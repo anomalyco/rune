@@ -59,6 +59,10 @@ pub(in crate::window) struct Host {
     pub(in crate::window) placement: Option<crate::windows::PlaceRequest>,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::window) macos_window: crate::MacWindowOptions,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(in crate::window) windows_window: crate::WindowsWindowOptions,
+    #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
+    pub(in crate::window) exclude_from_capture: Option<bool>,
     pub(in crate::window) native_handle: WindowHandle,
     pub(in crate::window) on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     pub(in crate::window) on_window: Option<crate::app::OnWindow>,
@@ -194,6 +198,8 @@ struct HostInit {
     titlebar: Option<crate::Titlebar>,
     options: WindowOptions,
     macos_window: crate::MacWindowOptions,
+    windows_window: crate::WindowsWindowOptions,
+    exclude_from_capture: Option<bool>,
     native_handle: WindowHandle,
     on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     on_window: Option<crate::app::OnWindow>,
@@ -237,6 +243,8 @@ impl Host {
             app.on_frame_drawn.take(),
         );
         let macos_window = std::mem::take(&mut app.macos_window);
+        let windows_window = std::mem::take(&mut app.windows_window);
+        let exclude_from_capture = app.exclude_from_capture;
         let (open, keep_running, release_gpu, fit_height, float_on_open) = (
             app.open, app.keep_running, app.release_gpu, app.fit_content_height, app.float_on_open,
         );
@@ -269,6 +277,8 @@ impl Host {
             titlebar,
             options,
             macos_window,
+            windows_window,
+            exclude_from_capture,
             native_handle,
             on_created,
             on_window,
@@ -307,6 +317,8 @@ impl Host {
             titlebar,
             options,
             macos_window,
+            windows_window,
+            exclude_from_capture,
             native_handle,
             on_created,
             on_window,
@@ -382,6 +394,11 @@ impl Host {
         clipboard.connect(waker.clone());
         let popup = crate::popup_menu::Presenter::new(waker.clone());
         let file_dialog = crate::file_dialog::Presenter::new(waker);
+        #[cfg(target_os = "windows")]
+        {
+            native_handle.native.no_activate.store(windows_window.no_activate, Ordering::Release);
+            native_handle.native.tool_window.store(windows_window.tool_window, Ordering::Release);
+        }
         Host {
             app_woken,
             chrome,
@@ -389,6 +406,8 @@ impl Host {
             options,
             placement: None,
             macos_window,
+            windows_window,
+            exclude_from_capture,
             native_handle,
             on_created,
             on_window,

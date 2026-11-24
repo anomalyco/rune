@@ -114,7 +114,7 @@ mod tests;
 pub(crate) enum WakeEvent {
     DisplayTick(usize),
     App(usize), Live(usize), Window(usize, WindowRequest), Focus(usize),
-    Position(usize, (i32, i32)), Level(usize, bool),
+    Position(usize, (i32, i32)), Level(usize, bool), ExcludeFromCapture(usize, bool),
     Place(usize, crate::windows::PlaceRequest),
     Frame(usize, crate::window::frame::FrameRequest),
     /// Windows: the window's or an overlay's swap chain can take the frame it waits for (`slot`).
@@ -479,7 +479,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let _handling = crate::quit::handling();
             let slot = match &event {
                 WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-                    | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
+                    | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
                     | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) => *i,
                 WakeEvent::Reopen => {
                     this.reopen(event_loop);

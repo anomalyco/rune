@@ -156,6 +156,7 @@ impl Host {
             cloak.hold(&window, crate::time::now() + win::READY_FALLBACK, focus);
             window.set_visible(true);
             chrome::open_as(&window, open_as);
+            crate::platform::win32::apply_window_styles(&window, &self.windows_window);
         }
         let phys = window.inner_size();
         let size = drawable_size(None, (phys.width, phys.height), max_surface_dim(None));

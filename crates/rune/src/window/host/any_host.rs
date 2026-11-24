@@ -30,7 +30,7 @@ impl AnyHost for Host {
         let shown = self.shown_win();
         let minimized = shown.is_some_and(Win::is_minimized_native);
         crate::platform::reopen::Candidate {
-            reopenable: !self.life.finished() && !self.macos_window.nonactivating_panel,
+            reopenable: !self.life.finished() && !self.macos_window.nonactivating_panel && !self.no_activate(),
             visible: shown.is_some() && !minimized,
             minimized,
             hidden_at: self.life.hidden_at(),

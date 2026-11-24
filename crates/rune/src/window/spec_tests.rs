@@ -263,3 +263,154 @@ fn win32_rect_to_work_area_handles_all_four_edges_negative_origins_and_clamping(
     assert_eq!(rect_to_work_area(100, 200, 50, 150), ((100, 200), (0, 0)));
     assert_eq!(rect_to_work_area(i32::MIN, i32::MIN, i32::MAX, i32::MAX), ((i32::MIN, i32::MIN), (u32::MAX, u32::MAX)));
 }
+
+#[test]
+fn windows_window_options_defaults_and_builders() {
+    let defaults = WindowsWindowOptions::default();
+    assert_eq!(defaults.exclude_from_capture, None);
+    assert!(!defaults.no_activate);
+    assert!(!defaults.tool_window);
+    assert_eq!(defaults.undecorated_shadow, None);
+
+    let configured = WindowsWindowOptions::default()
+        .exclude_from_capture(true)
+        .no_activate(true)
+        .tool_window(true)
+        .undecorated_shadow(true);
+    assert_eq!(configured.exclude_from_capture, Some(true));
+    assert!(configured.no_activate);
+    assert!(configured.tool_window);
+    assert_eq!(configured.undecorated_shadow, Some(true));
+
+    let cleared = configured
+        .exclude_from_capture(false)
+        .no_activate(false)
+        .tool_window(false)
+        .undecorated_shadow(false);
+    assert_eq!(cleared.exclude_from_capture, Some(false));
+    assert!(!cleared.no_activate);
+    assert!(!cleared.tool_window);
+    assert_eq!(cleared.undecorated_shadow, Some(false));
+}
+
+#[test]
+fn configured_options_chains_windows_and_macos_without_clobbering() {
+    let from_windows = WindowOptions { borderless: true, ..Default::default() }
+        .windows(WindowsWindowOptions::default().undecorated_shadow(true).tool_window(true))
+        .macos(|mac| mac.shadow(false).exclude_from_capture(true));
+    assert!(from_windows.options.borderless);
+    assert_eq!(from_windows.windows.undecorated_shadow, Some(true));
+    assert!(from_windows.windows.tool_window && !from_windows.windows.no_activate);
+    assert_eq!(from_windows.native.shadow, Some(false));
+    assert_eq!(from_windows.native.exclude_from_capture, Some(true));
+
+    let from_launcher = WindowOptions::launcher_panel()
+        .windows(|win| win.no_activate(true).exclude_from_capture(true));
+    assert!(from_launcher.native.launcher && from_launcher.native.nonactivating_panel);
+    assert!(from_launcher.windows.no_activate);
+    assert_eq!(from_launcher.windows.exclude_from_capture, Some(true));
+
+    let plain: ConfiguredWindowOptions = WindowOptions::default().into();
+    assert_eq!(plain.windows, WindowsWindowOptions::default());
+}
+
+#[test]
+fn app_and_window_spec_forward_windows_window_and_exclude_from_capture() {
+    let spec = || AppSpec::new("panel", (320.0, 200.0), || (), |_, _| crate::el());
+    let win_opts = WindowsWindowOptions::default()
+        .no_activate(true)
+        .tool_window(true)
+        .undecorated_shadow(true);
+
+    let app = App::new(spec())
+        .windows_window(win_opts.clone())
+        .exclude_from_capture(true);
+    assert_eq!(app.windows_window, win_opts);
+    assert_eq!(app.exclude_from_capture, Some(true));
+
+    let window = WindowSpec::new("panel", spec())
+        .windows_window(win_opts.clone())
+        .exclude_from_capture(true);
+    assert_eq!(window.app.windows_window, win_opts);
+    assert_eq!(window.app.exclude_from_capture, Some(true));
+
+    // Replacing WindowOptions via WindowSpec::options resets platform-specific native options
+    // (matching macos_window) while preserving portable App::exclude_from_capture.
+    let reset = window.options(WindowOptions::default());
+    assert_eq!(reset.app.windows_window, WindowsWindowOptions::default());
+    assert_eq!(reset.app.exclude_from_capture, Some(true));
+
+    let configured = WindowSpec::new("configured", spec()).configured_options(
+        WindowOptions { borderless: true, ..Default::default() }
+            .windows(win_opts.clone()),
+    );
+    assert_eq!(configured.app.windows_window, win_opts);
+    assert!(configured.options.borderless);
+}
+
+#[test]
+fn portable_exclude_from_capture_overrides_platform_options_and_falls_back_when_unset() {
+    for (portable, platform, expected) in [
+        (None, None, None),
+        (None, Some(false), Some(false)),
+        (None, Some(true), Some(true)),
+        (Some(false), None, Some(false)),
+        (Some(false), Some(false), Some(false)),
+        (Some(false), Some(true), Some(false)),
+        (Some(true), None, Some(true)),
+        (Some(true), Some(false), Some(true)),
+        (Some(true), Some(true), Some(true)),
+    ] {
+        let win = match platform {
+            Some(v) => WindowsWindowOptions::default().exclude_from_capture(v),
+            None => WindowsWindowOptions::default(),
+        };
+        assert_eq!(win.effective_exclude_from_capture(portable), expected);
+
+        let mac = match platform {
+            Some(v) => MacWindowOptions::default().exclude_from_capture(v),
+            None => MacWindowOptions::default(),
+        };
+        assert_eq!(mac.with_portable_exclude(portable).exclude_from_capture, expected);
+    }
+}
+
+#[test]
+fn reveal_focus_skips_activation_for_no_activate_windows() {
+    use crate::window::host::lifecycle::reveal_focus;
+    use crate::window::state::Reveal;
+
+    // Ordinary window activates on Open, not on Show.
+    assert!(reveal_focus(Reveal::Open, false, false, false));
+    assert!(reveal_focus(Reveal::Open, false, true, false));
+    assert!(!reveal_focus(Reveal::Show, false, false, false));
+    // open_inactive suppresses first open only.
+    assert!(!reveal_focus(Reveal::Open, true, false, false));
+    assert!(reveal_focus(Reveal::Open, true, true, false));
+    // no_activate suppresses activation on every reveal, including subsequent opens.
+    assert!(!reveal_focus(Reveal::Open, false, false, true));
+    assert!(!reveal_focus(Reveal::Open, false, true, true));
+    assert!(!reveal_focus(Reveal::Open, true, true, true));
+    assert!(!reveal_focus(Reveal::Show, false, true, true));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_undecorated_shadow_applies_to_attributes_and_preserves_default() {
+    let base = WindowOptions { borderless: true, ..Default::default() }
+        .attributes("panel", (320.0, 200.0), None, false);
+    let unset = WindowsWindowOptions::default().apply_attributes(base.clone());
+    assert!(format!("{unset:?}").contains("decoration_shadow: false"), "{unset:?}");
+    assert_eq!(unset.inner_size, Some(Size::Logical(LogicalSize::new(320.0, 200.0))));
+
+    let enabled = WindowsWindowOptions::default()
+        .undecorated_shadow(true)
+        .apply_attributes(base.clone());
+    assert!(format!("{enabled:?}").contains("decoration_shadow: true"), "{enabled:?}");
+    assert_eq!(enabled.inner_size, Some(Size::Logical(LogicalSize::new(320.0, 200.0))));
+
+    let disabled = WindowsWindowOptions::default()
+        .undecorated_shadow(false)
+        .apply_attributes(base);
+    assert!(format!("{disabled:?}").contains("decoration_shadow: false"), "{disabled:?}");
+}

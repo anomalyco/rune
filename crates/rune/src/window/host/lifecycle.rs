@@ -24,6 +24,13 @@ use crate::window::surface::{BackoffEvent, Win};
 #[cfg(target_os = "windows")]
 use crate::window::win32::covered_draw::CoveredDrawEvent;
 
+/// Whether a window creation reveal should request foreground activation.
+/// `App::open_inactive` suppresses activation on the first open only;
+/// `WindowsWindowOptions::no_activate` suppresses activation on every reveal.
+pub(in crate::window) const fn reveal_focus(reveal: Reveal, open_inactive: bool, shown: bool, no_activate: bool) -> bool {
+    matches!(reveal, Reveal::Open) && !(open_inactive && !shown) && !no_activate
+}
+
 impl Host {
     pub(in crate::window) fn window_request(&mut self, event_loop: &ActiveEventLoop, request: WindowRequest) {
         match request {
@@ -43,12 +50,36 @@ impl Host {
         self.sync_origin();
     }
 
+    /// Whether this window must never take foreground activation on reveal.
+    pub(in crate::window) fn no_activate(&self) -> bool {
+        #[cfg(target_os = "windows")]
+        return self.windows_window.no_activate;
+        #[cfg(not(target_os = "windows"))]
+        false
+    }
+
     pub(in crate::window) fn set_always_on_top(&mut self, event_loop: &ActiveEventLoop, on: bool) {
         self.options.always_on_top = on;
         self.macos_window.level = None;
         if !is_wayland(event_loop) && let Some(w) = &self.win {
             w.window.set_window_level(if on { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal });
+            #[cfg(target_os = "windows")]
+            crate::platform::win32::apply_window_styles(&w.window, &self.windows_window);
         }
+    }
+
+    pub(in crate::window) fn set_exclude_from_capture(&mut self, exclude: bool) {
+        self.exclude_from_capture = Some(exclude);
+        let Some(w) = &self.win else { return };
+        #[cfg(target_os = "windows")]
+        let _ = crate::platform::win32::set_exclude_from_capture(&w.window, exclude);
+        #[cfg(target_os = "macos")]
+        match &w.native.panel {
+            Some(panel) => { let _ = panel.set_capture_exclusion(exclude); }
+            None => crate::platform::macos::set_exclude_from_capture(&w.window, exclude),
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        let _ = w;
     }
 
     pub(in crate::window) fn show(&mut self, event_loop: &ActiveEventLoop) {
@@ -100,15 +131,14 @@ impl Host {
                 }
                 RevealEffect::Place => self.apply_placement(event_loop),
                 RevealEffect::Create => {
-                    // `App::open_inactive`: the first open leaves focus where it is.
-                    let focus = reveal == Reveal::Open && !(self.open_inactive && !self.shown);
+                    let focus = reveal_focus(reveal, self.open_inactive, self.shown, self.no_activate());
                     self.create(event_loop, token.take(), focus);
                     // On macOS a new window becomes key without activating the app, so activate
                     // it like a reopen does. The launch open leaves activation to the platform.
                     #[cfg(target_os = "macos")]
                     if focus && self.started && let Some(w) = self.shown_win() { w.focus(); }
                 }
-                RevealEffect::OrderIn { focus } => if let Some(w) = &mut self.win { w.show(focus) },
+                RevealEffect::OrderIn { focus } => { let focus = focus && !self.no_activate(); if let Some(w) = &mut self.win { w.show(focus); } }
                 RevealEffect::Unminimize => if let Some(w) = &self.win && !w.is_panel() { w.window.set_minimized(false) },
                 RevealEffect::Settle => {
                     if !built { self.app.rt_mut().settle_all(); }
@@ -122,7 +152,7 @@ impl Host {
                 RevealEffect::Number => if let Some(w) = &self.win {
                     self.native_handle.native.number.store(native_window_number(&w.window).unwrap_or(0), Ordering::Release);
                 },
-                RevealEffect::Focus => self.activate(event_loop, token.take()),
+                RevealEffect::Focus => if !self.no_activate() { self.activate(event_loop, token.take()); },
                 RevealEffect::Redraw => if let Some(w) = &self.win { w.request_redraw() },
                 // No settle, frame, surface configure or acquisition on a cached reveal, unless
                 // the refreshed frame left motion running.
@@ -312,9 +342,13 @@ impl Host {
         self.show_title();
         if self.app.rt_mut().take_toggle_maximized() && let Some(w) = self.shown_win() {
             w.toggle_maximized();
+            #[cfg(target_os = "windows")]
+            crate::platform::win32::apply_window_styles(&w.window, &self.windows_window);
         }
         if self.app.rt_mut().take_toggle_full_screen() && let Some(w) = self.shown_win() {
             w.toggle_full_screen();
+            #[cfg(target_os = "windows")]
+            crate::platform::win32::apply_window_styles(&w.window, &self.windows_window);
         }
         if let Some(menu) = self.app.rt_mut().take_window_menu() && let Some(w) = self.shown_win() {
             chrome::window_menu(&w.window, menu, None);
