@@ -186,8 +186,9 @@ const buildable: { title: string; text: ReactNode; status: Status; meta: string;
     title: "Web",
     text: (
       <>
-        The same apps in a browser over WebGPU, in one canvas on the page's main thread. Experimental: Safari keyboard
-        checks, accessibility and a WebGL fallback are still to come.
+        The same apps in a browser over WebGPU (with an opt-in WebGL2 fallback via the <code>webgl</code> feature), in
+        one canvas on the page's main thread. Experimental: includes a semantic DOM accessibility mirror (full
+        AccessKit parity is #118); real-device Safari keyboard verification and EditContext remain follow-up work.
       </>
     ),
     status: "partly",
@@ -927,9 +928,9 @@ export function ArchitectureView() {
     <>
       <PageHead eyebrow={<span>Architecture</span>} title="How Rune is built">
         <p>
-          The design splits a Rune app across two threads. The app side turns state into a keyed tree and lays it out
-          at its target state. The render thread owns what's on screen and animates toward those targets. Everything
-          between them goes through one command channel.
+          The target design splits a Rune app across two threads: the app side turns state into a keyed tree and lays it
+          out at its target state, while a render thread owns what's on screen and animates toward those targets over
+          one command channel.
         </p>
         <p>
           This page is the target from <a href={`${REPO}/blob/dev/PLAN.md`}>PLAN.md</a>. Today both sides run on one
@@ -960,8 +961,9 @@ export function ArchitectureView() {
               thread on the phone and the app side on the Mac, where it can be hot-patched.
             </li>
             <li>
-              <strong>Agents and tests read the same stream.</strong> Recording the channel gives deterministic replay,
-              frame traces and an inspector.
+              <strong>Agents and tests read the same stream (Target).</strong> Recording the channel will give
+              deterministic replay, frame traces and a live JSON inspector socket; today CLI flags (<code>--tree</code>,{" "}
+              <code>--trace</code>, <code>--snap</code>, <code>--script</code>, <code>--hot-control</code>) stand in.
             </li>
           </ul>
         </div>
@@ -1017,8 +1019,9 @@ export function ArchitectureView() {
             they're the reasons Kit's apps kept leaving it for Apple frameworks.
           </p>
           <p>
-            So Rune starts fresh and borrows GPUI's best parts under its Apache-2.0 licence: the rope and sum tree, the
-            line layout cache, the macOS and iOS text input code and the web textarea bridge.
+            So Rune starts fresh rather than forking GPUI. Today text fields hold a plain <code>String</code> with
+            winit IME on desktops and a sliding-window hidden <code>&lt;textarea&gt;</code> on the web; adopting GPUI's
+            rope/sum tree and direct macOS/iOS text input code under its Apache-2.0 licence remains Target.
           </p>
         </div>
       </section>
