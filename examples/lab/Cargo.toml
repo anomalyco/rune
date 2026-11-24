@@ -18,6 +18,10 @@ wgpu = { workspace = true, features = ["metal"] }
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { workspace = true, features = ["dx12"] }
 
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+pollster = { workspace = true }
+windows = { workspace = true, features = ["Win32_Graphics_Direct3D12"] }
+
 [target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 wgpu = { workspace = true, features = ["vulkan"] }
 

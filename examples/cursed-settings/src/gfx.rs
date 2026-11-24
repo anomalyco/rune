@@ -343,6 +343,10 @@ impl Compositor<Cursed> for Gfx {
         self.animating || self.view_pending
     }
 
+    fn release_gpu(&mut self) {
+        self.res = None;
+    }
+
     fn summary(&mut self, _device: &wgpu::Device) -> Option<String> {
         let (sum, n) = self.total_gpu;
         let gpu = if n > 0 { format!("gpu frame mean {:.3} ms over {n} timed frames", sum / n as f64) } else { "no GPU timestamps".to_owned() };

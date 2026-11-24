@@ -72,6 +72,7 @@ impl Browser {
                 crate::marks::mark("web.gpu.lost");
                 side.gpu.device.destroy();
                 drop(side);
+                r.app.release_compositor_gpu();
                 return false;
             }
             web_math::LossAction::FallbackToCpu { .. } => {}
@@ -98,6 +99,7 @@ impl Browser {
         crate::marks::mark("web.gpu.lost");
         side.gpu.device.destroy();
         drop(side);
+        r.app.release_compositor_gpu();
         let atlas = &mut r.app.rt_mut().text.atlas;
         crate::render::cpu_boot::attach_text(atlas);
         atlas.refill_gpu_masks();
@@ -204,6 +206,8 @@ impl Browser {
             web_sys::console::warn_1(&"rune: the GPU didn't finish its first frame; the page draws on the CPU".into());
             crate::marks::mark("web.handover.failed");
             side.gpu.device.destroy();
+            drop(side);
+            r.app.release_compositor_gpu();
             let atlas = &mut r.app.rt_mut().text.atlas;
             crate::render::cpu_boot::attach_text(atlas);
             atlas.refill_gpu_masks();

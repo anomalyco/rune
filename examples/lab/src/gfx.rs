@@ -117,6 +117,10 @@ impl Compositor<Lab> for LabGfx {
         self.animating || self.view_pending
     }
 
+    fn release_gpu(&mut self) {
+        self.res = None;
+    }
+
     fn summary(&mut self, _device: &wgpu::Device) -> Option<String> {
         let (sum, n) = self.total_gpu;
         Some(if n > 0 {

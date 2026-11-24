@@ -182,7 +182,10 @@ impl OverlayCore {
             match effect {
                 presence::Effect::StopDrawing => self.stop_drawing(app),
                 presence::Effect::HideWindow { fade } => self.hide_window(app, fade),
-                presence::Effect::ReleaseGpu => self.park(),
+                presence::Effect::ReleaseGpu => {
+                    app.release_compositor_gpu();
+                    self.park();
+                }
             }
         }
     }

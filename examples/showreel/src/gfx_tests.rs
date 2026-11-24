@@ -76,3 +76,33 @@ fn showreel_gfx_rebuilds_fx_renderer_when_device_key_changes() {
     assert!(errors.is_empty(), "uncaptured GPU errors: {errors:?}");
     assert!(!gpu2.is_lost());
 }
+
+#[test]
+fn showreel_gfx_release_gpu_drops_fx_and_rebuilds_cleanly() {
+    let size = (320, 180);
+    let state = State { scene: Scene::Glass, t: 1.0 };
+    let mut rt = Runtime::new(state, view, (size.0 as f32, size.1 as f32), Env::default());
+    rt.track_marks = true;
+
+    let mut gfx = Gfx::default();
+    let gpu1 = Gpu::headless();
+    let mut ui1 = Renderer::new(&gpu1.device, OFFSCREEN_FORMAT);
+    ui1.attach_text(&mut rt.text.atlas);
+    let off1 = Offscreen::new(&gpu1.device, size.0, size.1);
+    draw_on(&mut gfx, &mut rt, &gpu1, &mut ui1, &off1, 0.0);
+    assert!(gfx.fx.is_some());
+
+    drop((off1, ui1, gpu1));
+    gfx.release_gpu();
+    assert!(gfx.fx.is_none(), "release_gpu must drop showreel Gfx::fx");
+
+    let gpu2 = Gpu::headless();
+    let mut ui2 = Renderer::new(&gpu2.device, OFFSCREEN_FORMAT);
+    rt.text.atlas.invalidate();
+    rt.images.invalidate();
+    ui2.attach_text(&mut rt.text.atlas);
+    let off2 = Offscreen::new(&gpu2.device, size.0, size.1);
+    draw_on(&mut gfx, &mut rt, &gpu2, &mut ui2, &off2, 1.0 / 60.0);
+    assert_eq!(gfx.fx.as_ref().unwrap().device_key, ui2.device_key());
+    assert!(!gpu2.is_lost());
+}

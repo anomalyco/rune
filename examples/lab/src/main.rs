@@ -1,6 +1,6 @@
 //! Rune Lab: rune-light and rune-fx composited live inside Rune's renderer, with knobs.
 
-#![forbid(unsafe_code)]
+#![cfg_attr(not(test), forbid(unsafe_code))]
 
 mod gfx;
 mod knobs;

@@ -40,6 +40,7 @@ pub(super) trait OverlayApp {
     fn compositor_features(&self) -> wgpu::Features;
     fn compositor_animating(&self) -> bool;
     fn render_compositor(&mut self, args: OverlayRenderArgs<'_>) -> bool;
+    fn release_compositor_gpu(&mut self);
 }
 
 impl dyn OverlayApp + '_ {
@@ -211,6 +212,12 @@ impl<T: 'static> OverlayApp for TypedOverlayApp<T> {
         c.render(&mut f);
         c.animating()
     }
+
+    fn release_compositor_gpu(&mut self) {
+        if let Some(c) = self.compositor.as_mut() {
+            c.release_gpu();
+        }
+    }
 }
 
 /// Non-generic overlay host stored in `App::overlays` and `Windows::hosts`.
@@ -352,6 +359,12 @@ impl<T: 'static> OverlayApp for BorrowOverlayApp<'_, T> {
         };
         c.render(&mut f);
         c.animating()
+    }
+
+    fn release_compositor_gpu(&mut self) {
+        if let Some(c) = self.compositor.as_mut() {
+            c.release_gpu();
+        }
     }
 }
 

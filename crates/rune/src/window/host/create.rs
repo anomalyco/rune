@@ -176,10 +176,23 @@ impl Host {
             Ok(config)
         };
         let mut prewarmed = None;
-        // A device that died while this window was closed draws nothing: make another.
-        let (new_gpu, surface, configured) = match self.gpu.take().filter(|(gpu, _)| !gpu.is_lost()) {
+        // A device that died while this window was closed draws nothing: release it and any
+        // compositor resources on it before making another (D3D12 keeps a removed device alive
+        // per adapter until every resource made on it is dropped).
+        if self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.is_lost()) {
+            self.gpu = None;
+            self.app.release_compositor_gpu();
+        }
+        let (new_gpu, surface, configured) = match self.gpu.take() {
             Some((gpu, renderer)) => {
-                let surface = make_surface(&gpu.instance)?;
+                let surface = match make_surface(&gpu.instance) {
+                    Ok(surface) => surface,
+                    Err(error) => {
+                        drop((renderer, gpu));
+                        self.app.release_compositor_gpu();
+                        return Err(error);
+                    }
+                };
                 match setup_surface(&gpu, &surface) {
                     Ok(configured) => {
                         self.gpu = Some((gpu, renderer));
@@ -187,6 +200,8 @@ impl Host {
                     }
                     Err(err) => {
                         if err.kind == crate::gpu::fallback::Failure::DeviceLost {
+                            drop((surface, renderer, gpu));
+                            self.app.release_compositor_gpu();
                             *self.gpu_pool.borrow_mut() = Weak::default();
                             return Err(err.message);
                         }
@@ -198,6 +213,7 @@ impl Host {
                         let first_info = gpu.adapter.get_info();
                         let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
                         drop((surface, renderer, gpu));
+                        self.app.release_compositor_gpu();
                         *self.gpu_pool.borrow_mut() = Weak::default();
                         let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
                             instance, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
@@ -496,6 +512,7 @@ impl Host {
         { w.native.slot.reset(); w.native.damage.reset(); }
         drop(w.surface.take());
         self.gpu = None;
+        self.app.release_compositor_gpu();
         {
             let rt = self.app.rt_mut();
             rt.text.atlas.invalidate();
