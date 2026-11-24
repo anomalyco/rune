@@ -1960,7 +1960,10 @@ one winit event loop. Each spec has a stable key, an `AppSpec`, optional supplie
 state, and `WindowOptions`. Share Live handles/services between window states.
 Windows share one GPU device, with independent renderers and text atlases.
 `WindowOptions::overlay(display)` selects transparent, borderless, topmost,
-click-through presentation at that display's physical origin and size. Options
+click-through presentation at that display's physical origin and size.
+`Display::work_area()` returns the display's usable `(origin, size)` in physical
+desktop pixels (`GetMonitorInfoW`'s `rcWork` excluding the taskbar and docked app
+bars on Windows; `(position, size)` elsewhere or when disconnected). Options
 also support initially hidden windows and per-window minimum sizes.
 
 On macOS, `WindowOptions { transparent: true, borderless: true, .. }.macos(MacWindowOptions::default().corner_radius(16.0))`
@@ -2304,8 +2307,10 @@ of the primary display, centred or `inset` points from a side. Clicks pass throu
   Space incl. full-screen ones, ordered front with `orderFrontRegardless`; it ignores the mouse
   unless interactive. Clicks still reach Rune through winit's view (`platform/macos.rs`).
 - Windows: a topmost tool window with `WS_EX_NOACTIVATE` (plus `WS_EX_TRANSPARENT|WS_EX_LAYERED`
-  unless interactive), shown with `SW_SHOWNOACTIVATE`; a bottom overlay sits above the taskbar
-  (`platform/win32.rs`).
+  unless interactive), shown with `SW_SHOWNOACTIVATE`; edge-placed overlays (both `OverlaySpec`
+  defaults and `OverlayPlacement::Edge`) anchor inside all four sides of `Display::work_area()`
+  (`GetMonitorInfoW`'s `rcWork` in `platform/win32.rs`), while `OverlayPlacement::Rect` and
+  `OverlayPlacement::FullScreen` stay in full display coordinates.
 - Keys: `OverlayOptions::keys: KeyPolicy::OnDemand` lets an overlay take the keyboard on
   `OverlayHandle::request_keys` or a click, and `capabilities().nonactivating_keys` says whether
   its backend can: the macOS panel becomes key, a layer-shell (v4) surface asks for keyboard

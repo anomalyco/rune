@@ -23,14 +23,18 @@ of a blurred, rounded capsule; the separate headless regression covers fully off
 Only its chips and leading drag grip (`.hit().window_drag()`) intercept clicks; dragging the grip
 moves the pill natively on window-backed overlays without snapping back until placement is changed,
 while the background and hover label pass through. iPhone/Paste
-change its contents inside a fixed maximum canvas. Area/Window/Screen open one picker per
-display. Drag selects an area; Escape closes all pickers on platforms with overlay keys.
+change its contents inside a fixed maximum canvas. Edge cycles `OverlayPlacement::Edge` across
+all four corners and top/bottom center while showing `Display::work_area()` (on Windows, edge
+placements clear the taskbar and docked app bars on all four sides). Area/Window/Screen open
+one picker per display. Drag selects an area; Escape closes all pickers on platforms with
+overlay keys.
 
 Headless stills use the same views, selected as the ordinary `lab` host:
 
 ```
 cargo run -p overlay-lab -- --scene pill --snap pill.png
 cargo run -p overlay-lab -- --scene expanded --snap expanded.png
+cargo run -p overlay-lab -- --scene work-area --snap work-area.png
 cargo run -p overlay-lab -- --scene picker --size 960x600 --snap picker.png
 ```
 
@@ -75,7 +79,10 @@ does not guarantee ordering among peers. Native status/status+1 levels are macOS
 - `Display::native_id()` maps to `DisplayTarget::Native`: macOS CGDirectDisplayID, Windows
   full-width HMONITOR, X11 RandR CRTC, Wayland wl_output registry name. X11 output IDs can
   also be targeted with `NativeDisplayId::X11Output`. `native_bounds()` is global top-left
-  (macOS/Wayland points, Windows/X11 pixels); `scale` converts local lengths.
+  (macOS/Wayland points, Windows/X11 pixels); `scale` converts local lengths. `Display::work_area()`
+  returns `((x, y), (w, h))` in physical desktop pixels: `GetMonitorInfoW`'s `rcWork` on Windows
+  (matching all four sides of edge-placed overlays) and `(position, size)` elsewhere or when
+  disconnected.
 - The pill uses `AboveOverlays` (macOS 27), above the picker's `AboveStatus` (26). Both use
   CanJoinAllSpaces, FullScreenAuxiliary and Stationary. Wayland ordering remains compositor-owned.
 - Desktop hide retains the native window, GPU surface and renderer. With `prewarm`, macOS

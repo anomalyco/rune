@@ -566,17 +566,26 @@ fn raise_levels() {
     }
 }
 
-/// `monitor`'s work area (without its taskbar and app bars) as top and bottom, in physical
-/// desktop pixels.
+/// Converts a Win32 `RECT` (`left`, `top`, `right`, `bottom`) into `(origin, size)` in
+/// physical desktop pixels, clamping negative spans to zero without `i32` overflow.
+pub(crate) fn rect_to_work_area(left: i32, top: i32, right: i32, bottom: i32) -> ((i32, i32), (u32, u32)) {
+    let width = (i64::from(right) - i64::from(left)).max(0) as u32;
+    let height = (i64::from(bottom) - i64::from(top)).max(0) as u32;
+    ((left, top), (width, height))
+}
+
+/// `monitor`'s work area (excluding its taskbar and docked app bars) as `(origin, size)` in
+/// physical desktop pixels, matching `Display::position` and `Display::size`.
 #[allow(unsafe_code)]
-pub(crate) fn work_area(monitor: &winit::monitor::MonitorHandle) -> Option<(i32, i32)> {
+pub(crate) fn work_area(monitor: &winit::monitor::MonitorHandle) -> Option<((i32, i32), (u32, u32))> {
     use winit::platform::windows::MonitorHandleExtWindows;
     use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO};
     // SAFETY: MONITORINFO is plain data; all zeros is valid before cbSize is set.
     let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
     info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
     // SAFETY: GetMonitorInfoW fills `info`, whose cbSize says which struct it is.
-    (unsafe { GetMonitorInfoW(monitor.hmonitor() as _, &mut info) } != 0).then_some((info.rcWork.top, info.rcWork.bottom))
+    (unsafe { GetMonitorInfoW(monitor.hmonitor() as _, &mut info) } != 0)
+        .then(|| rect_to_work_area(info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom))
 }
 
 /// Destroys this thread's windows at once, for a fast exit: each gets the default window procedure

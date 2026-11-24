@@ -50,6 +50,10 @@ pub enum DisplayTarget {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum OverlayPlacement {
+    /// Anchored to `edge` (`margin` points inward) and aligned along it (`inset` points from
+    /// start or end). On Windows, all four sides measure from [`crate::Display::work_area`]
+    /// (excluding the taskbar and docked app bars), matching `OverlaySpec`'s default edge
+    /// placement; other platforms measure from the full display bounds.
     Edge { edge: ScreenEdge, margin: f32, align: Align, inset: f32 },
     /// Points from the selected display's top-left, not desktop pixels. The rect isn't kept
     /// on that display, so on [`DisplayTarget::Primary`] it's a global rect that may sit on
@@ -58,6 +62,7 @@ pub enum OverlayPlacement {
     /// scale, and the overlay draws at the backing scale of the display it lands on.
     /// Elsewhere a rect off the primary display is exact only where displays share a scale.
     Rect { x: f32, y: f32, width: f32, height: f32 },
+    /// Covers the entire selected display (including taskbar/menu-bar areas).
     FullScreen,
 }
 
