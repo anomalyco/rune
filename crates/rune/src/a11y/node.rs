@@ -113,7 +113,7 @@ impl RuntimeCore {
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
             handlers.is_some_and(|h| h.modal.is_some()), handlers.is_some_and(|h| h.has_primary())).hash(&mut h);
         (n.focus.selected, n.focus.step.is_some(), n.focus.set_value.is_some(), n.focus.default, self.focus_group(i).is_some()).hash(&mut h);
-        (self.allowed(i), self.can_focus(i), n.inert).hash(&mut h);
+        (self.allowed(i), self.can_focus(i), n.inert, w.delegated_a11y && roles::composite_item(role)).hash(&mut h);
         if let Some(st) = self.scroll.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
             [st.offset.to_bits(), st.max.to_bits(), st.x.offset.to_bits(), st.x.max.to_bits()].hash(&mut h);
             [st.drawn_x, st.drawn.y()].map(f32::to_bits).hash(&mut h);
@@ -287,7 +287,7 @@ impl RuntimeCore {
         node.set_bounds(rect(self.paint.drawn[i], shift));
         // What a pointer or keyboard user can do to it, routed to the same handlers.
         if actionable {
-            if handlers.is_some_and(|h| h.on_press.is_some()) || input.is_some() { node.add_action(Ak::Click); }
+            if handlers.is_some_and(|h| h.on_press.is_some()) || input.is_some() || (w.delegated_a11y && roles::composite_item(role)) { node.add_action(Ak::Click); }
             if focusable { node.add_action(Ak::Focus); }
             if handlers.is_some_and(|h| h.on_secondary_press.is_some()) { node.add_action(Ak::ShowContextMenu); }
             if n.a11y.expanded.is_some() && handlers.is_some_and(|h| h.on_press.is_some()) {

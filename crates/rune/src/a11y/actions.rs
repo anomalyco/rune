@@ -24,6 +24,8 @@ pub(crate) enum A11yAct {
     /// Pages (or, with `false`, lines) down and right.
     Scroll { x: i32, y: i32, pages: bool },
     ScrollTo(f32, f32),
+    /// Delegate an unhandled element action to the nearest ancestor `El::on_a11y_action`.
+    Delegate { target_key: String, action: Ak },
 }
 
 impl std::fmt::Debug for A11yAct {
@@ -38,6 +40,7 @@ impl std::fmt::Debug for A11yAct {
             Self::ScrollIntoView => f.write_str("ScrollIntoView"),
             Self::Scroll { x, y, pages } => f.debug_struct("Scroll").field("x", x).field("y", y).field("pages", pages).finish(),
             Self::ScrollTo(x, y) => f.debug_tuple("ScrollTo").field(x).field(y).finish(),
+            Self::Delegate { target_key, action } => f.debug_struct("Delegate").field("target_key", target_key).field("action", action).finish(),
         }
     }
 }
@@ -75,8 +78,12 @@ impl RuntimeCore {
             (Ak::Click, None) if pressable => self.queue_a11y_press(path),
             (Ak::Click, None) if input => self.queue_a11y(path, A11yAct::Focus(None)),
             (Ak::Focus, None) if focusable => self.queue_a11y(path, A11yAct::Focus(None)),
-            (Ak::Expand | Ak::Collapse, None) if pressable && expanded == Some(request.action == Ak::Collapse) => {
-                self.queue_a11y_press(path);
+            (Ak::Expand | Ak::Collapse, None) if pressable && expanded.is_some() => {
+                if expanded == Some(request.action == Ak::Collapse) {
+                    self.queue_a11y_press(path);
+                } else {
+                    return false;
+                }
             }
             (Ak::ShowContextMenu, None) if secondary => {
                 let r = self.drawn_box(i);
@@ -154,8 +161,35 @@ impl RuntimeCore {
                 Some(ActionData::SetScrollOffset(p)) => self.queue_a11y(path, A11yAct::ScrollTo(p.x as f32, p.y as f32)),
                 _ => return false,
             },
+            _ if sub == 0 => return self.queue_a11y_delegate(i, request.action),
             _ => return false,
         }
+        true
+    }
+
+    /// Nearest live, enabled, allowed strict ancestor of `i` with `El::on_a11y_action`.
+    pub(crate) fn a11y_action_ancestor(&self, i: usize) -> Option<usize> {
+        std::iter::successors(self.tree.nodes[i].parent, |&j| self.tree.nodes[j].parent)
+            .take_while(|&j| self.allowed(j) && !self.subtree_exiting(j))
+            .find(|&j| {
+                let n = &self.tree.nodes[j];
+                !n.a11y.disabled && n.handlers.get().is_some_and(|h| h.on_a11y_action.is_some())
+            })
+    }
+
+    /// Queues a delegated accessibility action for node `i` if it is enabled, allowed, not
+    /// exiting, and has a live enabled ancestor with `El::on_a11y_action`.
+    pub(crate) fn queue_a11y_delegate(&mut self, i: usize, action: Ak) -> bool {
+        if !self.allowed(i) || self.subtree_exiting(i) {
+            return false;
+        }
+        let n = &self.tree.nodes[i];
+        if n.a11y.disabled || self.a11y_action_ancestor(i).is_none() {
+            return false;
+        }
+        let path = n.path.clone();
+        let target_key = n.key.clone().unwrap_or_else(|| path.clone());
+        self.queue_a11y(path, A11yAct::Delegate { target_key, action });
         true
     }
 
@@ -221,6 +255,20 @@ impl RuntimeCore {
             A11yAct::ScrollTo(x, y) => {
                 tx.scroll_to_instant(path, x, y);
                 true
+            }
+            A11yAct::Delegate { target_key, action } => {
+                let Some(i) = self.node_index(&path) else { return false };
+                if !self.allowed(i) || self.tree.nodes[i].a11y.disabled { return false; }
+                let handlers: Vec<_> = std::iter::successors(self.tree.nodes[i].parent, |&j| self.tree.nodes[j].parent)
+                    .take_while(|&j| self.allowed(j) && !self.subtree_exiting(j))
+                    .filter_map(|j| {
+                        let n = &self.tree.nodes[j];
+                        (!n.a11y.disabled).then(|| n.handlers.get().and_then(|h| h.on_a11y_action.clone())).flatten()
+                    })
+                    .collect();
+                if handlers.is_empty() { return false; }
+                log_event!(self, "a11y delegate {action:?} {target_key}");
+                handlers.into_iter().any(|f| Tx::took(f(app.states(), &target_key, action, tx), tx))
             }
         }
     }

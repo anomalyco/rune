@@ -2,13 +2,14 @@
 //! `Cold<Handlers>`, so elements without callbacks pay one pointer.
 use crate::cold::Empty;
 use crate::el::{
-    AtBottomFn, Cursor, DragEndFn, DragFn, DragOutFn, DropSpec, LanguagesFn, LayoutFn, LayoutTxFn, ModalSpec,
-    PasteFn, PointerFn, PressFn, ScrollOffsetFn, SelectionChangeFn, SelectionCopy, VisibleRowsFn,
+    A11yActionFn, AtBottomFn, Cursor, DragEndFn, DragFn, DragOutFn, DropSpec, LanguagesFn, LayoutFn, LayoutTxFn,
+    ModalSpec, PasteFn, PointerFn, PressFn, ScrollOffsetFn, SelectionChangeFn, SelectionCopy, VisibleRowsFn,
     WindowFocusFn,
 };
 
 #[derive(Clone)]
 pub(crate) struct Handlers {
+    pub on_a11y_action: Option<A11yActionFn>,
     pub on_paste: Option<PasteFn>,
     pub on_window_focus: Option<WindowFocusFn>,
     /// `El::on_spellcheck`: the app's spell checking setting and what flips it.
@@ -104,6 +105,7 @@ impl Handlers {
 
 impl Empty for Handlers {
     const EMPTY: &'static Self = &Handlers {
+        on_a11y_action: None,
         on_paste: None,
         on_window_focus: None,
         on_spellcheck: None,

@@ -175,6 +175,8 @@ pub(super) struct Walk {
     /// Inside a secure ancestor: descendants are omitted so a secure container never leaks its
     /// children's text into the tree.
     secure: bool,
+    /// Inside a live, enabled, allowed ancestor with `El::on_a11y_action`.
+    pub(super) delegated_a11y: bool,
 }
 
 /// A node the walk found: the element it is (`None` for the root), where it is, and its
@@ -459,6 +461,11 @@ impl RuntimeCore {
         let mut w = Walk { clip_y: [0.0, self.viewport.1], ..Walk::default() };
         for p in ancs.into_iter().rev() {
             let pn = &self.tree.nodes[p];
+            if !self.allowed(p) || self.subtree_exiting(p) {
+                w.delegated_a11y = false;
+            } else if !pn.a11y.disabled && pn.handlers.get().is_some_and(|h| h.on_a11y_action.is_some()) {
+                w.delegated_a11y = true;
+            }
             if pn.vis.clip.is_some() || pn.scroll.is_some() {
                 let pr = self.paint.drawn[p];
                 w.clip_y = [w.clip_y[0].max(pr[1]), w.clip_y[1].min(pr[1] + pr[3].max(0.0))];
@@ -598,9 +605,14 @@ impl RuntimeCore {
         for i in 0..n_nodes {
             let n = &self.tree.nodes[i];
             let up = n.parent.map_or(root_walk, |p| walk[p]);
-            let mut w = Walk { slot: up.slot, gone: up.gone || up.secure, modal_gone: up.modal_gone, shift: up.shift, scrolled: up.scrolled, clip_y: up.clip_y, secure: up.secure || n.is_secure() };
+            let mut w = Walk { slot: up.slot, gone: up.gone || up.secure, modal_gone: up.modal_gone, shift: up.shift, scrolled: up.scrolled, clip_y: up.clip_y, secure: up.secure || n.is_secure(), delegated_a11y: up.delegated_a11y };
             if let Some(p) = n.parent {
                 let pn = &self.tree.nodes[p];
+                if !self.allowed(p) || self.subtree_exiting(p) {
+                    w.delegated_a11y = false;
+                } else if !pn.a11y.disabled && pn.handlers.get().is_some_and(|h| h.on_a11y_action.is_some()) {
+                    w.delegated_a11y = true;
+                }
                 if pn.vis.clip.is_some() || pn.scroll.is_some() {
                     let pr = self.paint.drawn[p];
                     w.clip_y = [w.clip_y[0].max(pr[1]), w.clip_y[1].min(pr[1] + pr[3].max(0.0))];

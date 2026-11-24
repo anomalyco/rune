@@ -2658,8 +2658,13 @@ feature (`crates/rune/src/a11y/`).
   control calls `on_set_value` with the clamped number (or, with only `on_step` and
   `range_step`, steps it toward the number), expand and collapse
   press a disclosure, show context menu calls `on_secondary_press`, and scroll requests move
-  the viewport. They skip hit testing, so a test that wants the pointer's path posts pointer
-  input instead.
+  the viewport. Composite containers (`"listbox"`, `"tree"`, `"grid"`, `"table"`, `"menu"`,
+  `"tablist"`) that handle input on the container rather than per item can install
+  `El::on_a11y_action(|s, key, action, tx| ...)`: actionable descendant composite items then
+  advertise `Action::Click` (in both AccessKit and the web mirror) and unhandled actions on
+  enabled descendants bubble innermost-first to the container with the target's key (or path
+  when unkeyed). Actions skip hit testing, so a test that wants the pointer's path posts
+  pointer input instead.
 - **Virtual lists** expose their mounted rows only; the list reports how many rows it has and
   each row its index.
 - **Tools**: `--tree` writes the tree under `"accessibility"` (role, key, name, value, states,

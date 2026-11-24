@@ -434,6 +434,25 @@ pub(crate) fn ordered_set_item_in(role: Role, container: Role) -> bool {
     }
 }
 
+/// Composite-widget and table item roles that advertise `Action::Click` when an enabled
+/// ancestor installs [`El::on_a11y_action`](crate::El::on_a11y_action) and the item has no
+/// `on_press` of its own.
+pub(crate) fn composite_item(role: Role) -> bool {
+    matches!(
+        role,
+        Role::ListBoxOption
+            | Role::MenuListOption
+            | Role::TreeItem
+            | Role::Row
+            | Role::Cell
+            | Role::GridCell
+            | Role::Tab
+            | Role::MenuItem
+            | Role::MenuItemCheckBox
+            | Role::MenuItemRadio
+    )
+}
+
 /// Tabular containers (`row_count` / `column_count`, ARIA `aria-rowcount` / `aria-colcount`),
 /// matching WAI-ARIA 1.2 and Chromium's `ui::IsTableLike`.
 pub(crate) fn table_container(role: Role) -> bool {

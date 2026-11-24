@@ -51,7 +51,7 @@ pub(crate) use rune_media::video;
 pub(crate) use tooling::virtual_desktop as desktop;
 pub(crate) use window::titlebar;
 
-/// AccessKit's types, for [`Runtime::accessibility_tree`] and [`Runtime::accessibility_action`].
+/// AccessKit's types, for [`El::on_a11y_action`], [`Runtime::accessibility_tree`] and [`Runtime::accessibility_action`].
 pub use a11y::AccessibilityLink;
 pub use accesskit;
 pub use app::App;

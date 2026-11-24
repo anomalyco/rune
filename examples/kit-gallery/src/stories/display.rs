@@ -378,3 +378,88 @@ pub(super) fn scroll_view_thumb(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(col().children(rows))
         .scroll_bar_styled(ScrollBarStyle::scroll_view(k))
 }
+
+/// Container-owned listbox using `El::on_a11y_action`: rows carry `role("option")` with no
+/// per-row `on_press`, so pointer, keyboard and assistive clicks all route through the container.
+pub(super) fn list_delegated_a11y(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    const ITEMS: [(&str, &str, bool); 4] = [
+        ("opt-readme", "README.md", false),
+        ("opt-cargo", "Cargo.toml", false),
+        ("opt-lib", "src/lib.rs", false),
+        ("opt-locked", "Cargo.lock (locked)", true),
+    ];
+    const ROW_H: f32 = 30.0;
+    let selected = s.picked("delegated-a11y", "opt-readme");
+    let selected_label = ITEMS.iter().find(|(id, _, _)| *id == selected).map_or("README.md", |(_, name, _)| *name);
+    let rows = ITEMS.iter().map(|&(id, name, disabled)| {
+        let active = selected == id;
+        let fill = if active { k.c.layer_02 } else { rune::Color::TRANSPARENT };
+        let fg = if disabled { k.c.text_faint } else if active { k.c.text_strong } else { k.c.text_base };
+        row()
+            .key(id)
+            .role("option")
+            .label(name)
+            .focus_selected(active)
+            .disabled(disabled)
+            .w_full()
+            .h(ROW_H)
+            .px(10.0)
+            .center_y()
+            .radius(k.radius.sm)
+            .fill(fill)
+            .child(text(name).font(k.ty.ui_compact).color(fg))
+    });
+    col()
+        .w(280.0)
+        .gap(8.0)
+        .child(text("Workspace files").key("list-heading").role("heading").level(3).font(k.ty.ui_medium).color(k.c.text_strong))
+        .child(
+            col()
+                .key("delegated-list")
+                .role("listbox")
+                .label("Workspace files")
+                .focusable(true)
+                .active_descendant(selected)
+                .w_full()
+                .padding(4.0)
+                .radius(k.radius.md)
+                .fill(k.c.bg_base)
+                .border(1.0, k.c.border_weak)
+                .on_drag(|s: &mut G, d, _| {
+                    if d.phase == rune::Phase::Up && !d.cancelled() {
+                        let idx = ((d.y - 4.0) / ROW_H).floor() as isize;
+                        if let Some(&(id, _, false)) = usize::try_from(idx).ok().and_then(|i| ITEMS.get(i)) {
+                            s.pick.insert("delegated-a11y".into(), id.into());
+                        }
+                    }
+                })
+                .on_key(|s: &mut G, ev, _| {
+                    let enabled: Vec<&str> = ITEMS.iter().filter(|(_, _, d)| !d).map(|(id, _, _)| *id).collect();
+                    let cur = enabled.iter().position(|id| *id == s.picked("delegated-a11y", "opt-readme")).unwrap_or(0);
+                    let next = match ev.key {
+                        rune::Key::Down => (cur + 1).min(enabled.len() - 1),
+                        rune::Key::Up => cur.saturating_sub(1),
+                        _ => return false,
+                    };
+                    s.pick.insert("delegated-a11y".into(), enabled[next].into());
+                    true
+                })
+                .on_a11y_action(|s: &mut G, key, action, _| {
+                    if action == rune::accesskit::Action::Click
+                        && ITEMS.iter().any(|&(id, _, disabled)| id == key && !disabled)
+                    {
+                        s.pick.insert("delegated-a11y".into(), key.to_owned());
+                        return true;
+                    }
+                    false
+                })
+                .children(rows),
+        )
+        .child(
+            text(format!("Selected: {selected_label}"))
+                .key("delegated-status")
+                .role("status")
+                .font(k.ty.small)
+                .color(k.c.text_weak),
+        )
+}
