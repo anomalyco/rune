@@ -1,0 +1,1 @@
+- Web: `App::on_frame_drawn` now runs on the browser's main thread after each drawn CPU or GPU frame (and not on unchanged or skipped frames), matching desktop windows.

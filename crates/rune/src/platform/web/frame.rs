@@ -460,6 +460,9 @@ impl FrameHost for WebFrameHost<'_> {
             let proxy = self.proxy.clone();
             full_faces::fetch(std::mem::take(&mut self.r.late_fonts), !self.r.document, move || { proxy.send_event(Wake::App).ok(); });
         }
+        if self.drawn {
+            self.r.app.inspect_frame();
+        }
         if self.r.app.rt_mut().shell_request.take().is_some() {
             self.should_end = true;
             return;

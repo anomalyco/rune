@@ -336,7 +336,9 @@ extra windows, native menus, drag-out, native audio/video, built-in HTTP client 
 [HTTP requests (fetch)](#http-requests-fetch)) or hot patching.
 Native configuration types remain source-compatible, but their desktop host paths are not
 used on wasm. Unsupported window requests warn in the console; Show/Open are ignored.
-The document title follows `AppSpec::title`, and hidden tabs report `is_visible() == false`.
+The document title follows `AppSpec::title`, hidden tabs report `is_visible() == false`,
+and `App::on_frame_drawn` runs on the browser's main thread after each drawn CPU or GPU frame
+(never on unchanged or skipped frames), matching desktop windows.
 
 The functional proof uses headless Chromium and Playwright:
 

@@ -91,6 +91,7 @@ pub(super) trait WebApp {
     fn compositor_draws_own(&self) -> bool;
     fn render_compositor(&mut self, args: CompositorFrame<'_>) -> bool;
     fn release_compositor_gpu(&mut self);
+    fn inspect_frame(&mut self);
     fn paste_event(&mut self, clipboard: &crate::clipboard::Client, content: crate::ClipboardContent, image: Option<&JsValue>);
 }
 
@@ -206,6 +207,7 @@ pub(super) struct TypedWebApp<S: 'static> {
     rt: Runtime<S>,
     shared: Arc<Shared<S>>,
     compositor: Option<Box<dyn Compositor<S>>>,
+    on_frame_drawn: Option<crate::frame::encoded::OnFrameDrawn<S>>,
 }
 
 impl<S: 'static> TypedWebApp<S> {
@@ -226,12 +228,12 @@ impl<S: 'static> TypedWebApp<S> {
         let shared = app.shared.core.clone();
         let start: StartFn = Box::new(move |fonts, viewport, env, wake, live_wake| {
             app.spec.fonts = with_fonts(app.spec.fonts, fonts);
-            let (rt, shared, compositor, spec_fonts) =
+            let (rt, shared, compositor, on_frame_drawn, spec_fonts) =
                 super::super::web_math::start_web_runtime(app, viewport, env, wake.clone(), live_wake);
             let menus = crate::native_menu::MenuGuard::attach(&shared, false);
             let shortcuts = crate::shortcuts::Guard::attach(&shared, wake, false, false);
             StartedWebApp {
-                app: Box::new(TypedWebApp { rt, shared, compositor }),
+                app: Box::new(TypedWebApp { rt, shared, compositor, on_frame_drawn }),
                 menus,
                 shortcuts,
                 fonts: spec_fonts,
@@ -310,6 +312,12 @@ impl<S: 'static> WebApp for TypedWebApp<S> {
     fn release_compositor_gpu(&mut self) {
         if let Some(c) = self.compositor.as_mut() {
             c.release_gpu();
+        }
+    }
+
+    fn inspect_frame(&mut self) {
+        if let Some(hook) = self.on_frame_drawn.as_mut() {
+            hook(&self.rt);
         }
     }
 

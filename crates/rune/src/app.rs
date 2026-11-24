@@ -600,11 +600,23 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Runs on the UI thread after each `Drawn` frame of the app's window, with the runtime as
-    /// that frame presented it (`Runtime::elements`, `Runtime::state`), for an app that watches
-    /// its own motion. Pair it with [`last_input`](crate::last_input) to tell motion the user
-    /// caused from motion they didn't. Like `on_frame_encoded`, it changes nothing about when
-    /// or what the window draws, and only desktop windows call it.
+    /// Runs on the UI thread after each `Drawn` frame of the app's window (desktop windows and
+    /// the web runner, and never on unchanged or skipped frames), with the runtime as that frame
+    /// presented it (`Runtime::elements`, `Runtime::state`), for an app that watches its own
+    /// motion or waits for presented frames. Pair it with [`last_input`](crate::last_input) to
+    /// tell motion the user caused from motion they didn't. Like `on_frame_encoded`, it changes
+    /// nothing about when or what the window draws.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// let spec = AppSpec::new("Demo", (320.0, 240.0), || 0u32, |_, _| el());
+    /// App::new(spec)
+    ///     .on_frame_drawn(|rt| {
+    ///         let _count = rt.elements().len();
+    ///     })
+    ///     .run();
+    /// ```
     pub fn on_frame_drawn(mut self, f: impl FnMut(&crate::Runtime<S>) + 'static) -> Self {
         self.on_frame_drawn = Some(Box::new(f));
         self
