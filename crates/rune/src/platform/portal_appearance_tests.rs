@@ -161,3 +161,85 @@ fn the_last_runs_reduced_motion_stands_until_a_portal_key_or_the_fallback_answer
     assert!(record_enable_animations(&slot, true));
     assert!(!resolved_reduced_motion(slot.load(Ordering::Relaxed)));
 }
+
+#[test]
+fn unanswered_double_click_stays_none() {
+    let slot = AtomicU32::new(DOUBLE_CLICK_UNKNOWN);
+    assert!(!has_portal_double_click(slot.load(Ordering::Relaxed)));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), None);
+    assert_eq!(effective_double_click_ms(slot.load(Ordering::Relaxed)), 500);
+}
+
+#[test]
+fn portal_double_click_clamps_and_tracks_live_changes() {
+    let slot = AtomicU32::new(DOUBLE_CLICK_UNKNOWN);
+
+    // Portal matching the 500 ms default marks portal authority without a needless redraw.
+    assert!(!record_double_click(&slot, 500));
+    assert!(has_portal_double_click(slot.load(Ordering::Relaxed)));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(0.5));
+
+    // A slower desktop setting updates and requests a redraw; repeating it requests none.
+    assert!(record_double_click(&slot, 1200));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(1.2));
+    assert!(!record_double_click(&slot, 1200));
+
+    // Values outside 50..=5000 ms are clamped to the bounds.
+    assert!(record_double_click(&slot, 10));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(0.05));
+    assert!(record_double_click(&slot, 999_999));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(5.0));
+
+    // Zero is ignored and leaves the stored setting untouched.
+    assert!(!record_double_click(&slot, 0));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(5.0));
+
+    // Returning to 500 ms after a different value triggers a redraw.
+    assert!(record_double_click(&slot, 500));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(0.5));
+}
+
+#[test]
+fn fallback_double_click_applies_only_until_portal_answers() {
+    let slot = AtomicU32::new(DOUBLE_CLICK_UNKNOWN);
+
+    // Zero is ignored and leaves the slot unanswered.
+    assert!(!record_fallback_double_click(&slot, 0));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), None);
+
+    // Before the portal answers, the fallback sets the cached interval and clamps it.
+    assert!(record_fallback_double_click(&slot, 400));
+    assert!(!has_portal_double_click(slot.load(Ordering::Relaxed)));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(0.4));
+    assert!(!record_fallback_double_click(&slot, 400));
+
+    // A portal answer agreeing with the fallback marks portal authority without a redraw.
+    assert!(!record_double_click(&slot, 400));
+    assert!(has_portal_double_click(slot.load(Ordering::Relaxed)));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(0.4));
+
+    // Once the portal has answered, subsequent fallback writes cannot override it.
+    assert!(!record_fallback_double_click(&slot, 900));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(0.4));
+
+    // Live SettingChanged updates from the portal take effect and still block fallback writes.
+    assert!(record_double_click(&slot, 1200));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(1.2));
+    assert!(!record_fallback_double_click(&slot, 300));
+    assert_eq!(stored_double_click_secs(slot.load(Ordering::Relaxed)), Some(1.2));
+}
+
+#[cfg(all(target_os = "linux", feature = "dbus"))]
+#[test]
+fn reads_double_click_millis_however_deeply_the_portal_wraps_it() {
+    use zbus::zvariant::Value;
+    assert_eq!(dbus::millis_value(&Value::I32(1200)), Some(1200));
+    assert_eq!(dbus::millis_value(&Value::U32(400)), Some(400));
+    assert_eq!(dbus::millis_value(&Value::Value(Box::new(Value::I32(750)))), Some(750));
+    assert_eq!(dbus::millis_value(&Value::Value(Box::new(Value::Value(Box::new(Value::U32(300)))))), Some(300));
+    assert_eq!(dbus::millis_value(&Value::I32(0)), None);
+    assert_eq!(dbus::millis_value(&Value::I32(-400)), None);
+    assert_eq!(dbus::millis_value(&Value::U32(0)), None);
+    assert_eq!(dbus::millis_value(&Value::Str("400".into())), None);
+    assert_eq!(dbus::millis_value(&Value::Bool(true)), None);
+}
