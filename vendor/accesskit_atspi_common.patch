@@ -1,0 +1,115 @@
+diff --git a/src/node.rs b/src/node.rs
+index cfcc46a..908d9ba 100644
+--- a/src/node.rs
++++ b/src/node.rs
+@@ -397,8 +397,13 @@ impl NodeWrapper<'_> {
+     }
+ 
+     fn size_of_set(&self) -> Option<String> {
+-        self.0
+-            .size_of_set_from_container(&filter)
++        // Rune (vendor/accesskit_atspi_common.patch): a levelled item in a flat tree carries its
++        // own level's set size; read it on item roles before falling back to the container, so
++        // containers never report their children's count as their own sibling set size.
++        (self.0.is_item_like() || self.0.role() == Role::Row)
++            .then(|| self.0.size_of_set())
++            .flatten()
++            .or_else(|| self.0.size_of_set_from_container(&filter))
+             .map(|s| s.to_string())
+     }
+ 
+@@ -2063,3 +2068,94 @@ pub struct CacheNode {
+     pub role: AtspiRole,
+     pub states: StateSet,
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use accesskit::{Node, TreeInfo, TreeUpdate};
++
++    #[test]
++    fn item_size_of_set_overrides_container_without_leaking_onto_containers() {
++        let mut root = Node::new(Role::Window);
++        root.set_children(vec![NodeId(1), NodeId(6), NodeId(8), NodeId(10)]);
++
++        let mut tree = Node::new(Role::Tree);
++        tree.set_author_id("tree");
++        tree.set_size_of_set(2);
++        tree.set_children(vec![NodeId(2), NodeId(3)]);
++
++        let mut level1 = Node::new(Role::TreeItem);
++        level1.set_author_id("level1");
++        level1.set_level(0);
++        level1.set_position_in_set(0);
++        level1.set_size_of_set(2);
++
++        let mut level2 = Node::new(Role::TreeItem);
++        level2.set_author_id("level2");
++        level2.set_level(1);
++        level2.set_position_in_set(2);
++        level2.set_size_of_set(3);
++
++        let mut listbox = Node::new(Role::ListBox);
++        listbox.set_author_id("listbox");
++        listbox.set_size_of_set(4);
++        listbox.set_children(vec![NodeId(7)]);
++
++        let mut option = Node::new(Role::ListBoxOption);
++        option.set_author_id("option");
++        option.set_position_in_set(1);
++
++        let mut treegrid = Node::new(Role::TreeGrid);
++        treegrid.set_author_id("treegrid");
++        treegrid.set_size_of_set(2);
++        treegrid.set_children(vec![NodeId(9)]);
++
++        let mut row = Node::new(Role::Row);
++        row.set_author_id("row");
++        row.set_level(1);
++        row.set_position_in_set(0);
++        row.set_size_of_set(5);
++
++        let mut group = Node::new(Role::Group);
++        group.set_author_id("group");
++        group.set_size_of_set(3);
++
++        let update = TreeUpdate {
++            nodes: vec![
++                (NodeId(0), root),
++                (NodeId(1), tree),
++                (NodeId(2), level1),
++                (NodeId(3), level2),
++                (NodeId(6), listbox),
++                (NodeId(7), option),
++                (NodeId(8), treegrid),
++                (NodeId(9), row),
++                (NodeId(10), group),
++            ],
++            tree: Some(TreeInfo::new(NodeId(0))),
++            tree_id: TreeId::ROOT,
++            focus: NodeId(0),
++        };
++        let t = Tree::new(update, false);
++        fn find<'a>(node: NodeRef<'a>, key: &str) -> Option<NodeRef<'a>> {
++            if node.author_id() == Some(key) {
++                return Some(node);
++            }
++            node.children().find_map(|c| find(c, key))
++        }
++        let attrs = |key: &str| {
++            let node = find(t.state().root(), key).unwrap();
++            NodeWrapper(&node).attributes()
++        };
++
++        assert_eq!(attrs("tree").get("setsize"), None, "tree container must not report its own children count");
++        assert_eq!(attrs("level1").get("setsize").map(String::as_str), Some("2"), "level-1 treeitem reads its own size");
++        assert_eq!(attrs("level2").get("setsize").map(String::as_str), Some("3"), "level-2 treeitem overrides the tree container's size");
++        assert_eq!(attrs("level2").get("posinset").map(String::as_str), Some("3"));
++        assert_eq!(attrs("listbox").get("setsize"), None, "listbox container must not report its own children count");
++        assert_eq!(attrs("option").get("setsize").map(String::as_str), Some("4"), "unlevelled option falls back to container size");
++        assert_eq!(attrs("treegrid").get("setsize"), None, "treegrid container must not report its own children count");
++        assert_eq!(attrs("row").get("setsize").map(String::as_str), Some("5"), "levelled treegrid row reads its own size");
++        assert_eq!(attrs("group").get("setsize"), None, "group container must not report its own children count");
++    }
++}

@@ -628,14 +628,20 @@ impl RuntimeCore {
                 let live_sig = self.a11y_live_sig(i, content_print);
                 let mut print = mix(self.a11y_print(i, role, &w), content_print);
                 let parent_role = slots[w.slot].role;
+                let is_set_item = crate::a11y::roles::ordered_set_item_in(role, parent_role);
                 if let Some(list) = self.commit.virtuals.get(&n.path) {
                     print = mix(print, list.keys.len() as u64 + 1);
                 }
                 if let Some(index) = self.a11y_index_in_list(i)
-                    && (crate::a11y::roles::ordered_set_item_in(role, parent_role)
-                        || (role == Role::Row && crate::a11y::roles::table_container(parent_role)))
+                    && (is_set_item || (role == Role::Row && crate::a11y::roles::table_container(parent_role)))
                 {
                     print = mix(print, index as u64 + 1);
+                }
+                if n.a11y.level.is_some()
+                    && is_set_item
+                    && let Some((_, size)) = n.a11y.more.as_ref().and_then(|m| m.set)
+                {
+                    print = mix(print, size as u64 + 1);
                 }
                 if n.scroll.is_some() && self.scroll.scrolls.contains_key(&n.id) { scrollers.push((i, w)); }
                 if self.a11y_uses_long_field(i) { long_fields.push((i, w, self.a11y_lines_box_print(i, &w))); }
@@ -711,7 +717,10 @@ impl RuntimeCore {
                 continue;
             };
             let mut node = self.a11y_node(i, s.role, &s.walk);
-            if let Some(list) = self.commit.virtuals.get(&self.tree.nodes[i].path) {
+            let n = &self.tree.nodes[i];
+            let parent_role = found.slots[s.walk.slot].role;
+            let is_set_item = crate::a11y::roles::ordered_set_item_in(s.role, parent_role);
+            if let Some(list) = self.commit.virtuals.get(&n.path) {
                 if crate::a11y::roles::ordered_set(s.role) { node.set_size_of_set(list.keys.len()); }
                 if crate::a11y::roles::table_container(s.role) && node.row_count().is_none() {
                     node.set_row_count(list.keys.len());
@@ -719,13 +728,20 @@ impl RuntimeCore {
             }
             // An app's own place in the set or table wins over the virtual list's index.
             if let Some(index) = self.a11y_index_in_list(i) {
-                let parent_role = found.slots[s.walk.slot].role;
-                if node.position_in_set().is_none() && crate::a11y::roles::ordered_set_item_in(s.role, parent_role) {
+                if node.position_in_set().is_none() && is_set_item {
                     node.set_position_in_set(index);
                 }
                 if s.role == Role::Row && node.row_index().is_none() && crate::a11y::roles::table_container(parent_role) {
                     node.set_row_index(index);
                 }
+            }
+            // A levelled ordered-set item (a flat tree's treeitem or treegrid row) carries its own
+            // level's set size so adapters report per-level counts without synthetic groups.
+            if n.a11y.level.is_some()
+                && is_set_item
+                && let Some((_, size)) = n.a11y.more.as_ref().and_then(|m| m.set)
+            {
+                node.set_size_of_set(size);
             }
             if let Some((size, _)) = s.set_size { node.set_size_of_set(size); }
             // Its text's lines and links come first, then its element children.

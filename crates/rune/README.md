@@ -2539,6 +2539,7 @@ wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 naga = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
+accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 ```
 
 Patch both `winit` and `sctk-adwaita`, and from the same revision: Rune's winit calls

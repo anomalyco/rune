@@ -54,7 +54,7 @@ rune-core ─────────┼──► rune-gpu (also depends on rune
 
 - Above `rune`: `crates/rune-kit` (themable components, optional `markdown`, `mermaid`, `math`, and `syntax` features), `crates/rune-mermaid` (native Mermaid flowcharts, sequence, and state diagrams), `crates/rune-knobs` (live tuning knobs and panel), `crates/rune-luau` (sandboxed Luau UI scripting via `mlua`; requires a host C++ compiler and is excluded from default workspace members), `themes/opencode` (`rune-theme-opencode`), and `crates/rune-ref` (scalar CPU reference renderer for differential testing; optional `gpu` feature, excluded from default workspace members).
 - Beside `rune`: `crates/rune-fx` (special-effects passes; depends on `rune-motion`, `rune-staging`), `crates/rune-light` (real-time SDF lighting and glass; depends on `rune-staging`), `crates/rune-mac` (macOS window-frame helpers; depends on `rune-notify`), and `crates/rune-perf` (bounded local performance recording; depends on `procwatch`).
-- Vendored patched crates under `vendor/`: `wgpu-hal`, `naga`, `winit`, `sctk-adwaita`, `parley_engine`, `accesskit_windows`, and `accesskit_macos` are patched via `[patch.crates-io]` in the root `Cargo.toml`; `tiny-skia-path` is a direct path dependency of `crates/rune-text`.
+- Vendored patched crates under `vendor/`: `wgpu-hal`, `naga`, `winit`, `sctk-adwaita`, `parley_engine`, `accesskit_windows`, `accesskit_macos`, and `accesskit_atspi_common` are patched via `[patch.crates-io]` in the root `Cargo.toml`; `tiny-skia-path` is a direct path dependency of `crates/rune-text`.
 
 ## Single-thread frame model and background work
 

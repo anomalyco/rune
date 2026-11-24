@@ -688,8 +688,13 @@ impl NodeWrapper<'_> {
     }
 
     fn size_of_set(&self) -> Option<i32> {
-        self.node
-            .size_of_set_from_container(&filter)
+        // Rune (vendor/accesskit_windows.patch): a levelled item in a flat tree carries its own
+        // level's set size; read it on item roles before falling back to the container, so
+        // containers never report their children's count as their own sibling set size.
+        (self.node.is_item_like() || self.node.role() == Role::Row)
+            .then(|| self.node.size_of_set())
+            .flatten()
+            .or_else(|| self.node.size_of_set_from_container(&filter))
             .and_then(|s| s.try_into().ok())
     }
 
@@ -1655,4 +1660,92 @@ patterns! {
 fn platform_node_impl_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<PlatformNode>();
+}
+
+#[test]
+fn item_size_of_set_overrides_container_without_leaking_onto_containers() {
+    use accesskit::{Node, TreeInfo, TreeUpdate};
+    use accesskit_consumer::Tree;
+
+    let mut root = Node::new(Role::Window);
+    root.set_children(vec![NodeId(1), NodeId(6), NodeId(8), NodeId(10)]);
+
+    let mut tree = Node::new(Role::Tree);
+    tree.set_author_id("tree");
+    tree.set_size_of_set(2);
+    tree.set_children(vec![NodeId(2), NodeId(3)]);
+
+    let mut level1 = Node::new(Role::TreeItem);
+    level1.set_author_id("level1");
+    level1.set_level(0);
+    level1.set_position_in_set(0);
+    level1.set_size_of_set(2);
+
+    let mut level2 = Node::new(Role::TreeItem);
+    level2.set_author_id("level2");
+    level2.set_level(1);
+    level2.set_position_in_set(2);
+    level2.set_size_of_set(3);
+
+    let mut listbox = Node::new(Role::ListBox);
+    listbox.set_author_id("listbox");
+    listbox.set_size_of_set(4);
+    listbox.set_children(vec![NodeId(7)]);
+
+    let mut option = Node::new(Role::ListBoxOption);
+    option.set_author_id("option");
+    option.set_position_in_set(1);
+
+    let mut treegrid = Node::new(Role::TreeGrid);
+    treegrid.set_author_id("treegrid");
+    treegrid.set_size_of_set(2);
+    treegrid.set_children(vec![NodeId(9)]);
+
+    let mut row = Node::new(Role::Row);
+    row.set_author_id("row");
+    row.set_level(1);
+    row.set_position_in_set(0);
+    row.set_size_of_set(5);
+
+    let mut group = Node::new(Role::Group);
+    group.set_author_id("group");
+    group.set_size_of_set(3);
+
+    let update = TreeUpdate {
+        nodes: vec![
+            (NodeId(0), root),
+            (NodeId(1), tree),
+            (NodeId(2), level1),
+            (NodeId(3), level2),
+            (NodeId(6), listbox),
+            (NodeId(7), option),
+            (NodeId(8), treegrid),
+            (NodeId(9), row),
+            (NodeId(10), group),
+        ],
+        tree: Some(TreeInfo::new(NodeId(0))),
+        tree_id: TreeId::ROOT,
+        focus: NodeId(0),
+    };
+    let t = Tree::new(update, false);
+    fn find<'a>(node: NodeRef<'a>, key: &str) -> Option<NodeRef<'a>> {
+        if node.author_id() == Some(key) {
+            return Some(node);
+        }
+        node.children().find_map(|c| find(c, key))
+    }
+    let size_of = |key: &str| {
+        let node = find(t.state().root(), key).unwrap();
+        let mut buf = Vec::new();
+        NodeWrapper { node: &node, string_buffer: &mut buf }.size_of_set()
+    };
+
+    assert_eq!(size_of("tree"), None, "tree container must not report its own children count");
+    assert_eq!(size_of("level1"), Some(2), "level-1 treeitem reads its own size");
+    assert_eq!(size_of("level2"), Some(3), "level-2 treeitem overrides the tree container's size");
+    assert_eq!(size_of("listbox"), None, "listbox container must not report its own children count");
+    assert_eq!(size_of("option"), Some(4), "unlevelled option falls back to container size");
+    assert_eq!(size_of("treegrid"), None, "treegrid container must not report its own children count");
+    assert_eq!(size_of("row"), Some(5), "levelled treegrid row reads its own size");
+    assert_eq!(size_of("group"), None, "group container must not report its own children count");
 }
