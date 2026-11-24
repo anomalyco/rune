@@ -85,6 +85,15 @@ fn page(_: &App, _: &mut Cx<App>) -> El {
 }
 
 #[test]
+fn sidebar_grip_set_value_lands_on_exact_width_from_off_grid() {
+    let mut rt = mount(App { sidebar: PaneState::new(243.0).range(180.0, 420.0), ..App::default() }, shell);
+    assert!(rt.accessibility_action("sidebar-grip", Action::SetValue, Some(ActionData::NumericValue(300.0))));
+    assert!(rt.accessibility_action("sidebar-grip", Action::SetValue, Some(ActionData::NumericValue(300.0))));
+    settle(&mut rt);
+    assert_eq!(rt.state.sidebar.width(), 300.0, "SetValue lands on the requested width, even off the step grid");
+}
+
+#[test]
 fn a_page_names_its_toolbar() {
     let rt = mount(App::default(), page);
     let tree = rt.accessibility_json();

@@ -36,9 +36,15 @@ pub(crate) struct Range {
 }
 
 impl Range {
+    /// The bounds `(min, max)` when finite and ordered (`min <= max`).
+    pub(crate) fn usable_bounds(self) -> Option<(f64, f64)> {
+        (self.min.is_finite() && self.max.is_finite() && self.min <= self.max)
+            .then_some((self.min, self.max))
+    }
+
     /// The step when the range is finite, ordered (`min <= max`) and has a finite positive step.
     pub(crate) fn usable_step(self) -> Option<f64> {
-        if !self.value.is_finite() || !self.min.is_finite() || !self.max.is_finite() || self.min > self.max {
+        if !self.value.is_finite() || self.usable_bounds().is_none() {
             return None;
         }
         self.step.filter(|s| s.is_finite() && *s > 0.0)
@@ -191,14 +197,15 @@ impl El {
         self
     }
     /// A slider's or progress bar's number, between `min` and `max` (ARIA `aria-valuenow`,
-    /// `aria-valuemin` and `aria-valuemax`). Assistive technology increments it through
-    /// [`El::on_step`].
+    /// `aria-valuemin` and `aria-valuemax`). Assistive technology sets it through
+    /// [`El::on_set_value`] and increments or decrements it through [`El::on_step`].
     pub fn range_value(mut self, value: f64, min: f64, max: f64) -> Self {
         let step = self.cold.a11y.more.as_ref().and_then(|m| m.range).and_then(|r| r.step);
         self.cold_mut().a11y.more().range = Some(Range { value, min, max, step });
         self
     }
     /// The amount one step of [`El::on_step`] moves a [`range_value`](Self::range_value).
+    /// [`El::on_set_value`] takes absolute numeric values with or without a step.
     pub fn range_step(mut self, step: f64) -> Self {
         let more = self.cold_mut().a11y.more();
         let range = more.range.get_or_insert(Range { value: 0.0, min: 0.0, max: 0.0, step: None });

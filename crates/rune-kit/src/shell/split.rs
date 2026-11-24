@@ -495,6 +495,9 @@ fn pane<S: 'static>(state: PaneState, access: fn(&mut S) -> &mut PaneState, cont
             let p = access(s);
             p.set_width(p.width() + steps as f32 * GRIP_STEP);
         })
+        .on_set_value(move |s: &mut S, value, _| {
+            access(s).set_width(value as f32);
+        })
     });
     let toggle: Option<Apply> =
         toggle.then(|| Box::new(move |e: El| e.on_press(move |s: &mut S| access(s).toggle())) as Apply);
