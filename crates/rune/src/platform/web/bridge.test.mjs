@@ -103,6 +103,9 @@ class FakeNode {
 
     remove() {
         if (!this.parentElement) return;
+        if (globalThis.document?.activeElement && this.contains(globalThis.document.activeElement)) {
+            globalThis.document.activeElement = globalThis.document.body;
+        }
         const i = this.parentElement.children.indexOf(this);
         if (i >= 0) this.parentElement.children.splice(i, 1);
         this.parentElement = null;
@@ -122,6 +125,10 @@ class FakeNode {
         };
         walk(this);
         return out;
+    }
+
+    getBoundingClientRect() {
+        return { left: 0, top: 0, right: 160, bottom: 80, width: 160, height: 80 };
     }
 
     contains(node) {
@@ -184,6 +191,8 @@ function installDom() {
         value: () => ({ position: 'relative', direction: 'ltr' }),
         configurable: true,
     });
+    Object.defineProperty(globalThis, 'innerWidth', { value: 800, writable: true, configurable: true });
+    Object.defineProperty(globalThis, 'innerHeight', { value: 844, writable: true, configurable: true });
     return { doc, win, body };
 }
 
@@ -1851,4 +1860,113 @@ test('consumer demand triggers flush the mirror and timer helpers pass attempt a
     }
 
     bridge.destroy(h);
+});
+
+test('showMenu blocks activate while open and restores focus and selection to active field on close', () => {
+    const { doc, win, body, events, h } = setup({ coarse: true });
+    const spec = JSON.stringify({
+        items: [
+            { id: 'copy', title: 'Copy' },
+            { id: 'paste', title: 'Paste' },
+        ],
+    });
+
+    bridge.sync(h, 'editor', 'hello', 0, 5, 5, false);
+    bridge.activate(h);
+    assert.equal(doc.activeElement, h.textarea);
+
+    bridge.showMenu(h, spec, 20, 40, 160, false);
+    const menu = body.children.find(el => el.getAttribute('data-rune-menu') !== null);
+    assert.ok(menu, 'popup menu should be mounted');
+    assert.equal(doc.activeElement, menu);
+
+    // Chrome collapses an unfocused textarea's selection to 0.
+    h.textarea.selectionStart = 0;
+    h.textarea.selectionEnd = 0;
+    h.textarea.selectionDirection = 'none';
+
+    // A stray activate() while the menu is open (such as lifting a finger after a long press)
+    // must keep DOM focus in the menu.
+    bridge.activate(h);
+    assert.equal(doc.activeElement, menu);
+
+    // Viewport resize dismisses the menu and must return DOM focus + selection to h.textarea.
+    win.dispatchEvent({ type: 'resize' });
+    assert.equal(body.children.find(el => el.getAttribute('data-rune-menu') !== null), undefined);
+    assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+    assert.equal(doc.activeElement, h.textarea);
+    assert.equal(h.textarea.inputMode, 'text');
+    assert.equal(h.textarea.selectionStart, 5);
+    assert.equal(h.textarea.selectionEnd, 5);
+    assert.equal(h.textarea.selectionDirection, 'forward');
+
+    // Picking a menu item also returns DOM focus + selection to h.textarea.
+    events.length = 0;
+    bridge.showMenu(h, spec, 20, 40, 160, false);
+    const menu2 = body.children.find(el => el.getAttribute('data-rune-menu') !== null);
+    assert.equal(doc.activeElement, menu2);
+    h.textarea.selectionStart = 0;
+    h.textarea.selectionEnd = 0;
+    menu2.children[0].dispatchEvent({ type: 'click', preventDefault() {} });
+    assert.deepEqual(events, [{ kind: 'menu', id: 'copy' }]);
+    assert.equal(doc.activeElement, h.textarea);
+    assert.equal(h.textarea.selectionStart, 5);
+    assert.equal(h.textarea.selectionEnd, 5);
+
+    // Secure field: dismissing the menu returns DOM focus to h.password.
+    events.length = 0;
+    bridge.sync(h, 'secret', '', 0, 0, 0, true);
+    bridge.activate(h);
+    assert.equal(doc.activeElement, h.password);
+    bridge.showMenu(h, spec, 20, 40, 160, false);
+    assert.notEqual(doc.activeElement, h.password);
+    doc.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {}, stopPropagation() {} });
+    assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+    assert.equal(doc.activeElement, h.password);
+    assert.equal(h.password.inputMode, 'text');
+
+    bridge.destroy(h);
+});
+
+test('showMenu dismissal falls back to canvas only when no field is focused and respects page mode', () => {
+    const spec = JSON.stringify({ items: [{ id: 'a', title: 'Action' }] });
+    const escape = () => ({ type: 'keydown', key: 'Escape', preventDefault() {}, stopPropagation() {} });
+
+    // Standalone/app mode without a focused field: dismissal focuses the canvas.
+    {
+        const { doc, canvas, events, h } = setup();
+        bridge.showMenu(h, spec, 10, 10, 160, false);
+        assert.notEqual(doc.activeElement, canvas);
+        doc.dispatchEvent(escape());
+        assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+        assert.equal(doc.activeElement, canvas);
+        bridge.destroy(h);
+    }
+
+    // Page mode without a focused field: dismissal must not focus the canvas.
+    {
+        const { doc, body, canvas, events, h } = setup({ page: true });
+        bridge.showMenu(h, spec, 10, 10, 160, false);
+        doc.dispatchEvent(escape());
+        assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+        assert.notEqual(doc.activeElement, canvas);
+        assert.equal(doc.activeElement, body);
+        bridge.destroy(h);
+    }
+
+    // Page mode with a focused field: dismissal restores DOM focus and selection to h.textarea.
+    {
+        const { doc, events, h } = setup({ page: true });
+        bridge.sync(h, 'editor', 'hello', 0, 2, 5, false);
+        bridge.activate(h);
+        bridge.showMenu(h, spec, 10, 10, 160, false);
+        h.textarea.selectionStart = 0;
+        h.textarea.selectionEnd = 0;
+        doc.dispatchEvent(escape());
+        assert.deepEqual(events, [{ kind: 'menu', id: null }]);
+        assert.equal(doc.activeElement, h.textarea);
+        assert.equal(h.textarea.selectionStart, 2);
+        assert.equal(h.textarea.selectionEnd, 5);
+        bridge.destroy(h);
+    }
 });

@@ -731,13 +731,14 @@ export function showMenu(h, json, x, y, minWidth, dark) {
     } };
 }
 
-// Takes the menu down; `refocus` gives the canvas its focus back, as a closing menu does.
+// Takes the menu down; `refocus` gives the focused field or canvas its focus back, as a closing
+// menu does.
 function closeMenu(h, refocus) {
-    if (!h.menu) return;
+    if (typeof h.menu?.done !== 'function') return;
     const menu = h.menu;
     h.menu = null;
     menu.done();
-    if (refocus) h.canvas.focus({ preventScroll: true });
+    if (refocus) activate(h);
 }
 
 // The app went away or the menu was answered by Rune itself: no answer is sent.
@@ -1444,6 +1445,8 @@ function deferStatic(h) {
 }
 
 export function activate(h) {
+    // Keep DOM focus inside an open Rune popup menu until it closes.
+    if (typeof h.menu?.done === 'function') return;
     // A page's canvas is `tabindex="-1"`: focusing it on a tap would only drop the reader's text
     // selection or a link's focus. An input that took the keyboard still gets it.
     if (h.page && !h.key) return;

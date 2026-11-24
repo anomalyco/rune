@@ -177,7 +177,11 @@ pub(crate) enum WebActivate {
 #[cfg(any(target_arch = "wasm32", test))]
 impl WebActivate {
     /// Resolves whether `sync_input` should call `activate()` for the post-frame runtime state.
+    /// Never steals DOM focus while a pop-up menu is open.
     pub(crate) fn should_activate(self, rt: &RuntimeCore) -> bool {
+        if rt.popup_menu().is_some() {
+            return false;
+        }
         match self {
             Self::Never => false,
             Self::Always => true,
@@ -196,6 +200,21 @@ pub(crate) fn web_mouse_activate(action: ButtonAction) -> WebActivate {
         | ButtonAction::SecondaryUp
         | ButtonAction::OtherDown(_)
         | ButtonAction::OtherUp(_) => WebActivate::Never,
+    }
+}
+
+/// Returns how a web touch release (`TouchPhase::Ended`) should activate DOM focus after its
+/// immediate frame. Lifting a finger after a long press (`ended_in_menu`) or while a pop-up menu
+/// is open leaves DOM focus alone so `[data-rune-menu]` keeps focus.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn web_touch_end_activate(rt: &RuntimeCore, document: bool, ended_in_menu: bool) -> WebActivate {
+    if ended_in_menu || rt.popup_menu().is_some() {
+        return WebActivate::Never;
+    }
+    if !document || rt.has_focus() {
+        WebActivate::Always
+    } else {
+        WebActivate::Never
     }
 }
 
