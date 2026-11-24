@@ -20,6 +20,9 @@ pub(in crate::runtime) struct ModifierKeys {
     /// How far Ctrl+Shift's direction chord has gone (`edit::direction_keys`), whatever the
     /// app asked for and whoever took the keys.
     chord: crate::edit::DirChord,
+    /// Test override for whether an RTL keyboard layout is installed (`None` queries the OS).
+    #[cfg(test)]
+    pub(super) rtl_layout_override: Option<bool>,
     /// Bit `i` set while `ALL[i]` is down.
     held: u16,
     /// The last `PhysicalInput::Modifiers`, to see a flag turn off. A flag that was never on
@@ -167,17 +170,47 @@ impl focus_machine::KeyboardState {
         self.modifier_keys.chord = crate::edit::DirChord::Idle;
     }
 
+    fn has_rtl_layout(&self) -> bool {
+        #[cfg(test)]
+        if let Some(has) = self.modifier_keys.rtl_layout_override {
+            return has;
+        }
+        crate::platform::ime::has_rtl_keyboard_layout()
+    }
+
     /// Steps Ctrl+Shift's direction chord; returns the flow direction when the release completes it.
     pub(super) fn step_direction_chord(&mut self, event: &PhysicalInput) -> Option<crate::el::Flow> {
-        let PhysicalInput::Key { key, mods, pressed, repeat: false } = *event else { return None };
-        let Some(m) = modifier(key) else {
-            if pressed { self.modifier_keys.chord = crate::edit::DirChord::Idle; }
-            return None;
-        };
-        let after = with(mods, m, pressed);
-        let (next, set) = crate::edit::step_dir_chord(self.modifier_keys.chord, m, pressed, after.ctrl, after.shift);
-        self.modifier_keys.chord = next;
-        set
+        match *event {
+            PhysicalInput::FocusLost => {
+                self.disarm_direction_chord();
+                None
+            }
+            PhysicalInput::Modifiers(m) => {
+                if m.alt || m.logo {
+                    self.disarm_direction_chord();
+                }
+                None
+            }
+            PhysicalInput::Key { key, mods, pressed, repeat } => {
+                let Some(m) = modifier(key) else {
+                    if pressed {
+                        self.disarm_direction_chord();
+                    }
+                    return None;
+                };
+                if repeat {
+                    return None;
+                }
+                let after = with(mods, m, pressed);
+                if after.alt || after.logo || (pressed && m == Modifier::Fn) {
+                    self.disarm_direction_chord();
+                    return None;
+                }
+                let (next, set) = crate::edit::step_dir_chord(self.modifier_keys.chord, m, pressed, after.ctrl, after.shift);
+                self.modifier_keys.chord = next;
+                set
+            }
+        }
     }
 
     #[inline]
@@ -195,10 +228,14 @@ impl RuntimeCore {
     #[inline]
     pub(crate) fn modifier_keys(&self) -> bool { self.kbd.modifier_keys() }
 
-    /// Ctrl+Left Shift and Ctrl+Right Shift: every physical key steps the chord (`edit::direction_keys`),
-    /// and its release sets the focused field's direction. Any other key disarms it. True if it set one.
+    /// Ctrl+Left Shift and Ctrl+Right Shift (Windows with an RTL keyboard layout installed,
+    /// matching Chrome): every physical key steps the chord (`edit::direction_keys`), and its
+    /// release sets the focused field's direction. Any other key, modifier or focus loss disarms
+    /// it. True if it set one.
     pub(in crate::runtime) fn direction_chord(&mut self, app: &mut dyn AppDriver, event: &PhysicalInput, tx: &mut Tx) -> bool {
-        let Some(flow) = self.kbd.step_direction_chord(event).filter(|_| self.focused_input().is_some()) else { return false };
+        let Some(flow) = self.kbd.step_direction_chord(event)
+            .filter(|_| self.focused_input().is_some() && self.kbd.has_rtl_layout())
+        else { return false };
         self.with_focused(app, |e| { e.force_dir(flow); crate::edit::EditOutcome::default() }, tx)
     }
 
