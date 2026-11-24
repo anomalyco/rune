@@ -83,6 +83,9 @@ impl RuntimeCore {
     /// method turning on or off is only the app's to hear.
     pub(in crate::runtime) fn run_ime(&mut self, app: &mut dyn AppDriver, ev: Ime, one: &mut Tx) -> bool {
         let app_target = self.app_ime_composing(app) || matches!(ev, Ime::Enabled | Ime::Disabled) || self.focused_input().is_none();
+        if !app_target && self.focused_input_read_only() {
+            return false;
+        }
         let composing = self.composing(app);
         // An empty preedit or commit while the focused field has no open composition changes
         // nothing (`TextEdit::commit_composed` returns early on an empty string). Routing it
@@ -113,7 +116,7 @@ impl RuntimeCore {
     /// The focused field's composition becomes its text, its change handler hearing it, before
     /// focus or the caret moves away from it.
     pub(in crate::runtime) fn finish_field_composition(&mut self, app: &mut dyn AppDriver, one: &mut Tx) -> bool {
-        if !self.focused_input().is_some_and(|i| i.access.is_some()) || !self.composing(app) { return false; }
+        if self.focused_input_read_only() || !self.focused_input().is_some_and(|i| i.access.is_some()) || !self.composing(app) { return false; }
         let mut finished = false;
         self.with_focused(app, |e| { finished = e.finish_composition(); EditOutcome::default() }, one);
         if finished { self.edit.ime_reset = true; }

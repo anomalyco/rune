@@ -36,6 +36,7 @@ pub struct G {
     /// Context menu anchor from a story's `on_secondary_press`.
     pub menu_at: Option<rune::PointerPress>,
     pub edits: [TextEdit; 12],
+    pub read_only_edits: [TextEdit; 2],
     pub nowrap_code: TextEdit,
     pub align_y_edits: [TextEdit; 4],
     pub key_preview_edit: TextEdit,
@@ -109,6 +110,13 @@ fn init() -> G {
         open: None,
         menu_at: None,
         edits: Default::default(),
+        read_only_edits: [
+            TextEdit::new("https://api.example.com/v1/workspaces/rune"),
+            TextEdit::new("fn preview(input: &str) -> usize {
+    // Move with arrows, Shift+arrows, Home/End, or word steps.
+    input.lines().count()
+}"),
+        ],
         nowrap_code: TextEdit::new(stories::NOWRAP_CODE),
         align_y_edits: [
             TextEdit::new("Vertically centred single-line text"),

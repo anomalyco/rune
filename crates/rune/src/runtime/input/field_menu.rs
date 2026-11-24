@@ -53,7 +53,8 @@ impl RuntimeCore {
         let selection_change = input.selection_change.clone();
         let Some(access) = input.access.clone() else { return false };
         let (single, secure) = (input.single_line, input.edit.is_secure());
-        let spell = input.spellcheck && !secure;
+        let read_only = self.is_node_read_only(i);
+        let spell = input.spellcheck && !secure && !read_only;
         let layout = self.tree.nodes[i].text_layout.clone();
         let point = hit_at.and_then(|(x, y)| self.input_text_point(i, x, y));
         let s = self.env.scale;
@@ -102,12 +103,13 @@ impl RuntimeCore {
         }
         let selected = a != b && !secure;
         menu = menu
-            .item(PopupItem::new("cut", label(Label::Cut)).enabled(selected))
+            .item(PopupItem::new("cut", label(Label::Cut)).enabled(selected && !read_only))
             .item(PopupItem::new("copy", label(Label::Copy)).enabled(selected))
-            .item(PopupItem::new("paste", label(Label::Paste)));
+            .item(PopupItem::new("paste", label(Label::Paste)).enabled(!read_only));
         if !cfg!(target_os = "macos") {
             menu = menu.item(PopupItem::new("select-all", label(Label::SelectAll)));
         }
+        let toggle = (!read_only).then_some(toggle).flatten();
         let mut languages = None;
         if let Some((on, _)) = &toggle {
             menu = menu.separator().item(PopupItem::new("spellcheck", label(Label::Spellcheck)).checked(*on));
@@ -190,9 +192,18 @@ impl RuntimeCore {
             "select-all" => {
                 let ev = command('a');
                 let layout = self.focused_layout();
-                self.with_focused(app, |e| e.key_in(&ev, layout.as_ref().map(TextLayout::view)), one);
+                let ro = self.focused_input_read_only();
+                self.with_focused(
+                    app,
+                    |e| if ro { e.key_in_read_only(&ev, layout.as_ref().map(TextLayout::view)) } else { e.key_in(&ev, layout.as_ref().map(TextLayout::view)) },
+                    one,
+                );
             }
-            "paste" => one.request_paste(),
+            "paste" => {
+                if !self.focused_input_read_only() {
+                    one.request_paste();
+                }
+            }
             "learn-spelling" => {
                 if let Some((_, _, word)) = &menu.word {
                     crate::spell::learn(word);
@@ -217,7 +228,9 @@ impl RuntimeCore {
             }
             id => {
                 let n = id.strip_prefix("suggestion-").and_then(|n| n.parse::<usize>().ok());
-                if let (Some((a, b, _)), Some(suggestion)) = (menu.word, n.and_then(|n| menu.suggestions.get(n).cloned())) {
+                if !self.focused_input_read_only()
+                    && let (Some((a, b, _)), Some(suggestion)) = (menu.word, n.and_then(|n| menu.suggestions.get(n).cloned()))
+                {
                     self.with_focused(
                         app,
                         |e| {

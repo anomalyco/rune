@@ -34,11 +34,13 @@ impl RuntimeCore {
             return true;
         }
         one.physical_key = None;
+        let read_only = self.focused_input_read_only();
         // Inside a list item or code block, Tab (and Shift+Tab in lists) edits the document by default.
         if ev.key == crate::edit::Key::Tab
             && !ev.mods.cmd
             && !ev.mods.alt
             && !ev.mods.ctrl
+            && !read_only
             && self.focused_input().is_some_and(|i| {
                 !i.single_line
                     && !i.edit.is_secure()
@@ -66,9 +68,10 @@ impl RuntimeCore {
             crate::edit::Key::Function(_) | crate::edit::Key::ContextMenu | crate::edit::Key::Tab | crate::edit::Key::PageUp | crate::edit::Key::PageDown
             | crate::edit::Key::Insert | crate::edit::Key::PrintScreen | crate::edit::Key::ScrollLock | crate::edit::Key::Pause => false,
             crate::edit::Key::Command(_) => match ev.edit_command() {
-                Some('a' | 'z') => true,
-                Some('y') => !cfg!(target_os = "macos"),
-                Some('b' | 'i' | 'u') => self.focused_input().is_some_and(|i| i.edit.format_chord(ev).is_some()),
+                Some('a') => true,
+                Some('z') => !read_only,
+                Some('y') => !read_only && !cfg!(target_os = "macos"),
+                Some('b' | 'i' | 'u') => !read_only && self.focused_input().is_some_and(|i| i.edit.format_chord(ev).is_some()),
                 _ => false,
             },
             // Alt+Space is the window menu's, so a field leaves it to the shell.
@@ -76,9 +79,28 @@ impl RuntimeCore {
             _ => !ev.is_command_chord() || ev.control_binding().is_some(),
         };
         if input_handles {
-            let layout = self.focused_layout();
-            if self.with_focused(app, |e| e.key_in(ev, layout.as_ref().map(TextLayout::view)), one) {
-                return true;
+            if read_only {
+                if self.focused_input().is_some_and(|i| i.access.is_some()) {
+                    let allows_ro = match &ev.key {
+                        crate::edit::Key::Left | crate::edit::Key::Right | crate::edit::Key::Up | crate::edit::Key::Down
+                        | crate::edit::Key::Home | crate::edit::Key::End | crate::edit::Key::Escape => true,
+                        crate::edit::Key::Command(_) => ev.edit_command() == Some('a'),
+                        _ => matches!(ev.control_binding(), Some('a' | 'e' | 'b' | 'f' | 'p' | 'n')),
+                    };
+                    if !allows_ro {
+                        one.live_only();
+                        return true;
+                    }
+                    let layout = self.focused_layout();
+                    if self.with_focused(app, |e| e.key_in_read_only(ev, layout.as_ref().map(TextLayout::view)), one) {
+                        return true;
+                    }
+                }
+            } else {
+                let layout = self.focused_layout();
+                if self.with_focused(app, |e| e.key_in(ev, layout.as_ref().map(TextLayout::view)), one) {
+                    return true;
+                }
             }
         }
         one.physical_key = physical_key;
@@ -107,6 +129,9 @@ impl RuntimeCore {
     /// `TextEdit::selected`, and attaches `TextEdit::selected_html` for rich fields. Cut deletes
     /// the selection and records undo after reading what to copy.
     pub(in crate::runtime) fn copy_or_cut_focused(&mut self, app: &mut dyn AppDriver, cut: bool, one: &mut Tx) -> bool {
+        if cut && self.focused_input_read_only() {
+            return false;
+        }
         let Some((copy_hook, pill_copy_text)) = self
             .focused_input()
             .map(|i| (i.copy.clone(), i.pill_copy_text.clone()))
@@ -438,6 +463,25 @@ impl RuntimeCore {
         self.node(path).and_then(|n| n.input.as_deref()).or_else(|| self.commit.virtual_inputs.get(path).map(Box::as_ref))
     }
 
+    /// Whether node `i` or any of its ancestors marks it read-only (`El::read_only(true)`),
+    /// or its `InputSpec` carries `read_only`.
+    pub(crate) fn is_node_read_only(&self, i: usize) -> bool {
+        if self.tree.nodes[i].input.as_ref().is_some_and(|inp| inp.read_only) {
+            return true;
+        }
+        std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
+            .any(|k| self.tree.nodes[k].a11y.more.as_ref().is_some_and(|m| m.read_only))
+    }
+
+    /// Whether the currently focused text input is read-only (`El::read_only(true)` on the field
+    /// or an ancestor, including a focused field scrolled out of a virtual list).
+    pub(crate) fn focused_input_read_only(&self) -> bool {
+        match self.focused_index() {
+            Some(i) => self.is_node_read_only(i),
+            None => self.focused_input().is_some_and(|inp| inp.read_only),
+        }
+    }
+
     /// What [`Tx::focused`] reports: the focused link's id, else the focused element's key,
     /// else its path's last segment (a field in a virtual row that scrolled out has no node).
     pub(in crate::runtime) fn focused_key(&self) -> Option<String> {
@@ -506,6 +550,7 @@ impl RuntimeCore {
         self.paste_target().is_some() || self.app_paste_handler().is_some()
     }
     pub(crate) fn paste_target(&self) -> Option<String> {
+        if self.focused_input_read_only() { return None; }
         self.focused_input().filter(|i| i.access.is_some()).and(self.kbd.focus.owned())
     }
     /// What the paste target hears: every form, images too, for a field with
@@ -533,6 +578,7 @@ impl RuntimeCore {
 
     /// The focused field's text around its selection, for the platform's input method.
     pub(crate) fn ime_text(&self) -> Option<crate::edit::ImeText> {
+        if self.focused_input_read_only() { return None; }
         self.focused_input().and_then(|i| i.edit.ime_text())
     }
 

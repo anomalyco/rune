@@ -566,7 +566,7 @@ impl RuntimeCore {
                     if !content.has_plain() { return EditOutcome::default(); }
                     edit.paste(content.text())
                 };
-                if self.with_focused_state(app, into_field, &mut one) {
+                if !self.focused_input_read_only() && self.with_focused_state(app, into_field, &mut one) {
                     log_event!(self, "paste field");
                     true
                 } else if let Some(f) = self.app_paste_handler() && (f.call)(app.states(), &content, &mut one) {

@@ -65,7 +65,12 @@ impl RuntimeCore {
         let enabled = !n.a11y.disabled;
         let pressable = enabled && handlers.is_some_and(|h| h.on_press.is_some());
         let secondary = enabled && handlers.is_some_and(|h| h.on_secondary_press.is_some());
-        let (input, editable) = (enabled && n.input.is_some(), enabled && n.input.as_ref().is_some_and(|i| i.access.is_some()));
+        let read_only = self.is_node_read_only(i);
+        let (input, has_access) = (
+            enabled && n.input.is_some(),
+            enabled && n.input.as_ref().is_some_and(|inp| inp.access.is_some()),
+        );
+        let editable = has_access && !read_only;
         let (expanded, steps, sets_value, scrolls) = (
             n.a11y.expanded,
             enabled && n.focus.step.is_some(),
@@ -134,7 +139,8 @@ impl RuntimeCore {
                 Some(ActionData::Value(v)) => self.queue_a11y(path, A11yAct::Replace(zeroize::Zeroizing::new(v.to_string()))),
                 _ => return false,
             },
-            (Ak::SetTextSelection, None) if editable && !n.is_secure() => {
+            (Ak::SetValue | Ak::ReplaceSelectedText, None) if has_access && read_only => return false,
+            (Ak::SetTextSelection, None) if has_access && !n.is_secure() => {
                 let Some(ActionData::SetTextSelection(sel)) = &request.data else { return false };
                 // A field past its runs: bytes of its value, on the field itself (`a11y_text_nodes`).
                 if let Some(input) = n.input.as_deref() && split_id(sel.anchor.node) == (id, 0) && split_id(sel.focus.node) == (id, 0) {
@@ -229,12 +235,18 @@ impl RuntimeCore {
                 f(app.states(), value, tx);
                 true
             }
-            A11yAct::SetValue(value) => self.a11y_edit(app, path, tx, move |e| {
-                let len = e.text.len();
-                e.set_selection(0, len);
-                e.paste(&value)
-            }),
-            A11yAct::Replace(value) => self.a11y_edit(app, path, tx, move |e| e.paste(&value)),
+            A11yAct::SetValue(value) => {
+                if self.node_index(&path).is_some_and(|i| self.is_node_read_only(i)) { return false; }
+                self.a11y_edit(app, path, tx, move |e| {
+                    let len = e.text.len();
+                    e.set_selection(0, len);
+                    e.paste(&value)
+                })
+            }
+            A11yAct::Replace(value) => {
+                if self.node_index(&path).is_some_and(|i| self.is_node_read_only(i)) { return false; }
+                self.a11y_edit(app, path, tx, move |e| e.paste(&value))
+            }
             A11yAct::Select(a, b) => self.a11y_edit(app, path, tx, move |e| {
                 let (a, b) = (e.model_index(a), e.model_index(b));
                 e.set_selection(a, b);

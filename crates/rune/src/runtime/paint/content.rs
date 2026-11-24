@@ -459,7 +459,7 @@ impl RuntimeCore {
                     }
                 }
                 // Misspelled words (`El::spellcheck`), but the one the caret is typing.
-                if inp.spellcheck && !e.is_secure() && e.preedit().is_none() && !departing {
+                if inp.spellcheck && !e.is_secure() && !self.is_node_read_only(i) && e.preedit().is_none() && !departing {
                     // Windows, Linux and the web check word by word, so the paragraphs shown are
                     // checked alone: a 20,000-line draft hashes and walks only what's on screen.
                     // macOS finds each text's language from the whole of it.

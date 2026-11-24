@@ -164,3 +164,95 @@ fn macos_key_home_end_matches_issue_1682_repro_and_default() {
     code.key(&key(Key::Down, Mods { cmd: true, ..Mods::default() }), None);
     assert_eq!(code.focus, code.text.len());
 }
+
+#[test]
+fn key_in_read_only_navigates_selects_and_copies_while_blocking_all_mutations() {
+    let shift = Mods { shift: true, ..Mods::default() };
+    let cmd = Mods { cmd: true, ..Mods::default() };
+    let cmd_shift = Mods { cmd: true, shift: true, ..Mods::default() };
+    let word_mods = if cfg!(target_os = "macos") {
+        Mods { alt: true, ..Mods::default() }
+    } else {
+        Mods { ctrl: true, cmd: true, ..Mods::default() }
+    };
+    let word_shift = Mods { shift: true, ..word_mods };
+
+    let mut e = TextEdit::new("alpha beta\ngamma delta").rich();
+    // Seed undo history so Undo/Redo attempts would mutate if unblocked.
+    e.set_caret(e.text.len());
+    e.insert("!");
+    assert_eq!(e.text, "alpha beta\ngamma delta!");
+    e.set_caret(0);
+
+    // Character, word, line, and Shift+selection navigation all work.
+    let _ = e.key_in_read_only(&plain(Key::Right), None);
+    assert_eq!((e.anchor, e.focus), (1, 1));
+    let _ = e.key_in_read_only(&key(Key::Right, word_shift), None);
+    assert_eq!(e.selected(), if cfg!(target_os = "macos") { "lpha" } else { "lpha " });
+
+    let _ = e.key_in_read_only(&plain(Key::Home), None);
+    assert_eq!(e.focus, 0);
+    let _ = e.key_in_read_only(&key(Key::Right, shift), None);
+    assert_eq!(e.selected(), "a");
+
+    // Cmd/Ctrl+A selects all; Cmd/Ctrl+C copies without mutating.
+    let _ = e.key_in_read_only(&key(Key::Command('a'), cmd), None);
+    assert_eq!(e.selected(), "alpha beta\ngamma delta!");
+    let copy = e.key_in_read_only(&key(Key::Command('c'), cmd), None);
+    assert_eq!(copy.copy.as_deref(), Some("alpha beta\ngamma delta!"));
+
+    // Mutating keys all leave text, marks, and blocks untouched and do not submit or cut.
+    let before = e.text.clone();
+    let blocked = [
+        plain(Key::Text("x".into())),
+        plain(Key::Backspace),
+        plain(Key::Delete),
+        plain(Key::Enter),
+        key(Key::Enter, shift),
+        plain(Key::Tab),
+        key(Key::Tab, shift),
+        key(Key::Command('x'), cmd),
+        key(Key::Command('z'), cmd),
+        key(Key::Command('z'), cmd_shift),
+        key(Key::Command('y'), cmd),
+        key(Key::Command('b'), cmd),
+        key(Key::Command('i'), cmd),
+        key(Key::Command('u'), cmd),
+    ];
+    for ev in &blocked {
+        let out = e.key_in_read_only(ev, None);
+        assert_eq!(e.text, before, "read-only key {ev:?} must not mutate text");
+        assert!(e.marks().is_empty(), "read-only key {ev:?} must not add marks");
+        assert!(!out.submit, "read-only key {ev:?} must not submit");
+        assert!(out.copy.is_none(), "read-only key {ev:?} must not cut/copy");
+    }
+
+    // Escape still requests blur.
+    assert!(e.key_in_read_only(&plain(Key::Escape), None).blur);
+
+    // Right/Down at the end of a trailing Code or Quote block must not insert a paragraph.
+    let mut code = TextEdit::new("let x = 1;").rich();
+    code.set_block(Block::Code);
+    code.set_caret(code.text.len());
+    let _ = code.key_in_read_only(&plain(Key::Right), None);
+    let _ = code.key_in_read_only(&plain(Key::Down), None);
+    assert_eq!(code.text, "let x = 1;");
+    assert_eq!(code.blocks(), &[Block::Code]);
+
+    // RTL text navigates and selects without mutating.
+    let mut rtl = TextEdit::new("مرحبا بالعالم");
+    rtl.set_caret(0);
+    let _ = rtl.key_in_read_only(&key(Key::End, shift), None);
+    assert_eq!(rtl.selected(), "مرحبا بالعالم");
+    let _ = rtl.key_in_read_only(&plain(Key::Backspace), None);
+    assert_eq!(rtl.text, "مرحبا بالعالم");
+
+    // Empty read-only field handles navigation, selection, copy, and blocked edits safely.
+    let mut empty = TextEdit::new("");
+    let _ = empty.key_in_read_only(&plain(Key::Left), None);
+    let _ = empty.key_in_read_only(&plain(Key::Right), None);
+    let _ = empty.key_in_read_only(&key(Key::Command('a'), cmd), None);
+    let _ = empty.key_in_read_only(&plain(Key::Backspace), None);
+    let _ = empty.key_in_read_only(&plain(Key::Text("a".into())), None);
+    assert_eq!(empty.text, "");
+}

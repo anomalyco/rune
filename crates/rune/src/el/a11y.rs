@@ -258,9 +258,30 @@ impl El {
         self
     }
     /// A control whose value can be read but not changed now (ARIA `aria-readonly`): a
-    /// checklist shown in a finished document.
+    /// checklist shown in a finished document, or a read-only [`text_input`](crate::text_input).
+    ///
+    /// On a bound [`text_input`](crate::text_input) (with [`El::on_edit`]), `read_only(true)`
+    /// matches HTML's `<input readonly>` / `<textarea readonly>`: the field stays focusable with
+    /// a visible caret, pointer and keyboard navigation, `Shift` selection, `Cmd/Ctrl+A`,
+    /// `Cmd/Ctrl+C`, and assistive `Focus`/`Click`/`SetTextSelection`, while refusing typing,
+    /// `Backspace`/`Delete`, `Enter`, `Cut`, `Paste`, `Undo`/`Redo`, rich formatting chords,
+    /// IME composition, spellcheck suggestions, and assistive `SetValue`/`ReplaceSelectedText`.
+    ///
+    /// ```no_run
+    /// # use rune::{TextEdit, TextStyle, text_input};
+    /// # struct App { preview: TextEdit }
+    /// # let s = App { preview: TextEdit::new("Read-only text") };
+    /// let _ = text_input(&s.preview, TextStyle::new(14.0, 400.0))
+    ///     .read_only(true)
+    ///     .on_edit(|s: &mut App| &mut s.preview);
+    /// ```
     pub fn read_only(mut self, read_only: bool) -> Self {
-        self.cold_mut().a11y.more().read_only = read_only;
+        if read_only || self.cold.a11y.more.is_some() {
+            self.cold_mut().a11y.more().read_only = read_only;
+        }
+        if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            input.read_only = read_only;
+        }
         self
     }
     /// How a column header sorts its table: `Some(true)` ascending, `Some(false)` descending

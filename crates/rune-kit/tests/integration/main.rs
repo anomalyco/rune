@@ -45,6 +45,7 @@ mod text_area_grow;
 mod text_area_keys;
 mod text_input_hooks;
 mod text_input_press;
+mod text_input_read_only;
 mod tooltip;
 mod tree;
 mod tx_callbacks;

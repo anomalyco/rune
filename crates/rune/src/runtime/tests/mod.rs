@@ -31,6 +31,7 @@ mod pointer_drag;
 mod pointer_hit;
 mod press_moving;
 mod press_pointer;
+mod read_only_input;
 mod relayout;
 mod remount;
 mod reveal_chain;

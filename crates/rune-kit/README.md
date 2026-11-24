@@ -108,7 +108,10 @@ keeping padding, forced-colors focus outline, invalid red ink and disabled dimmi
 `.trailing(el)` (reserving bottom-end width beside the wrapping/scrolling viewport while keeping
 the accessory independently focusable), and `.scroll_bar(bool)` / `.scroll_bar_styled(style)`
 (attaching a kit scroll bar to its internal `auto_grow` or `max_height` scroll viewport; see
-`rune-textarea--composer` in `kit-gallery`), `.line_home_end(bool)` (opting into visual line-based Home/End and Shift+Home/End on macOS for code editors while keeping Cmd+Home/End and Cmd+Up/Down on document ends; see `rune-textarea--code-keys` in `kit-gallery`), and `.reveal_caret_on_focus(bool)` (also on `TextInput`, off by default, forwarding `El::reveal_caret_on_focus` so focusing a scrolled field brings its caret into view; see `rune-textarea--focus-caret` in `kit-gallery`). `TextInput`, `TextArea`
+`rune-textarea--composer` in `kit-gallery`), `.line_home_end(bool)` (opting into visual line-based Home/End and Shift+Home/End on macOS for code editors while keeping Cmd+Home/End and Cmd+Up/Down on document ends; see `rune-textarea--code-keys` in `kit-gallery`), and `.reveal_caret_on_focus(bool)` (also on `TextInput`, off by default, forwarding `El::reveal_caret_on_focus` so focusing a scrolled field brings its caret into view; see `rune-textarea--focus-caret` in `kit-gallery`). `TextInput` and `TextArea` also accept `.read_only(bool)` (forwarding `El::read_only` to the
+inner editor so focus, caret, keyboard/pointer selection, and Copy stay active while mutating
+edits, Cut, Paste, Undo/Redo, IME, and spellcheck are blocked; see `rune-text-input--read-only`
+in `kit-gallery`). `TextInput`, `TextArea`
 and `TextField` forward `on_secondary_press` (replacing the default field context menu),
 `on_pill_press` and `on_pill_secondary` (intercepting primary and secondary clicks on `Mark::Pill`
 chips, skipped when disabled), `on_input_selection` (running before view rebuild whenever runtime
