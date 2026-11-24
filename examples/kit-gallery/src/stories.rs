@@ -25,7 +25,7 @@ use markdown::{
     markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_plan, markdown_mermaid_plan_zoomed, markdown_mermaid_shapes, markdown_mermaid_streaming, markdown_mermaid_systems, markdown_stream_tail, markdown_streaming, markdown_table_styles,
     markdown_walkthrough,
 };
-use overlays::{hover_card_basic, hover_card_placements, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, overlays_tx_callbacks, popover_basic, popover_controlled, toast_all, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
+use overlays::{hover_card_basic, hover_card_placements, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, overlays_tx_callbacks, popover_basic, popover_controlled, toast_all, tooltip_help_arrow, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
 
 type Story = fn(&G, &Kit, &mut Vec<El>) -> El;
 
@@ -81,6 +81,7 @@ const OPENED: &[(&str, &str)] = &[
     ("ui-tooltip--with-keybind", "tip"),
     ("ui-tooltip--path", "tip"),
     ("ui-tooltip--title-description", "tip"),
+    ("rune-tooltip--help-arrow", "help-arrow"),
     ("ui-toast--all-examples", "toast"),
 ];
 
@@ -161,6 +162,7 @@ stories! {
     "ui-tooltip--with-keybind" => tooltip_keybind,
     "ui-tooltip--path" => tooltip_path,
     "ui-tooltip--title-description" => tooltip_title_description,
+    "rune-tooltip--help-arrow" => tooltip_help_arrow,
     "components-hover-card--basic" => hover_card_basic,
     "rune-hover-card--placements" => hover_card_placements,
     "rune-overlays--tx-callbacks" => overlays_tx_callbacks,

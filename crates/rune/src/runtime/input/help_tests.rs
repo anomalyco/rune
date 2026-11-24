@@ -426,3 +426,286 @@ fn focused_link_shows_its_help_under_its_glyphs_when_on_focus_is_enabled() {
     press(&mut off, Key::Tab, false);
     assert!(off.help_tooltip().is_none(), "on_focus(false) keeps link focus tooltips off");
 }
+
+#[test]
+fn help_look_side_places_by_default_flips_and_is_overridden_by_el_help_side() {
+    use crate::{Direction, HelpLook, Side};
+
+    struct Cfg {
+        side: Side,
+        rtl: bool,
+    }
+
+    fn view(c: &Cfg, cx: &mut Cx<Cfg>) -> El {
+        cx.help_look(HelpLook::system(true).side(c.side));
+        let mut root = el().w_full().h_full()
+            .child(el().key("mid").size(40.0, 20.0).pin(Some(140.0), Some(140.0), None, None).help("Middle"))
+            .child(el().key("near_top").size(40.0, 20.0).pin(Some(140.0), Some(6.0), None, None).help("Near top"))
+            .child(el().key("near_left").size(40.0, 20.0).pin(Some(6.0), Some(140.0), None, None).help("Near left"))
+            .child(el().key("force_bottom").size(40.0, 20.0).pin(Some(140.0), Some(200.0), None, None).help("Force bottom").help_side(Side::Bottom))
+            .child(el().key("force_right").size(40.0, 20.0).pin(Some(80.0), Some(200.0), None, None).help("Force right").help_side(Side::Right));
+        if c.rtl {
+            root = root.dir(Direction::Rtl);
+        }
+        root
+    }
+
+    let hover = |rt: &mut Runtime<Cfg>, key: &str| -> ([f32; 4], [f32; 4]) {
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some(key)).unwrap();
+        let b = rt.drawn_box(i);
+        rt.pointer_move(0.0, 0.0);
+        rt.frame(1.0 / 60.0);
+        rt.pointer_move((b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5);
+        rt.frame(1.0 / 60.0);
+        rt.frame(rt.help_delay + 0.1);
+        let (_, tip) = rt.help_tooltip().expect("tooltip open");
+        (b, tip)
+    };
+
+    // HelpLook::side(Side::Top) opens above by default, flips below near the top edge, and
+    // yields to per-element El::help_side (including an explicit Side::Bottom override).
+    let mut rt = Runtime::new(Cfg { side: Side::Top, rtl: false }, view, (320.0, 320.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let (mid, tip) = hover(&mut rt, "mid");
+    assert!(tip[1] + tip[3] <= mid[1], "Side::Top opens above: tip {tip:?}, anchor {mid:?}");
+
+    let (top, tip) = hover(&mut rt, "near_top");
+    assert!(tip[1] >= top[3], "Side::Top flips below near top edge: tip {tip:?}, anchor {top:?}");
+
+    let (fb, tip) = hover(&mut rt, "force_bottom");
+    assert!(tip[1] >= fb[3], "El::help_side(Side::Bottom) overrides HelpLook::side(Side::Top): tip {tip:?}, anchor {fb:?}");
+
+    let (fr, tip) = hover(&mut rt, "force_right");
+    assert!(tip[0] >= fr[2], "El::help_side(Side::Right) overrides HelpLook::side(Side::Top): tip {tip:?}, anchor {fr:?}");
+
+    // HelpLook::side(Side::Left) opens left by default and flips right near the left edge.
+    let mut rt = Runtime::new(Cfg { side: Side::Left, rtl: false }, view, (320.0, 320.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let (mid, tip) = hover(&mut rt, "mid");
+    assert!(tip[0] + tip[2] <= mid[0], "Side::Left opens left: tip {tip:?}, anchor {mid:?}");
+
+    let (nl, tip) = hover(&mut rt, "near_left");
+    assert!(tip[0] >= nl[2], "Side::Left flips right near left edge: tip {tip:?}, anchor {nl:?}");
+
+    // In RTL layout, HelpLook::side(Side::Right) mirrors to open on the left of its anchor.
+    let mut rt = Runtime::new(Cfg { side: Side::Right, rtl: true }, view, (320.0, 320.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let (mid, tip) = hover(&mut rt, "mid");
+    assert!(tip[0] + tip[2] <= mid[0], "RTL mirrors Side::Right to left: tip {tip:?}, anchor {mid:?}");
+}
+
+#[test]
+fn help_look_arrow_emits_triangle_facing_anchor_and_omits_when_disabled() {
+    use crate::render::{KIND_RECT, KIND_TRIANGLE};
+    use crate::{Color, HelpLook, Side};
+
+    struct Cfg {
+        side: Side,
+        arrow: f32,
+        gap: f32,
+    }
+
+    fn view(c: &Cfg, cx: &mut Cx<Cfg>) -> El {
+        cx.help_look(
+            HelpLook::system(true)
+                .fill(Color { r: 0.12, g: 0.14, b: 0.18, a: 1.0 })
+                .ring(0.0, Color::TRANSPARENT)
+                .gap(c.gap)
+                .side(c.side)
+                .arrow(c.arrow),
+        );
+        el().w_full().h_full()
+            .child(el().key("mid").size(40.0, 20.0).pin(Some(140.0), Some(140.0), None, None).help("Arrow tooltip"))
+            .child(el().key("near_top").size(40.0, 20.0).pin(Some(140.0), Some(6.0), None, None).help("Flipped"))
+    }
+
+    let open_at = |cfg: Cfg, key: &str, scale: f32| {
+        let mut rt = Runtime::new(cfg, view, (360.0, 320.0), Env::new(true, scale));
+        rt.frame(0.0);
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some(key)).unwrap();
+        let b = rt.drawn_box(i);
+        rt.pointer_move((b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5);
+        rt.frame(1.0 / 60.0);
+        rt.frame(rt.help_delay + 0.1);
+        (rt, b)
+    };
+
+    // Disabled, negative and non-finite arrow sizes emit zero KIND_TRIANGLE instances.
+    for size in [0.0, -4.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let (rt, _) = open_at(Cfg { side: Side::Top, arrow: size, gap: 4.0 }, "mid", 2.0);
+        assert!(rt.help_tooltip().is_some());
+        let tris = rt.instances.iter().filter(|i| i.params[1] == KIND_TRIANGLE).count();
+        assert_eq!(tris, 0, "arrow({size}) must emit no KIND_TRIANGLE");
+    }
+
+    // All four sides at 2x scale: one KIND_TRIANGLE facing the anchor, flush with the card edge,
+    // tip staying gap clear of the anchor and colour matching the card fill.
+    let s = 2.0;
+    for side in [Side::Top, Side::Bottom, Side::Left, Side::Right] {
+        let (rt, b) = open_at(Cfg { side, arrow: 5.0, gap: 4.0 }, "mid", s);
+        let (_, tip) = rt.help_tooltip().expect("tooltip open");
+        let tris: Vec<_> = rt.instances.iter().filter(|i| i.params[1] == KIND_TRIANGLE).collect();
+        assert_eq!(tris.len(), 1, "side {side:?}: expected 1 triangle");
+        let tri = tris[0];
+        assert_eq!(tri.params[0], 6.0, "side {side:?}: base hard, slanted legs AA");
+        let card = rt.instances.iter().rev().find(|i| i.params[1] == KIND_RECT && i.fill == tri.fill).expect("matching card rect");
+        assert_eq!(tri.fill, card.fill);
+        let [ax, ay, bx, by] = tri.radii;
+        let [cx, cy] = [tri.uv[0], tri.uv[1]];
+        let expected_h = 5.0 * s;
+        match side {
+            Side::Top => {
+                assert!((ay - (card.rect[1] + card.rect[3])).abs() < 0.01 && (by - ay).abs() < 0.01);
+                assert!((cy - (ay + expected_h)).abs() < 0.01, "Top arrow points down toward anchor");
+                assert!(cy <= b[1] * s - 4.0 * s + 1.0, "tip keeps gap clear of anchor");
+                assert!(tip[1] + tip[3] <= b[1] - 8.9);
+            }
+            Side::Bottom => {
+                assert!((ay - card.rect[1]).abs() < 0.01 && (by - ay).abs() < 0.01);
+                assert!((cy - (ay - expected_h)).abs() < 0.01, "Bottom arrow points up toward anchor");
+                assert!(cy >= b[3] * s + 4.0 * s - 1.0, "tip keeps gap clear of anchor");
+                assert!(tip[1] >= b[3] + 8.9);
+            }
+            Side::Left => {
+                assert!((ax - (card.rect[0] + card.rect[2])).abs() < 0.01 && (bx - ax).abs() < 0.01);
+                assert!((cx - (ax + expected_h)).abs() < 0.01, "Left arrow points right toward anchor");
+                assert!(cx <= b[0] * s - 4.0 * s + 1.0, "tip keeps gap clear of anchor");
+            }
+            Side::Right => {
+                assert!((ax - card.rect[0]).abs() < 0.01 && (bx - ax).abs() < 0.01);
+                assert!((cx - (ax - expected_h)).abs() < 0.01, "Right arrow points left toward anchor");
+                assert!(cx >= b[2] * s + 4.0 * s - 1.0, "tip keeps gap clear of anchor");
+            }
+        }
+    }
+
+    // When Side::Top flips to Side::Bottom near the top edge, the arrow flips to point up.
+    let (rt, b) = open_at(Cfg { side: Side::Top, arrow: 5.0, gap: 4.0 }, "near_top", s);
+    let (_, tip) = rt.help_tooltip().expect("flipped tooltip");
+    assert!(tip[1] >= b[3], "flipped below anchor");
+    let tri = rt.instances.iter().find(|i| i.params[1] == KIND_TRIANGLE).expect("flipped arrow");
+    assert!(tri.uv[1] < tri.radii[1], "flipped arrow points upward toward anchor");
+}
+
+#[test]
+fn help_look_arrow_clamps_inside_corner_radii_and_handles_edge_cases() {
+    use crate::render::{KIND_RECT, KIND_TRIANGLE};
+    use crate::{HelpLook, Side};
+
+    struct Cfg {
+        side: Side,
+        radius: f32,
+        arrow: f32,
+        anchor_x: f32,
+    }
+
+    fn view(c: &Cfg, cx: &mut Cx<Cfg>) -> El {
+        cx.help_look(HelpLook::system(true).radius(c.radius).side(c.side).arrow(c.arrow).gap(4.0).margin(4.0));
+        el().w_full().h_full()
+            .child(el().key("a").size(16.0, 20.0).pin(Some(c.anchor_x), Some(140.0), None, None).help("A fairly wide tooltip label"))
+    }
+
+    let open = |cfg: Cfg| {
+        let mut rt = Runtime::new(cfg, view, (320.0, 300.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("a")).unwrap();
+        let b = rt.drawn_box(i);
+        rt.pointer_move((b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5);
+        rt.frame(1.0 / 60.0);
+        rt.frame(rt.help_delay + 0.1);
+        rt
+    };
+
+    // Anchor pinned at the left window edge: card clamps to margin, arrow clamps inside
+    // [card.x + radius, card.x + card.w - radius].
+    let rt = open(Cfg { side: Side::Top, radius: 8.0, arrow: 5.0, anchor_x: 2.0 });
+    let tri = rt.instances.iter().find(|i| i.params[1] == KIND_TRIANGLE).expect("clamped arrow");
+    let card = rt.instances.iter().rev().find(|i| i.params[1] == KIND_RECT && i.fill == tri.fill).unwrap();
+    assert!(tri.radii[0] >= card.rect[0] + 8.0 - 0.01, "arrow left base stays clear of corner radius: {tri:?} vs {card:?}");
+    assert!(tri.radii[2] <= card.rect[0] + card.rect[2] - 8.0 + 0.01, "arrow right base stays clear of corner radius");
+
+    // Huge arrow clamps cleanly to the flat span between corner radii without panicking.
+    let rt = open(Cfg { side: Side::Top, radius: 6.0, arrow: 500.0, anchor_x: 140.0 });
+    let tri = rt.instances.iter().find(|i| i.params[1] == KIND_TRIANGLE).expect("huge arrow clamped");
+    let card = rt.instances.iter().rev().find(|i| i.params[1] == KIND_RECT && i.fill == tri.fill).unwrap();
+    assert!(tri.radii.iter().chain(&tri.uv).all(|v| v.is_finite()));
+    assert!(tri.radii[0] >= card.rect[0] + 6.0 - 0.01);
+    assert!(tri.radii[2] <= card.rect[0] + card.rect[2] - 6.0 + 0.01);
+
+    // Pill radius on a vertical edge leaves zero flat span: no degenerate triangle emitted.
+    let rt = open(Cfg { side: Side::Right, radius: 40.0, arrow: 5.0, anchor_x: 40.0 });
+    assert!(rt.help_tooltip().is_some());
+    assert_eq!(rt.instances.iter().filter(|i| i.params[1] == KIND_TRIANGLE).count(), 0);
+}
+
+#[test]
+fn help_look_arrow_fades_scales_and_respects_reduced_motion() {
+    use crate::render::{KIND_RECT, KIND_TRIANGLE};
+    use crate::{HelpLook, Side};
+
+    fn view(reduced: &bool, cx: &mut Cx<bool>) -> El {
+        cx.reduced_motion(*reduced);
+        cx.help_look(HelpLook::system(true).side(Side::Top).arrow(5.0).fade(0.2, 0.2, 0.8));
+        el().w_full().h_full()
+            .child(el().key("btn").size(40.0, 20.0).pin(Some(140.0), Some(140.0), None, None).help("Fade"))
+    }
+
+    // Mid fade-in: arrow shares card alpha and stays flush with the scaled card bottom edge.
+    let mut rt = Runtime::new(false, view, (320.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(160.0, 150.0);
+    rt.frame(1.0 / 60.0);
+    rt.frame(rt.help_delay);
+    rt.frame(0.05);
+    let tri = rt.instances.iter().find(|i| i.params[1] == KIND_TRIANGLE).expect("fading arrow");
+    let card = rt.instances.iter().rev().find(|i| i.params[1] == KIND_RECT && i.fill == tri.fill).expect("fading card");
+    assert!(tri.fill[3] > 0.0 && tri.fill[3] < 1.0, "arrow fades in: alpha {}", tri.fill[3]);
+    assert!((tri.radii[1] - (card.rect[1] + card.rect[3])).abs() < 0.01, "arrow base stays flush with scaled card edge");
+    assert!(tri.rect[3] < 5.0, "arrow height scales down with fade_scale");
+
+    // Reduced motion: full alpha and full scale on the first open frame.
+    let mut rt = Runtime::new(true, view, (320.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(160.0, 150.0);
+    rt.frame(1.0 / 60.0);
+    rt.frame(rt.help_delay);
+    let tri = rt.instances.iter().find(|i| i.params[1] == KIND_TRIANGLE).expect("reduced motion arrow");
+    assert!((tri.fill[3] - 1.0).abs() < 1e-4, "reduced motion opens at full alpha");
+    assert!((tri.rect[3] - 5.0).abs() < 0.01, "reduced motion opens at full arrow scale");
+}
+
+#[test]
+fn help_look_side_and_arrow_update_a11y_tooltip_on_keyboard_focus() {
+    use crate::render::KIND_TRIANGLE;
+    use crate::{HelpLook, Key, KeyEvent, Mods, Side};
+
+    fn view(_: &(), cx: &mut Cx<()>) -> El {
+        cx.help_look(HelpLook::system(true).side(Side::Top).arrow(5.0).on_focus(true));
+        el().w_full().h_full().child(
+            el().key("save").role("button").label("Save").size(60.0, 24.0)
+                .pin(Some(120.0), Some(140.0), None, None)
+                .focusable(true)
+                .on_press(|_: &mut ()| {})
+                .help("Save changes"),
+        )
+    }
+
+    let mut rt = Runtime::new((), view, (320.0, 300.0), Env::new(true, 1.0));
+    rt.a11y_activate("test");
+    rt.frame(0.0);
+    let _ = rt.a11y_update();
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("save")).unwrap();
+    let anchor = rt.drawn_box(i);
+
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(1.0 / 60.0);
+    let (tip_text, tip_rect) = rt.help_tooltip().expect("keyboard focus opens tooltip");
+    assert_eq!(tip_text, "Save changes");
+    assert!(tip_rect[1] + tip_rect[3] <= anchor[1], "keyboard tooltip respects HelpLook::side(Side::Top)");
+    assert_eq!(rt.instances.iter().filter(|i| i.params[1] == KIND_TRIANGLE).count(), 1);
+
+    let update = rt.a11y_update().expect("a11y tree updated for tooltip");
+    let tip_node = update.nodes.iter().find(|(_, n)| n.role() == accesskit::Role::Tooltip).expect("Tooltip role in a11y tree");
+    let bounds = tip_node.1.bounds().expect("Tooltip bounds");
+    assert!(bounds.y1 <= anchor[1] as f64, "a11y tooltip bounds reflect Top placement: {bounds:?}");
+}

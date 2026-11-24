@@ -199,6 +199,41 @@ pub(super) fn tooltip_title_description(s: &G, k: &Kit, layer: &mut Vec<El>) -> 
     )
 }
 
+/// Drawn `El::help` tooltips configured with `HelpLook::side(Side::Top).arrow(5.0)` and
+/// per-element `El::help_side` overrides.
+pub(super) fn tooltip_help_arrow(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    tip_frame(
+        row()
+            .gap(16.0)
+            .center_y()
+            .child(
+                Button::new("Default (Top)")
+                    .on_press(toggle("help-arrow"))
+                    .build(k)
+                    .key("help-default")
+                    .help("Opens above by default")
+                    .help_keys(["⌘", "K"])
+                    .help_open(is_open(s, "help-arrow")),
+            )
+            .child(
+                Button::new("Bottom override")
+                    .variant(ButtonVariant::Outline)
+                    .build(k)
+                    .key("help-bottom")
+                    .help("Overridden below")
+                    .help_side(rune::Side::Bottom),
+            )
+            .child(
+                Button::new("Right override")
+                    .variant(ButtonVariant::Outline)
+                    .build(k)
+                    .key("help-right")
+                    .help("Overridden right")
+                    .help_side(rune::Side::Right),
+            ),
+    )
+}
+
 pub(super) fn hover_card_basic(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     row().child(
         HoverCard::new("card")
