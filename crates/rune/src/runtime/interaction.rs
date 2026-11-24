@@ -79,6 +79,7 @@ impl RuntimeCore {
             Action::Drag(p, ..) | Action::DragRepeat(p, ..) => ("on_drag", 2, Some(p)),
             Action::DragEnd(p, _) => ("on_drag_end", 2, Some(p)),
             Action::Wheel { chain, .. } => ("on_wheel", 2, chain.as_deref().and_then(|c| c.first()).map(String::as_str)),
+            Action::WheelRepost(_) => ("on_wheel", 2, None),
             Action::Gesture(chain, _) => ("gesture", 2, chain.first().map(String::as_str)),
             Action::Hover(p) => ("on_hover", 1, Some(p)),
             Action::HoverChange(p, _) => ("on_hover_change", 1, Some(p)),

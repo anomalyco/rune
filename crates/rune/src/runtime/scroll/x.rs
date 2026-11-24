@@ -545,6 +545,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn wheel_pending(&self) -> Option<Attempt> {
         self.frame.queue.iter().find_map(|a| match a {
             Action::Wheel { gesture, .. } => Some(*gesture),
+            Action::WheelRepost(r) => Some(r.gesture),
             _ => None,
         })
     }
@@ -552,7 +553,11 @@ impl RuntimeCore {
     /// Whether a wheel delta waits in the queue for `on_wheel` handlers: one of gesture `of`,
     /// or of any gesture.
     pub(in crate::runtime) fn wheel_queued(&self, of: Option<Attempt>) -> bool {
-        self.frame.queue.iter().any(|a| matches!(a, Action::Wheel { gesture: g, .. } if of.is_none_or(|of| *g == of)))
+        self.frame.queue.iter().any(|a| match a {
+            Action::Wheel { gesture, .. } => of.is_none_or(|of| *gesture == of),
+            Action::WheelRepost(r) => of.is_none_or(|of| r.gesture == of),
+            _ => false,
+        })
     }
 
     /// Scrolls by a delta no `on_wheel` handler took, on the axis the gesture locked to.
