@@ -408,6 +408,36 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Sets the startup GPU suballocation policy for wgpu devices ([`crate::GpuMemoryPolicy`]).
+    ///
+    /// Without a call, Rune uses [`crate::GpuMemoryPolicy::MemoryUsage`]. Call this (or
+    /// [`crate::set_gpu_memory_policy`] before [`crate::prewarm_gpu`], [`crate::warm_gpu`], or
+    /// [`crate::warm_gpu_cache`]) to pick [`crate::GpuMemoryPolicy::Performance`] or a
+    /// [`crate::GpuMemoryPolicy::Manual`] block-size range before windows or overlays create
+    /// their GPU devices.
+    ///
+    /// Applies process-wide to every wgpu device created from here on, and restarts or discards
+    /// any prewarmed or parked device built under a different policy. Honored by D3D12 (Windows)
+    /// and Vulkan (Linux); ignored by Rune's native Metal backend, wgpu's Metal backend, and
+    /// web backends. Resources larger than a `Manual` block range still succeed via dedicated
+    /// allocations.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, GpuMemoryPolicy, el};
+    ///
+    /// App::new(AppSpec::new("Low memory", (640.0, 480.0), || (), |_, _| el()))
+    ///     .gpu_memory_policy(GpuMemoryPolicy::Manual {
+    ///         block_size: (4 * 1024 * 1024)..(8 * 1024 * 1024),
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn gpu_memory_policy(self, policy: crate::GpuMemoryPolicy) -> Self {
+        crate::render::set_gpu_memory_policy(policy);
+        self
+    }
+
     /// macOS: run as an accessory (menu-bar) app: no Dock icon, no default menu bar, and
     /// launching doesn't activate the app or take focus. The app installs its own menu if it
     /// wants one (`standard_menus` gives it Close, Minimize and Edit), and may change the

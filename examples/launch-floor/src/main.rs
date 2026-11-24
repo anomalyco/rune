@@ -10,7 +10,10 @@
 //! quits the app that long after its report, as a person would, so the file is written.
 //! `LAUNCH_FLOOR=warm` opens nothing: it makes the GPU device and Rune's pipelines
 //! (`rune::warm_gpu_cache`) and exits, as a setup would run an installed app once, so a first
-//! launch finds the driver's compiled pipelines. `LAUNCH_FLOOR_LIVE=1` makes the shell's first
+//! launch finds the driver's compiled pipelines. `LAUNCH_FLOOR_MEMORY_POLICY` sets Rune's
+//! startup GPU suballocation policy (`memory-usage`, `performance`, `manual:<mib>`, or
+//! `manual:<min>-<max>` in MiB) via `App::gpu_memory_policy` / `rune::set_gpu_memory_policy`.
+//! `LAUNCH_FLOOR_LIVE=1` makes the shell's first
 //! sidebar row answer the pointer (it changes colour under it, and a press counts in the title), to
 //! see that a window takes input from its first frame on, whichever renderer draws it.
 //!
@@ -207,9 +210,13 @@ fn main() {
     let age = rune::process_age().unwrap_or_default();
     BOOT.get_or_init(|| (rune::time::now(), age, rune::time::system_now()));
     rune::marks::mark("main.entered");
+    let memory_policy = rune::env::var("LAUNCH_FLOOR_MEMORY_POLICY").as_deref().and_then(parse_memory_policy);
     // LAUNCH_FLOOR=warm: what a setup would run once after an install. No window: the GPU device
     // and Rune's pipelines are made, so Direct3D keeps them for this exe's later launches.
     if rune::env::var("LAUNCH_FLOOR").is_some_and(|v| v == "warm") {
+        if let Some(policy) = memory_policy {
+            rune::set_gpu_memory_policy(policy);
+        }
         let began = rune::time::now();
         let made = rune::warm_gpu_cache();
         let line = format!("{{\"scene\":\"warm\",\"ok\":{},\"us\":{},\"why\":\"{}\"}}\n", made.is_ok(), began.elapsed().as_micros(), made.err().unwrap_or_default().replace('"', "'"));
@@ -223,6 +230,10 @@ fn main() {
     }    let spec = AppSpec::new("Launch floor", (1280.0, 800.0), init, view);
     let shell = shell_scene();
     let app = rune::App::new(spec);
+    let app = match memory_policy {
+        Some(policy) => app.gpu_memory_policy(policy),
+        None => app,
+    };
     let handle = app.handle();
     let app = app.on_ready(move |_| {
         FIRST_VIEWS.store(VIEWS.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -254,4 +265,49 @@ fn main() {
         app
     };
     app.run();
+}
+
+/// Parses `LAUNCH_FLOOR_MEMORY_POLICY`: `memory-usage`, `performance`, `manual:<mib>`, or
+/// `manual:<min>-<max>` (MiB).
+fn parse_memory_policy(raw: &str) -> Option<rune::GpuMemoryPolicy> {
+    const MIB: u64 = 1024 * 1024;
+    match raw.trim() {
+        "memory-usage" => Some(rune::GpuMemoryPolicy::MemoryUsage),
+        "performance" => Some(rune::GpuMemoryPolicy::Performance),
+        other => {
+            let spec = other.strip_prefix("manual:")?;
+            let (min, max) = match spec.split_once('-') {
+                Some((a, b)) => (a.parse::<u64>().ok()?, b.parse::<u64>().ok()?),
+                None => {
+                    let size = spec.parse::<u64>().ok()?;
+                    (size, size)
+                }
+            };
+            Some(rune::GpuMemoryPolicy::Manual {
+                block_size: min.saturating_mul(MIB)..max.saturating_mul(MIB),
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_memory_policy;
+    use rune::GpuMemoryPolicy;
+
+    #[test]
+    fn parses_launch_floor_memory_policy_values() {
+        const MIB: u64 = 1024 * 1024;
+        assert_eq!(parse_memory_policy("memory-usage"), Some(GpuMemoryPolicy::MemoryUsage));
+        assert_eq!(parse_memory_policy("performance"), Some(GpuMemoryPolicy::Performance));
+        assert_eq!(
+            parse_memory_policy("manual:4-8"),
+            Some(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(8 * MIB) }),
+        );
+        assert_eq!(
+            parse_memory_policy("manual:4"),
+            Some(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(4 * MIB) }),
+        );
+        assert_eq!(parse_memory_policy("bogus"), None);
+    }
 }

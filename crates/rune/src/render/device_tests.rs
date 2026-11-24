@@ -769,3 +769,160 @@ fn direct_driver_surface_refused_widens_once_and_never_widens_on_stop_or_happy_p
         assert_eq!(stop_widens, 0, "must not widen on policy={policy:?} kind={kind:?}");
     }
 }
+
+#[test]
+fn gpu_memory_policy_defaults_to_memory_usage_and_maps_to_wgpu_hints() {
+    use crate::GpuMemoryPolicy;
+    use crate::gpu::memory::to_wgpu_hints;
+    const MIB: u64 = 1024 * 1024;
+
+    let assert_manual = |policy: GpuMemoryPolicy, expected: std::ops::Range<u64>| match to_wgpu_hints(&policy) {
+        wgpu::MemoryHints::Manual { suballocated_device_memory_block_size } => {
+            assert_eq!(suballocated_device_memory_block_size, expected);
+        }
+        other => panic!("expected Manual({expected:?}), got {other:?}"),
+    };
+
+    assert_eq!(GpuMemoryPolicy::default(), GpuMemoryPolicy::MemoryUsage);
+    assert!(matches!(to_wgpu_hints(&GpuMemoryPolicy::default()), wgpu::MemoryHints::MemoryUsage));
+    assert!(matches!(to_wgpu_hints(&GpuMemoryPolicy::Performance), wgpu::MemoryHints::Performance));
+    assert_manual(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(8 * MIB) }, (4 * MIB)..(8 * MIB));
+    assert_manual(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(4 * MIB) }, (4 * MIB)..(4 * MIB));
+    assert_manual(GpuMemoryPolicy::Manual { block_size: 0..0 }, 1..1);
+    assert_manual(GpuMemoryPolicy::Manual { block_size: (16 * MIB)..(4 * MIB) }, (16 * MIB)..(16 * MIB));
+    assert_manual(GpuMemoryPolicy::Manual { block_size: u64::MAX..0 }, u64::MAX..u64::MAX);
+}
+
+#[test]
+fn apply_gpu_memory_policy_chooses_before_invalidating_and_skips_when_unchanged() {
+    let log = std::cell::RefCell::new(Vec::new());
+    super::apply_gpu_memory_policy(
+        crate::GpuMemoryPolicy::Performance,
+        |p| {
+            log.borrow_mut().push(format!("choose {p:?}"));
+            true
+        },
+        || log.borrow_mut().push("invalidate".into()),
+    );
+    assert_eq!(*log.borrow(), ["choose Performance", "invalidate"]);
+
+    log.borrow_mut().clear();
+    super::apply_gpu_memory_policy(
+        crate::GpuMemoryPolicy::Performance,
+        |p| {
+            log.borrow_mut().push(format!("choose {p:?}"));
+            false
+        },
+        || log.borrow_mut().push("invalidate".into()),
+    );
+    assert_eq!(*log.borrow(), ["choose Performance"]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore]
+fn gpu_memory_policy_child() {
+    use crate::GpuMemoryPolicy;
+    const MIB: u64 = 1024 * 1024;
+
+    let mode = std::env::var("RUNE_TEST_GPU_MEMORY_POLICY").expect("policy test mode");
+    let expected_block = match mode.as_str() {
+        "default" => 8 * MIB,
+        "manual-setter" => {
+            crate::set_gpu_memory_policy(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(8 * MIB) });
+            4 * MIB
+        }
+        "manual-app" => {
+            let _app = crate::App::new(crate::AppSpec::new("test", (40.0, 30.0), || (), |_, _| crate::el()))
+                .gpu_memory_policy(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(8 * MIB) });
+            4 * MIB
+        }
+        "performance" => {
+            crate::set_gpu_memory_policy(GpuMemoryPolicy::Performance);
+            128 * MIB
+        }
+        "parked-invalidation" => {
+            #[cfg(not(target_os = "macos"))]
+            {
+                let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+                let renderer = super::super::Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+                super::super::prewarm::park(gpu, renderer, super::super::prewarm::PARKED);
+                // Setting the active policy again leaves the parked device alone.
+                crate::set_gpu_memory_policy(GpuMemoryPolicy::MemoryUsage);
+                let (gpu, renderer) = super::super::prewarm::take().expect("unchanged policy keeps parked GPU");
+                super::super::prewarm::park(gpu, renderer, super::super::prewarm::PARKED);
+                // Changing the policy discards the parked device so it is never silently reused.
+                crate::set_gpu_memory_policy(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(8 * MIB) });
+                assert!(super::super::prewarm::take().is_none(), "changed policy must discard parked GPU");
+            }
+            return;
+        }
+        other => panic!("unexpected RUNE_TEST_GPU_MEMORY_POLICY: {other}"),
+    };
+
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+    let small = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("memory-policy-small"),
+        size: 64 * 1024,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let backend = gpu.adapter.get_info().backend;
+    if matches!(backend, wgpu::Backend::Dx12 | wgpu::Backend::Vulkan) {
+        if let Some(report) = gpu.device.generate_allocator_report() {
+            if let Some(max_block) = report.blocks.iter().map(|b| b.size).max() {
+                assert_eq!(
+                    max_block, expected_block,
+                    "mode={mode} backend={backend:?} expected max block size {expected_block}, got blocks: {:?}",
+                    report.blocks.iter().map(|b| b.size).collect::<Vec<_>>(),
+                );
+            }
+        }
+    }
+    // Resources larger than a Manual block range still succeed via dedicated allocations.
+    if mode.starts_with("manual-") {
+        let (large, errors) = rune_gpu::health::with_error_scopes(&gpu.device, || {
+            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("memory-policy-large"),
+                size: 10 * MIB,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        });
+        assert!(errors.validation.is_none(), "unexpected validation error: {:?}", errors.validation);
+        assert!(errors.memory.is_none(), "unexpected OOM error: {:?}", errors.memory);
+        assert!(errors.internal.is_none(), "unexpected internal error: {:?}", errors.internal);
+        drop(large);
+    }
+    drop(small);
+}
+
+/// Verifies startup `GpuMemoryPolicy` end-to-end in isolated child processes so parallel tests
+/// never race on the process-wide policy or parked warm-up slot: default stays `MemoryUsage`,
+/// `set_gpu_memory_policy` and `App::gpu_memory_policy` apply `Manual` (4..8 MiB, with larger
+/// dedicated resources still succeeding) and `Performance` to created devices, and changing the
+/// policy discards a parked warm-up device.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn gpu_memory_policy_reaches_offscreen_device_and_invalidates_parked_gpu() {
+    let exe = std::env::current_exe().expect("test binary path");
+    for mode in ["default", "manual-setter", "manual-app", "performance", "parked-invalidation"] {
+        let output = std::process::Command::new(&exe)
+            .args([
+                "--exact",
+                "render::device::tests::gpu_memory_policy_child",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("RUNE_TEST_GPU_MEMORY_POLICY", mode)
+            .output()
+            .expect("spawn child test");
+        assert!(
+            output.status.success(),
+            "mode={mode} failed: status={:?}\nstdout={}\nstderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+}
