@@ -88,8 +88,23 @@ pub(in crate::window) fn drawable_size(current: Option<(u32, u32)>, reported: (u
 pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (width, height): (u32, u32), srgb_blend: bool)
     -> Option<(wgpu::SurfaceConfiguration, Option<wgpu::CompositeAlphaMode>)> {
     let (width, height) = drawable_size(None, (width, height), adapter.limits().max_texture_dimension_2d);
-    let mut config = surface.get_default_config(adapter, width, height)?;
+    // The surface is asked what it can do once. A Vulkan driver answers each part of that with a
+    // call of its own, and Mesa's Wayland surfaces answer each call by asking the compositor for
+    // its globals again and waiting for it twice (`wsi_wl_display_init`): asked three times here
+    // (`get_default_config`, this, the alpha mode), a window's swap chain waited for the
+    // compositor thirty times before it was made. What follows is `get_default_config`'s answer.
     let caps = surface.get_capabilities(adapter);
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: *caps.formats.first()?,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        width,
+        height,
+        desired_maximum_frame_latency: 2,
+        present_mode: *caps.present_modes.first()?,
+        alpha_mode: wgpu::CompositeAlphaMode::Auto,
+        view_formats: vec![],
+    };
     let srgb = caps.formats.iter().copied().find(|f| f.is_srgb()).unwrap_or(config.format);
     config.format = if srgb_blend {
         let non_srgb = srgb.remove_srgb_suffix();
@@ -111,7 +126,7 @@ pub(crate) fn surface_config(surface: &wgpu::Surface, adapter: &wgpu::Adapter, (
     config.usage |= caps.usages & wgpu::TextureUsages::COPY_DST;
     config.present_mode = wgpu::PresentMode::AutoVsync;
     config.desired_maximum_frame_latency = FRAME_LATENCY;
-    Some((config, crate::render::translucency::mode(surface, adapter)))
+    Some((config, crate::render::translucency::mode_of(&caps, adapter)))
 }
 
 /// Follows a blend switch (`Tx::set_srgb_blend`) on a configured surface: reconfigures it for
