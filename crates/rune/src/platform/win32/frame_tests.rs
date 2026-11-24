@@ -3,9 +3,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{HTCAPTION, HTCLIENT, HTCLOSE, 
 
 use crate::titlebar::{Caption, CaptionButton, CaptionState};
 
+use crate::runtime::DragHit;
+
 use super::{
-    HitWindow, adjust_track_height, client_hit, custom_borders, dpi_scaled_outer_size,
-    nccalcsize_restored, outer_size, owned_button,
+    DragHitSync, HitWindow, adjust_track_height, client_hit, custom_borders,
+    dpi_scaled_outer_size, drag_hit_code, nccalcsize_restored, outer_size, owned_button,
 };
 
 fn caption() -> Caption {
@@ -52,13 +54,13 @@ fn a_press_on_a_drawn_caption_button_is_rune_s() {
 
 #[test]
 fn the_client_hit_test_finds_the_top_edge_and_the_buttons() {
-    assert_eq!(client_hit(&at(caption(), 4, 2)), HTTOPLEFT);
-    assert_eq!(client_hit(&at(caption(), 400, 2)), HTTOP);
-    assert_eq!(client_hit(&at(caption(), 796, 2)), HTTOPRIGHT);
-    assert_eq!(client_hit(&at(caption(), 775, 18)), HTCLOSE);
-    assert_eq!(client_hit(&at(caption(), 400, 18)), HTCLIENT);
+    assert_eq!(client_hit(&at(caption(), 4, 2), &[]), HTTOPLEFT);
+    assert_eq!(client_hit(&at(caption(), 400, 2), &[]), HTTOP);
+    assert_eq!(client_hit(&at(caption(), 796, 2), &[]), HTTOPRIGHT);
+    assert_eq!(client_hit(&at(caption(), 775, 18), &[]), HTCLOSE);
+    assert_eq!(client_hit(&at(caption(), 400, 18), &[]), HTCLIENT);
     let fixed = HitWindow { resizable: false, ..at(caption(), 775, 2) };
-    assert_eq!(client_hit(&fixed), HTCLOSE, "no top resize edge on a window that doesn't resize");
+    assert_eq!(client_hit(&fixed, &[]), HTCLOSE, "no top resize edge on a window that doesn't resize");
 }
 
 fn standard_96() -> RECT {
@@ -121,4 +123,117 @@ fn restored_border_math_is_consistent_across_size_placement_and_dpi() {
     assert_eq!((scaled_down.cx, scaled_down.cy), (816, 608));
     let zero_old = dpi_scaled_outer_size(100, 100, 0, 96, std_96);
     assert_eq!((zero_old.cx, zero_old.cy), (9600 + 16, 9600 + 8));
+}
+
+#[test]
+fn window_drag_regions_answer_htcaption_after_edges_caption_buttons_and_interactive_children() {
+    // Full-width titlebar [0, 0, 800, 36] with a button [20, 4, 100, 32] painted above it.
+    let hits = [
+        DragHit { rect: [20.0, 4.0, 100.0, 32.0], drag: false },
+        DragHit { rect: [0.0, 0.0, 800.0, 36.0], drag: true },
+    ];
+    // Bare titlebar returns HTCAPTION.
+    assert_eq!(client_hit(&at(caption(), 400, 18), &hits), HTCAPTION);
+    // Interactive child inside .window_drag() returns HTCLIENT.
+    assert_eq!(client_hit(&at(caption(), 50, 18), &hits), HTCLIENT);
+    // Body below titlebar returns HTCLIENT.
+    assert_eq!(client_hit(&at(caption(), 400, 100), &hits), HTCLIENT);
+    // Top resize edge still wins over .window_drag() when restored and resizable.
+    assert_eq!(client_hit(&at(caption(), 4, 2), &hits), HTTOPLEFT);
+    assert_eq!(client_hit(&at(caption(), 400, 2), &hits), HTTOP);
+    assert_eq!(client_hit(&at(caption(), 796, 2), &hits), HTTOPRIGHT);
+    // Maximized window has no top resize edge, so y=2 in the bare band returns HTCAPTION.
+    let zoomed = HitWindow { zoomed: true, ..at(caption(), 400, 2) };
+    assert_eq!(client_hit(&zoomed, &hits), HTCAPTION);
+    // Caption buttons still win over full-width .window_drag(), keeping mouse/Snap Layouts intact.
+    assert_eq!(client_hit(&at(caption(), 685, 18), &hits), HTMINBUTTON);
+    assert_eq!(client_hit(&at(caption(), 730, 18), &hits), HTMAXBUTTON);
+    assert_eq!(client_hit(&at(caption(), 775, 18), &hits), HTCLOSE);
+    // A dimmed Maximize button stays HTCLIENT rather than turning into HTCAPTION.
+    let no_max = Caption { maximizable: false, ..caption() };
+    assert_eq!(client_hit(&at(no_max, 730, 18), &hits), HTCLIENT);
+    // 150% DPI scaling (144 dpi): 400 pt -> 600 px, 18 pt -> 27 px.
+    let scaled_bare = HitWindow { width: 1200, dpi: 144, edge: 12, ..at(caption(), 600, 27) };
+    assert_eq!(client_hit(&scaled_bare, &hits), HTCAPTION);
+    let scaled_btn = HitWindow { width: 1200, dpi: 144, edge: 12, ..at(caption(), 75, 27) };
+    assert_eq!(client_hit(&scaled_btn, &hits), HTCLIENT);
+    // Borderless drag subclass helper uses the same bare-drag hit test.
+    assert_eq!(drag_hit_code(96, POINT { x: 400, y: 18 }, &hits), HTCAPTION);
+    assert_eq!(drag_hit_code(96, POINT { x: 50, y: 18 }, &hits), HTCLIENT);
+    assert_eq!(drag_hit_code(96, POINT { x: 400, y: 100 }, &hits), HTCLIENT);
+}
+
+#[test]
+fn runtime_window_drag_hits_respect_children_modals_tooltips_and_zoom() {
+    use crate::{Cx, El, Env, Runtime, TextEdit, TextStyle, col, el, row, text, text_input};
+
+    #[derive(Default)]
+    struct S {
+        modal: bool,
+        zoom: f32,
+        note: TextEdit,
+    }
+
+    fn view(s: &S, cx: &mut Cx<S>) -> El {
+        if s.zoom > 0.0 { cx.zoom(s.zoom); }
+        let bar = row().key("bar").size(800.0, 36.0).window_drag()
+            .child(el().key("btn").size(60.0, 36.0).on_press(|_: &mut S| {}))
+            .child(el().key("nodrag").size(60.0, 36.0).no_window_drag())
+            .child(el().key("badge").size(40.0, 36.0).help("Status"))
+            .child(text_input(&s.note, TextStyle::new(14.0, 400.0)).key("input").label("Search").size(100.0, 28.0).on_edit(|s: &mut S| &mut s.note))
+            .child(text("Title"));
+        let modal = s.modal.then(|| el().key("sheet").size(200.0, 100.0).modal(true, |s: &mut S| s.modal = false));
+        col().size(800.0, 400.0).child(bar).children(modal)
+    }
+
+    let mut rt = Runtime::new(S { modal: false, zoom: 1.0, note: TextEdit::new("") }, view, (800.0, 400.0), Env::default());
+    rt.frame(0.0);
+
+    let hits = rt.core().window_drag_hits();
+    // Interactive button [0..60], .no_window_drag() [60..120], tooltip badge [120..160],
+    // text input [160..260] all stay HTCLIENT.
+    assert_eq!(client_hit(&at(caption(), 30, 18), &hits), HTCLIENT, "button inside .window_drag()");
+    assert_eq!(client_hit(&at(caption(), 90, 18), &hits), HTCLIENT, ".no_window_drag() child");
+    assert_eq!(client_hit(&at(caption(), 140, 18), &hits), HTCLIENT, "tooltip-only badge");
+    assert_eq!(client_hit(&at(caption(), 210, 18), &hits), HTCLIENT, "text input inside .window_drag()");
+    // Non-selectable plain text and bare band [260..662] return HTCAPTION.
+    assert_eq!(client_hit(&at(caption(), 280, 18), &hits), HTCAPTION, "plain title text inside .window_drag()");
+    assert_eq!(client_hit(&at(caption(), 450, 18), &hits), HTCAPTION, "bare drag region");
+    // Caption buttons and top resize edge stay intact.
+    assert_eq!(client_hit(&at(caption(), 450, 2), &hits), HTTOP);
+    assert_eq!(client_hit(&at(caption(), 775, 18), &hits), HTCLOSE);
+
+    // Active modal empties drag hits so titlebar clicks reach Rune to dismiss the modal,
+    // while top resize edge and caption buttons still work.
+    rt.update(|s, _| s.modal = true);
+    rt.frame(1.0 / 60.0);
+    let modal_hits = rt.core().window_drag_hits();
+    assert!(modal_hits.is_empty(), "active modal must clear HTCAPTION regions");
+    assert_eq!(client_hit(&at(caption(), 450, 18), &modal_hits), HTCLIENT);
+    assert_eq!(client_hit(&at(caption(), 450, 2), &modal_hits), HTTOP);
+    assert_eq!(client_hit(&at(caption(), 775, 18), &modal_hits), HTCLOSE);
+
+    // Zoom 1.25 scales view rects into window points: button [0..60] becomes [0..75] window pt,
+    // titlebar height 36 becomes 45 window pt.
+    rt.update(|s, _| { s.modal = false; s.zoom = 1.25; });
+    rt.frame(1.0 / 60.0);
+    let zoomed_hits = rt.core().window_drag_hits();
+    assert_eq!(drag_hit_code(96, POINT { x: 70, y: 20 }, &zoomed_hits), HTCLIENT, "zoomed button covers x=70");
+    assert_eq!(drag_hit_code(96, POINT { x: 450, y: 40 }, &zoomed_hits), HTCAPTION, "zoomed 36 pt bar reaches y=40");
+    assert_eq!(drag_hit_code(96, POINT { x: 450, y: 50 }, &zoomed_hits), HTCLIENT, "below zoomed 45 pt bar");
+}
+
+#[test]
+fn drag_hit_sync_skips_idle_and_non_committing_frames() {
+    let mut sync = DragHitSync::default();
+    assert!(sync.needs_update(1, 1.0, false, false), "initial frame syncs");
+    assert!(!sync.needs_update(1, 1.0, false, false), "unchanged frame does zero work");
+    assert!(sync.needs_update(2, 1.0, false, false), "layout commit updates");
+    assert!(!sync.needs_update(2, 1.0, false, false));
+    assert!(sync.needs_update(2, 1.25, false, false), "zoom change updates");
+    assert!(sync.needs_update(2, 1.25, true, false), "fullscreen toggle updates");
+    assert!(!sync.needs_update(2, 1.25, true, false));
+    assert!(sync.needs_update(2, 1.25, false, true), "motion updates");
+    assert!(sync.needs_update(2, 1.25, false, false), "first settled frame after motion updates");
+    assert!(!sync.needs_update(2, 1.25, false, false), "settled idle frame does zero work");
 }

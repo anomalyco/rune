@@ -82,6 +82,11 @@ pub(in crate::window) struct Native {
     pub(in crate::window) cloak: crate::platform::win32::Cloak,
     /// The frame without a title bar a window with `App::titlebar` has.
     pub(in crate::window) frame: Option<crate::platform::win32::CustomFrame>,
+    /// Lightweight `WM_NCHITTEST` subclass for windows without `frame` that have `.window_drag()`.
+    pub(in crate::window) drag_regions: Option<crate::platform::win32::DragRegions>,
+    /// Tracks the last commit/zoom/fullscreen/motion state synced into Win32 drag hit-testing so
+    /// idle and non-committing frames do zero work.
+    pub(in crate::window) drag_sync: crate::platform::win32::DragHitSync,
     /// Whether other windows cover it whole, as the last frame that looked found (`look`).
     pub(in crate::window) look: crate::window::win32::look::Look,
     /// Whether its swap chain can take the next frame (`slot`).

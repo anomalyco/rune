@@ -532,7 +532,18 @@ impl Host {
                 l.request_redraw();
             }
             WindowEvent::Touch(touch) => {
+                #[cfg(target_os = "macos")]
+                if touch.phase == winit::event::TouchPhase::Started {
+                    app.rt_mut().set_native_titlebar_band(mac::native_titlebar_band(&l.window));
+                }
                 app.touch(&touch);
+                match app.rt_mut().take_titlebar_action() {
+                    Some(TitlebarAction::Drag) => {
+                        l.window.drag_window().ok();
+                    }
+                    Some(TitlebarAction::DoubleClick) => titlebar_double_click(&l.window),
+                    None => {}
+                }
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {

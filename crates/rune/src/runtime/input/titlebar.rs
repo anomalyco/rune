@@ -36,6 +36,28 @@ pub(in crate::runtime) struct Titlebar {
     headless_chrome: crate::Chrome,
 }
 
+/// One entry in the committed bare `.window_drag()` hit-test region, in top-to-bottom paint
+/// order and window points `[x0, y0, x1, y1]`: the first rect containing a point decides whether
+/// Windows answers `HTCAPTION` (`drag == true`) or `HTCLIENT` (`drag == false`).
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DragHit {
+    pub rect: [f32; 4],
+    pub drag: bool,
+}
+
+/// Whether window point `(x, y)` hits a bare `.window_drag()` region in `hits` (top-to-bottom).
+#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+pub(crate) fn drag_hit_at(hits: &[DragHit], x: f32, y: f32) -> bool {
+    for hit in hits {
+        let r = hit.rect;
+        if x >= r[0] && y >= r[1] && x < r[2] && y < r[3] {
+            return hit.drag;
+        }
+    }
+    false
+}
+
 /// The window menu (Restore, Move, Size, Minimize, Maximize, Close) a custom titlebar opens
 /// where the native title bar would.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -348,6 +370,76 @@ impl RuntimeCore {
         let n = &self.tree.nodes[t];
         n.window_drag == crate::el::WindowDrag::Drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none()
             && n.handlers.drag_out.is_none() && self.textbox_input(t).is_none()
+    }
+
+    /// Number of committed view/layout passes so far.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    #[inline]
+    pub(crate) fn commit_generation(&self) -> u64 {
+        self.commit.commits
+    }
+
+    /// A `.window_drag()` element that Windows may answer `HTCAPTION` for directly: bare as
+    /// [`Self::bare_drag_region`] defines it, with no secondary, middle, hover, pointer-move or
+    /// gesture handler of its own that needs client messages over it.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    fn win32_bare_drag_region(&self, t: usize) -> bool {
+        let n = &self.tree.nodes[t];
+        self.bare_drag_region(t)
+            && n.handlers.on_secondary_press.is_none()
+            && n.handlers.on_middle_press.is_none()
+            && n.handlers.on_hover.is_none()
+            && n.handlers.on_hover_change.is_none()
+            && n.handlers.on_pointer_move.is_none()
+            && n.handlers.gestures.is_none()
+    }
+
+    /// Committed bare `.window_drag()` hit-test region in top-to-bottom paint order and window
+    /// points, empty while any modal is active or when no bare drag region is drawn.
+    ///
+    /// Keeps only hits overlapping the union bounds of bare drag regions (from the bottommost bare
+    /// drag region upward), plus any non-drag tooltip regions above them, so Windows'
+    /// `WM_NCHITTEST` stays bounded to controls over the titlebar and keeps interactive children,
+    /// selectable text, `.no_window_drag()` elements, overlays and tooltips in `HTCLIENT`.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    pub(crate) fn window_drag_hits(&self) -> Vec<DragHit> {
+        if self.active_modal().is_some() { return Vec::new(); }
+        let hits = self.hit.hits();
+        let mut bounds = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+        let mut min_idx = None;
+        for (idx, &(id, r)) in hits.iter().enumerate() {
+            let Some(&i) = self.tree.node_index.get(&id) else { continue };
+            if self.subtree_exiting(i) || !self.allowed(i) || !self.win32_bare_drag_region(i) { continue; }
+            let rect = self.to_window(self.hit_screen_rect(id, r));
+            if rect[2] <= rect[0] || rect[3] <= rect[1] { continue; }
+            min_idx.get_or_insert(idx);
+            bounds[0] = bounds[0].min(rect[0]);
+            bounds[1] = bounds[1].min(rect[1]);
+            bounds[2] = bounds[2].max(rect[2]);
+            bounds[3] = bounds[3].max(rect[3]);
+        }
+        let Some(min_idx) = min_idx else { return Vec::new() };
+        let overlaps_bounds = |r: [f32; 4]| r[0] < bounds[2] && r[2] > bounds[0] && r[1] < bounds[3] && r[3] > bounds[1];
+        let help = self.hit.help_hits();
+        let mut hi = help.len();
+        let mut out = Vec::new();
+        for (idx, &(id, r)) in hits.iter().enumerate().skip(min_idx).rev() {
+            while hi > 0 && help[hi - 1].2 > idx {
+                hi -= 1;
+                let (hid, hr, _, _) = help[hi];
+                let Some(&j) = self.tree.node_index.get(&hid) else { continue };
+                if self.subtree_exiting(j) || !self.allowed(j) || self.win32_bare_drag_region(j) { continue; }
+                let rect = self.to_window(self.hit_screen_rect(hid, hr));
+                if rect[2] <= rect[0] || rect[3] <= rect[1] || !overlaps_bounds(rect) { continue; }
+                out.push(DragHit { rect, drag: false });
+            }
+            let Some(&i) = self.tree.node_index.get(&id) else { continue };
+            if self.subtree_exiting(i) || !self.allowed(i) { continue; }
+            let rect = self.to_window(self.hit_screen_rect(id, r));
+            if rect[2] <= rect[0] || rect[3] <= rect[1] || !overlaps_bounds(rect) { continue; }
+            out.push(DragHit { rect, drag: self.win32_bare_drag_region(i) });
+        }
+        out
     }
 }
 

@@ -51,6 +51,12 @@ enum Mode {
     /// Still within the slop: lifting it here is a tap. `scroll` is the vertical viewport
     /// under the finger, held until the pan picks its axis.
     Pending { scroll: Option<NodeId> },
+    /// Landed on a bare `.window_drag()` region and still within `TOUCH_SLOP`: holds the drag
+    /// until the finger moves past the slop, so taps, double-taps and long presses still work.
+    WindowDragPending,
+    /// Crossed `TOUCH_SLOP` on a bare `.window_drag()` region and emitted `TitlebarAction::Drag`
+    /// (or immediately triggered `TitlebarAction::DoubleClick`): moves and release do nothing.
+    WindowDragging,
     /// It drags the element it pressed.
     Drag,
     /// It pans viewport `scroll` along one axis.
@@ -65,7 +71,7 @@ impl Mode {
         match self {
             Mode::Pending { scroll } => scroll,
             Mode::Pan { scroll, .. } => Some(scroll),
-            Mode::Drag | Mode::Menu => None,
+            Mode::WindowDragPending | Mode::WindowDragging | Mode::Drag | Mode::Menu => None,
         }
     }
 
@@ -102,6 +108,24 @@ impl RuntimeCore {
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(app, x, y);
         self.press_down(app, x, y, true);
+        match self.host.titlebar.action {
+            Some(TitlebarAction::Drag) => {
+                // Hold the drag until the finger crosses `TOUCH_SLOP`, so taps, double-taps and
+                // long-press window menus on bare `.window_drag()` regions still work.
+                self.host.titlebar.action = None;
+                self.touch_scroll_end(scroll, 0.0);
+                let hold_due = self.now_clock() + LONG_PRESS;
+                self.wake_at(hold_due);
+                self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragPending, hold_due });
+                return;
+            }
+            Some(TitlebarAction::DoubleClick) => {
+                self.touch_scroll_end(scroll, 0.0);
+                self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragging, hold_due: f64::INFINITY });
+                return;
+            }
+            None => {}
+        }
         // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut it.
         if self.press_drags_at_once() {
             self.touch_scroll_end(scroll, 0.0);
@@ -116,7 +140,11 @@ impl RuntimeCore {
     fn touch_move(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64) {
         let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| f.id == id) else { return };
         let (dx, dy) = (x - f.origin.0, y - f.origin.1);
-        if let Mode::Pending { scroll } = f.mode && dx.hypot(dy) > TOUCH_SLOP {
+        if f.mode == Mode::WindowDragPending && dx.hypot(dy) > TOUCH_SLOP {
+            self.host.titlebar.clear();
+            self.host.titlebar.action = Some(TitlebarAction::Drag);
+            self.pointer.touch.finger.as_mut().unwrap().mode = Mode::WindowDragging;
+        } else if let Mode::Pending { scroll } = f.mode && dx.hypot(dy) > TOUCH_SLOP {
             let origin = f.origin;
             let (scroll, horizontal) = if self.press_drags() { (None, false) } else { self.touch_scroll_pan(origin.0, origin.1, dx.abs() > dy.abs(), scroll) };
             self.pointer.touch.finger.as_mut().unwrap().mode = match scroll {
@@ -132,7 +160,7 @@ impl RuntimeCore {
         match f.mode {
             Mode::Pan { scroll, .. } => self.touch_scroll_move(scroll, along),
             Mode::Drag => self.pointer_move(app, x, y),
-            Mode::Pending { .. } | Mode::Menu => {}
+            Mode::Pending { .. } | Mode::WindowDragPending | Mode::WindowDragging | Mode::Menu => {}
         }
     }
 
@@ -141,12 +169,12 @@ impl RuntimeCore {
         let pan = matches!(f.mode, Mode::Pan { .. });
         let velocity = if pan && !cancelled && time - f.at < FLING_HOLD { f.velocity } else { 0.0 };
         self.touch_scroll_end(f.mode.scroll(), velocity);
-        if f.mode == Mode::Menu {
-            self.pointer_leave();
+        if cancelled || f.mode == Mode::WindowDragging {
+            self.cancel_pointer();
             return;
         }
-        if cancelled {
-            self.cancel_pointer();
+        if matches!(f.mode, Mode::Menu | Mode::WindowDragPending) {
+            self.pointer_leave();
             return;
         }
         // A pan cancelled the press, so its release clicks nothing.
@@ -161,9 +189,10 @@ impl RuntimeCore {
     /// without a click (a drag it started hears a cancelled `Phase::Up`), and a secondary click
     /// lands where it went down.
     pub(in crate::runtime) fn fire_touch_hold(&mut self, app: &dyn ViewDriver) {
-        let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| matches!(f.mode, Mode::Pending { .. }) && self.clock >= f.hold_due) else { return };
-        let ((x, y), scroll) = (f.origin, f.mode.scroll());
+        let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| matches!(f.mode, Mode::Pending { .. } | Mode::WindowDragPending) && self.clock >= f.hold_due) else { return };
+        let ((x, y), scroll, was_window_drag) = (f.origin, f.mode.scroll(), f.mode == Mode::WindowDragPending);
         self.touch_scroll_end(scroll, 0.0);
+        if was_window_drag { self.host.titlebar.clear(); }
         if !self.cancel_drag() { self.drop_press(); }
         self.secondary_down(x, y);
         self.secondary_up(app, x, y);
