@@ -2,7 +2,11 @@
 
 use std::cell::RefCell;
 
-use crate::{TextSystem, measure, names_system_mono};
+use parley::{FontFamilyName, Layout, PositionedLayoutItem};
+use rune_core::tok::Family;
+use swash::FontRef;
+
+use crate::{Ink, TextLayout, TextSystem, family_list, is_hidden_size, measure, named_list, names_system_mono};
 
 thread_local! {
     /// The families last chosen for every window (`Tx::set_font_families`), numbered by change.
@@ -115,4 +119,73 @@ impl TextSystem {
             chosen.as_ref().is_some_and(|(sans, mono)| self.set_families(sans, mono))
         })
     }
+
+    /// The first available family name in the collection that `family` resolves to, following the
+    /// same `named_list` / `family_list` fallback stack shaping uses. Used when a text node has no
+    /// shaped glyph runs (empty text) or is secure.
+    pub fn resolved_family(&self, family: Family) -> Option<String> {
+        let system = self.system_mono.as_deref().unwrap_or_default();
+        let mut collection = self.font_cx.collection.clone();
+        let mut find = |f: FontFamilyName<'_>| -> Option<String> {
+            let id = match f {
+                FontFamilyName::Named(name) => collection.family_id(&name),
+                FontFamilyName::Generic(generic) => collection.generic_families(generic).next(),
+            }?;
+            collection.family_name(id).map(str::to_owned)
+        };
+        match family {
+            Family::Sans => family_list(&self.sans, system, &self.sans).into_iter().find_map(&mut find),
+            Family::Mono => family_list(&self.mono, system, &self.sans).into_iter().find_map(&mut find),
+            Family::Named(list) => named_list(list)
+                .into_iter()
+                .chain(family_list(&self.sans, system, &self.sans))
+                .find_map(&mut find),
+            Family::SystemMono => system
+                .iter()
+                .map(|name| FontFamilyName::named(name.as_str()))
+                .chain(family_list(&self.mono, system, &self.sans))
+                .find_map(&mut find),
+        }
+    }
+}
+
+/// The OpenType family name of the first visible shaped run in `layout` (`TypographicFamily`,
+/// falling back to `Family`), or `None` when `layout` has no visible glyph runs.
+pub fn resolved_family_of(layout: &TextLayout) -> Option<String> {
+    match layout {
+        TextLayout::Single(l) => layout_resolved_family(l),
+        TextLayout::Paragraphs(p) => p
+            .paragraphs
+            .iter()
+            .filter(|para| para.shaped)
+            .find_map(|para| layout_resolved_family(&para.layout)),
+    }
+}
+
+fn layout_resolved_family(layout: &Layout<Ink>) -> Option<String> {
+    for line in layout.lines() {
+        for item in line.items() {
+            let PositionedLayoutItem::GlyphRun(gr) = item else { continue };
+            if is_hidden_size(gr.run().font_size()) {
+                continue;
+            }
+            let font = gr.run().font();
+            if let Some(name) = FontRef::from_index(font.data.as_ref(), font.index as usize).and_then(font_family_name) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+fn font_family_name(font: FontRef<'_>) -> Option<String> {
+    let strings = font.localized_strings();
+    let pick = |id| {
+        strings
+            .find_by_id(id, Some("en"))
+            .or_else(|| strings.find_by_id(id, None))
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
+    };
+    pick(swash::StringId::TypographicFamily).or_else(|| pick(swash::StringId::Family))
 }

@@ -132,3 +132,140 @@ fn trace_records_refresh_rate_changes_for_present_summary() {
     assert_eq!((summary.hz, summary.frames, summary.presented, summary.missed), (120.0, 4, 4, 1));
     assert!(summary.to_string().contains("at 120 Hz") && summary.to_string().contains("1 missed (>12.50 ms)"), "{summary}");
 }
+
+#[test]
+fn tree_json_emits_radius_matching_element_info() {
+    let view = |_: &(), _: &mut Cx<()>| {
+        crate::col().key("root").size(200.0, 200.0).children([
+            crate::el().key("sharp").size(40.0, 40.0),
+            crate::el().key("pill").size(80.0, 32.0).radius(12.5),
+        ])
+    };
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let els = rt.elements();
+    let tree = tree_json(&rt, 0.0);
+    let tree_els = tree["elements"].as_array().unwrap();
+    for (key, expected) in [("sharp", 0.0), ("pill", 12.5)] {
+        let info = els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap();
+        assert_eq!(info.radius, expected);
+        let node = tree_els.iter().find(|e| e["key"].as_str() == Some(key)).unwrap();
+        assert_eq!(node["radius"], serde_json::json!(expected), "{key} radius in --tree: {node}");
+    }
+}
+
+#[test]
+fn element_info_and_tree_report_resolved_text_style_and_fallbacks() {
+    const INTER: &[u8] = include_bytes!("../../assets/Inter-Regular.ttf");
+    const PLEX: &[u8] = include_bytes!("../../assets/IBMPlexMono-Regular.ttf");
+    let edit_filled = crate::TextEdit::new("hello\nworld");
+    let mut edit_secret = crate::TextEdit::new("top-secret-password");
+    edit_secret.set_secure(true);
+    type State = (crate::TextEdit, crate::TextEdit);
+    fn view((edit_filled, edit_secret): &State, _: &mut Cx<State>) -> El {
+        let named_hit = crate::TextStyle::new(15.0, 600.0)
+            .family(crate::Family::Named("MissingFont, IBM Plex Mono"))
+            .lh(22.5)
+            .tracking(0.45)
+            .italic();
+        let named_miss = crate::TextStyle::new(16.0, 400.0)
+            .family(crate::Family::Named("MissingFontOnly"));
+        let empty_hit = crate::TextStyle::new(14.0, 500.0)
+            .family(crate::Family::Named("MissingFont, IBM Plex Mono"));
+        let empty_miss = crate::TextStyle::new(12.0, 400.0)
+            .family(crate::Family::Named("MissingFontOnly"));
+        let rich_style = crate::TextStyle::new(13.0, 500.0).mono().tracking(-0.25);
+        let input_style = crate::TextStyle::new(14.0, 400.0).family(crate::Family::Named("MissingFont, IBM Plex Mono"));
+        let secret_style = crate::TextStyle::new(13.0, 400.0).family(crate::Family::Named("MissingFont, IBM Plex Mono"));
+        crate::col().key("root").size(400.0, 400.0).children([
+            crate::el().key("plain-box").size(30.0, 20.0).radius(6.0),
+            crate::text("Hit").key("named-hit").font(named_hit),
+            crate::text("Fallback").key("named-miss").font(named_miss),
+            crate::text("").key("empty-hit").font(empty_hit),
+            crate::text("").key("empty-miss").font(empty_miss),
+            crate::rich("Rich span", vec![crate::Span::new(0, 4)]).key("rich-node").font(rich_style),
+            crate::text_input(edit_filled, input_style).key("para-input").dir_by_paragraph(),
+            crate::text_input(edit_secret, secret_style).key("secret-input"),
+        ])
+    }
+    let text = crate::text::TextSystem::new(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+    let mut rt = Runtime::with_text((edit_filled, edit_secret), view, (400.0, 400.0), Env::new(true, 1.0), text);
+    rt.frame(0.0);
+
+    let els = rt.elements();
+    let tree = tree_json(&rt, 0.0);
+    let tree_els = tree["elements"].as_array().unwrap();
+    let el = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("missing {key}"));
+    let json_el = |key: &str| tree_els.iter().find(|e| e["key"].as_str() == Some(key)).unwrap_or_else(|| panic!("missing json {key}"));
+
+    // Non-text element has text_style: None and omits textStyle in --tree.
+    assert_eq!(el("plain-box").text_style, None);
+    assert!(json_el("plain-box").get("textStyle").is_none(), "non-text must omit textStyle: {}", json_el("plain-box"));
+    assert_eq!(json_el("plain-box")["radius"], serde_json::json!(6.0));
+
+    // MissingFont, IBM Plex Mono resolves to IBM Plex Mono; explicit line_height, tracking, italic match.
+    assert_eq!(
+        el("named-hit").text_style,
+        Some(crate::ResolvedTextStyle {
+            family: Some("IBM Plex Mono".into()),
+            size: 15.0,
+            weight: 600.0,
+            line_height: 22.5,
+            tracking: 0.45,
+            italic: true,
+        }),
+    );
+    assert_eq!(
+        json_el("named-hit")["textStyle"],
+        serde_json::json!({
+            "family": "IBM Plex Mono",
+            "size": 15.0,
+            "weight": 600.0,
+            "lineHeight": 22.5,
+            "tracking": 0.45,
+            "italic": true,
+        }),
+    );
+
+    // MissingFontOnly falls back to sans slot (Inter); auto line_height = 1.25 * size = 20.0.
+    assert_eq!(
+        el("named-miss").text_style,
+        Some(crate::ResolvedTextStyle {
+            family: Some("Inter".into()),
+            size: 16.0,
+            weight: 400.0,
+            line_height: 20.0,
+            tracking: 0.0,
+            italic: false,
+        }),
+    );
+    assert_eq!(
+        json_el("named-miss")["textStyle"],
+        serde_json::json!({
+            "family": "Inter",
+            "size": 16.0,
+            "weight": 400.0,
+            "lineHeight": 20.0,
+            "tracking": 0.0,
+            "italic": false,
+        }),
+    );
+
+    // Empty text still resolves family via the fallback stack.
+    assert_eq!(el("empty-hit").text_style.as_ref().and_then(|s| s.family.as_deref()), Some("IBM Plex Mono"));
+    assert_eq!(json_el("empty-hit")["textStyle"]["family"], "IBM Plex Mono");
+    assert_eq!(el("empty-miss").text_style.as_ref().and_then(|s| s.family.as_deref()), Some("Inter"));
+    assert_eq!(json_el("empty-miss")["textStyle"]["family"], "Inter");
+
+    // Rich text and by-paragraph text_input report resolved text style.
+    assert_eq!(el("rich-node").text_style.as_ref().and_then(|s| s.family.as_deref()), Some("IBM Plex Mono"));
+    assert_eq!(json_el("rich-node")["textStyle"]["tracking"], -0.25);
+    assert_eq!(el("para-input").text_style.as_ref().and_then(|s| s.family.as_deref()), Some("IBM Plex Mono"));
+    assert_eq!(json_el("para-input")["textStyle"]["family"], "IBM Plex Mono");
+
+    // Secure text_input resolves family without leaking plaintext.
+    assert_eq!(el("secret-input").text, None);
+    assert_eq!(el("secret-input").text_style.as_ref().and_then(|s| s.family.as_deref()), Some("IBM Plex Mono"));
+    assert_eq!(json_el("secret-input")["textStyle"]["family"], "IBM Plex Mono");
+    assert!(!tree.to_string().contains("top-secret-password"));
+}

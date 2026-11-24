@@ -27,6 +27,7 @@ impl Default for ElementInfo {
             radius: 0.0,
             fill: Color::TRANSPARENT,
             text_color: None,
+            text_style: None,
             hover: 0.0,
             press: 0.0,
             moving: false,

@@ -344,6 +344,7 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
                 "opacity": (e.opacity * 1000.0).round() / 1000.0,
                 "scale": (e.scale * 10000.0).round() / 10000.0,
                 "blur": r2(e.blur),
+                "radius": r2(e.radius),
                 "focusable": e.focusable, "focused": e.focused,
                 "focusVisible": e.focus_visible, "inert": e.inert,
                 "loopPhase": e.loop_phase,
@@ -360,6 +361,19 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             }
             if let Some(c) = e.text_color {
                 v["color"] = c.hex().into();
+            }
+            if let Some(ts) = &e.text_style {
+                let mut style = json!({
+                    "size": r2(ts.size),
+                    "weight": r2(ts.weight),
+                    "lineHeight": r2(ts.line_height),
+                    "tracking": r2(ts.tracking),
+                    "italic": ts.italic,
+                });
+                if let Some(family) = &ts.family {
+                    style["family"] = family.clone().into();
+                }
+                v["textStyle"] = style;
             }
             if let Some(h) = &e.help {
                 v["help"] = h.clone().into();

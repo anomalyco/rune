@@ -71,6 +71,8 @@ pub use fonts::face_weights::set_face_weights;
 pub use fonts::fallback::is_pictographic;
 #[doc(hidden)]
 pub use fonts::families::choose_families;
+#[doc(hidden)]
+pub use fonts::families::resolved_family_of;
 #[cfg(target_arch = "wasm32")]
 #[doc(hidden)]
 pub use fonts::full_faces;
