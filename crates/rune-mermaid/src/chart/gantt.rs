@@ -8,7 +8,7 @@ use rune::{Align, TextStyle};
 use super::date::{self, DAY, Span, Step};
 use super::{axis_x, ink, soft, strong};
 use crate::canvas::{Canvas, Measured, Scene, measure, measure_wrap, over_color, room, rounded_rect};
-use crate::{DiagramStyle, MAX_ITEMS, clean, clean_quoted, oklab_mix, statements};
+use crate::{DiagramStyle, clean, clean_quoted, oklab_mix, statements};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Tags {
@@ -78,7 +78,7 @@ struct Raw {
     to: To,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Gantt> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Gantt> {
     let mut g = Gantt { title: None, sections: Vec::new(), tasks: Vec::new(), axis: "%Y-%m-%d".into(), tick: None, excludes: Excludes::default() };
     let mut format = "YYYY-MM-DD".to_owned();
     let (mut raws, mut inclusive, mut weekend_friday, mut weekends) = (Vec::new(), false, false, false);
@@ -130,7 +130,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Gantt> {
             continue;
         }
         if let Some(rest) = stmt.strip_prefix("section") {
-            if g.sections.len() + raws.len() >= MAX_ITEMS {
+            if g.sections.len() + raws.len() >= max_items {
                 return None;
             }
             g.sections.push(clean(rest));
@@ -139,7 +139,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Gantt> {
         let Some((name, meta)) = stmt.split_once(':') else { continue };
         let section = g.sections.len().checked_sub(1);
         if let Some(r) = task(clean(name), section, meta, &format, inclusive) {
-            if g.sections.len() + raws.len() >= MAX_ITEMS {
+            if g.sections.len() + raws.len() >= max_items {
                 return None;
             }
             raws.push(r);

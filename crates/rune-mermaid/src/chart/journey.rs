@@ -5,7 +5,7 @@ use rune::{Align, oklch};
 
 use super::{bold, dark, hue, ink, small, soft, solid, strong};
 use crate::canvas::{Canvas, Measured, Scene, arc, arrowhead, ellipse, measure, measure_wrap, rounded_rect};
-use crate::{DiagramStyle, MAX_ITEMS, clean, word};
+use crate::{DiagramStyle, clean, word};
 
 #[derive(Debug, PartialEq)]
 pub(crate) struct Task {
@@ -23,7 +23,7 @@ pub(crate) struct Journey {
     pub tasks: Vec<Task>,
 }
 
-pub(crate) fn parse(body: &[&str]) -> Option<Journey> {
+pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Journey> {
     let mut j = Journey { title: None, sections: Vec::new(), actors: Vec::new(), tasks: Vec::new() };
     for &l in body {
         if let Some(rest) = word(l, "title") {
@@ -43,7 +43,7 @@ pub(crate) fn parse(body: &[&str]) -> Option<Journey> {
         if !score.is_finite() {
             continue;
         }
-        if j.tasks.len() + j.sections.len() >= MAX_ITEMS {
+        if j.tasks.len() + j.sections.len() >= max_items {
             return None;
         }
         let mut actors = Vec::new();

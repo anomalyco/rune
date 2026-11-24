@@ -7,7 +7,7 @@ use rune::{Align, Color};
 
 use super::{bold, hue, ink, small, solid};
 use crate::canvas::{Canvas, Measured, Scene, dist, ellipse, lerp, measure, rounded_rect, unit};
-use crate::{DiagramStyle, MAX_ITEMS, clean, oklab_mix, statements};
+use crate::{DiagramStyle, clean, oklab_mix, statements};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Kind {
@@ -49,7 +49,7 @@ pub(crate) struct GitGraph {
     pub commits: Vec<Commit>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<GitGraph> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<GitGraph> {
     let flow = match header.trim().trim_end_matches(':') {
         "TB" | "TD" => Flow::Down,
         "BT" => Flow::Up,
@@ -62,7 +62,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<GitGraph> {
         for stmt in statements(line) {
             let (cmd, rest) = stmt.split_once(char::is_whitespace).unwrap_or((stmt, ""));
             let rest = rest.trim();
-            if g.commits.len() + g.branches.len() > MAX_ITEMS {
+            if g.commits.len() + g.branches.len() > max_items {
                 return None;
             }
             let find = |g: &GitGraph, name: &str| g.branches.iter().position(|b| b.name == name);

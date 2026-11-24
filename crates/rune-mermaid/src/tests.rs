@@ -225,3 +225,124 @@ fn lines_shrink_with_the_drawing() {
         assert!(close, "{} is {:?} shrunk, {:?} full", a.key, a.size, b.size);
     }
 }
+
+fn chain_src(nodes: usize) -> String {
+    let mut s = String::from("flowchart TD\n");
+    for i in 0..nodes.saturating_sub(1) {
+        s.push_str(&format!("  N{i} --> N{}\n", i + 1));
+    }
+    s
+}
+
+fn style_hash(style: &DiagramStyle) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    style.hash(&mut h);
+    h.finish()
+}
+
+#[test]
+fn max_items_defaults_to_400_and_opts_in_to_larger_flowcharts() {
+    // 210 nodes + 209 edges = 419 items: rejected at default 400, accepted with max_items(1_000).
+    let chain_210 = chain_src(210);
+    let def = DiagramStyle::neutral(false);
+    let raised = def.max_items(1_000);
+    assert!(!supported(&chain_210));
+    assert!(!supported_with(&chain_210, &def));
+    assert!(render(&chain_210, &def).is_none());
+    assert!(supported_with(&chain_210, &raised));
+    assert!(render(&chain_210, &raised).is_some());
+
+    // A 500-edge flowchart (501 nodes + 500 edges = 1,001 items) renders with max_items(1_200).
+    let chain_501 = chain_src(501);
+    let big = def.max_items(1_200);
+    assert!(render(&chain_501, &def).is_none());
+    assert!(supported_with(&chain_501, &big));
+    assert!(render(&chain_501, &big).is_some());
+
+    // A denser 500-edge layered DAG (250 nodes + 500 edges = 750 items) also renders with max_items(1_200).
+    let mut dag = String::from("flowchart TD\n");
+    let mut edges = 0usize;
+    for l in 0..24 {
+        for w in 0..10 {
+            if edges >= 500 { break; }
+            let u = l * 10 + w;
+            dag.push_str(&format!("  N{u} --> N{}\n", (l + 1) * 10 + w));
+            edges += 1;
+            if edges < 500 {
+                dag.push_str(&format!("  N{u} -->|e{edges}| N{}\n", (l + 1) * 10 + ((w + 1) % 10)));
+                edges += 1;
+            }
+        }
+    }
+    assert!(render(&dag, &def).is_none());
+    assert!(render(&dag, &big).is_some());
+}
+
+#[test]
+fn max_items_clamps_bounds_ignores_directives_and_keys_scene_cache() {
+    let def = DiagramStyle::neutral(true);
+    // Clamping: 0 -> 1, above MAX_ITEMS_CEILING -> MAX_ITEMS_CEILING.
+    assert_eq!(style_hash(&def.max_items(0)), style_hash(&def.max_items(1)));
+    assert_eq!(style_hash(&def.max_items(MAX_ITEMS_CEILING)), style_hash(&def.max_items(100_000)));
+    assert_ne!(style_hash(&def), style_hash(&def.max_items(1_000)));
+
+    let tiny = def.max_items(0);
+    assert!(supported_with("flowchart TD\n  A", &tiny));
+    assert!(!supported_with("flowchart TD\n  A --> B", &tiny));
+
+    // At the ceiling (1,500): 750 nodes + 749 edges = 1,499 items passes; 751 + 750 = 1,501 fails.
+    let over = def.max_items(100_000);
+    assert!(supported_with(&chain_src(750), &over));
+    assert!(!supported_with(&chain_src(751), &over));
+
+    // Diagram directives and front matter cannot raise the cap past style.max_items.
+    let directed = format!(
+        r#"%%{{init: {{"maxEdges": 5000, "maxItems": 5000}}}}%%
+---
+maxEdges: 5000
+---
+{}"#,
+        chain_src(210),
+    );
+    assert!(!supported(&directed));
+    assert!(render(&directed, &def).is_none());
+    assert!(render(&directed, &def.max_items(1_000)).is_some());
+
+    // Scene cache differentiates styles with different max_items on the same source.
+    let src = chain_src(210);
+    assert!(scenes::built(&src, &def, None, None).0.is_none());
+    assert!(scenes::built(&src, &def.max_items(1_000), None, None).0.is_some());
+    assert!(scenes::built(&src, &def, None, None).0.is_none());
+}
+
+#[test]
+fn max_items_preserves_dummy_and_depth_bounds_and_applies_across_diagram_types() {
+    let high = DiagramStyle::neutral(true).max_items(MAX_ITEMS_CEILING);
+
+    // MAX_DUMMIES = 3000 still rejects dense tangled graphs even at MAX_ITEMS_CEILING.
+    let mut tangled = vec!["graph LR".to_owned()];
+    for i in 0..130 {
+        tangled.push(format!("N{i} --> N{} & N{}", (i * 7 + 1) % 130, (i * 13 + 5) % 130));
+    }
+    let tangled = tangled.join("\n");
+    assert!(supported_with(&tangled, &high));
+    assert!(scene(&tangled, &high, None).is_none(), "dense graph still hits MAX_DUMMIES");
+
+    // MAX_DEPTH = 8 still rejects 9-deep nested subgraphs.
+    let deep = format!("graph TD\n{}A\n{}", "subgraph s\n".repeat(9), "end\n".repeat(9));
+    assert!(!supported_with(&deep, &high));
+
+    // Non-flowchart diagram types honour max_items while keeping default 400 unchanged.
+    let seq = format!("sequenceDiagram\n{}", (0..450).map(|i| format!("  A->>B: m{i}")).collect::<Vec<_>>().join("\n"));
+    let pie = format!("pie\n{}", (0..450).map(|i| format!("  \"s{i}\" : 1")).collect::<Vec<_>>().join("\n"));
+    let state = format!("stateDiagram-v2\n{}", (0..220).map(|i| format!("  S{i} --> S{}", i + 1)).collect::<Vec<_>>().join("\n"));
+    let class = format!("classDiagram\n{}", (0..220).map(|i| format!("  C{i} --> C{}", i + 1)).collect::<Vec<_>>().join("\n"));
+    let er = format!("erDiagram\n{}", (0..220).map(|i| format!("  E{i} ||--o{{ E{} : r", i + 1)).collect::<Vec<_>>().join("\n"));
+    let gantt = format!("gantt\n{}", (0..450).map(|i| format!("  T{i} :2024-01-01, 1d")).collect::<Vec<_>>().join("\n"));
+    let mindmap = format!("mindmap\nroot\n{}", (0..450).map(|i| format!("  n{i}")).collect::<Vec<_>>().join("\n"));
+    let xy = format!("xychart-beta\n  bar [{}]", vec!["1"; 450].join(", "));
+    for src in [&seq, &pie, &state, &class, &er, &gantt, &mindmap, &xy] {
+        assert!(!supported(src), "default 400 rejects {}", &src[..20]);
+        assert!(supported_with(src, &high), "raised cap accepts {}", &src[..20]);
+    }
+}

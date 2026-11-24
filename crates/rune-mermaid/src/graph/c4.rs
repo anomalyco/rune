@@ -11,7 +11,7 @@ use crate::canvas::{Scene, measure_wrap};
 use crate::chart::{bold, ink, small};
 use crate::layout::draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, PERSON, draw_layered};
 use crate::layout::layered::Spacing;
-use crate::{DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, MAX_ITEMS, clean_quoted, word};
+use crate::{DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, clean_quoted, word};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Base {
@@ -72,7 +72,7 @@ enum Way {
     Back,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<C4> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<C4> {
     let dynamic = header == "C4Dynamic";
     let mut d = C4::default();
     let mut ids: HashMap<String, usize> = HashMap::new();
@@ -118,7 +118,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<C4> {
             let techn = named.get("techn").cloned().unwrap_or_else(|| get(3));
             rels.push(Rel { from: get(0), to: get(1), label: get(2), techn, both, way });
         }
-        if d.elements.len() + d.boundaries.len() + rels.len() > MAX_ITEMS {
+        if d.elements.len() + d.boundaries.len() + rels.len() > max_items {
             return None;
         }
     }

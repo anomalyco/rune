@@ -154,6 +154,10 @@ pub(super) struct TableBody {
     pub(super) shadows: Vec<rune::Shadow>,
 }
 
+/// Default and hard-ceiling item caps for Mermaid diagrams (mirroring `rune-mermaid`).
+const DEFAULT_DIAGRAM_MAX_ITEMS: usize = 400;
+const MAX_DIAGRAM_ITEMS: usize = 1_500;
+
 /// Colours and sizes diagrams draw with (see [`MarkdownStyle::diagram`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DiagramPaint {
@@ -170,6 +174,7 @@ pub(crate) struct DiagramPaint {
     pub font: TextStyle,
     pub max_width: f32,
     pub min_scale: f32,
+    pub max_items: usize,
     pub hover: Color,
     pub hover_neighbours: bool,
 }
@@ -279,6 +284,7 @@ impl MarkdownStyle {
                 font: TextStyle { size: 13.0, line_height: 18.0, ..k.ty.body },
                 max_width: 680.0,
                 min_scale: 0.6,
+                max_items: DEFAULT_DIAGRAM_MAX_ITEMS,
                 hover: k.alpha(c.text_base, 0.9),
                 hover_neighbours: false,
             },
@@ -619,6 +625,17 @@ impl MarkdownStyle {
         self.diagram.min_scale = k.clamp(0.0, 1.0);
         self
     }
+    /// Maximum parsed Mermaid items (nodes, edges, subgraphs) before a fence falls back to its
+    /// source block (400 by default, clamped to `1..=1_500`). Directives cannot raise this cap.
+    ///
+    /// ```no_run
+    /// # use rune_kit::MarkdownStyle;
+    /// let _s = MarkdownStyle::neutral(false).diagram_max_items(1_000);
+    /// ```
+    pub fn diagram_max_items(mut self, limit: usize) -> Self {
+        self.diagram.max_items = limit.clamp(1, MAX_DIAGRAM_ITEMS);
+        self
+    }
     /// What lights up while the pointer is over a flowchart or state diagram node: its edges and
     /// their labels in `color` (the text colour by default; transparent turns it off), and with
     /// `neighbours` its outline and the outlines of the nodes they reach. Pointing at an edge or
@@ -788,10 +805,11 @@ impl std::hash::Hash for MarkdownStyle {
             font,
             max_width,
             min_scale,
+            max_items,
             hover,
             hover_neighbours,
         } = diagram;
         (text, muted, surface, surface_border, node_fill, node_border, line, cluster_fill, note_fill, note_border).hash(state);
-        (font, f32_bits(max_width), f32_bits(min_scale), hover, hover_neighbours).hash(state);
+        (font, f32_bits(max_width), f32_bits(min_scale), max_items, hover, hover_neighbours).hash(state);
     }
 }

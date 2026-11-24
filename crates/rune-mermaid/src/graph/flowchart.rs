@@ -9,7 +9,7 @@ use crate::canvas::{Canvas, Scene, measure_balanced};
 use crate::layout::draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, NodeShape, layered_canvas, node_size};
 use crate::layout::layered::{MAX_MINLEN, Spacing};
 use crate::{
-    Cur, DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, MAX_ITEMS, NodeStyle, StyleSheet, clean, clean_quoted,
+    Cur, DiagramStyle, EdgeStyle, Hover, MAX_DEPTH, NodeStyle, StyleSheet, clean, clean_quoted,
     parse_edge_style_props, statements,
 };
 
@@ -40,7 +40,7 @@ pub(crate) struct Flowchart {
 }
 
 /// `header` is what follows `graph`/`flowchart` on its line; `body` the remaining lines.
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Flowchart> {
     let (dir, rest) = header.trim_start().split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header.trim(), ""));
     // A direction it doesn't know reads top-down.
     let dir = Dir::parse(dir).unwrap_or(Dir::Down);
@@ -52,6 +52,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Flowchart> {
         default_edge_style: EdgeStyle::default(),
         edge_styles: HashMap::new(),
         edge_ids: HashSet::new(),
+        max_items,
         over: false,
     };
     // A statement that doesn't read is skipped; one past the bounds leaves the whole diagram as source.
@@ -149,7 +150,8 @@ struct Parser {
     default_edge_style: EdgeStyle,
     edge_styles: HashMap<usize, EdgeStyle>,
     edge_ids: HashSet<String>,
-    /// Set once the source goes past [`MAX_ITEMS`] or [`MAX_DEPTH`].
+    max_items: usize,
+    /// Set once the source goes past `max_items` or [`MAX_DEPTH`].
     over: bool,
 }
 
@@ -164,7 +166,7 @@ pub(crate) struct Link {
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() >= MAX_ITEMS;
+        self.over |= self.f.nodes.len() + self.f.edges.len() + self.f.subgraphs.len() >= self.max_items;
         (!self.over).then_some(())
     }
 

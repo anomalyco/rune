@@ -1,4 +1,5 @@
 use super::*;
+use crate::MAX_ITEMS;
 
 fn timeline(src: &str) -> Timeline {
     match crate::parse(src).map(|p| p.diagram) {

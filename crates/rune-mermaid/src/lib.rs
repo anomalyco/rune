@@ -91,7 +91,8 @@
 //! without its closer (`B[/items split view]`) is a plain rectangle holding the text as written;
 //! blocks left open close at the end. [`render`] returns `None`, so callers can show the source,
 //! only for a diagram type it doesn't know (kanban, packet, architecture, …), when nothing reads,
-//! or past the size bounds (400 items, nesting 8 deep).
+//! or past the size bounds (400 items by default — configurable up to 1,500 via
+//! [`DiagramStyle::max_items`] — and nesting 8 deep).
 //!
 //! **Streaming.** Each node, edge, participant, message and frame is its own element, keyed by
 //! what it is (a flowchart node by its id), so a diagram rebuilt as its source grows keeps what
@@ -138,6 +139,8 @@ pub struct DiagramStyle {
     pub max_width: f32,
     /// Set with [`Self::min_scale`].
     min_scale: f32,
+    /// Set with [`Self::max_items`].
+    max_items: usize,
 }
 
 impl Hash for DiagramStyle {
@@ -159,6 +162,7 @@ impl Hash for DiagramStyle {
         let bits = if self.max_width == 0.0 { 0 } else if self.max_width.is_nan() { f32::NAN.to_bits() } else { self.max_width.to_bits() };
         bits.hash(state);
         self.min_scale.to_bits().hash(state);
+        self.max_items.hash(state);
     }
 }
 
@@ -180,6 +184,7 @@ impl DiagramStyle {
             font: TextStyle::new(13.0, 400.0).lh(18.0),
             max_width: 680.0,
             min_scale: 0.6,
+            max_items: MAX_ITEMS,
         }
     }
 
@@ -188,6 +193,19 @@ impl DiagramStyle {
     /// diagram in.
     pub fn min_scale(mut self, k: f32) -> Self {
         self.min_scale = k.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Maximum parsed items (such as nodes, edges and subgraphs) before rendering falls back to
+    /// `None` (400 by default, clamped to `1..=1_500`). Diagram directives cannot raise this cap.
+    ///
+    /// ```no_run
+    /// # use rune_mermaid::DiagramStyle;
+    /// let style = DiagramStyle::neutral(false).max_items(1_000);
+    /// # let _ = style;
+    /// ```
+    pub fn max_items(mut self, limit: usize) -> Self {
+        self.max_items = limit.clamp(1, MAX_ITEMS_CEILING);
         self
     }
 }
@@ -255,9 +273,21 @@ fn render_inner(src: &str, style: &DiagramStyle, hover: Hover, color: Color, mod
     scene.map(|s| s.el(style, mode != Mode::Still))
 }
 
-/// Whether `src` parses as a supported diagram.
+/// Whether `src` parses as a supported diagram under the default item limit (400).
 pub fn supported(src: &str) -> bool {
     parse(src).is_some()
+}
+
+/// Whether `src` parses as a supported diagram under `style`'s settings (such as
+/// [`DiagramStyle::max_items`]).
+///
+/// ```no_run
+/// # use rune_mermaid::{DiagramStyle, supported_with};
+/// let style = DiagramStyle::neutral(false).max_items(1_000);
+/// let _ok = supported_with("flowchart TD\n  A --> B", &style);
+/// ```
+pub fn supported_with(src: &str, style: &DiagramStyle) -> bool {
+    parse_with(src, style.max_items).is_some()
 }
 
 pub(crate) enum Diagram {
@@ -285,8 +315,14 @@ pub(crate) struct Parsed {
     pub diagram: Diagram,
 }
 
-/// Diagrams bigger than this are left as source: they would be unreadable at markdown width.
+/// Default item cap: diagrams bigger than this are left as source unless a caller opts in via
+/// [`DiagramStyle::max_items`].
 pub(crate) const MAX_ITEMS: usize = 400;
+
+/// Hard upper bound for [`DiagramStyle::max_items`] so synchronous UI-thread layout stays bounded
+/// (chosen from `--profile perf` measurements of chains, dense DAGs, long chords and nested
+/// subgraphs alongside [`MAX_DEPTH`] and `MAX_DUMMIES`).
+pub(crate) const MAX_ITEMS_CEILING: usize = 1_500;
 
 /// How deep subgraphs, composite states, frames and other blocks may nest.
 pub(crate) const MAX_DEPTH: usize = 8;
@@ -346,35 +382,40 @@ fn cleaned(src: &str) -> (Option<String>, impl Iterator<Item = (usize, &str)>) {
 }
 
 pub(crate) fn parse(src: &str) -> Option<Parsed> {
+    parse_with(src, MAX_ITEMS)
+}
+
+pub(crate) fn parse_with(src: &str, max_items: usize) -> Option<Parsed> {
+    let max_items = max_items.clamp(1, MAX_ITEMS_CEILING);
     let (fm_title, mut lines) = cleaned(src);
     let (_, header) = lines.next()?;
     let (kind, rest) = header.split_once(|c: char| c.is_whitespace() || c == ';').unwrap_or((header, ""));
     let (indents, body): (Vec<usize>, Vec<&str>) = lines.unzip();
     let (body_title, diagram) = match kind {
-        "graph" | "flowchart" => graph::flowchart::parse(rest, &body).map(|f| (f.title.clone(), Diagram::Flowchart(f)))?,
-        "sequenceDiagram" => sequence::parse(rest, &body).map(|s| (s.title.clone(), Diagram::Sequence(s)))?,
-        "stateDiagram" | "stateDiagram-v2" => graph::state::parse(rest, &body).map(|s| (s.title.clone(), Diagram::State(s)))?,
-        "classDiagram" => graph::class::parse(rest, &body).map(|c| (c.title.clone(), Diagram::Class(c)))?,
-        "erDiagram" => graph::er::parse(rest, &body).map(|e| (e.title.clone(), Diagram::Er(e)))?,
-        "gantt" => chart::gantt::parse(rest, &body).map(|g| (g.title.clone(), Diagram::Gantt(g)))?,
-        "pie" => chart::pie::parse(rest, &body).map(|p| (p.title.clone(), Diagram::Pie(p)))?,
-        "mindmap" => chart::mindmap::parse(&body, &indents).map(|m| (None, Diagram::Mindmap(m)))?,
-        "timeline" => chart::timeline::parse(rest, &body).map(|t| (t.title.clone(), Diagram::Timeline(t)))?,
-        "journey" => chart::journey::parse(&body).map(|j| (j.title.clone(), Diagram::Journey(j)))?,
-        "gitGraph" | "gitGraph:" => chart::git::parse(rest, &body).map(|g| (None, Diagram::Git(g)))?,
-        "quadrantChart" => chart::quadrant::parse(&body).map(|q| (q.title.clone(), Diagram::Quadrant(q)))?,
-        "xychart-beta" | "xychart" => chart::xychart::parse(rest, &body).map(|x| (x.title.clone(), Diagram::XyChart(x)))?,
-        "sankey-beta" | "sankey" => chart::sankey::parse(&body).map(|s| (None, Diagram::Sankey(s)))?,
-        "block-beta" | "block" => graph::block::parse(&body).map(|b| (None, Diagram::Block(b)))?,
-        "requirementDiagram" => graph::requirement::parse(&body).map(|r| (None, Diagram::Requirement(r)))?,
-        "C4Context" | "C4Container" | "C4Component" | "C4Dynamic" | "C4Deployment" => graph::c4::parse(kind, &body).map(|c| (c.title.clone(), Diagram::C4(c)))?,
+        "graph" | "flowchart" => graph::flowchart::parse(rest, &body, max_items).map(|f| (f.title.clone(), Diagram::Flowchart(f)))?,
+        "sequenceDiagram" => sequence::parse(rest, &body, max_items).map(|s| (s.title.clone(), Diagram::Sequence(s)))?,
+        "stateDiagram" | "stateDiagram-v2" => graph::state::parse(rest, &body, max_items).map(|s| (s.title.clone(), Diagram::State(s)))?,
+        "classDiagram" => graph::class::parse(rest, &body, max_items).map(|c| (c.title.clone(), Diagram::Class(c)))?,
+        "erDiagram" => graph::er::parse(rest, &body, max_items).map(|e| (e.title.clone(), Diagram::Er(e)))?,
+        "gantt" => chart::gantt::parse(rest, &body, max_items).map(|g| (g.title.clone(), Diagram::Gantt(g)))?,
+        "pie" => chart::pie::parse(rest, &body, max_items).map(|p| (p.title.clone(), Diagram::Pie(p)))?,
+        "mindmap" => chart::mindmap::parse(&body, &indents, max_items).map(|m| (None, Diagram::Mindmap(m)))?,
+        "timeline" => chart::timeline::parse(rest, &body, max_items).map(|t| (t.title.clone(), Diagram::Timeline(t)))?,
+        "journey" => chart::journey::parse(&body, max_items).map(|j| (j.title.clone(), Diagram::Journey(j)))?,
+        "gitGraph" | "gitGraph:" => chart::git::parse(rest, &body, max_items).map(|g| (None, Diagram::Git(g)))?,
+        "quadrantChart" => chart::quadrant::parse(&body, max_items).map(|q| (q.title.clone(), Diagram::Quadrant(q)))?,
+        "xychart-beta" | "xychart" => chart::xychart::parse(rest, &body, max_items).map(|x| (x.title.clone(), Diagram::XyChart(x)))?,
+        "sankey-beta" | "sankey" => chart::sankey::parse(&body, max_items).map(|s| (None, Diagram::Sankey(s)))?,
+        "block-beta" | "block" => graph::block::parse(&body, max_items).map(|b| (None, Diagram::Block(b)))?,
+        "requirementDiagram" => graph::requirement::parse(&body, max_items).map(|r| (None, Diagram::Requirement(r)))?,
+        "C4Context" | "C4Container" | "C4Component" | "C4Dynamic" | "C4Deployment" => graph::c4::parse(kind, &body, max_items).map(|c| (c.title.clone(), Diagram::C4(c)))?,
         _ => return None,
     };
     Some(Parsed { title: body_title.or(fm_title), diagram })
 }
 
 pub(crate) fn scene(src: &str, paint: &DiagramStyle, hover: Option<(Hover, Color)>) -> Option<Scene> {
-    let parsed = parse(src)?;
+    let parsed = parse_with(src, paint.max_items)?;
     let s = match &parsed.diagram {
         Diagram::Flowchart(f) => graph::flowchart::draw(f, paint, hover),
         Diagram::Sequence(s) => sequence::draw(s, paint),

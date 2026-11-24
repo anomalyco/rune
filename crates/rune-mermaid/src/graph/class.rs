@@ -8,7 +8,7 @@ use super::lenient::{Lenient, Reader};
 use crate::canvas::Scene;
 use crate::layout::draw::{ClusterSpec, Dir, DrawNode, Edge, Head, Line, class_box, draw_layered};
 use crate::layout::layered::Spacing;
-use crate::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, StyleSheet, clean, clean_quoted, statements};
+use crate::{DiagramStyle, EdgeStyle, Hover, NodeStyle, StyleSheet, clean, clean_quoted, statements};
 
 #[derive(Debug)]
 pub(crate) struct ClassNode {
@@ -56,7 +56,7 @@ const RELS: &[(&str, Head, Head, Line)] = &[
     ("..", Head::None, Head::None, Line::Dotted),
 ];
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ClassDiagram> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<ClassDiagram> {
     let mut p = Parser {
         d: ClassDiagram { title: None, dir: Dir::Down, classes: Vec::new(), edges: Vec::new(), namespaces: Vec::new() },
         ids: HashMap::new(),
@@ -64,6 +64,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ClassDiagram> {
         active_ns: None,
         styles: StyleSheet::default(),
         members: 0,
+        max_items,
         over: false,
     };
     let mut reader = Reader::default();
@@ -85,7 +86,8 @@ struct Parser {
     active_ns: Option<usize>,
     styles: StyleSheet,
     members: usize,
-    /// Set once the source goes past [`MAX_ITEMS`] (or four times that in members).
+    max_items: usize,
+    /// Set once the source goes past `max_items` (or four times that in members).
     over: bool,
 }
 
@@ -109,7 +111,7 @@ impl Lenient for Parser {
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.d.classes.len() + self.d.edges.len() + self.d.namespaces.len() >= MAX_ITEMS;
+        self.over |= self.d.classes.len() + self.d.edges.len() + self.d.namespaces.len() >= self.max_items;
         (!self.over).then_some(())
     }
 
@@ -242,7 +244,7 @@ impl Parser {
             return;
         }
         self.members += 1;
-        self.over |= self.members > MAX_ITEMS * 4;
+        self.over |= self.members > self.max_items.saturating_mul(4);
         let cleaned = clean(&tilde_generics(t));
         if cleaned.contains('(') && cleaned.contains(')') {
             self.d.classes[idx].methods.push(cleaned);

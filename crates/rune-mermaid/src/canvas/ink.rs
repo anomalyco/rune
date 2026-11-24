@@ -38,7 +38,7 @@ pub(crate) fn flatten(ops: &mut [Op], traces: &mut [Trace], surface: Color) {
             _ => None,
         })
         .collect();
-    let backdrop = Backdrop { areas, surface };
+    let backdrop = Backdrop::new(areas, surface);
     let n = ops.len();
     for (i, op) in ops.iter_mut().enumerate() {
         backdrop.flatten(op, i, &inks);
@@ -58,9 +58,42 @@ struct Area {
 struct Backdrop {
     areas: Vec<Area>,
     surface: Color,
+    y_min: f32,
+    y_max: f32,
+    inv_strip: f32,
+    strips: Vec<Vec<usize>>,
 }
 
 impl Backdrop {
+    fn new(areas: Vec<Area>, surface: Color) -> Self {
+        let mut y_min = f32::MAX;
+        let mut y_max = f32::MIN;
+        for a in &areas {
+            if a.bounds[1].is_finite() && a.bounds[3].is_finite() {
+                y_min = y_min.min(a.bounds[1]);
+                y_max = y_max.max(a.bounds[3]);
+            }
+        }
+        if areas.len() < 16 || y_min > y_max {
+            return Backdrop { areas, surface, y_min: 0.0, y_max: 0.0, inv_strip: 0.0, strips: Vec::new() };
+        }
+        let span = (y_max - y_min).max(1.0);
+        let count = ((span / 128.0).ceil() as usize).clamp(1, 128);
+        let inv_strip = count as f32 / span;
+        let mut strips = vec![Vec::new(); count];
+        for (idx, a) in areas.iter().enumerate() {
+            if !a.bounds[1].is_finite() || !a.bounds[3].is_finite() {
+                continue;
+            }
+            let s0 = (((a.bounds[1] - y_min) * inv_strip).floor() as isize).clamp(0, count as isize - 1) as usize;
+            let s1 = (((a.bounds[3] - y_min) * inv_strip).floor() as isize).clamp(0, count as isize - 1) as usize;
+            for strip in &mut strips[s0..=s1] {
+                strip.push(idx);
+            }
+        }
+        Backdrop { areas, surface, y_min, y_max, inv_strip, strips }
+    }
+
     fn flatten(&self, op: &mut Op, at: usize, inks: &[Color]) {
         match op {
             Op::Stroke { points, closed, color, .. } if translucent(*color) => {
@@ -75,8 +108,21 @@ impl Backdrop {
     /// The colour at `p` from the fills drawn before op `at`, over the surface; `own` is the
     /// outline being drawn, whose own fill doesn't count.
     fn under(&self, p: [f32; 2], at: usize, own: Option<&[[f32; 2]]>) -> Color {
-        self.areas
+        if self.strips.is_empty() {
+            return self
+                .areas
+                .iter()
+                .take_while(|a| a.at < at)
+                .filter(|a| own != Some(&a.points[..]) && inside(p, a.bounds, &a.points))
+                .fold(self.surface, |under, a| over(a.color, under));
+        }
+        if !p[1].is_finite() || p[1] < self.y_min || p[1] > self.y_max {
+            return self.surface;
+        }
+        let s = (((p[1] - self.y_min) * self.inv_strip).floor() as isize).clamp(0, self.strips.len() as isize - 1) as usize;
+        self.strips[s]
             .iter()
+            .map(|&idx| &self.areas[idx])
             .take_while(|a| a.at < at)
             .filter(|a| own != Some(&a.points[..]) && inside(p, a.bounds, &a.points))
             .fold(self.surface, |under, a| over(a.color, under))

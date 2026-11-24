@@ -559,3 +559,63 @@ fn code_block_radius_defaults_to_6_and_overrides_code_diff_and_deep_tail_cards()
     rt_cache.frame(1.0 / 60.0);
     assert!(RENDERS.with(Cell::get) > before);
 }
+
+#[test]
+fn diagram_max_items_defaults_to_400_clamps_hashes_and_renders_large_mermaid() {
+    let base = MarkdownStyle::neutral(false);
+    assert_eq!(base.diagram.max_items, 400);
+    assert_eq!(base.clone().diagram_max_items(0).diagram.max_items, 1);
+    assert_eq!(base.clone().diagram_max_items(100_000).diagram.max_items, 1_500);
+    assert_eq!(hash_of(base.clone().diagram_max_items(0)), hash_of(base.clone().diagram_max_items(1)));
+    assert_eq!(hash_of(base.clone().diagram_max_items(1_500)), hash_of(base.clone().diagram_max_items(100_000)));
+    assert_ne!(hash_of(&base), hash_of(base.clone().diagram_max_items(1_000)));
+
+    #[cfg(feature = "mermaid")]
+    {
+        let mut src = String::from("flowchart TD\n");
+        for i in 0..209 {
+            src.push_str(&format!("  N{i} --> N{}\n", i + 1));
+        }
+        let md = format!("```mermaid\n{src}```\n");
+        let raised = base.clone().diagram_max_items(1_000);
+
+        // Direct mermaid helpers honour diagram_max_items while default stays at 400.
+        assert!(!crate::mermaid::supported(&src));
+        assert!(crate::mermaid::supported_with(&src, &crate::mermaid::DiagramStyle::neutral(false).max_items(1_000)));
+        assert!(crate::mermaid::render(&src, &base).is_none());
+        assert!(crate::mermaid::render(&src, &raised).is_some());
+        assert!(crate::mermaid::drawing(&src, &base, 680.0).is_none());
+        assert!(crate::mermaid::drawing(&src, &raised, 680.0).is_some());
+        assert!(crate::mermaid::prepare(&src, &base, 680.0).is_none());
+        assert!(crate::mermaid::prepare(&src, &raised, 680.0).is_some());
+
+        // Markdown rendering: default falls back to "source"; diagram_max_items(1_000) renders
+        // "diagram" with figure role and Flowchart label, and toggling invalidates memoization.
+        let mut rt = Runtime::new(
+            (400usize, md),
+            |(cap, doc): &(usize, String), _: &mut Cx<(usize, String)>| {
+                let st = MarkdownStyle::neutral(false).diagram_max_items(*cap);
+                col().w(680.0).child(Markdown::new(doc).render(&st).key("md"))
+            },
+            (680.0, 1200.0),
+            Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        let keys0: Vec<String> = rt.elements().into_iter().filter_map(|e| e.key).collect();
+        assert!(keys0.iter().any(|k| k == "source") && !keys0.iter().any(|k| k == "diagram"), "default 400 falls back: {keys0:?}");
+
+        RENDERS.with(|n| n.set(0));
+        let before = RENDERS.with(Cell::get);
+        rt.update(|s, tx| {
+            tx.instant();
+            s.0 = 1_000;
+        });
+        rt.frame(1.0 / 60.0);
+        assert!(RENDERS.with(Cell::get) > before, "changing diagram_max_items invalidates cache");
+        let elems = rt.elements();
+        assert!(elems.iter().any(|e| e.key.as_deref() == Some("diagram")), "raised cap renders diagram");
+        assert!(!elems.iter().any(|e| e.key.as_deref() == Some("source")), "raised cap does not fall back to source");
+        let fig = elems.iter().find(|e| e.role == "figure").expect("diagram has figure role");
+        assert_eq!(fig.label.as_deref(), Some("Flowchart"));
+    }
+}

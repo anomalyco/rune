@@ -7,7 +7,10 @@
 //! Everything here works in the layout's own axes (ranks run down `y`); callers map points to
 //! the screen with [`Ctx::screen`].
 
+use std::collections::HashMap;
+
 use super::draw::{NodeShape, boundary, outline};
+use super::grid::{Grid, overlaps};
 use super::layered::Placed;
 use crate::canvas::{dist, lerp};
 
@@ -35,8 +38,6 @@ pub(crate) struct Ctx<'a> {
     pub ends: Vec<(usize, usize)>,
     /// Centres in layout axes, in the order of `sizes`.
     centers: Vec<[f32; 2]>,
-    /// How many of `sizes` are nodes; the rest are subgraphs edges stop on.
-    real: usize,
     /// Node outlines in layout axes.
     outlines: Vec<Vec<[f32; 2]>>,
     /// Subgraph titles, `[x0, y0, x1, y1]` in layout axes.
@@ -49,7 +50,23 @@ pub(crate) struct Ctx<'a> {
     homes: Vec<Vec<usize>>,
     /// The subgraph each of `sizes` past the nodes is.
     stops: Vec<usize>,
+    /// Whether edge `i` shares its unordered endpoints with another edge.
+    twins: Vec<bool>,
+    /// Padded node AABBs (`0..real`, expanded by `NODE_GAP`) and their spatial index.
+    node_boxes: Vec<[f32; 4]>,
+    node_grid: Grid,
+    /// Precomputed `(owner_edge_or_max, rect)` for edge labels and subgraph titles, plus spatial index.
+    label_rects: Vec<(usize, [f32; 4])>,
+    label_grid: Grid,
+    /// Non-empty cluster boxes `(cluster_idx, padded_rect)` (expanded by `CLUSTER_GAP`) and index.
+    cluster_rects: Vec<(usize, [f32; 4])>,
+    cluster_grid: Grid,
+    /// Anchors and label computed during [`Ctx::fanned`] for edges whose slots stayed unfanned.
+    cached_flip: bool,
+    cached: Vec<Option<CachedRoute>>,
 }
+
+type CachedRoute = (Vec<[f32; 2]>, Option<[f32; 2]>);
 
 /// An edge drawn: its curve and the tips and directions of its heads, in screen points.
 pub(crate) struct Route {
@@ -67,7 +84,52 @@ impl<'a> Ctx<'a> {
         let swap = |p: [f32; 2]| if across { [p[1], p[0]] } else { p };
         let outlines = (0..sizes.len()).map(|v| outline(shapes[v], swap(placed.centers[v]), sizes[v]).into_iter().map(swap).collect()).collect();
         let centers = placed.centers.clone();
-        Ctx { placed, sizes: sizes.to_vec(), shapes, labels, across, ends, centers, real: sizes.len(), outlines, titles: Vec::new(), slots: Vec::new(), homes: Vec::new(), stops: Vec::new() }
+        let twins = compute_twins(&ends);
+        let node_boxes: Vec<[f32; 4]> = (0..sizes.len())
+            .map(|v| {
+                let (c, s) = (centers[v], swap(sizes[v]));
+                [c[0] - s[0] / 2.0 - NODE_GAP, c[1] - s[1] / 2.0 - NODE_GAP, c[0] + s[0] / 2.0 + NODE_GAP, c[1] + s[1] / 2.0 + NODE_GAP]
+            })
+            .collect();
+        let node_grid = Grid::new(&node_boxes);
+        let label_rects: Vec<(usize, [f32; 4])> = (0..labels.len())
+            .filter_map(|j| {
+                let (at, s) = (placed.labels[j]?, labels[j]?);
+                Some((j, [at[0] - s[0] / 2.0, at[1] - s[1] / 2.0, at[0] + s[0] / 2.0, at[1] + s[1] / 2.0]))
+            })
+            .collect();
+        let label_grid = Grid::new_mapped(&label_rects, |x| x.1);
+        let cluster_rects: Vec<(usize, [f32; 4])> = placed
+            .clusters
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| **b != [0.0; 4])
+            .map(|(c, b)| (c, [b[0] - CLUSTER_GAP, b[1] - CLUSTER_GAP, b[2] + CLUSTER_GAP, b[3] + CLUSTER_GAP]))
+            .collect();
+        let cluster_grid = Grid::new_mapped(&cluster_rects, |x| x.1);
+        Ctx {
+            placed,
+            sizes: sizes.to_vec(),
+            shapes,
+            labels,
+            across,
+            ends,
+            centers,
+            outlines,
+            titles: Vec::new(),
+            slots: Vec::new(),
+            homes: Vec::new(),
+            stops: Vec::new(),
+            twins,
+            node_boxes,
+            node_grid,
+            label_rects,
+            label_grid,
+            cluster_rects,
+            cluster_grid,
+            cached_flip: false,
+            cached: Vec::new(),
+        }
     }
 
     /// The subgraphs each node sits in, innermost last, given per subgraph as its chain from the
@@ -78,11 +140,9 @@ impl<'a> Ctx<'a> {
         self
     }
 
-    /// The boxes of subgraphs that hold neither end of edge `i`, in layout axes.
-    fn foreign(&self, i: usize) -> impl Iterator<Item = [f32; 4]> + '_ {
-        let (from, to) = self.ends[i];
-        let home = |v: usize, c: usize| self.homes.get(v).is_some_and(|h| h.contains(&c));
-        self.placed.clusters.iter().enumerate().filter(move |&(c, b)| *b != [0.0; 4] && !home(from, c) && !home(to, c)).map(|(_, b)| *b)
+    /// Whether node or cluster-stop `v` sits inside cluster `c`.
+    fn in_home(&self, v: usize, c: usize) -> bool {
+        self.homes.get(v).is_some_and(|h| h.contains(&c))
     }
 
     /// Stops edge ends on subgraph borders, `[start, end]` per edge: each subgraph named joins as
@@ -114,6 +174,9 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
+        if !boxes.is_empty() {
+            self.twins = compute_twins(&self.ends);
+        }
         self
     }
 
@@ -126,6 +189,11 @@ impl<'a> Ctx<'a> {
                 [a[0], a[1], b[0], b[1]]
             })
             .collect();
+        if !self.titles.is_empty() {
+            self.label_rects.retain(|&(j, _)| j != usize::MAX);
+            self.label_rects.extend(self.titles.iter().map(|&r| (usize::MAX, r)));
+            self.label_grid = Grid::new_mapped(&self.label_rects, |x| x.1);
+        }
         self
     }
 
@@ -135,16 +203,22 @@ impl<'a> Ctx<'a> {
     pub(crate) fn fanned(mut self, flip: bool) -> Self {
         // (node, side, port x, other end's x, edge, which end) for every end.
         let mut ends: Vec<(usize, i8, f32, f32, usize, usize)> = Vec::new();
-        for i in 0..self.ends.len() {
+        let mut cached: Vec<Option<CachedRoute>> = vec![None; self.ends.len()];
+        for (i, slot) in cached.iter_mut().enumerate() {
             let (from, to) = self.ends[i];
             if from == to || self.placed.paths.get(i).is_none_or(|p| p.len() < 2) {
                 continue;
             }
-            let r = self.route(i, flip, [0.0, 0.0]);
-            let (a, b) = (self.screen(r.tip_start), self.screen(r.tip_end));
-            let side = |d: [f32; 2]| if self.screen(d)[1] > 0.0 { -1 } else { 1 };
-            ends.push((from, side(r.dir_start), a[0], b[0], i, 0));
-            ends.push((to, side(r.dir_end), b[0], a[0], i, 1));
+            let (anchors, at) = self.route_anchors(i, flip);
+            let n = anchors.len();
+            let s0 = (anchors[1][1] - anchors[0][1]).signum();
+            let s1 = (anchors[n - 1][1] - anchors[n - 2][1]).signum();
+            let (a, b) = (anchors[0], anchors[n - 1]);
+            // `dir_start` in layout axes is `[0, -s0]`, `dir_end` is `[0, s1]`.
+            let side = |dy: f32| if dy > 0.0 { -1 } else { 1 };
+            ends.push((from, side(-s0), a[0], b[0], i, 0));
+            ends.push((to, side(s1), b[0], a[0], i, 1));
+            *slot = Some((anchors, at));
         }
         ends.sort_by(|p, q| (p.0, p.1).cmp(&(q.0, q.1)).then(p.2.total_cmp(&q.2)));
         self.slots = vec![[None; 2]; self.ends.len()];
@@ -153,9 +227,12 @@ impl<'a> Ctx<'a> {
             for (x, &(_, _, natural, _, i, k)) in spread(group, c, reach).into_iter().zip(group) {
                 if (x - natural).abs() > 0.5 {
                     self.slots[i][k] = Some(x);
+                    cached[i] = None;
                 }
             }
         }
+        self.cached_flip = flip;
+        self.cached = cached;
         self
     }
 
@@ -248,45 +325,83 @@ impl<'a> Ctx<'a> {
         !inside(poly, p) && (0..poly.len()).all(|i| seg_dist(p, poly[i], poly[(i + 1) % poly.len()]) > gap)
     }
 
-    /// Other edges' label boxes, where the layout put them, and subgraph titles.
-    fn label_boxes(&self, skip: usize) -> impl Iterator<Item = [f32; 4]> + '_ {
-        let labels = (0..self.labels.len()).filter(move |&j| j != skip).filter_map(|j| {
-            let (at, s) = (self.placed.labels[j]?, self.labels[j]?);
-            Some([at[0] - s[0] / 2.0, at[1] - s[1] / 2.0, at[0] + s[0] / 2.0, at[1] + s[1] / 2.0])
-        });
-        labels.chain(self.titles.iter().copied())
-    }
-
     /// Whether the curve from `a` to `b` stays clear of every node but `ends` and of other labels.
     fn clear(&self, edge: usize, a: [f32; 2], b: [f32; 2], ends: (usize, usize)) -> bool {
-        let pts: Vec<[f32; 2]> = cubic(a, b)
-            .windows(2)
-            .flat_map(|w| {
-                let steps = (dist(w[0], w[1]) / 3.0).ceil().max(1.0) as usize;
-                (0..steps).map(move |k| lerp(w[0], w[1], k as f32 / steps as f32))
-            })
-            .chain([b])
-            .collect();
-        let boxes: Vec<[f32; 4]> = self.label_boxes(edge).collect();
-        let foreign: Vec<[f32; 4]> = self.foreign(edge).collect();
-        let g = CLUSTER_GAP;
-        pts.iter().all(|&p| {
-            (0..self.real).all(|v| v == ends.0 || v == ends.1 || self.clear_of(v, p, NODE_GAP))
+        // Every point on `cubic(a, b)` lies within the convex hull of its control points, which is
+        // bounded by the segment's AABB.
+        let q = [a[0].min(b[0]) - 1e-3, a[1].min(b[1]) - 1e-3, a[0].max(b[0]) + 1e-3, a[1].max(b[1]) + 1e-3];
+        let mut nodes: Vec<usize> = Vec::new();
+        self.node_grid.query(q, |v| {
+            if v != ends.0 && v != ends.1 && overlaps(self.node_boxes[v], q) {
+                nodes.push(v);
+            }
+        });
+        if nodes.len() > 1 {
+            nodes.sort_unstable();
+            nodes.dedup();
+        }
+        let mut boxes: Vec<[f32; 4]> = Vec::new();
+        self.label_grid.query(q, |idx| {
+            let (j, r) = self.label_rects[idx];
+            if j != edge && overlaps(r, q) && !boxes.contains(&r) {
+                boxes.push(r);
+            }
+        });
+        let (from, to) = self.ends[edge];
+        let mut foreign: Vec<[f32; 4]> = Vec::new();
+        self.cluster_grid.query(q, |idx| {
+            let (c, r) = self.cluster_rects[idx];
+            if overlaps(r, q) && !self.in_home(from, c) && !self.in_home(to, c) && !foreign.contains(&r) {
+                foreign.push(r);
+            }
+        });
+        if nodes.is_empty() && boxes.is_empty() && foreign.is_empty() {
+            return true;
+        }
+        cubic_samples_ok(a, b, |p| {
+            nodes.iter().all(|&v| self.clear_of(v, p, NODE_GAP))
                 && boxes.iter().all(|r| p[0] < r[0] || p[0] > r[2] || p[1] < r[1] || p[1] > r[3])
-                && foreign.iter().all(|r| p[0] < r[0] - g || p[0] > r[2] + g || p[1] < r[1] - g || p[1] > r[3] + g)
+                && foreign.iter().all(|r| p[0] < r[0] || p[0] > r[2] || p[1] < r[1] || p[1] > r[3])
         })
     }
 
     /// Edge `i`'s route, with its heads' insets `[start, end]` taken off the line.
     pub(crate) fn route(&self, i: usize, flip: bool, insets: [f32; 2]) -> Route {
-        let (from, to) = self.ends[i];
+        let (mut anchors, at) = if flip == self.cached_flip
+            && let Some(Some((a, l))) = self.cached.get(i)
+        {
+            (a.clone(), *l)
+        } else {
+            self.route_anchors(i, flip)
+        };
+        let n = anchors.len();
+        let (s0, s1) = ((anchors[1][1] - anchors[0][1]).signum(), (anchors[n - 1][1] - anchors[n - 2][1]).signum());
+        let (tip_start, tip_end) = (anchors[0], anchors[n - 1]);
+        let room = |a: [f32; 2], b: [f32; 2], inset: f32| (b[1] - a[1]).abs() > inset + 4.0;
+        if room(anchors[0], anchors[1], insets[0]) {
+            anchors[0][1] += s0 * insets[0];
+        }
+        if room(anchors[n - 2], anchors[n - 1], insets[1]) {
+            anchors[n - 1][1] -= s1 * insets[1];
+        }
+        Route {
+            curve: curve(&anchors).into_iter().map(|p| self.screen(p)).collect(),
+            tip_start: self.screen(tip_start),
+            tip_end: self.screen(tip_end),
+            dir_start: self.screen([0.0, -s0]),
+            dir_end: self.screen([0.0, s1]),
+            label: at.map(|p| self.screen(p)),
+        }
+    }
+
+    fn route_anchors(&self, i: usize, flip: bool) -> (Vec<[f32; 2]>, Option<[f32; 2]>) {
         let mut path = self.placed.paths[i].clone();
         if flip {
             path.reverse();
         }
         let label = self.placed.labels[i];
         // Edges between the same two nodes keep the layout's separate tracks.
-        let twin = self.ends.iter().enumerate().any(|(j, &(a, b))| j != i && ((a, b) == (from, to) || (a, b) == (to, from)));
+        let twin = self.twins[i];
         let label_at = label.and_then(|l| path.iter().position(|&p| p == l));
         let mut anchors = self.anchors(i, &path, twin, None);
         let mut at = label;
@@ -311,25 +426,7 @@ impl<'a> Ctx<'a> {
                 }
             }
         }
-
-        let n = anchors.len();
-        let (s0, s1) = ((anchors[1][1] - anchors[0][1]).signum(), (anchors[n - 1][1] - anchors[n - 2][1]).signum());
-        let (tip_start, tip_end) = (anchors[0], anchors[n - 1]);
-        let room = |a: [f32; 2], b: [f32; 2], inset: f32| (b[1] - a[1]).abs() > inset + 4.0;
-        if room(anchors[0], anchors[1], insets[0]) {
-            anchors[0][1] += s0 * insets[0];
-        }
-        if room(anchors[n - 2], anchors[n - 1], insets[1]) {
-            anchors[n - 1][1] -= s1 * insets[1];
-        }
-        Route {
-            curve: curve(&anchors).into_iter().map(|p| self.screen(p)).collect(),
-            tip_start: self.screen(tip_start),
-            tip_end: self.screen(tip_end),
-            dir_start: self.screen([0.0, -s0]),
-            dir_end: self.screen([0.0, s1]),
-            label: at.map(|p| self.screen(p)),
-        }
+        (anchors, at)
     }
 
     /// Ports on both nodes, then the fewest of `path`'s bend points that keep the curve clear;
@@ -418,7 +515,19 @@ impl<'a> Ctx<'a> {
         let (r0, r1) = (self.port_reach(from), self.port_reach(to));
         let mut xs: Vec<f32> = path[1..path.len() - 1].iter().map(|p| p[0]).collect();
         xs.extend([c0, c1, c0 - r0, c0 + r0, c1 - r1, c1 + r1]);
-        let pairs: Vec<(f32, f32)> = xs.iter().flat_map(|&a| xs.iter().map(move |&b| (a.clamp(c0 - r0, c0 + r0), b.clamp(c1 - r1, c1 + r1)))).collect();
+        let mut xa: Vec<f32> = Vec::with_capacity(xs.len().min(16));
+        let mut xb: Vec<f32> = Vec::with_capacity(xs.len().min(16));
+        for &x in &xs {
+            let a = x.clamp(c0 - r0, c0 + r0);
+            if !xa.iter().any(|&v| v.to_bits() == a.to_bits()) {
+                xa.push(a);
+            }
+            let b = x.clamp(c1 - r1, c1 + r1);
+            if !xb.iter().any(|&v| v.to_bits() == b.to_bits()) {
+                xb.push(b);
+            }
+        }
+        let pairs: Vec<(f32, f32)> = xa.iter().flat_map(|&a| xb.iter().map(move |&b| (a, b))).collect();
         let cost = |&(a, b): &(f32, f32)| (a - b).abs() * 4.0 + (a - c0).abs() + (b - c1).abs();
         let best = |mut pairs: Vec<(f32, f32)>| {
             pairs.sort_by(|p, q| cost(p).total_cmp(&cost(q)));
@@ -438,15 +547,86 @@ impl<'a> Ctx<'a> {
     fn label_fits(&self, i: usize, p: [f32; 2], size: [f32; 2]) -> bool {
         let (hw, hh) = (size[0] / 2.0 + LABEL_GAP, size[1] / 2.0 + LABEL_GAP);
         let corners = [[p[0] - hw, p[1] - hh], [p[0] + hw, p[1] - hh], [p[0] + hw, p[1] + hh], [p[0] - hw, p[1] + hh], p];
-        let nodes_ok = (0..self.real).all(|v| {
+        let rect = [p[0] - hw, p[1] - hh, p[0] + hw, p[1] + hh];
+        let mut nodes_ok = true;
+        self.node_grid.query(rect, |v| {
+            if !nodes_ok {
+                return;
+            }
             let (c, s) = (self.centers[v], self.size(v));
             let apart = (p[0] - c[0]).abs() > hw + s[0] / 2.0 || (p[1] - c[1]).abs() > hh + s[1] / 2.0;
-            apart || (corners.iter().all(|&q| !inside(&self.outlines[v], q)) && self.outlines[v].iter().all(|q| (q[0] - p[0]).abs() > hw || (q[1] - p[1]).abs() > hh))
+            if !apart
+                && !(corners.iter().all(|&q| !inside(&self.outlines[v], q))
+                    && self.outlines[v].iter().all(|q| (q[0] - p[0]).abs() > hw || (q[1] - p[1]).abs() > hh))
+            {
+                nodes_ok = false;
+            }
         });
-        let rect = [p[0] - hw, p[1] - hh, p[0] + hw, p[1] + hh];
-        let borders_ok = !self.placed.clusters.iter().filter(|c| **c != [0.0; 4]).any(|c| straddles(rect, *c));
-        nodes_ok && borders_ok && self.label_boxes(i).all(|r| p[0] + hw < r[0] || p[0] - hw > r[2] || p[1] + hh < r[1] || p[1] - hh > r[3])
+        if !nodes_ok {
+            return false;
+        }
+        let mut borders_ok = true;
+        self.cluster_grid.query(rect, |idx| {
+            let (c, _) = self.cluster_rects[idx];
+            if borders_ok && straddles(rect, self.placed.clusters[c]) {
+                borders_ok = false;
+            }
+        });
+        if !borders_ok {
+            return false;
+        }
+        let mut labels_ok = true;
+        self.label_grid.query(rect, |idx| {
+            let (j, r) = self.label_rects[idx];
+            if labels_ok && j != i && !(p[0] + hw < r[0] || p[0] - hw > r[2] || p[1] + hh < r[1] || p[1] - hh > r[3]) {
+                labels_ok = false;
+            }
+        });
+        labels_ok
     }
+}
+
+fn compute_twins(ends: &[(usize, usize)]) -> Vec<bool> {
+    let mut counts: HashMap<(usize, usize), usize> = HashMap::with_capacity(ends.len());
+    for &(a, b) in ends {
+        *counts.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+    }
+    ends.iter().map(|&(a, b)| counts[&(a.min(b), a.max(b))] > 1).collect()
+}
+
+
+
+/// Tests every 3-point sample along `cubic(a, b)` (ending at `b`) without allocating, stopping at
+/// the first point where `ok` returns `false`.
+fn cubic_samples_ok(a: [f32; 2], b: [f32; 2], mut ok: impl FnMut([f32; 2]) -> bool) -> bool {
+    let seg_ok = |w0: [f32; 2], w1: [f32; 2], ok: &mut dyn FnMut([f32; 2]) -> bool| -> bool {
+        let steps = (dist(w0, w1) / 3.0).ceil().max(1.0) as usize;
+        for k in 0..steps {
+            if !ok(lerp(w0, w1, k as f32 / steps as f32)) {
+                return false;
+            }
+        }
+        true
+    };
+    if (b[0] - a[0]).abs() < 0.25 {
+        return seg_ok(a, b, &mut ok) && ok(b);
+    }
+    let dy = b[1] - a[1];
+    let (c1, c2) = ([a[0], a[1] + dy * 0.5], [b[0], b[1] - dy * 0.5]);
+    let len = dist(a, c1) + dist(c1, c2) + dist(c2, b);
+    let steps = (len / 3.0).ceil().clamp(8.0, 96.0) as usize;
+    let mut prev = a;
+    for s in 1..=steps {
+        let t = s as f32 / steps as f32;
+        let u = 1.0 - t;
+        let (b0, b1, b2, b3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+        let cur = [b0 * a[0] + b1 * c1[0] + b2 * c2[0] + b3 * b[0], b0 * a[1] + b1 * c1[1] + b2 * c2[1] + b3 * b[1]];
+        if !seg_ok(prev, cur, &mut ok) {
+            return false;
+        }
+        prev = cur;
+    }
+    ok(b)
 }
 
 /// A cubic from `a` to `b` leaving and arriving along the rank axis, flattened.

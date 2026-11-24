@@ -5,7 +5,7 @@ use rune::{Align, TextStyle};
 
 use super::{hue, ink, solid};
 use crate::canvas::{Canvas, Measured, Scene, arc, measure, room, rounded_rect};
-use crate::{DiagramStyle, MAX_ITEMS, clean_quoted, statements};
+use crate::{DiagramStyle, clean_quoted, statements};
 
 #[derive(Debug)]
 pub(crate) struct Pie {
@@ -14,7 +14,7 @@ pub(crate) struct Pie {
     pub slices: Vec<(String, f64)>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Pie> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Pie> {
     let mut p = Pie { title: None, show_data: false, slices: Vec::new() };
     for line in std::iter::once(header).chain(body.iter().copied()) {
         for stmt in statements(line) {
@@ -35,7 +35,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Pie> {
             if !(v.is_finite() && v > 0.0) {
                 continue;
             }
-            if p.slices.len() >= MAX_ITEMS {
+            if p.slices.len() >= max_items {
                 return None;
             }
             p.slices.push((clean_quoted(label), v));

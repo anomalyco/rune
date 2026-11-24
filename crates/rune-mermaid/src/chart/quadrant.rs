@@ -8,7 +8,7 @@ use rune::{Align, Color};
 
 use super::{bold, small, soft, strong};
 use crate::canvas::{Canvas, Measured, Scene, ellipse, measure, measure_wrap, over_color, room};
-use crate::{DiagramStyle, MAX_ITEMS, clean, parse_color_spec, word};
+use crate::{DiagramStyle, clean, parse_color_spec, word};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Look {
@@ -47,7 +47,7 @@ pub(crate) struct Quadrant {
     pub points: Vec<Point>,
 }
 
-pub(crate) fn parse(body: &[&str]) -> Option<Quadrant> {
+pub(crate) fn parse(body: &[&str], max_items: usize) -> Option<Quadrant> {
     let mut q = Quadrant::default();
     let mut classes: HashMap<String, Look> = HashMap::new();
     let mut pending: Vec<(String, [f32; 2], Look, Option<String>)> = Vec::new();
@@ -74,7 +74,7 @@ pub(crate) fn parse(body: &[&str]) -> Option<Quadrant> {
             let (name, props) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
             classes.insert(name.to_owned(), look(props));
         } else if let Some(p) = point(l) {
-            if pending.len() >= MAX_ITEMS {
+            if pending.len() >= max_items {
                 return None;
             }
             pending.push(p);

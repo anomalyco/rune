@@ -5,7 +5,7 @@ use rune::Align;
 
 use super::{bold, hue, ink, small, soft, solid, strong};
 use crate::canvas::{Canvas, Measured, Scene, arrowhead, measure_wrap, room, rounded_rect};
-use crate::{DiagramStyle, MAX_ITEMS, clean, word};
+use crate::{DiagramStyle, clean, word};
 
 #[derive(Debug)]
 pub(crate) struct Period {
@@ -23,7 +23,7 @@ pub(crate) struct Timeline {
     pub down: bool,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Timeline> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<Timeline> {
     let mut t = Timeline { title: None, sections: Vec::new(), periods: Vec::new(), down: header.trim() == "TD" || header.trim() == "TB" };
     let mut items = 0;
     for &l in body {
@@ -43,7 +43,7 @@ pub(crate) fn parse(header: &str, body: &[&str]) -> Option<Timeline> {
         let time = parts.next().unwrap_or_default();
         let events: Vec<String> = parts.filter(|e| !e.is_empty()).collect();
         items += events.len() + usize::from(!time.is_empty());
-        if items > MAX_ITEMS {
+        if items > max_items {
             return None;
         }
         // `: event` on its own line adds to the period above.

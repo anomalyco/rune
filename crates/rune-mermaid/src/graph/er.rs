@@ -9,7 +9,7 @@ use super::lenient::{Lenient, Reader};
 use crate::canvas::{Measured, Scene, measure_wrap};
 use crate::layout::draw::{Dir, DrawNode, ENTITY_PAD, Edge, Head, Line, draw_layered, entity_row_h};
 use crate::layout::layered::Spacing;
-use crate::{DiagramStyle, EdgeStyle, Hover, MAX_ITEMS, NodeStyle, StyleSheet, clean, clean_quoted, statements};
+use crate::{DiagramStyle, EdgeStyle, Hover, NodeStyle, StyleSheet, clean, clean_quoted, statements};
 
 #[derive(Debug)]
 pub(crate) struct Entity {
@@ -37,13 +37,14 @@ pub(crate) struct ErDiagram {
     pub edges: Vec<Edge>,
 }
 
-pub(crate) fn parse(header: &str, body: &[&str]) -> Option<ErDiagram> {
+pub(crate) fn parse(header: &str, body: &[&str], max_items: usize) -> Option<ErDiagram> {
     let mut p = Parser {
         d: ErDiagram { title: None, dir: Dir::Down, entities: Vec::new(), edges: Vec::new() },
         ids: HashMap::new(),
         open: None,
         styles: StyleSheet::default(),
         attrs: 0,
+        max_items,
         over: false,
     };
     let mut reader = Reader::default();
@@ -65,6 +66,7 @@ struct Parser {
     open: Option<usize>,
     styles: StyleSheet,
     attrs: usize,
+    max_items: usize,
     over: bool,
 }
 
@@ -88,7 +90,7 @@ impl Lenient for Parser {
 
 impl Parser {
     fn budget(&mut self) -> Option<()> {
-        self.over |= self.d.entities.len() + self.d.edges.len() >= MAX_ITEMS || self.attrs > MAX_ITEMS * 4;
+        self.over |= self.d.entities.len() + self.d.edges.len() >= self.max_items || self.attrs > self.max_items.saturating_mul(4);
         (!self.over).then_some(())
     }
 

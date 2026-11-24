@@ -510,6 +510,27 @@ pub(super) fn markdown_mermaid_plan_zoomed(g: &G, k: &Kit, o: &mut Vec<El>) -> E
     col().w(680.0).origin(0.0, 0.0).scale(3.0).child(markdown_mermaid_plan(g, k, o))
 }
 
+/// A 210-node, 209-edge (419-item) flowchart that falls back at the default 400-item cap and
+/// renders via [`MarkdownStyle::diagram_max_items`].
+pub(super) fn markdown_mermaid_large(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let raised = s.picked("md-mermaid-cap", "1000") == "1000";
+    let mut md = String::from("```mermaid\nflowchart TD\n");
+    for i in 0..209 {
+        md.push_str(&format!("  N{i}[Step {i}] --> N{}[Step {}]\n", i + 1, i + 1));
+    }
+    md.push_str("```\n");
+    let mut style = MarkdownStyle::from_kit(k).diagram_max_width(680.0);
+    if raised {
+        style = style.diagram_max_items(1_000);
+    }
+    let label = if raised { "Cap: 1,000 (click for default 400)" } else { "Cap: 400 default (click for 1,000)" };
+    col().w(680.0).gap(12.0)
+        .child(Button::new(label).on_press(move |s: &mut G| {
+            s.pick.insert("md-mermaid-cap".into(), if raised { "400" } else { "1000" }.into());
+        }).build(k).key("toggle-cap"))
+        .child(Markdown::new(md).style(style).build(k))
+}
+
 /// A table without an outline, with a dimmed header and figures that line up, and a diff whose
 /// line text is tinted too.
 const TABLE_STYLES: &str = "| Field | Compared |\n|---|---|\n| title | yes |\n| updatedAt | yes |\n| draft cursor | no |\n\n| Build | Files | Time | Size |\n|:--|--:|--:|--:|\n| debug | 1,204 | 41.8 s | 118.4 MB |\n| release | 1,204 | 71.0 s | 31.1 MB |\n| perf | 1,211 | 69.6 s | 33.7 MB |\n\n```diff\n@@ -3,3 +3,3 @@ fields:\n   title: compared\n-  draft: compared\n+  draft: ignored\n```\n";

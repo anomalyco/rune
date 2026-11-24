@@ -1,4 +1,5 @@
 use super::*;
+use crate::MAX_ITEMS;
 
 fn quadrant(src: &str) -> Quadrant {
     match crate::parse(src).map(|p| p.diagram) {

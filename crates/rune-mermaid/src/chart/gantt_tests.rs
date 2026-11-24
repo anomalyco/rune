@@ -1,4 +1,5 @@
 use super::*;
+use crate::MAX_ITEMS;
 use super::super::date::days_from_civil;
 
 fn gantt(src: &str) -> Gantt {

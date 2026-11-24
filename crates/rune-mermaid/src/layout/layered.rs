@@ -152,9 +152,11 @@ fn place(g: &Graph, sp: &Spacing, held: Option<&Memo>) -> Option<(Placed, Memo)>
         succ[a].push(i);
         pred[b].push(i);
     }
+    let mut in_topo = vec![false; n];
     let mut topo = Vec::with_capacity(n);
     let mut ready: Vec<usize> = (0..n).filter(|&v| indeg[v] == 0).rev().collect();
     while let Some(v) = ready.pop() {
+        in_topo[v] = true;
         topo.push(v);
         for &i in succ[v].iter().rev() {
             let b = ends(i).1;
@@ -164,8 +166,8 @@ fn place(g: &Graph, sp: &Spacing, held: Option<&Memo>) -> Option<(Placed, Memo)>
             }
         }
     }
-    for v in 0..n {
-        if !topo.contains(&v) {
+    for (v, &seen) in in_topo.iter().enumerate() {
+        if !seen {
             topo.push(v);
         }
     }
@@ -406,53 +408,64 @@ fn place(g: &Graph, sp: &Spacing, held: Option<&Memo>) -> Option<(Placed, Memo)>
     };
 
     // 8. Push overlapping sibling clusters and loose nodes apart across layers.
-    let members: Vec<Vec<usize>> = (0..g.clusters.len()).map(|c| (0..nodes.len()).filter(|&v| node_chains[v].contains(&c)).collect()).collect();
-    let pos = positions(&layers, nodes.len());
-    #[derive(Clone, Copy)]
-    enum Item {
-        Cluster(usize),
-        Node(usize),
-    }
-    let item_nodes = |it: Item| match it {
-        Item::Cluster(c) => members[c].as_slice(),
-        Item::Node(v) => std::slice::from_ref(&layers[nodes[v].rank][pos[v]]),
-    };
-    let first_on_rank: Vec<std::collections::HashMap<usize, usize>> = members
-        .iter()
-        .map(|m| {
-            let mut at = std::collections::HashMap::new();
-            for &v in m {
-                at.entry(nodes[v].rank).or_insert(v);
-            }
-            at
-        })
-        .collect();
-    let on_rank = |it: Item, r: usize| match it {
-        Item::Cluster(c) => first_on_rank[c].get(&r).copied(),
-        Item::Node(v) => (nodes[v].rank == r).then_some(v),
-    };
-    let left_of = |a: Item, b: Item, ba: [f32; 4], bb: [f32; 4]| {
-        for &u in item_nodes(a) {
-            if let Some(w) = on_rank(b, nodes[u].rank) {
-                return pos[u] < pos[w];
+    if !g.clusters.is_empty() {
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); g.clusters.len()];
+        for (v, ch) in node_chains.iter().enumerate() {
+            for &c in *ch {
+                members[c].push(v);
             }
         }
-        ba[0] + ba[2] <= bb[0] + bb[2]
-    };
-    for _ in 0..12 {
-        let boxes = boxes_of(&x);
-        let mut items: Vec<(Option<usize>, Item, [f32; 4])> = (0..g.clusters.len())
-            .filter(|&c| boxes[c][0] <= boxes[c][2])
-            .map(|c| (g.clusters[c].parent, Item::Cluster(c), boxes[c]))
+        let pos = positions(&layers, nodes.len());
+        #[derive(Clone, Copy)]
+        enum Item {
+            Cluster(usize),
+            Node(usize),
+        }
+        let item_nodes = |it: Item| match it {
+            Item::Cluster(c) => members[c].as_slice(),
+            Item::Node(v) => std::slice::from_ref(&layers[nodes[v].rank][pos[v]]),
+        };
+        let first_on_rank: Vec<std::collections::HashMap<usize, usize>> = members
+            .iter()
+            .map(|m| {
+                let mut at = std::collections::HashMap::new();
+                for &v in m {
+                    at.entry(nodes[v].rank).or_insert(v);
+                }
+                at
+            })
             .collect();
-        items.extend((0..n).map(|v| (g.node_cluster[v], Item::Node(v), rect(&x, v))));
-        let mut shift = vec![0.0f32; nodes.len()];
-        let mut moved = false;
-        for i in 0..items.len() {
-            for j in i + 1..items.len() {
-                let ((pa, a, ba), (pb, b, bb)) = (items[i], items[j]);
-                if pa != pb || matches!((a, b), (Item::Node(_), Item::Node(_))) || ba[1] >= bb[3] || bb[1] >= ba[3] {
-                    continue;
+        let on_rank = |it: Item, r: usize| match it {
+            Item::Cluster(c) => first_on_rank[c].get(&r).copied(),
+            Item::Node(v) => (nodes[v].rank == r).then_some(v),
+        };
+        let left_of = |a: Item, b: Item, ba: [f32; 4], bb: [f32; 4]| {
+            for &u in item_nodes(a) {
+                if let Some(w) = on_rank(b, nodes[u].rank) {
+                    return pos[u] < pos[w];
+                }
+            }
+            ba[0] + ba[2] <= bb[0] + bb[2]
+        };
+        // Sibling nodes grouped by parent cluster (0 = top-level, c + 1 = inside cluster c).
+        let bucket = |p: Option<usize>| p.map_or(0, |c| c + 1);
+        let mut nodes_by_parent: Vec<Vec<usize>> = vec![Vec::new(); g.clusters.len() + 1];
+        for v in 0..n {
+            nodes_by_parent[bucket(g.node_cluster[v])].push(v);
+        }
+        for _ in 0..12 {
+            let boxes = boxes_of(&x);
+            let mut clusters_by_parent: Vec<Vec<(usize, [f32; 4])>> = vec![Vec::new(); g.clusters.len() + 1];
+            for c in 0..g.clusters.len() {
+                if boxes[c][0] <= boxes[c][2] {
+                    clusters_by_parent[bucket(g.clusters[c].parent)].push((c, boxes[c]));
+                }
+            }
+            let mut shift = vec![0.0f32; nodes.len()];
+            let mut moved = false;
+            let mut push_pair = |a: Item, ba: [f32; 4], b: Item, bb: [f32; 4]| {
+                if ba[1] >= bb[3] || bb[1] >= ba[3] {
+                    return;
                 }
                 let ((l, bl), (r, br)) = if left_of(a, b, ba, bb) { ((a, ba), (b, bb)) } else { ((b, bb), (a, ba)) };
                 let d = bl[2] + sp.node / 2.0 - br[0];
@@ -463,42 +476,59 @@ fn place(g: &Graph, sp: &Spacing, held: Option<&Memo>) -> Option<(Placed, Memo)>
                     item_nodes(r).iter().for_each(|&v| shift[v] += on);
                     moved = true;
                 }
-            }
-        }
-        // A long edge passing a subgraph it isn't in goes around its box, as dagre's border
-        // nodes make it: its points on the subgraph's ranks, and one rank either side so the
-        // curve doesn't cut a corner, move out past the box's nearer side.
-        for (c, b) in boxes.iter().enumerate().filter(|(_, b)| b[0] <= b[2]) {
-            let near = first[c].saturating_sub(1)..=last[c] + 1;
-            for v in n..nodes.len() {
-                let Kind::Dummy(e, _) = nodes[v].kind else { continue };
-                let (a, z) = ends(e);
-                if !near.contains(&nodes[v].rank) || [a, z].iter().any(|&u| node_chains[u].contains(&c)) {
+            };
+            for (p, siblings) in clusters_by_parent.iter().enumerate() {
+                if siblings.is_empty() {
                     continue;
                 }
+                for i in 0..siblings.len() {
+                    let (ca, ba) = siblings[i];
+                    for &(cb, bb) in &siblings[i + 1..] {
+                        push_pair(Item::Cluster(ca), ba, Item::Cluster(cb), bb);
+                    }
+                    for &v in &nodes_by_parent[p] {
+                        push_pair(Item::Cluster(ca), ba, Item::Node(v), rect(&x, v));
+                    }
+                }
+            }
+            // A long edge passing a subgraph it isn't in goes around its box, as dagre's border
+            // nodes make it: its points on the subgraph's ranks, and one rank either side so the
+            // curve doesn't cut a corner, move out past the box's nearer side.
+            for (c, b) in boxes.iter().enumerate().filter(|(_, b)| b[0] <= b[2]) {
+                let r_lo = first[c].saturating_sub(1);
+                let r_hi = (last[c] + 1).min(ranks.saturating_sub(1));
                 let (lo, hi) = (b[0] - sp.node / 2.0, b[2] + sp.node / 2.0);
-                if x[v] <= lo || x[v] >= hi {
-                    continue;
+                for (r, layer) in layers.iter().enumerate().take(r_hi + 1).skip(r_lo) {
+                    for &v in layer {
+                        if v < n || x[v] <= lo || x[v] >= hi {
+                            continue;
+                        }
+                        let Kind::Dummy(e, _) = nodes[v].kind else { continue };
+                        let (a, z) = ends(e);
+                        if [a, z].iter().any(|&u| node_chains[u].contains(&c)) {
+                            continue;
+                        }
+                        let left = match first_on_rank[c].get(&r) {
+                            Some(&w) => pos[v] < pos[w],
+                            None => x[v] < (b[0] + b[2]) / 2.0,
+                        };
+                        shift[v] += if left { lo - x[v] } else { hi - x[v] };
+                        moved = true;
+                    }
                 }
-                let left = match first_on_rank[c].get(&nodes[v].rank) {
-                    Some(&w) => pos[v] < pos[w],
-                    None => x[v] < (b[0] + b[2]) / 2.0,
-                };
-                shift[v] += if left { lo - x[v] } else { hi - x[v] };
-                moved = true;
             }
-        }
-        if !moved {
-            break;
-        }
-        for (xv, s) in x.iter_mut().zip(&shift) {
-            *xv += s;
-        }
-        for (layer, sep) in layers.iter().zip(&seps) {
-            let want: Vec<f32> = layer.iter().map(|&v| x[v]).collect();
-            let placed = isotonic_above(want, vec![1.0; layer.len()], sep, layer.iter().map(|&v| floor(v).copied()));
-            for (&v, p) in layer.iter().zip(placed) {
-                x[v] = p;
+            if !moved {
+                break;
+            }
+            for (xv, s) in x.iter_mut().zip(&shift) {
+                *xv += s;
+            }
+            for (layer, sep) in layers.iter().zip(&seps) {
+                let want: Vec<f32> = layer.iter().map(|&v| x[v]).collect();
+                let placed = isotonic_above(want, vec![1.0; layer.len()], sep, layer.iter().map(|&v| floor(v).copied()));
+                for (&v, p) in layer.iter().zip(placed) {
+                    x[v] = p;
+                }
             }
         }
     }

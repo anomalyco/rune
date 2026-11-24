@@ -66,6 +66,11 @@ pub(crate) fn edges(c: &mut Canvas, ctx: &Ctx, edges: &[Edge], labels: &[Option<
             })
         })
         .collect();
+    let all_gaps: Vec<(usize, [f32; 4])> = routes
+        .iter()
+        .enumerate()
+        .filter_map(|(j, o)| o.as_ref().and_then(|o| o.1).map(|g| (j, g)))
+        .collect();
     for (i, e) in edges.iter().enumerate() {
         c.part(Some(Part::Index(Kind::Edge, i)));
         let start = c.ops.len();
@@ -83,10 +88,18 @@ pub(crate) fn edges(c: &mut Canvas, ctx: &Ctx, edges: &[Edge], labels: &[Option<
                 }
             }
             Some((r, gap)) => {
-                let others = routes.iter().enumerate().filter(|&(j, _)| j != i).filter_map(|(_, o)| o.as_ref().and_then(|o| o.1));
+                let curve_box = r.curve.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, p| {
+                    [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]
+                });
+                let hits_curve = |rect: [f32; 4]| {
+                    curve_box[2] >= rect[0] && curve_box[0] <= rect[2] && curve_box[3] >= rect[1] && curve_box[1] <= rect[3]
+                };
+                let others = all_gaps.iter().filter(|&&(j, _)| j != i).map(|&(_, g)| g);
                 let mut runs = vec![r.curve.clone()];
                 for rect in gap.iter().copied().chain(titles.iter().copied()).chain(others) {
-                    runs = runs.iter().flat_map(|run| outside(run, rect)).collect();
+                    if hits_curve(rect) {
+                        runs = runs.iter().flat_map(|run| outside(run, rect)).collect();
+                    }
                 }
                 connector(c, &runs, [(r.tip_start, r.dir_start), (r.tip_end, r.dir_end)], e, paint);
                 if let (Some(m), Some(at), Some(g)) = (&labels[i], r.label, *gap) {

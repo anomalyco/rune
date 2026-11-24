@@ -484,7 +484,11 @@ source each time, and earlier blocks stay mounted.
   webview, themed through `MarkdownStyle::diagram*`. While a fence streams in, it lays out
   complete lines without reshuffling earlier nodes, then settles once complete; finished layouts are
   cached per source. Anything outside the supported subset (listed in `rune-mermaid`) shows as its
-  plain code block. `rune_kit::mermaid::render(src, &style)` draws one on its own.
+  plain code block. Diagrams default to a 400-item parser cap; opt into larger diagrams (up to
+  1,500 items, never raisable from diagram directives) with `MarkdownStyle::diagram_max_items`
+  or `DiagramStyle::max_items` (and check support under custom limits with
+  `rune_kit::mermaid::supported_with`). `rune_kit::mermaid::render(src, &style)` draws one on its
+  own.
 - **`selectable(true)`** lets people select and copy the text as one selection: a drag runs from
   a paragraph through list items into a code block, Shift-click extends, Cmd+A selects the
   whole Markdown and Cmd+C copies the text as drawn, as a web browser does: a newline between
@@ -510,7 +514,7 @@ source each time, and earlier blocks stay mounted.
 a kit. `TooltipStyle::max_width(w)` caps its width; `label`, `text` and a `.wrap()` text `child` wrap at it. The
 app owns `open`, so the hover delay is a `wake_after` in its hover handler; `El::help(text)` is
 the delayed, self-dismissing system tooltip when the look needn't match. The gallery's `rune-markdown--walkthrough`, `rune-markdown--diagrams`,
-`rune-markdown--table-styles`, `rune-markdown--code`, `rune-markdown--styled` and `rune-markdown--wrap-and-frames` scenes show every feature.
+`rune-markdown--mermaid-large`, `rune-markdown--table-styles`, `rune-markdown--code`, `rune-markdown--styled` and `rune-markdown--wrap-and-frames` scenes show every feature.
 
 ## Diff
 

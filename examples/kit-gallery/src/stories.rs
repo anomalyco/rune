@@ -26,7 +26,7 @@ use controls::{button_all_states, button_focus, button_icon, button_playground, 
 use display::{a11y_aria_properties, accordion_basic, accordion_multiple, accordion_single, badge_accent, badge_appearances, badge_basic, badge_high_contrast, badge_subtle, card_error, card_info, card_normal, card_success, card_warning, collapsible_basic, collapsible_ghost, keybind_all, keybind_keep_case, keybind_multiple, keybind_playground, keybind_symbols, keybind_variants, list_active_icon, list_basic, list_delegated_a11y, list_divider, list_empty, list_grouped, list_no_search, list_with_add, loader_basic, loader_sizes, progress_basic, progress_indeterminate, progress_no_label, rolling_text_basic, scroll_view_thumb, segmented_basic, segmented_controlled, segmented_rich, spinner_basic, spinner_sizes};
 use inputs::{field_direct_child, field_invalid, field_text_input, field_textarea, select_disabled, select_grouped, select_invalid, select_playground, select_states, select_step_closed, select_with_field, text_input_appearances, text_input_controlled, text_input_copy, text_input_hooks, text_input_playground, text_input_states, text_input_with_field, textarea_code_keys, textarea_composer, textarea_controlled, textarea_playground, textarea_states, textarea_with_field};
 use markdown::{
-    markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_maps, markdown_mermaid_plan, markdown_mermaid_plan_zoomed, markdown_mermaid_shapes, markdown_mermaid_streaming, markdown_mermaid_systems, markdown_stream_tail, markdown_streaming, markdown_styled, markdown_table_styles,
+    markdown_basic, markdown_code, markdown_diagrams, markdown_lenient, markdown_mermaid_charts, markdown_mermaid_data, markdown_mermaid_flows, markdown_mermaid_git, markdown_mermaid_hover, markdown_mermaid_large, markdown_mermaid_maps, markdown_mermaid_plan, markdown_mermaid_plan_zoomed, markdown_mermaid_shapes, markdown_mermaid_streaming, markdown_mermaid_systems, markdown_stream_tail, markdown_streaming, markdown_styled, markdown_table_styles,
     markdown_walkthrough, markdown_wrap_and_frames,
 };
 use overlays::{focus_keyboard, hover_card_basic, hover_card_placements, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, menu_submenu_options, overlays_tx_callbacks, popover_basic, popover_bounded, popover_controlled, popover_wheel_outside, popup_list_rich_inline, toast_all, tooltip_help_arrow, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
@@ -283,6 +283,7 @@ stories! {
     "rune-markdown--mermaid-streaming" => markdown_mermaid_streaming,
     "rune-markdown--mermaid-plan" => markdown_mermaid_plan,
     "rune-markdown--mermaid-plan-zoomed" => markdown_mermaid_plan_zoomed,
+    "rune-markdown--mermaid-large" => markdown_mermaid_large,
     "rune-markdown--table-styles" => markdown_table_styles,
     "rune-markdown--code" => markdown_code,
     "rune-markdown--styled" => markdown_styled,
