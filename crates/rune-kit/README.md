@@ -198,13 +198,15 @@ A `RollingText` reads as its whole label wherever text is looked up: its row's `
 `Shift` + `G`, shown in `rune-keybind--keep-case` in the gallery).
 
 **Scroll bars.** Any `El::scroll` (or `El::scroll_x`) viewport takes `.scroll_bar(&k)` or
-`.scroll_bar_styled(style)` with zero view commits per scroll frame. `ScrollBarStyle` ships
-presets (`from_kit`, `neutral`, `scroll_view`, `native`, `menu_scroll`) and builders to
-customise thumb colour/width (`thumb`, `thumb_hover`, `width`, `hover_width`, `min_thumb`,
-`webkit_parts`), track inset (`track_inset`), optional trough fills (`track`, `track_hover`),
-and `always_visible()` to keep a bar visible whenever content overflows regardless of the
-system scroll bar preference. The gallery's `rune-scroll-bar--basic`, `rune-scroll-bar--grow`
-and `rune-scroll-bar--styled` scenes show them.
+`.scroll_bar_styled(style)`, and any `El::scroll_xy` viewport takes `.scroll_bars_xy(&k)` or
+`.scroll_bars_xy_styled(vertical, horizontal)` for both vertical and horizontal bars leaving
+the bottom-end corner clear when both axes overflow, all with zero view commits per scroll frame.
+`ScrollBarStyle` ships presets (`from_kit`, `neutral`, `scroll_view`, `native`, `menu_scroll`)
+and builders to customise thumb colour/width (`thumb`, `thumb_hover`, `width`, `hover_width`,
+`min_thumb`, `webkit_parts`), track inset (`track_inset`), optional trough fills (`track`,
+`track_hover`), and `always_visible()` to keep a bar visible whenever content overflows
+regardless of the system scroll bar preference. The gallery's `rune-scroll-bar--basic`,
+`rune-scroll-bar--grow`, `rune-scroll-bar--styled` and `rune-scroll-bar--xy` scenes show them.
 
 `Placement` covers all 12 Floating UI placements (`Top`/`Bottom`/`Left`/`Right` plus `*Start`
 and `*End`). `HoverCard` accepts `.gutter(f32)` (default 4 pt), `.min_width(f32)` (default 200),
@@ -522,6 +524,10 @@ DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
 - **Unified or split** (`set_mode`). Rows keep their keys across modes, so a switch inside
   `tx.motion(..)` moves rows rather than replacing them. Long lines scroll sideways, or wrap
   with `set_wrap(true)`; split always wraps.
+- **Scroll bars**: `DiffView::scroll_bar(true)` (or `scroll_bar_styled(style)`) attaches a kit
+  vertical scroll bar below the 44-point sticky file header and, in unwrapped unified mode, a
+  horizontal scroll bar along the bottom edge, following `rune::system_scroll_bars()` (see
+  `rune-diff--scroll-bars` in `kit-gallery`).
 - **Colours** come from the kit's palette: added and removed lines take a tint of the success
   and danger colours, word changes a stronger one, with a bar at the edge. Syntax colours sit
   under them (`rune_kit::syntax`, swappable with `set_highlighter` and customisable with

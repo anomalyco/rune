@@ -459,6 +459,14 @@ impl ScrollBarStyle {
     fn widest(&self) -> f32 {
         self.width.max(self.hover_width)
     }
+
+    pub(crate) fn top_offset(&self) -> f32 {
+        self.track.top
+    }
+
+    pub(crate) fn end_offset(&self) -> f32 {
+        self.track.end
+    }
 }
 
 /// What one scroll bar keeps across rebuilds: where its viewport stands, its visibility state,
@@ -482,6 +490,9 @@ struct Bar {
     inside: Cell<bool>,
     /// The pointer is over the element marked [`ScrollBar::scroll_bar_hover`].
     target: Cell<bool>,
+    /// Room reserved at the far end of the track when a perpendicular bar shows on the same
+    /// [`El::scroll_xy`] viewport so the two tracks leave the bottom-end corner clear.
+    corner: Cell<f32>,
     /// The style the last view built the bar with; `None` until the first.
     style: Cell<Option<ScrollBarStyle>>,
     last_now: Cell<f64>,
@@ -521,6 +532,7 @@ fn kept(area_path: &str) -> Rc<Bar> {
                     over_track: Cell::new(false),
                     inside: Cell::new(false),
                     target: Cell::new(false),
+                    corner: Cell::new(0.0),
                     style: Cell::new(None),
                     last_now: Cell::new(0.0),
                     track: Live::new([0.0; 4]),
@@ -586,11 +598,31 @@ fn offset_along(at: ScrollPos, track: f32, top: f32, min: f32, a: usize, px: f32
     (top / travel * at.max[a]).clamp(0.0, at.max[a])
 }
 
-/// The track's length for a viewport at `at`, and whether a bar shows on it at all.
-fn track_len(at: ScrollPos, t: &Track) -> (f32, bool) {
+/// The track's length for a viewport at `at` leaving `corner` points clear at its far end, and
+/// whether a bar shows on it at all.
+fn track_len_with(at: ScrollPos, t: &Track, corner: f32) -> (f32, bool) {
     let a = t.along();
-    let len = at.viewport[a] - t.top - 2.0 * t.inset;
+    let len = at.viewport[a] - t.top - 2.0 * t.inset - corner;
     (len, at.max[a] > 0.5 && len >= t.min_thumb)
+}
+
+/// Corner clearance `(vertical, horizontal)` when both bars on an [`El::scroll_xy`] viewport
+/// sit inside the viewport and overflow at the same time, so the tracks leave the bottom-end
+/// corner clear as browser and macOS scroll bars do.
+fn resolve_corners(at: ScrollPos, v: &ScrollBarStyle, h: &ScrollBarStyle) -> (f32, f32) {
+    if v.track.gutter || h.track.gutter {
+        return (0.0, 0.0);
+    }
+    if !(track_len_with(at, &v.track, 0.0).1 && track_len_with(at, &h.track, 0.0).1) {
+        return (0.0, 0.0);
+    }
+    let cv = (h.strip() + h.track.end).max(0.0);
+    let ch = (v.strip() + v.track.end).max(0.0);
+    match (track_len_with(at, &v.track, cv).1, track_len_with(at, &h.track, ch).1) {
+        (true, true) => (cv, ch),
+        (false, true) => (cv, 0.0),
+        (true, false) | (false, false) => (0.0, ch),
+    }
 }
 
 /// `[x, y, w, h]` for a rect laid out down a vertical bar (`across` from its left, `along` from
@@ -600,6 +632,10 @@ fn turned(t: &Track, [across, along, thick, long]: [f32; 4]) -> [f32; 4] {
 }
 
 impl Bar {
+    pub(super) fn track_len(&self, at: ScrollPos) -> (f32, bool) {
+        track_len_with(at, &self.style().track, self.corner.get())
+    }
+
     fn wide(&self) -> bool {
         self.over.get() || self.pressed()
     }
@@ -670,15 +706,17 @@ impl Bar {
         self.track_fill.set(self.track_fill_color());
     }
 
-    /// Takes the style a view built the bar with; a new one lands at once.
-    fn restyle(&self, style: ScrollBarStyle) {
-        if self.style.replace(Some(style)) == Some(style) {
+    /// Takes the style and corner clearance a view built the bar with; a change lands at once.
+    fn restyle_with_corner(&self, style: ScrollBarStyle, corner: f32) {
+        let style_same = self.style.replace(Some(style)) == Some(style);
+        let corner_same = (self.corner.replace(corner) - corner).abs() < 0.01;
+        if style_same && corner_same {
             return;
         }
         self.fill.snap(self.thumb_fill());
         self.track_fill.snap(self.track_fill_color());
         let at = self.pos.get();
-        let (len, shows) = track_len(at, &style.track);
+        let (len, shows) = self.track_len(at);
         let (top, h) = style.track.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, style.track.along(), style.track.pixels));
         let h = if shows { h } else { 0.0 };
         self.track.snap(self.track_rect(at, if shows { len } else { 0.0 }));
@@ -690,7 +728,7 @@ impl Bar {
     fn slot_rect(&self, top: f32, h: f32) -> [f32; 4] {
         let style = self.style();
         let t = style.track;
-        let within = if t.x { track_len(self.pos.get(), &t).0.max(0.0) } else { style.strip() };
+        let within = if t.x { self.track_len(self.pos.get()).0.max(0.0) } else { style.strip() };
         let (start, width) = if t.thumb_only { (0.0, style.strip()) } else { (style.strip() - t.edge - style.widest(), style.widest()) };
         self.flowed(turned(&t, [start, top, width, h]), within)
     }
@@ -749,7 +787,7 @@ impl Bar {
         let at = self.pos.get();
         let style = self.style();
         let t = style.track;
-        let (len, shows) = track_len(at, &t);
+        let (len, shows) = self.track_len(at);
         let a = t.along();
         // The pointer and viewport in a vertical bar's terms: `across` the bar, `along` it.
         let (w, h_all) = (at.viewport[1 - a], at.viewport[a]);
@@ -832,22 +870,24 @@ impl Bar {
 
     /// Follows the viewport to `at`, from its `on_scroll_offset`, at the size it's drawn at, so
     /// the track keeps to it every frame a layout spring resizes it.
-    fn follow(&self, mut at: ScrollPos, overlay: bool) {
+    fn follow_with_corner(&self, mut at: ScrollPos, overlay: bool, corner: f32) {
         at.viewport = at.drawn;
         let prev_at = self.pos.replace(at);
+        let prev_corner = self.corner.replace(corner);
         let (scrolled, instant, now) = rune::scroll_watch_state();
         self.last_now.set(now);
         let style = self.style();
         let t = style.track;
-        let (len, shows) = track_len(at, &t);
+        let (len, shows) = self.track_len(at);
         let a = t.along();
+        let scrolled = scrolled && (prev_at.offset[a] - at.offset[a]).abs() > 0.01;
         self.track.set(self.track_rect(at, if shows { len } else { 0.0 }));
         let (top, h) = t.pill(thumb_along(at, len.max(0.0), style.track.min_thumb, a, t.pixels));
         let h = if shows { h } else { 0.0 };
-        let resized = (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5;
+        let corner_changed = (prev_corner - corner).abs() > 0.5;
+        let resized = (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5 || corner_changed;
         let lengthened = !resized && (prev_at.max[a] - at.max[a]).abs() > 0.5;
-        let extent_changed =
-            (prev_at.max[a] - at.max[a]).abs() > 0.5 || (prev_at.viewport[a] - at.viewport[a]).abs() > 0.5;
+        let extent_changed = (prev_at.max[a] - at.max[a]).abs() > 0.5 || resized;
         let (glides, cut) = self.visibility(BarEvent::Follow(Follow {
             shows,
             overlay,
@@ -871,8 +911,9 @@ impl Bar {
     }
 }
 
-/// Opts any vertical scroll viewport ([`El::scroll`]) into a `rune-kit` scroll bar in one call:
-/// `viewport.scroll_bar(&k)` (or `k.scroll_bar(viewport)`).
+/// Opts any scroll viewport ([`El::scroll`], [`El::scroll_x`], [`El::scroll_xy`]) into
+/// `rune-kit` scroll bars in one call: `viewport.scroll_bar(&k)`, `viewport.scroll_bars_xy(&k)`
+/// (or `k.scroll_bar(viewport)`).
 ///
 /// The wrapper takes the viewport's outer sizing and placement so it drops straight into the
 /// parent layout, keeps the viewport's key and existing [`El::on_scroll_offset`] handler, and
@@ -887,6 +928,34 @@ pub trait ScrollBar {
     /// [`ScrollBar::scroll_bar`] with the thumb drawn in `style`.
     #[track_caller]
     fn scroll_bar_styled(self, style: ScrollBarStyle) -> El;
+
+    /// Attaches both a vertical scroll bar (end edge) and a horizontal scroll bar (bottom edge)
+    /// to an [`El::scroll_xy`] viewport using [`ScrollBarStyle::from_kit`]. Both follow
+    /// [`rune::system_scroll_bars`] and leave the bottom-end corner clear when both axes overflow,
+    /// with zero view commits per scroll frame.
+    ///
+    /// ```ignore
+    /// col().key("canvas").w_full().grow(1.0).min_h(0.0)
+    ///     .scroll_xy()
+    ///     .child(wide_tall_content)
+    ///     .scroll_bars_xy(&k)
+    /// ```
+    #[track_caller]
+    fn scroll_bars_xy(self, k: &Kit) -> El;
+
+    /// [`ScrollBar::scroll_bars_xy`] with explicit vertical and horizontal styles. `vertical` is
+    /// always placed on the vertical end edge and `horizontal` along the bottom edge (calling
+    /// [`ScrollBarStyle::horizontal`] on `horizontal` is optional).
+    ///
+    /// ```ignore
+    /// let style = ScrollBarStyle::native(k.c.border_muted, k.c.border_strong).inside().always_visible();
+    /// col().key("canvas").w_full().grow(1.0).min_h(0.0)
+    ///     .scroll_xy()
+    ///     .child(wide_tall_content)
+    ///     .scroll_bars_xy_styled(style, style.horizontal())
+    /// ```
+    #[track_caller]
+    fn scroll_bars_xy_styled(self, vertical: ScrollBarStyle, horizontal: ScrollBarStyle) -> El;
 
     /// Makes this element the hover target of the scroll bar on the viewport keyed
     /// `viewport_key`: while the pointer is anywhere over it, children included, that overlay
@@ -913,6 +982,19 @@ impl ScrollBar for El {
         wrap(style, self, Location::caller())
     }
 
+    #[track_caller]
+    fn scroll_bars_xy(self, k: &Kit) -> El {
+        let style = ScrollBarStyle::from_kit(k);
+        wrap_xy(style, style.horizontal(), self, Location::caller())
+    }
+
+    #[track_caller]
+    fn scroll_bars_xy_styled(self, mut vertical: ScrollBarStyle, mut horizontal: ScrollBarStyle) -> El {
+        vertical.track.x = false;
+        horizontal.track.x = true;
+        wrap_xy(vertical, horizontal, self, Location::caller())
+    }
+
     fn scroll_bar_hover(self, viewport_key: &str) -> El {
         let area_seg = rune::path_segment(&format!("{viewport_key}-scroll-area"));
         self.bind_path(move |scope, patch| {
@@ -921,8 +1003,9 @@ impl ScrollBar for El {
             let area_seg = area_seg.clone();
             patch.on_hover_change_any(move |inside, tx| {
                 tx.live_only();
-                if let Some(bar) = bar_for_hover(runtime_id, &scope, &area_seg) {
-                    bar.note_now(tx.clock());
+                let now = tx.clock();
+                for bar in bars_for_hover(runtime_id, &scope, &area_seg).into_iter().flatten() {
+                    bar.note_now(now);
                     bar.hover_target(inside);
                 }
             });
@@ -930,10 +1013,11 @@ impl ScrollBar for El {
     }
 }
 
-/// Resolves the scroll bar whose wrapper ends with `area_seg` nearest `scope` in the tree:
-/// inside `scope` first, then walking up ancestors innermost-first (matching `El::wheel_scrolls`),
-/// preferring mounted bars (`Rc::strong_count > 1`) when more than one path is cached.
-fn bar_for_hover(runtime_id: u64, scope: &str, area_seg: &str) -> Option<Rc<Bar>> {
+/// Resolves the scroll bar (and its horizontal twin, if mounted on the same `scroll_xy` area)
+/// whose wrapper ends with `area_seg` nearest `scope` in the tree: inside `scope` first, then
+/// walking up ancestors innermost-first (matching `El::wheel_scrolls`), preferring mounted bars
+/// (`Rc::strong_count > 1`) when more than one path is cached.
+fn bars_for_hover(runtime_id: u64, scope: &str, area_seg: &str) -> [Option<Rc<Bar>>; 2] {
     BARS.with(|bars| {
         let bars = bars.borrow();
         let mut cur = Some(scope);
@@ -956,18 +1040,24 @@ fn bar_for_hover(runtime_id: u64, scope: &str, area_seg: &str) -> Option<Rc<Bar>
                     any = Some((path.as_str(), bar));
                 }
             }
-            if let Some((_, bar)) = mounted.or(any) {
-                return Some(bar.clone());
+            if let Some((path, bar)) = mounted.or(any) {
+                let horiz = bars.get(&(runtime_id, format!("{path}#x"))).cloned();
+                return [Some(bar.clone()), horiz];
             }
             cur = prefix.rsplit_once('/').map(|(parent, _)| parent);
         }
-        None
+        [None, None]
     })
 }
 
 pub(crate) fn wrap(style: ScrollBarStyle, viewport: El, site: &'static Location<'static>) -> El {
     let (_area, key, outer, viewport) = viewport.wrap_scroll_area((site.file(), site.line(), site.column()));
     attach(style, &key, outer, viewport)
+}
+
+fn wrap_xy(vertical: ScrollBarStyle, horizontal: ScrollBarStyle, viewport: El, site: &'static Location<'static>) -> El {
+    let (_area, key, outer, viewport) = viewport.wrap_scroll_area((site.file(), site.line(), site.column()));
+    attach_xy(vertical, horizontal, &key, outer, viewport)
 }
 
 /// `scroll_bar(&k, "rows-area", "scroll", viewport)`: `viewport`, a vertical scroll viewport
@@ -979,45 +1069,54 @@ pub fn scroll_bar(k: &Kit, area: &str, key: &str, viewport: El) -> El {
     attach(ScrollBarStyle::from_kit(k), key, col().key(area), viewport.key(key))
 }
 
-fn attach(style: ScrollBarStyle, key: &str, outer: El, viewport: El) -> El {
-    let overlay = match style.track.show {
+fn show_overlay(mode: ShowMode) -> bool {
+    match mode {
         ShowMode::Always => false,
         ShowMode::Overlay => true,
         ShowMode::System => rune::system_scroll_bars().is_overlay(rune::system_scroller_overlay()),
+    }
+}
+
+fn build_track(bar: &Rc<Bar>, style: ScrollBarStyle, track_key: &'static str, target: String, jumps: bool) -> El {
+    let (drag, follows) = (bar.clone(), target.clone());
+    let on_drag = move |d: &mut rune::Drag, tx: &mut rune::Tx| {
+        drag.note_now(tx.clock());
+        drag.drag(&target, jumps, d, tx);
     };
+    let slot = el().key("thumb-slot").absolute(0.0, 0.0).live_rect(bar.slot.smooth(style.track.tint)).child(
+        el().key("thumb").absolute(0.0, 0.0).live_rect(bar.thumb.smooth(style.track.tint))
+            .radius(style.widest() / 2.0).live_fill(bar.fill.smooth(style.track.tint)),
+    );
+    // A wheel over the bar is the viewport's, the track standing beside it rather than in it, on
+    // either axis: a sideways wheel over a table's bar scrolls the table, and a vertical wheel
+    // over it chains on up from the table to the pane that holds it.
+    let mut track = el().key(track_key).absolute(0.0, 0.0).live_rect(&bar.track)
+        .live_opacity(bar.opacity.smooth_with(style.track.enter).rest_with(style.track.leave)).a11y_hidden()
+        .wheel_scrolls(follows);
+    if style.track_fill.is_some() || style.track_hover.is_some() {
+        track = track.live_fill(bar.track_fill.smooth(style.track.tint));
+    }
+    // The transparent area beyond a ScrollView/MenuScroll thumb belongs to the viewport. A
+    // press there must not capture a drag, swallow a row's click, page or start a repeat timer.
+    if style.track.thumb_only { track.child(slot.on_drag_any(on_drag)) } else { track.on_drag_any(on_drag).child(slot) }
+}
+
+fn attach(style: ScrollBarStyle, key: &str, outer: El, viewport: El) -> El {
+    let overlay = show_overlay(style.track.show);
     let jumps = rune::system_scroller_jumps();
     let key = key.to_owned();
     let viewport = viewport.bind_path(move |viewport_path, patch| {
         let area_path = viewport_path.rsplit_once('/').map_or("", |(p, _)| p);
         let watch = kept(area_path);
-        patch.on_scroll_offset(move |at| watch.follow(at, overlay));
+        patch.on_scroll_offset(move |at| watch.follow_with_corner(at, overlay, 0.0));
     });
     outer
         .bind_path(move |area_path, patch| {
             let bar = kept(area_path);
-            bar.restyle(style);
+            bar.restyle_with_corner(style, 0.0);
             let target = rune::child_path(area_path, &key);
-            let (moved, left, drag, follows) = (bar.clone(), bar.clone(), bar.clone(), target.clone());
-            let on_drag = move |d: &mut rune::Drag, tx: &mut rune::Tx| {
-                drag.note_now(tx.clock());
-                drag.drag(&target, jumps, d, tx);
-            };
-            let slot = el().key("thumb-slot").absolute(0.0, 0.0).live_rect(bar.slot.smooth(style.track.tint)).child(
-                el().key("thumb").absolute(0.0, 0.0).live_rect(bar.thumb.smooth(style.track.tint))
-                    .radius(style.widest() / 2.0).live_fill(bar.fill.smooth(style.track.tint)),
-            );
-            // A wheel over the bar is the viewport's, the track standing beside it rather than in it, on
-            // either axis: a sideways wheel over a table's bar scrolls the table, and a vertical wheel
-            // over it chains on up from the table to the pane that holds it.
-            let mut track = el().key("scroll-bar").absolute(0.0, 0.0).live_rect(&bar.track)
-                .live_opacity(bar.opacity.smooth_with(style.track.enter).rest_with(style.track.leave)).a11y_hidden()
-                .wheel_scrolls(follows);
-            if style.track_fill.is_some() || style.track_hover.is_some() {
-                track = track.live_fill(bar.track_fill.smooth(style.track.tint));
-            }
-            // The transparent area beyond a ScrollView/MenuScroll thumb belongs to the viewport. A
-            // press there must not capture a drag, swallow a row's click, page or start a repeat timer.
-            let track = if style.track.thumb_only { track.child(slot.on_drag_any(on_drag)) } else { track.on_drag_any(on_drag).child(slot) };
+            let track = build_track(&bar, style, "scroll-bar", target, jumps);
+            let (moved, left) = (bar.clone(), bar);
             patch
                 .on_pointer_move_any(move |p, tx| {
                     tx.live_only();
@@ -1034,9 +1133,62 @@ fn attach(style: ScrollBarStyle, key: &str, outer: El, viewport: El) -> El {
         .child(viewport)
 }
 
+fn attach_xy(vertical: ScrollBarStyle, horizontal: ScrollBarStyle, key: &str, outer: El, viewport: El) -> El {
+    let v_overlay = show_overlay(vertical.track.show);
+    let h_overlay = show_overlay(horizontal.track.show);
+    let jumps = rune::system_scroller_jumps();
+    let key = key.to_owned();
+    let viewport = viewport.bind_path(move |viewport_path, patch| {
+        let area_path = viewport_path.rsplit_once('/').map_or("", |(p, _)| p);
+        let v_watch = kept(area_path);
+        let h_watch = kept(&format!("{area_path}#x"));
+        patch.on_scroll_offset(move |at| {
+            let mut drawn = at;
+            drawn.viewport = at.drawn;
+            let (cv, ch) = resolve_corners(drawn, &v_watch.style(), &h_watch.style());
+            v_watch.follow_with_corner(at, v_overlay, cv);
+            h_watch.follow_with_corner(at, h_overlay, ch);
+        });
+    });
+    outer
+        .bind_path(move |area_path, patch| {
+            let v_bar = kept(area_path);
+            let h_bar = kept(&format!("{area_path}#x"));
+            let (cv, ch) = resolve_corners(v_bar.pos.get(), &vertical, &horizontal);
+            v_bar.restyle_with_corner(vertical, cv);
+            h_bar.restyle_with_corner(horizontal, ch);
+            let target = rune::child_path(area_path, &key);
+            let v_track = build_track(&v_bar, vertical, "scroll-bar", target.clone(), jumps);
+            let h_track = build_track(&h_bar, horizontal, "scroll-bar-x", target, jumps);
+            let (v_moved, h_moved) = (v_bar.clone(), h_bar.clone());
+            patch
+                .on_pointer_move_any(move |p, tx| {
+                    tx.live_only();
+                    let now = tx.clock();
+                    v_moved.note_now(now);
+                    h_moved.note_now(now);
+                    v_moved.pointer(p);
+                    h_moved.pointer(p);
+                })
+                .on_hover_change_any(move |inside, tx| {
+                    tx.live_only();
+                    let now = tx.clock();
+                    v_bar.note_now(now);
+                    h_bar.note_now(now);
+                    v_bar.area_hover(inside);
+                    h_bar.area_hover(inside);
+                })
+                .child(v_track)
+                .child(h_track);
+        })
+        .child(viewport)
+}
+
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]
 mod visibility_tests;
+#[cfg(test)]
+mod xy_tests;

@@ -61,6 +61,7 @@ pub struct G {
     /// The diff stories' state and most recent comment anchor.
     pub diff: rune_kit::diff::DiffState,
     pub diff_custom: rune_kit::diff::DiffState,
+    pub diff_scroll: rune_kit::diff::DiffState,
     pub diff_comment: Option<rune_kit::diff::LineRange>,
     /// The image decode story's cache and sample handles.
     pub images: stories::images::ImageDemo,
@@ -122,6 +123,7 @@ fn init() -> G {
         table_menu: None,
         diff: stories::sample_diff(),
         diff_custom: stories::custom_diff(),
+        diff_scroll: stories::scroll_bars_diff(),
         diff_comment: None,
         images: stories::images::ImageDemo::default(),
         neutral: rune::extra_args().iter().any(|a| a == "neutral"),

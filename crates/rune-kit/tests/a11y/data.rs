@@ -326,3 +326,59 @@ fn custom_file_header_and_edge_whitespace_diff_reach_the_accessibility_tree() {
     assert!(has(collapsed, "collapsed"));
     assert!(with_role(&tree, "list-item").is_empty());
 }
+
+fn diff_with_scroll_bars(s: &App, _: &mut Cx<App>) -> El {
+    let k = kit();
+    col().w_full().h(300.0).child(
+        DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+            .scroll_bar(true)
+            .build(s, &k),
+    )
+}
+
+fn xy_box_with_scroll_bars(_: &App, _: &mut Cx<App>) -> El {
+    let k = kit();
+    col().size(200.0, 120.0).child(
+        col()
+            .key("board")
+            .w_full()
+            .h(120.0)
+            .scroll_xy()
+            .child(col().size(600.0, 400.0).child(text("Board cell").key("cell")))
+            .scroll_bars_xy(&k),
+    )
+}
+
+#[test]
+fn diff_view_and_scroll_bars_xy_hide_bar_chrome_from_a11y() {
+    let long = "let x = some_long_function_call_that_overflows_horizontally_in_unified_mode(1, 2, 3, 4, 5, 6);";
+    let old: String = (1..=30).map(|i| format!("fn f{i}() {{ {long} }}
+")).collect();
+    let new = old.replace("fn f2()", "fn f2_updated()");
+    let state = DiffState::new(vec![FileDiff::from_texts("src/long.rs", &old, &new)]);
+    let mut rt = mount(App { diff: state, ..App::default() }, diff_with_scroll_bars);
+    rt.set_system_scroll_bars(rune::ScrollBars::Always);
+    for _ in 0..20 {
+        rt.frame(1.0 / 60.0);
+    }
+    let tree = rt.accessibility_json();
+    assert!(find(&tree, "scroll-bar").is_none(), "vertical track stays out of the accessibility tree");
+    assert!(find(&tree, "scroll-bar-x").is_none(), "horizontal track stays out of the accessibility tree");
+    assert!(find(&tree, "thumb").is_none(), "thumbs stay out of the accessibility tree");
+    assert!(with_role(&tree, "list").iter().any(|l| l["name"] == "Diff"));
+    assert_eq!(with_role(&tree, "heading")[0]["name"], "src/long.rs, 1 added, 1 removed");
+    assert!(!with_role(&tree, "list-item").is_empty());
+    no_echo(&tree);
+
+    let mut xy = mount(App::default(), xy_box_with_scroll_bars);
+    xy.set_system_scroll_bars(rune::ScrollBars::Always);
+    for _ in 0..5 {
+        xy.frame(1.0 / 60.0);
+    }
+    let xy_tree = xy.accessibility_json();
+    assert!(find(&xy_tree, "scroll-bar").is_none());
+    assert!(find(&xy_tree, "scroll-bar-x").is_none());
+    assert!(find(&xy_tree, "thumb").is_none());
+    assert_eq!(node(&xy_tree, "cell")["name"], "Board cell");
+    no_echo(&xy_tree);
+}

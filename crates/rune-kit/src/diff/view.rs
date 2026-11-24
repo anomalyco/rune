@@ -10,9 +10,9 @@ use std::rc::Rc;
 use rune::{Color, Cursor, Drag, El, GrowthSpec, Icon, Phase, ScrollSpec, Tx, col, icon, memo, rich, row, text};
 
 use super::model::{LineKind, Side};
-use super::state::{Annotation, DiffMode, DiffState, Expand, LINE_H, LineRange, LineRef, Row};
-use crate::Kit;
+use super::state::{Annotation, DiffMode, DiffState, Expand, HEADER_H, LINE_H, LineRange, LineRef, Row};
 use crate::syntax::SyntaxTheme;
+use crate::{Kit, ScrollBar, ScrollBarStyle};
 
 mod chrome;
 mod labels;
@@ -180,11 +180,20 @@ impl<S: 'static> DiffBind for DiffHandlers<S> {
 ///     .on_visible_file(|s: &mut App, f| s.tree.reveal(f))
 ///     .build(s, &k)
 /// ```
+#[derive(Clone, Copy, Default)]
+enum DiffScrollBar {
+    #[default]
+    None,
+    Kit,
+    Styled(ScrollBarStyle),
+}
+
 pub struct DiffView<S> {
     key: String,
     fold_row: FoldRow,
     syntax_theme: Option<SyntaxTheme>,
     labels: Option<labels::LabelsFn>,
+    scroll_bar: DiffScrollBar,
     handlers: DiffHandlers<S>,
 }
 
@@ -195,6 +204,7 @@ impl<S: 'static> DiffView<S> {
             fold_row: FoldRow::default(),
             syntax_theme: None,
             labels: None,
+            scroll_bar: DiffScrollBar::None,
             handlers: DiffHandlers {
                 get: Rc::new(get),
                 get_mut: Rc::new(get_mut),
@@ -312,14 +322,50 @@ impl<S: 'static> DiffView<S> {
     /// file tree.
     pub fn on_visible_file(mut self, f: impl Fn(&mut S, usize) + 'static) -> Self { self.handlers.on_visible_file = Some(Rc::new(f)); self }
 
+    /// Draws kit scroll bars on the diff's viewport using [`ScrollBarStyle::from_kit`] when `on`
+    /// is true, following [`rune::system_scroll_bars`]. In unwrapped unified mode, both vertical
+    /// and horizontal bars are attached; when lines wrap (or in [`DiffMode::Split`]), only a
+    /// vertical bar is attached. Off by default.
+    ///
+    /// ```ignore
+    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+    ///     .scroll_bar(true)
+    ///     .build(s, &k)
+    /// ```
+    pub fn scroll_bar(mut self, on: bool) -> Self {
+        self.scroll_bar = if on { DiffScrollBar::Kit } else { DiffScrollBar::None };
+        self
+    }
+
+    /// Draws scroll bars on the diff's viewport in `style`, following
+    /// [`rune::system_scroll_bars`]. In unwrapped unified mode, the vertical bar uses `style`
+    /// and the horizontal bar uses `style.horizontal()`; when lines wrap (or in
+    /// [`DiffMode::Split`]), only the vertical bar is attached.
+    ///
+    /// ```ignore
+    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+    ///     .scroll_bar_styled(ScrollBarStyle::scroll_view(&k))
+    ///     .build(s, &k)
+    /// ```
+    pub fn scroll_bar_styled(mut self, style: ScrollBarStyle) -> Self {
+        self.scroll_bar = DiffScrollBar::Styled(style);
+        self
+    }
+
     pub fn build(self, s: &S, k: &Kit) -> El {
         let st = (self.handlers.get)(s);
         let labels_version = labels::fingerprint(self.labels.as_ref());
+        let scroll_bar = match self.scroll_bar {
+            DiffScrollBar::None => None,
+            DiffScrollBar::Kit => Some(ScrollBarStyle::from_kit(k)),
+            DiffScrollBar::Styled(style) => Some(style),
+        };
         let view = Rc::new(View {
             look: Look::new(k, self.syntax_theme),
             fold_row: self.fold_row,
             labels: self.labels,
             labels_version,
+            scroll_bar,
             bind: Box::new(self.handlers),
         });
         view.build_root(st, self.key, s)
@@ -360,6 +406,7 @@ struct View {
     fold_row: FoldRow,
     labels: Option<labels::LabelsFn>,
     labels_version: u64,
+    scroll_bar: Option<ScrollBarStyle>,
     bind: Box<dyn DiffBind>,
 }
 
@@ -392,7 +439,8 @@ impl View {
 
     fn build_root(self: &Rc<Self>, st: &DiffState, key: String, s: &dyn Any) -> El {
         let wrap = st.wraps();
-        if !wrap && let Some(r) = rune::memo::layout(&format!("{key}/scroll")) {
+        let scroll_path = if self.scroll_bar.is_some() { format!("{key}/scroll-scroll-area/scroll") } else { format!("{key}/scroll") };
+        if !wrap && let Some(r) = rune::memo::layout(&scroll_path) {
             st.set_viewport(r);
         }
         let count = st.rows.len();
@@ -404,6 +452,15 @@ impl View {
         let scroll = col().key("scroll").w_full().grow(1.0).min_h(0.0).scroll(ScrollSpec { stick_bottom: false });
         let scroll = if wrap { scroll } else { scroll.scroll_xy() };
         let scroll = scroll.child(list);
+        let scroll = match self.scroll_bar {
+            None => scroll,
+            Some(style) => {
+                // Keep the vertical track below the 44 pt sticky file header unless the caller
+                // set a custom top offset, so the sticky overlay never covers the top of the thumb.
+                let v = if style.top_offset() == 0.0 { style.track_offset(HEADER_H, style.end_offset()) } else { style };
+                if wrap { scroll.scroll_bar_styled(v) } else { scroll.scroll_bars_xy_styled(v, style.horizontal()) }
+            }
+        };
         // Code reads left to right in any window: gutters at the left, old before new.
         let mut root = col().key(key).dir(rune::Direction::Ltr).w_full().grow(1.0).min_h(0.0).fill(self.look.bg).child(scroll);
         if let Some(f) = st.sticky() {

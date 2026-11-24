@@ -12,7 +12,7 @@ mod controls;
 mod diff;
 mod display;
 
-pub(crate) use diff::{custom_diff, sample_diff};
+pub(crate) use diff::{custom_diff, sample_diff, scroll_bars_diff};
 mod icons;
 pub(crate) mod images;
 mod inputs;
@@ -280,6 +280,7 @@ stories! {
     "rune-scroll-bar--basic" => scroll_bar_basic,
     "rune-scroll-bar--grow" => scroll_bar_grow,
     "rune-scroll-bar--styled" => scroll_bar_styled,
+    "rune-scroll-bar--xy" => scroll_bar_xy,
     "rune-sidebar--reorder" => sidebar::reorder,
     "components-file-icon--samples" => icons::file_icon_samples,
     "components-file-icon--folder" => icons::file_icon_folder,
@@ -295,6 +296,7 @@ stories! {
     "rune-table--wide" => table::wide,
     "rune-diff--localized" => diff::localized,
     "rune-diff--custom" => diff::custom,
+    "rune-diff--scroll-bars" => diff::scroll_bars,
     "rune-image--decode" => images::decode,
 }
 
@@ -596,6 +598,64 @@ fn scroll_bar_styled(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .track(k.c.layer_02)
         .track_hover(k.c.surface_hover);
     scroll_feed_with(k, 24, None, style)
+}
+
+/// A two-axis `scroll_xy` viewport with both vertical and horizontal scroll bars leaving the
+/// bottom-end corner clear.
+fn scroll_bar_xy(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let always = s.is("xy-always");
+    let grid = col().w(760.0).padding(8.0).gap(4.0).children((0..24).map(|r| {
+        row()
+            .key(format!("xy-row-{r}"))
+            .w_full()
+            .h(30.0)
+            .px(10.0)
+            .gap(16.0)
+            .center_y()
+            .radius(k.radius.sm)
+            .fill(if r % 2 == 0 { k.c.layer_02 } else { k.c.layer_01 })
+            .children((0..6).map(|c| {
+                text(format!("r{:02} · col {} · payload_{}_{}", r + 1, c + 1, r, c))
+                    .key(format!("cell-{r}-{c}"))
+                    .font(k.ty.mono)
+                    .color(if c == 0 { k.c.text_base } else { k.c.text_muted })
+                    .single_line()
+            }))
+    }));
+    let viewport = col()
+        .key("xy-feed")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .scroll_xy()
+        .child(grid);
+    let viewport = if always {
+        let style = ScrollBarStyle::from_kit(k).always_visible();
+        viewport.scroll_bars_xy_styled(style, style.horizontal())
+    } else {
+        viewport.scroll_bars_xy(k)
+    };
+    col()
+        .key("xy-story")
+        .gap(10.0)
+        .child(
+            Switch::new(always)
+                .label("Always visible")
+                .on_toggle(|s: &mut G| s.flip("xy-always"))
+                .build(k)
+                .key("xy-always-toggle"),
+        )
+        .child(
+            col()
+                .key("xy-panel")
+                .w(420.0)
+                .h(260.0)
+                .radius(k.radius.md)
+                .fill(k.c.layer_01)
+                .border(1.0, k.c.border_weak)
+                .clip_soft(k.radius.md)
+                .child(viewport),
+        )
 }
 
 fn scroll_feed(k: &Kit, rows: usize, tail: Option<f32>) -> El {

@@ -3,7 +3,7 @@
 
 use rune::{Phase, PointerEvent};
 
-use super::{Bar, PAGE_DELAY, PAGE_EVERY, offset_along, thumb_along, track_len};
+use super::{Bar, PAGE_DELAY, PAGE_EVERY, offset_along, thumb_along};
 use crate::grip::Grip;
 
 /// What a press on the bar holds: the thumb, caught `grab` points below its top, or the track,
@@ -49,7 +49,7 @@ impl Bar {
         tx.live_only();
         let at = self.pos.get();
         let t = self.style().track;
-        let (len, shows) = track_len(at, &t);
+        let (len, shows) = self.track_len(at);
         if !shows {
             if self.step(Grip::release).is_some() {
                 self.widen();

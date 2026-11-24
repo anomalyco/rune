@@ -212,6 +212,46 @@ fn scroll_bar_motion_gate() {
                 r.rec
             }),
         ),
+        (
+            "scroll-bar/two-axis-xy".into(),
+            Box::new(|| {
+                fn xy(_: &(), _: &mut rune::Cx<()>) -> El {
+                    let k = Kit::neutral(true);
+                    col().size(200.0, 120.0).child(
+                        col()
+                            .key("scroll")
+                            .w_full()
+                            .h(120.0)
+                            .scroll_xy()
+                            .child(el().key("canvas").size(800.0, 600.0))
+                            .scroll_bars_xy(&k),
+                    )
+                }
+                let mut r = Run::new(rune::Runtime::new((), xy, (200.0, 120.0), rune::Env::new(true, 1.0)), 120.0);
+                r.idle(0.3);
+                for _ in 0..8 {
+                    r.act("wheel-y", |rt| rt.wheel(100.0, 60.0, -12.0));
+                    r.step();
+                }
+                r.play(1.6);
+                for _ in 0..8 {
+                    r.act("wheel-x", |rt| rt.wheel_xy(100.0, 60.0, -12.0, 0.0));
+                    r.step();
+                }
+                r.play(1.6);
+                r.act("near-right", |rt| rt.pointer_move(192.0, 50.0));
+                r.play(0.4);
+                r.act("near-bottom", |rt| rt.pointer_move(100.0, 114.0));
+                r.play(1.6);
+                r.act("away", |rt| rt.pointer_move(100.0, 50.0));
+                r.play(1.6);
+                r.act("always", |rt| rt.set_system_scroll_bars(ScrollBars::Always));
+                r.play(0.6);
+                r.act("when-scrolling", |rt| rt.set_system_scroll_bars(ScrollBars::WhenScrolling));
+                r.play(1.2);
+                r.rec
+            }),
+        ),
     ], &[]);
 }
 

@@ -5,7 +5,7 @@
 use rune::{Color, Cursor, El, col, icon, row, text};
 use rune_kit::diff::{DiffLabel, DiffMode, DiffOptions, DiffState, DiffView, FileDiff, FileStatus, FoldRow, LineKind, Side, parse};
 use rune_kit::syntax::{Syntax, SyntaxTheme};
-use rune_kit::{Kit, Switch};
+use rune_kit::{Kit, ScrollBarStyle, Switch};
 
 use crate::G;
 
@@ -297,6 +297,117 @@ pub(super) fn custom(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .gap(10.0)
         .child(controls)
         .child(text(hint).font(k.ty.small).color(c.text_muted).key("diff-custom-status"))
+        .child(
+            col()
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .border(1.0, c.border_weak)
+                .clip_soft(0.0)
+                .child(view.build(s, k)),
+        )
+}
+
+pub(crate) fn scroll_bars_diff() -> DiffState {
+    let mut old = String::new();
+    let mut new = String::new();
+    for i in 1..=48 {
+        let line = format!(
+            "    let metric_{i:02} = pipeline.measure_stage(\"stage_{i:02}\", config.batch_limit, config.timeout_ms, telemetry.span(\"diff_scroll_{i:02}\"));\n"
+        );
+        old.push_str(&line);
+        if i == 6 || i == 24 || i == 42 {
+            new.push_str(&line.replace("config.batch_limit", "config.effective_batch_limit(retry_budget)"));
+        } else {
+            new.push_str(&line);
+        }
+    }
+    let second_old = "pub fn summarize(items: &[u64]) -> u64 {\n    items.iter().copied().sum()\n}\n";
+    let second_new = "pub fn summarize(items: &[u64]) -> u64 {\n    items.iter().copied().fold(0u64, u64::saturating_add)\n}\n";
+    DiffState::new(vec![
+        FileDiff::from_texts("src/pipeline/metrics.rs", &old, &new),
+        FileDiff::from_texts("src/pipeline/summary.rs", second_old, second_new),
+    ])
+}
+
+/// `DiffView::scroll_bar(true)` and `DiffView::scroll_bar_styled` with both axes overflowing in
+/// unwrapped unified mode, switching to vertical-only when wrapped or split.
+pub(super) fn scroll_bars(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let enabled = !s.is("diff-sb-off");
+    let styled = s.is("diff-sb-styled");
+    let wrap = s.diff_scroll.wrap();
+    let split = s.diff_scroll.mode() == DiffMode::Split;
+
+    let mut view = DiffView::new(|s: &G| &s.diff_scroll, |s: &mut G| &mut s.diff_scroll).key("diff-scroll-bars");
+    if enabled {
+        view = if styled {
+            view.scroll_bar_styled(
+                ScrollBarStyle::native(c.border_base, c.border_strong)
+                    .inside()
+                    .always_visible()
+                    .track(c.layer_02)
+                    .track_hover(c.surface_hover),
+            )
+        } else {
+            view.scroll_bar(true)
+        };
+    }
+
+    let controls = row()
+        .gap(16.0)
+        .center_y()
+        .flex_wrap()
+        .child(
+            Switch::new(enabled)
+                .label("Scroll bars")
+                .on_toggle(|s: &mut G| s.flip("diff-sb-off"))
+                .build(k)
+                .key("toggle-sb"),
+        )
+        .child(
+            Switch::new(styled)
+                .label("Styled always")
+                .on_toggle(|s: &mut G| s.flip("diff-sb-styled"))
+                .build(k)
+                .key("toggle-styled"),
+        )
+        .child(
+            Switch::new(wrap)
+                .label("Wrap")
+                .on_toggle(|s: &mut G| {
+                    let next = !s.diff_scroll.wrap();
+                    s.diff_scroll.set_wrap(next);
+                })
+                .build(k)
+                .key("toggle-wrap"),
+        )
+        .child(
+            Switch::new(split)
+                .label("Split")
+                .on_toggle(|s: &mut G| {
+                    let next = if s.diff_scroll.mode() == DiffMode::Split { DiffMode::Unified } else { DiffMode::Split };
+                    s.diff_scroll.set_mode(next);
+                })
+                .build(k)
+                .key("toggle-split"),
+        );
+
+    let hint = if !enabled {
+        "Scroll bars disabled (default DiffView)"
+    } else if wrap || split {
+        "Wrapped / split mode: vertical scroll bar only, below the 44 pt sticky file header"
+    } else {
+        "Unwrapped unified mode: vertical and horizontal scroll bars with a clear bottom-right corner"
+    };
+
+    col()
+        .key("diff-scroll-bars-story")
+        .w(672.0)
+        .h(420.0)
+        .gap(10.0)
+        .child(controls)
+        .child(text(hint).font(k.ty.small).color(c.text_muted).key("diff-sb-status"))
         .child(
             col()
                 .w_full()
