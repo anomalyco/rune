@@ -315,6 +315,27 @@ impl<S: 'static> Runtime<S> {
     pub fn element_at_in(&self, within: &str, x: f32, y: f32) -> Option<Picked> { self.core().element_at_in(within, x, y) }
     #[inline(always)]
     pub fn element_at_in_with(&self, within: &str, x: f32, y: f32, pick: Pick) -> Option<Picked> { self.core().element_at_in_with(within, x, y, pick) }
+    /// Hit-test window point (`x`, `y`) in points to a UTF-8 byte offset in the mounted,
+    /// non-exiting, non-secure text or text field named `key` (key or key path), as of the last
+    /// presented frame. Returns `None` when `key` is missing, exiting, not a text or text field,
+    /// or secure. Running handlers can call [`Tx::text_offset_at`](crate::Tx::text_offset_at).
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, TextStyle, col, text};
+    ///
+    /// let mut rt = Runtime::new(
+    ///     (),
+    ///     |_: &(), _| col().size(200.0, 60.0).child(text("hello world").key("t").font(TextStyle::new(14.0, 400.0))),
+    ///     (200.0, 60.0),
+    ///     Env::new(true, 1.0),
+    /// );
+    /// rt.frame(0.0);
+    /// let (x, y) = rt.find("t").unwrap();
+    /// let offset = rt.text_offset_at("t", x, y).unwrap();
+    /// assert!(offset <= "hello world".len() && "hello world".is_char_boundary(offset));
+    /// ```
+    #[inline(always)]
+    pub fn text_offset_at(&self, key: &str, x: f32, y: f32) -> Option<usize> { self.core().text_offset_at(key, x, y) }
     #[inline(always)]
     pub fn contains(&self, key: &str, x: f32, y: f32) -> bool { self.core().contains(key, x, y) }
     #[inline(always)]

@@ -513,12 +513,43 @@ impl RuntimeCore {
         self.element_at_within(None, x, y, pick)
     }
 
+    /// UTF-8 byte offset in the text or text field named `key` (a key or key path, as
+    /// [`Runtime::find`] resolves it) under window point (`x`, `y`) in points, as of the last
+    /// presented frame, following `El::scale`, `El::rotate`, scrolling and single-line field
+    /// horizontal scroll. Returns `None` when `key` is missing, exiting, not a text or text
+    /// field, or secure, or when `x` or `y` is not finite. Running handlers can use
+    /// [`Tx::text_offset_at`](crate::Tx::text_offset_at) without holding a `Runtime`.
+    pub fn text_offset_at(&self, key: &str, x: f32, y: f32) -> Option<usize> {
+        if !x.is_finite() || !y.is_finite() { return None; }
+        let i = self.live_named(None, key)?;
+        let n = &self.tree.nodes[i];
+        if n.is_secure() { return None; }
+        if let Some(inp) = n.input.as_deref() {
+            let laid = n.text_layout.as_ref()?;
+            let [tx, ty] = self.input_text_point(i, x, y)?;
+            return Some(input_click::hit(&inp.edit, laid.view(), tx, ty, self.env.scale, inp.single_line).caret);
+        }
+        self.text_index_at(i, x, y)
+    }
+
     pub(super) fn run_pick_reads(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
         for read in std::mem::take(&mut tx.pick_reads) {
-            let picked = self.element_at_within(read.within.as_deref(), read.x, read.y, read.pick);
-            if let Some(f) = read.take() {
-                f(app.states(), picked, tx);
-                self.commit.dirty = true;
+            match read {
+                crate::el::PickRead::Element { within, x, y, pick, f } => {
+                    let picked = self.element_at_within(within.as_deref(), x, y, pick);
+                    if let Some(f) = f.take() {
+                        f(app.states(), picked, tx);
+                        self.commit.dirty = true;
+                    }
+                }
+                crate::el::PickRead::TextOffset { key, x, y, f } => {
+                    if !self.paint.text_rows.is_empty() { self.fill_text_near(); }
+                    let offset = self.text_offset_at(&key, x, y);
+                    if let Some(f) = f.take() {
+                        f(app.states(), offset, tx);
+                        self.commit.dirty = true;
+                    }
+                }
             }
         }
         // A callback may ask again, but cannot keep this dispatch running indefinitely.

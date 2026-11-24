@@ -101,6 +101,7 @@ mod sticky;
 mod sticky_paint;
 mod sticky_showing;
 mod text_case;
+mod text_geometry;
 mod theme_blend;
 mod tx_blur;
 mod virtual_rows_append;

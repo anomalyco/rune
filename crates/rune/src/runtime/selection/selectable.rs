@@ -579,7 +579,7 @@ impl RuntimeCore {
     }
 
     /// Byte offset of node `i`'s text under window point (x, y), where it was drawn this frame.
-    fn text_index_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
+    pub(in crate::runtime) fn text_index_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
         let n = &self.tree.nodes[i];
         let (spec, flow) = (n.text.as_ref()?, n.text_layout.as_ref()?.view());
         let s = self.env.scale;

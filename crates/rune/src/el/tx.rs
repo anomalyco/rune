@@ -7,6 +7,7 @@ use rune_motion::{Anim, Spring};
 use crate::el::*;
 
 mod keys;
+mod pick;
 mod press;
 mod scroll;
 
@@ -322,7 +323,7 @@ impl Tx {
         let f: PickFn = Box::new(move |s, picked, tx| {
             if let Some(s) = s.cast::<S>() { f(s, picked, tx); }
         });
-        self.pick_reads.push(PickRead { within, x, y, pick, f: Rc::new(std::cell::Cell::new(Some(f))) });
+        self.pick_reads.push(PickRead::Element { within, x, y, pick, f: Rc::new(std::cell::Cell::new(Some(f))) });
     }
 
     /// [`Runtime::invalidate_memos_by_prefix`](crate::Runtime::invalidate_memos_by_prefix) on
