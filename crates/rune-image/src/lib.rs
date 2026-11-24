@@ -192,7 +192,12 @@ impl Input {
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
-struct Job { image: Image, input: Input, waker: rune_core::Waker }
+enum JobTarget {
+    Image(Image),
+    Pixels { target: pixels::WeakPixels, ticket: u64 },
+}
+#[cfg(not(target_arch = "wasm32"))]
+struct Job { target: JobTarget, input: Input, waker: rune_core::Waker }
 /// Decoder threads for the process, at most one per core.
 #[cfg(not(target_arch = "wasm32"))]
 const DECODERS: usize = 4;
@@ -244,8 +249,22 @@ fn decode_jobs() {
             };
             job
         };
-        job.image.finish(job.input.decode_caught());
-        (job.waker)();
+        match job.target {
+            JobTarget::Image(image) => {
+                image.finish(job.input.decode_caught());
+                (job.waker)();
+            }
+            JobTarget::Pixels { target, ticket } => {
+                if !target.is_current(ticket) {
+                    continue;
+                }
+                if let Ok(decoded) = job.input.decode_caught()
+                    && target.store_mips_if_current(ticket, Arc::new(decoded))
+                {
+                    (job.waker)();
+                }
+            }
+        }
     }
 }
 
@@ -339,6 +358,98 @@ impl ImageCache {
         self.request(*hash.finalize().as_bytes(), Input::Rgba(width, height, bytes))
     }
 
+    /// Populates an existing [`Pixels`] handle with linear-premultiplied mipmaps built from
+    /// straight-alpha sRGB RGBA8 `bytes` (`width * height * 4` bytes, rows top first).
+    ///
+    /// Unlike [`ImageCache::rgba`], this updates `target` in place without allocating a new
+    /// [`Image`] handle or content-hashing `bytes`. On native targets, images up to 64 × 64
+    /// pixels finish inline on the calling thread; larger images build their mip chain on the
+    /// cache's shared decoder workers and wake both `target` and the cache's waker when ready.
+    /// On web (`wasm32`), mip levels are built in main-thread slices so frames are not blocked.
+    ///
+    /// Ordering is latest-wins per [`Pixels`] handle: a newer [`Pixels::set`],
+    /// [`Pixels::replace`], or `rgba_into` call supersedes any earlier in-flight `rgba_into` on
+    /// the same handle so an older worker never overwrites a newer frame. Passing zero width or
+    /// height with empty `bytes` clears `target` to empty; oversized dimensions (over 8192
+    /// pixels per side) or a mismatched byte length are ignored without modifying `target`.
+    ///
+    /// # Example
+    /// ```
+    /// use std::sync::Arc;
+    /// use rune_image::{ImageCache, Pixels};
+    ///
+    /// let cache = ImageCache::new(Arc::new(|| {}));
+    /// let thumb = Pixels::new();
+    /// cache.rgba_into(&thumb, 4, 4, vec![200u8; 4 * 4 * 4]);
+    /// assert_eq!(thumb.size(), (4, 4));
+    /// ```
+    pub fn rgba_into(&self, target: &Pixels, width: u32, height: u32, bytes: impl Into<Arc<[u8]>>) {
+        let bytes = bytes.into();
+        let expected = (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4));
+        if expected != Some(bytes.len()) {
+            return;
+        }
+        if width == 0 || height == 0 {
+            target.set(width, height, Vec::new());
+            return;
+        }
+        if width > MAX_SIDE || height > MAX_SIDE {
+            return;
+        }
+        let ticket = target.advance_ticket();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let input = Input::Rgba(width, height, bytes);
+            if u64::from(width) * u64::from(height) <= INLINE_RGBA_PIXELS {
+                if let Ok(decoded) = input.decode_caught()
+                    && target.store_mips_if_current(ticket, Arc::new(decoded))
+                {
+                    (self.waker)();
+                }
+                return;
+            }
+            let _ = decode_later(Job {
+                target: JobTarget::Pixels { target: target.downgrade(), ticket },
+                input,
+                waker: self.waker.clone(),
+            });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let weak = target.downgrade();
+            let wake = self.wake.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                let Some(Ok(decoded)) = from_url::mip_chain_in_slices(width, height, &bytes, || weak.is_current(ticket)).await else {
+                    return;
+                };
+                if weak.store_mips_if_current(ticket, Arc::new(decoded)) {
+                    wake();
+                }
+            });
+        }
+    }
+
+    /// Queues an `rgba_into` mip build behind a test gate so tests can force out-of-order
+    /// completion deterministically without sleeps.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    fn rgba_into_gated(
+        &self,
+        target: &Pixels,
+        width: u32,
+        height: u32,
+        bytes: impl Into<Arc<[u8]>>,
+        release: mpsc::Receiver<()>,
+    ) -> u64 {
+        let ticket = target.advance_ticket();
+        let input = Input::Gated(Box::new(Input::Rgba(width, height, bytes.into())), release);
+        assert!(decode_later(Job {
+            target: JobTarget::Pixels { target: target.downgrade(), ticket },
+            input,
+            waker: self.waker.clone(),
+        }));
+        ticket
+    }
+
     /// The Finder icon for an app bundle or any file path, rasterized at 2× `size_pt`.
     /// See [`ImageCache::app_icon_scaled`].
     pub fn app_icon(&self, path: impl AsRef<std::path::Path>, size_pt: f32) -> Image {
@@ -394,7 +505,7 @@ impl ImageCache {
             return image;
         }
         #[cfg(not(target_arch = "wasm32"))]
-        if !decode_later(Job { image: image.clone(), input, waker: self.waker.clone() }) {
+        if !decode_later(Job { target: JobTarget::Image(image.clone()), input, waker: self.waker.clone() }) {
             image.0.decoded.set(Err(ImageError("image worker stopped".into()))).ok();
         }
         #[cfg(target_arch = "wasm32")]

@@ -289,7 +289,7 @@ fn pixels_set_does_not_wait_for_atlas_copy_and_copy_stays_consistent() {
         if line == (h as usize) / 2 - 1 {
             // Confirm the frame lock is already released before handing off to the producer;
             // if the copy still holds the lock, fail immediately instead of deadlocking.
-            drop(px.frame.try_lock().expect("atlas copy held pixels.frame lock; a producer's Pixels::set would block behind it"));
+            drop(px.inner.frame.try_lock().expect("atlas copy held pixels.frame lock; a producer's Pixels::set would block behind it"));
             mid_tx.send(()).unwrap();
             done_rx.recv().unwrap();
         }
@@ -515,6 +515,169 @@ fn pixels_rgba_returns_snapshot_and_empty_for_mips() {
     px.store_mips(decoded);
     assert!(px.rgba().is_empty(), "decoded mips report empty raw rgba");
     assert_eq!(px.size(), (2, 1));
+}
+
+#[test]
+fn pixels_with_rgba_borrows_zero_copy_releases_lock_and_returns_none_for_empty_or_mips() {
+    let px = Pixels::new();
+    assert_eq!(px.with_rgba(|w, h, bytes| (w, h, bytes.len())), None, "empty handle returns None");
+
+    let original = vec![10, 20, 30, 255, 40, 50, 60, 128];
+    let original_ptr = original.as_ptr();
+    px.set(2, 1, original);
+    let first_arc = px.rgba_arc_ptr().unwrap();
+
+    let got = px.with_rgba(|w, h, bytes| {
+        assert_eq!(bytes.as_ptr(), original_ptr, "with_rgba must borrow without copying the buffer");
+        // The frame lock is already released before the closure runs.
+        drop(px.inner.frame.try_lock().expect("with_rgba must drop the frame lock before invoking callback"));
+        assert_eq!(px.size(), (2, 1), "calling Pixels::size inside with_rgba must not deadlock");
+        (w, h, bytes.to_vec())
+    });
+    assert_eq!(got, Some((2, 1, vec![10, 20, 30, 255, 40, 50, 60, 128])));
+
+    // After with_rgba returns, the Arc refcount drops back to 1 so set keeps its in-place reuse.
+    px.set(2, 1, vec![99; 8]);
+    assert_eq!(px.rgba_arc_ptr(), Some(first_arc), "subsequent set must keep Arc::get_mut reuse after with_rgba returns");
+
+    // Calling set/replace inside with_rgba does not deadlock and preserves the snapshotted bytes
+    // for the callback while publishing the replacement.
+    let replaced_inside = px.with_rgba(|w, h, bytes| {
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(bytes, &[99; 8]);
+        let returned = px.replace(1, 1, vec![1, 2, 3, 255]);
+        assert!(returned.is_empty(), "replace while with_rgba holds the Arc cannot reclaim it yet");
+        assert_eq!(bytes, &[99; 8], "snapshotted slice stays valid after concurrent replace");
+        bytes[0]
+    });
+    assert_eq!(replaced_inside, Some(99));
+    assert_eq!(px.with_rgba(|w, h, b| (w, h, b.to_vec())), Some((1, 1, vec![1, 2, 3, 255])));
+
+    // Clearing to empty returns None again.
+    px.set(0, 0, Vec::new());
+    assert_eq!(px.with_rgba(|_, _, _| ()), None);
+
+    // Decoded mips return None.
+    let decoded = Arc::new(crate::mip_chain(2, 1, &[200, 30, 30, 255, 200, 30, 30, 255]).unwrap());
+    px.store_mips(decoded);
+    assert_eq!(px.with_rgba(|_, _, _| ()), None);
+}
+
+#[test]
+fn pixels_replace_recycles_buffers_in_steady_state_coalesced_and_edge_transitions() {
+    let px = Pixels::new();
+    let (w, h) = (8u32, 4u32);
+    let len = (w * h * 4) as usize;
+
+    // First frame has nothing to return.
+    let buf_a = vec![1u8; len];
+    let ptr_a = buf_a.as_ptr();
+    let cap_a = buf_a.capacity();
+    let prev = px.replace(w, h, buf_a);
+    assert!(prev.is_empty() && prev.capacity() == 0, "first frame returns empty Vec");
+
+    // Second frame returns buf_a with identical pointer and capacity.
+    let buf_b = vec![2u8; len];
+    let ptr_b = buf_b.as_ptr();
+    let cap_b = buf_b.capacity();
+    let mut spare = px.replace(w, h, buf_b);
+    assert_eq!(spare.as_ptr(), ptr_a);
+    assert_eq!(spare.capacity(), cap_a);
+
+    // Steady-state ping-pong across place -> end_frame -> replace never reallocates.
+    let mut atlas = ImageAtlas::default();
+    let mut expected_next = (ptr_b, cap_b);
+    let mut other = (ptr_a, cap_a);
+    for i in 3..=10u8 {
+        assert!(atlas.place(&px, [w as f32, h as f32]).is_some());
+        atlas.end_frame();
+        spare.fill(i);
+        let returned = px.replace(w, h, spare);
+        assert_eq!((returned.as_ptr(), returned.capacity()), expected_next, "frame {i} must return prior buffer");
+        spare = returned;
+        std::mem::swap(&mut expected_next, &mut other);
+    }
+
+    // Back-to-back coalesced replaces without an atlas copy return each displaced buffer.
+    let (wakes, wake) = {
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = count.clone();
+        (count, rune_core::live::Wake::new(Arc::new(move || { c.fetch_add(1, Ordering::SeqCst); })))
+    };
+    let _sub = px.source.subscribe(&wake);
+    for i in 20..=25u8 {
+        spare.fill(i);
+        let returned = px.replace(w, h, spare);
+        assert_eq!((returned.as_ptr(), returned.capacity()), expected_next);
+        spare = returned;
+        std::mem::swap(&mut expected_next, &mut other);
+    }
+    assert_eq!(wakes.load(Ordering::SeqCst), 1, "coalesced replaces wake once");
+
+    // Dimension change still returns the prior buffer for caller reuse.
+    let big = vec![7u8; 16 * 6 * 4];
+    let big_ptr = big.as_ptr();
+    let big_cap = big.capacity();
+    let returned = px.replace(16, 6, big);
+    assert_eq!((returned.as_ptr(), returned.capacity()), expected_next);
+
+    // Clearing to empty when unshared returns the displaced RGBA buffer.
+    let cleared = px.replace(0, 0, Vec::new());
+    assert_eq!((cleared.as_ptr(), cleared.capacity()), (big_ptr, big_cap));
+    assert_eq!(px.size(), (0, 0));
+
+    // Replacing Empty returns empty Vec.
+    assert!(px.replace(0, 0, Vec::new()).is_empty());
+
+    // Replacing decoded Mips returns empty Vec.
+    let decoded = Arc::new(crate::mip_chain(2, 1, &[200, 30, 30, 255, 200, 30, 30, 255]).unwrap());
+    px.store_mips(decoded);
+    assert!(px.replace(2, 1, vec![9; 8]).is_empty());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pixels_replace_during_concurrent_atlas_copy_returns_empty_and_drops_old_after_copy() {
+    let px = Pixels::new();
+    let (w, h) = (8u32, 4u32);
+    let len = (w * h * 4) as usize;
+    assert!(px.replace(w, h, vec![10u8; len]).is_empty());
+    let w1 = px.rgba_weak().unwrap();
+
+    let (mid_tx, mid_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let producer_px = px.clone();
+    let producer = std::thread::spawn(move || {
+        if mid_rx.recv().is_err() { return; }
+        // First replace while place_at holds frame 1's Arc cannot reclaim frame 1.
+        let b2 = vec![20u8; len];
+        let ptr2 = b2.as_ptr();
+        let cap2 = b2.capacity();
+        assert!(producer_px.replace(w, h, b2).is_empty(), "in-flight copy prevents reclaiming frame 1");
+
+        // Second coalesced replace during the same copy reclaims frame 2.
+        let b3 = vec![30u8; len];
+        let returned = producer_px.replace(w, h, b3);
+        assert_eq!((returned.as_ptr(), returned.capacity()), (ptr2, cap2));
+        let _ = done_tx.send(());
+    });
+
+    let mut atlas = ImageAtlas::default();
+    let placed = atlas.place_at_with_copy_hook(&px, [w as f32, h as f32], None, |line| {
+        if line == 1 {
+            mid_tx.send(()).unwrap();
+            done_rx.recv().unwrap();
+        }
+    }).unwrap().0;
+    drop(mid_tx);
+    producer.join().unwrap();
+
+    // Once place_at returns, frame 1 drops cleanly and frame 3 is current.
+    assert_eq!(w1.strong_count(), 0, "in-flight snapshot drops when place_at finishes");
+    let page = &atlas.pages[placed.page];
+    let offset = (placed.rect[1] as usize * page.width as usize + placed.rect[0] as usize) * 4;
+    assert_eq!(&page.data[offset..offset + 4], &[10, 10, 10, 10]);
+    assert_eq!(px.with_rgba(|_, _, bytes| bytes[0]), Some(30));
 }
 
 #[test]

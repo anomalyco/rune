@@ -1975,6 +1975,11 @@ Pages are created on demand and unused trailing pages are released. Rendering br
 only when the image page changes, preserving painter order. Filtering is bilinear on
 premultiplied texels, clamped to each image. Same-size streaming updates reuse their slot,
 perform only a row copy/upload, and do no mip work or internal allocation.
+Use `Pixels::replace(width, height, rgba)` to get the previous frame's `Vec<u8>` back for
+buffer reuse (returns an empty `Vec` on the first frame, after replacing mips, or while a
+render copy or borrow holds it), and `Pixels::with_rgba(|w, h, bytes| ...)` to borrow the
+current straight-alpha frame without copying (the frame lock is released before the callback
+runs; returns `None` when empty or holding decoded mips).
 
 For static assets, construct an `ImageCache` once with the app's setup waker:
 
@@ -1987,7 +1992,9 @@ el().size(32.0, 32.0).pixels(icon.pixels())
 
 The cache deduplicates by content and decodes on a shared pool of up to 4 worker threads on native
 (or the browser's codecs / main-thread tasks on web). `cache.rgba(w, h, bytes)` accepts
-straight-alpha sRGB pixels. Static images get area-filtered, linear-premultiplied mip levels
+straight-alpha sRGB pixels, and `cache.rgba_into(&pixels, w, h, bytes)` builds linear-light
+mipmaps off the main thread directly into an existing `Pixels` handle using latest-wins
+ordering against newer `Pixels::set`, `Pixels::replace`, or `rgba_into` calls. Static images get area-filtered, linear-premultiplied mip levels
 on those workers; rendering chooses a precomputed level from the drawn device-pixel size.
 `Image::{size,is_ready,error}` inspect completion; `Image::wait` is for deterministic headless
 fixtures. Dropping all image and pixel handles releases decoded storage. Legacy ICNS codecs

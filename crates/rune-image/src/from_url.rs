@@ -106,6 +106,32 @@ pub(super) async fn land_in_slices(url: &str, fetched: Fetched, px: u32) -> Resu
     Ok(steps.finish())
 }
 
+/// Builds linear-light mips for straight-alpha `bytes` in main-thread slices, stopping early and
+/// returning `None` if `keep_going` becomes false between slices.
+#[cfg(target_arch = "wasm32")]
+pub(super) async fn mip_chain_in_slices(
+    width: u32,
+    height: u32,
+    bytes: &[u8],
+    keep_going: impl Fn() -> bool,
+) -> Option<Result<Decoded, ImageError>> {
+    const SLICE: usize = 1 << 15;
+    if !keep_going() {
+        return None;
+    }
+    let mut steps = match super::mips::MipSteps::new(width, height, bytes) {
+        Ok(steps) => steps,
+        Err(e) => return Some(Err(e)),
+    };
+    while !steps.step(SLICE) {
+        wasm_bindgen_futures::JsFuture::from(next_task()).await.ok();
+        if !keep_going() {
+            return None;
+        }
+    }
+    Some(Ok(steps.finish()))
+}
+
 /// Fetch and decode `url` in the browser, checking declared dimensions before the browser
 /// allocates a raster and resolving in a task of its own so each image's mips are a separate
 /// piece of main-thread work.

@@ -45,11 +45,68 @@ struct Frame {
     data: FrameData,
 }
 
+struct FrameInner {
+    frame: Mutex<Frame>,
+    /// Monotonic latest-wins ticket advanced by `Pixels::replace`/`set`, `store_mips`, and
+    /// `ImageCache::rgba_into`, so an older off-thread mip build never overwrites a newer frame.
+    ticket: AtomicU64,
+}
+
+/// Weak reference to a `Pixels`' frame storage and live source, used by off-thread
+/// [`crate::ImageCache::rgba_into`] jobs so abandoned handles skip mip work.
+pub(crate) struct WeakPixels {
+    inner: std::sync::Weak<FrameInner>,
+    source: std::sync::Weak<rune_core::live::Source>,
+}
+
+impl WeakPixels {
+    pub(crate) fn is_current(&self, ticket: u64) -> bool {
+        self.inner.upgrade().is_some_and(|inner| inner.ticket.load(Ordering::Acquire) == ticket)
+    }
+
+    pub(crate) fn store_mips_if_current(&self, ticket: u64, mips: Arc<crate::Decoded>) -> bool {
+        let (Some(inner), Some(source)) = (self.inner.upgrade(), self.source.upgrade()) else {
+            return false;
+        };
+        store_mips_if_current_inner(&inner, &source, ticket, mips)
+    }
+}
+
+fn reclaim_rgba(replaced: FrameData) -> Vec<u8> {
+    match replaced {
+        FrameData::Rgba(arc) => Arc::into_inner(arc).unwrap_or_default(),
+        FrameData::Empty | FrameData::Mips(_) => Vec::new(),
+    }
+}
+
+fn store_mips_if_current_inner(
+    inner: &FrameInner,
+    source: &rune_core::live::Source,
+    ticket: u64,
+    mips: Arc<crate::Decoded>,
+) -> bool {
+    let (width, height) = (mips.mips[0].width, mips.mips[0].height);
+    let replaced = {
+        let mut frame = inner.frame.lock().unwrap();
+        if inner.ticket.load(Ordering::Acquire) != ticket {
+            drop(frame);
+            return false;
+        }
+        frame.width = width;
+        frame.height = height;
+        frame.generation += 1;
+        std::mem::replace(&mut frame.data, FrameData::Mips(mips))
+    };
+    drop(replaced);
+    source.notify();
+    true
+}
+
 /// A replaceable RGBA image, shared between the producer and the view. Clone it freely.
 #[derive(Clone)]
 pub struct Pixels {
     id: u64,
-    frame: Arc<Mutex<Frame>>,
+    inner: Arc<FrameInner>,
     /// Wakes the windows and overlays whose scene shows this image.
     #[doc(hidden)]
     pub source: Arc<rune_core::live::Source>,
@@ -66,7 +123,7 @@ pub struct Pixels {
 impl std::fmt::Debug for Pixels {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (width, height, generation) = {
-            let frame = self.frame.lock().unwrap();
+            let frame = self.inner.frame.lock().unwrap();
             (frame.width, frame.height, frame.generation)
         };
         write!(f, "Pixels({}, {}x{}, gen {})", self.id, width, height, generation)
@@ -84,7 +141,10 @@ impl Pixels {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         Pixels {
             id: NEXT.fetch_add(1, Ordering::Relaxed),
-            frame: Arc::new(Mutex::new(Frame { width: 0, height: 0, generation: 0, data: FrameData::Empty })),
+            inner: Arc::new(FrameInner {
+                frame: Mutex::new(Frame { width: 0, height: 0, generation: 0, data: FrameData::Empty }),
+                ticket: AtomicU64::new(0),
+            }),
             source: rune_core::live::Source::new(0),
             url: None,
             srcset: None,
@@ -120,27 +180,57 @@ impl Pixels {
     /// and one upload of the latest image; a hidden or covered window catches up when it shows
     /// again. This is the streaming path: no decoding or mip generation, and a same-size
     /// frame reuses its atlas slot.
+    ///
+    /// To recycle the previous frame's buffer instead of dropping it, use [`Pixels::replace`].
+    /// To build downscaling mipmaps off the main thread into this handle, use
+    /// [`crate::ImageCache::rgba_into`].
     pub fn set(&self, width: u32, height: u32, rgba: Vec<u8>) {
+        let _ = self.replace(width, height, rgba);
+    }
+
+    /// Replaces the image like [`Pixels::set`] and returns the buffer the previous frame held,
+    /// so a streaming producer can refill and reuse it without allocating a new buffer every
+    /// frame.
+    ///
+    /// Returns an empty `Vec` on the first frame, when replacing decoded mipmaps, or while an
+    /// in-flight render copy or [`Pixels::with_rgba`] borrow still holds the previous buffer
+    /// (that buffer is freed once the reader finishes). No spare buffer is retained inside
+    /// `Pixels` when idle.
+    ///
+    /// # Example
+    /// ```
+    /// use rune_image::Pixels;
+    ///
+    /// let pixels = Pixels::new();
+    /// let mut spare = pixels.replace(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+    /// assert!(spare.is_empty());
+    /// spare.resize(8, 0);
+    /// let recycled = pixels.replace(2, 1, spare);
+    /// assert_eq!(recycled.len(), 8);
+    /// ```
+    pub fn replace(&self, width: u32, height: u32, rgba: Vec<u8>) -> Vec<u8> {
         assert_eq!(Some(rgba.len()), (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)), "rgba must hold width * height pixels");
         if rgba.is_empty() {
             let replaced = {
-                let mut frame = self.frame.lock().unwrap();
+                let mut frame = self.inner.frame.lock().unwrap();
+                self.advance_ticket();
                 frame.width = width;
                 frame.height = height;
                 frame.generation += 1;
                 std::mem::replace(&mut frame.data, FrameData::Empty)
             };
-            drop(replaced);
+            let old = reclaim_rgba(replaced);
             self.source.notify();
-            return;
+            return old;
         }
         // Fast path: when no reader holds a clone of the current Arc, swap the Vec in place so
         // steady-state streaming allocates nothing per update.
         let (rgba, old_vec) = {
-            let mut frame = self.frame.lock().unwrap();
+            let mut frame = self.inner.frame.lock().unwrap();
             if let FrameData::Rgba(arc) = &mut frame.data
                 && let Some(slot) = Arc::get_mut(arc)
             {
+                self.advance_ticket();
                 let old = std::mem::replace(slot, rgba);
                 frame.width = width;
                 frame.height = height;
@@ -151,23 +241,72 @@ impl Pixels {
             }
         };
         if let Some(old) = old_vec {
-            drop(old);
             self.source.notify();
-            return;
+            return old;
         }
-        // Slow path: first frame, replacing mips, or an in-flight copy holds the old Arc.
-        // Allocate the new Arc outside the lock, then swap it in and drop the replaced holder
-        // outside the lock.
+        // Slow path: first frame, replacing mips, or an in-flight copy/borrow holds the old Arc.
+        // Allocate the new Arc outside the lock, then swap it in and reclaim or drop the replaced
+        // holder outside the lock.
         let data = FrameData::Rgba(Arc::new(rgba.unwrap()));
         let replaced = {
-            let mut frame = self.frame.lock().unwrap();
+            let mut frame = self.inner.frame.lock().unwrap();
+            self.advance_ticket();
             frame.width = width;
             frame.height = height;
             frame.generation += 1;
             std::mem::replace(&mut frame.data, data)
         };
-        drop(replaced);
+        let old = reclaim_rgba(replaced);
         self.source.notify();
+        old
+    }
+
+    /// Runs `f` with the current straight-alpha sRGB RGBA frame: `(width, height, bytes)`, rows
+    /// top first, without copying the pixel buffer. Returns `None` when empty or when the handle
+    /// holds decoded mipmaps (from [`crate::ImageCache`]).
+    ///
+    /// The frame lock is released before `f` runs, so calling [`Pixels::size`], [`Pixels::set`],
+    /// or [`Pixels::replace`] inside `f` does not deadlock and does not block rendering. While
+    /// `f` runs, the borrowed slice keeps showing the snapshotted frame even if another call
+    /// replaces it.
+    ///
+    /// # Example
+    /// ```
+    /// use rune_image::Pixels;
+    ///
+    /// let pixels = Pixels::new();
+    /// pixels.set(2, 1, vec![10, 20, 30, 255, 40, 50, 60, 255]);
+    /// let first_red = pixels.with_rgba(|w, h, bytes| {
+    ///     assert_eq!((w, h), (2, 1));
+    ///     bytes[0]
+    /// });
+    /// assert_eq!(first_red, Some(10));
+    /// ```
+    pub fn with_rgba<R>(&self, f: impl FnOnce(u32, u32, &[u8]) -> R) -> Option<R> {
+        let (width, height, rgba) = {
+            let frame = self.inner.frame.lock().unwrap();
+            match &frame.data {
+                FrameData::Rgba(rgba) => (frame.width, frame.height, Arc::clone(rgba)),
+                FrameData::Empty | FrameData::Mips(_) => return None,
+            }
+        };
+        Some(f(width, height, &rgba))
+    }
+
+    pub(crate) fn advance_ticket(&self) -> u64 {
+        self.inner.ticket.fetch_add(1, Ordering::AcqRel) + 1
+    }
+
+    pub(crate) fn downgrade(&self) -> WeakPixels {
+        WeakPixels {
+            inner: Arc::downgrade(&self.inner),
+            source: Arc::downgrade(&self.source),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn store_mips_if_current(&self, ticket: u64, mips: Arc<crate::Decoded>) -> bool {
+        store_mips_if_current_inner(&self.inner, &self.source, ticket, mips)
     }
 
     /// Stores `mips` without notifying subscribers, so [`crate::Image::finish`] can publish
@@ -176,7 +315,8 @@ impl Pixels {
     pub(crate) fn store_mips(&self, mips: Arc<crate::Decoded>) {
         let (width, height) = (mips.mips[0].width, mips.mips[0].height);
         let replaced = {
-            let mut frame = self.frame.lock().unwrap();
+            let mut frame = self.inner.frame.lock().unwrap();
+            self.advance_ticket();
             frame.width = width;
             frame.height = height;
             frame.generation += 1;
@@ -186,20 +326,20 @@ impl Pixels {
     }
 
     pub fn size(&self) -> (u32, u32) {
-        let frame = self.frame.lock().unwrap();
+        let frame = self.inner.frame.lock().unwrap();
         (frame.width, frame.height)
     }
 
     #[doc(hidden)]
     pub fn signature(&self) -> (u64, u64) {
-        let frame = self.frame.lock().unwrap();
+        let frame = self.inner.frame.lock().unwrap();
         (self.id, frame.generation)
     }
 
     /// The image's RGBA bytes as [`Pixels::set`] gave them (empty for a decoded image's mips).
     #[doc(hidden)]
     pub fn rgba(&self) -> Vec<u8> {
-        let data = self.frame.lock().unwrap().data.clone();
+        let data = self.inner.frame.lock().unwrap().data.clone();
         match data {
             FrameData::Rgba(rgba) => (*rgba).clone(),
             FrameData::Empty | FrameData::Mips(_) => Vec::new(),
@@ -209,13 +349,13 @@ impl Pixels {
     /// Holds the frame lock until dropped, so tests can pause a concurrent pixel update.
     #[cfg(test)]
     pub(crate) fn hold_frame(&self) -> impl Drop + '_ {
-        self.frame.lock().unwrap()
+        self.inner.frame.lock().unwrap()
     }
 
     /// Weak handle to the current streaming RGBA buffer, so tests can verify reference counts.
     #[cfg(test)]
     fn rgba_weak(&self) -> Option<std::sync::Weak<Vec<u8>>> {
-        match &self.frame.lock().unwrap().data {
+        match &self.inner.frame.lock().unwrap().data {
             FrameData::Rgba(rgba) => Some(Arc::downgrade(rgba)),
             FrameData::Empty | FrameData::Mips(_) => None,
         }
@@ -225,7 +365,7 @@ impl Pixels {
     /// tests can verify in-place `Arc` reuse.
     #[cfg(test)]
     fn rgba_arc_ptr(&self) -> Option<*const Vec<u8>> {
-        match &self.frame.lock().unwrap().data {
+        match &self.inner.frame.lock().unwrap().data {
             FrameData::Rgba(rgba) => Some(Arc::as_ptr(rgba)),
             FrameData::Empty | FrameData::Mips(_) => None,
         }
@@ -387,7 +527,7 @@ impl ImageAtlas {
         #[cfg(test)]
         let lock_start = rune_core::time::now();
         let (frame_w, frame_h, generation, data) = {
-            let frame = pixels.frame.lock().unwrap();
+            let frame = pixels.inner.frame.lock().unwrap();
             if frame.width == 0 || frame.height == 0 || frame.width > crate::MAX_SIDE || frame.height > crate::MAX_SIDE {
                 #[cfg(test)]
                 { self.last_lock_hold = lock_start.elapsed(); }
