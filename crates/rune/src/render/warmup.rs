@@ -3,7 +3,7 @@
 
 use super::{
     BatchBind, Instance, Kind, Renderer, backdrop_blur, breaker, dxbc, fill, layers, pass::Backdrop,
-    upload, variant,
+    shader_check, upload, variant,
 };
 
 #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
@@ -48,6 +48,10 @@ pub(super) struct WarmRenderer {
     pub(super) backdrop_used: bool,
     pub(super) backdrop_blur: Option<backdrop_blur::BackdropBlur>,
     pub(super) breakers: breaker::Breakers,
+    pub(super) uber_check: shader_check::UberCheck,
+    pub(super) uber_check_seq: crate::machine::Seq,
+    #[cfg(target_arch = "wasm32")]
+    pub(super) uber_check_wake: shader_check::WakeSlot,
     pub(super) uploads: upload::Uploads,
     pub(super) fills: std::sync::Mutex<Option<fill::PendingFills>>,
     pub(super) device_key: crate::compose::DeviceKey,
@@ -103,6 +107,10 @@ impl Renderer {
             backdrop_used,
             backdrop_blur,
             breakers,
+            uber_check,
+            uber_check_seq,
+            #[cfg(target_arch = "wasm32")]
+            uber_check_wake,
             uploads,
             fills,
             device_key,
@@ -149,6 +157,10 @@ impl Renderer {
             backdrop_used,
             backdrop_blur,
             breakers,
+            uber_check,
+            uber_check_seq,
+            #[cfg(target_arch = "wasm32")]
+            uber_check_wake,
             uploads,
             fills,
             device_key,
@@ -223,6 +235,10 @@ impl Renderer {
             backdrop_used,
             backdrop_blur,
             breakers,
+            uber_check,
+            uber_check_seq,
+            #[cfg(target_arch = "wasm32")]
+            uber_check_wake,
             uploads,
             fills,
             device_key,
@@ -267,6 +283,10 @@ impl Renderer {
             backdrop_used,
             backdrop_blur,
             breakers,
+            uber_check,
+            uber_check_seq,
+            #[cfg(target_arch = "wasm32")]
+            uber_check_wake,
             uploads,
             fills,
             device_key,

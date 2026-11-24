@@ -108,6 +108,67 @@ impl Browser {
         false
     }
 
+    /// Handles an async browser WebGPU error-scope rejection of the primary uber shader or
+    /// pipeline (`Renderer::poll_uber_check`). On a GPU-first page, records `window_error`, shows
+    /// the error on the page and ends the app so it never stays blank; on a CPU-first page, stays
+    /// on or falls back to the CPU 2D canvas. Returns true when the app ended.
+    pub(super) fn failed_shader(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        let why = {
+            let mut running = self.running.borrow_mut();
+            let Some(r) = &mut *running else { return false };
+            r.draw.gpu_mut().and_then(|side| side.renderer.poll_uber_check())
+        };
+        let Some(why) = why else { return false };
+        let Some(window) = self.window.clone() else { return false };
+        let canvas = window.canvas();
+        if self.start == Start::GpuFirst || self.embedded || self.document {
+            let message = format!("The GPU rejected Rune's shader ({why}).");
+            self.shared.set_window_error(Some(message.clone()));
+            error(&message, canvas.as_ref(), self.embedded, self.document);
+            self.end(event_loop);
+            return true;
+        }
+        let mut running = self.running.borrow_mut();
+        let Some(r) = &mut *running else { return false };
+        let side = match std::mem::replace(&mut r.draw, Draw::Moving) {
+            Draw::HandingOver { cpu, side, .. } => {
+                r.draw = Draw::Cpu { cpu, failed: true };
+                r.last_presented = None;
+                side
+            }
+            Draw::Gpu(side) => match canvas.as_ref().and_then(cpu_canvas::CpuCanvas::under) {
+                Some(cpu) => {
+                    r.draw = Draw::Cpu { cpu, failed: true };
+                    r.last_presented = None;
+                    side
+                }
+                None => {
+                    r.draw = Draw::Gpu(side);
+                    drop(running);
+                    let message = format!("The GPU rejected Rune's shader ({why}).");
+                    self.shared.set_window_error(Some(message.clone()));
+                    error(&message, canvas.as_ref(), self.embedded, self.document);
+                    self.end(event_loop);
+                    return true;
+                }
+            },
+            other => {
+                r.draw = other;
+                return false;
+            }
+        };
+        web_sys::console::warn_1(&format!("rune: the GPU rejected the renderer shader ({why}); the page draws on the CPU").into());
+        crate::marks::mark("web.gpu.failed");
+        side.gpu.device.destroy();
+        drop(side);
+        let atlas = &mut r.app.rt_mut().text.atlas;
+        crate::render::cpu_boot::attach_text(atlas);
+        atlas.refill_gpu_masks();
+        if let Some(c) = &canvas { c.style().set_property("opacity", "0").ok(); }
+        window.request_redraw();
+        false
+    }
+
     /// Rebuilds the WebGL2 `GpuSide` after `webglcontextrestored` fires on the canvas.
     pub(super) fn maybe_restore_webgl(&mut self) {
         if !self.webgl_restored.get() || self.webgl_restoring { return; }

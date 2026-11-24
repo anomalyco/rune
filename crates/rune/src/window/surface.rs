@@ -131,7 +131,12 @@ pub(crate) fn reblend_core(surface: &wgpu::Surface, gpu: &Gpu, config: &mut wgpu
         }
     }
     let target = if srgb { config.format.remove_srgb_suffix() } else { config.format };
-    rebuild_renderer_core(&gpu.device, renderer, target, rt);
+    if let Err(error) = renderer.try_set_format(&gpu.device, target) {
+        eprintln!("rune: could not rebuild the renderer pipeline for a blend switch: {error}");
+        return false;
+    }
+    renderer.set_srgb_blend(rt.srgb_blend());
+    renderer.attach_text(&mut rt.text.atlas);
     if alpha.is_some() {
         *alpha = Some(crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target, (config.width, config.height)));
     }

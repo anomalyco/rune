@@ -203,10 +203,12 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
 
     let t0 = crate::time::now();
     let features = app.compositor_features();
-    let gpu = Gpu::try_with_features(Gpu::instance_for(features), None, features).unwrap_or_else(|e| die(&e));
     let srgb_blend = app.rt().srgb_blend();
     let target_format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
-    let mut renderer = Renderer::new(&gpu.device, target_format);
+    let (gpu, mut renderer) = Gpu::for_headless_setup(features, |gpu| {
+        Renderer::try_new_classified(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)
+    })
+    .unwrap_or_else(|e| die(&e.message));
     renderer.set_srgb_blend(srgb_blend);
     renderer.attach_text(&mut app.rt_mut().text.atlas);
     let (wp, hp) = ((size.0 * scale).round() as u32, (size.1 * scale).round() as u32);
@@ -216,7 +218,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let overlay = (args.keys.is_some() || args.pointer).then(|| {
         let mut ov = crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer);
         ov.set_srgb_blend(srgb_blend);
-        let mut ui = Renderer::new(&gpu.device, target_format);
+        let mut ui = Renderer::try_new(&gpu.device, target_format).unwrap_or_else(|e| die(&e));
         ui.set_srgb_blend(srgb_blend);
         (ov, ui)
     });

@@ -207,7 +207,11 @@ pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u3
         *lost.borrow_mut() = Some(if is_gl { Loss::WebGl(why) } else { Loss::WebGpu(why) });
         watch_proxy.send_event(Wake::App).ok();
     });
-    let mut renderer = Renderer::new(&gpu.device, format);
+    let mut renderer = Renderer::try_new(&gpu.device, format)?;
+    let check_proxy = proxy.clone();
+    renderer.set_uber_check_wake(std::sync::Arc::new(move || {
+        check_proxy.send_event(Wake::App).ok();
+    }));
     renderer.set_srgb_blend(!format.is_srgb());
     renderer.attach_text(&mut rt.text.atlas);
     // Re-upload every placed glyph row and outline record on a fresh renderer (for example after

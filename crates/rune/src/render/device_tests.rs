@@ -444,3 +444,201 @@ fn window_redirection_bitmap_omitted_on_plain_hwnd_fallback() {
     assert!(!needs_no_redirection_bitmap(false, Presentation::DirectComposition));
     assert!(!needs_no_redirection_bitmap(false, Presentation::PlainHwnd));
 }
+
+/// Real offscreen multi-adapter fallback test: when the first hardware adapter(s) reject Rune's
+/// last-resort Classic shader, the chain moves on across remaining hardware adapters before
+/// software rendering (WARP / CPU), and the fallback adapter builds a working renderer.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rejected_classic_shader_falls_back_across_real_adapters_hardware_before_software() {
+    use crate::gpu::fallback::{Policy, Presentation, PresentationPolicy};
+    use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
+
+    let instance = Gpu::instance();
+    let available = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+    if available.len() < 2 {
+        return eprintln!("skipped: machine exposes fewer than two adapters ({})", available.len());
+    }
+    let has_cpu = available.iter().any(|a| a.get_info().device_type == wgpu::DeviceType::Cpu);
+
+    let mut tried = Vec::new();
+    let mut surfaces_made = 0usize;
+    let res = Gpu::try_setup_on(
+        instance,
+        (),
+        Some(Policy::Automatic),
+        Presentation::DirectComposition,
+        PresentationPolicy::Automatic,
+        wgpu::Features::empty(),
+        false,
+        |_, _| {
+            surfaces_made += 1;
+            Ok(())
+        },
+        |_| unreachable!("shader rejection must not switch DX12 presentation"),
+        |_| None,
+        |gpu, _| {
+            let info = gpu.adapter.get_info();
+            tried.push((info.name.clone(), info.device_type));
+            let refuse = if has_cpu {
+                info.device_type != wgpu::DeviceType::Cpu
+            } else {
+                tried.len() == 1
+            };
+            shader_check::with_uber_shaders_refused(refuse, || {
+                Renderer::try_new_classified(&gpu.device, OFFSCREEN_FORMAT)
+                    .map_err(SurfaceSetupError::from_shader)
+            })
+        },
+    );
+    let (gpu, (), renderer) = res.expect("fallback chain must reach an adapter whose shader compiles");
+    assert_eq!(renderer.format(), OFFSCREEN_FORMAT);
+    assert!(tried.len() >= 2, "expected at least one fallback attempt, tried: {tried:?}");
+    assert!(surfaces_made >= 1, "a fresh surface must be created after a shader rejection");
+    if has_cpu {
+        assert_eq!(gpu.adapter.get_info().device_type, wgpu::DeviceType::Cpu);
+        let first_cpu = tried.iter().position(|(_, kind)| *kind == wgpu::DeviceType::Cpu).unwrap();
+        assert_eq!(first_cpu, tried.len() - 1, "software adapter must be tried last: {tried:?}");
+    }
+}
+
+/// A named (`Policy::Pinned`) adapter that rejects the last-resort shader is never replaced: its
+/// failure goes straight to the error without enumerating other adapters.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pinned_adapter_rejected_shader_is_not_replaced() {
+    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
+    use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
+
+    let mut tried = 0usize;
+    let mut extra_surfaces = 0usize;
+    let err = Gpu::try_setup_on(
+        Gpu::instance(),
+        (),
+        Some(Policy::Pinned),
+        Presentation::DirectComposition,
+        PresentationPolicy::Automatic,
+        wgpu::Features::empty(),
+        false,
+        |_, _| {
+            extra_surfaces += 1;
+            Ok(())
+        },
+        |_| unreachable!("pinned shader rejection must not switch DX12 presentation"),
+        |_| None,
+        |gpu, _| {
+            tried += 1;
+            shader_check::with_uber_shaders_refused(true, || {
+                Renderer::try_new_classified(&gpu.device, OFFSCREEN_FORMAT)
+                    .map_err(SurfaceSetupError::from_shader)
+            })
+        },
+    )
+    .err()
+    .expect("pinned adapter shader rejection must fail");
+    assert_eq!(err.kind, Failure::ShaderRejected);
+    assert!(err.message.contains("rejected Rune's shader"), "got: {}", err.message);
+    assert_eq!(tried, 1, "a pinned adapter must never fall back to another adapter");
+    assert_eq!(extra_surfaces, 0);
+}
+
+/// When every adapter rejects the last-resort shader, the chain returns the first error so
+/// `Host::create` records `AppHandle::window_error` and ends `App::try_run` with the error.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn exhausting_every_adapter_on_rejected_shader_reaches_window_error_and_try_run() {
+    use crate::gpu::fallback::{Failure, Policy, Presentation, PresentationPolicy};
+    use crate::window::{Life, finish_run};
+    use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
+
+    let mut tried = 0usize;
+    let err = Gpu::try_setup_on(
+        Gpu::instance(),
+        (),
+        Some(Policy::Automatic),
+        Presentation::DirectComposition,
+        PresentationPolicy::Automatic,
+        wgpu::Features::empty(),
+        false,
+        |_, _| Ok(()),
+        |_| unreachable!("shader rejection must not switch DX12 presentation"),
+        |_| None,
+        |gpu, _| {
+            tried += 1;
+            shader_check::with_uber_shaders_refused(true, || {
+                Renderer::try_new_classified(&gpu.device, OFFSCREEN_FORMAT)
+                    .map_err(SurfaceSetupError::from_shader)
+            })
+        },
+    )
+    .err()
+    .expect("all adapters rejected the shader");
+    assert!(tried >= 1);
+    assert_eq!(err.kind, Failure::ShaderRejected);
+    assert!(err.message.contains("rejected Rune's shader"), "got: {}", err.message);
+
+    // Mirror Host::finish_create -> Life::fail_create -> finish_run (App::try_run).
+    let app = crate::App::new(crate::AppSpec::new("test", (40.0, 30.0), || (), |_, _| crate::el()));
+    let handle = app.handle();
+    let (_, _, shared, _) = app.into_parts(None);
+    shared.core.set_window_error(Some(err.message.clone()));
+    assert_eq!(handle.window_error().as_deref(), Some(err.message.as_str()));
+
+    let mut life = Life::Unopened;
+    assert!(life.fail_create(false, false), "first window failure ends try_run");
+    let startup_error = format!("could not create the window main: {}", err.message);
+    let run_result = finish_run(Ok(()), None, Some(startup_error.clone()));
+    assert_eq!(run_result, Err(startup_error));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+#[ignore]
+fn headless_run_rejected_shader_child() {
+    use super::super::shader_check;
+    let _turn = crate::tooling::headless_run::test_turn();
+    let path = std::env::var("RUNE_TEST_HEADLESS_SNAP").expect("snap path env");
+    let _ = shader_check::with_uber_shaders_refused(true, || {
+        crate::tooling::try_run_windows_with_args(
+            crate::RunOptions::default(),
+            ["--snap".into(), path],
+            |_| [crate::WindowSpec::from_app("main", crate::App::new(crate::AppSpec::new("test", (40.0, 30.0), || (), |_, _| crate::el())))],
+        )
+    });
+}
+
+/// A headless run whose every adapter rejects the last-resort shader exits non-zero with the
+/// shader error on stderr instead of writing a blank image or panicking.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn headless_run_exits_nonzero_when_every_adapter_rejects_classic_shader() {
+    let exe = std::env::current_exe().expect("test binary path");
+    let snap = std::env::temp_dir().join(format!(
+        "rune-rejected-shader-headless-{}.png",
+        std::process::id(),
+    ));
+    let _ = std::fs::remove_file(&snap);
+    let output = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "render::device::tests::headless_run_rejected_shader_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env("RUNE_TEST_HEADLESS_SNAP", &snap)
+        .output()
+        .expect("spawn headless child test");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success() && output.status.code() == Some(2),
+        "headless run must exit non-zero (die = 2) on rejected shader, got {:?}, stderr:
+{stderr}",
+        output.status.code(),
+    );
+    assert!(
+        stderr.contains("rejected Rune's shader"),
+        "expected shader error on stderr, got:
+{stderr}",
+    );
+    assert!(!snap.exists(), "failed headless run must not write a snap image");
+}

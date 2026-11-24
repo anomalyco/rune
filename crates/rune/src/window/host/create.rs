@@ -165,7 +165,7 @@ impl Host {
         // one under a compositor that draws the decorations itself keeps the surface it always had.
         let client_frame = self.client_frame(&window);
         let make_surface = |instance: &wgpu::Instance, _| instance.create_surface(window.clone()).map_err(|e| e.to_string());
-        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>| -> Result<_, SurfaceSetupError> {
+        let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, prewarmed: Option<Renderer>| -> Result<_, SurfaceSetupError> {
             let initial = drawable_size(None, (phys.width, phys.height), max_surface_dim(Some(gpu)));
             let (mut config, translucent) = surface_config(surface, &gpu.adapter, initial, srgb_blend)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
@@ -179,12 +179,24 @@ impl Host {
             // fallback chain moves on to the next adapter.
             configure_checked(surface, gpu, &config)
                 .map_err(|error| SurfaceSetupError::from_configure("the window's GPU surface refused its configuration", error))?;
+            crate::marks::mark("gpu.surface");
+            let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
+            crate::marks::mark("renderer.begin");
+            let mut renderer = match prewarmed {
+                Some(mut renderer) => {
+                    renderer.try_set_format(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?;
+                    renderer
+                }
+                None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
+            };
+            crate::marks::note("uber", renderer.uber_shader());
+            crate::marks::mark("renderer.ready");
+            renderer.set_srgb_blend(srgb_blend);
             #[cfg(target_os = "macos")]
-            return Ok((config, launch_drawables));
+            return Ok((config, launch_drawables, renderer));
             #[cfg(not(target_os = "macos"))]
-            Ok(config)
+            Ok((config, renderer))
         };
-        let mut prewarmed = None;
         let (wanted_pres, pres_policy) = Gpu::dx12_presentation();
         // A device that died while this window was closed, or uses a presentation mode that was
         // since switched to plain HWND, draws nothing: release it and any compositor resources on
@@ -194,7 +206,7 @@ impl Host {
             self.gpu = None;
             self.app.release_compositor_gpu();
         }
-        let (new_gpu, surface, configured) = match self.gpu.take() {
+        let (gpu, surface, configured) = match self.gpu.take() {
             Some((gpu, renderer)) => {
                 let surface = match make_surface(&gpu.instance, gpu.presentation()) {
                     Ok(surface) => surface,
@@ -204,53 +216,48 @@ impl Host {
                         return Err(error);
                     }
                 };
-                match setup_surface(&gpu, &surface) {
-                    Ok(configured) => {
-                        self.gpu = Some((gpu, renderer));
-                        (None, surface, configured)
-                    }
+                match setup_surface(&gpu, &surface, Some(renderer)) {
+                    Ok(configured) => (gpu, surface, configured),
                     Err(err) => {
                         use crate::gpu::fallback::Action;
                         match crate::gpu::fallback::decide_with_presentation(Gpu::env_fallback_policy(), gpu.presentation(), pres_policy, err.kind) {
                             Action::Stop => {
+                                drop((surface, gpu));
+                                self.app.release_compositor_gpu();
                                 if err.kind == crate::gpu::fallback::Failure::DeviceLost {
-                                    drop((surface, renderer, gpu));
-                                    self.app.release_compositor_gpu();
                                     *self.gpu_pool.borrow_mut() = Weak::default();
-                                } else {
-                                    self.gpu = Some((gpu, renderer));
                                 }
                                 return Err(err.message);
                             }
                             Action::SwitchToHwnd => {
-                                drop((surface, renderer, gpu));
+                                drop((surface, gpu));
                                 self.app.release_compositor_gpu();
                                 *self.gpu_pool.borrow_mut() = Weak::default();
                                 let _ = Gpu::switch_to_hwnd_instance(features, &err.message);
-                                let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
+                                let (gpu, surface, configured) = Gpu::for_surface_setup(
                                     features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
                                 ).map_err(|e| e.message)?;
-                                prewarmed = renderer;
                                 let gpu = Arc::new(gpu);
                                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                                 crate::render::surface_gpu(&gpu);
-                                (Some(gpu), surface, configured)
+                                (gpu, surface, configured)
                             }
                             Action::MoveOn => {
                                 let instance = gpu.instance.clone();
                                 let gpu_pres = gpu.presentation();
                                 let first_info = gpu.adapter.get_info();
                                 let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
-                                drop((surface, renderer, gpu));
+                                drop((surface, gpu));
                                 self.app.release_compositor_gpu();
                                 *self.gpu_pool.borrow_mut() = Weak::default();
                                 let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
-                                    instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
+                                    instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.kind, err.message, features, transparent, make_surface,
+                                    |gpu, surface| setup_surface(gpu, surface, None),
                                 ).map_err(|e| e.message)?;
                                 let gpu = Arc::new(gpu);
                                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                                 crate::render::surface_gpu(&gpu);
-                                (Some(gpu), surface, configured)
+                                (gpu, surface, configured)
                             }
                         }
                     }
@@ -262,8 +269,8 @@ impl Host {
                     let surface = gpu.instance.create_surface(window.clone()).ok()?;
                     crate::render::translucency::serves(&gpu, &surface, features, transparent).then_some((gpu, surface))
                 });
-                let (gpu, surface, configured) = if let Some((gpu, surface)) = cached {
-                    match setup_surface(&gpu, &surface) {
+                if let Some((gpu, surface)) = cached {
+                    match setup_surface(&gpu, &surface, None) {
                         Ok(configured) => (gpu, surface, configured),
                         Err(err) => {
                             use crate::gpu::fallback::Action;
@@ -278,10 +285,9 @@ impl Host {
                                     drop((surface, gpu));
                                     *self.gpu_pool.borrow_mut() = Weak::default();
                                     let _ = Gpu::switch_to_hwnd_instance(features, &err.message);
-                                    let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
+                                    let (gpu, surface, configured) = Gpu::for_surface_setup(
                                         features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
                                     ).map_err(|e| e.message)?;
-                                    prewarmed = renderer;
                                     let gpu = Arc::new(gpu);
                                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                                     crate::render::surface_gpu(&gpu);
@@ -295,7 +301,8 @@ impl Host {
                                     drop((surface, gpu));
                                     *self.gpu_pool.borrow_mut() = Weak::default();
                                     let (gpu, surface, configured) = Gpu::for_surface_setup_excluding(
-                                        instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.message, features, transparent, make_surface, setup_surface,
+                                        instance, gpu_pres, PresentationFallback::Allow, excluded, first_info, err.kind, err.message, features, transparent, make_surface,
+                                        |gpu, surface| setup_surface(gpu, surface, None),
                                     ).map_err(|e| e.message)?;
                                     let gpu = Arc::new(gpu);
                                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
@@ -306,23 +313,20 @@ impl Host {
                         }
                     }
                 } else {
-                    let (gpu, surface, renderer, configured) = Gpu::for_surface_setup(
+                    let (gpu, surface, configured) = Gpu::for_surface_setup(
                         features, transparent, PresentationFallback::Allow, make_surface, setup_surface,
                     ).map_err(|e| e.message)?;
-                    prewarmed = renderer;
                     let gpu = Arc::new(gpu);
                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                     crate::render::surface_gpu(&gpu);
                     (gpu, surface, configured)
-                };
-                (Some(gpu), surface, configured)
+                }
             }
         };
         #[cfg(target_os = "macos")]
-        let (config, launch_drawables) = configured;
+        let (config, launch_drawables, renderer) = configured;
         #[cfg(not(target_os = "macos"))]
-        let config = configured;
-        crate::marks::mark("gpu.surface");
+        let (config, renderer) = configured;
         if transparent {
             if config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
                 eprintln!("transparency unavailable for {}; using an opaque window", self.native_handle.key());
@@ -330,14 +334,7 @@ impl Host {
             self.app.rt_mut().transparent = config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
         }
         let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
-        if let Some(gpu) = new_gpu {
-            crate::marks::mark("renderer.begin");
-            let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
-            crate::marks::note("uber", renderer.uber_shader());
-            crate::marks::mark("renderer.ready");
-            renderer.set_srgb_blend(srgb_blend);
-            self.gpu = Some((gpu, renderer));
-        }
+        self.gpu = Some((gpu, renderer));
         let (gpu, renderer) = self.gpu.as_mut().unwrap();
         rebuild_renderer_core(&gpu.device, renderer, target_format, self.app.rt_mut());
         #[cfg(target_os = "macos")]
@@ -578,7 +575,7 @@ impl Host {
         let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
         let srgb_blend = self.app.rt().srgb_blend();
         let client_frame = self.client_frame(&window);
-        let (gpu, surface, prewarmed, config) = Gpu::for_surface_setup(
+        let (gpu, surface, (config, mut renderer)) = Gpu::for_surface_setup(
             features,
             transparent,
             PresentationFallback::Allow,
@@ -594,7 +591,7 @@ impl Host {
                 let _ = presentation;
                 instance.create_surface(window.clone()).map_err(|e| e.to_string())
             },
-            |gpu, surface| {
+            |gpu, surface, prewarmed| {
                 let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
                 let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend)
                     .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
@@ -603,15 +600,22 @@ impl Host {
                 }
                 configure_checked(surface, gpu, &config)
                     .map_err(|error| SurfaceSetupError::from_configure("the new GPU surface refused its configuration", error))?;
-                Ok(config)
+                let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
+                let mut renderer = match prewarmed {
+                    Some(mut renderer) => {
+                        renderer.try_set_format(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?;
+                        renderer
+                    }
+                    None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
+                };
+                renderer.set_srgb_blend(srgb_blend);
+                Ok((config, renderer))
             },
         ).map_err(|e| e.message)?;
         let gpu = Arc::new(gpu);
         // A surface that fell back to opaque draws an opaque window, as the first one did.
         self.app.rt_mut().transparent = transparent && config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
         let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
-        let mut renderer = prewarmed.unwrap_or_else(|| Renderer::new(&gpu.device, target_format));
-        renderer.set_srgb_blend(srgb_blend);
         rebuild_renderer_core(&gpu.device, &mut renderer, target_format, self.app.rt_mut());
         let alpha = alpha_pass(&gpu, transparent, &config, target_format);
         #[cfg(target_os = "macos")]

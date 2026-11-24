@@ -37,10 +37,11 @@ fn decide_table_covers_every_policy_and_failure() {
     use Policy::*;
 
     let cases = [
-        // Automatic selection: persistent adapter/surface incompatibilities move on.
+        // Automatic selection: persistent adapter/surface/shader incompatibilities move on.
         (Automatic, DeviceCreate, MoveOn),
         (Automatic, SurfaceUnsupported, MoveOn),
         (Automatic, SurfaceRefused, MoveOn),
+        (Automatic, ShaderRejected, MoveOn),
         // Automatic selection: system-wide DComp absence, transient failures, and native surface
         // creation errors do not move on to another adapter.
         (Automatic, DirectCompositionUnavailable, Stop),
@@ -52,6 +53,7 @@ fn decide_table_covers_every_policy_and_failure() {
         (Pinned, SurfaceUnsupported, Stop),
         (Pinned, SurfaceRefused, Stop),
         (Pinned, DirectCompositionUnavailable, Stop),
+        (Pinned, ShaderRejected, Stop),
         (Pinned, OutOfMemory, Stop),
         (Pinned, DeviceLost, Stop),
         (Pinned, SurfaceCreate, Stop),
@@ -100,6 +102,39 @@ fn refused_surface_walks_fallbacks_until_one_succeeds() {
 }
 
 #[test]
+fn rejected_shader_walks_fallbacks_and_exhaustion_returns_first_error() {
+    let mut state = State::first(Policy::Automatic);
+    assert_eq!(
+        step(&mut state, Event::Failed { kind: Failure::ShaderRejected, error: "classic shader rejected".into() }),
+        Effects::one(Effect::EnumerateFallbacks),
+    );
+    assert_eq!(state.first_error(), Some("classic shader rejected"));
+    assert_eq!(
+        step(&mut state, Event::Candidates(vec![2, 1])),
+        Effects::one(Effect::TryCandidate(2)),
+    );
+    assert_eq!(
+        step(&mut state, Event::Failed { kind: Failure::ShaderRejected, error: "second rejected".into() }),
+        Effects::one(Effect::TryCandidate(1)),
+    );
+    assert_eq!(
+        step(&mut state, Event::Succeeded),
+        Effects::one(Effect::FinishOk { fell_back: true }),
+    );
+    assert_eq!(state, State::Done);
+
+    // Exhausting every adapter on ShaderRejected returns the first adapter's error.
+    let mut exhausted = State::first(Policy::Automatic);
+    step(&mut exhausted, Event::Failed { kind: Failure::ShaderRejected, error: "gpu0 rejected".into() });
+    step(&mut exhausted, Event::Candidates(vec![1]));
+    assert_eq!(
+        step(&mut exhausted, Event::Failed { kind: Failure::ShaderRejected, error: "warp rejected".into() }),
+        Effects::one(Effect::FinishErr("gpu0 rejected".into())),
+    );
+    assert_eq!(exhausted, State::Exhausted { error: "gpu0 rejected".into() });
+}
+
+#[test]
 fn exhausting_all_fallbacks_returns_the_first_error() {
     let mut state = State::first(Policy::Automatic);
     assert_eq!(
@@ -136,6 +171,7 @@ fn transient_and_pinned_failures_never_enumerate_fallbacks() {
         (Policy::Pinned, Failure::DeviceCreate),
         (Policy::Pinned, Failure::SurfaceUnsupported),
         (Policy::Pinned, Failure::SurfaceRefused),
+        (Policy::Pinned, Failure::ShaderRejected),
     ] {
         let mut state = State::first(policy);
         assert_eq!(
@@ -256,7 +292,7 @@ fn initial_presentation_table_covers_env_and_latch() {
 }
 
 /// Complete decision table over every (adapter policy, presentation mode, presentation policy,
-/// failure reason) combination — 56 rows.
+/// failure reason) combination — 64 rows.
 #[test]
 fn decide_with_presentation_table_covers_all_combinations() {
     use Action::*;
@@ -271,6 +307,7 @@ fn decide_with_presentation_table_covers_all_combinations() {
         SurfaceUnsupported,
         SurfaceRefused,
         DirectCompositionUnavailable,
+        ShaderRejected,
         OutOfMemory,
         DeviceLost,
         SurfaceCreate,
@@ -288,10 +325,12 @@ fn decide_with_presentation_table_covers_all_combinations() {
                                 Stop
                             }
                         },
-                        DeviceCreate | SurfaceUnsupported | SurfaceRefused => match policy {
-                            Policy::Automatic => MoveOn,
-                            Policy::Pinned => Stop,
-                        },
+                        DeviceCreate | SurfaceUnsupported | SurfaceRefused | ShaderRejected => {
+                            match policy {
+                                Policy::Automatic => MoveOn,
+                                Policy::Pinned => Stop,
+                            }
+                        }
                         OutOfMemory | DeviceLost | SurfaceCreate => Stop,
                     };
                     assert_eq!(
@@ -304,7 +343,7 @@ fn decide_with_presentation_table_covers_all_combinations() {
             }
         }
     }
-    assert_eq!(checked, 56);
+    assert_eq!(checked, 64);
 }
 
 #[test]

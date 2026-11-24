@@ -147,7 +147,7 @@ pub(crate) fn park(gpu: Gpu, mut renderer: Renderer, linger: Duration) {
 fn make(features: wgpu::Features) -> Option<Warmed> {
     super::gpu_events::starting();
     let gpu = Gpu::try_for_display(Gpu::instance_for(features), features).ok()?;
-    let renderer = Renderer::new_warm(&gpu.device, FORMAT);
+    let renderer = Renderer::try_new_warm(&gpu.device, FORMAT).ok()?;
     let target = super::Offscreen::with_format(&gpu.device, 8, 8, FORMAT);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
