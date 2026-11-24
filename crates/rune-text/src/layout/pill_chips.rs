@@ -61,6 +61,38 @@ pub fn pill_chips(
     out: &mut Vec<PaintedDeco>,
     icons: &mut Vec<(&'static Icon, u32, [f32; 2], Option<Color>)>,
 ) {
+    pill_chips_into(layout, pills, size, scale, origin, bg, out, icons, None);
+}
+
+/// `pill_chips` also collecting any leading full-colour Pixels images alongside monochrome icons.
+#[allow(clippy::too_many_arguments)]
+#[doc(hidden)]
+pub fn pill_chips_with_images(
+    layout: &Layout<Ink>,
+    pills: &[PillChip],
+    size: f32,
+    scale: f32,
+    origin: [f32; 2],
+    bg: Color,
+    out: &mut Vec<PaintedDeco>,
+    icons: &mut Vec<(&'static Icon, u32, [f32; 2], Option<Color>)>,
+    images: &mut Vec<(rune_image::pixels::Pixels, f32, [f32; 2])>,
+) {
+    pill_chips_into(layout, pills, size, scale, origin, bg, out, icons, Some(images));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pill_chips_into(
+    layout: &Layout<Ink>,
+    pills: &[PillChip],
+    size: f32,
+    scale: f32,
+    origin: [f32; 2],
+    bg: Color,
+    out: &mut Vec<PaintedDeco>,
+    icons: &mut Vec<(&'static Icon, u32, [f32; 2], Option<Color>)>,
+    mut images: Option<&mut Vec<(rune_image::pixels::Pixels, f32, [f32; 2])>>,
+) {
     if pills.is_empty() {
         return;
     }
@@ -103,6 +135,9 @@ pub fn pill_chips(
             }
             let margin = pm.margin * scale;
             let pad = pm.pad * scale;
+            let radius_pt = pill.radius.map_or(5.0, |r| if r.is_finite() && r > 0.0 { r } else { 0.0 });
+            let ring = pill.ring.and_then(|(c, w)| (w > 0.0 && w.is_finite()).then_some((c, w * scale)));
+            let byte = text.end.min(pill.end as usize).saturating_sub(1) as u32;
             let Some(lead) = lead else {
                 // A label carried on from the line above: its chip runs from the line's start,
                 // flush with the label (no room was made before it), to its trail, or on to the
@@ -116,7 +151,8 @@ pub fn pill_chips(
                 let (top, bot) = ((base - asc - 1.0 * scale).round(), (base + desc + 1.0 * scale).round());
                 let x0 = gr_x0.min(m.inline_min_coord + m.offset);
                 let rect = [(origin[0] + x0).round(), top, (x1 - x0).max(0.0).round(), bot - top];
-                out.push(PaintedDeco::new(Deco { rect, color: pill.bg.unwrap_or(bg), radius: (5.0 * scale).min(rect[3] * 0.5) }, None, 0));
+                let radius = (radius_pt * scale).min(rect[2].min(rect[3]) * 0.5);
+                out.push(PaintedDeco::new(Deco { rect, color: pill.bg.unwrap_or(bg), radius }, ring, byte));
                 continue;
             };
             let rtl_lead = gr_x0 <= gr_x1 && (lead.x - gr_x1).abs() < 1.0;
@@ -149,11 +185,19 @@ pub fn pill_chips(
             let top = (base - asc - 1.0 * scale).round();
             let bot = (base + desc + 1.0 * scale).round();
             let rect = [(origin[0] + x0).round(), top, (x1 - x0).max(0.0).round(), bot - top];
-            out.push(PaintedDeco::new(Deco { rect, color: pill.bg.unwrap_or(bg), radius: (5.0 * scale).min(rect[3] * 0.5) }, None, 0));
-            if let Some(icon) = pill.icon {
+            let radius = (radius_pt * scale).min(rect[2].min(rect[3]) * 0.5);
+            out.push(PaintedDeco::new(Deco { rect, color: pill.bg.unwrap_or(bg), radius }, ring, byte));
+            if pill.has_lead_visual() {
                 let px = (pm.icon * scale).round().max(1.0);
                 let ix = if rtl_lead { rect[0] + rect[2] - pm.pad * scale - px } else { rect[0] + pm.pad * scale };
-                icons.push((icon, px as u32, [ix.round(), ((top + bot - px) * 0.5).round()], pill.fg));
+                let at = [ix.round(), ((top + bot - px) * 0.5).round()];
+                if let Some(pixels) = &pill.image {
+                    if let Some(images) = images.as_deref_mut() {
+                        images.push((pixels.clone(), px, at));
+                    }
+                } else if let Some(icon) = pill.icon {
+                    icons.push((icon, px as u32, at, pill.fg));
+                }
             }
         }
     }

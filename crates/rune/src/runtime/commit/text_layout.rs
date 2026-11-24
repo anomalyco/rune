@@ -194,6 +194,14 @@ impl Elision {
             (start < end).then(|| crate::text::TextHighlight { start: start as u32, end: end as u32, ..h.clone() })
         }).collect()
     }
+
+    /// `line_fills` moved onto the drawn string.
+    pub(in crate::runtime) fn line_fills(self, fills: &[crate::el::LineFill]) -> Vec<crate::el::LineFill> {
+        fills.iter().filter_map(|&f| {
+            let (start, end) = self.mark(f.start as usize, f.end as usize, false);
+            (start < end).then_some(crate::el::LineFill { start: start as u32, end: end as u32, ..f })
+        }).collect()
+    }
 }
 
 fn spec_elide_keys(spec: &TextSpec, scale: f32, mode: u8, param: usize, max_w: f32, align: parley::Alignment) -> Option<(u64, u64)> {

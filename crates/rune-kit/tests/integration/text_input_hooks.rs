@@ -515,3 +515,46 @@ fn text_field_on_submit_fires_on_return_and_skips_when_disabled() {
     rt.frame(0.0);
     assert_eq!(rt.state.submitted, ["single", "multi"]);
 }
+
+#[test]
+fn text_area_forwards_pill_image_and_line_fills() {
+    let logo = rune::Pixels::new();
+    logo.set(8, 8, vec![255; 8 * 8 * 4]);
+    let mut edit = TextEdit::new("check ").rich();
+    edit.insert_pill("app:gmail", "@Gmail");
+    edit.insert("\n```\nlet x = 1;\n```");
+    let code_start = edit.text.find("```").unwrap();
+    let code_end = edit.text.len();
+
+    let mut rt = Runtime::new(
+        (edit, logo, code_start, code_end),
+        |(edit, logo, cs, ce): &(TextEdit, rune::Pixels, usize, usize), _: &mut Cx<_>| {
+            let k = Kit::neutral(true);
+            let px = logo.clone();
+            col().padding(8.0).child(
+                TextArea::new(edit)
+                    .width(Some(280.0))
+                    .pill_style(|_| {
+                        rune::PillStyle::new()
+                            .ring(rune::Color { r: 0.2, g: 0.5, b: 0.9, a: 1.0 }, 1.0)
+                            .radius(999.0)
+                    })
+                    .pill_image(move |id| (id == "app:gmail").then(|| px.clone()))
+                    .line_fill(rune::LineFill::new(*cs, *ce).bg(rune::Color { r: 0.2, g: 0.3, b: 0.5, a: 1.0 }))
+                    .build(&k)
+                    .key("ta"),
+            )
+        },
+        (320.0, 160.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    assert!(rt.instances.iter().any(|q| q.params[1] == rune::render::KIND_IMAGE));
+    assert!(rt.instances.iter().any(|q| q.params[1] == rune::render::KIND_RECT && q.params[0] > 0.5 && q.border[3] > 0.5));
+    assert!(rt.instances.iter().any(|q| {
+        q.params[1] == rune::render::KIND_RECT
+            && (q.fill[0] - 0.2).abs() < 0.03
+            && (q.fill[1] - 0.3).abs() < 0.03
+            && (q.fill[2] - 0.5).abs() < 0.03
+    }));
+}

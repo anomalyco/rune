@@ -66,7 +66,7 @@ impl RuntimeCore {
         let mut dropped = self.images.clear();
         let has_tree_pixels = self.tree.nodes.iter().any(|n| {
             n.vis.cold.get().is_some_and(|v| v.pixels.is_some())
-                || n.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(|p| p.bare.as_ref().is_some_and(|b| b.image.is_some())))
+                || n.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image))
         });
         if has_tree_pixels {
             // Clear memos first so `Cold` / `SharedBox` refcounts drop to 1 before mutating in place.
@@ -77,11 +77,12 @@ impl RuntimeCore {
                 {
                     vis.pixels = None;
                 }
-                if node.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(|p| p.bare.as_ref().is_some_and(|b| b.image.is_some())))
+                if node.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image))
                     && let Some(text) = node.text.as_mut()
                     && let Some(cold) = text.cold.get_mut_if_some()
                 {
                     for pill in &mut cold.pills {
+                        pill.image = None;
                         if let Some(bare) = pill.bare.as_mut() {
                             bare.image = None;
                         }

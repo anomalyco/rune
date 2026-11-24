@@ -606,6 +606,74 @@ impl<'a> TextFlow<'a> {
         (lo <= hi).then_some((lo, hi))
     }
 
+    /// Contiguous vertical extent `(top, bottom)` in device px of all visual lines intersecting
+    /// content bytes `start..end`, or `None` when no line intersects it.
+    #[doc(hidden)]
+    pub fn line_span(self, start: usize, end: usize, line_px: f32) -> Option<(f32, f32)> {
+        if start >= end {
+            return None;
+        }
+        let line_bounds = |line: &parley::Line<'_, Ink>| {
+            let m = line.metrics();
+            let bot = if m.block_max_coord > m.block_min_coord {
+                m.block_max_coord
+            } else {
+                m.block_min_coord + line_px
+            };
+            (m.block_min_coord, bot)
+        };
+        match self {
+            TextFlow::Single(layout) => {
+                let mut span: Option<(f32, f32)> = None;
+                for line in layout.lines() {
+                    let r = line.text_range();
+                    if r.start < end && start < r.end {
+                        let (t, b) = line_bounds(&line);
+                        span = Some(match span {
+                            Some((lo, hi)) => (lo.min(t), hi.max(b)),
+                            None => (t, b),
+                        });
+                    }
+                }
+                span
+            }
+            TextFlow::Paragraphs(pl) => {
+                let lo = pl.paragraphs.partition_point(|q| q.end < start || (q.end == start && q.start < q.end));
+                let hi = pl.paragraphs.partition_point(|q| q.start < end);
+                if lo >= hi {
+                    return None;
+                }
+                let para_span = |k: usize, q: &Paragraph| -> (f32, f32) {
+                    if !q.shaped || q.start == q.end {
+                        return (q.y, q.y + q.height);
+                    }
+                    let piece = Piece::of_paragraph(k, q, pl.disjoint_spans);
+                    let Some((sa, sb)) = piece.clip(start, end) else {
+                        return (q.y, q.y + q.height);
+                    };
+                    let mut span: Option<(f32, f32)> = None;
+                    for line in piece.layout.lines() {
+                        let r = line.text_range();
+                        if r.start < sb && sa < r.end {
+                            let (t, b) = line_bounds(&line);
+                            span = Some(match span {
+                                Some((a, c)) => (a.min(t), c.max(b)),
+                                None => (t, b),
+                            });
+                        }
+                    }
+                    match span {
+                        Some((t, b)) => (q.y + t, q.y + b),
+                        None => (q.y, q.y + q.height),
+                    }
+                };
+                let (top, bot0) = para_span(lo, &pl.paragraphs[lo]);
+                let bot = if hi - 1 == lo { bot0 } else { para_span(hi - 1, &pl.paragraphs[hi - 1]).1 };
+                Some((top, bot.max(top)))
+            }
+        }
+    }
+
     /// Its lines top to bottom, each marked when a paragraph ends with it.
     #[doc(hidden)] pub fn block_lines(self, line_px: f32) -> Vec<BlockLine> {
         let mut out = Vec::new();

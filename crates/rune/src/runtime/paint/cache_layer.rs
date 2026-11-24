@@ -206,7 +206,7 @@ impl RuntimeCore {
                     // A publication or animation frame can replace texels without moving the
                     // atlas slot, so identical image primitives do not imply identical raster contents.
                     || n.vis.pixels.is_some()
-                    || n.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(|p| p.bare.as_ref().is_some_and(|b| b.image.is_some())))
+                    || n.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image))
                     || n.vis.surface.is_some()
                     || (n.material.is_some() && self.paint.native_materials)
                     // Never retain a raster of a secret, even when the field is unfocused.

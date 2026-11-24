@@ -227,7 +227,8 @@ impl timer_wake::FrameState {
             let text = node.text.as_ref().and_then(|t| t.cold.live.as_ref()).map(|t| &t.source);
             let pixels = node.vis.cold.get().and_then(|v| v.pixels.as_ref()).map(|p| &p.source);
             let has_live = node.cold.get().is_some_and(|c| !c.live.is_empty());
-            if !has_live && text.is_none() && pixels.is_none() {
+            let has_pill_pixels = node.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image));
+            if !has_live && text.is_none() && pixels.is_none() && !has_pill_pixels {
                 continue;
             }
             // An element removed outright leaves the scene now but `nodes` only at the next
@@ -235,7 +236,13 @@ impl timer_wake::FrameState {
             // pixels keep waking until the exit ends (commit already dropped their bindings).
             if !scene.contains(node.id) { continue; }
             sampled |= text.is_some() || has_live;
-            for source in node.live.iter().map(|b| &b.source).chain(text).chain(pixels) {
+            let pill_pixels = node
+                .text
+                .as_ref()
+                .into_iter()
+                .flat_map(|t| t.cold.pills.iter())
+                .filter_map(|p| p.image.as_ref().or_else(|| p.bare.as_deref().and_then(|b| b.image.as_ref())).map(|px| &px.source));
+            for source in node.live.iter().map(|b| &b.source).chain(text).chain(pixels).chain(pill_pixels) {
                 self.live_subscriptions
                     .entry(SourceKey(source.id()))
                     .and_modify(|sub| sub.active.store(true, Ordering::Release))

@@ -220,18 +220,30 @@ impl NodePrint {
             }
         };
         type TextPart = (&'static str, fn(&TextSpec) -> u64, Option<fn(&TextSpec) -> String>);
-        let parts: [TextPart; 7] = [
+        let parts: [TextPart; 8] = [
             ("text", |t| key(|h| t.cold.live.is_none().then_some(&t.content).hash(h)), Some(snippet)),
             ("text colour", |t| key(|h| rgba(t.color).hash(h)), Some(|t| colour(t.color))),
             ("text style", |t| key(|h| bits(&[t.style.size, t.style.weight]).hash(h)), Some(|t| format!("{:.1}pt weight {}", t.style.size, t.style.weight))),
             ("pills", |t| key(|h| for p in &t.cold.pills {
-                (p.start, p.end, p.icon.map(|i| i.name), p.bg, p.fg).hash(h);
+                (
+                    p.start,
+                    p.end,
+                    p.icon.map(|i| i.name),
+                    p.image.as_ref().map(crate::pixels::Pixels::signature),
+                    p.bg,
+                    p.fg,
+                    p.ring.map(|(c, w)| (c, w.to_bits())),
+                    p.radius.map(f32::to_bits),
+                ).hash(h);
                 p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits(), b.radius.to_bits(), b.image.as_ref().map(crate::pixels::Pixels::signature), b.replace.map(|r| bits(&[r.width, r.ascent, r.descent, r.bleed])))).hash(h);
             }), None),
             ("rings", |t| key(|h| for &(a, b, c, w) in &t.cold.rings { (a, b, c, w.to_bits()).hash(h) }), None),
             ("strikes", |t| key(|h| t.cold.strikes.hash(h)), None),
             ("highlights", |t| key(|h| for hl in &t.cold.highlights {
                 (hl.start, hl.end, hl.bg, hl.fg, hl.pad.to_bits(), &hl.key, hl.ring.map(|(c, w)| (c, w.to_bits()))).hash(h)
+            }), None),
+            ("line fills", |t| key(|h| for f in &t.cold.line_fills {
+                (f.start, f.end, f.bg, f.left_bar.map(|(w, c)| (w.to_bits(), c)), f.radius.to_bits()).hash(h)
             }), None),
         ];
         parts.iter().find(|(_, k, _)| k(a) != k(b)).map(|&(what, _, show)| Difference {

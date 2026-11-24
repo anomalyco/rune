@@ -96,6 +96,9 @@ impl TextSpec {
         for h in &mut cold.highlights {
             (h.start, h.end) = marked.range(h.start, h.end);
         }
+        for f in &mut cold.line_fills {
+            (f.start, f.end) = marked.range(f.start, f.end);
+        }
         for p in &mut cold.pills {
             (p.start, p.end) = marked.range(p.start, p.end);
         }

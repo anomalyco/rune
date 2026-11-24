@@ -106,6 +106,7 @@ fn paragraph(t: &TextSpec, k: usize, (a, b): (usize, usize), last: bool, e: &mut
         cold.rings = t.cold.rings.iter().filter_map(|&(s, e, c, w)| clip(s, e).map(|(s, e)| (s, e, c, w))).collect();
         cold.strikes = t.cold.strikes.iter().filter_map(|&(s, e, c)| clip(s, e).map(|(s, e)| (s, e, c))).collect();
         cold.highlights = t.cold.highlights.iter().filter_map(|h| clip(h.start, h.end).map(|(start, end)| crate::text::TextHighlight { start, end, ..h.clone() })).collect();
+        cold.line_fills = t.cold.line_fills.iter().filter_map(|f| clip(f.start, f.end).map(|(start, end)| crate::el::LineFill { start, end, ..*f })).collect();
         // A chip lies inside one line; one across a newline has no paragraph to sit in.
         cold.pills = t.cold.pills.iter().filter(|c| a32 <= c.start && c.end <= b32).map(|c| crate::text::PillChip { start: c.start - a32, end: c.end - a32, ..c.clone() }).collect();
         cold.blocks = t.cold.blocks.get(k).copied().into_iter().collect();
