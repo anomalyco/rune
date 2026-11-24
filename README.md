@@ -60,6 +60,7 @@ wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
 naga = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
 accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
 accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
+accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "<dev rev>" }
 ```
 
 Rune is pre-release. Pin a rev of `dev`; `dev` is never rewritten. Cargo does not inherit `[patch.crates-io]` from a dependency, so put those patches in your workspace root `Cargo.toml` at the same `rev`. When pinning or bumping `rev`, check Rune's [`Cargo.toml`](Cargo.toml) for the current `[patch.crates-io]` list and see [Depending on Rune](crates/rune/README.md#depending-on-rune) for details.

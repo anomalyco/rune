@@ -495,3 +495,89 @@ fn grid_counts_and_cell_indices_reach_accesskit_json_and_incremental_updates() {
     let (_, cell_node) = mirror.by_key("col-c").unwrap();
     assert_eq!((cell_node.row_index(), cell_node.column_index()), (Some(50_000), Some(3)));
 }
+
+#[test]
+fn flat_tree_levelled_items_carry_their_own_level_set_size_and_stay_flat() {
+    struct TreeState {
+        rows: Vec<(&'static str, u32, usize, usize)>,
+        treegrid: bool,
+    }
+    fn view(s: &TreeState, _: &mut Cx<TreeState>) -> El {
+        let tree = col().key("tree").role("tree").label("Food").children(
+            s.rows.iter().map(|&(key, level, pos, size)| {
+                crate::el().key(key).role("treeitem").label(key).focusable(true)
+                    .level(level).position_in_set(pos, size)
+                    .size(140.0, 20.0).child(text(key))
+            }),
+        );
+        // Unlevelled list: items must keep size_of_set on the container only.
+        let flat_list = col().key("plain-list").role("listbox").label("Colors")
+            .child(crate::el().key("red").role("option").label("Red").position_in_set(1, 2).size(100.0, 20.0))
+            .child(crate::el().key("blue").role("option").label("Blue").position_in_set(2, 2).size(100.0, 20.0));
+        // Levelled tree without explicit position_in_set: items take no size_of_set.
+        let uncounted = col().key("uncounted").role("tree").label("Outline")
+            .child(crate::el().key("u1").role("treeitem").label("One").level(1).size(100.0, 20.0));
+        // Levelled row whose container switches between grid and treegrid tests parent-role invalidation.
+        let grid = col().key("maybe-treegrid").role(if s.treegrid { "treegrid" } else { "grid" }).label("Grid")
+            .child(row().key("grow").role("row").label("Sub").level(2).position_in_set(1, 4).size(120.0, 20.0));
+        col().size(300.0, 400.0).child(tree).child(flat_list).child(uncounted).child(grid)
+    }
+
+    let mut rt = Runtime::new(
+        TreeState {
+            rows: vec![
+                ("fruits", 1, 1, 2),
+                ("apple", 2, 1, 3),
+                ("banana", 2, 2, 3),
+                ("cherry", 2, 3, 3),
+                ("vegetables", 1, 2, 2),
+            ],
+            treegrid: false,
+        },
+        view,
+        (300.0, 400.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let mut link = AccessibilityLink::new();
+    link.activate();
+    let mut mirror = AdapterMirror::default();
+    mirror.init(link.service(&mut rt, "Window").expect("initial tree"));
+
+    let json = rt.accessibility_json();
+    let tree = find_json(&json, "tree").unwrap();
+    assert_eq!(tree["setSize"], 2);
+    let direct_keys: Vec<&str> = tree["children"].as_array().unwrap().iter()
+        .filter_map(|c| c["key"].as_str()).collect();
+    assert_eq!(direct_keys, vec!["fruits", "apple", "banana", "cherry", "vegetables"],
+        "flat tree items must stay direct children of tree with no synthetic groups");
+    for (key, level, pos, size) in [
+        ("fruits", 1, 1, 2),
+        ("apple", 2, 1, 3),
+        ("banana", 2, 2, 3),
+        ("cherry", 2, 3, 3),
+        ("vegetables", 1, 2, 2),
+    ] {
+        let item = find_json(&json, key).unwrap();
+        assert_eq!((item["level"].as_u64(), item["position"].as_u64(), item["setSize"].as_u64()),
+            (Some(level), Some(pos), Some(size)), "{key}: {item}");
+        let (_, ak) = mirror.by_key(key).unwrap();
+        assert_eq!(ak.size_of_set(), Some(size as usize), "AccessKit node {key} carries its level set size");
+    }
+
+    // Unlevelled listbox and uncounted tree leave item size_of_set unset.
+    assert_eq!(find_json(&json, "plain-list").unwrap()["setSize"], 2);
+    assert!(find_json(&json, "red").unwrap()["setSize"].is_null());
+    assert!(find_json(&json, "u1").unwrap()["setSize"].is_null());
+
+    // Plain grid row is not an ordered-set item, so it carries no size_of_set until its container is a treegrid.
+    assert!(mirror.by_key("grow").unwrap().1.size_of_set().is_none());
+    rt.update(|s, _| {
+        s.treegrid = true;
+        s.rows[1] = ("apple", 2, 1, 5);
+    });
+    rt.frame(1.0 / 60.0);
+    mirror.apply(link.service(&mut rt, "Window").expect("treegrid and set size changed"));
+    assert_eq!(mirror.by_key("grow").unwrap().1.size_of_set(), Some(4));
+    assert_eq!(mirror.by_key("apple").unwrap().1.size_of_set(), Some(5));
+}
