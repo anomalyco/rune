@@ -1641,10 +1641,20 @@ A `ClipboardContent` is plain text plus, optionally, HTML and RTF. Copy formatte
 `tx.copy_rich(ClipboardContent::new("Ship it").with_html("<b>Ship</b> it").with_rtf(rtf))`;
 plain text is always written, so every app can paste it. `copy_secret` stays plain text only.
 
+Copying and cutting from a focused text field can be intercepted across both keyboard shortcuts
+(`Cmd/Ctrl+C`, `Cmd/Ctrl+X`) and the field's context menu with
+`.on_input_copy(|s, cut, tx| -> Option<ClipboardContent>)`: return `Some(content)` to write that
+`ClipboardContent` via `tx.copy_rich` (Cut still deletes the selection and records undo), or
+`None` to fall back to the default plain/rich copy. Secure fields and empty selections skip the
+hook.
+
 Pasting delivers the richest form the source offered. A field hears it before its editor with
 `.on_input_paste(|s, content, tx| -> bool)`: return true when the app took the paste (say, a
 rich composer parsing `content.html()` into its model), false to let the editor paste
-`content.text()` as before. The root's `.on_paste_content(|s, content, tx| ..)` is `on_paste`
+`content.text()` as before. `content.has_own_pills()` reports whether the read carries
+`<span data-pill="…">` HTML that this app itself wrote on its last copy (verified against the
+clipboard revision and plain-text fingerprint), so a paste hook can distinguish its own rich
+pill copies from another app's HTML. The root's `.on_paste_content(|s, content, tx| ..)` is `on_paste`
 with every form. `tx.read_clipboard(|s, content, tx| ..)` reads without pasting; it always
 answers, with empty content when there's nothing to read. A rich `TextEdit` copies and pastes
 HTML without a hook (see Rich text editing below). Plain fields without a hook and text `on_paste`
@@ -1757,10 +1767,12 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   (`.pill_style(|id| PillStyle::new().bg(..).fg(..).icon(..).ring(color, width).radius(points))`,
   `.pill_image(|id| ...)` for a full-colour `Pixels` logo in the leading slot, or `.pill_colors(bg, fg)`
   and `.pill_icon(|id| ...)`), and a chip never splits across lines (static text supports the same
-  `PillStyle` via `.pill(range, style)`, `.pills(..)` and `.pill_with_image(range, style, pixels)`). Copy writes the label as
-  plain text and `<span data-pill="id">label</span>` as HTML; pasting that into a rich field
-  of the same app restores the pill, while HTML from elsewhere never makes one (an
-  `on_input_paste` hook can call `insert_pill` itself).
+  `PillStyle` via `.pill(range, style)`, `.pills(..)` and `.pill_with_image(range, style, pixels)`). Copy (both keyboard and context menu) writes the label as
+  plain text by default — or each pill's payload when `.pill_copy_text(|id| -> Option<String>)`
+  is set (using `edit.selected_with_pills(..)`, falling back to the label on `None`) — and
+  `<span data-pill="id">label</span>` as HTML for rich fields; pasting that into a rich field
+  of the same app restores the pill via `has_own_pills()`, while HTML from elsewhere never makes
+  one (an `on_input_paste` hook can check `content.has_own_pills()` or call `insert_pill` itself).
 
   ```rust
   // `@que` typed before the caret becomes a file pill.

@@ -71,7 +71,21 @@ impl ClipboardContent {
         if let Some(html) = &mut self.html { *html = Wiped(sanitize_html(html)); }
         self
     }
-    pub(crate) fn has_own_pills(&self) -> bool { self.own_pills }
+    /// Whether this clipboard read carries `<span data-pill="…">` HTML that this app itself
+    /// wrote on its last copy, verified against the clipboard revision and plain-text
+    /// fingerprint. Returns `false` for HTML written by another application or after the
+    /// clipboard has changed, so an [`El::on_input_paste`](crate::El::on_input_paste) hook can
+    /// tell its own rich pill copy apart from external HTML.
+    ///
+    /// ```
+    /// # use rune::clipboard::ClipboardContent;
+    /// let external = ClipboardContent::new("@ada")
+    ///     .with_html(r#"<span data-pill="u:1">@ada</span>"#);
+    /// assert!(!external.has_own_pills());
+    /// ```
+    pub fn has_own_pills(&self) -> bool { self.own_pills }
+    /// Marks clipboard content as carrying this app's verified pill copy (used on wasm32).
+    pub(crate) fn mark_own_pills(&mut self) { self.own_pills = true; }
     /// Text, HTML and RTF only, for a rich text target: no image or files to decode or list.
     /// None when the image or files were all it had, so a paste of them alone changes nothing;
     /// genuinely empty text stays.

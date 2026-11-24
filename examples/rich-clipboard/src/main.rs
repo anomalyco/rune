@@ -52,6 +52,8 @@ struct State {
     revision: Option<u64>,
     /// Last hit-tested target and UTF-8 byte offset from `Tx::text_offset_at`.
     hit: Option<(&'static str, usize)>,
+    /// Last Copy/Cut observed by `El::on_input_copy`: `(cut, plain_payload)`.
+    last_copy: Option<(bool, String)>,
 }
 
 fn badge_pixels(bg: [u8; 4], fg: [u8; 4], stripe: [u8; 4]) -> Pixels {
@@ -93,6 +95,7 @@ impl Default for State {
             last: None,
             revision: clipboard::revision(),
             hit: None,
+            last_copy: None,
         }
     }
 }
@@ -105,6 +108,25 @@ impl State {
         edit.insert_pill("app:github", "@GitHub");
         edit.insert(" capsule chips.");
         self.field = edit;
+    }
+
+    fn pill_copy_scene(&mut self) {
+        let mut edit = TextEdit::new("Open ").rich().allow_color(true);
+        edit.insert_pill("app:gmail", "@Gmail");
+        edit.insert(" or ");
+        edit.insert_pill("app:github", "@GitHub");
+        edit.insert(" now.");
+        edit.focused = true;
+        edit.set_selection(0, edit.text.len());
+        self.field = edit;
+    }
+}
+
+fn service_pill_payload(id: &str) -> Option<String> {
+    match id {
+        "app:gmail" => Some("https://mail.google.com".to_owned()),
+        "app:github" => Some("https://github.com".to_owned()),
+        _ => None,
     }
 }
 
@@ -197,9 +219,17 @@ fn hit_status(s: &State) -> String {
 fn summary(last: &Option<(&'static str, ClipboardContent)>) -> (String, String) {
     let Some((how, content)) = last else { return ("Paste formatted text into the field".into(), String::new()) };
     let form = |name: &str, len: Option<usize>| match len { Some(n) => format!("{name} {n} B"), None => format!("no {name}") };
-    let head = format!("{how}: text {} B, {}, {}", content.text().len(), form("HTML", content.html().map(str::len)), form("RTF", content.rtf().map(str::len)));
+    let own = if content.has_own_pills() { ", own pills" } else { "" };
+    let head = format!("{how}: text {} B, {}, {}{own}", content.text().len(), form("HTML", content.html().map(str::len)), form("RTF", content.rtf().map(str::len)));
     let preview: String = content.html().unwrap_or("").chars().take(400).collect();
     (head, preview)
+}
+
+fn copy_status(last_copy: &Option<(bool, String)>) -> String {
+    match last_copy {
+        Some((cut, plain)) => format!("Last {}: {plain}", if *cut { "cut" } else { "copy" }),
+        None => "Copy a @Gmail or @GitHub pill to export its URL payload while keeping the pill on paste.".into(),
+    }
 }
 
 fn button(key: &'static str, label: &str, f: impl Fn(&mut State, &mut Tx) + 'static) -> El {
@@ -291,7 +321,14 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
             "app:github" => Some(github.clone()),
             _ => None,
         })
+        .pill_copy_text(service_pill_payload)
         .on_edit(|s: &mut State| &mut s.field)
+        // Observe Copy/Cut (keyboard or context menu) and fall back to pill_copy_text + rich HTML.
+        .on_input_copy(|s: &mut State, cut, _| {
+            let plain = s.field.selected_with_pills(service_pill_payload);
+            s.last_copy = Some((cut, plain));
+            None
+        })
         // Look at every form, then let the editor paste the text as usual.
         .on_input_paste(|s: &mut State, content, _| { seen(s, "Pasted", content); false })
         .on_secondary_press(|_: &mut State, p, tx| {
@@ -399,6 +436,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
             .child(button("read", "Read clipboard", |_, tx| tx.read_clipboard(|s: &mut State, content, _| seen(s, "Read", content))))
             .child(button("check-revision", "Check revision", |s, _| s.revision = clipboard::revision())))
         .child(text(revision_status(s.revision)).key("revision").font(type_::LABEL).color(t.text_secondary))
+        .child(text(copy_status(&s.last_copy)).key("copy-status").font(type_::LABEL).color(t.text_secondary).w_full())
         .child(text(head).key("summary").font(type_::BODY).color(t.text_secondary))
         .child(text(preview).key("preview").font(type_::LABEL).color(t.text_secondary).w_full())
         .child(text(html_out).key("html-out").font(type_::LABEL).color(t.text_secondary).w_full());
@@ -417,6 +455,7 @@ fn main() {
                 s.field.set_selection(12, 24);
             }),
             ("decorations", State::decorations_scene),
+            ("pill-copy", State::pill_copy_scene),
         ],
         ..AppSpec::new("Rich Clipboard", (560.0, 620.0), State::default, view)
     });
@@ -527,5 +566,43 @@ mod tests {
         assert!(rt.find("overline-sample").is_some());
         let fills = markdown_line_fills(&rt.state.notes.text, Color::WHITE, Color::WHITE);
         assert_eq!(fills.len(), 2, "markdown sample produces one code block fill and one quote bar");
+    }
+
+    #[test]
+    fn pill_copy_scene_exports_url_payload_and_round_trips_own_pills() {
+        let board = clipboard::memory();
+        let mut s = State::default();
+        s.pill_copy_scene();
+        let mut rt = Runtime::new(s, view, (560.0, 620.0), Env::new(true, 1.0));
+        rt.use_clipboard(&board);
+        rt.frame(0.0);
+        assert!(rt.find("copy-status").is_some());
+
+        rt.key(rune::KeyEvent {
+            key: rune::Key::Command('c'),
+            mods: rune::Mods { cmd: true, ..rune::Mods::default() },
+        });
+        rt.frame(0.0);
+
+        let expected_plain = "Open https://mail.google.com or https://github.com now.";
+        let copied = board.content().unwrap();
+        assert_eq!(copied.text(), expected_plain);
+        assert!(copied.html().is_some_and(|h| h.contains(r#"<span data-pill="app:gmail">@Gmail</span>"#)));
+        assert_eq!(rt.state.last_copy, Some((false, expected_plain.to_owned())));
+
+        // Paste back into the field: has_own_pills() is true and both mention pills round-trip.
+        rt.update(|s, _| {
+            s.field.clear();
+            s.field.focused = true;
+        });
+        rt.frame(0.0);
+        rt.update(|_, tx| tx.request_paste());
+        rt.frame(0.0);
+        let (_, pasted) = rt.state.last.as_ref().unwrap();
+        assert!(pasted.has_own_pills());
+        assert_eq!(
+            rt.state.field.pills().map(|(_, id)| id).collect::<Vec<_>>(),
+            ["app:gmail", "app:github"]
+        );
     }
 }

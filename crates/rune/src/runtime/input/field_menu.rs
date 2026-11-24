@@ -126,12 +126,14 @@ impl RuntimeCore {
         }
         let command = |c| KeyEvent { key: Key::Command(c), mods: Mods { cmd: true, ctrl: !cfg!(target_os = "macos"), ..Mods::default() } };
         match picked {
-            "cut" | "copy" | "select-all" => {
-                let ev = command(match picked {
-                    "cut" => 'x',
-                    "copy" => 'c',
-                    _ => 'a',
-                });
+            "cut" => {
+                self.copy_or_cut_focused(app, true, one);
+            }
+            "copy" => {
+                self.copy_or_cut_focused(app, false, one);
+            }
+            "select-all" => {
+                let ev = command('a');
                 let layout = self.focused_layout();
                 self.with_focused(app, |e| e.key_in(&ev, layout.as_ref().map(TextLayout::view)), one);
             }

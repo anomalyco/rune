@@ -37,7 +37,13 @@ impl RuntimeCore {
         });
         let text = match self.focused_input() {
             Some(input) if focused_secure || input.edit.is_secure() => None,
-            Some(input) => Some(input.edit.selected().to_owned()).filter(|t| !t.is_empty()),
+            Some(input) => {
+                let text = match &input.pill_copy_text {
+                    Some(f) => input.edit.selected_with_pills(|id| f(id)),
+                    None => input.edit.selected().to_owned(),
+                };
+                (!text.is_empty()).then_some(text)
+            }
             None => self.selected_text(app),
         };
         let Some(text) = text else { return };

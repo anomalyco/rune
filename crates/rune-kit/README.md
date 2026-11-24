@@ -109,12 +109,13 @@ keeping padding, forced-colors focus outline, invalid red ink and disabled dimmi
 the accessory independently focusable), and `.scroll_bar(bool)` / `.scroll_bar_styled(style)`
 (attaching a kit scroll bar to its internal `auto_grow` or `max_height` scroll viewport; see
 `rune-textarea--composer` in `kit-gallery`), and `.line_home_end(bool)` (opting into visual line-based Home/End and Shift+Home/End on macOS for code editors while keeping Cmd+Home/End and Cmd+Up/Down on document ends; see `rune-textarea--code-keys` in `kit-gallery`). `TextInput`, `TextArea`
-and `TextField` forward `on_secondary_press` (replacing the default field context menu) and
+and `TextField` forward `on_secondary_press` (replacing the default field context menu),
+`on_input_copy` (intercepting keyboard and context-menu Copy/Cut, skipped when disabled), and
 `on_input_paste` (intercepting pastes before plain-text insertion, skipped when disabled), as well
 as `on_submit` and accessible `description`. They also accept `.decorations(spans)` (or `.spans(spans)`), `.line_fill(fill)` / `.line_fills(fills)`,
 and `.rich_style(style)` for attributed `TextEdit` marks, paragraph blocks, full-width code/quote
 line decorations and per-frame syntax highlights, and `.pill_style(f)` / `.pill_image(f)` /
-`.pill_icon(f)` / `.pill_colors(bg, fg)` for `@` mention pills (build the edit with
+`.pill_icon(f)` / `.pill_colors(bg, fg)` / `.pill_copy_text(f)` for `@` mention pills (build the edit with
 `TextEdit::rich()` for formatting keys and rich paste; see
 [`examples/rich_editor.rs`](examples/rich_editor.rs)):
 

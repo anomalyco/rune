@@ -35,12 +35,14 @@ pub struct InputSpec {
     pub(crate) pill_icon: Option<PillIconFn>,
     pub(crate) pill_image: Option<PillImageFn>,
     pub(crate) pill_style: Option<PillStyleFn>,
+    pub(crate) pill_copy_text: Option<PillCopyTextFn>,
     pub(crate) on_pill_secondary: Option<PillSecondaryFn>,
     pub(crate) access: Option<EditFn>,
     pub(crate) submit: Option<PressFn>,
     pub(crate) key: Option<InputKeyFn>,
     pub(crate) change: Option<PressFn>,
     pub(crate) paste: Option<InputPasteFn>,
+    pub(crate) copy: Option<InputCopyFn>,
     /// `El::spellcheck`: the platform's checker marks misspelled words.
     pub(crate) spellcheck: bool,
     /// [`El::selection_style`]: the selection's highlight and ink, by window focus, over `selection`.
@@ -103,12 +105,14 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         pill_icon: None,
         pill_image: None,
         pill_style: None,
+        pill_copy_text: None,
         on_pill_secondary: None,
         access: None,
         submit: None,
         key: None,
         change: None,
         paste: None,
+        copy: None,
         spellcheck: false,
         selection_style: None,
     }));
@@ -245,6 +249,56 @@ impl El {
     pub fn on_input_paste<S: 'static>(mut self, f: impl Fn(&mut S, &crate::ClipboardContent, &mut Tx) -> bool + 'static) -> Self {
         if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             input.paste = Some(Rc::new(move |s, content, tx| f(downcast::<S>(s), content, tx)));
+        }
+        self
+    }
+    /// Intercept Copy and Cut on this focused text field across both keyboard shortcuts
+    /// (`Cmd/Ctrl+C`, `Cmd/Ctrl+X`) and the field's context menu. The `bool` argument is `true`
+    /// for Cut and `false` for Copy.
+    ///
+    /// Return `Some(content)` to write that [`ClipboardContent`](crate::ClipboardContent) via
+    /// [`Tx::copy_rich`] (on Cut, the editor still deletes the selection and records undo after
+    /// the hook returns); return `None` to fall back to the default plain/rich copy. Never
+    /// invoked for secure fields or empty selections.
+    ///
+    /// ```no_run
+    /// # use rune::{ClipboardContent, TextEdit, TextStyle, text_input};
+    /// # struct App { draft: TextEdit }
+    /// # let s = App { draft: TextEdit::new("hello").rich() };
+    /// let _ = text_input(&s.draft, TextStyle::new(14.0, 400.0))
+    ///     .on_edit(|s: &mut App| &mut s.draft)
+    ///     .on_input_copy(|s: &mut App, _cut, _| {
+    ///         let plain = s.draft.selected().to_uppercase();
+    ///         Some(ClipboardContent::new(plain).with_html(s.draft.selected_html()))
+    ///     });
+    /// ```
+    pub fn on_input_copy<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, bool, &mut Tx) -> Option<crate::ClipboardContent> + 'static,
+    ) -> Self {
+        if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            input.copy = Some(Rc::new(move |s, cut, tx| f(downcast::<S>(s), cut, tx)));
+        }
+        self
+    }
+    /// Plain-text copy/cut payload for each [`Mark::Pill`](crate::Mark::Pill) in this
+    /// [`text_input`], by the pill's id (`None` falls back to the pill's display label).
+    ///
+    /// During Copy and Cut (both keyboard and context menu), wholly selected pills are expanded
+    /// with [`TextEdit::selected_with_pills`](crate::TextEdit::selected_with_pills) for the plain
+    /// clipboard representation while rich fields keep `<span data-pill="id">label</span>` in
+    /// HTML so pasting back into Rune restores the pill. Defaults to `None` (copies the display
+    /// label).
+    ///
+    /// ```no_run
+    /// # use rune::{TextEdit, TextStyle, text_input};
+    /// # let draft = TextEdit::new("").rich();
+    /// let _ = text_input(&draft, TextStyle::new(14.0, 400.0))
+    ///     .pill_copy_text(|id| id.strip_prefix("url:").map(str::to_owned));
+    /// ```
+    pub fn pill_copy_text(mut self, f: impl Fn(&str) -> Option<String> + 'static) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            inp.pill_copy_text = Some(Rc::new(f));
         }
         self
     }

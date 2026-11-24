@@ -878,4 +878,6 @@ impl TextEdit {
 #[cfg(test)]
 mod color_tests;
 #[cfg(test)]
+mod pill_copy_tests;
+#[cfg(test)]
 mod tests;

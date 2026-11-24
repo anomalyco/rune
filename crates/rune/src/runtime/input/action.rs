@@ -529,14 +529,16 @@ impl RuntimeCore {
             Action::Gesture(chain, gesture) => self.run_gesture(app, chain, gesture, &mut one),
             Action::Ime(ev) => self.run_ime(app, ev, &mut one),
             Action::FinishIme => self.finish_ime(app, &mut one),
-            Action::Paste(content, target) => {
+            Action::Paste(mut content, target) => {
                 if target.is_some_and(|target| target != self.paste_target()) { return false; }
                 let hook = self.focused_input().and_then(|i| i.paste.clone());
-                let own_pills = if cfg!(not(target_arch = "wasm32")) || self.edit.has_clipboard() {
-                    content.has_own_pills()
-                } else {
-                    content.html().is_some_and(|h| self.edit.has_pill_copy_matching(content.text(), h))
-                };
+                if cfg!(target_arch = "wasm32")
+                    && !self.edit.has_clipboard()
+                    && content.html().is_some_and(|h| self.edit.has_pill_copy_matching(content.text(), h))
+                {
+                    content.mark_own_pills();
+                }
+                let own_pills = content.has_own_pills();
                 let into_field = |mut state: crate::states::States<'_>, access: &crate::el::EditFn, tx: &mut Tx| {
                     if hook.is_some_and(|hook| hook(state.reborrow(), &content, tx)) { return EditOutcome::default(); }
                     let edit = access(state);
@@ -556,7 +558,13 @@ impl RuntimeCore {
                     true
                 } else { false }
             }
-            Action::ClipboardRead(id, content) => {
+            Action::ClipboardRead(id, mut content) => {
+                if cfg!(target_arch = "wasm32")
+                    && !self.edit.has_clipboard()
+                    && content.html().is_some_and(|h| self.edit.has_pill_copy_matching(content.text(), h))
+                {
+                    content.mark_own_pills();
+                }
                 let Some(f) = self.edit.take_clipboard_read(id) else { return false };
                 f(app.states(), &content, &mut one);
                 true

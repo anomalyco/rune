@@ -56,11 +56,16 @@ impl RuntimeCore {
             self.edit.paste_request = Some(Some(target));
             return true;
         }
+        if let Some(cmd) = ev.edit_command().filter(|c| matches!(c, 'c' | 'x'))
+            && self.copy_or_cut_focused(app, cmd == 'x', one)
+        {
+            return true;
+        }
         let input_handles = match &ev.key {
             crate::edit::Key::Function(_) | crate::edit::Key::ContextMenu | crate::edit::Key::Tab | crate::edit::Key::PageUp | crate::edit::Key::PageDown
             | crate::edit::Key::Insert | crate::edit::Key::PrintScreen | crate::edit::Key::ScrollLock | crate::edit::Key::Pause => false,
             crate::edit::Key::Command(_) => match ev.edit_command() {
-                Some('a' | 'c' | 'x' | 'z') => true,
+                Some('a' | 'z') => true,
                 Some('y') => !cfg!(target_os = "macos"),
                 Some('b' | 'i' | 'u') => self.focused_input().is_some_and(|i| i.edit.format_chord(ev).is_some()),
                 _ => false,
@@ -71,21 +76,9 @@ impl RuntimeCore {
         };
         if input_handles {
             let layout = self.focused_layout();
-            // A rich field copies its selection's formatting too, read before a cut removes it.
-            let mut html = None;
-            let copies = matches!(ev.edit_command(), Some('c' | 'x'));
-            let handled = self.with_focused(app, |e| {
-                if copies && e.is_rich() && !e.is_secure() {
-                    html = Some(e.selected_html()).filter(|h| !h.is_empty());
-                }
-                e.key_in(ev, layout.as_ref().map(TextLayout::view))
-            }, one);
-            if let Some(html) = html
-                && let Some(text) = one.copy.as_ref().filter(|w| !w.is_secret()).map(|w| w.content().text().to_owned())
-            {
-                one.copy_rich(crate::ClipboardContent::new(text).with_html(html));
+            if self.with_focused(app, |e| e.key_in(ev, layout.as_ref().map(TextLayout::view)), one) {
+                return true;
             }
-            if handled { return true; }
         }
         one.physical_key = physical_key;
         if !app_first && !app.playground_typing() && app.has_on_key() && Tx::took(app.on_key(ev, one), one) {
@@ -102,6 +95,72 @@ impl RuntimeCore {
         if !repeat && self.selection_key(app, ev, one) { return true; }
         if !repeat && self.context_menu_key(app, ev, one) { return true; }
         self.page_scroll(app, ev) || self.playground_key(app, ev, one)
+    }
+
+    /// Copy or cut the focused text field's selection, shared by keyboard `Cmd/Ctrl+C/X` and
+    /// the field's context menu (`field_menu_pick`).
+    ///
+    /// Runs `El::on_input_copy` first when the field is not secure and has a non-empty selection.
+    /// Returning `Some(content)` writes that `ClipboardContent` via `Tx::copy_rich`; returning
+    /// `None` (or with no hook) builds plain text via `El::pill_copy_text` (when set) or
+    /// `TextEdit::selected`, and attaches `TextEdit::selected_html` for rich fields. Cut deletes
+    /// the selection and records undo after reading what to copy.
+    pub(in crate::runtime) fn copy_or_cut_focused(&mut self, app: &mut dyn AppDriver, cut: bool, one: &mut Tx) -> bool {
+        let Some((copy_hook, pill_copy_text)) = self
+            .focused_input()
+            .map(|i| (i.copy.clone(), i.pill_copy_text.clone()))
+        else {
+            return false;
+        };
+        let focused_secure = self.focused_index().is_some_and(|i| {
+            std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
+                .any(|k| self.tree.nodes[k].is_secure())
+        });
+        self.with_focused_state(app, |mut state, access, tx| {
+            let (secure, has_selection) = {
+                let edit = access(state.reborrow());
+                edit.sync_invariants();
+                let (a, b) = edit.range();
+                (focused_secure || edit.is_secure(), a != b)
+            };
+            if secure || !has_selection {
+                return EditOutcome::default();
+            }
+            let custom = copy_hook
+                .as_ref()
+                .and_then(|hook| hook(state.reborrow(), cut, tx));
+            if let Some(content) = custom {
+                tx.copy_rich(content);
+            } else {
+                let edit = access(state.reborrow());
+                edit.sync_invariants();
+                if focused_secure || edit.is_secure() {
+                    return EditOutcome::default();
+                }
+                let (a, b) = edit.range();
+                if a != b {
+                    let text = match &pill_copy_text {
+                        Some(f) => edit.selected_with_pills(|id| f(id)),
+                        None => edit.selected().to_owned(),
+                    };
+                    let html = edit
+                        .is_rich()
+                        .then(|| edit.selected_html())
+                        .filter(|h| !h.is_empty());
+                    match html {
+                        Some(html) => tx.copy_rich(crate::ClipboardContent::new(text).with_html(html)),
+                        None => tx.copy(text),
+                    }
+                }
+            }
+            if cut {
+                let edit = access(state);
+                if !focused_secure && !edit.is_secure() {
+                    edit.insert("");
+                }
+            }
+            EditOutcome::default()
+        }, one)
     }
 
     /// Offer `ev` to the focused text field's `El::on_input_key` handler. If it consumes the key

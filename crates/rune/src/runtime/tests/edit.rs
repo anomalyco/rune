@@ -512,3 +512,140 @@ fn text_input_paints_color_marks_and_keeps_links_and_selection_on_top() {
     assert!(has_link_glyph, "expected link-coloured glyph quads on top of Mark::Color");
     assert!(has_sel_rect, "expected selection highlight rect over coloured text");
 }
+
+#[test]
+fn pill_copy_text_exports_payload_on_keyboard_and_menu_and_round_trips_pill() {
+    struct App {
+        src: TextEdit,
+        default_field: TextEdit,
+        rich_dest: TextEdit,
+        plain_dest: TextEdit,
+    }
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let st = TextStyle::new(14.0, 400.0);
+        col()
+            .size(320.0, 320.0)
+            .child(
+                text_input(&s.src, st)
+                    .key("src")
+                    .size(300.0, 70.0)
+                    .pill_copy_text(|id| match id {
+                        "url:msg" => Some("https://chat.example/m/42".to_owned()),
+                        "rtl:doc" => Some("https://docs.example/שלום".to_owned()),
+                        _ => None,
+                    })
+                    .on_edit(|s: &mut App| &mut s.src),
+            )
+            .child(
+                text_input(&s.default_field, st)
+                    .key("default")
+                    .size(300.0, 60.0)
+                    .on_edit(|s: &mut App| &mut s.default_field),
+            )
+            .child(
+                text_input(&s.rich_dest, st)
+                    .key("rich_dest")
+                    .size(300.0, 70.0)
+                    .on_edit(|s: &mut App| &mut s.rich_dest),
+            )
+            .child(
+                text_input(&s.plain_dest, st)
+                    .key("plain_dest")
+                    .size(300.0, 60.0)
+                    .on_edit(|s: &mut App| &mut s.plain_dest),
+            )
+    }
+
+    let mut src = TextEdit::new("See ").rich();
+    src.insert_pill("url:msg", "Ben in #general");
+    src.insert(" and ");
+    src.insert_pill("rtl:doc", "مرحبا");
+    src.insert(" plus ");
+    src.insert_pill("other:1", "@KeepLabel");
+    src.focused = true;
+    src.set_selection(0, src.text.len());
+
+    let mut default_field = with_pill();
+    default_field.set_selection(0, default_field.text.len());
+
+    let m = crate::clipboard::memory();
+    let mut rt = Runtime::new(
+        App {
+            src,
+            default_field,
+            rich_dest: TextEdit::new("").rich(),
+            plain_dest: TextEdit::new(""),
+        },
+        view,
+        (320.0, 320.0),
+        Env::new(true, 1.0),
+    );
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+
+    let expected_plain = "See https://chat.example/m/42 and https://docs.example/שלום plus @KeepLabel";
+
+    // 1. Keyboard Copy writes pill payload as plain text and <span data-pill> as HTML.
+    rt.key(cmd('c'));
+    rt.frame(0.0);
+    let copied = m.content().unwrap();
+    assert_eq!(copied.text(), expected_plain);
+    assert!(copied.html().is_some_and(|h| {
+        h.contains(r#"<span data-pill="url:msg">Ben in #general</span>"#)
+            && h.contains(r#"<span data-pill="rtl:doc">مرحبا</span>"#)
+            && h.contains(r#"<span data-pill="other:1">@KeepLabel</span>"#)
+    }));
+
+    // Pasting back into a rich Rune field restores all three pills with original labels and ids.
+    rt.update(|s, _| { s.src.focused = false; s.rich_dest.focused = true; });
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.request_paste());
+    rt.frame(0.0);
+    assert_eq!(rt.state.rich_dest.text, rt.state.src.text);
+    assert_eq!(pills_of(&rt.state.rich_dest), pills_of(&rt.state.src));
+
+    // Pasting into a plain field receives the plain-text payload.
+    rt.update(|s, _| { s.rich_dest.focused = false; s.plain_dest.focused = true; });
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.request_paste());
+    rt.frame(0.0);
+    assert_eq!(rt.state.plain_dest.text, expected_plain);
+
+    // 2. Context-menu Copy and Cut also export payload + HTML and restore pills on paste.
+    rt.update(|s, _| {
+        s.plain_dest.focused = false;
+        s.rich_dest.clear();
+        s.src.focused = true;
+        s.src.set_selection(0, s.src.text.len());
+    });
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    rt.resolve_popup(Some("copy")).unwrap();
+    rt.frame(0.0);
+    assert_eq!(m.content().unwrap().text(), expected_plain);
+
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    rt.resolve_popup(Some("cut")).unwrap();
+    rt.frame(0.0);
+    assert_eq!(rt.state.src.text, "");
+    assert_eq!(m.content().unwrap().text(), expected_plain);
+    rt.update(|s, _| { s.src.focused = false; s.rich_dest.focused = true; });
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.request_paste());
+    rt.frame(0.0);
+    assert_eq!(pills_of(&rt.state.rich_dest).len(), 3);
+    assert_eq!(rt.state.rich_dest.pills().next().map(|(_, id)| id), Some("url:msg"));
+
+    // 3. A rich field without pill_copy_text still copies display labels and preserves rich HTML via context menu.
+    rt.update(|s, _| { s.rich_dest.focused = false; s.default_field.focused = true; });
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    rt.resolve_popup(Some("copy")).unwrap();
+    rt.frame(0.0);
+    let default_copy = m.content().unwrap();
+    assert_eq!(default_copy.text(), "a @x-agent b");
+    assert!(default_copy.html().is_some_and(|h| h.contains(r#"<span data-pill="agent:x">@x-agent</span>"#)));
+}
