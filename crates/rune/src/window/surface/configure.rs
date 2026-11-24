@@ -59,33 +59,38 @@ pub(crate) fn classify_scope_error(
 /// `Surface::configure` returns (wgpu-30.0.1 `handle_error_inner`, "will be surfaced via
 /// callback") without recording the surface's error sink, so the surface has no presentation
 /// and the next `get_current_texture` panics ("Surface is not configured for presentation").
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn configure_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration) -> Result<(), ConfigureError> {
-    if gpu.is_lost() {
-        return Err(ConfigureError { kind: ConfigureErrorKind::DeviceLost, message: lost_device(config) });
-    }
-    let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
-    // No other thread of Rune's submits while wgpu waits for the queue to empty: a submission
-    // that lands inside the wait makes it refuse the configuration (`rune_gpu::configure`).
-    rune_gpu::configure::configuring(|| surface.configure(&gpu.device, config));
-    // `Device::destroy` only marks the device invalid: its lost callback runs when the device
-    // next maintains itself, at the soonest a poll. Without this, a device destroyed before it
-    // reported itself configures nothing while `is_lost` still reads false, and the drawable
-    // its surface is asked for panics.
-    rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
-    let [internal, memory, validation] = [internal.pop(), memory.pop(), validation.pop()].map(pollster::block_on);
-    if gpu.is_lost() {
-        return Err(ConfigureError { kind: ConfigureErrorKind::DeviceLost, message: lost_device(config) });
-    }
-    match classify_scope_error(memory, internal, validation) {
-        None => { configured(surface); Ok(()) }
+/// Turns captured error-scope results from `configure_checked` into `Result<(), ConfigureError>`.
+fn finish_configure(errors: rune_gpu::health::ScopeErrors, config: &wgpu::SurfaceConfiguration) -> Result<(), ConfigureError> {
+    match classify_scope_error(errors.memory, errors.internal, errors.validation) {
+        None => Ok(()),
         Some((kind, error)) => Err(ConfigureError {
             kind,
             message: format_error(&error.to_string(), config.width, config.height, config.format, config.alpha_mode, config.present_mode),
         }),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn configure_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration) -> Result<(), ConfigureError> {
+    if gpu.is_lost() {
+        return Err(ConfigureError { kind: ConfigureErrorKind::DeviceLost, message: lost_device(config) });
+    }
+    let ((), errors) = rune_gpu::health::with_error_scopes(&gpu.device, || {
+        // No other thread of Rune's submits while wgpu waits for the queue to empty: a submission
+        // that lands inside the wait makes it refuse the configuration (`rune_gpu::configure`).
+        rune_gpu::configure::configuring(|| surface.configure(&gpu.device, config));
+        // `Device::destroy` only marks the device invalid: its lost callback runs when the device
+        // next maintains itself, at the soonest a poll. Without this, a device destroyed before it
+        // reported itself configures nothing while `is_lost` still reads false, and the drawable
+        // its surface is asked for panics.
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+    });
+    if gpu.is_lost() {
+        return Err(ConfigureError { kind: ConfigureErrorKind::DeviceLost, message: lost_device(config) });
+    }
+    finish_configure(errors, config)?;
+    configured(surface);
+    Ok(())
 }
 
 /// Configures `surface`, returning the formatted error string on failure.
@@ -137,30 +142,14 @@ fn format_error(text: &str, width: u32, height: u32, format: wgpu::TextureFormat
     format!("{cause} ({width}x{height}, {format:?}, {alpha:?}, {present:?})")
 }
 
-#[cfg(target_arch = "wasm32")]
-fn poll_scope_now<F: std::future::Future<Output = Option<wgpu::Error>>>(fut: F) -> Option<wgpu::Error> {
-    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
-    match std::pin::pin!(fut).poll(&mut cx) {
-        std::task::Poll::Ready(err) => err,
-        std::task::Poll::Pending => None,
-    }
-}
-
 /// Configures `surface` on WebGL2, whose `wgpu-core` error scopes answer at once. A WebGPU
 /// surface goes through `configure_then`: wgpu's own scopes there panic on a `GPUInternalError`.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn configure_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration) -> Result<(), ConfigureError> {
-    let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
-    surface.configure(&gpu.device, config);
-    match classify_scope_error(poll_scope_now(memory.pop()), poll_scope_now(internal.pop()), poll_scope_now(validation.pop())) {
-        None => Ok(()),
-        Some((kind, error)) => Err(ConfigureError {
-            kind,
-            message: format_error(&error.to_string(), config.width, config.height, config.format, config.alpha_mode, config.present_mode),
-        }),
-    }
+    let ((), errors) = rune_gpu::health::with_error_scopes(&gpu.device, || {
+        surface.configure(&gpu.device, config);
+    });
+    finish_configure(errors, config)
 }
 
 #[cfg(target_arch = "wasm32")]

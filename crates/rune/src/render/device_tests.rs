@@ -389,6 +389,30 @@ fn configure_error_classification_separates_oom_from_refusal() {
     assert_eq!(rune_gpu::fallback::Failure::from(ConfigureErrorKind::Refused), rune_gpu::fallback::Failure::SurfaceRefused);
 }
 
+/// Real `wgpu-core` device check for the shared `rune_gpu::health::with_error_scopes` helper:
+/// captures a validation error without panicking on pop order and leaves no open scope on the
+/// device afterwards.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn with_error_scopes_captures_error_and_leaves_real_device_stack_clean() {
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+    let ((), errors) = rune_gpu::health::with_error_scopes(&gpu.device, || {
+        let _ = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("intentionally-invalid-scope-test"),
+            source: wgpu::ShaderSource::Wgsl("@vertex fn vs() -> @builtin(position) vec4<f32> { return missing_ident; }".into()),
+        });
+    });
+    assert!(errors.validation.is_some(), "validation scope must capture invalid WGSL");
+    assert!(errors.memory.is_none());
+    assert!(errors.internal.is_none());
+
+    // A second clean call must succeed with no leftover open scope on the device.
+    let ((), clean) = rune_gpu::health::with_error_scopes(&gpu.device, || {});
+    assert!(clean.validation.is_none());
+    assert!(clean.memory.is_none());
+    assert!(clean.internal.is_none());
+}
+
 #[test]
 fn window_redirection_bitmap_omitted_on_plain_hwnd_swapchain() {
     use crate::window::spec::needs_no_redirection_bitmap;

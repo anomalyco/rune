@@ -215,15 +215,18 @@ impl Renderer {
     }
 }
 
+/// Runs `build` inside synchronous error scopes (`wgpu-core`, shared by native and WebGL2),
+/// unconditionally popping all three scopes in reverse order.
+fn checked_sync_scopes(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
+    let ((), errors) = rune_gpu::health::with_error_scopes(device, build);
+    let error = errors.internal.or(errors.memory).or(errors.validation);
+    Verdict::Now(error.map(|e| e.to_string()))
+}
+
 /// Runs `build` inside error scopes for validation, out-of-memory and internal errors.
 #[cfg(not(target_arch = "wasm32"))]
 fn checked(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    build();
-    let errors = [internal.pop(), memory.pop(), validation.pop()].map(pollster::block_on);
-    Verdict::Now(errors.into_iter().flatten().next().map(|e| e.to_string()))
+    checked_sync_scopes(device, build)
 }
 
 /// Runs `build` inside the browser's error scopes, which answer later. wgpu's own scopes would
@@ -233,34 +236,13 @@ fn checked(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
 #[cfg(target_arch = "wasm32")]
 fn checked(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
     let Some(scopes) = crate::platform::web::health::Scopes::push(device) else {
-        return checked_wgpu_core(device, build);
+        return checked_sync_scopes(device, build);
     };
     build();
     let answer = Answer::default();
     let to = answer.clone();
     scopes.pop(move |error| *to.lock().unwrap_or_else(|e| e.into_inner()) = Some(error));
     Verdict::Later(answer)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn checked_wgpu_core(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
-    use std::future::Future;
-    use std::task::{Context, Poll, Waker};
-    fn poll_now<F: Future<Output = Option<wgpu::Error>>>(fut: F) -> Option<wgpu::Error> {
-        let mut cx = Context::from_waker(Waker::noop());
-        match std::pin::pin!(fut).poll(&mut cx) {
-            Poll::Ready(err) => err,
-            Poll::Pending => None,
-        }
-    }
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    build();
-    let error = poll_now(internal.pop())
-        .or_else(|| poll_now(memory.pop()))
-        .or_else(|| poll_now(validation.pop()));
-    Verdict::Now(error.map(|e| e.to_string()))
 }
 
 fn report(device: &wgpu::Device, feature: Feature, why: &str) {
