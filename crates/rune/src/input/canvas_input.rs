@@ -64,8 +64,9 @@ pub struct MagnifyEvent {
     pub y: f32,
     pub phase: GesturePhase,
     /// It came from Ctrl + wheel (a mouse wheel, or a two-finger scroll with Ctrl held), not a
-    /// pinch gesture: `delta` is the wheel's `dy / 200` points, so a browser's `deltaY` is
-    /// `-delta * 200`.
+    /// pinch gesture. For line-delta wheel notches, `delta` is `1.2^ticks - 1` (+0.2 per forward
+    /// notch, independent of OS scroll-lines settings, matching Chromium); for pixel-precise
+    /// deltas, `delta` is `dy / 200`.
     pub wheel: bool,
 }
 
@@ -171,9 +172,9 @@ impl El {
     }
 
     /// Trackpad pinches over this element: return true to take one. The innermost handler
-    /// under the pointer hears it first. macOS reports pinches; on Windows, Linux and the web
-    /// a pinch (and Ctrl + mouse wheel) comes as a Ctrl + wheel delta, turned into a delta of
-    /// `-dy / 200` per point.
+    /// under the pointer hears it first. macOS reports pinches; Ctrl + wheel also reaches
+    /// `on_magnify` (with `MagnifyEvent::wheel == true`), using `1.2^ticks - 1` for line-delta
+    /// notches and `dy / 200` for pixel-precise deltas.
     pub fn on_magnify<S: 'static>(mut self, f: impl Fn(&mut S, MagnifyEvent, &mut Tx) -> bool + 'static) -> Self {
         self.canvas_input().magnify = Some(Rc::new(move |s, e, tx| f(state::<S>(s), e, tx)));
         self

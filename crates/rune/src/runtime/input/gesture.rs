@@ -23,8 +23,11 @@ pub(crate) enum WheelStart {
     At(Option<usize>),
 }
 
-/// Points of Ctrl + wheel per unit of magnification, where a pinch arrives that way.
+/// Points of pixel-precise Ctrl + wheel per unit of magnification, where a pinch arrives that way.
 const PINCH_WHEEL: f32 = 200.0;
+/// Zoom factor per vertical line-delta wheel notch with Ctrl held, matching Chromium's
+/// `kTextSizeMultiplierRatio = 1.2` (`third_party/blink/common/page/page_zoom.cc`).
+const PINCH_WHEEL_STEP: f32 = 1.2;
 
 impl RuntimeCore {
     /// A wheel or trackpad scroll at window point (`ev.x`, `ev.y`), with its modifiers and
@@ -144,13 +147,23 @@ impl RuntimeCore {
         self.offer_gesture(x, y, |g| g.smart_magnify.is_some(), Gesture::SmartMagnify(x, y));
     }
 
-    /// A Ctrl + wheel `dy` at (x, y), which is how a trackpad pinch reaches Windows, Linux and
-    /// web apps, and how Chromium hands any page Ctrl + wheel: a pinch (`MagnifyEvent::wheel`) when
-    /// an `on_magnify` handler is there (true), else nothing. `dy` moves content down, so the wheel
-    /// turned away from the user (or the fingers spread) zooms in, as in a browser.
-    pub(crate) fn pinch_wheel(&mut self, x: f32, y: f32, dy: f32) -> bool {
-        if dy == 0.0 || self.gesture_chain(x, y, |g| g.magnify.is_some()).is_empty() { return false; }
-        self.magnify_event(MagnifyEvent { wheel: true, ..MagnifyEvent::new(dy / PINCH_WHEEL).at(x, y) });
+    /// A Ctrl + wheel at (x, y), which is how a trackpad pinch reaches Windows, Linux and web
+    /// apps, and how Chromium hands any page Ctrl + wheel: a pinch (`MagnifyEvent::wheel`) when
+    /// an `on_magnify` handler is there (true), else nothing. For line-delta wheels (`ticks`),
+    /// scales by `1.2^ticks - 1.0` (+20% per forward notch, independent of OS scroll-lines
+    /// settings, matching Chromium's tick-based `WebContentsImpl::HandleWheelEvent` and
+    /// `kTextSizeMultiplierRatio`); for pixel-precise deltas (`None`), scales by `dy / PINCH_WHEEL`.
+    /// Positive `ticks` or `dy` moves content down, so the wheel turned away from the user (or the
+    /// fingers spread) zooms in, as in a browser.
+    pub(crate) fn pinch_wheel(&mut self, x: f32, y: f32, dy: f32, ticks: Option<f32>) -> bool {
+        let delta = match ticks {
+            Some(t) if t != 0.0 => PINCH_WHEEL_STEP.powf(t) - 1.0,
+            Some(_) => return false,
+            None if dy != 0.0 => dy / PINCH_WHEEL,
+            None => return false,
+        };
+        if self.gesture_chain(x, y, |g| g.magnify.is_some()).is_empty() { return false; }
+        self.magnify_event(MagnifyEvent { wheel: true, ..MagnifyEvent::new(delta).at(x, y) });
         true
     }
 

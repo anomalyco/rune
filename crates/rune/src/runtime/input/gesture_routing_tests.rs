@@ -100,11 +100,27 @@ fn a_ctrl_wheel_pinches_only_where_a_magnify_handler_is() {
     let mut rt = Runtime::new(State::default(), view, (100.0, 100.0), Env::new(true, 1.0));
     rt.frame(0.0);
     // The wheel turned away from the user moves content down (positive dy) and zooms in.
-    assert!(rt.pinch_wheel(50.0, 50.0, 20.0));
+    assert!(rt.pinch_wheel(50.0, 50.0, 20.0, None));
     rt.frame(0.0);
     assert_eq!(rt.state.zoom, [20.0 / PINCH_WHEEL]);
     assert_eq!(rt.state.from_wheel, [true], "a handler tells Ctrl + wheel from a pinch gesture");
-    assert!(!rt.pinch_wheel(500.0, 50.0, -20.0), "off the window nothing takes it");
+    assert!(!rt.pinch_wheel(500.0, 50.0, -20.0, None), "off the window nothing takes it");
+}
+
+#[test]
+fn ctrl_wheel_line_ticks_scale_by_chrome_step_and_round_trip() {
+    let mut rt = Runtime::new(State::default(), view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    // Line-delta notches use 1.2^ticks - 1 regardless of pixel dy.
+    assert!(rt.pinch_wheel(50.0, 50.0, 100.0, Some(1.0)));
+    assert!(rt.pinch_wheel(50.0, 50.0, -100.0, Some(-1.0)));
+    assert!(!rt.pinch_wheel(50.0, 50.0, 100.0, Some(0.0)), "zero vertical ticks does not pinch");
+    assert!(!rt.pinch_wheel(500.0, 50.0, 100.0, Some(1.0)), "off the window nothing takes it");
+    rt.frame(0.0);
+    assert_eq!(rt.state.zoom.len(), 2);
+    assert_eq!(rt.state.from_wheel, [true, true]);
+    assert!((rt.state.zoom[0] - 0.2).abs() < 1e-5, "one forward notch is +0.2, got {}", rt.state.zoom[0]);
+    assert!(((1.0 + rt.state.zoom[0]) * (1.0 + rt.state.zoom[1]) - 1.0).abs() < 1e-5, "forward + backward round-trips to 1.0");
 }
 
 #[derive(Default)]

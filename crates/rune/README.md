@@ -436,9 +436,9 @@ policy changes are applied in the same mutation phase.
   and the element then hears the rest of that gesture, its momentum included, wherever the
   pointer goes, until it declines (passing the delta to outer handlers and then scrolling) or a
   modifier change starts a new unphased gesture. `.on_magnify(|s, e: MagnifyEvent, tx| -> bool)` hears trackpad
-  pinches (scale by `1 + delta`) at the pointer: macOS reports them, and on Windows, Linux and
-  the web a pinch arrives as Ctrl + wheel, which goes to `on_magnify` (`-dy / 200` per point)
-  when one is under the pointer. `.on_rotate` and `.on_smart_magnify` (a two-finger double tap)
+  pinches (scale by `1 + delta`) at the pointer: macOS reports them, and Ctrl + wheel also
+  goes to `on_magnify` (`1.2^ticks - 1` per line-delta notch, or `dy / 200` per pixel-precise
+  point, with `MagnifyEvent::wheel == true`) when one is under the pointer. `.on_rotate` and `.on_smart_magnify` (a two-finger double tap)
   are macOS only. `.pointer_buttons([PointerButton::Middle])` lets the middle (or back,
   forward) button press and drag the element through its own `on_press` and `on_drag`, from
   anywhere inside it; `tx.button()` says which button. Without it those handlers stay

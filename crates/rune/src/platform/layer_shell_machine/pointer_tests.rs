@@ -34,7 +34,7 @@ fn pointer_wheel_value120_and_discrete_match_wayland_window_units_and_signs() {
     assert!(step(&mut state, Event::Axis { axis: Axis::Vertical, value: 15.0 }).is_empty());
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: 0.0, dy: -WHEEL_LINE_POINTS, mods: plain, phase: GesturePhase::Moved,
+        dx: 0.0, dy: -WHEEL_LINE_POINTS, ticks: Some(-1.0), mods: plain, phase: GesturePhase::Moved,
         precise: false, notch: true, pinch: true,
     })]);
 
@@ -48,7 +48,7 @@ fn pointer_wheel_value120_and_discrete_match_wayland_window_units_and_signs() {
     step(&mut state, Event::AxisSource(AxisSource::Wheel));
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: 0.0, dy: WHEEL_LINE_POINTS, mods: plain, phase: GesturePhase::Moved,
+        dx: 0.0, dy: WHEEL_LINE_POINTS, ticks: Some(1.0), mods: plain, phase: GesturePhase::Moved,
         precise: false, notch: true, pinch: true,
     })]);
 
@@ -58,7 +58,7 @@ fn pointer_wheel_value120_and_discrete_match_wayland_window_units_and_signs() {
     step(&mut state, Event::Axis { axis: Axis::Vertical, value: 3.75 });
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: 0.0, dy: -30.0, mods: plain, phase: GesturePhase::Moved,
+        dx: 0.0, dy: -30.0, ticks: Some(-0.25), mods: plain, phase: GesturePhase::Moved,
         precise: false, notch: false, pinch: true,
     })]);
 
@@ -68,7 +68,7 @@ fn pointer_wheel_value120_and_discrete_match_wayland_window_units_and_signs() {
     step(&mut state, Event::Axis { axis: Axis::Vertical, value: 15.0 });
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: 0.0, dy: -WHEEL_LINE_POINTS, mods: plain, phase: GesturePhase::Moved,
+        dx: 0.0, dy: -WHEEL_LINE_POINTS, ticks: Some(-1.0), mods: plain, phase: GesturePhase::Moved,
         precise: false, notch: true, pinch: true,
     })]);
 
@@ -78,7 +78,7 @@ fn pointer_wheel_value120_and_discrete_match_wayland_window_units_and_signs() {
     step(&mut state, Event::AxisValue120 { axis: Axis::Vertical, value120: 120 });
     let got: Vec<_> = step(&mut state, Event::Frame { mods: shift, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: -WHEEL_LINE_POINTS, dy: 0.0, mods: shift, phase: GesturePhase::Moved,
+        dx: -WHEEL_LINE_POINTS, dy: 0.0, ticks: None, mods: shift, phase: GesturePhase::Moved,
         precise: false, notch: true, pinch: true,
     })]);
 
@@ -87,7 +87,7 @@ fn pointer_wheel_value120_and_discrete_match_wayland_window_units_and_signs() {
     step(&mut state, Event::AxisValue120 { axis: Axis::Horizontal, value120: -120 });
     let got: Vec<_> = step(&mut state, Event::Frame { mods: shift, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: WHEEL_LINE_POINTS, dy: 0.0, mods: shift, phase: GesturePhase::Moved,
+        dx: WHEEL_LINE_POINTS, dy: 0.0, ticks: Some(0.0), mods: shift, phase: GesturePhase::Moved,
         precise: false, notch: true, pinch: true,
     })]);
 }
@@ -109,7 +109,7 @@ fn pointer_touchpad_axis_frames_apply_finger_gain_and_track_phases() {
     assert_eq!(got, [Effect::Wheel(WheelInput {
         dx: FINGER_POINTS_PER_AXIS_UNIT as f32,
         dy: (-2.5 * FINGER_POINTS_PER_AXIS_UNIT) as f32,
-        mods: plain, phase: GesturePhase::Began, precise: true, notch: false, pinch: true,
+        ticks: None, mods: plain, phase: GesturePhase::Began, precise: true, notch: false, pinch: true,
     })]);
 
     // Stopping one axis while the other still moves keeps the gesture Moved.
@@ -119,14 +119,14 @@ fn pointer_touchpad_axis_frames_apply_finger_gain_and_track_phases() {
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
         dx: 0.0, dy: (-3.0 * FINGER_POINTS_PER_AXIS_UNIT) as f32,
-        mods: plain, phase: GesturePhase::Moved, precise: true, notch: false, pinch: true,
+        ticks: None, mods: plain, phase: GesturePhase::Moved, precise: true, notch: false, pinch: true,
     })]);
 
     // Final axis_stop ends the gesture with zero delta; a duplicate stop while idle emits nothing.
     step(&mut state, Event::AxisStop { axis: Axis::Vertical });
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: 0.0, dy: 0.0, mods: plain, phase: GesturePhase::Ended, precise: true, notch: false, pinch: true,
+        dx: 0.0, dy: 0.0, ticks: None, mods: plain, phase: GesturePhase::Ended, precise: true, notch: false, pinch: true,
     })]);
     step(&mut state, Event::AxisStop { axis: Axis::Horizontal });
     assert!(step(&mut state, Event::Frame { mods: plain, framed: true }).is_empty());
@@ -137,7 +137,7 @@ fn pointer_touchpad_axis_frames_apply_finger_gain_and_track_phases() {
     step(&mut state, Event::Axis { axis: Axis::Vertical, value: 5.0 });
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: 0.0, dy: -5.0, mods: plain, phase: GesturePhase::Moved, precise: true, notch: false, pinch: true,
+        dx: 0.0, dy: -5.0, ticks: None, mods: plain, phase: GesturePhase::Moved, precise: true, notch: false, pinch: true,
     })]);
 
     // Continuous source uses the same finger gain and starts with Began; Reset clears active gesture
@@ -147,7 +147,7 @@ fn pointer_touchpad_axis_frames_apply_finger_gain_and_track_phases() {
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
         dx: 0.0, dy: -FINGER_POINTS_PER_AXIS_UNIT as f32,
-        mods: plain, phase: GesturePhase::Began, precise: true, notch: false, pinch: true,
+        ticks: None, mods: plain, phase: GesturePhase::Began, precise: true, notch: false, pinch: true,
     })]);
     step(&mut state, Event::Axis { axis: Axis::Vertical, value: 4.0 });
     assert!(step(&mut state, Event::Reset).is_empty());
@@ -158,7 +158,7 @@ fn pointer_touchpad_axis_frames_apply_finger_gain_and_track_phases() {
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: true }).into_iter().collect();
     assert_eq!(got[0], Effect::Wheel(WheelInput {
         dx: 0.0, dy: -FINGER_POINTS_PER_AXIS_UNIT as f32,
-        mods: plain, phase: GesturePhase::Began, precise: true, notch: false, pinch: true,
+        ticks: None, mods: plain, phase: GesturePhase::Began, precise: true, notch: false, pinch: true,
     }));
 
     // Unframed wl_pointer (< v5) uses gain 1.0 and unphased Moved.
@@ -166,7 +166,7 @@ fn pointer_touchpad_axis_frames_apply_finger_gain_and_track_phases() {
     step(&mut state, Event::Axis { axis: Axis::Vertical, value: 15.0 });
     let got: Vec<_> = step(&mut state, Event::Frame { mods: plain, framed: false }).into_iter().collect();
     assert_eq!(got, [Effect::Wheel(WheelInput {
-        dx: 0.0, dy: -15.0, mods: plain, phase: GesturePhase::Moved, precise: true, notch: false, pinch: true,
+        dx: 0.0, dy: -15.0, ticks: None, mods: plain, phase: GesturePhase::Moved, precise: true, notch: false, pinch: true,
     })]);
 }
 

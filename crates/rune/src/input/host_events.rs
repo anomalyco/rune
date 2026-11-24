@@ -31,6 +31,9 @@ pub(crate) struct KeyInput {
 pub(crate) struct WheelInput {
     pub dx: f32,
     pub dy: f32,
+    /// Vertical wheel ticks (notches) for line-delta wheels, independent of OS scroll-lines
+    /// scaling; `None` for pixel-precise deltas or Shift-turned horizontal wheels.
+    pub ticks: Option<f32>,
     pub mods: crate::Mods,
     pub phase: crate::GesturePhase,
     pub precise: bool,
@@ -331,7 +334,7 @@ pub(crate) fn keyboard(
 pub(crate) fn wheel_core(rt: &mut RuntimeCore, input: WheelInput) -> WheelOutcome {
     match rt.pointer() {
         // Off macOS a trackpad pinch is a Ctrl + wheel.
-        Some((x, y)) if input.pinch && input.mods.ctrl && rt.pinch_wheel(x, y, input.dy) => WheelOutcome::Pinched,
+        Some((x, y)) if input.pinch && input.mods.ctrl && rt.pinch_wheel(x, y, input.dy, input.ticks) => WheelOutcome::Pinched,
         Some((x, y)) => {
             let zoom = rt.zoom();
             rt.wheel_event(
@@ -388,7 +391,7 @@ pub(crate) fn web_wheel(
     // A page's pinch is the browser's zoom; elsewhere unclaimed Ctrl+wheel stays with browser
     // zoom instead of falling through to scroll.
     if mods.ctrl {
-        let used = !document && rt.pinch_wheel(x, y, dy);
+        let used = !document && rt.pinch_wheel(x, y, dy, None);
         return (used, Some(used));
     }
     // On a content-sized embedded canvas, vertical wheel belongs to the page unless a
@@ -398,7 +401,7 @@ pub(crate) fn web_wheel(
     }
     let outcome = wheel_core(
         rt,
-        WheelInput { dx, dy, mods, phase, precise, notch: false, pinch: false },
+        WheelInput { dx, dy, ticks: None, mods, phase, precise, notch: false, pinch: false },
     );
     (outcome != WheelOutcome::Ignored, None)
 }
@@ -422,6 +425,10 @@ pub(crate) fn wheel(
     let points = crate::runtime::LINE_POINTS;
     let (dx, dy) = crate::runtime::wheel_delta(delta, scale, shift, points);
     let precise = matches!(delta, MouseScrollDelta::PixelDelta(_));
+    let ticks = match delta {
+        MouseScrollDelta::LineDelta(_, y) if !shift => Some(y),
+        _ => None,
+    };
     // Whole lines are a notched wheel; a free-spinning wheel or a precision touchpad
     // sends fractions (the run decides, `WheelLock::notched`). On Linux winit gives a
     // wheel's detents as whole lines too and a touchpad's as fractions or pixels.
@@ -432,6 +439,7 @@ pub(crate) fn wheel(
         WheelInput {
             dx,
             dy,
+            ticks,
             mods: map_mods(mods),
             phase,
             precise,

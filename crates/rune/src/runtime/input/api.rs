@@ -104,7 +104,7 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn smart_magnify(&mut self, x: f32, y: f32) { self.core_mut().smart_magnify(x, y); }
     #[inline(always)]
-    pub(crate) fn pinch_wheel(&mut self, x: f32, y: f32, dy: f32) -> bool { self.core_mut().pinch_wheel(x, y, dy) }
+    pub(crate) fn pinch_wheel(&mut self, x: f32, y: f32, dy: f32, ticks: Option<f32>) -> bool { self.core_mut().pinch_wheel(x, y, dy, ticks) }
     #[inline(always)]
     pub fn button_down(&mut self, x: f32, y: f32, button: PointerButton) {
         let (core, mut app) = self.split_mut();
