@@ -733,7 +733,12 @@ app.run();
   its display connection, bypassing fast exit so `App::try_run`, `try_run_windows_with` and
   `try_run_windows_with_args` return that error instead. Normal quits keep fast exit.
 - `App::on_window(|w: &WindowHandle| ..)` runs on the UI thread after every native creation, for
-  icons or native styles through `WindowHandle::with_raw_handle`.
+  icons, native styles, or display-bound protocol objects through `WindowHandle::with_raw_handle`
+  and `WindowHandle::with_raw_display_handle`. Pair `with_raw_display_handle` with
+  `App::on_display_close(|| ..)` (also forwarded on `WindowSpec::on_display_close`), which runs
+  once on the UI thread immediately before the event loop drops windows and tears down the native
+  display connection (after `on_close` and `on_quit`), so foreign proxies or queues bound on
+  winit's display can be destroyed before the display closes.
 - `AppSpec::min_size` sets the smallest window (None keeps 420×400).
 - `AppHandle::set_dock_icon(bool)` switches macOS between the regular and accessory activation
   policies at runtime.

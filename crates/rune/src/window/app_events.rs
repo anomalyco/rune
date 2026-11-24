@@ -36,11 +36,23 @@ pub(super) fn quit_hosts(
     exit
 }
 
-/// Starts the app's quit when its last main window has finished, before dropping finished hosts
-/// (or leaving them undropped for a fast exit). Returns whether the event loop must exit.
+/// Runs every registered `App::on_display_close` hook once on the UI thread, in registration
+/// order, draining them so later exit steps never invoke them again.
+pub(super) fn run_display_close(hooks: &mut Vec<crate::app::OnDisplayClose>) {
+    for hook in hooks.drain(..) {
+        hook();
+    }
+}
+
+/// Starts the app's quit when its last main window has finished, runs `App::on_display_close`
+/// hooks before dropping finished hosts when the loop is ending (unless `exiting` is already
+/// true, in which case `exiting_hosts` runs them after `on_quit`), and returns whether the event
+/// loop must exit.
 pub(super) fn cleanup_hosts(
     hosts: &mut [Option<Box<dyn AnyHost>>],
+    on_display_close: &mut Vec<crate::app::OnDisplayClose>,
     run_quit: bool,
+    exiting: bool,
     fast_exit: bool,
     mut send: impl FnMut(crate::quit::Event) -> Vec<crate::quit::Effect>,
 ) -> bool {
@@ -55,6 +67,9 @@ pub(super) fn cleanup_hosts(
         // failure ends without running quit hooks.
         quit_hosts(hosts, false, true, false, &mut send);
         for host in hosts.iter_mut().flatten() { host.terminate(); }
+    }
+    if no_main && !exiting {
+        run_display_close(on_display_close);
     }
     // The last window closing ends a fast-exiting app: its host isn't dropped first, which
     // tore down its window, swap chain and device (~37 ms) before the process ended anyway.
@@ -92,30 +107,38 @@ pub(super) fn is_error_exit(
     has_startup_error || has_display_error || (loop_exiting && !quitting)
 }
 
+/// Flags describing why `Windows::exiting` was entered.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ExitFlags {
+    pub(super) has_startup_error: bool,
+    pub(super) has_display_error: bool,
+    pub(super) loop_exiting: bool,
+    pub(super) quitting: bool,
+    pub(super) fast_exit: bool,
+}
+
 /// Runs the host-level steps of `Windows::exiting` and decides whether the process ends through
 /// fast exit or returns from the event loop for orderly teardown / error reporting.
 pub(super) fn exiting_hosts(
     hosts: &mut [Option<Box<dyn AnyHost>>],
-    has_startup_error: bool,
-    has_display_error: bool,
-    loop_exiting: bool,
-    quitting: bool,
-    fast_exit: bool,
+    on_display_close: &mut Vec<crate::app::OnDisplayClose>,
+    flags: ExitFlags,
     mut send: impl FnMut(crate::quit::Event) -> Vec<crate::quit::Effect>,
 ) -> ExitStep {
-    let error_exit = is_error_exit(has_startup_error, has_display_error, loop_exiting, quitting);
+    let error_exit = is_error_exit(flags.has_startup_error, flags.has_display_error, flags.loop_exiting, flags.quitting);
     if !error_exit {
         // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
         // quit's hooks already ran (a Windows logoff, the last window closing).
-        let _ = quit_hosts(hosts, false, true, loop_exiting, &mut send);
+        let _ = quit_hosts(hosts, false, true, flags.loop_exiting, &mut send);
         // Rune didn't ask to exit, so the OS is ending the app: macOS Quit, Cmd-Q, the Dock's
         // Quit, logout. Windows close as their close button would, before the clipboard stops.
-        if !loop_exiting {
+        if !flags.loop_exiting {
             for host in hosts.iter_mut().flatten() { host.terminate(); }
         }
     }
     for host in hosts.iter_mut().flatten() { host.cancel_menus(); }
-    if !error_exit && fast_exit {
+    run_display_close(on_display_close);
+    if !error_exit && flags.fast_exit {
         return ExitStep::FastExit;
     }
     let relaunch = !error_exit

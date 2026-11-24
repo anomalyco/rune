@@ -254,6 +254,41 @@ impl WindowHandle {
         let handle = window.window_handle().map_err(|e| e.to_string())?;
         Ok(f(handle))
     }
+    /// Borrow the display's raw native handle while the window is alive.
+    ///
+    /// Platform thread restrictions still apply (call on the UI thread). The borrowed
+    /// [`DisplayHandle`](crate::raw_window_handle::DisplayHandle) names winit's native display
+    /// connection (`wl_display` on Wayland, the Xlib display or XCB connection on X11, etc.), so
+    /// protocol objects or event queues attached to the window's surface belong on this display.
+    ///
+    /// The display connection stays alive only while the event loop runs, not after
+    /// [`App::run`](crate::App::run) or [`App::try_run`](crate::App::try_run) returns; closing an
+    /// individual window does not close the shared display while other windows or `keep_running`
+    /// keep the loop alive. Register [`App::on_display_close`](crate::App::on_display_close) to
+    /// destroy foreign proxies or queues bound on this display before the event loop drops windows
+    /// and closes the native display.
+    ///
+    /// Returns `Err("window is closed")` before the native window exists or after it closes, and
+    /// on headless or web runs.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Display", (320.0, 200.0), || (), |_, _| el()))
+    ///     .on_window(|window| {
+    ///         let _ = window.with_raw_display_handle(|display| format!("{:?}", display.as_raw()));
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn with_raw_display_handle<R>(
+        &self,
+        f: impl for<'a> FnOnce(winit::raw_window_handle::DisplayHandle<'a>) -> R,
+    ) -> Result<R, String> {
+        use winit::raw_window_handle::HasDisplayHandle;
+        let window = self.window()?;
+        let handle = window.display_handle().map_err(|e| e.to_string())?;
+        Ok(f(handle))
+    }
 }
 
 #[cfg(target_os = "macos")]

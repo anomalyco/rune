@@ -261,6 +261,9 @@ struct Windows {
     display_error: Option<String>,
     /// Scheduling state for waking winit on Wayland display reads and draining mid-turn layer events.
     wayland_wake: wayland_wake::State,
+    /// `App::on_display_close` hooks collected from started windows, run once on the UI thread
+    /// before the event loop drops windows and tears down the native display.
+    on_display_close: Vec<crate::app::OnDisplayClose>,
 }
 impl Windows {
     /// On macOS, catches panics before they cross winit's `extern "C"` AppKit delegate or view
@@ -308,7 +311,7 @@ impl Windows {
                 (args.scene, args.size) = (None, None);
                 let mut overlays = Vec::new();
                 let slot = self.hosts.len();
-                let host = spec.start(args, Start { proxy: self.proxy.clone(), slot, gpu: self.gpu.clone(), wayland, traced: false, overlays: &mut overlays });
+                let host = spec.start(args, Start { proxy: self.proxy.clone(), slot, gpu: self.gpu.clone(), wayland, traced: false, overlays: &mut overlays, on_display_close: &mut self.on_display_close });
                 self.hosts.push(host);
                 if let Some(Some(host)) = self.hosts.get_mut(slot) { host.resumed(event_loop); }
                 self.connect_overlays(overlays, event_loop);
@@ -342,7 +345,7 @@ impl Windows {
         #[cfg(target_arch = "wasm32")]
         let fast_exit = false;
         let exiting = event_loop.exiting();
-        let should_exit = app_events::cleanup_hosts(&mut self.hosts, !exiting && ok, fast_exit, crate::quit::send);
+        let should_exit = app_events::cleanup_hosts(&mut self.hosts, &mut self.on_display_close, !exiting && ok, exiting, fast_exit, crate::quit::send);
         // Another window's quit: a menu still tracking would hold the loop open.
         if exiting || should_exit {
             for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
@@ -382,6 +385,7 @@ pub(crate) struct Start<'a> {
     /// Whether this window records `--native` traces.
     traced: bool,
     overlays: &'a mut Vec<Box<dyn crate::overlay::PendingOverlay>>,
+    on_display_close: &'a mut Vec<crate::app::OnDisplayClose>,
 }
 
 impl Start<'_> {
@@ -459,10 +463,12 @@ impl ApplicationHandler<WakeEvent> for Windows {
             crate::windows::validate(&specs).expect("window keys");
             let trace_window = this.args.window.clone().or_else(|| specs.first().map(|s| s.key().to_owned()));
             let mut overlays = Vec::new();
+            let mut on_display_close = Vec::new();
             this.hosts = start_all(specs, |slot, spec| {
                 let traced = trace_window.as_deref() == Some(spec.key());
-                spec.start(this.args.clone(), Start { proxy: this.proxy.clone(), slot, gpu: this.gpu.clone(), wayland, traced, overlays: &mut overlays })
+                spec.start(this.args.clone(), Start { proxy: this.proxy.clone(), slot, gpu: this.gpu.clone(), wayland, traced, overlays: &mut overlays, on_display_close: &mut on_display_close })
             }, |host| host.resumed(event_loop));
+            this.on_display_close.extend(on_display_close);
             this.connect_overlays(overlays, event_loop);
             // A launch with no window makes its menu bar now; a window's first frame made it.
             #[cfg(target_os = "macos")]
@@ -603,11 +609,14 @@ impl ApplicationHandler<WakeEvent> for Windows {
         let fast_hook: Option<fn()> = None;
         let step = app_events::exiting_hosts(
             &mut self.hosts,
-            self.startup_error.is_some(),
-            has_display_error,
-            event_loop.exiting(),
-            crate::quit::quitting(),
-            fast_hook.is_some(),
+            &mut self.on_display_close,
+            app_events::ExitFlags {
+                has_startup_error: self.startup_error.is_some(),
+                has_display_error,
+                loop_exiting: event_loop.exiting(),
+                quitting: crate::quit::quitting(),
+                fast_exit: fast_hook.is_some(),
+            },
             crate::quit::send,
         );
         #[cfg(not(target_arch = "wasm32"))]

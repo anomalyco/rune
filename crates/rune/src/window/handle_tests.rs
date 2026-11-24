@@ -44,3 +44,21 @@ fn handle_queues_color_scheme_requests_in_order() {
         ]
     ));
 }
+
+#[test]
+fn with_raw_handle_and_with_raw_display_handle_return_closed_when_unbound() {
+    let handle = WindowHandle::new("display");
+    let mut window_called = false;
+    let mut display_called = false;
+    let window_err = handle.with_raw_handle(|raw| {
+        window_called = true;
+        format!("{:?}", raw.as_raw())
+    });
+    let display_err = handle.with_raw_display_handle(|raw| {
+        display_called = true;
+        format!("{:?}", raw.as_raw())
+    });
+    assert!(!window_called && !display_called);
+    assert_eq!(window_err, Err("window is closed".into()));
+    assert_eq!(display_err, Err("window is closed".into()));
+}
