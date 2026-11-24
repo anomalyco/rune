@@ -269,6 +269,149 @@ fn desktop_entries_resolve_the_closest_theme_size_then_scalable_then_pixmaps() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rgba_into_builds_mips_off_thread_and_atlas_selects_downscaled_level() {
+    let (tx, rx) = mpsc::channel();
+    let caller = std::thread::current().id();
+    let cache = ImageCache::new(Arc::new(move || { tx.send(std::thread::current().id()).ok(); }));
+
+    // 256x256 1-pixel checkerboard (black/white), drawn at 37x37 px as in issue #1385.
+    let board: Vec<u8> = (0..256u32 * 256)
+        .flat_map(|i| {
+            let v = if (i % 256 + i / 256) % 2 == 0 { 0 } else { 255 };
+            [v, v, v, 255]
+        })
+        .collect();
+
+    let mip_px = Pixels::new();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let wakes_c = wakes.clone();
+    let wake = rune_core::live::Wake::new(Arc::new(move || {
+        wakes_c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    let _sub = mip_px.source.subscribe(&wake);
+
+    cache.rgba_into(&mip_px, 256, 256, board.clone());
+    let worker = rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+    assert_ne!(worker, caller, "256x256 rgba_into must build mips off the calling thread");
+    assert_eq!(wakes.load(std::sync::atomic::Ordering::SeqCst), 1, "target source wakes once");
+    assert_eq!(mip_px.size(), (256, 256));
+    assert_eq!(mip_px.with_rgba(|_, _, _| ()), None, "mipmapped Pixels holds mips, not straight RGBA");
+
+    let mut atlas = crate::pixels::ImageAtlas::default();
+    let placed = atlas.place(&mip_px, [37.0, 37.0]).unwrap();
+    assert!(placed.premultiplied);
+    assert_eq!((placed.rect[2], placed.rect[3]), (64, 64), "37x37 draw selects the 64x64 mip level");
+    let page = &atlas.pages[placed.page];
+    let stride = (page.width * 4) as usize;
+    for y in 0..64usize {
+        for x in 0..64usize {
+            let i = (placed.rect[1] as usize + y) * stride + (placed.rect[0] as usize + x) * 4;
+            assert_eq!(&page.data[i..i + 4], &[188, 188, 188, 255], "downscaled checkerboard mip is uniform linear-light grey");
+        }
+    }
+
+    // Contrast with unmipped Pixels::set: places the full 256x256 straight-alpha level.
+    let raw_px = Pixels::new();
+    raw_px.set(256, 256, board);
+    let raw_placed = atlas.place(&raw_px, [37.0, 37.0]).unwrap();
+    assert!(!raw_placed.premultiplied);
+    assert_eq!((raw_placed.rect[2], raw_placed.rect[3]), (256, 256));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rgba_into_inline_fast_path_and_edge_inputs() {
+    let (tx, rx) = mpsc::channel();
+    let caller = std::thread::current().id();
+    let cache = ImageCache::new(Arc::new(move || { tx.send(std::thread::current().id()).ok(); }));
+    let px = Pixels::new();
+
+    // Small image (<= 64x64) completes inline on the calling thread.
+    cache.rgba_into(&px, 16, 16, [255, 0, 0, 255].repeat(16 * 16));
+    assert_eq!(px.size(), (16, 16));
+    assert_eq!(rx.try_recv(), Ok(caller));
+
+    let mut atlas = crate::pixels::ImageAtlas::default();
+    let placed = atlas.place(&px, [4.0, 4.0]).unwrap();
+    assert!(placed.premultiplied);
+    assert_eq!((placed.rect[2], placed.rect[3]), (4, 4));
+
+    // Mismatched byte length and oversized dimensions are ignored without modifying target.
+    cache.rgba_into(&px, 16, 16, vec![0u8; 4]);
+    cache.rgba_into(&px, MAX_SIDE + 1, 1, vec![0u8; (MAX_SIDE as usize + 1) * 4]);
+    assert_eq!(px.size(), (16, 16));
+    assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty));
+
+    // Zero dimensions with empty bytes clear target to empty.
+    cache.rgba_into(&px, 0, 0, Vec::new());
+    assert_eq!(px.size(), (0, 0));
+    assert_eq!(atlas.place(&px, [4.0, 4.0]), None);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rgba_into_is_latest_wins_against_set_replace_and_newer_rgba_into() {
+    let wait_dropped = |weak: &Weak<[u8]>| {
+        let start = rune_core::time::now();
+        while weak.strong_count() > 0 {
+            assert!(start.elapsed() < std::time::Duration::from_secs(30), "gated worker did not finish in time");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    };
+
+    let (tx, rx) = mpsc::channel();
+    let cache = ImageCache::new(Arc::new(move || { tx.send(()).ok(); }));
+
+    // 1. A gated rgba_into superseded by Pixels::set must not overwrite the newer set frame.
+    let px = Pixels::new();
+    let (release1, gate1) = mpsc::channel();
+    let raw1: Arc<[u8]> = [255, 0, 0, 255].repeat(128 * 128).into();
+    let weak1 = Arc::downgrade(&raw1);
+    let stale_ticket = cache.rgba_into_gated(&px, 128, 128, raw1, gate1);
+    px.set(2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255]);
+    // Direct store_mips_if_current with the stale ticket also rejects cleanly.
+    let decoded = Arc::new(mip_chain(2, 1, &[255, 0, 0, 255, 255, 0, 0, 255]).unwrap());
+    assert!(!px.store_mips_if_current(stale_ticket, decoded));
+    // The worker may already have skipped the job and dropped gate1 before decoding.
+    let _ = release1.send(());
+    wait_dropped(&weak1);
+    assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty), "superseded rgba_into must not wake cache");
+    assert_eq!(px.size(), (2, 1));
+    assert_eq!(px.with_rgba(|w, h, b| (w, h, b.to_vec())), Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255])));
+
+    // 2. A gated rgba_into superseded by a newer rgba_into must not overwrite the newer mips.
+    let px2 = Pixels::new();
+    let (release2, gate2) = mpsc::channel();
+    let raw2: Arc<[u8]> = [255, 0, 0, 255].repeat(128 * 128).into();
+    let weak2 = Arc::downgrade(&raw2);
+    let _ = cache.rgba_into_gated(&px2, 128, 128, raw2, gate2);
+    cache.rgba_into(&px2, 16, 16, [0, 0, 255, 255].repeat(16 * 16));
+    rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+    assert_eq!(px2.size(), (16, 16));
+    let _ = release2.send(());
+    wait_dropped(&weak2);
+    assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty), "stale gated rgba_into must not wake cache");
+    assert_eq!(px2.size(), (16, 16), "stale gated rgba_into must not overwrite newer rgba_into");
+    let mut atlas = crate::pixels::ImageAtlas::default();
+    let placed = atlas.place(&px2, [16.0, 16.0]).unwrap();
+    let page = &atlas.pages[placed.page];
+    let i = (placed.rect[1] as usize * page.width as usize + placed.rect[0] as usize) * 4;
+    assert_eq!(&page.data[i..i + 4], &[0, 0, 255, 255]);
+
+    // 3. Dropping the target Pixels before its queued rgba_into finishes wakes nothing and skips cleanly.
+    let dropped = Pixels::new();
+    let (release3, gate3) = mpsc::channel();
+    let raw3: Arc<[u8]> = [9, 9, 9, 255].repeat(128 * 128).into();
+    let weak3 = Arc::downgrade(&raw3);
+    let _ = cache.rgba_into_gated(&dropped, 128, 128, raw3, gate3);
+    drop(dropped);
+    let _ = release3.send(());
+    wait_dropped(&weak3);
+    assert_eq!(rx.try_recv(), Err(mpsc::TryRecvError::Empty), "dropped target must not wake cache");
+}
+
 #[cfg(target_os = "windows")]
 #[test]
 fn app_icon_reads_an_executables_icon() {

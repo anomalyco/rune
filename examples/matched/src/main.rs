@@ -9,13 +9,21 @@
 
 #![forbid(unsafe_code)]
 
+use std::sync::Arc;
 use rune::tok::{self, type_};
-use rune::{AppSpec, Color, Cx, El, Key, KeyEvent, Pixels, SurfaceFit, TextStyle, Transition, Tx, col, el, row, text};
+use rune::{AppSpec, Color, Cx, El, ImageCache, Key, KeyEvent, Pixels, SurfaceFit, TextStyle, Transition, Tx, Waker, col, el, row, text};
 
 struct State {
     picked: usize,
     zoomed: bool,
     pictures: [Pixels; 4],
+    mips_mode: bool,
+    cache: Option<ImageCache>,
+    streamed: Pixels,
+    mipmapped: Pixels,
+    spare: Vec<u8>,
+    frame: u32,
+    reused: u32,
 }
 
 /// Sky, ground and sun colours of each tile's picture, as sRGB bytes.
@@ -53,8 +61,71 @@ fn picture(i: usize) -> Pixels {
     p
 }
 
+const BOARD_SIDE: u32 = 256;
+
+fn fill_checkerboard(buf: &mut Vec<u8>, phase: u32) {
+    let len = (BOARD_SIDE * BOARD_SIDE * 4) as usize;
+    buf.resize(len, 0);
+    for y in 0..BOARD_SIDE {
+        for x in 0..BOARD_SIDE {
+            let v = if (x + y + phase) % 2 == 0 { 0 } else { 255 };
+            let i = ((y * BOARD_SIDE + x) * 4) as usize;
+            buf[i..i + 4].copy_from_slice(&[v, v, v, 255]);
+        }
+    }
+}
+
+impl State {
+    fn step_stream(&mut self, wait_mips: bool) {
+        self.frame = self.frame.wrapping_add(1);
+        let len = (BOARD_SIDE * BOARD_SIDE * 4) as usize;
+        let mut buf = std::mem::take(&mut self.spare);
+        let reused = buf.capacity() >= len;
+        fill_checkerboard(&mut buf, self.frame);
+        let mip_bytes: Arc<[u8]> = buf.as_slice().into();
+        self.spare = self.streamed.replace(BOARD_SIDE, BOARD_SIDE, buf);
+        if reused {
+            self.reused = self.reused.wrapping_add(1);
+        }
+        if wait_mips {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let cache = ImageCache::new(Arc::new(move || { tx.send(()).ok(); }));
+            cache.rgba_into(&self.mipmapped, BOARD_SIDE, BOARD_SIDE, mip_bytes);
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(10));
+        } else if let Some(cache) = &self.cache {
+            cache.rgba_into(&self.mipmapped, BOARD_SIDE, BOARD_SIDE, mip_bytes);
+        }
+    }
+
+    fn enter_mips(&mut self, wait_mips: bool) {
+        self.mips_mode = true;
+        if self.streamed.size() == (0, 0) {
+            // Prime three frames: frame 1 fills `streamed`, frame 2 hands frame 1's Vec back into
+            // `spare`, and frame 3 reuses `spare` with zero reallocation.
+            self.step_stream(false);
+            self.step_stream(false);
+            self.step_stream(wait_mips);
+        }
+    }
+}
+
 fn init() -> State {
-    State { picked: 0, zoomed: false, pictures: std::array::from_fn(picture) }
+    State {
+        picked: 0,
+        zoomed: false,
+        pictures: std::array::from_fn(picture),
+        mips_mode: false,
+        cache: None,
+        streamed: Pixels::new(),
+        mipmapped: Pixels::new(),
+        spare: Vec::new(),
+        frame: 0,
+        reused: 0,
+    }
+}
+
+fn setup(s: &mut State, waker: Waker) {
+    s.cache = Some(ImageCache::new(waker));
 }
 
 fn tile(s: &State, i: usize) -> El {
@@ -72,25 +143,72 @@ fn tile(s: &State, i: usize) -> El {
     t
 }
 
+fn mips_card(title: &str, subtitle: &str, pixels: &Pixels, theme: &tok::Theme) -> El {
+    col().grow(1.0).padding(18.0).gap(14.0).radius(16.0).fill(theme.card).border(1.0, theme.card_border)
+        .child(text(title).font(TextStyle::new(16.0, 600.0)).color(theme.text))
+        .child(text(subtitle).font(type_::LABEL).color(theme.text_secondary))
+        .child(
+            row().gap(16.0).items_end()
+                .child(col().gap(6.0)
+                    .child(el().size(37.0, 37.0).radius(4.0).clip_rounded(4.0).pixels(pixels))
+                    .child(text("37×37 pt").font(type_::LABEL).color(theme.text_secondary)))
+                .child(col().gap(6.0)
+                    .child(el().size(64.0, 64.0).radius(6.0).clip_rounded(6.0).pixels(pixels))
+                    .child(text("64×64 pt").font(type_::LABEL).color(theme.text_secondary)))
+                .child(col().gap(6.0)
+                    .child(el().size(112.0, 112.0).radius(8.0).clip_rounded(8.0).pixels(pixels))
+                    .child(text("112×112 pt").font(type_::LABEL).color(theme.text_secondary))),
+        )
+}
+
+fn mips_view(s: &State, theme: &tok::Theme) -> El {
+    let sample = s.streamed.with_rgba(|w, h, bytes| {
+        format!("{w}×{h} px · pixel[0]=({}, {}, {}, {})", bytes[0], bytes[1], bytes[2], bytes[3])
+    }).unwrap_or_else(|| "empty".into());
+    let stream_info = format!("frame {} · recycled {}× · with_rgba: {sample}", s.frame, s.reused);
+    let mip_info = format!("{}×{} px · with_rgba: {:?}", s.mipmapped.size().0, s.mipmapped.size().1, s.mipmapped.with_rgba(|_, _, _| ()));
+    let next_btn = el().key("next-frame").px(12.0).py(6.0).radius(8.0).fill(theme.card).border(1.0, theme.card_border)
+        .role("button").label("Next frame")
+        .on_press(|s: &mut State| s.step_stream(false))
+        .child(text("Next frame (R)").font(type_::LABEL).color(theme.text));
+    col().key("mips-stage").w_full().grow(1.0).gap(16.0)
+        .child(row().gap(12.0).items_center()
+            .child(text("256×256 1 px checkerboard downscaled on one Pixels handle").font(type_::LABEL).color(theme.text_secondary))
+            .child(next_btn))
+        .child(row().w_full().grow(1.0).gap(16.0)
+            .child(mips_card("Pixels::replace (unmipped stream)", &stream_info, &s.streamed, theme))
+            .child(mips_card("ImageCache::rgba_into (mipmapped)", &mip_info, &s.mipmapped, theme)))
+}
+
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let theme = tok::theme(true);
-    let hint = text("1–4 pick    ↩ zoom    esc back").font(type_::LABEL).color(theme.text_secondary);
-    let stage = col().key("stage").w_full().grow(1.0);
-    let stage = if s.zoomed {
-        stage.child(tile(s, s.picked))
+    let hint_text = if s.mips_mode { "r next frame    m back to grid" } else { "1–4 pick    ↩ zoom    esc back    m mips" };
+    let hint = text(hint_text).font(type_::LABEL).color(theme.text_secondary);
+    let stage = if s.mips_mode {
+        mips_view(s, &theme)
     } else {
-        // The grid's own entrance and exit; the matched tile rides above it.
-        let pair = |a: usize| row().key(format!("row-{a}")).grow(1.0).gap(12.0).child(tile(s, a)).child(tile(s, a + 1));
-        stage.child(col().key("grid").grow(1.0).gap(12.0).transition(Transition::scale(0.96))
-            .child(pair(0)).child(pair(2)))
+        let stage = col().key("stage").w_full().grow(1.0);
+        if s.zoomed {
+            stage.child(tile(s, s.picked))
+        } else {
+            // The grid's own entrance and exit; the matched tile rides above it.
+            let pair = |a: usize| row().key(format!("row-{a}")).grow(1.0).gap(12.0).child(tile(s, a)).child(tile(s, a + 1));
+            stage.child(col().key("grid").grow(1.0).gap(12.0).transition(Transition::scale(0.96))
+                .child(pair(0)).child(pair(2)))
+        }
     };
     col().w_full().h_full().padding(24.0).gap(14.0).fill(theme.bg).child(hint).child(stage)
 }
 
 fn on_key(s: &mut State, e: &KeyEvent, _: &mut Tx) -> bool {
     match &e.key {
-        Key::Text(t) if !s.zoomed && let Some(n @ 1..=4) = t.parse::<usize>().ok() => s.picked = n - 1,
-        Key::Enter => s.zoomed = true,
+        Key::Text(t) if t.eq_ignore_ascii_case("m") => {
+            if s.mips_mode { s.mips_mode = false; } else { s.enter_mips(false); }
+        }
+        Key::Text(t) if s.mips_mode && t.eq_ignore_ascii_case("r") => s.step_stream(false),
+        Key::Text(t) if !s.mips_mode && !s.zoomed && let Some(n @ 1..=4) = t.parse::<usize>().ok() => s.picked = n - 1,
+        Key::Enter if !s.mips_mode => s.zoomed = true,
+        Key::Escape if s.mips_mode => s.mips_mode = false,
         Key::Escape => s.zoomed = false,
         _ => return false,
     }
@@ -99,7 +217,8 @@ fn on_key(s: &mut State, e: &KeyEvent, _: &mut Tx) -> bool {
 
 fn main() {
     rune::run(AppSpec::<State> {
-        scenes: &[("grid", |_| {}), ("one", |s| s.zoomed = true)],
+        setup: Some(setup),
+        scenes: &[("grid", |_| {}), ("one", |s| s.zoomed = true), ("mips", |s| s.enter_mips(true))],
         on_key: Some(on_key),
         ..AppSpec::new("Matched", (720.0, 480.0), init, view)
     });
@@ -126,5 +245,23 @@ mod tests {
         }
         let one = rt.presented("tile-4").unwrap().0;
         assert!(one[2] > 600.0 && one[3] > 350.0, "fills the stage: {one:?}");
+    }
+
+    #[test]
+    fn mips_scene_reuses_stream_buffer_reads_back_and_downscales_with_mips() {
+        let mut s = init();
+        s.enter_mips(true);
+        assert!(s.reused >= 1, "replace must recycle the previous frame buffer");
+        assert!(s.streamed.with_rgba(|w, h, bytes| w == BOARD_SIDE && h == BOARD_SIDE && bytes.len() == (BOARD_SIDE * BOARD_SIDE * 4) as usize).unwrap());
+        assert_eq!(s.mipmapped.size(), (BOARD_SIDE, BOARD_SIDE));
+        assert_eq!(s.mipmapped.with_rgba(|_, _, _| ()), None);
+
+        let (streamed, mipmapped) = (s.streamed.clone(), s.mipmapped.clone());
+        let mut rt = Runtime::new(s, view, (720.0, 480.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let raw = rt.images.place(&streamed, [37.0, 37.0]).unwrap();
+        let mip = rt.images.place(&mipmapped, [37.0, 37.0]).unwrap();
+        assert!(!raw.premultiplied && raw.rect[2] == 256);
+        assert!(mip.premultiplied && mip.rect[2] == 64);
     }
 }
