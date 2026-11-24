@@ -68,6 +68,19 @@ impl Uploads {
     /// Frees the staging chunks kept for reuse (`Renderer::give_back`).
     pub(super) fn trim(&self) {
         if let Some(staging) = &self.staging { staging.trim(); }
+        if let Some(frame_writes) = &self.frame_writes { frame_writes.trim(); }
+    }
+
+    /// Frees only oversized (> 4 MiB) staging chunks at idle rest, keeping <= 4 MiB chunks.
+    pub(super) fn trim_oversized(&self) {
+        if let Some(staging) = &self.staging { staging.trim_oversized(); }
+        if let Some(frame_writes) = &self.frame_writes { frame_writes.trim_oversized(); }
+    }
+
+    /// Whether any recyclable oversized staging chunks are in flight on the GPU.
+    pub(super) fn has_oversized_in_flight(&self) -> bool {
+        self.staging.as_ref().is_some_and(Staging::has_oversized_in_flight)
+            || self.frame_writes.as_ref().is_some_and(Staging::has_oversized_in_flight)
     }
 
     #[cfg(test)]
