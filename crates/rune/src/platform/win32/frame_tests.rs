@@ -237,3 +237,41 @@ fn drag_hit_sync_skips_idle_and_non_committing_frames() {
     assert!(sync.needs_update(2, 1.25, false, false), "first settled frame after motion updates");
     assert!(!sync.needs_update(2, 1.25, false, false), "settled idle frame does zero work");
 }
+
+#[test]
+fn hidden_caption_keeps_top_resize_edge_and_releases_button_area_to_client_or_drag() {
+    let hidden = Caption { hidden: true, ..caption() };
+    // Top resize edges and corners stay active when controls are hidden.
+    assert_eq!(client_hit(&at(hidden, 4, 2), &[]), HTTOPLEFT, "top-left resize corner");
+    assert_eq!(client_hit(&at(hidden, 400, 2), &[]), HTTOP, "top resize edge");
+    assert_eq!(client_hit(&at(hidden, 796, 2), &[]), HTTOPRIGHT, "top-right resize corner");
+
+    // Without drag hits, the entire caption button strip answers HTCLIENT and owns no button.
+    for (x, hit) in [(685, HTMINBUTTON), (730, HTMAXBUTTON), (775, HTCLOSE)] {
+        assert_eq!(client_hit(&at(hidden, x, 18), &[]), HTCLIENT, "hidden button at x={x}");
+        assert_eq!(owned(&at(hidden, x, 18), hit), None, "hidden caption owns no button at x={x}");
+    }
+
+    // Mirrored (RTL) and 150% DPI also release the button strip to HTCLIENT.
+    let hidden_rtl = Caption { hidden: true, mirrored: true, ..caption() };
+    for (x, hit) in [(20, HTCLOSE), (70, HTMAXBUTTON), (115, HTMINBUTTON)] {
+        assert_eq!(client_hit(&at(hidden_rtl, x, 18), &[]), HTCLIENT, "hidden RTL button at x={x}");
+        assert_eq!(owned(&at(hidden_rtl, x, 18), hit), None, "hidden RTL caption owns no button at x={x}");
+    }
+    let scaled = HitWindow { width: 1200, dpi: 144, edge: 12, ..at(hidden, 1160, 24) };
+    assert_eq!(client_hit(&scaled, &[]), HTCLIENT, "150% DPI hidden Close area");
+    assert_eq!(owned(&scaled, HTCLOSE), None, "150% DPI hidden Close owned_button");
+
+    // With a full-width .window_drag() bar and an app-drawn Close button [754..800],
+    // top edge still resizes, the app button stays HTCLIENT, and bare space answers HTCAPTION.
+    let hits = [
+        DragHit { rect: [754.0, 0.0, 800.0, 36.0], drag: false },
+        DragHit { rect: [0.0, 0.0, 800.0, 36.0], drag: true },
+    ];
+    assert_eq!(client_hit(&at(hidden, 796, 2), &hits), HTTOPRIGHT, "top-right resize beats drag");
+    assert_eq!(client_hit(&at(hidden, 775, 18), &hits), HTCLIENT, "app-drawn close button stays HTCLIENT");
+    assert_eq!(client_hit(&at(hidden, 685, 18), &hits), HTCAPTION, "bare titlebar over hidden min slot drags");
+    let zoomed = HitWindow { zoomed: true, ..at(hidden, 775, 2) };
+    assert_eq!(client_hit(&zoomed, &hits), HTCLIENT, "maximized app-drawn close button at y=2");
+    assert_eq!(owned(&zoomed, HTCLOSE), None, "maximized hidden caption owns no Close button");
+}

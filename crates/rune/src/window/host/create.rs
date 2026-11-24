@@ -83,7 +83,8 @@ impl Host {
         crate::platform::win32::press_point::install(&window);
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
-        let frame = self.titlebar.and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height()));
+        let frame = self.titlebar.map(|t| self.app.rt().titlebar_set().over(t))
+            .and_then(|t| crate::platform::win32::CustomFrame::install(&window, t.height(), t.has_controls()));
         crate::marks::mark("window.frame_installed");
         #[cfg(target_os = "windows")]
         let cloak = crate::platform::win32::Cloak::default();
@@ -127,6 +128,10 @@ impl Host {
         #[cfg(target_os = "macos")]
         if uses_drag_regions(chrome, self.options.borderless, false) {
             mac::own_window_dragging(&window);
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(t) = self.titlebar.map(|t| self.app.rt().titlebar_set().over(t)) {
+            crate::platform::macos::traffic_lights::set_hidden(&window, !t.has_controls());
         }
         self.app.rt_mut().set_titlebar_inset(place_chrome(&window, chrome));
         #[cfg(target_os = "macos")]

@@ -56,12 +56,16 @@ pub(in crate::window) fn frame_chrome(chrome: Chrome, titlebar: Option<crate::Ti
 /// Places the traffic lights, and tells the runtime what the window's controls take of the
 /// titlebar and which caption buttons to draw over it. A change re-runs the view.
 pub(in crate::window) fn sync_chrome_core(rt: &mut RuntimeCore, w: &Win, chrome: Chrome, titlebar: Option<crate::Titlebar>) {
+    let resolved = titlebar.map(|t| rt.titlebar_set().over(t));
+    #[cfg(target_os = "macos")]
+    if let Some(t) = resolved {
+        crate::platform::macos::traffic_lights::set_hidden(&w.window, !t.has_controls());
+    }
     let leading = place_chrome(&w.window, frame_chrome(chrome, titlebar, rt.titlebar_set()));
     rt.set_titlebar_inset(leading);
-    let height = titlebar.map(|t| rt.titlebar_set().over(t).height());
-    let caption = caption(w, height);
+    let caption = caption(w, resolved);
     let scale = w.window.scale_factor() as f32;
-    let height = height.filter(|_| custom_frame(w)).unwrap_or(0.0);
+    let height = resolved.filter(|_| custom_frame(w)).map_or(0.0, |t| t.height());
     let buttons = caption.map_or(0.0, |c| c.width(scale));
     // The traffic lights' room is on the right in a right-to-left app on macOS, as the caption
     // buttons' is on the left on Windows.
@@ -90,15 +94,19 @@ fn custom_frame(w: &Win) -> bool {
     { let _ = w; false }
 }
 
-/// The caption buttons a custom frame draws `height` points tall; none in full screen.
-fn caption(w: &Win, height: Option<f32>) -> Option<crate::titlebar::Caption> {
+/// The caption buttons a custom frame draws for `titlebar`; hidden in full screen or when
+/// `Titlebar::controls(false)` is set.
+fn caption(w: &Win, titlebar: Option<crate::Titlebar>) -> Option<crate::titlebar::Caption> {
     #[cfg(target_os = "windows")]
     return w.native.frame.as_ref().map(|f| {
-        if let Some(h) = height { f.set_height(h); }
+        if let Some(t) = titlebar {
+            f.set_height(t.height());
+            f.set_controls(t.has_controls());
+        }
         f.caption(&w.window)
     });
     #[cfg(not(target_os = "windows"))]
-    { let _ = (w, height); None }
+    { let _ = (w, titlebar); None }
 }
 
 /// A double click on a titlebar: AppKit's action on macOS, else maximize or restore, as the

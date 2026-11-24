@@ -514,7 +514,7 @@ impl Window {
             unsafe { ReleaseCapture() };
 
             unsafe {
-                PostMessageW(window, WM_NCLBUTTONDOWN, wparam, &points as *const _ as LPARAM)
+                PostMessageW(window, WM_NCLBUTTONDOWN, wparam, pack_points(points))
             };
         });
     }
@@ -1594,4 +1594,31 @@ unsafe fn force_window_active(handle: HWND) {
     unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), mem::size_of::<INPUT>() as i32) };
 
     unsafe { SetForegroundWindow(handle) };
+}
+
+fn pack_points(points: POINTS) -> LPARAM {
+    ((points.x as u16 as u32) | ((points.y as u16 as u32) << 16)) as LPARAM
+}
+
+#[cfg(test)]
+mod drag_lparam_tests {
+    use super::*;
+
+    #[test]
+    fn pack_points_encodes_signed_screen_coordinates_by_value() {
+        for (x, y) in [
+            (0i16, 0i16),
+            (120, 40),
+            (-1920, -100),
+            (-1, -1),
+            (1920, -540),
+            (-2560, 1440),
+            (i16::MIN, i16::MAX),
+            (i16::MAX, i16::MIN),
+        ] {
+            let lparam = pack_points(POINTS { x, y });
+            assert_eq!(lparam as i16, x, "low 16 bits must encode signed x for ({x}, {y})");
+            assert_eq!((lparam >> 16) as i16, y, "high 16 bits must encode signed y for ({x}, {y})");
+        }
+    }
 }

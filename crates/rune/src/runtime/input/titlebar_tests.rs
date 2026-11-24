@@ -211,3 +211,92 @@ fn headless_chrome_current_tracks_dynamic_titlebar_and_ignores_borderless_or_nat
     native.frame(0.0);
     assert_eq!(native.core().headless_chrome_current(), Chrome::DEFAULT);
 }
+
+#[test]
+fn headless_chrome_controls_false_hides_system_controls_and_zeroes_edge_insets() {
+    use std::cell::Cell;
+
+    use crate::el::el;
+    use crate::runtime::Runtime;
+    use crate::{Chrome, ChromeInsets, Cx, El, Env, Titlebar};
+
+    struct State {
+        phase: usize,
+        insets: Cell<ChromeInsets>,
+        inset: Cell<f32>,
+    }
+
+    fn view(state: &State, cx: &mut Cx<State>) -> El {
+        match state.phase {
+            1 => cx.set_titlebar(Titlebar::new(36.0).controls(false)),
+            2 => cx.set_titlebar(Titlebar::new(44.0)),
+            _ => {}
+        }
+        state.insets.set(cx.chrome_insets());
+        state.inset.set(cx.titlebar_inset());
+        el().key("root").w_full().h_full()
+    }
+
+    let expected_height = if cfg!(any(target_os = "macos", target_os = "windows")) { 36.0 } else { 0.0 };
+    for rtl in [false, true] {
+        let mut rt = Runtime::new(
+            State { phase: 0, insets: Cell::default(), inset: Cell::default() },
+            view,
+            (400.0, 200.0),
+            Env::new(true, 1.25),
+        );
+        let resolved = rt.core_mut().headless_chrome_with(
+            Chrome { full_size_content: true, traffic_lights: Some((16.0, 17.0)), drag_regions: true },
+            Some(Titlebar::new(36.0).controls(false)),
+            false,
+            rtl,
+        );
+        rt.frame(0.0);
+        assert!(resolved.traffic_light_rects().is_none(), "controls(false) must hide headless traffic lights (rtl={rtl})");
+        assert!(resolved.traffic_light_rects_in(400.0, rtl).is_none(), "controls(false) must hide headless traffic lights in rtl={rtl}");
+        assert_eq!(resolved.titlebar_inset(), 0.0);
+        assert_eq!(rt.state.inset.get(), 0.0);
+        assert_eq!(rt.chrome_insets(), ChromeInsets::new(0.0, 0.0, expected_height), "rtl={rtl}");
+        assert_eq!(rt.state.insets.get(), ChromeInsets::new(0.0, 0.0, expected_height), "rtl={rtl}");
+        assert!(rt.tree.nodes.iter().all(|n| n.key.as_deref() != Some(crate::titlebar::BUTTONS_KEY)), "controls(false) must draw no caption buttons");
+        if cfg!(target_os = "windows") {
+            assert!(rt.tree.nodes.iter().any(|n| n.key.as_deref() == Some(crate::titlebar::FRAME_KEY)), "Windows keeps rune-frame so view paths stay stable");
+        }
+    }
+
+    // Dynamic toggle via Cx::set_titlebar: controls(true) -> controls(false) -> controls(true).
+    let mut rt = Runtime::new(
+        State { phase: 0, insets: Cell::default(), inset: Cell::default() },
+        view,
+        (400.0, 200.0),
+        Env::new(true, 1.0),
+    );
+    rt.headless_chrome(Chrome::DEFAULT, Some(Titlebar::new(36.0)), false);
+    rt.frame(0.0);
+    assert!(rt.core().headless_chrome_current().traffic_light_rects().is_some());
+    if cfg!(target_os = "windows") {
+        assert!(rt.tree.nodes.iter().any(|n| n.key.as_deref() == Some(crate::titlebar::BUTTONS_KEY)));
+    }
+
+    let has_live_caption = |rt: &Runtime<State>| {
+        rt.tree.nodes.iter().enumerate().any(|(i, n)| {
+            n.key.as_deref() == Some(crate::titlebar::BUTTONS_KEY) && !rt.core().subtree_exiting(i)
+        })
+    };
+    rt.update(|s, _| s.phase = 1);
+    rt.frame(0.1);
+    assert!(rt.core().headless_chrome_current().traffic_light_rects().is_none());
+    assert_eq!(rt.chrome_insets(), ChromeInsets::new(0.0, 0.0, expected_height));
+    assert!(!has_live_caption(&rt), "controls(false) must remove live caption buttons in the same commit");
+
+    rt.update(|s, tx| { s.phase = 2; tx.instant(); });
+    rt.frame(0.2);
+    // Restoring controls updates caption at commit end and marks dirty for the next frame.
+    rt.frame(0.25);
+    assert!(rt.core().headless_chrome_current().traffic_light_rects().is_some());
+    if cfg!(target_os = "windows") {
+        assert!(has_live_caption(&rt));
+        assert_eq!(rt.chrome_insets().height, 44.0);
+        assert!(rt.chrome_insets().trailing > 0.0);
+    }
+}

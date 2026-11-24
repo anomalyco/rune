@@ -1996,3 +1996,127 @@ index 27b73b6a4..eda2cea4b 100644
          })
      }
  
+diff --git a/src/platform_impl/windows/event_loop.rs b/src/platform_impl/windows/event_loop.rs
+index c386d644..a8181f95 100644
+--- a/src/platform_impl/windows/event_loop.rs
++++ b/src/platform_impl/windows/event_loop.rs
+@@ -1238,35 +1238,47 @@ unsafe fn public_window_callback_inner(
+         },
+ 
+         WM_NCLBUTTONDOWN => {
+-            if wparam == HTCAPTION as _ {
+-                // Prevent the user event loop from pausing when left clicking the title bar.
+-                //
+-                // When the user interacts with the title bar, Windows enters the modal event
+-                // loop. Currently, a left click causes a pause for about 500ms. Sending a dummy
+-                // mouse-move event seems to cancel the modal loop early, preventing the pause.
+-                // The application will never see this dummy event.
+-                //
+-                // The mouse coordinates are encoded into the lparam value, however the WM_MOUSEMOVE
+-                // event is not using the same coordinate system of the WM_NCLBUTTONDOWN event.
+-                // One uses client-area coordinates and the other is screen-coordinates. In any
+-                // case, passing the lparam as-is with the dummy event does not seem the cancel
+-                // the modal loop.
+-                //
+-                // However, passing in a value of 0 has been observed to always cancel the pause.
+-                //
+-                // Other notes:
+-                //
+-                // For some unknown reason, the cursor will blink when clicking the title bar.
+-                // Cancelling the modal loop early causes the blink to happen *immediately*.
+-                // Otherwise, the blank happens *after* the pause.
+-                //
+-                // When right-click the title bar, the system window menu is presented to the user,
+-                // and the modal event loop begins. This dummy event does *not* prevent the freeze
+-                // in the main event loop caused by that popup menu.
+-                let lparam = 0;
+-                unsafe { PostMessageW(window, WM_MOUSEMOVE, 0, lparam) };
++            if userdata.window_state_lock().dragging {
++                let res = unsafe { DefWindowProcW(window, msg, wparam, lparam) };
++                let mut state = userdata.window_state_lock();
++                if state.dragging {
++                    state.dragging = false;
++                    if !userdata.userdata_removed.get() {
++                        unsafe { PostMessageW(window, WM_LBUTTONUP, 0, lparam) };
++                    }
++                }
++                result = ProcResult::Value(res);
++            } else {
++                if wparam == HTCAPTION as _ {
++                    // Prevent the user event loop from pausing when left clicking the title bar.
++                    //
++                    // When the user interacts with the title bar, Windows enters the modal event
++                    // loop. Currently, a left click causes a pause for about 500ms. Sending a dummy
++                    // mouse-move event seems to cancel the modal loop early, preventing the pause.
++                    // The application will never see this dummy event.
++                    //
++                    // The mouse coordinates are encoded into the lparam value, however the WM_MOUSEMOVE
++                    // event is not using the same coordinate system of the WM_NCLBUTTONDOWN event.
++                    // One uses client-area coordinates and the other is screen-coordinates. In any
++                    // case, passing the lparam as-is with the dummy event does not seem the cancel
++                    // the modal loop.
++                    //
++                    // However, passing in a value of 0 has been observed to always cancel the pause.
++                    //
++                    // Other notes:
++                    //
++                    // For some unknown reason, the cursor will blink when clicking the title bar.
++                    // Cancelling the modal loop early causes the blink to happen *immediately*.
++                    // Otherwise, the blank happens *after* the pause.
++                    //
++                    // When right-click the title bar, the system window menu is presented to the user,
++                    // and the modal event loop begins. This dummy event does *not* prevent the freeze
++                    // in the main event loop caused by that popup menu.
++                    let lparam = 0;
++                    unsafe { PostMessageW(window, WM_MOUSEMOVE, 0, lparam) };
++                }
++                result = ProcResult::DefWindowProc(wparam);
+             }
+-            result = ProcResult::DefWindowProc(wparam);
+         },
+ 
+         WM_CLOSE => {
+diff --git a/src/platform_impl/windows/window.rs b/src/platform_impl/windows/window.rs
+index 1fcf1f2b..85dfb5e3 100644
+--- a/src/platform_impl/windows/window.rs
++++ b/src/platform_impl/windows/window.rs
+@@ -514,7 +514,7 @@ impl Window {
+             unsafe { ReleaseCapture() };
+ 
+             unsafe {
+-                PostMessageW(window, WM_NCLBUTTONDOWN, wparam, &points as *const _ as LPARAM)
++                PostMessageW(window, WM_NCLBUTTONDOWN, wparam, pack_points(points))
+             };
+         });
+     }
+@@ -1595,3 +1595,30 @@ unsafe fn force_window_active(handle: HWND) {
+ 
+     unsafe { SetForegroundWindow(handle) };
+ }
++
++fn pack_points(points: POINTS) -> LPARAM {
++    ((points.x as u16 as u32) | ((points.y as u16 as u32) << 16)) as LPARAM
++}
++
++#[cfg(test)]
++mod drag_lparam_tests {
++    use super::*;
++
++    #[test]
++    fn pack_points_encodes_signed_screen_coordinates_by_value() {
++        for (x, y) in [
++            (0i16, 0i16),
++            (120, 40),
++            (-1920, -100),
++            (-1, -1),
++            (1920, -540),
++            (-2560, 1440),
++            (i16::MIN, i16::MAX),
++            (i16::MAX, i16::MIN),
++        ] {
++            let lparam = pack_points(POINTS { x, y });
++            assert_eq!(lparam as i16, x, "low 16 bits must encode signed x for ({x}, {y})");
++            assert_eq!((lparam >> 16) as i16, y, "high 16 bits must encode signed y for ({x}, {y})");
++        }
++    }
++}
