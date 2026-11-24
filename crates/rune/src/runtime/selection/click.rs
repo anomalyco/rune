@@ -215,7 +215,7 @@ impl RuntimeCore {
 
     /// Focuses text field `ji` with its caret at (x, y), as a single click does, but holds no
     /// press: nothing drags from it (Linux's middle-click paste, `primary_selection.rs`).
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
     pub(in crate::runtime) fn place_caret(&mut self, ji: usize, x: f32, y: f32) {
         let path = self.tree.nodes[ji].path.clone();
         self.edit.input_click.presses.clear();

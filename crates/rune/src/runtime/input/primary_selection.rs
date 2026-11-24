@@ -32,8 +32,11 @@ impl RuntimeCore {
     /// selected on the primary selection, if it changed.
     pub(in crate::runtime) fn note_primary_selection(&mut self, app: &dyn ViewDriver) {
         if !std::mem::take(&mut self.edit.primary.pending) { return; }
+        let focused_secure = self.focused_index().is_some_and(|i| {
+            std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent).any(|k| self.tree.nodes[k].is_secure())
+        });
         let text = match self.focused_input() {
-            Some(input) if input.edit.is_secure() => None,
+            Some(input) if focused_secure || input.edit.is_secure() => None,
             Some(input) => Some(input.edit.selected().to_owned()).filter(|t| !t.is_empty()),
             None => self.selected_text(app),
         };
@@ -47,11 +50,23 @@ impl RuntimeCore {
     /// A middle press at (x, y): on a text field that takes text, it focuses the field with its
     /// caret there and asks for the primary selection to paste. True when it did.
     pub(in crate::runtime) fn primary_paste_down(&mut self, x: f32, y: f32) -> bool {
-        let Some(i) = self.primary_target(x, y).filter(|&i| self.allowed(i) && !self.subtree_exiting(i)) else { return false };
-        let takes = self.tree.nodes[i].input.as_ref().is_some_and(|input| input.access.is_some() && !input.edit.is_secure());
+        let Some(i) = self.primary_target(x, y)
+            .filter(|&i| self.allowed(i) && !self.subtree_exiting(i))
+            .and_then(|i| self.textbox_input(i))
+        else { return false };
+        let blocked = std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent).any(|k| {
+            let n = &self.tree.nodes[k];
+            n.is_secure() || n.a11y.disabled || n.a11y.more.as_ref().is_some_and(|m| m.read_only)
+        });
+        if blocked { return false; }
+        let takes = self.tree.nodes[i].input.as_ref().is_some_and(|input| input.access.is_some());
         if !takes { return false; }
         self.place_caret(i, x, y);
         self.edit.primary.paste = Some(self.tree.nodes[i].path.clone());
         true
     }
 }
+
+#[cfg(test)]
+#[path = "primary_selection_tests.rs"]
+mod tests;
