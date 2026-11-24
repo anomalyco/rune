@@ -1,0 +1,1 @@
+- `rune-kit` `Markdown`: a closed inline code span at the end of a paragraph, heading, list item, block quote or table cell now keeps its closing pad (`inline_code_pad`) in measured width, line wrapping and alignment, matching Chrome's inline-end padding while still dropping the closing pad on open streaming code spans and omitting it on copy.

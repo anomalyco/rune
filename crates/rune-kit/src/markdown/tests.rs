@@ -680,3 +680,133 @@ fn wide_gfm_tables_cap_columns_and_hostile_nesting_stays_bounded() {
         rt.frame(0.0);
     }
 }
+
+#[test]
+fn inline_code_at_block_end_keeps_its_closing_pad_in_width_wrap_and_alignment() {
+    use rune::{Cx, Env, Runtime};
+
+    const CODE_BG: Color = Color { r: 0.2, g: 0.4, b: 0.8, a: 1.0 };
+
+    struct Case {
+        src: &'static str,
+        pad: f32,
+        max_w: f32,
+        fixed_w: Option<f32>,
+    }
+    fn view(c: &Case, _: &mut Cx<Case>) -> El {
+        let style = MarkdownStyle::neutral(true)
+            .inline_code_bg(CODE_BG)
+            .inline_code_pad(c.pad);
+        let box_el = match c.fixed_w {
+            Some(w) => col().key("box").w(w),
+            None => col().key("box").max_w(c.max_w).min_w(0.0),
+        };
+        col().w_full().items_start().child(box_el.child(Markdown::new(c.src).render(&style).key("md").min_w(0.0)))
+    }
+    let chip_rects = |rt: &Runtime<Case>| -> Vec<[f32; 4]> {
+        let want = CODE_BG.premul(1.0);
+        rt.instances
+            .iter()
+            .filter(|i| i.params[1] == rune::render::KIND_RECT && i.fill.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3))
+            .map(|i| i.rect)
+            .collect()
+    };
+    let run = |src: &'static str, pad: f32, max_w: f32, fixed_w: Option<f32>| -> Runtime<Case> {
+        let mut rt = Runtime::new(Case { src, pad, max_w, fixed_w }, view, (600.0, 400.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt
+    };
+
+    // 1. Fit-content paragraph, heading, list item and blockquote ending in inline code count
+    // both start and end pads: increasing `inline_code_pad` by +4 pt grows the box by +8 pt
+    // (both sides), and the painted chip sits flush with the box's right edge without overhang.
+    for (label, src) in [
+        ("para", "Run `cargo test`"),
+        ("heading", "## Run `cargo test`"),
+        ("list", "- item `two`"),
+        ("quote", "> quote `two`"),
+    ] {
+        let rt_a = run(src, 3.5, 500.0, None);
+        let rt_b = run(src, 7.5, 500.0, None);
+        let box_a = rt_a.elements().into_iter().find(|e| e.key.as_deref() == Some("box")).unwrap();
+        let box_b = rt_b.elements().into_iter().find(|e| e.key.as_deref() == Some("box")).unwrap();
+        let growth = box_b.rect[2] - box_a.rect[2];
+        assert!(
+            (growth - 8.0).abs() < 1.0,
+            "{label}: +4 pt inline_code_pad should grow fit-content box by ~8 pt (both sides), got {growth:.2} ({} -> {})",
+            box_a.rect[2], box_b.rect[2]
+        );
+        let chips = chip_rects(&rt_a);
+        assert_eq!(chips.len(), 1, "{label}: one code chip rect");
+        let chip_right = chips[0][0] + chips[0][2];
+        let box_right = box_a.rect[0] + box_a.rect[2];
+        assert!(
+            (chip_right - box_right).abs() <= 1.2,
+            "{label}: chip right ({chip_right:.2}) should sit flush with box right ({box_right:.2})"
+        );
+    }
+
+    // 2. Wrapping at a tight width counts the closing pad (as Blink HandleCloseTag does):
+    // wide enough for text + start pad + half end pad wraps; full both pads stays on one line.
+    let fit_rt = run("Run `test`", 6.0, 500.0, None);
+    let fit_w = fit_rt.elements().into_iter().find(|e| e.key.as_deref() == Some("box")).unwrap().rect[2];
+    let line_h = MarkdownStyle::neutral(true).body.line_px();
+    let tight_rt = run("Run `test`", 6.0, 500.0, Some(fit_w - 3.0));
+    let tight_h = tight_rt.elements().into_iter().find(|e| e.key.as_deref() == Some("b0")).unwrap().rect[3];
+    assert!(
+        tight_h >= line_h * 1.9,
+        "tight container ({:.2}, 3 pt shy of closing pad) must wrap: height={tight_h:.2}, line={line_h:.2}",
+        fit_w - 3.0
+    );
+    let exact_rt = run("Run `test`", 6.0, 500.0, Some(fit_w + 0.5));
+    let exact_h = exact_rt.elements().into_iter().find(|e| e.key.as_deref() == Some("b0")).unwrap().rect[3];
+    assert!(
+        exact_h <= line_h * 1.5,
+        "container with full closing pad ({:.2}) fits on one line: height={exact_h:.2}",
+        fit_w + 0.5
+    );
+
+    // 3. Right-aligned table cell ending in inline code counts both pads once (not double-counted)
+    // and keeps its chip flush inside the cell's right content edge.
+    let table_src = "| h |\n|---:|\n| `cargo test` |\n";
+    let rt_t1 = run(table_src, 3.5, 500.0, Some(300.0));
+    let rt_t2 = run(table_src, 7.5, 500.0, Some(300.0));
+    let cell1 = rt_t1.elements().into_iter().find(|e| e.path.ends_with("/r0/c0")).unwrap();
+    let cell2 = rt_t2.elements().into_iter().find(|e| e.path.ends_with("/r0/c0")).unwrap();
+    let table_growth = cell2.rect[2] - cell1.rect[2];
+    assert!(
+        (table_growth - 8.0).abs() < 1.0,
+        "table cell +4 pt inline_code_pad should grow by ~8 pt (both sides once, not double-counted), got {table_growth:.2}"
+    );
+    let pad_x = MarkdownStyle::neutral(true).table_pad[0];
+    let t_chips = chip_rects(&rt_t1);
+    assert_eq!(t_chips.len(), 1, "one code chip in table cell");
+    let cell_content_right = cell1.rect[0] + cell1.rect[2] - pad_x;
+    let t_chip_right = t_chips[0][0] + t_chips[0][2];
+    assert!(
+        (t_chip_right - cell_content_right).abs() <= 1.5,
+        "right-aligned table chip right ({t_chip_right:.2}) should sit flush with cell content right ({cell_content_right:.2})"
+    );
+
+    // 4. Inline code inside a link at the end of a block keeps zero pill padding.
+    let link_a = run("See [run `test`](https://x.dev)", 3.5, 500.0, None);
+    let link_b = run("See [run `test`](https://x.dev)", 7.5, 500.0, None);
+    let lw_a = link_a.elements().into_iter().find(|e| e.key.as_deref() == Some("box")).unwrap().rect[2];
+    let lw_b = link_b.elements().into_iter().find(|e| e.key.as_deref() == Some("box")).unwrap().rect[2];
+    assert!((lw_b - lw_a).abs() < 0.01, "code inside a link adds no pill padding: {lw_a} vs {lw_b}");
+
+    // 5. Selecting and copying a block ending in inline code omits the closing pad and isolates.
+    let mut sel_rt = Runtime::new(
+        (),
+        |_: &(), _: &mut Cx<()>| {
+            let style = MarkdownStyle::neutral(true);
+            col().w(400.0).child(Markdown::new("Run `cargo test`").selectable(true).render(&style).key("md"))
+        },
+        (400.0, 200.0),
+        Env::new(true, 1.0),
+    );
+    sel_rt.frame(0.0);
+    sel_rt.update(|_, tx| tx.select_all_text("md"));
+    sel_rt.frame(1.0 / 60.0);
+    assert_eq!(sel_rt.selected_text().as_deref(), Some("Run cargo test"));
+}
