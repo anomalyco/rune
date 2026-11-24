@@ -1,0 +1,1 @@
+- Shortcuts tests: isolate the startup batch unit tests onto distinct chords in the process-wide registration table, replace dead `super::backend` test references with a panicking fake connector, and verify that a per-chord backend `Conflict` still registers the remaining shortcuts in a startup batch.
