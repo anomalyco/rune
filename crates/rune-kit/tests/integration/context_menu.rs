@@ -348,4 +348,80 @@ mod outside_secondary {
             assert_eq!(rt.state.bg_secondary, 0, "non-modal scrim must consume outside secondary press on every OS");
         }
     }
+
+    #[test]
+    fn context_menu_item_opening_dialog_in_same_commit_returns_focus_to_opener() {
+        use rune::{Key, KeyEvent, Mods, TextEdit, TextStyle, text_input};
+        use rune_kit::Button;
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum DialogKind { Default, FocusedField, NoOnClose }
+        struct S { kind: DialogKind, point: Option<PointerPress>, dialog: bool, field: TextEdit }
+
+        fn view(s: &S, _: &mut Cx<S>) -> El {
+            let k = Kit::neutral(true);
+            let mut layer = Vec::new();
+            let row = el().key("row").size(200.0, 40.0).focusable(true)
+                .on_secondary_press(|s: &mut S, p, _| s.point = Some(p));
+            let body = context_menu("context", row, s.point)
+                .item(MenuItem::new("Customize").on_select(|s: &mut S| {
+                    s.point = None;
+                    s.dialog = true;
+                    if s.kind == DialogKind::FocusedField { s.field.focused = true; }
+                }))
+                .on_close(|s: &mut S| s.point = None)
+                .build(&k, &mut layer);
+            let mut dlg = Dialog::new("custom", "Customize").fit().open(s.dialog);
+            if s.kind != DialogKind::NoOnClose {
+                dlg = dlg.on_close(|s: &mut S| { s.dialog = false; s.field.focused = false; });
+            }
+            if s.kind == DialogKind::FocusedField {
+                dlg = dlg.child(text_input(&s.field, TextStyle::new(14.0, 400.0)).key("dlg-input").size(180.0, 28.0)
+                    .on_edit(|s: &mut S| &mut s.field));
+            }
+            dlg = dlg.child(Button::new("Done").on_press(|s: &mut S| { s.dialog = false; s.field.focused = false; }).build(&k).key("done"));
+            dlg.build(&k, &mut layer);
+            root(col().padding(20.0).child(body).child(el().key("other").size(200.0, 40.0).focusable(true)), layer)
+        }
+
+        let press = |rt: &mut Runtime<S>, key: Key, shift: bool| {
+            rt.key(KeyEvent { key, mods: Mods { shift, ..Mods::default() } });
+            settle(rt);
+        };
+        let focused = |rt: &Runtime<S>| rt.elements().into_iter().find(|e| e.focused).and_then(|e| e.key);
+
+        for kind in [DialogKind::Default, DialogKind::FocusedField, DialogKind::NoOnClose] {
+            let mut rt = Runtime::new(
+                S { kind, point: None, dialog: false, field: TextEdit::new("") },
+                view,
+                (500.0, 400.0),
+                Env::new(true, 1.0),
+            );
+            rt.set_full_keyboard_access(true);
+            settle(&mut rt);
+
+            press(&mut rt, Key::Tab, false);
+            assert_eq!(focused(&rt).as_deref(), Some("row"));
+            press(&mut rt, Key::Function(10), true);
+            assert!(rt.state.point.is_some());
+            press(&mut rt, Key::Down, false);
+            press(&mut rt, Key::Enter, false);
+            assert!(rt.state.point.is_none() && rt.state.dialog);
+            if kind == DialogKind::FocusedField {
+                assert_eq!(focused(&rt).as_deref(), Some("dlg-input"));
+            }
+
+            if kind == DialogKind::NoOnClose {
+                press(&mut rt, Key::Text(" ".into()), false);
+            } else {
+                press(&mut rt, Key::Escape, false);
+            }
+            assert!(!rt.state.dialog);
+            assert_eq!(
+                focused(&rt).as_deref(),
+                Some("row"),
+                "closing dialog opened from context menu must return focus to original row ({kind:?})"
+            );
+        }
+    }
 }

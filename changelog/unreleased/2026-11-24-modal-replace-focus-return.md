@@ -1,0 +1,1 @@
+- Focus: a modal replacing one or more closing modals in the same commit (such as a context menu item opening a dialog, or a chain of dialogs) now carries the outermost removed modal's focus-return target forward—whether or not the replacement modal focuses a child during commit—while still rejecting openers that have been removed, disabled or made inert.
