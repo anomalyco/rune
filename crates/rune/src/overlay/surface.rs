@@ -462,6 +462,7 @@ impl OverlayCore {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.x11.take();
         drop(backing);
+        self.position_owner.step(input::PositionEvent::WindowReleased);
         self.shared.native.lock().unwrap().0 = None;
     }
 }

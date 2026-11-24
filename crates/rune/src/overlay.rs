@@ -464,9 +464,15 @@ pub(in crate::overlay) struct OverlayCore {
     meter: crate::frame::surface_stats::SurfaceMeter,
     /// The display `refollow_pointer` last found the pointer on, away from the overlay's.
     refollow_away: Option<winit::monitor::MonitorHandle>,
-    /// Test hook mirroring an outstanding Wayland `wl_surface.frame` callback on all hosts.
+    /// Whether placement requests or a user window drag owns this overlay's position.
+    position_owner: input::PositionOwner,
+    /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,
+    #[cfg(test)]
+    test_window_backing: bool,
+    #[cfg(test)]
+    test_window_drags: u32,
 }
 
 impl OverlayCore {
@@ -543,8 +549,13 @@ impl OverlayCore {
             slot_wake: None,
             meter,
             refollow_away: None,
+            position_owner: input::PositionOwner::Managed,
             #[cfg(test)]
             layer_frame_pending: false,
+            #[cfg(test)]
+            test_window_backing: false,
+            #[cfg(test)]
+            test_window_drags: 0,
         }
     }
 
@@ -661,7 +672,9 @@ impl OverlayCore {
         if let Some(Backing::Window(w)) = self.surface.parked() {
             let w = w.clone();
             let _size = w.request_inner_size(LogicalSize::new(self.at.size.0 as f64, self.at.size.1 as f64));
-            return self.place_window(app.rt_mut(), event_loop, &w);
+            if self.position_owner.is_managed() { self.place_window(app.rt_mut(), event_loop, &w); }
+            else { self.sync_origin(app.rt_mut(), &w); }
+            return;
         }
         let Some(live) = self.surface.live_mut() else { return };
         match &mut live.backing {
@@ -683,7 +696,12 @@ impl OverlayCore {
         }
         if let Some(Backing::Window(w)) = self.surface.live().map(|l| &l.backing) {
             let w = w.clone();
-            self.place_window(app.rt_mut(), event_loop, &w);
+            if self.position_owner.is_managed() { self.place_window(app.rt_mut(), event_loop, &w); }
+            else {
+                #[cfg(target_os = "macos")]
+                if let Some(panel) = &self.panel { panel.resize(self.at.size); }
+                self.sync_origin(app.rt_mut(), &w);
+            }
             if let Some(gpu) = self.gpu.clone() { self.rescale(app, &gpu, crate::window::backing_scale(&w)); }
         }
     }
@@ -704,7 +722,7 @@ impl OverlayCore {
 
     #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
     fn follow_pointer(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, point: (i32, i32)) {
-        if !self.options.follow_pointer { return; }
+        if !self.position_owner.is_managed() || !self.options.follow_pointer { return; }
         self.move_to_pointer_display(app, event_loop, point);
     }
 

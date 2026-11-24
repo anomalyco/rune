@@ -426,6 +426,16 @@ impl OverlayWindow {
     pub fn take_click(&self, down: bool) -> Option<(f32, f32)> {
         self.input.clicks.borrow_mut().pop_front().filter(|(pressed, _)| *pressed == down).map(|(_, point)| point)
     }
+    /// Clears native pointer capture when an OS drag takes over mouse-up.
+    pub fn pointer_released(&self) {
+        self.input.captured.set(false);
+        self.observe_current();
+    }
+    /// Refreshes the mouse hook's cached window rect and click-through state after a move or resize.
+    pub fn update_geometry(&self) {
+        if let Some(watch) = &self.watch { watch.geometry(self.input.hwnd, self.input.follow.get()); }
+        self.observe_current();
+    }
     pub fn set_regions(&self, regions: &[[f32; 4]], scale: f32) {
         self.input.scale.set(scale);
         if self.input.regions.borrow().as_slice() != regions { *self.input.regions.borrow_mut() = regions.to_vec(); }

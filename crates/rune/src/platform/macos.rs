@@ -289,6 +289,35 @@ impl Panel {
         }
     }
 
+    /// Resizes the panel in place, keeping its top-left corner fixed (for a user-dragged overlay).
+    pub fn resize(&self, size: (f32, f32)) {
+        let mut rect = self.panel.frame();
+        let next = NSSize::new(f64::from(size.0), f64::from(size.1));
+        if rect.size == next { return; }
+        rect.origin.y += rect.size.height - next.height;
+        rect.size = next;
+        self.window.setFrame_display(rect, false);
+        self.panel.setFrame_display(rect, true);
+        if self.presence.get().visible() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
+    }
+
+    /// Starts an interactive AppKit window drag on this panel from the current mouse-down event.
+    /// winit's `Window::drag_window` targets the hidden source `NSWindow`, not this panel.
+    /// Returns whether the panel's frame moved during the drag.
+    pub fn drag_window(&self) -> bool {
+        let Some(mtm) = MainThreadMarker::new() else { return false };
+        let Some(event) = NSApplication::sharedApplication(mtm).currentEvent() else { return false };
+        let before = self.panel.frame();
+        self.panel.performWindowDragWithEvent(&event);
+        let after = self.panel.frame();
+        if after != before {
+            self.window.setFrame_display(after, false);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn rect(&self, at: crate::overlay::Placement, options: &OverlayOptions) -> Option<NSRect> {
         overlay_rect_on(at, options, self.panel.screen().map(|s| screen_id(&s)))
     }

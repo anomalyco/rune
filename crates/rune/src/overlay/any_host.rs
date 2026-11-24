@@ -239,6 +239,9 @@ impl AnyHost for OverlayHost {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. })
             && let Some(x11) = &core.x11 { x11.update_geometry(); }
+        #[cfg(target_os = "windows")]
+        if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. })
+            && let Some(native) = &core.native { native.update_geometry(); }
         // A click gives an overlay that may take keys the focus, as it does the macOS panel; the
         // window manager gives an override-redirect window none.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -249,6 +252,7 @@ impl AnyHost for OverlayHost {
         let input_enabled = core.options.input.resolved(core.interactive) != OverlayInput::None;
         match event {
             WindowEvent::Moved(_) => {
+                core.position_owner.step(input::PositionEvent::WindowMoved);
                 if let Some(live) = core.surface.live() && let Some(w) = live.backing.window() {
                     let scale = crate::window::backing_scale(w);
                     if (scale - live.scale).abs() > f32::EPSILON && let Some(gpu) = core.gpu.clone() {
@@ -296,6 +300,10 @@ impl AnyHost for OverlayHost {
             }
             WindowEvent::Touch(touch) if input_enabled => {
                 app.touch(&touch);
+                core.take_titlebar_action(app);
+                if matches!(touch.phase, winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled) {
+                    core.position_owner.step(input::PositionEvent::LeftReleased);
+                }
                 core.dirty = true;
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -406,7 +414,7 @@ impl AnyHost for OverlayHost {
             let pointer = panel.pointer_state();
             if let Some((x, y)) = core.turn_position(app, &pointer) && app.rt().pointer() != Some((x, y)) {
                 core.observe_pointer(app, x, y);
-                if core.options.follow_pointer && core.options.display == DisplayTarget::UnderPointer {
+                if core.position_owner.is_managed() && core.options.follow_pointer && core.options.display == DisplayTarget::UnderPointer {
                     let size = core.at.size;
                     core.resolve_size(_event_loop);
                     if size != core.at.size { core.resized(app, _event_loop); }

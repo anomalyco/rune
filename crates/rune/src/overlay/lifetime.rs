@@ -29,7 +29,8 @@ impl OverlayCore {
         if !fading { self.settle_before_reveal(app.rt_mut()); }
         if let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) {
             let window = window.clone();
-            self.place_window(app.rt_mut(), event_loop, &window);
+            if self.position_owner.is_managed() { self.place_window(app.rt_mut(), event_loop, &window); }
+            else { self.sync_origin(app.rt_mut(), &window); }
             if let Some(gpu) = self.gpu.clone() { self.rescale(app, &gpu, crate::window::backing_scale(&window)); }
             if self.surface.live().is_none() { return; }
             // Retained alpha-zero hosts already have pixels. A hidden update must reach
