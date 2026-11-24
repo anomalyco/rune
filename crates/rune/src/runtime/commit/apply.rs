@@ -253,6 +253,10 @@ impl RuntimeCore {
                     && !was_exiting
                     && !self.reduced_motion;
                 let mount = if enters_at_once || nodes[i].virtual_mount || quiet_row || self.enters_unseen(&nodes, &unseen, i) { Mount::Initial } else { Mount::Animated };
+                match nodes[i].transition_motion.as_deref() {
+                    Some(&(enter, exit)) => self.scene.set_transition_motion(id, enter, exit),
+                    None => self.scene.clear_transition_motion(id),
+                }
                 self.scene.insert_delayed(id, spec, mount, nodes[i].vis.enter_delay);
             } else if tx.commit.lands() { self.scene.land_waiting(id); }
             self.scene.set_ride_trailing(id, nodes[i].vis_flags.ride_trailing());
@@ -269,6 +273,10 @@ impl RuntimeCore {
                 // As in SwiftUI, a node leaves with the transition of its last render.
                 if !was_exiting {
                     self.scene.set_transition(id, nodes[i].transition.as_deref().copied().unwrap_or_else(Transition::opacity));
+                    match nodes[i].transition_motion.as_deref() {
+                        Some(&(enter, exit)) => self.scene.set_transition_motion(id, enter, exit),
+                        None => self.scene.clear_transition_motion(id),
+                    }
                 }
                 let stack_row = nodes[i].parent.is_some_and(|p| nodes[p].growth.is_some()) || is_virtual
                     || (nodes[i].in_row == RowLayout::Horizontal && (self.tree.aspect_snap.is_empty() || !self.tree.aspect_snap.contains(&id)));
@@ -282,6 +290,7 @@ impl RuntimeCore {
                 if !out_of_sight && !nodes[i].instant_changes && live_row.is_some_and(|(root, _)| root == i) {
                     reorder_jump = shift.unwrap_or(0.0);
                 }
+                let frame_motion = nodes[i].frame_motion.as_deref().copied();
                 let layout_anim = if out_of_sight || held.get(i).copied().unwrap_or(false) {
                     LayoutAnim::INSTANT
                 } else if stack_row && !lands && !tx.relayout && !follows_window {
@@ -293,13 +302,19 @@ impl RuntimeCore {
                         if let Some(drawn) = self.scene.get(id, prop::FRAME) { row_jump = drawn.y - scene_rect.y; }
                         reorder_jump = self.reorder_jump(&nodes, i);
                     }
-                    let mut la = LayoutAnim::axes(anim_l, Anim::INSTANT);
-                    if tx.motion.is_none() && nodes[i].width_leads {
-                        la = la.width_leads();
+                    if let Some(anim) = frame_motion {
+                        LayoutAnim::axes(anim, Anim::INSTANT)
+                    } else {
+                        let mut la = LayoutAnim::axes(anim_l, Anim::INSTANT);
+                        if tx.motion.is_none() && nodes[i].width_leads {
+                            la = la.width_leads();
+                        }
+                        la
                     }
-                    la
                 } else if layout_instant || follows_window {
                     LayoutAnim::INSTANT
+                } else if let Some(anim) = frame_motion {
+                    LayoutAnim::new(anim)
                 } else {
                     let mut la = LayoutAnim::new(anim_l);
                     if tx.motion.is_none() {
@@ -349,7 +364,13 @@ impl RuntimeCore {
                     if self.motion.flying[f].1 != nodes[i].local || nodes[i].parent.is_some_and(|p| slid.get(p).copied().unwrap_or(false)) {
                         self.motion.flying[f].1 = nodes[i].local;
                         // A growth row's instant vertical place would land the whole flight.
-                        let la = if layout_anim.x == Anim::INSTANT || layout_anim.y == Anim::INSTANT { LayoutAnim::new(spring_l) } else { layout_anim };
+                        let la = if let Some(&anim) = nodes[i].matched_motion.as_deref() {
+                            LayoutAnim::new(anim)
+                        } else if layout_anim.x == Anim::INSTANT || layout_anim.y == Anim::INSTANT {
+                            LayoutAnim::new(anim_l)
+                        } else {
+                            layout_anim
+                        };
                         let [drawn, speed] = self.motion.launches_mut().restart(&self.scene, id);
                         self.scene.retarget_drawn(id, scene_rect, la.screen(), drawn, speed);
                     }

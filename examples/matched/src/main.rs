@@ -11,11 +11,12 @@
 
 use std::sync::Arc;
 use rune::tok::{self, type_};
-use rune::{AppSpec, Color, Cx, El, ImageCache, Key, KeyEvent, Pixels, SurfaceFit, TextStyle, Transition, Tx, Waker, col, el, row, text};
+use rune::{AppSpec, Color, Curve, Cx, Easing, El, ImageCache, Key, KeyEvent, Pixels, SurfaceFit, TextStyle, Transition, Tx, Waker, col, el, row, text};
 
 struct State {
     picked: usize,
     zoomed: bool,
+    timed: bool,
     pictures: [Pixels; 4],
     mips_mode: bool,
     cache: Option<ImageCache>,
@@ -113,6 +114,7 @@ fn init() -> State {
     State {
         picked: 0,
         zoomed: false,
+        timed: false,
         pictures: std::array::from_fn(picture),
         mips_mode: false,
         cache: None,
@@ -137,8 +139,25 @@ fn tile(s: &State, i: usize) -> El {
         })
         .child(el().w_full().h_full().pixels_fit(&s.pictures[i], SurfaceFit::Fill))
         .child(text(format!("{}  {}", i + 1, NAMES[i])).font(TextStyle::new(22.0, 600.0)).color(Color::WHITE).absolute(18.0, 14.0));
+    if s.timed {
+        t = t
+            .matched_motion(Curve::tween(0.24, Easing::EASE_IN_OUT))
+            .press(Color::WHITE.alpha(0.10))
+            .press_scale(0.97)
+            .press_motion(
+                Curve::tween(0.12, Easing::EASE_OUT),
+                Curve::tween(0.16, Easing::EASE_OUT),
+            );
+    }
     if s.picked == i {
-        t = t.child(el().absolute(0.0, 0.0).w_full().h_full().radius(20.0).border(3.0, Color::WHITE));
+        let mut ring = el().absolute(0.0, 0.0).w_full().h_full().radius(20.0).border(3.0, Color::WHITE);
+        if s.timed {
+            ring = ring.transition(Transition::opacity()).transition_motion(
+                Curve::tween(0.18, Easing::EASE_OUT),
+                Curve::tween(0.16, Easing::EASE_OUT),
+            );
+        }
+        t = t.child(ring);
     }
     t
 }
@@ -182,8 +201,29 @@ fn mips_view(s: &State, theme: &tok::Theme) -> El {
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let theme = tok::theme(true);
-    let hint_text = if s.mips_mode { "r next frame    m back to grid" } else { "1–4 pick    ↩ zoom    esc back    m mips" };
+    let hint_text = if s.mips_mode { "r next frame    m back to grid" } else { "1–4 pick    ↩ zoom    esc back    t curves    m mips" };
     let hint = text(hint_text).font(type_::LABEL).color(theme.text_secondary);
+    let mut bar = el().key("pick-bar").w((s.picked as f32 + 1.0) * 24.0).h(4.0).radius(2.0).fill(tok::accent(0, true));
+    if s.timed {
+        bar = bar.frame_motion(Curve::tween(0.20, Easing::EASE_OUT));
+    }
+    let pick_track = el().key("pick-track").w(96.0).h(4.0).radius(2.0).fill(theme.control_off).child(bar);
+    let mut mode = row().key("mode").gap(8.0).px(10.0).py(4.0).radius(8.0)
+        .fill(theme.card)
+        .press(theme.text.alpha(0.12))
+        .press_scale(0.97)
+        .on_press(|s: &mut State| s.timed = !s.timed)
+        .child(text("Spring").font(type_::LABEL).color(if !s.timed { theme.text } else { theme.text_secondary }))
+        .child(text("Timed").font(type_::LABEL).color(if s.timed { tok::accent(0, true) } else { theme.text_secondary }));
+    if s.timed {
+        mode = mode.press_motion(
+            Curve::tween(0.12, Easing::EASE_OUT),
+            Curve::tween(0.16, Easing::EASE_OUT),
+        );
+    }
+    let header = row().w_full().center_y().justify_between()
+        .child(hint)
+        .child(row().gap(12.0).center_y().child(pick_track).child(mode));
     let stage = if s.mips_mode {
         mips_view(s, &theme)
     } else {
@@ -193,11 +233,18 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         } else {
             // The grid's own entrance and exit; the matched tile rides above it.
             let pair = |a: usize| row().key(format!("row-{a}")).grow(1.0).gap(12.0).child(tile(s, a)).child(tile(s, a + 1));
-            stage.child(col().key("grid").grow(1.0).gap(12.0).transition(Transition::scale(0.96))
-                .child(pair(0)).child(pair(2)))
+            let mut grid = col().key("grid").grow(1.0).gap(12.0).transition(Transition::scale(0.96))
+                .child(pair(0)).child(pair(2));
+            if s.timed {
+                grid = grid.transition_motion(
+                    Curve::tween(0.20, Easing::EASE_OUT),
+                    Curve::tween(0.18, Easing::EASE_OUT),
+                );
+            }
+            stage.child(grid)
         }
     };
-    col().w_full().h_full().padding(24.0).gap(14.0).fill(theme.bg).child(hint).child(stage)
+    col().w_full().h_full().padding(24.0).gap(14.0).fill(theme.bg).child(header).child(stage)
 }
 
 fn on_key(s: &mut State, e: &KeyEvent, _: &mut Tx) -> bool {
@@ -207,6 +254,7 @@ fn on_key(s: &mut State, e: &KeyEvent, _: &mut Tx) -> bool {
         }
         Key::Text(t) if s.mips_mode && t.eq_ignore_ascii_case("r") => s.step_stream(false),
         Key::Text(t) if !s.mips_mode && !s.zoomed && let Some(n @ 1..=4) = t.parse::<usize>().ok() => s.picked = n - 1,
+        Key::Text(t) if !s.mips_mode && t.eq_ignore_ascii_case("t") => s.timed = !s.timed,
         Key::Enter if !s.mips_mode => s.zoomed = true,
         Key::Escape if s.mips_mode => s.mips_mode = false,
         Key::Escape => s.zoomed = false,
@@ -218,7 +266,12 @@ fn on_key(s: &mut State, e: &KeyEvent, _: &mut Tx) -> bool {
 fn main() {
     rune::run(AppSpec::<State> {
         setup: Some(setup),
-        scenes: &[("grid", |_| {}), ("one", |s| s.zoomed = true), ("mips", |s| s.enter_mips(true))],
+        scenes: &[
+            ("grid", |_| {}),
+            ("one", |s| s.zoomed = true),
+            ("timed", |s| s.timed = true),
+            ("mips", |s| s.enter_mips(true)),
+        ],
         on_key: Some(on_key),
         ..AppSpec::new("Matched", (720.0, 480.0), init, view)
     });
@@ -263,5 +316,21 @@ mod tests {
         let mip = rt.images.place(&mipmapped, [37.0, 37.0]).unwrap();
         assert!(!raw.premultiplied && raw.rect[2] == 256);
         assert!(mip.premultiplied && mip.rect[2] == 64);
+    }
+
+    #[test]
+    fn timed_mode_zooms_and_settles_on_timed_curves() {
+        let mut st = init();
+        st.timed = true;
+        let mut rt = Runtime::new(st, view, (720.0, 480.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        rt.update(|s, _| { s.picked = 1; s.zoomed = true; });
+        rt.frame(0.0);
+        rt.frame(0.11);
+        let mid = rt.presented("tile-2").unwrap().0;
+        assert!(mid[2] > 340.0 && mid[2] < 660.0, "mid-flight width: {mid:?}");
+        rt.frame(0.20);
+        let landed = rt.presented("tile-2").unwrap().0;
+        assert!(landed[2] > 600.0 && landed[3] > 350.0, "landed width: {landed:?}");
     }
 }

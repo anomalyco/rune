@@ -1220,6 +1220,15 @@ rune::App::new(spec).fit_content_height().run();
   clipping parent. `.hover_motion_within(enter, exit)` sets the default curves for every hover
   track below it without its own `.hover_motion` (the nearest ancestor wins), which reaches kit
   controls' inner elements; put it on the view root (`rune_kit::root` carries it to popup layers).
+  `.press_motion(down, up)` sets the down and release curves for all press tracks on the element
+  (`press`, `press_color` and `press_scale`), leaving `INSTANT`/`SNAPPY` (highlight) and
+  `INSTANT`/`POP` (scale) as the defaults when unset.
+- **Per-element motion overrides**: beside `offset_motion`, `opacity_motion`, `scale_motion`,
+  `rotate_motion` and `blur_motion`, `.frame_motion(anim)` overrides this element's own layout
+  curve (non-inherited, beating `Tx::motion` / `Tx::motion_curve` and skipping `lead` /
+  `width_leads`), and `.transition_motion(enter, exit)` overrides its presence transition's enter
+  and exit curves with any `Anim` (including timed `Curve::tween` curves and `Anim::INSTANT`).
+  Instant commits and Reduce Motion still override them.
 - **Loops** (`.cycle(Cycle { period, phase, stops, still, fps })`): an opacity loop sampled from the
   clock through `El::looping`, with one loop engine in rune-motion,
   so every loop with the same period stays in phase. Reduced motion holds `still`. While only loops
@@ -1288,8 +1297,9 @@ if s.zoomed {
   included, and starts from where the source was seen after its own viewport's scroll.
 - **Interruptible.** Matching back mid-flight starts from the presented rect with its
   velocity; a commit that leaves its layout alone doesn't re-time it.
-- **Spring.** `tok::motion::REFLOW` unless the commit's `Tx::motion` or the element's own
-  `.motion()` sets one. Under reduced motion nothing is matched: the old element exits and
+- **Curve.** `tok::motion::REFLOW` unless the element's own `.matched_motion(anim)`, the
+  commit's `Tx::motion` / `Tx::motion_curve`, or the element's own `.motion()` sets one. Under
+  reduced motion nothing is matched: the old element exits and
   the new one enters by their own transitions, in place. Settle and first frames swap.
 - **Nesting and removal.** A matched element inside a flying one flies its own path. A
   flight lands once the ancestors it sits in stop moving, scaling and fading. One removed
