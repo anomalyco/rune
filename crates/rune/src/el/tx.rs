@@ -303,7 +303,8 @@ impl Tx {
         self.pick_read(None, x, y, crate::Pick::default(), f);
     }
 
-    /// [`Tx::element_at`] with options ([`Pick`](crate::Pick)).
+    /// [`Tx::element_at`] with options ([`Pick`](crate::Pick)): transparent layers,
+    /// [`Pick::interactive`] hit targets, or [`Pick::drop_targets`].
     pub fn element_at_with<S: 'static>(&mut self, x: f32, y: f32, pick: crate::Pick, f: impl FnOnce(&mut S, Option<crate::Picked>, &mut Tx) + 'static) {
         self.pick_read(None, x, y, pick, f);
     }

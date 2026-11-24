@@ -45,6 +45,9 @@ impl HitState {
     pub(in crate::runtime) fn hits(&self) -> &[(NodeId, [f32; 4])] { &self.hits }
 
     #[inline]
+    pub(in crate::runtime) fn drop_hits(&self) -> &[(NodeId, [f32; 4], usize)] { &self.drop_hits }
+
+    #[inline]
     pub(in crate::runtime) fn hits_len(&self) -> usize { self.hits.len() }
 
     #[inline]
@@ -114,6 +117,12 @@ impl HitState {
     #[inline]
     pub(in crate::runtime) fn find_hit<T>(&self, mut f: impl FnMut(NodeId, [f32; 4]) -> Option<T>) -> Option<T> {
         self.hits.iter().rev().find_map(|&(id, r)| f(id, r))
+    }
+
+    /// Walks drop targets top-to-bottom and returns the first match from `f`.
+    #[inline]
+    pub(in crate::runtime) fn find_drop_hit<T>(&self, mut f: impl FnMut(NodeId, [f32; 4]) -> Option<T>) -> Option<T> {
+        self.drop_hits.iter().rev().find_map(|&(id, r, _)| f(id, r))
     }
 
     /// Walks wheel hits top-to-bottom and returns the first match from `f`.

@@ -319,3 +319,266 @@ fn pick_transparent_finds_opacity_zero_elements_but_not_exiting_ones() {
     assert_ne!(key(rt.element_at_with(x, y, on)).as_deref(), Some("leaver"));
     assert!(!rt.contains_with("leaver", x, y, on));
 }
+#[test]
+fn pick_interactive_skips_passive_layers_and_matches_presses() {
+    #[derive(Default)]
+    struct S { pressed: bool }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        col().size(300.0, 200.0)
+            .child(col().key("rows")
+                .child(el().key("row-1").size(300.0, 30.0)
+                    .on_press(|s: &mut S| s.pressed = true)
+                    .child(el().key("row-label").size(120.0, 20.0))))
+            .child(col().key("layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .child(el().key("bar").w(6.0).h_full()))
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Default pick still stops on the topmost passive overlay layer.
+    let plain = rt.element_at(150.0, 15.0).unwrap();
+    assert_eq!(plain.key(), Some("layer"));
+    assert_eq!(rt.element_at_with(150.0, 15.0, rune::Pick::default()), Some(plain));
+
+    // Pick::interactive skips both the passive overlay layer and passive child label inside row-1.
+    let inter = rune::Pick::new().interactive(true);
+    let hit = rt.element_at_with(150.0, 15.0, inter).unwrap();
+    assert_eq!(hit.key(), Some("row-1"));
+    assert_eq!(hit.rect(), [0.0, 0.0, 300.0, 30.0]);
+    assert_eq!(hit.local(), [150.0, 15.0]);
+
+    let over_child = rt.element_at_with(20.0, 10.0, inter).unwrap();
+    assert_eq!(over_child.key(), Some("row-1"));
+    assert_eq!(over_child.local(), [20.0, 10.0]);
+    // PartialEq / Eq compare element identity (path and key), not the queried local point.
+    assert_eq!(hit, over_child);
+
+    // Empty area below row-1 has only passive boxes.
+    assert_eq!(rt.element_at_with(150.0, 100.0, inter), None);
+
+    // contains_with respects Pick::interactive.
+    assert!(rt.contains("layer", 150.0, 15.0));
+    assert!(!rt.contains_with("layer", 150.0, 15.0, inter));
+    assert!(rt.contains_with("row-1", 150.0, 15.0, inter));
+
+    // A real press at the same point reaches row-1.
+    rt.pointer_move(150.0, 15.0);
+    rt.pointer_down(150.0, 15.0);
+    rt.pointer_up(150.0, 15.0);
+    rt.frame(0.016);
+    assert!(rt.state.pressed);
+}
+
+#[test]
+fn pick_drop_targets_and_combined_paint_order() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        el().size(300.0, 200.0)
+            // Left half: drop zone painted below an interactive button.
+            .child(el().key("zone-under").absolute(10.0, 10.0).size(120.0, 80.0)
+                .on_drop_files(|_: &mut (), _, _| {})
+                .child(el().key("inner-drop").absolute(10.0, 10.0).size(40.0, 30.0)
+                    .on_drop_files(|_: &mut (), _, _| {})))
+            .child(el().key("btn-over").absolute(60.0, 20.0).size(60.0, 40.0)
+                .on_press(|_: &mut ()| {}))
+            // Right half: interactive button painted below a drop zone.
+            .child(el().key("btn-under").absolute(160.0, 10.0).size(120.0, 80.0)
+                .on_press(|_: &mut ()| {}))
+            .child(el().key("zone-over").absolute(180.0, 20.0).size(80.0, 40.0)
+                .on_drop_files(|_: &mut (), _, _| {}))
+            // Passive full-size overlay over everything.
+            .child(el().key("passive-cover").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)))
+    }
+    let mut rt = Runtime::new((), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let drops = rune::Pick::new().drop_targets(true);
+    let inter = rune::Pick::new().interactive(true);
+    let both = rune::Pick::new().interactive(true).drop_targets(true);
+
+    // Passive cover wins for default pick everywhere.
+    assert_eq!(rt.element_at(30.0, 30.0).unwrap().key(), Some("passive-cover"));
+
+    // Nested drop zones: innermost wins at overlap, outer wins outside inner.
+    let inner = rt.element_at_with(30.0, 30.0, drops).unwrap();
+    assert_eq!(inner.key(), Some("inner-drop"));
+    assert_eq!(inner.rect(), [20.0, 20.0, 40.0, 30.0]);
+    assert_eq!(inner.local(), [10.0, 10.0]);
+    assert_eq!(rt.element_at_with(30.0, 30.0, inter), None);
+
+    // Where btn-over overlaps zone-under (80, 35):
+    assert_eq!(rt.element_at_with(80.0, 35.0, drops).unwrap().key(), Some("zone-under"));
+    assert_eq!(rt.element_at_with(80.0, 35.0, inter).unwrap().key(), Some("btn-over"));
+    assert_eq!(rt.element_at_with(80.0, 35.0, both).unwrap().key(), Some("btn-over"));
+
+    // Where zone-over overlaps btn-under (200, 35):
+    assert_eq!(rt.element_at_with(200.0, 35.0, drops).unwrap().key(), Some("zone-over"));
+    assert_eq!(rt.element_at_with(200.0, 35.0, inter).unwrap().key(), Some("btn-under"));
+    assert_eq!(rt.element_at_with(200.0, 35.0, both).unwrap().key(), Some("zone-over"));
+
+    // contains_with checks the target directly regardless of paint order.
+    assert!(rt.contains_with("zone-under", 80.0, 35.0, drops));
+    assert!(!rt.contains_with("zone-under", 80.0, 35.0, inter));
+    assert!(rt.contains_with("btn-under", 200.0, 35.0, inter));
+    assert!(!rt.contains_with("btn-under", 200.0, 35.0, drops));
+    assert!(rt.contains_with("zone-over", 200.0, 35.0, both));
+    assert!(!rt.contains_with("passive-cover", 200.0, 35.0, both));
+}
+
+#[test]
+fn pick_filters_respect_inert_modal_exiting_opacity_and_edges() {
+    #[derive(Default)]
+    struct S { modal_open: bool, gone: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        el().size(300.0, 200.0)
+            .child(col().key("inert-group").absolute(0.0, 0.0).size(100.0, 60.0).inert()
+                .child(el().key("inert-btn").size(50.0, 30.0).on_press(|_: &mut S| {}))
+                .child(el().key("inert-drop").size(50.0, 30.0).on_drop_files(|_: &mut S, _, _| {})))
+            .child(el().key("live-btn").absolute(110.0, 10.0).size(60.0, 40.0).on_press(|_: &mut S| {}))
+            .child(el().key("live-drop").absolute(180.0, 10.0).size(60.0, 40.0).on_drop_files(|_: &mut S, _, _| {}))
+            .child(el().key("clear-btn").absolute(10.0, 80.0).size(60.0, 40.0).opacity(0.0).on_press(|_: &mut S| {}))
+            .child(el().key("zero-btn").absolute(100.0, 80.0).size(0.0, 0.0).on_press(|_: &mut S| {}))
+            .children((!s.gone).then(|| el().key("leaving-btn").absolute(120.0, 80.0).size(60.0, 40.0)
+                .fill(Color::WHITE).transition(rune::Transition::opacity()).on_press(|_: &mut S| {})))
+            .children(s.modal_open.then(|| {
+                el().key("dialog").absolute(80.0, 130.0).size(140.0, 50.0).modal_trap()
+                    .child(el().key("modal-btn").size(60.0, 40.0).on_press(|_: &mut S| {}))
+            }))
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let inter = rune::Pick::new().interactive(true);
+    let drops = rune::Pick::new().drop_targets(true);
+
+    // Inert elements are found by default pick, skipped by interactive and drop_targets.
+    assert_eq!(rt.element_at(15.0, 15.0).unwrap().key(), Some("inert-btn"));
+    assert_eq!(rt.element_at_with(15.0, 15.0, inter), None);
+    assert_eq!(rt.element_at_with(15.0, 45.0, drops), None);
+    assert!(!rt.contains_with("inert-btn", 15.0, 15.0, inter));
+    assert!(!rt.contains_with("inert-drop", 15.0, 45.0, drops));
+
+    // Opacity-0 interactive element takes no input, so interactive skips it.
+    assert_eq!(rt.element_at_with(30.0, 100.0, inter), None);
+    assert_eq!(rt.element_at_with(30.0, 100.0, rune::Pick::new().transparent(true)).unwrap().key(), Some("clear-btn"));
+
+    // Zero-size and non-finite coordinates never match.
+    assert_eq!(rt.element_at_with(100.0, 80.0, inter), None);
+    assert_eq!(rt.element_at_with(f32::NAN, 15.0, inter), None);
+    assert_eq!(rt.element_at_with(f32::INFINITY, 15.0, drops), None);
+    assert_eq!(rt.element_at(f32::NAN, f32::NAN), None);
+
+    // Exiting element is skipped.
+    assert_eq!(rt.element_at_with(140.0, 95.0, inter).unwrap().key(), Some("leaving-btn"));
+    rt.update(|s, _| s.gone = true);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.element_at_with(140.0, 95.0, inter), None);
+
+    // Opening a modal blocks background interactive and drop targets, while modal controls match.
+    assert_eq!(rt.element_at_with(130.0, 25.0, inter).unwrap().key(), Some("live-btn"));
+    assert_eq!(rt.element_at_with(200.0, 25.0, drops).unwrap().key(), Some("live-drop"));
+    rt.update(|s, tx| { s.modal_open = true; tx.instant(); });
+    rt.frame(0.0);
+    assert_eq!(rt.element_at(130.0, 25.0).unwrap().key(), Some("live-btn"));
+    assert_eq!(rt.element_at_with(130.0, 25.0, inter), None);
+    assert_eq!(rt.element_at_with(200.0, 25.0, drops), None);
+    assert_eq!(rt.element_at_with(100.0, 145.0, inter).unwrap().key(), Some("modal-btn"));
+}
+
+#[test]
+fn picked_rect_and_local_match_pointer_events_under_scroll_scale_and_rotate() {
+    #[derive(Default)]
+    struct S {
+        last_local: Option<[f32; 2]>,
+        tx_picked: Option<rune::Picked>,
+    }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        el().size(400.0, 300.0)
+            // Scrolled list at (10, 10)
+            .child(col().key("scroller").absolute(10.0, 10.0).size(140.0, 80.0)
+                .scroll(rune::ScrollSpec { stick_bottom: false })
+                .child(col().w_full().h(240.0)
+                    .child(el().key("pad-top").w_full().h(60.0))
+                    .child(el().key("scroll-row").w_full().h(40.0)
+                        .on_pointer_move_local(|s: &mut S, p, _| s.last_local = Some([p.x, p.y]))
+                        .on_press_tx(|_: &mut S, tx| {
+                            tx.element_at_in_with(
+                                "scroller",
+                                45.0,
+                                55.0,
+                                rune::Pick::new().interactive(true),
+                                |s: &mut S, p, _| s.tx_picked = p,
+                            );
+                        }))))
+            // Scaled box at (180, 20), layout 80x40 scaled 2x about origin (0, 0) -> drawn [180, 20, 160, 80]
+            .child(el().key("scaled").absolute(180.0, 20.0).size(80.0, 40.0)
+                .scale(2.0).origin(0.0, 0.0)
+                .on_pointer_move_local(|s: &mut S, p, _| s.last_local = Some([p.x, p.y])))
+            // Rotated box at (100, 160), layout 100x20 rotated 90 deg CW about center (150, 170)
+            .child(el().key("turned").absolute(100.0, 160.0).size(100.0, 20.0)
+                .rotate(std::f32::consts::FRAC_PI_2)
+                .on_pointer_move_local(|s: &mut S, p, _| s.last_local = Some([p.x, p.y])))
+            // Passive cover over everything
+            .child(el().key("cover").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)))
+    }
+
+    fn assert_eq_trait<T: Eq>() {}
+    assert_eq_trait::<rune::Picked>();
+
+    for scale in [1.0, 2.0] {
+        let mut rt = Runtime::new(S::default(), view, (400.0, 300.0), Env::new(true, scale));
+        rt.frame(0.0);
+        rt.update(|_, tx| tx.scroll_to_y("scroller", 30.0));
+        rt.frame(0.0);
+
+        let inter = rune::Pick::new().interactive(true);
+        let elem_rect = |rt: &Runtime<S>, k: &str| {
+            rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k)).unwrap().rect
+        };
+
+        // 1. Scrolled row: scroller at y=10, pad-top=60, scrolled by 30 => row drawn at y=40..80.
+        let p = rt.element_at_with(45.0, 55.0, inter).unwrap();
+        assert_eq!(p.key(), Some("scroll-row"));
+        assert_eq!(p.rect(), elem_rect(&rt, "scroll-row"));
+        assert!((p.rect()[0] - 10.0).abs() < 1e-3 && (p.rect()[1] - 40.0).abs() < 1e-3);
+        assert!((p.local()[0] - 35.0).abs() < 1e-3 && (p.local()[1] - 15.0).abs() < 1e-3);
+        rt.pointer_move(45.0, 55.0);
+        rt.frame(0.0);
+        let ev = rt.state.last_local.unwrap();
+        assert!((ev[0] - p.local()[0]).abs() < 1e-3 && (ev[1] - p.local()[1]).abs() < 1e-3);
+
+        // Tx::element_at_in_with returns identical rect and local from a handler.
+        rt.pointer_down(45.0, 55.0);
+        rt.pointer_up(45.0, 55.0);
+        rt.frame(0.0);
+        let txp = rt.state.tx_picked.clone().unwrap();
+        assert_eq!(txp, p);
+        assert_eq!(txp.rect(), p.rect());
+        assert_eq!(txp.local(), p.local());
+
+        // 2. Scaled element: drawn [180, 20, 160, 80]; window point (260, 60) -> local (40, 20).
+        let ps = rt.element_at_with(260.0, 60.0, inter).unwrap();
+        assert_eq!(ps.key(), Some("scaled"));
+        assert_eq!(ps.rect(), elem_rect(&rt, "scaled"));
+        assert!((ps.rect()[2] - 160.0).abs() < 1e-3 && (ps.rect()[3] - 80.0).abs() < 1e-3);
+        assert!((ps.local()[0] - 40.0).abs() < 1e-3 && (ps.local()[1] - 20.0).abs() < 1e-3);
+        rt.state.last_local = None;
+        rt.pointer_move(260.0, 60.0);
+        rt.frame(0.0);
+        let ev = rt.state.last_local.unwrap();
+        assert!((ev[0] - ps.local()[0]).abs() < 1e-3 && (ev[1] - ps.local()[1]).abs() < 1e-3);
+
+        // 3. Rotated element: center (150, 170); window point (150, 200) is 30pt down from center
+        // which unturns 90 deg CCW to +30pt right of center -> local (80, 10).
+        let pt = rt.element_at_with(150.0, 200.0, inter).unwrap();
+        assert_eq!(pt.key(), Some("turned"));
+        assert_eq!(pt.rect(), elem_rect(&rt, "turned"));
+        assert!((pt.local()[0] - 80.0).abs() < 1e-2 && (pt.local()[1] - 10.0).abs() < 1e-2,
+            "scale={scale}: rotated local={:?}", pt.local());
+        rt.state.last_local = None;
+        rt.pointer_move(150.0, 200.0);
+        rt.frame(0.0);
+        let ev = rt.state.last_local.unwrap();
+        assert!((ev[0] - pt.local()[0]).abs() < 1e-3 && (ev[1] - pt.local()[1]).abs() < 1e-3);
+    }
+}
+
