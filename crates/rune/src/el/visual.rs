@@ -59,6 +59,11 @@ pub struct VisualCold {
     pub pixels: Option<crate::pixels::Pixels>,
     /// How `pixels` keeps its aspect ratio; `None` stretches it to the rect.
     pub pixels_fit: Option<crate::SurfaceFit>,
+    /// Colour whose RGB and alpha tint `pixels`'s alpha mask (`El::pixels_tint`); `None` draws
+    /// the image's own colours.
+    pub(crate) pixels_tint: Option<Color>,
+    /// Sampling filter for `pixels` (`El::image_filter`); `Linear` by default.
+    pub(crate) image_filter: crate::ImageFilter,
     /// An effect slot (`El::effect`).
     pub(crate) effect: Option<crate::el::effect::EffectSlot>,
     /// Backdrop blur standard deviation in points (`El::backdrop_blur`); 0 is off.
@@ -167,6 +172,8 @@ impl Empty for VisualCold {
         grid: None,
         pixels: None,
         pixels_fit: None,
+        pixels_tint: None,
+        image_filter: crate::ImageFilter::Linear,
         effect: None,
         backdrop_blur: 0.0,
         hover_motion: None,

@@ -93,6 +93,7 @@ pub(crate) use instance::INSTANCE_WORDS;
 pub(crate) use instance::effect_mark;
 pub(crate) use instance::end_layer;
 pub(crate) use instance::pack_u64_f32;
+pub(crate) use instance::shader_consts;
 pub(crate) use instance::turned_bounds;
 pub(crate) use instance::unpack_u64_f32;
 pub(crate) use instance::word;

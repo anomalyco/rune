@@ -591,7 +591,8 @@ fn srgb_tables() -> &'static ([f32; 256], [f32; 256]) {
     })
 }
 
-/// `KIND_IMAGE` at pixel centre `p`: bilinear, clamped to the image's own texels.
+/// `KIND_IMAGE` at pixel centre `p`: bilinear or nearest-neighbour, optionally alpha-tinted,
+/// clamped to the image's own texels.
 pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32; 4] {
     if !(i.rect[2] > 0.0 && i.rect[3] > 0.0 && i.uv[2] > 0.0 && i.uv[3] > 0.0)
         || !i.rect[2].is_finite() || !i.rect[3].is_finite()
@@ -602,8 +603,8 @@ pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32;
     }
     let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
     let d = sd_rounded([p[0] - i.rect[0] - half[0], p[1] - i.rect[1] - half[1]], half, i.radii);
-    let local = [(p[0] - i.rect[0]) * i.uv[2] / i.rect[2] - 0.5, (p[1] - i.rect[1]) * i.uv[3] / i.rect[3] - 0.5];
-    if !local[0].is_finite() || !local[1].is_finite() { return [0.0; 4]; }
+    let uv_pos = [(p[0] - i.rect[0]) * i.uv[2] / i.rect[2], (p[1] - i.rect[1]) * i.uv[3] / i.rect[3]];
+    if !uv_pos[0].is_finite() || !uv_pos[1].is_finite() { return [0.0; 4]; }
     let lo = [i.uv[0] as i32, i.uv[1] as i32];
     // A sub-texel crop (0 < uv < 1) spans less than one texel and samples `lo` without bleeding
     // into neighbouring atlas slots.
@@ -611,16 +612,34 @@ pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32;
         lo[0].saturating_add((i.uv[2] as i32).saturating_sub(1).max(0)),
         lo[1].saturating_add((i.uv[3] as i32).saturating_sub(1).max(0)),
     ];
-    let base = [local[0].floor(), local[1].floor()];
-    let f = [local[0] - base[0], local[1] - base[1]];
-    let bx = lo[0].saturating_add(base[0] as i32);
-    let by = lo[1].saturating_add(base[1] as i32);
-    let t0 = [bx.clamp(lo[0], hi[0]), by.clamp(lo[1], hi[1])];
-    let t1 = [bx.saturating_add(1).clamp(lo[0], hi[0]), by.saturating_add(1).clamp(lo[1], hi[1])];
-    let pm = i.params[2] > shader_consts::FLAG_ON_THRESHOLD;
-    let top = mix4(image_texel(page, t0, pm), image_texel(page, [t1[0], t0[1]], pm), f[0]);
-    let bottom = mix4(image_texel(page, [t0[0], t1[1]], pm), image_texel(page, t1, pm), f[0]);
-    scale4(mix4(top, bottom, f[1]), i.fill[3] * clamp01(0.5 - d))
+    let flags = if i.params[2].is_finite() { (i.params[2].max(0.0) + 0.5) as u32 } else { 0 };
+    let pm = (flags & shader_consts::IMAGE_FLAG_PREMULTIPLIED) != 0;
+    let tinted = (flags & shader_consts::IMAGE_FLAG_TINT) != 0;
+    let nearest = (flags & shader_consts::IMAGE_FLAG_NEAREST) != 0;
+    let c = if nearest {
+        let t = [
+            lo[0].saturating_add(uv_pos[0].floor() as i32).clamp(lo[0], hi[0]),
+            lo[1].saturating_add(uv_pos[1].floor() as i32).clamp(lo[1], hi[1]),
+        ];
+        image_texel(page, t, pm)
+    } else {
+        let local = [uv_pos[0] - 0.5, uv_pos[1] - 0.5];
+        let base = [local[0].floor(), local[1].floor()];
+        let f = [local[0] - base[0], local[1] - base[1]];
+        let bx = lo[0].saturating_add(base[0] as i32);
+        let by = lo[1].saturating_add(base[1] as i32);
+        let t0 = [bx.clamp(lo[0], hi[0]), by.clamp(lo[1], hi[1])];
+        let t1 = [bx.saturating_add(1).clamp(lo[0], hi[0]), by.saturating_add(1).clamp(lo[1], hi[1])];
+        let top = mix4(image_texel(page, t0, pm), image_texel(page, [t1[0], t0[1]], pm), f[0]);
+        let bottom = mix4(image_texel(page, [t0[0], t1[1]], pm), image_texel(page, t1, pm), f[0]);
+        mix4(top, bottom, f[1])
+    };
+    let cov = clamp01(0.5 - d);
+    if tinted {
+        scale4(i.fill, c[3] * cov)
+    } else {
+        scale4(c, i.fill[3] * cov)
+    }
 }
 
 #[cfg(test)]

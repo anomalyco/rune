@@ -715,3 +715,29 @@ fn pixels_place_lock_hold_time_1080x2400() {
         steady_total[10], steady_lock[10], unchanged_lock[10]
     );
 }
+
+#[test]
+fn place_at_filtered_nearest_requests_mip_zero_while_linear_uses_downsampled_mip() {
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let mut rgba = Vec::with_capacity(64 * 64 * 4);
+    for y in 0..64u32 {
+        for x in 0..64u32 {
+            let v = if ((x / 8) + (y / 8)) % 2 == 0 { 0u8 } else { 255u8 };
+            rgba.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    let img = cache.rgba(64, 64, rgba);
+    assert_eq!(img.wait(), Ok([64, 64]));
+
+    let mut atlas = ImageAtlas::default();
+    let (lin, _) = atlas.place_at_filtered(img.pixels(), [16.0, 16.0], None, ImageFilter::Linear).unwrap();
+    assert_eq!([lin.rect[2], lin.rect[3]], [16, 16], "Linear selects the 16x16 mip");
+    assert!(!atlas.has_slot(img.pixels(), 0));
+    assert!(atlas.has_slot(img.pixels(), 2));
+
+    let (near, _) = atlas.place_at_filtered(img.pixels(), [16.0, 16.0], None, ImageFilter::Nearest).unwrap();
+    assert_eq!([near.rect[2], near.rect[3]], [64, 64], "Nearest requests mip 0 even when scaled down");
+    assert!(atlas.has_slot(img.pixels(), 0));
+    assert!(atlas.has_slot(img.pixels(), 2), "Linear and Nearest slots coexist in the same atlas");
+    assert!(lin.premultiplied && near.premultiplied);
+}

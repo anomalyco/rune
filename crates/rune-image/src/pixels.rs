@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::place::{SurfaceFit, SurfacePlace};
+use crate::place::{ImageFilter, SurfaceFit, SurfacePlace};
 
 pub const IMAGE_ATLAS_SIZE: u32 = 1024;
 
@@ -514,14 +514,40 @@ impl ImageAtlas {
     /// an animation's first frame.
     #[doc(hidden)]
     pub fn place_at(&mut self, pixels: &Pixels, drawn: [f32; 2], now: Option<f64>) -> Option<(Placed, Option<f64>)> {
-        self.place_at_with_copy_hook(pixels, drawn, now, |_| {})
+        self.place_at_filtered(pixels, drawn, now, ImageFilter::Linear)
     }
 
+    /// [`Self::place_at`] with an explicit sampling filter: [`ImageFilter::Nearest`] selects mip
+    /// level 0 (the highest level within `max_side()`) instead of linear-prefiltered downsampled
+    /// mips so crisp pixel edges stay sharp even when scaled down.
+    #[doc(hidden)]
+    pub fn place_at_filtered(
+        &mut self,
+        pixels: &Pixels,
+        drawn: [f32; 2],
+        now: Option<f64>,
+        filter: ImageFilter,
+    ) -> Option<(Placed, Option<f64>)> {
+        self.place_at_inner(pixels, drawn, now, filter, |_| {})
+    }
+
+    #[cfg(test)]
     fn place_at_with_copy_hook(
         &mut self,
         pixels: &Pixels,
         drawn: [f32; 2],
         now: Option<f64>,
+        on_copy_row: impl FnMut(usize),
+    ) -> Option<(Placed, Option<f64>)> {
+        self.place_at_inner(pixels, drawn, now, ImageFilter::Linear, on_copy_row)
+    }
+
+    fn place_at_inner(
+        &mut self,
+        pixels: &Pixels,
+        drawn: [f32; 2],
+        now: Option<f64>,
+        filter: ImageFilter,
         mut on_copy_row: impl FnMut(usize),
     ) -> Option<(Placed, Option<f64>)> {
         #[cfg(test)]
@@ -553,12 +579,15 @@ impl ImageAtlas {
                     }
                     _ => &decoded.mips[..],
                 };
-                // Choose the smallest prefiltered level that still covers both device-pixel axes.
-                // No mip construction or resampling happens on the render thread.
-                while let Some(next) = mips.get(level + 1) {
-                    if (next.width as f32) < drawn[0].clamp(1.0, frame_w as f32)
-                        || (next.height as f32) < drawn[1].clamp(1.0, frame_h as f32) { break; }
-                    level += 1;
+                // Choose the smallest prefiltered level that still covers both device-pixel axes
+                // when linearly filtered. Nearest-neighbour requests mip 0 so downsampled linear
+                // mips never blur hard pixel edges. No mip construction happens on the render thread.
+                if filter == ImageFilter::Linear {
+                    while let Some(next) = mips.get(level + 1) {
+                        if (next.width as f32) < drawn[0].clamp(1.0, frame_w as f32)
+                            || (next.height as f32) < drawn[1].clamp(1.0, frame_h as f32) { break; }
+                        level += 1;
+                    }
                 }
                 // A level past the GPU's largest texture can't go up: draw from the largest that fits.
                 let limit = max_side();

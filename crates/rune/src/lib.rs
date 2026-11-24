@@ -172,6 +172,7 @@ pub use growth::edge;
 pub use image::Image;
 pub use image::ImageCache;
 pub use image::ImageError;
+pub use image::ImageFilter;
 pub use image::ImageId;
 pub use input::canvas_input::GesturePhase;
 pub use input::canvas_input::MagnifyEvent;
