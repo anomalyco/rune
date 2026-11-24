@@ -16,6 +16,7 @@ const SIGNATURE: u32 = u32::from_be_bytes(*b"rune");
 const KEYBOARD: u32 = u32::from_be_bytes(*b"keyb");
 const EXISTS: i64 = -9878;
 const NOT_HANDLED: i32 = -9874;
+const SHARED: u32 = 0;
 // Without this flag Carbon permits another process to register the same combination.
 const EXCLUSIVE: u32 = 1;
 
@@ -61,14 +62,52 @@ impl Native {
     }
 }
 
+/// True when `CopySymbolicHotKeys` holds a turned-off entry for `chord` and no enabled entry on
+/// the same chord. macOS can still reject `EXCLUSIVE` with `-9878` for unchecked system shortcuts
+/// (such as Spotlight's ⌘Space), while allowing a `SHARED` registration.
+fn disabled_only_symbolic(chord: (u32, u32), symbolic: &[((u32, u32), bool)]) -> bool {
+    let mut saw_disabled = false;
+    for &(entry, enabled) in symbolic {
+        if entry != chord { continue; }
+        if enabled { return false; }
+        saw_disabled = true;
+    }
+    saw_disabled
+}
+
+/// Registers exclusively first so another app's exclusive hold returns `Conflict`. Only when
+/// Carbon returns `EXISTS` (`-9878`) for a disabled-only symbolic hotkey does it retry once with
+/// `SHARED`, keeping the success path free of `CopySymbolicHotKeys` calls.
+fn register_with_fallback<T>(
+    chord: (u32, u32),
+    mut try_register: impl FnMut(u32) -> (i32, T),
+    symbolic: impl FnOnce() -> Vec<((u32, u32), bool)>,
+) -> Result<T, ShortcutError> {
+    let (status, handle) = try_register(EXCLUSIVE);
+    if i64::from(status) == EXISTS && disabled_only_symbolic(chord, &symbolic()) {
+        let (status, handle) = try_register(SHARED);
+        native_status(status.into(), EXISTS)?;
+        return Ok(handle);
+    }
+    native_status(status.into(), EXISTS)?;
+    Ok(handle)
+}
+
 impl Backend for Native {
     fn register(&mut self, id: ShortcutId, shortcut: &Shortcut) -> Result<(), ShortcutError> {
         let code = keycode(shortcut.key_name()).ok_or_else(|| ShortcutError::InvalidAccelerator(shortcut.to_string()))?;
         let mods = carbon_mods(shortcut);
-        let mut hotkey = ptr::null_mut();
-        // SAFETY: On the main thread; pointers are valid output slots and target is Carbon-owned.
-        native_status(unsafe { RegisterEventHotKey(code, mods, HotKeyId { signature: SIGNATURE, id: id.0 },
-            GetApplicationEventTarget(), EXCLUSIVE, &mut hotkey) }.into(), EXISTS)?;
+        let hotkey = register_with_fallback(
+            (code, mods),
+            |options| {
+                let mut hotkey = ptr::null_mut();
+                // SAFETY: On the main thread; pointers are valid output slots and target is Carbon-owned.
+                let status = unsafe { RegisterEventHotKey(code, mods, HotKeyId { signature: SIGNATURE, id: id.0 },
+                    GetApplicationEventTarget(), options, &mut hotkey) };
+                (status, hotkey)
+            },
+            symbolic_hotkeys,
+        )?;
         self.context.keys.borrow_mut().insert(id, hotkey);
         Ok(())
     }
@@ -132,7 +171,7 @@ const MODS: u32 = CMD | SHIFT_KEY | OPTION | CONTROL;
 pub(super) fn system_owner(shortcut: &Shortcut) -> Option<String> {
     objc2::MainThreadMarker::new()?;
     let chord = (keycode(shortcut.key_name())?, carbon_mods(shortcut));
-    if !enabled_symbolic().contains(&chord) { return None; }
+    if !symbolic_hotkeys().iter().any(|&(entry, enabled)| enabled && entry == chord) { return None; }
     Some(named(chord, &remapped()).unwrap_or("macOS").into())
 }
 
@@ -144,8 +183,8 @@ fn named(chord: (u32, u32), remapped: &[(&str, Option<(u32, u32)>)]) -> Option<&
     }).map(|(.., name)| *name)
 }
 
-/// Carbon's effective symbolic hotkeys, defaults included, as (key code, modifiers).
-fn enabled_symbolic() -> Vec<(u32, u32)> {
+/// Carbon's effective symbolic hotkeys, defaults included, as `((key code, modifiers), enabled)`.
+fn symbolic_hotkeys() -> Vec<((u32, u32), bool)> {
     let mut array = ptr::null();
     // SAFETY: Copy rule: a successful call returns a retained array, released by CFRetained.
     let array = unsafe {
@@ -159,9 +198,13 @@ fn enabled_symbolic() -> Vec<(u32, u32)> {
         .and_then(|v| v.downcast::<CFNumber>().ok()).and_then(|n| n.as_i64());
     // HIToolbox defines these keys as CFSTR literals, not exported symbols.
     let [code, mods, enabled] = ["kHISymbolicHotKeyCode", "kHISymbolicHotKeyModifiers", "kHISymbolicHotKeyEnabled"].map(CFString::from_str);
-    let (code, mods) = (&*code, &*mods);
-    array.iter().filter(|d| d.get(&enabled).and_then(|v| v.downcast::<CFBoolean>().ok()).is_some_and(|b| b.as_bool()))
-        .filter_map(|d| Some((u32::try_from(number(&d, code)?).ok()?, number(&d, mods)? as u32 & MODS))).collect()
+    let (code, mods, enabled) = (&*code, &*mods, &*enabled);
+    array.iter().filter_map(|d| {
+        let is_enabled = d.get(enabled)?.downcast::<CFBoolean>().ok()?.as_bool();
+        let code = u32::try_from(number(&d, code)?).ok().filter(|&c| c != 65535)?;
+        let mods = number(&d, mods)? as u32 & MODS;
+        Some(((code, mods), is_enabled))
+    }).collect()
 }
 
 /// The user's remappings of the named ids: id and its chord now, None when unassigned or disabled.
@@ -245,5 +288,108 @@ mod tests {
         assert_eq!(named((49, CMD), &[("64", None)]), None);
         // An enabled entry without parameters is no remap.
         assert_eq!(remap(Some(true), None, None), None);
+    }
+
+    #[test]
+    fn registration_retries_shared_only_for_disabled_symbolic_hotkeys() {
+        use super::*;
+        let chord = (49, CMD);
+
+        // Exclusive succeeds: no symbolic lookup and no retry.
+        let mut calls = Vec::new();
+        let mut symbolic_calls = 0;
+        let got = register_with_fallback(
+            chord,
+            |options| { calls.push(options); (0, 101u32) },
+            || { symbolic_calls += 1; vec![(chord, false)] },
+        );
+        assert_eq!(got, Ok(101));
+        assert_eq!(calls, vec![EXCLUSIVE]);
+        assert_eq!(symbolic_calls, 0);
+
+        // -9878 with disabled-only symbolic match: retries once with SHARED and succeeds.
+        let mut calls = Vec::new();
+        let mut symbolic_calls = 0;
+        let got = register_with_fallback(
+            chord,
+            |options| {
+                calls.push(options);
+                if options == EXCLUSIVE { (EXISTS as i32, 0u32) } else { (0, 202) }
+            },
+            || { symbolic_calls += 1; vec![((49, CMD | OPTION), true), (chord, false)] },
+        );
+        assert_eq!(got, Ok(202));
+        assert_eq!(calls, vec![EXCLUSIVE, SHARED]);
+        assert_eq!(symbolic_calls, 1);
+
+        // -9878 with enabled symbolic match: no retry, Conflict.
+        let mut calls = Vec::new();
+        let mut symbolic_calls = 0;
+        let got = register_with_fallback(
+            chord,
+            |options| { calls.push(options); (EXISTS as i32, 0u32) },
+            || { symbolic_calls += 1; vec![(chord, true)] },
+        );
+        assert_eq!(got, Err(ShortcutError::Conflict));
+        assert_eq!(calls, vec![EXCLUSIVE]);
+        assert_eq!(symbolic_calls, 1);
+
+        // -9878 with both enabled and disabled entries on the same chord: no retry, Conflict.
+        for entries in [vec![(chord, false), (chord, true)], vec![(chord, true), (chord, false)]] {
+            let mut calls = Vec::new();
+            let mut symbolic_calls = 0;
+            let got = register_with_fallback(
+                chord,
+                |options| { calls.push(options); (EXISTS as i32, 0u32) },
+                || { symbolic_calls += 1; entries },
+            );
+            assert_eq!(got, Err(ShortcutError::Conflict));
+            assert_eq!(calls, vec![EXCLUSIVE]);
+            assert_eq!(symbolic_calls, 1);
+        }
+
+        // -9878 with no symbolic match (another process holds it exclusively): no retry, Conflict.
+        let mut calls = Vec::new();
+        let mut symbolic_calls = 0;
+        let got = register_with_fallback(
+            chord,
+            |options| { calls.push(options); (EXISTS as i32, 0u32) },
+            || { symbolic_calls += 1; vec![((49, CMD | OPTION), false)] },
+        );
+        assert_eq!(got, Err(ShortcutError::Conflict));
+        assert_eq!(calls, vec![EXCLUSIVE]);
+        assert_eq!(symbolic_calls, 1);
+
+        // Non--9878 OSStatus: no symbolic lookup and no retry, Backend error.
+        let mut calls = Vec::new();
+        let mut symbolic_calls = 0;
+        let got = register_with_fallback(
+            chord,
+            |options| { calls.push(options); (-50, 0u32) },
+            || { symbolic_calls += 1; vec![(chord, false)] },
+        );
+        assert_eq!(got, Err(ShortcutError::Backend("native status -50".into())));
+        assert_eq!(calls, vec![EXCLUSIVE]);
+        assert_eq!(symbolic_calls, 0);
+
+        // Shared-retry failure propagates its mapped status (Conflict and Backend).
+        for (retry_status, expected) in [
+            (EXISTS as i32, ShortcutError::Conflict),
+            (-50, ShortcutError::Backend("native status -50".into())),
+        ] {
+            let mut calls = Vec::new();
+            let mut symbolic_calls = 0;
+            let got = register_with_fallback(
+                chord,
+                |options| {
+                    calls.push(options);
+                    if options == EXCLUSIVE { (EXISTS as i32, 0u32) } else { (retry_status, 0u32) }
+                },
+                || { symbolic_calls += 1; vec![(chord, false)] },
+            );
+            assert_eq!(got, Err(expected));
+            assert_eq!(calls, vec![EXCLUSIVE, SHARED]);
+            assert_eq!(symbolic_calls, 1);
+        }
     }
 }

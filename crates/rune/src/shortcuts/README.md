@@ -58,7 +58,12 @@ even if other threads retain `AppHandle`s.
 
 - macOS: Carbon `RegisterEventHotKey`, no Accessibility permission. Command is
   the Super modifier. Hardware key positions follow the US layout; F21–F24 have
-  no Carbon key code and return `InvalidAccelerator`.
+  no Carbon key code and return `InvalidAccelerator`. Registrations ask for
+  `kEventHotKeyExclusive` first so another app's exclusive hold returns
+  `Conflict`; when Carbon returns `-9878` (`eventHotKeyExistsErr`) for a chord
+  that `CopySymbolicHotKeys` lists only as disabled (such as Spotlight's ⌘Space
+  after turning it off in System Settings), Rune retries once without the
+  exclusive flag.
 - Windows: `RegisterHotKey` on a message-only window owned by the event thread.
   Repeat is disabled. Windows-reserved combinations may fail registration.
 - X11: checked passive grabs on every root, including CapsLock/NumLock variants.
