@@ -395,10 +395,40 @@ impl<T: Send + 'static, C: Clock + 'static> WarmSlot<T, C> {
         self.lock().state
     }
 
+    #[cfg(test)]
+    pub(crate) fn wait_until_stopped(&self) -> State {
+        let mut inner = self.lock();
+        while !inner.state.is_stopped() {
+            inner = self.changed.wait(inner).unwrap_or_else(|e| e.into_inner());
+        }
+        inner.state
+    }
+
+    #[cfg(test)]
+    pub(crate) fn wait_until_zero_workers(&self, timeout: Duration) -> usize {
+        let deadline = self.clock.now() + timeout;
+        let mut inner = self.lock();
+        while inner.state.live_workers() > 0 {
+            let now = self.clock.now();
+            if now >= deadline {
+                break;
+            }
+            inner = self
+                .changed
+                .wait_timeout(inner, deadline - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        inner.state.live_workers()
+    }
+
     fn worker_exited(&self) {
         let mut inner = self.lock();
         let fx = step(&mut inner.state, Event::WorkerExited);
-        if fx.into_iter().any(|e| e == Effect::NotifyWaiters) {
+        let notify = fx.into_iter().any(|e| e == Effect::NotifyWaiters);
+        #[cfg(test)]
+        let notify = notify || inner.state.live_workers() == 0;
+        if notify {
             self.changed.notify_all();
         }
     }

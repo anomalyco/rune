@@ -1,0 +1,1 @@
+- Tests (`render::warm_tests::shutdown_machine`): wait on `WarmSlot`'s condition variable for `State::Cancelled` and zero live workers instead of fixed 30-40 ms sleeps before releasing the test gate, removing load-dependent flakiness where `warm_then` could run `frame` or `done` before the spawned shutdown thread entered `WarmSlot::shutdown`.
