@@ -13,7 +13,7 @@ mod state;
 mod view;
 mod words;
 
-pub use model::{FileDiff, FileStatus, Hunk, Line, LineKind, Side, parse};
+pub use model::{DiffOptions, FileDiff, FileStatus, Hunk, Line, LineKind, Side, parse};
 pub use pairs::SplitRow;
 pub use state::{Annotation, DiffLine, DiffMode, DiffState, EXPAND_STEP, Expand, LineRange, LineRef};
 pub use view::{DiffLabel, DiffView, FoldRow};

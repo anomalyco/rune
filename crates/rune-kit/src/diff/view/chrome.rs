@@ -114,53 +114,58 @@ impl View {
         let l = &self.look;
         let file = &st.files()[f];
         let collapsed = st.collapsed(f);
-        let toggle_label = self.label(if collapsed { DiffLabel::ExpandFile } else { DiffLabel::CollapseFile });
-        let toggle = row()
-            .key("toggle")
-            .size(24.0, 24.0)
-            .center()
-            .radius(6.0)
-            .hover(l.hover)
-            .cursor(Cursor::Pointer)
-            .role("button")
-            .label(toggle_label).expanded(!collapsed)
-            .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted));
-        let toggle = self.bind.bind_toggle_file(toggle, f, sticky);
-        let path = |p: &str, c: Color| text(p.to_owned()).font(l.label).color(c).truncate_head().min_w(0.0).shrink();
-        let mut name = row().key("path").items_center().gap(6.0).min_w(0.0).shrink();
         let (old, new) = (file.old_path.as_deref(), file.new_path.as_deref());
-        name = match (file.status, old, new) {
-            (FileStatus::Renamed | FileStatus::Copied, Some(a), Some(b)) => {
-                name.child(path(a, l.muted).key("old")).child(text("→").font(l.label).color(l.faint).key("arrow")).child(path(b, l.text).key("new"))
-            }
-            _ => name.child(path(file.path(), l.text).key("new")),
-        };
-        let status_color = match file.status {
-            FileStatus::Added => Some(l.add.count),
-            FileStatus::Deleted => Some(l.del.count),
-            FileStatus::Renamed | FileStatus::Copied => Some(l.muted),
-            FileStatus::Modified => None,
-        };
-        let mut inner = row().key("inner").w_full().grow(1.0).px(10.0).gap(8.0).items_center().child(toggle).child(name);
-        if let Some(color) = status_color {
-            inner = inner.child(text(self.label(DiffLabel::FileStatus(file.status))).font(l.small).color(color).key("status"));
-        }
-        if let (Some(a), Some(b)) = (&file.old_mode, &file.new_mode)
-            && a != b
-        {
-            inner = inner.child(text(format!("{a} → {b}")).font(l.small).color(l.faint).key("mode"));
-        }
-        inner = inner.child(row().key("space").grow(1.0).a11y_hidden());
         let (adds, dels) = (file.additions(), file.deletions());
-        if adds > 0 {
-            inner = inner.child(text(format!("+{adds}")).font(l.small).color(l.add.count).key("adds"));
-        }
-        if dels > 0 {
-            inner = inner.child(text(format!("−{dels}")).font(l.small).color(l.del.count).key("dels"));
-        }
-        if let Some(actions) = self.bind.header_action(s, f) {
-            inner = inner.child(actions.key("actions"));
-        }
+        let inner = if let Some(custom) = self.bind.file_header(s, f, collapsed) {
+            row().key("inner").w_full().grow(1.0).min_w(0.0).min_h(0.0).items_center().child(custom)
+        } else {
+            let toggle_label = self.label(if collapsed { DiffLabel::ExpandFile } else { DiffLabel::CollapseFile });
+            let toggle = row()
+                .key("toggle")
+                .size(24.0, 24.0)
+                .center()
+                .radius(6.0)
+                .hover(l.hover)
+                .cursor(Cursor::Pointer)
+                .role("button")
+                .label(toggle_label).expanded(!collapsed)
+                .child(icon(if collapsed { l.triangle_right } else { l.triangle_down }, 16.0).color(l.muted));
+            let toggle = self.bind.bind_toggle_file(toggle, f, sticky);
+            let path = |p: &str, c: Color| text(p.to_owned()).font(l.label).color(c).truncate_head().min_w(0.0).shrink();
+            let mut name = row().key("path").items_center().gap(6.0).min_w(0.0).shrink();
+            name = match (file.status, old, new) {
+                (FileStatus::Renamed | FileStatus::Copied, Some(a), Some(b)) => {
+                    name.child(path(a, l.muted).key("old")).child(text("→").font(l.label).color(l.faint).key("arrow")).child(path(b, l.text).key("new"))
+                }
+                _ => name.child(path(file.path(), l.text).key("new")),
+            };
+            let status_color = match file.status {
+                FileStatus::Added => Some(l.add.count),
+                FileStatus::Deleted => Some(l.del.count),
+                FileStatus::Renamed | FileStatus::Copied => Some(l.muted),
+                FileStatus::Modified => None,
+            };
+            let mut inner = row().key("inner").w_full().grow(1.0).px(10.0).gap(8.0).items_center().child(toggle).child(name);
+            if let Some(color) = status_color {
+                inner = inner.child(text(self.label(DiffLabel::FileStatus(file.status))).font(l.small).color(color).key("status"));
+            }
+            if let (Some(a), Some(b)) = (&file.old_mode, &file.new_mode)
+                && a != b
+            {
+                inner = inner.child(text(format!("{a} → {b}")).font(l.small).color(l.faint).key("mode"));
+            }
+            inner = inner.child(row().key("space").grow(1.0).a11y_hidden());
+            if adds > 0 {
+                inner = inner.child(text(format!("+{adds}")).font(l.small).color(l.add.count).key("adds"));
+            }
+            if dels > 0 {
+                inner = inner.child(text(format!("−{dels}")).font(l.small).color(l.del.count).key("dels"));
+            }
+            if let Some(actions) = self.bind.header_action(s, f) {
+                inner = inner.child(actions.key("actions"));
+            }
+            inner
+        };
         let renamed_from = (file.status == FileStatus::Renamed).then_some(old).flatten();
         let label = self.label(DiffLabel::FileSummary {
             path: file.path(),

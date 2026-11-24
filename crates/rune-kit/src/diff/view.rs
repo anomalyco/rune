@@ -12,6 +12,7 @@ use rune::{Color, Cursor, Drag, El, GrowthSpec, Icon, Phase, ScrollSpec, Tx, col
 use super::model::{LineKind, Side};
 use super::state::{Annotation, DiffMode, DiffState, Expand, LINE_H, LineRange, LineRef, Row};
 use crate::Kit;
+use crate::syntax::SyntaxTheme;
 
 mod chrome;
 mod labels;
@@ -39,6 +40,7 @@ const CODE_PAD: (f32, f32) = (12.0, 24.0);
 type Get<S> = Rc<dyn Fn(&S) -> &DiffState>;
 type GetMut<S> = Rc<dyn Fn(&mut S) -> &mut DiffState>;
 type AnnotateFn<S> = Rc<dyn Fn(&S, &Annotation) -> El>;
+type FileHeaderFn<S> = Rc<dyn Fn(&S, usize, bool) -> El>;
 type HeaderFn<S> = Rc<dyn Fn(&S, usize) -> El>;
 type SelectFn<S> = Rc<dyn Fn(&mut S, Option<LineRange>, &mut Tx)>;
 type CommentFn<S> = Rc<dyn Fn(&mut S, LineRange, &mut Tx)>;
@@ -58,6 +60,7 @@ trait DiffBind {
     fn has_comment(&self) -> bool;
     fn can_comment(&self, f: usize, at: LineRef) -> bool;
     fn has_annotation(&self) -> bool;
+    fn file_header(&self, s: &dyn Any, f: usize, collapsed: bool) -> Option<El>;
     fn header_action(&self, s: &dyn Any, f: usize) -> Option<El>;
     fn annotation(&self, s: &dyn Any, a: &Annotation) -> Option<El>;
     fn bind_list(&self, list: El, count: usize, view: Rc<View>) -> El;
@@ -73,6 +76,7 @@ struct DiffHandlers<S> {
     get: Get<S>,
     get_mut: GetMut<S>,
     annotation: Option<AnnotateFn<S>>,
+    file_header: Option<FileHeaderFn<S>>,
     header: Option<HeaderFn<S>>,
     on_select: Option<SelectFn<S>>,
     on_comment: Option<CommentFn<S>>,
@@ -86,6 +90,11 @@ impl<S: 'static> DiffBind for DiffHandlers<S> {
         self.on_comment.is_some() && self.comment_filter.as_ref().is_none_or(|allow| allow(f, at))
     }
     fn has_annotation(&self) -> bool { self.annotation.is_some() }
+
+    fn file_header(&self, s: &dyn Any, f: usize, collapsed: bool) -> Option<El> {
+        let s = s.downcast_ref::<S>().expect("diff view state type mismatch");
+        self.file_header.as_ref().map(|h| h(s, f, collapsed))
+    }
 
     fn header_action(&self, s: &dyn Any, f: usize) -> Option<El> {
         let s = s.downcast_ref::<S>().expect("diff view state type mismatch");
@@ -174,6 +183,7 @@ impl<S: 'static> DiffBind for DiffHandlers<S> {
 pub struct DiffView<S> {
     key: String,
     fold_row: FoldRow,
+    syntax_theme: Option<SyntaxTheme>,
     labels: Option<labels::LabelsFn>,
     handlers: DiffHandlers<S>,
 }
@@ -183,11 +193,13 @@ impl<S: 'static> DiffView<S> {
         DiffView {
             key: "diff".into(),
             fold_row: FoldRow::default(),
+            syntax_theme: None,
             labels: None,
             handlers: DiffHandlers {
                 get: Rc::new(get),
                 get_mut: Rc::new(get_mut),
                 annotation: None,
+                file_header: None,
                 header: None,
                 on_select: None,
                 on_comment: None,
@@ -228,6 +240,45 @@ impl<S: 'static> DiffView<S> {
     /// commit, so a widget can read app state (a composer's text) freely.
     pub fn annotation(mut self, f: impl Fn(&S, &Annotation) -> El + 'static) -> Self { self.handlers.annotation = Some(Rc::new(f)); self }
 
+    /// Replace the inner built-in file header for each file (called with the app state, the
+    /// file's index in [`DiffState::files`], and whether it is currently collapsed).
+    ///
+    /// `DiffView` keeps the 44-point header row, its heading accessible label, horizontal
+    /// left-pinning in unwrapped mode, and the sticky top header overlay. Collapse files from
+    /// the custom header via [`DiffState::set_collapsed`]. When set, [`Self::header_actions`]
+    /// is ignored.
+    ///
+    /// ```ignore
+    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+    ///     .file_header(|s: &App, file, collapsed| {
+    ///         let path = s.diff.files()[file].path().to_owned();
+    ///         row().w_full().h_full().px(10.0).items_center()
+    ///             .on_press(move |s: &mut App| s.diff.set_collapsed(file, !collapsed))
+    ///             .child(text(path))
+    ///     })
+    ///     .build(s, &k)
+    /// ```
+    pub fn file_header(mut self, f: impl Fn(&S, usize, bool) -> El + 'static) -> Self {
+        self.handlers.file_header = Some(Rc::new(f));
+        self
+    }
+
+    /// Override the syntax highlighting palette (by default [`SyntaxTheme::from_kit`]).
+    ///
+    /// ```ignore
+    /// use rune::Color;
+    /// use rune_kit::syntax::{Syntax, SyntaxTheme};
+    ///
+    /// let theme = SyntaxTheme::from_kit(&k).with(Syntax::Keyword, Color { r: 0.9, g: 0.3, b: 0.6, a: 1.0 });
+    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+    ///     .syntax_theme(theme)
+    ///     .build(s, &k)
+    /// ```
+    pub fn syntax_theme(mut self, theme: SyntaxTheme) -> Self {
+        self.syntax_theme = Some(theme);
+        self
+    }
+
     /// Extra controls at the end of each file's header (a "viewed" toggle, a menu), by file.
     pub fn header_actions(mut self, f: impl Fn(&S, usize) -> El + 'static) -> Self { self.handlers.header = Some(Rc::new(f)); self }
 
@@ -265,7 +316,7 @@ impl<S: 'static> DiffView<S> {
         let st = (self.handlers.get)(s);
         let labels_version = labels::fingerprint(self.labels.as_ref());
         let view = Rc::new(View {
-            look: Look::new(k),
+            look: Look::new(k, self.syntax_theme),
             fold_row: self.fold_row,
             labels: self.labels,
             labels_version,
@@ -548,16 +599,19 @@ impl View {
             let fill = if selected { l.selected } else { l.tints(kind).map_or(l.bg, |t| t.line) };
             let n = if side == Side::Old { c.old } else { c.new };
             let mut cell = c;
-            if kind == LineKind::Context && matches!(st.rows[i], Row::Ctx { .. }) {
-                cell.text = st.side_line(f, side, n.unwrap_or(1)).unwrap_or(c.text);
+            if kind == LineKind::Context
+                && let Some(line) = n
+            {
+                cell.text = st.side_line(f, side, line).unwrap_or(c.text);
             }
             let copy = st.copy_side() == side;
+            let number = n.unwrap_or_else(|| cell.source().1);
             h = h
                 .fill(fill)
                 .hover(l.hover)
                 .hover_group()
                 .role("listitem")
-                .label(self.cell_label(&cell))
+                .label(self.label(DiffLabel::Line { kind: cell.kind, number, text: cell.text }))
                 .child(self.bar(kind))
                 .child(self.number(st, i, f, n, side, kind, selected, digits).key("n"))
                 .child(self.code(st, f, &cell, copy, side, &st.keys[i]).key("code"));
@@ -628,7 +682,11 @@ impl View {
     /// The code of a line: syntax colours under word changes, tabs padded to four columns.
     fn code(&self, st: &DiffState, f: usize, c: &Cell<'_>, copy: bool, side: Side, row_key: &str) -> El {
         let l = &self.look;
-        let (src, n) = c.source();
+        let (src, n) = match (side, c.old, c.new) {
+            (Side::Old, Some(n), _) => (Side::Old, n),
+            (Side::New, _, Some(n)) => (Side::New, n),
+            _ => c.source(),
+        };
         let syntax: Vec<(Range<usize>, Color)> = st
             .highlights_for(f, src, n, c.text)
             .into_iter()

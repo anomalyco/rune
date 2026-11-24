@@ -5,6 +5,7 @@ mod context_menu;
 mod control_size;
 mod dialog_select;
 mod diff;
+mod diff_custom;
 mod diff_labels;
 mod disabled;
 mod elevation_compat;

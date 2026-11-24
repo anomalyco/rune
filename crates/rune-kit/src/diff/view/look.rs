@@ -56,7 +56,7 @@ pub(super) struct Tints {
 }
 
 impl Look {
-    pub(super) fn new(k: &Kit) -> Look {
+    pub(super) fn new(k: &Kit, syntax_theme: Option<SyntaxTheme>) -> Look {
         let c = &k.c;
         let bg = c.bg_base;
         let dark = k.dark;
@@ -95,7 +95,7 @@ impl Look {
             on_accent: c.white,
             triangle_down: k.glyph.triangle_down,
             triangle_right: k.glyph.triangle_right,
-            syntax: SyntaxTheme::from_kit(k),
+            syntax: syntax_theme.unwrap_or_else(|| SyntaxTheme::from_kit(k)),
             version: 0,
         };
         let mut h = std::hash::DefaultHasher::new();
@@ -103,6 +103,7 @@ impl Look {
             [c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);
         }
         look.font.size.to_bits().hash(&mut h);
+        look.syntax.hash(&mut h);
         look.version = h.finish();
         look
     }

@@ -12,7 +12,7 @@ mod controls;
 mod diff;
 mod display;
 
-pub(crate) use diff::sample_diff;
+pub(crate) use diff::{custom_diff, sample_diff};
 mod icons;
 mod inputs;
 mod markdown;
@@ -255,6 +255,7 @@ stories! {
     "rune-split-view--flat-main" => split_view::flat_main,
     "rune-table--options" => table::options,
     "rune-diff--localized" => diff::localized,
+    "rune-diff--custom" => diff::custom,
 }
 
 fn popup_list_composer(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
