@@ -13,6 +13,7 @@ mod glyphs;
 mod hover_within;
 mod image_zoom;
 mod interactive;
+mod keybind;
 mod list_keyboard;
 mod menu_description;
 mod menu_open;

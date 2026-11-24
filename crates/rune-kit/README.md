@@ -176,6 +176,10 @@ label element in the button's font and ink. The text stays the button's accessib
 A `RollingText` reads as its whole label wherever text is looked up: its row's `text` in
 `--tree` and `ElementInfo::text`, so tests find it by text as they find a plain `text`.
 
+`Keybind::new(&["g"])` upper-cases single-character keycaps by default (`"G"`); call
+`.keep_case()` to preserve authored letter case verbatim (for example Vim-style `g` vs
+`Shift` + `G`, shown in `rune-keybind--keep-case` in the gallery).
+
 ### Accessibility
 
 Every component reports what a screen reader needs through Rune's accessibility tree (Rune's
