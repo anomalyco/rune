@@ -297,7 +297,13 @@ impl Renderer {
         // (`max_width = None`), so `wrap_anywhere().wrap_greedy()` has zero effect while unwrapped
         // and keeps `shape_key`/`style_key` identical across wrap toggles so already-shaped lines
         // rebreak in place without reshaping.
-        let body = if wrapped || self.scroll_wide { body.wrap_anywhere().wrap_greedy() } else { body };
+        let body = if wrapped || self.scroll_wide {
+            body.wrap_anywhere().wrap_greedy()
+        } else if self.wrap_anywhere {
+            body.wrap_anywhere()
+        } else {
+            body
+        };
         let body = self.with_reveal(body).copy_breaks(2, 2);
         // `.highlights`' `border: 0.5px` takes its device pixel each side, inside which the padding sits.
         // Code reads left to right in any document, as `markdown.css` isolates it.
@@ -364,11 +370,15 @@ impl Renderer {
                 _ => (None, s.text),
             };
             let shown = if line.is_empty() { " " } else { line };
+            let mut line_text = tabbed(shown, Vec::new(), line_hl, s.code_block).font(s.code_block).color(color).wrap();
+            if self.wrap_anywhere {
+                line_text = line_text.wrap_anywhere();
+            }
             let mut r = row()
                 .key(format!("l{n}"))
                 .w_full()
                 .px(s.code_block_pad[0])
-                .child(self.select(self.with_reveal(tabbed(shown, Vec::new(), line_hl, s.code_block).font(s.code_block).color(color).wrap()).w_full()
+                .child(self.select(self.with_reveal(line_text).w_full()
                     .copy_breaks(if n == 0 { 2 } else { 1 }, if n == last { 2 } else { 1 })));
             if let Some(t) = tint {
                 r = r.fill(t);
@@ -472,9 +482,13 @@ impl Renderer {
                 })
                 .collect();
             let is_last = end >= full.len();
+            let mut chunk_text = tabbed(slice, Vec::new(), chunk_hl, s.code_block).font(s.code_block).color(ink).wrap();
+            if self.wrap_anywhere {
+                chunk_text = chunk_text.wrap_anywhere();
+            }
             let node = self
                 .select(
-                    self.with_reveal(tabbed(slice, Vec::new(), chunk_hl, s.code_block).font(s.code_block).color(ink).wrap())
+                    self.with_reveal(chunk_text)
                         .w_full()
                         .copy_prefix(pad.clone())
                         .copy_breaks(if chunk_idx == 0 { 2 } else { 1 }, if is_last { 2 } else { 1 }),

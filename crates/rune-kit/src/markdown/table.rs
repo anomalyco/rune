@@ -438,9 +438,13 @@ impl Renderer {
                 Align::End if dir.is_some() && dir != table_dir => Align::Start,
                 a => a,
             };
+            let mut cell_text = rich(inl.text.clone(), self.spans(inl, font)).font(font).color(color).align(align);
+            if self.wrap_anywhere {
+                cell_text = cell_text.wrap_anywhere();
+            }
             let content = self
                 .with_reveal(self.with_math(
-                    rich(inl.text.clone(), self.spans(inl, font)).font(font).color(color).align(align),
+                    cell_text,
                     inl,
                     font,
                     color,

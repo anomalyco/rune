@@ -30,7 +30,8 @@ pub(super) enum Fence {
     /// A code block; its language as written, if it names one, and whether its closing fence
     /// has arrived.
     Plain(Option<Rc<str>>, bool),
-    Diff,
+    /// A diff fence; whether its closing fence has arrived.
+    Diff(bool),
     /// A mermaid fence; whether its closing fence has arrived.
     Mermaid(bool),
 }
@@ -216,16 +217,21 @@ impl Builder {
         }
         map.truncate_out(text.len());
         let block = code_block(text, &fence);
-        if let Block::Code(code) | Block::Mermaid(code) = &block {
-            let (lang, closed) = match fence {
-                Fence::Plain(lang, closed) => (lang, closed),
-                Fence::Mermaid(closed) => (Some("mermaid".into()), closed),
-                Fence::Diff => (None, true),
-            };
-            let coloured = if closed || line_ended { code.len() } else { code.rfind('\n').unwrap_or(0) };
-            self.sources.push(Source { lang, len: code.len(), coloured, open: !closed });
-        }
-        self.push(block, BlockMap::Code(map));
+        let block_map = match &block {
+            Block::Code(code) | Block::Mermaid(code) => {
+                let (lang, closed) = match fence {
+                    Fence::Plain(lang, closed) => (lang, closed),
+                    Fence::Mermaid(closed) => (Some("mermaid".into()), closed),
+                    Fence::Diff(_) => unreachable!(),
+                };
+                let coloured = if closed || line_ended { code.len() } else { code.rfind('\n').unwrap_or(0) };
+                self.sources.push(Source { lang, len: code.len(), coloured, open: !closed });
+                BlockMap::Code(map)
+            }
+            Block::Diff(_) => BlockMap::Diff { open: !matches!(fence, Fence::Diff(true)), map },
+            _ => BlockMap::Code(map),
+        };
+        self.push(block, block_map);
     }
 
     pub(super) fn inline(&mut self) -> &mut (InlineKind, Inline, Vec<Open>, SpanMap) {
@@ -366,7 +372,7 @@ fn trimmed_len(inl: &Inline) -> usize {
 fn code_block(text: String, fence: &Fence) -> Block {
     match fence {
         Fence::Plain(..) => Block::Code(text),
-        Fence::Diff => Block::Diff(text),
+        Fence::Diff(_) => Block::Diff(text),
         Fence::Mermaid(_) => Block::Mermaid(text),
     }
 }

@@ -461,7 +461,7 @@ impl Renderer {
             _ => None,
         };
         let code_map = match map {
-            BlockMap::Code(m) => Some(m),
+            BlockMap::Code(m) | BlockMap::Diff { map: m, .. } => Some(m),
             _ => None,
         };
         match b {
@@ -520,7 +520,24 @@ impl Renderer {
                     None => self.code(code, source, code_map, wrapped),
                 }
             }
-            Block::Diff(src) => self.diff(src, code_map),
+            Block::Diff(src) => {
+                let n = self.next_diff.get();
+                self.next_diff.set(n + 1);
+                let open = matches!(map, BlockMap::Diff { open: true, .. });
+                match &self.diff_frame {
+                    Some(f) => {
+                        let card = match self.settled_diff_card_digest(src, open, code_map) {
+                            Some(digest) => rune::memo::cached(digest, || {
+                                memo::note_block_build();
+                                self.diff(src, code_map).key("card")
+                            }),
+                            None => self.diff(src, code_map).key("card"),
+                        };
+                        f(card, &DiffFrame { index: n, source: src, open })
+                    }
+                    None => self.diff(src, code_map),
+                }
+            }
             Block::Mermaid(src) => {
                 let n = self.next_source.get();
                 self.next_source.set(n + 1);
