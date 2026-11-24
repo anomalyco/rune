@@ -7,7 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 struct State { name: &'static str, native: Option<WindowHandle>, polls: usize, focus: Vec<bool> }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
-    el().fill(oklch(0.25, 0.01, 280.0)).padding(24.0).child(text(s.name).color(Color::WHITE))
+    el().fill(oklch(0.25, 0.01, 280.0)).padding(24.0).window_drag().child(text(s.name).color(Color::WHITE))
 }
 
 fn spec() -> AppSpec<State> {

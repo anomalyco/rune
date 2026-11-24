@@ -127,6 +127,7 @@ gated!(set_origin, set_origin_from, (point: NSPoint), "mov x2, x30", "mov rdx, [
 gated!(set_size, set_size_from, (size: NSSize), "mov x2, x30", "mov rdx, [rsp]", setContentSize: size);
 gated!(set_level, set_level_from, (level: isize), "mov x3, x30", "mov rcx, [rsp]", setLevel: level);
 gated!(set_hit, set_hit_from, (ignore: Bool), "mov x3, x30", "mov rcx, [rsp]", setIgnoresMouseEvents: ignore);
+gated!(perform_window_drag, perform_window_drag_from, (event: *mut AnyObject), "mov x3, x30", "mov rcx, [rsp]", performWindowDragWithEvent: event);
 
 /// `-contentView`. AppKit restyles a window by removing `[self contentView]` from its
 /// superview (`setStyleMask:`, `setContentView:`, toolbars), and other frameworks restyle the
@@ -257,7 +258,7 @@ pub(crate) fn take_reattached(panel: &NSPanel) -> bool {
 #[doc(hidden)]
 pub fn reattach_count() -> usize { REATTACHED.load(Ordering::Relaxed) }
 
-fn window_forwards() -> [(Sel, *const c_void); 15] {
+fn window_forwards() -> [(Sel, *const c_void); 16] {
     [
         (sel!(contentView), content_view as *const c_void),
         (sel!(isVisible), visible as *const c_void),
@@ -274,6 +275,7 @@ fn window_forwards() -> [(Sel, *const c_void); 15] {
         (sel!(setTitle:), set_title as *const c_void),
         (sel!(setLevel:), set_level as *const c_void),
         (sel!(setIgnoresMouseEvents:), set_hit as *const c_void),
+        (sel!(performWindowDragWithEvent:), perform_window_drag as *const c_void),
     ]
 }
 
@@ -329,6 +331,8 @@ mod tests {
     extern "C" fn got_level(_: *mut AnyObject, _: Sel, level: isize) { received(format!("level {level}")); }
     extern "C" fn got_hit(_: *mut AnyObject, _: Sel, ignore: Bool) { received(format!("ignore {}", ignore.as_bool())); }
     extern "C" fn got_live_resize(_: *mut AnyObject, _: Sel) -> Bool { Bool::YES }
+    extern "C" fn got_drag(_: *mut AnyObject, _: Sel, event: *mut AnyObject) { received(format!("panel-drag {event:p}")); }
+    extern "C" fn super_drag(_: *mut AnyObject, _: Sel, event: *mut AnyObject) { received(format!("super-drag {event:p}")); }
 
     /// The trampolines on this architecture: each hands its own arguments and the sender's
     /// return address to the Rust side. A wrong register would read garbage as the caller and
@@ -379,5 +383,62 @@ mod tests {
         }
         WINDOWS.with(|w| w.borrow_mut().remove(&(window as usize)));
         assert_eq!(RECEIVED.with(|r| r.take()), ["frame 1.5 2.5 300 200 true", "origin 7 8", "size 40 50", "level 3", "ignore true"]);
+    }
+
+    #[test]
+    fn perform_window_drag_forwards_to_ordinary_panel_from_rune_only() {
+        use objc2::ClassType;
+        RECEIVED.with(|r| r.borrow_mut().clear());
+        let mut base_class = ClassBuilder::new(c"RuneBridgeDragBaseWindow", NSWindow::class()).unwrap();
+        // SAFETY: signature matches `-[NSWindow performWindowDragWithEvent:]`.
+        unsafe {
+            base_class.add_method(
+                sel!(performWindowDragWithEvent:),
+                super_drag as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject),
+            );
+        }
+        let base_class = base_class.register();
+        let window_class = ClassBuilder::new(c"RuneBridgeDragWindow", base_class).unwrap().register();
+        assert!(install(window_class, NSWindow::class(), &window_forwards()));
+        let mut panel_class = ClassBuilder::new(c"RuneBridgeDragPanel", class!(NSObject)).unwrap();
+        // SAFETY: signature matches `-[NSWindow performWindowDragWithEvent:]`.
+        unsafe {
+            panel_class.add_method(
+                sel!(performWindowDragWithEvent:),
+                got_drag as extern "C" fn(*mut AnyObject, Sel, *mut AnyObject),
+            );
+        }
+        let panel_class = panel_class.register();
+        // SAFETY: registered ObjC classes whose `alloc`/`new` return valid instances.
+        let (window, panel, view, event): (*mut AnyObject, *mut AnyObject, *mut AnyObject, *mut AnyObject) = unsafe {
+            (
+                msg_send![window_class, alloc],
+                msg_send![panel_class, new],
+                msg_send![class!(NSObject), new],
+                msg_send![class!(NSObject), new],
+            )
+        };
+        WINDOWS.with(|w| w.borrow_mut().insert(window as usize, Source { view: view as usize, panel: panel as usize, ordinary: true }));
+        // SAFETY: `window`, `panel`, `view`, and `event` are live ObjC objects registered in `WINDOWS`,
+        // and `NSInvocation` argument index 2 matches the single object parameter of `performWindowDragWithEvent:`.
+        unsafe {
+            let _: () = msg_send![window, performWindowDragWithEvent: event];
+            assert_eq!(RECEIVED.with(|r| r.take()), [format!("panel-drag {event:p}")], "ordinary adopted panel receives window drag from Rune");
+
+            // Foreign caller (CoreFoundation via NSInvocation) falls through to the source window.
+            let signature: *mut AnyObject = msg_send![window, methodSignatureForSelector: sel!(performWindowDragWithEvent:)];
+            let invocation: *mut AnyObject = msg_send![class!(NSInvocation), invocationWithMethodSignature: signature];
+            let _: () = msg_send![invocation, setSelector: sel!(performWindowDragWithEvent:)];
+            let mut arg = event;
+            let _: () = msg_send![invocation, setArgument: &mut arg as *mut *mut AnyObject as *mut c_void, atIndex: 2isize];
+            let _: () = msg_send![invocation, invokeWithTarget: window];
+            assert_eq!(RECEIVED.with(|r| r.take()), [format!("super-drag {event:p}")], "foreign caller must not drag the adopted panel");
+
+            // Overlay panels (ordinary: false) use Panel::drag_window() directly, not panel_bridge.
+            WINDOWS.with(|w| w.borrow_mut().insert(window as usize, Source { view: view as usize, panel: panel as usize, ordinary: false }));
+            let _: () = msg_send![window, performWindowDragWithEvent: event];
+            assert_eq!(RECEIVED.with(|r| r.take()), [format!("super-drag {event:p}")], "overlay panel source window must not bridge performWindowDragWithEvent:");
+        }
+        WINDOWS.with(|w| w.borrow_mut().remove(&(window as usize)));
     }
 }

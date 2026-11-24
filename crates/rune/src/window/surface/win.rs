@@ -478,6 +478,16 @@ impl Win {
         if let Some(panel) = &self.native.panel { panel.request_keys(); return; }
         self.window.focus_window();
     }
+
+    /// Starts an interactive OS window move from the current press event.
+    pub(in crate::window) fn drag_window(&self) {
+        #[cfg(target_os = "macos")]
+        if let Some(panel) = &self.native.panel {
+            panel.drag_window();
+            return;
+        }
+        self.window.drag_window().ok();
+    }
 }
 
 /// `on_ready` starts an app's live work, so it can't wait on a drawable: a window launched

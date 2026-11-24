@@ -94,7 +94,7 @@ fn launcher_view(s: &Launcher, _: &mut Cx<Launcher>) -> El {
         .on_submit(open_picked);
     let mut panel = col().key("panel").w_full().radius(14.0).clip_rounded(14.0)
         .fill(t.card).border(1.0, Color::WHITE.alpha(0.1))
-        .child(row().h(56.0).px(18.0).gap(12.0).center_y()
+        .child(row().h(56.0).px(18.0).gap(12.0).center_y().window_drag()
             .child(text("⌕").font(type_::TITLE.lh(26.0)).color(t.text_secondary))
             .child(field));
     if !found.is_empty() {
