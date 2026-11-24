@@ -160,6 +160,27 @@ fn a_first_blocking_callback_before_cpu_rate_is_known_still_warns() {
 }
 
 #[test]
+fn fast_updates_do_not_probe_the_run_queue() {
+    fn view(_: &u32, _: &mut Cx<u32>) -> El { col() }
+    let mut rt = Runtime::new(0u32, view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let _ = runq::take_probe_calls();
+    let mut slow = 0;
+    for _ in 0..100 {
+        let started = crate::time::now();
+        rt.update(|n, _| *n += 1);
+        if started.elapsed().as_secs_f64() * 1000.0 > STALL_MS { slow += 1; }
+    }
+    assert!(slow < 100, "at least one update finished within STALL_MS");
+    assert!(runq::take_probe_calls() <= slow, "updates within STALL_MS must not probe the run queue");
+
+    if let Some(mark) = crate::frame::profile::thread_cpu_mark() {
+        end_slow(STALL_MS, mark, &mut || ("test-slow-probe".into(), "`update`".into()));
+        assert_eq!(runq::take_probe_calls(), 1, "judging a slow callback consults the load probe");
+    }
+}
+
+#[test]
 fn a_slow_callback_without_a_cpu_reading_does_not_invent_a_stall() {
     let _clock = FakeStallClock::new();
     take_log();

@@ -1,28 +1,27 @@
-//! Time a thread spent runnable but waiting for a core. A callback that was descheduled on a
-//! busy machine isn't blocked, so `Stall` takes that time out before it judges. Interaction
-//! timing (`tooling::interaction`) asks [`overloaded`] in any build.
+//! Scheduler load and run-queue accounting for stall warnings. A callback that was descheduled
+//! on a busy machine isn't blocked, so `Stall` queries [`overloaded`] only on the cold path when
+//! a callback exceeds `STALL_MS`, never on fast updates or during frames. Interaction timing
+//! (`tooling::interaction`) also asks [`overloaded`] in any build.
 
 #[cfg(debug_assertions)]
 use super::{STALL_CPU_RATIO, STALL_MS};
 
-/// How long the calling thread has waited in a run queue, in ms, since it started. Linux reads
-/// the scheduler's own count; other systems don't expose it per thread, so they get `None`.
-#[cfg(debug_assertions)]
-pub(crate) fn wait_ms() -> Option<f64> {
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    {
-        let stats = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
-        let ns: f64 = stats.split_whitespace().nth(1)?.parse().ok()?;
-        Some(ns / 1e6)
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    { None }
+#[cfg(all(test, debug_assertions))]
+thread_local! {
+    static PROBE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, debug_assertions))]
+pub(super) fn take_probe_calls() -> usize {
+    PROBE_CALLS.replace(0)
 }
 
 /// Whether the machine has no core to spare: the 1-minute load average is at or above the core
 /// count. Read at most every few seconds. Always false where there's no load average.
 #[allow(unsafe_code)]
 pub(crate) fn overloaded() -> bool {
+    #[cfg(all(test, debug_assertions))]
+    PROBE_CALLS.with(|c| c.set(c.get() + 1));
     #[cfg(unix)]
     {
         use std::{sync::Mutex, time::{Duration, Instant}};
