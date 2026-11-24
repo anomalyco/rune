@@ -837,3 +837,130 @@ fn observe_pointer_skips_unchanged_moves_and_repaints_hover_groups_links_live_an
     rt.pointer_up(90.0, 252.0);
     rt.frame(0.016);
 }
+
+#[test]
+fn window_resize_emits_action_sets_default_cursor_and_yields_to_controls() {
+    use crate::{Cursor, ResizeEdge};
+    #[derive(Default)]
+    struct State { pressed: u32, modal: bool }
+    let edges = [
+        (ResizeEdge::North, Cursor::ResizeNs),
+        (ResizeEdge::South, Cursor::ResizeNs),
+        (ResizeEdge::East, Cursor::ResizeEw),
+        (ResizeEdge::West, Cursor::ResizeEw),
+        (ResizeEdge::NorthWest, Cursor::ResizeNwse),
+        (ResizeEdge::SouthEast, Cursor::ResizeNwse),
+        (ResizeEdge::NorthEast, Cursor::ResizeNesw),
+        (ResizeEdge::SouthWest, Cursor::ResizeNesw),
+    ];
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let edges = [
+            ResizeEdge::North, ResizeEdge::South, ResizeEdge::East, ResizeEdge::West,
+            ResizeEdge::NorthWest, ResizeEdge::SouthEast, ResizeEdge::NorthEast, ResizeEdge::SouthWest,
+        ];
+        let mut strips = crate::el::row().key("strips").size(320.0, 40.0);
+        for (i, edge) in edges.into_iter().enumerate() {
+            strips = strips.child(el().key(format!("edge-{i}")).size(40.0, 40.0).window_resize(edge));
+        }
+        let modal = s.modal.then(|| el().key("modal").pin(Some(0.0), Some(0.0), None, None).size(100.0, 100.0).modal(true, |s: &mut State| s.modal = false));
+        col().size(320.0, 200.0)
+            .child(strips)
+            .child(crate::el::row().key("combo").size(320.0, 40.0).window_resize(ResizeEdge::East)
+                .child(el().key("btn").size(60.0, 40.0).on_press(|s: &mut State| s.pressed += 1))
+                .child(el().key("nodrag").size(60.0, 40.0).no_window_drag())
+                .child(el().key("custom-a").size(60.0, 40.0).window_resize(ResizeEdge::SouthEast).cursor(Cursor::Grab))
+                .child(el().key("custom-b").size(60.0, 40.0).cursor(Cursor::Crosshair).window_resize(ResizeEdge::NorthWest)))
+            .child(el().key("inert-resize").size(80.0, 40.0).window_resize(ResizeEdge::South).inert())
+            .child(el().key("drag-bar").size(80.0, 40.0).window_drag())
+            .children(modal)
+    }
+    let mut rt = Runtime::new(State::default(), view, (320.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // All 8 edges emit TitlebarAction::Resize(edge) once and show the matching cursor.
+    for (i, (edge, cursor)) in edges.into_iter().enumerate() {
+        let x = i as f32 * 40.0 + 20.0;
+        rt.pointer_move(x, 20.0);
+        assert_eq!(rt.cursor(), cursor, "default cursor for {edge:?}");
+        rt.pointer_down(x, 20.0);
+        assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(edge)));
+        assert_eq!(rt.take_titlebar_action(), None, "taken once");
+        rt.pointer_up(x, 20.0);
+        // Rapid second press stays Resize, never turns into DoubleClick.
+        rt.pointer_down(x, 20.0);
+        assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(edge)));
+        rt.pointer_up(x, 20.0);
+    }
+
+    // Interactive child and .no_window_drag() block resize and do not inherit the resize cursor.
+    rt.pointer_move(30.0, 60.0);
+    assert_eq!(rt.cursor(), Cursor::Default);
+    rt.pointer_down(30.0, 60.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.pointer_up(30.0, 60.0);
+    rt.frame(0.016);
+    assert_eq!(rt.state.pressed, 1);
+
+    rt.pointer_move(90.0, 60.0);
+    assert_eq!(rt.cursor(), Cursor::Default);
+    rt.pointer_down(90.0, 60.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.pointer_up(90.0, 60.0);
+
+    // Explicit .cursor(..) wins regardless of builder call order.
+    rt.pointer_move(150.0, 60.0);
+    assert_eq!(rt.cursor(), Cursor::Grab);
+    rt.pointer_down(150.0, 60.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::SouthEast)));
+    rt.pointer_up(150.0, 60.0);
+
+    rt.pointer_move(210.0, 60.0);
+    assert_eq!(rt.cursor(), Cursor::Crosshair);
+    rt.pointer_down(210.0, 60.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::NorthWest)));
+    rt.pointer_up(210.0, 60.0);
+
+    // Bare area of parent resize row still resizes.
+    rt.pointer_move(280.0, 60.0);
+    assert_eq!(rt.cursor(), Cursor::ResizeEw);
+    rt.pointer_down(280.0, 60.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::East)));
+    rt.pointer_up(280.0, 60.0);
+
+    // Inert resize strip neither shows resize cursor nor resizes.
+    rt.pointer_move(40.0, 100.0);
+    assert_eq!(rt.cursor(), Cursor::Default);
+    rt.pointer_down(40.0, 100.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.pointer_up(40.0, 100.0);
+
+    // Pressing a resize strip clears any armed titlebar drag double-click pair.
+    rt.pointer_down(40.0, 140.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    rt.pointer_up(40.0, 140.0);
+    rt.pointer_down(20.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::North)));
+    rt.pointer_up(20.0, 20.0);
+    rt.pointer_down(40.0, 140.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag), "resize broke the drag pair");
+    rt.pointer_up(40.0, 140.0);
+
+    // Resize strips are chrome geometry: plain group role with no click action or focusable state,
+    // while interactive child buttons remain accessible buttons.
+    let a11y = rt.accessibility_json();
+    let edge0 = &a11y["children"][0]["children"][0];
+    assert_eq!(edge0["key"], "edge-0");
+    assert_eq!(edge0["role"], "group");
+    assert!(edge0.get("actions").is_none(), "bare resize strip exposes no button action: {edge0}");
+    let btn = &a11y["children"][1]["children"][0];
+    assert_eq!(btn["key"], "btn");
+    assert_eq!(btn["role"], "button");
+
+    // Active modal blocks resize grips underneath.
+    rt.update(|s, _| s.modal = true);
+    rt.frame(0.016);
+    rt.pointer_move(200.0, 20.0);
+    assert_eq!(rt.cursor(), Cursor::Default);
+    rt.pointer_down(200.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+}

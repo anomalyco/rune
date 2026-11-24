@@ -420,6 +420,7 @@ pub use windows::AnyWindowSpec;
 pub use windows::ConfiguredWindowOptions;
 pub use windows::Display;
 pub use windows::MacWindowOptions;
+pub use windows::ResizeEdge;
 pub use windows::RunOptions;
 pub use windows::WindowOptions;
 pub use windows::WindowPlacement;

@@ -764,6 +764,7 @@ fn flatten_node<E: FlattenEl>(
     let static_scale = el_r.scale;
     let time_scale = el_r.cold.time_scale;
     let option_as_alt = el_r.cold.option_as_alt;
+    let window_drag = el_r.window_drag_mode();
     let virtual_list = el_r.cold.virtual_estimate.is_some();
     let focus = el_r.cold.focus.clone();
     let on_path = el_r.cold.get().and_then(|c| c.on_path.clone());
@@ -804,7 +805,7 @@ fn flatten_node<E: FlattenEl>(
         virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),
         virtual_list,
         selection_group: flags.has(ElFlags::SELECTION_GROUP),
-        window_drag: flags.window_drag(),
+        window_drag,
         ime_cursor: flags.has(ElFlags::IME_CURSOR),
         ime_option_as_alt: option_as_alt,
         in_flow,

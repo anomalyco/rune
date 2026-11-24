@@ -224,6 +224,21 @@ fn runtime_window_drag_hits_respect_children_modals_tooltips_and_zoom() {
 }
 
 #[test]
+fn window_resize_strip_above_window_drag_stays_htclient_so_press_reaches_rune() {
+    use crate::{Cx, El, Env, Runtime, col, el};
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(400.0, 200.0)
+            .child(el().key("bar").size(400.0, 40.0).window_drag())
+            .child(el().key("resize-n").pin(Some(0.0), Some(0.0), Some(0.0), None).h(6.0).window_resize(crate::ResizeEdge::North))
+    }
+    let mut rt = Runtime::new((), view, (400.0, 200.0), Env::default());
+    rt.frame(0.0);
+    let hits = rt.core().window_drag_hits();
+    assert_eq!(drag_hit_code(96, POINT { x: 200, y: 3 }, &hits), HTCLIENT, "resize strip wins over .window_drag()");
+    assert_eq!(drag_hit_code(96, POINT { x: 200, y: 20 }, &hits), HTCAPTION, "uncovered titlebar still drags");
+}
+
+#[test]
 fn drag_hit_sync_skips_idle_and_non_committing_frames() {
     let mut sync = DragHitSync::default();
     assert!(sync.needs_update(1, 1.0, false, false), "initial frame syncs");

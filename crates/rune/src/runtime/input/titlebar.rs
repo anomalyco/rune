@@ -109,6 +109,8 @@ impl TitlebarPress {
 pub(in crate::runtime) enum Event {
     /// A primary press on a bare `.window_drag()` region.
     Region { now: f64, point: (f32, f32), interval: f64 },
+    /// A primary press on a bare `.window_resize(edge)` region.
+    Resize { edge: crate::ResizeEdge },
     /// A primary press that hit nothing; `band` when it is in the native titlebar band, where
     /// the system drags the window itself and only the double click is Rune's.
     Empty { now: f64, point: (f32, f32), interval: f64, band: bool },
@@ -163,6 +165,10 @@ pub(in crate::runtime) fn step(state: &mut TitlebarPress, event: Event) -> Effec
             *state = keep_secondary(state, next);
             Effects::one(Request::Action(if double { TitlebarAction::DoubleClick } else { TitlebarAction::Drag }))
         }
+        Event::Resize { edge } => {
+            *state = keep_secondary(state, None);
+            Effects::one(Request::Action(TitlebarAction::Resize(edge)))
+        }
         // AppKit drags the band itself and never sees the double click over the content.
         Event::Empty { now, point, interval, band } => {
             if !band { return Effects::none(); }
@@ -191,6 +197,11 @@ impl Titlebar {
     /// A press on a `.window_drag()` region: drag, or the double-click action on its second press.
     pub(in crate::runtime) fn press_region(&mut self, now: f64, x: f32, y: f32, interval: f64) {
         self.act(Event::Region { now, point: (x, y), interval });
+    }
+
+    /// A press on a `.window_resize(edge)` region: start an interactive resize from `edge`.
+    pub(in crate::runtime) fn press_resize(&mut self, edge: crate::ResizeEdge) {
+        self.act(Event::Resize { edge });
     }
 
     /// A press that hit nothing. In the native band AppKit moves the window itself but doesn't
@@ -372,6 +383,20 @@ impl RuntimeCore {
         let n = &self.tree.nodes[t];
         n.window_drag == crate::el::WindowDrag::Drag && n.handlers.on_press.is_none() && n.handlers.on_double_press.is_none() && n.handlers.on_drag.is_none()
             && n.handlers.drag_out.is_none() && self.textbox_input(t).is_none()
+    }
+
+    /// A `.window_resize(edge)` element with nothing of its own to do with a press: a press
+    /// there starts an interactive OS/compositor window resize from `edge`, and hover shows the
+    /// matching resize cursor unless overridden.
+    pub(in crate::runtime) fn bare_resize_edge(&self, t: usize) -> Option<crate::ResizeEdge> {
+        let n = &self.tree.nodes[t];
+        let crate::el::WindowDrag::Resize(edge) = n.window_drag else { return None };
+        (n.handlers.on_press.is_none()
+            && n.handlers.on_double_press.is_none()
+            && n.handlers.on_drag.is_none()
+            && n.handlers.drag_out.is_none()
+            && self.textbox_input(t).is_none())
+            .then_some(edge)
     }
 
     /// Number of committed view/layout passes so far.

@@ -698,6 +698,28 @@ impl El {
         self.flags.set_window_drag(WindowDrag::NoDrag);
         self
     }
+    /// Pressing this element starts an interactive OS/compositor-driven window resize from
+    /// `edge` (Win32 sizing borders, X11 `_NET_WM_MOVERESIZE`, Wayland `xdg_toplevel.resize`),
+    /// for borderless windows that draw their own frame.
+    ///
+    /// While hovered, the element shows the matching resize cursor (`Cursor::ResizeNs`,
+    /// `Cursor::ResizeEw`, `Cursor::ResizeNwse`, or `Cursor::ResizeNesw`) unless an explicit
+    /// [`El::cursor`] is set on it. Interactive children, [`El::no_window_drag`], inert
+    /// subtrees, and active modals block the resize just as they block [`El::window_drag`].
+    /// Ignored on macOS, on the web, in overlays, and in headless runs (headless tests observe
+    /// `TitlebarAction::Resize(edge)` via
+    /// [`Runtime::take_titlebar_action`](crate::Runtime::take_titlebar_action)).
+    ///
+    /// ```ignore
+    /// el().pin(None, None, Some(0.0), Some(0.0))
+    ///     .size(12.0, 12.0)
+    ///     .window_resize(ResizeEdge::SouthEast)
+    /// ```
+    pub fn window_resize(mut self, edge: crate::ResizeEdge) -> Self {
+        self.flags.set_window_drag(WindowDrag::Resize(edge));
+        self.cold_mut().window_resize = Some(edge);
+        self
+    }
     /// The caret of an editor the app draws itself rather than with `text_input`: while this
     /// element is drawn and no text field has focus, the window turns its input method on (dead
     /// keys, CJK, the emoji picker, dictation), places the candidate window at this element's

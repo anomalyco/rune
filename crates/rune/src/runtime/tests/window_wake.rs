@@ -259,3 +259,42 @@ fn a_new_system_scroll_bar_setting_rebuilds_the_view_and_its_memos() {
     rt.frame(5.0);
     assert_eq!((w(&rt, "cx"), w(&rt, "memo")), (80.0, 90.0));
 }
+
+#[test]
+fn drag_resize_window_populates_frame_request_and_merges_with_resize_window() {
+    use crate::{Phase, ResizeEdge};
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        el().key("grip").size(40.0, 40.0).on_drag(|_: &mut (), d, tx| {
+            if d.phase == Phase::Down {
+                tx.drag_resize_window(ResizeEdge::SouthEast);
+            }
+        })
+    }
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(rt.host.window_frame.is_none());
+
+    // Triggered from on_drag Phase::Down on a custom grip.
+    rt.pointer_move(20.0, 20.0);
+    rt.pointer_down(20.0, 20.0);
+    rt.frame(1.0 / 60.0);
+    let req = rt.host.window_frame.take().expect("drag_resize_window request");
+    assert_eq!(req.resize_drag, Some(ResizeEdge::SouthEast));
+    assert_eq!(req.size, None);
+    assert!(!req.center);
+    rt.pointer_up(20.0, 20.0);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.host.window_frame.is_none(), "Phase::Up does not re-emit resize_drag");
+
+    // Merges cleanly with resize_window and center_window; later drag_resize_window wins.
+    rt.update(|_, tx| {
+        tx.resize_window((640.0, 480.0));
+        tx.drag_resize_window(ResizeEdge::East);
+        tx.center_window();
+        tx.drag_resize_window(ResizeEdge::NorthWest);
+    });
+    let merged = rt.host.window_frame.take().expect("merged frame request");
+    assert_eq!(merged.size, Some((640.0, 480.0)));
+    assert!(merged.center);
+    assert_eq!(merged.resize_drag, Some(ResizeEdge::NorthWest));
+}

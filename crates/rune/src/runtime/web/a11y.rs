@@ -227,7 +227,7 @@ pub(crate) fn takes_pointer(n: &Node) -> bool {
     h.on_press.is_some() || h.on_double_press.is_some() || h.on_secondary_press.is_some() || h.on_middle_press.is_some()
         || h.on_pointer_move.is_some() || h.on_drag.is_some() || h.drag_out.is_some() || h.on_drag_start.is_some()
         || h.gestures.as_ref().is_some_and(|g| g.takes_gestures())
-        || n.input.is_some() || n.window_drag == crate::el::WindowDrag::Drag
+        || n.input.is_some() || matches!(n.window_drag, crate::el::WindowDrag::Drag | crate::el::WindowDrag::Resize(_))
         || n.a11y.more.as_ref().is_some_and(|m| m.href.is_some())
         || roles::takes_pointer(n.role)
 }
@@ -629,7 +629,7 @@ impl RuntimeCore {
             let button_like = raw_href.is_none()
                 && n.handlers.on_a11y_action.is_none()
                 && (n.role == "button" || range_or_combo || stateful_control || n.handlers.on_press.is_some() || delegated_control)
-                && n.window_drag != crate::el::WindowDrag::Drag;
+                && !matches!(n.window_drag, crate::el::WindowDrag::Drag | crate::el::WindowDrag::Resize(_));
             // Only collapse a pressable container into one button when it doesn't wrap an entire
             // multi-block section with independent buttons inside, unless it has an explicit
             // control role (such as a closable tab or treeitem with row actions, whose child

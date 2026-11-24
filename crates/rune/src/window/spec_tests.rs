@@ -414,3 +414,23 @@ fn windows_undecorated_shadow_applies_to_attributes_and_preserves_default() {
         .apply_attributes(base);
     assert!(format!("{disabled:?}").contains("decoration_shadow: false"), "{disabled:?}");
 }
+
+#[test]
+fn resize_edge_maps_to_winit_direction_and_default_cursors() {
+    use crate::Cursor;
+    use winit::window::ResizeDirection;
+    let cases = [
+        (ResizeEdge::North, ResizeDirection::North, Cursor::ResizeNs),
+        (ResizeEdge::South, ResizeDirection::South, Cursor::ResizeNs),
+        (ResizeEdge::East, ResizeDirection::East, Cursor::ResizeEw),
+        (ResizeEdge::West, ResizeDirection::West, Cursor::ResizeEw),
+        (ResizeEdge::NorthEast, ResizeDirection::NorthEast, Cursor::ResizeNesw),
+        (ResizeEdge::NorthWest, ResizeDirection::NorthWest, Cursor::ResizeNwse),
+        (ResizeEdge::SouthEast, ResizeDirection::SouthEast, Cursor::ResizeNwse),
+        (ResizeEdge::SouthWest, ResizeDirection::SouthWest, Cursor::ResizeNesw),
+    ];
+    for (edge, direction, cursor) in cases {
+        assert_eq!(ResizeDirection::from(edge), direction);
+        assert_eq!(edge.cursor(), cursor);
+    }
+}

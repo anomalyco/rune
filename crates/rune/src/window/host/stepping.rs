@@ -325,6 +325,14 @@ impl Host {
             self.geometry.size = size;
             self.args.size = None;
         }
+        if let Some(edge) = request.resize_drag
+            && self.win.as_ref().is_some_and(|w| w.drag_resize_window(edge))
+        {
+            self.app.rt_mut().cancel_pointer();
+        }
+        if request.size.is_none() && !request.center {
+            return false;
+        }
         let Some(w) = &self.win else { return false };
         #[cfg(target_os = "macos")]
         {

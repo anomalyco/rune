@@ -520,6 +520,25 @@ impl Tx {
         self.frame_request(crate::window::frame::FrameRequest { center: true, ..Default::default() });
     }
 
+    /// Start an interactive OS/compositor-driven window resize from `edge` (winit's
+    /// `Window::drag_resize_window`: Win32 sizing borders, X11 `_NET_WM_MOVERESIZE`, Wayland
+    /// `xdg_toplevel.resize`). Call from a press or [`El::on_drag`](crate::El::on_drag)
+    /// [`Phase::Down`](crate::Phase::Down) handler on a custom resize grip; for a plain resize
+    /// edge or corner without custom logic, prefer
+    /// [`El::window_resize`](crate::El::window_resize), which also supplies the matching resize
+    /// cursor. Ignored on macOS, on the web, in overlays, and in headless runs.
+    ///
+    /// ```ignore
+    /// el().size(12.0, 12.0).cursor(Cursor::ResizeNwse).on_drag(|_: &mut App, d, tx| {
+    ///     if d.phase == Phase::Down {
+    ///         tx.drag_resize_window(ResizeEdge::SouthEast);
+    ///     }
+    /// })
+    /// ```
+    pub fn drag_resize_window(&mut self, edge: crate::ResizeEdge) {
+        self.frame_request(crate::window::frame::FrameRequest { resize_drag: Some(edge), ..Default::default() });
+    }
+
     /// Drop keyboard focus, as a click on empty space does: after this handler, nothing is
     /// focused, the focused field's `TextEdit::focused` turns false (through its `on_edit`
     /// accessor) and keys go to the window's `on_key` again. A field focused only by setting

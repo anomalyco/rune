@@ -195,6 +195,7 @@ impl HostState {
         let request = crate::window::frame::FrameRequest {
             size: Some((viewport.0, height)), animate: !jump,
             spring: (!jump).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring)), center: false,
+            resize_drag: None,
         };
         self.window_frame = Some(self.window_frame.unwrap_or_default().merge(request));
     }

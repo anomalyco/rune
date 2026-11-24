@@ -337,6 +337,10 @@ impl RuntimeCore {
             }
             return;
         }
+        if let Some(edge) = self.bare_resize_edge(ti) {
+            self.host.titlebar.press_resize(edge);
+            return;
+        }
         let n = &self.tree.nodes[ti];
         let clicks = self.pointer.press_click(&n.path, now, (x, y), self.double_click_interval);
         let second = n.handlers.on_double_press.is_some() && pending.is_some_and(|first| {
@@ -583,6 +587,11 @@ impl RuntimeCore {
         }
         if self.is_selectable(i) && !self.edit.selectable.phase.dragging() && self.link_at(i, x, y).is_some() {
             return crate::el::Cursor::Pointer;
+        }
+        if self.tree.nodes[i].handlers.cursor.is_none()
+            && let Some(edge) = self.bare_resize_edge(i)
+        {
+            return edge.cursor();
         }
         loop {
             if let Some(c) = self.tree.nodes[i].handlers.cursor {

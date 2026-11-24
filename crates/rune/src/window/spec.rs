@@ -31,6 +31,59 @@ impl PlaceRequest {
     }
 }
 
+/// Which edge or corner of a window an interactive pointer resize drags
+/// ([`El::window_resize`](crate::El::window_resize),
+/// [`Tx::drag_resize_window`](crate::Tx::drag_resize_window)).
+///
+/// Maps directly to `winit::window::ResizeDirection` (Win32 sizing borders, X11
+/// `_NET_WM_MOVERESIZE`, Wayland `xdg_toplevel.resize`).
+///
+/// ```ignore
+/// use rune::{ResizeEdge, el};
+///
+/// el().pin(None, None, Some(0.0), Some(0.0))
+///     .size(12.0, 12.0)
+///     .window_resize(ResizeEdge::SouthEast)
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ResizeEdge {
+    North,
+    South,
+    East,
+    West,
+    NorthEast,
+    NorthWest,
+    SouthEast,
+    SouthWest,
+}
+
+impl ResizeEdge {
+    /// The default hover cursor for a bare [`El::window_resize`](crate::El::window_resize) region.
+    pub(crate) const fn cursor(self) -> crate::el::Cursor {
+        match self {
+            ResizeEdge::North | ResizeEdge::South => crate::el::Cursor::ResizeNs,
+            ResizeEdge::East | ResizeEdge::West => crate::el::Cursor::ResizeEw,
+            ResizeEdge::NorthWest | ResizeEdge::SouthEast => crate::el::Cursor::ResizeNwse,
+            ResizeEdge::NorthEast | ResizeEdge::SouthWest => crate::el::Cursor::ResizeNesw,
+        }
+    }
+}
+
+impl From<ResizeEdge> for winit::window::ResizeDirection {
+    fn from(edge: ResizeEdge) -> Self {
+        match edge {
+            ResizeEdge::North => Self::North,
+            ResizeEdge::South => Self::South,
+            ResizeEdge::East => Self::East,
+            ResizeEdge::West => Self::West,
+            ResizeEdge::NorthEast => Self::NorthEast,
+            ResizeEdge::NorthWest => Self::NorthWest,
+            ResizeEdge::SouthEast => Self::SouthEast,
+            ResizeEdge::SouthWest => Self::SouthWest,
+        }
+    }
+}
+
 /// Process-level settings applied once, before constructing the native event loop.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RunOptions {

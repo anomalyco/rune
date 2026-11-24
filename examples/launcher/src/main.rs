@@ -19,8 +19,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rune::tok::{self, type_};
 use rune::{
     Align, App, AppHandle, AppSpec, Color, Cx, DisplayTarget, El, Image, ImageCache, Key, KeyEvent,
-    MacWindowOptions, OverlayPlacement, ScreenEdge, SurfaceFit, TextEdit, Tx, Waker, WindowOptions,
-    WindowSpec, col, el, row, spacer, text, text_input,
+    MacWindowOptions, OverlayPlacement, ResizeEdge, ScreenEdge, SurfaceFit, TextEdit, Tx, Waker,
+    WindowOptions, WindowSpec, col, el, row, spacer, text, text_input,
 };
 
 /// Recording with `--desktop`: there is no native chrome, so the app draws its own.
@@ -162,7 +162,7 @@ fn launcher_view(s: &Launcher, _: &mut Cx<Launcher>) -> El {
         })
         .on_input_change(|s: &mut Launcher, _| s.picked = 0)
         .on_submit(open_picked);
-    let mut panel = col().key("panel").w_full().radius(14.0).clip_rounded(14.0)
+    let mut panel = col().key("panel").w_full().grow(1.0).radius(14.0).clip_rounded(14.0)
         .fill(t.card).border(1.0, Color::WHITE.alpha(0.1))
         .child(row().h(56.0).px(18.0).gap(12.0).center_y().window_drag()
             .child(text("⌕").font(type_::TITLE.lh(26.0)).color(t.text_secondary))
@@ -178,7 +178,22 @@ fn launcher_view(s: &Launcher, _: &mut Cx<Launcher>) -> El {
         }
         panel = panel.child(el().h(1.0).w_full().fill(t.separator)).child(results);
     }
-    col().w_full().h_full().child(panel)
+    // 8-way interactive resize strips around the borderless launcher window.
+    const EDGE: f32 = 6.0;
+    const CORNER: f32 = 12.0;
+    let corner_grip = el().key("resize-se").pin(None, None, Some(0.0), Some(0.0)).size(CORNER, CORNER)
+        .window_resize(ResizeEdge::SouthEast)
+        .child(el().pin(None, None, Some(4.0), Some(4.0)).size(5.0, 5.0).radius(2.5).fill(Color::WHITE.alpha(0.22)));
+    col().w_full().h_full()
+        .child(panel)
+        .child(el().key("resize-n").pin(Some(CORNER), Some(0.0), Some(CORNER), None).h(EDGE).window_resize(ResizeEdge::North))
+        .child(el().key("resize-s").pin(Some(CORNER), None, Some(CORNER), Some(0.0)).h(EDGE).window_resize(ResizeEdge::South))
+        .child(el().key("resize-w").pin(Some(0.0), Some(CORNER), None, Some(CORNER)).w(EDGE).window_resize(ResizeEdge::West))
+        .child(el().key("resize-e").pin(None, Some(CORNER), Some(0.0), Some(CORNER)).w(EDGE).window_resize(ResizeEdge::East))
+        .child(el().key("resize-nw").pin(Some(0.0), Some(0.0), None, None).size(CORNER, CORNER).window_resize(ResizeEdge::NorthWest))
+        .child(el().key("resize-ne").pin(None, Some(0.0), Some(0.0), None).size(CORNER, CORNER).window_resize(ResizeEdge::NorthEast))
+        .child(el().key("resize-sw").pin(Some(0.0), None, None, Some(0.0)).size(CORNER, CORNER).window_resize(ResizeEdge::SouthWest))
+        .child(corner_grip)
 }
 
 fn open_picked(s: &mut Launcher, tx: &mut Tx) {
@@ -236,9 +251,21 @@ fn main() {
                 s.me.show();
             })
             .on_focus(|_, focused, tx| if !focused { tx.close_window() });
+        let launcher_options = if cfg!(target_os = "macos") {
+            WindowOptions::launcher_panel()
+        } else {
+            WindowOptions {
+                visible: false,
+                borderless: true,
+                transparent: true,
+                resizable: true,
+                min_size: Some((360.0, 140.0)),
+                ..Default::default()
+            }.into()
+        };
         let mut windows: Vec<rune::AnyWindowSpec> = vec![
             WindowSpec::from_app("notes", notes).into(),
-            WindowSpec::from_app("launcher", launcher).configured_options(WindowOptions::launcher_panel()).into(),
+            WindowSpec::from_app("launcher", launcher).configured_options(launcher_options).into(),
         ];
         if DESKTOP.load(Ordering::Relaxed) && let Some(d) = displays.iter().find(|d| d.primary).or(displays.first()) {
             let bar = WindowOptions {

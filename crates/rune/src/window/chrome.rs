@@ -118,6 +118,7 @@ fn caption(w: &Win, titlebar: Option<crate::Titlebar>) -> Option<crate::titlebar
 pub(in crate::window) enum TitlebarTarget {
     DragPanel,
     DragWindow,
+    ResizeWindow(crate::ResizeEdge),
     DoubleClickWindow,
     Ignore,
 }
@@ -128,6 +129,8 @@ pub(in crate::window) fn titlebar_target(action: crate::runtime::TitlebarAction,
     match (action, panel) {
         (crate::runtime::TitlebarAction::Drag, true) => TitlebarTarget::DragPanel,
         (crate::runtime::TitlebarAction::Drag, false) => TitlebarTarget::DragWindow,
+        (crate::runtime::TitlebarAction::Resize(_), true) => TitlebarTarget::Ignore,
+        (crate::runtime::TitlebarAction::Resize(edge), false) => TitlebarTarget::ResizeWindow(edge),
         (crate::runtime::TitlebarAction::DoubleClick, true) => TitlebarTarget::Ignore,
         (crate::runtime::TitlebarAction::DoubleClick, false) => TitlebarTarget::DoubleClickWindow,
     }
