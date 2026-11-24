@@ -156,7 +156,8 @@ pub(crate) type PillImageFn = Rc<dyn Fn(&str) -> Option<crate::Pixels>>;
 pub(crate) type PillStyleFn = Rc<dyn Fn(&str) -> PillStyle>;
 /// A pill's plain-text copy payload by its id; see [`El::pill_copy_text`].
 pub(crate) type PillCopyTextFn = Rc<dyn Fn(&str) -> Option<String>>;
-pub(crate) type PillSecondaryFn = Rc<dyn Fn(crate::states::States<'_>, &str, PointerPress, &mut Tx) -> bool>;
+pub(crate) type PillPressFn = Rc<dyn Fn(crate::states::States<'_>, &str, PointerPress, &mut Tx) -> bool>;
+pub(crate) type PillSecondaryFn = PillPressFn;
 
 /// How one [`Mark::Pill`](crate::Mark::Pill) chip looks: any part left unset falls back to
 /// [`El::pill_colors`] and [`El::pill_icon`], then the field's defaults. Build one with

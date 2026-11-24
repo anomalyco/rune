@@ -649,3 +649,310 @@ fn pill_copy_text_exports_payload_on_keyboard_and_menu_and_round_trips_pill() {
     assert_eq!(default_copy.text(), "a @x-agent b");
     assert!(default_copy.html().is_some_and(|h| h.contains(r#"<span data-pill="agent:x">@x-agent</span>"#)));
 }
+
+#[test]
+fn on_input_selection_fires_on_keys_clicks_drags_edits_and_a11y_same_frame() {
+    use accesskit::{Action as Ak, ActionData, TextPosition, TextSelection};
+    use crate::{ScrollSpec, TextStyle};
+
+    struct SelState {
+        edit: TextEdit,
+        rtl: TextEdit,
+        disabled: TextEdit,
+        inert: TextEdit,
+        clamp_at_two: bool,
+        events: Vec<String>,
+        rendered_sel: (usize, usize),
+    }
+
+    fn view(s: &SelState, _: &mut Cx<SelState>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        let readout = format!("sel:{}:{}", s.rendered_sel.0, s.rendered_sel.1);
+        col()
+            .w(320.0)
+            .h(340.0)
+            .gap(6.0)
+            .child(crate::text(readout).key("readout"))
+            .child(
+                text_input(&s.edit, style)
+                    .key("field")
+                    .label("Main editor")
+                    .w_full()
+                    .h(80.0)
+                    .on_edit(|s: &mut SelState| &mut s.edit)
+                    .on_input_change(|s: &mut SelState, _| {
+                        s.events.push(format!("change:{}", s.edit.text));
+                    })
+                    .on_input_selection(|s: &mut SelState, _| {
+                        if s.clamp_at_two && s.edit.anchor == 2 && s.edit.focus == 2 {
+                            s.edit.set_caret(3);
+                        }
+                        s.rendered_sel = (s.edit.anchor, s.edit.focus);
+                        s.events.push(format!("sel:{}:{}", s.edit.anchor, s.edit.focus));
+                    }),
+            )
+            .child(
+                text_input(&s.rtl, style)
+                    .key("rtl")
+                    .label("RTL editor")
+                    .w_full()
+                    .h(36.0)
+                    .on_edit(|s: &mut SelState| &mut s.rtl)
+                    .on_input_selection(|s: &mut SelState, _| {
+                        s.events.push(format!("rtl:{}:{}", s.rtl.anchor, s.rtl.focus));
+                    }),
+            )
+            .child(
+                text_input(&s.disabled, style)
+                    .key("disabled")
+                    .w_full()
+                    .h(32.0)
+                    .disabled(true)
+                    .on_edit(|s: &mut SelState| &mut s.disabled)
+                    .on_input_selection(|s: &mut SelState, _| s.events.push("dis".into())),
+            )
+            .child(
+                col().inert().child(
+                    text_input(&s.inert, style)
+                        .key("inert")
+                        .w_full()
+                        .h(32.0)
+                        .on_edit(|s: &mut SelState| &mut s.inert)
+                        .on_input_selection(|s: &mut SelState, _| s.events.push("inert".into())),
+                ),
+            )
+    }
+
+    let mut edit = TextEdit::new("hello world
+second line");
+    edit.focused = true;
+    edit.set_caret(0);
+    let mut rtl = TextEdit::new("مرحبا بكم");
+    rtl.set_caret(0);
+
+    let mut rt = Runtime::new(
+        SelState {
+            edit,
+            rtl,
+            disabled: TextEdit::new("off"),
+            inert: TextEdit::new("inert"),
+            clamp_at_two: false,
+            events: Vec::new(),
+            rendered_sel: (0, 0),
+        },
+        view,
+        (320.0, 340.0),
+        Env::new(true, 1.0),
+    );
+    let board = crate::clipboard::memory();
+    rt.use_clipboard(&board);
+    rt.frame(0.0);
+    assert!(rt.state.events.is_empty());
+
+    let readout_text = |rt: &Runtime<SelState>| -> String {
+        rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("readout"))
+            .and_then(|n| n.text.as_deref())
+            .map(|t| t.content.clone())
+            .unwrap()
+    };
+
+    // 1. No-op Left and Home at offset 0 do not fire on_input_selection.
+    rt.key(KeyEvent::from(Key::Left));
+    rt.frame(1.0 / 60.0);
+    rt.key(KeyEvent::from(Key::Home));
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.events.is_empty(), "no-op moves must not fire: {:?}", rt.state.events);
+
+    // 2. Right arrow fires on_input_selection and updates view in the SAME frame.
+    rt.key(KeyEvent::from(Key::Right));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.events, ["sel:1:1"]);
+    assert_eq!(readout_text(&rt), "sel:1:1", "view rebuild in same frame sees handler state");
+
+    // 3. Caret adjustment inside on_input_selection (e.g. skipping hidden syntax) applies same frame without looping.
+    rt.update(|s, _| { s.clamp_at_two = true; s.events.clear(); });
+    rt.frame(1.0 / 60.0);
+    rt.key(KeyEvent::from(Key::Right));
+    rt.frame(1.0 / 60.0);
+    assert_eq!((rt.state.edit.anchor, rt.state.edit.focus), (3, 3));
+    assert_eq!(rt.state.events, ["sel:3:3"]);
+    assert_eq!(readout_text(&rt), "sel:3:3");
+    rt.update(|s, _| { s.clamp_at_two = false; s.events.clear(); });
+    rt.frame(1.0 / 60.0);
+
+    // 4. Shift+Right, End, Home, Cmd/Ctrl+A (and no-op second Cmd/Ctrl+A).
+    rt.key(KeyEvent { key: Key::Right, mods: Mods { shift: true, ..Mods::default() } });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.events.last().map(String::as_str), Some("sel:3:4"));
+
+    rt.key(KeyEvent::from(Key::End));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.edit.anchor, rt.state.edit.focus);
+    let end_pos = rt.state.edit.focus;
+    assert!(end_pos > 4);
+    assert_eq!(rt.state.events.last().map(String::as_str), Some(format!("sel:{end_pos}:{end_pos}").as_str()));
+
+    rt.key(cmd('a'));
+    rt.frame(1.0 / 60.0);
+    let len = rt.state.edit.text.len();
+    assert_eq!(rt.state.events.last().map(String::as_str), Some(format!("sel:0:{len}").as_str()));
+    let before_noop_a = rt.state.events.len();
+    rt.key(cmd('a'));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.events.len(), before_noop_a, "second Cmd+A with identical selection does not fire");
+
+    // 5. Typing & edits: on_input_change runs BEFORE on_input_selection; forward Delete keeping (0,0) fires change only.
+    rt.update(|s, _| {
+        s.edit.replace_text("abc");
+        s.edit.set_caret(0);
+        s.events.clear();
+    });
+    rt.frame(1.0 / 60.0);
+    rt.key(KeyEvent::from(Key::Text("Z".into())));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.events, ["change:Zabc", "sel:1:1"]);
+
+    rt.state.events.clear();
+    rt.key(KeyEvent::from(Key::Left));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.events, ["sel:0:0"]);
+
+    rt.state.events.clear();
+    rt.key(KeyEvent::from(Key::Delete));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.events, ["change:abc"], "Delete keeping (0,0) fires change only");
+
+    // 6. Direct app-side mutation outside runtime input does NOT fire on_input_selection.
+    rt.state.events.clear();
+    rt.update(|s, _| s.edit.set_caret(2));
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.events.is_empty());
+
+    // 7. Mouse single click, double-click, drag, and Shift+click.
+    rt.update(|s, _| {
+        s.edit.replace_text("alpha beta gamma");
+        s.edit.set_caret(0);
+        s.events.clear();
+    });
+    rt.frame(1.0 / 60.0);
+    let field_rect = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("field")).unwrap().rect;
+    let y = field_rect[1] + 10.0;
+    let x_mid = field_rect[0] + 60.0;
+    let x_end = field_rect[0] + 160.0;
+
+    rt.pointer_down(x_mid, y);
+    rt.pointer_up(x_mid, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.events.len(), 1);
+    let clicked_pos = rt.state.edit.focus;
+    assert!(clicked_pos > 0);
+    assert_eq!(readout_text(&rt), format!("sel:{clicked_pos}:{clicked_pos}"));
+
+    // Double-click selects word and fires on_input_selection.
+    rt.pointer_down(x_mid, y);
+    rt.pointer_up(x_mid, y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.edit.anchor != rt.state.edit.focus);
+    assert_eq!(rt.state.events.len(), 2);
+
+    // Drag selects range and fires on_input_selection.
+    rt.state.events.clear();
+    rt.frame(1.0); // past double-click interval
+    rt.pointer_down(field_rect[0] + 4.0, y);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_move(x_end, y);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_up(x_end, y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.events.len() >= 2, "down + drag should fire on_input_selection: {:?}", rt.state.events);
+    assert!(rt.state.edit.focus > rt.state.edit.anchor);
+
+    // 8. Assistive technology SetTextSelection fires on_input_selection.
+    rt.state.events.clear();
+    let tree = rt.accessibility_tree();
+    let (field_a11y_id, _) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("field")).unwrap();
+    let line_id = tree.nodes.iter()
+        .find(|(_, n)| n.role() == accesskit::Role::TextRun && n.value().is_some_and(|v| v.contains("alpha")))
+        .map(|(id, _)| *id)
+        .unwrap_or(*field_a11y_id);
+    assert!(rt.accessibility_action(
+        "field",
+        Ak::SetTextSelection,
+        Some(ActionData::SetTextSelection(TextSelection {
+            anchor: TextPosition { node: line_id, character_index: 1 },
+            focus: TextPosition { node: line_id, character_index: 4 },
+        })),
+    ));
+    rt.frame(1.0 / 60.0);
+    assert_eq!((rt.state.edit.anchor, rt.state.edit.focus), (1, 4));
+    assert_eq!(rt.state.events, ["sel:1:4"]);
+
+    // 9. RTL field navigation fires on_input_selection with UTF-8 byte offsets.
+    rt.update(|s, _| {
+        s.edit.focused = false;
+        s.rtl.focused = true;
+        s.rtl.set_caret(0);
+        s.events.clear();
+    });
+    rt.frame(1.0 / 60.0);
+    // In RTL text at byte 0 (visual right edge), Left moves forward through the Arabic characters.
+    rt.key(KeyEvent::from(Key::Left));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.events.len(), 1, "RTL Left should move caret: {:?}", rt.state.events);
+    assert!(rt.state.events[0].starts_with("rtl:"));
+    assert!(rt.state.rtl.focus > 0);
+
+    // 10. Disabled and inert fields never fire on_input_selection.
+    rt.state.events.clear();
+    for key in ["disabled", "inert"] {
+        let (x, y) = rt.find(key).unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(rt.state.events.is_empty());
+
+    // 11. Idle window asks for no frames.
+    for _ in 0..10 {
+        if !rt.frame(1.0 / 60.0) {
+            break;
+        }
+    }
+    assert!(!rt.frame(1.0 / 60.0), "idle field with on_input_selection must ask for no frames");
+
+    // 12. Edge autoscroll in a scrollable multi-line field fires on_input_selection as selection extends.
+    struct ScrollSel {
+        edit: TextEdit,
+        moves: Vec<(usize, usize)>,
+    }
+    fn scroll_view(s: &ScrollSel, _: &mut Cx<ScrollSel>) -> El {
+        col()
+            .w(220.0)
+            .h(70.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .child(
+                text_input(&s.edit, TextStyle::new(14.0, 400.0).lh(20.0))
+                    .key("doc")
+                    .w_full()
+                    .on_edit(|s: &mut ScrollSel| &mut s.edit)
+                    .on_input_selection(|s: &mut ScrollSel, _| s.moves.push((s.edit.anchor, s.edit.focus))),
+            )
+    }
+    let long = (0..20).map(|i| format!("line {i:02} content")).collect::<Vec<_>>().join("
+");
+    let mut srt = Runtime::new(ScrollSel { edit: TextEdit::new(long), moves: Vec::new() }, scroll_view, (220.0, 70.0), Env::new(true, 1.0));
+    srt.frame(0.0);
+    srt.pointer_down(10.0, 10.0);
+    srt.frame(1.0 / 60.0);
+    let moves_before_edge = srt.state.moves.len();
+    let focus_before_edge = srt.state.edit.focus;
+    // Drag past bottom edge to engage edge autoscroll.
+    srt.pointer_move(10.0, 95.0);
+    for _ in 0..8 {
+        srt.frame(1.0 / 30.0);
+    }
+    srt.pointer_up(10.0, 95.0);
+    srt.frame(1.0 / 60.0);
+    assert!(srt.state.edit.focus > focus_before_edge, "edge autoscroll extends field selection");
+    assert!(srt.state.moves.len() > moves_before_edge, "edge autoscroll fires on_input_selection");
+}

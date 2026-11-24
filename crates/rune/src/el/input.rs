@@ -36,11 +36,13 @@ pub struct InputSpec {
     pub(crate) pill_image: Option<PillImageFn>,
     pub(crate) pill_style: Option<PillStyleFn>,
     pub(crate) pill_copy_text: Option<PillCopyTextFn>,
+    pub(crate) on_pill_press: Option<PillPressFn>,
     pub(crate) on_pill_secondary: Option<PillSecondaryFn>,
     pub(crate) access: Option<EditFn>,
     pub(crate) submit: Option<PressFn>,
     pub(crate) key: Option<InputKeyFn>,
     pub(crate) change: Option<PressFn>,
+    pub(crate) selection_change: Option<PressFn>,
     pub(crate) paste: Option<InputPasteFn>,
     pub(crate) copy: Option<InputCopyFn>,
     /// `El::spellcheck`: the platform's checker marks misspelled words.
@@ -106,11 +108,13 @@ pub fn text_input(edit: &TextEdit, style: TextStyle) -> El {
         pill_image: None,
         pill_style: None,
         pill_copy_text: None,
+        on_pill_press: None,
         on_pill_secondary: None,
         access: None,
         submit: None,
         key: None,
         change: None,
+        selection_change: None,
         paste: None,
         copy: None,
         spellcheck: false,
@@ -235,6 +239,33 @@ impl El {
         }
         self
     }
+    /// Called after a focused text field's caret or selection (`anchor`, `focus`) changes from
+    /// runtime input (arrow keys, `Home`/`End`, `Shift` navigation, `Cmd/Ctrl+A`, clicks,
+    /// double/triple clicks, pointer drags, edge autoscroll, field context-menu caret moves,
+    /// assistive-technology selection actions, or text edits), in the same turn before the view
+    /// rebuilds.
+    ///
+    /// When an edit changes both the text and the caret/selection, [`El::on_input_change`] runs
+    /// first and `on_input_selection` runs immediately after it. No-op moves (such as `Left` at
+    /// offset 0) do not fire it, and direct app-side mutations to `TextEdit` outside runtime
+    /// input do not re-trigger it.
+    ///
+    /// ```no_run
+    /// # use rune::{TextEdit, TextStyle, text_input};
+    /// # struct App { edit: TextEdit, sel: (usize, usize) }
+    /// # let s = App { edit: TextEdit::new("hello"), sel: (0, 0) };
+    /// let _ = text_input(&s.edit, TextStyle::new(14.0, 400.0))
+    ///     .on_edit(|s: &mut App| &mut s.edit)
+    ///     .on_input_selection(|s: &mut App, _tx| {
+    ///         s.sel = (s.edit.anchor, s.edit.focus);
+    ///     });
+    /// ```
+    pub fn on_input_selection<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            input.selection_change = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
+        }
+        self
+    }
     /// Handle a paste into this focused text field before the editor, with every form the
     /// clipboard held ([`ClipboardContent`](crate::ClipboardContent): plain text, and sanitised
     /// HTML and RTF when the source offered them). Return true when the app took it; false lets
@@ -299,6 +330,34 @@ impl El {
     pub fn pill_copy_text(mut self, f: impl Fn(&str) -> Option<String> + 'static) -> Self {
         if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             inp.pill_copy_text = Some(Rc::new(f));
+        }
+        self
+    }
+    /// Primary press (left-click or tap) on a [`Mark::Pill`](crate::Mark::Pill) chip inside
+    /// this [`text_input`](crate::text_input), invoked before caret placement. Called with the
+    /// pill's id and the press point in window points; return `true` to consume the press
+    /// without moving the caret or starting a text-selection drag, or `false` to fall through to
+    /// normal caret placement. Skipped while `Shift` is held so `Shift+click` continues to
+    /// extend the selection. While hovering a pill in a field with this handler, the cursor
+    /// shows [`Cursor::Pointer`](crate::Cursor::Pointer).
+    ///
+    /// ```no_run
+    /// # use rune::{TextEdit, TextStyle, text_input};
+    /// # struct App { edit: TextEdit, picked: Option<String> }
+    /// # let s = App { edit: TextEdit::new("").rich(), picked: None };
+    /// let _ = text_input(&s.edit, TextStyle::new(14.0, 400.0))
+    ///     .on_edit(|s: &mut App| &mut s.edit)
+    ///     .on_pill_press(|s: &mut App, id, _press, _tx| {
+    ///         s.picked = Some(id.to_owned());
+    ///         true
+    ///     });
+    /// ```
+    pub fn on_pill_press<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, &str, PointerPress, &mut Tx) -> bool + 'static,
+    ) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            inp.on_pill_press = Some(Rc::new(move |s, id, press, tx| f(downcast::<S>(s), id, press, tx)));
         }
         self
     }

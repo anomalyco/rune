@@ -33,6 +33,7 @@ impl RuntimeCore {
         {
             return true;
         }
+        let selection_change = input.selection_change.clone();
         let Some(access) = input.access.clone() else { return false };
         let (single, secure) = (input.single_line, input.edit.is_secure());
         let spell = input.spellcheck && !secure;
@@ -44,22 +45,30 @@ impl RuntimeCore {
         if self.kbd.focus.path() != Some(path.as_str()) {
             self.set_focus(app, Some(path.clone()), false);
         }
-        let e = access(app.states());
-        e.set_single_line(single);
-        if let (Some([tx, ty]), Some(l)) = (point, layout.as_ref().map(TextLayout::view))
-            && e.preedit().is_none()
-        {
-            let caret = hit(e, l, tx, ty, s, single).caret;
-            let (a, b) = e.range();
-            // A press in the selection keeps it for Cut and Copy. Elsewhere it moves the caret
-            // there, and on a misspelled word selects the word, as Chromium does.
-            if a == b || caret < a || caret > b {
-                match spell.then(|| crate::spell::misspelled_at(&e.text, caret)).flatten() {
-                    Some((wa, wb)) => e.set_selection(wa, wb),
-                    None => e.set_caret(caret),
+        let changed_sel = {
+            let e = access(app.states());
+            e.set_single_line(single);
+            let before = (e.anchor, e.focus);
+            if let (Some([tx, ty]), Some(l)) = (point, layout.as_ref().map(TextLayout::view))
+                && e.preedit().is_none()
+            {
+                let caret = hit(e, l, tx, ty, s, single).caret;
+                let (a, b) = e.range();
+                // A press in the selection keeps it for Cut and Copy. Elsewhere it moves the caret
+                // there, and on a misspelled word selects the word, as Chromium does.
+                if a == b || caret < a || caret > b {
+                    match spell.then(|| crate::spell::misspelled_at(&e.text, caret)).flatten() {
+                        Some((wa, wb)) => e.set_selection(wa, wb),
+                        None => e.set_caret(caret),
+                    }
                 }
             }
+            (e.anchor, e.focus) != before
+        };
+        if changed_sel && let Some(selection_change) = selection_change {
+            selection_change(app.states(), one);
         }
+        let e = access(app.states());
         let (a, b) = e.range();
         let word = spell
             .then(|| crate::spell::misspelled(&e.text, None))

@@ -680,3 +680,204 @@ fn on_input_copy_and_pill_copy_text_forward_across_kit_fields() {
     rt.frame(0.0);
     assert_eq!(rt.state.seen, [("ti", false), ("ta", false), ("tf", false)]);
 }
+
+#[test]
+fn on_pill_press_on_pill_secondary_and_on_input_selection_forward_and_skip_disabled() {
+    struct State {
+        ti: TextEdit,
+        ta: TextEdit,
+        tf: TextEdit,
+        dis_ti: TextEdit,
+        dis_ta: TextEdit,
+        dis_tf: TextEdit,
+        inert_ti: TextEdit,
+        pill_presses: Vec<(&'static str, String)>,
+        pill_secondaries: Vec<(&'static str, String)>,
+        sel_moves: Vec<(&'static str, usize, usize)>,
+    }
+
+    fn with_pill(id: &str) -> TextEdit {
+        let mut e = TextEdit::new("").rich();
+        e.insert_pill(id, "@MentionChip");
+        e.insert(" tail");
+        e.set_caret(0);
+        e
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let k = Kit::neutral(true);
+        col()
+            .w_full()
+            .h_full()
+            .padding(12.0)
+            .gap(8.0)
+            .child(
+                TextInput::new(&s.ti)
+                    .width(Some(260.0))
+                    .on_edit(|s: &mut State| &mut s.ti)
+                    .on_pill_press(|s: &mut State, id, _, _| {
+                        s.pill_presses.push(("ti", id.to_owned()));
+                        true
+                    })
+                    .on_pill_secondary(|s: &mut State, id, _, _| {
+                        s.pill_secondaries.push(("ti", id.to_owned()));
+                        true
+                    })
+                    .on_input_selection(|s: &mut State, _| {
+                        s.sel_moves.push(("ti", s.ti.anchor, s.ti.focus));
+                    })
+                    .build(&k)
+                    .key("ti"),
+            )
+            .child(
+                TextArea::new(&s.ta)
+                    .width(Some(260.0))
+                    .rows(2)
+                    .on_edit(|s: &mut State| &mut s.ta)
+                    .on_pill_press(|s: &mut State, id, _, _| {
+                        s.pill_presses.push(("ta", id.to_owned()));
+                        true
+                    })
+                    .on_pill_secondary(|s: &mut State, id, _, _| {
+                        s.pill_secondaries.push(("ta", id.to_owned()));
+                        true
+                    })
+                    .on_input_selection(|s: &mut State, _| {
+                        s.sel_moves.push(("ta", s.ta.anchor, s.ta.focus));
+                    })
+                    .build(&k)
+                    .key("ta"),
+            )
+            .child(
+                TextField::new("Title", &s.tf)
+                    .on_edit(|s: &mut State| &mut s.tf)
+                    .on_pill_press(|s: &mut State, id, _, _| {
+                        s.pill_presses.push(("tf", id.to_owned()));
+                        true
+                    })
+                    .on_pill_secondary(|s: &mut State, id, _, _| {
+                        s.pill_secondaries.push(("tf", id.to_owned()));
+                        true
+                    })
+                    .on_input_selection(|s: &mut State, _| {
+                        s.sel_moves.push(("tf", s.tf.anchor, s.tf.focus));
+                    })
+                    .build(&k)
+                    .key("tf"),
+            )
+            .child(
+                TextInput::new(&s.dis_ti)
+                    .width(Some(260.0))
+                    .disabled(true)
+                    .on_edit(|s: &mut State| &mut s.dis_ti)
+                    .on_pill_press(|s: &mut State, id, _, _| { s.pill_presses.push(("dis_ti", id.to_owned())); true })
+                    .on_pill_secondary(|s: &mut State, id, _, _| { s.pill_secondaries.push(("dis_ti", id.to_owned())); true })
+                    .on_input_selection(|s: &mut State, _| s.sel_moves.push(("dis_ti", s.dis_ti.anchor, s.dis_ti.focus)))
+                    .build(&k)
+                    .key("dis_ti"),
+            )
+            .child(
+                TextArea::new(&s.dis_ta)
+                    .width(Some(260.0))
+                    .rows(1)
+                    .disabled(true)
+                    .on_edit(|s: &mut State| &mut s.dis_ta)
+                    .on_pill_press(|s: &mut State, id, _, _| { s.pill_presses.push(("dis_ta", id.to_owned())); true })
+                    .on_pill_secondary(|s: &mut State, id, _, _| { s.pill_secondaries.push(("dis_ta", id.to_owned())); true })
+                    .on_input_selection(|s: &mut State, _| s.sel_moves.push(("dis_ta", s.dis_ta.anchor, s.dis_ta.focus)))
+                    .build(&k)
+                    .key("dis_ta"),
+            )
+            .child(
+                TextField::new("Off", &s.dis_tf)
+                    .disabled(true)
+                    .on_edit(|s: &mut State| &mut s.dis_tf)
+                    .on_pill_press(|s: &mut State, id, _, _| { s.pill_presses.push(("dis_tf", id.to_owned())); true })
+                    .on_pill_secondary(|s: &mut State, id, _, _| { s.pill_secondaries.push(("dis_tf", id.to_owned())); true })
+                    .on_input_selection(|s: &mut State, _| s.sel_moves.push(("dis_tf", s.dis_tf.anchor, s.dis_tf.focus)))
+                    .build(&k)
+                    .key("dis_tf"),
+            )
+            .child(
+                col().inert().child(
+                    TextInput::new(&s.inert_ti)
+                        .width(Some(260.0))
+                        .on_edit(|s: &mut State| &mut s.inert_ti)
+                        .on_pill_press(|s: &mut State, id, _, _| { s.pill_presses.push(("inert_ti", id.to_owned())); true })
+                        .on_pill_secondary(|s: &mut State, id, _, _| { s.pill_secondaries.push(("inert_ti", id.to_owned())); true })
+                        .on_input_selection(|s: &mut State, _| s.sel_moves.push(("inert_ti", s.inert_ti.anchor, s.inert_ti.focus)))
+                        .build(&k)
+                        .key("inert_ti"),
+                ),
+            )
+    }
+
+    let mut rt = Runtime::new(
+        State {
+            ti: with_pill("id:ti"),
+            ta: with_pill("id:ta"),
+            tf: with_pill("id:tf"),
+            dis_ti: with_pill("id:dis_ti"),
+            dis_ta: with_pill("id:dis_ta"),
+            dis_tf: with_pill("id:dis_tf"),
+            inert_ti: with_pill("id:inert_ti"),
+            pill_presses: Vec::new(),
+            pill_secondaries: Vec::new(),
+            sel_moves: Vec::new(),
+        },
+        view,
+        (320.0, 560.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    // 1. Primary and secondary clicks on the leading pill in TextInput, TextArea, TextField.
+    for (suffix, tag, id) in [
+        ("ti/value/input", "ti", "id:ti"),
+        ("ta/input", "ta", "id:ta"),
+        ("tf/wrapper/input", "tf", "id:tf"),
+    ] {
+        let r = find_path_rect(&rt, suffix);
+        let (px, py) = (r[0] + 18.0, r[1] + 10.0);
+        rt.pointer_move(px, py);
+        assert_eq!(rt.cursor(), rune::Cursor::Pointer, "{tag} pill hover cursor");
+        rt.pointer_down(px, py);
+        rt.pointer_up(px, py);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.pill_presses.last(), Some(&(tag, id.to_owned())));
+        rclick(&mut rt, px, py);
+        assert_eq!(rt.state.pill_secondaries.last(), Some(&(tag, id.to_owned())));
+    }
+
+    // 2. Disabled and inert fields never fire on_pill_press or on_pill_secondary.
+    for suffix in ["dis_ti/value/input", "dis_ta/input", "dis_tf/wrapper/input", "inert_ti/value/input"] {
+        let r = find_path_rect(&rt, suffix);
+        let (px, py) = (r[0] + 18.0, r[1] + 10.0);
+        rt.pointer_move(px, py);
+        rt.pointer_down(px, py);
+        rt.pointer_up(px, py);
+        rt.frame(1.0 / 60.0);
+        rclick(&mut rt, px, py);
+    }
+    assert_eq!(rt.state.pill_presses.len(), 3);
+    assert_eq!(rt.state.pill_secondaries.len(), 3);
+
+    // 3. on_input_selection forwards on TextInput, TextArea, and TextField.
+    rt.update(|s, _| s.ti.focused = true);
+    rt.frame(1.0 / 60.0);
+    rt.key(KeyEvent::from(Key::Right));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.sel_moves.last().map(|&(k, _, f)| (k, f > 0)), Some(("ti", true)));
+
+    rt.update(|s, _| { s.ti.focused = false; s.ta.focused = true; });
+    rt.frame(1.0 / 60.0);
+    rt.key(KeyEvent::from(Key::Right));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.sel_moves.last().map(|&(k, _, f)| (k, f > 0)), Some(("ta", true)));
+
+    rt.update(|s, _| { s.ta.focused = false; s.tf.focused = true; });
+    rt.frame(1.0 / 60.0);
+    rt.key(KeyEvent::from(Key::Right));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.sel_moves.last().map(|&(k, _, f)| (k, f > 0)), Some(("tf", true)));
+}

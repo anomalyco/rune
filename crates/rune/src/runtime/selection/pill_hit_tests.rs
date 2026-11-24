@@ -205,3 +205,322 @@ fn input_pill_at_single_line_scrolled_matches_full_scan_with_bounded_queries() {
         }
     }
 }
+
+#[test]
+fn on_pill_press_consumes_primary_click_and_falls_through_when_false() {
+    use crate::{Cursor, Key, KeyEvent, Mods, PointerPress};
+
+    struct PressDoc {
+        edit: TextEdit,
+        plain_pills: TextEdit,
+        disabled_edit: TextEdit,
+        inert_edit: TextEdit,
+        consume: bool,
+        pressed: Vec<(String, PointerPress)>,
+        sel_moves: Vec<(usize, usize)>,
+    }
+
+    fn make_pills() -> TextEdit {
+        let mut e = TextEdit::new("Hi ").rich();
+        e.insert_pill("p0", "@Ada");
+        e.insert(" mid ");
+        e.insert_pill("p1", "@Ben");
+        e.insert(" ");
+        e.insert_pill("rtl:1", "مرحبا");
+        e.insert(" end");
+        e.set_caret(0);
+        e
+    }
+
+    fn view(s: &PressDoc, _: &mut Cx<PressDoc>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        let consume = s.consume;
+        col()
+            .w(360.0)
+            .h(320.0)
+            .gap(8.0)
+            .child(
+                text_input(&s.edit, style)
+                    .key("field")
+                    .label("Editable pills")
+                    .w_full()
+                    .h(48.0)
+                    .on_edit(|s: &mut PressDoc| &mut s.edit)
+                    .on_pill_press(move |s: &mut PressDoc, id, press, _| {
+                        s.pressed.push((id.to_owned(), press));
+                        consume
+                    })
+                    .on_input_selection(|s: &mut PressDoc, _| {
+                        s.sel_moves.push((s.edit.anchor, s.edit.focus));
+                    }),
+            )
+            .child(
+                text_input(&s.plain_pills, style)
+                    .key("no-handler")
+                    .label("No pill press handler")
+                    .w_full()
+                    .h(48.0)
+                    .on_edit(|s: &mut PressDoc| &mut s.plain_pills),
+            )
+            .child(
+                text_input(&s.disabled_edit, style)
+                    .key("disabled")
+                    .label("Disabled pills")
+                    .w_full()
+                    .h(48.0)
+                    .disabled(true)
+                    .on_edit(|s: &mut PressDoc| &mut s.disabled_edit)
+                    .on_pill_press(|s: &mut PressDoc, id, press, _| {
+                        s.pressed.push((format!("dis:{id}"), press));
+                        true
+                    }),
+            )
+            .child(
+                col().inert().child(
+                    text_input(&s.inert_edit, style)
+                        .key("inert")
+                        .label("Inert pills")
+                        .w_full()
+                        .h(48.0)
+                        .on_edit(|s: &mut PressDoc| &mut s.inert_edit)
+                        .on_pill_press(|s: &mut PressDoc, id, press, _| {
+                            s.pressed.push((format!("inert:{id}"), press));
+                            true
+                        }),
+                ),
+            )
+    }
+
+    let mut rt = Runtime::new(
+        PressDoc {
+            edit: make_pills(),
+            plain_pills: make_pills(),
+            disabled_edit: make_pills(),
+            inert_edit: make_pills(),
+            consume: true,
+            pressed: Vec::new(),
+            sel_moves: Vec::new(),
+        },
+        view,
+        (360.0, 320.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    let node_of = |rt: &Runtime<PressDoc>, key: &str| {
+        rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some(key)).expect(key)
+    };
+    let mid = |r: [f32; 4]| ((r[0] + r[2]) * 0.5, (r[1] + r[3]) * 0.5);
+
+    let fi = node_of(&rt, "field");
+    let boxes = all_pill_boxes(rt.core(), fi);
+    let r_p0 = boxes.iter().find(|(k, _)| *k == 0).unwrap().1;
+    let r_p1 = boxes.iter().find(|(k, _)| *k == 1).unwrap().1;
+    let r_rtl = boxes.iter().find(|(k, _)| *k == 2).unwrap().1;
+    let (p0x, p0y) = mid(r_p0);
+    let (p1x, p1y) = mid(r_p1);
+    let (rtlx, rtly) = mid(r_rtl);
+    let plain_x = (r_p0[2] + r_p1[0]) * 0.5;
+    let plain_y = p0y;
+
+    // 1. Hover cursor: Pointer over pill with handler, Text over plain text, Text over pill without handler.
+    rt.pointer_move(p0x, p0y);
+    assert_eq!(rt.cursor(), Cursor::Pointer);
+    rt.pointer_move(plain_x, plain_y);
+    assert_eq!(rt.cursor(), Cursor::Text);
+
+    let ni = node_of(&rt, "no-handler");
+    let n_r0 = all_pill_boxes(rt.core(), ni).into_iter().find(|(k, _)| *k == 0).unwrap().1;
+    let (nx, ny) = mid(n_r0);
+    rt.pointer_move(nx, ny);
+    assert_eq!(rt.cursor(), Cursor::Text, "field without on_pill_press keeps Cursor::Text over pills");
+
+    // 2. Holding Shift suppresses Pointer cursor over pill.
+    rt.pointer_move(p0x, p0y);
+    assert_eq!(rt.cursor(), Cursor::Pointer);
+    rt.physical_input(crate::PhysicalInput::Modifiers(Mods { shift: true, ..Mods::default() }));
+    assert_eq!(rt.cursor(), Cursor::Text, "Shift+hover over pill shows Cursor::Text");
+    rt.physical_input(crate::PhysicalInput::Modifiers(Mods::default()));
+
+    // 3. Consuming primary press on p0: fires with id & window point, bounded <= 1 query,
+    // does not focus, move caret, fire on_input_selection, or start a drag.
+    rt.pointer_move(p0x, p0y);
+    let (_, queries) = count_span_box_queries(|| {
+        rt.pointer_down(p0x, p0y);
+        rt.pointer_move(p1x, p1y);
+        rt.pointer_up(p1x, p1y);
+        rt.frame(1.0 / 60.0);
+    });
+    assert!(queries <= 1, "on_pill_press should query <= 1 span, got {queries}");
+    assert_eq!(rt.state.pressed, vec![("p0".to_owned(), PointerPress { x: p0x, y: p0y })]);
+    assert!(!rt.state.edit.focused, "consumed pill press should not focus field");
+    assert_eq!((rt.state.edit.anchor, rt.state.edit.focus), (0, 0));
+    assert!(rt.state.sel_moves.is_empty(), "consumed pill press should not fire on_input_selection");
+
+    // Multi-frame drag after consumed pill press also must not select text.
+    rt.state.pressed.clear();
+    rt.pointer_move(rtlx, rtly);
+    rt.pointer_down(rtlx, rtly);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.pressed, vec![("rtl:1".to_owned(), PointerPress { x: rtlx, y: rtly })]);
+    rt.pointer_move(p0x, p0y);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_up(p0x, p0y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!((rt.state.edit.anchor, rt.state.edit.focus), (0, 0));
+    assert!(rt.state.sel_moves.is_empty());
+
+    // 4. Click on plain text focuses field, moves caret, does not fire on_pill_press.
+    rt.state.pressed.clear();
+    rt.pointer_move(plain_x, plain_y);
+    rt.pointer_down(plain_x, plain_y);
+    rt.pointer_up(plain_x, plain_y);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.pressed.is_empty());
+    assert!(rt.state.edit.focused);
+    assert!(rt.state.edit.focus > 0);
+    assert_eq!(rt.state.sel_moves.len(), 1);
+    let anchor_after_plain = rt.state.edit.focus;
+
+    // 5. Shift+click on pill p1 bypasses on_pill_press and extends selection normally.
+    rt.physical_input(crate::PhysicalInput::Modifiers(Mods { shift: true, ..Mods::default() }));
+    rt.pointer_move(p1x, p1y);
+    rt.pointer_down(p1x, p1y);
+    rt.pointer_up(p1x, p1y);
+    rt.frame(1.0 / 60.0);
+    rt.physical_input(crate::PhysicalInput::Modifiers(Mods::default()));
+    assert!(rt.state.pressed.is_empty(), "Shift+click must bypass on_pill_press");
+    assert_eq!(rt.state.edit.anchor, anchor_after_plain);
+    assert_ne!(rt.state.edit.focus, anchor_after_plain);
+
+    // 6. Dragging a selection across a pill keeps Cursor::Text while dragging.
+    rt.pointer_move(plain_x, plain_y);
+    rt.pointer_down(plain_x, plain_y);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_move(p0x, p0y);
+    assert_eq!(rt.cursor(), Cursor::Text, "dragging across pill keeps Cursor::Text");
+    rt.pointer_up(p0x, p0y);
+    rt.frame(1.0 / 60.0);
+
+    // 7. Returning false from on_pill_press falls through to normal caret placement & double-click selection.
+    rt.update(|s, _| {
+        s.consume = false;
+        s.pressed.clear();
+        s.sel_moves.clear();
+        s.edit.set_caret(0);
+    });
+    rt.frame(1.0 / 60.0);
+    rt.pointer_move(p1x, p1y);
+    rt.pointer_down(p1x, p1y);
+    rt.pointer_up(p1x, p1y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.pressed.len(), 1);
+    assert_eq!(rt.state.pressed[0].0, "p1");
+    assert!(rt.state.edit.focus > 0, "returning false falls through to caret placement");
+    assert!(!rt.state.sel_moves.is_empty());
+
+    // Second click within double-click interval selects the whole p1 pill.
+    rt.pointer_down(p1x, p1y);
+    rt.pointer_up(p1x, p1y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.edit.selected(), "@Ben");
+
+    // 8. Accessibility tree stays intact with textbox role and name, and keyboard arrows collapse selection.
+    let a11y = rt.accessibility_json().to_string();
+    assert!(a11y.contains("Editable pills"));
+    rt.key(KeyEvent { key: Key::Left, mods: Mods::default() });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.edit.anchor, rt.state.edit.focus);
+
+    // 9. Disabled and inert fields never fire on_pill_press or show Pointer cursor.
+    rt.update(|s, _| {
+        s.consume = true;
+        s.pressed.clear();
+    });
+    rt.frame(1.0 / 60.0);
+    for key in ["disabled", "inert"] {
+        let idx = node_of(&rt, key);
+        let r0 = all_pill_boxes(rt.core(), idx).into_iter().find(|(k, _)| *k == 0).unwrap().1;
+        let (x, y) = mid(r0);
+        rt.pointer_move(x, y);
+        assert_ne!(rt.cursor(), Cursor::Pointer, "{key} field must not show Cursor::Pointer");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(rt.state.pressed.is_empty(), "disabled/inert pills must not fire on_pill_press");
+}
+
+#[test]
+fn on_pill_press_works_on_scrolled_single_line_and_empty_pills() {
+    struct SingleDoc {
+        scrolled: TextEdit,
+        empty: TextEdit,
+        pressed: Vec<String>,
+    }
+
+    fn view(s: &SingleDoc, _: &mut Cx<SingleDoc>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        col()
+            .w(180.0)
+            .h(120.0)
+            .gap(8.0)
+            .child(
+                text_input(&s.scrolled, style)
+                    .key("scrolled")
+                    .single_line()
+                    .size(180.0, 28.0)
+                    .on_edit(|s: &mut SingleDoc| &mut s.scrolled)
+                    .on_pill_press(|s: &mut SingleDoc, id, _, _| {
+                        s.pressed.push(id.to_owned());
+                        true
+                    }),
+            )
+            .child(
+                text_input(&s.empty, style)
+                    .key("empty")
+                    .single_line()
+                    .size(180.0, 28.0)
+                    .on_edit(|s: &mut SingleDoc| &mut s.empty)
+                    .on_pill_press(|s: &mut SingleDoc, id, _, _| {
+                        s.pressed.push(id.to_owned());
+                        true
+                    }),
+            )
+    }
+
+    let doc = make_pill_doc(40, true);
+    let mut rt = Runtime::new(
+        SingleDoc { scrolled: doc.edit, empty: TextEdit::new("").rich(), pressed: Vec::new() },
+        view,
+        (180.0, 120.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    let si = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("scrolled")).unwrap();
+    let path = rt.tree.nodes[si].path.clone();
+    let unscrolled = all_pill_boxes(rt.core(), si);
+    let scroll_x = unscrolled.iter().find(|(k, _)| *k == 20).unwrap().1[0] - 12.0;
+    rt.edit.input_scroll.insert(path, scroll_x);
+    let r20 = all_pill_boxes(rt.core(), si).into_iter().find(|(k, _)| *k == 20).unwrap().1;
+    let (mx, my) = ((r20[0] + r20[2]) * 0.5, (r20[1] + r20[3]) * 0.5);
+
+    let (_, q) = count_span_box_queries(|| {
+        rt.pointer_down(mx, my);
+        rt.pointer_up(mx, my);
+        rt.frame(1.0 / 60.0);
+    });
+    assert!(q <= 1, "scrolled on_pill_press should query <= 1 span, got {q}");
+    assert_eq!(rt.state.pressed, vec!["p20"]);
+
+    // Clicking an empty field with on_pill_press queries 0 spans and never calls the handler.
+    let (ex, ey) = rt.find("empty").unwrap();
+    let (_, eq) = count_span_box_queries(|| {
+        rt.pointer_down(ex, ey);
+        rt.pointer_up(ex, ey);
+        rt.frame(1.0 / 60.0);
+    });
+    assert_eq!(eq, 0);
+    assert_eq!(rt.state.pressed, vec!["p20"]);
+}
