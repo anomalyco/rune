@@ -636,12 +636,17 @@ top-left, which is what popups and context menus anchor to.
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
 `on_press`, `on_double_press`, `on_hover`, `on_hover_change`, `on_focus_change`,
-`on_focus_within_change`, `on_drop_files` and `on_drop_hover` give no point; a tooltip (`El::help`) anchors itself to the element as drawn.
+`on_focus_within_change`, `on_mount`, `on_drop_files` and `on_drop_hover` give no point; a tooltip (`El::help`) anchors itself to the element as drawn.
 `on_pointer_move` and `on_secondary_press` stay in window points, as apps written against
-them expect. `on_layout`, `on_layout_tx`, `on_drawn_layout`, and `on_drawn_layout_tx` also
-re-fire once when the display scale changes (even when the logical point rect is unchanged), and
-`Tx::scale()` reports the current display scale (device pixels per view point, including
-`Cx::zoom`) in any handler or `poll`.
+them expect. `El::on_mount(|s, tx| ..)` runs once when an element mounts into the tree, in the
+same frame before drawing (unlike `on_visible` and `on_layout`, which run after paint): state
+changes it makes commit in that frame with no one-frame lag, chained mounts run up to 4 rounds per
+frame, rebuilds/moves/resizes do not re-fire it, and unmounting (instant or mid-exit) followed by
+remounting fires it again; call `Tx::live_only` to skip the follow-up commit when only updating
+`Live` values or scheduling wakes. `on_layout`, `on_layout_tx`, `on_drawn_layout`, and
+`on_drawn_layout_tx` also re-fire once when the display scale changes (even when the logical
+point rect is unchanged), and `Tx::scale()` reports the current display scale (device pixels per
+view point, including `Cx::zoom`) in any handler or `poll`.
 
 ### App lifetime (`app.rs`, for apps that outlive their window)
 

@@ -73,6 +73,10 @@ pub(crate) struct CommitState {
     drawn_fired: HashMap<NodeId, ([f32; 4], [f32; 4], u32)>,
     /// Whether each element with `El::on_visible` was last on screen.
     visible_fired: HashMap<NodeId, bool>,
+    /// Live (non-exiting, non-unmounted) elements whose `El::on_mount` has already fired.
+    mounted_seen: HashSet<NodeId>,
+    /// Commit generation at which `mounted_seen` was last completely synchronized.
+    mounted_gen: u64,
     /// Whether layout feedback may still cause a commit (see `layout_read`).
     feedback: layout_read::Feedback,
 }
@@ -110,6 +114,8 @@ impl CommitState {
             screen_fired: HashMap::default(),
             drawn_fired: HashMap::default(),
             visible_fired: HashMap::default(),
+            mounted_seen: HashSet::default(),
+            mounted_gen: 0,
             feedback: Default::default(),
             #[cfg(debug_assertions)]
             last_commit_clock: f64::NEG_INFINITY,
@@ -274,6 +280,36 @@ impl CommitState {
     #[inline]
     pub(in crate::runtime) fn set_visible_fired(&mut self, seen: HashMap<NodeId, bool>) {
         self.visible_fired = seen;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn mounted_seen_empty(&self) -> bool {
+        self.mounted_seen.is_empty()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn is_mount_seen(&self, id: NodeId) -> bool {
+        self.mounted_seen.contains(&id)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_mounted_seen(&mut self) -> HashSet<NodeId> {
+        std::mem::take(&mut self.mounted_seen)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_mounted_seen(&mut self, seen: HashSet<NodeId>) {
+        self.mounted_seen = seen;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn mounted_gen(&self) -> u64 {
+        self.mounted_gen
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_mounted_gen(&mut self, generation: u64) {
+        self.mounted_gen = generation;
     }
 
     #[inline]

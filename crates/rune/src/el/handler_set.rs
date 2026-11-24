@@ -53,6 +53,8 @@ pub(crate) struct Handlers {
     pub on_drawn_layout: Option<LayoutTxFn>,
     /// `El::on_visible`: the element came on screen (`true`) or left it.
     pub on_visible: Option<WindowFocusFn>,
+    /// `El::on_mount`: runs once when this element mounts, in the same frame before drawing.
+    pub on_mount: Option<PressFn>,
     /// `El::drawn_rect_into`: where each frame draws the element.
     pub drawn_rect: Option<crate::Live<[f32; 4]>>,
     pub on_scroll_offset: Option<ScrollOffsetFn>,
@@ -141,6 +143,7 @@ impl Empty for Handlers {
         on_screen_layout: None,
         on_drawn_layout: None,
         on_visible: None,
+        on_mount: None,
         drawn_rect: None,
         on_scroll_offset: None,
         selection_copy: None,

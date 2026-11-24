@@ -158,6 +158,32 @@ impl El {
         self.handlers.on_visible = Some(Rc::new(move |s, on, tx| f(downcast::<S>(s), on, tx)));
         self
     }
+    /// Called once when this element mounts into the tree, in the same frame before drawing, so
+    /// state changes it makes commit and render without a one-frame lag (like SwiftUI's
+    /// `.onAppear` or React's `useLayoutEffect(fn, [])`).
+    ///
+    /// Rebuilding the view, resizing, or moving the element does not call it again; unmounting
+    /// (with or without an exit transition) and mounting again does. An `on_mount` handler that
+    /// mounts another element with `on_mount` runs in the same frame too, up to 4 rounds per frame.
+    /// After a state update outside a frame ([`Runtime::update`](crate::Runtime::update)), it runs
+    /// in the next frame at the latest. Call [`Tx::live_only`] when the handler only updates
+    /// [`Live`](crate::Live) values or schedules work without changing what the view renders.
+    ///
+    /// ```
+    /// use rune::{El, Tx, col, text};
+    ///
+    /// struct State { show_tip: bool, shown: usize }
+    ///
+    /// fn view(s: &State) -> El {
+    ///     col().children(s.show_tip.then(|| {
+    ///         text("Tip").on_mount(|s: &mut State, _tx: &mut Tx| s.shown += 1)
+    ///     }))
+    /// }
+    /// ```
+    pub fn on_mount<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.handlers.on_mount = Some(Rc::new(move |s, tx| f(downcast::<S>(s), tx)));
+        self
+    }
     /// Writes where each frame draws this element into `rect`: `[x, y, w, h]` in window points,
     /// the rect [`El::on_drawn_layout`] reports, on every frame it moves, through a scroll, a
     /// glide and its own or an ancestor's spring. It runs no handler and commits nothing, so a

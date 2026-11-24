@@ -3,6 +3,7 @@ use super::*;
 
 mod latch;
 mod motion;
+mod mount;
 mod wakes;
 
 impl RuntimeCore {
@@ -23,6 +24,7 @@ impl RuntimeCore {
         self.needs_commit()
             || self.commit.relayout
             || self.paint.drawn_rect_wrote
+            || self.mounts_pending()
             || self.frame.queue.iter().any(|a| matches!(
                 a,
                 Action::Layout(..)
@@ -493,6 +495,14 @@ impl RuntimeCore {
         }
         #[cfg(debug_assertions)]
         { self.frame.clear_live_check(); }
+        let mount_rounds = self.deliver_mounts(
+            app,
+            &mut tx,
+            commits0,
+            &mut open_urls,
+            &mut open_paths,
+            mount::MAX_MOUNT_ROUNDS,
+        );
         tx.keep_on_screen.clear();
         self.queue_reveal_selected(&mut tx, pointer_hover);
         #[cfg(debug_assertions)]
@@ -509,6 +519,20 @@ impl RuntimeCore {
             self.commit(app, &Tx { commit: Commit::Instant, ..Tx::default() });
         }
         self.deliver_visible_rows(app, &tx, commits0, pointer_hover);
+        if self.commit.commits != commits_before_scroll && mount_rounds < mount::MAX_MOUNT_ROUNDS {
+            let late_rounds = self.deliver_mounts(
+                app,
+                &mut tx,
+                commits0,
+                &mut open_urls,
+                &mut open_paths,
+                mount::MAX_MOUNT_ROUNDS - mount_rounds,
+            );
+            if late_rounds > 0 {
+                let late_follow = std::mem::take(&mut self.edit.caret_follow);
+                self.finish_scroll_requests(app, &mut tx, late_follow);
+            }
+        }
         #[cfg(debug_assertions)]
         {
             let scrolling = self.scrolling();
