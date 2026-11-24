@@ -1122,8 +1122,9 @@ rune::App::new(spec).fit_content_height().run();
   Aero Snap, the snap layouts flyout over maximize, the window menu (Alt+Space, or a right-click on a
   `.window_drag()` region) and its animations; Rune draws the caption buttons over the trailing edge
   (Electron's `titleBarOverlay`: 46 points wide, close turns red), as elements named Minimize,
-  Maximize or Restore, and Close for assistive technology, still in reach while the view holds a
-  modal. A window that isn't resizable never maximizes: its maximize button is dimmed, with no snap
+  Maximize or Restore, and Close for assistive technology (localized through `rune::set_labels`
+  with `Label::Minimize`, `Label::Maximize`, `Label::Restore`, and `Label::Close`), still in
+  reach while the view holds a modal. A window that isn't resizable never maximizes: its maximize button is dimmed, with no snap
   layouts. `Cx::chrome_insets()` says what the controls take (`leading`, `trailing`, `height`; zero
   where the native frame stays, as on Linux; memos rebuild when it changes), `Cx::caption_color(c)`
   colours the caption symbols for an app theme, `Cx::titlebar_height(h)` changes the band's height
