@@ -1,0 +1,1 @@
+- Render (shaders): `shader.wgsl` clamps the upper texel bound to at least the lower bound (`hi = max(hi, lo)` for `KIND_IMAGE` and `hi = max(vec2<i32>(i.uv.zw) - vec2<i32>(1), vec2<i32>(0))` for scaled `KIND_LAYER`), so sub-texel crops read their own origin texel instead of bleeding the adjacent atlas texel at `lo - 1` and agree with `cpu_boot`.
