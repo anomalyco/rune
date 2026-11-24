@@ -196,12 +196,14 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
 - **Inert subtrees**: `.inert()` draws and lays out an element and everything inside it, but
   presses, hovers, cursors, scrolls, drops and tooltips go to whatever is under it, nothing inside
   takes focus, and `ElementInfo::inert` reports it (a document drawn under an editor's canvas).
-- **Cursors**: `.cursor(Cursor::Pointer)` and the other system shapes; children inherit their
-  nearest ancestor's. `Cursor::Image(CursorImage::png(include_bytes!("pencil.png"), [2.0, 30.0]))`
+- **Cursors**: `.cursor(Cursor::Pointer)` and the other system shapes (including
+  `ResizeColumn`, `ResizeRow`, bidirectional `ResizeEw` / `ResizeNs`, and diagonal
+  `ResizeNwse` / `ResizeNesw`); children inherit their nearest ancestor's.
+  `Cursor::Image(CursorImage::png(include_bytes!("pencil.png"), [2.0, 30.0]))`
   shows an app's own PNG, drawn at 2x, with its hot spot in points from the top-left. The OS
   draws it, so it keeps up with the pointer and reaches the window's edge, where a view drawn
   after the pointer lags a frame and is clipped (`examples/sketch`). A PNG that doesn't decode
-  shows the arrow. The web host sets no cursors yet.
+  shows the arrow.
 - **Double press**: `.on_double_press(|s: &mut S| ..)` (or `_tx`) runs when a second press on
   the element lands within the double-click interval of the first and within 4 pt of it, and
   releases inside. `on_press` still runs for every press, the first one right away, so a row

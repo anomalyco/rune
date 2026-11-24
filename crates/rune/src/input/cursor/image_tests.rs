@@ -154,3 +154,27 @@ fn a_macos_image_cursor_is_sized_in_points() {
     assert_eq!(pixels, (64, 40), "the 2x pixels stay");
     assert_eq!((hot.x, hot.y), (2.0, 19.5), "the hot spot in points, clamped into the 20 pt height");
 }
+
+/// AppKit resolves all four bidirectional/diagonal resize cursors without modifying the live
+/// desktop cursor (never calls `-[NSCursor set]`).
+#[cfg(target_os = "macos")]
+#[test]
+#[allow(unsafe_code)]
+fn macos_resize_cursors_resolve_distinct_nscursors() {
+    use objc2::msg_send;
+    let kinds = [Cursor::ResizeEw, Cursor::ResizeNs, Cursor::ResizeNwse, Cursor::ResizeNesw];
+    let resolved: Vec<_> = kinds
+        .iter()
+        .map(|&cursor| {
+            (cursor, crate::platform::macos::cursor::resolve_ns_cursor(cursor)
+                .unwrap_or_else(|| panic!("{cursor:?} must resolve an NSCursor")))
+        })
+        .collect();
+    for (i, (a_kind, a)) in resolved.iter().enumerate() {
+        for (b_kind, b) in &resolved[i + 1..] {
+            // SAFETY: comparing retained NSCursor objects via NSObject's isEqual:.
+            let equal: bool = unsafe { msg_send![&**a, isEqual: &**b] };
+            assert!(!equal, "{a_kind:?} and {b_kind:?} must resolve to distinct NSCursors");
+        }
+    }
+}

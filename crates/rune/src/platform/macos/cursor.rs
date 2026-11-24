@@ -107,20 +107,26 @@ pub(crate) fn ns_cursor(d: &Decoded) -> Result<Retained<NSObject>, String> {
     })
 }
 
-/// `[NSCursor set]` with winit's shape for each cursor. Main thread.
-pub(crate) fn set_ns_cursor(cursor: Cursor) {
+/// `NSCursorFrameResizePosition` and `NSCursorFrameResizeDirections` (AppKit, macOS 15+).
+const FRAME_RESIZE_TOP: usize = 1 << 0;
+const FRAME_RESIZE_LEFT: usize = 1 << 1;
+const FRAME_RESIZE_RIGHT: usize = 1 << 3;
+const FRAME_RESIZE_TOP_LEFT: usize = FRAME_RESIZE_TOP | FRAME_RESIZE_LEFT;
+const FRAME_RESIZE_TOP_RIGHT: usize = FRAME_RESIZE_TOP | FRAME_RESIZE_RIGHT;
+const FRAME_RESIZE_ALL: usize = (1 << 0) | (1 << 1);
+
+/// Resolves AppKit's `NSCursor` for `cursor` without calling `-[NSCursor set]`. Main thread.
+pub(crate) fn resolve_ns_cursor(cursor: Cursor) -> Option<Retained<NSObject>> {
     use crate::cursor::{MacCursor as M, mac_cursor};
     thread_local! {
         static TRANSPARENT: Option<Retained<NSObject>> = image_cursor(None);
         static MOVE: Option<Retained<NSObject>> = image_cursor(Some("move"));
         static CELL: Option<Retained<NSObject>> = image_cursor(Some("cell"));
     }
-    let Some(class) = objc2::runtime::AnyClass::get(c"NSCursor") else { return };
-    #[cfg(feature = "macos-background-cursor")]
-    sets_cursor_in_background();
-    // SAFETY: NSCursor class methods and -set on the main thread.
+    let class = objc2::runtime::AnyClass::get(c"NSCursor")?;
+    // SAFETY: NSCursor class methods on the main thread.
     unsafe {
-        let ns: Option<Retained<NSObject>> = match mac_cursor(cursor) {
+        match mac_cursor(cursor) {
             M::Arrow => arrow(class),
             M::PointingHand => msg_send![class, pointingHandCursor],
             M::IBeam => msg_send![class, IBeamCursor],
@@ -129,6 +135,11 @@ pub(crate) fn set_ns_cursor(cursor: Cursor) {
             M::NotAllowed => msg_send![class, operationNotAllowedCursor],
             M::ResizeLeftRight => msg_send![class, resizeLeftRightCursor],
             M::ResizeUpDown => msg_send![class, resizeUpDownCursor],
+            // Public from macOS 15; before that fall back to the legacy/private selectors winit uses.
+            M::ResizeEw => frame_resize(class, FRAME_RESIZE_LEFT, &[objc2::sel!(resizeLeftRightCursor)]),
+            M::ResizeNs => frame_resize(class, FRAME_RESIZE_TOP, &[objc2::sel!(resizeUpDownCursor)]),
+            M::ResizeNwse => frame_resize(class, FRAME_RESIZE_TOP_LEFT, &[objc2::sel!(_windowResizeNorthWestSouthEastCursor)]),
+            M::ResizeNesw => frame_resize(class, FRAME_RESIZE_TOP_RIGHT, &[objc2::sel!(_windowResizeNorthEastSouthWestCursor)]),
             M::Crosshair => msg_send![class, crosshairCursor],
             // Public from macOS 15; before that only as the private selectors winit uses.
             M::ZoomIn => named(class, &[objc2::sel!(zoomInCursor), objc2::sel!(_zoomInCursor)]),
@@ -139,8 +150,43 @@ pub(crate) fn set_ns_cursor(cursor: Cursor) {
             M::MoveImage => MOVE.with(Clone::clone).or_else(|| arrow(class)),
             M::CellImage => CELL.with(Clone::clone).or_else(|| arrow(class)),
             M::Custom(image) => native(image).or_else(|| arrow(class)),
-        };
-        if let Some(ns) = ns { let _: () = msg_send![&*ns, set]; }
+        }
+    }
+}
+
+/// `[NSCursor set]` with winit's shape for each cursor. Main thread.
+pub(crate) fn set_ns_cursor(cursor: Cursor) {
+    #[cfg(feature = "macos-background-cursor")]
+    sets_cursor_in_background();
+    let Some(ns) = resolve_ns_cursor(cursor) else { return };
+    // SAFETY: `ns` is an `NSCursor` on the main thread.
+    unsafe { let _: () = msg_send![&*ns, set]; }
+}
+
+/// macOS 15's public `+[NSCursor frameResizeCursorFromPosition:inDirections:]`, falling back to
+/// `fallback` selectors and then the arrow on older macOS.
+///
+/// # Safety
+/// Main thread; `class` is `NSCursor`, and each fallback selector is a class method returning an
+/// `NSCursor`.
+unsafe fn frame_resize(
+    class: &objc2::runtime::AnyClass,
+    position: usize,
+    fallback: &[objc2::runtime::Sel],
+) -> Option<Retained<NSObject>> {
+    // SAFETY: caller guarantees main thread and `NSCursor`; `respondsToSelector:` guards the send.
+    unsafe {
+        let sel = objc2::sel!(frameResizeCursorFromPosition:inDirections:);
+        let responds: bool = msg_send![class, respondsToSelector: sel];
+        if responds {
+            let cursor: Option<Retained<NSObject>> = msg_send![
+                class,
+                frameResizeCursorFromPosition: position,
+                inDirections: FRAME_RESIZE_ALL
+            ];
+            if cursor.is_some() { return cursor; }
+        }
+        named(class, fallback)
     }
 }
 
