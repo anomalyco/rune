@@ -3,8 +3,8 @@
 Rune's animation runtime: springs, tweens, decay, keyframes, retargeting, presence and
 transitions (blur-replace included), layout animation, matched geometry and choreography. It is
 plain math and data structures with no renderer dependency and no required dependencies (the
-optional `serde` feature covers the config types). App code states targets. The render thread
-samples them once per frame and gets back what to draw.
+optional `serde` feature covers the config types). App code states targets. The caller (the main
+thread in Rune windows today) samples them once per frame and gets back what to draw.
 
 ```rust
 use rune_motion::prelude::*;
@@ -23,7 +23,7 @@ scene.insert(row, NodeSpec::new(Rect::new(0.0, 96.0, 320.0, 44.0))
 scene.set_frame(card, Rect::new(0.0, 0.0, 360.0, 160.0), LayoutAnim::new(motion::MORPH).width_leads());
 scene.remove(NodeId(3));                       // stays drawn until its exit settles
 
-let out = scene.frame_at(1.0 / 120.0);         // render thread, once per frame
+let out = scene.frame_at(1.0 / 120.0);         // caller (main thread in Rune windows today), once per frame
 for p in out.changed { /* draw p.rect, p.opacity, p.affine(), p.blur, p.mask … */ }
 ```
 
@@ -151,7 +151,7 @@ one critical lane at 10 ns, `exp` at 5 ns and `sin_cos` at 7.6 ns.
 
 ## Renderer integration contract
 
-Run this on the render thread once per display-link callback:
+Run this from the caller (the main thread in Rune windows today) once per frame:
 
 1. `scene.set_time(target_timestamp)`. Use the timestamp the frame will be *shown* at, not the
    current time. `Clock::frame(host)` handles pause, slow motion and seek.
@@ -189,7 +189,7 @@ system setting changes. Setting `RUNE_MOTION_TRACE=/path.jsonl` and calling
   presets, curve kinds, retargeting and presence/travel paths. The current plots are in
   `demo/motion/`.
 - `cargo run --profile perf --example bench` prints the numbers above.
-- `cargo test` runs 53 tests and 1 doctest. They check the spring closed form against ODE
+- `cargo test` checks the spring closed form against ODE
   integration in every regime, C¹ continuity under random retargets, that additive and merged
   springs match, delays, decay into bounds, generational reuse, zero allocation, presence revive,
   blur-replace, screen travel, matched geometry, reduced motion, choreography cues and trace
@@ -198,9 +198,10 @@ system setting changes. Setting `RUNE_MOTION_TRACE=/path.jsonl` and calling
 ## Not yet
 
 - `Travel::Screen` uses a separate progress per axis, so a width-leading screen path is not perfectly straight.
-- Not implemented: resize modes (mask, scale, relayout), a live token table and `tune.json`,
-  live `Bound` expressions, growth caps, flight-layer z-order, and scroll physics for platforms
-  other than iOS.
+- Not implemented in `rune-motion`: resize modes (mask, scale, relayout), a live token table and
+  `tune.json`, live `Bound` expressions, and scroll physics for platforms other than iOS. Growth
+  caps (`rune_core::growth`) and flight-layer z-order (`rune::flight` / `El::matched`) live in
+  `rune-core` and `rune`.
 - `Animated<T>` has no delay and no additive blending.
 - Multi-lane values (rects, colours) cost more than the ~20 ns target per track. The cost is
   roughly per lane.
