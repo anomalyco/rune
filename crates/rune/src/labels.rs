@@ -1,10 +1,12 @@
 //! The words Rune itself puts on screen: a text field's menu (Cut, Copy, Paste, Select All and
-//! the spelling items), selectable text's Copy, and on macOS the menu bar's standard items and
-//! menus. They are English until the app names them in its own language with [`set_labels`],
-//! and [`set_locale`] says which language that is.
+//! the spelling items), selectable text's Copy, the Windows custom-titlebar caption buttons
+//! (Minimize, Maximize, Restore, Close), and on macOS the menu bar's standard items and menus.
+//! They are English until the app names them in its own language with [`set_labels`], and
+//! [`set_locale`] says which language that is.
 //!
 //! Rune asks each time it shows one, so after the app's language changes the next menu opened
-//! speaks it. The macOS menu bar takes the new names at the next [`AppHandle::set_menu`].
+//! speaks it and the Windows caption buttons take the new names on the next view commit. The
+//! macOS menu bar takes the new names at the next [`AppHandle::set_menu`].
 //!
 //! [`AppHandle::set_menu`]: crate::AppHandle::set_menu
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,10 +37,35 @@ pub enum Label<'a> {
     /// A top-level menu of the macOS menu bar, by the name its items give (`MenuItem::menu`):
     /// Rune's own "Edit" and "Window", or one of the app's.
     Menu(&'a str),
-    /// The Window menu's items.
+    /// The Window menu's Minimize item (macOS) and the Windows custom-titlebar minimize button.
     Minimize,
+    /// The Windows custom-titlebar caption button that maximizes a restored window
+    /// (English: `"Maximize"`).
+    ///
+    /// ```
+    /// rune::set_labels(|label| match label {
+    ///     rune::Label::Maximize => Some("Maximieren".into()),
+    ///     _ => None,
+    /// });
+    /// assert_eq!(rune::labels::label(rune::Label::Maximize), "Maximieren");
+    /// ```
+    Maximize,
+    /// The Windows custom-titlebar caption button that restores a maximized window
+    /// (English: `"Restore"`).
+    ///
+    /// ```
+    /// rune::set_labels(|label| match label {
+    ///     rune::Label::Restore => Some("Wiederherstellen".into()),
+    ///     _ => None,
+    /// });
+    /// assert_eq!(rune::labels::label(rune::Label::Restore), "Wiederherstellen");
+    /// ```
+    Restore,
+    /// The Window menu's Zoom item (macOS).
     Zoom,
+    /// The Window menu's Close item (macOS) and the Windows custom-titlebar close button.
     Close,
+    /// The Window menu's Bring All to Front item (macOS).
     BringAllToFront,
     /// The Edit menu's system items (macOS).
     StartDictation,
@@ -106,7 +133,7 @@ pub(crate) fn locale() -> Option<String> {
     LOCALE.read().ok().and_then(|locale| locale.clone())
 }
 
-fn english(label: Label<'_>) -> String {
+pub(crate) fn english(label: Label<'_>) -> String {
     match label {
         Label::Cut => "Cut".into(),
         Label::Copy => "Copy".into(),
@@ -122,6 +149,8 @@ fn english(label: Label<'_>) -> String {
         Label::Language(tag) => tag.into(),
         Label::Menu(name) => name.into(),
         Label::Minimize => "Minimize".into(),
+        Label::Maximize => "Maximize".into(),
+        Label::Restore => "Restore".into(),
         Label::Zoom => "Zoom".into(),
         Label::Close => "Close".into(),
         Label::BringAllToFront => "Bring All to Front".into(),
@@ -136,4 +165,28 @@ fn english(label: Label<'_>) -> String {
         Label::MoreNestedLines(1) => "1 more nested line".into(),
         Label::MoreNestedLines(n) => format!("{n} more nested lines"),
     }
+}
+
+#[cfg(test)]
+pub(crate) struct LabelsGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    prev: Option<Namer>,
+}
+
+#[cfg(test)]
+impl Drop for LabelsGuard {
+    fn drop(&mut self) {
+        if let Ok(mut namer) = NAMER.write() {
+            *namer = self.prev.take();
+        }
+    }
+}
+
+/// Serializes tests that call [`set_labels`] and restores the previous namer on drop.
+#[cfg(test)]
+pub(crate) fn test_lock() -> LabelsGuard {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let lock = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let prev = NAMER.read().ok().and_then(|n| n.clone());
+    LabelsGuard { _lock: lock, prev }
 }

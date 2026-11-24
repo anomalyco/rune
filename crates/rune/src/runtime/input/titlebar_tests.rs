@@ -55,6 +55,34 @@ mod windows {
             assert_eq!(rt.chrome_insets(), ChromeInsets::default(), "scale {scale} RTL borderless");
         }
     }
+
+    #[test]
+    fn headless_chrome_caption_buttons_follow_set_labels() {
+        let _guard = crate::labels::test_lock();
+        crate::set_labels(|_| None);
+
+        let mut rt = Runtime::new(State::default(), view, (400.0, 200.0), Env::new(true, 1.0));
+        rt.core_mut().headless_chrome_with(Chrome::DEFAULT, Some(Titlebar::new(36.0)), false, false);
+        rt.frame(0.0);
+        let a11y = rt.accessibility_json();
+        assert_eq!(super::a11y_name(&a11y, "rune-caption-minimize"), Some("Minimize"));
+        assert_eq!(super::a11y_name(&a11y, "rune-caption-maximize"), Some("Maximize"));
+        assert_eq!(super::a11y_name(&a11y, "rune-caption-close"), Some("Close"));
+
+        crate::set_labels(|label| match label {
+            crate::Label::Minimize => Some("Minimaliseren".into()),
+            crate::Label::Maximize => Some("Maximaliseren".into()),
+            crate::Label::Restore => Some("Herstellen".into()),
+            crate::Label::Close => Some("Sluiten".into()),
+            _ => None,
+        });
+        rt.update(|_, _| {});
+        rt.frame(0.1);
+        let a11y = rt.accessibility_json();
+        assert_eq!(super::a11y_name(&a11y, "rune-caption-minimize"), Some("Minimaliseren"));
+        assert_eq!(super::a11y_name(&a11y, "rune-caption-maximize"), Some("Maximaliseren"));
+        assert_eq!(super::a11y_name(&a11y, "rune-caption-close"), Some("Sluiten"));
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -299,4 +327,177 @@ fn headless_chrome_controls_false_hides_system_controls_and_zeroes_edge_insets()
         assert_eq!(rt.chrome_insets().height, 44.0);
         assert!(rt.chrome_insets().trailing > 0.0);
     }
+}
+
+fn a11y_find<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    if v["key"] == key { return Some(v); }
+    v["children"].as_array()?.iter().find_map(|c| a11y_find(c, key))
+}
+
+fn a11y_name<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    a11y_find(v, key).and_then(|n| n["name"].as_str())
+}
+
+fn a11y_states(v: &serde_json::Value, key: &str) -> Vec<String> {
+    a11y_find(v, key)
+        .and_then(|n| n["states"].as_array())
+        .map_or_else(Vec::new, |s| s.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect())
+}
+
+#[test]
+fn caption_button_labels_follow_set_labels_across_states_and_edges() {
+    use crate::el::el;
+    use crate::runtime::Runtime;
+    use crate::{Cx, El, Env, Label};
+
+    let _guard = crate::labels::test_lock();
+    crate::set_labels(|_| None);
+
+    // Unset / None hook preserves the English defaults for all four caption labels.
+    assert_eq!(crate::labels::label(Label::Minimize), "Minimize");
+    assert_eq!(crate::labels::label(Label::Maximize), "Maximize");
+    assert_eq!(crate::labels::label(Label::Restore), "Restore");
+    assert_eq!(crate::labels::label(Label::Close), "Close");
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        el().key("root").w_full().h_full()
+    }
+
+    let mut rt = Runtime::new((), view, (400.0, 200.0), Env::new(true, 1.0));
+    let mut caption = crate::titlebar::Caption::new(36.0);
+    rt.set_caption(Some(caption));
+    rt.frame(0.0);
+
+    let a11y = rt.accessibility_json();
+    assert_eq!(a11y_name(&a11y, "rune-caption-minimize"), Some("Minimize"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-maximize"), Some("Maximize"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-close"), Some("Close"));
+    assert_eq!(a11y_find(&a11y, "rune-caption-maximize").unwrap()["role"], "button");
+
+    // Maximized state uses Restore by default.
+    caption.maximized = true;
+    rt.set_caption(Some(caption));
+    rt.frame(0.1);
+    assert_eq!(a11y_name(&rt.accessibility_json(), "rune-caption-maximize"), Some("Restore"));
+
+    // Custom labels localize Minimize, Maximize, Restore, and Close in both JSON and AccessKit.
+    crate::set_labels(|label| match label {
+        Label::Minimize => Some("Minimaliseren".into()),
+        Label::Maximize => Some("Maximaliseren".into()),
+        Label::Restore => Some("Herstellen".into()),
+        Label::Close => Some("Sluiten".into()),
+        _ => None,
+    });
+    caption.maximized = false;
+    rt.set_caption(Some(caption));
+    rt.frame(0.2);
+    let a11y = rt.accessibility_json();
+    assert_eq!(a11y_name(&a11y, "rune-caption-minimize"), Some("Minimaliseren"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-maximize"), Some("Maximaliseren"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-close"), Some("Sluiten"));
+
+    let ak = rt.accessibility_tree();
+    let ak_button = |key: &str| {
+        ak.nodes.iter().find_map(|(_, n)| (n.author_id() == Some(key)).then_some(n)).expect("caption node")
+    };
+    assert_eq!(ak_button("rune-caption-minimize").role(), accesskit::Role::Button);
+    assert_eq!(ak_button("rune-caption-minimize").label(), Some("Minimaliseren"));
+    assert_eq!(ak_button("rune-caption-maximize").label(), Some("Maximaliseren"));
+    assert_eq!(ak_button("rune-caption-close").label(), Some("Sluiten"));
+
+    // Switching to maximized updates the button to the localized Restore label.
+    caption.maximized = true;
+    rt.set_caption(Some(caption));
+    rt.frame(0.3);
+    assert_eq!(a11y_name(&rt.accessibility_json(), "rune-caption-maximize"), Some("Herstellen"));
+
+    // Returning None for some variants falls back to English only for those variants.
+    crate::set_labels(|label| match label {
+        Label::Minimize => Some("Minimaliseren".into()),
+        Label::Close => Some("Sluiten".into()),
+        _ => None,
+    });
+    rt.update(|_, _| {});
+    rt.frame(0.4);
+    let a11y = rt.accessibility_json();
+    assert_eq!(a11y_name(&a11y, "rune-caption-minimize"), Some("Minimaliseren"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-maximize"), Some("Restore"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-close"), Some("Sluiten"));
+
+    caption.maximized = false;
+    rt.set_caption(Some(caption));
+    rt.frame(0.5);
+    assert_eq!(a11y_name(&rt.accessibility_json(), "rune-caption-maximize"), Some("Maximize"));
+
+    // Empty and whitespace-only translations fall back to English so buttons stay named in UIA.
+    crate::set_labels(|label| match label {
+        Label::Minimize | Label::Close => Some(String::new()),
+        Label::Maximize | Label::Restore => Some("   	 ".into()),
+        _ => None,
+    });
+    rt.update(|_, _| {});
+    rt.frame(0.6);
+    let a11y = rt.accessibility_json();
+    assert_eq!(a11y_name(&a11y, "rune-caption-minimize"), Some("Minimize"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-maximize"), Some("Maximize"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-close"), Some("Close"));
+    caption.maximized = true;
+    rt.set_caption(Some(caption));
+    rt.frame(0.7);
+    assert_eq!(a11y_name(&rt.accessibility_json(), "rune-caption-maximize"), Some("Restore"));
+
+    // Right-to-left mirrored caption with Arabic and long labels preserves exact accessible names.
+    let long_close = "إغلاق ".repeat(40);
+    let long_close_for_hook = long_close.clone();
+    crate::set_labels(move |label| match label {
+        Label::Minimize => Some("تصغير".into()),
+        Label::Maximize => Some("تكبير".into()),
+        Label::Restore => Some("استعادة".into()),
+        Label::Close => Some(long_close_for_hook.clone()),
+        _ => None,
+    });
+    caption.mirrored = true;
+    caption.maximized = false;
+    rt.set_caption(Some(caption));
+    rt.frame(0.8);
+    let a11y = rt.accessibility_json();
+    assert_eq!(a11y_name(&a11y, "rune-caption-minimize"), Some("تصغير"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-maximize"), Some("تكبير"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-close"), Some(long_close.as_str()));
+
+    // Disabled maximize button keeps its localized name and disabled state; Close-only omits min/max.
+    caption.maximizable = false;
+    rt.set_caption(Some(caption));
+    rt.frame(0.9);
+    let a11y = rt.accessibility_json();
+    assert_eq!(a11y_name(&a11y, "rune-caption-maximize"), Some("تكبير"));
+    assert!(a11y_states(&a11y, "rune-caption-maximize").iter().any(|s| s == "disabled"));
+
+    caption.minimizable = false;
+    rt.set_caption(Some(caption));
+    rt.frame(1.0);
+    let a11y = rt.accessibility_json();
+    assert!(a11y_find(&a11y, "rune-caption-minimize").is_none());
+    assert!(a11y_find(&a11y, "rune-caption-maximize").is_none());
+    assert_eq!(a11y_name(&a11y, "rune-caption-close"), Some(long_close.as_str()));
+
+    // Dynamic language switch on the next commit updates existing buttons without changing Caption.
+    caption.minimizable = true;
+    caption.maximizable = true;
+    caption.mirrored = false;
+    rt.set_caption(Some(caption));
+    rt.frame(1.1);
+    crate::set_labels(|label| match label {
+        Label::Minimize => Some("Minimieren".into()),
+        Label::Maximize => Some("Maximieren".into()),
+        Label::Restore => Some("Wiederherstellen".into()),
+        Label::Close => Some("Schließen".into()),
+        _ => None,
+    });
+    rt.update(|_, _| {});
+    rt.frame(1.2);
+    let a11y = rt.accessibility_json();
+    assert_eq!(a11y_name(&a11y, "rune-caption-minimize"), Some("Minimieren"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-maximize"), Some("Maximieren"));
+    assert_eq!(a11y_name(&a11y, "rune-caption-close"), Some("Schließen"));
 }
