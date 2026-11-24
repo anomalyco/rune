@@ -217,7 +217,8 @@ impl Drag {
     }
 }
 
-/// What a press on an element does to the window (`El::window_drag`, `El::no_window_drag`).
+/// What a press on an element does to the window (`El::window_drag`, `El::no_window_drag`,
+/// `El::window_resize`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum WindowDrag {
     /// Nothing of its own: a press goes to what's under it.
@@ -225,9 +226,13 @@ pub(crate) enum WindowDrag {
     None,
     /// A press moves the window, and a double press zooms it.
     Drag,
-    /// A press stays here, inside a `Drag` element, and does nothing to the window.
+    /// A press stays here, inside a `Drag` or `Resize` element, and does nothing to the window.
     NoDrag,
+    /// A press starts an OS/compositor-driven window resize from this edge or corner.
+    Resize(crate::ResizeEdge),
 }
+
+const _: () = assert!(std::mem::size_of::<WindowDrag>() == 1);
 
 pub(crate) type A11yActionFn = Rc<dyn Fn(crate::states::States<'_>, &str, accesskit::Action, &mut Tx) -> bool>;
 pub(crate) type PressFn = Rc<dyn Fn(crate::states::States<'_>, &mut Tx)>;

@@ -1230,6 +1230,17 @@ rune::App::new(spec).fit_content_height().run();
   With `Chrome::drag_regions` on macOS, only marked regions move a borderless or full-size-content
   window, so titlebar content stays clickable; Rune subclasses only that window's content-view
   instance, leaving ordinary titled windows and NSPanel overlays with their native behaviour.
+- **Borderless window resize** (`ResizeEdge`, `El::window_resize(edge)`, `Tx::drag_resize_window(edge)`):
+  borderless windows that draw their own frame can attach 8-way resize grips (`North`, `South`,
+  `East`, `West`, `NorthEast`, `NorthWest`, `SouthEast`, `SouthWest`) that start an interactive
+  OS/compositor resize via winit's `Window::drag_resize_window` (Win32 sizing borders, X11
+  `_NET_WM_MOVERESIZE`, Wayland `xdg_toplevel.resize`). `El::window_resize(edge)` defaults its
+  hover cursor to the matching resize cursor (`Cursor::ResizeNs`, `Cursor::ResizeEw`,
+  `Cursor::ResizeNwse`, `Cursor::ResizeNesw`) unless an explicit `.cursor(..)` overrides it, and
+  interactive children, `.no_window_drag()`, inert subtrees and active modals block it.
+  `Tx::drag_resize_window(edge)` starts the same resize from custom press or `on_drag` `Phase::Down`
+  handlers. Ignored on macOS, on the web, in overlays, and in headless runs (`examples/launcher`
+  adds 8-way edge and corner grips around its borderless launcher window).
 - **Hover groups**: `.hover_group()` (or any `.hover(color)`) tracks hover for a subtree, and
   `.hover_motion(enter, exit)` sets its curves (for example a delayed reveal). Descendants read the
   nearest group with `.group_opacity(rest, hovered)` and `.group_color(c)`. A group stays hovered

@@ -159,7 +159,7 @@ impl OverlayCore {
     pub(super) fn take_titlebar_action(&mut self, app: &mut dyn OverlayApp) -> bool {
         match app.rt_mut().take_titlebar_action() {
             Some(crate::TitlebarAction::Drag) => self.begin_window_drag(app),
-            Some(crate::TitlebarAction::DoubleClick) | None => false,
+            Some(crate::TitlebarAction::Resize(_)) | Some(crate::TitlebarAction::DoubleClick) | None => false,
         }
     }
 

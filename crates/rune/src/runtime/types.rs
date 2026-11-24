@@ -581,13 +581,15 @@ impl WidthHold {
     }
 }
 
-/// What a press on a window drag region asks the shell to do, synchronously in that press.
+/// What a press on a window drag or resize region asks the shell to do, synchronously in that press.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TitlebarAction {
     /// Move the window with the pointer (the system tracks the drag).
     Drag,
     /// The titlebar double-click action (zoom, minimise or nothing, per system setting).
     DoubleClick,
+    /// Resize the window from this edge or corner (the system tracks the resize).
+    Resize(crate::ResizeEdge),
 }
 
 #[derive(Clone, Copy, Debug, Default)]

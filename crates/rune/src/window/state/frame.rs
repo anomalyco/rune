@@ -14,13 +14,21 @@ pub(crate) struct FrameRequest {
     /// request (`Tx::instant`, `Tx::motion`, reduced motion).
     pub spring: Option<Spring>,
     pub center: bool,
+    /// Start an interactive OS/compositor window resize from this edge (`Tx::drag_resize_window`).
+    pub resize_drag: Option<crate::ResizeEdge>,
 }
 
 impl FrameRequest {
-    /// A later request's size replaces an earlier one's; centring sticks.
+    /// A later request's size or resize drag replaces an earlier one's; centring sticks.
     pub fn merge(self, later: FrameRequest) -> FrameRequest {
         let (size, animate, spring) = if later.size.is_some() { (later.size, later.animate, later.spring) } else { (self.size, self.animate, self.spring) };
-        FrameRequest { size, animate, spring, center: self.center || later.center }
+        FrameRequest {
+            size,
+            animate,
+            spring,
+            center: self.center || later.center,
+            resize_drag: later.resize_drag.or(self.resize_drag),
+        }
     }
 }
 
@@ -219,9 +227,19 @@ mod tests {
 
     #[test]
     fn later_sizes_win_and_centring_sticks() {
-        let a = FrameRequest { size: Some((1.0, 2.0)), animate: true, spring: None, center: true };
-        let b = FrameRequest { size: Some((3.0, 4.0)), animate: false, spring: None, center: false };
-        assert_eq!(a.merge(b), FrameRequest { size: Some((3.0, 4.0)), animate: false, spring: None, center: true });
+        let a = FrameRequest { size: Some((1.0, 2.0)), animate: true, spring: None, center: true, resize_drag: None };
+        let b = FrameRequest { size: Some((3.0, 4.0)), animate: false, spring: None, center: false, resize_drag: None };
+        assert_eq!(a.merge(b), FrameRequest { size: Some((3.0, 4.0)), animate: false, spring: None, center: true, resize_drag: None });
         assert_eq!(b.merge(FrameRequest { center: true, ..Default::default() }), FrameRequest { center: true, ..b });
+    }
+
+    #[test]
+    fn resize_drag_merges_with_size_and_center_and_later_edge_wins() {
+        let resize = FrameRequest { resize_drag: Some(crate::ResizeEdge::SouthEast), ..Default::default() };
+        let sized = FrameRequest { size: Some((500.0, 400.0)), animate: true, center: true, ..Default::default() };
+        assert_eq!(resize.merge(sized), FrameRequest { resize_drag: Some(crate::ResizeEdge::SouthEast), ..sized });
+        assert_eq!(sized.merge(resize), FrameRequest { resize_drag: Some(crate::ResizeEdge::SouthEast), ..sized });
+        let newer = FrameRequest { resize_drag: Some(crate::ResizeEdge::NorthWest), ..Default::default() };
+        assert_eq!(resize.merge(newer).resize_drag, Some(crate::ResizeEdge::NorthWest));
     }
 }

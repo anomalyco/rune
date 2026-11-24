@@ -362,7 +362,7 @@ impl RuntimeCore {
                 self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragPending });
                 return;
             }
-            Some(TitlebarAction::DoubleClick) => {
+            Some(TitlebarAction::DoubleClick | TitlebarAction::Resize(_)) => {
                 self.touch_scroll_end(scroll, 0.0);
                 let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
                 let _ = self.apply_hold_effects(effects);

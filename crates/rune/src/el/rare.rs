@@ -30,6 +30,8 @@ pub(crate) struct ElCold {
     pub(crate) animated_changes: bool,
     /// `El::ime_option_as_alt`.
     pub(crate) option_as_alt: bool,
+    /// `El::window_resize` edge, read when `ElFlags` holds the resize tag.
+    pub(crate) window_resize: Option<crate::ResizeEdge>,
     pub(crate) transition: Option<Box<Transition>>,
     pub(crate) transition_motion: Option<Box<(Anim, Anim)>>,
     pub(crate) matched: Option<Rc<str>>,
@@ -95,6 +97,7 @@ impl Empty for ElCold {
         lead: None,
         animated_changes: false,
         option_as_alt: false,
+        window_resize: None,
         transition: None,
         transition_motion: None,
         matched: None,
@@ -190,12 +193,8 @@ impl ElFlags {
     }
 
     #[inline(always)]
-    pub(crate) fn window_drag(self) -> WindowDrag {
-        match (self.0 & Self::DRAG_MASK) >> Self::DRAG_SHIFT {
-            1 => WindowDrag::Drag,
-            2 => WindowDrag::NoDrag,
-            _ => WindowDrag::None,
-        }
+    pub(crate) fn window_drag_raw(self) -> u16 {
+        (self.0 & Self::DRAG_MASK) >> Self::DRAG_SHIFT
     }
 
     #[inline(always)]
@@ -204,6 +203,7 @@ impl ElFlags {
             WindowDrag::None => 0,
             WindowDrag::Drag => 1,
             WindowDrag::NoDrag => 2,
+            WindowDrag::Resize(_) => 3,
         };
         self.0 = (self.0 & !Self::DRAG_MASK) | (bits << Self::DRAG_SHIFT);
     }
@@ -259,6 +259,18 @@ impl crate::El {
                 self.role = RoleTag::CUSTOM;
                 self.cold_mut().role = role;
             }
+        }
+    }
+
+    /// What a press on this element does to its window (`window_drag`, `no_window_drag`,
+    /// `window_resize`), reading `cold` only when the resize tag is set.
+    #[inline(always)]
+    pub(crate) fn window_drag_mode(&self) -> WindowDrag {
+        match self.flags.window_drag_raw() {
+            1 => WindowDrag::Drag,
+            2 => WindowDrag::NoDrag,
+            3 => self.cold.window_resize.map_or(WindowDrag::None, WindowDrag::Resize),
+            _ => WindowDrag::None,
         }
     }
 

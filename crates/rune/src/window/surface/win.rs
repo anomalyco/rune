@@ -513,6 +513,9 @@ impl Win {
             crate::window::chrome::TitlebarTarget::DragWindow => {
                 self.window.drag_window().ok();
             }
+            crate::window::chrome::TitlebarTarget::ResizeWindow(edge) => {
+                self.drag_resize_window(edge);
+            }
             crate::window::chrome::TitlebarTarget::DoubleClickWindow => {
                 crate::window::chrome::titlebar_double_click(&self.window);
             }
@@ -530,6 +533,20 @@ impl Win {
     pub(in crate::window) fn toggle_full_screen(&self) {
         if self.is_panel() { return; }
         crate::window::chrome::toggle_full_screen(&self.window);
+    }
+
+    /// Starts an interactive OS/compositor window resize from `edge`, returning whether the
+    /// platform accepted the resize request. Ignored on macOS.
+    pub(in crate::window) fn drag_resize_window(&self, edge: crate::ResizeEdge) -> bool {
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.window.drag_resize_window(edge.into()).is_ok()
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = edge;
+            false
+        }
     }
 }
 

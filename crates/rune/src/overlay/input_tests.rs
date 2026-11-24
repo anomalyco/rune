@@ -472,6 +472,28 @@ fn overlay_without_window_drag_behaves_unchanged() {
     assert_eq!(overlay.core.position_owner, PositionOwner::Managed);
 }
 
+#[test]
+fn window_resize_in_overlay_is_drained_without_starting_a_drag() {
+    use super::{Overlay, OverlayOptions, OverlaySpec, Presence};
+    use crate::tooling::AppSpec;
+    use crate::{Cx, El, OverlayInput};
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        crate::el().key("edge").size(100.0, 40.0).hit().window_resize(crate::ResizeEdge::East)
+    }
+    let app = AppSpec::new("resize-overlay", (100.0, 40.0), || (), view);
+    let spec = OverlaySpec::new("resize-overlay", app.size, view)
+        .options(OverlayOptions { input: OverlayInput::All, ..Default::default() });
+    let (mut overlay, _) = Overlay::new(spec, (), &app);
+    overlay.core.test_window_backing = true;
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.set_viewport(app.size, 1.0);
+    overlay.rt.frame(0.0);
+    overlay.left_button(true, Some((50.0, 20.0)));
+    overlay.left_button(false, Some((50.0, 20.0)));
+    assert_eq!(overlay.rt.take_titlebar_action(), None, "Resize action must be drained");
+    assert_eq!(overlay.core.test_window_drags, 0, "overlays ignore window_resize");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn macos_window_drag_in_overlay_starts_drag_and_pointer_released_clears_native_capture() {

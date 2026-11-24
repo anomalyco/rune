@@ -265,6 +265,23 @@ fn an_active_modal_blocks_touch_window_drag() {
     assert!(!rt.state.modal_open, "touch outside modal still dismisses it");
 }
 
+#[test]
+fn touch_on_window_resize_emits_resize_action_and_clears_cleanly() {
+    use crate::ResizeEdge;
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        el().key("grip").size(100.0, 40.0).window_resize(ResizeEdge::SouthEast)
+    }
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::default());
+    rt.frame(0.0);
+    rt.touch(1, TouchPhase::Started, 50.0, 20.0, 0.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Resize(ResizeEdge::SouthEast)));
+    assert_eq!(rt.wake_deadline(), None, "resize touch does not arm long-press hold timer");
+    rt.touch(1, TouchPhase::Moved, 90.0, 40.0, 0.02);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.touch(1, TouchPhase::Ended, 90.0, 40.0, 0.04);
+    assert!(!rt.touching());
+}
+
 #[derive(Default)]
 struct HoldStateTest {
     taps: usize,
