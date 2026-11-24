@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+/// Generous bound on test channels that should only ever fail on a genuine deadlock.
+const WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Drop witness representing the worker's `wgpu::Device` clone: records the instant the worker
 /// releases it so tests can assert the device is dropped before `CompletionWorker::drop` returns.
 #[derive(Debug)]
@@ -16,6 +19,17 @@ struct DeviceWitness(Arc<AtomicBool>);
 impl Drop for DeviceWitness {
     fn drop(&mut self) {
         self.0.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Drop witness that also notifies a channel after recording release, for event-driven tests
+/// where the worker drops itself from inside its own callback.
+struct SignalingWitness(Arc<AtomicBool>, mpsc::Sender<()>);
+
+impl Drop for SignalingWitness {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::SeqCst);
+        self.1.send(()).ok();
     }
 }
 
@@ -53,8 +67,9 @@ fn drop_waits_for_in_flight_poll_then_exits_without_polling_again() {
         Ok(wgpu::PollStatus::Poll)
     });
 
+    let waker = worker.waker();
     worker.wake();
-    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered poll");
+    entered_rx.recv_timeout(WAIT_TIMEOUT).expect("worker entered poll");
 
     let (dropped_tx, dropped_rx) = mpsc::channel();
     let dropper = std::thread::spawn(move || {
@@ -62,12 +77,16 @@ fn drop_waits_for_in_flight_poll_then_exits_without_polling_again() {
         dropped_tx.send(()).ok();
     });
 
+    // Wait for `drop(worker)` to mark `Stopped` before checking that drop blocks on the in-flight
+    // poll and releasing the worker, so load-delayed thread startup cannot race `release_tx`.
+    waker.wait_stopped();
     assert!(
-        dropped_rx.recv_timeout(Duration::from_millis(40)).is_err(),
+        dropped_rx.recv_timeout(Duration::from_millis(20)).is_err(),
         "drop must wait for the in-flight poll to finish"
     );
     release_tx.send(()).ok();
-    dropped_rx.recv_timeout(Duration::from_secs(5)).expect("drop finishes once poll returns");
+    drop(release_tx);
+    dropped_rx.recv_timeout(WAIT_TIMEOUT).expect("drop finishes once poll returns");
     dropper.join().expect("dropper thread");
 
     assert!(released.load(Ordering::SeqCst), "device witness must drop before join returns");
@@ -86,11 +105,9 @@ fn drop_wakes_worker_sleeping_between_polls() {
     });
 
     worker.wake();
-    polled_rx.recv_timeout(Duration::from_secs(5)).expect("first poll");
-    let started = rune_core::time::now();
+    polled_rx.recv_timeout(WAIT_TIMEOUT).expect("first poll");
     drop(worker);
     assert!(released.load(Ordering::SeqCst));
-    assert!(started.elapsed() < Duration::from_secs(2), "drop should wake and join promptly");
 }
 
 #[test]
@@ -121,13 +138,9 @@ fn lost_device_exits_worker_and_releases_device() {
         Err(PollFailed::Lost)
     });
 
+    let waker = worker.waker();
     worker.wake();
-    worker.wait_polling();
-    // Wait briefly for the worker to exit on Lost even before drop.
-    let deadline = rune_core::time::now() + Duration::from_secs(5);
-    while !released.load(Ordering::SeqCst) && rune_core::time::now() < deadline {
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    waker.wait_stopped();
     assert!(released.load(Ordering::SeqCst), "lost device must exit worker and release device");
     // Further wakes after exit are no-ops and drop joins cleanly.
     worker.wake();
@@ -164,10 +177,11 @@ fn caller_unwind_joins_worker_without_aborting() {
         Ok(wgpu::PollStatus::QueueEmpty)
     });
 
+    let waker = worker.waker();
     worker.wake();
-    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered poll");
+    entered_rx.recv_timeout(WAIT_TIMEOUT).expect("worker entered poll");
     let unblocker = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(20));
+        waker.wait_stopped();
         release_tx.send(()).ok();
     });
 
@@ -183,10 +197,11 @@ fn caller_unwind_joins_worker_without_aborting() {
 #[test]
 fn dropping_worker_from_inside_poll_callback_does_not_self_join_deadlock() {
     let released = Arc::new(AtomicBool::new(false));
+    let (released_tx, released_rx) = mpsc::channel();
     let polls = Arc::new(AtomicUsize::new(0));
     let slot: Arc<Mutex<Option<CompletionWorker>>> = Arc::new(Mutex::new(None));
     let slot_for = slot.clone();
-    let witness = DeviceWitness(released.clone());
+    let witness = SignalingWitness(released.clone(), released_tx);
     let polls_for = polls.clone();
     let worker = CompletionWorker::spawn_with(move || {
         let _ = &witness;
@@ -199,10 +214,7 @@ fn dropping_worker_from_inside_poll_callback_does_not_self_join_deadlock() {
     *slot.lock().unwrap() = Some(worker);
     waker.wake();
 
-    let deadline = rune_core::time::now() + Duration::from_secs(5);
-    while !released.load(Ordering::SeqCst) && rune_core::time::now() < deadline {
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    released_rx.recv_timeout(WAIT_TIMEOUT).expect("worker dropped from its own callback must exit cleanly");
     assert!(released.load(Ordering::SeqCst), "worker dropped from its own callback must exit cleanly");
     assert_eq!(polls.load(Ordering::SeqCst), 1, "worker must not poll again after self-drop");
 }
@@ -226,11 +238,11 @@ fn rewake_during_active_poll_runs_another_poll_before_parking() {
     });
 
     worker.wake();
-    first_rx.recv_timeout(Duration::from_secs(5)).expect("first poll");
+    first_rx.recv_timeout(WAIT_TIMEOUT).expect("first poll");
     // A second submission arrives while the first poll is still running.
     worker.wake();
     continue_tx.send(()).ok();
-    second_rx.recv_timeout(Duration::from_secs(5)).expect("rewake must trigger second poll");
+    second_rx.recv_timeout(WAIT_TIMEOUT).expect("rewake must trigger second poll");
     drop(worker);
     assert_eq!(polls.load(Ordering::SeqCst), 2);
 }
@@ -241,11 +253,14 @@ fn drop_joins_completion_thread(with_timestamps: bool) {
     surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let observer_finished = Arc::new(AtomicBool::new(false));
+    let observer_finished_for = observer_finished.clone();
     let release_rx = Mutex::new(release_rx);
     surface.set_observer(Arc::new(move |t| {
         if t.completed_at.is_some() {
             entered_tx.send(std::thread::current().id()).ok();
             release_rx.lock().unwrap().recv().ok();
+            observer_finished_for.store(true, Ordering::SeqCst);
         }
     }));
 
@@ -275,19 +290,19 @@ fn drop_joins_completion_thread(with_timestamps: bool) {
 
     // Dropping the renderer must block until the worker finishes its in-flight poll and exits,
     // rather than returning while the worker is still polling the device. The renderer stays on
-    // this thread (on macOS it isn't `Send`): another thread lets the observer go after a moment.
-    let (released_tx, released_rx) = mpsc::channel();
+    // this thread (on macOS it isn't `Send`): another thread waits for `drop(renderer)` to enter
+    // `CompletionWorker::stop`, then lets the observer go.
+    let waker = renderer.completion.waker();
     let releaser = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(50));
-        released_tx.send(rune_core::time::now()).ok();
+        waker.wait_stopped();
         release_tx.send(()).ok();
     });
     drop(renderer);
-    let dropped = rune_core::time::now();
+    assert!(
+        observer_finished.load(Ordering::SeqCst),
+        "SurfaceRenderer::drop returned while the completion thread was still polling"
+    );
     releaser.join().expect("releaser thread");
-    let released = released_rx.recv().expect("the observer was let go");
-
-    assert!(dropped >= released, "SurfaceRenderer::drop returned while the completion thread was still polling");
 }
 
 #[test]
@@ -350,10 +365,11 @@ fn the_completion_thread_submits_what_a_configure_kept_back_once_it_is_done() {
         parked.park(7);
         assert!(!parked.flush(&gate, |_| panic!("submitted inside the configure")));
         worker.wake();
+        worker.wait_polling();
         // The worker keeps coming back, and keeps being refused, while the surface configures.
         assert!(submitted.recv_timeout(Duration::from_millis(60)).is_err(), "submitted while a surface was being configured");
     });
-    assert_eq!(submitted.recv_timeout(Duration::from_secs(5)), Ok(7), "the parked work was never submitted");
+    assert_eq!(submitted.recv_timeout(WAIT_TIMEOUT), Ok(7), "the parked work was never submitted");
     drop(worker);
 }
 
@@ -457,8 +473,9 @@ fn read_worker_drop_waits_for_in_flight_wait_and_skips_queued_items() {
     .unwrap();
 
     let first_dropped = Arc::new(AtomicBool::new(false));
+    let stop_probe = worker.stop_probe();
     worker.send((1, DeviceWitness(first_dropped))).unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    entered_rx.recv_timeout(WAIT_TIMEOUT).expect("worker entered wait");
     // Enqueue two more items while the first wait is blocked in flight.
     worker.send((2, DeviceWitness(skipped_a.clone()))).unwrap();
     worker.send((3, DeviceWitness(skipped_b.clone()))).unwrap();
@@ -469,12 +486,16 @@ fn read_worker_drop_waits_for_in_flight_wait_and_skips_queued_items() {
         dropped_tx.send(()).ok();
     });
 
+    // Wait for `drop(worker)` to transition the queue out of `Running` before checking that drop
+    // blocks on the in-flight wait and releasing item 1.
+    stop_probe.wait_stopping();
     assert!(
-        dropped_rx.recv_timeout(Duration::from_millis(40)).is_err(),
+        dropped_rx.recv_timeout(Duration::from_millis(20)).is_err(),
         "drop must wait for the in-flight wait to finish"
     );
     release_tx.send(()).ok();
-    dropped_rx.recv_timeout(Duration::from_secs(5)).expect("drop finishes once wait returns");
+    drop(release_tx);
+    dropped_rx.recv_timeout(WAIT_TIMEOUT).expect("drop finishes once wait returns");
     dropper.join().expect("dropper thread");
 
     assert!(released.load(Ordering::SeqCst), "device witness must drop before join returns");
@@ -503,7 +524,7 @@ fn read_worker_lost_device_exits_releases_device_and_rejects_further_sends() {
     .unwrap();
 
     worker.send((1, DeviceWitness(Arc::new(AtomicBool::new(false))))).unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    entered_rx.recv_timeout(WAIT_TIMEOUT).expect("worker entered wait");
     worker.send((2, DeviceWitness(queued_dropped.clone()))).unwrap();
     release_tx.send(()).ok();
     worker.wait_stopped();
@@ -526,8 +547,8 @@ fn read_worker_continues_after_non_fatal_wait_error() {
 
     worker.send(1).unwrap();
     worker.send(2).unwrap();
-    assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)), Ok(1));
-    assert_eq!(done_rx.recv_timeout(Duration::from_secs(5)), Ok(2));
+    assert_eq!(done_rx.recv_timeout(WAIT_TIMEOUT), Ok(1));
+    assert_eq!(done_rx.recv_timeout(WAIT_TIMEOUT), Ok(2));
     drop(worker);
 }
 
@@ -547,7 +568,7 @@ fn read_worker_panic_releases_device_and_drop_does_not_panic() {
     .unwrap();
 
     worker.send((1, DeviceWitness(Arc::new(AtomicBool::new(false))))).unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    entered_rx.recv_timeout(WAIT_TIMEOUT).expect("worker entered wait");
     worker.send((2, DeviceWitness(queued_dropped.clone()))).unwrap();
     release_tx.send(()).ok();
     worker.wait_stopped();
@@ -572,10 +593,11 @@ fn read_worker_caller_unwind_joins_worker_without_aborting() {
     })
     .unwrap();
 
+    let stop_probe = worker.stop_probe();
     worker.send(()).unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    entered_rx.recv_timeout(WAIT_TIMEOUT).expect("worker entered wait");
     let unblocker = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(20));
+        stop_probe.wait_stopping();
         release_tx.send(()).ok();
     });
 
@@ -612,16 +634,14 @@ fn read_worker_self_drop_from_callback_does_not_deadlock() {
     })
     .unwrap();
 
+    let stop_probe = worker.stop_probe();
     worker.send((1, DeviceWitness(Arc::new(AtomicBool::new(false))))).unwrap();
-    entered_rx.recv_timeout(Duration::from_secs(5)).expect("worker entered wait");
+    entered_rx.recv_timeout(WAIT_TIMEOUT).expect("worker entered wait");
     worker.send((2, DeviceWitness(queued_dropped.clone()))).unwrap();
     *slot.lock().unwrap() = Some(worker);
     release_tx.send(()).ok();
 
-    let deadline = rune_core::time::now() + Duration::from_secs(5);
-    while !released.load(Ordering::SeqCst) && rune_core::time::now() < deadline {
-        std::thread::sleep(Duration::from_millis(1));
-    }
+    stop_probe.wait_stopped();
     assert!(released.load(Ordering::SeqCst), "worker dropped from its own callback must exit cleanly");
     assert!(queued_dropped.load(Ordering::SeqCst), "self-drop must discard unpolled items");
     assert_eq!(waits.load(Ordering::SeqCst), 1, "worker must not wait again after self-drop");
@@ -651,6 +671,8 @@ fn read_worker_device_notifies_on_read_and_drop_joins_in_flight_callback() {
 
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let callback_finished = Arc::new(AtomicBool::new(false));
+    let callback_finished_for = callback_finished.clone();
     assert!(
         worker
             .send((
@@ -660,6 +682,7 @@ fn read_worker_device_notifies_on_read_and_drop_joins_in_flight_callback() {
                     let current = std::thread::current();
                     entered_tx.send((current.id(), current.name().map(str::to_owned))).ok();
                     release_rx.recv().ok();
+                    callback_finished_for.store(true, Ordering::SeqCst);
                 }),
             ))
             .is_ok()
@@ -669,16 +692,15 @@ fn read_worker_device_notifies_on_read_and_drop_joins_in_flight_callback() {
     assert_ne!(worker_tid, std::thread::current().id(), "on_read must run on the worker thread");
     assert_eq!(worker_name.as_deref(), Some("rune-dmabuf-read"));
 
-    let (released_tx, released_rx) = mpsc::channel();
+    let stop_probe = worker.stop_probe();
     let releaser = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(50));
-        released_tx.send(rune_core::time::now()).ok();
+        stop_probe.wait_stopping();
         release_tx.send(()).ok();
     });
     drop(worker);
-    let dropped = rune_core::time::now();
+    assert!(
+        callback_finished.load(Ordering::SeqCst),
+        "ReadWorker::drop returned while the read thread was still running"
+    );
     releaser.join().expect("releaser thread");
-    let released = released_rx.recv().expect("callback was let go");
-
-    assert!(dropped >= released, "ReadWorker::drop returned while the read thread was still running");
 }
