@@ -40,6 +40,16 @@ impl CompletionWake {
             Signal::Pending | Signal::Stopped => {}
         }
     }
+
+    /// Waits until `CompletionWorker::stop` or worker exit has transitioned the signal to
+    /// `Stopped`.
+    #[cfg(test)]
+    pub(crate) fn wait_stopped(&self) {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        while *state != Signal::Stopped {
+            state = self.shared.condvar.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
 }
 
 /// Work a completion callback has to submit, parked until it may be. A callback runs on
@@ -294,6 +304,31 @@ impl<T> Drop for ReadExitGuard<T> {
     }
 }
 
+/// Test-only probe for observing a [`ReadWorker`]'s shutdown transitions after the worker has
+/// been moved to another thread to drop.
+#[cfg(test)]
+pub(crate) struct ReadStopProbe<T>(Arc<ReadShared<T>>);
+
+#[cfg(test)]
+impl<T> ReadStopProbe<T> {
+    /// Waits until `ReadWorker::stop` or worker exit has moved the queue out of `Running`.
+    pub(crate) fn wait_stopping(&self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        while matches!(*state, QueueState::Running(_)) {
+            state = self.0.condvar.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// Waits until the worker has transitioned to `Stopped` (after releasing its closure, device,
+    /// and queued items).
+    pub(crate) fn wait_stopped(&self) {
+        let mut state = self.0.state.lock().unwrap_or_else(|e| e.into_inner());
+        while !matches!(*state, QueueState::Stopped) {
+            state = self.0.condvar.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+}
+
 /// Background thread that processes queued GPU waits in FIFO order and stops and joins cleanly
 /// before its `wgpu::Device` is torn down.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -339,14 +374,18 @@ impl<T: Send + 'static> ReadWorker<T> {
         }
     }
 
+    /// Returns a test-only probe for observing this worker's shutdown transitions after it has
+    /// been moved to another thread to drop.
+    #[cfg(test)]
+    pub(crate) fn stop_probe(&self) -> ReadStopProbe<T> {
+        ReadStopProbe(self.shared.clone())
+    }
+
     /// Waits until the worker has transitioned to `Stopped` (after releasing its closure and
     /// device).
     #[cfg(test)]
     pub(crate) fn wait_stopped(&self) {
-        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
-        while !matches!(*state, QueueState::Stopped) {
-            state = self.shared.condvar.wait(state).unwrap_or_else(|e| e.into_inner());
-        }
+        self.stop_probe().wait_stopped();
     }
 
     /// Signals the worker to stop, discards unpolled items, and joins the thread so no wait can
