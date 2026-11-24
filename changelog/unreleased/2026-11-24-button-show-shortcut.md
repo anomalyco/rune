@@ -1,0 +1,1 @@
+- `rune-kit`: added `Button::show_shortcut()` to render a configured `Button::shortcut(...)` inline beside a plain text label in the label's font at 60% of the label ink's alpha, hidden from assistive technology so the button's existing `shortcut_hint` is not duplicated.

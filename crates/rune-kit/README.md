@@ -172,7 +172,10 @@ Progress, ProgressCircle, SegmentedControl.
 
 `Button::new(label).rolling("import-label")` rolls the label's changed characters
 (`RollingText`) and springs the button's width with it; `.label_with(|font, ink| ..)` draws any
-label element in the button's font and ink. The text stays the button's accessible label.
+label element in the button's font and ink; `.shortcut("cmd+s").show_shortcut()` draws the
+formatted shortcut inline beside a plain text label in the label's font at 60% of the label ink's
+alpha while keeping it hidden from assistive technology (the button's shortcut hint still exposes
+it; see `rune-button--shortcuts` in `kit-gallery`). The text stays the button's accessible label.
 A `RollingText` reads as its whole label wherever text is looked up: its row's `text` in
 `--tree` and `ElementInfo::text`, so tests find it by text as they find a plain `text`.
 

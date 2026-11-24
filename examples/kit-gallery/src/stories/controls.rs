@@ -37,6 +37,28 @@ pub(super) fn button_icon(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(Button::new("Large").variant(ButtonVariant::Contrast).control_size(ControlSize::Large).icon(&ic::PLUS).build(k))
 }
 
+pub(super) fn button_shortcuts(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    use ButtonVariant::*;
+    col()
+        .gap(12.0)
+        .child(
+            flex(12.0)
+                .child(Button::new("Save").shortcut("cmd+s").show_shortcut().build(k))
+                .child(Button::new("End it now").variant(Contrast).shortcut("⏎").show_shortcut().build(k))
+                .child(Button::new("Submit").variant(Submit).shortcut("cmd+enter").show_shortcut().build(k))
+                .child(Button::new("End run").variant(Danger).shortcut("cmd+d").show_shortcut().build(k))
+                .child(Button::new("Retry").variant(Warning).shortcut("cmd+r").show_shortcut().build(k)),
+        )
+        .child(
+            flex(12.0)
+                .child(Button::new("New").icon(&ic::PLUS).variant(Outline).shortcut("cmd+n").show_shortcut().build(k))
+                .child(Button::new("Stay").variant(Ghost).shortcut("esc").show_shortcut().build(k))
+                .child(Button::new("Edit").variant(GhostMuted).shortcut("E").show_shortcut().build(k))
+                .child(Button::new("More").variant(GhostFaint).shortcut("M").show_shortcut().build(k))
+                .child(Button::new("Disabled").shortcut("cmd+k").show_shortcut().disabled(true).build(k)),
+        )
+}
+
 pub(super) fn button_all_states(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     use ButtonVariant::*;
     let variants = [
