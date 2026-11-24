@@ -34,7 +34,9 @@ impl HiddenHwnd {
             )
         };
         assert!(!hwnd.is_null(), "CreateWindowExW failed");
-        assert_eq!(unsafe { IsWindowVisible(hwnd) }, 0, "test window must remain hidden");
+        // SAFETY: `hwnd` is a live window just created by `CreateWindowExW` on this thread.
+        let visible = unsafe { IsWindowVisible(hwnd) };
+        assert_eq!(visible, 0, "test window must remain hidden");
         Self(hwnd)
     }
 
@@ -98,6 +100,7 @@ fn configure_hwnd_applies_no_activate_tool_window_and_capture_exclusion() {
     assert_ne!(ex & WS_EX_TOOLWINDOW, 0, "WS_EX_TOOLWINDOW should be set");
     assert_eq!(ex & WS_EX_APPWINDOW, 0, "WS_EX_APPWINDOW should be cleared for tool_window");
     assert_eq!(win.display_affinity(), WDA_EXCLUDEFROMCAPTURE);
+    // SAFETY: `win.0` is a live window owned by this thread.
     #[allow(unsafe_code)]
     let visible = unsafe { IsWindowVisible(win.0) };
     assert_eq!(visible, 0, "configuring styles must not show the hidden window");
