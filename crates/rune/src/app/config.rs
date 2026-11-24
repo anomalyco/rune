@@ -14,6 +14,7 @@ pub(crate) struct RuntimeConfig<S: 'static> {
     pub(crate) on_mods: Option<fn(&mut S, crate::Mods, &mut Tx)>,
     pub(crate) on_visibility: Option<fn(&mut S, bool, &mut Tx)>,
     pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
+    pub(crate) on_field_menu: Option<fn(&mut S, crate::FieldMenuRequest, &mut Tx)>,
     pub(crate) modifier_keys: bool,
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
@@ -35,6 +36,7 @@ impl<S: 'static> Default for RuntimeConfig<S> {
             on_mods: None,
             on_visibility: None,
             on_ime: None,
+            on_field_menu: None,
             modifier_keys: false,
             tab_visits_controls: false,
             srgb_blend: true,
@@ -72,6 +74,7 @@ impl<S: 'static> Runtime<S> {
             on_mods,
             on_visibility,
             on_ime,
+            on_field_menu,
             modifier_keys,
             tab_visits_controls,
             srgb_blend,
@@ -83,6 +86,7 @@ impl<S: 'static> Runtime<S> {
         self.hooks.on_mods = on_mods;
         self.hooks.on_visibility = on_visibility;
         self.hooks.on_ime = on_ime;
+        self.hooks.on_field_menu = on_field_menu;
         self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, font_smoothing, max_native_materials, dev_stats);
     }
 }
@@ -110,6 +114,7 @@ mod tests {
             .on_modifiers(|s, m, _| s.mods.push(m))
             .on_visibility(|s, v, _| s.visibility.push(v))
             .on_ime(|s, _: &Ime, _| { s.ime += 1; true })
+            .on_field_menu(|_, _, _| {})
             .modifier_keys()
             .tab_visits_controls(true)
             .srgb_blend(false)
@@ -125,6 +130,7 @@ mod tests {
         assert!(rt.hooks.on_mods.is_some());
         assert!(rt.hooks.on_visibility.is_some());
         assert!(rt.hooks.on_ime.is_some());
+        assert!(rt.hooks.on_field_menu.is_some());
         assert!(rt.modifier_keys());
         assert!(!rt.srgb_blend());
         assert_eq!(rt.font_smoothing(), FontSmoothing::Off);
@@ -156,6 +162,6 @@ mod tests {
         assert!(!cfg.modifier_keys && !cfg.tab_visits_controls);
         assert_eq!(cfg.font_smoothing, FontSmoothing::default());
         assert_eq!(cfg.max_native_materials, crate::MAX_NATIVE_MATERIALS);
-        assert!(cfg.on_focus.is_none() && cfg.on_mods.is_none() && cfg.on_visibility.is_none() && cfg.on_ime.is_none() && cfg.dev_stats.is_none());
+        assert!(cfg.on_focus.is_none() && cfg.on_mods.is_none() && cfg.on_visibility.is_none() && cfg.on_ime.is_none() && cfg.on_field_menu.is_none() && cfg.dev_stats.is_none());
     }
 }

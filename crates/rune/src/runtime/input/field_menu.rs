@@ -21,11 +21,27 @@ pub(crate) struct FieldMenu {
     languages: Option<(Vec<String>, crate::el::LanguagesFn)>,
 }
 
+/// A pending fallback field menu delivered to `App::on_field_menu`, awaiting
+/// `Tx::resolve_field_menu`.
+pub(crate) struct PendingFieldMenu {
+    pub(crate) menu: PopupMenu,
+    pub(crate) field: FieldMenu,
+}
+
 impl RuntimeCore {
     /// Opens field `path`'s menu at window point `at`, pressed at window point `hit_at`, or from
     /// the keyboard (`None`).
+    fn field_menu_fallback_active(&self) -> bool {
+        #[cfg(test)]
+        if self.host.force_field_menu_fallback {
+            return true;
+        }
+        !crate::popup_menu_supported()
+    }
+
     pub(in crate::runtime) fn field_menu(&mut self, app: &mut dyn AppDriver, path: String, at: (f32, f32), hit_at: Option<(f32, f32)>, one: &mut Tx) -> bool {
         let Some(i) = self.live(&path) else { return false };
+        let field_key = self.tree.nodes[i].key.clone();
         let Some(input) = self.tree.nodes[i].input.as_deref() else { return false };
         if let (Some(f), Some((hx, hy))) = (input.on_pill_secondary.clone(), hit_at)
             && let Some(pill_id) = self.input_pill_at(i, hx, hy)
@@ -119,13 +135,42 @@ impl RuntimeCore {
         }
         one.commit = one.commit.instant();
         log_event!(self, "field menu {path}");
+        let field = FieldMenu { path: path.clone(), word, suggestions, toggle, languages };
+        if self.field_menu_fallback_active() && app.has_on_field_menu() {
+            self.host.field_menu_fallback = Some(Box::new(PendingFieldMenu { menu: menu.clone(), field }));
+            self.trace_event("field-menu:open");
+            let request = crate::FieldMenuRequest::new(field_key, path, crate::PointerPress { x: at.0, y: at.1 }, menu);
+            app.on_field_menu(request, one);
+            return true;
+        }
         self.host.popups.push_back(Request {
             menu,
             anchor: PopupAnchor::Point(at.0, at.1),
             on_pick: Box::new(|_, _, _| {}),
-            field: Some(Box::new(FieldMenu { path, word, suggestions, toggle, languages })),
+            field: Some(Box::new(field)),
         });
         true
+    }
+
+    /// Resolves the pending fallback field menu delivered to `App::on_field_menu` when
+    /// `Tx::resolve_field_menu` runs.
+    pub(in crate::runtime) fn resolve_field_menu_fallback(&mut self, app: &mut dyn AppDriver, picked: Option<&str>, one: &mut Tx) {
+        let Some(pending) = self.host.field_menu_fallback.as_ref() else { return };
+        if let Some(id) = picked {
+            let Some(item) = pending.menu.find(id) else { return };
+            if !item.enabled { return; }
+        }
+        let Some(pending) = self.host.field_menu_fallback.take() else { return };
+        match picked {
+            Some(id) => {
+                self.trace_event(format_args!("field-menu:pick:{id}"));
+                self.field_menu_pick(app, pending.field, id, one);
+                self.commit.dirty = true;
+            }
+            None => {
+                self.trace_event("field-menu:cancel");
+            }
+        }
     }
 
     /// Does what `picked` in field menu `menu` asks, on its field.
@@ -185,3 +230,7 @@ impl RuntimeCore {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "field_menu_tests.rs"]
+mod tests;

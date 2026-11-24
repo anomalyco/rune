@@ -449,6 +449,29 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Fallback handler for a text field's context menu (right-click, Menu key, Shift+F10) on
+    /// platforms where [`crate::popup_menu_supported`] is false (such as Linux).
+    ///
+    /// When set and `!popup_menu_supported()`, Rune hands the ready-built
+    /// [`crate::FieldMenuRequest`] to `f` instead of queuing a native pop-up menu, so the app
+    /// can render it in-window (for example with `rune_kit::Menu`) and answer with
+    /// [`Tx::resolve_field_menu`]. On macOS and Windows (`popup_menu_supported()` is true),
+    /// native field menus continue to open as usual and `f` is not called.
+    ///
+    /// ```
+    /// use rune::{App, AppSpec, FieldMenuRequest, Tx, el};
+    ///
+    /// struct S { menu: Option<FieldMenuRequest> }
+    /// let _app = App::new(AppSpec::new("Notes", (480.0, 320.0), || S { menu: None }, |_, _| el()))
+    ///     .on_field_menu(|s: &mut S, req: FieldMenuRequest, _tx: &mut Tx| {
+    ///         s.menu = Some(req);
+    ///     });
+    /// ```
+    pub fn on_field_menu(mut self, f: fn(&mut S, crate::FieldMenuRequest, &mut Tx)) -> Self {
+        self.runtime.on_field_menu = Some(f);
+        self
+    }
+
     /// Adds a transparent overlay with its own state, hidden until `OverlayHandle::show`.
     /// Bare specs preserve primary-display edge placement and never request key focus;
     /// `OverlaySpec::options` selects displays, placement and native input policy.

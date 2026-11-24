@@ -174,6 +174,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
         .on_visibility(|_, _, _| {})
         .on_rest(|_, _| false)
         .on_ime(|_, _, _| false)
+        .on_field_menu(|_, _, _| {})
         .on_close_request(|_, _| crate::CloseResponse::Close)
         .on_close(|_, _| {})
         .on_quit(|_, _| {})
@@ -193,7 +194,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
     assert_eq!(window.app.runtime.max_native_materials, 8);
     assert!(window.app.runtime.modifier_keys && window.app.runtime.tab_visits_controls);
     assert!(window.app.runtime.on_focus.is_some() && window.app.runtime.on_mods.is_some());
-    assert!(window.app.runtime.on_visibility.is_some() && window.app.runtime.on_ime.is_some());
+    assert!(window.app.runtime.on_visibility.is_some() && window.app.runtime.on_ime.is_some() && window.app.runtime.on_field_menu.is_some());
     assert_eq!(window.app.runtime.dev_stats.map(|f| f()).as_deref(), Some("stats"));
     assert!(window.app.fit_content_height && window.app.float_on_open && window.app.open_inactive);
     assert!(window.app.open_as.maximizes() && window.app.open_as.full_screens());

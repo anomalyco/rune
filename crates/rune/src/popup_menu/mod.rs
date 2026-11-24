@@ -264,6 +264,53 @@ impl From<&String> for PopupAnchor { fn from(key: &String) -> Self { Self::Key(k
 impl From<PointerPress> for PopupAnchor { fn from(p: PointerPress) -> Self { Self::Point(p.x, p.y) } }
 impl From<(f32, f32)> for PopupAnchor { fn from((x, y): (f32, f32)) -> Self { Self::Point(x, y) } }
 
+/// A text field's context-menu request handed to [`App::on_field_menu`](crate::App::on_field_menu)
+/// on platforms where [`popup_menu_supported`] is false (such as Linux).
+///
+/// Inspect [`Self::menu`] with [`PopupMenu::entries`] to build an in-window menu at
+/// [`Self::point`], then answer with [`Tx::resolve_field_menu`](crate::Tx::resolve_field_menu).
+///
+/// ```
+/// use rune::{App, AppSpec, FieldMenuRequest, PopupEntry, Tx, el};
+///
+/// struct S { open_menu: Option<FieldMenuRequest> }
+/// let _app = App::new(AppSpec::new("demo", (480.0, 320.0), || S { open_menu: None }, |_, _| el()))
+///     .on_field_menu(|s: &mut S, req: FieldMenuRequest, _tx: &mut Tx| {
+///         let _entries: &[PopupEntry] = req.menu().entries();
+///         s.open_menu = Some(req);
+///     });
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldMenuRequest {
+    field_key: Option<String>,
+    field_path: String,
+    point: PointerPress,
+    menu: PopupMenu,
+}
+
+impl FieldMenuRequest {
+    pub(crate) fn new(field_key: Option<String>, field_path: String, point: PointerPress, menu: PopupMenu) -> Self {
+        Self { field_key, field_path, point, menu }
+    }
+
+    /// The text field's element key (`El::key`), if one was set.
+    pub fn field_key(&self) -> Option<&str> { self.field_key.as_deref() }
+
+    /// The text field's full tree path.
+    pub fn field_path(&self) -> &str { &self.field_path }
+
+    /// Where the menu was requested, in view points (the secondary-press point, or the focused
+    /// field's bottom-left for keyboard Menu / Shift+F10).
+    pub fn point(&self) -> PointerPress { self.point }
+
+    /// The ready-built field menu (spelling suggestions, Cut, Copy, Paste, Select All,
+    /// Spellcheck, Spellcheck Languages). Read its items with [`PopupMenu::entries`].
+    pub fn menu(&self) -> &PopupMenu { &self.menu }
+
+    /// Consumes the request and returns its [`PopupMenu`].
+    pub fn into_menu(self) -> PopupMenu { self.menu }
+}
+
 /// Why [`Runtime::resolve_popup`] could not answer a menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PopupMenuError {
@@ -338,6 +385,25 @@ impl Tx {
         });
         let request = Request { menu, anchor: anchor.into(), on_pick, field: None };
         self.popups.push(Call(Rc::new(RefCell::new(Some(request)))));
+    }
+
+    /// Answers the pending text-field menu delivered to
+    /// [`App::on_field_menu`](crate::App::on_field_menu).
+    ///
+    /// Pass `Some(id)` with the picked [`PopupItem::id`] to run that field action (Cut, Copy,
+    /// Paste, Select All, a spelling suggestion, Learn Spelling, or a spellcheck setting), or
+    /// `None` to dismiss it. Unknown or disabled item ids are ignored, and calls with no
+    /// pending fallback menu do nothing.
+    ///
+    /// ```
+    /// use rune::{Tx, el};
+    ///
+    /// let _copy = el().on_press_tx(|_: &mut (), tx: &mut Tx| {
+    ///     tx.resolve_field_menu(Some("copy"));
+    /// });
+    /// ```
+    pub fn resolve_field_menu(&mut self, id: Option<&str>) {
+        self.field_menu_resolution = Some(id.map(str::to_owned));
     }
 }
 

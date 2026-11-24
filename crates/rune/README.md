@@ -40,7 +40,7 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     - `.scroll(..)`, `.scroll_x()`, and `.scroll_xy()` set Taffy `overflow` (`hidden`/`scroll`, `scroll`/`hidden`, `scroll`/`scroll`). At commit time (`runtime/commit/flatten.rs`, `runtime/commit.rs::unwrapped_width`), a `scroll_x` viewport—and a single-child `scroll_xy` viewport—forces `flex-direction: row`. Each direct child of `scroll_x`/`scroll_xy` gets `flex-shrink: 0`; if its width is `auto` or `100%` (`.w_full()`), width is rewritten to `max-content` with `min-width: 100%` when `min-width` is `auto` (on both `auto` and `w_full` for single-child viewports, and on `w_full` for multi-child viewports). Under `scroll_xy`, children with no explicit `align_self` also receive `align-self: flex-start`.
     - `.border_layout()` copies the border widths into Taffy's `border` rect at commit time (`runtime/commit/device.rs::border`), snapped to whole device pixels so layout matches rendered hairlines across scales.
     - `.equal_columns(n)` switches the container to CSS Grid (`display: grid; grid-template-columns: repeat(n, 1fr)`) and `.grid_cell(col)` places a child in 1-based column `col + 1` of row 1 (`span 1`).
-    - `.absolute(left, top)`, `.pin(l, t, r, b)`, and `.anchored*`/`.above` set `position: absolute` against the parent's padding box; anchored overlays are then positioned by the runtime relative to their target anchor and flipped/clamped to the window, or to a named boundary element via `.anchored_in(key)` (with pure helpers `anchor_rect` and `anchor_rect_in`).
+    - `.absolute(left, top)`, `.pin(l, t, r, b)`, and `.anchored*`/`.above` set `position: absolute` against the parent's padding box; anchored overlays are then positioned by the runtime relative to their target anchor and flipped/clamped to the window, or to a named boundary element via `.anchored_in(key)` (with pure helpers `anchor_rect` and `anchor_rect_in`). `.anchored_fit` clamps overflowing surfaces on both the main axis and the cross axis (8 pt inside the window or boundary) so scrolling menus and submenus stay inside small windows.
     - `.sticky_top`, `.sticky_top_showing`, `.sticky_bottom`, and `.sticky_left` run outside Taffy in the paint and hit-test pass (`runtime/scroll/sticky.rs`); laid-out rects stay at their unscrolled positions.
     - `.aspect_ratio(r)` passes CSS `aspect-ratio` directly to Taffy; `.aspect_fit(r)` runs a two-pass commit rewrite (`fit_room` → `fitted` in `commit/flatten.rs`) to measure the available room first and then lay out the largest box at ratio `r` inside it.
   - **Static `--html` export differences** (`crates/rune/src/runtime/web/export/page.rs`, `css.rs`, `export.rs`): `BASE_CSS` sets `min-width: 0` globally (instead of `auto`) and leaves `flex-shrink` at CSS's default `1` (so `css::layout` emits `flex-shrink: 0` per element and omits `min-width: auto`). The export omits `calc()` and `fr` values (including `equal_columns` grid template tracks and `grid_cell` placement, even when `display: grid` is emitted), text inputs and secure/redacted nodes, and disallowed, exiting, or invisible (`opacity <= 0.01`) subtrees.
@@ -2216,7 +2216,13 @@ row().key("theme").child(text(theme_title(&s.theme)))
   dismissal by a click outside (answered `None`) are the system's, overlays included. A click
   right after the menu closes lands where the pointer is, moved or not. Elsewhere
   `popup_menu_supported()` is false and `on_pick` gets `None` on the next frame, so keep an
-  in-app fallback for those platforms. `cargo run -p rune --example popup_menu` shows both kinds.
+  in-app fallback for those platforms. For text-field menus (right-click, Menu key, Shift+F10),
+  opt in with `App::on_field_menu(|s, req, tx| ...)` (also on `WindowSpec` and
+  `ConfiguredOverlay`): when `!popup_menu_supported()`, Rune hands the ready-built
+  `FieldMenuRequest` (`field_key`, `field_path`, `point`, `menu` / `PopupMenu::entries`) to
+  your hook so you can render it in-window and run the chosen action with
+  `tx.resolve_field_menu(Some(id))` (or `None` to cancel), while macOS and Windows keep their
+  native menus unchanged. `cargo run -p rune --example popup_menu` shows both kinds.
 - **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`) while a
   menu is open, and `--trace` notes `popup-menu:open`, `popup-menu:pick:{id}` and
   `popup-menu:cancel`. Scripts answer it with `{"type": "menu-pick", "id": "dark"}` or

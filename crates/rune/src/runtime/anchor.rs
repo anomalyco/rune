@@ -240,6 +240,40 @@ fn fit_bound(a: &Anchor, t: [f32; 4], len: f32, bounds: [f32; 4]) -> Option<f32>
     Some((own.max(other) - 0.5).floor().max(0.0))
 }
 
+/// The longest an `anchored_fit` overlay `cross_len` long may be along the cross axis inside
+/// `bounds`, or `None` when it already fits with [`MARGIN`] on both ends.
+fn cross_fit_bound(a: &Anchor, cross_len: f32, bounds: [f32; 4]) -> Option<f32> {
+    let room = match a.side {
+        Side::Top | Side::Bottom => bounds[2] - bounds[0] - 2.0 * MARGIN,
+        Side::Left | Side::Right => bounds[3] - bounds[1] - 2.0 * MARGIN,
+    };
+    let room = room.max(0.0);
+    if cross_len <= room {
+        return None;
+    }
+    Some(room.floor().max(0.0))
+}
+
+/// Clamps `style`'s width ceiling to `max_w`, lowering any definite `min_width` above `max_w` so
+/// CSS/Taffy min-over-max precedence does not let a floored surface escape its bounds.
+fn clamp_max_width(style: &mut rune_taffy::CompactStyle, max_w: f32) {
+    use taffy::util::MaybeResolve;
+    style.set_max_width(length(max_w));
+    if style.min_size().width.maybe_resolve(None, |_, _| 0.0).is_some_and(|min_w| min_w > max_w) {
+        style.set_min_width(length(max_w));
+    }
+}
+
+/// Clamps `style`'s height ceiling to `max_h`, lowering any definite `min_height` above `max_h` so
+/// CSS/Taffy min-over-max precedence does not let a floored surface escape its bounds.
+fn clamp_max_height(style: &mut rune_taffy::CompactStyle, max_h: f32) {
+    use taffy::util::MaybeResolve;
+    style.set_max_height(length(max_h));
+    if style.min_size().height.maybe_resolve(None, |_, _| 0.0).is_some_and(|min_h| min_h > max_h) {
+        style.set_min_height(length(max_h));
+    }
+}
+
 /// Resolved `(Side, Align)` of anchored overlay `i` against anchor `j` and optional boundary `b`,
 /// accounting for inherited zoom when present.
 pub(super) fn resolved_placement(
@@ -390,13 +424,14 @@ impl Measurement<'_> {
         }
     }
 
-    /// Bounds each placed `anchored_fit` overlay that fits on neither side of its anchor to the
-    /// larger room, through its style. True when any changed, so layout runs again.
+    /// Bounds each placed `anchored_fit` overlay that overflows its bounds on the main axis
+    /// (neither side of its anchor fits) or the cross axis (wider/taller than the bounds minus
+    /// margins), through its style. True when any changed, so layout runs again.
     pub(super) fn fit_anchored(&self, taffy: &mut LayoutEngine, nodes: &[Node]) -> bool {
         let mut changed = false;
         for (i, n) in nodes.iter().enumerate() {
             let Some(a) = n.above.as_ref().filter(|a| a.fit) else { continue };
-            let Some(j) = anchor_index(&nodes, i, a) else { continue };
+            let Some(j) = anchor_index(nodes, i, a) else { continue };
             let b = boundary_index(nodes, i);
             let target = sticky::anchored_target(nodes, self.scrolls, j, self.viewport);
             // It draws `k` times its layout size beside where the anchor draws.
@@ -406,13 +441,24 @@ impl Measurement<'_> {
             let zoomed;
             let a = if k == 1.0 { a } else { zoomed = zoomed_gap(a, k); &zoomed };
             let vertical = matches!(a.side, Side::Top | Side::Bottom);
-            let len = if vertical { n.local.h } else { n.local.w };
-            let Some(bound) = fit_bound(a, target, len * k, bounds) else { continue };
+            let (main_len, cross_len) = if vertical { (n.local.h, n.local.w) } else { (n.local.w, n.local.h) };
+            let main_bound = fit_bound(a, target, main_len * k, bounds);
+            let cross_bound = cross_fit_bound(a, cross_len * k, bounds);
+            if main_bound.is_none() && cross_bound.is_none() { continue; }
             let mut style = taffy.style(n.taffy).clone();
-            if vertical {
-                style.set_max_height(length(bound / k));
-            } else {
-                style.set_max_width(length(bound / k));
+            if let Some(bound) = main_bound {
+                if vertical {
+                    clamp_max_height(&mut style, bound / k);
+                } else {
+                    clamp_max_width(&mut style, bound / k);
+                }
+            }
+            if let Some(bound) = cross_bound {
+                if vertical {
+                    clamp_max_width(&mut style, bound / k);
+                } else {
+                    clamp_max_height(&mut style, bound / k);
+                }
             }
             taffy.set_style_and_mark_ancestors(
                 n.taffy,
