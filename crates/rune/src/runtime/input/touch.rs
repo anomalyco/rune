@@ -16,6 +16,11 @@ const FLING_HOLD: f64 = 0.1;
 /// A finger held still this long (seconds) opens the menu under it (Chromium's
 /// `long_press_time_in_ms`).
 const LONG_PRESS: f64 = 0.5;
+/// Fallback hold deadline (seconds) behind the browser's live `contextmenu` event under
+/// `TouchHoldPolicy::HostContextMenu`: clears Android's longest Touch & Hold accessibility delay
+/// (1500 ms + 100 ms tap timeout) while still guaranteeing a long press if a browser never sends
+/// `contextmenu` (spoofed UA, embedded WebView, or kiosk).
+const HOST_HOLD_FALLBACK: f64 = 1.7;
 
 /// A host's touch phase, as winit reports it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,8 +40,12 @@ pub(crate) enum TouchHoldPolicy {
     #[default]
     DirectTimer,
     /// When `clock >= due`, wait one low-priority host turn (`TouchHoldCommand::Confirm`) so any
-    /// queued release or move drains before confirming the hold (web host).
+    /// queued release or move drains before confirming the hold (web iOS/iPadOS, Windows, macOS).
     ConfirmingTimer,
+    /// Trust the browser's live `contextmenu` event (`HoldEvent::HostHold`) while arming a
+    /// `HOST_HOLD_FALLBACK` confirming timer behind it so a wrong platform guess still gets a
+    /// long press and no hold ever fires twice (web Android, Linux, ChromeOS).
+    HostContextMenu,
 }
 
 /// Host-side command emitted when a web touch hold enters or leaves confirmation.
@@ -82,6 +91,8 @@ pub(in crate::runtime) enum HoldEvent {
     Tick { now: f64, policy: TouchHoldPolicy },
     /// The host's low-priority confirmation turn ran for `attempt`.
     Confirm { attempt: Attempt },
+    /// The browser dispatched a live touch `contextmenu` event for the active finger.
+    HostHold,
     /// The finger moved past `TOUCH_SLOP`, lifted, or was cancelled.
     Cancel,
 }
@@ -98,20 +109,32 @@ pub(in crate::runtime) enum HoldEffect {
     Fire,
 }
 
-/// Computes the hold deadline on the runtime clock. Under `ConfirmingTimer`, subtracts
-/// `event_processing_delay = now - event_time` only when `0 < delay < LONG_PRESS`, matching
-/// Chromium's `TimeoutGestureHandler::Start` (`kCompensateGestureDetectorTimeouts` with
-/// `kCompensateGestureTimeoutsForLongDelayedSequences = false`): a malformed/future timestamp or
-/// a press delayed by `>= LONG_PRESS` arms a full `LONG_PRESS` instead of firing immediately.
+/// Hold timeout duration for `policy` (`LONG_PRESS` for direct/confirming timers,
+/// `HOST_HOLD_FALLBACK` behind the browser's live `contextmenu` under `HostContextMenu`).
+#[inline]
+pub(in crate::runtime) fn hold_duration(policy: TouchHoldPolicy) -> f64 {
+    match policy {
+        TouchHoldPolicy::DirectTimer | TouchHoldPolicy::ConfirmingTimer => LONG_PRESS,
+        TouchHoldPolicy::HostContextMenu => HOST_HOLD_FALLBACK,
+    }
+}
+
+/// Computes the hold deadline on the runtime clock. Under web policies (`ConfirmingTimer` and
+/// `HostContextMenu`), subtracts `event_processing_delay = now - event_time` only when
+/// `0 < delay < timeout`, matching Chromium's `TimeoutGestureHandler::Start`
+/// (`kCompensateGestureDetectorTimeouts` with `kCompensateGestureTimeoutsForLongDelayedSequences = false`):
+/// a malformed/future timestamp or a press delayed by `>= timeout` arms a full `timeout` instead
+/// of firing immediately.
 pub(in crate::runtime) fn compensated_hold_due(now: f64, event_time: f64, policy: TouchHoldPolicy) -> f64 {
+    let timeout = hold_duration(policy);
     if policy == TouchHoldPolicy::DirectTimer || !event_time.is_finite() {
-        return now + LONG_PRESS;
+        return now + timeout;
     }
     let delay = now - event_time;
-    if delay > 0.0 && delay < LONG_PRESS {
-        now + (LONG_PRESS - delay)
+    if delay > 0.0 && delay < timeout {
+        now + (timeout - delay)
     } else {
-        now + LONG_PRESS
+        now + timeout
     }
 }
 
@@ -135,7 +158,7 @@ pub(in crate::runtime) fn step_hold(seq: &mut Seq, state: &mut HoldState, event:
                     *state = HoldState::Fired;
                     Effects::one(HoldEffect::Fire)
                 }
-                TouchHoldPolicy::ConfirmingTimer => {
+                TouchHoldPolicy::ConfirmingTimer | TouchHoldPolicy::HostContextMenu => {
                     *state = HoldState::Confirming { attempt };
                     Effects::one(HoldEffect::ConfirmHold(attempt))
                 }
@@ -148,6 +171,17 @@ pub(in crate::runtime) fn step_hold(seq: &mut Seq, state: &mut HoldState, event:
                 Effects::one(HoldEffect::Fire)
             }
             _ => Effects::none(),
+        },
+        HoldEvent::HostHold => match *state {
+            HoldState::Armed { .. } => {
+                *state = HoldState::Fired;
+                Effects::one(HoldEffect::Fire)
+            }
+            HoldState::Confirming { .. } => {
+                *state = HoldState::Fired;
+                Effects::two(HoldEffect::CancelConfirm, HoldEffect::Fire)
+            }
+            HoldState::Idle | HoldState::Fired => Effects::none(),
         },
         HoldEvent::Cancel => {
             let cancel = matches!(*state, HoldState::Confirming { .. });
@@ -431,6 +465,22 @@ impl RuntimeCore {
             return false;
         }
         let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Confirm { attempt });
+        if self.apply_hold_effects(effects) {
+            self.commit_touch_hold(app);
+            return true;
+        }
+        false
+    }
+
+    /// Handles a browser-dispatched live touch `contextmenu` event for finger `id`. Fires the
+    /// hold once while the finger is still pending within `TOUCH_SLOP`, cancels any pending
+    /// fallback timer/confirmation, and ignores duplicate or post-lift events.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn host_touch_hold(&mut self, app: &dyn ViewDriver, id: u64) -> bool {
+        if !self.pointer.touch.finger.as_ref().is_some_and(|f| f.id == id && f.mode.hold_eligible()) {
+            return false;
+        }
+        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::HostHold);
         if self.apply_hold_effects(effects) {
             self.commit_touch_hold(app);
             return true;

@@ -393,6 +393,17 @@ pub(crate) fn start_web_runtime<S: 'static>(
     (rt, shared, compositor, spec_fonts)
 }
 
+/// Chooses the web touch hold policy from whether the browser dispatches live touch
+/// `contextmenu` while the finger is still down (Android, Linux, ChromeOS) versus deferring it
+/// to lift or omitting it (Windows, iOS/iPadOS, macOS).
+pub(crate) fn web_touch_hold_policy(live_contextmenu: bool) -> crate::runtime::TouchHoldPolicy {
+    if live_contextmenu {
+        crate::runtime::TouchHoldPolicy::HostContextMenu
+    } else {
+        crate::runtime::TouchHoldPolicy::ConfirmingTimer
+    }
+}
+
 /// Maps a browser `PointerEvent.timeStamp` (milliseconds since `timeOrigin`) onto the runtime
 /// clock (`rt_now`, seconds since `wall_start`). Clamps future timestamps to `perf_now_ms`, and
 /// falls back to `rt_now` (delivery time) when either browser reading is malformed or non-positive.

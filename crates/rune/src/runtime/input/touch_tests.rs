@@ -471,3 +471,178 @@ fn web_touch_event_time_maps_timestamps_and_falls_back_on_malformed_values() {
     assert!((web_touch_event_time(1.20, -10.0, 1700.0) - 1.20).abs() < 1e-9);
     assert!((web_touch_event_time(1.20, 1080.0, 0.0) - 1.20).abs() < 1e-9);
 }
+
+/// Pure simulation of the touch hold state machine across a sequence of clock ticks, an optional
+/// browser `contextmenu` (`HostHold`) arrival, and a finger lift, returning `(fires, fire_time,
+/// final_deadline)` so every platform-guess and timing combination is proven in a table test.
+fn simulate_hold(
+    live_contextmenu_guess: bool,
+    host_event_at: Option<f64>,
+    lift_at: f64,
+) -> (usize, Option<f64>, Option<f64>) {
+    use crate::platform::web_math::web_touch_hold_policy;
+    let policy = web_touch_hold_policy(live_contextmenu_guess);
+    let mut seq = Seq::default();
+    let mut state = HoldState::Idle;
+    let mut fires = 0usize;
+    let mut fire_time = None;
+    let mut pending_confirm: Option<(Attempt, f64)> = None;
+
+    let _ = step_hold(&mut seq, &mut state, HoldEvent::Start { now: 0.0, event_time: 0.0, policy });
+
+    // Collect ordered timestamps to visit up to `lift_at`.
+    let mut t = 0.0;
+    loop {
+        let next_due = state.deadline().filter(|&d| d <= lift_at);
+        let next_confirm = pending_confirm.map(|(_, at)| at).filter(|&at| at <= lift_at);
+        let next_host = host_event_at.filter(|&at| at >= t && at <= lift_at);
+        let next_t = [next_due, next_confirm, next_host].into_iter().flatten().min_by(f64::total_cmp);
+        let Some(now) = next_t else { break };
+        t = now;
+
+        if host_event_at == Some(now) {
+            for e in step_hold(&mut seq, &mut state, HoldEvent::HostHold) {
+                match e {
+                    HoldEffect::CancelConfirm => pending_confirm = None,
+                    HoldEffect::Fire => { fires += 1; fire_time.get_or_insert(now); }
+                    _ => {}
+                }
+            }
+        }
+        if let Some((attempt, at)) = pending_confirm && at == now {
+            pending_confirm = None;
+            for e in step_hold(&mut seq, &mut state, HoldEvent::Confirm { attempt }) {
+                if e == HoldEffect::Fire { fires += 1; fire_time.get_or_insert(now); }
+            }
+        }
+        if state.deadline().is_some_and(|d| d <= now) {
+            for e in step_hold(&mut seq, &mut state, HoldEvent::Tick { now, policy }) {
+                match e {
+                    HoldEffect::ConfirmHold(attempt) => pending_confirm = Some((attempt, now + 0.01)),
+                    HoldEffect::Fire => { fires += 1; fire_time.get_or_insert(now); }
+                    _ => {}
+                }
+            }
+        }
+        // Prevent revisiting a host event already processed at `now`.
+        if host_event_at == Some(now) {
+            t = now + 1e-6;
+        }
+    }
+
+    // Finger lifts at `lift_at`.
+    let _ = step_hold(&mut seq, &mut state, HoldEvent::Cancel);
+    // Any deferred post-lift contextmenu (e.g. Windows HandleGestureLongTap) must not fire.
+    if host_event_at.is_some_and(|at| at > lift_at) {
+        for e in step_hold(&mut seq, &mut state, HoldEvent::HostHold) {
+            if e == HoldEffect::Fire { fires += 1; }
+        }
+    }
+    (fires, fire_time, state.deadline())
+}
+
+#[test]
+fn host_contextmenu_and_fallback_table_never_double_fires_and_survives_wrong_platform_guess() {
+    // (live_guess, host_contextmenu_at, lift_at, expected_fires, expected_fire_time)
+    let cases: &[(bool, Option<f64>, f64, usize, Option<f64>)] = &[
+        // Android Short (500 ms), Linux desktop (650 ms), Android Medium (1100 ms), Android Long (1600 ms):
+        // browser contextmenu fires once at the browser's own timing; fallback never double-fires.
+        (true, Some(0.50), 2.50, 1, Some(0.50)),
+        (true, Some(0.65), 2.50, 1, Some(0.65)),
+        (true, Some(1.10), 2.50, 1, Some(1.10)),
+        (true, Some(1.60), 2.50, 1, Some(1.60)),
+        // Wrong platform guess (spoofed Android UA on Windows DevTools, embedded WebView, kiosk):
+        // contextmenu never arrives while holding -> fallback confirming timer fires once at 1.71 s.
+        (true, None, 2.50, 1, Some(HOST_HOLD_FALLBACK + 0.01)),
+        // Wrong platform guess with deferred Windows contextmenu after lift -> fallback fired once;
+        // post-lift contextmenu does not double-fire.
+        (true, Some(2.60), 2.50, 1, Some(HOST_HOLD_FALLBACK + 0.01)),
+        // Host contextmenu arrives during fallback Confirming window (1.70..1.71): cancels confirm
+        // and fires once.
+        (true, Some(HOST_HOLD_FALLBACK + 0.005), 2.50, 1, Some(HOST_HOLD_FALLBACK + 0.005)),
+        // Host contextmenu arrives after fallback already fired -> still fires exactly once.
+        (true, Some(2.00), 2.50, 1, Some(HOST_HOLD_FALLBACK + 0.01)),
+        // Short tap (80 ms) or 700 ms stall on Android without contextmenu -> zero holds fired.
+        (true, None, 0.08, 0, None),
+        (true, None, 0.70, 0, None),
+        // Non-live-hold platform (iOS Safari, Windows Chrome, macOS): 500 ms confirming timer fires once.
+        (false, None, 1.00, 1, Some(LONG_PRESS + 0.01)),
+        // Misclassified browser that DOES send live contextmenu early (0.45 s) -> fires once, never twice.
+        (false, Some(0.45), 1.00, 1, Some(0.45)),
+        // Misclassified browser whose contextmenu arrives after 500 ms timer already fired -> still once.
+        (false, Some(0.65), 1.00, 1, Some(LONG_PRESS + 0.01)),
+    ];
+    for &(guess, host_at, lift_at, want_fires, want_time) in cases {
+        let (fires, fire_time, deadline) = simulate_hold(guess, host_at, lift_at);
+        assert_eq!(fires, want_fires, "guess={guess}, host_at={host_at:?}, lift_at={lift_at}");
+        match (fire_time, want_time) {
+            (Some(got), Some(want)) => assert!((got - want).abs() < 1e-6, "got={got}, want={want} for guess={guess}, host_at={host_at:?}"),
+            (a, b) => assert_eq!(a, b, "guess={guess}, host_at={host_at:?}, lift_at={lift_at}"),
+        }
+        assert_eq!(deadline, None, "lifted finger must leave no wake scheduled");
+    }
+}
+
+#[test]
+fn host_touch_hold_fires_once_cancels_confirm_and_ignores_stale_or_duplicate_events() {
+    let mut rt = Runtime::new(HoldStateTest::default(), hold_view, (200.0, 300.0), Env::default());
+    rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+    rt.core_mut().set_touch_hold_policy(TouchHoldPolicy::HostContextMenu);
+    rt.frame(0.0);
+
+    // 1. Android/Linux live contextmenu at 0.65 s fires on_secondary_press once and clears fallback wake.
+    rt.touch(1, TouchPhase::Started, 100.0, 30.0, 0.0);
+    assert_eq!(rt.wake_deadline(), Some(HOST_HOLD_FALLBACK));
+    rt.frame.test_clock_mut().unwrap().seek(0.65);
+    rt.frame(0.65);
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 0));
+    let fired = {
+        let (core, app) = rt.split_mut();
+        core.host_touch_hold(&app, 1)
+    };
+    assert!(fired);
+    rt.frame(0.0);
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 1));
+    assert!(rt.core().touch_in_menu());
+    assert_eq!(rt.wake_deadline(), None, "host hold clears fallback wake");
+
+    // Advancing past HOST_HOLD_FALLBACK or receiving a duplicate host hold must never double-fire.
+    rt.frame.test_clock_mut().unwrap().seek(2.0);
+    rt.frame(1.35);
+    assert_eq!(rt.core_mut().take_touch_hold_command(), None);
+    let fired_again = {
+        let (core, app) = rt.split_mut();
+        core.host_touch_hold(&app, 1)
+    };
+    assert!(!fired_again);
+    rt.touch(1, TouchPhase::Ended, 100.0, 30.0, 2.0);
+    rt.frame(0.0);
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 1));
+
+    // 2. Wrong platform guess: no contextmenu arrives -> fallback enters Confirming at 1.7 s and fires once.
+    rt.frame.test_clock_mut().unwrap().seek(3.0);
+    rt.touch(2, TouchPhase::Started, 100.0, 30.0, 3.0);
+    assert_eq!(rt.wake_deadline(), Some(3.0 + HOST_HOLD_FALLBACK));
+    rt.frame.test_clock_mut().unwrap().seek(3.0 + HOST_HOLD_FALLBACK);
+    rt.frame(HOST_HOLD_FALLBACK);
+    let Some(TouchHoldCommand::Confirm(attempt)) = rt.core_mut().take_touch_hold_command() else {
+        panic!("expected fallback ConfirmHold");
+    };
+    // If contextmenu arrives right during Confirming, it cancels confirm and fires once.
+    let fired_mid = {
+        let (core, app) = rt.split_mut();
+        core.host_touch_hold(&app, 2)
+    };
+    assert!(fired_mid);
+    assert_eq!(rt.core_mut().take_touch_hold_command(), Some(TouchHoldCommand::Cancel));
+    let stale_confirm = {
+        let (core, app) = rt.split_mut();
+        core.confirm_touch_hold(&app, attempt)
+    };
+    assert!(!stale_confirm);
+    rt.frame(0.0);
+    assert_eq!((rt.state.taps, rt.state.secondary), (0, 2));
+    rt.touch(2, TouchPhase::Ended, 100.0, 30.0, 5.0);
+    rt.frame(0.0);
+    assert_eq!(rt.wake_deadline(), None);
+}

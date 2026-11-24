@@ -170,6 +170,10 @@ impl dyn WebApp + '_ {
         self.driver(|rt, app| rt.confirm_touch_hold(app, attempt))
     }
 
+    pub(super) fn host_touch_hold(&mut self, id: u64) -> bool {
+        self.driver(|rt, app| rt.host_touch_hold(app, id))
+    }
+
     pub(super) fn web_focus_field(&mut self) -> bool {
         self.driver(|rt, app| rt.web_focus_field(app))
     }
