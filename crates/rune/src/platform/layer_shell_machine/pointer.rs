@@ -138,10 +138,11 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
 
     // Negate Wayland signs: positive Wayland axis moves the viewport down/right, while Rune
     // (matching winit) uses positive deltas to move content down/right.
-    let (raw_dx, raw_dy, precise, notch) = if has_value120 {
+    let (raw_dx, raw_dy, raw_ticks, precise, notch) = if has_value120 {
         (
             -(h.value120 as f32) * (WHEEL_LINE_POINTS / 120.0),
             -(v.value120 as f32) * (WHEEL_LINE_POINTS / 120.0),
+            Some(-(v.value120 as f32) / 120.0),
             false,
             h.value120 % 120 == 0 && v.value120 % 120 == 0,
         )
@@ -149,6 +150,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
         (
             -(h.discrete as f32) * WHEEL_LINE_POINTS,
             -(v.discrete as f32) * WHEEL_LINE_POINTS,
+            Some(-(v.discrete as f32)),
             false,
             true,
         )
@@ -157,7 +159,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
             Some(AxisSource::Finger | AxisSource::Continuous) => FINGER_POINTS_PER_AXIS_UNIT,
             _ => 1.0,
         };
-        ((-h.absolute * gain) as f32, (-v.absolute * gain) as f32, true, false)
+        ((-h.absolute * gain) as f32, (-v.absolute * gain) as f32, None, true, false)
     };
 
     let moved = raw_dx != 0.0 || raw_dy != 0.0;
@@ -187,15 +189,18 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
     };
 
     let clean = |v: f32| if v == 0.0 { 0.0 } else { v };
-    let (dx, dy) = if mods.shift && !mods.ctrl && raw_dx == 0.0 {
+    let shift_turn = mods.shift && !mods.ctrl && raw_dx == 0.0;
+    let (dx, dy) = if shift_turn {
         (clean(raw_dy), 0.0)
     } else {
         (clean(raw_dx), clean(raw_dy))
     };
+    let ticks = if shift_turn { None } else { raw_ticks.map(clean) };
 
     Effects::one(Effect::Wheel(WheelInput {
         dx,
         dy,
+        ticks,
         mods,
         phase,
         precise,

@@ -1,0 +1,1 @@
+- Input: Ctrl + line-delta mouse wheel now zooms `on_magnify` by `1.2^ticks - 1` (+20% per forward notch, -1/6 per backward notch), matching Chromium's zoom step and ignoring the OS scroll-lines setting, instead of scaling by `dy / 200`; pixel-precise Ctrl + wheel deltas keep `dy / 200`.

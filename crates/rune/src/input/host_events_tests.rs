@@ -859,3 +859,51 @@ fn web_primary_up_activates_only_when_release_focuses_an_editable_field() {
         assert!(!web_mouse_activate(action).should_activate(rt.core()));
     }
 }
+
+#[test]
+fn ctrl_wheel_line_delta_uses_chrome_notch_step_and_keeps_pixel_delta_scale() {
+    #[derive(Default)]
+    struct S { pinches: Vec<crate::MagnifyEvent> }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        el().size(200.0, 200.0).hit()
+            .on_magnify(|s: &mut S, ev, _| { s.pinches.push(ev); true })
+    }
+    let mut rt = Runtime::new(S::default(), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(50.0, 50.0);
+
+    // One forward notch zooms in by Chrome's 1.2x step (+0.2), independent of OS scroll lines.
+    wheel(rt.core_mut(), MouseScrollDelta::LineDelta(0.0, 1.0), GesturePhase::Moved, 1.0, ModifiersState::CONTROL);
+    // One backward notch zooms out by 1/1.2x (-1/6) so forward + backward round-trips cleanly.
+    wheel(rt.core_mut(), MouseScrollDelta::LineDelta(0.0, -1.0), GesturePhase::Moved, 1.0, ModifiersState::CONTROL);
+    // Pixel-precise Ctrl+wheel keeps dy / 200.0 (at scale 2.0, physical 40 -> 20 pt -> 0.1).
+    wheel(rt.core_mut(), MouseScrollDelta::PixelDelta(PhysicalPosition::new(0.0, 40.0)), GesturePhase::Moved, 2.0, ModifiersState::CONTROL);
+    // Horizontal line-delta wheel does not pinch.
+    wheel(rt.core_mut(), MouseScrollDelta::LineDelta(1.0, 0.0), GesturePhase::Moved, 1.0, ModifiersState::CONTROL);
+    // Line-delta Ctrl+wheel is independent of scroll-line pixel distance (e.g. WHEEL_PAGESCROLL or 0 lines).
+    let ctrl = crate::Mods { ctrl: true, ..crate::Mods::default() };
+    assert_eq!(
+        wheel_core(rt.core_mut(), WheelInput { dx: 0.0, dy: 700.0, ticks: Some(1.0), mods: ctrl, phase: GesturePhase::Moved, precise: false, notch: true, pinch: true }),
+        WheelOutcome::Pinched,
+    );
+    assert_eq!(
+        wheel_core(rt.core_mut(), WheelInput { dx: 0.0, dy: 0.0, ticks: Some(1.0), mods: ctrl, phase: GesturePhase::Moved, precise: false, notch: true, pinch: true }),
+        WheelOutcome::Pinched,
+    );
+    rt.frame(0.0);
+
+    assert_eq!(rt.state.pinches.len(), 5);
+    let (fwd, back, px, page, zero_lines) = (
+        rt.state.pinches[0],
+        rt.state.pinches[1],
+        rt.state.pinches[2],
+        rt.state.pinches[3],
+        rt.state.pinches[4],
+    );
+    assert!(fwd.wheel && back.wheel && px.wheel && page.wheel && zero_lines.wheel);
+    assert!((fwd.delta - 0.2).abs() < 1e-5, "forward notch delta should be +0.2, got {}", fwd.delta);
+    assert!(((1.0 + fwd.delta) * (1.0 + back.delta) - 1.0).abs() < 1e-5, "forward + backward must round-trip: fwd={}, back={}", fwd.delta, back.delta);
+    assert!((px.delta - 0.1).abs() < 1e-5, "PixelDelta keeps dy / 200.0, got {}", px.delta);
+    assert!((page.delta - 0.2).abs() < 1e-5, "page-scroll dy does not inflate Ctrl+wheel zoom, got {}", page.delta);
+    assert!((zero_lines.delta - 0.2).abs() < 1e-5, "zero scroll lines still zooms by 1.2x per tick, got {}", zero_lines.delta);
+}
