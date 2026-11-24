@@ -1,7 +1,7 @@
 //! The platform's spell checker for text fields that ask for it (`El::spellcheck`): Windows'
 //! spell checking API (`ISpellChecker`), AppKit's `NSSpellChecker` on macOS, installed system
-//! Hunspell dictionaries on Linux (`linux.rs`), and Hunspell dictionaries a page fetches in a
-//! browser (`web.rs`), none elsewhere.
+//! Hunspell dictionaries on Linux (`linux.rs`, default-on `hunspell` feature), and Hunspell
+//! dictionaries a page fetches in a browser (`web.rs`, `hunspell` feature), none elsewhere.
 //! A field's misspelled words get a red marker under them and their suggestions in its menu.
 //!
 //! Where the platform checks one language at a time (Windows, Linux, web), an app picks the
@@ -16,22 +16,26 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(any(target_os = "linux", target_arch = "wasm32", test))]
+#[cfg(any(test, all(any(target_os = "linux", target_arch = "wasm32"), feature = "hunspell")))]
 mod hunspell;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(test, all(target_os = "linux", feature = "hunspell")))]
 mod linux;
 #[doc(hidden)]
 pub mod pause;
 #[cfg(target_os = "macos")]
 #[path = "macos.rs"]
 mod platform;
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", feature = "hunspell"))]
 #[path = "web.rs"]
 mod platform;
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
 mod platform;
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux", target_arch = "wasm32")))]
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(any(target_os = "linux", target_arch = "wasm32"), feature = "hunspell"),
+)))]
 mod platform {
     pub(super) const OFF_THREAD: bool = false;
     pub(super) fn misspelled(_: &str) -> Vec<(usize, usize)> { Vec::new() }
@@ -43,7 +47,7 @@ mod platform {
     pub(super) fn name_in(_: &str, _: &str) -> Option<String> { None }
     pub(super) fn sort_in<T>(_: &mut [(String, T)], _: &str) -> bool { false }
 }
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", feature = "hunspell"))]
 use linux as platform;
 
 /// The most suggestions a field's menu offers, as Chromium's.
@@ -90,8 +94,15 @@ pub fn languages() -> Vec<String> {
 /// `spell/<tag>.dic` (`en-US`): each is fetched the first time a field checks text in it.
 #[cfg(target_arch = "wasm32")]
 pub fn set_web_dictionaries(tags: &[&str]) {
-    platform::set_tags(tags.iter().map(|t| (*t).to_owned()).collect());
-    GENERATION.fetch_add(1, Ordering::Relaxed);
+    #[cfg(feature = "hunspell")]
+    {
+        platform::set_tags(tags.iter().map(|t| (*t).to_owned()).collect());
+        GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+    #[cfg(not(feature = "hunspell"))]
+    {
+        let _ = tags;
+    }
 }
 
 /// Check with these dictionaries. None, or none the platform has, follows the system languages.
@@ -199,7 +210,7 @@ fn resolve_languages(available: &[String], chosen: &[String], preferred: &[Strin
 
 /// Filters loaded dictionaries to only those in `active`, so deselected web dictionaries stop
 /// being consulted without needing to unload them.
-#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+#[cfg_attr(not(any(test, all(target_arch = "wasm32", feature = "hunspell"))), allow(dead_code))]
 pub(crate) fn active_dicts<'a, T>(loaded: &'a [(String, T)], active: &[String]) -> Vec<&'a T> {
     loaded
         .iter()
@@ -262,11 +273,18 @@ pub fn misspelled(text: &str, wake: Option<&std::sync::Arc<rune_core::live::Wake
         // macOS finds each text's language from the text, so it checks the whole of it.
         // A page fetches its dictionaries the first time it checks: until they're in, nothing is
         // marked and nothing kept, and the window asking is woken when they arrive.
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(all(target_arch = "wasm32", feature = "hunspell"))]
         let ready = platform::prepare(wake);
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(all(target_arch = "wasm32", feature = "hunspell")))]
         let ready = true;
-        let (found, whole) = if cfg!(any(target_os = "windows", target_os = "linux", target_arch = "wasm32")) { by_words(text, wake) } else { (platform::misspelled(text), true) };
+        let (found, whole) = if cfg!(any(
+            target_os = "windows",
+            all(any(target_os = "linux", target_arch = "wasm32"), feature = "hunspell"),
+        )) {
+            by_words(text, wake)
+        } else {
+            (platform::misspelled(text), true)
+        };
         let whole = whole && ready;
         let found = Rc::new(found);
         // A text with words still on the checker thread is put together again when they're back.

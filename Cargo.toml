@@ -195,7 +195,7 @@ rune-mermaid = { path = "crates/rune-mermaid" }
 rune-motion = { path = "crates/rune-motion" }
 rune-notify = { path = "crates/rune-notify" }
 rune-ref = { path = "crates/rune-ref" }
-rune-spell = { path = "crates/rune-spell" }
+rune-spell = { path = "crates/rune-spell", default-features = false }
 rune-staging = { path = "crates/rune-staging" }
 rune-taffy = { path = "crates/rune-taffy" }
 rune-text = { path = "crates/rune-text", default-features = false }

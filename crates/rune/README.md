@@ -1905,8 +1905,11 @@ submenu in the field menu.
 
 - **Windows**: uses the system `ISpellChecker` API off the UI thread.
 - **macOS**: uses AppKit's `NSSpellChecker`, which detects each text's language automatically.
-- **Linux**: uses installed system Hunspell dictionaries (`<tag>.aff` and `<tag>.dic`) via
-  `spellbook` off the UI thread. Dictionaries are discovered in priority order from `DICPATH`,
+- **Linux**: enabled by default via the `hunspell` Cargo feature (`rune/hunspell`,
+  `rune-spell/hunspell`); uses installed system Hunspell dictionaries (`<tag>.aff` and
+  `<tag>.dic`) via `spellbook` (MPL-2.0) off the UI thread. Disable `hunspell` (or build with
+  `default-features = false`) to omit `spellbook` on Linux and fall back to a no-op. Dictionaries
+  are discovered in priority order from `DICPATH`,
   `$XDG_DATA_HOME/hunspell` (or `~/.local/share/hunspell`), `$XDG_DATA_DIRS/*/hunspell`,
   `/usr/local/share/hunspell`, `/usr/share/hunspell`, `/usr/share/myspell/dicts`, and
   `/usr/share/myspell`, with default languages resolved from POSIX locale variables
