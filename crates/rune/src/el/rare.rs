@@ -45,6 +45,8 @@ pub(crate) struct ElCold {
     pub(crate) virtual_rows: Option<Rc<crate::el::virtual_rows::RowSource>>,
     /// [`El::virtual_rows_version`](crate::El::virtual_rows_version), hashed.
     pub(crate) virtual_rows_version: Option<u64>,
+    /// [`El::virtual_rows_append_only`](crate::El::virtual_rows_append_only).
+    pub(crate) virtual_rows_append_only: bool,
     /// The memo this element was expanded from (`El::expand_memo`) to mount virtual rows.
     pub(crate) expanded_memo: Option<Rc<crate::memo::Built>>,
     pub(crate) glide: Option<crate::growth::FoldGlide>,
@@ -68,6 +70,8 @@ pub(crate) struct ElCold {
     pub(crate) scroll_source: Option<&'static std::panic::Location<'static>>,
     #[cfg(debug_assertions)]
     pub(crate) virtual_source: Option<&'static std::panic::Location<'static>>,
+    #[cfg(debug_assertions)]
+    pub(crate) virtual_append_source: Option<&'static std::panic::Location<'static>>,
 }
 
 impl Empty for ElCold {
@@ -97,6 +101,7 @@ impl Empty for ElCold {
         virtual_estimate: None,
         virtual_rows: None,
         virtual_rows_version: None,
+        virtual_rows_append_only: false,
         expanded_memo: None,
         glide: None,
         input: None,
@@ -113,6 +118,8 @@ impl Empty for ElCold {
         scroll_source: None,
         #[cfg(debug_assertions)]
         virtual_source: None,
+        #[cfg(debug_assertions)]
+        virtual_append_source: None,
     };
 }
 

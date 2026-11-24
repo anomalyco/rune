@@ -43,6 +43,24 @@ impl Places {
         places
     }
 
+    fn reserve(&mut self, additional: usize) {
+        self.by_hash.reserve(additional);
+    }
+
+    /// Inserts `key` at index `i`, assuming `key` is not already present in `keys[..i]`.
+    fn insert(&mut self, keys: &[String], key: &str, i: usize) {
+        match self.by_hash.entry(Self::hash(key)) {
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(i);
+            }
+            std::collections::hash_map::Entry::Occupied(e) => {
+                debug_assert_ne!(keys[*e.get()], key, "virtual row keys must be unique");
+                let prev = self.collided.insert(key.to_owned(), i);
+                debug_assert!(prev.is_none(), "virtual row keys must be unique");
+            }
+        }
+    }
+
     /// Where `key` is in `keys` (those `self` was made of).
     fn get(&self, keys: &[String], key: &str) -> Option<usize> {
         match self.by_hash.get(&Self::hash(key)) {
@@ -121,6 +139,13 @@ pub(crate) struct VirtualList {
     pub mounted: Option<Mounted>,
     /// What the last pass that built the rows read building them.
     pub row_reads: crate::memo::Reads,
+    /// Debug-only: this list took the `virtual_rows_append_only` fast path since its last full
+    /// rekey, so newly mounted old rows check their key against `RowSource::key`.
+    #[cfg(debug_assertions)]
+    pub append_only_fast: bool,
+    /// Debug-only: call site of `El::virtual_rows_append_only`.
+    #[cfg(debug_assertions)]
+    pub append_source: Option<&'static std::panic::Location<'static>>,
 }
 
 /// The rows a virtual list mounted and the padding standing in for the rest.
@@ -309,7 +334,158 @@ impl VirtualList {
         self.row_heights = heights;
         self.sums_stale.set(true);
         self.reported_visible = None;
+        #[cfg(debug_assertions)]
+        { self.append_only_fast = false; }
         anchor
+    }
+
+    /// Attempts the `El::virtual_rows_append_only` fast path when `count > self.keys.len()` and
+    /// `self.keys` is non-empty: checks the existing prefix with [`Self::mismatch_before_append`]
+    /// (warning once in debug builds on a broken promise), reads only `self.keys.len()..count`,
+    /// and delegates to [`Self::append_keys`]. Returns `None` to fall back to the full path.
+    pub(crate) fn try_append_rows<'a>(
+        &mut self,
+        path: &str,
+        count: usize,
+        commit: u64,
+        offset: Option<f32>,
+        mut key_at: impl FnMut(usize) -> std::borrow::Cow<'a, str>,
+    ) -> Option<Option<(String, f32)>> {
+        if self.keys.is_empty() || count <= self.keys.len() {
+            return None;
+        }
+        if let Some((i, got)) = self.mismatch_before_append(&mut key_at) {
+            #[cfg(debug_assertions)]
+            crate::tooling::perf_warn::virtual_rows_append_broken(path, self.append_source, i, &self.keys[i], &got);
+            let _ = (path, i, got);
+            return None;
+        }
+        let new = (self.keys.len()..count).map(|i| key_at(i).into_owned()).collect();
+        self.append_keys(new, commit, offset)
+    }
+
+    /// Checks whether the existing rows still match `key_at` before taking the append-only fast
+    /// path. Always probes the start, midpoint and end of `self.keys` (at most 3 calls, O(1));
+    /// debug builds also check the currently mounted window (`self.range`). Returns the first
+    /// mismatched `(index, actual_key)`, or `None` when every checked row matches.
+    pub(crate) fn mismatch_before_append<'a>(
+        &self,
+        mut key_at: impl FnMut(usize) -> std::borrow::Cow<'a, str>,
+    ) -> Option<(usize, String)> {
+        let len = self.keys.len();
+        if len == 0 {
+            return None;
+        }
+        let mut prev = usize::MAX;
+        for i in [0, len / 2, len - 1] {
+            if i == prev { continue; }
+            prev = i;
+            let got = key_at(i);
+            if got.as_ref() != self.keys[i] {
+                return Some((i, got.into_owned()));
+            }
+        }
+        #[cfg(debug_assertions)]
+        {
+            let start = self.range.start.min(len);
+            let end = self.range.end.min(len);
+            for i in start..end {
+                if i == 0 || i == len / 2 || i == len - 1 { continue; }
+                let got = key_at(i);
+                if got.as_ref() != self.keys[i] {
+                    return Some((i, got.into_owned()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Appends `new` rows after the current ones in O(`new.len()`), keeping every existing row's
+    /// index, measured height and birth commit. Returns `None`, changing nothing, when any new
+    /// key duplicates an existing row or another new key (the caller then falls back to
+    /// [`Self::set_keys`]). Otherwise returns `Some(anchor)`, matching [`Self::set_keys`].
+    pub fn append_keys(
+        &mut self,
+        new: Vec<String>,
+        commit: u64,
+        offset: Option<f32>,
+    ) -> Option<Option<(String, f32)>> {
+        if new.is_empty() {
+            return Some(
+                offset
+                    .and_then(|o| self.first_visible(o, |_| true))
+                    .filter(|(_, top)| offset.is_some_and(|o| *top < o + self.viewport)),
+            );
+        }
+        if new.len() == 1 {
+            if self.index_of(&new[0]).is_some() {
+                return None;
+            }
+        } else {
+            let mut seen = HashSet::with_capacity_and_hasher(new.len(), Default::default());
+            for k in &new {
+                if self.index_of(k).is_some() || !seen.insert(k.as_str()) {
+                    return None;
+                }
+            }
+        }
+        let anchor = offset
+            .and_then(|o| self.first_visible(o, |_| true))
+            .filter(|(_, top)| offset.is_some_and(|o| *top < o + self.viewport));
+        let sums_fresh =
+            !self.sums_stale.get() && self.sums.borrow().len() == self.row_heights.len() + 1;
+        let added = new.len();
+        self.places.reserve(added);
+        self.keys.reserve(added);
+        self.measured.reserve(added);
+        self.born.reserve(added);
+        self.row_heights.reserve(added);
+        if sums_fresh {
+            let mut sums = self.sums.borrow_mut();
+            sums.reserve(added);
+            let mut y = sums.last().copied().unwrap_or(0.0);
+            for _ in 0..added {
+                y += self.estimate + self.gap;
+                sums.push(y);
+            }
+        } else {
+            self.sums_stale.set(true);
+        }
+        for key in new {
+            let index = self.keys.len();
+            self.places.insert(&self.keys, &key, index);
+            self.keys.push(key);
+            self.measured.push(None);
+            self.born.push(commit);
+            self.row_heights.push(self.estimate);
+        }
+        self.keys_fresh = true;
+        self.held = offset.map_or(true, |_| anchor.is_some());
+        self.reported_visible = None;
+        #[cfg(debug_assertions)]
+        { self.append_only_fast = true; }
+        Some(anchor)
+    }
+
+    /// Debug-only: warns once if a newly mounted existing row's key no longer matches what the
+    /// list recorded before an `El::virtual_rows_append_only` fast path.
+    #[cfg(debug_assertions)]
+    pub(crate) fn check_append_row_key<'a>(
+        &self,
+        path: &str,
+        i: usize,
+        commit: u64,
+        key_at: impl FnOnce(usize) -> std::borrow::Cow<'a, str>,
+    ) {
+        if !self.append_only_fast || self.born[i] >= commit || self.shown.contains(&self.keys[i]) {
+            return;
+        }
+        let actual = key_at(i);
+        if actual.as_ref() != self.keys[i] {
+            crate::tooling::perf_warn::virtual_rows_append_broken(
+                path, self.append_source, i, &self.keys[i], actual.as_ref(),
+            );
+        }
     }
 
     /// The list's own scroll offset, and whether its window is pinned to its end, for its
@@ -687,5 +863,39 @@ mod tests {
         v.set_estimate(105.0);
         // r26 was at 2500 (20*95 + 6*100); now at index 25 with 20*105 + 5*100 = 2600 -> delta +100.
         assert_eq!(v.anchor_delta(), 100.0);
+    }
+
+    #[test]
+    fn append_keys_matches_set_keys_prefix_sums_and_heights() {
+        let mut fast = VirtualList::default();
+        let mut full = VirtualList::default();
+        for v in [&mut fast, &mut full] {
+            v.viewport = 80.0;
+            v.set_estimate(20.0);
+            v.set_gap(5.0);
+            v.set_keys((0..10).map(|i| format!("r{i}")).collect(), 0, None);
+            v.set_height("r2", 35.0);
+            v.set_height("r7", 12.0);
+            let _ = v.prefix(10); // warm sums before appending
+        }
+        // Duplicate against existing or within new returns None and mutates nothing.
+        assert_eq!(fast.append_keys(vec!["r2".into()], 1, Some(50.0)), None);
+        assert_eq!(fast.append_keys(vec!["r10".into(), "r10".into()], 1, Some(50.0)), None);
+        assert_eq!(fast.keys.len(), 10);
+
+        let fast_anchor = fast.append_keys((10..15).map(|i| format!("r{i}")).collect(), 1, Some(50.0)).expect("unique");
+        let full_anchor = full.set_keys((0..15).map(|i| format!("r{i}")).collect(), 1, Some(50.0));
+        assert_eq!(fast_anchor, full_anchor);
+        assert_eq!(fast.keys, full.keys);
+        assert_eq!(fast.max_offset(), full.max_offset());
+        for i in 0..=15 {
+            assert_eq!(fast.prefix(i), full.prefix(i), "prefix({i})");
+            assert_eq!(fast.row_end(i), full.row_end(i), "row_end({i})");
+        }
+        for i in 0..15 {
+            let k = format!("r{i}");
+            assert_eq!(fast.index_of(&k), Some(i));
+            assert_eq!(fast.height(&k), full.height(&k));
+        }
     }
 }

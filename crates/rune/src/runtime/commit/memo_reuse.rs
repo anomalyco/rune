@@ -219,12 +219,14 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
         focus, looping, trace_name, trace_namespace, role, label, live, above, motion, opacity_motion, lead,
         animated_changes, option_as_alt, transition, matched, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
-        virtual_rows_version, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, wheel_scrolls, on_path,
+        virtual_rows_version, virtual_rows_append_only, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, wheel_scrolls, on_path,
         expanded_memo: _,
         #[cfg(debug_assertions)]
         scroll_source: _,
         #[cfg(debug_assertions)]
         virtual_source: _,
+        #[cfg(debug_assertions)]
+        virtual_append_source: _,
     } = b;
     crate::cold::Cold::ptr_eq(&a.focus, focus)
         && opt_box_eq(&a.looping, looping)
@@ -250,6 +252,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.virtual_estimate == *virtual_estimate
         && opt_rc_eq(&a.virtual_rows, virtual_rows)
         && a.virtual_rows_version == *virtual_rows_version
+        && a.virtual_rows_append_only == *virtual_rows_append_only
         && a.glide == *glide
         && a.input.is_none()
         && input.is_none()

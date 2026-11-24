@@ -179,6 +179,24 @@ pub(crate) fn reveal_selected_on_virtual_rows(path: &str, site: Option<&std::pan
     ));
 }
 
+/// A `virtual_rows_append_only` list at `path`, set up at `site`, changed an existing row's key
+/// at `index` from `expected` to `actual` without bumping `virtual_rows_version`.
+#[cfg(debug_assertions)]
+pub(crate) fn virtual_rows_append_broken(
+    path: &str,
+    site: Option<&std::panic::Location>,
+    index: usize,
+    expected: &str,
+    actual: &str,
+) {
+    let site = site.map_or_else(String::new, |s| format!(" (.virtual_rows_append_only at {s})"));
+    warn_once(format!("append-only {path}"), || format!(
+        "append-only virtual list {path:?}{site} changed row {index} from {expected:?} to \
+         {actual:?}: bump `.virtual_rows_version(..)` on non-append changes, or remove \
+         `.virtual_rows_append_only()`"
+    ));
+}
+
 /// `memo(id, ..)`, called at `site`, built a root already keyed `existing` and renamed it `id`.
 #[cfg(debug_assertions)]
 pub(crate) fn memo_key_replaced(id: &str, existing: &str, site: &std::panic::Location) {

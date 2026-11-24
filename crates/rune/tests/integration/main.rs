@@ -99,4 +99,5 @@ mod sticky_showing;
 mod text_case;
 mod theme_blend;
 mod tx_blur;
+mod virtual_rows_append;
 mod window_panel_compat;
