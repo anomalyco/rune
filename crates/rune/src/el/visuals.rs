@@ -343,6 +343,50 @@ impl El {
         self.vis.set_press(c);
         self
     }
+    /// Replacement fill colour while hovered, like CSS `:hover { background-color }`.
+    /// `Color::TRANSPARENT` is a real override; active fill gradients fade out as it applies.
+    /// ```
+    /// use rune::{Color, el};
+    /// let b = el().fill(Color::TRANSPARENT).hover_fill(Color::WHITE.alpha(0.12));
+    /// # let _ = b;
+    /// ```
+    pub fn hover_fill(mut self, c: Color) -> Self {
+        self.vis.cold_mut().hover_fill = Some(c);
+        self
+    }
+    /// Replacement fill colour while pressed, like CSS `:active { background-color }`.
+    /// Overrides [`Self::hover_fill`] while held; `Color::TRANSPARENT` is a real override.
+    /// ```
+    /// use rune::{Color, el};
+    /// let b = el().fill(Color::BLACK).press_fill(Color::WHITE.alpha(0.2));
+    /// # let _ = b;
+    /// ```
+    pub fn press_fill(mut self, c: Color) -> Self {
+        self.vis.cold_mut().press_fill = Some(c);
+        self
+    }
+    /// Replacement border colour while hovered, like CSS `:hover { border-color }`.
+    /// Applies when the element has a non-zero border width; `Color::TRANSPARENT` hides it.
+    /// ```
+    /// use rune::{Color, el};
+    /// let b = el().border(1.0, Color::BLACK).hover_border(Color::WHITE);
+    /// # let _ = b;
+    /// ```
+    pub fn hover_border(mut self, c: Color) -> Self {
+        self.vis.cold_mut().hover_border = Some(c);
+        self
+    }
+    /// Replacement border colour while pressed, like CSS `:active { border-color }`.
+    /// Overrides [`Self::hover_border`] while held; `Color::TRANSPARENT` hides it.
+    /// ```
+    /// use rune::{Color, el};
+    /// let b = el().border(1.0, Color::BLACK).press_border(Color::WHITE);
+    /// # let _ = b;
+    /// ```
+    pub fn press_border(mut self, c: Color) -> Self {
+        self.vis.cold_mut().press_border = Some(c);
+        self
+    }
     /// Shrink to `scale` about the centre while a press on this element is held, as iOS tiles
     /// and buttons do (0.96 to 0.97), springing back on release or when the pointer leaves
     /// (override the down/up curves with [`Self::press_motion`]).
@@ -523,8 +567,9 @@ impl El {
         self.vis.cold_mut().hover_motion = Some(Rc::new((enter.into(), exit.into())));
         self
     }
-    /// Curves for this element's press tracks ([`Self::press`], [`Self::press_color`] and
-    /// [`Self::press_scale`]): `down` while a press is held and `up` on release or leave.
+    /// Curves for this element's press tracks ([`Self::press`], [`Self::press_fill`],
+    /// [`Self::press_border`], [`Self::press_color`] and [`Self::press_scale`]): `down` while
+    /// a press is held and `up` on release or leave.
     ///
     /// When unset, press highlights and colour use `tok::motion::INSTANT` down / `SNAPPY` up,
     /// and `press_scale` uses `INSTANT` down / `POP` up. Under Reduce Motion, `press_scale`

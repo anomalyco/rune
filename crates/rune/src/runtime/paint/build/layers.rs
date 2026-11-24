@@ -56,7 +56,7 @@ impl paint_state::PaintState {
             let i = self.layer_paint_order.get(index).copied().unwrap_or(index);
             let n = &tree.nodes[i];
             let inherited_group = n.parent.map_or(0.0, |p| self.inh_scratch[p].group);
-            self.inh_scratch[i].group = if n.vis.hover().a > 0.0 || n.vis_flags.hover_group() {
+            self.inh_scratch[i].group = if n.vis.tracks_hover_paint() || n.vis_flags.hover_group() {
                 scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
             } else { inherited_group };
             let Some(parent) = n.parent.filter(|&p| tree.nodes[p].vis_flags.blend() == crate::render::Blend::PlusLighter) else { continue };

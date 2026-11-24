@@ -76,6 +76,48 @@ pub(in crate::runtime) fn press_tint(c: Color, to: Option<Color>, pressed: f32) 
     }
 }
 
+/// Premultiplied linear interpolation between `a` and `b`, matching CSS transitions so
+/// `Color::TRANSPARENT` fades cleanly without dark fringing.
+fn lerp_premul(a: Color, b: Color, t: f32) -> Color {
+    if t <= 0.0 { return a; }
+    if t >= 1.0 { return b; }
+    let pa = a.premul(1.0);
+    let pb = b.premul(1.0);
+    let r = pa[0] + (pb[0] - pa[0]) * t;
+    let g = pa[1] + (pb[1] - pa[1]) * t;
+    let bl = pa[2] + (pb[2] - pa[2]) * t;
+    let al = pa[3] + (pb[3] - pa[3]) * t;
+    if al <= 1e-6 {
+        Color::TRANSPARENT
+    } else {
+        Color { r: r / al, g: g / al, b: bl / al, a: al }
+    }
+}
+
+/// Resolves a rest fill or border colour through optional declarative hover and press
+/// replacements (hover first, then press so press wins). Returns `(color, replacement_weight)`
+/// where `replacement_weight` is in `0.0..=1.0` for suppressing active fill gradients.
+#[inline]
+pub(in crate::runtime) fn replace_color(
+    rest: Color,
+    hover: Option<Color>,
+    hov_v: f32,
+    press: Option<Color>,
+    prs_v: f32,
+) -> (Color, f32) {
+    let mut c = rest;
+    let mut w = 0.0f32;
+    if let Some(h) = hover && hov_v > 0.0 {
+        c = lerp_premul(c, h, hov_v);
+        w = hov_v;
+    }
+    if let Some(p) = press && prs_v > 0.0 {
+        c = lerp_premul(c, p, prs_v);
+        w = w + (1.0 - w) * prs_v;
+    }
+    (c, w)
+}
+
 /// Which of a node's colours a live value owns. A commit leaves those tracks to the latch.
 #[derive(Clone, Copy, Default)]
 pub(in crate::runtime) struct LiveColors {

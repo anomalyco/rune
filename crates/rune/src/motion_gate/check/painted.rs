@@ -85,7 +85,7 @@ pub fn painted(rec: &Recording, loops: &HashSet<usize>) -> Vec<(usize, Finding)>
             // A hover or press highlight landing, even on content that slid under a still pointer:
             // a fill, or text in its hovered group's colour (`El::group_color`).
             let pointer = |a: usize, b: usize| {
-                matches!(ch.name, "fill" | "text-color") && (a.max(1)..=b).any(|j| at[j].zip(at[j - 1]).is_some_and(|((_, p), (_, q))| p.pointer != q.pointer))
+                matches!(ch.name, "fill" | "border" | "gradient" | "text-color") && (a.max(1)..=b).any(|j| at[j].zip(at[j - 1]).is_some_and(|((_, p), (_, q))| p.pointer != q.pointer))
             };
             for e in series::events(&vals, &tune, &w) {
                 let k = e.k;

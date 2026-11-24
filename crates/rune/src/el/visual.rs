@@ -107,6 +107,14 @@ pub struct VisualCold {
     pub(crate) row_face: Option<&'static str>,
     /// `El::press_color`: its text and icons' colour while a press on it is held.
     pub(crate) press_color: Option<Color>,
+    /// `El::hover_fill`: replacement fill colour while hovered.
+    pub(crate) hover_fill: Option<Color>,
+    /// `El::press_fill`: replacement fill colour while pressed.
+    pub(crate) press_fill: Option<Color>,
+    /// `El::hover_border`: replacement border colour while hovered.
+    pub(crate) hover_border: Option<Color>,
+    /// `El::press_border`: replacement border colour while pressed.
+    pub(crate) press_border: Option<Color>,
     /// `El::paint_contained`: the origin (window points) its children snap against.
     pub(crate) paint_contain: Option<[f32; 2]>,
     /// `El::motion_snaps`: while it moves, it and its subtree snap every frame.
@@ -180,6 +188,10 @@ impl Empty for VisualCold {
         hold_landing: false,
         row_face: None,
         press_color: None,
+        hover_fill: None,
+        press_fill: None,
+        hover_border: None,
+        press_border: None,
         paint_contain: None,
         motion_snaps: false,
         hairline: false,
@@ -374,8 +386,18 @@ impl VisualFlags {
 }
 
 impl Visual {
-    /// Whether a press on it shows (an `El::press` overlay or an `El::press_color`).
+    /// Whether hover on this element paints a fill or border state of its own
+    /// (`El::hover`, `El::hover_fill`, or `El::hover_border`).
+    #[inline]
+    pub(crate) fn tracks_hover_paint(&self) -> bool {
+        self.hover().a > 0.0
+            || self.cold.get().is_some_and(|c| c.hover_fill.is_some() || c.hover_border.is_some())
+    }
+
+    /// Whether a press on it shows (`El::press`, `El::press_color`, `El::press_fill`, or `El::press_border`).
+    #[inline]
     pub(crate) fn tracks_press(&self) -> bool {
-        self.press().a > 0.0 || self.cold.get().is_some_and(|c| c.press_color.is_some())
+        self.press().a > 0.0
+            || self.cold.get().is_some_and(|c| c.press_color.is_some() || c.press_fill.is_some() || c.press_border.is_some())
     }
 }

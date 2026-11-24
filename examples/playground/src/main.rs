@@ -16,6 +16,8 @@ mod pick;
 use std::time::Duration;
 
 use rune::tok::{self, Theme, motion, radius, type_};
+mod hover_press;
+
 use rune::{Align, App, AppSpec, Color, Cx, El, ElementInfo, Family, OverlaySpec, Play, Playground, ScreenEdge, ScrollSpec, Stage, Story, TextStyle, Tx, col, el, row, text};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -647,6 +649,14 @@ fn main() {
                         .trigger('e', "Fail", |s, _| { s.message = "Sync failed, retrying"; s.failed = true; })
                         .variant("Synced", |_| {})
                         .variant("Failed", |s| { s.message = "Sync failed, retrying"; s.failed = true; }),
+                )
+                .story(
+                    Story::new("Controls/Buttons/Hover & press", hover_press::HoverPressDemo::default, hover_press::view)
+                        .trigger('p', "Toggle popup cover", |s, _| s.popup_open = !s.popup_open)
+                        .trigger('t', "Toggle hover_passes_below", |s, _| s.pass_through = !s.pass_through)
+                        .variant("Closed", |_| {})
+                        .variant("Popup blocking", |s| { s.popup_open = true; s.pass_through = false; })
+                        .variant("Pass-through cover", |s| { s.popup_open = true; s.pass_through = true; }),
                 )
                 .story(
                     Story::new("Controls/Switches/Toggle", || Switch { on: true, dimmed: false, label: "Sync across devices" }, switch_story)

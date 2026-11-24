@@ -480,3 +480,242 @@ fn press_motion_change_on_memo_root_is_not_reused_as_stale() {
     rt.frame(1.0 / 120.0);
     assert!(rt.scene.get(id, P_PRESS).unwrap_or(0.0) < 1e-4, "updated press_motion took effect on memo root");
 }
+
+#[test]
+fn hit_only_cover_blocks_on_hover_and_focus_highlight_until_removed_or_pass_through() {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Cover { Off, HitOnly, PassThrough, DismissWithMenu, PanelWithChild }
+    struct S {
+        cover: Cover,
+        hovers: Vec<&'static str>,
+        dismiss_presses: u32,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let row0 = crate::row().key("row-0").size(200.0, 40.0)
+            .hover_fill(Color::WHITE.alpha(0.2))
+            .hover_motion(Anim::INSTANT, Anim::INSTANT)
+            .focusable(true).label("row-0")
+            .focus_highlight(Color::WHITE.alpha(0.3))
+            .on_hover(|s: &mut S| s.hovers.push("row-0"))
+            .on_press(|_: &mut S| {})
+            .child(el().key("badge").absolute(140.0, 5.0).size(30.0, 30.0).hit());
+        let row1 = crate::row().key("row-1").size(200.0, 40.0)
+            .hover_fill(Color::WHITE.alpha(0.2))
+            .hover_motion(Anim::INSTANT, Anim::INSTANT)
+            .focusable(true).label("row-1")
+            .focus_highlight(Color::WHITE.alpha(0.3))
+            .on_hover(|s: &mut S| s.hovers.push("row-1"))
+            .on_press(|_: &mut S| {});
+        let mut root = col().key("root").size(240.0, 120.0)
+            .child(row0)
+            .child(row1);
+        match s.cover {
+            Cover::Off => {}
+            Cover::HitOnly => {
+                root = root.child(el().key("cover").absolute(0.0, 0.0).size(120.0, 40.0).hit());
+            }
+            Cover::PassThrough => {
+                root = root.child(el().key("cover").absolute(0.0, 0.0).size(120.0, 40.0).hit().hover_passes_below());
+            }
+            Cover::DismissWithMenu => {
+                root = root
+                    .child(el().key("scrim").absolute(0.0, 0.0).size(240.0, 120.0)
+                        .hover_passes_below()
+                        .on_press(|s: &mut S| s.dismiss_presses += 1))
+                    .child(el().key("menu").absolute(60.0, 0.0).size(60.0, 40.0).hit());
+            }
+            Cover::PanelWithChild => {
+                root = root.child(
+                    col().key("panel").absolute(0.0, 0.0).size(120.0, 40.0).hit()
+                        .child(el().key("panel-item").absolute(60.0, 0.0).size(60.0, 40.0)
+                            .focusable(true).label("panel-item").focus_highlight(Color::WHITE.alpha(0.3))
+                            .on_hover(|s: &mut S| s.hovers.push("panel-item"))
+                            .on_press(|_: &mut S| {})),
+                );
+            }
+        }
+        root
+    }
+    let lit = |rt: &Runtime<S>, key: &str| {
+        let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some(key)).unwrap().id;
+        rt.scene.store().target(id, P_HOVER).unwrap_or(0.0)
+    };
+    let focus_key = |rt: &Runtime<S>| {
+        rt.kbd.focus.path().and_then(|p| p.rsplit('/').next()).map(str::to_owned)
+    };
+
+    let mut rt = Runtime::new(S { cover: Cover::Off, hovers: Vec::new(), dismiss_presses: 0 }, view, (240.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Over row-0 with no cover: on_hover, focus_highlight, and hover_fill all activate.
+    rt.pointer_move(30.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state.hovers, vec!["row-0"]);
+    assert_eq!(focus_key(&rt).as_deref(), Some("row-0"));
+    assert!(rt.kbd.focus.hovered());
+    assert_eq!(lit(&rt, "row-0"), 1.0);
+
+    // A .hit()-only child inside row-0 keeps row-0 hovered.
+    rt.pointer_move(155.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(focus_key(&rt).as_deref(), Some("row-0"));
+    assert_eq!(lit(&rt, "row-0"), 1.0);
+
+    // Open a .hit()-only overlying sibling covering (0..120, 0..40): row-0's hover & focus_highlight clear.
+    rt.pointer_move(30.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    rt.state.hovers.clear();
+    rt.update(|s, _| s.cover = Cover::HitOnly);
+    rt.frame(1.0 / 120.0);
+    rt.frame(1.0 / 120.0);
+    assert!(rt.state.hovers.is_empty(), "blocked row must not re-fire on_hover: {:?}", rt.state.hovers);
+    assert!(!rt.kbd.focus.hovered(), "hit-only cover clears focus_highlight on row underneath");
+    assert_eq!(lit(&rt, "row-0"), 0.0, "hit-only cover blocks hover_fill underneath");
+
+    // Moving inside the cover never leaks on_hover or focus_highlight to row-0.
+    rt.pointer_move(80.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    assert!(rt.state.hovers.is_empty());
+    assert!(!rt.kbd.focus.hovered());
+    assert_eq!(lit(&rt, "row-0"), 0.0);
+
+    // Uncovered row-1 still hovers normally.
+    rt.pointer_move(30.0, 60.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state.hovers, vec!["row-1"]);
+    assert_eq!(focus_key(&rt).as_deref(), Some("row-1"));
+    assert!(rt.kbd.focus.hovered());
+
+    // Moving back onto the cover over row-0 drops row-1 and does not hover row-0.
+    rt.state.hovers.clear();
+    rt.pointer_move(30.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    assert!(rt.state.hovers.is_empty());
+    assert!(!rt.kbd.focus.hovered());
+
+    // Removing the cover under a still pointer restores row-0's on_hover, focus_highlight, and hover_fill.
+    rt.update(|s, _| s.cover = Cover::Off);
+    rt.frame(1.0 / 120.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state.hovers, vec!["row-0"]);
+    assert_eq!(focus_key(&rt).as_deref(), Some("row-0"));
+    assert!(rt.kbd.focus.hovered());
+    assert_eq!(lit(&rt, "row-0"), 1.0);
+
+    // Marking the .hit() cover with hover_passes_below restores hover through it.
+    rt.update(|s, _| s.cover = Cover::HitOnly);
+    rt.frame(1.0 / 120.0);
+    rt.frame(1.0 / 120.0);
+    assert!(!rt.kbd.focus.hovered());
+    rt.state.hovers.clear();
+    rt.update(|s, _| s.cover = Cover::PassThrough);
+    rt.frame(1.0 / 120.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state.hovers, vec!["row-0"]);
+    assert_eq!(focus_key(&rt).as_deref(), Some("row-0"));
+    assert!(rt.kbd.focus.hovered());
+    assert_eq!(lit(&rt, "row-0"), 1.0);
+
+    // A pressable dismiss scrim with hover_passes_below passes on_hover & focus_highlight through,
+    // while still taking its press and letting a .hit() menu above it block row-0.
+    rt.update(|s, _| s.cover = Cover::DismissWithMenu);
+    rt.frame(1.0 / 120.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(focus_key(&rt).as_deref(), Some("row-0"));
+    assert!(rt.kbd.focus.hovered());
+    assert_eq!(lit(&rt, "row-0"), 1.0);
+    rt.pointer_down(30.0, 20.0);
+    rt.pointer_up(30.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state.dismiss_presses, 1, "dismiss scrim still takes presses");
+    rt.state.hovers.clear();
+    rt.pointer_move(80.0, 20.0); // over the .hit() menu above the scrim
+    rt.frame(1.0 / 120.0);
+    assert!(rt.state.hovers.is_empty());
+    assert!(!rt.kbd.focus.hovered(), "menu above scrim blocks focus_highlight underneath");
+    assert_eq!(lit(&rt, "row-0"), 0.0);
+
+    // A .hit() panel blocks row-0 in its padding, while its own item still gets on_hover and focus_highlight.
+    rt.pointer_move(20.0, 20.0); // panel padding over row-0
+    rt.update(|s, _| s.cover = Cover::PanelWithChild);
+    rt.frame(1.0 / 120.0);
+    rt.state.hovers.clear();
+    rt.pointer_move(25.0, 20.0); // still in panel padding over row-0
+    rt.frame(1.0 / 120.0);
+    assert!(rt.state.hovers.is_empty());
+    assert!(!rt.kbd.focus.hovered());
+    rt.pointer_move(80.0, 20.0); // panel-item inside panel
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.state.hovers, vec!["panel-item"]);
+    assert_eq!(focus_key(&rt).as_deref(), Some("panel-item"));
+    assert!(rt.kbd.focus.hovered());
+}
+
+#[test]
+fn hover_and_press_replacements_drive_tracks_groups_motion_and_memo_without_commits() {
+    struct S { variant: u8, inert: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let c_h = if s.variant == 0 { Color::WHITE } else { Color::BLACK };
+        let base = crate::memo("btn", 0u32, || {
+            el().size(100.0, 40.0)
+                .fill(Color::BLACK)
+                .border(1.0, Color::BLACK)
+                .press_motion(rune_motion::Curve::linear(0.2), rune_motion::Curve::linear(0.4))
+                .on_press_tx(|_: &mut S, tx| tx.live_only())
+                .child(el().key("dot").size(8.0, 8.0).fill(Color::WHITE).group_opacity(0.0, 1.0))
+        })
+        .hover_fill(c_h)
+        .press_fill(c_h.alpha(0.5))
+        .hover_border(c_h)
+        .press_border(c_h.alpha(0.5));
+        let btn = if s.inert { base.inert() } else { base };
+        col().size(200.0, 100.0).child(btn)
+    }
+    let mut rt = Runtime::new(S { variant: 0, inert: false }, view, (200.0, 100.0), Env::new(true, 1.0));
+    rt.check_live_only(false);
+    rt.frame(0.0);
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("btn")).unwrap().id;
+    let commits = rt.stats.commits;
+
+    // Hover activates P_HOVER and descendant group_opacity with zero commits.
+    rt.pointer_move(50.0, 20.0);
+    rt.frame(1.0 / 120.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.scene.get(id, P_HOVER), Some(1.0));
+    let dot_op = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("dot")).unwrap().opacity;
+    assert_eq!(dot_op, 1.0, "hover_fill/hover_border element acts as hover group owner");
+
+    // Press uses press_motion (0.2s down, 0.4s up) with zero commits.
+    rt.pointer_down(50.0, 20.0);
+    rt.frame(0.0);
+    rt.frame(0.1);
+    let mid = rt.scene.get(id, P_PRESS).unwrap_or(0.0);
+    assert!((mid - 0.5).abs() < 0.08, "press_fill/press_border follow press_motion down midpoint, got {mid}");
+    rt.frame(0.15);
+    assert!((rt.scene.get(id, P_PRESS).unwrap_or(0.0) - 1.0).abs() < 1e-4);
+    rt.pointer_up(50.0, 20.0);
+    rt.frame(0.0);
+    rt.frame(0.2);
+    let up_mid = rt.scene.get(id, P_PRESS).unwrap_or(0.0);
+    assert!((up_mid - 0.5).abs() < 0.08, "press_fill/press_border follow press_motion up midpoint, got {up_mid}");
+    rt.frame(0.25);
+    assert!(rt.scene.get(id, P_PRESS).unwrap_or(0.0) < 1e-4);
+    assert_eq!(rt.stats.commits, commits, "hover/press replacement colours never commit");
+
+    // Memo equality: changing replacement colours on a memo root updates the node's visual fields.
+    rt.update(|s, _| s.variant = 1);
+    rt.frame(0.0);
+    let n = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("btn")).unwrap();
+    assert_eq!(n.vis.hover_fill, Some(Color::BLACK));
+    assert_eq!(n.vis.press_fill, Some(Color::BLACK.alpha(0.5)));
+    assert_eq!(n.vis.hover_border, Some(Color::BLACK));
+    assert_eq!(n.vis.press_border, Some(Color::BLACK.alpha(0.5)));
+
+    // Inert element does not track hover or press replacements.
+    rt.update(|s, _| s.inert = true);
+    rt.frame(1.0 / 120.0);
+    rt.pointer_down(50.0, 20.0);
+    rt.frame(0.2);
+    assert_eq!(rt.scene.store().target(id, P_HOVER).unwrap_or(0.0), 0.0);
+    assert_eq!(rt.scene.store().target(id, P_PRESS).unwrap_or(0.0), 0.0);
+}

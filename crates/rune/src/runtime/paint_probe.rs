@@ -16,15 +16,32 @@ impl RuntimeCore {
             let mut over_c = |c: Color, k: f32| {
                 if k > 0.0 && c.a > 0.0 { overlay = unpremul(over(c.premul(k), overlay.premul(1.0))); }
             };
-            if v.hover().a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C) {
-                pointer[0] = self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0);
-                over_c(self.color(n.id, P_HOVER_C, v.hover()), pointer[0]);
+            let focus_flat = n.focus.flat_within && self.focus_within(i);
+            let hov_v = if !focus_flat && (v.tracks_hover_paint() || self.scene.store().is_animating(n.id, P_HOVER_C)) {
+                self.scene.get(n.id, P_HOVER).unwrap_or(0.0).clamp(0.0, 1.0)
+            } else { 0.0 };
+            let prs_v = if v.tracks_press() || self.scene.store().is_animating(n.id, P_PRESS_C) {
+                self.scene.get(n.id, P_PRESS).unwrap_or(0.0).clamp(0.0, 1.0)
+            } else { 0.0 };
+            if v.tracks_hover_paint() || self.scene.store().is_animating(n.id, P_HOVER_C) {
+                pointer[0] = hov_v;
+                if v.hover().a > 0.0 || self.scene.store().is_animating(n.id, P_HOVER_C) {
+                    over_c(self.color(n.id, P_HOVER_C, v.hover()), hov_v);
+                }
             }
-            if v.press().a > 0.0 || self.scene.store().is_animating(n.id, P_PRESS_C) {
-                pointer[1] = self.scene.get(n.id, P_PRESS).unwrap_or(0.0).clamp(0.0, 1.0);
-                over_c(self.color(n.id, P_PRESS_C, v.press()), pointer[1]);
+            if v.tracks_press() || self.scene.store().is_animating(n.id, P_PRESS_C) {
+                pointer[1] = prs_v;
+                if v.press().a > 0.0 || self.scene.store().is_animating(n.id, P_PRESS_C) {
+                    over_c(self.color(n.id, P_PRESS_C, v.press()), prs_v);
+                }
             }
-            let base = self.color(n.id, P_FILL, v.fill);
+            let (base, fill_replace_w) = paint_tracks::replace_color(
+                self.color(n.id, P_FILL, v.fill),
+                if focus_flat { None } else { v.hover_fill },
+                hov_v,
+                v.press_fill,
+                prs_v,
+            );
             let fill = unpremul(over(overlay.premul(1.0), base.premul(1.0)));
             // Static fades, as they show: its own `dim` and the layer opacity of it and every
             // element it sits in.
@@ -33,7 +50,15 @@ impl RuntimeCore {
             let mut colors = [Color::TRANSPARENT; 6];
             colors[C_FILL] = fill.alpha(fill.a * k);
             if v.border_width() > 0.0 {
-                let bc = n.focus.border.filter(|_| self.focus_ring_visible(i)).unwrap_or_else(|| self.color(n.id, P_BORDER, v.border()));
+                let bc = n.focus.border.filter(|_| self.focus_ring_visible(i)).unwrap_or_else(|| {
+                    paint_tracks::replace_color(
+                        self.color(n.id, P_BORDER, v.border()),
+                        if focus_flat { None } else { v.hover_border },
+                        hov_v,
+                        v.press_border,
+                        prs_v,
+                    ).0
+                });
                 colors[C_BORDER] = bc.alpha_times(k);
             }
             // As it paints: a hovered group's `El::group_color` mixes in.
@@ -51,14 +76,15 @@ impl RuntimeCore {
                 colors[C_SHADOW] = self.color(n.id, P_SHADOWS[0], sh.color).alpha_times(k);
                 sizes[S_SHADOW] = at.blur + at.spread.abs() + at.x.abs().max(at.y.abs());
             }
+            let gk = k * (1.0 - fill_replace_w).clamp(0.0, 1.0);
             let mut gradient_end = Color::TRANSPARENT;
             if let Some(g) = &v.gradient {
-                colors[C_GRADIENT] = self.color(n.id, P_GRADIENT[0], g[0]).alpha_times(k);
-                gradient_end = self.color(n.id, P_GRADIENT[1], g[1]).alpha_times(k);
+                colors[C_GRADIENT] = self.color(n.id, P_GRADIENT[0], g[0]).alpha_times(gk);
+                gradient_end = self.color(n.id, P_GRADIENT[1], g[1]).alpha_times(gk);
             } else if let Some(g) = &v.radial && let (Some(first), Some(last)) = (g.stops.first(), g.stops.last()) {
-                colors[C_GRADIENT] = self.color(n.id, P_RADIAL[0], first.1).alpha_times(k);
+                colors[C_GRADIENT] = self.color(n.id, P_RADIAL[0], first.1).alpha_times(gk);
                 let end = (g.stops.len() - 1).min(P_RADIAL.len() - 1);
-                gradient_end = if g.stops.len() - 1 < P_RADIAL.len() { self.color(n.id, P_RADIAL[end], last.1) } else { last.1 }.alpha_times(k);
+                gradient_end = if g.stops.len() - 1 < P_RADIAL.len() { self.color(n.id, P_RADIAL[end], last.1) } else { last.1 }.alpha_times(gk);
             }
             if let Some(o) = v.outline.filter(|o| o.width > 0.0) { colors[C_OUTLINE] = self.color(n.id, P_OUTLINE, o.color); }
             let intent = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).fold(0u16, |bits, j| bits | self.tree.nodes[j].vis.motion_intent.bits());
