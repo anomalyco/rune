@@ -61,8 +61,11 @@ impl Host {
         // Windows maximizes it once cloaked: maximizing shows a window.
         #[cfg(not(target_os = "windows"))]
         {
-            attrs = attrs.with_maximized(open_as.maximizes());
-            if open_as.full_screens() { attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
+            let panel = cfg!(target_os = "macos") && self.macos_window.nonactivating_panel;
+            if !panel {
+                attrs = attrs.with_maximized(open_as.maximizes());
+                if open_as.full_screens() { attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
+            }
         }
         let chrome = frame_chrome(self.chrome, self.titlebar, self.app.rt().titlebar_set());
         #[cfg(target_os = "macos")]

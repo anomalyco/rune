@@ -66,3 +66,35 @@ fn kvo_observed_drag_regions_in_both_orders() {
         let _: () = msg_send![&*above, removeObserver: &*observer, forKeyPath: &*key];
     }
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn is_panel_object_distinguishes_nspanel_from_nswindow() {
+    use objc2::ClassType;
+    use objc2_app_kit::{NSPanel, NSWindow};
+    let win_class = ClassBuilder::new(c"RunePanelCheckWindow", NSWindow::class()).unwrap().register();
+    let panel_class = ClassBuilder::new(c"RunePanelCheckPanel", NSPanel::class()).unwrap().register();
+    // SAFETY: `alloc` sets the `isa` pointer on registered ObjC classes without opening a window,
+    // and `isKindOfClass:` only inspects the class hierarchy.
+    unsafe {
+        let win: *mut AnyObject = msg_send![win_class, alloc];
+        let panel: *mut AnyObject = msg_send![panel_class, alloc];
+        assert!(!is_panel_object(&*win), "ordinary NSWindow must not read as an NSPanel");
+        assert!(is_panel_object(&*panel), "adopted NSPanel subclass must read as an NSPanel");
+    }
+}
+
+#[test]
+fn double_click_action_ignores_panels_under_every_system_setting() {
+    for setting in [Some("Minimize"), Some("Maximize"), Some("None"), None] {
+        assert_eq!(
+            double_click_action(setting, true),
+            DoubleClickAction::None,
+            "adopted panel must ignore titlebar double-click for AppleActionOnDoubleClick={setting:?}",
+        );
+    }
+    assert_eq!(double_click_action(Some("Minimize"), false), DoubleClickAction::Minimize);
+    assert_eq!(double_click_action(Some("Maximize"), false), DoubleClickAction::Zoom);
+    assert_eq!(double_click_action(Some("None"), false), DoubleClickAction::None);
+    assert_eq!(double_click_action(None, false), DoubleClickAction::Zoom);
+}

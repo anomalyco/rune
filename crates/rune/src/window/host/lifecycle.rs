@@ -69,7 +69,7 @@ impl Host {
     /// The window as a reveal finds it.
     fn found(&self) -> Found {
         let Some(w) = &self.win else { return Found::Missing };
-        let minimized = w.window.is_minimized() == Some(true);
+        let minimized = w.is_minimized_native();
         match self.life {
             Life::Shown { sight } => Found::Shown { covered: sight.covered(), minimized },
             _ => Found::Hidden { minimized },
@@ -109,7 +109,7 @@ impl Host {
                     if focus && self.started && let Some(w) = self.shown_win() { w.focus(); }
                 }
                 RevealEffect::OrderIn { focus } => if let Some(w) = &mut self.win { w.show(focus) },
-                RevealEffect::Unminimize => if let Some(w) = &self.win { w.window.set_minimized(false) },
+                RevealEffect::Unminimize => if let Some(w) = &self.win && !w.is_panel() { w.window.set_minimized(false) },
                 RevealEffect::Settle => {
                     if !built { self.app.rt_mut().settle_all(); }
                     self.idle = true;
@@ -185,7 +185,7 @@ impl Host {
 
     pub(in crate::window) fn focus(&self, event_loop: &ActiveEventLoop) {
         let Some(w) = self.shown_win() else { return };
-        if w.window.is_minimized() == Some(true) { w.window.set_minimized(false); }
+        if w.is_minimized_native() { w.window.set_minimized(false); }
         if is_wayland(event_loop) {
             w.window.request_user_attention(Some(winit::window::UserAttentionType::Informational));
             return;
@@ -311,10 +311,10 @@ impl Host {
     pub(in crate::window) fn shell(&mut self, event_loop: &ActiveEventLoop) {
         self.show_title();
         if self.app.rt_mut().take_toggle_maximized() && let Some(w) = self.shown_win() {
-            chrome::toggle_maximized(&w.window);
+            w.toggle_maximized();
         }
         if self.app.rt_mut().take_toggle_full_screen() && let Some(w) = self.shown_win() {
-            chrome::toggle_full_screen(&w.window);
+            w.toggle_full_screen();
         }
         if let Some(menu) = self.app.rt_mut().take_window_menu() && let Some(w) = self.shown_win() {
             chrome::window_menu(&w.window, menu, None);

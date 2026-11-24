@@ -682,8 +682,9 @@ impl El {
         self
     }
     /// Pressing this element moves the window (or a window-backed overlay; pair with `.hit()`
-    /// under `OverlayInput::Regions`), and on ordinary windows a double press zooms or minimises
-    /// it as the system's titlebar setting says. Hit targets inside it keep their presses.
+    /// under `OverlayInput::Regions`), and on ordinary non-panel windows a double press zooms or
+    /// minimises it as the system's titlebar setting says (overlays and macOS non-activating
+    /// panels ignore the double press). Hit targets inside it keep their presses.
     pub fn window_drag(mut self) -> Self {
         self.flags.set_window_drag(WindowDrag::Drag);
         self

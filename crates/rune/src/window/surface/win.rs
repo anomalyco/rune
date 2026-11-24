@@ -479,14 +479,57 @@ impl Win {
         self.window.focus_window();
     }
 
-    /// Starts an interactive OS window move from the current press event.
-    pub(in crate::window) fn drag_window(&self) {
+    /// Whether this window is backed by an adopted macOS `NSPanel`.
+    pub(in crate::window) fn is_panel(&self) -> bool {
         #[cfg(target_os = "macos")]
-        if let Some(panel) = &self.native.panel {
-            panel.drag_window();
-            return;
+        return self.native.panel.is_some();
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+
+    /// Whether the native window is currently minimized. Adopted macOS panels never minimize,
+    /// avoiding a `isMiniaturized` query on winit's hidden source `NSWindow`.
+    pub(in crate::window) fn is_minimized_native(&self) -> bool {
+        !self.is_panel() && self.window.is_minimized() == Some(true)
+    }
+
+    /// Whether the native window is currently maximized. Adopted macOS panels never maximize,
+    /// avoiding winit's borderless `is_zoomed` style-mask mutation on the hidden source `NSWindow`.
+    #[cfg(target_os = "windows")]
+    pub(in crate::window) fn is_maximized(&self) -> bool {
+        !self.is_panel() && self.window.is_maximized()
+    }
+
+    /// Carries out a titlebar action (`Drag` or `DoubleClick`) on the window's live native
+    /// target. Adopted macOS panels drag the `NSPanel` directly and ignore `DoubleClick` so
+    /// neither `miniaturize:` nor `zoom:` (nor winit's borderless `setStyleMask:` / frame
+    /// fallback) can reach winit's hidden source `NSWindow`.
+    pub(in crate::window) fn titlebar_action(&self, action: crate::runtime::TitlebarAction) {
+        match crate::window::chrome::titlebar_target(action, self.is_panel()) {
+            crate::window::chrome::TitlebarTarget::DragPanel => {
+                #[cfg(target_os = "macos")]
+                if let Some(panel) = &self.native.panel { panel.drag_window(); }
+            }
+            crate::window::chrome::TitlebarTarget::DragWindow => {
+                self.window.drag_window().ok();
+            }
+            crate::window::chrome::TitlebarTarget::DoubleClickWindow => {
+                crate::window::chrome::titlebar_double_click(&self.window);
+            }
+            crate::window::chrome::TitlebarTarget::Ignore => {}
         }
-        self.window.drag_window().ok();
+    }
+
+    /// Maximizes or restores this window. Adopted macOS panels ignore it.
+    pub(in crate::window) fn toggle_maximized(&self) {
+        if self.is_panel() { return; }
+        crate::window::chrome::toggle_maximized(&self.window);
+    }
+
+    /// Takes this window full screen or brings it back. Adopted macOS panels ignore it.
+    pub(in crate::window) fn toggle_full_screen(&self) {
+        if self.is_panel() { return; }
+        crate::window::chrome::toggle_full_screen(&self.window);
     }
 }
 

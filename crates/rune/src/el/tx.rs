@@ -434,7 +434,8 @@ impl Tx {
     }
 
     /// Maximize this window after this handler, or restore it when it is maximized, as its
-    /// maximize button would (macOS zooms). Does nothing for overlays and headless runs.
+    /// maximize button would (macOS zooms). Does nothing for overlays, macOS non-activating
+    /// panels, and headless runs.
     pub fn toggle_maximized(&mut self) {
         self.toggle_maximized = true;
     }
@@ -442,7 +443,7 @@ impl Tx {
     /// Take this window full screen after this handler, or bring it back, as macOS's green
     /// button and Electron's `setFullScreen` do: on Windows and Linux a borderless window over
     /// its display, which hides a custom titlebar's caption buttons (`Cx::chrome_insets`).
-    /// Does nothing for overlays and headless runs.
+    /// Does nothing for overlays, macOS non-activating panels, and headless runs.
     pub fn toggle_full_screen(&mut self) {
         self.toggle_full_screen = true;
     }
