@@ -684,13 +684,29 @@ impl El {
 }
 
 impl El {
-    /// Paint the latest text in this element's fixed layout box. `text("00:00")` reserves
-    /// that placeholder's size; explicit `.size(w, h)` also works. Updates never resize the
-    /// box or reflow siblings, and overflow is clipped. Plain single-line text only.
+    /// Paint the latest text in this element's fixed layout box without rebuilding the view or
+    /// reflowing siblings. `text("00:00")` reserves that placeholder's size; explicit
+    /// `.size(w, h)` also works, and overflow is clipped.
+    ///
+    /// Plain single-line text (including [`El::truncate_fade`]) shapes one line directly.
+    /// [`El::wrap`], [`El::truncate`] (and `truncate_middle` / `truncate_head`), and
+    /// [`El::max_lines`] re-wrap or re-elide inside the existing box width. Where plain string
+    /// replacement cannot apply (a text editor, non-text element, [`El::spans`], [`El::reveal`],
+    /// [`El::secure`], links, pills, or byte-indexed text decorations), the binding is ignored
+    /// and the element keeps its authored text without panicking.
+    ///
+    /// ```no_run
+    /// # use rune::{LiveText, text};
+    /// let caption = LiveText::new("Starting...");
+    /// let el = text("Placeholder").size(160.0, 40.0).max_lines(2).live_text(&caption);
+    /// caption.set("Live caption that wraps and elides inside the box");
+    /// ```
     pub fn live_text(mut self, value: &crate::LiveText) -> Self {
-        assert!(self.cold.input.is_none(), "live_text cannot bind a text editor");
-        let spec = self.text.as_mut().expect("live_text requires a text element");
-        spec.cold.live = Some(value.clone());
+        if self.cold.input.is_none()
+            && let Some(spec) = &mut self.text
+        {
+            spec.cold.live = Some(value.clone());
+        }
         self
     }
     #[inline]

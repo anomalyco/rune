@@ -253,7 +253,7 @@ impl RuntimeCore {
         fn intent(n: &Node) -> u32 {
             n.live.iter().filter(|b| b.enter.is_none()).fold(0, |bits, b| bits | match b.property {
                 crate::live::Property::Offset => 1,
-                crate::live::Property::Scale | crate::live::Property::Rect => 1 | 2,
+                crate::live::Property::Scale | crate::live::Property::Rotation | crate::live::Property::Rect => 1 | 2,
                 crate::live::Property::Opacity => 4,
                 _ => 0,
             })

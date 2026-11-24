@@ -210,6 +210,19 @@ impl TextSystem {
         self.layout_keyed(spec.shape_key, spec.content, spec.spans, spec.blocks, spec.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, spec.pretty, if spec.redacted { Keep::Secret } else { Keep::Cached }, spec.base())
     }
 
+    /// Like [`Self::layout_for_spec`], keeping the layout only on the caller so live text
+    /// ticks never retain entries in the commit cache.
+    #[doc(hidden)]
+    pub fn layout_live_spec(
+        &mut self,
+        spec: &TextInput<'_>,
+        scale: f32,
+        max_width: Option<f32>,
+        align: Alignment,
+    ) -> Rc<Layout<Ink>> {
+        self.layout_keyed(None, spec.content, spec.spans, spec.blocks, spec.pills, spec.style, scale, max_width, align, spec.wrap_anywhere, spec.pretty, Keep::Owned, spec.base())
+    }
+
     /// [`Self::layout_blocks_inner`] of a cut of `spec`'s content, in its direction.
     #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
@@ -224,6 +237,22 @@ impl TextSystem {
         cache: bool,
     ) -> Rc<Layout<Ink>> {
         self.layout_keyed(None, text, spans, spec.blocks, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, if cache { Keep::Cached } else { Keep::Secret }, spec.base())
+    }
+
+    /// Like [`Self::layout_cut`] for live text: reuses the shaping context without inserting
+    /// into the shared layout cache.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn layout_cut_live(
+        &mut self,
+        spec: &TextInput<'_>,
+        text: &str,
+        spans: &[Span],
+        scale: f32,
+        max_width: Option<f32>,
+        align: Alignment,
+    ) -> Rc<Layout<Ink>> {
+        self.layout_keyed(None, text, spans, spec.blocks, &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Owned, spec.base())
     }
 }
 

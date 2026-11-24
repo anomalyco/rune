@@ -346,11 +346,22 @@ fn build_relayout_spans(
 /// Lays `n`'s text out again at the width it was laid out at.
 pub(in crate::runtime) fn lay_out_text_in_place(text: &mut TextSystem, n: &mut Node, scale: f32) {
     let w = (n.local.w - n.inset[0] - n.inset[2]).max(0.0);
-    lay_out_text(text, n, w, scale);
+    lay_out_text_inner(text, n, w, scale, false);
+}
+
+/// Lays a wrapped, truncated, or line-clamped `live_text` node out at its existing content
+/// width without inserting per-tick layouts or elisions into the shared commit caches.
+pub(in crate::runtime) fn lay_out_live_text_in_place(text: &mut TextSystem, n: &mut Node, scale: f32) {
+    let w = (n.local.w - n.inset[0] - n.inset[2]).max(0.0);
+    lay_out_text_inner(text, n, w, scale, true);
 }
 
 /// Lays `n`'s text out at its content width `w`.
 pub(in crate::runtime) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f32, scale: f32) {
+    lay_out_text_inner(text, n, w, scale, false);
+}
+
+fn lay_out_text_inner(text: &mut TextSystem, n: &mut Node, w: f32, scale: f32, live: bool) {
     let Some(spec) = &n.text else { return };
     // A cell of a run draws from the run's layout (and keeps it cached) instead of its own.
     let run = spec.cold.advance_in.as_ref().map(|(run, at)| (text.run_layout(run, spec.style, scale), *at));
@@ -362,13 +373,17 @@ pub(in crate::runtime) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f
     let wrap = spec.wrap.then_some(w * scale + super::text_layout::FIT_SLACK);
     // A by-paragraph field keeps what its last layout (still on it) shares with this one.
     let is_input = n.input.is_some();
-    let mut layout = match text.layout_text(&spec.as_text_input(scale, is_input), is_input, scale, wrap, line_alignment(spec), n.text_layout.as_ref()) {
-        TextLayout::Single(l) => l,
-        TextLayout::Paragraphs(mut p) => {
-            text.prepare_highlights(&mut p, &spec.cold.highlights);
-            n.text_layout = Some(TextLayout::Paragraphs(p));
-            n.elided = None;
-            return;
+    let mut layout = if live {
+        text.layout_live_spec(&spec.as_text_input(scale, false), scale, wrap, line_alignment(spec))
+    } else {
+        match text.layout_text(&spec.as_text_input(scale, is_input), is_input, scale, wrap, line_alignment(spec), n.text_layout.as_ref()) {
+            TextLayout::Single(l) => l,
+            TextLayout::Paragraphs(mut p) => {
+                text.prepare_highlights(&mut p, &spec.cold.highlights);
+                n.text_layout = Some(TextLayout::Paragraphs(p));
+                n.elided = None;
+                return;
+            }
         }
     };
     let mut elided = None;

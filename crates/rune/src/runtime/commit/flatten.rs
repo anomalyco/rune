@@ -202,8 +202,23 @@ fn prepare_text(
         }
     }
     if let Some(t) = text && t.cold.live.is_some() {
-        assert!(input.is_none() && !t.redacted && !t.wrap && t.spans.is_empty() && t.reveal < 0.0 && !t.truncate,
-            "live_text requires plain single-line text; use truncate_fade for overflow");
+        let incompatible = input.is_some()
+            || t.redacted
+            || !t.spans.is_empty()
+            || t.reveal >= 0.0
+            || t.cold.advance_in.is_some()
+            || !t.cold.links.is_empty()
+            || !t.cold.pills.is_empty()
+            || !t.cold.isolates.is_empty()
+            || !t.cold.rings.is_empty()
+            || !t.cold.strikes.is_empty()
+            || !t.cold.highlights.is_empty()
+            || !t.cold.blocks.is_empty()
+            || !t.cold.soft_breaks.is_empty()
+            || !t.cold.uncopied.is_empty();
+        if incompatible {
+            t.cold.live = None;
+        }
     }
     if input.is_none()
         && text.as_ref().is_some_and(|t| !t.cold.isolates.is_empty() || !t.cold.pills.is_empty())

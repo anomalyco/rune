@@ -226,7 +226,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   about its `.origin(x, y)` (default centre `(0.5, 0.5)`), like SwiftUI's `scaleEffect`. Changes
   spring on the element's layout spring or `.scale_motion(anim)` (landing at once on mount, in an
   instant transaction and under Reduce Motion). `.rotate(radians)` turns the element and its
-  subtree clockwise about the same origin on the layout spring or `.rotate_motion(anim)`, drawing
+  subtree clockwise about the same origin on the layout spring or `.rotate_motion(anim)` (and
+  `.live_rotation(&angle)` binds the same clockwise radians to a `Live<f32>` or `Tween<f32>`
+  without rebuilding the view), drawing
   into a layer whose composite turns; hit testing follows the turned box while reported rects use
   its upright bounds. Layout keeps the unscaled upright size, so siblings don't move. Scaling
   does not clip to the parent, and hit testing follows the drawn rects in paint order, so a zoomed
@@ -1269,9 +1271,13 @@ clock.set("00:01");
 The placeholder determines layout even after a view rebuild. Only the changed
 run reshapes; overflow clips to that box. Equal strings do not shape or wake a
 host. Hidden hosts keep the latest value and sample it on return. Publication
-uses a short mutex and can allocate; it is not an audio-callback API. Live text
-supports plain single-line labels, including `.truncate_fade()`, but not rich
-spans, wrapping, editors, ellipsis truncation or streaming word reveals.
+uses a short mutex and can allocate; it is not an audio-callback API. Plain
+single-line labels (including `.truncate_fade()`) shape one line directly;
+`.wrap()`, `.truncate()` (and `truncate_middle` / `truncate_head`), and
+`.max_lines(n)` re-wrap or re-elide inside the existing box width without
+reflowing siblings. Incompatible combinations (rich spans, links, pills,
+streaming word reveals, redacted text, or text editors) ignore the live binding
+and keep the authored text instead of panicking.
 
 `TextStyle::features("'tnum' 1, 'ss01' 1")` enables OpenType features, and
 `.variations("'wght' 500, 'opsz' 14")` selects variation axes. Both use CSS syntax
@@ -1363,7 +1369,7 @@ work no one sees (a live preview, a ticker) can pause there and resume when it s
 `[f32; 4]`, `Color`). Call `set(value)` from a producer thread; Rune coalesces a
 wake for each visible subscribed window. Equal values and hidden windows do not
 wake. Bind with `.live_opacity(&level)`, `.live_offset(&cursor)`,
-`.live_scale(&scale)`, `.live_fill(&color)` or `.live_rect(&rect)`, and colours with
+`.live_scale(&scale)`, `.live_rotation(&angle)`, `.live_fill(&color)` or `.live_rect(&rect)`, and colours with
 `.live_text_color`, `.live_border`, `.live_shadow` (the first shadow's colour) and
 `.live_gradient(&top, &bottom)`. A rebuild keeps what a colour binding last set.
 `cursor.smooth(Spring::new(0.16, 0.0))` opts a binding into rune-motion smoothing.
