@@ -91,6 +91,8 @@ pub use icon::icon_coverage_placed;
 pub use icon::set_icon_swap;
 pub use icon::set_icon_swap_size;
 #[doc(hidden)]
+pub use layout::box_decos::span_box_decorations;
+#[doc(hidden)]
 pub use layout::cache::CachedElision;
 #[doc(hidden)]
 pub use layout::cache::Keep;
@@ -119,6 +121,8 @@ pub use layout::decorations::SPAN_RADIUS;
 pub use layout::hash::directed;
 #[doc(hidden)]
 pub use layout::hash::elide_key;
+#[doc(hidden)]
+pub use layout::hash::mix_span_boxes;
 #[doc(hidden)]
 pub use layout::hash::shape_key;
 pub use layout::hash::text_hash;
@@ -158,6 +162,9 @@ pub use layout::span::PillMetrics;
 #[doc(hidden)]
 pub use layout::span::Replace;
 pub use layout::span::Span;
+pub use layout::span::SpanBox;
+#[doc(hidden)]
+pub use layout::span::SpanBoxRun;
 pub use layout::span::TextHighlight;
 #[doc(hidden)]
 pub use layout::span::flatten_spans;
@@ -243,7 +250,7 @@ use layout::cache::STALE_BYTES;
 use layout::decorations::Decoration;
 use layout::id::LayoutIds;
 use layout::rich::mono_tab_stops;
-use layout::span::{HIDDEN_SIZE, PILL_BOX, is_hidden_size};
+use layout::span::{HIDDEN_SIZE, PILL_BOX, SPAN_BOX, is_hidden_size};
 use layout::{cursor, hash, line_break, line_metrics, span};
 use raster::{macos, support, windfoil, windows};
 

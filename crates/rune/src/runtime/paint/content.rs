@@ -497,10 +497,13 @@ impl RuntimeCore {
             for piece in flow.pieces_in(rows.start, rows.end) {
                 let layout = piece.layout;
                 let d_origin = [base_d_origin[0], base_d_origin[1] + piece.y];
-                let (spans_here, pills) = (piece.spans(&spec.spans), piece.pills(&spec.cold.pills));
+                let (spans_here, pills, span_boxes_here) = (piece.spans(&spec.spans), piece.pills(&spec.cold.pills), piece.span_boxes(&spec.cold.span_boxes));
                 let from = self.paint.deco_scratch.len();
                 crate::text::pill_chips_with_images(layout, &pills, spec.style.size, s, d_origin, pill_bg, &mut self.paint.deco_scratch, &mut pill_icons, &mut pill_images);
                 // Elided text draws its decorations over the drawn string's offsets.
+                let drawn_boxes = n.elided.map(|e| e.span_boxes(&span_boxes_here));
+                let span_boxes = drawn_boxes.as_deref().unwrap_or(&span_boxes_here);
+                crate::text::span_box_decorations(layout, span_boxes, spec.style.size, s, d_origin, &mut self.paint.deco_scratch);
                 let drawn_spans = n.elided.map(|e| e.spans(&spans_here));
                 let spans = drawn_spans.as_deref().unwrap_or(&spans_here);
                 let drawn_rings = n.elided.map(|e| e.rings(&spec.cold.rings));
@@ -522,13 +525,20 @@ impl RuntimeCore {
             for piece in flow.pieces_in(rows.start, rows.end) {
                 let d_origin = [base_d_origin[0], base_d_origin[1] + piece.y];
                 let strikes = piece.strikes(&spec.cold.strikes);
+                let overlines = piece.overlines(&spec.cold.overlines);
                 let from = self.paint.deco_scratch.len();
-                if !strikes.is_empty() {
+                if !strikes.is_empty() || !overlines.is_empty() {
                     let spans_here = piece.spans(&spec.spans);
                     let drawn_spans = n.elided.map(|e| e.spans(&spans_here));
                     let spans = drawn_spans.as_deref().unwrap_or(&spans_here);
-                    let drawn = n.elided.map(|e| e.strikes(&strikes));
-                    self.text.strike_decorations(piece.layout, spans, drawn.as_deref().unwrap_or(&strikes), color, s, d_origin, &mut self.paint.deco_scratch);
+                    if !strikes.is_empty() {
+                        let drawn = n.elided.map(|e| e.strikes(&strikes));
+                        self.text.strike_decorations(piece.layout, spans, drawn.as_deref().unwrap_or(&strikes), color, s, d_origin, &mut self.paint.deco_scratch);
+                    }
+                    if !overlines.is_empty() {
+                        let drawn = n.elided.map(|e| e.overlines(&overlines));
+                        self.text.overline_decorations(piece.layout, spans, drawn.as_deref().unwrap_or(&overlines), color, s, d_origin, &mut self.paint.deco_scratch);
+                    }
                 }
                 link_fx.decos_piece(&piece, drawn_len, s, d_origin, &mut self.paint.deco_scratch);
                 if !piece.is_whole() {
@@ -538,16 +548,18 @@ impl RuntimeCore {
             if !spec.cold.rings.is_empty()
                 || spec.cold.highlights.iter().any(|h| h.ring.is_some())
                 || spec.cold.pills.iter().any(|p| p.ring.is_some())
+                || spec.cold.span_boxes.iter().any(|b| b.style.border_ring().is_some())
             {
                 // Adjacent backgrounds overlap by bg_pad. Paint ringed chips after
                 // plain fills so a neighboring fill cannot erase an inset edge;
-                // keep underlines above both. No sorting on the ringless path.
-                self.paint.deco_scratch.sort_by_key(|d| if d.radius == 0.0 && d.ring.is_none() { 2 } else { u8::from(d.ring.is_some()) });
+                // keep underlines/strikes/overlines above both. No sorting on the ringless path.
+                self.paint.deco_scratch.sort_by_key(|d| if d.radius == 0.0 && d.corners.is_none() && d.ring.is_none() { 2 } else { u8::from(d.ring.is_some()) });
             }
             if base_d_origin != base_rest || tk != 1.0 {
                 for d in &mut self.paint.deco_scratch {
                     d.rect = scale_about(d.rect, base_rest, base_d_origin, tk);
                     d.radius *= tk;
+                    if let Some(corners) = &mut d.corners { *corners = corners.map(|r| r * tk); }
                     if let Some((_, rw)) = &mut d.ring { *rw *= tk; }
                 }
             }
@@ -560,6 +572,10 @@ impl RuntimeCore {
                 } else { 1.0 };
                 let c = premul(d.color, o * alpha, srgb);
                 let mut inst = rect_inst(d.rect, c, d.radius, clip, fade);
+                if let Some(corners) = d.corners {
+                    let half = d.rect[2].min(d.rect[3]) * 0.5;
+                    inst.radii = corners.map(|r| r.min(half));
+                }
                 if let Some((rc, rw)) = d.ring {
                     inst.border = premul(rc, o * alpha, srgb);
                     inst.params[0] = rw;

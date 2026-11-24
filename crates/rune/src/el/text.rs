@@ -56,6 +56,8 @@ impl El {
                 }
                 cold.uncopied.clear();
                 cold.strikes.clear();
+                cold.overlines.clear();
+                cold.span_boxes.clear();
                 cold.highlights.clear();
                 cold.line_fills.clear();
                 cold.pills.clear();
@@ -125,6 +127,47 @@ impl El {
         }
         self
     }
+    /// Draws bytes `range` of a [`text`](crate::text) or [`rich`](crate::rich) element inside a
+    /// padded [`SpanBox`](crate::SpanBox) with its own layout-affecting horizontal padding,
+    /// per-corner radii, and optional inset border.
+    ///
+    /// Unlike [`Span::bg`], `SpanBox` padding reserves horizontal room in the line so adjacent
+    /// inline chips (such as a search filter's `from:` key and `ada` value) meet without
+    /// overlapping, and distinct adjacent ranges are never merged. UTF-8 byte offsets, selection
+    /// and copy remain unchanged. Ranges are authored UTF-8 bytes on char boundaries; empty,
+    /// out-of-range, or overlapping ones are skipped. Ignored on [`text_input`] fields.
+    ///
+    /// ```no_run
+    /// # use rune::{Color, SpanBox, text};
+    /// let chip = text("from:ada")
+    ///     .span_box(0..5, SpanBox::new().bg(Color::WHITE.alpha(0.12)).pad_x(6.0, 4.0).corners([4.0, 0.0, 0.0, 4.0]))
+    ///     .span_box(5..8, SpanBox::new().bg(Color::WHITE.alpha(0.22)).pad_x(4.0, 6.0).corners([0.0, 4.0, 4.0, 0.0]));
+    /// ```
+    pub fn span_box(self, range: std::ops::Range<usize>, style: crate::text::SpanBox) -> Self {
+        self.span_boxes([(range, style)])
+    }
+    /// Padded [`SpanBox`](crate::SpanBox)es for multiple non-overlapping byte ranges (see [`El::span_box`]).
+    pub fn span_boxes(mut self, boxes: impl IntoIterator<Item = (std::ops::Range<usize>, crate::text::SpanBox)>) -> Self {
+        if self.cold.input.is_some() {
+            return self;
+        }
+        let Some(t) = &mut self.text else { return self };
+        for (r, style) in boxes {
+            let ok = r.start < r.end
+                && r.end <= t.content.len()
+                && t.content.is_char_boundary(r.start)
+                && t.content.is_char_boundary(r.end)
+                && style.has_effect();
+            let (start, end) = (r.start as u32, r.end as u32);
+            if !ok || t.cold.span_boxes.iter().any(|b| b.start < end && start < b.end) {
+                continue;
+            }
+            let at = t.cold.span_boxes.partition_point(|b| b.start < start);
+            t.cold.span_boxes.insert(at, crate::text::SpanBoxRun { start, end, style });
+            t.shape = None;
+        }
+        self
+    }
     /// A strikethrough line across bytes `start..end` in `color` (`None`: the span's or text's
     /// colour). Wrapped lines each get their own segment. On a [`text_input`], byte offsets are
     /// relative to `edit.text` and shift across any active IME preedit, as [`El::spans`] do.
@@ -154,6 +197,47 @@ impl El {
             for (start, end, color) in strikes {
                 if start < end {
                     t.cold.strikes.push((start as u32, end as u32, color));
+                }
+            }
+        }
+        self
+    }
+    /// An overline above bytes `start..end` in `color` (`None`: the span's or text's colour),
+    /// matching CSS `text-decoration-line: overline` and ANSI SGR 53/55. Wrapped lines each get
+    /// their own segment, and overlines coexist with [`Span::underline`] and [`El::strike`]. On
+    /// a [`text_input`], byte offsets are relative to `edit.text` and shift across any active
+    /// IME preedit, as [`El::spans`] and [`El::strike`] do.
+    ///
+    /// ```no_run
+    /// # use rune::{Color, text};
+    /// let el = text("OVER plain").overline(0, 4, Some(Color::WHITE));
+    /// ```
+    pub fn overline(mut self, start: usize, end: usize, color: Option<Color>) -> Self {
+        if start >= end {
+            return self;
+        }
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            inp.decoration_overlines.push((start as u32, end as u32, color));
+            self.sync_input_rich();
+        } else if let Some(t) = &mut self.text {
+            t.cold.overlines.push((start as u32, end as u32, color));
+        }
+        self
+    }
+    /// Overlines `(start, end, color)` for multiple byte ranges (see [`El::overline`]).
+    pub fn overlines(mut self, overlines: impl IntoIterator<Item = (usize, usize, Option<Color>)>) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            let before = inp.decoration_overlines.len();
+            inp.decoration_overlines.extend(
+                overlines.into_iter().filter(|&(s, e, _)| s < e).map(|(s, e, c)| (s as u32, e as u32, c)),
+            );
+            if inp.decoration_overlines.len() != before {
+                self.sync_input_rich();
+            }
+        } else if let Some(t) = &mut self.text {
+            for (start, end, color) in overlines {
+                if start < end {
+                    t.cold.overlines.push((start as u32, end as u32, color));
                 }
             }
         }
@@ -328,11 +412,13 @@ impl El {
         if inp.edit.is_plain()
             && inp.decorations.is_empty()
             && inp.decoration_strikes.is_empty()
+            && inp.decoration_overlines.is_empty()
             && inp.line_fills.is_empty()
         {
             // A plain field lays out and draws exactly as before rich editing existed.
             t.spans.clear();
             t.cold.strikes.clear();
+            t.cold.overlines.clear();
             t.cold.line_fills.clear();
             t.cold.blocks.clear();
             t.cold.soft_breaks.clear();
@@ -352,6 +438,12 @@ impl El {
         for &(start, end, color) in &inp.decoration_strikes {
             for (ds, de) in inp.edit.map_range_to_display(start as usize, end as usize) {
                 strikes.push((ds, de, color));
+            }
+        }
+        let mut overlines = Vec::with_capacity(inp.decoration_overlines.len());
+        for &(start, end, color) in &inp.decoration_overlines {
+            for (ds, de) in inp.edit.map_range_to_display(start as usize, end as usize) {
+                overlines.push((ds, de, color));
             }
         }
         let pill_fg = t.cold.pill_colors.and_then(|(_, fg)| fg);
@@ -378,6 +470,7 @@ impl El {
         }
         t.spans = flat;
         t.cold.strikes = strikes;
+        t.cold.overlines = overlines;
         t.cold.line_fills = line_fills;
         t.cold.blocks = blocks;
         t.cold.soft_breaks = inp.edit.soft_breaks().to_vec();

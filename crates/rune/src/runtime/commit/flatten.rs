@@ -185,6 +185,8 @@ fn prepare_text(
         if let Some(cold) = t.cold.get_mut_if_some() {
             crate::el::wipe_links(&mut cold.links);
             cold.rings.clear();
+            cold.overlines.clear();
+            cold.span_boxes.clear();
             cold.line_fills.clear();
             cold.advance_in = None;
             cold.live = None;
@@ -213,6 +215,8 @@ fn prepare_text(
             || !t.cold.isolates.is_empty()
             || !t.cold.rings.is_empty()
             || !t.cold.strikes.is_empty()
+            || !t.cold.overlines.is_empty()
+            || !t.cold.span_boxes.is_empty()
             || !t.cold.highlights.is_empty()
             || !t.cold.line_fills.is_empty()
             || !t.cold.blocks.is_empty()

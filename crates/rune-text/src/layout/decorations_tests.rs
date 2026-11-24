@@ -839,6 +839,7 @@ fn strike_and_highlight_match_reference_for_unsorted_overlaps_bidi_and_paragraph
             spans: &p_spans,
             blocks: &[],
             pills: &[],
+            span_boxes: &[],
             style: TextStyle::new(14.0, 400.0),
             shape_key: None,
             wrap_anywhere: false,

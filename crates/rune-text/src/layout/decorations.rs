@@ -21,7 +21,16 @@ pub struct Deco {
 pub struct PaintedDeco {
     pub deco: Deco,
     pub ring: Option<(Color, f32)>,
+    /// Optional per-corner radii `[tl, tr, br, bl]` in device px (takes precedence over `deco.radius`).
+    pub corners: Option<[f32; 4]>,
     pub byte: u32,
+}
+
+impl PaintedDeco {
+    #[doc(hidden)]
+    pub fn with_corners(deco: Deco, ring: Option<(Color, f32)>, corners: [f32; 4], byte: u32) -> Self {
+        Self { deco, ring, corners: Some(corners), byte }
+    }
 }
 
 impl std::ops::Deref for PaintedDeco {
@@ -42,7 +51,7 @@ impl Decoration for Deco {
     fn paint(&mut self) -> (&mut Deco, Option<(Color, f32)>) { (self, None) }
 }
 impl Decoration for PaintedDeco {
-    fn new(deco: Deco, ring: Option<(Color, f32)>, byte: u32) -> Self { Self { deco, ring, byte } }
+    fn new(deco: Deco, ring: Option<(Color, f32)>, byte: u32) -> Self { Self { deco, ring, corners: None, byte } }
     fn paint(&mut self) -> (&mut Deco, Option<(Color, f32)>) { (&mut self.deco, self.ring) }
     fn extend_to(&mut self, byte: u32) { self.byte = self.byte.max(byte); }
 }
@@ -147,6 +156,7 @@ impl TextSystem {
     }
 
     /// Strikethrough lines for `strikes` (`(start_byte, end_byte, color)`) in device px.
+    #[allow(clippy::too_many_arguments)]
     #[doc(hidden)]
     pub fn strike_decorations(
         &self,
@@ -158,19 +168,52 @@ impl TextSystem {
         origin: [f32; 2],
         out: &mut Vec<PaintedDeco>,
     ) {
-        if strikes.is_empty() {
+        self.line_decorations(layout, spans, strikes, default_color, scale, origin, LineDecoKind::Strike, out);
+    }
+
+    /// Overline lines for `overlines` (`(start_byte, end_byte, color)`) in device px, drawn along
+    /// the em-box top (`baseline - ascent`) with underline thickness (CSS Text Decoration Level 3
+    /// / Blink `TextDecorationInfo`, ANSI SGR 53/55).
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn overline_decorations(
+        &self,
+        layout: &Layout<Ink>,
+        spans: &[Span],
+        overlines: &[(u32, u32, Option<Color>)],
+        default_color: Color,
+        scale: f32,
+        origin: [f32; 2],
+        out: &mut Vec<PaintedDeco>,
+    ) {
+        self.line_decorations(layout, spans, overlines, default_color, scale, origin, LineDecoKind::Overline, out);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn line_decorations(
+        &self,
+        layout: &Layout<Ink>,
+        spans: &[Span],
+        ranges: &[(u32, u32, Option<Color>)],
+        default_color: Color,
+        scale: f32,
+        origin: [f32; 2],
+        kind: LineDecoKind,
+        out: &mut Vec<PaintedDeco>,
+    ) {
+        if ranges.is_empty() {
             return;
         }
         let mut span_index: Option<StrikeSpanIndex> = None;
         let mut line_cache: FxHashMap<usize, StrikeLine> = FxHashMap::default();
-        let multi_strike = strikes.len() > 1;
-        for &(s_start, s_end, sc) in strikes {
+        let multi = ranges.len() > 1;
+        for &(s_start, s_end, sc) in ranges {
             let (a, b) = (s_start as usize, s_end as usize);
             if a >= b {
                 continue;
             }
             let span_color = sc.or_else(|| {
-                if multi_strike && spans.len() > 1 {
+                if multi && spans.len() > 1 {
                     span_index.get_or_insert_with(|| StrikeSpanIndex::new(spans)).color_for(a, b)
                 } else {
                     spans
@@ -184,7 +227,7 @@ impl TextSystem {
             });
             let color = span_color.unwrap_or(default_color);
             let boxes = range_boxes(layout, a, b, false);
-            let use_cache = multi_strike || boxes.len() > 1;
+            let use_cache = multi || boxes.len() > 1;
             for (bb, line_idx) in boxes {
                 let w = (bb.x1 - bb.x0) as f32;
                 if w <= 0.0 {
@@ -196,14 +239,18 @@ impl TextSystem {
                 let best = if use_cache {
                     line_cache
                         .entry(line_idx)
-                        .or_insert_with(|| StrikeLine::new(&line, scale))
+                        .or_insert_with(|| StrikeLine::new(&line, scale, kind))
                         .best(a, b, bx0, bx1)
                 } else {
-                    scan_strike_line(&line, a, b, bx0, bx1, scale)
+                    scan_line_deco(&line, a, b, bx0, bx1, scale, kind)
                 };
-                let (strike_off, h) = best.unwrap_or((m.line_height * 0.25, scale.round().max(1.0)));
+                let fallback_off = match kind {
+                    LineDecoKind::Strike => m.line_height * 0.25,
+                    LineDecoKind::Overline => m.line_height * 0.8,
+                };
+                let (off, h) = best.unwrap_or((fallback_off, scale.round().max(1.0)));
                 let x0 = origin[0] + bb.x0 as f32;
-                let y = (origin[1] + m.baseline - strike_off).round();
+                let y = (origin[1] + m.baseline - off).round();
                 out.push(PaintedDeco::new(Deco { rect: [x0, y, w, h], color, radius: 0.0 }, None, 0));
             }
         }
@@ -460,12 +507,23 @@ impl<'a> RingLookup<'a> {
     }
 }
 
-fn strike_metrics(fm: &parley::FontMetrics, scale: f32) -> (f32, f32) {
-    let off = if fm.strikethrough_offset != 0.0 { fm.strikethrough_offset } else { fm.ascent * 0.32 };
-    (off, fm.strikethrough_size.max(scale).round().max(1.0))
+#[derive(Clone, Copy)]
+enum LineDecoKind { Strike, Overline }
+
+fn line_deco_metrics(fm: &parley::FontMetrics, scale: f32, kind: LineDecoKind) -> (f32, f32) {
+    match kind {
+        LineDecoKind::Strike => {
+            let off = if fm.strikethrough_offset != 0.0 { fm.strikethrough_offset } else { fm.ascent * 0.32 };
+            (off, fm.strikethrough_size.max(scale).round().max(1.0))
+        }
+        LineDecoKind::Overline => {
+            let h = if fm.underline_size > 0.0 { fm.underline_size } else { scale };
+            (fm.ascent, h.max(scale).round().max(1.0))
+        }
+    }
 }
 
-fn scan_strike_line(line: &parley::Line<'_, Ink>, a: usize, b: usize, bx0: f32, bx1: f32, scale: f32) -> Option<(f32, f32)> {
+fn scan_line_deco(line: &parley::Line<'_, Ink>, a: usize, b: usize, bx0: f32, bx1: f32, scale: f32, kind: LineDecoKind) -> Option<(f32, f32)> {
     let mut best: Option<(f32, f32, f32)> = None;
     for item in line.items() {
         count_visit(Visit::StrikeItem);
@@ -474,7 +532,7 @@ fn scan_strike_line(line: &parley::Line<'_, Ink>, a: usize, b: usize, bx0: f32, 
         if run.end <= a || b <= run.start { continue; }
         let overlap = (gr.offset() + gr.advance()).min(bx1) - gr.offset().max(bx0);
         if best.is_none_or(|(prev, _, _)| overlap > prev) {
-            let (off, h) = strike_metrics(&gr.run().font_metrics(), scale);
+            let (off, h) = line_deco_metrics(gr.run().font_metrics(), scale, kind);
             best = Some((overlap, off, h));
         }
     }
@@ -485,7 +543,7 @@ struct StrikeRun { order: usize, start: usize, end: usize, x0: f32, x1: f32, max
 struct StrikeLine { runs: Vec<StrikeRun>, cursor: usize }
 
 impl StrikeLine {
-    fn new(line: &parley::Line<'_, Ink>, scale: f32) -> Self {
+    fn new(line: &parley::Line<'_, Ink>, scale: f32, kind: LineDecoKind) -> Self {
         let mut runs = Vec::new();
         let (mut sorted, mut prev_x0) = (true, f32::NEG_INFINITY);
         for (order, item) in line.items().enumerate() {
@@ -495,7 +553,7 @@ impl StrikeLine {
             let (x0, x1) = (gr.offset(), gr.offset() + gr.advance());
             if x0 < prev_x0 { sorted = false; }
             prev_x0 = x0;
-            let (strike_off, h) = strike_metrics(&gr.run().font_metrics(), scale);
+            let (strike_off, h) = line_deco_metrics(gr.run().font_metrics(), scale, kind);
             runs.push(StrikeRun { order, start: r.start, end: r.end, x0, x1, max_x1: x1, strike_off, h });
         }
         if !sorted {

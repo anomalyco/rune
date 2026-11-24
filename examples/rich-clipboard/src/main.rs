@@ -19,7 +19,7 @@
 use rune::clipboard;
 use rune::color::hex;
 use rune::tok::{self, radius, space, type_};
-use rune::{AppSpec, ClipboardContent, Color, Cx, El, LineFill, Mark, Phase, PillStyle, Pixels, TextEdit, Tx, col, el, row, text, text_input};
+use rune::{AppSpec, ClipboardContent, Color, Cx, El, LineFill, Mark, Phase, PillStyle, Pixels, Span, SpanBox, TextEdit, Tx, col, el, rich, row, text, text_input};
 
 const SAMPLE_TEXT: &str = "Click here or right-click the field to hit-test a UTF-8 byte offset.";
 
@@ -333,6 +333,55 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .pill_with_image(g0..g0 + "@Gmail".len(), service_pill_style("app:gmail"), s.gmail_logo.clone())
         .pill_with_image(h0..h0 + "@GitHub".len(), service_pill_style("app:github"), s.github_logo.clone());
 
+    // Adjacent padded SpanBox search-filter chips: squared inner corners, rounded outer corners.
+    let filter_src = "Filters: from:ada  in:#general";
+    let fk0 = filter_src.find("from:").unwrap_or(0);
+    let fk1 = fk0 + "from:".len();
+    let fv1 = fk1 + "ada".len();
+    let ik0 = filter_src.find("in:").unwrap_or(0);
+    let ik1 = ik0 + "in:".len();
+    let iv1 = ik1 + "#general".len();
+    let key_box = SpanBox::new()
+        .bg(Color { r: 0.24, g: 0.28, b: 0.36, a: 0.9 })
+        .pad_x(6.0, 4.0)
+        .corners([4.0, 0.0, 0.0, 4.0]);
+    let val_box = SpanBox::new()
+        .bg(Color { r: 0.16, g: 0.42, b: 0.78, a: 0.45 })
+        .pad_x(4.0, 6.0)
+        .corners([0.0, 4.0, 4.0, 0.0])
+        .border(Color { r: 0.38, g: 0.66, b: 1.0, a: 0.7 }, 1.0);
+    let filter_chips = rich(filter_src, vec![
+        Span::new(fk0, fk1).color(t.text_secondary),
+        Span::new(fk1, fv1).bold().color(t.text),
+        Span::new(ik0, ik1).color(t.text_secondary),
+        Span::new(ik1, iv1).bold().color(t.text),
+    ])
+        .key("filter-chips")
+        .font(type_::LABEL)
+        .color(t.text_secondary)
+        .selectable(true)
+        .span_boxes([(fk0..fk1, key_box), (fk1..fv1, val_box), (ik0..ik1, key_box), (ik1..iv1, val_box)]);
+
+    // Overline coexisting with underline and strikethrough, plus a wrapped overline run.
+    let overline_src = "OVER + BOTH (over/strike/under) and a wrapped overline segment across narrow widths";
+    let over_end = "OVER".len();
+    let both_start = overline_src.find("BOTH").unwrap_or(0);
+    let both_end = both_start + "BOTH".len();
+    let wrap_start = overline_src.find("wrapped").unwrap_or(0);
+    let over_color = Color { r: 0.94, g: 0.56, b: 0.24, a: 1.0 };
+    let overline_sample = rich(overline_src, vec![
+        Span::new(0, over_end).bold().color(over_color),
+        Span::new(both_start, both_end).underline(Color { r: 0.35, g: 0.68, b: 1.0, a: 1.0 }),
+    ])
+        .key("overline-sample")
+        .font(type_::LABEL)
+        .color(t.text_secondary)
+        .w_full()
+        .wrap()
+        .strike(both_start, both_end, Some(Color { r: 0.4, g: 0.85, b: 0.5, a: 1.0 }))
+        .overline(0, over_end, None)
+        .overlines([(both_start, both_end, Some(over_color)), (wrap_start, overline_src.len(), Some(over_color))]);
+
     let html_out = s.field.to_html();
     let mut root = col().w_full().h_full().padding(space::S6).gap(space::S3).fill(t.bg)
         .on_spellcheck(s.spellcheck, |s: &mut State, on, _| s.spellcheck = on)
@@ -340,6 +389,8 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .child(toolbar)
         .child(field)
         .child(static_pills)
+        .child(filter_chips)
+        .child(overline_sample)
         .child(notes_field)
         .child(sample_line)
         .child(text(hit_status(s)).key("hit-offset").font(type_::LABEL).color(t.text_secondary))
@@ -472,6 +523,8 @@ mod tests {
         rt.frame(0.0);
         assert!(rt.find("markdown-field").is_some());
         assert!(rt.find("static-pills").is_some());
+        assert!(rt.find("filter-chips").is_some());
+        assert!(rt.find("overline-sample").is_some());
         let fills = markdown_line_fills(&rt.state.notes.text, Color::WHITE, Color::WHITE);
         assert_eq!(fills.len(), 2, "markdown sample produces one code block fill and one quote bar");
     }

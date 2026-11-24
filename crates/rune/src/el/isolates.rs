@@ -93,6 +93,12 @@ impl TextSpec {
         for r in &mut cold.strikes {
             (r.0, r.1) = marked.range(r.0, r.1);
         }
+        for r in &mut cold.overlines {
+            (r.0, r.1) = marked.range(r.0, r.1);
+        }
+        for b in &mut cold.span_boxes {
+            (b.start, b.end) = marked.range(b.start, b.end);
+        }
         for h in &mut cold.highlights {
             (h.start, h.end) = marked.range(h.start, h.end);
         }

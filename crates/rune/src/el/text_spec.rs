@@ -107,6 +107,10 @@ pub(crate) struct TextCold {
     pub(crate) span_radius: f32,
     /// Strikethrough byte ranges `(start, end, color)` of `content`.
     pub(crate) strikes: Vec<(u32, u32, Option<Color>)>,
+    /// Overline byte ranges `(start, end, color)` of `content`.
+    pub(crate) overlines: Vec<(u32, u32, Option<Color>)>,
+    /// Padded inline boxes over `content` (`El::span_box`), sorted and non-overlapping.
+    pub(crate) span_boxes: Vec<crate::text::SpanBoxRun>,
     /// Paint-only highlight byte ranges of `content`.
     pub(crate) highlights: Vec<crate::text::TextHighlight>,
     /// Display-only full-width line fills and left bars over `content` (see [`El::line_fills`](crate::El::line_fills)).
@@ -141,6 +145,8 @@ impl Empty for TextCold {
         rings: Vec::new(),
         span_radius: crate::text::SPAN_RADIUS,
         strikes: Vec::new(),
+        overlines: Vec::new(),
+        span_boxes: Vec::new(),
         highlights: Vec::new(),
         line_fills: Vec::new(),
         blocks: Vec::new(),
@@ -195,6 +201,7 @@ impl TextSpec {
             spans: &self.spans,
             blocks: &self.cold.blocks,
             pills: &self.cold.pills,
+            span_boxes: &self.cold.span_boxes,
             style: self.style,
             shape_key: self.shape_key(scale),
             wrap_anywhere: self.wrap_anywhere,
@@ -282,6 +289,7 @@ impl TextSpec {
     /// [`crate::text::shape_key`] of this text in its direction.
     pub(crate) fn fresh_shape_key(&self, scale: f32) -> u64 {
         let key = crate::text::shape_key(&self.content, &self.spans, self.style, scale, self.wrap_anywhere, &self.cold.pills);
+        let key = crate::text::mix_span_boxes(key, &self.cold.span_boxes);
         crate::text::directed(key, self.base())
     }
 
@@ -370,6 +378,8 @@ impl TextSpec {
             wipe_links(&mut cold.links);
             cold.rings.clear();
             cold.strikes.clear();
+            cold.overlines.clear();
+            cold.span_boxes.clear();
             cold.line_fills.clear();
             cold.blocks.clear();
             cold.soft_breaks.clear();
@@ -421,6 +431,12 @@ impl TextSpec {
             }
             for r in &mut cold.strikes {
                 (r.0, r.1) = (source.shown(r.0, false), source.shown(r.1, true));
+            }
+            for r in &mut cold.overlines {
+                (r.0, r.1) = (source.shown(r.0, false), source.shown(r.1, true));
+            }
+            for b in &mut cold.span_boxes {
+                (b.start, b.end) = (source.shown(b.start, false), source.shown(b.end, true));
             }
             for h in &mut cold.highlights {
                 (h.start, h.end) = (source.shown(h.start, false), source.shown(h.end, true));

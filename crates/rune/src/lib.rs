@@ -375,6 +375,7 @@ pub use text::Link;
 pub use text::LinkPaint;
 pub use text::SmoothingSupport;
 pub use text::Span;
+pub use text::SpanBox;
 pub use text::TextCase;
 pub use text::TextHighlight;
 pub use theme::Theme;
