@@ -17,6 +17,8 @@ pub struct Gpu {
     pub(super) lost: Arc<AtomicBool>,
     /// D3D12 removes a device before wgpu hears of it (`Gpu::is_lost`).
     pub(super) removal: rune_gpu::health::Removal,
+    /// Whether Rune's surface uncaptured-error policy has been installed on this device.
+    pub(super) uncaptured_logged: AtomicBool,
 }
 
 /// Latched process-wide once a Linux direct-driver Vulkan instance fails to serve a device or
@@ -54,9 +56,10 @@ impl Gpu {
         Self::try_picked(instance, surface, wanted, translucent, false)
     }
 
-    /// A device for a surface not made yet (`warm_gpu`): on the adapter a surface would get.
-    #[cfg(not(any(target_arch = "wasm32", target_os = "macos")))]
-    pub(super) fn try_for_display(instance: wgpu::Instance, wanted: wgpu::Features) -> Result<Gpu, String> {
+    /// A device for a surface not made yet (`prewarm_gpu`, `warm_gpu`, `embed::LayerHost`):
+    /// on the adapter a surface would get, with the surface uncaptured-error policy installed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn try_for_display(instance: wgpu::Instance, wanted: wgpu::Features) -> Result<Gpu, String> {
         Self::try_picked(instance, None, wanted, false, true)
     }
 
@@ -409,7 +412,7 @@ impl Gpu {
     /// window (Hex #662). A machine without a hardware D3D12 adapter gets WARP, D3D12's software
     /// adapter, from the same instance.
     #[cfg(target_os = "windows")]
-    fn wgpu_instance() -> wgpu::Instance {
+    pub(super) fn wgpu_instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let instance = Self::wgpu_instance_on(wgpu::Backends::DX12, false);
         crate::marks::mark("gpu.instance");
@@ -418,7 +421,7 @@ impl Gpu {
 
     /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says.
     #[cfg(not(target_os = "windows"))]
-    fn wgpu_instance() -> wgpu::Instance {
+    pub(super) fn wgpu_instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let unlimited = Self::direct_vulkan_bypassed();
         Self::wgpu_instance_on(wgpu::Backends::all(), unlimited)
@@ -582,6 +585,7 @@ impl Gpu {
         };
         let surface = surface(&early.instance)?;
         if crate::render::translucency::serves(&early, &surface, wanted, translucent) {
+            early.install_surface_error_policy();
             return Ok((early, surface, Some(renderer)));
         }
         let instance = early.instance.clone();

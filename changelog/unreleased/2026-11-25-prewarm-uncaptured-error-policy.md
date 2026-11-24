@@ -1,0 +1,1 @@
+- macOS/wgpu: a window, overlay, or embedded `LayerHost` that adopts a prewarmed or shared `CAMetalLayer` device now installs Rune's uncaptured GPU error logger once instead of leaving wgpu's default validation panic active; headless devices keep the panic.

@@ -20,7 +20,7 @@ static SHARED_GPU: OnceLock<Result<Arc<Gpu>, String>> = OnceLock::new();
 
 fn shared_gpu() -> Result<Arc<Gpu>, String> {
     SHARED_GPU
-        .get_or_init(|| Gpu::try_new(Gpu::instance(), None).map(Arc::new))
+        .get_or_init(|| Gpu::try_for_display(Gpu::instance(), wgpu::Features::empty()).map(Arc::new))
         .clone()
 }
 

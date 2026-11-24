@@ -45,15 +45,44 @@ impl Gpu {
             #[cfg(target_arch = "wasm32")]
             let _ = (reason, message);
         });
+        let removal = rune_gpu::health::Removal::watch(&device);
+        let gpu = Gpu {
+            instance,
+            adapter,
+            device,
+            queue,
+            lost,
+            removal,
+            uncaptured_logged: AtomicBool::new(false),
+        };
+        if draws_surfaces {
+            gpu.install_surface_error_policy();
+        }
+        gpu
+    }
+
+    /// Installs Rune's uncaptured-error logger on a device that draws surfaces, at most once.
+    ///
+    /// Headless devices (`Gpu::headless`, `Gpu::try_new(_, None)`, `Gpu::for_headless_setup`)
+    /// never call this so offscreen renders and tests keep wgpu's validation panic. Surface
+    /// devices call it at creation (`Gpu::made(..., true)`) and on surface adoption
+    /// (`Gpu::for_surface_setup`); repeat calls are no-ops so the handler is never installed twice.
+    pub(crate) fn install_surface_error_policy(&self) {
+        if self.uncaptured_logged.swap(true, Ordering::AcqRel) {
+            return;
+        }
         // On wasm32, `platform::web::health::watch` owns uncaptured error logging for both WebGPU
         // (through JS, avoiding wgpu's panic on `GPUInternalError`) and WebGL2 (to `console.error`,
         // where `eprintln!` is silent).
         #[cfg(not(target_arch = "wasm32"))]
-        if draws_surfaces && !cfg!(test) { log_uncaptured(&device); }
-        #[cfg(target_arch = "wasm32")]
-        let _ = draws_surfaces;
-        let removal = rune_gpu::health::Removal::watch(&device);
-        Gpu { instance, adapter, device, queue, lost, removal }
+        if should_log_uncaptured() {
+            log_uncaptured(&self.device);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_surface_error_policy(&self) -> bool {
+        self.uncaptured_logged.load(Ordering::Acquire)
     }
 
     /// Whether the device went away: a driver reset, a GPU removed, a resume from Modern Standby.
@@ -95,3 +124,23 @@ fn log_uncaptured(device: &wgpu::Device) {
         if let Some(line) = line { eprintln!("{line}"); }
     }));
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+static INSTALL_UNCAPTURED_IN_TEST: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(super) fn enable_uncaptured_logging_for_test() {
+    INSTALL_UNCAPTURED_IN_TEST.store(true, Ordering::Release);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn should_log_uncaptured() -> bool {
+    #[cfg(not(test))]
+    { true }
+    #[cfg(test)]
+    { INSTALL_UNCAPTURED_IN_TEST.load(Ordering::Acquire) }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "gpu_loss_tests.rs"]
+mod tests;
