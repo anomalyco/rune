@@ -11,6 +11,7 @@ hot = ["rune/hot"]
 [dependencies]
 procwatch = { workspace = true, optional = true }
 rune = { workspace = true, default-features = true, features = ["keys-overlay"] }
+rune-kit = { workspace = true, default-features = false }
 
 [lints]
 workspace = true

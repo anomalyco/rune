@@ -171,6 +171,8 @@ pub struct Drag {
     /// view selects by words on 2 and lines on 3, and extends by them as the drag moves.
     pub clicks: u32,
     pub(crate) cancelled: bool,
+    /// Resolved layout flow of the dragged element (`Flow::Rtl`).
+    pub(crate) rtl: bool,
     /// The pointer in window points.
     pub(crate) window: [f32; 2],
     /// The pointer in desktop pixels, when a native window hosts the view.
@@ -182,6 +184,22 @@ impl Drag {
     /// pointer was taken away). Put back whatever the drag moved.
     pub fn cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    /// The resolved layout direction of the dragged element (`Direction::Ltr` or
+    /// `Direction::Rtl`), matching [`El::dir`](crate::El::dir) inherited from ancestors.
+    /// `x` and `start_x` remain physical coordinates from the element's left edge; in
+    /// `Direction::Rtl`, logical start is `w - x`.
+    ///
+    /// ```no_run
+    /// # use rune::{Direction, Drag, El, el};
+    /// let _: El = el().on_drag(|_: &mut (), d: &mut Drag, _| {
+    ///     let logical_x = if d.direction() == Direction::Rtl { d.w - d.x } else { d.x };
+    ///     let _ = logical_x;
+    /// });
+    /// ```
+    pub fn direction(&self) -> crate::Direction {
+        if self.rtl { crate::Direction::Rtl } else { crate::Direction::Ltr }
     }
 
     /// The pointer in window points from the window's top-left, whatever scale the element

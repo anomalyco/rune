@@ -205,6 +205,7 @@ impl RuntimeCore {
             data: 0.0,
             clicks: u32::from(clicks),
             cancelled: false,
+            rtl: jn.flow == crate::el::Flow::Rtl,
             window: [x, y],
             screen: self.screen_at(x, y),
         };

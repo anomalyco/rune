@@ -6,5 +6,6 @@ pub(crate) mod field;
 pub(crate) mod radio;
 pub(crate) mod segmented;
 pub(crate) mod shortcut_recorder;
+pub(crate) mod slider;
 pub(crate) mod switch;
 pub(crate) mod text_input;

@@ -300,3 +300,88 @@ pub(super) fn radio_states(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
                 .build(k),
         )
 }
+
+// Slider
+
+pub(super) fn slider_basic(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let vol = s.value("slider-vol", 50.0);
+    let thumb = s.value("slider-thumb", 240.0);
+    let hidden = s.value("slider-hidden", 0.65);
+    col()
+        .gap(16.0)
+        .child(
+            row().gap(12.0).center_y()
+                .child(
+                    Slider::new("slider-vol", vol)
+                        .range(0.0..=100.0)
+                        .label("Volume")
+                        .value_text(format!("{vol:.0}%"))
+                        .on_change(|s: &mut G, v, _| s.set_value("slider-vol", v))
+                        .build(k),
+                )
+                .child(caption(k, &format!("{vol:.0}%")).w(44.0)),
+        )
+        .child(
+            row().gap(12.0).center_y()
+                .child(
+                    Slider::new("slider-thumb", thumb)
+                        .range(160.0..=420.0)
+                        .step(20.0)
+                        .label("Thumbnail size")
+                        .value_text(format!("{thumb:.0} px"))
+                        .on_change(|s: &mut G, v, _| s.set_value("slider-thumb", v))
+                        .build(k),
+                )
+                .child(caption(k, &format!("{thumb:.0} px")).w(52.0)),
+        )
+        .child(
+            row().gap(12.0).center_y()
+                .child(caption(k, "Hidden label").w(88.0))
+                .child(
+                    Slider::new("slider-hidden", hidden)
+                        .label("Hidden label")
+                        .hide_label()
+                        .on_change(|s: &mut G, v, _| s.set_value("slider-hidden", v))
+                        .build(k),
+                ),
+        )
+}
+
+pub(super) fn slider_sizes(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let sizes = [
+        ("Mini", ControlSize::Mini),
+        ("Small", ControlSize::Small),
+        ("Regular", ControlSize::Regular),
+        ("Large", ControlSize::Large),
+        ("Extra large", ControlSize::ExtraLarge),
+    ];
+    col().gap(12.0).children(sizes.into_iter().map(|(name, size)| {
+        let key = format!("slider-size-{name}");
+        let v = s.value(&key, 0.5);
+        let key_cb = key.clone();
+        row().gap(12.0).center_y()
+            .child(caption(k, name).w(80.0))
+            .child(
+                Slider::new(key, v)
+                    .control_size(size)
+                    .label(name)
+                    .hide_label()
+                    .on_change(move |s: &mut G, v, _| s.set_value(&key_cb, v))
+                    .build(k),
+            )
+    }))
+}
+
+pub(super) fn slider_states(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    col().gap(12.0).children(STATES.into_iter().map(|(name, st)| {
+        row().gap(12.0).center_y()
+            .child(caption(k, &cap_first(name)).w(80.0))
+            .child(
+                Slider::new(format!("slider-state-{name}"), 0.55)
+                    .label(cap_first(name))
+                    .hide_label()
+                    .state(st)
+                    .build(k),
+            )
+    }))
+}

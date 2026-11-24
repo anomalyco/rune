@@ -262,6 +262,61 @@ fn status_and_progress_read_their_text_and_fraction() {
     assert_eq!(node(&tree, "upload")["value"], "100%");
 }
 
+fn sliders(s: &App, _: &mut Cx<App>) -> El {
+    let k = kit();
+    col()
+        .gap(12.0)
+        .child(
+            Slider::new("volume", s.level * 100.0)
+                .range(0.0..=100.0)
+                .step(5.0)
+                .label("Volume")
+                .value_text(format!("{:.0}%", s.level * 100.0))
+                .on_change(|s: &mut App, v, _| s.level = v / 100.0)
+                .build(&k),
+        )
+        .child(
+            Slider::new("speed", s.level)
+                .label("Speed")
+                .hide_label()
+                .disabled(true)
+                .build(&k),
+        )
+}
+
+#[test]
+fn sliders_read_range_value_and_step_by_any_input() {
+    use rune::accesskit::ActionData;
+    let mut rt = mount(App::default(), sliders);
+    let tree = rt.accessibility_json();
+    let vol = node(&tree, "volume");
+    assert_eq!((said(vol), vol["value"].as_str()), (("slider", "Volume"), Some("40%")));
+    assert_eq!(vol["range"], serde_json::json!([40.0, 0.0, 100.0, 5.0]));
+    assert!(can(vol, "focus") && can(vol, "increment") && can(vol, "decrement") && can(vol, "set-value"));
+    assert!(vol["children"].is_null(), "decorative slider parts stay hidden: {vol}");
+    let speed = node(&tree, "speed");
+    assert_eq!(said(speed), ("slider", "Speed"), "a hidden label still names it");
+    assert!(has(speed, "disabled") && actions(speed).is_empty());
+    no_echo(&tree);
+
+    assert!(act(&mut rt, "volume", Action::Increment));
+    assert!((rt.state.level - 0.45).abs() < 1e-4);
+    assert!(act(&mut rt, "volume", Action::Decrement));
+    assert!((rt.state.level - 0.40).abs() < 1e-4);
+    assert!(rt.accessibility_action("volume", Action::SetValue, Some(ActionData::NumericValue(73.0))));
+    settle(&mut rt);
+    assert!((rt.state.level - 0.75).abs() < 1e-4, "SetValue snaps to step 5: {}", rt.state.level);
+    assert_eq!(node(&rt.accessibility_json(), "volume")["value"], "75%");
+    assert!(act(&mut rt, "volume", Action::Focus));
+    press_key(&mut rt, Key::Right);
+    assert!((rt.state.level - 0.80).abs() < 1e-4);
+    press_key(&mut rt, Key::Home);
+    assert_eq!(rt.state.level, 0.0);
+    press_key(&mut rt, Key::End);
+    assert_eq!(rt.state.level, 1.0);
+    assert!(!act(&mut rt, "speed", Action::Increment), "disabled slider takes no assistive action");
+}
+
 fn fields(s: &App, _: &mut Cx<App>) -> El {
     let k = kit();
     col()

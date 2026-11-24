@@ -29,6 +29,8 @@ pub struct G {
     pub on: HashSet<String>,
     /// Picked values by group key (radio groups, selects, segmented controls, tabs).
     pub pick: HashMap<String, String>,
+    /// Numeric values by key (sliders).
+    pub values: HashMap<String, f32>,
     /// The open overlay, by key.
     pub open: Option<String>,
     pub edits: [TextEdit; 8],
@@ -62,6 +64,12 @@ impl G {
     pub fn picked<'a>(&'a self, group: &str, default: &'a str) -> &'a str {
         self.pick.get(group).map_or(default, String::as_str)
     }
+    pub fn value(&self, key: &str, default: f32) -> f32 {
+        self.values.get(key).copied().unwrap_or(default)
+    }
+    pub fn set_value(&mut self, key: &str, v: f32) {
+        self.values.insert(key.to_owned(), v);
+    }
     pub fn toggle_open(&mut self, key: &str) {
         self.open = if self.open.as_deref() == Some(key) { None } else { Some(key.to_owned()) };
     }
@@ -72,6 +80,7 @@ fn init() -> G {
         story: "index",
         on: HashSet::new(),
         pick: HashMap::new(),
+        values: HashMap::new(),
         open: None,
         edits: Default::default(),
         combo: Default::default(),
