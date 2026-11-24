@@ -89,6 +89,57 @@ impl Standard {
     }
 }
 
+/// The built-in key equivalent of an item Rune manages that yields to an app's own item
+/// claiming the same shortcut: the standard Edit/Window items (`STANDARD`-tagged) and the
+/// app menu's built-in nil-target `terminate:` Quit item (both winit's and `add_app_items`'s).
+pub(crate) fn yieldable_equivalent(
+    in_app_menu: bool,
+    is_standard: bool,
+    has_target: bool,
+    action: Option<&str>,
+) -> Option<Equivalent> {
+    let action = action?;
+    if is_standard {
+        return by_action(action).map(Standard::equivalent);
+    }
+    if in_app_menu && !has_target && action == "terminate:" {
+        return Some(Equivalent { key: "q".into(), cmd: true, shift: false, alt: false, ctrl: false });
+    }
+    None
+}
+
+/// A menu bar entry reduced to the fields key-equivalent yielding inspects.
+#[cfg(test)]
+#[derive(Clone)]
+struct YieldItem<'a> {
+    in_app_menu: bool,
+    is_standard: bool,
+    has_target: bool,
+    action: Option<&'a str>,
+    equivalent: Option<Equivalent>,
+}
+
+/// Computes the effective key string of each item after built-in yieldable items release
+/// any key equivalent claimed by a non-yieldable item, matching `default_macos::sync_standard`.
+#[cfg(test)]
+fn resolve_yields(items: &[YieldItem<'_>]) -> Vec<String> {
+    let mut claimed = std::collections::HashSet::new();
+    for item in items {
+        if yieldable_equivalent(item.in_app_menu, item.is_standard, item.has_target, item.action).is_none()
+            && let Some(eq) = &item.equivalent
+        {
+            claimed.insert(eq.clone());
+        }
+    }
+    items.iter().map(|item| {
+        if let Some(eq) = yieldable_equivalent(item.in_app_menu, item.is_standard, item.has_target, item.action) {
+            if !claimed.contains(&eq) { eq.key } else { String::new() }
+        } else {
+            item.equivalent.as_ref().map_or_else(String::new, |e| e.key.clone())
+        }
+    }).collect()
+}
+
 /// Where a new top-level menu named `name` goes among the menus named `tops` (index 0 the app
 /// menu), in the Mac order: the app menu, File, Edit, the app's other menus, Window, Help. It
 /// goes before the first menu that comes later in that order, else last. Names are the ones
@@ -226,5 +277,40 @@ mod tests {
         assert!(!is_winit_default(1, &winit[..7]), "no Quit: not winit's");
         assert!(!is_winit_default(1, &[]), "an accessory app's empty app menu");
         assert!(!is_winit_default(0, &[]));
+    }
+
+    #[test]
+    fn builtin_quit_yields_cmd_q_and_restores_when_unclaimed() {
+        let cmd_q = Equivalent::new("q", true, false, false, false).unwrap();
+        let shift_cmd_q = Equivalent::new("q", true, true, false, false).unwrap();
+        let opt_cmd_q = Equivalent::new("q", true, false, true, false).unwrap();
+        let cmd_w = Equivalent::new("w", true, false, false, false).unwrap();
+
+        // Nil-target terminate: in the app menu yields ⌘Q; targeted or non-app-menu terminate: does not.
+        assert_eq!(yieldable_equivalent(true, false, false, Some("terminate:")), Some(cmd_q.clone()));
+        assert_eq!(yieldable_equivalent(true, false, true, Some("terminate:")), None);
+        assert_eq!(yieldable_equivalent(false, false, false, Some("terminate:")), None);
+        assert_eq!(yieldable_equivalent(true, false, false, Some("hide:")), None);
+        assert_eq!(yieldable_equivalent(true, false, false, Some("orderFrontStandardAboutPanel:")), None);
+        assert_eq!(yieldable_equivalent(false, true, false, Some("performClose:")), Some(cmd_w.clone()));
+        assert_eq!(yieldable_equivalent(false, false, false, Some("performClose:")), None);
+
+        let builtin_quit = |current: Option<Equivalent>| YieldItem {
+            in_app_menu: true, is_standard: false, has_target: false, action: Some("terminate:"), equivalent: current,
+        };
+        let custom = |in_app_menu: bool, eq: Equivalent| YieldItem {
+            in_app_menu, is_standard: false, has_target: true, action: Some("runeMenuAction:"), equivalent: Some(eq),
+        };
+        let std_close = YieldItem {
+            in_app_menu: false, is_standard: true, has_target: false, action: Some("performClose:"), equivalent: Some(cmd_w),
+        };
+
+        // Custom ⌘Q in another menu or the app menu steals ⌘Q from built-in Quit; ⌘W stays untouched.
+        assert_eq!(resolve_yields(&[builtin_quit(Some(cmd_q.clone())), custom(false, cmd_q.clone()), std_close.clone()]), ["", "q", "w"]);
+        assert_eq!(resolve_yields(&[builtin_quit(None), custom(true, cmd_q.clone())]), ["", "q"]);
+        // Different modifier chords (⇧⌘Q, ⌥⌘Q) do not steal ⌘Q from built-in Quit.
+        assert_eq!(resolve_yields(&[builtin_quit(Some(cmd_q.clone())), custom(false, shift_cmd_q), custom(false, opt_cmd_q)]), ["q", "q", "q"]);
+        // Removing the custom ⌘Q item restores ⌘Q to built-in Quit even if its current key was cleared.
+        assert_eq!(resolve_yields(&[builtin_quit(None), std_close]), ["q", "w"]);
     }
 }

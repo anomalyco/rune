@@ -6,7 +6,7 @@ use rune::tok::{self, Theme, motion, radius, space, type_};
 #[cfg(feature = "frame-profile")]
 #[global_allocator]
 static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
-use rune::{Align, AppSpec, Color, Cx, Drag, El, Phase, Spring, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, Cx, Drag, El, MenuItem, Phase, Spring, col, el, row, text};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Appearance {
@@ -24,6 +24,8 @@ struct Settings {
     /// Slider position 0..1; animation speed is 2^(2v − 1), so the middle is 1×.
     speed: f32,
     reduce_motion: bool,
+    about_open: bool,
+    quit_confirm: bool,
 }
 
 impl Default for Settings {
@@ -36,6 +38,8 @@ impl Default for Settings {
             sounds: false,
             speed: 0.5,
             reduce_motion: false,
+            about_open: false,
+            quit_confirm: false,
         }
     }
 }
@@ -59,6 +63,28 @@ fn cancelling_the_speed_slider_restores_its_value_before_a_track_press() {
     rt.pointer_up(x + 70.0, y);
     rt.frame(0.0);
     assert_eq!(rt.state.speed, 0.5);
+}
+
+#[test]
+fn about_and_quit_confirm_sheets_open_and_dismiss_on_escape() {
+    let mut rt = rune::Runtime::new(Settings::default(), view, (620.0, 520.0), rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(rt.find("about-dialog").is_none());
+    assert!(rt.find("quit-dialog").is_none());
+
+    rt.update(|s, _| s.about_open = true);
+    rt.frame(0.0);
+    assert!(rt.find("about-dialog").is_some());
+    rt.key(rune::KeyEvent { key: rune::Key::Escape, mods: rune::Mods::default() });
+    rt.frame(0.0);
+    assert!(!rt.state.about_open);
+
+    rt.update(|s, _| s.quit_confirm = true);
+    rt.frame(0.0);
+    assert!(rt.find("quit-dialog").is_some());
+    rt.key(rune::KeyEvent { key: rune::Key::Escape, mods: rune::Mods::default() });
+    rt.frame(0.0);
+    assert!(!rt.state.quit_confirm);
 }
 
 /// Everything a component needs to paint itself.
@@ -134,6 +160,78 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
                     ],
                 )),
         )
+        .children(s.about_open.then(|| modal_sheet(
+            p,
+            "about-dialog",
+            "About Settings",
+            "Custom macOS app-menu About item (MenuItem::about), replacing AppKit's standard About panel.",
+            row().key("actions").justify_end().child(sheet_button(p, "about-done", "Done", true, |s, _| s.about_open = false)),
+            |s| s.about_open = false,
+        )))
+        .children(s.quit_confirm.then(|| modal_sheet(
+            p,
+            "quit-dialog",
+            "Quit Settings?",
+            "⌘Q is claimed by this app's Close Settings menu item; the built-in Quit item yields its shortcut.",
+            row().key("actions").justify_end().gap(space::S2)
+                .child(sheet_button(p, "quit-cancel", "Cancel", false, |s, _| s.quit_confirm = false))
+                .child(sheet_button(p, "quit-confirm", "Quit", true, |_, tx| tx.quit())),
+            |s| s.quit_confirm = false,
+        )))
+}
+
+fn modal_sheet(
+    p: Paint,
+    key: &'static str,
+    title: &'static str,
+    body: &'static str,
+    actions: El,
+    dismiss: fn(&mut Settings),
+) -> El {
+    el().key("backdrop")
+        .absolute(0.0, 0.0)
+        .w_full()
+        .h_full()
+        .center()
+        .fill(Color::BLACK.alpha(0.32))
+        .child(
+            col().key(key)
+                .role("dialog")
+                .label(title)
+                .modal(true, dismiss)
+                .w(360.0)
+                .padding(space::S6)
+                .gap(space::S3)
+                .fill(p.t.card)
+                .radius(radius::LG)
+                .border(p.hair, p.t.card_border)
+                .shadow(8.0, 28.0, p.t.shadow)
+                .child(text(title).key("title").font(type_::TITLE).color(p.t.text))
+                .child(text(body).key("body").w_full().wrap().font(type_::BODY).color(p.t.text_secondary))
+                .child(actions),
+        )
+}
+
+fn sheet_button(
+    p: Paint,
+    key: &'static str,
+    label: &'static str,
+    primary: bool,
+    action: fn(&mut Settings, &mut rune::Tx),
+) -> El {
+    el().key(key)
+        .role("button")
+        .label(label)
+        .focusable(true)
+        .h(28.0)
+        .px(space::S3)
+        .center()
+        .radius(radius::MD)
+        .fill(if primary { p.accent } else { p.t.control_track })
+        .hover(if primary { p.accent.alpha(0.88) } else { p.t.hover })
+        .press(p.t.press)
+        .on_press_tx(action)
+        .child(text(label).key("label").font(type_::LABEL).color(if primary { Color::WHITE } else { p.t.text }).a11y_hidden())
 }
 
 fn section<const N: usize>(p: Paint, key: &str, title: &str, rows: [El; N]) -> El {
@@ -359,7 +457,7 @@ fn speed_control(p: Paint, v: f32) -> El {
 }
 
 fn main() {
-    rune::run(AppSpec::<Settings> {
+    let spec = AppSpec::<Settings> {
         scenes: &[
             ("default", |_| {}),
             ("light", |s| s.appearance = Appearance::Light),
@@ -372,7 +470,30 @@ fn main() {
             }),
             ("accent-pink", |s| s.accent = 2),
             ("slow", |s| s.speed = 0.0),
+            ("about", |s| s.about_open = true),
+            ("quit-confirm", |s| s.quit_confirm = true),
         ],
         ..AppSpec::new("Settings", (620.0, 520.0), Settings::default, view)
-    });
+    };
+    App::new(spec)
+        .menu_item(
+            MenuItem::about("About Settings", |s: &mut Settings, _| {
+                s.quit_confirm = false;
+                s.about_open = true;
+            })
+            .id("about"),
+        )
+        .menu_item(
+            MenuItem::new("Close Settings…", |s: &mut Settings, tx| {
+                if s.quit_confirm {
+                    tx.quit();
+                } else {
+                    s.about_open = false;
+                    s.quit_confirm = true;
+                }
+            })
+            .id("close-settings")
+            .key_equivalent("cmd+q".parse().expect("valid cmd+q shortcut")),
+        )
+        .run();
 }
