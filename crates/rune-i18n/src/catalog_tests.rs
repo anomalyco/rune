@@ -36,3 +36,22 @@ fn get_returns_none_when_span_end_overflows_u32() {
     assert_eq!(messages.get(5), None);
     assert_eq!(messages.get(6), None);
 }
+
+#[test]
+fn a_locale_left_for_run_time_takes_its_blob_once_and_refuses_another_builds() {
+    use super::{Catalog, Key, LocaleInfo};
+    static LOCALES: [LocaleInfo; 2] = [LocaleInfo::new("en", "en", "English", false), LocaleInfo::new("de", "de", "Deutsch", false)];
+    static MESSAGES: [Messages; 2] = [Messages::new("hi", &[0, 0, 0, 0, 2, 0, 0, 0]), Messages::later()];
+    static CATALOG: Catalog = Catalog::new(&["greeting"], &[], &[], &LOCALES, &MESSAGES);
+    let key = Key::named(CATALOG.keys(), "greeting");
+
+    assert!(!CATALOG.present(1));
+    assert!(CATALOG.load_blob(1, "hallo", &[0, 0, 0, 0, 5]).is_err());
+    assert!(!CATALOG.present(1));
+    assert_eq!(CATALOG.load_blob(1, "hallo", &[0, 0, 0, 0, 5, 0, 0, 0]), Ok(()));
+    assert_eq!(MESSAGES[1].get(key.index()), Some("hallo"));
+    // Here already: a second blob changes nothing.
+    assert_eq!(CATALOG.load_blob(1, "moin", &[0, 0, 0, 0, 4, 0, 0, 0]), Ok(()));
+    assert_eq!(MESSAGES[1].get(key.index()), Some("hallo"));
+    assert!(CATALOG.load_blob(2, "", &[]).is_err());
+}

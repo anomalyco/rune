@@ -167,6 +167,21 @@ impl Catalog {
         Ok(())
     }
 
+    /// Fills a locale the build left for run time (`Messages::later`) from the blob the build
+    /// wrote for it (`codegen::generate_later`: `<id>.txt` and `<id>.spans`), with nothing to
+    /// parse. The blob must come from the same build as the program: its span table has one
+    /// entry per key, and one of another length is refused. A locale that's here already is left
+    /// as it is.
+    pub fn load_blob(&self, locale: usize, text: &'static str, spans: &'static [u8]) -> Result<(), String> {
+        let Some(messages) = self.messages.get(locale) else { return Err(format!("no locale {locale}")) };
+        if messages.present() { return Ok(()); }
+        if spans.len() != self.keys.len() * 8 {
+            return Err(format!("the span table has {} bytes, the catalog has {} keys", spans.len(), self.keys.len()));
+        }
+        messages.loaded.set((text, spans)).ok();
+        Ok(())
+    }
+
     /// The key index for each CLDR category of a plural base, in [`crate::PluralCategory`] order.
     pub(crate) fn plural_forms(&self, key: PluralKey) -> [Option<usize>; 6] {
         let forms = self.plural_forms.get(key.0 as usize).copied().unwrap_or([u32::MAX; 6]);
