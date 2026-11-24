@@ -1,0 +1,1 @@
+- Release builds: gate debug-only `CommitState::last_commit_clock` (and its per-commit write) and `CommitMeter::{handler, frame_ends}` behind `#[cfg(debug_assertions)]`, removing release-only dead-code warnings in `rune`.
