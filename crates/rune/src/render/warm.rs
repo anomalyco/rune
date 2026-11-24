@@ -92,22 +92,44 @@ pub(super) fn warm(features: wgpu::Features, prepare: Option<Box<dyn FnOnce(&wgp
     if spawned.is_err() { *lock(&SLOT.state) = State::Idle; }
 }
 
-/// `warm`, then `done`, on a thread of its own, once a device waits in the slot or none could be
-/// made: a window that opened on the CPU takes it from there (`window::linux::handover`), and
-/// `Gpu::for_surface` makes one itself when the slot is empty.
+/// `warm`, then `frame`, then `done`, on a thread of its own, once a device waits in the slot
+/// or none could be made: a window that opened on the CPU takes it from there
+/// (`window::linux::handover`), and `Gpu::for_surface` makes one itself when the slot is empty.
+///
+/// `frame` draws with the device and renderer that wait, on this thread: what a window's first
+/// GPU frame would make on the app's thread (the pipelines the frame's layers need, their
+/// targets) is made here, while the CPU goes on drawing the window. For as long as it draws,
+/// the slot reads as still being made.
 #[cfg(target_os = "linux")]
-pub(super) fn warm_then(features: wgpu::Features, done: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+pub(super) fn warm_then(features: wgpu::Features, frame: impl FnOnce(&Gpu, &mut Renderer) + Send + 'static, done: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
     std::thread::Builder::new().name("rune-gpu-window".into()).spawn(move || {
         warm(features, None);
         let mut state = lock(&SLOT.state);
         while matches!(*state, State::Making { .. }) {
             state = SLOT.changed.wait(state).unwrap_or_else(|e| e.into_inner());
         }
+        if let State::Ready { until, .. } = &*state {
+            let until = *until;
+            let State::Ready { warmed: Warmed(gpu, renderer), .. } = std::mem::replace(&mut *state, State::Making { until }) else { unreachable!("checked above") };
+            drop(state);
+            let mut renderer = Renderer::from_warm(renderer);
+            frame(&gpu, &mut renderer);
+            state = lock(&SLOT.state);
+            // `discard` may have asked for it to go meanwhile (`until`), and its device may have died.
+            let until = if let State::Making { until } = &*state { Some(*until) } else { None };
+            *state = match (renderer.into_warm(), until) {
+                (Some(renderer), Some(until)) if !gpu.is_lost() => State::Ready { warmed: Warmed(gpu, renderer), until },
+                _ => State::Idle,
+            };
+            SLOT.changed.notify_all();
+        }
         drop(state);
         done();
+        // The thread that made the device stopped keeping the slot when it saw it taken out:
+        // this one lets it go if no surface takes it in time.
+        wait_for_surface(lock(&SLOT.state));
     }).map(drop)
 }
-
 /// Whether a surface made now finds a device: a warmed one waits in the slot, or another
 /// surface's lives. Without either, every adapter refused a device (`make`), and a surface made
 /// now would only ask them again.

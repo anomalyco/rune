@@ -55,7 +55,7 @@ fn orders() -> Vec<Vec<Event>> {
 
 fn building(explicit_sync: bool) -> (SurfaceMode, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let (cpu, sent) = Cpu::fake(explicit_sync);
-    (SurfaceMode::Cpu { cpu, job: GpuJob::Building { tries: 1 } }, sent)
+    (SurfaceMode::Cpu { cpu, job: GpuJob::Building { tries: 1, latest: Default::default() } }, sent)
 }
 
 #[test]
@@ -126,6 +126,6 @@ fn a_failed_surface_leaves_the_window_with_the_gpu_under_explicit_sync() {
 fn only_a_window_that_switched_goes_back() {
     let (mut mode, _) = building(false);
     assert!(!mode.switch_back(GpuJob::Failed));
-    assert!(matches!(mode, SurfaceMode::Cpu { job: GpuJob::Building { tries: 1 }, .. }));
+    assert!(matches!(mode, SurfaceMode::Cpu { job: GpuJob::Building { tries: 1, .. }, .. }));
     assert!(!SurfaceMode::Gpu.switch_back(GpuJob::Failed));
 }

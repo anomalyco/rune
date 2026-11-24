@@ -20,6 +20,7 @@ use crate::platform::win32::dib::{Dib, free_later};
 use crate::render::cpu_boot::HalfRounding;
 use crate::render::{Gpu, Renderer, SurfaceSetupError, format_window_setup_error, with_wine_hwnd_hint};
 use crate::time::Instant;
+pub(super) use crate::window::warm_frame::{warm_frame, warm_instances};
 use crate::window::WakeEvent;
 use crate::window::host::{CompositorFrame, Host};
 use crate::window::surface::{Win, acquire, configure_checked, drawable_size, max_surface_dim, reblend_core, rebuild_renderer_core, surface_config};
@@ -523,57 +524,6 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
     warm_frame(&gpu, &mut renderer, target_format, srgb, (config.width, config.height), &instances);
     crate::marks::mark("gpu.window.warmed");
     Ok(Prepared { gpu, renderer, surface, config, handover })
-}
-
-/// On the GPU thread, before the hand-over: the renderer draws the window's latest CPU frame once,
-/// into a target of the swap chain's format, and waits for the GPU. Its first frame's costs are
-/// paid here, so the hand-over frame on the app's thread costs what a frame does: the pipelines
-/// its layers' formats need, its layers' targets (the hand-over frame's layers are the latest
-/// frame's, or nearly), the staging space and the instance buffer. Its own target goes as soon as
-/// the GPU is done with it. The atlas is an empty one: the glyphs land with the hand-over frame's
-/// own prepare.
-fn warm_frame(gpu: &Gpu, renderer: &mut Renderer, format: wgpu::TextureFormat, srgb: bool, size: (u32, u32), instances: &[crate::render::Instance]) {
-    renderer.set_format(&gpu.device, format);
-    renderer.set_srgb_blend(srgb);
-    debug_assert_eq!(renderer.format(), format);
-    let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("rune warm frame"),
-        size: wgpu::Extent3d { width: size.0.max(1), height: size.1.max(1), depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = target.create_view(&Default::default());
-    let mut atlas = crate::text::Atlas::new();
-    let mut enc = gpu.device.create_command_encoder(&Default::default());
-    renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, instances, size);
-    renderer.draw(&mut enc, &view, [0.0; 4]);
-    renderer.submit(&gpu.queue, enc);
-    rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
-    target.destroy();
-    rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
-}
-
-/// A CPU frame's instances as the warm frame draws them: what reads the app's own state (an
-/// image's slot, a glyph's atlas page, a compositor's effect) draws as a plain box, so the frame
-/// needs nothing but the renderer.
-pub(super) fn warm_instances(instances: &[crate::render::Instance]) -> Vec<crate::render::Instance> {
-    use crate::render::{KIND_RECT, Kind};
-    instances
-        .iter()
-        .map(|i| {
-            let mut i = *i;
-            match i.kind() {
-                Some(Kind::Image | Kind::Effect) => i.params[1] = KIND_RECT,
-                Some(Kind::Glyph) => i.params[2] = 0.0,
-                _ => {}
-            }
-            i
-        })
-        .collect()
 }
 
 /// On a worker: maps the GPU frame's copy, counts the pixels that differ from the CPU's buffer

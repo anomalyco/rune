@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
-use super::handover::{GpuJob, SurfaceMode};
+use super::handover::{GpuJob, Latest, SurfaceMode};
 use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, RenderPrep, StepInfo};
 use crate::platform::cpu_frames::{Frames, Put, Retired};
@@ -26,6 +26,7 @@ use crate::window::handle::native_window_number;
 use crate::window::host::Host;
 use crate::window::host::stepping::FrameMove;
 use crate::window::state::FirstFrame;
+use crate::window::warm_frame::warm_instances;
 use crate::window::surface::{
     Backoff, BackoffEvent, FRAME_LATENCY, HiddenPace, LoopFrame, Native, Presented, Redraw,
     SurfaceRetries, TIMER_FRAME, TimerFrame, Win, drawable_size, max_surface_dim,
@@ -261,6 +262,10 @@ impl FrameHost for CpuWindowFrame<'_> {
         let Some(l) = self.host.win.as_mut() else { return RenderPrep::Abort };
         let (width, height) = (l.config.width, l.config.height);
         let rt = self.host.app.rt_mut();
+        // What the window draws now, for the GPU thread's warm frame (`handover::Latest`).
+        if let SurfaceMode::Cpu { job: GpuJob::Building { latest, .. }, .. } = &l.native.mode {
+            *latest.lock().unwrap_or_else(|e| e.into_inner()) = Latest { instances: warm_instances(&rt.instances), size: (width, height) };
+        }
         let Some(cpu) = l.native.mode.cpu() else { return RenderPrep::Abort };
         cpu.painter.fill_masks(&mut rt.text.atlas);
         crate::marks::mark_once(&FIRST_MASKS, "frame.first.masks");

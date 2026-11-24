@@ -12,6 +12,8 @@ pub(crate) mod display_link_machine;
 pub mod embed;
 #[cfg(any(test, target_vendor = "apple"))]
 pub(crate) mod embed_frame;
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod gl_links;
 pub(crate) mod ime;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(crate) mod layer_shell;
