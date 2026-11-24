@@ -1,7 +1,7 @@
 //! Alignment and aspect-preserving placement for surfaces and pixel buffers: which edge a spare
 //! or cropped side is shared from, and whether the frame is scaled at all.
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Align {
     #[default]
     Start,
@@ -17,7 +17,7 @@ pub enum SurfaceFit {
 }
 
 /// `El::surface_anchor` and `El::surface_unscaled`. The default centres and scales by `SurfaceFit`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfacePlace {
     pub anchor: [Align; 2],
     pub unscaled: bool,

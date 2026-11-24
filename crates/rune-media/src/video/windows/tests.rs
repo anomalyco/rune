@@ -474,3 +474,50 @@ fn reconcile_folds_nudged_audio_clock_into_playing_phase() {
     assert_eq!(rig.phase(), Phase::Playing { clock: nudged });
     assert_eq!(rig.native().clock.get(), Some(nudged));
 }
+
+#[test]
+fn layer_showing_reports_playing_layer_without_mutating_state_and_false_after_pause_seek_or_end() {
+    let r = rig();
+    let start = rune_core::time::now();
+    r.plays_from_two(start);
+    assert!(r.window_layers().showing);
+    assert_eq!(r.native().screen, Screen::Layer);
+    assert_eq!(r.pipe.lock().layer, Some(SIZE));
+
+    assert!(layer_showing(&r.player.shared, SIZE));
+    assert!(!layer_showing(&r.player.shared, (SIZE.0 + 2, SIZE.1)), "different size is not showing");
+    assert_eq!(r.native().screen, Screen::Layer, "read-only check leaves screen untouched");
+    assert_eq!(r.pipe.lock().layer, Some(SIZE), "read-only check leaves decoder ask untouched");
+
+    // Refusing the layer makes layer_showing false without altering screen.
+    r.pipe.lock().layer_refused = true;
+    assert!(!layer_showing(&r.player.shared, SIZE));
+    assert_eq!(r.native().screen, Screen::Layer);
+    r.pipe.lock().layer_refused = false;
+    assert!(layer_showing(&r.player.shared, SIZE));
+
+    // Pausing leaves Screen::Layer intact until unlayer runs, yet layer_showing turns false.
+    r.edit(phases::Event::Pause);
+    r.reconcile();
+    assert_eq!(r.native().screen, Screen::Layer);
+    assert!(!layer_showing(&r.player.shared, SIZE));
+
+    // Seeking while layered also makes layer_showing false.
+    r.edit(phases::Event::Play);
+    r.stand(Phase::Playing { clock: Anchor { at: start, pos: 2.0, rate: 1.0 } }, Some(2.0));
+    assert!(r.window_layers().showing);
+    assert!(layer_showing(&r.player.shared, SIZE));
+    r.edit(phases::Event::Seek(5.0));
+    r.reconcile();
+    assert!(!layer_showing(&r.player.shared, SIZE));
+
+    // Ending while layered also makes layer_showing false.
+    let rig_end = rig();
+    rig_end.plays_from_two(start);
+    assert!(rig_end.window_layers().showing);
+    assert!(layer_showing(&rig_end.player.shared, SIZE));
+    rig_end.pipe.lock().ended = Some(rig_end.generation());
+    rig_end.show(start + Duration::from_secs(10));
+    assert!(matches!(rig_end.phase(), Phase::Ended { .. }));
+    assert!(!layer_showing(&rig_end.player.shared, SIZE));
+}

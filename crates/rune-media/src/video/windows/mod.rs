@@ -131,6 +131,21 @@ pub(crate) fn layer(shared: &Arc<Shared>, ask: Option<(u32, u32)>) -> LayerStatu
     status
 }
 
+/// Read-only check of whether the clip's layer is still running and showing at `size` for the
+/// current seek generation, without mutating the decoder's ask or `native.screen`.
+pub(crate) fn layer_showing(shared: &Arc<Shared>, size: (u32, u32)) -> bool {
+    let native = shared.native.lock().unwrap();
+    if !matches!(native.phase, Phase::Playing { .. }) {
+        return false;
+    }
+    let generation = native.seeks.current().0;
+    let Some(pipe) = native.pipe.as_ref() else {
+        return false;
+    };
+    let s = pipe.lock();
+    !s.layer_refused && s.layer_shown == Some((size, generation))
+}
+
 // SAFETY: the reader in `still` stays on the headless thread that made it, under the Shared mutex.
 #[allow(unsafe_code)]
 unsafe impl Send for Native {}
