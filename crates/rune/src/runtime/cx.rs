@@ -52,6 +52,8 @@ pub(crate) struct CxCore {
     pub(super) env: Env,
     pub(super) titlebar_inset: f32,
     pub(super) chrome: crate::ChromeInsets,
+    pub(super) maximized: bool,
+    pub(super) full_screen: bool,
     /// `Cx::caption_color`, read once the view returns.
     pub(super) caption_color: Option<Color>,
     /// `Cx::foreground` and `Cx::focus_ring`, read once the view returns.
@@ -93,12 +95,16 @@ impl CxCore {
     pub(crate) fn clear_chrome(&mut self) {
         self.titlebar_inset = 0.0;
         self.chrome = crate::ChromeInsets::default();
+        self.maximized = false;
+        self.full_screen = false;
     }
 
     pub(crate) fn env(&self) -> Env { self.env }
     pub(crate) fn system_dark(&self) -> bool { self.env.system_dark }
     pub(crate) fn titlebar_inset(&self) -> f32 { self.titlebar_inset }
     pub(crate) fn chrome_insets(&self) -> crate::ChromeInsets { self.chrome }
+    pub(crate) fn is_maximized(&self) -> bool { self.maximized }
+    pub(crate) fn is_full_screen(&self) -> bool { self.full_screen }
     pub(crate) fn caption_color(&mut self, color: Color) { self.caption_color = Some(color); }
     pub(crate) fn foreground(&mut self, color: Color) { self.defaults.foreground = Some(color); }
     pub(crate) fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
@@ -200,6 +206,36 @@ impl<S> Cx<S> {
     /// window would.
     #[inline(always)]
     pub fn chrome_insets(&self) -> crate::ChromeInsets { self.core.chrome_insets() }
+    /// Whether the host window is currently maximized (zoomed on macOS), as confirmed by the
+    /// window system. The view and any `memo` closures rebuild automatically when this changes;
+    /// `Tx::toggle_maximized` never flips it optimistically before the OS confirms the change.
+    /// Returns `false` in headless runs unless set with [`Runtime::set_maximized`], and for
+    /// overlays, adopted macOS panels, and staged playground subviews.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, text};
+    /// fn titlebar(_: &(), cx: &mut Cx<()>) -> El {
+    ///     text(if cx.is_maximized() { "Restore" } else { "Maximize" })
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn is_maximized(&self) -> bool { self.core.is_maximized() }
+    /// Whether the host window is currently in full screen (a native full-screen Space on
+    /// macOS, borderless full screen over its display on Windows and Linux), as confirmed by
+    /// the window system. The view and any `memo` closures rebuild automatically when this
+    /// changes, including when the user enters or leaves full screen from the window manager
+    /// or macOS Esc / green button. Returns `false` in headless runs unless set with
+    /// [`Runtime::set_full_screen`], and for overlays, adopted macOS panels, and staged
+    /// playground subviews.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, text};
+    /// fn titlebar(_: &(), cx: &mut Cx<()>) -> El {
+    ///     text(if cx.is_full_screen() { "Exit full screen" } else { "Full screen" })
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn is_full_screen(&self) -> bool { self.core.is_full_screen() }
     /// The colour of the Windows caption buttons' symbols (Electron's `titleBarOverlay`
     /// `symbolColor`), for a titlebar whose colours follow the app's theme rather than the
     /// system's light or dark setting: by default black in light mode, white in dark. Their

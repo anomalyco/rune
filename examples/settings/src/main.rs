@@ -141,6 +141,40 @@ fn font_picker_lists_installed_families_and_updates_slot() {
     }
 }
 
+#[test]
+fn titlebar_reflects_window_maximized_and_full_screen_state() {
+    let mut rt = rune::Runtime::new(Settings::default(), view, (620.0, 640.0), rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    use rune::accesskit::Toggled;
+    let node_state = |rt: &mut rune::Runtime<Settings>, key: &str| {
+        let tree = rt.accessibility_tree();
+        tree.nodes
+            .iter()
+            .find(|(_, node)| node.author_id() == Some(key))
+            .map(|(_, node)| (node.label().map(str::to_owned), node.toggled()))
+    };
+    assert_eq!(node_state(&mut rt, "window-state"), Some((Some("Window state: Windowed".into()), None)));
+    assert_eq!(node_state(&mut rt, "window-maximize"), Some((Some("Maximize".into()), Some(Toggled::False))));
+    assert_eq!(node_state(&mut rt, "window-full-screen"), Some((Some("Full screen".into()), Some(Toggled::False))));
+
+    rt.set_maximized(true);
+    rt.frame(1.0);
+    assert_eq!(node_state(&mut rt, "window-state"), Some((Some("Window state: Maximized".into()), None)));
+    assert_eq!(node_state(&mut rt, "window-maximize"), Some((Some("Restore".into()), Some(Toggled::True))));
+
+    rt.set_full_screen(true);
+    rt.frame(2.0);
+    assert_eq!(node_state(&mut rt, "window-state"), Some((Some("Window state: Full screen".into()), None)));
+    assert_eq!(node_state(&mut rt, "window-full-screen"), Some((Some("Exit full screen".into()), Some(Toggled::True))));
+
+    rt.set_maximized(false);
+    rt.set_full_screen(false);
+    rt.frame(3.0);
+    assert_eq!(node_state(&mut rt, "window-state"), Some((Some("Window state: Windowed".into()), None)));
+    assert_eq!(node_state(&mut rt, "window-maximize"), Some((Some("Maximize".into()), Some(Toggled::False))));
+    assert_eq!(node_state(&mut rt, "window-full-screen"), Some((Some("Full screen".into()), Some(Toggled::False))));
+}
+
 /// Everything a component needs to paint itself.
 #[derive(Clone, Copy)]
 struct Paint {
@@ -198,14 +232,7 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
         .key("window")
         .role("window")
         .fill(t.bg)
-        .child(
-            row()
-                .key("titlebar")
-                .h(40.0)
-                .w_full()
-                .center()
-                .child(text("Settings").key("title").font(type_::TITLE).color(t.text)),
-        )
+        .child(titlebar(p, cx.chrome_insets(), cx.is_maximized(), cx.is_full_screen()))
         .child(
             col()
                 .key("content")
@@ -326,6 +353,98 @@ fn font_picker(
         .placement(rune_kit::Placement::TopEnd)
         .on_choose(choose)
         .build(k, overlays)
+}
+
+fn titlebar(p: Paint, insets: rune::ChromeInsets, maximized: bool, full_screen: bool) -> El {
+    let status = if full_screen {
+        "Full screen"
+    } else if maximized {
+        "Maximized"
+    } else {
+        "Windowed"
+    };
+    let max_label = if maximized { "Restore" } else { "Maximize" };
+    let fs_label = if full_screen { "Exit full screen" } else { "Full screen" };
+    let leading = insets.leading.max(space::S3);
+    let trailing = insets.trailing.max(space::S3);
+    let state_pill = el()
+        .key("window-state")
+        .role("status")
+        .label(format!("Window state: {status}"))
+        .h(22.0)
+        .px(space::S2)
+        .center()
+        .radius(radius::SM)
+        .fill(if full_screen || maximized { p.accent.alpha(0.16) } else { p.t.control_track })
+        .child(
+            text(status)
+                .key("label")
+                .font(type_::LABEL)
+                .color(if full_screen || maximized { p.accent } else { p.t.text_secondary })
+                .a11y_hidden(),
+        );
+    let max_button = titlebar_button(p, "window-maximize", max_label, maximized, |_, tx| {
+        tx.toggle_maximized();
+    });
+    let fs_button = titlebar_button(
+        p,
+        "window-full-screen",
+        fs_label,
+        full_screen,
+        if full_screen {
+            |_, tx| tx.set_full_screen(false)
+        } else {
+            |_, tx| tx.set_full_screen(true)
+        },
+    );
+    row()
+        .key("titlebar")
+        .h(40.0)
+        .w_full()
+        .pl(leading)
+        .pr(trailing)
+        .center_y()
+        .justify_between()
+        .window_drag()
+        .child(row().key("titlebar-left").center_y().gap(space::S2).child(state_pill))
+        .child(text("Settings").key("title").font(type_::TITLE).color(p.t.text))
+        .child(
+            row()
+                .key("titlebar-actions")
+                .center_y()
+                .gap(space::S1)
+                .child(max_button)
+                .child(fs_button),
+        )
+}
+
+fn titlebar_button(
+    p: Paint,
+    key: &'static str,
+    label: &'static str,
+    active: bool,
+    action: fn(&mut Settings, &mut rune::Tx),
+) -> El {
+    el().key(key)
+        .role("button")
+        .label(label)
+        .checked(active)
+        .focusable(true)
+        .h(24.0)
+        .px(space::S2)
+        .center()
+        .radius(radius::SM)
+        .fill(if active { p.accent.alpha(0.18) } else { p.t.control_track })
+        .hover(p.t.hover)
+        .press(p.t.press)
+        .on_press_tx(action)
+        .child(
+            text(label)
+                .key("label")
+                .font(type_::LABEL)
+                .color(if active { p.accent } else { p.t.text })
+                .a11y_hidden(),
+        )
 }
 
 fn modal_sheet(

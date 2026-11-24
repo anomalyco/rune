@@ -219,7 +219,7 @@ pub(crate) fn enter(
     accent: crate::SystemAccent,
     reduced_motion: bool,
     srgb_blend: bool,
-    chrome: [u32; 4],
+    chrome: [u32; 5],
     caret: Option<(String, [f32; 4])>,
     layout: LayoutRects,
 ) -> Guard {
@@ -287,7 +287,7 @@ pub(crate) fn enter_partial(
     accent: crate::SystemAccent,
     reduced_motion: bool,
     srgb_blend: bool,
-    chrome: [u32; 4],
+    chrome: [u32; 5],
     caret: Option<(String, [f32; 4])>,
     layout: LayoutRects,
 ) -> Guard {

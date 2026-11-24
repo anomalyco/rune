@@ -501,3 +501,72 @@ fn caption_button_labels_follow_set_labels_across_states_and_edges() {
     assert_eq!(a11y_name(&a11y, "rune-caption-maximize"), Some("Maximieren"));
     assert_eq!(a11y_name(&a11y, "rune-caption-close"), Some("Schließen"));
 }
+
+#[test]
+fn full_screen_requests_latch_and_last_call_wins() {
+    use crate::el::{FullScreenRequest, Tx, el};
+    use crate::runtime::Runtime;
+    use crate::{Cx, El, Env};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        el().key("root").w_full().h_full()
+    }
+
+    let mut rt = Runtime::new((), view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert_eq!(rt.take_full_screen_request(), None);
+    assert!(!rt.take_toggle_maximized());
+
+    // Explicit set_full_screen(true) and single-consume semantics.
+    rt.update(|_, tx| tx.set_full_screen(true));
+    assert_eq!(rt.take_full_screen_request(), Some(FullScreenRequest::Set(true)));
+    assert_eq!(rt.take_full_screen_request(), None);
+
+    // Explicit set_full_screen(false).
+    rt.update(|_, tx| tx.set_full_screen(false));
+    assert_eq!(rt.take_full_screen_request(), Some(FullScreenRequest::Set(false)));
+    assert_eq!(rt.take_full_screen_request(), None);
+
+    // Unchanged toggle_full_screen() latches Toggle.
+    rt.update(|_, tx| tx.toggle_full_screen());
+    assert_eq!(rt.take_full_screen_request(), Some(FullScreenRequest::Toggle));
+    assert_eq!(rt.take_full_screen_request(), None);
+
+    // Within one handler, last call wins.
+    rt.update(|_, tx| {
+        tx.toggle_full_screen();
+        tx.set_full_screen(false);
+    });
+    assert_eq!(rt.take_full_screen_request(), Some(FullScreenRequest::Set(false)));
+
+    rt.update(|_, tx| {
+        tx.set_full_screen(true);
+        tx.toggle_full_screen();
+    });
+    assert_eq!(rt.take_full_screen_request(), Some(FullScreenRequest::Toggle));
+
+    // Across turns before the shell drains: a quiet update preserves an earlier request,
+    // and a later request overwrites it; toggle_maximized stays independent.
+    rt.update(|_, tx| {
+        tx.set_full_screen(true);
+        tx.toggle_maximized();
+    });
+    rt.update(|_, _| {});
+    assert_eq!(rt.take_full_screen_request(), Some(FullScreenRequest::Set(true)));
+    assert!(rt.take_toggle_maximized());
+    assert!(!rt.take_toggle_maximized());
+
+    rt.update(|_, tx| tx.set_full_screen(true));
+    rt.update(|_, tx| tx.set_full_screen(false));
+    assert_eq!(rt.take_full_screen_request(), Some(FullScreenRequest::Set(false)));
+
+    // action::merge preserves an earlier request when the second Tx is empty, else last wins.
+    let mut merged = Tx::default();
+    merged.set_full_screen(true);
+    crate::runtime::input::action::merge(&mut merged, Tx::default());
+    assert_eq!(merged.full_screen, Some(FullScreenRequest::Set(true)));
+    let mut override_tx = Tx::default();
+    override_tx.toggle_full_screen();
+    crate::runtime::input::action::merge(&mut merged, override_tx);
+    assert_eq!(merged.full_screen, Some(FullScreenRequest::Toggle));
+}

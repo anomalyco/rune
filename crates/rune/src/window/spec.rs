@@ -161,7 +161,7 @@ pub struct WindowOptions {
     /// A bare window without OS decorations: for HUDs, launchers, overlays and tray pop-ups.
     /// On Windows, borderless windows stay bare with no outer resize borders or edge hit-test
     /// interception so exact display bounds and edge controls are preserved; apps that draw a
-    /// custom titlebar and want OS resize edges, Aero Snap, window menu and `Tx::minimize()`
+    /// custom titlebar and want OS resize edges, Aero Snap, and the system window menu
     /// should use [`App::titlebar`](crate::App::titlebar) (with
     /// [`Titlebar::controls(false)`](crate::Titlebar::controls) when drawing their own caption
     /// buttons).

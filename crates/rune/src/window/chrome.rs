@@ -75,6 +75,8 @@ pub(in crate::window) fn sync_chrome_core(rt: &mut RuntimeCore, w: &Win, chrome:
     let (left, right) = if caption.is_some_and(|c| c.mirrored) { (left + buttons, right) } else { (left, right + buttons) };
     rt.set_chrome_insets(crate::ChromeInsets::new(left, right, height));
     rt.set_caption(caption);
+    rt.set_maximized(w.is_maximized());
+    rt.set_full_screen(w.is_full_screen());
 }
 
 /// The traffic lights sit at the window's right: a right-to-left app on macOS.
@@ -161,13 +163,20 @@ pub(in crate::window) fn open_as(window: &Window, open_as: crate::windows::OpenA
     if open_as.full_screens() { window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(None))); }
 }
 
+/// Sets the window's full-screen state (`true` for borderless full screen over its display,
+/// `false` to exit). Adopted macOS panels ignore it.
+pub(in crate::window) fn set_full_screen(window: &Window, full_screen: bool) {
+    #[cfg(target_os = "macos")]
+    if crate::platform::macos::is_panel(window) { return; }
+    window.set_fullscreen(full_screen.then_some(winit::window::Fullscreen::Borderless(None)));
+}
+
 /// Takes the window full screen, borderless over its display, or brings it back. Adopted
 /// macOS panels ignore it.
 pub(in crate::window) fn toggle_full_screen(window: &Window) {
     #[cfg(target_os = "macos")]
     if crate::platform::macos::is_panel(window) { return; }
-    let full = window.fullscreen().is_some();
-    window.set_fullscreen((!full).then_some(winit::window::Fullscreen::Borderless(None)));
+    set_full_screen(window, window.fullscreen().is_none());
 }
 
 /// The window menu, where a custom titlebar (at `at`, the click's point in window points, else

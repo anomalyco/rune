@@ -5,6 +5,7 @@ fn no_direct_window_chrome_actions_bypassing_win_panel_guard() {
         "titlebar_double_click(&",
         "toggle_maximized(&",
         "toggle_full_screen(&",
+        "set_full_screen(&",
         ".window.drag_window(",
         ".window.set_maximized(",
         ".window.set_fullscreen(",

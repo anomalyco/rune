@@ -680,8 +680,10 @@ app.run();
   builds once with the latest state, with motion already landed where it would have ended. A
   window any part of which shows draws as usual. Headless runs always see a current tree.
 - Handlers ask the shell with `Tx::close_window()`, `Tx::minimize()` and `Tx::quit()` (quit wins,
-  and either wins over minimize). Minimize does nothing for a hidden window, a panel, a launcher,
-  an overlay, a borderless window or a window that can't minimize (debug builds say so).
+  and either wins over minimize). On Windows and Linux, resizable borderless windows minimize when
+  `WindowButtons::MINIMIZE` is enabled; minimize still does nothing for a hidden window, a panel,
+  a launcher, a click-through overlay, a non-resizable borderless window, a borderless window on
+  macOS, or a window without a minimize button (debug builds say so).
 - `Tx::set_title("Draft — Notes")` sets the window's title from a handler or `update`. The window
   opens with `AppSpec`'s title, keeps the last one set when it closes and opens again, and headless
   `--tree` output shows it as `"title"`.
@@ -1235,7 +1237,10 @@ rune::App::new(spec).fit_content_height().run();
   layouts. `Cx::chrome_insets()` says what the controls take (`leading`, `trailing`, `height`; zero
   where the native frame stays, as on Linux; memos rebuild when it changes), `Cx::caption_color(c)`
   colours the caption symbols for an app theme, `Cx::titlebar_height(h)` changes the band's height
-  as the app runs (a UI zoom), and `Tx::toggle_maximized()` maximizes or restores.
+  as the app runs (a UI zoom), `Cx::is_maximized()` and `Cx::is_full_screen()` report confirmed OS
+  maximized and full-screen state (invalidating views and memos on change; testable headlessly via
+  `Runtime::set_maximized` and `Runtime::set_full_screen`), and `Tx::toggle_maximized()`,
+  `Tx::toggle_full_screen()`, and `Tx::set_full_screen(bool)` request state changes.
   `cargo run -p rune --example custom_titlebar` shows it.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
   that set a few more end with `..AppSpec::new(..)`. Window chrome lives on the builders, keeping

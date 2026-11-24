@@ -384,7 +384,7 @@ impl Host {
                 }
                 let viewport = (l.config.width as f32 / scale, l.config.height as f32 / scale);
                 if !resized && viewport == app.rt().window_viewport() && scale == app.rt().window_scale() {
-                    if restored || origin_moved { l.request_redraw(); }
+                    if restored || origin_moved || app.rt().stale() { l.request_redraw(); }
                     return;
                 }
                 let asked = FrameMove::take_jump(&mut self.frame_move, viewport);
@@ -424,7 +424,7 @@ impl Host {
                         f64::from(app.rt().window_scale()),
                         scale_factor,
                         l.is_maximized(),
-                        l.window.fullscreen().is_some(),
+                        l.is_full_screen(),
                     );
                     winit::dpi::PhysicalSize::new(width, height)
                 };

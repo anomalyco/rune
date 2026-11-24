@@ -206,6 +206,38 @@ impl<S: 'static> Runtime<S> {
     pub fn set_system_dark(&mut self, dark: bool) { self.core_mut().set_system_dark(dark); }
     #[inline(always)]
     pub fn set_titlebar_inset(&mut self, points: f32) { self.core_mut().set_titlebar_inset(points); }
+    /// Sets what [`Cx::is_maximized`] reports, marking the view dirty when it changes.
+    ///
+    /// Native windows update this from confirmed OS window state on create, resize, scale change,
+    /// and focus. Headless runs default to `false`.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, el};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     el().w(if cx.is_maximized() { 100.0 } else { 50.0 })
+    /// }
+    /// let mut rt = Runtime::new((), view, (200.0, 100.0), Env::default());
+    /// rt.set_maximized(true);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_maximized(&mut self, maximized: bool) { self.core_mut().set_maximized(maximized); }
+    /// Sets what [`Cx::is_full_screen`] reports, marking the view dirty when it changes.
+    ///
+    /// Native windows update this from confirmed OS window state on create, resize, scale change,
+    /// focus, and macOS full-screen transitions. Headless runs default to `false`.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, el};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     el().w(if cx.is_full_screen() { 100.0 } else { 50.0 })
+    /// }
+    /// let mut rt = Runtime::new((), view, (200.0, 100.0), Env::default());
+    /// rt.set_full_screen(true);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_full_screen(&mut self, full_screen: bool) { self.core_mut().set_full_screen(full_screen); }
     #[inline(always)]
     pub(crate) fn system_accent(&self) -> crate::SystemAccent { self.core().system_accent() }
     #[inline(always)]

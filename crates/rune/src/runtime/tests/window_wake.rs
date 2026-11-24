@@ -298,3 +298,103 @@ fn drag_resize_window_populates_frame_request_and_merges_with_resize_window() {
     assert!(merged.center);
     assert_eq!(merged.resize_drag, Some(ResizeEdge::NorthWest));
 }
+
+#[test]
+fn maximized_and_full_screen_state_rebuilds_view_and_memos_only_on_confirmed_change() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct Counters {
+        view_builds: Rc<Cell<usize>>,
+        memo_builds: Rc<Cell<usize>>,
+        cleared_maximized: Rc<Cell<bool>>,
+        cleared_full_screen: Rc<Cell<bool>>,
+    }
+
+    fn view(c: &Counters, cx: &mut Cx<Counters>) -> El {
+        c.view_builds.set(c.view_builds.get() + 1);
+        let max = cx.is_maximized();
+        let full = cx.is_full_screen();
+        let mut sub = cx.retype::<()>();
+        sub.clear_chrome();
+        c.cleared_maximized.set(sub.is_maximized());
+        c.cleared_full_screen.set(sub.is_full_screen());
+        let memo_builds = c.memo_builds.clone();
+        crate::row().size(300.0, 40.0)
+            .child(el().key("max").size(if max { 80.0 } else { 20.0 }, 10.0))
+            .child(el().key("full").size(if full { 90.0 } else { 30.0 }, 10.0))
+            .child(crate::memo("memo-state", 0, move || {
+                memo_builds.set(memo_builds.get() + 1);
+                el().size(if max { 60.0 } else { 10.0 } + if full { 5.0 } else { 0.0 }, 10.0)
+            }))
+    }
+
+    let view_builds = Rc::new(Cell::new(0));
+    let memo_builds = Rc::new(Cell::new(0));
+    let cleared_maximized = Rc::new(Cell::new(true));
+    let cleared_full_screen = Rc::new(Cell::new(true));
+    let mut rt = Runtime::new(
+        Counters {
+            view_builds: view_builds.clone(),
+            memo_builds: memo_builds.clone(),
+            cleared_maximized: cleared_maximized.clone(),
+            cleared_full_screen: cleared_full_screen.clone(),
+        },
+        view,
+        (300.0, 40.0),
+        Env::new(true, 1.0),
+    );
+    let w = |rt: &Runtime<Counters>, key: &str| rt.presented(key).unwrap().0[2];
+    rt.frame(0.0);
+    assert_eq!((w(&rt, "max"), w(&rt, "full"), w(&rt, "memo-state")), (20.0, 30.0, 10.0));
+    assert_eq!((view_builds.get(), memo_builds.get()), (1, 1));
+
+    // Fire-and-forget requests never flip Cx::is_maximized or Cx::is_full_screen optimistically.
+    rt.update(|_, tx| {
+        tx.toggle_maximized();
+        tx.set_full_screen(true);
+    });
+    rt.frame(1.0);
+    assert_eq!((w(&rt, "max"), w(&rt, "full"), w(&rt, "memo-state")), (20.0, 30.0, 10.0));
+
+    // Setting the already-current state does not mark dirty or rebuild the view or memo.
+    let builds_before = (view_builds.get(), memo_builds.get());
+    rt.set_maximized(false);
+    rt.set_full_screen(false);
+    assert!(!rt.core().stale());
+    rt.frame(2.0);
+    assert_eq!((view_builds.get(), memo_builds.get()), builds_before);
+
+    // Confirmed OS maximize rebuilds the view and invalidates the memo.
+    rt.set_maximized(true);
+    assert!(rt.core().stale());
+    rt.frame(3.0);
+    rt.frame(8.0);
+    assert_eq!((w(&rt, "max"), w(&rt, "full"), w(&rt, "memo-state")), (80.0, 30.0, 60.0));
+    assert_eq!((view_builds.get(), memo_builds.get()), (builds_before.0 + 1, builds_before.1 + 1));
+    assert!(!cleared_maximized.get(), "clear_chrome resets is_maximized for staged subviews");
+
+    // Repeating true is a no-op.
+    let builds_max = (view_builds.get(), memo_builds.get());
+    rt.set_maximized(true);
+    assert!(!rt.core().stale());
+    rt.frame(9.0);
+    assert_eq!((view_builds.get(), memo_builds.get()), builds_max);
+
+    // Confirmed OS full screen rebuilds the view and invalidates the memo.
+    rt.set_full_screen(true);
+    assert!(rt.core().stale());
+    rt.frame(10.0);
+    rt.frame(15.0);
+    assert_eq!((w(&rt, "max"), w(&rt, "full"), w(&rt, "memo-state")), (80.0, 90.0, 65.0));
+    assert_eq!((view_builds.get(), memo_builds.get()), (builds_max.0 + 1, builds_max.1 + 1));
+    assert!(!cleared_full_screen.get(), "clear_chrome resets is_full_screen for staged subviews");
+
+    // Exiting both restores both view and memo back to false.
+    rt.set_maximized(false);
+    rt.set_full_screen(false);
+    rt.frame(16.0);
+    rt.frame(21.0);
+    assert_eq!((w(&rt, "max"), w(&rt, "full"), w(&rt, "memo-state")), (20.0, 30.0, 10.0));
+    assert_eq!((view_builds.get(), memo_builds.get()), (builds_max.0 + 2, builds_max.1 + 2));
+}

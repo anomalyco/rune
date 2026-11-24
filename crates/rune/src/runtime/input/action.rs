@@ -238,7 +238,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.shell = tx.shell.max(one.shell);
     tx.minimize_order = tx.minimize_order.max(one.minimize_order);
     tx.toggle_maximized |= one.toggle_maximized;
-    tx.toggle_full_screen |= one.toggle_full_screen;
+    if one.full_screen.is_some() { tx.full_screen = one.full_screen; }
     tx.keys.extend(one.keys);
     if one.title.is_some() { tx.title = one.title; }
     if one.color_scheme.is_some() { tx.color_scheme = one.color_scheme; }
