@@ -33,6 +33,8 @@ pub(crate) struct HostState {
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The window's title (`Tx::set_title`), from `AppSpec`'s.
     pub(crate) window_title: Title,
+    /// Per-window native color scheme requested via `Tx::set_color_scheme`, taken by the host.
+    pub(crate) window_color_scheme: Option<crate::ColorScheme>,
     /// The window's height follows the root's natural height (`App::fit_content_height`).
     pub(crate) fit_height: bool,
     /// The height a window that fits its content last asked for, and the frame its move
@@ -85,6 +87,7 @@ impl HostState {
             window_resting: false,
             window_frame: None,
             window_title: Default::default(),
+            window_color_scheme: None,
             fit_height: false,
             fit: Default::default(),
             minimize: Default::default(),

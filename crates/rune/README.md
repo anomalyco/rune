@@ -711,6 +711,16 @@ app.run();
 - `AppSpec::min_size` sets the smallest window (None keeps 420×400).
 - `AppHandle::set_dock_icon(bool)` switches macOS between the regular and accessory activation
   policies at runtime.
+- `ColorScheme` (`System`, `Light`, `Dark`) overrides native light or dark chrome without changing
+  the default `System` behavior: set per-window at creation with `App::color_scheme(ColorScheme)`
+  or `WindowSpec::color_scheme(ColorScheme)`, change a window at runtime with
+  `Tx::set_color_scheme(ColorScheme)` or `WindowHandle::set_color_scheme(ColorScheme)` (retained
+  across native recreation; drives Win32 `DWMWA_USE_IMMERSIVE_DARK_MODE`, AppKit
+  `NSWindow.appearance` / `NSPanel.appearance`, Wayland CSD, and X11 `_GTK_THEME_VARIANT`), or
+  override the whole application with `AppHandle::set_color_scheme(ColorScheme)` (sets
+  `NSApplication.appearance` on macOS so menus, open/save panels, traffic lights, system
+  materials, and inheriting windows follow; updates every `ColorScheme::System` window on
+  Windows and Linux, including windows created or recreated later). Ignored on web and headless.
 - `App::standard_menus()` (macOS) adds the items every Mac app has: Edit with Undo ⌘Z, Redo ⇧⌘Z,
   Cut, Copy, Paste and Select All, and Window with Minimize ⌘M and Close ⌘W, all sent to the first
   responder. A regular app whose menu bar is still winit's default gets them without asking. An

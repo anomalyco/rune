@@ -6,19 +6,13 @@ use rune::tok::{self, Theme, motion, radius, space, type_};
 #[cfg(feature = "frame-profile")]
 #[global_allocator]
 static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
-use rune::{Align, App, AppSpec, Color, Cx, El, MenuItem, ScrollSpec, Spring, col, el, row, text};
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Appearance {
-    Auto,
-    Light,
-    Dark,
-}
+use rune::{Align, App, AppHandle, AppSpec, Color, ColorScheme, Cx, El, MenuItem, ScrollSpec, Spring, Tx, col, el, row, text};
 
 const DEFAULT_FONT_ID: &str = "__default__";
 
 struct Settings {
-    appearance: Appearance,
+    appearance: ColorScheme,
+    app_handle: Option<AppHandle<Settings>>,
     accent: usize,
     launch_at_login: bool,
     menu_bar: bool,
@@ -37,7 +31,8 @@ struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            appearance: Appearance::Auto,
+            appearance: ColorScheme::System,
+            app_handle: None,
             accent: 0,
             launch_at_login: true,
             menu_bar: true,
@@ -55,7 +50,7 @@ impl Default for Settings {
 }
 
 impl Settings {
-    fn apply_fonts(&self, tx: &mut rune::Tx) {
+    fn apply_fonts(&self, tx: &mut Tx) {
         let quote = |name: &str| format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\""));
         let sans = match &self.sans_font {
             Some(name) => format!("{}, Inter", quote(name)),
@@ -67,6 +62,15 @@ impl Settings {
         };
         tx.set_font_families(sans, mono);
     }
+}
+
+fn apply_color_scheme(s: &mut Settings, scheme: ColorScheme, tx: &mut Tx) {
+    s.appearance = scheme;
+    tx.set_color_scheme(scheme);
+    if let Some(handle) = &s.app_handle {
+        handle.set_color_scheme(scheme);
+    }
+    tx.color_motion(motion::CALM);
 }
 
 fn speed_of(v: f32) -> f32 {
@@ -147,9 +151,9 @@ struct Paint {
 
 fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
     let dark = match s.appearance {
-        Appearance::Auto => cx.system_dark(),
-        Appearance::Light => false,
-        Appearance::Dark => true,
+        ColorScheme::System => cx.system_dark(),
+        ColorScheme::Light => false,
+        ColorScheme::Dark => true,
     };
     cx.reduced_motion(s.reduce_motion);
     cx.time_scale(speed_of(s.speed));
@@ -441,10 +445,10 @@ fn toggle(p: Paint, on: bool) -> El {
         )
 }
 
-const APPEARANCES: [(Appearance, &str); 3] =
-    [(Appearance::Auto, "Auto"), (Appearance::Light, "Light"), (Appearance::Dark, "Dark")];
+const APPEARANCES: [(ColorScheme, &str); 3] =
+    [(ColorScheme::System, "System"), (ColorScheme::Light, "Light"), (ColorScheme::Dark, "Dark")];
 
-fn segmented(p: Paint, current: Appearance) -> El {
+fn segmented(p: Paint, current: ColorScheme) -> El {
     let (w, h, pad) = (205.0, 28.0, 2.0);
     let seg = (w - 2.0 * pad) / 3.0;
     let idx = APPEARANCES.iter().position(|(a, _)| *a == current).unwrap_or(0);
@@ -462,8 +466,7 @@ fn segmented(p: Paint, current: Appearance) -> El {
                 .radius(radius::SM)
                 .hover(if selected { Color::TRANSPARENT } else { p.t.hover })
                 .on_press_tx(move |s: &mut Settings, tx| {
-                    s.appearance = a;
-                    tx.color_motion(motion::CALM);
+                    apply_color_scheme(s, a, tx);
                 })
                 .child(
                     text(name)
@@ -565,8 +568,7 @@ fn accent_title(name: &str) -> String {
 fn native_menu_items() -> Vec<MenuItem<Settings>> {
     let appearance_items = APPEARANCES.into_iter().map(|(appearance, name)| {
         MenuItem::with_action(name, move |s: &mut Settings, tx| {
-            s.appearance = appearance;
-            tx.color_motion(motion::CALM);
+            apply_color_scheme(s, appearance, tx);
         })
         .id(format!("appearance-{}", name.to_ascii_lowercase()))
     });
@@ -623,8 +625,8 @@ fn main() {
     let spec = AppSpec::<Settings> {
         scenes: &[
             ("default", |_| {}),
-            ("light", |s| s.appearance = Appearance::Light),
-            ("dark", |s| s.appearance = Appearance::Dark),
+            ("light", |s| s.appearance = ColorScheme::Light),
+            ("dark", |s| s.appearance = ColorScheme::Dark),
             ("reduced-motion", |s| s.reduce_motion = true),
             ("toggles-off", |s| {
                 s.launch_at_login = false;
@@ -641,8 +643,35 @@ fn main() {
         ],
         ..AppSpec::new("Settings", (620.0, 640.0), Settings::default, view)
     };
-    native_menu_items()
+    let app = native_menu_items()
         .into_iter()
-        .fold(App::new(spec), App::menu_item)
-        .run();
+        .fold(App::new(spec).color_scheme(ColorScheme::System), App::menu_item);
+    let handle = app.handle();
+    app.init(move || Settings {
+        app_handle: Some(handle),
+        ..Settings::default()
+    })
+    .run();
+}
+
+#[test]
+fn appearance_picker_switches_color_scheme_and_updates_accessibility_state() {
+    let mut rt = rune::Runtime::new(Settings::default(), view, (620.0, 520.0), rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert_eq!(rt.state.appearance, ColorScheme::System);
+
+    for (label, expected) in [
+        ("Light", ColorScheme::Light),
+        ("Dark", ColorScheme::Dark),
+        ("System", ColorScheme::System),
+    ] {
+        let (x, y) = rt.find(label).expect("appearance segment");
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert_eq!(rt.state.appearance, expected);
+        let tree = rt.accessibility_tree();
+        let selected = tree.nodes.iter().find(|(_, n)| n.label() == Some(label)).expect("segment a11y node");
+        assert_eq!(selected.1.toggled(), Some(rune::accesskit::Toggled::True));
+    }
 }

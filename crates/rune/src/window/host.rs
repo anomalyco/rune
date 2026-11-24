@@ -63,6 +63,11 @@ pub(in crate::window) struct Host {
     pub(in crate::window) windows_window: crate::WindowsWindowOptions,
     #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
     pub(in crate::window) exclude_from_capture: Option<bool>,
+    /// Per-window native color scheme (`App::color_scheme`, `Tx::set_color_scheme`,
+    /// `WindowHandle::set_color_scheme`), retained across native window recreation.
+    pub(in crate::window) color_scheme: crate::ColorScheme,
+    /// Last winit theme applied to the live `self.win`, avoiding redundant `set_theme` calls.
+    pub(in crate::window) applied_theme: Option<winit::window::Theme>,
     pub(in crate::window) native_handle: WindowHandle,
     pub(in crate::window) on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     pub(in crate::window) on_window: Option<crate::app::OnWindow>,
@@ -200,6 +205,7 @@ struct HostInit {
     macos_window: crate::MacWindowOptions,
     windows_window: crate::WindowsWindowOptions,
     exclude_from_capture: Option<bool>,
+    color_scheme: crate::ColorScheme,
     native_handle: WindowHandle,
     on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     on_window: Option<crate::app::OnWindow>,
@@ -245,6 +251,7 @@ impl Host {
         let macos_window = std::mem::take(&mut app.macos_window);
         let windows_window = std::mem::take(&mut app.windows_window);
         let exclude_from_capture = app.exclude_from_capture;
+        let color_scheme = app.color_scheme;
         let (open, keep_running, release_gpu, fit_height, float_on_open) = (
             app.open, app.keep_running, app.release_gpu, app.fit_content_height, app.float_on_open,
         );
@@ -279,6 +286,7 @@ impl Host {
             macos_window,
             windows_window,
             exclude_from_capture,
+            color_scheme,
             native_handle,
             on_created,
             on_window,
@@ -319,6 +327,7 @@ impl Host {
             macos_window,
             windows_window,
             exclude_from_capture,
+            color_scheme,
             native_handle,
             on_created,
             on_window,
@@ -408,6 +417,8 @@ impl Host {
             macos_window,
             windows_window,
             exclude_from_capture,
+            color_scheme,
+            applied_theme: None,
             native_handle,
             on_created,
             on_window,

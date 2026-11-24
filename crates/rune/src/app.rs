@@ -86,6 +86,7 @@ pub struct App<S: 'static> {
     pub(crate) macos_window: crate::MacWindowOptions,
     pub(crate) windows_window: crate::WindowsWindowOptions,
     pub(crate) exclude_from_capture: Option<bool>,
+    pub(crate) color_scheme: crate::ColorScheme,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) canvas_id: Option<String>,
@@ -144,6 +145,7 @@ impl<S: 'static> App<S> {
             macos_window: crate::MacWindowOptions::default(),
             windows_window: crate::WindowsWindowOptions::default(),
             exclude_from_capture: None,
+            color_scheme: crate::ColorScheme::System,
             compositor: None,
             window_options: crate::WindowOptions::default(),
             canvas_id: None,
@@ -329,6 +331,29 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn exclude_from_capture(mut self, exclude: bool) -> Self {
         self.exclude_from_capture = Some(exclude);
+        self
+    }
+
+    /// Preferred native light or dark chrome for this window, applied on creation and retained
+    /// across native recreation. Defaults to [`ColorScheme::System`](crate::ColorScheme::System).
+    ///
+    /// On Windows this controls the native titlebar (`DWMWA_USE_IMMERSIVE_DARK_MODE`), on macOS
+    /// `NSWindow.appearance`, on Wayland client-side decorations, and on X11
+    /// `_GTK_THEME_VARIANT`. Update at runtime with
+    /// [`Tx::set_color_scheme`](crate::Tx::set_color_scheme) or
+    /// [`WindowHandle::set_color_scheme`](crate::WindowHandle::set_color_scheme), or override
+    /// the whole app with [`AppHandle::set_color_scheme`](crate::AppHandle::set_color_scheme).
+    /// Ignored on web and headless.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, ColorScheme, el};
+    ///
+    /// App::new(AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+    ///     .color_scheme(ColorScheme::Dark)
+    ///     .run();
+    /// ```
+    pub fn color_scheme(mut self, scheme: crate::ColorScheme) -> Self {
+        self.color_scheme = scheme;
         self
     }
 
@@ -880,6 +905,27 @@ impl<S: 'static> AppHandle<S> {
     /// the regular and accessory activation policies. Does nothing elsewhere.
     #[inline]
     pub fn set_dock_icon(&self, visible: bool) { self.shared.core.set_dock_icon(visible); }
+
+    /// Override the native light or dark appearance across the whole application.
+    ///
+    /// On macOS this sets `NSApplication.sharedApplication.appearance` (`nil` for
+    /// [`ColorScheme::System`](crate::ColorScheme::System), `NSAppearanceNameAqua` for `Light`,
+    /// `NSAppearanceNameDarkAqua` for `Dark`), so native menus, open/save panels, traffic lights,
+    /// system materials, and windows with no per-window override follow it. On Windows and Linux
+    /// this applies to every window whose own color scheme is `ColorScheme::System`, including
+    /// windows created or recreated later. Windows with an explicit per-window `Light` or `Dark`
+    /// override keep their own scheme. Safe to call from any thread; no-op on web and headless.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, ColorScheme, el};
+    ///
+    /// let app = App::new(AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()));
+    /// let handle = app.handle();
+    /// handle.set_color_scheme(ColorScheme::Dark);
+    /// app.run();
+    /// ```
+    #[inline]
+    pub fn set_color_scheme(&self, scheme: crate::ColorScheme) { self.shared.core.set_color_scheme(scheme); }
 
     /// Whether the window is on screen (shown, not hidden or closed). Minimized and occluded
     /// windows count as shown.

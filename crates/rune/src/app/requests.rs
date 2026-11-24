@@ -37,6 +37,9 @@ pub(crate) struct WindowRequests {
     pub window: Option<WindowRequest>,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub dock: Option<bool>,
+    /// `AppHandle::set_color_scheme`: app-wide light/dark appearance override; last-wins.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub color_scheme: Option<crate::ColorScheme>,
     /// `AppHandle::focus` or `AppHandle::minimize`; last-wins (`cancel_minimize`).
     pub activation: Option<Activation>,
     pub position: Option<(i32, i32)>,
@@ -173,6 +176,15 @@ impl SharedCore {
 
     pub(crate) fn set_dock_icon(&self, visible: bool) {
         self.request(|q| q.dock = Some(visible));
+    }
+
+    pub(crate) fn set_color_scheme(&self, scheme: crate::ColorScheme) {
+        self.request(|q| q.color_scheme = Some(scheme));
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn take_color_scheme(&self) -> Option<crate::ColorScheme> {
+        self.requests.lock().unwrap().color_scheme.take()
     }
 
     pub(crate) fn is_visible(&self) -> bool {

@@ -248,6 +248,17 @@ impl WindowOptions {
         if app_min.is_none() && self.min_size.is_none() { Some((DEFAULT_MIN_SIZE.0, 0.0)) } else { app_min }
     }
 
+    pub(crate) fn attributes_with_theme(
+        &self,
+        title: &str,
+        size: (f32, f32),
+        app_min: Option<(f32, f32)>,
+        visible: bool,
+        theme: Option<winit::window::Theme>,
+    ) -> winit::window::WindowAttributes {
+        self.attributes(title, size, app_min, visible).with_theme(theme)
+    }
+
     pub(crate) fn attributes(&self, title: &str, size: (f32, f32), app_min: Option<(f32, f32)>, visible: bool) -> winit::window::WindowAttributes {
         use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
         use winit::window::{Window, WindowButtons, WindowLevel};
@@ -581,6 +592,16 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         exclude_from_capture(exclude: bool);
+        /// Preferred native light or dark chrome for this window, like [`App::color_scheme`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, ColorScheme, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+        ///     .color_scheme(ColorScheme::Dark);
+        /// let _ = spec;
+        /// ```
+        color_scheme(scheme: crate::ColorScheme);
         /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
         modifier_keys();
         /// Tab visits every focusable control in this window, like `App::tab_visits_controls`.

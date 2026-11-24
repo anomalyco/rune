@@ -86,3 +86,40 @@ unsafe extern "C" fn observe(this: *mut AnyObject, cmd: Sel, key_path: *mut AnyO
         }
     }
 }
+
+/// Applies `scheme` to `NSApplication.sharedApplication.appearance` on the main thread:
+/// `nil` for `System`, `NSAppearanceNameAqua` for `Light`, and `NSAppearanceNameDarkAqua`
+/// for `Dark`. Native menus, open/save panels, traffic lights, system materials, and
+/// windows without a per-window override follow it.
+pub(crate) fn set_app_appearance(scheme: crate::ColorScheme) {
+    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
+    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+    set_object_appearance(&app, scheme);
+}
+
+/// Applies `scheme` to an `NSWindow` (or `NSPanel`) on the main thread.
+pub(crate) fn set_window_appearance(window: &objc2_app_kit::NSWindow, scheme: crate::ColorScheme) {
+    set_object_appearance(window, scheme);
+}
+
+fn set_object_appearance(target: &AnyObject, scheme: crate::ColorScheme) {
+    objc2::rc::autoreleasepool(|_| {
+        let appearance = resolve_appearance(scheme);
+        // SAFETY: called on the main thread; `target` conforms to `NSAppearanceCustomization`
+        // (`NSApplication` or `NSWindow`) and `setAppearance:` accepts an `NSAppearance` or `nil`.
+        unsafe { let _: () = msg_send![target, setAppearance: appearance]; }
+    });
+}
+
+fn resolve_appearance(scheme: crate::ColorScheme) -> *mut AnyObject {
+    let name = match scheme.macos_appearance_name() {
+        None => return std::ptr::null_mut(),
+        Some("NSAppearanceNameAqua") => ns_string!("NSAppearanceNameAqua"),
+        Some("NSAppearanceNameDarkAqua") => ns_string!("NSAppearanceNameDarkAqua"),
+        Some(_) => return std::ptr::null_mut(),
+    };
+    let Some(class) = AnyClass::get(c"NSAppearance") else { return std::ptr::null_mut() };
+    // SAFETY: `class` is `NSAppearance`, `name` is a static `NSString`, and
+    // `+appearanceNamed:` returns an autoreleased `NSAppearance` or `nil`.
+    unsafe { msg_send![class, appearanceNamed: name] }
+}

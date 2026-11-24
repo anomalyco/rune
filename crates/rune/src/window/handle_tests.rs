@@ -27,3 +27,20 @@ fn handle_queues_exclude_from_capture_requests_in_order() {
         [WakeEvent::ExcludeFromCapture(0, true), WakeEvent::ExcludeFromCapture(0, false)]
     ));
 }
+
+#[test]
+fn handle_queues_color_scheme_requests_in_order() {
+    let handle = WindowHandle::new("settings");
+    handle.set_color_scheme(crate::ColorScheme::Light);
+    handle.set_color_scheme(crate::ColorScheme::Dark);
+    handle.set_color_scheme(crate::ColorScheme::System);
+    let taken = handle.take_headless();
+    assert!(matches!(
+        taken[..],
+        [
+            WakeEvent::ColorScheme(0, crate::ColorScheme::Light),
+            WakeEvent::ColorScheme(0, crate::ColorScheme::Dark),
+            WakeEvent::ColorScheme(0, crate::ColorScheme::System),
+        ]
+    ));
+}

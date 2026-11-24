@@ -184,6 +184,30 @@ impl WindowHandle {
     pub fn set_exclude_from_capture(&self, exclude: bool) {
         self.send(move |slot| WakeEvent::ExcludeFromCapture(slot, exclude));
     }
+    /// Overrides this window's native light or dark chrome at runtime, retained across native
+    /// recreation.
+    ///
+    /// On Windows this updates the native titlebar (`DWMWA_USE_IMMERSIVE_DARK_MODE`), on macOS
+    /// `NSWindow.appearance` (and `NSPanel.appearance` for non-activating panels), on Wayland
+    /// client-side decorations, and on X11 `_GTK_THEME_VARIANT`. Passing
+    /// [`ColorScheme::System`](crate::ColorScheme::System) clears the per-window override so the
+    /// window inherits any app-wide override from
+    /// [`AppHandle::set_color_scheme`](crate::AppHandle::set_color_scheme) or the operating
+    /// system's appearance.
+    ///
+    /// Safe to call from any thread; requests made before the window starts apply once it does.
+    /// Ignored on web and headless.
+    ///
+    /// ```no_run
+    /// use rune::{AppSpec, ColorScheme, WindowSpec, el};
+    ///
+    /// let spec = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+    ///     .on_created(|handle| handle.set_color_scheme(ColorScheme::Dark));
+    /// let _ = spec;
+    /// ```
+    pub fn set_color_scheme(&self, scheme: crate::ColorScheme) {
+        self.send(move |slot| WakeEvent::ColorScheme(slot, scheme));
+    }
     /// Physical desktop pixels; retained across recreation. Unsupported on Wayland.
     pub fn set_position(&self, position: (i32, i32)) {
         self.send(move |slot| WakeEvent::Position(slot, position));

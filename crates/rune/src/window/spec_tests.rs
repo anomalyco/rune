@@ -434,3 +434,54 @@ fn resize_edge_maps_to_winit_direction_and_default_cursors() {
         assert_eq!(edge.cursor(), cursor);
     }
 }
+
+#[test]
+fn window_options_attributes_with_theme_sets_preferred_theme_without_changing_default() {
+    use winit::window::Theme;
+    let default_attrs = WindowOptions::default().attributes("app", (640.0, 480.0), None, true);
+    assert_eq!(default_attrs.preferred_theme, None);
+
+    let system = WindowOptions::default().attributes_with_theme(
+        "app",
+        (640.0, 480.0),
+        None,
+        true,
+        crate::ColorScheme::System.winit_theme(),
+    );
+    assert_eq!(system.preferred_theme, None);
+
+    let light = WindowOptions::default().attributes_with_theme(
+        "app",
+        (640.0, 480.0),
+        None,
+        true,
+        crate::ColorScheme::Light.winit_theme(),
+    );
+    assert_eq!(light.preferred_theme, Some(Theme::Light));
+
+    let dark = WindowOptions::default().attributes_with_theme(
+        "app",
+        (640.0, 480.0),
+        None,
+        true,
+        crate::ColorScheme::Dark.winit_theme(),
+    );
+    assert_eq!(dark.preferred_theme, Some(Theme::Dark));
+}
+
+#[test]
+fn app_and_window_spec_default_to_system_and_preserve_color_scheme() {
+    let spec = || AppSpec::new("notes", (480.0, 360.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).color_scheme, crate::ColorScheme::System);
+
+    let app = App::new(spec()).color_scheme(crate::ColorScheme::Dark);
+    assert_eq!(app.color_scheme, crate::ColorScheme::Dark);
+    let from_app = WindowSpec::from_app("notes", app);
+    assert_eq!(from_app.app.color_scheme, crate::ColorScheme::Dark);
+
+    let window = WindowSpec::new("notes", spec()).color_scheme(crate::ColorScheme::Light);
+    assert_eq!(window.app.color_scheme, crate::ColorScheme::Light);
+    // Replacing WindowOptions resets platform-specific native structs while keeping portable color_scheme.
+    let reset = window.options(WindowOptions::default());
+    assert_eq!(reset.app.color_scheme, crate::ColorScheme::Light);
+}
