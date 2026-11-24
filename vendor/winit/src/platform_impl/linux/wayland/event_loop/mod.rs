@@ -107,10 +107,12 @@ impl<T: 'static> EventLoop<T> {
         let wayland_dispatcher =
             calloop::Dispatcher::new(wayland_source, |_, queue, winit_state: &mut WinitState| {
                 let result = queue.dispatch_pending(winit_state);
-                if result.is_ok()
-                    && (!winit_state.events_sink.is_empty()
-                        || !winit_state.window_compositor_updates.is_empty())
-                {
+                if should_mark_dispatched(
+                    result.is_ok(),
+                    winit_state.wake_on_wayland_read,
+                    !winit_state.events_sink.is_empty(),
+                    !winit_state.window_compositor_updates.is_empty(),
+                ) {
                     winit_state.dispatched_events = true;
                 }
                 result
@@ -656,6 +658,12 @@ pub struct ActiveEventLoop {
 }
 
 impl ActiveEventLoop {
+    /// Rune: opt into waking from `ControlFlow::Wait` on any Wayland display read.
+    #[inline]
+    pub(crate) fn set_wake_on_wayland_read(&self, wake: bool) {
+        self.state.borrow_mut().wake_on_wayland_read = wake;
+    }
+
     pub(crate) fn set_control_flow(&self, control_flow: ControlFlow) {
         self.control_flow.set(control_flow)
     }
@@ -807,4 +815,33 @@ enum PumpEventNotifierAction {
     Pause,
     /// Shutdown the thread.
     Shutdown,
+}
+
+/// Rune: whether a completed Wayland source read should set `WinitState::dispatched_events`.
+fn should_mark_dispatched(
+    read_ok: bool,
+    wake_on_wayland_read: bool,
+    has_events: bool,
+    has_compositor_updates: bool,
+) -> bool {
+    read_ok && (wake_on_wayland_read || has_events || has_compositor_updates)
+}
+
+#[cfg(test)]
+mod wake_on_wayland_read_tests {
+    use super::should_mark_dispatched;
+
+    #[test]
+    fn empty_sink_read_sets_dispatched_events_only_when_wake_flag_is_enabled() {
+        // Default (flag off): empty-sink reads do not wake from ControlFlow::Wait.
+        assert!(!should_mark_dispatched(true, false, false, false));
+        // Flag on: a successful empty-sink read wakes the loop for foreign queues.
+        assert!(should_mark_dispatched(true, true, false, false));
+        // Dispatch errors never mark dispatched_events even with the flag on.
+        assert!(!should_mark_dispatched(false, true, false, false));
+        assert!(!should_mark_dispatched(false, false, true, true));
+        // Non-empty winit sinks still wake when the flag is off.
+        assert!(should_mark_dispatched(true, false, true, false));
+        assert!(should_mark_dispatched(true, false, false, true));
+    }
 }

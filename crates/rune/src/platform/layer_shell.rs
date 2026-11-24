@@ -3,7 +3,7 @@
 //! input regions and the rendered buffer share a commit. Global pointer observation and
 //! capture exclusion are unavailable. wgpu draws through the raw `wl_surface`.
 
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -26,7 +26,7 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextIn
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, text_input as text_input_machine, touch, watch_loop};
+use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, text_input as text_input_machine, touch};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -515,8 +515,8 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
 }
 
 /// Wakes the event loop when an XWayland overlay's own X connection becomes readable.
-/// Wayland layer surfaces use `WaylandWatch` instead so they join libwayland's reader protocol
-/// on winit's shared display.
+/// Wayland layer surfaces wake through winit's `set_wake_on_wayland_read` instead of a
+/// background reader thread.
 pub(crate) struct Watch {
     stop: Arc<AtomicBool>,
     /// How many times the overlay has dispatched, so the watcher waits for the loop to read
@@ -593,185 +593,6 @@ impl Drop for Watch {
     }
 }
 
-/// Non-blocking fd that wakes `WaylandWatch`'s `poll(2)` on drop: one `eventfd` on Linux, or a
-/// self-pipe on other Unix targets.
-struct StopSignal {
-    #[cfg(target_os = "linux")]
-    fd: OwnedFd,
-    #[cfg(not(target_os = "linux"))]
-    read: OwnedFd,
-    #[cfg(not(target_os = "linux"))]
-    write: OwnedFd,
-}
-
-impl StopSignal {
-    #[allow(unsafe_code)]
-    fn new() -> Option<Self> {
-        #[cfg(target_os = "linux")]
-        {
-            // SAFETY: creates a fresh close-on-exec, non-blocking eventfd.
-            let fd = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC | libc::EFD_NONBLOCK) };
-            if fd < 0 { return None; }
-            // SAFETY: `fd` is a newly created descriptor owned exclusively by `StopSignal`.
-            Some(Self { fd: unsafe { OwnedFd::from_raw_fd(fd) } })
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            let mut fds = [0 as RawFd; 2];
-            // SAFETY: creates a fresh pipe pair; flags are applied immediately below.
-            if unsafe { libc::pipe(fds.as_mut_ptr()) } < 0 { return None; }
-            for fd in fds {
-                // SAFETY: `fd` was just returned by `pipe`.
-                unsafe {
-                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
-                    libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK);
-                }
-            }
-            // SAFETY: both descriptors are newly created and owned exclusively by `StopSignal`.
-            Some(Self {
-                read: unsafe { OwnedFd::from_raw_fd(fds[0]) },
-                write: unsafe { OwnedFd::from_raw_fd(fds[1]) },
-            })
-        }
-    }
-
-    fn poll_fd(&self) -> RawFd {
-        #[cfg(target_os = "linux")]
-        { self.fd.as_raw_fd() }
-        #[cfg(not(target_os = "linux"))]
-        { self.read.as_raw_fd() }
-    }
-
-    #[allow(unsafe_code)]
-    fn signal(&self) {
-        #[cfg(target_os = "linux")]
-        let (fd, buf) = (self.fd.as_raw_fd(), 1u64.to_ne_bytes());
-        #[cfg(not(target_os = "linux"))]
-        let (fd, buf) = (self.write.as_raw_fd(), [1u8]);
-        loop {
-            // SAFETY: `fd` is an open non-blocking descriptor owned by `self` and `buf` is valid.
-            let ret = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
-            if ret >= 0 || std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
-                break;
-            }
-        }
-    }
-}
-
-struct WatchTurns {
-    count: u64,
-    stopped: bool,
-}
-
-/// Participates in libwayland's multi-thread reader protocol on winit's shared display so events
-/// winit or Mesa WSI read into this layer's private queue wake the loop immediately, and an idle
-/// layer sleeps with no poll timeout. Holds no read guard while waiting for a loop turn, and
-/// joins its thread on drop via `StopSignal`.
-struct WaylandWatch {
-    stop: Arc<StopSignal>,
-    turns: Arc<(Mutex<WatchTurns>, Condvar)>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-struct WaylandWatchDriver {
-    conn: Connection,
-    stop: Arc<StopSignal>,
-    turns: Arc<(Mutex<WatchTurns>, Condvar)>,
-    wake: Waker,
-}
-
-fn map_watch_dispatch(result: Result<usize, WaylandError>) -> watch_loop::Dispatch {
-    match result {
-        Ok(n) => watch_loop::Dispatch::Events(n),
-        Err(WaylandError::Io(err)) if err.kind() == std::io::ErrorKind::WouldBlock => watch_loop::Dispatch::WouldBlock,
-        Err(_) => watch_loop::Dispatch::Error,
-    }
-}
-
-impl watch_loop::Driver for WaylandWatchDriver {
-    type Guard = ReadEventsGuard;
-
-    fn stopped(&self) -> bool { self.turns.0.lock().unwrap().stopped }
-
-    fn prepare_read(&mut self) -> Option<ReadEventsGuard> { self.conn.prepare_read() }
-
-    fn dispatch_inner_queue(&mut self) -> watch_loop::Dispatch {
-        map_watch_dispatch(self.conn.backend().dispatch_inner_queue())
-    }
-
-    #[allow(unsafe_code)]
-    fn poll(&mut self, guard: &ReadEventsGuard) -> watch_loop::Poll {
-        let mut pfds = [
-            libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events: libc::POLLIN, revents: 0 },
-            libc::pollfd { fd: self.stop.poll_fd(), events: libc::POLLIN, revents: 0 },
-        ];
-        // SAFETY: two open descriptors: the live display socket borrowed by `guard` and `stop`.
-        let ret = unsafe { libc::poll(pfds.as_mut_ptr(), 2, -1) };
-        if ret < 0 {
-            return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                watch_loop::Poll::Interrupted
-            } else {
-                watch_loop::Poll::Error
-            };
-        }
-        if ret == 0 { return watch_loop::Poll::Interrupted; }
-        if pfds[1].revents != 0 { return watch_loop::Poll::Stop; }
-        if pfds[0].revents & libc::POLLNVAL != 0 { return watch_loop::Poll::Error; }
-        if pfds[0].revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) != 0 { return watch_loop::Poll::Readable; }
-        watch_loop::Poll::Error
-    }
-
-    fn read(&mut self, guard: ReadEventsGuard) -> watch_loop::Dispatch { map_watch_dispatch(guard.read()) }
-
-    fn wake_and_wait(&mut self) {
-        let (lock, cond) = &*self.turns;
-        let before = {
-            let state = lock.lock().unwrap();
-            if state.stopped { return; }
-            state.count
-        };
-        (self.wake)();
-        // Bounded, as the polling watch was: a wake that never turns the loop can't park the
-        // watch, and events still queued then are found again by `prepare_read` returning None.
-        let state = lock.lock().unwrap();
-        let _ = cond.wait_timeout_while(state, Duration::from_millis(100), |s| s.count == before && !s.stopped);
-    }
-}
-
-impl WaylandWatch {
-    fn spawn(conn: Connection, wake: Waker) -> Option<Self> {
-        let stop = Arc::new(StopSignal::new()?);
-        let turns = Arc::new((Mutex::new(WatchTurns { count: 0, stopped: false }), Condvar::new()));
-        let mut driver = WaylandWatchDriver { conn, stop: stop.clone(), turns: turns.clone(), wake };
-        let thread = std::thread::Builder::new()
-            .name("rune-layer-watch".into())
-            .spawn(move || watch_loop::run(&mut driver))
-            .ok()?;
-        Some(Self { stop, turns, thread: Some(thread) })
-    }
-
-    fn turned(&self) {
-        let (lock, cond) = &*self.turns;
-        let mut state = lock.lock().unwrap();
-        state.count = state.count.wrapping_add(1);
-        cond.notify_all();
-    }
-}
-
-impl Drop for WaylandWatch {
-    fn drop(&mut self) {
-        {
-            let (lock, cond) = &*self.turns;
-            lock.lock().unwrap().stopped = true;
-            cond.notify_all();
-        }
-        self.stop.signal();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
 /// What the overlay needs to know after the compositor talked to the surface.
 pub(crate) struct Changes {
     pub size: Option<(u32, u32)>,
@@ -796,7 +617,6 @@ pub(crate) struct LayerSurface {
     layer: ZwlrLayerSurfaceV1,
     surface: WlSurface,
     display: NonNull<std::ffi::c_void>,
-    watch: Option<WaylandWatch>,
 }
 
 struct ConfigureDriver<'a> {
@@ -886,7 +706,7 @@ impl LayerSurface {
     /// None when the display isn't Wayland, the compositor lacks layer-shell, or it never
     /// configures the surface within `configure_wait::TIMEOUT`.
     #[allow(unsafe_code)]
-    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>, wake: Option<Waker>) -> Option<LayerSurface> {
+    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
         let want_keys = options.keys == crate::KeyPolicy::OnDemand;
         if want_keys { compose::warm(); }
@@ -950,7 +770,7 @@ impl LayerSurface {
             text_input,
             ..State::default()
         };
-        let mut this = LayerSurface { namespace: namespace.to_owned(), conn, globals: Some(globals), seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, shell, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display, watch: None };
+        let mut this = LayerSurface { namespace: namespace.to_owned(), conn, globals: Some(globals), seat_global, regions: std::cell::RefCell::new(Some(Vec::new())), compositor, shell, output, seat, options: options.clone(), queue, state, layer, surface, display: display.display };
         this.place(at);
         this.surface.commit();
         match wait_for_configure(&this.conn, &mut this.queue, &mut this.state, configure_wait::TIMEOUT) {
@@ -967,7 +787,6 @@ impl LayerSurface {
             }
         }
         if this.state.readiness.closed() { return None; }
-        this.watch = wake.and_then(|wake| WaylandWatch::spawn(this.conn.clone(), wake));
         Some(this)
     }
 
@@ -1119,6 +938,19 @@ impl LayerSurface {
         }
     }
 
+    /// True while the surface has not been closed by the compositor or a fatal display error.
+    pub fn is_live(&self) -> bool {
+        !self.state.readiness.closed()
+    }
+
+    /// True when the surface is still live and libwayland's private event queue already holds
+    /// unread events (for example from a mid-turn `wl_display` read during swapchain acquire,
+    /// present, or a roundtrip). Checks the queue in memory without syscalls by immediately
+    /// dropping any prepared-read guard.
+    pub fn has_pending_events(&self) -> bool {
+        !self.state.readiness.closed() && self.queue.prepare_read().is_none()
+    }
+
     /// Next held-key repeat deadline for the overlay's wake timer, or `None` when idle.
     pub fn repeat_deadline(&self) -> Option<crate::time::Instant> {
         self.state.repeat.deadline()
@@ -1159,7 +991,6 @@ impl LayerSurface {
     fn turn(&mut self) {
         let was_closed = self.state.readiness.closed();
         if was_closed {
-            self.watch = None;
             return;
         }
         let dispatch_err = self.queue.dispatch_pending(&mut self.state).err();
@@ -1167,8 +998,9 @@ impl LayerSurface {
         let last_err = self.conn.backend().last_error();
         let (kind, reason) = classify_turn_error(dispatch_err, flush_err, last_err);
         match connection::turn_action(was_closed, kind, self.state.readiness.closed()) {
-            connection::TurnAction::Continue => if let Some(watch) = &self.watch { watch.turned(); },
-            connection::TurnAction::StopClosed | connection::TurnAction::AlreadyClosed => self.watch = None,
+            connection::TurnAction::Continue
+            | connection::TurnAction::StopClosed
+            | connection::TurnAction::AlreadyClosed => {}
             connection::TurnAction::FailAndClose => self.fail_connection(reason),
         }
     }
@@ -1192,7 +1024,6 @@ impl LayerSurface {
         self.state.step_repeat(repeat::Event::Stop);
         self.state.reset_text_input_gone();
         self.state.input.clear();
-        self.watch = None;
         if !was_closed {
             match reason {
                 Some(reason) => eprintln!("rune: Wayland layer surface '{}' closed: the display connection failed: {reason}", self.namespace),
@@ -1212,8 +1043,6 @@ impl LayerSurface {
 
 impl Drop for LayerSurface {
     fn drop(&mut self) {
-        // Stop and join the reader thread before draining or destroying proxies.
-        self.watch = None;
         self.state.want_pointer = false;
         self.state.want_keys = false;
         self.state.surface = None;

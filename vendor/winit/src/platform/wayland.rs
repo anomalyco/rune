@@ -27,12 +27,23 @@ pub use crate::window::Theme;
 pub trait ActiveEventLoopExtWayland {
     /// True if the [`ActiveEventLoop`] uses Wayland.
     fn is_wayland(&self) -> bool;
+
+    /// Rune: when `wake` is true, any successful Wayland display read marks the event loop as
+    /// having dispatched events so `ControlFlow::Wait` runs a turn even when winit's own queues
+    /// had no events. Foreign Wayland queues sharing the display (such as layer-shell overlays)
+    /// dispatch on that turn without background reader threads. Off by default; no-op on X11.
+    fn set_wake_on_wayland_read(&self, wake: bool);
 }
 
 impl ActiveEventLoopExtWayland for ActiveEventLoop {
     #[inline]
     fn is_wayland(&self) -> bool {
         self.p.is_wayland()
+    }
+
+    #[inline]
+    fn set_wake_on_wayland_read(&self, wake: bool) {
+        self.p.set_wake_on_wayland_read(wake);
     }
 }
 

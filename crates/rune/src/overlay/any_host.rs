@@ -413,6 +413,20 @@ impl AnyHost for OverlayHost {
         core.a11y_turn(app.rt_mut()) || more
     }
 
+    fn has_live_wayland_layer(&self) -> bool {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        return matches!(self.core.surface.live().map(|l| &l.backing), Some(Backing::Layer(layer)) if layer.is_live());
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        false
+    }
+
+    fn has_pending_platform_events(&self) -> bool {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        return matches!(self.core.surface.live().map(|l| &l.backing), Some(Backing::Layer(layer)) if layer.has_pending_events());
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        false
+    }
+
     fn keeps_loop(&self) -> bool {
         false
     }

@@ -1,0 +1,1 @@
+- Wayland layer-shell overlays no longer spawn a background reader thread per surface: vendored `winit` adds `ActiveEventLoopExtWayland::set_wake_on_wayland_read(bool)` (enabled only while a layer surface is live), and `Windows::about_to_wait` checks `LayerSurface::has_pending_events` in memory to drain events read mid-turn without extra wakes or frames when idle.
