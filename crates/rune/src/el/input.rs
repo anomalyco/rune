@@ -334,12 +334,12 @@ impl El {
         self
     }
     /// Primary press (left-click or tap) on a [`Mark::Pill`](crate::Mark::Pill) chip inside
-    /// this [`text_input`](crate::text_input), invoked before caret placement. Called with the
+    /// this [`text_input`], invoked before caret placement. Called with the
     /// pill's id and the press point in window points; return `true` to consume the press
     /// without moving the caret or starting a text-selection drag, or `false` to fall through to
     /// normal caret placement. Skipped while `Shift` is held so `Shift+click` continues to
     /// extend the selection. While hovering a pill in a field with this handler, the cursor
-    /// shows [`Cursor::Pointer`](crate::Cursor::Pointer).
+    /// shows [`Cursor::Pointer`].
     ///
     /// ```no_run
     /// # use rune::{TextEdit, TextStyle, text_input};

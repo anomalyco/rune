@@ -1,6 +1,6 @@
 //! A motion gate for an app's own tests: drive the real app headless on the virtual clock, record
 //! every element's presented rect, visible part and opacity each frame, and list what a person
-//! would see go wrong (see [`check`] and [`RULES`]).
+//! would see go wrong (see [`check()`] and [`RULES`]).
 //!
 //! An app lists cells, one scenario in one circumstance each, and runs them in a test:
 //!

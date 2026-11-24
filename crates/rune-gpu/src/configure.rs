@@ -5,7 +5,7 @@
 //! the wait and the check makes it refuse the configuration (`GpuWaitTimeout`), and the window
 //! is left with a surface that has no swap chain. So every `Surface::configure` runs inside
 //! [`configuring`], and a thread other than the one that configures surfaces submits through
-//! [`try_submit`], which does nothing while a surface is being configured.
+//! [`Gate::try_submit`], which does nothing while a surface is being configured.
 
 use std::sync::{Mutex, TryLockError};
 

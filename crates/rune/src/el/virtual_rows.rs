@@ -64,7 +64,7 @@ impl El {
     /// `Runtime::elements`, accessibility, Tab order, text selection and matched elements see the
     /// built rows only. A focused field in a row that scrolls out keeps its focus and typing (its
     /// row is built for that, not mounted); a field focused from state in a row that isn't built
-    /// takes focus once the row is. A [`memo`](crate::memo) inside `build` keeps its subtree while
+    /// takes focus once the row is. A [`memo`](crate::memo()) inside `build` keeps its subtree while
     /// the row stays built; a row built again after scrolling out builds afresh.
     ///
     /// Handlers in a row must find their item by its key or id, never by `i`. An index is only

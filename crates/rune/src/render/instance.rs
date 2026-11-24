@@ -230,10 +230,10 @@ pub struct Instance {
     /// x0, y0, x1, y1
     pub clip: [f32; 4],
     /// Attribute 7 is Uint32x4; the instance ABI stays 128 bytes (8 × vec4).
-    /// [0] = pack2x16float(left, top), [1] = pack2x16float(right, bottom) widths; a negative
+    /// `[0]` = pack2x16float(left, top), `[1]` = pack2x16float(right, bottom) widths; a negative
     /// width ramps linearly, a positive one on smoothstep.
-    /// [2] = pack4x8unorm(clamp(inward origin→clip distance / width, 0, 1)), LTRB.
-    /// [3] = signed uniform f32 clip-radius bits or tagged mixed radii (`pack_clip_radii`).
+    /// `[2]` = pack4x8unorm(clamp(inward origin→clip distance / width, 0, 1)), LTRB.
+    /// `[3]` = signed uniform f32 clip-radius bits or tagged mixed radii (`pack_clip_radii`).
     /// The rounded rectangle is `clip`; fade widths never occupy this word.
     /// Layer records may leave all four words zero. See `pack_fade`.
     pub fade: [u32; 4],
@@ -692,7 +692,7 @@ impl Instance {
         self.fade[3] = pack_clip_radii(self.clip, radii);
     }
 
-    /// Begin an isolated scope. `bounds` is a device-pixel [x,y,w,h] content bound, including
+    /// Begin an isolated scope. `bounds` is a device-pixel `[x, y, w, h]` content bound, including
     /// native surfaces. Primitive bounds (including shadow support) expand it during prepare.
     pub fn begin_layer(bounds: [f32; 4], clip: [f32; 4], spec: LayerSpec) -> Self {
         let mut instance = Self { rect: bounds, clip, fill: [0.0, 0.0, 0.0, spec.opacity.clamp(0.0, 1.0)],

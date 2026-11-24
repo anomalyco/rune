@@ -223,10 +223,16 @@ impl CodeFrame<'_> {
 
 /// A diff block [`Markdown::diff_frame`] is wrapping.
 ///
-/// ```ignore
+/// ```
+/// # use rune::{El, col};
+/// # use rune_kit::Markdown;
+/// # fn copy_button(_: &str) -> El { col() }
+/// # let src = "";
+/// # let _ =
 /// Markdown::new(src).diff_frame(|card, d| {
 ///     col().key(format!("diff-{}", d.index)).child(copy_button(d.source)).child(card)
 /// })
+/// # ;
 /// ```
 #[non_exhaustive]
 pub struct DiffFrame<'a> {
@@ -440,7 +446,10 @@ impl Markdown {
     /// still break at spaces (`false` by default). Applies to paragraphs, headings, lists,
     /// block quotes, table cells, diff fences, and code fences when [`Self::scroll_wide`] is off.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, Markdown};
+    /// # let src = "";
+    /// # let kit = Kit::neutral(true);
     /// let view = Markdown::new(src).wrap_anywhere(true).build(&kit);
     /// ```
     pub fn wrap_anywhere(mut self, on: bool) -> Self {
@@ -477,8 +486,14 @@ impl Markdown {
     /// app can put its own controls on it (a Copy patch button) or add a header. Ordinary code
     /// fences still go to [`Self::code_frame`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, col};
+    /// # use rune_kit::Markdown;
+    /// # fn copy_button(_: &str) -> El { col() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).diff_frame(|card, d| col().key(format!("diff-{}", d.index)).child(copy_button(d.source)).child(card))
+    /// # ;
     /// ```
     pub fn diff_frame(mut self, f: impl Fn(El, &DiffFrame<'_>) -> El + 'static) -> Self {
         self.diff_frame = Some(Rc::new(f));

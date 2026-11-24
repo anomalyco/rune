@@ -333,7 +333,7 @@ impl ScrollBarStyle {
     }
 
     /// How thick the strip beside the viewport is, for the room a [`Self::native`] bar takes
-    /// ([`TRACK`], the preset's own strip, or wider for a thumb too wide to sit in it).
+    /// (`TRACK`, the preset's own strip, or wider for a thumb too wide to sit in it).
     pub fn strip(&self) -> f32 {
         self.track.strip.max(self.widest() + 2.0 * self.track.edge)
     }
@@ -935,11 +935,17 @@ pub trait ScrollBar {
     /// with zero view commits per scroll frame. Custom implementors inherit a default fallback to
     /// [`ScrollBar::scroll_bar`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::col;
+    /// # use rune_kit::{Kit, ScrollBar};
+    /// # let k = Kit::neutral(true);
+    /// # let wide_tall_content = col();
+    /// # let _ =
     /// col().key("canvas").w_full().grow(1.0).min_h(0.0)
     ///     .scroll_xy()
     ///     .child(wide_tall_content)
     ///     .scroll_bars_xy(&k)
+    /// # ;
     /// ```
     #[track_caller]
     fn scroll_bars_xy(self, k: &Kit) -> El
@@ -954,12 +960,18 @@ pub trait ScrollBar {
     /// [`ScrollBarStyle::horizontal`] on `horizontal` is optional). Custom implementors inherit a
     /// default fallback to [`ScrollBar::scroll_bar_styled`] with `vertical`.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::col;
+    /// # use rune_kit::{Kit, ScrollBar, ScrollBarStyle};
+    /// # let k = Kit::neutral(true);
+    /// # let wide_tall_content = col();
     /// let style = ScrollBarStyle::native(k.c.border_muted, k.c.border_strong).inside().always_visible();
+    /// # let _ =
     /// col().key("canvas").w_full().grow(1.0).min_h(0.0)
     ///     .scroll_xy()
     ///     .child(wide_tall_content)
     ///     .scroll_bars_xy_styled(style, style.horizontal())
+    /// # ;
     /// ```
     #[track_caller]
     fn scroll_bars_xy_styled(self, vertical: ScrollBarStyle, _horizontal: ScrollBarStyle) -> El

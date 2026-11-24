@@ -311,7 +311,7 @@ impl FieldMenuRequest {
     pub fn into_menu(self) -> PopupMenu { self.menu }
 }
 
-/// Why [`Runtime::resolve_popup`] could not answer a menu.
+/// Why [`crate::Runtime::resolve_popup`] could not answer a menu.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PopupMenuError {
     NotOpen,

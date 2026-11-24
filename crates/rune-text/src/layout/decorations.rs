@@ -5,7 +5,7 @@ use crate::*;
 use rune_core::HashMap as FxHashMap;
 
 /// The corner radius in points of a span's rounded background unless its text element sets
-/// another ([`El::span_radius`](crate::El::span_radius)).
+/// another (`El::span_radius`).
 pub const SPAN_RADIUS: f32 = 4.0;
 
 /// A rect drawn under or over text: span backgrounds and underlines (device px).

@@ -37,7 +37,7 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub(crate) fn window_moved(&mut self, dx: f32, dy: f32) { self.core_mut().window_moved(dx, dy); }
     /// Cancel any active pointer capture, drag or hover: ends a held drag with a cancelled
-    /// [`Phase::Up`](crate::Phase::Up) ([`Drag::cancelled`](crate::Drag::cancelled)), clears
+    /// [`Phase::Up`] ([`Drag::cancelled`]), clears
     /// press, secondary, tint, touch-hold, drag-out and autoscroll state, and leaves hover.
     ///
     /// ```
@@ -325,10 +325,12 @@ impl<S: 'static> Runtime<S> {
     /// [`El::window_resize`](crate::El::window_resize) region. The shell must act on it
     /// before returning from that press event.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # fn handle(rt: &mut rune::Runtime<()>, window: &winit::window::Window) {
     /// if let Some(edge) = rt.take_resize_action() {
     ///     let _ = window.drag_resize_window(edge.into());
     /// }
+    /// # }
     /// ```
     #[inline(always)]
     pub fn take_resize_action(&mut self) -> Option<crate::ResizeEdge> { self.core_mut().take_resize_action() }
@@ -386,8 +388,10 @@ impl<S: 'static> Runtime<S> {
     pub fn file_dialog(&self) -> Option<(FileDialogKind, &FileDialogOptions)> { self.core().file_dialog() }
     /// True when the pending file dialog allows selecting multiple files ([`Tx::open_files`]).
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # fn check(rt: &rune::Runtime<()>) {
     /// assert!(rt.file_dialog_multiple());
+    /// # }
     /// ```
     #[inline(always)]
     pub fn file_dialog_multiple(&self) -> bool { self.core().file_dialog_multiple() }
@@ -399,9 +403,11 @@ impl<S: 'static> Runtime<S> {
     /// For a single-file dialog, the first path (if any) is delivered. Its callback runs on
     /// the next frame. For tests and headless drivers; native dialogs answer themselves.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # fn answer(rt: &mut rune::Runtime<()>) {
     /// rt.resolve_file_dialog_files(Some(vec!["/a.csv".into(), "/b.csv".into()])).unwrap();
     /// rt.frame(1.0 / 60.0);
+    /// # }
     /// ```
     #[inline(always)]
     pub fn resolve_file_dialog_files(&mut self, paths: Option<Vec<PathBuf>>) -> Result<(), FileDialogError> {

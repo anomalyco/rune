@@ -1,7 +1,7 @@
-//! [`El::text_case`](crate::El::text_case): draw a cased copy of a string while byte ranges
+//! `El::text_case`: draw a cased copy of a string while byte ranges
 //! (spans, links) and tools keep the authored one.
 
-/// How [`El::text_case`](crate::El::text_case) draws a text's letters.
+/// How `El::text_case` draws a text's letters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextCase {
     /// Capitals, by `str::to_uppercase`: "Straße" draws "STRASSE".

@@ -3,9 +3,9 @@
 //! has no threads, the main thread runs it from a task after the current event, so it never runs
 //! inside a frame.
 //!
-//! On the web the work can wait without blocking the page: after [`start_runners`] (called from
+//! On the web the work can wait without blocking the page: after `start_runners` (called from
 //! a `#[wasm_bindgen(jspi)]` export), it runs on a few JS Promise Integration fibers, and
-//! [`wait`] suspends the fiber on a promise (a `fetch`, a timer) while frames and input carry on.
+//! `wait` suspends the fiber on a promise (a `fetch`, a timer) while frames and input carry on.
 //! So blocking code written for a thread (a request, a [`sleep`]) runs unchanged and costs the
 //! page nothing while it waits.
 

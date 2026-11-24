@@ -10,8 +10,10 @@ impl RuntimeCore {
 
     /// True when the pending file dialog allows selecting multiple files ([`Tx::open_files`]).
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # fn check(rt: &rune::Runtime<()>) {
     /// assert!(rt.file_dialog_multiple());
+    /// # }
     /// ```
     pub fn file_dialog_multiple(&self) -> bool {
         self.host.file_dialog.pending().is_some_and(|d| d.multiple)
@@ -30,9 +32,11 @@ impl RuntimeCore {
     /// For a single-file dialog, the first path (if any) is delivered. Its callback runs on
     /// the next frame. For tests and headless drivers; native dialogs answer themselves.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # fn answer(rt: &mut rune::Runtime<()>) {
     /// rt.resolve_file_dialog_files(Some(vec!["/a.csv".into(), "/b.csv".into()])).unwrap();
     /// rt.frame(1.0 / 60.0);
+    /// # }
     /// ```
     pub fn resolve_file_dialog_files(&mut self, paths: Option<Vec<std::path::PathBuf>>) -> Result<(), FileDialogError> {
         let id = self.host.file_dialog.pending().ok_or_else(|| FileDialogError("no file dialog is open".into()))?.id;

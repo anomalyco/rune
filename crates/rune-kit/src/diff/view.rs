@@ -258,7 +258,13 @@ impl<S: 'static> DiffView<S> {
     /// the custom header via [`DiffState::set_collapsed`]. When set, [`Self::header_actions`]
     /// is ignored.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{row, text};
+    /// # use rune_kit::{Kit, diff::{DiffState, DiffView}};
+    /// # struct App { diff: DiffState }
+    /// # let s = &App { diff: DiffState::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
     ///     .file_header(|s: &App, file, collapsed| {
     ///         let path = s.diff.files()[file].path().to_owned();
@@ -267,6 +273,7 @@ impl<S: 'static> DiffView<S> {
     ///             .child(text(path))
     ///     })
     ///     .build(s, &k)
+    /// # ;
     /// ```
     pub fn file_header(mut self, f: impl Fn(&S, usize, bool) -> El + 'static) -> Self {
         self.handlers.file_header = Some(Rc::new(f));
@@ -275,14 +282,20 @@ impl<S: 'static> DiffView<S> {
 
     /// Override the syntax highlighting palette (by default [`SyntaxTheme::from_kit`]).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, diff::{DiffState, DiffView}};
+    /// # struct App { diff: DiffState }
+    /// # let s = &App { diff: DiffState::default() };
+    /// # let k = Kit::neutral(true);
     /// use rune::Color;
     /// use rune_kit::syntax::{Syntax, SyntaxTheme};
     ///
     /// let theme = SyntaxTheme::from_kit(&k).with(Syntax::Keyword, Color { r: 0.9, g: 0.3, b: 0.6, a: 1.0 });
+    /// # let _ =
     /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
     ///     .syntax_theme(theme)
     ///     .build(s, &k)
+    /// # ;
     /// ```
     pub fn syntax_theme(mut self, theme: SyntaxTheme) -> Self {
         self.syntax_theme = Some(theme);
@@ -327,10 +340,16 @@ impl<S: 'static> DiffView<S> {
     /// and horizontal bars are attached; when lines wrap (or in [`DiffMode::Split`]), only a
     /// vertical bar is attached. Off by default.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, diff::{DiffState, DiffView}};
+    /// # struct App { diff: DiffState }
+    /// # let s = &App { diff: DiffState::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
     ///     .scroll_bar(true)
     ///     .build(s, &k)
+    /// # ;
     /// ```
     pub fn scroll_bar(mut self, on: bool) -> Self {
         self.scroll_bar = if on { DiffScrollBar::Kit } else { DiffScrollBar::None };
@@ -342,10 +361,16 @@ impl<S: 'static> DiffView<S> {
     /// and the horizontal bar uses `style.horizontal()`; when lines wrap (or in
     /// [`DiffMode::Split`]), only the vertical bar is attached.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, ScrollBarStyle, diff::{DiffState, DiffView}};
+    /// # struct App { diff: DiffState }
+    /// # let s = &App { diff: DiffState::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
     ///     .scroll_bar_styled(ScrollBarStyle::scroll_view(&k))
     ///     .build(s, &k)
+    /// # ;
     /// ```
     pub fn scroll_bar_styled(mut self, style: ScrollBarStyle) -> Self {
         self.scroll_bar = DiffScrollBar::Styled(style);

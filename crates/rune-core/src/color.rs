@@ -26,7 +26,7 @@ pub(crate) fn hash_bits(x: f32) -> u32 {
     if x == 0.0 { 0 } else if x.is_nan() { f32::NAN.to_bits() } else { x.to_bits() }
 }
 
-/// Hashes as `==` compares (see [`hash_bits`]), so a colour can be a `memo` version.
+/// Hashes as `==` compares (see `hash_bits`), so a colour can be a `memo` version.
 impl std::hash::Hash for Color {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         [self.r, self.g, self.b, self.a].map(hash_bits).hash(state);

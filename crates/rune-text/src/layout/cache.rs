@@ -111,7 +111,7 @@ impl TextSystem {
         self.line_scan = None;
     }
 
-    /// commits, and older ones, most recently used first, while they fit in [`STALE_BYTES`].
+    /// commits, and older ones, most recently used first, while they fit in `STALE_BYTES`.
     pub fn end_commit(&mut self) {
         let g = self.generation;
         if !self.superseded.is_empty() {

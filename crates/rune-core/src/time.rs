@@ -1,5 +1,5 @@
 //! Clocks. Native clock types remain unchanged; browsers read the page's `performance.now()`
-//! ([`page_clock`]). [`LocalTime`] reads an instant off the user's wall clock.
+//! (`page_clock`). [`LocalTime`] reads an instant off the user's wall clock.
 #[cfg(not(target_arch = "wasm32"))]
 pub use std::time::Instant;
 #[cfg(target_arch = "wasm32")]

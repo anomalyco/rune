@@ -216,15 +216,15 @@ impl WindowHandle {
         let place = crate::windows::PlaceRequest::new(display, placement);
         self.send(move |slot| WakeEvent::Place(slot, place));
     }
-    /// [`Tx::resize_window`] from outside a handler, on `tok::motion::DEFAULT`.
+    /// [`crate::Tx::resize_window`] from outside a handler, on `tok::motion::DEFAULT`.
     pub fn resize(&self, size: (f32, f32)) {
         self.frame(crate::window::frame::FrameRequest { size: Some(size), animate: true, ..Default::default() });
     }
-    /// [`Tx::resize_window_instant`] from outside a handler.
+    /// [`crate::Tx::resize_window_instant`] from outside a handler.
     pub fn resize_instant(&self, size: (f32, f32)) {
         self.frame(crate::window::frame::FrameRequest { size: Some(size), ..Default::default() });
     }
-    /// [`Tx::center_window`] from outside a handler.
+    /// [`crate::Tx::center_window`] from outside a handler.
     pub fn center(&self) {
         self.frame(crate::window::frame::FrameRequest { center: true, ..Default::default() });
     }

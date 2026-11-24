@@ -442,7 +442,7 @@ pub fn flatten_spans(spans: &[Span]) -> Vec<Span> {
 }
 
 /// A pressable byte range of a text element: a link, an @mention, a file chip. Attach with
-/// [`El::link`](crate::El::link) and handle with [`El::on_link`](crate::El::on_link). Its resting
+/// `El::link` and handle with `El::on_link`. Its resting
 /// look is whatever [`Span`]s cover it; [`LinkPaint`]s add the hover, pressed and focus looks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Link {
@@ -507,7 +507,7 @@ impl Link {
         self.focused = Some(paint);
         self
     }
-    /// A tooltip for this link alone, as [`El::help`](crate::El::help) is for an element:
+    /// A tooltip for this link alone, as `El::help` is for an element:
     /// shown after the hover delay while the pointer rests on the link's glyphs, and hidden
     /// by a press, scroll, key or the pointer leaving them. An empty string sets none.
     pub fn help(mut self, text: impl Into<String>) -> Self {
@@ -626,8 +626,7 @@ impl TextHighlight {
         self.vpad = vpad.max(0.0);
         self
     }
-    /// Optional key for [`Tx::scroll_into_view`](crate::Tx::scroll_into_view),
-    /// [`Cx::layout`](crate::Cx::layout) and [`Runtime::find`](crate::Runtime::find).
+    /// Optional key for `Tx::scroll_into_view`, `Cx::layout` and `Runtime::find`.
     pub fn key(mut self, key: impl Into<String>) -> Self {
         self.key = Some(key.into());
         self

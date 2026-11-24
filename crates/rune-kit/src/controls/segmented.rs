@@ -33,7 +33,11 @@ type Pick = Box<dyn Fn(usize) -> Box<dyn FnOnce(El) -> El>>;
 /// Builds a WAI-ARIA `radiogroup` of `radio` segments by default, or a `tablist` of `tab`
 /// segments with [`Self::as_tabs`].
 ///
-/// ```ignore
+/// ```
+/// # use rune_kit::{Badge, Kit, SegmentedControl};
+/// # use rune_theme_opencode::icons;
+/// # let k = Kit::neutral(true);
+/// # let _ =
 /// SegmentedControl::new(&["Comments", "Checks"], Some(0))
 ///     .icons(&[Some(&icons::COMMENT), Some(&icons::CIRCLE_CHECK)])
 ///     .trailing(0, Badge::new("3").build(&k))
@@ -41,6 +45,7 @@ type Pick = Box<dyn Fn(usize) -> Box<dyn FnOnce(El) -> El>>;
 ///     .shortcut(0, "cmd+1")
 ///     .fit()
 ///     .build(&k)
+/// # ;
 /// ```
 pub struct SegmentedControl {
     labels: Vec<String>,
@@ -103,10 +108,15 @@ impl SegmentedControl {
     /// Leading 14 pt icon for segment `i`, tinted to match the segment's ink and hover colour.
     /// Pair with an empty label (`""`) and [`Self::help`] for an icon-only segment.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, SegmentedControl};
+    /// # use rune_theme_opencode::icons;
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// SegmentedControl::new(&["List", "Grid"], Some(0))
     ///     .icon(0, &icons::BULLET_LIST)
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn icon(mut self, i: usize, icon: &'static Icon) -> Self {
         if let Some(seg) = self.segment_mut(i) {
@@ -117,12 +127,17 @@ impl SegmentedControl {
     /// Leading 14 pt icons for segments in order (`None` leaves a segment without an icon).
     /// Entries past the number of segments are ignored.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, SegmentedControl};
+    /// # use rune_theme_opencode::icons;
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// SegmentedControl::new(&["", ""], Some(0))
     ///     .icons(&[Some(&icons::BULLET_LIST), Some(&icons::CODE)])
     ///     .help(0, "List")
     ///     .help(1, "Code")
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn icons(mut self, icons: &[Option<&'static Icon>]) -> Self {
         let count = icons.len().min(self.labels.len());
@@ -137,10 +152,14 @@ impl SegmentedControl {
     /// Trailing element rendered after segment `i`'s label (for example a count badge or status
     /// dot), separated by a 6 pt gap.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Badge, Kit, SegmentedControl};
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// SegmentedControl::new(&["Comments", "Checks"], Some(0))
     ///     .trailing(0, Badge::new("3").build(&k))
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn trailing(mut self, i: usize, el: El) -> Self {
         if let Some(seg) = self.segment_mut(i) {
@@ -155,11 +174,15 @@ impl SegmentedControl {
     /// accessible description when it differs from a non-empty label and [`Self::description`]
     /// was not set.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, SegmentedControl};
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// SegmentedControl::new(&["Comments", "Checks"], Some(0))
     ///     .help(0, "Review comments")
     ///     .shortcut(0, "cmd+1")
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn help(mut self, i: usize, text: impl Into<String>) -> Self {
         if let Some(seg) = self.segment_mut(i) {
@@ -171,10 +194,14 @@ impl SegmentedControl {
     /// and exposed to assistive technology via `El::shortcut_hint`. Accepts display strings
     /// (`"⌘1"`) or accelerator strings (`"cmd+1"`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, SegmentedControl};
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// SegmentedControl::new(&["Comments", "Checks"], Some(0))
     ///     .shortcut(0, "cmd+1")
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn shortcut(mut self, i: usize, s: impl Into<String>) -> Self {
         if let Some(seg) = self.segment_mut(i) {
@@ -186,11 +213,16 @@ impl SegmentedControl {
     /// example naming the meaning of a trailing status dot. Overrides any tooltip-derived
     /// description; pass `""` to suppress tooltip fallback.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::el;
+    /// # use rune_kit::{Kit, SegmentedControl};
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// SegmentedControl::new(&["General", "Security"], Some(0))
     ///     .trailing(1, el().size(6.0, 6.0).radius(3.0).fill(k.c.danger.fg))
     ///     .description(1, "1 security warning")
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn description(mut self, i: usize, text: impl Into<String>) -> Self {
         if let Some(seg) = self.segment_mut(i) {
@@ -201,12 +233,16 @@ impl SegmentedControl {
     /// Wire segment `i`'s ARIA `aria-controls` relation (`El::controls`) to the element keyed
     /// `key`, such as a `role("tabpanel")` in [`Self::as_tabs`] mode. An empty key has no effect.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, SegmentedControl};
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// SegmentedControl::new(&["General", "Network"], Some(0))
     ///     .as_tabs()
     ///     .controls(0, "settings-panel")
     ///     .controls(1, "settings-panel")
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn controls(mut self, i: usize, key: impl Into<String>) -> Self {
         if let Some(seg) = self.segment_mut(i) {
@@ -218,12 +254,16 @@ impl SegmentedControl {
     /// `aria-checked`) to WAI-ARIA Tabs (`tablist` with horizontal `aria-orientation` / `tab`
     /// with `aria-selected`), keeping roving focus and visual layout unchanged.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, SegmentedControl};
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// SegmentedControl::new(&["General", "Network", "Security"], Some(0))
     ///     .label("Settings sections")
     ///     .as_tabs()
     ///     .controls(0, "settings-panel")
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn as_tabs(mut self) -> Self {
         self.as_tabs = true;

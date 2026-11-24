@@ -127,7 +127,7 @@ impl El {
         }
         self
     }
-    /// Draws bytes `range` of a [`text`](crate::text) or [`rich`](crate::rich) element inside a
+    /// Draws bytes `range` of a [`text`](crate::text()) or [`rich`] element inside a
     /// padded [`SpanBox`](crate::SpanBox) with its own layout-affecting horizontal padding,
     /// per-corner radii, and optional inset border.
     ///
@@ -272,10 +272,18 @@ impl El {
     /// and shift automatically across any active IME preedit, as [`El::decorations`] and
     /// [`El::strikes`] do.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Color, LineFill, TextEdit, TextStyle, text_input};
+    /// # struct App { edit: TextEdit }
+    /// # let s = App { edit: TextEdit::default() };
+    /// # let body = TextStyle::new(14.0, 400.0);
+    /// # let (code_start, code_end, quote_start, quote_end) = (0, 0, 0, 0);
+    /// # let (code_bg, quote_bar) = (Color::WHITE, Color::WHITE);
+    /// # let _ =
     /// text_input(&s.edit, body)
     ///     .line_fills([LineFill::new(code_start, code_end).bg(code_bg)])
     ///     .line_fills([LineFill::new(quote_start, quote_end).left_bar(2.0, quote_bar)])
+    /// # ;
     /// ```
     pub fn line_fills(mut self, fills: impl IntoIterator<Item = LineFill>) -> Self {
         if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
@@ -339,11 +347,18 @@ impl El {
     /// its aspect ratio, without tinting. When `Some`, it takes precedence over
     /// [`PillStyle::icon`] and [`El::pill_icon`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::collections::HashMap;
+    /// # use rune::{Pixels, TextEdit, TextStyle, text_input};
+    /// # struct App { draft: TextEdit, logos: HashMap<String, Pixels> }
+    /// # let s = App { draft: TextEdit::default(), logos: HashMap::new() };
+    /// # let body = TextStyle::new(14.0, 400.0);
+    /// # let _ =
     /// text_input(&s.draft, body).pill_image({
     ///     let logos = s.logos.clone();
     ///     move |id| logos.get(id).cloned()
     /// })
+    /// # ;
     /// ```
     pub fn pill_image(mut self, image: impl Fn(&str) -> Option<crate::Pixels> + 'static) -> Self {
         if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
@@ -375,7 +390,7 @@ impl El {
     }
 
     /// Secondary press (right-click or macOS control-click) on a [`Mark::Pill`](crate::Mark::Pill)
-    /// inside this [`text_input`](crate::text_input). Called with the pill's id and the press point
+    /// inside this [`text_input`]. Called with the pill's id and the press point
     /// in window points; return `true` to handle it (opening a pill-specific menu) or `false` to
     /// fall through to the field's standard context menu.
     pub fn on_pill_secondary<S: 'static>(mut self, f: impl Fn(&mut S, &str, PointerPress, &mut Tx) -> bool + 'static) -> Self {
@@ -1048,8 +1063,8 @@ impl El {
         }
         self
     }
-    /// Indents the first formatted line of a [`text`](crate::text), [`rich`](crate::rich), or
-    /// [`text_input`](crate::text_input) element by `points` from its inline-start edge,
+    /// Indents the first formatted line of a [`text`](crate::text()), [`rich`], or
+    /// [`text_input`] element by `points` from its inline-start edge,
     /// matching CSS Text Module Level 3 `text-indent: <length>`.
     ///
     /// Positive values indent the first line inward; negative values pull it outward into leading

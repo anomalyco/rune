@@ -7,10 +7,8 @@ use crate::{Entry, Face, Ink, TextSystem};
 use super::hash;
 use rune_core::tok::TextStyle;
 
-/// A string that several text cells each show one grapheme of (see [`El::advance_in`]), hashed
+/// A string that several text cells each show one grapheme of (see `El::advance_in`), hashed
 /// once so cells and frames can look up its shaped layout without rehashing it.
-///
-/// [`El::advance_in`]: crate::El::advance_in
 #[derive(Clone, Debug)]
 pub struct Run {
     text: Rc<str>,
@@ -116,7 +114,7 @@ impl RunLayout {
     }
 
     /// Width in points of the grapheme at byte `at`: the gap to the next grapheme, or for the
-    /// last to the run's end rounded up as [`TextSystem::measure`](super::TextSystem::measure)
+    /// last to the run's end rounded up as [`TextSystem::measure`](crate::TextSystem::measure)
     /// does, so cells measured this way keep the run's kerning and sum to its measured width.
     pub fn advance(&self, at: usize, scale: f32) -> Option<f32> {
         let i = self.grapheme(at)?;

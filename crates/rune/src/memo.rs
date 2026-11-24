@@ -390,7 +390,7 @@ pub fn as_next_build<R>(f: impl FnOnce() -> R) -> R {
 ///
 /// Anything the closure reads that can change belongs in `version`, apart from `Cx::layout`,
 /// `Cx::layout_with`, `Cx::layout_size` and `Cx::caret`, which are tracked; see the
-/// [module docs](crate::memo) for handlers, live values and what else invalidates. Outside a view (a test calling a view function directly)
+/// [module docs](mod@crate::memo) for handlers, live values and what else invalidates. Outside a view (a test calling a view function directly)
 /// it just builds.
 #[inline]
 #[cfg_attr(debug_assertions, track_caller)]

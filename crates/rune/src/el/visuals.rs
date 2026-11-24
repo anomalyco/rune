@@ -596,7 +596,7 @@ impl El {
         self.set_clip([left, top, right, bottom].map(|w| -w.clamp(0.0, 65504.0)));
         self
     }
-    /// Track hover for descendants' `group_*` styles (see [`Visual::hover_group`]). Keyboard
+    /// Track hover for descendants' `group_*` styles (see `Visual::hover_group`). Keyboard
     /// focus on the group or inside it lights it too, as CSS `:is(:hover, :has(:focus-visible))`
     /// does, so controls it reveals show when Tab reaches them.
     pub fn hover_group(mut self) -> Self {

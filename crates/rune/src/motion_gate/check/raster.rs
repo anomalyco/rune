@@ -13,7 +13,7 @@ use crate::render::{Instance, Kind};
 /// Points per cell.
 pub const CELL: f32 = 12.0;
 
-/// One frame's cells, row-major, in OKLab scaled by [`Q`].
+/// One frame's cells, row-major, in OKLab scaled by `Q`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Grid {
     pub w: usize,

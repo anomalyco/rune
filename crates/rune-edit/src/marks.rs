@@ -620,7 +620,7 @@ impl TextEdit {
     }
 
     /// Return the current selection as plain text, replacing each wholly contained
-    /// [`Mark::Pill`](crate::Mark::Pill) with `pill_text(id)` when it returns `Some`, and keeping
+    /// [`Mark::Pill`] with `pill_text(id)` when it returns `Some`, and keeping
     /// the pill's display label otherwise.
     ///
     /// Returns an empty string when the selection is empty or the field is secure. A pill only

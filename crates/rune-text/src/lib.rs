@@ -355,8 +355,8 @@ pub struct TextSystem {
     ink_spans: Vec<(u32, u32, u32)>,
     coords_scratch: Vec<i16>,
     traks: Traks,
-    /// The mode glyphs draw in: [`Self::requested`]'s, or its grayscale twin while subpixel
-    /// text can't draw ([`FontSmoothing::drawn`]).
+    /// The mode glyphs draw in: `Self::requested`'s, or its grayscale twin while subpixel
+    /// text can't draw (`FontSmoothing::drawn`).
     #[doc(hidden)]
     pub smoothing: FontSmoothing,
     /// The mode the app asked for ([`Self::set_font_smoothing`]).

@@ -7,8 +7,8 @@ use super::{EditActs, kit_rich_style, name_field};
 /// The older labelled field (`components/text-field`): label over a bordered 32 point input.
 ///
 /// Draws a visible label and a wrapped, assertive [`Self::error`] line, but has no `secure`,
-/// `on_change` or visible help text. Prefer [`crate::Field`] with [`TextInput`] or
-/// [`TextArea`] for new forms.
+/// `on_change` or visible help text. Prefer [`crate::Field`] with [`crate::TextInput`] or
+/// [`crate::TextArea`] for new forms.
 pub struct TextField {
     label: String,
     description: Option<String>,
@@ -77,8 +77,15 @@ impl TextField {
     /// Accessibility-only (not drawn); when [`Self::error`] is also set, both describe the
     /// editor, with the description before the error.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, TextField};
+    /// # struct App { name: TextEdit }
+    /// # let s = App { name: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextField::new("Name", &s.name).description("Letters and digits only").build(&k)
+    /// # ;
     /// ```
     pub fn description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
@@ -99,8 +106,16 @@ impl TextField {
         self
     }
     /// Called when the user submits the focused field with Return (`El::on_submit`). Skipped when disabled.
-    /// ```ignore
+    /// ```
+    /// # use rune::{TextEdit, Tx};
+    /// # use rune_kit::{Kit, TextField};
+    /// # struct App { name: TextEdit }
+    /// # impl App { fn save(&mut self, _: &mut Tx) {} }
+    /// # let s = App { name: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextField::new("Name", &s.name).on_edit(|s: &mut App| &mut s.name).on_submit(|s: &mut App, tx: &mut Tx| s.save(tx)).build(&k)
+    /// # ;
     /// ```
     pub fn on_submit<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.edits.submit(f);

@@ -4,7 +4,7 @@ use super::*;
 use rune_text::paragraph_ranges as paragraphs;
 
 impl El {
-    /// Lays out each newline-ended line as its own [`Layout`](crate::text::Layout), reusing
+    /// Lays out each newline-ended line as its own `Layout`, reusing
     /// unchanged lines across commits (shaping only changed lines; per-commit keying still hashes
     /// each line when spans are present, and long plain/colour-only ASCII interiors in a
     /// start-aligned, LTR, fixed-pitch monospace face wait as runs even when other lines carry

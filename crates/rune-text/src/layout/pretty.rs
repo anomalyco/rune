@@ -20,7 +20,7 @@ static PRETTY: AtomicBool = AtomicBool::new(false);
 /// Wraps the app's text as `text-wrap-style: pretty` does in Chromium: a paragraph that would end
 /// on a lone short word takes a word or more down with it, pills and inline boxes included. Text
 /// in a monospace family, justified, in an editor, cut to a number of lines or opted out with
-/// [`El::wrap_greedy`](crate::El::wrap_greedy) keeps greedy lines, as does, as in Chromium, a
+/// `El::wrap_greedy` keeps greedy lines, as does, as in Chromium, a
 /// paragraph whose last line holds an isolated run (inline code), one with a word broken inside to
 /// fit (`wrap_anywhere`), and one in an indented block (a list item, a quote). Call it before any text is laid
 /// out: layouts are cached.

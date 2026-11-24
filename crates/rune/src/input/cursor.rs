@@ -25,28 +25,40 @@ pub enum Cursor {
     ResizeRow,
     /// Horizontal bidirectional resize (CSS `ew-resize`), for left and right frame edges.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
     /// el().size(8.0, 120.0).hit().cursor(Cursor::ResizeEw)
+    /// # ;
     /// ```
     ResizeEw,
     /// Vertical bidirectional resize (CSS `ns-resize`), for top and bottom frame edges.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
     /// el().size(120.0, 8.0).hit().cursor(Cursor::ResizeNs)
+    /// # ;
     /// ```
     ResizeNs,
     /// Diagonal resize from north-west to south-east (CSS `nwse-resize`), for top-left and
     /// bottom-right corners.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
     /// el().size(12.0, 12.0).hit().cursor(Cursor::ResizeNwse)
+    /// # ;
     /// ```
     ResizeNwse,
     /// Diagonal resize from north-east to south-west (CSS `nesw-resize`), for top-right and
     /// bottom-left corners.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
     /// el().size(12.0, 12.0).hit().cursor(Cursor::ResizeNesw)
+    /// # ;
     /// ```
     ResizeNesw,
     /// A precise-selection cross (CSS `crosshair`), for picking a point or dragging out a rect.
