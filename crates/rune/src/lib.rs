@@ -1,7 +1,6 @@
-//! Rune, first slice: keyed element tree from plain view functions, Taffy layout, analytic
-//! spring tracks, an instanced wgpu uber-quad renderer with Parley text, pointer and keyboard
-//! input, scroll viewports, growth stacks, streaming reveals, themes as data, and headless agent
-//! tooling.
+//! Rune: GPU-rendered Rust UI framework with keyed element trees, Taffy layout, analytic springs,
+//! Parley/Windfoil text, native Metal and wgpu backends, overlays, AccessKit accessibility, media,
+//! and headless tooling.
 
 #[cfg(all(target_arch = "wasm32", any(feature = "hot", feature = "native-file-dialog")))]
 compile_error!("web does not support Rune's hot or native-file-dialog features; disable them for wasm32");

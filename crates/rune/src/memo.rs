@@ -364,10 +364,24 @@ pub fn as_next_build<R>(f: impl FnOnce() -> R) -> R {
 /// environment) differs from the last build's. Otherwise `build` isn't called and the
 /// previous subtree is reused, with the same node ids and state.
 ///
-/// ```ignore
-/// col().growth(GrowthSpec::default()).virtualize(72.0).children(s.messages.iter().map(|m| {
-///     memo(format!("msg-{}", m.id), (m.revision, s.theme), || message_view(m))
-/// }))
+/// ```no_run
+/// # use rune::{El, GrowthSpec, ScrollSpec, col, memo, text};
+/// # struct Message { id: String, revision: u64, body: String }
+/// # struct App { messages: Vec<Message>, theme: u64 }
+/// # fn message_view(m: &Message) -> El { text(&m.body) }
+/// # fn view(s: &App) -> El {
+/// col().scroll(ScrollSpec { stick_bottom: true }).grow(1.0).child(
+///     col().key("rows").growth(GrowthSpec::default()).virtual_rows(
+///         s.messages.len(),
+///         72.0,
+///         |s: &App, i| s.messages[i].id.as_str().into(),
+///         |s: &App, i| {
+///             let m = &s.messages[i];
+///             memo(format!("msg-{}", m.id), (m.revision, s.theme), || message_view(m))
+///         },
+///     ),
+/// )
+/// # }
 /// ```
 ///
 /// Anything the closure reads that can change belongs in `version`, apart from `Cx::layout`,

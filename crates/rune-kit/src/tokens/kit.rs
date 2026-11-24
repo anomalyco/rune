@@ -223,7 +223,7 @@ pub struct Motion {
     pub control: Spring,
     /// Overlays opening and closing (popover, menu, tooltip): ~120–150 ms.
     pub overlay: Spring,
-    /// Disclosure height changes (accordion, collapsible).
+    /// Disclosure transitions (shell `SplitView` panes via `PaneMotion`, and `SidebarSection` collapse/expand).
     pub disclosure: Spring,
 }
 

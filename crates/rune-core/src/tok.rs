@@ -144,6 +144,9 @@ pub mod type_ {
 
 /// Semantic colours for one appearance. Alphas are for linear-light blending, so white overlays
 /// on dark are much lower and black overlays on light much higher than their sRGB/CSS equivalents.
+/// Windows blend in sRGB by default (`App::srgb_blend(true)`), where these legacy linear-tuned
+/// alphas appear subtler on dark and heavier on light; use `rune::Theme` with sRGB blend metadata
+/// or `rune-kit` for sRGB-authored themes.
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
     pub bg: Color,
