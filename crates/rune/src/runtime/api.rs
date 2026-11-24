@@ -254,6 +254,26 @@ impl<S: 'static> Runtime<S> {
     pub fn set_system_reduced_motion(&mut self, reduced: bool) { self.core_mut().set_system_reduced_motion(reduced); }
     #[inline(always)]
     pub fn system_reduced_motion(&self) -> bool { self.core().host.system_reduced_motion() }
+    /// Sets the preferred language list reported by [`Cx::system_languages`] and [`Cx::locale`]
+    /// as BCP 47 tags in preference order, overriding the lazily queried platform languages.
+    /// Empty and duplicate tags are dropped; a change re-runs the view and its memos.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new(
+    ///     (),
+    ///     |_: &(), cx| { let _ = cx.locale(); el() },
+    ///     (200.0, 120.0),
+    ///     Env::default(),
+    /// );
+    /// rt.set_languages(["ar-EG", "en-US"]);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_languages(&mut self, languages: impl IntoIterator<Item = impl AsRef<str>>) {
+        self.core_mut().set_languages(languages.into_iter().map(|s| s.as_ref().to_owned()).collect());
+    }
     #[inline(always)]
     pub(crate) fn system_scroll_bars_state(&self) -> crate::platform::scroll_bars::SystemScrollBars { self.core().system_scroll_bars_state() }
     #[inline(always)]

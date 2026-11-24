@@ -157,7 +157,11 @@ its element's place. States and values project to WAI-ARIA attributes (`aria-dis
 HTML `disabled` so disabled controls stay discoverable, `aria-busy`, `aria-expanded`,
 `aria-selected`, `aria-checked`, `aria-pressed`, `aria-level`, `aria-posinset`/`aria-setsize`,
 `aria-live`, `aria-description`, and `aria-valuemin`/`aria-valuemax`/`aria-valuenow`/`aria-valuetext`),
-and in app mode keyboard focus mirrors onto the canvas's `aria-activedescendant` focus proxy
+The `[data-rune-a11y]` mirror root carries `dir="rtl"` or `dir="ltr"` from the scene root's
+resolved direction (with `dir` on mirrored descendants only where their resolved direction
+flips from their mirror parent), carries `lang` from the active `rune::text::set_language`
+tag when set, and projects text alignment as logical CSS `text-align: start`/`end`.
+In app mode keyboard focus mirrors onto the canvas's `aria-activedescendant` focus proxy
 with the same role, name, range, and states. Keys become element ids, so
 `#views` scrolls to the element keyed `views`. Its text is transparent but real, so the browser
 selects and copies it, and screen readers, crawlers and link previews read it. An element with

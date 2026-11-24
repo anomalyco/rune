@@ -36,6 +36,8 @@ pub(crate) struct A11yMirror {
     moving: bool,
     built_at: f64,
     built: bool,
+    root_dir: Option<&'static str>,
+    root_lang: Option<parley::fontique::Language>,
     json: String,
     patch: patch::PatchState,
     patch_json: String,
@@ -103,6 +105,9 @@ pub(crate) struct A11yItem {
     /// Extra WAI-ARIA states and relations (`aria-haspopup`, `aria-orientation`,
     /// `aria-multiselectable`, `aria-required`, `aria-controls`, `aria-owns`).
     pub aria: MirrorAria,
+    /// Explicit HTML `dir` (`"rtl"` or `"ltr"`) when this item's resolved `Flow` flips from its
+    /// mirror parent's; `None` when inherited.
+    pub dir: Option<&'static str>,
 }
 
 /// Extra WAI-ARIA states and relations mirrored onto a web DOM item.
@@ -124,7 +129,7 @@ pub(crate) struct A11yFont {
     pub line_height: f32,
     pub tracking: f32,
     pub italic: bool,
-    /// `"left"`, `"center"` or `"right"`.
+    /// Logical alignment: `"start"`, `"center"` or `"end"`.
     pub align: &'static str,
 }
 
@@ -147,7 +152,7 @@ impl A11yItem {
     fn new(kind: &'static str, path: &str, rect: [f32; 4]) -> Self {
         A11yItem { kind, path: path.to_owned(), rect, font_size: 0.0, level: None, expanded: None, text: String::new(),
             runs: Vec::new(), tag: None, role: None, parent: None, id: None, href: None, font: None, selectable: false, description: String::new(), value: String::new(), pressed: None, selected: None, checked: None, set: None,
-            live: None, range: None, value_text: String::new(), disabled: false, busy: false, scroll: None, aria: MirrorAria::default() }
+            live: None, range: None, value_text: String::new(), disabled: false, busy: false, scroll: None, aria: MirrorAria::default(), dir: None }
     }
 
     fn to_json(&self) -> Value {
@@ -180,6 +185,7 @@ impl A11yItem {
             self.busy,
             self.scroll,
             &self.aria,
+            self.dir,
         ))
     }
 }
@@ -216,8 +222,15 @@ pub(crate) fn family_name(family: crate::tok::Family) -> String {
 pub(crate) fn align_name(align: crate::el::Align) -> &'static str {
     match align {
         crate::el::Align::Center => "center",
-        crate::el::Align::End => "right",
-        crate::el::Align::Start => "left",
+        crate::el::Align::End => "end",
+        crate::el::Align::Start => "start",
+    }
+}
+
+fn flow_name(flow: crate::el::Flow) -> &'static str {
+    match flow {
+        crate::el::Flow::Ltr => "ltr",
+        crate::el::Flow::Rtl => "rtl",
     }
 }
 
@@ -464,9 +477,26 @@ impl RuntimeCore {
         [round1(left as f32), round1(top as f32), round1((right - left).max(0.0) as f32), round1((bottom - top).max(0.0) as f32)]
     }
 
+    /// Resolved flow of the scene root (`Flow::Ltr` when empty).
+    pub(crate) fn web_a11y_root_flow(&self) -> crate::el::Flow {
+        self.tree.nodes.first().map_or(crate::el::Flow::Ltr, |n| n.flow)
+    }
+
+    /// HTML `dir` attribute value for `[data-rune-a11y]` (`"ltr"` or `"rtl"`).
+    pub(crate) fn web_a11y_root_dir(&self) -> &'static str {
+        flow_name(self.web_a11y_root_flow())
+    }
+
+    /// Active BCP 47 language for `[data-rune-a11y]`'s `lang` attribute, when set.
+    pub(crate) fn web_a11y_root_lang(&self) -> Option<parley::fontique::Language> {
+        self.text.current_language()
+    }
+
     pub(crate) fn web_a11y_items(&self) -> Vec<A11yItem> {
         let zoom = self.zoom();
+        let root_flow = self.web_a11y_root_flow();
         let mut out: Vec<A11yItem> = Vec::new();
+        let mut item_flows: Vec<crate::el::Flow> = Vec::new();
         let mut last_flow_parent: Option<usize> = None;
         let mut inline: Option<Inline> = None;
         let ends = self.subtree_ends();
@@ -508,6 +538,9 @@ impl RuntimeCore {
             let busy = n.a11y.more.as_deref().is_some_and(|m| m.busy);
             // A page hands every horizontal viewport to the DOM: iOS scrolls it natively, at the
             // compositor's rate, with axis locking, momentum and text selection.
+            let parent_flow = parent.map_or(root_flow, |p| item_flows[p]);
+            let node_flow = n.flow;
+            let item_dir = (node_flow != parent_flow).then(|| flow_name(node_flow));
             if self.host.page.is_some() && n.scroll_axes == crate::el::ScrollAxes::X {
                 let rect = self.mirror_rect(i, [0.0, 0.0]);
                 let shift = self.scroll.scrolls.get(&n.id).map_or(0.0, |st| st.x.shift());
@@ -515,7 +548,9 @@ impl RuntimeCore {
                 item.tag = Some("div");
                 item.busy = busy;
                 item.parent = parent;
+                item.dir = item_dir;
                 out.push(item);
+                item_flows.push(node_flow);
                 open.push((end, out.len() - 1));
                 scrollers.push((end, [shift, 0.0]));
                 last_flow_parent = None;
@@ -524,9 +559,12 @@ impl RuntimeCore {
             }
             let shift = scrollers.iter().fold([0.0f64; 2], |acc, &(_, off)| [acc[0] + off[0], acc[1] + off[1]]);
             let rect = self.mirror_rect(i, shift);
-            let push = |out: &mut Vec<A11yItem>, mut item: A11yItem| {
+            let last_item_flow = item_flows.last().copied();
+            let mut push = |out: &mut Vec<A11yItem>, mut item: A11yItem| {
                 item.parent = parent;
+                item.dir = item_dir;
                 out.push(item);
+                item_flows.push(node_flow);
             };
 
             let in_control = i < control_end;
@@ -706,6 +744,7 @@ impl RuntimeCore {
                         }
                     });
                     if plain_text && flow_group.is_some() && flow_group == last_flow_parent
+                        && last_item_flow == Some(node_flow)
                         && let Some(prev) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy)
                     {
                         merge_flow(prev, rect, runs);
@@ -721,7 +760,7 @@ impl RuntimeCore {
                     }
                     if plain_text && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
-                        && let Some(gap) = prev.gap(n.target, spec.style, selectable)
+                        && let Some(gap) = prev.gap(n.target, spec.style, selectable, node_flow)
                         && let Some(item) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy)
                     {
                         join_inline(item, text_rect, runs, gap > spec.style.size * 0.15);
@@ -770,6 +809,7 @@ impl RuntimeCore {
                         bottom: n.target[3],
                         style: spec.style,
                         selectable,
+                        flow: node_flow,
                     });
                 }
             } else if !in_control && n.role == "heading" && let Some(lbl) = self.mirror_name(i) {
@@ -860,11 +900,15 @@ impl RuntimeCore {
         let sd = self.scroll_digest();
         let moving = self.animating;
         let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
+        let root_dir = self.web_a11y_root_dir();
+        let root_lang = self.web_a11y_root_lang();
         mirror.commits != self.commit.commits
             || mirror.live_text_gen != self.frame.live_text_gen
             || mirror.viewport != vp
             || mirror.zoom != zoom
             || mirror.scroll_digest != sd
+            || mirror.root_dir != Some(root_dir)
+            || mirror.root_lang != root_lang
             || follow
     }
 
@@ -961,9 +1005,14 @@ impl RuntimeCore {
             non_virtual_commits: self.commit.non_virtual_commits,
             scroll_digest: sd,
         });
+        let root_dir = self.web_a11y_root_dir();
+        let root_lang = self.web_a11y_root_lang();
+        mirror.root_dir = Some(root_dir);
+        mirror.root_lang = root_lang;
         mirror.built = true;
         let items = self.web_a11y_items();
-        let patch = mirror.patch.diff(&items)?;
+        let lang_str = root_lang.map(|l| l.to_string());
+        let patch = mirror.patch.diff_with_root(&items, root_dir, lang_str.as_deref())?;
         mirror.patch_json = serde_json::to_string(&patch).unwrap_or_else(|_| r#"{"p":1}"#.into());
         Some(&mirror.patch_json)
     }
@@ -1151,15 +1200,16 @@ struct Inline {
     bottom: f32,
     style: crate::tok::TextStyle,
     selectable: bool,
+    flow: crate::el::Flow,
 }
 
 impl Inline {
     /// The gap in points from the last text to `target`, when `target` carries on its line in the
     /// same face; a larger gap is a separate column, not the same run of text.
-    fn gap(&self, target: [f32; 4], style: crate::tok::TextStyle, selectable: bool) -> Option<f32> {
+    fn gap(&self, target: [f32; 4], style: crate::tok::TextStyle, selectable: bool, flow: crate::el::Flow) -> Option<f32> {
         let a = self.style;
         let same_face = (a.family, a.size, a.weight, a.tracking) == (style.family, style.size, style.weight, style.tracking)
-            && self.selectable == selectable;
+            && self.selectable == selectable && self.flow == flow;
         let height = (self.bottom - self.top).min(target[3] - target[1]);
         let overlap = self.bottom.min(target[3]) - self.top.max(target[1]);
         let gap = target[0] - self.right;

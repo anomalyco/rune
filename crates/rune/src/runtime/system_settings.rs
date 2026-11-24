@@ -85,6 +85,16 @@ impl window_requests::HostState {
         self.system_reduced_motion
     }
 
+    pub(super) fn set_languages(&mut self, languages: Vec<String>) -> bool {
+        let normalized = crate::platform::languages::normalize(languages);
+        if self.system_languages.as_deref() == Some(normalized.as_slice()) {
+            return false;
+        }
+        self.system_languages = Some(Rc::from(normalized));
+        self.languages_gen = self.languages_gen.wrapping_add(1);
+        true
+    }
+
     #[inline]
     pub(crate) fn system_scroll_bars_state(&self) -> crate::platform::scroll_bars::SystemScrollBars {
         self.scroll_bars.state
@@ -211,6 +221,13 @@ impl RuntimeCore {
     #[inline]
     pub fn set_system_reduced_motion(&mut self, reduced: bool) {
         if self.host.set_system_reduced_motion(reduced) { self.commit.dirty = true; }
+    }
+
+    /// Sets the preferred language list reported by [`Cx::system_languages`] and [`Cx::locale`],
+    /// as BCP 47 tags in preference order. Empty and duplicate tags are dropped. A change re-runs
+    /// the view and its memos.
+    pub fn set_languages(&mut self, languages: Vec<String>) {
+        if self.host.set_languages(languages) { self.commit.dirty = true; }
     }
 
     #[inline]

@@ -19,6 +19,10 @@ pub(crate) struct HostState {
     /// What [`Cx::system_increased_contrast`] reports.
     pub(in crate::runtime) system_increased_contrast: bool,
     pub(in crate::runtime) scroll_bars: system_settings::ScrollBarHost,
+    /// Preferred languages set via `Runtime::set_languages` or browser `languagechange` (`None`: lazy OS query).
+    pub(in crate::runtime) system_languages: Option<Rc<[String]>>,
+    /// Incremented whenever `system_languages` changes, so memos rebuild without querying the OS.
+    pub(in crate::runtime) languages_gen: u64,
     pub(crate) native_overlay: bool,
     /// The window or overlay surface's frame counts, published by its host.
     pub(crate) surface_stats: Option<std::sync::Arc<std::sync::Mutex<crate::SurfaceStats>>>,
@@ -91,6 +95,8 @@ impl HostState {
             system_contrast: None,
             system_increased_contrast: false,
             scroll_bars: Default::default(),
+            system_languages: None,
+            languages_gen: 0,
             native_overlay: false,
             surface_stats: None,
             app_stats: None,

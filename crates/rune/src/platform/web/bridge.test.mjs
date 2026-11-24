@@ -2383,3 +2383,61 @@ test('focusA11y sets and clears aria-disabled, aria-busy, and numeric range attr
 
     bridge.destroy(h);
 });
+
+test('syncA11y applies root dir/lang, per-item dir overrides, and logical text-align across patches', () => {
+    const { h } = setup();
+
+    bridge.syncA11y(h, JSON.stringify({
+        p: 1,
+        dir: 'rtl',
+        lang: 'ar-EG',
+        u: [
+            { k: 'text', p: '#0/rtl', r: [0, 0, 200, 24], t: 'مرحبا', f: ['sans', 400, 20, 0, false, 'start'] },
+            { k: 'text', p: '#0/end', r: [0, 28, 200, 24], t: 'نهاية', f: ['sans', 400, 20, 0, false, 'end'] },
+            { k: 'text', p: '#0/island', r: [0, 56, 200, 24], t: 'README.md', dir: 'ltr', f: ['mono', 400, 20, 0, false, 'start'] },
+            { k: 'group', g: 'div', p: '#0/bar', r: [0, 84, 200, 32], o: 'toolbar', t: 'Actions', dir: 'ltr' },
+            { k: 'text', p: '#0/bar/inner', r: [0, 0, 80, 24], t: 'إرسال', dir: 'rtl' },
+        ],
+        o: {
+            '': ['p:#0/rtl', 'p:#0/end', 'p:#0/island', 'div:#0/bar'],
+            'div:#0/bar': ['p:#0/bar/inner'],
+        },
+    }));
+
+    assert.equal(h.a11y.getAttribute('dir'), 'rtl');
+    assert.equal(h.a11y.getAttribute('lang'), 'ar-EG');
+    const rtl = h.a11yNodes.get('p:#0/rtl');
+    const end = h.a11yNodes.get('p:#0/end');
+    const island = h.a11yNodes.get('p:#0/island');
+    const bar = h.a11yNodes.get('div:#0/bar');
+    const inner = h.a11yNodes.get('p:#0/bar/inner');
+    assert.equal(rtl.getAttribute('dir'), null);
+    assert.match(rtl.style.cssText, /text-align:start;/);
+    assert.match(end.style.cssText, /text-align:end;/);
+    assert.equal(island.getAttribute('dir'), 'ltr');
+    assert.equal(bar.getAttribute('dir'), 'ltr');
+    assert.equal(inner.getAttribute('dir'), 'rtl');
+
+    // Flip root to ltr, update lang, and clear island/bar dir when they match the new parent.
+    bridge.syncA11y(h, JSON.stringify({
+        p: 1,
+        dir: 'ltr',
+        lang: 'en-US',
+        u: [
+            { k: 'text', p: '#0/island', r: [0, 56, 200, 24], t: 'README.md', f: ['mono', 400, 20, 0, false, 'start'] },
+            { k: 'group', g: 'div', p: '#0/bar', r: [0, 84, 200, 32], o: 'toolbar', t: 'Actions' },
+        ],
+    }));
+    assert.equal(h.a11y.getAttribute('dir'), 'ltr');
+    assert.equal(h.a11y.getAttribute('lang'), 'en-US');
+    assert.equal(island.getAttribute('dir'), null);
+    assert.equal(bar.getAttribute('dir'), null);
+    assert.equal(inner.getAttribute('dir'), 'rtl');
+
+    // Clearing lang with an empty string removes the attribute cleanly.
+    bridge.syncA11y(h, JSON.stringify({ p: 1, lang: '' }));
+    assert.equal(h.a11y.getAttribute('dir'), 'ltr');
+    assert.equal(h.a11y.getAttribute('lang'), null);
+
+    bridge.destroy(h);
+});

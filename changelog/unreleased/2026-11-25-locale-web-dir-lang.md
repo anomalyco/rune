@@ -1,0 +1,1 @@
+- Added lazy `Cx::system_languages()` and `Cx::locale()` accessors (backed by `Runtime::set_languages` and platform queries on Windows, macOS/iOS, POSIX, and web `navigator.languages`/`languagechange`) and emitted HTML `dir`/`lang` attributes and logical `start`/`end` text alignment on the web accessibility mirror.

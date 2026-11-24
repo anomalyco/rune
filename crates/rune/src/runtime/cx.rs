@@ -66,6 +66,7 @@ pub(crate) struct CxCore {
     pub(super) system_contrast: Option<crate::SystemContrast>,
     pub(super) system_increased_contrast: bool,
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
+    pub(super) system_languages: Option<Rc<[String]>>,
     pub(super) system_reduced_motion: bool,
     pub(super) reduced_motion: bool,
     pub(super) time_scale: f32,
@@ -141,6 +142,15 @@ impl CxCore {
     pub(crate) fn system_contrast(&self) -> Option<crate::SystemContrast> { self.system_contrast }
     pub(crate) fn system_increased_contrast(&self) -> bool { self.system_increased_contrast }
     pub(crate) fn system_reduced_motion(&self) -> bool { self.system_reduced_motion }
+    pub(crate) fn system_languages(&self) -> &[String] {
+        match &self.system_languages {
+            Some(langs) => langs,
+            None => crate::platform::languages::cached(),
+        }
+    }
+    pub(crate) fn locale(&self) -> Option<&str> {
+        self.system_languages().first().map(String::as_str)
+    }
     pub(crate) fn scroll_bars(&self) -> crate::ScrollBars { self.system_scroll_bars.bars }
     pub(crate) fn overlay_scroll_bars(&self) -> bool { self.system_scroll_bars.is_overlay() }
     pub(crate) fn is_reduced_motion(&self) -> bool { self.reduced_motion }
@@ -359,6 +369,59 @@ impl<S> Cx<S> {
     /// The host's OS accessibility preference, independent of this commit's override.
     #[inline(always)]
     pub fn system_reduced_motion(&self) -> bool { self.core.system_reduced_motion() }
+    /// The user's preferred languages as BCP 47 tags (RFC 5646), most preferred first (for
+    /// example `["ar-EG", "en-US"]`). Queries the platform lazily on first read
+    /// (`GetUserPreferredUILanguages` on Windows, `NSLocale.preferredLanguages` on macOS/iOS,
+    /// `navigator.languages` on web, and POSIX `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`
+    /// elsewhere), performing no work before the first frame. Tests and hosts can override
+    /// the list with [`Runtime::set_languages`](crate::Runtime::set_languages).
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let seen = Rc::new(RefCell::new(Vec::new()));
+    /// let mut rt = Runtime::new(
+    ///     seen.clone(),
+    ///     |out: &Rc<RefCell<Vec<String>>>, cx| {
+    ///         *out.borrow_mut() = cx.system_languages().to_vec();
+    ///         el()
+    ///     },
+    ///     (200.0, 100.0),
+    ///     Env::default(),
+    /// );
+    /// rt.set_languages(["ar-EG", "en-US"]);
+    /// rt.frame(0.0);
+    /// assert_eq!(*seen.borrow(), vec!["ar-EG", "en-US"]);
+    /// ```
+    #[inline(always)]
+    pub fn system_languages(&self) -> &[String] { self.core.system_languages() }
+    /// The user's primary preferred language tag (`Self::system_languages().first()`), as a
+    /// BCP 47 tag (RFC 5646), or `None` when none is configured. Useful for deriving layout
+    /// direction or passing to [`rune::text::set_language`](crate::text::set_language).
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let seen = Rc::new(RefCell::new(None));
+    /// let mut rt = Runtime::new(
+    ///     seen.clone(),
+    ///     |out: &Rc<RefCell<Option<String>>>, cx| {
+    ///         *out.borrow_mut() = cx.locale().map(str::to_owned);
+    ///         el()
+    ///     },
+    ///     (200.0, 100.0),
+    ///     Env::default(),
+    /// );
+    /// rt.set_languages(["ar-EG", "en-US"]);
+    /// rt.frame(0.0);
+    /// assert_eq!(seen.borrow().as_deref(), Some("ar-EG"));
+    /// ```
+    #[inline(always)]
+    pub fn locale(&self) -> Option<&str> { self.core.locale() }
     /// The user's "Show scroll bars" preference (System Settings › Appearance on macOS;
     /// [`ScrollBars::WhenScrolling`](crate::ScrollBars::WhenScrolling) elsewhere and headless).
     /// The view and its memos re-run when it changes.

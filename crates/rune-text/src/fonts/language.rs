@@ -85,6 +85,17 @@ impl TextSystem {
         self.language
     }
 
+    /// The active language tag for this text system: [`set_language`]'s latest choice when it
+    /// changed since this text system last shaped, else [`Self::language`].
+    #[doc(hidden)]
+    pub fn current_language(&self) -> Option<Language> {
+        if EPOCH.load(Ordering::Relaxed) != self.language_epoch {
+            *CHOSEN.lock().unwrap_or_else(|e| e.into_inner())
+        } else {
+            self.language
+        }
+    }
+
     /// Shapes in `language` from now on, dropping layouts shaped in another. False, dropping
     /// nothing, when it already does.
     pub fn set_language(&mut self, language: Option<Language>) -> bool {
@@ -222,5 +233,6 @@ mod tests {
         assert!(ts.set_language(ja));
         assert!(!ts.set_language(ja));
         assert_eq!(ts.language(), ja);
+        assert_eq!(ts.current_language(), ja);
     }
 }

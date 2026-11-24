@@ -266,6 +266,7 @@ fn make_item(kind: &'static str, path: &str, rect: [f32; 4]) -> A11yItem {
         busy: false,
         scroll: None,
         aria: Default::default(),
+        dir: None,
     }
 }
 
@@ -340,7 +341,7 @@ fn differential_random_patch_sequences_match_full_rebuild() {
                 line_height: round1(18.0 * zoom),
                 tracking: 0.0,
                 italic: false,
-                align: "left",
+                align: "start",
             });
             if r % 3 == 0 {
                 row.runs = vec![
