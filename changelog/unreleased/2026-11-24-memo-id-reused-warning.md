@@ -1,0 +1,1 @@
+- **`memo(id, ..)` warns in debug builds when its resolved cache id is already used in the same view build.** The second call still falls back to building uncached, as before, and now prints one stderr warning per call site naming the colliding id and location. `RUNE_PERF_WARN=0` silences it; release builds are unchanged.

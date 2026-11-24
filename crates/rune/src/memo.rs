@@ -41,7 +41,8 @@
 //! The id names the subtree within the window, so it must be unique among the memos of one
 //! view build (a message id, say). A memo inside another's closure is named within it, so
 //! `memo("b0", ..)` inside each message's memo doesn't collide. A second memo with an id
-//! already used in the same build just builds, uncached.
+//! already used in the same build just builds, uncached, and warns once per call site in debug
+//! builds (`RUNE_PERF_WARN=0` silences it).
 //!
 //! Layout isn't stored: a reused subtree still lays out each commit it is mounted, but Taffy
 //! keeps each unchanged node's measured size, so this is cheap while width and constraints hold.
@@ -479,6 +480,10 @@ fn memo_inner(key: String, version: u64, region: bool, build: &mut dyn FnMut() -
         Step::Plain => return keyed(build(), key),
         Step::Build { id, version, store } => (id, version, store),
     };
+    #[cfg(debug_assertions)]
+    if !store {
+        crate::tooling::perf_warn::memo_id_reused(&id, std::panic::Location::caller());
+    }
     // A region's `Tracked` reads join its reads; a memo's closure records none of its own (a
     // region inside it still does, and they reach it as any nested read does).
     let (el, states) = if region {

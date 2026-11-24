@@ -3,7 +3,8 @@
 //! changed what shows when nothing did, a window that keeps drawing while idle, a slow first
 //! frame, something that commits the view on most frames of a scroll, an app stepping its own
 //! scroll glide, and (mistakes rather than slowness) a `memo` whose root already had another
-//! key or `reveal_selected` on a `virtual_rows` list. Each warns once per site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds
+//! key, a `memo` id reused in the same view build, or `reveal_selected` on a `virtual_rows`
+//! list. Each warns once per site, on stderr; `RUNE_PERF_WARN=0` silences them. Release builds
 //! contain none of it. `budget` is the exception: an opt-in line per slow commit, in any build.
 
 pub(crate) mod budget;
@@ -47,9 +48,16 @@ const OVERBUILD_ROWS: usize = 200;
 const OVERBUILD_RATIO: usize = 4;
 
 #[cfg(debug_assertions)]
+fn enabled_for(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_none_or(|v| v != "0")
+}
+
+#[cfg(debug_assertions)]
 fn enabled() -> bool {
+    #[cfg(test)]
+    if let Some(on) = FAKE_ENABLED.get() { return on; }
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| rune_core::env::var_os("RUNE_PERF_WARN").is_none_or(|v| v != "0"))
+    *ON.get_or_init(|| enabled_for(rune_core::env::var_os("RUNE_PERF_WARN").as_deref()))
 }
 
 /// Initializes the cached `RUNE_PERF_WARN` flag up front so the first timed callback does not
@@ -95,6 +103,32 @@ thread_local! {
 /// The warnings this thread printed since the last call.
 #[cfg(all(test, debug_assertions))]
 pub(crate) fn take_log() -> Vec<String> { LOG.take() }
+
+#[cfg(all(test, debug_assertions))]
+thread_local! {
+    static FAKE_ENABLED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Overrides `enabled()` on this thread until dropped, so tests can verify `RUNE_PERF_WARN=0`
+/// without racing the process-wide `OnceLock`.
+#[cfg(all(test, debug_assertions))]
+pub(super) struct FakeEnabled {
+    previous: Option<bool>,
+}
+
+#[cfg(all(test, debug_assertions))]
+impl FakeEnabled {
+    pub(super) fn new(on: bool) -> Self {
+        Self { previous: FAKE_ENABLED.replace(Some(on)) }
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+impl Drop for FakeEnabled {
+    fn drop(&mut self) {
+        FAKE_ENABLED.set(self.previous);
+    }
+}
 
 #[cfg(all(test, debug_assertions))]
 #[derive(Clone, Copy)]
@@ -204,6 +238,16 @@ pub(crate) fn memo_key_replaced(id: &str, existing: &str, site: &std::panic::Loc
     warn_once(format!("memo key {site}"), || format!(
         "`memo({id:?}, ..)` at {site} replaced its root's key {existing:?} with {id:?}: look it up \
          by {id:?}, or key the memo with the id you want"
+    ));
+}
+
+/// A memo or region with resolved cache identity `id`, called at `site`, was already used in the
+/// same view build and fell back to building uncached.
+#[cfg(debug_assertions)]
+pub(crate) fn memo_id_reused(id: &str, site: &std::panic::Location) {
+    warn_once(format!("memo id {site}"), || format!(
+        "memo id {id:?} at {site} was already used in this build, so this call built uncached: \
+         give each memo in the same scope a distinct id"
     ));
 }
 
