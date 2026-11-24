@@ -1,35 +1,56 @@
-//! Files dropped on an element from another app: `El::on_drop_files` and the hover, move
-//! and reject callbacks around it, and `Tx::drop_point`. `runtime/input/drop.rs` routes the drag.
+//! Files dropped on an element from another app: `El::on_drop_files`, acceptance hooks,
+//! hover/move/reject callbacks, passive ancestor observers, `Tx::drop_point` and `Tx::drag_paths`.
+//! `runtime/input/drop.rs` routes the drag.
 use std::rc::Rc;
 
 use crate::el::{El, PointerEvent, Tx};
-use crate::states::downcast;
+use crate::states::{StatesRef, downcast};
 
 pub(crate) type DropFilesFn = Rc<dyn Fn(crate::states::States<'_>, &[std::path::PathBuf], &mut Tx)>;
 
-/// [`El::on_drop_files`], [`El::accepts_files`], [`El::on_drop_hover`], [`El::on_drop_move`],
-/// [`El::on_drop_rejected`] and [`El::on_drop_rejected_hover`].
+/// [`El::on_drop_files`], [`El::accepts_files`], [`El::accepts_drag`], [`El::on_drop_hover`],
+/// [`El::on_drop_move`], [`El::on_drop_rejected`], [`El::on_drop_rejected_hover`],
+/// [`El::on_drop_hover_within`] and [`El::on_drop_move_within`].
 #[derive(Clone, Default)]
 pub(crate) struct DropSpec {
     pub on_drop: Option<DropFilesFn>,
     pub accepts: Option<AcceptsFn>,
+    pub accepts_drag: Option<AcceptsDragFn>,
     pub on_hover: Option<DropHoverFn>,
     pub on_reject: Option<DropFilesFn>,
     pub on_reject_hover: Option<DropHoverFn>,
     pub on_move: Option<DropMoveFn>,
+    pub on_hover_within: Option<DropHoverFn>,
+    pub on_move_within: Option<DropMoveFn>,
 }
 pub(crate) type AcceptsFn = Rc<dyn Fn(&std::path::Path) -> bool>;
+pub(crate) type AcceptsDragFn = Rc<dyn Fn(StatesRef<'_>, &[std::path::PathBuf]) -> bool>;
 pub(crate) type DropHoverFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx)>;
 pub(crate) type DropMoveFn = Rc<dyn Fn(crate::states::States<'_>, PointerEvent, &mut Tx)>;
 
 impl DropSpec {
-    /// The files of `paths` this element takes, when it's a drop target, and the rest.
-    pub(crate) fn split(&self, paths: &[std::path::PathBuf]) -> (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
+    /// The files of `paths` this element takes, when it's a drop target, and the rest. When
+    /// `states` is `Some`, evaluates [`El::accepts_drag`] over the full drag slice first; if it
+    /// returns `false`, all `paths` are rejected.
+    pub(crate) fn split(
+        &self,
+        states: Option<StatesRef<'_>>,
+        paths: &[std::path::PathBuf],
+    ) -> (Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
+        if paths.is_empty() { return (Vec::new(), Vec::new()); }
         if self.on_drop.is_none() { return (Vec::new(), paths.to_vec()); }
+        if let Some(accepts_drag) = &self.accepts_drag
+            && let Some(states) = states
+            && !accepts_drag(states, paths)
+        {
+            return (Vec::new(), paths.to_vec());
+        }
         paths.iter().cloned().partition(|p| self.accepts.as_ref().is_none_or(|f| f(p)))
     }
     /// It stops a drag it takes none of, rather than passing it to the target around it.
     pub(crate) fn claims_rejects(&self) -> bool { self.on_reject.is_some() || self.on_reject_hover.is_some() }
+    /// It passively observes file drags crossing its subtree.
+    pub(crate) fn observes_within(&self) -> bool { self.on_hover_within.is_some() || self.on_move_within.is_some() }
     /// Its hover callback for a drag it takes (`accepted`) or rejects.
     pub(crate) fn hover_fn(&self, accepted: bool) -> Option<DropHoverFn> {
         if accepted { self.on_hover.clone() } else { self.on_reject_hover.clone() }
@@ -76,6 +97,29 @@ impl El {
         let extensions: Vec<String> = extensions.iter().map(|e| e.trim_start_matches('.').to_ascii_lowercase()).collect();
         self.accepts_files(move |path| path.extension().and_then(|e| e.to_str())
             .is_some_and(|e| extensions.iter().any(|x| x.eq_ignore_ascii_case(e))))
+    }
+    /// Decide whether this element takes a file drag as a whole, with read access to app state
+    /// `&S` and every dragged path together. When `accepts` returns `false`, the whole drag is
+    /// refused (passed to the next accepting ancestor, or stopped by [`El::on_drop_rejected`] /
+    /// [`El::on_drop_rejected_hover`]). When paired with [`El::accepts_files`] or
+    /// [`El::accepts_extensions`], `accepts_drag` runs first over all paths and the per-file
+    /// filter partitions what remains.
+    ///
+    /// ```
+    /// # use rune::el::el;
+    /// # use std::path::PathBuf;
+    /// # struct App { read_only: bool, dir: PathBuf }
+    /// el().on_drop_files(|_: &mut App, _, _| {})
+    ///     .accepts_drag(|s: &App, paths| !s.read_only && !paths.iter().any(|p| p == &s.dir));
+    /// ```
+    pub fn accepts_drag<S: 'static>(
+        mut self,
+        accepts: impl Fn(&S, &[std::path::PathBuf]) -> bool + 'static,
+    ) -> Self {
+        self.handlers.drop.get_or_insert_default().accepts_drag = Some(Rc::new(move |s, paths| {
+            accepts(s.cast::<S>().expect("handler registered for a different state type than the app's"), paths)
+        }));
+        self
     }
     /// Called with `true` when a file drag over the window makes this element the drop target
     /// (the innermost [`El::on_drop_files`] under the pointer that accepts the files), and with
@@ -124,12 +168,59 @@ impl El {
         self.handlers.drop.get_or_insert_default().on_reject_hover = Some(Rc::new(move |s, over, tx| f(downcast::<S>(s), over, tx)));
         self
     }
+    /// Passively observe when a file drag enters (`true`) or leaves (`false`) this element or
+    /// any descendant along the hit path, alongside the innermost drop target without stealing
+    /// the drop. Fires innermost first across ancestors (matching DOM `dragenter`/`dragleave`
+    /// bubbling), and hears `false` when the drag moves outside the subtree, leaves the window,
+    /// drops, or when the element unmounts. With `true`, [`Tx::drop_point`] and
+    /// [`Tx::drag_paths`] give the drag's point on this element and the dragged files.
+    ///
+    /// ```
+    /// # use rune::el::el;
+    /// # struct App { strip_over: bool }
+    /// el().on_drop_hover_within(|s: &mut App, over, _| s.strip_over = over);
+    /// ```
+    pub fn on_drop_hover_within<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
+        self.handlers.drop.get_or_insert_default().on_hover_within = Some(Rc::new(move |s, over, tx| f(downcast::<S>(s), over, tx)));
+        self
+    }
+    /// Passively follow a file drag's position while it moves anywhere over this element or its
+    /// descendants, alongside the innermost drop target without stealing the drop. `f` hears the
+    /// drag's point in this element's own points (and [`Tx::drop_point`] / [`Tx::drag_paths`]),
+    /// at most once a frame, innermost ancestor first. Only an element with this (or
+    /// [`El::on_drop_move`]) asks for frames as the drag moves across it; a drag without a
+    /// platform position is never heard here.
+    ///
+    /// ```
+    /// # use rune::el::el;
+    /// # struct App { drag_x: Option<f32> }
+    /// el().on_drop_move_within(|s: &mut App, p, _| s.drag_x = Some(p.x));
+    /// ```
+    pub fn on_drop_move_within<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {
+        self.handlers.drop.get_or_insert_default().on_move_within = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
+        self
+    }
 }
 
 impl Tx {
-    /// In [`El::on_drop_files`], [`El::on_drop_rejected`], [`El::on_drop_move`] and
-    /// [`El::on_drop_hover`]'s `true`: where the file drag is on the element, in its own points
-    /// (`x`, `y`, following its scroll and transforms) and in the window's. `None` when the
-    /// platform gave no position and in every other handler.
+    /// In [`El::on_drop_files`], [`El::on_drop_rejected`], [`El::on_drop_move`],
+    /// [`El::on_drop_move_within`], and [`El::on_drop_hover`] / [`El::on_drop_rejected_hover`] /
+    /// [`El::on_drop_hover_within`]'s `true`: where the file drag is on the element, in its own
+    /// points (`x`, `y`, following its scroll and transforms) and in the window's. `None` when
+    /// the platform gave no position and in every other handler.
     pub fn drop_point(&self) -> Option<PointerEvent> { self.drop_point }
+
+    /// In [`El::on_drop_files`], [`El::on_drop_rejected`], [`El::on_drop_move`],
+    /// [`El::on_drop_move_within`], and [`El::on_drop_hover`] / [`El::on_drop_rejected_hover`] /
+    /// [`El::on_drop_hover_within`]'s `true`: all paths carried by the active file drag. `None`
+    /// when a hover ends (`false`) and in every other handler.
+    ///
+    /// ```
+    /// # use rune::el::el;
+    /// # struct App { count: usize }
+    /// el().on_drop_hover(|s: &mut App, over, tx| {
+    ///     s.count = if over { tx.drag_paths().map_or(0, |p| p.len()) } else { 0 };
+    /// });
+    /// ```
+    pub fn drag_paths(&self) -> Option<&[std::path::PathBuf]> { self.drag_paths.as_deref() }
 }

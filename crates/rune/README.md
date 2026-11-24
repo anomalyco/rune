@@ -1826,10 +1826,21 @@ el().fill(if s.over { Color::WHITE.alpha(0.1) } else { Color::TRANSPARENT })
 ```
 
 - The target is the innermost `on_drop_files` element under the pointer that accepts any of
-  the dragged files (`.accepts_files(|path| ..)`, or `.accepts_extensions(..)`, compared
-  without case). A target that accepts none of them passes the drag to the next accepting
-  element around it.
+  the dragged files (`.accepts_files(|path| ..)`, `.accepts_extensions(..)` compared without
+  case, or `.accepts_drag(|s: &App, paths| ..)` to decide over the whole drag with read access
+  to app state `&S`). A target that accepts none of them passes the drag to the next accepting
+  element around it. When both `accepts_drag` and `accepts_files` are set, `accepts_drag`
+  runs first on the full slice and `accepts_files` partitions what remains.
 - The target gets the files it accepts, all in one call. The rest are left out.
+- In `on_drop_files`, `on_drop_rejected`, `on_drop_move`, `on_drop_move_within`, and the
+  `true` hover callbacks (`on_drop_hover`, `on_drop_rejected_hover`, `on_drop_hover_within`),
+  `tx.drag_paths()` returns all paths carried by the active drag (and `None` on hover end or
+  in other handlers).
+- To observe a drag passively on an ancestor while it crosses child drop targets (a strip or
+  scroll container) without stealing the drop, add `.on_drop_hover_within(|s, over, tx| ..)`
+  and/or `.on_drop_move_within(|s, p, tx| ..)`. They fire along the hit path innermost first
+  with each ancestor's own local points; only `on_drop_move_within` (or `on_drop_move`, or a
+  hit chain with `accepts_drag`) wakes frames as the drag moves.
 - To say why a drop was refused, add `.on_drop_rejected(|s, files, tx| ..)`: the target then
   stops a drag carrying none of the files it accepts instead of passing it on, and gets those
   files there; on a mixed drop it gets the ones `on_drop_files` didn't. Draw the "can't drop

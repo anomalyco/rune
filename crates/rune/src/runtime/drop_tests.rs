@@ -463,3 +463,386 @@ fn has_drop_targets_tracks_mount_unmount_exiting_modal_root_and_rejects() {
     rt.frame(1.0 / 60.0);
     assert!(rt.core().has_drop_targets());
 }
+
+#[test]
+fn accepts_drag_reads_state_and_whole_drag_slice() {
+    struct S {
+        read_only: bool,
+        self_dir: PathBuf,
+        hover: Vec<(&'static str, bool)>,
+        dropped: Vec<(&'static str, Vec<String>)>,
+        rejected: Vec<Vec<String>>,
+        use_reject: bool,
+        png_only: bool,
+    }
+    impl Default for S {
+        fn default() -> Self {
+            Self {
+                read_only: true,
+                self_dir: PathBuf::from("/dir/folder"),
+                hover: Vec::new(),
+                dropped: Vec::new(),
+                rejected: Vec::new(),
+                use_reject: false,
+                png_only: false,
+            }
+        }
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut folder = el().key("folder").size(150.0, 150.0)
+            .on_drop_files(|s: &mut S, files, _| s.dropped.push(("folder", names(files))))
+            .on_drop_hover(|s: &mut S, over, _| s.hover.push(("folder", over)))
+            .accepts_drag(|s: &S, paths| !s.read_only && paths.len() <= 2 && !paths.iter().any(|p| p == &s.self_dir));
+        if s.png_only {
+            folder = folder.accepts_extensions(&["png"]);
+        }
+        if s.use_reject {
+            folder = folder
+                .on_drop_rejected(|s: &mut S, files, _| s.rejected.push(names(files)))
+                .on_drop_rejected_hover(|s: &mut S, over, _| s.hover.push(("folder-rejected", over)));
+        }
+        el().key("outer").size(300.0, 200.0)
+            .on_drop_files(|s: &mut S, files, _| s.dropped.push(("outer", names(files))))
+            .on_drop_hover(|s: &mut S, over, _| s.hover.push(("outer", over)))
+            .child(folder)
+    }
+
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // read_only == true: folder refuses the drag and passes it to outer.
+    rt.drag_files(files(&["a.txt", "b.png"]), Some((50.0, 50.0)));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.hover, [("outer", true)]);
+    assert!(!rt.drag_files_to(Some((50.0, 50.0))), "stationary drag without state change queues nothing");
+    rt.drop_files(files(&["a.txt", "b.png"]), Some((50.0, 50.0)));
+    rt.frame(2.0 / 60.0);
+    assert_eq!(rt.state.dropped, [("outer", vec!["a.txt".into(), "b.png".into()])]);
+
+    // read_only == false: folder takes up to 2 files, not containing self_dir.
+    rt.update(|s, _| { s.read_only = false; s.hover.clear(); s.dropped.clear(); });
+    rt.frame(3.0 / 60.0);
+    rt.drag_files(files(&["a.txt", "b.png"]), Some((50.0, 50.0)));
+    rt.frame(4.0 / 60.0);
+    assert_eq!(rt.state.hover, [("folder", true)]);
+    assert_eq!(rt.drop_hovered().as_deref(), Some("folder"));
+
+    // State changes mid-drag while pointer stays stationary: next poll rechecks accepts_drag.
+    rt.update(|s, _| s.read_only = true);
+    rt.frame(5.0 / 60.0);
+    assert!(rt.drag_files_to(Some((50.0, 50.0))), "commit under accepts_drag triggers recheck");
+    rt.frame(6.0 / 60.0);
+    assert_eq!(rt.state.hover[1..], [("folder", false), ("outer", true)]);
+    assert!(!rt.drag_files_to(Some((50.0, 50.0))), "once rechecked, stationary drag queues nothing");
+    rt.drag_files_leave();
+    rt.frame(7.0 / 60.0);
+
+    // Whole-drag checks: >2 files or dragging self_dir onto itself are refused.
+    rt.update(|s, _| { s.read_only = false; s.hover.clear(); s.dropped.clear(); });
+    rt.frame(8.0 / 60.0);
+    rt.drag_files(files(&["a.txt", "b.txt", "c.txt"]), Some((50.0, 50.0)));
+    rt.drop_files(files(&["a.txt", "b.txt", "c.txt"]), Some((50.0, 50.0)));
+    rt.frame(9.0 / 60.0);
+    assert_eq!(rt.state.dropped, [("outer", vec!["a.txt".into(), "b.txt".into(), "c.txt".into()])]);
+
+    rt.drag_files(files(&["/dir/folder", "a.txt"]), Some((50.0, 50.0)));
+    rt.drop_files(files(&["/dir/folder", "a.txt"]), Some((50.0, 50.0)));
+    rt.frame(10.0 / 60.0);
+    assert_eq!(rt.state.dropped[1], ("outer", vec!["/dir/folder".into(), "a.txt".into()]));
+
+    // Composing accepts_drag with accepts_extensions + on_drop_rejected(_hover).
+    rt.update(|s, _| { s.use_reject = true; s.png_only = true; s.read_only = true; s.hover.clear(); s.dropped.clear(); s.rejected.clear(); });
+    rt.frame(11.0 / 60.0);
+    rt.drag_files(files(&["a.png"]), Some((50.0, 50.0)));
+    rt.frame(12.0 / 60.0);
+    assert_eq!(rt.state.hover, [("folder-rejected", true)], "read_only rejects even a png");
+    rt.drop_files(files(&["a.png"]), Some((50.0, 50.0)));
+    rt.frame(13.0 / 60.0);
+    assert_eq!(rt.state.dropped, []);
+    assert_eq!(rt.state.rejected, [vec!["a.png".to_owned()]]);
+
+    rt.update(|s, _| { s.read_only = false; s.hover.clear(); s.dropped.clear(); s.rejected.clear(); });
+    rt.frame(14.0 / 60.0);
+    rt.drag_files(files(&["a.png", "b.txt"]), Some((50.0, 50.0)));
+    rt.drop_files(files(&["a.png", "b.txt"]), Some((50.0, 50.0)));
+    rt.frame(15.0 / 60.0);
+    assert_eq!(rt.state.dropped, [("folder", vec!["a.png".into()])]);
+    assert_eq!(rt.state.rejected, [vec!["b.txt".to_owned()]]);
+}
+
+#[test]
+fn drag_paths_is_populated_across_drop_callbacks_and_none_elsewhere() {
+    assert_eq!(Tx::default().drag_paths(), None);
+
+    #[derive(Default)]
+    struct Seen {
+        log: Vec<(&'static str, Option<Vec<String>>)>,
+    }
+    fn snap(tx: &Tx) -> Option<Vec<String>> { tx.drag_paths().map(names) }
+    fn view(_: &Seen, _: &mut Cx<Seen>) -> El {
+        el().key("wrap").size(300.0, 200.0)
+            .on_drop_hover_within(|s: &mut Seen, over, tx| s.log.push((if over { "within-on" } else { "within-off" }, snap(tx))))
+            .on_drop_move_within(|s: &mut Seen, _, tx| s.log.push(("within-move", snap(tx))))
+            .child(
+                el().key("zone").size(150.0, 150.0)
+                    .on_press_tx(|s: &mut Seen, tx| s.log.push(("press", snap(tx))))
+                    .on_drop_files(|s: &mut Seen, _, tx| s.log.push(("drop", snap(tx))))
+                    .accepts_extensions(&["png"])
+                    .on_drop_hover(|s: &mut Seen, over, tx| s.log.push((if over { "hover-on" } else { "hover-off" }, snap(tx))))
+                    .on_drop_move(|s: &mut Seen, _, tx| s.log.push(("move", snap(tx))))
+                    .on_drop_rejected(|s: &mut Seen, _, tx| s.log.push(("reject", snap(tx))))
+                    .on_drop_rejected_hover(|s: &mut Seen, over, tx| s.log.push((if over { "reject-on" } else { "reject-off" }, snap(tx)))),
+            )
+    }
+
+    let mut rt = Runtime::new(Seen::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Non-drop handler sees None.
+    rt.pointer_down(20.0, 20.0);
+    rt.pointer_up(20.0, 20.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(std::mem::take(&mut rt.state.log), [("press", None)]);
+
+    // Mixed drag: hover(true), move, within-hover(true), within-move, drop and reject all see the full slice;
+    // hover(false) and within-hover(false) see None.
+    let mixed = vec!["a.png".to_owned(), "b.txt".to_owned()];
+    rt.drag_files(files(&["a.png", "b.txt"]), Some((40.0, 40.0)));
+    rt.frame(2.0 / 60.0);
+    assert_eq!(
+        std::mem::take(&mut rt.state.log),
+        [
+            ("hover-on", Some(mixed.clone())),
+            ("within-on", Some(mixed.clone())),
+            ("move", Some(mixed.clone())),
+            ("within-move", Some(mixed.clone())),
+        ]
+    );
+    rt.drop_files(files(&["a.png", "b.txt"]), Some((40.0, 40.0)));
+    rt.frame(3.0 / 60.0);
+    assert_eq!(
+        std::mem::take(&mut rt.state.log),
+        [
+            ("hover-off", None),
+            ("within-off", None),
+            ("drop", Some(mixed.clone())),
+            ("reject", Some(mixed)),
+        ]
+    );
+
+    // Rejected-only drag populates drag_paths in on_drop_rejected_hover(true) and clears on leave.
+    let txt = vec!["notes.txt".to_owned()];
+    rt.drag_files(files(&["notes.txt"]), Some((40.0, 40.0)));
+    rt.frame(4.0 / 60.0);
+    assert_eq!(
+        std::mem::take(&mut rt.state.log),
+        [
+            ("reject-on", Some(txt.clone())),
+            ("within-on", Some(txt.clone())),
+            ("within-move", Some(txt)),
+        ]
+    );
+    rt.drag_files_leave();
+    rt.frame(5.0 / 60.0);
+    assert_eq!(std::mem::take(&mut rt.state.log), [("reject-off", None), ("within-off", None)]);
+}
+
+#[test]
+fn within_observers_follow_drag_across_child_targets_without_stealing_drop() {
+    #[derive(Default)]
+    struct S {
+        log: Vec<String>,
+        hide_strip: bool,
+        inert_strip: bool,
+        modal: bool,
+    }
+    fn col_zone(key: &'static str) -> El {
+        el().key(key).size(150.0, 150.0)
+            .on_drop_hover(move |s: &mut S, over, _| s.log.push(format!("{key} hover {over}")))
+            .on_drop_files(move |s: &mut S, _, _| s.log.push(format!("{key} drop")))
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut strip = crate::row().key("strip").size(360.0, 150.0)
+            .on_drop_hover(|s: &mut S, over, _| s.log.push(format!("strip hover {over}")))
+            .on_drop_files(|s: &mut S, _, _| s.log.push("strip drop".into()))
+            .on_drop_hover_within(|s: &mut S, over, tx| {
+                let pt = tx.drop_point().map(|p| (p.x, p.y));
+                s.log.push(format!("strip within {over} {pt:?}"));
+            })
+            .on_drop_move_within(|s: &mut S, p, tx| {
+                assert_eq!(tx.drop_point(), Some(p));
+                s.log.push(format!("strip move ({},{})", p.x, p.y));
+            })
+            .child(col_zone("column-a"))
+            .child(col_zone("column-b"));
+        if s.inert_strip {
+            strip = strip.inert();
+        }
+        let mut outer = crate::col().key("outer").px(20.0).py(10.0).w_full().h_full()
+            .on_drop_hover_within(|s: &mut S, over, _| s.log.push(format!("outer within {over}")))
+            .on_drop_move_within(|s: &mut S, p, _| s.log.push(format!("outer move ({},{})", p.x, p.y)));
+        if !s.hide_strip {
+            outer = outer.child(strip);
+        }
+        if s.modal {
+            outer = outer.child(el().key("modal").absolute(0.0, 0.0).size(80.0, 80.0).modal(false, |s: &mut S| s.modal = false));
+        }
+        outer
+    }
+
+    let mut rt = Runtime::new(S::default(), view, (420.0, 220.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Drag crosses column-a (x=50 -> strip local x=30), column-b (x=200 -> strip local x=180),
+    // then strip's own space (x=350 -> strip local x=330).
+    let p = files(&["a.txt"]);
+    rt.drag_files(p.clone(), Some((50.0, 50.0)));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(
+        std::mem::take(&mut rt.state.log),
+        [
+            "column-a hover true",
+            "strip within true Some((30.0, 40.0))",
+            "outer within true",
+            "strip move (30,40)",
+            "outer move (50,50)",
+        ],
+        "innermost ancestor fires first, with each ancestor's own local points"
+    );
+
+    assert!(rt.drag_files_to(Some((200.0, 50.0))));
+    rt.frame(2.0 / 60.0);
+    assert_eq!(
+        std::mem::take(&mut rt.state.log),
+        [
+            "column-a hover false",
+            "column-b hover true",
+            "strip move (180,40)",
+            "outer move (200,50)",
+        ],
+        "strip stays within-hovered across sibling columns without flickering"
+    );
+
+    assert!(rt.drag_files_to(Some((350.0, 50.0))));
+    rt.frame(3.0 / 60.0);
+    assert_eq!(
+        std::mem::take(&mut rt.state.log),
+        [
+            "column-b hover false",
+            "strip hover true",
+            "strip move (330,40)",
+            "outer move (350,50)",
+        ]
+    );
+
+    // Move back onto column-a and drop: column-a takes the drop, not strip.
+    assert!(rt.drag_files_to(Some((50.0, 50.0))));
+    rt.frame(4.0 / 60.0);
+    rt.state.log.clear();
+    rt.drop_files(p.clone(), Some((50.0, 50.0)));
+    rt.frame(5.0 / 60.0);
+    assert_eq!(
+        std::mem::take(&mut rt.state.log),
+        [
+            "column-a hover false",
+            "strip within false None",
+            "outer within false",
+            "column-a drop",
+        ]
+    );
+
+    // Empty drag does not trigger within observers.
+    rt.drag_files(Vec::new(), Some((50.0, 50.0)));
+    rt.frame(6.0 / 60.0);
+    assert!(rt.state.log.is_empty());
+
+    // Unmounting a within-hovered ancestor delivers false on the next sample.
+    rt.drag_files(p.clone(), Some((50.0, 50.0)));
+    rt.frame(7.0 / 60.0);
+    rt.state.log.clear();
+    rt.update(|s, _| s.hide_strip = true);
+    rt.frame(8.0 / 60.0);
+    assert!(rt.drag_files_to(Some((50.0, 50.0))));
+    rt.frame(9.0 / 60.0);
+    assert!(rt.state.log.iter().any(|l| l == "strip within false None"), "unmounted ancestor hears false: {:?}", rt.state.log);
+    rt.drag_files_leave();
+    rt.frame(10.0 / 60.0);
+
+    // Inert ancestor and modal-blocked ancestor hear nothing.
+    rt.update(|s, _| { s.hide_strip = false; s.inert_strip = true; s.log.clear(); });
+    rt.frame(11.0 / 60.0);
+    rt.drag_files(p.clone(), Some((50.0, 50.0)));
+    rt.frame(12.0 / 60.0);
+    assert!(!rt.state.log.iter().any(|l| l.starts_with("strip")), "inert strip hears nothing: {:?}", rt.state.log);
+    rt.drag_files_leave();
+    rt.frame(13.0 / 60.0);
+
+    rt.update(|s, _| { s.inert_strip = false; s.modal = true; s.log.clear(); });
+    rt.frame(14.0 / 60.0);
+    rt.drag_files(p, Some((200.0, 50.0)));
+    rt.frame(15.0 / 60.0);
+    assert!(rt.state.log.is_empty(), "drag outside modal reaches no background within observer");
+}
+
+#[test]
+fn within_observers_wake_frames_only_when_needed_and_count_as_drop_targets() {
+    #[derive(Default)]
+    struct S {
+        with_move: bool,
+        within_only: bool,
+        dropped: usize,
+        moves: usize,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        if s.within_only {
+            return el().key("obs").size(200.0, 200.0)
+                .on_drop_hover_within(|_: &mut S, _, _| {});
+        }
+        let mut box_a = el().key("box-a").size(150.0, 150.0)
+            .on_drop_hover_within(|_: &mut S, _, _| {});
+        if s.with_move {
+            box_a = box_a.on_drop_move_within(|s: &mut S, _, _| s.moves += 1);
+        }
+        el().key("root").size(300.0, 200.0)
+            .on_drop_files(|s: &mut S, files, _| s.dropped += files.len())
+            .child(box_a)
+    }
+
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Passive child observer with on_drop_hover_within only: moving inside queues no frames,
+    // and dropping inside still reaches parent's on_drop_files.
+    rt.drag_files(files(&["a.txt"]), Some((20.0, 20.0)));
+    rt.frame(1.0 / 60.0);
+    for x in 25..100 {
+        assert!(!rt.drag_files_to(Some((x as f32, 20.0))), "hover_within without move_within wakes no frames");
+    }
+    assert!(rt.drag_files_to(Some((200.0, 20.0))), "leaving box-a changes within_hovered set");
+    rt.frame(2.0 / 60.0);
+    rt.drop_files(files(&["a.txt"]), Some((20.0, 20.0)));
+    rt.frame(3.0 / 60.0);
+    assert_eq!(rt.state.dropped, 1, "passive child observer does not steal parent's drop");
+
+    // With on_drop_move_within: stationary queues nothing, moves coalesce to once a frame, outside queues nothing.
+    rt.update(|s, _| s.with_move = true);
+    rt.frame(4.0 / 60.0);
+    rt.drag_files(files(&["a.txt"]), Some((20.0, 20.0)));
+    rt.frame(5.0 / 60.0);
+    assert_eq!(rt.state.moves, 1);
+    assert!(!rt.drag_files_to(Some((20.0, 20.0))), "stationary move_within queues nothing");
+    assert!(rt.drag_files_to(Some((30.0, 20.0))), "first move wakes one frame");
+    assert!(!rt.drag_files_to(Some((40.0, 20.0))), "coalesced to once a frame");
+    rt.frame(6.0 / 60.0);
+    assert_eq!(rt.state.moves, 2);
+    assert!(rt.drag_files_to(Some((200.0, 20.0))), "leaving box-a");
+    rt.frame(7.0 / 60.0);
+    assert!(!rt.drag_files_to(Some((220.0, 20.0))), "outside box-a wakes no frames");
+    rt.drag_files_leave();
+    rt.frame(8.0 / 60.0);
+
+    // A tree with only on_drop_hover_within still counts for has_drop_targets (Wayland lazy binding).
+    rt.update(|s, _| s.within_only = true);
+    rt.frame(9.0 / 60.0);
+    assert!(rt.core().has_drop_targets());
+}
