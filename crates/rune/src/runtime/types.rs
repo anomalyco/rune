@@ -30,6 +30,8 @@ pub(crate) struct NodeCold {
     /// `El::matched` id, with the element's own (not inherited) layout spring.
     pub(super) matched: Option<(Rc<str>, Option<Spring>)>,
     pub(super) above: Option<crate::el::Anchor>,
+    pub(super) above_boundary: Option<String>,
+    pub(super) resolved_anchor: Option<(crate::Side, crate::Align)>,
     pub(crate) scroll: Option<ScrollSpec>,
     pub(super) scroll_axes: crate::el::ScrollAxes,
     pub(super) scroll_edges: crate::el::ScrollEdges,
@@ -71,7 +73,7 @@ impl crate::cold::Empty for NodeCold {
         lead: None,
         transition: None,
         matched: None,
-        above: None,
+        above: None, above_boundary: None, resolved_anchor: None,
         scroll: None,
         scroll_axes: crate::el::ScrollAxes::Y,
         scroll_edges: crate::el::ScrollEdges { fade: 0.0, fade_style: crate::el::FadeStyle::SMOOTH, margin: 0.0, anchor: false },

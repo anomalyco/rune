@@ -167,10 +167,12 @@ fn message(s: &Source, count: u32, frames: u32) -> String {
              `El::on_scroll_offset` and live values"),
         Cause::Read => {
             let window = crate::runtime::window_read_key(subject);
+            let anchor = crate::runtime::anchor_read_key(subject);
             let at = s.at.map_or_else(String::new, |at| format!(" at {at}"));
-            let read = match window {
-                Some(key) => format!("the view's `Cx::window_layout` read of {key:?}{at}"),
-                None => format!("the view's layout read of {subject:?}{at}"),
+            let read = match (window, anchor) {
+                (Some(key), _) => format!("the view's `Cx::window_layout` read of {key:?}{at}"),
+                (_, Some(key)) => format!("the view's `Cx::anchor_placement` read of {key:?}{at}"),
+                (None, None) => format!("the view's layout read of {subject:?}{at}"),
             };
             (format!("{read} moved and"),
              if window.is_some() { "read `Cx::layout_size` or `Cx::layout` (unscrolled) unless the view needs where the \

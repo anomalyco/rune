@@ -148,9 +148,9 @@ impl RuntimeCore {
                     let saved = self.anchored_inh(i, j, &a, &p, &mut pinh);
                     self.paint.last_anchor_targets.insert(node_id, saved);
                 } else if self.subtree_exiting(i)
-                    && let Some((target, k)) = self.paint.last_anchor_targets.get(&node_id).copied()
+                    && let Some((target, k, bounds)) = self.paint.last_anchor_targets.get(&node_id).copied()
                 {
-                    self.anchored_inh_at(i, &a, target, k, ScaleMotion::Still, &p, &mut pinh);
+                    self.anchored_inh_at(i, &a, target, k, bounds, ScaleMotion::Still, &p, &mut pinh);
                 } else {
                     // Never draw an anchored overlay at (0, 0) when its anchor cannot be resolved.
                     let path = self.tree.nodes[i].path.clone();

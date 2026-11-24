@@ -65,7 +65,7 @@ pub(crate) struct PaintState {
     pub(super) lifted_anchors: Vec<usize>,
     /// Last resolved `(target_rect, zoom)` per anchored overlay node id, so an exiting overlay
     /// holds its position if its anchor unmounts mid-exit instead of snapping to `(0, 0)`.
-    pub(in crate::runtime) last_anchor_targets: HashMap<NodeId, ([f32; 4], f32)>,
+    pub(in crate::runtime) last_anchor_targets: HashMap<NodeId, ([f32; 4], f32, [f32; 4])>,
     /// Deduplicated `(overlay_path, anchor_key)` pairs logged when an anchored overlay could not
     /// resolve its anchor and was suppressed.
     pub(in crate::runtime) unresolved_anchor_warnings: HashSet<(String, String)>,

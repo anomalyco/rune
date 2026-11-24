@@ -52,7 +52,7 @@ mod visuals;
 
 pub use a11y::LiveRegion;
 pub(crate) use a11y::{A11y, Checked};
-pub use anchor::{Anchor, Side, anchor_rect};
+pub use anchor::{Anchor, Side, anchor_rect, anchor_rect_in};
 pub(crate) use crate::clipboard::tx::{ClipboardRead, ReadFn};
 pub use crate::cursor::{Cursor, CursorImage};
 pub use direction::Direction;
