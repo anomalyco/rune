@@ -1,0 +1,1 @@
+- Web / WebGL2: fixed a `Mismatched pop_error_scope call` panic on every WebGL2 surface configuration (`crates/rune/src/window/surface/configure.rs`) and a short-circuiting scope leak in WebGL2 optional-pipeline checks (`crates/rune/src/render/breaker.rs`) by routing native and WebGL2 error-scope push/pop through one shared LIFO helper (`rune_gpu::health::with_error_scopes`).

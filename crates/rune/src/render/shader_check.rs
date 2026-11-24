@@ -95,52 +95,20 @@ pub(crate) fn classify_scope_error(
 }
 
 /// Runs `build` inside synchronous error scopes (validation, out-of-memory, internal) on native
-/// devices and returns `Err(ShaderError)` if the device rejects the shader or pipeline.
-#[cfg(not(target_arch = "wasm32"))]
+/// and WebGL2 (`wgpu-core`, no JS `GPUDevice`) devices, returning `Err(ShaderError)` if the
+/// device rejects the shader or pipeline. On browser WebGPU, wgpu's own error scopes panic on
+/// `GPUInternalError`, so the outer JS error scopes (`platform::web::health::Scopes`) check the
+/// build asynchronously instead.
 pub(super) fn checked_sync<T>(
     device: &wgpu::Device,
     build: impl FnOnce() -> T,
 ) -> Result<T, ShaderError> {
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let built = build();
-    let [internal, memory, validation] =
-        [internal.pop(), memory.pop(), validation.pop()].map(pollster::block_on);
-    match classify_scope_error(memory, internal, validation) {
-        None => Ok(built),
-        Some(error) => Err(error),
-    }
-}
-
-/// On WebGL2 (`wgpu-core`, no JS `GPUDevice`), runs `build` inside synchronous error scopes.
-/// On browser WebGPU, wgpu's own error scopes panic on `GPUInternalError`, so the outer JS
-/// error scopes (`platform::web::health::Scopes`) check the build asynchronously instead.
-#[cfg(target_arch = "wasm32")]
-pub(super) fn checked_sync<T>(
-    device: &wgpu::Device,
-    build: impl FnOnce() -> T,
-) -> Result<T, ShaderError> {
-    use std::future::Future;
-    use std::task::{Context, Poll, Waker};
+    #[cfg(target_arch = "wasm32")]
     if device.as_webgpu().is_some() {
         return Ok(build());
     }
-    fn poll_now<F: Future<Output = Option<wgpu::Error>>>(fut: F) -> Option<wgpu::Error> {
-        let mut cx = Context::from_waker(Waker::noop());
-        match std::pin::pin!(fut).poll(&mut cx) {
-            Poll::Ready(err) => err,
-            Poll::Pending => None,
-        }
-    }
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
-    let built = build();
-    let internal = poll_now(internal.pop());
-    let memory = poll_now(memory.pop());
-    let validation = poll_now(validation.pop());
-    match classify_scope_error(memory, internal, validation) {
+    let (built, errors) = rune_gpu::health::with_error_scopes(device, build);
+    match classify_scope_error(errors.memory, errors.internal, errors.validation) {
         None => Ok(built),
         Some(error) => Err(error),
     }
