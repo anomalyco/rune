@@ -79,6 +79,30 @@ macro_rules! rich_forwarders {
     };
 }
 
+/// Secondary-press and paste hooks every field forwards to its inner editor (skipped when disabled).
+macro_rules! field_hook_forwarders {
+    ($ctor:literal) => {
+        /// Secondary press (right-click, control-click, Menu, Shift+F10) on the inner editor in
+        /// place of the default field menu (`El::on_secondary_press`). Skipped when disabled.
+        /// ```ignore
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_secondary_press(|s: &mut App, p, _| s.menu = Some(p)).build(&k)")]
+        /// ```
+        pub fn on_secondary_press<S: 'static>(mut self, f: impl Fn(&mut S, rune::PointerPress, &mut Tx) + 'static) -> Self {
+            self.edits.secondary_press(f);
+            self
+        }
+        /// Intercept pastes into the focused inner editor (`El::on_input_paste`): return `true` to
+        /// consume or `false` for default plain-text insertion. Skipped when disabled.
+        /// ```ignore
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_input_paste(|s: &mut App, c, _| !c.files().is_empty()).build(&k)")]
+        /// ```
+        pub fn on_input_paste<S: 'static>(mut self, f: impl Fn(&mut S, &rune::ClipboardContent, &mut Tx) -> bool + 'static) -> Self {
+            self.edits.paste(f);
+            self
+        }
+    };
+}
+
 /// Edit bindings collected for the inner text field.
 #[derive(Default)]
 struct EditActs {
@@ -98,6 +122,12 @@ impl EditActs {
     }
     fn change<S: 'static>(&mut self, f: impl Fn(&mut S, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_input_change(f)));
+    }
+    fn paste<S: 'static>(&mut self, f: impl Fn(&mut S, &rune::ClipboardContent, &mut Tx) -> bool + 'static) {
+        self.handlers.push(Box::new(move |e: El| e.on_input_paste(f)));
+    }
+    fn secondary_press<S: 'static>(&mut self, f: impl Fn(&mut S, rune::PointerPress, &mut Tx) + 'static) {
+        self.handlers.push(Box::new(move |e: El| e.on_secondary_press(f)));
     }
     fn visual(&mut self, f: impl FnOnce(El) -> El + 'static) {
         self.visual.push(Box::new(f));
@@ -320,6 +350,7 @@ impl TextInput {
         self.copy_acts.press_tx(f);
         self
     }
+    field_hook_forwarders!("TextInput::new(&s.edit)");
     rich_forwarders!();
 
     pub fn build(self, k: &Kit) -> El {
@@ -410,6 +441,7 @@ impl TextInput {
 pub struct TextArea {
     edit: TextEdit,
     label: Option<String>,
+    description: Option<String>,
     placeholder: String,
     width: Option<f32>,
     rows: usize,
@@ -445,6 +477,7 @@ impl TextArea {
         TextArea {
             edit: edit.clone(),
             label: None,
+            description: None,
             placeholder: String::new(),
             width: Some(280.0),
             rows: 3,
@@ -462,6 +495,16 @@ impl TextArea {
     /// The accessible name, as [`TextInput::label`].
     pub fn label(mut self, l: impl Into<String>) -> Self {
         self.label = Some(l.into());
+        self
+    }
+    /// Help or a validation error for the inner editor, separate from its name, as
+    /// [`TextInput::description`]. Accessibility-only (not drawn).
+    ///
+    /// ```ignore
+    /// TextArea::new(&s.notes).label("Notes").description("Markdown supported").build(&k)
+    /// ```
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
         self
     }
     pub fn width(mut self, w: Option<f32>) -> Self {
@@ -525,6 +568,7 @@ impl TextArea {
         self.edits.change(f);
         self
     }
+    field_hook_forwarders!("TextArea::new(&s.edit)");
     rich_forwarders!();
 
     pub fn build(self, k: &Kit) -> El {
@@ -541,7 +585,7 @@ impl TextArea {
             .rich_style(kit_rich_style(k))
             .placeholder(self.placeholder.clone(), hint)
             .caret(ink, k.selection());
-        let field = name_field(field, self.label.as_deref(), &self.placeholder, None, disabled);
+        let field = name_field(field, self.label.as_deref(), &self.placeholder, self.description.as_deref(), disabled);
         let field = self.edits.apply(field, disabled);
         let line = style.line_px();
         let mut e = col().role("textbox").padding(8.0);
@@ -578,10 +622,11 @@ impl TextArea {
 /// The older labelled field (`components/text-field`): label over a bordered 32 point input.
 ///
 /// Draws a visible label and a wrapped, assertive [`Self::error`] line, but has no `secure`,
-/// `on_change`, `on_submit` or help text. Prefer [`crate::Field`] with [`TextInput`] or
+/// `on_change` or visible help text. Prefer [`crate::Field`] with [`TextInput`] or
 /// [`TextArea`] for new forms.
 pub struct TextField {
     label: String,
+    description: Option<String>,
     edit: TextEdit,
     placeholder: String,
     hide_label: bool,
@@ -599,6 +644,7 @@ impl TextField {
     pub fn new(label: impl Into<String>, edit: &TextEdit) -> TextField {
         TextField {
             label: label.into(),
+            description: None,
             edit: edit.clone(),
             placeholder: String::new(),
             hide_label: false,
@@ -642,6 +688,17 @@ impl TextField {
         self.copy_acts.press_tx(f);
         self
     }
+    /// Help text for the inner editor, separate from its label and [`Self::error`].
+    /// Accessibility-only (not drawn); when [`Self::error`] is also set, both describe the
+    /// editor, with the description before the error.
+    ///
+    /// ```ignore
+    /// TextField::new("Name", &s.name).description("Letters and digits only").build(&k)
+    /// ```
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
     pub fn error(mut self, e: impl Into<String>) -> Self {
         self.error = Some(e.into());
         self
@@ -656,6 +713,15 @@ impl TextField {
         self.edits.edit(f);
         self
     }
+    /// Called when the user submits the focused field with Return (`El::on_submit`). Skipped when disabled.
+    /// ```ignore
+    /// TextField::new("Name", &s.name).on_edit(|s: &mut App| &mut s.name).on_submit(|s: &mut App, tx: &mut Tx| s.save(tx)).build(&k)
+    /// ```
+    pub fn on_submit<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.edits.submit(f);
+        self
+    }
+    field_hook_forwarders!("TextField::new(\"Name\", &s.edit)");
     rich_forwarders!();
 
     pub fn build(self, k: &Kit) -> El {
@@ -670,8 +736,18 @@ impl TextField {
             .placeholder(self.placeholder.clone(), c.text_weak)
             .caret(c.text_strong, k.selection());
         let field = if self.multiline { field } else { field.single_line() };
-        // The error describes the editor; the label above names it.
-        let field = name_field(field, Some(self.label.as_str()), &self.placeholder, self.error.as_deref(), self.state == State::Disabled);
+        let desc = match (
+            self.description.as_deref().filter(|s| !s.is_empty()),
+            self.error.as_deref().filter(|s| !s.is_empty()),
+        ) {
+            (Some(d), Some(e)) if d.ends_with(['.', '!', '?']) => Some(format!("{d} {e}")),
+            (Some(d), Some(e)) => Some(format!("{d}. {e}")),
+            (Some(d), None) => Some(d.to_owned()),
+            (None, Some(e)) => Some(e.to_owned()),
+            (None, None) => None,
+        };
+        // Description and error describe the editor; the label above names it.
+        let field = name_field(field, Some(self.label.as_str()), &self.placeholder, desc.as_deref(), self.state == State::Disabled);
         let field = self.edits.apply(field, self.state == State::Disabled);
         let mut wrapper = row()
             .key("wrapper")

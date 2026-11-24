@@ -36,6 +36,7 @@ mod shortcut_recorder;
 mod switch_snap;
 mod table;
 mod text_area_grow;
+mod text_input_hooks;
 mod text_input_press;
 mod tooltip;
 mod tree;

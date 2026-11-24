@@ -65,6 +65,24 @@ impl capture::PointerState {
 }
 
 impl RuntimeCore {
+    /// The single reachable editor inside a `role("textbox")` container that handles secondary
+    /// presses (its own `on_secondary_press`, or its editable `field_menu`).
+    fn textbox_secondary_input(&self, i: usize) -> Option<usize> {
+        if self.tree.nodes[i].role != "textbox" { return None; }
+        let mut inputs = (0..self.tree.nodes.len()).filter(|&j| {
+            let n = &self.tree.nodes[j];
+            n.input.is_some()
+                && (n.handlers.on_secondary_press.is_some()
+                    || n.input.as_ref().is_some_and(|spec| spec.access.is_some()))
+                && self.reachable(j)
+                && !std::iter::successors(Some(j), |&p| self.tree.nodes[p].parent)
+                    .any(|k| self.tree.nodes[k].a11y.disabled)
+                && std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent).any(|p| p == i)
+        });
+        let first = inputs.next()?;
+        inputs.next().is_none().then_some(first)
+    }
+
     /// The nearest element with `on_secondary_press` (or a link with `on_link_secondary`) at
     /// (x, y), else the selectable text there (its Copy menu): an app's context menu on a row
     /// wins over its text's.
@@ -72,12 +90,18 @@ impl RuntimeCore {
         let id = self.hit.top_hit(|id, r| self.hit_contains(id, r, x, y))?;
         let mut index = *self.tree.node_index.get(&id)?;
         let mut text = None;
+        let mut first = true;
         loop {
             let n = &self.tree.nodes[index];
             if self.subtree_exiting(index) || !self.allowed(index) { break; }
             if n.handlers.on_secondary_press.is_some() || self.secondary_link_at(index, x, y).is_some() { return Some(&n.path); }
             // A text field's own menu (`field_menu`) wins over its ancestors'.
             if n.input.as_ref().is_some_and(|i| i.access.is_some()) { return Some(&n.path); }
+            // A `role("textbox")` wrapper's padding routes secondary presses to its single editor.
+            if first && let Some(input_i) = self.textbox_secondary_input(index) {
+                return Some(&self.tree.nodes[input_i].path);
+            }
+            first = false;
             if text.is_none() && self.is_selectable(index) { text = Some(n.path.as_str()); }
             let Some(p) = n.parent else { break };
             index = p;

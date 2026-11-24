@@ -258,7 +258,7 @@ impl RuntimeCore {
         self.can_take_focus(&self.tree.nodes[i]) && !self.tree.nodes[i].inert && !self.subtree_exiting(i) && node_shown(&self.tree.nodes, i)
     }
     /// Shown, sized, not exiting and not behind a modal.
-    fn reachable(&self, i: usize) -> bool {
+    pub(super) fn reachable(&self, i: usize) -> bool {
         self.allowed(i) && !self.subtree_exiting(i) && node_shown(&self.tree.nodes, i)
     }
     /// Whether Return goes to focused element `i` rather than the default button: a focused

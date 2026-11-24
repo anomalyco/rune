@@ -33,6 +33,8 @@ pub struct G {
     pub values: HashMap<String, f32>,
     /// The open overlay, by key.
     pub open: Option<String>,
+    /// Context menu anchor from a story's `on_secondary_press`.
+    pub menu_at: Option<rune::PointerPress>,
     pub edits: [TextEdit; 8],
     pub combo: rune_kit::ComboboxState,
     /// The sidebar reorder story's state.
@@ -91,6 +93,7 @@ fn init() -> G {
         pick: HashMap::new(),
         values: HashMap::new(),
         open: None,
+        menu_at: None,
         edits: Default::default(),
         combo: Default::default(),
         reorder: Default::default(),

@@ -158,6 +158,118 @@ pub(super) fn field_invalid(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
     )
 }
 
+/// TextInput, TextArea and TextField forwarding `on_secondary_press`, `on_input_paste`,
+/// `description` and `on_submit` to their inner editors.
+pub(super) fn text_input_hooks(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let intercept = !s.is("hooks-pass-paste");
+    let status = s
+        .pick
+        .get("hooks-status")
+        .map_or("Right-click any field, paste text or files, or press Return in TextField.", String::as_str);
+    let (target, target_idx): (&'static str, usize) = match s.pick.get("hooks-menu-field").map(String::as_str) {
+        Some("TextArea") => ("TextArea", 5),
+        Some("TextField") => ("TextField", 6),
+        _ => ("TextInput", 4),
+    };
+    let open_menu = |name: &'static str| {
+        move |s: &mut G, p: rune::PointerPress, _: &mut Tx| {
+            s.menu_at = Some(p);
+            s.pick.insert("hooks-menu-field".into(), name.into());
+            s.pick.insert("hooks-status".into(), format!("Context menu on {name} at ({:.0}, {:.0})", p.x, p.y));
+        }
+    };
+    let on_paste = |idx: usize, name: &'static str| {
+        move |s: &mut G, content: &rune::ClipboardContent, _: &mut Tx| {
+            let files = content.files().len();
+            if files > 0 {
+                s.edits[idx].insert(&format!("[{files} file(s)]"));
+                s.pick.insert("hooks-status".into(), format!("{name} intercepted {files} file(s)"));
+                return true;
+            }
+            if !s.is("hooks-pass-paste") {
+                let trimmed = content.text().trim();
+                s.edits[idx].insert(&format!("[pasted: {trimmed}]"));
+                s.pick.insert("hooks-status".into(), format!("{name} intercepted paste ({} chars)", trimmed.len()));
+                return true;
+            }
+            s.pick.insert("hooks-status".into(), format!("{name} passed paste through"));
+            false
+        }
+    };
+    let body = grid(16.0, 320.0)
+        .child(
+            Checkbox::new(intercept)
+                .label("Intercept paste in on_input_paste")
+                .on_toggle(flip("hooks-pass-paste"))
+                .build(k)
+                .key("hooks-intercept"),
+        )
+        .child(
+            Field::new()
+                .label("TextInput")
+                .control(
+                    TextInput::new(&s.edits[4])
+                        .label("TextInput")
+                        .description("Right-click for menu or paste to intercept")
+                        .placeholder("Right-click or paste…")
+                        .width(None)
+                        .on_edit(|s: &mut G| &mut s.edits[4])
+                        .on_secondary_press(open_menu("TextInput"))
+                        .on_input_paste(on_paste(4, "TextInput"))
+                        .build(k)
+                        .key("hooks-input"),
+                )
+                .build(k),
+        )
+        .child(
+            Field::new()
+                .label("TextArea")
+                .control(
+                    TextArea::new(&s.edits[5])
+                        .label("TextArea")
+                        .description("Multi-line editor with custom menu and paste hook")
+                        .placeholder("Right-click anywhere in box or paste…")
+                        .width(None)
+                        .on_edit(|s: &mut G| &mut s.edits[5])
+                        .on_secondary_press(open_menu("TextArea"))
+                        .on_input_paste(on_paste(5, "TextArea"))
+                        .build(k)
+                        .key("hooks-area"),
+                )
+                .build(k),
+        )
+        .child(
+            TextField::new("TextField", &s.edits[6])
+                .placeholder("Type and press Return…")
+                .description("Supports description, on_submit, paste and menu")
+                .on_edit(|s: &mut G| &mut s.edits[6])
+                .on_submit(|s: &mut G, _| {
+                    let v = s.edits[6].text.clone();
+                    s.pick.insert("hooks-status".into(), format!("TextField submitted: {v:?}"));
+                })
+                .on_secondary_press(open_menu("TextField"))
+                .on_input_paste(on_paste(6, "TextField"))
+                .build(k)
+                .key("hooks-field"),
+        )
+        .child(text(status).key("hooks-status").font(k.ty.small).color(k.c.text_muted).wrap());
+
+    context_menu("text-hooks-menu", body, s.menu_at)
+        .on_close(|s: &mut G| s.menu_at = None)
+        .item(MenuItem::new(format!("Insert sample in {target}")).on_select(move |s: &mut G| {
+            s.edits[target_idx].insert("sample");
+            s.menu_at = None;
+            s.pick.insert("hooks-status".into(), format!("Inserted sample in {target}"));
+        }))
+        .item(MenuItem::new(format!("Clear {target}")).on_select(move |s: &mut G| {
+            s.edits[target_idx].text.clear();
+            s.edits[target_idx].set_caret(0);
+            s.menu_at = None;
+            s.pick.insert("hooks-status".into(), format!("Cleared {target}"));
+        }))
+        .build(k, layer)
+}
+
 // Select
 
 const FRUITS: [&str; 5] = ["Apple", "Banana", "Cherry", "Date", "Elderberry"];
