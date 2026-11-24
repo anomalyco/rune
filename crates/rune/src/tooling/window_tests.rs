@@ -231,3 +231,35 @@ fn headless_chrome_overlay_follows_dynamic_titlebar_changes() {
         assert!(hits[0].0.contains(want), "phase {phase}: expected {want}, got {hits:?}");
     }
 }
+
+#[test]
+fn headless_script_delivers_open_files_to_app_hook() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
+    let _turn = super::headless_run::test_turn();
+    let pid = std::process::id();
+    let script = std::env::temp_dir().join(format!("rune-open-files-{pid}.json"));
+    let tree = std::env::temp_dir().join(format!("rune-open-files-tree-{pid}.json"));
+    std::fs::write(&script, r#"[{"t": 0.0, "open_files": ["alpha.torrent", "beta.torrent"]}, {"t": 0.05, "open_files": []}]"#).unwrap();
+
+    #[derive(Default)]
+    struct Opened(Vec<std::path::PathBuf>);
+    fn view(opened: &Opened, _: &mut crate::Cx<Opened>) -> crate::El {
+        let label = opened.0.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>().join(",");
+        crate::el().w_full().h_full().child(crate::text(label).key("opened"))
+    }
+
+    let spec = crate::AppSpec::new("open-files-script", (120.0, 40.0), Opened::default, view);
+    let app = crate::App::new(spec).on_open_files(|opened, paths, _| opened.0.extend(paths.iter().cloned()));
+    super::headless(app, super::Args {
+        script: Some(script.clone()),
+        tree: Some(tree.clone()),
+        frames: Some(6),
+        fps: 60.0,
+        scale: Some(1.0),
+        ..Default::default()
+    });
+    let dump = std::fs::read_to_string(&tree).unwrap();
+    std::fs::remove_file(&script).ok();
+    std::fs::remove_file(&tree).ok();
+    assert!(dump.contains("alpha.torrent,beta.torrent"), "expected opened files in tree dump: {dump}");
+}

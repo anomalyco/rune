@@ -58,6 +58,27 @@ fn script_events_answer_a_multi_file_dialog() {
 }
 
 #[test]
+fn script_events_open_files_with_the_app() {
+    let script = parse_script(json!([
+        {"t": 0.1, "open_files": ["a.torrent", "dir/b.torrent"]},
+        {"t": 0.25, "open_files": []},
+    ]));
+    assert_eq!(script.len(), 2);
+    assert_eq!(script[0].t, 0.1);
+    let ScriptEvent::OpenFiles(ref public_paths) = script[0].public().event else { panic!("public event lost open_files") };
+    let Kind::OpenFiles(ref paths) = script[0].kind else { panic!("parsed as another event") };
+    assert_eq!(public_paths, paths);
+    assert_eq!(paths, &[std::path::PathBuf::from("a.torrent"), std::path::PathBuf::from("dir/b.torrent")]);
+
+    let ScriptEvent::OpenFiles(ref public_empty) = script[1].public().event else { panic!("public event lost empty open_files") };
+    assert!(public_empty.is_empty());
+
+    let mut rt = Runtime::new((), |_: &(), _: &mut crate::Cx<()>| crate::el(), (100.0, 100.0), Env::default());
+    let (core, mut app) = rt.split_mut();
+    assert!(!script_input(core, &mut app, &script[0].kind, (0.0, 0.0)), "open_files is handled at the headless host, not script_input");
+}
+
+#[test]
 fn script_events_answer_a_pop_up_menu() {
     let kinds: Vec<_> = parse_script(json!([{"t": 0.2, "type": "menu-cancel"}, {"t": 0.1, "type": "menu-pick", "id": "dark"}]))
         .into_iter().map(|e| {

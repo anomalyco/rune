@@ -37,6 +37,15 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
             out.push(Ev { t, kind: Kind::OpenUrl(url.into()), pos: Pos::Rel(0.0, 0.0) });
             continue;
         }
+        if let Some(files) = e.get("open_files") {
+            let paths: Vec<std::path::PathBuf> = files.as_array()
+                .unwrap_or_else(|| die("open_files needs an array of path strings, like [\"a.txt\"]"))
+                .iter()
+                .map(|p| p.as_str().unwrap_or_else(|| die("open_files entries must be strings")).into())
+                .collect();
+            out.push(Ev { t, kind: Kind::OpenFiles(paths), pos: Pos::Rel(0.0, 0.0) });
+            continue;
+        }
         if let Some(chord) = e["physical"].as_str() {
             let chord: crate::Shortcut = chord.parse().unwrap_or_else(|e: crate::ShortcutError| die(&e.to_string()));
             let repeat = e["repeat"].as_bool().unwrap_or(false);

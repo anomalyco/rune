@@ -844,6 +844,52 @@ app.run();
   MyApp.app`); then `open 'myapp://x'` launches or reaches the app. A bare `cargo run` binary has
   no bundle and gets no links. iOS isn't wired yet (winit owns the scene delegate), and Linux
   passes a link to a new process as a launch argument, so the hook never runs there.
+- Files opened with the app (macOS): `App::on_open_files(|s, paths: &[PathBuf], tx| ..)` (and
+  `WindowSpec::on_open_files`) runs on the main thread for each batch of files the system hands
+  the app (Finder double-click or "Open With", files dropped on the Dock icon, or `open -a MyApp
+  file.ext`), including the `kAEOpenDocuments` (`'aevt'`/`'odoc'`) Apple Event that launched
+  it. Like `on_open_url`, Rune installs the handler before the event loop starts, re-applies it on
+  `NSApplicationWillFinishLaunchingNotification` after AppKit installs its default core handlers,
+  buffers launch-time batches until the first listening window starts (running before its first
+  frame), removes the handler on settle if no window has the hook, and leaves a pre-existing app
+  handler alone unless a window registers `on_open_files`. Each batch runs as an
+  `AppHandle::update` in arrival order, skipping non-file URLs and never invoking the hook with an
+  empty slice. Paths come from outside the app, so validate them before acting; bring a window
+  forward yourself with `AppHandle::open()`. With several listening windows, the first still
+  running receives files. Declare document types in the bundle's `Info.plist` (and add
+  `UTImportedTypeDeclarations` for extensions the system doesn't already know):
+
+  ```xml
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Torrent File</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSItemContentTypes</key>
+      <array><string>org.bittorrent.torrent</string></array>
+    </dict>
+  </array>
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.bittorrent.torrent</string>
+      <key>UTTypeConformsTo</key>
+      <array><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>torrent</string></array>
+      </dict>
+    </dict>
+  </array>
+  ```
+
+  Register the bundle (`lsregister -f MyApp.app`) so Launch Services learns the document types.
+  Never called on Windows or Linux, which pass opened files to a new process as launch arguments.
+  Headless scripts send it with `{"open_files": ["a.torrent"]}`.
 - Links and relaunches on Windows: Windows starts a new process for each launch, passing a link
   as an argument. The hook receives the links among the first process's arguments
   (`scheme://…`) like the launching link on macOS. Call `rune::single_instance("com.example.myapp")`
@@ -3102,6 +3148,8 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   `{"reopen": true}` reopens the app, as a click on its Dock icon (see "App lifetime").
   `{"open_url": "myapp://…"}` hands `App::on_open_url` a link, as the system does when a link
   opens the app.
+  `{"open_files": ["a.torrent", "b.torrent"]}` hands `App::on_open_files` a batch of file paths,
+  as the system does when files open with the app on macOS.
   `menu-pick` (with an `id`) and `menu-cancel` answer an open pop-up menu, `file-dialog` (with
   a `path`) and `file-dialog-cancel` an open file dialog (see "File dialogs"). `drag_files` and
   `drop_files` drag files in from another app (see "Dropping files in from other apps").
@@ -3487,7 +3535,7 @@ Omit `--snap-on-patch` for a window on a development machine.
 `rune::run` and `App::run` share the same runtime and window host: `RuntimeCore` and
 `WindowApp` already type-erase the runtime and shell into the Rune library, so hot builds
 compile only the app's typed glue while keeping every `App` hook and option (`turn_scope`,
-`on_quit`, `on_reopen`, `on_focus`, `on_open_url`, handles, compositors and playgrounds).
+`on_quit`, `on_reopen`, `on_focus`, `on_open_url`, `on_open_files`, handles, compositors and playgrounds).
 The `HotFn` boundary calls the app's typed view and callback function pointers. The headless
 PNG encoder uses its fastest lossless mode; normal snapshots keep their existing encoding.
 

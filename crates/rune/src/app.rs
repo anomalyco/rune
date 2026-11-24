@@ -99,6 +99,7 @@ pub struct App<S: 'static> {
     pub(crate) on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
+    pub(crate) on_open_files: Option<crate::open_url::incoming::OnOpenFiles<S>>,
     pub(crate) shared: Arc<Shared<S>>,
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
@@ -165,6 +166,7 @@ impl<S: 'static> App<S> {
             on_rest: None,
             on_reopen: None,
             on_open_url: None,
+            on_open_files: None,
             shared,
             overlays: Vec::new(),
             windows: Vec::new(),
@@ -742,6 +744,35 @@ impl<S: 'static> App<S> {
     /// called on other platforms (Linux passes links to a new process as arguments).
     pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut Tx)) -> Self {
         self.on_open_url = Some(f);
+        self
+    }
+
+    /// macOS: runs on the main thread with each batch of files the system opens with this app
+    /// (Finder double-click or "Open With", files dropped on the Dock icon, or `open -a MyApp
+    /// file.ext`), including the `kAEOpenDocuments` (`'odoc'`) Apple Event that launched it,
+    /// which runs before the window's first frame. Each batch runs in arrival order as an
+    /// `AppHandle::update`, so a window it opens through a handle opens in the same turn. Never
+    /// called with an empty slice (non-file URLs in the event are skipped). Paths come from
+    /// outside the app, so validate them before acting. Bringing a window forward is up to the app
+    /// (`AppHandle::open`). The app's bundle must declare its document types
+    /// (`CFBundleDocumentTypes`, see the README). With several windows whose apps have the hook,
+    /// the first still running receives files.
+    ///
+    /// Never called on Windows or Linux, which pass opened files to a new process as launch
+    /// arguments. Headless scripts deliver it with `{"open_files": ["a.torrent"]}`.
+    ///
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// let spec = AppSpec::new("Viewer", (640.0, 420.0), Vec::<PathBuf>::new, |_, _| el());
+    /// let app = App::new(spec).on_open_files(|opened, paths, _| {
+    ///     opened.extend(paths.iter().cloned());
+    /// });
+    /// let _ = app;
+    /// ```
+    pub fn on_open_files(mut self, f: fn(&mut S, &[std::path::PathBuf], &mut Tx)) -> Self {
+        self.on_open_files = Some(f);
         self
     }
 

@@ -1,24 +1,29 @@
-//! Drop files into a Rune window from Finder, Explorer or a file manager, or pick several
-//! files at once with the native multi-file Open dialog (`Tx::open_files`). `cargo run -p
-//! drop-files`. The pictures zone takes images only; the folder zone uses `El::accepts_drag`
-//! to refuse drops when read-only or carrying more than two files; the anything zone takes any
-//! file; the strip around all three follows the drag passively with `El::on_drop_hover_within`,
-//! `El::on_drop_move_within`, and `Tx::drag_paths`; a drop anywhere else lands on the window.
-//! Each drop prints `drop <target> <files>`, each multi-file pick prints `open-files <files>`,
-//! and each path shows Open and Reveal buttons (`Tx::open_path`, `Tx::reveal_path`).
+//! Drop files into a Rune window from Finder, Explorer or a file manager, pick several files
+//! at once with the native multi-file Open dialog (`Tx::open_files`), or receive files the
+//! system opens with the app on macOS (`App::on_open_files`, `kAEOpenDocuments` / `'odoc'`).
+//! `cargo run -p drop-files`. The pictures zone takes images only; the folder zone uses
+//! `El::accepts_drag` to refuse drops when read-only or carrying more than two files; the
+//! anything zone takes any file; the strip around all three follows the drag passively with
+//! `El::on_drop_hover_within`, `El::on_drop_move_within`, and `Tx::drag_paths`; a drop
+//! anywhere else lands on the window. Each drop prints `drop <target> <files>`, each
+//! multi-file pick prints `open-files <files>`, each system-opened batch prints
+//! `open-with-app <files>`, and each path shows Open and Reveal buttons (`Tx::open_path`,
+//! `Tx::reveal_path`).
 //!
 //! Headless, with the highlight held before each drop:
 //! `cargo run -p drop-files -- --script examples/drop-files/scripts/drop.json --frames 120 --every 8 --cols 5 --strip strip.png`
 //! Headless multi-file Open dialog:
 //! `cargo run -p drop-files -- --script examples/drop-files/scripts/open-files.json --frames 30 --tree tree.json`
-//! Or inspect the dropped-file controls directly: `cargo run -p drop-files -- --snap drop-files.png --scene dropped`
+//! Headless system-opened files (`App::on_open_files`):
+//! `cargo run -p drop-files -- --script examples/drop-files/scripts/open-with-app.json --frames 20 --tree tree.json`
+//! Or inspect the scenes directly: `cargo run -p drop-files -- --snap drop-files.png --scene dropped` (`--scene opened-with-app`)
 
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
 
 use rune::tok::{self, radius, space, type_};
-use rune::{AppSpec, Color, Cursor, Cx, El, FileDialogOptions, PathAction, Tx, col, el, row, text};
+use rune::{App, AppSpec, Color, Cursor, Cx, El, FileDialogOptions, PathAction, Tx, col, el, row, text};
 
 const REJECT_RED: Color = Color { r: 0.92, g: 0.34, b: 0.34, a: 1.0 };
 
@@ -64,6 +69,14 @@ fn dropped(s: &mut State, target: &'static str, files: &[PathBuf]) {
 fn picked(s: &mut State, files: Vec<PathBuf>) {
     println!("open-files {}", names(&files));
     s.last = Some(("dialog", files));
+    s.rejected_msg = None;
+    s.action_status = None;
+    s.dialog_note = None;
+}
+
+fn opened_with_app(s: &mut State, files: &[PathBuf]) {
+    println!("open-with-app {}", names(files));
+    s.last = Some(("app", files.to_vec()));
     s.rejected_msg = None;
     s.action_status = None;
     s.dialog_note = None;
@@ -123,6 +136,8 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         msg.clone()
     } else if let Some(note) = &s.dialog_note {
         note.clone()
+    } else if let Some(("app", files)) = &s.last {
+        format!("Opened with app ({} files): {}", files.len(), names(files))
     } else if let Some(("dialog", files)) = &s.last {
         format!("Opened {} files: {}", files.len(), names(files))
     } else if let Some((target, files)) = &s.last {
@@ -211,12 +226,20 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
 }
 
 fn main() {
-    rune::run(AppSpec::<State> {
-        scenes: &[("dropped", |s| {
-            s.last = Some(("anything", vec![PathBuf::from("photo.png"), PathBuf::from("notes.txt")]));
-        })],
+    let spec = AppSpec::<State> {
+        scenes: &[
+            ("dropped", |s| {
+                s.last = Some(("anything", vec![PathBuf::from("photo.png"), PathBuf::from("notes.txt")]));
+            }),
+            ("opened-with-app", |s| {
+                s.last = Some(("app", vec![PathBuf::from("archive.torrent"), PathBuf::from("readme.md")]));
+            }),
+        ],
         ..AppSpec::new("Drop Files", (680.0, 420.0), State::default, view)
-    });
+    };
+    App::new(spec)
+        .on_open_files(|s, files, _| opened_with_app(s, files))
+        .run();
 }
 
 #[cfg(test)]
@@ -356,5 +379,24 @@ mod tests {
         rt.frame(6.0 / 60.0);
         assert_eq!(rt.state.last, Some(("dialog", files)));
         assert_eq!(rt.state.dialog_note, None);
+    }
+
+    #[test]
+    fn opened_with_app_updates_status_and_file_controls() {
+        let mut rt = run();
+        let files = vec![PathBuf::from("/docs/archive.torrent"), PathBuf::from("/docs/readme.md")];
+        rt.update(|s, _| opened_with_app(s, &files));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.last, Some(("app", files)));
+        let tree = rt.accessibility_tree();
+        let has_status = tree.nodes.iter().any(|(_, n)| {
+            n.author_id() == Some("status")
+                && n.label() == Some("Opened with app (2 files): archive.torrent, readme.md")
+        });
+        assert!(has_status, "status must report files opened with the app");
+        let has_open_btn = tree.nodes.iter().any(|(_, n)| {
+            n.role() == rune::accesskit::Role::Button && n.label() == Some("Open archive.torrent")
+        });
+        assert!(has_open_btn, "Open button for app-opened file must appear in accessibility tree");
     }
 }

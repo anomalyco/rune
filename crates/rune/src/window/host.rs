@@ -87,8 +87,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) ends_app: bool,
     /// Whether a turn is inside `App::turn_scope` now.
     pub(in crate::window) turn: any_host::Turn,
-    /// Its place among the windows receiving links (`App::on_open_url`).
-    pub(in crate::window) _open_urls: Option<crate::open_url::incoming::Listening>,
+    /// Its place among the windows receiving links (`App::on_open_url`) and files (`App::on_open_files`).
+    pub(in crate::window) _incoming: crate::open_url::incoming::Listeners,
     pub(in crate::window) release_gpu: bool,
     pub(in crate::window) prewarm_effects: crate::PrewarmEffects,
     pub(in crate::window) open_at_start: bool,
@@ -228,7 +228,7 @@ struct HostInit {
     gpu_pool: Rc<RefCell<Weak<Gpu>>>,
     wayland: bool,
     keeps_loop: bool,
-    open_urls: Option<crate::open_url::incoming::Listening>,
+    incoming: crate::open_url::incoming::Listeners,
 }
 
 impl Host {
@@ -238,7 +238,7 @@ impl Host {
         args: Args,
         cx: super::Start<'_>,
         keeps_loop: bool,
-        open_urls: Option<crate::open_url::incoming::Listening>,
+        incoming: crate::open_url::incoming::Listeners,
     ) -> Self {
         let WindowSpec { mut app, options, key, on_created } = window_spec;
         let args = app.resolve_args(args);
@@ -315,7 +315,7 @@ impl Host {
             gpu_pool,
             wayland,
             keeps_loop,
-            open_urls,
+            incoming,
         })
     }
 
@@ -357,7 +357,7 @@ impl Host {
             gpu_pool,
             wayland,
             keeps_loop,
-            open_urls,
+            incoming,
         } = init;
         let titlebar = titlebar.filter(|_| !options.borderless);
         // `RUNE_OPEN_INACTIVE`: a tool's launch (an accessibility probe, a capture) leaves the user's
@@ -444,7 +444,7 @@ impl Host {
             chores: Default::default(),
             ends_app: false,
             turn: any_host::Turn::Between,
-            _open_urls: open_urls,
+            _incoming: incoming,
             release_gpu,
             prewarm_effects,
             open_at_start,

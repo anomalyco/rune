@@ -409,8 +409,8 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
         crate::tooling::finish_start(crate::tooling::headless_window_spec(spec.app, spec.options, args, scale));
         return None;
     }
-    let open_urls = crate::open_url::incoming::listen(&spec.app);
-    Some(Box::new(Host::new(spec, handle, args, cx, keeps_loop, open_urls)))
+    let incoming = crate::open_url::incoming::listen(&spec.app);
+    Some(Box::new(Host::new(spec, handle, args, cx, keeps_loop, incoming)))
 }
 
 impl ApplicationHandler<WakeEvent> for Windows {

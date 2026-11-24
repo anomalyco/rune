@@ -129,6 +129,13 @@ pub enum ScriptEvent {
     Reopen,
     /// `{"open_url": …}`: a link the system opened with the app (`App::on_open_url`).
     OpenUrl(String),
+    /// `{"open_files": […]}`: files the system opened with the app (`App::on_open_files`).
+    ///
+    /// ```ignore
+    /// // JSON script event: {"t": 0.1, "open_files": ["a.torrent", "b.torrent"]}
+    /// matches!(event, ScriptEvent::OpenFiles(ref paths) if paths.len() == 2)
+    /// ```
+    OpenFiles(Vec<std::path::PathBuf>),
     /// `{"type": "resize", "dw": …, "dh": …, "dur": …}`: a person resizing the window, one step
     /// a frame, (dw, dh) points from its size when the resize began.
     Resize { dw: f32, dh: f32 },

@@ -28,6 +28,7 @@ pub(super) trait HeadlessApp {
     fn with_driver(&mut self, f: &mut dyn FnMut(&mut RuntimeCore, &mut dyn AppDriver));
     fn run_reopen(&mut self);
     fn run_open_url(&mut self, url: &str);
+    fn run_open_files(&mut self, paths: &[std::path::PathBuf]);
     fn drain_updates(&mut self, menus: &mut crate::native_menu::MenuGuard);
     fn has_compositor(&self) -> bool;
     fn compositor_features(&self) -> wgpu::Features;
@@ -68,6 +69,7 @@ pub(super) struct TypedHeadlessApp<S: 'static> {
     pub(super) comp: Option<Box<dyn Compositor<S>>>,
     pub(super) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(super) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
+    pub(super) on_open_files: Option<crate::open_url::incoming::OnOpenFiles<S>>,
 }
 
 impl<S: 'static> HeadlessApp for TypedHeadlessApp<S> {
@@ -82,6 +84,10 @@ impl<S: 'static> HeadlessApp for TypedHeadlessApp<S> {
     }
     fn run_open_url(&mut self, url: &str) {
         if let Some(f) = self.on_open_url { self.rt.update(|s, tx| f(s, url, tx)); }
+    }
+    fn run_open_files(&mut self, paths: &[std::path::PathBuf]) {
+        if paths.is_empty() { return; }
+        if let Some(f) = self.on_open_files { self.rt.update(|s, tx| f(s, paths, tx)); }
     }
     fn drain_updates(&mut self, menus: &mut crate::native_menu::MenuGuard) {
         for f in self.shared.take_updates() {
@@ -123,3 +129,7 @@ impl<S: 'static> HeadlessApp for TypedHeadlessApp<S> {
         gate.frame(&mut self.rt, awake);
     }
 }
+
+#[cfg(test)]
+#[path = "app_tests.rs"]
+mod tests;
