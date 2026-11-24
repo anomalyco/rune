@@ -33,6 +33,9 @@ pub(crate) struct FrameState {
     pub(super) live_subscriptions: HashMap<live_latch::SourceKey, Arc<crate::live::Subscription>>,
     /// Events whose handler said `Tx::live_only`, and so didn't commit.
     pub(in crate::runtime) live_only_skips: u64,
+    /// Incremented once per frame when `latch_live` mutates an in-scene, non-secure `LiveText`
+    /// in place without a commit, so accessibility stamps notice in O(1).
+    pub(crate) live_text_gen: u64,
     last_dt: f64,
     /// Record `events` without a trace: headless runs. Live hosts turn it off.
     record_events: bool,
@@ -64,6 +67,7 @@ impl FrameState {
             live_clock: Arc::new(()),
             live_subscriptions: HashMap::default(),
             live_only_skips: 0,
+            live_text_gen: 0,
             #[cfg(debug_assertions)]
             live_only_check: true,
             #[cfg(debug_assertions)]

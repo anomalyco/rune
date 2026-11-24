@@ -39,6 +39,7 @@ pub(super) fn sub_link(sub: u64) -> Option<usize> { (sub >= LINK_BASE).then(|| (
 #[derive(Clone, PartialEq, Default)]
 struct Stamp {
     commits: u64,
+    live_texts: u64,
     scrolls: u64,
     text_fills: u64,
     text_settled: u64,
@@ -532,6 +533,7 @@ impl RuntimeCore {
         let focus = self.kbd.focus.path().map_or(0, hash_str) ^ self.link_focus().map_or(0, |k| k as u64 + 1) << 48;
         Stamp {
             commits: self.commit.commits,
+            live_texts: self.frame.live_text_gen,
             scrolls,
             text_fills,
             text_settled,

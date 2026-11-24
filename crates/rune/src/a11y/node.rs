@@ -79,7 +79,10 @@ impl RuntimeCore {
             if !secure {
                 match long_key {
                     Some(k) => (k, t.content.len()).hash(&mut h),
-                    None => t.content.hash(&mut h),
+                    None => {
+                        t.content.hash(&mut h);
+                        if t.source.is_some() { t.source_text().hash(&mut h); }
+                    }
                 }
             }
             (t.redacted, t.selectable, t.cold.on_link.is_some(), t.cold.on_link_secondary.is_some(), t.cold.links.len()).hash(&mut h);
@@ -172,7 +175,7 @@ impl RuntimeCore {
             let n = &self.tree.nodes[j];
             let own = if n.a11y.hidden || n.vis.opacity <= 0.01 || n.is_secure() { 0 }
                 else if let Some(l) = n.label.as_deref() { hash_str(l) }
-                else { n.text.as_deref().filter(|_| n.input.is_none()).map_or(0, |t| hash_str(&t.content)) };
+                else { n.text.as_deref().filter(|_| n.input.is_none()).map_or(0, |t| hash_str(t.source_text())) };
             sub[j] = mix(sub[j], own);
             if let Some(p) = n.parent { sub[p] = mix(sub[p], sub[j]); }
         }
