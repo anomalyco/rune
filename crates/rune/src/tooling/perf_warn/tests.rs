@@ -37,6 +37,66 @@ fn a_short_virtualize_list_stays_quiet() {
 }
 
 #[test]
+fn reveal_selected_on_virtual_rows_warns_once() {
+    let _clock = FakeStallClock::new();
+    take_log();
+    fn view(_: &u32, _: &mut Cx<u32>) -> El {
+        col().size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col().key("vr-reveal").w_full().growth(GrowthSpec::default()).reveal_selected(true)
+                .virtual_rows(100, 20.0, |_: &u32, i| format!("r{i}").into(), |n: &u32, i| {
+                    row().w_full().h(20.0).focus_selected(i == *n as usize)
+                }),
+        )
+    }
+    let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|n, _| *n = 60);
+    rt.frame(1.0 / 60.0);
+    let log = take_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(
+        log[0].contains("vr-reveal")
+            && log[0].contains("scroll_into_view")
+            && log[0].contains("tests.rs")
+            && !log[0].contains("virtual_rows.rs"),
+        "{}",
+        log[0]
+    );
+}
+
+#[test]
+fn virtual_rows_without_reveal_selected_and_virtualize_with_reveal_selected_stay_quiet() {
+    let _clock = FakeStallClock::new();
+    take_log();
+    fn vr_view(_: &u32, _: &mut Cx<u32>) -> El {
+        col().size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col().key("vr-quiet").w_full().growth(GrowthSpec::default())
+                .virtual_rows(100, 20.0, |_: &u32, i| format!("r{i}").into(), |n: &u32, i| {
+                    row().w_full().h(20.0).focus_selected(i == *n as usize)
+                }),
+        )
+    }
+    let mut rt = Runtime::new(0u32, vr_view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|n, _| *n = 60);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(take_log(), Vec::<String>::new());
+
+    fn vz_view(n: &u32, _: &mut Cx<u32>) -> El {
+        let sel = *n as usize;
+        col().size(200.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).child(
+            col().key("vz-reveal").w_full().growth(GrowthSpec::default()).virtualize(20.0).reveal_selected(true)
+                .children((0..50).map(|i| row().key(format!("r{i}")).w_full().h(20.0).focus_selected(i == sel))),
+        )
+    }
+    let mut rt = Runtime::new(0u32, vz_view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|n, _| *n = 40);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(take_log(), Vec::<String>::new());
+}
+
+#[test]
 fn a_callback_blocked_past_its_cpu_time_warns_once_per_site() {
     let _clock = FakeStallClock::new();
     take_log();
