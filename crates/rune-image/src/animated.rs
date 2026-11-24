@@ -123,13 +123,13 @@ pub(super) fn decode(bytes: &[u8]) -> Option<Result<Decoded, ImageError>> {
     if chains.len() < 2 { return (!chains.is_empty()).then(|| still(chains)); }
     let mut chains = chains.into_iter();
     let first = chains.next().expect("two frames or more");
-    Some(Ok(Decoded { mips: first, motion: Some(Box::new(Motion { frames: chains.collect(), ends, plays })) }))
+    Some(Ok(Decoded { mips: first, motion: Some(Box::new(Motion { frames: chains.collect(), ends, plays })), intrinsic: None }))
 }
 
 /// The first frame alone, for an animation too large to hold.
 fn still(chains: Vec<Vec<Mip>>) -> Result<Decoded, ImageError> {
     let first = chains.into_iter().next().ok_or_else(|| ImageError("animation has no frames".into()))?;
-    Ok(Decoded { mips: first, motion: None })
+    Ok(Decoded { mips: first, motion: None, intrinsic: None })
 }
 
 fn finite(count: image::metadata::LoopCount) -> Option<u32> {

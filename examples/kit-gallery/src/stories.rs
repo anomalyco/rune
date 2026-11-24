@@ -14,6 +14,7 @@ mod display;
 
 pub(crate) use diff::{custom_diff, sample_diff};
 mod icons;
+pub(crate) mod images;
 mod inputs;
 mod markdown;
 mod overlays;
@@ -62,6 +63,9 @@ macro_rules! stories {
                 s.table = TableState::new().key("wide-table");
                 s.table.hide_column("region");
                 s.table_menu = None;
+            }
+            if $id == "rune-image--decode" {
+                s.images.enter(true);
             }
             s.tree_menu = None;
             s.tree_action = None;
@@ -275,6 +279,7 @@ stories! {
     "rune-table--wide" => table::wide,
     "rune-diff--localized" => diff::localized,
     "rune-diff--custom" => diff::custom,
+    "rune-image--decode" => images::decode,
 }
 
 fn popup_list_composer(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {

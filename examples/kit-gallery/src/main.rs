@@ -59,6 +59,8 @@ pub struct G {
     pub diff: rune_kit::diff::DiffState,
     pub diff_custom: rune_kit::diff::DiffState,
     pub diff_comment: Option<rune_kit::diff::LineRange>,
+    /// The image decode story's cache and sample handles.
+    pub images: stories::images::ImageDemo,
     pub neutral: bool,
     pub palette: bool,
     /// `--reduced-motion`: the runtime's reduced-motion mode.
@@ -116,6 +118,7 @@ fn init() -> G {
         diff: stories::sample_diff(),
         diff_custom: stories::custom_diff(),
         diff_comment: None,
+        images: stories::images::ImageDemo::default(),
         neutral: rune::extra_args().iter().any(|a| a == "neutral"),
         palette: rune::extra_args().iter().any(|a| a == "palette"),
         reduced: rune::extra_args().iter().any(|a| a == "--reduced-motion"),
@@ -208,6 +211,13 @@ fn view(s: &G, cx: &mut Cx<G>) -> El {
 fn main() {
     rune::run(AppSpec {
         scenes: stories::SCENES,
+        setup: Some(|s, waker| s.images.set_waker(waker)),
+        poll: Some(|s, _, _| {
+            if s.story == "index" && !s.images.is_loaded() {
+                s.images.enter(false);
+            }
+            false
+        }),
         fonts: rune_theme_opencode::FONTS,
         families: rune_theme_opencode::FAMILIES,
         ..AppSpec::new("rune-kit gallery", (720.0, 480.0), init, view)

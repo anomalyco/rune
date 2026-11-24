@@ -82,6 +82,8 @@ pub fn start() {
     if input_proof::enabled() { input_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if image_proof::enabled() { image_proof::run(); return; }
+    #[cfg(target_arch = "wasm32")]
+    if image_proof::scaled_enabled() { image_proof::run_scaled(); return; }
     let app = rune::App::new(AppSpec::new("Messages", (390.0, 760.0), State::default, view));
     #[cfg(target_arch = "wasm32")]
     let app = app.on_frame_drawn(|rt| {
