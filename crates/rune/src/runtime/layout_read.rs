@@ -552,14 +552,16 @@ impl RuntimeCore {
         self.report_rects(false, true)
     }
 
-    /// Queues `on_drawn_layout` for elements whose drawn rect moved since it last reported,
-    /// once their own and their ancestors' springs rest. A move its laid-out rect explains is
-    /// layout feedback and falls quiet with the rest of it; one it doesn't (a live value) always
-    /// reports, as scrolling reopens feedback. True when it queued any.
+    /// Queues `on_drawn_layout` for elements whose drawn rect moved or whose display scale
+    /// changed since it last reported, once their own and their ancestors' springs rest. A move
+    /// its laid-out rect explains is layout feedback and falls quiet with the rest of it; one it
+    /// doesn't (a live value) always reports, as scrolling reopens feedback. True when it queued
+    /// any.
     pub(super) fn report_drawn(&mut self) -> bool {
         if !self.tree.has_drawn_layout() && self.commit.drawn_fired_empty() { return false; }
         let mut queued = false;
         let quiet = !self.layout_feedback_open();
+        let scale = self.env.scale.to_bits();
         let last = self.commit.take_drawn_fired();
         let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         for i in 0..self.tree.nodes.len() {
@@ -573,19 +575,21 @@ impl RuntimeCore {
             }
             let laid = self.tree.static_layout(i);
             let old = last.get(&id).copied();
-            if !moved(old.map(|o| o.0), Some(drawn)) {
-                fired.insert(id, old.unwrap_or((drawn, laid)));
+            let rect_moved = moved(old.map(|o| o.0), Some(drawn));
+            let scale_changed = old.is_some_and(|o| o.2 != scale);
+            if !rect_moved && !scale_changed {
+                fired.insert(id, old.unwrap_or((drawn, laid, scale)));
                 continue;
             }
-            let external = old.is_some_and(|(_, l)| !moved(Some(l), Some(laid)));
+            let external = rect_moved && old.is_some_and(|(_, l, _)| !moved(Some(l), Some(laid)));
             if quiet && !external {
-                fired.insert(id, (drawn, laid));
+                fired.insert(id, (drawn, laid, scale));
                 continue;
             }
             let path = n.path.clone();
             self.frame.queue.retain(|a| !matches!(a, Action::DrawnLayout(p, ..) if *p == path));
             self.frame.queue.push(Action::DrawnLayout(path, drawn, external));
-            fired.insert(id, (drawn, laid));
+            fired.insert(id, (drawn, laid, scale));
             queued = true;
         }
         self.commit.set_drawn_fired(fired);
@@ -621,12 +625,13 @@ impl RuntimeCore {
             })
     }
 
-    /// Queues `on_layout`, or `on_screen_layout` when `screen`, for rects that moved; true when
-    /// it queued any.
+    /// Queues `on_layout`, or `on_screen_layout` when `screen`, for rects that moved (or, for
+    /// `on_layout`, whose display scale changed); true when it queued any.
     fn report_rects(&mut self, quiet: bool, screen: bool) -> bool {
         let last = self.commit.take_layout_fired(screen);
         // On screen, the view's points are the window's over its zoom.
         let ((ox, oy), k) = if screen { (self.host.window_origin(), self.host.zoom()) } else { ((0.0, 0.0), 1.0) };
+        let scale = self.env.scale.to_bits();
         let mut fired = HashMap::with_capacity_and_hasher(last.len(), Default::default());
         let mut queued = false;
         for i in 0..self.tree.nodes.len() {
@@ -635,7 +640,9 @@ impl RuntimeCore {
             let id = n.id;
             let [x, y, w, h] = self.laid_out(&self.tree.nodes, i);
             let r = [x * k + ox, y * k + oy, w * k, h * k];
-            if !quiet && moved(last.get(&id).copied(), Some(r)) {
+            let old = last.get(&id).copied();
+            let scale_changed = !screen && old.is_some_and(|(_, s)| s != scale);
+            if !quiet && (moved(old.map(|(r, _)| r), Some(r)) || scale_changed) {
                 let path = self.tree.nodes[i].path.clone();
                 queued = true;
                 if screen {
@@ -645,12 +652,12 @@ impl RuntimeCore {
                 } else {
                     self.frame.queue.push(Action::Layout(path, r));
                 }
-            } else if let Some(old) = last.get(&id).filter(|_| !quiet) {
+            } else if let Some(old) = old.filter(|_| !quiet) {
                 // Unchanged: keep the rect last reported, so drift below the threshold adds up.
-                fired.insert(id, *old);
+                fired.insert(id, old);
                 continue;
             }
-            fired.insert(id, r);
+            fired.insert(id, (r, scale));
         }
         self.commit.set_layout_fired(screen, fired);
         queued

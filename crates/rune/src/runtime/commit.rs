@@ -65,12 +65,12 @@ pub(crate) struct CommitState {
     pub(in crate::runtime) layout_seen: layout_read::LayoutSeen,
     /// What the first commit's view read (`layout_seed`): the next launch's first view starts from it.
     pub(in crate::runtime) layout_first: Option<crate::LayoutSeed>,
-    /// Rect last sent to each element's `El::on_layout`.
-    layout_fired: HashMap<NodeId, [f32; 4]>,
-    /// Rect last sent to each element's `El::on_screen_layout`.
-    screen_fired: HashMap<NodeId, [f32; 4]>,
-    /// (Drawn rect, laid-out rect) last sent to each element's `El::on_drawn_layout`.
-    drawn_fired: HashMap<NodeId, ([f32; 4], [f32; 4])>,
+    /// (Rect, display scale bits) last sent to each element's `El::on_layout`.
+    layout_fired: HashMap<NodeId, ([f32; 4], u32)>,
+    /// (Rect, display scale bits) last sent to each element's `El::on_screen_layout`.
+    screen_fired: HashMap<NodeId, ([f32; 4], u32)>,
+    /// (Drawn rect, laid-out rect, display scale bits) last sent to each element's `El::on_drawn_layout`.
+    drawn_fired: HashMap<NodeId, ([f32; 4], [f32; 4], u32)>,
     /// Whether each element with `El::on_visible` was last on screen.
     visible_fired: HashMap<NodeId, bool>,
     /// Whether layout feedback may still cause a commit (see `layout_read`).
@@ -237,12 +237,12 @@ impl CommitState {
     }
 
     #[inline]
-    pub(in crate::runtime) fn take_layout_fired(&mut self, screen: bool) -> HashMap<NodeId, [f32; 4]> {
+    pub(in crate::runtime) fn take_layout_fired(&mut self, screen: bool) -> HashMap<NodeId, ([f32; 4], u32)> {
         std::mem::take(if screen { &mut self.screen_fired } else { &mut self.layout_fired })
     }
 
     #[inline]
-    pub(in crate::runtime) fn set_layout_fired(&mut self, screen: bool, fired: HashMap<NodeId, [f32; 4]>) {
+    pub(in crate::runtime) fn set_layout_fired(&mut self, screen: bool, fired: HashMap<NodeId, ([f32; 4], u32)>) {
         *(if screen { &mut self.screen_fired } else { &mut self.layout_fired }) = fired;
     }
 
@@ -252,12 +252,12 @@ impl CommitState {
     }
 
     #[inline]
-    pub(in crate::runtime) fn take_drawn_fired(&mut self) -> HashMap<NodeId, ([f32; 4], [f32; 4])> {
+    pub(in crate::runtime) fn take_drawn_fired(&mut self) -> HashMap<NodeId, ([f32; 4], [f32; 4], u32)> {
         std::mem::take(&mut self.drawn_fired)
     }
 
     #[inline]
-    pub(in crate::runtime) fn set_drawn_fired(&mut self, fired: HashMap<NodeId, ([f32; 4], [f32; 4])>) {
+    pub(in crate::runtime) fn set_drawn_fired(&mut self, fired: HashMap<NodeId, ([f32; 4], [f32; 4], u32)>) {
         self.drawn_fired = fired;
     }
 

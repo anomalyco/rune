@@ -1,0 +1,1 @@
+- Layout handlers and `Tx`: added `Tx::scale()` returning the window's display scale in device pixels per view point (including `Cx::zoom`, defaulting to `1.0` on `Tx::default()`), and `El::on_layout`, `El::on_layout_tx`, `El::on_drawn_layout`, and `El::on_drawn_layout_tx` now re-fire once when the display scale changes even if the element's logical point rect is unchanged.

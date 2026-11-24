@@ -27,11 +27,12 @@ pub struct ScrollPos {
 impl El {
     /// Called with this element's laid-out rect `[x, y, w, h]` in window points, after scrolling
     /// (as [`Cx::window_layout`](crate::Cx::window_layout) reads it): once after its first
-    /// layout, then when it moves or resizes by more than half a point, which inside a scroll
-    /// viewport is every frame of a scroll. Never per animation frame: the rect is where layout
-    /// puts the element, not where its spring is on the way there. Each report is a state
-    /// change, so the view runs again, unless the handler says [`Tx::live_only`] (see
-    /// [`El::on_layout_tx`]).
+    /// layout, then when it moves or resizes by more than half a point (which inside a scroll
+    /// viewport is every frame of a scroll), or when the display scale changes (even if its
+    /// logical rect is unchanged; read the new scale from [`Tx::scale`] in
+    /// [`El::on_layout_tx`]). Never per animation frame: the rect is where layout puts the
+    /// element, not where its spring is on the way there. Each report is a state change, so the
+    /// view runs again, unless the handler says [`Tx::live_only`] (see [`El::on_layout_tx`]).
     #[track_caller]
     pub fn on_layout<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4]) + 'static) -> Self {
         self.handlers.on_layout = Some(Rc::new(move |s, r, _| f(downcast::<S>(s), r)));
@@ -39,9 +40,10 @@ impl El {
         { self.handlers.sites.layout = Some(std::panic::Location::caller()); }
         self
     }
-    /// [`El::on_layout`] with a [`Tx`]. A handler that only moves live values (a marker beside
-    /// a scrolling row, by its own [`El::live_offset`]) says [`Tx::live_only`], and a scroll
-    /// runs no view.
+    /// [`El::on_layout`] with a [`Tx`]. Read [`Tx::scale`] for backing-pixel sizing when the
+    /// element resizes or the display scale changes. A handler that only moves live values (a
+    /// marker beside a scrolling row, by its own [`El::live_offset`]) says [`Tx::live_only`],
+    /// and a scroll runs no view.
     ///
     /// ```ignore
     /// .on_layout_tx(|s: &mut Board, [_, y, _, _], tx| {
@@ -74,7 +76,9 @@ impl El {
     /// [`El::live_rect`] and [`El::scale`], so an element on a zoomed canvas reports where it
     /// shows (the rect hit tests use, and [`ElementInfo::rect`](crate::ElementInfo)). It runs
     /// once after the element is first drawn, then when that rect moves by more than half a
-    /// point, including on every frame a live value moves it (a camera pan, with no commit). A
+    /// point—including on every frame a live value moves it (a camera pan, with no commit)—or
+    /// when the display scale changes (read the scale from [`Tx::scale`] in
+    /// [`El::on_drawn_layout_tx`]). A
     /// spring moving it, its own or an ancestor's, reports where it comes to rest, as
     /// `on_layout` does. Its handler runs on the next frame. Keep it to the few elements
     /// something follows (a selection a toolbar floats over), not every node on a canvas: each

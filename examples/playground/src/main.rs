@@ -233,6 +233,60 @@ fn device_count(s: &Prefs, cx: &mut Cx<Prefs>) -> El {
         .child(step("more", "+", |s| s.devices.push("New device")))
 }
 
+/// The "Layout/Display scale" story: a fixed-point surface whose `on_layout_tx` computes its
+/// backing pixel size from `tx.scale()` and re-fires whenever display scale or zoom changes.
+struct ScaleReadout {
+    size_pt: [f32; 2],
+    scale: f32,
+    zoom: f32,
+    reports: usize,
+}
+
+fn scale_readout_init() -> ScaleReadout {
+    ScaleReadout { size_pt: [0.0, 0.0], scale: 1.0, zoom: 1.0, reports: 0 }
+}
+
+const ZOOM_STEPS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
+
+fn scale_readout_view(s: &ScaleReadout, cx: &mut Cx<ScaleReadout>) -> El {
+    cx.zoom(s.zoom);
+    let t = tok::theme(cx.system_dark());
+    let accent = tok::accent(0, cx.system_dark());
+    let px_w = (s.size_pt[0] * s.scale).round() as u32;
+    let px_h = (s.size_pt[1] * s.scale).round() as u32;
+    let zoom_btn = |key: &'static str, label: &'static str, z: f32| {
+        let on = (s.zoom - z).abs() < 1e-3;
+        row().key(key).h(26.0).px(10.0).center().radius(radius::SM)
+            .fill(if on { accent } else { t.control_track })
+            .hover(if on { accent } else { t.hover })
+            .child(text(label).font(type_::LABEL).color(if on { Color::WHITE } else { t.text }))
+            .focusable(true).role("button").label(format!("Zoom {label}"))
+            .on_press(move |s: &mut ScaleReadout| s.zoom = z)
+    };
+    col().w_full().h_full().center().gap(12.0)
+        .child(
+            col().key("pixel-surface").size(220.0, 120.0).center().gap(4.0)
+                .radius(radius::MD).fill(t.card).outline(1.0, 0.0, t.card_border)
+                .on_layout_tx(|s: &mut ScaleReadout, [_, _, w, h], tx| {
+                    s.size_pt = [w, h];
+                    s.scale = tx.scale();
+                    s.reports += 1;
+                })
+                .child(text(format!("{px_w} × {px_h} px")).font(type_::TITLE).color(t.text))
+                .child(text(format!(
+                    "{:.0} × {:.0} pt @ {:.2}× · {} report{}",
+                    s.size_pt[0], s.size_pt[1], s.scale, s.reports, if s.reports == 1 { "" } else { "s" }
+                )).font(type_::LABEL).color(t.text_secondary)),
+        )
+        .child(
+            row().gap(6.0).center_y()
+                .child(zoom_btn("zoom-100", "100%", 1.0))
+                .child(zoom_btn("zoom-125", "125%", 1.25))
+                .child(zoom_btn("zoom-150", "150%", 1.5))
+                .child(zoom_btn("zoom-200", "200%", 2.0)),
+        )
+}
+
 /// R on the upload: start over, then pause part way and pick up again, on the logical clock.
 fn upload_replay(u: &mut Upload, play: &mut Play<'_, Upload>) {
     u.running = true;
@@ -259,6 +313,16 @@ fn main() {
                     s.devices = vec!["Studio desk in the back office", "Travel laptop (borrowed for the conference)", "Kitchen tablet"];
                 })
                 .story(Story::new("Lists/Every device", every_device, devices).stage(Stage::Scroll))
+                .story(
+                    Story::new("Layout/Display scale", scale_readout_init, scale_readout_view)
+                        .trigger('z', "Cycle zoom", |s, _| {
+                            let i = ZOOM_STEPS.iter().position(|z| (s.zoom - z).abs() < 1e-3).unwrap_or(0);
+                            s.zoom = ZOOM_STEPS[(i + 1) % ZOOM_STEPS.len()];
+                        })
+                        .variant("100% zoom", |_| {})
+                        .variant("150% zoom", |s| s.zoom = 1.5)
+                        .variant("200% zoom", |s| s.zoom = 2.0),
+                )
                 .story(Story::new("Windows/Preferences", init, view).stage(Stage::Fill))
                 .story(
                     Story::new("Progress/Upload", upload_init, upload_view)
