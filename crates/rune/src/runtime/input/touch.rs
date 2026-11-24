@@ -97,6 +97,14 @@ impl RuntimeCore {
         self.pointer.touching()
     }
 
+    /// Whether the active touch already entered `Mode::Menu` (long press), so lifting it does
+    /// nothing and must not activate DOM focus.
+    #[inline]
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn touch_in_menu(&self) -> bool {
+        self.pointer.touch.finger.as_ref().is_some_and(|f| f.mode == Mode::Menu)
+    }
+
     fn touch_down(&mut self, app: &mut dyn AppDriver, id: u64, x: f32, y: f32, time: f64) {
         if self.pointer.touch.finger.is_some() { return; }
         let scroll = self.touch_scroll_start(x, y);

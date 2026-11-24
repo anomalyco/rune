@@ -907,3 +907,77 @@ fn ctrl_wheel_line_delta_uses_chrome_notch_step_and_keeps_pixel_delta_scale() {
     assert!((page.delta - 0.2).abs() < 1e-5, "page-scroll dy does not inflate Ctrl+wheel zoom, got {}", page.delta);
     assert!((zero_lines.delta - 0.2).abs() < 1e-5, "zero scroll lines still zooms by 1.2x per tick, got {}", zero_lines.delta);
 }
+
+#[test]
+fn web_touch_end_does_not_activate_while_popup_menu_is_open_or_touch_ended_in_menu() {
+    #[derive(Default)]
+    struct S { edit: crate::TextEdit, secondary: u32 }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col().size(240.0, 200.0)
+            .child(crate::text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("editor").label("Editor").size(200.0, 32.0).on_edit(|s: &mut S| &mut s.edit))
+            .child(crate::text("Custom").key("custom").size(120.0, 32.0)
+                .on_secondary_press(|s: &mut S, _, _| { s.secondary += 1; }))
+            .child(crate::text("Menu").key("open_menu").size(120.0, 32.0)
+                .on_press_tx(|_: &mut S, tx| {
+                    tx.popup_menu(crate::PopupMenu::new().item(crate::PopupItem::new("a", "A")), "open_menu", |_: &mut S, _, _| {});
+                }))
+    }
+    let mut rt = Runtime::new(S::default(), view, (240.0, 200.0), Env::default());
+    rt.frame(0.0);
+
+    // 1. Long press on a focused text field opens field_menu and enters Mode::Menu.
+    let (ex, ey) = rt.find("editor").unwrap();
+    rt.touch(1, crate::TouchPhase::Started, ex, ey, 0.0);
+    rt.frame(0.0);
+    assert!(rt.core().web_has_editable_focus());
+    rt.frame(0.6);
+    assert!(rt.popup_menu().is_some(), "long press on text field must open field_menu");
+    assert!(rt.core().touch_in_menu(), "long press must transition touch into Mode::Menu");
+
+    // Lifting the finger must not activate the editing proxy while the menu is open.
+    let ended_in_menu = rt.core().touch_in_menu();
+    rt.touch(1, crate::TouchPhase::Ended, ex, ey, 0.6);
+    let act_app = web_touch_end_activate(rt.core(), false, ended_in_menu);
+    let act_doc = web_touch_end_activate(rt.core(), true, ended_in_menu);
+    rt.frame(0.0);
+    assert!(!act_app.should_activate(rt.core()));
+    assert!(!act_doc.should_activate(rt.core()));
+    assert!(!WebActivate::Always.should_activate(rt.core()), "popup menu must block activation");
+
+    // 2. Once dismissed, a normal short tap on the field activates again in both modes.
+    rt.resolve_popup(None).unwrap();
+    rt.frame(0.0);
+    assert!(rt.popup_menu().is_none());
+    rt.touch(2, crate::TouchPhase::Started, ex, ey, 1.0);
+    assert!(!rt.core().touch_in_menu());
+    let ended_in_menu = rt.core().touch_in_menu();
+    rt.touch(2, crate::TouchPhase::Ended, ex, ey, 1.05);
+    let act_app = web_touch_end_activate(rt.core(), false, ended_in_menu);
+    let act_doc = web_touch_end_activate(rt.core(), true, ended_in_menu);
+    rt.frame(0.0);
+    assert!(act_app.should_activate(rt.core()));
+    assert!(act_doc.should_activate(rt.core()));
+
+    // 3. Long press on a custom secondary-press element (no PopupMenu) still ends in Mode::Menu
+    // and suppresses touch-end activation.
+    let (cx, cy) = rt.find("custom").unwrap();
+    rt.touch(3, crate::TouchPhase::Started, cx, cy, 2.0);
+    rt.frame(0.6);
+    assert_eq!(rt.state.secondary, 1);
+    assert!(rt.popup_menu().is_none());
+    assert!(rt.core().touch_in_menu());
+    let ended_in_menu = rt.core().touch_in_menu();
+    rt.touch(3, crate::TouchPhase::Ended, cx, cy, 2.6);
+    assert!(!web_touch_end_activate(rt.core(), false, ended_in_menu).should_activate(rt.core()));
+
+    // 4. A normal tap whose press handler opens a PopupMenu suppresses post-frame activation.
+    let (mx, my) = rt.find("open_menu").unwrap();
+    rt.touch(4, crate::TouchPhase::Started, mx, my, 3.0);
+    let ended_in_menu = rt.core().touch_in_menu();
+    rt.touch(4, crate::TouchPhase::Ended, mx, my, 3.05);
+    let act = web_touch_end_activate(rt.core(), false, ended_in_menu);
+    rt.frame(0.0);
+    assert!(rt.popup_menu().is_some());
+    assert!(!act.should_activate(rt.core()));
+}

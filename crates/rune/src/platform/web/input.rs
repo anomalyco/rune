@@ -608,16 +608,17 @@ impl Running {
             // On a canvas as tall as its content the browser takes vertical pans and cancels the
             // touch; taps and horizontal drags stay Rune's.
             WindowEvent::Touch(touch) => {
+                let ended_in_menu = matches!(touch.phase, TouchPhase::Ended) && self.app.rt().touch_in_menu();
                 self.app.touch(touch);
                 // A tap is a user activation: links, the clipboard and focus act before the handler
-                // returns. In a page only a tap that left something focused needs it; anything else
-                // would focus the canvas and drop the reader's selection.
+                // returns. Lifting the finger after a long press opened a menu leaves DOM focus in
+                // the menu; in a page only a tap that left something focused needs activation.
                 if matches!(touch.phase, TouchPhase::Ended) {
-                    activate = if !self.input.document || self.app.rt().has_focus() {
-                        crate::input::host_events::WebActivate::Always
-                    } else {
-                        crate::input::host_events::WebActivate::Never
-                    };
+                    activate = crate::input::host_events::web_touch_end_activate(
+                        self.app.rt(),
+                        self.input.document,
+                        ended_in_menu,
+                    );
                     immediate = true;
                 }
             }
