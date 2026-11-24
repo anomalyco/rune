@@ -107,6 +107,7 @@ pub struct App<S: 'static> {
     pub(crate) on_ready: Option<OnWindow>,
     pub(crate) on_display_close: Option<OnDisplayClose>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
+    pub(crate) on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     pub(crate) on_frame_drawn: Option<crate::frame::encoded::OnFrameDrawn<S>>,
     /// `App::layout_seed`'s seed and keeper; only desktop windows use them.
     #[cfg_attr(any(target_arch = "wasm32", target_os = "ios", target_os = "android"), allow(dead_code))]
@@ -174,6 +175,7 @@ impl<S: 'static> App<S> {
             on_ready: None,
             on_display_close: None,
             on_frame_encoded: None,
+            on_frame_presented: None,
             on_frame_drawn: None,
             layout_seed: None,
             keep_layout: None,
@@ -845,6 +847,38 @@ impl<S: 'static> App<S> {
     /// multi-window headless runs and the web never call it.
     pub fn on_frame_encoded(mut self, f: impl FnMut(&crate::FrameEncoded) + 'static) -> Self {
         self.on_frame_encoded = Some(Box::new(f));
+        self
+    }
+
+    /// Runs on the UI thread in submission order once a `Drawn` frame actually reaches the screen
+    /// (or is skipped by the system, reported as
+    /// [`FramePresented::presented_at`](crate::FramePresented::presented_at) returning `None`).
+    ///
+    /// [`FramePresented::seq`](crate::FramePresented::seq) matches
+    /// [`FrameEncoded::seq`](crate::FrameEncoded::seq) for the same `Drawn` frame, and
+    /// `on_frame_encoded` always runs before `on_frame_presented` for a given sequence number.
+    /// Pair them to measure real input-to-photon latency or detect missed vsyncs against
+    /// [`FrameEncoded::presents_at`](crate::FrameEncoded::presents_at).
+    ///
+    /// Only platforms with reliable actual presentation timestamps call it (currently macOS
+    /// Metal, via `MTLDrawable::addPresentedHandler`). Windows, Linux, the web, overlays, and
+    /// headless runs never call it, matching
+    /// [`FrameEncoded::presents_at`](crate::FrameEncoded::presents_at). Without it, no layer
+    /// hook is attached and each frame pays only an `Option` check; once in-flight drawables
+    /// finish presenting, the watch clears automatically so an idle window never wakes or draws.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// let spec = AppSpec::new("Demo", (320.0, 240.0), || (), |_, _| el());
+    /// App::new(spec)
+    ///     .on_frame_presented(|p| {
+    ///         let _ = (p.seq(), p.window(), p.presented_at());
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn on_frame_presented(mut self, f: impl FnMut(&crate::FramePresented) + 'static) -> Self {
+        self.on_frame_presented = Some(Box::new(f));
         self
     }
 

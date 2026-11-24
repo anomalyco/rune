@@ -85,7 +85,7 @@ impl FrameEncoded {
 pub(crate) struct FrameReports(Option<Reporter>);
 
 struct Reporter {
-    hook: OnFrameEncoded,
+    hook: Option<OnFrameEncoded>,
     window: Option<Rc<str>>,
     seq: u64,
     refresh_hz: Option<f64>,
@@ -93,14 +93,24 @@ struct Reporter {
 
 impl FrameReports {
     pub(crate) fn new(hook: Option<OnFrameEncoded>, window: Option<&str>) -> Self {
-        Self(hook.map(|hook| Reporter { hook, window: window.map(Rc::from), seq: 0, refresh_hz: None }))
+        Self::with_presented_seq(hook, false, window)
     }
 
-    /// The time to report a `Drawn` frame at, taken only when there's a hook.
-    pub(crate) fn stamp(&self) -> Option<Instant> { self.0.as_ref().map(|_| crate::time::now()) }
+    /// Creates frame reporting, also numbering frames when `track_seq` is true (for
+    /// `App::on_frame_presented`) without stamping encode times or reading refresh rates when no
+    /// `on_frame_encoded` hook is registered.
+    pub(crate) fn with_presented_seq(hook: Option<OnFrameEncoded>, track_seq: bool, window: Option<&str>) -> Self {
+        let active = hook.is_some() || track_seq;
+        Self(active.then(|| Reporter { hook, window: window.map(Rc::from), seq: 0, refresh_hz: None }))
+    }
 
-    /// Whether anyone reads the reports, so a host asks for what only they need.
-    pub(crate) fn wanted(&self) -> bool { self.0.is_some() }
+    /// The time to report a `Drawn` frame at, taken only when there's an `on_frame_encoded` hook.
+    pub(crate) fn stamp(&self) -> Option<Instant> {
+        self.0.as_ref().filter(|r| r.hook.is_some()).map(|_| crate::time::now())
+    }
+
+    /// Whether `on_frame_encoded` reads the reports, so a host asks for what only it needs.
+    pub(crate) fn wanted(&self) -> bool { self.0.as_ref().is_some_and(|r| r.hook.is_some()) }
 
     /// The display refresh the next reports carry, until it changes.
     pub(crate) fn set_refresh(&mut self, hz: Option<f64>) {
@@ -108,27 +118,46 @@ impl FrameReports {
     }
 
     /// A frame encoded at `at` (from `stamp`), which started at `started` and spent `update_ms`
-    /// of that building.
-    pub(crate) fn drawn(&mut self, at: Option<Instant>, presents_at: Option<Instant>, started: Instant, update_ms: f64) {
-        let Some(at) = at else { return };
-        let encode_ms = (at.saturating_duration_since(started).as_secs_f64() * 1000.0 - update_ms).max(0.0);
-        self.report(FrameOutcome::Drawn, at, presents_at, Some((started, update_ms, encode_ms)));
+    /// of that building. Returns this frame's `seq` when either `on_frame_encoded` or
+    /// `on_frame_presented` tracks it.
+    pub(crate) fn drawn(&mut self, at: Option<Instant>, presents_at: Option<Instant>, started: Instant, update_ms: f64) -> Option<u64> {
+        let r = self.0.as_mut()?;
+        let seq = r.seq;
+        if r.hook.is_some() {
+            let at = at?;
+            let encode_ms = (at.saturating_duration_since(started).as_secs_f64() * 1000.0 - update_ms).max(0.0);
+            self.report(FrameOutcome::Drawn, at, presents_at, Some((started, update_ms, encode_ms)));
+        } else {
+            r.seq += 1;
+        }
+        Some(seq)
     }
 
     pub(crate) fn unchanged(&mut self, presents_at: Option<Instant>) {
-        if self.0.is_some() { self.report(FrameOutcome::Unchanged, crate::time::now(), presents_at, None); }
+        let Some(r) = self.0.as_mut() else { return };
+        if r.hook.is_some() {
+            self.report(FrameOutcome::Unchanged, crate::time::now(), presents_at, None);
+        } else {
+            r.seq += 1;
+        }
     }
 
     pub(crate) fn skipped(&mut self) {
-        if self.0.is_some() { self.report(FrameOutcome::Skipped, crate::time::now(), None, None); }
+        let Some(r) = self.0.as_mut() else { return };
+        if r.hook.is_some() {
+            self.report(FrameOutcome::Skipped, crate::time::now(), None, None);
+        } else {
+            r.seq += 1;
+        }
     }
 
     fn report(&mut self, outcome: FrameOutcome, at: Instant, presents_at: Option<Instant>, work: Option<(Instant, f64, f64)>) {
         let Some(r) = &mut self.0 else { return };
+        let Some(hook) = r.hook.as_mut() else { return };
         let (started, update_ms, encode_ms) = (work.map(|w| w.0), work.map(|w| w.1), work.map(|w| w.2));
         let frame = FrameEncoded { at, outcome, window: r.window.clone(), seq: r.seq, presents_at, started, refresh_hz: r.refresh_hz, update_ms, encode_ms };
         r.seq += 1;
-        (r.hook)(&frame);
+        hook(&frame);
     }
 }
 

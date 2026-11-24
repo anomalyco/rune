@@ -2,7 +2,9 @@ use motion_bento_chaos::schedule::{TAP_LEAD, schedule};
 use motion_bento_chaos::{Config, Model};
 use rune::{Env, Runtime};
 
-use super::{State, view};
+use std::time::Duration;
+
+use super::{PresentTelemetry, State, view};
 use motion_bento_chaos::look::grid;
 
 /// Taps every scheduled action's key the way the headless script does, and checks the window's
@@ -42,4 +44,24 @@ fn script_taps_reach_the_same_state_as_the_schedule() {
             );
         }
     }
+}
+
+#[test]
+fn present_telemetry_correlates_latency_and_skipped_drawables() {
+    let base = rune::time::now();
+    let mut telemetry = PresentTelemetry::default();
+    assert_eq!(telemetry.hud_line(), "present waiting (macOS Metal)");
+    assert_eq!(telemetry.summary_note(), None);
+
+    telemetry.record_encoded(0, base, None);
+    telemetry.record_encoded(1, base + Duration::from_millis(8), None);
+    telemetry.record_encoded(2, base + Duration::from_millis(16), None);
+
+    telemetry.record_presented(0, Some(base + Duration::from_millis(5)));
+    telemetry.record_presented(1, None);
+    telemetry.record_presented(2, Some(base + Duration::from_millis(26)));
+
+    assert!(telemetry.hud_line().contains("skip 1"), "{}", telemetry.hud_line());
+    let note = telemetry.summary_note().expect("summary after landed frames");
+    assert!(note.contains("presented 2 skipped 1"), "{note}");
 }

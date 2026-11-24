@@ -5,6 +5,7 @@ pub(crate) mod host_step;
 #[cfg(feature = "frame-profile")]
 pub(crate) mod live_log;
 pub(crate) mod present_time;
+pub(crate) mod presented;
 #[cfg(target_os = "macos")]
 pub(crate) mod present_worker;
 pub(crate) mod profile;

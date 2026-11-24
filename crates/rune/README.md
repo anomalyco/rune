@@ -1245,6 +1245,14 @@ For an app's own perf log, with nothing changed about how its windows draw:
   moment the window took it from winit elsewhere. Events that pile up between frames keep their own times. It is
   `None` in timers, polls, updates and layout callbacks. The gap from it to the next `Drawn` frame's `at()` is the
   app's input-to-encode latency.
+- **`App::on_frame_presented(|p: &FramePresented| ..)`** (or `WindowSpec::on_frame_presented`) runs on the UI
+  thread in submission order once a `Drawn` frame actually reaches the screen (or is skipped by the system, with
+  `p.presented_at() == None`). `p.seq()` matches `FrameEncoded::seq()` for that `Drawn` frame (and
+  `on_frame_encoded` always runs before `on_frame_presented` for the same `seq`), so apps can measure real
+  input-to-photon latency and detect missed vsyncs against `FrameEncoded::presents_at()`. Called on platforms with
+  reliable actual presentation timestamps (macOS Metal via `MTLDrawable::addPresentedHandler`); Windows, Linux,
+  headless runs, overlays and the web never call it. Without it, no layer hook is attached; once in-flight drawables
+  land, the wake watch clears automatically so an idle window never wakes or draws.
 - **`App::on_frame_drawn(|rt: &Runtime<S>| ..)`** runs on the UI thread after each `Drawn` frame (on desktop
   windows and in the web runner, and not on unchanged or skipped frames) with the runtime as it presented that frame,
   so an app can watch its own motion, query the focused presented element without building the tree

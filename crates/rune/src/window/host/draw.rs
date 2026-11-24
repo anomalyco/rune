@@ -685,12 +685,18 @@ impl FrameHost for WindowFrame<'_> {
                 l.native.pacing = crate::platform::display_link::DisplayLink::retry(&l.window, self.host.frame_wake.clone());
             }
         }
-        self.host.frame_reports.drawn(self.state.encoded, info.presents_at, now, info.update_ms);
+        let frame_seq = self.host.frame_reports.drawn(self.state.encoded, info.presents_at, now, info.update_ms);
         self.host.app.inspect_frame();
         #[cfg(target_os = "macos")]
         let drawable = self.state.drawable;
         #[cfg(not(target_os = "macos"))]
         let drawable = None;
+        #[cfg(target_os = "macos")]
+        if let (Some(frame_seq), Some(drawable_seq)) = (frame_seq, drawable) {
+            self.host.frame_presented.push_and_drain(drawable_seq, frame_seq);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = frame_seq;
         if record_trace_frame(self.host, now, submitted, self.state.target, drawable) {
             return;
         }

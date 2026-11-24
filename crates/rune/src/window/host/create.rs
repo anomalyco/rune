@@ -394,7 +394,7 @@ impl Host {
         let shadow = hook_log.clone().filter(|_| resamples && present.is_some())
             .and_then(|log| crate::platform::macos::window_shape::Shadow::new(&window, log, visible || launcher));
         #[cfg(target_os = "macos")]
-        if self.present_log.is_some() && present.is_none() { eprintln!("rune: trace: this surface reports no present times"); }
+        if self.args.trace.is_some() && present.is_none() { eprintln!("rune: trace: this surface reports no present times"); }
         #[cfg(target_os = "macos")]
         let fn_key = if self.app.rt().modifier_keys() { crate::input::fn_key::FnKey::new(&window) } else { None };
         #[cfg(target_os = "macos")]
@@ -585,6 +585,8 @@ impl Host {
         #[cfg(target_os = "windows")]
         { w.native.slot.reset(); w.native.damage.reset(); }
         drop(w.surface.take());
+        #[cfg(target_os = "macos")]
+        self.frame_presented.reset();
         self.gpu = None;
         self.app.release_compositor_gpu();
         {
