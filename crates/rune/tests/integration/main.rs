@@ -58,6 +58,7 @@ mod opacity_motion;
 mod pinned_scroll;
 mod pixel_scale;
 mod playground_deep;
+mod popup_menu;
 mod playground_folds;
 mod playground_keys;
 mod playground_links;

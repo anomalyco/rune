@@ -29,7 +29,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use winit::window::Window;
 
-use super::{Entry, PopupItem, PopupMenu, Session, Show};
+use super::{PopupEntry, PopupItem, PopupMenu, Session, Show};
 use crate::runtime::Waker;
 
 pub(super) const SUPPORTED: bool = true;
@@ -318,15 +318,15 @@ unsafe fn build(menu: &PopupMenu, ids: &mut Vec<String>) -> Option<OwnedMenu> {
         if hmenu.0.is_null() { return None; }
         for entry in &menu.entries {
             match entry {
-                Entry::Item(item) => {
+                PopupEntry::Item(item) => {
                     let Ok(command) = u16::try_from(ids.len() + 1) else { break };
                     let flags = MF_STRING | if item.enabled { 0 } else { MF_GRAYED } | if item.checked { MF_CHECKED } else { 0 };
                     if AppendMenuW(hmenu.0, flags, usize::from(command), wide(&label(item)).as_ptr()) != 0 {
                         ids.push(item.id.clone());
                     }
                 }
-                Entry::Separator => { AppendMenuW(hmenu.0, MF_SEPARATOR, 0, std::ptr::null()); }
-                Entry::Submenu(title, menu, enabled) => {
+                PopupEntry::Separator => { AppendMenuW(hmenu.0, MF_SEPARATOR, 0, std::ptr::null()); }
+                PopupEntry::Submenu { title, menu, enabled } => {
                     let Some(submenu) = build(menu, ids) else { continue };
                     let flags = MF_STRING | MF_POPUP | if *enabled { 0 } else { MF_GRAYED };
                     if AppendMenuW(hmenu.0, flags, submenu.0 as usize, wide(&escape(title)).as_ptr()) != 0 {
