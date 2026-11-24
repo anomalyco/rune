@@ -462,17 +462,15 @@ pub(super) fn should_commit_rebind(
     polled.is_ok() && !lost
 }
 
-/// Finalizes surface-retry accounting after submission, presentation, and any synchronous GPU
-/// wait. Returns `true` when the device stayed alive (resetting `surface_retries`); returns
-/// `false` when the device was lost so consecutive failed replacements still reach
-/// `SURFACE_TRIES` instead of resetting to zero on every frame.
+/// Finalizes post-present status after submission, presentation, and any synchronous GPU wait.
+/// Returns `true` when the device stayed alive; returns `false` when the device was lost.
+/// Following Chromium's `GpuProcessHost::IncrementCrashCount`, a single healthy frame never resets
+/// `surface_retries` — earlier losses decay only through `FORGIVE_LOSS` (1 per 5 minutes).
 pub(super) fn finalize_present_retries(
     lost: bool,
-    surface_retries: &mut crate::window::surface::SurfaceRetries,
+    _surface_retries: &mut crate::window::surface::SurfaceRetries,
 ) -> bool {
-    if lost { return false; }
-    surface_retries.worked();
-    true
+    !lost
 }
 
 pub(super) fn open_trace_if_needed(host: &mut Host, now: Instant) {

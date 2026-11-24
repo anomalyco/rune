@@ -2179,6 +2179,7 @@ dependencies = [
  "pollster",
  "rune",
  "rune-fx",
+ "rune-gpu",
  "rune-light",
  "rune-motion",
  "wgpu",

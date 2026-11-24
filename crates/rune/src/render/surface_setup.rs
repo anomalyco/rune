@@ -143,6 +143,79 @@ impl Gpu {
         Ok((gpu, value))
     }
 
+    /// Picks a software adapter (`DeviceType::Cpu`, e.g. DX12 WARP on Windows) for repeated
+    /// hardware device-loss fallback, creates a surface via `make_surface`, and runs `setup`.
+    /// Never uses a prewarmed hardware GPU and never falls back to a hardware adapter.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn for_surface_setup_software<'w, T>(
+        wanted: wgpu::Features,
+        presentation_fallback: PresentationFallback,
+        mut make_surface: impl FnMut(
+            &wgpu::Instance,
+            crate::gpu::fallback::Presentation,
+        ) -> Result<wgpu::Surface<'w>, String>,
+        mut setup: impl FnMut(&Gpu, &wgpu::Surface<'w>, Option<Renderer>) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, wgpu::Surface<'w>, T), SurfaceSetupError> {
+        use crate::gpu::fallback::{Action, Failure, Presentation};
+        let (presentation, pres_policy) = presentation_fallback.resolve();
+        let instance = Self::instance_for_presentation(wanted, presentation);
+        let surface = make_surface(&instance, presentation)
+            .map_err(|message| SurfaceSetupError { kind: Failure::SurfaceCreate, message })?;
+        gpu_events::starting();
+        let (gpu, surface, value) = match Self::try_software_setup_on(
+            instance,
+            surface,
+            wanted,
+            |s| Some(s),
+            |gpu, surface| setup(gpu, surface, None),
+        ) {
+            Ok(made) => made,
+            Err(err)
+                if crate::gpu::fallback::decide_with_presentation(
+                    crate::gpu::fallback::Policy::Pinned,
+                    presentation,
+                    pres_policy,
+                    err.kind,
+                ) == Action::SwitchToHwnd =>
+            {
+                let hwnd_instance = Self::switch_to_hwnd_instance(wanted, &err.message);
+                let surface = make_surface(&hwnd_instance, Presentation::PlainHwnd)
+                    .map_err(|message| SurfaceSetupError { kind: Failure::SurfaceCreate, message })?;
+                Self::try_software_setup_on(hwnd_instance, surface, wanted, |s| Some(s), |gpu, surface| setup(gpu, surface, None))?
+            }
+            Err(err) => return Err(err),
+        };
+        Self::log_surface_gpu(&gpu);
+        Ok((gpu, surface, value))
+    }
+
+    /// Parameterized software-adapter setup helper so offscreen GPU tests can verify software
+    /// fallback without opening a native window.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn try_software_setup_on<S, T>(
+        instance: wgpu::Instance,
+        surface: S,
+        wanted: wgpu::Features,
+        surface_ref: impl Fn(&S) -> Option<&wgpu::Surface<'_>>,
+        mut setup: impl FnMut(&Gpu, &S) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, S, T), SurfaceSetupError> {
+        let adapter = Self::pick_software_adapter(&instance, surface_ref(&surface))?;
+        let (device, queue) = Self::create_device_serialized(&adapter, wanted)
+            .map_err(|message| SurfaceSetupError { kind: crate::gpu::fallback::Failure::DeviceCreate, message })?;
+        let draws_surfaces = surface_ref(&surface).is_some();
+        let gpu = Gpu::made(instance, adapter, device, queue, draws_surfaces);
+        match setup(&gpu, &surface) {
+            Ok(value) => {
+                crate::native_surface::note_device(&gpu.device, draws_surfaces);
+                Ok((gpu, surface, value))
+            }
+            Err(err) => {
+                drop((surface, gpu));
+                Err(err)
+            }
+        }
+    }
+
     /// Enters the fallback chain directly after an already-open or pooled GPU failed `setup` with
     /// `Action::MoveOn`, excluding `excluded` so the failed adapter is not tried again.
     #[cfg(not(target_arch = "wasm32"))]
@@ -608,6 +681,19 @@ impl Gpu {
             kind: rune_gpu::fallback::Failure::DeviceCreate,
             message: "synchronous GPU initialization is unsupported on web; use App::run".into(),
         })
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    #[allow(dead_code)]
+    pub(crate) fn for_surface_setup_software<'w, T>(
+        _: wgpu::Features,
+        _: PresentationFallback,
+        _: impl FnMut(&wgpu::Instance, crate::gpu::fallback::Presentation) -> Result<wgpu::Surface<'w>, String>,
+        _: impl FnMut(&Gpu, &wgpu::Surface<'w>, Option<Renderer>) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, wgpu::Surface<'w>, T), SurfaceSetupError> {
+        Err(SurfaceSetupError::unsupported(
+            "synchronous GPU initialization is unsupported on web; use App::run",
+        ))
     }
 
     #[cfg(target_arch = "wasm32")]

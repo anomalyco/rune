@@ -42,6 +42,8 @@ pub enum Reason {
     /// Offscreen or test work, on the GPU driving the primary display.
     WindowGpu,
     LowPower,
+    /// Software adapter selected after repeated hardware device losses.
+    SoftwareFallback,
 }
 
 impl Reason {
@@ -53,6 +55,7 @@ impl Reason {
             Reason::Display => "the GPU driving the primary display",
             Reason::WindowGpu => "the GPU a window would get (it drives the primary display)",
             Reason::LowPower => "lowest power",
+            Reason::SoftwareFallback => "software fallback after repeated device loss",
         }
     }
 }
@@ -70,10 +73,11 @@ impl Pick {
         matches!(self.reason, Reason::EnvName | Reason::EnvPower)
     }
 
-    /// Fallback policy for this pick: a user-named adapter (`WGPU_ADAPTER_NAME`) is pinned and
-    /// never replaced; automatic choices may fall back on persistent adapter/surface failures.
+    /// Fallback policy for this pick: a user-named adapter (`WGPU_ADAPTER_NAME`) or a software
+    /// fallback pick is pinned and never replaced; automatic choices may fall back on persistent
+    /// adapter/surface failures.
     pub fn policy(&self) -> crate::fallback::Policy {
-        if self.reason == Reason::EnvName {
+        if matches!(self.reason, Reason::EnvName | Reason::SoftwareFallback) {
             crate::fallback::Policy::Pinned
         } else {
             crate::fallback::Policy::Automatic
@@ -151,6 +155,36 @@ pub fn pick(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, pres
     }
     let adapter = request(instance, surface, wgpu::PowerPreference::LowPower)?;
     Ok(log(Pick { adapter, reason: Reason::LowPower, compositor }, enumerated))
+}
+
+/// Picks a software GPU adapter (`DeviceType::Cpu`: DX12 WARP on Windows, `force_fallback_adapter`
+/// elsewhere) for repeated device-loss fallback. Refuses when `WGPU_ADAPTER_NAME` pins an adapter,
+/// and never returns a hardware adapter.
+pub fn pick_software(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Result<Pick, String> {
+    if env_policy() == crate::fallback::Policy::Pinned {
+        let error = "software fallback is disabled while WGPU_ADAPTER_NAME is set".to_owned();
+        log_failure(&error);
+        return Err(error);
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(picked) = dxgi::pick_software(instance, surface) {
+        let pick = picked.inspect_err(|error| log_failure(error))?;
+        return Ok(log(pick, None));
+    }
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::LowPower,
+        force_fallback_adapter: true,
+        compatible_surface: surface,
+        apply_limit_buckets: false,
+    }))
+    .map_err(|error| format!("no software GPU adapter: {error}"))?;
+    if adapter.get_info().device_type != wgpu::DeviceType::Cpu {
+        return Err(format!(
+            "no software GPU adapter is available (fallback request returned {:?})",
+            adapter.get_info().device_type
+        ));
+    }
+    Ok(log(Pick { adapter, reason: Reason::SoftwareFallback, compositor: None }, None))
 }
 
 fn request(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>, power_preference: wgpu::PowerPreference) -> Result<wgpu::Adapter, String> {
@@ -305,6 +339,44 @@ mod dxgi {
         }
         Some(Ok((Pick { adapter, reason, compositor: None }, count)))
     }
+
+    /// Picks a DXGI software adapter (`DXGI_ADAPTER_FLAG_SOFTWARE`, i.e. WARP) without creating a
+    /// device on any hardware adapter. Returns `None` when the instance is not DX12 or `wgpu-hal`
+    /// is unpatched so the caller falls through to wgpu's `force_fallback_adapter`.
+    pub(super) fn pick_software(instance: &wgpu::Instance, surface: Option<&wgpu::Surface<'_>>) -> Option<Result<Pick, String>> {
+        // SAFETY: wgpu's DX12 instance, borrowed for this call.
+        let hal = unsafe { instance.as_hal::<wgpu::hal::api::Dx12>() }?;
+        // SAFETY: a DXGI factory and its adapters, asked for their descriptions.
+        let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
+        let software: Vec<(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> = (0..)
+            .map_while(|i| {
+                // SAFETY: `factory` is a live `IDXGIFactory1`; out-of-range `i` returns `DXGI_ERROR_NOT_FOUND`.
+                unsafe { factory.EnumAdapters1(i) }.ok()
+            })
+            .filter_map(|a| {
+                // SAFETY: `a` is a live `IDXGIAdapter1` returned by `EnumAdapters1`.
+                unsafe { a.GetDesc1() }.ok().map(|d| (a, d))
+            })
+            .filter(|(_, d)| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0)
+            .collect();
+        for (adapter, _) in &software {
+            without_patch::UNPATCHED.with(|unpatched| unpatched.set(false));
+            // SAFETY: `adapter` comes from a DXGI factory in this process, as `expose_adapter` asks.
+            let Some(exposed) = (unsafe { hal.expose_adapter(adapter) }) else {
+                if without_patch::UNPATCHED.with(|unpatched| unpatched.replace(false)) {
+                    return None;
+                }
+                continue;
+            };
+            // SAFETY: `exposed` was exposed from this same DX12 `instance`'s HAL.
+            let adapter = unsafe { instance.create_adapter_from_hal(exposed) };
+            if surface.is_some_and(|s| !adapter.is_surface_supported(s)) {
+                continue;
+            }
+            return Some(Ok(Pick { adapter, reason: Reason::SoftwareFallback, compositor: None }));
+        }
+        Some(Err("no usable DXGI software adapter (WARP) is available".to_owned()))
+    }
 }
 
 /// The usable hardware adapter for the first of `displays` (PCI vendor and device IDs, the
@@ -315,13 +387,18 @@ fn by_display(displays: &[(u32, u32)], adapters: &[(wgpu::AdapterInfo, bool)]) -
     })
 }
 
-/// Fallback policy derived from the process environment (`WGPU_ADAPTER_NAME` pins the adapter).
-pub fn env_policy() -> crate::fallback::Policy {
-    if rune_core::env::var("WGPU_ADAPTER_NAME").is_some() {
+/// Fallback policy for an optional user-supplied adapter name (`WGPU_ADAPTER_NAME`).
+pub const fn policy_for_adapter_name(adapter_name: Option<&str>) -> crate::fallback::Policy {
+    if adapter_name.is_some() {
         crate::fallback::Policy::Pinned
     } else {
         crate::fallback::Policy::Automatic
     }
+}
+
+/// Fallback policy derived from the process environment (`WGPU_ADAPTER_NAME` pins the adapter).
+pub fn env_policy() -> crate::fallback::Policy {
+    policy_for_adapter_name(rune_core::env::var("WGPU_ADAPTER_NAME").as_deref())
 }
 
 /// `PowerPreference::LowPower`'s order; a software adapter comes last.
