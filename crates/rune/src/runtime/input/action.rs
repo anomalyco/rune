@@ -50,6 +50,9 @@ pub(in crate::runtime) enum Action {
     /// innermost first, with the gesture's own axis policy: whether the platform reported its
     /// phases (`runtime/input/gesture.rs`).
     Wheel { gesture: crate::machine::Attempt, chain: Option<Vec<String>>, ev: crate::WheelEvent, phased: bool },
+    /// An outside wheel that dismissed a modal with `El::modal_wheel_outside` and waits for
+    /// the dismissal to commit and rebuild hit-testing before routing to what lies under it.
+    WheelRepost(WheelRepost),
     Gesture(Vec<String>, gesture_dispatch::Gesture),
     Ime(Ime),
     /// The window went inactive: an open composition becomes text (`Runtime::finish_composition`).
@@ -67,6 +70,15 @@ pub(in crate::runtime) enum Action {
     Blur,
     /// What assistive technology asked of an element (`a11y/actions.rs`).
     A11y(String, crate::a11y::actions::A11yAct),
+}
+
+/// An outside wheel waiting for a modal's dismissal to commit before routing to what lies under it.
+pub(in crate::runtime) struct WheelRepost {
+    pub(in crate::runtime) modal: String,
+    pub(in crate::runtime) outer: Option<String>,
+    pub(in crate::runtime) gesture: crate::machine::Attempt,
+    pub(in crate::runtime) ev: crate::WheelEvent,
+    pub(in crate::runtime) phased: bool,
 }
 
 /// A queued action and when the input that queued it arrived (`Tx::input_time`): the arrival
@@ -158,7 +170,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::DragEnd(..) => "on_drag_end",
         Action::Key { .. } => "on_key",
         Action::KeyUp(_) => "on_key_up",
-        Action::Wheel { .. } => "on_wheel",
+        Action::Wheel { .. } | Action::WheelRepost(_) => "on_wheel",
         Action::Gesture(_, gesture_dispatch::Gesture::Magnify(_)) => "on_magnify",
         Action::Gesture(_, gesture_dispatch::Gesture::Rotate(_)) => "on_rotate",
         Action::Gesture(_, gesture_dispatch::Gesture::SmartMagnify(..)) => "on_smart_magnify",
@@ -511,6 +523,7 @@ impl RuntimeCore {
             }
             Action::KeyUp(ev) => self.route_key_up(app, &ev, &mut one),
             Action::Wheel { gesture, chain, ev, phased } => self.run_wheel(app, gesture, chain, ev, phased, &mut one),
+            Action::WheelRepost(repost) => self.run_wheel_repost(app, repost, &mut one),
             Action::Gesture(chain, gesture) => self.run_gesture(app, chain, gesture, &mut one),
             Action::Ime(ev) => self.run_ime(app, ev, &mut one),
             Action::FinishIme => self.finish_ime(app, &mut one),

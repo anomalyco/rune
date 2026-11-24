@@ -46,12 +46,55 @@ impl RuntimeCore {
         // A notch or not is the run's to decide, not each delta's.
         let ev = if moved { WheelEvent { notch: self.scroll.wheel_notched(self.now_clock(), ev.notch), ..ev } } else { ev };
         if moved || ev.phase != GesturePhase::Moved {
-            let ev = WheelEvent { momentum: self.scroll.wheel_momentum(), ..ev };
+            let ev = WheelEvent { momentum: ev.momentum || self.scroll.wheel_momentum(), ..ev };
             let gesture = self.scroll.wheel_gesture();
             let phased = self.scroll.wheel_phased();
-            if let Some(start) = self.offer_wheel(gesture, ev) { self.wheel_scroll_for(gesture, ev, phased, start); }
+            if !(moved && self.dismiss_modal_on_wheel(gesture, ev, phased))
+                && let Some(start) = self.offer_wheel(gesture, ev)
+            {
+                self.wheel_scroll_for(gesture, ev, phased, start);
+            }
         }
         if ev.phase == GesturePhase::Ended { self.wheel_ended(); }
+    }
+
+    /// Dismisses an active modal opted into [`crate::El::modal_wheel_outside`] on an outside,
+    /// non-momentum wheel and queues [`Action::WheelRepost`] so the delta routes to what lies
+    /// beneath once the dismissal commits and rebuilds hit-testing.
+    pub(super) fn dismiss_modal_on_wheel(&mut self, gesture: Attempt, ev: WheelEvent, phased: bool) -> bool {
+        if ev.momentum { return false; }
+        let owner_allows = matches!(self.scroll.wheel_owner(), WheelOwner::Unpicked)
+            || (!phased && matches!(self.scroll.wheel_owner(), WheelOwner::Vertical | WheelOwner::Horizontal(_)));
+        if !owner_allows { return false; }
+        let Some(i) = self.active_modal() else { return false };
+        if self.point_in_modal(i, ev.x, ev.y) { return false; }
+        if !self.tree.nodes[i].handlers.modal.as_ref().is_some_and(|m| m.wheel_outside && m.dismiss.is_some()) {
+            return false;
+        }
+        if self.scroll.wheel_owner() != &WheelOwner::Unpicked {
+            self.scroll.set_wheel_owner(gesture, WheelOwner::Unpicked);
+            self.scroll.end_wheel_vertical();
+        }
+        let modal = self.tree.nodes[i].path.clone();
+        let outer = self.outer_modal_path(i);
+        if !self.frame.queue.iter().any(|a| matches!(a, Action::Dismiss(p) if *p == modal)) {
+            self.frame.queue.push(Action::Dismiss(modal.clone()));
+        }
+        self.frame.queue.push(Action::WheelRepost(action::WheelRepost { modal, outer, gesture, ev, phased }));
+        true
+    }
+
+    /// Same-frame outside-wheel repost: runs after `Action::Dismiss` commits so `ModalScope` and
+    /// hit-testing are freshly rebuilt for the post-dismiss tree.
+    pub(super) fn run_wheel_repost(&mut self, app: &mut dyn AppDriver, repost: action::WheelRepost, one: &mut Tx) -> bool {
+        if !self.repost_allowed(&repost.modal, repost.outer.as_deref()) { return false; }
+        if !self.tree.built {
+            self.scene.present();
+            self.begin_exit_mask();
+            self.build();
+            self.end_exit_mask();
+        }
+        self.run_wheel(app, repost.gesture, None, repost.ev, repost.phased, one)
     }
 
     /// Queues `ev` for the `on_wheel` handlers it may go to (None), or leaves it to scrolling now,
@@ -401,3 +444,7 @@ mod tests;
 #[cfg(test)]
 #[path = "gesture_tests.rs"]
 mod gesture_tests;
+
+#[cfg(test)]
+#[path = "modal_wheel_tests.rs"]
+mod modal_wheel_tests;

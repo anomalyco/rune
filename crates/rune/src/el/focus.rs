@@ -103,6 +103,7 @@ impl crate::cold::Empty for FocusSpec {
 pub(crate) struct ModalSpec {
     pub dismiss: Option<PressFn>,
     pub outside: bool,
+    pub wheel_outside: bool,
 }
 
 impl El {
@@ -507,25 +508,48 @@ impl El {
     }
     /// Trap focus and make the background inert while mounted. Escape requests dismissal.
     pub fn modal<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S) + 'static) -> Self {
-        self.handlers.modal = Some(ModalSpec { outside: click_outside,
+        self.handlers.modal = Some(ModalSpec { outside: click_outside, wheel_outside: false,
             dismiss: Some(Rc::new(move |s, _| dismiss(downcast::<S>(s)))) });
         self
     }
     /// [`El::modal`] whose dismissal gets the change's [`Tx`]: a dialog that closes at once
     /// (`tx.instant()`), say.
     pub fn modal_tx<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.handlers.modal = Some(ModalSpec { outside: click_outside,
+        self.handlers.modal = Some(ModalSpec { outside: click_outside, wheel_outside: false,
             dismiss: Some(Rc::new(move |s, tx| dismiss(downcast::<S>(s), tx))) });
         self
     }
     /// Trap focus and make the background inert while mounted, with no Escape or outside-click
     /// dismissal (as HTML's `<dialog closedby="none">`): the modal's own controls close it.
     pub fn modal_trap(mut self) -> Self {
-        self.handlers.modal = Some(ModalSpec { outside: false, dismiss: None });
+        self.handlers.modal = Some(ModalSpec { outside: false, wheel_outside: false, dismiss: None });
         self
     }
     pub fn modal_click_outside(mut self, enabled: bool) -> Self {
         if let Some(h) = self.handlers.get_mut_if_some() && let Some(m) = &mut h.modal { m.outside = enabled; }
+        self
+    }
+    /// Dismiss this modal on a non-momentum wheel event outside its scope and route that wheel
+    /// to what lies beneath once the modal closes (as AppKit's `NSPopoverBehaviorTransient` and
+    /// GTK's `GtkPopover` do).
+    ///
+    /// Off by default: outside wheels are swallowed while the modal is open. Only applies to a
+    /// dismissible modal ([`El::modal`] or [`El::modal_tx`]); ignored on [`El::modal_trap`] and
+    /// non-modals. If the dismissal callback leaves the modal open or replaces it with another
+    /// modal, the reposted wheel is dropped.
+    ///
+    /// ```
+    /// use rune::{El, col};
+    ///
+    /// struct App { open: bool }
+    /// let _popover: El = col()
+    ///     .role("dialog")
+    ///     .label("Options")
+    ///     .modal(true, |s: &mut App| s.open = false)
+    ///     .modal_wheel_outside(true);
+    /// ```
+    pub fn modal_wheel_outside(mut self, enabled: bool) -> Self {
+        if let Some(h) = self.handlers.get_mut_if_some() && let Some(m) = &mut h.modal { m.wheel_outside = enabled; }
         self
     }
 }

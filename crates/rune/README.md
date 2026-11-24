@@ -295,7 +295,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   distinguish keyboard modality and scoped subtrees), and `.focus_highlight(color)` for a menu row's shared pointer
   and keyboard highlight. Enter/Space
   activates non-text controls. `.modal(click_outside, close)` traps Tab, handles Escape, makes the
-  background inert and restores the opener. Nested modals restore in stack order. Inspector tree
+  background inert and restores the opener, and `.modal_wheel_outside(true)` lets a non-momentum
+  outside wheel dismiss the modal and route that wheel to what lies beneath once it closes (off by
+  default; ignored on `.modal_trap()`, and dropped if dismissal keeps the modal open or replaces it
+  with another modal). Nested modals restore in stack order. Inspector tree
   flags (`focusable`, `focused`, `focusVisible`, `inert`) are the future platform AX hook.
 - **Key routing**: a key the OS delivers to the window goes to the first of these that takes it.
   Global shortcuts and native menu key equivalents are handled before the window sees the key.

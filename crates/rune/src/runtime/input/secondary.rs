@@ -119,7 +119,7 @@ impl RuntimeCore {
     }
 
     /// The live modal that becomes active if `modal` closes, if any (for nested-modal repost checks).
-    fn outer_modal_path(&self, modal: usize) -> Option<String> {
+    pub(super) fn outer_modal_path(&self, modal: usize) -> Option<String> {
         self.tree.nodes.iter().enumerate().rev()
             .find(|&(j, n)| j != modal && n.handlers.get().is_some_and(|h| h.modal.is_some()) && !self.subtree_exiting(j) && !self.subtree_unmounted(j))
             .map(|(_, n)| n.path.clone())
@@ -128,7 +128,7 @@ impl RuntimeCore {
     /// Reposting is allowed only after `modal` actually closed without a brand-new modal opening
     /// in its place; falling back to an already-open outer modal keeps that outer modal's
     /// `ModalScope` in effect.
-    fn repost_allowed(&self, modal: &str, outer: Option<&str>) -> bool {
+    pub(super) fn repost_allowed(&self, modal: &str, outer: Option<&str>) -> bool {
         let current = self.active_modal().map(|i| self.tree.nodes[i].path.as_str());
         current != Some(modal) && (current.is_none() || current == outer)
     }

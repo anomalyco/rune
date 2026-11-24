@@ -113,6 +113,108 @@ pub(super) fn popover_bounded(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     row().gap(8.0).child(list_pane).child(drawer_pane)
 }
 
+/// An anchored modal popover over a scrollable list with `El::modal_wheel_outside(true)`:
+/// scrolling over the list dismisses the popover and scrolls the list in one gesture, while
+/// scrolling inside the popover scrolls its own body without closing it.
+pub(super) fn popover_wheel_outside(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let open = is_open(s, "popover-wheel-outside");
+    let wheel_outside = !s.is("wheel-outside-off");
+    if open {
+        let mut details = col().gap(4.0);
+        for i in 1..=10 {
+            details = details.child(
+                text(format!("Metadata field {i}: value-{i:02}"))
+                    .font(k.ty.small)
+                    .color(k.c.text_weak),
+            );
+        }
+        let body = col()
+            .w(220.0)
+            .padding(12.0)
+            .gap(8.0)
+            .child(text("Item details").font(k.ty.ui_medium).color(k.c.text_strong))
+            .child(
+                text(if wheel_outside {
+                    "Scroll the file list outside to close this popover and scroll it at once."
+                } else {
+                    "modal_wheel_outside(false): outside wheels are blocked while open."
+                })
+                .font(k.ty.small)
+                .color(k.c.text_muted)
+                .wrap(),
+            )
+            .child(
+                col()
+                    .key("wheel-outside-popover-scroll")
+                    .w_full()
+                    .h(88.0)
+                    .padding(6.0)
+                    .radius(k.radius.sm)
+                    .fill(k.c.layer_01)
+                    .scroll(rune::ScrollSpec { stick_bottom: false })
+                    .child(details),
+            );
+        let surface = popover::raised(k, body, k.radius.md)
+            .key("wheel-outside-card")
+            .role("dialog")
+            .label("Item details")
+            .modal(true, close)
+            .modal_wheel_outside(wheel_outside);
+        layer.push(popover::anchored(k, surface, "wheel-outside-trigger", Placement::RightStart, 8.0));
+    }
+    let mut rows = col().gap(2.0).padding(6.0);
+    for i in 1..=24 {
+        rows = rows.child(
+            row()
+                .key(format!("file-row-{i}"))
+                .w_full()
+                .h(28.0)
+                .px(8.0)
+                .center_y()
+                .justify_between()
+                .radius(4.0)
+                .fill(if i % 2 == 0 { k.c.layer_01 } else { k.c.surface_base })
+                .child(text(format!("document-{i:02}.rs")).font(k.ty.ui_compact).color(k.c.text_base))
+                .child(text(format!("{} KB", i * 4)).font(k.ty.small).color(k.c.text_faint)),
+        );
+    }
+    let list = scroll_bar(
+        k,
+        "wheel-outside-list-area",
+        "wheel-outside-list",
+        col()
+            .key("wheel-outside-list")
+            .w_full()
+            .h(220.0)
+            .scroll(rune::ScrollSpec { stick_bottom: false })
+            .child(rows),
+    )
+    .w(320.0)
+    .radius(k.radius.md)
+    .fill(k.c.surface_base)
+    .border(1.0, k.c.border_weak);
+    let controls = row()
+        .gap(12.0)
+        .center_y()
+        .child(
+            Button::new(if open { "Close popover" } else { "Open popover" })
+                .variant(ButtonVariant::Outline)
+                .control_size(ControlSize::Small)
+                .expanded(open)
+                .on_press(toggle("popover-wheel-outside"))
+                .build(k)
+                .key("wheel-outside-trigger"),
+        )
+        .child(
+            Switch::new(wheel_outside)
+                .label("modal_wheel_outside")
+                .on_toggle(flip("wheel-outside-off"))
+                .build(k)
+                .key("wheel-outside-toggle"),
+        );
+    col().gap(10.0).items_start().child(controls).child(list)
+}
+
 fn menu_button(k: &Kit, label: &str, key: &'static str, open: bool) -> El {
     Button::new(label).expanded(open).on_press(toggle(key)).build(k)
 }
