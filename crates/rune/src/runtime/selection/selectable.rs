@@ -401,7 +401,7 @@ impl RuntimeCore {
         let ranges = self.selection_ranges();
         if ranges.is_empty() { return None; }
         let texts = ranges.iter().map(|&(i, a, b)| self.selected_piece(i, a..b, None)).collect();
-        Some(TextSelection { texts, text: self.joined(&ranges), backward: self.selection_backward() })
+        Some(TextSelection { texts, text: self.joined(&ranges), backward: self.selection_backward(), truncated: false })
     }
 
     /// [`Runtime::selection`] for a handler's `Tx`, kept until a commit or the selection changes.
@@ -460,6 +460,7 @@ impl RuntimeCore {
                     Rc::ptr_eq(a, b)
                         || (a.text == b.text
                             && a.backward == b.backward
+                            && a.truncated == b.truncated
                             && a.texts.len() == b.texts.len()
                             && a.texts.iter().zip(&b.texts).all(|(x, y)| {
                                 x.key == y.key
@@ -519,7 +520,7 @@ impl RuntimeCore {
                 .filter(|&j| match g { Some(g) => self.group_of(j) == Some(g), None => j == first })
                 .map(|j| self.selected_piece(j, range_in(&ranges, j).map_or(0..0, |(a, b)| a..b), Some(p)))
                 .collect();
-            if let Some(text) = f(&TextSelection { texts, text: drawn.clone(), backward: self.selection_backward() }) { return Some(text); }
+            if let Some(text) = f(&TextSelection { texts, text: drawn.clone(), backward: self.selection_backward(), truncated: false }) { return Some(text); }
         }
         (!drawn.is_empty()).then_some(drawn)
     }

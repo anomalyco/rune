@@ -568,9 +568,11 @@ impl Tx {
     }
 
     /// The [`El::selectable`] text selection as this event arrived: the texts it covers with
-    /// their selected ranges, and the text as copying takes it. `None` when nothing is
-    /// selected (a single click leaves only a caret-sized selection, which reads as `None`).
-    /// What this handler asks with [`Tx::select_text`] and kin shows from the next event on.
+    /// their selected ranges, the text as copying takes it, and whether collection across unbuilt
+    /// virtual rows hit its cap ([`TextSelection::truncated`](crate::TextSelection::truncated)).
+    /// `None` when nothing is selected (a single click leaves only a caret-sized selection, which
+    /// reads as `None`). What this handler asks with [`Tx::select_text`] and kin shows from the
+    /// next event on.
     pub fn text_selection(&self) -> Option<&crate::TextSelection> {
         self.selection.as_deref()
     }
