@@ -7,6 +7,14 @@ use winit::event_loop::EventLoopProxy;
 use crate::{render::{Gpu, Renderer}, runtime::RuntimeCore, time::Instant};
 use super::{Wake, app::{CompositorFrame, WebApp}, cpu_canvas, health};
 
+/// An acquired web GPU device and canvas surface, plus an optional prebuilt renderer whose
+/// deferred WebGL2 shader links have already completed and passed verification.
+pub(super) struct ReadyGpu {
+    pub(super) gpu: Gpu,
+    pub(super) surface: wgpu::Surface<'static>,
+    pub(super) renderer: Option<Renderer>,
+}
+
 /// The GPU's side of the page: its device, the canvas's surface and Rune's renderer.
 pub(super) struct GpuSide {
     pub(super) gpu: Gpu,
@@ -196,8 +204,17 @@ pub(super) async fn gpu(
 /// The GPU's side for a canvas of `size`: the surface configured, the renderer made, and the
 /// text system told its masks are the renderer's to fill from now on. `lost` records the reason
 /// and wakes `proxy` if the device is lost.
-pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u32), rt: &mut RuntimeCore, lost: Rc<RefCell<Option<Loss>>>, proxy: EventLoopProxy<Wake>) -> Result<GpuSide, String> {
+pub(super) fn gpu_side(
+    ready: ReadyGpu,
+    size: (u32, u32),
+    rt: &mut RuntimeCore,
+    lost: Rc<RefCell<Option<Loss>>>,
+    proxy: EventLoopProxy<Wake>,
+) -> Result<GpuSide, String> {
+    let ReadyGpu { gpu, surface, renderer: prebuilt } = ready;
     let Some((config, format)) = canvas_config(&gpu, &surface, size, rt.srgb_blend()) else {
+        drop(prebuilt);
+        gpu.device.destroy();
         return Err("WebGPU canvas has no supported configuration".into());
     };
     let backend = gpu.adapter.get_info().backend;
@@ -207,7 +224,15 @@ pub(super) fn gpu_side(gpu: Gpu, surface: wgpu::Surface<'static>, size: (u32, u3
         *lost.borrow_mut() = Some(if is_gl { Loss::WebGl(why) } else { Loss::WebGpu(why) });
         watch_proxy.send_event(Wake::App).ok();
     });
-    let mut renderer = Renderer::try_new(&gpu.device, format)?;
+    let mut renderer = match prebuilt {
+        Some(mut renderer) => {
+            if renderer.format() != format {
+                renderer.try_set_format(&gpu.device, format)?;
+            }
+            renderer
+        }
+        None => Renderer::try_new(&gpu.device, format)?,
+    };
     let check_proxy = proxy.clone();
     renderer.set_uber_check_wake(std::sync::Arc::new(move || {
         check_proxy.send_event(Wake::App).ok();

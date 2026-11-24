@@ -173,14 +173,15 @@ impl Browser {
     pub(super) fn maybe_restore_webgl(&mut self) {
         if !self.webgl_restored.get() || self.webgl_restoring { return; }
         if self.webgl_watch.as_ref().is_some_and(health::WebglWatch::is_lost) { return; }
-        let features = {
+        let (features, canvas_now, srgb_blend) = {
             let running = self.running.borrow();
             let Some(r) = &*running else { return };
             if !matches!(r.draw, Draw::Cpu { failed: true, .. } | Draw::ContextLost) {
                 self.webgl_restored.set(false);
                 return;
             }
-            r.app.compositor_features()
+            let srgb = r.app.rt().srgb_blend();
+            (r.app.compositor_features(), Some((r.size, srgb)), srgb)
         };
         let Some(canvas) = self.window.as_ref().and_then(|w| w.canvas()) else { return };
         self.webgl_restored.set(false);
@@ -190,11 +191,11 @@ impl Browser {
             let (pending, proxy, shared) = (self.pending.clone(), self.proxy.clone(), self.shared.clone());
             wasm_bindgen_futures::spawn_local(async move {
                 let result = gpu::try_webgl2(&canvas, features, &shared.quitting).await;
-                deliver_gpu(result, None, pending, None, proxy, shared, false).await;
+                deliver_gpu(result, canvas_now, srgb_blend, pending, None, proxy, shared, false).await;
             });
         }
         #[cfg(not(feature = "webgl"))]
-        let _ = (canvas, features);
+        let _ = (canvas, features, canvas_now, srgb_blend);
     }
 
     /// The GPU answered while the page draws on the CPU (initial CPU-first hand-over) or after
@@ -215,8 +216,8 @@ impl Browser {
                 let (seq, startup) = &mut self.gpu_startup;
                 let _ = startup.step(seq, web_math::GpuStartupEvent::WebGpuSucceeded);
             }
-            let side = made.and_then(|(gpu, surface)| {
-                gpu::gpu_side(gpu, surface, r.size, r.app.rt_mut(), self.lost.clone(), self.proxy.clone())
+            let side = made.and_then(|ready| {
+                gpu::gpu_side(ready, r.size, r.app.rt_mut(), self.lost.clone(), self.proxy.clone())
             });
             // The renderer is made: the pipelines compiled ahead for it can go.
             self.warmed.borrow_mut().take();
@@ -307,10 +308,14 @@ impl Browser {
         crate::marks::mark("web.gpu.asked");
         let features = self.requested_features();
         let canvas_now = self.running.borrow().as_ref().map(|r| (r.size, r.app.rt().srgb_blend()));
+        let srgb_blend = canvas_now
+            .map(|(_, s)| s)
+            .or_else(|| self.app.as_ref().map(|a| a.srgb_blend))
+            .unwrap_or(true);
         let (pending, warmed, proxy, shared) = (self.pending.clone(), self.warmed.clone(), self.proxy.clone(), self.shared.clone());
         wasm_bindgen_futures::spawn_local(async move {
             let result = gpu::gpu(canvas, features, &shared.quitting).await;
-            deliver_gpu(result, canvas_now, pending, Some(warmed), proxy, shared, true).await;
+            deliver_gpu(result, canvas_now, srgb_blend, pending, Some(warmed), proxy, shared, true).await;
         });
     }
 
@@ -380,6 +385,7 @@ impl Browser {
         crate::marks::mark("web.gpu.asked");
         let features = self.requested_features();
         let canvas_now = self.running.borrow().as_ref().map(|r| (r.size, r.app.rt().srgb_blend()));
+        let srgb_blend = canvas_now.map_or(true, |(_, s)| s);
         let (pending, warmed, webgpu_err, proxy, shared) = (
             self.pending.clone(),
             self.warmed.clone(),
@@ -389,7 +395,7 @@ impl Browser {
         );
         wasm_bindgen_futures::spawn_local(async move {
             match gpu::try_webgpu(&canvas, features).await {
-                Ok(pair) => deliver_gpu(Ok(pair), canvas_now, pending, Some(warmed), proxy, shared, true).await,
+                Ok(pair) => deliver_gpu(Ok(pair), canvas_now, srgb_blend, pending, Some(warmed), proxy, shared, true).await,
                 Err(err) => {
                     if shared.quitting.load(Ordering::Acquire) { return; }
                     *webgpu_err.borrow_mut() = Some(err);
@@ -409,6 +415,8 @@ impl Browser {
             crate::marks::mark("web.gpu.asked");
         }
         let features = self.requested_features();
+        let canvas_now = self.running.borrow().as_ref().map(|r| (r.size, r.app.rt().srgb_blend()));
+        let srgb_blend = canvas_now.map_or(true, |(_, s)| s);
         let (pending, webgpu_err, proxy, shared) = (
             self.pending.clone(),
             self.webgpu_err.clone(),
@@ -424,7 +432,7 @@ impl Browser {
                     Err(format!("WebGPU ({webgpu}) and WebGL2 ({gl_err}) unavailable"))
                 }
             };
-            deliver_gpu(result, None, pending, None, proxy, shared, true).await;
+            deliver_gpu(result, canvas_now, srgb_blend, pending, None, proxy, shared, true).await;
         });
     }
 
@@ -443,13 +451,16 @@ impl Browser {
     }
 }
 
-/// Finishes an async GPU acquisition: warms async WebGPU pipelines when available, yields a
-/// browser macrotask on WebGL2 so `gpu_side` (`Renderer::new`) runs in its own task, and delivers
-/// the result to `pending` via `Wake::Ready` unless the app quit in the meantime.
+/// Finishes an async GPU acquisition:
+/// - WebGPU: warms pipelines via `createRenderPipelineAsync` when available.
+/// - WebGL2: when `KHR_parallel_shader_compile` is supported, builds and links the real `Renderer`
+///   once across browser turns via `pipelines::warm_webgl2` and hands it straight into `gpu_side`;
+///   otherwise yields a browser macrotask so synchronous `Renderer::try_new` runs in its own task.
 async fn deliver_gpu(
     result: Result<(crate::render::Gpu, wgpu::Surface<'static>), String>,
     canvas_now: Option<((u32, u32), bool)>,
-    pending: std::rc::Rc<std::cell::RefCell<Option<Result<(crate::render::Gpu, wgpu::Surface<'static>), String>>>>,
+    srgb_blend: bool,
+    pending: std::rc::Rc<std::cell::RefCell<Option<Result<gpu::ReadyGpu, String>>>>,
     warmed: Option<std::rc::Rc<std::cell::RefCell<Option<pipelines::Warmed>>>>,
     proxy: winit::event_loop::EventLoopProxy<Wake>,
     shared: std::sync::Arc<crate::app::SharedCore>,
@@ -460,21 +471,69 @@ async fn deliver_gpu(
         return;
     }
     if mark_answered { crate::marks::mark("web.gpu.answered"); }
-    if let (Ok((gpu, surface)), Some((size, srgb)), Some(warmed_slot)) = (&result, canvas_now, &warmed)
-        && let Some((_, format)) = gpu::canvas_config(gpu, surface, size, srgb)
-        && let Some(w) = pipelines::warm(&gpu.device, format).await
-    {
-        crate::marks::mark("web.gpu.warmed");
-        *warmed_slot.borrow_mut() = Some(w);
-    }
-    if result.as_ref().is_ok_and(|(gpu, _)| web_math::needs_ready_yield(gpu.adapter.get_info().backend)) {
-        yield_turn().await;
-    }
+    let ready = match result {
+        Err(err) => Err(err),
+        Ok((gpu, surface)) => {
+            let backend = gpu.adapter.get_info().backend;
+            if backend == wgpu::Backend::Gl {
+                #[cfg(feature = "webgl")]
+                {
+                    let size = canvas_now.map_or((1, 1), |(s, _)| s);
+                    if let Some((_, format)) = gpu::canvas_config(&gpu, &surface, size, srgb_blend) {
+                        match pipelines::warm_webgl2(&gpu.device, format, &shared.quitting).await {
+                            pipelines::WebGlWarm::Ready(renderer) => {
+                                Ok(gpu::ReadyGpu { gpu, surface, renderer: Some(renderer) })
+                            }
+                            pipelines::WebGlWarm::Unsupported => {
+                                if web_math::needs_ready_yield(backend) {
+                                    yield_turn().await;
+                                }
+                                Ok(gpu::ReadyGpu { gpu, surface, renderer: None })
+                            }
+                            pipelines::WebGlWarm::Failed(why) => {
+                                gpu.device.destroy();
+                                Err(why)
+                            }
+                            pipelines::WebGlWarm::Aborted => {
+                                gpu.device.destroy();
+                                return;
+                            }
+                        }
+                    } else {
+                        if web_math::needs_ready_yield(backend) {
+                            yield_turn().await;
+                        }
+                        Ok(gpu::ReadyGpu { gpu, surface, renderer: None })
+                    }
+                }
+                #[cfg(not(feature = "webgl"))]
+                {
+                    let _ = srgb_blend;
+                    if web_math::needs_ready_yield(backend) {
+                        yield_turn().await;
+                    }
+                    Ok(gpu::ReadyGpu { gpu, surface, renderer: None })
+                }
+            } else {
+                if let (Some((size, srgb)), Some(warmed_slot)) = (canvas_now, &warmed)
+                    && let Some((_, format)) = gpu::canvas_config(&gpu, &surface, size, srgb)
+                    && let Some(w) = pipelines::warm(&gpu.device, format).await
+                {
+                    crate::marks::mark("web.gpu.warmed");
+                    *warmed_slot.borrow_mut() = Some(w);
+                }
+                Ok(gpu::ReadyGpu { gpu, surface, renderer: None })
+            }
+        }
+    };
     // A loop that has closed was quit while the GPU started.
     if shared.quitting.load(Ordering::Acquire) || proxy.send_event(Wake::Ready).is_err() {
         if let Some(warmed_slot) = warmed { warmed_slot.borrow_mut().take(); }
-        if let Ok((gpu, _)) = result { gpu.device.destroy(); }
+        if let Ok(ready_gpu) = ready {
+            drop(ready_gpu.renderer);
+            ready_gpu.gpu.device.destroy();
+        }
         return;
     }
-    *pending.borrow_mut() = Some(result);
+    *pending.borrow_mut() = Some(ready);
 }

@@ -230,14 +230,39 @@ impl super::CommandEncoder {
     }
 
     fn set_pipeline_inner(&mut self, inner: &super::PipelineInner) {
+        if inner.is_pending() {
+            let gl = &self.shared.context.lock();
+            #[cfg(webgl)]
+            if self.shared.context.webgl2_context.is_context_lost() {
+                inner.mark_context_lost();
+            } else if let Err(err) = unsafe { inner.finalize(gl, self.private_caps) } {
+                log::error!("Deferred shader program link failed on early use: {err}");
+            }
+            #[cfg(not(webgl))]
+            if let Err(err) = unsafe { inner.finalize(gl, self.private_caps) } {
+                log::error!("Deferred shader program link failed on early use: {err}");
+            }
+        }
         self.cmd_buffer.commands.push(C::SetProgram(inner.program));
 
-        self.state
-            .first_instance_location
-            .clone_from(&inner.first_instance_location);
-        self.state
-            .immediates_descs
-            .clone_from(&inner.immediates_descs);
+        {
+            let state = inner.link_state.lock();
+            match &*state {
+                super::ProgramLinkState::Ready {
+                    first_instance_location,
+                    immediates_descs,
+                } => {
+                    self.state
+                        .first_instance_location
+                        .clone_from(first_instance_location);
+                    self.state.immediates_descs.clone_from(immediates_descs);
+                }
+                super::ProgramLinkState::Pending(_) | super::ProgramLinkState::Failed(_) => {
+                    self.state.first_instance_location = None;
+                    self.state.immediates_descs.clear();
+                }
+            }
+        }
 
         // rebind textures, if needed
         let mut dirty_textures = 0u32;

@@ -45,6 +45,7 @@ pub(super) struct PendingApp {
     pub(super) embedded: bool,
     pub(super) document: bool,
     pub(super) fit_height: bool,
+    pub(super) srgb_blend: bool,
     pub(super) font_urls: Vec<String>,
     pub(super) late_font_urls: Vec<String>,
     pub(super) on_ready: Option<OnWindow>,
@@ -216,6 +217,7 @@ impl<S: 'static> TypedWebApp<S> {
         let size = app.spec.size;
         let canvas_id = app.canvas_id.take();
         let fit_height = app.fit_content_height;
+        let srgb_blend = app.runtime.srgb_blend;
         let font_urls = std::mem::take(&mut app.font_urls);
         let late_font_urls = std::mem::take(&mut app.late_font_urls);
         let on_ready = app.on_ready.take();
@@ -242,6 +244,7 @@ impl<S: 'static> TypedWebApp<S> {
             embedded,
             document,
             fit_height,
+            srgb_blend,
             font_urls,
             late_font_urls,
             on_ready,
