@@ -15,13 +15,15 @@ pub struct Dialog {
     outside: bool,
     width: f32,
     fit: bool,
+    close_label: Option<String>,
+    close_disabled: bool,
     close: Option<Box<dyn FnOnce(El) -> El>>,
     button: Option<Box<dyn FnOnce(El) -> El>>,
 }
 impl Dialog {
     pub fn new(key: impl Into<String>, title: impl Into<String>) -> Self {
         Self { key: key.into(), title: title.into(), description: None, body: Vec::new(), open: false,
-            outside: true, width: 480.0, fit: false, close: None, button: None }
+            outside: true, width: 480.0, fit: false, close_label: None, close_disabled: false, close: None, button: None }
     }
     pub fn open(mut self, open: bool) -> Self { self.open = open; self }
     pub fn description(mut self, description: impl Into<String>) -> Self { self.description = Some(description.into()); self }
@@ -33,6 +35,30 @@ impl Dialog {
     /// `.shrink().min_h(0.0)` so it takes what is left and scrolls.
     pub fn fit(mut self) -> Self { self.fit = true; self }
     pub fn click_outside(mut self, close: bool) -> Self { self.outside = close; self }
+    /// The accessible name for the header's close button (the web's `aria-label`), `"Close"` by
+    /// default. Accessibility-only (not drawn); blank values fall back to `"Close"`.
+    ///
+    /// ```ignore
+    /// Dialog::new("confirm", "Confirmer")
+    ///     .open(s.open)
+    ///     .close_label("Fermer")
+    ///     .on_close(|s: &mut App| s.open = false)
+    ///     .build(&kit, &mut layer);
+    /// ```
+    pub fn close_label(mut self, label: impl Into<String>) -> Self { self.close_label = Some(label.into()); self }
+    /// Disables dismissal while an action is in flight (such as saving): when `true` and
+    /// [`Self::on_close`] is set, the header's close button stays visible in its disabled state
+    /// and Escape and outside clicks are ignored. Without [`Self::on_close`], the close button
+    /// stays omitted and dismissal remains disabled.
+    ///
+    /// ```ignore
+    /// Dialog::new("save", "Saving changes")
+    ///     .open(s.open)
+    ///     .close_disabled(s.saving)
+    ///     .on_close(|s: &mut App| s.open = false)
+    ///     .build(&kit, &mut layer);
+    /// ```
+    pub fn close_disabled(mut self, disabled: bool) -> Self { self.close_disabled = disabled; self }
     /// Requests to dismiss the dialog: the header's close button, Escape, and outside clicks
     /// (when [`Self::click_outside`] is true). Without it the dialog still opens as a modal,
     /// leaves out the close button, and closes only from its own controls.
@@ -53,8 +79,13 @@ impl Dialog {
         }
         let mut header = row().key("header").w_full().padding(16.0).items_start().child(title);
         if let Some(button) = self.button {
-            let dismiss = button(IconButton::new(k.glyph.close).variant(IconButtonVariant::Ghost)
-                .control_size(ControlSize::Regular).label("Close").build(k).key("close"))
+            let close_label = self.close_label
+                .filter(|l| !l.trim().is_empty())
+                .unwrap_or_else(|| "Close".into());
+            let dismiss = IconButton::new(k.glyph.close).variant(IconButtonVariant::Ghost)
+                .control_size(ControlSize::Regular).label(close_label).disabled(self.close_disabled)
+                .build(k).key("close");
+            let dismiss = if self.close_disabled { dismiss } else { button(dismiss) }
                 .size(20.0, 20.0).mt(-2.0).mr(-2.0);
             header = header.child(dismiss);
         }
@@ -66,9 +97,9 @@ impl Dialog {
             .child(header)
             .child(body)
             .token_motion(k.motion.overlay), &k.elevation.overlay);
-        let panel = match self.close {
-            Some(close) => close(panel).modal_click_outside(self.outside),
-            None => panel.modal_trap(),
+        let panel = match (self.close, self.close_disabled) {
+            (Some(close), false) => close(panel).modal_click_outside(self.outside),
+            _ => panel.modal_trap(),
         };
         layer.push(el().key(scrim_key(&self.key)).absolute(0.0, 0.0).w_full().h_full()
             .fill(k.c.scrim).token_motion(k.motion.overlay).a11y_hidden());
