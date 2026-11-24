@@ -1,9 +1,10 @@
 //! Whether interaction timing runs, read once from the environment, and where it sends.
 //!
-//! On when `RUNE_PERF=1`, or when `OTEL_EXPORTER_OTLP_ENDPOINT` names a loopback address (a
-//! developer's local collector). `RUNE_PERF=0` turns it off over either. A headless run turns on
-//! only for `RUNE_PERF=1`, so agents' snapshots and tests don't send. Shipped builds on a user's
-//! Mac have neither variable: every check is one load of a cached byte.
+//! On when `RUNE_PERF=1`, or (in debug builds and release builds with Rune's `tooling` feature)
+//! when `OTEL_EXPORTER_OTLP_ENDPOINT` names a loopback address (a developer's local collector).
+//! `RUNE_PERF=0` turns it off over either. A headless run turns on only for `RUNE_PERF=1`, so
+//! agents' snapshots and tests don't send. Release builds without `tooling` ignore an ambient
+//! `OTEL_EXPORTER_OTLP_ENDPOINT` unless `RUNE_PERF=1` is set.
 
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -37,19 +38,22 @@ pub(crate) fn headless() { decide(true); }
 #[cold]
 fn decide(headless: bool) -> bool {
     let perf = rune_core::env::var("RUNE_PERF");
-    let otel = rune_core::env::var("OTEL_EXPORTER_OTLP_ENDPOINT");
-    let on = !cfg!(test) && !cfg!(target_arch = "wasm32") && wanted(perf.as_deref(), otel.as_deref(), headless);
+    let ambient = crate::tooling::dev_tooling_enabled();
+    let otel = (ambient || perf.as_deref().map(str::trim) == Some("1"))
+        .then(|| rune_core::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+        .flatten();
+    let on = !cfg!(test) && !cfg!(target_arch = "wasm32") && wanted(perf.as_deref(), otel.as_deref(), headless, ambient);
     if on { ENDPOINT.set(endpoint(otel.as_deref())).ok(); }
     STATE.store(if on { ON } else { OFF }, Ordering::Relaxed);
     on
 }
 
 /// Whether the settings turn timing on.
-pub(crate) fn wanted(perf: Option<&str>, otel: Option<&str>, headless: bool) -> bool {
+pub(crate) fn wanted(perf: Option<&str>, otel: Option<&str>, headless: bool, ambient_otel: bool) -> bool {
     match perf.map(str::trim) {
         Some("0") => false,
         Some("1") => true,
-        _ => !headless && otel.and_then(loopback).is_some(),
+        _ => ambient_otel && !headless && otel.and_then(loopback).is_some(),
     }
 }
 

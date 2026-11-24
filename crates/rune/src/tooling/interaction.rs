@@ -1,7 +1,7 @@
 //! Interaction timing: how long each input took to reach the screen, which page and control it
 //! was, and where the frame's time went, sent to a developer's local OpenTelemetry collector.
 //!
-//! Off unless `RUNE_PERF=1` or `OTEL_EXPORTER_OTLP_ENDPOINT` points at loopback (`gate`). Off,
+//! Off unless `RUNE_PERF=1`, or (in debug builds and release builds with `tooling`) `OTEL_EXPORTER_OTLP_ENDPOINT` points at loopback (`gate`). Off,
 //! a frame checks one cached flag and nothing else runs: no clocks, threads or files.
 //!
 //! On, a frame whose input ran a handler (a press, key, edit, paste, wheel, drag, hover) is timed

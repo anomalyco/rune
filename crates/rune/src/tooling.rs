@@ -137,8 +137,9 @@ pub(crate) fn app_id() -> Option<&'static str> {
 /// Command-line arguments Rune didn't recognise, in order, for the app to interpret. Ready
 /// before any window: called before `run` (to pick the file a window opens, say), it reads
 /// Rune's flags from the process's arguments as `run` will, `--help` and a malformed flag
-/// included. The first read wins, so an app that passes `App::args` reads this after `run`
-/// starts.
+/// included. In a release build without Rune's `tooling` feature, Rune parses no process flags
+/// and returns every argument untouched. The first read wins, so an app that passes `App::args`
+/// reads this after `run` starts.
 pub fn extra_args() -> &'static [String] {
     if EXTRA.get().is_none() { Args::parse(); }
     EXTRA.get().map_or(&[], |v| v.as_slice())
@@ -630,6 +631,9 @@ pub(crate) mod record;
 pub(crate) mod virtual_desktop;
 #[cfg(test)]
 pub(crate) mod test_alloc;
+#[cfg(test)]
+#[path = "tooling/args_tests.rs"]
+mod args_tests;
 #[cfg(test)]
 #[path = "tooling/window_tests.rs"]
 mod window_tests;
