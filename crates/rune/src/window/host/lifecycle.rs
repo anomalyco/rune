@@ -581,10 +581,15 @@ impl Host {
         }
         self.app.run_on_rest();
         if let Some((gpu, renderer)) = &mut self.gpu {
+            // Poll once (non-blocking) at idle rest only if recyclable oversized chunks are in
+            // flight so their completed buffers return before `give_back(false)` trims them;
+            // ordinary windows skip polling to avoid the 4-9 ms Iris Xe post-poll penalty.
+            if !all && renderer.has_oversized_uploads_in_flight() {
+                rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+            }
             renderer.give_back(all, &mut self.app.rt_mut().text.atlas.resident_caches);
             // Out of sight, what the last frame used goes too, and the staging chunks: an empty
-            // submission and a wait land those frees now. At an idle rest the device isn't
-            // polled: a poll costs the next two frames' submits 4-9 ms each on an Iris Xe.
+            // submission and a wait land those frees now.
             if all {
                 gpu.queue.submit(std::iter::empty());
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
