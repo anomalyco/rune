@@ -54,6 +54,11 @@ macro_rules! stories {
                 s.table_rows = 16;
                 s.table_menu = None;
             }
+            if $id == "rune-table--wide" {
+                s.table = TableState::new().key("wide-table");
+                s.table.hide_column("region");
+                s.table_menu = None;
+            }
             s.open = OPENED.iter().find(|(id, _)| *id == $id).map(|(_, k)| (*k).to_owned());
         }),)*];
     };
@@ -247,6 +252,7 @@ stories! {
     "rune-tree--files" => icons::file_tree,
     "rune-split-view--flat-main" => split_view::flat_main,
     "rune-table--options" => table::options,
+    "rune-table--wide" => table::wide,
     "rune-diff--localized" => diff::localized,
 }
 

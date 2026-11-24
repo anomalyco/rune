@@ -130,12 +130,124 @@ impl TableColumn {
         self.resizable = on;
         self
     }
+    /// The column's id (what [`Table::cell`], [`Table::on_sort`], and [`TableState`] use).
     pub fn id(&self) -> &str {
         &self.id
+    }
+    /// The column's header title.
+    ///
+    /// ```
+    /// use rune_kit::TableColumn;
+    /// let col = TableColumn::new("size", "Size");
+    /// assert_eq!(col.title(), "Size");
+    /// ```
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+    /// The declared fixed width in points, or `None` for a flex column.
+    ///
+    /// ```
+    /// use rune_kit::TableColumn;
+    /// assert_eq!(TableColumn::new("size", "Size").width(90.0).fixed_width(), Some(90.0));
+    /// assert_eq!(TableColumn::new("name", "Name").flex(2.0).fixed_width(), None);
+    /// ```
+    pub fn fixed_width(&self) -> Option<f32> {
+        match self.width {
+            Width::Fixed(w) => Some(w),
+            Width::Flex(_) => None,
+        }
+    }
+    /// The declared flex weight, or `None` for a fixed-width column.
+    ///
+    /// ```
+    /// use rune_kit::TableColumn;
+    /// assert_eq!(TableColumn::new("name", "Name").flex(2.0).flex_weight(), Some(2.0));
+    /// assert_eq!(TableColumn::new("size", "Size").width(90.0).flex_weight(), None);
+    /// ```
+    pub fn flex_weight(&self) -> Option<f32> {
+        match self.width {
+            Width::Flex(g) => Some(g),
+            Width::Fixed(_) => None,
+        }
+    }
+    /// The narrowest width in points (default `48.0`).
+    ///
+    /// ```
+    /// use rune_kit::TableColumn;
+    /// assert_eq!(TableColumn::new("name", "Name").min(120.0).min_width(), 120.0);
+    /// ```
+    pub fn min_width(&self) -> f32 {
+        self.min
+    }
+    /// The widest width in points (default `f32::INFINITY`).
+    ///
+    /// ```
+    /// use rune_kit::TableColumn;
+    /// assert_eq!(TableColumn::new("size", "Size").max(240.0).max_width(), 240.0);
+    /// ```
+    pub fn max_width(&self) -> f32 {
+        self.max
+    }
+    /// The cell and title alignment (default [`Align::Start`]).
+    ///
+    /// ```
+    /// use rune::Align;
+    /// use rune_kit::TableColumn;
+    /// assert_eq!(TableColumn::new("size", "Size").align(Align::End).alignment(), Align::End);
+    /// ```
+    pub fn alignment(&self) -> Align {
+        self.align
+    }
+    /// Whether clicking this column's header sorts by it (default `false`).
+    ///
+    /// ```
+    /// use rune_kit::TableColumn;
+    /// assert!(TableColumn::new("name", "Name").sortable().is_sortable());
+    /// assert!(!TableColumn::new("kind", "Kind").is_sortable());
+    /// ```
+    pub fn is_sortable(&self) -> bool {
+        self.sortable
+    }
+    /// Whether dragging this column's header edge resizes it (default `true`).
+    ///
+    /// ```
+    /// use rune_kit::TableColumn;
+    /// assert!(TableColumn::new("name", "Name").is_resizable());
+    /// assert!(!TableColumn::new("kind", "Kind").resizable(false).is_resizable());
+    /// ```
+    pub fn is_resizable(&self) -> bool {
+        self.resizable
     }
     /// `w` within the column's min and max.
     pub fn clamp(&self, w: f32) -> f32 {
         w.max(self.min).min(self.max.max(self.min))
+    }
+    /// Sizes `el` (a header or body cell) to this column's declared width or flex weight and
+    /// min/max bounds, using `override_width` (for example from [`TableState::column_width`])
+    /// clamped via [`Self::clamp`] when present.
+    ///
+    /// ```
+    /// use rune::row;
+    /// use rune_kit::{TableColumn, TableState};
+    /// let col = TableColumn::new("name", "Name").flex(1.0).min(120.0).max(320.0);
+    /// let state = TableState::new();
+    /// let _cell = col.size_el(row(), state.column_width(col.id()));
+    /// ```
+    pub fn size_el(&self, el: El, override_width: Option<f32>) -> El {
+        self.apply_width(el, self.resolved_width(override_width))
+    }
+
+    fn resolved_width(&self, override_width: Option<f32>) -> Width {
+        override_width.map_or(self.width, |w| Width::Fixed(self.clamp(w)))
+    }
+
+    fn apply_width(&self, el: El, w: Width) -> El {
+        let el = match w {
+            Width::Fixed(w) => el.w(w),
+            Width::Flex(g) => el.w(0.0).grow(g).shrink(),
+        };
+        let el = el.min_w(self.min);
+        if self.max.is_finite() { el.max_w(self.max) } else { el }
     }
 }
 
@@ -195,6 +307,7 @@ pub struct TableState {
     multi: bool,
     sort: Option<(String, SortDir)>,
     widths: HashMap<String, f32>,
+    hidden: HashSet<String>,
     /// Each column's laid-out width, for starting a drag.
     laid_out: HashMap<String, f32>,
     resize: Grip<ColumnDrag>,
@@ -222,6 +335,7 @@ impl TableState {
             multi: false,
             sort: None,
             widths: HashMap::new(),
+            hidden: HashSet::new(),
             laid_out: HashMap::new(),
             resize: Grip::Idle,
             selected: HashSet::new(),
@@ -275,6 +389,63 @@ impl TableState {
     /// Puts `column` back to its declared width.
     pub fn reset_column_width(&mut self, column: &str) {
         self.widths.remove(column);
+    }
+
+    /// Hides `column` from the table's header, rows, and wide scroll width while preserving any
+    /// resized width in [`Self::column_width`].
+    ///
+    /// ```
+    /// use rune_kit::TableState;
+    /// let mut state = TableState::new();
+    /// state.set_column_width("size", 140.0);
+    /// state.hide_column("size");
+    /// assert!(state.is_column_hidden("size"));
+    /// assert_eq!(state.column_width("size"), Some(140.0));
+    /// ```
+    pub fn hide_column(&mut self, column: impl Into<String>) {
+        self.hidden.insert(column.into());
+    }
+    /// Shows a previously hidden `column`, restoring any resized width it had before hiding.
+    ///
+    /// ```
+    /// use rune_kit::TableState;
+    /// let mut state = TableState::new();
+    /// state.hide_column("size");
+    /// state.show_column("size");
+    /// assert!(!state.is_column_hidden("size"));
+    /// ```
+    pub fn show_column(&mut self, column: &str) {
+        self.hidden.remove(column);
+    }
+    /// Sets whether `column` is hidden (`true`) or visible (`false`), preserving any resized
+    /// width in [`Self::column_width`].
+    ///
+    /// ```
+    /// use rune_kit::TableState;
+    /// let mut state = TableState::new();
+    /// state.set_column_hidden("kind", true);
+    /// assert!(state.is_column_hidden("kind"));
+    /// state.set_column_hidden("kind", false);
+    /// assert!(!state.is_column_hidden("kind"));
+    /// ```
+    pub fn set_column_hidden(&mut self, column: impl Into<String>, hidden: bool) {
+        if hidden {
+            self.hidden.insert(column.into());
+        } else {
+            self.hidden.remove(&column.into());
+        }
+    }
+    /// Whether `column` is currently hidden.
+    ///
+    /// ```
+    /// use rune_kit::TableState;
+    /// let mut state = TableState::new();
+    /// assert!(!state.is_column_hidden("name"));
+    /// state.hide_column("name");
+    /// assert!(state.is_column_hidden("name"));
+    /// ```
+    pub fn is_column_hidden(&self, column: &str) -> bool {
+        self.hidden.contains(column)
     }
 
     pub fn selected(&self) -> impl Iterator<Item = &str> {
@@ -529,5 +700,58 @@ mod tests {
         st.set_sort("size", SortDir::Ascending);
         assert_eq!(st.next_sort("size"), SortDir::Descending);
         assert_eq!(st.next_sort("name"), SortDir::Ascending, "another column starts ascending");
+    }
+
+    #[test]
+    fn column_getters_reflect_defaults_and_builders() {
+        let default = TableColumn::new("name", "Name");
+        assert_eq!(default.id(), "name");
+        assert_eq!(default.title(), "Name");
+        assert_eq!(default.fixed_width(), None);
+        assert_eq!(default.flex_weight(), Some(1.0));
+        assert_eq!(default.min_width(), 48.0);
+        assert_eq!(default.max_width(), f32::INFINITY);
+        assert_eq!(default.alignment(), Align::Start);
+        assert!(!default.is_sortable());
+        assert!(default.is_resizable());
+
+        let fixed = TableColumn::new("size", "Size")
+            .width(96.0)
+            .min(60.0)
+            .max(180.0)
+            .align(Align::End)
+            .sortable()
+            .resizable(false);
+        assert_eq!(fixed.id(), "size");
+        assert_eq!(fixed.title(), "Size");
+        assert_eq!(fixed.fixed_width(), Some(96.0));
+        assert_eq!(fixed.flex_weight(), None);
+        assert_eq!(fixed.min_width(), 60.0);
+        assert_eq!(fixed.max_width(), 180.0);
+        assert_eq!(fixed.alignment(), Align::End);
+        assert!(fixed.is_sortable());
+        assert!(!fixed.is_resizable());
+
+        let weighted = TableColumn::new("desc", "Description").flex(2.5);
+        assert_eq!(weighted.fixed_width(), None);
+        assert_eq!(weighted.flex_weight(), Some(2.5));
+    }
+
+    #[test]
+    fn hiding_and_showing_columns_preserves_resized_widths() {
+        let mut st = TableState::new();
+        assert!(!st.is_column_hidden("size"));
+        st.set_column_width("size", 144.0);
+        st.hide_column("size");
+        assert!(st.is_column_hidden("size"));
+        assert_eq!(st.column_width("size"), Some(144.0));
+        st.show_column("size");
+        assert!(!st.is_column_hidden("size"));
+        assert_eq!(st.column_width("size"), Some(144.0));
+        st.set_column_hidden("size", true);
+        assert!(st.is_column_hidden("size"));
+        st.set_column_hidden("size", false);
+        assert!(!st.is_column_hidden("size"));
+        assert_eq!(st.column_width("size"), Some(144.0));
     }
 }
