@@ -93,6 +93,10 @@ pub struct Tx {
     pub(crate) drag_paths: Option<Rc<[std::path::PathBuf]>>,
     pub(crate) title: Option<String>,
     pub(crate) color_scheme: Option<crate::ColorScheme>,
+    /// `Tx::set_represented_file`: `Some(Some(path))` sets, `Some(None)` clears.
+    pub(crate) represented_file: Option<Option<std::path::PathBuf>>,
+    /// `Tx::set_document_edited`.
+    pub(crate) document_edited: Option<bool>,
     /// `Tx::announce`: what a screen reader says after this handler.
     pub(crate) announce: Option<(String, crate::LiveRegion)>,
     pub(crate) open_urls: Vec<crate::open_url::Link>,
@@ -518,6 +522,45 @@ impl Tx {
     /// ```
     pub fn set_color_scheme(&mut self, scheme: crate::ColorScheme) {
         self.color_scheme = Some(scheme);
+    }
+
+    /// Sets or clears this window's represented document path on macOS (`NSWindow.representedURL`),
+    /// updating AppKit's titlebar proxy icon and path menu without performing filesystem I/O.
+    /// Pass `None` (or an empty path) to clear the represented file. When the window opted into
+    /// [`MacWindowOptions::title_from_file`](crate::MacWindowOptions::title_from_file), the
+    /// native title updates to the file's final path component (and restores the window's
+    /// configured title when cleared); calling [`Tx::set_title`](Self::set_title) in the same
+    /// turn takes precedence. Retained across native window recreation. No-op off macOS, on
+    /// overlays, and in headless runs.
+    ///
+    /// ```no_run
+    /// use std::path::PathBuf;
+    /// use rune::{El, el};
+    ///
+    /// let button: El = el().on_press_tx(|_: &mut (), tx| {
+    ///     tx.set_represented_file(Some(PathBuf::from("/tmp/notes.md")));
+    /// });
+    /// let _ = button;
+    /// ```
+    pub fn set_represented_file(&mut self, path: Option<std::path::PathBuf>) {
+        self.represented_file = Some(crate::window::spec::normalize_represented_file(path));
+    }
+
+    /// Sets this window's document-edited state on macOS (`NSWindow.documentEdited`), showing
+    /// (`true`) or hiding (`false`) the unsaved-changes dot inside the close button. Retained
+    /// across native window recreation. No-op off macOS, on overlays, and in headless runs.
+    ///
+    /// Following AppKit's default, marking a document as edited disables dragging its proxy icon
+    /// until `set_document_edited(false)` is called.
+    ///
+    /// ```no_run
+    /// use rune::{El, el};
+    ///
+    /// let button: El = el().on_press_tx(|_: &mut (), tx| tx.set_document_edited(true));
+    /// let _ = button;
+    /// ```
+    pub fn set_document_edited(&mut self, edited: bool) {
+        self.document_edited = Some(edited);
     }
 
     /// Have a screen reader say `text` after this handler, without moving focus: a reply that

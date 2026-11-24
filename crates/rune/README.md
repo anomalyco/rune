@@ -705,6 +705,12 @@ app.run();
 - `Tx::set_title("Draft — Notes")` sets the window's title from a handler or `update`. The window
   opens with `AppSpec`'s title, keeps the last one set when it closes and opens again, and headless
   `--tree` output shows it as `"title"`.
+- On macOS, `Tx::set_represented_file(Option<PathBuf>)` updates `NSWindow.representedURL` (showing
+  or clearing AppKit's titlebar proxy icon and path menu with pure `NSURL` string construction and
+  no filesystem `stat`, and updating the title when `MacWindowOptions::title_from_file(true)` is
+  set) and `Tx::set_document_edited(bool)` updates `NSWindow.documentEdited` (the unsaved-changes
+  dot in the close button; AppKit disables proxy-icon dragging while edited). Both deduplicate,
+  survive native window recreation, and are no-ops off macOS, on overlays, and in headless runs.
 - The `Runtime` (state, scene, text, scroll offsets) belongs to the app, so a reopened window
   shows the same UI, settled on its first frame. The GPU device and renderer stay too, unless
   `release_gpu_when_closed` (then closing destroys the window and device everywhere).
@@ -2160,14 +2166,30 @@ desktop pixels (`GetMonitorInfoW`'s `rcWork` excluding the taskbar and docked ap
 bars on Windows; `(position, size)` elsewhere or when disconnected). Options
 also support initially hidden windows and per-window minimum sizes.
 
-On macOS, `WindowOptions { transparent: true, borderless: true, .. }.macos(MacWindowOptions::default().corner_radius(16.0))`
-rounds a window or nonactivating panel with a continuous curve (`.corner_curve_circular()` for
-a circular arc). The window's layer clips everything in it, so the root view needn't clip to
-the radius; a border inside the edge is still the app's. The system shadow follows the rounded
-shape: any transparent window with `hasShadow` asks AppKit to re-sample its shadow once its
-first frame after each show, resize or scale change (or a launcher's prewarm) reaches the screen.
-Opaque or bordered windows ignore the radius. To round a preset without losing what it set,
-amend its native options: `WindowOptions::launcher_panel().macos(|native| native.corner_radius(16.0))`.
+On macOS, `MacWindowOptions` (via `App::macos_window`, `WindowSpec::macos_window`,
+`WindowOptions::macos`, or `ConfiguredWindowOptions::macos`) configures AppKit properties
+without adding fields to `WindowOptions` or `Chrome` literals, all retained across native
+recreation and ignored on other platforms:
+
+- `.accepts_first_mouse(bool)` sets `NSView.acceptsFirstMouse(for:)` through winit's
+  `with_accepts_first_mouse` on all macOS windows (bordered, full-size-content, borderless, and
+  non-activating panels); pass `false` so clicking an inactive window only activates it without
+  clicking inside the view (omitted keeps winit's `true` default).
+- `.represented_file(path)` sets `NSWindow.representedURL` via pure `NSURL::fileURLWithPath_isDirectory`
+  string construction (no filesystem `stat`), `.title_from_file(bool)` derives the window title
+  from the represented file's final path component, `.document_edited(bool)` sets
+  `NSWindow.documentEdited` (the dot in the close button; AppKit disables proxy-icon dragging
+  while edited), and `.show_title(bool)` keeps the native title and proxy icon visible under
+  `Chrome::full_size_content` (default `false` keeps the title hidden). Update the file and
+  edited state at runtime with `Tx::set_represented_file` and `Tx::set_document_edited`.
+- `WindowOptions { transparent: true, borderless: true, .. }.macos(MacWindowOptions::default().corner_radius(16.0))`
+  rounds a window or nonactivating panel with a continuous curve (`.corner_curve_circular()` for
+  a circular arc). The window's layer clips everything in it, so the root view needn't clip to
+  the radius; a border inside the edge is still the app's. The system shadow follows the rounded
+  shape: any transparent window with `hasShadow` asks AppKit to re-sample its shadow once its
+  first frame after each show, resize or scale change (or a launcher's prewarm) reaches the screen.
+  Opaque or bordered windows ignore the radius. To round a preset without losing what it set,
+  amend its native options: `WindowOptions::launcher_panel().macos(|native| native.corner_radius(16.0))`.
 
 On Windows, `WindowOptions::windows(WindowsWindowOptions::default()...)` (or
 `ConfiguredWindowOptions::windows`, `App::windows_window`, `WindowSpec::windows_window`)

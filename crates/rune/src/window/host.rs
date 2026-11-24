@@ -401,6 +401,8 @@ impl Host {
             rt.host.open_urls_natively = args.script.is_none() && args.window_script.is_none() && args.trace.is_none() && args.frames.is_none();
             rt.frame.set_record_events(false);
             rt.host.surface_stats = Some(meter.shared());
+            rt.host.represented_file.seed(macos_window.represented_file.clone());
+            rt.host.document_edited.seed(macos_window.document_edited);
         }
         app.set_live_visible(false);
         let mut clipboard = crate::clipboard::Client::default();

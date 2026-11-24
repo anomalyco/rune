@@ -65,3 +65,114 @@ fn tx_set_color_scheme_latches_last_wins_without_forcing_redundant_redraw() {
     crate::runtime::input::action::merge(&mut base, Tx::default());
     assert_eq!(base.color_scheme, Some(crate::ColorScheme::Dark));
 }
+
+#[test]
+fn tx_set_represented_file_and_document_edited_latch_deduplicate_and_retain() {
+    use std::path::PathBuf;
+
+    let mut rt = Runtime::new((), |_: &(), _: &mut Cx<()>| crate::el(), (200.0, 100.0), Env::default());
+    rt.frame(0.0);
+    assert_eq!(rt.host.represented_file.current(), None);
+    assert_eq!(rt.host.represented_file.take_change(), None);
+    assert_eq!(rt.host.document_edited.current(), None);
+    assert_eq!(rt.host.document_edited.take_change(), None);
+
+    // Seeding from creation options records Applied without queuing a redundant change.
+    let initial = Some(PathBuf::from("/tmp/rune-notes/a.md"));
+    rt.host.represented_file.seed(initial.clone());
+    rt.host.document_edited.seed(false);
+    assert_eq!(rt.host.represented_file.current(), Some(&initial));
+    assert_eq!(rt.host.represented_file.take_change(), None);
+    assert_eq!(rt.host.document_edited.current(), Some(&false));
+    assert_eq!(rt.host.document_edited.take_change(), None);
+
+    // Repeating the currently applied values deduplicates and never marks the view stale.
+    assert!(!rt.update_if(|_, tx| {
+        tx.set_represented_file(initial.clone());
+        tx.set_document_edited(false);
+        false
+    }));
+    assert!(!rt.stale());
+    assert_eq!(rt.host.represented_file.take_change(), None);
+    assert_eq!(rt.host.document_edited.take_change(), None);
+
+    // Changing values via update_if(false) latches last-wins without forcing a redraw.
+    let next = Some(PathBuf::from("/tmp/rune-notes/b.md"));
+    assert!(!rt.update_if(|_, tx| {
+        tx.set_represented_file(Some(PathBuf::from("/tmp/rune-notes/tmp.md")));
+        tx.set_represented_file(next.clone());
+        tx.set_document_edited(false);
+        tx.set_document_edited(true);
+        false
+    }));
+    assert!(!rt.stale());
+    assert_eq!(rt.host.represented_file.current(), Some(&next));
+    assert_eq!(rt.host.document_edited.current(), Some(&true));
+    assert_eq!(rt.host.represented_file.take_change().cloned(), Some(next.clone()));
+    assert_eq!(rt.host.document_edited.take_change().copied(), Some(true));
+    // Taken once; retained for native window recreation.
+    assert_eq!(rt.host.represented_file.take_change(), None);
+    assert_eq!(rt.host.document_edited.take_change(), None);
+    assert_eq!(rt.host.represented_file.current(), Some(&next));
+    assert_eq!(rt.host.document_edited.current(), Some(&true));
+
+    // Changing and reverting before take_change cancels the pending update.
+    rt.update_if(|_, tx| {
+        tx.set_represented_file(Some(PathBuf::from("/tmp/rune-notes/c.md")));
+        tx.set_document_edited(false);
+        false
+    });
+    rt.update_if(|_, tx| {
+        tx.set_represented_file(next.clone());
+        tx.set_document_edited(true);
+        false
+    });
+    assert_eq!(rt.host.represented_file.take_change(), None);
+    assert_eq!(rt.host.document_edited.take_change(), None);
+
+    // Clearing with None (and empty PathBuf normalization) latches and retains None.
+    rt.update_if(|_, tx| {
+        tx.set_represented_file(None);
+        tx.set_document_edited(false);
+        false
+    });
+    assert_eq!(rt.host.represented_file.take_change().cloned(), Some(None));
+    assert_eq!(rt.host.document_edited.take_change().copied(), Some(false));
+    assert_eq!(rt.host.represented_file.current(), Some(&None));
+    assert_eq!(rt.host.document_edited.current(), Some(&false));
+
+    // Empty PathBuf normalizes to None and deduplicates against already-cleared state.
+    rt.update_if(|_, tx| {
+        tx.set_represented_file(Some(PathBuf::new()));
+        false
+    });
+    assert_eq!(rt.host.represented_file.take_change(), None);
+
+    // mark_applied transitions Pending to Applied (used when native creation applies current).
+    let reopened = Some(PathBuf::from("/tmp/rune-notes/reopened.md"));
+    rt.update_if(|_, tx| {
+        tx.set_represented_file(reopened.clone());
+        tx.set_document_edited(true);
+        false
+    });
+    rt.host.represented_file.mark_applied();
+    rt.host.document_edited.mark_applied();
+    assert_eq!(rt.host.represented_file.take_change(), None);
+    assert_eq!(rt.host.document_edited.take_change(), None);
+    assert_eq!(rt.host.represented_file.current(), Some(&reopened));
+    assert_eq!(rt.host.document_edited.current(), Some(&true));
+
+    // Merging two Tx values keeps the later call and preserves earlier calls when default merges.
+    let mut base = Tx::default();
+    base.set_represented_file(Some(PathBuf::from("/tmp/one.md")));
+    base.set_document_edited(true);
+    let mut later = Tx::default();
+    later.set_represented_file(None);
+    later.set_document_edited(false);
+    crate::runtime::input::action::merge(&mut base, later);
+    assert_eq!(base.represented_file, Some(None));
+    assert_eq!(base.document_edited, Some(false));
+    crate::runtime::input::action::merge(&mut base, Tx::default());
+    assert_eq!(base.represented_file, Some(None));
+    assert_eq!(base.document_edited, Some(false));
+}

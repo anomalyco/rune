@@ -37,6 +37,10 @@ pub(crate) struct HostState {
     pub(crate) window_title: Title,
     /// Per-window native color scheme requested via `Tx::set_color_scheme`, taken by the host.
     pub(crate) window_color_scheme: Option<crate::ColorScheme>,
+    /// macOS document path (`MacWindowOptions::represented_file`, `Tx::set_represented_file`).
+    pub(crate) represented_file: Latched<Option<std::path::PathBuf>>,
+    /// macOS document edited dot (`MacWindowOptions::document_edited`, `Tx::set_document_edited`).
+    pub(crate) document_edited: Latched<bool>,
     /// The window's height follows the root's natural height (`App::fit_content_height`).
     pub(crate) fit_height: bool,
     /// The height a window that fits its content last asked for, and the frame its move
@@ -92,6 +96,8 @@ impl HostState {
             window_frame: None,
             window_title: Default::default(),
             window_color_scheme: None,
+            represented_file: Default::default(),
+            document_edited: Default::default(),
             fit_height: false,
             fit: Default::default(),
             minimize: Default::default(),
@@ -283,6 +289,83 @@ impl Title {
             (_, TitleEvent::Set(title)) => (Title::Pending(title), false),
             (Title::Pending(title), TitleEvent::Shown) => (Title::Shown(title), true),
             (title, TitleEvent::Shown) => (title, false),
+        }
+    }
+}
+
+/// A latched host-window property seeded from creation options and updated by `Tx`.
+/// Deduplicates repeated sets to the currently applied value, cancels a pending change if a
+/// later `Tx` reverts back to the applied value before the host takes it, and retains the
+/// latest value across native window recreation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Latched<T> {
+    #[default]
+    Unset,
+    /// Value already applied to the native window (or seeded at creation).
+    Applied(T),
+    /// Value updated via `Tx` that differs from `applied` and awaits `Host::shell`.
+    Pending { applied: Option<T>, next: T },
+}
+
+enum LatchedEvent<T> {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    Seed(T),
+    Set(T),
+    TakeChange,
+    MarkApplied,
+}
+
+impl<T: PartialEq> Latched<T> {
+    /// Seeds the initial creation-time value before any `Tx` update runs.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn seed(&mut self, value: T) {
+        *self = std::mem::take(self).step(LatchedEvent::Seed(value)).0;
+    }
+
+    /// Latches a new requested value from `Tx`.
+    pub(crate) fn set(&mut self, value: T) {
+        *self = std::mem::take(self).step(LatchedEvent::Set(value)).0;
+    }
+
+    /// Returns the latest value (applied or pending) for native creation/recreation.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(crate) fn current(&self) -> Option<&T> {
+        match self {
+            Latched::Unset => None,
+            Latched::Applied(v) | Latched::Pending { next: v, .. } => Some(v),
+        }
+    }
+
+    /// Marks the current value as already applied to a freshly created native window.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(crate) fn mark_applied(&mut self) {
+        *self = std::mem::take(self).step(LatchedEvent::MarkApplied).0;
+    }
+
+    /// Takes a pending change for the host to apply, transitioning it to `Applied`.
+    pub(crate) fn take_change(&mut self) -> Option<&T> {
+        let (next, changed) = std::mem::take(self).step(LatchedEvent::TakeChange);
+        *self = next;
+        if !changed { return None; }
+        match &*self {
+            Latched::Applied(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    fn step(self, event: LatchedEvent<T>) -> (Self, bool) {
+        match (self, event) {
+            (Latched::Unset, LatchedEvent::Seed(v)) => (Latched::Applied(v), false),
+            (state, LatchedEvent::Seed(_)) => (state, false),
+            (Latched::Unset, LatchedEvent::Set(v)) => (Latched::Pending { applied: None, next: v }, false),
+            (Latched::Applied(a), LatchedEvent::Set(v)) if a == v => (Latched::Applied(a), false),
+            (Latched::Applied(a), LatchedEvent::Set(v)) => (Latched::Pending { applied: Some(a), next: v }, false),
+            (Latched::Pending { applied: Some(a), .. }, LatchedEvent::Set(v)) if a == v => (Latched::Applied(a), false),
+            (Latched::Pending { applied, .. }, LatchedEvent::Set(v)) => (Latched::Pending { applied, next: v }, false),
+            (Latched::Pending { next, .. }, LatchedEvent::TakeChange) => (Latched::Applied(next), true),
+            (state, LatchedEvent::TakeChange) => (state, false),
+            (Latched::Pending { next, .. }, LatchedEvent::MarkApplied) => (Latched::Applied(next), false),
+            (state, LatchedEvent::MarkApplied) => (state, false),
         }
     }
 }

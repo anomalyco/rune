@@ -68,6 +68,32 @@ impl Host {
             self.set_color_scheme(scheme);
         }
     }
+
+    /// `Tx::set_represented_file` and `Tx::set_document_edited`: applies macOS document state
+    /// changes set since the shell last checked. Retained in `HostState` across native window
+    /// recreation; no-op off macOS.
+    pub(in crate::window) fn apply_tx_macos_document(&mut self) {
+        if self.win.is_none() { return; }
+        let represented_change = self.app.rt_mut().host.represented_file.take_change().cloned();
+        let edited_change = self.app.rt_mut().host.document_edited.take_change().copied();
+        #[cfg(target_os = "macos")]
+        if let Some(w) = &self.win {
+            if let Some(path) = represented_change {
+                let fallback_title = self.app.rt().host.window_title.current().unwrap_or(self.geometry.title);
+                crate::platform::macos::document::set_represented_file(
+                    &w.window,
+                    path.as_deref(),
+                    self.macos_window.title_from_file,
+                    Some(fallback_title),
+                );
+            }
+            if let Some(edited) = edited_change {
+                crate::platform::macos::document::set_document_edited(&w.window, edited);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (represented_change, edited_change);
+    }
 }
 
 #[cfg(test)]
