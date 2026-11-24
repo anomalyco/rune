@@ -186,8 +186,10 @@ struct Slot {
     role: Role,
     print: u64,
     live_sig: Option<u64>,
-    /// A set size an item's `El::position_in_set` gave this container.
-    set_size: Option<usize>,
+    /// A set size an item's `El::position_in_set` gave this container, paired with the item's
+    /// hierarchical level (`u32::MAX` when unset) so deeper items in a flat tree do not replace
+    /// the top level's size.
+    set_size: Option<(usize, u32)>,
 }
 
 /// What a walk found: every node, each node's element children in order, and the focus.
@@ -390,6 +392,8 @@ impl RuntimeCore {
             let Some(old) = tree.sent.get_mut(&id.0) else { continue };
             node.set_children(old.node.children().to_vec());
             if let Some(size) = old.node.size_of_set() { node.set_size_of_set(size); }
+            if let Some(rows) = old.node.row_count() { node.set_row_count(rows); }
+            if let Some(row) = old.node.row_index() { node.set_row_index(row); }
             if old.node != node {
                 moved = true;
                 changed.push((id, node.clone()));
@@ -623,10 +627,26 @@ impl RuntimeCore {
                 let id = element_id(n.id);
                 let live_sig = self.a11y_live_sig(i, content_print);
                 let mut print = mix(self.a11y_print(i, role, &w), content_print);
-                if let Some(index) = self.a11y_index_in_list(i) { print = mix(print, index as u64 + 1); }
+                let parent_role = slots[w.slot].role;
+                if let Some(list) = self.commit.virtuals.get(&n.path) {
+                    print = mix(print, list.keys.len() as u64 + 1);
+                }
+                if let Some(index) = self.a11y_index_in_list(i)
+                    && (crate::a11y::roles::ordered_set_item_in(role, parent_role)
+                        || (role == Role::Row && crate::a11y::roles::table_container(parent_role)))
+                {
+                    print = mix(print, index as u64 + 1);
+                }
                 if n.scroll.is_some() && self.scroll.scrolls.contains_key(&n.id) { scrollers.push((i, w)); }
                 if self.a11y_uses_long_field(i) { long_fields.push((i, w, self.a11y_lines_box_print(i, &w))); }
-                if let Some((_, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { slots[w.slot].set_size = Some(size); }
+                if let Some((_, size)) = n.a11y.more.as_ref().and_then(|m| m.set)
+                    && crate::a11y::roles::ordered_set(parent_role)
+                {
+                    let level = n.a11y.level.unwrap_or(u32::MAX);
+                    if slots[w.slot].set_size.is_none_or(|(_, cur)| level <= cur) {
+                        slots[w.slot].set_size = Some((size, level));
+                    }
+                }
                 kids.push((w.slot, id));
                 if focused == Some(i) {
                     focus = self.link_focus().filter(|&k| n.text.as_ref().is_some_and(|t| k < t.cold.links.len()))
@@ -647,7 +667,7 @@ impl RuntimeCore {
         let mut kid_prints = vec![0u64; slots.len()];
         for &(parent, id) in &kids { kid_prints[parent] = mix(kid_prints[parent], id.0); }
         for (k, s) in slots.iter_mut().enumerate() {
-            s.print = mix(mix(s.print, kid_prints[k]), s.set_size.map_or(0, |n| n as u64 + 1));
+            s.print = mix(mix(s.print, kid_prints[k]), s.set_size.map_or(0, |(n, _)| n as u64 + 1));
         }
         Found { slots, kids, focus, scrollers, long_fields, modal_hidden_live }
     }
@@ -685,16 +705,29 @@ impl RuntimeCore {
                 node.set_bounds(AkRect { x0: 0.0, y0: 0.0, x1: 1.0, y1: 1.0 });
                 kids.push(ANNOUNCER);
                 out.push((ANNOUNCER, node, s.print));
-                if let Some(size) = s.set_size { root.set_size_of_set(size); }
+                if let Some((size, _)) = s.set_size { root.set_size_of_set(size); }
                 root.set_children(kids);
                 out.push((ROOT, root, s.print));
                 continue;
             };
             let mut node = self.a11y_node(i, s.role, &s.walk);
-            if let Some(list) = self.commit.virtuals.get(&self.tree.nodes[i].path) { node.set_size_of_set(list.keys.len()); }
-            // An app's own place in the set wins over the virtual list's index.
-            if node.position_in_set().is_none() && let Some(index) = self.a11y_index_in_list(i) { node.set_position_in_set(index); }
-            if let Some(size) = s.set_size { node.set_size_of_set(size); }
+            if let Some(list) = self.commit.virtuals.get(&self.tree.nodes[i].path) {
+                if crate::a11y::roles::ordered_set(s.role) { node.set_size_of_set(list.keys.len()); }
+                if crate::a11y::roles::table_container(s.role) && node.row_count().is_none() {
+                    node.set_row_count(list.keys.len());
+                }
+            }
+            // An app's own place in the set or table wins over the virtual list's index.
+            if let Some(index) = self.a11y_index_in_list(i) {
+                let parent_role = found.slots[s.walk.slot].role;
+                if node.position_in_set().is_none() && crate::a11y::roles::ordered_set_item_in(s.role, parent_role) {
+                    node.set_position_in_set(index);
+                }
+                if s.role == Role::Row && node.row_index().is_none() && crate::a11y::roles::table_container(parent_role) {
+                    node.set_row_index(index);
+                }
+            }
+            if let Some((size, _)) = s.set_size { node.set_size_of_set(size); }
             // Its text's lines and links come first, then its element children.
             let mut text = vec![(s.id, node)];
             self.a11y_text_nodes(i, &s.walk, &mut text);

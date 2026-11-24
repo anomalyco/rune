@@ -58,7 +58,8 @@ impl RuntimeCore {
         n.a11y.disabled.hash(&mut h);
         n.a11y.live.hash(&mut h);
         if let Some(m) = n.a11y.more.as_deref() {
-            (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy).hash(&mut h);
+            (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy,
+                m.row_count, m.column_count, m.row_index, m.column_index).hash(&mut h);
             [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j))).hash(&mut h);
             if let Some(r) = m.range { [r.value, r.min, r.max, r.step.unwrap_or(f64::NAN)].map(f64::to_bits).hash(&mut h); }
             self.a11y_active_descendant(i).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
@@ -241,6 +242,12 @@ impl RuntimeCore {
         }
         if let Some(keys) = more.and_then(|m| m.shortcut.as_deref()) { node.set_keyboard_shortcut(keys); }
         if let Some((pos, _)) = more.and_then(|m| m.set) { node.set_position_in_set(pos.saturating_sub(1)); }
+        if let Some(m) = more {
+            if let Some(rows) = m.row_count { node.set_row_count(rows); }
+            if let Some(cols) = m.column_count { node.set_column_count(cols); }
+            if let Some(r) = m.row_index { node.set_row_index(r.saturating_sub(1)); }
+            if let Some(c) = m.column_index { node.set_column_index(c.saturating_sub(1)); }
+        }
         if let Some(level) = n.a11y.level { node.set_level(level.saturating_sub(1) as usize); }
         if let Some(open) = n.a11y.expanded { node.set_expanded(open); }
         let checked = n.a11y.checked.or_else(|| (role == Role::RadioButton).then(|| if n.focus.selected { Checked::True } else { Checked::False }));
