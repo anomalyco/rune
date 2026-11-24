@@ -231,6 +231,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   its content's touches: the element springs back and the release doesn't press. Elements without
   it pay nothing, and Reduce Motion turns it off. rune-kit's `Button` and `IconButton` don't use
   it: they follow `@opencode/ui` and AppKit, whose buttons don't scale.
+- **Press offset**: `.press_offset(x, y)` translates an element and its subtree by `(x, y)` points
+  while a press on it is held (like a keycap sinking into its lip) and springs back on release,
+  pointer leave, or scroll cancel, sharing `.press_motion(down, up)` (default `INSTANT` down /
+  `POP` up). Layout and hit testing keep the resting rect, and Reduce Motion turns it off.
 - **Scale, rotation and origin**: `.scale(0.5)` draws an element and everything in it at half size
   about its `.origin(x, y)` (default centre `(0.5, 0.5)`), like SwiftUI's `scaleEffect`. Changes
   spring on the element's layout spring or `.scale_motion(anim)` (landing at once on mount, in an
@@ -386,10 +390,13 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   the text's ends). On macOS, Home and End move to the document's ends by default; opt into
   visual line edges (keeping Cmd+Home/End and Ctrl+Home/End on the document's ends) with
   `El::line_home_end(true)` or `TextEdit::set_line_home_end(true)` / `with_line_home_end(true)`.
-- **Periodic motion**: `.looping(rune_motion::LoopSpec::opacity(..))` or `LoopSpec::rotation(period)`
-  (icon quads). Tracks use animation time, preserve phase when retimed and only request frames
-  while visible through ancestor clips. Removal uses the existing spring presence fade. Reduced
-  motion holds the first pose; time scale 0 pauses. Occluded windows stop drawing and building.
+- **Periodic and finite loops**: `.looping(rune_motion::LoopSpec::opacity(..))`, `LoopSpec::rotation(period)`
+  (icon quads), `LoopSpec::slide(period, from, to)` (optionally bounded to `n` sweeps with `.loop_times(n)`,
+  resting at `to` and sleeping once finished), and `El::sequence(Sequence::new(BEATS).repeating())`.
+  Tracks use animation time, preserve phase when retimed and only request frames
+  while visible through ancestor clips. Removal cools smoothly via amplitude. Reduced
+  motion holds the calm first pose (or end pose `to` for finite slides and one-shot sequences);
+  time scale 0 pauses. Occluded windows stop drawing and building.
 
 Commit layout runs through a `Measurement` capability that can access text/layout
 caches and virtual geometry, but cannot access the scene, animation tracks, draw
@@ -1297,8 +1304,8 @@ rune::App::new(spec).fit_content_height().run();
   overlying `.hit()` elements block all pointer hover signals beneath them (including `on_hover`
   and `focus_highlight`) unless marked `.hover_passes_below()`.
   `.press_motion(down, up)` sets the down and release curves for all press tracks on the element
-  (`press`, `press_fill`, `press_border`, `press_color` and `press_scale`), leaving
-  `INSTANT`/`SNAPPY` (highlight) and `INSTANT`/`POP` (scale) as the defaults when unset.
+  (`press`, `press_fill`, `press_border`, `press_color`, `press_scale` and `press_offset`), leaving
+  `INSTANT`/`SNAPPY` (highlight) and `INSTANT`/`POP` (scale and offset) as the defaults when unset.
 - **Per-element motion overrides**: beside `offset_motion`, `opacity_motion`, `scale_motion`,
   `rotate_motion` and `blur_motion`, `.frame_motion(anim)` overrides this element's own layout
   curve (non-inherited, beating `Tx::motion` / `Tx::motion_curve` and skipping `lead` /

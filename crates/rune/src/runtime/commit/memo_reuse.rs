@@ -224,7 +224,7 @@ pub(in crate::runtime) fn same_visual(a: &Visual, b: &Visual) -> bool {
 
 fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
-        focus, looping, trace_name, trace_namespace, role, label, live, above, above_boundary, motion, frame_motion, opacity_motion, lead,
+        focus, looping, loop_times, trace_name, trace_namespace, role, label, live, above, above_boundary, motion, frame_motion, opacity_motion, lead,
         animated_changes, option_as_alt, window_resize, transition, transition_motion, matched, matched_motion, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
         virtual_rows_version, virtual_rows_append_only, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, wheel_scrolls, on_path,
         expanded_memo: _,
@@ -237,6 +237,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     } = b;
     crate::cold::Cold::ptr_eq(&a.focus, focus)
         && opt_box_eq(&a.looping, looping)
+        && a.loop_times == *loop_times
         && a.trace_name == *trace_name
         && a.trace_namespace == *trace_namespace
         && a.role == *role
@@ -363,6 +364,7 @@ fn same_handlers(
         on_selection_change,
         cursor,
         press_scale,
+        press_offset,
         #[cfg(debug_assertions)]
         sites: _,
     } = &**b;
@@ -422,6 +424,7 @@ fn same_handlers(
         && opt_rc_eq(&a.on_selection_change, on_selection_change)
         && a.cursor == *cursor
         && a.press_scale == *press_scale
+        && a.press_offset == *press_offset
 }
 
 /// Exhaustively checks that `el` has not been mutated by builders after `Built::placeholder`

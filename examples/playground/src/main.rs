@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use rune::tok::{self, Theme, motion, radius, type_};
 mod hover_press;
+mod loops_press;
 
 use rune::{Align, App, AppSpec, Color, Cx, El, ElementInfo, Family, OverlaySpec, Play, Playground, ScreenEdge, ScrollSpec, Stage, Story, TextStyle, Tx, col, el, row, text};
 
@@ -660,6 +661,13 @@ fn main() {
                         .variant("Closed", |_| {})
                         .variant("Popup blocking", |s| { s.popup_open = true; s.pass_through = false; })
                         .variant("Pass-through cover", |s| { s.popup_open = true; s.pass_through = true; }),
+                )
+                .story(
+                    Story::new("Controls/Motion/Loops & press offset", loops_press::LoopsPressDemo::default, loops_press::view)
+                        .trigger('r', "Replay 2× shimmer", |s, _| s.shimmer_gen = s.shimmer_gen.wrapping_add(1))
+                        .trigger('p', "Toggle repeating pulse", |s, _| s.pulsing = !s.pulsing)
+                        .variant("Active", |_| {})
+                        .variant("Pulse paused", |s| s.pulsing = false),
                 )
                 .story(
                     Story::new("Controls/Switches/Toggle", || Switch { on: true, dimmed: false, label: "Sync across devices" }, switch_story)

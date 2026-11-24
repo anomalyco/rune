@@ -399,6 +399,27 @@ impl El {
         }
         self
     }
+    /// Translate this element and its subtree by `(x, y)` points while a press on it is held
+    /// (like a tactile button or keycap sinking into its lip, matching CSS
+    /// `:active { transform: translate(x, y) }`), springing back to `(0.0, 0.0)` on release or when
+    /// the pointer leaves (override the down/up curves with [`Self::press_motion`]).
+    ///
+    /// Put it on the element with `on_press`. Layout and hit testing keep the resting rect, and
+    /// Reduce Motion turns it off. `(0.0, 0.0)` or non-finite inputs remove it.
+    ///
+    /// ```
+    /// use rune::el;
+    ///
+    /// let keycap = el().size(80.0, 32.0).press_offset(0.0, 1.5);
+    /// # let _ = keycap;
+    /// ```
+    pub fn press_offset(mut self, x: f32, y: f32) -> Self {
+        let off = (x.is_finite() && y.is_finite() && (x != 0.0 || y != 0.0)).then_some([x, y]);
+        if off.is_some() || !self.handlers.is_empty() {
+            self.handlers.press_offset = off;
+        }
+        self
+    }
     /// Draw this element and everything in it `k` times its size about its
     /// [`origin`](Self::origin) (default centre `(0.5, 0.5)`), like SwiftUI's `scaleEffect`:
     /// fills, borders, text, icons and images all scale, and text rasterizes at the scaled size
@@ -568,12 +589,13 @@ impl El {
         self
     }
     /// Curves for this element's press tracks ([`Self::press`], [`Self::press_fill`],
-    /// [`Self::press_border`], [`Self::press_color`] and [`Self::press_scale`]): `down` while
-    /// a press is held and `up` on release or leave.
+    /// [`Self::press_border`], [`Self::press_color`], [`Self::press_scale`] and
+    /// [`Self::press_offset`]): `down` while a press is held and `up` on release or leave.
     ///
     /// When unset, press highlights and colour use `tok::motion::INSTANT` down / `SNAPPY` up,
-    /// and `press_scale` uses `INSTANT` down / `POP` up. Under Reduce Motion, `press_scale`
-    /// stays off and press highlight curves reduce as opacity tracks do ([`Anim::INSTANT`] stays
+    /// and `press_scale` / `press_offset` use `INSTANT` down / `POP` up. Under Reduce Motion,
+    /// `press_scale` and `press_offset` stay off and press highlight curves reduce as opacity
+    /// tracks do ([`Anim::INSTANT`] stays
     /// instant).
     ///
     /// ```

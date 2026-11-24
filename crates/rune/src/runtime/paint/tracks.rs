@@ -302,6 +302,7 @@ pub(in crate::runtime) fn unchanged_node_resting(
             c.matched.is_none()
                 && c.matched_motion.is_none()
                 && c.looping.is_none()
+                && c.loop_times.is_none()
                 && c.live.is_empty()
                 && c.transition.is_none()
                 && c.transition_motion.is_none()

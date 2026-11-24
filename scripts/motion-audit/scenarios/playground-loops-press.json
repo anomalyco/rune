@@ -1,0 +1,12 @@
+{
+  "events": [
+    { "t": 0.2, "type": "move", "key": "keycap-btn" },
+    { "t": 0.35, "type": "down", "key": "keycap-btn" },
+    { "t": 0.55, "type": "up", "key": "keycap-btn" },
+    { "t": 0.9, "type": "move", "key": "tactile-btn" },
+    { "t": 1.05, "type": "down", "key": "tactile-btn" },
+    { "t": 1.25, "type": "up", "key": "tactile-btn" },
+    { "t": 1.6, "type": "tap", "key": "replay-shimmer", "hold": 0.08 },
+    { "t": 2.9, "type": "tap", "key": "toggle-pulse", "hold": 0.06 }
+  ]
+}

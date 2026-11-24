@@ -15,7 +15,7 @@ impl RuntimeCore {
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub(crate) fn loops_shown(&self) -> bool {
         (!self.reduced_motion && self.paint.animated_icons_shown())
-            || self.tree.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.paint.was_seen(i, false) && self.motion.has_loop(n.id))
+            || self.tree.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.paint.was_seen(i, false) && self.motion.loop_active(n.id, self.scene.store().node_time(n.id)))
     }
 
     /// Wakes when a delayed start at animation time `at` comes due, on the loops' wake: the

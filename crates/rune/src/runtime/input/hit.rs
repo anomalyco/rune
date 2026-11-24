@@ -470,7 +470,7 @@ impl RuntimeCore {
         pinh_clip: [f32; 4],
         (effective_opacity, visible): (f32, bool),
         rect_pt: [f32; 4],
-        (press_k, press_anchor): (f32, [f32; 2]),
+        (press_k, press_anchor, press_off): (f32, [f32; 2], [f32; 2]),
     ) {
         let s = self.env.scale;
         let n = &self.tree.nodes[i];
@@ -485,6 +485,10 @@ impl RuntimeCore {
                 let [ax, ay] = press_anchor;
                 [ax + (rect_pt[0] - ax) / press_k, ay + (rect_pt[1] - ay) / press_k,
                     ax + (rect_pt[2] - ax) / press_k, ay + (rect_pt[3] - ay) / press_k]
+            } else { rect_pt };
+            let rect_pt = if press_off != [0.0; 2] {
+                [rect_pt[0] - press_off[0], rect_pt[1] - press_off[1],
+                    rect_pt[2] - press_off[0], rect_pt[3] - press_off[1]]
             } else { rect_pt };
             let cr = [
                 rect_pt[0].max(c[0] / s),

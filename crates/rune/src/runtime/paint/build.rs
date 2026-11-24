@@ -229,6 +229,12 @@ impl RuntimeCore {
             let mut rounded = pinh.rounded;
             let has_press_scale = n.handlers.get().is_some_and(|h| h.press_scale.is_some());
             let press_k = if has_press_scale { self.scene.get(n.id, P_PRESS_SCALE).unwrap_or(1.0) } else { 1.0 };
+            let has_press_offset = n.handlers.get().is_some_and(|h| h.press_offset.is_some());
+            let press_off = if has_press_offset {
+                [self.scene.get(n.id, P_PRESS_OX).unwrap_or(0.0), self.scene.get(n.id, P_PRESS_OY).unwrap_or(0.0)]
+            } else {
+                [0.0; 2]
+            };
             let sequence = track
                 .filter(|_| matches!(n.looping.as_ref().map(|l| l.kind), Some(rune_motion::LoopKind::Sequence(_))));
             let static_k = if n.scale_track { self.scene.get(n.id, P_SCALE).unwrap_or(n.static_scale) } else { n.static_scale };
@@ -280,6 +286,27 @@ impl RuntimeCore {
             } else {
                 sc
             };
+            let press_target = if has_press_offset {
+                [store.target(n.id, P_PRESS_OX).unwrap_or(0.0), store.target(n.id, P_PRESS_OY).unwrap_or(0.0)]
+            } else {
+                [0.0; 2]
+            };
+            let press_off_anim = has_press_offset
+                && (store.is_animating(n.id, P_PRESS_OX) || store.is_animating(n.id, P_PRESS_OY));
+            let own_press_by = if press_off_anim {
+                [press_off[0] - press_target[0], press_off[1] - press_target[1]]
+            } else {
+                [0.0; 2]
+            };
+            let press_off_by = [pinh.press_off_by[0] + own_press_by[0], pinh.press_off_by[1] + own_press_by[1]];
+            let hit_press_off = [press_off[0] * pinh.scale, press_off[1] * pinh.scale];
+            if press_off != [0.0; 2] {
+                pinh.dx += press_off[0];
+                pinh.dy += press_off[1];
+            }
+            if press_target != [0.0; 2] {
+                pinh.snap.shifted = true;
+            }
             let pivot = match n.vis.origin {
                 Some([ox, oy]) => [p.rect.x + ox * p.rect.w, p.rect.y + oy * p.rect.h],
                 None => [p.anchor.x, p.anchor.y],
@@ -358,13 +385,15 @@ impl RuntimeCore {
             };
             let steps = pinh.snap.steps || n.vis.cold.get().is_some_and(|c| c.motion_snaps);
             let rest = if snaps && animating && !steps { self.scene.rest(n.id) } else { None };
-            let gliding = snaps && (rest.is_some() || !unscaled);
+            let press_gliding = snaps && !steps && press_off_by != [0.0; 2];
+            let gliding = snaps && (rest.is_some() || press_gliding || !unscaled);
             let (mut r, snap_rest) = if !snaps {
                 (r_exact, None)
-            } else if rest.is_none() && unscaled {
+            } else if rest.is_none() && !press_gliding && unscaled {
                 self.paint.pixel_snap.at_rest(n.id, r_exact, rigid, pinh.snap.parent)
             } else {
                 let motion = pixel_snap::motion(&p, rest, s, n.above.is_some(), self.paint.row_h[i] >= 0.0);
+                let motion = pixel_snap::with_offset_motion(motion, raw_edges, press_off_by, s);
                 let raw = if unscaled { r_exact } else { raw_edges.map(snap_px) };
                 self.paint.pixel_snap.snapped(n.id, motion, (r_exact, raw), rigid, (snap_layer, sc), pinh.snap.parent)
             };
@@ -702,12 +731,13 @@ impl RuntimeCore {
                 scale_target: if cover.is_some() { scale } else { scale_target },
                 scale_tracked: p_scale_tracked && cover.is_none(),
                 in_cache, skip_paint, anchor_hidden: false, turn: turn_index,
+                press_off_by: if cover.is_some() { [0.0; 2] } else { press_off_by },
                 snap: pixel_snap::Inherit { off: snap_off, steps, shifted: pinh.snap.shifted || n.vis.offset != [0.0; 2], layer: if cover.is_some() { 0 } else { snap_layer }, parent: snap_rest.filter(|_| cover.is_none() && snap.rigid == pinh.snap.rigid && pixel_snap::frames(&n.vis)), ..snap } };
             // Shown only under its group's hover, it takes presses where the pointer hovers the
             // group: a press in the same frame as the move that reveals it finds it, as a page's
             // `:hover` applies before the press does.
             let (hit_opacity, hit_rect) = if effective_opacity > 0.001 { (effective_opacity, rect_pt) } else { (hit_opacity, intersect(rect_pt, pinh.group_rect)) };
-            self.register_node_hits(i, pinh.clip, (hit_opacity, visible), hit_rect, (press_k, press_anchor));
+            self.register_node_hits(i, pinh.clip, (hit_opacity, visible), hit_rect, (press_k, press_anchor, hit_press_off));
             if self.tree.has_sticky {
                 self.fade_below_header(i, s);
             }

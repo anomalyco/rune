@@ -68,6 +68,47 @@ fn sequences_run_without_commits_then_sleep_and_settle() {
     assert_eq!(pose(&reduced).loop_phase, Some(1.0));
     assert_eq!(reduced.wake_deadline(), None);
 }
+#[test]
+fn repeating_sequence_loops_without_commits_cools_on_removal_and_holds_first_pose_reduced() {
+    const BEATS: &[crate::Beat] = &[
+        crate::Beat::new(0.0).opacity(0.4).scale(0.8),
+        crate::Beat::new(0.4).opacity(1.0).scale(1.0).easing(crate::Easing::LINEAR),
+        crate::Beat::new(0.8).opacity(0.4).scale(0.8).easing(crate::Easing::LINEAR),
+    ];
+    fn view(on: &bool, _: &mut Cx<bool>) -> El {
+        let mut dot = el().key("dot").size(20.0, 20.0).fill(Color::WHITE);
+        if *on {
+            dot = dot.sequence(crate::Sequence::new(BEATS).repeating());
+        }
+        el().key("root").size(100.0, 100.0).child(dot)
+    }
+    let dot = |rt: &Runtime<bool>| rt.elements().into_iter().find(|e| e.key.as_deref() == Some("dot")).unwrap();
+    let mut rt = Runtime::new(true, view, (100.0, 100.0), Env::new(true, 1.0));
+    assert!(rt.frame(0.0));
+    let commits = rt.stats.commits;
+    assert!(rt.frame(0.2));
+    let first = dot(&rt);
+    assert!((first.opacity - 0.7).abs() < 1e-4 && (first.scale - 0.9).abs() < 1e-4);
+    assert!(rt.frame(0.8));
+    let second = dot(&rt);
+    assert!((second.opacity - first.opacity).abs() < 1e-4 && (second.scale - first.scale).abs() < 1e-4, "wraps every period");
+    assert_eq!(rt.stats.commits, commits, "repeating sequence runs with zero view commits");
+    // Removing the sequence cools smoothly to neutral (1.0, 1.0) and goes idle.
+    rt.update(|on, _| *on = false);
+    assert!(rt.frame(1.0 / 120.0));
+    for _ in 0..120 { rt.frame(1.0 / 120.0); }
+    assert!(!rt.animating, "cooled repeating sequence sleeps");
+    let rested = dot(&rt);
+    assert!((rested.opacity - 1.0).abs() < 1e-3 && (rested.scale - 1.0).abs() < 1e-3);
+    // Reduced motion holds the calm first pose and schedules no frames.
+    let mut reduced = Runtime::new(true, view, (100.0, 100.0), Env::new(true, 1.0));
+    reduced.set_system_reduced_motion(true);
+    assert!(!reduced.frame(0.0));
+    let p = dot(&reduced);
+    assert!((p.opacity - 0.4).abs() < 1e-5 && (p.scale - 0.8).abs() < 1e-5);
+    assert_eq!(p.loop_phase, Some(0.0));
+    assert_eq!(reduced.wake_deadline(), None);
+}
 
 #[test]
 fn motion_curve_moves_layout_on_a_tween() {

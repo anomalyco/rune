@@ -407,10 +407,11 @@ impl RuntimeCore {
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
-            if !n.vis.tracks_hover_paint() && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            let press_offset = n.handlers.get().and_then(|h| h.press_offset);
+            if !n.vis.tracks_hover_paint() && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() && press_offset.is_none() { continue; }
             if self.subtree_exiting(i) { continue; }
             if self.hover_flip(i, top, captured, alone, &shared).is_some_and(|f| f.changed) { return true; }
-            if !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            if !n.vis.tracks_press() && press_scale.is_none() && press_offset.is_none() { continue; }
             let down = self.press_down_node(i, captured);
             let id = n.id;
             if n.vis.tracks_press() && self.scene.store().target(id, P_PRESS).unwrap_or(0.0) != down as u8 as f32 {
@@ -419,6 +420,14 @@ impl RuntimeCore {
             if let Some(k) = press_scale {
                 let want = if down && !self.reduced_motion { k } else { 1.0 };
                 if self.scene.store().target(id, P_PRESS_SCALE).unwrap_or(1.0) != want {
+                    return true;
+                }
+            }
+            if let Some(off) = press_offset {
+                let want = if down && !self.reduced_motion { off } else { [0.0; 2] };
+                if self.scene.store().target(id, P_PRESS_OX).unwrap_or(0.0) != want[0]
+                    || self.scene.store().target(id, P_PRESS_OY).unwrap_or(0.0) != want[1]
+                {
                     return true;
                 }
             }
@@ -444,7 +453,8 @@ impl RuntimeCore {
         for i in 0..self.tree.nodes.len() {
             let n = &self.tree.nodes[i];
             let press_scale = n.handlers.get().and_then(|h| h.press_scale);
-            if !n.vis.tracks_hover_paint() && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            let press_offset = n.handlers.get().and_then(|h| h.press_offset);
+            if !n.vis.tracks_hover_paint() && !n.vis_flags.hover_group() && !n.vis.tracks_press() && press_scale.is_none() && press_offset.is_none() { continue; }
             if self.subtree_exiting(i) { continue; }
             match self.hover_flip(i, top, captured, alone, &shared) {
                 Some(f) if f.changed => flips.push(f),
@@ -459,7 +469,7 @@ impl RuntimeCore {
                 Some(_) => {}
                 None => {}
             }
-            if !n.vis.tracks_press() && press_scale.is_none() { continue; }
+            if !n.vis.tracks_press() && press_scale.is_none() && press_offset.is_none() { continue; }
             let down = self.press_down_node(i, captured);
             let pressed = down && n.vis.tracks_press();
             let press_motion = n.vis.press_motion.as_deref().copied();
@@ -483,6 +493,20 @@ impl RuntimeCore {
                         None => if down { crate::tok::motion::INSTANT.into() } else { crate::tok::motion::POP.into() },
                     };
                     self.scene.animate(id, P_PRESS_SCALE, want, anim);
+                }
+            }
+            if let Some(off) = press_offset {
+                let down = down && !self.reduced_motion;
+                let want = if down { off } else { [0.0; 2] };
+                let anim = match press_motion {
+                    Some((d, u)) => if down { d } else { u },
+                    None => if down { crate::tok::motion::INSTANT.into() } else { crate::tok::motion::POP.into() },
+                };
+                for (prop, target) in [(P_PRESS_OX, want[0]), (P_PRESS_OY, want[1])] {
+                    changed |= self.scene.store().target(id, prop).unwrap_or(0.0) != target;
+                    if paint_tracks::ready_from_rest(&mut self.scene, id, prop, 0.0, target) {
+                        self.scene.animate(id, prop, target, anim);
+                    }
                 }
             }
         }

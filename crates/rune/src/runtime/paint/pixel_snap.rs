@@ -65,6 +65,34 @@ pub(in crate::runtime) fn motion(p: &Presented, rest: Option<Rect>, s: f32, anch
     Some(Motion { by, rest: b, k: 1.0 })
 }
 
+/// Adds an animating `El::press_offset` residual `by_pt` (`current - target`, in points) onto `m`
+/// (or builds a `Motion` from `raw_edges` in points), so pressed elements and their subtrees
+/// glide sub-pixel smoothly and land snapped at rest.
+pub(in crate::runtime) fn with_offset_motion(m: Option<Motion>, raw_edges: [f32; 4], by_pt: [f32; 2], s: f32) -> Option<Motion> {
+    if by_pt == [0.0; 2] {
+        return m;
+    }
+    let [dx, dy] = by_pt;
+    Some(match m {
+        Some(mut m) => {
+            m.by[0] += dx * s;
+            m.by[2] += dx * s;
+            m.by[1] += dy * s;
+            m.by[3] += dy * s;
+            m.rest[0] -= dx;
+            m.rest[2] -= dx;
+            m.rest[1] -= dy;
+            m.rest[3] -= dy;
+            m
+        }
+        None => Motion {
+            by: [dx * s, dy * s, dx * s, dy * s],
+            rest: [raw_edges[0] - dx, raw_edges[1] - dy, raw_edges[2] - dx, raw_edges[3] - dy],
+            k: 1.0,
+        },
+    })
+}
+
 /// How far a gliding box's top (device px) sits below its nearest whole pixel: its glyphs lay
 /// out from that pixel (moved by the fraction its resting box sits off the grid, as at rest) and
 /// move down by this ([`crate::text::TextSystem::set_glide`]), so they keep their place against
