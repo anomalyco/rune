@@ -346,3 +346,158 @@ fn a_memo_over_a_differently_keyed_root_warns_once_per_site() {
     assert!(log[0].contains("\"outer\"") && log[0].contains("\"inner\""), "{}", log[0]);
     assert!(rt.find("outer").is_some() && rt.find("inner").is_none());
 }
+
+#[test]
+fn a_memo_id_reused_in_one_build_warns_once_per_site() {
+    let _clock = FakeStallClock::new();
+    take_log();
+    let dup_line = line!() + 4;
+    fn view(_: &u32, _: &mut Cx<u32>) -> El {
+        col().children([
+            col().key("a").child(crate::memo("dup", 0, || col().key("dup"))),
+            col().key("b").child(crate::memo("dup", 0, || col().key("dup"))),
+        ])
+    }
+    let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|n, _| *n += 1);
+    rt.frame(1.0 / 60.0);
+    let log = take_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(
+        log[0].contains("\"dup\"")
+            && log[0].contains("uncached")
+            && log[0].contains(&format!("{}:{dup_line}:", file!()))
+            && !log[0].contains("memo.rs")
+            && log[0].contains("RUNE_PERF_WARN=0"),
+        "{}",
+        log[0]
+    );
+}
+
+#[test]
+fn a_memo_id_reused_in_a_loop_warns_once_and_distinct_sites_warn_separately() {
+    let _clock = FakeStallClock::new();
+    take_log();
+    fn view(_: &u32, _: &mut Cx<u32>) -> El {
+        let mut children: Vec<El> = (0..4)
+            .map(|i| col().key(format!("r{i}")).child(crate::memo("loop-dup", 0, || col())))
+            .collect();
+        children.push(col().key("extra").child(crate::memo("loop-dup", 0, || col().key("other"))));
+        col().children(children)
+    }
+    let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|n, _| *n += 1);
+    rt.frame(1.0 / 60.0);
+    let log = take_log();
+    // 1 warning for the loop call site, 1 for the extra call site's id collision, and 1 for the
+    // extra call site's root key replacement (proving memo_id_reused and memo_key_replaced use
+    // distinct deduplication keys).
+    assert_eq!(log.len(), 3, "{log:?}");
+    assert_eq!(log.iter().filter(|m| m.contains("already used in this build")).count(), 2, "{log:?}");
+    assert_eq!(log.iter().filter(|m| m.contains("replaced its root's key")).count(), 1, "{log:?}");
+}
+
+#[test]
+fn memo_id_reused_respects_rune_perf_warn_zero() {
+    use std::ffi::OsStr;
+    assert!(enabled_for(None));
+    assert!(enabled_for(Some(OsStr::new("1"))));
+    assert!(!enabled_for(Some(OsStr::new("0"))));
+
+    let _clock = FakeStallClock::new();
+    take_log();
+    fn view(_: &u32, _: &mut Cx<u32>) -> El {
+        col().children([
+            col().key("a").child(crate::memo("silenced-dup", 0, || col())),
+            col().key("b").child(crate::memo("silenced-dup", 0, || col())),
+        ])
+    }
+    let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
+    {
+        let _off = FakeEnabled::new(enabled_for(Some(OsStr::new("0"))));
+        rt.frame(0.0);
+        assert_eq!(take_log(), Vec::<String>::new(), "RUNE_PERF_WARN=0 silences memo_id_reused");
+    }
+    {
+        let _on = FakeEnabled::new(true);
+        rt.update(|n, _| *n += 1);
+        rt.frame(1.0 / 60.0);
+        let log = take_log();
+        assert_eq!(log.len(), 1, "being silenced once does not suppress future enabled runs: {log:?}");
+        assert!(log[0].contains("\"silenced-dup\""), "{}", log[0]);
+    }
+}
+
+#[test]
+fn equal_memo_ids_under_distinct_enclosing_memos_stay_quiet_and_same_scope_warns() {
+    let _clock = FakeStallClock::new();
+    take_log();
+    fn quiet_view(_: &u32, _: &mut Cx<u32>) -> El {
+        col().children([
+            crate::memo("first", 0, || col().child(crate::memo("header", 0, || col()))),
+            crate::memo("second", 0, || col().child(crate::memo("header", 0, || col()))),
+        ])
+    }
+    let mut rt = Runtime::new(0u32, quiet_view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|n, _| *n += 1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(take_log(), Vec::<String>::new());
+
+    let nested_line = line!() + 5;
+    fn nested_dup_view(_: &u32, _: &mut Cx<u32>) -> El {
+        crate::memo("outer-scope", 0, || {
+            col().children([
+                col().key("a").child(crate::memo("header", 0, || col())),
+                col().key("b").child(crate::memo("header", 0, || col())),
+            ])
+        })
+    }
+    let mut rt = Runtime::new(0u32, nested_dup_view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let log = take_log();
+    assert_eq!(log.len(), 1, "{log:?}");
+    assert!(
+        log[0].contains("\"outer-scope/header\"")
+            && log[0].contains(&format!("{}:{nested_line}:", file!())),
+        "{}",
+        log[0]
+    );
+}
+
+#[test]
+fn memo_with_hash_and_region_id_reuse_warn_at_caller_sites() {
+    let _clock = FakeStallClock::new();
+    take_log();
+    let hash_line = line!() + 5;
+    let region_line = line!() + 6;
+    fn view(_: &u32, _: &mut Cx<u32>) -> El {
+        col().children([
+            col().key("h1").child(crate::memo::memo_with_hash("hash-dup", 1, || col())),
+            col().key("h2").child(crate::memo::memo_with_hash("hash-dup", 1, || col())),
+            col().key("r1").child(crate::memo::region("region-dup", || col())),
+            col().key("r2").child(crate::memo::region("region-dup", || col())),
+        ])
+    }
+    let mut rt = Runtime::new(0u32, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let log = take_log();
+    assert_eq!(log.len(), 2, "{log:?}");
+    assert!(
+        log[0].contains("\"hash-dup\"")
+            && log[0].contains(&format!("{}:{hash_line}:", file!()))
+            && !log[0].contains("memo.rs"),
+        "{}",
+        log[0]
+    );
+    assert!(
+        log[1].contains("\"region-dup\"")
+            && log[1].contains(&format!("{}:{region_line}:", file!()))
+            && !log[1].contains("region.rs")
+            && !log[1].contains("memo.rs"),
+        "{}",
+        log[1]
+    );
+}
