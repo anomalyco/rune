@@ -117,6 +117,15 @@ b";
     assert_eq!(decos[1].rect[0], num_indent, "empty list item highlight starts after indent");
 }
 
+const INTER: &[u8] = include_bytes!("../../../rune/assets/Inter-Regular.ttf");
+const PLEX: &[u8] = include_bytes!("../../../rune/assets/IBMPlexMono-Regular.ttf");
+
+/// A self-contained `TextSystem` with bundled sans and fixed-pitch monospace faces, so
+/// `by_line` deferral tests do not depend on host system monospace fonts.
+fn mono_text_system() -> TextSystem {
+    TextSystem::new_local(&[INTER, PLEX], ("Inter", "IBM Plex Mono"))
+}
+
 fn rich_input<'a>(
     content: &'a str,
     spans: &'a [Span],
@@ -176,13 +185,13 @@ fn by_line_defers_plain_ascii_paragraphs_when_head_has_underline() {
     let scale = 2.0;
     let max_w = Some(320.0 * scale);
 
-    let mut plain_ts = TextSystem::default();
+    let mut plain_ts = mono_text_system();
     let plain_tl = plain_ts.layout_text(&rich_input(&content, &[], style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
     let plain_pl = as_paragraphs(&plain_tl);
     assert!(plain_pl.waiting(), "unspanned baseline should defer plain interior lines");
     let baseline_shaped = plain_ts.shaped;
 
-    let mut spanned_ts = TextSystem::default();
+    let mut spanned_ts = mono_text_system();
     let spanned_tl = spanned_ts.layout_text(&rich_input(&content, &spans, style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
     let spanned_pl = as_paragraphs(&spanned_tl);
     assert!(spanned_pl.waiting(), "decorated head line must not disable deferral for plain lines below it");
@@ -203,7 +212,7 @@ fn by_line_defers_plain_ascii_paragraphs_when_head_has_underline() {
     // Head underline decorations match laying out the underlined head paragraph alone.
     let mut head_decos = Vec::new();
     spanned_ts.decorations(&filled.paragraphs[0].layout, &spans, scale, [0.0, 0.0], &mut head_decos);
-    let mut solo_ts = TextSystem::default();
+    let mut solo_ts = mono_text_system();
     let solo_layout = solo_ts.layout_rich(&head, &spans, style, scale, max_w);
     let mut solo_decos = Vec::new();
     solo_ts.decorations(&solo_layout, &spans, scale, [0.0, 0.0], &mut solo_decos);
@@ -239,7 +248,7 @@ fn interior_disjoint_overlapping_multiline_and_input_spans_keep_waiting_runs_spa
         Span::new(starts[200].0, starts[200].1).bold().size(22.0),
         Span::new(starts[280].0 + 2, starts[282].1 - 2).italic(),
     ];
-    let mut ts = TextSystem::default();
+    let mut ts = mono_text_system();
     let tl = ts.layout_text(&rich_input(&content, &disjoint, style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
     let pl = as_paragraphs(&tl);
     assert!(pl.waiting(), "interior disjoint spans keep plain runs waiting");
@@ -266,7 +275,7 @@ fn interior_disjoint_overlapping_multiline_and_input_spans_keep_waiting_runs_spa
         Span::new(starts[140].0, starts[140].1).underline(Color::BLACK),
         Span::new(starts[140].0 + 2, starts[140].1 - 2).italic(),
     ];
-    let mut ts_ov = TextSystem::default();
+    let mut ts_ov = mono_text_system();
     let tl_ov = ts_ov.layout_text(&rich_input(&content, &overlapping, style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
     let pl_ov = as_paragraphs(&tl_ov);
     assert!(pl_ov.waiting(), "unsorted/overlapping layout spans still defer plain runs");
@@ -282,7 +291,7 @@ fn interior_disjoint_overlapping_multiline_and_input_spans_keep_waiting_runs_spa
     assert!(!moved_ov);
 
     // 3. Multi-line input (by_line: false) with a layout span also defers plain ASCII runs.
-    let mut ts_in = TextSystem::default();
+    let mut ts_in = mono_text_system();
     let tl_in = ts_in.layout_text(&rich_input(&content, &disjoint, style, false, TextDir::Plaintext(Some(Flow::Ltr))), true, scale, max_w, Alignment::Start, None);
     let pl_in = as_paragraphs(&tl_in);
     assert!(pl_in.waiting(), "by_paragraph input with layout spans still defers plain runs");
@@ -313,7 +322,7 @@ fn rtl_blocks_and_pills_preserve_existing_deferral_limits() {
     let max_w = Some(400.0 * scale);
 
     // Fixed RTL by_line stays eager (not deferred).
-    let mut ts = TextSystem::default();
+    let mut ts = mono_text_system();
     let rtl = ts.layout_text(&rich_input(&content, &spans, style, true, TextDir::Fixed(Flow::Rtl)), false, scale, max_w, Alignment::Start, None);
     assert!(!as_paragraphs(&rtl).waiting(), "RTL by_line must not defer");
 
@@ -343,4 +352,10 @@ fn rtl_blocks_and_pills_preserve_existing_deferral_limits() {
         .fill_paragraphs(mixed_pl, std::time::Duration::MAX, (0.0, f32::INFINITY), f32::INFINITY)
         .expect("fill mixed");
     assert!(!moved);
+
+    // When the mono slot resolves to a proportional face (e.g. a host with no monospace font
+    // installed and none bundled), `by_line` intentionally disables deferral and shapes eagerly.
+    let mut prop_ts = TextSystem::new_local(&[INTER], ("Inter", "Inter"));
+    let prop_tl = prop_ts.layout_text(&rich_input(&content, &[], style, true, TextDir::Auto), false, scale, max_w, Alignment::Start, None);
+    assert!(!as_paragraphs(&prop_tl).waiting(), "proportional fallback in mono slot must not defer by_line");
 }
