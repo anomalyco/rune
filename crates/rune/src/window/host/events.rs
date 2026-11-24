@@ -139,6 +139,11 @@ impl Host {
                 if self.win.as_ref().is_some_and(Win::paced) {
                     self.redraw();
                     self.shell(event_loop);
+                } else {
+                    #[cfg(target_os = "macos")]
+                    if let Some(w) = &mut self.win {
+                        w.stop_expired_pacing();
+                    }
                 }
             }
             WakeEvent::Live(_) => {
@@ -649,6 +654,8 @@ impl Host {
         // AppKit paints off its own display link; elsewhere a paint holds what it asks for.
         #[cfg(not(target_os = "macos"))]
         if let Some(l) = &self.win { l.redraw_step(RedrawEvent::Paint); }
+        #[cfg(target_os = "macos")]
+        let satisfied = self.win.as_ref().is_some_and(Win::take_redraw_on_paint);
         // A new accent, scroller style, light/dark or reduced-motion preference asks every window
         // to redraw.
         {
@@ -664,6 +671,16 @@ impl Host {
         #[cfg(target_os = "macos")]
         if let Some(l) = self.win.as_ref().filter(|l| l.native.full_screen.take()) {
             sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar);
+        }
+        // A `DisplayTick` that already drew and settled the queued work leaves a stale
+        // `RedrawRequested` in winit's queue. Skip it while resting with nothing changed so it
+        // cannot bump a coasting display link back to `Active` for a duplicate frame.
+        #[cfg(target_os = "macos")]
+        if satisfied && self.win.as_ref().is_some_and(|l| l.presented.is_some()) {
+            let rt = self.app.rt();
+            if !rt.stale() && !rt.live_pending() && !rt.has_pending_input() && rt.host.window_frame.is_none() {
+                return;
+            }
         }
         // The window procedure asks for this paint when a caption button's hover or
         // press changes.

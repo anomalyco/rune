@@ -163,7 +163,7 @@ impl FrameHost for OverlayFrame<'_> {
             let opportunity = if self.prewarm { None } else { live.pacing.as_mut().map(|p| p.next_frame()) };
             let Some(target) = frame::claim(opportunity, || live.settle()) else { return Gate::Skip };
             self.target = target;
-            self.paced = live.pacing.as_ref().is_some_and(|p| p.running());
+            self.paced = live.pacing.as_ref().is_some_and(|p| p.paced());
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -218,7 +218,7 @@ impl FrameHost for OverlayFrame<'_> {
             {
                 if let Some(pacing) = live.pacing.as_mut() { let _ = pacing.next_frame(); }
                 live.settle();
-                self.paced = live.pacing.as_ref().is_some_and(|p| p.running());
+                self.paced = live.pacing.as_ref().is_some_and(|p| p.paced());
             }
             #[cfg(not(target_os = "macos"))]
             {
@@ -416,7 +416,7 @@ impl FrameHost for OverlayFrame<'_> {
             return;
         };
         #[cfg(target_os = "macos")]
-        let next_tick = live.pacing.as_ref().filter(|p| !self.prewarm && p.running()).map(|p| submitted + Duration::from_secs_f64(1.0 / p.refresh_hz()));
+        let next_tick = live.pacing.as_ref().filter(|p| !self.prewarm && p.paced()).map(|p| submitted + Duration::from_secs_f64(1.0 / p.refresh_hz()));
         #[cfg(not(target_os = "macos"))]
         let next_tick = None;
         self.core.idle = idle_after(self.app.rt(), info.animating, next_tick);
@@ -434,8 +434,12 @@ impl FrameHost for OverlayFrame<'_> {
             let idle = self.core.idle;
             let paced = live.pacing.as_mut().is_some_and(|pacing| {
                 pacing.presented(submitted);
-                if self.prewarm || idle { pacing.stop(); }
-                pacing.running()
+                if self.prewarm {
+                    pacing.stop();
+                } else if idle {
+                    pacing.coast();
+                }
+                pacing.paced()
             });
             if !paced && !self.prewarm && !idle { self.core.backoff.step(crate::window::BackoffEvent::At(now + crate::window::TIMER_FRAME)); }
             // A display link that couldn't be made while the displays slept: they're back.

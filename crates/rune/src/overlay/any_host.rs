@@ -22,7 +22,7 @@ impl OverlayCore {
         // would turn the loop at once until then.
         let deadline = deadline.filter(|_| !self.waits_for_slot());
         #[cfg(target_os = "macos")]
-        let deadline = deadline.filter(|_| !self.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()));
+        let deadline = deadline.filter(|_| !self.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.paced()));
         #[cfg(target_os = "macos")]
         let deadline = deadline.into_iter().chain(self.panel.as_ref().and_then(|p| p.pointer_deadline(self.presence.occluded()))).min();
         // A Windows fade-out steps its alpha once a frame.
@@ -121,9 +121,12 @@ impl AnyHost for OverlayHost {
             }
         }
         #[cfg(target_os = "macos")]
-        if matches!(event, WakeEvent::DisplayTick(_))
-            && self.core.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.running()) {
-            self.core.draw(&mut *self.app);
+        if matches!(event, WakeEvent::DisplayTick(_)) {
+            if self.core.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.paced()) {
+                self.core.draw(&mut *self.app);
+            } else if let Some(pacing) = self.core.surface.live_mut().and_then(|l| l.pacing.as_mut()) {
+                pacing.stop_expired();
+            }
         }
         if let WakeEvent::App(_) = event {
             self.core.sync(&mut *self.app, event_loop);
