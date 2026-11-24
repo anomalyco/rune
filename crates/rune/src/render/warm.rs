@@ -108,6 +108,14 @@ pub(super) fn warm_then(features: wgpu::Features, done: impl FnOnce() + Send + '
     }).map(drop)
 }
 
+/// Whether a surface made now finds a device: a warmed one waits in the slot, or another
+/// surface's lives. Without either, every adapter refused a device (`make`), and a surface made
+/// now would only ask them again.
+#[cfg(target_os = "linux")]
+pub(super) fn made() -> bool {
+    live().is_some() || matches!(*lock(&SLOT.state), State::Ready { .. })
+}
+
 /// Keeps what's ready for a surface to take, or lets it go once nothing asked for it by its
 /// time (which `warm` may push back).
 fn wait_for_surface(mut state: std::sync::MutexGuard<'_, State>) {

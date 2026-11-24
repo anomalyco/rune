@@ -7,15 +7,25 @@
 //! When it's there the UI thread makes the window's Vulkan surface and swap chain on the same
 //! `wl_surface` or X11 window (`Host::reattach`, as after a lost device) and draws the next frame
 //! with the GPU. The display shows the CPU's last frame until that one presents: on Wayland a
-//! surface keeps its buffer until the next is committed, on X11 a window keeps its pixels. From
-//! the moment the swap chain exists the CPU sends nothing more (the driver's present owns the
-//! surface's state), so no frame of the wrong kind, size or age can land between them. A GPU that
-//! can't be made leaves the window on the CPU, fully live.
+//! surface keeps its buffer until the next is committed, on X11 a window keeps its pixels.
+//!
+//! One side at a time may send the window's pixels to the display, and the window changes sides
+//! once, at one point, on the UI thread: `SurfaceMode::switch` in `Host::gpu_ready`, before the
+//! Vulkan surface is made. The switch retires the CPU's frames (`platform::cpu_frames::Retired`
+//! can send nothing), so no resize, scale change, redraw, timer or input that comes after it can
+//! put a CPU frame beside the driver's swap chain. On a Wayland compositor with explicit
+//! synchronization that would be a protocol error, which ends the app (`platform::cpu_frames`).
+//!
+//! A GPU that gives no device leaves the window on the CPU, fully live, its surface untouched.
+//! A device whose surface can't be made (after the switch) gives the window back to the CPU only
+//! where a surface that came and went is known to leave nothing behind (`Retired::revive`); with
+//! explicit synchronization the window stays the GPU's and its surface is tried again as a lost
+//! one is (`Host::replace_lost_surface`).
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::cpu_frame::Cpu;
+use super::cpu_frame::{Cpu, RetiredCpu};
 use crate::render::Gpu;
 use crate::time::Instant;
 use crate::window::WakeEvent;
@@ -30,9 +40,10 @@ pub(in crate::window) enum SurfaceMode {
     Gpu,
     /// The CPU renderer draws; `job` is the GPU being made for it.
     Cpu { cpu: Cpu, job: GpuJob },
-    /// The GPU has the window's surface and draws the next frame; the display shows the CPU's
-    /// last one until it presents (`handed`).
-    Handing { cpu: Cpu },
+    /// The window is the GPU's (`switch`): it has the window's surface, or is making it, and draws
+    /// the next frame; the display shows the CPU's last one until that presents (`handed`).
+    /// `tries`: how many times a GPU was made for this window.
+    Handing { cpu: RetiredCpu, tries: u8 },
 }
 
 /// The GPU a CPU window is waiting for. Every way it ends is logged: handed over
@@ -65,6 +76,43 @@ pub(in crate::window) struct Readback {
 impl SurfaceMode {
     /// Whether the CPU renderer draws this window's frames now.
     pub(in crate::window) fn cpu_draws(&self) -> bool { matches!(self, SurfaceMode::Cpu { .. }) }
+
+    /// The CPU's side of the window, while the window is the CPU's: the only way to its frames.
+    pub(super) fn cpu(&mut self) -> Option<&mut Cpu> {
+        match self {
+            SurfaceMode::Cpu { cpu, .. } => Some(cpu),
+            SurfaceMode::Gpu | SurfaceMode::Handing { .. } => None,
+        }
+    }
+
+    /// The one point where a window goes from the CPU to the GPU: its CPU frames are retired, and
+    /// from here nothing of the CPU's reaches the display. Only a window whose GPU was being made
+    /// switches; its try's number comes back.
+    pub(super) fn switch(&mut self) -> Option<u8> {
+        let SurfaceMode::Cpu { job: GpuJob::Building { tries }, .. } = self else { return None };
+        let tries = *tries;
+        let SurfaceMode::Cpu { cpu, .. } = std::mem::take(self) else { unreachable!("checked above") };
+        *self = SurfaceMode::Handing { cpu: cpu.retire(), tries };
+        Some(tries)
+    }
+
+    /// A window that switched and whose GPU surface then couldn't be made, and is gone: back to
+    /// the CPU with `job`, where the display allows that (`RetiredCpu::revive`). False: it stays
+    /// the GPU's.
+    pub(super) fn switch_back(&mut self, job: GpuJob) -> bool {
+        let SurfaceMode::Handing { .. } = self else { return false };
+        let SurfaceMode::Handing { cpu, tries } = std::mem::take(self) else { unreachable!("checked above") };
+        match cpu.revive() {
+            Ok(cpu) => {
+                *self = SurfaceMode::Cpu { cpu, job };
+                true
+            }
+            Err(cpu) => {
+                *self = SurfaceMode::Handing { cpu, tries };
+                false
+            }
+        }
+    }
 }
 
 impl Host {
@@ -98,21 +146,43 @@ impl Host {
         }
     }
 
-    /// The GPU thread finished: the window's surface and swap chain are made with what it made
-    /// (or on this thread, if it made nothing), and the next frame is the GPU's; or the window
-    /// stays on the CPU if that failed.
+    /// The GPU thread finished. With a device, the window goes to the GPU (`SurfaceMode::switch`),
+    /// its surface and swap chain are made with that device, and the next frame is the GPU's.
+    /// With none, the window's surface is left alone and the CPU goes on drawing.
     pub(in crate::window) fn gpu_ready(&mut self) {
         let Some(w) = self.win.as_mut() else { return };
-        let SurfaceMode::Cpu { cpu, job: GpuJob::Building { tries } } = &mut w.native.mode else { return };
+        let SurfaceMode::Cpu { job: GpuJob::Building { tries }, .. } = &w.native.mode else { return };
         let tries = *tries;
         crate::marks::mark("gpu.window.ready");
-        // X11: the server has every CPU frame before the driver's connection presents one.
-        cpu.frames.settle();
-        if let Err(error) = self.reattach() { return self.fail_gpu(error, tries); }
-        let Some(w) = self.win.as_mut() else { return };
-        let SurfaceMode::Cpu { cpu, .. } = std::mem::take(&mut w.native.mode) else { unreachable!("checked above") };
-        w.native.mode = SurfaceMode::Handing { cpu };
+        // Every adapter refused a device: a surface made now would only ask them again, on this
+        // thread, and would put a driver on a window the CPU keeps drawing.
+        if !crate::render::warm_gpu_made() { return self.fail_gpu("no GPU gave a device".into(), tries); }
+        // The switch comes before the Vulkan surface, not after it: a driver may put its own
+        // objects on the window as soon as its surface or swap chain exists.
+        if w.native.mode.switch().is_none() { return; }
+        crate::marks::mark("gpu.window.switched");
+        // In the log where a protocol trace has it in order with the display's requests.
+        if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") { eprintln!("rune: the window is the GPU's from here: the CPU sends the display nothing more"); }
+        if let Err(error) = self.reattach() { return self.fail_surface(error, tries); }
         crate::marks::mark("gpu.window.attached");
+        if let Some(w) = self.win.as_ref() { w.request_redraw(); }
+    }
+
+    /// The window switched to the GPU and its surface couldn't be made (`why`); what the try
+    /// made of one is gone again (`reattach` drops it). Where the display allows, the CPU takes
+    /// the window back and the GPU is tried again later (`fail_gpu`). With explicit
+    /// synchronization it doesn't: the window stays the GPU's, shows the CPU's last frame, and
+    /// its surface is made again as a lost one is, with that path's tries and its end
+    /// (`replace_lost_surface`: the window is given up and the app told why).
+    fn fail_surface(&mut self, why: String, tries: u8) {
+        let Some(w) = self.win.as_mut() else { return };
+        if w.native.mode.switch_back(GpuJob::Waiting { tries, retry_at: None }) { return self.fail_gpu(why, tries); }
+        eprintln!("rune: the window's GPU surface couldn't be made; it is tried again (the compositor takes no CPU frame once a GPU surface was tried): {why}");
+        crate::marks::mark("gpu.window.failed");
+        if !crate::marks::noted("gpu.window.why") { crate::marks::note("gpu.window.why", Box::leak(why.into_boxed_str())); }
+        w.surface = None;
+        w.surface_ok = false;
+        self.gpu = None;
         w.request_redraw();
     }
 
@@ -162,7 +232,7 @@ impl Win {
 /// (`RUNE_CPU_BOOT_DRIFT=1`): a copy of that frame is added to `encoder`, and comes back with
 /// the CPU frame the window shows.
 pub(in crate::window) fn readback(l: &Win, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, frame: &wgpu::SurfaceTexture) -> Option<Readback> {
-    let SurfaceMode::Handing { cpu } = &l.native.mode else { return None };
+    let SurfaceMode::Handing { cpu, .. } = &l.native.mode else { return None };
     let wanted = crate::render::cpu_boot::drift_wanted() && l.config.usage.contains(wgpu::TextureUsages::COPY_SRC)
         && l.config.format.remove_srgb_suffix() == wgpu::TextureFormat::Bgra8Unorm;
     if !wanted { return None; }
@@ -202,3 +272,7 @@ fn count_drift(gpu: Arc<Gpu>, readback: Readback) {
     });
     if let Err(error) = spawned { eprintln!("rune: could not count the hand-over's drift: {error}"); }
 }
+
+#[cfg(test)]
+#[path = "handover_tests.rs"]
+mod tests;
