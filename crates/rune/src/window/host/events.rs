@@ -74,7 +74,14 @@ impl Host {
         #[cfg(target_os = "windows")]
         let native = self.win.as_ref().map(|l| crate::platform::win32::drop_target::take(&l.window)).unwrap_or_default();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        let native = self.win.as_ref().map(|l| crate::platform::wayland_drop::take(&l.window)).unwrap_or_default();
+        let (native, wayland_drop_lost) = match self.win.as_ref().filter(|l| l.native.drop_target.is_some()) {
+            Some(l) => crate::platform::wayland_drop::take(&l.window),
+            None => (Vec::new(), false),
+        };
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if wayland_drop_lost {
+            self.wayland_drop_display_lost();
+        }
         #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
         let native: Vec<FileStep> = Vec::new();
         let Some(l) = self.win.as_ref().filter(|_| self.life.shown()) else {

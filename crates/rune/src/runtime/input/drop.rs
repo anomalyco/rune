@@ -184,6 +184,18 @@ impl RuntimeCore {
     #[inline]
     pub(in crate::runtime) fn clear_drop_hits(&mut self) { self.hit.clear_drop_hits(); }
 
+    /// Whether the live, allowed view tree currently mounts any drop target (`El::on_drop_files`
+    /// or `El::on_drop_rejected` / `El::on_drop_rejected_hover`). Matches `drop_target`: exiting
+    /// subtrees and elements behind an active modal do not count.
+    #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    pub(crate) fn has_drop_targets(&self) -> bool {
+        (0..self.tree.nodes.len()).any(|i| {
+            !self.subtree_exiting(i)
+                && self.allowed(i)
+                && self.tree.nodes[i].handlers.drop.as_ref().is_some_and(|d| d.on_drop.is_some() || d.claims_rejects())
+        })
+    }
+
     /// The target for `paths` at `at` and the files it takes: walking out from the topmost
     /// element under the point, the first drop target that accepts any of them or rejects
     /// what it doesn't take (`El::on_drop_rejected`), then the root.

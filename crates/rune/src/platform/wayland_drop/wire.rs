@@ -27,7 +27,7 @@ use super::machine::{
     self, Effect, Event, MAX_URI_LIST_BYTES, OfferId, OfferSet, ReadOutcome, ReadPhase,
     SelectedAction, State, SurfaceId, URI_LIST_MIME, WindowMap, WindowToken,
 };
-use super::pipe::{CancelToken, StopSignal, make_pipe, read_fd_bounded};
+use super::pipe::{CancelToken, DoneFlag, SignalOnDrop, StopSignal, THREAD_JOIN_BOUND, join_bounded, make_pipe, read_fd_bounded};
 use crate::machine::{Attempt, Seq};
 use crate::platform::layer_shell_machine::watch_loop;
 use crate::runtime::Waker;
@@ -82,19 +82,27 @@ pub(crate) fn install(window: &winit::window::Window, wake: Waker) -> Option<Dro
 }
 
 /// Pumps the display's shared Wayland drop queue and worker replies, then drains any `FileStep`s
-/// queued for `window`. Returns empty off Wayland or before `install`.
-pub(crate) fn take(window: &winit::window::Window) -> Vec<FileStep> {
+/// queued for `window`, plus whether the display connection failed. Returns empty off Wayland or
+/// when no controller is bound.
+pub(crate) fn take(window: &winit::window::Window) -> (Vec<FileStep>, bool) {
     let Some((display_ptr, surface_id)) = wayland_ids(window) else {
-        return Vec::new();
+        return (Vec::new(), false);
     };
     CONTROLLERS.with(|map| {
         let mut map = map.borrow_mut();
         let Some(controller) = map.get_mut(&display_ptr) else {
-            return Vec::new();
+            return (Vec::new(), false);
         };
-        controller.pump();
-        controller.take(surface_id)
+        let lost = controller.pump();
+        (controller.take(surface_id), lost)
     })
+}
+
+/// Tears down any remaining Wayland drop controllers and joins their threads before exit.
+pub(crate) fn shutdown() {
+    CONTROLLERS.try_with(|map| {
+        map.borrow_mut().clear();
+    }).ok();
 }
 
 #[allow(unsafe_code)]
@@ -142,6 +150,7 @@ struct WatchTurns {
 struct WaylandWatch {
     stop: Arc<StopSignal>,
     turns: Arc<(Mutex<WatchTurns>, Condvar)>,
+    done: DoneFlag,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -230,12 +239,16 @@ impl WaylandWatch {
     fn spawn(conn: Connection, wake: WakePool) -> Option<Self> {
         let stop = Arc::new(StopSignal::new()?);
         let turns = Arc::new((Mutex::new(WatchTurns { count: 0, stopped: false }), Condvar::new()));
+        let (done, signal_done) = DoneFlag::new();
         let mut driver = WaylandWatchDriver { conn, stop: stop.clone(), turns: turns.clone(), wake };
         let thread = std::thread::Builder::new()
             .name("rune-wayland-drop".into())
-            .spawn(move || watch_loop::run(&mut driver))
+            .spawn(move || {
+                let _signal = SignalOnDrop(signal_done);
+                watch_loop::run(&mut driver);
+            })
             .ok()?;
-        Some(Self { stop, turns, thread: Some(thread) })
+        Some(Self { stop, turns, done, thread: Some(thread) })
     }
 
     fn turned(&self) {
@@ -255,7 +268,7 @@ impl Drop for WaylandWatch {
         }
         self.stop.signal();
         if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+            let _ = join_bounded(thread, &self.done, THREAD_JOIN_BOUND);
         }
     }
 }
@@ -264,6 +277,25 @@ struct WorkerReply {
     seat: u32,
     attempt: Attempt,
     outcome: ReadOutcome,
+}
+
+struct ActiveReader {
+    cancel: Arc<CancelToken>,
+    done: DoneFlag,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ActiveReader {
+    fn cancel_and_join(mut self) {
+        self.cancel.cancel();
+        self.join();
+    }
+
+    fn join(mut self) {
+        if let Some(thread) = self.thread.take() {
+            let _ = join_bounded(thread, &self.done, THREAD_JOIN_BOUND);
+        }
+    }
 }
 
 struct SeatDevice {
@@ -280,7 +312,7 @@ struct QueueState {
     offer_seat: HashMap<OfferId, u32>,
     windows: WindowMap,
     seq: Seq,
-    readers: HashMap<Attempt, Arc<CancelToken>>,
+    readers: HashMap<Attempt, ActiveReader>,
     reply_tx: mpsc::Sender<WorkerReply>,
     wakers: WakePool,
     needs_flush: bool,
@@ -384,8 +416,8 @@ impl QueueState {
                     self.start_read(seat_name, offer, attempt, phase);
                 }
                 Effect::CancelRead(attempt) => {
-                    if let Some(cancel) = self.readers.remove(&attempt) {
-                        cancel.cancel();
+                    if let Some(reader) = self.readers.remove(&attempt) {
+                        reader.cancel_and_join();
                     }
                 }
                 Effect::FinishOffer(offer) => {
@@ -427,20 +459,22 @@ impl QueueState {
 
         let cancel = Arc::new(cancel);
         let worker_cancel = cancel.clone();
+        let (done, signal_done) = DoneFlag::new();
         let reply_tx = self.reply_tx.clone();
         let wakers = self.wakers.clone();
         let timeout = phase.timeout();
         match std::thread::Builder::new()
             .name("rune-wayland-drop-read".into())
             .spawn(move || {
+                let _signal = SignalOnDrop(signal_done);
                 if let Some(outcome) = read_fd_bounded(read_fd, &worker_cancel, MAX_URI_LIST_BYTES, timeout) {
                     if reply_tx.send(WorkerReply { seat: seat_name, attempt, outcome }).is_ok() {
                         wakers.wake();
                     }
                 }
             }) {
-            Ok(_) => {
-                self.readers.insert(attempt, cancel);
+            Ok(thread) => {
+                self.readers.insert(attempt, ActiveReader { cancel, done, thread: Some(thread) });
             }
             Err(_) => {
                 let _ = self.reply_tx.send(WorkerReply { seat: seat_name, attempt, outcome: ReadOutcome::Error });
@@ -696,13 +730,16 @@ impl Controller {
         self.state.windows.is_empty()
     }
 
-    fn pump(&mut self) {
+    /// Pumps Wayland events and worker replies; returns `true` if the display connection failed.
+    fn pump(&mut self) -> bool {
         let dispatch_err = self.queue.dispatch_pending(&mut self.state).is_err();
         for _ in 0..64 {
             let Ok(reply) = self.reply_rx.try_recv() else {
                 break;
             };
-            self.state.readers.remove(&reply.attempt);
+            if let Some(reader) = self.state.readers.remove(&reply.attempt) {
+                reader.join();
+            }
             self.state.step_seat(reply.seat, Event::ReadComplete {
                 attempt: reply.attempt,
                 outcome: reply.outcome,
@@ -714,11 +751,13 @@ impl Controller {
         } else {
             false
         };
-        if dispatch_err || flush_err || self.conn.backend().last_error().is_some() {
+        let lost = dispatch_err || flush_err || self.conn.backend().last_error().is_some();
+        if lost {
             self.watch = None;
         } else if let Some(watch) = &self.watch {
             watch.turned();
         }
+        lost
     }
 
     fn take(&mut self, surface: SurfaceId) -> Vec<FileStep> {
@@ -731,8 +770,12 @@ impl Drop for Controller {
         // Stop and join the reader thread before draining or destroying proxies.
         self.watch = None;
         self.state.tearing_down = true;
-        for (_, cancel) in self.state.readers.drain() {
-            cancel.cancel();
+        let readers: Vec<ActiveReader> = self.state.readers.drain().map(|(_, r)| r).collect();
+        for reader in &readers {
+            reader.cancel.cancel();
+        }
+        for reader in readers {
+            reader.join();
         }
         drain_event_queue(&mut self.queue, &mut self.state);
         let seat_names: Vec<u32> = self.state.seats.keys().copied().collect();

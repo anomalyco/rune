@@ -190,6 +190,7 @@ pub(crate) enum State {
     /// so a source that defers writes until `drop` gets one post-drop fallback `receive`.
     Deferred {
         offer: OfferId,
+        serial: u32,
         version: u32,
         selected_action: SelectedAction,
         surface: SurfaceId,
@@ -199,6 +200,7 @@ pub(crate) enum State {
     /// Enter-time read produced non-empty local paths and `FileStep::Enter` has been enqueued.
     Hovering {
         offer: OfferId,
+        serial: u32,
         version: u32,
         selected_action: SelectedAction,
         surface: SurfaceId,
@@ -363,7 +365,7 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
         Event::Drop => match std::mem::take(state) {
             State::Idle => Effects::none(),
             State::Rejected { offer } => Effects::two(Effect::DestroyOffer(offer), Effect::Flush),
-            State::Hovering { offer, version, selected_action, surface, token, pos, paths } => {
+            State::Hovering { offer, version, selected_action, surface, token, pos, paths, .. } => {
                 let mut effects = Effects::none();
                 if can_deliver_drop(version, selected_action) {
                     effects.push(Effect::EnqueueStep {
@@ -400,7 +402,7 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                 };
                 Effects::none()
             }
-            State::Deferred { offer, version, selected_action, surface, token, pos } => {
+            State::Deferred { offer, version, selected_action, surface, token, pos, .. } => {
                 if !can_deliver_drop(version, selected_action) {
                     return Effects::two(Effect::DestroyOffer(offer), Effect::Flush);
                 }
@@ -455,6 +457,7 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                     if !paths.is_empty() {
                         *state = State::Hovering {
                             offer,
+                            serial,
                             version,
                             selected_action,
                             surface,
@@ -481,7 +484,7 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                     effects
                 }
                 ReadOutcome::Bytes(_) | ReadOutcome::TimedOut | ReadOutcome::Error => {
-                    *state = State::Deferred { offer, version, selected_action, surface, token, pos };
+                    *state = State::Deferred { offer, serial, version, selected_action, surface, token, pos };
                     Effects::none()
                 }
             },
@@ -542,22 +545,37 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
                 Effects::none()
             }
         },
-        Event::UnregisterWindow { surface, token } => {
-            let matches_window = match state {
-                State::Fetching { surface: s, token: t, .. }
-                | State::Deferred { surface: s, token: t, .. }
-                | State::Hovering { surface: s, token: t, .. }
-                | State::Dropping { surface: s, token: t, .. } => *s == surface && *t == token,
-                State::Idle | State::Rejected { .. } => false,
-            };
-            if !matches_window {
-                return Effects::none();
+        Event::UnregisterWindow { surface, token } => match std::mem::take(state) {
+            State::Fetching { offer, serial, version, attempt, surface: s, token: t, .. }
+                if s == surface && t == token =>
+            {
+                // Reject rather than destroying mid-drag (wlroots cancels the source on mid-drag destroy).
+                let mut effects = Effects::one(Effect::CancelRead(attempt));
+                reject_offer(&mut effects, offer, serial, version);
+                *state = State::Rejected { offer };
+                effects
             }
-            let mut effects = Effects::none();
-            let old = std::mem::take(state);
-            tear_down_active(&mut effects, old, false);
-            effects
-        }
+            State::Deferred { offer, serial, version, surface: s, token: t, .. }
+            | State::Hovering { offer, serial, version, surface: s, token: t, .. }
+                if s == surface && t == token =>
+            {
+                let mut effects = Effects::none();
+                reject_offer(&mut effects, offer, serial, version);
+                *state = State::Rejected { offer };
+                effects
+            }
+            State::Dropping { offer, attempt, surface: s, token: t, .. }
+                if s == surface && t == token =>
+            {
+                let mut effects = Effects::two(Effect::CancelRead(attempt), Effect::DestroyOffer(offer));
+                effects.push(Effect::Flush);
+                effects
+            }
+            other => {
+                *state = other;
+                Effects::none()
+            }
+        },
         Event::Gone => {
             let mut effects = Effects::none();
             let old = std::mem::take(state);
@@ -632,86 +650,7 @@ impl WindowMap {
     }
 }
 
-/// Parses an RFC 2483 `text/uri-list` payload into local filesystem paths.
-///
-/// Ignores comment lines (`#...`), blank lines, non-`file://` schemes, foreign hosts (anything
-/// other than empty authority or `localhost`), malformed percent escapes, and paths containing
-/// NUL bytes.
-pub(crate) fn parse_uri_list(mut bytes: &[u8]) -> Vec<PathBuf> {
-    while bytes.last() == Some(&0) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    let mut paths = Vec::new();
-    for raw_line in bytes.split(|&b| b == b'\n') {
-        let line = raw_line.strip_suffix(b"\r").unwrap_or(raw_line);
-        if line.is_empty() || line[0] == b'#' || line.iter().all(u8::is_ascii_whitespace) {
-            continue;
-        }
-        if let Some(path) = parse_file_uri(line) {
-            paths.push(path);
-        }
-    }
-    paths
-}
-
-fn parse_file_uri(line: &[u8]) -> Option<PathBuf> {
-    if line.len() < 8 || !line[..7].eq_ignore_ascii_case(b"file://") {
-        return None;
-    }
-    let after_scheme = &line[7..];
-    let slash = after_scheme.iter().position(|&b| b == b'/')?;
-    let host = &after_scheme[..slash];
-    if !host.is_empty() && !host.eq_ignore_ascii_case(b"localhost") {
-        return None;
-    }
-    let path_part = &after_scheme[slash..];
-    let path_end = path_part.iter().position(|&b| b == b'?' || b == b'#').unwrap_or(path_part.len());
-    let decoded = percent_decode(&path_part[..path_end])?;
-    if decoded.is_empty() || decoded[0] != b'/' || decoded.contains(&0) {
-        return None;
-    }
-    bytes_to_path(decoded)
-}
-
-fn hex_val(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn percent_decode(input: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(input.len());
-    let mut i = 0;
-    while i < input.len() {
-        if input[i] == b'%' {
-            if i + 2 >= input.len() {
-                return None;
-            }
-            let hi = hex_val(input[i + 1])?;
-            let lo = hex_val(input[i + 2])?;
-            out.push((hi << 4) | lo);
-            i += 3;
-        } else {
-            out.push(input[i]);
-            i += 1;
-        }
-    }
-    Some(out)
-}
-
-#[cfg(unix)]
-fn bytes_to_path(bytes: Vec<u8>) -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStringExt;
-    Some(PathBuf::from(std::ffi::OsString::from_vec(bytes)))
-}
-
-#[cfg(not(unix))]
-fn bytes_to_path(bytes: Vec<u8>) -> Option<PathBuf> {
-    String::from_utf8(bytes).ok().map(PathBuf::from)
-}
+pub(crate) use super::uri::parse_uri_list;
 
 /// Bounded, cancellable, deadline-enforced pipe read loop, kept cross-platform so timeouts,
 /// size bounds, cancellation, and `EINTR`/`WouldBlock` retries run unit tests on every host.

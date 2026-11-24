@@ -598,6 +598,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         self.apply_wayland_wake(event_loop, effects);
         // Surfaces go while winit's display connection is still open (layer surfaces live on it).
         self.hosts.clear();
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        crate::platform::wayland_drop::shutdown();
         crate::marks::mark("windows.dropped");
         crate::clipboard::shutdown();
         if matches!(step, app_events::ExitStep::Orderly { relaunch: true }) {

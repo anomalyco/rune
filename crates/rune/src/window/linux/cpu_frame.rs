@@ -254,6 +254,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         info.update_ms = now.elapsed().as_secs_f64() * 1000.0;
         let Some(l) = self.host.win.as_mut() else { return };
         sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        self.host.sync_wayland_drop();
     }
 
     fn prepare_render(&mut self, _drawable: (), _info: &mut StepInfo) -> RenderPrep<Option<Vec<[u32; 4]>>> {
