@@ -257,3 +257,57 @@ fn xy_styled_rtl_hover_target_and_extreme_sizes() {
     assert_eq!(find_track(&rt, "scroll-bar").rect[3], 0.0, "vertical hides cleanly when too short for corner");
     assert_eq!(find_track(&rt, "scroll-bar-x").rect[2], 200.0 - 2.0 * INSET, "horizontal reclaims full width");
 }
+
+#[test]
+fn legacy_scroll_bar_impl_without_xy_methods_compiles_and_falls_back_to_vertical() {
+    struct LegacyViewport(El);
+
+    impl ScrollBar for LegacyViewport {
+        fn scroll_bar(self, k: &Kit) -> El {
+            self.0.scroll_bar(k)
+        }
+
+        fn scroll_bar_styled(self, style: ScrollBarStyle) -> El {
+            self.0.scroll_bar_styled(style)
+        }
+
+        fn scroll_bar_hover(self, viewport_key: &str) -> El {
+            self.0.scroll_bar_hover(viewport_key)
+        }
+    }
+
+    fn legacy_view(styled: &bool, _: &mut rune::Cx<bool>) -> El {
+        let k = Kit::neutral(true);
+        let vp = LegacyViewport(
+            col()
+                .key("scroll")
+                .w_full()
+                .h(120.0)
+                .scroll_xy()
+                .child(el().key("canvas").size(800.0, 600.0)),
+        );
+        let wrapped = if *styled {
+            let v = ScrollBarStyle::from_kit(&k).always_visible().width(9.0).hover_width(9.0);
+            let h = ScrollBarStyle::from_kit(&k).horizontal();
+            vp.scroll_bars_xy_styled(v, h)
+        } else {
+            vp.scroll_bars_xy(&k)
+        };
+        col().size(200.0, 120.0).child(wrapped)
+    }
+
+    // Default scroll_bars_xy falls back to scroll_bar(k).
+    let mut rt = rune::Runtime::new(false, legacy_view, (200.0, 120.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::Always);
+    frames(&mut rt, 2);
+    assert_eq!(find_track(&rt, "scroll-bar").rect, [200.0 - TRACK, INSET, TRACK, 120.0 - 2.0 * INSET]);
+    assert!(rt.elements().into_iter().all(|e| e.key.as_deref() != Some("scroll-bar-x")));
+
+    // Default scroll_bars_xy_styled falls back to scroll_bar_styled(vertical).
+    let mut rt = rune::Runtime::new(true, legacy_view, (200.0, 120.0), rune::Env::new(true, 1.0));
+    rt.set_system_scroll_bars(ScrollBars::WhenScrolling);
+    frames(&mut rt, 2);
+    assert_eq!(opacity(&rt, "scroll-bar"), 1.0);
+    assert!((find_thumb(&rt, "scroll-bar").rect[2] - 9.0).abs() < 0.5);
+    assert!(rt.elements().into_iter().all(|e| e.key.as_deref() != Some("scroll-bar-x")));
+}
