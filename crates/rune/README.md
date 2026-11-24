@@ -92,7 +92,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     transparent holes, nested islands, and self-intersections via `Shape::fill_path` and
     `Shape::fill_path_with(path, FillRule::NonZero | FillRule::EvenOdd, color)`) in the element's own
     points, or in a `view_box` stretched to the element's size; `Path` flattens quadratic and cubic
-    Béziers. Strokes are one analytic capsule/box per
+    Béziers, and `Path::from_svg(d)` (plus `Shape::fill_svg`, `Shape::fill_svg_with`, and
+    `Shape::stroke_svg`) parses SVG 2 path data (`M/L/H/V/C/S/Q/T/A/Z`, arcs converted to cubics,
+    stopping at the first syntax error like Blink/Chromium). Strokes are one analytic capsule/box per
     segment (`KIND_SEGMENT`); fills are triangles (`KIND_TRIANGLE`) antialiased only on true contour
     edges (never bridge edges or diagonals), so translucent fills have no seams. No atlas, so a shape can
     change every frame (`examples/shapes`). SVG export emits `fill-rule="evenodd"` for `FillRule::EvenOdd`.

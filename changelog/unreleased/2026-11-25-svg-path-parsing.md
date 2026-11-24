@@ -1,0 +1,1 @@
+- Vector shapes: added SVG 2 path data parsing via `Path::from_svg`, `Shape::fill_svg`, `Shape::fill_svg_with`, and `Shape::stroke_svg` (supporting all SVG 2 path commands including elliptical arcs converted to cubics, implicit repeated commands, scientific notation, and Blink/Chromium stop-on-first-error semantics), sharing one parser with `rune-text`'s monochrome icon pipeline.

@@ -11,8 +11,11 @@
 //! it once.
 
 mod planar;
+mod svg_path;
 mod triangulate;
 
+#[doc(hidden)]
+pub use svg_path::{SvgPathSink, parse_svg_path};
 #[doc(hidden)]
 pub use triangulate::{triangulate, triangulate_compound};
 
@@ -182,6 +185,51 @@ impl Shape {
         self
     }
 
+    /// Parses SVG 2 path data `d` with [`Path::from_svg`] and fills it under
+    /// [`FillRule::NonZero`]. Equivalent to `self.fill_svg_with(d, FillRule::NonZero, color)`.
+    ///
+    /// ```
+    /// use rune_core::Color;
+    /// use rune_core::shape::Shape;
+    ///
+    /// let badge = Shape::new().fill_svg("M0 0 H40 V40 H0 Z", Color::WHITE);
+    /// assert!(!badge.is_empty());
+    /// ```
+    pub fn fill_svg(self, d: &str, color: Color) -> Shape {
+        self.fill_svg_with(d, FillRule::NonZero, color)
+    }
+
+    /// Parses SVG 2 path data `d` with [`Path::from_svg`] and fills all subpaths together under
+    /// `rule` ([`FillRule::NonZero`] or [`FillRule::EvenOdd`]).
+    ///
+    /// ```
+    /// use rune_core::Color;
+    /// use rune_core::shape::{FillRule, Shape};
+    ///
+    /// let ring = "M0 0 H40 V40 H0 Z M10 10 H30 V30 H10 Z";
+    /// let shape = Shape::new().fill_svg_with(ring, FillRule::EvenOdd, Color::WHITE);
+    /// assert!(!shape.is_empty());
+    /// ```
+    pub fn fill_svg_with(self, d: &str, rule: FillRule, color: Color) -> Shape {
+        let path = Path::from_svg(d);
+        self.fill_path_with(&path, rule, color)
+    }
+
+    /// Parses SVG 2 path data `d` with [`Path::from_svg`] and strokes every subpath, closed
+    /// ones back to their start.
+    ///
+    /// ```
+    /// use rune_core::Color;
+    /// use rune_core::shape::{LineCap, Shape};
+    ///
+    /// let check = Shape::new().stroke_svg("M4 12 L10 18 L20 6", 2.0, LineCap::Round, Color::WHITE);
+    /// assert!(!check.is_empty());
+    /// ```
+    pub fn stroke_svg(self, d: &str, width: f32, cap: LineCap, color: Color) -> Shape {
+        let path = Path::from_svg(d);
+        self.stroke_path(&path, width, cap, color)
+    }
+
     /// Treats coordinates as spanning `width` × `height` and stretches them to whatever size the
     /// element lays out at, so a shape can fill a flexible element (a waveform in a growing row).
     /// Stroke widths stay in points.
@@ -321,6 +369,26 @@ const TOLERANCE: f32 = 0.1;
 impl Path {
     pub fn new() -> Path {
         Path::default()
+    }
+
+    /// Parses an SVG 2 path data (`d`) string into a flattened `Path`.
+    ///
+    /// Supports all SVG 2 path commands in absolute and relative forms (`M/m`, `L/l`, `H/h`,
+    /// `V/v`, `C/c`, `S/s`, `Q/q`, `T/t`, `A/a`, `Z/z`), implicit repeated commands,
+    /// scientific-notation numbers, compact flag packing, and elliptical arcs (converted to cubic
+    /// Bézier segments). Follows W3C SVG 2 and Blink/Chromium error handling: parsing stops at the
+    /// first syntax error or non-finite value while preserving every valid segment parsed before it.
+    ///
+    /// ```
+    /// use rune_core::Color;
+    /// use rune_core::shape::{LineCap, Path, Shape};
+    ///
+    /// let path = Path::from_svg("M0 10 C10 0 20 0 30 10 S50 20 60 10");
+    /// let shape = Shape::new().stroke_path(&path, 2.0, LineCap::Round, Color::WHITE);
+    /// assert!(!shape.is_empty());
+    /// ```
+    pub fn from_svg(d: &str) -> Path {
+        svg_path::parse_into_path(d)
     }
 
     fn last(&self) -> [f32; 2] {
