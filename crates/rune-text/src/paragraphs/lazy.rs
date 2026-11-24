@@ -185,6 +185,10 @@ impl TextSystem {
     /// line is shaped. None when none were waiting.
     #[doc(hidden)]
     pub fn fill_paragraphs(&mut self, laid: &ParagraphLayout, budget: std::time::Duration, rows: (f32, f32), reach: f32) -> Option<(Rc<ParagraphLayout>, bool)> {
+        self.follow_language();
+        if laid.shaped_epoch != self.shaped_epoch {
+            return None;
+        }
         let lazy = laid.lazy.clone()?;
         // The crate's clock: the standard library's has none in a browser, and panics there.
         let start = rune_core::time::now();
@@ -237,7 +241,7 @@ impl TextSystem {
         let keyed = laid.keyed.as_ref().map(|k| Keyed { content: k.content.clone(), style_key: k.style_key, start_flow: k.start_flow });
         let built = Rc::new(ParagraphLayout {
             paragraphs, width, full_width, height: y as f32, max_width: laid.max_width, align: laid.align, text_indent: 0.0, text_indent_px: 0.0, whole: laid.whole,
-            newline: laid.newline, blank_box: laid.blank_box, disjoint_spans: laid.disjoint_spans, keyed, lazy: left.then_some(lazy.clone()),
+            shaped_epoch: self.shaped_epoch, newline: laid.newline, blank_box: laid.blank_box, disjoint_spans: laid.disjoint_spans, keyed, lazy: left.then_some(lazy.clone()),
         });
         let g = self.generation;
         let shaped_bytes: usize = built.paragraphs.iter().filter(|p| p.shaped).map(|p| p.end - p.start).sum();

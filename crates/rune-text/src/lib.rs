@@ -299,6 +299,9 @@ pub struct TextSystem {
     ascii: HashMap<u64, Option<Rc<paragraphs::AsciiLine>>>,
     runs: Cache<Rc<RunLayout>>,
     generation: u32,
+    /// Incremented whenever [`Self::drop_shaped`] clears shaped caches so stale
+    /// [`ParagraphLayout`]s are not reused.
+    shaped_epoch: u64,
     /// The id of the layout at each address one was built or re-broken at (`layout::id`).
     layout_ids: LayoutIds,
     /// The slots' families as named; `sans` and `mono` are the lists text asks for.
@@ -466,6 +469,7 @@ impl TextSystem {
             ascii: HashMap::default(),
             runs: Default::default(),
             generation: 0,
+            shaped_epoch: 0,
             layout_ids: LayoutIds::default(),
             families: (String::new(), String::new()),
             chosen: 0,

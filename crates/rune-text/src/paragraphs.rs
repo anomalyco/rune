@@ -96,6 +96,8 @@ pub struct ParagraphLayout {
     text_indent_px: f32,
     /// Its text's shape key, which its layouts at other widths are cached under.
     whole: u64,
+    /// The [`TextSystem::shaped_epoch`] that built this layout; older epochs are not reused.
+    shaped_epoch: u64,
     /// The width a selected line break highlights, as a selection across a newline shows.
     pub(super) newline: f32,
     /// `[baseline, ascent, descent]` of one line in the base font (device px), for blank lines.
@@ -766,6 +768,7 @@ impl TextSystem {
             let shape = spec.shape_key.map(|k| hash::directed(k, base));
             return TextLayout::Single(self.layout_keyed(shape, spec.content, spec.spans, spec.blocks, spec.text_indent, &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
         }
+        self.follow_language();
         let whole = spec.shape_key.unwrap_or_else(|| spec.fresh_shape_key(scale));
         // Lines with no strong character take the element's flow, so it keys the whole too.
         let whole = if forced.unwrap_or(spec.plaintext_flow()) == Flow::Rtl { whole ^ 0x3c6e_f372_fe94_f82b } else { whole };
@@ -782,6 +785,7 @@ impl TextSystem {
         // Measuring asks at more than one width: the last text's layout at this one, when it
         // was laid out there too, keeps its paragraphs without breaking them again.
         let prev = match prev {
+            Some(TextLayout::Paragraphs(p)) if p.shaped_epoch != self.shaped_epoch => None,
             Some(TextLayout::Paragraphs(p)) if p.max_width == max_width && p.align == align && p.text_indent == spec.text_indent => Some(p.clone()),
             Some(TextLayout::Paragraphs(p)) => {
                 let there = hash::break_key(p.whole ^ PARAGRAPHS, max_width, align, indented, spec.text_indent) ^ pretty_bit;
@@ -962,6 +966,6 @@ impl TextSystem {
             style, scale, wrap_anywhere: spec.wrap_anywhere, cache_key, style_key, forced, start_flow, ascii,
         }));
         let text_indent_px = line_break::indent_px(spec.text_indent, scale);
-        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, text_indent: spec.text_indent, text_indent_px, whole, newline, blank_box, disjoint_spans, keyed, lazy }, fresh)
+        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, text_indent: spec.text_indent, text_indent_px, whole, shaped_epoch: self.shaped_epoch, newline, blank_box, disjoint_spans, keyed, lazy }, fresh)
     }
 }

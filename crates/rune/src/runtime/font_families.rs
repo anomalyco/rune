@@ -42,17 +42,17 @@ impl RuntimeCore {
     }
 
     /// Takes up runtime-added faces (including a web app's fetched faces) and families chosen
-    /// since this runtime last looked. On a change, everything sized in the old fonts goes:
-    /// memoized subtrees, and every measured leaf's layout result. The text system has already
-    /// dropped its layouts. True when the next frame must build.
+    /// since this runtime last looked. On a change, everything sized in the old fonts rebuilds on
+    /// the next commit: memoized subtrees and every measured leaf's layout result. The text system
+    /// has already dropped its caches and bumped its shaped epoch so stale `ParagraphLayout`s are
+    /// not reused, while the presented tree keeps its `text_layout`s intact until the commit
+    /// replaces them so pre-commit reads (`Tx::read_elements`, input, a11y, flights) stay
+    /// consistent. True when the next frame must build.
     pub(crate) fn follow_font_families(&mut self) -> bool {
         let faces = self.text.follow_full_faces();
         let chosen = self.text.follow_chosen();
         if !(faces || chosen) {
             return false;
-        }
-        for n in &mut self.tree.nodes {
-            n.text_layout = None;
         }
         self.commit.clear_memo();
         self.commit.layout.mark_all_dirty();
