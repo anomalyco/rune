@@ -58,7 +58,8 @@ impl FrameHost for OverlayFrame<'_> {
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.core.surface.live_mut() {
             let changes = layer.dispatch();
             if changes.closed {
-                self.core.hide(self.app);
+                let reason = layer.close_reason().map(str::to_owned);
+                self.core.layer_closed(self.app, reason.as_deref());
                 return Gate::Skip;
             }
             for input in changes.input { self.core.surface_input(self.app, input); }
@@ -482,14 +483,14 @@ impl OverlayCore {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         {
             let closed = match self.surface.live_mut().map(|l| &mut l.backing) {
-                Some(Backing::Layer(layer)) => layer.drain(),
+                Some(Backing::Layer(layer)) => layer.drain().then(|| layer.close_reason().map(str::to_owned)),
                 Some(Backing::Xwayland(surface)) => {
                     surface.drain();
-                    false
+                    None
                 }
-                _ => false,
+                _ => None,
             };
-            if closed { self.hide(app); }
+            if let Some(reason) = closed { self.layer_closed(app, reason.as_deref()); }
         }
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         let _ = app;

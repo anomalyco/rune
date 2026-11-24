@@ -408,6 +408,7 @@ fn has_pending_events_tracks_foreign_queue_until_dispatched_and_false_when_close
         let changes = layer.dispatch();
         assert!(changes.closed);
         assert!(!layer.is_live());
+        assert_eq!(layer.close_reason(), None, "compositor close leaves close_reason None so overlay reports compositor closed");
         assert!(!layer.has_pending_events(), "closed surface must never report pending events");
 
         // Even if another event lands in the queue after close, has_pending_events stays false.
@@ -467,94 +468,102 @@ fn display_error_reports_dead_connection_and_none_when_live() -> std::io::Result
     Ok(())
 }
 
+fn mock_push_u32(buf: &mut Vec<u8>, v: u32) {
+    buf.extend_from_slice(&v.to_ne_bytes());
+}
+
+fn mock_push_str(buf: &mut Vec<u8>, s: &str) {
+    let bytes = s.as_bytes();
+    mock_push_u32(buf, (bytes.len() + 1) as u32);
+    buf.extend_from_slice(bytes);
+    buf.push(0);
+    while buf.len() % 4 != 0 {
+        buf.push(0);
+    }
+}
+
+fn mock_send_msg(stream: &mut std::os::unix::net::UnixStream, sender_id: u32, opcode: u16, payload: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let total = 8 + payload.len();
+    let mut msg = Vec::with_capacity(total);
+    mock_push_u32(&mut msg, sender_id);
+    mock_push_u32(&mut msg, ((total as u32) << 16) | u32::from(opcode));
+    msg.extend_from_slice(payload);
+    stream.write_all(&msg)
+}
+
+fn spawn_mock_compositor(mut server: std::os::unix::net::UnixStream) -> (std::sync::Arc<std::sync::atomic::AtomicBool>, std::thread::JoinHandle<()>) {
+    use std::io::Read;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn u32_at(buf: &[u8], offset: usize) -> u32 {
+        u32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
+    }
+    let shell_destroyed = Arc::new(AtomicBool::new(false));
+    let destroyed = shell_destroyed.clone();
+    let handle = std::thread::spawn(move || {
+        let mut registry_id = 0u32;
+        let mut shell_id = 0u32;
+        let mut header = [0u8; 8];
+        while server.read_exact(&mut header).is_ok() {
+            let sender_id = u32_at(&header, 0);
+            let word1 = u32_at(&header, 4);
+            let size = (word1 >> 16) as usize;
+            let opcode = (word1 & 0xffff) as u16;
+            if size < 8 { break; }
+            let mut payload = vec![0u8; size - 8];
+            if server.read_exact(&mut payload).is_err() { break; }
+            if sender_id == 1 && opcode == 1 && payload.len() >= 4 {
+                registry_id = u32_at(&payload, 0);
+                let mut p1 = Vec::new();
+                mock_push_u32(&mut p1, 1);
+                mock_push_str(&mut p1, "wl_compositor");
+                mock_push_u32(&mut p1, 6);
+                if mock_send_msg(&mut server, registry_id, 0, &p1).is_err() { break; }
+                let mut p2 = Vec::new();
+                mock_push_u32(&mut p2, 2);
+                mock_push_str(&mut p2, "zwlr_layer_shell_v1");
+                mock_push_u32(&mut p2, 4);
+                if mock_send_msg(&mut server, registry_id, 0, &p2).is_err() { break; }
+            } else if sender_id == 1 && opcode == 0 && payload.len() >= 4 {
+                let cb_id = u32_at(&payload, 0);
+                if mock_send_msg(&mut server, cb_id, 0, &0u32.to_ne_bytes()).is_err() { break; }
+            } else if sender_id == registry_id && registry_id != 0 && opcode == 0 && payload.len() >= 8 {
+                let name = u32_at(&payload, 0);
+                let str_len = u32_at(&payload, 4) as usize;
+                let str_padded = (str_len + 3) & !3;
+                let new_id_off = 8 + str_padded + 4;
+                if name == 2 && payload.len() >= new_id_off + 4 {
+                    shell_id = u32_at(&payload, new_id_off);
+                }
+            } else if sender_id == shell_id && shell_id != 0 && opcode == 0 && payload.len() >= 4 {
+                let layer_id = u32_at(&payload, 0);
+                let mut cfg = Vec::new();
+                mock_push_u32(&mut cfg, 1);
+                mock_push_u32(&mut cfg, 200);
+                mock_push_u32(&mut cfg, 100);
+                if mock_send_msg(&mut server, layer_id, 0, &cfg).is_err() { break; }
+            } else if sender_id == shell_id && shell_id != 0 && opcode == 1 {
+                destroyed.store(true, Ordering::Release);
+            }
+        }
+    });
+    (shell_destroyed, handle)
+}
+
 #[test]
 fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_leak() -> std::io::Result<()> {
-    use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     use std::ptr::NonNull;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use wayland_client::{Connection, Proxy};
     use winit::raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle};
     use crate::el::Align;
     use crate::overlay::{Placement, ScreenEdge};
     use crate::OverlayOptions;
-
-    fn push_u32(buf: &mut Vec<u8>, v: u32) {
-        buf.extend_from_slice(&v.to_ne_bytes());
-    }
-    fn push_str(buf: &mut Vec<u8>, s: &str) {
-        let bytes = s.as_bytes();
-        push_u32(buf, (bytes.len() + 1) as u32);
-        buf.extend_from_slice(bytes);
-        buf.push(0);
-        while buf.len() % 4 != 0 {
-            buf.push(0);
-        }
-    }
-    fn send_msg(stream: &mut UnixStream, sender_id: u32, opcode: u16, payload: &[u8]) -> std::io::Result<()> {
-        let total = 8 + payload.len();
-        let mut msg = Vec::with_capacity(total);
-        push_u32(&mut msg, sender_id);
-        push_u32(&mut msg, ((total as u32) << 16) | u32::from(opcode));
-        msg.extend_from_slice(payload);
-        stream.write_all(&msg)
-    }
-    fn u32_at(buf: &[u8], offset: usize) -> u32 {
-        u32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]])
-    }
-    fn spawn_mock_compositor(mut server: UnixStream) -> (Arc<AtomicBool>, std::thread::JoinHandle<()>) {
-        let shell_destroyed = Arc::new(AtomicBool::new(false));
-        let destroyed = shell_destroyed.clone();
-        let handle = std::thread::spawn(move || {
-            let mut registry_id = 0u32;
-            let mut shell_id = 0u32;
-            let mut header = [0u8; 8];
-            while server.read_exact(&mut header).is_ok() {
-                let sender_id = u32_at(&header, 0);
-                let word1 = u32_at(&header, 4);
-                let size = (word1 >> 16) as usize;
-                let opcode = (word1 & 0xffff) as u16;
-                if size < 8 { break; }
-                let mut payload = vec![0u8; size - 8];
-                if server.read_exact(&mut payload).is_err() { break; }
-                if sender_id == 1 && opcode == 1 && payload.len() >= 4 {
-                    registry_id = u32_at(&payload, 0);
-                    let mut p1 = Vec::new();
-                    push_u32(&mut p1, 1);
-                    push_str(&mut p1, "wl_compositor");
-                    push_u32(&mut p1, 6);
-                    if send_msg(&mut server, registry_id, 0, &p1).is_err() { break; }
-                    let mut p2 = Vec::new();
-                    push_u32(&mut p2, 2);
-                    push_str(&mut p2, "zwlr_layer_shell_v1");
-                    push_u32(&mut p2, 4);
-                    if send_msg(&mut server, registry_id, 0, &p2).is_err() { break; }
-                } else if sender_id == 1 && opcode == 0 && payload.len() >= 4 {
-                    let cb_id = u32_at(&payload, 0);
-                    if send_msg(&mut server, cb_id, 0, &0u32.to_ne_bytes()).is_err() { break; }
-                } else if sender_id == registry_id && registry_id != 0 && opcode == 0 && payload.len() >= 8 {
-                    let name = u32_at(&payload, 0);
-                    let str_len = u32_at(&payload, 4) as usize;
-                    let str_padded = (str_len + 3) & !3;
-                    let new_id_off = 8 + str_padded + 4;
-                    if name == 2 && payload.len() >= new_id_off + 4 {
-                        shell_id = u32_at(&payload, new_id_off);
-                    }
-                } else if sender_id == shell_id && shell_id != 0 && opcode == 0 && payload.len() >= 4 {
-                    let layer_id = u32_at(&payload, 0);
-                    let mut cfg = Vec::new();
-                    push_u32(&mut cfg, 1);
-                    push_u32(&mut cfg, 200);
-                    push_u32(&mut cfg, 100);
-                    if send_msg(&mut server, layer_id, 0, &cfg).is_err() { break; }
-                } else if sender_id == shell_id && shell_id != 0 && opcode == 1 {
-                    destroyed.store(true, Ordering::Release);
-                }
-            }
-        });
-        (shell_destroyed, handle)
-    }
+    let send_msg = mock_send_msg;
 
     let placement = Placement { size: (200.0, 100.0), edge: ScreenEdge::Top, margin: 0.0, align: Align::Start, inset: 0.0 };
     let options = OverlayOptions::default();
@@ -674,4 +683,36 @@ fn layer_shell_maps_diagonal_and_bidirectional_resize_cursors() {
     assert_eq!(super::shape(Cursor::ResizeNs), Shape::NsResize);
     assert_eq!(super::shape(Cursor::ResizeNwse), Shape::NwseResize);
     assert_eq!(super::shape(Cursor::ResizeNesw), Shape::NeswResize);
+}
+
+#[test]
+fn layer_surface_fail_connection_populates_close_reason_once() -> std::io::Result<()> {
+    use std::os::unix::net::UnixStream;
+    use std::ptr::NonNull;
+    use wayland_client::{Connection, Proxy};
+    use winit::raw_window_handle::{RawDisplayHandle, WaylandDisplayHandle};
+
+    let (client, server) = UnixStream::pair()?;
+    let (_destroyed, server_thread) = spawn_mock_compositor(server);
+    let Ok(host) = Connection::from_socket(client) else { return Ok(()); };
+    let display = RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+        NonNull::new(host.display().id().as_ptr().cast()).unwrap(),
+    ));
+    let placement = crate::overlay::Placement {
+        size: (100.0, 40.0), edge: crate::ScreenEdge::Top, margin: 0.0, align: crate::Align::Center, inset: 0.0,
+    };
+    let options = crate::OverlayOptions::default();
+    let mut layer = super::LayerSurface::new(display, "test-close-reason", placement, false, &options, None)
+        .expect("configured layer surface");
+    assert_eq!(layer.close_reason(), None);
+    layer.fail_connection(Some("broken pipe".into()));
+    assert!(!layer.is_live());
+    assert_eq!(layer.close_reason(), Some("the display connection failed: broken pipe"));
+    // Repeated failure on an already-closed surface does not overwrite the initial reason.
+    layer.fail_connection(Some("later error".into()));
+    assert_eq!(layer.close_reason(), Some("the display connection failed: broken pipe"));
+    drop(layer);
+    drop(host);
+    server_thread.join().unwrap();
+    Ok(())
 }

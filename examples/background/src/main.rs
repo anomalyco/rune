@@ -25,14 +25,17 @@ use std::time::Duration;
 
 use rune::tok::{self, radius, space, type_};
 use rune::{
-    App, Cx, El, Key, KeyEvent, TextEdit, Tray, TrayEvent, TrayIcon, TrayItem, TraySpec, Tx, col,
-    el, row, text, text_input,
+    App, AppHandle, Availability, Cx, El, Key, KeyEvent, OverlayHandle, OverlayOptions, TextEdit,
+    Tray, TrayEvent, TrayIcon, TrayItem, TraySpec, Tx, col, el, row, text, text_input,
 };
 
 struct Background {
     ticks: u64,
     closes: u32,
     note: TextEdit,
+    hud: Option<OverlayHandle<Hud>>,
+    hud_availability: Availability,
+    hud_failure: Option<String>,
 }
 
 fn init() -> Background {
@@ -40,6 +43,9 @@ fn init() -> Background {
         ticks: 0,
         closes: 0,
         note: TextEdit::new("Type here, close, reopen"),
+        hud: None,
+        hud_availability: Availability::Unknown,
+        hud_failure: None,
     }
 }
 
@@ -77,6 +83,15 @@ fn view(s: &Background, cx: &mut Cx<Background>) -> El {
             .color(t.text_secondary),
         )
         .child(
+            text(match &s.hud_failure {
+                Some(reason) => format!("HUD overlay: {:?} ({reason})", s.hud_availability),
+                None => format!("HUD overlay: {:?}", s.hud_availability),
+            })
+            .key("hud-availability")
+            .font(type_::BODY)
+            .color(t.text_secondary),
+        )
+        .child(
             el().key("note-field")
                 .w_full()
                 .h(32.0)
@@ -97,6 +112,12 @@ fn view(s: &Background, cx: &mut Cx<Background>) -> El {
             row()
                 .key("actions")
                 .gap(space::S2)
+                .child(button("hud-show", "Show HUD", t, |s, _| {
+                    if let Some(hud) = &s.hud { hud.show(); }
+                }))
+                .child(button("hud-hide", "Hide HUD", t, |s, _| {
+                    if let Some(hud) = &s.hud { hud.hide(); }
+                }))
                 .child(button("close", "Close window", t, |_, tx| tx.close_window()))
                 .child(button("quit", "Quit", t, |_, tx| tx.quit())),
         )
@@ -118,10 +139,29 @@ fn on_close(s: &mut Background, _: &mut Tx) {
 }
 
 /// The overlay's own state: what a recording HUD shows.
-#[derive(Default)]
 struct Hud {
     seconds: u64,
     transcribing: bool,
+    app: AppHandle<Background>,
+    handle: Option<OverlayHandle<Hud>>,
+}
+
+impl Hud {
+    fn new(app: AppHandle<Background>) -> Self {
+        Self { seconds: 0, transcribing: false, app, handle: None }
+    }
+}
+
+fn on_hud_availability(h: &mut Hud, availability: Availability, _: &mut Tx) {
+    let failure = h.handle.as_ref().and_then(OverlayHandle::failure);
+    match &failure {
+        Some(reason) => eprintln!("background: hud availability -> {availability:?} ({reason})"),
+        None => eprintln!("background: hud availability -> {availability:?}"),
+    }
+    h.app.update(move |s, _| {
+        s.hud_availability = availability;
+        s.hud_failure = failure;
+    });
 }
 
 fn hud(h: &Hud, _: &mut Cx<Hud>) -> El {
@@ -189,9 +229,15 @@ fn main() {
             inset: 0.0,
             interactive: false,
             view: hud,
-        },
-        Hud::default(),
+        }
+        .options(OverlayOptions::default())
+        .on_availability(on_hud_availability),
+        Hud::new(app.handle()),
     );
+    let hud_for_cb = overlay.clone();
+    overlay.update(move |h, _| h.handle = Some(hud_for_cb));
+    let hud_for_window = overlay.clone();
+    app.handle().update(move |s, _| s.hud = Some(hud_for_window));
     // A clickable capsule in the top-right corner, like a meeting offer: clicks reach it, focus
     // stays where it was.
     let capsule = app.overlay(
