@@ -55,6 +55,69 @@ fn buttons_read_their_label_tooltip_shortcut_and_state() {
     assert_eq!(rt.state.presses, 12, "assistive click, pointer and Space reach the same handlers");
 }
 
+#[test]
+fn button_with_show_shortcut_keeps_accessibility_tree_clean() {
+    fn view(_: &App, _: &mut Cx<App>) -> El {
+        let k = kit();
+        col()
+            .gap(8.0)
+            .child(
+                Button::new("Save")
+                    .help("Write the file to disk")
+                    .shortcut("F5")
+                    .show_shortcut()
+                    .on_press(|s: &mut App| s.presses += 1)
+                    .build(&k)
+                    .key("save-inline"),
+            )
+            .child(
+                Button::new("Commit")
+                    .shortcut("cmd+s")
+                    .show_shortcut()
+                    .build(&k)
+                    .key("commit-inline"),
+            )
+            .child(
+                Button::new("Unavailable")
+                    .shortcut("F5")
+                    .show_shortcut()
+                    .disabled(true)
+                    .on_press(|s: &mut App| s.presses += 100)
+                    .build(&k)
+                    .key("off-inline"),
+            )
+    }
+
+    let mut rt = mount(App::default(), view);
+    let tree = rt.accessibility_json();
+
+    let save = node(&tree, "save-inline");
+    assert_eq!(said(save), ("button", "Save"));
+    assert_eq!(save["description"], "Write the file to disk");
+    assert_eq!(save["shortcut"], "F5");
+    assert!(can(save, "click") && can(save, "focus"));
+    assert!(save["children"].is_null(), "inline shortcut is hidden from assistive technology: {save}");
+
+    let expected_cmd_s = if cfg!(target_os = "macos") { "⌘S" } else { "Super+S" };
+    let commit = node(&tree, "commit-inline");
+    assert_eq!(said(commit), ("button", "Commit"));
+    assert_eq!(commit["shortcut"], expected_cmd_s);
+    assert!(commit["children"].is_null(), "inline accelerator is hidden from assistive technology: {commit}");
+
+    let off = node(&tree, "off-inline");
+    assert_eq!(said(off), ("button", "Unavailable"));
+    assert_eq!(off["shortcut"], "F5");
+    assert!(has(off, "disabled") && actions(off).is_empty());
+    assert!(off["children"].is_null());
+
+    assert!(act(&mut rt, "save-inline", Action::Click));
+    tap(&mut rt, "save-inline");
+    assert!(act(&mut rt, "save-inline", Action::Focus));
+    press_key(&mut rt, Key::Text(" ".into()));
+    assert!(!act(&mut rt, "off-inline", Action::Click));
+    assert_eq!(rt.state.presses, 3);
+}
+
 fn toggles(s: &App, _: &mut Cx<App>) -> El {
     let k = kit();
     col()

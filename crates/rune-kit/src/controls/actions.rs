@@ -199,6 +199,7 @@ pub struct Button {
     expanded: Option<bool>,
     help: Option<String>,
     shortcut: Option<String>,
+    show_shortcut: bool,
     acts: Acts,
 }
 
@@ -227,6 +228,7 @@ impl Button {
             expanded: None,
             help: None,
             shortcut: None,
+            show_shortcut: false,
             acts: Acts::default(),
         }
     }
@@ -294,9 +296,24 @@ impl Button {
     }
     /// A shortcut hint appended to the button's tooltip (e.g. `"Lock  ⌘L"`), formatted like
     /// [`MenuItem::shortcut`](crate::MenuItem::shortcut), and read by assistive technology.
-    /// Accepts display strings (`"⌘L"`) or accelerator strings (`"cmd+l"`).
+    /// Accepts display strings (`"⌘L"`) or accelerator strings (`"cmd+l"`). Call
+    /// [`Button::show_shortcut`] to also draw it inline beside a plain text label.
     pub fn shortcut(mut self, s: impl Into<String>) -> Self {
         self.shortcut = Some(s.into());
+        self
+    }
+    /// Render the shortcut set with [`Button::shortcut`] inline beside a plain text label,
+    /// formatted like [`MenuItem::shortcut`](crate::MenuItem::shortcut) in the label's font at
+    /// 60% of the label ink's alpha. Off by default. Applies only to plain text labels (not
+    /// [`Button::rolling`] or [`Button::label_with`]) and omits the inline text when no
+    /// non-empty shortcut is set. The inline text is hidden from assistive technology because
+    /// the button already exposes the shortcut through its shortcut hint.
+    ///
+    /// ```ignore
+    /// Button::new("Save").shortcut("cmd+s").show_shortcut().build(&k)
+    /// ```
+    pub fn show_shortcut(mut self) -> Self {
+        self.show_shortcut = true;
         self
     }
     pub fn on_press<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
@@ -357,7 +374,15 @@ impl Button {
             e = e.child(ic);
         }
         e = match self.look {
-            Label::Text => e.child(text(self.label).key("label").font(font).color(ink).a11y_hidden()),
+            Label::Text => {
+                let mut e = e.child(text(self.label).key("label").font(font).color(ink).a11y_hidden());
+                if self.show_shortcut {
+                    if let Some(sc) = self.shortcut.as_deref().map(format_shortcut).filter(|s| !s.is_empty()) {
+                        e = e.child(text(sc).key("shortcut").font(font).color(ink.alpha(ink.a * 0.6)).a11y_hidden());
+                    }
+                }
+                e
+            }
             // The button's edges spring on the label's own curve, so the padding holds while
             // the label grows or shrinks.
             Label::Rolling(key) => e.motion(RollingText::SPRING).width_leads()
