@@ -404,6 +404,8 @@ impl Host {
             self.app.file_dialog_cancel(&mut self.file_dialog);
             self.app.rt_mut().cancel_pointer();
             self.files = FileDrop::default();
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            if let Some(w) = &mut self.win { w.native.drop_target = None; }
             if !ends && let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); w.hide(); }
             crate::marks::mark("window.hidden");
             self.life.finish();

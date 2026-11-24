@@ -14,13 +14,13 @@ pub(super) struct FileDrop {
     pub(super) at: Option<(f32, f32)>,
 }
 
-/// One step of a file drag over a window. Native drop targets (AppKit, Win32 OLE) supply the
-/// pointer's place in window points (`Some(at)`); winit's fallback events (`HoveredFile`,
-/// `DroppedFile`) omit it (`None`), so the host samples the pointer.
-#[derive(Debug, PartialEq)]
+/// One step of a file drag over a window. Native drop targets (AppKit, Win32 OLE, Wayland
+/// `wl_data_device`) supply the pointer's place in window points (`Some(at)`); winit's fallback
+/// events (`HoveredFile`, `DroppedFile`) omit it (`None`), so the host samples the pointer.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FileStep {
     Enter(Vec<PathBuf>, Option<(f32, f32)>),
-    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    #[cfg_attr(not(any(test, target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     Move((f32, f32)),
     Drop(Vec<PathBuf>, Option<(f32, f32)>),
     Leave,
