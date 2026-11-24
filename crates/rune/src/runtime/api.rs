@@ -241,6 +241,24 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn overlay_scroll_bars(&self) -> bool { self.core().host.overlay_scroll_bars() }
 
+    /// Registers font bytes (TTF, OTF, TTC, or variable font) into the process-wide font
+    /// collection at runtime, returning the registered family names in registration order.
+    ///
+    /// Pass bytes loaded off the UI thread (or embedded bytes); never read font files on the UI
+    /// thread. Invalidates this runtime's shaped layouts, memoized subtrees, and layout
+    /// measurements immediately when new faces are added; every other window, overlay, and
+    /// [`rune::text::measure`](crate::text::measure) picks them up too.
+    ///
+    /// ```no_run
+    /// # let mut rt: rune::Runtime<()> = unimplemented!();
+    /// # let bytes: Vec<u8> = Vec::new();
+    /// let families = rt.add_font(bytes);
+    /// if let Some(family) = families.first() {
+    ///     rt.set_font_families(family, "ui-monospace");
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn add_font(&mut self, bytes: impl Into<std::sync::Arc<[u8]>>) -> Vec<String> { self.core_mut().add_font(bytes) }
     #[inline(always)]
     pub fn set_font_families(&mut self, sans: &str, mono: &str) { self.core_mut().set_font_families(sans, mono); }
     #[inline(always)]

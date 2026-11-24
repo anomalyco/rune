@@ -101,6 +101,8 @@ pub struct Tx {
     pub(crate) rewind: Option<Option<crate::rewind::Rewind>>,
     pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
     pub(crate) font_families: Option<(String, String)>,
+    /// `Tx::add_font`: new font bytes were registered during this handler.
+    pub(crate) fonts_added: bool,
     pub(crate) blur: bool,
     /// `Tx::cancel_pointer`.
     pub(crate) cancel_pointer: bool,
@@ -656,6 +658,31 @@ impl Tx {
     /// on parallel threads isolate `measure` with [`rune::text::with_families`](crate::text::with_families).
     pub fn set_font_families(&mut self, sans: impl Into<String>, mono: impl Into<String>) {
         self.font_families = Some((sans.into(), mono.into()));
+    }
+
+    /// Registers font bytes (TTF, OTF, TTC, or variable font) into the process-wide font
+    /// collection at runtime, returning the registered family names in registration order.
+    ///
+    /// Pass bytes loaded off the UI thread (or embedded bytes); never read font files on the UI
+    /// thread. Select a returned family with [`Self::set_font_families`] or
+    /// [`Family::Named`](crate::Family::Named). Every window, overlay, and
+    /// [`rune::text::measure`](crate::text::measure) picks up the new faces, and caches keyed on
+    /// [`rune::text::font_epoch`](crate::text::font_epoch) invalidate automatically.
+    ///
+    /// Empty slices, blobs larger than 64 MiB, and unrecognised font data are ignored and return
+    /// an empty list. Registering bytes that are already registered returns their family names
+    /// without duplicating data or triggering a relayout.
+    ///
+    /// ```ignore
+    /// let families = tx.add_font(bytes);
+    /// if let Some(family) = families.first() {
+    ///     tx.set_font_families(family, "ui-monospace");
+    /// }
+    /// ```
+    pub fn add_font(&mut self, bytes: impl Into<std::sync::Arc<[u8]>>) -> Vec<String> {
+        let (families, added) = crate::text::full_faces::add_font_checked(bytes.into());
+        self.fonts_added |= added;
+        families
     }
 
     /// Shapes and breaks the text of `view` into the window's layout cache in its next idle turn,

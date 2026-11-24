@@ -175,26 +175,6 @@ pub(crate) fn note_fonts(fonts: &[&'static [u8]], families: (&str, &str)) {
     });
 }
 
-#[cfg(target_arch = "wasm32")]
-fn apply_faces_arrived(slot: &mut Option<Fonts>) {
-    if let Some(f) = slot.as_mut() {
-        f.generation += 1;
-        f.fonts_generation = next_fonts_generation();
-    }
-}
-
-/// Called when faces a web app adds after its first frame arrive: the next measurement shapes
-/// with them.
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn note_faces_arrived() {
-    if OVERRIDE.with_borrow(Option::is_some) {
-        OVERRIDE.with_borrow_mut(apply_faces_arrived);
-        return;
-    }
-    THREAD_FONTS.with_borrow_mut(apply_faces_arrived);
-    with_global(apply_faces_arrived);
-}
-
 fn apply_families(slot: &mut Option<Fonts>, sans: &str, mono: &str) {
     let Some(f) = slot.as_mut() else { return };
     if f.families.0 != sans || f.families.1 != mono {
@@ -214,24 +194,35 @@ pub(crate) fn note_families(sans: &str, mono: &str) {
 }
 
 /// Changes whenever the fonts or families [`measure`] uses on this thread change, as when an app
-/// calls `Tx::set_font_families` or this thread builds a [`TextSystem`] with different fonts. A
-/// cache of measured sizes mixes it into its key.
+/// calls [`crate::add_font`], `Tx::add_font`, `Tx::set_font_families`, or this thread builds a
+/// [`TextSystem`] with different fonts. A cache of measured sizes mixes it into its key.
 ///
 /// A thread that has built its own [`TextSystem`] or holds a [`with_families`] or [`with_fonts`]
 /// guard has an epoch in its own scope, distinct from the process-wide epoch and from other
 /// guards, so caches keyed on it never mix scopes or invalidate on another thread's `TextSystem`.
 pub fn font_epoch() -> u64 {
-    OVERRIDE.with_borrow(|o| match o {
+    let faces = crate::fonts::full_faces::count() as u64;
+    let base = OVERRIDE.with_borrow(|o| match o {
         Some(f) => epoch_of(f),
         None => THREAD_FONTS.with_borrow(|t| match t {
             Some(f) => epoch_of(f),
             None => GLOBAL_EPOCH.load(Ordering::Acquire),
         }),
-    })
+    });
+    combine_face_epoch(base, faces)
 }
 
 fn epoch_of(f: &Fonts) -> u64 {
     if f.scope == 0 { f.generation } else { 1 << 63 | f.scope << 32 | (f.generation & 0xFFFF_FFFF) }
+}
+
+/// Mixes the process-wide runtime face count into `base` without colliding across scopes.
+fn combine_face_epoch(base: u64, faces: u64) -> u64 {
+    if base & (1 << 63) == 0 {
+        base.wrapping_add(faces) & 0x7FFF_FFFF_FFFF_FFFF
+    } else {
+        (base & 0xFFFF_FFFF_0000_0000) | (base.wrapping_add(faces) & 0xFFFF_FFFF)
+    }
 }
 
 /// Holds a thread-scoped family override; see [`with_families`].
@@ -410,7 +401,10 @@ pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
     let f = if OVERRIDE.with_borrow(Option::is_none) {
         match LENT.with(|cell| match cell.try_borrow_mut() {
             Ok(mut slot) => match slot.as_mut() {
-                Some(text) => Ok(f(text)),
+                Some(text) => {
+                    text.follow_full_faces();
+                    Ok(f(text))
+                }
                 None => Err(f),
             },
             Err(_) => Err(f),
@@ -424,13 +418,16 @@ pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
     MEASURER.with_borrow_mut(|m| {
         let current = font_epoch();
         if m.as_ref().is_none_or(|m| m.generation != current) {
-            let (epoch, fonts_generation, fonts, (sans, mono)) = with_state(|slot| {
+            let faces = crate::fonts::full_faces::count() as u64;
+            let (base_epoch, fonts_generation, fonts, (sans, mono)) = with_state(|slot| {
                 let f = ensure_fonts(slot);
                 (epoch_of(f), f.fonts_generation, f.fonts.clone(), f.families.clone())
             });
+            let epoch = combine_face_epoch(base_epoch, faces);
             match m.as_mut() {
-                // Only the families changed: the loaded fonts stay.
+                // Only the families or runtime-added faces changed: the loaded fonts stay.
                 Some(m) if m.fonts_generation == fonts_generation => {
+                    m.text.follow_full_faces();
                     m.text.apply_families(&sans, &mono);
                     m.generation = epoch;
                 }
