@@ -86,6 +86,7 @@ fn track(s: &State, track_w: f32) -> El {
     el().key("track").role("slider").label("Puck").range_value(f64::from(s.at), 0.0, 1.0)
         .range_step(1.0 / (STOPS - 1) as f64)
         .on_step(|s: &mut State, steps, _| s.at = snap(s.at + steps as f32 / (STOPS - 1) as f32).clamp(0.0, 1.0))
+        .on_set_value(|s: &mut State, value, _| s.at = snap(value as f32).clamp(0.0, 1.0))
         .size(track_w, PUCK)
         .motion(SPRINGS[s.spring].1)
         .on_drag(move |s: &mut State, d: &mut Drag, tx: &mut Tx| match d.phase {

@@ -300,6 +300,7 @@ fn speed_control(p: Paint, v: f32) -> El {
                 .range_step(0.05)
                 .a11y_value(format!("{:.2}×", speed_of(v)))
                 .on_step(|s: &mut Settings, steps, _| s.speed = (s.speed + steps as f32 * 0.05).clamp(0.0, 1.0))
+                .on_set_value(|s: &mut Settings, value, _| s.speed = (value as f32).clamp(0.0, 1.0))
                 .size(w, h)
                 .motion(motion::SNAPPY)
                 .on_drag(move |s: &mut Settings, d: &mut Drag, tx| match d.phase {

@@ -3,7 +3,7 @@
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::el::{El, InputKeyFn, Outline, PressFn, RoleTag, StepFn, StepLimitFn, Tx};
+use crate::el::{El, InputKeyFn, Outline, PressFn, RoleTag, SetValueFn, StepFn, StepLimitFn, Tx};
 use crate::states::downcast;
 
 #[derive(Clone)]
@@ -41,6 +41,8 @@ pub(crate) struct FocusSpec {
     pub return_to: Option<String>,
     /// [`crate::El::press_focuses_below`].
     pub below: bool,
+    /// `on_set_value`: a range control's absolute value from assistive technology.
+    pub set_value: Option<SetValueFn>,
     /// `on_step`: a slider's arrow and page keys.
     pub step: Option<StepFn>,
     /// `on_step_limit`: a slider's Home and End.
@@ -74,6 +76,7 @@ impl crate::cold::Empty for FocusSpec {
         follows: false,
         return_to: None,
         below: false,
+        set_value: None,
         step: None,
         step_limit: None,
         key_up: None,
@@ -202,6 +205,20 @@ impl El {
     /// the minimum, and `true` for End, the maximum. Without it they scroll, as elsewhere.
     pub fn on_step_limit<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
         self.cold_mut().focus.step_limit = Some(Rc::new(move |s, max, tx| f(downcast::<S>(s), max, tx)));
+        self
+    }
+    /// Sets a range control's numeric value when assistive technology invokes AccessKit's numeric
+    /// `SetValue` action, as a browser sets `<input type="range">` directly to the requested
+    /// number.
+    ///
+    /// When [`El::range_value`] sets finite ordered bounds (`min <= max`), the requested value is
+    /// clamped to `[min, max]` before `f` runs, so `f` receives the target and snaps it to its
+    /// own grid (if any); non-finite targets and unusable range bounds are ignored. Works with or
+    /// without [`El::range_step`]. When both `on_set_value` and [`El::on_step`] are set,
+    /// `SetValue` calls `on_set_value` while `Increment`, `Decrement` and keyboard stepping still
+    /// call `on_step`.
+    pub fn on_set_value<S: 'static>(mut self, f: impl Fn(&mut S, f64, &mut Tx) + 'static) -> Self {
+        self.cold_mut().focus.set_value = Some(Rc::new(move |s, value, tx| f(downcast::<S>(s), value, tx)));
         self
     }
     /// Return focus to this keyed trigger (or its first focusable child) when removed.

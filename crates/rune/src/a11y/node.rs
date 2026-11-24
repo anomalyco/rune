@@ -111,7 +111,7 @@ impl RuntimeCore {
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
             handlers.is_some_and(|h| h.modal.is_some()), handlers.is_some_and(|h| h.has_primary())).hash(&mut h);
-        (n.focus.selected, n.focus.step.is_some(), n.focus.default, self.focus_group(i).is_some()).hash(&mut h);
+        (n.focus.selected, n.focus.step.is_some(), n.focus.set_value.is_some(), n.focus.default, self.focus_group(i).is_some()).hash(&mut h);
         (self.allowed(i), self.can_focus(i), n.inert).hash(&mut h);
         if let Some(st) = self.scroll.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
             [st.offset.to_bits(), st.max.to_bits(), st.x.offset.to_bits(), st.x.max.to_bits()].hash(&mut h);
@@ -261,6 +261,9 @@ impl RuntimeCore {
                 node.add_action(Ak::Increment);
                 node.add_action(Ak::Decrement);
                 if more.and_then(|m| m.range).is_some_and(|r| r.usable_step().is_some()) { node.add_action(Ak::SetValue); }
+            }
+            if n.focus.set_value.is_some() && more.and_then(|m| m.range).is_none_or(|r| r.usable_bounds().is_some()) {
+                node.add_action(Ak::SetValue);
             }
             if input.is_some_and(|i| i.access.is_some()) {
                 node.add_action(Ak::SetValue);

@@ -15,6 +15,7 @@ pub(crate) enum A11yAct {
     /// Focus the element, or one of its text's links.
     Focus(Option<usize>),
     Step(i32),
+    SetNumericValue(f64),
     SetValue(zeroize::Zeroizing<String>),
     Replace(zeroize::Zeroizing<String>),
     /// Anchor and focus, in the field's display bytes.
@@ -30,6 +31,7 @@ impl std::fmt::Debug for A11yAct {
         match self {
             Self::Focus(link) => f.debug_tuple("Focus").field(link).finish(),
             Self::Step(delta) => f.debug_tuple("Step").field(delta).finish(),
+            Self::SetNumericValue(value) => f.debug_tuple("SetNumericValue").field(value).finish(),
             Self::SetValue(_) => f.debug_tuple("SetValue").field(&"[redacted]").finish(),
             Self::Replace(_) => f.debug_tuple("Replace").field(&"[redacted]").finish(),
             Self::Select(a, b) => f.debug_tuple("Select").field(a).field(b).finish(),
@@ -60,7 +62,7 @@ impl RuntimeCore {
         let pressable = handlers.is_some_and(|h| h.on_press.is_some());
         let secondary = handlers.is_some_and(|h| h.on_secondary_press.is_some());
         let (input, editable) = (n.input.is_some(), n.input.as_ref().is_some_and(|i| i.access.is_some()));
-        let (expanded, steps, scrolls) = (n.a11y.expanded, n.focus.step.is_some(), n.scroll.is_some());
+        let (expanded, steps, sets_value, scrolls) = (n.a11y.expanded, n.focus.step.is_some(), n.focus.set_value.is_some(), n.scroll.is_some());
         let focusable = self.can_focus(i);
         match (request.action, link) {
             (Ak::Click, Some(k)) => self.queue_a11y_link(path, k),
@@ -87,7 +89,22 @@ impl RuntimeCore {
                 let Some(ActionData::Value(v)) = &request.data else { return false };
                 self.queue_a11y(path, A11yAct::SetValue(zeroize::Zeroizing::new(v.to_string())));
             }
-            // A slider with a stated step takes a number as that many steps from its value.
+            // A range control with `on_set_value` takes the target value directly, clamped to its range.
+            (Ak::SetValue, None) if sets_value => {
+                let Some(ActionData::NumericValue(target)) = request.data else { return false };
+                if !target.is_finite() { return false; }
+                let clamped = match n.a11y.more.as_deref().and_then(|m| m.range) {
+                    Some(r) => {
+                        let Some((min, max)) = r.usable_bounds() else { return false };
+                        target.clamp(min, max)
+                    }
+                    None => target,
+                };
+                self.queue_a11y(path, A11yAct::SetNumericValue(clamped));
+            }
+            // A slider with only `on_step` and a stated step takes a number as that many steps from
+            // its last built value; any earlier queued steps on the same element are replaced so
+            // repeated SetValue requests before a frame do not add up.
             (Ak::SetValue, None) if steps => {
                 let Some(ActionData::NumericValue(target)) = request.data else { return false };
                 if !target.is_finite() { return false; }
@@ -96,7 +113,8 @@ impl RuntimeCore {
                     let target = target.clamp(r.min, r.max);
                     Some(((target - r.value) / step).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32)
                 }) else { return false };
-                if delta == 0 { return false; }
+                let had_steps = self.clear_a11y_steps(&path);
+                if delta == 0 { return had_steps; }
                 self.queue_a11y(path, A11yAct::Step(delta));
             }
             (Ak::ReplaceSelectedText, None) if editable => match &request.data {
@@ -163,6 +181,12 @@ impl RuntimeCore {
                 let Some(f) = self.node(&path).and_then(|n| n.focus.step.clone()) else { return false };
                 log_event!(self, "a11y step {delta} {path}");
                 f(app.states(), delta, tx);
+                true
+            }
+            A11yAct::SetNumericValue(value) => {
+                let Some(f) = self.node(&path).and_then(|n| n.focus.set_value.clone()) else { return false };
+                log_event!(self, "a11y set_value {value} {path}");
+                f(app.states(), value, tx);
                 true
             }
             A11yAct::SetValue(value) => self.a11y_edit(app, path, tx, move |e| {

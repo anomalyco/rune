@@ -559,6 +559,11 @@ impl RuntimeCore {
     pub(crate) fn queue_a11y(&mut self, path: String, act: crate::a11y::actions::A11yAct) {
         self.frame.queue.push(Action::A11y(path, act));
     }
+    pub(crate) fn clear_a11y_steps(&mut self, path: &str) -> bool {
+        let before = self.frame.queue.len();
+        self.frame.queue.retain(|a| !matches!(a, Action::A11y(p, crate::a11y::actions::A11yAct::Step(_)) if p == path));
+        self.frame.queue.len() != before
+    }
     pub(crate) fn queue_a11y_press(&mut self, path: String) {
         self.frame.queue.push(Action::Press(path, crate::PointerButton::Primary, false));
     }
