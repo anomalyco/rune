@@ -55,12 +55,12 @@ return {
   a small table of its own after it, laid over it (`ui.row(ROW, { key = id }, children)`,
   `ui.text(words, LABEL, { color = ink })`, host nodes too), and only that table is decoded.
   Values after a text's props fill `{1}`, `{2}`... in its content, straight into the string the
-  element keeps (`ui.text("{1} / {2}", VALUE, read, write)`). Props: `key`, `w`/`h` (points or `"full"`), `minW`..`maxH`, `grow`, `shrink`, `pad`,
+  element keeps (`ui.text("{1} / {2}", VALUE, read, write)`). Props: `key`, `w`/`h` (points, `"full"`, or a non-negative CSS percentage string such as `"40%"`), `minW`..`maxH`, `grow`, `shrink`, `cols` (positive integer equal-width grid columns, `El::equal_columns`), `aspect` (positive finite aspect ratio, `El::aspect_ratio`), `pad`,
   `px`..`pl`, `m`..`ml`, `gap`, `align`, `justify`, `center`, `wrap`, `fill`, `hover`, `press`,
-  `border`, `borderWidth`, `radius`, `clip`, `scrollY`, `scrollX`, `opacity`, `role`, `label`,
+  `border`, `borderWidth`, `outline`, `outlineWidth` (default `1.0`, `El::outline(width, 0.0, color)`), `radius`, `clip` (`true` for rectangular soft clip or a non-negative radius number for `El::clip_rounded`), `scrollY`, `scrollX`, `opacity`, `pressScale` (positive scale while held), `scale` (non-negative uniform scale), `rotate` (clockwise degrees), `origin` (`{ x?, y? }`, unset axes default to `0.5`), `offset` (`{ x?, y? }`, unset axes default to `0.0`), `raise` (`El::raise`), `matched` (non-empty shared-element flight id, `El::matched`), `matchedCrop` (boolean, `El::matched_crop`), `role` (`"none"`, `"group"`, `"region"`, `"button"`, `"link"`, `"switch"`, `"checkbox"`, `"radio"`, `"tab"`, `"tablist"`, `"list"`, `"listitem"`, `"heading"`, `"img"`, `"status"`, `"timer"`, `"alert"`, `"slider"`, `"spinbutton"`, `"textbox"`, `"progressbar"`, `"dialog"`, `"combobox"`, `"tooltip"`), `label`,
   `help`, `helpSide`, `helpOpen` (keeps the tooltip up while true, as a `Tooltip forceOpen`), `dir` (`"ltr"`, `"rtl"` or `"auto"`), `pin`, `corners`, `shadow`, `selected`, `focusable`, `disabled`, `hoverTransition`, `hoverGroup`, `hoverGroupColor`, `revealOnHover`, `onPress`, `onMiddlePress` (a middle click: a `middle-press` event), `menuTrigger` (its `onPress` opens a menu: a mouse runs it as the button goes down, as Kobalte's `Menu.Trigger`; a key, a screen reader's Invoke or a tap runs it on the click), `onHover`, and for text `size`, `weight`, `lineHeight`, `tracking`, `color`, `mono`,
-  `tabular`, `noWrap`, `truncate`, `fadeOut`, `selectable`, `textAlign`. Colours are palette names or
-  `ui.hex("#rrggbb")`.
+  `tabular`, `noWrap`, `truncate`, `fadeOut`, `maxLines` (non-negative integer line clamp with ellipsis; `0` shows every wrapped line), `selectable`, `textAlign`. Colours are palette names or
+  `ui.hex("#rrggbb")`. Inside `view:Memo`, `matched` nodes still participate in shared-element flights (Rune does not skip matched elements during memo reuse); inside `ui.virtualList`, only rows currently built in the rendered window participate, as with `El::virtual_rows`.
 - **`view:Memo(key, version, build)`** reuses the subtree while `version` (a string, number or
   boolean) is unchanged, without calling `build`. Its memo id, and its root's key, is `key` under
   the script's prefix (`luau:<name>:<key>`), so scripts in one window never share a memo. **`view:Handler(fn)`** returns `fn`; handlers
@@ -112,6 +112,9 @@ finish browser-async work (a `fetch`) from its own callback through the `Complet
 
 ## Example
 
-`examples/luau-panel`: a header, a pulse driven by `task.wait`, a signal and a 1,000-row virtual
-list. `cargo run -p luau-panel --bin luau-panel`; `cargo run -p luau-panel --bin luau-bench --profile perf`
-measures idle frames, memo hits, a 20-row rebuild, list scrolling and hot reload.
+`examples/luau-panel`: a header, a pulse driven by `task.wait`, a signal, a 1,000-row virtual
+list, and a **Props** showcase (`--scene props`) covering `maxLines`, `matched`/`matchedCrop`,
+transforms, `outline`, `raise`, rounded `clip`, `cols`, `aspect`, percentage `w`/`h`, and ARIA
+roles. `cargo run -p luau-panel --bin luau-panel` (or `-- --scene props --snap target/luau-panel-props.png`);
+`cargo run -p luau-panel --bin luau-bench --profile perf` measures idle frames, memo hits, a 20-row
+rebuild, list scrolling and hot reload.

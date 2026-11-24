@@ -4,6 +4,7 @@
 -- and keeps the selection and counters (saveHotState / loadHotState).
 local ui = require("@rune/ui")
 local rows = require("@self/rows")
+local showcase = require("@self/showcase")
 
 local state = {
 	selected = 0,
@@ -11,6 +12,9 @@ local state = {
 	pulse = 0,
 	pings = 0,
 	shuffles = 0,
+	tab = "list",
+	pill = 1,
+	cardSlot = 0,
 }
 
 local items = rows.items(1000)
@@ -60,6 +64,7 @@ local function button(key: string, label: string, onPress: () -> ())
 		fill = "control-off",
 		hover = "hover",
 		press = "press",
+		pressScale = 0.96,
 		onPress = onPress,
 	}, { ui.text(label, { size = 12, weight = "medium" }) })
 end
@@ -82,9 +87,13 @@ local function header()
 			button("ping", "Ping", function()
 				pinged:Fire(state.pings + 1)
 			end),
+			button("tab-toggle", if state.tab == "list" then "Props" else "List", function()
+				state.tab = if state.tab == "list" then "props" else "list"
+				changed(false)
+			end),
 			ui.spacer(),
-			ui.box({ w = 120, h = 6, radius = 3, fill = "separator" }, {
-				ui.box({ w = state.pulse * 12, h = 6, radius = 3, fill = ui.hex("#009fff") }),
+			ui.box({ w = 120, h = 6, radius = 3, fill = "separator", role = "progressbar", label = "Pulse progress" }, {
+				ui.box({ w = `{state.pulse * 10}%`, h = "100%", radius = 3, fill = ui.hex("#009fff") }),
 			}),
 			ui.text(`{state.pings} pings`, { size = 12, color = "text-secondary", w = 60 }),
 		}),
@@ -92,10 +101,17 @@ local function header()
 end
 
 local function render(view)
-	return ui.col({ key = "panel", w = "full", h = "full", fill = "bg" }, {
-		view:Memo("header", headerVersion, header),
-		ui.box({ w = "full", h = 1, fill = "separator" }),
-		ui.virtualList({
+	local body
+	if state.tab == "props" then
+		body = showcase.render(state.pill, state.cardSlot, function(i: number)
+			state.pill = i
+			changed(false)
+		end, function()
+			state.cardSlot = 1 - state.cardSlot
+			changed(false)
+		end)
+	else
+		body = ui.virtualList({
 			key = "items",
 			w = "full",
 			grow = 1,
@@ -107,14 +123,23 @@ local function render(view)
 					select(i)
 				end)
 			end,
-		}),
+		})
+	end
+	return ui.col({ key = "panel", w = "full", h = "full", fill = "bg" }, {
+		view:Memo("header", headerVersion, header),
+		ui.box({ w = "full", h = 1, fill = "separator" }),
+		body,
 	})
 end
 
 return {
 	render = render,
-	-- For the host: select a row, and read the selection.
+	-- For the host: select a row, switch tabs, and read the selection.
 	select = select,
+	setTab = function(tab: string)
+		state.tab = tab
+		changed(false)
+	end,
 	selected = function()
 		return state.selected
 	end,
