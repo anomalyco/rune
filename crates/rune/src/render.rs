@@ -40,6 +40,8 @@ mod upload;
 mod variant;
 #[cfg(any(target_os = "linux", all(test, not(target_arch = "wasm32"))))]
 mod vulkan_icd;
+#[cfg(not(target_arch = "wasm32"))]
+mod warm_machine;
 mod warmup;
 #[cfg(target_os = "macos")]
 mod windfoil_metallib;
@@ -79,6 +81,12 @@ pub(crate) use surface_setup::{SurfaceSetupError, format_window_setup_error};
 pub(crate) use surface_setup::with_wine_hwnd_hint;
 pub(crate) use device::choose_gpu_backend;
 pub(crate) use device::discard_prewarm;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use device::reopen_prewarm;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use device::shutdown_prewarm;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use warm_machine::ShutdownOutcome;
 pub(crate) use instance::Globals;
 pub(crate) use instance::INSTANCE_WORDS;
 pub(crate) use instance::effect_mark;

@@ -160,10 +160,18 @@ pub(crate) fn end_fast(last: fn()) -> ! {
 /// Ends this process now with exit code 0 (3 when `RUNE_LOOP_CHECK=2` found a differing picture,
 /// `render::pixel_check`): no destructors, no `atexit`, no DLL detach.
 #[cfg(not(target_arch = "wasm32"))]
-#[allow(unsafe_code)]
 fn end_process() -> ! {
-    crate::marks::mark("quit.end");
     let code = if crate::render::loop_pixel_check_failed() { 3 } else { 0 };
+    end_process_with_code(code)
+}
+
+/// Ends this process immediately with `code`: no destructors, no `atexit`, no DLL detach.
+/// Used by fast exit, `exit_deadline`, and orderly/error exits whose GPU warm-up threads stayed
+/// wedged in a driver call past the bounded shutdown wait.
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(unsafe_code)]
+pub(crate) fn end_process_with_code(code: i32) -> ! {
+    crate::marks::mark("quit.end");
     // A process ends once each of its threads has run to its end: an idle-priority one (D3D12's
     // shader threads) on a busy machine can hold it for seconds.
     #[cfg(target_os = "windows")]
