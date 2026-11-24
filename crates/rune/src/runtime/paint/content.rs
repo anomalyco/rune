@@ -127,19 +127,36 @@ impl RuntimeCore {
             let span = [crop[2] - crop[0], crop[3] - crop[1]];
             if rect[2] > 0.0 && rect[3] > 0.0 && span[0] > 0.0 && span[1] > 0.0 {
                 // The mip covers the whole image's drawn size, not just its visible window.
-                if let Some((image, next)) = self.images.place_at(pixels, [rect[2] / span[0], rect[3] / span[1]], Some(now)) {
+                if let Some((image, next)) = self.images.place_at_filtered(
+                    pixels,
+                    [rect[2] / span[0], rect[3] / span[1]],
+                    Some(now),
+                    n.vis.image_filter,
+                ) {
                     if let Some(at) = next {
                         arm_image_wake(&mut self.paint, &mut self.motion, self.frame.live.visible(), self.clock, self.time_scale, now, at);
                     }
                     let [x, y, iw, ih] = image.rect.map(|v| v as f32);
                     // A letterboxed image rounds its own, smaller corners.
                     let half = rect[2].min(rect[3]) * 0.5;
+                    let sc = &crate::render::shader_consts::IMAGE_FLAG_PREMULTIPLIED;
+                    let mut flags = if image.premultiplied { *sc } else { 0 };
+                    if n.vis.image_filter == crate::ImageFilter::Nearest {
+                        flags |= crate::render::shader_consts::IMAGE_FLAG_NEAREST;
+                    }
+                    let fill = match n.vis.pixels_tint {
+                        Some(tint) => {
+                            flags |= crate::render::shader_consts::IMAGE_FLAG_TINT;
+                            premul(tint, o, srgb)
+                        }
+                        None => [0.0, 0.0, 0.0, o],
+                    };
                     self.instances.push(Instance {
                         rect,
                         radii: if n.vis.pixels_fit.is_some() { radii.map(|v| v.min(half)) } else { radii },
-                        fill: [0.0, 0.0, 0.0, o],
+                        fill,
                         border: [0.0; 4],
-                        params: [image.page as f32, KIND_IMAGE, image.premultiplied as u8 as f32, 1.0],
+                        params: [image.page as f32, KIND_IMAGE, flags as f32, 1.0],
                         // The shader samples from a whole-texel origin; the span may be fractional.
                         uv: [x + (crop[0] * iw).round(), y + (crop[1] * ih).round(), span[0] * iw, span[1] * ih],
                         clip,

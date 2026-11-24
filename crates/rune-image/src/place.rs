@@ -16,6 +16,28 @@ pub enum SurfaceFit {
     Fill,
 }
 
+/// How an image scales when its drawn size differs from its source texels (`El::image_filter`).
+///
+/// Matches CSS `image-rendering: auto` ([`Self::Linear`], the default) and
+/// `image-rendering: pixelated` ([`Self::Nearest`]), and `wgpu::FilterMode::{Linear, Nearest}`.
+///
+/// ```
+/// use rune_image::ImageFilter;
+///
+/// assert_eq!(ImageFilter::default(), ImageFilter::Linear);
+/// assert_ne!(ImageFilter::Nearest, ImageFilter::Linear);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImageFilter {
+    /// Bilinear interpolation between neighbouring texels, using prefiltered mip levels when
+    /// scaled down (the default).
+    #[default]
+    Linear,
+    /// Nearest-neighbour (point) sampling from mip level 0, keeping crisp hard texel edges for
+    /// pixel art, sprites, and zoomed bitmaps.
+    Nearest,
+}
+
 /// `El::surface_anchor` and `El::surface_unscaled`. The default centres and scales by `SurfaceFit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfacePlace {

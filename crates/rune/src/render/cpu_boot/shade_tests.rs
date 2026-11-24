@@ -459,3 +459,152 @@ fn valid_image_matches_gpu_byte_for_byte() {
     assert_eq!(d.over_two, 0, "valid image CPU/GPU drift: {d:?}");
     assert!(d.max <= 1, "valid image CPU/GPU max diff > 1: {d:?}");
 }
+
+#[test]
+fn pixels_tint_and_nearest_filter_match_gpu_byte_for_byte() {
+    use crate::color::Color;
+    use crate::render::instance::shader_consts as sc;
+    use crate::render::KIND_IMAGE;
+
+    let (w, h) = (160u32, 80u32);
+    let clear = [0.06, 0.08, 0.12, 1.0];
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
+
+    let mut images = ImageAtlas::default();
+    // 4x4 black/white checkerboard (straight alpha).
+    let checker = crate::pixels::Pixels::new();
+    let mut c_rgba = Vec::with_capacity(4 * 4 * 4);
+    for y in 0..4 {
+        for x in 0..4 {
+            let v = if (x + y) % 2 == 0 { 0 } else { 255 };
+            c_rgba.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    checker.set(4, 4, c_rgba);
+    let p_check = images.place(&checker, [4.0, 4.0]).expect("places checker");
+
+    // 8x8 symbolic alpha mask painted in dark grey (#2e3436) with opaque centre,
+    // semi-transparent ring, and transparent corners (both straight and premultiplied mips).
+    let mut mask_rgba = Vec::with_capacity(8 * 8 * 4);
+    for y in 0..8usize {
+        for x in 0..8usize {
+            let a = if (2..6).contains(&x) && (2..6).contains(&y) {
+                255
+            } else if (1..7).contains(&x) && (1..7).contains(&y) {
+                128
+            } else {
+                0
+            };
+            mask_rgba.extend_from_slice(&[0x2e, 0x34, 0x36, a]);
+        }
+    }
+    let straight_mask = crate::pixels::Pixels::new();
+    straight_mask.set(8, 8, mask_rgba.clone());
+    let p_straight = images.place(&straight_mask, [8.0, 8.0]).expect("places straight mask");
+
+    let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+    let premul_img = cache.rgba(8, 8, mask_rgba);
+    premul_img.wait().expect("decodes premul mask");
+    let p_premul = images.place(premul_img.pixels(), [8.0, 8.0]).expect("places premul mask");
+    assert!(p_premul.premultiplied);
+
+    let tint_opaque = Color { r: 0.25, g: 0.65, b: 1.0, a: 1.0 }.premul_srgb(1.0);
+    let tint_sheen = Color::WHITE.alpha(0.6).premul_srgb(0.8);
+    let tint_clear = Color::TRANSPARENT.premul_srgb(1.0);
+    let instances = [
+        // 4x4 checkerboard drawn at 64x64 with Nearest.
+        Instance {
+            rect: [4.0, 8.0, 64.0, 64.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [0.0; 4],
+            params: [p_check.page as f32, KIND_IMAGE, sc::IMAGE_FLAG_NEAREST as f32, 1.0],
+            uv: p_check.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // Straight-alpha symbolic mask tinted opaque with rounded corners.
+        Instance {
+            rect: [76.0, 8.0, 24.0, 24.0],
+            radii: [4.0; 4],
+            fill: tint_opaque,
+            border: [0.0; 4],
+            params: [p_straight.page as f32, KIND_IMAGE, sc::IMAGE_FLAG_TINT as f32, 1.0],
+            uv: p_straight.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // Premultiplied symbolic mask tinted translucent (sheen) + Nearest combined.
+        Instance {
+            rect: [108.0, 8.0, 24.0, 24.0],
+            radii: [0.0; 4],
+            fill: tint_sheen,
+            border: [0.0; 4],
+            params: [
+                p_premul.page as f32,
+                KIND_IMAGE,
+                (sc::IMAGE_FLAG_PREMULTIPLIED | sc::IMAGE_FLAG_TINT | sc::IMAGE_FLAG_NEAREST) as f32,
+                1.0,
+            ],
+            uv: p_premul.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // Transparent tint draws nothing.
+        Instance {
+            rect: [76.0, 40.0, 24.0, 24.0],
+            radii: [0.0; 4],
+            fill: tint_clear,
+            border: [0.0; 4],
+            params: [p_straight.page as f32, KIND_IMAGE, sc::IMAGE_FLAG_TINT as f32, 1.0],
+            uv: p_straight.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // Sub-texel crop with Nearest must still clamp safely to lo.
+        Instance {
+            rect: [108.0, 40.0, 16.0, 16.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [0.0; 4],
+            params: [p_check.page as f32, KIND_IMAGE, sc::IMAGE_FLAG_NEAREST as f32, 1.0],
+            uv: [p_check.rect[0] as f32 + 1.0, p_check.rect[1] as f32, 0.5, 0.5],
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+    ];
+
+    let mut atlas = Atlas::new();
+    let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true).half_rounding(half);
+    let mut cpu_px = vec![0u8; (w * h * 4) as usize];
+    paint(&scene, &mut Target::new(&mut cpu_px, w, h), 1).expect("CPU paints tinted and nearest images");
+
+    // Verify the 64x64 Nearest checkerboard has exactly 2 distinct grey levels in hard 16 px blocks.
+    let mut levels = std::collections::BTreeSet::new();
+    for y in 8..72u32 {
+        for x in 4..68u32 {
+            let at = ((y * w + x) * 4) as usize;
+            let expected = if (((x - 4) / 16) + ((y - 8) / 16)) % 2 == 0 { 0u8 } else { 255u8 };
+            assert_eq!(cpu_px[at..at + 3], [expected; 3], "CPU nearest block ({x},{y})");
+            levels.insert(cpu_px[at]);
+        }
+    }
+    assert_eq!(levels.len(), 2, "Nearest checkerboard must have exactly 2 levels, got {levels:?}");
+
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    renderer.set_srgb_blend(true);
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, &instances, (w, h));
+    let target = Offscreen::with_format(&gpu.device, w, h, format);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, clear);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let gpu_px = target.read(&gpu.device);
+
+    let d = drift(Pixels::bgra(&cpu_px, w, h, w as usize * 4), Pixels::bgra(&gpu_px, w, h, w as usize * 4));
+    assert_eq!(d.over_two, 0, "tinted/nearest CPU/GPU drift: {d:?}");
+    assert!(d.max <= 1, "tinted/nearest CPU/GPU max diff > 1: {d:?}");
+}

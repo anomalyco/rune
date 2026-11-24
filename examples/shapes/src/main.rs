@@ -1,16 +1,23 @@
-//! Vector shapes and element cutouts: a filled waveform envelope, polylines, meters, a Bézier
-//! path, a concave polygon, compound fills with transparent holes under `FillRule::NonZero` and
-//! `FillRule::EvenOdd`, SVG 2 path data (`Path::from_svg`, `Shape::fill_svg`,
-//! `Shape::fill_svg_with`, `Shape::stroke_svg`), and multi-hole circular cutouts
-//! (`El::cutout_circles`). `cargo run -p shapes -- --snap shapes.png` renders it headless; time
-//! animates the waveform, so `--at 1.5` shows another moment.
+//! Vector shapes, element cutouts, and image sampling/tinting: a filled waveform envelope,
+//! polylines, meters, a Bézier path, a concave polygon, compound fills with transparent holes
+//! under `FillRule::NonZero` and `FillRule::EvenOdd`, SVG 2 path data (`Path::from_svg`,
+//! `Shape::fill_svg`, `Shape::fill_svg_with`, `Shape::stroke_svg`), multi-hole circular cutouts
+//! (`El::cutout_circles`), nearest-neighbour pixel-art scaling (`El::image_filter`,
+//! `ImageFilter::Nearest`), and runtime alpha-tinted symbolic icons (`El::pixels_tint`).
+//! `cargo run -p shapes -- --snap shapes.png` renders it headless; time animates the waveform,
+//! so `--at 1.5` shows another moment.
 
 #![forbid(unsafe_code)]
 
-use rune::{AppSpec, Color, Cx, El, FillRule, LineCap, Path, Shape, Tx, canvas, col, el, memo, row, text};
+use rune::{
+    AppSpec, Color, Cx, El, FillRule, ImageFilter, LineCap, Path, Pixels, Shape, SurfaceFit, Tx,
+    canvas, col, el, memo, row, text,
+};
 
 struct State {
     t: f32,
+    sprite: Pixels,
+    symbolic: Pixels,
 }
 
 const INK: Color = Color {
@@ -226,6 +233,103 @@ fn cutout_cards() -> El {
         .child(row().gap(24.0).child(ticket).child(punched))
 }
 
+/// A 4×4 pixel-art sprite (contrasting colour tiles) for comparing `ImageFilter::Linear` and
+/// `ImageFilter::Nearest` when scaled up to 64×64.
+fn pixel_sprite() -> Pixels {
+    const PALETTE: [[u8; 4]; 4] = [
+        [20, 24, 34, 255],
+        [90, 140, 255, 255],
+        [255, 140, 76, 255],
+        [240, 244, 248, 255],
+    ];
+    const GRID: [[usize; 4]; 4] = [
+        [0, 1, 1, 0],
+        [1, 3, 2, 1],
+        [1, 2, 3, 1],
+        [0, 1, 1, 0],
+    ];
+    let mut rgba = Vec::with_capacity(4 * 4 * 4);
+    for row in GRID {
+        for idx in row {
+            rgba.extend_from_slice(&PALETTE[idx]);
+        }
+    }
+    let px = Pixels::new();
+    px.set(4, 4, rgba);
+    px
+}
+
+/// An 8×8 symbolic folder-style alpha mask painted in dark grey (`#2e3436`, like a Freedesktop
+/// `*-symbolic.svg` loaded at run time) to demonstrate recolouring with `El::pixels_tint`.
+fn symbolic_icon() -> Pixels {
+    const MASK: [&str; 8] = [
+        "........",
+        ".###....",
+        ".######.",
+        ".######.",
+        ".##++##.",
+        ".######.",
+        ".######.",
+        "........",
+    ];
+    let mut rgba = Vec::with_capacity(8 * 8 * 4);
+    for line in MASK {
+        for ch in line.bytes() {
+            let a = match ch {
+                b'#' => 255,
+                b'+' => 140,
+                _ => 0,
+            };
+            rgba.extend_from_slice(&[0x2e, 0x34, 0x36, a]);
+        }
+    }
+    let px = Pixels::new();
+    px.set(8, 8, rgba);
+    px
+}
+
+fn pixel_sampling_and_tint(sprite: &Pixels, symbolic: &Pixels) -> El {
+    let tile = |title: &str, preview: El| {
+        col()
+            .gap(6.0)
+            .child(
+                el()
+                    .size(64.0, 64.0)
+                    .radius(8.0)
+                    .fill(Color { r: 0.12, g: 0.13, b: 0.16, a: 1.0 })
+                    .center()
+                    .child(preview),
+            )
+            .child(text(title).color(INK))
+    };
+    row()
+        .gap(20.0)
+        .child(tile(
+            "Linear (default)",
+            el().size(64.0, 64.0).radius(8.0).pixels(sprite),
+        ))
+        .child(tile(
+            "Nearest (4x4)",
+            el().size(64.0, 64.0).radius(8.0).pixels(sprite).image_filter(ImageFilter::Nearest),
+        ))
+        .child(tile(
+            "Raw #2e3436",
+            el().size(48.0, 48.0).pixels_fit(symbolic, SurfaceFit::Fit).image_filter(ImageFilter::Nearest),
+        ))
+        .child(tile(
+            "Tint: INK",
+            el().size(48.0, 48.0).pixels_fit(symbolic, SurfaceFit::Fit).image_filter(ImageFilter::Nearest).pixels_tint(INK),
+        ))
+        .child(tile(
+            "Tint: ACCENT",
+            el().size(48.0, 48.0).pixels_fit(symbolic, SurfaceFit::Fit).image_filter(ImageFilter::Nearest).pixels_tint(ACCENT),
+        ))
+        .child(tile(
+            "Tint: 0.6 white",
+            el().size(48.0, 48.0).pixels_fit(symbolic, SurfaceFit::Fit).image_filter(ImageFilter::Nearest).pixels_tint(Color::WHITE.alpha(0.6)),
+        ))
+}
+
 fn view(s: &State, _: &mut Cx<State>) -> El {
     col()
         .key("root")
@@ -284,6 +388,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 .child(label("Circular cutouts (El::cutout_circles): ticket notches and four punched holes"))
                 .child(memo("cutouts", (), cutout_cards)),
         )
+        .child(
+            col()
+                .gap(8.0)
+                .child(label("Image sampling & alpha tint: ImageFilter::Linear vs Nearest (4x4 sprite) and El::pixels_tint on a #2e3436 symbolic mask"))
+                .child(pixel_sampling_and_tint(&s.sprite, &s.symbolic)),
+        )
 }
 
 fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
@@ -292,5 +402,17 @@ fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
 }
 
 fn main() {
-    rune::run(AppSpec { poll: Some(poll), ..AppSpec::new("Shapes", (820.0, 740.0), || State { t: 0.0 }, view) });
+    rune::run(AppSpec {
+        poll: Some(poll),
+        ..AppSpec::new(
+            "Shapes",
+            (820.0, 880.0),
+            || State {
+                t: 0.0,
+                sprite: pixel_sprite(),
+                symbolic: symbolic_icon(),
+            },
+            view,
+        )
+    });
 }

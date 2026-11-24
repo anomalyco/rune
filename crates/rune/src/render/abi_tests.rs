@@ -836,6 +836,9 @@ fn shader_consts_and_clip_radii_invariants() {
     let expected_shadow_inside = 3.0 * (unit_g(0.75) + unit_g(2.25));
     assert!((sc::SHADOW_INSIDE - expected_shadow_inside).abs() < 1e-6);
     assert_eq!(sc::OUTLINE_TEX_WIDTH, crate::text::outline::WIDTH);
+    assert_eq!(sc::IMAGE_FLAG_PREMULTIPLIED, 1);
+    assert_eq!(sc::IMAGE_FLAG_TINT, 2);
+    assert_eq!(sc::IMAGE_FLAG_NEAREST, 4);
 
     // `variant::LCD_MEAN_EPSILON` matches the threshold literal in `variant::DUAL_ENTRY`.
     let eps_start = variant::DUAL_ENTRY.find("mean < ").expect("DUAL_ENTRY mean threshold") + "mean < ".len();

@@ -292,3 +292,30 @@ fn exports_compound_shape_fill_rules_to_svg() {
     let two = nodes.iter().find(|n| n.path.ends_with("two")).expect("two");
     assert_eq!(two.inner.matches("<path ").count(), 2, "separate compound fills must not merge into one path: {}", two.inner);
 }
+
+#[test]
+fn html_export_emits_pixelated_image_rendering_for_nearest_filter() {
+    let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+    let linear_img = cache.url("a.png", 32.0, 1.0);
+    let nearest_img = cache.url("b.png", 32.0, 1.0);
+
+    let mut rt = Runtime::new(
+        (linear_img, nearest_img),
+        |(a, b), _| {
+            crate::col().key("root").w_full().role("main")
+                .child(crate::el().key("lin").size(32.0, 32.0).pixels(a.pixels()))
+                .child(crate::el().key("near").size(32.0, 32.0).pixels(b.pixels()).image_filter(crate::ImageFilter::Nearest))
+        },
+        (400.0, 200.0),
+        Env::default(),
+    );
+    rt.page_mode();
+    rt.set_viewport((400.0, 200.0), 2.0);
+    rt.frame(0.0);
+    rt.frame(0.0);
+    let nodes = rt.export_nodes();
+    let lin = nodes.iter().find(|n| n.path.ends_with("lin")).expect("lin");
+    let near = nodes.iter().find(|n| n.path.ends_with("near")).expect("near");
+    assert!(!lin.decls.iter().any(|d| d.0 == "image-rendering"), "{:?}", lin.decls);
+    assert!(near.decls.contains(&("image-rendering", "pixelated".into())), "{:?}", near.decls);
+}

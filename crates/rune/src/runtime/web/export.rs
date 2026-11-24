@@ -145,6 +145,9 @@ impl RuntimeCore {
                 Some(crate::SurfaceFit::Fill) => "cover",
             };
             decls.push(("object-fit", fit.into()));
+            if n.vis.cold.image_filter == crate::ImageFilter::Nearest {
+                decls.push(("image-rendering", "pixelated".into()));
+            }
         }
         ExportNode { path: n.path.clone(), depth, tag, attrs, inner, decls, width: x1 - x0, text: n.text.is_some() }
     }

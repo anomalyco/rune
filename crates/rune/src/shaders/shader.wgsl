@@ -493,18 +493,35 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             let arc = ring_arc(screen - i.rect.xy, i.rect.zw, i.radii, bw);
             col = mix(i.fill, i.border, t) * (ring * dash_cov(arc.x, arc.y, i.uv.xyz));
         } else {
-            // Bilinear, clamped to the image's own texels so neighbours in the atlas never bleed.
-            let local = (screen - i.rect.xy) * i.uv.zw / i.rect.zw - vec2<f32>(0.5);
+            // Image (kind 7): params.z is a bitmask: bit 0 = premultiplied, bit 1 = alpha tint in
+            // fill, bit 2 = nearest-neighbour sampling. params.w is reserved for wrap modes.
+            let flags = u32(max(i.params.z, 0.0) + 0.5);
+            let premultiplied = (flags & 1u) != 0u;
+            let tinted = (flags & 2u) != 0u;
+            let nearest = (flags & 4u) != 0u;
             let lo = vec2<i32>(i.uv.xy);
             let hi = max(lo + vec2<i32>(i.uv.zw) - vec2<i32>(1), lo);
-            let base = floor(local);
-            let f = local - base;
-            let t0 = clamp(lo + vec2<i32>(base), lo, hi);
-            let t1 = clamp(lo + vec2<i32>(base) + vec2<i32>(1, 1), lo, hi);
-            let premultiplied = i.params.z > 0.5;
-            let c = mix(mix(image_texel(t0, premultiplied), image_texel(vec2<i32>(t1.x, t0.y), premultiplied), f.x),
+            let uv_pos = (screen - i.rect.xy) * i.uv.zw / i.rect.zw;
+            var c: vec4<f32>;
+            if (nearest) {
+                let t = clamp(lo + vec2<i32>(floor(uv_pos)), lo, hi);
+                c = image_texel(t, premultiplied);
+            } else {
+                // Bilinear, clamped to the image's own texels so neighbours in the atlas never bleed.
+                let local = uv_pos - vec2<f32>(0.5);
+                let base = floor(local);
+                let f = local - base;
+                let t0 = clamp(lo + vec2<i32>(base), lo, hi);
+                let t1 = clamp(lo + vec2<i32>(base) + vec2<i32>(1, 1), lo, hi);
+                c = mix(mix(image_texel(t0, premultiplied), image_texel(vec2<i32>(t1.x, t0.y), premultiplied), f.x),
                         mix(image_texel(vec2<i32>(t0.x, t1.y), premultiplied), image_texel(t1, premultiplied), f.x), f.y);
-            col = c * (i.fill.a * clamp(0.5 - d, 0.0, 1.0));
+            }
+            let cov = clamp(0.5 - d, 0.0, 1.0);
+            if (tinted) {
+                col = i.fill * (c.a * cov);
+            } else {
+                col = c * (i.fill.a * cov);
+            }
         }
     } else if (kind > 4.5 && kind < 5.5) {
         col = i.fill * segment(screen, i.radii.xy, i.radii.zw, i.params.x, i.params.z > 0.5);

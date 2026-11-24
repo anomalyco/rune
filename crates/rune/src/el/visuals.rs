@@ -226,6 +226,47 @@ impl El {
         cold.pixels_fit = Some(fit);
         self
     }
+    /// Draws this element's [`Self::pixels`] / [`Self::pixels_fit`] image as an alpha mask tinted
+    /// in `color`, ignoring the image's own RGB channels and multiplying `color.a` with the
+    /// image's alpha (and the element's opacity and corner-radius coverage).
+    ///
+    /// Matches CSS `mask-image` + `background-color`, SwiftUI `.renderingMode(.template)`,
+    /// AppKit `NSImage.isTemplate`, GTK symbolic icons, and [`Self::icon_one_color`] for icons
+    /// or sprite overlays loaded at run time. `Color::TRANSPARENT` draws nothing.
+    ///
+    /// ```
+    /// use rune::{Color, Pixels, SurfaceFit, el};
+    ///
+    /// let icon = Pixels::new();
+    /// let tinted = el()
+    ///     .size(24.0, 24.0)
+    ///     .pixels_fit(&icon, SurfaceFit::Fit)
+    ///     .pixels_tint(Color::WHITE.alpha(0.6));
+    /// # let _ = tinted;
+    /// ```
+    pub fn pixels_tint(mut self, color: Color) -> Self {
+        self.vis.cold_mut().pixels_tint = Some(color);
+        self
+    }
+    /// Chooses how this element's [`Self::pixels`] / [`Self::pixels_fit`] image is sampled when
+    /// scaled: [`ImageFilter::Linear`](crate::ImageFilter::Linear) (default, bilinear with
+    /// prefiltered mips) or [`ImageFilter::Nearest`](crate::ImageFilter::Nearest)
+    /// (nearest-neighbour from mip level 0, matching CSS `image-rendering: pixelated` and
+    /// `wgpu::FilterMode::Nearest`).
+    ///
+    /// ```
+    /// use rune::{ImageFilter, Pixels, el};
+    ///
+    /// let sprite = Pixels::new();
+    /// let crisp = el().size(64.0, 64.0).pixels(&sprite).image_filter(ImageFilter::Nearest);
+    /// # let _ = crisp;
+    /// ```
+    pub fn image_filter(mut self, filter: crate::ImageFilter) -> Self {
+        if filter != crate::ImageFilter::Linear || !self.vis.cold.is_empty() {
+            self.vis.cold_mut().image_filter = filter;
+        }
+        self
+    }
     /// A ring `offset` points outside the border box (CSS `outline` + `outline-offset`). Width
     /// and offset snap to device pixels as [`Self::border`]'s width does.
     pub fn outline(mut self, width: f32, offset: f32, color: Color) -> Self {

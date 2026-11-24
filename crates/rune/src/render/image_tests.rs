@@ -369,3 +369,235 @@ fn gpu_sub_texel_image_crop_samples_own_texel_not_atlas_neighbour() {
         assert!(d.max <= 1, "sub-texel uv={uv:?} CPU/GPU max diff > 1: {d:?}");
     }
 }
+
+#[test]
+fn gpu_image_filter_nearest_keeps_crisp_blocks_and_mip_zero() {
+    use crate::el::{El, el, row};
+    use crate::render::{Gpu, KIND_IMAGE, OFFSCREEN_FORMAT, Offscreen, Renderer, instance::shader_consts as sc};
+    use crate::runtime::{Cx, Env, Runtime};
+    use crate::ImageFilter;
+
+    // 4x4 black/white checkerboard drawn at 64x64: Nearest produces 2 levels in hard 16 px blocks,
+    // while default Linear smooths the transitions into many intermediate grey levels.
+    let px = Pixels::new();
+    let mut rgba = Vec::with_capacity(4 * 4 * 4);
+    for y in 0..4 {
+        for x in 0..4 {
+            let v = if (x + y) % 2 == 0 { 0u8 } else { 255u8 };
+            rgba.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    px.set(4, 4, rgba);
+
+    let draw = |filter: ImageFilter| -> (Vec<u8>, [f32; 4]) {
+        fn view(s: &(Pixels, ImageFilter), _: &mut Cx<(Pixels, ImageFilter)>) -> El {
+            el().size(64.0, 64.0).pixels(&s.0).image_filter(s.1)
+        }
+        let mut rt = Runtime::new((px.clone(), filter), view, (64.0, 64.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let inst = rt.instances.iter().find(|i| i.params[1] == KIND_IMAGE).expect("image instance");
+        let params = inst.params;
+        let Some(gpu) = Gpu::test_headless() else { return (Vec::new(), params) };
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (64, 64));
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        let target = Offscreen::new(&gpu.device, 64, 64);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, [0.0, 0.0, 0.0, 1.0]);
+        target.copy(&mut enc);
+        renderer.submit(&gpu.queue, enc);
+        (target.read(&gpu.device), params)
+    };
+
+    let (near_px, near_params) = draw(ImageFilter::Nearest);
+    let (lin_px, lin_params) = draw(ImageFilter::Linear);
+    assert_eq!(near_params[2] as u32, sc::IMAGE_FLAG_NEAREST);
+    assert_eq!(near_params[3], 1.0, "params[3] stays untouched for wrap modes");
+    assert_eq!(lin_params[2] as u32, 0);
+    assert_eq!(lin_params[3], 1.0);
+
+    if !near_px.is_empty() {
+        let mut near_levels = std::collections::BTreeSet::new();
+        for y in 0..64usize {
+            for x in 0..64usize {
+                let v = near_px[(y * 64 + x) * 4];
+                let expected = if ((x / 16) + (y / 16)) % 2 == 0 { 0u8 } else { 255u8 };
+                assert_eq!(v, expected, "Nearest checkerboard mismatch at ({x}, {y})");
+                near_levels.insert(v);
+            }
+        }
+        assert_eq!(near_levels.len(), 2, "Nearest must produce exactly 2 grey levels");
+
+        let lin_levels: std::collections::BTreeSet<u8> =
+            lin_px.chunks_exact(4).map(|p| p[0]).collect();
+        assert!(lin_levels.len() > 2, "default Linear must stay bilinear-smoothed, got {lin_levels:?}");
+    }
+
+    // Mip selection: a 64x64 mipmapped Image drawn at 16x16 uses mip 0 under Nearest and a
+    // downsampled mip under Linear.
+    let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+    let big = cache.rgba(64, 64, [255, 0, 0, 255].repeat(64 * 64));
+    big.wait().expect("decodes mipmapped image");
+    fn mip_view(p: &Pixels, _: &mut Cx<Pixels>) -> El {
+        row()
+            .child(el().size(16.0, 16.0).pixels(p))
+            .child(el().size(16.0, 16.0).pixels(p).image_filter(ImageFilter::Nearest))
+    }
+    let mut rt = Runtime::new(big.pixels().clone(), mip_view, (32.0, 16.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let imgs: Vec<_> = rt.instances.iter().filter(|i| i.params[1] == KIND_IMAGE).collect();
+    assert_eq!(imgs.len(), 2);
+    assert_eq!([imgs[0].uv[2], imgs[0].uv[3]], [16.0, 16.0], "Linear uses 16x16 mip");
+    assert_eq!([imgs[1].uv[2], imgs[1].uv[3]], [64.0, 64.0], "Nearest requests 64x64 mip 0");
+    assert_eq!(imgs[0].params[2] as u32, sc::IMAGE_FLAG_PREMULTIPLIED);
+    assert_eq!(imgs[1].params[2] as u32, sc::IMAGE_FLAG_PREMULTIPLIED | sc::IMAGE_FLAG_NEAREST);
+    assert!(rt.images.has_slot(big.pixels(), 0));
+    assert!(rt.images.has_slot(big.pixels(), 2));
+}
+
+#[test]
+fn gpu_pixels_tint_recolors_alpha_mask_in_linear_and_srgb_blend() {
+    use crate::color::Color;
+    use crate::el::{El, el, row};
+    use crate::render::{Gpu, KIND_IMAGE, OFFSCREEN_FORMAT, Offscreen, Renderer, instance::shader_consts as sc};
+    use crate::runtime::{Cx, Env, Runtime};
+    use crate::ImageFilter;
+
+    // 4x4 dark-grey (#2e3436) symbolic icon: left half opaque, top-right half-alpha, bottom-right transparent.
+    let mut icon_rgba = Vec::with_capacity(4 * 4 * 4);
+    for y in 0..4 {
+        for x in 0..4 {
+            let a = if x < 2 { 255 } else if y < 2 { 128 } else { 0 };
+            icon_rgba.extend_from_slice(&[0x2e, 0x34, 0x36, a]);
+        }
+    }
+    let straight = Pixels::new();
+    straight.set(4, 4, icon_rgba.clone());
+    let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+    let decoded = cache.rgba(4, 4, icon_rgba);
+    decoded.wait().expect("decodes icon");
+
+    let tint_red = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+    let tint_sheen = Color::WHITE.alpha(0.6);
+
+    fn view(s: &(Pixels, Pixels, Color, Color), _: &mut Cx<(Pixels, Pixels, Color, Color)>) -> El {
+        row()
+            // 0..16: untinted (must stay dark grey #2e3436 on opaque pixels)
+            .child(el().size(16.0, 16.0).pixels(&s.0).image_filter(ImageFilter::Nearest))
+            // 16..32: straight-alpha tinted pure red
+            .child(el().size(16.0, 16.0).pixels(&s.0).pixels_tint(s.2).image_filter(ImageFilter::Nearest))
+            // 32..48: premultiplied mip tinted translucent white sheen
+            .child(el().size(16.0, 16.0).pixels(&s.1).pixels_tint(s.3).image_filter(ImageFilter::Nearest))
+            // 48..64: Color::TRANSPARENT tint draws nothing
+            .child(el().size(16.0, 16.0).pixels(&s.0).pixels_tint(Color::TRANSPARENT).image_filter(ImageFilter::Nearest))
+    }
+
+    for srgb_blend in [false, true] {
+        let mut rt = Runtime::new(
+            (straight.clone(), decoded.pixels().clone(), tint_red, tint_sheen),
+            view,
+            (64.0, 16.0),
+            Env::new(true, 1.0),
+        );
+        rt.set_srgb_blend(srgb_blend);
+        rt.frame(0.0);
+
+        let imgs: Vec<_> = rt.instances.iter().filter(|i| i.params[1] == KIND_IMAGE).collect();
+        assert_eq!(imgs.len(), 4);
+        assert_eq!(imgs[0].params[2] as u32, sc::IMAGE_FLAG_NEAREST);
+        assert_eq!(imgs[1].params[2] as u32, sc::IMAGE_FLAG_TINT | sc::IMAGE_FLAG_NEAREST);
+        assert_eq!(imgs[2].params[2] as u32, sc::IMAGE_FLAG_PREMULTIPLIED | sc::IMAGE_FLAG_TINT | sc::IMAGE_FLAG_NEAREST);
+        assert_eq!(imgs[3].params[2] as u32, sc::IMAGE_FLAG_TINT | sc::IMAGE_FLAG_NEAREST);
+
+        let Some(gpu) = Gpu::test_headless() else { continue };
+        let format = if srgb_blend { wgpu::TextureFormat::Bgra8Unorm } else { OFFSCREEN_FORMAT };
+        let mut renderer = Renderer::new(&gpu.device, format);
+        renderer.set_srgb_blend(srgb_blend);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (64, 16));
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        let target = Offscreen::with_format(&gpu.device, 64, 16, format);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, [0.0, 0.0, 0.0, 1.0]);
+        target.copy(&mut enc);
+        renderer.submit(&gpu.queue, enc);
+        let out = target.read(&gpu.device);
+        let rgb = |x: usize, y: usize| -> [u8; 3] {
+            let p = &out[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4];
+            if srgb_blend { [p[2], p[1], p[0]] } else { [p[0], p[1], p[2]] }
+        };
+
+        // Untinted opaque pixel keeps dark grey (#2e3436).
+        let u = rgb(2, 2);
+        assert!(u[0].abs_diff(0x2e) <= 2 && u[1].abs_diff(0x34) <= 2 && u[2].abs_diff(0x36) <= 2,
+            "srgb_blend={srgb_blend}: untinted icon changed: {u:?}");
+        // Red-tinted opaque pixel is pure red, ignoring source dark grey.
+        assert_eq!(rgb(18, 2), [255, 0, 0], "srgb_blend={srgb_blend}: red tint on opaque mask");
+        // Red-tinted transparent corner stays black clear colour.
+        assert_eq!(rgb(28, 12), [0, 0, 0], "srgb_blend={srgb_blend}: red tint must respect 0 alpha");
+        // Red-tinted half-alpha texel is strictly dimmer than opaque and strictly brighter than 0.
+        let half_red = rgb(28, 2);
+        assert!(half_red[0] > 80 && half_red[0] < 240 && half_red[1] == 0 && half_red[2] == 0,
+            "srgb_blend={srgb_blend}: red tint on half-alpha mask: {half_red:?}");
+        // Translucent white sheen (alpha 0.6) over premultiplied opaque pixel is grey, brighter than half-alpha.
+        let sheen_full = rgb(34, 2);
+        let sheen_half = rgb(44, 2);
+        assert!(sheen_full[0] > 100 && sheen_full[0] < 230 && sheen_full[0] == sheen_full[1],
+            "srgb_blend={srgb_blend}: translucent white sheen on full alpha: {sheen_full:?}");
+        assert!(sheen_half[0] > 40 && sheen_half[0] < sheen_full[0],
+            "srgb_blend={srgb_blend}: translucent sheen multiplies image alpha: full={sheen_full:?} half={sheen_half:?}");
+        // Transparent tint draws nothing even on opaque mask texels.
+        assert_eq!(rgb(50, 2), [0, 0, 0], "srgb_blend={srgb_blend}: transparent tint must draw nothing");
+    }
+}
+
+#[test]
+fn memo_reuse_invalidates_when_pixels_tint_or_image_filter_changes() {
+    use crate::color::Color;
+    use crate::el::{El, el};
+    use crate::memo::memo;
+    use crate::render::{KIND_IMAGE, instance::shader_consts as sc};
+    use crate::runtime::{Cx, Env, Runtime};
+    use crate::ImageFilter;
+
+    struct State {
+        px: Pixels,
+        tint: Option<Color>,
+        filter: ImageFilter,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut e = memo("img", (), || el().size(16.0, 16.0).pixels(&s.px));
+        if let Some(c) = s.tint {
+            e = e.pixels_tint(c);
+        }
+        e.image_filter(s.filter)
+    }
+
+    let px = Pixels::new();
+    px.set(4, 4, vec![255; 4 * 4 * 4]);
+    let mut rt = Runtime::new(
+        State { px, tint: None, filter: ImageFilter::Linear },
+        view,
+        (16.0, 16.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let flags = |rt: &Runtime<State>| -> u32 {
+        rt.instances.iter().find(|i| i.params[1] == KIND_IMAGE).unwrap().params[2] as u32
+    };
+    assert_eq!(flags(&rt), 0);
+
+    rt.update(|s, _| s.filter = ImageFilter::Nearest);
+    rt.frame(0.0);
+    assert_eq!(flags(&rt), sc::IMAGE_FLAG_NEAREST);
+
+    rt.update(|s, _| s.tint = Some(Color::WHITE));
+    rt.frame(0.0);
+    assert_eq!(flags(&rt), sc::IMAGE_FLAG_TINT | sc::IMAGE_FLAG_NEAREST);
+
+    rt.update(|s, _| {
+        s.tint = None;
+        s.filter = ImageFilter::Linear;
+    });
+    rt.frame(0.0);
+    assert_eq!(flags(&rt), 0);
+}

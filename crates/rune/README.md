@@ -2486,6 +2486,14 @@ covers the rect and crops the centred overflow, choosing the mip for the uncropp
 In a fixed box these behave like SwiftUI's `.aspectRatio(contentMode: .fit)` and
 `.aspectRatio(contentMode: .fill)` followed by `.clipped()`.
 
+`El::pixels_tint(color)` draws a `Pixels` image's alpha channel tinted in `color`, ignoring the
+image's RGB channels and multiplying `color.a` with the image's alpha (and element opacity and
+corner-radius coverage)—useful for runtime-loaded Freedesktop symbolic icons (`*-symbolic.svg`)
+or translucent sprite highlights and sheens. `El::image_filter(ImageFilter::Nearest)` switches
+sampling from the default bilinear filtering (`ImageFilter::Linear`) to nearest-neighbour point
+sampling from mip level 0 (matching CSS `image-rendering: pixelated` and `wgpu::FilterMode::Nearest`),
+keeping hard pixel edges for pixel art, sprites, and zoomed bitmaps.
+
 A picture that sets only one side takes the other from its image, so
 `el().w(240.0).pixels(icon.pixels())` is as tall as the image's shape makes it, and
 `el().w_full()` fills its parent's width. The height is 0 while the image decodes and settles
