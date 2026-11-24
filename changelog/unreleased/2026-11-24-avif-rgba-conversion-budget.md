@@ -1,0 +1,1 @@
+- Image: native AVIF decoding (`avif` feature) now validates decoded dimensions and checked RGBA8 byte size against the 8192 px per side and 256 MiB allocation limits before allocating the conversion buffer, pre-allocating exact capacity with `try_reserve_exact` instead of growing via `collect()`.

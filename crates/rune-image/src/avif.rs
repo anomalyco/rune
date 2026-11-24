@@ -10,23 +10,64 @@ pub(super) fn is_avif(bytes: &[u8]) -> bool {
 
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 pub(super) fn rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
-    use avif_decode::Image;
     check_limits(bytes)?;
     let error = |e: avif_decode::Error| ImageError(format!("AVIF: {e}"));
     let image = avif_decode::Decoder::from_avif(bytes).map_err(error)?.to_image().map_err(error)?;
-    let eight = |v: u16| ((u32::from(v) * 255 + 32767) / 65535) as u8;
-    let (w, h, pixels): (usize, usize, Vec<u8>) = match image {
-        Image::Rgb8(i) => (i.width(), i.height(), i.pixels().flat_map(|p| [p.r, p.g, p.b, 255]).collect()),
-        Image::Rgba8(i) => (i.width(), i.height(), i.pixels().flat_map(|p| [p.r, p.g, p.b, p.a]).collect()),
-        Image::Rgb16(i) => (i.width(), i.height(), i.pixels().flat_map(|p| [eight(p.r), eight(p.g), eight(p.b), 255]).collect()),
-        Image::Rgba16(i) => (i.width(), i.height(), i.pixels().flat_map(|p| [eight(p.r), eight(p.g), eight(p.b), eight(p.a)]).collect()),
-        Image::Gray8(i) => (i.width(), i.height(), i.pixels().flat_map(|p| { let v = p.value(); [v, v, v, 255] }).collect()),
-        Image::Gray16(i) => (i.width(), i.height(), i.pixels().flat_map(|p| { let v = eight(p.value()); [v, v, v, 255] }).collect()),
+    image_to_rgba(image)
+}
+
+/// Validates decoded dimensions and checked RGBA8 byte size against [`crate::MAX_SIDE`] and
+/// [`crate::MAX_ALLOC`] before allocating a conversion buffer.
+#[cfg_attr(not(any(test, all(feature = "avif", not(target_arch = "wasm32")))), allow(dead_code))]
+pub(super) fn checked_rgba_bytes(w: usize, h: usize) -> Result<(u32, u32, usize), ImageError> {
+    checked_rgba_bytes_with(w, h, limits::MAX_DIM, crate::MAX_ALLOC)
+}
+
+#[cfg_attr(not(any(test, all(feature = "avif", not(target_arch = "wasm32")))), allow(dead_code))]
+pub(super) fn checked_rgba_bytes_with(w: usize, h: usize, max_dim: u32, max_alloc: u64) -> Result<(u32, u32, usize), ImageError> {
+    let (Ok(w32), Ok(h32)) = (u32::try_from(w), u32::try_from(h)) else { return Err(limits::too_large()); };
+    if w32 == 0 || h32 == 0 || w32 > max_dim || h32 > max_dim { return Err(limits::too_large()); }
+    let bytes = u64::from(w32)
+        .checked_mul(u64::from(h32))
+        .and_then(|n| n.checked_mul(4))
+        .filter(|&n| n <= max_alloc)
+        .and_then(|n| usize::try_from(n).ok())
+        .ok_or_else(limits::too_large)?;
+    Ok((w32, h32, bytes))
+}
+
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+fn image_to_rgba(image: avif_decode::Image) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    image_to_rgba_with(image, limits::MAX_DIM, crate::MAX_ALLOC)
+}
+
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+fn image_to_rgba_with(image: avif_decode::Image, max_dim: u32, max_alloc: u64) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    use avif_decode::Image;
+    let (w, h) = match &image {
+        Image::Rgb8(i) => (i.width(), i.height()),
+        Image::Rgba8(i) => (i.width(), i.height()),
+        Image::Rgb16(i) => (i.width(), i.height()),
+        Image::Rgba16(i) => (i.width(), i.height()),
+        Image::Gray8(i) => (i.width(), i.height()),
+        Image::Gray16(i) => (i.width(), i.height()),
     };
-    if w == 0 || h == 0 || w > limits::MAX_DIM as usize || h > limits::MAX_DIM as usize {
-        return Err(limits::too_large());
+    let (w, h, byte_len) = checked_rgba_bytes_with(w, h, max_dim, max_alloc)?;
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(byte_len).map_err(|_| limits::too_large())?;
+    let eight = |v: u16| ((u32::from(v) * 255 + 32767) / 65535) as u8;
+    match image {
+        Image::Rgb8(i) => for p in i.pixels() { pixels.extend_from_slice(&[p.r, p.g, p.b, 255]); },
+        Image::Rgba8(i) => for p in i.pixels() { pixels.extend_from_slice(&[p.r, p.g, p.b, p.a]); },
+        Image::Rgb16(i) => for p in i.pixels() { pixels.extend_from_slice(&[eight(p.r), eight(p.g), eight(p.b), 255]); },
+        Image::Rgba16(i) => for p in i.pixels() { pixels.extend_from_slice(&[eight(p.r), eight(p.g), eight(p.b), eight(p.a)]); },
+        Image::Gray8(i) => for p in i.pixels() { let v = p.value(); pixels.extend_from_slice(&[v, v, v, 255]); },
+        Image::Gray16(i) => for p in i.pixels() { let v = eight(p.value()); pixels.extend_from_slice(&[v, v, v, 255]); },
     }
-    Ok((w as u32, h as u32, pixels))
+    if pixels.len() != byte_len {
+        return Err(ImageError("AVIF: decoded pixel count did not match dimensions".into()));
+    }
+    Ok((w, h, pixels))
 }
 
 #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
