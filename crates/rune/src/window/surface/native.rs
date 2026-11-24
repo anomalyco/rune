@@ -73,6 +73,8 @@ mod tests;
 #[derive(Default)]
 pub(in crate::window) struct Native {
     pub(in crate::window) activator: Option<crate::platform::activation::Activator>,
+    /// Unregisters the window's Wayland drop target before the window's `wl_surface` drops.
+    pub(in crate::window) drop_target: Option<crate::platform::wayland_drop::DropTarget>,
 }
 
 #[cfg(target_os = "windows")]

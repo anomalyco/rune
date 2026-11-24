@@ -47,7 +47,7 @@ pub use handle::WindowHandle;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
 pub(crate) use event_loop::run_windows;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(test, target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) use file_drop::FileStep;
 pub(crate) use keys::{key_base, map_key_event, map_mods};
 pub(crate) use state::frame;
@@ -127,6 +127,9 @@ pub(crate) enum WakeEvent {
     /// Windows: the GPU a CPU-drawn window was waiting for is made, or failed (`cpu_frame`).
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     GpuReady(usize),
+    /// Wayland: native `wl_data_device` drop events or pipe reads are ready for `Host::flush_files`.
+    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+    FileDrop,
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -406,6 +409,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 return;
             }
             WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] self.turn(event_loop); return; }
+            WakeEvent::FileDrop => return,
         };
         if let Some(Some(host)) = self.hosts.get_mut(slot) {
             host.user_event(event_loop, event);

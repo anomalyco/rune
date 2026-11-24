@@ -1,0 +1,1 @@
+- Wayland: native file drops now reach `El::on_drop_files`, `El::on_drop_hover`, `El::on_drop_move`, and `Tx::drop_point` via a shared `wl_data_device` controller on winit's display connection (copy-only `text/uri-list` with surface-local coordinates and bounded off-UI-thread pipe reads).
