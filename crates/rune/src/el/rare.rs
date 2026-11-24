@@ -9,6 +9,41 @@ use rune_motion::{Anim, Spring, Transition};
 use crate::cold::{Cold, Empty};
 use crate::el::{A11y, Anchor, FocusSpec, GrowthSpec, InputSpec, ScrollAxes, ScrollEdges, ScrollSpec, Sticky, WindowDrag};
 
+/// Which macOS Option key acts as Alt while an [`El::ime_cursor`](crate::El::ime_cursor) caret
+/// holds the input method ([`El::ime_option_as_alt_mode`](crate::El::ime_option_as_alt_mode)).
+///
+/// Mirrors winit's macOS `OptionAsAlt` (`None`, `OnlyLeft`, `OnlyRight`, `Both`). Ignored off
+/// macOS.
+///
+/// ```
+/// use rune::{OptionAsAlt, el};
+///
+/// let caret = el().ime_cursor().ime_option_as_alt_mode(OptionAsAlt::Left);
+/// # let _ = caret;
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OptionAsAlt {
+    /// Neither Option key acts as Alt: both compose the keyboard layout's characters and reach
+    /// the input method as usual (the default).
+    #[default]
+    None,
+    /// Only the left Option key acts as Alt; the right Option key keeps composing the layout's
+    /// characters (such as `[` or `@` on a German keyboard).
+    Left,
+    /// Only the right Option key acts as Alt; the left Option key keeps composing the layout's
+    /// characters.
+    Right,
+    /// Both Option keys act as Alt (same as `El::ime_option_as_alt(true)`).
+    Both,
+}
+
+impl From<bool> for OptionAsAlt {
+    #[inline]
+    fn from(on: bool) -> Self {
+        if on { Self::Both } else { Self::None }
+    }
+}
+
 /// Element fields most elements leave at their defaults.
 #[derive(Clone)]
 pub(crate) struct ElCold {
@@ -29,8 +64,8 @@ pub(crate) struct ElCold {
     pub(crate) lead: Option<(Spring, Spring)>,
     /// `El::animated_changes`: an ancestor's `El::instant_changes` stops here.
     pub(crate) animated_changes: bool,
-    /// `El::ime_option_as_alt`.
-    pub(crate) option_as_alt: bool,
+    /// `El::ime_option_as_alt` / `El::ime_option_as_alt_mode`.
+    pub(crate) option_as_alt: OptionAsAlt,
     /// `El::window_resize` edge, read when `ElFlags` holds the resize tag.
     pub(crate) window_resize: Option<crate::ResizeEdge>,
     pub(crate) transition: Option<Box<Transition>>,
@@ -100,7 +135,7 @@ impl Empty for ElCold {
         opacity_motion: None,
         lead: None,
         animated_changes: false,
-        option_as_alt: false,
+        option_as_alt: OptionAsAlt::None,
         window_resize: None,
         transition: None,
         transition_motion: None,

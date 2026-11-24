@@ -234,6 +234,94 @@ fn direct_commit_inserts_fullwidth_punctuation_into_focused_text_input() {
 }
 
 #[test]
+fn option_as_alt_matches_left_right_both_and_none_modifier_masks() {
+    use super::{NX_DEVICELALTKEYMASK, NX_DEVICERALTKEYMASK, option_as_alt_matches};
+    use crate::OptionAsAlt;
+
+    let left = NX_DEVICELALTKEYMASK;
+    let right = NX_DEVICERALTKEYMASK;
+    let both = left | right;
+
+    // Without Option held, no mode matches (even if stale device bits were present).
+    for mode in [OptionAsAlt::None, OptionAsAlt::Left, OptionAsAlt::Right, OptionAsAlt::Both] {
+        for bits in [0, left, right, both] {
+            assert!(!option_as_alt_matches(mode, false, bits), "{mode:?} with alt=false bits={bits:#x}");
+        }
+    }
+
+    // None never matches (default text fields always type the layout's Option characters).
+    for bits in [0, left, right, both] {
+        assert!(!option_as_alt_matches(OptionAsAlt::None, true, bits));
+    }
+
+    // Left matches only when NX_DEVICELALTKEYMASK is set.
+    assert!(!option_as_alt_matches(OptionAsAlt::Left, true, 0));
+    assert!(option_as_alt_matches(OptionAsAlt::Left, true, left));
+    assert!(!option_as_alt_matches(OptionAsAlt::Left, true, right));
+    assert!(option_as_alt_matches(OptionAsAlt::Left, true, both));
+
+    // Right matches only when NX_DEVICERALTKEYMASK is set.
+    assert!(!option_as_alt_matches(OptionAsAlt::Right, true, 0));
+    assert!(!option_as_alt_matches(OptionAsAlt::Right, true, left));
+    assert!(option_as_alt_matches(OptionAsAlt::Right, true, right));
+    assert!(option_as_alt_matches(OptionAsAlt::Right, true, both));
+
+    // Both matches whenever Option is held, even on synthetic events without device-side bits.
+    for bits in [0, left, right, both] {
+        assert!(option_as_alt_matches(OptionAsAlt::Both, true, bits));
+    }
+}
+
+#[test]
+fn direct_commit_keeps_unselected_option_key_composing_when_left_or_right_is_alt() {
+    use super::{NX_DEVICELALTKEYMASK, NX_DEVICERALTKEYMASK, option_as_alt_matches};
+    use crate::OptionAsAlt;
+
+    // With OptionAsAlt::Left, left Option acts as Alt (suppresses direct commit) while right Option
+    // keeps normal character/IME composition (e.g. German Option+5 -> '[' or IME substitution).
+    let left_kd = KeyDown {
+        view: 1,
+        chars: Some("[".into()),
+        chars_ignoring_mods: Some("5".into()),
+        ctrl: false,
+        cmd: false,
+        alt: true,
+        option_as_alt: option_as_alt_matches(OptionAsAlt::Left, true, NX_DEVICELALTKEYMASK),
+    };
+    assert!(!should_direct_commit(&left_kd, false, "「"));
+
+    let right_kd = KeyDown {
+        view: 1,
+        chars: Some("[".into()),
+        chars_ignoring_mods: Some("5".into()),
+        ctrl: false,
+        cmd: false,
+        alt: true,
+        option_as_alt: option_as_alt_matches(OptionAsAlt::Left, true, NX_DEVICERALTKEYMASK),
+    };
+    assert!(!right_kd.option_as_alt);
+    assert!(should_direct_commit(&right_kd, false, "「"));
+    // Layout character matching NSEvent.characters stays on KeyboardInput (types '[').
+    assert!(!should_direct_commit(&right_kd, false, "["));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn winit_option_as_alt_maps_all_modes_and_resets_when_ime_disallowed() {
+    use crate::OptionAsAlt;
+    use crate::input::host_events::winit_option_as_alt;
+    use winit::platform::macos::OptionAsAlt as WinitOpt;
+
+    assert_eq!(winit_option_as_alt(true, OptionAsAlt::None), WinitOpt::None);
+    assert_eq!(winit_option_as_alt(true, OptionAsAlt::Left), WinitOpt::OnlyLeft);
+    assert_eq!(winit_option_as_alt(true, OptionAsAlt::Right), WinitOpt::OnlyRight);
+    assert_eq!(winit_option_as_alt(true, OptionAsAlt::Both), WinitOpt::Both);
+    for mode in [OptionAsAlt::None, OptionAsAlt::Left, OptionAsAlt::Right, OptionAsAlt::Both] {
+        assert_eq!(winit_option_as_alt(false, mode), WinitOpt::None);
+    }
+}
+
+#[test]
 fn rtl_primary_lang_ids_match_windows_rtl_layouts() {
     use super::is_rtl_primary_lang_id;
     // Primary language IDs extracted via PRIMARYLANGID(LOWORD(hkl)) = (hkl as u16) & 0x03ff.

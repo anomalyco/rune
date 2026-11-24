@@ -20,6 +20,32 @@ pub(crate) use windows::{sync, take_clauses, take_select};
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn take_direct_commit(_window: &winit::window::Window) -> Option<String> { None }
 
+/// macOS device-dependent modifier masks from IOKit's `IOLLEvent.h` (`NX_DEVICELALTKEYMASK` and
+/// `NX_DEVICERALTKEYMASK`), matching winit's `lalt_pressed` / `ralt_pressed`.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) const NX_DEVICELALTKEYMASK: usize = 0x0000_0020;
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) const NX_DEVICERALTKEYMASK: usize = 0x0000_0040;
+
+/// Whether the active macOS `OptionAsAlt` mode treats the pressed Option key(s) in `flags_bits`
+/// (from `NSEvent::modifierFlags().bits()`) as Alt rather than layout-composed text.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn option_as_alt_matches(
+    mode: crate::OptionAsAlt,
+    alt_pressed: bool,
+    flags_bits: usize,
+) -> bool {
+    if !alt_pressed {
+        return false;
+    }
+    match mode {
+        crate::OptionAsAlt::None => false,
+        crate::OptionAsAlt::Left => flags_bits & NX_DEVICELALTKEYMASK != 0,
+        crate::OptionAsAlt::Right => flags_bits & NX_DEVICERALTKEYMASK != 0,
+        crate::OptionAsAlt::Both => true,
+    }
+}
+
 /// Key-down context captured while macOS `WinitView::keyDown:` runs `interpretKeyEvents:`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]

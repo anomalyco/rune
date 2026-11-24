@@ -648,6 +648,24 @@ pub(crate) fn ime_sync_step(rt: &mut RuntimeCore, ime_state: &mut ImeSync, focus
     ime_state.step(reset, area, rt.has_secure_focus(), focused, rt.window_scale())
 }
 
+/// Maps Rune's active `OptionAsAlt` mode and IME allowance to winit's macOS `OptionAsAlt`.
+#[cfg(target_os = "macos")]
+pub(crate) fn winit_option_as_alt(
+    ime_allowed: bool,
+    mode: crate::OptionAsAlt,
+) -> winit::platform::macos::OptionAsAlt {
+    use winit::platform::macos::OptionAsAlt as WinitOptionAsAlt;
+    if !ime_allowed {
+        return WinitOptionAsAlt::None;
+    }
+    match mode {
+        crate::OptionAsAlt::None => WinitOptionAsAlt::None,
+        crate::OptionAsAlt::Left => WinitOptionAsAlt::OnlyLeft,
+        crate::OptionAsAlt::Right => WinitOptionAsAlt::OnlyRight,
+        crate::OptionAsAlt::Both => WinitOptionAsAlt::Both,
+    }
+}
+
 /// Synchronizes a window's OS IME allowance, cursor area, and published text with the runtime.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn sync_ime(window: &Window, rt: &mut RuntimeCore, ime_state: &mut ImeSync, focused: bool) {
@@ -660,8 +678,8 @@ pub(crate) fn sync_ime(window: &Window, rt: &mut RuntimeCore, ime_state: &mut Im
     }
     #[cfg(target_os = "macos")]
     {
-        use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
-        let want = if ime_allowed && rt.edit.ime_option_as_alt { OptionAsAlt::Both } else { OptionAsAlt::None };
+        use winit::platform::macos::WindowExtMacOS;
+        let want = winit_option_as_alt(ime_allowed, rt.edit.ime_option_as_alt);
         if window.option_as_alt() != want {
             window.set_option_as_alt(want);
         }

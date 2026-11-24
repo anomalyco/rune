@@ -8,7 +8,7 @@
 #![allow(unsafe_code)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,8 +33,8 @@ thread_local! {
     /// Where the published text starts in its field, in bytes.
     static START: Cell<usize> = const { Cell::new(0) };
     static DIRECT: RefCell<DirectCommit> = const { RefCell::new(DirectCommit::new()) };
-    /// Views (`ns_view` pointer) that currently have `OptionAsAlt` enabled.
-    static OPTION_AS_ALT: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
+    /// Views (`ns_view` pointer) that currently have a non-`None` `OptionAsAlt` mode.
+    static OPTION_AS_ALT: RefCell<HashMap<usize, crate::OptionAsAlt>> = RefCell::new(HashMap::new());
 }
 
 struct KeyDownGuard;
@@ -95,14 +95,18 @@ unsafe extern "C" fn key_down(this: *mut AnyObject, sel: Sel, event: *mut NSEven
         let ev = unsafe { &*event };
         if ev.r#type() != NSEventType::KeyDown { return None; }
         let flags = ev.modifierFlags();
-        let option_as_alt = OPTION_AS_ALT.with_borrow(|views| views.contains(&view));
+        let alt = flags.contains(NSEventModifierFlags::Option);
+        let mode = OPTION_AS_ALT.with_borrow(|views| {
+            views.get(&view).copied().unwrap_or(crate::OptionAsAlt::None)
+        });
+        let option_as_alt = super::option_as_alt_matches(mode, alt, flags.bits());
         Some(KeyDown {
             view,
             chars: ev.characters().map(|s| s.to_string()),
             chars_ignoring_mods: ev.charactersIgnoringModifiers().map(|s| s.to_string()),
             ctrl: flags.contains(NSEventModifierFlags::Control),
             cmd: flags.contains(NSEventModifierFlags::Command),
-            alt: flags.contains(NSEventModifierFlags::Option),
+            alt,
             option_as_alt,
         })
     }).flatten();
@@ -136,13 +140,26 @@ unsafe extern "C" fn insert_text(
     }
 }
 
+fn from_winit_option_as_alt(opt: OptionAsAlt) -> crate::OptionAsAlt {
+    match opt {
+        OptionAsAlt::None => crate::OptionAsAlt::None,
+        OptionAsAlt::OnlyLeft => crate::OptionAsAlt::Left,
+        OptionAsAlt::OnlyRight => crate::OptionAsAlt::Right,
+        OptionAsAlt::Both => crate::OptionAsAlt::Both,
+    }
+}
+
 pub(crate) fn sync(window: &winit::window::Window, text: Option<ImeText>) {
     install();
     START.set(text.as_ref().map_or(0, |t| t.start));
     if let Some(view) = view_ptr(window) {
-        let opt = window.option_as_alt() != OptionAsAlt::None;
+        let mode = from_winit_option_as_alt(window.option_as_alt());
         OPTION_AS_ALT.with_borrow_mut(|views| {
-            if opt { views.insert(view); } else { views.remove(&view); }
+            if mode == crate::OptionAsAlt::None {
+                views.remove(&view);
+            } else {
+                views.insert(view, mode);
+            }
         });
     }
     winit::platform::macos::set_ime_text(text.map(|t| (t.text.clone(), t.selection.clone())));

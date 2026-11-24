@@ -184,13 +184,50 @@ fn cold_packing_handles_el_only_cold_meta_only_and_shared_clones() {
     assert_eq!(by_key(&owned_unique, "el-only").motion, own_spring);
     assert!(by_key(&owned_unique, "el-only").animated_changes);
     assert_eq!(by_key(&owned_unique, "el-only").time_scale, 0.5);
-    assert!(by_key(&owned_unique, "el-only").ime_option_as_alt);
+    assert_eq!(by_key(&owned_unique, "el-only").ime_option_as_alt, crate::OptionAsAlt::Both);
     assert!(!by_key(&owned_unique, "pic-only").cold.is_empty());
     assert_eq!(by_key(&owned_unique, "pic-only").pixel_aspect, Some(2.0));
     let matched = by_key(&owned_unique, "matched-motion");
     assert_eq!(matched.matched.as_ref().map(|(id, m)| (&**id, *m)), Some(("card", Some(own_spring))));
     assert_eq!(matched.label.as_deref(), Some("Card"));
     assert_eq!(matched.help.as_deref(), Some("Open card"));
+}
+
+#[test]
+fn option_as_alt_modes_flatten_consistently_and_keep_bool_signature_compatible() {
+    struct BoolFlag(bool);
+    impl From<BoolFlag> for bool {
+        fn from(f: BoolFlag) -> bool { f.0 }
+    }
+    // Existing `El::ime_option_as_alt(bool)` signature stays concrete, so both function pointers
+    // and `.into()` type inference keep compiling unchanged.
+    let legacy: fn(El, bool) -> El = El::ime_option_as_alt;
+    let tree = col().key("root").size(200.0, 120.0)
+        .child(el().key("default").size(10.0, 10.0))
+        .child(el().key("none").size(10.0, 10.0).ime_option_as_alt_mode(crate::OptionAsAlt::None))
+        .child(el().key("left").size(10.0, 10.0).ime_option_as_alt_mode(crate::OptionAsAlt::Left))
+        .child(el().key("right").size(10.0, 10.0).ime_option_as_alt_mode(crate::OptionAsAlt::Right))
+        .child(el().key("both").size(10.0, 10.0).ime_option_as_alt_mode(crate::OptionAsAlt::Both))
+        .child(el().key("cleared").size(10.0, 10.0).ime_option_as_alt_mode(crate::OptionAsAlt::Left).ime_option_as_alt_mode(crate::OptionAsAlt::None))
+        .child(legacy(el().key("legacy-true").size(10.0, 10.0), true))
+        .child(el().key("legacy-into").size(10.0, 10.0).ime_option_as_alt(BoolFlag(false).into()));
+
+    let (borrowed, taffy_borrowed) = run_flatten(&tree, None);
+    let (owned, taffy_owned) = run_flatten(tree, None);
+    assert_nodes_match(&owned, &borrowed, Some(&taffy_owned), Some(&taffy_borrowed));
+
+    let by_key = |k: &str| owned.iter().find(|n| n.key.as_deref() == Some(k)).unwrap();
+    assert_eq!(by_key("default").ime_option_as_alt, crate::OptionAsAlt::None);
+    assert_eq!(by_key("none").ime_option_as_alt, crate::OptionAsAlt::None);
+    assert_eq!(by_key("left").ime_option_as_alt, crate::OptionAsAlt::Left);
+    assert_eq!(by_key("right").ime_option_as_alt, crate::OptionAsAlt::Right);
+    assert_eq!(by_key("both").ime_option_as_alt, crate::OptionAsAlt::Both);
+    assert_eq!(by_key("cleared").ime_option_as_alt, crate::OptionAsAlt::None);
+    assert_eq!(by_key("legacy-true").ime_option_as_alt, crate::OptionAsAlt::Both);
+    assert_eq!(by_key("legacy-into").ime_option_as_alt, crate::OptionAsAlt::None);
+    assert_eq!(crate::OptionAsAlt::from(false), crate::OptionAsAlt::None);
+    assert_eq!(crate::OptionAsAlt::from(true), crate::OptionAsAlt::Both);
+    assert_eq!(crate::OptionAsAlt::default(), crate::OptionAsAlt::None);
 }
 
 #[test]

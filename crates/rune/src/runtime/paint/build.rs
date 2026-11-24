@@ -74,7 +74,7 @@ impl RuntimeCore {
         let sel_ranges = self.selection_ranges();
         let mark_ranges = self.mark_ranges();
         self.ime_area = None;
-        self.edit.ime_option_as_alt = false;
+        self.edit.ime_option_as_alt = crate::OptionAsAlt::None;
         let now = self.t;
         let vp = [0.0, 0.0, self.viewport.0 * s, self.viewport.1 * s];
         let mut glyph_count = 0usize;
@@ -554,7 +554,7 @@ impl RuntimeCore {
                     && f.alphas(f.destination, now, self.reduced_motion).0 > 0.0))
                 .and_then(|_| input_caret(n, r, sc, s, gliding, &mut self.edit.input_scroll));
             if let Some((_, area)) = input_caret
-                && n.input.as_ref().is_some_and(|input| !input.edit.is_secure()) { self.ime_area = Some(area); }
+                && n.input.as_ref().is_some_and(|input| !input.edit.is_secure()) { self.ime_area = Some(area); self.edit.ime_option_as_alt = crate::OptionAsAlt::None; }
             else if n.ime_cursor && self.ime_area.is_none() && self.allowed(i) && !self.subtree_exiting(i) { self.ime_area = Some(app_ime::area(r, s)); self.edit.ime_option_as_alt = n.ime_option_as_alt; }
             let paint_visible = if in_cache {
                 r[2] >= clip[0] - filter_margin - 2.0

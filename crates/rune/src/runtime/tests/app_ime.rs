@@ -312,6 +312,100 @@ fn app_composition_wipes_preedit_on_drop() {
     assert_eq!(check, ReleaseCheck::Zeroed, "AppComposition::drop must wipe preedit buffer");
 }
 
+#[test]
+fn ime_option_as_alt_modes_reach_runtime_and_default_text_fields_keep_none() {
+    #[derive(Default)]
+    struct Terminal {
+        field: TextEdit,
+        caret: bool,
+        inert_caret: bool,
+        caret_first: bool,
+        mode: Option<crate::OptionAsAlt>,
+        legacy_bool: Option<bool>,
+    }
+    fn view(s: &Terminal, _: &mut Cx<Terminal>) -> El {
+        let field = text_input(&s.field, TextStyle::new(14.0, 400.0))
+            .key("field")
+            .label("Field")
+            .size(200.0, 30.0)
+            .on_edit(|s: &mut Terminal| &mut s.field);
+        let caret = s.caret.then(|| {
+            let mut c = el().key("caret").absolute(40.0, 20.0).size(2.0, 18.0).ime_cursor();
+            if let Some(mode) = s.mode {
+                c = c.ime_option_as_alt_mode(mode);
+            }
+            if let Some(on) = s.legacy_bool {
+                c = c.ime_option_as_alt(on);
+            }
+            if s.inert_caret {
+                c = c.inert();
+            }
+            c
+        });
+        let mut root = col().size(300.0, 200.0);
+        if s.caret_first {
+            root = root.children(caret).child(field);
+        } else {
+            root = root.child(field).children(caret);
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(Terminal { caret: true, ..Default::default() }, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert_eq!(rt.core().edit.ime_option_as_alt, crate::OptionAsAlt::None, "plain ime_cursor defaults to None");
+
+    for mode in [
+        crate::OptionAsAlt::None,
+        crate::OptionAsAlt::Left,
+        crate::OptionAsAlt::Right,
+        crate::OptionAsAlt::Both,
+    ] {
+        rt.update(|s, _| { s.mode = Some(mode); s.legacy_bool = None; });
+        rt.frame(0.0);
+        assert_eq!(rt.core().edit.ime_option_as_alt, mode, "ime_option_as_alt_mode({mode:?}) reaches runtime");
+    }
+
+    // Legacy bool builder keeps true => Both and false => None.
+    rt.update(|s, _| { s.mode = None; s.legacy_bool = Some(true); });
+    rt.frame(0.0);
+    assert_eq!(rt.core().edit.ime_option_as_alt, crate::OptionAsAlt::Both);
+    rt.update(|s, _| { s.legacy_bool = Some(false); });
+    rt.frame(0.0);
+    assert_eq!(rt.core().edit.ime_option_as_alt, crate::OptionAsAlt::None);
+
+    // Focused text_input always resets OptionAsAlt to None, even when painted AFTER an ime_cursor
+    // that asked for OptionAsAlt::Left.
+    rt.update(|s, _| {
+        s.caret_first = true;
+        s.mode = Some(crate::OptionAsAlt::Left);
+        s.legacy_bool = None;
+        s.field.focused = true;
+    });
+    rt.frame(0.0);
+    assert!(rt.ime_area.is_some());
+    assert_eq!(
+        rt.core().edit.ime_option_as_alt,
+        crate::OptionAsAlt::None,
+        "focused text_input that asks for nothing keeps OptionAsAlt::None"
+    );
+
+    // An inert ime_cursor never claims IME or OptionAsAlt.
+    rt.update(|s, _| { s.field.focused = false; s.inert_caret = true; });
+    rt.frame(0.0);
+    assert_eq!(rt.ime_area, None);
+    assert_eq!(rt.core().edit.ime_option_as_alt, crate::OptionAsAlt::None);
+
+    // Removing the caret resets OptionAsAlt back to None.
+    rt.update(|s, _| { s.inert_caret = false; });
+    rt.frame(0.0);
+    assert_eq!(rt.core().edit.ime_option_as_alt, crate::OptionAsAlt::Left);
+    rt.update(|s, _| { s.caret = false; });
+    rt.frame(0.0);
+    assert_eq!(rt.ime_area, None);
+    assert_eq!(rt.core().edit.ime_option_as_alt, crate::OptionAsAlt::None);
+}
+
 /// A double-click's word as selected: on Windows with the space after it (`selectable::with_trailing_space`).
 fn w(word: &str) -> String {
     if cfg!(target_os = "windows") { format!("{word} ") } else { word.to_owned() }
