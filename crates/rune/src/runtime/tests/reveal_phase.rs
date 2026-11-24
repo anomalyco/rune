@@ -34,7 +34,7 @@ struct Facts {
     /// `TextSpec::reveal >= 0`: the text tracks a reveal at all. A negative reveal skips the
     /// whole block, words, length and fade alike.
     reveal: bool,
-    /// The fade dev gives each word (`TextSpec::reveal`, or 0.15 under reduced motion).
+    /// The fade each word takes (`TextSpec::reveal`, capped at 0.15 under reduced motion).
     fade: f32,
     reduced_motion: bool,
     /// Some node's clock is scaled (`El::time_scale`), which takes the text out of the chain.
@@ -601,7 +601,7 @@ impl Stream {
     fn facts(&self) -> Facts {
         Facts {
             reveal: self.reveal >= 0.0,
-            fade: if self.reduced { 0.15 } else { self.reveal },
+            fade: if self.reduced { self.reveal.min(0.15) } else { self.reveal },
             reduced_motion: self.reduced,
             time_scaled: self.paused,
         }
@@ -752,7 +752,47 @@ fn a_reveal_of_zero_shows_future_words_whole() {
     w.tick(0.1).unwrap();
 }
 
-/// Under reduced motion every word of a chunk starts together, over the one fade the window uses.
+/// Under reduced motion, `reveal(0.0)` still shows arriving words at once and adds no fade.
+#[test]
+fn a_reveal_of_zero_under_reduced_motion_adds_no_fade() {
+    #[derive(Clone, Default)]
+    struct ZeroStream {
+        content: String,
+        show_second: bool,
+    }
+    fn view(s: &ZeroStream, cx: &mut Cx<ZeroStream>) -> El {
+        cx.reduced_motion(true);
+        let mut root = col().key("root").w(300.0).child(text(s.content.clone()).key("t").w_full().wrap().reveal(0.0));
+        if s.show_second {
+            root = root.child(text("new entering words").key("t2").w_full().wrap().reveal(0.0));
+        }
+        root
+    }
+    let mut rt = Runtime::new(ZeroStream { content: "a b".to_owned(), show_second: false }, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().id;
+    for next in ["a b c d", "a b c d e f"] {
+        rt.update(|s, _| s.content = next.to_owned());
+        let animating = rt.frame(1.0 / 60.0);
+        let phase = rt.motion.reveals_map().get(&id).expect("reveal state exists");
+        assert!(!phase.fading() && phase.words().is_empty(), "reveal(0.0) under reduced motion must stay Idle: {phase:?}");
+        assert_eq!(phase.shown(), next.len());
+        assert_eq!(rt.motion.anim_sources & AnimSource::REVEAL, 0, "REVEAL anim source must stay unset");
+        assert!(!animating, "reveal(0.0) under reduced motion must not request extra frames");
+        for byte in 0..=next.len() as u32 {
+            let alpha = phase.fade().map_or(1.0, |fade| fade.alpha(byte, rt.t));
+            assert_eq!(alpha, 1.0, "byte {byte} must show at full alpha");
+        }
+    }
+    rt.update(|s, _| s.show_second = true);
+    rt.frame(1.0 / 60.0);
+    let id2 = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t2")).unwrap().id;
+    let phase2 = rt.motion.reveals_map().get(&id2).expect("entering text reveal state");
+    assert!(!phase2.fading() && phase2.words().is_empty(), "newly mounted reveal(0.0) under reduced motion must stay Idle: {phase2:?}");
+    assert_eq!(rt.motion.anim_sources & AnimSource::REVEAL, 0);
+}
+
+/// Under reduced motion every word of a chunk starts together, capped at 0.15 s (never lengthened).
 #[test]
 fn reduced_motion_fades_every_word_together() {
     let mut w = Driven::new(Stream::streamed("a b"));
@@ -761,9 +801,15 @@ fn reduced_motion_fades_every_word_together() {
     let times: Vec<f64> = w.rt.motion.reveals_map().values().flat_map(|p| p.words().iter().map(|w| w.1)).collect();
     assert!(times.len() > 1, "the chunk's words fade: {times:?}");
     assert!(times.windows(2).all(|p| p[0] == p[1]), "no stagger, so they start together: {times:?}");
-    w.tick(0.2).unwrap();
-    w.set(|s| s.reduced = false).unwrap();
-    w.set(|s| s.content = "a b c d e f g".to_owned()).unwrap();
+    // Short reveal (FADE = 0.05) keeps its 0.05 s duration rather than stretching to 0.15 s.
+    w.tick(0.06).unwrap();
+    assert_eq!(w.rt.motion.anim_sources & AnimSource::REVEAL, 0, "short reveal finishes without stretching to 0.15 s");
+    // Longer reveal (0.30 s) shortens to 0.15 s under reduced motion.
+    w.set(|s| { s.reveal = 0.30; s.content = "a b c d e f g h".to_owned(); }).unwrap();
+    w.tick(0.16).unwrap();
+    assert_eq!(w.rt.motion.anim_sources & AnimSource::REVEAL, 0, "long reveal caps at 0.15 s under reduced motion");
+    w.set(|s| { s.reduced = false; s.reveal = FADE; }).unwrap();
+    w.set(|s| s.content = "a b c d e f g h i".to_owned()).unwrap();
     w.tick(0.2).unwrap();
 }
 

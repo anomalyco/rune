@@ -407,6 +407,27 @@ fn table_header_takes_its_own_rule_fill_and_weight() {
     assert_eq!(by_key(&empty, "s-end").fill, head, "with no rows the closing rule is the header's");
 }
 
+#[test]
+fn streaming_markdown_under_reduced_motion_adds_no_reveal_frames() {
+    let mut rt = Runtime::new("hello".to_owned(), streaming, (480.0, 400.0), Env::new(true, 1.0));
+    rt.set_system_reduced_motion(true);
+    rt.frame(0.0);
+    rt.update(|s, _| s.push_str(" world streaming words"));
+    assert!(!rt.frame(1.0 / 60.0), "growing a streaming Markdown with no reveal fade under reduced motion must settle without extra frames");
+
+    // When the app explicitly sets a positive reveal fade on streaming Markdown, reduced motion
+    // keeps the fade without stretching it (capping at 0.15 s).
+    let streaming_revealed = |src: &String, _: &mut Cx<String>| {
+        col().w_full().child(Markdown::new(src.clone()).streaming(true).reveal(0.25).build(&Kit::neutral(true)))
+    };
+    let mut faded = Runtime::new("hello".to_owned(), streaming_revealed, (480.0, 400.0), Env::new(true, 1.0));
+    faded.set_system_reduced_motion(true);
+    faded.frame(0.0);
+    faded.update(|s, _| s.push_str(" world streaming words"));
+    assert!(faded.frame(1.0 / 60.0), "explicit positive reveal still fades under reduced motion");
+    assert!(!faded.frame(0.16), "explicit positive reveal caps at 0.15 s under reduced motion");
+}
+
 /// A web table's look: cells a step smaller than the body, padded 10 by 4, the first column
 /// flush with the paragraph above.
 #[test]

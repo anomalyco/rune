@@ -39,9 +39,11 @@ pub enum PropClass {
     Other,
 }
 
+const REDUCED_FADE_DURATION: f32 = 0.18;
+
 /// The fade that replaces travel under Reduce Motion (OpenCode `reducedFade` .20, 75 ms in a native app;
 /// Kit: ≈ .15–.2 s).
-pub const REDUCED_FADE: Curve = Curve::Tween { duration: 0.18, easing: Easing::EASE_IN_OUT };
+pub const REDUCED_FADE: Curve = Curve::Tween { duration: REDUCED_FADE_DURATION, easing: Easing::EASE_IN_OUT };
 
 impl PropClass {
     /// Settle thresholds, set below the 1/64 px snap quantum so the final snap is invisible
@@ -57,11 +59,15 @@ impl PropClass {
         Eps { pos, vel: pos * 10.0 }
     }
 
-    /// What Reduce Motion turns `curve` into for this class (research 06 §2.12): travel, scale,
-    /// rotation, shape and blur jump; opacity, colour and presence take a short fade; the user's
-    /// own gestures are untouched.
+    /// What Reduce Motion turns `curve` into for this class (research 06 §2.12): instant and
+    /// zero-duration curves stay instant; travel, scale, rotation, shape and blur jump; opacity,
+    /// colour and presence take a short fade (capped at `REDUCED_FADE`, never lengthened); the
+    /// user's own gestures are untouched.
     pub fn reduce(self, curve: Curve) -> Curve {
-        if matches!(curve, Curve::Instant | Curve::Decay(_)) {
+        if curve.is_instant() {
+            return Curve::Instant;
+        }
+        if matches!(curve, Curve::Decay(_)) {
             return curve;
         }
         match self {
@@ -70,7 +76,12 @@ impl PropClass {
             | PropClass::Rotation
             | PropClass::Shape
             | PropClass::Blur => Curve::Instant,
-            PropClass::Opacity | PropClass::Color | PropClass::Presence => REDUCED_FADE,
+            PropClass::Opacity | PropClass::Color | PropClass::Presence => match curve {
+                Curve::Tween { duration, .. } | Curve::Hermite { duration, .. } if duration < REDUCED_FADE_DURATION => {
+                    Curve::Tween { duration, easing: Easing::EASE_IN_OUT }
+                }
+                _ => REDUCED_FADE,
+            },
             PropClass::Gesture | PropClass::Other => curve,
         }
     }

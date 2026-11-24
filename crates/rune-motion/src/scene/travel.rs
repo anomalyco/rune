@@ -73,7 +73,7 @@ impl Scene {
 
     fn finish_match(&mut self, from: NodeId, to: NodeId, start: [f32; 4], vel: [f32; 4], radius_scale: f32, anim: LayoutAnim) {
         let (Some(a), Some(b)) = (self.slot(from), self.slot(to)) else { return };
-        if self.store.reduced_motion() {
+        if self.store.reduced_motion() && !anim.is_instant() {
             self.remove(from);
             let entrance = self.enter_anim(b);
             let acts = self.nodes[b].phase_step(&mut self.exiting, PhaseEvent::FadeIn { entrance });
