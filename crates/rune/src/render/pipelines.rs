@@ -28,6 +28,13 @@ impl Renderer {
         Ok(Self::from_warm(Self::try_create_warm(device, format, properties, classic)?))
     }
 
+    /// True when the renderer was created with the Windfoil uber shader rather than Classic.
+    #[cfg(target_arch = "wasm32")]
+    #[cfg_attr(not(feature = "webgl"), allow(dead_code))]
+    pub(crate) fn is_windfoil(&self) -> bool {
+        matches!(self.uber, variant::Uber::Windfoil { .. })
+    }
+
     fn try_create_warm(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,

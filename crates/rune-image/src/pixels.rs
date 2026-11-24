@@ -122,7 +122,43 @@ impl Pixels {
     /// frame reuses its atlas slot.
     pub fn set(&self, width: u32, height: u32, rgba: Vec<u8>) {
         assert_eq!(Some(rgba.len()), (width as usize).checked_mul(height as usize).and_then(|n| n.checked_mul(4)), "rgba must hold width * height pixels");
-        let data = if rgba.is_empty() { FrameData::Empty } else { FrameData::Rgba(Arc::new(rgba)) };
+        if rgba.is_empty() {
+            let replaced = {
+                let mut frame = self.frame.lock().unwrap();
+                frame.width = width;
+                frame.height = height;
+                frame.generation += 1;
+                std::mem::replace(&mut frame.data, FrameData::Empty)
+            };
+            drop(replaced);
+            self.source.notify();
+            return;
+        }
+        // Fast path: when no reader holds a clone of the current Arc, swap the Vec in place so
+        // steady-state streaming allocates nothing per update.
+        let (rgba, old_vec) = {
+            let mut frame = self.frame.lock().unwrap();
+            if let FrameData::Rgba(arc) = &mut frame.data
+                && let Some(slot) = Arc::get_mut(arc)
+            {
+                let old = std::mem::replace(slot, rgba);
+                frame.width = width;
+                frame.height = height;
+                frame.generation += 1;
+                (None, Some(old))
+            } else {
+                (Some(rgba), None)
+            }
+        };
+        if let Some(old) = old_vec {
+            drop(old);
+            self.source.notify();
+            return;
+        }
+        // Slow path: first frame, replacing mips, or an in-flight copy holds the old Arc.
+        // Allocate the new Arc outside the lock, then swap it in and drop the replaced holder
+        // outside the lock.
+        let data = FrameData::Rgba(Arc::new(rgba.unwrap()));
         let replaced = {
             let mut frame = self.frame.lock().unwrap();
             frame.width = width;
@@ -181,6 +217,16 @@ impl Pixels {
     fn rgba_weak(&self) -> Option<std::sync::Weak<Vec<u8>>> {
         match &self.frame.lock().unwrap().data {
             FrameData::Rgba(rgba) => Some(Arc::downgrade(rgba)),
+            FrameData::Empty | FrameData::Mips(_) => None,
+        }
+    }
+
+    /// Raw pointer to the current streaming `Arc<Vec<u8>>` without taking a `Weak` count, so
+    /// tests can verify in-place `Arc` reuse.
+    #[cfg(test)]
+    fn rgba_arc_ptr(&self) -> Option<*const Vec<u8>> {
+        match &self.frame.lock().unwrap().data {
+            FrameData::Rgba(rgba) => Some(Arc::as_ptr(rgba)),
             FrameData::Empty | FrameData::Mips(_) => None,
         }
     }

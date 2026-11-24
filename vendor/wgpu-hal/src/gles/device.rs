@@ -242,12 +242,124 @@ impl super::Device {
         }
     }
 
+    /// Returns whether this GL context exposes `KHR_parallel_shader_compile` /
+    /// `ARB_parallel_shader_compile`.
+    pub fn supports_parallel_shader_compile(&self) -> bool {
+        self.shared
+            .private_caps
+            .contains(PrivateCapabilities::PARALLEL_SHADER_COMPILE)
+    }
+
+    /// Enables or disables deferred program linking for subsequently created pipelines.
+    ///
+    /// Has no effect when [`Self::supports_parallel_shader_compile`] is `false`.
+    pub fn set_defer_program_links(&self, defer: bool) {
+        let enable = defer && self.supports_parallel_shader_compile();
+        self.shared
+            .defer_program_links
+            .store(enable, Ordering::Release);
+    }
+
+    /// Number of live pipelines currently waiting for deferred link completion.
+    pub fn pending_deferred_links(&self) -> usize {
+        let mut list = self.shared.deferred_links.lock();
+        list.retain(|weak| weak.upgrade().is_some_and(|inner| inner.is_pending()));
+        list.len()
+    }
+
+    /// Polls every pending deferred program link with `COMPLETION_STATUS_KHR` without blocking,
+    /// finalizing completed programs (deleting attached shaders and binding uniform/block slots)
+    /// and returning how many remain pending along with any link error or context loss.
+    pub fn poll_deferred_links(&self) -> super::DeferredLinkStatus {
+        {
+            let list = self.shared.deferred_links.lock();
+            if list.is_empty() {
+                return super::DeferredLinkStatus::default();
+            }
+        }
+
+        let gl = &self.shared.context.lock();
+
+        #[cfg(webgl)]
+        if self.shared.context.webgl2_context.is_context_lost() {
+            let mut list = self.shared.deferred_links.lock();
+            for weak in list.drain(..) {
+                if let Some(inner) = weak.upgrade() {
+                    inner.mark_context_lost();
+                }
+            }
+            return super::DeferredLinkStatus {
+                pending: 0,
+                finalized: 0,
+                error: None,
+                context_lost: true,
+            };
+        }
+
+        let pending_list = core::mem::take(&mut *self.shared.deferred_links.lock());
+        let mut still_pending = Vec::new();
+        let mut status = super::DeferredLinkStatus::default();
+        let mut iter = pending_list.into_iter();
+
+        while let Some(weak) = iter.next() {
+            let Some(inner) = weak.upgrade() else {
+                continue;
+            };
+            match inner.early_result() {
+                Some(Ok(())) => continue,
+                Some(Err(msg)) => {
+                    if status.error.is_none() {
+                        status.error = Some(msg);
+                    }
+                    continue;
+                }
+                None => {}
+            }
+
+            let completed = unsafe { gl.get_program_completion_status(inner.program) };
+            #[cfg(webgl)]
+            if !completed && self.shared.context.webgl2_context.is_context_lost() {
+                inner.mark_context_lost();
+                for other in still_pending.drain(..).chain(iter) {
+                    if let Some(p) = other.upgrade() {
+                        p.mark_context_lost();
+                    }
+                }
+                status.pending = 0;
+                status.context_lost = true;
+                return status;
+            }
+
+            if !completed {
+                still_pending.push(weak);
+                continue;
+            }
+
+            status.finalized += 1;
+            if let Err(msg) = unsafe { inner.finalize(gl, self.shared.private_caps) } {
+                if status.error.is_none() {
+                    status.error = Some(msg);
+                }
+            }
+        }
+
+        let mut list = self.shared.deferred_links.lock();
+        if list.is_empty() {
+            *list = still_pending;
+        } else {
+            still_pending.append(&mut *list);
+            *list = still_pending;
+        }
+        status.pending = list.len();
+        status
+    }
+
     unsafe fn compile_shader(
         gl: &glow::Context,
         shader: &str,
         naga_stage: naga::ShaderStage,
         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
-    ) -> Result<glow::Shader, crate::PipelineError> {
+    ) -> glow::Shader {
         let target = match naga_stage {
             naga::ShaderStage::Vertex => glow::VERTEX_SHADER,
             naga::ShaderStage::Fragment => glow::FRAGMENT_SHADER,
@@ -271,22 +383,7 @@ impl super::Device {
         unsafe { gl.compile_shader(raw) };
 
         log::debug!("\tCompiled shader {raw:?}");
-
-        let compiled_ok = unsafe { gl.get_shader_compile_status(raw) };
-        let msg = unsafe { gl.get_shader_info_log(raw) };
-        if compiled_ok {
-            if !msg.is_empty() {
-                log::debug!("\tCompile message: {msg}");
-            }
-            Ok(raw)
-        } else {
-            log::error!("\tShader compilation failed: {msg}");
-            unsafe { gl.delete_shader(raw) };
-            Err(crate::PipelineError::Linkage(
-                map_naga_stage(naga_stage),
-                msg,
-            ))
-        }
+        raw
     }
 
     fn create_shader(
@@ -392,7 +489,7 @@ impl super::Device {
             Cow::Owned(output)
         };
 
-        unsafe { Self::compile_shader(gl, &source, naga_stage, stage.module.label.as_deref()) }
+        Ok(unsafe { Self::compile_shader(gl, &source, naga_stage, stage.module.label.as_deref()) })
     }
 
     unsafe fn create_pipeline<'a>(
@@ -425,6 +522,11 @@ impl super::Device {
             .expect("Couldn't acquire program_cache lock");
         // This guard ensures that we can't accidentally destroy a program whilst we're about to reuse it
         // The only place that destroys a pipeline is also locking on `program_cache`
+        let defer_link = self.shared.defer_program_links.load(Ordering::Acquire)
+            && self
+                .shared
+                .private_caps
+                .contains(PrivateCapabilities::PARALLEL_SHADER_COMPILE);
         let program = guard
             .entry(super::ProgramCacheKey {
                 stages: program_stages,
@@ -437,8 +539,8 @@ impl super::Device {
                     layout,
                     label,
                     multiview_mask,
-                    self.shared.shading_language_version,
-                    self.shared.private_caps,
+                    &self.shared,
+                    defer_link,
                 )
             })
             .to_owned()?;
@@ -464,10 +566,11 @@ impl super::Device {
         layout: &super::PipelineLayout,
         #[cfg_attr(target_arch = "wasm32", allow(unused))] label: Option<&str>,
         multiview_mask: Option<NonZeroU32>,
-        glsl_version: naga::back::glsl::Version,
-        private_caps: PrivateCapabilities,
+        shared: &super::AdapterShared,
+        defer_link: bool,
     ) -> Result<Arc<super::PipelineInner>, crate::PipelineError> {
-        let glsl_version = match glsl_version {
+        let private_caps = shared.private_caps;
+        let glsl_version = match shared.shading_language_version {
             naga::back::glsl::Version::Embedded { version, .. } => format!("{version} es"),
             naga::back::glsl::Version::Desktop(version) => format!("{version}"),
         };
@@ -484,7 +587,8 @@ impl super::Device {
         let mut immediates_items = ArrayVec::<_, { crate::MAX_CONCURRENT_SHADER_STAGES }>::new();
         let mut sampler_map = [None; super::MAX_TEXTURE_SLOTS];
         let mut has_stages = wgt::ShaderStages::empty();
-        let mut shaders_to_delete = ArrayVec::<_, { crate::MAX_CONCURRENT_SHADER_STAGES }>::new();
+        let mut attached_shaders =
+            ArrayVec::<(naga::ShaderStage, glow::Shader), { crate::MAX_CONCURRENT_SHADER_STAGES }>::new();
         let mut clip_distance_count = 0;
 
         for &(naga_stage, stage) in &shaders {
@@ -502,8 +606,16 @@ impl super::Device {
                 clip_distance_count: &mut clip_distance_count,
             };
 
-            let shader = Self::create_shader(gl, naga_stage, stage, context, program)?;
-            shaders_to_delete.push(shader);
+            match Self::create_shader(gl, naga_stage, stage, context, program) {
+                Ok(shader) => attached_shaders.push((naga_stage, shader)),
+                Err(err) => {
+                    for (_, shader) in attached_shaders {
+                        unsafe { gl.delete_shader(shader) };
+                    }
+                    unsafe { gl.delete_program(program) };
+                    return Err(err);
+                }
+            }
         }
 
         // Create empty fragment shader if only vertex shader is present
@@ -517,45 +629,118 @@ impl super::Device {
                     naga::ShaderStage::Fragment,
                     Some("(wgpu internal) dummy fragment shader"),
                 )
-            }?;
-            shaders_to_delete.push(shader);
+            };
+            attached_shaders.push((naga::ShaderStage::Fragment, shader));
         }
 
-        for &shader in shaders_to_delete.iter() {
+        for &(_, shader) in attached_shaders.iter() {
             unsafe { gl.attach_shader(program, shader) };
         }
         unsafe { gl.link_program(program) };
 
-        for shader in shaders_to_delete {
-            unsafe { gl.delete_shader(shader) };
+        let pending = super::PendingProgramLink {
+            attached_shaders,
+            has_stages,
+            name_binding_map,
+            immediates_items,
+        };
+
+        if defer_link {
+            // Flush compile/link commands to the driver so background shader compilation starts
+            // immediately without stalling the caller on LINK_STATUS or uniform queries.
+            unsafe { gl.flush() };
+            let inner = Arc::new(super::PipelineInner {
+                program,
+                sampler_map,
+                clip_distance_count,
+                link_state: parking_lot::Mutex::new(super::ProgramLinkState::Pending(pending)),
+            });
+            shared.deferred_links.lock().push(Arc::downgrade(&inner));
+            return Ok(inner);
         }
 
+        match unsafe { Self::finalize_program(gl, program, pending, private_caps) } {
+            Ok((first_instance_location, immediates_descs)) => Ok(Arc::new(super::PipelineInner {
+                program,
+                sampler_map,
+                clip_distance_count,
+                link_state: parking_lot::Mutex::new(super::ProgramLinkState::Ready {
+                    first_instance_location,
+                    immediates_descs,
+                }),
+            })),
+            Err(err) => {
+                unsafe { gl.delete_program(program) };
+                Err(err)
+            }
+        }
+    }
+
+    pub(super) unsafe fn finalize_program(
+        gl: &glow::Context,
+        program: glow::Program,
+        pending: super::PendingProgramLink,
+        private_caps: PrivateCapabilities,
+    ) -> Result<
+        (
+            Option<glow::UniformLocation>,
+            ArrayVec<super::ImmediateDesc, { super::MAX_IMMEDIATES_COMMANDS }>,
+        ),
+        crate::PipelineError,
+    > {
         log::debug!("\tLinked program {program:?}");
 
         let linked_ok = unsafe { gl.get_program_link_status(program) };
-        let msg = unsafe { gl.get_program_info_log(program) };
         if !linked_ok {
-            return Err(crate::PipelineError::Linkage(has_stages, msg));
+            let mut shader_failure = None;
+            for &(stage, shader) in &pending.attached_shaders {
+                if shader_failure.is_none() && !unsafe { gl.get_shader_compile_status(shader) } {
+                    let msg = unsafe { gl.get_shader_info_log(shader) };
+                    log::error!("\tShader compilation failed: {msg}");
+                    shader_failure = Some((stage, msg));
+                }
+            }
+            for (_, shader) in pending.attached_shaders {
+                unsafe { gl.delete_shader(shader) };
+            }
+            if let Some((stage, msg)) = shader_failure {
+                return Err(crate::PipelineError::Linkage(map_naga_stage(stage), msg));
+            }
+            let msg = unsafe { gl.get_program_info_log(program) };
+            return Err(crate::PipelineError::Linkage(pending.has_stages, msg));
         }
-        if !msg.is_empty() {
-            log::debug!("\tLink message: {msg}");
+
+        for (_, shader) in pending.attached_shaders {
+            unsafe { gl.delete_shader(shader) };
+        }
+        if log::log_enabled!(log::Level::Debug) {
+            let msg = unsafe { gl.get_program_info_log(program) };
+            if !msg.is_empty() {
+                log::debug!("\tLink message: {msg}");
+            }
         }
 
         if !private_caps.contains(PrivateCapabilities::SHADER_BINDING_LAYOUT) {
             // This remapping is only needed if we aren't able to put the binding layout
             // in the shader. We can't remap storage buffers this way.
             unsafe { gl.use_program(Some(program)) };
-            for (ref name, (register, slot)) in name_binding_map {
+            for (ref name, (register, slot)) in pending.name_binding_map {
                 log::trace!("Get binding {name:?} from program {program:?}");
                 match register {
                     super::BindingRegister::UniformBuffers => {
-                        let index = unsafe { gl.get_uniform_block_index(program, name) }.unwrap();
+                        let Some(index) = (unsafe { gl.get_uniform_block_index(program, name) })
+                        else {
+                            return Err(crate::DeviceError::Lost.into());
+                        };
                         log::trace!("\tBinding slot {slot} to block index {index}");
                         unsafe { gl.uniform_block_binding(program, index, slot as _) };
                     }
                     super::BindingRegister::StorageBuffers => {
-                        let index =
-                            unsafe { gl.get_shader_storage_block_index(program, name) }.unwrap();
+                        let Some(index) =
+                            (unsafe { gl.get_shader_storage_block_index(program, name) })
+                        else {
+                            return Err(crate::DeviceError::Lost.into());
+                        };
                         log::error!("Unable to re-map shader storage block {name} to {index}");
                         return Err(crate::DeviceError::Lost.into());
                     }
@@ -569,7 +754,7 @@ impl super::Device {
 
         let mut uniforms = ArrayVec::new();
 
-        for stage_items in immediates_items {
+        for stage_items in pending.immediates_items {
             for item in stage_items {
                 let location = unsafe { gl.get_uniform_location(program, &item.access_path) };
 
@@ -592,20 +777,87 @@ impl super::Device {
             }
         }
 
-        let first_instance_location = if has_stages.contains(wgt::ShaderStages::VERTEX) {
+        let first_instance_location = if pending.has_stages.contains(wgt::ShaderStages::VERTEX) {
             // If this returns none (the uniform isn't active), that's fine, we just won't set it.
             unsafe { gl.get_uniform_location(program, naga::back::glsl::FIRST_INSTANCE_BINDING) }
         } else {
             None
         };
 
-        Ok(Arc::new(super::PipelineInner {
-            program,
-            sampler_map,
-            first_instance_location,
-            immediates_descs: uniforms,
-            clip_distance_count,
-        }))
+        Ok((first_instance_location, uniforms))
+    }
+}
+
+impl super::PipelineInner {
+    pub(super) fn is_pending(&self) -> bool {
+        matches!(*self.link_state.lock(), super::ProgramLinkState::Pending(_))
+    }
+
+    fn early_result(&self) -> Option<Result<(), String>> {
+        match &*self.link_state.lock() {
+            super::ProgramLinkState::Pending(_) => None,
+            super::ProgramLinkState::Ready { .. } => Some(Ok(())),
+            super::ProgramLinkState::Failed(msg) => Some(Err(msg.clone())),
+        }
+    }
+
+    #[cfg(webgl)]
+    pub(super) fn mark_context_lost(&self) {
+        let mut state = self.link_state.lock();
+        if matches!(*state, super::ProgramLinkState::Pending(_)) {
+            *state = super::ProgramLinkState::Failed(String::from("WebGL2 context lost"));
+        }
+    }
+
+    pub(super) fn delete_pending_shaders(&self, gl: &glow::Context) {
+        let mut state = self.link_state.lock();
+        if matches!(*state, super::ProgramLinkState::Pending(_)) {
+            let prev = core::mem::replace(
+                &mut *state,
+                super::ProgramLinkState::Failed(String::from(
+                    "pipeline destroyed before link completed",
+                )),
+            );
+            if let super::ProgramLinkState::Pending(pending) = prev {
+                for (_, shader) in pending.attached_shaders {
+                    unsafe { gl.delete_shader(shader) };
+                }
+            }
+        }
+    }
+
+    pub(super) unsafe fn finalize(
+        &self,
+        gl: &glow::Context,
+        private_caps: PrivateCapabilities,
+    ) -> Result<(), String> {
+        let mut state = self.link_state.lock();
+        match &*state {
+            super::ProgramLinkState::Ready { .. } => return Ok(()),
+            super::ProgramLinkState::Failed(msg) => return Err(msg.clone()),
+            super::ProgramLinkState::Pending(_) => {}
+        }
+        let prev = core::mem::replace(
+            &mut *state,
+            super::ProgramLinkState::Failed(String::new()),
+        );
+        let super::ProgramLinkState::Pending(pending) = prev else {
+            unreachable!()
+        };
+        match unsafe { super::Device::finalize_program(gl, self.program, pending, private_caps) } {
+            Ok((first_instance_location, immediates_descs)) => {
+                *state = super::ProgramLinkState::Ready {
+                    first_instance_location,
+                    immediates_descs,
+                };
+                Ok(())
+            }
+            Err(err) => {
+                let msg = err.to_string();
+                *state = super::ProgramLinkState::Failed(msg.clone());
+                Err(msg)
+            }
+        }
     }
 }
 
@@ -1262,6 +1514,7 @@ impl crate::Device for super::Device {
         self.counters.command_encoders.add(1);
 
         Ok(super::CommandEncoder {
+            shared: Arc::clone(&self.shared),
             cmd_buffer: super::CommandBuffer::default(),
             state: Default::default(),
             private_caps: self.shared.private_caps,
@@ -1605,6 +1858,7 @@ impl crate::Device for super::Device {
                 Ok(ref p) => p.program != pipeline.inner.program,
                 Err(_) => false,
             });
+            pipeline.inner.delete_pending_shaders(gl);
             unsafe { gl.delete_program(pipeline.inner.program) };
         }
 
@@ -1641,6 +1895,7 @@ impl crate::Device for super::Device {
                 Ok(ref p) => p.program != pipeline.inner.program,
                 Err(_) => false,
             });
+            pipeline.inner.delete_pending_shaders(gl);
             unsafe { gl.delete_program(pipeline.inner.program) };
         }
 

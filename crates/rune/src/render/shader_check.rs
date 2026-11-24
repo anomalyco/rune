@@ -1,9 +1,13 @@
 //! Error-scope checks and async browser state machine for Rune's primary (uber) shader and
 //! pipeline.
 //!
-//! Native devices and WebGL2 (`wgpu-core`) answer synchronously inside `Renderer::try_new`, so a
-//! rejected last-resort shader returns `ShaderError` immediately and drives the adapter fallback
-//! chain (`rune_gpu::fallback::Failure::ShaderRejected`).
+//! Native devices and synchronous WebGL2 (`wgpu-core`) answer synchronously inside
+//! `Renderer::try_new`, so a rejected last-resort shader returns `ShaderError` immediately and
+//! drives the adapter fallback chain (`rune_gpu::fallback::Failure::ShaderRejected`). On WebGL2
+//! contexts with `KHR_parallel_shader_compile`, `platform::web::pipelines::warm_webgl2` defers GL
+//! program linking across browser turns via `platform::gl_links::GlLinkState`: WGSL/Naga errors
+//! still fail synchronously here, while GL compile/link rejections are reported when links finish
+//! (falling back from Windfoil to Classic, then to CPU or error display on Classic rejection).
 //!
 //! Browser WebGPU error scopes (`GPUDevice.popErrorScope`) resolve asynchronously. Rather than
 //! blocking launch, `UberCheck` tracks the in-flight check as an explicit state machine:

@@ -446,6 +446,63 @@ fn pixels_concurrent_sets_during_copy_stay_bounded_to_one_extra_frame() {
     assert!(px.rgba_weak().is_none());
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pixels_set_reuses_arc_in_place_when_unshared_and_during_coalesced_updates() {
+    let px = Pixels::new();
+    let (w, h) = (8u32, 4u32);
+    px.set(w, h, [1u8, 2, 3, 255].repeat((w * h) as usize));
+    let first_arc = px.rgba_arc_ptr().unwrap();
+
+    // Steady-state set -> place -> set reuses the same Arc allocation in place.
+    let mut atlas = ImageAtlas::default();
+    assert!(atlas.place(&px, [w as f32, h as f32]).is_some());
+    for i in 2..=6u8 {
+        px.set(w, h, [i, 2, 3, 255].repeat((w * h) as usize));
+        assert_eq!(px.rgba_arc_ptr(), Some(first_arc), "steady-state set #{i} must reuse the Arc");
+        assert!(atlas.place(&px, [w as f32, h as f32]).is_some());
+    }
+
+    // While place_at holds a clone of first_arc mid-copy, the first concurrent set allocates a
+    // second Arc, and subsequent coalesced sets reuse that second Arc in place.
+    px.set(w, h, [10u8, 2, 3, 255].repeat((w * h) as usize));
+    assert_eq!(px.rgba_arc_ptr(), Some(first_arc));
+
+    let (mid_tx, mid_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let producer_px = px.clone();
+    let first_addr = first_arc as usize;
+    let producer = std::thread::spawn(move || {
+        if mid_rx.recv().is_err() { return 0usize; }
+        producer_px.set(w, h, [20u8, 2, 3, 255].repeat((w * h) as usize));
+        let second_addr = producer_px.rgba_arc_ptr().unwrap() as usize;
+        assert_ne!(second_addr, first_addr, "concurrent set during copy must not mutate the in-flight Arc");
+
+        producer_px.set(w, h, [30u8, 2, 3, 255].repeat((w * h) as usize));
+        assert_eq!(producer_px.rgba_arc_ptr().unwrap() as usize, second_addr, "coalesced set during copy reuses the second Arc");
+
+        producer_px.set(w, h, [40u8, 2, 3, 255].repeat((w * h) as usize));
+        assert_eq!(producer_px.rgba_arc_ptr().unwrap() as usize, second_addr);
+
+        let _ = done_tx.send(());
+        second_addr
+    });
+
+    atlas.place_at_with_copy_hook(&px, [w as f32, h as f32], None, |line| {
+        if line == 1 {
+            mid_tx.send(()).unwrap();
+            done_rx.recv().unwrap();
+        }
+    }).unwrap();
+    drop(mid_tx);
+    let second_addr = producer.join().unwrap();
+
+    // After the copy finishes, steady-state streaming keeps reusing second_addr in place.
+    assert!(atlas.place(&px, [w as f32, h as f32]).is_some());
+    px.set(w, h, [50u8, 2, 3, 255].repeat((w * h) as usize));
+    assert_eq!(px.rgba_arc_ptr().unwrap() as usize, second_addr);
+}
+
 #[test]
 fn pixels_rgba_returns_snapshot_and_empty_for_mips() {
     let px = Pixels::new();
