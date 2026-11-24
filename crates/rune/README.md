@@ -694,8 +694,11 @@ app.run();
   process (an open panel, an updater) get copy, paste, select-all and close back. In a Rune window
   the keys still reach fields and `on_key` first; an untaken ⌘W or ⌘M closes or minimizes as the
   title-bar button would. It never adds Quit. `MenuItem::about(title, action)` replaces the app
-  menu's standard About item (restoring it when custom items clear), and a custom `MenuItem` with
-  ⌘Q claims ⌘Q from the built-in Quit item across `set_dock_icon(true)` promotions. Details in
+  menu's standard About item (restoring it when custom items clear), a custom `MenuItem` with
+  ⌘Q claims ⌘Q from the built-in Quit item across `set_dock_icon(true)` promotions,
+  `MenuItem::submenu(title, items)` nests submenus to arbitrary depth, and
+  `MenuItem::with_action(title, closure)` attaches a data-capturing `Fn(&mut S, &mut Tx)` closure
+  while keeping `MenuItem<S>` `Clone` without requiring `S: Send + Sync`. Details in
   `src/shortcuts/README.md` under native menus.
 - Reopening (macOS): a click on the Dock icon, or opening the app again from Finder, Spotlight or
   `open` while it runs, brings back a window when none shows, as in other Mac apps. Rune shows

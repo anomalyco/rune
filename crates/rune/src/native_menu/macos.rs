@@ -3,7 +3,7 @@
 
 #![allow(unsafe_code)]
 
-use super::{Description, Location, MenuError};
+use super::{Description, EntryKind, Location, MenuError};
 use std::{cell::{Cell, RefCell}, ffi::{c_char, c_void}, sync::Arc};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel, rc::Retained,
     runtime::{AnyClass, AnyObject, Bool, Sel}};
@@ -118,9 +118,10 @@ impl Native {
     }
     fn clear(&mut self) {
         for (menu, item) in self.entries.drain(..) {
-            // SAFETY: AppKit's target is non-retaining. Clear it before releasing our target,
-            // even if a currently tracking menu keeps the removed item alive.
-            unsafe { item.setTarget(None); item.setAction(None); menu.removeItem(&item); }
+            // SAFETY: AppKit's target is non-retaining. Clear targets recursively through any
+            // nested submenus before releasing our targets, even if a currently tracking menu
+            // keeps removed items alive.
+            unsafe { clear_item_targets(&item); menu.removeItem(&item); }
         }
         // A menu the standard items joined stays for them.
         for (root, top) in self.tops.drain(..) { super::default_macos::remove_top_if_empty(&root, &top); }
@@ -133,28 +134,17 @@ impl Native {
         // retained from AppKit, indices are bounded, and targets outlive their items.
         unsafe {
         let app = NSApplication::sharedApplication(self.mtm);
-        if descriptions.iter().any(|d| d.location == Location::Dock) { install_dock_hook(&app)?; }
-        // Construct all targets before removing the previous snapshot.
+        if descriptions.iter().any(|d| d.meta.location == Location::Dock) { install_dock_hook(&app)?; }
+        // Construct all items, nested submenus, and targets before removing the previous snapshot.
+        let mut new_targets = Vec::new();
         let prepared: Vec<_> = descriptions.iter().map(|d| {
-            if d.separator { return (d, NSMenuItem::separatorItem(self.mtm), None); }
-            // SAFETY: NSObject initialization follows set_ivars; the main-thread target is
-            // kept alive until its menu item is removed and its non-retaining target cleared.
-            let target: Retained<MenuTarget> = msg_send![super(self.mtm.alloc().set_ivars(Action {
-                id: d.id.clone(), enabled: d.enabled, keys_first: d.keys_first, sink: sink.clone(),
-            })), init];
-            let item = NSMenuItem::initWithTitle_action_keyEquivalent(self.mtm.alloc(),
-                &NSString::from_str(&d.title), Some(sel!(runeMenuAction:)), &NSString::from_str(""));
-            item.setTarget(Some(&target));
-            item.setEnabled(d.enabled);
-            item.setState(if d.checked { 1 } else { 0 });
-            item.setAlternate(d.alternate);
-            super::set_key_equivalent(&item, d.equivalent.as_ref());
-            (d, item, Some(target))
+            let item = build_item(self.mtm, d, true, &sink, &mut new_targets);
+            (d, item)
         }).collect();
         self.clear();
         // Ensure the default menu bar exists before `adding` releases yieldable keys (including
         // built-in Quit's ⌘Q), so a custom item claiming ⌘Q never collides with `terminate:`.
-        if descriptions.iter().any(|d| d.location != Location::Dock) {
+        if descriptions.iter().any(|d| d.meta.location != Location::Dock) {
             let _ = super::ensure_default_menu(&app);
         }
         super::default_macos::adding(&app, || {
@@ -163,9 +153,9 @@ impl Native {
             // Items placed so far by id, and the last one placed after each anchor.
             let mut placed: Vec<(&str, Retained<NSMenuItem>)> = Vec::new();
             let mut chained: Vec<(&str, Retained<NSMenuItem>)> = Vec::new();
-            for (d, item, target) in prepared {
-                if d.replaces_about { item.setTag(super::default_macos::ABOUT_REPLACEMENT); }
-                let location = &d.location;
+            for (d, item) in prepared {
+                if d.meta.replaces_about { item.setTag(super::default_macos::ABOUT_REPLACEMENT); }
+                let location = &d.meta.location;
                 let menu = if *location == Location::Dock {
                     DOCK.with(|slot| slot.borrow_mut().get_or_insert_with(|| NSMenu::new(self.mtm)).clone())
                 } else {
@@ -186,8 +176,8 @@ impl Native {
                         Location::Dock => unreachable!(),
                     }
                 };
-                let anchor = d.after.as_deref().and_then(|a| anchor_index(&menu, a, &placed, &chained).map(|i| (a, i)));
-                if d.replaces_about {
+                let anchor = d.meta.after.as_deref().and_then(|a| anchor_index(&menu, a, &placed, &chained).map(|i| (a, i)));
+                if d.meta.replaces_about {
                     menu.insertItem_atIndex(&item, 0);
                     custom_about = true;
                 } else if let Some((a, index)) = anchor {
@@ -212,16 +202,22 @@ impl Native {
                 } else {
                     menu.addItem(&item);
                 }
-                if !d.separator { placed.push((&d.id, item.clone())); }
-                self.entries.push((menu, item)); self.targets.extend(target);
+                if !matches!(d.kind, EntryKind::Separator) { placed.push((&d.meta.id, item.clone())); }
+                self.entries.push((menu, item));
             }
         });
+        self.targets = new_targets;
         // Each menu reads the app's way; the bar keeps the system's order of its menus.
         if let Some(root) = app.mainMenu() {
             for top in (0..root.numberOfItems()).filter_map(|i| root.itemAtIndex(i)).filter_map(|i| i.submenu()) {
                 super::set_layout_direction(&top);
             }
         }
+        DOCK.with(|slot| {
+            if let Some(dock) = slot.borrow().as_ref() {
+                super::set_layout_direction(dock);
+            }
+        });
         Ok(())
         }
     }
@@ -229,6 +225,95 @@ impl Native {
         let (top, menu) = super::default_macos::add_top(self.mtm, root, name);
         self.tops.push((root.clone(), top));
         menu
+    }
+}
+
+/// Builds one `NSMenuItem` (leaf action, separator, or recursive submenu), appending every
+/// created `MenuTarget` to `targets`. `ancestors_enabled` is false whenever an enclosing submenu
+/// is disabled, so nested targets refuse to validate or fire even via key equivalents.
+unsafe fn build_item(
+    mtm: MainThreadMarker,
+    d: &Description,
+    ancestors_enabled: bool,
+    sink: &Sink,
+    targets: &mut Vec<Retained<MenuTarget>>,
+) -> Retained<NSMenuItem> {
+    // SAFETY: caller holds a main-thread marker; every MenuTarget is pushed into `targets`
+    // and kept alive until `clear_item_targets` detaches it.
+    unsafe {
+        match &d.kind {
+            EntryKind::Separator => NSMenuItem::separatorItem(mtm),
+            EntryKind::Action => {
+                let effective_enabled = ancestors_enabled && d.meta.enabled;
+                let target: Retained<MenuTarget> = msg_send![super(mtm.alloc().set_ivars(Action {
+                    id: d.meta.id.clone(),
+                    enabled: effective_enabled,
+                    keys_first: d.meta.keys_first,
+                    sink: sink.clone(),
+                })), init];
+                let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                    mtm.alloc(),
+                    &NSString::from_str(&d.meta.title),
+                    Some(sel!(runeMenuAction:)),
+                    &NSString::from_str(""),
+                );
+                item.setTarget(Some(&target));
+                item.setEnabled(effective_enabled);
+                item.setState(if d.meta.checked { 1 } else { 0 });
+                item.setAlternate(d.meta.alternate);
+                super::set_key_equivalent(&item, d.meta.equivalent.as_ref());
+                targets.push(target);
+                item
+            }
+            EntryKind::Submenu(children) => {
+                let effective_enabled = ancestors_enabled && d.meta.enabled;
+                let title = NSString::from_str(&d.meta.title);
+                let submenu = NSMenu::new(mtm);
+                submenu.setTitle(&title);
+                submenu.setAutoenablesItems(false);
+                let mut placed: Vec<(&str, Retained<NSMenuItem>)> = Vec::new();
+                let mut chained: Vec<(&str, Retained<NSMenuItem>)> = Vec::new();
+                for child in children {
+                    let ns_child = build_item(mtm, child, effective_enabled, sink, targets);
+                    let anchor = child.meta.after.as_deref()
+                        .and_then(|a| anchor_index(&submenu, a, &placed, &chained).map(|i| (a, i)));
+                    if let Some((a, index)) = anchor {
+                        submenu.insertItem_atIndex(&ns_child, index + 1);
+                        chained.retain(|(c, _)| *c != a);
+                        chained.push((a, ns_child.clone()));
+                    } else {
+                        submenu.addItem(&ns_child);
+                    }
+                    if !matches!(child.kind, EntryKind::Separator) {
+                        placed.push((&child.meta.id, ns_child));
+                    }
+                }
+                let item = NSMenuItem::new(mtm);
+                item.setTitle(&title);
+                item.setSubmenu(Some(&submenu));
+                item.setEnabled(effective_enabled);
+                item.setState(if d.meta.checked { 1 } else { 0 });
+                item.setAlternate(d.meta.alternate);
+                item
+            }
+        }
+    }
+}
+
+/// Detaches targets and actions recursively through any nested submenus before releasing
+/// `Native::targets`.
+unsafe fn clear_item_targets(item: &NSMenuItem) {
+    // SAFETY: main-thread AppKit items; indices are bounded by `numberOfItems`.
+    unsafe {
+        if let Some(submenu) = item.submenu() {
+            for i in 0..submenu.numberOfItems() {
+                if let Some(child) = submenu.itemAtIndex(i) {
+                    clear_item_targets(&child);
+                }
+            }
+        }
+        item.setTarget(None);
+        item.setAction(None);
     }
 }
 
