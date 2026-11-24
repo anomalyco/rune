@@ -186,9 +186,10 @@ impl Port for Av<'_> {
         unsafe { self.objects().player.setAudioOutputDeviceUniqueID(uid.as_deref()) };
     }
 
-    fn seek_to(&mut self, at: f64) {
+    fn seek_to(&mut self, at: f64, exact: bool) {
+        let tolerance = if exact { asset::zero() } else { asset::positive_infinity() };
         // SAFETY: `player` is a live `AVPlayer` accessed on the main thread with valid `CMTime` values.
-        unsafe { self.objects().player.seekToTime_toleranceBefore_toleranceAfter(asset::cm(at), asset::zero(), asset::zero()) };
+        unsafe { self.objects().player.seekToTime_toleranceBefore_toleranceAfter(asset::cm(at), tolerance, tolerance) };
     }
 
     fn set_rate(&mut self, rate: f32) {

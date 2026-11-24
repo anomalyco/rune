@@ -12,11 +12,20 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
+/// A seek the UI asked the decoder to land: clip seconds, the generation its pictures carry,
+/// and whether to decode forward to `to` (`exact == true`) or keep the first keyframe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct SeekAsk {
+    pub to: f64,
+    pub generation: u32,
+    pub exact: bool,
+}
+
 /// What the UI asks of the decoder and what the decoder hands back, under one lock.
 #[derive(Default)]
 pub(super) struct Inbox {
-    /// A seek to land: clip seconds and the generation its pictures carry.
-    pub seek: Option<(f64, u32)>,
+    /// A seek to land.
+    pub seek: Option<SeekAsk>,
     pub looping: bool,
     /// Play sound, at this gain (unmuted, and the clip has some).
     pub sound: Option<f32>,
@@ -161,11 +170,11 @@ impl Pipe {
     /// unlocked, since the UI thread locks it in every frame that draws the clip and for every
     /// seek it asks for. A seek asked for meanwhile is landed next, before the caller reads
     /// anything for the one before it, so only the newest is decoded.
-    pub(super) fn land_seeks<'a, E>(&'a self, mut inbox: MutexGuard<'a, Inbox>, mut seek: impl FnMut(f64, u32) -> Result<(), E>) -> Result<MutexGuard<'a, Inbox>, E> {
-        while let Some((to, generation)) = inbox.seek.take() {
+    pub(super) fn land_seeks<'a, E>(&'a self, mut inbox: MutexGuard<'a, Inbox>, mut seek: impl FnMut(SeekAsk) -> Result<(), E>) -> Result<MutexGuard<'a, Inbox>, E> {
+        while let Some(ask) = inbox.seek.take() {
             inbox.flush();
             drop(inbox);
-            seek(to, generation)?;
+            seek(ask)?;
             inbox = self.lock();
         }
         Ok(inbox)

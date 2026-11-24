@@ -156,6 +156,7 @@ struct Fake {
     now: Instant,
     log: Vec<Cmd>,
     output_devices: Vec<Option<String>>,
+    seeks: Vec<(f64, bool)>,
 }
 
 impl Port for Fake {
@@ -231,8 +232,9 @@ impl Port for Fake {
     fn set_output_device(&mut self, uid: Option<&str>) {
         self.output_devices.push(uid.map(str::to_owned));
     }
-    fn seek_to(&mut self, at: f64) {
+    fn seek_to(&mut self, at: f64, exact: bool) {
         self.log.push(Cmd::Seek(at));
+        self.seeks.push((at, exact));
     }
     fn set_rate(&mut self, rate: f32) {
         self.log.push(Cmd::Rate(rate));
@@ -275,7 +277,7 @@ impl New {
         let kind = if audio { Kind::Audio } else { Kind::Video };
         Self {
             c: Control { muted: !audio, kind, ..Control::default() },
-            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new(), output_devices: Vec::new() },
+            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new(), output_devices: Vec::new(), seeks: Vec::new() },
         }
     }
 
@@ -346,7 +348,7 @@ impl New {
         match sym {
             Sym::Play => self.send(Event::Play),
             Sym::Pause => self.send(Event::Pause),
-            Sym::Seek(t) => self.send(Event::Seek(t)),
+            Sym::Seek(t) => self.send(Event::Seek { to: t, exact: true }),
             Sym::Rate(r) => self.send(Event::Rate(r)),
             Sym::Looping(l) => self.c.looping = l,
             Sym::Muted(m) => self.c.muted = m,
@@ -385,7 +387,7 @@ impl New {
             drawn: matches!(c.run, Run::Failed { drawn: true, .. }),
             anchor: if let Run::Playing { anchor } = c.run { anchor } else { None },
             rate: c.rate,
-            seek: c.seek,
+            seek: c.seek.map(|s| s.at),
             time: c.time,
             duration: c.duration,
             size: c.size,
@@ -684,4 +686,102 @@ fn output_device_reapplies_when_generation_wraps_to_zero() {
     step(&mut c, Event::PlayerMade { created: now });
     let effects = step(&mut c, Event::Reconcile { now });
     assert!(effects.into_iter().any(|e| e == Effect::SetOutputDevice));
+}
+
+#[test]
+fn seek_fast_passes_exact_false_and_exact_seek_passes_exact_true() {
+    let now = rune_core::time::now();
+    let mut new = New::new(false, now);
+    new.run(Open);
+    new.run(Play);
+    new.run(Pull(Script::READY));
+    assert!(!new.c.is_seeking());
+
+    // Fast seek propagates exact=false and marks is_seeking() until a frame lands.
+    new.send(Event::Seek { to: 0.7, exact: false });
+    assert!(new.c.is_seeking(), "pending before reconcile");
+    new.run(Apply);
+    assert_eq!(new.fake.seeks, [(0.7, false)]);
+    assert!(new.c.is_seeking(), "waiting for frame after fast seek");
+
+    // Frame lands at keyframe time (0.5): is_seeking clears and time reports the keyframe.
+    let keyframe = Script { frame: Frame::New(0.5), item_time: 0.5, current: 0.5, ..Script::READY };
+    new.run(Pull(keyframe));
+    assert!(!new.c.is_seeking());
+    assert_eq!(new.c.time, 0.5);
+
+    // Exact seek on release propagates exact=true.
+    new.send(Event::Seek { to: 0.7, exact: true });
+    new.run(Apply);
+    assert_eq!(new.fake.seeks, [(0.7, false), (0.7, true)]);
+    assert!(new.c.is_seeking());
+    let exact_frame = Script { frame: Frame::New(0.7), item_time: 0.7, current: 0.7, ..Script::READY };
+    new.run(Pull(exact_frame));
+    assert!(!new.c.is_seeking());
+    assert_eq!(new.c.time, 0.7);
+}
+
+#[test]
+fn is_seeking_handles_same_frame_paused_seek_expiry_audio_and_failure() {
+    let now = rune_core::time::now();
+    let mut new = New::new(false, now);
+    new.run(Open);
+    new.run(Play);
+    new.run(Pull(Script::FRAME)); // shown = 0.3 (frame 1 of 0.25 s frames)
+    new.run(Pause);
+    new.run(Apply);
+    assert!(!new.c.is_seeking());
+
+    // Paused seek within the same frame (0.25..0.5): Settle::Holding -> not waiting.
+    new.send(Event::Seek { to: 0.35, exact: false });
+    new.run(Apply);
+    assert!(!new.c.is_seeking(), "same-frame paused seek needs no new frame");
+
+    // Paused seek to a different frame: waits until frame arrives or SEEK_PATIENCE expires.
+    new.send(Event::Seek { to: 0.8, exact: false });
+    new.run(Apply);
+    assert!(new.c.is_seeking());
+    new.run(Wait(3));
+    new.run(Pull(Script::READY));
+    assert!(!new.c.is_seeking(), "expired seek stops waiting");
+
+    // Audio seek clears when current reaches target within AUDIO_SEEK_SLOP.
+    let mut audio = New::new(true, now);
+    audio.run(Open);
+    audio.run(Play);
+    audio.run(Pull(Script::READY));
+    audio.send(Event::Seek { to: 0.8, exact: false });
+    assert!(audio.c.is_seeking());
+    audio.run(Pull(Script::READY)); // current = 0.4, still far from 0.8
+    assert_eq!(audio.fake.seeks, [(0.8, false)]);
+    assert!(audio.c.is_seeking());
+    audio.run(Pull(Script { current: 0.8, item_time: 0.8, ..Script::READY }));
+    assert!(!audio.c.is_seeking());
+
+    // Failed clips never report seeking.
+    audio.send(Event::Seek { to: 0.2, exact: false });
+    assert!(audio.c.is_seeking());
+    audio.run(Fail);
+    assert!(!audio.c.is_seeking());
+}
+
+#[test]
+fn is_seeking_tracks_paused_poster_seek_until_poster_lands() {
+    let now = rune_core::time::now();
+    let mut new = New::new(false, now);
+    // Initial poster load is not a seek.
+    new.run(Pull(Script::LOADING));
+    assert!(!new.c.is_seeking());
+    new.run(Land(Done::Frame));
+    new.run(Pull(Script::LOADING));
+    assert!(!new.c.is_seeking());
+
+    // Paused seek with no player: seeking stays true across poster decode until ShowPoster.
+    new.send(Event::Seek { to: 0.6, exact: false });
+    assert!(new.c.is_seeking());
+    new.run(Pull(Script::LOADING));
+    assert!(new.c.is_seeking(), "waiting on poster worker for seek");
+    new.run(Land(Done::Frame));
+    new.run(Pull(Script::LOADING));
+    assert!(!new.c.is_seeking(), "poster landed");
 }

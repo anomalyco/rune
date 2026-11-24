@@ -8,16 +8,37 @@
 use rune_core::machine::Effects;
 use rune_core::time::Instant;
 
+/// How a seek lands on its picture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SeekMode {
+    /// Decode forward from the preceding keyframe to the target time.
+    Exact,
+    /// Stop at the first keyframe at or before the target time.
+    Keyframe,
+}
+
+impl SeekMode {
+    pub(super) const fn from_exact(exact: bool) -> Self {
+        if exact { Self::Exact } else { Self::Keyframe }
+    }
+
+    pub(super) const fn is_exact(self) -> bool {
+        matches!(self, Self::Exact)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Phase {
     /// No decoder: never asked for, or let go while undrawn. The surface keeps the picture at
-    /// `at`, and opening starts there.
-    Idle { at: f64 },
-    /// The decoder is opening the source.
-    Opening { at: f64, play: bool },
+    /// `at`, and opening starts there. `seek` is `Some` when a seek was asked while idle and
+    /// still waits for its picture.
+    Idle { at: f64, seek: Option<SeekMode> },
+    /// The decoder is opening the source. `seeking` is true when opening for a seek.
+    Opening { at: f64, play: bool, seeking: bool },
     /// Waiting for the picture at `at`: after opening, a seek, or a stall while playing, when
-    /// the clock holds. `play`: playback goes on once it lands.
-    Buffering { at: f64, play: bool },
+    /// the clock holds. `play`: playback goes on once it lands. `seeking`: waiting for a seek's
+    /// picture (false for initial open or a playback stall).
+    Buffering { at: f64, play: bool, seeking: bool },
     /// Pictures follow the clock.
     Playing { clock: Anchor },
     /// The picture at `at` holds.
@@ -29,7 +50,19 @@ pub(super) enum Phase {
 
 impl Default for Phase {
     fn default() -> Self {
-        Phase::Idle { at: 0.0 }
+        Phase::Idle { at: 0.0, seek: None }
+    }
+}
+
+impl Phase {
+    /// Whether this phase is still waiting for a seek's picture to land.
+    pub(super) fn is_seeking(self) -> bool {
+        matches!(
+            self,
+            Phase::Idle { seek: Some(_), .. }
+                | Phase::Opening { seeking: true, .. }
+                | Phase::Buffering { seeking: true, .. }
+        )
     }
 }
 
@@ -66,7 +99,7 @@ pub(super) enum Event {
     Play { target: Instant, lead: f64, rate: f64 },
     /// Hold the picture on screen, at `at`.
     Pause { at: f64 },
-    Seek { to: f64 },
+    Seek { to: f64, exact: bool },
     Rate { target: Instant, rate: f64 },
     /// Playing, with no picture due and the decoder behind: hold the clock at `at`.
     Stalled { at: f64 },
@@ -82,10 +115,10 @@ pub(super) enum Event {
 
 #[derive(Debug, PartialEq)]
 pub(super) enum Effect {
-    /// Start a decoder at `at`.
-    Open { at: f64 },
+    /// Start a decoder at `at`, exact or keyframe-only.
+    Open { at: f64, exact: bool },
     /// Move the decoder to `to`, and forget the picture on screen: the seek's replaces it.
-    Seek { to: f64 },
+    Seek { to: f64, exact: bool },
     /// The clock changed: sound follows it (`None`: silent).
     Clock(Option<Anchor>),
 }
@@ -104,12 +137,12 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
             *phase = P::Failed;
             Effects::one(Effect::Clock(None))
         }
-        (P::Idle { at }, Event::Open { play }) => {
-            *phase = P::Opening { at, play };
-            Effects::one(Effect::Open { at })
+        (P::Idle { at, seek }, Event::Open { play }) => {
+            *phase = P::Opening { at, play, seeking: seek.is_some() };
+            Effects::one(Effect::Open { at, exact: seek.is_none_or(SeekMode::is_exact) })
         }
-        (P::Opening { at, play }, Event::Opened) => {
-            *phase = P::Buffering { at, play };
+        (P::Opening { at, play, seeking }, Event::Opened) => {
+            *phase = P::Buffering { at, play, seeking };
             Effects::none()
         }
         (P::Buffering { play, .. }, Event::Shown { pts, target, lead, rate }) => {
@@ -122,12 +155,12 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
                 Effects::none()
             }
         }
-        (P::Opening { at, .. }, Event::Play { .. }) => {
-            *phase = P::Opening { at, play: true };
+        (P::Opening { at, seeking, .. }, Event::Play { .. }) => {
+            *phase = P::Opening { at, play: true, seeking };
             Effects::none()
         }
-        (P::Buffering { at, .. }, Event::Play { .. }) => {
-            *phase = P::Buffering { at, play: true };
+        (P::Buffering { at, seeking, .. }, Event::Play { .. }) => {
+            *phase = P::Buffering { at, play: true, seeking };
             Effects::none()
         }
         (P::Paused { at }, Event::Play { target, lead, rate }) => {
@@ -135,12 +168,12 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
             *phase = P::Playing { clock };
             Effects::one(Effect::Clock(Some(clock)))
         }
-        (P::Opening { at, .. }, Event::Pause { .. }) => {
-            *phase = P::Opening { at, play: false };
+        (P::Opening { at, seeking, .. }, Event::Pause { .. }) => {
+            *phase = P::Opening { at, play: false, seeking };
             Effects::none()
         }
-        (P::Buffering { at, .. }, Event::Pause { .. }) => {
-            *phase = P::Buffering { at, play: false };
+        (P::Buffering { at, seeking, .. }, Event::Pause { .. }) => {
+            *phase = P::Buffering { at, play: false, seeking };
             Effects::none()
         }
         (P::Playing { .. }, Event::Pause { at }) => {
@@ -149,25 +182,25 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
         }
         // No decoder to move: the effect forgets the picture on screen, so the clip opens at
         // `to` and shows the seek's picture when it's drawn, playing or not.
-        (P::Idle { .. }, Event::Seek { to }) => {
-            *phase = P::Idle { at: to };
-            Effects::one(Effect::Seek { to })
+        (P::Idle { .. }, Event::Seek { to, exact }) => {
+            *phase = P::Idle { at: to, seek: Some(SeekMode::from_exact(exact)) };
+            Effects::one(Effect::Seek { to, exact })
         }
-        (P::Opening { play, .. }, Event::Seek { to }) => {
-            *phase = P::Opening { at: to, play };
-            Effects::one(Effect::Seek { to })
+        (P::Opening { play, .. }, Event::Seek { to, exact }) => {
+            *phase = P::Opening { at: to, play, seeking: true };
+            Effects::one(Effect::Seek { to, exact })
         }
-        (P::Buffering { play, .. }, Event::Seek { to }) => {
-            *phase = P::Buffering { at: to, play };
-            Effects::one(Effect::Seek { to })
+        (P::Buffering { play, .. }, Event::Seek { to, exact }) => {
+            *phase = P::Buffering { at: to, play, seeking: true };
+            Effects::one(Effect::Seek { to, exact })
         }
-        (P::Playing { .. }, Event::Seek { to }) => {
-            *phase = P::Buffering { at: to, play: true };
-            Effects::two(Effect::Clock(None), Effect::Seek { to })
+        (P::Playing { .. }, Event::Seek { to, exact }) => {
+            *phase = P::Buffering { at: to, play: true, seeking: true };
+            Effects::two(Effect::Clock(None), Effect::Seek { to, exact })
         }
-        (P::Paused { .. } | P::Ended { .. }, Event::Seek { to }) => {
-            *phase = P::Buffering { at: to, play: false };
-            Effects::one(Effect::Seek { to })
+        (P::Paused { .. } | P::Ended { .. }, Event::Seek { to, exact }) => {
+            *phase = P::Buffering { at: to, play: false, seeking: true };
+            Effects::one(Effect::Seek { to, exact })
         }
         (P::Playing { clock }, Event::Rate { target, rate }) => {
             let clock = Anchor { at: target, pos: clock.position(target), rate };
@@ -175,7 +208,7 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
             Effects::one(Effect::Clock(Some(clock)))
         }
         (P::Playing { .. }, Event::Stalled { at }) => {
-            *phase = P::Buffering { at, play: true };
+            *phase = P::Buffering { at, play: true, seeking: false };
             Effects::one(Effect::Clock(None))
         }
         (P::Playing { .. }, Event::Ended { at }) => {
@@ -198,7 +231,7 @@ pub(super) fn step(phase: &mut Phase, event: Event) -> Effects<Effect> {
             Effects::one(Effect::Clock(Some(clock)))
         }
         (P::Opening { .. } | P::Buffering { .. } | P::Playing { .. } | P::Paused { .. } | P::Ended { .. }, Event::Released { at }) => {
-            *phase = P::Idle { at };
+            *phase = P::Idle { at, seek: None };
             Effects::one(Effect::Clock(None))
         }
         _ => Effects::none(),

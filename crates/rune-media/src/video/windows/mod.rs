@@ -24,7 +24,7 @@ mod vsync;
 
 use super::*;
 use decoder::{Facts, Job};
-use inbox::{Decoded, News, Pic, Pick, Pipe};
+use inbox::{Decoded, News, Pic, Pick, Pipe, SeekAsk};
 use machine::{Effect, Event, Phase};
 use std::time::Duration;
 
@@ -259,6 +259,19 @@ pub(crate) fn unlayer(shared: &Arc<Shared>, surface: &NativeSurface) {
     native.show(shared, &mut c, surface, vsync::snap(rune_core::time::now()), lead);
 }
 
+/// Whether a seek is still waiting for its picture to land.
+pub(super) fn is_seeking(shared: &Shared) -> bool {
+    let native = shared.native.lock().unwrap();
+    let c = shared.ctl.lock().unwrap();
+    if c.failed() {
+        return false;
+    }
+    if !playback_enabled() && native.pipe.is_none() {
+        return false;
+    }
+    c.seek.is_some() || native.phase.is_seeking()
+}
+
 /// Audio, and video on its layer: where the clock has it now. The clock runs only while the sound
 /// does (or the layer shows the pictures), so it's always the one to read.
 pub(super) fn live_time(shared: &Shared, _: bool) -> Option<f64> {
@@ -323,11 +336,11 @@ impl Native {
         }
         for effect in effects {
             match effect {
-                Effect::Open { at } => self.open(shared, c, at),
-                Effect::Seek { to } => {
+                Effect::Open { at, exact } => self.open(shared, c, at, exact),
+                Effect::Seek { to, exact } => {
                     let generation = self.seeks.next().0;
                     if let Some(pipe) = &self.pipe {
-                        pipe.lock().seek = Some((to, generation));
+                        pipe.lock().seek = Some(SeekAsk { to, generation, exact });
                         pipe.poke();
                     }
                     self.shown = None;
@@ -337,13 +350,14 @@ impl Native {
         }
     }
 
-    fn open(&mut self, shared: &Arc<Shared>, c: &Control, at: f64) {
+    fn open(&mut self, shared: &Arc<Shared>, c: &Control, at: f64, exact: bool) {
         let weak = Arc::downgrade(shared);
         let job = Job {
             source: shared.source.clone(),
             kind: shared.kind,
             // Picture times count on through loops; the clip starts at its own time.
             start: c.duration.filter(|d| *d > 0.0).map_or(at, |d| at.rem_euclid(d)),
+            exact,
             generation: self.seeks.current().0,
             looping: c.looping,
             sound: (!c.muted).then_some(c.volume),
@@ -405,8 +419,8 @@ impl Native {
             self.event(shared, c, Event::Synced { clock: heard });
         }
         let lead = vsync::period().as_secs_f64() / 2.0;
-        if let Some(to) = c.seek.take() {
-            self.event(shared, c, Event::Seek { to });
+        if let Some(seek) = c.seek.take() {
+            self.event(shared, c, Event::Seek { to: seek.at, exact: seek.exact });
         }
         if c.playing() != self.playing {
             self.playing = c.playing();
@@ -496,7 +510,7 @@ impl Native {
     /// The phase's time, for a pause before any picture showed.
     fn at(&self) -> f64 {
         match self.phase {
-            Phase::Idle { at } | Phase::Opening { at, .. } | Phase::Buffering { at, .. } | Phase::Paused { at } | Phase::Ended { at } => at,
+            Phase::Idle { at, .. } | Phase::Opening { at, .. } | Phase::Buffering { at, .. } | Phase::Paused { at } | Phase::Ended { at } => at,
             Phase::Playing { clock } => clock.pos,
             Phase::Failed => 0.0,
         }
@@ -543,7 +557,7 @@ impl Native {
         let Some(frame) = picked else {
             // The picture a paused clip holds left the queue: the decoder gets it again.
             if let (true, Phase::Paused { at }) = (behind, self.phase) {
-                return self.event(shared, c, Event::Seek { to: clip_time(c, at) });
+                return self.event(shared, c, Event::Seek { to: clip_time(c, at), exact: true });
             }
             self.check_end(shared, c, &pipe, generation, target);
             return;
@@ -586,8 +600,8 @@ impl Native {
         let duration = c.duration.unwrap_or(0.0);
         let clock = match self.phase {
             Phase::Playing { clock } => clock,
-            Phase::Buffering { at, play: true } if ended => return self.end(shared, c, at, duration),
-            Phase::Buffering { at, play: false } if ended => return self.event(shared, c, Event::Ended { at }),
+            Phase::Buffering { at, play: true, .. } if ended => return self.end(shared, c, at, duration),
+            Phase::Buffering { at, play: false, .. } if ended => return self.event(shared, c, Event::Ended { at }),
             _ => return,
         };
         // Played from a hold with no picture: nothing is left to show.
@@ -610,7 +624,7 @@ impl Native {
     /// turned on since starts the clip again from zero.
     fn end(&mut self, shared: &Arc<Shared>, c: &mut Control, at: f64, duration: f64) {
         if c.observe(duration, true) {
-            c.seek = Some(0.0);
+            c.seek = Some(Seek::exact(0.0));
             return;
         }
         self.event(shared, c, Event::Ended { at });

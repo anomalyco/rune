@@ -4,7 +4,7 @@
 //! the poster worker and the native player all report to [`step`], and what it asks for comes
 //! back as [`Effect`]s, carried out by `turn` or the caller.
 
-use super::{Control, Kind, Meta, PlayerState};
+use super::{Control, Kind, Meta, PlayerState, Seek};
 use rune_core::machine::{Attempt, Effects};
 use rune_core::time::Instant;
 use std::time::Duration;
@@ -132,7 +132,7 @@ pub(super) enum Event {
     // The handle.
     Play,
     Pause,
-    Seek(f64),
+    Seek { to: f64, exact: bool },
     Rate(f32),
     // The clip's facts, or why there are none.
     Open(Result<Meta, String>),
@@ -184,7 +184,7 @@ pub(super) enum Effect {
     SetMuted(bool),
     SetVolume(f32),
     SetOutputDevice,
-    SeekTo(f64),
+    SeekTo { at: f64, exact: bool },
     /// 0 pauses.
     SetRate(f32),
     /// Back to zero at this rate, for a loop.
@@ -198,7 +198,7 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
             match c.run {
                 Run::Failed { .. } => return Effects::none(),
                 Run::Ended => {
-                    c.seek = Some(0.0);
+                    c.seek = Some(Seek::exact(0.0));
                     c.time = 0.0;
                 }
                 Run::Paused | Run::Playing { .. } => {}
@@ -210,10 +210,10 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                 c.run = Run::Paused;
             }
         }
-        Event::Seek(seconds) => {
+        Event::Seek { to: seconds, exact } => {
             let seconds = if seconds.is_finite() { seconds.max(0.0) } else { 0.0 };
             let seconds = c.duration.map_or(seconds, |d| seconds.min(d));
-            c.seek = Some(seconds);
+            c.seek = Some(Seek { at: seconds, exact });
             c.time = seconds;
             match c.run {
                 Run::Ended => c.run = Run::Paused,
@@ -265,6 +265,9 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                     }
                     // A late poster never covers a frame a player made, or one a seek moved past.
                     if current && !overtaken(c) && c.stage == Stage::Poster {
+                        if c.poster_seeking == Some(attempt) {
+                            c.poster_seeking = None;
+                        }
                         return Effects::one(Effect::ShowPoster);
                     }
                 }
@@ -277,13 +280,14 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
         Event::PlayerMade { created } => {
             // A fresh player starts at the handle's position.
             if c.time > 0.0 && c.seek.is_none() {
-                c.seek = Some(c.time);
+                c.seek = Some(Seek::exact(c.time));
             }
             // Posters still in flight are for a surface the player now owns. Audio's load has
             // no surface to lose, so its answer always counts.
             if c.kind == Kind::Video {
                 c.posters.next();
                 c.poster_at = None;
+                c.poster_seeking = None;
             }
             // A fresh player starts on the system output; only a chosen device needs applying.
             let output = if c.output_device.is_some() { c.output_generation.wrapping_sub(1) } else { c.output_generation };
@@ -326,7 +330,7 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
 /// // differs from dev: dev had no fence, and failed the clip on the old answer.
 fn overtaken(c: &Control) -> bool {
     let clamp = |t: f64| c.duration.map_or(t, |d| t.min(d));
-    c.poster_at.is_some_and(|asked| c.seek.is_some_and(|target| clamp(target) != clamp(asked)))
+    c.poster_at.is_some_and(|asked| c.seek.is_some_and(|target| clamp(target.at) != clamp(asked)))
 }
 
 fn opened(c: &mut Control, meta: Meta) {
@@ -334,13 +338,14 @@ fn opened(c: &mut Control, meta: Meta) {
     c.duration = Some(meta.duration);
     c.size = meta.size;
     c.time = c.time.min(meta.duration);
-    c.seek = c.seek.map(|t| t.min(meta.duration));
+    c.seek = c.seek.map(|s| Seek { at: s.at.min(meta.duration), ..s });
     c.generation += 1;
 }
 
 fn failed(c: &mut Control, error: String) {
     if !c.failed() {
         c.run = Run::Failed { error, drawn: false };
+        c.poster_seeking = None;
         c.generation += 1;
     }
 }
@@ -349,8 +354,8 @@ fn failed(c: &mut Control, error: String) {
 /// `seek` or a rate change.
 fn advance(c: &mut Control, now: f64) {
     let Some(meta) = c.meta else { return };
-    if let Some(t) = c.seek.take() {
-        c.time = t.min(meta.duration);
+    if let Some(seek) = c.seek.take() {
+        c.time = seek.at.min(meta.duration);
         if let Run::Playing { anchor } = &mut c.run {
             *anchor = None;
         }
@@ -392,10 +397,15 @@ fn pull(c: &mut Control) -> Effects<Effect> {
         return Effects::none();
     }
     if !c.playing() {
-        if c.kind == Kind::Video
-            && let Some(at) = c.seek.take().or_else(|| (c.stage == Stage::Unasked).then_some(c.time))
-        {
-            return ask_poster(c, at);
+        if c.kind == Kind::Video {
+            if let Some(seek) = c.seek.take() {
+                let effects = ask_poster(c, seek.at);
+                c.poster_seeking = Some(c.posters.current());
+                return effects;
+            }
+            if c.stage == Stage::Unasked {
+                return ask_poster(c, c.time);
+            }
         }
         return Effects::none();
     }
@@ -460,11 +470,11 @@ fn reconcile(c: &mut Control, now: Instant) -> Effects<Effect> {
     }
     let playing = c.playing();
     if let Stage::Ready { rate, settle, shown, .. } = &mut c.stage {
-        if let Some(t) = c.seek.take() {
-            effects.push(Effect::SeekTo(t));
+        if let Some(seek) = c.seek.take() {
+            effects.push(Effect::SeekTo { at: seek.at, exact: seek.exact });
             // A paused seek within the frame on screen brings no new frame to wait for.
-            let same_frame = !playing && c.meta.zip(*shown).is_some_and(|(m, shown)| m.frame_index(shown) == m.frame_index(t));
-            settle.seek(t, same_frame, now);
+            let same_frame = !playing && c.meta.zip(*shown).is_some_and(|(m, shown)| m.frame_index(shown) == m.frame_index(seek.at));
+            settle.seek(seek.at, same_frame, now);
         }
         let want = if playing { c.rate } else { 0.0 };
         if *rate != want {
@@ -549,6 +559,17 @@ impl Control {
     pub(crate) fn next_frame_id(&mut self) -> u64 {
         self.frame_id += 1;
         self.frame_id
+    }
+
+    /// Whether a seek is still waiting to be carried out or for its picture (or position, for
+    /// audio) to land.
+    pub(super) fn is_seeking(&self) -> bool {
+        if self.failed() {
+            return false;
+        }
+        self.seek.is_some()
+            || self.poster_seeking.is_some()
+            || matches!(self.stage, Stage::Ready { settle, .. } if settle.waiting())
     }
 
     /// Whether the player's own position is the one to read: it runs, and no seek is under way.

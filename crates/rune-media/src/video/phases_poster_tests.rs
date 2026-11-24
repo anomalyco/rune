@@ -146,7 +146,7 @@ fn posters_for_repeated_seeks_to_one_time_all_show() {
     let meta = Meta { duration: 1.0, size: Some((64, 36)), frame: 0.25, sound: false };
     let (mut owed, mut shown) = (None, 0);
     for _ in 0..30 {
-        step(&mut c, Event::Seek(0.3));
+        step(&mut c, Event::Seek { to: 0.3, exact: true });
         let AskPoster(_, attempt) = only(step(&mut c, Event::Pull)) else { panic!("asks for a poster") };
         if let Some(answered) = owed.replace(attempt)
             && step(&mut c, Event::PosterDone { attempt: answered, result: Ok(meta) }) == Effects::one(Effect::ShowPoster)
@@ -175,7 +175,7 @@ fn a_superseded_poster_keeps_the_clips_frame_timing() {
     }
     step(&mut c, Event::Framed { shown: 0.0 });
     step(&mut c, Event::Pause);
-    step(&mut c, Event::Seek(0.02));
+    step(&mut c, Event::Seek { to: 0.02, exact: true });
     step(&mut c, Event::Reconcile { now });
 
     assert_eq!(c.meta.map(|m| m.frame), Some(1.0 / 60.0));

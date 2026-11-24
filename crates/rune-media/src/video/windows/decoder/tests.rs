@@ -40,6 +40,20 @@ fn a_stream_with_no_pictures_has_none_to_go_back_for() {
     assert_eq!(Landing::at(10.0).ended(), None);
 }
 
+#[test]
+fn a_keyframe_landing_keeps_the_first_picture_without_discarding_frames() {
+    let mut landing = Landing::keyframe();
+    assert!(!landing.landed());
+    // Keeps a keyframe well before any scrub target (and even a small negative edit-list PTS)
+    // without discarding a single frame.
+    assert_eq!(kept(&mut landing, &[-0.02, 0.0, 0.033, 0.066]), vec![-0.02, 0.0, 0.033, 0.066]);
+    assert!(landing.landed());
+    assert_eq!(landing.ended(), None);
+
+    let mut empty = Landing::keyframe();
+    assert_eq!(empty.ended(), None);
+}
+
 const SIXTIETH: f64 = 1.0 / 60.0;
 
 #[test]
@@ -312,6 +326,7 @@ fn a_muted_clip_keeps_its_audio_stream_selected_and_with_no_sound_output() {
         source: MediaSource::File(path),
         kind: Kind::Video,
         start: 0.0,
+        exact: true,
         generation: 0,
         looping: false,
         sound: None,
@@ -459,6 +474,58 @@ fn a_real_clip_unmuted_mid_clip_reads_audio_at_playback_position_without_seeking
         "video jumped on unmute: was {video_pts} s, next {} s",
         next_video.time
     );
+}
+
+#[test]
+fn a_real_clip_keyframe_seek_lands_on_the_first_decoded_frame_without_skipping_forward() {
+    // SAFETY: COM on this test's thread for the reader; left initialised, as the thread may open more.
+    unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().ok();
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
+    let lib = mf::library().unwrap();
+    let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
+    let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, false).unwrap();
+    let (video, frame) = (opened.video.unwrap(), opened.picture.unwrap().frame);
+
+    // Pick a target mid-clip where MF seeks back to an earlier keyframe.
+    let target = (opened.duration * 0.5).min(1.5);
+    assert!(target > frame * 2.0, "fixture too short: {}", opened.duration);
+
+    // Keyframe-only seek: keeps the very first picture returned after mf::seek.
+    mf::seek(&opened.reader, target).unwrap();
+    let mut fast = Landing::keyframe();
+    let mut fast_reads = 0u32;
+    let fast_pts = loop {
+        let read = mf::read(&opened.reader, video).unwrap();
+        assert!(read.flags & MF_SOURCE_READERF_ENDOFSTREAM.0 == 0, "unexpected EOS during fast seek");
+        if read.sample.is_some() {
+            fast_reads += 1;
+            if fast.keeps(read.time, frame) {
+                break read.time;
+            }
+        }
+    };
+    assert_eq!(fast_reads, 1, "keyframe seek must keep the first decoded picture");
+    assert!(fast_pts <= target + frame * 0.5, "keyframe at {fast_pts} s should be at or before target {target} s");
+
+    // Exact seek to the same target: lands within half a frame of target, reading at least as many frames.
+    mf::seek(&opened.reader, target).unwrap();
+    let mut exact = Landing::at(target);
+    let mut exact_reads = 0u32;
+    let exact_pts = loop {
+        let read = mf::read(&opened.reader, video).unwrap();
+        assert!(read.flags & MF_SOURCE_READERF_ENDOFSTREAM.0 == 0, "unexpected EOS during exact seek");
+        if read.sample.is_some() {
+            exact_reads += 1;
+            if exact.keeps(read.time, frame) {
+                break read.time;
+            }
+        }
+    };
+    assert!((exact_pts - target).abs() <= frame, "exact seek landed at {exact_pts} s for target {target} s");
+    assert!(exact_reads >= fast_reads, "exact seek ({exact_reads}) must read at least as many frames as keyframe seek ({fast_reads})");
+    if fast_pts + frame * 0.5 < target {
+        assert!(exact_reads > 1, "mid-GOP target {target} s after keyframe {fast_pts} s should decode intermediate frames for exact seek");
+    }
 }
 
 

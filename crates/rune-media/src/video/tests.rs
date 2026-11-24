@@ -10,6 +10,7 @@ fn new_videos_are_muted_paused_and_loading() {
     assert!(v.muted());
     assert!(!v.looping());
     assert!(!v.is_playing());
+    assert!(!v.is_seeking());
     assert_eq!(v.rate(), 1.0);
     assert_eq!(v.output_device(), None);
     assert_eq!(v.time(), 0.0);
@@ -167,10 +168,56 @@ fn a_waker_set_after_a_failure_hears_it_once() {
 fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
     let v = Video::file("missing.mp4");
     v.seek(30.0);
-    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(30.0), "no duration yet");
+    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek::exact(30.0)), "no duration yet");
     v.shared.ctl.lock().unwrap().open(Ok(meta()));
     let c = v.shared.ctl.lock().unwrap();
-    assert_eq!((c.seek, c.time), (Some(1.0), 1.0));
+    assert_eq!((c.seek, c.time), (Some(Seek::exact(1.0)), 1.0));
+}
+
+#[test]
+fn seek_fast_records_keyframe_seek_clamps_inputs_and_preserves_state() {
+    let v = Video::file("missing.mp4");
+    let other = v.clone();
+    // Before opening: records exact=false, clamps negative/non-finite to 0.
+    v.seek_fast(-5.0);
+    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.0, exact: false }));
+    v.seek_fast(f64::NAN);
+    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.0, exact: false }));
+    v.seek_fast(f64::INFINITY);
+    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.0, exact: false }));
+    // Past duration before open: clamps when metadata arrives and keeps exact=false.
+    other.seek_fast(30.0);
+    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 30.0, exact: false }));
+    v.shared.ctl.lock().unwrap().open(Ok(meta()));
+    {
+        let c = v.shared.ctl.lock().unwrap();
+        assert_eq!((c.seek, c.time), (Some(Seek { at: 1.0, exact: false }), 1.0));
+    }
+    // Headless runs report is_seeking() == false.
+    assert!(!v.is_seeking());
+    assert_eq!(v.state(), PlayerState::Ready);
+
+    // Seeking while playing stays Playing; seeking after Ended returns to Ready.
+    v.play();
+    v.seek_fast(0.5);
+    assert_eq!(v.state(), PlayerState::Playing);
+    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.5, exact: false }));
+    assert!(!v.is_seeking());
+
+    v.shared.ctl.lock().unwrap().run = Run::Ended;
+    assert_eq!(v.state(), PlayerState::Ended);
+    v.seek_fast(0.25);
+    assert_eq!(v.state(), PlayerState::Ready);
+    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek { at: 0.25, exact: false }));
+
+    // A subsequent exact seek replaces the pending keyframe seek.
+    v.seek(0.75);
+    assert_eq!(v.shared.ctl.lock().unwrap().seek, Some(Seek::exact(0.75)));
+
+    // Failed clips never report seeking.
+    v.shared.ctl.lock().unwrap().fail("boom".into());
+    v.seek_fast(0.5);
+    assert!(!v.is_seeking());
 }
 
 /// The parked list is process-wide: these tests take turns so each sees only its own clips.
@@ -328,7 +375,7 @@ fn virtual_time_loops_rates_and_seeks() {
     c.advance_virtual(0.6);
     assert!((c.time - 0.2).abs() < 1e-9, "1.2 s wraps to 0.2: {}", c.time);
     assert!(c.playing());
-    step(&mut c, Event::Seek(0.75));
+    step(&mut c, Event::Seek { to: 0.75, exact: true });
     c.advance_virtual(5.0);
     assert_eq!(c.time, 0.75);
     c.advance_virtual(5.1);
@@ -351,7 +398,7 @@ fn playing_after_the_end_restarts_from_zero() {
     assert_eq!(v.state(), PlayerState::Ended);
     v.play();
     let c = v.shared.ctl.lock().unwrap();
-    assert_eq!(c.seek, Some(0.0));
+    assert_eq!(c.seek, Some(Seek::exact(0.0)));
     assert!(c.playing());
 }
 
