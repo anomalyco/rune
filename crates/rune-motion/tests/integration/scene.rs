@@ -663,3 +663,37 @@ fn transition_motion_drives_enter_exit_revive_and_respects_reduced_motion() {
     s.frame_at(1.30);
     assert_eq!(s.phase(reduced_id), Some(Phase::Present), "2.0s timed enter reduced to ~0.18s fade settles by 0.24s");
 }
+
+#[test]
+fn reduced_motion_instant_match_geometry_and_zero_tween_transition_add_no_fade() {
+    let mut s = Scene::new();
+    s.set_reduced_motion(true);
+    s.insert(NodeId(1), spec(0.0, 0.0, 10.0, 10.0), Mount::Initial);
+    s.frame_at(0.0);
+
+    // Zero-duration timed transition must stay instant under Reduce Motion.
+    let id = NodeId(200);
+    s.set_transition_motion(id, Curve::linear(0.0), Curve::linear(0.0));
+    s.insert(id, spec(0.0, 0.0, 80.0, 40.0).transition(Transition::opacity()), Mount::Animated);
+    let out = s.frame_at(0.1);
+    assert!(!out.animating, "0 s enter tween must not animate under reduced motion");
+    assert_eq!(s.phase(id), Some(Phase::Present));
+    assert_eq!(s.presented(id).unwrap().opacity, 1.0);
+    s.remove(id);
+    let out = s.frame_at(0.2);
+    assert!(!out.animating, "0 s exit tween must not animate under reduced motion");
+    assert!(!s.contains(id));
+
+    // match_geometry with an instant LayoutAnim must not gain a crossfade under Reduce Motion.
+    let (from, to) = (NodeId(201), NodeId(202));
+    s.insert(from, spec(0.0, 0.0, 60.0, 30.0), Mount::Initial);
+    s.frame_at(0.3);
+    s.insert(to, spec(120.0, 40.0, 100.0, 50.0), Mount::Initial);
+    s.match_geometry(from, to, LayoutAnim::INSTANT);
+    let out = s.frame_at(0.3);
+    assert!(!out.animating, "instant match_geometry must not add a crossfade under reduced motion");
+    assert!(!s.contains(from), "source must unmount at once");
+    assert_eq!(s.phase(to), Some(Phase::Present));
+    assert_eq!(s.presented(to).unwrap().opacity, 1.0);
+    assert_eq!(s.presented(to).unwrap().rect, Rect::new(120.0, 40.0, 100.0, 50.0));
+}

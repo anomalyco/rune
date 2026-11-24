@@ -123,7 +123,18 @@ impl AnimationStore {
         let n = T::LANES;
         if self.reduced_motion() && prop.class.reduce(Curve::Spring(Spring::SMOOTH)) != Curve::Spring(Spring::SMOOTH) {
             let target = lanes(&last);
-            let anim = crate::Anim { delay: kf.delay, ..crate::Anim::new(Curve::Spring(Spring::SMOOTH)) };
+            let has_spring = kf.frames.iter().any(|f| matches!(*f, Keyframe::Spring { spring, .. } if spring != Spring::NONE));
+            let curve = if has_spring {
+                Curve::Spring(Spring::SMOOTH)
+            } else {
+                let timed: f32 = kf.frames.iter().map(|f| match *f {
+                    Keyframe::Linear { duration, .. } | Keyframe::Cubic { duration, .. } => duration.max(0.0),
+                    Keyframe::Spring { .. } | Keyframe::Move { .. } => 0.0,
+                }).sum();
+                let total = timed * kf.repeat as f32;
+                if total > 0.0 { Curve::ease_in_out(total) } else { Curve::Instant }
+            };
+            let anim = crate::Anim { delay: kf.delay, ..crate::Anim::new(curve) };
             self.animate_raw(t, &target[..n], anim, None);
             return Some(self.id_of(t));
         }

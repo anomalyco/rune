@@ -41,6 +41,17 @@ impl Curve {
         }
     }
 
+    /// Whether this curve lands immediately with no motion (`Instant`, `Spring::NONE`, or a
+    /// non-positive tween/Hermite duration).
+    pub(crate) fn is_instant(self) -> bool {
+        match self {
+            Curve::Instant => true,
+            Curve::Spring(s) => s == Spring::NONE,
+            Curve::Tween { duration, .. } | Curve::Hermite { duration, .. } => duration <= 0.0 || duration.is_nan(),
+            Curve::Decay(_) => false,
+        }
+    }
+
     fn default_blend(&self) -> Blend {
         match self {
             Curve::Tween { .. } => Blend::Additive,
@@ -125,6 +136,10 @@ impl Anim {
         Anim { curve, delay: 0.0, blend: Blend::Auto, velocity: Velocity::Inherit, token: 0 }
     }
     pub const INSTANT: Anim = Anim::new(Curve::Instant);
+
+    pub(crate) fn is_instant(&self) -> bool {
+        (self.delay <= 0.0 || self.delay.is_nan()) && self.curve.is_instant()
+    }
 
     pub(crate) fn resolved_blend(&self) -> Blend {
         match self.blend {

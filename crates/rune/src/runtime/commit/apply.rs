@@ -517,7 +517,7 @@ impl RuntimeCore {
             {
                 let content = spec.content.as_str();
                 let now = if time_scaled { self.scene.store().node_time(id) } else { now };
-                let fade = if self.reduced_motion { 0.15 } else { spec.reveal };
+                let fade = if self.reduced_motion { spec.reveal.min(0.15) } else { spec.reveal };
                 self.motion.commit_reveal(id, content, fade, now, time_scaled, was_present, instant, tx.unprompted, nodes[i].virtual_mount, self.reduced_motion);
             }
         }

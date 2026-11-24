@@ -93,6 +93,12 @@ impl LayoutAnim {
     }
     pub const INSTANT: LayoutAnim =
         LayoutAnim { x: Anim::INSTANT, y: Anim::INSTANT, lead: None, travel: Travel::Parent };
+
+    pub(crate) fn is_instant(&self) -> bool {
+        self.x.is_instant()
+            && self.y.is_instant()
+            && self.lead.is_none_or(|(lead, trail)| lead.is_instant() && trail.is_instant())
+    }
 }
 
 impl From<Spring> for LayoutAnim {
