@@ -71,7 +71,7 @@ impl RuntimeCore {
         let raster = if cover.is_some() { 1.0 } else { scale_motion.raster(sc, rest) };
         let still = scale_motion == ScaleMotion::Still;
         let y_top = match cover { Some((_, c)) => r[1] + c[1] * s, None => r[1] }
-            + if still && (sc - 1.0).abs() < 1e-5 { exact_off[1] } else { 0.0 }
+            + if cover.is_none() && (sc - 1.0).abs() <= 1e-5 { exact_off[1] } else { 0.0 }
             + self.tree.nodes[i].inset[1] * zk * s;
         let rest_y = y_top - if gliding && cover.is_none() && still { r[1] - r[1].round() } else { 0.0 };
         let rows = visible_text_rows(spec, rest_y, shown, tk, raster, s);

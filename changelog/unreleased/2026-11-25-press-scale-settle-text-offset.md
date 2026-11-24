@@ -1,0 +1,1 @@
+- Fixed a one-frame 1 px vertical text jump when a releasing `press_scale` (or other scale animation landing at `1.0`) crossed `|scale - 1.0| <= 1e-5` one frame before settling: `paint_content` and `fill_visible_by_line` now apply `LeafBox::exact_off` whenever `cover.is_none() && (sc - 1.0).abs() <= 1e-5`, matching `build`'s unscaled `at_rest` snapping.

@@ -231,6 +231,68 @@ fn words_set_in_a_field_without_a_key_are_no_region_snap() {
     assert!(!f.iter().any(|f| f.element.ends_with("(pixels)")), "{f:#?}");
 }
 
+#[test]
+fn a_press_scale_release_does_not_flash_text_on_the_settle_frame() {
+    // When a releasing `press_scale` reaches `|scale - 1.0| <= 1e-5` one frame before the
+    // track settles, `build` already switches the button and its centred label back to
+    // `at_rest` snapping (which can centre-snap the label box by 1 px and compute `exact_off`
+    // to keep the glyphs on their exact origin). `paint_content` must apply `exact_off` on
+    // that frame too, rather than waiting for `ScaleMotion::Still`, or the text jumps 1 px
+    // for one frame and snaps back on both CPU and GPU renders.
+    use crate::render::KIND_GLYPH;
+    use crate::{Curve, Easing, row, text};
+    use crate::tok::{radius, type_};
+
+    fn btn_view(top: &f32, _: &mut Cx<f32>) -> El {
+        let accent = crate::color::hex("#3B63FB").unwrap();
+        let hover = crate::color::hex("#274DEA").unwrap();
+        let press = crate::color::hex("#1A34A8").unwrap();
+        let btn = row().key("btn").absolute(80.0, *top).h(34.0).px(14.0).center().radius(radius::SM)
+            .fill(accent).hover_fill(hover).press_fill(press)
+            .press_scale(0.97)
+            .press_motion(Curve::tween(0.08, Easing::EASE_OUT), Curve::tween(0.16, Easing::EASE_OUT))
+            .on_press(|_: &mut f32| {})
+            .child(text("Accent").font(type_::LABEL).color(Color::WHITE));
+        col().w_full().h_full().fill(oklch(0.18, 0.01, 260.0)).child(btn)
+    }
+
+    // Half-pixel top so `pixel_snap::at_rest` centres the 15 px text box onto a whole pixel
+    // with a -1 px `exact_off`, positioned so a 1 px downward shift crosses a 12 pt cell edge.
+    let mut rt = Runtime::new(104.5f32, btn_view, (320.0, 200.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(true);
+    let mut run = Run::new(rt, 120.0);
+    run.idle(0.1);
+    run.step();
+    run.act("hover", |rt| { let (x, y) = rt.find("btn").unwrap(); rt.pointer_move(x, y); });
+    run.play(0.2);
+    run.act("press", |rt| { let (x, y) = rt.find("btn").unwrap(); rt.pointer_down(x, y); });
+    run.play(0.2);
+    run.act("release", |rt| { let (x, y) = rt.find("btn").unwrap(); rt.pointer_up(x, y); });
+
+    let mut glyph_ys = Vec::new();
+    let mut saw_near_one_moving = false;
+    for _ in 0..36 {
+        run.step();
+        let btn = run.rt.elements().into_iter().find(|e| e.key.as_deref() == Some("btn")).unwrap();
+        if (btn.scale - 1.0).abs() <= 1e-5 && btn.moving {
+            saw_near_one_moving = true;
+        }
+        let y0 = run.rt.instances.iter()
+            .find(|i| i.params[1] == KIND_GLYPH)
+            .expect("button label draws glyphs")
+            .rect[1];
+        glyph_ys.push((btn.scale, btn.moving, y0));
+    }
+    assert!(saw_near_one_moving, "test must exercise the |sc - 1| <= 1e-5 penultimate settle frame");
+    // Every frame near rest must keep its glyph baseline within 0.25 px of the resting frame.
+    let rest_y = glyph_ys.last().unwrap().2;
+    for &(sc, moving, y) in glyph_ys.iter().filter(|&&(sc, _, _)| (sc - 1.0).abs() < 0.002) {
+        assert!((y - rest_y).abs() < 0.25, "glyph y jumped near settle (sc={sc}, moving={moving}): {y} vs rest {rest_y}");
+    }
+    let findings = run.finish();
+    assert!(!findings.iter().any(|f| f.element.ends_with("(pixels)")), "unexpected pixel findings: {findings:#?}");
+}
+
 impl Run<S> {
     fn play_and_check(&mut self) -> Vec<Finding> {
         self.play(1.0);
