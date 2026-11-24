@@ -153,18 +153,97 @@ impl Host {
             crate::tooling::perf_warn::timed("on_ready", || ready(&self.native_handle));
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if self.wayland
-            && let Some(w) = &mut self.win
-            && w.native.drop_target.is_none()
-        {
-            let handle = self.native_handle.clone();
-            w.native.drop_target = crate::platform::wayland_drop::install(
-                &w.window,
-                std::sync::Arc::new(move || handle.send(|_| crate::window::WakeEvent::FileDrop)),
-            );
-        }
+        self.wayland_drop_ready();
         #[cfg(not(target_arch = "wasm32"))]
         crate::platform::ready_signal::ready();
+    }
+
+    /// Wayland: marks the window ready for lazy `wl_data_device` binding and syncs drop targets.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn wayland_drop_ready(&mut self) {
+        if !self.wayland { return; }
+        self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::WindowReady);
+        self.sync_wayland_drop();
+    }
+
+    /// Wayland: lazily binds or schedules teardown of `wl_data_device` when `(commit_generation,
+    /// active_modal)` changes. Zero work before frame 1 or on steady/animation frames.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(in crate::window) fn sync_wayland_drop(&mut self) {
+        if !self.wayland { return; }
+        let key = {
+            let rt = self.app.rt();
+            crate::platform::wayland_drop::binding::SyncKey {
+                commit: rt.commit_generation(),
+                modal: rt.active_modal(),
+            }
+        };
+        if !self.win.as_ref().is_some_and(|w| w.native.drop_binding.needs_sync(key)) {
+            return;
+        }
+        let has_targets = self.app.rt().has_drop_targets();
+        self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::TreeSynced {
+            key,
+            has_targets,
+            now: crate::time::now(),
+        });
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(in crate::window) fn wayland_drop_closed(&mut self) {
+        if !self.wayland { return; }
+        self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::WindowClosed);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(in crate::window) fn wayland_drop_display_lost(&mut self) {
+        if !self.wayland { return; }
+        self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::DisplayLost);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(in crate::window) fn step_wayland_drop_binding(
+        &mut self,
+        event: crate::platform::wayland_drop::binding::Event,
+    ) {
+        use crate::platform::wayland_drop::binding::{self, Effect};
+        let Some(w) = &mut self.win else { return };
+        let effects = binding::step(&mut w.native.drop_seq, &mut w.native.drop_binding, event);
+        for effect in effects {
+            match effect {
+                Effect::Bind => {
+                    let Some(w) = &mut self.win else { return };
+                    if w.native.drop_target.is_none() {
+                        let handle = self.native_handle.clone();
+                        let target = crate::platform::wayland_drop::install(
+                            &w.window,
+                            std::sync::Arc::new(move || handle.send(|_| crate::window::WakeEvent::FileDrop)),
+                        );
+                        if target.is_some() {
+                            w.native.drop_target = target;
+                        } else {
+                            let _ = binding::step(
+                                &mut w.native.drop_seq,
+                                &mut w.native.drop_binding,
+                                binding::Event::BindFailed,
+                            );
+                        }
+                    }
+                }
+                Effect::LeaveRuntimeDrag => {
+                    let rt = self.app.rt_mut();
+                    if rt.dragging_files() {
+                        rt.drag_files_leave();
+                    }
+                }
+                Effect::WakeAt(_) => {}
+                Effect::Unbind => {
+                    if let Some(w) = &mut self.win {
+                        w.native.drop_target = None;
+                    }
+                }
+            }
+        }
     }
 
     /// Windows: the hooks a shown window takes once it's ready.

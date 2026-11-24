@@ -4,14 +4,16 @@
 //! loop live in `machine` so they compile and run unit tests on every platform; the Wayland wire
 //! binding and reader thread live in `wire` on desktop Unix targets.
 
+pub(crate) mod binding;
 pub(crate) mod machine;
+mod uri;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod pipe;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod wire;
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-pub(crate) use wire::{DropTarget, install, take};
+pub(crate) use wire::{DropTarget, install, shutdown, take};
 
 #[cfg(test)]
 #[path = "wayland_drop/tests.rs"]

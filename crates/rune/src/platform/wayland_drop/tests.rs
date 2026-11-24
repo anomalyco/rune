@@ -558,12 +558,39 @@ fn unregister_window_cancels_matching_drag_only() {
     assert!(step_vec(&mut seq, &mut state, Event::UnregisterWindow { surface: 10, token: 1 }).is_empty());
     // Other surface does nothing.
     assert!(step_vec(&mut seq, &mut state, Event::UnregisterWindow { surface: 20, token: 2 }).is_empty());
-    // Matching (surface, token) cancels read and destroys offer without emitting Leave.
+    // Matching (surface, token) while Fetching cancels read and rejects without mid-drag destroy;
+    // DestroyOffer is deferred until Leave/Drop.
     assert_eq!(
         step_vec(&mut seq, &mut state, Event::UnregisterWindow { surface: 10, token: 2 }),
-        vec![Effect::CancelRead(Attempt(1)), Effect::DestroyOffer(95), Effect::Flush],
+        vec![
+            Effect::CancelRead(Attempt(1)),
+            Effect::AcceptOffer { offer: 95, serial: 1, mime: None },
+            Effect::SetActions { offer: 95, copy: false },
+            Effect::Flush,
+        ],
     );
+    assert_eq!(state, State::Rejected { offer: 95 });
+    assert_eq!(step_vec(&mut seq, &mut state, Event::Leave), vec![Effect::DestroyOffer(95), Effect::Flush]);
     assert_eq!(state, State::Idle);
+
+    // Matching (surface, token) while Hovering rejects and defers DestroyOffer to Leave.
+    let _ = step_vec(&mut seq, &mut state, Event::Enter {
+        serial: 11, surface: 10, target: Some(2), x: 1.0, y: 2.0, offer: Some(uri_offer(97, 3)),
+    });
+    let cur = seq.current();
+    let _ = step_vec(&mut seq, &mut state, Event::ReadComplete {
+        attempt: cur, outcome: ReadOutcome::Bytes(b"file:///tmp/a.txt\n".to_vec()),
+    });
+    assert_eq!(
+        step_vec(&mut seq, &mut state, Event::UnregisterWindow { surface: 10, token: 2 }),
+        vec![
+            Effect::AcceptOffer { offer: 97, serial: 11, mime: None },
+            Effect::SetActions { offer: 97, copy: false },
+            Effect::Flush,
+        ],
+    );
+    assert_eq!(state, State::Rejected { offer: 97 });
+    assert_eq!(step_vec(&mut seq, &mut state, Event::Leave), vec![Effect::DestroyOffer(97), Effect::Flush]);
 
     // Seat/controller teardown (Gone) cancels reads and destroys active offers without Leave.
     let _ = step_vec(&mut seq, &mut state, Event::Enter {
@@ -576,7 +603,7 @@ fn unregister_window_cancels_matching_drag_only() {
     });
     assert_eq!(
         step_vec(&mut seq, &mut state, Event::Gone),
-        vec![Effect::CancelRead(Attempt(2)), Effect::DestroyOffer(96), Effect::Flush],
+        vec![Effect::CancelRead(Attempt(3)), Effect::DestroyOffer(96), Effect::Flush],
     );
     assert_eq!(state, State::Idle);
 }
@@ -888,7 +915,7 @@ mod unix_pipe_tests {
 
     use wayland_client::protocol::wl_data_device_manager::DndAction;
     use super::super::machine::{ReadOutcome, SelectedAction};
-    use super::super::pipe::{CancelToken, read_fd_bounded};
+    use super::super::pipe::{CancelToken, DoneFlag, SignalOnDrop, THREAD_JOIN_BOUND, join_bounded, read_fd_bounded};
 
     fn nonblocking_pair() -> (OwnedFd, UnixStream) {
         let (rx, tx) = UnixStream::pair().expect("UnixStream::pair");
@@ -950,5 +977,19 @@ mod unix_pipe_tests {
         assert_eq!(SelectedAction::from_wayland_mask(DndAction::Ask.bits()), SelectedAction::Ask);
         assert_eq!(SelectedAction::from_wayland_mask((DndAction::Copy | DndAction::Move).bits()), SelectedAction::None);
         assert_eq!(SelectedAction::from_wayland_mask((DndAction::Copy | DndAction::Ask).bits()), SelectedAction::None);
+    }
+
+    #[test]
+    fn unix_join_bounded_reaps_cancelled_thread_within_bound() {
+        let (rx, _tx) = nonblocking_pair();
+        let cancel = Arc::new(CancelToken::new().expect("CancelToken"));
+        let worker_cancel = cancel.clone();
+        let (done, signal_done) = DoneFlag::new();
+        let handle = std::thread::spawn(move || {
+            let _signal = SignalOnDrop(signal_done);
+            let _ = read_fd_bounded(rx, &worker_cancel, 1024, Duration::from_secs(10));
+        });
+        cancel.cancel();
+        assert!(join_bounded(handle, &done, THREAD_JOIN_BOUND), "cancelled worker must join within bound");
     }
 }

@@ -382,3 +382,84 @@ fn held_file_steps_survive_headless_timer_substeps_below_60_fps() {
         }
     }
 }
+
+#[test]
+fn has_drop_targets_tracks_mount_unmount_exiting_modal_root_and_rejects() {
+    #[derive(Default)]
+    struct S {
+        child_drop: bool,
+        child_exit: bool,
+        root_drop: bool,
+        reject_only: bool,
+        hover_only: bool,
+        modal: bool,
+        modal_drop: bool,
+    }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut root = el().size(300.0, 200.0);
+        if s.root_drop {
+            root = root.on_drop_files(|_: &mut S, _, _| {});
+        }
+        if s.child_drop {
+            let mut child = el().key("drop").size(100.0, 100.0).on_drop_files(|_: &mut S, _, _| {});
+            if s.child_exit {
+                child = child.transition(crate::Transition::opacity());
+            }
+            root = root.child(child);
+        }
+        if s.reject_only {
+            root = root.child(el().key("rej").size(50.0, 50.0).on_drop_rejected(|_: &mut S, _, _| {}));
+        }
+        if s.hover_only {
+            root = root.child(el().key("hov").size(50.0, 50.0).on_drop_hover(|_: &mut S, _, _| {}));
+        }
+        if s.modal {
+            let mut m = el().key("modal").size(120.0, 80.0).modal(false, |s: &mut S| s.modal = false);
+            if s.modal_drop {
+                m = m.on_drop_files(|_: &mut S, _, _| {});
+            }
+            root = root.child(m);
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(!rt.core().has_drop_targets(), "empty tree has no drop targets");
+
+    // Hover-only without on_drop_files or reject handlers does not count.
+    rt.update(|s, _| s.hover_only = true);
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.core().has_drop_targets());
+
+    // Mount and unmount child on_drop_files.
+    rt.update(|s, _| { s.hover_only = false; s.child_drop = true; s.child_exit = true; });
+    rt.frame(1.0 / 60.0);
+    assert!(rt.core().has_drop_targets());
+
+    // Unmounting an exiting node keeps it in the tree while exiting, but it must not count.
+    rt.update(|s, _| s.child_drop = false);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.tree.nodes.iter().any(|n| n.key.as_deref() == Some("drop")), "exiting node still present");
+    assert!(!rt.core().has_drop_targets(), "exiting drop target must not count");
+
+    // Modal without drop targets hides a background drop target.
+    rt.update(|s, _| { s.child_drop = true; s.child_exit = false; s.modal = true; });
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.core().has_drop_targets(), "modal without drop targets hides background target");
+
+    // Modal with its own drop target counts.
+    rt.update(|s, _| s.modal_drop = true);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.core().has_drop_targets());
+
+    // Root drop target counts.
+    rt.update(|s, _| { s.modal = false; s.modal_drop = false; s.child_drop = false; s.root_drop = true; });
+    rt.frame(1.0 / 60.0);
+    assert!(rt.core().has_drop_targets());
+
+    // on_drop_rejected-only target counts.
+    rt.update(|s, _| { s.root_drop = false; s.reject_only = true; });
+    rt.frame(1.0 / 60.0);
+    assert!(rt.core().has_drop_targets());
+}

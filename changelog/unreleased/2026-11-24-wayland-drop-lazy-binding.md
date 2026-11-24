@@ -1,0 +1,1 @@
+- Wayland: bind `wl_data_device` lazily only while at least one ready window mounts a live, allowed drop target (`El::on_drop_files` or `El::on_drop_rejected`), with a 500 ms teardown grace period and bounded thread joins on unmount/close/exit, so apps without drop handlers or with a custom `wl_data_device` bind nothing.

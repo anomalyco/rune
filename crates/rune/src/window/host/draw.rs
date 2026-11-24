@@ -462,6 +462,9 @@ impl FrameHost for WindowFrame<'_> {
     fn on_unchanged(&mut self, _info: &StepInfo) {
         let Some(l) = self.host.win.as_mut() else { return };
         sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        self.host.sync_wayland_drop();
+        let Some(l) = self.host.win.as_mut() else { return };
         #[cfg(target_os = "macos")]
         l.redraw_step(RedrawEvent::DrewOutsidePaint);
         // When `deferred` is true, the link was already `Stopped` or `Coasting`: leave a coasting
@@ -623,6 +626,8 @@ impl FrameHost for WindowFrame<'_> {
         info.update_ms = now.elapsed().as_secs_f64() * 1000.0;
         self.state.profile.mark_built();
         sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        self.host.sync_wayland_drop();
     }
 
     fn prepare_render(&mut self, drawable: wgpu::SurfaceTexture, info: &mut StepInfo) -> RenderPrep<PreparedWindowFrame> {

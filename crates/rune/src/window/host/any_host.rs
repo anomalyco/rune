@@ -72,6 +72,7 @@ impl AnyHost for Host {
             .chain(self.files.pointer.as_ref().filter(|_| shown.is_some()).map(|_| now + DROP_SAMPLE))
             .chain(shown.and_then(|w| w.cursor.reassert_at(now)))
             .chain(self.rest.deadline())
+            .chain(wayland_drop_deadline(win))
             .chain(self.window_script.as_ref().and_then(|s| s.next_at()))
             .min()
     }
@@ -228,6 +229,15 @@ impl Host {
         if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, crate::time::now()); }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.watch_handover(crate::time::now());
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(attempt) = self.win.as_ref().and_then(|w| w.native.drop_binding.grace_attempt())
+            && self.win.as_ref().and_then(|w| w.native.drop_binding.deadline()).is_some_and(|due| due <= crate::time::now())
+        {
+            self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::GraceDue {
+                attempt,
+                now: crate::time::now(),
+            });
+        }
         #[cfg(target_os = "windows")]
         if let Some(w) = &mut self.win && w.covered_draw.due(crate::time::now()) {
             w.covered_draw = w.covered_draw.step(CoveredDrawEvent::Due);
@@ -392,4 +402,12 @@ fn look_deadline(win: Option<&Win>, life: Life) -> Option<Instant> {
     return win.and_then(|w| w.native.look.deadline(life));
     #[cfg(not(target_os = "windows"))]
     { let _ = (win, life); None }
+}
+
+/// When a Wayland window's lazy `wl_data_device` teardown grace timer expires.
+fn wayland_drop_deadline(win: Option<&Win>) -> Option<Instant> {
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    return win.and_then(|w| w.native.drop_binding.deadline());
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    { let _ = win; None }
 }
