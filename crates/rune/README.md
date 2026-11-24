@@ -2516,6 +2516,7 @@ winit = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 parley_engine = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
+naga = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "<rev>" }
 ```
