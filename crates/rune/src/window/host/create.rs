@@ -82,10 +82,7 @@ impl Host {
         }
         let chrome = frame_chrome(self.chrome, self.titlebar, self.app.rt().titlebar_set());
         #[cfg(target_os = "macos")]
-        if !self.options.borderless && chrome.full_size_content {
-            use winit::platform::macos::WindowAttributesExtMacOS;
-            attrs = attrs.with_titlebar_transparent(true).with_title_hidden(true).with_fullsize_content_view(true);
-        }
+        let attrs = self.macos_window.apply_attributes(attrs, self.options.borderless, chrome.full_size_content);
         // Windows opens it hidden, then shows it cloaked until its first frame lands
         // (`Cloak`), so it never comes on screen empty. The show doesn't activate it: the cloak
         // does as it lifts, so the text services' start-up follows the frame.
@@ -137,7 +134,13 @@ impl Host {
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
         #[cfg(target_os = "macos")]
-        let mac_opts = self.macos_window.with_portable_exclude(self.exclude_from_capture);
+        let mac_opts = self
+            .macos_window
+            .with_portable_exclude(self.exclude_from_capture)
+            .with_runtime_document(
+                self.app.rt().host.represented_file.current(),
+                self.app.rt().host.document_edited.current(),
+            );
         #[cfg(target_os = "macos")]
         let panel = if mac_opts.nonactivating_panel {
             Some(crate::platform::macos::Panel::adopt_window(&window, size, &mac_opts).ok_or("could not create nonactivating panel")?)
@@ -149,6 +152,12 @@ impl Host {
             }
         } else {
             crate::platform::macos::configure_window(&window, &mac_opts);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let rt = self.app.rt_mut();
+            rt.host.represented_file.mark_applied();
+            rt.host.document_edited.mark_applied();
         }
         #[cfg(target_os = "macos")]
         let drop_target = crate::platform::macos::drop::install(&window);

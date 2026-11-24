@@ -377,6 +377,7 @@ impl Host {
     /// Carries out what a handler or update asked with `Tx::close_window` / `Tx::quit`, then
     /// opens the pop-up menu it asked for, if the window is still there to open it over.
     pub(in crate::window) fn shell(&mut self, event_loop: &ActiveEventLoop) {
+        self.apply_tx_macos_document();
         self.show_title();
         self.apply_tx_color_scheme();
         if self.app.rt_mut().take_toggle_maximized() && let Some(w) = self.shown_win() {

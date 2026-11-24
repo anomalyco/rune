@@ -128,6 +128,8 @@ impl RuntimeCore {
         if std::mem::take(&mut tx.cancel_pointer) { self.cancel_pointer(); }
         if let Some(title) = tx.title.take() { self.host.window_title.set(title); }
         if let Some(scheme) = tx.color_scheme.take() { self.host.window_color_scheme = Some(scheme); }
+        if let Some(path) = tx.represented_file.take() { self.host.represented_file.set(crate::window::spec::normalize_represented_file(path)); }
+        if let Some(edited) = tx.document_edited.take() { self.host.document_edited.set(edited); }
         if let Some((text, how)) = tx.announce.take() { self.host.announcement.say(text, how); }
         if let Some(mut request) = tx.window_frame.take() {
             request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring));

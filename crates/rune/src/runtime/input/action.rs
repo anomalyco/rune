@@ -254,6 +254,8 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.keys.extend(one.keys);
     if one.title.is_some() { tx.title = one.title; }
     if one.color_scheme.is_some() { tx.color_scheme = one.color_scheme; }
+    if one.represented_file.is_some() { tx.represented_file = one.represented_file; }
+    if one.document_edited.is_some() { tx.document_edited = one.document_edited; }
     if one.announce.is_some() { tx.announce = one.announce; }
     tx.playground.extend(one.playground);
     tx.open_urls.extend(one.open_urls);

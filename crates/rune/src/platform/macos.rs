@@ -11,6 +11,7 @@ use std::{cell::{Cell, RefCell}, rc::Rc};
 #[doc(hidden)]
 pub mod appearance;
 pub(crate) mod cursor;
+pub(crate) mod document;
 pub(crate) mod drop;
 mod geometry;
 mod hold;
@@ -168,6 +169,12 @@ fn configure_native(window: &NSWindow, options: &crate::MacWindowOptions) {
         }
     }
     if let Some(exclude) = options.exclude_from_capture { set_sharing(window, exclude); }
+    if let Some(path) = options.represented_file.as_deref() {
+        document::apply_represented_file(window, Some(path), options.title_from_file, None);
+    }
+    if options.document_edited {
+        document::apply_document_edited(window, true);
+    }
 }
 
 /// `sharingType` none keeps the window out of captures; read-only lets recorders see it.
@@ -266,6 +273,8 @@ impl Panel {
         configure_native(&panel, &native);
         if ordinary {
             panel.setTitle(&ns_window.title());
+            panel.setTitleVisibility(ns_window.titleVisibility());
+            panel.setTitlebarAppearsTransparent(ns_window.titlebarAppearsTransparent());
             panel.setLevel(3);
             panel.setHasShadow(ns_window.hasShadow());
             panel.setContentMinSize(ns_window.contentMinSize());

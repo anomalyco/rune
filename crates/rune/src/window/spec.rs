@@ -311,6 +311,11 @@ pub struct MacWindowOptions {
     pub(crate) launcher: bool,
     pub(crate) corner_radius: Option<f32>,
     pub(crate) corner_curve_circular: bool,
+    pub(crate) accepts_first_mouse: Option<bool>,
+    pub(crate) represented_file: Option<std::path::PathBuf>,
+    pub(crate) title_from_file: bool,
+    pub(crate) document_edited: bool,
+    pub(crate) show_title: bool,
 }
 
 impl MacWindowOptions {
@@ -338,6 +343,98 @@ impl MacWindowOptions {
     pub fn corner_radius(mut self, radius: f32) -> Self { self.corner_radius = Some(radius.max(0.0)); self }
     /// Use a circular corner arc instead of the continuous curve for `corner_radius`.
     pub fn corner_curve_circular(mut self) -> Self { self.corner_curve_circular = true; self }
+    /// Sets `NSView.acceptsFirstMouse(for:)` through winit's `with_accepts_first_mouse` for all
+    /// macOS windows (bordered, full-size-content, borderless, and non-activating panels).
+    /// Pass `false` so clicking an inactive window activates it without delivering that click to
+    /// the view. Omitted keeps winit's default (`true`). Retained across native recreation and
+    /// ignored on other platforms.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, MacWindowOptions, el};
+    ///
+    /// App::new(AppSpec::new("Review", (640.0, 420.0), || (), |_, _| el()))
+    ///     .macos_window(MacWindowOptions::default().accepts_first_mouse(false))
+    ///     .run();
+    /// ```
+    pub fn accepts_first_mouse(mut self, enabled: bool) -> Self {
+        self.accepts_first_mouse = Some(enabled);
+        self
+    }
+    /// Sets the document path associated with this window (`NSWindow.representedURL`), showing
+    /// AppKit's titlebar proxy icon and path menu when the native title is visible. Constructed
+    /// from the path string with no filesystem `stat`. An empty path clears it. Update at
+    /// runtime with [`Tx::set_represented_file`](crate::Tx::set_represented_file). Retained across
+    /// native recreation and ignored on other platforms.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, MacWindowOptions, el};
+    ///
+    /// App::new(AppSpec::new("Notes", (640.0, 420.0), || (), |_, _| el()))
+    ///     .macos_window(
+    ///         MacWindowOptions::default()
+    ///             .represented_file("/tmp/notes.md")
+    ///             .show_title(true),
+    ///     )
+    ///     .run();
+    /// ```
+    pub fn represented_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.represented_file = normalize_represented_file(Some(path.into()));
+        self
+    }
+    /// When `true`, derives the macOS window title from the represented file's final path
+    /// component on creation and on each [`Tx::set_represented_file`](crate::Tx::set_represented_file)
+    /// update (restoring the window's configured title when cleared). Default `false` leaves the
+    /// window title untouched. Ignored on other platforms.
+    ///
+    /// ```no_run
+    /// use rune::MacWindowOptions;
+    ///
+    /// let opts = MacWindowOptions::default()
+    ///     .represented_file("/tmp/notes.md")
+    ///     .title_from_file(true);
+    /// let _ = opts;
+    /// ```
+    pub fn title_from_file(mut self, enabled: bool) -> Self {
+        self.title_from_file = enabled;
+        self
+    }
+    /// Sets the window's initial unsaved-changes state (`NSWindow.documentEdited`), showing the
+    /// dot inside the macOS close button. Default `false`. Update at runtime with
+    /// [`Tx::set_document_edited`](crate::Tx::set_document_edited). Retained across native
+    /// recreation and ignored on other platforms.
+    ///
+    /// Following AppKit's default, marking a document as edited disables dragging its proxy icon
+    /// until `document_edited` is cleared.
+    ///
+    /// ```no_run
+    /// use rune::MacWindowOptions;
+    ///
+    /// let opts = MacWindowOptions::default()
+    ///     .represented_file("/tmp/notes.md")
+    ///     .document_edited(true);
+    /// let _ = opts;
+    /// ```
+    pub fn document_edited(mut self, edited: bool) -> Self {
+        self.document_edited = edited;
+        self
+    }
+    /// Keeps the native macOS window title (and therefore AppKit's document proxy icon) visible
+    /// when `Chrome::full_size_content` is enabled. Default `false` hides the title under a
+    /// transparent full-size-content titlebar, preserving existing behavior. Ignored for
+    /// borderless windows and on other platforms.
+    ///
+    /// ```no_run
+    /// use rune::MacWindowOptions;
+    ///
+    /// let opts = MacWindowOptions::default()
+    ///     .represented_file("/tmp/notes.md")
+    ///     .show_title(true);
+    /// let _ = opts;
+    /// ```
+    pub fn show_title(mut self, show: bool) -> Self {
+        self.show_title = show;
+        self
+    }
 
     /// Returns a copy with portable `exclude_from_capture` taking precedence when set, falling
     /// back to `self.exclude_from_capture` when unset.
@@ -349,6 +446,77 @@ impl MacWindowOptions {
         }
         next
     }
+
+    /// Returns a copy with runtime document state (`Tx::set_represented_file`,
+    /// `Tx::set_document_edited`) overlaid when latched, preserving creation-time defaults when
+    /// unset.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(crate) fn with_runtime_document(
+        &self,
+        represented_file: Option<&Option<std::path::PathBuf>>,
+        document_edited: Option<&bool>,
+    ) -> Self {
+        let mut next = self.clone();
+        if let Some(path) = represented_file {
+            next.represented_file = normalize_represented_file(path.clone());
+        }
+        if let Some(&edited) = document_edited {
+            next.document_edited = edited;
+        }
+        next
+    }
+
+    /// Applies macOS creation-time winit attributes (`accepts_first_mouse` for all windows, and
+    /// full-size-content titlebar visibility) without changing defaults when unset.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn apply_attributes(
+        &self,
+        mut attrs: winit::window::WindowAttributes,
+        borderless: bool,
+        full_size_content: bool,
+    ) -> winit::window::WindowAttributes {
+        use winit::platform::macos::WindowAttributesExtMacOS;
+        if let Some(accept) = self.accepts_first_mouse {
+            attrs = attrs.with_accepts_first_mouse(accept);
+        }
+        if !borderless && full_size_content {
+            attrs = attrs
+                .with_titlebar_transparent(true)
+                .with_title_hidden(!self.show_title)
+                .with_fullsize_content_view(true);
+        }
+        attrs
+    }
+}
+
+/// Normalizes a represented-file path so empty paths clear the represented file, matching AppKit's
+/// `NSWindow.representedFilename = ""` semantics.
+pub(crate) fn normalize_represented_file(
+    path: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    path.filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Derives a window title from a represented file path without touching the filesystem.
+/// Returns the final path component when available, falling back to the full path string for
+/// root/dot paths, or `None` when empty.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn represented_file_title(path: &std::path::Path) -> Option<String> {
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    Some(
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string_lossy().into_owned()),
+    )
+}
+
+/// Whether `path` explicitly indicates a directory via a trailing slash, avoiding filesystem
+/// `stat` calls when constructing `NSURL::fileURLWithPath_isDirectory`.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn represented_path_is_dir(path: &std::path::Path) -> bool {
+    path.to_string_lossy().ends_with('/')
 }
 
 /// Win32 properties for an ordinary window, reapplied on native recreation and ignored on other
@@ -572,6 +740,16 @@ impl<S: 'static> WindowSpec<S> {
         maximized(maximized: bool);
         /// Open this window full screen, like `App::full_screen`.
         full_screen(full_screen: bool);
+        /// AppKit native window policy, like [`App::macos_window`]. Ignored on other platforms.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, MacWindowOptions, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("doc", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+        ///     .macos_window(MacWindowOptions::default().accepts_first_mouse(false).show_title(true));
+        /// let _ = spec;
+        /// ```
+        macos_window(options: crate::MacWindowOptions);
         /// Win32 native window policy, like `App::windows_window`. Ignored on other platforms.
         ///
         /// ```no_run

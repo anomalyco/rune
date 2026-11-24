@@ -485,3 +485,132 @@ fn app_and_window_spec_default_to_system_and_preserve_color_scheme() {
     let reset = window.options(WindowOptions::default());
     assert_eq!(reset.app.color_scheme, crate::ColorScheme::Light);
 }
+
+#[test]
+fn mac_window_options_document_and_first_mouse_defaults_and_retention() {
+    let default = MacWindowOptions::default();
+    assert_eq!(default.accepts_first_mouse, None);
+    assert_eq!(default.represented_file, None);
+    assert!(!default.title_from_file);
+    assert!(!default.document_edited);
+    assert!(!default.show_title);
+
+    // Empty represented_file normalizes to None.
+    assert_eq!(MacWindowOptions::default().represented_file("").represented_file, None);
+
+    let opts = MacWindowOptions::default()
+        .accepts_first_mouse(false)
+        .represented_file("/tmp/rune-notes/groceries.md")
+        .title_from_file(true)
+        .document_edited(true)
+        .show_title(true);
+    assert_eq!(opts.accepts_first_mouse, Some(false));
+    assert_eq!(opts.represented_file.as_deref(), Some(std::path::Path::new("/tmp/rune-notes/groceries.md")));
+    assert!(opts.title_from_file);
+    assert!(opts.document_edited);
+    assert!(opts.show_title);
+
+    let spec = || AppSpec::new("notes", (480.0, 360.0), || (), |_, _| crate::el());
+    let app = App::new(spec()).macos_window(opts.clone());
+    assert_eq!(app.macos_window.accepts_first_mouse, Some(false));
+    assert_eq!(app.macos_window.represented_file, opts.represented_file);
+    assert!(app.macos_window.title_from_file && app.macos_window.document_edited && app.macos_window.show_title);
+
+    let from_app = WindowSpec::from_app("notes", app);
+    assert_eq!(from_app.app.macos_window.accepts_first_mouse, Some(false));
+    assert_eq!(from_app.app.macos_window.represented_file, opts.represented_file);
+
+    let via_spec = WindowSpec::new("doc", spec()).macos_window(opts.clone());
+    assert_eq!(via_spec.app.macos_window.accepts_first_mouse, Some(false));
+    assert!(via_spec.app.macos_window.show_title);
+
+    let configured = WindowSpec::new("cfg", spec()).configured_options(
+        WindowOptions::default().macos(opts.clone()),
+    );
+    assert_eq!(configured.app.macos_window.accepts_first_mouse, Some(false));
+    assert_eq!(configured.app.macos_window.represented_file, opts.represented_file);
+    assert!(configured.app.macos_window.title_from_file);
+    assert!(configured.app.macos_window.document_edited);
+    assert!(configured.app.macos_window.show_title);
+
+    // Amending launcher_panel keeps launcher behavior while setting accepts_first_mouse.
+    let amended = WindowOptions::launcher_panel().macos(|m| m.accepts_first_mouse(false));
+    assert!(amended.native.launcher && amended.native.nonactivating_panel);
+    assert_eq!(amended.native.accepts_first_mouse, Some(false));
+
+    // Runtime document overlay keeps other MacWindowOptions fields intact and applies updates/clears.
+    let updated_path = Some(std::path::PathBuf::from("/tmp/rune-notes/ideas.md"));
+    let overlaid = opts.with_runtime_document(Some(&updated_path), Some(&false));
+    assert_eq!(overlaid.represented_file, updated_path);
+    assert!(!overlaid.document_edited);
+    assert_eq!(overlaid.accepts_first_mouse, Some(false));
+    assert!(overlaid.title_from_file && overlaid.show_title);
+
+    let cleared = opts.with_runtime_document(Some(&None), None);
+    assert_eq!(cleared.represented_file, None);
+    assert!(cleared.document_edited);
+}
+
+#[test]
+fn represented_file_title_and_dir_helpers_handle_edges() {
+    use std::path::Path;
+    assert_eq!(represented_file_title(Path::new("")), None);
+    assert_eq!(represented_file_title(Path::new("/tmp/notes/groceries.md")).as_deref(), Some("groceries.md"));
+    assert_eq!(represented_file_title(Path::new("/tmp/notes/")).as_deref(), Some("notes"));
+    assert_eq!(represented_file_title(Path::new("draft.txt")).as_deref(), Some("draft.txt"));
+    assert_eq!(represented_file_title(Path::new("/")).as_deref(), Some("/"));
+    assert_eq!(represented_file_title(Path::new("/tmp/My Notes (日本語).md")).as_deref(), Some("My Notes (日本語).md"));
+
+    assert!(!represented_path_is_dir(Path::new("")));
+    assert!(!represented_path_is_dir(Path::new("/tmp/notes.md")));
+    assert!(represented_path_is_dir(Path::new("/tmp/notes/")));
+    assert!(represented_path_is_dir(Path::new("/")));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_window_options_apply_attributes_preserves_defaults_and_applies_overrides() {
+    let base = WindowOptions::default().attributes("notes", (520.0, 320.0), None, true);
+
+    // Omitted options keep winit's accepts_first_mouse = true default and hide title under full_size_content.
+    let default_full = MacWindowOptions::default().apply_attributes(base.clone(), false, true);
+    let dbg = format!("{default_full:?}");
+    assert!(dbg.contains("accepts_first_mouse: true"), "{dbg}");
+    assert!(dbg.contains("titlebar_transparent: true"), "{dbg}");
+    assert!(dbg.contains("title_hidden: true"), "{dbg}");
+    assert!(dbg.contains("fullsize_content_view: true"), "{dbg}");
+
+    // show_title(true) keeps the native title and proxy icon visible under full_size_content.
+    let shown = MacWindowOptions::default()
+        .show_title(true)
+        .apply_attributes(base.clone(), false, true);
+    let dbg = format!("{shown:?}");
+    assert!(dbg.contains("accepts_first_mouse: true"), "{dbg}");
+    assert!(dbg.contains("titlebar_transparent: true"), "{dbg}");
+    assert!(dbg.contains("title_hidden: false"), "{dbg}");
+    assert!(dbg.contains("fullsize_content_view: true"), "{dbg}");
+
+    // accepts_first_mouse(false) applies to full-size-content, standard titled, and borderless windows.
+    for (borderless, full_size_content) in [(false, true), (false, false), (true, false), (true, true)] {
+        let attrs = WindowOptions { borderless, ..Default::default() }
+            .attributes("doc", (400.0, 300.0), None, true);
+        let applied = MacWindowOptions::default()
+            .accepts_first_mouse(false)
+            .show_title(true)
+            .apply_attributes(attrs, borderless, full_size_content);
+        let dbg = format!("{applied:?}");
+        assert!(dbg.contains("accepts_first_mouse: false"), "borderless={borderless} full_size={full_size_content}: {dbg}");
+        if !borderless && full_size_content {
+            assert!(dbg.contains("fullsize_content_view: true"), "{dbg}");
+            assert!(dbg.contains("title_hidden: false"), "{dbg}");
+        } else {
+            assert!(dbg.contains("fullsize_content_view: false"), "{dbg}");
+        }
+    }
+
+    // Explicit accepts_first_mouse(true) sets true.
+    let explicit_true = MacWindowOptions::default()
+        .accepts_first_mouse(true)
+        .apply_attributes(base, false, false);
+    assert!(format!("{explicit_true:?}").contains("accepts_first_mouse: true"));
+}

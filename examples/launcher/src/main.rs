@@ -17,6 +17,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rune::tok::{self, type_};
+use std::path::PathBuf;
+
 use rune::{
     Align, App, AppHandle, AppSpec, Color, Cx, DisplayTarget, El, Image, ImageCache, Key, KeyEvent,
     MacWindowOptions, OverlayPlacement, ResizeEdge, ScreenEdge, SurfaceFit, TextEdit, Tx, Waker,
@@ -28,6 +30,7 @@ static DESKTOP: AtomicBool = AtomicBool::new(false);
 
 struct NoteEntry {
     title: &'static str,
+    file: &'static str,
     body: &'static str,
     icon_names: &'static [&'static str],
 }
@@ -35,31 +38,49 @@ struct NoteEntry {
 const NOTES: [NoteEntry; 4] = [
     NoteEntry {
         title: "Groceries",
+        file: "groceries.md",
         body: "Oat milk, lemons, basil, sourdough, two avocados.",
         icon_names: &["accessories-text-editor", "text-x-generic", "text-plain"],
     },
     NoteEntry {
         title: "Trip to Lisbon",
+        file: "trip-to-lisbon.md",
         body: "Book the tram tour. Pastéis de nata first.",
         icon_names: &["applications-internet", "web-browser", "text-html"],
     },
     NoteEntry {
         title: "Reading list",
+        file: "reading-list.md",
         body: "The Design of Everyday Things. Thinking in Systems.",
         icon_names: &["accessories-dictionary", "x-office-document", "text-x-generic"],
     },
     NoteEntry {
         title: "Ideas",
+        file: "ideas.md",
         body: "A launcher that opens notes by typing their first letters.",
         icon_names: &["dialog-information", "emblem-favorite", "text-x-generic"],
     },
 ];
 
+fn note_path(index: usize) -> PathBuf {
+    PathBuf::from(format!("/tmp/rune-notes/{}", NOTES[index].file))
+}
+
 struct Notes {
     selected: usize,
     focused: bool,
+    represented_attached: bool,
+    edited: [bool; NOTES.len()],
     cache: Option<ImageCache>,
     icons: Vec<Image>,
+}
+
+impl Notes {
+    fn select_note(&mut self, index: usize, tx: &mut Tx) {
+        self.selected = index;
+        tx.set_represented_file(self.represented_attached.then(|| note_path(index)));
+        tx.set_document_edited(self.edited[index]);
+    }
 }
 
 impl Notes {
@@ -117,29 +138,62 @@ fn item_icon(icon: Option<&Image>, title: &str, on: bool, t: &tok::Theme) -> El 
 fn notes_view(s: &Notes, _: &mut Cx<Notes>) -> El {
     let t = tok::theme(true);
     let accent = tok::accent(0, true);
-    let light = |c: (f32, f32, f32)| el().size(12.0, 12.0).radius(6.0)
-        .fill(if s.focused { Color { r: c.0, g: c.1, b: c.2, a: 1.0 } } else { t.control_off });
+    let entry = &NOTES[s.selected];
+    let edited = s.edited[s.selected];
+    let light = |c: (f32, f32, f32), dot: bool| {
+        let base = el().size(12.0, 12.0).radius(6.0).center()
+            .fill(if s.focused { Color { r: c.0, g: c.1, b: c.2, a: 1.0 } } else { t.control_off });
+        if dot { base.child(el().size(4.0, 4.0).radius(2.0).fill(Color::BLACK.alpha(0.55))) } else { base }
+    };
+    let bar_title = if s.represented_attached { entry.file } else { "Notes" };
     let title_bar = row().h(38.0).px(14.0).gap(8.0).center_y()
-        .child(light((1.0, 0.37, 0.34))).child(light((1.0, 0.74, 0.18))).child(light((0.16, 0.79, 0.25)))
-        .child(spacer()).child(text("Notes").font(type_::TITLE).color(t.text_secondary)).child(spacer())
+        .child(light((1.0, 0.37, 0.34), edited)).child(light((1.0, 0.74, 0.18), false)).child(light((0.16, 0.79, 0.25), false))
+        .child(spacer()).child(text(bar_title).font(type_::TITLE).color(t.text_secondary)).child(spacer())
         .child(el().w(52.0));
     let mut list = col().key("list").w(170.0).h_full().px(8.0).gap(2.0);
     for (i, entry) in NOTES.iter().enumerate() {
         let on = i == s.selected;
+        let suffix = if s.edited[i] { " •" } else { "" };
         list = list.child(row().key(format!("note-{i}")).h(30.0).px(10.0).gap(8.0).radius(6.0).center_y()
             .fill(if on { accent.alpha(0.85) } else { Color::TRANSPARENT })
             .child(item_icon(s.icons.get(i), entry.title, on, &t))
-            .child(text(entry.title).font(type_::BODY).color(if on { Color::WHITE } else { t.text }))
-            .on_press(move |s: &mut Notes| s.selected = i));
+            .child(text(format!("{}{suffix}", entry.title)).font(type_::BODY).color(if on { Color::WHITE } else { t.text }))
+            .on_press_tx(move |s: &mut Notes, tx| s.select_note(i, tx)));
     }
-    let entry = &NOTES[s.selected];
+    let chip = |key: &'static str, label: &'static str, active: bool| {
+        row().key(key).role("button").label(label).focusable(true).h(26.0).px(10.0).radius(6.0).center_y()
+            .fill(if active { accent.alpha(0.85) } else { t.control_off.alpha(0.75) })
+            .child(text(label).font(type_::LABEL).color(if active { Color::WHITE } else { t.text }))
+    };
+    let toggle_edited = chip("toggle-edited", if edited { "Edited (mark saved)" } else { "Mark edited" }, edited)
+        .on_press_tx(|s: &mut Notes, tx| {
+            let next = !s.edited[s.selected];
+            s.edited[s.selected] = next;
+            tx.set_document_edited(next);
+        });
+    let toggle_file = chip(
+        "toggle-file",
+        if s.represented_attached { "Clear proxy file" } else { "Attach proxy file" },
+        s.represented_attached,
+    )
+    .on_press_tx(|s: &mut Notes, tx| {
+        s.represented_attached = !s.represented_attached;
+        tx.set_represented_file(s.represented_attached.then(|| note_path(s.selected)));
+    });
+    let doc_status = if s.represented_attached {
+        format!("{} · accepts_first_mouse: false", note_path(s.selected).display())
+    } else {
+        "No represented file · accepts_first_mouse: false".to_owned()
+    };
     let page = col().key("page").grow(1.0).h_full().padding(20.0).gap(10.0).fill(t.bg)
         .child(text(entry.title).font(type_::TITLE.lh(22.0)).color(t.text))
         .child(text(entry.body).font(type_::BODY.lh(20.0)).color(t.text_secondary))
         .child(spacer())
+        .child(row().gap(8.0).child(toggle_edited).child(toggle_file))
+        .child(text(doc_status).font(type_::LABEL).color(t.text_secondary.alpha(0.75)))
         .child(text("⌘Space to search").font(type_::LABEL).color(t.text_secondary.alpha(0.7)));
     col().w_full().h_full().fill(t.card)
-        .child(if DESKTOP.load(Ordering::Relaxed) { title_bar } else { el().h(12.0) })
+        .child(if DESKTOP.load(Ordering::Relaxed) { title_bar } else { el().h(28.0) })
         .child(row().w_full().grow(1.0).child(list).child(page))
 }
 
@@ -198,7 +252,7 @@ fn launcher_view(s: &Launcher, _: &mut Cx<Launcher>) -> El {
 
 fn open_picked(s: &mut Launcher, tx: &mut Tx) {
     let Some(&i) = matches(&s.query.text).get(s.picked) else { return };
-    s.notes.update(move |n, _| n.selected = i);
+    s.notes.update(move |n, ntx| n.select_note(i, ntx));
     s.notes.focus();
     s.query.clear();
     tx.close_window();
@@ -220,16 +274,36 @@ fn main() {
     rune::run_windows(|displays| {
         let notes_spec = AppSpec::<Notes> {
             setup: Some(|s, w| s.load_icons(w, false)),
-            scenes: &[("themed-icons", |s| s.load_icons(Arc::new(|| {}), true))],
+            scenes: &[
+                ("themed-icons", |s| s.load_icons(Arc::new(|| {}), true)),
+                ("document-edited", |s| {
+                    s.load_icons(Arc::new(|| {}), true);
+                    s.edited[0] = true;
+                }),
+            ],
             ..AppSpec::new(
                 "Notes",
-                (520.0, 320.0),
-                || Notes { selected: 0, focused: true, cache: None, icons: Vec::new() },
+                (560.0, 340.0),
+                || Notes {
+                    selected: 0,
+                    focused: true,
+                    represented_attached: true,
+                    edited: [false; NOTES.len()],
+                    cache: None,
+                    icons: Vec::new(),
+                },
                 notes_view,
             )
         };
         let notes = App::new(notes_spec)
             .keep_running()
+            .macos_window(
+                MacWindowOptions::default()
+                    .represented_file(note_path(0))
+                    .title_from_file(true)
+                    .show_title(true)
+                    .accepts_first_mouse(false),
+            )
             .on_focus(|s, focused, _| s.focused = focused);
         let launcher_spec = AppSpec::<Launcher> {
             setup: Some(|s, w| s.load_icons(w, false)),
@@ -287,16 +361,53 @@ mod tests {
 
     #[test]
     fn notes_view_renders_themed_icon_or_not_found_fallback_cleanly() {
-        let mut state = Notes { selected: 0, focused: true, cache: None, icons: Vec::new() };
+        let mut state = Notes {
+            selected: 0,
+            focused: true,
+            represented_attached: true,
+            edited: [false; NOTES.len()],
+            cache: None,
+            icons: Vec::new(),
+        };
         state.load_icons(Arc::new(|| {}), true);
         assert_eq!(state.icons.len(), NOTES.len());
         for icon in &state.icons {
             assert!(icon.is_ready());
             assert!(icon.size().is_some() || icon.is_not_found());
         }
-        let mut rt = Runtime::new(state, notes_view, (520.0, 320.0), Env { system_dark: true, scale: 2.0 });
+        let mut rt = Runtime::new(state, notes_view, (560.0, 340.0), Env { system_dark: true, scale: 2.0 });
         rt.frame(0.0);
         assert!(rt.find("note-0").is_some());
         assert!(rt.find("note-3").is_some());
+        assert!(rt.find("toggle-edited").is_some());
+        assert!(rt.find("toggle-file").is_some());
+    }
+
+    #[test]
+    fn notes_document_controls_toggle_edited_and_represented_file() {
+        let state = Notes {
+            selected: 0,
+            focused: true,
+            represented_attached: true,
+            edited: [false; NOTES.len()],
+            cache: None,
+            icons: Vec::new(),
+        };
+        let mut rt = Runtime::new(state, notes_view, (560.0, 340.0), Env { system_dark: true, scale: 2.0 });
+        rt.frame(0.0);
+        assert!(!rt.state.edited[0]);
+        assert!(rt.state.represented_attached);
+
+        let (x, y) = rt.find("toggle-edited").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.1);
+        assert!(rt.state.edited[0]);
+
+        let (fx, fy) = rt.find("toggle-file").unwrap();
+        rt.pointer_down(fx, fy);
+        rt.pointer_up(fx, fy);
+        rt.frame(0.2);
+        assert!(!rt.state.represented_attached);
     }
 }
