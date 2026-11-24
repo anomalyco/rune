@@ -253,6 +253,7 @@ impl timer_wake::FrameState {
         if !self.live.latch_begin(pending, !self.live_subscriptions.is_empty()) { return false; }
         let mut active = false;
         for node in nodes {
+            let mut layout_text_in_place = false;
             if let Some(spec) = &mut node.text
                 && let Some(live) = &spec.cold.live
             {
@@ -260,8 +261,15 @@ impl timer_wake::FrameState {
                 if let Some(live_text) = live.read(seen) && spec.source_text() != &*live_text {
                     spec.replace_content(live_text.to_string());
                     spec.apply_case();
-                    node.text_layout = Some(TextLayout::Single(text.layout_live(&spec.content, spec.style, scale)));
+                    if !spec.wrap && !spec.truncate && spec.max_lines == 0 {
+                        node.text_layout = Some(TextLayout::Single(text.layout_live(&spec.content, spec.style, scale)));
+                    } else {
+                        layout_text_in_place = true;
+                    }
                 }
+            }
+            if layout_text_in_place {
+                super::super::commit::relayout::lay_out_live_text_in_place(text, node, scale);
             }
             let Some(cold) = node.cold.get_mut_if_some() else { continue };
             for bound in &mut cold.live {
@@ -318,6 +326,11 @@ impl timer_wake::FrameState {
                         scene, node.id, prop::SCALE, enter, leave,
                         |b| f32::decode(b).max(0.0), op,
                         |cur, to| cur.is_some_and(|c| to < c),
+                    ),
+                    Property::Rotation => apply(
+                        scene, node.id, prop::ROTATION, enter, leave,
+                        f32::decode, op,
+                        |_, _| false,
                     ),
                     Property::Offset => apply(
                         scene, node.id, prop::OFFSET, enter, leave,

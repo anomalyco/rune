@@ -363,6 +363,23 @@ impl El {
     pub fn live_scale(mut self, value: impl Into<crate::live::Binding<f32>>) -> Self {
         self.bind_live(crate::live::Bound::new(value, crate::live::Property::Scale)); self
     }
+    /// Bind clockwise rotation in radians about the element's [`origin`](Self::origin) (default
+    /// centre `(0.5, 0.5)`), without rebuilding or laying out the view.
+    ///
+    /// Layout keeps the upright box, so siblings don't move; while turned, the subtree draws into
+    /// its own layer and hit testing follows the turned box, as under [`El::rotate`]. Accepts a
+    /// `&Live<f32>`, a smoothed [`Live::smooth`](crate::Live::smooth) binding, or a
+    /// [`Tween<f32>`](crate::Tween).
+    ///
+    /// ```no_run
+    /// # use rune::{Color, Live, el};
+    /// let angle = Live::new(0.0_f32);
+    /// let needle = el().size(4.0, 48.0).fill(Color::WHITE).origin(0.5, 1.0).live_rotation(&angle);
+    /// angle.set(std::f32::consts::FRAC_PI_4);
+    /// ```
+    pub fn live_rotation(mut self, value: impl Into<crate::live::Binding<f32>>) -> Self {
+        self.bind_live(crate::live::Bound::new(value, crate::live::Property::Rotation)); self
+    }
     /// Bind the [start, end] span of a shape's strokes that draws, as fractions (0 to 1) of
     /// their combined length, as [`Shape::trimmed`](crate::Shape::trimmed) cuts them. A
     /// [`Tween`](crate::Tween) runs a countdown ring or a travelling dash without rebuilding.

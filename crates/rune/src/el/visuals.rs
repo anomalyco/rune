@@ -398,7 +398,7 @@ impl El {
     /// The point this element scales and rotates about, in units of its own size: `(0.5, 0.5)`
     /// (the default) is its centre, `(0.5, 1.0)` the middle of its bottom edge, which stays put
     /// while a keycap sinks. Like SwiftUI's `anchor:`. [`Self::scale`], [`Self::rotate`],
-    /// `live_scale`, `press_scale` and a transition's scale all pivot here once it's set;
+    /// `live_scale`, `live_rotation`, `press_scale` and a transition's scale all pivot here once it's set;
     /// [`Self::offset`] ignores it. Values outside 0..1 pivot outside the element; anything not
     /// finite is the centre.
     pub fn origin(mut self, x: f32, y: f32) -> Self {

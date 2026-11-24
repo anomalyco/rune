@@ -564,3 +564,384 @@ fn subscribe_live_reuses_adds_prunes_and_replaces_waker() {
     pixels.set(2, 2, vec![64u8; 16]);
     assert_eq!(woke_2.load(Ordering::SeqCst), new_before, "cleared sources must not wake");
 }
+
+#[test]
+fn live_rotation_updates_without_view_commit_and_keeps_static_rotate_unchanged() {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+
+    struct State {
+        angle: crate::Live<f32>,
+        bound: bool,
+        static_turn: f32,
+        other_turn: f32,
+        hits: u32,
+        views: AtomicUsize,
+    }
+    fn view(s: &State, _: &mut crate::Cx<State>) -> crate::El {
+        s.views.fetch_add(1, Ordering::Relaxed);
+        let mut needle = crate::el()
+            .key("needle")
+            .absolute(100.0, 100.0)
+            .size(100.0, 20.0)
+            .fill(crate::Color::WHITE)
+            .rotate(s.static_turn)
+            .on_press(|s: &mut State| s.hits += 1);
+        if s.bound {
+            needle = needle.live_rotation(&s.angle);
+        }
+        crate::el()
+            .size(300.0, 300.0)
+            .child(needle)
+            .child(crate::el().key("static").absolute(10.0, 10.0).size(40.0, 20.0).fill(crate::Color::WHITE).rotate(s.other_turn))
+    }
+
+    let state = State {
+        angle: crate::Live::new(0.0),
+        bound: true,
+        static_turn: 0.25,
+        other_turn: FRAC_PI_4,
+        hits: 0,
+        views: AtomicUsize::new(0),
+    };
+    let mut rt = crate::Runtime::new(state, view, (300.0, 300.0), crate::Env::new(true, 2.0));
+    rt.frame(0.0);
+
+    let rot = |rt: &crate::Runtime<State>, k: &str| rt.presented_pose(k).unwrap().rotation();
+    let info = |rt: &crate::Runtime<State>, k: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k)).unwrap();
+
+    // Live binding overrides authored rotate(0.25) on mount, while sibling static rotate is untouched.
+    assert_eq!(rot(&rt, "needle"), 0.0);
+    assert!((rot(&rt, "static") - FRAC_PI_4).abs() < 1e-4);
+    assert_eq!(info(&rt, "needle").rect, [100.0, 100.0, 100.0, 20.0]);
+
+    // Unsmoothed live_rotation declares live_intent agreeing with MotionElement::LIVE.
+    let needle_info = info(&rt, "needle");
+    assert_ne!(needle_info.live_intent, 0);
+    let mut motion_els = Vec::new();
+    rt.motion_elements(&mut motion_els);
+    let needle_motion = motion_els.iter().find(|m| rt.element_path(m.id).and_then(|p| p.1) == Some("needle")).unwrap();
+    assert!(needle_motion.is(crate::MotionElement::LIVE));
+
+    let commits = rt.stats.commits;
+    let views = rt.state.views.load(Ordering::Relaxed);
+
+    // Quarter-turn rotates the 100x20 bar into a 20x100 upright bbox without view/commit/spring.
+    assert!(rt.state.angle.set(FRAC_PI_2));
+    assert!(rt.live_pending());
+    assert!(!rt.frame(1.0 / 120.0), "unsmoothed live_rotation lands in one frame without springing");
+    assert!(!rt.live_pending());
+    assert!(!rt.animating);
+    assert_eq!(rt.stats.commits, commits);
+    assert_eq!(rt.state.views.load(Ordering::Relaxed), views);
+    assert!((rot(&rt, "needle") - FRAC_PI_2).abs() < 1e-5);
+    let turned = info(&rt, "needle").rect;
+    assert!((turned[0] - 140.0).abs() < 0.5 && (turned[1] - 60.0).abs() < 0.5, "bbox origin {turned:?}");
+    assert!((turned[2] - 20.0).abs() < 0.5 && (turned[3] - 100.0).abs() < 0.5, "bbox size {turned:?}");
+
+    // Hit testing follows the turned box: (150, 70) is inside the turned bar, (110, 110) is outside.
+    assert!(!rt.contains("needle", 110.0, 110.0), "old upright arm must miss after live_rotation");
+    assert!(rt.contains("needle", 150.0, 70.0), "turned arm must hit after live_rotation");
+    rt.pointer_move(110.0, 110.0);
+    rt.pointer_down(110.0, 110.0);
+    rt.pointer_up(110.0, 110.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.hits, 0, "old upright arm must miss after live_rotation");
+    rt.pointer_move(150.0, 70.0);
+    rt.pointer_down(150.0, 70.0);
+    rt.pointer_up(150.0, 70.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.hits, 1, "turned arm must hit after live_rotation");
+
+    // Edge values: equal value doesn't wake; NaN is ignored; negative and large angles apply.
+    assert!(!rt.state.angle.set(FRAC_PI_2));
+    assert!(!rt.state.angle.set(f32::NAN));
+    assert!(!rt.live_pending());
+    assert!(rt.state.angle.set(-FRAC_PI_4));
+    rt.frame(1.0 / 120.0);
+    assert!((rot(&rt, "needle") + FRAC_PI_4).abs() < 1e-5);
+    let huge = 100.0 * PI;
+    assert!(rt.state.angle.set(huge));
+    rt.frame(1.0 / 120.0);
+    assert!((rot(&rt, "needle") - huge).abs() < 1e-3);
+
+    // Unrelated view rebuild preserves live rotation instead of stomping it with static_turn.
+    rt.state.angle.set(1.2);
+    rt.frame(1.0 / 120.0);
+    rt.invalidate();
+    rt.frame(0.0);
+    assert!((rot(&rt, "needle") - 1.2).abs() < 1e-5, "unrelated rebuild keeps live_rotation");
+
+    // Unbinding restores the authored static rotate (and 0.0 when none is set).
+    rt.update(|s, tx| { s.bound = false; tx.settle(); });
+    rt.frame(0.0);
+    assert!((rot(&rt, "needle") - 0.25).abs() < 1e-5, "unbinding restores authored El::rotate");
+    rt.update(|s, tx| { s.static_turn = 0.0; tx.settle(); });
+    rt.frame(0.0);
+    assert_eq!(rot(&rt, "needle"), 0.0);
+}
+
+#[test]
+fn live_rotation_supports_smooth_spring_reduced_motion_and_tween() {
+    use std::f32::consts::FRAC_PI_2;
+    use std::time::Duration;
+
+    struct State {
+        angle: crate::Live<f32>,
+        tween: crate::Tween<f32>,
+    }
+    fn view(s: &State, _: &mut crate::Cx<State>) -> crate::El {
+        crate::el()
+            .size(200.0, 200.0)
+            .child(
+                crate::el()
+                    .key("smooth")
+                    .size(40.0, 10.0)
+                    .fill(crate::Color::WHITE)
+                    .live_rotation(s.angle.smooth(crate::Spring::new(0.25, 0.0))),
+            )
+            .child(
+                crate::el()
+                    .key("tween")
+                    .size(40.0, 10.0)
+                    .fill(crate::Color::WHITE)
+                    .live_rotation(&s.tween),
+            )
+    }
+
+    let state = State {
+        angle: crate::Live::new(0.0),
+        tween: crate::Tween::linear(0.0, FRAC_PI_2, Duration::from_secs(1)),
+    };
+    let mut rt = crate::Runtime::new(state, view, (200.0, 200.0), crate::Env::new(true, 1.0));
+    rt.frame(0.0);
+    let rot = |rt: &crate::Runtime<State>, k: &str| rt.presented_pose(k).unwrap().rotation();
+
+    // Smoothed binding does not set live_intent / MotionElement::LIVE.
+    let smooth_info = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("smooth")).unwrap();
+    assert_eq!(smooth_info.live_intent, 0);
+    let mut motion_els = Vec::new();
+    rt.motion_elements(&mut motion_els);
+    let smooth_motion = motion_els.iter().find(|m| rt.element_path(m.id).and_then(|p| p.1) == Some("smooth")).unwrap();
+    assert!(!smooth_motion.is(crate::MotionElement::LIVE));
+
+    let commits = rt.stats.commits;
+    rt.state.angle.set(FRAC_PI_2);
+    assert!(rt.frame(0.05));
+    let mid = rot(&rt, "smooth");
+    assert!(mid > 0.0 && mid < FRAC_PI_2, "smoothed live_rotation should be mid-spring: {mid}");
+    assert_eq!(rt.stats.commits, commits);
+
+    // Unrelated view rebuild keeps the spring moving from the same angle.
+    rt.invalidate();
+    rt.frame(0.0);
+    assert!((rot(&rt, "smooth") - mid).abs() < 1e-4);
+
+    // Advance until both smooth spring and 1 s tween finish.
+    for _ in 0..180 {
+        rt.frame(1.0 / 120.0);
+    }
+    assert!((rot(&rt, "smooth") - FRAC_PI_2).abs() < 1e-3);
+    assert!((rot(&rt, "tween") - FRAC_PI_2).abs() < 1e-3);
+    assert!(!rt.animating);
+    assert!(!rt.live_pending());
+
+    // Under reduced motion, a smoothed live_rotation lands immediately.
+    rt.set_system_reduced_motion(true);
+    rt.frame(0.0);
+    rt.state.angle.set(0.0);
+    rt.frame(1.0 / 120.0);
+    assert!(rot(&rt, "smooth").abs() < 1e-3, "reduced motion lands smoothed live_rotation immediately");
+}
+
+#[test]
+fn live_text_wraps_truncates_and_clamps_in_place_without_reflow_or_cache_growth() {
+    struct State {
+        plain: crate::LiveText,
+        wrapped: crate::LiveText,
+        trunc: crate::LiveText,
+        trunc_mid: crate::LiveText,
+        trunc_head: crate::LiveText,
+        clamped: crate::LiveText,
+        zero_w: crate::LiveText,
+        views: AtomicUsize,
+    }
+    fn view(s: &State, _: &mut crate::Cx<State>) -> crate::El {
+        s.views.fetch_add(1, Ordering::Relaxed);
+        crate::col()
+            .size(300.0, 400.0)
+            .child(crate::text("00:00").key("plain").size(100.0, 20.0).live_text(&s.plain))
+            .child(crate::text("init").key("wrapped").size(90.0, 60.0).wrap().live_text(&s.wrapped))
+            .child(crate::text("init").key("trunc").size(70.0, 20.0).truncate().live_text(&s.trunc))
+            .child(crate::text("init").key("trunc_mid").size(70.0, 20.0).truncate_middle().live_text(&s.trunc_mid))
+            .child(crate::text("init").key("trunc_head").size(70.0, 20.0).truncate_head().live_text(&s.trunc_head))
+            .child(crate::text("init").key("clamped").size(90.0, 44.0).max_lines(2).live_text(&s.clamped))
+            .child(crate::text("init").key("zero_w").size(0.0, 20.0).truncate().live_text(&s.zero_w))
+            .child(crate::text("sibling").key("sibling").size(80.0, 20.0))
+    }
+
+    let state = State {
+        plain: crate::LiveText::new("00:00"),
+        wrapped: crate::LiveText::new("hi"),
+        trunc: crate::LiveText::new("ok"),
+        trunc_mid: crate::LiveText::new("ok"),
+        trunc_head: crate::LiveText::new("ok"),
+        clamped: crate::LiveText::new("one"),
+        zero_w: crate::LiveText::new("z"),
+        views: AtomicUsize::new(0),
+    };
+    let mut rt = crate::Runtime::new(state, view, (300.0, 400.0), crate::Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    fn find_node<'a>(rt: &'a crate::Runtime<State>, k: &str) -> &'a crate::runtime::types::Node {
+        rt.core().tree.nodes.iter().find(|n| n.key.as_deref() == Some(k)).unwrap()
+    }
+    let line_count = |rt: &crate::Runtime<State>, k: &str| {
+        find_node(rt, k).text_layout.as_ref().and_then(crate::text::TextLayout::single).unwrap().len()
+    };
+    let rect_of = |rt: &crate::Runtime<State>, k: &str| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k)).unwrap().rect
+    };
+
+    let wrapped_rect = rect_of(&rt, "wrapped");
+    let trunc_rect = rect_of(&rt, "trunc");
+    let clamped_rect = rect_of(&rt, "clamped");
+    let sibling_rect = rect_of(&rt, "sibling");
+    let commits = rt.stats.commits;
+    let views = rt.state.views.load(Ordering::Relaxed);
+    let layouts_before = rt.core().text.cached_layout_count();
+    let elisions_before = rt.core().text.cached_elision_count();
+
+    // Grow every live text to multi-line / overflowing strings.
+    rt.state.plain.set("00:01");
+    rt.state.wrapped.set("A long live caption that wraps across several lines inside its fixed box");
+    rt.state.trunc.set("A very long single-line live ticker that overflows seventy points");
+    rt.state.trunc_mid.set("crates/rune/src/runtime/motion/live_latch.rs");
+    rt.state.trunc_head.set("prefix-that-gets-elided-from-the-start-keeping-the-end.rs");
+    rt.state.clamped.set("Line one and line two and line three and line four overflowing the clamp");
+    rt.state.zero_w.set("overflows zero width safely");
+    rt.frame(1.0 / 120.0);
+
+    assert_eq!(rt.stats.commits, commits, "no commit on wrapped/truncated live_text updates");
+    assert_eq!(rt.state.views.load(Ordering::Relaxed), views, "no view rerun");
+    assert_eq!(rect_of(&rt, "wrapped"), wrapped_rect, "wrapped box keeps its fixed rect");
+    assert_eq!(rect_of(&rt, "trunc"), trunc_rect, "truncated box keeps its fixed rect");
+    assert_eq!(rect_of(&rt, "clamped"), clamped_rect, "clamped box keeps its fixed rect");
+    assert_eq!(rect_of(&rt, "sibling"), sibling_rect, "siblings do not reflow");
+
+    assert!(line_count(&rt, "wrapped") > 1, "wrapped live_text must wrap onto multiple lines");
+    assert!(find_node(&rt, "trunc").elided.is_some(), "truncated live_text must elide");
+    assert!(find_node(&rt, "trunc_mid").elided.is_some(), "truncate_middle live_text must elide");
+    assert!(find_node(&rt, "trunc_head").elided.is_some(), "truncate_head live_text must elide");
+    assert_eq!(line_count(&rt, "clamped"), 2, "max_lines(2) live_text must clamp to 2 lines");
+    assert!(find_node(&rt, "clamped").elided.is_some(), "max_lines(2) overflow must elide");
+
+    // Accessibility tree and web mirror both expose the updated wrapped/truncated live text.
+    let a11y_tree = rt.accessibility_tree();
+    let ak_name = |k: &str| {
+        let node = &a11y_tree.nodes.iter().find(|(_, n)| n.author_id() == Some(k)).unwrap().1;
+        node.value().or_else(|| node.label()).map(str::to_owned)
+    };
+    assert_eq!(
+        ak_name("wrapped").as_deref(),
+        Some("A long live caption that wraps across several lines inside its fixed box"),
+    );
+    assert_eq!(
+        ak_name("trunc").as_deref(),
+        Some("A very long single-line live ticker that overflows seventy points"),
+    );
+    let web_a11y = rt.a11y_json();
+    assert!(web_a11y.contains("A long live caption that wraps across several lines inside its fixed box"));
+    assert!(web_a11y.contains("A very long single-line live ticker that overflows seventy points"));
+
+    // Shrink back to short text, empty string, and right-to-left Arabic text.
+    rt.state.wrapped.set("short");
+    rt.state.trunc.set("fit");
+    rt.state.clamped.set("fit");
+    rt.frame(1.0 / 120.0);
+    assert_eq!(line_count(&rt, "wrapped"), 1);
+    assert!(find_node(&rt, "trunc").elided.is_none(), "elision clears when truncated live_text fits again");
+    assert!(find_node(&rt, "clamped").elided.is_none(), "elision clears when clamped live_text fits again");
+
+    rt.state.wrapped.set("");
+    rt.state.trunc.set("");
+    rt.state.clamped.set("");
+    rt.frame(1.0 / 120.0);
+    assert!(find_node(&rt, "trunc").elided.is_none());
+    assert!(find_node(&rt, "clamped").elided.is_none());
+
+    rt.state.wrapped.set("مرحبا بالعالم هذا نص عربي طويل يلتف داخل الصندوق الثابت");
+    rt.state.trunc.set("مرحبا بالعالم هذا نص عربي طويل جدا يتجاوز العرض");
+    rt.frame(1.0 / 120.0);
+    assert!(line_count(&rt, "wrapped") > 1, "RTL wrapped live_text wraps");
+    assert!(find_node(&rt, "trunc").elided.is_some(), "RTL truncated live_text elides");
+
+    // Repeated live updates must not leak entries into the commit layout or elision caches.
+    for tick in 0..30u32 {
+        rt.state.plain.set(format!("00:{tick:02}"));
+        rt.state.wrapped.set(format!("Wrapped live counter tick {tick:02} with plenty of words to wrap"));
+        rt.state.trunc.set(format!("Truncated live counter tick {tick:02} overflowing seventy points"));
+        rt.state.clamped.set(format!("Clamped live counter tick {tick:02} with many words spanning three lines or more"));
+        rt.frame(1.0 / 120.0);
+    }
+    assert_eq!(rt.stats.commits, commits);
+    assert_eq!(rt.core().text.cached_layout_count(), layouts_before, "live ticks must not grow layout cache");
+    assert_eq!(rt.core().text.cached_elision_count(), elisions_before, "live ticks must not grow elision cache");
+}
+
+#[test]
+fn live_text_degrades_safely_on_spans_reveal_redacted_links_input_and_non_text() {
+    struct State {
+        live: crate::LiveText,
+        edit: crate::TextEdit,
+    }
+    fn view(s: &State, _: &mut crate::Cx<State>) -> crate::El {
+        let style = crate::TextStyle::new(14.0, 400.0);
+        crate::col()
+            .size(300.0, 300.0)
+            .child(
+                crate::text("spanned authored")
+                    .key("spanned")
+                    .spans(vec![crate::Span { start: 0, end: 7, weight: Some(700.0), ..Default::default() }])
+                    .live_text(&s.live),
+            )
+            .child(crate::text("reveal authored").key("reveal").reveal(0.2).live_text(&s.live))
+            .child(crate::text("secret authored").key("secret").secure().live_text(&s.live))
+            .child(crate::text("link authored").key("link").link(crate::Link::new(0..4, "go")).live_text(&s.live))
+            .child(crate::text_input(&s.edit, style).key("editor").live_text(&s.live))
+            .child(crate::el().key("box").size(20.0, 20.0).live_text(&s.live))
+    }
+
+    let state = State {
+        live: crate::LiveText::new("from live"),
+        edit: crate::TextEdit::new("editor authored"),
+    };
+    let mut rt = crate::Runtime::new(state, view, (300.0, 300.0), crate::Env::new(true, 1.0));
+    let wakes = Arc::new(AtomicUsize::new(0));
+    rt.set_live_waker({
+        let wakes = wakes.clone();
+        Arc::new(move || { wakes.fetch_add(1, Ordering::SeqCst); })
+    });
+    rt.frame(0.0);
+
+    // Incompatible live bindings were stripped at build/commit time without panicking.
+    assert!(!rt.core().frame.has_live_subscriptions(), "degraded live_text bindings must not subscribe");
+    let text_of = |rt: &crate::Runtime<State>, k: &str| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k)).unwrap().text
+    };
+    assert_eq!(text_of(&rt, "spanned").as_deref(), Some("spanned authored"));
+    assert_eq!(text_of(&rt, "reveal").as_deref(), Some("reveal authored"));
+    assert_eq!(text_of(&rt, "secret"), None, "secure label stays redacted");
+    assert_eq!(text_of(&rt, "link").as_deref(), Some("link authored"));
+    assert_eq!(text_of(&rt, "editor").as_deref(), Some("editor authored"));
+
+    // Publishing later neither panics, wakes, nor overwrites any degraded element.
+    let before = wakes.load(Ordering::SeqCst);
+    assert!(rt.state.live.set("later update"));
+    assert_eq!(wakes.load(Ordering::SeqCst), before);
+    assert!(!rt.live_pending());
+    rt.frame(1.0 / 120.0);
+    assert_eq!(text_of(&rt, "spanned").as_deref(), Some("spanned authored"));
+    assert_eq!(text_of(&rt, "reveal").as_deref(), Some("reveal authored"));
+    assert_eq!(text_of(&rt, "link").as_deref(), Some("link authored"));
+    assert_eq!(text_of(&rt, "editor").as_deref(), Some("editor authored"));
+}

@@ -430,7 +430,9 @@ impl RuntimeCore {
                 }
             }
             let turn = nodes[i].vis.rotate;
-            if turn != 0.0 || self.scene.store().has(id, prop::ROTATION) {
+            if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Rotation)
+                && (turn != 0.0 || self.scene.store().has(id, prop::ROTATION))
+            {
                 self.snap_or_animate(id, prop::ROTATION, turn, rest_quiet, 0.0, nodes[i].vis.rotate_motion.as_deref().copied(), spring_l);
             }
             let (instant, vis) = ((instant && !riding) || self.enters_unseen(&nodes, &unseen, i), &nodes[i].vis);

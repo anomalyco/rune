@@ -197,7 +197,7 @@ impl Elision {
 }
 
 fn spec_elide_keys(spec: &TextSpec, scale: f32, mode: u8, param: usize, max_w: f32, align: parley::Alignment) -> Option<(u64, u64)> {
-    if spec.redacted {
+    if spec.redacted || spec.cold.live.is_some() {
         return None;
     }
     let shape = spec.shape_key(scale).unwrap_or_else(|| spec.fresh_shape_key(scale));
@@ -249,7 +249,11 @@ pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scal
             str_buf.push_str(&content[..e.head]);
             str_buf.push_str(Elision::ELLIPSIS);
             str_buf.push_str(&content[e.tail..]);
-            text.layout_cut(&input, &str_buf, &span_buf, scale, None, parley::Alignment::Start, true)
+            if spec.cold.live.is_some() {
+                text.layout_cut_live(&input, &str_buf, &span_buf, scale, None, parley::Alignment::Start)
+            } else {
+                text.layout_cut(&input, &str_buf, &span_buf, scale, None, parley::Alignment::Start, true)
+            }
         }
     };
     let (mut lo, mut hi) = (0usize, n);
@@ -468,7 +472,11 @@ pub(in crate::runtime) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale:
             str_buf.clear();
             str_buf.push_str(&content[..e.head]);
             str_buf.push_str(Elision::ELLIPSIS);
-            text.layout_cut(&input, &str_buf, &span_buf, scale, Some(max_w), align, true)
+            if spec.cold.live.is_some() {
+                text.layout_cut_live(&input, &str_buf, &span_buf, scale, Some(max_w), align)
+            } else {
+                text.layout_cut(&input, &str_buf, &span_buf, scale, Some(max_w), align, true)
+            }
         }
     };
     let fits = |l: &Layout<Ink>| l.len() <= lines && last_line_width(l, lines) <= max_w + 0.5;
