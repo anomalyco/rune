@@ -674,3 +674,292 @@ fn entering_modal_at_zero_opacity_does_not_dismiss_on_inside_primary_or_secondar
         assert_eq!((rt.state.dismisses, rt.state.bg_secondary), (1, 0));
     }
 }
+
+#[test]
+fn modal_replacing_modal_in_same_commit_returns_focus_to_original_opener() {
+    use crate::{TextEdit, TextStyle, text_input};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Mode { InitialFirst, InitialAutofocus, SelfFocusField, SelfFocusTx, TrapModal }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Active { None, A, B }
+    struct S { mode: Mode, active: Active, field: TextEdit }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut root = col().key("root").w_full().h_full()
+            .child(button("before").on_press(|_: &mut S| {}))
+            .child(button("opener").on_press(|s: &mut S| s.active = Active::A));
+        match s.active {
+            Active::None => {}
+            Active::A => {
+                root = root.child(
+                    col().key("modal-a").size(200.0, 120.0).role("menu")
+                        .modal(true, |s: &mut S| s.active = Active::None)
+                        .child(button("pick").on_press_tx(|s: &mut S, tx| {
+                            s.active = Active::B;
+                            match s.mode {
+                                Mode::SelfFocusField => s.field.focused = true,
+                                Mode::SelfFocusTx => tx.focus("b-second", true),
+                                _ => {}
+                            }
+                        })),
+                );
+            }
+            Active::B => {
+                let b_first = button("b-first").on_press(|s: &mut S| s.active = Active::None);
+                let mut b_second = button("b-second").on_press(|s: &mut S| s.active = Active::None);
+                if s.mode == Mode::InitialAutofocus { b_second = b_second.autofocus(); }
+                let mut modal = col().key("modal-b").size(200.0, 120.0).role("dialog")
+                    .child(b_first)
+                    .child(b_second);
+                if s.mode == Mode::SelfFocusField {
+                    modal = modal.child(
+                        text_input(&s.field, TextStyle::new(14.0, 400.0)).key("b-field").size(160.0, 28.0)
+                            .on_edit(|s: &mut S| &mut s.field),
+                    );
+                }
+                let modal = if s.mode == Mode::TrapModal {
+                    modal.modal_trap()
+                } else {
+                    modal.modal(true, |s: &mut S| { s.active = Active::None; s.field.focused = false; })
+                };
+                root = root.child(modal);
+            }
+        }
+        root
+    }
+
+    for (mode, expected_b_focus) in [
+        (Mode::InitialFirst, "b-first"),
+        (Mode::InitialAutofocus, "b-second"),
+        (Mode::SelfFocusField, "b-field"),
+        (Mode::SelfFocusTx, "b-second"),
+        (Mode::TrapModal, "b-first"),
+    ] {
+        let mut rt = Runtime::new(S { mode, active: Active::None, field: TextEdit::new("") }, view, (400.0, 300.0), Env::new(true, 1.0));
+        rt.frame(0.016);
+        press(&mut rt, Key::Tab);
+        press(&mut rt, Key::Tab);
+        assert_eq!(focused_element(&rt), Some(("opener".into(), true)));
+
+        press(&mut rt, Key::Text(" ".into()));
+        assert_eq!(focused_element(&rt), Some(("pick".into(), true)));
+
+        // Close Modal A and open Modal B in the same commit.
+        press(&mut rt, Key::Text(" ".into()));
+        assert!(rt.state.active == Active::B);
+        assert_eq!(focused_element(&rt).map(|(k, _)| k), Some(expected_b_focus.into()), "mode={mode:?}");
+
+        // Closing Modal B returns focus to the original opener.
+        if mode == Mode::TrapModal {
+            press(&mut rt, Key::Text(" ".into()));
+        } else {
+            press(&mut rt, Key::Escape);
+        }
+        assert!(rt.state.active == Active::None);
+        assert_eq!(
+            focused_element(&rt),
+            Some(("opener".into(), true)),
+            "closing replacement modal must return focus to original opener (mode={mode:?})"
+        );
+    }
+}
+
+#[test]
+fn modal_replacement_chain_of_three_and_nested_replacements_preserve_restore() {
+    use crate::{TextEdit, TextStyle, text_input};
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Step { None, A, B, C }
+    struct S { outer: bool, step: Step, field: TextEdit }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut root = col().key("root").w_full().h_full()
+            .child(button("before").on_press(|_: &mut S| {}))
+            .child(button("opener").on_press(|s: &mut S| s.step = Step::A))
+            .child(button("open-outer").on_press(|s: &mut S| s.outer = true));
+        if s.outer {
+            root = root.child(
+                col().key("outer").size(300.0, 200.0).role("dialog")
+                    .modal(true, |s: &mut S| s.outer = false)
+                    .child(button("outer-first").on_press(|_: &mut S| {}))
+                    .child(button("open-a").on_press(|s: &mut S| s.step = Step::A)),
+            );
+        }
+        match s.step {
+            Step::None => {}
+            Step::A => {
+                root = root.child(
+                    col().key("modal-a").size(200.0, 120.0).role("menu")
+                        .modal(true, |s: &mut S| s.step = Step::None)
+                        .child(button("to-b").on_press(|s: &mut S| { s.step = Step::B; s.field.focused = true; }))
+                        .child(button("replace-both").on_press(|s: &mut S| { s.outer = false; s.step = Step::C; })),
+                );
+            }
+            Step::B => {
+                root = root.child(
+                    col().key("modal-b").size(200.0, 120.0).role("dialog")
+                        .modal(true, |s: &mut S| { s.step = Step::None; s.field.focused = false; })
+                        .child(text_input(&s.field, TextStyle::new(14.0, 400.0)).key("b-field").size(160.0, 28.0)
+                            .on_edit(|s: &mut S| &mut s.field))
+                        .child(button("to-c").on_press(|s: &mut S| { s.field.focused = false; s.step = Step::C; })),
+                );
+            }
+            Step::C => {
+                root = root.child(
+                    col().key("modal-c").size(200.0, 120.0).role("dialog")
+                        .modal(true, |s: &mut S| s.step = Step::None)
+                        .child(button("c-first"))
+                        .child(button("c-auto").autofocus()),
+                );
+            }
+        }
+        root
+    }
+
+    // 1. Top-level chain of three: opener -> A -> B (self-focused field) -> C (autofocus) -> opener.
+    let mut rt = Runtime::new(S { outer: false, step: Step::None, field: TextEdit::new("") }, view, (400.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.016);
+    press(&mut rt, Key::Tab);
+    press(&mut rt, Key::Tab);
+    assert_eq!(focused_element(&rt), Some(("opener".into(), true)));
+    press(&mut rt, Key::Text(" ".into()));
+    assert_eq!(focused_element(&rt), Some(("to-b".into(), true)));
+    press(&mut rt, Key::Text(" ".into()));
+    assert_eq!(focused_element(&rt).map(|(k, _)| k), Some("b-field".into()));
+    press(&mut rt, Key::Tab);
+    assert_eq!(focused_element(&rt), Some(("to-c".into(), true)));
+    press(&mut rt, Key::Text(" ".into()));
+    assert_eq!(focused_element(&rt), Some(("c-auto".into(), true)));
+    press(&mut rt, Key::Escape);
+    assert_eq!(focused_element(&rt), Some(("opener".into(), true)), "chain of three returns to original opener");
+
+    // 2. Nested [Outer, A] -> [Outer, B] preserves Outer's opener (not outer-first), then Outer -> open-outer.
+    let mut rt = Runtime::new(S { outer: false, step: Step::None, field: TextEdit::new("") }, view, (400.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.016);
+    press(&mut rt, Key::Tab);
+    press(&mut rt, Key::Tab);
+    press(&mut rt, Key::Tab);
+    assert_eq!(focused_element(&rt), Some(("open-outer".into(), true)));
+    press(&mut rt, Key::Text(" ".into()));
+    press(&mut rt, Key::Tab);
+    assert_eq!(focused_element(&rt), Some(("open-a".into(), true)));
+    press(&mut rt, Key::Text(" ".into()));
+    assert_eq!(focused_element(&rt), Some(("to-b".into(), true)));
+    press(&mut rt, Key::Text(" ".into()));
+    assert_eq!(focused_element(&rt).map(|(k, _)| k), Some("b-field".into()));
+    press(&mut rt, Key::Escape);
+    assert_eq!(focused_element(&rt), Some(("open-a".into(), true)), "closing nested replacement returns to inner opener");
+    press(&mut rt, Key::Escape);
+    assert_eq!(focused_element(&rt), Some(("open-outer".into(), true)), "closing outer returns to page opener");
+
+    // 3. Nested [Outer, A] both close as C opens -> closing C returns to open-outer.
+    press(&mut rt, Key::Text(" ".into()));
+    press(&mut rt, Key::Tab);
+    press(&mut rt, Key::Text(" ".into()));
+    press(&mut rt, Key::Tab);
+    assert_eq!(focused_element(&rt), Some(("replace-both".into(), true)));
+    press(&mut rt, Key::Text(" ".into()));
+    assert!(!rt.state.outer && rt.state.step == Step::C);
+    assert_eq!(focused_element(&rt), Some(("c-auto".into(), true)));
+    press(&mut rt, Key::Escape);
+    assert_eq!(focused_element(&rt), Some(("open-outer".into(), true)), "replacing two popped modals carries outermost restore");
+}
+
+#[test]
+fn modal_replacement_with_removed_disabled_or_inert_opener_keeps_focus_sensible() {
+    #[derive(Clone, Copy, Debug)]
+    enum OpenerLoss { DisabledAtReplace, RemovedAtReplace, InertAtReplace, DisabledAtClose, RemovedAtClose }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Active { None, A, B }
+    struct S { loss: OpenerLoss, outer: bool, active: Active, lost: bool }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let make_opener = |key: &str| -> Option<El> {
+            let removed = s.lost && matches!(s.loss, OpenerLoss::RemovedAtReplace | OpenerLoss::RemovedAtClose);
+            if removed { return None; }
+            let disabled = s.lost && matches!(s.loss, OpenerLoss::DisabledAtReplace | OpenerLoss::DisabledAtClose);
+            let mut b = button(key).disabled(disabled).on_press(|s: &mut S| s.active = Active::A);
+            if s.lost && matches!(s.loss, OpenerLoss::InertAtReplace) { b = b.inert(); }
+            Some(b)
+        };
+        let mut root = col().key("root").w_full().h_full()
+            .child(button("before").on_press(|_: &mut S| {}));
+        if !s.outer && let Some(op) = make_opener("opener") { root = root.child(op); }
+        if s.outer {
+            let mut outer = col().key("outer").size(300.0, 200.0).role("dialog")
+                .modal(true, |s: &mut S| s.outer = false)
+                .child(button("other").on_press(|_: &mut S| {}));
+            if let Some(op) = make_opener("open-a") { outer = outer.child(op); }
+            root = root.child(outer);
+        }
+        match s.active {
+            Active::None => {}
+            Active::A => {
+                root = root.child(
+                    col().key("modal-a").size(200.0, 120.0).role("menu")
+                        .modal(true, |s: &mut S| s.active = Active::None)
+                        .child(button("pick").on_press(|s: &mut S| {
+                            if matches!(s.loss, OpenerLoss::DisabledAtReplace | OpenerLoss::RemovedAtReplace | OpenerLoss::InertAtReplace) {
+                                s.lost = true;
+                            }
+                            s.active = Active::B;
+                        })),
+                );
+            }
+            Active::B => {
+                root = root.child(
+                    col().key("modal-b").size(200.0, 120.0).role("dialog")
+                        .modal(true, |s: &mut S| {
+                            if matches!(s.loss, OpenerLoss::DisabledAtClose | OpenerLoss::RemovedAtClose) {
+                                s.lost = true;
+                            }
+                            s.active = Active::None;
+                        })
+                        .child(button("b-ok").on_press(|s: &mut S| {
+                            if matches!(s.loss, OpenerLoss::DisabledAtClose | OpenerLoss::RemovedAtClose) {
+                                s.lost = true;
+                            }
+                            s.active = Active::None;
+                        })),
+                );
+            }
+        }
+        root
+    }
+
+    for loss in [
+        OpenerLoss::DisabledAtReplace,
+        OpenerLoss::RemovedAtReplace,
+        OpenerLoss::InertAtReplace,
+        OpenerLoss::DisabledAtClose,
+        OpenerLoss::RemovedAtClose,
+    ] {
+        // Top-level: focus enters B while B is open, does not return to disabled/inert/removed opener on close,
+        // and Tab cleanly lands on the remaining enabled control.
+        let mut rt = Runtime::new(S { loss, outer: false, active: Active::None, lost: false }, view, (400.0, 300.0), Env::new(true, 1.0));
+        rt.frame(0.016);
+        press(&mut rt, Key::Tab);
+        press(&mut rt, Key::Tab);
+        assert_eq!(focused_element(&rt), Some(("opener".into(), true)));
+        press(&mut rt, Key::Text(" ".into()));
+        press(&mut rt, Key::Text(" ".into()));
+        assert_eq!(focused_element(&rt), Some(("b-ok".into(), true)), "focus enters B ({loss:?})");
+        press(&mut rt, Key::Escape);
+        assert_eq!(focused_element(&rt), None, "lost opener must not regain focus ({loss:?})");
+        assert!(!rt.has_focus());
+        press(&mut rt, Key::Tab);
+        assert_eq!(focused_element(&rt), Some(("before".into(), true)), "Tab reaches remaining control ({loss:?})");
+
+        // Nested inside Outer: closing B falls back inside Outer to "other", never nowhere.
+        let mut rt = Runtime::new(S { loss, outer: true, active: Active::None, lost: false }, view, (400.0, 300.0), Env::new(true, 1.0));
+        rt.frame(0.016);
+        press(&mut rt, Key::Tab);
+        assert_eq!(focused_element(&rt), Some(("open-a".into(), true)));
+        press(&mut rt, Key::Text(" ".into()));
+        press(&mut rt, Key::Text(" ".into()));
+        assert_eq!(focused_element(&rt), Some(("b-ok".into(), true)), "nested focus enters B ({loss:?})");
+        press(&mut rt, Key::Escape);
+        assert_eq!(focused_element(&rt), Some(("other".into(), true)), "nested close falls back inside Outer ({loss:?})");
+    }
+}

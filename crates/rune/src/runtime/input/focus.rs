@@ -252,6 +252,11 @@ impl RuntimeCore {
     pub(crate) fn can_focus(&self, i: usize) -> bool {
         self.can_take_focus(&self.tree.nodes[i]) && self.reachable(i)
     }
+    /// Whether `i` can take focus once any modal covering it closes (same as [`Self::can_focus`]
+    /// without the active modal's membership check).
+    pub(super) fn can_focus_unblocked(&self, i: usize) -> bool {
+        self.can_take_focus(&self.tree.nodes[i]) && !self.tree.nodes[i].inert && !self.subtree_exiting(i) && node_shown(&self.tree.nodes, i)
+    }
     /// Shown, sized, not exiting and not behind a modal.
     fn reachable(&self, i: usize) -> bool {
         self.allowed(i) && !self.subtree_exiting(i) && node_shown(&self.tree.nodes, i)
