@@ -24,8 +24,8 @@ pub(in crate::runtime) struct Titlebar {
     pub(in crate::runtime) caption: Option<crate::titlebar::Caption>,
     /// `Tx::toggle_maximized`, for the shell.
     pub(in crate::runtime) toggle_maximized: bool,
-    /// `Tx::toggle_full_screen`, for the shell.
-    pub(in crate::runtime) toggle_full_screen: bool,
+    /// `Tx::toggle_full_screen` and `Tx::set_full_screen`, for the shell; last call wins.
+    pub(in crate::runtime) full_screen: Option<crate::el::FullScreenRequest>,
     /// `Cx::set_titlebar` and `Cx::titlebar_height`, as the last view set them, and whether the
     /// shell has yet to see them.
     set: crate::titlebar::TitlebarSet,
@@ -330,10 +330,10 @@ impl RuntimeCore {
         std::mem::take(&mut self.host.titlebar.toggle_maximized)
     }
 
-    /// Takes a `Tx::toggle_full_screen`, for the shell to carry out.
+    /// Takes a `Tx::toggle_full_screen` or `Tx::set_full_screen`, for the shell to carry out.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    pub(crate) fn take_toggle_full_screen(&mut self) -> bool {
-        std::mem::take(&mut self.host.titlebar.toggle_full_screen)
+    pub(crate) fn take_full_screen_request(&mut self) -> Option<crate::el::FullScreenRequest> {
+        self.host.titlebar.full_screen.take()
     }
 
     /// The window menu a secondary click on a drag region or an unclaimed Alt+Space asked for,

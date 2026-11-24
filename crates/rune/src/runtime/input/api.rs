@@ -348,7 +348,7 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn take_toggle_maximized(&mut self) -> bool { self.core_mut().take_toggle_maximized() }
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     #[inline(always)]
-    pub(crate) fn take_toggle_full_screen(&mut self) -> bool { self.core_mut().take_toggle_full_screen() }
+    pub(crate) fn take_full_screen_request(&mut self) -> Option<crate::el::FullScreenRequest> { self.core_mut().take_full_screen_request() }
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     #[inline(always)]
     pub(crate) fn take_window_menu(&mut self) -> Option<WindowMenu> { self.core_mut().take_window_menu() }

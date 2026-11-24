@@ -83,8 +83,8 @@ pub struct Tx {
     pub(crate) minimize_order: Option<std::num::NonZeroU64>,
     /// `Tx::toggle_maximized`.
     pub(crate) toggle_maximized: bool,
-    /// `Tx::toggle_full_screen`.
-    pub(crate) toggle_full_screen: bool,
+    /// `Tx::toggle_full_screen` and `Tx::set_full_screen`; the last call in a turn wins.
+    pub(crate) full_screen: Option<FullScreenRequest>,
     /// `Tx::send_key`, in order.
     pub(crate) keys: Vec<crate::KeyEvent>,
     /// `Tx::drop_point`.
@@ -143,6 +143,14 @@ pub struct Tx {
     pub(crate) clock: f64,
     /// `Tx::scale` (0 when unset on `Tx::default()`, which reads as 1.0).
     pub(crate) scale: f32,
+}
+
+/// What a handler asked of the window's full-screen state ([`Tx::toggle_full_screen`],
+/// [`Tx::set_full_screen`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FullScreenRequest {
+    Toggle,
+    Set(bool),
 }
 
 /// Which asked for focus: [`Tx::focus`], [`Tx::focus_when_shown`], or [`Tx::return_focus`]
@@ -434,9 +442,11 @@ impl Tx {
     }
 
     /// Minimize this window after this handler, as its minimize button would (winit's
-    /// `set_minimized` off macOS). Does nothing (logging in debug builds) where a window
-    /// can't minimize: an overlay, a panel or launcher, a borderless window, or one without a
-    /// minimize button.
+    /// `set_minimized` off macOS). On Windows and Linux, resizable borderless windows
+    /// (`WindowOptions { borderless: true, ..Default::default() }`) minimize when
+    /// `WindowButtons::MINIMIZE` is enabled; does nothing (logging in debug builds) for a
+    /// hidden window, a panel or launcher, a click-through overlay, a non-resizable
+    /// borderless window, a borderless window on macOS, or a window without a minimize button.
     /// A close or quit asked in the same change wins.
     pub fn minimize(&mut self) {
         self.minimize_order = Some(crate::app::window_request_order());
@@ -444,7 +454,7 @@ impl Tx {
 
     /// Maximize this window after this handler, or restore it when it is maximized, as its
     /// maximize button would (macOS zooms). Does nothing for overlays, macOS non-activating
-    /// panels, and headless runs.
+    /// panels, and headless runs. Read the confirmed OS state with [`Cx::is_maximized`].
     pub fn toggle_maximized(&mut self) {
         self.toggle_maximized = true;
     }
@@ -452,9 +462,27 @@ impl Tx {
     /// Take this window full screen after this handler, or bring it back, as macOS's green
     /// button and Electron's `setFullScreen` do: on Windows and Linux a borderless window over
     /// its display, which hides a custom titlebar's caption buttons (`Cx::chrome_insets`).
-    /// Does nothing for overlays, macOS non-activating panels, and headless runs.
+    /// Does nothing for overlays, macOS non-activating panels, and headless runs. When both
+    /// `toggle_full_screen` and [`Self::set_full_screen`] run in one turn, the last call wins.
+    /// Read the confirmed OS state with [`Cx::is_full_screen`].
     pub fn toggle_full_screen(&mut self) {
-        self.toggle_full_screen = true;
+        self.full_screen = Some(FullScreenRequest::Toggle);
+    }
+
+    /// Enter (`true`) or exit (`false`) full screen after this handler, as Electron's
+    /// `BrowserWindow.setFullScreen(flag)` does: on Windows and Linux a borderless window over
+    /// its display, on macOS a native full-screen Space. Does nothing for overlays, macOS
+    /// non-activating panels, and headless runs, and is a no-op when the window is already in
+    /// the requested state. When multiple calls to `set_full_screen` or
+    /// [`Self::toggle_full_screen`] run in one turn, the last call wins. Read the confirmed OS
+    /// state with [`Cx::is_full_screen`].
+    ///
+    /// ```
+    /// # use rune::{el, Tx};
+    /// let _button = el().on_press_tx(|_: &mut (), tx: &mut Tx| tx.set_full_screen(true));
+    /// ```
+    pub fn set_full_screen(&mut self, full_screen: bool) {
+        self.full_screen = Some(FullScreenRequest::Set(full_screen));
     }
 
     /// Deliver `ev` once this handler is done, as if it were typed: to the focused field, then

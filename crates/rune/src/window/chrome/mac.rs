@@ -175,6 +175,18 @@ pub(crate) fn double_click_action(setting: Option<&str>, panel: bool) -> DoubleC
     }
 }
 
+/// Whether the window is zoomed (maximized). Borderless and non-resizable windows cannot zoom
+/// natively on macOS and return `false` without mutating `styleMask` (unlike winit's
+/// `Window::is_maximized`).
+pub fn is_maximized(window: &Window) -> bool {
+    let Some(win) = ns_window(window) else { return false };
+    let mask = win.styleMask();
+    if !mask.contains(NSWindowStyleMask::Titled | NSWindowStyleMask::Resizable) {
+        return false;
+    }
+    win.isZoomed()
+}
+
 /// System Settings › Desktop & Dock › "Double-click a window's title bar to".
 pub fn titlebar_double_click(window: &Window) {
     let action = NSUserDefaults::standardUserDefaults().stringForKey(&NSString::from_str("AppleActionOnDoubleClick"));

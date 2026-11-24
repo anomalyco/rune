@@ -69,6 +69,8 @@ impl RuntimeCore {
             system_reduced_motion: self.host.system_reduced_motion,
             titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
+            maximized: self.host.maximized,
+            full_screen: self.host.full_screen,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,

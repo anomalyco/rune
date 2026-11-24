@@ -28,6 +28,20 @@ impl window_requests::HostState {
         true
     }
 
+    #[inline]
+    pub(super) fn set_maximized(&mut self, maximized: bool) -> bool {
+        if maximized == self.maximized { return false; }
+        self.maximized = maximized;
+        true
+    }
+
+    #[inline]
+    pub(super) fn set_full_screen(&mut self, full_screen: bool) -> bool {
+        if full_screen == self.full_screen { return false; }
+        self.full_screen = full_screen;
+        true
+    }
+
     /// What [`Cx::accent`] and [`Cx::focus_color`] report, and the colour of default focus
     /// rings. Native windows set it from [`system_accent`](crate::system_accent) and again when
     /// the user picks another accent; a change re-runs the view. Headless runs keep
@@ -145,6 +159,21 @@ impl RuntimeCore {
     #[inline]
     pub fn set_titlebar_inset(&mut self, points: f32) {
         if self.host.set_titlebar_inset(points) { self.commit.dirty = true; }
+    }
+
+    /// What [`Cx::is_maximized`] reports. Native windows set it from confirmed OS window state
+    /// on create, resize, scale change, and focus; a change re-runs the view and its memos.
+    #[inline]
+    pub fn set_maximized(&mut self, maximized: bool) {
+        if self.host.set_maximized(maximized) { self.commit.dirty = true; }
+    }
+
+    /// What [`Cx::is_full_screen`] reports. Native windows set it from confirmed OS window state
+    /// on create, resize, scale change, focus, and macOS full-screen transitions; a change
+    /// re-runs the view and its memos.
+    #[inline]
+    pub fn set_full_screen(&mut self, full_screen: bool) {
+        if self.host.set_full_screen(full_screen) { self.commit.dirty = true; }
     }
 
     #[inline]

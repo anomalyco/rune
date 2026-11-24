@@ -384,8 +384,11 @@ impl Host {
             #[cfg(target_os = "windows")]
             crate::platform::win32::apply_window_styles(&w.window, &self.windows_window);
         }
-        if self.app.rt_mut().take_toggle_full_screen() && let Some(w) = self.shown_win() {
-            w.toggle_full_screen();
+        if let Some(req) = self.app.rt_mut().take_full_screen_request() && let Some(w) = self.shown_win() {
+            match req {
+                crate::el::FullScreenRequest::Toggle => w.toggle_full_screen(),
+                crate::el::FullScreenRequest::Set(on) => w.set_full_screen(on),
+            }
             #[cfg(target_os = "windows")]
             crate::platform::win32::apply_window_styles(&w.window, &self.windows_window);
         }

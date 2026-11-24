@@ -495,9 +495,18 @@ impl Win {
 
     /// Whether the native window is currently maximized. Adopted macOS panels never maximize,
     /// avoiding winit's borderless `is_zoomed` style-mask mutation on the hidden source `NSWindow`.
-    #[cfg(target_os = "windows")]
     pub(in crate::window) fn is_maximized(&self) -> bool {
-        !self.is_panel() && self.window.is_maximized()
+        if self.is_panel() { return false; }
+        #[cfg(target_os = "macos")]
+        { crate::window::chrome::mac::is_maximized(&self.window) }
+        #[cfg(not(target_os = "macos"))]
+        { self.window.is_maximized() }
+    }
+
+    /// Whether the native window is currently full screen. Adopted macOS panels never enter
+    /// full screen.
+    pub(in crate::window) fn is_full_screen(&self) -> bool {
+        !self.is_panel() && self.window.fullscreen().is_some()
     }
 
     /// Carries out a titlebar action (`Drag` or `DoubleClick`) on the window's live native
@@ -524,6 +533,13 @@ impl Win {
     pub(in crate::window) fn toggle_maximized(&self) {
         if self.is_panel() { return; }
         crate::window::chrome::toggle_maximized(&self.window);
+    }
+
+    /// Sets this window's full-screen state (`true` to enter, `false` to exit). Adopted macOS
+    /// panels ignore it.
+    pub(in crate::window) fn set_full_screen(&self, full_screen: bool) {
+        if self.is_panel() { return; }
+        crate::window::chrome::set_full_screen(&self.window, full_screen);
     }
 
     /// Takes this window full screen or brings it back. Adopted macOS panels ignore it.

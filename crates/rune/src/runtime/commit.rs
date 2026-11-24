@@ -361,6 +361,8 @@ pub(super) struct Measurement<'a> {
     pub(super) system_reduced_motion: bool,
     pub(super) titlebar_inset: f32,
     pub(super) chrome: crate::ChromeInsets,
+    pub(super) maximized: bool,
+    pub(super) full_screen: bool,
     /// Caption buttons drawn over the view's root.
     pub(super) caption: Option<crate::titlebar::Caption>,
     pub(super) system_accent: crate::SystemAccent,
