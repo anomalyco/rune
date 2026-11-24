@@ -932,7 +932,8 @@ pub trait ScrollBar {
     /// Attaches both a vertical scroll bar (end edge) and a horizontal scroll bar (bottom edge)
     /// to an [`El::scroll_xy`] viewport using [`ScrollBarStyle::from_kit`]. Both follow
     /// [`rune::system_scroll_bars`] and leave the bottom-end corner clear when both axes overflow,
-    /// with zero view commits per scroll frame.
+    /// with zero view commits per scroll frame. Custom implementors inherit a default fallback to
+    /// [`ScrollBar::scroll_bar`].
     ///
     /// ```ignore
     /// col().key("canvas").w_full().grow(1.0).min_h(0.0)
@@ -941,11 +942,17 @@ pub trait ScrollBar {
     ///     .scroll_bars_xy(&k)
     /// ```
     #[track_caller]
-    fn scroll_bars_xy(self, k: &Kit) -> El;
+    fn scroll_bars_xy(self, k: &Kit) -> El
+    where
+        Self: Sized,
+    {
+        self.scroll_bar(k)
+    }
 
     /// [`ScrollBar::scroll_bars_xy`] with explicit vertical and horizontal styles. `vertical` is
     /// always placed on the vertical end edge and `horizontal` along the bottom edge (calling
-    /// [`ScrollBarStyle::horizontal`] on `horizontal` is optional).
+    /// [`ScrollBarStyle::horizontal`] on `horizontal` is optional). Custom implementors inherit a
+    /// default fallback to [`ScrollBar::scroll_bar_styled`] with `vertical`.
     ///
     /// ```ignore
     /// let style = ScrollBarStyle::native(k.c.border_muted, k.c.border_strong).inside().always_visible();
@@ -955,7 +962,12 @@ pub trait ScrollBar {
     ///     .scroll_bars_xy_styled(style, style.horizontal())
     /// ```
     #[track_caller]
-    fn scroll_bars_xy_styled(self, vertical: ScrollBarStyle, horizontal: ScrollBarStyle) -> El;
+    fn scroll_bars_xy_styled(self, vertical: ScrollBarStyle, _horizontal: ScrollBarStyle) -> El
+    where
+        Self: Sized,
+    {
+        self.scroll_bar_styled(vertical)
+    }
 
     /// Makes this element the hover target of the scroll bar on the viewport keyed
     /// `viewport_key`: while the pointer is anywhere over it, children included, that overlay
