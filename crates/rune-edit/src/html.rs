@@ -218,10 +218,10 @@ fn parse_style_marks(style: &str, add: &mut Vec<Mark>, remove: &mut Vec<Mark>) {
                     remove.push(Mark::Strike);
                 }
             }
-        } else if prop.eq_ignore_ascii_case("color") {
-            if let Some(hex) = color::parse_css_color(val) {
-                add.push(Mark::Color(hex));
-            }
+        } else if prop.eq_ignore_ascii_case("color")
+            && let Some(hex) = color::parse_css_color(val)
+        {
+            add.push(Mark::Color(hex));
         }
     }
 }

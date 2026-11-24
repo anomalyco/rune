@@ -572,7 +572,5 @@ pub(crate) fn parse_html(html: &str) -> TextEdit {
         blocks.pop();
     }
 
-    let mut edit = TextEdit::from_parts(text, marks, blocks);
-    edit.soft_breaks = soft_breaks;
-    edit
+    TextEdit::from_parsed_html(text, marks, blocks, soft_breaks)
 }

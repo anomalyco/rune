@@ -25,11 +25,118 @@ fn mark_color_helpers_and_same_kind() {
     assert_eq!(red.color_hex(), Some("#d93025"));
     assert_eq!(Mark::Bold.color_hex(), None);
     assert_eq!(Mark::Link("https://example.com".into()).color_hex(), None);
+
+    // DEFAULT_ALLOWED_MARKS holds exactly the 7 pre-existing mark kinds, excluding Mark::Color.
+    let expected = [
+        Mark::Bold,
+        Mark::Italic,
+        Mark::Underline,
+        Mark::Strike,
+        Mark::Code,
+        Mark::Link(String::new()),
+        Mark::Pill(String::new()),
+    ]
+    .iter()
+    .fold(0u16, |bits, m| bits | (1 << m.kind_order()));
+    assert_eq!(TextEdit::DEFAULT_ALLOWED_MARKS, expected);
+    assert_eq!(TextEdit::DEFAULT_ALLOWED_MARKS & (1 << Mark::Color(String::new()).kind_order()), 0);
+}
+
+#[test]
+fn color_is_opt_in_by_default_for_rich_from_html_and_paste() {
+    // Default rich field allows the 7 pre-existing marks and disallows Mark::Color.
+    let mut def = TextEdit::new("hello").rich();
+    assert!(def.allows_mark(&Mark::Bold));
+    assert!(def.allows_mark(&Mark::Italic));
+    assert!(def.allows_mark(&Mark::Underline));
+    assert!(def.allows_mark(&Mark::Strike));
+    assert!(def.allows_mark(&Mark::Code));
+    assert!(def.allows_mark(&Mark::Link(String::new())));
+    assert!(def.allows_mark(&Mark::Pill(String::new())));
+    assert!(!def.allows_mark(&Mark::Color(String::new())));
+    assert!(!def.allows_mark(&Mark::Color("#d93025".into())));
+
+    // Editing methods ignore Mark::Color until opted in.
+    def.set_selection(0, 5);
+    def.set_color(Some("#d93025"));
+    def.set_mark(Mark::Color("#d93025".into()));
+    def.toggle_mark(Mark::Color("#d93025".into()));
+    def.set_marks(vec![MarkRange::new(0..5, Mark::Color("#d93025".into()))]);
+    assert!(def.marks().is_empty());
+    assert_eq!(def.active_color(), None);
+
+    // Chrome black-ink paste into a default rich field drops colour and keeps Bold.
+    let chrome_html = concat!(
+        r#"<meta charset='utf-8'><span style="color: rgb(0, 0, 0); font-weight: 700;">Hello</span>"#,
+        r#"<span style="color: rgb(0, 0, 0);"> world</span>"#,
+    );
+    let mut def_chrome = TextEdit::new("").rich();
+    def_chrome.paste_html(chrome_html, "Hello world");
+    assert_eq!(def_chrome.text, "Hello world");
+    assert_eq!(def_chrome.marks(), &[MarkRange::new(0..5, Mark::Bold)]);
+
+    // Slack paste into a default rich field drops Slack's rgb(29, 28, 29) ink colour.
+    let slack_html = concat!(
+        r#"<b style="color: rgb(29, 28, 29);">bold</b>"#,
+        r#"<span style="color: rgb(29, 28, 29);"> and </span><i>it</i>"#,
+    );
+    let mut def_slack = TextEdit::new("").rich();
+    def_slack.paste_html(slack_html, "bold and it");
+    assert_eq!(def_slack.text, "bold and it");
+    assert!(color_ranges(&def_slack).is_empty());
+    assert_eq!(def_slack.marks(), &[MarkRange::new(0..4, Mark::Bold), MarkRange::new(9..11, Mark::Italic)]);
+
+    // VS Code colour-only paste into a default rich field falls back to plain whitespace.
+    let vscode_html = concat!(
+        r#"<meta charset='utf-8'><div style="color: #d4d4d4;white-space: pre;">"#,
+        r#"<div><span style="color: #569cd6;">fn</span><span>&nbsp;a()&nbsp;{</span></div>"#,
+        r#"<div><span>&nbsp; &nbsp; b</span></div><div><span>}</span></div></div>"#,
+    );
+    let mut def_vscode = TextEdit::new("").rich();
+    def_vscode.paste_html(vscode_html, "fn a() {\n    b\n}");
+    assert_eq!(def_vscode.text, "fn a() {\n    b\n}");
+    assert!(def_vscode.marks().is_empty());
+
+    // Default from_html strips CSS color and <font color> just like pre-Mark::Color dev.
+    let loaded = TextEdit::from_html(r#"<p><span style="color:#ff0000"><b>red</b></span> <font color="blue">blue</font></p>"#);
+    assert_eq!(loaded.text, "red blue");
+    assert_eq!(loaded.marks(), &[MarkRange::new(0..3, Mark::Bold)]);
+    assert!(!loaded.allows_mark(&Mark::Color(String::new())));
+
+    // Opting in via allow_color(true) keeps pasted Chrome, Slack, VS Code, and <font color> colours.
+    let mut opt_chrome = TextEdit::new("").rich().allow_color(true);
+    opt_chrome.paste_html(chrome_html, "Hello world");
+    assert_eq!(color_ranges(&opt_chrome), [(0, 11, "#000000".into())]);
+
+    let mut opt_slack = TextEdit::new("").rich().allow_color(true);
+    opt_slack.paste_html(slack_html, "bold and it");
+    assert_eq!(color_ranges(&opt_slack), [(0, 9, "#1d1c1d".into())]);
+
+    let mut opt_vscode = TextEdit::new("").rich().allow_color(true);
+    opt_vscode.paste_html(vscode_html, "fn a() {\n    b\n}");
+    assert!(color_ranges(&opt_vscode).iter().any(|(_, _, c)| c == "#569cd6"));
+
+    // allow_color(true) composes with allow_marks without re-enabling disallowed marks.
+    let restricted = TextEdit::new("hi").rich().allow_marks([Mark::Bold]).allow_color(true);
+    assert!(restricted.allows_mark(&Mark::Bold));
+    assert!(restricted.allows_mark(&Mark::Color(String::new())));
+    assert!(!restricted.allows_mark(&Mark::Italic));
+
+    // allow_color(false) strips existing colours and pending colour typing style.
+    let mut off = TextEdit::from_html_with_color(r#"<p><span style="color:#ff0000">red</span></p>"#);
+    assert_eq!(color_ranges(&off), [(0, 3, "#ff0000".into())]);
+    off.set_caret(3);
+    off.set_color(Some("#00ff00"));
+    assert_eq!(off.active_color(), Some("#00ff00"));
+    let off = off.allow_color(false);
+    assert!(!off.allows_mark(&Mark::Color(String::new())));
+    assert!(color_ranges(&off).is_empty());
+    assert_eq!(off.active_color(), None);
 }
 
 #[test]
 fn set_color_and_active_color_on_selection_replace_merge_and_invalid() {
-    let mut e = TextEdit::new("hello world").rich();
+    let mut e = TextEdit::new("hello world").rich().allow_color(true);
     assert_eq!(e.active_color(), None);
 
     // Shorthand uppercase hex normalizes to lowercase #rrggbb.
@@ -91,7 +198,7 @@ fn set_color_and_active_color_on_selection_replace_merge_and_invalid() {
 #[test]
 fn collapsed_caret_pending_typing_style_and_inheritance() {
     // Empty field: arming a colour before typing applies to the first characters typed.
-    let mut e = TextEdit::new("").rich();
+    let mut e = TextEdit::new("").rich().allow_color(true);
     e.set_color(Some("#0a84ff"));
     assert_eq!(e.active_color(), Some("#0a84ff"));
     e.insert("red");
@@ -126,7 +233,7 @@ fn collapsed_caret_pending_typing_style_and_inheritance() {
 
 #[test]
 fn undo_redo_and_history_json_preserve_color() {
-    let mut e = TextEdit::new("hello").rich();
+    let mut e = TextEdit::new("hello").rich().allow_color(true);
     e.set_selection(0, 5);
     e.set_color(Some("#d93025"));
     e.set_color(Some("#1a73e8"));
@@ -162,7 +269,7 @@ fn undo_redo_and_history_json_preserve_color() {
 #[test]
 fn allow_marks_code_block_and_secure_gate_color() {
     // Disallowing Mark::Color strips existing colours, blocks set_color/set_mark/toggle_mark/paste/undo.
-    let e = TextEdit::from_html(r#"<p><span style="color:#ff0000"><b>red</b></span></p>"#);
+    let e = TextEdit::from_html_with_color(r#"<p><span style="color:#ff0000"><b>red</b></span></p>"#);
     assert_eq!(color_ranges(&e), [(0, 3, "#ff0000".into())]);
     let mut e = e.allow_marks([Mark::Bold, Mark::Link(String::new())]);
     assert!(!e.allows_mark(&Mark::Color(String::new())));
@@ -190,7 +297,7 @@ fn allow_marks_code_block_and_secure_gate_color() {
     assert_eq!(allowed.active_color(), Some("#123456"));
 
     // Code blocks strip colour and report None for active_color.
-    let mut code = TextEdit::new("let x = 1;").rich();
+    let mut code = TextEdit::new("let x = 1;").rich().allow_color(true);
     code.set_selection(0, 3);
     code.set_color(Some("#ff0000"));
     code.set_block(Block::Code);
@@ -200,7 +307,7 @@ fn allow_marks_code_block_and_secure_gate_color() {
     assert_eq!(code.active_color(), None);
 
     // Secure fields ignore colour.
-    let mut sec = TextEdit::new("secret").secure();
+    let mut sec = TextEdit::new("secret").secure().allow_color(true);
     sec.set_selection(0, 6);
     sec.set_color(Some("#ff0000"));
     assert!(sec.marks().is_empty());
@@ -210,7 +317,7 @@ fn allow_marks_code_block_and_secure_gate_color() {
 #[test]
 fn ime_preedit_and_rtl_and_unicode_with_color() {
     // IME preedit inside a coloured span splits the committed span and styles the preedit.
-    let mut e = TextEdit::new("hello").rich();
+    let mut e = TextEdit::new("hello").rich().allow_color(true);
     e.set_selection(0, 5);
     e.set_color(Some("#d93025"));
     e.set_caret(2);
@@ -225,14 +332,14 @@ fn ime_preedit_and_rtl_and_unicode_with_color() {
     assert_eq!(color_ranges(&e), [(0, 8, "#d93025".into())]);
 
     // RTL Arabic + emoji round-trip through HTML keeping dir="rtl" and colour.
-    let mut rtl = TextEdit::new("مرحبا 👋 عالم").rich();
+    let mut rtl = TextEdit::new("مرحبا 👋 عالم").rich().allow_color(true);
     let end_first = "مرحبا".len();
     rtl.set_selection(0, end_first);
     rtl.set_color(Some("#0b8043"));
     let html = rtl.to_html();
     assert!(html.contains(r#"dir="rtl""#), "{html}");
     assert!(html.contains(r#"<span style="color:#0b8043">مرحبا</span>"#), "{html}");
-    let back = TextEdit::from_html(&html);
+    let back = TextEdit::from_html_with_color(&html);
     assert_eq!((&back.text, back.marks()), (&rtl.text, rtl.marks()));
 }
 
@@ -316,7 +423,7 @@ fn html_import_nested_font_precedence_and_round_trip() {
         r#"<span style="color: var(--ink)">g</span>"#,
         "</p>",
     );
-    let e = TextEdit::from_html(src);
+    let e = TextEdit::from_html_with_color(src);
     assert_eq!(e.text, "abcdefg");
     assert_eq!(
         color_ranges(&e),
@@ -333,11 +440,11 @@ fn html_import_nested_font_precedence_and_round_trip() {
         exported,
         r#"<p><span style="color:#ff0000">a</span><span style="color:#0080ff">b</span><span style="color:#dc143c">c</span><span style="color:#00aa00">d</span><span style="color:#336699">e</span>fg</p>"#
     );
-    let back = TextEdit::from_html(&exported);
+    let back = TextEdit::from_html_with_color(&exported);
     assert_eq!((&back.text, back.marks()), (&e.text, e.marks()));
 
     // Nested colours restore the outer colour when the inner tag closes.
-    let nested = TextEdit::from_html(r#"<span style="color:red">a<span style="color:blue">b</span>c</span>d"#);
+    let nested = TextEdit::from_html_with_color(r#"<span style="color:red">a<span style="color:blue">b</span>c</span>d"#);
     assert_eq!(nested.text, "abcd");
     assert_eq!(
         color_ranges(&nested),
@@ -350,16 +457,16 @@ fn html_import_nested_font_precedence_and_round_trip() {
 
     // Same element with both <font color> and style="color:..." (or duplicate style color) lets
     // the later declaration win without leaking the earlier one after the closing tag.
-    let same_el = TextEdit::from_html(r#"<font color="red" style="color:blue">x</font>y<span style="color:green; color:#123456">z</span>w"#);
+    let same_el = TextEdit::from_html_with_color(r#"<font color="red" style="color:blue">x</font>y<span style="color:green; color:#123456">z</span>w"#);
     assert_eq!(same_el.text, "xyzw");
     assert_eq!(color_ranges(&same_el), [(0, 1, "#0000ff".into()), (2, 3, "#123456".into())]);
 
     // Round-trip combined with Bold, Italic, Underline, Link, and Pill.
-    let mut combo = TextEdit::from_html(
+    let mut combo = TextEdit::from_html_with_color(
         r#"<p><a href="https://example.com"><span style="color:#d93025"><strong><em>link</em></strong></span></a> <span data-pill="id:1"><span style="color:#1a73e8">@tag</span></span></p>"#,
     );
     let html = combo.to_html();
-    let round = TextEdit::from_html(&html);
+    let round = TextEdit::from_html_with_color(&html);
     assert_eq!((&round.text, round.marks()), (&combo.text, combo.marks()));
     combo.set_selection(0, 4);
     assert!(combo.selected_html().contains(r#"<span style="color:#d93025">"#));

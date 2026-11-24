@@ -37,7 +37,7 @@ impl Default for State {
             "\tspans.len()\n",
             "}</code></pre>",
         );
-        let mut edit = TextEdit::from_html(html);
+        let mut edit = TextEdit::from_html_with_color(html);
         edit.focused = true;
         // Place the caret at the end of "attributed" so the Bold button shows active.
         edit.set_caret(19);

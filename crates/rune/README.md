@@ -1692,6 +1692,9 @@ newline on `Shift+Return` and pastes plain text. The mark and block methods work
   a link or code mark's run). `edit.toggle_mark(mark)`, `set_mark`, `remove_mark`,
   `set_link(Some(url))` and `set_color(Some("#d93025"))` apply or remove marks on a selection, or
   arm a pending typing style when the selection is empty (cleared when the caret moves).
+  `Mark::Color` is opt-in (off by default on `.rich()` and `TextEdit::from_html` so browser or
+  code-editor ink colours are never pasted into a dark theme): enable it with `.allow_color(true)`,
+  `.allow_marks([..., Mark::Color(String::new())])`, or `TextEdit::from_html_with_color(html)`.
   `set_color` normalizes `#rgb` and `#rrggbb` (in either case) to lowercase `#rrggbb`, clears on
   `None` or empty, and ignores invalid values; link and selection colours stay on top when drawing.
   In a rich field `⌘B`, `⌘I` and `⌘U` (`Ctrl` on Windows/Linux) toggle bold, italic and

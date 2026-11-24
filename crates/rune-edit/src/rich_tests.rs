@@ -88,29 +88,17 @@ fn list_levels_stop_at_max_list_level() {
 
 #[test]
 fn paste_html_without_formatting_keeps_the_plain_whitespace() {
-    // Layout-only HTML (no marks the model keeps) falls back to the plain text's whitespace.
-    let layout_only = concat!(
-        "<meta charset='utf-8'><div style=\"font-family: monospace; white-space: pre;\">",
-        "<div><span>fn</span><span>&nbsp;a()&nbsp;{</span></div>",
-        "<div><span>&nbsp; &nbsp; b</span></div><div><span>}</span></div></div>",
-    );
-    let mut e = TextEdit::new("").rich();
-    e.paste_html(layout_only, "fn a() {\n    b\n}");
-    assert_eq!(e.text, "fn a() {\n    b\n}");
-
-    // VS Code's coloured copy keeps plain whitespace when the field disallows `Mark::Color`.
-    let vscode = concat!(
+    // VS Code's copy: colour spans in a `white-space: pre` div.
+    // Default `.rich()` does not opt into `Mark::Color`, so it falls back to plain whitespace.
+    let html = concat!(
         "<meta charset='utf-8'><div style=\"color: #d4d4d4;white-space: pre;\">",
         "<div><span style=\"color: #569cd6;\">fn</span><span>&nbsp;a()&nbsp;{</span></div>",
         "<div><span>&nbsp; &nbsp; b</span></div><div><span>}</span></div></div>",
     );
-    let mut no_color = TextEdit::new("")
-        .rich()
-        .allow_marks([Mark::Bold, Mark::Italic, Mark::Underline, Mark::Strike, Mark::Code, Mark::Link(String::new())]);
-    no_color.paste_html(vscode, "fn a() {\n    b\n}");
-    assert_eq!(no_color.text, "fn a() {\n    b\n}");
-    assert!(no_color.marks().is_empty());
-
+    let mut e = TextEdit::new("").rich();
+    e.paste_html(html, "fn a() {\n    b\n}");
+    assert_eq!(e.text, "fn a() {\n    b\n}");
+    assert!(e.marks().is_empty(), "default rich field strips pasted colours");
     let mut e = TextEdit::new("").rich();
     e.paste_html("<p>a  <b>b</b></p>", "a  b");
     assert_eq!((e.text.as_str(), marked(&e, &Mark::Bold)), ("a b", vec!["b"]), "formatted HTML still wins");
@@ -442,6 +430,7 @@ fn html_from_browsers_notes_slack_and_docs_round_trips() {
     ));
     assert_eq!(chrome.text, "Hello world");
     assert_eq!(marked(&chrome, &Mark::Bold), ["Hello"]);
+    assert!(chrome.marks().iter().all(|m| m.mark.color_hex().is_none()), "default from_html drops browser black ink");
     round_trip(&chrome, "browser");
 
     let notes = TextEdit::from_html(concat!(
@@ -468,6 +457,7 @@ fn html_from_browsers_notes_slack_and_docs_round_trips() {
     assert_eq!(slack.soft_breaks(), &[1]);
     assert_eq!(marked(&slack, &Mark::Code), ["x()"]);
     assert_eq!(marked(&slack, &Mark::Link("https://a.b/c?d=1&e=2".into())), ["link"]);
+    assert!(slack.marks().iter().all(|m| m.mark.color_hex().is_none()), "default from_html drops Slack ink colour");
     round_trip(&slack, "slack");
 
     let docs = TextEdit::from_html(concat!(
@@ -493,7 +483,7 @@ fn random_edits_keep_ranges_blocks_and_soft_breaks_consistent() {
     for seed in 0..40u64 {
         let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
         let mut next = |n: u64| { state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407); (state >> 33) % n };
-        let mut e = TextEdit::from_html("<p>start <b>bold</b></p><ul><li>item</li></ul>");
+        let mut e = TextEdit::from_html("<p>start <b>bold</b></p><ul><li>item</li></ul>").allow_color(true);
         let (mut clip, mut clip_html) = (String::new(), String::new());
         for step in 0..300 {
             let op = next(22);
