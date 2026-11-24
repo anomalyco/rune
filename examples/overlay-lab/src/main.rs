@@ -2,10 +2,19 @@
 //! full-screen area pickers, with optional capture exclusion.
 
 use std::sync::{Arc, Mutex};
-use rune::{App, AppSpec, Color, Cx, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, RunOptions, Tx, WindowSpec, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, Cx, Display, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, RunOptions, ScreenEdge, Tx, WindowSpec, col, el, row, text};
 
 const BLUE: Color = Color { r: 0.25, g: 0.55, b: 1.0, a: 1.0 };
 const DARK: Color = Color { r: 0.055, g: 0.065, b: 0.085, a: 0.97 };
+
+const EDGE_SLOTS: [(&str, ScreenEdge, Align, f32, f32); 6] = [
+    ("Top · Center", ScreenEdge::Top, Align::Center, 40.0, 0.0),
+    ("Top · Start", ScreenEdge::Top, Align::Start, 16.0, 16.0),
+    ("Top · End", ScreenEdge::Top, Align::End, 16.0, 16.0),
+    ("Bottom · Start", ScreenEdge::Bottom, Align::Start, 16.0, 16.0),
+    ("Bottom · Center", ScreenEdge::Bottom, Align::Center, 16.0, 0.0),
+    ("Bottom · End", ScreenEdge::Bottom, Align::End, 16.0, 16.0),
+];
 
 #[derive(Default)]
 struct Handles { pill: Option<OverlayHandle<State>>, pickers: Vec<OverlayHandle<State>> }
@@ -15,14 +24,29 @@ struct State {
     clicks: u32,
     picker: bool,
     expanded: bool,
+    edge_slot: usize,
     hovered: String,
+    work_area: String,
     selection: Option<[f32; 4]>,
     selection_at_press: Option<[f32; 4]>,
     pointer: rune::Live<[f32; 2]>,
     handles: Arc<Mutex<Handles>>,
 }
 fn init() -> State {
-    State { underlay: false, hit_only: false, clicks: 0, picker: false, expanded: false, hovered: String::new(), selection: None, selection_at_press: None, pointer: rune::Live::new([160.0, 100.0]), handles: Arc::default() }
+    State { underlay: false, hit_only: false, clicks: 0, picker: false, expanded: false, edge_slot: 0, hovered: String::new(), work_area: String::new(), selection: None, selection_at_press: None, pointer: rune::Live::new([160.0, 100.0]), handles: Arc::default() }
+}
+fn format_work_area(display: &Display) -> String {
+    let ((wx, wy), (ww, wh)) = display.work_area();
+    let ((dx, dy), (dw, dh)) = (display.position, display.size);
+    format!("work_area ({wx},{wy}) {ww}×{wh} / display ({dx},{dy}) {dw}×{dh}")
+}
+fn cycle_edge(s: &mut State) {
+    s.edge_slot = (s.edge_slot + 1) % EDGE_SLOTS.len();
+    let (label, edge, align, margin, inset) = EDGE_SLOTS[s.edge_slot];
+    if let Some(pill) = &s.handles.lock().unwrap().pill {
+        pill.set_placement(Some(OverlayPlacement::Edge { edge, margin, align, inset }));
+    }
+    s.hovered = if s.work_area.is_empty() { label.into() } else { format!("{label} · {}", s.work_area) };
 }
 fn show_picker(s: &mut State) {
     let handles = s.handles.lock().unwrap();
@@ -90,13 +114,23 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(chip("Screen", show_picker)).child(chip("iPhone", |s| s.expanded = !s.expanded));
     if s.expanded { chips = chips.child(chip("Route", |s| s.expanded = false)); }
     chips = chips.child(chip("Paste", |s| s.expanded = !s.expanded))
+        .child(chip("Edge", cycle_edge))
         .child(chip("×", |s| { if let Some(pill) = &s.handles.lock().unwrap().pill { pill.hide(); } }));
+    let status = if !s.hovered.is_empty() { s.hovered.as_str() } else { s.work_area.as_str() };
     col().w_full().h_full().center().gap(8.0).child(chips)
-        .child(text(&s.hovered).color(BLUE))
+        .child(text(status).color(BLUE))
 }
 fn spec() -> AppSpec<State> {
     AppSpec { title: "Overlay lab", size: (680.0, 160.0), min_size: None, init, view,
-        scenes: &[("pill", |_| {}), ("expanded", |s| s.expanded = true), ("picker", |s| { s.picker = true; s.selection = Some([140.0, 100.0, 560.0, 320.0]); })],
+        scenes: &[
+            ("pill", |_| {}),
+            ("expanded", |s| s.expanded = true),
+            ("work-area", |s| {
+                s.edge_slot = 5;
+                s.work_area = "Bottom · End · work_area (0,0) 1920×1032 / display (0,0) 1920×1080".into();
+            }),
+            ("picker", |s| { s.picker = true; s.selection = Some([140.0, 100.0, 560.0, 320.0]); }),
+        ],
         fonts: &[], families: ("sans-serif", "monospace"), setup: None, poll: None, on_key: Some(key) }
 }
 
@@ -160,6 +194,7 @@ fn main() {
         let handles = Arc::new(Mutex::new(Handles::default()));
         let mut app = App::new(spec()).windowless();
         for display in displays {
+            eprintln!("overlay-lab display {:?} {} scale={}", display.name, format_work_area(display), display.scale);
             let mut state = init();
             state.picker = true;
             state.handles = handles.clone();
@@ -172,6 +207,7 @@ fn main() {
         }
         let mut state = init();
         state.handles = handles.clone();
+        state.work_area = displays.iter().find(|d| d.primary).or_else(|| displays.first()).map(format_work_area).unwrap_or_default();
         let pill = app.overlay(OverlaySpec { margin: 40.0, ..OverlaySpec::new("Rune pill", (680.0, 160.0), view) }.options(OverlayOptions {
             display: DisplayTarget::UnderPointer, follow_pointer: true,
             input: OverlayInput::Regions, exclude_from_capture: exclude, level: OverlayLevel::AboveOverlays, prewarm: true, ..Default::default()

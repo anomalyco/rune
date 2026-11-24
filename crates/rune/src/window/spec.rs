@@ -62,6 +62,31 @@ impl Display {
         if let Some(crate::NativeDisplayId::MacOS(id)) = self.native_id() { return crate::platform::macos::display_bounds(id); }
         native_bounds_for(self.native_id(), self.position, self.size, self.scale)
     }
+
+    /// Usable work area as `(origin, size)` in the same physical desktop-pixel coordinates as
+    /// [`position`](Self::position) and [`size`](Self::size).
+    ///
+    /// On Windows, this queries `GetMonitorInfoW`'s `rcWork` (excluding the taskbar and docked
+    /// app bars) for this display's `HMONITOR`, matching the region used by edge-placed
+    /// overlays. If the display is no longer available, or on other platforms and headless
+    /// virtual displays, this returns `(self.position, self.size)`.
+    ///
+    /// ```no_run
+    /// rune::run_windows(|displays| {
+    ///     for display in displays {
+    ///         let ((x, y), (w, h)) = display.work_area();
+    ///         let _ = (x, y, w, h);
+    ///     }
+    ///     Vec::<rune::AnyWindowSpec>::new()
+    /// });
+    /// ```
+    pub fn work_area(&self) -> ((i32, i32), (u32, u32)) {
+        #[cfg(target_os = "windows")]
+        if let Some(work) = self.id.as_ref().and_then(|id| crate::platform::win32::work_area(&id.0)) {
+            return work;
+        }
+        (self.position, self.size)
+    }
 }
 
 pub(crate) fn native_bounds_for(

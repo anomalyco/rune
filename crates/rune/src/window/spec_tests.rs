@@ -217,3 +217,49 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
         .max_native_materials(usize::MAX);
     assert_eq!(overlay_clamped.runtime.max_native_materials, 64);
 }
+
+#[test]
+fn display_work_area_falls_back_to_full_bounds_for_headless_displays() {
+    let primary = Display {
+        id: None,
+        name: Some("headless".into()),
+        position: (0, 0),
+        size: (1920, 1080),
+        scale: 1.0,
+        primary: true,
+    };
+    assert_eq!(primary.work_area(), ((0, 0), (1920, 1080)));
+
+    let secondary = Display {
+        id: None,
+        name: None,
+        position: (-1920, -240),
+        size: (2560, 1440),
+        scale: 1.5,
+        primary: false,
+    };
+    assert_eq!(secondary.work_area(), ((-1920, -240), (2560, 1440)));
+
+    let empty = Display {
+        id: None,
+        name: None,
+        position: (0, 0),
+        size: (0, 0),
+        scale: 1.0,
+        primary: false,
+    };
+    assert_eq!(empty.work_area(), ((0, 0), (0, 0)));
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn win32_rect_to_work_area_handles_all_four_edges_negative_origins_and_clamping() {
+    use crate::platform::win32::rect_to_work_area;
+    assert_eq!(rect_to_work_area(0, 0, 1920, 1032), ((0, 0), (1920, 1032)));
+    assert_eq!(rect_to_work_area(0, 48, 1920, 1080), ((0, 48), (1920, 1032)));
+    assert_eq!(rect_to_work_area(64, 0, 1920, 1080), ((64, 0), (1856, 1080)));
+    assert_eq!(rect_to_work_area(0, 0, 1856, 1080), ((0, 0), (1856, 1080)));
+    assert_eq!(rect_to_work_area(-1856, -200, 0, 832), ((-1856, -200), (1856, 1032)));
+    assert_eq!(rect_to_work_area(100, 200, 50, 150), ((100, 200), (0, 0)));
+    assert_eq!(rect_to_work_area(i32::MIN, i32::MIN, i32::MAX, i32::MAX), ((i32::MIN, i32::MIN), (u32::MAX, u32::MAX)));
+}
