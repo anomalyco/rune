@@ -146,7 +146,7 @@ impl RuntimeCore {
         let mut inside: Vec<String> = Vec::new();
         let mut entering: Vec<usize> = Vec::new();
         if let Some((x, y)) = self.pointer.pos
-            && let Some(top) = self.top_hit(x, y)
+            && let Some(top) = self.top_hover_hit(x, y)
         {
             for &(id, _) in self.hit.hits() {
                 if let Some((i, n)) = self.tree.node_index.get(&id).map(|&i| (i, &self.tree.nodes[i]))
@@ -209,7 +209,7 @@ impl RuntimeCore {
         match flips {
             Some(flips) => flips.iter().any(held),
             None => {
-                let top = self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y));
+                let top = self.pointer.pos.and_then(|(x, y)| self.top_hover_hit(x, y));
                 let (captured, alone, shared) = (self.pointer.captured_path(), self.hovered_alone_at(top), self.shared_hovered_at(top));
                 (0..self.tree.nodes.len()).filter_map(|i| self.hover_flip(i, top, captured, alone, &shared)).any(|f| held(&f))
             }
@@ -327,7 +327,7 @@ impl RuntimeCore {
 
     #[cfg(test)]
     fn hovered_alone(&self) -> Option<usize> {
-        self.hovered_alone_at(self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y)))
+        self.hovered_alone_at(self.pointer.pos.and_then(|(x, y)| self.top_hover_hit(x, y)))
     }
 
     /// Keyboard focus shows on node `i` or inside it (CSS `:has(:focus-visible)`): a hover group
@@ -349,7 +349,7 @@ impl RuntimeCore {
 
     #[cfg(test)]
     fn shared_hovered(&self) -> Vec<Rc<str>> {
-        self.shared_hovered_at(self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y)))
+        self.shared_hovered_at(self.pointer.pos.and_then(|(x, y)| self.top_hover_hit(x, y)))
     }
 
     /// Node `i`'s hover track, if it has one and isn't leaving. `top`: the topmost hit under
@@ -400,7 +400,7 @@ impl RuntimeCore {
         if !self.tree.nodes.iter().map(|n| n.id).eq(self.tree.built_ids.iter().copied()) {
             return false;
         }
-        let top = self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y));
+        let top = self.pointer.pos.and_then(|(x, y)| self.top_hover_hit(x, y));
         let captured = self.pointer.captured_path();
         let alone = self.hovered_alone_at(top);
         let shared = self.shared_hovered_at(top);
@@ -437,7 +437,7 @@ impl RuntimeCore {
         }
         let mut changed = false;
         let mut flips = std::mem::take(&mut self.pointer.hover_hold.flips);
-        let top = self.pointer.pos.and_then(|(x, y)| self.top_hit(x, y));
+        let top = self.pointer.pos.and_then(|(x, y)| self.top_hover_hit(x, y));
         let captured = self.pointer.captured_path();
         let alone = self.hovered_alone_at(top);
         let shared = self.shared_hovered_at(top);
