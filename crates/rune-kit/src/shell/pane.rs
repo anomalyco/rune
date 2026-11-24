@@ -359,6 +359,8 @@ fn tail_fade(spring: Spring, fraction: f32, open: bool) -> Anim {
 /// sidebar's toggle, slides the sidebar in over the content as a floating surface, without
 /// moving the layout. Leaving it closes it again; pressing the toggle docks it where it is.
 /// `SplitView::sidebar_peek(SidebarPeek::new().edge(16.0, ms(40)).toggle_delay(ms(80)))`.
+const DEFAULT_PEEK_REDUCED_FADE: f32 = 0.15;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SidebarPeek {
     pub(super) edge: f32,
@@ -368,7 +370,7 @@ pub struct SidebarPeek {
     pub(super) margin: f32,
     pub(super) grace: Duration,
     pub(super) spring: Option<Spring>,
-    pub(super) reduced_fade: f32,
+    pub(super) reduced_fade: Option<f32>,
 }
 
 impl SidebarPeek {
@@ -383,7 +385,7 @@ impl SidebarPeek {
             margin: 12.0,
             grace: Duration::from_millis(150),
             spring: None,
-            reduced_fade: 0.15,
+            reduced_fade: None,
         }
     }
     /// The zone along the window's leading edge, `width` points into the content past the
@@ -417,10 +419,18 @@ impl SidebarPeek {
         self.spring = Some(s);
         self
     }
-    /// Under Reduce Motion the peek fades in place over `seconds` instead of sliding.
+    /// Under Reduce Motion the peek fades in place over `seconds` instead of sliding (0 snaps).
+    /// Without this override, a sliding peek fades over 0.15 s and `Spring::NONE` stays instant.
     pub fn reduced_motion_fade(mut self, seconds: f32) -> Self {
-        self.reduced_fade = seconds.max(0.0);
+        self.reduced_fade = Some(seconds.max(0.0));
         self
+    }
+    pub(super) fn reduced_fade_for(&self, spring: Spring) -> f32 {
+        match self.reduced_fade {
+            Some(s) => s,
+            None if spring == Spring::NONE => 0.0,
+            None => DEFAULT_PEEK_REDUCED_FADE,
+        }
     }
 }
 

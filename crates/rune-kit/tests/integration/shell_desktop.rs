@@ -471,3 +471,73 @@ fn resting_on_a_row_or_toggle_in_a_peek_keeps_it_open_until_leaving() {
     rt.frame(0.02);
     assert!(!rt.state.sidebar.is_peeking(), "closes after leaving the toggle");
 }
+
+#[test]
+fn sidebar_peek_with_spring_none_adds_no_fade_under_reduced_motion() {
+    struct PeekDoc {
+        sidebar: PaneState,
+        peek: SidebarPeek,
+        reduced: bool,
+    }
+    fn peek_view(s: &PeekDoc, cx: &mut Cx<PeekDoc>) -> El {
+        cx.reduced_motion(s.reduced);
+        let k = Kit::neutral(true);
+        SplitView::new(col().key("body").w_full().h_full())
+            .sidebar(&s.sidebar, |s: &mut PeekDoc| &mut s.sidebar, col().key("side-body").w_full().h_full())
+            .sidebar_peek(s.peek)
+            .reduced_motion(s.reduced)
+            .build(&k)
+    }
+    let run_cycle = |peek: SidebarPeek, reduced: bool| -> (usize, usize, f32, f32) {
+        let mut rt = Runtime::new(
+            PeekDoc { sidebar: PaneState::new(240.0).collapsed(), peek, reduced },
+            peek_view,
+            (900.0, 600.0),
+            Env::new(true, 1.0),
+        );
+        rt.set_system_reduced_motion(reduced);
+        rt.frame(0.0);
+        for _ in 0..30 {
+            if !rt.frame(1.0 / 60.0) { break; }
+        }
+        rt.update(|s, _| s.sidebar.peek());
+        let mut open_frames = 0;
+        let mut open_content_alpha = 0.0;
+        let mut open_surface_alpha = 0.0;
+        for i in 0..60 {
+            let animating = rt.frame(1.0 / 60.0);
+            if i == 0 {
+                open_content_alpha = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("pane-content")).unwrap().opacity;
+                open_surface_alpha = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("pane-surface")).unwrap().opacity;
+            }
+            if !animating { break; }
+            open_frames += 1;
+        }
+        rt.update(|s, _| s.sidebar.end_peek());
+        let mut close_frames = 0;
+        for _ in 0..60 {
+            if !rt.frame(1.0 / 60.0) { break; }
+            close_frames += 1;
+        }
+        (open_frames, close_frames, open_content_alpha, open_surface_alpha)
+    };
+
+    // Spring::NONE without reduced_motion_fade must stay instant under reduced motion.
+    let instant_peek = SidebarPeek::new().spring(Spring::NONE);
+    let (norm_open, norm_close, _, _) = run_cycle(instant_peek, false);
+    let (red_open, red_close, red_c, red_s) = run_cycle(instant_peek, true);
+    assert_eq!(norm_open, 0, "normal Spring::NONE peek opens in zero extra frames");
+    assert_eq!(norm_close, 0, "normal Spring::NONE peek closes in zero extra frames");
+    assert_eq!((red_open, red_close), (0, 0), "reduced motion must not add a fade to Spring::NONE peek (open={red_open}, close={red_close})");
+    assert_eq!((red_c, red_s), (1.0, 1.0), "Spring::NONE peek lands at full opacity immediately under reduced motion");
+
+    // Explicit reduced_motion_fade(0.0) with a real spring snaps both content and surface.
+    let (zero_open, zero_close, zero_c, zero_s) = run_cycle(SidebarPeek::new().reduced_motion_fade(0.0), true);
+    assert_eq!((zero_open, zero_close), (0, 0), "reduced_motion_fade(0.0) must snap both pane-content and pane-surface (open={zero_open}, close={zero_close})");
+    assert_eq!((zero_c, zero_s), (1.0, 1.0));
+
+    // Explicit reduced_motion_fade(0.15) stays an override even with Spring::NONE.
+    let (ovr_open, ovr_close, ovr_c, ovr_s) = run_cycle(SidebarPeek::new().spring(Spring::NONE).reduced_motion_fade(0.15), true);
+    assert!(ovr_open > 0 && ovr_close > 0, "explicit reduced_motion_fade override still fades (open={ovr_open}, close={ovr_close})");
+    assert!(ovr_c < 1.0 && ovr_s < 1.0, "override starts fading on first frame (content={ovr_c}, surface={ovr_s})");
+}

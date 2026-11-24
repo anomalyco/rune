@@ -630,7 +630,8 @@ fn dock(d: &Dock, key: &str, p: Pane, leading: bool, content: Contents) -> El {
     let phase = if content.peek.is_some() { s.peek_phase() } else { Peek::None };
     let floating = phase != Peek::None;
     let fade_peek = |pk: &SidebarPeek| -> Anim {
-        if d.reduced && pk.reduced_fade > 0.0 { Curve::tween(pk.reduced_fade, Easing::EASE_IN_OUT).into() } else { Anim::INSTANT }
+        let sec = pk.reduced_fade_for(pk.spring.unwrap_or(k.motion.control));
+        if d.reduced && sec > 0.0 { Curve::tween(sec, Easing::EASE_IN_OUT).into() } else { Anim::INSTANT }
     };
     let (opacity, fade) = match (open, phase, &content.peek) {
         (false, Peek::Shown, Some(pk)) => (1.0, fade_peek(pk)),
@@ -662,8 +663,8 @@ fn dock(d: &Dock, key: &str, p: Pane, leading: bool, content: Contents) -> El {
             // them, on the same spring, so they hold still.
             _ => (0.0, spring.into()),
         };
-        let surface_motion: Anim = if d.reduced && pk.reduced_fade > 0.0 {
-            Curve::tween(pk.reduced_fade, Easing::EASE_IN_OUT).into()
+        let surface_motion: Anim = if d.reduced {
+            fade_peek(&pk)
         } else if phase == Peek::Docked {
             spring.into()
         } else {
