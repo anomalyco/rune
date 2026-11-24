@@ -1,12 +1,13 @@
 //! The platform's spell checker for text fields that ask for it (`El::spellcheck`): Windows'
-//! spell checking API (`ISpellChecker`), AppKit's `NSSpellChecker` on macOS, Hunspell
-//! dictionaries a page fetches in a browser (`web.rs`), none elsewhere.
+//! spell checking API (`ISpellChecker`), AppKit's `NSSpellChecker` on macOS, installed system
+//! Hunspell dictionaries on Linux (`linux.rs`), and Hunspell dictionaries a page fetches in a
+//! browser (`web.rs`), none elsewhere.
 //! A field's misspelled words get a red marker under them and their suggestions in its menu.
 //!
-//! Where the platform checks one language at a time (Windows), an app picks the dictionaries:
-//! [`available_languages`], [`set_languages`] and the fields' Spellcheck Languages menu
-//! (`El::on_spellcheck_languages`). A word is misspelled when every chosen dictionary says so,
-//! as Chromium's multilingual checking does. macOS picks each text's language itself.
+//! Where the platform checks one language at a time (Windows, Linux, web), an app picks the
+//! dictionaries: [`available_languages`], [`set_languages`] and the fields' Spellcheck Languages
+//! menu (`El::on_spellcheck_languages`). A word is misspelled when every chosen dictionary says
+//! so, as Chromium's multilingual checking does. macOS picks each text's language itself.
 //! Apps normally reach this crate through `rune::spell`.
 
 use std::cell::RefCell;
@@ -15,6 +16,10 @@ use std::rc::Rc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(any(target_os = "linux", target_arch = "wasm32", test))]
+mod hunspell;
+#[cfg(any(target_os = "linux", test))]
+mod linux;
 #[doc(hidden)]
 pub mod pause;
 #[cfg(target_os = "macos")]
@@ -26,7 +31,7 @@ mod platform;
 #[cfg(target_os = "windows")]
 #[path = "windows.rs"]
 mod platform;
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_arch = "wasm32")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux", target_arch = "wasm32")))]
 mod platform {
     pub(super) const OFF_THREAD: bool = false;
     pub(super) fn misspelled(_: &str) -> Vec<(usize, usize)> { Vec::new() }
@@ -38,6 +43,8 @@ mod platform {
     pub(super) fn name_in(_: &str, _: &str) -> Option<String> { None }
     pub(super) fn sort_in<T>(_: &mut [(String, T)], _: &str) -> bool { false }
 }
+#[cfg(target_os = "linux")]
+use linux as platform;
 
 /// The most suggestions a field's menu offers, as Chromium's.
 const MAX_SUGGESTIONS: usize = 5;
@@ -106,7 +113,7 @@ pub fn language_name(tag: &str) -> String {
 
 /// A language tag's name in `locale`'s language as a browser's `Intl.DisplayNames(locale)`
 /// gives it, from the platform's ICU: `en-US` in `de` is "Amerikanisches Englisch". `None`
-/// where the platform has no ICU to ask (only Windows has dictionaries to name).
+/// where the platform has no ICU to ask (only Windows provides ICU display names here).
 #[doc(hidden)]
 pub fn language_name_in(tag: &str, locale: &str) -> Option<String> {
     platform::name_in(tag, locale)
@@ -259,7 +266,7 @@ pub fn misspelled(text: &str, wake: Option<&std::sync::Arc<rune_core::live::Wake
         let ready = platform::prepare(wake);
         #[cfg(not(target_arch = "wasm32"))]
         let ready = true;
-        let (found, whole) = if cfg!(any(target_os = "windows", target_arch = "wasm32")) { by_words(text, wake) } else { (platform::misspelled(text), true) };
+        let (found, whole) = if cfg!(any(target_os = "windows", target_os = "linux", target_arch = "wasm32")) { by_words(text, wake) } else { (platform::misspelled(text), true) };
         let whole = whole && ready;
         let found = Rc::new(found);
         // A text with words still on the checker thread is put together again when they're back.
@@ -459,5 +466,7 @@ pub fn learn(word: &str) {
     WORDS.with_borrow_mut(|w| *w = Words::default());
 }
 
+#[cfg(test)]
+mod linux_tests;
 #[cfg(test)]
 mod tests;

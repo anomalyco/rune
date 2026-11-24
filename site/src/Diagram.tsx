@@ -207,7 +207,7 @@ const crateRows: { label: string; crates: Crate[] }[] = [
       { name: "rune-text", does: "Parley shaping and layout, font discovery, glyph atlas, icons" },
       { name: "rune-media", does: "Video and audio playback, zero-copy native surfaces, recording" },
       { name: "rune-image", does: "Content-addressed image decoding, linear-light mips, SVG/AVIF, app icons" },
-      { name: "rune-spell", does: "Platform spellchecking (Windows, macOS, web Hunspell)" },
+      { name: "rune-spell", does: "Platform spellchecking (Windows, macOS, Linux and web Hunspell)" },
     ],
   },
   {

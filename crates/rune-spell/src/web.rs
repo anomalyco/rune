@@ -100,42 +100,11 @@ fn with_ready<R>(f: impl FnOnce(&[&spellbook::Dictionary]) -> R) -> Option<R> {
 }
 
 pub(super) fn misspelled(text: &str) -> Vec<(usize, usize)> {
-    use unicode_segmentation::UnicodeSegmentation;
-    with_ready(|dicts| {
-        let mut out = Vec::new();
-        for (chunk_at, chunk) in text.split_whitespace().map(|c| (c.as_ptr() as usize - text.as_ptr() as usize, c)) {
-            // Paths, URLs, addresses and code are not prose.
-            if chunk.contains(['/', '@', '`', '_', '\\', '=', '<', '>', '{', '}']) || chunk.contains("::") { continue; }
-            for (at, word) in chunk.split_word_bound_indices() {
-                if !checked(word) { continue; }
-                if dicts.iter().all(|d| !d.check(word)) { out.push((chunk_at + at, chunk_at + at + word.len())); }
-            }
-        }
-        out
-    }).unwrap_or_default()
-}
-
-/// A word worth checking: letters (an apostrophe inside), at least two, no digits, and no
-/// capital after its first letter (an acronym or an identifier).
-fn checked(word: &str) -> bool {
-    let letters = word.chars().filter(|c| c.is_alphabetic()).count();
-    letters >= 2
-        && word.chars().all(|c| c.is_alphabetic() || c == '\'' || c == '\u{2019}')
-        && !word.chars().skip(1).any(char::is_uppercase)
+    with_ready(|dicts| super::hunspell::misspelled(dicts, text)).unwrap_or_default()
 }
 
 pub(super) fn suggest(word: &str) -> Vec<String> {
-    with_ready(|dicts| {
-        let mut out = Vec::new();
-        for d in dicts {
-            let mut found = Vec::new();
-            d.suggest(word, &mut found);
-            for s in found {
-                if !out.contains(&s) { out.push(s); }
-            }
-        }
-        out
-    }).unwrap_or_default()
+    with_ready(|dicts| super::hunspell::suggest(dicts, word)).unwrap_or_default()
 }
 
 pub(super) fn learn(word: &str) {
