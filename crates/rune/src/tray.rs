@@ -1,17 +1,25 @@
 //! A system tray icon with a flat menu: StatusNotifierItem and `com.canonical.dbusmenu` over
-//! zbus on Linux, `Shell_NotifyIcon` on its own message-only window on Windows. Each tray runs
-//! on its own thread, so it needs no event loop of the app's and answers while the app's window
-//! is closed. A primary click sends [`TrayEvent::Activate`]; a secondary click opens the menu,
-//! whose picks send [`TrayEvent::Menu`]. Dropping the [`Tray`] removes the icon.
+//! zbus on Linux, `NSStatusBar` / `NSStatusItem` on macOS, and `Shell_NotifyIcon` on its own
+//! message-only window on Windows. A primary click sends [`TrayEvent::Activate`]; a secondary
+//! click (or Control-click on macOS) opens the menu, whose picks send [`TrayEvent::Menu`].
+//! Dropping the [`Tray`] removes the icon.
+//!
+//! Linux and Windows run each tray on its own thread, so it needs no event loop of the app's
+//! and answers while the app's window is closed. On macOS [`Tray::new`] must run on the main
+//! thread (and works while every window is hidden, including in an accessory app), while
+//! [`Tray::set_menu`], [`Tray::set_tooltip`] and dropping [`Tray`] may happen from any thread.
 //!
 //! Linux shows the icon only where a tray host runs (KDE, waybar, most bars; GNOME needs an
 //! extension). Without one, [`Tray::new`] still succeeds and the icon appears once a host
-//! starts. The Linux backend needs the default `dbus` feature. macOS isn't supported yet.
-#[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
+//! starts. The Linux backend needs the default `dbus` feature.
+#[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows"))]
 use std::sync::Arc;
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 #[path = "tray/sni.rs"]
+mod native;
+#[cfg(target_os = "macos")]
+#[path = "tray/macos.rs"]
 mod native;
 #[cfg(target_os = "windows")]
 #[path = "tray/win32.rs"]
@@ -19,9 +27,32 @@ mod native;
 
 /// The icon as straight (not premultiplied) RGBA rows, `width × height × 4` bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TrayIcon { pub(crate) width: u32, pub(crate) height: u32, pub(crate) rgba: Vec<u8> }
+pub struct TrayIcon {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) rgba: Vec<u8>,
+    pub(crate) template: bool,
+}
 impl TrayIcon {
-    pub fn rgba(width: u32, height: u32, pixels: Vec<u8>) -> Self { Self { width, height, rgba: pixels } }
+    pub fn rgba(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        Self { width, height, rgba: pixels, template: false }
+    }
+
+    /// Marks the icon as a macOS template image (`NSImage.isTemplate`).
+    ///
+    /// Template images use their alpha channel as a mask so macOS tints the glyph for light and
+    /// dark menu bars. Ignored on other platforms. Defaults to `false`.
+    ///
+    /// ```
+    /// use rune::TrayIcon;
+    ///
+    /// let icon = TrayIcon::rgba(32, 32, vec![0; 32 * 32 * 4]).template(true);
+    /// # let _ = icon;
+    /// ```
+    pub fn template(mut self, template: bool) -> Self {
+        self.template = template;
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,12 +112,12 @@ impl std::fmt::Display for TrayError {
 }
 impl std::error::Error for TrayError {}
 
-/// Runs on the tray's thread; keep it short and hand work to the app.
-#[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
+/// Runs on the tray's thread (or the main thread on macOS); keep it short and hand work to the app.
+#[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows"))]
 pub(crate) type Handler = Arc<dyn Fn(TrayEvent) + Send + Sync>;
 
 pub struct Tray {
-    #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
+    #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows"))]
     native: native::Native,
 }
 
@@ -107,21 +138,21 @@ impl Tray {
         if expected != Some(spec.icon.rgba.len()) {
             return Err(TrayError::Backend("tray icon size doesn't match its pixels".into()));
         }
-        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
+        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows"))]
         { native::Native::new(spec, Arc::new(on_event)).map(|native| Self { native }) }
-        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "windows")))]
+        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows")))]
         { let _ = (spec, on_event); Err(TrayError::Unsupported) }
     }
     pub fn set_menu(&self, menu: Vec<TrayItem>) {
-        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
+        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows"))]
         self.native.set_menu(menu);
-        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "windows")))]
+        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows")))]
         let _ = menu;
     }
     pub fn set_tooltip(&self, tooltip: impl Into<String>) {
-        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "windows"))]
+        #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows"))]
         self.native.set_tooltip(tooltip.into());
-        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "windows")))]
+        #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows")))]
         let _ = tooltip;
     }
 }
@@ -295,9 +326,107 @@ pub(super) fn truncate_utf16(text: &str, max_units: usize) -> Vec<u16> {
     out
 }
 
+/// Computes the logical point size `(width, height)` for a macOS status-bar icon of pixel
+/// dimensions `width × height` so its height matches `bar_thickness` while preserving aspect
+/// ratio. Returns `None` for zero dimensions or non-positive/non-finite bar thickness.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(super) fn macos_icon_point_size(width: u32, height: u32, bar_thickness: f64) -> Option<(f64, f64)> {
+    if width == 0 || height == 0 || !bar_thickness.is_finite() || bar_thickness <= 0.0 {
+        return None;
+    }
+    let pt_w = bar_thickness * (f64::from(width) / f64::from(height));
+    pt_w.is_finite().then_some((pt_w, bar_thickness))
+}
+
+/// Converts a row of straight RGBA pixels into premultiplied RGBA pixels.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(super) fn premultiply_rgba(straight_rgba: &[u8], out: &mut [u8]) {
+    for (dst, src) in out.chunks_exact_mut(4).zip(straight_rgba.chunks_exact(4)) {
+        let a = u32::from(src[3]);
+        dst[0] = ((u32::from(src[0]) * a + 127) / 255) as u8;
+        dst[1] = ((u32::from(src[1]) * a + 127) / 255) as u8;
+        dst[2] = ((u32::from(src[2]) * a + 127) / 255) as u8;
+        dst[3] = src[3];
+    }
+}
+
+/// What a macOS status-bar click should trigger.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MacClickAction {
+    Activate,
+    ShowMenu,
+}
+
+/// Primary click activates; secondary click or Control-click opens the tray menu.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(super) fn classify_mac_click(is_right_button: bool, control_modifier: bool) -> MacClickAction {
+    if is_right_button || control_modifier {
+        MacClickAction::ShowMenu
+    } else {
+        MacClickAction::Activate
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Tray>();
+    }
+
+    #[test]
+    fn tray_icon_template_defaults_false_and_toggles() {
+        let plain = TrayIcon::rgba(2, 2, vec![0; 16]);
+        assert!(!plain.template);
+        let templated = plain.clone().template(true);
+        assert!(templated.template);
+        assert_ne!(plain, templated);
+        assert_eq!(templated.template(false), plain);
+    }
+
+    #[test]
+    fn macos_icon_point_size_preserves_aspect_ratio_and_rejects_invalid() {
+        assert_eq!(macos_icon_point_size(32, 32, 22.0), Some((22.0, 22.0)));
+        assert_eq!(macos_icon_point_size(44, 44, 22.0), Some((22.0, 22.0)));
+        assert_eq!(macos_icon_point_size(64, 32, 22.0), Some((44.0, 22.0)));
+        assert_eq!(macos_icon_point_size(16, 32, 22.0), Some((11.0, 22.0)));
+        assert_eq!(macos_icon_point_size(48, 24, 24.0), Some((48.0, 24.0)));
+        assert_eq!(macos_icon_point_size(0, 32, 22.0), None);
+        assert_eq!(macos_icon_point_size(32, 0, 22.0), None);
+        assert_eq!(macos_icon_point_size(0, 0, 22.0), None);
+        assert_eq!(macos_icon_point_size(32, 32, 0.0), None);
+        assert_eq!(macos_icon_point_size(32, 32, -22.0), None);
+        assert_eq!(macos_icon_point_size(32, 32, f64::NAN), None);
+        assert_eq!(macos_icon_point_size(32, 32, f64::INFINITY), None);
+    }
+
+    #[test]
+    fn premultiply_rgba_scales_rgb_and_preserves_alpha() {
+        let src = [
+            255, 128, 64, 255, // opaque
+            255, 128, 64, 0,   // transparent -> RGB zeroed
+            200, 100, 50, 128, // ~50% alpha
+        ];
+        let mut dst = [0u8; 12];
+        premultiply_rgba(&src, &mut dst);
+        assert_eq!(dst, [
+            255, 128, 64, 255,
+            0, 0, 0, 0,
+            100, 50, 25, 128,
+        ]);
+    }
+
+    #[test]
+    fn mac_click_classification_splits_primary_and_secondary_or_control() {
+        assert_eq!(classify_mac_click(false, false), MacClickAction::Activate);
+        assert_eq!(classify_mac_click(true, false), MacClickAction::ShowMenu);
+        assert_eq!(classify_mac_click(false, true), MacClickAction::ShowMenu);
+        assert_eq!(classify_mac_click(true, true), MacClickAction::ShowMenu);
+    }
 
     #[test]
     fn enabled_leaves_separators_alone() {
