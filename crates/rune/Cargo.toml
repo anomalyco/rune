@@ -340,5 +340,9 @@ harness = false
 name = "help_macos"
 harness = false
 
+[[test]]
+name = "macos_callback_panic"
+harness = false
+
 [lints]
 workspace = true

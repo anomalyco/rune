@@ -33,6 +33,7 @@ mod file_drop;
 mod handle;
 mod host;
 mod keys;
+mod panic_trap;
 pub mod spec;
 mod state;
 mod surface;
@@ -175,6 +176,10 @@ pub(crate) trait AnyHost {
     /// Ends a tracking pop-up menu and answers waiting ones `None`, before the host drops or
     /// the loop exits.
     fn cancel_menus(&mut self) {}
+    /// Hard-stops an active or coasting macOS display link immediately when a panic is caught so
+    /// no further display ticks fire while the loop unwinds.
+    #[cfg(target_os = "macos")]
+    fn stop_pacing(&mut self) {}
     /// False for hosts that must not keep the loop running alone (overlays).
     fn keeps_loop(&self) -> bool { true }
     /// An app window's key; overlays have none.
@@ -234,6 +239,9 @@ struct Windows {
     any_shown: bool,
     /// First startup window creation error when no loop-keeping host stays alive or ever showed.
     startup_error: Option<String>,
+    /// First panic caught at the macOS `ApplicationHandler` boundary, re-raised after `run_app` returns.
+    #[cfg(target_os = "macos")]
+    panic: panic_trap::PanicTrap,
     /// Fatal Wayland display error captured while `ActiveEventLoop` is still alive.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     display_error: Option<String>,
@@ -241,6 +249,33 @@ struct Windows {
     wayland_wake: wayland_wake::State,
 }
 impl Windows {
+    /// On macOS, catches panics before they cross winit's `extern "C"` AppKit delegate or view
+    /// boundary, skips subsequent callbacks, and requests loop exit so `run` re-raises the
+    /// original panic once `run_app` returns. Inside a nested tracking or modal run-loop mode
+    /// where `event_loop.exit()` cannot return from `[NSApp run]`, logs the mode and re-raises
+    /// immediately rather than hanging.
+    #[cfg(target_os = "macos")]
+    fn guard(&mut self, event_loop: &ActiveEventLoop, f: impl FnOnce(&mut Self)) {
+        if self.panic.is_panicking() {
+            return;
+        }
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self))) {
+            for host in self.hosts.iter_mut().flatten() { host.stop_pacing(); }
+            if let Some(mode) = panic_trap::nested_run_loop_mode() {
+                eprintln!("rune: panic inside macOS nested run-loop mode {mode} cannot unwind out of run()");
+                std::panic::resume_unwind(payload);
+            }
+            if self.panic.record(payload) {
+                event_loop.exit();
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[inline(always)]
+    fn guard(&mut self, _event_loop: &ActiveEventLoop, f: impl FnOnce(&mut Self)) {
+        f(self);
+    }
     /// Starts the windows `crate::open_window` asked for this turn, in fresh slots, each like
     /// a window the factory returned but without `--scene` or `--size`, which describe the
     /// launch's windows.
@@ -281,6 +316,10 @@ impl Windows {
     }
 
     fn cleanup(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "macos")]
+        if self.panic.is_panicking() {
+            return;
+        }
         if !event_loop.exiting() { self.open_requested(event_loop); }
         let _ = collect_startup_errors(&mut self.hosts, &mut self.any_shown, &mut self.startup_error);
         let ok = self.startup_error.is_none();
@@ -358,156 +397,174 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
 
 impl ApplicationHandler<WakeEvent> for Windows {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
-        let _handling = crate::quit::handling();
-        for host in self.hosts.iter_mut().flatten() { host.new_events(event_loop, cause); }
-        // Before resumed there are no hosts to clean up.
-        if self.factory.is_none() { self.cleanup(event_loop); }
+        self.guard(event_loop, |this| {
+            let _handling = crate::quit::handling();
+            for host in this.hosts.iter_mut().flatten() { host.new_events(event_loop, cause); }
+            // Before resumed there are no hosts to clean up.
+            if this.factory.is_none() { this.cleanup(event_loop); }
+        });
     }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let _handling = crate::quit::handling();
-        let Some(factory) = self.factory.take() else { return };
-        crate::marks::mark("loop.resumed");
-        let wayland = is_wayland(event_loop);
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        let wayland_outputs = wayland
-            .then(|| winit::raw_window_handle::HasDisplayHandle::display_handle(event_loop).ok())
-            .flatten()
-            .map(|display| crate::platform::wayland_output::query(display.as_raw()))
-            .unwrap_or_default();
-        let primary = event_loop.primary_monitor();
-        let displays: Vec<_> = event_loop.available_monitors().map(|m| {
-            let id = crate::DisplayId::from_monitor(m.clone(), wayland);
-            let fallback = ((m.position().x, m.position().y), (m.size().width, m.size().height), m.scale_factor());
+        self.guard(event_loop, |this| {
+            let _handling = crate::quit::handling();
+            let Some(factory) = this.factory.take() else { return };
+            crate::marks::mark("loop.resumed");
+            let wayland = is_wayland(event_loop);
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            let (position, size, scale) = match id.native_id() {
-                Some(crate::NativeDisplayId::Wayland(output_id)) => {
-                    let resolved = crate::platform::wayland_output::resolve(
-                        wayland_outputs.get(&output_id),
-                        crate::platform::wayland_output::ResolvedOutput {
-                            position: fallback.0,
-                            size: fallback.1,
-                            scale: fallback.2,
-                        },
-                    );
-                    (resolved.position, resolved.size, resolved.scale)
+            let wayland_outputs = wayland
+                .then(|| winit::raw_window_handle::HasDisplayHandle::display_handle(event_loop).ok())
+                .flatten()
+                .map(|display| crate::platform::wayland_output::query(display.as_raw()))
+                .unwrap_or_default();
+            let primary = event_loop.primary_monitor();
+            let displays: Vec<_> = event_loop.available_monitors().map(|m| {
+                let id = crate::DisplayId::from_monitor(m.clone(), wayland);
+                let fallback = ((m.position().x, m.position().y), (m.size().width, m.size().height), m.scale_factor());
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                let (position, size, scale) = match id.native_id() {
+                    Some(crate::NativeDisplayId::Wayland(output_id)) => {
+                        let resolved = crate::platform::wayland_output::resolve(
+                            wayland_outputs.get(&output_id),
+                            crate::platform::wayland_output::ResolvedOutput {
+                                position: fallback.0,
+                                size: fallback.1,
+                                scale: fallback.2,
+                            },
+                        );
+                        (resolved.position, resolved.size, resolved.scale)
+                    }
+                    _ => fallback,
+                };
+                #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+                let (position, size, scale) = fallback;
+                Display {
+                    id: Some(id), name: m.name(), position, size, scale, primary: primary.as_ref() == Some(&m),
                 }
-                _ => fallback,
-            };
-            #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-            let (position, size, scale) = fallback;
-            Display {
-                id: Some(id), name: m.name(), position, size, scale, primary: primary.as_ref() == Some(&m),
+            }).collect();
+            let specs = crate::windows::flatten(factory(&displays));
+            crate::windows::validate(&specs).expect("window keys");
+            let trace_window = this.args.window.clone().or_else(|| specs.first().map(|s| s.key().to_owned()));
+            let mut overlays = Vec::new();
+            this.hosts = start_all(specs, |slot, spec| {
+                let traced = trace_window.as_deref() == Some(spec.key());
+                spec.start(this.args.clone(), Start { proxy: this.proxy.clone(), slot, gpu: this.gpu.clone(), wayland, traced, overlays: &mut overlays })
+            }, |host| host.resumed(event_loop));
+            this.connect_overlays(overlays, event_loop);
+            // A launch with no window makes its menu bar now; a window's first frame made it.
+            #[cfg(target_os = "macos")]
+            crate::native_menu::bar_ready();
+            #[cfg(target_os = "macos")]
+            {
+                let proxy = this.proxy.clone();
+                crate::platform::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
             }
-        }).collect();
-        let specs = crate::windows::flatten(factory(&displays));
-        crate::windows::validate(&specs).expect("window keys");
-        let trace_window = self.args.window.clone().or_else(|| specs.first().map(|s| s.key().to_owned()));
-        let mut overlays = Vec::new();
-        self.hosts = start_all(specs, |slot, spec| {
-            let traced = trace_window.as_deref() == Some(spec.key());
-            spec.start(self.args.clone(), Start { proxy: self.proxy.clone(), slot, gpu: self.gpu.clone(), wayland, traced, overlays: &mut overlays })
-        }, |host| host.resumed(event_loop));
-        self.connect_overlays(overlays, event_loop);
-        // A launch with no window makes its menu bar now; a window's first frame made it.
-        #[cfg(target_os = "macos")]
-        crate::native_menu::bar_ready();
-        #[cfg(target_os = "macos")]
-        {
-            let proxy = self.proxy.clone();
-            crate::platform::reopen::install(move || proxy.send_event(WakeEvent::Reopen).is_ok());
-        }
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        {
-            let proxy = self.proxy.clone();
-            crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
-        }
-        let proxy = self.proxy.clone();
-        crate::quit::install(move |ending| proxy.send_event(WakeEvent::Quit(ending)).is_ok());
-        crate::open_url::incoming::settle();
-        // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
-        crate::render::discard_prewarm();
-        self.cleanup(event_loop);
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            {
+                let proxy = this.proxy.clone();
+                crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
+            }
+            let proxy = this.proxy.clone();
+            crate::quit::install(move |ending| proxy.send_event(WakeEvent::Quit(ending)).is_ok());
+            crate::open_url::incoming::settle();
+            // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
+            crate::render::discard_prewarm();
+            this.cleanup(event_loop);
+        });
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
-        let _handling = crate::quit::handling();
-        let slot = match &event {
-            WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-                | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
-                | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) => *i,
-            WakeEvent::Reopen => {
-                self.reopen(event_loop);
-                self.cleanup(event_loop);
-                return;
+        self.guard(event_loop, |this| {
+            let _handling = crate::quit::handling();
+            let slot = match &event {
+                WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
+                    | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
+                    | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) => *i,
+                WakeEvent::Reopen => {
+                    this.reopen(event_loop);
+                    this.cleanup(event_loop);
+                    return;
+                }
+                // A session query (`ending: false`) can still be cancelled: the windows stay up.
+                WakeEvent::Quit(ending) => {
+                    this.quit(event_loop, *ending, *ending);
+                    this.cleanup(event_loop);
+                    return;
+                }
+                WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] this.turn(event_loop); return; }
+                WakeEvent::FileDrop => return,
+                WakeEvent::LayerPending => {
+                    let _ = wayland_wake::step(&mut this.wayland_wake, wayland_wake::Event::WakeReceived);
+                    return;
+                }
+            };
+            if let Some(Some(host)) = this.hosts.get_mut(slot) {
+                host.user_event(event_loop, event);
             }
-            // A session query (`ending: false`) can still be cancelled: the windows stay up.
-            WakeEvent::Quit(ending) => {
-                self.quit(event_loop, *ending, *ending);
-                self.cleanup(event_loop);
-                return;
-            }
-            WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] self.turn(event_loop); return; }
-            WakeEvent::FileDrop => return,
-            WakeEvent::LayerPending => {
-                let _ = wayland_wake::step(&mut self.wayland_wake, wayland_wake::Event::WakeReceived);
-                return;
-            }
-        };
-        if let Some(Some(host)) = self.hosts.get_mut(slot) {
-            host.user_event(event_loop, event);
-        }
-        self.cleanup(event_loop);
+            this.cleanup(event_loop);
+        });
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
-        let _handling = crate::quit::handling();
-        // The last window's close ends a fast-exiting app: the window can go at once.
-        #[cfg(not(target_arch = "wasm32"))]
-        if matches!(event, WindowEvent::CloseRequested) && crate::quit::fast_exit_hook().is_some()
-            && !self.hosts.iter().flatten().any(|h| !h.owns(id) && !h.finished() && h.keeps_loop())
-            && let Some(host) = self.hosts.iter_mut().flatten().find(|h| h.owns(id) && h.keeps_loop())
-        {
-            host.closing_ends_app();
-        }
-        if let Some(host) = self.hosts.iter_mut().flatten().find(|h| h.owns(id)) {
-            let _input = crate::input::time::arrived(&event);
-            host.window_event(event_loop, id, event);
-        }
-        self.cleanup(event_loop);
+        self.guard(event_loop, |this| {
+            let _handling = crate::quit::handling();
+            // The last window's close ends a fast-exiting app: the window can go at once.
+            #[cfg(not(target_arch = "wasm32"))]
+            if matches!(event, WindowEvent::CloseRequested) && crate::quit::fast_exit_hook().is_some()
+                && !this.hosts.iter().flatten().any(|h| !h.owns(id) && !h.finished() && h.keeps_loop())
+                && let Some(host) = this.hosts.iter_mut().flatten().find(|h| h.owns(id) && h.keeps_loop())
+            {
+                host.closing_ends_app();
+            }
+            if let Some(host) = this.hosts.iter_mut().flatten().find(|h| h.owns(id)) {
+                let _input = crate::input::time::arrived(&event);
+                host.window_event(event_loop, id, event);
+            }
+            this.cleanup(event_loop);
+        });
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let _handling = crate::quit::handling();
-        // Windows, Linux: a later launch handed to this loop (`single_instance`) is served once
-        // the app goes on with a window shown. One that came as the app ended (its last window
-        // already closing, the quit not started) isn't: the process starts the app again for it.
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        if crate::open_url::instance::launches_waiting() && !event_loop.exiting() {
-            let windows: Vec<_> = self.hosts.iter().map(|h| h.as_ref().map(|h| h.reopen_candidate()).unwrap_or_default()).collect();
-            if crate::platform::reopen::has_visible(&windows) {
-                crate::open_url::instance::served();
+        self.guard(event_loop, |this| {
+            let _handling = crate::quit::handling();
+            // Windows, Linux: a later launch handed to this loop (`single_instance`) is served once
+            // the app goes on with a window shown. One that came as the app ended (its last window
+            // already closing, the quit not started) isn't: the process starts the app again for it.
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            if crate::open_url::instance::launches_waiting() && !event_loop.exiting() {
+                let windows: Vec<_> = this.hosts.iter().map(|h| h.as_ref().map(|h| h.reopen_candidate()).unwrap_or_default()).collect();
+                if crate::platform::reopen::has_visible(&windows) {
+                    crate::open_url::instance::served();
+                }
             }
-        }
-        crate::marks::loop_waits();
-        #[cfg(target_os = "macos")]
-        crate::native_menu::settle_standard_menus();
-        #[cfg(target_os = "macos")]
-        crate::platform::macos::launch::settle();
-        crate::cursor::os::make_pending(event_loop);
-        let mut animating = false;
-        for host in self.hosts.iter_mut().flatten() {
-            animating |= host.about_to_wait(event_loop);
-        }
-        // The frames windows want next (`redraw`), and on Windows the paints the system keeps
-        // putting off behind another window's.
-        let now = crate::time::now();
-        for host in self.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
-        let effects = wayland_wake::about_to_wait(&mut self.wayland_wake, &self.hosts);
-        self.apply_wayland_wake(event_loop, effects);
-        // Layer surfaces have no redraw events: keep turning while one animates (its vsync
-        // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
-        let deadline = self.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
-        event_loop.set_control_flow(if animating { ControlFlow::Poll }
-            else { deadline.map_or(ControlFlow::Wait, |at| ControlFlow::WaitUntil(crate::time::for_winit(at))) });
+            crate::marks::loop_waits();
+            #[cfg(target_os = "macos")]
+            crate::native_menu::settle_standard_menus();
+            #[cfg(target_os = "macos")]
+            crate::platform::macos::launch::settle();
+            crate::cursor::os::make_pending(event_loop);
+            let mut animating = false;
+            for host in this.hosts.iter_mut().flatten() {
+                animating |= host.about_to_wait(event_loop);
+            }
+            // The frames windows want next (`redraw`), and on Windows the paints the system keeps
+            // putting off behind another window's.
+            let now = crate::time::now();
+            for host in this.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
+            let effects = wayland_wake::about_to_wait(&mut this.wayland_wake, &this.hosts);
+            this.apply_wayland_wake(event_loop, effects);
+            // Layer surfaces have no redraw events: keep turning while one animates (its vsync
+            // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
+            let deadline = this.hosts.iter().flatten().filter_map(|host| host.wake_deadline()).min();
+            event_loop.set_control_flow(if animating { ControlFlow::Poll }
+                else { deadline.map_or(ControlFlow::Wait, |at| ControlFlow::WaitUntil(crate::time::for_winit(at))) });
+        });
     }
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
+        // A panic caught at the macOS callback boundary skips quit hooks, close hooks and fast exit
+        // (matching Windows and Linux where `exiting` does not run on panic), then unwinds from
+        // `run_configured`. `exiting` itself stays unguarded because `applicationWillTerminate:`
+        // never returns to `run_app`.
+        #[cfg(target_os = "macos")]
+        if self.panic.is_panicking() {
+            return;
+        }
         let _handling = crate::quit::handling();
         crate::marks::mark("loop.exiting");
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
