@@ -350,6 +350,7 @@ impl OverlayCore {
 
     pub(super) fn wake_due(&mut self, app: &mut dyn OverlayApp, now: Instant) {
         self.presence_due(app, now);
+        self.rest_step(app, crate::window::RestEvent::Woke { now }, now);
         self.retire.poll_due(now);
         // Paced to a frame interval: a hidden or covered overlay's poll that keeps asking for
         // the next frame runs once a frame, however often other events turn the loop.

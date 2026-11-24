@@ -59,7 +59,8 @@ pub(crate) use event_loop::run_windows;
 pub(crate) use file_drop::FileStep;
 pub(crate) use keys::{key_base, map_key_event, map_mods};
 pub(crate) use state::frame;
-pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
+pub(crate) use state::rest;
+pub(crate) use state::{Life, Minimize, MinimizeEvent, Rest, RestEffect, RestEvent, Sight};
 pub(crate) use surface::{
     Backoff, BackoffEffect, BackoffEvent, ConfigureError, HiddenPace, Missed,
     Presented, TIMER_FRAME, acquire_checked, configure, configure_checked, reblend_core,

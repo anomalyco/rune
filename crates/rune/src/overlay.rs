@@ -435,6 +435,7 @@ pub(in crate::overlay) struct OverlayCore {
     renderer: Option<Renderer>,
     gpu: Option<Arc<Gpu>>,
     gpu_pool: Rc<RefCell<Weak<Gpu>>>,
+    rest: crate::window::Rest,
     retire: Retire,
     dark: bool,
     dirty: bool,
@@ -523,6 +524,7 @@ impl OverlayCore {
             renderer: None,
             gpu: None,
             gpu_pool: Rc::default(),
+            rest: Default::default(),
             retire: Default::default(),
             dark: true,
             dirty: true,
@@ -762,6 +764,10 @@ impl OverlayCore {
 #[cfg(test)]
 #[path = "overlay/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "overlay/rest_tests.rs"]
+mod rest_tests;
 
 #[cfg(test)]
 #[path = "overlay/state_walk_tests.rs"]

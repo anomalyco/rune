@@ -409,7 +409,7 @@ impl FrameHost for OverlayFrame<'_> {
             self.more = false;
             return;
         }
-        if !self.prewarm { self.core.meter.presented(); }
+        if !self.prewarm { self.core.meter.presented(); self.core.note_presented(submitted); }
         self.core.dirty = false;
         let Some(live) = self.core.surface.live_mut() else {
             self.more = false;
@@ -657,6 +657,7 @@ impl OverlayCore {
         if occluded {
             if let Some(live) = self.surface.live_mut() && let Some(pacing) = &mut live.pacing { pacing.stop(); }
             app.set_live_visible(false);
+            self.rest_step(app, crate::window::RestEvent::Unseen, crate::time::now());
         } else if self.presence.drawing() {
             self.dirty = true;
             self.backoff_step(crate::window::BackoffEvent::Revealed);
