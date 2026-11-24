@@ -93,7 +93,15 @@ impl Scene {
         self.track_set(b, prop::FILL, fill);
         self.track_animate(b, prop::FILL, to_fill, anim.y);
         self.intent(to, Intent::POSITION | Intent::SIZE | Intent::SHAPE, anim.y.curve.logical_duration());
+        let start_rect = Rect::from_edges(start[0], start[1], start[2], start[3]);
+        let end_rect = self.nodes[b].frame.translated(self.parent_target_origin(b));
+        self.handovers.push(Handover { from, to, start: start_rect, end: end_rect });
         self.remove_now(a);
+    }
+
+    /// Drains the matched-geometry handovers completed since the last call.
+    pub fn take_handovers(&mut self) -> Vec<Handover> {
+        std::mem::take(&mut self.handovers)
     }
 
     /// Where node `id`'s screen path ends in scene root space (`end_local + parent_target_origin`),

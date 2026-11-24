@@ -95,6 +95,20 @@ pub struct ElementInfo {
     pub stuck: f32,
 }
 
+/// One `El::matched` handover completed on the last frame: `from` left the tree at `from_rect`
+/// as `to` took over on the same frame at `to_rect`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MatchedHandover {
+    /// Element tree path of the leaving source (`ElementInfo::path`).
+    pub from: String,
+    /// Element tree path of the arriving target (`ElementInfo::path`).
+    pub to: String,
+    /// Drawn rect `[x, y, w, h]` of `from` on its last frame, in window points.
+    pub from_rect: [f32; 4],
+    /// Drawn rect `[x, y, w, h]` of `to` on the handover frame, in window points.
+    pub to_rect: [f32; 4],
+}
+
 /// An element [`Runtime::element_at`] found.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Picked {
@@ -218,6 +232,21 @@ impl RuntimeCore {
             Some(t) => [t.mat[0] * x + t.mat[1] * y, t.mat[2] * x + t.mat[3] * y],
             None => [x, y],
         }
+    }
+
+    /// `El::matched` handovers completed on the last frame, with both drawn rects in window points.
+    pub fn matched_handovers(&self) -> Vec<MatchedHandover> {
+        self.motion.handovers().iter().map(|h| {
+            let to_rect = self.tree.node_index.get(&h.to_id)
+                .and_then(|&i| self.paint.drawn.get(i).copied())
+                .unwrap_or(h.start_rect);
+            MatchedHandover {
+                from: h.from_path.clone(),
+                to: h.to_path.clone(),
+                from_rect: h.from_rect,
+                to_rect,
+            }
+        }).collect()
     }
 
     pub fn elements(&self) -> Vec<ElementInfo> {

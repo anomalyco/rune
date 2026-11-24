@@ -93,6 +93,7 @@ pub use props::PropId;
 pub use props::REDUCED_FADE;
 pub use props::prop;
 pub use scene::FrameOutput;
+pub use scene::Handover;
 pub use scene::LayoutAnim;
 pub use scene::Mask;
 pub use scene::Mount;

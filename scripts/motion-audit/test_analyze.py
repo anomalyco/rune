@@ -47,7 +47,7 @@ def scene(frames, flags=None, clips=None):
     gone. A name's parent is its longest named prefix. `clips` maps a name to a window-space
     clip (x0, y0, x1, y1) cutting the visible part of it and what it holds. A frame's "@ev"
     lists the inputs the app recorded in it ("wheel 3.0")."""
-    names = sorted({nm for fr in frames for nm in fr if nm != "@ev"})
+    names = sorted({nm for fr in frames for nm in fr if not nm.startswith("@")})
     ids = {nm: i + 1 for i, nm in enumerate(names)}
     def parent(nm):
         cut = [nm[:j] for j in range(len(nm)) if nm[j] == "/" and nm[:j] in ids]
@@ -56,7 +56,12 @@ def scene(frames, flags=None, clips=None):
     alive, meta = set(), set()
     for fr in frames:
         out = {"e": [], "quality": {"animating": True}, "m": [], "g": [], "sc": [], "ev": fr.get("@ev", [])}
-        fr = {nm: v for nm, v in fr.items() if nm != "@ev"}
+        if "@ho" in fr:
+            out["handover"] = [
+                {"from": ids.get(a), "to": ids.get(b), "from_rect": list(ar), "to_rect": list(br)}
+                for a, b, ar, br in fr["@ho"]
+            ]
+        fr = {nm: v for nm, v in fr.items() if not nm.startswith("@")}
         for nm, (x, y, w, h, op, *sc) in fr.items():
             out["sc"] += [[ids[nm], *sc[0]]] if sc else []
             if nm not in meta:
@@ -267,6 +272,43 @@ def main():
     assert "idle-frames" not in scale_settle_trace(12, True), "100 ms scale-settle after motion"
     assert "idle-frames" in scale_settle_trace(20, True), "overrun scale-settle"
     assert "idle-frames" in scale_settle_trace(6, False), "cold scale-settle"
+
+    # matched handovers: clean morphing and same-size flights pass; late, early, 5 px away,
+    # opacity mismatch, and unrecorded remounts are caught.
+    def spring_rect(a, b, j):
+        t = (j + 1) / 8.0
+        p = 1.0 - (1.0 + t) * math.exp(-t)
+        return tuple(a[m] + (b[m] - a[m]) * p for m in range(4))
+    src_r = (180.0, 115.0, 50.0, 25.0)
+    dst_r = (120.0, 20.0, 160.0, 80.0)
+    before_ho = hold({**still, "root/board/card": (*src_r, 1.0)}, 15)
+    after_ho = [{**still, "root/card": (*spring_rect(src_r, dst_r, j), 1.0)} for j in range(30)]
+    clean_morph = before_ho + [{**after_ho[0], "@ho": [("root/board/card", "root/card", src_r, after_ho[0]["root/card"][:4])]}] + after_ho[1:]
+    assert not kinds(clean_morph), f"clean morphing handover: {kinds(clean_morph)}"
+
+    same_r = (260.0, 115.0, 50.0, 25.0)
+    after_same = [{**still, "root/card": (*spring_rect(src_r, same_r, j), 1.0)} for j in range(30)]
+    clean_same = before_ho + [{**after_same[0], "@ho": [("root/board/card", "root/card", src_r, after_same[0]["root/card"][:4])]}] + after_same[1:]
+    assert not kinds(clean_same), f"clean same-size handover: {kinds(clean_same)}"
+
+    late = before_ho + [{**still, "@ho": [("root/board/card", "root/card", src_r, after_ho[0]["root/card"][:4])]}] + after_ho
+    late_k = kinds(late)
+    assert "bad-handover" in late_k and "pop-out" in late_k, f"late target: {late_k}"
+
+    early = before_ho[:-1] + [{**before_ho[-1], "root/card": (*src_r, 1.0)}] + [{**after_ho[0], "@ho": [("root/board/card", "root/card", src_r, after_ho[0]["root/card"][:4])]}] + after_ho[1:]
+    assert "bad-handover" in kinds(early), f"early target: {kinds(early)}"
+
+    shifted_r = (185.0, 115.0, 50.0, 25.0)
+    after_shift = [{**still, "root/card": (*spring_rect(shifted_r, dst_r, j), 1.0)} for j in range(30)]
+    far = before_ho + [{**after_shift[0], "@ho": [("root/board/card", "root/card", src_r, after_shift[0]["root/card"][:4])]}] + after_shift[1:]
+    assert "bad-handover" in kinds(far), f"5 px jump: {kinds(far)}"
+
+    dim_first = {**after_ho[0], "root/card": (*after_ho[0]["root/card"][:4], 0.5), "@ho": [("root/board/card", "root/card", src_r, after_ho[0]["root/card"][:4])]}
+    assert "bad-handover" in kinds(before_ho + [dim_first] + after_ho[1:]), "opacity mismatch"
+
+    plain_remount = before_ho + hold({**still, "root/card": (*src_r, 1.0)}, 30)
+    plain_k = kinds(plain_remount)
+    assert "pop-out" in plain_k and "pop-in" in plain_k, f"plain remount without handover: {plain_k}"
     print("ok")
 
 

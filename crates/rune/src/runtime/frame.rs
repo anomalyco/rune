@@ -142,6 +142,7 @@ impl RuntimeCore {
     /// frame or a sleeping host's gap belongs to old tracks, never to targets first observed
     /// on this frame.
     pub(crate) fn frame_split(&mut self, app: &mut dyn AppDriver, catch_up: f64, dt: f64) -> bool {
+        self.motion.clear_handovers();
         // Like a native shell: the logical clock follows host time (timers, poll), while
         // animations step by the frame's own dt, so idle time never lands on a fresh commit.
         let elapsed = catch_up + dt;

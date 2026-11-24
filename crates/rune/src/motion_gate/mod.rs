@@ -49,7 +49,7 @@
 pub mod check;
 mod gate;
 
-pub use check::{Finding, RULES, Recording, Rule, Snap, Track, check, dump, rule, sheet, short};
+pub use check::{Finding, Handover, RULES, Recording, Rule, Snap, Track, check, dump, rule, sheet, short};
 pub use gate::{Allow, AllowRow, Cell, Job, Report, allowed, gate, gate_rows, report, report_rows, run};
 pub(crate) use gate::evidence;
 
@@ -96,7 +96,11 @@ fn sample(rt: &mut crate::runtime::RuntimeCore, rec: &mut Recording, raster: &mu
     rec.commits(rt.scrolling(), why);
     let els: Vec<ElementInfo> = rt.elements();
     let paints = rt.paints();
+    let frame = rec.frames;
     rec.sample_with(&els, Some(&paints));
+    for h in rt.matched_handovers() {
+        rec.handover(frame, h.from, h.to, h.from_rect, h.to_rect);
+    }
     let grid = grid.unwrap_or_else(|| raster.of(rt, rec.size));
     rec.grid(Some(grid));
     rec.tips.resize(rec.frames.saturating_sub(1), None);
