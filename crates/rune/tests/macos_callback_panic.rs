@@ -15,7 +15,7 @@ mod mac {
     use std::os::unix::process::ExitStatusExt;
     use std::process::Command;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use block2::{Block, RcBlock};
     use objc2::{MainThreadMarker, msg_send, runtime::AnyObject};
@@ -83,7 +83,7 @@ mod mac {
                 std::process::exit(99);
             });
         }
-        match std::env::var(CASE).ok().as_deref() {
+        match rune::env::var(CASE).as_deref() {
             Some("probe_nested_tracking") => case_probe_nested_tracking(),
             Some("resumed_uncaught") => case_resumed_uncaught(),
             Some("resumed_caught") => case_resumed_caught(),
@@ -153,18 +153,18 @@ mod mac {
     fn case_resumed_uncaught() {
         rune::fast_exit(count_fast_exit);
         let options = RunOptions { accessory: true, ..Default::default() };
-        let _ = rune::try_run_windows_with_args(options, std::iter::empty::<String>(), |_| -> Vec<rune::AnyWindowSpec> {
+        rune::try_run_windows_with_args(options, std::iter::empty::<String>(), |_| -> Vec<rune::AnyWindowSpec> {
             panic!("boom-from-resumed");
-        });
+        }).ok();
     }
 
     fn case_resumed_caught() {
         rune::fast_exit(count_fast_exit);
         let options = RunOptions { accessory: true, ..Default::default() };
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = rune::try_run_windows_with_args(options, std::iter::empty::<String>(), |_| -> Vec<rune::AnyWindowSpec> {
+            rune::try_run_windows_with_args(options, std::iter::empty::<String>(), |_| -> Vec<rune::AnyWindowSpec> {
                 std::panic::panic_any(TypedPanic(924));
-            });
+            }).ok();
         }));
         let err = caught.expect_err("panic in resumed must unwind out of try_run_windows_with_args");
         assert_eq!(err.downcast_ref::<TypedPanic>(), Some(&TypedPanic(924)));
@@ -176,9 +176,9 @@ mod mac {
         rune::fast_exit(count_fast_exit);
         let options = RunOptions { accessory: true, ..Default::default() };
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = rune::try_run_windows_with_args(options, std::iter::empty::<String>(), |_| -> Vec<rune::AnyWindowSpec> {
+            rune::try_run_windows_with_args(options, std::iter::empty::<String>(), |_| -> Vec<rune::AnyWindowSpec> {
                 std::panic::panic_any(TypedPanic(925));
-            });
+            }).ok();
         }));
         let err = caught.expect_err("panic in did_finish_launching must unwind out of try_run_windows_with_args");
         assert_eq!(err.downcast_ref::<TypedPanic>(), Some(&TypedPanic(925)));
@@ -200,7 +200,7 @@ mod mac {
             std::panic::panic_any(TypedPanic(77));
         });
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = app.try_run();
+            app.try_run().ok();
         }));
         let err = caught.expect_err("panic in update must unwind out of try_run");
         assert_eq!(err.downcast_ref::<TypedPanic>(), Some(&TypedPanic(77)));
@@ -224,7 +224,7 @@ mod mac {
         handle.update(|_: &mut (), _: &mut Tx| {
             panic!("boom-from-user-event");
         });
-        let _ = app.try_run();
+        app.try_run().ok();
     }
 
     /// Runs a tracking-mode nested loop from a run-loop block (so winit's `event_handler.ready()`
@@ -267,7 +267,7 @@ mod mac {
                 CFRunLoopWakeUp(rl);
             }
         });
-        let _ = app.try_run();
+        app.try_run().ok();
     }
 
     /// Empirically verifies on macOS that calling `event_loop.exit()` from inside a callback
@@ -289,7 +289,7 @@ mod mac {
                     let tracking = NSString::from_str("NSEventTrackingRunLoopMode");
                     let tracking_ref = (&*tracking as *const NSString).cast::<c_void>();
                     let p1 = proxy.clone();
-                    let b1 = RcBlock::new(move || { let _ = p1.send_event(Wake); });
+                    let b1 = RcBlock::new(move || { p1.send_event(Wake).ok(); });
                     // SAFETY: main thread; bounded 0.5s live-resize-shaped tracking call.
                     unsafe {
                         let rl = CFRunLoopGetMain();
@@ -298,7 +298,7 @@ mod mac {
                         let mtm = MainThreadMarker::new().unwrap();
                         let app = NSApplication::sharedApplication(mtm);
                         let until = NSDate::dateWithTimeIntervalSinceNow(0.5);
-                        let t0 = Instant::now();
+                        let t0 = rune::time::now();
                         let ev: *mut AnyObject = msg_send![
                             &*app,
                             nextEventMatchingMask: NSEventMask::LeftMouseUp.0,

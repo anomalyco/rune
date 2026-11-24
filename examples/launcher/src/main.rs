@@ -77,7 +77,7 @@ fn launcher_view(s: &Launcher, _: &mut Cx<Launcher>) -> El {
     let t = tok::theme(true);
     let accent = tok::accent(0, true);
     let found = matches(&s.query.text);
-    let field = text_input(&s.query, type_::BODY.lh(26.0)).key("query").single_line().grow(1.0)
+    let field = text_input(&s.query, type_::BODY.lh(26.0)).key("query").label("Search notes").single_line().grow(1.0)
         .color(t.text).placeholder("Search notes", t.text_secondary)
         .on_edit(|s: &mut Launcher| &mut s.query)
         .on_input_key(|s: &mut Launcher, ev: &KeyEvent, tx: &mut Tx| {

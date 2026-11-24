@@ -283,7 +283,7 @@ fn headless_snap_and_tree_with_settle_capture_settled_geometry_while_default_sta
     }
 
     let dir = std::env::temp_dir().join(format!("rune-settle-e2e-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
 
     let run_one = |name: &str, settle: bool| -> (image::RgbaImage, Value) {

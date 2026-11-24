@@ -6,7 +6,7 @@ struct TempFile(PathBuf);
 
 impl Drop for TempFile {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        std::fs::remove_file(&self.0).ok();
     }
 }
 

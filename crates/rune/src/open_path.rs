@@ -211,7 +211,7 @@ fn file_uri_from_bytes(bytes: &[u8]) -> Option<String> {
             out.push(b as char);
         } else {
             use std::fmt::Write;
-            let _ = write!(out, "%{b:02X}");
+            write!(out, "%{b:02X}").ok();
         }
     }
     Some(out)
@@ -320,7 +320,7 @@ fn dispatch_native(request: PathRequest) -> Result<(), OpenPathError> {
                     use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
                     // SAFETY: STA COM initialization for this dedicated worker thread; Shell APIs
                     // (`SHOpenFolderAndSelectItems`, `ShellExecuteW`) expect an STA apartment.
-                    let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+                    drop(unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) });
                     while let Ok(req) = rx.recv() {
                         let verb = req.action.verb();
                         let display = req.path.display().to_string();
@@ -376,7 +376,9 @@ fn run_windows(request: &PathRequest) -> Result<(), OpenPathError> {
             if pidl.is_null() {
                 return Err(OpenPathError::Failed("path could not be resolved by the shell".into()));
             }
+            // SAFETY: `pidl` is non-null from `ILCreateFromPathW` and remains valid until `ILFree` below.
             let hr = unsafe { SHOpenFolderAndSelectItems(pidl, None, 0) };
+            // SAFETY: `pidl` was allocated by `ILCreateFromPathW` above and is freed once here.
             unsafe { ILFree(Some(pidl)) };
             hr.map_err(|e| OpenPathError::Failed(format!("SHOpenFolderAndSelectItems failed: {e}")))
         }

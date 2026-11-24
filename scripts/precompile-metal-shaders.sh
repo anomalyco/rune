@@ -98,7 +98,7 @@ hash_rs_path.write_text(
     f'pub(super) const UBER_ABI_FNV64: u64 = 0x{(tmp / "abi.fnv64").read_text().strip()};\n'
     "#[cfg(all(test, target_os = \"macos\"))]\n"
     f'pub(super) const UBER_MSL_OPTIONS_FNV64: u64 = 0x{(tmp / "options.fnv64").read_text().strip()};\n'
-    "#[cfg(test)]\n"
+    "#[cfg(all(test, target_os = \"macos\"))]\n"
     f'pub(super) const UBER_MSL_BLAKE3: &str = "{msl_hash}";\n'
     "#[cfg(test)]\n"
     f"pub(super) const UBER_METALLIB_FNV64: u64 = 0x{h:016x};\n"

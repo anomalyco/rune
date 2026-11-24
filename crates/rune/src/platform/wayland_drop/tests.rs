@@ -947,7 +947,7 @@ mod unix_pipe_tests {
     fn unix_pipe_times_out_on_silent_peer_over_socket_pair() {
         let (rx, _tx) = nonblocking_pair();
         let cancel = CancelToken::new().expect("CancelToken");
-        let start = std::time::Instant::now();
+        let start = crate::time::now();
         let out = read_fd_bounded(rx, &cancel, 1024, Duration::from_millis(40));
         assert_eq!(out, Some(ReadOutcome::TimedOut));
         assert!(start.elapsed() < Duration::from_secs(2));
@@ -962,7 +962,7 @@ mod unix_pipe_tests {
             std::thread::sleep(Duration::from_millis(20));
             killer.cancel();
         });
-        let start = std::time::Instant::now();
+        let start = crate::time::now();
         let out = read_fd_bounded(rx, &cancel, 1024, Duration::from_secs(5));
         handle.join().unwrap();
         assert_eq!(out, None);

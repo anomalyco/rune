@@ -32,7 +32,7 @@ thread_local! {
         RefCell::new(ComposePool::new(MAX_LOCALES));
 }
 
-fn current_locale() -> String { keyboard::compose_locale(|name| std::env::var(name).ok()) }
+fn current_locale() -> String { keyboard::compose_locale(crate::env::var) }
 
 fn compile_table(locale: &str) -> Option<compose::Table> {
     #[cfg(test)]

@@ -136,7 +136,7 @@ fn headless_chrome_overlay_follows_dynamic_titlebar_changes() {
     if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = super::headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-dynamic-chrome-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
 
     struct State { phase: usize }

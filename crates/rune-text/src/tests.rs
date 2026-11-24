@@ -662,7 +662,7 @@ fn non_emoji_named_color_emoji_stays_last_in_symbol_families() {
     const FONT: &[u8] = include_bytes!("../../rune/assets/IBMPlexMono-Regular.ttf");
 
     let dir = std::env::temp_dir().join(format!("rune-text-emoji-test-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
     let mono_path = dir.join("mono.ttf");
     let color_path = dir.join("color.ttf");
     std::fs::write(&mono_path, FONT).unwrap();
@@ -701,7 +701,7 @@ fn non_emoji_named_color_emoji_stays_last_in_symbol_families() {
     assert_eq!(ts_noto.emoji, Some("Noto Color Emoji"));
     assert_eq!(ts_noto.symbol_families, vec!["DejaVu Sans", "Noto Color Emoji"]);
 
-    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// `first_color_emoji_family` picks the first colour font (`COLR`, `CBDT` or `sbix`) from

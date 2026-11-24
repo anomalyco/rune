@@ -160,9 +160,9 @@ fn open_linux_backend<T>(
 
 #[cfg(target_os = "linux")]
 fn linux_backend(wayland: bool, sink: Sink) -> Result<NativeBackend, ShortcutError> {
-    let session_type = std::env::var("XDG_SESSION_TYPE").ok();
-    let wayland_display = std::env::var("WAYLAND_DISPLAY").ok();
-    let display = std::env::var("DISPLAY").ok();
+    let session_type = crate::env::var("XDG_SESSION_TYPE");
+    let wayland_display = crate::env::var("WAYLAND_DISPLAY");
+    let display = crate::env::var("DISPLAY");
     let env = LinuxEnv {
         wayland,
         session_type: session_type.as_deref(),

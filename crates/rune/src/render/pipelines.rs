@@ -355,11 +355,11 @@ impl Renderer {
     /// rejected the uber shader or pipeline.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     pub(crate) fn poll_uber_check(&mut self) -> Option<String> {
-        if let Some(event) = self.uber_check.answered() {
-            for effect in self.uber_check.step(&mut self.uber_check_seq, event) {
-                let shader_check::UberCheckEffect::Fail(reason) = effect;
-                return Some(reason);
-            }
+        if let Some(event) = self.uber_check.answered()
+            && let Some(shader_check::UberCheckEffect::Fail(reason)) =
+                self.uber_check.step(&mut self.uber_check_seq, event).into_iter().next()
+        {
+            return Some(reason);
         }
         self.uber_check.failed_reason().map(str::to_owned)
     }

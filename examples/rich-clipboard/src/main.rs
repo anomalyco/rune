@@ -234,6 +234,7 @@ mod tests {
         rt.use_clipboard(&board);
         rt.frame(0.0);
         assert!(rt.find("revision").is_some());
+        assert!(rt.accessibility_json().to_string().contains("Rich text editor"));
         rt.update(|s, _| s.field.focused = true);
         rt.frame(0.0);
         board.set_content(ClipboardContent::new("Hi").with_html("<b>Hi</b><img src=x onerror=alert(1)>"));

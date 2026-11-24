@@ -231,13 +231,13 @@ impl Drop for EffectWarm {
         for effect in step(&mut self.state, Event::Shutdown) {
             match effect {
                 Effect::JoinNow(thread) | Effect::Drain(thread) => {
-                    let _ = thread.join();
+                    thread.join().ok();
                 }
                 Effect::SpawnWorker => {}
             }
         }
         for thread in self.draining.drain(..) {
-            let _ = thread.join();
+            thread.join().ok();
         }
     }
 }
@@ -250,7 +250,7 @@ impl EffectWarm {
         while i < self.draining.len() {
             if self.draining[i].is_finished() {
                 let handle = self.draining.swap_remove(i);
-                let _ = handle.join();
+                handle.join().ok();
             } else {
                 i += 1;
             }
@@ -264,7 +264,7 @@ impl EffectWarm {
                 Effect::SpawnWorker => spawn = true,
                 Effect::Drain(thread) => self.draining.push(thread),
                 Effect::JoinNow(thread) => {
-                    let _ = thread.join();
+                    thread.join().ok();
                 }
             }
         }
@@ -345,7 +345,7 @@ impl EffectWarm {
                 let _ = step(&mut self.state, Event::AllConsumed);
             }
             for handle in self.draining.drain(..) {
-                let _ = handle.join();
+                handle.join().ok();
             }
         }
     }
@@ -526,7 +526,7 @@ fn run_worker(job: WarmJob) {
         }
     }
     if !cancelled() {
-        let _ = sender.send(out);
+        sender.send(out).ok();
     }
 }
 

@@ -111,7 +111,7 @@ fn read_keymap_fd_ignores_and_preserves_shared_file_offset() -> std::io::Result<
 #[test]
 fn wait_for_configure_times_out_on_silent_socket_and_errors_on_hangup() -> std::io::Result<()> {
     use std::os::unix::net::UnixStream;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     use wayland_client::Connection;
     use crate::platform::layer_shell_machine::configure_wait::Outcome;
 
@@ -119,7 +119,7 @@ fn wait_for_configure_times_out_on_silent_socket_and_errors_on_hangup() -> std::
     let Ok(conn) = Connection::from_socket(client) else { return Ok(()); };
     let mut queue = conn.new_event_queue::<super::State>();
     let mut state = super::State::default();
-    let started = Instant::now();
+    let started = crate::time::now();
     let outcome = super::wait_for_configure(&conn, &mut queue, &mut state, Duration::from_millis(40));
     assert_eq!(outcome, Outcome::TimedOut);
     assert!(started.elapsed() >= Duration::from_millis(30));
@@ -130,7 +130,7 @@ fn wait_for_configure_times_out_on_silent_socket_and_errors_on_hangup() -> std::
     let Ok(conn) = Connection::from_socket(client) else { return Ok(()); };
     let mut queue = conn.new_event_queue::<super::State>();
     let mut state = super::State::default();
-    let started = Instant::now();
+    let started = crate::time::now();
     let outcome = super::wait_for_configure(&conn, &mut queue, &mut state, Duration::from_secs(2));
     assert_eq!(outcome, Outcome::Error);
     assert!(started.elapsed() < Duration::from_secs(1));
@@ -288,7 +288,7 @@ fn has_pending_events_tracks_foreign_queue_until_dispatched_and_false_when_close
             host.prepare_read()
         });
         if let Some(guard) = guard {
-            let _ = guard.read();
+            guard.read().ok();
         }
     }
 

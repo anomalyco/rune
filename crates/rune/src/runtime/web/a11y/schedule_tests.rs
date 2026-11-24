@@ -140,7 +140,7 @@ impl<S: 'static> HostHarness<S> {
 
 #[test]
 fn scrolling_and_virtual_shifts_defer_all_raf_syncs_until_settle_and_idle() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut seq = Seq::default();
     let mut state = ScheduleState::default();
 
@@ -255,7 +255,7 @@ fn scrolling_and_virtual_shifts_defer_all_raf_syncs_until_settle_and_idle() {
 
 #[test]
 fn non_scroll_app_commits_never_flush_synchronously_in_raf() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut seq = Seq::default();
     let mut state = ScheduleState::default();
 
@@ -291,7 +291,7 @@ fn non_scroll_app_commits_never_flush_synchronously_in_raf() {
 
 #[test]
 fn consumer_demand_cancels_pending_timers_and_flushes_immediately() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut seq = Seq::default();
     let mut state = ScheduleState::default();
 
@@ -329,7 +329,7 @@ fn consumer_demand_cancels_pending_timers_and_flushes_immediately() {
 
 #[test]
 fn document_mode_flushes_synchronously_on_first_frame_and_commits() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut seq = Seq::default();
     let mut state = ScheduleState::default();
 
@@ -371,7 +371,7 @@ fn host_settle_flushes_within_settle_time_when_frames_run_every_100ms_after_scro
         )
     }
 
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let rt = Runtime::new((), view, (390.0, 844.0), Env::new(false, 1.0));
     let mut host = HostHarness::new(rt, t0);
 
@@ -447,7 +447,7 @@ fn host_scroll_on_idle_page_flushes_without_follow_up_frame_and_consumer_demand_
         )
     }
 
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let rt = Runtime::new((), view, (390.0, 400.0), Env::new(false, 1.0));
     let mut host = HostHarness::new(rt, t0);
     host.step_frame(Duration::ZERO);
@@ -480,7 +480,7 @@ fn host_scroll_on_idle_page_flushes_without_follow_up_frame_and_consumer_demand_
 
 #[test]
 fn max_defer_bound_prevents_starvation_under_repeated_scrolling_signals() {
-    let t0 = Instant::now();
+    let t0 = crate::time::now();
     let mut seq = Seq::default();
     let mut state = ScheduleState::default();
 

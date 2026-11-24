@@ -87,6 +87,7 @@ impl Slot {
                     // up) leaves a surplus count in the semaphore: drain them so later frames keep
                     // waiting for the compositor. Bounded in case the handle is not a semaphore.
                     for _ in 0..MAX_DRAIN {
+                        // SAFETY: `object` is the swap chain's live waitable handle; zero timeout polls without blocking.
                         if unsafe { WaitForSingleObject(object, 0) } != WAIT_OBJECT_0 { break; }
                     }
                     *self = Slot::Free;

@@ -42,7 +42,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> El {
         messages = messages.child(text(message.clone()).key(format!("message-{i}"))
             .font(type_::BODY).color(t.text).w_full().padding(16.0).radius(12.0).fill(t.card));
     }
-    let composer = text_input(&state.draft, type_::BODY).key("composer")
+    let composer = text_input(&state.draft, type_::BODY).key("composer").label("Message")
         .placeholder("Message", t.text_secondary).color(t.text)
         .grow(1.0).h(48.0).padding(12.0).radius(12.0).fill(t.card)
         .on_edit(|s: &mut State| &mut s.draft).on_submit(send);

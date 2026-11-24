@@ -92,7 +92,7 @@ impl State {
             let (tx, rx) = std::sync::mpsc::channel();
             let cache = ImageCache::new(Arc::new(move || { tx.send(()).ok(); }));
             cache.rgba_into(&self.mipmapped, BOARD_SIDE, BOARD_SIDE, mip_bytes);
-            let _ = rx.recv_timeout(std::time::Duration::from_secs(10));
+            rx.recv_timeout(std::time::Duration::from_secs(10)).ok();
         } else if let Some(cache) = &self.cache {
             cache.rgba_into(&self.mipmapped, BOARD_SIDE, BOARD_SIDE, mip_bytes);
         }

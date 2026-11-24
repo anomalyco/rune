@@ -216,12 +216,12 @@ impl Engine {
         let empty = ShortcutDetails::default();
         for ((idx, id, shortcut, _), outcome) in to_bind.into_iter().zip(outcomes) {
             match outcome {
-                Ok(()) => { let _ = self.apply(BindEvent::Bound { id, shortcut }, &empty); }
+                Ok(()) => { self.apply(BindEvent::Bound { id, shortcut }, &empty).ok(); }
                 Err(error) => results[idx] = Err(error),
             }
         }
         if matches!(&self.bindings, Bindings::Connected { registrations, .. } if registrations.is_empty()) {
-            let _ = self.apply(BindEvent::Rejected(ShortcutError::Unsupported), &empty);
+            self.apply(BindEvent::Rejected(ShortcutError::Unsupported), &empty).ok();
         }
         results
     }

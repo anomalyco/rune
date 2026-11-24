@@ -1,0 +1,1 @@
+- Fixed denied Clippy lint errors across workspace crates and tests, gated `rune-image`'s `Fetched::Svg` variant to `svg`/`wasm32` builds to clear `--no-default-features` dead-code warnings, and added accessible labels to unlabelled fields and controls in examples.

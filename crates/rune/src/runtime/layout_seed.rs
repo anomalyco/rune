@@ -115,7 +115,7 @@ impl RuntimeCore {
 /// `RUNE_LAYOUT_SEED=log`: each read the seed got wrong, on stderr.
 pub(super) fn log_moved(key: &str, seeded: Option<Option<[f32; 4]>>, now: Option<[f32; 4]>) {
     static LOG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*LOG.get_or_init(|| std::env::var("RUNE_LAYOUT_SEED").is_ok_and(|v| v == "log")) { return; }
+    if !*LOG.get_or_init(|| crate::env::var("RUNE_LAYOUT_SEED").is_some_and(|v| v == "log")) { return; }
     match seeded {
         Some(seeded) => eprintln!("rune: layout seed: {key:?} moved: seeded {seeded:?}, laid out {now:?}"),
         None => eprintln!("rune: layout seed: {key:?} was not in the seed, laid out {now:?}"),

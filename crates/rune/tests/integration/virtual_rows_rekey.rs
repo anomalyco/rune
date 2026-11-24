@@ -1,6 +1,4 @@
 use std::borrow::Cow;
-use std::time::Instant;
-
 use rune::{Cx, El, Env, GrowthSpec, Runtime, ScrollSpec, col, el, memo, text};
 
 struct RekeyState {
@@ -149,7 +147,7 @@ fn virtual_rows_rekey_166k_time() {
             (800.0, 600.0),
             Env::default(),
         );
-        let t0 = Instant::now();
+        let t0 = rune::time::now();
         rt.frame(0.0);
         init_ms.push(t0.elapsed().as_secs_f64() * 1e3);
 
@@ -157,7 +155,7 @@ fn virtual_rows_rekey_166k_time() {
             s.keys = keys_b.clone();
             s.version = 1;
         });
-        let t1 = Instant::now();
+        let t1 = rune::time::now();
         rt.frame(1.0 / 120.0);
         disjoint_ms.push(t1.elapsed().as_secs_f64() * 1e3);
 
@@ -165,7 +163,7 @@ fn virtual_rows_rekey_166k_time() {
             s.keys = keys_prepend.clone();
             s.version = 2;
         });
-        let t2 = Instant::now();
+        let t2 = rune::time::now();
         rt.frame(1.0 / 120.0);
         overlap_ms.push(t2.elapsed().as_secs_f64() * 1e3);
 
@@ -173,7 +171,7 @@ fn virtual_rows_rekey_166k_time() {
             s.keys = keys_reorder.clone();
             s.version = 3;
         });
-        let t3 = Instant::now();
+        let t3 = rune::time::now();
         rt.frame(1.0 / 120.0);
         reorder_ms.push(t3.elapsed().as_secs_f64() * 1e3);
     }

@@ -498,13 +498,13 @@ fn a_failed_command_buffer_loses_a_stock_wgpu_metal_device() {
     device.set_device_lost_callback(move |_, message| into.lock().unwrap().push(message));
     // SAFETY: the hal device and queue are only read, to make an event and stage a wait on it.
     let event = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }.and_then(|d| d.raw_device().newSharedEvent()).expect("a Metal shared event");
-    // Kept alive here: the wait's command buffer doesn't retain it.
+    // SAFETY: the hal queue is only read to stage a wait on `event`, which stays alive below.
     unsafe { queue.as_hal::<wgpu::hal::api::Metal>() }.expect("a Metal queue").add_wait_event(event.clone(), 1);
     queue.submit([device.create_command_encoder(&Default::default()).finish()]);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    while heard.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+    let deadline = rune_core::time::now() + std::time::Duration::from_secs(20);
+    while heard.lock().unwrap().is_empty() && rune_core::time::now() < deadline {
         // wgpu 30 panics in `Device::poll` once the hal reports the device lost (gfx-rs/wgpu#10031).
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Poll)));
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| device.poll(wgpu::PollType::Poll))).ok();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     assert_eq!(heard.lock().unwrap().len(), 1, "the failed wait loses the device");

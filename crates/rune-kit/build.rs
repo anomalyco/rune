@@ -1,7 +1,7 @@
 //! Freshness check for the committed `math` WebAssembly module and KaTeX font pack when
 //! `feature = "math"` is enabled (zero build-dependencies).
 
-use std::path::Path;
+use std::path::PathBuf;
 
 fn sha256_hex(data: &[u8]) -> String {
     const K: [u32; 64] = [
@@ -83,8 +83,7 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_MATH").is_none() {
         return;
     }
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
-    let root = Path::new(&manifest_dir);
+    let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
     let hash_path = root.join("src/math/wasm_hash.rs");
     let wasm_path = root.join("assets/math/ratex-math.wasm.deflate");
     let fonts_path = root.join("assets/math/katex-fonts.pack.deflate");

@@ -10,7 +10,7 @@
 
 use std::sync::mpsc;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rune::Color;
 use wasmi::{Config, Engine, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder};
@@ -144,7 +144,7 @@ impl Sandbox {
     }
 
     pub(super) fn render_one(&mut self, tex: &str, em_pt: f32, ink: Color, scale: f32) -> Option<Rasterized> {
-        let started = Instant::now();
+        let started = rune::time::now();
         let bytes = self.eval_wire(tex)?;
         if started.elapsed() > WALL_DEADLINE {
             return None;

@@ -181,7 +181,7 @@ impl CompletionWorker {
         if let Some(handle) = self.thread.take()
             && handle.thread().id() != std::thread::current().id()
         {
-            let _ = handle.join();
+            handle.join().ok();
         }
     }
 }
