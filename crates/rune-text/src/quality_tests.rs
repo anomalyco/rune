@@ -553,6 +553,7 @@ fn text_flow_line_span_covers_single_wrapped_multiline_and_blank_lines() {
         blocks: &[],
         pills: &[],
         span_boxes: &[],
+        text_indent: 0.0,
         style,
         shape_key: None,
         wrap_anywhere: false,

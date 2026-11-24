@@ -367,7 +367,8 @@ impl RuntimeCore {
                 let departing = self.motion.flights().iter().any(|f| f.departs(&n.path, n.key.as_deref())
                     && f.alphas(f.destination, now, self.reduced_motion).0 > 0.0);
                 if e.text.is_empty() && e.preedit().is_none() && !inp.placeholder.is_empty() && !departing {
-                    let pl_indent = spec.cold.blocks.first().map_or(0.0, |b| (b.indent_pt(spec.style.size) * s).round() * tk);
+                    let ti = if spec.cold.text_indent == 0.0 { 0.0 } else { (spec.cold.text_indent * s).clamp(-1e7, 1e7).round() * tk };
+                    let pl_indent = spec.cold.blocks.first().map_or(0.0, |b| (b.indent_pt(spec.style.size) * s).round() * tk) + ti;
                     // A one-line field's placeholder stays on its line, cut by the field's clip, as its
                     // text does; a multi-line field's wraps at its width.
                     let wrap = (!inp.single_line).then(|| (x1 - x0 - pl_indent).max(1.0) / tk.max(1e-4));
@@ -912,9 +913,21 @@ impl RuntimeCore {
         let (x0, x1) = (r[0] + ins[0], r[2] - ins[2]);
         let exact = r_exact[2] - r_exact[0] - ins[0] - ins[2];
         let laid_out = (n.local.w - n.inset[0] - n.inset[2]).max(0.0) * s;
-        let overflows = (laid_out <= 0.0 && layout.full_width() > 0.0)
-            || (layout.full_width() > laid_out + 0.5 && layout.full_width() * sc > (x1 - x0).max(exact) + 0.5 * sc);
-        overflows.then(|| [clip[0].max(x0), clip[1], clip[2].min(x1), clip[3]])
+        let content_width = if spec.cold.text_indent < 0.0 {
+            layout.lines().map(|l| l.metrics().indent + l.metrics().advance).fold(0.0f32, f32::max)
+        } else {
+            layout.full_width()
+        };
+        let overflows = (laid_out <= 0.0 && content_width > 0.0)
+            || (content_width > laid_out + 0.5 && content_width * sc > (x1 - x0).max(exact) + 0.5 * sc);
+        overflows.then(|| {
+            let (cx0, cx1) = if spec.cold.text_indent < 0.0 {
+                if layout.is_rtl() { (x0, r[2]) } else { (r[0], x1) }
+            } else {
+                (x0, x1)
+            };
+            [clip[0].max(cx0), clip[1], clip[2].min(cx1), clip[3]]
+        })
     }
 
     /// The rectangle a live or truncated text clips its glyphs to (edges, device pixels), its

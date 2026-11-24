@@ -418,8 +418,10 @@ policy changes are applied in the same mutation phase.
   (`Span`), wrapping with absolute line height and letter spacing, `.truncate()` with an ellipsis,
   inline-code backgrounds that merge where they touch, padded inline boxes (`SpanBox`, `El::span_box`
   / `El::span_boxes`) with layout-affecting horizontal padding, per-corner radii `[tl, tr, br, bl]`
-  and inset borders for adjacent chips, and byte-range overlines (`El::overline` / `El::overlines`)
-  that split across wrapped lines and coexist with underline and strikethrough. `.align(..)` and
+  and inset borders for adjacent chips, byte-range overlines (`El::overline` / `El::overlines`)
+  that split across wrapped lines and coexist with underline and strikethrough, and first-line /
+  hanging indentation (`El::text_indent` / `El::set_text_indent`, following CSS `text-indent`,
+  with negative values pulling line 0 into leading padding and mirroring in RTL). `.align(..)` and
   `Node` insets keep text inside padding and borders.
 - **Fonts as data**: `AppSpec::fonts` embeds faces and `AppSpec::families = (ui, mono)` names them.
   `TextStyle` picks a `Family`.

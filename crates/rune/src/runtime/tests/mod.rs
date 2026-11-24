@@ -48,6 +48,7 @@ mod springs;
 mod stream_overflow;
 mod stream_pace;
 mod text_glide;
+mod text_indent;
 mod text_keys;
 mod text_quads;
 mod text_rebreak;

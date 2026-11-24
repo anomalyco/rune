@@ -105,6 +105,8 @@ pub(crate) struct TextCold {
     pub(crate) rings: Vec<(u32, u32, Color, f32)>,
     /// See [`El::span_radius`](crate::El::span_radius), in points.
     pub(crate) span_radius: f32,
+    /// First-line indentation in points (negative for hanging indent); see [`El::text_indent`](crate::El::text_indent).
+    pub(crate) text_indent: f32,
     /// Strikethrough byte ranges `(start, end, color)` of `content`.
     pub(crate) strikes: Vec<(u32, u32, Option<Color>)>,
     /// Overline byte ranges `(start, end, color)` of `content`.
@@ -144,6 +146,7 @@ impl Empty for TextCold {
         copy_prefix: None,
         rings: Vec::new(),
         span_radius: crate::text::SPAN_RADIUS,
+        text_indent: 0.0,
         strikes: Vec::new(),
         overlines: Vec::new(),
         span_boxes: Vec::new(),
@@ -202,6 +205,7 @@ impl TextSpec {
             blocks: &self.cold.blocks,
             pills: &self.cold.pills,
             span_boxes: &self.cold.span_boxes,
+            text_indent: self.cold.text_indent,
             style: self.style,
             shape_key: self.shape_key(scale),
             wrap_anywhere: self.wrap_anywhere,
@@ -381,6 +385,7 @@ impl TextSpec {
             cold.overlines.clear();
             cold.span_boxes.clear();
             cold.line_fills.clear();
+            cold.text_indent = 0.0;
             cold.blocks.clear();
             cold.soft_breaks.clear();
             cold.pills.clear();

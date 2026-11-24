@@ -1,0 +1,1 @@
+- Text layout: added `El::text_indent(points)` and `El::set_text_indent(points)` for first-line and negative hanging indentation (matching CSS Text Level 3 `text-indent`), with RTL inline-start mirroring, `wrap_pretty` / `max_lines` / `text_input` support, caret/selection hit-testing into leading padding, and zero inline size overhead when unset.

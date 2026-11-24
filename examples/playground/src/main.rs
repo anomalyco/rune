@@ -14,6 +14,7 @@
 mod mount;
 mod pick;
 mod scroll_anchor_story;
+mod text_indent_story;
 
 use std::time::Duration;
 
@@ -695,6 +696,7 @@ fn main() {
                         .variant("25 / 75 · centred col", |s| { s.align = 1; s.split = 0.25; })
                         .variant("65 / 35 · row center_y", |s| { s.align = 3; s.split = 0.65; }),
                 )
+                .story(text_indent_story::story())
                 .story(
                     Story::new("Text/Runtime font", RuntimeFont::default, runtime_font_view)
                         .trigger('l', "Register font bytes", |s, play| {
