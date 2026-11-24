@@ -54,7 +54,7 @@ pub(super) struct Layers {
     /// kept for the next layer of their size: opening a menu or a popover again makes no texture.
     spare: Vec<Target>,
     stack: Vec<usize>,
-    pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    pub(super) pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     pub additive: Option<(wgpu::RenderPipeline, wgpu::RenderPipeline)>,
     pub blur: Option<layer_blur::Pipeline>,
     viewport: (u32, u32),
@@ -700,9 +700,23 @@ impl Renderer {
     }
 
     pub(super) fn add_layer_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
-        if !self.layers.pipelines.iter().any(|(f, _)| *f == format) {
-            self.layers.pipelines.push((format, Self::pipeline(device, &self.layout, &self.shader, format, "vs", Blend::SourceOver)));
-        }
+        if self.layers.pipelines.iter().any(|(f, _)| *f == format) { return; }
+        // With the standard `"vs"` vertex entry, the layer composite pipeline for `format` is
+        // identical to the renderer's own main or `extra` uber pipeline; clone instead of
+        // compiling a duplicate.
+        let pipeline = if self.vertex_entry == "vs" {
+            if format == self.format {
+                Some(self.pipeline.clone())
+            } else {
+                self.extra.iter().find(|(f, _)| *f == format).map(|(_, p)| p.clone())
+            }
+        } else {
+            None
+        };
+        let pipeline = pipeline.unwrap_or_else(|| {
+            Self::pipeline(device, &self.layout, &self.shader, format, "vs", Blend::SourceOver)
+        });
+        self.layers.pipelines.push((format, pipeline));
     }
 
     fn layer_target(&self, mut layer: Option<usize>) -> Option<usize> {

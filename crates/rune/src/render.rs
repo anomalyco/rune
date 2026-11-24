@@ -9,6 +9,7 @@ mod breaker;
 mod damaged;
 mod device;
 mod dxbc;
+mod effect_warm;
 mod fill;
 mod first_use;
 mod gpu_loss;
@@ -285,6 +286,10 @@ enum BatchBind {
 }
 
 pub struct Renderer {
+    /// Post-first-frame background effect-pipeline warmer: listed first so its Drop drains
+    /// any active worker before GPU resources on this renderer drop.
+    effect_warm: effect_warm::EffectWarm,
+    first_frame_submitted: std::sync::atomic::AtomicBool,
     surfaces: Option<crate::native_surface::SurfaceRenderer>,
     /// The native surface renderer while its pipeline compiles (`build_surfaces`).
     surfaces_building: Option<crate::native_surface::Building>,
@@ -627,7 +632,9 @@ impl Renderer {
 
     pub fn submit(&self, queue: &wgpu::Queue, mut encoder: wgpu::CommandEncoder) -> wgpu::SubmissionIndex {
         self.before_submit(&mut encoder);
-        if let Some(s) = &self.surfaces { s.submit(queue, encoder) } else { queue.submit([encoder.finish()]) }
+        let index = if let Some(s) = &self.surfaces { s.submit(queue, encoder) } else { queue.submit([encoder.finish()]) };
+        self.first_frame_submitted.store(true, std::sync::atomic::Ordering::Release);
+        index
     }
 
     /// Whether `submit` is `queue.submit` after `before_submit` and nothing more: no native video

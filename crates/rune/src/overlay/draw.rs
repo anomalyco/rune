@@ -379,7 +379,7 @@ impl FrameHost for OverlayFrame<'_> {
     fn submit_and_present(&mut self, prepared: PreparedOverlayFrame, _info: &StepInfo) -> Instant {
         let (Some(live), Some(renderer), Some(gpu)) = (
             self.core.surface.live_mut(),
-            self.core.renderer.as_ref(),
+            self.core.renderer.as_mut(),
             self.core.gpu.as_ref(),
         ) else {
             return crate::time::now();
@@ -390,6 +390,9 @@ impl FrameHost for OverlayFrame<'_> {
         live.slot.presented();
         frame::record_presented(self.prewarm);
         crate::render::gpu_events::presented();
+        if !self.prewarm && !gpu.is_lost() {
+            renderer.warm_effects(&gpu.device);
+        }
         crate::time::now()
     }
 

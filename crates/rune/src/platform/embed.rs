@@ -191,6 +191,9 @@ impl LayerHostCore {
         self.renderer.submit(&self.gpu.queue, prepared.encoder);
         self.gpu.queue.present(prepared.frame);
         crate::render::gpu_events::presented();
+        if !self.gpu.is_lost() {
+            self.renderer.warm_effects(&self.gpu.device);
+        }
         crate::time::now()
     }
 }

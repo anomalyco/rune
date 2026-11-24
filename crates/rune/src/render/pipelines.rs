@@ -122,6 +122,8 @@ impl Renderer {
         let spring_instances = properties.map_or(0, |(_, ids)| ids.len());
         let springs = properties.map(|(nodes, ids)| crate::gpu::springs::Bindings::new(device, spring_layout.as_ref().unwrap(), nodes, ids));
         Ok(WarmRenderer {
+            effect_warm: Default::default(),
+            first_frame_submitted: std::sync::atomic::AtomicBool::new(false),
             surfaces_building: None,
             pipeline,
             format,

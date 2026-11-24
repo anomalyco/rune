@@ -8,12 +8,14 @@
 //! ```
 //!
 //! The bar blurs at σ 8 pt under a light tint. `--scene strong` blurs at σ 20 pt under a
-//! heavier tint; `--scene plain` draws the bar with its tint alone, for comparison.
+//! heavier tint; `--scene plain` draws the bar with its tint alone, for comparison. Press `b` to
+//! cycle Plain -> Soft -> Strong at runtime (starting in `--scene plain` exercises post-first-frame
+//! background warming of the backdrop-blur pipelines on the first blurred frame).
 
 #![forbid(unsafe_code)]
 
 use rune::tok::{self, type_};
-use rune::{AppSpec, Cx, El, ScrollSpec, TextStyle, col, el, oklch, oklcha, row, text};
+use rune::{AppSpec, Cx, El, Key, KeyEvent, ScrollSpec, TextStyle, Tx, col, el, oklch, oklcha, row, text};
 
 const BAR: f32 = 60.0;
 const TABS: [&str; 4] = ["Inbox", "Today", "Later", "Done"];
@@ -71,9 +73,24 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
     el().w_full().h_full().fill(t.bg).child(list).child(bar)
 }
 
+fn on_key(s: &mut State, ev: &KeyEvent, _: &mut Tx) -> bool {
+    match &ev.key {
+        Key::Text(t) if t.eq_ignore_ascii_case("b") => {
+            s.look = match s.look {
+                Look::Plain => Look::Soft,
+                Look::Soft => Look::Strong,
+                Look::Strong => Look::Plain,
+            };
+            true
+        }
+        _ => false,
+    }
+}
+
 fn main() {
     rune::run(AppSpec::<State> {
         scenes: &[("strong", |s| s.look = Look::Strong), ("plain", |s| s.look = Look::Plain)],
+        on_key: Some(on_key),
         ..AppSpec::new("Frosted bar", (390.0, 640.0), State::default, view)
     });
 }
@@ -81,7 +98,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rune::{Env, Runtime, render::KIND_BACKDROP_BLUR};
+    use rune::render::{Gpu, KIND_BACKDROP_BLUR, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    use rune::{Env, Runtime};
 
     #[test]
     fn the_bar_blurs_and_a_tab_takes_a_tap() {
@@ -93,5 +111,26 @@ mod tests {
         rt.pointer_up(x, y);
         rt.frame(1.0 / 60.0);
         assert_eq!(rt.state.tab, 2);
+    }
+
+    #[test]
+    fn plain_first_frame_then_toggle_to_soft_renders_blurred_bar() {
+        let Some(gpu) = Gpu::test_headless() else { return };
+        let (w, h) = (390u32, 640u32);
+        let mut rt = Runtime::new(State { tab: 0, look: Look::Plain }, view, (w as f32, h as f32), Env::new(true, 1.0));
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        let target = Offscreen::new(&gpu.device, w, h);
+
+        rt.frame(0.0);
+        assert_eq!(rt.instances.iter().filter(|i| i.params[1] == KIND_BACKDROP_BLUR).count(), 0);
+        renderer.render_runtime_to_offscreen(&gpu.device, &gpu.queue, &target, &mut rt);
+        let plain = target.read(&gpu.device);
+
+        rt.update(|s, _| s.look = Look::Soft);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.instances.iter().filter(|i| i.params[1] == KIND_BACKDROP_BLUR).count(), 1);
+        renderer.render_runtime_to_offscreen(&gpu.device, &gpu.queue, &target, &mut rt);
+        let frosted = target.read(&gpu.device);
+        assert_ne!(plain, frosted, "toggling blur on after plain first frame changes bar pixels");
     }
 }

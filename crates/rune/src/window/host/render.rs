@@ -438,6 +438,7 @@ pub(super) fn submit_and_present_window(
         crate::render::gpu_events::presented();
         #[cfg(target_os = "macos")]
         if let Some(shadow) = &l.native.shadow { shadow.presented(); }
+        renderer.warm_effects(&gpu.device);
     }
     #[cfg(feature = "frame-profile")]
     profile.build_frame(
