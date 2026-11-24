@@ -216,6 +216,117 @@ pub(super) fn hover_card_basic(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     )
 }
 
+/// HoverCard with `LeftStart`, `LeftEnd`, and `RightEnd` placements, custom gutter/width,
+/// accessible role/label, and `on_hover_tx` so moving onto the surface keeps the card open.
+pub(super) fn hover_card_placements(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    let card = |id: &'static str, title: &'static str, placement: Placement, gutter: f32, width: f32, layer: &mut Vec<El>| {
+        let trig_flag = format!("{id}-t");
+        let surf_flag = format!("{id}-s");
+        let open = is_open(s, id) || s.is(&trig_flag) || s.is(&surf_flag);
+        let t_flag = trig_flag.clone();
+        let s_flag = surf_flag.clone();
+        let trigger = Button::new(title)
+            .variant(ButtonVariant::Outline)
+            .build(k)
+            .on_hover_change(move |s: &mut G, over, _| {
+                if over {
+                    s.on.insert(t_flag.clone());
+                    s.open = Some(id.to_owned());
+                } else {
+                    s.on.remove(&t_flag);
+                    if !s.is(&s_flag) && s.open.as_deref() == Some(id) {
+                        s.open = None;
+                    }
+                }
+            });
+        let t_flag_s = trig_flag;
+        let s_flag_s = surf_flag;
+        HoverCard::new(id)
+            .trigger(trigger)
+            .placement(placement)
+            .gutter(gutter)
+            .width(width)
+            .role("dialog")
+            .label(format!("{title} preview"))
+            .open(open)
+            .on_hover_tx(move |s: &mut G, over, tx: &mut Tx| {
+                if over {
+                    s.on.insert(s_flag_s.clone());
+                    tx.instant();
+                } else {
+                    s.on.remove(&s_flag_s);
+                    if !s.is(&t_flag_s) && s.open.as_deref() == Some(id) {
+                        s.open = None;
+                    }
+                }
+            })
+            .child(
+                col()
+                    .gap(6.0)
+                    .padding(4.0)
+                    .child(text(format!("{title} ({placement:?})")).font(k.ty.body_medium).color(k.c.text_strong))
+                    .child(
+                        text("Move the pointer onto this surface: on_hover_tx keeps it open.")
+                            .font(k.ty.text_small)
+                            .color(k.c.text_weak)
+                            .wrap(),
+                    ),
+            )
+            .build(k, layer)
+    };
+    col()
+        .w_full()
+        .py(48.0)
+        .px(240.0)
+        .gap(16.0)
+        .items_start()
+        .child(card("hc-left-start", "LeftStart", Placement::LeftStart, 8.0, 210.0, layer))
+        .child(card("hc-left-end", "LeftEnd", Placement::LeftEnd, 8.0, 210.0, layer))
+        .child(card("hc-right-end", "RightEnd", Placement::RightEnd, 10.0, 220.0, layer))
+}
+
+/// Popover and Select using `on_close_tx` and `on_toggle_tx` to move focus to the target button
+/// in the same commit.
+pub(super) fn overlays_tx_callbacks(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
+    const OPTIONS: [&str; 3] = ["Apple", "Pear", "Plum"];
+    let popover = Popover::new("tx-popover")
+        .trigger(Button::new("Open popover").on_press(toggle("tx-popover")).build(k))
+        .title("Popover (on_close_tx)")
+        .description("Closing moves focus to the button on the right.")
+        .child(overlay_text(k, "Click Close or outside to test on_close_tx."))
+        .open(is_open(s, "tx-popover"))
+        .on_close_tx(|s: &mut G, tx: &mut Tx| {
+            s.open = None;
+            tx.focus("tx-after", true);
+        })
+        .build(k, layer);
+    let select = Select::new("tx-select", &OPTIONS)
+        .label("Fruit")
+        .placeholder("Choose fruit")
+        .appearance(SelectAppearance::Field)
+        .width(160.0)
+        .current(s.pick.get("tx-select").map(String::as_str))
+        .open(is_open(s, "tx-select"))
+        .on_toggle_tx(|s: &mut G, tx: &mut Tx| {
+            s.toggle_open("tx-select");
+            if s.open.is_none() {
+                tx.focus("tx-after", true);
+            }
+        })
+        .on_close_tx(|s: &mut G, tx: &mut Tx| {
+            s.open = None;
+            tx.focus("tx-after", true);
+        })
+        .on_choose(|s: &mut G, v, tx| {
+            s.pick.insert("tx-select".into(), v.to_owned());
+            s.open = None;
+            tx.focus("tx-after", true);
+        })
+        .build(k, layer);
+    let target = Button::new("Focus target after close").variant(ButtonVariant::Outline).build(k).key("tx-after");
+    row().gap(16.0).center_y().child(popover).child(select).child(target)
+}
+
 static DOWNLOAD: rune::Icon = rune::Icon {
     name: "story-download",
     view: 16.0,

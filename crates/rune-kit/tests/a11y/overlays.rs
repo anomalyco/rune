@@ -459,3 +459,133 @@ fn toasts_announce_politely_and_their_buttons_reach_the_keyboard() {
     press_key(&mut rt, Key::Text(" ".into()));
     assert_eq!(rt.state.presses, 11, "Tab reaches Undo, Space presses it");
 }
+
+#[test]
+fn hover_card_role_and_label_reach_accessibility_tree_and_web_mirror() {
+    struct Local {
+        role: Option<&'static str>,
+        label: Option<String>,
+    }
+    fn view(s: &Local, _: &mut Cx<Local>) -> El {
+        let k = kit();
+        let mut layer = Vec::new();
+        let mut card = HoverCard::new("preview")
+            .trigger(Button::new("readme.md").build(&k).key("trigger-btn"))
+            .child(text("File metadata").key("meta"))
+            .open(true);
+        if let Some(r) = s.role {
+            card = card.role(r);
+        }
+        if let Some(l) = &s.label {
+            card = card.label(l.clone());
+        }
+        let trigger = card.build(&k, &mut layer);
+        root(col().padding(40.0).child(trigger), layer)
+    }
+
+    let mount_local = |role: Option<&'static str>, label: Option<&str>| {
+        let mut rt = rune::Runtime::new(
+            Local { role, label: label.map(str::to_owned) },
+            view,
+            (720.0, 480.0),
+            rune::Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(1.0 / 60.0);
+        rt
+    };
+
+    // Default without role or label keeps group role and unnamed surface.
+    let rt_default = mount_local(None, None);
+    let tree = rt_default.accessibility_json();
+    assert_eq!(said(node(&tree, "preview-card")), ("group", ""));
+
+    // Explicit role("dialog") and label reach AccessKit and web DOM mirror.
+    let rt_dialog = mount_local(Some("dialog"), Some("File preview"));
+    let tree = rt_dialog.accessibility_json();
+    assert_eq!(said(node(&tree, "preview-card")), ("dialog", "File preview"));
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt_dialog.a11y_json()).unwrap();
+    assert!(
+        mirror.iter().any(|v| v["o"] == "dialog" && v["t"] == "File preview"),
+        "HoverCard role and label reach web mirror: {mirror:?}",
+    );
+
+    // RTL label and region role are preserved verbatim in both trees.
+    let rt_rtl = mount_local(Some("region"), Some("معاينة الملف"));
+    let tree = rt_rtl.accessibility_json();
+    assert_eq!(said(node(&tree, "preview-card")), ("region", "معاينة الملف"));
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt_rtl.a11y_json()).unwrap();
+    assert!(
+        mirror.iter().any(|v| v["g"] == "section" && v["t"] == "معاينة الملف"),
+        "RTL HoverCard region label reaches web mirror: {mirror:?}",
+    );
+
+    // Blank role or label falls back cleanly to default group / unnamed.
+    let rt_blank = mount_local(Some("   "), Some("   "));
+    assert_eq!(said(node(&rt_blank.accessibility_json(), "preview-card")), ("group", ""));
+}
+
+#[test]
+fn popover_and_select_tx_callbacks_fire_from_assistive_actions() {
+    #[derive(Default)]
+    struct Local {
+        popover_open: bool,
+        select_open: bool,
+        closes: usize,
+        toggles: usize,
+    }
+    fn view(s: &Local, _: &mut Cx<Local>) -> El {
+        let k = kit();
+        let mut layer = Vec::new();
+        let pop = Popover::new("share")
+            .trigger(Button::new("Share").build(&k).key("share-btn"))
+            .title("Share")
+            .child(text("Link"))
+            .open(s.popover_open)
+            .on_close_tx(|s: &mut Local, tx: &mut rune::Tx| {
+                s.popover_open = false;
+                s.closes += 1;
+                tx.focus("after", true);
+            })
+            .build(&k, &mut layer);
+        let sel = Select::new("fruit", &FRUIT)
+            .label("Fruit")
+            .open(s.select_open)
+            .on_toggle_tx(|s: &mut Local, tx: &mut rune::Tx| {
+                s.select_open = !s.select_open;
+                s.toggles += 1;
+                tx.instant();
+            })
+            .on_close_tx(|s: &mut Local, tx: &mut rune::Tx| {
+                s.select_open = false;
+                s.closes += 1;
+                tx.focus("after", true);
+            })
+            .build(&k, &mut layer);
+        let after = Button::new("After").build(&k).key("after");
+        root(col().gap(8.0).child(pop).child(sel).child(after), layer)
+    }
+
+    let mut rt = rune::Runtime::new(
+        Local { popover_open: true, ..Local::default() },
+        view,
+        (720.0, 480.0),
+        rune::Env::new(false, 1.0),
+    );
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(1.0 / 60.0);
+
+    // Assistive Click on Popover close button runs on_close_tx and focuses "after".
+    assert!(rt.accessibility_action("close", Action::Click, None));
+    rt.frame(0.0);
+    assert!(!rt.state.popover_open && rt.state.closes == 1);
+    assert!(has(node(&rt.accessibility_json(), "after"), "focused"));
+
+    // Assistive Expand on Select trigger runs on_toggle_tx.
+    assert!(rt.accessibility_action("fruit-trigger", Action::Expand, None));
+    rt.frame(0.0);
+    assert!(rt.state.select_open && rt.state.toggles == 1);
+    assert!(find(&rt.accessibility_json(), "fruit-content").is_some());
+}
