@@ -156,10 +156,26 @@ fn by_line_rich_log_with_underline_defers_offscreen_plain_lines() {
     let line500_start = content.find(target).unwrap();
     let interior_spans = vec![crate::Span::new(line500_start, line500_start + target.len()).underline(crate::Color::BLACK)];
 
+    // Bring bundled Inter + IBM Plex Mono so the test does not depend on host system monospace
+    // fonts (which may be absent in minimal Linux environments, causing `ui-monospace` to fall back
+    // to proportional Inter and intentionally disable `by_line` deferral).
+    const INTER: &[u8] = include_bytes!("../../../assets/Inter-Regular.ttf");
+    const PLEX: &[u8] = include_bytes!("../../../assets/IBMPlexMono-Regular.ttf");
+    let _fonts = crate::text::with_fonts(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+
     let env = Env::new(true, 2.0);
-    let mut plain = Runtime::new(LogState { content: content.clone(), spans: Vec::new() }, log_view, (320.0, 320.0), env);
-    let mut underlined = Runtime::new(LogState { content: content.clone(), spans: head_spans }, log_view, (320.0, 320.0), env);
-    let mut interior = Runtime::new(LogState { content: content.clone(), spans: interior_spans }, log_view, (320.0, 320.0), env);
+    let make = |spans| {
+        Runtime::with_text(
+            LogState { content: content.clone(), spans },
+            log_view,
+            (320.0, 320.0),
+            env,
+            crate::text::TextSystem::new(&[INTER, PLEX], ("Inter", "IBM Plex Mono")),
+        )
+    };
+    let mut plain = make(Vec::new());
+    let mut underlined = make(head_spans);
+    let mut interior = make(interior_spans);
 
     plain.frame(0.0);
     underlined.frame(0.0);

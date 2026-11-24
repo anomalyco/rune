@@ -1,0 +1,1 @@
+- Text layout: `El::by_line` rustdoc now notes that deferred waiting runs require a start-aligned, LTR, fixed-pitch monospace face (shaping eagerly if the monospace slot falls back to a proportional font), and the `by_line` deferral tests in `rune` and `rune-text` now register bundled `IBMPlexMono-Regular.ttf` so they pass on hosts without system monospace fonts.
