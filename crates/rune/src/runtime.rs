@@ -119,7 +119,7 @@ pub(crate) use input::titlebar::{DragHit, WindowMenu, drag_hit_at};
 pub use input::touch::TouchPhase;
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_imports))]
 pub(crate) use input::touch::{TouchHoldCommand, TouchHoldPolicy};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 use input::primary_selection;
 use input::{
     app_ime, autoscroll, capture, drop as drop_dispatch, focus, focus_machine,

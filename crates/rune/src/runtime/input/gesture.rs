@@ -238,6 +238,10 @@ impl RuntimeCore {
     /// text with `on_link`, or an element with [`El::on_middle_press`], each clicked when the
     /// button comes up over it.
     pub(crate) fn button_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, button: PointerButton) {
+        self.button_down_with_primary(app, x, y, button, cfg!(target_os = "linux"));
+    }
+
+    pub(super) fn button_down_with_primary(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, button: PointerButton, primary_paste: bool) {
         match button {
             PointerButton::Primary => return self.pointer_down(app, x, y),
             PointerButton::Secondary => return self.secondary_down(x, y),
@@ -248,8 +252,10 @@ impl RuntimeCore {
         self.pointer.pos = Some((x, y));
         if button == PointerButton::Middle { self.tint_down(x, y, button); }
         // On Linux a middle click in a text field pastes the primary selection there.
-        #[cfg(target_os = "linux")]
-        if button == PointerButton::Middle && self.primary_paste_down(x, y) { return; }
+        #[cfg(any(target_os = "linux", test))]
+        if primary_paste && button == PointerButton::Middle && self.primary_paste_down(x, y) { return; }
+        #[cfg(not(any(target_os = "linux", test)))]
+        let _ = primary_paste;
         self.dismiss_help();
         let hit = self.hit.top_hit(|id, r| self.hit_contains(id, r, x, y)).and_then(|id| self.tree.node_index.get(&id).copied());
         let middle = button == PointerButton::Middle;

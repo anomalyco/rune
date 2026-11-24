@@ -27,7 +27,7 @@ pub(super) mod pointer;
 pub(super) mod popup;
 pub(super) mod press_repeat;
 pub(super) mod press_run;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 pub(super) mod primary_selection;
 pub(super) mod secondary;
 pub(super) mod titlebar;
