@@ -1,0 +1,1 @@
+- Web (WebGPU): clearing `last_presented` when a back-off surface configure retry reconfigures the canvas ensures one fresh frame is drawn onto the cleared swapchain instead of staying blank until the next input, and preserves consecutive failure backoff if a frame presents before an async `popErrorScope` refusal arrives.

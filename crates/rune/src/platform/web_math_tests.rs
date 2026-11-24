@@ -921,16 +921,11 @@ fn surface_health_backs_off_ignores_stale_attempts_and_gives_up_until_resize() {
     assert!(health.can_draw());
 
     // A stale attempt answer after a newer configure began is ignored.
-    let stale = seq.next();
+    let (stale, current) = (seq.next(), seq.next());
     health.step(&mut seq, SurfaceHealthEvent::Begin(stale));
-    let current = seq.next();
     health.step(&mut seq, SurfaceHealthEvent::Begin(current));
-    let ignored: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome {
-        attempt: stale,
-        error: Some("stale failure".into()),
-    }).into_iter().collect();
-    assert!(ignored.is_empty());
-    assert!(health.can_draw());
+    let ignored: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: stale, error: Some("stale failure".into()) }).into_iter().collect();
+    assert!(ignored.is_empty() && health.can_draw());
 
     // First failure reports once and schedules 50ms backoff; subsequent failures double up to 5.
     let expected_delays = [50u64, 100, 200, 400];
@@ -973,26 +968,32 @@ fn surface_health_backs_off_ignores_stale_attempts_and_gives_up_until_resize() {
     health.step(&mut seq, SurfaceHealthEvent::Begin(next));
     health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: next, error: None });
     health.step(&mut seq, SurfaceHealthEvent::Presented);
-    assert_eq!(health, SurfaceHealth::Ready { failures: 0, active: None });
+    assert_eq!(health, SurfaceHealth::Ready { failures: 0 });
 }
 
 #[test]
-fn surface_health_drain_retry_respects_suspend_and_present_resets_failure_count() {
+fn surface_health_drain_retry_and_async_present_ordering() {
     let (mut seq, mut health) = (crate::machine::Seq::default(), SurfaceHealth::default());
-    let first = seq.next();
-    health.step(&mut seq, SurfaceHealthEvent::Begin(first));
-    let effects: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: first, error: Some("oom".into()) }).into_iter().collect();
-    let [SurfaceHealthEffect::ReportFirst(_), SurfaceHealthEffect::ScheduleRetry { attempt: retry, .. }] = effects.as_slice() else { panic!("{effects:?}") };
-    let mut retry_due = Some(*retry);
-    assert!(!health.can_draw() && !health.drain_retry(&mut seq, &mut retry_due, true) && retry_due == Some(*retry));
-    assert!(health.drain_retry(&mut seq, &mut retry_due, false) && retry_due.is_none() && health.can_draw());
-    let second = seq.next();
-    health.step(&mut seq, SurfaceHealthEvent::Begin(second));
-    health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: second, error: None });
+    let a1 = seq.next();
+    health.step(&mut seq, SurfaceHealthEvent::Begin(a1));
+    let e1: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: a1, error: Some("oom".into()) }).into_iter().collect();
+    let [SurfaceHealthEffect::ReportFirst(_), SurfaceHealthEffect::ScheduleRetry { attempt: r1, .. }] = e1.as_slice() else { panic!("{e1:?}") };
+    let mut due = Some(*r1);
+    assert!(!health.can_draw() && !health.drain_retry(&mut seq, &mut due, true) && due == Some(*r1));
+    assert!(health.drain_retry(&mut seq, &mut due, false) && due.is_none() && health.can_draw());
+    // WebGPU presents before async popErrorScope resolves: refusal still escalates to 100 ms.
+    let a2 = seq.next();
+    health.step(&mut seq, SurfaceHealthEvent::Begin(a2));
     health.step(&mut seq, SurfaceHealthEvent::Presented);
-    assert_eq!(health, SurfaceHealth::Ready { failures: 0, active: None });
-    let third = seq.next();
-    health.step(&mut seq, SurfaceHealthEvent::Begin(third));
-    let later: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: third, error: Some("later".into()) }).into_iter().collect();
-    assert!(matches!(later.as_slice(), [SurfaceHealthEffect::ReportFirst(_), SurfaceHealthEffect::ScheduleRetry { delay, .. }] if *delay == std::time::Duration::from_millis(50)));
+    let e2: Vec<_> = health.step(&mut seq, SurfaceHealthEvent::Outcome { attempt: a2, error: Some("oom2".into()) }).into_iter().collect();
+    let [SurfaceHealthEffect::ScheduleRetry { attempt: r2, delay }] = e2.as_slice() else { panic!("{e2:?}") };
+    assert_eq!(*delay, std::time::Duration::from_millis(100));
+    due = Some(*r2);
+    assert!(health.drain_retry(&mut seq, &mut due, false));
+    // When async popErrorScope succeeds after Presented, failures reset to 0.
+    let a3 = seq.next();
+    for ev in [SurfaceHealthEvent::Begin(a3), SurfaceHealthEvent::Presented, SurfaceHealthEvent::Outcome { attempt: a3, error: None }] {
+        health.step(&mut seq, ev);
+    }
+    assert_eq!(health, SurfaceHealth::Ready { failures: 0 });
 }
