@@ -380,6 +380,38 @@ fn link_help_gives_each_link_its_own_tooltip() {
     ]);
 }
 
+#[test]
+fn markdown_link_help_shows_on_keyboard_focus_and_in_web_a11y_mirror() {
+    use rune::{Cx, Env, HelpLook, Key, KeyEvent, Mods, Runtime};
+
+    fn view(_: &(), cx: &mut Cx<()>) -> El {
+        cx.help_look(HelpLook::system(false).on_focus(true));
+        Markdown::new("[Local app](http://localhost:8123/)")
+            .on_link_tx(|_: &mut (), _, _| {})
+            .link_help(|_| Some("This address opens on your device.".into()))
+            .build(&crate::Kit::neutral(false))
+    }
+
+    let mut rt = Runtime::new((), view, (400.0, 200.0), Env::new(false, 2.0));
+    rt.frame(0.0);
+
+    // Tabbing to the Markdown link shows its help immediately.
+    rt.key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.help_tooltip().map(|(t, _)| t), Some("This address opens on your device."));
+
+    // The web accessibility mirror exposes the link's text, href, and help description.
+    let items: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let run = items.iter()
+        .filter_map(|it| it["u"].as_array())
+        .flatten()
+        .find(|r| r.get("h").is_some())
+        .expect("mirrored inline link run");
+    assert_eq!(run["t"], "Local app");
+    assert_eq!(run["h"], "http://localhost:8123/");
+    assert_eq!(run["d"], "This address opens on your device.");
+}
+
 /// A wheel over a wide table's scroll bar scrolls the pane around that table, though every wide
 /// table keys its viewport `scroll` (`table::Renderer::wide_frame`): the wheel names the viewport
 /// in the pane that holds the bar, not the first element keyed alike in the window, and a

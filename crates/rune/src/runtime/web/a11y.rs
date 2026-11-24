@@ -21,7 +21,7 @@ pub(crate) struct A11yMirror {
     built_at: f64,
     json: String,
     /// The focus proxy last sent (`web_a11y_focus`), and the commit and focus it was read at.
-    focus_at: (u64, String),
+    focus_at: (u64, String, Option<usize>),
     focus_json: String,
 }
 
@@ -94,6 +94,13 @@ pub(crate) struct A11yRun {
     pub href: Option<String>,
     pub path: Option<String>,
     pub link: Option<usize>,
+    pub description: Option<String>,
+}
+
+impl A11yRun {
+    fn plain(text: String) -> Self {
+        A11yRun { text, href: None, path: None, link: None, description: None }
+    }
 }
 
 impl A11yItem {
@@ -137,6 +144,7 @@ impl A11yItem {
                 if let Some(h) = &r.href { ro.insert("h".into(), json!(h)); }
                 if let Some(p) = &r.path { ro.insert("p".into(), json!(p)); }
                 if let Some(i) = r.link { ro.insert("i".into(), json!(i)); }
+                if let Some(d) = &r.description { ro.insert("d".into(), json!(d)); }
                 Value::Object(ro)
             }).collect();
             obj.insert("u".into(), Value::Array(runs));
@@ -249,10 +257,18 @@ pub(crate) fn clean_slice(spec: &crate::el::TextSpec, a: usize, b: usize) -> Str
     out
 }
 
+/// Inline link help as an accessible description: plain words, omitted when empty or an exact
+/// duplicate of the link's own label.
+fn link_description(help: Option<&str>, label: &str) -> Option<String> {
+    let words = crate::el::help_words(help?);
+    let trimmed = words.trim();
+    (!trimmed.is_empty() && trimmed != label.trim()).then(|| trimmed.to_owned())
+}
+
 fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
     if spec.cold.links.is_empty() {
         let t = clean_slice(spec, 0, spec.content.len());
-        return if t.is_empty() { Vec::new() } else { vec![A11yRun { text: t, href: None, path: None, link: None }] };
+        return if t.is_empty() { Vec::new() } else { vec![A11yRun::plain(t)] };
     }
     let mut out: Vec<A11yRun> = Vec::new();
     let mut at = 0usize;
@@ -261,7 +277,7 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
         if let Some(last) = out.last_mut().filter(|r| r.href.is_none()) {
             last.text.push_str(&text);
         } else {
-            out.push(A11yRun { text, href: None, path: None, link: None });
+            out.push(A11yRun::plain(text));
         }
     };
     for (idx, link) in spec.cold.links.iter().enumerate() {
@@ -273,11 +289,13 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
             let label = clean_slice(spec, la, lb);
             if !label.is_empty() {
                 if let Ok(href) = crate::open_url::check_href(&link.id) {
+                    let description = link_description(link.help.as_deref(), &label);
                     out.push(A11yRun {
                         text: label,
                         href: Some(href),
                         path: Some(path.to_owned()),
                         link: Some(idx),
+                        description,
                     });
                 } else {
                     push_plain(&mut out, label);
@@ -749,7 +767,7 @@ impl RuntimeCore {
     /// element's ARIA role, name, description and states; empty when nothing has focus. `None`
     /// when unchanged since the last call.
     pub(crate) fn web_a11y_focus<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
-        let at = (self.commit.commits, self.kbd.focus.path().unwrap_or_default().to_owned());
+        let at = (self.commit.commits, self.kbd.focus.path().unwrap_or_default().to_owned(), self.link_focus());
         if mirror.focus_at == at { return None; }
         mirror.focus_at = at;
         // A field naming a highlighted row (`El::active_descendant`, the palette's): the row is
@@ -769,6 +787,25 @@ impl RuntimeCore {
 
     fn web_focus_item(&self, i: usize) -> Value {
         let n = &self.tree.nodes[i];
+        if self.focused_index() == Some(i) && !n.is_secure()
+            && let Some(k) = self.link_focus()
+            && let Some(spec) = n.text.as_deref().filter(|t| !t.redacted)
+            && let Some(link) = spec.cold.links.get(k)
+        {
+            let role = roles::map(link.role, &roles::RoleCtx {
+                pressable: true, focusable: true, input: false, multiline: false, secure: false, scrolls: false, modal: false,
+                default_button: false, labelled: true, keyed: true, has_text: true, image: false,
+            }).map_or("link", roles::focus_role);
+            let name = link.label.as_deref().filter(|s| !s.trim().is_empty()).map(str::to_owned)
+                .unwrap_or_else(|| clean_slice(spec, link.start as usize, link.end as usize));
+            let mut o = serde_json::Map::new();
+            o.insert("o".into(), json!(role));
+            o.insert("t".into(), json!(name));
+            if let Some(d) = link_description(link.help.as_deref(), &name) {
+                o.insert("d".into(), json!(d));
+            }
+            return Value::Object(o);
+        }
         let role = self.a11y_role(i);
         let focus_role = role.map_or("group", roles::focus_role);
         let mut o = serde_json::Map::new();
@@ -826,7 +863,7 @@ fn merge_flow(prev: &mut A11yItem, rect: [f32; 4], runs: Vec<A11yRun>) {
         if let Some(last) = prev.runs.last_mut().filter(|r| r.href.is_none()) {
             last.text.push(' ');
         } else {
-            prev.runs.push(A11yRun { text: " ".into(), href: None, path: None, link: None });
+            prev.runs.push(A11yRun::plain(" ".into()));
         }
     }
     if runs.len() == 1 && runs[0].href.is_none()
@@ -883,14 +920,14 @@ fn join_inline(prev: &mut A11yItem, rect: [f32; 4], mut runs: Vec<A11yRun>, gap:
     prev.rect = union(prev.rect, rect);
     let ends_blank = if prev.runs.is_empty() { prev.text.ends_with(char::is_whitespace) } else { prev.runs.last().is_some_and(|r| r.text.ends_with(char::is_whitespace)) };
     if gap && !ends_blank && runs.first().is_some_and(|r| !r.text.starts_with(char::is_whitespace)) {
-        runs.insert(0, A11yRun { text: " ".into(), href: None, path: None, link: None });
+        runs.insert(0, A11yRun::plain(" ".into()));
     }
     if prev.runs.is_empty() && runs.iter().all(|r| r.href.is_none()) {
         for r in runs { prev.text.push_str(&r.text); }
         return;
     }
     if prev.runs.is_empty() {
-        prev.runs.push(A11yRun { text: std::mem::take(&mut prev.text), href: None, path: None, link: None });
+        prev.runs.push(A11yRun::plain(std::mem::take(&mut prev.text)));
     }
     for r in runs {
         match prev.runs.last_mut() {

@@ -150,6 +150,7 @@ function installDom() {
     doc.hidden = false;
     doc.title = '';
     doc.createElement = tag => new FakeNode(tag);
+    doc.createTextNode = text => Object.assign(new FakeNode('#text'), { textContent: String(text) });
 
     const win = new FakeNode('window');
     Object.defineProperty(globalThis, 'Node', { value: FakeNode, configurable: true });
@@ -1079,6 +1080,63 @@ test('syncA11y writes aria-pressed, aria-checked, and aria-selected cleanly acro
     assert.equal(check.getAttribute('role'), null);
     assert.equal(check.getAttribute('aria-checked'), null);
     assert.equal(check.getAttribute('aria-pressed'), 'false');
+
+    bridge.destroy(h);
+});
+
+test('syncA11y sets aria-description on inline link anchors while preserving text and href', () => {
+    const { h } = setup();
+
+    bridge.syncA11y(h, JSON.stringify([
+        {
+            k: 'text',
+            p: 'root/p',
+            r: [0, 0, 240, 20],
+            u: [
+                { t: 'Open ' },
+                { t: 'Local app', h: 'http://localhost:8123/', p: 'root/p', i: 0, d: 'This address opens on your device.' },
+                { t: ' or ' },
+                { t: 'notes', h: '/notes', p: 'root/p', i: 1, d: 'Local notes' },
+                { t: ' or ' },
+                { t: 'plain', h: 'https://example.com/', p: 'root/p', i: 2 },
+            ],
+        },
+    ]));
+
+    const p = h.a11yNodes.get('p:root/p');
+    const anchors = p.children.filter(c => c.tagName === 'A');
+    assert.equal(anchors.length, 3);
+
+    assert.equal(anchors[0].textContent, 'Local app');
+    assert.equal(anchors[0].href, 'http://localhost:8123/');
+    assert.equal(anchors[0].target, '_blank');
+    assert.equal(anchors[0].getAttribute('aria-description'), 'This address opens on your device.');
+    assert.equal(anchors[0].getAttribute('title'), null);
+
+    assert.equal(anchors[1].textContent, 'notes');
+    assert.equal(anchors[1].href, '#');
+    assert.equal(anchors[1].getAttribute('aria-description'), 'Local notes');
+
+    assert.equal(anchors[2].textContent, 'plain');
+    assert.equal(anchors[2].href, 'https://example.com/');
+    assert.equal(anchors[2].getAttribute('aria-description'), null);
+
+    // Updating or clearing a run description rebuilds the anchor attributes cleanly.
+    bridge.syncA11y(h, JSON.stringify([
+        {
+            k: 'text',
+            p: 'root/p',
+            r: [0, 0, 240, 20],
+            u: [
+                { t: 'Local app', h: 'http://localhost:8123/', p: 'root/p', i: 0 },
+            ],
+        },
+    ]));
+    const updated = p.children.filter(c => c.tagName === 'A');
+    assert.equal(updated.length, 1);
+    assert.equal(updated[0].textContent, 'Local app');
+    assert.equal(updated[0].href, 'http://localhost:8123/');
+    assert.equal(updated[0].getAttribute('aria-description'), null);
 
     bridge.destroy(h);
 });

@@ -369,9 +369,12 @@ impl RuntimeCore {
         // With the pointer on no help element, the one the keyboard focused shows its own.
         if matches!(over, Over::Nothing | Over::Away) && self.help_look().on_focus && self.kbd.focus.keyboard()
             && let Some(i) = self.focused_index()
-            && self.tree.nodes[i].help.is_some() && self.allowed(i) && !self.subtree_exiting(i)
+            && self.allowed(i) && !self.subtree_exiting(i)
         {
-            return (Over::Focused(target(i, None)), Some(i));
+            let link = self.link_focus().filter(|&k| self.help_text(i, Some(k)).is_some());
+            if link.is_some() || self.tree.nodes[i].help.is_some() {
+                return (Over::Focused(target(i, link)), Some(i));
+            }
         }
         (over, under)
     }

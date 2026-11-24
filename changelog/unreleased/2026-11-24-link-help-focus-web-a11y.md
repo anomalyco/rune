@@ -1,0 +1,1 @@
+- Inline link help (`Link::help` and `Markdown::link_help`) now opens under the focused link's glyphs on keyboard focus when `HelpLook::on_focus(true)` is set, and mirrors as `aria-description` on the web accessibility mirror's inline `<a>` elements and canvas focus proxy without altering the link's text or `href`.
