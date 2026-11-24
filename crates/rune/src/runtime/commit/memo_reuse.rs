@@ -291,11 +291,9 @@ fn same_gestures(
     match (a, b) {
         (None, None) => true,
         (Some(x), Some(y)) => {
-            x.buttons == y.buttons
-                && opt_rc_eq(&x.wheel, &y.wheel)
-                && opt_rc_eq(&x.magnify, &y.magnify)
-                && opt_rc_eq(&x.rotate, &y.rotate)
-                && opt_rc_eq(&x.smart_magnify, &y.smart_magnify)
+            let crate::input::canvas_input::CanvasInput { wheel, magnify, rotate, smart_magnify, button, buttons } = &**y;
+            x.buttons == *buttons && opt_rc_eq(&x.wheel, wheel) && opt_rc_eq(&x.magnify, magnify)
+                && opt_rc_eq(&x.rotate, rotate) && opt_rc_eq(&x.smart_magnify, smart_magnify) && opt_rc_eq(&x.button, button)
         }
         _ => false,
     }

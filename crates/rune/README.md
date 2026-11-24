@@ -520,10 +520,19 @@ policy changes are applied in the same mutation phase.
   pinches (scale by `1 + delta`) at the pointer: macOS reports them, and Ctrl + wheel also
   goes to `on_magnify` (`1.2^ticks - 1` per line-delta notch, or `dy / 200` per pixel-precise
   point, with `MagnifyEvent::wheel == true`) when one is under the pointer. `.on_rotate` and `.on_smart_magnify` (a two-finger double tap)
-  are macOS only. `.pointer_buttons([PointerButton::Middle])` lets the middle (or back,
-  forward) button press and drag the element through its own `on_press` and `on_drag`, from
-  anywhere inside it; `tx.button()` says which button. Without it those handlers stay
-  primary-only. `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
+  are macOS only. `.pointer_buttons([PointerButton::Middle])` lets the middle, back, forward,
+  or other buttons press and drag the element through its own `on_press` and `on_drag`, from
+  anywhere inside it; `tx.button()` says which button. Including `PointerButton::Secondary` lets
+  a right-button drag drive `on_drag` (with `tx.button() == PointerButton::Secondary`) while a
+  right-click within the 4 pt click slop still opens `on_secondary_press` (on the element or a
+  child) and a drag past slop suppresses context menus without firing `on_press`. Without
+  `pointer_buttons`, `on_press` and `on_drag` stay primary-only.
+  `.on_button(|s, button: PointerButton, tx| -> bool)` bubbles extra mouse buttons (`Middle`,
+  `Back`, `Forward`, `Other(n)`) innermost-first up to the root or open modal when no
+  `pointer_buttons`, middle-link, or `on_middle_press` target claimed them, without making the
+  element a primary press target (primary clicks, empty-click blur, press cursors, and text
+  selection stay unchanged); for `Middle`, platform autoscroll starts only if every handler
+  returns `false`. `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
   logical keys `on_key` sees: the press-time and current focus chains first (keeping shared
   ancestors after both); when nothing is focused or focus rests on the open modal itself, every
   allowed `on_key_up` handler hears the release deepest-first (with the modal itself first if it

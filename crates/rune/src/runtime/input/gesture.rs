@@ -7,12 +7,15 @@ use crate::machine::Attempt;
 use crate::runtime::scroll_x::WheelOwner;
 use crate::{GesturePhase, MagnifyEvent, PointerButton, RotateEvent, WheelEvent};
 
-/// A trackpad gesture at a window point, queued for the handlers under it.
+/// A trackpad gesture or extra mouse button press at a window point, queued for the handlers under it.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::runtime) enum Gesture {
     Magnify(MagnifyEvent),
     Rotate(RotateEvent),
     SmartMagnify(f32, f32),
+    /// An extra mouse button (`Middle`, `Back`, `Forward`, `Other`) for [`El::on_button`]
+    /// handlers; `released` records a same-frame middle release for deferred autoscroll fallback.
+    Button { button: PointerButton, x: f32, y: f32, released: Option<(f32, f32)> },
 }
 
 /// Where a wheel delta's chain starts (`Runtime::chain_start`), when it was already found on the
@@ -216,6 +219,24 @@ impl RuntimeCore {
     }
 
     pub(in crate::runtime) fn run_gesture(&mut self, app: &mut dyn AppDriver, chain: Vec<String>, gesture: Gesture, tx: &mut Tx) -> bool {
+        if let Gesture::Button { button, x, y, released } = gesture {
+            tx.button = button;
+            for path in chain {
+                let taken = self.gesture_handler(&path, |g| g.button.clone()).map(|(_, f)| {
+                    Tx::took(f(app.states(), button, tx), tx)
+                });
+                if taken == Some(true) { return true; }
+            }
+            if button == PointerButton::Middle && self.pointer.pos.is_some() && self.autoscroll_down(x, y) {
+                if let Some((ux, uy)) = released {
+                    self.autoscroll_moved(ux, uy);
+                    self.pointer.autoscroll_release(PointerButton::Middle);
+                } else if let Some((px, py)) = self.pointer.pos && (px, py) != (x, y) {
+                    self.autoscroll_moved(px, py);
+                }
+            }
+            return false;
+        }
         for path in chain {
             let taken = match gesture {
                 Gesture::Magnify(ev) => self.gesture_handler(&path, |g| g.magnify.clone()).map(|(i, f)| {
@@ -230,6 +251,7 @@ impl RuntimeCore {
                     let [x, y] = self.to_local(i, x, y);
                     Tx::took(f(app.states(), x, y, tx), tx)
                 }),
+                Gesture::Button { .. } => unreachable!(),
             };
             if taken == Some(true) { return true; }
         }
@@ -312,7 +334,12 @@ impl RuntimeCore {
                 h.on_middle_press.is_some().then_some((i, None))
             });
         let Some((i, link)) = target else {
-            if middle { self.autoscroll_down(x, y); }
+            let chain = self.gesture_chain(x, y, |g| g.button.is_some());
+            if !chain.is_empty() {
+                self.frame.queue.push(Action::Gesture(chain, Gesture::Button { button, x, y, released: None }));
+            } else if middle {
+                self.autoscroll_down(x, y);
+            }
             return;
         };
         let n = &self.tree.nodes[i];
@@ -348,6 +375,7 @@ impl RuntimeCore {
     /// A mouse button came up at (x, y): the release of [`Self::button_down`].
     pub(crate) fn button_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32, button: PointerButton) {
         self.pointer.release_tint(button);
+        if button == PointerButton::Middle { self.frame.queue.note_middle_button_up(x, y); }
         if !matches!(button, PointerButton::Primary | PointerButton::Secondary) && self.pointer.autoscroll_release(button) { self.pointer.pos = Some((x, y)); return; }
         match button {
             PointerButton::Primary => self.pointer_up(app, x, y),

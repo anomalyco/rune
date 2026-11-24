@@ -365,7 +365,7 @@ impl RuntimeCore {
         let inside = self.pointer_hovers(i, top)
             || n.vis.hover_share.as_ref().is_some_and(|k| shared.contains(k))
             || (n.vis_flags.hover_group() && self.keyboard_within(i));
-        let capture_inside = if self.pointer.secondary_held() { inside } else { self.pointer.press_inside() };
+        let capture_inside = if self.pointer.pressing() { self.pointer.press_inside() } else { inside };
         let held = captured == Some(n.path.as_str()) && capture_inside;
         let allowed = self.allowed(i);
         // A held press stays hovered while it's inside, though a press scale shrank the drawn
@@ -386,10 +386,12 @@ impl RuntimeCore {
     /// Whether node `i` shows pressed right now (primary capture, secondary capture, or tint).
     fn press_down_node(&self, i: usize, captured: Option<&str>) -> bool {
         let n = &self.tree.nodes[i];
-        let capture_inside = if self.pointer.secondary_held() {
+        let capture_inside = if self.pointer.pressing() {
+            self.pointer.press_inside()
+        } else if self.pointer.secondary_held() {
             !self.pointer.left() && self.pointer.pos.is_some_and(|(x, y)| self.node_contains(i, x, y))
         } else {
-            self.pointer.press_inside()
+            false
         };
         // The middle or secondary button shows pressed what it went down on while it's over
         // it, as the primary does.
