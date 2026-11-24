@@ -443,15 +443,17 @@ impl<S: 'static> App<S> {
     }
 
     /// Runs once in every open window when the app starts to quit, before any window closes
-    /// for it: `Tx::quit` or `AppHandle::quit` from any window, the last window closing (in the
-    /// windows still open), macOS Quit (⌘Q, the Dock, logout, restart and shutdown), and a
-    /// Windows logoff or shutdown (`WM_QUERYENDSESSION`, or `WM_ENDSESSION` when no query came
-    /// first), as Electron's `before-quit` and `session-end` do between them. Save what must
-    /// survive the quit here, synchronously: a Windows session may end the process once the
-    /// hooks returned. From then on [`crate::quitting`] holds, so an `on_close` that follows
-    /// (macOS, the end of a Windows session) can tell the app ending from its window closing
-    /// alone. A Windows shutdown another app refuses clears it, and a later quit runs this again.
-    /// What it asks of its `Tx` beyond state is moot once the loop ends. Native windows only.
+    /// for it, and in the last main window whose close ends the app (after its `on_close`):
+    /// `Tx::quit` or `AppHandle::quit` from any window, the last main window closing, macOS
+    /// Quit (⌘Q, the Dock, logout, restart and shutdown), and a Windows logoff or shutdown
+    /// (`WM_QUERYENDSESSION`, or `WM_ENDSESSION` when no query came first), as Electron's
+    /// `before-quit` and `session-end` do between them. Save what must survive the quit here,
+    /// synchronously: a Windows session may end the process once the hooks returned. From then
+    /// on [`crate::quitting`] holds, so an `on_close` that follows (macOS, the end of a Windows
+    /// session, or another window closing for the quit) can tell the app ending from its window
+    /// closing alone. A Windows shutdown another app refuses clears it, and a later quit runs
+    /// this again. What it asks of its `Tx` beyond state is moot once the loop ends. Native
+    /// windows only.
     pub fn on_quit(mut self, f: fn(&mut S, &mut Tx)) -> Self {
         self.on_quit = Some(f);
         self

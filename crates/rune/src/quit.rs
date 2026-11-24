@@ -2,7 +2,8 @@
 //! window, the last window closing, macOS Quit (?Q, the Dock, logout and shutdown, which AppKit
 //! asks the app delegate about with `applicationShouldTerminate:`), and a Windows logoff or
 //! shutdown (`WM_QUERYENDSESSION`, then `WM_ENDSESSION`). Every open window's `App::on_quit`
-//! runs once when it starts, before any window closes for it, and [`quitting`] holds from then
+//! (and that of the last main window whose close ended the app) runs once when it starts, before
+//! any remaining window closes for it, and [`quitting`] holds from then
 //! on, so a window's `on_close` can tell the app ending from the user closing that one window.
 //!
 //! One machine ([`State`], [`step`]) holds where the quit is: running, quitting (the windows'
