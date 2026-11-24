@@ -461,8 +461,8 @@ impl PendingOverlay for OverlayHost {
     fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing) {
         OverlayHost::inherit_font_smoothing(self, mode);
     }
-    fn set_prewarm_effects(&mut self, enabled: bool) {
-        OverlayHost::set_prewarm_effects(self, enabled);
+    fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects) {
+        OverlayHost::set_prewarm_effects(self, effects);
     }
     #[cfg(test)]
     fn font_smoothing(&self) -> crate::FontSmoothing {

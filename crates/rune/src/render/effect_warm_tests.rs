@@ -3,7 +3,7 @@ use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 use bytemuck::Zeroable;
 
-use super::{Effect, Event, State, step};
+use super::{Effect, Event, PrewarmEffects, State, pace, step};
 use crate::render::{
     Blend, Gpu, Instance, KIND_BACKDROP_BLUR, KIND_EFFECT, KIND_RECT, LayerSpec, NO_CLIP,
     OFFSCREEN_FORMAT, Offscreen, Renderer, breaker, layers, variant,
@@ -122,26 +122,83 @@ fn state_machine_walks_idle_warming_ready_consumed_and_handles_shader_swap_and_s
 }
 
 #[test]
-fn app_and_window_spec_prewarm_effects_default_false_and_opt_in() {
+fn prewarm_effects_set_names_each_effect_and_converts_from_bool() {
+    assert_eq!(PrewarmEffects::default(), PrewarmEffects::NONE);
+    assert!(PrewarmEffects::NONE.is_empty());
+    assert_eq!(PrewarmEffects::from(true), PrewarmEffects::ALL);
+    assert_eq!(PrewarmEffects::from(false), PrewarmEffects::NONE);
+    let each = [PrewarmEffects::ISOLATION, PrewarmEffects::PLUS_LIGHTER, PrewarmEffects::LAYER_BLUR, PrewarmEffects::BACKDROP_BLUR];
+    assert_eq!(each.into_iter().fold(PrewarmEffects::NONE, |all, one| all | one), PrewarmEffects::ALL);
+    for (i, one) in each.into_iter().enumerate() {
+        assert!(!one.is_empty() && PrewarmEffects::ALL.contains(one));
+        assert!(PrewarmEffects::ALL.without(one).with(one) == PrewarmEffects::ALL);
+        for (j, other) in each.into_iter().enumerate() {
+            assert_eq!(one.contains(other), i == j, "{one:?} and {other:?} are distinct effects");
+        }
+    }
+    let glass = PrewarmEffects::BACKDROP_BLUR | PrewarmEffects::ISOLATION;
+    assert!(glass.contains(PrewarmEffects::BACKDROP_BLUR) && glass.contains(PrewarmEffects::ISOLATION));
+    assert!(!glass.contains(PrewarmEffects::PLUS_LIGHTER) && !glass.contains(PrewarmEffects::LAYER_BLUR));
+    assert_eq!(glass.without(PrewarmEffects::ISOLATION), PrewarmEffects::BACKDROP_BLUR);
+}
+
+#[test]
+fn worker_rests_until_the_window_is_still_or_the_limit_passes() {
+    use std::time::Duration;
+    let ms = Duration::from_millis;
+    // Still for less than the quiet time: waits for the rest of it.
+    assert_eq!(pace::rest_left(ms(0), ms(0), ms(300), ms(5000)), Some(ms(300)));
+    assert_eq!(pace::rest_left(ms(120), ms(900), ms(300), ms(5000)), Some(ms(180)));
+    // Still for the quiet time: compiles.
+    assert_eq!(pace::rest_left(ms(300), ms(300), ms(300), ms(5000)), None);
+    // A window that keeps drawing: never longer than the limit, and the last wait ends on it.
+    assert_eq!(pace::rest_left(ms(10), ms(4900), ms(300), ms(5000)), Some(ms(100)));
+    assert_eq!(pace::rest_left(ms(10), ms(5000), ms(300), ms(5000)), None);
+    // No quiet time (tests): at once.
+    assert_eq!(pace::rest_left(ms(0), ms(0), ms(0), ms(5000)), None);
+}
+
+#[test]
+fn an_effect_is_built_by_the_worker_or_by_the_frame_never_both() {
+    let link = pace::Link::default();
+    // The frame comes first: it claims the effect and the worker skips it.
+    assert!(!link.begun_or_claim(PrewarmEffects::BACKDROP_BLUR), "nothing begun: the frame builds it");
+    assert!(!link.start(PrewarmEffects::BACKDROP_BLUR), "the worker skips what a frame claimed");
+    // The worker comes first: a frame that needs the effect waits for it instead of building.
+    assert!(link.start(PrewarmEffects::ISOLATION));
+    assert!(link.begun_or_claim(PrewarmEffects::ISOLATION), "begun: the frame waits for the worker");
+    // Claims and starts are per effect.
+    assert!(link.start(PrewarmEffects::LAYER_BLUR));
+    assert!(!link.begun_or_claim(PrewarmEffects::PLUS_LIGHTER));
+}
+
+#[test]
+fn app_and_window_spec_prewarm_effects_default_none_and_opt_in() {
     let spec = || crate::AppSpec::new("Test", (320.0, 240.0), || (), |_, _| crate::el());
     let app_default = crate::App::new(spec());
-    assert!(!app_default.prewarm_effects, "App::prewarm_effects must default to false");
+    assert!(app_default.prewarm_effects.is_empty(), "App::prewarm_effects must default to none");
 
     let app_on = crate::App::new(spec()).prewarm_effects(true);
-    assert!(app_on.prewarm_effects, "App::prewarm_effects(true) opts in");
+    assert_eq!(app_on.prewarm_effects, PrewarmEffects::ALL, "App::prewarm_effects(true) names every effect");
+
+    let app_glass = crate::App::new(spec()).prewarm_effects(PrewarmEffects::BACKDROP_BLUR);
+    assert_eq!(app_glass.prewarm_effects, PrewarmEffects::BACKDROP_BLUR, "App::prewarm_effects names one effect");
 
     let win_default = crate::WindowSpec::new("secondary", spec());
-    assert!(!win_default.app.prewarm_effects, "WindowSpec::prewarm_effects must default to false");
+    assert!(win_default.app.prewarm_effects.is_empty(), "WindowSpec::prewarm_effects must default to none");
 
     let win_on = crate::WindowSpec::new("secondary", spec()).prewarm_effects(true);
-    assert!(win_on.app.prewarm_effects, "WindowSpec::prewarm_effects(true) opts in");
+    assert_eq!(win_on.app.prewarm_effects, PrewarmEffects::ALL, "WindowSpec::prewarm_effects(true) names every effect");
+
+    let win_glass = crate::WindowSpec::new("secondary", spec()).prewarm_effects(PrewarmEffects::BACKDROP_BLUR | PrewarmEffects::ISOLATION);
+    assert_eq!(win_glass.app.prewarm_effects, PrewarmEffects::BACKDROP_BLUR | PrewarmEffects::ISOLATION);
 }
 
 #[test]
 fn effect_warm_is_disabled_by_default_and_one_shot_offscreen_never_warms() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    assert!(!renderer.prewarm_effects(), "Renderer::prewarm_effects must default to false");
+    assert!(renderer.prewarm_effects().is_empty(), "Renderer::prewarm_effects must default to none");
     assert!(renderer.effect_warm.is_idle());
 
     let target = Offscreen::new(&gpu.device, 32, 16);
@@ -155,7 +212,7 @@ fn effect_warm_is_disabled_by_default_and_one_shot_offscreen_never_warms() {
 
     // One-shot render_runtime_to_offscreen must not trigger background warming even when opted in.
     renderer.set_prewarm_effects(true);
-    assert!(renderer.prewarm_effects());
+    assert_eq!(renderer.prewarm_effects(), PrewarmEffects::ALL);
     let mut rt = crate::Runtime::new(
         (),
         |_, _| crate::el().w_full().h_full().fill(crate::Color::WHITE),
@@ -195,8 +252,174 @@ fn first_frame_starts_no_effect_compilation_before_completion() {
 
     // Opting back out discards unharvested warmed pipelines and returns to Idle.
     renderer.set_prewarm_effects(false);
-    assert!(!renderer.prewarm_effects());
+    assert!(renderer.prewarm_effects().is_empty());
     assert!(renderer.effect_warm.is_idle());
+}
+
+#[test]
+fn worker_builds_only_the_named_effects() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(PrewarmEffects::BACKDROP_BLUR);
+    let target = Offscreen::new(&gpu.device, 64, 48);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+
+    let bg = rect([0.0, 0.0, 64.0, 48.0], [1.0, 0.0, 0.0, 1.0]);
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &[bg]);
+    renderer.warm_effects(&gpu.device);
+    renderer.wait_effect_warm();
+    renderer.wait_pinned();
+    let State::Ready(warmed) = &renderer.effect_warm.state else { panic!("the named effect is held aside until first use") };
+    assert_eq!(warmed.reported, PrewarmEffects::BACKDROP_BLUR, "the worker answers for the named effect alone");
+    assert!(warmed.backdrop_blur.is_some());
+    assert!(warmed.isolation.is_none() && warmed.plus_lighter.is_none() && warmed.layer_blur.is_none(), "unnamed effects are never compiled ahead");
+
+    // The first backdrop blur frame takes the warmed pipelines and compiles none.
+    #[cfg(feature = "test-gpu-counters")]
+    let before = live_render_pipelines(&gpu.device);
+    let frosted = [
+        rect([0.0, 0.0, 32.0, 48.0], [1.0, 0.0, 0.0, 1.0]),
+        rect([32.0, 0.0, 32.0, 48.0], [0.0, 0.0, 1.0, 1.0]),
+        backdrop_blur_instance([0.0, 24.0, 64.0, 24.0], 8.0),
+    ];
+    let pixels = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &frosted);
+    #[cfg(feature = "test-gpu-counters")]
+    assert_eq!(live_render_pipelines(&gpu.device) - before, 0, "first backdrop blur frame reuses the warmed pipelines");
+    let seam = ((36 * 64 + 32) * 4) as usize;
+    assert!(pixels[seam] > 20 && pixels[seam + 2] > 20, "backdrop blur blended across seam: {:?}", &pixels[seam..seam + 4]);
+    assert!(renderer.effect_warm.is_consumed(), "the one named effect was harvested");
+
+    // An unnamed effect still compiles on the frame that first draws it.
+    let iso = group([8.0, 8.0, 32.0, 16.0], LayerSpec { opacity: 0.5, ..Default::default() }, [1.0; 4]);
+    let pixels = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &iso);
+    assert!(renderer.breakers.health(breaker::Feature::Isolation).working());
+    let mid = ((16 * 64 + 24) * 4) as usize;
+    assert!((pixels[mid + 3] as i16 - 128).abs() <= 2, "half-opacity layer pixel: {:?}", &pixels[mid..mid + 4]);
+}
+
+#[test]
+fn worker_compiles_nothing_while_the_window_draws_and_a_drop_ends_its_rest_at_once() {
+    use std::time::{Duration, Instant};
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(PrewarmEffects::BACKDROP_BLUR);
+    // Rest for 400 ms without a frame before compiling.
+    renderer.effect_warm.rest = (Duration::from_millis(400), Duration::from_secs(30));
+    let steps = Arc::new(AtomicUsize::new(0));
+    let steps_worker = steps.clone();
+    renderer.effect_warm.on_step = Some(Arc::new(move || {
+        steps_worker.fetch_add(1, Ordering::SeqCst);
+    }));
+    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let plain = [rect([0.0, 0.0, 32.0, 16.0], [0.2, 0.4, 0.8, 1.0])];
+
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+    renderer.warm_effects(&gpu.device);
+    assert!(renderer.effect_warm.is_warming());
+    // Frames keep coming for 600 ms, a few ms apart: the worker never sees the window rest.
+    let drawing = Instant::now();
+    while drawing.elapsed() < Duration::from_millis(600) {
+        let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(steps.load(Ordering::SeqCst), 0, "no effect is compiled while the window draws");
+    assert!(renderer.effect_warm.is_warming());
+
+    // The window rests: the worker compiles and hands the pipelines over.
+    renderer.wait_effect_warm();
+    assert_eq!(steps.load(Ordering::SeqCst), 1);
+    assert!(renderer.effect_warm.is_ready());
+
+    // A renderer dropped while its worker rests does not wait for the rest to end.
+    let mut resting = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    resting.set_prewarm_effects(true);
+    resting.effect_warm.rest = (Duration::from_secs(60), Duration::from_secs(120));
+    let _ = render_offscreen(&gpu, &mut resting, &target, &mut atlas, &plain);
+    resting.warm_effects(&gpu.device);
+    assert!(resting.effect_warm.is_warming());
+    let dropping = Instant::now();
+    drop(resting);
+    assert!(dropping.elapsed() < Duration::from_secs(20), "drop woke the resting worker instead of waiting out its rest: {:?}", dropping.elapsed());
+}
+
+#[test]
+fn frame_that_meets_the_worker_mid_build_waits_for_it_and_compiles_nothing_twice() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(PrewarmEffects::ISOLATION | PrewarmEffects::BACKDROP_BLUR);
+    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+
+    // Hold the worker after it has begun its first effect (isolation), before it builds it.
+    let builds = Arc::new(AtomicUsize::new(0));
+    let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
+    let builds_worker = builds.clone();
+    let gate_worker = gate.clone();
+    renderer.effect_warm.on_build = Some(Arc::new(move || {
+        if builds_worker.fetch_add(1, Ordering::SeqCst) > 0 { return; }
+        let (lock, cv) = &*gate_worker;
+        let mut guard = lock.lock().unwrap();
+        guard.0 = true;
+        cv.notify_all();
+        while !guard.1 {
+            guard = cv.wait(guard).unwrap();
+        }
+    }));
+
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &[rect([0.0, 0.0, 32.0, 16.0], [0.0; 4])]);
+    renderer.wait_pinned();
+    renderer.warm_effects(&gpu.device);
+    {
+        let (lock, cv) = &*gate;
+        let mut guard = lock.lock().unwrap();
+        while !guard.0 {
+            guard = cv.wait(guard).unwrap();
+        }
+    }
+    assert!(renderer.effect_warm.is_warming());
+    #[cfg(feature = "test-gpu-counters")]
+    let before = live_render_pipelines(&gpu.device);
+
+    // The worker goes on a moment after the frame began to wait for it.
+    let releaser = {
+        let gate = gate.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            let (lock, cv) = &*gate;
+            let mut guard = lock.lock().unwrap();
+            guard.1 = true;
+            cv.notify_all();
+        })
+    };
+    // An isolated layer while the worker is in the middle of isolation: the frame waits for the
+    // worker's pipeline, takes it, and draws the exact half-opacity pixel.
+    let iso = group([4.0, 4.0, 24.0, 8.0], LayerSpec { opacity: 0.5, ..Default::default() }, [1.0; 4]);
+    let pixels = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &iso);
+    releaser.join().unwrap();
+    assert!(renderer.breakers.health(breaker::Feature::Isolation).working());
+    let mid = ((8 * 32 + 16) * 4) as usize;
+    assert!((pixels[mid + 3] as i16 - 128).abs() <= 2, "isolated layer pixel taken from the worker: {:?}", &pixels[mid..mid + 4]);
+
+    // Isolation was compiled once, by the worker: with the `vs` entry that is the one
+    // `Rgba16Float` uber pipeline (its composites are clones), then backdrop blur's own.
+    renderer.wait_effect_warm();
+    assert_eq!(builds.load(Ordering::SeqCst), 2, "the worker built isolation and backdrop blur");
+    #[cfg(feature = "test-gpu-counters")]
+    {
+        let with_wait = live_render_pipelines(&gpu.device) - before;
+        // The same two effects warmed with no frame in the way compile the same pipelines.
+        let mut plain = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        plain.set_prewarm_effects(PrewarmEffects::ISOLATION | PrewarmEffects::BACKDROP_BLUR);
+        let _ = render_offscreen(&gpu, &mut plain, &target, &mut atlas, &[rect([0.0, 0.0, 32.0, 16.0], [0.0; 4])]);
+        plain.wait_pinned();
+        let before_plain = live_render_pipelines(&gpu.device);
+        plain.warm_effects(&gpu.device);
+        plain.wait_effect_warm();
+        let _ = render_offscreen(&gpu, &mut plain, &target, &mut atlas, &iso);
+        assert_eq!(with_wait, live_render_pipelines(&gpu.device) - before_plain, "a frame that waits for the worker compiles nothing a second time");
+    }
+    assert!(renderer.effect_warm.is_ready(), "backdrop blur stays held aside until first use");
 }
 
 #[test]
@@ -364,15 +587,16 @@ fn synchronous_fallback_works_while_worker_is_in_flight() {
     }
     assert!(renderer.effect_warm.is_warming());
 
-    // Render an isolated layer while the worker is still blocked: must fall back synchronously
-    // without blocking and draw the exact half-opacity pixel.
+    // Render an isolated layer while the worker is still blocked before it began isolation: the
+    // frame claims the effect, builds it synchronously without blocking and draws the exact
+    // half-opacity pixel.
     let iso = group([4.0, 4.0, 24.0, 8.0], LayerSpec { opacity: 0.5, ..Default::default() }, [1.0; 4]);
     let pixels = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &iso);
     assert!(renderer.breakers.health(breaker::Feature::Isolation).working());
     let mid = ((8 * 32 + 16) * 4) as usize;
     assert!((pixels[mid + 3] as i16 - 128).abs() <= 2, "fallback isolated layer pixel: {:?}", &pixels[mid..mid + 4]);
 
-    // Release the worker and wait for it; polling prunes the already-built Isolation slot.
+    // Release the worker and wait for it: it skips the claimed isolation and builds the rest.
     {
         let (lock, cv) = &*gate;
         let mut guard = lock.lock().unwrap();
@@ -381,7 +605,9 @@ fn synchronous_fallback_works_while_worker_is_in_flight() {
     }
     renderer.wait_effect_warm();
     renderer.poll_effect_warm();
-    assert!(renderer.effect_warm.is_ready(), "remaining unbuilt features stay ready after pruning Isolation");
+    let State::Ready(warmed) = &renderer.effect_warm.state else { panic!("remaining unbuilt features stay ready") };
+    assert_eq!(warmed.reported, PrewarmEffects::ALL.without(PrewarmEffects::ISOLATION), "the worker never builds what a frame claimed");
+    assert!(warmed.isolation.is_none());
 }
 
 #[test]

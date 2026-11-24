@@ -349,7 +349,7 @@ impl<T: 'static> OverlayHandle<T> {
 pub(crate) trait PendingOverlay: AnyHost {
     fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>);
     fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing);
-    fn set_prewarm_effects(&mut self, enabled: bool);
+    fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects);
     #[cfg(test)]
     fn font_smoothing(&self) -> crate::FontSmoothing;
 }
@@ -472,8 +472,8 @@ pub(in crate::overlay) struct OverlayCore {
     refollow_away: Option<winit::monitor::MonitorHandle>,
     /// Whether placement requests or a user window drag owns this overlay's position.
     position_owner: input::PositionOwner,
-    /// Whether this overlay's renderer warms effect pipelines after its first frame.
-    prewarm_effects: bool,
+    /// The effect pipelines this overlay's renderer compiles ahead of their first use.
+    prewarm_effects: crate::PrewarmEffects,
     /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,
@@ -561,7 +561,7 @@ impl OverlayCore {
             meter,
             refollow_away: None,
             position_owner: input::PositionOwner::Managed,
-            prewarm_effects: false,
+            prewarm_effects: crate::PrewarmEffects::NONE,
             #[cfg(test)]
             layer_frame_pending: false,
             #[cfg(test)]
