@@ -194,6 +194,15 @@ it; see `rune-button--shortcuts` in `kit-gallery`). The text stays the button's 
 A `RollingText` reads as its whole label wherever text is looked up: its row's `text` in
 `--tree` and `ElementInfo::text`, so tests find it by text as they find a plain `text`.
 
+`SegmentedControl` supports per-segment leading 14 pt icons (`.icon(i, icon)`, `.icons(&[..])`),
+trailing elements such as count badges or status dots (`.trailing(i, el)`), hover tooltips and
+shortcut hints formatted like `Button` (`.help(i, text)`, `.shortcut(i, s)`), explicit
+accessible descriptions (`.description(i, text)`), `aria-controls` wiring (`.controls(i, key)`),
+and WAI-ARIA Tabs semantics (`.as_tabs()`, switching `radiogroup`/`radio` to horizontal
+`tablist`/`tab` with `aria-selected`); empty segment labels omit the text element for
+icon-only switchers whose `help` supplies the accessible name (see `rune-segmented-control--rich`
+in `kit-gallery`).
+
 `Keybind::new(&["g"])` upper-cases single-character keycaps by default (`"G"`); call
 `.keep_case()` to preserve authored letter case verbatim (for example Vim-style `g` vs
 `Shift` + `G`, shown in `rune-keybind--keep-case` in the gallery).
@@ -248,7 +257,7 @@ assistive technology runs through the same handlers as pointer and keys.
 - **States**: checked (checkbox, switch, radio, segment, checked menu item, task), expanded or
   collapsed (accordion, collapsible, menu and popover triggers given `.expanded`, select,
   combobox, submenu, tree row, sidebar section, sidebar toggle, diff file), selected and place
-  in the set (list, select, popup list, table, tree and sidebar rows), disabled, modal
+  in the set (list, select, popup list, table, tree, sidebar rows and `as_tabs()` segments), disabled, modal
   (dialog, open menu and select).
 - **Descriptions and live regions**: tooltips and help text describe their control; a field's
   error describes it and is announced; toasts and badges are polite live regions.

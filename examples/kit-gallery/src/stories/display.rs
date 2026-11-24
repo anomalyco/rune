@@ -336,6 +336,112 @@ pub(super) fn segmented_controlled(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         )
 }
 
+/// Rich `SegmentedControl`: per-segment icons, trailing count badge and status dot, hover
+/// tooltips with keyboard shortcuts, icon-only segments, and `as_tabs()` with `controls()`
+/// wired to a `tabpanel`.
+pub(super) fn segmented_rich(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let view: usize = s.picked("seg-rich", "0").parse().unwrap_or(0).min(3);
+    let icon_view: usize = s.picked("seg-icons", "0").parse().unwrap_or(0).min(2);
+    let tab: usize = s.picked("seg-tabs", "0").parse().unwrap_or(0).min(2);
+    let tab_copy = [
+        "General preferences: language, startup screen and default workspace.",
+        "Network settings: proxy configuration and TLS certificate store.",
+        "Security warning: 1 pending signing key rotation requires review.",
+    ][tab];
+    let dot = |color| el().size(6.0, 6.0).radius(3.0).fill(color).a11y_hidden();
+
+    col()
+        .gap(16.0)
+        .items_start()
+        .child(
+            col()
+                .gap(6.0)
+                .items_start()
+                .child(text("Icons, trailing badge & status dot, shortcut tooltips").font(k.ty.small_medium).color(k.c.text_weak))
+                .child(
+                    SegmentedControl::new(&["Comments", "Checks", "Sound", "Versions"], Some(view))
+                        .label("Inspector view")
+                        .icons(&[Some(&ic::COMMENT), Some(&ic::CIRCLE_CHECK), Some(&glyphs::MIC), Some(&ic::ARCHIVE)])
+                        .trailing(0, Badge::new("3").build(k))
+                        .trailing(1, dot(k.c.danger.fg))
+                        .help(0, "Review comments")
+                        .shortcut(0, "cmd+1")
+                        .help(1, "CI checks")
+                        .shortcut(1, "cmd+2")
+                        .description(1, "2 failing checks")
+                        .help(2, "Sound alerts")
+                        .shortcut(2, "cmd+3")
+                        .help(3, "Version history")
+                        .shortcut(3, "cmd+4")
+                        .fit()
+                        .on_pick(|s: &mut G, i: usize, _: &mut Tx| {
+                            s.pick.insert("seg-rich".into(), i.to_string());
+                        })
+                        .build(k)
+                        .key("seg-rich"),
+                ),
+        )
+        .child(
+            col()
+                .gap(6.0)
+                .items_start()
+                .child(text("Icon-only segments (tooltip names each segment)").font(k.ty.small_medium).color(k.c.text_weak))
+                .child(
+                    SegmentedControl::new(&["", "", ""], Some(icon_view))
+                        .label("Layout mode")
+                        .icons(&[Some(&ic::BULLET_LIST), Some(&ic::CODE), Some(&ic::TERMINAL)])
+                        .help(0, "List")
+                        .shortcut(0, "cmd+1")
+                        .help(1, "Code")
+                        .shortcut(1, "cmd+2")
+                        .help(2, "Terminal")
+                        .shortcut(2, "cmd+3")
+                        .fit()
+                        .on_pick(|s: &mut G, i: usize, _: &mut Tx| {
+                            s.pick.insert("seg-icons".into(), i.to_string());
+                        })
+                        .build(k)
+                        .key("seg-icons"),
+                ),
+        )
+        .child(
+            col()
+                .w(360.0)
+                .gap(8.0)
+                .items_start()
+                .child(text("Tablist mode (.as_tabs() + .controls())").font(k.ty.small_medium).color(k.c.text_weak))
+                .child(
+                    SegmentedControl::new(&["General", "Network", "Security"], Some(tab))
+                        .label("Settings sections")
+                        .icons(&[Some(&ic::SETTINGS_GEAR), Some(&ic::GLOBE), Some(&ic::SHIELD)])
+                        .trailing(2, dot(k.c.warning.fg))
+                        .description(2, "1 security warning")
+                        .controls(0, "seg-tabpanel")
+                        .controls(1, "seg-tabpanel")
+                        .controls(2, "seg-tabpanel")
+                        .as_tabs()
+                        .width(None)
+                        .on_pick(|s: &mut G, i: usize, _: &mut Tx| {
+                            s.pick.insert("seg-tabs".into(), i.to_string());
+                        })
+                        .build(k)
+                        .key("seg-tabs"),
+                )
+                .child(
+                    col()
+                        .key("seg-tabpanel")
+                        .role("tabpanel")
+                        .label("Settings section details")
+                        .w_full()
+                        .padding(10.0)
+                        .radius(k.radius.md)
+                        .fill(k.c.layer_01)
+                        .border(1.0, k.c.border_weak)
+                        .child(text(tab_copy).font(k.ty.small).color(k.c.text_base).wrap()),
+                ),
+        )
+}
+
 /// A copy label and countdown, sans and mono. Each press of "Roll" advances one step:
 /// "Copy password" → "Copied, clears in 0:30" → "… 0:29", and the countdown "0:30" → "0:29" → ….
 pub(super) fn rolling_text_basic(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
