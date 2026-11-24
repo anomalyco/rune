@@ -231,33 +231,33 @@ impl Convexicator {
 /// Skia's elements for SVG path data: arcs as the conics `SkPath::arcTo` makes, the rest as is.
 pub(super) fn parse(d: &str) -> Vec<El> {
     let mut out = Elements(Vec::new());
-    let _ = super::svg_path::parse_into(d, &mut out);
+    let _ = rune_core::shape::parse_svg_path(d, &mut out);
     out.0
 }
 
 struct Elements(Vec<El>);
 
-fn v(p: swash::zeno::Point) -> V {
-    V::new(p.x, p.y)
+fn v(p: [f32; 2]) -> V {
+    V::new(p[0], p[1])
 }
 
-impl super::svg_path::Sink for Elements {
+impl rune_core::shape::SvgPathSink for Elements {
     fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-    fn move_to(&mut self, p: swash::zeno::Point) {
+    fn move_to(&mut self, p: [f32; 2]) {
         self.0.push(El::Move(v(p)));
     }
-    fn line_to(&mut self, p: swash::zeno::Point) {
+    fn line_to(&mut self, p: [f32; 2]) {
         self.0.push(El::Line(v(p)));
     }
-    fn quad_to(&mut self, c: swash::zeno::Point, p: swash::zeno::Point) {
+    fn quad_to(&mut self, c: [f32; 2], p: [f32; 2]) {
         self.0.push(El::Quad(v(c), v(p)));
     }
-    fn curve_to(&mut self, c1: swash::zeno::Point, c2: swash::zeno::Point, p: swash::zeno::Point) {
+    fn curve_to(&mut self, c1: [f32; 2], c2: [f32; 2], p: [f32; 2]) {
         self.0.push(El::Cubic(v(c1), v(c2), v(p)));
     }
-    fn arc_to(&mut self, from: swash::zeno::Point, rx: f32, ry: f32, angle: f32, large: bool, sweep: bool, to: swash::zeno::Point) {
+    fn arc_to(&mut self, from: [f32; 2], rx: f32, ry: f32, angle: f32, large: bool, sweep: bool, to: [f32; 2]) {
         arc_to(&mut self.0, v(from), rx, ry, angle, large, sweep, v(to));
     }
     fn close(&mut self) {

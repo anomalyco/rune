@@ -1,7 +1,8 @@
 //! Vector shapes: a filled waveform envelope, polylines, meters, a Bézier path, a concave
-//! polygon, and compound fills with transparent holes under `FillRule::NonZero` and
-//! `FillRule::EvenOdd`. `cargo run -p shapes -- --snap shapes.png` renders it headless; time
-//! animates the waveform, so `--at 1.5` shows another moment.
+//! polygon, compound fills with transparent holes under `FillRule::NonZero` and
+//! `FillRule::EvenOdd`, and SVG 2 path data (`Path::from_svg`, `Shape::fill_svg`,
+//! `Shape::fill_svg_with`, `Shape::stroke_svg`). `cargo run -p shapes -- --snap shapes.png`
+//! renders it headless; time animates the waveform, so `--at 1.5` shows another moment.
 
 #![forbid(unsafe_code)]
 
@@ -171,6 +172,29 @@ fn compound_fills() -> Shape {
         .fill_path_with(&star_eo, FillRule::EvenOdd, translucent_warm)
 }
 
+/// SVG 2 path data showcase: a smooth cubic heart (`Shape::fill_svg`), a compound arc donut
+/// with a transparent cutout (`Shape::fill_svg_with` + `FillRule::EvenOdd`), a stroked arc and
+/// quadratic wave (`Shape::stroke_svg`), and a reusable `Path::from_svg` both filled and stroked.
+fn svg_paths() -> Shape {
+    let heart = "M 54 78 C 54 78 14 54 14 30 C 14 14 26 6 38 6 C 46 6 51 11 54 18                  C 57 11 62 6 70 6 C 82 6 94 14 94 30 C 94 54 54 78 54 78 Z";
+    let arc_donut = "M 224 44 A 36 36 0 1 0 152 44 A 36 36 0 1 0 224 44 Z                      M 206 44 A 18 18 0 1 0 170 44 A 18 18 0 1 0 206 44 Z";
+    let arc_wave = "M 272 56 A 26 26 0 0 1 324 56 Q 350 12 376 56 T 428 56";
+    let crescent = Path::from_svg(
+        "M 512 12 A 34 34 0 1 0 512 76 A 24 24 0 1 1 512 12 Z",
+    );
+    let badge = "M 576 14 H 644 A 12 12 0 0 1 656 26 V 62 A 12 12 0 0 1 644 74                  H 576 A 12 12 0 0 1 564 62 V 26 A 12 12 0 0 1 576 14 Z                  M 594 44 L 606 56 L 628 32";
+
+    Shape::new()
+        // Backdrop stripe so the arc donut's EvenOdd hole is visibly transparent.
+        .fill(vec![[136.0, 38.0], [240.0, 38.0], [240.0, 50.0], [136.0, 50.0]], STRIPE)
+        .fill_svg(heart, WARM)
+        .fill_svg_with(arc_donut, FillRule::EvenOdd, Color { a: 0.72, ..ACCENT })
+        .stroke_svg(arc_wave, 3.0, LineCap::Round, ACCENT)
+        .fill_path(&crescent, Color { a: 0.85, ..WARM })
+        .stroke_path(&crescent, 1.5, LineCap::Round, INK)
+        .stroke_svg(badge, 2.5, LineCap::Round, INK)
+}
+
 fn label(s: &str) -> El {
     text(s).color(INK)
 }
@@ -221,6 +245,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 .child(label("Compound fills: ring with hole, same-winding NonZero vs EvenOdd, crossing star NonZero vs EvenOdd"))
                 .child(memo("compound", (), || canvas(compound_fills()).size(680.0, 104.0))),
         )
+        .child(
+            col()
+                .gap(8.0)
+                .child(label("SVG 2 path data: fill_svg, fill_svg_with (EvenOdd arc ring), stroke_svg, Path::from_svg"))
+                .child(memo("svg_paths", (), || canvas(svg_paths()).size(680.0, 88.0))),
+        )
 }
 
 fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
@@ -229,5 +259,5 @@ fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
 }
 
 fn main() {
-    rune::run(AppSpec { poll: Some(poll), ..AppSpec::new("Shapes", (820.0, 500.0), || State { t: 0.0 }, view) });
+    rune::run(AppSpec { poll: Some(poll), ..AppSpec::new("Shapes", (820.0, 620.0), || State { t: 0.0 }, view) });
 }

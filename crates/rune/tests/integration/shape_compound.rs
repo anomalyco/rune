@@ -206,3 +206,34 @@ fn single_compound_fill_needs_no_layer_when_fading() {
     rt.frame(0.0);
     assert!(!layered(&rt.instances), "single compound fill is non-overlapping and needs no layer");
 }
+
+#[test]
+fn svg_path_compound_fill_and_stroke_render_through_runtime() {
+    // Two concentric circles built from SVG 2 elliptical arcs (same sweep -> hollow under EvenOdd),
+    // plus an SVG stroked horizontal bar across the bottom.
+    const DONUT_D: &str = "M 160 80 A 60 60 0 1 0 40 80 A 60 60 0 1 0 160 80 Z                            M 130 80 A 30 30 0 1 0 70 80 A 30 30 0 1 0 130 80 Z";
+    const BAR_D: &str = "M 20 175 H 180";
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let shape = Shape::new()
+            .fill_svg_with(DONUT_D, FillRule::EvenOdd, Color::WHITE)
+            .stroke_svg(BAR_D, 6.0, rune::LineCap::Round, RED);
+        el().size(200.0, 200.0).child(canvas(shape).size(200.0, 200.0))
+    }
+
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let check = |buf: &[u8], tag: &str| {
+        assert_eq!(px(buf, 200, 100, 80), [0, 0, 0, 0], "{tag}: SVG arc donut hole must be transparent");
+        assert_eq!(px(buf, 200, 145, 80)[3], 255, "{tag}: SVG arc donut wall must be opaque");
+        assert_eq!(px(buf, 200, 55, 80)[3], 255, "{tag}: SVG arc donut left wall must be opaque");
+        assert!(px(buf, 200, 100, 175)[3] > 200, "{tag}: SVG stroked bar must paint");
+        assert_eq!(px(buf, 200, 10, 10), [0, 0, 0, 0], "{tag}: outside corner stays transparent");
+    };
+    let cpu = render_cpu(&rt, 200, 200);
+    check(&cpu, "cpu_boot");
+    if let Some(gpu) = Gpu::test_headless() {
+        let gpu_buf = render_gpu(&gpu, &mut rt, 200, 200);
+        check(&gpu_buf, "gpu");
+    }
+}

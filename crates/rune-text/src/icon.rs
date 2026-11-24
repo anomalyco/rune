@@ -8,7 +8,6 @@ pub(crate) mod anim;
 mod area;
 pub(crate) mod color;
 mod convex;
-mod svg_path;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
