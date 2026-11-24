@@ -249,7 +249,7 @@ fn span_ring_draws_inset_border_on_light_page_merges_runs_wraps_and_stays_on_hov
 
     // Offscreen GPU readback in a light theme where fill ≈ page colour: the ring is visible
     // at the inset edge while the interior shows the fill.
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let size = (400u32, 88u32);
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, size.0, size.1);

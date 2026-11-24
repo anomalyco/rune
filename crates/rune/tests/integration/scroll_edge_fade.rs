@@ -105,7 +105,7 @@ fn keyboard_selection_stops_clear_of_the_fade() {
 
 #[test]
 fn edge_pixels_fade_by_the_hidden_extent() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let size = ((200.0 * SCALE) as u32, (300.0 * SCALE) as u32);
     let target = Offscreen::new(&gpu.device, size.0, size.1);

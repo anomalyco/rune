@@ -30,7 +30,7 @@ fn gpu_pages_interleave_with_video_and_retained_springs() {
     let mut rt = Runtime::new((pixels, surface), view, (8.0, 8.0), Env::new(true, 1.0));
     rt.frame(0.0);
     assert_eq!(rt.images.pages.len(), 2);
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let zero = crate::gpu::springs::Track::constant(0.0);
     let node = crate::gpu::springs::Node { x: zero, y: zero, opacity: crate::gpu::springs::Track::constant(1.0) };
     let mut renderer = Renderer::with_springs(&gpu.device, OFFSCREEN_FORMAT, &[node], &vec![0; rt.instances.len()]);
@@ -63,7 +63,7 @@ fn gpu_emoji_in_text_draws_in_colour() {
         return;
     }
     let (w, h) = (160, 48);
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
     renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
@@ -99,7 +99,7 @@ fn an_image_over_its_fill_fades_into_a_soft_edge_like_a_flat_fill() {
     let cache = ImageCache::new(Arc::new(|| {}));
     let image = cache.rgba(80, 120, [40u8, 40, 40, 255].repeat(80 * 120));
     image.wait().unwrap();
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 100, 60);
     let mut rt = Runtime::new(image.pixels().clone(), view, (100.0, 60.0), Env::new(true, 1.0));
@@ -137,7 +137,7 @@ fn gpu_static_mips_alpha_clip_and_page_order_match_pixels() {
     }).collect();
     let image = cache.rgba(64, 64, checker);
     image.wait().unwrap();
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 8, 8);
     let mut rt = Runtime::new((image.pixels().clone(), Pixels::new(), false), view, (8.0, 8.0), Env::new(true, 1.0));
@@ -198,7 +198,7 @@ fn gpu_draws_pixels_texel_for_texel_and_follows_new_frames() {
     }
     px.set(4, 4, rgba.clone());
     let mut rt = Runtime::new(px.clone(), view, (4.0, 4.0), Env::new(true, 1.0));
-    let gpu = Gpu::new(Gpu::instance(), None);
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 4, 4);
     let mut draw = |rt: &mut Runtime<Pixels>| {
@@ -230,7 +230,7 @@ fn gpu_pixels_fit_letterboxes_and_fill_crops() {
     // Four columns, red green blue white, two rows tall.
     let px = Pixels::new();
     px.set(4, 2, [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255; 4]].concat().repeat(2));
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 4, 4);
     let mut draw = |fit| {
@@ -271,7 +271,7 @@ fn clear_for_park_drops_image_textures_and_reuploads_cleanly() {
     px.set(4, 4, [240, 30, 80, 255].repeat(16));
     let mut rt = Runtime::new(px, view, (4.0, 4.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (4, 4));
     renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
@@ -303,7 +303,7 @@ fn gpu_sub_texel_image_crop_samples_own_texel_not_atlas_neighbour() {
 
     let (w, h) = (32u32, 32u32);
     let clear = [0.0, 0.0, 0.0, 1.0];
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
 
     // Place a 16x16 red slot, then paint a 4x4 blue sub-region at (4, 4) inside it.

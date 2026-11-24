@@ -647,7 +647,7 @@ fn secure_label_masks_reveals_conceals_and_never_leaks_plaintext() {
                         ),
                 )
         }
-        let gpu = Gpu::headless();
+        let Some(gpu) = Gpu::test_headless() else { return };
         let (w, h) = (840, 460);
         for (name, rev) in [("secure-label-hidden.png", false), ("secure-label-revealed.png", true)] {
             let mut rt = Runtime::new(rev, card_view, (420.0, 230.0), Env::new(true, 2.0));

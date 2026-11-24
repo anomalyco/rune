@@ -32,7 +32,7 @@ mod tests {
     #[test]
     fn gpu_straight_alpha_matches_cpu_reference() {
         use crate::render::{Gpu, Offscreen, OFFSCREEN_FORMAT};
-        let gpu = Gpu::new(Gpu::instance(), None);
+        let Some(gpu) = Gpu::test_headless() else { return };
         let alpha = super::AlphaSurface::new(&gpu.device, OFFSCREEN_FORMAT, (4, 4));
         let target = Offscreen::new(&gpu.device, 4, 4);
         for color in [[0.125_f32, 0.25, 0.375, 0.5], [0.0; 4], [0.4, 0.6, 0.1, 1.0]] {

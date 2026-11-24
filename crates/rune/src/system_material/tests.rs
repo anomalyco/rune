@@ -283,7 +283,7 @@ fn headless_runtimes_never_host_native_views_and_build_identically() {
 /// The shader leaves a shadow's hole clear and the rest as it was.
 #[test]
 fn shadow_hole_clears_the_interior_on_the_gpu() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 64);
     let mut atlas = crate::text::TextSystem::default().atlas;
@@ -320,7 +320,7 @@ fn srgb_blend_frost_over_a_native_material_reads_as_core_animation() {
         let white = Color::WHITE.alpha(0.62 * f32::from(*frost));
         el().size(200.0, 120.0).child(card().continuous_corners().child(el().size(120.0, 60.0).fill(white)))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let read = |srgb: bool, frost: u8, clear: [f32; 4]| {
         let mut rt = Runtime::new(frost, frosted, (200.0, 120.0), Env { scale: 2.0, system_dark: true });
         rt.paint.set_native_materials(true);

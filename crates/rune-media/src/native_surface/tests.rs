@@ -30,11 +30,17 @@ impl Drop for Gpu {
 }
 
 impl Gpu {
-    pub(super) fn new(instance: wgpu::Instance) -> Self {
+    pub(super) fn try_new(instance: wgpu::Instance) -> Option<Self> {
         #[cfg(target_os = "windows")]
         let _serial = GPU_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         let _init = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
-        let pick = rune_gpu::pick::pick(&instance, None, false).expect("pick GPU adapter");
+        let pick = match rune_gpu::pick::pick(&instance, None, false) {
+            Ok(pick) => pick,
+            Err(error) => {
+                rune_gpu::skip_test_without_gpu(&error);
+                return None;
+            }
+        };
         let required_features = pick.adapter.features() & (wgpu::Features::TIMESTAMP_QUERY | rune_gpu::backend::free_features(&pick.adapter));
         let adapter_limits = pick.adapter.limits();
         let required_limits = if adapter_limits.max_inter_stage_shader_variables < wgpu::Limits::default().max_inter_stage_shader_variables
@@ -60,14 +66,14 @@ impl Gpu {
                 *heard.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{reason:?}: {message}"));
             }
         });
-        Self {
+        Some(Self {
             adapter: pick.adapter,
             device,
             queue,
             lost,
             #[cfg(target_os = "windows")]
             _serial,
-        }
+        })
     }
 
     /// Fails the test if its device was lost.
@@ -96,7 +102,7 @@ impl Gpu {
         }
     }
 
-    pub(super) fn headless_wgpu() -> Self {
+    pub(super) fn headless_wgpu() -> Option<Self> {
         static INSTANCE: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
         let instance = INSTANCE.get_or_init(|| {
             let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
@@ -108,7 +114,7 @@ impl Gpu {
             desc.flags &= !wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL;
             wgpu::Instance::new(desc)
         });
-        Self::new(instance.clone())
+        Self::try_new(instance.clone())
     }
 }
 
@@ -270,12 +276,14 @@ macro_rules! on_each_backend {
     ($wgpu:ident, $metal:ident, $body:ident) => {
         #[test]
         fn $wgpu() {
-            $body(Gpu::headless_wgpu());
+            let Some(gpu) = Gpu::headless_wgpu() else { return };
+            $body(gpu);
         }
         #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
         #[test]
         fn $metal() {
-            $body(Gpu::new(rune_gpu::metal::instance()));
+            let Some(gpu) = Gpu::try_new(rune_gpu::metal::instance()) else { return };
+            $body(gpu);
         }
     };
 }
@@ -322,7 +330,7 @@ fn completion_worker_preserves_cpu_gpu_overlap() {
     /// However cheap a chunk's work measures, no attempt queues chunks whose full submit-to-done
     /// times add up past this.
     const QUEUED_MOST: Duration = Duration::from_secs(2);
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::headless_wgpu() else { return };
     let surface = NativeSurface::new();
     surface.push_bytes(synthetic(16, 16, 0), 1).unwrap();
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);

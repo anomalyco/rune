@@ -9,13 +9,13 @@ fn snap(r: [f32; 4], motion: [f32; 4], rigid: [f32; 2]) -> [f32; 4] {
 }
 
 /// The alpha channel of a headless 2× render of `view`, `w` × `h` points, row-major.
-fn coverage<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, w: u32, h: u32) -> Vec<u8> {
-    render(state, view, w, h, 2.0).chunks(4).map(|p| p[3]).collect()
+fn coverage<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, w: u32, h: u32) -> Option<Vec<u8>> {
+    Some(render(state, view, w, h, 2.0)?.chunks(4).map(|p| p[3]).collect())
 }
 
 /// A headless RGBA render of `view`, `w` × `h` points at `scale`, row-major.
-fn render<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, w: u32, h: u32, scale: f32) -> Vec<u8> {
-    let gpu = Gpu::headless();
+fn render<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, w: u32, h: u32, scale: f32) -> Option<Vec<u8>> {
+    let gpu = Gpu::test_headless()?;
     let mut renderer = Renderer::new(&gpu.device, FORMAT);
     let (dw, dh) = ((w as f32 * scale) as u32, (h as f32 * scale) as u32);
     let target = Offscreen::with_format(&gpu.device, dw, dh, FORMAT);
@@ -26,7 +26,7 @@ fn render<S: 'static>(state: S, view: fn(&S, &mut Cx<S>) -> El, w: u32, h: u32, 
     renderer.draw(&mut enc, &target.view, [0.0; 4]);
     target.copy(&mut enc);
     renderer.submit(&gpu.queue, enc);
-    target.read(&gpu.device)
+    Some(target.read(&gpu.device))
 }
 
 fn fills<S: 'static>(rt: &Runtime<S>) -> Vec<[f32; 4]> {
@@ -80,7 +80,7 @@ fn gap_column(on: &bool, _: &mut Cx<bool>) -> El {
 #[test]
 fn rows_with_a_fractional_gap_have_hard_edges() {
     for on in [true, false] {
-        let a = coverage(on, gap_column, 24, 52);
+        let Some(a) = coverage(on, gap_column, 24, 52) else { return };
         let column: Vec<u8> = (0..104).map(|y| a[y * 48 + 10]).collect();
         let soft = column.iter().filter(|&&v| v > 1 && v < 254).count();
         if on {
@@ -115,7 +115,7 @@ fn adjacent_boxes_meet_without_a_seam() {
     fn view(_: &(), _: &mut Cx<()>) -> El {
         row().padding(0.35).children((0..5).map(|_| el().size(7.15, 10.0).fill(Color::WHITE)))
     }
-    let a = coverage((), view, 40, 12);
+    let Some(a) = coverage((), view, 40, 12) else { return };
     let line = &a[12 * 80..13 * 80];
     let lit: Vec<usize> = (0..80).filter(|&x| line[x] > 0).collect();
     let (first, last) = (lit[0], *lit.last().unwrap());
@@ -128,7 +128,7 @@ fn hairline_border_is_one_crisp_pixel() {
     fn view(_: &(), _: &mut Cx<()>) -> El {
         el().size(32.0, 32.0).child(el().absolute(3.3, 4.15).size(20.3, 12.45).border(0.5, Color::WHITE))
     }
-    let a = coverage((), view, 32, 32);
+    let Some(a) = coverage((), view, 32, 32) else { return };
     let column: Vec<u8> = (0..64).map(|y| a[y * 64 + 20]).collect();
     assert!(column.iter().all(|&v| v <= 1 || v >= 254), "{column:?}");
     assert_eq!(column.iter().filter(|&&v| v >= 254).count(), 2, "{column:?}");
@@ -493,7 +493,7 @@ fn a_centred_knob_keeps_even_gaps_at_fractional_scales() {
 #[test]
 fn a_centred_knob_draws_even_gaps_in_device_pixels_at_1_25x() {
     // Where an app's Small switch sat: the track 559.25 pt down is 699.0625 px, as 11.25 pt is.
-    let rgba = render((11.25, 0.0), knob, 80, 60, 1.25);
+    let Some(rgba) = render((11.25, 0.0), knob, 80, 60, 1.25) else { return };
     let column: Vec<[u8; 4]> = (0..75).map(|y| {
         let i = (y * 100 + 22) * 4;
         [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]

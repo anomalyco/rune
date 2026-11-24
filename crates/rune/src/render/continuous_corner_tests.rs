@@ -41,7 +41,7 @@ fn oracle(p: [f32; 2], line: &[[f32; 2]]) -> f32 {
 
 #[test]
 fn continuous_corners_follow_apples_curve_in_fills_and_clips() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 96, 80);
     let mut atlas = crate::text::TextSystem::default().atlas;
@@ -74,7 +74,7 @@ fn continuous_corners_follow_apples_curve_in_fills_and_clips() {
 // into its own quadrant; the shape stays inside the rect and covers its centre.
 #[test]
 fn continuous_corners_at_half_the_shorter_side_stay_closed() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 32);
     let mut atlas = crate::text::TextSystem::default().atlas;

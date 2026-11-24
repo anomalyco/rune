@@ -44,7 +44,7 @@ fn median(mut v: Vec<f64>) -> f64 {
 #[test]
 #[ignore = "manual GPU and CPU cost of a full-width 60 pt frosted bar at 2x"]
 fn frosted_bar_cost() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     eprintln!("adapter: {:?}", gpu.adapter.get_info().name);
     for (w, h) in [(390.0f32, 844.0f32), (1280.0, 800.0)] {
         let size = ((w * 2.0) as u32, (h * 2.0) as u32);

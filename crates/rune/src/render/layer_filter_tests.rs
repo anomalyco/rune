@@ -17,7 +17,7 @@ fn coverage(x: i32, start: i32, end: i32, sigma: f32) -> f32 {
 
 #[test]
 fn gaussian_pixels_support_offscreen_saturation_and_pooling() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 48);
     let mut atlas = crate::text::TextSystem::default().atlas;
@@ -53,7 +53,7 @@ fn cached_blur_only_counts_passes_when_it_draws_the_layer() {
     fn view(_: &(), _: &mut Cx<()>) -> El {
         el().size(20.0, 16.0).fill(Color::WHITE).blur(2.0).cache()
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut rt = Runtime::new((), view, (32.0, 32.0), Env::new(true, 1.0));
     let target = Offscreen::new(&gpu.device, 32, 32);
@@ -108,7 +108,7 @@ fn runtime_keeps_offscreen_blur_sources_and_presence_transitions() {
     fn offscreen(_: &(), _: &mut Cx<()>) -> El {
         el().child(el().size(6.0, 12.0).absolute(-8.0, 12.0).fill(Color::WHITE).blur(4.0))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 48);
     let mut rt = Runtime::new((), offscreen, (64.0, 48.0), Env { scale: 1.0, system_dark: true });
@@ -144,7 +144,7 @@ fn later_live_blur_binding_replaces_the_earlier_source() {
 
 #[test]
 fn nested_blur_and_capsule_mask_apply_to_completed_output() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 48);
     let mut atlas = crate::text::TextSystem::default().atlas;
@@ -177,7 +177,7 @@ fn nested_blur_and_capsule_mask_apply_to_completed_output() {
 
 #[test]
 fn nested_targets_bound_ancestor_support_without_losing_halos() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 512, 512);
     let mut atlas = crate::text::TextSystem::default().atlas;
@@ -209,7 +209,7 @@ fn nested_targets_bound_ancestor_support_without_losing_halos() {
 
 #[test]
 fn unchanged_blur_reuses_uniforms_and_changed_inputs_refresh_them() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let mut writes = 0;
@@ -230,7 +230,7 @@ fn unchanged_blur_reuses_uniforms_and_changed_inputs_refresh_them() {
 fn filtered_video_and_image_page_match_primitive_source() {
     use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface, SurfaceDraw, SurfaceFit};
     use crate::pixels::{Pixels, ImageAtlas};
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 48);
     let mut atlas = crate::text::TextSystem::default().atlas;
@@ -300,7 +300,7 @@ pub(super) fn gpu_time(gpu: &Gpu, mut draw: impl FnMut(&mut wgpu::CommandEncoder
 #[test]
 #[ignore = "manual 400x40pt pill and oversized 400x120pt stress fixture at 2x"]
 fn pill_blur_gpu_cost() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     eprintln!("adapter: {:?}", gpu.adapter.get_info());
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 1024, 512);
@@ -321,7 +321,7 @@ fn pill_blur_gpu_cost() {
 
 #[test]
 fn reduced_gaussian_accuracy_and_resolution_boundary_continuity() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = Renderer::new(&gpu.device, format);
     let target = Offscreen::with_format(&gpu.device, 128, 96, format);
@@ -359,7 +359,7 @@ fn blur_replace_cost_and_appearance() {
                 .child(crate::text("Replace this row").absolute(36.0, 8.0).color(Color::WHITE))
         }))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     eprintln!("adapter: {:?}", gpu.adapter.get_info());
     let modes = [("legacy-radius4", 4.0), ("sigma4", 4.0), ("equivalent", 4.0 / 3.0f32.sqrt()),
         ("capped", rune_motion::Transition::blur_replace().insertion.blur)];

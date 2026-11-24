@@ -61,8 +61,8 @@ fn group(spec: LayerSpec) -> Vec<Instance> {
 
 /// Draws three frames of `instances` with `feature`'s pipelines built broken, and checks that no
 /// frame set an invalid pipeline; the pixel at the group's centre.
-fn draw_refusing(feature: Feature, instances: &[Instance]) -> (Renderer, [u8; 4]) {
-    let gpu = Gpu::headless_wgpu();
+fn draw_refusing(feature: Feature, instances: &[Instance]) -> Option<(Renderer, [u8; 4])> {
+    let gpu = Gpu::test_headless_wgpu()?;
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     renderer.breakers.refuse = Some(feature);
     let target = Offscreen::new(&gpu.device, 32, 16);
@@ -81,14 +81,14 @@ fn draw_refusing(feature: Feature, instances: &[Instance]) -> (Renderer, [u8; 4]
     }
     assert!(!matches!(renderer.breakers.health(feature), Health::Working | Health::Untried));
     let at = (8 * 32 + 16) * 4;
-    (renderer, [out[at], out[at + 1], out[at + 2], out[at + 3]])
+    Some((renderer, [out[at], out[at + 1], out[at + 2], out[at + 3]]))
 }
 
 /// A half-faded group whose layer pipeline the device refused draws its contents straight into
 /// the frame, at full opacity, rather than leaving the frame blank.
 #[test]
 fn a_refused_layer_pipeline_draws_the_group_in_its_parent() {
-    let (renderer, pixel) = draw_refusing(Feature::Isolation, &group(LayerSpec { opacity: 0.5, ..Default::default() }));
+    let Some((renderer, pixel)) = draw_refusing(Feature::Isolation, &group(LayerSpec { opacity: 0.5, ..Default::default() })) else { return };
     assert_eq!(pixel, [255; 4]);
     assert_eq!(renderer.layer_stats().targets, 0);
     assert!(!renderer.extra.iter().any(|(f, _)| *f == FORMAT), "the refused pipeline isn't kept");
@@ -96,7 +96,7 @@ fn a_refused_layer_pipeline_draws_the_group_in_its_parent() {
 
 #[test]
 fn a_refused_plus_lighter_pipeline_draws_source_over() {
-    let (renderer, pixel) = draw_refusing(Feature::PlusLighter, &group(LayerSpec { opacity: 0.5, blend: Blend::PlusLighter, ..Default::default() }));
+    let Some((renderer, pixel)) = draw_refusing(Feature::PlusLighter, &group(LayerSpec { opacity: 0.5, blend: Blend::PlusLighter, ..Default::default() })) else { return };
     let want = [188, 188, 188, 128];
     assert!(pixel.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 1), "half white, isolated, source-over: {pixel:?}");
     assert!(renderer.layers.additive.is_none());
@@ -104,6 +104,6 @@ fn a_refused_plus_lighter_pipeline_draws_source_over() {
 
 #[test]
 fn a_refused_blur_pipeline_draws_unblurred() {
-    let (_, pixel) = draw_refusing(Feature::LayerBlur, &group(LayerSpec { blur: 4.0, ..Default::default() }));
+    let Some((_, pixel)) = draw_refusing(Feature::LayerBlur, &group(LayerSpec { blur: 4.0, ..Default::default() })) else { return };
     assert_eq!(pixel, [255; 4]);
 }

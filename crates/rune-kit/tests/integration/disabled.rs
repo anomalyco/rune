@@ -70,7 +70,7 @@ fn a_disabled_contrast_button_fades_as_the_browser_does() {
         col().w_full().h_full().fill(k.c.bg_base).padding(10.0).child(b.w(200.0))
     }
     let (w, h) = (220u32, 48u32);
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     for dark in [false, true] {
         let mut rt = Runtime::new((), view, (w as f32, h as f32), Env { system_dark: dark, scale: 1.0 });
         rt.set_srgb_blend(true);

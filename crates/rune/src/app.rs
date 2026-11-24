@@ -621,7 +621,10 @@ impl<S: 'static> App<S> {
     /// window can't be created) or loses its display connection (panics on wasm32); `try_run`
     /// returns it. See `keep_running`.
     pub fn run(self) {
+        #[cfg(target_arch = "wasm32")]
         crate::tooling::started(self.try_run());
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::tooling::finish_start(self.try_run_start());
     }
 
     /// `run`, returning an error instead of exiting when the event loop can't start or fails, or
@@ -635,7 +638,12 @@ impl<S: 'static> App<S> {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn try_run(mut self) -> Result<(), String> {
+    pub fn try_run(self) -> Result<(), String> {
+        self.try_run_start().map_err(crate::tooling::StartError::message)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn try_run_start(mut self) -> Result<(), crate::tooling::StartError> {
         // Windows' word dictionaries start loading now, on their own thread (`rune_text::segmenter`).
         #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
         rune_text::segmenter::install();
@@ -650,9 +658,9 @@ impl<S: 'static> App<S> {
                 crate::tooling::try_headless(self, args)
             }
             #[cfg(not(any(feature = "tooling", debug_assertions)))]
-            Err(crate::tooling::WITHOUT_TOOLING.into())
+            Err(crate::tooling::StartError::Window(crate::tooling::WITHOUT_TOOLING.into()))
         } else {
-            crate::window::run(self, args)
+            crate::window::run(self, args).map_err(crate::tooling::StartError::Window)
         }
     }
 }

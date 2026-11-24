@@ -288,8 +288,102 @@ impl Gpu {
 
     /// A headless GPU on wgpu's backends, for tests of what needs wgpu-hal.
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn headless_wgpu() -> Gpu {
         Self::new(Self::wgpu_instance(), None)
+    }
+
+    /// A headless GPU for tests. Returns `Some(gpu)` whenever a real adapter is available; when
+    /// no adapter exists and `RUNE_ALLOW_NO_GPU=1` is set, prints one skip line and returns
+    /// `None`. Without `RUNE_ALLOW_NO_GPU=1`, or on any other GPU error, panics like `headless`.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn test_headless() -> Option<Gpu> {
+        Self::test_on(Self::instance())
+    }
+
+    /// Like `test_headless`, using `instance`.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn test_on(instance: wgpu::Instance) -> Option<Gpu> {
+        match Self::try_new(instance, None) {
+            Ok(gpu) => Some(gpu),
+            Err(error) => {
+                crate::gpu::skip_test_without_gpu(&error);
+                None
+            }
+        }
+    }
+
+    /// Checks whether a real GPU adapter is available for tests that don't construct a `Gpu`
+    /// directly (headless runs, `try_setup_on` fallback tests). Returns `true` when an adapter
+    /// exists; prints one skip line and returns `false` when none exists and `RUNE_ALLOW_NO_GPU=1`
+    /// is set; panics otherwise.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn test_adapter_available() -> bool {
+        static PROBE: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+        let res = PROBE.get_or_init(|| {
+            let instance = Self::instance();
+            let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
+            crate::gpu::pick::pick(&instance, None, false).map(|_| ())
+        });
+        match res {
+            Ok(()) => true,
+            Err(error) => {
+                crate::gpu::skip_test_without_gpu(error);
+                false
+            }
+        }
+    }
+
+    /// Like `test_headless`, on wgpu's own backends (`Gpu::wgpu_instance`).
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn test_headless_wgpu() -> Option<Gpu> {
+        Self::test_on(Self::wgpu_instance())
+    }
+
+    /// Like `test_headless`, requesting optional `wanted` features.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn test_with_features(wanted: wgpu::Features) -> Option<Gpu> {
+        match Self::try_with_features(Self::instance(), None, wanted) {
+            Ok(gpu) => Some(gpu),
+            Err(error) => {
+                crate::gpu::skip_test_without_gpu(&error);
+                None
+            }
+        }
+    }
+
+    /// A GPU on wgpu's noop backend, for non-pixel tests when `test-gpu-noop` is enabled.
+    #[cfg(all(test, feature = "test-gpu-noop"))]
+    pub(crate) fn test_noop() -> Gpu {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = wgpu::Backends::NOOP;
+        descriptor.backend_options.noop.enable = true;
+        let instance = wgpu::Instance::new(descriptor);
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        Gpu::from_device(instance, adapter, device, queue)
+    }
+
+    /// A real GPU when available, or wgpu's noop backend on a GPU-less host when both
+    /// `RUNE_ALLOW_NO_GPU=1` and `test-gpu-noop` are active (for tests checking non-pixel
+    /// invariants). Skips when `RUNE_ALLOW_NO_GPU=1` is set without `test-gpu-noop`; panics
+    /// without `RUNE_ALLOW_NO_GPU=1`.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn test_headless_or_noop() -> Option<Gpu> {
+        match Self::try_new(Self::instance(), None) {
+            Ok(gpu) => Some(gpu),
+            Err(error) => {
+                #[cfg(feature = "test-gpu-noop")]
+                if crate::gpu::allow_no_gpu_tests() && crate::gpu::is_missing_adapter_error(&error) {
+                    return Some(Self::test_noop());
+                }
+                crate::gpu::skip_test_without_gpu(&error);
+                None
+            }
+        }
     }
 
     /// Without `VALIDATION_INDIRECT_CALL`: Rune issues no indirect draws or dispatches, and the

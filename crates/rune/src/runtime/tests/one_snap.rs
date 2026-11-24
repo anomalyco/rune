@@ -47,12 +47,12 @@ struct Bench {
 }
 
 impl Bench {
-    fn new(w: u32, h: u32, scale: f32) -> Self {
-        let gpu = Gpu::headless();
+    fn new(w: u32, h: u32, scale: f32) -> Option<Self> {
+        let gpu = Gpu::test_headless()?;
         let renderer = Renderer::new(&gpu.device, FORMAT);
         let (dw, dh) = ((w as f32 * scale) as u32, (h as f32 * scale) as u32);
         let target = Offscreen::with_format(&gpu.device, dw, dh, FORMAT);
-        Self { gpu, renderer, target, dw, dh }
+        Some(Self { gpu, renderer, target, dw, dh })
     }
 
     fn draw<S: 'static>(&mut self, rt: &mut Runtime<S>, clear: [f64; 4]) -> Vec<u8> {
@@ -157,7 +157,7 @@ fn scaled_view(s: &ScaledCase, _: &mut Cx<ScaledCase>) -> El {
 /// rounding drop) and whole-pixel snapping of the held `1.6×` anchored popover.
 #[test]
 fn concentric_icon_and_shape_share_centre_and_size_at_scaled_rest() {
-    let mut bench = Bench::new(160, 160, 2.0);
+    let Some(mut bench) = Bench::new(160, 160, 2.0) else { return };
     for anchored in [false, true] {
         let mut max_err = 0.0f32;
         let (mut min_icon_area, mut max_icon_area) = (f32::MAX, 0.0f32);
@@ -265,7 +265,7 @@ fn moving_view(s: &MovingCase, _: &mut Cx<MovingCase>) -> El {
 /// within `1/8 px` on every frame of a diagonal glide, at `1×` and `1.6×` zoom.
 #[test]
 fn concentric_icon_shape_and_fill_glide_together_during_motion() {
-    let mut bench = Bench::new(120, 120, 2.0);
+    let Some(mut bench) = Bench::new(120, 120, 2.0) else { return };
     for zoom in [1.0, 1.6] {
         let mut rt = Runtime::new(
             MovingCase { at: [0.0, 0.0], zoom },
@@ -337,7 +337,7 @@ fn swap_view(s: &SwapCase, _: &mut Cx<SwapCase>) -> El {
 /// no area drop (`< 1%`).
 #[test]
 fn swapping_canvas_shape_to_icon_keeps_centre_and_area_steady() {
-    let mut bench = Bench::new(160, 160, 2.0);
+    let Some(mut bench) = Bench::new(160, 160, 2.0) else { return };
     let mut rt = Runtime::new(
         SwapCase { swapped: false, disc_r: 2.8 },
         swap_view,
@@ -509,7 +509,7 @@ fn capture_one_snap_proof() {
     let dir = std::path::PathBuf::from(dir);
     std::fs::create_dir_all(&dir).unwrap();
 
-    let mut bench160 = Bench::new(160, 160, 2.0);
+    let Some(mut bench160) = Bench::new(160, 160, 2.0) else { return };
     let mut still_scaled_errs = Vec::new();
     let mut still_anchored_errs = Vec::new();
     let mut disc_icon_area = 0.0f32;
@@ -553,7 +553,7 @@ fn capture_one_snap_proof() {
         }
     }
 
-    let mut bench120 = Bench::new(120, 120, 2.0);
+    let Some(mut bench120) = Bench::new(120, 120, 2.0) else { return };
     let mut moving_errs = Vec::new();
     let mut rt_move = Runtime::new(
         MovingCase { at: [0.0, 0.0], zoom: 1.6 },
@@ -605,7 +605,7 @@ fn capture_one_snap_proof() {
     //   0..70:  zoom 1.0 -> 1.6 while inner canvas disc pulses inside outer icon ring
     //   70..130: held at 1.6x fractional offset; frame 100 swaps canvas disc -> icon disc
     //   130..210: diagonal spring glide across subpixel offsets and settle
-    let mut bench_clip = Bench::new(80, 80, 2.0);
+    let Some(mut bench_clip) = Bench::new(80, 80, 2.0) else { return };
     let mut rt_clip = Runtime::new(
         ProofScene { at: [0.0, 0.0], zoom: 1.0, disc_r: 2.6, swapped: false },
         proof_view,

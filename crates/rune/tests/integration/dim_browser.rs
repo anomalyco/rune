@@ -54,7 +54,7 @@ fn button(page: u8, dim: f32, sheen: bool) -> El {
 
 #[test]
 fn a_dimmed_button_fades_as_css_opacity_does() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     fn plain_light(_: &(), _: &mut Cx<()>) -> El { button(0xff, 0.4, false) }
     fn plain_dark(_: &(), _: &mut Cx<()>) -> El { button(0x16, 0.4, false) }
     fn sheened(_: &(), _: &mut Cx<()>) -> El { button(0xff, 0.4, true) }
@@ -86,7 +86,7 @@ fn a_shadow_paints_its_authored_alpha() {
             .box_shadow(Shadow { y: 40.0, blur: 4.0, color: Color::BLACK.alpha(31.0 / 255.0), ..Shadow::default() }))
     }
     fn page(_: &(), cx: &mut Cx<()>) -> El { card(&(), cx).fill(Color::WHITE) }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let over_window = pixel(&render(&gpu, card, true, true), 60, 85);
     assert!(over_window[..3] == [0, 0, 0] && over_window[3].abs_diff(31) <= 1, "over a transparent window, the authored #0000001f: {over_window:?}");
     let over_page = pixel(&render(&gpu, page, true, false), 60, 85)[0] as f32;

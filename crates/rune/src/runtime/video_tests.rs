@@ -90,7 +90,7 @@ mod headless {
     /// The fixture is four 0.25 s frames: red, green, blue, white.
     #[test]
     fn headless_playback_decodes_the_frame_at_virtual_time() {
-        let gpu = Gpu::new(Gpu::instance(), None);
+        let Some(gpu) = Gpu::test_headless() else { return };
         let v = Video::file(fixture());
         let mut rt = crate::Runtime::new(v.clone(), view, (32.0, 18.0), crate::Env::new(true, 2.0));
         rt.frame(0.0);
@@ -143,7 +143,7 @@ mod headless {
     /// at the time it comes back, not the one it left on.
     #[test]
     fn a_playing_clip_scrolling_across_the_clip_edge_commits_nothing() {
-        let gpu = Gpu::new(Gpu::instance(), None);
+        let Some(gpu) = Gpu::test_headless() else { return };
         let v = Video::file(fixture());
         v.set_looping(true);
         let mut rt = crate::Runtime::new(v.clone(), scrolled, (32.0, 18.0), crate::Env::new(true, 2.0));

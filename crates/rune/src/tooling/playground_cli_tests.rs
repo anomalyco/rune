@@ -53,6 +53,7 @@ fn png_size(path: &std::path::Path) -> (u32, u32) {
 
 #[test]
 fn a_playground_scene_renders_its_script_the_same_every_run() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-playground-cli-{}", std::process::id()));
     let script = dir.join("script.json");
@@ -80,6 +81,7 @@ fn a_playground_scene_renders_its_script_the_same_every_run() {
 
 #[test]
 fn variant_and_crop_pick_a_storys_variant_and_crop_the_snap_to_an_element() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-playground-crop-{}", std::process::id()));
     let parsed = Args::parse_from(["--playground", "--snap", "s.png", "--crop", "1,2,3,4", "--crop", "puck", "--variant", "Big"].map(String::from).into());
@@ -95,6 +97,7 @@ fn variant_and_crop_pick_a_storys_variant_and_crop_the_snap_to_an_element() {
 
 #[test]
 fn whole_window_snaps_the_list_and_side_column_and_crops_to_their_keys() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
     let _turn = headless_run::test_turn();
     let dir = std::env::temp_dir().join(format!("rune-playground-whole-{}", std::process::id()));
     let stage = run(&dir, "stage", &["--at", "0"]);

@@ -42,7 +42,7 @@ fn snap_app<S: 'static>(app: App<S>, name: &str, extra_args: &[&str]) -> (u32, u
     for a in extra_args {
         args.push((*a).to_string());
     }
-    app.args(args).run();
+    app.args(args).try_run().unwrap();
     let file = std::fs::File::open(&png_path).unwrap();
     let decoder = png::Decoder::new(std::io::BufReader::new(file));
     let mut reader = decoder.read_info().unwrap();
@@ -75,7 +75,7 @@ fn radial_gradient_centre_edge_and_monotonic_falloff() {
     assert_eq!(inst.params[1], KIND_RADIAL);
     assert_eq!(inst.uv, [60.0, 60.0, 50.0, 50.0]);
 
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let out = render_rt(&gpu, &mut rt, (120, 120));
 
     let center = pixel(&out, 120, 60, 60);
@@ -134,7 +134,7 @@ fn radial_gradient_multi_stop_elliptical_quad_shrinking_and_validation() {
     );
     assert_eq!(radial_insts[1].rect, [10.0, 10.0, 120.0, 80.0]);
 
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let out = render_rt(&gpu, &mut rt, (140, 100));
 
     // Rounded corner outside the 20pt radius at (11, 11) is clipped transparent.
@@ -216,6 +216,7 @@ fn radial_gradient_multi_stop_elliptical_quad_shrinking_and_validation() {
 
 #[test]
 fn srgb_blend_matches_css_and_core_animation_glow_reference() {
+    if !Gpu::test_adapter_available() { return; }
     let bg = hex("#100e11").unwrap();
     let glow = hex("#40bf80").unwrap().alpha(0.16);
 
@@ -327,6 +328,7 @@ fn srgb_blend_matches_css_and_core_animation_glow_reference() {
 
 #[test]
 fn srgb_blend_images_surfaces_keycaps_and_compositor() {
+    if !Gpu::test_adapter_available() { return; }
     #[derive(Clone)]
     struct MediaState {
         premul_img: Image,

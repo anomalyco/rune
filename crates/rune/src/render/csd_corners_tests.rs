@@ -46,7 +46,7 @@ fn at(pixels: &[u8], width: u32, (x, y): (u32, u32)) -> [u8; 4] {
 
 #[test]
 fn the_bottom_corners_clear_and_nothing_else() {
-    let gpu = Gpu::new(Gpu::instance(), None);
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (width, height) = (40, 30);
     let radius = 6.;
     let pixels = cleared(&gpu, (width, height), radius);
@@ -68,7 +68,7 @@ fn the_bottom_corners_clear_and_nothing_else() {
 /// The arcs follow the radius: a wider one takes more of the corner.
 #[test]
 fn a_wider_radius_clears_more_of_the_corner() {
-    let gpu = Gpu::new(Gpu::instance(), None);
+    let Some(gpu) = Gpu::test_headless() else { return };
     let size = (40, 30);
     let narrow = cleared(&gpu, size, 4.);
     let wide = cleared(&gpu, size, 9.);
@@ -85,7 +85,7 @@ fn a_wider_radius_clears_more_of_the_corner() {
 /// it outright for that radius (`window::tests`).
 #[test]
 fn a_square_window_draws_nothing() {
-    let gpu = Gpu::new(Gpu::instance(), None);
+    let Some(gpu) = Gpu::test_headless() else { return };
     let size = (40, 30);
     let target = Offscreen::new(&gpu.device, size.0, size.1);
     let mut enc = gpu.device.create_command_encoder(&Default::default());
@@ -123,7 +123,7 @@ fn a_square_window_draws_nothing() {
 /// the linear one it makes for `srgb_blend(true)`, which the frame is drawn through in either case.
 #[test]
 fn both_target_views_fade_the_corners() {
-    let gpu = Gpu::new(Gpu::instance(), None);
+    let Some(gpu) = Gpu::test_headless() else { return };
     let size = (40, 30);
     for format in [OFFSCREEN_FORMAT, OFFSCREEN_FORMAT.remove_srgb_suffix()] {
         let pixels = cleared_with(&gpu, size, 6., format);

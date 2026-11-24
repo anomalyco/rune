@@ -815,7 +815,7 @@ fn overlay_idle_after_stays_awake_when_stale_or_live_pending() {
 
 #[test]
 fn overlay_render_registers_frame_wake_on_renderer() {
-    let Ok(gpu) = crate::render::Gpu::try_new(crate::render::Gpu::instance(), None) else { return };
+    let Some(gpu) = crate::render::Gpu::test_headless_or_noop() else { return };
     let mut overlay = width_overlay("frame-wake");
     overlay.rt.frame(0.0);
     let renderer = crate::render::Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);

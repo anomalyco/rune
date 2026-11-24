@@ -6,8 +6,8 @@ use crate::{Cx, El, Env, Pixels, Runtime, SurfaceFit, col, el, row, rule};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-fn render_gpu<S: 'static>(rt: &mut Runtime<S>, w: u32, h: u32) -> Vec<u8> {
-    let gpu = Gpu::headless();
+fn render_gpu<S: 'static>(rt: &mut Runtime<S>, w: u32, h: u32) -> Option<Vec<u8>> {
+    let gpu = Gpu::test_headless()?;
     let mut renderer = Renderer::new(&gpu.device, FORMAT);
     let target = Offscreen::with_format(&gpu.device, w, h, FORMAT);
     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
@@ -15,7 +15,7 @@ fn render_gpu<S: 'static>(rt: &mut Runtime<S>, w: u32, h: u32) -> Vec<u8> {
     renderer.draw(&mut enc, &target.view, [0.0; 4]);
     target.copy(&mut enc);
     renderer.submit(&gpu.queue, enc);
-    target.read(&gpu.device)
+    Some(target.read(&gpu.device))
 }
 
 fn render_cpu<S: 'static>(rt: &Runtime<S>, w: u32, h: u32) -> Vec<u8> {
@@ -54,7 +54,7 @@ fn zero_height_or_width_filled_elements_paint_nothing_at_fractional_offsets() {
         let (dw, dh) = ((200.0 * scale) as u32, (200.0 * scale) as u32);
         let cpu_px = render_cpu(&rt, dw, dh);
         assert_eq!(all_same_pixel(&cpu_px), None, "cpu_boot drew a non-background pixel at scale {scale}");
-        let gpu_px = render_gpu(&mut rt, dw, dh);
+        let Some(gpu_px) = render_gpu(&mut rt, dw, dh) else { return };
         assert_eq!(all_same_pixel(&gpu_px), None, "GPU drew a non-background pixel at scale {scale}");
     }
 }
@@ -138,6 +138,6 @@ fn zero_area_images_emit_nothing_and_paint_nothing() {
     assert!(rt.instances.iter().all(|i| i.rect[2] > 0.0 && i.rect[3] > 0.0));
     let cpu_px = render_cpu(&rt, 120, 120);
     assert_eq!(all_same_pixel(&cpu_px), None, "cpu_boot drew a non-background pixel");
-    let gpu_px = render_gpu(&mut rt, 120, 120);
+    let Some(gpu_px) = render_gpu(&mut rt, 120, 120) else { return };
     assert_eq!(all_same_pixel(&gpu_px), None, "GPU drew a non-background pixel");
 }

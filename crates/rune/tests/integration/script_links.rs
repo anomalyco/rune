@@ -20,6 +20,7 @@ fn view(opened: &Vec<String>, _: &mut Cx<Vec<String>>) -> El {
 
 #[test]
 fn script_taps_links_by_id() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let dir = std::env::temp_dir().join(format!("rune-script-links-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (script, tree) = (dir.join("script.json"), dir.join("tree.json"));
@@ -29,7 +30,8 @@ fn script_taps_links_by_id() {
     ]"#).unwrap();
     App::new(AppSpec::new("links", (300.0, 200.0), Vec::new, view))
         .args(["--script", script.to_str().unwrap(), "--tree", tree.to_str().unwrap()].map(String::from))
-        .run();
+        .try_run()
+        .unwrap();
     let tree: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&tree).unwrap()).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let opened = tree["elements"].as_array().unwrap().iter().find(|e| e["key"] == "opened").unwrap();

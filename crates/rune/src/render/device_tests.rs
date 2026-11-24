@@ -136,6 +136,7 @@ fn surface_refused_falls_back_across_real_adapters_hardware_before_software() {
     use crate::gpu::fallback::{Failure, Policy};
     use super::super::SurfaceSetupError;
 
+    if !Gpu::test_adapter_available() { return; }
     let instance = Gpu::instance();
     let available = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
     if available.len() < 2 {
@@ -193,6 +194,7 @@ fn surface_refused_falls_back_across_real_adapters_hardware_before_software() {
 fn happy_path_first_adapter_does_no_fallback_work() {
     use crate::gpu::fallback::Policy;
 
+    if !Gpu::test_adapter_available() { return; }
     let instance = Gpu::instance();
     let mut tried = 0usize;
     let mut extra_surfaces = 0usize;
@@ -229,6 +231,7 @@ fn transient_and_pinned_failures_do_not_switch_real_adapters() {
     use crate::gpu::fallback::{Failure, Policy};
     use super::super::SurfaceSetupError;
 
+    if !Gpu::test_adapter_available() { return; }
     for (policy, kind) in [
         (Policy::Automatic, Failure::OutOfMemory),
         (Policy::Automatic, Failure::DeviceLost),
@@ -272,6 +275,7 @@ fn exhausting_every_real_adapter_returns_first_error() {
     use crate::window::{Life, finish_run};
     use super::super::{SurfaceSetupError, surface_setup::append_wine_hwnd_hint};
 
+    if !Gpu::test_adapter_available() { return; }
     let mut tried = 0usize;
     let err = Gpu::try_setup_on(
         Gpu::instance(),
@@ -405,6 +409,7 @@ fn rejected_classic_shader_falls_back_across_real_adapters_hardware_before_softw
     use crate::gpu::fallback::Policy;
     use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
 
+    if !Gpu::test_adapter_available() { return; }
     let instance = Gpu::instance();
     let available = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
     if available.len() < 2 {
@@ -458,6 +463,7 @@ fn pinned_adapter_rejected_shader_is_not_replaced() {
     use crate::gpu::fallback::{Failure, Policy};
     use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
 
+    if !Gpu::test_adapter_available() { return; }
     let mut tried = 0usize;
     let mut extra_surfaces = 0usize;
     let err = Gpu::try_setup_on(
@@ -496,6 +502,7 @@ fn exhausting_every_adapter_on_rejected_shader_reaches_window_error_and_try_run(
     use crate::window::{Life, finish_run};
     use super::super::{OFFSCREEN_FORMAT, Renderer, SurfaceSetupError, shader_check};
 
+    if !Gpu::test_adapter_available() { return; }
     let mut tried = 0usize;
     let err = Gpu::try_setup_on(
         Gpu::instance(),
@@ -540,8 +547,8 @@ fn headless_run_rejected_shader_child() {
     use super::super::shader_check;
     let _turn = crate::tooling::headless_run::test_turn();
     let path = std::env::var("RUNE_TEST_HEADLESS_SNAP").expect("snap path env");
-    let _ = shader_check::with_uber_shaders_refused(true, || {
-        crate::tooling::try_run_windows_with_args(
+    shader_check::with_uber_shaders_refused(true, || {
+        crate::tooling::run_windows_with_args(
             crate::RunOptions::default(),
             ["--snap".into(), path],
             |_| [crate::WindowSpec::from_app("main", crate::App::new(crate::AppSpec::new("test", (40.0, 30.0), || (), |_, _| crate::el())))],
@@ -549,11 +556,39 @@ fn headless_run_rejected_shader_child() {
     });
 }
 
+/// Fallible headless entry points (`App::try_run`, `try_run_windows_with_args`) return `Err`
+/// instead of ending the test process when GPU/shader setup fails.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn try_run_headless_returns_error_instead_of_exiting_process() {
+    use super::super::shader_check;
+    let _turn = crate::tooling::headless_run::test_turn();
+    let snap = std::env::temp_dir().join(format!(
+        "rune-try-run-headless-err-{}.png",
+        std::process::id(),
+    ));
+    let _ = std::fs::remove_file(&snap);
+    let err = shader_check::with_uber_shaders_refused(true, || {
+        crate::tooling::try_run_windows_with_args(
+            crate::RunOptions::default(),
+            ["--snap".into(), snap.to_string_lossy().into_owned()],
+            |_| [crate::WindowSpec::from_app("main", crate::App::new(crate::AppSpec::new("test", (40.0, 30.0), || (), |_, _| crate::el())))],
+        )
+    })
+    .expect_err("failed headless GPU setup must return Err, not exit the process");
+    assert!(
+        err.contains("rejected Rune's shader") || err.starts_with("no GPU adapter:"),
+        "unexpected error: {err}",
+    );
+    assert!(!snap.exists(), "failed headless run must not write a snap image");
+}
+
 /// A headless run whose every adapter rejects the last-resort shader exits non-zero with the
 /// shader error on stderr instead of writing a blank image or panicking.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn headless_run_exits_nonzero_when_every_adapter_rejects_classic_shader() {
+    if !Gpu::test_adapter_available() { return; }
     let exe = std::env::current_exe().expect("test binary path");
     let snap = std::env::temp_dir().join(format!(
         "rune-rejected-shader-headless-{}.png",
@@ -591,6 +626,7 @@ fn headless_run_exits_nonzero_when_every_adapter_rejects_classic_shader() {
 fn direct_driver_pick_failure_widens_once_to_unlimited_instance() {
     use crate::gpu::fallback::Policy;
 
+    if !Gpu::test_adapter_available() { return; }
     let mut empty_desc = wgpu::InstanceDescriptor::new_without_display_handle();
     empty_desc.backends = wgpu::Backends::empty();
     let restricted = wgpu::Instance::new(empty_desc);
@@ -630,6 +666,7 @@ fn direct_driver_surface_refused_widens_once_and_never_widens_on_stop_or_happy_p
     use crate::gpu::fallback::{Failure, Policy};
     use super::super::SurfaceSetupError;
 
+    if !Gpu::test_adapter_available() { return; }
     // 1. Exhausting adapters with SurfaceRefused triggers widen_instance exactly once and
     // preserves the first error if the widened instance has no untried adapters left.
     let mut widen_calls = 0usize;

@@ -315,7 +315,7 @@ impl Desk {
 /// Renders `windows` composited over the `--desktop` backdrop. `selected` is the window
 /// `--scene`, `--tree` and `--trace` describe.
 /// `accessory` is `RunOptions::accessory`: reopening brings back no window.
-pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, accessory: bool) {
+pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, accessory: bool) -> Result<(), String> {
     let launched = crate::time::now();
     let backdrop = args.desktop.clone().expect("--desktop");
     if args.list_scenes { die("--list-scenes lists one window's scenes; drop --desktop"); }
@@ -369,7 +369,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
             .map_err(crate::render::SurfaceSetupError::from_shader)?;
         Ok(need_overlay.then_some(renderer))
     })
-    .unwrap_or_else(|e| die(&e.message));
+    .map_err(|e| e.message)?;
     let max = gpu.device.limits().max_texture_dimension_2d;
     let (wp, hp) = pixels(size, scale, max).unwrap_or_else(|| die(&format!(
         "--desktop: the output, {}x{} points at --scale {scale}, must be 1 to {max} pixels a side", size.0, size.1)));
@@ -587,6 +587,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     for m in &mut desk.members {
         if let Some(s) = m.summary(&gpu.device) { eprintln!("{s}"); }
     }
+    Ok(())
 }
 
 /// Sends a shortcut or menu pick to the key window's app, else the first other app that knows it.

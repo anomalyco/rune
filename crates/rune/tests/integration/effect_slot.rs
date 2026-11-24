@@ -161,7 +161,8 @@ fn snap(name: &'static str, view: fn(&(), &mut Cx<()>) -> El, srgb: bool, comp: 
         .compositor(comp)
         .srgb_blend(srgb)
         .args(["--snap".to_string(), path.to_str().unwrap().to_string(), "--scale".to_string(), "1".to_string()])
-        .run();
+        .try_run()
+        .unwrap();
     let mut reader = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap())).read_info().unwrap();
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut buf).unwrap();
@@ -223,6 +224,7 @@ fn opaque(_: &(), _: &mut Cx<()>) -> El {
 
 #[test]
 fn effect_in_a_faded_layer_is_faded_and_under_later_content() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         let formats = Arc::default();
         let (w, rgba) = snap("faded", faded, srgb, Flat::new(Arc::clone(&formats)));
@@ -239,6 +241,7 @@ fn effect_in_a_faded_layer_is_faded_and_under_later_content() {
 
 #[test]
 fn rounded_clip_cuts_the_effect_corner() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         let (w, rgba) = snap("rounded", rounded, srgb, Flat::new(Arc::default()));
         near(px(&rgba, w, 17, 17), over([32.0 / 255.0; 3], 1.0, srgb), "corner is clipped away");
@@ -252,6 +255,7 @@ fn rounded_clip_cuts_the_effect_corner() {
 
 #[test]
 fn opaque_effects_match_across_blend_modes() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let (w, linear) = snap("opaque-linear", opaque, false, Flat::new(Arc::default()));
     let (_, gamma) = snap("opaque-gamma", opaque, true, Flat::new(Arc::default()));
     assert_eq!(linear.len(), gamma.len());
@@ -281,6 +285,7 @@ fn faded_rounded_leaf(_: &(), _: &mut Cx<()>) -> El {
 /// compositor that paints at full strength is still faded.
 #[test]
 fn a_faded_slot_is_faded_for_the_compositor() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         for (name, view) in [("leaf", faded_leaf as fn(&(), &mut Cx<()>) -> El), ("only-child", faded_only_child), ("dimmed", dimmed)] {
             let (w, rgba) = snap(name, view, srgb, Flat::new(Arc::default()));
@@ -302,6 +307,7 @@ fn bleeding(_: &(), _: &mut Cx<()>) -> El {
 /// compositor that ignores the clip is held to it by the scissor.
 #[test]
 fn bleed_reaches_in_and_the_scissor_holds_the_clip() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let (w, rgba) = snap("bleeding", bleeding, false, Flat { ignore_clip: true, ..Flat::new(Arc::default()) });
     near(px(&rgba, w, 20, 20), over(RED, 1.0, false), "bleed inside the clip");
     near(px(&rgba, w, 10, 20), over([32.0 / 255.0; 3], 1.0, false), "bleed outside the clip");
@@ -310,6 +316,7 @@ fn bleed_reaches_in_and_the_scissor_holds_the_clip() {
 
 #[test]
 fn an_unpainted_effect_slot_draws_nothing() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let slots = Arc::default();
     let (w, rgba) = snap("unpainted", opaque, false, Plain(Arc::clone(&slots)));
     assert_eq!(*slots.lock().unwrap(), 1);
@@ -366,6 +373,7 @@ fn scaled_slots(_: &(), _: &mut Cx<()>) -> El {
 
 #[test]
 fn slot_reports_device_pixels_per_point_without_bleed() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let seen = Arc::default();
     let dir = std::env::temp_dir().join(format!("rune-effect-slot-scale-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -373,7 +381,8 @@ fn slot_reports_device_pixels_per_point_without_bleed() {
     App::new(AppSpec::new("slot-scale", (96.0, 96.0), || (), scaled_slots))
         .compositor(ScaleProbe(Arc::clone(&seen)))
         .args(["--snap".to_string(), path.to_str().unwrap().to_string(), "--scale".to_string(), "2".to_string()])
-        .run();
+        .try_run()
+        .unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     let got = seen.lock().unwrap().clone();
     assert_eq!(got, vec![(1, 2.0, 0.0), (2, 6.0, 0.0)]);
@@ -411,6 +420,7 @@ fn mixed_backdrop_slots(_: &(), _: &mut Cx<()>) -> El {
 
 #[test]
 fn only_backdrop_slots_split_the_pass_and_receive_a_backdrop_view() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let seen = Arc::default();
     let _ = snap("backdrop-probe", mixed_backdrop_slots, false, BackdropProbe(Arc::clone(&seen)));
     let got = seen.lock().unwrap().clone();
@@ -428,6 +438,7 @@ fn only_backdrop_slots_split_the_pass_and_receive_a_backdrop_view() {
 
 #[test]
 fn inert_backdrop_slots_draw_but_hidden_and_offscreen_subtrees_do_not() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let seen = Arc::default();
     let _ = snap("backdrop-visibility", |_, _| background()
         .child(el().inert().absolute(8.0, 8.0).size(24.0, 24.0)
@@ -482,6 +493,7 @@ fn cached_subtree_with_effect(_: &(), _: &mut Cx<()>) -> El {
 
 #[test]
 fn effect_slot_in_cached_subtree_draws_live_and_never_caches() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let dir = std::env::temp_dir().join(format!("rune-effect-slot-cache-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let log = Arc::default();
@@ -495,7 +507,8 @@ fn effect_slot_in_cached_subtree_draws_live_and_never_caches() {
             "--scale".to_string(),
             "1".to_string(),
         ])
-        .run();
+        .try_run()
+        .unwrap();
     let frame2 = dir.join("frame_0001.png");
     let mut reader = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&frame2).unwrap())).read_info().unwrap();
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];

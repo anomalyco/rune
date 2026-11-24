@@ -28,7 +28,7 @@ fn thumb<S>(rt: &Runtime<S>) -> [f32; 4] {
 
 #[test]
 fn the_thumb_draws_whole_over_a_viewport_that_fades_out_at_the_bottom() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     for inside in [true, false] {
         fades_the_rows_but_not_the_thumb(&gpu, inside);
     }

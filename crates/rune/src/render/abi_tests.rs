@@ -725,7 +725,7 @@ fn gpu_spring_opacity_folding_matches_cpu_across_all_kinds() {
         },
     ];
 
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let clear = [0.06, 0.08, 0.12, 1.0];
 
     for alpha in [0.5f32, 0.25] {

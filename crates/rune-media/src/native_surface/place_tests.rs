@@ -63,7 +63,7 @@ fn pixels_follow_the_same_anchor() {
 
 #[test]
 fn a_stale_frame_draws_pinned_top_left_on_the_gpu() {
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::headless_wgpu() else { return };
     let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let (frame, src) = super::gpu_tests::bgra_ramp(8, 4);
     let surface = NativeSurface::new();

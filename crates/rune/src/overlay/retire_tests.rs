@@ -68,8 +68,8 @@ impl BusyGpu {
     const CHUNKS_MOST: u32 = 512;
     const QUEUED_MOST: Duration = Duration::from_secs(2);
 
-    fn new() -> Self {
-        let gpu = Arc::new(Gpu::headless());
+    fn try_new() -> Option<Self> {
+        let gpu = Arc::new(Gpu::test_headless()?);
         let shader = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("overlay busy workload"),
             source: wgpu::ShaderSource::Wgsl(
@@ -143,7 +143,7 @@ impl BusyGpu {
         let (index, chunk_alone) = step;
         let per_chunk = if index == 0 { chunk_alone } else { chunk_alone.saturating_sub(floor).max(chunk_alone / 64) };
         let chunks_most = ((Self::QUEUED_MOST.as_secs_f64() / chunk_alone.as_secs_f64().max(1e-6)) as u32).clamp(1, Self::CHUNKS_MOST);
-        BusyGpu { gpu, compute, chunk: binds.into_iter().nth(index).unwrap(), per_chunk, chunks_most }
+        Some(BusyGpu { gpu, compute, chunk: binds.into_iter().nth(index).unwrap(), per_chunk, chunks_most })
     }
 
     fn submit_busy(&self, planned: Duration) -> (u32, Arc<AtomicBool>) {
@@ -178,7 +178,7 @@ fn drop_overlay_core_polls_shared_device_without_blocking() {
     let app = AppSpec::new("drop-poll", (16.0, 16.0), || (), view);
     let make = || Overlay::new(OverlaySpec::new("drop-poll", app.size, view).options(Default::default()), (), &app).0;
 
-    let mut busy = BusyGpu::new();
+    let Some(mut busy) = BusyGpu::try_new() else { return };
     busy.drain();
 
     // Idle shared device: Drop drops the renderer then polls non-blockingly so queued work retires.
@@ -223,7 +223,7 @@ fn drop_hidden_images_and_park_do_not_block_on_busy_shared_gpu_and_retire_on_lat
         root
     }
     let app = AppSpec::new("busy-hide", (16.0, 16.0), || None::<Pixels>, view);
-    let mut busy = BusyGpu::new();
+    let Some(mut busy) = BusyGpu::try_new() else { return };
 
     // 1. drop_hidden_images on a busy shared device returns immediately and retires on later wake_due.
     let mut overlapped = false;

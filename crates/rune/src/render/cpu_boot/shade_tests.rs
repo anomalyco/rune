@@ -190,7 +190,7 @@ fn shadow_row_matches_per_pixel_shadow_for_mixed_and_equal_corners() {
 fn mixed_and_rtl_mirrored_shadows_match_gpu_and_mirror_pixels() {
     let (w, h) = (180u32, 96u32);
     let clear = Color::WHITE.premul_srgb(1.0);
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
 
     fn view(dir: &Direction, _: &mut Cx<Direction>) -> El {
@@ -398,7 +398,7 @@ fn valid_image_matches_gpu_byte_for_byte() {
 
     let (w, h) = (96u32, 64u32);
     let clear = [0.06, 0.08, 0.12, 1.0];
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
 
     let mut images = ImageAtlas::default();

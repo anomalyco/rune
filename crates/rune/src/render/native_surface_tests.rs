@@ -12,12 +12,14 @@ macro_rules! on_each_backend {
     ($wgpu:ident, $metal:ident, $body:ident) => {
         #[test]
         fn $wgpu() {
-            $body(Gpu::headless_wgpu());
+            let Some(gpu) = Gpu::test_headless_wgpu() else { return };
+            $body(gpu);
         }
         #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
         #[test]
         fn $metal() {
-            $body(Gpu::new(crate::gpu::metal::instance(), None));
+            let Some(gpu) = Gpu::test_on(crate::gpu::metal::instance()) else { return };
+            $body(gpu);
         }
     };
 }
@@ -156,7 +158,7 @@ fn video_interleaves_with_renderer_springs_and_external_timing_on(gpu: Gpu) {
 fn video_continuous_corners_match_uber_shader() {
     use crate::render::{Instance, KIND_RECT, NO_CLIP, pack_clip_radii};
 
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (w, h) = (96u32, 80u32);
     let surface = NativeSurface::new();
     surface

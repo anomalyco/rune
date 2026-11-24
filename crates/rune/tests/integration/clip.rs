@@ -36,7 +36,7 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
 
 #[test]
 fn overflowing_scroll_content_stays_inside_the_box_as_it_scrolls() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let size = (100, 200);
     let mut rt = Runtime::new(S::default(), view, (100.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
@@ -77,7 +77,7 @@ fn a_press_outside_the_box_misses_clipped_content() {
 
 #[test]
 fn an_explicit_soft_clip_still_wins() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut rt = Runtime::new(S { soft: true, ..S::default() }, view, (100.0, 200.0), Env::new(true, 1.0));
     rt.frame(0.0);
     let px = pixels(&gpu, &mut rt, (100, 200));
@@ -99,7 +99,7 @@ fn packed_fades_survive_group_layer_projection_without_double_application() {
             // Intersect before isolation: the composite must decode a nonzero origin offset.
             .child(col().absolute(0.0, 8.0).size(80.0, 64.0).clip_soft(0.0).child(group)))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     for (scale, rounded) in [(1.0, false), (2.0, false), (1.0, true), (2.0, true)] {
         let size = ((128.0 * scale) as u32, (128.0 * scale) as u32);
         let env = Env::new(true, scale);
@@ -122,7 +122,7 @@ fn packed_fades_survive_group_layer_projection_without_double_application() {
 #[test]
 fn narrower_nested_edge_and_streaming_mask_survive_outer_fades() {
     use rune::render::unpack_fade;
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     for scale in [1.0, 2.0] {
         fn nested(outer: &bool, _: &mut Cx<bool>) -> El {
             col().size(80.0, 200.0).clip_fade(0.0, if *outer { 24.0 } else { 0.0 }, 0.0, 0.0)
@@ -170,7 +170,7 @@ fn faded_rows(faded: &bool, _: &mut Cx<bool>) -> El {
 
 #[test]
 fn nested_row_text_keeps_full_alpha_in_the_middle_of_a_faded_list() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     for scale in [1.0, 2.0] {
         let (w, h) = ((120.0 * scale) as u32, (100.0 * scale) as u32);
@@ -208,7 +208,7 @@ fn a_linear_fade_falls_in_proportion_to_distance_from_the_edge() {
         let clip = col().size(100.0, 100.0);
         if *linear { clip.clip_fade_linear(0.0, 0.0, 0.0, 40.0) } else { clip.clip_fade(0.0, 0.0, 0.0, 40.0) }.child(content)
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut linear = Runtime::new(true, faded, (100.0, 100.0), Env::new(true, 1.0));
     let mut smooth = Runtime::new(false, faded, (100.0, 100.0), Env::new(true, 1.0));
     linear.frame(0.0); smooth.frame(0.0);

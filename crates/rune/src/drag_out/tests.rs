@@ -144,7 +144,7 @@ fn readback_unpremultiplies_and_swaps_bgra() {
 #[test]
 fn snapshot_unpremultiplies_correctly_on_srgb_and_unorm_targets() {
     use crate::render::{Gpu, Instance, KIND_RECT, NO_CLIP, Renderer};
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let expected_rgb = [0.25_f32, 0.5, 0.125].map(|v| (srgb_encode(v) * 255.0).round() as u8);
     let expected_a = (0.5_f32 * 255.0).round() as u8;
     for (format, srgb_blend) in [

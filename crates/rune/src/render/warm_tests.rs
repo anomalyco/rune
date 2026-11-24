@@ -7,21 +7,10 @@ mod lost {
     use crate::render::prewarm::{PARKED, discard, park, take};
     use crate::render::{Gpu, Renderer};
 
-    /// A GPU on wgpu's noop backend: it takes anything and draws nothing.
-    fn noop_gpu() -> Gpu {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::NOOP;
-        descriptor.backend_options.noop.enable = true;
-        let instance = wgpu::Instance::new(descriptor);
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
-        Gpu::from_device(instance, adapter, device, queue)
-    }
-
     #[test]
     fn a_parked_device_that_died_is_not_handed_to_the_next_surface() {
         discard();
-        let gpu = noop_gpu();
+        let gpu = Gpu::test_noop();
         let renderer = Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
         assert!(!gpu.is_lost());
         gpu.device.destroy();
@@ -39,7 +28,7 @@ mod warm_renderer {
 
     #[test]
     fn warm_renderer_transfers_across_threads_and_rejects_surfaces() {
-        let Ok(gpu) = Gpu::try_new(Gpu::instance(), None) else { return eprintln!("skipped: no GPU") };
+        let Some(gpu) = Gpu::test_headless_or_noop() else { return };
         let device = gpu.device.clone();
         let warm = std::thread::spawn(move || Renderer::new_warm(&device, wgpu::TextureFormat::Bgra8Unorm))
             .join()

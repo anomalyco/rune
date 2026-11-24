@@ -643,7 +643,7 @@ fn park_after_wayland_hide_releases_gpu_renderer_and_surface_description() {
     };
 
     // Shared device: another surface keeps an Arc<Gpu> clone alive.
-    let shared_gpu = Arc::new(Gpu::headless());
+    let Some(shared_gpu) = Gpu::test_headless_or_noop().map(Arc::new) else { return };
     let (mut overlay, handle) = make();
     overlay.core.gpu = Some(shared_gpu.clone());
     overlay.core.renderer = Some(Renderer::new(&shared_gpu.device, OFFSCREEN_FORMAT));
@@ -657,7 +657,7 @@ fn park_after_wayland_hide_releases_gpu_renderer_and_surface_description() {
     assert_eq!(Arc::strong_count(&shared_gpu), 1, "only the external holder keeps the shared device alive");
 
     // Sole device: Arc::try_unwrap succeeds and parks the device and renderer.
-    let sole_gpu = Arc::new(Gpu::headless());
+    let Some(sole_gpu) = Gpu::test_headless_or_noop().map(Arc::new) else { return };
     let (mut overlay, handle) = make();
     overlay.core.renderer = Some(Renderer::new(&sole_gpu.device, OFFSCREEN_FORMAT));
     overlay.core.gpu = Some(sole_gpu);
@@ -715,7 +715,7 @@ fn wayland_hide_drops_pixels_references_atlas_pages_and_gpu_textures_and_reuploa
         memo_frame: Some(memo_shot),
         inline_frame: Some(inline_shot),
     }, &app);
-    let gpu = Arc::new(Gpu::headless());
+    let Some(gpu) = Gpu::test_headless().map(Arc::new) else { return };
     overlay.core.renderer = Some(Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
     overlay.core.gpu = Some(gpu.clone());
     overlay.rt.frame(0.0);

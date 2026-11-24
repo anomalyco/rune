@@ -30,16 +30,17 @@ fn rendered(name: &str, run: impl FnOnce(Vec<String>)) -> (String, serde_json::V
 
 #[test]
 fn a_factory_mixes_state_types_and_tools_render_the_selected_one() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     for (key, text, viewport) in [("review", "review 7", [400.0, 300.0]), ("settings", "settings Kit", [320.0, 200.0])] {
         let (out, size) = rendered(&format!("factory-{key}"), |mut args| {
             args.extend(["--window".into(), key.into()]);
-            run_windows_with_args(RunOptions::default(), args, |_| {
+            try_run_windows_with_args(RunOptions::default(), args, |_| {
                 let review = review();
                 review.handle().update(|s, _| s.count = 7);
                 let settings = settings();
                 settings.app.handle().update(|s, _| s.name = "Kit".into());
                 vec![WindowSpec::from_app("review", review).boxed(), settings.into()]
-            });
+            }).unwrap();
         });
         assert_eq!(out, text);
         assert_eq!(size, serde_json::json!(viewport));
@@ -48,6 +49,7 @@ fn a_factory_mixes_state_types_and_tools_render_the_selected_one() {
 
 #[test]
 fn app_window_is_selectable_with_its_own_state_and_hidden_until_opened() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     for (key, text, viewport) in [("main", "review 7", [400.0, 300.0]), ("settings", "settings Kit", [320.0, 200.0])] {
         let (out, size) = rendered(&format!("app-{key}"), |mut args| {
             args.extend(["--window".into(), key.into()]);
@@ -60,7 +62,7 @@ fn app_window_is_selectable_with_its_own_state_and_hidden_until_opened() {
             window.open();
             settings.update(|s, _| s.name = "Kit".into());
             app.handle().update(|s, _| s.count = 7);
-            app.args(args).run();
+            app.args(args).try_run().unwrap();
         });
         assert_eq!(out, text);
         assert_eq!(size, serde_json::json!(viewport));
@@ -69,14 +71,15 @@ fn app_window_is_selectable_with_its_own_state_and_hidden_until_opened() {
 
 #[test]
 fn factory_windows_can_add_their_own_secondary_windows() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let (out, _) = rendered("nested", |mut args| {
         args.extend(["--window".into(), "settings".into()]);
-        run_windows_with_args(RunOptions::default(), args, |_| {
+        try_run_windows_with_args(RunOptions::default(), args, |_| {
             let mut review = review();
             let (settings, _) = review.window(settings());
             settings.update(|s, _| s.name = "nested".into());
             vec![WindowSpec::from_app("review", review)]
-        });
+        }).unwrap();
     });
     assert_eq!(out, "settings nested");
 }

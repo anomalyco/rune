@@ -111,7 +111,7 @@ fn occlude_view(s: &OccludeState, _: &mut Cx<OccludeState>) -> El {
 #[test]
 fn sticky_header_stays_opaque_and_occludes_scrolled_rows_under_edge_fade_and_memo() {
     let scale = 2.0;
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let size = ((200.0 * scale) as u32, (200.0 * scale) as u32);
     let mut render_pixels = |memoized: bool| -> Vec<u8> {
@@ -259,7 +259,7 @@ fn three_columns(s: &ThreeColumns, _: &mut Cx<ThreeColumns>) -> El {
 
 #[test]
 fn sticky_three_column_repro_orders_rows_before_opaque_or_translucent_headers() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let mut differences = Vec::new();
     for alpha in [1.0, 0.5] {
@@ -319,7 +319,7 @@ fn fade_edges(s: &FadeEdges, _: &mut Cx<FadeEdges>) -> El {
 
 #[test]
 fn sticky_fade_exemption_is_continuous_on_each_axis_and_preserves_explicit_clips() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     for edge in 0..3 {
         for fade in [0.0, 16.0] {

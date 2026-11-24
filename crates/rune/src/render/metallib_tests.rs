@@ -157,7 +157,7 @@ fn semantic_fingerprint_tracks_descriptors_not_source_text() {
 fn uber_shader_loads_precompiled_metallib_and_falls_back_cleanly() {
     use super::super::{Gpu, OFFSCREEN_FORMAT, Renderer};
 
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::test_headless_wgpu() else { return };
     assert!(
         gpu.device.features().contains(wgpu::Features::PASSTHROUGH_SHADERS),
         "Metal device must enable PASSTHROUGH_SHADERS"
@@ -210,7 +210,7 @@ fn uber_shader_loads_precompiled_metallib_and_falls_back_cleanly() {
 fn native_backend_loads_its_metallib_and_falls_back_cleanly() {
     use super::super::{Gpu, OFFSCREEN_FORMAT, Renderer};
 
-    let gpu = Gpu::new(crate::gpu::metal::instance(), None);
+    let Some(gpu) = Gpu::test_on(crate::gpu::metal::instance()) else { return };
     let before = METALLIB_LOADS.with(std::cell::Cell::get);
     let _on = with_metallib_enabled(true, || Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
     assert_eq!(METALLIB_LOADS.with(std::cell::Cell::get), before + 1, "Renderer::new must load uber_native.metallib");
@@ -241,7 +241,7 @@ fn native_backend_loads_its_metallib_and_falls_back_cleanly() {
 fn pipeline_linkage_failure_retries_wgsl_without_uncaptured_error() {
     use super::super::{Blend, Gpu, OFFSCREEN_FORMAT, Renderer};
 
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::test_headless_wgpu() else { return };
     let renderer = with_metallib_enabled(false, || Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
     let before = METALLIB_LOADS.with(std::cell::Cell::get);
     let mut attempts = 0;
@@ -281,9 +281,9 @@ fn metallib_and_wgsl_render_identical_pixels() {
     };
     use bytemuck::Zeroable;
 
-    let gpu = Gpu::headless_wgpu();
+    let Some(gpu) = Gpu::test_headless_wgpu() else { return };
     #[cfg(all(target_os = "macos", feature = "metal-backend"))]
-    let native = Gpu::new(crate::gpu::metal::instance(), None);
+    let Some(native) = Gpu::test_on(crate::gpu::metal::instance()) else { return };
     let (width, height) = (160u32, 120u32);
 
     let render_scene = |gpu: &Gpu, use_metallib: bool, format: wgpu::TextureFormat, srgb_blend: bool| {

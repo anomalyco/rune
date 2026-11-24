@@ -59,7 +59,7 @@ fn per_corner_video_clip_matches_the_primitive_mask() {
     let surface = NativeSurface::new();
     surface.push_bytes(ByteFrame { width: 1, height: 1, format: Format::Bgra, color: ColorInfo::default(),
         planes: [vec![255; 4], vec![]] }, 1).unwrap();
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     // Compare mask coverage directly, without sRGB amplification of near-zero AA residuals.
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = Renderer::new(&gpu.device, format);
@@ -120,7 +120,7 @@ fn rounded_clip_direct_nested_and_rectangular_intersections() {
         } else { el().child(capsule) }
     }
     assert_eq!(std::mem::size_of::<Instance>(), 128);
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 48);
     for mode in 0..3 {
@@ -151,7 +151,7 @@ fn rounded_clip_blurred_exiting_chip_stays_inside_capsule() {
             .fill(Color { r: 0.06, g: 0.32, b: 1.0, a: 1.0 })
             .child(crate::text("Leaving").color(Color::WHITE).absolute(8.0, 6.0))))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 896, 176);
     let mut plain = Runtime::new((false, Live::new([0.0; 2])), view, (448.0, 88.0), Env { scale: 2.0, system_dark: true });
@@ -200,7 +200,7 @@ fn rounded_clip_blurred_exiting_chip_stays_inside_capsule() {
 
 #[test]
 fn rounded_clip_preserves_every_primitive_lane_and_feathers() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = Renderer::new(&gpu.device, format);
     let target = Offscreen::with_format(&gpu.device, 64, 48, format);
@@ -253,7 +253,7 @@ fn rounded_clip_native_video_inherits_capsule_without_a_layer() {
         el().child(el().size(48.0, 32.0).absolute(8.0, 8.0).clip_rounded(16.0)
             .child(el().size(64.0, 48.0).absolute(-8.0, -8.0).native_surface(surface, SurfaceFit::Fill)))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 64, 48);
     let surface = NativeSurface::new();
@@ -282,7 +282,7 @@ fn rounded_clip_live_truncated_text_preserves_corner_centres() {
         if s.2 { label = label.truncate_fade(); }
         el().child(capsule.child(label))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     for scale in [1.0, 2.0] { for truncate in [false, true] {
         let size = ((64.0 * scale) as u32, (48.0 * scale) as u32);
         let target = Offscreen::new(&gpu.device, size.0, size.1);
@@ -325,7 +325,7 @@ fn live_text_clear_of_rounded_corners_draws_without_a_layer() {
             .absolute(10.0, 8.0).font(crate::TextStyle::new(20.0, 700.0)).color(Color::WHITE);
         el().child(card.child(label))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     for scale in [1.0, 2.0] {
         let size = ((136.0 * scale) as u32, (80.0 * scale) as u32);
         let target = Offscreen::new(&gpu.device, size.0, size.1);
@@ -382,7 +382,7 @@ fn rounded_clip_leaves_central_scroll_rectangles_on_the_direct_path() {
         el().child(capsule.child(el().absolute(x, y).size(w, h).scroll(crate::ScrollSpec { stick_bottom: false })
             .child(el().size(120.0, 120.0).fill(Color::WHITE))))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 96, 64);
     for horizontal in [false, true] {
@@ -407,7 +407,7 @@ fn rounded_clip_single_line_input_keeps_the_original_mask() {
         el().child(capsule.child(crate::text_input(&s.1, crate::TextStyle::new(28.0, 700.0))
             .single_line().size(64.0, 40.0).absolute(8.0, 0.0)))
     }
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     for scale in [1.0, 2.0] {
         let size = ((96.0 * scale) as u32, (56.0 * scale) as u32);
         let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
@@ -433,7 +433,7 @@ fn rounded_clip_single_line_input_keeps_the_original_mask() {
 
 #[test]
 fn per_corner_continuous_card_clips_image_child_and_nested_layers() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let target = Offscreen::new(&gpu.device, 128, 96);
 

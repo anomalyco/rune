@@ -21,6 +21,45 @@ pub mod springs;
 pub use backend::GpuBackend;
 pub use backend::describe as describe_gpu;
 
+/// Opt-in environment switch for GPU-less test hosts (such as a headless Linux container without
+/// Vulkan): when set to `"1"`, `"true"`, `"TRUE"`, or `"yes"`, GPU test helpers skip with one
+/// clear line (or use wgpu's noop backend when `test-gpu-noop` is enabled for non-pixel tests)
+/// instead of failing when no adapter is found. Unset by default so a host with a GPU fails loudly
+/// if its adapter disappears.
+#[doc(hidden)]
+pub const ALLOW_NO_GPU_ENV: &str = "RUNE_ALLOW_NO_GPU";
+
+/// Whether the caller explicitly opted into skipping GPU tests when no adapter is available.
+#[doc(hidden)]
+pub fn allow_no_gpu_tests() -> bool {
+    rune_core::env::flag(ALLOW_NO_GPU_ENV)
+}
+
+/// Whether `error` reports that no GPU adapter exists on the host (as opposed to a device error,
+/// shader rejection, or an unmatched `WGPU_ADAPTER_NAME`).
+#[doc(hidden)]
+pub fn is_missing_adapter_error(error: &str) -> bool {
+    error.starts_with("no GPU adapter:")
+}
+
+/// Handles a GPU initialization error in a test: returns `true` (after printing one clear skip
+/// line) only when [`ALLOW_NO_GPU_ENV`] is set and `error` reports a missing adapter. Otherwise
+/// panics with `error` so real GPU failures or missing adapters without the opt-in switch fail
+/// loudly.
+#[doc(hidden)]
+pub fn skip_test_without_gpu(error: &str) -> bool {
+    skip_test_without_gpu_with(allow_no_gpu_tests(), error)
+}
+
+#[doc(hidden)]
+pub fn skip_test_without_gpu_with(allow: bool, error: &str) -> bool {
+    if allow && is_missing_adapter_error(error) {
+        eprintln!("skipped: {error} ({ALLOW_NO_GPU_ENV}=1)");
+        return true;
+    }
+    panic!("{error}");
+}
+
 #[cfg(target_os = "macos")]
 use objc2::runtime::AnyObject;
 

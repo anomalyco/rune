@@ -731,7 +731,7 @@ fn overlay_compositor_observes_prewarm_and_each_rendered_frame() {
     let spec = OverlaySpec::new("trace", app.size, view).options(OverlayOptions { prewarm: true, ..Default::default() })
         .compositor(Trace(trace.clone()));
     let (mut overlay, _) = Overlay::new(spec, 8.0, &app);
-    let gpu = Arc::new(Gpu::headless());
+    let Some(gpu) = Gpu::test_headless().map(Arc::new) else { return };
     overlay.renderer = Some(Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
     overlay.gpu = Some(gpu.clone());
     overlay.rt.transparent = true;

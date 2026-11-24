@@ -19,6 +19,7 @@ fn view(_: &(), _: &mut Cx<()>) -> El {
 
 #[test]
 fn screen_rects_follow_the_window_on_the_virtual_desktop() {
+    if !rune::render::Gpu::test_adapter_available() { return; }
     let dir = std::env::temp_dir().join(format!("rune-headless-screen-layout-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let (script, tree) = (dir.join("desktop.json"), dir.join("tree.json"));
@@ -30,7 +31,7 @@ fn screen_rects_follow_the_window_on_the_virtual_desktop() {
     }"#).unwrap();
     let app = App::new(AppSpec::new("screen-layout", (600.0, 80.0), || (), view));
     HANDLE.set(app.handle()).ok().unwrap();
-    app.args(["--script", script.to_str().unwrap(), "--tree", tree.to_str().unwrap()].map(String::from)).run();
+    app.args(["--script", script.to_str().unwrap(), "--tree", tree.to_str().unwrap()].map(String::from)).try_run().unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(*RECTS.lock().unwrap(), [
         // Opened centred on the primary display, the card 10 points in.
