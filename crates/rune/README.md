@@ -24,8 +24,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   - Flex items default to a minimum of their content size, so a nested flex column overflows its
     parent instead of shrinking and the scroll inside never scrolls. Put `.min_h(0.0)` on each
     column between the bounded ancestor and the viewport.
-  - `.virtualize(..)` only works on a growth stack: call `.growth(GrowthSpec)` on the same element,
-    and make it the scroll viewport's first child.
+  - `.virtualize(..)` only works on a growth stack: call `.growth(GrowthSpec)` on the same element
+    inside a `.scroll(..)` viewport (at any depth, including under other content; prefer
+    `.virtual_rows(..)` over `.virtualize(..)` for long lists).
 
   Debug builds warn once per call site when a scroll viewport inside a `.grow()` container
   resolves to 0 pt while its content is taller; `.virtualize` without `.growth` panics with the
@@ -66,8 +67,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     (`0.15 s`). Growth-stack rows also keep this fade on insertion/removal; closing gaps land after
     the exit fade instead of animating their height.
   - The animation clock has a time scale, which the Settings speed slider drives.
-- **Renderer** (`render.rs`, `shader.wgsl`): one instanced uber-quad pipeline and one draw call per
-  frame.
+- **Renderer** (`render.rs`, `shader.wgsl`): one instanced uber-quad pipeline (with pinned
+  single-kind fast paths) issuing a draw call per atlas-page batch or kind run, plus separate passes
+  for isolated layers, blurs and GPU glyph-mask fills.
   - Kinds: rounded rects (per-corner radius, a border drawn over the fill as CSS draws one, per-side
     widths), analytic Gaussian shadows (outer and inset),
     vertical and angled linear gradients, circular and elliptical radial gradients (`KIND_RADIAL`),
@@ -76,10 +78,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     `.linear_gradient(angle, stops)`): painted over `.fill(..)` and under hover/press overlays and
     borders, clipped to `.radius(..)`, and composited with `.opacity(..)` and `.blur(..)`.
     `radial_gradient` takes normalized `center: [f32; 2]` (`[0.5, 0.5]` = element centre), `radius` in
-    points (`f32` for a circle or `[rx, ry]` for an ellipse), and up to 8 `stops` as `(t, Color)` pairs in
+    points (`f32` for a circle or `[rx, ry]` for an ellipse), and up to 16 `stops` as `(t, Color)` pairs in
     `0.0..=1.0` (inner radial bands shrink their quads to the band bounding box). `linear_gradient`
-    takes `angle` in radians (CSS convention: `0.0` up, `PI / 2` right, `PI` down) and up to 8 `stops`.
-    Stop colours spring in Oklab when changed and interpolate in premultiplied colour across the quad.
+    takes `angle` in radians (CSS convention: `0.0` up, `PI / 2` right, `PI` down) and up to 16 `stops`.
+    The first 8 stop colours spring in Oklab when changed and interpolate in premultiplied colour across the quad.
   - **Shadows** (`.shadow(y, blur, color)`, `.box_shadow(Shadow)`): `blur` follows CSS `box-shadow`
     (`blur = 2σ`, so the Gaussian standard deviation is `σ = blur * 0.5`). `CALayer.shadowRadius` and
     Sketch / Figma shadow blur specify `r ≈ σ`, so pass `blur = 2.0 * r` to match a `CALayer` shadow
@@ -104,10 +106,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     reconfigures the surface and rebuilds the renderer once (the web canvas keeps its format and
     changes its view).
   - The Retina scale is applied throughout.
-- **Text** (`text.rs`): Parley 0.12 lays out embedded Inter 4.1 (OFL, `assets/`). swash 0.2
-  outlines are rasterised through a port of CoreGraphics' glyph pipeline into a 2048² R8 shelf
-  atlas, at CoreGraphics' subpixel pen steps, with a 1 px zeroed border per glyph and
-  pixel-snapped baselines.
+- **Text** (`text.rs`): Parley 0.12 lays out embedded Inter 4.1 (OFL, `assets/`). On macOS and in
+  Mac browsers, swash 0.2 outlines are rasterised by default through a port of CoreGraphics' glyph
+  pipeline into a 2048² R8 shelf atlas at CoreGraphics' subpixel pen steps (with a 1 px zeroed
+  border per glyph and pixel-snapped baselines); elsewhere, `FontSmoothing::WindfoilChromium` fills
+  masks from glyph outlines on quarter-pixel pens.
   **Font smoothing** (`FontSmoothing`, `crates/rune-text/src/raster/coretext_match.rs`) picks how glyphs are rasterised
   and placed, app-wide with `App::new(spec).font_smoothing(FontSmoothing::Off)` (or
   `WindowSpec::font_smoothing`), or while running with `Tx::set_font_smoothing(mode)`, which
@@ -121,8 +124,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     ink's luminance and the device ppem (`crates/rune-text/src/raster/macos/smoothing.rs`, `ApplePipeline::SMOOTHED`).
   - `Off`: what macOS browsers draw for `-webkit-font-smoothing: antialiased`, CoreText with font
     smoothing off. Apple's pipeline without the dilation
-    (`ApplePipeline::UNSMOOTHED`); lighter than `On`. Coverage takes an exponent keyed to the
-    ink's luminance, the curve of Skia's grayscale text gamma.
+    (`ApplePipeline::UNSMOOTHED`); lighter than `On`. Off Apple platforms, coverage takes an
+    exponent keyed to the ink's luminance (the curve of Skia's grayscale text gamma); on macOS, iOS
+    and Apple browsers coverage is drawn as is.
   - `DirectWrite`: Chromium's text on Windows. DirectWrite rasterises each
     glyph as Skia's `SkScalerContext_DW` asks it to (the rendering mode the `gasp` table picks,
     grid fitting on, grayscale antialiasing, the face at the run's variation coordinates, read in
@@ -371,13 +375,15 @@ policy changes are applied in the same mutation phase.
   in the app; core ships only the format.
 - **Scrolling** (`.scroll(ScrollSpec { stick_bottom })`): a runtime-owned fractional offset, wheel 1:1,
   fling decay, and follow-the-end. A new viewport opens at its end on its first frame.
-- **Virtual rows** (`.virtualize(estimated_row_height)` on a growth stack directly inside a scroll
-  viewport): only an overscanned window has Taffy, shaped text and scene nodes. Rows need unique
+- **Virtual rows** (`.virtualize(estimated_row_height)` or lazy
+  `.virtual_rows(count, estimate, key, build)` on a growth stack inside a scroll viewport at any
+  depth): only an overscanned window has Taffy, shaped text and scene nodes. Rows need unique
   keys and internal vertical padding rather than margins or stack gaps. Unvisited heights are
   estimates; measured corrections preserve the visible key and the bottom stays exact. Historical
   rows remount settled. The measurement pass expands the window before drawing if estimates leave
   a gap. Render coordinates are rebased near the window and scroll extents use double precision.
-  View construction still visits every row; a lazy view API is a remaining optimization.
+  Use `El::virtual_rows` to build only rows in the mounted window; `.virtualize` still visits
+  every row on commit.
   `tx.scroll_into_view(key)` reveals a row, including one outside the realized window.
   `tx.scroll_page(key, pages)` pages the viewport keyed `key` (or containing it) by `pages` × 90%
   of its height, as Page Up and Page Down do; a `stick_bottom` viewport that lands on its end
@@ -443,8 +449,10 @@ policy changes are applied in the same mutation phase.
   forward) button press and drag the element through its own `on_press` and `on_drag`, from
   anywhere inside it; `tx.button()` says which button. Without it those handlers stay
   primary-only. `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
-  logical keys `on_key` sees: the focused element's first, then its ancestors', and with
-  nothing focused the root's, so a handler on a window's root hears every release. A focused
+  logical keys `on_key` sees: the press-time and current focus chains first (keeping shared
+  ancestors after both); when nothing is focused or focus rests on the open modal itself, every
+  allowed `on_key_up` handler hears the release deepest-first (with the modal itself first if it
+  holds focus). A focused
   `on_physical_input` that takes a release keeps it from `on_key_up`. Hosts map releases to
   logical keys only while some element has `on_key_up`. Under a camera (`live_offset` and
   `live_scale` on the world), hit tests follow the drawn rects in paint order, `Drag` points and
@@ -732,17 +740,23 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   `Compositor::features` asks for more than the native backend offers (`TIMESTAMP_QUERY` and `IMMEDIATES`) draws
   with wgpu instead, every frame: log
   `rune::describe_gpu(frame.device)` once to see which backend a window got and why, or set `RUNE_GPU_LOG=1`.
-- **Precompiled Metal uber shader.** `crates/rune/src/shaders/uber.metallib` is loaded through wgpu's passthrough shaders,
-  skipping WGSL translation and Metal's compile (`Renderer::new` 232 ms to 85 ms on a cold shader cache). The WGSL
-  path is the fallback when the adapter lacks passthrough support, when `RUNE_DISABLE_METALLIB=1`, when the
-  fingerprint doesn't match or when Metal rejects the library. Rune's own Metal backend (`metal-backend`) loads
-  `uber_native.metallib`, built from the MSL that backend emits (first `Renderer::new` 222 ms to 90 ms cold,
-  4.0 ms to 0.9 ms warm). After editing `clip.wgsl` or `shader.wgsl`, run
-  `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac. If it says the MSL
-  is byte-identical, paste the printed lines into `uber/metallib_hash.rs`. If it says the MSL, flags or library hash
-  changed, run `scripts/precompile-metal-shaders.sh` (needs Xcode's Metal toolchain) and commit both libraries and
-  `uber/metallib_hash.rs`. Effect, lighting and blur shaders and iOS aren't precompiled; binary archives would need
-  wgpu support.
+- **Precompiled shaders and adapter overrides.** On macOS, Rune precompiles both Classic
+  (`uber.metallib`, `uber_native.metallib`) and Windfoil (`uber_windfoil.metallib`,
+  `uber_windfoil_native.metallib`) uber shaders for wgpu and native Metal, skipping WGSL
+  translation and Metal's front-end compile (`Renderer::new` 232 ms to 85 ms on wgpu cold,
+  222 ms to 90 ms cold / 4.0 ms to 0.9 ms warm on native Metal), plus `builtin_native.metallib`
+  for `rune`, `rune-fx` and `rune-light` pipelines on native Metal. The WGSL path is the fallback
+  when the adapter lacks passthrough support, when `RUNE_DISABLE_METALLIB=1`, when the fingerprint
+  doesn't match or when Metal rejects the library. On iOS, native Metal loads precompiled
+  `builtin_native_ios.metallib` / `builtin_native_ios_sim.metallib` (including the uber shader),
+  while iOS on wgpu compiles WGSL at launch. On Windows, DX12 loads precompiled DXBC uber shaders
+  (`uber.vs.dxbc`, `uber.fs.dxbc`; set `RUNE_DISABLE_DXBC=1` to disable). `WGPU_ADAPTER_NAME`
+  and `WGPU_POWER_PREF` (`low`, `high` or `none`) override GPU adapter selection. After editing
+  `clip.wgsl` or `shader.wgsl`, run
+  `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac;
+  if the MSL, flags or library hash changed, run `scripts/precompile-metal-shaders.sh` (needs
+  Xcode's Metal toolchain) and commit the updated libraries and hash files. Metal binary archives on
+  wgpu's backend would need `wgpu-hal` support.
 - **The first frame draws during window creation** on macOS for visible windows (not launcher windows or panels).
   The first view build and layout run inside creation, right after the window-created callbacks, so keep the initial
   state, `view` and `on_window` cheap.
@@ -765,7 +779,7 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
 - **Draw nothing when idle.** A due `wake_after` on a resting window runs `poll` first and draws only if it returns
   true, so return false when nothing changed. A custom compositor returns `animating() == true` only while it moves
   (the default is false); a still one lets its window rest too. One settings window went from 77 presents per 20 s
-  idle to none, 2.45% CPU to 0.85%, and 77 MB to 70 MB.
+  idle to none, 2.45% CPU to 0.85%, and 77 MB to 70 MB settled physical footprint.
 - **Relaunch in place while developing.** `scripts/mac-app` swaps a rebuilt bundle in and starts it before the
   old process quits, so with `rune_mac::remember_frame` the new window lands over the old one (see "Relaunching a
   Mac app" below).
@@ -1921,14 +1935,15 @@ For static assets, construct an `ImageCache` once with the app's setup waker:
 
 ```rust,ignore
 let cache = rune::ImageCache::new(waker);
-let icon = cache.load(png_bytes); // PNG, JPEG, PNG-backed ICNS, or SVG
+let icon = cache.load(png_bytes); // PNG (APNG), JPEG, GIF, WebP, BMP, ICO, AVIF (with `avif`), PNG-backed ICNS, or SVG
 // Keep `icon` in app state; pending images paint nothing, completion wakes the app.
 el().size(32.0, 32.0).pixels(icon.pixels())
 ```
 
-The cache deduplicates by content and decodes on one worker. `cache.rgba(w, h, bytes)` accepts
+The cache deduplicates by content and decodes on a shared pool of up to 4 worker threads on native
+(or the browser's codecs / main-thread tasks on web). `cache.rgba(w, h, bytes)` accepts
 straight-alpha sRGB pixels. Static images get area-filtered, linear-premultiplied mip levels
-on that worker; rendering chooses a precomputed level from the drawn device-pixel size.
+on those workers; rendering chooses a precomputed level from the drawn device-pixel size.
 `Image::{size,is_ready,error}` inspect completion; `Image::wait` is for deterministic headless
 fixtures. Dropping all image and pixel handles releases decoded storage. Legacy ICNS codecs
 are not decoded; provide decoded RGBA for those. A JPEG (or any format whose decoder reads
@@ -2167,10 +2182,10 @@ of the primary display, centred or `inset` points from a side. Clicks pass throu
 `Unavailable` where the platform can't do it. An overlay is one more host on the event loop
 (it shares the GPU pool) but never keeps the loop alive alone.
 
-- Wayland: a `zwlr_layer_shell_v1` surface on winit's display (overlay layer, keyboard none,
-  exclusive zone 0, empty input region), buffer scale from `preferred_buffer_scale`; hidden
-  means destroyed. Interactive overlays are unavailable there (pointer events for a surface on
-  a private queue aren't wired).
+- Wayland: a `zwlr_layer_shell_v1` surface on winit's display (overlay layer, exclusive zone 0),
+  supporting pointer and touch input, `KeyPolicy::OnDemand` keyboard interactivity (layer-shell v4),
+  and per-monitor `wl_output` placement, with buffer scale from `preferred_buffer_scale`; hidden
+  means destroyed.
 - X11: an override-redirect notification window, empty input shape unless interactive.
 - macOS: winit's view (and the Metal layer wgpu draws into) moves into a non-activating
   `NSPanel` (`NonactivatingPanel`, `becomesKeyOnlyIfNeeded`) at status level (25) on every
@@ -2187,8 +2202,7 @@ of the primary display, centred or `inset` points from a side. Clicks pass throu
 - Checked under headless sway (layer shell, and Xwayland for X11) and on macOS (panel level,
   bounds, hide and reshow). Windows builds are checked with `cargo xwin clippy` only.
 - `Tx::copy` works in overlays (a meeting capsule's Copy button).
-- Unsupported: interactive overlays on Wayland, hover in a non-key macOS panel (mouse-moved events
-  go to the key window), per-monitor placement.
+- Unsupported: hover in a non-key macOS panel (mouse-moved events go to the key window).
 
 ### Compositor hook (lighting and effects)
 
@@ -2461,7 +2475,7 @@ Every window and overlay exposes its elements to the OS accessibility API throug
 [AccessKit](https://accesskit.dev): UI Automation on Windows (Narrator, NVDA, JAWS, Voice
 Access), NSAccessibility on macOS (VoiceOver, Voice Control), AT-SPI on Linux (Orca). The same
 tree is what automation and testing tools drive. It comes with the default `accessibility`
-feature (`crate::a11y`, `runtime/a11y`).
+feature (`crates/rune/src/a11y/`).
 
 - **Free until asked**: nothing is built until an assistive client asks for a surface's tree.
   Then each turn that changed something the tree shows (a commit, a scroll, focus, the end of
@@ -3037,15 +3051,16 @@ Over ten edits per example, spring positions and velocities stay exact. Median
 save-to-GPU time is about 8 s for Settings, short of the
 one-second target.
 
-## Measured (Apple silicon, headless at 2×)
+## Measured (Apple silicon, headless wgpu at 2×, 2026-10-26, rev `cce775da4`)
 
 - **Build**: release builds are incremental; `--profile perf` keeps the non-incremental build
   for frame timings.
 - **Binary**: 10.9 MB, or 9.3 MB stripped (1.2 MB of that is the three Inter faces).
 - **Frame CPU**: over 180 frames of `examples/settings/scripts/bench.json` (theme switch,
   toggles, accent, a drag, a click-to-seek), the mean is 0.13 ms and p95 0.29 ms. The first frame
-  takes 1.4 ms (glyph rasterisation) and GPU init about 11 ms. There are 174 instances, drawn in
-  one draw call.
+  takes 1.4 ms (glyph rasterisation) and GPU init about 11 ms. There are 174 instances in that
+  trace (drawn in one pass; the current renderer issues a draw call per atlas-page batch or pinned
+  kind run, and macOS now defaults to Rune's native Metal backend).
 - **Motion linting**: the internal motion linter finds 0 candidates in that trace.
 
 ## Differences from PLAN.md
