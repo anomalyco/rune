@@ -1627,7 +1627,10 @@ text(&command).font(k.ty.mono).selectable(true).selection_color(k.selection())
 ```
 
 A handler reads the selection with `tx.text_selection()`, a `TextSelection` of the selected
-texts (path, key, byte range, whether all of it is selected) and the text copying takes. It sets
+texts (path, key, byte range, whether all of it is selected), the text copying takes, and
+`truncated()` (true when on-demand collection across unbuilt `virtual_rows` or `virtualize` rows
+hit its 10,000 unbuilt rows or 4 MiB UTF-8 cap; also visible in `Runtime::selection()`,
+`El::on_selection_change`, and `El::selection_copy`). It sets
 the selection by key with `tx.select_text(key, range)` (a byte range of one text, clamped to its
 characters), `tx.select_all_text(key)` (a text, or every text of the selection group inside an
 element) and `tx.clear_text_selection()`. These apply after the handler's change is built, so a

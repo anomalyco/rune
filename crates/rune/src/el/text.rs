@@ -563,9 +563,10 @@ impl El {
     /// copy the source. `f` sees every [`El::selectable`] text inside this element that the
     /// selection could reach (those of its selection group), in tree order, each with its
     /// selected range (empty when it isn't selected) and its path relative to this element.
-    /// Return `None` to copy the drawn text after all ([`TextSelection::text`]). The nearest
-    /// such element around both ends of the selection answers. Kit's `Markdown::copy_source`
-    /// is one.
+    /// Return `None` to copy the drawn text after all ([`TextSelection::text`]). When a
+    /// selection spans unbuilt virtual rows, collection stops at 10,000 unbuilt rows or 4 MiB of
+    /// UTF-8 text and sets [`TextSelection::truncated`]. The nearest such element around both ends
+    /// of the selection answers. Kit's `Markdown::copy_source` is one.
     ///
     /// ```ignore
     /// col().selection_group(true)
@@ -573,6 +574,7 @@ impl El {
     /// ```
     ///
     /// [`TextSelection::text`]: crate::TextSelection::text
+    /// [`TextSelection::truncated`]: crate::TextSelection::truncated
     pub fn selection_copy(mut self, f: impl Fn(&crate::TextSelection) -> Option<String> + 'static) -> Self {
         self.handlers.selection_copy = Some(Rc::new(f));
         self

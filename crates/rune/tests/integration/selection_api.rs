@@ -63,6 +63,7 @@ fn code_selects_a_range_reads_it_and_clears_it() {
     rt.update(|s, tx| s.seen = tx.text_selection().cloned());
     let seen = rt.state.seen.take().expect("a handler reads the selection");
     assert_eq!(seen.text(), "text");
+    assert!(!seen.truncated());
     let [t] = seen.texts() else { panic!("{seen:?}") };
     assert!(t.path().ends_with("/lone") && t.key() == Some("lone"), "{t:?}");
     assert_eq!((t.range(), t.len(), t.text(), t.is_whole()), (5..9, 14, "text", false));

@@ -103,14 +103,14 @@ impl RuntimeCore {
                     if a >= b || b > self.content_of(i).len() { return None; }
                     let piece = self.selected_piece(i, a..b, base);
                     let text = piece.text().to_owned();
-                    Some(TextSelection { texts: vec![piece], text, backward: self.selection_backward() })
+                    Some(TextSelection { texts: vec![piece], text, backward: self.selection_backward(), truncated: false })
                 }
                 EndRef::Offscreen(vi, ti) => {
                     let t = self.offscreen_text(vi, ti);
                     if a >= b || b > t.spec.content.len() { return None; }
                     let piece = offscreen_piece(t, a..b, base_path);
                     let text = piece.text().to_owned();
-                    Some(TextSelection { texts: vec![piece], text, backward: self.selection_backward() })
+                    Some(TextSelection { texts: vec![piece], text, backward: self.selection_backward(), truncated: false })
                 }
             };
         }
@@ -131,7 +131,7 @@ impl RuntimeCore {
             let kept = v.selection.pins.texts();
             let row_key = &kept[ti0].row_key;
             if self.offscreen_text(vi1, ti1).row_key == *row_key {
-                let (mut texts, mut out) = (Vec::new(), CopyJoin::default());
+                let (mut texts, mut out, mut hit_cap) = (Vec::new(), CopyJoin::default(), false);
                 for (ti, t) in kept.iter().enumerate() {
                     if &t.row_key != row_key || t.group_path.as_deref() != Some(g_path) { continue; }
                     let end_ref = EndRef::Offscreen(vi0, ti);
@@ -142,12 +142,15 @@ impl RuntimeCore {
                     let b = if end_ref == last_end { last_byte.min(len) } else { len };
                     if a >= b { continue; }
                     let piece = offscreen_piece(t, a..b, base_path);
-                    let hit_cap = out.push(&t.spec, a..b, piece.text(), t.tab_before, MAX_VIRTUAL_COPY_BYTES);
+                    let capped = out.push(&t.spec, a..b, piece.text(), t.tab_before, MAX_VIRTUAL_COPY_BYTES);
                     texts.push(piece);
-                    if hit_cap { break; }
+                    if capped {
+                        hit_cap = true;
+                        break;
+                    }
                 }
                 let text = out.finish();
-                return (!text.is_empty()).then_some(TextSelection { texts, text, backward: self.selection_backward() });
+                return (!text.is_empty()).then_some(TextSelection { texts, text, backward: self.selection_backward(), truncated: hit_cap });
             }
         }
 
@@ -258,6 +261,7 @@ impl RuntimeCore {
             if !hit_cap {
                 for j in (list_end + 1..self.tree.nodes.len()).take_while(|&j| self.tree.is_descendant(j, g)).filter(|&j| self.member(j, g)) {
                     if append_mounted(j, &mut out, &mut texts, &mut prev_mounted) {
+                        hit_cap = true;
                         break;
                     }
                 }
@@ -265,7 +269,7 @@ impl RuntimeCore {
         }
 
         let text = out.finish();
-        (!text.is_empty()).then_some(TextSelection { texts, text, backward: self.selection_backward() })
+        (!text.is_empty()).then_some(TextSelection { texts, text, backward: self.selection_backward(), truncated: hit_cap })
     }
 
     /// Finds the first and last selectable texts inside mounted node `root` (including unbuilt rows
