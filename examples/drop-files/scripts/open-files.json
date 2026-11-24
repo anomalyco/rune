@@ -1,0 +1,25 @@
+[
+  {
+    "t": 0.05,
+    "type": "tap",
+    "key": "open-files"
+  },
+  {
+    "t": 0.2,
+    "type": "file-dialog",
+    "paths": [
+      "report-1.csv",
+      "report-2.csv",
+      "summary.csv"
+    ]
+  },
+  {
+    "t": 0.35,
+    "type": "tap",
+    "key": "open-files"
+  },
+  {
+    "t": 0.5,
+    "type": "file-dialog-cancel"
+  }
+]

@@ -132,6 +132,7 @@ pub use el::spacer;
 pub use el::text;
 pub use el::text_input;
 pub use file_dialog::FileDialogError;
+pub use file_dialog::FileDialogFilesResult;
 pub use file_dialog::FileDialogKind;
 pub use file_dialog::FileDialogOptions;
 pub use file_dialog::FileDialogResult;

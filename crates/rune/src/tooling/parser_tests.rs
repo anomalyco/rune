@@ -40,6 +40,24 @@ fn script_events_answer_a_file_dialog() {
 }
 
 #[test]
+fn script_events_answer_a_multi_file_dialog() {
+    let script = parse_script(json!([
+        {"t": 0.1, "type": "file-dialog", "paths": ["/exports/a.csv", "/exports/b.csv"]},
+        {"t": 0.2, "type": "file-dialog", "paths": []},
+        {"t": 0.3, "type": "file-dialog-cancel"},
+    ]));
+    let ScriptEvent::FileDialogFiles(ref public_many) = script[0].public().event else { panic!("public event lost paths") };
+    let Kind::FileDialogFiles(ref many) = script[0].kind else { panic!("parsed as another event") };
+    assert_eq!(public_many, many);
+    assert_eq!(many, &[std::path::PathBuf::from("/exports/a.csv"), std::path::PathBuf::from("/exports/b.csv")]);
+
+    let ScriptEvent::FileDialogFiles(ref public_empty) = script[1].public().event else { panic!("public event lost empty paths") };
+    assert!(public_empty.is_empty());
+
+    assert!(matches!(script[2].public().event, ScriptEvent::FileDialog(None)));
+}
+
+#[test]
 fn script_events_answer_a_pop_up_menu() {
     let kinds: Vec<_> = parse_script(json!([{"t": 0.2, "type": "menu-cancel"}, {"t": 0.1, "type": "menu-pick", "id": "dark"}]))
         .into_iter().map(|e| {

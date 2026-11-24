@@ -47,6 +47,17 @@ pub(super) fn outcome(status: u32, uris: &[String]) -> Result<Option<PathBuf>, F
     }
 }
 
+/// Multi-file `Response` signal: decodes every `file://` URI in `uris`, returning `Ok(None)` on
+/// cancellation or an empty choice and failing if any URI is non-local.
+pub(super) fn outcome_many(status: u32, uris: &[String]) -> Result<Option<Vec<PathBuf>>, FileDialogError> {
+    match status {
+        0 if uris.is_empty() => Ok(None),
+        0 => uris.iter().map(|uri| uri_path(uri)).collect::<Result<Vec<_>, _>>().map(Some),
+        1 | 2 => Ok(None),
+        n => Err(FileDialogError(format!("file dialog portal response {n}"))),
+    }
+}
+
 /// A local `file://` URI as a path, percent-decoded to raw bytes.
 pub(super) fn uri_path(uri: &str) -> Result<PathBuf, FileDialogError> {
     let invalid = || FileDialogError(format!("file dialog returned a non-local URI: {uri}"));
@@ -93,6 +104,19 @@ mod tests {
         assert_eq!(uri_path("file:///tmp/%FF").unwrap().as_os_str().as_bytes(), b"/tmp/\xff");
         assert!(uri_path("file://server/share/a").is_err());
         assert!(uri_path("https://example.com/a").is_err());
+    }
+    #[test]
+    fn outcome_many_decodes_all_uris_and_rejects_non_local_ones() {
+        assert_eq!(
+            outcome_many(0, &uris(&["file:///home/a/My%20Export%20%E5%BD%95.csv", "file://localhost/tmp/a%2fb"])).unwrap(),
+            Some(vec![PathBuf::from("/home/a/My Export 录.csv"), PathBuf::from("/tmp/a/b")])
+        );
+        assert_eq!(outcome_many(0, &[]).unwrap(), None);
+        assert!(outcome_many(0, &uris(&["file:///tmp/ok", "https://example.com/bad"])).is_err());
+        assert!(outcome_many(0, &uris(&["file://server/share/a"])).is_err());
+        assert_eq!(outcome_many(1, &uris(&["file:///tmp/a"])).unwrap(), None);
+        assert_eq!(outcome_many(2, &[]).unwrap(), None);
+        assert!(outcome_many(3, &[]).is_err());
     }
     #[test]
     fn cancelled_or_ended_dialog_is_no_choice() {

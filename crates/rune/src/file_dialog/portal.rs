@@ -1,11 +1,11 @@
 //! xdg-desktop-portal FileChooser over zbus. Dialog tasks run on the shared portal worker
 //! (`platform::portal::spawn`), so any executor can poll them, the event loop never blocks,
 //! and no thread is leaked per call. Dropping the future closes the portal request.
-use super::{FileDialogError, FileDialogKind, FileDialogOptions};
-use super::portal_format::{filters, outcome, parent_window, path_bytes};
+use super::{DialogAnswer, DialogOutcome, FileDialogError, FileDialogFilesResult, FileDialogKind, FileDialogOptions, FileDialogResult};
+use super::portal_format::{filters, outcome, outcome_many, parent_window, path_bytes};
 use crate::platform::portal::{self, DEST, PATH, RequestError, RequestTimeouts};
 use futures_lite::FutureExt;
-use std::{collections::HashMap, path::PathBuf, sync::atomic::{AtomicU32, Ordering}, time::Duration};
+use std::{collections::HashMap, sync::atomic::{AtomicU32, Ordering}, time::Duration};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use zbus::{Connection, Proxy, zvariant::{OwnedValue, Value}};
 
@@ -37,13 +37,14 @@ fn dbus_error(e: zbus::Error) -> FileDialogError {
     FileDialogError(e.to_string())
 }
 
-fn request_options<'a>(kind: FileDialogKind, options: &'a FileDialogOptions, token: &'a str) -> HashMap<&'static str, Value<'a>> {
+fn request_options<'a>(kind: FileDialogKind, multiple: bool, options: &'a FileDialogOptions, token: &'a str) -> HashMap<&'static str, Value<'a>> {
     let mut map = HashMap::from([("handle_token", Value::from(token)), ("modal", Value::from(true))]);
     let filters = filters(options);
     if !filters.is_empty() && kind != FileDialogKind::Folder { map.insert("filters", Value::from(filters)); }
     if let Some(bytes) = options.directory.as_deref().and_then(path_bytes) {
         map.insert("current_folder", Value::from(bytes));
     }
+    if multiple && kind == FileDialogKind::Open { map.insert("multiple", Value::from(true)); }
     if kind == FileDialogKind::Folder { map.insert("directory", Value::from(true)); }
     if kind == FileDialogKind::Save && let Some(name) = options.file_name.as_deref().filter(|s| !s.is_empty()) {
         map.insert("current_name", Value::from(name));
@@ -55,14 +56,22 @@ fn uris(results: &HashMap<String, OwnedValue>) -> Vec<String> {
     results.get("uris").and_then(|v| v.try_clone().ok()).and_then(|v| Vec::<String>::try_from(v).ok()).unwrap_or_default()
 }
 
-pub(super) async fn show(kind: FileDialogKind, options: FileDialogOptions) -> Result<Option<PathBuf>, FileDialogError> {
+pub(super) async fn show(kind: FileDialogKind, options: FileDialogOptions) -> FileDialogResult {
+    show_outcome(kind, false, options).await.map(DialogAnswer::into_single)
+}
+
+pub(super) async fn show_files(options: FileDialogOptions) -> FileDialogFilesResult {
+    show_outcome(FileDialogKind::Open, true, options).await.map(DialogAnswer::into_many)
+}
+
+pub(super) async fn show_outcome(kind: FileDialogKind, multiple: bool, options: FileDialogOptions) -> DialogOutcome {
     let (reply, result) = async_channel::bounded(1);
     let parent = parent_window(PARENT.load(Ordering::Relaxed));
-    portal::spawn(move || run(kind, options, parent, reply)).map_err(FileDialogError)?;
+    portal::spawn(move || run(kind, multiple, options, parent, reply)).map_err(FileDialogError)?;
     result.recv().await.unwrap_or_else(|_| Err(FileDialogError("file dialog worker stopped".into())))
 }
 
-async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, reply: async_channel::Sender<Result<Option<PathBuf>, FileDialogError>>) {
+async fn run(kind: FileDialogKind, multiple: bool, options: FileDialogOptions, parent: String, reply: async_channel::Sender<DialogOutcome>) {
     let token = portal::next_token("file_dialog");
     let conn = match portal::timeout(RPC_TIMEOUT, async {
         reply.closed().await;
@@ -90,7 +99,7 @@ async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, r
     };
     // A folder is OpenFile's `directory` choice (portal version 3).
     let method = match kind { FileDialogKind::Open | FileDialogKind::Folder => "OpenFile", FileDialogKind::Save => "SaveFile" };
-    let body = (parent.as_str(), options.title.as_str(), request_options(kind, &options, &token));
+    let body = (parent.as_str(), options.title.as_str(), request_options(kind, multiple, &options, &token));
     let response = portal::request(
         &conn,
         &portal_proxy,
@@ -102,7 +111,15 @@ async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, r
     ).await;
     conn.close().await.ok();
     match response {
-        Ok((status, results)) => { reply.try_send(outcome(status, &uris(&results))).ok(); }
+        Ok((status, results)) => {
+            let reply_uris = uris(&results);
+            let answer = if multiple && kind == FileDialogKind::Open {
+                outcome_many(status, &reply_uris).map(DialogAnswer::Many)
+            } else {
+                outcome(status, &reply_uris).map(DialogAnswer::Single)
+            };
+            reply.try_send(answer).ok();
+        }
         Err(RequestError::Cancelled) => {}
         Err(RequestError::Dbus(e)) => { reply.try_send(Err(dbus_error(e))).ok(); }
         Err(RequestError::Unavailable) => { reply.try_send(Err(unavailable())).ok(); }
@@ -114,6 +131,7 @@ async fn run(kind: FileDialogKind, options: FileDialogOptions, parent: String, r
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     use zbus::fdo;
     #[test]
     fn reply_uris_are_read_from_the_results_map() {
@@ -121,29 +139,42 @@ mod tests {
         let results = HashMap::from([("uris".to_string(), OwnedValue::try_from(Value::from(list.clone())).unwrap())]);
         assert_eq!(uris(&results), list);
         assert_eq!(outcome(0, &uris(&results)).unwrap(), Some(PathBuf::from("/tmp/a b")));
+        assert_eq!(
+            outcome_many(0, &uris(&results)).unwrap(),
+            Some(vec![PathBuf::from("/tmp/a b"), PathBuf::from("/tmp/c")])
+        );
         assert!(uris(&HashMap::new()).is_empty());
         let mistyped = HashMap::from([("uris".to_string(), OwnedValue::try_from(Value::from(7u32)).unwrap())]);
         assert!(uris(&mistyped).is_empty());
     }
     #[test]
-    fn options_carry_token_filters_folder_and_save_name() {
+    fn options_carry_token_filters_folder_multiple_and_save_name() {
         let options = FileDialogOptions { title: "Import".into(), directory: Some("/home/a/Downloads".into()),
             file_name: Some("export.csv".into()), filters: vec![] }.filter("Exports", &["csv"]);
-        let open = request_options(FileDialogKind::Open, &options, "t1");
+        let open = request_options(FileDialogKind::Open, false, &options, "t1");
         assert_eq!(open.get("handle_token"), Some(&Value::from("t1")));
         assert_eq!(open.get("filters"), Some(&Value::from(vec![("Exports".to_string(), vec![(0u32, "*.csv".to_string())])])));
         assert_eq!(open.get("current_folder"), Some(&Value::from(b"/home/a/Downloads\0".to_vec())));
         assert!(!open.contains_key("current_name"));
         assert!(!open.contains_key("directory"));
-        let folder = request_options(FileDialogKind::Folder, &options, "t4");
+        assert!(!open.contains_key("multiple"));
+        let open_many = request_options(FileDialogKind::Open, true, &options, "t5");
+        assert_eq!(open_many.get("multiple"), Some(&Value::from(true)));
+        assert_eq!(open_many.get("filters"), Some(&Value::from(vec![("Exports".to_string(), vec![(0u32, "*.csv".to_string())])])));
+        assert_eq!(open_many.get("current_folder"), Some(&Value::from(b"/home/a/Downloads\0".to_vec())));
+        assert!(!open_many.contains_key("current_name"));
+        assert!(!open_many.contains_key("directory"));
+        let folder = request_options(FileDialogKind::Folder, true, &options, "t4");
         assert_eq!(folder.get("directory"), Some(&Value::from(true)));
         assert!(!folder.contains_key("filters"));
+        assert!(!folder.contains_key("multiple"));
         assert_eq!(folder.get("current_folder"), Some(&Value::from(b"/home/a/Downloads\0".to_vec())));
-        let save = request_options(FileDialogKind::Save, &options, "t2");
+        let save = request_options(FileDialogKind::Save, true, &options, "t2");
         assert_eq!(save.get("current_name"), Some(&Value::from("export.csv")));
+        assert!(!save.contains_key("multiple"));
         let empty = FileDialogOptions { directory: Some(PathBuf::new()), file_name: Some(String::new()), ..Default::default() }
             .filter("Empty", &[]);
-        let empty_save = request_options(FileDialogKind::Save, &empty, "t3");
+        let empty_save = request_options(FileDialogKind::Save, false, &empty, "t3");
         assert!(!empty_save.contains_key("filters"));
         assert!(!empty_save.contains_key("current_folder"));
         assert!(!empty_save.contains_key("current_name"));
