@@ -115,11 +115,9 @@ impl ActionQueue {
     /// Puts `queued` ahead of everything queued.
     pub(in crate::runtime) fn prepend(&mut self, queued: Vec<Queued>) { self.0.splice(0..0, queued); }
     pub(in crate::runtime) fn iter(&self) -> impl Iterator<Item = &Action> { self.0.iter().map(|q| &q.action) }
-    /// Whether any of them came from the user's input (they carry its arrival time).
-    pub(in crate::runtime) fn has_input(&self) -> bool { self.0.iter().any(|q| q.at.is_some()) }
     /// Whether any of them is the user's input, as the commit's `INPUT` cause counts it: a host
-    /// may dispatch input without a timestamp.
-    pub(in crate::runtime) fn has_input_action(&self) -> bool { self.0.iter().any(|q| q.input) }
+    /// (or headless `Runtime`) may dispatch input without an arrival timestamp.
+    pub(in crate::runtime) fn has_input(&self) -> bool { self.0.iter().any(|q| q.input) }
     pub(in crate::runtime) fn len(&self) -> usize { self.0.len() }
     pub(in crate::runtime) fn is_empty(&self) -> bool { self.0.is_empty() }
     pub(in crate::runtime) fn retain(&mut self, mut keep: impl FnMut(&Action) -> bool) { self.0.retain(|q| keep(&q.action)); }
@@ -634,3 +632,7 @@ fn reads_text_layout(action: &Action) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "action_tests.rs"]
+mod tests;

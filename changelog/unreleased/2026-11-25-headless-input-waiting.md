@@ -1,0 +1,1 @@
+- **`Tx::input_waiting()` now reports `true` in `poll` for headless `Runtime` input and scripted runs.** `ActionQueue::has_input` checks each queued action's user-input flag instead of requiring a host arrival timestamp, matching live windows while keeping `Tx::input_time()` as `None` and excluding layout and state observers.

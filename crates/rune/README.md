@@ -3285,8 +3285,10 @@ if let Some(menu) = rt.popup_menu() {
   It ignores command-line arguments and never runs `on_ready`; set up initial state in
   `App::init` or call `rt.update(|s, tx| ..)` before framing.
 - Drive input with `pointer_move`, `pointer_down`/`pointer_up`, `secondary_down`/`secondary_up`,
-  `key`, `paste`, and `ime`, then step the logical clock with `rt.frame(dt)` (`0.0` for an
-  immediate commit, or `1.0 / 60.0` to advance animations and timers).
+  `wheel_xy`/`wheel_event`, `key`, `paste`, and `ime`, then step the logical clock with
+  `rt.frame(dt)` (`0.0` for an immediate commit, or `1.0 / 60.0` to advance animations and
+  timers). Queued headless input sets `Tx::input_waiting()` in `poll` as in a live window,
+  while `Tx::input_time()` stays `None`.
 - Inspect `rt.state`, `rt.presented_focus_key()` (zero-allocation focus key query matching
   `rt.elements()`), `rt.elements()` (`ElementInfo`: `key`, `path`, `role`, `label`,
   `description`, `text`, `rect`, `inset`, `fill`, `border_color`, `text_color`,
