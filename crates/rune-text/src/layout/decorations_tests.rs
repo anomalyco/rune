@@ -840,6 +840,7 @@ fn strike_and_highlight_match_reference_for_unsorted_overlaps_bidi_and_paragraph
             blocks: &[],
             pills: &[],
             span_boxes: &[],
+            text_indent: 0.0,
             style: TextStyle::new(14.0, 400.0),
             shape_key: None,
             wrap_anywhere: false,

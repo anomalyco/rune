@@ -91,6 +91,9 @@ pub struct ParagraphLayout {
     /// What its lines were broken at; the next edit's paragraphs re-break theirs when it changed.
     pub(crate) max_width: Option<f32>,
     align: Alignment,
+    /// First-line `text_indent` in points and device pixels (paragraph 0, line 0 only).
+    text_indent: f32,
+    text_indent_px: f32,
     /// Its text's shape key, which its layouts at other widths are cached under.
     whole: u64,
     /// The width a selected line break highlights, as a selection across a newline shows.
@@ -455,9 +458,17 @@ impl<'a> TextFlow<'a> {
     /// indent when reading left to right, or inside its right padding from the wrap width when
     /// reading right to left.
     pub(crate) fn blank_start(self, p: &Piece<'_>, size: f32) -> f32 {
+        let indent = if p.index == 0 {
+            match self {
+                TextFlow::Paragraphs(pl) => pl.text_indent_px,
+                TextFlow::Single(_) => 0.0,
+            }
+        } else {
+            0.0
+        };
         match (p.flow, self) {
-            (Flow::Rtl, TextFlow::Paragraphs(pl)) => (pl.max_width.unwrap_or(pl.width) - p.pad[1] - size).max(p.pad[0]),
-            _ => p.pad[0],
+            (Flow::Rtl, TextFlow::Paragraphs(pl)) => (pl.max_width.unwrap_or(pl.width) - p.pad[1] - indent - size).max(p.pad[0]),
+            _ => p.pad[0] + indent,
         }
     }
 
@@ -635,8 +646,11 @@ impl<'a> TextFlow<'a> {
     /// The span its lines cover across, from the leftmost line start to the rightmost end, or
     /// `None` with no lines.
     pub fn extent(self) -> Option<(f32, f32)> {
-        let (lo, hi) = self.pieces().flat_map(|p| p.layout.lines().map(|l| (l.metrics().offset, l.metrics().advance)))
-            .fold((f32::MAX, 0.0f32), |(lo, hi), (offset, advance)| (lo.min(offset), hi.max(offset + advance)));
+        let (lo, hi) = self.pieces().flat_map(|p| p.layout.lines().map(|l| {
+            let m = l.metrics();
+            (m.inline_min_coord + m.offset, m.advance)
+        }))
+            .fold((f32::MAX, f32::NEG_INFINITY), |(lo, hi), (start, advance)| (lo.min(start), hi.max(start + advance)));
         (lo <= hi).then_some((lo, hi))
     }
 
@@ -750,7 +764,7 @@ impl TextSystem {
         if !spec.by_line && spec.pills.is_empty() && spec.span_boxes.is_empty() && !spec.content.contains('\n') {
             let base = forced.or_else(|| flow_of(spec.content, &[])).unwrap_or(spec.plaintext_flow()).base();
             let shape = spec.shape_key.map(|k| hash::directed(k, base));
-            return TextLayout::Single(self.layout_keyed(shape, spec.content, spec.spans, spec.blocks, &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
+            return TextLayout::Single(self.layout_keyed(shape, spec.content, spec.spans, spec.blocks, spec.text_indent, &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
         }
         let whole = spec.shape_key.unwrap_or_else(|| spec.fresh_shape_key(scale));
         // Lines with no strong character take the element's flow, so it keys the whole too.
@@ -759,7 +773,7 @@ impl TextSystem {
         let indented = blocks.iter().any(|&b| b != Block::Paragraph).then_some(blocks);
         let pretty = spec.by_line && spec.pretty && !input && max_width.is_some() && !matches!(spec.style.family, Family::Mono | Family::SystemMono);
         let pretty_bit = if pretty { 0x7072_6574_7479_0001 } else { 0 };
-        let key = hash::break_key(whole ^ PARAGRAPHS, max_width, align, indented) ^ pretty_bit;
+        let key = hash::break_key(whole ^ PARAGRAPHS, max_width, align, indented, spec.text_indent) ^ pretty_bit;
         let g = self.generation;
         if let Some(e) = self.paragraphs.get_mut(&key) {
             e.used = g;
@@ -768,16 +782,16 @@ impl TextSystem {
         // Measuring asks at more than one width: the last text's layout at this one, when it
         // was laid out there too, keeps its paragraphs without breaking them again.
         let prev = match prev {
-            Some(TextLayout::Paragraphs(p)) if p.max_width == max_width && p.align == align => Some(p.clone()),
+            Some(TextLayout::Paragraphs(p)) if p.max_width == max_width && p.align == align && p.text_indent == spec.text_indent => Some(p.clone()),
             Some(TextLayout::Paragraphs(p)) => {
-                let there = hash::break_key(p.whole ^ PARAGRAPHS, max_width, align, indented) ^ pretty_bit;
+                let there = hash::break_key(p.whole ^ PARAGRAPHS, max_width, align, indented, spec.text_indent) ^ pretty_bit;
                 Some(self.paragraphs.get(&there).map_or_else(|| p.clone(), |e| e.value.clone()))
             }
             _ => None,
         };
         // This text laid out at another width measuring asked for this commit: a paragraph
         // neither keeps is broken again from it rather than shaped twice.
-        let other = self.last_paragraphs.clone().filter(|o| o.whole == whole && (o.max_width != max_width || o.align != align));
+        let other = self.last_paragraphs.clone().filter(|o| o.whole == whole && (o.max_width != max_width || o.align != align || o.text_indent != spec.text_indent));
         let (built, fresh) = self.lay_out_paragraphs(spec, input, scale, max_width, align, (whole, key), prev.as_deref(), other.as_deref());
         let built = Rc::new(built);
         self.last_paragraphs = Some(built.clone());
@@ -803,7 +817,7 @@ impl TextSystem {
         // and after it keep their keys (`reuse_keys`), so a keystroke or recolour costs no full scan.
         let layout_spans: Vec<Span> = span::layout_spans(spec.spans).cloned().collect();
         let layout_disjoint = layout_spans.len() <= 1 || layout_spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
-        let no_pills_or_blocks = spec.pills.is_empty() && spec.span_boxes.is_empty() && spec.blocks.iter().all(|&b| b == Block::Paragraph);
+        let no_pills_or_blocks = spec.pills.is_empty() && spec.span_boxes.is_empty() && spec.text_indent == 0.0 && spec.blocks.iter().all(|&b| b == Block::Paragraph);
         let plain = layout_spans.is_empty() && no_pills_or_blocks;
         let disjoint_spans = spec.spans.len() <= 1 || spec.spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
         let forced = spec.paragraphs_flow();
@@ -845,6 +859,7 @@ impl TextSystem {
         let before = found.iter().zip(old).take_while(|(f, o)| f.3 == o.key).count();
         let after = found[before..].iter().rev().zip(old[before..].iter().rev()).take_while(|(f, o)| f.3 == o.key).count();
         let rebreak = prev.is_some_and(|p| p.max_width != max_width || p.align != align);
+        let rebreak_first = prev.is_some_and(|p| p.text_indent != spec.text_indent);
         let line = style.line_px() * scale;
         // Each record found with the one the last layout had for it. A waiting one broken at
         // another width is keyed again there: its lines may not all fit any more.
@@ -886,17 +901,19 @@ impl TextSystem {
                 for _ in 0..lines { y += f64::from(line_h); }
                 continue;
             }
+            let para_indent = if k == 0 { spec.text_indent } else { 0.0 };
+            let para_rebreak = rebreak || (k == 0 && rebreak_first);
             // The same paragraph at the other width (the same text, so the same index).
             let twin = other.and_then(|o| o.paragraphs.get(k)).filter(|o| !pretty_active && o.key == key && o.shaped);
-            let kept = kept.filter(|_| !(rebreak && pretty_active));
+            let kept = kept.filter(|_| !(para_rebreak && pretty_active));
             // A kept paragraph broken at another width, or this text's own paragraph at the
             // other width measuring asks for, breaks again here rather than shaping anew.
-            let again = match kept { Some(o) if rebreak => Some(o), Some(_) => None, None => twin };
+            let again = match kept { Some(o) if para_rebreak => Some(o), Some(_) => None, None => twin };
             let mut layout = match (kept, again) {
                 (_, Some(o)) => {
                     fresh += b - a;
                     let mut l = o.layout.clone();
-                    line_break::rebreak(Rc::make_mut(&mut l), blocks, style.size, scale, max_width, align);
+                    line_break::rebreak(Rc::make_mut(&mut l), blocks, para_indent, style.size, scale, max_width, align);
                     // Re-broken, in place or as a copy: the lines it draws now are new.
                     self.layout_ids.build(&l);
                     l
@@ -909,7 +926,7 @@ impl TextSystem {
                     let spans: Vec<Span> = spans_in(&layout_spans, a, b, &isolates, layout_disjoint).collect();
                     let pills: Vec<PillChip> = pills_in(spec.pills, a, b, &isolates).collect();
                     let span_boxes: Vec<SpanBoxRun> = span_boxes_in(spec.span_boxes, a, b, &isolates).collect();
-                    self.layout_keyed(Some(key), &text, &spans, blocks, &pills, &span_boxes, style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
+                    self.layout_keyed(Some(key), &text, &spans, blocks, para_indent, &pills, &span_boxes, style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
                 }
             };
             // A paragraph kept as it was keeps its measures too: touching 2,000 layouts to read
@@ -921,7 +938,7 @@ impl TextSystem {
             let want_frac = if layout.len() > 1 { (y - y.floor()) as f32 } else { 0.0 };
             let have_frac = match (kept, again) { (Some(o), None) => o.y_frac, _ => 0.0 };
             if (want_frac - have_frac).abs() > 1e-5 {
-                line_break::rebreak_at_y(Rc::make_mut(&mut layout), blocks, style.size, scale, max_width, align, f64::from(want_frac));
+                line_break::rebreak_at_y(Rc::make_mut(&mut layout), blocks, para_indent, style.size, scale, max_width, align, f64::from(want_frac));
                 self.layout_ids.build(&layout);
                 (height, widths) = (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]);
             }
@@ -944,6 +961,7 @@ impl TextSystem {
             disjoint_spans: layout_disjoint,
             style, scale, wrap_anywhere: spec.wrap_anywhere, cache_key, style_key, forced, start_flow, ascii,
         }));
-        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, whole, newline, blank_box, disjoint_spans, keyed, lazy }, fresh)
+        let text_indent_px = line_break::indent_px(spec.text_indent, scale);
+        (ParagraphLayout { paragraphs, width, full_width, height: y as f32, max_width, align, text_indent: spec.text_indent, text_indent_px, whole, newline, blank_box, disjoint_spans, keyed, lazy }, fresh)
     }
 }

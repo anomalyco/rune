@@ -167,11 +167,15 @@ fn paragraph(lines: &[Line<'_, Ink>], boxes: &[(u64, usize)], text: &str, font_s
     let orphan = cands.len() - 2;
     cands[orphan].penalty += ORPHANS_PENALTY;
     let width = css(max_width);
+    let first_indent = if first == 0 { css(lines[0].metrics().indent) } else { 0.0 };
+    if first_indent >= width {
+        return None;
+    }
     let fit = width + EPSILON;
     // `SetupParameters` for unjustified text: twice the width times the font size per hyphen, and
     // twice that per line.
     let line_penalty = width * font_size * 4.0;
-    let breaks = optimal(&cands, fit, line_penalty);
+    let breaks = optimal(&cands, fit, first_indent, line_penalty);
     if breaks.len() != window.len() {
         return None;
     }
@@ -191,13 +195,30 @@ fn paragraph(lines: &[Line<'_, Ink>], boxes: &[(u64, usize)], text: &str, font_s
 }
 
 /// `ComputeScores` and `ComputeBreakPoints`: the candidates the lines end at, in order.
-fn optimal(cands: &[Candidate], fit: f32, line_penalty: f32) -> Vec<usize> {
+fn optimal(cands: &[Candidate], fit: f32, first_indent: f32, line_penalty: f32) -> Vec<usize> {
     // (score, the candidate the line starts at, lines so far)
     let mut scores: Vec<(f32, usize, usize)> = vec![(0.0, 0, 0)];
-    let mut active = 0;
+    let mut active = 1;
     for end in 1..cands.len() {
         let last = end == cands.len() - 1;
         let (mut best, mut best_prev, mut best_hope) = (f32::MAX, 0, 0.0f32);
+        // Line 0 may have a different available width (`fit - first_indent`) than continuation
+        // lines (`fit`), so score start 0 directly without letting it advance `active`/`best_hope`.
+        {
+            let delta = (fit - first_indent) - cands[end].if_break;
+            let (width_score, extra) = if delta < 0.0 {
+                (OVERFULL, 0.0)
+            } else if last {
+                (0.0, LAST_LINE_PENALTY * cands[0].penalty)
+            } else {
+                (delta * delta, 0.0)
+            };
+            let score = scores[0].0 + width_score + extra;
+            if score <= best {
+                best = score;
+                best_prev = 0;
+            }
+        }
         let start_edge = cands[end].if_break - fit;
         for start in active..end {
             let start_score = scores[start].0;

@@ -1015,6 +1015,41 @@ impl El {
         }
         self
     }
+    /// Indents the first formatted line of a [`text`](crate::text), [`rich`](crate::rich), or
+    /// [`text_input`](crate::text_input) element by `points` from its inline-start edge,
+    /// matching CSS Text Module Level 3 `text-indent: <length>`.
+    ///
+    /// Positive values indent the first line inward; negative values pull it outward into leading
+    /// padding (for example `.pl(48.0).text_indent(-48.0)` for a hanging indent). Mirrors to the
+    /// right edge in right-to-left text. Subsequent wrapped lines and lines after explicit `\n`
+    /// breaks stay unindented. Non-finite values are ignored.
+    ///
+    /// ```no_run
+    /// # use rune::text;
+    /// let msg = text("10:42 Ada: Wrapping message body aligned under the body column.")
+    ///     .w(280.0)
+    ///     .pl(48.0)
+    ///     .wrap()
+    ///     .text_indent(-48.0);
+    /// ```
+    #[inline]
+    pub fn text_indent(mut self, points: f32) -> Self {
+        self.set_text_indent(points);
+        self
+    }
+    /// [`El::text_indent`] in place.
+    #[inline]
+    pub fn set_text_indent(&mut self, points: f32) -> &mut Self {
+        if points.is_finite()
+            && let Some(t) = &mut self.text
+        {
+            let points = if points == 0.0 { 0.0 } else { points };
+            if t.cold.text_indent != points {
+                t.cold.text_indent = points;
+            }
+        }
+        self
+    }
     /// Measure this text as the grapheme at byte `at` of `run`, shaped as one line in the same
     /// style, instead of on its own rounded up to a device pixel. Neighbouring cells of one run
     /// then sit at its fractional, kerned advances and together take its width, and each draws

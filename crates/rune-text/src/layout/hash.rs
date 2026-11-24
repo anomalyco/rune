@@ -94,14 +94,15 @@ pub fn directed(key: u64, base: parley::BaseDirection) -> u64 {
     }
 }
 
-/// A shaping broken at `max_width`, aligned and block-indented: the shape key itself when the
-/// layout is unwrapped, start-aligned and unindented.
-pub(crate) fn break_key(shape: u64, max_width: Option<f32>, align: parley::Alignment, blocks: Option<&[crate::Block]>) -> u64 {
-    if max_width.is_none() && align == parley::Alignment::Start && blocks.is_none() {
+/// A shaping broken at `max_width`, aligned and block- or first-line-indented: the shape key
+/// itself when the layout is unwrapped, start-aligned and unindented.
+pub(crate) fn break_key(shape: u64, max_width: Option<f32>, align: parley::Alignment, blocks: Option<&[crate::Block]>, text_indent: f32) -> u64 {
+    if max_width.is_none() && align == parley::Alignment::Start && blocks.is_none() && text_indent == 0.0 {
         return shape;
     }
+    let indent_bits = if text_indent == 0.0 { 0u32 } else { text_indent.to_bits() };
     let mut h = KeyHasher::default();
-    (shape, max_width.map(f32::to_bits), align as u8, blocks).hash(&mut h);
+    (shape, max_width.map(f32::to_bits), align as u8, blocks, indent_bits).hash(&mut h);
     h.finish()
 }
 

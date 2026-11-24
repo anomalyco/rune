@@ -17,14 +17,15 @@ pub(crate) fn take_line_end_item_visits() -> usize {
 /// Rightmost glyph-run edge on `line` in layout device px.
 #[doc(hidden)]
 pub fn line_end(line: &parley::Line<'_, Ink>) -> f32 {
-    line.items().fold(0.0f32, |e, item| match item {
+    let end = line.items().fold(f32::NEG_INFINITY, |e, item| match item {
         PositionedLayoutItem::GlyphRun(gr) => {
             #[cfg(test)]
             LINE_END_ITEM_VISITS.with(|c| c.set(c.get() + 1));
             e.max(gr.offset() + gr.advance())
         }
         PositionedLayoutItem::InlineBox(_) => e,
-    })
+    });
+    if end.is_finite() { end } else { 0.0 }
 }
 
 /// [`underline_edges`] given a precomputed [`line_end`] for `line`.

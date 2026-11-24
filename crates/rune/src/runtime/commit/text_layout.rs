@@ -223,7 +223,11 @@ fn spec_elide_keys(spec: &TextSpec, scale: f32, mode: u8, param: usize, max_w: f
     }
     let shape = spec.shape_key(scale).unwrap_or_else(|| spec.fresh_shape_key(scale));
     let blocks = spec.cold.blocks.iter().any(|&b| b != crate::edit::Block::Paragraph).then_some(spec.cold.blocks.as_slice());
-    Some((shape, crate::text::elide_key(shape, mode, param, max_w, align, blocks)))
+    let mut key = crate::text::elide_key(shape, mode, param, max_w, align, blocks);
+    if spec.cold.text_indent != 0.0 {
+        key ^= u64::from(spec.cold.text_indent.to_bits()).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    Some((shape, key))
 }
 
 /// `spec`'s content cut to fit `max_w` device px with an ellipsis, keeping as many whole
@@ -283,7 +287,8 @@ pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scal
         let mid = (lo + hi).div_ceil(2);
         let e = cut(mid);
         let l = make(text, e);
-        if l.full_width() <= max_w + 0.5 {
+        let lw = l.get(0).map_or(l.full_width(), |line| line.metrics().indent + line.metrics().advance);
+        if lw <= max_w + 0.5 {
             lo = mid;
             best = Some((mid, l, e));
         } else {
@@ -448,14 +453,21 @@ pub(in crate::runtime) fn clamped_height(l: &Layout<Ink>, spec: &TextSpec, scale
     }
 }
 
-/// The advance of the last line `l` shows when clamped to `lines`, in device px.
+/// The inline end of the last line `l` shows when clamped to `lines`, in device px
+/// (accounting for first-line `text_indent`).
 pub(in crate::runtime) fn last_line_width(l: &Layout<Ink>, lines: usize) -> f32 {
-    l.lines().take(lines).last().map_or(0.0, |line| line.metrics().advance - line.metrics().hanging_advance)
+    l.lines().take(lines).last().map_or(0.0, |line| {
+        let m = line.metrics();
+        m.indent + m.advance - m.hanging_advance
+    })
 }
 
 fn all_lines_fit(l: &Layout<Ink>, lines: usize, max_w: f32) -> bool {
     l.len() <= lines
-        && l.lines().all(|line| line.metrics().advance - line.metrics().hanging_advance <= max_w + 0.5)
+        && l.lines().all(|line| {
+            let m = line.metrics();
+            m.indent + m.advance - m.hanging_advance <= max_w + 0.5
+        })
 }
 
 fn search_elision<C, M, F>(

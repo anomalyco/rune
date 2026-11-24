@@ -156,8 +156,8 @@ impl TextSystem {
         };
         if let Some(m) = self.ascii.get(&key) { return m.clone(); }
         let sample: String = (0x21u8..0x7f).flat_map(|b| [b as char, ' ']).collect();
-        let l = self.layout_keyed(None, &sample, &[], &[], &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
-        let empty = self.layout_keyed(None, "", &[], &[], &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
+        let l = self.layout_keyed(None, &sample, &[], &[], 0.0, &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
+        let empty = self.layout_keyed(None, "", &[], &[], 0.0, &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
         let measured = (|| {
             let line = l.lines().next().filter(|_| l.lines().count() == 1)?;
             let mut runs = line.runs();
@@ -211,7 +211,7 @@ impl TextSystem {
             let p = &mut paragraphs[k];
             let words = &lazy.content[p.start..p.end];
             let spans: Vec<Span> = spans_in(&lazy.spans, p.start, p.end, &[], lazy.disjoint_spans).collect();
-            let l = self.layout_keyed(Some(p.key), words, &spans, &[], &[], &[], lazy.style, lazy.scale, laid.max_width, laid.align, lazy.wrap_anywhere, false, Keep::Owned, p.flow.base());
+            let l = self.layout_keyed(Some(p.key), words, &spans, &[], 0.0, &[], &[], lazy.style, lazy.scale, laid.max_width, laid.align, lazy.wrap_anywhere, false, Keep::Owned, p.flow.base());
             moved |= l.height() != p.height;
             (p.height, p.widths, p.layout, p.shaped) = (l.height(), [l.width(), l.full_width()], l, true);
             shaped_any = true;
@@ -220,7 +220,7 @@ impl TextSystem {
         for p in &mut paragraphs {
             let want_frac = if p.shaped && p.layout.len() > 1 { (y - y.floor()) as f32 } else { 0.0 };
             if p.shaped && (want_frac - p.y_frac).abs() > 1e-5 {
-                line_break::rebreak_at_y(Rc::make_mut(&mut p.layout), &[], lazy.style.size, lazy.scale, laid.max_width, laid.align, f64::from(want_frac));
+                line_break::rebreak_at_y(Rc::make_mut(&mut p.layout), &[], 0.0, lazy.style.size, lazy.scale, laid.max_width, laid.align, f64::from(want_frac));
                 self.layout_ids.build(&p.layout);
                 (p.height, p.widths) = (p.layout.height(), [p.layout.width(), p.layout.full_width()]);
             }
@@ -236,7 +236,7 @@ impl TextSystem {
         let left = paragraphs.iter().any(|p| !p.shaped);
         let keyed = laid.keyed.as_ref().map(|k| Keyed { content: k.content.clone(), style_key: k.style_key, start_flow: k.start_flow });
         let built = Rc::new(ParagraphLayout {
-            paragraphs, width, full_width, height: y as f32, max_width: laid.max_width, align: laid.align, whole: laid.whole,
+            paragraphs, width, full_width, height: y as f32, max_width: laid.max_width, align: laid.align, text_indent: 0.0, text_indent_px: 0.0, whole: laid.whole,
             newline: laid.newline, blank_box: laid.blank_box, disjoint_spans: laid.disjoint_spans, keyed, lazy: left.then_some(lazy.clone()),
         });
         let g = self.generation;

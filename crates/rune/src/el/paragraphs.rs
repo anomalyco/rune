@@ -129,6 +129,9 @@ fn paragraph(t: &TextSpec, k: usize, (a, b): (usize, usize), last: bool, e: &mut
         cold.pills = t.cold.pills.iter().filter(|c| a32 <= c.start && c.end <= b32).map(|c| crate::text::PillChip { start: c.start - a32, end: c.end - a32, ..c.clone() }).collect();
         cold.blocks = t.cold.blocks.get(k).copied().into_iter().collect();
         cold.soft_breaks.clear();
+        if k > 0 {
+            cold.text_indent = 0.0;
+        }
         cold.copy_breaks = [if k == 0 { t.cold.copy_breaks[0] } else { 1 }, if last { t.cold.copy_breaks[1] } else { 1 }];
         cold.copy_prefix = if k == 0 { t.cold.copy_prefix.clone() } else { None };
     }

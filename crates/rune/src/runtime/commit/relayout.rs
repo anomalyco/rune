@@ -387,7 +387,8 @@ fn lay_out_text_inner(text: &mut TextSystem, n: &mut Node, w: f32, scale: f32, l
         }
     };
     let mut elided = None;
-    if spec.truncate && layout.full_width() > w * scale + 0.5 {
+    let trunc_w = layout.get(0).map_or(layout.full_width(), |l| l.metrics().indent + l.metrics().advance);
+    if spec.truncate && trunc_w > w * scale + 0.5 {
         if let Some((cut, e)) = truncated(text, spec, scale, w * scale) {
             (layout, elided) = (cut, Some(e));
         }
