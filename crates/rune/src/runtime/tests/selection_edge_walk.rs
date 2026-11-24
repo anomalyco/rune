@@ -158,6 +158,8 @@ impl Dev {
         let clicks = self.press_count(&path(row), point(spot)).min(3);
         let unit = match clicks { 1 => U::Char, 2 => U::Word, _ => U::Paragraph };
         let origin = unit_at(at, unit);
+        // On Windows a double-click on "row" takes the space after it (`selectable::with_trailing_space`).
+        let origin = if cfg!(target_os = "windows") && unit == U::Word && origin == (0, 3) { (0, 4) } else { origin };
         (self.unit, self.origin) = (unit, origin);
         (self.anchor, self.focus) = origin;
         self.path = Some(path(row));

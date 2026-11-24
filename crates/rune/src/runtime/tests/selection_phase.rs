@@ -181,6 +181,12 @@ fn unit_at(text: &str, i: usize, unit: U) -> (usize, usize) {
     }
 }
 
+/// `with_trailing_space`, transcribed: on Windows a double-click's word takes the spaces after it.
+fn with_trailing_space(text: &str, (a, b): (usize, usize)) -> (usize, usize) {
+    if !cfg!(target_os = "windows") || b > text.len() || text[a..b].trim().is_empty() { return (a, b); }
+    (a, text.len() - text[b..].trim_start_matches([' ', '\t']).len())
+}
+
 /// `extend`, transcribed.
 fn extend(origin: (usize, usize), at: (usize, usize)) -> (usize, usize) {
     if at.0 < origin.0 { (origin.1, at.0) } else { (origin.0, at.1.max(origin.1)) }
@@ -371,6 +377,7 @@ impl Dev {
             _ => {
                 let unit = match clicks { 1 => U::Char, 2 => U::Word, _ => U::Paragraph };
                 let origin = unit_at(&content, at, unit);
+                let origin = if unit == U::Word { with_trailing_space(&content, origin) } else { origin };
                 (self.unit, self.origin) = (unit, origin);
                 (self.anchor, self.focus) = origin;
                 self.path = Some(path);
