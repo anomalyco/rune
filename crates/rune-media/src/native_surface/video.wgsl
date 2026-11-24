@@ -13,11 +13,19 @@ struct Out { @builtin(position) pos: vec4<f32> };
     let local = p - u.viewport.zw;
     return Out(vec4<f32>(local.x / u.viewport.x * 2.0 - 1.0, 1.0 - local.y / u.viewport.y * 2.0, 0.0, 1.0));
 }
+fn bt709_decode(x: vec3<f32>) -> vec3<f32> {
+    return select(pow((x + 0.099) / 1.099, vec3<f32>(1.0 / 0.45)), x / 4.5, x < vec3<f32>(0.081));
+}
+fn srgb_encode(x: vec3<f32>) -> vec3<f32> {
+    let v = clamp(x, vec3<f32>(0.0), vec3<f32>(1.0));
+    return select(1.055 * pow(max(v, vec3<f32>(0.0031308)), vec3<f32>(1.0 / 2.4)) - 0.055, v * 12.92, v <= vec3<f32>(0.0031308));
+}
 fn linear(v: vec3<f32>) -> vec3<f32> {
     let x = clamp(v, vec3<f32>(0.0), vec3<f32>(1.0));
+    if u.color.z > 2.5 { return srgb_encode(bt709_decode(x)); }
     if u.color.z > 1.5 { return x; }
     if u.color.z < 0.5 { return select(pow((x + 0.055) / 1.055, vec3<f32>(2.4)), x / 12.92, x <= vec3<f32>(0.04045)); }
-    return select(pow((x + 0.099) / 1.099, vec3<f32>(1.0 / 0.45)), x / 4.5, x < vec3<f32>(0.081));
+    return bt709_decode(x);
 }
 fn convert(a: vec4<f32>, uv: vec2<f32>) -> vec4<f32> {
     if u.color.x < 0.5 { return vec4<f32>(linear(a.rgb) * a.a, a.a); }
