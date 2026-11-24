@@ -42,6 +42,7 @@ use crate::theme::{
 
 use buttons::Buttons;
 use config::get_button_layout_config;
+pub use config::read_system_config_early;
 use parts::DecorationParts;
 use pointer::{Location, MouseState};
 use shadow::Shadow;

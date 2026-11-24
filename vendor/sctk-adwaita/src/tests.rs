@@ -306,3 +306,29 @@ fn the_straight_bands_shadow_is_the_shadow_model() {
         assert_eq!(window_alpha(&round, (100, y)), window_alpha(&square, (100, y)), "y {y}");
     }
 }
+
+/// A read started early runs on a thread of its own, and its answer is handed out once: the
+/// frame after the first reads the system as it is then.
+#[test]
+fn an_early_read_runs_off_the_asking_thread_and_is_taken_once() {
+    fn here() -> std::thread::ThreadId {
+        std::thread::current().id()
+    }
+    let slot = std::sync::Mutex::new(crate::config::start(here));
+    let ran_on = crate::config::take(&slot).expect("the early read's answer");
+    assert_ne!(ran_on, here(), "the read ran on the thread that asked for it");
+    assert!(crate::config::take(&slot).is_none(), "the answer was handed out twice");
+}
+
+/// A frame made while an early read still runs waits for that read instead of starting its own.
+#[test]
+fn a_frame_waits_for_an_early_read_that_still_runs() {
+    static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    fn slow() -> usize {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        READS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+    }
+    let slot = std::sync::Mutex::new(crate::config::start(slow));
+    assert_eq!(crate::config::take(&slot), Some(1));
+    assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
