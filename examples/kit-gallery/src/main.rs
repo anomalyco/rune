@@ -33,6 +33,8 @@ pub struct G {
     pub open: Option<String>,
     pub edits: [TextEdit; 8],
     pub combo: rune_kit::ComboboxState,
+    /// The sidebar reorder story's state.
+    pub reorder: stories::sidebar::ReorderDemo,
     /// The file tree story's files.
     pub files: rune_kit::TreeModel<rune_kit::FileNode<()>>,
     /// The split-view story's sidebar and inspector panes.
@@ -69,6 +71,7 @@ fn init() -> G {
         open: None,
         edits: Default::default(),
         combo: Default::default(),
+        reorder: Default::default(),
         files: files(),
         split_sidebar: rune_kit::PaneState::new(180.0).range(120.0, 280.0),
         split_inspector: rune_kit::PaneState::new(170.0).range(120.0, 260.0),

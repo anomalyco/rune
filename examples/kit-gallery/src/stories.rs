@@ -14,6 +14,7 @@ mod icons;
 mod inputs;
 mod markdown;
 mod overlays;
+pub(crate) mod sidebar;
 mod split_view;
 
 use controls::{button_all_states, button_icon, button_playground, button_shortcuts, button_sizes, button_variants, checkbox_basic, checkbox_custom_icon, checkbox_hidden_label, checkbox_states, icon_button_all_states, icon_button_playground, icon_button_sizes, icon_button_variants, radio_basic, radio_controlled, radio_states, switch_appearances, switch_basic, switch_hidden_label, switch_sizes, switch_states, switch_web};
@@ -33,6 +34,7 @@ macro_rules! stories {
         pub const SCENES: &[(&str, fn(&mut G))] = &[$(($id, |s: &mut G| {
             s.story = $id;
             s.combo = ComboboxState::default();
+            s.reorder = sidebar::ReorderDemo::default();
             if $id.starts_with("rune-combobox--") { let _ = s.combo.step(ComboboxEvent::Toggle { current: None }); }
             if $id == "rune-popup-list--composer" {
                 s.edits[7] = TextEdit::new("/");
@@ -219,6 +221,7 @@ stories! {
     "rune-scroll-bar--basic" => scroll_bar_basic,
     "rune-scroll-bar--grow" => scroll_bar_grow,
     "rune-scroll-bar--styled" => scroll_bar_styled,
+    "rune-sidebar--reorder" => sidebar::reorder,
     "components-file-icon--samples" => icons::file_icon_samples,
     "components-file-icon--folder" => icons::file_icon_folder,
     "ui-icon--gallery" => icons::icon_gallery,

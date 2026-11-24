@@ -1,0 +1,1 @@
+- `rune-kit`: expose `Reorder::offset`, `Reorder::pitch`, and `Reorder::shift`, add `ReorderLanding` (`Nearest`, `HalfRow`) via `Reorder::landing`, add `Reorder::cancel_outside_x` to cancel drops dragged past a horizontal margin, and add `SidebarRow::reorder_tx` passing `&mut Tx` to the drop callback.

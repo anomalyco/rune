@@ -143,6 +143,8 @@ pub use scroll_bar::ScrollBarStyle;
 pub use scroll_bar::scroll_bar;
 pub use shell::Page;
 pub use shell::PaneState;
+pub use shell::Reorder;
+pub use shell::ReorderLanding;
 pub use shell::Sidebar;
 pub use shell::SidebarHeader;
 pub use shell::SidebarRow;
