@@ -283,8 +283,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   `.focus_follows()` to press each item it
   reaches, `.focus_selected(on)` for a group's initial Tab stop, `.press_on_return()` to let an
   individual focused control activate on Return without enabling `Cx::web_focus`,
+  `.keyboard_focus_only()` for a focusable control reachable via Tab, modal initial focus and
+  assistive technology while pointer clicks run `on_press` without taking focus,
   `.focus_ring(width, offset,
-  color)` for keyboard-only rings, and `.focus_highlight(color)` for a menu row's shared pointer
+  color)` for keyboard-only rings, `.focus_ring_radius(r)` for an explicit outer focus-ring
+  corner radius independent of the element's own radius, and `.focus_highlight(color)` for a menu row's shared pointer
   and keyboard highlight. Enter/Space
   activates non-text controls. `.modal(click_outside, close)` traps Tab, handles Escape, makes the
   background inert and restores the opener. Nested modals restore in stack order. Inspector tree

@@ -402,7 +402,7 @@ impl RuntimeCore {
     /// A focusable scroll region, which a press on plain content inside it focuses, as a web
     /// page focuses a `tabIndex` scroller.
     pub(in crate::runtime) fn focuses_on_click(&self, i: usize) -> bool {
-        self.tree.nodes[i].scroll.is_some() && self.tree.nodes[i].focus.enabled
+        self.tree.nodes[i].scroll.is_some() && self.tree.nodes[i].focus.enabled && !self.tree.nodes[i].focus.keyboard_only
     }
 
     /// The focusable scroll region a press at (x, y) lands in beneath `layer`

@@ -357,6 +357,8 @@ impl RuntimeCore {
         // A control that keeps the field's focus on a press (`preserve_focus_on_press`) doesn't
         // take focus on click, and a click on its unfocusable descendants doesn't focus an
         // `on_key` or scroll ancestor either (explicitly focusable descendants still take focus).
+        // A `keyboard_focus_only` control does not take focus on click either; for focus it falls
+        // through like a press on plain content (focusing a qualifying ancestor or blurring).
         if n.focus.below && !on_link {
             match self.scroll_region_below(ti, x, y) {
                 Some(r) => self.frame.queue.push(Action::FocusControl(self.tree.nodes[r].path.clone())),
@@ -365,10 +367,11 @@ impl RuntimeCore {
             }
         }
         let (preserve_focus, keeps) = (self.press_keeps_focus(ti), self.press_keeps_selection(ti));
-        let takes_focus = (n.focus.enabled && !n.focus.preserve_on_press.focus) || (self.takes_focus(n) && !preserve_focus);
+        let takes_focus = !n.focus.keyboard_only
+            && ((n.focus.enabled && !n.focus.preserve_on_press.focus) || (self.takes_focus(n) && !preserve_focus));
         let keyed = (!takes_focus && !self.is_selectable(ti) && !preserve_focus).then(|| std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent)
             .take_while(|&p| self.allowed(p))
-            .find(|&p| (self.tree.nodes[p].focus.key.is_some() || self.focuses_on_click(p)) && self.can_focus(p))).flatten();
+            .find(|&p| (self.tree.nodes[p].focus.key.is_some() || self.focuses_on_click(p)) && self.can_focus(p) && !self.tree.nodes[p].focus.keyboard_only)).flatten();
         let in_textbox = std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent).any(|p| self.textbox_input(p).is_some());
         let below = n.focus.below;
         if !below && !on_link && !keeps && takes_focus && !self.is_selectable(ti) {

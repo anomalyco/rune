@@ -12,6 +12,8 @@ pub(crate) struct FocusSpec {
     pub enabled: bool,
     /// `focusable(false)`: not a Tab stop even where [`crate::Cx::web_focus`] would make it one.
     pub opt_out: bool,
+    /// [`crate::El::keyboard_focus_only`]: Tab, modals and assistive tech can focus it, not pointer clicks.
+    pub keyboard_only: bool,
     /// [`crate::El::autofocus`].
     pub autofocus: bool,
     pub order: i32,
@@ -20,6 +22,8 @@ pub(crate) struct FocusSpec {
     pub reveal_selected: bool,
     pub preserve_on_press: crate::runtime::selectable::OnPress,
     pub ring: Option<Outline>,
+    /// [`crate::El::focus_ring_radius`]: explicit outer corner radius in points for this element's focus ring.
+    pub ring_radius: Option<f32>,
     /// `focus_within_ring`: `ring` shows while focus is on this element or inside it, from
     /// the pointer or the keyboard.
     pub within: bool,
@@ -62,6 +66,7 @@ impl crate::cold::Empty for FocusSpec {
         physical: None,
         enabled: false,
         opt_out: false,
+        keyboard_only: false,
         autofocus: false,
         order: 0,
         group: false,
@@ -69,6 +74,7 @@ impl crate::cold::Empty for FocusSpec {
         reveal_selected: false,
         preserve_on_press: crate::runtime::selectable::OnPress { focus: false, selection: false },
         ring: None,
+        ring_radius: None,
         within: false,
         ring_off: false,
         flat_within: false,
@@ -117,6 +123,29 @@ impl El {
         let focus = &mut self.cold_mut().focus;
         focus.enabled = enabled;
         focus.opt_out = !enabled;
+        self
+    }
+    /// Reachable via Tab, modal initial focus, [`Tx::focus`](crate::Tx::focus) and assistive
+    /// technology (`Focus`), while pointer clicks run `on_press` without focusing this element
+    /// (as AppKit's `NSButton` and Safari's buttons do).
+    ///
+    /// For focus, a click on this element acts like a click on plain content: it blurs a focused
+    /// control or focuses a qualifying ancestor (`on_key` or focusable scroll region), unless
+    /// [`El::preserve_focus_on_press`] is also set.
+    ///
+    /// ```
+    /// use rune::{El, el};
+    ///
+    /// struct App { runs: usize }
+    /// let _btn: El = el()
+    ///     .role("button")
+    ///     .label("Run")
+    ///     .focusable(true)
+    ///     .keyboard_focus_only()
+    ///     .on_press(|s: &mut App| s.runs += 1);
+    /// ```
+    pub fn keyboard_focus_only(mut self) -> Self {
+        self.cold_mut().focus.keyboard_only = true;
         self
     }
     /// Positive overrides precede document order (0); negative values skip Tab only.
@@ -294,6 +323,30 @@ impl El {
         self.cold_mut().focus.within_keyboard = false;
         self.cold_mut().focus.ring_off = false;
         self.cold_mut().focus.ring_for = None;
+        self
+    }
+    /// Explicit outer corner radius in points for this element's focus ring, independent of its
+    /// own [`El::radius`] or [`El::corners`].
+    ///
+    /// When unset, a focus ring derives concentric radii from the element's own corner radii plus
+    /// its offset and width. Setting `focus_ring_radius` overrides that for any focus ring painted
+    /// on this element (the default ring, [`El::focus_ring`], [`El::focus_within_ring`],
+    /// [`El::focus_visible_within_ring`] and [`El::focus_ring_for`]), while leaving
+    /// [`El::outline`] unaffected. Negative and non-finite values clamp to `0.0`, and
+    /// [`El::continuous_corners`] applies to positive radii.
+    ///
+    /// ```
+    /// use rune::{Color, El, el};
+    ///
+    /// let _row: El = el()
+    ///     .size(160.0, 32.0)
+    ///     .radius(4.0)
+    ///     .focusable(true)
+    ///     .focus_ring(2.0, 2.0, Color { r: 0.0, g: 0.62, b: 1.0, a: 1.0 })
+    ///     .focus_ring_radius(8.0);
+    /// ```
+    pub fn focus_ring_radius(mut self, radius: f32) -> Self {
+        self.cold_mut().focus.ring_radius = Some(if radius.is_finite() { radius.max(0.0) } else { 0.0 });
         self
     }
     /// A ring drawn while focus is on this element or anywhere inside it, whether the pointer or
