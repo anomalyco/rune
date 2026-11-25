@@ -53,6 +53,8 @@ impl RuntimeCore {
                 return true;
             }
         }
+        // Selectable text's keyboard caret (`El::caret_browsing`) before focus traversal's arrows.
+        if self.browse_key(ev) { return true; }
         if self.focus_key(app, ev, shown, one) { return true; }
         if ev.edit_command() == Some('v') && let Some(target) = self.paste_target() {
             // Capture the target in event order, before another queued click can

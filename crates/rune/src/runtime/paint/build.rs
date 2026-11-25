@@ -67,7 +67,9 @@ impl RuntimeCore {
             self.scroll.stuck.resize(n_nodes, 0.0);
             self.scroll.sticky_frame.resize(n_nodes, sticky::UNBOUNDED);
         }
-        let sel_ranges = self.selection_ranges();
+        let mut sel_ranges = self.selection_ranges();
+        // The keyboard caret in selectable text paints as an empty range (`El::caret_browsing`).
+        sel_ranges.extend(self.browse_caret());
         let mark_ranges = self.mark_ranges();
         self.ime_area = None;
         self.edit.ime_option_as_alt = crate::OptionAsAlt::None;

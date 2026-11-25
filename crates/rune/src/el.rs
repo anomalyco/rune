@@ -16,6 +16,7 @@ use crate::tok::TextStyle;
 mod a11y;
 mod anchor;
 mod backdrop;
+mod caret_browsing;
 mod child_exit;
 mod direction;
 pub(crate) mod drop;

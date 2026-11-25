@@ -759,7 +759,9 @@ impl RuntimeCore {
                     let map = |a, b| n.elided.map_or((a, b), |e| e.range(a, b));
                     text_marks::push_mark(&mut self.instances, flow, &spec.content, (a, b), map, base_origin, tk, fill, clip, fade);
                 }
-                if let Some((a, b)) = selectable::range_in(sel_ranges, i) {
+                if let Some((a, _)) = selectable::range_in(sel_ranges, i).filter(|r| r.0 == r.1) {
+                    selectable::push_caret(&mut self.instances, flow, a, base_origin, tk, premul(color, o, srgb), s, clip, fade);
+                } else if let Some((a, b)) = selectable::range_in(sel_ranges, i) {
                     let (a, b) = n.elided.map_or((a, b), |e| e.range(a, b));
                     // `::selection` with a colour recolours the selected glyphs, as a field's does.
                     let (highlight, ink) = spec.cold.selection_style.map_or((spec.cold.selection, None), |st| st.pick(self.host.window_focused != Some(false)));

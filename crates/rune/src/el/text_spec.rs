@@ -132,6 +132,8 @@ pub(crate) struct TextCold {
     /// Visual palette for rich block and inline decorations; the default's when unset.
     pub(crate) rich_style: Option<crate::edit::RichStyle>,
     pub(crate) secure_revealed: bool,
+    /// See [`El::caret_browsing`](crate::El::caret_browsing).
+    pub(crate) caret_browsing: bool,
 }
 
 impl Empty for TextCold {
@@ -162,6 +164,7 @@ impl Empty for TextCold {
         pill_colors: None,
         rich_style: None,
         secure_revealed: false,
+        caret_browsing: false,
     };
 }
 

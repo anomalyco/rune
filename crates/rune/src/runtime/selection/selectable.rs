@@ -21,6 +21,8 @@ use std::ops::Range;
 /// Chromium on Windows and Linux doesn't.
 const SECONDARY_SELECTS_WORD: bool = cfg!(target_os = "macos");
 
+#[path = "browse_keys.rs"]
+mod browse_keys;
 #[path = "copy_html.rs"]
 mod copy_html;
 #[path = "copy_join.rs"]
@@ -136,6 +138,15 @@ pub(in crate::runtime) fn push_selection(out: &mut Vec<Instance>, flow: TextFlow
         let radius = 2.0 * s * k;
         extend_run(out, rect, fill, radius, clip, fade, 40.0 * s * k);
     }
+}
+
+/// The keyboard caret at byte `at` of selectable `layout` (`El::caret_browsing`), as a field
+/// draws its own: `1.5` points wide, over the line's middle 80%.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::runtime) fn push_caret(out: &mut Vec<Instance>, flow: TextFlow<'_>, at: usize, origin: [f32; 2], k: f32,
+    fill: [f32; 4], s: f32, clip: [f32; 4], fade: [f32; 4]) {
+    let [x, y, _, h] = super::text_marks::pixel_rect(origin, flow.caret(at, parley::Affinity::Downstream, 0.0), k);
+    out.push(rect_inst([x, y + h * 0.1, (1.5 * s * k).round().max(1.0), h * 0.8], fill, 0.0, clip, fade));
 }
 
 /// A text field's selection: one layout, so no runs to join, and a field's own fill behind it

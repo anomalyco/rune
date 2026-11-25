@@ -225,6 +225,21 @@ impl RuntimeCore {
         spec: &crate::el::TextSpec,
         laid: &crate::text::TextLayout,
     ) -> [f32; 2] {
+        let [mut x, y] = self.text_origin(nodes, i, spec, laid);
+        if inp.single_line && let Some(l) = laid.single() {
+            let n = &nodes[i];
+            let s = self.env.scale;
+            let t = sticky::anchored_target(nodes, &self.scroll.scrolls, i, self.viewport);
+            let width = (t[2] - n.inset[2]) - (t[0] + n.inset[0]);
+            let prev = self.edit.single_line_scroll(&n.path);
+            x -= single_line_offset(prev, inp, &spec.content, l, s, width * s) / s;
+        }
+        [x, y]
+    }
+
+    /// Text origin `[x, y]` in window points for text node `i` at its laid-out place, after
+    /// scrolling, sticky shifts and growth stack deltas.
+    pub(in crate::runtime) fn text_origin(&self, nodes: &[Node], i: usize, spec: &crate::el::TextSpec, laid: &crate::text::TextLayout) -> [f32; 2] {
         let n = &nodes[i];
         let layout = laid.view();
         let s = self.env.scale;
@@ -233,12 +248,7 @@ impl RuntimeCore {
         let tw = text_width(layout.full_width()) / s;
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
         let (y0, y1) = (y + n.inset[1], y + (t[3] - t[1]) - n.inset[3]);
-        let mut x = text_x(spec, x0, x1, tw, layout.flow());
-        if inp.single_line && let Some(l) = laid.single() {
-            let prev = self.edit.single_line_scroll(&n.path);
-            x -= single_line_offset(prev, inp, &spec.content, l, s, (x1 - x0) * s) / s;
-        }
-        [x, text_y(spec, y0, y1, text_height(spec, layout, s) / s)]
+        [text_x(spec, x0, x1, tw, layout.flow()), text_y(spec, y0, y1, text_height(spec, layout, s) / s)]
     }
 
     /// Node `i`'s caret line `[x, y, w, h]` in window points at its laid-out place, after
@@ -265,8 +275,9 @@ impl RuntimeCore {
             self.reveal_row(app, &ScrollReveal::into_view(None, path), true);
             self.step_scroll(0.0);
         }
-        let Some(i) = self.focused_index() else { return };
-        if self.caret_rect(&self.tree.nodes, i).is_none() { return; }
+        // A focused field's caret, else selectable text's keyboard caret (`El::caret_browsing`).
+        let Some(i) = self.focused_index().or_else(|| self.browse_focus().map(|c| c.0)) else { return };
+        if self.follow_rect(i).is_none() { return; }
         let mut scrolled = false;
         for horizontal in [false, true] {
             let mut cur = Some(i);
@@ -275,7 +286,7 @@ impl RuntimeCore {
                 if !(self.tree.nodes[v].scroll.is_some() && self.tree.nodes[v].scroll_axes.has(horizontal)) {
                     continue;
                 }
-                let Some(r) = self.caret_rect(&self.tree.nodes, i) else { return };
+                let Some(r) = self.follow_rect(i) else { return };
                 let a = usize::from(!horizontal);
                 let start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
                 let view = f64::from(self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
@@ -306,6 +317,12 @@ impl RuntimeCore {
             self.commit_virtual_scroll(app, &Tx::default());
             self.step_scroll(0.0);
         }
+    }
+
+    /// The caret `follow_caret` keeps in view in node `i`: a focused field's, else selectable
+    /// text's keyboard caret.
+    fn follow_rect(&self, i: usize) -> Option<[f32; 4]> {
+        self.caret_rect(&self.tree.nodes, i).or_else(|| self.browse_caret_rect(i))
     }
 
     /// Promotes a pending `El::on_input_key` snapshot into `caret_follow` when the committed tree's

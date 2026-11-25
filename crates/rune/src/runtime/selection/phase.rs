@@ -112,6 +112,9 @@ pub(in crate::runtime) enum Event<'a> {
     /// A Shift-press keeps the anchor and moves the focus to `focus`, in `far` or the anchor's
     /// text; the drag that follows extends by character.
     Extend { focus: usize, far: Option<Far> },
+    /// A key moved the focus to `focus`, in `far` or the anchor's text, and the anchor stays
+    /// (`El::caret_browsing` with Shift). A press holding the selection keeps it.
+    Caret { focus: usize, far: Option<Far> },
     /// The held press moved the selection's ends to `anchor` and `focus`, the focus in `reach`.
     Drag { anchor: usize, focus: usize, reach: Reach<'a> },
     /// The press ended: released, cancelled, lost, or taken by a draggable row.
@@ -146,6 +149,17 @@ pub(in crate::runtime) fn step(phase: &mut Phase, event: Event<'_>) -> Effects<E
             selection.focus = focus;
             selection.far = far;
             *phase = Phase::Dragging { selection, unit: Unit::Char };
+            Effects::one(Effect::Seal)
+        }
+        Event::Caret { focus, far } => {
+            let Phase::Placed(sel) = phase else { return Effects::none() };
+            sel.origin = (sel.anchor, sel.anchor);
+            sel.focus = focus;
+            // The same far text keeps the row identity it already resolved to.
+            match (far, &mut sel.far) {
+                (Some(f), Some(old)) if old.path == f.path => old.content = f.content,
+                (far, slot) => *slot = far,
+            }
             Effects::one(Effect::Seal)
         }
         Event::Drag { anchor, focus, reach } => {
