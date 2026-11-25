@@ -14,9 +14,12 @@ impl Client {
         self.flush_primary(rt);
         // Nothing to clear before the first write.
         if std::mem::take(&mut rt.edit.clear_secret_request) && let Some(w) = WORKER.get() { w.sender.send(Request::Clear(None)).ok(); }
-        if let Some(copy) = rt.copy_request.take() {
+        if let Some(mut copy) = rt.copy_request.take() {
             let worker = worker_handle();
             copy.bind(Route::System(worker.sender.clone()));
+            if let Some(id) = copy.copy_image_id() {
+                copy.attach_copy_reply(CopyReply { id, sender: self.sender.clone(), wake: self.wake.clone() });
+            }
             worker.send_write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() }), revision());
         }
         if let Some(target) = rt.edit.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
@@ -134,9 +137,12 @@ fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() 
         if matches!(request, Request::Clear(_)) && core.hold.is_free() { continue; }
         if clipboard.is_none() { clipboard = open(); }
         let Some(cb) = &mut clipboard else {
-            if let Request::Write(copy, notify) = request && let Some(slot) = copy.slot() {
-                slot.set(SecretState::Failed("no clipboard".into()));
-                if let Some(n) = notify { n.send(); }
+            if let Request::Write(mut copy, notify) = request {
+                if let Some(r) = copy.take_copy_reply() { r.send(Err(CopyImageError::Failed("no clipboard".into()))); }
+                if let Some(slot) = copy.slot() {
+                    slot.set(SecretState::Failed("no clipboard".into()));
+                    if let Some(n) = notify { n.send(); }
+                }
             }
             continue;
         };

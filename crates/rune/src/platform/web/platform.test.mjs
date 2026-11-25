@@ -232,3 +232,63 @@ test('preferredLanguages reads navigator.languages with navigator.language fallb
         Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
     }
 });
+
+test('writeClipboardImage creates ClipboardItem with Promise<Blob> synchronously and encodes off-turn', async () => {
+    const origNav = globalThis.navigator;
+    const origCI = globalThis.ClipboardItem;
+    try {
+        let writtenItems = null;
+        let makePngCalled = false;
+        class FakeClipboardItem {
+            constructor(forms) { this.forms = forms; }
+        }
+        Object.defineProperty(globalThis, 'ClipboardItem', { value: FakeClipboardItem, configurable: true });
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                clipboard: {
+                    async write(items) {
+                        writtenItems = items;
+                        const blob = await items[0].forms['image/png'];
+                        return blob;
+                    },
+                },
+            },
+            configurable: true,
+        });
+
+        const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+        const promise = platform.writeClipboardImage(() => {
+            makePngCalled = true;
+            return { png: pngBytes };
+        });
+        // Clipboard.write and ClipboardItem must have been called synchronously inside the gesture,
+        // BEFORE makePng() runs on a later turn.
+        assert.equal(makePngCalled, false, 'makePng must not run synchronously on the input turn');
+        assert.equal(writtenItems?.length, 1);
+        assert.ok(writtenItems[0].forms['image/png'] instanceof Promise);
+
+        const blob = await promise;
+        assert.equal(makePngCalled, true);
+        assert.equal(blob.type, 'image/png');
+        assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), pngBytes);
+
+        // Abort from makePng rejects without resolving a blob.
+        await assert.rejects(
+            platform.writeClipboardImage(() => ({ error: 'image exceeds limit' })),
+            /image exceeds limit/,
+        );
+
+        // Browser clipboard rejection (e.g. outside user gesture) propagates.
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { clipboard: { write: () => Promise.reject(new Error('NotAllowedError')) } },
+            configurable: true,
+        });
+        await assert.rejects(
+            platform.writeClipboardImage(() => ({ png: pngBytes })),
+            /NotAllowedError/,
+        );
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        Object.defineProperty(globalThis, 'ClipboardItem', { value: origCI, configurable: true });
+    }
+});

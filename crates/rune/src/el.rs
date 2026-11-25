@@ -57,7 +57,7 @@ mod visuals;
 pub use a11y::{AutoComplete, HasPopup, LiveRegion, Orientation};
 pub(crate) use a11y::{A11y, Checked};
 pub use anchor::{Anchor, Side, anchor_rect, anchor_rect_in};
-pub(crate) use crate::clipboard::tx::{ClipboardRead, ReadFn};
+pub(crate) use crate::clipboard::tx::{ClipboardRead, CopyImageCallback, CopyImageFn, ReadFn};
 pub use crate::cursor::{Cursor, CursorImage};
 pub use direction::Direction;
 pub(crate) use direction::{DirEffect, DirEvent, Flow, Pin, mirror_anchor, mirror_side, mirror_visual, step as step_direction};

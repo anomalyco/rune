@@ -202,3 +202,42 @@ impl std::fmt::Debug for ClipboardImage {
         f.debug_struct("ClipboardImage").field("size", &self.size).field("bytes", &self.png.len()).finish()
     }
 }
+
+/// Why [`Tx::copy_image`](crate::Tx::copy_image) or
+/// [`Tx::copy_image_then`](crate::Tx::copy_image_then) did not put the image on the clipboard.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CopyImageError {
+    /// The image has not finished decoding yet.
+    NotReady,
+    /// Decoding the image failed.
+    DecodeFailed(crate::ImageError),
+    /// The image exceeded 64 megapixels or its encoded PNG exceeded [`MAX_IMAGE_BYTES`].
+    TooLarge,
+    /// A newer clipboard write (from this app or another) superseded this copy before it
+    /// wrote to the clipboard.
+    Superseded,
+    /// The OS or browser clipboard rejected or could not perform the write.
+    Failed(String),
+}
+
+impl std::fmt::Display for CopyImageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotReady => f.write_str("image is still decoding"),
+            Self::DecodeFailed(err) => write!(f, "image failed to decode: {err}"),
+            Self::TooLarge => f.write_str("image exceeds clipboard size limits"),
+            Self::Superseded => f.write_str("copy superseded by a newer clipboard write"),
+            Self::Failed(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for CopyImageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DecodeFailed(err) => Some(err),
+            _ => None,
+        }
+    }
+}
