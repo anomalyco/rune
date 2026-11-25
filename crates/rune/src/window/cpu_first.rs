@@ -19,12 +19,24 @@
 ///
 /// # Platform notes
 ///
-/// - **Windows and Linux**: applies to visible opaque windows that do not already hold a GPU
-///   device. Under [`CpuFirst::Only`], background GPU handover does not start on idle, so the
-///   window stays on `CpuPainter` unless a frame requires a GPU-only feature (such as linear
-///   blending, native video surfaces, `FontSmoothing::Slug`, `El::blur`, rotated layers, nested
-///   `El::backdrop_blur`, or a compositor effect slot), in which case Rune starts the GPU and hands
-///   over so that frame can draw. Transparent windows always open on the GPU.
+/// - **Windows**: applies to visible opaque windows that do not already hold a GPU device. Under
+///   [`CpuFirst::Auto`] with the automatic adapter policy (`WGPU_ADAPTER_NAME` unset), machines whose
+///   only DXGI/wgpu adapters are software ones (WARP) stay on `CpuPainter` instead of handing over
+///   at idle, and an opaque second window ignores any software GPU held in the shared pool by a
+///   transparent window or overlay. When a mid-session frame later requires a GPU-only feature
+///   (under either `Auto` on a software-only machine or `Only`), WARP builds off the UI thread
+///   (~1.5 s on first effect shader compile) without waiting for an idle frame, while degradable
+///   elements paint live without their GPU-only modifier (`El::blur` unblurred, `El::rotate`
+///   unrotated, nested `El::backdrop_blur` unblurred, compositor effect and native-surface slots
+///   blank, linear blending in sRGB) instead of freezing the window. Frames requiring
+///   `FontSmoothing::Slug`, Slug outline glyphs, unknown instance kinds, or a mismatched target
+///   hold the previous frame until the GPU takes over, and frame 1 stays cloaked until drawn.
+///   Hardware GPU machines, transparent windows, overlays, pinned `WGPU_ADAPTER_NAME` adapters, and
+///   [`CpuFirst::Off`] are unchanged.
+/// - **Linux**: applies to visible opaque windows that do not already hold a GPU device. Under
+///   [`CpuFirst::Only`], background GPU handover does not start on idle unless a frame requires a
+///   GPU-only feature; [`CpuFirst::Auto`] keeps background idle handover unchanged. Transparent
+///   windows always open on the GPU.
 /// - **Web (`wasm32`)**: applies to full-window apps (`App::web_document` and inline
 ///   `App::canvas_id` pages always start on the GPU). Under [`CpuFirst::Only`], the page stays on
 ///   the 2D CPU canvas and never requests WebGPU or WebGL2.
@@ -43,6 +55,11 @@ pub enum CpuFirst {
     /// Default startup: open opaque windows on the CPU while no GPU exists yet and hand over to
     /// the GPU in the background once the first frame is shown (and on full-window web pages, paint
     /// first frames on the 2D canvas until WebGPU/WebGL2 takes over).
+    ///
+    /// On Windows machines whose only adapters are software ones (WARP) with `WGPU_ADAPTER_NAME`
+    /// unset, stays on `CpuPainter` at idle and hands over lazily on the first frame that needs the
+    /// GPU. Opt out with `App::cpu_first(CpuFirst::Off)`, `RUNE_CPU_FIRST=0`, or
+    /// `WGPU_ADAPTER_NAME`.
     #[default]
     Auto,
     /// Open opaque windows on the CPU renderer and do not start background GPU handover on idle.

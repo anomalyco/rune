@@ -554,7 +554,60 @@ fn run_memory_sample(mode: &str) {
     }
 }
 
+fn bench_degraded_fallback(trigger: HandoverTrigger, expected: NeedsGpu, label: &str) {
+    let mut rt = new_runtime(ShellState { hovered: 0, trigger }, shell_view, true);
+    let mut painter = CpuPainter::new(painter_threads());
+    let mut pixels = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+
+    for i in 0..4usize {
+        rt.update(|s, _| s.hovered = i % 2);
+        rt.frame(1.0 / 60.0);
+        let _ = painter.fill_masks(&mut rt.text.atlas);
+        let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (WIDTH, HEIGHT), rt.clear_color())
+            .srgb_blend(true).fade_stops(rt.fade_stops());
+        assert_eq!(scene.needs_gpu(), Some(expected));
+        let _ = painter.paint(&scene.degraded(true), &mut Target::new(&mut pixels, WIDTH, HEIGHT))
+            .expect("degraded fallback must paint");
+    }
+
+    let (mut render_rounds, mut total_rounds) = (Vec::with_capacity(FRAME_ROUNDS), Vec::with_capacity(FRAME_ROUNDS));
+    let mut dirty = Vec::new();
+    let mut total_tiles = 0usize;
+    let n = 20usize;
+    for round in 0..FRAME_ROUNDS {
+        let (mut r, mut t) = (Vec::with_capacity(n), Vec::with_capacity(n));
+        for f in 0..n {
+            let t0 = rune::time::now();
+            rt.update(|s, _| s.hovered = (round * n + f) % 2);
+            rt.frame(1.0 / 60.0);
+            let t1 = rune::time::now();
+            let _ = painter.fill_masks(&mut rt.text.atlas);
+            let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (WIDTH, HEIGHT), rt.clear_color())
+                .srgb_blend(true).fade_stops(rt.fade_stops()).degraded(true);
+            let p = painter.paint(&scene, &mut Target::new(&mut pixels, WIDTH, HEIGHT))
+                .expect("degraded fallback must paint");
+            let t2 = rune::time::now();
+            r.push((t2 - t1).as_secs_f64() * 1e3);
+            t.push((t2 - t0).as_secs_f64() * 1e3);
+            dirty.push(p.dirty_tiles as f64);
+            total_tiles = p.tiles;
+        }
+        render_rounds.push(stats(&r).0);
+        total_rounds.push(stats(&t).0);
+    }
+
+    let (rm, rmin, rmax) = stats(&render_rounds);
+    let (tm, tmin, tmax) = stats(&total_rounds);
+    println!(
+        "SCENARIO {label} (degraded fallback, dirty={:.0}/{total_tiles} tiles): cpu_render_med={rm:.3} ms (min={rmin:.3} max={rmax:.3}) | total_med={tm:.3} ms (min={tmin:.3} max={tmax:.3})",
+        stats(&dirty).0
+    );
+}
+
 fn run_handover_sample(kind: &str) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     let (trigger, expected) = match kind {
         "rotate" => (HandoverTrigger::Rotate, NeedsGpu::TurnedLayer),
         _ => (HandoverTrigger::Blur, NeedsGpu::LayerBlur),
@@ -577,24 +630,57 @@ fn run_handover_sample(kind: &str) {
     let reason = painter.paint(&scene, &mut Target::new(&mut pixels, WIDTH, HEIGHT))
         .expect_err("NeedsGpu handover trigger frame must require GPU");
     assert_eq!(reason, expected);
+    assert!(reason.is_degradable());
 
-    let t0 = rune::time::now();
-    let gpu = Gpu::headless();
-    let t1 = rune::time::now();
-    let (mut renderer, target) = new_gpu_renderer(&gpu);
-    let t2 = rune::time::now();
-    gpu_render_runtime(&gpu, &mut renderer, &target, &mut rt);
-    let t3 = rune::time::now();
+    // Spawn off-thread cold software-GPU handover (matching win32/handover.rs) while the UI thread
+    // keeps painting live degraded CPU frames paced at ~60 Hz.
+    let instances_for_bg = rt.instances.clone();
+    let clear = rt.clear_color();
+    let done = Arc::new(AtomicBool::new(false));
+    let done_bg = done.clone();
+    let bg = std::thread::spawn(move || {
+        let t0 = rune::time::now();
+        let gpu = Gpu::headless();
+        let t1 = rune::time::now();
+        let (mut renderer, target) = new_gpu_renderer(&gpu);
+        let t2 = rune::time::now();
+        let mut atlas = rune::text::Atlas::new();
+        renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &instances_for_bg, (WIDTH, HEIGHT));
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, clear);
+        renderer.submit(&gpu.queue, enc);
+        if let Err(err) = gpu.device.poll(wgpu::PollType::wait_indefinitely()) {
+            panic!("device poll failed: {err}");
+        }
+        let t3 = rune::time::now();
+        done_bg.store(true, Ordering::Release);
+        (gpu, renderer, target, (t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3, (t3 - t2).as_secs_f64() * 1e3, (t3 - t0).as_secs_f64() * 1e3)
+    });
+
+    let mut ui_frames = 0usize;
+    let mut ui_max_ms = 0.0f64;
+    while !done.load(Ordering::Acquire) {
+        let f0 = rune::time::now();
+        rt.update(|s, _| s.hovered = ui_frames % 16);
+        rt.frame(1.0 / 60.0);
+        let _ = painter.fill_masks(&mut rt.text.atlas);
+        let degraded = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (WIDTH, HEIGHT), rt.clear_color())
+            .srgb_blend(true).fade_stops(rt.fade_stops()).degraded(true);
+        let _ = painter.paint(&degraded, &mut Target::new(&mut pixels, WIDTH, HEIGHT))
+            .expect("mid-handover degraded paint");
+        let ms = f0.elapsed().as_secs_f64() * 1e3;
+        ui_max_ms = ui_max_ms.max(ms);
+        ui_frames += 1;
+        std::thread::sleep(Duration::from_millis(16));
+    }
+
+    let (_gpu, _renderer, _target, gpu_create, renderer_new, first_frame, total) = bg.join().expect("handover bg thread");
     drop(painter);
     drop(pixels);
     let after = sample_memory();
 
     println!(
-        "HANDOVER kind={kind}|gpu_create={:.3}|renderer_new={:.3}|first_frame={:.3}|total={:.3}|before_priv={:.3}|after_priv={:.3}",
-        (t1 - t0).as_secs_f64() * 1e3,
-        (t2 - t1).as_secs_f64() * 1e3,
-        (t3 - t2).as_secs_f64() * 1e3,
-        (t3 - t0).as_secs_f64() * 1e3,
+        "HANDOVER kind={kind}|gpu_create={gpu_create:.3}|renderer_new={renderer_new:.3}|first_frame={first_frame:.3}|total={total:.3}|before_priv={:.3}|after_priv={:.3}|ui_frames={ui_frames}|ui_max_ms={ui_max_ms:.3}",
         before.private_mib,
         after.private_mib,
     );
@@ -637,8 +723,8 @@ fn bench_memory(exe: &std::path::Path) {
 }
 
 fn bench_cold_handover(exe: &std::path::Path, kind: &str, label: &str) {
-    let (mut create_ms, mut renderer_ms, mut frame_ms, mut total_ms, mut before_p, mut after_p) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut create_ms, mut renderer_ms, mut frame_ms, mut total_ms, mut before_p, mut after_p, mut ui_frames, mut ui_max) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for _ in 0..HANDOVER_ROUNDS {
         let out = Command::new(exe).args(["--sample-handover", kind]).output().expect("spawn handover sample");
         assert!(out.status.success(), "handover sample failed ({kind}): {}", String::from_utf8_lossy(&out.stderr));
@@ -650,11 +736,13 @@ fn bench_cold_handover(exe: &std::path::Path, kind: &str, label: &str) {
         total_ms.push(parse_kv(rest, "total="));
         before_p.push(parse_kv(rest, "before_priv="));
         after_p.push(parse_kv(rest, "after_priv="));
+        ui_frames.push(parse_kv(rest, "ui_frames="));
+        ui_max.push(parse_kv(rest, "ui_max_ms="));
     }
     let (tm, tmin, tmax) = stats(&total_ms);
     println!(
-        "SCENARIO cold_handover_{kind} ({HANDOVER_ROUNDS} fresh processes, {label}): total_med={tm:.2} ms (min={tmin:.2} max={tmax:.2}) [gpu_create_med={:.2} ms, renderer_new_med={:.2} ms, first_frame_med={:.2} ms] | priv_med before={:.2} MiB after={:.2} MiB",
-        stats(&create_ms).0, stats(&renderer_ms).0, stats(&frame_ms).0, stats(&before_p).0, stats(&after_p).0
+        "SCENARIO cold_handover_{kind} ({HANDOVER_ROUNDS} fresh processes, {label}): total_med={tm:.2} ms (min={tmin:.2} max={tmax:.2}) [gpu_create_med={:.2} ms, renderer_new_med={:.2} ms, first_frame_med={:.2} ms] | ui_live_frames_med={:.0} ui_frame_max={:.3} ms | priv_med before={:.2} MiB after={:.2} MiB",
+        stats(&create_ms).0, stats(&renderer_ms).0, stats(&frame_ms).0, stats(&ui_frames).0, stats(&ui_max).2, stats(&before_p).0, stats(&after_p).0
     );
 }
 
@@ -690,6 +778,8 @@ fn main() {
     bench_scroll(&gpu, false, "scroll", 20);
     bench_spring(&gpu);
     bench_scroll(&gpu, true, "backdrop_blur", 10);
+    bench_degraded_fallback(HandoverTrigger::Blur, NeedsGpu::LayerBlur, "degraded_blur");
+    bench_degraded_fallback(HandoverTrigger::Rotate, NeedsGpu::TurnedLayer, "degraded_rotate");
 
     let exe = std::env::current_exe().expect("current_exe");
     bench_memory(&exe);

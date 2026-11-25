@@ -72,6 +72,9 @@ pub struct Scene<'a> {
     half: HalfRounding,
     /// Packed explicit scroll-fade stops (`Runtime::fade_stops`), matching `Globals::flags[2..4]`.
     fade_stops: [f32; 2],
+    /// When true, degradable GPU-only features paint live without their GPU-only modifier while a
+    /// mid-session GPU handover builds off the UI thread (`NeedsGpu::is_degradable`).
+    degraded: bool,
 }
 
 /// How a GPU stores a float into an `Rgba16Float` target. Vendors differ, and a layer's pixels
@@ -113,6 +116,7 @@ struct Flags {
     smoothing: Option<FontSmoothing>,
     half: HalfRounding,
     fade_stops: [u32; 2],
+    degraded: bool,
 }
 
 /// An image atlas page: RGBA8 texels, `width * 4` bytes a row.
@@ -131,7 +135,7 @@ impl<'a> Scene<'a> {
     pub fn new(instances: &'a [Instance], atlas: &'a Atlas, images: &'a ImageAtlas, size: (u32, u32), clear: [f32; 4]) -> Self {
         let glyph_pages = (0..atlas.page_count()).filter_map(|p| atlas.page_data(p)).collect();
         let images = images.pages.iter().map(|p| Image { width: p.width, data: &p.data, dirty: p.dirty }).collect();
-        Scene { instances, glyph_pages, outlines: Some(&atlas.outlines), images, size, clear, lcd: atlas.lcd, srgb_blend: true, native_surfaces: false, compositor: false, smoothing: None, atlas_resets: atlas.resets(), half: HalfRounding::default(), fade_stops: [0.0; 2] }
+        Scene { instances, glyph_pages, outlines: Some(&atlas.outlines), images, size, clear, lcd: atlas.lcd, srgb_blend: true, native_surfaces: false, compositor: false, smoothing: None, atlas_resets: atlas.resets(), half: HalfRounding::default(), fade_stops: [0.0; 2], degraded: false }
     }
 
     /// Packed explicit scroll-fade stops (`Runtime::fade_stops`).
@@ -167,9 +171,34 @@ impl<'a> Scene<'a> {
         self
     }
 
+    /// Allows painting degradable GPU-only features live without their GPU-only modifier
+    /// (`LayerBlur` unblurred, `TurnedLayer` unrotated, nested `BackdropBlur` unblurred, `Effect`
+    /// and `NativeSurface` blank, `LinearBlend` in sRGB) instead of refusing the frame.
+    ///
+    /// Non-degradable reasons (`NeedsGpu::SlugText`, `NeedsGpu::OutlineGlyph`,
+    /// `NeedsGpu::UnknownKind`, `NeedsGpu::Target`) still fail so the caller keeps the previous
+    /// frame until the GPU takes over.
+    ///
+    /// ```
+    /// use rune::render::cpu_boot::{CpuPainter, NeedsGpu, Scene, Target};
+    /// use rune::{Color, Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_, _| el().size(32.0, 32.0).fill(Color::WHITE).blur(8.0), (32.0, 32.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// let mut buf = vec![0u8; 32 * 32 * 4];
+    /// let mut painter = CpuPainter::new(1);
+    /// let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (32, 32), rt.clear_color());
+    /// assert_eq!(scene.needs_gpu(), Some(NeedsGpu::LayerBlur));
+    /// assert!(painter.paint(&scene.degraded(true), &mut Target::new(&mut buf, 32, 32)).is_ok());
+    /// ```
+    pub fn degraded(mut self, allow: bool) -> Self {
+        self.degraded = allow;
+        self
+    }
+
     /// The scene-wide switches, which a frame that only recolours keeps.
     fn flags(&self) -> Flags {
-        Flags { srgb_blend: self.srgb_blend, native_surfaces: self.native_surfaces, compositor: self.compositor, lcd: self.lcd, smoothing: self.smoothing, half: self.half, fade_stops: [self.fade_stops[0].to_bits(), self.fade_stops[1].to_bits()] }
+        Flags { srgb_blend: self.srgb_blend, native_surfaces: self.native_surfaces, compositor: self.compositor, lcd: self.lcd, smoothing: self.smoothing, half: self.half, fade_stops: [self.fade_stops[0].to_bits(), self.fade_stops[1].to_bits()], degraded: self.degraded }
     }
 
     /// How the GPU that will take over rounds half floats (`HalfRounding::of_vendor`).
@@ -208,6 +237,29 @@ impl<'a> Scene<'a> {
             None => Some(NeedsGpu::UnknownKind),
         })
     }
+
+    /// The first reason this scene cannot paint in its current mode: identical to
+    /// [`Scene::needs_gpu`] when `degraded` is false, or only non-degradable reasons
+    /// (`SlugText`, `OutlineGlyph`, `UnknownKind`) when `degraded` is true.
+    pub(super) fn blocking_needs_gpu(&self) -> Option<NeedsGpu> {
+        if !self.degraded {
+            return self.needs_gpu();
+        }
+        if self.smoothing == Some(FontSmoothing::Slug) {
+            return Some(NeedsGpu::SlugText);
+        }
+        self.instances.iter().find_map(|i| match i.kind() {
+            Some(Kind::Glyph)
+                if i.radii[3] > 0.0
+                    && (self.outlines.is_none()
+                        || i.border[3] == super::instance::shader_consts::OUTLINE_MODE_SLUG as f32) =>
+            {
+                Some(NeedsGpu::OutlineGlyph)
+            }
+            Some(_) => None,
+            None => Some(NeedsGpu::UnknownKind),
+        })
+    }
 }
 
 /// Why a frame needs the GPU.
@@ -233,6 +285,35 @@ pub enum NeedsGpu {
     UnknownKind,
     /// The target isn't the scene's size, or its buffer is too small.
     Target,
+}
+
+impl NeedsGpu {
+    /// Whether a live CPU fallback frame can paint without this GPU-only feature while a
+    /// mid-session GPU handover builds off the UI thread.
+    ///
+    /// Degradable reasons paint without their GPU-only modifier (`LayerBlur` unblurred,
+    /// `TurnedLayer` unrotated, nested `BackdropBlur` unblurred, `Effect` and `NativeSurface`
+    /// blank, `LinearBlend` in sRGB). Non-degradable reasons (`SlugText`, `OutlineGlyph`,
+    /// `UnknownKind`, `Target`) keep the previous frame until the GPU takes over.
+    ///
+    /// ```
+    /// use rune::render::cpu_boot::NeedsGpu;
+    ///
+    /// assert!(NeedsGpu::LayerBlur.is_degradable());
+    /// assert!(NeedsGpu::TurnedLayer.is_degradable());
+    /// assert!(!NeedsGpu::SlugText.is_degradable());
+    /// ```
+    pub const fn is_degradable(self) -> bool {
+        matches!(
+            self,
+            Self::LinearBlend
+                | Self::NativeSurface
+                | Self::LayerBlur
+                | Self::TurnedLayer
+                | Self::BackdropBlur
+                | Self::Effect
+        )
+    }
 }
 
 /// Where `paint` writes: `width × height` pixels, four bytes each in memory order B, G, R, A,
@@ -285,7 +366,7 @@ pub struct Report {
 /// Paints `scene` into `target` on `threads` threads (the calling one among them), or says why
 /// only the GPU can.
 pub fn paint(scene: &Scene<'_>, target: &mut Target<'_>, threads: usize) -> Result<Report, NeedsGpu> {
-    if let Some(why) = scene.needs_gpu() { return Err(why); }
+    if let Some(why) = scene.blocking_needs_gpu() { return Err(why); }
     check_target(scene, target)?;
     let start = crate::time::now();
     let bins = bin::Bins::of(scene);

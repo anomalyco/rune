@@ -14,7 +14,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
 use super::covered_draw::{CoveredDraw, CoveredDrawEvent};
-use super::handover::{GpuJob, SurfaceMode, warm_instances};
+use super::handover::{GpuJob, NeedsGpuFrameAction, SurfaceMode, needs_gpu_frame_action, warm_instances};
 use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, RenderPrep, StepInfo};
 use crate::platform::win32::dib::{Blit, Dib, Prefault};
@@ -44,6 +44,9 @@ pub(in crate::window) struct Cpu {
     pub(super) shown: Shown,
     /// Until the first frame is painted: the window shows with it, then, activating when `true`.
     show: Option<bool>,
+    /// Whether the most recently painted CPU frame used degraded fallback mode (so `count_drift`
+    /// is skipped when the GPU takes over).
+    pub(super) degraded: bool,
 }
 
 /// What a CPU window has of its buffer. GDI draws nothing into a hidden window, so the first
@@ -124,12 +127,44 @@ fn painter_threads() -> usize {
     std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 6)
 }
 
+/// Pure Windows rule for whether a window opens on the CPU renderer.
+///
+/// Under `CpuFirst::Auto` + `Policy::Automatic`, a live `DeviceType::Cpu` (WARP) device in
+/// `gpu_pool` (created by a transparent window or overlay) does not pull a second opaque window
+/// onto WARP. Hardware pool GPUs, pinned adapters, transparent windows, overlays, `CpuFirst::Off`,
+/// and `CpuFirst::Only` behave identically to before.
+pub(super) const fn win32_opens_on_cpu(
+    mode: crate::window::CpuFirst,
+    policy: crate::gpu::fallback::Policy,
+    transparent: bool,
+    has_gpu: bool,
+    pool_gpu: Option<wgpu::DeviceType>,
+) -> bool {
+    let live_pool_gpu = match (mode, policy, pool_gpu) {
+        (crate::window::CpuFirst::Auto, crate::gpu::fallback::Policy::Automatic, Some(wgpu::DeviceType::Cpu)) => false,
+        (_, _, Some(_)) => true,
+        (_, _, None) => false,
+    };
+    mode.opens_on_cpu(transparent, has_gpu, live_pool_gpu)
+}
+
 /// Whether a window opens on the CPU: an opaque window without its own GPU, following
 /// [`Host::effective_cpu_first`] (`RUNE_CPU_FIRST` overrides `App::cpu_first` /
 /// `WindowSpec::cpu_first`).
 pub(in crate::window) fn opens_on_cpu(host: &Host) -> bool {
-    let live_pool_gpu = host.gpu_pool.borrow().upgrade().is_some_and(|gpu| !gpu.is_lost());
-    host.effective_cpu_first().opens_on_cpu(host.options.transparent, host.gpu.is_some(), live_pool_gpu)
+    let pool_gpu = host
+        .gpu_pool
+        .borrow()
+        .upgrade()
+        .filter(|gpu| !gpu.is_lost())
+        .map(|gpu| gpu.adapter.get_info().device_type);
+    win32_opens_on_cpu(
+        host.effective_cpu_first(),
+        crate::gpu::pick::env_policy(),
+        host.options.transparent,
+        host.gpu.is_some(),
+        pool_gpu,
+    )
 }
 
 impl Host {
@@ -189,7 +224,7 @@ impl Host {
         *self.native_handle.native.window.lock().unwrap() = Arc::downgrade(&window);
         self.native_handle.native.number.store(native_window_number(&window).unwrap_or(0), Ordering::Release);
         let native = {
-            let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing, show: Some(focus) }, job: GpuJob::Waiting { tries: 0, retry_at: None } };
+            let mode = SurfaceMode::Cpu { cpu: Cpu { buffer: Buffer::Touching(prefault, capacity), painter, half, shown: Shown::Nothing, show: Some(focus), degraded: false }, job: GpuJob::Waiting { tries: 0, retry_at: None } };
             Native { cloak, frame, mode, a11y_start, ..Default::default() }
         };
         self.win = Some(Win {
@@ -371,6 +406,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         let Some(l) = self.host.win.as_mut() else { return RenderPrep::Abort };
         let (width, height) = (l.config.width, l.config.height);
         let rt = self.host.app.rt_mut();
+        let handing_over = matches!(l.native.mode, SurfaceMode::HandingOver { .. });
         let (SurfaceMode::Cpu { cpu, .. } | SurfaceMode::HandingOver { cpu, .. }) = &mut l.native.mode else { return RenderPrep::Abort };
         cpu.painter.fill_masks(&mut rt.text.atlas);
         crate::marks::mark_once(&FIRST_MASKS, "frame.first.masks");
@@ -388,17 +424,47 @@ impl FrameHost for CpuWindowFrame<'_> {
             return RenderPrep::Abort;
         };
         let stride = dib.stride();
-        match painter.paint(&scene, &mut Target::with_stride(dib.bytes(), width, height, stride)) {
+        let paint_result = painter.paint(&scene, &mut Target::with_stride(dib.bytes(), width, height, stride));
+        match paint_result {
             Ok(painted) => {
+                cpu.degraded = false;
                 crate::marks::mark_once(&FIRST_PAINT, "frame.first.painted");
                 RenderPrep::Ready(Some(painted.rects))
             }
-            Err(_why) => {
-                // The frame needs what only the GPU draws (a native surface, a compositor's scene):
-                // the GPU starts now if it hasn't, and the window keeps its last frame until then.
-                if !matches!(self.host.win.as_ref().map(|w| &w.native.mode), Some(SurfaceMode::HandingOver { .. })) {
+            Err(why) => {
+                let first_frame_ready = l.first_frame.ready();
+                let action = needs_gpu_frame_action(first_frame_ready, why);
+                // Mid-session degradable NeedsGpu frames paint live without their GPU-only
+                // modifier while the GPU builds off the UI thread, avoiding a full-window freeze.
+                // Frame 1 stays cloaked; SlugText/OutlineGlyph/UnknownKind/Target hold the last frame.
+                let degraded_rects = if action == NeedsGpuFrameAction::PaintDegraded {
+                    let degraded_scene = scene.degraded(true);
+                    let Cpu { buffer, painter, degraded, .. } = &mut *cpu;
+                    match buffer {
+                        Buffer::Ready(dib) => {
+                            let stride = dib.stride();
+                            match painter.paint(&degraded_scene, &mut Target::with_stride(dib.bytes(), width, height, stride)) {
+                                Ok(painted) => {
+                                    *degraded = true;
+                                    crate::marks::mark("cpu_first.degraded_paint");
+                                    Some(painted.rects)
+                                }
+                                Err(_non_degradable) => None,
+                            }
+                        }
+                        Buffer::Touching(..) | Buffer::Missing => None,
+                    }
+                } else {
+                    None
+                };
+                if !handing_over {
                     crate::marks::mark("cpu_first.needs_gpu");
-                    self.host.start_gpu(false);
+                    self.host.start_gpu_for_needs_gpu();
+                }
+                if let Some(rects) = degraded_rects {
+                    return RenderPrep::Ready(Some(rects));
+                }
+                if !handing_over {
                     self.host.idle = false;
                     if let Some(l) = self.host.win.as_mut() { l.backoff_step(BackoffEvent::At(crate::time::now() + TIMER_FRAME)); }
                     return RenderPrep::Abort;

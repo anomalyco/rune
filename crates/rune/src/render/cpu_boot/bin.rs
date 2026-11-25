@@ -189,11 +189,26 @@ impl Bins {
         }
         let mut blurs = Vec::new();
         let mut quiet = vec![false; tiles];
-        for (n, i) in scene.instances.iter().enumerate().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur)) {
-            bounds[n] = super::backdrop::bounds(i, (w, h));
-            let Some(rec) = super::backdrop::plan(i, (w, h)) else { continue };
-            for t in region_tiles(rec.region, cols, rows) { quiet[t] = true; }
-            blurs.push((n as u32, rec));
+        let mut layer_depth = 0u32;
+        for (n, i) in scene.instances.iter().enumerate() {
+            match i.kind() {
+                Some(Kind::Layer) => layer_depth += 1,
+                Some(Kind::LayerEnd) => layer_depth = layer_depth.saturating_sub(1),
+                Some(Kind::BackdropBlur) => {
+                    // A backdrop blur nested inside a layer scope cannot split the rasterizer's
+                    // phase loop without resetting open layer scratch tiles; in degraded fallback
+                    // mode skip the blur record so the element paints unblurred.
+                    if layer_depth > 0 {
+                        bounds[n] = [0; 4];
+                        continue;
+                    }
+                    bounds[n] = super::backdrop::bounds(i, (w, h));
+                    let Some(rec) = super::backdrop::plan(i, (w, h)) else { continue };
+                    for t in region_tiles(rec.region, cols, rows) { quiet[t] = true; }
+                    blurs.push((n as u32, rec));
+                }
+                _ => {}
+            }
         }
         // The last opaque instance covering each tile whole, plus one (0: none).
         let mut first = vec![0u32; tiles];
