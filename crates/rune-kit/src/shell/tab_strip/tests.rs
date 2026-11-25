@@ -362,3 +362,50 @@ fn a_drag_stops_at_a_break() {
         assert_eq!(rt.state.moves, [(0, 1), (3, 2)], "{orientation:?}: the last tab goes as far as the break before the third");
     }
 }
+
+#[test]
+fn arrow_keys_cross_a_break() {
+    #[derive(Default)]
+    struct S {
+        vertical: bool,
+        drag: TabDragState,
+        selected: Vec<String>,
+    }
+    fn view(s: &S, _: &mut rune::Cx<S>) -> El {
+        let k = Kit::neutral(true);
+        let tabs = (0..4).map(|i| TabItem::new(format!("tab{i}"), format!("Tab {i}")));
+        let (orientation, mark, length) = match s.vertical {
+            true => (TabOrientation::Vertical, rune::el().key("mid").w_full().h(20.0), 20.0),
+            false => (TabOrientation::Horizontal, rune::el().key("mid").size(1.0, 16.0), 1.0),
+        };
+        let strip = TabStrip::new("strip", orientation)
+            .tabs(tabs)
+            .viewport_width(Some(600.0))
+            .breaks([TabBreak::new("mid", 2, mark, length)])
+            .drag_state(&s.drag, |s: &mut S| &mut s.drag)
+            .on_select(|s: &mut S, id, _| s.selected.push(id.to_owned()))
+            .build(&k);
+        col().size(600.0, 400.0).child(strip)
+    }
+    for vertical in [false, true] {
+        let mut rt = rune::Runtime::new(S { vertical, ..S::default() }, view, (600.0, 400.0), rune::Env::new(true, 1.0));
+        for _ in 0..40 {
+            rt.frame(1.0 / 60.0);
+        }
+        // A press on the second tab, the last before the break, selects and focuses it.
+        let r = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("t-tab1")).expect("tab1").rect;
+        let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.selected, ["tab1"], "vertical: {vertical}");
+        rt.state.selected.clear();
+        // The arrow takes the focus to the third tab, past the break, and Space selects it there.
+        rt.key(rune::KeyEvent { key: if vertical { rune::Key::Down } else { rune::Key::Right }, mods: rune::Mods::default() });
+        rt.frame(1.0 / 60.0);
+        rt.key(rune::KeyEvent { key: rune::Key::Text(" ".into()), mods: rune::Mods::default() });
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.selected, ["tab2"], "vertical: {vertical}: the arrow crosses the break");
+    }
+}
