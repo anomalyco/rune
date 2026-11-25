@@ -656,6 +656,115 @@ fn fx_blend_modes_over_cream_paper_and_fallback_without_backdrop() {
     }
 }
 
+fn lens_veil_scene(_: &(), _: &mut Cx<()>) -> El {
+    el().size(96.0, 96.0)
+        .fill(hex("#e8f4ff").unwrap())
+        .child(effect(1).effect_backdrop(true).absolute(16.0, 16.0).size(64.0, 64.0).radius(16.0))
+}
+
+fn veil_lens(veil: f32, presence: f32) -> Fx {
+    Fx::lens(LensParams {
+        depth: 0.0,
+        magnification: 1.0,
+        shadow: 0.0,
+        rim: 1.6,
+        tint: rgb(0x18181b),
+        veil,
+        presence,
+        ..Default::default()
+    })
+}
+
+#[test]
+fn lens_veil_mixes_tint_under_rim_light_and_scales_with_presence() {
+    for srgb in [false, true] {
+        let (w, base) = snap_with("veil-0", lens_veil_scene, srgb, Arc::default(), 1, || veil_lens(0.0, 1.0));
+        let (_, mid) = snap_with("veil-60", lens_veil_scene, srgb, Arc::default(), 1, || veil_lens(0.6, 1.0));
+        let (_, full) = snap_with("veil-100", lens_veil_scene, srgb, Arc::default(), 1, || veil_lens(1.0, 1.0));
+        let (_, absent) = snap_with("veil-p0", lens_veil_scene, srgb, Arc::default(), 1, || veil_lens(0.6, 0.0));
+
+        // Default veil == 0.0 matches explicit default lens bit-identically.
+        let (_, default_lens) = snap_with("veil-def", lens_veil_scene, srgb, Arc::default(), 1, || {
+            Fx::lens(LensParams { depth: 0.0, magnification: 1.0, shadow: 0.0, rim: 1.6, tint: rgb(0x18181b), ..Default::default() })
+        });
+        assert_eq!(base, default_lens, "srgb={srgb}: default veil=0 must draw bit-identically");
+
+        // Interior darkens monotonically toward #18181b (24, 24, 27) as veil increases.
+        let p0 = px(&base, w, 48, 48);
+        let p60 = px(&mid, w, 48, 48);
+        let p100 = px(&full, w, 48, 48);
+        assert!(
+            p0[0] > p60[0] + 40 && p60[0] > p100[0] + 40,
+            "srgb={srgb}: interior darkens with veil: 0.0={p0:?}, 0.6={p60:?}, 1.0={p100:?}"
+        );
+        assert!(
+            p100[0] <= 40 && p100[1] <= 40 && p100[2] <= 45,
+            "srgb={srgb}: veil=1.0 reaches dark tint #18181b: {p100:?}"
+        );
+
+        // Rim light sits above the veil: the lit top rim at (48, 17) stays distinctly brighter than the dark body.
+        let rim_px = px(&full, w, 48, 17);
+        assert!(
+            rim_px[0] > p100[0] + 45 && rim_px[1] > p100[1] + 45 && rim_px[2] > p100[2] + 45,
+            "srgb={srgb}: specular rim stays visible over veil=1.0: rim={rim_px:?} vs body={p100:?}"
+        );
+
+        // At presence = 0, veil does not paint over the backdrop (#e8f4ff = 232, 244, 255).
+        let p_absent = px(&absent, w, 48, 48);
+        assert!(
+            p_absent[0].abs_diff(0xe8) <= 3 && p_absent[1].abs_diff(0xf4) <= 3 && p_absent[2].abs_diff(0xff) <= 3,
+            "srgb={srgb}: presence=0 suppresses veil: {p_absent:?}"
+        );
+    }
+}
+
+fn wide_step_lens_scene(_: &(), _: &mut Cx<()>) -> El {
+    el().size(96.0, 96.0)
+        .fill(hex("#202020").unwrap())
+        .child(el().absolute(0.0, 0.0).size(48.0, 96.0).fill(hex("#00e5ff").unwrap()))
+        .child(effect(1).effect_backdrop(true).absolute(8.0, 8.0).size(80.0, 80.0))
+}
+
+fn sigma_lens(frost_sigma: f32) -> Fx {
+    Fx::lens(LensParams {
+        frost: 1.0,
+        frost_sigma,
+        depth: 0.0,
+        magnification: 1.0,
+        shadow: 0.0,
+        rim: 0.0,
+        ..Default::default()
+    })
+}
+
+#[test]
+fn lens_frost_sigma_widens_blur_monotonically_above_18_pt() {
+    // Render at 2x scale (192x192 device px) so 32 pt = 64 device px reaches the blur pyramid's top mip.
+    let (w, s0) = snap_with("sigma-0", wide_step_lens_scene, false, Arc::default(), 2, || sigma_lens(0.0));
+    let (_, s6) = snap_with("sigma-6", wide_step_lens_scene, false, Arc::default(), 2, || sigma_lens(6.0));
+    let (_, s18) = snap_with("sigma-18", wide_step_lens_scene, false, Arc::default(), 2, || sigma_lens(18.0));
+    let (_, s18_def) = snap_with("sigma-def", wide_step_lens_scene, false, Arc::default(), 2, || {
+        Fx::lens(LensParams { frost: 1.0, depth: 0.0, magnification: 1.0, shadow: 0.0, rim: 0.0, ..Default::default() })
+    });
+    let (_, s32) = snap_with("sigma-32", wide_step_lens_scene, false, Arc::default(), 2, || sigma_lens(32.0));
+
+    assert_eq!(s18, s18_def, "default frost_sigma must match explicit 18.0 pt bit-identically");
+
+    // Zero sigma keeps the x=48 pt (px=96) step sharp (no fallback spiral blur across x=52 pt / px=104).
+    let sharp = px(&s0, w, 104, 96);
+    assert!(sharp[0].abs_diff(32) <= 4 && sharp[2].abs_diff(32) <= 4, "frost_sigma=0 stays sharp: {sharp:?}");
+
+    // At x = 68 pt (px = 136, 20 pt = 40 device px past the cyan step), cyan bleeds further as sigma grows:
+    // 6 pt < 18 pt < 32 pt.
+    let p6 = px(&s6, w, 136, 96);
+    let p18 = px(&s18, w, 136, 96);
+    let p32 = px(&s32, w, 136, 96);
+    assert!(
+        p6[2] + 8 < p18[2] && p18[2] + 8 < p32[2],
+        "cyan spread at 20 pt past step grows monotonically with frost_sigma: 6pt={p6:?}, 18pt={p18:?}, 32pt={p32:?}"
+    );
+}
+
 /// Writes `demo/fx/in-layer.png`: a fill in a faded, rounded, clipped card, linear blend on the
 /// left and gamma blend on the right. `cargo test -p rune-fx --test integration in_layer:: -- --ignored`.
 #[test]

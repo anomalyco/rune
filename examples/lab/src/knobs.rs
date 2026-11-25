@@ -3,7 +3,7 @@
 
 use std::sync::OnceLock;
 
-use rune_fx::{ElectricParams, FireParams, GlowParams, Knob, MotionBlurParams, PulseParams};
+use rune_fx::{ElectricParams, FireParams, GlowParams, Knob, LensParams, MotionBlurParams, PulseParams};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Scene {
@@ -200,6 +200,8 @@ fn build(scene: Scene) -> Vec<KnobSpec> {
             sl("dispersion", "Dispersion", 0.0, 0.5, 0.14, 2),
             sl("magnification", "Magnification", 0.9, 1.3, 1.04, 2),
             sl("frost", "Frost", 0.0, 1.0, 0.0, 2),
+            sl("frost_sigma", "Frost sigma", 0.0, 32.0, LensParams::DEFAULT_FROST_SIGMA, 0),
+            sl("veil", "Veil", 0.0, 1.0, 0.0, 2),
             tg("crt", "CRT terminal", true),
         ],
         Scene::Extras => vec![
