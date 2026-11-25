@@ -458,3 +458,345 @@ fn a_frame_still_on_its_way_to_the_display_waits_for_a_tick() {
     assert_eq!(opportunity(None, Some(ms(100)), Some(ms(100)), ms(118), Duration::from_millis(16)), Opportunity::Wait);
     assert_eq!(opportunity(Some(ms(116)), Some(ms(100)), Some(ms(108)), ms(102), period), Opportunity::Wait);
 }
+
+/// Runs a continuous animating stream on `core` for `ticks` hardware ticks at `hw_period`,
+/// calling `before_tick(index, tick_at)` before each tick's `claim`. Returns
+/// `(draws, waits)` for the ticks in `count_range`.
+fn drive_stream(
+    core: &mut DisplayLinkCore,
+    t0: Instant,
+    hw_period: Duration,
+    frame_work: Duration,
+    ticks: u32,
+    count_range: std::ops::Range<u32>,
+    mut before_tick: impl FnMut(&mut DisplayLinkCore, u32, Instant),
+) -> (u32, u32) {
+    let _ = core.start();
+    let mut draws = 0u32;
+    let mut waits = 0u32;
+    for i in 0..ticks {
+        let now = t0 + hw_period * i;
+        let target = now + hw_period;
+        before_tick(core, i, now);
+        match core.claim(Some(target), now) {
+            Opportunity::Tick(_) | Opportunity::Now => {
+                core.presented(now + frame_work);
+                if count_range.contains(&i) {
+                    draws += 1;
+                }
+            }
+            Opportunity::Wait => {
+                if count_range.contains(&i) {
+                    waits += 1;
+                }
+            }
+        }
+    }
+    (draws, waits)
+}
+
+#[test]
+fn ambient_fps_default_paces_every_120hz_tick_bit_identically() {
+    let t0 = crate::time::now();
+    let period_120 = Duration::from_nanos(1_000_000_000 / 120);
+    let frame_work = Duration::from_micros(900);
+    let mut core = DisplayLinkCore::new(period_120);
+
+    assert_eq!(core.frame_period_at(t0), core.frame_period());
+    assert!((core.refresh_hz() - 120.0).abs() < 0.1);
+
+    let (draws, waits) = drive_stream(&mut core, t0, period_120, frame_work, 120, 0..120, |_, _, _| {});
+    assert_eq!(draws, 120, "default uncapped pacing must draw every 120 Hz tick with no input");
+    assert_eq!(waits, 0, "default uncapped pacing must never skip a 120 Hz tick");
+    assert_eq!(core.coast(), Effects::one(LinkEffect::ArmCoast { ticks_left: 18 }));
+}
+
+#[test]
+fn ambient_fps_60_skips_alternate_120hz_ticks_and_coasts_to_stopped() {
+    let t0 = crate::time::now();
+    let period_120 = Duration::from_nanos(1_000_000_000 / 120);
+    let frame_work = Duration::from_micros(900);
+    let mut sim = SimLink::new(period_120);
+    sim.core.set_ambient_period(crate::app::ambient_period_from_fps(60.0));
+
+    // Unsteered streaming for 1 second (120 hardware ticks): alternates Tick and Wait -> 60 draws.
+    let mut pattern = Vec::new();
+    let _ = sim.core.start();
+    sim.apply(Effects::one(LinkEffect::StartLink), t0);
+    for i in 0..120u32 {
+        let now = t0 + period_120 * i;
+        let target = now + period_120;
+        let opp = sim.core.claim(Some(target), now);
+        pattern.push(matches!(opp, Opportunity::Tick(_)));
+        if matches!(opp, Opportunity::Tick(_) | Opportunity::Now) {
+            sim.total_draws += 1;
+            sim.total_presents += 1;
+            sim.core.presented(now + frame_work);
+        } else {
+            sim.wait_opportunities += 1;
+        }
+    }
+    assert_eq!(sim.total_draws, 60, "ambient_fps(60.0) on 120 Hz must draw 60 frames/s");
+    assert_eq!(sim.wait_opportunities, 60, "ambient_fps(60.0) on 120 Hz must skip alternate ticks");
+    for (i, drew) in pattern.iter().enumerate() {
+        assert_eq!(*drew, i % 2 == 0, "tick {i} must alternate Tick / Wait");
+    }
+
+    // Streaming stops: coast() budgets ~150 ms from hardware self.period (18 ticks, not 9),
+    // draws/presents zero times while coasting, and stops cleanly to Stopped.
+    let end_t = t0 + period_120 * 120;
+    let coast = sim.core.coast();
+    assert_eq!(coast, Effects::one(LinkEffect::ArmCoast { ticks_left: 18 }));
+    sim.apply(coast, end_t);
+    sim.next_hw_tick = Some(end_t + period_120);
+    let draws_before_coast = sim.total_draws;
+    let presents_before_coast = sim.total_presents;
+    sim.advance_until(end_t + Duration::from_millis(250), frame_work, |_| {});
+    assert_eq!(sim.core.state(), LinkState::Stopped, "ambient link must stop cleanly after ~150 ms coasting");
+    assert_eq!(sim.hw_stops, 1);
+    assert_eq!(sim.coasting_ticks, 18);
+    assert_eq!(sim.total_draws, draws_before_coast, "coasting must draw nothing");
+    assert_eq!(sim.total_presents, presents_before_coast, "coasting must present nothing");
+    assert_eq!(sim.draws_during_coast, 0);
+    assert_eq!(sim.presents_during_coast, 0);
+    assert_eq!(sim.draws_on_expiry, 0);
+    assert_eq!(sim.presents_on_expiry, 0);
+}
+
+#[test]
+fn ambient_fps_input_lifts_cap_on_next_120hz_tick() {
+    let t0 = crate::time::now();
+    let period_120 = Duration::from_nanos(1_000_000_000 / 120);
+    let frame_work = Duration::from_micros(900);
+    let mut core = DisplayLinkCore::new(period_120);
+    core.set_ambient_period(crate::app::ambient_period_from_fps(60.0));
+    let _ = core.start();
+
+    // Tick 0 draws, tick 1 is skipped under ambient 60 Hz, tick 2 draws.
+    assert!(matches!(core.claim(Some(t0 + period_120), t0), Opportunity::Tick(_)));
+    core.presented(t0 + frame_work);
+    assert_eq!(core.claim(Some(t0 + period_120 * 2), t0 + period_120), Opportunity::Wait);
+    assert!(matches!(core.claim(Some(t0 + period_120 * 3), t0 + period_120 * 2), Opportunity::Tick(_)));
+    core.presented(t0 + period_120 * 2 + frame_work);
+
+    // Input arrives before tick 3 (which ambient 60 Hz would have skipped): cap lifts immediately.
+    core.note_input(t0 + period_120 * 2 + Duration::from_millis(4));
+    assert!(
+        matches!(core.claim(Some(t0 + period_120 * 4), t0 + period_120 * 3), Opportunity::Tick(_)),
+        "input must lift the ambient cap on the very next 120 Hz tick"
+    );
+    core.presented(t0 + period_120 * 3 + frame_work);
+    assert!(
+        matches!(core.claim(Some(t0 + period_120 * 5), t0 + period_120 * 4), Opportunity::Tick(_)),
+        "subsequent steered ticks must stay at 120 Hz"
+    );
+}
+
+#[test]
+fn ambient_fps_never_caps_pointer_drag_wheel_scroll_key_or_touch_following_finger() {
+    let t0 = crate::time::now();
+    let period_120 = Duration::from_nanos(1_000_000_000 / 120);
+    let frame_work = Duration::from_micros(900);
+    let cap_60 = crate::app::ambient_period_from_fps(60.0);
+
+    // Each input modality drives motion for 2.5 s (300 ticks, past both 600 ms and 2 s),
+    // followed by a 1.2 s unbroken glide/spring tail after release (144 ticks).
+    for (label, input_every_ticks) in [
+        ("pointer drag", 2u32),         // ~60 Hz mouse moves while dragging
+        ("wheel/trackpad scroll", 1u32),// 120 Hz wheel deltas + glide tail
+        ("keyboard input", 4u32),       // ~30 Hz key repeats
+        ("touch / finger spring", 1u32),// 120 Hz touch moves + spring settle tail
+    ] {
+        let mut core = DisplayLinkCore::new(period_120);
+        core.set_ambient_period(cap_60);
+        let active_ticks = 300u32; // 2.5 s of active user steering
+        let tail_ticks = 144u32;   // 1.2 s unbroken settle/glide after last input (< 2 s max)
+        let total = active_ticks + tail_ticks;
+
+        let (draws, waits) = drive_stream(
+            &mut core,
+            t0,
+            period_120,
+            frame_work,
+            total,
+            0..total,
+            |core, i, now| {
+                if i < active_ticks && i % input_every_ticks == 0 {
+                    core.note_input(now);
+                }
+            },
+        );
+        assert_eq!(draws, total, "{label}: must stay at full 120 Hz throughout input and release tail");
+        assert_eq!(waits, 0, "{label}: ambient cap must never drop a steered 120 Hz tick");
+    }
+}
+
+#[test]
+fn ambient_fps_unbroken_steered_run_holds_120hz_until_2s_ceiling_then_caps() {
+    let t0 = crate::time::now();
+    let period_120 = Duration::from_nanos(1_000_000_000 / 120);
+    let frame_work = Duration::from_micros(900);
+    let mut core = DisplayLinkCore::new(period_120);
+    core.set_ambient_period(crate::app::ambient_period_from_fps(60.0));
+
+    // Single input at t = 0; unbroken animation presents from tick 0 through 3 s (360 ticks).
+    // Ticks 0..240 cover [0, 2.0 s): stays at 120 Hz past the 600 ms idle window.
+    let (draws_first_2s, waits_first_2s) = drive_stream(
+        &mut core,
+        t0,
+        period_120,
+        frame_work,
+        240,
+        0..240,
+        |core, i, now| {
+            if i == 0 {
+                core.note_input(now);
+            }
+        },
+    );
+    assert_eq!(draws_first_2s, 240, "unbroken steered run must stay at 120 Hz through 2 s");
+    assert_eq!(waits_first_2s, 0);
+
+    // Ticks 241..361 cover > 2.0 s through 3.0 s: exceeds STEERED_RUN_MAX (2 s) and caps to 60 Hz.
+    let mut draws_after_2s = 0u32;
+    let mut waits_after_2s = 0u32;
+    for i in 241..361u32 {
+        let now = t0 + period_120 * i;
+        let target = now + period_120;
+        match core.claim(Some(target), now) {
+            Opportunity::Tick(_) | Opportunity::Now => {
+                core.presented(now + frame_work);
+                draws_after_2s += 1;
+            }
+            Opportunity::Wait => waits_after_2s += 1,
+        }
+    }
+    assert_eq!(core.steering(), Steering::Ambient, "steering must fall back to Ambient past 2 s");
+    assert_eq!(draws_after_2s, 60, "unsteered motion past 2 s ceiling must cap to 60 Hz");
+    assert_eq!(waits_after_2s, 60);
+}
+
+#[test]
+fn ambient_fps_reply_after_gap_caps_at_60hz_once_600ms_elapses() {
+    let t0 = crate::time::now();
+    let period_120 = Duration::from_nanos(1_000_000_000 / 120);
+    let frame_work = Duration::from_micros(900);
+    let mut core = DisplayLinkCore::new(period_120);
+    core.set_ambient_period(crate::app::ambient_period_from_fps(60.0));
+    let _ = core.start();
+
+    // User presses Enter at t = 0 and the composer clears on one frame at t = 5 ms.
+    core.note_input(t0);
+    assert!(matches!(core.claim(Some(t0 + period_120), t0), Opportunity::Tick(_)));
+    core.presented(t0 + Duration::from_millis(5));
+
+    // > 100 ms idle pause waiting for the model's first token (reply starts at t = 250 ms).
+    // From 250 ms to 600 ms (42 ticks), motion is within STEERED_IDLE (600 ms) so stays 120 Hz,
+    // but the > 100 ms gap broke the steered run so it will NOT extend past 600 ms.
+    let start_tick = 30u32; // 250 ms
+    let mut draws_before_600 = 0u32;
+    for i in start_tick..72u32 {
+        let now = t0 + period_120 * i;
+        let target = now + period_120;
+        assert!(matches!(core.claim(Some(target), now), Opportunity::Tick(_) | Opportunity::Now));
+        core.presented(now + frame_work);
+        draws_before_600 += 1;
+    }
+    assert_eq!(draws_before_600, 42);
+    assert_eq!(core.steering(), Steering::Steered { last_input: t0, run: SteeredRun::None });
+
+    // From 608 ms through 1608 ms (120 ticks = 1 s): caps cleanly at 60 Hz.
+    let mut draws_after_600 = 0u32;
+    let mut waits_after_600 = 0u32;
+    for i in 73..193u32 {
+        let now = t0 + period_120 * i;
+        let target = now + period_120;
+        match core.claim(Some(target), now) {
+            Opportunity::Tick(_) | Opportunity::Now => {
+                core.presented(now + frame_work);
+                draws_after_600 += 1;
+            }
+            Opportunity::Wait => waits_after_600 += 1,
+        }
+    }
+    assert_eq!(core.steering(), Steering::Ambient);
+    assert_eq!(draws_after_600, 60, "reply after > 100 ms gap must cap at 60 Hz once 600 ms elapses");
+    assert_eq!(waits_after_600, 60);
+}
+
+#[test]
+fn ambient_fps_composes_monotonically_with_low_power_mode_and_rates() {
+    let t0 = crate::time::now();
+    let period_120 = Duration::from_nanos(1_000_000_000 / 120);
+    let period_60 = Duration::from_nanos(1_000_000_000 / 60);
+    let frame_work = Duration::from_micros(900);
+
+    // Low Power Mode (60 Hz) + ambient_fps(30.0) on 120 Hz -> 30 Hz wins.
+    let mut lpm_30 = DisplayLinkCore::new(period_120);
+    lpm_30.set_capped(true);
+    lpm_30.set_ambient_period(crate::app::ambient_period_from_fps(30.0));
+    let (draws, waits) = drive_stream(&mut lpm_30, t0, period_120, frame_work, 120, 0..120, |_, _, _| {});
+    assert_eq!(draws, 30, "Low Power Mode + ambient_fps(30.0) must cap at 30 Hz");
+    assert_eq!(waits, 90);
+
+    // Low Power Mode (60 Hz) + ambient_fps(90.0) on 120 Hz -> Low Power Mode 60 Hz wins.
+    let mut lpm_90 = DisplayLinkCore::new(period_120);
+    lpm_90.set_capped(true);
+    lpm_90.set_ambient_period(crate::app::ambient_period_from_fps(90.0));
+    let (draws, waits) = drive_stream(&mut lpm_90, t0, period_120, frame_work, 120, 0..120, |_, _, _| {});
+    assert_eq!(draws, 60, "Low Power Mode + ambient_fps(90.0) must stay capped at 60 Hz");
+    assert_eq!(waits, 60);
+
+    // Low Power Mode (60 Hz) + steered input -> Low Power Mode 60 Hz still bounds steered frames.
+    let mut lpm_steered = DisplayLinkCore::new(period_120);
+    lpm_steered.set_capped(true);
+    lpm_steered.set_ambient_period(crate::app::ambient_period_from_fps(30.0));
+    let (draws, waits) = drive_stream(&mut lpm_steered, t0, period_120, frame_work, 120, 0..120, |core, i, now| {
+        if i % 2 == 0 { core.note_input(now); }
+    });
+    assert_eq!(draws, 60, "steered input in Low Power Mode lifts ambient 30 Hz back to Low Power 60 Hz");
+    assert_eq!(waits, 60);
+
+    // ambient_fps(30.0) on a 60 Hz panel -> 30 Hz (alternates Tick / Wait).
+    let mut panel_60_cap_30 = DisplayLinkCore::new(period_60);
+    panel_60_cap_30.set_ambient_period(crate::app::ambient_period_from_fps(30.0));
+    let (draws, waits) = drive_stream(&mut panel_60_cap_30, t0, period_60, frame_work, 60, 0..60, |_, _, _| {});
+    assert_eq!(draws, 30, "ambient_fps(30.0) on 60 Hz panel must draw 30 frames/s");
+    assert_eq!(waits, 30);
+}
+
+#[test]
+fn steering_state_machine_handles_boundaries_and_re_input() {
+    let t0 = crate::time::now();
+    let ms = |n| t0 + Duration::from_millis(n);
+    let mut s = Steering::default();
+    assert_eq!(s, Steering::Ambient);
+    assert!(!s.is_steered(t0));
+
+    // Ambient ignores Presented.
+    let _ = step_steering(&mut s, SteeringEvent::Presented { at: ms(10) });
+    assert_eq!(s, Steering::Ambient);
+
+    // Input enters Steered { run: None }; exact STEERED_IDLE (600 ms) boundary is inclusive.
+    let _ = step_steering(&mut s, SteeringEvent::Input { at: ms(0) });
+    assert!(s.is_steered(ms(600)));
+    assert!(!s.is_steered(ms(601)));
+
+    // First present within STEERED_RUN_GAP (100 ms) starts Active.
+    let _ = step_steering(&mut s, SteeringEvent::Presented { at: ms(100) });
+    assert_eq!(s, Steering::Steered { last_input: ms(0), run: SteeredRun::Active { last_present: ms(100) } });
+
+    // Input while Active preserves Active if within 100 ms of last_present, else drops to None.
+    let _ = step_steering(&mut s, SteeringEvent::Input { at: ms(200) });
+    assert_eq!(s, Steering::Steered { last_input: ms(200), run: SteeredRun::Active { last_present: ms(100) } });
+    let _ = step_steering(&mut s, SteeringEvent::Input { at: ms(201) });
+    assert_eq!(s, Steering::Steered { last_input: ms(201), run: SteeredRun::None });
+
+    // Present past STEERED_RUN_GAP from last_input (101 ms) does not start Active.
+    let _ = step_steering(&mut s, SteeringEvent::Presented { at: ms(302) });
+    assert_eq!(s, Steering::Steered { last_input: ms(201), run: SteeredRun::None });
+
+    // Present past STEERED_IDLE with no active run transitions cleanly to Ambient.
+    let _ = step_steering(&mut s, SteeringEvent::Presented { at: ms(802) });
+    assert_eq!(s, Steering::Ambient);
+}

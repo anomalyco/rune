@@ -76,6 +76,27 @@ impl<S> Clone for TurnScope<S> {
 
 impl<S> Copy for TurnScope<S> {}
 
+/// Normalizes an opt-in frame-rate cap (Hz): positive finite values clamp to at least `1.0` Hz,
+/// while zero, negative, NaN and infinite values normalize to `0.0` (uncapped display rate).
+#[inline]
+pub(crate) fn normalize_fps_cap(fps: f32) -> f32 {
+    if fps.is_finite() && fps > 0.0 {
+        fps.max(1.0)
+    } else {
+        0.0
+    }
+}
+
+/// Converts an opt-in `ambient_fps` rate (Hz) into its target frame period, or `None` when
+/// uncapped (zero, negative, non-finite, or so large that its period rounds to zero).
+#[inline]
+pub(crate) fn ambient_period_from_fps(fps: f32) -> Option<std::time::Duration> {
+    let hz = normalize_fps_cap(fps);
+    (hz > 0.0)
+        .then(|| std::time::Duration::from_secs_f64(1.0 / f64::from(hz)))
+        .filter(|period| !period.is_zero())
+}
+
 /// An `AppSpec` with its lifetime: by default it opens one window and quits when it closes,
 /// like `rune::run`.
 pub struct App<S: 'static> {
@@ -110,6 +131,8 @@ pub struct App<S: 'static> {
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     pub(crate) on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     pub(crate) on_frame_drawn: Option<crate::frame::encoded::OnFrameDrawn<S>>,
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(crate) ambient_period: Option<std::time::Duration>,
     /// `App::layout_seed`'s seed and keeper; only desktop windows use them.
     #[cfg_attr(any(target_arch = "wasm32", target_os = "ios", target_os = "android"), allow(dead_code))]
     pub(crate) layout_seed: Option<crate::LayoutSeed>,
@@ -179,6 +202,7 @@ impl<S: 'static> App<S> {
             on_frame_encoded: None,
             on_frame_presented: None,
             on_frame_drawn: None,
+            ambient_period: None,
             layout_seed: None,
             keep_layout: None,
             same_tab_router: None,
@@ -1016,6 +1040,43 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn on_frame_drawn(mut self, f: impl FnMut(&crate::Runtime<S>) + 'static) -> Self {
         self.on_frame_drawn = Some(Box::new(f));
+        self
+    }
+
+    /// Cap frame pacing (Hz) for motion no recent user input is steering (`0.0`, default =
+    /// uncapped at the display's refresh rate; positive finite values clamp to at least `1.0` Hz,
+    /// and zero, negative, or non-finite values clear the cap back to uncapped).
+    ///
+    /// **What counts as steered.** Any live key, pointer, mouse-wheel, touch, trackpad gesture,
+    /// or file drag-and-drop event that reaches the window lifts the cap immediately on the very
+    /// next display refresh. Motion stays steered at the display's full rate for 600 ms after the
+    /// last input, and up to 2 s after that input while an unbroken run of presented frames
+    /// started within 100 ms of the input and keeps presenting with gaps of at most 100 ms.
+    /// Continuous pointer drags, wheel or trackpad scrolls, typing, and springs following a finger
+    /// keep refreshing the input timestamp and never cap. Motion that starts after a pause (such
+    /// as a streaming reply beginning after a wait) or continues past 2 s with no new input paces
+    /// at `fps`, and when motion ends the link coasts for ~150 ms and stops with zero idle draws.
+    ///
+    /// **Interaction with other caps.** When multiple caps apply, the lower rate (longer frame
+    /// period) wins: Low Power Mode (60 Hz on built-in ProMotion panels) always bounds both
+    /// steered and ambient frames, and combining this with `App::reveal_fps` lets reveal-only
+    /// tails wake on their timer at `reveal_fps` while any concurrent unsteered animation (such as
+    /// timeline growth or scroll following a stream) paces at `ambient_fps`.
+    ///
+    /// Enforced on macOS `DisplayLink` windows today; Windows, Linux, web, overlays, and
+    /// headless runs ignore it (matching [`App::on_frame_presented`] and
+    /// [`App::exclude_from_capture`]).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, text};
+    ///
+    /// let spec = AppSpec::new("Chat", (720.0, 540.0), String::new, |s, _| text(s.as_str()).wrap());
+    /// App::new(spec)
+    ///     .ambient_fps(60.0)
+    ///     .run();
+    /// ```
+    pub fn ambient_fps(mut self, fps: f32) -> Self {
+        self.ambient_period = ambient_period_from_fps(fps);
         self
     }
 

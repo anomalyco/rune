@@ -408,6 +408,37 @@ fn portable_exclude_from_capture_overrides_platform_options_and_falls_back_when_
 }
 
 #[test]
+fn app_and_window_spec_ambient_fps_default_and_normalize() {
+    use std::time::Duration;
+
+    let spec = || AppSpec::new("chat", (720.0, 540.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).ambient_period, None);
+    assert_eq!(WindowSpec::new("chat", spec()).app.ambient_period, None);
+
+    let p60 = Duration::from_secs_f64(1.0 / 60.0);
+    let p30 = Duration::from_secs_f64(1.0 / 30.0);
+    let p1 = Duration::from_secs(1);
+
+    let app = App::new(spec()).ambient_fps(60.0);
+    assert_eq!(app.ambient_period, Some(p60));
+    assert_eq!(WindowSpec::from_app("chat", app).app.ambient_period, Some(p60));
+
+    assert_eq!(WindowSpec::new("chat", spec()).ambient_fps(30.0).app.ambient_period, Some(p30));
+    assert_eq!(WindowSpec::new("chat", spec()).ambient_fps(0.25).app.ambient_period, Some(p1));
+    assert_eq!(WindowSpec::new("chat", spec()).ambient_fps(1e-38).app.ambient_period, Some(p1));
+
+    // Clearing back to uncapped works after setting a positive cap.
+    for raw in [0.0, -0.0, -60.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, f32::MAX] {
+        let cleared = WindowSpec::new("chat", spec()).ambient_fps(60.0).ambient_fps(raw);
+        assert_eq!(cleared.app.ambient_period, None, "raw={raw:?} must clear ambient_period");
+    }
+
+    // Large finite rate yields a tiny non-zero period that never slows the display.
+    let fast = App::new(spec()).ambient_fps(10_000.0).ambient_period;
+    assert_eq!(fast, Some(Duration::from_secs_f64(1.0 / 10_000.0)));
+}
+
+#[test]
 fn reveal_focus_skips_activation_for_no_activate_windows() {
     use crate::window::host::lifecycle::reveal_focus;
     use crate::window::state::Reveal;

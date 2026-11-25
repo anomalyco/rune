@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+mod ambient_fps_story;
 mod any_handlers;
 mod any_press;
 mod emoji_family_story;
@@ -698,6 +699,7 @@ fn main() {
                         .variant("Active", |_| {})
                         .variant("Pulse paused", |s| s.pulsing = false),
                 )
+                .story(ambient_fps_story::story())
                 .story(
                     Story::new("Controls/Switches/Toggle", || Switch { on: true, dimmed: false, label: "Sync across devices" }, switch_story)
                         .trigger('t', "Flip", |s, _| s.on = !s.on)
@@ -784,7 +786,18 @@ fn main() {
                 .start_folded(true)
                 .sizes(&[("Compact", (420.0, 300.0)), ("Wide", (900.0, 560.0))]),
         )
+        .ambient_fps(configured_ambient_fps())
         .run();
+}
+
+fn configured_ambient_fps() -> f32 {
+    let extra = rune::extra_args();
+    for pair in extra.windows(2) {
+        if pair[0] == "--ambient-fps" && let Ok(hz) = pair[1].parse::<f32>() {
+            return hz;
+        }
+    }
+    rune::env::var("RUNE_AMBIENT_FPS").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0)
 }
 
 #[cfg(test)]

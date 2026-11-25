@@ -1309,6 +1309,16 @@ For an app's own perf log, with nothing changed about how its windows draw:
   (`rt.presented_focus_key()`), or inspect presented frames (`rt.elements()`, `rt.state`).
   **`rune::last_input()`** is when the thread last took an input event from the platform, stamped at dispatch: input
   later than the previous frame landed in this one.
+- **`App::ambient_fps(fps)`** (also on `WindowSpec::ambient_fps`) opts a window into capping frame pacing for
+  motion no recent user input is steering (`0.0`, default = uncapped display rate; positive finite values clamp to
+  at least `1.0` Hz, and non-positive or non-finite values clear the cap). Any live key, pointer, wheel, touch,
+  gesture, or file drag-and-drop event lifts the cap on the very next display refresh; motion stays steered at the
+  display's full rate for 600 ms after input and up to 2 s while an unbroken run of frames that started within
+  100 ms of input keeps presenting with gaps of at most 100 ms (drags, scrolls, typing, and springs following a
+  finger never cap). When multiple caps apply, the lower rate wins: Low Power Mode (60 Hz on built-in ProMotion
+  panels) bounds both steered and ambient frames, and combining `ambient_fps` with `App::reveal_fps` paces
+  reveal-only tails on the `reveal_fps` timer while concurrent unsteered motion paces at `ambient_fps`. Enforced
+  on macOS `DisplayLink` windows today; Windows, Linux, web, overlays, and headless runs ignore it.
 
 ### Compact tray-controlled windows
 

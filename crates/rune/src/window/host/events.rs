@@ -56,15 +56,21 @@ impl Host {
 
     #[cfg(target_os = "macos")]
     pub(in crate::window) fn fn_key(&mut self) {
-        let Some(l) = &self.win else { return };
-        let Some(changes) = l.native.fn_key.as_ref().map(|f| f.take()) else { return };
+        let changes = {
+            let Some(l) = &self.win else { return };
+            let Some(changes) = l.native.fn_key.as_ref().map(|f| f.take()) else { return };
+            changes
+        };
+        if !changes.is_empty() {
+            self.note_input(crate::time::now());
+        }
         let mut redraw = false;
         for pressed in changes {
             redraw |= self.app.physical_with_fallback(crate::PhysicalInput::Key {
                 key: winit::keyboard::KeyCode::Fn, mods: map_mods(self.mods), pressed, repeat: false,
             }, None);
         }
-        if redraw { l.request_redraw(); }
+        if redraw && let Some(l) = &self.win { l.request_redraw(); }
     }
 
     #[cfg(target_os = "macos")]
@@ -132,7 +138,12 @@ impl Host {
             if queued { crate::input::time::record_last(now); }
         }
         if !queued { return; }
-        if !self.life.covered() && !l.minimized() { l.request_redraw(); } else {
+        let covered = self.life.covered() || l.minimized();
+        let _ = l;
+        self.note_input(crate::time::now());
+        if !covered {
+            if let Some(l) = &self.win { l.request_redraw(); }
+        } else {
             self.covered_frame();
             self.shell(event_loop);
         }
@@ -243,6 +254,9 @@ impl Host {
         // A window replaying `--window-script` takes its pointer from the script alone.
         if super::window_script::drops(self.window_script.is_some(), &event) {
             return;
+        }
+        if crate::input::time::current().is_some() {
+            self.note_input(crate::time::now());
         }
         self.a11y_window_event(&event);
         // What says whether other windows cover it (`look`): the pointer reaching it shows some

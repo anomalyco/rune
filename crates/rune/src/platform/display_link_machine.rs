@@ -13,6 +13,118 @@ use crate::time::Instant;
 /// 120 Hz.
 pub(crate) const LOW_POWER_FRAME: Duration = Duration::from_nanos(1_000_000_000 / 60);
 
+/// How long after the last live user input motion stays at full display rate even if no
+/// unbroken run of presents started immediately after that input.
+pub(crate) const STEERED_IDLE: Duration = Duration::from_millis(600);
+/// Maximum gap between the last input and the first present of a steered run, and between
+/// consecutive presents in that run.
+pub(crate) const STEERED_RUN_GAP: Duration = Duration::from_millis(100);
+/// Maximum total duration after the last input that an unbroken run of presents keeps full
+/// display rate before an opt-in ambient cap applies.
+pub(crate) const STEERED_RUN_MAX: Duration = Duration::from_secs(2);
+
+/// Whether an unbroken run of presented frames followed the last live input closely enough to
+/// stay at full display rate past [`STEERED_IDLE`] (up to [`STEERED_RUN_MAX`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SteeredRun {
+    /// No unbroken run started within [`STEERED_RUN_GAP`] of `last_input`, or the run paused.
+    None,
+    /// An unbroken run of presents started within [`STEERED_RUN_GAP`] of `last_input` and last
+    /// presented at `last_present`.
+    Active { last_present: Instant },
+}
+
+/// Whether recent user input is steering this window's motion.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Steering {
+    /// No recent user input is steering motion; an opt-in ambient frame-rate cap applies.
+    #[default]
+    Ambient,
+    /// Live user input arrived at `last_input`, optionally followed by an unbroken run of
+    /// presents.
+    Steered { last_input: Instant, run: SteeredRun },
+}
+
+impl Steering {
+    /// Whether motion at `now` is steered by recent user input: true within [`STEERED_IDLE`]
+    /// (600 ms) of `last_input`, or within [`STEERED_RUN_MAX`] (2 s) while an unbroken run of
+    /// presents started within [`STEERED_RUN_GAP`] (100 ms) of `last_input` and has not paused
+    /// for more than [`STEERED_RUN_GAP`].
+    pub(crate) fn is_steered(&self, now: Instant) -> bool {
+        match *self {
+            Self::Ambient => false,
+            Self::Steered { last_input, run } => {
+                let since_input = now.saturating_duration_since(last_input);
+                if since_input <= STEERED_IDLE {
+                    return true;
+                }
+                since_input <= STEERED_RUN_MAX
+                    && matches!(
+                        run,
+                        SteeredRun::Active { last_present }
+                            if now.saturating_duration_since(last_present) <= STEERED_RUN_GAP
+                    )
+            }
+        }
+    }
+}
+
+/// What happens to [`Steering`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SteeringEvent {
+    /// Live user input (key, pointer, wheel, touch, gesture, or file drag/drop) reached the
+    /// window at `at`.
+    Input { at: Instant },
+    /// A frame finished submitting/presenting at `at`.
+    Presented { at: Instant },
+}
+
+/// Effects emitted by [`step_steering`] (none today; kept uniform with `rune::machine`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SteeringEffect {}
+
+/// Pure transition for [`Steering`].
+pub(crate) fn step_steering(
+    state: &mut Steering,
+    event: SteeringEvent,
+) -> Effects<SteeringEffect> {
+    match (*state, event) {
+        (Steering::Steered { run: SteeredRun::Active { last_present }, .. }, SteeringEvent::Input { at }) => {
+            let run = if at.saturating_duration_since(last_present) <= STEERED_RUN_GAP {
+                SteeredRun::Active { last_present }
+            } else {
+                SteeredRun::None
+            };
+            *state = Steering::Steered { last_input: at, run };
+        }
+        (_, SteeringEvent::Input { at }) => {
+            *state = Steering::Steered { last_input: at, run: SteeredRun::None };
+        }
+        (Steering::Ambient, SteeringEvent::Presented { .. }) => {}
+        (Steering::Steered { last_input, run }, SteeringEvent::Presented { at }) => {
+            let next_run = match run {
+                SteeredRun::None => {
+                    if at.saturating_duration_since(last_input) <= STEERED_RUN_GAP {
+                        SteeredRun::Active { last_present: at }
+                    } else {
+                        SteeredRun::None
+                    }
+                }
+                SteeredRun::Active { last_present } => {
+                    if at.saturating_duration_since(last_present) <= STEERED_RUN_GAP {
+                        SteeredRun::Active { last_present: at }
+                    } else {
+                        SteeredRun::None
+                    }
+                }
+            };
+            let candidate = Steering::Steered { last_input, run: next_run };
+            *state = if candidate.is_steered(at) { candidate } else { Steering::Ambient };
+        }
+    }
+    Effects::none()
+}
+
 /// How long a running display link coasts after a visible window settles idle before stopping.
 /// Matches Chromium's `ExternalBeginFrameSourceMac` (`kMaxKeepAliveCount = 20`) and
 /// `ImageTransportSurfaceOverlayMacEGL` (`kMaxKeepAliveCounter = 8`).
@@ -180,10 +292,41 @@ pub(crate) fn permits(
     now: Instant,
     period: Duration,
 ) -> bool {
+    permits_paced(last, last_target, target, now, period, period)
+}
+
+fn permits_paced(
+    last: Option<Instant>,
+    last_target: Option<Instant>,
+    target: Instant,
+    now: Instant,
+    period: Duration,
+    hw_period: Duration,
+) -> bool {
     let half = period / 2;
+    let min_gap = if period == hw_period {
+        period * 3 / 4
+    } else {
+        period.saturating_sub(hw_period.min(period) / 4)
+    };
     now < target
-        && last_target.is_none_or(|last| target >= last + period * 3 / 4)
+        && last_target.is_none_or(|last| target >= last + min_gap)
         && last.is_none_or(|last| now.saturating_duration_since(last) >= half)
+}
+
+fn opportunity_paced(
+    tick: Option<Instant>,
+    last: Option<Instant>,
+    last_target: Option<Instant>,
+    now: Instant,
+    period: Duration,
+    hw_period: Duration,
+) -> Opportunity {
+    match tick {
+        Some(target) if permits_paced(last, last_target, target, now, period, hw_period) => Opportunity::Tick(target),
+        _ if rested(last, last_target, now, period) => Opportunity::Now,
+        _ => Opportunity::Wait,
+    }
 }
 
 /// Whether the last frame has surely reached the display: its target has passed, and a whole
@@ -229,6 +372,8 @@ pub(crate) struct DisplayLinkCore {
     last_target: Option<Instant>,
     period: Duration,
     capped: bool,
+    ambient_period: Option<Duration>,
+    steering: Steering,
 }
 
 impl DisplayLinkCore {
@@ -239,6 +384,8 @@ impl DisplayLinkCore {
             last_target: None,
             period,
             capped: false,
+            ambient_period: None,
+            steering: Steering::Ambient,
         }
     }
 
@@ -250,6 +397,16 @@ impl DisplayLinkCore {
         if self.capped { self.period.max(LOW_POWER_FRAME) } else { self.period }
     }
 
+    /// Effective frame period at `now`, applying `ambient_period` only when no recent user input
+    /// is steering the window (composing monotonically with Low Power Mode).
+    pub(crate) fn frame_period_at(&self, now: Instant) -> Duration {
+        let base = self.frame_period();
+        match self.ambient_period {
+            Some(ambient) if !self.steering.is_steered(now) => base.max(ambient),
+            _ => base,
+        }
+    }
+
     pub(crate) fn refresh_hz(&self) -> f64 { 1.0 / self.frame_period().as_secs_f64() }
 
     pub(crate) fn set_period(&mut self, period: Duration) {
@@ -257,6 +414,17 @@ impl DisplayLinkCore {
     }
 
     pub(crate) fn set_capped(&mut self, capped: bool) { self.capped = capped; }
+
+    pub(crate) fn set_ambient_period(&mut self, period: Option<Duration>) {
+        self.ambient_period = period.filter(|p| !p.is_zero());
+    }
+
+    pub(crate) fn note_input(&mut self, at: Instant) {
+        let _ = step_steering(&mut self.steering, SteeringEvent::Input { at });
+    }
+
+    #[cfg(test)]
+    pub(crate) fn steering(&self) -> Steering { self.steering }
 
     pub(crate) fn start(&mut self) -> Effects<LinkEffect> {
         step(&mut self.state, LinkEvent::Start)
@@ -267,8 +435,9 @@ impl DisplayLinkCore {
     }
 
     pub(crate) fn coast(&mut self) -> Effects<LinkEffect> {
-        let period = self.frame_period();
-        step(&mut self.state, LinkEvent::Coast { period })
+        // CoreVideo fires coasting ticks at the hardware refresh period, so compute the
+        // ~150 ms budget from `self.period` even when an ambient or Low Power cap is active.
+        step(&mut self.state, LinkEvent::Coast { period: self.period })
     }
 
     #[cfg(test)]
@@ -288,7 +457,8 @@ impl DisplayLinkCore {
     }
 
     pub(crate) fn claim(&mut self, tick: Option<Instant>, now: Instant) -> Opportunity {
-        let next = opportunity(tick, self.last_present, self.last_target, now, self.frame_period());
+        let period = self.frame_period_at(now);
+        let next = opportunity_paced(tick, self.last_present, self.last_target, now, period, self.period);
         match next {
             Opportunity::Tick(target) => self.last_target = Some(target),
             Opportunity::Now => self.last_target = Some(now),
@@ -298,12 +468,15 @@ impl DisplayLinkCore {
     }
 
     pub(crate) fn defers_start(&self, now: Instant) -> bool {
-        defers_start(self.state, self.last_present, self.last_target, now, self.frame_period())
+        defers_start(self.state, self.last_present, self.last_target, now, self.frame_period_at(now))
     }
 
-    pub(crate) fn tick_after(&self, now: Instant) -> Instant { now + self.frame_period() }
+    pub(crate) fn tick_after(&self, now: Instant) -> Instant { now + self.frame_period_at(now) }
 
-    pub(crate) fn presented(&mut self, at: Instant) { self.last_present = Some(at); }
+    pub(crate) fn presented(&mut self, at: Instant) {
+        self.last_present = Some(at);
+        let _ = step_steering(&mut self.steering, SteeringEvent::Presented { at });
+    }
 }
 
 #[cfg(test)]
