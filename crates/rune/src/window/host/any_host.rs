@@ -82,7 +82,17 @@ impl AnyHost for Host {
             .min()
     }
 
-    fn turn_ends(&mut self, event_loop: &ActiveEventLoop, now: Instant) { self.in_turn(|h| h.turn_ends_in_turn(event_loop, now)) }
+    fn turn_ends(&mut self, event_loop: &ActiveEventLoop, now: Instant) {
+        self.in_turn(|h| {
+            h.turn_ends_in_turn(event_loop, now);
+            // Last in the turn, after its frames presented: reads they made may have filled the
+            // app's own queue on winit's display (`App::on_display_events`).
+            display_turn_ends(&mut *h.app, h.started && !h.life.finished());
+        })
+    }
+    fn watches_display_reads(&self) -> bool {
+        watches_display_reads(&*self.app, self.wayland, self.started && !self.life.finished())
+    }
 
     // What reaches the app's state runs in its turn scope (`App::turn_scope`).
     fn terminate(&mut self) { self.in_turn(Self::terminate_in_turn) }
@@ -112,6 +122,19 @@ impl AnyHost for Host {
         if !self.app.rt().pointer_locked() { return; }
         self.in_turn(|h| h.pointer_motion_in_turn(dx, dy));
     }
+}
+
+/// End of a window's turn for `App::on_display_events`: queues its dispatch when events wait.
+/// A window that hasn't started or has finished (`live` false) drains no updates, so nothing is
+/// queued for it.
+pub(in crate::window) fn display_turn_ends(app: &mut dyn WindowApp, live: bool) {
+    if live { app.queue_display_events(); }
+}
+
+/// Whether winit should wake on every Wayland display read for this window's
+/// `App::on_display_events` hook: only on Wayland, and only while the window is `live`.
+pub(in crate::window) fn watches_display_reads(app: &dyn WindowApp, wayland: bool, live: bool) -> bool {
+    wayland && live && app.watches_display()
 }
 
 /// Whether a host's turn is inside its app's turn scope now.

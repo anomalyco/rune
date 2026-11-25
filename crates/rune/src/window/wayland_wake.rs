@@ -4,7 +4,9 @@
 //! `ControlFlow::Wait` on any Wayland display read while at least one layer surface is live,
 //! and a syscall-free `prepare_read` check at the end of `about_to_wait` posts one
 //! `WakeEvent::LayerPending` whenever a mid-turn read (Mesa WSI acquire/present or a roundtrip)
-//! already queued events for a layer surface.
+//! already queued events for a layer surface. A window whose app keeps its own queue on the
+//! display (`App::on_display_events`) turns the same wake on; its host checks that queue as
+//! its turn ends.
 
 use crate::machine::Effects;
 use crate::window::AnyHost;
@@ -13,12 +15,12 @@ use crate::window::AnyHost;
 /// already in flight.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum State {
-    /// No live Wayland layer surface; winit's `wake_on_wayland_read` flag is off.
+    /// Nothing wants a wake on display reads; winit's `wake_on_wayland_read` flag is off.
     #[default]
     Inactive,
-    /// At least one Wayland layer surface is live and idle; winit wakes on any Wayland read.
+    /// A live layer surface or a watching window wants it and none is pending; winit wakes on any Wayland read.
     Watching,
-    /// At least one Wayland layer surface is live and a `WakeEvent::LayerPending` ping is in
+    /// A wake on read is wanted and a `WakeEvent::LayerPending` ping is in
     /// flight to drain events already queued in libwayland.
     WakeQueued,
 }
@@ -28,7 +30,9 @@ pub(crate) enum State {
 pub(crate) enum Event {
     /// End of an event-loop turn, after every host's `about_to_wait` and `turn_ends`.
     AboutToWait {
-        has_live_layer: bool,
+        /// A live layer surface, or a window watching its app's display queue, wants winit to
+        /// wake on every display read.
+        wake_on_read: bool,
         has_pending_events: bool,
     },
     /// `WakeEvent::LayerPending` was delivered to `ApplicationHandler::user_event`.
@@ -50,47 +54,47 @@ pub(crate) enum Effect {
 /// Advances the Wayland layer wake scheduler for `event` and returns the effects to perform.
 pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
     match (*state, event) {
-        (State::Inactive, Event::AboutToWait { has_live_layer: false, has_pending_events: false }) => {
+        (State::Inactive, Event::AboutToWait { wake_on_read: false, has_pending_events: false }) => {
             Effects::none()
         }
-        (State::Inactive, Event::AboutToWait { has_live_layer: false, has_pending_events: true }) => {
+        (State::Inactive, Event::AboutToWait { wake_on_read: false, has_pending_events: true }) => {
             Effects::one(Effect::SendWake)
         }
-        (State::Inactive, Event::AboutToWait { has_live_layer: true, has_pending_events: false }) => {
+        (State::Inactive, Event::AboutToWait { wake_on_read: true, has_pending_events: false }) => {
             *state = State::Watching;
             Effects::one(Effect::SetWakeOnRead(true))
         }
-        (State::Inactive, Event::AboutToWait { has_live_layer: true, has_pending_events: true }) => {
+        (State::Inactive, Event::AboutToWait { wake_on_read: true, has_pending_events: true }) => {
             *state = State::WakeQueued;
             Effects::two(Effect::SetWakeOnRead(true), Effect::SendWake)
         }
-        (State::Watching, Event::AboutToWait { has_live_layer: true, has_pending_events: false }) => {
+        (State::Watching, Event::AboutToWait { wake_on_read: true, has_pending_events: false }) => {
             Effects::none()
         }
-        (State::Watching, Event::AboutToWait { has_live_layer: true, has_pending_events: true }) => {
+        (State::Watching, Event::AboutToWait { wake_on_read: true, has_pending_events: true }) => {
             *state = State::WakeQueued;
             Effects::one(Effect::SendWake)
         }
-        (State::Watching, Event::AboutToWait { has_live_layer: false, has_pending_events: false }) => {
+        (State::Watching, Event::AboutToWait { wake_on_read: false, has_pending_events: false }) => {
             *state = State::Inactive;
             Effects::one(Effect::SetWakeOnRead(false))
         }
-        (State::Watching, Event::AboutToWait { has_live_layer: false, has_pending_events: true }) => {
+        (State::Watching, Event::AboutToWait { wake_on_read: false, has_pending_events: true }) => {
             *state = State::Inactive;
             Effects::two(Effect::SetWakeOnRead(false), Effect::SendWake)
         }
-        (State::WakeQueued, Event::AboutToWait { has_live_layer: true, has_pending_events: true }) => {
+        (State::WakeQueued, Event::AboutToWait { wake_on_read: true, has_pending_events: true }) => {
             Effects::none()
         }
-        (State::WakeQueued, Event::AboutToWait { has_live_layer: true, has_pending_events: false }) => {
+        (State::WakeQueued, Event::AboutToWait { wake_on_read: true, has_pending_events: false }) => {
             *state = State::Watching;
             Effects::none()
         }
-        (State::WakeQueued, Event::AboutToWait { has_live_layer: false, has_pending_events: false }) => {
+        (State::WakeQueued, Event::AboutToWait { wake_on_read: false, has_pending_events: false }) => {
             *state = State::Inactive;
             Effects::one(Effect::SetWakeOnRead(false))
         }
-        (State::WakeQueued, Event::AboutToWait { has_live_layer: false, has_pending_events: true }) => {
+        (State::WakeQueued, Event::AboutToWait { wake_on_read: false, has_pending_events: true }) => {
             *state = State::Inactive;
             Effects::two(Effect::SetWakeOnRead(false), Effect::SendWake)
         }
@@ -112,9 +116,9 @@ pub(crate) fn about_to_wait(
     state: &mut State,
     hosts: &[Option<Box<dyn AnyHost>>],
 ) -> Effects<Effect> {
-    let has_live_layer = hosts.iter().flatten().any(|h| h.has_live_wayland_layer());
+    let wake_on_read = hosts.iter().flatten().any(|h| h.has_live_wayland_layer() || h.watches_display_reads());
     let has_pending_events = hosts.iter().flatten().any(|h| h.has_pending_platform_events());
-    step(state, Event::AboutToWait { has_live_layer, has_pending_events })
+    step(state, Event::AboutToWait { wake_on_read, has_pending_events })
 }
 
 #[cfg(test)]

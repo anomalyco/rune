@@ -917,6 +917,8 @@ impl<S: 'static> WindowSpec<S> {
         on_quit(f: fn(&mut S, &mut crate::Tx));
         /// Runs `enter` before and `leave` after each event-handling turn of this window, like `App::turn_scope`.
         turn_scope(enter: fn(&mut S), leave: fn(&mut S));
+        /// Gives an event queue on winit's display a turn whenever events wait in it, like `App::on_display_events`.
+        on_display_events(pending: fn(&S) -> bool, dispatch: fn(&mut S, &mut crate::Tx) -> bool);
         /// Runs when the app is reopened, like `App::on_reopen`.
         on_reopen(f: fn(&mut S, bool, &mut crate::Tx) -> bool);
         /// Receives links opened with the app, like `App::on_open_url`.

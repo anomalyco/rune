@@ -221,6 +221,9 @@ pub(crate) trait AnyHost {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool { false }
     /// Whether this host owns a live Wayland layer-shell surface sharing winit's `wl_display`.
     fn has_live_wayland_layer(&self) -> bool { false }
+    /// Whether this host's app keeps its own event queue on winit's Wayland display
+    /// (`App::on_display_events`), so winit should wake on every display read.
+    fn watches_display_reads(&self) -> bool { false }
     /// Whether this host has unread platform events already queued in memory (for example a
     /// Wayland layer surface whose queue filled during a mid-turn read).
     fn has_pending_platform_events(&self) -> bool { false }

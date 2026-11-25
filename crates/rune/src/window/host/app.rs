@@ -5,7 +5,7 @@ use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use winit::window::Window;
 
-use crate::app::{Shared, TurnScope, WindowRequests};
+use crate::app::{DisplayWatch, Shared, TurnScope, WindowRequests};
 use crate::compose::{Compositor, Frame};
 use crate::el::Tx;
 use crate::frame::clock::FrameClock;
@@ -44,6 +44,10 @@ pub(crate) trait WindowApp {
     fn drain_startup(&mut self, shortcuts: &crate::shortcuts::Guard, menus: &mut crate::native_menu::MenuGuard);
     fn drain_window(&mut self, shortcuts: &crate::shortcuts::Guard, menus: &mut crate::native_menu::MenuGuard) -> (WindowRequests, bool, bool);
     fn has_updates(&self) -> bool;
+    /// Whether the app gave an event queue on winit's display a turn (`App::on_display_events`).
+    fn watches_display(&self) -> bool;
+    /// Queues `App::on_display_events`'s dispatch when its queue has events waiting.
+    fn queue_display_events(&mut self);
     fn has_compositor(&self) -> bool;
     fn compositor_features(&self) -> wgpu::Features;
     fn compositor_animating(&self) -> bool;
@@ -208,9 +212,36 @@ pub(in crate::window) fn test_app_with_close_request<S: 'static>(
         on_quit,
         on_reopen: None,
         turn_scope: None,
+        display_events: None,
         keep_layout: None,
         kept_layout: None,
     })
+}
+
+/// A test window app carrying `App::on_display_events`'s hooks, with the `Shared` its
+/// dispatches queue on.
+#[cfg(test)]
+pub(in crate::window) fn test_app_with_display_events<S: 'static>(
+    rt: Runtime<S>,
+    events: crate::app::DisplayEvents<S>,
+) -> (Box<dyn WindowApp>, Arc<Shared<S>>) {
+    let shared = Arc::new(Shared::default());
+    let app = Box::new(TypedWindowApp {
+        rt,
+        shared: shared.clone(),
+        comp: None,
+        on_frame_drawn: None,
+        on_close_request: None,
+        on_close: None,
+        on_rest: None,
+        on_quit: None,
+        on_reopen: None,
+        turn_scope: None,
+        display_events: Some(DisplayWatch::new(events)),
+        keep_layout: None,
+        kept_layout: None,
+    });
+    (app, shared)
 }
 
 /// The only per-state-type structure owned by a native window host.
@@ -225,6 +256,7 @@ pub(crate) struct TypedWindowApp<S: 'static> {
     pub(super) on_quit: Option<fn(&mut S, &mut Tx)>,
     pub(super) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(super) turn_scope: Option<TurnScope<S>>,
+    pub(super) display_events: Option<DisplayWatch<S>>,
     /// `App::layout_seed`'s keeper, and the seed it was last given (or the launch's own).
     pub(super) keep_layout: Option<Box<dyn FnMut(crate::LayoutSeed)>>,
     pub(super) kept_layout: Option<crate::LayoutSeed>,
@@ -233,8 +265,8 @@ pub(crate) struct TypedWindowApp<S: 'static> {
 impl<S: 'static> TypedWindowApp<S> {
     #[cfg(all(test, feature = "hot"))]
     pub(crate) fn from_app(mut app: crate::App<S>, waker: crate::runtime::Waker) -> Self {
-        let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
-            app.on_close_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
+        let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope, display_events) = (
+            app.on_close_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope, app.display_events,
         );
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
@@ -243,7 +275,7 @@ impl<S: 'static> TypedWindowApp<S> {
         rt.configure(runtime);
         Self {
             rt, shared, comp, on_frame_drawn: None, on_close_request, on_close, on_rest, on_quit, on_reopen, turn_scope,
-            keep_layout, kept_layout: layout_seed,
+            display_events: display_events.map(DisplayWatch::new), keep_layout, kept_layout: layout_seed,
         }
     }
 
@@ -364,6 +396,12 @@ impl<S: 'static> WindowApp for TypedWindowApp<S> {
     }
 
     fn has_updates(&self) -> bool { self.shared.has_updates() }
+
+    fn watches_display(&self) -> bool { self.display_events.is_some() }
+
+    fn queue_display_events(&mut self) {
+        if let Some(watch) = &self.display_events { watch.queue_if_pending(&self.rt.state, &self.shared); }
+    }
 
     fn has_compositor(&self) -> bool { self.comp.is_some() }
 

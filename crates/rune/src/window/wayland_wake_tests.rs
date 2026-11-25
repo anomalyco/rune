@@ -235,3 +235,33 @@ fn hiding_all_layer_overlays_and_exiting_clear_wake_flag_once() {
     let exit_again = step(&mut h.state, Event::Exiting);
     assert!(exit_again.is_empty());
 }
+
+/// A window whose app keeps its own queue on the display (`App::on_display_events`).
+struct WatchingHost {
+    watching: Rc<Cell<bool>>,
+}
+
+impl AnyHost for WatchingHost {
+    fn resumed(&mut self, _: &ActiveEventLoop) {}
+    fn user_event(&mut self, _: &ActiveEventLoop, _: WakeEvent) {}
+    fn owns(&self, _: WindowId) -> bool { false }
+    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    fn watches_display_reads(&self) -> bool { self.watching.get() }
+}
+
+#[test]
+fn window_watching_its_display_queue_wakes_on_reads_until_it_stops() {
+    let watching = Rc::new(Cell::new(true));
+    let hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(WatchingHost { watching: watching.clone() }))];
+    let mut h = Harness::default();
+
+    for _ in 0..5 { h.end_turn(&hosts); }
+    assert_eq!(h.state, State::Watching);
+    assert_eq!(h.set_wake_calls, vec![true]);
+    assert_eq!(h.wakes_sent, 0, "the host queues its own dispatch; the scheduler sends no wake");
+
+    watching.set(false);
+    h.end_turn(&hosts);
+    assert_eq!(h.state, State::Inactive);
+    assert_eq!(h.set_wake_calls, vec![true, false]);
+}
