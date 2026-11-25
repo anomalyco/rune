@@ -853,6 +853,10 @@ impl<S: 'static> WindowSpec<S> {
         /// ```
         color_scheme(scheme: crate::ColorScheme);
         /// Opt-in whole-window system backdrop material, like [`App::window_backdrop`].
+        /// On Windows 11, DWM draws the material only while the window is the foreground window
+        /// and shows its own flat fallback while unfocused (so a non-activating window never shows
+        /// the live material even while [`Cx::window_backdrop`](crate::Cx::window_backdrop) is
+        /// active); pair with [`Self::on_focus`] if the view needs to distinguish focused state.
         ///
         /// ```no_run
         /// use rune::{AppSpec, WindowBackdrop, WindowOptions, WindowSpec, el};

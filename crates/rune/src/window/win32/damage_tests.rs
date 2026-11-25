@@ -313,3 +313,41 @@ fn glyph_atlas_changes_force_full_redraw_without_breaking_partial_updates() {
         "animated icon UV flip with dirty rows must stay partial"
     );
 }
+
+#[test]
+fn damage_plan_redraws_whole_for_translucent_clear_and_keeps_partial_for_opaque() {
+    let size = (240u32, 80u32);
+    let swap = 1u64;
+    let atlas = GlyphAtlas::default();
+    let frame1 = [Instance {
+        rect: [10.0, 10.0, 90.0, 24.0],
+        fill: [1.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        clip: NO_CLIP,
+        ..Instance::zeroed()
+    }];
+    let frame2 = [Instance {
+        rect: [10.0, 10.0, 48.0, 24.0],
+        fill: [1.0; 4],
+        params: [0.0, KIND_RECT, 0.0, 1.0],
+        clip: NO_CLIP,
+        ..Instance::zeroed()
+    }];
+
+    // Transparent clear (alpha 0.0, e.g. active WindowBackdrop): partial damage's blended clear
+    // quad cannot erase old pixels, so Damage::plan must request a whole-frame redraw.
+    let mut transparent = Damage::default();
+    let _ = transparent.plan(&frame1, size, [0.0; 4], swap, atlas, true);
+    assert!(
+        matches!(transparent.plan(&frame2, size, [0.0; 4], swap, atlas, true), Plan::All(_)),
+        "transparent clear must draw whole rather than arm partial damage",
+    );
+
+    // Opaque clear (alpha 1.0): partial damage stays active as before.
+    let mut opaque = Damage::default();
+    let _ = opaque.plan(&frame1, size, [0.1, 0.1, 0.1, 1.0], swap, atlas, true);
+    assert!(
+        matches!(opaque.plan(&frame2, size, [0.1, 0.1, 0.1, 1.0], swap, atlas, true), Plan::Part { .. }),
+        "opaque clear must keep partial damage",
+    );
+}
