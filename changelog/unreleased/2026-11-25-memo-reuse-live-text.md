@@ -1,0 +1,1 @@
+- Memo reuse: allow `memo` subtrees holding `LiveText` nodes to be flatten-reused across commits, preserving their latched `text_layout` and elisions when scale and content width are unchanged so static siblings keep their paint-keep epochs and live texts are not double-shaped.

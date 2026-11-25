@@ -100,8 +100,10 @@ fn move_slice(
         let old_parent = slot.parent;
         let stub = Node::moved_stub(slot);
         let mut n = std::mem::replace(slot, stub);
-        n.text_layout = None;
-        n.elided = None;
+        if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) {
+            n.text_layout = None;
+            n.elided = None;
+        }
         n.clear_run_layout();
         n.scale_track = false;
         n.group_fade = false;
@@ -518,7 +520,7 @@ impl Measurement<'_> {
         self.memo.path_scratch = path_buf;
         taffy.finish_flatten();
         let root_id = nodes[0].taffy;
-        let (layout, mut nodes) = self.solve(text, taffy, root_id, nodes);
+        let (layout, mut nodes) = self.solve(text, taffy, root_id, nodes, &reused);
         if self.measure_virtuals(&nodes, false) {
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &[]);
             nodes.clear();

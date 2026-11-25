@@ -142,8 +142,10 @@ impl Measurement<'_> {
             } else {
                 let stub = Node::moved_stub(slot);
                 let mut n = std::mem::replace(slot, stub);
-                n.text_layout = None;
-                n.elided = None;
+                if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) {
+                    n.text_layout = None;
+                    n.elided = None;
+                }
                 n.clear_run_layout();
                 n.virtual_mount = false;
                 nodes.push(n);
@@ -165,7 +167,7 @@ impl Measurement<'_> {
                 std::iter::successors(n.parent, |&p| nodes[p].parent).map(|p| nodes[p].taffy),
             );
         }
-        let (layout, mut nodes) = self.solve(text, taffy, root, nodes);
+        let (layout, mut nodes) = self.solve(text, taffy, root, nodes, &reused);
         if self.measure_virtuals(&nodes, false) || self.windows_move() {
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &[]);
             reused.clear();
@@ -231,7 +233,7 @@ impl Measurement<'_> {
     }
 
     /// Lays `nodes` out from `root_id` at the viewport, places them, and lays out their text.
-    pub(in crate::runtime) fn solve(&mut self, text: &mut TextSystem, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>) -> (LayoutEngine, Vec<Node>) {
+    pub(in crate::runtime) fn solve(&mut self, text: &mut TextSystem, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>, reused: &[memo_reuse::ReusedSpan]) -> (LayoutEngine, Vec<Node>) {
         let scale = self.env.scale;
         let room = Size {
             width: AvailableSpace::Definite(self.viewport.0),
@@ -265,8 +267,35 @@ impl Measurement<'_> {
             compute_layout(&mut taffy, root_id, room, &nodes, text, scale);
             self.place(&taffy, &mut nodes);
         }
-        for n in nodes.iter_mut().filter(|n| n.text.is_some()) {
+        let mut span_idx = 0usize;
+        for (i, n) in nodes.iter_mut().enumerate() {
+            let Some(spec) = &n.text else { continue };
             let w = (taffy.box_layout(n.taffy).w - n.inset[0] - n.inset[2]).max(0.0);
+            if spec.cold.live.is_some() {
+                while span_idx < reused.len() && reused[span_idx].new_start + reused[span_idx].len <= i {
+                    span_idx += 1;
+                }
+                let reused_old = reused
+                    .get(span_idx)
+                    .filter(|s| i >= s.new_start && i < s.new_start + s.len)
+                    .and_then(|s| self.nodes.get(s.old_start + (i - s.new_start)));
+                let width_sensitive = spec.wrap || spec.truncate || spec.max_lines > 0;
+                let kept_valid = n.text_layout.is_some()
+                    && reused_old.is_some_and(|old| {
+                        !width_sensitive || (old.local.w - old.inset[0] - old.inset[2]).max(0.0) == w
+                    });
+                if kept_valid {
+                    continue;
+                }
+                if n.cold.get().is_some_and(|c| c.live_text_seen.is_some()) {
+                    lay_out_text_inner(text, n, w, scale, true);
+                    n.epoch = crate::runtime::paint_keep::next_epoch();
+                    continue;
+                }
+                if reused_old.is_some() {
+                    n.epoch = crate::runtime::paint_keep::next_epoch();
+                }
+            }
             lay_out_text(text, n, w, scale);
         }
 
