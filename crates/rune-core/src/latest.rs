@@ -100,6 +100,8 @@ struct Slot<T> {
     key: Option<Box<dyn Any + Send>>,
     /// None once the `Latest` drops, so nothing wakes after.
     waker: Option<Waker>,
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    landings: usize,
 }
 
 /// The newest request: an answer lands only while this still holds its attempt.
@@ -131,6 +133,8 @@ impl<T> Slot<T> {
             driven: false,
             key: None,
             waker,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            landings: 0,
         }
     }
 
@@ -179,6 +183,10 @@ impl<T> Slot<T> {
     /// A request's outcome. Settles it if it's still the newest, and returns the waker to call
     /// when an answer landed; a panic or a `None` settles with nothing to land.
     fn land(&mut self, attempt: Attempt, out: Result<Option<T>, ()>) -> Option<Waker> {
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        {
+            self.landings += 1;
+        }
         if !self.runs(attempt) {
             return None;
         }
@@ -219,11 +227,29 @@ impl<T: Send + 'static> Latest<T> {
     }
 
     /// A `Latest` on its own pool, for tests that count its threads.
-    #[cfg(test)]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     fn on(pool: Arc<Pool>, waker: Option<Waker>) -> Self {
         let mut latest = Self::with(waker);
         latest.pool = pool;
         latest
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    fn pending_due(&self) -> Option<crate::time::Instant> {
+        match &self.inner.slot.lock().unwrap().request {
+            Request::Waiting(job) => Some(job.due),
+            _ => None,
+        }
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    fn land_probe(&self) -> LandProbe<T> {
+        LandProbe(self.inner.clone())
+    }
+
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    fn wait_landings(&self, target: usize) {
+        self.land_probe().wait(target);
     }
 
     /// Starts each request only after `wait` passes with no newer one. Zero (the default) starts
@@ -355,11 +381,30 @@ impl<T: Send + 'static> Drop for Latest<T> {
     }
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+struct LandProbe<T>(Arc<Inner<T>>);
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl<T> LandProbe<T> {
+    fn wait(&self, target: usize) {
+        let mut slot = self.0.slot.lock().unwrap();
+        while slot.landings < target {
+            slot = self.0.changed.wait(slot).unwrap();
+        }
+    }
+}
+
 impl<T> Inner<T> {
     /// A request's outcome: its answer lands, waking once, if it's still the newest; a panic or
     /// a `None` settles it with nothing to land, and no wake.
     fn land(&self, attempt: Attempt, out: Result<Option<T>, ()>) {
-        let waker = self.slot.lock().unwrap().land(attempt, out);
+        let waker = {
+            let mut slot = self.slot.lock().unwrap();
+            let waker = slot.land(attempt, out);
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            self.changed.notify_all();
+            waker
+        };
         if let Some(wake) = waker {
             wake();
         }

@@ -702,10 +702,10 @@ fn overlay_setup_runs_once_with_a_waker_that_redraws_the_overlay() {
     let before = loop_wakes.load(Ordering::SeqCst);
     let state = &mut overlay.rt.state;
     let cache = state.cache.as_ref().unwrap();
-    let _a = cache.rgba(1, 1, vec![1, 2, 3, 255]);
-    let _b = cache.rgba(1, 1, vec![4, 5, 6, 255]);
+    let a = cache.rgba(1, 1, vec![1, 2, 3, 255]);
+    let b = cache.rgba(1, 1, vec![4, 5, 6, 255]);
+    assert!(a.wait().is_ok() && b.wait().is_ok());
     rx.recv_timeout(Duration::from_secs(5)).expect("the decodes wake the event loop");
-    std::thread::sleep(Duration::from_millis(100));
     assert_eq!(loop_wakes.load(Ordering::SeqCst), before + 1, "one loop wake until the overlay takes it");
     assert!(take(&mut overlay).0.woken);
     assert!(loop_wakes.load(Ordering::SeqCst) >= 2);

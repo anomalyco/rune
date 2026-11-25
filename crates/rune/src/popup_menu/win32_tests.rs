@@ -5,8 +5,8 @@ use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, HWND_MESSAGE, MSG,
-    PM_REMOVE, PeekMessageW, RegisterClassW, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, MSG,
+    RegisterClassW, WNDCLASSW,
 };
 
 use super::{hands_back, start, turn, turns, wide};
@@ -64,17 +64,17 @@ fn modal_turn_trampoline_blocks_reentrancy_and_keeps_outer_timer_alive() {
     start(Arc::new(move || { fired_inner.fetch_add(1, Ordering::SeqCst); }));
     let outer = turns(hwnd);
     let inner = turns(hwnd);
+    assert_ne!(outer.id, inner.id, "nested Turns guards must use distinct timer ids");
     drop(inner);
 
-    let deadline = crate::time::now() + std::time::Duration::from_millis(250);
-    while fired.load(Ordering::SeqCst) == 0 && crate::time::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        // SAFETY: pumps messages for this thread's test window.
+    while fired.load(Ordering::SeqCst) == 0 {
+        // SAFETY: blocks on this thread's test window until its live outer WM_TIMER arrives.
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
-            while PeekMessageW(&mut msg, hwnd, 0, 0, PM_REMOVE) != 0 {
-                DispatchMessageW(&msg);
+            if GetMessageW(&mut msg, hwnd, 0, 0) <= 0 {
+                break;
             }
+            DispatchMessageW(&msg);
         }
     }
     let count = fired.load(Ordering::SeqCst);

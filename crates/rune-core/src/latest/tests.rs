@@ -131,8 +131,8 @@ fn the_newest_answer_wins_when_an_older_one_finishes_last() {
     assert_eq!(search.take().as_deref(), Some("ab"));
 
     open_a.open();
-    eventually("a finishes", || a_done.load(Ordering::SeqCst) == 1);
-    std::thread::sleep(Duration::from_millis(5));
+    search.wait_landings(2);
+    assert_eq!(a_done.load(Ordering::SeqCst), 1);
     assert_eq!(search.take(), None, "the older answer is dropped");
     assert_eq!(wakes.load(Ordering::SeqCst), 1, "and wakes nothing");
 }
@@ -230,10 +230,11 @@ fn dropping_it_cancels_and_nothing_wakes_after() {
     let done = finished.clone();
     search.request((), move |_| { wait(); done.fetch_add(1, Ordering::SeqCst); 1 });
     open.wait_started();
+    let probe = search.land_probe();
     drop(search);
     open.open();
-    eventually("the running work finishes", || finished.load(Ordering::SeqCst) == 1);
-    std::thread::sleep(Duration::from_millis(5));
+    probe.wait(1);
+    assert_eq!(finished.load(Ordering::SeqCst), 1);
     assert_eq!(wakes.load(Ordering::SeqCst), 0);
 }
 
@@ -272,16 +273,28 @@ fn requests_reuse_a_few_threads_that_exit_when_idle() {
 
 #[test]
 fn set_waker_keeps_the_debounce_and_a_pending_request() {
+    let quiet = Duration::from_millis(30);
     let (waker, wakes) = counter();
-    let search = Latest::<usize>::on(pool(), None).debounce(Duration::from_millis(250));
-    search.request(7, |n| n);
+    let search = Latest::<(usize, Duration)>::on(pool(), None).debounce(quiet);
+    let (open, wait) = gate();
+    let start = crate::time::now();
+    search.request(7, move |n| { wait(); (n, start.elapsed()) });
     assert!(search.is_pending());
     search.set_waker(waker);
     assert!(search.is_pending(), "the pending request survives");
-    std::thread::sleep(Duration::from_millis(50));
-    assert_eq!(wakes.load(Ordering::SeqCst), 0, "the debounce is still waited out");
+    open.open();
     eventually("the request lands", || wakes.load(Ordering::SeqCst) == 1);
-    assert_eq!(search.take(), Some(7));
+    let (value, waited) = search.take().unwrap();
+    assert_eq!(value, 7);
+    assert!(waited >= quiet, "the debounce is still waited out: {waited:?}");
+
+    // A follow-up request after `set_waker` also waits out the preserved debounce.
+    let again = crate::time::now();
+    search.request(8, move |n| (n, again.elapsed()));
+    eventually("the second request lands", || wakes.load(Ordering::SeqCst) == 2);
+    let (value, waited) = search.take().unwrap();
+    assert_eq!(value, 8);
+    assert!(waited >= quiet, "debounce survives set_waker: {waited:?}");
 }
 
 #[test]
@@ -319,16 +332,25 @@ fn request_if_changed_ignores_an_unchanged_key() {
 #[test]
 fn request_if_changed_does_not_push_back_the_debounce() {
     let (waker, wakes) = counter();
-    let search = Latest::<usize>::on(pool(), Some(waker)).debounce(Duration::from_millis(250));
-    let start = crate::time::now();
+    let search = Latest::<usize>::on(pool(), Some(waker.clone())).debounce(Duration::from_secs(60));
+    let t0 = crate::time::now();
     search.request_if_changed(&1usize, |n| n);
-    while start.elapsed() < Duration::from_millis(150) {
-        search.request_if_changed(&1usize, |n| n);
-        std::thread::sleep(Duration::from_millis(5));
+    let first_due = search.pending_due().expect("first request waiting out debounce");
+    // Wait until the monotonic clock strictly advances so a re-enqueued request would get a later due.
+    while crate::time::now() <= t0 {
+        std::hint::spin_loop();
     }
+    for _ in 0..5 {
+        search.request_if_changed(&1usize, |n| n);
+        assert_eq!(search.pending_due(), Some(first_due), "unchanged key must not push back debounce");
+    }
+    search.cancel();
+
+    let quick = Latest::<usize>::on(pool(), Some(waker)).debounce(Duration::from_millis(20));
+    quick.request_if_changed(&1usize, |n| n);
+    quick.request_if_changed(&1usize, |n| n);
     eventually("it lands", || wakes.load(Ordering::SeqCst) == 1);
-    assert!(start.elapsed() < Duration::from_millis(1500));
-    assert_eq!(search.take(), Some(1));
+    assert_eq!(quick.take(), Some(1));
 }
 
 #[test]
@@ -375,7 +397,7 @@ fn request_opt_none_still_supersedes_older_answers() {
     search.request_opt(2, |_| None);
     eventually("it settles", || !search.is_pending());
     open.open();
-    std::thread::sleep(Duration::from_millis(50));
+    search.wait_landings(2);
     assert_eq!(search.take(), None, "the older answer stays dropped");
     assert_eq!(wakes.load(Ordering::SeqCst), 0);
 }

@@ -1,7 +1,6 @@
 #![allow(unsafe_code)]
 
 use std::sync::mpsc;
-use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE};
 use windows_sys::Win32::System::Threading::{CreateEventW, CreateSemaphoreW, GetCurrentProcess, ReleaseSemaphore};
@@ -85,7 +84,7 @@ fn slot_keeps_waiting_and_owed_across_resize_reconfigure() {
 
     // When the swap chain retires the frame, the registered wait still fires.
     sem.release(1);
-    assert!(rx.recv_timeout(Duration::from_millis(500)).is_ok(), "the wait on the duplicated semaphore must still wake");
+    assert!(rx.recv().is_ok(), "the wait on the duplicated semaphore must still wake");
     slot.came_back();
     assert!(!slot.waiting());
     assert_eq!(slot.take(Some(resized_handle.0), || {}), Take::Draw);

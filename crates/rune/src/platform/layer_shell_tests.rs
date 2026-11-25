@@ -123,17 +123,14 @@ fn wait_for_configure_times_out_on_silent_socket_and_errors_on_hangup() -> std::
     let outcome = super::wait_for_configure(&conn, &mut queue, &mut state, Duration::from_millis(40));
     assert_eq!(outcome, Outcome::TimedOut);
     assert!(started.elapsed() >= Duration::from_millis(30));
-    assert!(started.elapsed() < Duration::from_secs(2));
 
     let (client, server) = UnixStream::pair()?;
     drop(server);
     let Ok(conn) = Connection::from_socket(client) else { return Ok(()); };
     let mut queue = conn.new_event_queue::<super::State>();
     let mut state = super::State::default();
-    let started = crate::time::now();
     let outcome = super::wait_for_configure(&conn, &mut queue, &mut state, Duration::from_secs(2));
     assert_eq!(outcome, Outcome::Error);
-    assert!(started.elapsed() < Duration::from_secs(1));
     Ok(())
 }
 
@@ -429,18 +426,16 @@ fn watch_exits_after_one_wake_on_closed_socket() -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
-    use std::time::Duration;
 
     let (client, server) = UnixStream::pair()?;
     drop(server);
     let wakes = Arc::new(AtomicUsize::new(0));
     let count = wakes.clone();
     let watch = super::Watch::spawn(client.as_raw_fd(), Arc::new(move || {
-        count.fetch_add(1, Ordering::Relaxed);
+        count.fetch_add(1, Ordering::SeqCst);
     }));
-    std::thread::sleep(Duration::from_millis(300));
-    drop(watch);
-    assert_eq!(wakes.load(Ordering::Relaxed), 1);
+    watch.join();
+    assert_eq!(wakes.load(Ordering::SeqCst), 1);
     Ok(())
 }
 

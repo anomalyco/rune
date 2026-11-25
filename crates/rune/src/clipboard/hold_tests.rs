@@ -246,7 +246,7 @@ fn no_clipboard_reports_a_failed_write_and_wakes() {
     let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { woke.send(()).ok(); }) };
     let (write, handle) = ClipboardWrite::secret("fixture".into(), LONG);
     worker.sender.send(Request::Write(write, Some(notify))).unwrap();
-    wakes.recv_timeout(Duration::from_secs(1)).unwrap();
+    wakes.recv().unwrap();
     assert_eq!(handle.state(), SecretState::Failed("no clipboard".into()));
     worker.stop();
 }
@@ -369,13 +369,13 @@ fn the_worker_s_exit_leaves_no_handle_holding() {
         let (write, handle) = ClipboardWrite::secret(SECRET.into(), LONG);
         write.bind(Route::System(worker.sender.clone()));
         worker.sender.send(Request::Write(write, Some(notify))).unwrap();
-        wakes.recv_timeout(Duration::from_secs(1)).unwrap();
+        wakes.recv().unwrap();
         lock_it.store(unreadable, Ordering::SeqCst);
         if clear_first { handle.clear_now(); }
         worker.stop();
         assert_eq!(handle.state(), expected, "unreadable {unreadable}, refuse {refuse}, clear first {clear_first}");
-        wakes.recv_timeout(Duration::from_secs(1)).expect("the app hears of it");
-        assert!(wakes.recv_timeout(Duration::from_millis(50)).is_err(), "once");
+        wakes.recv().expect("the app hears of it");
+        assert!(wakes.recv().is_err(), "once");
     }
 }
 
