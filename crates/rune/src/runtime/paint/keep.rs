@@ -103,6 +103,8 @@ pub(in crate::runtime) struct PaintKeep {
     why: [usize; 6],
     /// The next paint paints everything (the raster check's fresh paint).
     pub(in crate::runtime) off_once: bool,
+    #[cfg(test)]
+    pub(in crate::runtime) check_mismatches: usize,
 }
 
 fn disabled() -> bool {
@@ -554,6 +556,8 @@ impl RuntimeCore {
         if now.glyphs[1] - now.glyphs[0] != was.glyphs[1] - was.glyphs[0] { differ.push("glyph count"); }
         if k.pages[range(now.pages)] != k.prev_pages[range(was.pages)] { differ.push("atlas pages"); }
         if !differ.is_empty() {
+            #[cfg(test)]
+            { self.paint.keep.check_mismatches += 1; }
             eprintln!("rune: paint keep: {} would have copied what differs: {}", self.tree.nodes[r].path, differ.join(", "));
         }
     }
@@ -587,7 +591,7 @@ fn static_ok(n: &Node) -> bool {
         && n.vis.backdrop_blur <= 0.0 && n.vis.effect.is_none() && n.vis.pixels.is_none()
         && n.sticky.is_none() && n.above.is_none() && n.matched.is_none()
         && n.static_scale == 1.0 && !n.scale_track && n.vis.mark == 0
-        && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.live.is_none() && t.cold.advance_in.is_none()
+        && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.advance_in.is_none()
             && !t.cold.pills.iter().any(crate::text::PillChip::has_image))
 }
 
@@ -601,3 +605,7 @@ fn dynamic_ok(rt: &RuntimeCore, i: usize, sel: &[(usize, usize, usize)], marks: 
         && (rt.paint.static_scales.is_empty() || !rt.paint.static_scales.contains_key(&id))
         && rt.paint.row_mask[i] < 0.0
 }
+
+#[cfg(test)]
+#[path = "keep_tests.rs"]
+mod tests;
