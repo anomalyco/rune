@@ -47,6 +47,7 @@ mod backdrop;
 mod chrome;
 mod color_scheme;
 mod cpu_first;
+pub(crate) mod display_queue;
 pub(crate) mod displays;
 mod event_loop;
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -663,13 +664,19 @@ impl ApplicationHandler<WakeEvent> for Windows {
             for host in this.hosts.iter_mut().flatten() {
                 animating |= host.about_to_wait(event_loop);
             }
+            let wayland = is_wayland(event_loop);
+            if wayland && !event_loop.exiting() {
+                display_queue::dispatch_pending();
+            }
             // A window an idle hook closed (`App::on_window_geometry`) goes before the loop sleeps.
             if this.hosts.iter().flatten().any(|host| host.finished()) { this.cleanup(event_loop); }
             // The frames windows want next (`redraw`), and on Windows the paints the system keeps
             // putting off behind another window's.
             let now = crate::time::now();
             for host in this.hosts.iter_mut().flatten() { host.turn_ends(event_loop, now); }
-            let effects = wayland_wake::about_to_wait(&mut this.wayland_wake, &this.hosts);
+            let has_display_watch = wayland && !event_loop.exiting() && display_queue::has_watches();
+            let has_pending_display = has_display_watch && display_queue::has_pending();
+            let effects = wayland_wake::about_to_wait(&mut this.wayland_wake, &this.hosts, has_display_watch, has_pending_display);
             this.apply_wayland_wake(event_loop, effects);
             // Layer surfaces have no redraw events: keep turning while one animates (its vsync
             // paces the loop). Hosts whose only motion is an ambient loop sleep until its next step.
