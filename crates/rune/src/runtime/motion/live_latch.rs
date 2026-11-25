@@ -214,6 +214,24 @@ fn take_source_key_comparisons() -> usize {
 }
 
 impl timer_wake::FrameState {
+    /// Sets the scene offset of each matched element arriving now from its `live_offset`, which
+    /// the frame's latch would only set after the commit: its flight then starts where its
+    /// source was seen with that offset already its own.
+    pub(in crate::runtime) fn preset_live_offsets(&self, nodes: &[Node], arrivals: &[(Rc<str>, usize, bool)], scene: &mut Scene, clock: f64) {
+        for &(_, i, arriving) in arrivals {
+            if !arriving { continue; }
+            for bound in nodes[i].live.iter().filter(|b| b.property == crate::live::Property::Offset) {
+                // A copy that has seen nothing reads the value the latch will snap to first.
+                let mut fresh = bound.clone();
+                fresh.seen = None;
+                if let (Some(crate::live::LatchOp::Snap(bits)), _) = fresh.read(&self.live_clock, clock) {
+                    let [x, y] = <[f32; 2] as crate::live::LiveValue>::decode(bits);
+                    scene.set(nodes[i].id, prop::OFFSET, rune_motion::Vec2::new(x, y));
+                }
+            }
+        }
+    }
+
     pub(in crate::runtime) fn subscribe_live(&mut self, nodes: &mut [Node], scene: &Scene, clock: f64) {
         for node in nodes.iter_mut() {
             if let Some(cold) = node.cold.get_mut_if_some() {

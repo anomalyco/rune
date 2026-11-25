@@ -24,6 +24,7 @@ mod layout_rows;
 mod line_fills;
 mod loop_sleep;
 mod matched_in_place;
+mod matched_own_offset;
 mod matched_scroll;
 mod matched_zoom;
 mod no_motion;

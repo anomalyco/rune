@@ -1,0 +1,8 @@
+{
+  "events": [
+    { "t": 0.25, "type": "tap", "key": "off-chip", "hold": 0.14, "expect": "smooth", "element": "off-chip" },
+    { "t": 1.0, "type": "tap", "key": "live-chip", "hold": 0.14, "expect": "smooth", "element": "live-chip" },
+    { "t": 1.75, "type": "tap", "key": "off-chip", "hold": 0.14, "expect": "smooth", "element": "off-chip" },
+    { "t": 2.5, "type": "tap", "key": "live-chip", "hold": 0.14, "expect": "smooth", "element": "live-chip" }
+  ]
+}

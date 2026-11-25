@@ -532,6 +532,7 @@ impl RuntimeCore {
         }
 
         if !arrivals.is_empty() || self.motion.has_matched() {
+            self.frame.preset_live_offsets(&nodes, &arrivals, &mut self.scene, self.clock);
             self.motion.match_elements(&self.tree, &self.paint, &mut self.scene, &mut self.commit, &nodes, &arrivals, tx, instant, self.reduced_motion);
         }
         arrivals.clear();

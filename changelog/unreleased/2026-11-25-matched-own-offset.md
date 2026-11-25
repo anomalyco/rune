@@ -1,0 +1,1 @@
+- **`El::matched` flights start where the source was seen under its own offset:** a matched flight's first frame now matches the source's presented rect including its own `El::offset` / `live_offset` (it started at the source's layout rect), and the target's own offset, static or `live_offset`, is part of where it lands rather than already applied at the start (#2305).

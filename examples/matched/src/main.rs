@@ -1,6 +1,7 @@
 //! Shared-element motion with `El::matched`: a 2×2 grid of picture tiles. 1–4 picks a tile, ↩
 //! (or a click) zooms it to the whole stage and Esc zooms it back. Both places are plain flex
-//! layout; the tile flies between them because both carry the same `matched` id.
+//! layout; the tile flies between them because both carry the same `matched` id. `o` shows chips
+//! with offsets of their own (`El::offset`, `El::live_offset`) flying between two shelves.
 //!
 //! ```sh
 //! cargo run -p matched
@@ -11,7 +12,7 @@
 
 use std::sync::Arc;
 use rune::tok::{self, type_};
-use rune::{AppSpec, Color, Curve, Cx, Easing, El, ImageCache, Key, KeyEvent, LiveRegion, MotionIntent, Pixels, SurfaceFit, TextStyle, Transition, Tx, Waker, col, el, row, text};
+use rune::{AppSpec, Color, Curve, Cx, Easing, El, ImageCache, Key, KeyEvent, Live, LiveRegion, MotionIntent, Pixels, SurfaceFit, TextStyle, Transition, Tx, Waker, col, el, row, text};
 
 struct State {
     picked: usize,
@@ -20,6 +21,11 @@ struct State {
     pictures: [Pixels; 4],
     mips_mode: bool,
     in_place_mode: bool,
+    offset_mode: bool,
+    /// Which shelf each offset chip sits on.
+    offset_right: [bool; 2],
+    /// The `live_offset` chip's offset on the left and right shelves.
+    live_offsets: [Live<[f32; 2]>; 2],
     segment: usize,
     toast: Option<u32>,
     toast_seq: u32,
@@ -122,6 +128,9 @@ fn init() -> State {
         pictures: std::array::from_fn(picture),
         mips_mode: false,
         in_place_mode: false,
+        offset_mode: false,
+        offset_right: [false; 2],
+        live_offsets: [Live::new([18.0, -10.0]), Live::new([-24.0, 16.0])],
         segment: 0,
         toast: None,
         toast_seq: 0,
@@ -359,14 +368,47 @@ fn in_place_view(s: &State, theme: &tok::Theme) -> El {
     col().key("in-place-stage").w_full().grow(1.0).gap(16.0).child(seg_card).child(toast_card)
 }
 
+/// Two chips that fly between a left and a right shelf, each with an offset of its own on both
+/// shelves: `El::offset` on the first, `El::live_offset` on the second. A flight starts where
+/// the chip was seen, offset and all, and lands under the destination's offset.
+fn offset_view(s: &State, theme: &tok::Theme) -> El {
+    const STATIC: [[f32; 2]; 2] = [[24.0, 12.0], [-16.0, 28.0]];
+    let chip = |k: usize| {
+        let key = ["off-chip", "live-chip"][k];
+        let right = s.offset_right[k];
+        let mut c = el().key(key).matched(key).size(120.0, 64.0).radius(14.0).fill(tok::accent(k, true))
+            .on_press(move |s: &mut State| s.offset_right[k] = !s.offset_right[k])
+            .child(text(["El::offset", "El::live_offset"][k]).font(type_::LABEL).color(Color::WHITE).absolute(12.0, 10.0));
+        if s.timed { c = c.matched_motion(Curve::tween(0.24, Easing::EASE_IN_OUT)); }
+        if k == 0 {
+            let [x, y] = STATIC[right as usize];
+            c.offset(x, y)
+        } else {
+            c.live_offset(&s.live_offsets[right as usize])
+        }
+    };
+    let shelf = |right: bool| {
+        let mut sh = col().key(if right { "shelf-right" } else { "shelf-left" }).grow(1.0).h_full().gap(48.0).padding(32.0)
+            .radius(16.0).fill(theme.card).border(1.0, theme.card_border);
+        if right { sh = sh.items_end(); }
+        for k in 0..2 {
+            sh = sh.child(if s.offset_right[k] == right { chip(k) } else { el().size(120.0, 64.0) });
+        }
+        sh
+    };
+    row().key("offset-stage").w_full().grow(1.0).gap(16.0).child(shelf(false)).child(shelf(true))
+}
+
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let theme = tok::theme(true);
     let hint_text = if s.mips_mode {
         "r next frame    m back to grid"
+    } else if s.offset_mode {
+        "click a chip to fly it    t curves    o back to grid"
     } else if s.in_place_mode {
         "1–3 segment    space toast (Tx::instant)    t curves    i back to grid"
     } else {
-        "1–4 pick    ↩ zoom    esc back    t curves    i in-place    m mips"
+        "1–4 pick    ↩ zoom    esc back    t curves    i in-place    o offsets    m mips"
     };
     let hint = text(hint_text).font(type_::LABEL).color(theme.text_secondary);
     let mut bar = el().key("pick-bar").w((s.picked as f32 + 1.0) * 24.0).h(4.0).radius(2.0).fill(tok::accent(0, true));
@@ -392,6 +434,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(row().gap(12.0).center_y().child(pick_track).child(mode));
     let stage = if s.mips_mode {
         mips_view(s, &theme)
+    } else if s.offset_mode {
+        offset_view(s, &theme)
     } else if s.in_place_mode {
         in_place_view(s, &theme)
     } else {
@@ -418,20 +462,25 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 fn on_key(s: &mut State, e: &KeyEvent, tx: &mut Tx) -> bool {
     match &e.key {
         Key::Text(t) if t.eq_ignore_ascii_case("m") => {
-            if s.mips_mode { s.mips_mode = false; } else { s.in_place_mode = false; s.enter_mips(false); }
+            if s.mips_mode { s.mips_mode = false; } else { s.in_place_mode = false; s.offset_mode = false; s.enter_mips(false); }
         }
         Key::Text(t) if t.eq_ignore_ascii_case("i") => {
             s.in_place_mode = !s.in_place_mode;
-            if s.in_place_mode { s.mips_mode = false; }
+            if s.in_place_mode { s.mips_mode = false; s.offset_mode = false; }
+        }
+        Key::Text(t) if !s.mips_mode && t.eq_ignore_ascii_case("o") => {
+            s.offset_mode = !s.offset_mode;
+            if s.offset_mode { s.in_place_mode = false; }
         }
         Key::Text(t) if s.mips_mode && t.eq_ignore_ascii_case("r") => s.step_stream(false),
         Key::Text(t) if s.in_place_mode && let Some(n @ 1..=3) = t.parse::<usize>().ok() => s.segment = n - 1,
         Key::Text(t) if s.in_place_mode && t == " " => toggle_toast(s, tx),
-        Key::Text(t) if !s.mips_mode && !s.in_place_mode && !s.zoomed && let Some(n @ 1..=4) = t.parse::<usize>().ok() => s.picked = n - 1,
+        Key::Text(t) if !s.mips_mode && !s.in_place_mode && !s.offset_mode && !s.zoomed && let Some(n @ 1..=4) = t.parse::<usize>().ok() => s.picked = n - 1,
         Key::Text(t) if !s.mips_mode && t.eq_ignore_ascii_case("t") => s.timed = !s.timed,
-        Key::Enter if !s.mips_mode && !s.in_place_mode => s.zoomed = true,
+        Key::Enter if !s.mips_mode && !s.in_place_mode && !s.offset_mode => s.zoomed = true,
         Key::Escape if s.mips_mode => s.mips_mode = false,
         Key::Escape if s.in_place_mode => s.in_place_mode = false,
+        Key::Escape if s.offset_mode => s.offset_mode = false,
         Key::Escape => s.zoomed = false,
         _ => return false,
     }
@@ -446,6 +495,7 @@ fn main() {
             ("one", |s| s.zoomed = true),
             ("timed", |s| s.timed = true),
             ("in-place", |s| { s.in_place_mode = true; s.mips_mode = false; }),
+            ("offset", |s| s.offset_mode = true),
             ("mips", |s| s.enter_mips(true)),
         ],
         on_key: Some(on_key),
@@ -531,5 +581,23 @@ mod tests {
         assert!((bar[2] - 22.0).abs() < 0.5, "counter bar snapped in Tx::instant: {bar:?}");
         let toast_op = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("instant-toast-1")).unwrap().opacity;
         assert!(toast_op < 0.5, "toast with enter_in_instant fades in during Tx::instant: {toast_op}");
+    }
+
+    #[test]
+    fn offset_scene_flies_from_where_each_chip_was_seen_to_its_new_offset() {
+        let mut st = init();
+        st.offset_mode = true;
+        let mut rt = Runtime::new(st, view, (720.0, 480.0), Env::new(true, 1.0));
+        for _ in 0..30 { rt.frame(1.0 / 60.0); }
+        for key in ["off-chip", "live-chip"] {
+            let seen = rt.presented(key).unwrap().0;
+            rt.update(|s, _| s.offset_right = [true; 2]);
+            rt.frame(1.0 / 1000.0);
+            let first = rt.presented(key).unwrap().0;
+            assert!((first[0] - seen[0]).abs() < 1.0 && (first[1] - seen[1]).abs() < 1.0, "{key}: {seen:?} -> {first:?}");
+            for _ in 0..120 { rt.frame(1.0 / 60.0); }
+            rt.update(|s, _| s.offset_right = [false; 2]);
+            for _ in 0..120 { rt.frame(1.0 / 60.0); }
+        }
     }
 }

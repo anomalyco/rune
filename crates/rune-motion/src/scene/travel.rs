@@ -33,7 +33,7 @@ impl Scene {
         anim: impl Into<LayoutAnim>,
     ) {
         let Some(a) = self.slot(from) else { return };
-        let (mut start, mut vel) = self.exact_world(a);
+        let (mut start, mut vel) = self.exact_seen(a);
         for k in 0..4 {
             let (off, anc, anc_to) = if k % 2 == 0 {
                 (offset.x, anchor.x, anchor_to.x)
@@ -61,7 +61,7 @@ impl Scene {
         anim: impl Into<LayoutAnim>,
     ) {
         let Some(a) = self.slot(from) else { return };
-        let (mut start, mut vel) = self.exact_world(a);
+        let (mut start, mut vel) = self.exact_seen(a);
         let t = [travel.x, travel.y];
         let tv = [travel_vel.x, travel_vel.y];
         for k in 0..4 {
@@ -87,7 +87,15 @@ impl Scene {
         // `to` is the one surface from now on: fully present, no presence effect.
         let acts = self.nodes[b].phase_step(&mut self.exiting, PhaseEvent::Appear);
         self.apply(b, acts);
-        self.start_path(b, start, vel, anim);
+        // `to` is drawn with its own offset on top of its path: start the path that far back so
+        // its first frame is where `from` was seen, and the offset is its destination's alone.
+        // A presence look it keeps (an exit it was leaving from) stays on top, as before.
+        let mut off = [D::c(0.0); 2];
+        self.lanes_dual(b, prop::OFFSET.id, &mut off);
+        let (own, own_vel) = ([off[0].x, off[1].x], [off[0].v, off[1].v]);
+        let path_start = core::array::from_fn(|k| start[k] - own[k % 2]);
+        let path_vel = core::array::from_fn(|k| vel[k] - own_vel[k % 2]);
+        self.start_path(b, path_start, path_vel, anim);
         self.track_set(b, prop::RADIUS, radius);
         self.track_animate(b, prop::RADIUS, to_radius, anim.x);
         self.track_set(b, prop::FILL, fill);
@@ -171,6 +179,20 @@ impl Scene {
         let mut o = self.origin_dual(n.parent as usize);
         o[0] = o[0].add(self.trail_dual(i));
         core::array::from_fn(|k| local[k].add(o[k % 2]))
+    }
+
+    /// Root-space edges of node `i` where it is seen at `now()`, with velocities: its layout
+    /// edges plus its own and presence offsets, as `Presented::rect` places it.
+    fn exact_seen(&self, i: usize) -> ([f32; 4], [f32; 4]) {
+        let (mut edges, mut vel) = self.exact_world(i);
+        let w = self.world_dual(i);
+        let o = self.origin_dual(i);
+        for k in 0..4 {
+            let (own, own_vel) = (o[k % 2].x - w[k % 2].x, o[k % 2].v - w[k % 2].v);
+            edges[k] += own;
+            vel[k] += own_vel;
+        }
+        (edges, vel)
     }
 
     pub(super) fn start_path(&mut self, i: usize, start: [f32; 4], vel: [f32; 4], anim: LayoutAnim) {
