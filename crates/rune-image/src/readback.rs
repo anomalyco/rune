@@ -18,15 +18,19 @@ pub(crate) fn decoded_to_rgba(decoded: &Decoded) -> Option<(u32, u32, Vec<u8>)> 
 impl Image {
     /// The decoded image as straight-alpha sRGB RGBA8 (`width * height * 4` bytes, rows top
     /// first), at full resolution: a raster at its decoded size (after EXIF orientation and ICC
-    /// conversion), an animation's or AVIF's first frame, and an SVG at its intrinsic size
-    /// ([`Image::intrinsic_size`], rounded) when it was rasterized larger. An image from
-    /// [`ImageCache::load_scaled`](crate::ImageCache::load_scaled) gives its scaled pixels.
-    /// `None` while it decodes or when decoding failed.
+    /// conversion), an animated GIF/WebP/APNG's frame 0 (not the currently displayed frame),
+    /// a native AVIF still (animated `avis` is rejected natively; first frame on web), and an
+    /// SVG loaded via [`ImageCache::load`](crate::ImageCache::load) at its rounded intrinsic
+    /// size ([`Image::intrinsic_size`], capped at 4096 px/side) when rasterized larger. An SVG
+    /// rasterized smaller via [`ImageCache::svg`](crate::ImageCache::svg) or an image from
+    /// [`ImageCache::load_scaled`](crate::ImageCache::load_scaled) returns its rasterized/
+    /// scaled size. `None` while decoding or when decoding failed.
     ///
-    /// Opaque 8-bit sRGB pixels (`alpha == 255`) round-trip bit-exactly; translucent pixels
-    /// (`1..=254`) round-trip through premultiplied 8-bit sRGB mip 0 (with slight low-alpha
-    /// quantization), and fully transparent pixels (`alpha == 0`) zero RGB. Wide-gamut ICC
-    /// profiles are converted to sRGB and >8-bit sources are reduced to 8-bit sRGB.
+    /// Opaque 8-bit sRGB pixels (`alpha == 255`) round-trip bit-exactly (`0` error);
+    /// translucent pixels (`1..=254`) round-trip through premultiplied 8-bit sRGB mip 0
+    /// (worst channel error ±1 for `alpha >= 128`, ±4 for `alpha >= 32`, up to 55 at
+    /// `alpha == 1`), and fully transparent pixels (`alpha == 0`) zero RGB. Wide-gamut ICC
+    /// profiles are converted to sRGB and >8-bit HDR sources are reduced to 8-bit sRGB.
     ///
     /// It copies and converts every pixel, so call it off the event thread for a large image
     /// (`Tx::copy_image` in `rune` does).
