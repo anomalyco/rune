@@ -149,6 +149,9 @@ impl Renderer {
     fn write_rows(staging: &Staging, texture: &wgpu::Texture, data: &[u8], (y0, y1): (u32, u32)) {
         if y1 <= y0 { return; }
         let row = texture.width() * texture.format().block_copy_size(None).unwrap();
+        let max_y = (data.len() / row as usize) as u32;
+        let y1 = y1.min(max_y);
+        if y1 <= y0 { return; }
         staging.write_texture_rows(texture, y0, &data[(y0 * row) as usize..(y1 * row) as usize]);
     }
 
