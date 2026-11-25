@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
-    Align, Cx, Direction, El, Env, Key, KeyEvent, Link, Mark, MarkRange, Mods, PointerButton, Runtime,
-    ScrollSpec, Side, TextEdit, TextStyle, TouchPhase, Tx, col, el, text, text_input,
+    Align, Cx, Direction, El, Env, InlineAlign, InlineBox, Key, KeyEvent, Link, Mark, MarkRange,
+    Mods, PointerButton, Runtime, ScrollSpec, Side, TextEdit, TextStyle, TouchPhase, Tx, col, el,
+    text, text_input,
 };
 
 fn approx_rect(got: [f32; 4], want: [f32; 4], label: &str) {
@@ -272,38 +273,216 @@ fn link_rect_follows_scroll_zoom_scale_and_hidpi() {
 fn link_rect_handles_rtl_text() {
     #[derive(Default)]
     struct State {
-        rect: Option<[f32; 4]>,
+        last: Option<(String, Option<[f32; 4]>)>,
     }
 
-    const BODY: &str = "مرحبا بالعالم رابط مهم هنا";
-    const START: usize = "مرحبا بالعالم ".len();
-    const END: usize = START + "رابط".len();
+    // 1. Bundled Inter font in RTL with RLM reordering (font-independent across every OS).
+    const BUNDLED_BODY: &str = "alpha ‏ beta";
+    const BUNDLED_A_END: usize = "alpha".len();
+    const BUNDLED_B_START: usize = "alpha ‏ ".len();
+    const BUNDLED_B_END: usize = BUNDLED_BODY.len();
+
+    // 2. Arabic script (shaped by system Arabic font when present, or .notdef boxes when absent).
+    const ARABIC_BODY: &str = "رابط أول ثم آخر";
+    const ARABIC_A_END: usize = "رابط".len();
+    const ARABIC_B_START: usize = "رابط أول ثم ".len();
+    const ARABIC_B_END: usize = ARABIC_BODY.len();
+
+    // 3. Unassigned strong-RTL (Bidi_Class=R, U+05C8..U+05CD) guaranteed to render as .notdef
+    // boxes on every host, verifying missing-glyph boxes still lay out and report in RTL order.
+    const NOTDEF_BODY: &str = "׈׉׊ ׋׌׍";
+    const NOTDEF_A_END: usize = "׈׉׊".len();
+    const NOTDEF_B_START: usize = "׈׉׊ ".len();
+    const NOTDEF_B_END: usize = NOTDEF_BODY.len();
 
     fn view(_: &State, _: &mut Cx<State>) -> El {
-        col().size(300.0, 100.0).padding(12.0).child(
-            text(BODY)
-                .key("rtl-doc")
-                .dir(Direction::Rtl)
-                .font(TextStyle::new(14.0, 400.0).lh(20.0))
-                .w(260.0)
-                .link(Link::new(START..END, "rtl-link"))
-                .on_link(|s: &mut State, _, tx| s.rect = tx.link_rect()),
-        )
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        col()
+            .size(400.0, 140.0)
+            .padding(12.0)
+            .gap(8.0)
+            .child(
+                text(BUNDLED_BODY)
+                    .key("rtl-bundled")
+                    .dir(Direction::Rtl)
+                    .font(style)
+                    .w(360.0)
+                    .link(Link::new(0..BUNDLED_A_END, "bundled-first"))
+                    .link(Link::new(BUNDLED_B_START..BUNDLED_B_END, "bundled-second"))
+                    .on_link(|s: &mut State, id, tx| s.last = Some((id.to_owned(), tx.link_rect()))),
+            )
+            .child(
+                text(ARABIC_BODY)
+                    .key("rtl-arabic")
+                    .dir(Direction::Rtl)
+                    .font(style)
+                    .w(360.0)
+                    .link(Link::new(0..ARABIC_A_END, "arabic-first"))
+                    .link(Link::new(ARABIC_B_START..ARABIC_B_END, "arabic-second"))
+                    .on_link(|s: &mut State, id, tx| s.last = Some((id.to_owned(), tx.link_rect()))),
+            )
+            .child(
+                text(NOTDEF_BODY)
+                    .key("rtl-notdef")
+                    .dir(Direction::Rtl)
+                    .font(style)
+                    .w(360.0)
+                    .link(Link::new(0..NOTDEF_A_END, "notdef-first"))
+                    .link(Link::new(NOTDEF_B_START..NOTDEF_B_END, "notdef-second"))
+                    .on_link(|s: &mut State, id, tx| s.last = Some((id.to_owned(), tx.link_rect()))),
+            )
     }
 
-    let mut rt = Runtime::new(State::default(), view, (300.0, 100.0), Env::new(true, 1.0));
+    let mut rt = Runtime::new(State::default(), view, (400.0, 140.0), Env::new(true, 1.0));
     rt.frame(0.0);
     settle(&mut rt);
 
-    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("rtl-doc")).unwrap();
-    let want = first_box_xywh(&rt, i, 0);
-    assert!(want[0] > 120.0, "RTL link should sit on the right half: {want:?}");
+    for (node_key, first_id, second_id) in [
+        ("rtl-bundled", "bundled-first", "bundled-second"),
+        ("rtl-arabic", "arabic-first", "arabic-second"),
+        ("rtl-notdef", "notdef-first", "notdef-second"),
+    ] {
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some(node_key)).unwrap();
+        let doc_box = rt.core().drawn_box(i);
+        let first_want = first_box_xywh(&rt, i, 0);
+        let second_want = first_box_xywh(&rt, i, 1);
 
-    rt.update(|_, tx| tx.focus("rtl-link", true));
-    settle(&mut rt);
-    rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+        assert!(first_want[2] > 0.0 && first_want[3] > 0.0, "{node_key}: first box empty {first_want:?}");
+        assert!(second_want[2] > 0.0 && second_want[3] > 0.0, "{node_key}: second box empty {second_want:?}");
+        assert!(
+            first_want[0] > second_want[0] + second_want[2],
+            "{node_key}: logical-first RTL link must sit strictly right of logical-second: first={first_want:?}, second={second_want:?}",
+        );
+        assert!(
+            (doc_box[2] - (first_want[0] + first_want[2])).abs() < 2.0,
+            "{node_key}: logical-first RTL link should align to right edge {}: first={first_want:?}",
+            doc_box[2],
+        );
+
+        for (id, want) in [(first_id, first_want), (second_id, second_want)] {
+            // Pointer click.
+            rt.state.last = None;
+            let (cx, cy) = (want[0] + want[2] * 0.5, want[1] + want[3] * 0.5);
+            rt.pointer_down(cx, cy);
+            rt.pointer_up(cx, cy);
+            rt.frame(0.0);
+            let (got_id, got_rect) = rt.state.last.take().unwrap_or_else(|| panic!("{node_key}/{id} click"));
+            assert_eq!(got_id, id);
+            approx_rect(got_rect.expect("click link_rect"), want, &format!("{node_key}/{id} click"));
+
+            // Keyboard Enter.
+            rt.update(|_, tx| tx.focus(id, true));
+            settle(&mut rt);
+            rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+            rt.frame(0.0);
+            let (got_id, got_rect) = rt.state.last.take().unwrap_or_else(|| panic!("{node_key}/{id} Enter"));
+            assert_eq!(got_id, id);
+            approx_rect(got_rect.expect("Enter link_rect"), want, &format!("{node_key}/{id} Enter"));
+        }
+    }
+}
+
+#[test]
+fn link_rect_beside_inline_box_in_ltr_and_rtl() {
+    #[derive(Default)]
+    struct State {
+        last: Option<(String, Option<[f32; 4]>)>,
+    }
+
+    const LTR_BODY: &str = "Lead  docs";
+    const LTR_LEAD_END: usize = "Lead".len();
+    const LTR_INLINE_AT: usize = "Lead ".len();
+    const LTR_DOCS_START: usize = "Lead  ".len();
+    const LTR_DOCS_END: usize = LTR_BODY.len();
+
+    const RTL_BODY: &str = "alpha ‏ beta";
+    const RTL_INLINE_AT: usize = "alpha ".len();
+    const RTL_BETA_START: usize = "alpha ‏ ".len();
+    const RTL_BETA_END: usize = RTL_BODY.len();
+
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        let style = TextStyle::new(14.0, 400.0).lh(20.0);
+        let slot = InlineBox::new(60.0, 18.0).align(InlineAlign::TextCenter);
+        col()
+            .size(380.0, 120.0)
+            .padding(12.0)
+            .gap(10.0)
+            .child(
+                text(LTR_BODY)
+                    .key("ltr-inline")
+                    .font(style)
+                    .w(340.0)
+                    .link(Link::new(0..LTR_LEAD_END, "ltr-before"))
+                    .link(Link::new(LTR_DOCS_START..LTR_DOCS_END, "ltr-after"))
+                    .on_link(|s: &mut State, id, tx| s.last = Some((id.to_owned(), tx.link_rect())))
+                    .inline(LTR_INLINE_AT, slot, el().key("ltr-chip")),
+            )
+            .child(
+                text(RTL_BODY)
+                    .key("rtl-inline")
+                    .dir(Direction::Rtl)
+                    .font(style)
+                    .w(340.0)
+                    .link(Link::new(RTL_BETA_START..RTL_BETA_END, "rtl-after"))
+                    .on_link(|s: &mut State, id, tx| s.last = Some((id.to_owned(), tx.link_rect())))
+                    .inline(RTL_INLINE_AT, slot, el().key("rtl-chip")),
+            )
+    }
+
+    let mut rt = Runtime::new(State::default(), view, (380.0, 120.0), Env::new(true, 1.0));
     rt.frame(0.0);
-    approx_rect(rt.state.rect.expect("RTL link_rect"), want, "RTL link");
+    settle(&mut rt);
+
+    let chip_rect = |rt: &Runtime<State>, key: &str| {
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap().rect
+    };
+
+    // LTR: "Lead" sits left of the 60pt inline box; "docs" sits right of it.
+    let ltr_i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("ltr-inline")).unwrap();
+    let ltr_chip = chip_rect(&rt, "ltr-chip");
+    let before_want = first_box_xywh(&rt, ltr_i, 0);
+    let after_want = first_box_xywh(&rt, ltr_i, 1);
+    assert!(
+        before_want[0] + before_want[2] <= ltr_chip[0] + 1.0,
+        "LTR link before box must end before chip: link={before_want:?}, chip={ltr_chip:?}",
+    );
+    assert!(
+        after_want[0] >= ltr_chip[0] + ltr_chip[2] - 1.0,
+        "LTR link after box must start past chip: link={after_want:?}, chip={ltr_chip:?}",
+    );
+
+    // RTL: "beta" sits left of the inline box.
+    let rtl_i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("rtl-inline")).unwrap();
+    let rtl_chip = chip_rect(&rt, "rtl-chip");
+    let rtl_after_want = first_box_xywh(&rt, rtl_i, 0);
+    assert!(
+        rtl_after_want[0] + rtl_after_want[2] <= rtl_chip[0] + 1.0,
+        "RTL link after box must sit left of chip: link={rtl_after_want:?}, chip={rtl_chip:?}",
+    );
+
+    for (id, want) in [
+        ("ltr-before", before_want),
+        ("ltr-after", after_want),
+        ("rtl-after", rtl_after_want),
+    ] {
+        // Click.
+        let (cx, cy) = (want[0] + want[2] * 0.5, want[1] + want[3] * 0.5);
+        rt.pointer_down(cx, cy);
+        rt.pointer_up(cx, cy);
+        rt.frame(0.0);
+        let (got_id, got) = rt.state.last.take().unwrap_or_else(|| panic!("{id} click"));
+        assert_eq!(got_id, id);
+        approx_rect(got.expect("click link_rect"), want, &format!("{id} click"));
+
+        // Enter.
+        rt.update(|_, tx| tx.focus(id, true));
+        settle(&mut rt);
+        rt.key(KeyEvent { key: Key::Enter, mods: Mods::default() });
+        rt.frame(0.0);
+        let (got_id, got) = rt.state.last.take().unwrap_or_else(|| panic!("{id} Enter"));
+        assert_eq!(got_id, id);
+        approx_rect(got.expect("Enter link_rect"), want, &format!("{id} Enter"));
+    }
 }
 
 #[test]

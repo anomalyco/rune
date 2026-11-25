@@ -1,0 +1,1 @@
+- Fixed `runtime::selection::links::link_rect_tests::link_rect_handles_rtl_text` to assert font-metric-independent RTL ordering and right-edge alignment across bundled Inter (RLM-reordered), Arabic, and missing-glyph (`.notdef`) RTL text instead of assuming narrow system Arabic glyphs, and added `Tx::link_rect` coverage beside `El::inline` boxes in LTR and RTL.
