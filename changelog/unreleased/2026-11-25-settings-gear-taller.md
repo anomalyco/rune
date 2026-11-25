@@ -1,0 +1,1 @@
+- `rune-theme-opencode`: the `settings-gear` icon's hexagon is taller, as in @opencode/ui's catalog today: its top and bottom points move from 1.5 and 14.5 to 1 and 15; the circle is unchanged.
