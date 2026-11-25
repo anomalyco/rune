@@ -288,7 +288,12 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (h.disposed) return;
         const locked = document.pointerLockElement === canvas;
         if (locked) {
-            if (!h.pointerLockPending && !h.pointerLocked) {
+            if (h.pointerLocked) {
+                // Second pointerlockchange from an in-place option upgrade (W3C Pointer Lock 2.0
+                // step 6.3.2): already locked, no duplicate event to Rust.
+                return;
+            }
+            if (!h.pointerLockPending) {
                 // Lock arrived after Rune cancelled or unmounted: exit immediately.
                 if (typeof document.exitPointerLock === 'function') {
                     try { document.exitPointerLock(); } catch {}
@@ -298,7 +303,9 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             h.pointerLocked = true;
             h.pointerLockPending = false;
             h.pointerLockHasPromise = false;
+            const seq = h.pointerLockSeq;
             send({ kind: 'pointer_lock', locked: true });
+            upgradeUnadjustedMovement(h, seq);
         } else if (h.pointerLocked) {
             h.pointerLocked = false;
             h.pointerLockPending = false;
@@ -775,11 +782,40 @@ export function syncMediaKeys(h, enabled) {
     h.mediaKeys = !!enabled;
 }
 
-// Requests pointer lock on the canvas inside a user gesture. Tries `{ unadjustedMovement: true }`
-// first for raw unaccelerated deltas where supported, caching and falling back to plain
-// `requestPointerLock()` on `NotSupportedError` or synchronous `TypeError`. Any refusal
-// (`SecurityError`, missing API, or failed fallback) reports `{ kind: 'pointer_lock', locked: false }`
-// so Rune's state machine returns cleanly to Ready without getting stuck.
+// Upgrades an already-active plain pointer lock to `{ unadjustedMovement: true }` in place
+// (W3C Pointer Lock 2.0 step 6.3). If unsupported, the original plain lock remains intact and
+// the fallback is cached so later locks skip the upgrade.
+function upgradeUnadjustedMovement(h, seq) {
+    if (h.disposed || h.pointerLockUnadjustedFailed || !h.pointerLocked || h.pointerLockSeq !== seq) return;
+    const canvas = h.canvas;
+    if (document.pointerLockElement !== canvas || typeof canvas.requestPointerLock !== 'function') return;
+    try {
+        const res = canvas.requestPointerLock({ unadjustedMovement: true });
+        if (res && typeof res.then === 'function') {
+            res.then(
+                () => {},
+                err => {
+                    if (err && err.name === 'NotSupportedError') {
+                        h.pointerLockUnadjustedFailed = true;
+                    }
+                },
+            );
+        } else {
+            h.pointerLockUnadjustedFailed = true;
+        }
+    } catch (err) {
+        if (err && (err.name === 'NotSupportedError' || err.name === 'TypeError')) {
+            h.pointerLockUnadjustedFailed = true;
+        }
+    }
+}
+
+// Requests plain pointer lock synchronously inside the user gesture so the first click never
+// depends on an asynchronous retry (which can lose transient activation or race a stale
+// `pointerlockerror` when a platform rejects `unadjustedMovement`). Once `pointerlockchange`
+// confirms the lock, `upgradeUnadjustedMovement` upgrades it in place where supported. Any
+// refusal (`SecurityError`, missing API, or `pointerlockerror`) reports
+// `{ kind: 'pointer_lock', locked: false, refused: true }` so Rune returns cleanly to Ready.
 export function requestPointerLock(h) {
     if (h.disposed) return;
     const canvas = h.canvas;
@@ -798,70 +834,28 @@ export function requestPointerLock(h) {
         h.pointerLockHasPromise = false;
         h.send({ kind: 'pointer_lock', locked: false, refused: true });
     };
-    const invoke = opts => {
+    h.syncing = true;
+    try {
         h.pointerLockCalling = true;
         h.pointerLockSyncError = false;
+        let res;
         try {
-            return opts === undefined ? canvas.requestPointerLock() : canvas.requestPointerLock(opts);
+            res = canvas.requestPointerLock();
         } finally {
             h.pointerLockCalling = false;
         }
-    };
-    const tryPlain = () => {
-        if (h.disposed || h.pointerLockSeq !== seq) return;
-        try {
-            const res = invoke(undefined);
-            if (res && typeof res.then === 'function') {
-                h.pointerLockHasPromise = true;
-                h.pointerLockSyncError = false;
-                res.then(
-                    () => { if (h.pointerLockSeq === seq) h.pointerLockHasPromise = false; },
-                    fail,
-                );
-            } else if (h.pointerLockSyncError) {
-                h.pointerLockSyncError = false;
-                fail();
-            }
-        } catch {
+        if (res && typeof res.then === 'function') {
+            // Keep `pointerLockHasPromise` true until `pointerlockchange` or `fail`, never
+            // clearing it in a fulfillment microtask before `pointerlockchange` fires.
+            h.pointerLockHasPromise = true;
+            h.pointerLockSyncError = false;
+            res.then(() => {}, fail);
+        } else if (h.pointerLockSyncError) {
+            h.pointerLockSyncError = false;
             fail();
         }
-    };
-    h.syncing = true;
-    try {
-        if (h.pointerLockUnadjustedFailed) {
-            tryPlain();
-            return;
-        }
-        try {
-            const res = invoke({ unadjustedMovement: true });
-            if (res && typeof res.then === 'function') {
-                h.pointerLockHasPromise = true;
-                h.pointerLockSyncError = false;
-                res.then(
-                    () => { if (h.pointerLockSeq === seq) h.pointerLockHasPromise = false; },
-                    err => {
-                        if (h.disposed || h.pointerLockSeq !== seq) return;
-                        h.pointerLockHasPromise = false;
-                        if (err && err.name === 'NotSupportedError') {
-                            h.pointerLockUnadjustedFailed = true;
-                            tryPlain();
-                            return;
-                        }
-                        fail();
-                    },
-                );
-            } else if (h.pointerLockSyncError) {
-                h.pointerLockSyncError = false;
-                fail();
-            }
-        } catch (err) {
-            if (err && (err.name === 'NotSupportedError' || err.name === 'TypeError')) {
-                h.pointerLockUnadjustedFailed = true;
-                tryPlain();
-            } else {
-                fail();
-            }
-        }
+    } catch {
+        fail();
     } finally {
         h.syncing = false;
     }

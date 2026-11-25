@@ -448,9 +448,11 @@ impl El {
     ///   back to `Confined`; `zwp_relative_pointer_v1` deltas are already in logical surface units.
     /// - **X11**: `Locked` is unsupported so it falls back to `CursorGrabMode::Confined`
     ///   (`xcb_grab_pointer`); XInput2 `RawMotion` counts are divided by `scale_factor()`.
-    /// - **Web**: inside the primary press user gesture, calls
-    ///   `canvas.requestPointerLock({ unadjustedMovement: true })` and caches a fallback to plain
-    ///   `canvas.requestPointerLock()` if the browser rejects with `NotSupportedError`.
+    /// - **Web**: inside the primary press user gesture, calls plain `canvas.requestPointerLock()`
+    ///   synchronously so the first click never depends on an asynchronous retry; once
+    ///   `pointerlockchange` confirms the lock, upgrades in place to `{ unadjustedMovement: true }`
+    ///   where supported (caching `NotSupportedError` so the plain lock stays intact and later
+    ///   locks skip the upgrade).
     ///   [`Cx::pointer_locked`](crate::Cx::pointer_locked) stays `false` until the browser grants
     ///   lock (`pointerlockchange`), relative deltas come from `PointerEvent.movementX`/`movementY`
     ///   in CSS pixels (logical points, independent of `Cx::zoom`), and browser-driven exits

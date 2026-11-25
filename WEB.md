@@ -267,9 +267,10 @@ focus to the canvas so
 shortcuts and Tab keep working. Continuous pointer movement, pointer-lock motion (`El::pointer_lock`) and wheel events wait for rAF.
 
 `El::pointer_lock` uses the W3C Pointer Lock API: a primary press on the element requests
-`canvas.requestPointerLock({ unadjustedMovement: true })` synchronously inside the `pointerdown`
-user gesture, caching a fallback to plain `canvas.requestPointerLock()` when a platform rejects
-`unadjustedMovement` with `NotSupportedError`. `Cx::pointer_locked()` stays `false` until
+plain `canvas.requestPointerLock()` synchronously inside the `pointerdown` user gesture so the
+first click never depends on an asynchronous retry; once `pointerlockchange` confirms the lock,
+it upgrades in place to `{ unadjustedMovement: true }` where supported (caching
+`NotSupportedError` so the plain lock stays intact and later locks skip the upgrade). `Cx::pointer_locked()` stays `false` until
 `pointerlockchange` confirms `document.pointerLockElement === canvas`. While locked, relative
 deltas arrive from `PointerEvent.movementX`/`movementY` in CSS pixels (logical points, independent
 of `Cx::zoom`) and coalesce into one handler call per animation frame. Browser-driven exits
