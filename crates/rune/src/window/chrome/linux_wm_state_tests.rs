@@ -20,8 +20,8 @@ fn pre_configure_returns_all_unknown() {
 
 #[test]
 fn protocol_version_gating_keeps_older_compositors_unknown() {
-    // v1 compositor: decoration_mode known, tiled edges and capabilities remain Unknown (None)
-    // even when sctk's default capabilities are WindowManagerCapabilities::all().
+    // v1 compositor: decoration_mode and client-controlled close are known; tiled edges and
+    // compositor-gated capabilities stay Unknown (None) even when sctk defaults capabilities to all().
     let v1 = decode_wayland_wm_state(Some(gate_wayland_configure(
         false,
         [true, false, true, true],
@@ -30,10 +30,10 @@ fn protocol_version_gating_keeps_older_compositors_unknown() {
     )));
     assert_eq!(v1.decoration_mode, DecorationMode::Client);
     assert_eq!(v1.tiled_edges, None);
-    assert_eq!(v1.actions, WindowActions::default());
+    assert_eq!(v1.actions, WindowActions::default().with_close(Some(true)));
 
-    // v2..=v4 compositor: tiled edges known, wm_capabilities still Unknown (None) so sctk's
-    // default all() never leaks as confirmed capabilities.
+    // v2..=v4 compositor: tiled edges known, compositor wm_capabilities still Unknown (None) so
+    // sctk's default all() never leaks as confirmed capabilities.
     for version in 2..=4 {
         let state = decode_wayland_wm_state(Some(gate_wayland_configure(
             true,
@@ -43,10 +43,14 @@ fn protocol_version_gating_keeps_older_compositors_unknown() {
         )));
         assert_eq!(state.decoration_mode, DecorationMode::Server);
         assert_eq!(state.tiled_edges, Some(TiledEdges::new(true, false, true, true)));
-        assert_eq!(state.actions, WindowActions::default(), "v{version} must not report capabilities");
+        assert_eq!(
+            state.actions,
+            WindowActions::default().with_close(Some(true)),
+            "v{version} must not report compositor wm_capabilities",
+        );
     }
 
-    // v5+ compositor: all three are reported; close remains None (absent from xdg-shell).
+    // v5+ compositor: all five actions are known (close follows window closeable policy).
     let v5 = decode_wayland_wm_state(Some(gate_wayland_configure(
         false,
         [false, false, false, false],
@@ -62,57 +66,89 @@ fn protocol_version_gating_keeps_older_compositors_unknown() {
             .with_maximize(Some(true))
             .with_minimize(Some(true))
             .with_fullscreen(Some(true))
-            .with_close(None),
+            .with_close(Some(true)),
     );
 }
 
 #[test]
-fn decodes_every_tiled_edge_and_capability_bit_independently() {
-    // Every tiled edge individually.
-    assert_eq!(
-        decode_wayland_wm_state(Some(WaylandConfigureState {
-            server_decorations: false,
-            tiled_edges: Some([true, false, false, false]),
-            capabilities: None,
-        }))
-        .tiled_edges,
-        Some(TiledEdges::new(true, false, false, false)),
-    );
-    assert_eq!(
-        decode_wayland_wm_state(Some(WaylandConfigureState {
-            server_decorations: false,
-            tiled_edges: Some([false, true, false, false]),
-            capabilities: None,
-        }))
-        .tiled_edges,
-        Some(TiledEdges::new(false, true, false, false)),
-    );
-    assert_eq!(
-        decode_wayland_wm_state(Some(WaylandConfigureState {
-            server_decorations: false,
-            tiled_edges: Some([false, false, true, false]),
-            capabilities: None,
-        }))
-        .tiled_edges,
-        Some(TiledEdges::new(false, false, true, false)),
-    );
-    assert_eq!(
-        decode_wayland_wm_state(Some(WaylandConfigureState {
-            server_decorations: false,
-            tiled_edges: Some([false, false, false, true]),
-            capabilities: None,
-        }))
-        .tiled_edges,
-        Some(TiledEdges::new(false, false, false, true)),
-    );
+fn non_resizable_wayland_window_reports_maximize_false_while_keeping_fullscreen_and_close() {
+    // Live GNOME Shell 50.1 (Mutter) sends all four wm_capabilities unconditionally, even for a
+    // non-resizable window whose Super+Up maximize is refused while fullscreen is still allowed.
+    let mut cfg = gate_wayland_configure(false, [false; 4], ALL_WAYLAND_CAPS, 5);
+    cfg.resizable = false;
+    let state = decode_wayland_wm_state(Some(cfg));
+    assert_eq!(state.decoration_mode, DecorationMode::Client);
+    assert_eq!(state.actions.maximize, Some(false));
+    assert_eq!(state.actions.fullscreen, Some(true));
+    assert_eq!(state.actions.minimize, Some(true));
+    assert_eq!(state.actions.window_menu, Some(true));
+    assert_eq!(state.actions.close, Some(true));
 
-    // Every capability bit individually, plus empty (0) and higher unknown bits ignored.
-    let empty_caps = decode_wayland_wm_state(Some(WaylandConfigureState {
-        server_decorations: true,
-        tiled_edges: Some([false; 4]),
-        capabilities: Some(0xFFF0),
-    }));
-    // Empty capabilities must not affect server decoration_mode.
+    // Even below v5, a non-resizable window knows maximize is disallowed while other compositor
+    // capabilities remain unknown.
+    let mut cfg_v4 = gate_wayland_configure(false, [false; 4], ALL_WAYLAND_CAPS, 4);
+    cfg_v4.resizable = false;
+    let state_v4 = decode_wayland_wm_state(Some(cfg_v4));
+    assert_eq!(state_v4.actions.maximize, Some(false));
+    assert_eq!(state_v4.actions.fullscreen, None);
+    assert_eq!(state_v4.actions.window_menu, None);
+    assert_eq!(state_v4.actions.minimize, None);
+    assert_eq!(state_v4.actions.close, Some(true));
+
+    // Non-closeable window reflects close: Some(false).
+    let mut no_close = gate_wayland_configure(false, [false; 4], ALL_WAYLAND_CAPS, 5);
+    no_close.closeable = false;
+    assert_eq!(decode_wayland_wm_state(Some(no_close)).actions.close, Some(false));
+}
+
+#[test]
+fn gnome_ubuntu_wayland_live_fixtures_pass_through_protocol_states_honestly() {
+    // Live GNOME 50.1 maximized window sends all four TILED_* states.
+    let maximized = decode_wayland_wm_state(Some(gate_wayland_configure(
+        false,
+        [true, true, true, true],
+        ALL_WAYLAND_CAPS,
+        5,
+    )));
+    assert_eq!(maximized.tiled_edges, Some(TiledEdges::ALL));
+
+    // Ubuntu 26.04 Tiling Assistant half-tiles via vertical maximize, so Mutter only sends
+    // TILED_TOP | TILED_BOTTOM on Wayland; Rune reports the compositor's exact states with no guess.
+    let ubuntu_vert_half = decode_wayland_wm_state(Some(gate_wayland_configure(
+        false,
+        [true, false, true, false],
+        ALL_WAYLAND_CAPS,
+        5,
+    )));
+    assert_eq!(ubuntu_vert_half.tiled_edges, Some(TiledEdges::new(true, false, true, false)));
+
+    // Stock Mutter left-half tile sends TILED_TOP | TILED_BOTTOM | TILED_LEFT.
+    let stock_left = decode_wayland_wm_state(Some(gate_wayland_configure(
+        false,
+        [true, false, true, true],
+        ALL_WAYLAND_CAPS,
+        5,
+    )));
+    assert_eq!(stock_left.tiled_edges, Some(TiledEdges::new(true, false, true, true)));
+}
+
+#[test]
+fn decodes_every_tiled_edge_and_capability_bit_independently() {
+    let mk = |server_decorations, tiled_edges, capabilities| WaylandConfigureState {
+        server_decorations,
+        tiled_edges,
+        capabilities,
+        resizable: true,
+        closeable: true,
+    };
+
+    assert_eq!(decode_wayland_wm_state(Some(mk(false, Some([true, false, false, false]), None))).tiled_edges, Some(TiledEdges::new(true, false, false, false)));
+    assert_eq!(decode_wayland_wm_state(Some(mk(false, Some([false, true, false, false]), None))).tiled_edges, Some(TiledEdges::new(false, true, false, false)));
+    assert_eq!(decode_wayland_wm_state(Some(mk(false, Some([false, false, true, false]), None))).tiled_edges, Some(TiledEdges::new(false, false, true, false)));
+    assert_eq!(decode_wayland_wm_state(Some(mk(false, Some([false, false, false, true]), None))).tiled_edges, Some(TiledEdges::new(false, false, false, true)));
+
+    // Empty capabilities (0) plus higher unknown bits must not affect server decoration_mode.
+    let empty_caps = decode_wayland_wm_state(Some(mk(true, Some([false; 4]), Some(0xFFF0))));
     assert_eq!(empty_caps.decoration_mode, DecorationMode::Server);
     assert_eq!(
         empty_caps.actions,
@@ -121,41 +157,25 @@ fn decodes_every_tiled_edge_and_capability_bit_independently() {
             .with_maximize(Some(false))
             .with_minimize(Some(false))
             .with_fullscreen(Some(false))
-            .with_close(None),
+            .with_close(Some(true)),
     );
 
-    let only_menu = decode_wayland_wm_state(Some(WaylandConfigureState {
-        server_decorations: false,
-        tiled_edges: None,
-        capabilities: Some(WAYLAND_CAP_WINDOW_MENU),
-    }));
+    let only_menu = decode_wayland_wm_state(Some(mk(false, None, Some(WAYLAND_CAP_WINDOW_MENU))));
     assert_eq!(only_menu.actions.window_menu, Some(true));
     assert_eq!(only_menu.actions.maximize, Some(false));
     assert_eq!(only_menu.actions.minimize, Some(false));
     assert_eq!(only_menu.actions.fullscreen, Some(false));
-    assert_eq!(only_menu.actions.close, None);
+    assert_eq!(only_menu.actions.close, Some(true));
 
-    let only_max = decode_wayland_wm_state(Some(WaylandConfigureState {
-        server_decorations: false,
-        tiled_edges: None,
-        capabilities: Some(WAYLAND_CAP_MAXIMIZE),
-    }));
+    let only_max = decode_wayland_wm_state(Some(mk(false, None, Some(WAYLAND_CAP_MAXIMIZE))));
     assert_eq!(only_max.actions.maximize, Some(true));
     assert_eq!(only_max.actions.window_menu, Some(false));
 
-    let only_full = decode_wayland_wm_state(Some(WaylandConfigureState {
-        server_decorations: false,
-        tiled_edges: None,
-        capabilities: Some(WAYLAND_CAP_FULLSCREEN),
-    }));
+    let only_full = decode_wayland_wm_state(Some(mk(false, None, Some(WAYLAND_CAP_FULLSCREEN))));
     assert_eq!(only_full.actions.fullscreen, Some(true));
     assert_eq!(only_full.actions.minimize, Some(false));
 
-    let only_min = decode_wayland_wm_state(Some(WaylandConfigureState {
-        server_decorations: false,
-        tiled_edges: None,
-        capabilities: Some(WAYLAND_CAP_MINIMIZE),
-    }));
+    let only_min = decode_wayland_wm_state(Some(mk(false, None, Some(WAYLAND_CAP_MINIMIZE))));
     assert_eq!(only_min.actions.minimize, Some(true));
     assert_eq!(only_min.actions.fullscreen, Some(false));
 }
@@ -197,7 +217,6 @@ fn decoded_wayland_transitions_drive_headless_runtime_reactivity() {
     assert_eq!(rt.presented("wl-bar").unwrap().0[2], 10.0);
     assert_eq!((builds.get(), memo_builds.get()), (1, 1));
 
-    // Initial configure on a Wayland v5 CSD compositor (untiled, all capabilities).
     let initial = decode_wayland_wm_state(Some(gate_wayland_configure(
         false,
         [false; 4],
@@ -211,7 +230,6 @@ fn decoded_wayland_transitions_drive_headless_runtime_reactivity() {
     assert_eq!(rt.presented("wl-bar").unwrap().0[2], 20.0);
     assert_eq!((builds.get(), memo_builds.get()), (2, 2));
 
-    // Compositor tiles left and drops MAXIMIZE capability without changing size.
     let tiled_no_max = decode_wayland_wm_state(Some(gate_wayland_configure(
         false,
         [true, false, true, true],
@@ -225,7 +243,6 @@ fn decoded_wayland_transitions_drive_headless_runtime_reactivity() {
     assert_eq!(rt.presented("wl-bar").unwrap().0[2], 27.0);
     assert_eq!((builds.get(), memo_builds.get()), (3, 3));
 
-    // Compositor switches to server-side decorations without resizing.
     let ssd = decode_wayland_wm_state(Some(gate_wayland_configure(
         true,
         [true, false, true, true],
