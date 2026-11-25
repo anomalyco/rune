@@ -1,0 +1,1 @@
+- rune-fx: `FxRenderer::supported(&adapter, &device)` and `fx_support(&downlevel, &limits)` report whether a device can draw effects, returning `FxUnsupported` on adapters without vertex or fragment storage buffers (WebGL2) or with fewer than 2 storage buffers per stage; `FxRenderer::new` now panics with that message instead of a wgpu validation error on such devices.
