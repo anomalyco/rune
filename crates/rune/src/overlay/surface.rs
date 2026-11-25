@@ -223,6 +223,11 @@ impl OverlayCore {
             }
         };
         let features = app.compositor_features();
+        // Re-poll any retained GPU and check the terminal latch right after `Compositor::features()`
+        // so a device lost or destroyed inside that callback never falls through to replacement.
+        if self.poll_device_for_terminal_loss(app) {
+            return None;
+        }
         // A device that died while the overlay was hidden (a driver reset, a resume from
         // Modern Standby) can configure nothing: the next surface gets a new one.
         if self.gpu.as_ref().is_some_and(|gpu| gpu.is_lost()) {
@@ -282,17 +287,37 @@ impl OverlayCore {
         };
         let (surface, (config, opaque_fallback, mut renderer), reused_renderer) = match reused {
             Some((gpu, surface)) => {
-                let own_renderer = self.gpu.as_ref().is_some_and(|own| Arc::ptr_eq(own, &gpu))
+                let already_own = self.gpu.as_ref().is_some_and(|own| Arc::ptr_eq(own, &gpu));
+                if !already_own {
+                    self.attach_terminal_gpu_latch(&gpu);
+                }
+                let own_renderer = already_own
                     .then(|| self.renderer.take())
                     .flatten();
                 let had_own = own_renderer.is_some();
                 match setup_surface(&gpu, &surface, own_renderer) {
-                    Ok(configured) => { self.gpu = Some(gpu); (surface, configured, had_own) }
+                    Ok(configured) => {
+                        if self.poll_device_for_terminal_loss(app) {
+                            drop((surface, configured));
+                            if !already_own && let Some(latch) = &self.gpu_loss_latch {
+                                gpu.detach_terminal_latch(latch);
+                            }
+                            return None;
+                        }
+                        self.gpu = Some(gpu);
+                        (surface, configured, had_own)
+                    }
                     Err(err) => {
                         if self.is_terminal_gpu_policy() {
+                            let lost = err.kind == crate::gpu::fallback::Failure::DeviceLost || gpu.is_lost();
+                            if let Some(latch) = &self.gpu_loss_latch {
+                                gpu.detach_terminal_latch(latch);
+                            }
+                            if lost && self.gpu_pool.borrow().upgrade().is_some_and(|p| Arc::ptr_eq(&p, &gpu)) {
+                                *self.gpu_pool.borrow_mut() = Weak::default();
+                            }
                             drop((surface, gpu));
-                            *self.gpu_pool.borrow_mut() = Weak::default();
-                            let kind = if err.kind == crate::gpu::fallback::Failure::DeviceLost {
+                            let kind = if lost {
                                 crate::render::loss_latch::GpuFailureKind::DeviceLost
                             } else {
                                 crate::render::loss_latch::GpuFailureKind::SurfaceFailed
@@ -339,6 +364,15 @@ impl OverlayCore {
                 }
             }
             None => {
+                if self.is_terminal_gpu_policy() && self.gpu.is_some() {
+                    // Never discard an existing Terminal overlay device to make a replacement.
+                    self.latch_terminal_loss_latch(
+                        app,
+                        crate::render::loss_latch::GpuFailureKind::SurfaceFailed,
+                        "could not create a surface on the overlay's GPU device",
+                    );
+                    return None;
+                }
                 if self.gpu.is_some() {
                     self.gpu = None;
                     self.renderer = None;
@@ -364,14 +398,18 @@ impl OverlayCore {
                 // The old renderer's buffers live on the old device; a new one was built above.
                 self.renderer = None;
                 let gpu = Arc::new(gpu);
+                self.attach_terminal_gpu_latch(&gpu);
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                 crate::render::surface_gpu(&gpu);
                 self.gpu = Some(gpu);
+                if self.poll_device_for_terminal_loss(app) {
+                    drop((surface, configured));
+                    return None;
+                }
                 (surface, configured, false)
             }
         };
         let gpu = self.gpu.clone()?;
-        self.attach_terminal_gpu_latch(&gpu);
         let rt = app.rt_mut();
         if opaque_fallback {
             eprintln!("transparency unavailable for overlay {}; drawing it opaque", self.name);

@@ -188,6 +188,10 @@ impl AnyHost for OverlayHost {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
+        if self.core.poll_terminal_gpu_loss(&mut *self.app) {
+            self.core.drain_tokens_none();
+            return;
+        }
         self.core.meter.waited();
         #[cfg(target_os = "windows")]
         if matches!(event, WakeEvent::FrameSlot(_)) {
@@ -226,6 +230,7 @@ impl AnyHost for OverlayHost {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let core = &mut self.core;
         let app = &mut *self.app;
+        if core.poll_terminal_gpu_loss(app) { return; }
         if !matches!(event, WindowEvent::RedrawRequested) { core.meter.waited(); }
         #[cfg(target_os = "windows")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }) {
@@ -450,6 +455,7 @@ impl AnyHost for OverlayHost {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool {
         let core = &mut self.core;
         let app = &mut *self.app;
+        if core.poll_terminal_gpu_loss(app) { return false; }
         #[cfg(target_os = "macos")]
         {
             core.fn_key(app);
