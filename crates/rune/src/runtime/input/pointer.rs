@@ -32,6 +32,9 @@ impl RuntimeCore {
             }
         }
         self.refresh_hover(x, y);
+        if drag_move {
+            self.host.titlebar.move_pointer(x, y);
+        }
         let Some(held) = self.pointer.press.held() else { return };
         let (path, d, at, button, is_drag) = (held.path.clone(), held.drag, held.at, held.button, held.drag_handler.is_some());
         if held.drag_out.is_some_and(|threshold| crate::drag_out::past_threshold(at, (x, y), threshold)) && self.start_drag_out(app, path.clone()) {
@@ -87,6 +90,7 @@ impl RuntimeCore {
         self.frame.queue.len() != queued
             || self.pointer.press_inside() != capture_inside
             || self.pointer.drag_out_request.is_some()
+            || self.host.titlebar.action.is_some()
             || self.hovered_link() != prev_link
             || self.selection_drag_snapshot() != prev_sel
             || (!prev_edge && self.edit.selectable.edge.running())
@@ -317,6 +321,7 @@ impl RuntimeCore {
         if let Some(i) = self.active_modal()
             && target.is_none_or(|t| !self.allowed(t))
         {
+            self.host.titlebar.other_press();
             if !self.point_in_modal(i, x, y)
                 && self.tree.nodes[i].handlers.modal.as_ref().is_some_and(|m| m.outside && m.dismiss.is_some())
             {
@@ -344,7 +349,8 @@ impl RuntimeCore {
         let pending = self.pointer.press.take_first();
         let now = self.now_clock();
         if self.bare_drag_region(ti) {
-            self.host.titlebar.press_region(now, x, y, self.double_click_interval);
+            let defer = !touch && self.host.titlebar.defer_mouse_drag();
+            self.host.titlebar.press_region(now, x, y, self.double_click_interval, defer);
             if self.kbd.focus.path().is_some() {
                 self.frame.queue.push(Action::Blur);
             }
@@ -354,6 +360,7 @@ impl RuntimeCore {
             self.host.titlebar.press_resize(edge);
             return;
         }
+        self.host.titlebar.other_press();
         let n = &self.tree.nodes[ti];
         let clicks = self.pointer.press_click(&n.path, now, (x, y), self.double_click_interval);
         let second = n.handlers.on_double_press.is_some() && pending.is_some_and(|first| {
@@ -450,6 +457,7 @@ impl RuntimeCore {
         if self.pointer.autoscroll_release(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
         #[cfg(target_os = "linux")]
         self.primary_released();
+        self.host.titlebar.release_primary();
         if self.pointer.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
             self.pointer.pos = Some((x, y));
             return;
@@ -577,6 +585,7 @@ impl RuntimeCore {
     pub fn pointer_leave(&mut self) {
         if self.pointer_locked() { return; }
         self.wheel_lost();
+        self.host.titlebar.leave();
         if !self.pointer.captured() {
             self.pointer.pos = None;
             self.pointer.hovered = None;

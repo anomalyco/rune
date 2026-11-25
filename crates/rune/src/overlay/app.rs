@@ -464,6 +464,8 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn hidden_input(&mut self) { with_app!(self, |core, app| core.hidden_input(&mut app)) }
     pub(super) fn apply_input(&mut self) { self.core.apply_input(self.rt.core()) }
     pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) { with_app!(self, |core, app| core.left_button(&mut app, pressed, point)) }
+    #[cfg(test)]
+    pub(super) fn cursor_moved(&mut self, x: f32, y: f32) { with_app!(self, |core, app| core.cursor_moved(&mut app, x, y)) }
     pub(super) fn touch_event(&mut self, touch: &winit::event::Touch) {
         with_app!(self, |core, app| {
             let app: &mut dyn OverlayApp = &mut app;

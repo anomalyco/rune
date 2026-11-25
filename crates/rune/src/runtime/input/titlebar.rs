@@ -14,6 +14,10 @@ pub(in crate::runtime) struct Titlebar {
     pub(in crate::runtime) resize: Option<crate::ResizeEdge>,
     /// The press in flight (`step`).
     pub(in crate::runtime) press: TitlebarPress,
+    /// Test-only override for [`DEFER_MOUSE_DRAG`] so every platform can drive both deferred
+    /// (Linux) and immediate (macOS/Windows) modes through `Runtime`.
+    #[cfg(test)]
+    pub(in crate::runtime) defer_drag_override: Option<bool>,
     /// Window points from the top that AppKit drags natively, over the content (0 elsewhere).
     native_band: f32,
     /// The window menu the shell opens next.
@@ -71,6 +75,26 @@ pub(crate) enum WindowMenu {
     Keyboard,
 }
 
+/// Pointer travel (points, per axis) from a deferred bare `.window_drag()` mouse press before
+/// the native move starts, matching GTK's `gtk-dnd-drag-threshold` (8) and Chromium's
+/// `LinuxUi::kDefaultWindowDragThreshold` (8).
+pub(in crate::runtime) const DRAG_THRESHOLD: f32 = 8.0;
+
+/// Whether mouse presses on bare `.window_drag()` regions wait for pointer motion past
+/// [`DRAG_THRESHOLD`] before requesting [`TitlebarAction::Drag`]: true on Linux/desktop Unix
+/// (where `xdg_toplevel.move` / `_NET_WM_MOVERESIZE` grabs the pointer at once and would swallow
+/// the second press of a double-click), false on macOS (AppKit's `performWindowDragWithEvent:`
+/// runs inside mouse-down and handles click vs drag itself) and Windows (`WM_NCHITTEST`
+/// `HTCAPTION` handles both natively).
+pub(in crate::runtime) const DEFER_MOUSE_DRAG: bool =
+    cfg!(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")));
+
+/// Whether `point` has reached or crossed [`DRAG_THRESHOLD`] on either axis from `origin`,
+/// matching Chromium's `WindowEventFilterLinux` and GTK's `gtk-dnd-drag-threshold`.
+fn past_drag_threshold(origin: (f32, f32), point: (f32, f32)) -> bool {
+    (point.0 - origin.0).abs() >= DRAG_THRESHOLD || (point.1 - origin.1).abs() >= DRAG_THRESHOLD
+}
+
 /// A press that may pair with the next one: when it went down and where.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::runtime) struct Pair {
@@ -88,13 +112,18 @@ impl Pair {
     }
 }
 
-/// The titlebar's press: what the next press can pair with, and whether a secondary press on a
+/// The titlebar's press: whether a deferred drag press is held waiting for motion past
+/// [`DRAG_THRESHOLD`], what a released press can pair with, and whether a secondary press on a
 /// bare `.window_drag()` region still owes its release.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(in crate::runtime) enum TitlebarPress {
     /// No press is in flight.
     #[default]
     Rest,
+    /// A primary mouse press went down on a bare `.window_drag()` region in deferred-drag mode
+    /// and is still held within [`DRAG_THRESHOLD`]: moving past the threshold starts the drag,
+    /// and releasing within it arms `Pair` for a double-click.
+    Holding(Pair),
     /// A press went down where a second one means something.
     Armed(Pair),
     /// A secondary press began on a bare drag region: its release there opens the window menu.
@@ -109,13 +138,22 @@ impl TitlebarPress {
 
 /// What the titlebar's press sees.
 pub(in crate::runtime) enum Event {
-    /// A primary press on a bare `.window_drag()` region.
-    Region { now: f64, point: (f32, f32), interval: f64 },
+    /// A primary press on a bare `.window_drag()` region. `defer` holds `TitlebarAction::Drag`
+    /// until pointer motion crosses [`DRAG_THRESHOLD`].
+    Region { now: f64, point: (f32, f32), interval: f64, defer: bool },
+    /// The pointer moved to `point` while a deferred press may be held.
+    Move { point: (f32, f32) },
+    /// The primary pointer button was released.
+    Release,
+    /// The pointer left the window.
+    Leave,
     /// A primary press on a bare `.window_resize(edge)` region.
     Resize { edge: crate::ResizeEdge },
     /// A primary press that hit nothing; `band` when it is in the native titlebar band, where
     /// the system drags the window itself and only the double click is Rune's.
     Empty { now: f64, point: (f32, f32), interval: f64, band: bool },
+    /// A primary press on an interactive or non-drag element.
+    OtherPress,
     /// A secondary press; `region` when it landed on a bare drag region of a custom titlebar.
     SecondaryDown { region: bool },
     /// A secondary release; `region` when it is over a bare drag region now.
@@ -124,8 +162,9 @@ pub(in crate::runtime) enum Event {
     Clear,
 }
 
-/// What a press asks the window for, in that press event: the shell starts a native drag inside
-/// the press, and the window menu opens where the pointer is.
+/// What a press or deferred drag motion asks the window for: the shell starts a native drag
+/// inside that press or motion event, and the window menu opens where the pointer is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::runtime) enum Request {
     /// Move the window, or the titlebar's double-click action.
     Action(TitlebarAction),
@@ -147,7 +186,7 @@ fn pair_of(last: Option<Pair>, now: f64, point: (f32, f32), interval: f64) -> (O
 fn pair(state: &TitlebarPress) -> Option<Pair> {
     match *state {
         TitlebarPress::Rest => None,
-        TitlebarPress::Armed(pair) => Some(pair),
+        TitlebarPress::Holding(pair) | TitlebarPress::Armed(pair) => Some(pair),
         TitlebarPress::SecondaryOnRegion(pair) => pair,
     }
 }
@@ -163,11 +202,41 @@ fn keep_secondary(state: &TitlebarPress, pair: Option<Pair>) -> TitlebarPress {
 
 pub(in crate::runtime) fn step(state: &mut TitlebarPress, event: Event) -> Effects<Request> {
     match event {
-        // A press on a drag region always moves the window, unless it is the second of a pair.
-        Event::Region { now, point, interval } => {
+        // A press on a drag region moves the window at once when `!defer`, or waits in
+        // `Holding` until motion crosses `DRAG_THRESHOLD` when `defer`; a second press within
+        // the double-click interval and slop always triggers the double-click action.
+        Event::Region { now, point, interval, defer } => {
             let (next, double) = pair_of(pair(state), now, point, interval);
-            *state = keep_secondary(state, next);
-            Effects::one(Request::Action(if double { TitlebarAction::DoubleClick } else { TitlebarAction::Drag }))
+            if double {
+                *state = keep_secondary(state, None);
+                Effects::one(Request::Action(TitlebarAction::DoubleClick))
+            } else if defer {
+                *state = next.map_or(TitlebarPress::Rest, TitlebarPress::Holding);
+                Effects::none()
+            } else {
+                *state = keep_secondary(state, next);
+                Effects::one(Request::Action(TitlebarAction::Drag))
+            }
+        }
+        Event::Move { point } => {
+            let TitlebarPress::Holding(held) = *state else { return Effects::none() };
+            if !past_drag_threshold(held.point, point) { return Effects::none(); }
+            // Keep `held` armed, as Chromium's `WindowEventFilterLinux` and immediate-drag
+            // platforms do: a caption double-click is judged by the time and distance between the
+            // two presses, even if a slight drag started on the first press.
+            *state = TitlebarPress::Armed(held);
+            Effects::one(Request::Action(TitlebarAction::Drag))
+        }
+        // Release or pointer leave ends the held drag wait without losing the armed pair: after a
+        // compositor grab the client may receive leave and enter with no release before the second
+        // press arrives.
+        Event::Release | Event::Leave => {
+            if let TitlebarPress::Holding(held) = *state { *state = TitlebarPress::Armed(held); }
+            Effects::none()
+        }
+        Event::OtherPress => {
+            if matches!(*state, TitlebarPress::Holding(_)) { *state = TitlebarPress::Rest; }
+            Effects::none()
         }
         Event::Resize { edge } => {
             *state = keep_secondary(state, None);
@@ -175,13 +244,20 @@ pub(in crate::runtime) fn step(state: &mut TitlebarPress, event: Event) -> Effec
         }
         // AppKit drags the band itself and never sees the double click over the content.
         Event::Empty { now, point, interval, band } => {
-            if !band { return Effects::none(); }
+            if !band {
+                if matches!(*state, TitlebarPress::Holding(_)) { *state = TitlebarPress::Rest; }
+                return Effects::none();
+            }
             let (next, double) = pair_of(pair(state), now, point, interval);
             *state = keep_secondary(state, next);
             if double { Effects::one(Request::Action(TitlebarAction::DoubleClick)) } else { Effects::none() }
         }
         Event::SecondaryDown { region } => {
-            *state = if region { TitlebarPress::SecondaryOnRegion(pair(state)) } else { armed(pair(state)) };
+            let kept = match *state {
+                TitlebarPress::Holding(_) => None,
+                _ => pair(state),
+            };
+            *state = if region { TitlebarPress::SecondaryOnRegion(kept) } else { armed(kept) };
             Effects::none()
         }
         Event::SecondaryUp { region } => {
@@ -198,9 +274,42 @@ pub(in crate::runtime) fn step(state: &mut TitlebarPress, event: Event) -> Effec
 }
 
 impl Titlebar {
-    /// A press on a `.window_drag()` region: drag, or the double-click action on its second press.
-    pub(in crate::runtime) fn press_region(&mut self, now: f64, x: f32, y: f32, interval: f64) {
-        self.act(Event::Region { now, point: (x, y), interval });
+    /// Whether mouse presses on bare `.window_drag()` regions defer [`TitlebarAction::Drag`]
+    /// until motion crosses [`DRAG_THRESHOLD`].
+    pub(in crate::runtime) fn defer_mouse_drag(&self) -> bool {
+        #[cfg(test)]
+        if let Some(defer) = self.defer_drag_override {
+            return defer;
+        }
+        DEFER_MOUSE_DRAG
+    }
+
+    /// A press on a `.window_drag()` region: drag (at once or after [`DRAG_THRESHOLD`] when
+    /// `defer`), or the double-click action on its second press.
+    pub(in crate::runtime) fn press_region(&mut self, now: f64, x: f32, y: f32, interval: f64, defer: bool) {
+        self.act(Event::Region { now, point: (x, y), interval, defer });
+    }
+
+    /// Pointer motion while a deferred bare `.window_drag()` press may be held.
+    pub(in crate::runtime) fn move_pointer(&mut self, x: f32, y: f32) {
+        self.act(Event::Move { point: (x, y) });
+    }
+
+    /// Primary button release, ending a held deferred drag wait while keeping its press armed
+    /// for a double-click.
+    pub(in crate::runtime) fn release_primary(&mut self) {
+        self.act(Event::Release);
+    }
+
+    /// The pointer left the window: ends any held deferred drag wait without disarming the pair,
+    /// so a leave/enter sequence with no release still pairs a second press within time and slop.
+    pub(in crate::runtime) fn leave(&mut self) {
+        self.act(Event::Leave);
+    }
+
+    /// A primary press landed on a non-drag element: cancels any held deferred press.
+    pub(in crate::runtime) fn other_press(&mut self) {
+        self.act(Event::OtherPress);
     }
 
     /// A press on a `.window_resize(edge)` region: start an interactive resize from `edge`.
@@ -245,8 +354,14 @@ impl RuntimeCore {
         self.host.titlebar.native_band = points;
     }
 
-    /// A window drag or titlebar double-click requested by the press just delivered. The shell
-    /// must act on it before returning from that press event.
+    /// Test-only override for deferred mouse window dragging on bare `.window_drag()` regions.
+    #[cfg(test)]
+    pub(crate) fn set_defer_titlebar_drag(&mut self, defer: bool) {
+        self.host.titlebar.defer_drag_override = Some(defer);
+    }
+
+    /// A window drag or titlebar double-click requested by the press or pointer motion just
+    /// delivered. The shell must act on it before returning from that input event.
     pub fn take_titlebar_action(&mut self) -> Option<TitlebarAction> {
         self.host.titlebar.action.take()
     }

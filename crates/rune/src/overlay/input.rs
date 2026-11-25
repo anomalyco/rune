@@ -246,6 +246,7 @@ impl OverlayCore {
     /// winit reported the pointer at (x, y).
     pub(super) fn cursor_moved(&mut self, app: &mut dyn OverlayApp, x: f32, y: f32) {
         self.dirty |= app.observe_pointer(x, y);
+        self.take_titlebar_action(app);
         self.begin_drag_out(app.rt_mut());
     }
 

@@ -738,3 +738,51 @@ fn turn_end_guard_requests_redraw_when_user_input_is_queued_at_rest() {
     assert!(!rt.core().has_input_waiting());
     assert!(!queued_input_needs_redraw(rt.core().has_input_waiting(), true, link.paced(), Redraw::Idle));
 }
+
+#[test]
+fn cursor_moved_core_wakes_and_produces_drag_when_deferred_titlebar_press_crosses_threshold() {
+    use crate::window::host::events::cursor_moved_core;
+    use crate::window::surface::{LoopFrame, TimerFrame};
+    use crate::{Cx, El, Env, Runtime, TitlebarAction, el};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        el().key("bar").size(200.0, 40.0).window_drag()
+    }
+    let mut rt = Runtime::new((), view, (200.0, 100.0), Env::new(true, 1.0));
+    rt.core_mut().set_defer_titlebar_drag(true);
+    rt.frame(0.0);
+    let mut app = TypedWindowApp {
+        rt,
+        shared: Arc::new(Shared::default()),
+        comp: None,
+        on_frame_drawn: None,
+        on_close_request: None,
+        on_close: None,
+        on_rest: None,
+        on_quit: None,
+        on_reopen: None,
+        on_geometry: None,
+        turn_scope: None,
+        keep_layout: None,
+        kept_layout: None,
+    };
+    let mut timer = TimerFrame::default();
+    let mut loops = LoopFrame::default();
+
+    app.rt.pointer_move(100.0, 20.0);
+    app.rt.pointer_down(100.0, 20.0);
+    assert_eq!(app.rt_mut().take_titlebar_action(), None);
+
+    // Motion inside the 8 pt drag threshold stays quiet and emits no action.
+    let (redraw, drag_out) = cursor_moved_core(&mut app, &mut timer, &mut loops, 105.0, 20.0);
+    assert!(!redraw);
+    assert!(drag_out.is_none());
+    assert_eq!(app.rt_mut().take_titlebar_action(), None);
+
+    // Motion reaching 8 pt emits TitlebarAction::Drag and wakes the host loop.
+    let (redraw, drag_out) = cursor_moved_core(&mut app, &mut timer, &mut loops, 108.0, 20.0);
+    assert!(redraw);
+    assert!(drag_out.is_none());
+    assert_eq!(app.rt_mut().take_titlebar_action(), Some(TitlebarAction::Drag));
+    assert_eq!(app.rt_mut().take_titlebar_action(), None);
+}

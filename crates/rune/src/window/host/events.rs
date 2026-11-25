@@ -595,6 +595,11 @@ impl Host {
                     position.x as f32 / input_scale,
                     position.y as f32 / input_scale,
                 );
+                // Deferred mouse drags on Linux cross the drag threshold during motion while the
+                // original press serial is still current on Wayland.
+                if let Some(action) = app.rt_mut().take_titlebar_action() {
+                    l.titlebar_action(action);
+                }
                 // AppKit needs the drag session started inside this mouse-dragged event.
                 if let Some(start) = drag_out {
                     let rt = app.rt();
