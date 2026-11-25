@@ -1,0 +1,1 @@
+- `examples/glass-card`: call `tx.animated()` from the background 1.6 s auto-toggle timer (`AppHandle::update` / `OverlayHandle::update`) so the toplevel card window's spring animates between docked and full states instead of snapping as an unprompted commit (`Commit::Unprompted`).

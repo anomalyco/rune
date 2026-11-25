@@ -3532,8 +3532,11 @@ GPU windows and overlays (`zwlr_layer_shell_v1` and toplevel fallbacks) whenever
 Unlike macOS and Windows (where native material views sit behind the element and replace its
 fill), Wayland compositor blur has no tint of its own: translucent fills are kept as the tint,
 unfilled elements draw transparent instead of the opaque fallback, outer-shadow interior holes
-are punched, opaque fills (`alpha >= 1.0`) stay opaque with no blur region, elements below
-`0.10` opacity leave the region, ancestor clips and all four rounded corners are decomposed
+are punched, opaque fills (`alpha >= 1.0`) stay opaque with no blur region, elements beyond
+`App::max_native_materials` (default `MAX_NATIVE_MATERIALS` = 4) draw their fallback fill,
+Wayland blur protocols have no opacity parameter so blur is all-or-nothing under a fading card
+(staying at full strength until opacity crosses `0.10`, then dropping cleanly), ancestor clips
+and all four rounded corners are decomposed
 conservatively inward into logical `wl_region` spans (bounded at 512 rects per surface), and
 updates flush right before present so region and pixels commit atomically. Use
 `Cx::window_backdrop_supported(WindowBackdrop::Blur)` to query capability for both
