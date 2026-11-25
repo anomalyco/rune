@@ -336,3 +336,28 @@ fn finite_slide_plays_n_periods_and_rests_at_end_pose() {
     assert!(spin.active(10.0));
     let _ = once.offset(3.0, false);
 }
+#[test]
+fn a_sequence_blends_translate_and_rotate_and_only_moving_ones_report_motion() {
+    const SHAKE: &[Beat] = &[
+        Beat::new(0.0),
+        Beat::new(0.1).translate(-4.0, 0.0).rotate(0.2).easing(Easing::LINEAR),
+        Beat::new(0.2).easing(Easing::LINEAR),
+    ];
+    const FADE: &[Beat] = &[Beat::new(0.0).opacity(0.0), Beat::new(0.2)];
+    let track = LoopTrack::new(LoopSpec::sequence(Sequence::new(SHAKE)), 0.0);
+    let ([x, y], turn) = track.motion(0.05, false).unwrap();
+    assert!((x + 2.0).abs() < 1e-5 && y == 0.0 && (turn - 0.1).abs() < 1e-5);
+    assert_eq!(track.motion(0.5, false), Some(([0.0; 2], 0.0)));
+    assert_eq!(LoopTrack::new(LoopSpec::sequence(Sequence::new(FADE)), 0.0).motion(0.1, false), None);
+    // A one-shot sequence the element dropped lets go of its motion at once.
+    let mut dropped = track;
+    dropped.enabled(false, 0.05);
+    assert_eq!(dropped.motion(0.05, false), None);
+    // So does a repeating one: the element's own springs take it home, not a cooling tail.
+    let mut looping = LoopTrack::new(LoopSpec::sequence(Sequence::new(SHAKE).repeating()), 0.0);
+    assert!(looping.motion(0.15, false).is_some());
+    looping.enabled(false, 0.1);
+    assert_eq!(looping.motion(0.15, false), None);
+    looping.enabled(true, 0.2);
+    assert!(looping.motion(0.25, false).is_some());
+}

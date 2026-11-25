@@ -66,6 +66,6 @@ run matched-zoom      3.0 $B/examples/matched_zoom --script $S/matched-zoom.json
 run matched-timed     3.4 $B/matched --scene timed --script $S/matched-timed.json
 run matched-in-place  4.2 $B/matched --scene in-place --script $S/matched-in-place.json
 run playground-hover-press 3.0 $B/playground --size 960x560 --playground "Controls/Buttons/Hover & press" --script $S/playground-hover-press.json
-run playground-loops-press 3.6 $B/playground --size 960x560 --playground "Controls/Motion/Loops & press offset" --script $S/playground-loops-press.json
+run playground-loops-press 4.6 $B/playground --size 960x560 --playground "Controls/Motion/Loops & press offset" --script $S/playground-loops-press.json
 run hold-layout       3.5 $B/examples/hold_layout --script $S/hold-layout.json
 ls "$O"
