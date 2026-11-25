@@ -631,7 +631,7 @@ impl Measurement<'_> {
             }
             if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, text, &reused); }
             taffy.finish_flatten();
-            let (taffy, nodes) = self.solve(text, taffy, root_id, nodes);
+            let (taffy, nodes) = self.solve(text, taffy, root_id, nodes, &reused);
             break (taffy, nodes, pending, reused, taken_paths);
         }
     }

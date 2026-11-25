@@ -75,7 +75,7 @@ fn el_flatten_reusable(e: &El) -> bool {
         && c.above.is_none()
         && c.input.is_none()
         && e.handlers.get().is_none_or(|h| h.modal.is_none())
-        && e.text.as_ref().is_none_or(|t| !t.redacted && t.cold.live.is_none())
+        && e.text.as_ref().is_none_or(|t| !t.redacted)
         && e.memo_children().is_none_or(|m| m.reusable && !m.duplicate_keys)
         && e.children.iter().all(el_flatten_reusable)
 }

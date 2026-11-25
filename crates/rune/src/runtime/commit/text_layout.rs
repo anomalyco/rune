@@ -433,7 +433,19 @@ pub(in crate::runtime) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId,
                 }
             }
             let is_input = nodes[i].input.is_some();
-            let laid = text.layout_text(&spec.as_text_input(scale, is_input), is_input, scale, w.map(|w| w * scale + FIT_SLACK), parley::Alignment::Start, nodes[i].text_layout.as_ref());
+            let laid = if spec.cold.live.is_some()
+                && !spec.wrap
+                && nodes[i].elided.is_none()
+                && let Some(existing) = nodes[i].text_layout.as_ref()
+            {
+                existing.clone()
+            } else if spec.cold.live.is_some()
+                && nodes[i].cold.get().is_some_and(|c| c.live_text_seen.is_some())
+            {
+                TextLayout::Single(text.layout_live_spec(&spec.as_text_input(scale, false), scale, w.map(|w| w * scale + FIT_SLACK), parley::Alignment::Start))
+            } else {
+                text.layout_text(&spec.as_text_input(scale, is_input), is_input, scale, w.map(|w| w * scale + FIT_SLACK), parley::Alignment::Start, nodes[i].text_layout.as_ref())
+            };
             let l = laid.view();
             // Spaces hanging past a wrapped line's end take no room, as in CSS.
             let mut lw = text_width(if w.is_some() { l.width() } else { l.full_width() }) / scale;

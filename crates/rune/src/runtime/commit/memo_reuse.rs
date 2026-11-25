@@ -582,8 +582,7 @@ pub(in crate::runtime) fn try_reuse_memo(
             taffy.reuse_slot(slot.taffy, new_idx as u32);
             let stub = Node::moved_stub(slot);
             let mut n = std::mem::replace(slot, stub);
-            n.text_layout = None;
-            n.elided = None;
+            if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) { n.text_layout = None; n.elided = None; }
             n.clear_run_layout();
             n.scale_track = false;
             n.group_fade = false;
@@ -598,10 +597,11 @@ pub(in crate::runtime) fn try_reuse_memo(
         for (k, old) in old_slice.iter().enumerate() {
             let new_idx = new_start + k;
             taffy.reuse_slot(old.taffy, new_idx as u32);
+            let keep_live = old.text.as_ref().is_some_and(|t| t.cold.live.is_some());
             let mut n = Node {
                 id: old.id,
-                text_layout: None,
-                elided: None,
+                text_layout: if keep_live { old.text_layout.clone() } else { None },
+                elided: if keep_live { old.elided } else { None },
                 scale_track: false,
                 group_fade: false,
                 virtual_mount: if k == 0 { el.flags.has(crate::el::ElFlags::VIRTUAL_MOUNT) } else { false },
@@ -653,11 +653,12 @@ pub(in crate::runtime) fn try_reuse_memo(
                 .map(|(k, (old, new_id))| (old.id.0, new_id.0, old.taffy, (new_start + k) as u32)),
         );
         for (k, ((old, path), id)) in old_slice.iter().zip(rebased).zip(new_ids).enumerate() {
+            let keep_live = old.text.as_ref().is_some_and(|t| t.cold.live.is_some());
             let mut n = Node {
                 id,
                 path,
-                text_layout: None,
-                elided: None,
+                text_layout: if keep_live { old.text_layout.clone() } else { None },
+                elided: if keep_live { old.elided } else { None },
                 scale_track: false,
                 group_fade: false,
                 virtual_mount: if k == 0 { el.flags.has(crate::el::ElFlags::VIRTUAL_MOUNT) } else { false },
@@ -801,3 +802,6 @@ impl crate::memo::MemoCache {
 #[cfg(test)]
 #[path = "../memo_reuse_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "../memo_reuse_live_text_tests.rs"]
+mod live_text_tests;
