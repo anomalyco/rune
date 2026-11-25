@@ -47,6 +47,23 @@ fn a_handler_reads_a_row_it_removes_where_it_stood() {
 }
 
 #[test]
+fn an_instant_removal_reads_where_it_stood_and_is_unmounted_from_presented() {
+    let mut rt = runtime();
+    let before = rt.presented("row-3");
+    rt.update(|s, tx| {
+        s.rows.retain(|&r| r != 3);
+        tx.instant();
+        tx.read_layout("row-3", |s: &mut S, rect, _| s.layout = Some(rect));
+        tx.read_presented("row-3", |s: &mut S, drawn, _| s.presented = Some(drawn));
+    });
+    rt.frame(0.0);
+    assert!(rt.find("row-3").is_none(), "the row left the live tree after the commit");
+    assert!(rt.presented("row-3").is_none(), "an instant-removed unmounted row must not be reported as presented");
+    assert_eq!(rt.state.layout, Some(Some([0.0, 60.0, 100.0, 20.0])));
+    assert_eq!(rt.state.presented, Some(before));
+}
+
+#[test]
 fn layout_is_read_after_scrolling_and_key_paths_resolve() {
     let mut rt = runtime();
     rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 40.0));
