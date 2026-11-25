@@ -13,6 +13,7 @@ impl<S: 'static> App<S> {
     pub fn headless_runtime(mut self, size: (f32, f32), env: Env) -> Runtime<S> {
         let playground = self.playground.take();
         let (chrome, titlebar, borderless) = (self.chrome, self.titlebar, self.window_options.borderless);
+        crate::credentials::note_headless_runtime();
         let (spec, state, _, runtime) = self.into_parts(None);
         let mut rt = crate::tooling::runtime_for(&spec, state, size, env, std::sync::Arc::new(|| {}));
         if let Some(playground) = playground.filter(Playground::is_enabled) {

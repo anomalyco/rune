@@ -129,6 +129,7 @@ pub(crate) use patched_or_original;
 /// `WindowSpec::from_app` or `App::window`: the same typed `Runtime<S>` a native window
 /// builds, so its view and callbacks patch the way they do on screen.
 pub(crate) fn snap_window<S: 'static>(app: crate::App<S>, args: Args) {
+    crate::credentials::note_headless_runtime();
     let (spec, state, _, runtime) = app.into_parts(args.scene.as_deref());
     headless(&spec, state, args, runtime);
 }

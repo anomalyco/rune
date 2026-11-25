@@ -223,3 +223,16 @@ fn overlay_macos_color_space_defaults_to_srgb_and_retains_unmanaged() {
     let (toggled, _) = Overlay::new(back_to_srgb, (), &app);
     assert_eq!(toggled.core.macos_color_space, crate::MacColorSpace::Srgb);
 }
+
+#[test]
+fn an_overlay_keeps_the_system_credential_store() {
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(20.0, 20.0) }
+    // A thread of its own: the flag is per thread in tests, and other tests make headless runs.
+    let noted = std::thread::spawn(|| {
+        let app = AppSpec::new("overlay-credentials", (20.0, 20.0), || (), view);
+        let spec = OverlaySpec::new("overlay-credentials", app.size, view).options(Default::default());
+        let _ = Overlay::new(spec, (), &app);
+        crate::credentials::headless_runtime_noted()
+    });
+    assert!(!noted.join().unwrap(), "a real app's overlay must not switch credentials to memory");
+}
