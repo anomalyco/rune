@@ -249,7 +249,11 @@ impl Host {
         }
         // The window changed size while the GPU was made.
         if size.width > 0 && size.height > 0 { w.resize_surface(Some(&*gpu), size); }
-        renderer.set_prewarm_effects(self.prewarm_effects);
+        // A window that hands over names its effects when the hand-over is committed
+        // (`hand_over_if_done`). Named here, the hand-over frame's own prepare would start the
+        // warm worker, and while the GPU finishes that frame nothing is prepared: a frame it is
+        // slow to finish would read to the worker as a window at rest.
+        if !matches!(w.native.mode, SurfaceMode::HandingOver { .. }) { renderer.set_prewarm_effects(self.prewarm_effects); }
         self.gpu = Some((gpu, renderer));
         w.request_redraw();
     }
@@ -347,6 +351,9 @@ impl Host {
                 if let Err(error) = committed { return self.fail_gpu(format!("the GPU couldn't take over the window: {error}"), tries); }
                 let SurfaceMode::HandingOver { cpu, handover, readback, .. } = std::mem::replace(&mut w.native.mode, SurfaceMode::Gpu) else { unreachable!() };
                 crate::marks::mark("gpu.window.handed");
+                // The window is the GPU's: its effects are named now (`gpu_ready`), and the warm
+                // worker starts its rest from here.
+                renderer.set_prewarm_effects(self.prewarm_effects);
                 renderer.warm_effects(&gpu.device);
                 crate::platform::win32::unidle_d3d_threads_soon();
                 // A first frame only the GPU could draw showed cloaked: it comes on screen now.

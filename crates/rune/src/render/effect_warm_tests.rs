@@ -343,6 +343,30 @@ fn worker_compiles_nothing_while_the_window_draws_and_a_drop_ends_its_rest_at_on
     assert!(dropping.elapsed() < Duration::from_secs(20), "drop woke the resting worker instead of waiting out its rest: {:?}", dropping.elapsed());
 }
 
+/// A Windows window that opens on the CPU names its effects when its hand-over to the GPU is
+/// committed, not when the GPU arrives: until then no prepare starts the worker, the hand-over
+/// frame's own (the second the renderer submits, after the GPU thread's warm frame) among them.
+#[test]
+fn no_worker_starts_until_the_effects_are_named() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let plain = [rect([0.0, 0.0, 32.0, 16.0], [0.2, 0.4, 0.8, 1.0])];
+
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+    renderer.warm_effects(&gpu.device);
+    assert!(!renderer.effect_warm.is_warming(), "nothing is named: no worker");
+
+    // The hand-over is committed: the effects are named and the worker starts its rest.
+    renderer.set_prewarm_effects(PrewarmEffects::BACKDROP_BLUR);
+    renderer.warm_effects(&gpu.device);
+    assert!(renderer.effect_warm.is_warming());
+    renderer.wait_effect_warm();
+    assert!(renderer.effect_warm.is_ready());
+}
+
 #[test]
 fn frame_that_meets_the_worker_mid_build_waits_for_it_and_compiles_nothing_twice() {
     let Some(gpu) = Gpu::test_headless() else { return };
