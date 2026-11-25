@@ -222,7 +222,10 @@ impl Host {
 
     fn new_events_in_turn(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         #[cfg(target_os = "macos")]
-        if let Some(shadow) = self.win.as_ref().and_then(|w| w.native.shadow.as_ref()) { shadow.turn(); }
+        {
+            if let Some(shadow) = self.win.as_ref().and_then(|w| w.native.shadow.as_ref()) { shadow.turn(); }
+            self.frame_presented.drain();
+        }
         self.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         if matches!(cause, StartCause::ResumeTimeReached { .. }) && let Some(w) = &self.win { w.cursor.reassert(); }
         if self.window_script.is_some() { self.replay_window_script(crate::time::now()); }

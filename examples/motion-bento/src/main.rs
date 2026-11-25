@@ -13,6 +13,7 @@ mod tiles_mid;
 mod tiles_top;
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -29,8 +30,81 @@ use style::{c, caption, font, nums, spring};
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
 
+/// Bounded per-frame presentation telemetry populated when `--present-times` is passed.
+#[derive(Default)]
+pub(crate) struct PresentTelemetry {
+    /// `(seq, encoded_at, presents_at)` for in-flight drawn frames (capped at 64 entries).
+    pending: VecDeque<(u64, rune::time::Instant, Option<rune::time::Instant>)>,
+    /// Recent encode-to-present durations in ms (capped at 240 samples for HUD percentiles).
+    recent_ms: VecDeque<f64>,
+    presented: u64,
+    skipped: u64,
+    max_ms: f64,
+}
+
+impl PresentTelemetry {
+    const PENDING_CAP: usize = 64;
+    const RECENT_CAP: usize = 240;
+
+    pub(crate) fn record_encoded(
+        &mut self,
+        seq: u64,
+        encoded_at: rune::time::Instant,
+        presents_at: Option<rune::time::Instant>,
+    ) {
+        if self.pending.len() >= Self::PENDING_CAP {
+            self.pending.pop_front();
+        }
+        self.pending.push_back((seq, encoded_at, presents_at));
+    }
+
+    pub(crate) fn record_presented(&mut self, seq: u64, presented_at: Option<rune::time::Instant>) {
+        let Some(pos) = self.pending.iter().position(|(s, _, _)| *s == seq) else { return };
+        let Some((_, encoded_at, _)) = self.pending.remove(pos) else { return };
+        match presented_at {
+            Some(actual) => {
+                let ms = actual.saturating_duration_since(encoded_at).as_secs_f64() * 1000.0;
+                self.presented += 1;
+                self.max_ms = self.max_ms.max(ms);
+                if self.recent_ms.len() >= Self::RECENT_CAP {
+                    self.recent_ms.pop_front();
+                }
+                self.recent_ms.push_back(ms);
+            }
+            None => self.skipped += 1,
+        }
+    }
+
+    fn percentiles(&self) -> Option<(f64, f64)> {
+        if self.recent_ms.is_empty() {
+            return None;
+        }
+        let mut sorted: Vec<f64> = self.recent_ms.iter().copied().collect();
+        sorted.sort_by(f64::total_cmp);
+        let at = |p: f64| sorted[((sorted.len() - 1) as f64 * p).round() as usize];
+        Some((at(0.5), at(0.95)))
+    }
+
+    pub(crate) fn hud_line(&self) -> String {
+        match self.percentiles() {
+            Some((p50, p95)) => format!("present p50 {p50:.2} · p95 {p95:.2} ms · skip {}", self.skipped),
+            None if self.skipped > 0 => format!("present 0 landed · skip {}", self.skipped),
+            None => "present waiting (macOS Metal)".to_owned(),
+        }
+    }
+
+    pub(crate) fn summary_note(&self) -> Option<String> {
+        let (p50, p95) = self.percentiles()?;
+        Some(format!(
+            "presented {} skipped {} encode_to_present p50 {:.2} p95 {:.2} max {:.2} ms",
+            self.presented, self.skipped, p50, p95, self.max_ms
+        ))
+    }
+}
+
 thread_local! {
     static METER: RefCell<Option<Meter>> = const { RefCell::new(None) };
+    static PRESENT: RefCell<Option<PresentTelemetry>> = const { RefCell::new(None) };
 }
 
 pub fn config() -> &'static Config {
@@ -47,6 +121,7 @@ pub struct State {
     player: Option<Player>,
     hud: bool,
     hud_lines: [String; 4],
+    present_hud: Option<String>,
     hud_at: f64,
     begun: bool,
     ended: bool,
@@ -75,6 +150,7 @@ impl State {
             player: (!scripted && cfg.load.is_none()).then(|| Player::new(cfg)),
             hud: cfg.hud,
             hud_lines: Default::default(),
+            present_hud: None,
             hud_at: f64::NEG_INFINITY,
             begun: false,
             ended: false,
@@ -101,6 +177,9 @@ impl State {
             let mut m = m.borrow_mut();
             let Some(m) = m.as_mut() else { return };
             m.end();
+            if let Some(note) = PRESENT.with(|p| p.borrow().as_ref().and_then(PresentTelemetry::summary_note)) {
+                m.note("present", &note);
+            }
             if let Some(path) = &config().frames
                 && let Err(e) = std::fs::write(path, m.frames_csv())
             {
@@ -171,6 +250,9 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
             changed |= lines != s.hud_lines;
             s.hud_lines = lines;
         }
+        let present_line = PRESENT.with(|p| p.borrow().as_ref().map(PresentTelemetry::hud_line));
+        changed |= present_line != s.present_hud;
+        s.present_hud = present_line;
         tx.wake_after(Duration::from_millis(250));
     }
     changed
@@ -241,6 +323,9 @@ fn hud(s: &State) -> El {
     for l in &s.hud_lines {
         lines = lines.child(text(l.clone()).font(nums(11.0, 500.0).mono()).color(c(color::TEXT_2)));
     }
+    if let Some(present) = &s.present_hud {
+        lines = lines.child(text(present.clone()).font(nums(11.0, 500.0).mono()).color(c(color::ACCENT)));
+    }
     lines
 }
 
@@ -286,9 +371,18 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
 }
 
 fn main() {
-    let (cfg, rest) = Config::parse(std::env::args()).unwrap_or_else(|e| {
+    let (cfg, mut rest) = Config::parse(std::env::args()).unwrap_or_else(|e| {
         eprintln!("motion-bento: {e}");
         std::process::exit(2);
+    });
+    let mut present_times = false;
+    rest.retain(|arg| {
+        if arg == "--present-times" {
+            present_times = true;
+            false
+        } else {
+            true
+        }
     });
     if let Some(path) = &cfg.emit_script {
         std::fs::write(path, script_json(&cfg)).unwrap_or_else(|e| panic!("writing {}: {e}", path.display()));
@@ -304,13 +398,16 @@ fn main() {
         meter.note("mode", if config().naive { "naive" } else { "idiomatic" });
         *m.borrow_mut() = Some(meter);
     });
+    if present_times {
+        PRESENT.with(|p| *p.borrow_mut() = Some(PresentTelemetry::default()));
+    }
     let spec = AppSpec {
         poll: Some(poll),
         on_key: Some(on_key),
         min_size: Some((grid::WIDTH, grid::HEIGHT)),
         ..AppSpec::new("Motion bento", (grid::WIDTH, grid::HEIGHT), State::new, view)
     };
-    rune::App::new(spec)
+    let mut app = rune::App::new(spec)
         .args(rest.into_iter().skip(1))
         .on_close(on_close)
         .on_frame_encoded(|f| {
@@ -325,6 +422,20 @@ fn main() {
                     m.frame_with_build(start, work, build);
                 }
             });
-        })
-        .run();
+            PRESENT.with(|p| {
+                if let Some(p) = p.borrow_mut().as_mut() {
+                    p.record_encoded(f.seq(), f.at(), f.presents_at());
+                }
+            });
+        });
+    if present_times {
+        app = app.on_frame_presented(|p| {
+            PRESENT.with(|t| {
+                if let Some(t) = t.borrow_mut().as_mut() {
+                    t.record_presented(p.seq(), p.presented_at());
+                }
+            });
+        });
+    }
+    app.run();
 }

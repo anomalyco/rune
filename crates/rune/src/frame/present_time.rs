@@ -287,15 +287,16 @@ pub(crate) mod metal {
     //! Present times from a CAMetalLayer. wgpu acquires and presents the drawable itself and
     //! exposes neither, so the traced window's layer becomes an instance of a subclass of its
     //! own class whose `nextDrawable` adds a Metal presented handler to each drawable it
-    //! returns. Only that layer changes, only while tracing or while a transparent window with
-    //! a shadow needs to know when its frames land (`macos_window_shape`), and it gets its
-    //! class back when the hook drops.
+    //! returns. Only that layer changes, only while tracing, while `App::on_frame_presented`
+    //! is set, or while a transparent window with a shadow needs to know when its frames land
+    //! (`macos_window_shape`), and it gets its class back when the hook drops.
 
     use super::{Presented, Source};
     use objc2_metal::MTLDrawable;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, ClassBuilder, ProtocolObject, Sel};
     use objc2::{Message, msg_send, sel};
+    use std::collections::VecDeque;
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::ffi::CString;
@@ -317,23 +318,73 @@ pub(crate) mod metal {
         unsafe { CFRunLoopWakeUp(CFRunLoopGetMain()) }
     }
 
-    /// Drawables acquired and presented on a hooked layer.
+    /// Bounded completion buffer and wake flag for `App::on_frame_presented`, synchronized under
+    /// one mutex so turning the watch off once drained never races a Metal presented handler.
     #[derive(Default)]
+    struct CallbackBuffer {
+        entries: VecDeque<(u64, f64)>,
+        watch: bool,
+    }
+
+    /// Drawables acquired and presented on a hooked layer.
     pub(crate) struct Log {
         next: AtomicU64,
         acquired: AtomicU64,
         /// `(seq, presentedTime)`: host seconds, 0 for a skipped drawable. Kept only while tracing.
         presented: Mutex<Vec<(u64, f64)>>,
-        untraced: bool,
+        traced: bool,
+        /// `(seq, presentedTime)` for `App::on_frame_presented`, independent of tracing and shadow.
+        callback_presented: Mutex<CallbackBuffer>,
+        callbacks: bool,
         /// The newest drawable that reached the screen.
         on_screen: AtomicU64,
-        /// Wake the main run loop when a drawable reaches the screen.
+        /// Wake the main run loop when a drawable reaches the screen (`Shadow`).
         watch: AtomicBool,
     }
 
+    impl Default for Log {
+        fn default() -> Self { Self::new(true, false) }
+    }
+
     impl Log {
-        /// A log that only tracks which drawable is on screen, for a window that isn't traced.
-        pub(crate) fn untraced() -> Self { Log { untraced: true, ..Default::default() } }
+        /// A log recording for `--trace` (`traced`), `App::on_frame_presented` (`callbacks`),
+        /// and/or transparent shadow resampling (always tracked via `on_screen` / `watch`).
+        pub(crate) fn new(traced: bool, callbacks: bool) -> Self {
+            Log {
+                next: AtomicU64::new(0),
+                acquired: AtomicU64::new(0),
+                presented: Mutex::new(Vec::new()),
+                traced,
+                callback_presented: Mutex::new(CallbackBuffer::default()),
+                callbacks,
+                on_screen: AtomicU64::new(0),
+                watch: AtomicBool::new(false),
+            }
+        }
+
+        /// A log that only tracks which drawable is on screen, for a window that isn't traced and
+        /// has no `App::on_frame_presented` callback.
+        pub(crate) fn untraced() -> Self { Self::new(false, false) }
+
+        /// Records one completed drawable `(seq, presentedTime)` and returns whether the main
+        /// run loop should be woken (`wake_main`).
+        pub(crate) fn record_presented(&self, seq: u64, at: f64) -> bool {
+            if self.traced { self.presented.lock().unwrap().push((seq, at)); }
+            let mut wake = false;
+            if self.callbacks {
+                let mut buf = self.callback_presented.lock().unwrap();
+                if buf.entries.len() >= crate::frame::presented::MAX_PENDING {
+                    buf.entries.pop_front();
+                }
+                buf.entries.push_back((seq, at));
+                wake |= buf.watch;
+            }
+            if at > 0.0 {
+                self.on_screen.fetch_max(seq, Ordering::AcqRel);
+                wake |= self.watch.load(Ordering::Acquire);
+            }
+            wake
+        }
 
         /// The drawable the last `nextDrawable` returned, once.
         pub(crate) fn acquired(&self) -> Option<u64> {
@@ -346,8 +397,13 @@ pub(crate) mod metal {
         /// The newest drawable Metal reported on screen (0 before the first).
         pub(crate) fn on_screen(&self) -> u64 { self.on_screen.load(Ordering::Acquire) }
 
-        /// While on, each drawable that reaches the screen wakes the main run loop.
+        /// While on, each drawable that reaches the screen wakes the main run loop (`Shadow`).
         pub(crate) fn watch(&self, on: bool) { self.watch.store(on, Ordering::Release); }
+
+        #[cfg(test)]
+        pub(crate) fn callback_watching(&self) -> bool {
+            self.callback_presented.lock().unwrap().watch
+        }
     }
 
     impl Source for Log {
@@ -357,6 +413,21 @@ pub(crate) mod metal {
             // SAFETY: CACurrentMediaTime has no preconditions.
             let (now, media_now) = (crate::time::now(), unsafe { CACurrentMediaTime() });
             out.extend(presented.drain(..).map(|(seq, at)| (seq, (at > 0.0).then(|| instant_at(now, media_now, at)))));
+        }
+    }
+
+    impl crate::frame::presented::PresentSource for Log {
+        fn poll_and_watch(&self, out: &mut Vec<(u64, Option<Instant>)>, watch: bool) {
+            let mut buf = self.callback_presented.lock().unwrap();
+            buf.watch = watch;
+            if buf.entries.is_empty() { return; }
+            // SAFETY: CACurrentMediaTime has no preconditions.
+            let (now, media_now) = (crate::time::now(), unsafe { CACurrentMediaTime() });
+            out.extend(buf.entries.drain(..).map(|(seq, at)| (seq, (at > 0.0).then(|| instant_at(now, media_now, at)))));
+        }
+
+        fn set_watch(&self, watch: bool) {
+            self.callback_presented.lock().unwrap().watch = watch;
         }
     }
 
@@ -388,11 +459,7 @@ pub(crate) mod metal {
             let handler = block2::RcBlock::new(move |d: NonNull<ProtocolObject<dyn MTLDrawable>>| {
                 // SAFETY: Metal passes the presented drawable for the handler's duration.
                 let at = unsafe { d.as_ref() }.presentedTime();
-                if !log.untraced { log.presented.lock().unwrap().push((seq, at)); }
-                if at > 0.0 {
-                    log.on_screen.fetch_max(seq, Ordering::AcqRel);
-                    if log.watch.load(Ordering::Acquire) { wake_main(); }
-                }
+                if log.record_presented(seq, at) { wake_main(); }
             });
             // SAFETY: nextDrawable returns a CAMetalDrawable, which conforms to MTLDrawable;
             // Metal copies the block.

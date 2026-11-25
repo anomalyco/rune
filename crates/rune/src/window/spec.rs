@@ -861,6 +861,20 @@ impl<S: 'static> WindowSpec<S> {
         /// `WindowSpec::from_app` keeps its app's hook unless this replaces it; windows `App::window`
         /// adds have their own.
         on_frame_encoded(f: impl FnMut(&crate::FrameEncoded) + 'static);
+        /// Reports when each drawn frame of this window actually reached the screen, like
+        /// [`App::on_frame_presented`]. A spec made with [`WindowSpec::from_app`] keeps its app's
+        /// hook unless this replaces it; windows [`App::window`] adds have their own.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("main", AppSpec::new("Timing", (320.0, 200.0), || (), |_, _| el()))
+        ///     .on_frame_presented(|p| {
+        ///         let _ = (p.seq(), p.presented_at());
+        ///     });
+        /// let _ = spec;
+        /// ```
+        on_frame_presented(f: impl FnMut(&crate::FramePresented) + 'static);
         /// Runs on the UI thread after each drawn frame of this window with its runtime, like `App::on_frame_drawn`.
         on_frame_drawn(f: impl FnMut(&crate::Runtime<S>) + 'static);
         /// Keep this window's layout reads across launches, like `App::layout_seed`.

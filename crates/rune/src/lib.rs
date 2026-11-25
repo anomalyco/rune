@@ -146,6 +146,7 @@ pub use file_dialog::FileDialogs;
 pub use file_dialog::ScriptedFileDialog;
 pub use frame::encoded::FrameEncoded;
 pub use frame::encoded::FrameOutcome;
+pub use frame::presented::FramePresented;
 #[cfg(feature = "frame-profile")]
 #[doc(hidden)]
 pub use frame::profile::PHASES;

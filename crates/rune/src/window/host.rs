@@ -73,6 +73,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) on_window: Option<crate::app::OnWindow>,
     pub(in crate::window) on_ready: Option<crate::app::OnWindow>,
     pub(in crate::window) frame_reports: crate::frame::encoded::FrameReports,
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) frame_presented: crate::frame::presented::FramePresentReports,
     /// Shown, hidden or closed for good; `win` holds the window while it has one.
     pub(in crate::window) life: Life,
     /// False for windows `App::window` added: they live as long as the loop, never keep it.
@@ -212,6 +214,8 @@ struct HostInit {
     on_window: Option<crate::app::OnWindow>,
     on_ready: Option<crate::app::OnWindow>,
     on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
+    #[cfg(target_os = "macos")]
+    on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     geometry: WindowGeometry,
     args: Args,
     keep_running: bool,
@@ -253,6 +257,8 @@ impl Host {
             app.on_frame_encoded.take(),
             app.on_frame_drawn.take(),
         );
+        #[cfg(target_os = "macos")]
+        let on_frame_presented = app.on_frame_presented.take();
         let macos_window = std::mem::take(&mut app.macos_window);
         let windows_window = std::mem::take(&mut app.windows_window);
         let exclude_from_capture = app.exclude_from_capture;
@@ -299,6 +305,8 @@ impl Host {
             on_window,
             on_ready,
             on_frame_encoded,
+            #[cfg(target_os = "macos")]
+            on_frame_presented,
             geometry,
             args,
             keep_running,
@@ -341,6 +349,8 @@ impl Host {
             on_window,
             on_ready,
             on_frame_encoded,
+            #[cfg(target_os = "macos")]
+            on_frame_presented,
             mut geometry,
             mut args,
             keep_running,
@@ -363,7 +373,17 @@ impl Host {
         // `RUNE_OPEN_INACTIVE`: a tool's launch (an accessibility probe, a capture) leaves the user's
         // focus and keyboard where they are, as `App::open_inactive` does.
         let open_inactive = open_inactive || std::env::var_os("RUNE_OPEN_INACTIVE").is_some();
-        let frame_reports = crate::frame::encoded::FrameReports::new(on_frame_encoded, Some(native_handle.key()));
+        #[cfg(target_os = "macos")]
+        let mut frame_presented = crate::frame::presented::FramePresentReports::new(on_frame_presented, Some(native_handle.key()));
+        #[cfg(target_os = "macos")]
+        let track_presented = frame_presented.wanted();
+        #[cfg(not(target_os = "macos"))]
+        let track_presented = false;
+        let frame_reports = crate::frame::encoded::FrameReports::with_presented_seq(
+            on_frame_encoded,
+            track_presented,
+            Some(native_handle.key()),
+        );
         if fit_height {
             let size = args.size.unwrap_or(geometry.size);
             geometry.min_size = options.fit_min_size(geometry.min_size);
@@ -377,7 +397,12 @@ impl Host {
             args.size = None;
         }
         #[cfg(target_os = "macos")]
-        let present_log = args.trace.as_ref().map(|_| Arc::default());
+        let present_log = (args.trace.is_some() || frame_presented.wanted())
+            .then(|| Arc::new(crate::frame::present_time::metal::Log::new(args.trace.is_some(), frame_presented.wanted())));
+        #[cfg(target_os = "macos")]
+        if let Some(log) = &present_log && frame_presented.wanted() {
+            frame_presented.set_source(log.clone());
+        }
         let has_comp = app.has_compositor();
         let meter = SurfaceMeter::new(native_handle.key(), native_handle.native.stats.clone());
         // One window replays: the one `--window` names, else the first window the app opens.
@@ -435,6 +460,8 @@ impl Host {
             on_window,
             on_ready,
             frame_reports,
+            #[cfg(target_os = "macos")]
+            frame_presented,
             life: Life::Unopened,
             keeps_loop,
             geometry,

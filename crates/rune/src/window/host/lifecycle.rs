@@ -548,6 +548,12 @@ impl Host {
         self.app.set_live_visible(false);
         // While the window still shows its last frames.
         if let Some(trace) = &mut self.trace { trace.settle_presents(crate::frame::present_time::SETTLE); }
+        #[cfg(target_os = "macos")]
+        if self.keep_running {
+            self.frame_presented.drain();
+        } else {
+            self.frame_presented.reset();
+        }
         if let Some(after) = self.app.rt_mut().shell_request.take().and_then(Shell::after) {
             let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
             self.app.popup_cancel(&mut self.popup);
@@ -656,6 +662,8 @@ impl Host {
     /// (an app that sees `AppHandle::window_error` and the window gone can ask for one).
     pub(in crate::window) fn release(&mut self) {
         self.win = None;
+        #[cfg(target_os = "macos")]
+        self.frame_presented.reset();
         self.native_handle.native.ready.store(false, Ordering::Release);
         self.native_handle.native.number.store(0, Ordering::Release);
         self.gpu = None;
