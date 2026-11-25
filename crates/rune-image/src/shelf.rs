@@ -35,6 +35,11 @@ impl Shelves {
         self.used_rows == 0
     }
 
+    /// Whether this shelf page has any unallocated vertical rows or free horizontal spans.
+    pub(crate) fn has_free_space(&self) -> bool {
+        self.used_rows < IMAGE_ATLAS_SIZE || self.bands.iter().any(|b| b.live == 0 || !b.free.is_empty())
+    }
+
     pub(crate) fn reset(&mut self) {
         self.bands.clear();
         self.used_rows = 0;
@@ -191,6 +196,11 @@ impl ImagePage {
 
     pub(crate) fn is_shelf(&self) -> bool {
         self.width == IMAGE_ATLAS_SIZE && self.height <= IMAGE_ATLAS_SIZE
+    }
+
+    /// Whether this page might accept a relocated slot without evicting a currently shown page.
+    pub(crate) fn has_free_space(&self) -> bool {
+        self.data.is_empty() || !self.shown || (self.is_shelf() && self.shelves.has_free_space())
     }
 
     /// A shelf page starts with the rows its first image needs (at least
