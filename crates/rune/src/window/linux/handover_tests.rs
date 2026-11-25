@@ -141,6 +141,19 @@ fn only_an_automatic_auto_hand_over_leaves_a_software_gpu_alone() {
 }
 
 #[test]
+fn transparent_fallback_starts_with_failed_gpu_job_and_never_switches_or_retries() {
+    let (cpu, sent) = Cpu::fake(false);
+    let mut mode = SurfaceMode::Cpu { cpu, job: GpuJob::Failed };
+    assert!(mode.cpu_draws());
+    assert_eq!(mode.switch(), None, "GpuJob::Failed must never switch to GPU");
+    assert!(cpu_frame(&mut mode, Event::Redraw));
+    assert!(cpu_frame(&mut mode, Event::Resize(320, 200)));
+    assert_eq!(sent.load(Ordering::Relaxed), 2);
+    // GpuJob::Failed is not GpuJob::Waiting, so neither gpu_owed nor handover_deadline triggers.
+    assert!(matches!(mode, SurfaceMode::Cpu { job: GpuJob::Failed, .. }));
+}
+
+#[test]
 fn a_frame_that_needs_the_gpu_takes_the_software_one_a_thread_found() {
     let pick = Pick::new(true);
     pick.software.store(true, Ordering::Release);

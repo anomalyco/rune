@@ -115,3 +115,53 @@ fn buffer_that_missed_too_many_rectangles_takes_the_whole_frame() {
     // The newest is held, so the second is picked: past the limit it copies everything.
     assert_eq!(slots.pick(), Some((second, Fill::All { from: first })));
 }
+
+#[test]
+fn wayland_shm_format_selects_argb8888_for_alpha_and_xrgb8888_for_opaque() {
+    use wayland_client::protocol::wl_shm::Format;
+    assert_eq!(super::wayland::shm_format(true), Format::Argb8888);
+    assert_eq!(super::wayland::shm_format(false), Format::Xrgb8888);
+}
+
+#[test]
+fn x11_visual_matching_supports_32bit_argb_and_24bit_opaque_fallback() {
+    use super::x11::{PixmapFormat, VisualFormat, VisualInfo, match_visual};
+
+    let formats = [
+        PixmapFormat { depth: 24, bits_per_pixel: 32 },
+        PixmapFormat { depth: 32, bits_per_pixel: 32 },
+    ];
+    let visuals = [
+        VisualInfo { id: 0x21, depth: 24, true_color: true, rgb_masks: (0xff0000, 0xff00, 0xff) },
+        VisualInfo { id: 0x42, depth: 32, true_color: true, rgb_masks: (0xff0000, 0xff00, 0xff) },
+        VisualInfo { id: 0x50, depth: 32, true_color: false, rgb_masks: (0xff0000, 0xff00, 0xff) },
+        VisualInfo { id: 0x60, depth: 32, true_color: true, rgb_masks: (0xff, 0xff00, 0xff0000) },
+    ];
+
+    // Transparent window on a server with a 32-bit ARGB TrueColor visual.
+    assert_eq!(
+        match_visual(true, &formats, &visuals, 0x42, true),
+        Some(VisualFormat { depth: 32, has_alpha: true })
+    );
+    // Transparent window on a server with no 32-bit visual (winit fell back to 24-bit TrueColor):
+    // falls back to 24-bit opaque presentation so the window paints its theme background cleanly.
+    assert_eq!(
+        match_visual(true, &formats, &visuals, 0x21, true),
+        Some(VisualFormat { depth: 24, has_alpha: false })
+    );
+    // Opaque window keeps 24-bit matching only.
+    assert_eq!(
+        match_visual(true, &formats, &visuals, 0x21, false),
+        Some(VisualFormat { depth: 24, has_alpha: false })
+    );
+    assert_eq!(match_visual(true, &formats, &visuals, 0x42, false), None);
+
+    // Non-LSB byte order, non-TrueColor, wrong channel masks, or missing 32-bit pixmap format fail.
+    assert_eq!(match_visual(false, &formats, &visuals, 0x42, true), None);
+    assert_eq!(match_visual(true, &formats, &visuals, 0x50, true), None);
+    assert_eq!(match_visual(true, &formats, &visuals, 0x60, true), None);
+    assert_eq!(
+        match_visual(true, &[PixmapFormat { depth: 24, bits_per_pixel: 32 }], &visuals, 0x42, true),
+        None
+    );
+}

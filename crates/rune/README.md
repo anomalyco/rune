@@ -1050,16 +1050,24 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   native-surface slots blank, linear blending in sRGB) instead of freezing the window. Frames
   requiring `FontSmoothing::Slug`, Slug outline glyphs, unknown instance kinds, or a mismatched
   target hold the previous frame until the GPU takes over, and frame 1 stays cloaked until drawn.
-  On Linux under `CpuFirst::Auto` with `WGPU_ADAPTER_NAME` unset, a window whose background GPU
-  turns out to be a software one (lavapipe, llvmpipe) stays on `CpuPainter` instead of handing
+  On Linux under `CpuFirst::Auto` with `WGPU_ADAPTER_NAME` unset, an opaque window whose background
+  GPU turns out to be a software one (lavapipe, llvmpipe) stays on `CpuPainter` instead of handing
   over; a frame that later needs a GPU-only feature hands over to it, keeping the previous frame
-  until it does. Apps can also choose `CpuFirst::Only` to stay on the CPU
-  renderer on hardware GPUs (until a GPU-only feature is drawn on desktop, or permanently on web) or
-  `CpuFirst::Off` to open directly on the GPU (restoring immediate WARP handover on GPU-less
-  Windows). `RUNE_CPU_FIRST` (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the
-  builder without a rebuild (`0` or `off` for `Off`, `only` for `Only`, `auto` for `Auto`; unset,
-  empty, or unrecognized values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored
-  on macOS, iOS, headless runs, transparent windows, and inline/document web pages.
+  until it does. Transparent Linux windows still open on the GPU whenever a GPU surface can be made;
+  under `CpuFirst::Auto` or `CpuFirst::Only` with `WGPU_ADAPTER_NAME` unset, if pre-swapchain GPU
+  startup fails (for example, no Vulkan driver is installed), a visible transparent window falls
+  back to `CpuPainter` with alpha buffers (`wl_shm` ARGB8888 on Wayland; 32-bit ARGB TrueColor on
+  X11, or a 24-bit opaque window with the theme background if X11 gives no 32-bit visual), marks
+  its GPU job failed so Vulkan is not retried, and paints degradable `NeedsGpu` features without
+  their GPU-only modifier. Apps can also choose `CpuFirst::Only` to stay on the CPU renderer on
+  hardware GPUs (until a GPU-only feature is drawn on desktop, or permanently on web) or
+  `CpuFirst::Off` to open directly on the GPU without CPU fallback (restoring immediate WARP
+  handover on GPU-less Windows and surfacing GPU errors directly on Linux). `RUNE_CPU_FIRST`
+  (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the builder without a rebuild
+  (`0` or `off` for `Off`, `only` for `Only`, `auto` for `Auto`; unset, empty, or unrecognized
+  values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored on macOS, iOS, headless
+  runs, Windows transparent windows (which use WARP on GPU-less Windows), and inline/document web
+  pages.
 - **GPU memory policy (`GpuMemoryPolicy`).** By default Rune creates wgpu devices with
   `GpuMemoryPolicy::MemoryUsage` (smaller suballocation blocks than wgpu's `Performance` default).
   Apps can choose `MemoryUsage`, `Performance`, or `Manual { block_size }` at startup via
@@ -3371,8 +3379,10 @@ installed at build time, including in CI:
 - Fedora: `dnf install libxkbcommon-devel wayland-devel`
 - Arch: `pacman -S libxkbcommon wayland`
 
-Windowed runs need the XKB X11 library, and GPU runs without a physical GPU
-need a software Vulkan driver. On stock Ubuntu 24.04 both are one install away:
+Windowed runs need the XKB X11 library; visible opaque and transparent windows
+fall back to `CpuPainter` when no Vulkan driver is installed (unless `CpuFirst::Off`
+or `WGPU_ADAPTER_NAME` is set), while GPU runs without a physical GPU need a software
+Vulkan driver. On stock Ubuntu 24.04 both are one install away:
 
 ```sh
 sudo apt-get install -y libxkbcommon-x11-0 mesa-vulkan-drivers

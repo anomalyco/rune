@@ -39,8 +39,15 @@
 ///   still starts on idle, but when its adapter is a software one (`wgpu::DeviceType::Cpu`:
 ///   lavapipe, llvmpipe) the window stays on `CpuPainter` instead of handing over to it; a frame
 ///   that later needs a GPU-only feature hands over to it, keeping the previous frame until the
-///   GPU draws. Hardware GPUs, pinned `WGPU_ADAPTER_NAME` adapters and [`CpuFirst::Off`] are
-///   unchanged. Transparent windows always open on the GPU.
+///   GPU draws. Transparent windows open on the GPU whenever a GPU surface can be made; under
+///   [`CpuFirst::Auto`] or [`CpuFirst::Only`] with automatic adapter selection (`WGPU_ADAPTER_NAME`
+///   unset), if pre-swapchain GPU startup fails (for example, no Vulkan driver is installed), a
+///   visible transparent window falls back to `CpuPainter` with alpha buffers (`wl_shm` ARGB8888
+///   on Wayland; a 32-bit ARGB TrueColor visual on X11, or a 24-bit opaque window with the theme
+///   background if the X server has no 32-bit visual) and stays on the CPU without retrying
+///   Vulkan, painting degradable `NeedsGpu` features without their GPU-only modifier. Under
+///   [`CpuFirst::Off`] or a pinned `WGPU_ADAPTER_NAME`, a transparent window returns the GPU
+///   startup error without falling back to the CPU renderer.
 /// - **Web (`wasm32`)**: applies to full-window apps (`App::web_document` and inline
 ///   `App::canvas_id` pages always start on the GPU). Under [`CpuFirst::Only`], the page stays on
 ///   the 2D CPU canvas and never requests WebGPU or WebGL2.
@@ -70,12 +77,13 @@ pub enum CpuFirst {
     /// Open opaque windows on the CPU renderer and do not start background GPU handover on idle.
     ///
     /// On Windows and Linux, a frame that hits a GPU-only feature still triggers GPU handover so
-    /// the frame can render; transparent windows and windows that already have a GPU keep using
-    /// the GPU. On full-window web pages, stays on the 2D CPU canvas without requesting WebGPU or
-    /// WebGL2.
+    /// the frame can render; transparent windows (unless Linux pre-swapchain GPU startup fails
+    /// with no pinned adapter) and windows that already have a GPU keep using the GPU. On
+    /// full-window web pages, stays on the 2D CPU canvas without requesting WebGPU or WebGL2.
     Only,
-    /// Skip CPU-first startup and open directly on the GPU (on web, skip the 2D CPU canvas underlay
-    /// and start directly on WebGPU/WebGL2).
+    /// Skip CPU-first startup and open directly on the GPU without falling back to the CPU
+    /// renderer if no GPU surface can be made (on web, skip the 2D CPU canvas underlay and start
+    /// directly on WebGPU/WebGL2).
     Off,
 }
 
@@ -129,6 +137,46 @@ impl CpuFirst {
     #[cfg_attr(not(any(target_os = "windows", target_os = "linux", test)), allow(dead_code))]
     pub(crate) const fn gpu_owed(self, ready_and_due: bool) -> bool {
         ready_and_due && !matches!(self, Self::Only)
+    }
+
+    /// Whether a Linux visible transparent window whose pre-swapchain GPU startup failed may fall
+    /// back to `CpuPainter` (starting with `GpuJob::Failed`, never retrying Vulkan).
+    ///
+    /// - Returns `false` for opaque or hidden windows, under `CpuFirst::Off` (explicit GPU-only
+    ///   opt-out), under `Policy::Pinned` (`WGPU_ADAPTER_NAME` explicitly requested a GPU), or
+    ///   after a swapchain has been configured / on transient device errors.
+    /// - Returns `true` only under `CpuFirst::Auto` or `CpuFirst::Only` with `Policy::Automatic`
+    ///   on pre-swapchain failures (`SurfaceCreate`, `DeviceCreate`, `SurfaceUnsupported`).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    pub(crate) const fn transparent_gpu_fallback(
+        self,
+        visible: bool,
+        transparent: bool,
+        policy: crate::gpu::fallback::Policy,
+        failure: crate::gpu::fallback::Failure,
+    ) -> bool {
+        use crate::gpu::fallback::{Failure, Policy};
+        if !visible || !transparent {
+            return false;
+        }
+        if matches!(self, Self::Off) || matches!(policy, Policy::Pinned) {
+            return false;
+        }
+        matches!(
+            failure,
+            Failure::SurfaceCreate | Failure::DeviceCreate | Failure::SurfaceUnsupported
+        )
+    }
+
+    /// Whether a Linux CPU window whose GPU job permanently failed (`GpuJob::Failed`) should paint
+    /// a degradable `NeedsGpu` frame without its GPU-only modifier instead of aborting forever.
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    pub(crate) const fn linux_degraded_when_gpu_failed(
+        gpu_failed: bool,
+        reason: crate::render::cpu_boot::NeedsGpu,
+    ) -> bool {
+        gpu_failed && reason.is_degradable()
     }
 
     /// Resolves how a web page's frames start from this effective mode and page layout flags.

@@ -19,6 +19,7 @@ use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, RenderPrep, StepInfo};
 use crate::platform::cpu_frames::{Frames, Put, Retired};
 use crate::render::cpu_boot::{CpuPainter, HalfRounding, Scene, Target};
+use crate::window::CpuFirst;
 use crate::runtime::RuntimeCore;
 use crate::time::Instant;
 use crate::window::chrome::{sync_chrome_core, sync_platform_core};
@@ -101,16 +102,32 @@ pub(in crate::window) fn opens_on_cpu(host: &Host) -> bool {
 }
 
 impl Host {
-    /// The rest of `try_create` for a window that opens on the CPU: no GPU, no surface. A
+    /// The rest of `try_create` for an opaque window that opens on the CPU: no GPU, no surface. A
     /// Wayland window comes on screen with its first frame (it has no buffer, and so isn't
     /// shown, before). `Err` gives the window back when the display takes no CPU frames, for
     /// `try_create` to open it on the GPU.
     pub(in crate::window) fn open_on_cpu(&mut self, event_loop: &ActiveEventLoop, window: Arc<Window>, a11y: Option<crate::a11y::Adapter>, built: bool) -> Result<(), (Arc<Window>, Option<crate::a11y::Adapter>)> {
+        self.open_on_cpu_with_job(event_loop, window, a11y, built, GpuJob::Waiting { tries: 0, retry_at: None })
+    }
+
+    /// Fallback for a transparent window whose pre-swapchain GPU startup failed: opens on the CPU
+    /// with alpha buffers (`wl_shm` ARGB8888 or X11 32-bit ARGB, falling back to 24-bit opaque
+    /// with the theme background if the display gives no alpha) and `GpuJob::Failed` so Vulkan
+    /// is never retried in a loop.
+    pub(in crate::window) fn open_on_cpu_fallback(&mut self, event_loop: &ActiveEventLoop, window: Arc<Window>, a11y: Option<crate::a11y::Adapter>, built: bool) -> Result<(), (Arc<Window>, Option<crate::a11y::Adapter>)> {
+        self.open_on_cpu_with_job(event_loop, window, a11y, built, GpuJob::Failed)
+    }
+
+    fn open_on_cpu_with_job(&mut self, event_loop: &ActiveEventLoop, window: Arc<Window>, a11y: Option<crate::a11y::Adapter>, built: bool, job: GpuJob) -> Result<(), (Arc<Window>, Option<crate::a11y::Adapter>)> {
         let phys = window.inner_size();
         let size = drawable_size(None, (phys.width, phys.height), max_surface_dim(None));
-        // A client-side frame's window keeps its pixels' alpha for the frame's corner arcs.
+        // A client-side frame's window keeps its pixels' alpha for the frame's corner arcs; a
+        // transparent window asks for alpha buffers too (falling back to 24-bit opaque on X11
+        // servers without a 32-bit ARGB visual).
         let client_frame = self.client_frame(&window);
-        let Some(frames) = Frames::new(&window, size, client_frame) else { return Err((window, a11y)) };
+        let want_alpha = client_frame || self.options.transparent;
+        let Some(frames) = Frames::new(&window, size, want_alpha) else { return Err((window, a11y)) };
+        let has_alpha = frames.has_alpha();
         crate::render::cpu_boot::attach_text(&mut self.app.rt_mut().text.atlas);
         let cpu = Cpu { frames, painter: CpuPainter::new(painter_threads()), half: HalfRounding::default(), radius: 0. };
         crate::marks::mark("cpu.side");
@@ -121,10 +138,16 @@ impl Host {
             height: size.1,
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: FRAME_LATENCY,
-            alpha_mode: if client_frame { wgpu::CompositeAlphaMode::PreMultiplied } else { wgpu::CompositeAlphaMode::Opaque },
+            alpha_mode: if has_alpha { wgpu::CompositeAlphaMode::PreMultiplied } else { wgpu::CompositeAlphaMode::Opaque },
             view_formats: vec![],
             color_space: Default::default(),
         };
+        if self.options.transparent {
+            if !has_alpha {
+                eprintln!("transparency unavailable for {}; using an opaque window", self.native_handle.key());
+            }
+            self.app.rt_mut().transparent = has_alpha;
+        }
         let scale = window.scale_factor() as f32;
         {
             let rt = self.app.rt_mut();
@@ -141,7 +164,7 @@ impl Host {
         self.native_handle.native.number.store(native_window_number(&window).unwrap_or(0), Ordering::Release);
         self.win = Some(Win {
             a11y,
-            native: Native { mode: SurfaceMode::Cpu { cpu, job: GpuJob::Waiting { tries: 0, retry_at: None } }, ..Default::default() },
+            native: Native { mode: SurfaceMode::Cpu { cpu, job }, ..Default::default() },
             first_frame: FirstFrame::opened(crate::time::now()),
             surface: None,
             config,
@@ -266,6 +289,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         if let SurfaceMode::Cpu { job: GpuJob::Building { latest, .. }, .. } = &l.native.mode {
             *latest.lock().unwrap_or_else(|e| e.into_inner()) = Latest { instances: warm_instances(&rt.instances), size: (width, height) };
         }
+        let gpu_failed = matches!(l.native.mode, SurfaceMode::Cpu { job: GpuJob::Failed, .. });
         let Some(cpu) = l.native.mode.cpu() else { return RenderPrep::Abort };
         cpu.painter.fill_masks(&mut rt.text.atlas);
         crate::marks::mark_once(&FIRST_MASKS, "frame.first.masks");
@@ -298,7 +322,18 @@ impl FrameHost for CpuWindowFrame<'_> {
                 if !kept { self.owed = true; }
                 RenderPrep::Ready(Some(painted.rects))
             }
-            Err(_why) => {
+            Err(why) => {
+                // When the GPU has permanently failed (no Vulkan driver, or transparent CPU
+                // fallback), paint degradable NeedsGpu features without their GPU-only modifier
+                // instead of leaving the window blank/frozen forever.
+                if CpuFirst::linux_degraded_when_gpu_failed(gpu_failed, why)
+                    && let Ok(painted) = painter.paint(&scene.degraded(true), &mut Target::with_stride(&mut *canvas.bytes, width, height, stride))
+                {
+                    clear_corners(canvas.bytes, stride, (width, height), radius, &painted.rects);
+                    crate::marks::mark_once(&FIRST_PAINT, "frame.first.painted");
+                    if !kept { self.owed = true; }
+                    return RenderPrep::Ready(Some(painted.rects));
+                }
                 // The frame needs what only the GPU draws (a native surface, a compositor's
                 // scene): the GPU starts now if it hasn't, even a software one, and the window
                 // keeps its last frame until it's there.

@@ -41,7 +41,9 @@ use crate::window::surface::Win;
 use crate::window::warm_frame::{warm_frame, warm_instances};
 
 /// Where a window's frames go. Windows that need the GPU from their first frame (a translucent
-/// window, a second window) are `Gpu` from the start.
+/// window, a second window) are `Gpu` from the start; a visible translucent window whose
+/// pre-swapchain GPU startup fails under `CpuFirst::Auto`/`Only` (automatic adapter selection)
+/// falls back to `SurfaceMode::Cpu { job: GpuJob::Failed, .. }`.
 #[derive(Default)]
 pub(in crate::window) enum SurfaceMode {
     #[default]

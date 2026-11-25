@@ -363,6 +363,27 @@ impl Host {
                         }
                     }
                 } else {
+                    #[cfg(target_os = "linux")]
+                    let (gpu, surface, configured) = match Gpu::for_surface_setup(
+                        features, transparent, make_surface, setup_surface,
+                    ) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            if self.effective_cpu_first().transparent_gpu_fallback(
+                                visible,
+                                transparent,
+                                crate::gpu::pick::env_policy(),
+                                err.kind,
+                            ) {
+                                if self.open_on_cpu_fallback(event_loop, window, a11y, built).is_ok() {
+                                    crate::marks::mark("cpu_first.transparent_fallback");
+                                    return Ok(());
+                                }
+                            }
+                            return Err(format_window_setup_error(err));
+                        }
+                    };
+                    #[cfg(not(target_os = "linux"))]
                     let (gpu, surface, configured) = Gpu::for_surface_setup(
                         features, transparent, make_surface, setup_surface,
                     ).map_err(format_window_setup_error)?;

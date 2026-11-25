@@ -688,7 +688,11 @@ impl<S: 'static> App<S> {
     /// GPU handover on idle (on Windows and Linux, a frame that hits a GPU-only feature still
     /// triggers GPU handover so it can render; on web, stays on the 2D canvas without requesting
     /// WebGPU/WebGL2). [`crate::CpuFirst::Off`] skips CPU-first startup and opens directly on the
-    /// GPU. Ignored on macOS, iOS, headless runs, and inline/document web pages.
+    /// GPU without falling back to the CPU renderer. Transparent windows always open on the GPU
+    /// on Windows and whenever a GPU surface can be made on Linux; on Linux under `Auto` or `Only`
+    /// (with automatic adapter selection), a visible transparent window whose pre-swapchain GPU
+    /// startup fails falls back to `CpuPainter` with alpha buffers (or 24-bit opaque if X11 gives
+    /// no 32-bit visual). Ignored on macOS, iOS, headless runs, and inline/document web pages.
     ///
     /// `RUNE_CPU_FIRST` (or `globalThis.RUNE_CPU_FIRST` on web) overrides this setting without a
     /// rebuild (`0`/`off`, `only`, `auto`), matching `RUNE_GPU_BACKEND`.

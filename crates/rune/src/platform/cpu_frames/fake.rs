@@ -10,6 +10,7 @@ pub(crate) struct Frames {
     pub(crate) sent: Arc<AtomicUsize>,
     /// Stands for a Wayland compositor with `wp_linux_drm_syncobj_manager_v1`.
     pub(crate) explicit_sync: bool,
+    pub(crate) alpha: bool,
     buffer: Vec<u8>,
     size: (u32, u32),
     painted: bool,
@@ -18,7 +19,7 @@ pub(crate) struct Frames {
 impl Frames {
     pub(crate) fn new(explicit_sync: bool) -> (super::Frames, Arc<AtomicUsize>) {
         let sent = Arc::new(AtomicUsize::new(0));
-        (super::Frames::Fake(Frames { sent: sent.clone(), explicit_sync, buffer: Vec::new(), size: (0, 0), painted: false }), sent)
+        (super::Frames::Fake(Frames { sent: sent.clone(), explicit_sync, alpha: false, buffer: Vec::new(), size: (0, 0), painted: false }), sent)
     }
 
     pub(super) fn begin(&mut self, size: (u32, u32)) -> Option<Canvas<'_>> {
