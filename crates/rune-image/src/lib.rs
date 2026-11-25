@@ -51,6 +51,8 @@ pub use place::ImageFilter;
 pub use place::PixelsWrap;
 pub use place::SurfaceFit;
 #[doc(hidden)]
+pub use readback::CopyPixels;
+#[doc(hidden)]
 pub use svg::svg_rgba;
 pub use svg::svg_rgba_cover;
 

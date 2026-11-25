@@ -1,6 +1,32 @@
 //! A decoded image's pixels read back as straight RGBA, for a copy to the clipboard or a save.
+use std::borrow::Cow;
 use super::{Decoded, Image};
 use super::mips::{downsample_rgba_to, straight_rgba};
+
+/// Borrowed or owned pixel data ready for off-thread PNG encoding without running
+/// linear-premultiplied un-premultiplication on the UI thread.
+#[doc(hidden)]
+pub enum CopyPixels<'a> {
+    /// Straight-alpha sRGB RGBA8 (`width * height * 4` bytes, rows top first).
+    Straight { width: u32, height: u32, bytes: Cow<'a, [u8]> },
+    /// Mip-0 linear-premultiplied sRGB RGBA8 (`width * height * 4` bytes, rows top first)
+    /// requiring `straight_rgba` un-premultiplication off the UI thread.
+    PremulMip0 { width: u32, height: u32, bytes: &'a [u8] },
+}
+
+pub(crate) fn with_decoded_copy_pixels<R>(decoded: &Decoded, f: impl FnOnce(CopyPixels<'_>) -> R) -> Option<R> {
+    let mip = decoded.mips.first()?;
+    let full = (mip.width, mip.height);
+    if let Some([iw, ih]) = decoded.intrinsic {
+        let side = |v: f32| if v.is_finite() { v.round().max(1.0) as u32 } else { u32::MAX };
+        let (nw, nh) = (side(iw), side(ih));
+        if nw <= full.0 && nh <= full.1 && (nw, nh) != full {
+            let (w, h, rgba) = downsample_rgba_to(full.0, full.1, straight_rgba(&mip.pixels), nw, nh).ok()?;
+            return Some(f(CopyPixels::Straight { width: w, height: h, bytes: Cow::Owned(rgba) }));
+        }
+    }
+    Some(f(CopyPixels::PremulMip0 { width: full.0, height: full.1, bytes: &mip.pixels }))
+}
 
 /// Converts a decoded image's top mip (linear-premultiplied sRGB RGBA8) back to straight-alpha
 /// sRGB RGBA8, downsampling a 2x-rasterized SVG to its rounded intrinsic size when smaller.
@@ -47,5 +73,13 @@ impl Image {
     pub fn to_rgba(&self) -> Option<(u32, u32, Vec<u8>)> {
         let decoded = self.decoded()?.ok()?;
         decoded_to_rgba(&decoded)
+    }
+
+    /// Borrows mip-0 bytes (or straight RGBA for 2x SVGs downsampled to intrinsic size) for
+    /// off-thread un-premultiplication and PNG encoding on web.
+    #[doc(hidden)]
+    pub fn with_copy_pixels<R>(&self, f: impl FnOnce(CopyPixels<'_>) -> R) -> Option<R> {
+        let decoded = self.decoded()?.ok()?;
+        with_decoded_copy_pixels(&decoded, f)
     }
 }

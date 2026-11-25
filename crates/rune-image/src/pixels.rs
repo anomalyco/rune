@@ -328,6 +328,23 @@ impl Pixels {
         }
     }
 
+    /// Borrows the current frame's pixels (straight RGBA or mip-0 linear-premultiplied) for
+    /// off-thread un-premultiplication and PNG encoding on web.
+    #[doc(hidden)]
+    pub fn with_copy_pixels<R>(&self, f: impl FnOnce(crate::CopyPixels<'_>) -> R) -> Option<R> {
+        let (width, height, data) = {
+            let frame = self.inner.frame.lock().unwrap();
+            (frame.width, frame.height, frame.data.clone())
+        };
+        match data {
+            FrameData::Empty => None,
+            FrameData::Rgba(rgba) => (width > 0 && height > 0).then(|| {
+                f(crate::CopyPixels::Straight { width, height, bytes: std::borrow::Cow::Borrowed(&rgba) })
+            }),
+            FrameData::Mips(decoded) => crate::readback::with_decoded_copy_pixels(&decoded, f),
+        }
+    }
+
     pub(crate) fn advance_ticket(&self) -> u64 {
         self.inner.ticket.fetch_add(1, Ordering::AcqRel) + 1
     }
