@@ -14,7 +14,7 @@ mod tests;
 use std::collections::HashMap;
 
 use rune::compose::{Compositor, Frame, is_glyph};
-use rune::render::{Instance, KIND_LAYER, KIND_LAYER_END, KIND_RECT, Kind};
+use rune::render::{Instance, KIND_LAYER, KIND_LAYER_END, KIND_RECT};
 use rune_fx::{BlurMode, Fx, FxFrame, FxLayer, MotionBlurParams, MotionSamples, Pose, Rect, Shape};
 use rune_light::{Light, LightRenderer, Prim, Scene as LightScene, Settings};
 use rune_motion::Vec2;
@@ -99,28 +99,7 @@ impl Cv<'_> {
 /// store their placed rect in `border`, and layer headers store rotation/pivot in `border`).
 pub(self) fn apply_opacity(ins: &Instance, opacity: f32) -> Instance {
     let mut out = *ins;
-    if opacity == 1.0 {
-        return out;
-    }
-    out.fill = out.fill.map(|v| v * opacity);
-    match out.kind() {
-        Some(Kind::Rect) => {
-            out.border = out.border.map(|v| v * opacity);
-            out.params[3] *= opacity;
-        }
-        Some(Kind::Gradient) => {
-            out.border = out.border.map(|v| v * opacity);
-            out.uv = out.uv.map(|v| v * opacity);
-            out.params[3] *= opacity;
-        }
-        Some(Kind::Dashed | Kind::Radial) => {
-            out.border = out.border.map(|v| v * opacity);
-        }
-        Some(
-            Kind::Glyph | Kind::Shadow | Kind::Inset | Kind::Segment | Kind::Triangle
-            | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur,
-        ) | None => {}
-    }
+    out.scale_opacity(opacity);
     out
 }
 

@@ -1,6 +1,6 @@
 //! Manual, headless disabled-control timing and legacy per-instance pixel comparison.
 use super::*;
-use rune::render::{Gpu, Instance, Renderer, Offscreen, OFFSCREEN_FORMAT, KIND_LAYER, KIND_LAYER_END, KIND_GRADIENT};
+use rune::render::{Gpu, Instance, Renderer, Offscreen, OFFSCREEN_FORMAT, KIND_LAYER, KIND_LAYER_END};
 
 fn disabled_controls(_: &G, _: &mut Cx<G>) -> El {
     let mut s = init();
@@ -27,9 +27,7 @@ fn legacy(instances: &[Instance]) -> Vec<Instance> {
         else if i.params[1] == KIND_LAYER_END { alpha = stack.pop().unwrap(); }
         else {
             let mut i = *i;
-            i.fill = i.fill.map(|v| v * alpha);
-            i.border = i.border.map(|v| v * alpha);
-            if i.params[1] == KIND_GRADIENT { i.uv = i.uv.map(|v| v * alpha); }
+            i.scale_opacity(alpha);
             out.push(i);
         }
     }

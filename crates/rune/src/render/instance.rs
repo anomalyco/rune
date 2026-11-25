@@ -49,6 +49,22 @@ pub enum Kind {
     BackdropBlur = 13,
 }
 
+/// Which fields of an [`Instance`] carry premultiplied colour or opacity and therefore scale
+/// with enclosing layer opacity ([`Kind::opacity_fields`], [`Instance::scale_opacity`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OpacityFields {
+    /// `Instance::fill` holds premultiplied colour or opacity (`fill[3]`).
+    pub fill: bool,
+    /// `Instance::border` holds a premultiplied colour (never outline records, wrapped-image
+    /// placement rects, layer pivots, or effect marks).
+    pub border: bool,
+    /// `Instance::uv` holds a premultiplied colour (`Kind::Gradient` bottom colour).
+    pub uv: bool,
+    /// `Instance::params[3]` holds the opacity the colours already carry (`border_over` on
+    /// `Kind::Rect` and `Kind::Gradient`).
+    pub params_w: bool,
+}
+
 const _: () = {
     assert!(size_of::<Option<Kind>>() == 1);
     assert!(Kind::Radial.as_f32() < shader_consts::UBER_MAX_KIND_THRESHOLD);
@@ -75,6 +91,38 @@ impl Kind {
     #[inline]
     pub const fn as_f32(self) -> f32 {
         self as u8 as f32
+    }
+
+    /// Which fields of an [`Instance`] of this kind carry colour or opacity and scale when
+    /// flattened into an enclosing layer's opacity or animated by GPU springs
+    /// (`crates/rune-gpu/src/springs.wgsl`).
+    ///
+    /// Every variant is matched explicitly with no wildcard arm so adding a new `Kind` forces
+    /// declaring which fields are colours before it can corrupt non-colour payloads.
+    #[inline]
+    pub(crate) const fn opacity_fields(self) -> OpacityFields {
+        match self {
+            Kind::Rect => OpacityFields { fill: true, border: true, uv: false, params_w: true },
+            Kind::Gradient => OpacityFields { fill: true, border: true, uv: true, params_w: true },
+            Kind::Dashed | Kind::Radial => OpacityFields { fill: true, border: true, uv: false, params_w: false },
+            // Primitives whose only colour/alpha is `fill`: `Glyph` stores Windfoil outline
+            // record metadata in `border`, `Image` stores its wrapped placement rect in `border`
+            // and wrap mode in `params[3]`, `Layer` stores turned-layer rotation/pivot in
+            // `border`, and `Shadow`/`Inset`/`Segment`/`Triangle`/`BackdropBlur` carry no
+            // colour in `border`.
+            Kind::Shadow
+            | Kind::Glyph
+            | Kind::Inset
+            | Kind::Segment
+            | Kind::Triangle
+            | Kind::Image
+            | Kind::Layer
+            | Kind::BackdropBlur => OpacityFields { fill: true, border: false, uv: false, params_w: false },
+            // Scope sentinel (`LayerEnd`) and compositor slot (`Effect`, whose `fill[3]` is
+            // always 1, `border[0..2]` holds `EffectSite::mark`, `uv` holds `EffectSite::data`,
+            // and faded slots stay inside isolated layers).
+            Kind::LayerEnd | Kind::Effect => OpacityFields { fill: false, border: false, uv: false, params_w: false },
+        }
     }
 
     #[inline]
@@ -713,6 +761,24 @@ impl Instance {
     pub fn end_layer() -> Self {
         Self { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..Self::zeroed() }
     }
+
+    /// Scales only the colour and opacity fields of this instance by `opacity`, leaving
+    /// non-colour payloads (outline glyph records, wrapped-image placement rects, layer pivots,
+    /// effect marks, wrap modes, etc.) untouched. Mirrors `crates/rune-gpu/src/springs.wgsl`.
+    #[doc(hidden)]
+    pub fn scale_opacity(&mut self, opacity: f32) {
+        if opacity == 1.0 {
+            return;
+        }
+        let Some(kind) = self.kind() else {
+            return;
+        };
+        let f = kind.opacity_fields();
+        if f.fill { self.fill = self.fill.map(|v| v * opacity); }
+        if f.border { self.border = self.border.map(|v| v * opacity); }
+        if f.uv { self.uv = self.uv.map(|v| v * opacity); }
+        if f.params_w { self.params[3] *= opacity; }
+    }
 }
 
 /// An effect slot's `El::effect` tag, from the two exact 16-bit floats in `border` (`KIND_EFFECT`).
@@ -763,28 +829,7 @@ pub(crate) fn end_layer(instances: &mut Vec<Instance>, surfaces: &mut [crate::na
         if primitives == 1 {
             let i = &mut instances[start + 1];
             if transfer_clip { i.clip = scope.clip; i.fade = scope.fade; }
-            i.fill = i.fill.map(|v| v * opacity);
-            // A glyph's `border` holds no colour (an outline glyph's names its record).
-            // A box's `params.w` is the opacity its colours carry (shader.wgsl `border_over`).
-            match i.kind() {
-                Some(Kind::Glyph) => {}
-                Some(Kind::Rect) => {
-                    i.border = i.border.map(|v| v * opacity);
-                    i.params[3] *= opacity;
-                }
-                Some(Kind::Gradient) => {
-                    i.border = i.border.map(|v| v * opacity);
-                    i.uv = i.uv.map(|v| v * opacity);
-                    i.params[3] *= opacity;
-                }
-                Some(
-                    Kind::Shadow | Kind::Inset | Kind::Segment | Kind::Triangle | Kind::Image
-                    | Kind::Layer | Kind::LayerEnd | Kind::Dashed | Kind::Radial
-                    | Kind::Effect | Kind::BackdropBlur,
-                ) | None => {
-                    i.border = i.border.map(|v| v * opacity);
-                }
-            }
+            i.scale_opacity(opacity);
         }
         if videos == 1 {
             if transfer_clip { surfaces[surface_start].clip = scope.clip; surfaces[surface_start].fade = scope.fade; }

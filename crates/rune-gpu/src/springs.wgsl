@@ -61,11 +61,16 @@ fn vs_springs(input: In, @builtin(instance_index) instance: u32) -> Out {
     let kind = i.params.y;
     // This spike translates geometry under a fixed screen-space clip. No text reflow or scaling.
     i.rect = vec4<f32>(i.rect.xy + offset, i.rect.zw);
-    i.fill *= alpha;
-    // Match CPU opacity folding (`render/instance.rs` `end_layer`):
-    // - Rect (0) and Gradient (4) carry opacity in `params.w` for `border_over`.
-    // - Gradient (4) carries its bottom colour in `uv`.
-    // - Glyph (2) and Layer (8) store non-colour data in `border`.
+    // Match CPU opacity folding (`render/instance.rs` `Kind::opacity_fields` / `Instance::scale_opacity`):
+    // - Scale `fill` on every colour-bearing kind (not LayerEnd (9) or Effect (12)).
+    // - Scale `border` ONLY on kinds whose `border` holds a colour: Rect (0), Gradient (4),
+    //   Dashed (10), and Radial (11). Every other kind stores non-colour payloads or zeroes in
+    //   `border` (Glyph outline records, Image wrapped placement rect, Layer pivot, Effect mark).
+    // - Scale `uv` ONLY on Gradient (4, bottom colour).
+    // - Scale `params.w` ONLY on Rect (0) and Gradient (4, `border_over` opacity).
+    if (!(kind > 8.5 && kind < 9.5) && !(kind > 11.5 && kind < 12.5)) {
+        i.fill *= alpha;
+    }
     if (kind < 0.5) {
         i.border *= alpha;
         i.params.w *= alpha;
@@ -73,13 +78,18 @@ fn vs_springs(input: In, @builtin(instance_index) instance: u32) -> Out {
         i.border *= alpha;
         i.uv *= alpha;
         i.params.w *= alpha;
-    } else if (!(kind > 1.5 && kind < 2.5) && !(kind > 7.5 && kind < 8.5)) {
+    } else if (kind > 9.5 && kind < 11.5) {
         i.border *= alpha;
     }
     // Vector endpoints are screen-space geometry, unlike image/glyph atlas UVs.
     if (kind > 4.5 && kind < 6.5) {
         i.radii += vec4<f32>(offset, offset);
         if (kind > 5.5) { i.uv = vec4<f32>(i.uv.xy + offset, i.uv.zw); }
+    }
+    // Wrapped images (kind 7, params.w > 1.5) store their placed rect in screen-space device
+    // pixels in `border`, so translation shifts its origin alongside `rect.xy`.
+    if (kind > 6.5 && kind < 7.5 && i.params.w > 1.5) {
+        i.border = vec4<f32>(i.border.xy + offset, i.border.zw);
     }
     return base_vs(i);
 }
