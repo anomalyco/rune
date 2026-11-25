@@ -32,6 +32,7 @@ mod help;
 mod highlight_texts;
 mod input;
 mod isolates;
+pub(crate) mod items;
 mod layout;
 pub(crate) mod layout_watch;
 mod live_colors;
@@ -69,6 +70,7 @@ pub use handlers::{Drag, Phase, PointerEvent, PointerPress};
 pub(crate) use handlers::{A11yActionFn, AnyPressFn, DragEndFn, DragFn, DragOutFn, InputKeyFn, PointerFn, PointerMotionFn, PressFn, SetValueFn, StepFn, StepLimitFn, WindowDrag};
 pub(crate) use help::{HELP_KEY, HELP_ROW, help_words};
 pub use input::{InputSpec, auto_grow, edit_access, text_input};
+pub use items::VirtualItems;
 #[doc(hidden)]
 pub use layout::PathBind;
 pub use pills::{InlineIcon, InlineImage};

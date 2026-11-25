@@ -58,6 +58,7 @@ pub(crate) struct CommitState {
     /// Opt-in tooling checks. None keeps release commits free of key traversal/allocation.
     key_warnings: Option<Vec<String>>,
     pub(crate) virtuals: HashMap<String, crate::el::virtual_list::VirtualList>,
+    pub(crate) virtual_items: virtual_items::VirtualItemsState,
     virtual_culled: HashSet<String>,
     /// Fresh view accessors for focused text fields omitted by virtualization.
     pub(in crate::runtime) virtual_inputs: HashMap<String, Box<InputSpec>>,
@@ -107,6 +108,7 @@ impl CommitState {
             key_warnings: None,
             defaults: Default::default(),
             virtuals: HashMap::default(),
+            virtual_items: virtual_items::VirtualItemsState::default(),
             virtual_culled: HashSet::default(),
             virtual_inputs: HashMap::default(),
             virtual_fill: virtual_fill::Fill::default(),
@@ -343,6 +345,7 @@ impl CommitState {
         self.memo.reused_scratch = measured.memo_reused;
         measured.taken_paths.clear();
         self.memo.taken_paths_scratch = measured.taken_paths;
+        self.virtual_items.clear_staged();
         self.layout = measured.layout;
     }
 }
@@ -431,6 +434,7 @@ pub(super) struct Measurement<'a> {
     pub(super) scrolls: &'a mut HashMap<NodeId, ScrollState>,
     pub(super) scroll_requests: &'a scroll::requests::Requests,
     pub(super) virtuals: &'a mut HashMap<String, crate::el::virtual_list::VirtualList>,
+    pub(super) virtual_items: &'a mut virtual_items::VirtualItemsState,
     pub(super) virtual_culled: &'a mut HashSet<String>,
     pub(super) virtual_inputs: &'a mut HashMap<String, Box<InputSpec>>,
     pub(super) stats: &'a mut FrameStats,

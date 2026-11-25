@@ -130,7 +130,7 @@ impl RuntimeCore {
             || self.poll_wake_deadline().is_some_and(|d| d <= wall)
         { return false; }
         if self.ambient.is_none() || !self.slots_hold() { return false; }
-        if self.commit.virtual_fill.resuming(wall) { return false; }
+        if self.commit.virtual_fill.resuming(wall) || self.commit.virtual_items.fill_resuming(wall) { return false; }
         // No poll: as on a window resting without a loop, the app's poll runs when its timers,
         // wakes or input ask, each of which takes an ordinary frame.
         self.clock = wall;
@@ -158,7 +158,7 @@ impl RuntimeCore {
             else if (self.wall_start.is_none() && !virtual_check) || self.reduced_motion || self.time_scale <= 0.0 || !self.live_visible() || self.tracing() { "not live" }
             else if dt < 0.0 || (!has_icons && dt > 1.0 / 30.0) { "late" }
             else if self.poll_wake_deadline().is_some_and(|d| d <= wall) { "timer due" }
-            else if self.commit.virtual_fill.resuming(wall) { "a list filling" }
+            else if self.commit.virtual_fill.resuming(wall) || self.commit.virtual_items.fill_resuming(wall) { "a list filling" }
             else if let Some(work) = self.waiting_work() { work }
             else { "" };
         if !why.is_empty() { return Err(why); }

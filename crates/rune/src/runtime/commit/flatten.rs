@@ -780,6 +780,7 @@ fn flatten_node<E: FlattenEl>(
     let option_as_alt = el_r.cold.option_as_alt;
     let window_drag = el_r.window_drag_mode();
     let virtual_list = el_r.cold.virtual_estimate.is_some();
+    let virtual_items = el_r.cold.virtual_items.is_some();
     let mut focus = el_r.cold.focus.clone();
     if (focus.disabled || focus.opt_out) && (focus.enabled || !focus.opt_out) {
         let f = &mut *focus;
@@ -824,6 +825,7 @@ fn flatten_node<E: FlattenEl>(
         inert, selection_off, flow, directed, pin, scale_track: false, group_fade: false,
         virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),
         virtual_list,
+        virtual_items,
         selection_group: flags.has(ElFlags::SELECTION_GROUP),
         window_drag,
         ime_cursor: flags.has(ElFlags::IME_CURSOR),
