@@ -321,6 +321,7 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
     }
     #[cfg(target_os = "macos")]
     {
+        let _ = window_backdrop;
         if !prewarm && live.materials.presents_plainly() && renderer.submits_plainly() && !crate::gpu::native(&gpu.queue) {
             if live.present.is_none() { live.present = crate::frame::present_worker::PresentWorker::spawn(); }
             if let Some(worker) = &mut live.present {

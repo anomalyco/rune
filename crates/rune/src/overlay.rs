@@ -629,7 +629,7 @@ pub(in crate::overlay) struct OverlayCore {
     /// `ConfiguredOverlay::renderer` (defaults to `RendererKind::Gpu`).
     pub(in crate::overlay) requested_renderer: crate::RendererKind,
     /// Windows: latched once if layered CPU setup fails so the overlay falls back to GPU once.
-    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    #[cfg(target_os = "windows")]
     cpu_layered_failed: bool,
     /// Logged once when `RendererKind::Cpu` is paired with `.compositor(...)`.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -736,6 +736,7 @@ impl OverlayCore {
             frame_latency: None,
             on_materials: None,
             requested_renderer: crate::RendererKind::Gpu,
+            #[cfg(target_os = "windows")]
             cpu_layered_failed: false,
             compositor_override_logged: false,
             #[cfg(target_os = "windows")]

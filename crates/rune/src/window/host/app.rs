@@ -254,7 +254,7 @@ pub(crate) struct TypedWindowApp<S: 'static> {
 }
 
 impl<S: 'static> TypedWindowApp<S> {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     pub(in crate::window) fn for_test(rt: Runtime<S>, on_frame_drawn: Option<OnFrameDrawn<S>>) -> Self {
         Self {
             rt,

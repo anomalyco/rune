@@ -8,20 +8,20 @@
 //! presents them through documented Win32 `UpdateLayeredWindowIndirect` (`ULW_ALPHA`) via
 //! `platform::win32::layered::LayeredPresenter`.
 
-use crate::render::cpu_boot::NeedsGpu;
-use crate::RendererKind;
-
 #[cfg(any(target_os = "windows", test))]
-use crate::render::cpu_boot::{CpuPainter, Scene, Target};
+use crate::render::cpu_boot::{CpuPainter, NeedsGpu, Scene, Target};
 #[cfg(any(target_os = "windows", test))]
 use crate::runtime::RuntimeCore;
+#[cfg(any(target_os = "windows", test))]
+use crate::RendererKind;
 
 #[cfg(target_os = "windows")]
 use crate::platform::win32::layered::{self, LayeredPresenter, LayeredSeam, RealLayeredSeam};
 #[cfg(all(test, not(target_os = "windows")))]
-use crate::platform::win32_layered::{self as layered, LayeredPresenter, LayeredSeam};
+use crate::platform::win32_layered::{LayeredPresenter, LayeredSeam};
 
 /// Target OS classification for the pure overlay backend selection policy.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OverlayTarget {
     Windows,
@@ -30,6 +30,7 @@ pub(crate) enum OverlayTarget {
     Other,
 }
 
+#[cfg(target_os = "windows")]
 impl OverlayTarget {
     #[inline]
     pub(crate) const fn current() -> Self {
@@ -46,6 +47,7 @@ impl OverlayTarget {
 }
 
 /// Pure backend selection decision for an overlay.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OverlayBackendChoice {
     /// Default GPU presentation through `wgpu`.
@@ -60,13 +62,14 @@ pub(crate) enum OverlayBackendChoice {
     GpuPlatformUnsupported,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl OverlayBackendChoice {
     #[inline]
     pub(crate) const fn is_cpu_layered(self) -> bool {
         matches!(self, Self::WindowsCpuLayered)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     #[inline]
     pub(crate) const fn renderer_kind(self) -> RendererKind {
         if self.is_cpu_layered() {
@@ -81,6 +84,7 @@ impl OverlayBackendChoice {
 ///
 /// An overlay enters `WindowsCpuLayered` if and only if:
 /// `target == Windows && requested == RendererKind::Cpu && !has_compositor && !cpu_layered_failed`.
+#[cfg(any(target_os = "windows", test))]
 #[inline]
 pub(crate) const fn select_overlay_backend(
     target: OverlayTarget,
@@ -108,6 +112,7 @@ pub(crate) const fn select_overlay_backend(
 ///
 /// Unlike opaque-window `CpuFirst`, a CPU overlay never silently hands over to the GPU (which
 /// would discard its 42-129 MiB memory saving).
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NeedsGpuAction {
     /// Paint live via `Scene::degraded(true)`, log once, and note the reason in `surface_description`.
@@ -118,6 +123,7 @@ pub(crate) enum NeedsGpuAction {
     UnavailableFrameOne(NeedsGpu),
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[inline]
 pub(crate) const fn classify_needs_gpu(reason: NeedsGpu, has_presented: bool) -> NeedsGpuAction {
     if reason.is_degradable() {
@@ -130,7 +136,7 @@ pub(crate) const fn classify_needs_gpu(reason: NeedsGpu, has_presented: bool) ->
 }
 
 /// Formats `OverlayHandle::surface_description()` for a Windows CPU layered overlay.
-#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn format_surface_description(degraded: Option<NeedsGpu>) -> String {
     match degraded {
         None => "CpuPainter (Win32 layered, ULW_ALPHA)".to_owned(),
@@ -232,6 +238,7 @@ impl<S: LayeredSeam> CpuPaintEngine<S> {
         self.active_degraded
     }
 
+    #[cfg(target_os = "windows")]
     pub(crate) fn invalidate_full(&mut self) {
         self.presenter.invalidate_full();
     }
