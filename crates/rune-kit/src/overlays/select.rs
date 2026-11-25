@@ -103,21 +103,41 @@ impl Select {
         self.details = d.iter().map(|x| x.as_ref().map(|s| s.as_ref().to_owned())).collect();
         self
     }
-    /// The field trigger's width in points (default 280).
+    /// The field trigger's width in points (default 280). Ignored when [`Self::fill`] is set
+    /// or when the appearance is [`SelectAppearance::Inline`].
     pub fn width(mut self, w: f32) -> Self {
         self.width = w;
         self
     }
-    /// The field trigger takes its parent's width instead of [`Self::width`], to line up with
-    /// the other fields in a form column.
+    /// The [`SelectAppearance::Field`] trigger fills its parent's width instead of using
+    /// [`Self::width`] (taking precedence regardless of call order), shrinking inside a
+    /// horizontal row beside a label. Has no effect on [`SelectAppearance::Inline`].
+    ///
+    /// ```
+    /// use rune_kit::{Select, SelectAppearance};
+    ///
+    /// let _select = Select::new("theme", &["System", "Light", "Dark"])
+    ///     .appearance(SelectAppearance::Field)
+    ///     .fill();
+    /// ```
     pub fn fill(mut self) -> Self {
         self.fill = true;
         self
     }
-    /// The open listbox's width in points, such as the trigger's measured width. Without it the
-    /// listbox sizes itself to its labels, between 160 and 368 points.
+    /// The open listbox's width in points for any [`SelectAppearance`], such as the trigger's
+    /// measured width (clamped to the window bounds when wider than the viewport). Without it
+    /// the listbox sizes itself to its labels, between 160 and 368 points.
+    ///
+    /// ```
+    /// use rune_kit::{Select, SelectAppearance};
+    ///
+    /// let _select = Select::new("theme", &["System", "Light", "Dark"])
+    ///     .appearance(SelectAppearance::Field)
+    ///     .fill()
+    ///     .menu_width(320.0);
+    /// ```
     pub fn menu_width(mut self, w: f32) -> Self {
-        self.menu_width = Some(w);
+        self.menu_width = w.is_finite().then_some(w.max(0.0));
         self
     }
     pub fn current(mut self, c: Option<&str>) -> Self {
@@ -332,16 +352,16 @@ impl Select {
             .role("listbox")
             .label(name)
             .focus_group()
-            .focus_return(&anchor_key);
+            .focus_return(&anchor_key)
+            .max_h(LISTBOX_MAX_HEIGHT)
+            .min_h(0.0)
+            .shrink();
         let listbox = match self.menu_width {
             Some(w) => listbox.w(w),
             None => listbox.min_w(160.0).max_w(368.0),
         };
         let content = k.elevate(
             listbox
-                .max_h(LISTBOX_MAX_HEIGHT)
-                .min_h(0.0)
-                .shrink()
                 .radius(6.0)
                 .fill(c.layer_01)
                 .child(fit_scroll_bar(k, &self.key, list)),
@@ -390,7 +410,7 @@ impl Select {
                 k.overlay_state(t, self.state, hover, !disabled)
             }
             SelectAppearance::Field => {
-                let t = if self.fill { trigger.w_full() } else { trigger.w(self.width) };
+                let t = if self.fill { trigger.w_full().shrink() } else { trigger.w(self.width) };
                 let mut t = t
                     .h(28.0)
                     .pr(6.0)
