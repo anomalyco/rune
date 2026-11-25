@@ -39,6 +39,7 @@ pub mod shell;
 pub mod syntax;
 mod tokens;
 mod tree;
+pub mod zoom_pan;
 
 pub use containers::accordion::Accordion;
 pub use containers::accordion::AccordionItem;
@@ -188,6 +189,8 @@ pub use tree::TreeRow;
 pub use tree::TreeStyle;
 pub use tree::file_icon;
 pub use tree::natural_cmp;
+pub use zoom_pan::Canvas;
+pub use zoom_pan::ZoomPan;
 
 use rune::{Color, El, Shadow, Tx};
 
