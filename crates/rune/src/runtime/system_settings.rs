@@ -42,6 +42,20 @@ impl window_requests::HostState {
         true
     }
 
+    #[inline]
+    pub(super) fn set_window_backdrop(&mut self, backdrop: crate::WindowBackdrop) -> bool {
+        if backdrop == self.window_backdrop { return false; }
+        self.window_backdrop = backdrop;
+        true
+    }
+
+    #[inline]
+    pub(super) fn set_backdrop_opaque_fallback(&mut self, fallback: bool) -> bool {
+        if fallback == self.backdrop_opaque_fallback { return false; }
+        self.backdrop_opaque_fallback = fallback;
+        true
+    }
+
     /// What [`Cx::accent`] and [`Cx::focus_color`] report, and the colour of default focus
     /// rings. Native windows set it from [`system_accent`](crate::system_accent) and again when
     /// the user picks another accent; a change re-runs the view. Headless runs keep
@@ -184,6 +198,19 @@ impl RuntimeCore {
     #[inline]
     pub fn set_full_screen(&mut self, full_screen: bool) {
         if self.host.set_full_screen(full_screen) { self.commit.dirty = true; }
+    }
+
+    /// What [`Cx::window_backdrop`] reports. Native hosts set it only after the OS confirms the
+    /// backdrop is active; a change re-runs the view and its memos.
+    #[inline]
+    pub fn set_window_backdrop(&mut self, backdrop: crate::WindowBackdrop) {
+        if self.host.set_window_backdrop(backdrop) { self.commit.dirty = true; }
+    }
+
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    #[inline]
+    pub(crate) fn set_backdrop_opaque_fallback(&mut self, fallback: bool) {
+        if self.host.set_backdrop_opaque_fallback(fallback) { self.commit.dirty = true; }
     }
 
     #[inline]

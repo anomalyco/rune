@@ -12,6 +12,11 @@ pub(crate) struct HostState {
     pub(in crate::runtime) titlebar_inset: f32,
     pub(in crate::runtime) maximized: bool,
     pub(in crate::runtime) full_screen: bool,
+    /// Confirmed OS-active whole-window backdrop reported by [`Cx::window_backdrop`].
+    pub(in crate::runtime) window_backdrop: crate::WindowBackdrop,
+    /// When `true` on a transparent window, `clear_color()` clears to an opaque theme-matched
+    /// fallback so a requested backdrop that could not activate never opens a transparent hole.
+    pub(in crate::runtime) backdrop_opaque_fallback: bool,
     pub(in crate::runtime) system_reduced_motion: bool,
     pub(in crate::runtime) system_accent: crate::SystemAccent,
     /// What [`Cx::system_contrast`] reports.
@@ -41,6 +46,8 @@ pub(crate) struct HostState {
     pub(crate) window_title: Title,
     /// Per-window native color scheme requested via `Tx::set_color_scheme`, taken by the host.
     pub(crate) window_color_scheme: Option<crate::ColorScheme>,
+    /// Per-window system backdrop requested via `Tx::set_window_backdrop`, taken by the host.
+    pub(crate) window_backdrop_request: Option<crate::WindowBackdrop>,
     /// macOS document path (`MacWindowOptions::represented_file`, `Tx::set_represented_file`).
     pub(crate) represented_file: Latched<Option<std::path::PathBuf>>,
     /// macOS document edited dot (`MacWindowOptions::document_edited`, `Tx::set_document_edited`).
@@ -101,6 +108,8 @@ impl HostState {
             titlebar_inset: 0.0,
             maximized: false,
             full_screen: false,
+            window_backdrop: crate::WindowBackdrop::None,
+            backdrop_opaque_fallback: false,
             system_reduced_motion: false,
             system_accent: crate::SystemAccent::DEFAULT,
             system_contrast: None,
@@ -118,6 +127,7 @@ impl HostState {
             window_frame: None,
             window_title: Default::default(),
             window_color_scheme: None,
+            window_backdrop_request: None,
             represented_file: Default::default(),
             document_edited: Default::default(),
             fit_height: false,

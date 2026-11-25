@@ -486,7 +486,8 @@ impl Host {
                 Some(handover) => handover::SurfaceMode::Rebinding { handover },
                 None => handover::SurfaceMode::Gpu,
             };
-            Native { cloak, frame, mode, a11y_start, ..Default::default() }
+            let last_maximized = window.is_maximized();
+            Native { cloak, frame, mode, a11y_start, last_maximized, ..Default::default() }
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
@@ -517,6 +518,7 @@ impl Host {
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(crate::time::now()); }
+        self.sync_window_backdrop(false);
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]
         if visible && let Some(w) = &mut self.win && w.native.panel.is_some() { w.show(focus); }
@@ -755,6 +757,7 @@ impl Host {
         *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
         crate::render::surface_gpu(&gpu);
         self.gpu = Some((gpu, renderer));
+        self.sync_window_backdrop(true);
         Ok(())
     }
 

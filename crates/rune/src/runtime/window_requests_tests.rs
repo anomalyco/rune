@@ -67,6 +67,18 @@ fn tx_set_color_scheme_latches_last_wins_without_forcing_redundant_redraw() {
 }
 
 #[test]
+fn tx_set_window_backdrop_merges_last_wins() {
+    let mut base = Tx::default();
+    base.set_window_backdrop(crate::WindowBackdrop::Mica);
+    let mut later = Tx::default();
+    later.set_window_backdrop(crate::WindowBackdrop::MicaAlt);
+    crate::runtime::input::action::merge(&mut base, later);
+    assert_eq!(base.window_backdrop, Some(crate::WindowBackdrop::MicaAlt));
+    crate::runtime::input::action::merge(&mut base, Tx::default());
+    assert_eq!(base.window_backdrop, Some(crate::WindowBackdrop::MicaAlt));
+}
+
+#[test]
 fn tx_set_represented_file_and_document_edited_latch_deduplicate_and_retain() {
     use std::path::PathBuf;
 

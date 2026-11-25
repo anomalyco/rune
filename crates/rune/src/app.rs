@@ -158,6 +158,7 @@ pub struct App<S: 'static> {
     pub(crate) windows_window: crate::WindowsWindowOptions,
     pub(crate) exclude_from_capture: Option<bool>,
     pub(crate) color_scheme: crate::ColorScheme,
+    pub(crate) window_backdrop: crate::WindowBackdrop,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) canvas_id: Option<String>,
@@ -230,6 +231,7 @@ impl<S: 'static> App<S> {
             windows_window: crate::WindowsWindowOptions::default(),
             exclude_from_capture: None,
             color_scheme: crate::ColorScheme::System,
+            window_backdrop: crate::WindowBackdrop::None,
             compositor: None,
             window_options: crate::WindowOptions::default(),
             canvas_id: None,
@@ -520,6 +522,39 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn color_scheme(mut self, scheme: crate::ColorScheme) -> Self {
         self.color_scheme = scheme;
+        self
+    }
+
+    /// Opt-in whole-window system backdrop material ([`WindowBackdrop`](crate::WindowBackdrop)),
+    /// applied on creation and retained across native window recreation. Defaults to
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None).
+    ///
+    /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows
+    /// (`WindowOptions { transparent: true, .. }`), this applies the documented
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` attribute. Views read [`Cx::window_backdrop`](crate::Cx::window_backdrop)
+    /// to see what the OS actually activated. Update at runtime with
+    /// [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop) or
+    /// [`WindowHandle::set_window_backdrop`](crate::WindowHandle::set_window_backdrop).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, Color, WindowBackdrop, WindowOptions, el};
+    ///
+    /// let opts = WindowOptions { transparent: true, ..Default::default() };
+    /// let spec = AppSpec::new("Notes", (800.0, 600.0), || (), |_, cx| {
+    ///     let bg = if cx.window_backdrop().is_active() {
+    ///         Color::TRANSPARENT
+    ///     } else {
+    ///         rune::tok::theme(cx.system_dark()).bg
+    ///     };
+    ///     el().w_full().h_full().fill(bg)
+    /// });
+    /// App::new(spec)
+    ///     .window_options(opts)
+    ///     .window_backdrop(WindowBackdrop::Mica)
+    ///     .run();
+    /// ```
+    pub fn window_backdrop(mut self, backdrop: crate::WindowBackdrop) -> Self {
+        self.window_backdrop = backdrop;
         self
     }
 

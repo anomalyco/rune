@@ -44,5 +44,8 @@ pub mod web;
 pub(crate) mod web_math;
 #[cfg(target_os = "windows")]
 pub(crate) mod win32;
+#[cfg(all(test, not(target_os = "windows")))]
+#[path = "platform/win32/backdrop.rs"]
+pub(crate) mod win32_backdrop;
 #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) mod x11;

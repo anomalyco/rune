@@ -178,6 +178,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) font_smoothing: Option<crate::FontSmoothing>,
     pub(crate) macos_level: Option<isize>,
     pub(crate) macos_color_space: crate::MacColorSpace,
+    pub(crate) window_backdrop: crate::WindowBackdrop,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
 }
@@ -360,6 +361,29 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.macos_color_space = color_space;
         self
     }
+    /// Opt-in whole-window system backdrop material ([`WindowBackdrop`](crate::WindowBackdrop))
+    /// for this overlay, applied on Windows 11 Build 22621+ (`DWMWA_SYSTEMBACKDROP_TYPE`) and
+    /// retained across hide/show and recreation. Defaults to
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None).
+    ///
+    /// Update at runtime with
+    /// [`OverlayHandle::set_window_backdrop`](crate::OverlayHandle::set_window_backdrop) or
+    /// [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop), and read the OS-confirmed
+    /// backdrop with [`Cx::window_backdrop`](crate::Cx::window_backdrop). Note that Windows 11
+    /// Mica and Desktop Acrylic follow window activation by design, so non-activating overlays
+    /// (`KeyPolicy::None`) may display the OS solid inactive fallback colour.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, WindowBackdrop, el};
+    ///
+    /// let _overlay = OverlaySpec::new("hud", (280.0, 96.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .window_backdrop(WindowBackdrop::Acrylic);
+    /// ```
+    pub fn window_backdrop(mut self, backdrop: crate::WindowBackdrop) -> Self {
+        self.window_backdrop = backdrop;
+        self
+    }
 }
 
 impl<T: 'static> OverlaySpec<T> {
@@ -371,7 +395,8 @@ impl<T: 'static> OverlaySpec<T> {
         ConfiguredOverlay {
             spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
-            macos_color_space: crate::MacColorSpace::Srgb, animate_reveal: false, release_after: None,
+            macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
+            animate_reveal: false, release_after: None,
         }
     }
 }

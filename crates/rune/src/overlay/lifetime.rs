@@ -41,6 +41,7 @@ impl OverlayCore {
             // the surface before exposing it, rather than flashing the old frame.
             if !fading { self.refresh_for_reveal_at(app, crate::time::now()); }
             self.show_window(app, &window, fade);
+            self.sync_window_backdrop(app.rt_mut(), true);
             // A retained macOS panel drew while hidden during prewarm and does not mark itself
             // dirty on reveal, so exposing its retained pixels is the first visible present.
             if frame::retained_reveal_presents(self.retained(), self.dirty, self.surface.live().is_some()) {
@@ -107,6 +108,7 @@ impl OverlayCore {
                     self.rescale(app, &gpu, scale);
                     if self.shared.failure.lock().unwrap().is_some() { return; }
                 }
+                self.sync_window_backdrop(app.rt_mut(), false);
                 self.ready(app, showing);
             }
             None => {

@@ -452,6 +452,7 @@ pub use video::Thumbnails;
 pub use video::Video;
 pub use window::ColorScheme;
 pub use window::CpuFirst;
+pub use window::WindowBackdrop;
 pub use window::WindowHandle;
 pub use window::displays::displays;
 pub use window::geometry::WindowGeometry;

@@ -664,6 +664,14 @@ impl OverlayCore {
             #[cfg(target_os = "macos")]
             if let Some(panel) = &self.panel { panel.set_level(level); }
         }
+        if let Some(backdrop) = requests.window_backdrop {
+            self.window_backdrop = backdrop;
+            self.sync_window_backdrop(app.rt_mut(), false);
+        }
+        if let Some(backdrop) = app.rt_mut().host.window_backdrop_request.take() {
+            self.window_backdrop = backdrop;
+            self.sync_window_backdrop(app.rt_mut(), false);
+        }
         match requests.visibility {
             Some(Visibility::Show(fade)) => self.show_fading(app, event_loop, fade),
             Some(Visibility::Hide(fade)) => self.hide_fading(app, fade),

@@ -219,6 +219,7 @@ impl SharedCore {
     fn fade_in(&self, duration: Duration) { self.request(|q| q.visibility = Some(Visibility::Show(duration))); }
     fn fade_out(&self, duration: Duration) { self.request(|q| q.visibility = Some(Visibility::Hide(duration))); }
     fn set_macos_level(&self, level: isize) { self.request(|q| q.macos_level = Some(level)); }
+    fn set_window_backdrop(&self, backdrop: crate::WindowBackdrop) { self.request(|q| q.window_backdrop = Some(backdrop)); }
     fn set_edge(&self, edge: ScreenEdge) { self.request(|q| q.edge = Some(edge)); }
     fn place(&self, edge: ScreenEdge, margin: f32) {
         self.request(|q| {
@@ -365,6 +366,26 @@ impl<T: 'static> OverlayHandle<T> {
     #[inline(always)]
     pub fn set_macos_level(&self, level: isize) { self.shared.core.set_macos_level(level); }
 
+    /// Requests a whole-window system backdrop material ([`WindowBackdrop`](crate::WindowBackdrop))
+    /// for this overlay at runtime, retained across hide/show and native recreation.
+    ///
+    /// On Windows 11 Build 22621+ DirectComposition GPU overlays, this updates
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` (and syncs `DWMWA_USE_IMMERSIVE_DARK_MODE` while active) and
+    /// reports the OS-confirmed state through [`Cx::window_backdrop`](crate::Cx::window_backdrop).
+    /// Safe to call from any thread; ignored on non-Windows platforms.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, OverlaySpec, WindowBackdrop, el};
+    ///
+    /// let mut app = App::new(AppSpec::new("Host", (480.0, 320.0), || (), |_, _| el()));
+    /// let overlay = app.overlay(OverlaySpec::new("hud", (240.0, 72.0), |_: &(), _| el()), ());
+    /// overlay.set_window_backdrop(WindowBackdrop::Acrylic);
+    /// ```
+    #[inline(always)]
+    pub fn set_window_backdrop(&self, backdrop: crate::WindowBackdrop) {
+        self.shared.core.set_window_backdrop(backdrop);
+    }
+
     #[inline(always)]
     pub fn set_edge(&self, edge: ScreenEdge) { self.shared.core.set_edge(edge); }
 
@@ -500,6 +521,11 @@ pub(in crate::overlay) struct OverlayCore {
     /// `ConfiguredOverlay::macos_color_space`.
     #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     pub(in crate::overlay) macos_color_space: crate::MacColorSpace,
+    /// `ConfiguredOverlay::window_backdrop` or the last `set_window_backdrop`.
+    pub(in crate::overlay) window_backdrop: crate::WindowBackdrop,
+    /// Cached Windows DWM backdrop state for the overlay's live `HWND`.
+    #[cfg(target_os = "windows")]
+    backdrop_tracker: crate::platform::win32::backdrop::BackdropTracker,
     shared: Arc<SharedCore>,
     clipboard: crate::clipboard::Client,
     popup: crate::popup_menu::Presenter,
@@ -577,6 +603,7 @@ impl OverlayCore {
         on_created: Option<Box<dyn FnMut(crate::OverlayCreated)>>,
         macos_level: Option<isize>,
         macos_color_space: crate::MacColorSpace,
+        window_backdrop: crate::WindowBackdrop,
         animate_reveal: bool,
         release_after: Option<Duration>,
     ) -> Self {
@@ -606,6 +633,9 @@ impl OverlayCore {
             interactive,
             macos_level,
             macos_color_space,
+            window_backdrop,
+            #[cfg(target_os = "windows")]
+            backdrop_tracker: Default::default(),
             shared,
             clipboard: Default::default(),
             popup: Default::default(),
@@ -684,7 +714,54 @@ impl OverlayCore {
     pub(super) fn theme_changed(&mut self, rt: &mut RuntimeCore, dark: bool) {
         self.dark = dark;
         rt.set_system_dark(dark);
+        self.sync_window_backdrop(rt, true);
         self.dirty = true;
+    }
+
+    /// Synchronizes the overlay's OS system backdrop and updates `Cx::window_backdrop()`.
+    /// When `WindowBackdrop::None` has never been activated on this `HWND`, makes zero DWM calls.
+    pub(super) fn sync_window_backdrop(&mut self, rt: &mut RuntimeCore, force_reapply: bool) {
+        #[cfg(target_os = "windows")]
+        {
+            let Some(live) = self.surface.live() else {
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                return;
+            };
+            let Some(window) = live.backing.window() else {
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                return;
+            };
+            let Some(hwnd) = crate::platform::win32::hwnd(window) else {
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                return;
+            };
+            let inputs = crate::platform::win32::backdrop::BackdropInputs {
+                requested: self.window_backdrop,
+                build: crate::platform::win32::dark_mode::windows_build(),
+                transparent: true,
+                swapchain: crate::render::Gpu::dx12_swapchain_kind(),
+                alpha_mode: Some(live.config.alpha_mode),
+                cpu_painter: false,
+                device_type: self.gpu.as_ref().map(|gpu| gpu.adapter.get_info().device_type),
+            };
+            let outcome = self.backdrop_tracker.sync(
+                hwnd as isize,
+                inputs,
+                true,
+                force_reapply,
+                Some(self.dark),
+                &mut crate::platform::win32::backdrop::RealBackdropSeam,
+            );
+            rt.set_window_backdrop(outcome.active);
+            if rt.stale() {
+                self.dirty = true;
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = force_reapply;
+            rt.set_window_backdrop(crate::WindowBackdrop::None);
+        }
     }
 
     /// Moving the window under a still pointer (`place`, `set_placement`, a resize that keeps

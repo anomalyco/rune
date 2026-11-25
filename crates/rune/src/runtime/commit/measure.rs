@@ -70,6 +70,7 @@ impl RuntimeCore {
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
+            window_backdrop: self.host.window_backdrop,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
@@ -203,13 +204,14 @@ impl Measurement<'_> {
     }
 
     /// What a memo scope hashes of the window's controls and state (`Cx::titlebar_inset`,
-    /// `Cx::chrome_insets`, `Cx::is_maximized`, `Cx::is_full_screen`), so memos that read them
-    /// rebuild when they change.
+    /// `Cx::chrome_insets`, `Cx::is_maximized`, `Cx::is_full_screen`, `Cx::window_backdrop`), so
+    /// memos that read them rebuild when they change.
     pub(in crate::runtime) fn chrome_bits(&self) -> [u32; 5] {
         let [leading, trailing, height] = self.chrome.bits();
         let flags = u32::from(self.maximized)
             | (u32::from(self.full_screen) << 1)
-            | (u32::from(self.pointer_locked) << 2);
+            | (u32::from(self.pointer_locked) << 2)
+            | (u32::from(self.window_backdrop.to_u8()) << 3);
         [self.titlebar_inset.to_bits(), leading, trailing, height, flags]
     }
 
@@ -511,6 +513,7 @@ impl Measurement<'_> {
             chrome: this.chrome,
             maximized: this.maximized,
             full_screen: this.full_screen,
+            window_backdrop: this.window_backdrop,
             caption_color: None,
             titlebar: Default::default(),
             system_accent: this.system_accent,

@@ -73,6 +73,7 @@ impl RuntimeCore {
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
+            window_backdrop: self.host.window_backdrop,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
