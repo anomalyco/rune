@@ -37,6 +37,7 @@ impl FrameRequest {
 /// usable area of its screen. The top edge stays put, as an AppKit window grows downward;
 /// centring follows AppKit's `center` (centred across, a quarter of the spare height above).
 /// A frame never moves further off the visible area than it already was.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn target(current: [f32; 4], outer: Option<(f32, f32)>, center: bool, visible: [f32; 4]) -> [f32; 4] {
     let (w, h) = outer.unwrap_or((current[2], current[3]));
     let [vx, vy, vw, vh] = visible;

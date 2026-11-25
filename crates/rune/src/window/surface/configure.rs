@@ -6,6 +6,7 @@ use crate::render::Gpu;
 /// a persistent driver/surface refusal so the adapter fallback chain knows whether to move on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConfigureErrorKind {
+    #[cfg(not(target_arch = "wasm32"))]
     DeviceLost,
     OutOfMemory,
     Refused,
@@ -14,6 +15,7 @@ pub(crate) enum ConfigureErrorKind {
 impl From<ConfigureErrorKind> for rune_gpu::fallback::Failure {
     fn from(kind: ConfigureErrorKind) -> Self {
         match kind {
+            #[cfg(not(target_arch = "wasm32"))]
             ConfigureErrorKind::DeviceLost => Self::DeviceLost,
             ConfigureErrorKind::OutOfMemory => Self::OutOfMemory,
             ConfigureErrorKind::Refused => Self::SurfaceRefused,

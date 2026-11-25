@@ -3,9 +3,13 @@
 
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::frame::surface_stats::SurfaceMeter;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::render::Gpu;
-use crate::runtime::{Runtime, RuntimeCore};
+#[cfg(test)]
+use crate::runtime::Runtime;
+use crate::runtime::RuntimeCore;
 use crate::time::Instant;
 
 /// The runtime's next timer, on the wall clock that started with the host.
@@ -25,13 +29,14 @@ fn wall_wake_deadline_core(rt: &RuntimeCore) -> Option<Instant> {
 /// poll that keeps asking steps at most once per `TIMER_FRAME` and never spins the loop.
 /// Motion's own frames (a loop's step, a video's next picture) come when due: held a frame
 /// after each poll, they'd drift later every frame and drop one every half second.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[inline(always)]
 pub(crate) fn timer_deadline<S>(rt: &Runtime<S>) -> Option<Instant> {
     timer_deadline_core(rt.core())
 }
 
 /// The runtime's next poll wake and when `poll` last ran, both on the host's wall clock.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn poll_wake_wall_core(rt: &RuntimeCore) -> Option<(Option<Instant>, Instant)> {
     let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
     let due = rt.poll_wake_deadline().and_then(wall)?;
@@ -39,6 +44,7 @@ pub(crate) fn poll_wake_wall_core(rt: &RuntimeCore) -> Option<(Option<Instant>, 
 }
 
 /// The runtime's next motion-owned wake (loop step, video frame), on the host's wall clock.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn motion_wake_wall_core(rt: &RuntimeCore) -> Option<Instant> {
     let wall = |t: f64| rt.wall_start?.checked_add(Duration::try_from_secs_f64(t).ok()?);
     rt.motion_wake_deadline().and_then(wall)
@@ -47,11 +53,13 @@ pub(crate) fn motion_wake_wall_core(rt: &RuntimeCore) -> Option<Instant> {
 /// Like [`timer_deadline_core`], omitting `motion_wake_deadline` so ambient visual loops pause
 /// while a Wayland layer surface awaits its `wl_surface.frame` callback, while app timers
 /// (`Tx::wake_after`) still fire on schedule.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn poll_timer_deadline_core(rt: &RuntimeCore) -> Option<Instant> {
     let (polled, due) = poll_wake_wall_core(rt)?;
     Some(polled.map_or(due, |polled| due.max(polled + TIMER_FRAME)))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn timer_deadline_core(rt: &RuntimeCore) -> Option<Instant> {
     poll_timer_deadline_core(rt).into_iter().chain(motion_wake_wall_core(rt)).min()
 }
@@ -60,6 +68,7 @@ pub(crate) fn timer_deadline_core(rt: &RuntimeCore) -> Option<Instant> {
 /// overlay's commit). A change after a quiet spell renders at once; later ones wait until
 /// `HIDDEN_REFRESH` has passed since the last render, so state that changes many times a
 /// second costs a few builds a second while nobody sees them.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum HiddenPace {
     /// Nothing rendered since it was hidden: a change renders at once.
@@ -71,9 +80,11 @@ pub(crate) enum HiddenPace {
     Waiting { at: Instant },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const HIDDEN_REFRESH: Duration = Duration::from_millis(250);
 
 /// What happens to a hidden host's pace.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PaceEvent {
     /// Its state changed at `now`.
@@ -86,6 +97,7 @@ pub(crate) enum PaceEvent {
     Reset,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HiddenPace {
     /// The pace after `event`, and whether a change renders now.
     pub(crate) fn step(self, event: PaceEvent) -> (HiddenPace, bool) {
@@ -140,7 +152,7 @@ impl HiddenPace {
 /// Whether a timer asks for the frame after one just presented. Only a surface whose display
 /// link paces it (`next_frame` is its next tick) takes a timer due by then as a frame request;
 /// anywhere else the timer waits in `timer_deadline`, so it never turns the loop by itself.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[inline(always)]
 pub(crate) fn timer_wants_frame<S>(rt: &Runtime<S>, next_frame: Option<Instant>) -> bool {
     timer_wants_frame_core(rt.core(), next_frame)
@@ -154,12 +166,14 @@ pub(crate) fn timer_wants_frame_core(rt: &RuntimeCore, next_frame: Option<Instan
 /// `RedrawRequested` while a surface frame callback is outstanding, and a compositor may not send
 /// one for a fully covered surface for a long time; the wait is an occluded surface's first
 /// re-check.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const TIMER_FRAME_STALL: Duration = OCCLUDED_RETRY;
 
 /// The frame a due timer asked a shown window for, until it draws it, and whether only that timer
 /// asked for it. An overdue timer whose frame never comes would otherwise keep turning the loop
 /// (`new_events` asks again, no frame arrives, and `wake_deadline` returns the past timer), so
 /// after `TIMER_FRAME_STALL` the timer runs covered instead and the next ask starts over.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct TimerFrame {
     /// When a due timer asked for a frame the window hasn't drawn yet.
@@ -170,6 +184,7 @@ pub(crate) struct TimerFrame {
     quiet: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl TimerFrame {
     /// A due timer asked for a frame: only it did, if nothing else has since the last frame.
     pub(crate) fn asked_quiet(&mut self, now: Instant) {
@@ -218,6 +233,7 @@ pub(crate) enum Missed {
     /// No drawable was free, or acquisition failed some other passing way.
     Timeout,
     /// Outdated or lost, and reconfiguring didn't bring it back.
+    #[cfg(not(target_arch = "wasm32"))]
     Outdated,
     /// The surface refused its configuration. wgpu panics on its next drawable, so its owner
     /// must drop it.
@@ -226,13 +242,17 @@ pub(crate) enum Missed {
 
 /// The first re-check of an occluded surface. Its occlusion notification usually redraws it
 /// first; this catches one that never arrives. Consecutive misses back off to `OCCLUDED_MAX`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const OCCLUDED_RETRY: Duration = Duration::from_millis(250);
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const OCCLUDED_MAX: Duration = Duration::from_secs(2);
 /// An unpaced surface's retry after a drawable timeout: about one frame.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const TIMEOUT_RETRY: Duration = Duration::from_millis(16);
 /// Motion's frame interval when no display link paces a surface.
 pub(crate) const TIMER_FRAME: Duration = Duration::from_micros(16_667);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Missed {
     pub(in crate::window) fn of(status: wgpu::CurrentSurfaceTexture) -> Result<wgpu::SurfaceTexture, Missed> {
         use wgpu::CurrentSurfaceTexture as S;
@@ -268,6 +288,7 @@ impl Missed {
 /// `reconfigures` times, synchronously; every other miss returns at once. On macOS a surface
 /// wgpu would call occluded is never asked: each failed `get_current_texture` leaks a texture
 /// id in wgpu-core 30.0.1.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn acquire(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration, configured: bool, reconfigures: u32,
     meter: &mut SurfaceMeter) -> Result<wgpu::SurfaceTexture, Missed> {
     acquire_checked(surface, gpu, config, configured, reconfigures, meter, true)
@@ -277,6 +298,7 @@ pub(crate) fn acquire(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::Surface
 /// the surface as visible (`check_occlusion` false). `configured` is whether the surface's last
 /// configuration took: one that didn't has no presentation, and wgpu panics on its next
 /// drawable (`Missed::Unconfigured`), so it is never asked.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn acquire_checked(surface: &wgpu::Surface, gpu: &Gpu, config: &wgpu::SurfaceConfiguration, configured: bool, mut reconfigures: u32,
     meter: &mut SurfaceMeter, check_occlusion: bool) -> Result<wgpu::SurfaceTexture, Missed> {
     #[cfg(not(target_os = "macos"))]

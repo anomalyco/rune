@@ -1,5 +1,6 @@
 //! Native window and application light/dark appearance overrides ([`ColorScheme`]).
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicU8, Ordering};
 
 /// Preferred native light or dark appearance for a window or the whole application.
@@ -34,6 +35,7 @@ pub enum ColorScheme {
     Dark,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ColorScheme {
     /// Maps this scheme to winit's `Option<Theme>` (`None` follows the system).
     pub(crate) const fn winit_theme(self) -> Option<winit::window::Theme> {
@@ -85,14 +87,17 @@ impl ColorScheme {
 /// Process-wide app-level color scheme set via `AppHandle::set_color_scheme`, retained so
 /// windows created or recreated later on Windows and Linux inherit it when their own
 /// per-window override is `ColorScheme::System`.
+#[cfg(not(target_arch = "wasm32"))]
 static APP_COLOR_SCHEME: AtomicU8 = AtomicU8::new(0);
 
 /// Returns the current process-wide app-level color scheme.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn app_color_scheme() -> ColorScheme {
     ColorScheme::from_u8(APP_COLOR_SCHEME.load(Ordering::Acquire))
 }
 
 /// Stores the process-wide app-level color scheme.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn set_app_color_scheme_state(scheme: ColorScheme) {
     APP_COLOR_SCHEME.store(scheme.to_u8(), Ordering::Release);
 }
@@ -104,6 +109,7 @@ pub(crate) fn set_app_color_scheme_state(scheme: ColorScheme) {
 /// `NSWindow.appearance` is `nil`, so `ColorScheme::System` maps to `None` regardless of
 /// `app`. On Windows and Linux there is no process-wide appearance property, so a window
 /// set to `ColorScheme::System` falls back to `app`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const fn window_theme_for_platform(
     window: ColorScheme,
     app: ColorScheme,
@@ -118,6 +124,7 @@ pub(crate) const fn window_theme_for_platform(
 
 /// Deduplicating tracker for applying a window's effective winit theme only when it changes.
 /// Used by native hosts and unit-tested behind a fake sink.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn sync_window_theme(
     applied: &mut Option<winit::window::Theme>,
     target: Option<winit::window::Theme>,

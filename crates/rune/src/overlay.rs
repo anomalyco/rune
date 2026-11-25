@@ -20,59 +20,93 @@
 //!   one is made without `WS_EX_NOACTIVATE`, so a click or `request_keys` activates it.
 //! - With `release_gpu_when_hidden`, hidden means destroyed on Windows and macOS too.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::cell::RefCell;
+#[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Weak;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 use winit::dpi::LogicalSize;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event::{StartCause, WindowEvent};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::ActiveEventLoop;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::{Window, WindowId, WindowLevel};
 
 use crate::el::{Align, El, Tx};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::frame::clock::FrameClock;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::render::{Gpu, Renderer};
-use crate::runtime::{Cx, RuntimeCore, Waker};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::RuntimeCore;
+use crate::runtime::{Cx, Waker};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::window::{AnyHost, WakeEvent};
 #[cfg(target_os = "windows")]
 use crate::window::slot::{Slot, Take};
-use crate::{DisplayTarget, KeyPolicy, OverlayInput, OverlayOptions, OverlayPlacement, OverlaySupport};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{KeyPolicy, OverlayOptions};
+use crate::{DisplayTarget, OverlayInput, OverlayPlacement, OverlaySupport};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/any_host.rs"]
 mod any_host;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/app.rs"]
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/draw.rs"]
 mod draw;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/frame.rs"]
 mod frame;
+#[cfg(not(target_arch = "wasm32"))]
 use frame::{OverlayRenderArgs, idle_after, render_frame, step};
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/input.rs"]
 mod input;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod keys;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/lifetime.rs"]
 mod lifetime;
 pub(crate) mod options;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/placement.rs"]
 mod placement;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub(crate) use placement::monitor_at;
+#[cfg(not(target_arch = "wasm32"))]
 use placement::{monitor, position};
+#[cfg(not(target_arch = "wasm32"))]
 mod presence;
+#[cfg(not(target_arch = "wasm32"))]
 use presence::{Presence, Release};
 mod requests;
 use requests::{Requests, Update, Visibility};
+#[cfg(not(target_arch = "wasm32"))]
 mod retire;
+#[cfg(not(target_arch = "wasm32"))]
 use retire::Retire;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/surface.rs"]
 mod surface;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/xwayland.rs"]
 pub(crate) mod xwayland;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use app::OverlayHost;
+#[cfg(not(target_arch = "wasm32"))]
 use app::OverlayApp;
 #[cfg(test)]
 use crate::compose::{Compositor, Frame};
@@ -220,6 +254,11 @@ impl<T> Clone for OverlayHandle<T> {
 }
 
 impl<T: 'static> OverlayHandle<T> {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn disconnected() -> Self {
+        Self { shared: Arc::new(Shared { core: Arc::default(), updates: Mutex::default() }) }
+    }
+
     /// Takes effect on the next event-loop turn, or after the current owned drag releases.
     #[inline(always)]
     pub fn set_input(&self, input: OverlayInput) { self.shared.core.set_input(input); }
@@ -346,6 +385,7 @@ impl<T: 'static> OverlayHandle<T> {
 }
 
 /// An overlay before the event loop runs: the shell gives it a wake-up and the GPU pool.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) trait PendingOverlay: AnyHost {
     fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>);
     fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing);
@@ -354,6 +394,7 @@ pub(crate) trait PendingOverlay: AnyHost {
     fn font_smoothing(&self) -> crate::FontSmoothing;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum Backing {
     Window(Arc<Window>),
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -364,6 +405,7 @@ enum Backing {
     Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Backing {
     fn window(&self) -> Option<&Arc<Window>> {
         match self {
@@ -375,6 +417,7 @@ impl Backing {
 }
 
 /// A shown overlay. The wgpu surface drops before what it draws into.
+#[cfg(not(target_arch = "wasm32"))]
 struct Live {
     /// The OS accessibility adapter for this surface.
     a11y: Option<crate::a11y::Adapter>,
@@ -407,6 +450,7 @@ struct Live {
 }
 
 /// All non-generic state of an overlay host, compiled once.
+#[cfg(not(target_arch = "wasm32"))]
 pub(in crate::overlay) struct OverlayCore {
     on_created: Option<Box<dyn FnMut(crate::OverlayCreated)>>,
     pending_input: Option<OverlayInput>,
@@ -486,6 +530,7 @@ pub(in crate::overlay) struct OverlayCore {
     test_window_drags: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl OverlayCore {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -818,7 +863,7 @@ mod state_walk_tests;
 mod lost_release_tests;
 
 /// A Windows overlay's alpha (255 opaque) at `now`, fading out linearly over `length` until `end`.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg(any(target_os = "windows", test))]
 fn fade_alpha(end: Instant, length: Duration, now: Instant) -> u8 {
     if length.is_zero() { return 0; }
     let left = end.saturating_duration_since(now).as_secs_f64() / length.as_secs_f64();
