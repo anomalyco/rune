@@ -129,5 +129,6 @@ pub(super) fn take() -> Option<(Gpu, Renderer)> { GLOBAL.take() }
 pub(super) fn restart() { GLOBAL.restart(); }
 #[cfg_attr(test, allow(dead_code))]
 pub(super) fn discard() { GLOBAL.discard(); }
+pub(super) fn cancel() { GLOBAL.discard(); }
 pub(super) fn shutdown(timeout: Duration) -> ShutdownOutcome { GLOBAL.shutdown(timeout) }
 pub(super) fn reopen() { GLOBAL.reopen(); }

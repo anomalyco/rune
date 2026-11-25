@@ -124,6 +124,13 @@ pub fn fast_exit(last: fn()) {
 /// Tears the process down in order when the app quits instead of ending it at once (the default,
 /// [`fast_exit`]): windows, GPU devices and threads are dropped and `run` returns, for an app with
 /// work after `run` or destructors that must run. Call it before the app runs.
+///
+/// In-flight background GPU warm-up is cancelled as soon as the event loop begins exiting, and
+/// exit waits up to 30 seconds for those warm-up threads to finish so slow driver or shader
+/// startup under load drains cleanly and `run` returns. As a last resort against a driver call
+/// that is truly hung, if a warm-up thread has still not exited after 30 seconds, Rune logs to
+/// stderr and ends the process immediately (`_exit` on Unix, `TerminateProcess` on Windows)
+/// without running destructors under the stuck thread or returning from `run`.
 pub fn orderly_exit() {
     ORDERLY.store(true, std::sync::atomic::Ordering::Relaxed);
 }

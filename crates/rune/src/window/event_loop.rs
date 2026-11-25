@@ -61,7 +61,7 @@ pub(crate) fn finish_run(
 /// How `run_configured` finishes after `shutdown_prewarm()`.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ExitAction {
+pub(crate) enum ExitAction {
     /// All warm-up workers exited cleanly (or a caught callback panic must unwind): drop
     /// windows and return from `run_configured` normally.
     Return,
@@ -72,7 +72,7 @@ enum ExitAction {
 
 /// Pure exit decision combining warm-up shutdown outcome, run result, and pixel-check status.
 #[cfg(not(target_arch = "wasm32"))]
-fn exit_action(
+pub(crate) fn exit_action(
     warm: crate::render::ShutdownOutcome,
     has_panic: bool,
     run_error: Option<&str>,
@@ -84,8 +84,9 @@ fn exit_action(
     match warm {
         crate::render::ShutdownOutcome::Drained => ExitAction::Return,
         crate::render::ShutdownOutcome::TimedOut { remaining } => {
+            let secs = crate::render::warm_machine::SHUTDOWN_TIMEOUT.as_secs();
             let note = format!(
-                "rune: {remaining} GPU warm-up thread(s) did not finish before exit; ending process without destructors"
+                "rune: {remaining} GPU warm-up thread(s) did not finish within {secs} s before exit; ending process without destructors"
             );
             match run_error {
                 Some(error) => ExitAction::EndProcess {
@@ -354,25 +355,26 @@ fn exit_action_returns_when_drained_and_ends_process_without_destructors_on_time
     assert_eq!(exit_action(ShutdownOutcome::Drained, false, Some("err"), false), ExitAction::Return);
     assert_eq!(exit_action(ShutdownOutcome::TimedOut { remaining: 1 }, true, None, false), ExitAction::Return);
 
+    let secs = crate::render::warm_machine::SHUTDOWN_TIMEOUT.as_secs();
     assert_eq!(
         exit_action(ShutdownOutcome::TimedOut { remaining: 1 }, false, None, false),
         ExitAction::EndProcess {
             code: 0,
-            message: "rune: 1 GPU warm-up thread(s) did not finish before exit; ending process without destructors".into(),
+            message: format!("rune: 1 GPU warm-up thread(s) did not finish within {secs} s before exit; ending process without destructors"),
         },
     );
     assert_eq!(
         exit_action(ShutdownOutcome::TimedOut { remaining: 2 }, false, None, true),
         ExitAction::EndProcess {
             code: 3,
-            message: "rune: 2 GPU warm-up thread(s) did not finish before exit; ending process without destructors".into(),
+            message: format!("rune: 2 GPU warm-up thread(s) did not finish within {secs} s before exit; ending process without destructors"),
         },
     );
     assert_eq!(
         exit_action(ShutdownOutcome::TimedOut { remaining: 1 }, false, Some("run: display failed"), false),
         ExitAction::EndProcess {
             code: 1,
-            message: "rune: run: display failed\nrune: 1 GPU warm-up thread(s) did not finish before exit; ending process without destructors".into(),
+            message: format!("rune: run: display failed\nrune: 1 GPU warm-up thread(s) did not finish within {secs} s before exit; ending process without destructors"),
         },
     );
 }

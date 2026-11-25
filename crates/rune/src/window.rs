@@ -30,6 +30,8 @@ mod app_events;
 mod chrome;
 mod color_scheme;
 mod event_loop;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) use event_loop::{ExitAction, exit_action};
 mod file_drop;
 mod handle;
 mod host;
@@ -593,6 +595,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
         }
         let _handling = crate::quit::handling();
         crate::marks::mark("loop.exiting");
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::render::cancel_prewarm();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if self.display_error.is_none()
             && let Ok(display) = winit::raw_window_handle::HasDisplayHandle::display_handle(event_loop)
