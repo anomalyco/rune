@@ -35,7 +35,7 @@ fn app() -> Runtime<Seen> {
 }
 
 fn physical(code: PhysicalKeyCode, key: Key) -> (PhysicalInput, Option<KeyEvent>) {
-    (PhysicalInput::Key { key: code, mods: Mods::default(), pressed: true, repeat: false }, Some(KeyEvent { key, mods: Mods::default() }))
+    (PhysicalInput::Key { key: code, mods: Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default() }, Some(KeyEvent { key, mods: Mods::default() }))
 }
 
 #[test]

@@ -218,7 +218,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null, a11yTouchId: null,
         hoverLink: null, hoverLinkLeave: null, hoverClientX: NaN, hoverClientY: NaN,
         forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
-        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false };
+        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false,
+        pointerLocked: false, pointerLockPending: false, pointerLockSeq: 0, pointerLockHasPromise: false, pointerLockCalling: false, pointerLockSyncError: false, pointerLockUnadjustedFailed: false };
     // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
     const send = (event, after) => {
         const message = JSON.stringify(event);
@@ -283,6 +284,42 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }, { passive: true });
     listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); });
     listen(document, 'visibilitychange', () => { if (document.hidden) { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); } });
+    listen(document, 'pointerlockchange', () => {
+        if (h.disposed) return;
+        const locked = document.pointerLockElement === canvas;
+        if (locked) {
+            if (!h.pointerLockPending && !h.pointerLocked) {
+                // Lock arrived after Rune cancelled or unmounted: exit immediately.
+                if (typeof document.exitPointerLock === 'function') {
+                    try { document.exitPointerLock(); } catch {}
+                }
+                return;
+            }
+            h.pointerLocked = true;
+            h.pointerLockPending = false;
+            h.pointerLockHasPromise = false;
+            send({ kind: 'pointer_lock', locked: true });
+        } else if (h.pointerLocked) {
+            h.pointerLocked = false;
+            h.pointerLockPending = false;
+            h.pointerLockHasPromise = false;
+            send({ kind: 'pointer_lock', locked: false });
+        }
+    });
+    listen(document, 'pointerlockerror', () => {
+        if (h.disposed || h.pointerLockHasPromise || !h.pointerLockPending) return;
+        if (h.pointerLockCalling) { h.pointerLockSyncError = true; return; }
+        h.pointerLockPending = false;
+        send({ kind: 'pointer_lock', locked: false, refused: true });
+    });
+    listen(document, 'pointermove', event => {
+        if (!h.pointerLocked || document.pointerLockElement !== canvas) return;
+        if (event.pointerType && event.pointerType !== 'mouse') return;
+        const dx = typeof event.movementX === 'number' ? event.movementX : 0;
+        const dy = typeof event.movementY === 'number' ? event.movementY : 0;
+        if (dx === 0 && dy === 0) return;
+        send({ kind: 'pointer_motion', dx, dy });
+    }, { capture: true, passive: true });
     function changed(preedit = false) {
         const backward = textarea.selectionDirection === 'backward';
         const edit = replacement(h.domValue, textarea.value, preedit ? h.composition : '', textarea.selectionEnd);
@@ -736,6 +773,110 @@ export function syncSecondary(h, claim) {
 // Whether the app opted into hardware media transport keys (`App::media_keys`).
 export function syncMediaKeys(h, enabled) {
     h.mediaKeys = !!enabled;
+}
+
+// Requests pointer lock on the canvas inside a user gesture. Tries `{ unadjustedMovement: true }`
+// first for raw unaccelerated deltas where supported, caching and falling back to plain
+// `requestPointerLock()` on `NotSupportedError` or synchronous `TypeError`. Any refusal
+// (`SecurityError`, missing API, or failed fallback) reports `{ kind: 'pointer_lock', locked: false }`
+// so Rune's state machine returns cleanly to Ready without getting stuck.
+export function requestPointerLock(h) {
+    if (h.disposed) return;
+    const canvas = h.canvas;
+    if (typeof canvas.requestPointerLock !== 'function') {
+        h.syncing = true;
+        try { h.send({ kind: 'pointer_lock', locked: false, refused: true }); }
+        finally { h.syncing = false; }
+        return;
+    }
+    const seq = ++h.pointerLockSeq;
+    h.pointerLockPending = true;
+    h.pointerLockHasPromise = false;
+    const fail = () => {
+        if (h.disposed || h.pointerLockSeq !== seq) return;
+        h.pointerLockPending = false;
+        h.pointerLockHasPromise = false;
+        h.send({ kind: 'pointer_lock', locked: false, refused: true });
+    };
+    const invoke = opts => {
+        h.pointerLockCalling = true;
+        h.pointerLockSyncError = false;
+        try {
+            return opts === undefined ? canvas.requestPointerLock() : canvas.requestPointerLock(opts);
+        } finally {
+            h.pointerLockCalling = false;
+        }
+    };
+    const tryPlain = () => {
+        if (h.disposed || h.pointerLockSeq !== seq) return;
+        try {
+            const res = invoke(undefined);
+            if (res && typeof res.then === 'function') {
+                h.pointerLockHasPromise = true;
+                h.pointerLockSyncError = false;
+                res.then(
+                    () => { if (h.pointerLockSeq === seq) h.pointerLockHasPromise = false; },
+                    fail,
+                );
+            } else if (h.pointerLockSyncError) {
+                h.pointerLockSyncError = false;
+                fail();
+            }
+        } catch {
+            fail();
+        }
+    };
+    h.syncing = true;
+    try {
+        if (h.pointerLockUnadjustedFailed) {
+            tryPlain();
+            return;
+        }
+        try {
+            const res = invoke({ unadjustedMovement: true });
+            if (res && typeof res.then === 'function') {
+                h.pointerLockHasPromise = true;
+                h.pointerLockSyncError = false;
+                res.then(
+                    () => { if (h.pointerLockSeq === seq) h.pointerLockHasPromise = false; },
+                    err => {
+                        if (h.disposed || h.pointerLockSeq !== seq) return;
+                        h.pointerLockHasPromise = false;
+                        if (err && err.name === 'NotSupportedError') {
+                            h.pointerLockUnadjustedFailed = true;
+                            tryPlain();
+                            return;
+                        }
+                        fail();
+                    },
+                );
+            } else if (h.pointerLockSyncError) {
+                h.pointerLockSyncError = false;
+                fail();
+            }
+        } catch (err) {
+            if (err && (err.name === 'NotSupportedError' || err.name === 'TypeError')) {
+                h.pointerLockUnadjustedFailed = true;
+                tryPlain();
+            } else {
+                fail();
+            }
+        }
+    } finally {
+        h.syncing = false;
+    }
+}
+
+export function exitPointerLock(h) {
+    h.pointerLockSeq++;
+    h.pointerLockPending = false;
+    h.pointerLockHasPromise = false;
+    if (document.pointerLockElement === h.canvas && typeof document.exitPointerLock === 'function') {
+        h.syncing = true;
+        try { document.exitPointerLock(); }
+        catch {}
+        finally { h.syncing = false; }
+    }
 }
 
 // The sans and mono slots' families (CSS lists): the mirror's text sets in them (`family`).
@@ -1373,6 +1514,10 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-autocomplete', item.ac],
         ['aria-controls', item.ct],
         ['aria-owns', item.ow],
+        ['aria-rowcount', item.rc !== undefined ? String(item.rc) : undefined],
+        ['aria-colcount', item.cc !== undefined ? String(item.cc) : undefined],
+        ['aria-rowindex', item.ri !== undefined ? String(item.ri) : undefined],
+        ['aria-colindex', item.ci !== undefined ? String(item.ci) : undefined],
     ];
     for (const [name, value] of rangeAttrs) {
         if (value === undefined) {
@@ -1676,6 +1821,10 @@ export function focusA11y(h, json) {
     if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
     if (f.ct) el.setAttribute('aria-controls', f.ct);
     if (f.ow) el.setAttribute('aria-owns', f.ow);
+    if (f.rc !== undefined) el.setAttribute('aria-rowcount', String(f.rc));
+    if (f.cc !== undefined) el.setAttribute('aria-colcount', String(f.cc));
+    if (f.ri !== undefined) el.setAttribute('aria-rowindex', String(f.ri));
+    if (f.ci !== undefined) el.setAttribute('aria-colindex', String(f.ci));
     if (f.ro) el.setAttribute('aria-readonly', 'true');
     if (f.sel) {
         el.setAttribute('data-rune-selection', JSON.stringify(f.sel));
@@ -2041,6 +2190,7 @@ export async function pastedImage(h, max) {
 }
 
 export function destroy(h) {
+    exitPointerLock(h);
     closeMenu(h, false);
     h.disposed = true;
     h.image = undefined;

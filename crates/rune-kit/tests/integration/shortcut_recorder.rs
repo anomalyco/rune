@@ -23,7 +23,7 @@ fn click(rt: &mut Runtime<State>, name: &str) {
     let (x, y) = rt.find(name).unwrap(); rt.pointer_down(x, y); rt.pointer_up(x, y);
 }
 fn physical(rt: &mut Runtime<State>, key: Code, mods: Mods, pressed: bool, repeat: bool) {
-    rt.physical_input(PhysicalInput::Key { key, mods, pressed, repeat }); rt.frame(0.0);
+    rt.physical_input(PhysicalInput::Key { key, mods, pressed, repeat, text: None, consumed_mods: Default::default() }); rt.frame(0.0);
 }
 
 #[test]

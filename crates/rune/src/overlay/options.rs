@@ -19,7 +19,6 @@ pub enum NativeDisplayId {
 impl DisplayId {
     pub fn native_id(&self) -> Option<NativeDisplayId> { self.1 }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn from_monitor(monitor: winit::monitor::MonitorHandle, _wayland: bool) -> Self {
         #[cfg(target_os = "macos")]
         let native = { use winit::platform::macos::MonitorHandleExtMacOS; Some(NativeDisplayId::MacOS(monitor.native_id())) };
@@ -91,6 +90,20 @@ pub enum KeyPolicy {
     /// `WS_EX_NOACTIVATE`, and `request_keys` takes the foreground only when Windows lets this
     /// process (it just had the user's input, or was given the right); a click always does.
     OnDemand,
+    /// As `OnDemand`, except on Wayland layer-shell: `request_keys` sets exclusive keyboard
+    /// interactivity, so the overlay keeps the keys wherever the pointer goes until
+    /// `OverlayHandle::release_keys` or a hide. Works on every layer-shell version. While it
+    /// holds them no other surface gets keys, so release them as soon as input ends. There is
+    /// no safety net yet: if the app's event loop hangs while it holds them, the whole desktop
+    /// stays without a keyboard until the process exits or is killed. Other hosts treat it as
+    /// `OnDemand`.
+    Exclusive,
+}
+
+impl KeyPolicy {
+    /// Whether an overlay with this policy may take keyboard focus (`OnDemand` or `Exclusive`).
+    #[inline]
+    pub fn takes_keys(self) -> bool { !matches!(self, KeyPolicy::None) }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -164,6 +177,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) runtime: crate::app::RuntimeConfig<T>,
     pub(crate) font_smoothing: Option<crate::FontSmoothing>,
     pub(crate) macos_level: Option<isize>,
+    pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
 }
@@ -325,6 +339,27 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// `OverlayOptions::level`; `OverlayHandle::set_macos_level` changes it later. At any
     /// level a macOS overlay goes exactly where it's placed, over the menu bar too.
     pub fn macos_level(mut self, level: isize) -> Self { self.macos_level = Some(level); self }
+    /// Sets how macOS colour-manages this overlay panel (`NSWindow.colorSpace` and its
+    /// `CAMetalLayer.colorspace`), like [`MacWindowOptions::color_space`](crate::MacWindowOptions::color_space).
+    ///
+    /// Defaults to [`MacColorSpace::Srgb`](crate::MacColorSpace::Srgb) so both the native Metal
+    /// backend and the wgpu backend show sRGB colours as sRGB on wide-gamut displays. Pass
+    /// [`MacColorSpace::Unmanaged`](crate::MacColorSpace::Unmanaged) to leave
+    /// `NSWindow.colorSpace` unset (`nil`) and clear `CAMetalLayer.colorspace` so framebuffer
+    /// values reach the display unmodified. Retained across hide/recreate and ignored on other
+    /// platforms.
+    ///
+    /// ```no_run
+    /// use rune::{MacColorSpace, OverlayOptions, OverlaySpec, el};
+    ///
+    /// let _overlay = OverlaySpec::new("raw", (240.0, 80.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .macos_color_space(MacColorSpace::Unmanaged);
+    /// ```
+    pub fn macos_color_space(mut self, color_space: crate::MacColorSpace) -> Self {
+        self.macos_color_space = color_space;
+        self
+    }
 }
 
 impl<T: 'static> OverlaySpec<T> {
@@ -336,7 +371,7 @@ impl<T: 'static> OverlaySpec<T> {
         ConfiguredOverlay {
             spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
-            animate_reveal: false, release_after: None,
+            macos_color_space: crate::MacColorSpace::Srgb, animate_reveal: false, release_after: None,
         }
     }
 }
@@ -357,11 +392,33 @@ pub enum OverlaySupport {
     Failed,
 }
 
+/// What the overlay's backend can do. `Unsupported` in `placement`, `always_on_top` or
+/// `click_through` marks a degraded backing, such as the plain Wayland toplevel an overlay
+/// falls back to without layer-shell or XWayland (GNOME), so an app can adapt.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OverlayCapabilities {
     pub capture_exclusion: OverlaySupport,
     pub nonactivating_keys: OverlaySupport,
     pub global_pointer: OverlaySupport,
+    /// The overlay goes where its edge, rect or display target says. A Wayland toplevel can't
+    /// position itself: the compositor places it.
+    pub placement: OverlaySupport,
+    /// The overlay stays above other windows. A Wayland toplevel stacks like any window.
+    pub always_on_top: OverlaySupport,
+    /// Clicks outside `OverlayInput::Regions` hit regions reach what's under the overlay. A
+    /// Wayland toplevel takes no input at all under `OverlayInput::None`, but under `Regions`
+    /// its whole surface takes clicks.
+    pub click_through: OverlaySupport,
+}
+
+impl OverlayCapabilities {
+    /// A backend that places, stacks and passes clicks through as asked (every one but the
+    /// Wayland toplevel fallback), with what else it reports.
+    #[cfg_attr(any(target_arch = "wasm32", target_os = "ios", target_os = "android"), allow(dead_code))]
+    pub(crate) const fn placed(capture_exclusion: OverlaySupport, nonactivating_keys: OverlaySupport, global_pointer: OverlaySupport) -> Self {
+        let s = OverlaySupport::Supported;
+        OverlayCapabilities { capture_exclusion, nonactivating_keys, global_pointer, placement: s, always_on_top: s, click_through: s }
+    }
 }
 
 /// Bounds in logical points, local to a display. Also shared by native placement tests.

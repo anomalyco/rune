@@ -253,6 +253,9 @@ pub struct Kit {
     /// rest, focus and invalid stay apart in the theme's few colours (`text-input.css`,
     /// opencode#65100).
     pub forced: Option<Color>,
+    /// Component metrics a theme sets in place of the built-in ones (button and switch sizes,
+    /// field box, text area type, checkbox colours). `Metrics::default()` keeps them all.
+    pub metrics: crate::Metrics,
 }
 
 impl Kit {

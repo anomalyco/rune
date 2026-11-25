@@ -535,6 +535,7 @@ pub(crate) fn set_jump_menu(list: &crate::jump_list::JumpList) {
     macos::set_jump_menu(list);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn take_unhandled(key: Option<&crate::KeyEvent>) -> Option<crate::runtime::Unhandled> {
     #[cfg(target_os = "macos")]
     { key.and_then(standard_macos::take_unhandled) }
@@ -702,6 +703,7 @@ impl MenuGuard {
 
     /// This App's window took focus: its items take the menu bar, so they act in it. An App
     /// without items of its own leaves the bar to the one that has it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn claim(&mut self) {
         #[cfg(target_os = "macos")]
         {

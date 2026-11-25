@@ -207,6 +207,11 @@ impl FrameState {
         !self.live_subscriptions.is_empty()
     }
 
+    #[cfg(test)]
+    pub(in crate::runtime) fn live_subscription(&self, source_id: u64) -> Option<Arc<crate::live::Subscription>> {
+        self.live_subscriptions.get(&live_latch::SourceKey(source_id)).cloned()
+    }
+
     #[inline]
     pub(in crate::runtime) fn set_last_dt(&mut self, dt: f64) {
         self.last_dt = dt;
@@ -391,7 +396,7 @@ impl RuntimeCore {
         let stale = self.poll_alone(app);
         let steps = self.frame.pending.wakes.iter().any(|d| d.is_zero());
         // A starved fill's wake draws the frame that resumes it; the poll alone never does.
-        Some(stale || self.host.window_frame.is_some() || steps || self.commit.virtual_fill.resuming(self.clock))
+        Some(stale || self.host.window_frame.is_some() || steps || self.commit.virtual_fill.resuming(self.clock) || self.commit.virtual_items.fill_resuming(self.clock))
     }
 
     /// Whether the host asked for a frame after `resting_wake`. That frame doesn't poll again
@@ -418,6 +423,7 @@ impl RuntimeCore {
     /// Whether user input is queued in the action queue (`ActionQueue::has_input`), as
     /// distinguished from layout and state observers. Hosts check this before resting so
     /// queued input never waits for a later timer.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn has_input_waiting(&self) -> bool {
         self.frame.queue.has_input()
     }

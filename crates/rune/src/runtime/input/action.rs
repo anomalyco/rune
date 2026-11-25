@@ -48,6 +48,8 @@ pub(in crate::runtime) enum Action {
     DragRepeat(String, Drag, crate::PointerButton),
     DragStart(String),
     DragEnd(String, crate::DragOutcome),
+    /// A phase of an `El::on_edge_drag` swipe (`runtime/input/edge_drag.rs`).
+    EdgeDrag(String, Drag),
     /// A file drag from another app moved, left, or dropped (`drop_dispatch`).
     Files(drop_dispatch::FileEvent),
     /// `stage`: a playground step pressed it, for the stage (`Play::press`).
@@ -70,6 +72,8 @@ pub(in crate::runtime) enum Action {
     /// A `Tx::open_file`, `Tx::open_files`, `Tx::save_file` or `Tx::open_folder` callback's id
     /// and the dialog's answer.
     FileDialog(u64, crate::file_dialog::DialogOutcome),
+    /// A `Tx::open_url_then` callback and what came of the open.
+    UrlOpened(crate::open_url::OpenedFn, Result<(), crate::open_url::OpenUrlError>),
     Focus(String, f32, f32),
     /// A text field's menu: the field, the window point it opens at, and the window point where a
     /// press asked for it (none from the keyboard).
@@ -110,7 +114,7 @@ impl ActionQueue {
         let input = !matches!(action, Action::Layout(..) | Action::ScreenLayout(..) | Action::DrawnLayout(..)
             | Action::Visible(..) | Action::VisibleRows(..) | Action::AtBottom(..) | Action::FarFromBottom(..)
             | Action::WindowFocus(_) | Action::Physical(crate::PhysicalInput::FocusLost, _) | Action::FinishIme
-            | Action::ClipboardRead(..) | Action::SelectionChange(..)) || at.is_some();
+            | Action::ClipboardRead(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
         self.0.push(Queued { action, at, input });
     }
     /// A stationary pointer was re-hit after layout; no pointer event asked for that hover.
@@ -190,6 +194,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::Drag(..) | Action::DragRepeat(..) => "on_drag",
         Action::DragStart(_) => "on_drag_start",
         Action::DragEnd(..) => "on_drag_end",
+        Action::EdgeDrag(..) => "on_edge_drag",
         Action::Key { .. } => "on_key",
         Action::KeyUp(_) => "on_key_up",
         Action::Wheel { .. } | Action::WheelRepost(_) => "on_wheel",
@@ -207,7 +212,7 @@ pub(in crate::runtime) fn action_path(action: &Action) -> Option<&str> {
     match action {
         Action::PointerMove(path, _) | Action::PointerLockMotion(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path, ..) | Action::MiddlePress(path, ..) | Action::AnyPress(path, ..)
         | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::LinkHover(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
-        | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
+        | Action::DragEnd(path, _) | Action::EdgeDrag(path, _) | Action::Visible(path, _) => Some(path),
         Action::Wheel { chain, .. } => chain.as_deref().and_then(|c| c.first()).map(String::as_str),
         Action::Gesture(chain, _) => chain.first().map(String::as_str),
         _ => None,
@@ -231,6 +236,7 @@ fn handler_name(action: &Action) -> &'static str {
         Action::Paste(..) => "on_paste",
         Action::ClipboardRead(..) => "a `read_clipboard` callback",
         Action::FileDialog(..) => "a file dialog callback",
+        Action::UrlOpened(..) => "an `open_url_then` callback",
         _ => "a handler",
     })
 }
@@ -289,7 +295,9 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     if one.announce.is_some() { tx.announce = one.announce; }
     tx.playground.extend(one.playground);
     tx.open_urls.extend(one.open_urls);
+    tx.haptics.extend(one.haptics);
     tx.open_paths.extend(one.open_paths);
+    tx.url_schemes.extend(one.url_schemes);
     tx.srgb_blend = one.srgb_blend.or(tx.srgb_blend);
     tx.font_smoothing = one.font_smoothing.or(tx.font_smoothing);
     tx.fonts_added |= one.fonts_added;
@@ -559,6 +567,19 @@ impl RuntimeCore {
                 }
                 true
             }
+            Action::EdgeDrag(path, mut d) => {
+                let Some((.., f)) = self.node(&path).and_then(|n| n.handlers.edge_drag.clone()) else { return false };
+                if d.phase == Phase::Move {
+                    one.commit = one.commit.instant();
+                }
+                d.data = if d.phase == Phase::Down { 0.0 } else { self.pointer.touch.edge_data };
+                f(app.states(), &mut d, &mut one);
+                self.pointer.touch.edge_data = d.data;
+                if d.phase != Phase::Move {
+                    log_event!(self, "edge drag {:?} {path}", d.phase);
+                }
+                true
+            }
             Action::DragStart(path) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_drag_start.clone()) else { return false };
                 f(app.states(), &mut one);
@@ -623,6 +644,10 @@ impl RuntimeCore {
                 true
             }
             Action::FileDialog(id, result) => self.run_file_dialog(app, id, result, &mut one),
+            Action::UrlOpened(f, result) => {
+                f(app.states(), result, &mut one);
+                true
+            }
             Action::Focus(path, x, y) => self.focus_input(app, path, x, y, &mut one),
             Action::FieldMenu(path, at, local) => self.field_menu(app, path, at, local, &mut one),
             Action::Blur => {

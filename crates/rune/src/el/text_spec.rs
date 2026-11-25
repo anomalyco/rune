@@ -25,8 +25,6 @@ pub struct TextSpec {
     /// Streaming word reveal: words that arrive after mount fade in over this many seconds
     /// (negative: no reveal tracking).
     pub reveal: f32,
-    /// The `truncate_fade` edge's width in ems (see [`El::truncate_fade_width`](crate::El::truncate_fade_width)).
-    pub(crate) fade_em: f32,
     pub align: Align,
     /// `color` came from [`El::color`](crate::El::color); without it the text takes the
     /// window's foreground ([`Cx::foreground`](crate::Cx::foreground)) when the view sets one.
@@ -47,8 +45,9 @@ pub struct TextSpec {
     pub(crate) selectable: bool,
     pub(crate) redacted: bool,
     pub(crate) wrap_anywhere: bool,
-    /// See [`El::wrap_greedy`](crate::El::wrap_greedy).
-    pub(crate) greedy: bool,
+    /// Packed internal booleans (`GREEDY`, `SELECTABLE_CURSOR`), keeping `TextSpec` at 224 bytes
+    /// without allocating `TextCold` on plain selectable text.
+    pub(crate) flags: TextFlags,
     /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
     /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
     pub(crate) exact_lines: bool,
@@ -56,6 +55,26 @@ pub struct TextSpec {
     pub(crate) by_line: bool,
     /// The paragraph direction it lays out in (see [`TextDir`]).
     pub(crate) dir: TextDir,
+}
+
+/// Packed internal booleans on [`TextSpec`] (one bit each).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TextFlags(u8);
+
+impl TextFlags {
+    /// See [`El::wrap_greedy`](crate::El::wrap_greedy).
+    pub(crate) const GREEDY: u8 = 1 << 0;
+    /// [`El::selectable`](crate::El::selectable) gave the element its `Cursor::Text`, which an
+    /// [`El::selection_enabled`](crate::El::selection_enabled)`(false)` subtree takes back.
+    pub(crate) const SELECTABLE_CURSOR: u8 = 1 << 1;
+
+    #[inline(always)]
+    pub(crate) const fn has(self, bit: u8) -> bool { self.0 & bit != 0 }
+
+    #[inline(always)]
+    pub(crate) fn set(&mut self, bit: u8, on: bool) {
+        if on { self.0 |= bit; } else { self.0 &= !bit; }
+    }
 }
 
 pub(crate) use rune_text::TextDir;
@@ -123,6 +142,8 @@ pub(crate) struct TextCold {
     pub(crate) text_indent: f32,
     /// Vertical alignment of laid-out text inside a taller content box; see [`El::align_y`](crate::El::align_y).
     pub(crate) align_y: Align,
+    /// The `truncate_fade` edge's width in ems (see [`El::truncate_fade_width`](crate::El::truncate_fade_width)).
+    pub(crate) fade_em: f32,
     /// Strikethrough byte ranges `(start, end, color)` of `content`.
     pub(crate) strikes: Vec<(u32, u32, Option<Color>)>,
     /// Overline byte ranges `(start, end, color)` of `content`.
@@ -172,6 +193,7 @@ impl Empty for TextCold {
         span_radius: crate::text::SPAN_RADIUS,
         text_indent: 0.0,
         align_y: Align::Start,
+        fade_em: crate::el::TRUNCATE_FADE_EM,
         strikes: Vec::new(),
         overlines: Vec::new(),
         span_boxes: Vec::new(),
@@ -189,6 +211,7 @@ impl Empty for TextCold {
     };
 }
 
+// Every text carries one of these: a field few texts set goes in `TextCold`, not here.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<TextSpec>() == 224);
 
@@ -205,7 +228,6 @@ impl TextSpec {
             source: None,
             cold: Cold::NONE,
             reveal: -1.0,
-            fade_em: crate::el::TRUNCATE_FADE_EM,
             align: Align::Start,
             inked: false,
             wrap: false,
@@ -217,12 +239,15 @@ impl TextSpec {
             selectable: false,
             redacted: false,
             wrap_anywhere: false,
-            greedy: false,
+            flags: TextFlags::default(),
             exact_lines: true,
             by_line: false,
             dir: TextDir::Auto,
         }
     }
+
+    #[inline(always)]
+    pub(crate) const fn greedy(&self) -> bool { self.flags.has(TextFlags::GREEDY) }
 
     /// Borrowed read-only layout inputs for `rune-text`.
     pub(crate) fn as_text_input(&self, scale: f32, input: bool) -> crate::text::TextInput<'_> {
@@ -315,7 +340,7 @@ impl TextSpec {
 
     /// Whether its lines break as Chromium's `text-wrap-style: pretty` does ([`crate::text::set_pretty_wrap`]).
     pub(crate) fn pretty(&self) -> bool {
-        crate::text::pretty_wrap() && !self.greedy && !self.redacted && !self.justify
+        crate::text::pretty_wrap() && !self.flags.has(TextFlags::GREEDY) && !self.redacted && !self.justify
     }
 
     /// [`crate::text::shape_key`] of this text in its direction.

@@ -249,6 +249,14 @@ impl<S: 'static> LayerHost<S> {
         &mut self.rt
     }
 
+    /// Takes the haptics handlers asked for (`Tx::haptic`), oldest first, for the host to play:
+    /// Rune doesn't call the platform's feedback generators itself here. Take them after each
+    /// [`Self::frame`], and at any other time (say after `Runtime::update`), since a request
+    /// alone doesn't ask for a frame.
+    pub fn take_haptics(&mut self) -> Vec<crate::Haptic> {
+        self.rt.take_haptics()
+    }
+
     /// Updates the viewport in points and display scale, reconfiguring the Metal swapchain only
     /// when its clamped device-pixel dimensions change.
     pub fn resize(&mut self, viewport: (f32, f32), scale: f32) {

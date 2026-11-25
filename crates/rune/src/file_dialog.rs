@@ -9,14 +9,18 @@
 //! `{"type": "file-dialog", "paths": […]}` or `{"type": "file-dialog-cancel"}` answers it.
 use std::cell::RefCell;
 use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
 use std::future::Future;
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
 use std::task::{Context, Poll};
 
 use crate::Tx;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::Waker;
 
 #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
@@ -446,6 +450,7 @@ impl Tx {
 /// One window's native file dialog: shows what its runtime asks for, and queues the answer
 /// after `wake` brings the host back to poll it. The dialog's future owns copies of the
 /// options and the window's handle, never the app's state or the runtime.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Presenter {
     showing: Option<(u64, Pin<Box<dyn Future<Output = DialogOutcome>>>)>,
     #[cfg(all(feature = "native-file-dialog", target_os = "macos"))]
@@ -453,12 +458,15 @@ pub(crate) struct Presenter {
     wake: std::task::Waker,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Wake(Waker);
+#[cfg(not(target_arch = "wasm32"))]
 impl std::task::Wake for Wake {
     fn wake(self: Arc<Self>) { (self.0)() }
     fn wake_by_ref(self: &Arc<Self>) { (self.0)() }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Presenter {
     pub(crate) fn new(wake: Waker) -> Self {
         Self {
@@ -515,10 +523,12 @@ impl Presenter {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Presenter {
     fn drop(&mut self) { self.stop(); }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn show_over(kind: FileDialogKind, multiple: bool, options: FileDialogOptions, window: &winit::window::Window) -> Pin<Box<dyn Future<Output = DialogOutcome>>> {
     #[cfg(all(feature = "native-file-dialog", any(target_os = "macos", target_os = "windows")))]
     return if multiple && kind == FileDialogKind::Open {

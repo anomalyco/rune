@@ -562,16 +562,18 @@ pub fn last_appearance(last: Option<Appearance>, keep: impl FnMut(Appearance) + 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 pub(crate) fn dark() -> Option<bool> { crate::platform::portal_appearance::dark() }
 
-#[cfg(not(all(target_os = "linux", feature = "dbus")))]
+#[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_arch = "wasm32")))]
 pub(crate) fn dark() -> Option<bool> { None }
 
 /// [`dark`] for a window winit gives no theme; None leaves the window's appearance as it is.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn desktop_dark(window: &winit::window::Window) -> Option<bool> {
     dark().filter(|_| window.theme().is_none())
 }
 
 /// A new window's appearance: `--theme` when given, else winit's theme, else [`desktop_dark`],
 /// else dark. On Linux a change of the desktop's preference redraws the window, which rereads it.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn window_dark(window: &std::sync::Arc<winit::window::Window>, theme: Option<&str>) -> bool {
     #[cfg(all(target_os = "linux", feature = "dbus"))]
     crate::platform::portal_appearance::follow(window);

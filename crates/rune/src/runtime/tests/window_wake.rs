@@ -398,3 +398,61 @@ fn maximized_and_full_screen_state_rebuilds_view_and_memos_only_on_confirmed_cha
     assert_eq!((w(&rt, "max"), w(&rt, "full"), w(&rt, "memo-state")), (20.0, 30.0, 10.0));
     assert_eq!((view_builds.get(), memo_builds.get()), (builds_max.0 + 2, builds_max.1 + 2));
 }
+
+#[test]
+fn full_screen_transition_and_failed_revert_keep_inset_and_memo_in_sync() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    struct State {
+        builds: Rc<Cell<usize>>,
+        memo_builds: Rc<Cell<usize>>,
+    }
+
+    fn view(s: &State, cx: &mut Cx<State>) -> El {
+        s.builds.set(s.builds.get() + 1);
+        let full = cx.is_full_screen();
+        let inset = cx.titlebar_inset();
+        let memo_builds = s.memo_builds.clone();
+        crate::row().size(300.0, 40.0)
+            .child(el().key("inset").size(inset.max(1.0), 10.0))
+            .child(crate::memo("titlebar", 0, move || {
+                memo_builds.set(memo_builds.get() + 1);
+                el().size(if full { 120.0 } else { 40.0 } + inset, 10.0)
+            }))
+    }
+
+    let builds = Rc::new(Cell::new(0));
+    let memo_builds = Rc::new(Cell::new(0));
+    let mut rt = Runtime::new(
+        State { builds: builds.clone(), memo_builds: memo_builds.clone() },
+        view,
+        (300.0, 40.0),
+        Env::new(true, 1.0),
+    );
+    let inset = crate::Chrome::DEFAULT.titlebar_inset();
+    rt.set_titlebar_inset(inset);
+    rt.frame(0.0);
+    assert_eq!(rt.presented("inset").unwrap().0[2], inset);
+    assert_eq!(rt.presented("titlebar").unwrap().0[2], 40.0 + inset);
+
+    // Transition start (WillEnter): full_screen flips true and titlebar_inset drops to 0.
+    rt.set_full_screen(true);
+    rt.set_titlebar_inset(0.0);
+    assert!(rt.core().stale());
+    rt.frame(1.0);
+    rt.frame(6.0);
+    assert_eq!(rt.presented("inset").unwrap().0[2], 1.0);
+    assert_eq!(rt.presented("titlebar").unwrap().0[2], 120.0);
+    assert_eq!((builds.get(), memo_builds.get()), (2, 2));
+
+    // Failed enter revert (DidExit / Sync): both flip back and re-run view and memo.
+    rt.set_full_screen(false);
+    rt.set_titlebar_inset(inset);
+    assert!(rt.core().stale());
+    rt.frame(7.0);
+    rt.frame(12.0);
+    assert_eq!(rt.presented("inset").unwrap().0[2], inset);
+    assert_eq!(rt.presented("titlebar").unwrap().0[2], 40.0 + inset);
+    assert_eq!((builds.get(), memo_builds.get()), (3, 3));
+}

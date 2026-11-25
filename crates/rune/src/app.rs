@@ -70,15 +70,18 @@ pub enum CloseResponse {
 }
 
 /// `App::turn_scope`'s hooks.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct TurnScope<S> {
     pub(crate) enter: fn(&mut S),
     pub(crate) leave: fn(&mut S),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S> Clone for TurnScope<S> {
     fn clone(&self) -> Self { *self }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S> Copy for TurnScope<S> {}
 
 /// Normalizes an opt-in frame-rate cap (Hz): positive finite values clamp to at least `1.0` Hz,
@@ -122,6 +125,7 @@ pub struct App<S: 'static> {
     pub(crate) on_close_request: Option<fn(&mut S, &mut Tx) -> CloseResponse>,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) turn_scope: Option<TurnScope<S>>,
     pub(crate) on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
@@ -135,6 +139,8 @@ pub struct App<S: 'static> {
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) on_ready: Option<OnWindow>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) on_window_geometry: Option<crate::window::geometry::OnWindowGeometry<S>>,
     pub(crate) on_display_close: Option<OnDisplayClose>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     pub(crate) on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
@@ -196,6 +202,7 @@ impl<S: 'static> App<S> {
             on_close_request: None,
             on_close: None,
             on_quit: None,
+            #[cfg(not(target_arch = "wasm32"))]
             turn_scope: None,
             on_rest: None,
             on_reopen: None,
@@ -209,6 +216,8 @@ impl<S: 'static> App<S> {
             windows: Vec::new(),
             on_window: None,
             on_ready: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            on_window_geometry: None,
             on_display_close: None,
             on_frame_encoded: None,
             on_frame_presented: None,
@@ -877,8 +886,12 @@ impl<S: 'static> App<S> {
     /// (an event, a wake, a frame, a hook), and `leave` after it, so state the app's windows
     /// share can move into the state of the window whose turn it is and back. The windows of
     /// one event loop take turns, never two at once. Native windows only.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     pub fn turn_scope(mut self, enter: fn(&mut S), leave: fn(&mut S)) -> Self {
-        self.turn_scope = Some(TurnScope { enter, leave });
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.turn_scope = Some(TurnScope { enter, leave }); }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (enter, leave);
         self
     }
 
@@ -913,8 +926,10 @@ impl<S: 'static> App<S> {
     /// Windows: the links among the launch arguments (`scheme://…`), as Windows passes a link to
     /// the process it starts, and with `rune::single_instance` the links of every later launch,
     /// which that launch hands to this process instead of opening a window. The app registers its
-    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install). Never
-    /// called on other platforms (Linux passes links to a new process as arguments).
+    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install), and
+    /// names it with `rune::url_schemes` so only arguments on it are links: without that a flag's
+    /// URL value (`--server http://localhost:4096`) is one too. Never called on other platforms
+    /// (Linux passes links to a new process as arguments).
     pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut Tx)) -> Self {
         self.on_open_url = Some(f);
         self

@@ -226,8 +226,10 @@ impl<S: 'static> Runtime<S> {
     pub fn set_maximized(&mut self, maximized: bool) { self.core_mut().set_maximized(maximized); }
     /// Sets what [`Cx::is_full_screen`] reports, marking the view dirty when it changes.
     ///
-    /// Native windows update this from confirmed OS window state on create, resize, scale change,
-    /// focus, and macOS full-screen transitions. Headless runs default to `false`.
+    /// Native macOS windows flip this at the start of the Space transition
+    /// (`NSWindowWillEnterFullScreenNotification` / `NSWindowWillExitFullScreenNotification`) and
+    /// reconcile on completion or failure; Windows and Linux update from confirmed OS window state
+    /// on create, resize, scale change, and focus. Web and headless runs default to `false`.
     ///
     /// ```
     /// # use rune::{Cx, El, Env, Runtime, el};
@@ -468,6 +470,30 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn text_offset_at(&self, key: &str, x: f32, y: f32) -> Option<usize> { self.core().text_offset_at(key, x, y) }
+    /// The visual line holding byte `byte` of the text field named `key`, focused or not, from
+    /// the last layout: its box in window points and the first bytes of it and the lines
+    /// beside it. `None` when `key` is missing, exiting, not a text field, or secure. Running
+    /// handlers can use [`Tx::text_line`] without holding a `Runtime`; [`Self::text_offset_at`]
+    /// goes the other way, from a point to a byte.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, TextEdit, TextStyle, col, text_input};
+    ///
+    /// let edit = TextEdit::new("one\ntwo\nthree");
+    /// let mut rt = Runtime::new(
+    ///     edit,
+    ///     |e: &TextEdit, _| col().size(200.0, 120.0).child(text_input(e, TextStyle::new(14.0, 400.0)).key("f").w_full()),
+    ///     (200.0, 120.0),
+    ///     Env::new(true, 1.0),
+    /// );
+    /// rt.frame(0.0);
+    /// let two = rt.text_line("f", 5).unwrap();
+    /// assert_eq!((two.start, two.prev, two.next), (4, Some(0), Some(8)));
+    /// let one = rt.text_line("f", 0).unwrap();
+    /// assert!(two.rect[1] > one.rect[1]);
+    /// ```
+    #[inline(always)]
+    pub fn text_line(&self, key: &str, byte: usize) -> Option<crate::TextLine> { self.core().text_line(key, byte) }
     #[inline(always)]
     pub fn contains(&self, key: &str, x: f32, y: f32) -> bool { self.core().contains(key, x, y) }
     #[inline(always)]
@@ -513,6 +539,29 @@ impl<S: 'static> Runtime<S> {
     pub fn check_live_only(&mut self, on: bool) { self.core_mut().check_live_only(on); }
     #[inline(always)]
     pub fn live_only_warnings(&self) -> &[String] { self.core().live_only_warnings() }
+
+    /// Debug builds: opt into panicking when `PaintKeep`'s self-check detects that a copied
+    /// subtree would differ from a fresh paint (unshifted or scroll-shifted).
+    ///
+    /// Off by default in downstream debug runs (which log the mismatch to stderr and paint fresh);
+    /// set `RUNE_PAINT_KEEP_STRICT=1` or call this method in tests to fail fast. No-op in release
+    /// builds.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::new(true, 1.0));
+    /// rt.set_paint_keep_strict(true);
+    /// rt.frame(0.0);
+    /// assert_eq!(rt.paint_keep_mismatches(), 0);
+    /// ```
+    #[inline(always)]
+    pub fn set_paint_keep_strict(&mut self, strict: bool) { self.core_mut().paint.set_paint_keep_strict(strict); }
+
+    /// Debug builds: total `PaintKeep` self-check mismatches observed on this runtime across both
+    /// unshifted and scroll-shifted copies. Always `0` in release builds.
+    #[inline(always)]
+    pub fn paint_keep_mismatches(&self) -> usize { self.core().paint.keep_check_mismatches() }
 
     #[inline(always)]
     pub(crate) fn live_wake(&self) -> &Arc<crate::live::Wake> { self.core().live_wake() }
@@ -600,6 +649,12 @@ impl<S: 'static> Runtime<S> {
     /// Takes the links handlers asked to open that this runtime didn't open.
     #[inline(always)]
     pub fn take_url_requests(&mut self) -> Vec<String> { self.core_mut().host.take_url_requests() }
+
+    /// Takes the schemes [`AppHandle::register_url_scheme`](crate::AppHandle::register_url_scheme)
+    /// asked to claim that this runtime didn't claim with the system (lowercased, in order): all
+    /// of them in headless runs and tests, none in a live window.
+    #[inline(always)]
+    pub fn take_url_scheme_requests(&mut self) -> Vec<String> { self.core_mut().host.take_url_scheme_requests() }
 
     /// Takes the local path open and reveal requests queued by [`Tx::open_path`] and
     /// [`Tx::reveal_path`] that this runtime didn't execute natively (all of them in headless runs

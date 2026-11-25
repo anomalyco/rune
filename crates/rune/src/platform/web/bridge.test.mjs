@@ -2825,3 +2825,98 @@ test('armed external link keeps clicks/middle/modified/right-click with browser,
         bridge.destroy(h);
     }
 });
+
+test('requestPointerLock handles unadjustedMovement fallback, motion delivery, Escape exit, and refusal', async () => {
+    const { events, doc, canvas, h } = setup();
+    const flushMicrotasks = () => new Promise(r => queueMicrotask(r));
+    const calls = [];
+    let exitCalls = 0;
+    doc.pointerLockElement = null;
+    doc.exitPointerLock = () => {
+        exitCalls++;
+        if (doc.pointerLockElement) {
+            doc.pointerLockElement = null;
+            doc.dispatchEvent({ type: 'pointerlockchange' });
+        }
+    };
+    try {
+        // 1. NotSupportedError on { unadjustedMovement: true } ignores intermediate pointerlockerror
+        // and retries plain requestPointerLock(), caching the fallback for later locks.
+        canvas.requestPointerLock = opts => {
+            calls.push(opts);
+            if (opts && opts.unadjustedMovement) {
+                // Reproduce Chromium firing pointerlockerror alongside NotSupportedError rejection.
+                doc.dispatchEvent({ type: 'pointerlockerror' });
+                const err = new Error('not supported');
+                err.name = 'NotSupportedError';
+                return Promise.reject(err);
+            }
+            return Promise.resolve().then(() => {
+                doc.pointerLockElement = canvas;
+                doc.dispatchEvent({ type: 'pointerlockchange' });
+            });
+        };
+        bridge.requestPointerLock(h);
+        await flushMicrotasks();
+        await flushMicrotasks();
+        await flushMicrotasks();
+        assert.deepEqual(calls, [{ unadjustedMovement: true }, undefined]);
+        assert.deepEqual(events, [{ kind: 'pointer_lock', locked: true }]);
+
+        // 2. While locked, mouse pointermove sends movementX/movementY; touch and zero deltas are ignored.
+        events.length = 0;
+        doc.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', movementX: 12, movementY: -4 });
+        doc.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', movementX: 0, movementY: 0 });
+        doc.dispatchEvent({ type: 'pointermove', pointerType: 'touch', movementX: 9, movementY: 9 });
+        assert.deepEqual(events, [{ kind: 'pointer_motion', dx: 12, dy: -4 }]);
+
+        // 3. Browser exits lock (Escape / tab switch): pointerlockchange sends locked: false,
+        // and subsequent pointermove sends nothing.
+        events.length = 0;
+        doc.pointerLockElement = null;
+        doc.dispatchEvent({ type: 'pointerlockchange' });
+        doc.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', movementX: 25, movementY: 5 });
+        assert.deepEqual(events, [{ kind: 'pointer_lock', locked: false }]);
+
+        // 4. Subsequent request skips unadjustedMovement (cached), and SecurityError refusal
+        // (e.g. Chrome cooldown or unfocused document) reports locked: false without retrying.
+        calls.length = 0;
+        events.length = 0;
+        canvas.requestPointerLock = opts => {
+            calls.push(opts);
+            const err = new Error('cooldown');
+            err.name = 'SecurityError';
+            return Promise.reject(err);
+        };
+        bridge.requestPointerLock(h);
+        await flushMicrotasks();
+        await flushMicrotasks();
+        assert.deepEqual(calls, [undefined]);
+        assert.deepEqual(events, [{ kind: 'pointer_lock', locked: false, refused: true }]);
+
+        // 5. Legacy non-Promise browser: pointerlockerror reports refusal.
+        events.length = 0;
+        canvas.requestPointerLock = () => undefined;
+        bridge.requestPointerLock(h);
+        doc.dispatchEvent({ type: 'pointerlockerror' });
+        assert.deepEqual(events, [{ kind: 'pointer_lock', locked: false, refused: true }]);
+
+        // 6. exitPointerLock cancels a pending request so a stale late grant exits immediately,
+        // and destroy() exits an active lock.
+        events.length = 0;
+        canvas.requestPointerLock = () => new Promise(() => {});
+        bridge.requestPointerLock(h);
+        bridge.exitPointerLock(h);
+        doc.pointerLockElement = canvas;
+        doc.dispatchEvent({ type: 'pointerlockchange' });
+        assert.equal(exitCalls, 1, 'stale grant after exitPointerLock must exit immediately');
+        assert.deepEqual(events, []);
+
+        // Active lock is released on destroy().
+        doc.pointerLockElement = canvas;
+        h.pointerLocked = true;
+    } finally {
+        bridge.destroy(h);
+    }
+    assert.equal(doc.pointerLockElement, null);
+});

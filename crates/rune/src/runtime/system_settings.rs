@@ -178,9 +178,9 @@ impl RuntimeCore {
         if self.host.set_maximized(maximized) { self.commit.dirty = true; }
     }
 
-    /// What [`Cx::is_full_screen`] reports. Native windows set it from confirmed OS window state
-    /// on create, resize, scale change, focus, and macOS full-screen transitions; a change
-    /// re-runs the view and its memos.
+    /// What [`Cx::is_full_screen`] reports. On macOS this flips at the start of the Space
+    /// transition (`WillEnter` / `WillExit`) and reconciles on completion or failure; on Windows
+    /// and Linux it updates from confirmed OS window state. A change re-runs the view and its memos.
     #[inline]
     pub fn set_full_screen(&mut self, full_screen: bool) {
         if self.host.set_full_screen(full_screen) { self.commit.dirty = true; }

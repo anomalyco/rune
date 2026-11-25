@@ -1,6 +1,6 @@
-use rune::{Color, El, Icon, RichStyle, Span, TextEdit, TextStyle, Tx, col, row, text_input};
+use rune::{Color, El, Icon, RichStyle, Span, TextEdit, Tx, col, row, text_input};
 
-use crate::{Kit, ScrollBarStyle, State};
+use crate::{Kit, ScrollBarStyle, State, TextAreaMetrics};
 
 use super::{EditActs, kit_rich_style, name_field, shell};
 
@@ -11,7 +11,8 @@ enum AreaScrollBar {
     Styled(ScrollBarStyle),
 }
 
-/// A multi-line field (`Textarea`): 80 points tall at least, 13/1.35 type, 8 points of padding.
+/// A multi-line field (`Textarea`): 80 points tall at least, 13/1.35 type, 8 points of padding
+/// (or the kit's own type and padding, `Kit::metrics.text_area`).
 /// Wrap in [`crate::Field`] with `.width(None)` for a visible label and wrapped help text.
 pub struct TextArea {
     edit: TextEdit,
@@ -311,7 +312,7 @@ impl TextArea {
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
         let disabled = self.state == State::Disabled;
-        let style = TextStyle { line_height: (13.0f32 * 1.35 * 2.0).round() / 2.0, ..k.ty.ui };
+        let TextAreaMetrics { style, padding } = k.text_area_metrics();
         let red = self.invalid && !disabled && (k.invalid_text || self.plain);
         let ink = if red { c.danger.fg } else { c.text_base };
         let hint = if red { c.danger.fg } else { c.text_faint };
@@ -344,8 +345,8 @@ impl TextArea {
             };
             (attach_bar(viewport), None)
         } else if let Some(h) = self.max_height {
-            let max_inner = (h - 16.0).max(line);
-            let min_inner = (self.rows as f32 * line).max(80.0 - 16.0).min(max_inner);
+            let max_inner = (h - 2.0 * padding).max(line);
+            let min_inner = (self.rows as f32 * line).max(80.0 - 2.0 * padding).min(max_inner);
             let viewport = col()
                 .key("scroll")
                 .w_full()
@@ -354,20 +355,20 @@ impl TextArea {
                 .max_h(max_inner)
                 .scroll(rune::ScrollSpec { stick_bottom: false })
                 .child(field.animate_edit_layout());
-            (attach_bar(viewport), Some(min_inner + 16.0))
+            (attach_bar(viewport), Some(min_inner + 2.0 * padding))
         } else {
             // A <textarea rows=3>: rows of its line height plus padding, at least 80.
-            (field, Some((self.rows as f32 * line + 16.0).max(80.0)))
+            (field, Some((self.rows as f32 * line + 2.0 * padding).max(80.0)))
         };
         let mut e = if let Some(t) = self.trailing {
             row()
                 .role("textbox")
-                .padding(8.0)
+                .padding(padding)
                 .gap(8.0)
                 .child(content.grow(1.0).shrink().min_w(0.0))
                 .child(row().key("trailing").self_end().child(t))
         } else {
-            col().role("textbox").padding(8.0).child(content)
+            col().role("textbox").padding(padding).child(content)
         };
         if let Some(h) = min_h {
             e = e.min_h(h);

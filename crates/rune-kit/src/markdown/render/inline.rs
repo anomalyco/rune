@@ -192,7 +192,7 @@ impl Renderer {
         if self.wrap_anywhere {
             e = e.wrap_anywhere();
         }
-        let e = self.with_reveal(self.with_math(e, inl, style, color)).w_full();
+        let e = self.with_reveal(self.with_emoji(self.with_math(e, inl, style, color), inl, style)).w_full();
         let e = bidi::directed(bidi::isolated(e, inl), bidi::inline_dir(inl));
         // A copy puts a blank line around a paragraph, one newline around a list item's first
         // with its marker before it.

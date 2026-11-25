@@ -575,7 +575,7 @@ fn hiding_a_key_overlay_releases_the_modifiers_it_held() {
     let press = |overlay: &mut Overlay<_>, key| {
         overlay.presence = Presence::Shown { occluded: false };
         overlay.rt.window_focus(true);
-        overlay.rt.physical_with_fallback(PhysicalInput::Key { key, mods: Mods::default(), pressed: true, repeat: false }, None);
+        overlay.rt.physical_with_fallback(PhysicalInput::Key { key, mods: Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default() }, None);
         overlay.advance();
     };
     press(&mut overlay, Code::AltRight);

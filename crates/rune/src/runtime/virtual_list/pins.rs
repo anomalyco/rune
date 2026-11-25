@@ -49,12 +49,14 @@ pub(crate) struct OffscreenText {
     pub tab_before: bool,
 }
 
-/// What the last commit collected offscreen rows under: the selection group they belong to and
-/// whether the list is inert. They are written together, so they always describe one commit.
+/// What the last commit collected offscreen rows under: the selection group they belong to,
+/// whether the list is inert and whether it sits in an `El::selection_enabled(false)` subtree.
+/// They are written together, so they always describe one commit.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Scope {
     pub group_path: Option<String>,
     pub inert: bool,
+    pub selection_off: bool,
 }
 
 /// Offscreen selection state retained on a [`crate::el::virtual_list::VirtualList`].

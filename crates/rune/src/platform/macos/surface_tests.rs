@@ -202,3 +202,49 @@ fn a_metal_layer_disables_implicit_scale_and_geometry_animations() {
     assert_eq!(unsafe { let s: f64 = msg_send![&*layer, contentsScale]; s }, 1.0, "non-positive and non-finite scales are ignored");
     drop(surface);
 }
+/// Overlay panel options carry `ConfiguredOverlay::macos_color_space` through
+/// `overlay_panel_native_options` into `apply_window_color_space_to` and `pin_contents_top_left`,
+/// keeping default overlays sRGB and letting `MacColorSpace::Unmanaged` clear both the panel
+/// and its off-screen `CAMetalLayer` to `nil`.
+#[test]
+fn overlay_panel_color_space_options_drive_panel_seam_and_metal_layer() {
+    use std::cell::RefCell;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_app_kit::NSColorSpace;
+
+    #[derive(Default)]
+    struct FakePanel {
+        space: RefCell<Option<Retained<NSColorSpace>>>,
+    }
+    impl ColorSpaceTarget for FakePanel {
+        fn set_color_space(&self, color_space: Option<&NSColorSpace>) {
+            *self.space.borrow_mut() = color_space.map(objc2::Message::retain);
+        }
+    }
+
+    // SAFETY: new off-screen layer, used on this thread only.
+    let layer: Retained<AnyObject> = unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] };
+    let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
+    // SAFETY: `layer` outlives `surface`.
+    let surface = unsafe { crate::render::Gpu::instance().create_surface_unsafe(target) }.expect("overlay Metal layer surface");
+    let panel = FakePanel::default();
+
+    let srgb_opts = super::super::overlay_panel_native_options(crate::OverlayLevel::Status, crate::MacColorSpace::Srgb);
+    assert_eq!(srgb_opts.shadow, Some(false));
+    assert_eq!(srgb_opts.level, Some(25));
+    assert_eq!(srgb_opts.color_space, crate::MacColorSpace::Srgb);
+    apply_window_color_space_to(&panel, srgb_opts.color_space);
+    assert_eq!(panel.space.borrow().as_deref(), Some(&*NSColorSpace::sRGBColorSpace()));
+    pin_contents_top_left(&surface, srgb_opts.color_space);
+    assert_eq!(layer_colorspace_name(&layer).as_deref(), Some("kCGColorSpaceSRGB"));
+
+    let unmanaged_opts = super::super::overlay_panel_native_options(crate::OverlayLevel::AboveOverlays, crate::MacColorSpace::Unmanaged);
+    assert_eq!(unmanaged_opts.shadow, Some(false));
+    assert_eq!(unmanaged_opts.level, Some(27));
+    assert_eq!(unmanaged_opts.color_space, crate::MacColorSpace::Unmanaged);
+    apply_window_color_space_to(&panel, unmanaged_opts.color_space);
+    assert!(panel.space.borrow().is_none(), "Unmanaged overlay panel clears NSWindow.colorSpace to nil");
+    pin_contents_top_left(&surface, unmanaged_opts.color_space);
+    assert_eq!(layer_colorspace_name(&layer), None, "Unmanaged overlay clears CAMetalLayer.colorspace to nil");
+    drop(surface);
+}

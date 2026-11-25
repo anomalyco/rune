@@ -229,7 +229,20 @@ const _: () = {
 };
 
 impl FxRenderer {
+    /// Whether rune-fx can draw on this adapter and device. Effects read storage buffers in vertex
+    /// and fragment shaders, which WebGL2 and some downlevel adapters lack; skip effects when this
+    /// is an error instead of calling `new`.
+    pub fn supported(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Result<(), FxUnsupported> {
+        fx_support(&adapter.get_downlevel_capabilities(), &device.limits())
+    }
+
+    /// Panics if the device allows fewer storage buffers per shader stage than rune-fx binds (as on
+    /// WebGL2). Check `FxRenderer::supported` first on devices that may lack them.
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, opts: FxOptions) -> FxRenderer {
+        let allowed = device.limits().max_storage_buffers_per_shader_stage;
+        if allowed < crate::support::FRAGMENT_STORAGE_BUFFERS {
+            panic!("{}", FxUnsupported::StorageBuffers { needed: crate::support::FRAGMENT_STORAGE_BUFFERS, allowed });
+        }
         let entry = |binding, visibility, ty| wgpu::BindGroupLayoutEntry { binding, visibility, ty, count: None };
         let vf = wgpu::ShaderStages::VERTEX_FRAGMENT;
         let fr = wgpu::ShaderStages::FRAGMENT;

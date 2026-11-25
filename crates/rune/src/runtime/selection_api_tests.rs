@@ -29,7 +29,7 @@ fn a_physical_copy_in_the_same_frame_copies_what_code_selected() {
     rt.update(|_, tx| tx.select_text("lone", 5..9));
     let cmd = Mods { cmd: true, ..Mods::default() };
     rt.physical_with_fallback(
-        PhysicalInput::Key { key: PhysicalKeyCode::KeyC, mods: cmd, pressed: true, repeat: false },
+        PhysicalInput::Key { key: PhysicalKeyCode::KeyC, mods: cmd, pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
         Some(KeyEvent { key: Key::Command('c'), mods: cmd }),
     );
     rt.frame(1.0 / 60.0);

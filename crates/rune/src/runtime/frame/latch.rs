@@ -97,6 +97,7 @@ impl RuntimeCore {
         for prefix in std::mem::take(&mut tx.evict_memos) { self.invalidate_memos_by_prefix(&prefix); }
         if !tx.open_urls.is_empty() { self.open_urls(std::mem::take(&mut tx.open_urls)); }
         if !tx.open_paths.is_empty() { self.open_paths(std::mem::take(&mut tx.open_paths)); }
+        if !tx.url_schemes.is_empty() { self.host.claim_url_schemes(std::mem::take(&mut tx.url_schemes)); }
         if std::mem::take(&mut tx.clear_secret) {
             if self.copy_request.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { self.copy_request = None; }
             self.edit.clear_secret_request = true;
@@ -140,6 +141,12 @@ impl RuntimeCore {
         if let Some(path) = tx.represented_file.take() { self.host.represented_file.set(crate::window::spec::normalize_represented_file(path)); }
         if let Some(edited) = tx.document_edited.take() { self.host.document_edited.set(edited); }
         if let Some((text, how)) = tx.announce.take() { self.host.announcement.say(text, how); }
+        if !tx.haptics.is_empty() {
+            // `open_urls_natively` is set for live windows, overlays and the web, which have no
+            // haptics player yet: they drop requests. Headless runs and embedding hosts keep them.
+            let keep = !self.host.open_urls_natively;
+            self.host.haptics.push(std::mem::take(&mut tx.haptics), keep);
+        }
         if let Some(mut request) = tx.window_frame.take() {
             request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring));
             self.host.window_frame = Some(self.host.window_frame.unwrap_or_default().merge(request));

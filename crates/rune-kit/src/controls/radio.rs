@@ -4,12 +4,24 @@ use rune::{El, Shadow, TextStyle, Tx, col, el, row, text};
 
 use crate::{Acts, Kit, State};
 
+/// What a radio group's controls sit on (`@opencode/ui` radio `surface`): the fill of a control
+/// that is neither selected nor invalid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RadioSurface {
+    /// `c.bg_base`, for a group on the window's or a dialog's own background.
+    #[default]
+    Base,
+    /// `c.layer_01`, for a group on a raised layer (`surface="layer-1"`).
+    Layer1,
+}
+
 pub struct RadioItem {
     label: String,
     description: Option<String>,
     checked: bool,
     state: State,
     invalid: bool,
+    surface: RadioSurface,
     acts: Acts,
 }
 
@@ -21,8 +33,14 @@ impl RadioItem {
             checked,
             state: State::Rest,
             invalid: false,
+            surface: RadioSurface::Base,
             acts: Acts::default(),
         }
+    }
+    /// What the control sits on ([`RadioGroup::surface`] sets it for a group's items).
+    pub fn surface(mut self, s: RadioSurface) -> Self {
+        self.surface = s;
+        self
     }
     pub fn description(mut self, d: impl Into<String>) -> Self {
         self.description = Some(d.into());
@@ -51,15 +69,21 @@ impl RadioItem {
         let c = &k.c;
         let disabled = self.state == State::Disabled;
         let hover = self.state == State::Hover;
+        // radio.css: only a selected control has the top light; one that is not is flat, on its
+        // surface (or the danger background when invalid, with a ring in the danger foreground).
         let (base, sheen) = if self.checked {
             (c.bg_accent, k.light_on(0.2, c.bg_accent))
         } else if self.invalid {
             (c.danger.bg, k.light(0.0))
         } else {
-            (c.bg_base, k.light(0.06))
+            let surface = match self.surface {
+                RadioSurface::Base => c.bg_base,
+                RadioSurface::Layer1 => c.layer_01,
+            };
+            (surface, k.light(0.0))
         };
         let overlay = if self.checked { k.on(c.contrast_hover, c.bg_accent) } else { c.hover };
-        let ring = if self.invalid && !self.checked { c.danger.border } else { c.border_strong };
+        let ring = if self.invalid && !self.checked { c.danger.fg } else { c.border_strong };
         let mut control = k.hover_surface(
             el().key("control")
                 .size(16.0, 16.0)
@@ -75,16 +99,18 @@ impl RadioItem {
         );
         control = k.focus_ring_state(control, 2.0, 2.0, self.state == State::Focus);
         if self.checked {
+            // The dot: the depth gradient over its grey, a ring in the contrast icon colour and
+            // the small elements' drop (radio.css, `radio-v2-item-indicator`).
             let dot = c.knob_on;
-            control = control.child(
-                el().key("dot")
-                    .size(6.0, 6.0)
-                    .absolute(5.0, 5.0)
-                    .radius(3.0)
-                    .fill(dot)
-                    .box_shadow(Shadow { spread: 0.5, color: k.on(c.depth_top, dot), inset: true, ..Shadow::default() })
-                    .box_shadow(Shadow { y: 0.5, blur: 0.5, color: k.dark_a(0.4), ..Shadow::default() }),
-            );
+            let indicator = el()
+                .key("dot")
+                .size(6.0, 6.0)
+                .absolute(5.0, 5.0)
+                .radius(3.0)
+                .fill(dot)
+                .gradient(k.on(c.depth_top, dot), k.on(c.depth_bottom, dot))
+                .box_shadow(Shadow { spread: 0.5, color: c.icon_contrast, inset: true, ..Shadow::default() });
+            control = control.child(k.elevate(indicator, &k.elevation.elements));
         }
         control = k.disabled_dim(control, disabled);
         let label_color = if disabled { c.text_muted } else { c.text_base };
@@ -114,11 +140,12 @@ pub struct RadioGroup {
     items: Vec<RadioItem>,
     disabled: bool,
     invalid: bool,
+    surface: RadioSurface,
 }
 
 impl RadioGroup {
     pub fn new() -> RadioGroup {
-        RadioGroup { label: None, description: None, items: Vec::new(), disabled: false, invalid: false }
+        RadioGroup { label: None, description: None, items: Vec::new(), disabled: false, invalid: false, surface: RadioSurface::Base }
     }
     pub fn label(mut self, l: impl Into<String>) -> Self {
         self.label = Some(l.into());
@@ -138,6 +165,11 @@ impl RadioGroup {
     }
     pub fn invalid(mut self, i: bool) -> Self {
         self.invalid = i;
+        self
+    }
+    /// What the group's controls sit on: [`RadioSurface::Base`] unless set.
+    pub fn surface(mut self, s: RadioSurface) -> Self {
+        self.surface = s;
         self
     }
 
@@ -162,6 +194,7 @@ impl RadioGroup {
                 item = item.disabled(true);
             }
             item.invalid = self.invalid;
+            item.surface = self.surface;
             items = items.child(item.build(k).key(format!("item{i}")).position_in_set(i + 1, n));
         }
         root.child(items).disabled(self.disabled)

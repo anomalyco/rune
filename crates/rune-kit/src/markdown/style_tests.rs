@@ -268,6 +268,7 @@ fn inline_code_text_colours_plain_code_spans_and_preserves_links_and_code_links(
         diff_frame: None,
         quote_frame: None,
         link_favicon: None,
+        emoji: None,
         images: None,
         on_image: None,
         flow: Cell::default(),

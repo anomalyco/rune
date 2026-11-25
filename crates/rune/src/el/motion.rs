@@ -379,7 +379,8 @@ impl El {
         self.cold_mut().trace_namespace = Some((class, host));
         self
     }
-    /// An opacity/scale keyframe sequence on the shared render clock: one-shot by default
+    /// An opacity, scale, translate and rotate keyframe sequence ([`Beat`](rune_motion::Beat))
+    /// on the shared render clock: one-shot by default
     /// (holding its final pose, landing immediately under Reduce Motion or explicit settle; a new
     /// key replays it), or looping continuously with
     /// [`Sequence::repeating`](rune_motion::Sequence::repeating) (holding its calm first pose

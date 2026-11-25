@@ -7,7 +7,7 @@ extern "C" {
     #[wasm_bindgen(js_name = readClipboard)]
     pub(crate) fn read_clipboard(rich: bool, image: bool, max_image: u32) -> js_sys::Promise;
     #[wasm_bindgen(catch, js_name = openLink)]
-    pub(crate) fn open_link(url: &str) -> Result<(), JsValue>;
+    pub(crate) fn open_link(url: &str) -> Result<bool, JsValue>;
     /// `[absolute href, on this page's origin]`.
     #[wasm_bindgen(catch, js_name = resolveLink)]
     pub(crate) fn resolve_link(url: &str) -> Result<js_sys::Array, JsValue>;

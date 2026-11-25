@@ -777,7 +777,7 @@ fn unhandled_cmd_w_asks_on_close_request_before_closing() {
         host.app.with_driver(&mut |rt, app| {
             rt.physical_then(
                 app,
-                PhysicalInput::Key { key: Code::KeyW, mods: cmd, pressed: true, repeat: false },
+                PhysicalInput::Key { key: Code::KeyW, mods: cmd, pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
                 Some(KeyEvent { key: Key::Command('w'), mods: cmd }),
                 None,
                 Some(Unhandled::Close),

@@ -16,8 +16,10 @@
 //! no frame. On web the canvas's CSS names the PNG itself (`cursor/web.rs`).
 
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::time::Instant;
 
 use winit::event_loop::ActiveEventLoop;
@@ -26,6 +28,7 @@ use winit::window::{CursorIcon, Window};
 use crate::el::Cursor;
 
 /// How often an image cursor is set again while it holds the pointer and nothing redraws.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const REASSERT: Duration = Duration::from_millis(50);
 
 pub(crate) struct OsCursor {
@@ -73,6 +76,7 @@ impl OsCursor {
     }
 
     /// When to set the image cursor again: while one holds the pointer, on macOS.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn reassert_at(&self, now: Instant) -> Option<Instant> {
         (cfg!(target_os = "macos") && holds_image(self.applied)).then(|| now + REASSERT)
     }
@@ -135,6 +139,7 @@ fn os_image(c: Cursor) -> Option<crate::cursor::CursorImage> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn holds_image(applied: (bool, Cursor)) -> bool {
     matches!(applied, (true, Cursor::Image(_)))
 }

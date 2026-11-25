@@ -323,3 +323,148 @@ fn held_header_after_dropping_sticky_never_copies_stale_paint() {
         }
     }
 }
+
+#[test]
+fn record_mismatch_counts_both_plain_and_scroll_and_enforces_strict_policy() {
+    // Downstream debug builds (is_test = false) must never panic by default.
+    assert!(!should_panic_on_mismatch(false, false, None));
+    assert!(!should_panic_on_mismatch(false, false, Some("0")));
+    assert!(!should_panic_on_mismatch(false, false, Some("2")));
+    assert!(should_panic_on_mismatch(false, false, Some("1")));
+    assert!(should_panic_on_mismatch(true, false, None));
+    assert!(should_panic_on_mismatch(true, false, Some("0")));
+
+    // Rune's own unit tests (is_test = true) panic unless explicitly opted out with "0".
+    assert!(should_panic_on_mismatch(false, true, None));
+    assert!(should_panic_on_mismatch(false, true, Some("1")));
+    assert!(!should_panic_on_mismatch(false, true, Some("0")));
+    assert!(should_panic_on_mismatch(true, true, Some("0")));
+
+    let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::new(true, 1.0));
+    assert_eq!(rt.paint_keep_mismatches(), 0);
+    assert!(!rt.core().paint.keep.strict_check);
+    rt.set_paint_keep_strict(true);
+    assert!(rt.core().paint.keep.strict_check);
+    rt.set_paint_keep_strict(false);
+    assert!(!rt.core().paint.keep.strict_check);
+
+    // With allow_check_mismatch, both unshifted and scroll-shifted mismatches increment the unified counter without panicking.
+    rt.core_mut().paint.keep.allow_check_mismatch = true;
+    rt.core_mut().paint.keep.record_mismatch(false, "root/a", &["instances"]);
+    assert_eq!(rt.core().paint.keep.check_mismatches, 1);
+    assert_eq!(rt.core().paint.keep.verify_mismatches, 0);
+    assert_eq!(rt.paint_keep_mismatches(), 1);
+    assert_eq!(rt.core().paint.keep_check_mismatches(), 1);
+
+    rt.core_mut().paint.keep.record_mismatch(true, "root/b", &["drawn rects", "hits"]);
+    assert_eq!(rt.core().paint.keep.check_mismatches, 1);
+    assert_eq!(rt.core().paint.keep.verify_mismatches, 1);
+    assert_eq!(rt.paint_keep_mismatches(), 2);
+    assert_eq!(rt.core().paint.keep_check_mismatches(), 2);
+
+    // With allow_check_mismatch off and strict mode on, both plain and scroll mismatches panic with the diagnostic.
+    rt.core_mut().paint.keep.allow_check_mismatch = false;
+    rt.set_paint_keep_strict(true);
+    let plain_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rt.core_mut().paint.keep.record_mismatch(false, "root/a", &["instances"]);
+    }))
+    .expect_err("plain mismatch must panic in strict mode");
+    let plain_msg = plain_panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| plain_panic.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert_eq!(
+        plain_msg,
+        "rune: paint keep: root/a would have copied what differs: instances (set RUNE_PAINT_KEEP_STRICT=1 to panic)"
+    );
+    assert_eq!(rt.paint_keep_mismatches(), 3);
+
+    let scroll_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rt.core_mut().paint.keep.record_mismatch(true, "root/b", &["drawn rects", "hits"]);
+    }))
+    .expect_err("scroll mismatch must panic in strict mode");
+    let scroll_msg = scroll_panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| scroll_panic.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert_eq!(
+        scroll_msg,
+        "rune: paint keep (scroll): root/b would have copied what differs: drawn rects, hits (set RUNE_PAINT_KEEP_STRICT=1 to panic)"
+    );
+    assert_eq!(rt.paint_keep_mismatches(), 4);
+}
+
+#[test]
+fn exiting_child_in_tree_order_never_leaks_ghost_instances_after_unmount() {
+    use crate::ScrollSpec;
+
+    struct Swap {
+        custom: bool,
+    }
+
+    fn view(s: &Swap, _: &mut Cx<Swap>) -> El {
+        let content = if s.custom {
+            row()
+                .key("old")
+                .size(120.0, 24.0)
+                .fill(Color { r: 0.9, g: 0.2, b: 0.2, a: 1.0 })
+                .transition(crate::Transition::opacity())
+                .child(el().key("old-dot").size(8.0, 8.0).fill(Color::WHITE))
+        } else {
+            row()
+                .key("new")
+                .size(120.0, 24.0)
+                .fill(Color { r: 0.2, g: 0.5, b: 0.9, a: 1.0 })
+                .transition(crate::Transition::none())
+        };
+        // A sticky sibling keeps `tree_order == true` across the frame where `old` unmounts,
+        // matching a diff file header with `sticky_left` whose custom child fades out.
+        let hdr = col()
+            .key("hdr")
+            .w_full()
+            .h(40.0)
+            .sticky_left(0.0)
+            .child(row().key("inner").w_full().h(36.0).child(content));
+        col()
+            .key("scroll")
+            .size(300.0, 200.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .scroll_xy()
+            .child(col().key("list").w(500.0).child(hdr).child(el().key("body").w_full().h(400.0)))
+    }
+
+    let make = || {
+        let mut rt = Runtime::new(Swap { custom: true }, view, (300.0, 200.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        for _ in 0..10 {
+            rt.frame(1.0 / 60.0);
+        }
+        rt.state.custom = false;
+        rt.invalidate();
+        rt
+    };
+
+    // 1. Debug strict mode must find zero PaintKeep mismatches across exit and unmount.
+    let mut rt_dbg = make();
+    rt_dbg.set_paint_keep_strict(true);
+    for f in 0..40 {
+        rt_dbg.frame(1.0 / 60.0);
+        assert_eq!(rt_dbg.paint_keep_mismatches(), 0, "frame {f}: unexpected PaintKeep mismatch");
+    }
+
+    // 2. Release-like mode (force_copy = true) must match a fresh unskipped paint byte-for-byte
+    //    on every frame, including the frame right after the exiting child unmounts.
+    let mut rt_copy = make();
+    let mut rt_fresh = make();
+    rt_copy.core_mut().paint.keep.force_copy = true;
+    for f in 0..40 {
+        rt_copy.frame(1.0 / 60.0);
+        rt_fresh.core_mut().paint.keep.off_once = true;
+        rt_fresh.frame(1.0 / 60.0);
+        let a = bytemuck::cast_slice::<Instance, u8>(&rt_copy.core().instances);
+        let b = bytemuck::cast_slice::<Instance, u8>(&rt_fresh.core().instances);
+        assert_eq!(a, b, "frame {f}: release-mode PaintKeep copied stale exiting child instances");
+    }
+}

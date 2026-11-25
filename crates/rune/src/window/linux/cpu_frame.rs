@@ -93,12 +93,44 @@ fn painter_threads() -> usize {
     std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 6)
 }
 
+/// Pure Linux rule for whether a window opens on the CPU renderer.
+///
+/// Under `CpuFirst::Auto` + `Policy::Automatic`, a live `DeviceType::Cpu` (lavapipe/llvmpipe)
+/// device in `gpu_pool` (created by a transparent window or an earlier `NeedsGpu` window) does
+/// not pull a second opaque window onto the software GPU. Hardware pool GPUs, pinned adapters,
+/// transparent windows, `CpuFirst::Off`, and `CpuFirst::Only` behave identically to before.
+pub(super) const fn linux_opens_on_cpu(
+    mode: CpuFirst,
+    policy: crate::gpu::fallback::Policy,
+    transparent: bool,
+    has_gpu: bool,
+    pool_gpu: Option<wgpu::DeviceType>,
+) -> bool {
+    let live_pool_gpu = match (mode, policy, pool_gpu) {
+        (CpuFirst::Auto, crate::gpu::fallback::Policy::Automatic, Some(wgpu::DeviceType::Cpu)) => false,
+        (_, _, Some(_)) => true,
+        (_, _, None) => false,
+    };
+    mode.opens_on_cpu(transparent, has_gpu, live_pool_gpu)
+}
+
 /// Whether a window opens on the CPU: an opaque window without its own GPU, following
 /// [`Host::effective_cpu_first`] (`RUNE_CPU_FIRST` overrides `App::cpu_first` /
 /// `WindowSpec::cpu_first`).
 pub(in crate::window) fn opens_on_cpu(host: &Host) -> bool {
-    let live_pool_gpu = host.gpu_pool.borrow().upgrade().is_some_and(|gpu| !gpu.is_lost());
-    host.effective_cpu_first().opens_on_cpu(host.options.transparent, host.gpu.is_some(), live_pool_gpu)
+    let pool_gpu = host
+        .gpu_pool
+        .borrow()
+        .upgrade()
+        .filter(|gpu| !gpu.is_lost())
+        .map(|gpu| gpu.adapter.get_info().device_type);
+    linux_opens_on_cpu(
+        host.effective_cpu_first(),
+        crate::gpu::pick::env_policy(),
+        host.options.transparent,
+        host.gpu.is_some(),
+        pool_gpu,
+    )
 }
 
 impl Host {

@@ -341,3 +341,83 @@ fn mid_frame_resize_keeps_first_draw_and_reclaims_old_rect_next_frame() {
     atlas.end_frame();
     assert!(atlas.pages[0].data.is_empty(), "page 0 freed once deferred mid-frame resize rect expires");
 }
+
+#[test]
+fn steady_overflow_scene_keeps_pages_resident_without_per_frame_copies_and_reclaims_after_shrink() {
+    for &(w, h, label) in &[(900u32, 900u32, "900x900 shelf"), (1200u32, 1200u32, "1200x1200 standalone")] {
+        let count = IMAGE_ATLAS_MAX_PAGES + 4;
+        let imgs: Vec<Pixels> = (0..count)
+            .map(|i| {
+                let p = Pixels::new();
+                p.set(w, h, [i as u8, 80, 160, 255].repeat((w * h) as usize));
+                p
+            })
+            .collect();
+
+        let mut atlas = ImageAtlas::default();
+        let mut prev_placed: Vec<Placed> = imgs.iter().map(|p| atlas.place(p, [w as f32, h as f32]).unwrap()).collect();
+        atlas.end_frame();
+        assert_eq!(atlas.pages.len(), count, "{label}: initial frame allocates {count} pages");
+        for page in &mut atlas.pages {
+            page.dirty = None;
+        }
+
+        // Steady state: all 20 images remain shown across 5 consecutive frames.
+        for frame in 1..=5usize {
+            #[cfg(debug_assertions)]
+            let copies_before = atlas.copies;
+            let mut moved = 0usize;
+            let mut rows_copied = 0usize;
+            for (i, img) in imgs.iter().enumerate() {
+                let placed = atlas.place_at_with_copy_hook(img, [w as f32, h as f32], None, |_| {
+                    rows_copied += 1;
+                }).unwrap().0;
+                if placed != prev_placed[i] {
+                    moved += 1;
+                    prev_placed[i] = placed;
+                }
+            }
+            let dirty_pages = atlas.pages.iter().filter(|p| p.dirty.is_some()).count();
+            let bytes_copied = rows_copied * (w as usize) * 4;
+            #[cfg(debug_assertions)]
+            let copies_delta = atlas.copies - copies_before;
+            #[cfg(not(debug_assertions))]
+            let copies_delta = if rows_copied > 0 { 1 } else { 0 };
+            assert_eq!(atlas.pages.len(), count, "{label} frame {frame}: page count stays stable");
+            assert_eq!(moved, 0, "{label} frame {frame}: no steady-state overflow slot may move");
+            assert_eq!(copies_delta, 0, "{label} frame {frame}: steady-state overflow must not re-copy slots on CPU");
+            assert_eq!(bytes_copied, 0, "{label} frame {frame}: steady-state overflow must copy 0 bytes");
+            assert_eq!(dirty_pages, 0, "{label} frame {frame}: steady-state overflow must leave every page.dirty == None");
+            atlas.end_frame();
+        }
+
+        // Shrink visible set below IMAGE_ATLAS_MAX_PAGES (keep 6 from 0..16 + the 4 overflow images 16..20).
+        let kept: Vec<usize> = (0..6).chain(IMAGE_ATLAS_MAX_PAGES..count).collect();
+        for &i in &kept {
+            assert!(atlas.place(&imgs[i], [w as f32, h as f32]).is_some());
+        }
+        atlas.end_frame();
+        // Next frame relocates the 4 overflow images into the freed pages < 16.
+        for &i in &kept {
+            assert!(atlas.place(&imgs[i], [w as f32, h as f32]).is_some());
+        }
+        atlas.end_frame();
+        assert!(
+            atlas.pages.len() <= IMAGE_ATLAS_MAX_PAGES,
+            "{label}: after shrink, pages {} must drop to <= {IMAGE_ATLAS_MAX_PAGES}",
+            atlas.pages.len(),
+        );
+        assert_eq!(
+            atlas.pages.iter().filter(|p| !p.data.is_empty()).count(),
+            kept.len(),
+            "{label}: only the {} kept pages stay allocated",
+            kept.len(),
+        );
+        for &i in &kept {
+            let p = atlas.place(&imgs[i], [w as f32, h as f32]).unwrap();
+            let [x, y, ..] = p.rect;
+            let off = ((y * atlas.pages[p.page].width + x) * 4) as usize;
+            assert_eq!(&atlas.pages[p.page].data[off..off + 4], &[i as u8, 80, 160, 255]);
+        }
+    }
+}

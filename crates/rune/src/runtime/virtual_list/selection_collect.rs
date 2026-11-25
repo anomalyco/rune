@@ -50,7 +50,7 @@ impl RuntimeCore {
     ) {
         let Some(v) = self.commit.virtuals.get(list_path) else { return };
         let Some(key) = v.keys.get(r) else { return };
-        let (group_path, inert) = (v.selection.scope.group_path.as_deref(), v.selection.scope.inert);
+        let (group_path, inert, off) = (v.selection.scope.group_path.as_deref(), v.selection.scope.inert, v.selection.scope.selection_off);
         match v.selection.pins.source() {
             Some(Source::Rebuild(rows)) => {
                 let state = app.states_ref();
@@ -58,11 +58,11 @@ impl RuntimeCore {
                 if !crate::input::key_diagnostics::clean(&row) {
                     let _ = crate::input::key_diagnostics::repair_at(&mut row, &format!("{list_path}/{key}"));
                 }
-                collect_virtual_row_selection(&row, list_path, key, r, group_path, inert, texts, providers);
+                collect_virtual_row_selection(&row, list_path, key, r, group_path, inert, off, texts, providers);
             }
             Some(Source::Stored) => {
                 if let Some(row) = v.selection.stored.get(&r) {
-                    collect_virtual_row_selection(row, list_path, key, r, group_path, inert, texts, providers);
+                    collect_virtual_row_selection(row, list_path, key, r, group_path, inert, off, texts, providers);
                 }
             }
             // Before the list's first commit there is nothing to build a row from, as dev's

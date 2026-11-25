@@ -201,7 +201,11 @@ pub fn thread_cpu_ns() -> Option<f64> {
 /// converted later ([`thread_cpu_since`]): a mark taken before Windows knows the cycles' rate still
 /// measures from that moment once it does.
 #[derive(Clone, Copy, Debug)]
-pub struct ThreadCpuMark(u64);
+pub struct ThreadCpuMark(
+    // Only unix/windows CPU clocks or frame-profile read the raw timestamp.
+    #[cfg_attr(not(any(unix, windows, feature = "frame-profile")), allow(dead_code))]
+    u64,
+);
 
 #[cfg(feature = "frame-profile")]
 impl ThreadCpuMark {

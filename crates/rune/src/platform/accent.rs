@@ -64,6 +64,7 @@ pub fn system_accent() -> SystemAccent {
 /// Starts following accent changes (`NSSystemColorsDidChangeNotification`), once per process:
 /// each change rereads the colours and asks every window to redraw, which hands them to its
 /// runtime. Main thread.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn watch() {
     #[cfg(target_os = "macos")]
     mac::watch();

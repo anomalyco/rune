@@ -65,6 +65,7 @@ impl WindowRequests {
     }
 
     /// Nothing but updates: no wake for `poll`, no window, focus or geometry request.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn only_updates(&self) -> bool {
         !self.woken && !self.asks_window()
     }
@@ -207,6 +208,7 @@ impl SharedCore {
         std::mem::take(&mut self.requests.lock().unwrap())
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn finish_drain_window(&self, rt: &mut crate::runtime::RuntimeCore, minimize: Option<NonZeroU64>) -> WindowRequests {
         let batch = self.take_window();
         if minimize > batch.last_cancel {
@@ -269,6 +271,7 @@ impl<S> Shared<S> {
     }
 
     /// Drain a native window's updates, running `after` (menu callbacks) after each update.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn drain_window(&self, rt: &mut crate::runtime::Runtime<S>, mut after: impl FnMut(bool)) -> WindowRequests
     where S: 'static {
         // Only these updates’ minimizes, and only those that survive their pick callbacks, are

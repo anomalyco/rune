@@ -120,6 +120,10 @@ pub(crate) struct MirrorAria {
     pub auto_complete: Option<&'static str>,
     pub controls: Option<String>,
     pub owns: Option<String>,
+    pub row_count: Option<usize>,
+    pub column_count: Option<usize>,
+    pub row_index: Option<usize>,
+    pub column_index: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -418,13 +422,15 @@ impl RuntimeCore {
     /// In a page, which nodes' text the browser selects without `El::selectable`, as a web page's
     /// text selects: all of it but text inside something that takes the pointer (mirrored text
     /// takes the pointer from the canvas, so it would swallow that control's press) or inside
-    /// `El::unselectable`. Empty outside a page. A parent always comes before its children.
+    /// `El::unselectable` or an `El::selection_enabled(false)` subtree (where only
+    /// `El::selectable` text a descendant's `true` reopens selects). Empty outside a page. A
+    /// parent always comes before its children.
     pub(crate) fn page_text_selects(&self) -> Vec<bool> {
         if self.host.page.is_none() { return Vec::new(); }
         let mut out = vec![false; self.tree.nodes.len()];
         for (i, n) in self.tree.nodes.iter().enumerate() {
             let inherited = n.parent.is_none_or(|p| out[p]);
-            out[i] = inherited && !n.a11y.unselectable && !takes_pointer(n);
+            out[i] = inherited && !n.a11y.unselectable && !n.selection_off && !takes_pointer(n);
         }
         out
     }
@@ -919,6 +925,10 @@ impl RuntimeCore {
             aria.auto_complete = m.auto_complete.map(crate::AutoComplete::as_aria);
             aria.controls = self.mirror_related_id(i, m.controls.as_deref());
             aria.owns = self.mirror_related_id(i, m.owns.as_deref());
+            aria.row_count = m.row_count;
+            aria.column_count = m.column_count;
+            aria.row_index = m.row_index;
+            aria.column_index = m.column_index;
         }
         aria
     }
@@ -1201,6 +1211,10 @@ impl RuntimeCore {
         if let Some(ac) = aria.auto_complete { o.insert("ac".into(), json!(ac)); }
         if let Some(ct) = aria.controls.as_deref() { o.insert("ct".into(), json!(ct)); }
         if let Some(ow) = aria.owns.as_deref() { o.insert("ow".into(), json!(ow)); }
+        if let Some(rc) = aria.row_count { o.insert("rc".into(), json!(rc)); }
+        if let Some(cc) = aria.column_count { o.insert("cc".into(), json!(cc)); }
+        if let Some(ri) = aria.row_index { o.insert("ri".into(), json!(ri)); }
+        if let Some(ci) = aria.column_index { o.insert("ci".into(), json!(ci)); }
         if n.input.is_none() && self.is_caret_browsing_node(n) {
             o.insert("ro".into(), json!(true));
             if let Some((h, ai, a_byte, fi, f_byte)) = self.caret_browse_endpoints()

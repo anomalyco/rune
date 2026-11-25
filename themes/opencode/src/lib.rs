@@ -245,6 +245,7 @@ fn build(dark: bool) -> Kit {
         ring: None,
         invalid_text: true,
         forced: None,
+        metrics: rune_kit::Metrics::default(),
     }
 }
 

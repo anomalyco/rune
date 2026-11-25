@@ -13,6 +13,7 @@ use crate::window::surface::Win;
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(in crate::window) mod float_on_open;
+pub(in crate::window) mod full_screen;
 #[cfg(target_os = "macos")]
 pub(in crate::window) mod mac;
 pub(in crate::window) mod platform_sync;
@@ -31,17 +32,23 @@ pub(in crate::window) fn uses_drag_regions(chrome: Chrome, borderless: bool, pan
 /// Places the traffic lights and returns `Cx::titlebar_inset`.
 pub(in crate::window) fn place_chrome(window: &Window, chrome: Chrome) -> f32 {
     #[cfg(target_os = "macos")]
-    {
-        if let Some(p) = chrome.traffic_lights {
-            crate::platform::macos::traffic_lights::place(window, p);
-        }
-        mac::titlebar_inset(window)
-    }
+    { place_chrome_for(window, chrome, mac::initial_full_screen_state(window)) }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (window, chrome);
         0.0
     }
+}
+
+#[cfg(target_os = "macos")]
+fn place_chrome_for(window: &Window, chrome: Chrome, state: full_screen::State) -> f32 {
+    if state.is_full_screen() {
+        return 0.0;
+    }
+    if let Some(p) = chrome.traffic_lights {
+        crate::platform::macos::traffic_lights::place(window, p);
+    }
+    mac::titlebar_inset(window, state)
 }
 
 /// The frame the window draws for the app's `chrome` and `titlebar` as the view `set` it
@@ -58,12 +65,19 @@ pub(in crate::window) fn frame_chrome(chrome: Chrome, titlebar: Option<crate::Ti
 /// Places the traffic lights, and tells the runtime what the window's controls take of the
 /// titlebar and which caption buttons to draw over it. A change re-runs the view.
 pub(in crate::window) fn sync_chrome_core(rt: &mut RuntimeCore, w: &Win, chrome: Chrome, titlebar: Option<crate::Titlebar>) {
+    #[cfg(target_os = "macos")]
+    w.sync_full_screen();
+    let full_screen = w.is_full_screen();
     let resolved = titlebar.map(|t| rt.titlebar_set().over(t));
     #[cfg(target_os = "macos")]
-    if let Some(t) = resolved {
+    if let Some(t) = resolved && (!full_screen || !t.has_controls()) {
         crate::platform::macos::traffic_lights::set_hidden(&w.window, !t.has_controls());
     }
-    let leading = place_chrome(&w.window, frame_chrome(chrome, titlebar, rt.titlebar_set()));
+    let frame = frame_chrome(chrome, titlebar, rt.titlebar_set());
+    #[cfg(target_os = "macos")]
+    let leading = place_chrome_for(&w.window, frame, w.full_screen_state());
+    #[cfg(not(target_os = "macos"))]
+    let leading = place_chrome(&w.window, frame);
     rt.set_titlebar_inset(leading);
     let caption = caption(w, resolved);
     let scale = w.window.scale_factor() as f32;
@@ -76,7 +90,7 @@ pub(in crate::window) fn sync_chrome_core(rt: &mut RuntimeCore, w: &Win, chrome:
     rt.set_chrome_insets(crate::ChromeInsets::new(left, right, height));
     rt.set_caption(caption);
     rt.set_maximized(w.is_maximized());
-    rt.set_full_screen(w.is_full_screen());
+    rt.set_full_screen(full_screen);
 }
 
 /// The traffic lights sit at the window's right: a right-to-left app on macOS.
@@ -171,14 +185,6 @@ pub(in crate::window) fn set_full_screen(window: &Window, full_screen: bool) {
     window.set_fullscreen(full_screen.then_some(winit::window::Fullscreen::Borderless(None)));
 }
 
-/// Takes the window full screen, borderless over its display, or brings it back. Adopted
-/// macOS panels ignore it.
-pub(in crate::window) fn toggle_full_screen(window: &Window) {
-    #[cfg(target_os = "macos")]
-    if crate::platform::macos::is_panel(window) { return; }
-    set_full_screen(window, window.fullscreen().is_none());
-}
-
 /// The window menu, where a custom titlebar (at `at`, the click's point in window points, else
 /// the pointer) or the keyboard opens it.
 pub(in crate::window) fn window_menu(window: &Window, menu: crate::runtime::WindowMenu, at: Option<(f32, f32)>) {
@@ -188,16 +194,45 @@ pub(in crate::window) fn window_menu(window: &Window, menu: crate::runtime::Wind
         let at = at.zip(window.inner_position().ok()).map(|((x, y), o)| (o.x + (f64::from(x) * scale).round() as i32, o.y + (f64::from(y) * scale).round() as i32));
         crate::platform::win32::window_menu(window, menu, at);
     }
-    #[cfg(not(target_os = "windows"))]
+    // Wayland: `xdg_toplevel.show_window_menu`, at the click or the window's top-left corner.
+    // X11: `_GTK_SHOW_WINDOW_MENU` when the window manager advertises it, at the click, the
+    // pointer, or the window's top-left corner.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        use crate::platform::x11::window_menu::{At, show_window_menu};
+        use crate::runtime::WindowMenu;
+        if is_wayland_window(window) {
+            let (x, y) = match menu { WindowMenu::Keyboard => (0.0, 0.0), WindowMenu::Pointer => at.unwrap_or((0.0, 0.0)) };
+            window.show_window_menu(winit::dpi::LogicalPosition::new(f64::from(x.max(0.0)), f64::from(y.max(0.0))));
+            return;
+        }
+        let scale = window.scale_factor();
+        let at = match (menu, at) {
+            (WindowMenu::Keyboard, _) => At::Window(0, 0),
+            (WindowMenu::Pointer, Some((x, y))) => At::Window((f64::from(x) * scale).round() as i32, (f64::from(y) * scale).round() as i32),
+            (WindowMenu::Pointer, None) => At::Pointer,
+        };
+        show_window_menu(window, at);
+    }
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     let _ = (window, menu, at);
 }
 
-/// Whether Alt+Space opens this window's window menu when no handler takes it.
+/// Whether Alt+Space opens this window's window menu when no handler takes it: on Wayland every
+/// toplevel can ask; on X11, when the window manager advertises `_GTK_SHOW_WINDOW_MENU`.
 pub(in crate::window) fn has_window_menu(window: &Window) -> bool {
     #[cfg(target_os = "windows")]
     return crate::platform::win32::has_window_menu(window);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    return is_wayland_window(window) || crate::platform::x11::window_menu::has_window_menu(window);
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     { let _ = window; false }
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+fn is_wayland_window(window: &Window) -> bool {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    matches!(window.window_handle().map(|h| h.as_raw()), Ok(RawWindowHandle::Wayland(_)))
 }
 
 /// Sizes the window's content to `size` points. Returns the applied physical size when the

@@ -60,6 +60,7 @@ impl RuntimeCore {
             v.shown = v.keys[v.range.clone()].iter().cloned().collect();
             v.mounted = v.indexed.then(|| crate::el::virtual_list::Mounted::of(v));
         }
+        self.commit.virtual_items.commit_staged();
         // A row scrolled into view mounts settled with its subtree. Content added later under a
         // row already on screen is a live change and keeps its own entrance.
         // Parents precede children, so a remounting row passes its flag down its whole subtree.
@@ -412,10 +413,17 @@ impl RuntimeCore {
             let rest_quiet = (lands && !riding) || !was_present || was_exiting || self.reduced_motion;
             let shift = nodes[i].vis.offset;
             if !slid.is_empty() && nodes[i].parent.is_some_and(|p| slid[p]) { slid[i] = true; }
-            if nodes[i].looping.is_none() && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
+            // A moving sequence plays on top of `El::offset` and `El::rotate`; between plays they
+            // aim at its resting pose so a change still springs (`step_loops_into_scene`).
+            let sequence_rest = match nodes[i].looping.as_deref().map(|l| l.kind) {
+                Some(rune_motion::LoopKind::Sequence(q)) if q.moves() => Some(q.rest()),
+                _ => None,
+            };
+            if (nodes[i].looping.is_none() || sequence_rest.is_some()) && !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Offset)
                 && (shift != [0.0; 2] || reorder_jump != 0.0 || self.scene.store().has(id, prop::OFFSET))
             {
-                let to = rune_motion::Vec2::new(shift[0], shift[1]);
+                let lift = sequence_rest.map_or([0.0; 2], |b| b.translate);
+                let to = rune_motion::Vec2::new(shift[0] + lift[0], shift[1] + lift[1]);
                 if rest_quiet && reorder_jump == 0.0 {
                     self.scene.set(id, prop::OFFSET, to);
                 } else if self.scene.store().target(id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO) != to {
@@ -459,7 +467,7 @@ impl RuntimeCore {
                     self.paint.record_static_scale_target(id, target);
                 }
             }
-            let turn = nodes[i].vis.rotate;
+            let turn = nodes[i].vis.rotate + sequence_rest.map_or(0.0, |b| b.rotate);
             if !nodes[i].live.iter().any(|b| b.property == crate::live::Property::Rotation)
                 && (turn != 0.0 || self.scene.store().has(id, prop::ROTATION))
             {
