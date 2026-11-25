@@ -2639,3 +2639,189 @@ test('focusA11y mirrors read-only caret-browsing selection onto proxy attributes
         bridge.destroy(h);
     }
 });
+
+test('armed external link forwards wheel scroll and Ctrl+wheel pinch to canvas and disarms when scrolled away', () => {
+    const { win, canvas, events, h } = setup();
+    const wheels = [];
+    // Simulate winit's wheel listener registered before bridge.mount by putting it at the front.
+    const canvasWheels = canvas.listeners.get('wheel') ?? [];
+    canvasWheels.unshift(ev => wheels.push({ dx: ev.deltaX, dy: ev.deltaY, mode: ev.deltaMode, ctrl: ev.ctrlKey }));
+    canvas.listeners.set('wheel', canvasWheels);
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            {
+                k: 'group', g: 'div', p: '#0/sc', r: [0, 0, 320, 140], sc: [0, 0],
+            },
+            {
+                k: 'text', p: '#0/sc/t', a: 0, r: [12, 24, 160, 20], t: 'Open docs',
+                u: [{ t: 'Open ' }, { t: 'docs', h: 'https://example.com/docs', p: '#0/sc/t', i: 0 }],
+            },
+        ]));
+        const sc = h.a11yNodes.get('div:#0/sc');
+        sc.style.overflow = 'hidden';
+        sc.getBoundingClientRect = () => ({ left: 0, top: 0, right: 320, bottom: 140, width: 320, height: 140 });
+        const a = h.a11y.querySelectorAll('a[target="_blank"]')[0];
+        assert.ok(a, 'external link mirrored as a[target="_blank"]');
+        let linkRect = { left: 60, top: 24, right: 100, bottom: 44, width: 40, height: 20 };
+        a.getClientRects = () => [linkRect];
+
+        // Hover arms the external link so browser status bar / clicks work.
+        canvas.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', buttons: 0, clientX: 80, clientY: 32 });
+        assert.equal(h.hoverLink, a);
+        assert.equal(a.style.pointerEvents, 'auto');
+
+        // Normal wheel over the armed link forwards to canvas and prevents default.
+        let prevented = false;
+        h.a11y.dispatchEvent({
+            type: 'wheel', target: a, deltaX: 0, deltaY: 240, deltaZ: 0, deltaMode: 0,
+            clientX: 80, clientY: 32, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false,
+            preventDefault() { prevented = true; },
+        });
+        assert.equal(prevented, true);
+        assert.deepEqual(wheels, [{ dx: 0, dy: 240, mode: 0, ctrl: false }]);
+
+        // Ctrl+wheel (pinch) leaves browser zoom un-prevented when Rune did not consume it,
+        // and prevents default when Rune sets syncWheel(h, true).
+        wheels.length = 0;
+        prevented = false;
+        bridge.syncWheel(h, false);
+        h.a11y.dispatchEvent({
+            type: 'wheel', target: a, deltaX: 0, deltaY: -12, deltaZ: 0, deltaMode: 0,
+            clientX: 80, clientY: 32, ctrlKey: true,
+            preventDefault() { prevented = true; },
+        });
+        assert.equal(prevented, false, 'unhandled Ctrl+wheel stays with browser zoom');
+        assert.deepEqual(wheels, [{ dx: 0, dy: -12, mode: 0, ctrl: true }]);
+
+        wheels.length = 0;
+        prevented = false;
+        bridge.syncWheel(h, true);
+        h.a11y.dispatchEvent({
+            type: 'wheel', target: a, deltaX: 0, deltaY: -12, deltaZ: 0, deltaMode: 0,
+            clientX: 80, clientY: 32, ctrlKey: true,
+            preventDefault() { prevented = true; },
+        });
+        assert.equal(prevented, true, 'Rune-handled Ctrl+wheel prevents browser zoom');
+
+        // DOM_DELTA_PAGE (deltaMode === 2) also forwards wheel_page through canvas.
+        events.length = 0;
+        prevented = false;
+        h.a11y.dispatchEvent({
+            type: 'wheel', target: a, deltaX: 0, deltaY: 1, deltaZ: 0, deltaMode: 2,
+            clientX: 80, clientY: 32,
+            preventDefault() { prevented = true; },
+        });
+        assert.equal(prevented, true);
+        assert.ok(events.some(e => e.kind === 'wheel_page' && e.dy === -1));
+
+        // After scroll moves the link out from under the stationary pointer, syncA11yPatch disarms it.
+        linkRect = { left: 60, top: -200, right: 100, bottom: -180, width: 40, height: 20 };
+        bridge.syncA11y(h, JSON.stringify({ p: 1, u: [{ k: 'group', g: 'div', p: '#0/sc', r: [0, 0, 320, 140], sc: [0, 224] }] }));
+        assert.equal(h.hoverLink, null);
+        assert.equal(a.style.pointerEvents, 'none');
+
+        // Re-arm and verify window blur clears hoverLink cleanly.
+        linkRect = { left: 60, top: 24, right: 100, bottom: 44, width: 40, height: 20 };
+        canvas.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', buttons: 0, clientX: 80, clientY: 32 });
+        assert.equal(h.hoverLink, a);
+        win.dispatchEvent({ type: 'blur' });
+        assert.equal(h.hoverLink, null);
+        assert.equal(a.style.pointerEvents, 'none');
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('armed external link keeps clicks/middle/modified/right-click with browser, promotes primary drag and forwards touch to canvas', () => {
+    const { win, canvas, h } = setup();
+    canvas.getBoundingClientRect = () => ({ left: 10, top: 20, right: 330, bottom: 260, width: 320, height: 240 });
+    const canvasPtr = [];
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel']) {
+        canvas.addEventListener(type, ev => {
+            canvasPtr.push({
+                type: ev.type, pointerType: ev.pointerType, button: ev.button,
+                ox: ev.offsetX, oy: ev.offsetY, id: ev.pointerId,
+                coalesced: typeof ev.getCoalescedEvents === 'function' ? ev.getCoalescedEvents().length : 0,
+            });
+        });
+    }
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            {
+                k: 'text', p: '#0/t', r: [10, 20, 200, 20], t: 'Open docs',
+                u: [{ t: 'Open ' }, { t: 'docs', h: 'https://example.com/docs', p: '#0/t', i: 0 }],
+            },
+            {
+                k: 'link', p: '#0/dis', r: [10, 50, 100, 20], t: 'Disabled', h: 'https://example.com/dis', dis: true,
+            },
+        ]));
+        // Disabled block El::href uses pointer-events:none.
+        const dis = h.a11yNodes.get('a:#0/dis');
+        assert.match(dis.style.cssText, /pointer-events:none;/);
+
+        const a = h.a11y.querySelectorAll('a[target="_blank"]')[0];
+        a.getClientRects = () => [{ left: 70, top: 40, right: 110, bottom: 60, width: 40, height: 20 }];
+
+        // 1. Plain primary click (<= 4px travel) stays with the browser: canvas sees nothing and click is un-prevented.
+        canvas.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', buttons: 0, clientX: 80, clientY: 50 });
+        canvasPtr.length = 0;
+        assert.equal(h.hoverLink, a);
+        h.a11y.dispatchEvent({ type: 'pointerdown', target: a, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 1, clientX: 80, clientY: 50 });
+        win.dispatchEvent({ type: 'pointermove', target: a, pointerType: 'mouse', pointerId: 1, button: -1, buttons: 1, clientX: 82, clientY: 51 });
+        win.dispatchEvent({ type: 'pointerup', target: a, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 0, clientX: 82, clientY: 51 });
+        let clickPrevented = false;
+        h.a11y.dispatchEvent({ type: 'click', target: a, preventDefault() { clickPrevented = true; } });
+        assert.deepEqual(canvasPtr, [], 'plain click must not forward to canvas');
+        assert.equal(clickPrevented, false, 'plain click must stay un-prevented for browser navigation');
+
+        // 2. Middle click, Ctrl+click, Meta+click, and right-click stay with the browser.
+        for (const ev of [
+            { button: 1, buttons: 4 },
+            { button: 0, buttons: 1, ctrlKey: true },
+            { button: 0, buttons: 1, metaKey: true },
+            { button: 2, buttons: 2 },
+        ]) {
+            h.a11y.dispatchEvent({ type: 'pointerdown', target: a, pointerType: 'mouse', pointerId: 2, clientX: 80, clientY: 50, ...ev });
+            win.dispatchEvent({ type: 'pointermove', target: a, pointerType: 'mouse', pointerId: 2, clientX: 120, clientY: 50, ...ev });
+            win.dispatchEvent({ type: 'pointerup', target: a, pointerType: 'mouse', pointerId: 2, clientX: 120, clientY: 50, ...ev });
+        }
+        assert.deepEqual(canvasPtr, [], 'middle, modified, and secondary presses stay with browser');
+
+        // 3. Primary drag (> 4px travel) promotes to canvas (with canvas-relative offsetX/Y), blocks dragstart,
+        //    disarms link, and suppresses the trailing click.
+        let dragPrevented = false;
+        h.a11y.dispatchEvent({ type: 'dragstart', target: a, preventDefault() { dragPrevented = true; } });
+        assert.equal(dragPrevented, true);
+        h.a11y.dispatchEvent({ type: 'pointerdown', target: a, pointerType: 'mouse', pointerId: 3, button: 0, buttons: 1, clientX: 80, clientY: 50 });
+        win.dispatchEvent({ type: 'pointermove', target: a, pointerType: 'mouse', pointerId: 3, button: -1, buttons: 1, clientX: 100, clientY: 50 });
+        win.dispatchEvent({ type: 'pointerup', target: a, pointerType: 'mouse', pointerId: 3, button: 0, buttons: 0, clientX: 100, clientY: 50 });
+        assert.equal(h.hoverLink, null, 'drag promotion disarms link');
+        assert.deepEqual(canvasPtr, [
+            { type: 'pointerdown', pointerType: 'mouse', button: 0, ox: 70, oy: 30, id: 3, coalesced: 0 },
+            { type: 'pointermove', pointerType: 'mouse', button: -1, ox: 90, oy: 30, id: 3, coalesced: 1 },
+            { type: 'pointerup', pointerType: 'mouse', button: 0, ox: 90, oy: 30, id: 3, coalesced: 0 },
+        ]);
+        clickPrevented = false;
+        h.a11y.dispatchEvent({ type: 'click', target: a, preventDefault() { clickPrevented = true; } });
+        assert.equal(clickPrevented, true, 'trailing click after promoted drag is suppressed');
+
+        // 4. Touch starting on an armed link disarms it, prevents touchstart, and forwards to canvas.
+        canvas.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', buttons: 0, clientX: 80, clientY: 50 });
+        assert.equal(h.hoverLink, a);
+        canvasPtr.length = 0;
+        let touchPrevented = false;
+        h.a11y.dispatchEvent({ type: 'touchstart', target: a, preventDefault() { touchPrevented = true; } });
+        assert.equal(touchPrevented, true);
+        h.a11y.dispatchEvent({ type: 'pointerdown', target: a, pointerType: 'touch', pointerId: 9, button: 0, buttons: 1, clientX: 80, clientY: 50, preventDefault() {} });
+        assert.equal(h.hoverLink, null, 'touch down disarms mouse hoverLink');
+        h.a11y.dispatchEvent({ type: 'pointermove', target: a, pointerType: 'touch', pointerId: 9, button: -1, buttons: 1, clientX: 80, clientY: 110 });
+        h.a11y.dispatchEvent({ type: 'pointerup', target: a, pointerType: 'touch', pointerId: 9, button: 0, buttons: 0, clientX: 80, clientY: 110 });
+        assert.deepEqual(canvasPtr, [
+            { type: 'pointerdown', pointerType: 'touch', button: 0, ox: 70, oy: 30, id: 9, coalesced: 0 },
+            { type: 'pointermove', pointerType: 'touch', button: -1, ox: 70, oy: 90, id: 9, coalesced: 1 },
+            { type: 'pointerup', pointerType: 'touch', button: 0, ox: 70, oy: 90, id: 9, coalesced: 0 },
+        ]);
+    } finally {
+        bridge.destroy(h);
+    }
+});

@@ -215,7 +215,9 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), a11yByPath: new Map(), mirrorSel: false, field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
-        touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null,
+        touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null, a11yTouchId: null,
+        hoverLink: null, hoverLinkLeave: null, hoverClientX: NaN, hoverClientY: NaN,
+        forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false };
     // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
     const send = (event, after) => {
@@ -279,8 +281,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(window, 'keyup', event => {
         if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
     }, { passive: true });
-    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; });
-    listen(document, 'visibilitychange', () => { if (document.hidden) { h.modBits = 0; h.activeTouchId = null; } });
+    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); });
+    listen(document, 'visibilitychange', () => { if (document.hidden) { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); } });
     function changed(preedit = false) {
         const backward = textarea.selectionDirection === 'backward';
         const edit = replacement(h.domValue, textarea.value, preedit ? h.composition : '', textarea.selectionEnd);
@@ -440,7 +442,12 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (event.pointerType !== 'touch') send({ kind: 'pointer_cancel', lost_capture: true });
     }, { passive: true });
     listen(a11y, 'pointerleave', event => {
-        if (event.pointerType !== 'touch' && event.relatedTarget !== canvas) send({ kind: 'leave' });
+        if (event.pointerType !== 'touch' && event.relatedTarget !== canvas) {
+            h.hoverClientX = NaN;
+            h.hoverClientY = NaN;
+            disarmLink(h);
+            send({ kind: 'leave' });
+        }
     }, { passive: true });
     listen(canvas, 'keydown', event => {
         if (page && !h.focused && SCROLL_KEYS.includes(event.key) && !event.metaKey && !event.ctrlKey) return;
@@ -515,17 +522,113 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         // A web link takes the pointer while it's over it, as a page's would: the status bar
         // shows where it goes, and middle-click, Ctrl+click and its own menu open it.
         listen(canvas, 'pointermove', event => {
-            if (event.pointerType === 'touch' || event.buttons) return;
+            if (event.pointerType === 'touch') return;
+            h.hoverClientX = event.clientX;
+            h.hoverClientY = event.clientY;
+            if (event.buttons) return;
             const a = linkAt(h, event.clientX, event.clientY);
             if (a && a !== h.hoverLink) armLink(h, a);
         }, { passive: true });
-        // The pointer over a link (or anything else of the mirror's that took it) still hovers Rune.
+        // The pointer over a link (or anything else of the mirror's that took it) still hovers Rune,
+        // and an active touch forwarded from an armed link continues reaching the canvas.
         listen(a11y, 'pointermove', event => {
             if (event.pointerType !== 'touch') {
+                h.hoverClientX = event.clientX;
+                h.hoverClientY = event.clientY;
+                const r = canvas.getBoundingClientRect();
+                send({ kind: 'hover', x: event.clientX - r.left, y: event.clientY - r.top });
+            } else if (h.a11yTouchId === event.pointerId) {
+                forwardPointerToCanvas(h, 'pointermove', event);
+            }
+        }, { passive: true });
+        // Wheel events (scroll and Ctrl+wheel trackpad pinch) over an armed external link or block
+        // El::href forward to the canvas so scrolling never stalls under the pointer.
+        listen(a11y, 'wheel', event => {
+            if (h.forwarding) return;
+            if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+                && (event.clientX !== h.hoverClientX || event.clientY !== h.hoverClientY)) {
+                h.hoverClientX = event.clientX;
+                h.hoverClientY = event.clientY;
                 const r = canvas.getBoundingClientRect();
                 send({ kind: 'hover', x: event.clientX - r.left, y: event.clientY - r.top });
             }
-        }, { passive: true });
+            forwardWheelToCanvas(h, event);
+        }, { passive: false });
+        // Block native HTML link-drag ghosts so a primary drag starting on an armed link promotes
+        // into a Rune text-selection drag instead of cancelling pointer moves.
+        listen(a11y, 'dragstart', event => event.preventDefault());
+        listen(a11y, 'click', event => {
+            if (h.suppressLinkClickUntil > performance.now()) {
+                h.suppressLinkClickUntil = 0;
+                event.preventDefault();
+            }
+        });
+        if (!fitHeight) {
+            listen(a11y, 'touchstart', event => event.preventDefault(), { passive: false });
+        }
+        // Touch over an armed link forwards to the canvas (pan, tap, long-press); a plain primary
+        // mouse press stays with the anchor for clicks (<= 4 px) and promotes to canvas on drag
+        // (> 4 px) so text selection can start on a link without breaking browser link clicks.
+        listen(a11y, 'pointerdown', event => {
+            if (h.forwarding) return;
+            if (event.pointerType === 'touch') {
+                disarmLink(h);
+                h.a11yTouchId = event.pointerId;
+                if (!fitHeight) event.preventDefault();
+                forwardPointerToCanvas(h, 'pointerdown', event);
+                return;
+            }
+            if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+                h.suppressLinkClickUntil = 0;
+                h.pendingLinkDrag = {
+                    pointerId: event.pointerId,
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    down: snapshotPointer(event),
+                    active: false,
+                };
+            }
+        });
+        listen(a11y, 'pointerup', event => {
+            if (event.pointerType === 'touch' && h.a11yTouchId === event.pointerId) {
+                h.a11yTouchId = null;
+                forwardPointerToCanvas(h, 'pointerup', event);
+            }
+        });
+        listen(a11y, 'pointercancel', event => {
+            if (event.pointerType === 'touch' && h.a11yTouchId === event.pointerId) {
+                h.a11yTouchId = null;
+                forwardPointerToCanvas(h, 'pointercancel', event);
+            }
+        });
+        listen(window, 'pointermove', event => {
+            if (h.forwarding || !h.pendingLinkDrag || event.pointerId !== h.pendingLinkDrag.pointerId) return;
+            const drag = h.pendingLinkDrag;
+            if (!drag.active) {
+                if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <= 4) return;
+                drag.active = true;
+                disarmLink(h);
+                h.suppressLinkClickUntil = performance.now() + 500;
+                forwardPointerToCanvas(h, 'pointerdown', drag.down);
+                if (event.target !== canvas) forwardPointerToCanvas(h, 'pointermove', event);
+            } else if (event.target !== canvas) {
+                forwardPointerToCanvas(h, 'pointermove', event);
+            }
+        }, { capture: true, passive: true });
+        const finishLinkDrag = (type, event) => {
+            if (h.forwarding) return;
+            if (event.pointerType === 'touch' && event.target === canvas && h.a11yTouchId === event.pointerId) {
+                h.a11yTouchId = null;
+            }
+            if (!h.pendingLinkDrag || event.pointerId !== h.pendingLinkDrag.pointerId) return;
+            const drag = h.pendingLinkDrag;
+            h.pendingLinkDrag = null;
+            if (!drag.active) return;
+            h.suppressLinkClickUntil = performance.now() + 500;
+            if (event.target !== canvas) forwardPointerToCanvas(h, type, event);
+        };
+        listen(window, 'pointerup', event => finishLinkDrag('pointerup', event), { capture: true, passive: true });
+        listen(window, 'pointercancel', event => finishLinkDrag('pointercancel', event), { capture: true, passive: true });
     }
     // Right-click (and Ctrl+click on macOS): Rune draws an element's own menu; anywhere else the
     // browser opens its own over what a page would have there (the selection, a link, text, a text
@@ -857,26 +960,144 @@ function placeField(field, [x, y, w, height]) {
     Object.assign(field.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${height}px`, pointerEvents: 'none' });
 }
 
+function forwardWheelToCanvas(h, event) {
+    const init = {
+        deltaX: event.deltaX ?? 0,
+        deltaY: event.deltaY ?? 0,
+        deltaZ: event.deltaZ ?? 0,
+        deltaMode: event.deltaMode ?? 0,
+        clientX: event.clientX ?? 0,
+        clientY: event.clientY ?? 0,
+        screenX: event.screenX ?? 0,
+        screenY: event.screenY ?? 0,
+        shiftKey: !!event.shiftKey,
+        ctrlKey: !!event.ctrlKey,
+        altKey: !!event.altKey,
+        metaKey: !!event.metaKey,
+        bubbles: false,
+        cancelable: true,
+    };
+    const forwarded = typeof WheelEvent === 'function'
+        ? new WheelEvent('wheel', init)
+        : Object.assign({ type: 'wheel', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, init);
+    h.forwarding = true;
+    let notCancelled;
+    try { notCancelled = h.canvas.dispatchEvent(forwarded); }
+    finally { h.forwarding = false; }
+    if (notCancelled === false || forwarded.defaultPrevented) event.preventDefault();
+}
+
+function snapshotPointer(event) {
+    return {
+        pointerId: event.pointerId ?? 1,
+        pointerType: event.pointerType ?? 'mouse',
+        isPrimary: event.isPrimary ?? true,
+        button: event.button ?? 0,
+        buttons: event.buttons ?? 0,
+        pressure: event.pressure ?? 0,
+        clientX: event.clientX ?? 0,
+        clientY: event.clientY ?? 0,
+        screenX: event.screenX ?? 0,
+        screenY: event.screenY ?? 0,
+        shiftKey: !!event.shiftKey,
+        ctrlKey: !!event.ctrlKey,
+        altKey: !!event.altKey,
+        metaKey: !!event.metaKey,
+        timeStamp: event.timeStamp,
+    };
+}
+
+function forwardPointerToCanvas(h, type, src) {
+    const r = h.canvas.getBoundingClientRect();
+    const init = {
+        pointerId: src.pointerId ?? 1,
+        pointerType: src.pointerType ?? 'mouse',
+        isPrimary: src.isPrimary ?? true,
+        button: src.button ?? (type === 'pointermove' ? -1 : 0),
+        buttons: src.buttons ?? 0,
+        pressure: src.pressure ?? 0,
+        clientX: src.clientX ?? 0,
+        clientY: src.clientY ?? 0,
+        screenX: src.screenX ?? 0,
+        screenY: src.screenY ?? 0,
+        shiftKey: !!src.shiftKey,
+        ctrlKey: !!src.ctrlKey,
+        altKey: !!src.altKey,
+        metaKey: !!src.metaKey,
+        bubbles: false,
+        cancelable: true,
+    };
+    const forwarded = typeof PointerEvent === 'function'
+        ? new PointerEvent(type, init)
+        : Object.assign({ type, timeStamp: src.timeStamp ?? performance.now(), defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, init);
+    const ox = init.clientX - r.left;
+    const oy = init.clientY - r.top;
+    if (forwarded.offsetX !== ox || forwarded.offsetY !== oy) {
+        Object.defineProperty(forwarded, 'offsetX', { value: ox });
+        Object.defineProperty(forwarded, 'offsetY', { value: oy });
+    }
+    // Synthetic PointerEvents return [] from getCoalescedEvents() in Chromium, which causes
+    // winit's pointer_move_event() to drop forwarded moves unless we expose the event itself.
+    if (type === 'pointermove') {
+        Object.defineProperty(forwarded, 'getCoalescedEvents', { value: () => [forwarded] });
+    }
+    h.forwarding = true;
+    try { h.canvas.dispatchEvent(forwarded); }
+    finally { h.forwarding = false; }
+}
+
+function linkContains(h, a, x, y) {
+    if (!a || !h.a11y.contains(a)) return false;
+    let hit = false;
+    for (const r of a.getClientRects()) {
+        if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) { hit = true; break; }
+    }
+    if (!hit) return false;
+    for (let p = a.parentElement; p && p !== h.a11y; p = p.parentElement) {
+        if (p.style?.overflow === 'hidden' && typeof p.getBoundingClientRect === 'function') {
+            const c = p.getBoundingClientRect();
+            if (x < c.left || x >= c.right || y < c.top || y >= c.bottom) return false;
+        }
+    }
+    return true;
+}
+
 // The mirror's web link under (x, y), if any.
 function linkAt(h, x, y) {
     for (const a of h.a11y.querySelectorAll('a[target="_blank"]')) {
-        for (const r of a.getClientRects()) if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return a;
+        if (linkContains(h, a, x, y)) return a;
     }
     return null;
 }
 
 function armLink(h, a) {
+    if (h.hoverLink === a) return;
     disarmLink(h);
     h.hoverLink = a;
     a.style.pointerEvents = 'auto';
     a.style.cursor = 'pointer';
-    a.addEventListener('pointerleave', () => disarmLink(h), { once: true });
+    const onLeave = () => { if (h.hoverLink === a) disarmLink(h); };
+    h.hoverLinkLeave = onLeave;
+    a.addEventListener('pointerleave', onLeave, { once: true });
 }
 
 function disarmLink(h) {
     if (!h.hoverLink) return;
+    if (h.hoverLinkLeave) {
+        h.hoverLink.removeEventListener('pointerleave', h.hoverLinkLeave);
+        h.hoverLinkLeave = null;
+    }
     h.hoverLink.style.pointerEvents = 'none';
     h.hoverLink = null;
+}
+
+function syncHoverLink(h) {
+    if (h.page || !h.hoverLink) return;
+    if (Number.isFinite(h.hoverClientX) && Number.isFinite(h.hoverClientY)) {
+        if (!linkContains(h, h.hoverLink, h.hoverClientX, h.hoverClientY)) disarmLink(h);
+    } else if (!h.a11y.contains(h.hoverLink)) {
+        disarmLink(h);
+    }
 }
 
 // Readies the browser's own menu for a right-click at (x, y), unless Rune's takes it. True when
@@ -1052,7 +1273,9 @@ function itemStyle(h, item, origin) {
     // block scrolls the block at the compositor's rate while a vertical drag still scrolls the
     // page.
     if (item.k === 'scroll_x') return css + 'overflow-x:auto;overflow-y:hidden;pointer-events:auto;touch-action:pan-x pan-y pinch-zoom;scrollbar-width:none;';
-    if (item.k === 'link') return css + 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;';
+    if (item.k === 'link') return css + (item.dis
+        ? 'display:block;overflow:hidden;text-decoration:none;pointer-events:none;font:14px/1.25 sans-serif;'
+        : 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;');
     if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
     const fs = item.s || 14;
     if (!item.f) return css + `font:${fs}px/1.25 sans-serif;overflow:hidden;white-space:pre-wrap;pointer-events:none;`;
@@ -1302,6 +1525,7 @@ function syncA11yPatch(h, patch) {
             }
         }
     }
+    syncHoverLink(h);
 }
 
 export function syncA11y(h, json) {
@@ -1341,6 +1565,7 @@ export function syncA11y(h, json) {
             h.a11yNodes.delete(key);
         }
     }
+    syncHoverLink(h);
 }
 
 // An app's focus (`Runtime::web_a11y_focus`), for a reader: the browser's own focus stays on the
@@ -1821,6 +2046,9 @@ export function destroy(h) {
     h.image = undefined;
     clearTimeout(h.staticTimer);
     cancelTouchHoldConfirm(h);
+    disarmLink(h);
+    h.pendingLinkDrag = null;
+    h.a11yTouchId = null;
     h.touchTimestamps.length = 0;
     h.activeTouchId = null;
     cancelA11y(h);
