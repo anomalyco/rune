@@ -180,6 +180,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) window_backdrop: crate::WindowBackdrop,
     pub(crate) frame_latency: Option<u32>,
+    pub(crate) on_materials: Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
 }
@@ -313,6 +314,38 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.on_availability = Some(f);
         self
     }
+    /// Called on the event thread with each frame's
+    /// [`El::system_material`](crate::El::system_material) rects
+    /// ([`MaterialFrame`](crate::MaterialFrame)), after the frame is built and just before it
+    /// presents, hidden prewarm frames included; an idle overlay draws no frames and so calls
+    /// nothing. Where Rune hosts no native material (everywhere but macOS) the element draws only
+    /// its fallback fill, so an app can keep its own backdrop (a companion window or composition
+    /// visual) under these rects in step with the frame. Give the element a translucent
+    /// [`El::fill`](crate::El::fill) of its own to replace the neutral fallback tint. A frame
+    /// lists no rects once the last material element is gone. It only runs for frames that
+    /// present, so hiding the overlay ([`OverlayHandle::hide`](crate::OverlayHandle::hide)),
+    /// releasing its surface (`release_gpu_when_hidden`, `release_gpu_after`) or losing it sends
+    /// no final empty frame: hide the backdrop alongside the app's own `hide` calls and when
+    /// [`on_availability`](Self::on_availability) reports the overlay unavailable.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, SystemMaterial, el};
+    ///
+    /// let _overlay = OverlaySpec::new("island", (720.0, 200.0), |_: &(), _| {
+    ///     el().w(240.0).h(44.0).radius(22.0).system_material(SystemMaterial::Glass)
+    /// })
+    /// .options(OverlayOptions::default())
+    /// .on_materials(|frame| {
+    ///     for draw in frame.draws() {
+    ///         let (_rect, _radius) = draw.points(frame.scale());
+    ///         // Move this app's own backdrop visual to `_rect` with `_radius` corners.
+    ///     }
+    /// });
+    /// ```
+    pub fn on_materials(mut self, f: impl FnMut(crate::MaterialFrame<'_>) + 'static) -> Self {
+        self.on_materials = Some(Box::new(f));
+        self
+    }
     /// Showing doesn't settle motion: what the state started while hidden plays from the
     /// first visible frame, such as a notification stack's first card entering. By default
     /// an unretained overlay shows settled, at its target.
@@ -421,7 +454,7 @@ impl<T: 'static> OverlaySpec<T> {
             spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
-            frame_latency: None, animate_reveal: false, release_after: None,
+            frame_latency: None, on_materials: None, animate_reveal: false, release_after: None,
         }
     }
 }

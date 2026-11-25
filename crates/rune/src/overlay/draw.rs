@@ -391,7 +391,7 @@ impl FrameHost for OverlayFrame<'_> {
         ) else {
             return crate::time::now();
         };
-        frame::submit_and_present(live, renderer, gpu, self.app.rt(), prepared.encoder, prepared.frame, self.prewarm);
+        frame::submit_and_present(live, renderer, gpu, self.app.rt(), prepared.encoder, prepared.frame, self.prewarm, &mut self.core.on_materials);
         // The next frame waits for the room this one took (`slot`).
         #[cfg(target_os = "windows")]
         live.slot.presented();

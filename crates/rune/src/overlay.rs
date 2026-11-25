@@ -595,6 +595,8 @@ pub(in crate::overlay) struct OverlayCore {
     prewarm_effects: crate::PrewarmEffects,
     /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
     pub(in crate::overlay) frame_latency: Option<u32>,
+    /// `ConfiguredOverlay::on_materials`, called before each present.
+    on_materials: Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>,
     /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,
@@ -692,6 +694,7 @@ impl OverlayCore {
             position_owner: input::PositionOwner::Managed,
             prewarm_effects: crate::PrewarmEffects::NONE,
             frame_latency: None,
+            on_materials: None,
             #[cfg(test)]
             layer_frame_pending: false,
             #[cfg(test)]

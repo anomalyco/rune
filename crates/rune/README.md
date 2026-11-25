@@ -294,8 +294,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     text, layout, hover/focus/selection, theme and scale) with an optional `.cache_key(u64)` hint.
   - **Live fallback:** while any node inside the subtree animates (springs, transitions, loops,
     growth, word reveals, flights) or hosts a live compositor `El::effect` slot, `NativeSurface`,
-    native `SystemMaterial`, image pixels or focused text input, the subtree bypasses the cache and draws live,
-    then re-caches once settled.
+    image pixels or focused text input, the subtree bypasses the cache and draws live, then re-caches
+    once settled. A subtree holding an `El::system_material` element always draws live, on every
+    platform and with or without a native material view, so its rect stays listed in
+    `Runtime::system_materials` every frame.
   - **Scale and budget:** while an ancestor's live scale or scale spring is changing without view
     commits, the existing cached texture is composited with clamped bilinear filtering and
     re-rasterized at the new device-pixel resolution once the scale holds still for 0.1 s.
@@ -3455,6 +3457,17 @@ clips. A window gets at most `App::max_native_materials` (also on `WindowSpec` a
 clamped to 64). Visible material elements past the limit draw their fallback instead, report
 `ElementInfo::material_fallback = true`, emit `"materialFallback": true` in `--tree` JSON, and
 log a one-time notice to stderr when native materials are active.
+
+Off macOS Rune hosts no native material and the element draws its fallback, but the frame's
+material rects are still public, so an app can drive its own backdrop under them (on Windows, a
+companion window or composition visual). `Runtime::system_materials` lists the last built frame's
+`MaterialDraw`s (element id, material, rect and corner radius in physical pixels, `points(scale)`
+for window points), readable from `App::on_frame_drawn`. `ConfiguredOverlay::on_materials` hears
+each overlay frame's (`MaterialFrame`: draws and window scale) just before it presents. Give the
+element a translucent `fill` of its own to replace the neutral fallback tint. The hook runs only
+for presented frames: hiding the overlay, releasing or losing its surface sends no final empty
+frame, so hide the backdrop with the app's own `OverlayHandle::hide` calls and on
+`ConfiguredOverlay::on_availability`.
 
 Rune draws the shadow, so make the window larger than the card and turn the system shadow off
 with `MacWindowOptions::default().shadow(false)`, or the window gets a second, rectangular
