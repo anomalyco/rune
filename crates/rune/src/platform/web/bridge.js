@@ -705,8 +705,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }
     queueMicrotask(() => {
         if (!h.disposed && !embedded && !page && document.activeElement === document.body) {
-            (h.key ? h.field : canvas).focus({ preventScroll: true });
-            if (h.key) reselect(h);
+            if (h.key) focusInput(h);
+            else canvas.focus({ preventScroll: true });
         }
     });
     return h;
@@ -723,6 +723,18 @@ function reselect(h) {
         try { h.textarea.setSelectionRange(start, end, direction); }
         finally { h.syncing = syncing; }
     }
+}
+
+// Prepares and focuses the active hidden input (`h.textarea` or `h.password`) when `h.key` is set.
+// Sets `inert = false` and `inputMode = 'text'` BEFORE calling `focus()` so iOS Safari evaluates
+// `shouldShowAutomaticKeyboardUI` with an editable `inputMode` at the moment of focus (while
+// keeping `opacity: 0` so WebKit suppresses native selection UI and zoom-to-focus per r238146).
+function focusInput(h) {
+    const field = h.field;
+    field.inert = false;
+    field.inputMode = 'text';
+    if (document.activeElement !== field) field.focus({ preventScroll: true });
+    reselect(h);
 }
 
 export function sync(h, key, text, base, anchor, focus, secure) {
@@ -754,8 +766,11 @@ export function sync(h, key, text, base, anchor, focus, secure) {
             h.selection = [start, end, direction];
         }
         if (editing && active !== h.field) activate(h);
-        else if (active === h.canvas) h.field.focus({ preventScroll: true });
-        reselect(h);
+        else if (active === h.canvas) focusInput(h);
+        else {
+            h.field.inputMode = 'text';
+            reselect(h);
+        }
         (secure ? h.textarea : h.password).inert = true;
     }
     h.syncing = false;
@@ -2132,10 +2147,8 @@ export function activate(h) {
     // A page's canvas is `tabindex="-1"`: focusing it on a tap would only drop the reader's text
     // selection or a link's focus. An input that took the keyboard still gets it.
     if (h.page && !h.key) return;
-    const field = h.key ? h.field : h.canvas;
-    if (h.key) field.inputMode = 'text';
-    if (document.activeElement !== field) field.focus({ preventScroll: true });
-    if (h.key) reselect(h);
+    if (h.key) focusInput(h);
+    else if (document.activeElement !== h.canvas) h.canvas.focus({ preventScroll: true });
 }
 
 // Browser `File` handles a paste or drop offered the focused field, by id, for

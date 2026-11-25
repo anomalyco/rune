@@ -180,7 +180,11 @@ impl Running {
         if reset {
             cancel_ime(&self.input.handle);
         }
-        if self.app.rt().web_context(&mut self.input.mirror) || reset {
+        // While a finger is still down, wait for the touch release (`TouchPhase::Ended`, which
+        // calls `sync_input(true)` inside the `touchend` gesture) instead of focusing the hidden
+        // input prematurely from a mid-tap `requestAnimationFrame` outside any user gesture.
+        let defer_touch_sync = !focus && self.app.rt().touching();
+        if !defer_touch_sync && (self.app.rt().web_context(&mut self.input.mirror) || reset) {
             let m = &self.input.mirror;
             sync(&self.input.handle, &m.key, &m.text, m.base, m.anchor, m.focus, m.secure);
         }
