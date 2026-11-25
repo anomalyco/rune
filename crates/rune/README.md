@@ -2131,7 +2131,11 @@ Hooks also hear a pasted image (a screenshot, an image copied from a browser or 
 (`size()`), whatever form the clipboard held it in. Rune fetches it only for a target with a
 hook (`on_input_paste`, `on_paste_content`, `read_clipboard`), so pasting text into other fields
 never decodes one, and leaves out images over `clipboard::MAX_IMAGE_BYTES` (32 MiB as PNG).
-An image alone, with no text, reaches only hooks. Copies don't write images yet. On the web,
+An image alone, with no text, reaches only hooks. To copy an image, as a browser's Copy Image
+does, `tx.copy_image(&image)` takes an `Image` an `ImageCache` decoded (any format it draws; an
+animation's first frame, an SVG at its intrinsic size) and encodes it as PNG on the clipboard
+worker, so the app decodes nothing twice. `ClipboardImage::from_rgba(w, h, &rgba)` encodes
+pixels the app holds, for `ClipboardContent::with_image`. On the web,
 hooks also hear files pasted into or dropped on the field as `content.web_files()`: up to
 `clipboard::MAX_WEB_FILES` `WebFile` handles with a name, type and size, no path, and nothing
 read until `WebFile::read(max)` (see WEB.md). A dropped PNG or text file is also the image or

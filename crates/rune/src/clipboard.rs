@@ -54,18 +54,34 @@ pub struct ClipboardWrite {
     content: ClipboardContent,
     clear_after: Option<Duration>,
     secret: Option<Arc<Unwritten>>,
+    /// A decoded image to copy, encoded as PNG where the write is carried out.
+    image: Option<crate::Image>,
 }
 impl ClipboardWrite {
     pub(crate) fn new(content: ClipboardContent) -> Self {
-        Self { content, clear_after: None, secret: None }
+        Self { content, clear_after: None, secret: None, image: None }
+    }
+    /// `Tx::copy_image`: the image alone, encoded off the event thread on native platforms.
+    pub(crate) fn image(image: crate::Image) -> Self {
+        Self { image: Some(image), ..Self::new(ClipboardContent::default()) }
+    }
+    /// Encodes the decoded image this write copies as PNG, into its content. False when it
+    /// has one it can't give (still decoding, failed, or too large): the write then leaves the
+    /// clipboard as it was.
+    fn encode_image(&mut self) -> bool {
+        let Some(image) = self.image.take() else { return true };
+        let Some(png) = image.to_rgba().and_then(|(w, h, rgba)| ClipboardImage::from_rgba(w, h, &rgba)) else { return false };
+        self.content = std::mem::take(&mut self.content).with_image(png);
+        true
     }
     /// Secrets are plain text only: no HTML or RTF copy of a password lingers.
     pub(crate) fn secret(text: String, clear_after: Duration) -> (Self, SecretCopy) {
         let slot = Arc::new(Slot::default());
-        let write = Self { content: ClipboardContent::new(text), clear_after: Some(clear_after), secret: Some(Arc::new(Unwritten(slot.clone()))) };
+        let write = Self { content: ClipboardContent::new(text), clear_after: Some(clear_after), secret: Some(Arc::new(Unwritten(slot.clone()))), image: None };
         (write, SecretCopy(slot))
     }
-    /// Everything this write puts on the clipboard.
+    /// Everything this write puts on the clipboard. A `Tx::copy_image` write has no image here
+    /// until it is carried out, when its PNG is encoded.
     pub fn content(&self) -> &ClipboardContent { &self.content }
     pub(crate) fn is_secret(&self) -> bool { self.clear_after.is_some() }
     fn slot(&self) -> Option<&Arc<Slot>> { self.secret.as_ref().map(|u| &u.0) }
@@ -427,7 +443,8 @@ impl Core {
         Some(reply)
     }
 
-    fn write<B: Backend>(&mut self, cb: &mut B, copy: ClipboardWrite, notify: Option<Notify>, steps: &dyn WriteSteps) {
+    fn write<B: Backend>(&mut self, cb: &mut B, mut copy: ClipboardWrite, notify: Option<Notify>, steps: &dyn WriteSteps) {
+        if !copy.encode_image() { return; }
         let slot = copy.slot().cloned();
         let notify = notify.filter(|_| slot.is_some());
         if slot.as_ref().is_some_and(|s| s.cancelled()) { return; } // `Unwritten` settles it as cleared.

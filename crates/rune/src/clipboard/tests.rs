@@ -189,6 +189,30 @@ fn rich_copies_carry_every_form_and_secrets_stay_plain() {
     assert_eq!(m.content(), None);
 }
 
+#[test]
+fn copy_image_writes_a_decoded_image_as_png_and_a_failed_one_leaves_the_clipboard_alone() {
+    use crate::{col, Cx, El, Env};
+    fn view(_: &u8, _: &mut Cx<u8>) -> El { col() }
+    let m = memory();
+    let mut rt = Runtime::new(0, view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let rgba: Vec<u8> = (0..12u8).flat_map(|i| [i * 20, 255 - i * 20, 7, 255]).collect();
+    let image = cache.rgba(4, 3, rgba.clone());
+    image.wait().unwrap();
+    rt.update(|_, tx| tx.copy_image(&image));
+    let copied = m.content().unwrap().image().cloned().unwrap();
+    assert_eq!(copied.size(), (4, 3));
+    assert_eq!(crate::image::png_rgba8(copied.png()).unwrap().into_raw(), rgba, "the PNG holds the decoded pixels");
+
+    let bad = cache.load(b"not an image".as_slice());
+    assert!(bad.wait().is_err());
+    let revision = m.revision();
+    rt.update(|_, tx| tx.copy_image(&bad));
+    assert_eq!((m.revision(), m.content().unwrap().image()), (revision, Some(&copied)), "nothing to copy, nothing written");
+}
+
 /// A plain paste leaves an empty clipboard alone; a read always answers.
 #[test]
 fn the_worker_answers_reads_with_sanitised_content() {
