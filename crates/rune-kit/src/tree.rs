@@ -9,19 +9,38 @@
 //! Return opens, and typing a name jumps to it. With [`TreeModel::multi_select`], Shift extends
 //! the selection and Cmd-A selects every row.
 //!
-//! ```ignore
-//! struct App { files: TreeModel<FileNode<Change>> }
+//! ```
+//! # use rune::{PointerPress, Tx};
+//! # use rune_kit::{FileNode, FileTree, Kit, Tree, TreeItem, TreeModel};
+//! # #[derive(Clone)] struct Change { path: String, added: u32, removed: u32 }
+//! # struct Diff;
+//! # impl Diff { fn show(&mut self, _: &str) {} }
+//! struct App {
+//!     files: TreeModel<FileNode<Change>>,
+//! #   diff: Diff,
+//! #   menu: Option<(String, PointerPress)>,
+//! }
+//! # let changes: Vec<Change> = Vec::new();
 //! let files = FileTree::new().build(changes.iter().map(|c| (c.path.as_str(), c.clone())));
+//! # let s = &App { files, diff: Diff, menu: None };
+//! # let kit = Kit::neutral(true);
 //! // In the view:
+//! # let _ =
 //! Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
-//!     .row(|n, r| TreeItem::file(n, r).changes(n.data.as_ref().map_or((0, 0), |c| (c.added, c.removed))))
+//!     .row(|n, r| {
+//!         let (added, removed) = n.data.as_ref().map_or((0, 0), |c| (c.added, c.removed));
+//!         TreeItem::file(n, r).changes(added, removed)
+//!     })
 //!     .on_select(|s: &mut App, id, _| s.diff.show(id))
 //!     .on_menu(|s: &mut App, id, point, _| s.menu = Some((id.to_owned(), point)))
 //!     .scroll_bar(true)
 //!     .build(s, &kit)
 //!     .h(480.0)
+//! # ;
+//! # fn _follow(s: &mut App, path: &str, tx: &mut Tx) {
 //! // Following another view: open the folders above `path`, select it and scroll to it.
 //! s.files.reveal(path, tx);
+//! # }
 //! ```
 
 use std::cmp::Ordering;

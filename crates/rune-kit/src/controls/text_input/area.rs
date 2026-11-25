@@ -76,12 +76,19 @@ impl TextArea {
     /// [`Self::max_height`] viewport) to bring the caret into view when the field gains focus
     /// ([`El::reveal_caret_on_focus`](rune::El::reveal_caret_on_focus)). Off by default (`false`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, TextArea};
+    /// # struct App { notes: TextEdit }
+    /// # let s = App { notes: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextArea::new(&s.notes)
     ///     .max_height(120.0)
     ///     .reveal_caret_on_focus(true)
     ///     .on_edit(|s: &mut App| &mut s.notes)
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn reveal_caret_on_focus(mut self, on: bool) -> Self {
         self.edits.visual(move |e| e.reveal_caret_on_focus(on));
@@ -258,8 +265,15 @@ impl TextArea {
     /// Undo/Redo, IME, and spellcheck edits. Pair with [`Self::on_edit`] so the runtime can
     /// move the caret and selection in your [`TextEdit`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, TextArea};
+    /// # struct App { preview: TextEdit }
+    /// # let s = App { preview: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextArea::new(&s.preview).read_only(true).on_edit(|s: &mut App| &mut s.preview).build(&k)
+    /// # ;
     /// ```
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;

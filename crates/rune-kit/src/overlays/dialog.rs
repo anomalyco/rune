@@ -38,7 +38,12 @@ impl Dialog {
     /// The accessible name for the header's close button (the web's `aria-label`), `"Close"` by
     /// default. Accessibility-only (not drawn); blank values fall back to `"Close"`.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Dialog, Kit};
+    /// # struct App { open: bool }
+    /// # let s = App { open: true };
+    /// # let kit = Kit::neutral(true);
+    /// # let mut layer = Vec::new();
     /// Dialog::new("confirm", "Confirmer")
     ///     .open(s.open)
     ///     .close_label("Fermer")
@@ -51,7 +56,12 @@ impl Dialog {
     /// and Escape and outside clicks are ignored. Without [`Self::on_close`], the close button
     /// stays omitted and dismissal remains disabled.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Dialog, Kit};
+    /// # struct App { open: bool, saving: bool }
+    /// # let s = App { open: true, saving: true };
+    /// # let kit = Kit::neutral(true);
+    /// # let mut layer = Vec::new();
     /// Dialog::new("save", "Saving changes")
     ///     .open(s.open)
     ///     .close_disabled(s.saving)
