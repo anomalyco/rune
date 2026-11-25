@@ -1,0 +1,1 @@
+- Overlays: `OverlayCore::hide_window` discards a `Shell::Close` queued by its own `on_focus(false)` blur, so a launcher overlay that closes on focus loss no longer aborts a fade-out or re-hides when the native blur arrives.

@@ -304,7 +304,14 @@ impl OverlayCore {
         // and a hidden overlay hears none. A focused one blurs here, so `on_focus(false)` runs
         // and the next show's focus is a change; what it held is released.
         if self.options.keys.takes_keys() {
-            if app.rt().window_has_focus() { app.window_focus(false); }
+            if app.rt().window_has_focus() {
+                app.window_focus(false);
+                // The overlay is already hiding: discard a close request from `on_focus(false)` so
+                // a fade-out's native blur (or the next show's focus event) cannot hide it again.
+                if matches!(app.rt().shell_request, Some(crate::el::Shell::Close)) {
+                    app.rt_mut().shell_request = None;
+                }
+            }
             app.rt_mut().keys_lost();
         }
         self.mods = Default::default();
