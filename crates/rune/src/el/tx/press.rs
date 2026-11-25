@@ -38,6 +38,36 @@ impl Tx {
     /// ```
     pub fn press_point(&self) -> Option<crate::PointerEvent> { self.press_point }
 
+    /// In [`El::on_link`](crate::El::on_link) (including `rune_kit::Markdown::on_link_tx`):
+    /// the activated link's first drawn line box `[left, top, width, height]` in window points,
+    /// after scrolling and transforms. Works identically for a pointer click (primary, middle,
+    /// or touch tap), keyboard activation (Enter or Space on a focused link), and
+    /// assistive-technology activation. `None` in every other handler and when the link was not
+    /// drawn this frame (for example, truncated away or before the first frame).
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Link, Runtime, col, text};
+    /// # #[derive(Default)] struct S { opened: Option<(String, Option<[f32; 4]>)> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// col().size(240.0, 80.0).child(
+    ///     text("Open the docs").link(Link::new(9..13, "docs")).on_link(|s: &mut S, id, tx| {
+    ///         s.opened = Some((id.to_owned(), tx.link_rect()));
+    ///     }),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S::default(), view, (240.0, 80.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # let (x, y) = rt.find("docs").unwrap();
+    /// # rt.pointer_down(x, y);
+    /// # rt.pointer_up(x, y);
+    /// # rt.frame(0.0);
+    /// # let (id, rect) = rt.state.opened.as_ref().unwrap();
+    /// # assert_eq!(id, "docs");
+    /// # let r = rect.unwrap();
+    /// # assert!(r[2] > 0.0 && r[3] > 0.0);
+    /// ```
+    pub fn link_rect(&self) -> Option<[f32; 4]> { self.link_rect }
+
     /// From a drag handler: while this press stays held, send the handler the pointer again as
     /// a [`Phase::Move`](crate::Phase::Move) after `delay`, moved or not. [`Tx::drag_repeat`]
     /// tells that move from the hand's. Ask again from the repeat, with the repeat interval, to

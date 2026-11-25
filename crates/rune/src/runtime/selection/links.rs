@@ -420,14 +420,29 @@ impl RuntimeCore {
         }
     }
 
+    /// First drawn line box `[left, top, width, height]` in window points for link `k` of node `i`,
+    /// or `None` when node `i` was not drawn this frame or the link has no drawn line box.
+    pub(in crate::runtime) fn link_first_rect(&self, i: usize, k: usize) -> Option<[f32; 4]> {
+        if self.paint.drawn.len() != self.tree.nodes.len() { return None; }
+        let d = self.paint.drawn.get(i).copied().filter(|d| d[2] > 0.0 || d[3] > 0.0)?;
+        let (_, r) = self.link_boxes_for(i, k, [d[0], d[1], d[0] + d[2], d[1] + d[3]]).into_iter().next()?;
+        let scroll_x = self.tree.nodes[i].input.as_deref().filter(|inp| inp.single_line).map_or(0.0, |_| {
+            let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+            self.edit.input_scroll.get(&self.tree.nodes[i].path).copied().unwrap_or(0.0) * z
+        });
+        Some([r[0] - scroll_x, r[1], (r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0)])
+    }
+
     /// Runs the `on_link` handler of node `path` for link `k`.
     pub(in crate::runtime) fn press_link(&mut self, app: &mut dyn AppDriver, path: &str, k: usize, tx: &mut Tx) -> bool {
-        let Some((f, id)) = self.node(path).and_then(|n| {
-            let t = n.text.as_ref()?;
-            Some((t.cold.on_link.clone()?, t.cold.links.get(k)?.id.clone()))
+        let Some((i, f, id)) = self.node_index(path).and_then(|i| {
+            let t = self.tree.nodes[i].text.as_ref()?;
+            Some((i, t.cold.on_link.clone()?, t.cold.links.get(k)?.id.clone()))
         }) else { return false };
+        let prev = std::mem::replace(&mut tx.link_rect, self.link_first_rect(i, k));
         log_event!(self, "link {path} {id}");
         (f.0)(app.states(), &id, tx);
+        tx.link_rect = prev;
         true
     }
 
@@ -739,3 +754,7 @@ mod tests;
 #[cfg(test)]
 #[path = "pill_hit_tests.rs"]
 mod pill_hit_tests;
+
+#[cfg(test)]
+#[path = "link_rect_tests.rs"]
+mod link_rect_tests;
