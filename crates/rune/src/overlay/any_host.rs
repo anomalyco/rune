@@ -163,6 +163,27 @@ impl AnyHost for OverlayHost {
         }
     }
 
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    fn on_material_policy_changed(&mut self) {
+        let contrast = crate::platform::preferences::contrast();
+        let mut effects = crate::system_material::windows::current_policy();
+        effects.high_contrast |= contrast.is_some();
+        self.app.rt_mut().set_system_contrast(contrast);
+        if let Some(live) = self.core.surface.live_mut() {
+            let redraw = live.materials.on_policy_changed(effects, live.handover.as_mut());
+            let now_native = live.materials.native();
+            self.app.rt_mut().paint.set_native_materials(now_native);
+            if redraw || self.app.rt().stale() {
+                self.core.dirty = true;
+                if self.core.presence.shown()
+                    && let Some(w) = live.backing.window()
+                {
+                    w.request_redraw();
+                }
+            }
+        }
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         self.core.meter.waited();
         #[cfg(target_os = "windows")]

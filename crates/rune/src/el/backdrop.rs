@@ -10,8 +10,12 @@ impl El {
     /// - **macOS & Windows**: native on macOS in transparent windows (`NSGlassEffectView` /
     ///   `NSVisualEffectView`), and on Windows 11 Build 22000+ transparent DirectComposition
     ///   windows and overlays when the off-by-default `windows-system-material` Cargo feature is
-    ///   enabled. On Windows and macOS the native material sits behind the element, replaces its
-    ///   fill, ignores ancestor clips, and punches a hole inside the node's outer shadows.
+    ///   enabled and the system permits effects (Transparency effects enabled, Battery/Energy Saver
+    ///   off, composition effects supported/fast, High Contrast off, and not in a Remote Desktop
+    ///   session). Whenever the system will not draw the material, Rune tears down native visuals
+    ///   and draws the element's fallback fill instead. On Windows and macOS the native material
+    ///   sits behind the element, replaces its fill, ignores ancestor clips, and punches a hole
+    ///   inside the node's outer shadows.
     /// - **Linux Wayland**: active on transparent GPU windows and overlays (`zwlr_layer_shell_v1`
     ///   and toplevel fallbacks) when [`WindowBackdrop::None`](crate::WindowBackdrop::None) is
     ///   active and the compositor advertises `ext_background_effect_v1` (`Capability::Blur`) or

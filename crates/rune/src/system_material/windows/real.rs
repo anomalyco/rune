@@ -19,7 +19,10 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
 use windows::core::{HRESULT, Interface};
 
-use super::{ClipKind, Controller, MaterialInputs, State, TintMode, VisualSpec, WindowsMaterialSeam};
+use super::{
+    ClipKind, Controller, EffectsPolicy, MaterialInputs, State, TintMode, VisualSpec,
+    WindowsMaterialSeam,
+};
 use crate::platform::win32::dcomp_handover::Handover;
 use crate::system_material::{MaterialDraw, Mode};
 
@@ -472,6 +475,16 @@ impl Materials {
         }
         let mut seam = RealSeam { target: &mut self.target, handover };
         self.controller.sync_before_present(draws, dark, &mut seam)
+    }
+
+    /// Handles an OS system-effects policy change event. Returns `true` if the host should redraw.
+    pub(crate) fn on_policy_changed(
+        &mut self,
+        policy: EffectsPolicy,
+        handover: Option<&mut Handover>,
+    ) -> bool {
+        let mut seam = RealSeam { target: &mut self.target, handover };
+        self.controller.on_policy_changed(policy, &mut seam)
     }
 
     /// Cleanly tears down active visuals and returns `Handover` to `topmost = false`.

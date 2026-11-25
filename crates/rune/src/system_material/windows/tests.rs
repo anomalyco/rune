@@ -14,6 +14,7 @@ fn base_inputs() -> MaterialInputs {
         window_backdrop: WindowBackdrop::None,
         mode: Mode::Synced,
         has_handover: true,
+        effects: EffectsPolicy::ENABLED,
     }
 }
 
@@ -160,6 +161,11 @@ fn eligibility_matrix_requires_all_preconditions() {
     assert!(!eligible(MaterialInputs { window_backdrop: WindowBackdrop::Acrylic, ..ok }), "active Acrylic rejected");
     assert!(!eligible(MaterialInputs { mode: Mode::Off, ..ok }), "RUNE_SYSTEM_MATERIAL=off rejected");
     assert!(!eligible(MaterialInputs { has_handover: false, ..ok }), "missing Handover rejected");
+    assert!(!eligible(MaterialInputs { effects: EffectsPolicy { advanced_effects: false, ..EffectsPolicy::ENABLED }, ..ok }), "Transparency effects off rejected");
+    assert!(!eligible(MaterialInputs { effects: EffectsPolicy { energy_saver: true, ..EffectsPolicy::ENABLED }, ..ok }), "Battery/Energy Saver on rejected");
+    assert!(!eligible(MaterialInputs { effects: EffectsPolicy { composition_effects: false, ..EffectsPolicy::ENABLED }, ..ok }), "unsupported/slow CompositionCapabilities rejected");
+    assert!(!eligible(MaterialInputs { effects: EffectsPolicy { high_contrast: true, ..EffectsPolicy::ENABLED }, ..ok }), "High Contrast rejected");
+    assert!(!eligible(MaterialInputs { effects: EffectsPolicy { remote_session: true, ..EffectsPolicy::ENABLED }, ..ok }), "Remote Desktop session rejected");
 }
 
 #[test]
@@ -514,4 +520,242 @@ fn cpu_renderer_overlay_refuses_windows_system_material_and_stays_idle() {
     assert_eq!(ctrl.state(), State::Idle);
     assert!(!ctrl.native());
     assert!(seam.calls.is_empty(), "CPU overlay must make zero DWM/Composition calls");
+}
+
+#[test]
+fn effects_off_at_start_never_activates_and_draws_fallback_fill() {
+    use crate::{Color, Env, Runtime, el};
+
+    const FALLBACK: Color = Color { r: 0.12, g: 0.12, b: 0.14, a: 0.92 };
+    fn view(_: &(), _: &mut crate::Cx<()>) -> crate::El {
+        el().key("pill")
+            .size(220.0, 48.0)
+            .radius(24.0)
+            .fill(FALLBACK)
+            .system_material(SystemMaterial::Popover)
+    }
+
+    let disabled_policies = [
+        EffectsPolicy { advanced_effects: false, ..EffectsPolicy::ENABLED },
+        EffectsPolicy { energy_saver: true, ..EffectsPolicy::ENABLED },
+        EffectsPolicy { composition_effects: false, ..EffectsPolicy::ENABLED },
+        EffectsPolicy { high_contrast: true, ..EffectsPolicy::ENABLED },
+        EffectsPolicy { remote_session: true, ..EffectsPolicy::ENABLED },
+    ];
+
+    for (idx, off_policy) in disabled_policies.into_iter().enumerate() {
+        let hwnd = 0x9000 + idx as isize;
+        let mut rt = Runtime::new((), view, (400.0, 120.0), Env::new(true, 1.0));
+        let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+        let mut seam = FakeSeam::default();
+
+        // Frame 1 starts with native_materials = false (fallback fill drawn).
+        rt.paint.set_native_materials(ctrl.native());
+        rt.frame(0.0);
+        let found = !rt.system_materials().is_empty();
+        assert!(found, "material draw is still collected while fallback is active");
+
+        let inputs = MaterialInputs { effects: off_policy, ..base_inputs() };
+        assert!(!ctrl.update(Some(hwnd), inputs, found, &mut seam));
+        assert!(!ctrl.native(), "must stay non-native when effects policy is {off_policy:?}");
+        assert_eq!(ctrl.state(), State::Idle);
+        assert!(seam.calls.is_empty(), "zero DWM/Composition calls when effects are off at start");
+        assert!(
+            rt.instances.iter().any(|inst| inst.fill[3] > 0.5),
+            "Frame 1 must paint the fallback fill (never a black/empty frame) for {off_policy:?}",
+        );
+
+        // When system effects return, PolicyChanged requests a redraw and the next frame activates.
+        assert!(ctrl.on_policy_changed(EffectsPolicy::ENABLED, &mut seam));
+        assert!(seam.calls.is_empty(), "Idle -> PolicyChanged(enabled) only asks for redraw");
+        assert!(ctrl.update(Some(hwnd), base_inputs(), found, &mut seam));
+        assert!(ctrl.native());
+        assert_eq!(ctrl.state(), State::Active { hwnd });
+        assert_eq!(seam.calls, vec![
+            Call::SetHandoverTopmost(hwnd, true),
+            Call::CreateTarget(hwnd),
+            Call::SetHostBackdropBrush(hwnd, true),
+        ]);
+        // Rebuilt frame with native_materials = true omits the fallback fill.
+        rt.paint.set_native_materials(ctrl.native());
+        rt.frame(0.0);
+        assert!(
+            rt.instances.iter().all(|inst| inst.fill[3] == 0.0),
+            "active native material frame omits fallback fill",
+        );
+    }
+}
+
+#[test]
+fn effects_disabled_while_mounted_tears_down_and_repaints_fallback_then_reactivates() {
+    use crate::{Color, Env, Runtime, el};
+
+    const FALLBACK: Color = Color { r: 0.12, g: 0.12, b: 0.14, a: 0.92 };
+    fn view(_: &(), _: &mut crate::Cx<()>) -> crate::El {
+        el().key("pill")
+            .size(220.0, 48.0)
+            .radius(24.0)
+            .fill(FALLBACK)
+            .system_material(SystemMaterial::Popover)
+    }
+    let hwnd = 0xA001;
+    let mut rt = Runtime::new((), view, (400.0, 120.0), Env::new(true, 1.0));
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut seam = FakeSeam::default();
+
+    // Activate on Frame 1 when effects are enabled.
+    rt.frame(0.0);
+    assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
+    rt.paint.set_native_materials(ctrl.native());
+    rt.frame(0.0);
+    assert!(ctrl.sync_before_present(rt.system_materials(), true, &mut seam));
+    assert!(rt.instances.iter().all(|inst| inst.fill[3] == 0.0));
+    seam.calls.clear();
+
+    // Path A: Transparency effects turned off via PolicyChanged event while Active ->
+    // tears down immediately in strict order and requests a redraw with fallback fill.
+    let transparency_off = EffectsPolicy { advanced_effects: false, ..EffectsPolicy::ENABLED };
+    assert!(ctrl.on_policy_changed(transparency_off, &mut seam));
+    assert!(!ctrl.native());
+    assert_eq!(ctrl.state(), State::Idle);
+    assert_eq!(seam.calls, vec![
+        Call::DestroyTarget,
+        Call::SetHostBackdropBrush(hwnd, false),
+        Call::SetHandoverTopmost(hwnd, false),
+    ]);
+    assert!(!seam.handover_topmost);
+    assert!(!seam.target_open);
+    seam.calls.clear();
+
+    // Redraw paints fallback fill and makes zero seam calls while still off.
+    rt.paint.set_native_materials(ctrl.native());
+    rt.frame(0.0);
+    assert!(rt.instances.iter().any(|inst| inst.fill[3] > 0.5), "fallback fill must draw");
+    let off_inputs = MaterialInputs { effects: transparency_off, ..base_inputs() };
+    assert!(!ctrl.update(Some(hwnd), off_inputs, true, &mut seam));
+    assert!(seam.calls.is_empty());
+
+    // Transparency effects come back -> PolicyChanged asks for redraw, next frame re-activates.
+    assert!(ctrl.on_policy_changed(EffectsPolicy::ENABLED, &mut seam));
+    assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
+    assert!(ctrl.native());
+    assert_eq!(ctrl.state(), State::Active { hwnd });
+    seam.calls.clear();
+
+    // Path B: Battery/Energy Saver turns on right before a frame's eligibility check (in-frame) ->
+    // update() tears down and returns true so the host rebuilds fallback fill in the same frame.
+    let energy_saver_on = MaterialInputs {
+        effects: EffectsPolicy { energy_saver: true, ..EffectsPolicy::ENABLED },
+        ..base_inputs()
+    };
+    assert!(ctrl.update(Some(hwnd), energy_saver_on, true, &mut seam));
+    assert!(!ctrl.native());
+    assert_eq!(ctrl.state(), State::Idle);
+    assert_eq!(seam.calls, vec![
+        Call::DestroyTarget,
+        Call::SetHostBackdropBrush(hwnd, false),
+        Call::SetHandoverTopmost(hwnd, false),
+    ]);
+    rt.paint.set_native_materials(ctrl.native());
+    rt.frame(0.0);
+    assert!(rt.instances.iter().any(|inst| inst.fill[3] > 0.5), "same-frame rebuild draws fallback fill");
+}
+
+#[test]
+fn policy_changed_is_noop_without_mounted_materials_or_when_failed() {
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut seam = FakeSeam::default();
+
+    // Window with no material elements never redraws or touches the seam on policy changes.
+    assert!(!ctrl.update(Some(0xB001), base_inputs(), false, &mut seam));
+    assert!(!ctrl.on_policy_changed(EffectsPolicy { energy_saver: true, ..EffectsPolicy::ENABLED }, &mut seam));
+    assert!(!ctrl.on_policy_changed(EffectsPolicy::ENABLED, &mut seam));
+    assert!(seam.calls.is_empty());
+
+    // Failed latch stays latched across policy changes on the same HWND.
+    let mut seam_fail = FakeSeam::failing(FailAt::CreateTarget);
+    assert!(!ctrl.update(Some(0xB002), base_inputs(), true, &mut seam_fail));
+    assert_eq!(ctrl.state(), State::Failed { hwnd: 0xB002 });
+    seam_fail.calls.clear();
+    assert!(!ctrl.on_policy_changed(EffectsPolicy { advanced_effects: false, ..EffectsPolicy::ENABLED }, &mut seam_fail));
+    assert!(!ctrl.on_policy_changed(EffectsPolicy::ENABLED, &mut seam_fail));
+    assert_eq!(ctrl.state(), State::Failed { hwnd: 0xB002 });
+    assert!(seam_fail.calls.is_empty());
+}
+
+#[test]
+fn power_setting_payload_parser_decodes_legacy_and_24h2_energy_saver_guids() {
+    assert_eq!(
+        parse_power_setting(GUID_POWER_SAVING_STATUS_PARTS, &0u32.to_le_bytes()),
+        Some(PowerSettingUpdate::PowerSaving(false)),
+    );
+    assert_eq!(
+        parse_power_setting(GUID_POWER_SAVING_STATUS_PARTS, &1u32.to_le_bytes()),
+        Some(PowerSettingUpdate::PowerSaving(true)),
+    );
+    // Windows 11 24H2+ GUID_ENERGY_SAVER_STATUS: 0 = Off, 1 = Standard, 2 = High Savings.
+    assert_eq!(
+        parse_power_setting(GUID_ENERGY_SAVER_STATUS_PARTS, &0u32.to_le_bytes()),
+        Some(PowerSettingUpdate::EnergySaver(false)),
+    );
+    assert_eq!(
+        parse_power_setting(GUID_ENERGY_SAVER_STATUS_PARTS, &1u32.to_le_bytes()),
+        Some(PowerSettingUpdate::EnergySaver(true)),
+    );
+    assert_eq!(
+        parse_power_setting(GUID_ENERGY_SAVER_STATUS_PARTS, &2u32.to_le_bytes()),
+        Some(PowerSettingUpdate::EnergySaver(true)),
+    );
+    // Unknown GUIDs and truncated payloads are ignored safely.
+    assert_eq!(parse_power_setting((0, 0, 0, [0; 8]), &1u32.to_le_bytes()), None);
+    assert_eq!(parse_power_setting(GUID_ENERGY_SAVER_STATUS_PARTS, &[1, 0, 0]), None);
+    assert_eq!(parse_power_setting(GUID_POWER_SAVING_STATUS_PARTS, &[]), None);
+}
+
+#[test]
+fn pure_step_state_machine_covers_policy_and_lifecycle_events() {
+    let hwnd = 0xC001;
+    let mut state = State::Idle;
+    let off = EffectsPolicy { advanced_effects: false, ..EffectsPolicy::ENABLED };
+
+    // Idle + PolicyChanged(off) -> no effects.
+    assert_eq!(step(&mut state, Event::PolicyChanged { policy: off, had_materials: true }), Effects::none());
+    assert_eq!(state, State::Idle);
+
+    // Idle + PolicyChanged(enabled) with mounted materials -> RequestRedraw.
+    assert_eq!(
+        step(&mut state, Event::PolicyChanged { policy: EffectsPolicy::ENABLED, had_materials: true }),
+        Effects::one(Effect::RequestRedraw),
+    );
+    assert_eq!(state, State::Idle);
+
+    // Idle + eligible Frame -> Active + [Activate, RebuildFrame].
+    assert_eq!(
+        step(&mut state, Event::Frame { hwnd: Some(hwnd), inputs: base_inputs(), found: true }),
+        Effects::two(Effect::Activate { hwnd }, Effect::RebuildFrame),
+    );
+    assert_eq!(state, State::Active { hwnd });
+
+    // Active + PolicyChanged(off) -> Idle + [Teardown, RequestRedraw].
+    assert_eq!(
+        step(&mut state, Event::PolicyChanged { policy: off, had_materials: true }),
+        Effects::two(Effect::Teardown { hwnd }, Effect::RequestRedraw),
+    );
+    assert_eq!(state, State::Idle);
+
+    // Distinct policy bitmasks for change deduplication.
+    assert_ne!(EffectsPolicy::ENABLED.bits(), off.bits());
+    assert_ne!(
+        EffectsPolicy::ENABLED.bits(),
+        EffectsPolicy { energy_saver: true, ..EffectsPolicy::ENABLED }.bits(),
+    );
+}
+
+#[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+#[test]
+fn real_policy_watcher_reads_and_refreshes_without_window() {
+    let first = current_policy();
+    notify_wm_setting_change();
+    let second = current_policy();
+    assert_eq!(first, second, "steady host policy snapshot is stable across WM_SETTINGCHANGE refresh");
 }

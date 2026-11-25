@@ -297,7 +297,12 @@ impl FrameHost for OverlayFrame<'_> {
             let device_type = self.core.gpu.as_ref().map(|gpu| gpu.adapter.get_info().device_type);
             let window_backdrop = self.app.rt().window_backdrop();
             let found = !self.app.rt().paint.materials().is_empty();
-            if let Some(live) = self.core.surface.live_mut() {
+            let high_contrast = self.app.rt().system_contrast().is_some();
+            if let Some(live) = self.core.surface.live_mut()
+                && (found || live.materials.native())
+            {
+                let mut effects = crate::system_material::windows::current_policy();
+                effects.high_contrast |= high_contrast;
                 let hwnd = live.backing.window().and_then(|w| crate::platform::win32::hwnd(w)).map(|h| h as isize);
                 let inputs = crate::system_material::windows::MaterialInputs {
                     transparent: true,
@@ -310,6 +315,7 @@ impl FrameHost for OverlayFrame<'_> {
                     window_backdrop,
                     mode: live.materials.mode(),
                     has_handover: live.handover.is_some(),
+                    effects,
                 };
                 if live.materials.update(hwnd, inputs, found, live.handover.as_mut()) {
                     return PostStepCheck::Reacquire(ReacquireReason::NativeMaterials);

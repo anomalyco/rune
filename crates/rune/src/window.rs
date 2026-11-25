@@ -223,6 +223,11 @@ pub(crate) enum WakeEvent {
     /// wakes the immediate next turn so `about_to_wait` drains it without entering `ControlFlow::Poll`.
     #[cfg(not(target_arch = "wasm32"))]
     LayerPending,
+    /// Windows: system effects policy changed (Transparency effects, Energy/Battery Saver,
+    /// `CompositionCapabilities`, High Contrast, or Remote Desktop); every host reconciles
+    /// `El::system_material` native vs fallback state.
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    MaterialPolicyChanged,
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -285,6 +290,10 @@ pub(crate) trait AnyHost {
     /// Syncs this host's native window theme with the current process-wide `app_color_scheme()`.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     fn apply_app_color_scheme(&mut self) {}
+    /// Windows: reconciles `El::system_material` native vs fallback state after a system effects
+    /// policy notification.
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    fn on_material_policy_changed(&mut self) {}
 }
 
 /// Collects startup creation errors from finished hosts and returns whether any loop-keeping host
@@ -540,6 +549,13 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 let proxy = this.proxy.clone();
                 crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
             }
+            #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+            {
+                let proxy = this.proxy.clone();
+                crate::system_material::windows::set_policy_waker(std::sync::Arc::new(move || {
+                    proxy.send_event(WakeEvent::MaterialPolicyChanged).ok();
+                }));
+            }
             app_events::install_quit(&this.hosts, &this.proxy);
             crate::open_url::incoming::settle();
             // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
@@ -576,6 +592,13 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 }
                 WakeEvent::LayerPending => {
                     let _ = wayland_wake::step(&mut this.wayland_wake, wayland_wake::Event::WakeReceived);
+                    return;
+                }
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                WakeEvent::MaterialPolicyChanged => {
+                    for host in this.hosts.iter_mut().flatten() {
+                        host.on_material_policy_changed();
+                    }
                     return;
                 }
             };

@@ -13,10 +13,105 @@
 //!   or `CompositionGeometricClip` + `CompositionRoundedRectangleGeometry` (`RUNE_WIN_MATERIAL_CLIP=geo`)
 
 use super::{MAX_NATIVE_MATERIALS_CAP, MaterialDraw, Mode, SystemMaterial, assign};
+use crate::machine::Effects;
 use rune_motion::NodeId;
 
 /// Minimum Windows 11 build that documents `DWMWA_USE_HOSTBACKDROPBRUSH` (`dwmapi.h`).
 pub(crate) const MIN_HOST_BACKDROP_BUILD: u32 = 22000;
+
+/// `GUID_POWER_SAVING_STATUS` (`{E00958C0-C213-4ACE-AC77-FECCED2EEEA5}`, WinNT.h):
+/// legacy Battery Saver state (`DWORD`: 0 = off, 1 = on).
+pub(crate) const GUID_POWER_SAVING_STATUS_PARTS: (u32, u16, u16, [u8; 8]) =
+    (0xE009_58C0, 0xC213, 0x4ACE, [0xAC, 0x77, 0xFE, 0xCC, 0xED, 0x2E, 0xEE, 0xA5]);
+
+/// `GUID_ENERGY_SAVER_STATUS` (`{550E8400-E29B-41D4-A716-446655440000}`, WinNT.h, Windows 11 24H2+):
+/// three-state Energy Saver mode (`DWORD`: 0 = `ENERGY_SAVER_OFF`, 1 = `ENERGY_SAVER_STANDARD`,
+/// 2 = `ENERGY_SAVER_HIGH_SAVINGS`).
+pub(crate) const GUID_ENERGY_SAVER_STATUS_PARTS: (u32, u16, u16, [u8; 8]) =
+    (0x550E_8400, 0xE29B, 0x41D4, [0xA7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x00]);
+
+/// Decoded power-setting notification payload from `PowerSettingRegisterNotification`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PowerSettingUpdate {
+    /// `GUID_POWER_SAVING_STATUS`: `true` when Battery Saver is active.
+    PowerSaving(bool),
+    /// `GUID_ENERGY_SAVER_STATUS`: `true` when Standard or High Savings Energy Saver is active.
+    EnergySaver(bool),
+}
+
+/// Pure parser for `POWERBROADCAST_SETTING` payloads delivered by `PowerSettingRegisterNotification`.
+pub(crate) fn parse_power_setting(
+    guid: (u32, u16, u16, [u8; 8]),
+    data: &[u8],
+) -> Option<PowerSettingUpdate> {
+    if data.len() < 4 {
+        return None;
+    }
+    let value = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    if guid == GUID_POWER_SAVING_STATUS_PARTS {
+        Some(PowerSettingUpdate::PowerSaving(value != 0))
+    } else if guid == GUID_ENERGY_SAVER_STATUS_PARTS {
+        // ENERGY_SAVER_OFF == 0; ENERGY_SAVER_STANDARD == 1, ENERGY_SAVER_HIGH_SAVINGS == 2.
+        Some(PowerSettingUpdate::EnergySaver(value != 0))
+    } else {
+        None
+    }
+}
+
+/// System-level Windows policy facts that decide whether DWM will actually draw
+/// `HostBackdropBrush` rather than a solid black rectangle.
+///
+/// Mirrors Microsoft's documented Acrylic / `HostBackdropBrush` fallback conditions:
+/// - `advanced_effects`: `Windows.UI.ViewManagement.UISettings::AdvancedEffectsEnabled`
+///   (Settings -> Personalization -> Colors / Accessibility -> Visual effects -> Transparency effects;
+///   also re-read on `WM_SETTINGCHANGE`).
+/// - `energy_saver`: `true` while Battery Saver or Windows 11 24H2+ Energy Saver (Standard or
+///   High Savings) is active (`GUID_POWER_SAVING_STATUS` / `GUID_ENERGY_SAVER_STATUS` via
+///   `PowerSettingRegisterNotification`, seeded from `GetSystemPowerStatus().SystemStatusFlag`).
+/// - `composition_effects`: `Windows.UI.Composition.CompositionCapabilities`
+///   (`AreEffectsSupported() && AreEffectsFast()`, or `true` when unavailable on a non-CoreWindow
+///   desktop thread so GPU adapter checks remain authoritative).
+/// - `high_contrast`: `SystemParametersInfoW(SPI_GETHIGHCONTRAST)` (`HCF_HIGHCONTRASTON`).
+/// - `remote_session`: `GetSystemMetrics(SM_REMOTESESSION) != 0`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EffectsPolicy {
+    pub advanced_effects: bool,
+    pub energy_saver: bool,
+    pub composition_effects: bool,
+    pub high_contrast: bool,
+    pub remote_session: bool,
+}
+
+impl EffectsPolicy {
+    /// All system conditions allowing DWM host backdrop blur.
+    #[cfg(test)]
+    pub(crate) const ENABLED: Self = Self {
+        advanced_effects: true,
+        energy_saver: false,
+        composition_effects: true,
+        high_contrast: false,
+        remote_session: false,
+    };
+
+    /// Whether the Windows system policy permits `HostBackdropBrush` to render blur.
+    pub(crate) const fn allows_blur(self) -> bool {
+        self.advanced_effects
+            && !self.energy_saver
+            && self.composition_effects
+            && !self.high_contrast
+            && !self.remote_session
+    }
+
+    /// Compact bitmask encoding for change deduplication across event sources.
+    #[cfg_attr(not(any(test, all(target_os = "windows", feature = "windows-system-material"))), allow(dead_code))]
+    pub(crate) const fn bits(self) -> u8 {
+        (self.advanced_effects as u8)
+            | ((self.energy_saver as u8) << 1)
+            | ((self.composition_effects as u8) << 2)
+            | ((self.high_contrast as u8) << 3)
+            | ((self.remote_session as u8) << 4)
+    }
+}
 
 /// All runtime facts that decide whether Windows 11 per-element behind-window blur may activate
 /// on a window or overlay.
@@ -44,6 +139,9 @@ pub(crate) struct MaterialInputs {
     pub mode: Mode,
     /// Whether the window or overlay holds a live Rune-owned DirectComposition `Handover`.
     pub has_handover: bool,
+    /// Live Windows effects policy (Transparency effects, Energy/Battery Saver,
+    /// `CompositionCapabilities`, High Contrast, Remote Desktop).
+    pub effects: EffectsPolicy,
 }
 
 /// Pure eligibility rule for Windows 11 `El::system_material`.
@@ -57,7 +155,8 @@ pub(crate) struct MaterialInputs {
 /// 6. a hardware/non-CPU GPU adapter is attached (`device_type != DeviceType::Cpu`, excluding WARP);
 /// 7. no whole-window `WindowBackdrop` is active (mutually exclusive with `DWMWA_SYSTEMBACKDROP_TYPE`);
 /// 8. `RUNE_SYSTEM_MATERIAL` is not `off`;
-/// 9. the window or overlay holds a live DirectComposition `Handover`.
+/// 9. the window or overlay holds a live DirectComposition `Handover`;
+/// 10. Windows system effects policy permits host backdrop blur (`effects.allows_blur()`).
 pub(crate) const fn eligible(inputs: MaterialInputs) -> bool {
     if !inputs.transparent {
         return false;
@@ -84,6 +183,9 @@ pub(crate) const fn eligible(inputs: MaterialInputs) -> bool {
         return false;
     }
     if matches!(inputs.mode, Mode::Off) {
+        return false;
+    }
+    if !inputs.effects.allows_blur() {
         return false;
     }
     inputs.has_handover
@@ -210,6 +312,101 @@ pub(crate) enum State {
     Failed { hwnd: isize },
 }
 
+/// Lifecycle events for the Windows system-material host state machine.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Event {
+    /// A frame finished layout/paint and evaluated material eligibility.
+    Frame {
+        hwnd: Option<isize>,
+        inputs: MaterialInputs,
+        found: bool,
+    },
+    /// The OS system effects policy changed (Transparency effects, Energy/Battery Saver,
+    /// `CompositionCapabilities`, High Contrast, or Remote Desktop session).
+    PolicyChanged {
+        policy: EffectsPolicy,
+        had_materials: bool,
+    },
+    /// Activation failed on `hwnd`: latch failed for this HWND and rebuild fallback if mounted.
+    ActivationFailed {
+        hwnd: isize,
+        found: bool,
+    },
+    /// GPU device loss: tear down active visuals and clear any failure latch.
+    DeviceLoss,
+    /// Window or overlay teardown on close.
+    Teardown,
+}
+
+/// Side effects emitted by [`step`] for the controller / seam to execute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Effect {
+    /// Activate `Handover(topmost = true)` -> `DesktopWindowTarget(false)` -> `DWMWA_USE_HOSTBACKDROPBRUSH`.
+    Activate { hwnd: isize },
+    /// Tear down `DesktopWindowTarget`, clear `DWMWA_USE_HOSTBACKDROPBRUSH`, and restore `Handover(topmost = false)`.
+    Teardown { hwnd: isize },
+    /// Rebuild this frame with the updated `native()` flag before rendering so neither activation
+    /// nor fallback flashes a black or wrong-fill frame.
+    RebuildFrame,
+    /// Schedule a redraw so the window/overlay repaints with fallback fills or re-activates blur.
+    RequestRedraw,
+}
+
+/// Pure state transition function for the Windows system-material lifecycle.
+pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
+    match (*state, event) {
+        (State::Idle, Event::Frame { hwnd: Some(hwnd), inputs, found: true }) if eligible(inputs) => {
+            *state = State::Active { hwnd };
+            Effects::two(Effect::Activate { hwnd }, Effect::RebuildFrame)
+        }
+        (State::Idle, Event::Frame { .. }) => Effects::none(),
+        (State::Active { hwnd: active }, Event::Frame { hwnd, inputs, found }) => {
+            let can_run = found && eligible(inputs);
+            if can_run && hwnd == Some(active) {
+                return Effects::none();
+            }
+            if can_run && let Some(next) = hwnd {
+                *state = State::Active { hwnd: next };
+                return Effects::two(Effect::Teardown { hwnd: active }, Effect::Activate { hwnd: next });
+            }
+            *state = State::Idle;
+            if found {
+                Effects::two(Effect::Teardown { hwnd: active }, Effect::RebuildFrame)
+            } else {
+                Effects::one(Effect::Teardown { hwnd: active })
+            }
+        }
+        (State::Failed { hwnd: failed }, Event::Frame { hwnd, inputs, found }) => {
+            if hwnd.is_some_and(|h| h != failed) {
+                *state = State::Idle;
+                return step(state, Event::Frame { hwnd, inputs, found });
+            }
+            Effects::none()
+        }
+        (State::Active { hwnd }, Event::PolicyChanged { policy, .. }) if !policy.allows_blur() => {
+            *state = State::Idle;
+            Effects::two(Effect::Teardown { hwnd }, Effect::RequestRedraw)
+        }
+        (State::Idle, Event::PolicyChanged { policy, had_materials: true }) if policy.allows_blur() => {
+            Effects::one(Effect::RequestRedraw)
+        }
+        (_, Event::PolicyChanged { .. }) => Effects::none(),
+        (_, Event::ActivationFailed { hwnd, found }) => {
+            *state = State::Failed { hwnd };
+            if found { Effects::one(Effect::RebuildFrame) } else { Effects::none() }
+        }
+        (State::Active { hwnd }, Event::Teardown | Event::DeviceLoss) => {
+            *state = State::Idle;
+            Effects::one(Effect::Teardown { hwnd })
+        }
+        (State::Failed { .. }, Event::Teardown | Event::DeviceLoss) => {
+            *state = State::Idle;
+            Effects::none()
+        }
+        (State::Idle, Event::Teardown | Event::DeviceLoss) => Effects::none(),
+    }
+}
+
 /// Narrow seam isolating all Win32 DWM, DirectComposition target-slot switching, and
 /// `Windows.UI.Composition` operations for off-screen unit testing on every platform.
 pub(crate) trait WindowsMaterialSeam {
@@ -261,6 +458,7 @@ pub(crate) struct Controller {
     clip: ClipKind,
     tint: TintMode,
     pub(super) state: State,
+    had_materials: bool,
     next_slot_id: usize,
     slots: Vec<PooledSlot>,
 }
@@ -272,6 +470,7 @@ impl Controller {
             clip,
             tint,
             state: State::Idle,
+            had_materials: false,
             next_slot_id: 0,
             slots: Vec::new(),
         }
@@ -303,47 +502,55 @@ impl Controller {
         found: bool,
         seam: &mut impl WindowsMaterialSeam,
     ) -> bool {
-        let can_run = found && eligible(inputs);
-        match self.state {
-            State::Idle => {
-                if !can_run {
-                    return false;
-                }
-                let Some(hwnd) = hwnd else {
-                    return false;
-                };
-                if let Err(err) = self.activate(hwnd, seam) {
-                    eprintln!("rune: Windows system material activation failed: {err}");
-                    return false;
-                }
-                true
-            }
-            State::Active { hwnd: active_hwnd } => {
-                if can_run && hwnd == Some(active_hwnd) {
-                    return false;
-                }
-                self.teardown_active(active_hwnd, seam);
-                if can_run && let Some(next_hwnd) = hwnd {
-                    if let Err(err) = self.activate(next_hwnd, seam) {
+        let was_active = self.native();
+        self.had_materials = found;
+        let effects = step(&mut self.state, Event::Frame { hwnd, inputs, found });
+        let mut rebuild = false;
+        for effect in effects {
+            match effect {
+                Effect::Activate { hwnd } => {
+                    if let Err(err) = self.activate(hwnd, seam) {
                         eprintln!("rune: Windows system material activation failed: {err}");
-                        return found;
+                        // Only request a fallback rebuild when we were previously active (switching
+                        // HWNDs); a first-time failure from Idle already painted its fallback fill.
+                        let fail_effects = step(
+                            &mut self.state,
+                            Event::ActivationFailed { hwnd, found: was_active && found },
+                        );
+                        return fail_effects.into_iter().any(|e| e == Effect::RebuildFrame);
                     }
-                    return false;
                 }
-                // If materials are still mounted but became ineligible (e.g. WindowBackdrop turned
-                // on), rebuild this frame with `native_materials = false` so fallback fills draw.
-                found
-            }
-            State::Failed { hwnd: failed_hwnd } => {
-                // Stay latched failed for the same HWND; if the window was recreated with a new
-                // HWND, reset to Idle so the new window can evaluate eligibility cleanly.
-                if hwnd.is_some_and(|h| h != failed_hwnd) {
-                    self.state = State::Idle;
-                    return self.update(hwnd, inputs, found, seam);
-                }
-                false
+                Effect::Teardown { hwnd } => self.teardown_active(hwnd, seam),
+                Effect::RebuildFrame => rebuild = true,
+                Effect::RequestRedraw => {}
             }
         }
+        rebuild
+    }
+
+    /// Handles an OS system-effects policy change event (Transparency effects, Energy/Battery
+    /// Saver, `CompositionCapabilities`, High Contrast, or Remote Desktop) without polling.
+    ///
+    /// Returns `true` when the host must redraw (either an active material host just tore down to
+    /// draw fallback fills, or effects came back while material elements are mounted).
+    pub(crate) fn on_policy_changed(
+        &mut self,
+        policy: EffectsPolicy,
+        seam: &mut impl WindowsMaterialSeam,
+    ) -> bool {
+        let effects = step(
+            &mut self.state,
+            Event::PolicyChanged { policy, had_materials: self.had_materials },
+        );
+        let mut redraw = false;
+        for effect in effects {
+            match effect {
+                Effect::Teardown { hwnd } => self.teardown_active(hwnd, seam),
+                Effect::RequestRedraw => redraw = true,
+                Effect::Activate { .. } | Effect::RebuildFrame => {}
+            }
+        }
+        redraw
     }
 
     /// Syncs pooled visuals to `draws` (physical pixels) right before `gpu.queue.present(frame)`.
@@ -362,7 +569,7 @@ impl Controller {
         };
         let draws = &draws[..draws.len().min(MAX_NATIVE_MATERIALS_CAP)];
         if draws.is_empty() {
-            self.teardown_active(hwnd, seam);
+            self.teardown(seam);
             return true;
         }
         let wanted: Vec<_> = draws.iter().map(|d| (d.material, d.id)).collect();
@@ -442,16 +649,23 @@ impl Controller {
     /// Cleanly tears down active visuals and restores `Handover` to `topmost = false` when a
     /// window or overlay closes.
     pub(crate) fn teardown(&mut self, seam: &mut impl WindowsMaterialSeam) {
-        if let State::Active { hwnd } = self.state {
-            self.teardown_active(hwnd, seam);
+        self.had_materials = false;
+        for effect in step(&mut self.state, Event::Teardown) {
+            if let Effect::Teardown { hwnd } = effect {
+                self.teardown_active(hwnd, seam);
+            }
         }
-        self.state = State::Idle;
     }
 
     /// Tears down active visuals on GPU device loss and clears any failure latch so a recovered
     /// hardware GPU can re-evaluate eligibility cleanly (while a WARP fallback stays inactive).
     pub(crate) fn on_device_loss(&mut self, seam: &mut impl WindowsMaterialSeam) {
-        self.teardown(seam);
+        self.had_materials = false;
+        for effect in step(&mut self.state, Event::DeviceLoss) {
+            if let Effect::Teardown { hwnd } = effect {
+                self.teardown_active(hwnd, seam);
+            }
+        }
     }
 
     fn activate(&mut self, hwnd: isize, seam: &mut impl WindowsMaterialSeam) -> Result<(), String> {
@@ -489,7 +703,6 @@ impl Controller {
         seam.destroy_target();
         seam.set_host_backdrop_brush(hwnd, false).ok();
         seam.set_handover_topmost(hwnd, false).ok();
-        self.state = State::Idle;
     }
 
     fn rollback_and_latch(&mut self, hwnd: isize, err: &str, seam: &mut impl WindowsMaterialSeam) {
@@ -500,8 +713,12 @@ impl Controller {
 }
 
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+mod policy;
+#[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 mod real;
 
+#[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+pub(crate) use policy::{current_policy, notify_wm_setting_change, set_policy_waker};
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 pub(crate) use real::Materials;
 
