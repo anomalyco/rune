@@ -3606,7 +3606,9 @@ if let Some(menu) = rt.popup_menu() {
   `description`, `text`, `rect`, `inset`, `fill`, `border_color`, `text_color`,
   `text_style`, `text_size`, `wrap`, `truncate`, `text_cut`, `clips`, `scroll_axes`,
   `raised`, `focused`, `exiting`, ...), `Tx::read_elements` (deferred presented-frame element
-  reads from handlers and `poll`), `rt.element_at` / `element_at_with` / `Tx::element_at_with`
+  reads from handlers and `poll`), `Tx::read_layout` / `Tx::read_presented` (one keyed
+  element's laid-out or last drawn rect, the handler-side `Cx::window_layout` and
+  `rt.presented`), `rt.element_at` / `element_at_with` / `Tx::element_at_with`
   (`Pick::{transparent, interactive, drop_targets}` to skip passive layers or target drop zones,
   and `Picked::{path, key, rect, local}` for drawn bounds and element-local coordinates),
   `rt.accessibility_json()` / `rt.accessibility_tree()`, and `rt.popup_menu()`

@@ -10,6 +10,7 @@ mod elements;
 mod keys;
 mod pick;
 mod press;
+mod rects;
 mod scroll;
 
 #[cfg(test)]
