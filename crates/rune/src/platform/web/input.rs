@@ -458,6 +458,8 @@ impl Running {
                 if let serde_json::Value::String(html) = event["html"].take() && !html.is_empty() {
                     content = content.with_html(html);
                 }
+                // Claim the page's file handles now, so dropping the paste releases them.
+                let content = content.with_web_files(crate::clipboard::web_file::from_event(&event["files"]));
                 let image = (event["image"].as_bool() == Some(true)).then_some(&self.input.handle);
                 self.app.paste_event(&self.clipboard, content, image);
             }

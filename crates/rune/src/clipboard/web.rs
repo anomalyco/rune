@@ -30,15 +30,26 @@ impl Client {
             if let Some(reply) = purpose.reply(content) && sender.send(reply).is_ok() { wake(); }
         });
     }
-    /// A DOM paste into the focused field: the text and HTML come with the event, and when it
-    /// carried an image, `png` reads its bytes, only if the target takes images.
+    /// A DOM paste or drop into the focused field: the text, HTML and browser file handles come
+    /// with the event, and when it carried an image, `png` reads its bytes, only if the target
+    /// takes images. A target that takes neither images nor files hears nothing of a paste
+    /// that carried only those.
     #[inline(always)]
     pub fn paste_event<S: 'static>(&self, rt: &mut Runtime<S>, content: ClipboardContent, png: Option<impl FnOnce() -> js_sys::Promise>) {
         self.paste_event_core(rt.core_mut(), content, png);
     }
     fn paste_event_core(&self, rt: &mut crate::runtime::RuntimeCore, content: ClipboardContent, png: Option<impl FnOnce() -> js_sys::Promise>) {
         let purpose = Purpose::paste(rt, rt.paste_target());
-        let content = if purpose.forms() == Forms::Text { ClipboardContent::new(content.text()) } else { content };
+        // A paste or drop of only an image or files never pastes empty text into a target that
+        // takes neither: it would replace the selection with nothing.
+        let has_text = |c: &ClipboardContent| !c.text().is_empty() || (!c.is_rich() && png.is_none());
+        let content = match purpose.forms() {
+            Forms::Text if !has_text(&content) => return,
+            Forms::Text => ClipboardContent::new(content.text()),
+            Forms::Rich if content.is_empty() && png.is_some() => return,
+            Forms::Rich => match content.text_forms() { Some(content) => content, None => return },
+            Forms::All => content,
+        };
         let Some(png) = png.filter(|_| purpose.forms() == Forms::All) else { return rt.paste_content(content) };
         let promise = png();
         let (sender, wake) = (self.sender.clone(), self.wake.clone());

@@ -217,10 +217,12 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false };
-    const send = event => {
+    // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
+    const send = (event, after) => {
         const message = JSON.stringify(event);
-        if (h.syncing) queueMicrotask(() => { if (!h.disposed) callback(message); });
-        else if (!h.disposed) callback(message);
+        const go = () => { try { if (!h.disposed) callback(message); } finally { after?.(); } };
+        if (h.syncing) queueMicrotask(go);
+        else go();
     };
     h.send = send;
     const listen = (target, name, handler, options) => {
@@ -322,8 +324,10 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             event.preventDefault();
             const data = event.clipboardData;
             h.image = field === textarea ? [...(data?.items ?? [])].find(i => i.kind === 'file' && i.type === 'image/png')?.getAsFile() ?? undefined : undefined;
+            // Files go only to the text field: a password field takes text alone.
+            const files = field === textarea ? offerFiles(data?.files) : [];
             try {
-                send({ kind: 'paste', text: data?.getData('text/plain') ?? '', html: field === textarea ? data?.getData('text/html') ?? '' : '', image: !!h.image });
+                send({ kind: 'paste', text: data?.getData('text/plain') ?? '', html: field === textarea ? data?.getData('text/html') ?? '' : '', image: !!h.image, files }, () => settleFiles(files));
             } finally {
                 if (h.syncing) queueMicrotask(() => { h.image = undefined; });
                 else h.image = undefined;
@@ -392,9 +396,11 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             event.clipboardData.setData('text/plain', h.copyText);
         }
     });
-    // A file dropped while a Rune field has the keyboard is pasted into it, as a page's field
-    // takes a drop: an image as a pasted image, text as text. Elsewhere a drop does nothing (the
-    // browser would open the file in place of the app).
+    // Files dropped while a Rune field has the keyboard are pasted into it, as a page's field
+    // takes a drop: the first file as a pasted image when it is a PNG, or as text when it is
+    // text, and every file (up to `MAX_WEB_FILES`) as a handle for `ClipboardContent::web_files`
+    // unless the field is a password field, which, as with a paste, takes no files.
+    // Elsewhere a drop does nothing (the browser would open the file in place of the app).
     listen(canvas, 'dragover', event => {
         if (!event.dataTransfer?.types.includes('Files')) return;
         event.preventDefault();
@@ -405,12 +411,20 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (!file) return;
         event.preventDefault();
         if (!h.key) return;
+        // The `FileList` empties once this handler yields, so take the handles before reading.
+        const files = h.field === h.password ? [] : offerFiles(event.dataTransfer.files);
         if (file.type === 'image/png') {
             h.image = file;
-            send({ kind: 'paste', text: '', html: '', image: true });
+            send({ kind: 'paste', text: '', html: '', image: true, files }, () => settleFiles(files));
             return;
         }
-        if (file.type.startsWith('text/') || file.size < 1048576 && !file.type) send({ kind: 'paste', text: await file.text(), html: '', image: false });
+        // Only a small text file is read as text; a bigger one arrives as a handle alone.
+        const text = file.size <= MAX_DROP_TEXT && (file.type.startsWith('text/') || !file.type);
+        let content = '';
+        try { if (text) content = await file.text(); } catch { content = ''; }
+        // Nothing to paste (a PDF dropped on a password field, say): leave the field as it is.
+        if (!content && !files.length) return;
+        send({ kind: 'paste', text: content, html: '', image: false, files }, () => settleFiles(files));
     });
     listen(canvas, 'pointerdown', event => event.preventDefault(), { capture: true });
     // WebKit on iOS 27 still fires a tap's compatibility mousedown to the canvas after a
@@ -1743,6 +1757,45 @@ export function activate(h) {
     if (h.key) field.inputMode = 'text';
     if (document.activeElement !== field) field.focus({ preventScroll: true });
     if (h.key) reselect(h);
+}
+
+// Browser `File` handles a paste or drop offered the focused field, by id, for
+// `rune::clipboard::WebFile`: Rust holds only the id, name, type and size. Nothing is read
+// until the app asks. Rust claims each handle while it handles the event (`claimWebFile`) and
+// releases it when its last `WebFile` drops; `settleFiles` lets go of any handle the event
+// offered but Rust didn't claim (a paste Rust dropped), so no handle outlives both.
+const MAX_WEB_FILES = 32;
+// The largest dropped text file whose contents a drop pastes as text (1 MiB).
+const MAX_DROP_TEXT = 1048576;
+const webFiles = new Map();
+let nextWebFile = 1;
+function offerFiles(files) {
+    const out = [];
+    for (const file of [...(files ?? [])].slice(0, MAX_WEB_FILES)) {
+        const id = nextWebFile++;
+        webFiles.set(id, { file, claimed: false });
+        out.push({ id, name: file.name ?? '', type: file.type ?? '', size: file.size ?? 0 });
+    }
+    return out;
+}
+function settleFiles(offered) {
+    for (const { id } of offered) if (webFiles.get(id)?.claimed === false) webFiles.delete(id);
+}
+
+export function claimWebFile(id) {
+    const entry = webFiles.get(id);
+    if (!entry || entry.claimed) return false;
+    entry.claimed = true;
+    return true;
+}
+
+export function webFile(id) { return webFiles.get(id)?.file; }
+
+export function releaseWebFile(id) { webFiles.delete(id); }
+
+export async function readWebFile(id, max) {
+    const file = webFiles.get(id)?.file;
+    return file && file.size <= max ? new Uint8Array(await file.arrayBuffer()) : undefined;
 }
 
 export async function pastedImage(h, max) {

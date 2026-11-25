@@ -1947,7 +1947,11 @@ Hooks also hear a pasted image (a screenshot, an image copied from a browser or 
 (`size()`), whatever form the clipboard held it in. Rune fetches it only for a target with a
 hook (`on_input_paste`, `on_paste_content`, `read_clipboard`), so pasting text into other fields
 never decodes one, and leaves out images over `clipboard::MAX_IMAGE_BYTES` (32 MiB as PNG).
-An image alone, with no text, reaches only hooks. Copies don't write images yet.
+An image alone, with no text, reaches only hooks. Copies don't write images yet. On the web,
+hooks also hear files pasted into or dropped on the field as `content.web_files()`: up to
+`clipboard::MAX_WEB_FILES` `WebFile` handles with a name, type and size, no path, and nothing
+read until `WebFile::read(max)` (see WEB.md). A dropped PNG or text file is also the image or
+text.
 
 ```rust
 text_input(&s.prompt, style).on_edit(|s: &mut S| &mut s.prompt).on_input_paste(|s: &mut S, content, _| {
