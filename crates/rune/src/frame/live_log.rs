@@ -23,10 +23,38 @@ thread_local! {
     /// Frames missed since the last drawn one (occluded, timeout, outdated, unconfigured), and
     /// surfaces `acquire` reconfigured and got a drawable from.
     static MISSED: Cell<([u32; 4], u32)> = const { Cell::new(([0; 4], 0)) };
+    /// Test-only in-memory capture sink for asserting logged frame records without touching disk.
+    #[cfg(test)]
+    static CAPTURED: RefCell<Option<Vec<serde_json::Value>>> = const { RefCell::new(None) };
+}
+
+/// Captures every JSON frame line emitted to [`frame`] on the current thread during `f`.
+#[cfg(test)]
+pub(crate) fn capture_frames<R>(f: impl FnOnce() -> R) -> (R, Vec<serde_json::Value>) {
+    struct Guard(Option<Vec<serde_json::Value>>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            CAPTURED.with_borrow_mut(|slot| { *slot = self.0.take(); });
+        }
+    }
+    let prev = CAPTURED.with_borrow_mut(|slot| slot.replace(Vec::new()));
+    let mut guard = Guard(prev);
+    let result = f();
+    let captured = CAPTURED.with_borrow_mut(|slot| {
+        let out = slot.take().unwrap_or_default();
+        *slot = guard.0.take();
+        out
+    });
+    std::mem::forget(guard);
+    (result, captured)
 }
 
 /// Whether frames are logged in this process.
 pub(crate) fn on() -> bool {
+    #[cfg(test)]
+    if CAPTURED.with_borrow(|c| c.is_some()) {
+        return true;
+    }
     OUT.with_borrow_mut(|out| {
         out.get_or_insert_with(|| {
             let path = std::env::var_os("RUNE_FRAME_LOG")?;
@@ -160,6 +188,12 @@ pub(crate) fn frame(f: Frame) {
     let (missed, reconfigured) = MISSED.replace(([0; 4], 0));
     if missed != [0; 4] || reconfigured > 0 { line["missed"] = serde_json::json!({ "occluded": missed[0], "timeout": missed[1], "outdated": missed[2], "unconfigured": missed[3], "reconfigured": reconfigured }); }
     line["loop_check"] = serde_json::json!(f.loop_check.map(|(n, d)| [n as f64, if d.is_finite() { f64::from(d) } else { -1.0 }]));
+    #[cfg(test)]
+    CAPTURED.with_borrow_mut(|slot| {
+        if let Some(lines) = slot.as_mut() {
+            lines.push(line.clone());
+        }
+    });
     OUT.with_borrow_mut(|out| {
         if let Some(Some(w)) = out.as_mut() {
             writeln!(w, "{line}").ok();

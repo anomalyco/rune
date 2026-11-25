@@ -239,6 +239,25 @@ pub(crate) struct TypedWindowApp<S: 'static> {
 }
 
 impl<S: 'static> TypedWindowApp<S> {
+    #[cfg(test)]
+    pub(in crate::window) fn for_test(rt: Runtime<S>, on_frame_drawn: Option<OnFrameDrawn<S>>) -> Self {
+        Self {
+            rt,
+            shared: Arc::new(Shared::default()),
+            comp: None,
+            on_frame_drawn,
+            on_close_request: None,
+            on_close: None,
+            on_rest: None,
+            on_quit: None,
+            on_reopen: None,
+            on_geometry: None,
+            turn_scope: None,
+            keep_layout: None,
+            kept_layout: None,
+        }
+    }
+
     #[cfg(all(test, feature = "hot"))]
     pub(crate) fn from_app(mut app: crate::App<S>, waker: crate::runtime::Waker) -> Self {
         let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (

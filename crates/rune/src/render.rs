@@ -560,7 +560,7 @@ impl Renderer {
         if range.is_empty() && range.end != self.count { return; }
         self.validate_layer_range(&range);
         self.flush_uploads(encoder);
-        let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("frame"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
@@ -573,6 +573,7 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         }).forget_lifetime();
+        pass::apply_subrect_viewport(&mut pass, view, self.target_frame(None).1);
         let mut active = ActivePass::owned(pass, encoder, view);
         self.draw_layer_range(&mut active, format, range, None, hook);
     }
@@ -737,6 +738,7 @@ impl Renderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        pass::apply_subrect_viewport(&mut pass, view, self.target_frame(None).1);
         if !blurs {
             self.draw_range(&mut pass, self.format, 0..self.count);
             return;
@@ -746,6 +748,7 @@ impl Renderer {
         let mut active = ActivePass::owned_timed(pass, encoder, view, timestamps);
         self.draw_layer_range(&mut active, self.format, 0..self.count, None, &mut |_, _| {});
     }
+
 }
 
 /// How far a corner of radius `radius` reaches along each edge. Radii are signed: a negative

@@ -188,7 +188,7 @@ impl PaintState {
     /// Debug builds: total `PaintKeep` self-check mismatches observed (both unshifted and
     /// scroll-shifted copies). Always `0` in release builds.
     #[inline]
-    pub(in crate::runtime) fn keep_check_mismatches(&self) -> usize {
+    pub(crate) fn keep_check_mismatches(&self) -> usize {
         #[cfg(debug_assertions)]
         {
             self.keep.check_mismatches + self.keep.verify_mismatches
