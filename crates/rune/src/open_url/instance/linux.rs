@@ -31,7 +31,13 @@ pub(super) fn claim(id: &str) -> bool {
     let deadline = crate::time::now() + REACH_FOR;
     loop {
         match UnixListener::bind(&path) {
-            Ok(listener) => return claimed(path, listener),
+            Ok(listener) => {
+                let claimed = claimed(path, listener);
+                // The session bus's `org.freedesktop.Application`, served beside the socket.
+                #[cfg(feature = "dbus")]
+                super::dbus::serve(id);
+                return claimed;
+            }
             Err(e) if e.kind() == ErrorKind::AddrInUse => {}
             Err(_) => return true,
         }
@@ -123,6 +129,8 @@ pub(super) fn release() {
     if RELEASED.swap(true, Ordering::AcqRel) {
         return;
     }
+    #[cfg(feature = "dbus")]
+    super::dbus::release();
     // A launch took the name over while this process didn't answer: the socket there is its,
     // and this listener, which nothing reaches any more, goes with the process.
     if !std::fs::metadata(path).is_ok_and(|m| m.ino() == *inode) {

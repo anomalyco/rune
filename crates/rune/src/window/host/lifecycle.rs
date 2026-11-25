@@ -264,8 +264,8 @@ impl Host {
 
     pub(in crate::window) fn open(&mut self, event_loop: &ActiveEventLoop, token: Option<String>) {
         if self.launcher() { self.reveal_launcher(event_loop); return; }
-        // The launcher's startup token belongs to the first window only.
-        let token = token.or_else(|| self.startup_token(event_loop));
+        // The launcher's startup token belongs to the first window only; else a handed-on launch's.
+        let token = crate::open_url::instance::handed_token(token.or_else(|| self.startup_token(event_loop)));
         self.reveal(event_loop, Reveal::Open, token);
     }
 

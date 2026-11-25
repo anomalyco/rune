@@ -19,9 +19,11 @@
 //! Windows hands a link to a new process as a launch argument: the links among the first
 //! process's arguments are kept as the launching link is on macOS, and `single_instance` sends
 //! a later launch's links here from the first process's pipe (`instance`). Links that arrive
-//! before the loop starts are kept too. Linux does the same through a Unix socket. Files opened
-//! with an app on Windows and Linux arrive as process arguments instead of an Apple Event, so
-//! `App::on_open_files` never runs there. iOS (winit owns the scene delegate) is a follow-up.
+//! before the loop starts are kept too. Linux does the same through a Unix socket, and takes links
+//! and `file://` URIs from `org.freedesktop.Application.Open` on the session bus (`instance`),
+//! whose files go to `App::on_open_files`. Otherwise files opened with an app on Windows and
+//! Linux arrive as process arguments instead of an Apple Event, which `App::on_open_files`
+//! doesn't receive. iOS (winit owns the scene delegate) is a follow-up.
 // The web build runs no native window, so nothing here is reached there.
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 use std::path::PathBuf;
@@ -237,15 +239,23 @@ impl Glue for NativeFiles {
 /// Before the event loop starts (see the module docs).
 pub(crate) fn prepare() {
     INBOX.prepare(&NativeUrl);
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
-    INBOX.launched(super::instance::launch_links());
     FILES_INBOX.prepare(&NativeFiles);
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        let (links, files) = super::instance::launch_arguments();
+        INBOX.launched(links);
+        if !files.is_empty() { FILES_INBOX.receive(files); }
+    }
 }
 
 /// A link from a later launch of the app (Windows, Linux, `single_instance`), or the Dock menu's
 /// jump list entry (macOS, `native_menu`).
 #[cfg(any(target_os = "windows", target_os = "linux", target_os = "macos"))]
 pub(crate) fn receive(url: String) { INBOX.receive(url); }
+
+/// Files from `org.freedesktop.Application.Open` (Linux, `single_instance`).
+#[cfg(target_os = "linux")]
+pub(crate) fn receive_files(paths: Vec<PathBuf>) { FILES_INBOX.receive(paths); }
 
 /// For a starting window: its app's links and opened files, while the guard lives.
 pub(crate) fn listen<S: 'static>(app: &App<S>) -> Listeners {
@@ -266,14 +276,15 @@ use mac as platform;
 
 /// Windows and Linux: links come in launch arguments and down `single_instance`'s pipe or socket,
 /// so there is no handler to install, and nothing else can have taken it. Files come as launch
-/// arguments, so the open-files handler stays inactive.
+/// arguments on Windows, so the open-files handler stays inactive there; Linux takes them from
+/// `org.freedesktop.Application.Open`.
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod platform {
     pub(super) fn handled_elsewhere() -> bool { false }
     pub(super) fn install() -> bool { true }
     pub(super) fn remove() {}
     pub(super) fn files_handled_elsewhere() -> bool { false }
-    pub(super) fn files_install() -> bool { false }
+    pub(super) fn files_install() -> bool { cfg!(target_os = "linux") }
     pub(super) fn files_remove() {}
 }
 
