@@ -53,38 +53,61 @@ pub(crate) struct BackdropInputs {
 /// 5. surface composite alpha is `PreMultiplied`;
 /// 6. not drawing on the CPU painter;
 /// 7. a hardware/non-CPU GPU adapter is attached (`device_type != DeviceType::Cpu`, excluding WARP).
-pub(crate) const fn eligible_backdrop(inputs: BackdropInputs) -> Option<WindowBackdrop> {
-    if !inputs.requested.is_active() {
-        return None;
-    }
+/// Whether this Windows host and surface satisfy the preconditions for DWM system backdrops
+/// (`Mica`, `MicaAlt`, `Acrylic`), independent of `inputs.requested`.
+pub(crate) const fn surface_supports_dwm(inputs: BackdropInputs) -> bool {
     let Some(build) = inputs.build else {
-        return None;
+        return false;
     };
     if build < MIN_BACKDROP_BUILD {
-        return None;
+        return false;
     }
     if !inputs.transparent {
-        return None;
+        return false;
     }
     if !matches!(inputs.swapchain, wgpu::Dx12SwapchainKind::DxgiFromVisual) {
-        return None;
+        return false;
     }
     if !matches!(inputs.alpha_mode, Some(wgpu::CompositeAlphaMode::PreMultiplied)) {
-        return None;
+        return false;
     }
     if inputs.cpu_painter {
+        return false;
+    }
+    !matches!(inputs.device_type, Some(wgpu::DeviceType::Cpu) | None)
+}
+
+/// Bitmask of `WindowBackdrop` variants supported by this Windows surface without issuing DWM
+/// calls (`Mica | MicaAlt | Acrylic` when eligible, `0` otherwise; `WindowBackdrop::Blur` is
+/// Wayland-only and never set on Windows).
+pub(crate) const fn windows_supported_mask(inputs: BackdropInputs) -> u8 {
+    if surface_supports_dwm(inputs) {
+        WindowBackdrop::Mica.support_bit()
+            | WindowBackdrop::MicaAlt.support_bit()
+            | WindowBackdrop::Acrylic.support_bit()
+    } else {
+        0
+    }
+}
+
+pub(crate) const fn eligible_backdrop(inputs: BackdropInputs) -> Option<WindowBackdrop> {
+    if !matches!(
+        inputs.requested,
+        WindowBackdrop::Mica | WindowBackdrop::MicaAlt | WindowBackdrop::Acrylic
+    ) {
         return None;
     }
-    match inputs.device_type {
-        Some(wgpu::DeviceType::Cpu) | None => None,
-        Some(_) => Some(inputs.requested),
+    if surface_supports_dwm(inputs) {
+        Some(inputs.requested)
+    } else {
+        None
     }
 }
 
 /// Maps a [`WindowBackdrop`] to its documented `DWM_SYSTEMBACKDROP_TYPE` (`i32`) constant.
 pub(crate) const fn dwm_backdrop_value(backdrop: WindowBackdrop) -> i32 {
     match backdrop {
-        WindowBackdrop::None => DWMSBT_NONE,
+        WindowBackdrop::None | WindowBackdrop::Blur => DWMSBT_NONE,
         WindowBackdrop::Mica => DWMSBT_MAINWINDOW,
         WindowBackdrop::MicaAlt => DWMSBT_TABBEDWINDOW,
         WindowBackdrop::Acrylic => DWMSBT_TRANSIENTWINDOW,

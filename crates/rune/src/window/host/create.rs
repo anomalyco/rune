@@ -544,6 +544,10 @@ impl Host {
                 self.app.window_focus(true);
             }
         }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.wayland && self.options.transparent {
+            self.sync_window_backdrop(false);
+        }
         // The first frame, now, so the window comes on screen with it instead of empty for a
         // frame or two. AppKit has ordered the window in, but it reaches the screen with this
         // turn's Core Animation commit, so nothing reports it visible yet.

@@ -701,7 +701,10 @@ impl ApplicationHandler<WakeEvent> for Windows {
             },
             || {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-                crate::platform::wayland_drop::shutdown();
+                {
+                    crate::platform::wayland_drop::shutdown();
+                    crate::platform::wayland_backdrop::shutdown();
+                }
                 crate::marks::mark("windows.dropped");
                 crate::clipboard::shutdown();
             },

@@ -154,6 +154,10 @@ impl OverlayCore {
         allow(dead_code)
     )]
     pub(super) fn layer_closed(&mut self, app: &mut dyn OverlayApp, reason: Option<&str>) {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(blur) = self.surface.live_mut().and_then(|l| l.wayland_backdrop.as_mut()) {
+            blur.mark_closed();
+        }
         let reason = reason.unwrap_or("compositor closed layer surface").to_owned();
         self.surface_refused(app, reason);
     }
@@ -349,12 +353,18 @@ impl OverlayCore {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if super::toplevel::is_toplevel(window) {
                     self.surface.take_live();
+                    let rt = app.rt_mut();
+                    rt.set_window_backdrop(crate::WindowBackdrop::None);
+                    rt.set_window_backdrop_supported_mask(0);
                     self.drop_hidden_images(app);
                 }
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => {
                 self.surface.take_live();
+                let rt = app.rt_mut();
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
                 self.drop_hidden_images(app);
             }
         }

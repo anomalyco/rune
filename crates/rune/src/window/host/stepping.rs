@@ -153,9 +153,57 @@ impl Host {
             crate::tooling::perf_warn::timed("on_ready", || ready(&self.native_handle));
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        self.wayland_drop_ready();
+        {
+            self.wayland_drop_ready();
+            self.wayland_backdrop_ready();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         crate::platform::ready_signal::ready();
+    }
+
+    /// Wayland: lazily binds the shared per-display backdrop controller after the first frame for
+    /// transparent windows opened with `WindowBackdrop::None`, populating
+    /// `Cx::window_backdrop_supported(WindowBackdrop::Blur)` without adding a startup round-trip
+    /// or creating any per-surface blur object.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn wayland_backdrop_ready(&mut self) {
+        if !self.wayland || !self.options.transparent {
+            return;
+        }
+        let needs_attach = self.win.as_ref().is_some_and(|w| {
+            #[cfg(target_os = "linux")]
+            let cpu = matches!(w.native.mode, crate::window::linux::handover::SurfaceMode::Cpu { .. });
+            #[cfg(not(target_os = "linux"))]
+            let cpu = false;
+            w.native.wayland_backdrop.is_none()
+                && !cpu
+                && w.surface.is_some()
+                && w.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque
+        });
+        if needs_attach && let Some(w) = self.win.as_mut() {
+            w.native.wayland_backdrop =
+                crate::platform::wayland_backdrop::SurfaceBlur::for_window(&w.window);
+            if w.native.wayland_backdrop.is_some() {
+                self.sync_window_backdrop(false);
+            }
+        }
+    }
+
+    /// Wayland: dispatches queued runtime capability events on the shared display controller and
+    /// re-syncs this window if `Capability::Blur` was revoked or re-granted.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(in crate::window) fn poll_wayland_backdrop(&mut self) {
+        if !self.wayland {
+            return;
+        }
+        let changed = self
+            .win
+            .as_mut()
+            .and_then(|w| w.native.wayland_backdrop.as_mut())
+            .is_some_and(|b| b.poll_capability_change());
+        if changed {
+            self.sync_window_backdrop(false);
+        }
     }
 
     /// Wayland: marks the window ready for lazy `wl_data_device` binding and syncs drop targets.
@@ -305,6 +353,10 @@ impl Host {
             (resized, (w.config.width, w.config.height))
         });
         if redraw && self.life.shown() && (changed || origin_moved) { w.request_redraw(); }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.wayland && self.options.transparent {
+            self.sync_window_backdrop(false);
+        }
     }
 
     /// Seconds on the host's frame clock, which frame animations sample.

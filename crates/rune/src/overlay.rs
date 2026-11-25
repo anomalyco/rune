@@ -370,9 +370,18 @@ impl<T: 'static> OverlayHandle<T> {
     /// for this overlay at runtime, retained across hide/show and native recreation.
     ///
     /// On Windows 11 Build 22621+ DirectComposition GPU overlays, this updates
-    /// `DWMWA_SYSTEMBACKDROP_TYPE` (and syncs `DWMWA_USE_IMMERSIVE_DARK_MODE` while active) and
-    /// reports the OS-confirmed state through [`Cx::window_backdrop`](crate::Cx::window_backdrop).
-    /// Safe to call from any thread; ignored on non-Windows platforms.
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` (and syncs `DWMWA_USE_IMMERSIVE_DARK_MODE` while active). On
+    /// Linux Wayland GPU overlays (`zwlr_layer_shell_v1` and toplevel fallbacks),
+    /// [`WindowBackdrop::Blur`](crate::WindowBackdrop::Blur) attaches a compositor blur region via
+    /// `ext_background_effect_v1` (with `org_kde_kwin_blur_manager` fallback). Both report the
+    /// OS-confirmed state through [`Cx::window_backdrop`](crate::Cx::window_backdrop). On Windows
+    /// 11, DWM draws Mica, Mica Alt, and Desktop Acrylic only while the overlay is the foreground
+    /// window and shows its own solid neutral fallback when unfocused, so a non-activating overlay
+    /// (`KeyPolicy::None`) never shows the live material even while
+    /// [`Cx::window_backdrop`](crate::Cx::window_backdrop) reports `is_active() == true`. On
+    /// Wayland, neither blur protocol ties blur to focus, so compositors such as KWin blur
+    /// non-activating layer-shell overlays subject to compositor policy. Safe to call from any
+    /// thread; ignored on unsupported platforms.
     ///
     /// ```no_run
     /// use rune::{App, AppSpec, OverlaySpec, WindowBackdrop, el};
@@ -473,6 +482,9 @@ impl Backing {
 struct Live {
     /// The OS accessibility adapter for this surface.
     a11y: Option<crate::a11y::Adapter>,
+    /// Per-surface Wayland behind-window blur controller; drops strictly before `backing`.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    wayland_backdrop: Option<crate::platform::wayland_backdrop::SurfaceBlur>,
     /// Presents plain frames off the event loop's thread; joined before the surface drops.
     #[cfg(target_os = "macos")]
     present: Option<crate::frame::present_worker::PresentWorker>,
@@ -728,14 +740,17 @@ impl OverlayCore {
         {
             let Some(live) = self.surface.live() else {
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
                 return;
             };
             let Some(window) = live.backing.window() else {
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
                 return;
             };
             let Some(hwnd) = crate::platform::win32::hwnd(window) else {
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
                 return;
             };
             let inputs = crate::platform::win32::backdrop::BackdropInputs {
@@ -747,6 +762,7 @@ impl OverlayCore {
                 cpu_painter: false,
                 device_type: self.gpu.as_ref().map(|gpu| gpu.adapter.get_info().device_type),
             };
+            let supported = crate::platform::win32::backdrop::windows_supported_mask(inputs);
             let outcome = self.backdrop_tracker.sync(
                 hwnd as isize,
                 inputs,
@@ -756,15 +772,137 @@ impl OverlayCore {
                 &mut crate::platform::win32::backdrop::RealBackdropSeam,
             );
             rt.set_window_backdrop(outcome.active);
+            rt.set_window_backdrop_supported_mask(supported);
             if rt.stale() {
                 self.dirty = true;
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        {
+            let requested = self.window_backdrop;
+            let Some(live) = self.surface.live_mut() else {
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
+                return;
+            };
+            let is_wayland_live = match &live.backing {
+                Backing::Layer(layer) => layer.is_live(),
+                Backing::Window(window) => toplevel::is_toplevel(window),
+                Backing::Xwayland(_) => false,
+            };
+            if !is_wayland_live {
+                if let Some(blur) = live.wayland_backdrop.as_mut() {
+                    blur.mark_closed();
+                }
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
+                return;
+            }
+            let alpha_mode = Some(live.config.alpha_mode);
+            let translucent = live.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
+            if live.wayland_backdrop.is_none()
+                && translucent
+                && requested == crate::WindowBackdrop::Blur
+            {
+                live.wayland_backdrop = match &live.backing {
+                    Backing::Layer(layer) => {
+                        let (d, w) = layer.raw_handles();
+                        crate::platform::wayland_backdrop::SurfaceBlur::from_raw_handles(d, w)
+                    }
+                    Backing::Window(window) => {
+                        crate::platform::wayland_backdrop::SurfaceBlur::for_window(window)
+                    }
+                    Backing::Xwayland(_) => None,
+                };
+            }
+            let Some(blur) = live.wayland_backdrop.as_mut() else {
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
+                return;
+            };
+            let scale = if live.scale > 0.0 { live.scale } else { 1.0 };
+            let region_spec = crate::platform::wayland_backdrop::region::RegionSpec::from_surface(
+                (live.config.width, live.config.height),
+                scale,
+                0.0,
+            );
+            let outcome = blur.sync(
+                requested,
+                true,
+                alpha_mode,
+                false,
+                region_spec,
+                true,
+                force_reapply,
+            );
+            rt.set_window_backdrop(outcome.active);
+            rt.set_window_backdrop_supported_mask(outcome.supported_mask);
+            if rt.stale() || outcome.needs_commit {
+                self.dirty = true;
+            }
+        }
+        #[cfg(not(any(
+            target_os = "windows",
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))
+        )))]
         {
             let _ = force_reapply;
             rt.set_window_backdrop(crate::WindowBackdrop::None);
         }
+    }
+
+    /// Wayland: lazily binds the shared per-display backdrop controller after the overlay's first
+    /// visible present when opened with `WindowBackdrop::None`, populating
+    /// `Cx::window_backdrop_supported(WindowBackdrop::Blur)` without adding a startup round-trip.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(super) fn wayland_backdrop_after_first_frame(&mut self, rt: &mut RuntimeCore) {
+        let Some(live) = self.surface.live_mut() else { return };
+        if live.wayland_backdrop.is_some() || live.config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
+            return;
+        }
+        live.wayland_backdrop = match &live.backing {
+            Backing::Layer(layer) if layer.is_live() => {
+                let (d, w) = layer.raw_handles();
+                crate::platform::wayland_backdrop::SurfaceBlur::from_raw_handles(d, w)
+            }
+            Backing::Window(window) if toplevel::is_toplevel(window) => {
+                crate::platform::wayland_backdrop::SurfaceBlur::for_window(window)
+            }
+            _ => None,
+        };
+        if live.wayland_backdrop.is_some() {
+            self.sync_window_backdrop(rt, false);
+        }
+    }
+
+    /// Wayland: dispatches queued runtime capability events on the shared display controller and
+    /// re-syncs this overlay if `Capability::Blur` changed.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(super) fn poll_wayland_backdrop(&mut self, rt: &mut RuntimeCore) {
+        let changed = self
+            .surface
+            .live_mut()
+            .and_then(|l| l.wayland_backdrop.as_mut())
+            .is_some_and(|b| b.poll_capability_change());
+        if changed {
+            self.sync_window_backdrop(rt, false);
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(super) fn has_live_wayland_backdrop_watch(&self) -> bool {
+        self.surface
+            .live()
+            .and_then(|l| l.wayland_backdrop.as_ref())
+            .is_some_and(|b| b.needs_wake_on_read())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(super) fn has_pending_wayland_backdrop_events(&self) -> bool {
+        self.surface
+            .live()
+            .and_then(|l| l.wayland_backdrop.as_ref())
+            .is_some_and(|b| b.has_pending_events())
     }
 
     /// Moving the window under a still pointer (`place`, `set_placement`, a resize that keeps

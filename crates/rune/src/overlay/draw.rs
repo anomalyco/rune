@@ -83,6 +83,8 @@ impl FrameHost for OverlayFrame<'_> {
             }
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        self.core.poll_wayland_backdrop(self.app.rt_mut());
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Xwayland(surface), .. }) = self.core.surface.live_mut() {
             let input = surface.dispatch();
             for input in input { self.core.surface_input(self.app, input); }
@@ -420,6 +422,10 @@ impl FrameHost for OverlayFrame<'_> {
         crate::haptics::flush_live(self.app.rt_mut(), !self.prewarm);
         if !self.prewarm { self.core.meter.presented(); self.core.note_presented(submitted); }
         self.core.dirty = false;
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if !self.prewarm {
+            self.core.wayland_backdrop_after_first_frame(self.app.rt_mut());
+        }
         let Some(live) = self.core.surface.live_mut() else {
             self.more = false;
             return;

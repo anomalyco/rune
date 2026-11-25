@@ -195,12 +195,14 @@ impl Host {
             let Some(w) = self.win.as_mut() else {
                 let rt = self.app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
                 rt.set_backdrop_opaque_fallback(false);
                 return;
             };
             let Some(hwnd) = crate::platform::win32::hwnd(&w.window) else {
                 let rt = self.app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
                 rt.set_backdrop_opaque_fallback(
                     crate::platform::win32::backdrop::needs_opaque_fallback(
                         false,
@@ -224,6 +226,7 @@ impl Host {
                 ),
                 device_type,
             };
+            let supported = crate::platform::win32::backdrop::windows_supported_mask(inputs);
             let outcome = w.native.backdrop.sync(
                 hwnd as isize,
                 inputs,
@@ -234,12 +237,110 @@ impl Host {
             );
             let rt = self.app.rt_mut();
             rt.set_window_backdrop(outcome.active);
+            rt.set_window_backdrop_supported_mask(supported);
             rt.set_backdrop_opaque_fallback(outcome.opaque_fallback);
             if rt.stale() {
                 w.request_redraw();
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        {
+            let requested = self.window_backdrop;
+            let transparent = self.options.transparent;
+            let borderless = self.options.borderless;
+            let wayland = self.wayland;
+            let Some(w) = self.win.as_mut() else {
+                let rt = self.app.rt_mut();
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
+                rt.set_backdrop_opaque_fallback(false);
+                return;
+            };
+            // Opaque windows and X11/XWayland sessions never bind Wayland blur globals.
+            if !wayland || !transparent {
+                let fallback = crate::platform::wayland_backdrop::policy::needs_opaque_fallback(
+                    false,
+                    transparent,
+                    requested,
+                    crate::WindowBackdrop::None,
+                );
+                let rt = self.app.rt_mut();
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
+                rt.set_backdrop_opaque_fallback(fallback);
+                if rt.stale() {
+                    w.request_redraw();
+                }
+                return;
+            }
+            #[cfg(target_os = "linux")]
+            let cpu_painter = matches!(
+                w.native.mode,
+                crate::window::linux::handover::SurfaceMode::Cpu { .. }
+            );
+            #[cfg(not(target_os = "linux"))]
+            let cpu_painter = false;
+            let alpha_mode = w.surface.is_some().then_some(w.config.alpha_mode);
+            let translucent_gpu = !cpu_painter
+                && matches!(alpha_mode, Some(m) if m != wgpu::CompositeAlphaMode::Opaque);
+            // When WindowBackdrop::Blur is requested at creation or runtime, bind immediately so
+            // the first presented frame is blurred; when WindowBackdrop::None is active before
+            // frame 1, defer binding the shared display manager until `run_on_ready`.
+            if w.native.wayland_backdrop.is_none()
+                && translucent_gpu
+                && requested == crate::WindowBackdrop::Blur
+            {
+                w.native.wayland_backdrop =
+                    crate::platform::wayland_backdrop::SurfaceBlur::for_window(&w.window);
+            }
+            let Some(blur) = w.native.wayland_backdrop.as_mut() else {
+                let fallback = crate::platform::wayland_backdrop::policy::needs_opaque_fallback(
+                    false,
+                    transparent,
+                    requested,
+                    crate::WindowBackdrop::None,
+                );
+                let rt = self.app.rt_mut();
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
+                rt.set_backdrop_opaque_fallback(fallback);
+                if rt.stale() {
+                    w.request_redraw();
+                }
+                return;
+            };
+            let scale = w.window.scale_factor() as f32;
+            let csd_radius = if !borderless && w.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque {
+                winit::platform::wayland::WindowExtWayland::content_corner_radius(&*w.window)
+            } else {
+                0.0
+            };
+            let region_spec = crate::platform::wayland_backdrop::region::RegionSpec::from_surface(
+                (w.config.width, w.config.height),
+                scale,
+                csd_radius,
+            );
+            let outcome = blur.sync(
+                requested,
+                transparent,
+                alpha_mode,
+                cpu_painter,
+                region_spec,
+                false,
+                force_reapply,
+            );
+            let rt = self.app.rt_mut();
+            rt.set_window_backdrop(outcome.active);
+            rt.set_window_backdrop_supported_mask(outcome.supported_mask);
+            rt.set_backdrop_opaque_fallback(outcome.opaque_fallback);
+            if rt.stale() || outcome.needs_commit {
+                w.request_redraw();
+            }
+        }
+        #[cfg(not(any(
+            target_os = "windows",
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))
+        )))]
         {
             let _ = force_reapply;
             self.app.rt_mut().set_window_backdrop(crate::WindowBackdrop::None);
@@ -720,6 +821,13 @@ impl Host {
             self.win = None;
             self.native_handle.native.ready.store(false, Ordering::Release);
             self.native_handle.native.number.store(0, Ordering::Release);
+            let rt = self.app.rt_mut();
+            rt.set_window_backdrop(crate::WindowBackdrop::None);
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            {
+                rt.set_window_backdrop_supported_mask(0);
+                rt.set_backdrop_opaque_fallback(false);
+            }
         } else if let Some(w) = self.win.as_mut() {
             w.stop_pacing();
             #[cfg(target_os = "windows")]
@@ -793,8 +901,14 @@ impl Host {
         self.app.release_compositor_gpu();
         let rt = self.app.rt_mut();
         rt.set_window_backdrop(crate::WindowBackdrop::None);
-        #[cfg(target_os = "windows")]
-        rt.set_backdrop_opaque_fallback(false);
+        #[cfg(any(
+            target_os = "windows",
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))
+        ))]
+        {
+            rt.set_window_backdrop_supported_mask(0);
+            rt.set_backdrop_opaque_fallback(false);
+        }
         rt.text.atlas.invalidate();
         rt.images.invalidate();
     }

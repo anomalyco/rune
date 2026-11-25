@@ -233,13 +233,18 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
     );
 
     let active_backdrop = cx.window_backdrop();
-    let window_bg = if active_backdrop.is_active() { Color::TRANSPARENT } else { t.bg };
+    let blur_supported = cx.window_backdrop_supported(WindowBackdrop::Blur);
+    let window_bg = match active_backdrop {
+        WindowBackdrop::Blur => t.bg.alpha(0.75),
+        b if b.is_active() => Color::TRANSPARENT,
+        _ => t.bg,
+    };
     let mut appearance_rows = vec![
         setting_row(p, "theme", "Theme", None, segmented(p, s.appearance)),
         setting_row(p, "accent", "Accent colour", None, swatches(p, s.accent, dark)),
     ];
     if s.backdrop_enabled || active_backdrop.is_active() {
-        appearance_rows.push(backdrop_row(p, s.backdrop, active_backdrop));
+        appearance_rows.push(backdrop_row(p, s.backdrop, active_backdrop, blur_supported));
     }
 
     let window = col()
@@ -748,8 +753,9 @@ fn native_menu_items() -> Vec<MenuItem<Settings>> {
     ]
 }
 
-const BACKDROPS: [(WindowBackdrop, &str); 4] = [
+const BACKDROPS: [(WindowBackdrop, &str); 5] = [
     (WindowBackdrop::None, "None"),
+    (WindowBackdrop::Blur, "Blur"),
     (WindowBackdrop::Mica, "Mica"),
     (WindowBackdrop::MicaAlt, "Mica Alt"),
     (WindowBackdrop::Acrylic, "Acrylic"),
@@ -759,13 +765,15 @@ fn backdrop_name(backdrop: WindowBackdrop) -> &'static str {
     BACKDROPS.iter().find_map(|&(b, name)| (b == backdrop).then_some(name)).unwrap_or("None")
 }
 
-fn backdrop_row(p: Paint, requested: WindowBackdrop, active: WindowBackdrop) -> El {
+fn backdrop_row(p: Paint, requested: WindowBackdrop, active: WindowBackdrop, blur_supported: bool) -> El {
     let status = if active.is_active() {
         format!("Active: {}", backdrop_name(active))
+    } else if blur_supported {
+        "Blur supported".to_owned()
     } else {
         "Inactive".to_owned()
     };
-    let (w, h, pad) = (268.0, 28.0, 2.0);
+    let (w, h, pad) = (314.0, 28.0, 2.0);
     let seg = (w - 2.0 * pad) / BACKDROPS.len() as f32;
     let idx = BACKDROPS.iter().position(|(b, _)| *b == requested).unwrap_or(0);
     let mut segs = row().key("backdrop-segments");
@@ -842,6 +850,7 @@ fn backdrop_row(p: Paint, requested: WindowBackdrop, active: WindowBackdrop) -> 
 fn parse_backdrop_value(raw: &str) -> Option<WindowBackdrop> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "none" => Some(WindowBackdrop::None),
+        "blur" => Some(WindowBackdrop::Blur),
         "mica" => Some(WindowBackdrop::Mica),
         "mica-alt" | "mica_alt" | "micaalt" => Some(WindowBackdrop::MicaAlt),
         "acrylic" => Some(WindowBackdrop::Acrylic),
@@ -927,6 +936,8 @@ fn parse_backdrop_cli_flag_handles_all_variants() {
     assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "mica".into()]), Some(WindowBackdrop::Mica));
     assert_eq!(parse_backdrop_arg(&["--backdrop=mica-alt".into()]), Some(WindowBackdrop::MicaAlt));
     assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "ACRYLIC".into()]), Some(WindowBackdrop::Acrylic));
+    assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "blur".into()]), Some(WindowBackdrop::Blur));
+    assert_eq!(parse_backdrop_arg(&["--backdrop=BLUR".into()]), Some(WindowBackdrop::Blur));
     assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "unknown".into()]), None);
 }
 
@@ -972,6 +983,15 @@ fn backdrop_switcher_updates_state_and_cx_window_backdrop_controls_status() {
     rt.set_window_backdrop(WindowBackdrop::None);
     rt.frame(3.0);
     assert_eq!(status_label(&mut rt), Some("Window backdrop: Inactive".into()));
+
+    // Capability query reports Wayland Blur support even while WindowBackdrop::None is active.
+    rt.set_window_backdrop_supported(WindowBackdrop::Blur, true);
+    rt.frame(4.0);
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Blur supported".into()));
+
+    rt.set_window_backdrop(WindowBackdrop::Blur);
+    rt.frame(5.0);
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Active: Blur".into()));
 }
 
 #[test]

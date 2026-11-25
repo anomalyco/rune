@@ -20,6 +20,28 @@ impl AnyHost for Host {
     fn owns(&self, id: WindowId) -> bool {
         self.win.as_ref().is_some_and(|w| w.window.id() == id)
     }
+    fn has_live_wayland_layer(&self) -> bool {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        return self.wayland
+            && self
+                .win
+                .as_ref()
+                .and_then(|w| w.native.wayland_backdrop.as_ref())
+                .is_some_and(|b| b.needs_wake_on_read());
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        false
+    }
+    fn has_pending_platform_events(&self) -> bool {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        return self.wayland
+            && self
+                .win
+                .as_ref()
+                .and_then(|w| w.native.wayland_backdrop.as_ref())
+                .is_some_and(|b| b.has_pending_events());
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        false
+    }
     fn finished(&self) -> bool { self.life.finished() }
     fn has_shown(&self) -> bool { self.shown }
     fn take_startup_error(&mut self) -> Option<String> { self.startup_error.take() }
@@ -391,6 +413,8 @@ impl Host {
             self.media_keys();
         }
         self.flush_files(event_loop);
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        self.poll_wayland_backdrop();
         // Another window switched the font families (`Tx::set_font_families`).
         if self.app.rt_mut().follow_font_families() && let Some(w) = &mut self.win {
             w.loop_frame.touched();

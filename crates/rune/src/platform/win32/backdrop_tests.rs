@@ -262,3 +262,30 @@ fn fake_seam_device_loss_to_warp_clears_active_backdrop() {
     );
     assert_eq!(seam.backdrop_calls, vec![(0x55, DWMSBT_MAINWINDOW), (0x55, DWMSBT_NONE)]);
 }
+
+#[test]
+fn wayland_blur_variant_is_ineligible_on_windows_and_supported_mask_excludes_blur() {
+    let mut tracker = BackdropTracker::default();
+    let mut seam = FakeSeam::default();
+    let blur_inputs = eligible_inputs(WindowBackdrop::Blur);
+    assert_eq!(eligible_backdrop(blur_inputs), None);
+    assert_eq!(dwm_backdrop_value(WindowBackdrop::Blur), DWMSBT_NONE);
+
+    let out = tracker.sync(0x99, blur_inputs, false, false, Some(true), &mut seam);
+    assert_eq!(out, BackdropSync { active: WindowBackdrop::None, opaque_fallback: true });
+    assert!(seam.backdrop_calls.is_empty(), "WindowBackdrop::Blur must make zero DWM calls on Windows");
+    assert!(seam.dark_mode_calls.is_empty());
+
+    // Eligible Windows surface reports Mica/MicaAlt/Acrylic supported (even when None requested),
+    // and never reports Blur supported.
+    let mask = super::windows_supported_mask(eligible_inputs(WindowBackdrop::None));
+    assert!(WindowBackdrop::None.is_supported_in(mask));
+    assert!(WindowBackdrop::Mica.is_supported_in(mask));
+    assert!(WindowBackdrop::MicaAlt.is_supported_in(mask));
+    assert!(WindowBackdrop::Acrylic.is_supported_in(mask));
+    assert!(!WindowBackdrop::Blur.is_supported_in(mask));
+
+    // Ineligible surface (opaque or old build) reports 0.
+    assert_eq!(super::windows_supported_mask(BackdropInputs { transparent: false, ..blur_inputs }), 0);
+    assert_eq!(super::windows_supported_mask(BackdropInputs { build: Some(22000), ..blur_inputs }), 0);
+}

@@ -3486,50 +3486,78 @@ to a card-sized window that moves 60 times a second, and fades out.
 
 ```rust,ignore
 let opts = WindowOptions { transparent: true, ..Default::default() };
-let spec = AppSpec::new("Notes", (800.0, 600.0), || (), |_, cx| {
-    let bg = if cx.window_backdrop().is_active() { Color::TRANSPARENT } else { theme_bg(cx) };
+let spec = AppSpec::new("Files", (960.0, 640.0), || (), |_, cx| {
+    let base = theme_bg(cx);
+    let bg = match cx.window_backdrop() {
+        WindowBackdrop::Blur => base.alpha(0.75),
+        b if b.is_active() => Color::TRANSPARENT,
+        _ => base,
+    };
     el().w_full().h_full().fill(bg)
 });
-App::new(spec).window_options(opts).window_backdrop(WindowBackdrop::Mica).run();
+App::new(spec).window_options(opts).window_backdrop(WindowBackdrop::Blur).run();
 ```
 
 Opt-in whole-window OS backdrop material behind the entire window or overlay (`WindowBackdrop::None`
-default, `Mica`, `MicaAlt`, `Acrylic`), configured with `App::window_backdrop`,
+default, `Mica`, `MicaAlt`, `Acrylic`, `Blur`), configured with `App::window_backdrop`,
 `WindowSpec::window_backdrop`, or `ConfiguredOverlay::window_backdrop`, updated at runtime with
 `Tx::set_window_backdrop`, `WindowHandle::set_window_backdrop`, or
-`OverlayHandle::set_window_backdrop`, and queried in views with `Cx::window_backdrop()` (memo-tracked;
-headless tests can drive it with `Runtime::set_window_backdrop`).
+`OverlayHandle::set_window_backdrop`, and queried in views with `Cx::window_backdrop()` and
+`Cx::window_backdrop_supported(backdrop)` (both memo-tracked; headless tests can drive them with
+`Runtime::set_window_backdrop` and `Runtime::set_window_backdrop_supported`).
 
-- **Windows 11 Build 22621+ (22H2)**: applies only the documented Win32 attribute
-  `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` (`DWMSBT_MAINWINDOW`, `DWMSBT_TABBEDWINDOW`,
-  `DWMSBT_TRANSIENTWINDOW`; `DWMSBT_NONE` when clearing) and syncs `DWMWA_USE_IMMERSIVE_DARK_MODE`
-  while active. Never uses undocumented `SetWindowCompositionAttribute`, accent policies, or
-  pre-22H2 `DWMWA_MICA_EFFECT`. Activates only on transparent windows and overlays presenting on a
-  hardware GPU through DirectComposition (`DxgiFromVisual`, `CompositeAlphaMode::PreMultiplied`,
-  not on the CPU painter or WARP). Re-applied across window recreation, hide/show,
-  maximize/unmaximize, device reattach, and theme updates.
-- **Zero cost when unused**: while `WindowBackdrop::None` is unchanged from default, Rune makes zero
-  DWM backdrop calls and existing windows, CPU-first launches, and headless renders stay unchanged.
-- **Microsoft activation and policy fallbacks**: by Microsoft design, Mica, Mica Alt, and Desktop
-  Acrylic fall back to a solid neutral colour when the window is inactive, on `WS_EX_NOACTIVATE`
-  overlays, in Battery Saver, in High Contrast, or when Transparency Effects are turned off.
-- **No transparent holes**: on Windows builds before 22621, opaque windows, `DxgiFromHwnd`, the
-  CPU painter, WARP, DWM error, macOS, Linux, web, and headless renders, `Cx::window_backdrop()`
-  reports `WindowBackdrop::None`. If a non-overlay Windows transparent window requested a non-`None`
+- **Windows 11 Build 22621+ (22H2)**: `Mica`, `MicaAlt`, and `Acrylic` apply only the documented
+  Win32 attribute `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` (`DWMSBT_MAINWINDOW`,
+  `DWMSBT_TABBEDWINDOW`, `DWMSBT_TRANSIENTWINDOW`; `DWMSBT_NONE` when clearing) and sync
+  `DWMWA_USE_IMMERSIVE_DARK_MODE` while active. Never uses undocumented
+  `SetWindowCompositionAttribute`, accent policies, or pre-22H2 `DWMWA_MICA_EFFECT`. Activates
+  only on transparent windows and overlays presenting on a hardware GPU through DirectComposition
+  (`DxgiFromVisual`, `CompositeAlphaMode::PreMultiplied`, not on the CPU painter or WARP).
+  Re-applied across window recreation, hide/show, maximize/unmaximize, device reattach, and theme
+  updates.
+- **Linux Wayland (`WindowBackdrop::Blur`)**: binds `ext_background_effect_v1` (version 1,
+  checking `Capability::Blur`; KWin 6.7+, GNOME Mutter 51+, Hyprland 0.56+, niri 26.04+, COSMIC
+  1.11) with `org_kde_kwin_blur_manager` (version 1) as fallback only when
+  `ext_background_effect_v1` is absent (KDE Plasma 5.x–6.6.x). Works on transparent GPU toplevel
+  windows, toplevel-fallback overlays, and `zwlr_layer_shell_v1` overlays, using surface-local
+  logical `wl_region` coordinates (approximating `sctk-adwaita` rounded bottom corners) and
+  tracking runtime `capabilities` changes with zero background threads. Unlike Windows Mica or
+  Acrylic (which paint DWM's own tint behind `Color::TRANSPARENT`), Wayland blur is untinted:
+  draw a translucent fill (such as `bg.alpha(0.75)`) over it when `cx.window_backdrop() ==
+  WindowBackdrop::Blur`.
+- **Zero cost when unused**: opaque windows make zero DWM or Wayland registry/blur calls.
+  Transparent Wayland windows left at `WindowBackdrop::None` never create a per-surface blur
+  object (preserving Hyprland global blur rules) and bind only the shared display manager lazily
+  after the first frame to populate `Cx::window_backdrop_supported(WindowBackdrop::Blur)`.
+- **Active state and compositor policies**: on Windows 11, DWM draws Mica, Mica Alt, and Desktop
+  Acrylic only while the window is the foreground window and shows its own solid neutral fallback
+  when unfocused, in Battery Saver, in High Contrast, or when Transparency Effects are turned off.
+  `Cx::window_backdrop().is_active()` stays `true` once DWM accepts the attribute (including on
+  non-activating `KeyPolicy::None` overlays, which never take focus and never show the live
+  material); apps wanting their own unfocused fill can pair `cx.window_backdrop().is_active()`
+  with `App::on_focus` or `El::on_window_focus`. On Wayland, neither `ext_background_effect_v1`
+  nor `org_kde_kwin_blur_manager` couples blur to focus—compositors such as KWin blur mapped
+  unfocused windows and layer-shell overlays alike—though blur appearance remains subject to
+  compositor policy.
+- **No transparent holes**: on Windows builds before 22621, X11/XWayland, unsupported Wayland
+  compositors (or when blur capability is revoked), opaque windows, `DxgiFromHwnd`, the CPU
+  painter, WARP, DWM error, macOS, web, and headless renders, `Cx::window_backdrop()` reports
+  `WindowBackdrop::None`. If a non-overlay Windows or Linux transparent window requested an active
   backdrop that could not activate, Rune clears its surface to an opaque theme-matched fallback so
   even a view that skips `cx.window_backdrop()` never opens a transparent hole.
-- **Live verification status**: eligibility, attribute constants, and lifecycle re-application are
-  unit-tested off-screen behind a Win32 seam; live visual composition on real Windows 11 hardware
-  has not yet been watched by the team and will be confirmed on issue #300. Try it with
-  `cargo run -p settings -- --backdrop mica`.
+- **Live verification status**: Windows 11 Mica, Mica Alt, and Desktop Acrylic have been verified
+  on live Windows 11 hardware (#300). Wayland protocol seams, region geometry, and lifecycle
+  teardown are unit-tested off-screen; live visual composition on real Wayland compositors (#1381)
+  has not yet been watched by the team. Try it with `cargo run -p settings -- --backdrop mica`
+  (Windows) or `cargo run -p settings -- --backdrop blur` (Linux Wayland).
 
 ### Frosted panels
 
 Which blur a frosted surface needs depends on what sits behind it and whether it covers the whole
 window or one element:
 
-- **The whole window over the desktop (Windows 11 22H2+):** `WindowBackdrop` above (`Mica`,
-  `MicaAlt`, `Acrylic`), in a transparent DirectComposition window or overlay.
+- **The whole window over the desktop (Windows 11 22H2+ / Linux Wayland):** `WindowBackdrop` above
+  (`Mica`, `MicaAlt`, `Acrylic` on Windows; `Blur` on Wayland), in a transparent window or overlay.
 - **One rounded element over the desktop (macOS):** `El::system_material` above, in a transparent
   window. Only the platform can see behind the window.
 - **The app's own content (every platform):** `El::backdrop_blur` below. (`El::blur(σ)` blurs the element's own

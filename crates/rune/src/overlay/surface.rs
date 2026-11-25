@@ -388,6 +388,8 @@ impl OverlayCore {
             slot: Slot::default(),
             #[cfg(target_os = "windows")]
             poll_pace: crate::window::poll_pace::PollPace::default(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            wayland_backdrop: None,
             a11y, alpha, surface, config, backing, scale,
         })
     }
@@ -414,6 +416,8 @@ impl OverlayCore {
         }
         app.rt_mut().set_viewport(self.at.size, scale);
         self.dirty = true;
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        self.sync_window_backdrop(app.rt_mut(), false);
     }
 }
 
@@ -462,7 +466,14 @@ impl OverlayCore {
                 // The wait for the swap chain's room is unregistered before the surface drops.
                 #[cfg(target_os = "windows")]
                 live.slot.reset();
-                let Live { alpha, surface, backing, .. } = live;
+                let Live {
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    wayland_backdrop,
+                    alpha, surface, backing, ..
+                } = live;
+                // Destroy per-surface Wayland blur proxy strictly before `backing`'s `wl_surface`.
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                drop(wayland_backdrop);
                 drop(alpha);
                 drop(surface);
                 Some(backing)

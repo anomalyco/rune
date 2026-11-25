@@ -444,6 +444,10 @@ impl Host {
                 let viewport = (l.config.width as f32 / scale, l.config.height as f32 / scale);
                 if !resized && viewport == app.rt().window_viewport() && scale == app.rt().window_scale() {
                     if restored || origin_moved || app.rt().stale() { l.request_redraw(); }
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    if self.wayland && self.options.transparent {
+                        self.sync_window_backdrop(false);
+                    }
                     return;
                 }
                 let asked = FrameMove::take_jump(&mut self.frame_move, viewport);
@@ -467,6 +471,10 @@ impl Host {
                     return;
                 }
                 l.request_redraw();
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if self.wayland && self.options.transparent {
+                    self.sync_window_backdrop(false);
+                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 #[cfg(target_os = "macos")]
@@ -507,6 +515,10 @@ impl Host {
                         }
                         #[cfg(not(target_os = "macos"))]
                         l.request_redraw();
+                    }
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    if self.wayland && self.options.transparent {
+                        self.sync_window_backdrop(false);
                     }
                 }
             }
