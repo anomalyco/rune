@@ -4,7 +4,7 @@ use rune::{Cursor, Drag, El, KeyEvent, Tx, el};
 
 use super::{Geom, ZoomPan};
 
-type Lens<S> = fn(&mut S) -> &mut ZoomPan;
+type Lens<S> = std::rc::Rc<dyn for<'a> Fn(&'a mut S) -> &'a mut ZoomPan>;
 
 enum Body {
     El(El),
@@ -43,14 +43,14 @@ pub struct Canvas<S> {
 
 impl<S: 'static> Canvas<S> {
     /// `content` laid out at `content_size` points.
-    pub fn new(lens: Lens<S>, content_size: [f32; 2], content: El) -> Canvas<S> {
-        Canvas::with_body(lens, content_size, Body::El(content))
+    pub fn new(lens: impl for<'a> Fn(&'a mut S) -> &'a mut ZoomPan + 'static, content_size: [f32; 2], content: El) -> Canvas<S> {
+        Canvas::with_body(std::rc::Rc::new(lens), content_size, Body::El(content))
     }
 
     /// Content built for the scale it draws at in this build, so it can drop detail (labels,
     /// edges' arrowheads) that would be unreadable when zoomed out.
-    pub fn scaled(lens: Lens<S>, content_size: [f32; 2], content: impl FnOnce(f32) -> El + 'static) -> Canvas<S> {
-        Canvas::with_body(lens, content_size, Body::Scaled(Box::new(content)))
+    pub fn scaled(lens: impl for<'a> Fn(&'a mut S) -> &'a mut ZoomPan + 'static, content_size: [f32; 2], content: impl FnOnce(f32) -> El + 'static) -> Canvas<S> {
+        Canvas::with_body(std::rc::Rc::new(lens), content_size, Body::Scaled(Box::new(content)))
     }
 
     fn with_body(lens: Lens<S>, content_size: [f32; 2], body: Body) -> Canvas<S> {
@@ -145,15 +145,16 @@ impl<S: 'static> Canvas<S> {
 }
 
 fn bind<S: 'static>(pane: El, lens: Lens<S>, key: String) -> El {
+    let (drag_lens, wheel_lens, key_lens, magnify_lens) = (lens.clone(), lens.clone(), lens.clone(), lens);
     let mut pane = pane
         .on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
             if d.phase == rune::Phase::Down { tx.focus(key.clone(), false); }
-            lens(s).drag(d, tx)
+            drag_lens(s).drag(d, tx)
         })
-        .on_wheel(move |s: &mut S, ev, tx| lens(s).wheel(ev, tx))
-        .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| lens(s).key(ev, tx));
+        .on_wheel(move |s: &mut S, ev, tx| wheel_lens(s).wheel(ev, tx))
+        .on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| key_lens(s).key(ev, tx));
     if cfg!(target_os = "macos") {
-        pane = pane.on_magnify(move |s: &mut S, ev, tx| lens(s).magnify(ev, tx));
+        pane = pane.on_magnify(move |s: &mut S, ev, tx| magnify_lens(s).magnify(ev, tx));
     }
     pane
 }

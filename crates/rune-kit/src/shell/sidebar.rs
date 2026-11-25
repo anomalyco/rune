@@ -479,7 +479,7 @@ impl SidebarRow {
         state: &Reorder,
         index: usize,
         count: usize,
-        access: fn(&mut S) -> &mut Reorder,
+        access: impl for<'a> Fn(&'a mut S) -> &'a mut Reorder + 'static,
         drop: impl Fn(&mut S, usize, usize) + 'static,
     ) -> Self {
         self.reorder_tx(state, index, count, access, move |s, from, to, _| drop(s, from, to))
@@ -518,15 +518,17 @@ impl SidebarRow {
         state: &Reorder,
         index: usize,
         count: usize,
-        access: fn(&mut S) -> &mut Reorder,
+        access: impl for<'a> Fn(&'a mut S) -> &'a mut Reorder + 'static,
         drop: impl Fn(&mut S, usize, usize, &mut Tx) + 'static,
     ) -> Self {
         let held = state.held();
+        let access = std::rc::Rc::new(access);
         let bind = Box::new(move |mut e: El| {
             // While a row is held, every row hears where the pointer goes: a move its drag never
             // hears means the release was lost (the row unmounted, or a modal took the pointer).
             if held {
-                e = e.on_pointer_move_local(move |s: &mut S, p, tx: &mut Tx| reorder_pointer(access(s), p, tx));
+                let pointer_access = access.clone();
+                e = e.on_pointer_move_local(move |s: &mut S, p, tx: &mut Tx| reorder_pointer(pointer_access(s), p, tx));
             }
             e.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
                 if let Some((from, to)) = reorder_drag(access(s), index, count, d, tx) {

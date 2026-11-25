@@ -202,7 +202,7 @@ impl StageZoom {
     }
 }
 
-type Lens<S> = fn(&mut S) -> &mut StageZoom;
+type Lens<S> = std::rc::Rc<dyn for<'a> Fn(&'a mut S) -> &'a mut StageZoom>;
 
 trait StageBind {
     fn image(&self, e: El) -> El;
@@ -214,21 +214,21 @@ struct StageHandlers<S>(Lens<S>);
 
 impl<S: 'static> StageBind for StageHandlers<S> {
     fn image(&self, e: El) -> El {
-        let lens = self.0;
+        let lens = self.0.clone();
         e.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| lens(s).drag(d, tx))
     }
 
     fn stage(&self, e: El) -> El {
-        let lens = self.0;
-        let mut e = e.on_wheel(move |s: &mut S, ev, tx| lens(s).wheel(ev, tx));
+        let (wheel_lens, magnify_lens) = (self.0.clone(), self.0.clone());
+        let mut e = e.on_wheel(move |s: &mut S, ev, tx| wheel_lens(s).wheel(ev, tx));
         if cfg!(target_os = "macos") {
-            e = e.on_magnify(move |s: &mut S, ev, tx| lens(s).magnify(ev, tx));
+            e = e.on_magnify(move |s: &mut S, ev, tx| magnify_lens(s).magnify(ev, tx));
         }
         e
     }
 
     fn action(&self, b: IconButton, f: fn(&mut StageZoom, &mut Tx)) -> IconButton {
-        let lens = self.0;
+        let lens = self.0.clone();
         b.on_press_tx(move |s: &mut S, tx: &mut Tx| f(lens(s), tx))
     }
 }
@@ -307,8 +307,8 @@ pub struct Stage<S> {
 }
 
 impl<S: 'static> Stage<S> {
-    pub fn new(lens: Lens<S>, natural: [f32; 2], image: El) -> Stage<S> {
-        Stage { core: StageCore::new(natural, image), handlers: StageHandlers(lens) }
+    pub fn new(lens: impl for<'a> Fn(&'a mut S) -> &'a mut StageZoom + 'static, natural: [f32; 2], image: El) -> Stage<S> {
+        Stage { core: StageCore::new(natural, image), handlers: StageHandlers(std::rc::Rc::new(lens)) }
     }
 
     /// An SVG fits by growing too.

@@ -317,10 +317,14 @@ trait TreeBind {
     fn bind_root_key(&self, root: El, rtl: bool) -> El;
 }
 
+type GetFn<S, T> = Rc<dyn for<'a> Fn(&'a S) -> &'a TreeModel<T>>;
+type GetMutFn<S, T> = Rc<dyn for<'a> Fn(&'a mut S) -> &'a mut TreeModel<T>>;
+type LabelFn<T> = Rc<dyn for<'a> Fn(&'a T) -> &'a str>;
+
 struct TreeHandlers<S, T> {
-    get: fn(&S) -> &TreeModel<T>,
-    get_mut: fn(&mut S) -> &mut TreeModel<T>,
-    label: fn(&T) -> &str,
+    get: GetFn<S, T>,
+    get_mut: GetMutFn<S, T>,
+    label: LabelFn<T>,
     row: Option<RowFn<T>>,
     on_select: Option<IdFn<S>>,
     on_open: Option<IdFn<S>>,
@@ -330,7 +334,7 @@ struct TreeHandlers<S, T> {
 
 impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
     fn bind_virtual_rows(&self, rows: El, count: usize, style: TreeStyle, kit: Rc<Kit>) -> El {
-        let (get, get_mut, label) = (self.get, self.get_mut, self.label);
+        let (get_key, get, get_mut, label) = (self.get.clone(), self.get.clone(), self.get_mut.clone(), self.label.clone());
         let (row_fn, sel, open, toggle, menu) = (
             self.row.clone(),
             self.on_select.clone(),
@@ -350,7 +354,7 @@ impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
             let mut e = item.build(&kit, &r, &style).key(r.id);
             // A click selects the row (Shift extends and Cmd toggles, in a multi-select tree);
             // on a folder it also opens or closes it, as a file tree's does.
-            let (pick, sel, toggle) = (id.clone(), sel.clone(), toggle.clone());
+            let (pick, sel, toggle, get_mut) = (id.clone(), sel.clone(), toggle.clone(), get_mut.clone());
             e = e.on_press_tx(move |s: &mut S, tx: &mut Tx| {
                 let toggled = get_mut(s).meta.click_row(&pick, openable, tx.mods());
                 if let Some(f) = &sel { f(s, &pick, tx); }
@@ -368,13 +372,13 @@ impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
         rows.virtual_rows(
             count,
             style.row_height,
-            move |s: &S, i| Cow::Borrowed(get(s).visible_id(i).unwrap_or_default()),
+            move |s: &S, i| Cow::Borrowed(get_key(s).visible_id(i).unwrap_or_default()),
             build_row,
         )
     }
 
     fn bind_viewport_layout(&self, viewport: El, row_height: f32) -> El {
-        let get_mut = self.get_mut;
+        let get_mut = self.get_mut.clone();
         // Inside a scrolling page this reports every frame of the scroll; only a new height
         // changes what the view reads.
         viewport.on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
@@ -383,14 +387,14 @@ impl<S: 'static, T: 'static> TreeBind for TreeHandlers<S, T> {
     }
 
     fn bind_root_key(&self, root: El, rtl: bool) -> El {
-        let (get_mut, label) = (self.get_mut, self.label);
+        let (get_mut, label) = (self.get_mut.clone(), self.label.clone());
         let (on_select, on_open, on_toggle) = (self.on_select.clone(), self.on_open.clone(), self.on_toggle.clone());
         root.on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
             let m = get_mut(s);
             m.set_right_to_left(rtl);
             let before = m.meta.cursor;
             let before_open = before.map(|c| m.meta.open(c));
-            let out = m.handle_key(ev, label, tx);
+            let out = m.handle_key(ev, |t| label(t), tx);
             let moved = (before != m.meta.cursor).then(|| m.cursor().map(str::to_owned)).flatten();
             let toggled = before.and_then(|c| {
                 let now = m.meta.open(c);
@@ -471,10 +475,23 @@ pub struct Tree<S, T> {
 impl<S: 'static, T: 'static> Tree<S, T> {
     /// `get` and `get_mut` find the model in the state; `label` names a node (rows show it, and
     /// typing jumps by it).
-    pub fn new(get: fn(&S) -> &TreeModel<T>, get_mut: fn(&mut S) -> &mut TreeModel<T>, label: fn(&T) -> &str) -> Self {
+    pub fn new(
+        get: impl for<'a> Fn(&'a S) -> &'a TreeModel<T> + 'static,
+        get_mut: impl for<'a> Fn(&'a mut S) -> &'a mut TreeModel<T> + 'static,
+        label: impl for<'a> Fn(&'a T) -> &'a str + 'static,
+    ) -> Self {
         Tree {
             core: TreeCore { style: None, name: None, rtl: false, scroll_bar: TreeScrollBar::None },
-            handlers: TreeHandlers { get, get_mut, label, row: None, on_select: None, on_open: None, on_toggle: None, on_menu: None },
+            handlers: TreeHandlers {
+                get: Rc::new(get),
+                get_mut: Rc::new(get_mut),
+                label: Rc::new(label),
+                row: None,
+                on_select: None,
+                on_open: None,
+                on_toggle: None,
+                on_menu: None,
+            },
         }
     }
     /// What each row shows; by default its label alone.
