@@ -147,6 +147,22 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(run.call_count, 3)
         self.assertEqual(out.getvalue().count("rune-dev: restarting with the new build"), 2)
 
+    def test_a_refused_edit_relaunches_a_local_run_but_a_syntax_error_waits(self):
+        def guard(code):
+            return patch.object(dev.subprocess, "run", return_value=Mock(returncode=code))
+        with guard(0), patch("sys.stdout", io.StringIO()) as out:
+            self.assertTrue(dev.guarded("g", "a.rs", "b.rs", "src/view.rs", True))
+            self.assertTrue(dev.guarded("g", "a.rs", "b.rs", "src/view.rs", False))
+        self.assertEqual(out.getvalue(), "")
+        with guard(2), patch("sys.stdout", io.StringIO()):
+            self.assertFalse(dev.guarded("g", "a.rs", "b.rs", "src/view.rs", True))
+        with guard(3), patch("sys.stdout", io.StringIO()) as out, self.assertRaises(dev.Restart):
+            dev.guarded("g", "a.rs", "b.rs", "src/view.rs", True)
+        self.assertIn("rune-dev: restart needed (guard): src/view.rs", out.getvalue())
+        with guard(3), patch("sys.stdout", io.StringIO()) as out:
+            self.assertFalse(dev.guarded("g", "a.rs", "b.rs", "src/view.rs", False))
+        self.assertIn("rerun rune-dev", out.getvalue())
+
     def test_a_local_run_execs_itself_once_under_the_wrap_prefix(self):
         with patch.dict(os.environ, {"RUNE_DEV_WRAP": "lease --kind build --"}, clear=False), patch.object(dev.os, "execvp") as execvp:
             os.environ.pop("RUNE_DEV_WRAPPED", None)

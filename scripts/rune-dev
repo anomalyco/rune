@@ -913,6 +913,17 @@ class Restart(Exception):
     """A local run's edit needs a new build."""
 
 
+def guarded(guard, before, after, name, local):
+    """True when the guard accepts the edit. A refused declaration change relaunches a local run;
+    a syntax error (exit 2) waits for the next save."""
+    code = subprocess.run([str(guard), str(before), str(after)]).returncode
+    if code == 3:
+        print(f"rune-dev: restart needed (guard): {name}" + ("" if local else "; rerun rune-dev to apply it"), flush=True)
+        if local:
+            raise Restart()
+    return code == 0
+
+
 def local(argv):
     """Compiles and runs the app here, rebuilding and relaunching it after a restart-needed edit."""
     wrap = os.environ.get("RUNE_DEV_WRAP")
@@ -1034,7 +1045,7 @@ def run(args):
                     return
                 for p in changed:
                     candidate.write_bytes(current[p])
-                    if subprocess.run([str(guard), str(mirror / p), str(candidate)]).returncode:
+                    if not guarded(guard, mirror / p, candidate, p, opts.local):
                         return
                 # All files validated from immutable bytes before publishing any of them.
                 for p in changed:
