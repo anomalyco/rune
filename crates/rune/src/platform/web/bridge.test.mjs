@@ -316,7 +316,7 @@ test('activate restores backward non-collapsed selection without echoing a selec
     bridge.destroy(h);
 });
 
-test('sync keeps inputMode none on coarse pointers when reclaiming focus from canvas', async () => {
+test('sync sets inputMode text before reclaiming focus from canvas on coarse pointers', async () => {
     const { doc, canvas, h } = setup({ coarse: true });
     await Promise.resolve();
     assert.equal(doc.activeElement, canvas);
@@ -324,10 +324,9 @@ test('sync keeps inputMode none on coarse pointers when reclaiming focus from ca
 
     bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
     assert.equal(doc.activeElement, h.textarea);
-    assert.equal(h.textarea.inputMode, 'none');
+    assert.equal(h.textarea.inputMode, 'text');
     assert.equal(h.textarea.selectionStart, 5);
 
-    // An explicit tap activates the soft keyboard.
     bridge.activate(h);
     assert.equal(h.textarea.inputMode, 'text');
     bridge.destroy(h);
@@ -1559,7 +1558,7 @@ test('page mode mouse release focusing a field via sync + activate focuses texta
     bridge.destroy(h);
 });
 
-test('coarse pointer release focusing a field via sync + activate restores inputMode text', async () => {
+test('coarse pointer release focusing a field via sync + activate has inputMode text at focus time', async () => {
     const { doc, canvas, h } = setup({ coarse: true });
     await Promise.resolve();
     assert.equal(doc.activeElement, canvas);
@@ -1568,10 +1567,10 @@ test('coarse pointer release focusing a field via sync + activate restores input
     bridge.sync(h, '', '', 0, 0, 0, false);
     assert.equal(h.textarea.inputMode, 'none');
 
-    // sync() alone reclaims focus from canvas but keeps inputMode none; activate() sets text.
+    // sync() sets inputMode text before focusing so iOS Safari opens the virtual keyboard at focus time.
     bridge.sync(h, 'editor', 'Recalled text', 0, 13, 13, false);
     assert.equal(doc.activeElement, h.textarea);
-    assert.equal(h.textarea.inputMode, 'none');
+    assert.equal(h.textarea.inputMode, 'text');
 
     bridge.activate(h);
     assert.equal(doc.activeElement, h.textarea);
@@ -2946,4 +2945,93 @@ test('requestPointerLock requests plain lock synchronously, upgrades unadjustedM
         bridge.destroy(h);
     }
     assert.equal(doc.pointerLockElement, null);
+});
+
+test('coarse-pointer focus sites set inputMode=text and inert=false before focus() on plain and password inputs, and reset when unfocused', async () => {
+    const captureFocus = (h, log) => {
+        const opacityOf = el => el.style.cssText.match(/opacity:([^;]+)/)?.[1] ?? '';
+        for (const [name, el] of [['textarea', h.textarea], ['password', h.password]]) {
+            const orig = el.focus.bind(el);
+            el.focus = opts => {
+                log.push({
+                    field: name,
+                    inputMode: el.inputMode,
+                    inert: el.inert,
+                    opacity: opacityOf(el),
+                });
+                return orig(opts);
+            };
+        }
+    };
+
+    // Site 1: mount startup microtask with an initially focused plain field, then password field.
+    for (const [secure, expectedField] of [[false, 'textarea'], [true, 'password']]) {
+        const { doc, h } = setup({ coarse: true });
+        const log = [];
+        try {
+            captureFocus(h, log);
+            assert.equal(h.textarea.inputMode, 'none');
+            assert.equal(h.password.inputMode, 'none');
+            assert.equal(h.textarea.inert, true);
+            assert.equal(h.password.inert, true);
+            // Simulate an autofocused field synced before mount's microtask runs (activeElement is still body).
+            bridge.sync(h, 'auto', secure ? '' : 'hi', 0, secure ? 0 : 2, secure ? 0 : 2, secure);
+            assert.equal(log.length, 0, 'body activeElement waits for mount microtask');
+            await Promise.resolve();
+            assert.deepEqual(log, [{ field: expectedField, inputMode: 'text', inert: false, opacity: '0' }]);
+            assert.equal(doc.activeElement, secure ? h.password : h.textarea);
+        } finally {
+            bridge.destroy(h);
+        }
+    }
+
+    // Site 2: sync() when activeElement === canvas (tap path on iOS Safari), for plain & password fields,
+    // plus Site 3: activate(), and reset when no editable field is focused (!key).
+    const { doc, canvas, h } = setup({ coarse: true });
+    const log = [];
+    try {
+        captureFocus(h, log);
+        await Promise.resolve();
+        assert.equal(doc.activeElement, canvas);
+
+        // Plain field via sync() while canvas is active.
+        bridge.sync(h, 'plain', 'hello', 0, 5, 5, false);
+        assert.deepEqual(log, [{ field: 'textarea', inputMode: 'text', inert: false, opacity: '0' }]);
+        assert.equal(doc.activeElement, h.textarea);
+        assert.equal(h.password.inert, true);
+
+        // Blur / non-editable focus resets both hidden inputs back to inputMode='none' and inert=true.
+        log.length = 0;
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        assert.equal(doc.activeElement, canvas);
+        assert.equal(h.textarea.inputMode, 'none');
+        assert.equal(h.password.inputMode, 'none');
+        assert.equal(h.textarea.inert, true);
+        assert.equal(h.password.inert, true);
+
+        // Password field via sync() while canvas is active.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        assert.deepEqual(log, [{ field: 'password', inputMode: 'text', inert: false, opacity: '0' }]);
+        assert.equal(doc.activeElement, h.password);
+        assert.equal(h.password.value, '', 'password input value stays empty');
+        assert.equal(h.textarea.inert, true);
+
+        // Switching directly from password field to plain field via sync() -> activate().
+        log.length = 0;
+        bridge.sync(h, 'plain', 'abc', 0, 3, 3, false);
+        assert.deepEqual(log, [{ field: 'textarea', inputMode: 'text', inert: false, opacity: '0' }]);
+        assert.equal(doc.activeElement, h.textarea);
+
+        // Site 3: direct activate() from an unfocused body element.
+        log.length = 0;
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        doc.activeElement = doc.body;
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        assert.equal(log.length, 0);
+        bridge.activate(h);
+        assert.deepEqual(log, [{ field: 'password', inputMode: 'text', inert: false, opacity: '0' }]);
+        assert.equal(doc.activeElement, h.password);
+    } finally {
+        bridge.destroy(h);
+    }
 });
