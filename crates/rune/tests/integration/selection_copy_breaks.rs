@@ -1,6 +1,7 @@
 //! `El::copy_breaks` and `El::copy_prefix`: a group's copy leaves the newlines its texts ask for
 //! between them, the larger of the two, and puts a text's prefix before it when the copy takes it
-//! from its start along with other texts. A copy of one text alone goes without its prefix.
+//! from its start along with other texts or covers the element's whole copied text. A partial copy
+//! of one text alone goes without its prefix.
 
 use rune::{Cx, El, Env, Runtime, TextStyle, col, text};
 use crate::support::{command, drag, glyphs, wait};
@@ -40,14 +41,22 @@ fn copy_leaves_the_breaks_and_prefixes_texts_ask_for() {
 }
 
 #[test]
-fn a_text_taken_from_inside_or_alone_goes_without_its_prefix() {
+fn a_whole_single_text_keeps_its_prefix_and_partial_goes_without() {
     let (mut rt, _) = runtime();
     let one = glyphs(&rt, "i0");
     let two = glyphs(&rt, "i1");
-    // Just inside the text, which starts at the padding's edge.
+    // Whole single text keeps its copy_prefix.
     drag(&mut rt, (two[0].0 - 1.0, two[0].1), after(two[2]));
-    assert_eq!(rt.selected_text().as_deref(), Some("two"));
+    assert_eq!(rt.selected_text().as_deref(), Some("- two"));
     wait(&mut rt);
+    // Partial single text (from start or from inside) drops its copy_prefix.
+    drag(&mut rt, (two[0].0 - 1.0, two[0].1), after(two[1]));
+    assert_eq!(rt.selected_text().as_deref(), Some("tw"));
+    wait(&mut rt);
+    drag(&mut rt, before(two[1]), after(two[2]));
+    assert_eq!(rt.selected_text().as_deref(), Some("wo"));
+    wait(&mut rt);
+    // Across items starting mid-word: first drops its prefix, second keeps it.
     drag(&mut rt, before(one[1]), after(two[2]));
     assert_eq!(rt.selected_text().as_deref(), Some("ne\n- two"));
 }

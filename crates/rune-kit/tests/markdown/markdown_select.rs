@@ -232,13 +232,16 @@ fn a_quote_with_paragraphs_a_list_and_code_copies_as_plain_text() {
         Some("Before.\n\nFirst para here.\n\nSecond para.\n\n- one\n- two\n  - nested\n\n1. first\n2. second\n\nlet a = 1;\nlet b = 2;\n\nAfter."),
     );
 
-    // One item alone copies without its marker, and a drag from inside an item leaves it off.
+    // One whole item alone keeps its marker; a partial slice or a drag from inside an item leaves it off.
     rt.pointer_down(470.0, 790.0);
     rt.pointer_up(470.0, 790.0);
     rt.frame(1.0);
     let two = glyphs(&rt, "m0/b1/#1/b2/i1/#1/b0");
     drag(&mut rt, (two[0].0 - 1.0, two[0].1), (two[2].0 + 3.0, two[2].1));
-    assert_eq!(rt.selected_text().as_deref(), Some("two"));
+    assert_eq!(rt.selected_text().as_deref(), Some("- two"));
+    rt.frame(1.0);
+    drag(&mut rt, (two[0].0 - 1.0, two[0].1), (two[1].0 + 2.0, two[1].1));
+    assert_eq!(rt.selected_text().as_deref(), Some("tw"));
     rt.frame(1.0);
     let one = glyphs(&rt, "m0/b1/#1/b2/i0/#1/b0");
     drag(&mut rt, before(one[1]), (two[2].0 + 3.0, two[2].1));

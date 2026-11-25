@@ -35,9 +35,17 @@ impl RuntimeCore {
         };
         for &(i, a, b) in &ranges {
             let Some(spec) = self.tree.nodes[i].text.as_ref() else { continue };
-            let block = self.block_of(i);
+            let mut block = self.block_of(i);
             // A list's markers are the list's own: `<ol>` and `<ul>` draw them.
             if self.tree.nodes[i].a11y.hidden && matches!(block, Block::Item { .. }) { continue; }
+            // A partial slice inside one list item copies as a plain fragment rather than a
+            // list item, keeping HTML in agreement with plain text and `Markdown::copy_source`.
+            if ranges.len() == 1
+                && matches!(block, Block::Item { .. })
+                && !super::copy_join::is_whole_copied(spec, &(a..b))
+            {
+                block = Block::Paragraph(i);
+            }
             let inline = inline_html(spec, a, b);
             if inline.trim().is_empty() { continue; }
             match prev {

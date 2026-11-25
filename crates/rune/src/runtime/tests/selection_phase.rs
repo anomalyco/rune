@@ -642,7 +642,7 @@ impl Walk {
                 }
             }
             (phase, _) => {
-                let phase = match phase { Phase::Empty => "empty", Phase::Placed(_) => "placed", Phase::Dragging { .. } => "dragging" };
+                let phase = match phase { Phase::Empty => "empty", Phase::Placed(_) => "placed", Phase::Armed { .. } => "armed", Phase::Dragging { .. } => "dragging" };
                 return Err(format!("after {letter:?}: {phase}, dev path {:?} dragging {}", dev.path, dev.dragging));
             }
         }

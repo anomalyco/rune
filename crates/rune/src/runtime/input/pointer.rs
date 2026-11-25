@@ -35,7 +35,13 @@ impl RuntimeCore {
         if drag_move {
             self.host.titlebar.move_pointer(x, y);
         }
-        let Some(held) = self.pointer.press.held() else { return };
+        let Some(held) = self.pointer.press.held() else {
+            if self.edit.selectable.phase.drag_active() {
+                self.selection_drag(x, y);
+                self.edge_scroll_moved(y);
+            }
+            return;
+        };
         let (path, d, at, button, is_drag) = (held.path.clone(), held.drag, held.at, held.button, held.drag_handler.is_some());
         if held.drag_out.is_some_and(|threshold| crate::drag_out::past_threshold(at, (x, y), threshold)) && self.start_drag_out(app, path.clone()) {
             return;
@@ -102,7 +108,7 @@ impl RuntimeCore {
     /// A button holds the pointer: the OS keeps sending its moves to this window, and a leave
     /// waits for the release.
     #[inline]
-    pub(crate) fn pointer_captured(&self) -> bool { self.pointer.captured() }
+    pub(crate) fn pointer_captured(&self) -> bool { self.pointer.captured() || self.edit.selectable.phase.drag_active() }
 
     /// The host's window content top-left in desktop pixels; `None` where it has none.
     pub(crate) fn set_window_pixels(&mut self, pixels: Option<(i32, i32)>) {
@@ -340,7 +346,7 @@ impl RuntimeCore {
         let Some(ti) = target else {
             let now = self.input_clock();
             self.host.titlebar.press_empty(now, x, y, self.double_click_interval);
-            if self.kbd.focus.path().is_some() {
+            if self.kbd.focus.path().is_some() && !self.armed_marker_in_focused_caret_host() {
                 self.frame.queue.push(Action::Blur);
             }
             return;

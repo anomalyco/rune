@@ -6,8 +6,10 @@ use super::*;
 mod blocks;
 mod code;
 mod inline;
+mod source_copy;
 
 pub(super) use code::code_overflows_at;
+pub(super) use source_copy::source_copy;
 
 pub(super) struct Renderer {
     pub(super) s: MarkdownStyle,
@@ -108,30 +110,6 @@ impl Lead {
 pub(super) fn rendered_keys(n: usize, keys: &[String]) -> Vec<String> {
     let mut used = Vec::new();
     (0..n).map(|i| if keys.is_empty() { format!("b{i}") } else { block_key(i, keys, &mut used) }).collect()
-}
-
-/// [`Markdown::copy_source`]: the source of the top-level blocks (keyed `names`, starting at
-/// `starts`) that `sel` touches, `None` for part of one block.
-pub(super) fn source_copy(src: &str, starts: &[usize], names: &[String], sel: &rune::TextSelection) -> Option<String> {
-    // The longest key that is the path or its first segments: an app's key may hold a `/`.
-    let block_of = |path: &str| names.iter().enumerate()
-        .filter(|(_, k)| path == k.as_str() || path.strip_prefix(k.as_str()).is_some_and(|rest| rest.starts_with('/')))
-        .max_by_key(|(_, k)| k.len()).map(|(b, _)| b);
-    let mut touched: Option<(usize, usize)> = None;
-    for t in sel.texts().iter().filter(|t| t.is_selected()) {
-        let Some(b) = block_of(t.path()) else { continue };
-        touched = Some(touched.map_or((b, b), |(first, _)| (first, b)));
-    }
-    let (first, last) = touched?;
-    if first == last && !sel.texts().iter().filter(|t| block_of(t.path()) == Some(first)).all(|t| t.is_whole() || t.is_empty()) {
-        return None;
-    }
-    if (first == 0 && last + 1 >= starts.len()) || sel.texts().iter().all(|t| t.is_whole() || t.is_empty()) {
-        return Some(src.to_owned());
-    }
-    let start = *starts.get(first)?;
-    let end = starts.get(last + 1).copied().unwrap_or(src.len());
-    Some(src.get(start..end)?.trim_end().to_owned())
 }
 
 fn block_key(i: usize, keys: &[String], used: &mut Vec<String>) -> String {
