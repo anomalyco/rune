@@ -11,8 +11,8 @@ linker = "rust-lld"
 [alias]
 lint = "clippy --lib --bins --tests"
 lint-all = "clippy --workspace --all-targets"
-check-wasm = "check -p rune --no-default-features --target wasm32-unknown-unknown"
-check-webgl = "check -p rune --no-default-features --features webgl --target wasm32-unknown-unknown"
+check-wasm = "clippy -p rune --no-default-features --target wasm32-unknown-unknown --no-deps -- -A clippy::all -A clippy::unwrap_used -A clippy::expect_used -A clippy::todo -D clippy::disallowed_methods -D clippy::disallowed_types -D warnings"
+check-webgl = "clippy -p rune --no-default-features --features webgl --target wasm32-unknown-unknown --no-deps -- -A clippy::all -A clippy::unwrap_used -A clippy::expect_used -A clippy::todo -D clippy::disallowed_methods -D clippy::disallowed_types -D warnings"
 check-hot = "check -p rune --features hot --tests"
 test-fast = "test -p rune -p rune-mermaid -p rune-kit --features rune-kit/markdown,rune-kit/mermaid"
 

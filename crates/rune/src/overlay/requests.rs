@@ -18,6 +18,7 @@ pub(super) enum KeyRequest {
 }
 
 /// Takes the answer to `OverlayHandle::activation_token`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) type TokenReply = Box<dyn FnOnce(Option<String>) + Send>;
 
 /// A show or a hide, fading the window's alpha over its duration (zero: at once; see
@@ -49,6 +50,7 @@ pub(super) struct Requests {
     pub xwayland_input: Option<bool>,
     /// `OverlayHandle::activation_token` replies, answered before this turn's show or hide,
     /// while the surface may still have the keys.
+    #[cfg(not(target_arch = "wasm32"))]
     pub tokens: Vec<TokenReply>,
     /// The `setup` waker fired.
     #[cfg(not(target_arch = "wasm32"))]

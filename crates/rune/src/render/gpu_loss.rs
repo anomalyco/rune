@@ -165,6 +165,7 @@ impl Gpu {
     /// never call this so offscreen renders and tests keep wgpu's validation panic. Surface
     /// devices call it at creation (`Gpu::made(..., true)`) and on surface adoption
     /// (`Gpu::for_surface_setup`); repeat calls are no-ops so the handler is never installed twice.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn install_surface_error_policy(&self) {
         self.callbacks.install_surface_error_policy(&self.device);
     }

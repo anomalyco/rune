@@ -26,8 +26,7 @@ pub(in crate::window) mod win;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use backoff::{Backoff, BackoffEffect, BackoffEvent};
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use configure::{configure, configure_checked};
-pub(crate) use configure::ConfigureError;
+pub(crate) use configure::{ConfigureError, configure, configure_checked};
 #[cfg(test)]
 pub(crate) use configure::{ConfigureErrorKind, classify_scope_error};
 #[cfg(target_arch = "wasm32")]

@@ -21,7 +21,7 @@ mod outlines;
 mod pass;
 mod pipelines;
 // The kept frame it checks exists only where partial frames do (`damaged`).
-#[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+#[cfg(target_os = "windows")]
 mod pixel_check;
 #[cfg(target_os = "macos")]
 mod prewarm;
@@ -31,7 +31,6 @@ mod prewarm;
 #[cfg(target_arch = "wasm32")]
 mod prewarm {
     pub(super) fn start() {}
-    pub(super) fn take() -> Option<(super::Gpu, super::Renderer)> { None }
     pub(super) fn discard() {}
 }
 mod shader_check;
@@ -47,10 +46,12 @@ mod warmup;
 #[cfg(target_os = "macos")]
 mod windfoil_metallib;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod csd_corners;
 pub(crate) mod gpu_events;
 pub(crate) mod layer_blur;
 pub(crate) mod surface_alpha;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod translucency;
 
 pub mod cpu_boot;
@@ -79,7 +80,9 @@ use pass::{ActivePass, Backdrop};
 #[cfg(target_os = "windows")]
 pub(crate) use damaged::MAX_RECTS;
 pub(crate) use shader_check::ShaderError;
-pub(crate) use surface_setup::{SurfaceSetupError, format_window_setup_error};
+pub(crate) use surface_setup::SurfaceSetupError;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use surface_setup::format_window_setup_error;
 #[cfg(target_os = "windows")]
 pub(crate) use surface_setup::with_wine_hwnd_hint;
 #[cfg(not(target_arch = "wasm32"))]
@@ -101,7 +104,9 @@ pub(crate) use instance::shader_consts;
 pub(crate) use instance::turned_bounds;
 pub(crate) use instance::unpack_u64_f32;
 pub(crate) use instance::word;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use warmup::park_gpu;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use warmup::surface_gpu;
 #[cfg(target_os = "linux")]
 pub(crate) use warmup::{warm_gpu_made, warm_gpu_then};
@@ -155,10 +160,11 @@ pub(crate) const ATLAS_START_ROWS: u32 = 256;
 
 /// `RUNE_LOOP_CHECK=2` found a picture that differed from the whole frame's (`pixel_check`), so the
 /// process's exit code is 3. Never on macOS and Linux, which have no loop-only frames.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn loop_pixel_check_failed() -> bool {
-    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
+    #[cfg(target_os = "windows")]
     return pixel_check::failed();
-    #[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
+    #[cfg(not(target_os = "windows"))]
     false
 }
 
