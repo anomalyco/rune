@@ -140,32 +140,28 @@ impl Switch {
 
     fn raised_switch(&self, k: &Kit, track_box: (f32, f32, f32), thumb_box: (f32, f32, f32, f32, f32)) -> El {
         let c = &k.c;
-        let (base, sheen_bottom, elevation, knob) = if self.checked {
-            (c.bg_accent, k.light_on(0.1, c.bg_accent), &k.elevation.switch_on, c.knob_on)
+        let look = k.switch_look();
+        let (base, sheen_bottom, elevation, knob, border) = if self.checked {
+            (c.bg_accent, k.light_on(0.1, c.bg_accent), &k.elevation.switch_on, c.knob_on, look.track_border_on)
         } else {
-            (c.layer_04, k.light_on(0.2, c.layer_04), &k.elevation.switch_off, c.knob)
+            (c.layer_04, k.light_on(0.2, c.layer_04), &k.elevation.switch_off, c.knob, look.track_border_off)
         };
         let overlay = if self.checked { k.on(c.contrast_hover, c.bg_accent) } else { c.hover };
         let (tw, th, tr) = track_box;
         let (w, h, x, y, r) = thumb_box;
-        let thumb = k.elevate(
-            el().key("thumb")
-                .size(w, h)
-                .absolute(x, y)
-                .radius(r)
-                .fill(knob)
-                .gradient(k.on(c.depth_top, knob), k.on(c.depth_bottom, knob))
-                .border(0.5, k.on(c.depth_top, knob)),
-            &k.elevation.elements,
-        )
-        .motion(k.motion.control);
-        let track = k.hover_surface(
-            el().size(tw, th).radius(tr).gradient(k.light(0.0), sheen_bottom),
-            base,
-            overlay,
-            self.state == State::Hover,
-            self.state == State::Rest,
-        );
+        let mut thumb = el().key("thumb").size(w, h).absolute(x, y).radius(r).fill(knob);
+        if look.knob_depth {
+            thumb = thumb.gradient(k.on(c.depth_top, knob), k.on(c.depth_bottom, knob)).border(0.5, k.on(c.depth_top, knob));
+        }
+        let thumb = k.elevate(thumb, &k.elevation.elements).motion(k.motion.control);
+        let mut track = el().size(tw, th).radius(tr);
+        if look.sheen {
+            track = track.gradient(k.light(0.0), sheen_bottom);
+        }
+        if look.track_border > 0.0 {
+            track = track.border(look.track_border, border);
+        }
+        let track = k.hover_surface(track, base, overlay, self.state == State::Hover, self.state == State::Rest);
         k.elevate(track, elevation).motion(k.motion.control).child(thumb)
     }
 

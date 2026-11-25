@@ -177,6 +177,7 @@ pub use tokens::metrics::BySize;
 pub use tokens::metrics::CheckboxColors;
 pub use tokens::metrics::FieldMetrics;
 pub use tokens::metrics::Metrics;
+pub use tokens::metrics::SwitchLook;
 pub use tokens::metrics::SwitchMetrics;
 pub use tokens::metrics::TextAreaMetrics;
 pub use tokens::palette::PaletteFocus;
