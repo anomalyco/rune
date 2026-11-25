@@ -19,7 +19,7 @@ mod aria_tests;
 pub(crate) mod dump;
 #[cfg(test)]
 mod dump_tests;
-mod node;
+pub(crate) mod node;
 pub(crate) mod roles;
 #[cfg(test)]
 mod tests;

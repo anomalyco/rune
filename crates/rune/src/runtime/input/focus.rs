@@ -159,12 +159,6 @@ impl focus_machine::KeyboardState {
         self.modal_scope.as_ref().map(|m| m.index)
     }
 
-    /// Node `i` (its subtree ending before `end`) holds an open modal member.
-    #[inline]
-    pub(in crate::runtime) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
-        self.modal_scope.as_ref().is_some_and(|m| m.members.get(i + 1..end).is_some_and(|s| s.iter().any(|&b| b)))
-    }
-
     /// Node `i` is inside the open modal's scope, or no modal is open.
     #[inline]
     pub(in crate::runtime) fn modal_member(&self, i: usize) -> bool {
@@ -238,11 +232,6 @@ impl RuntimeCore {
     #[inline]
     pub(crate) fn active_modal(&self) -> Option<usize> {
         self.kbd.active_modal()
-    }
-    /// Node `i` (its subtree ending before `end`) holds an open modal member.
-    #[inline]
-    pub(crate) fn modal_ancestor(&self, i: usize, end: usize) -> bool {
-        self.kbd.modal_ancestor(i, end)
     }
     /// Node `i` is inside the open modal's scope, or no modal is open.
     #[inline]

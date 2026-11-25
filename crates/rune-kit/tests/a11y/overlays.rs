@@ -183,9 +183,18 @@ fn menus_read_items_checks_shortcuts_and_submenus() {
     let mut rt = mount(App::default(), menu);
     let button = node(&rt.accessibility_json(), "file-button").clone();
     assert!(has(&button, "collapsed") && can(&button, "expand"), "a menu button reads closed: {button}");
+    assert_eq!(button["hasPopup"], "menu");
     assert!(act(&mut rt, "file-button", Action::Expand));
     let tree = rt.accessibility_json();
-    assert_eq!(said(node(&tree, "file-menu")).0, "menu");
+    let open_button = node(&tree, "file-button");
+    assert!(has(open_button, "expanded") && !has(open_button, "disabled"), "trigger reads expanded while menu is open: {open_button}");
+    assert_eq!(open_button["hasPopup"], "menu");
+    assert_eq!(open_button["controls"], serde_json::json!(["file-menu"]));
+    assert!(actions(open_button).is_empty(), "kept menu trigger is inert to actions: {open_button}");
+    assert!(!act(&mut rt, "file-button", Action::Click), "kept menu trigger blocks assistive click");
+    let menu_node = node(&tree, "file-menu");
+    assert_eq!(said(menu_node).0, "menu");
+    assert!(!has(menu_node, "modal"), "popup menu does not announce modal state: {menu_node}");
     let new = node(&tree, "file-item0");
     assert_eq!((said(new), new["shortcut"].as_str()), (("menu-item", "New"), Some("Ctrl+N")));
     assert!(new["children"].is_null(), "the row's label and shortcut aren't read twice");
@@ -274,10 +283,16 @@ fn a_select_reads_its_name_choice_and_options() {
 
     assert!(act(&mut rt, "fruit-trigger", Action::Expand));
     let tree = rt.accessibility_json();
-    assert!(find(&tree, "fruit-trigger").is_none(), "the open listbox is modal: the trigger waits behind it");
-    assert_eq!(said(node(&tree, "fruit-content")), ("dialog", "Fruit"));
-    let listbox = node(&tree, "listbox");
+    let open_trigger = node(&tree, "fruit-trigger");
+    assert!(has(open_trigger, "expanded") && !has(open_trigger, "disabled"), "select trigger reads expanded while listbox is open: {open_trigger}");
+    assert_eq!(open_trigger["hasPopup"], "listbox");
+    assert_eq!(open_trigger["controls"], serde_json::json!(["fruit-content"]));
+    assert!(actions(open_trigger).is_empty(), "kept select trigger is inert to actions: {open_trigger}");
+    assert!(!act(&mut rt, "fruit-trigger", Action::Click), "kept select trigger blocks assistive click");
+    assert!(find(&tree, "size-trigger").is_none(), "unrelated select behind open listbox stays pruned");
+    let listbox = node(&tree, "fruit-content");
     assert_eq!(said(listbox), ("list-box", "Fruit"));
+    assert!(!has(listbox, "modal"), "select listbox does not announce modal state: {listbox}");
     let pear = node(&tree, "option1");
     assert_eq!(said(pear), ("list-box-option", "Pear"));
     assert!(has(pear, "selected") && pear["position"] == 2);
@@ -785,4 +800,80 @@ fn popup_item_label_with_and_build_list_reach_accessibility_tree_and_web_mirror(
         !mirror.iter().any(|v| v["t"] == "/rev" || v["t"] == "iew"),
         "split label_with spans do not echo in web mirror: {mirror:?}",
     );
+}
+
+#[test]
+fn select_inside_dialog_keeps_dialog_and_expanded_trigger_readable() {
+    #[derive(Default)]
+    struct Local {
+        dialog: bool,
+        select: bool,
+        chosen: Option<String>,
+    }
+
+    fn view(s: &Local, _: &mut Cx<Local>) -> El {
+        let k = kit();
+        let mut layer = Vec::new();
+        let mut select_layer = Vec::new();
+        let select = Select::new("fruit", &FRUIT)
+            .label("Fruit")
+            .current(s.chosen.as_deref())
+            .open(s.select)
+            .on_toggle(|s: &mut Local| s.select = !s.select)
+            .on_close(|s: &mut Local| s.select = false)
+            .on_choose(|s: &mut Local, v: &str, _| {
+                s.chosen = Some(v.to_owned());
+                s.select = false;
+            })
+            .build(&k, &mut select_layer);
+        Dialog::new("settings", "Settings")
+            .open(s.dialog)
+            .on_close(|s: &mut Local| s.dialog = false)
+            .child(select)
+            .build(&k, &mut layer);
+        // Mount the select's popup after the dialog so the listbox is the topmost active modal.
+        layer.extend(select_layer);
+        root(col().child(Button::new("Page").build(&k).key("page-btn")), layer)
+    }
+
+    let mut rt = rune::Runtime::new(
+        Local { dialog: true, select: true, chosen: Some("Pear".into()) },
+        view,
+        (720.0, 480.0),
+        rune::Env::new(false, 1.0),
+    );
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(1.0 / 60.0);
+
+    let tree = rt.accessibility_json();
+    let dlg = node(&tree, "settings-dialog");
+    assert_eq!(said(dlg), ("dialog", "Settings"));
+    assert!(has(dlg, "modal"));
+    let trig = node(dlg, "fruit-trigger");
+    assert_eq!(said(trig), ("combo-box", "Fruit"));
+    assert!(has(trig, "expanded") && !has(trig, "disabled"));
+    assert_eq!(trig["hasPopup"], "listbox");
+    assert_eq!(trig["controls"], serde_json::json!(["fruit-content"]));
+    assert!(actions(trig).is_empty(), "select trigger inside dialog is inert while listbox is open: {trig}");
+    assert!(find(&tree, "page-btn").is_none(), "page behind outer dialog stays pruned");
+    let list = node(&tree, "fruit-content");
+    assert_eq!(said(list), ("list-box", "Fruit"));
+    assert!(!has(list, "modal"));
+
+    let mirror: Vec<serde_json::Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let dlg_i = mirror
+        .iter()
+        .position(|v| v["k"] == "group" && v["o"] == "dialog" && v["t"] == "Settings")
+        .unwrap_or_else(|| panic!("outer dialog missing in web mirror: {mirror:?}"));
+    let m_trig = mirror
+        .iter()
+        .find(|v| v["o"] == "combobox" && v["t"] == "Fruit")
+        .unwrap_or_else(|| panic!("select trigger missing in web mirror: {mirror:?}"));
+    assert_eq!(m_trig["a"], dlg_i, "select trigger sits inside outer dialog in web mirror: {mirror:?}");
+    assert_eq!(m_trig["x"], true);
+    assert_eq!(m_trig["hp"], "listbox");
+    assert_eq!(m_trig["ct"], "fruit-content");
+    assert!(mirror.iter().any(|v| v["o"] == "listbox" && v["i"] == "fruit-content"));
+    assert!(!mirror.iter().any(|v| v["t"] == "Page"));
 }

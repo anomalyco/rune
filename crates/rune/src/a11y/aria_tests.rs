@@ -556,3 +556,254 @@ fn web_mirror_and_focus_proxy_reflect_aria_disabled_and_wai_aria_setters() {
     let fruit_u = upserts.iter().find(|v| v["t"] == "Fruit").expect("Fruit updated in patch");
     assert!(fruit_u.get("ct").is_none() && fruit_u.get("ow").is_none(), "closed popup drops ct/ow: {fruit_u}");
 }
+
+#[test]
+fn anchored_popup_modal_keeps_trigger_and_outer_dialog_readable_while_blocking_input() {
+    #[derive(Default)]
+    struct Scene {
+        menu: bool,
+        dialog: bool,
+        list: bool,
+        anchored_dialog: bool,
+        tree_popup: bool,
+        trigger_presses: usize,
+        copy_presses: usize,
+    }
+
+    fn item(key: &'static str, role: &'static str) -> El {
+        el().key(key).role(role).label(key).focusable(true).size(120.0, 24.0).child(text(key))
+    }
+
+    fn view(s: &Scene, _: &mut Cx<Scene>) -> El {
+        let menu_btn = el()
+            .key("menu-button")
+            .role("button")
+            .label("Edit")
+            .focusable(true)
+            .size(120.0, 24.0)
+            .expanded(s.menu)
+            .has_popup(HasPopup::Menu)
+            .controls("menu")
+            .on_press(|s: &mut Scene| {
+                s.trigger_presses += 1;
+                s.menu = !s.menu;
+            })
+            .child(text("Edit"));
+        let other_btn = el()
+            .key("other-button")
+            .role("button")
+            .label("Other")
+            .focusable(true)
+            .size(120.0, 24.0)
+            .on_press(|_: &mut Scene| {})
+            .child(text("Other"));
+        let dlg_trigger = el()
+            .key("dialog-trigger")
+            .role("button")
+            .label("Confirm")
+            .focusable(true)
+            .size(120.0, 24.0)
+            .expanded(s.anchored_dialog)
+            .has_popup(HasPopup::Dialog)
+            .controls("anchored-dialog")
+            .child(text("Confirm"));
+        let tree_trigger = el()
+            .key("tree-trigger")
+            .role("button")
+            .label("Tree")
+            .focusable(true)
+            .size(120.0, 24.0)
+            .expanded(s.tree_popup)
+            .has_popup(HasPopup::Tree)
+            .controls("tree-popup")
+            .child(text("Tree"));
+
+        let mut root = col().w_full().h_full()
+            .child(menu_btn)
+            .child(other_btn)
+            .child(dlg_trigger)
+            .child(tree_trigger);
+
+        if s.menu {
+            root = root.child(
+                col().key("menu").role("menu").label("Edit").transition(crate::Transition::none())
+                    .anchored_fit("menu-button", crate::Side::Bottom, crate::Align::Start, 0.0)
+                    .modal(true, |s: &mut Scene| s.menu = false)
+                    .child(item("copy", "menuitem").on_press(|s: &mut Scene| s.copy_presses += 1)),
+            );
+        }
+        if s.dialog {
+            let select = el()
+                .key("fruit")
+                .role("combobox")
+                .label("Fruit")
+                .focusable(true)
+                .size(120.0, 24.0)
+                .expanded(s.list)
+                .has_popup(HasPopup::Listbox)
+                .controls("list")
+                .on_press(|s: &mut Scene| s.list = !s.list)
+                .child(text("Fruit"));
+            let save = el()
+                .key("save-btn")
+                .role("button")
+                .label("Save")
+                .focusable(true)
+                .size(80.0, 24.0)
+                .child(text("Save"));
+            root = root.child(
+                col().key("dialog").role("dialog").label("Settings").transition(crate::Transition::none())
+                    .absolute(200.0, 40.0)
+                    .modal(true, |s: &mut Scene| s.dialog = false)
+                    .child(select)
+                    .child(save),
+            );
+            if s.list {
+                root = root.child(
+                    col().key("list").role("listbox").label("Fruit").transition(crate::Transition::none())
+                        .anchored_fit("fruit", crate::Side::Bottom, crate::Align::Start, 0.0)
+                        .modal(true, |s: &mut Scene| s.list = false)
+                        .child(item("apple", "option")),
+                );
+            }
+        }
+        if s.anchored_dialog {
+            root = root.child(
+                col().key("anchored-dialog").role("dialog").label("Sure?").transition(crate::Transition::none())
+                    .anchored_fit("dialog-trigger", crate::Side::Bottom, crate::Align::Start, 0.0)
+                    .modal(true, |s: &mut Scene| s.anchored_dialog = false)
+                    .child(item("ok", "button")),
+            );
+        }
+        if s.tree_popup {
+            root = root.child(
+                col().key("tree-popup").role("tree").label("Files").transition(crate::Transition::none())
+                    .anchored_fit("tree-trigger", crate::Side::Bottom, crate::Align::Start, 0.0)
+                    .modal(true, |s: &mut Scene| s.tree_popup = false)
+                    .child(item("leaf", "treeitem")),
+            );
+        }
+        root
+    }
+
+    // 1. Anchored menu modal keeps its trigger readable (expanded, hasPopup, controls) and inert,
+    //    omits modal state on the menu, and still prunes unrelated page content.
+    let mut rt = Runtime::new(Scene::default(), view, (600.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let mut link = AccessibilityLink::new();
+    link.activate();
+    assert!(link.service(&mut rt, "Window").is_some());
+
+    rt.update(|s, _| s.menu = true);
+    rt.frame(1.0 / 60.0);
+    rt.frame(2.0 / 60.0);
+    assert!(link.service(&mut rt, "Window").is_some());
+
+    let tree = rt.accessibility_tree();
+    let json = rt.accessibility_json();
+    let trigger = find(&json, "menu-button").unwrap_or_else(|| panic!("menu-button missing while menu open: {json}"));
+    assert_eq!(trigger["hasPopup"], "menu");
+    assert_eq!(trigger["controls"], json!(["menu"]));
+    assert!(states(trigger).contains(&"expanded"), "trigger must read expanded: {trigger}");
+    assert!(!states(trigger).contains(&"disabled"), "kept trigger is not disabled: {trigger}");
+    assert!(actions(trigger).is_empty(), "kept trigger must be inert to actions: {trigger}");
+    assert!(find(&json, "other-button").is_none(), "unrelated page controls stay pruned: {json}");
+
+    let menu = find(&json, "menu").expect("menu in tree");
+    assert!(!states(menu).contains(&"modal"), "popup menu must not announce modal state: {menu}");
+    let (menu_id, ak_menu) = ak_node(&tree, "menu");
+    let (_, ak_trigger) = ak_node(&tree, "menu-button");
+    assert!(!ak_menu.is_modal());
+    assert_eq!(ak_trigger.is_expanded(), Some(true));
+    assert_eq!(ak_trigger.has_popup(), Some(AkHasPopup::Menu));
+    assert_eq!(ak_trigger.controls(), &[menu_id]);
+    assert!(!ak_trigger.supports_action(Ak::Click));
+    assert!(!ak_trigger.supports_action(Ak::Focus));
+    assert!(!ak_trigger.supports_action(Ak::Collapse));
+
+    // Assistive actions, pointer clicks, and Tab stay blocked on the trigger while menu is open.
+    assert!(!rt.accessibility_action("menu-button", Ak::Click, None));
+    assert!(!rt.accessibility_action("menu-button", Ak::Focus, None));
+    assert!(!rt.accessibility_action("menu-button", Ak::Collapse, None));
+    press_key(&mut rt, Key::Tab);
+    assert_eq!(focused_key(&rt).as_deref(), Some("copy"));
+    assert_eq!(rt.state.trigger_presses, 0);
+
+    // Web mirror parity: trigger stays mirrored with expanded/haspopup/controls, refuses a11y_press,
+    // and unrelated page buttons stay hidden.
+    let mut mirror = A11yMirror::default();
+    let web_items: Vec<Value> = serde_json::from_str(rt.web_a11y(&mut mirror).expect("web mirror")).unwrap();
+    let web_trigger = web_items.iter().find(|v| v["t"] == "Edit" && v["k"] == "button")
+        .unwrap_or_else(|| panic!("menu-button missing in web mirror: {web_items:?}"));
+    assert_eq!(web_trigger["x"], true);
+    assert_eq!(web_trigger["hp"], "menu");
+    assert_eq!(web_trigger["ct"], "menu");
+    assert!(web_trigger.get("dis").is_none());
+    assert!(!web_items.iter().any(|v| v["t"] == "Other"), "unrelated button pruned in web mirror: {web_items:?}");
+    assert!(!rt.web_a11y_action(&json!({"kind": "a11y_press", "path": web_trigger["p"].as_str().unwrap()})));
+    rt.frame(3.0 / 60.0);
+    assert_eq!(rt.state.trigger_presses, 0);
+
+    // Escape closes the menu and restores collapsed + actions on menu-button.
+    press_key(&mut rt, Key::Escape);
+    assert!(!rt.state.menu);
+    assert!(link.service(&mut rt, "Window").is_some());
+    let closed_json = rt.accessibility_json();
+    let closed_trigger = find(&closed_json, "menu-button").expect("trigger after close");
+    assert!(states(closed_trigger).contains(&"collapsed"));
+    assert!(actions(closed_trigger).contains(&"click") && actions(closed_trigger).contains(&"expand"));
+
+    // 2. A select's listbox modal inside an outer dialog keeps both the dialog and the expanded
+    //    combobox trigger readable while pruning outside page controls and unrelated dialog siblings.
+    let mut rt = Runtime::new(Scene { dialog: true, list: true, ..Scene::default() }, view, (600.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(1.0 / 60.0);
+    let json = rt.accessibility_json();
+    let dlg = find(&json, "dialog").unwrap_or_else(|| panic!("outer dialog missing while listbox open: {json}"));
+    assert!(states(dlg).contains(&"modal"), "outer dialog keeps modal state: {dlg}");
+    assert!(actions(dlg).is_empty());
+    let fruit = find(dlg, "fruit").unwrap_or_else(|| panic!("combobox trigger missing inside outer dialog: {dlg}"));
+    assert_eq!(fruit["hasPopup"], "listbox");
+    assert_eq!(fruit["controls"], json!(["list"]));
+    assert!(states(fruit).contains(&"expanded"));
+    assert!(actions(fruit).is_empty());
+    assert!(find(&json, "menu-button").is_none(), "page behind outer dialog stays pruned: {json}");
+    assert!(find(dlg, "save-btn").is_none(), "unrelated sibling inside dialog stays pruned: {dlg}");
+    let list = find(&json, "list").expect("listbox in tree");
+    assert!(!states(list).contains(&"modal"), "listbox popup must not announce modal state: {list}");
+    assert!(!rt.accessibility_action("fruit", Ak::Click, None));
+
+    let web_items: Vec<Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    let dlg_i = web_items.iter().position(|v| v["k"] == "group" && v["o"] == "dialog" && v["t"] == "Settings")
+        .unwrap_or_else(|| panic!("outer dialog missing in web mirror: {web_items:?}"));
+    let web_fruit = web_items.iter().find(|v| v["o"] == "combobox" && v["t"] == "Fruit")
+        .unwrap_or_else(|| panic!("combobox trigger missing in web mirror: {web_items:?}"));
+    assert_eq!(web_fruit["a"], dlg_i, "combobox stays inside outer dialog in web mirror: {web_items:?}");
+    assert_eq!(web_fruit["x"], true);
+    assert_eq!(web_fruit["hp"], "listbox");
+    assert_eq!(web_fruit["ct"], "list");
+    assert!(!web_items.iter().any(|v| v["t"] == "Edit"), "page behind outer dialog pruned in web mirror");
+    assert!(!web_items.iter().any(|v| v["t"] == "Save"), "unrelated dialog sibling pruned in web mirror");
+
+    // 3. An anchored modal dialog is still a modal dialog: it announces modal and hides its trigger.
+    let mut rt = Runtime::new(Scene { anchored_dialog: true, ..Scene::default() }, view, (600.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(1.0 / 60.0);
+    let json = rt.accessibility_json();
+    let adlg = find(&json, "anchored-dialog").expect("anchored dialog in tree");
+    assert!(states(adlg).contains(&"modal"), "anchored dialog announces modal: {adlg}");
+    assert!(find(&json, "dialog-trigger").is_none(), "anchored dialog hides its trigger: {json}");
+    let web_items: Vec<Value> = serde_json::from_str(&rt.a11y_json()).unwrap();
+    assert!(!web_items.iter().any(|v| v["t"] == "Confirm"), "anchored dialog hides trigger in web mirror: {web_items:?}");
+
+    // 4. Other WAI-ARIA popup roles (tree) follow the same rule.
+    let mut rt = Runtime::new(Scene { tree_popup: true, ..Scene::default() }, view, (600.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.frame(1.0 / 60.0);
+    let json = rt.accessibility_json();
+    let tbtn = find(&json, "tree-trigger").expect("tree popup trigger stays readable");
+    assert!(states(tbtn).contains(&"expanded"));
+    assert_eq!(tbtn["controls"], json!(["tree-popup"]));
+    assert!(actions(tbtn).is_empty());
+    assert!(!states(find(&json, "tree-popup").unwrap()).contains(&"modal"));
+}

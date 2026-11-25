@@ -459,6 +459,13 @@ pub(crate) fn table_container(role: Role) -> bool {
     matches!(role, Role::Grid | Role::Table | Role::TreeGrid)
 }
 
+/// Non-dialog WAI-ARIA popup roles (`menu`, `listbox`, `tree`, `grid`, `treegrid`): not
+/// exposed as `aria-modal`, and when opened as an anchored [`El::modal`](crate::El::modal)
+/// keep their trigger and enclosing modal readable (inert to actions) in the accessibility tree.
+pub(crate) fn popup_modal(role: Role) -> bool {
+    matches!(role, Role::Menu | Role::ListBox | Role::Tree | Role::Grid | Role::TreeGrid)
+}
+
 /// The ARIA role a browser's reader knows for an AccessKit role, for the web focus proxy.
 pub(crate) fn focus_role(role: Role) -> &'static str {
     ak_meta(role).focus_role

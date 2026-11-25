@@ -3,94 +3,97 @@
     {
       "children": [
         {
+          "controls": [
+            "fruit-content"
+          ],
+          "hasPopup": "listbox",
+          "key": "fruit-trigger",
+          "name": "Fruit",
+          "role": "combo-box",
+          "states": [
+            "expanded"
+          ],
+          "value": "Pear"
+        },
+        {
           "children": [
             {
               "children": [
                 {
+                  "actions": [
+                    "scroll-up",
+                    "scroll-down",
+                    "set-scroll-offset"
+                  ],
                   "children": [
                     {
                       "actions": [
-                        "scroll-up",
-                        "scroll-down",
-                        "set-scroll-offset"
+                        "scroll-into-view"
                       ],
                       "children": [
                         {
                           "actions": [
+                            "click",
+                            "focus",
                             "scroll-into-view"
                           ],
-                          "children": [
-                            {
-                              "actions": [
-                                "click",
-                                "focus",
-                                "scroll-into-view"
-                              ],
-                              "key": "option0",
-                              "name": "Apple",
-                              "position": 1,
-                              "role": "list-box-option",
-                              "states": [
-                                "unselected"
-                              ]
-                            },
-                            {
-                              "actions": [
-                                "click",
-                                "focus",
-                                "scroll-into-view"
-                              ],
-                              "key": "option1",
-                              "name": "Pear",
-                              "position": 2,
-                              "role": "list-box-option",
-                              "states": [
-                                "focused",
-                                "selected"
-                              ]
-                            },
-                            {
-                              "actions": [
-                                "click",
-                                "focus",
-                                "scroll-into-view"
-                              ],
-                              "key": "option2",
-                              "name": "Plum",
-                              "position": 3,
-                              "role": "list-box-option",
-                              "states": [
-                                "unselected"
-                              ]
-                            }
+                          "key": "option0",
+                          "name": "Apple",
+                          "position": 1,
+                          "role": "list-box-option",
+                          "states": [
+                            "unselected"
+                          ]
+                        },
+                        {
+                          "actions": [
+                            "click",
+                            "focus",
+                            "scroll-into-view"
                           ],
-                          "key": "rows",
-                          "role": "group",
-                          "setSize": 3
+                          "key": "option1",
+                          "name": "Pear",
+                          "position": 2,
+                          "role": "list-box-option",
+                          "states": [
+                            "focused",
+                            "selected"
+                          ]
+                        },
+                        {
+                          "actions": [
+                            "click",
+                            "focus",
+                            "scroll-into-view"
+                          ],
+                          "key": "option2",
+                          "name": "Plum",
+                          "position": 3,
+                          "role": "list-box-option",
+                          "states": [
+                            "unselected"
+                          ]
                         }
                       ],
-                      "key": "scroll",
-                      "role": "scroll-view",
-                      "states": [
-                        "clips"
-                      ]
+                      "key": "rows",
+                      "role": "group",
+                      "setSize": 3
                     }
                   ],
-                  "key": "fruit-scroll-area",
-                  "role": "group"
+                  "key": "scroll",
+                  "role": "scroll-view",
+                  "states": [
+                    "clips"
+                  ]
                 }
               ],
-              "key": "listbox",
-              "name": "Fruit",
-              "role": "list-box"
+              "key": "fruit-scroll-area",
+              "role": "group"
             }
           ],
           "key": "fruit-content",
           "name": "Fruit",
-          "role": "dialog",
-          "states": [
-            "modal"
-          ]
+          "role": "list-box"
         }
       ],
       "key": "kit-root",

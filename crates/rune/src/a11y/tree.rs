@@ -591,19 +591,9 @@ impl RuntimeCore {
         let focused = self.focused_index();
         let content = self.a11y_content_prints();
         let mut spoken = rustc_hash::FxHashMap::default();
-        // Behind an open modal the tree holds only the modal and what contains it.
-        let mut holds_modal = Vec::new();
-        let modal = self.active_modal().is_some();
-        if modal {
-            holds_modal = vec![false; n_nodes];
-            for i in (0..n_nodes).filter(|&i| self.modal_member(i)) {
-                let mut p = self.tree.nodes[i].parent;
-                while let Some(j) = p.filter(|&j| !holds_modal[j]) {
-                    holds_modal[j] = true;
-                    p = self.tree.nodes[j].parent;
-                }
-            }
-        }
+        // Behind an open modal the tree holds the modal, its ancestors, and (for an anchored
+        // popup modal such as a menu or listbox) its anchor trigger and enclosing modal context.
+        let modal_mask = self.a11y_modal_mask();
         for i in 0..n_nodes {
             let n = &self.tree.nodes[i];
             let up = n.parent.map_or(root_walk, |p| walk[p]);
@@ -630,7 +620,7 @@ impl RuntimeCore {
                     || !self.scene.contains(n.id);
             }
             if !w.gone && !w.modal_gone {
-                w.modal_gone = modal && !self.modal_member(i) && !holds_modal[i];
+                w.modal_gone = modal_mask.as_ref().is_some_and(|m| !m.visible(i));
             }
             let content_print = content.get(i).copied().unwrap_or(0);
             if w.modal_gone && !w.gone && let Some(sig) = self.a11y_live_sig(i, content_print) {

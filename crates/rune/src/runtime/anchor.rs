@@ -4,7 +4,7 @@ use super::*;
 use crate::el::{Anchor, Flow, Pin, Side};
 
 /// Maximum depth of chained anchored overlays followed for zoom or target placement.
-pub(super) const MAX_ANCHOR_CHAIN: usize = 32;
+pub(crate) const MAX_ANCHOR_CHAIN: usize = 32;
 
 /// Whether `candidate` is `root` or inside `root`'s subtree.
 fn in_subtree(nodes: &[Node], mut candidate: usize, root: usize) -> bool {
@@ -570,6 +570,17 @@ fn attach_point(a: &Anchor, t: [f32; 4], d: [f32; 4]) -> [f32; 2] {
 }
 
 impl RuntimeCore {
+    /// Whether node `i` carries an `El::above` / `El::anchored` anchor.
+    pub(crate) fn has_anchor(&self, i: usize) -> bool {
+        self.tree.nodes.get(i).is_some_and(|n| n.above.is_some())
+    }
+
+    /// The live anchor element `overlay`'s `El::above` / `El::anchored` points to, if any.
+    pub(crate) fn anchor_of(&self, overlay: usize) -> Option<usize> {
+        let a = self.tree.nodes.get(overlay)?.above.as_ref()?;
+        anchor_index_live(&self.tree.nodes, overlay, a, |j| self.subtree_exiting(j))
+    }
+
     /// Resolved boundary rect `[x0, y0, x1, y1]` for anchored overlay `i` during paint,
     /// intersected with the window, or the full window viewport when no boundary is set/found.
     fn anchored_bounds_drawn(&self, i: usize) -> [f32; 4] {

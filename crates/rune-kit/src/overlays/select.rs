@@ -246,7 +246,9 @@ impl Select {
     }
 
     pub fn build(mut self, k: &Kit, layer: &mut Vec<El>) -> El {
-        let trigger = self.field(k);
+        let trigger = self.field(k)
+            .has_popup(rune::HasPopup::Listbox)
+            .controls(content_key(&self.key));
         if self.state == State::Disabled || !self.open {
             return trigger;
         }
@@ -308,18 +310,22 @@ impl Select {
             list = list.child(item);
             after_item = true;
         }
+        let name = self.name.clone().unwrap_or_else(|| self.placeholder.clone());
         let content = k.elevate(
             col()
                 .key(content_key(&self.key))
-                // Modal, so a reader hears a dialog: it's named as the select is.
-                .label(self.name.clone().unwrap_or_else(|| self.placeholder.clone()))
+                .role("listbox")
+                .label(name)
+                .focus_group()
                 .focus_return(&anchor_key)
                 .min_w(160.0)
                 .max_w(368.0)
+                .max_h(LISTBOX_MAX_HEIGHT)
+                .min_h(0.0)
+                .shrink()
                 .radius(6.0)
                 .fill(c.layer_01)
-                .child(col().key("listbox").role("listbox").label(self.name.clone().unwrap_or_else(|| self.placeholder.clone()))
-                    .focus_group().max_h(LISTBOX_MAX_HEIGHT).min_h(0.0).shrink().child(fit_scroll_bar(k, &self.key, list))),
+                .child(fit_scroll_bar(k, &self.key, list)),
             &k.elevation.floating,
         );
         push_anchored_modal(k, layer, self.dismiss, content, &anchor_key, self.placement, 2.0);

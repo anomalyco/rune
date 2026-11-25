@@ -8,6 +8,7 @@
             "focus",
             "expand"
           ],
+          "hasPopup": "listbox",
           "key": "fruit-trigger",
           "name": "Fruit",
           "role": "combo-box",
@@ -17,6 +18,7 @@
           "value": "Pear"
         },
         {
+          "hasPopup": "listbox",
           "key": "size-trigger",
           "name": "Size",
           "role": "combo-box",

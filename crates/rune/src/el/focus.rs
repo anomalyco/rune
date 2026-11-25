@@ -563,6 +563,15 @@ impl El {
         self
     }
     /// Trap focus and make the background inert while mounted. Escape requests dismissal.
+    ///
+    /// Accessibility follows WAI-ARIA 1.2 and Chromium: only `dialog` and `alertdialog` modals
+    /// (including a plain `group` box, which resolves to `dialog` when modal) report the `modal`
+    /// state and hide everything outside them from assistive technology. An anchored modal whose
+    /// role is a popup role (`menu`, `listbox`, `tree`, `grid`, or `treegrid`) omits the
+    /// `modal` state and keeps its anchor trigger (and any enclosing outer modal holding that
+    /// trigger) in the accessibility tree and web mirror—readable with its `expanded`,
+    /// `has_popup`, and `controls` states, and inert to assistive actions—while pointer and
+    /// keyboard input stay blocked outside the modal.
     pub fn modal<S: 'static>(mut self, click_outside: bool, dismiss: impl Fn(&mut S) + 'static) -> Self {
         self.handlers.modal = Some(ModalSpec { outside: click_outside, wheel_outside: false,
             dismiss: Some(Rc::new(move |s, _| dismiss(downcast::<S>(s)))) });

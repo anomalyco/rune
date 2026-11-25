@@ -5,6 +5,24 @@
         {
           "children": [
             {
+              "controls": [
+                "file-menu"
+              ],
+              "hasPopup": "menu",
+              "key": "file-button",
+              "name": "File",
+              "role": "button",
+              "states": [
+                "expanded"
+              ]
+            }
+          ],
+          "key": "file-trigger",
+          "role": "group"
+        },
+        {
+          "children": [
+            {
               "children": [
                 {
                   "actions": [
@@ -110,10 +128,7 @@
             }
           ],
           "key": "file-menu",
-          "role": "menu",
-          "states": [
-            "modal"
-          ]
+          "role": "menu"
         }
       ],
       "key": "kit-root",
