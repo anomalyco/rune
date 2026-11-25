@@ -313,6 +313,7 @@ impl TextArea {
         let c = &k.c;
         let disabled = self.state == State::Disabled;
         let TextAreaMetrics { style, padding } = k.text_area_metrics();
+        let min_height = k.text_area_min_height();
         let red = self.invalid && !disabled && (k.invalid_text || self.plain);
         let ink = if red { c.danger.fg } else { c.text_base };
         let hint = if red { c.danger.fg } else { c.text_faint };
@@ -346,7 +347,7 @@ impl TextArea {
             (attach_bar(viewport), None)
         } else if let Some(h) = self.max_height {
             let max_inner = (h - 2.0 * padding).max(line);
-            let min_inner = (self.rows as f32 * line).max(80.0 - 2.0 * padding).min(max_inner);
+            let min_inner = (self.rows as f32 * line).max(min_height - 2.0 * padding).min(max_inner);
             let viewport = col()
                 .key("scroll")
                 .w_full()
@@ -357,8 +358,8 @@ impl TextArea {
                 .child(field.animate_edit_layout());
             (attach_bar(viewport), Some(min_inner + 2.0 * padding))
         } else {
-            // A <textarea rows=3>: rows of its line height plus padding, at least 80.
-            (field, Some((self.rows as f32 * line + 2.0 * padding).max(80.0)))
+            // A <textarea rows=3>: rows of its line height plus padding, at least min_height.
+            (field, Some((self.rows as f32 * line + 2.0 * padding).max(min_height)))
         };
         let mut e = if let Some(t) = self.trailing {
             row()

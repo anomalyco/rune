@@ -279,14 +279,16 @@ impl SegmentedControl {
 
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
+        let m = k.segmented_metrics();
+        let (height, radius, padding_x) = (m.height, m.radius, m.padding_x);
         let n = self.labels.len().max(1);
         let font = TextStyle { line_height: 13.0, ..k.ty.ui };
         let mut root = row()
             .role(if self.as_tabs { "tablist" } else { "radiogroup" })
             .focus_group()
-            .h(28.0)
+            .h(height)
             .center_y()
-            .radius(6.0)
+            .radius(radius)
             .fill(c.layer_01)
             .box_shadow(rune::Shadow {
                 spread: 0.5,
@@ -306,8 +308,8 @@ impl SegmentedControl {
         };
         let indicator = || {
             el().key("indicator")
-                .h(28.0)
-                .radius(6.0)
+                .h(height)
+                .radius(radius)
                 .fill(c.bg_base)
                 .box_shadow(rune::Shadow { spread: 0.5, color: c.border_strong, ..Default::default() })
                 .token_motion(k.motion.control)
@@ -348,11 +350,11 @@ impl SegmentedControl {
                 .position_in_set(i + 1, n)
                 .grow(1.0)
                 .shrink()
-                .h(28.0)
-                .px(12.0)
+                .h(height)
+                .px(padding_x)
                 .gap(6.0)
                 .center()
-                .radius(6.0);
+                .radius(radius);
             if let Some(name) = a11y_name {
                 seg = seg.label(name);
             }

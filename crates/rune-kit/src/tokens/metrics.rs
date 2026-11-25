@@ -7,6 +7,10 @@ use rune::{Color, TextStyle};
 
 use crate::{ControlSize, Kit};
 
+fn non_neg(v: f32) -> f32 {
+    if v.is_finite() && v > 0.0 { v } else { 0.0 }
+}
+
 /// One value per [`ControlSize`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BySize<T> {
@@ -85,6 +89,13 @@ impl SwitchMetrics {
 
 /// How a compact or web [`Switch`](crate::Switch) paints its track and knob over their fills.
 /// Shadows stay in `Kit::elevation` (`switch_on`, `switch_off`, `elements`).
+///
+/// ```
+/// # use rune_kit::{Kit, Switch, SwitchLook};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.switch_look = Some(SwitchLook { track_border: 1.0, ..SwitchLook::flat(&k) });
+/// let _ = Switch::new(true).build(&k);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SwitchLook {
     /// The track's sheen: a white gradient that brightens towards its bottom.
@@ -178,11 +189,115 @@ impl CheckboxColors {
     }
 }
 
+/// A [`SegmentedControl`](crate::SegmentedControl)'s height, horizontal segment padding and
+/// corner radius.
+///
+/// ```
+/// # use rune_kit::{Kit, SegmentedControl, SegmentedMetrics};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.segmented = Some(SegmentedMetrics { height: 24.0, padding_x: 8.0, ..SegmentedMetrics::kit(&k) });
+/// let _ = SegmentedControl::new(&["List", "Grid"], Some(0)).build(&k);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SegmentedMetrics {
+    pub height: f32,
+    /// Padding left and right of each segment's content.
+    pub padding_x: f32,
+    pub radius: f32,
+}
+
+impl SegmentedMetrics {
+    /// The built-in box: 28 points tall, 12 points of side padding and `k.radius.md` corners.
+    pub fn kit(k: &Kit) -> SegmentedMetrics {
+        SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: k.radius.md }
+    }
+}
+
+/// A linear [`Progress`](crate::Progress) bar's track height and rim width.
+///
+/// ```
+/// # use rune_kit::{Kit, Progress, ProgressMetrics};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.progress = Some(ProgressMetrics { border_width: 0.0, ..ProgressMetrics::kit(&k) });
+/// let _ = Progress::new(Some(0.6)).build(&k);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProgressMetrics {
+    pub height: f32,
+    /// Track rim width; `0.0` omits the border.
+    pub border_width: f32,
+}
+
+impl ProgressMetrics {
+    /// The built-in track: 8 points tall with a 1 point rim.
+    pub fn kit(_k: &Kit) -> ProgressMetrics {
+        ProgressMetrics { height: 8.0, border_width: 1.0 }
+    }
+}
+
+/// A [`Keybind`](crate::Keybind) keycap's height (and minimum width), horizontal padding and
+/// corner radius.
+///
+/// ```
+/// # use rune_kit::{Keybind, KeybindMetrics, Kit};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.keybind = Some(KeybindMetrics { height: 18.0, padding_x: 6.0, ..KeybindMetrics::kit(&k) });
+/// let _ = Keybind::new(&["⌘", "K"]).build(&k);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeybindMetrics {
+    /// Keycap height and minimum width.
+    pub height: f32,
+    /// Padding left and right of each keycap's label.
+    pub padding_x: f32,
+    pub radius: f32,
+}
+
+impl KeybindMetrics {
+    /// The built-in keycap: 14 points tall, 4 points of side padding and `k.radius.xs` corners.
+    pub fn kit(k: &Kit) -> KeybindMetrics {
+        KeybindMetrics { height: 14.0, padding_x: 4.0, radius: k.radius.xs }
+    }
+}
+
+/// A standard [`Switch`](crate::Switch)'s (`Switch::standard`) track and thumb geometry.
+///
+/// ```
+/// # use rune_kit::{Kit, StandardSwitchMetrics, Switch};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.standard_switch = Some(StandardSwitchMetrics {
+///     track_width: 32.0,
+///     track_height: 20.0,
+///     thumb: 16.0,
+///     ..StandardSwitchMetrics::kit(&k)
+/// });
+/// let _ = Switch::new(true).standard().build(&k);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StandardSwitchMetrics {
+    pub track_width: f32,
+    pub track_height: f32,
+    /// Diameter of the checked thumb; unchecked adds the 1 point border on each side.
+    pub thumb: f32,
+    /// Space between the track edge and the checked thumb.
+    pub inset: f32,
+}
+
+impl StandardSwitchMetrics {
+    /// The built-in standard switch: a 28 × 16 track with a 14 point thumb, 1 point inside.
+    pub fn kit(_k: &Kit) -> StandardSwitchMetrics {
+        StandardSwitchMetrics { track_width: 28.0, track_height: 16.0, thumb: 14.0, inset: 1.0 }
+    }
+}
+
 /// Overrides for metrics some controls otherwise fix in code. `Metrics::default()` overrides
 /// nothing.
 ///
 /// ```
-/// # use rune_kit::{BySize, ButtonMetrics, FieldMetrics, Kit};
+/// # use rune_kit::{
+/// #     BySize, ButtonMetrics, FieldMetrics, KeybindMetrics, Kit, ProgressMetrics,
+/// #     SegmentedMetrics, SwitchLook,
+/// # };
 /// let mut k = Kit::neutral(true);
 /// // Tailwind's 24/28/32/36 buttons.
 /// let m = |height, padding_x, radius| ButtonMetrics { height, padding_x, radius, icon: 16.0 };
@@ -202,6 +317,14 @@ impl CheckboxColors {
 ///     focus_offset: 0.0,
 ///     ..FieldMetrics::kit(&k)
 /// });
+/// // Dense flat controls.
+/// k.metrics.segmented = Some(SegmentedMetrics { height: 24.0, padding_x: 8.0, ..SegmentedMetrics::kit(&k) });
+/// k.metrics.disclosure_header_height = Some(26.0);
+/// k.metrics.progress = Some(ProgressMetrics { height: 6.0, ..ProgressMetrics::kit(&k) });
+/// k.metrics.divider_thickness = Some(0.5);
+/// k.metrics.keybind = Some(KeybindMetrics { height: 16.0, ..KeybindMetrics::kit(&k) });
+/// k.metrics.text_area_min_height = Some(60.0);
+/// k.metrics.switch_look = Some(SwitchLook { track_border: 1.0, ..SwitchLook::flat(&k) });
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Metrics {
@@ -220,6 +343,27 @@ pub struct Metrics {
     pub text_area: Option<TextAreaMetrics>,
     /// Checked [`Checkbox`](crate::Checkbox) colours; else [`CheckboxColors::kit`].
     pub checkbox: Option<CheckboxColors>,
+
+    // Controls and containers (#2362).
+    /// [`SegmentedControl`](crate::SegmentedControl) height, side padding and corner radius; else
+    /// [`SegmentedMetrics::kit`].
+    pub segmented: Option<SegmentedMetrics>,
+    /// [`Collapsible`](crate::Collapsible) and [`Accordion`](crate::Accordion) header row height;
+    /// else `32.0`.
+    pub disclosure_header_height: Option<f32>,
+    /// Linear [`Progress`](crate::Progress) track height and rim width; else
+    /// [`ProgressMetrics::kit`].
+    pub progress: Option<ProgressMetrics>,
+    /// [`Divider`](crate::Divider) rule thickness in points; else `1.0`.
+    pub divider_thickness: Option<f32>,
+    /// [`Keybind`](crate::Keybind) keycap height, side padding and corner radius; else
+    /// [`KeybindMetrics::kit`].
+    pub keybind: Option<KeybindMetrics>,
+    /// Minimum height for non-auto-growing [`TextArea`](crate::TextArea) boxes; else `80.0`.
+    pub text_area_min_height: Option<f32>,
+    /// Standard [`Switch`](crate::Switch) (`Switch::standard`) track and thumb geometry; else
+    /// [`StandardSwitchMetrics::kit`].
+    pub standard_switch: Option<StandardSwitchMetrics>,
 }
 
 impl Kit {
@@ -230,7 +374,8 @@ impl Kit {
         self.metrics.switch.unwrap_or(SwitchMetrics::NS_SWITCH).get(size)
     }
     pub(crate) fn switch_look(&self) -> SwitchLook {
-        self.metrics.switch_look.unwrap_or_else(|| SwitchLook::kit(self))
+        let look = self.metrics.switch_look.unwrap_or_else(|| SwitchLook::kit(self));
+        SwitchLook { track_border: non_neg(look.track_border), ..look }
     }
     pub(crate) fn field_metrics(&self) -> FieldMetrics {
         self.metrics.field.unwrap_or_else(|| FieldMetrics::kit(self))
@@ -240,5 +385,42 @@ impl Kit {
     }
     pub(crate) fn checkbox_colors(&self) -> CheckboxColors {
         self.metrics.checkbox.unwrap_or_else(|| CheckboxColors::kit(self))
+    }
+
+    pub(crate) fn segmented_metrics(&self) -> SegmentedMetrics {
+        let m = self.metrics.segmented.unwrap_or_else(|| SegmentedMetrics::kit(self));
+        SegmentedMetrics { height: non_neg(m.height), padding_x: non_neg(m.padding_x), radius: non_neg(m.radius) }
+    }
+    pub(crate) fn disclosure_header_height(&self) -> f32 {
+        non_neg(self.metrics.disclosure_header_height.unwrap_or(32.0))
+    }
+    pub(crate) fn progress_metrics(&self) -> ProgressMetrics {
+        let m = self.metrics.progress.unwrap_or_else(|| ProgressMetrics::kit(self));
+        ProgressMetrics { height: non_neg(m.height), border_width: non_neg(m.border_width) }
+    }
+    pub(crate) fn divider_thickness(&self) -> f32 {
+        non_neg(self.metrics.divider_thickness.unwrap_or(1.0))
+    }
+    pub(crate) fn keybind_metrics(&self) -> KeybindMetrics {
+        let m = self.metrics.keybind.unwrap_or_else(|| KeybindMetrics::kit(self));
+        KeybindMetrics { height: non_neg(m.height), padding_x: non_neg(m.padding_x), radius: non_neg(m.radius) }
+    }
+    pub(crate) fn text_area_min_height(&self) -> f32 {
+        non_neg(self.metrics.text_area_min_height.unwrap_or(80.0))
+    }
+    pub(crate) fn standard_switch_metrics(&self) -> StandardSwitchMetrics {
+        let m = self.metrics.standard_switch.unwrap_or_else(|| StandardSwitchMetrics::kit(self));
+        StandardSwitchMetrics {
+            track_width: non_neg(m.track_width),
+            track_height: non_neg(m.track_height),
+            thumb: non_neg(m.thumb),
+            inset: non_neg(m.inset),
+        }
+    }
+    pub(crate) fn radius_sm(&self) -> f32 {
+        non_neg(self.radius.sm)
+    }
+    pub(crate) fn radius_md(&self) -> f32 {
+        non_neg(self.radius.md)
     }
 }

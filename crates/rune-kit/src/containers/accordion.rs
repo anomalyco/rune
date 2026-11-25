@@ -71,6 +71,7 @@ impl Accordion {
 
     pub fn build(self, k: &Kit) -> El {
         let c = &k.c;
+        let header_height = k.disclosure_header_height();
         let r = k.radius.lg;
         let n = self.items.len();
         let mut root = col().role("group").items_stretch();
@@ -91,7 +92,7 @@ impl Accordion {
                     .expanded(item.expanded)
                     .focusable(enabled)
                     .disabled(!enabled)
-                    .h(32.0)
+                    .h(header_height)
                     .px(12.0)
                     .py(8.0)
                     .center_y()

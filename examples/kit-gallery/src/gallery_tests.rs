@@ -172,3 +172,133 @@ fn pure_hover_sweep_commits_only_on_stateful_hover_stories() {
         "stories with no stateful hover committed on a pure pointer sweep: {unexpected:?}"
     );
 }
+
+const PINNED_CONTROL_STORIES: &[&str] = &[
+    "ui-segmented-control--basic",
+    "ui-segmented-control--controlled",
+    "rune-segmented-control--rich",
+    "components-collapsible--basic",
+    "components-collapsible--ghost",
+    "ui-accordion--basic",
+    "ui-accordion--multiple",
+    "ui-accordion--non-collapsible",
+    "components-progress--basic",
+    "components-progress--no-label",
+    "components-progress--indeterminate",
+    "components-list--divider",
+    "ui-keybind--playground",
+    "ui-keybind--variants",
+    "ui-keybind--multiple-keys",
+    "ui-keybind--all-examples",
+    "rune-keybind--symbols",
+    "rune-keybind--keep-case",
+    "ui-textarea--playground",
+    "ui-textarea--controlled",
+    "ui-textarea--with-field",
+    "ui-textarea--states",
+    "rune-textarea--composer",
+    "rune-textarea--code-keys",
+    "rune-textarea--focus-caret",
+    "ui-switch--basic",
+    "ui-switch--appearances",
+    "ui-switch--states",
+    "ui-switch--hidden-label",
+    "rune-switch--sizes",
+    "rune-switch--web",
+];
+
+fn fnv_bytes(h: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *h ^= u64::from(b);
+        *h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+}
+
+fn fnv_f32(h: &mut u64, v: f32) {
+    let bits = if v == 0.0 { 0u32 } else { v.to_bits() };
+    fnv_bytes(h, &bits.to_le_bytes());
+}
+
+fn fnv_color(h: &mut u64, c: rune::Color) {
+    for ch in [c.r, c.g, c.b, c.a] {
+        fnv_f32(h, ch);
+    }
+}
+
+fn hash_story_frame(rt: &rune::Runtime<G>) -> (u64, u64, usize, usize) {
+    let mut layout_h: u64 = 0xcbf2_9ce4_8422_2325;
+    let els = rt.elements();
+    for e in &els {
+        fnv_bytes(&mut layout_h, e.path.as_bytes());
+        fnv_bytes(&mut layout_h, &[0]);
+        if let Some(k) = &e.key {
+            fnv_bytes(&mut layout_h, k.as_bytes());
+        }
+        fnv_bytes(&mut layout_h, &[0]);
+        fnv_bytes(&mut layout_h, e.role.as_bytes());
+        for v in e.rect {
+            fnv_f32(&mut layout_h, v);
+        }
+        fnv_f32(&mut layout_h, e.radius);
+        fnv_color(&mut layout_h, e.fill);
+        match e.border_color {
+            Some(c) => {
+                fnv_bytes(&mut layout_h, &[1]);
+                fnv_color(&mut layout_h, c);
+            }
+            None => fnv_bytes(&mut layout_h, &[0]),
+        }
+        for v in e.inset {
+            fnv_f32(&mut layout_h, v);
+        }
+    }
+    let mut paint_h: u64 = 0xcbf2_9ce4_8422_2325;
+    for inst in &rt.instances {
+        for v in inst.rect { fnv_f32(&mut paint_h, v); }
+        for v in inst.radii { fnv_f32(&mut paint_h, v); }
+        for v in inst.fill { fnv_f32(&mut paint_h, v); }
+        for v in inst.border { fnv_f32(&mut paint_h, v); }
+        for v in inst.params { fnv_f32(&mut paint_h, v); }
+        for v in inst.uv { fnv_f32(&mut paint_h, v); }
+        for v in inst.clip { fnv_f32(&mut paint_h, v); }
+        for v in inst.fade { fnv_bytes(&mut paint_h, &v.to_le_bytes()); }
+    }
+    (layout_h, paint_h, els.len(), rt.instances.len())
+}
+
+#[test]
+fn pinned_control_stories_snapshot() {
+    let mut lines = Vec::new();
+    for &id in PINNED_CONTROL_STORIES {
+        let &(_, setup) = stories::SCENES
+            .iter()
+            .find(|&&(s, _)| s == id)
+            .unwrap_or_else(|| panic!("missing story {id:?}"));
+        for (theme_name, neutral) in [("opencode", false), ("neutral", true)] {
+            for dark in [false, true] {
+                let mut g = init();
+                g.neutral = neutral;
+                g.palette = false;
+                setup(&mut g);
+                let mut rt = rune::Runtime::new(g, view, (720.0, 480.0), rune::Env::new(dark, 1.0));
+                rt.frame(0.0);
+                rt.settle_all();
+                rt.frame(0.0);
+                let (lh, ph, ne, ni) = hash_story_frame(&rt);
+                lines.push(format!("{id}|{theme_name}|dark={dark}|els={ne}|insts={ni}|layout={lh:016x}|paint={ph:016x}"));
+            }
+        }
+    }
+    let dump = lines.join("\n");
+    if let Some(path) = rune::env::var("RUNE_PIN_DUMP_OUT") {
+        std::fs::write(&path, &dump).expect("write pin dump");
+    }
+    if let Some(path) = rune::env::var("RUNE_PIN_DUMP_CHECK") {
+        let expected = std::fs::read_to_string(&path).expect("read pin baseline");
+        let exp_lines: Vec<&str> = expected.lines().collect();
+        let got_lines: Vec<&str> = dump.lines().collect();
+        assert_eq!(exp_lines.len(), got_lines.len(), "story count changed");
+        let diffs: Vec<_> = exp_lines.iter().zip(&got_lines).filter(|(a, b)| a != b).collect();
+        assert!(diffs.is_empty(), "default look drifted for {} story/theme combos:\n{diffs:#?}", diffs.len());
+    }
+}
