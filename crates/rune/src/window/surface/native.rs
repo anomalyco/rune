@@ -79,12 +79,12 @@ pub(in crate::window) struct Native {
     #[cfg(target_os = "linux")]
     pub(in crate::window) mode: crate::window::linux::handover::SurfaceMode,
     /// Lazy `wl_data_device` binding state machine (pre-first-frame, bound, teardown grace, unavailable).
-    pub(in crate::window) drop_binding: crate::platform::wayland_drop::binding::State,
+    pub(in crate::window) drop_binding: crate::platform::wayland::drop::binding::State,
     pub(in crate::window) drop_seq: crate::machine::Seq,
     /// Unregisters the window's Wayland drop target before the window's `wl_surface` drops.
-    pub(in crate::window) drop_target: Option<crate::platform::wayland_drop::DropTarget>,
+    pub(in crate::window) drop_target: Option<crate::platform::wayland::drop::DropTarget>,
     /// Per-surface Wayland behind-window blur controller, dropped strictly before `wl_surface`.
-    pub(in crate::window) wayland_backdrop: Option<crate::platform::backdrop::SurfaceBlur>,
+    pub(in crate::window) wayland_backdrop: Option<crate::platform::wayland::backdrop::SurfaceBlur>,
 }
 
 #[cfg(target_os = "windows")]

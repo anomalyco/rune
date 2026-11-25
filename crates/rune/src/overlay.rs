@@ -484,7 +484,7 @@ struct Live {
     a11y: Option<crate::a11y::Adapter>,
     /// Per-surface Wayland behind-window blur controller; drops strictly before `backing`.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    wayland_backdrop: Option<crate::platform::backdrop::SurfaceBlur>,
+    wayland_backdrop: Option<crate::platform::wayland::backdrop::SurfaceBlur>,
     /// Presents plain frames off the event loop's thread; joined before the surface drops.
     #[cfg(target_os = "macos")]
     present: Option<crate::frame::present_worker::PresentWorker>,
@@ -807,10 +807,10 @@ impl OverlayCore {
                 live.wayland_backdrop = match &live.backing {
                     Backing::Layer(layer) => {
                         let (d, w) = layer.raw_handles();
-                        crate::platform::backdrop::SurfaceBlur::from_raw_handles(d, w)
+                        crate::platform::wayland::backdrop::SurfaceBlur::from_raw_handles(d, w)
                     }
                     Backing::Window(window) => {
-                        crate::platform::backdrop::SurfaceBlur::for_window(window)
+                        crate::platform::wayland::backdrop::SurfaceBlur::for_window(window)
                     }
                     Backing::Xwayland(_) => None,
                 };
@@ -821,7 +821,7 @@ impl OverlayCore {
                 return;
             };
             let scale = if live.scale > 0.0 { live.scale } else { 1.0 };
-            let region_spec = crate::platform::backdrop::region::RegionSpec::from_surface(
+            let region_spec = crate::platform::wayland::backdrop::region::RegionSpec::from_surface(
                 (live.config.width, live.config.height),
                 scale,
                 0.0,
@@ -863,10 +863,10 @@ impl OverlayCore {
         live.wayland_backdrop = match &live.backing {
             Backing::Layer(layer) if layer.is_live() => {
                 let (d, w) = layer.raw_handles();
-                crate::platform::backdrop::SurfaceBlur::from_raw_handles(d, w)
+                crate::platform::wayland::backdrop::SurfaceBlur::from_raw_handles(d, w)
             }
             Backing::Window(window) if toplevel::is_toplevel(window) => {
-                crate::platform::backdrop::SurfaceBlur::for_window(window)
+                crate::platform::wayland::backdrop::SurfaceBlur::for_window(window)
             }
             _ => None,
         };

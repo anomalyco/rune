@@ -182,7 +182,7 @@ impl Host {
         });
         if needs_attach && let Some(w) = self.win.as_mut() {
             w.native.wayland_backdrop =
-                crate::platform::backdrop::SurfaceBlur::for_window(&w.window);
+                crate::platform::wayland::backdrop::SurfaceBlur::for_window(&w.window);
             if w.native.wayland_backdrop.is_some() {
                 self.sync_window_backdrop(false);
             }
@@ -210,7 +210,7 @@ impl Host {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     fn wayland_drop_ready(&mut self) {
         if !self.wayland { return; }
-        self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::WindowReady);
+        self.step_wayland_drop_binding(crate::platform::wayland::drop::binding::Event::WindowReady);
         self.sync_wayland_drop();
     }
 
@@ -221,7 +221,7 @@ impl Host {
         if !self.wayland { return; }
         let key = {
             let rt = self.app.rt();
-            crate::platform::wayland_drop::binding::SyncKey {
+            crate::platform::wayland::drop::binding::SyncKey {
                 commit: rt.commit_generation(),
                 modal: rt.active_modal(),
             }
@@ -230,7 +230,7 @@ impl Host {
             return;
         }
         let has_targets = self.app.rt().has_drop_targets();
-        self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::TreeSynced {
+        self.step_wayland_drop_binding(crate::platform::wayland::drop::binding::Event::TreeSynced {
             key,
             has_targets,
             now: crate::time::now(),
@@ -240,21 +240,21 @@ impl Host {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     pub(in crate::window) fn wayland_drop_closed(&mut self) {
         if !self.wayland { return; }
-        self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::WindowClosed);
+        self.step_wayland_drop_binding(crate::platform::wayland::drop::binding::Event::WindowClosed);
     }
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     pub(in crate::window) fn wayland_drop_display_lost(&mut self) {
         if !self.wayland { return; }
-        self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::DisplayLost);
+        self.step_wayland_drop_binding(crate::platform::wayland::drop::binding::Event::DisplayLost);
     }
 
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     pub(in crate::window) fn step_wayland_drop_binding(
         &mut self,
-        event: crate::platform::wayland_drop::binding::Event,
+        event: crate::platform::wayland::drop::binding::Event,
     ) {
-        use crate::platform::wayland_drop::binding::{self, Effect};
+        use crate::platform::wayland::drop::binding::{self, Effect};
         let Some(w) = &mut self.win else { return };
         let effects = binding::step(&mut w.native.drop_seq, &mut w.native.drop_binding, event);
         for effect in effects {
@@ -263,7 +263,7 @@ impl Host {
                     let Some(w) = &mut self.win else { return };
                     if w.native.drop_target.is_none() {
                         let handle = self.native_handle.clone();
-                        let target = crate::platform::wayland_drop::install(
+                        let target = crate::platform::wayland::drop::install(
                             &w.window,
                             std::sync::Arc::new(move || handle.send(|_| crate::window::WakeEvent::FileDrop)),
                         );
