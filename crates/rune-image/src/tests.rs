@@ -787,3 +787,36 @@ fn load_scaled_decodes_only_first_frame_of_animated_gif_and_apng() {
     assert!(d_apng.motion.is_none(), "load_scaled() must keep only frame 0 of APNG");
     assert_eq!(&d_apng.mips[0].pixels[..4], &[0, 255, 0, 255], "frame 0 is green");
 }
+
+#[test]
+fn to_rgba_reads_decoded_pixels_back_straight_and_svg_at_its_intrinsic_size() {
+    let cache = ImageCache::new(Arc::new(|| {}));
+    let source = image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 100, y as u8 * 200, 30, [255, 128, 0][x as usize]]));
+    let mut png = Vec::new();
+    source.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let image = cache.load(png);
+    image.wait().unwrap();
+    let (w, h, rgba) = image.to_rgba().unwrap();
+    assert_eq!((w, h), (3, 2));
+    for (got, want) in rgba.chunks(4).zip(source.pixels()) {
+        match want.0[3] {
+            0 => assert_eq!(got, [0; 4], "fully transparent pixels hold no colour"),
+            255 => assert_eq!(got, want.0, "opaque pixels round-trip exactly"),
+            _ => assert!(got.iter().zip(want.0).all(|(g, w)| g.abs_diff(w) <= 2), "{got:?} vs {:?}", want.0),
+        }
+    }
+
+    #[cfg(feature = "svg")]
+    {
+        const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8"><rect width="16" height="8" fill="#2060a0"/></svg>"##;
+        let svg = cache.load(SVG);
+        assert_eq!(svg.wait(), Ok([32, 16]));
+        let (w, h, rgba) = svg.to_rgba().unwrap();
+        assert_eq!((w, h, rgba.len()), (16, 8, 16 * 8 * 4), "an SVG copies at its intrinsic size, not its 2x raster");
+        assert_eq!(&rgba[..4], &[0x20, 0x60, 0xa0, 255]);
+    }
+
+    let bad = cache.load(b"not an image".as_slice());
+    assert!(bad.wait().is_err());
+    assert_eq!(bad.to_rgba(), None);
+}

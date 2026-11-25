@@ -39,6 +39,25 @@ impl Tx {
         self.copy = Some(crate::ClipboardWrite::new(content));
     }
 
+    /// Copy an image an [`ImageCache`](crate::ImageCache) decoded, as a browser's Copy Image
+    /// does: the pixels it holds, at full resolution, as PNG. Every format the cache draws
+    /// copies, with no second decode: PNG, JPEG, WebP, GIF and AVIF (an animation's first
+    /// frame) and SVG at its intrinsic size (see [`Image::to_rgba`](crate::Image::to_rgba)). The
+    /// PNG is encoded on the clipboard worker, off the event thread (on the web, when the
+    /// handler's requests are flushed). An image still decoding, one that failed, or one whose
+    /// PNG passes [`MAX_IMAGE_BYTES`](crate::clipboard::MAX_IMAGE_BYTES) copies nothing and
+    /// leaves the clipboard as it was. Like [`Tx::copy_rich`] with only an image.
+    ///
+    /// ```
+    /// # use rune::{Image, Tx};
+    /// # fn _copy(tx: &mut Tx, image: &Image) {
+    /// tx.copy_image(image);
+    /// # }
+    /// ```
+    pub fn copy_image(&mut self, image: &crate::Image) {
+        self.copy = Some(crate::ClipboardWrite::image(image.clone()));
+    }
+
     /// Exclude this text from clipboard histories and clear it after `clear_after` if unchanged.
     /// The handle reports whether the copy still holds the clipboard, and can clear it early.
     pub fn copy_secret(&mut self, text: impl Into<String>, clear_after: std::time::Duration) -> crate::SecretCopy {

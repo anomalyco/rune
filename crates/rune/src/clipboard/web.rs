@@ -64,14 +64,14 @@ impl Client {
         #[cfg(test)]
         if let Some(m) = &self.memory { return flush_to_memory(rt, m); }
         rt.edit.clear_secret_request = false;
-        if let Some(copy) = rt.copy_request.take() {
+        if let Some(mut copy) = rt.copy_request.take() {
             if copy.is_secret() {
                 if let Some(slot) = copy.slot() {
                     slot.set(SecretState::Failed("secret clipboard writes are unsupported on web".into()));
                     self.changed.store(true, Ordering::SeqCst);
                     (self.wake)();
                 }
-            } else {
+            } else if copy.encode_image() {
                 // The browser's Clipboard API takes plain text, HTML and PNG; RTF and files stay behind.
                 let content = copy.content();
                 let png = content.image().map_or(&[][..], ClipboardImage::png);
