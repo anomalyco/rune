@@ -106,6 +106,49 @@ pub(super) const UBER_WGSL_BLAKE3: &str = \"{wgsl_hash}\";", uber_abi_hash());
 }
 
 #[test]
+fn precompiled_builtin_and_windfoil_metallibs_match_rune_wgsl() {
+    if std::env::var_os("RUNE_METAL_CAPTURE").is_some() {
+        return;
+    }
+    let windfoil_hash_rs = include_str!("uber/windfoil_hash.rs");
+    let expected_windfoil = format!("WINDFOIL_WGSL_BLAKE3: &str = \"{}\";", super::super::uber_wgsl::WINDFOIL_BLAKE3);
+    assert!(
+        windfoil_hash_rs.contains(&expected_windfoil),
+        "Windfoil uber WGSL changed (now {}); run scripts/precompile-metal-shaders.sh on a Mac",
+        super::super::uber_wgsl::WINDFOIL_BLAKE3
+    );
+
+    let table = include_str!("../../../rune-gpu/src/metal/builtin_table.rs");
+    let sources_block = table
+        .split("const SOURCES:")
+        .nth(1)
+        .and_then(|s| s.split("];").next())
+        .expect("builtin_table.rs SOURCES");
+    let recorded: Vec<&str> = sources_block.split('"').skip(1).step_by(2).collect();
+    assert!(!recorded.is_empty(), "builtin_table.rs SOURCES must not be empty");
+
+    let clip = include_str!("../shaders/clip.wgsl");
+    let shader = include_str!("../shaders/shader.wgsl");
+    let springs = include_str!("../../../rune-gpu/src/springs.wgsl");
+    let rune_shaders: [(&str, String); 7] = [
+        ("rune/uber (classic)", super::super::uber_wgsl::CLASSIC.to_owned()),
+        ("rune/backdrop_blur.wgsl", include_str!("../shaders/backdrop_blur.wgsl").to_owned()),
+        ("rune/backdrop_composite.wgsl", format!("{clip}\n{}", include_str!("../shaders/backdrop_composite.wgsl"))),
+        ("rune/layer_blur.wgsl", include_str!("../shaders/layer_blur.wgsl").to_owned()),
+        ("rune-media/video.wgsl", include_str!("../../../rune-media/src/native_surface/video.wgsl").to_owned()),
+        ("rune/surface_alpha.wgsl", include_str!("../shaders/surface_alpha.wgsl").to_owned()),
+        ("rune/uber+springs", format!("{clip}\n{shader}\n{springs}")),
+    ];
+    for (name, wgsl) in &rune_shaders {
+        let hash = super::super::builtin_wgsl_hash(wgsl);
+        assert!(
+            recorded.binary_search(&hash.as_str()).is_ok(),
+            "built-in shader {name} (blake3 {hash}) is missing from crates/rune-gpu/src/metal/builtin_table.rs; run scripts/precompile-metal-shaders.sh on a Mac"
+        );
+    }
+}
+
+#[test]
 fn semantic_fingerprint_tracks_descriptors_not_source_text() {
     let entries = uber_bind_entries();
     let vertex = uber_vertex_layout();
