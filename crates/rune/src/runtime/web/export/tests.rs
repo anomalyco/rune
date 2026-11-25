@@ -280,6 +280,7 @@ fn exports_compound_shape_fill_rules_to_svg() {
             .child(crate::canvas(crate::Shape::new().fill_path(&ring, c)).key("nz").size(40.0, 40.0))
             .child(crate::canvas(crate::Shape::new().fill_path_with(&ring, crate::FillRule::EvenOdd, c)).key("eo").size(40.0, 40.0))
             .child(crate::canvas(crate::Shape::new().fill_path_with(&a, crate::FillRule::EvenOdd, c).fill_path_with(&b, crate::FillRule::EvenOdd, c)).key("two").size(40.0, 40.0))
+            .child(crate::canvas(crate::Shape::new().fill_area(&crate::Area::new(&ring, crate::FillRule::EvenOdd), c)).key("area").size(40.0, 40.0))
     }
     let mut rt = Runtime::new((), view, (400.0, 300.0), Env::default());
     rt.page_mode();
@@ -291,6 +292,8 @@ fn exports_compound_shape_fill_rules_to_svg() {
     assert!(eo.inner.contains("<path fill=\"#ffffff\" fill-rule=\"evenodd\" d=\"M0,0L40,0L40,40L0,40ZM10,10L30,10L30,30L10,30Z\"/>"), "{}", eo.inner);
     let two = nodes.iter().find(|n| n.path.ends_with("two")).expect("two");
     assert_eq!(two.inner.matches("<path ").count(), 2, "separate compound fills must not merge into one path: {}", two.inner);
+    let area = nodes.iter().find(|n| n.path.ends_with("area")).expect("area");
+    assert!(area.inner.contains("<path fill=\"#ffffff\" fill-rule=\"evenodd\" d=\"M0,0L40,0L40,40L0,40ZM10,10L30,10L30,30L10,30Z\"/>"), "{}", area.inner);
 }
 
 #[test]

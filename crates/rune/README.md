@@ -101,6 +101,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     segment (`KIND_SEGMENT`); fills are triangles (`KIND_TRIANGLE`) antialiased only on true contour
     edges (never bridge edges or diagonals), so translucent fills have no seams. No atlas, so a shape can
     change every frame (`examples/shapes`). SVG export emits `fill-rule="evenodd"` for `FillRule::EvenOdd`.
+    `Area::new(&path, rule)` triangulates a path once (clones share the triangles) for
+    `Shape::fill_area`, so a map kept in state redraws without triangulating again, and
+    `Area::contains(point)` hit-tests under the same rule (a point in a hole misses).
+    `Path::polygon(points)` adds a closed subpath.
     Translucent strokes blend twice where segments overlap at a joint; fills do not overlap.
   - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`). Circular alpha cutouts (`El::cutout_circle` for one hole, `El::cutout_circles` for several intersected holes) isolate the element and its subtree into one layer per hole so backdrops show through without wrappers (`examples/shapes`).
   - Every path blends in sRGB-encoded space by default — `App` windows, overlays, standalone
