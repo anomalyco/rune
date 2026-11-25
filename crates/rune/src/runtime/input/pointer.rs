@@ -338,7 +338,7 @@ impl RuntimeCore {
             self.select_step(selectable::phase::Event::Release);
         }
         let Some(ti) = target else {
-            let now = self.now_clock();
+            let now = self.input_clock();
             self.host.titlebar.press_empty(now, x, y, self.double_click_interval);
             if self.kbd.focus.path().is_some() {
                 self.frame.queue.push(Action::Blur);
@@ -349,8 +349,8 @@ impl RuntimeCore {
         let on_link = link.is_some();
         // Any press breaks a pending pair unless it's the second press of it.
         let pending = self.pointer.press.take_first();
-        let now = self.now_clock();
         if self.bare_drag_region(ti) {
+            let now = self.input_clock();
             let defer = !touch && self.host.titlebar.defer_mouse_drag();
             self.host.titlebar.press_region(now, x, y, self.double_click_interval, defer);
             if self.kbd.focus.path().is_some() {
@@ -363,6 +363,7 @@ impl RuntimeCore {
             return;
         }
         self.host.titlebar.other_press();
+        let now = self.now_clock();
         let n = &self.tree.nodes[ti];
         let clicks = self.pointer.press_click(&n.path, now, (x, y), self.double_click_interval);
         let second = n.handlers.on_double_press.is_some() && pending.is_some_and(|first| {

@@ -10,6 +10,16 @@ impl RuntimeCore {
         self.wall_start.map_or(self.clock, |t| t.elapsed().as_secs_f64())
     }
 
+    /// Clock seconds of the live input event currently being dispatched (on macOS, the hardware
+    /// `NSEvent.timestamp()` mapped onto `wall_start` via `crate::input::time::current()`),
+    /// falling back to [`Self::now_clock`] when no native event timestamp or wall clock is active.
+    pub(crate) fn input_clock(&self) -> f64 {
+        if let (Some(start), Some(at)) = (self.wall_start, crate::input::time::current()) {
+            return at.saturating_duration_since(start).as_secs_f64();
+        }
+        self.now_clock()
+    }
+
     /// The window's size in its points and its scale. The view lays out in them over its zoom
     /// ([`Cx::zoom`]), at the scale times the zoom.
     pub fn set_viewport(&mut self, viewport: (f32, f32), scale: f32) {
