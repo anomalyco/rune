@@ -447,6 +447,9 @@ source each time, and earlier blocks stay mounted. `Markdown::on_link_hover(|s, 
 reports the hovered link's destination and hit line box in window points (activating link hover
 tracking even without `on_link` or `on_link_secondary`, and leaving the old block before entering
 the new one across paragraphs; see `rune-markdown--link-hover` in `kit-gallery`).
+`Markdown::emoji(|name| Option<Pixels>)` draws `:name:` shortcodes in prose (not in code, math or
+a link showing its address) as the app's pictures, 1.2 em tall on the baseline; selection, copy and
+search still see the shortcode. The pictures are drawn only, with no hover or press of their own.
 
 - **Tables** keep their header row, per-column alignment and inline formatting. Columns start
   at their content's width, so a table with room never wraps a cell, and shrink in proportion
