@@ -261,7 +261,7 @@ impl Host {
             };
             // Opaque windows and X11/XWayland sessions never bind Wayland blur globals.
             if !wayland || !transparent {
-                let fallback = crate::platform::backdrop::policy::needs_opaque_fallback(
+                let fallback = crate::platform::wayland::backdrop::policy::needs_opaque_fallback(
                     false,
                     transparent,
                     requested,
@@ -294,10 +294,10 @@ impl Host {
                 && requested == crate::WindowBackdrop::Blur
             {
                 w.native.wayland_backdrop =
-                    crate::platform::backdrop::SurfaceBlur::for_window(&w.window);
+                    crate::platform::wayland::backdrop::SurfaceBlur::for_window(&w.window);
             }
             let Some(blur) = w.native.wayland_backdrop.as_mut() else {
-                let fallback = crate::platform::backdrop::policy::needs_opaque_fallback(
+                let fallback = crate::platform::wayland::backdrop::policy::needs_opaque_fallback(
                     false,
                     transparent,
                     requested,
@@ -318,7 +318,7 @@ impl Host {
             } else {
                 0.0
             };
-            let region_spec = crate::platform::backdrop::region::RegionSpec::from_surface(
+            let region_spec = crate::platform::wayland::backdrop::region::RegionSpec::from_surface(
                 (w.config.width, w.config.height),
                 scale,
                 csd_radius,

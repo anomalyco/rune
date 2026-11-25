@@ -318,5 +318,5 @@ mod wayland {
 pub(crate) use wayland::query;
 
 #[cfg(test)]
-#[path = "wayland_output_tests.rs"]
+#[path = "output_tests.rs"]
 mod tests;

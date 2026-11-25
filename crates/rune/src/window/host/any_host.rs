@@ -306,7 +306,7 @@ impl Host {
         if let Some(attempt) = self.win.as_ref().and_then(|w| w.native.drop_binding.grace_attempt())
             && self.win.as_ref().and_then(|w| w.native.drop_binding.deadline()).is_some_and(|due| due <= crate::time::now())
         {
-            self.step_wayland_drop_binding(crate::platform::wayland_drop::binding::Event::GraceDue {
+            self.step_wayland_drop_binding(crate::platform::wayland::drop::binding::Event::GraceDue {
                 attempt,
                 now: crate::time::now(),
             });

@@ -96,7 +96,7 @@ impl Host {
         let native = self.win.as_ref().map(|l| crate::platform::win32::drop_target::take(&l.window)).unwrap_or_default();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let (native, wayland_drop_lost) = match self.win.as_ref().filter(|l| l.native.drop_target.is_some()) {
-            Some(l) => crate::platform::wayland_drop::take(&l.window),
+            Some(l) => crate::platform::wayland::drop::take(&l.window),
             None => (Vec::new(), false),
         };
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
