@@ -75,6 +75,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) frame_reports: crate::frame::encoded::FrameReports,
     #[cfg(target_os = "macos")]
     pub(in crate::window) frame_presented: crate::frame::presented::FramePresentReports,
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) ambient_period: Option<std::time::Duration>,
     /// Shown, hidden or closed for good; `win` holds the window while it has one.
     pub(in crate::window) life: Life,
     /// False for windows `App::window` added: they live as long as the loop, never keep it.
@@ -218,6 +220,8 @@ struct HostInit {
     on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     #[cfg(target_os = "macos")]
     on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
+    #[cfg(target_os = "macos")]
+    ambient_period: Option<std::time::Duration>,
     geometry: WindowGeometry,
     args: Args,
     keep_running: bool,
@@ -262,6 +266,8 @@ impl Host {
         );
         #[cfg(target_os = "macos")]
         let on_frame_presented = app.on_frame_presented.take();
+        #[cfg(target_os = "macos")]
+        let ambient_period = app.ambient_period;
         let macos_window = std::mem::take(&mut app.macos_window);
         let windows_window = std::mem::take(&mut app.windows_window);
         let exclude_from_capture = app.exclude_from_capture;
@@ -310,6 +316,8 @@ impl Host {
             on_frame_encoded,
             #[cfg(target_os = "macos")]
             on_frame_presented,
+            #[cfg(target_os = "macos")]
+            ambient_period,
             geometry,
             args,
             keep_running,
@@ -355,6 +363,8 @@ impl Host {
             on_frame_encoded,
             #[cfg(target_os = "macos")]
             on_frame_presented,
+            #[cfg(target_os = "macos")]
+            ambient_period,
             mut geometry,
             mut args,
             keep_running,
@@ -467,6 +477,8 @@ impl Host {
             frame_reports,
             #[cfg(target_os = "macos")]
             frame_presented,
+            #[cfg(target_os = "macos")]
+            ambient_period,
             life: Life::Unopened,
             keeps_loop,
             geometry,
@@ -520,6 +532,19 @@ impl Host {
             #[cfg(target_os = "macos")]
             frame_wake: Arc::new(move || { frame_proxy.send_event(WakeEvent::DisplayTick(slot)).ok(); }),
         }
+    }
+
+    /// Notes live user input reaching this window so an opt-in `App::ambient_fps` cap lifts
+    /// immediately on the next display refresh.
+    pub(in crate::window) fn note_input(&mut self, at: Instant) {
+        #[cfg(target_os = "macos")]
+        if let Some(w) = &mut self.win
+            && let Some(pacing) = &mut w.native.pacing
+        {
+            pacing.note_input(at);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = at;
     }
 
     /// Tells the runtime where the window's content is on screen, drawing a frame when that

@@ -760,7 +760,10 @@ impl Host {
         sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar);
         // A window opened while the displays slept has no display link yet.
         #[cfg(target_os = "macos")]
-        if l.native.pacing.is_none() { l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
+        if l.native.pacing.is_none() {
+            l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.frame_wake.clone())
+                .map(|p| p.with_ambient_period(self.ambient_period));
+        }
         if was {
             self.app.rt_mut().settle_all();
             l.request_redraw();

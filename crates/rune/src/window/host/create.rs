@@ -413,7 +413,7 @@ impl Host {
         let native = Native {
             // A window whose first frame is drawn here, at once (`prime`), gets its display link
             // after that frame. `RUNE_PACING_BEFORE_FRAME` keeps the old order.
-            pacing: if prime.presumes() && std::env::var_os("RUNE_PACING_BEFORE_FRAME").is_none() { None } else { crate::platform::display_link::DisplayLink::new(&window, self.frame_wake.clone()) },
+            pacing: if prime.presumes() && std::env::var_os("RUNE_PACING_BEFORE_FRAME").is_none() { None } else { crate::platform::display_link::DisplayLink::new(&window, self.frame_wake.clone()).map(|p| p.with_ambient_period(self.ambient_period)) },
             present,
             present_log: hook_log,
             shadow,
@@ -536,7 +536,8 @@ impl Host {
             self.menus.drain();
             // The display link that waited for the first frame, or for a window not drawn here.
             if let Some(w) = self.win.as_mut() && w.native.pacing.is_none() {
-                w.native.pacing = crate::platform::display_link::DisplayLink::new(&w.window, self.frame_wake.clone());
+                w.native.pacing = crate::platform::display_link::DisplayLink::new(&w.window, self.frame_wake.clone())
+                    .map(|p| p.with_ambient_period(self.ambient_period));
             }
         }
         if !drew && (visible || launcher) && let Some(w) = &self.win {

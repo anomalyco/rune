@@ -271,6 +271,13 @@ impl DisplayLink {
         core.tick_after(now)
     }
 
+    pub(crate) fn with_ambient_period(mut self, period: Option<Duration>) -> Self {
+        self.core.set_ambient_period(period);
+        self
+    }
+
+    pub(crate) fn note_input(&mut self, at: Instant) { self.core.note_input(at); }
+
     pub(crate) fn presented(&mut self, at: Instant) { self.core.presented(at); }
 
     /// Keeps an active link coasting briefly (~150 ms) with zero draws and zero presents after
