@@ -158,6 +158,57 @@ fn worker_rests_until_the_window_is_still_or_the_limit_passes() {
     assert_eq!(pace::rest_left(ms(0), ms(0), ms(0), ms(5000)), None);
 }
 
+/// A window that draws without pause is never still for the quiet time: only the limit ends
+/// the worker's rest, and until it does a first use of the effect compiles in its own frame.
+#[test]
+fn a_window_that_never_rests_is_warmed_within_a_second() {
+    use std::time::Duration;
+    // The worker's loop, on a frame every 8 ms from the moment it starts.
+    let frame = Duration::from_millis(8);
+    let (mut still, mut waited) = (Duration::ZERO, Duration::ZERO);
+    while let Some(left) = pace::rest_left(still, waited, pace::QUIET, pace::LIMIT) {
+        let step = left.min(frame - still);
+        waited += step;
+        still += step;
+        if still == frame { still = Duration::ZERO; }
+    }
+    assert!(waited <= Duration::from_secs(1), "a window that never rests waited {waited:?} for its effects");
+    assert!(waited > pace::QUIET, "the limit is no shorter than the rest it bounds: {waited:?}");
+}
+
+#[test]
+fn worker_compiles_at_the_limit_while_the_window_still_draws() {
+    use std::time::Duration;
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.set_prewarm_effects(PrewarmEffects::BACKDROP_BLUR);
+    // A quiet time out of reach: only the limit can end the worker's rest.
+    renderer.effect_warm.rest = (Duration::from_secs(60), pace::LIMIT);
+    let steps = Arc::new(AtomicUsize::new(0));
+    let steps_worker = steps.clone();
+    renderer.effect_warm.on_step = Some(Arc::new(move || {
+        steps_worker.fetch_add(1, Ordering::SeqCst);
+    }));
+    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut atlas = crate::text::TextSystem::default().atlas;
+    let plain = [rect([0.0, 0.0, 32.0, 16.0], [0.2, 0.4, 0.8, 1.0])];
+
+    let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+    let started = crate::time::now();
+    renderer.warm_effects(&gpu.device);
+    assert!(renderer.effect_warm.is_warming());
+    // Frames keep coming a few ms apart, as while a reply streams, until the worker begins.
+    while steps.load(Ordering::SeqCst) == 0 && started.elapsed() < Duration::from_secs(10) {
+        let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let began = started.elapsed();
+    assert_eq!(steps.load(Ordering::SeqCst), 1, "the worker compiles though the window never rested");
+    assert!(began >= pace::LIMIT, "the worker began before its limit: {began:?}");
+    assert!(began < pace::LIMIT + Duration::from_secs(3), "the worker began long after its limit: {began:?}");
+    renderer.wait_effect_warm();
+    assert!(renderer.effect_warm.is_ready());
+}
 #[test]
 fn an_effect_is_built_by_the_worker_or_by_the_frame_never_both() {
     let link = pace::Link::default();
