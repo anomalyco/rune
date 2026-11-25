@@ -221,6 +221,66 @@ fn gpu_draws_pixels_texel_for_texel_and_follows_new_frames() {
 }
 
 #[test]
+fn gpu_shared_page_eviction_rest_shrink_and_reupload_draw_exact_pixels() {
+    use crate::pixels::ImageAtlas;
+    use crate::render::{Gpu, Instance, KIND_IMAGE, NO_CLIP, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    use crate::text::Atlas;
+
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut images = ImageAtlas::default();
+    let pin = Pixels::new();
+    pin.set(64, 64, [20, 220, 80, 255].repeat(64 * 64));
+    let returning = Pixels::new();
+    returning.set(64, 64, [240, 40, 180, 255].repeat(64 * 64));
+
+    let pin_placed = images.place(&pin, [64.0; 2]).unwrap();
+    images.place(&returning, [64.0; 2]).unwrap();
+    for f in 0..8u8 {
+        assert_eq!(images.place(&pin, [64.0; 2]), Some(pin_placed));
+        for t in 0..4u8 {
+            let thumb = Pixels::new();
+            thumb.set(256, 256, [f, t, 99, 255].repeat(256 * 256));
+            images.place(&thumb, [256.0; 2]).unwrap();
+        }
+        images.end_frame();
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    }
+    assert_eq!(images.pages.len(), 1);
+    assert_eq!(renderer.images.len(), 1);
+
+    // rest() evicts dropped/unshown slots and shrinks page 0 from 1024x1024 to 1024x128.
+    images.rest();
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    let (tex, _) = renderer.images[0].as_ref().expect("page 0 texture stays live");
+    assert_eq!((tex.width(), tex.height()), (1024, 128));
+
+    // Returning image re-uploads on this frame alongside the intact persistent image.
+    let ret_placed = images.place(&returning, [64.0; 2]).unwrap();
+    assert_eq!(images.place(&pin, [64.0; 2]), Some(pin_placed));
+    images.end_frame();
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    let insts = [
+        Instance { rect: [0.0, 0.0, 4.0, 4.0], radii: [0.0; 4], fill: [0.0, 0.0, 0.0, 1.0], border: [0.0; 4], params: [pin_placed.page as f32, KIND_IMAGE, 0.0, 1.0], uv: pin_placed.rect.map(|v| v as f32), clip: NO_CLIP, fade: [0; 4] },
+        Instance { rect: [4.0, 0.0, 4.0, 4.0], radii: [0.0; 4], fill: [0.0, 0.0, 0.0, 1.0], border: [0.0; 4], params: [ret_placed.page as f32, KIND_IMAGE, 0.0, 1.0], uv: ret_placed.rect.map(|v| v as f32), clip: NO_CLIP, fade: [0; 4] },
+    ];
+    let mut atlas = Atlas::new();
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &insts, (8, 4));
+    let target = Offscreen::new(&gpu.device, 8, 4);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, [0.0; 4]);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let out = target.read(&gpu.device);
+    for (got, want) in out[..4].iter().zip([20u8, 220, 80, 255]) {
+        assert!(got.abs_diff(want) <= 1, "persistent pixel {got} != {want}");
+    }
+    for (got, want) in out[16..20].iter().zip([240u8, 40, 180, 255]) {
+        assert!(got.abs_diff(want) <= 1, "re-uploaded pixel {got} != {want}");
+    }
+}
+
+#[test]
 fn gpu_pixels_fit_letterboxes_and_fill_crops() {
     use crate::el::{El, el};
     use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
