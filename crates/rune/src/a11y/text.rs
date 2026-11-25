@@ -92,7 +92,13 @@ impl RuntimeCore {
             let words = spec.source_slice(l.start, l.end).unwrap_or("");
             link.set_label(l.label.as_deref().unwrap_or(words));
             link.set_author_id(l.id.as_str());
-            if role == Role::Link && l.id.contains("://") { link.set_url(l.id.as_str()); }
+            if role == Role::Link {
+                if let Some(url) = crate::runtime::selection::link_menu::link_url(spec, l) {
+                    link.set_url(url);
+                } else if l.id.contains("://") {
+                    link.set_url(l.id.as_str());
+                }
+            }
             link.set_bounds(AkRect {
                 x0: round(r[0] + w.shift[0]), y0: round(r[1] + w.shift[1]),
                 x1: round(r[2] + w.shift[0]), y1: round(r[3] + w.shift[1]),
@@ -102,7 +108,13 @@ impl RuntimeCore {
             if self.allowed(i) {
                 if !disabled && spec.cold.on_link.is_some() { link.add_action(Ak::Click); }
                 if self.can_focus(i) { link.add_action(Ak::Focus); }
-                if !disabled && spec.cold.on_link_secondary.is_some() { link.add_action(Ak::ShowContextMenu); }
+                if !disabled
+                    && (spec.cold.on_link_secondary.is_some()
+                        || (!self.ancestor_has_secondary_press(i)
+                            && crate::runtime::selection::link_menu::link_address(spec, l).is_some()))
+                {
+                    link.add_action(Ak::ShowContextMenu);
+                }
             }
             let id = link_id(n.id, k);
             out[me].1.push_child(id);

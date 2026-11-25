@@ -118,7 +118,9 @@ impl RuntimeCore {
                 return Some(&self.tree.nodes[input_i].path);
             }
             first = false;
-            if text.is_none() && self.is_selectable(index) { text = Some(n.path.as_str()); }
+            if text.is_none() && (self.default_link_at(index, x, y).is_some() || self.is_selectable(index)) {
+                text = Some(n.path.as_str());
+            }
             let Some(p) = n.parent else { break };
             index = p;
         }
@@ -201,7 +203,7 @@ impl RuntimeCore {
         let path = self.secondary_target(x, y).map(str::to_owned);
         let i = path.as_ref().and_then(|p| self.tree.nodes.iter().position(|n| n.path == *p));
         self.pointer.set_secondary(match path {
-            Some(path) => capture::Secondary::Held { path, link: i.and_then(|i| self.secondary_link_at(i, x, y)), left: false },
+            Some(path) => capture::Secondary::Held { path, link: i.and_then(|i| self.secondary_link_kind_at(i, x, y)), left: false },
             None => capture::Secondary::Up,
         });
         self.secondary_region_down(x, y, self.pointer.secondary_held() || secondary_drag);
@@ -282,7 +284,12 @@ impl RuntimeCore {
         let Some(i) = self.live(path) else { return "" };
         let n = &self.tree.nodes[i];
         if n.input.is_some() && self.node_disabled(i) { return ""; }
-        if link.is_some() || n.handlers.on_secondary_press.is_some() { return "app"; }
+        if matches!(link, Some(capture::SecondaryLink::Explicit(_))) || n.handlers.on_secondary_press.is_some() {
+            return "app";
+        }
+        if matches!(link, Some(capture::SecondaryLink::Default(_))) {
+            return if self.is_selectable(i) { "text" } else { "" };
+        }
         // On a misspelled word or a pill with a secondary handler, Rune's own menu wins over the browser's.
         if let Some(input) = n.input.as_deref()
             && input.access.is_some()
@@ -350,12 +357,19 @@ impl RuntimeCore {
                 PointerEvent { x, y, window_x: x, window_y: y, pressing: self.pointer.any_button_down() },
                 |i| self.pointer_event(i, x, y),
             );
-            let link = i.and_then(|i| self.secondary_link_at(i, x, y));
+            let link = i.and_then(|i| self.secondary_link_kind_at(i, x, y));
             // Like a primary link press, it must end on the link it began on; one that moved
             // onto, off or between links opens nothing.
             match (link, down_link) {
-                (Some(k), Some(d)) if k == d => self.frame.queue.push(Action::LinkSecondary(path, k, point)),
-                (None, None) if !self.selection_menu(app, &path, x, y) && !self.queue_field_menu(&path, x, y) => self.frame.queue.push(Action::SecondaryPress(path, point)),
+                (Some(capture::SecondaryLink::Explicit(k)), Some(capture::SecondaryLink::Explicit(d))) if k == d => {
+                    self.frame.queue.push(Action::LinkSecondary(path, k, point));
+                }
+                (Some(capture::SecondaryLink::Default(k)), Some(capture::SecondaryLink::Default(d))) if k == d => {
+                    self.open_link_menu(app, &path, k, x, y, Some((x, y)));
+                }
+                (None, None) if !self.selection_menu(app, &path, x, y) && !self.queue_field_menu(&path, x, y) => {
+                    self.frame.queue.push(Action::SecondaryPress(path, point));
+                }
                 _ => {}
             }
         }
@@ -363,12 +377,12 @@ impl RuntimeCore {
     }
 
     /// Resolves a reposted secondary click (`down` -> `up`) on the live, post-dismiss tree.
-    fn resolve_repost_target(&self, (dx, dy): (f32, f32), (ux, uy): (f32, f32)) -> Option<(usize, String, Option<usize>, PointerEvent)> {
+    fn resolve_repost_target(&self, (dx, dy): (f32, f32), (ux, uy): (f32, f32)) -> Option<(usize, String, Option<capture::SecondaryLink>, PointerEvent)> {
         let path = self.secondary_target(dx, dy)?.to_owned();
         if self.secondary_target(ux, uy) != Some(path.as_str()) { return None; }
         let i = self.live(&path)?;
-        let down_link = self.secondary_link_at(i, dx, dy);
-        let up_link = self.secondary_link_at(i, ux, uy);
+        let down_link = self.secondary_link_kind_at(i, dx, dy);
+        let up_link = self.secondary_link_kind_at(i, ux, uy);
         let link = match (up_link, down_link) {
             (Some(k), Some(d)) if k == d => Some(k),
             (None, None) => None,
@@ -385,7 +399,8 @@ impl RuntimeCore {
             self.frame.queue.push(Action::FocusControl(control));
         }
         match link {
-            Some(k) => self.frame.queue.push(Action::LinkSecondary(path, k, point)),
+            Some(capture::SecondaryLink::Explicit(k)) => self.frame.queue.push(Action::LinkSecondary(path, k, point)),
+            Some(capture::SecondaryLink::Default(k)) => { self.open_link_menu(app, &path, k, up.0, up.1, Some(up)); }
             None if !self.selection_menu(app, &path, up.0, up.1) && !self.queue_field_menu(&path, up.0, up.1) => {
                 self.frame.queue.push(Action::SecondaryPress(path, point));
             }
@@ -416,7 +431,8 @@ impl RuntimeCore {
             self.set_focus(app, Some(control), false);
         }
         match link {
-            Some(k) => self.secondary_press_link(app, &path, k, point, one),
+            Some(capture::SecondaryLink::Explicit(k)) => self.secondary_press_link(app, &path, k, point, one),
+            Some(capture::SecondaryLink::Default(k)) => self.open_link_menu(app, &path, k, up.0, up.1, Some(up)),
             None => {
                 if self.selection_menu(app, &path, up.0, up.1) { return true; }
                 if self.tree.nodes[i].handlers.on_secondary_press.is_none() && self.editable_field_menu(i) {
@@ -453,7 +469,7 @@ impl RuntimeCore {
             _ => false,
         };
         let Some(focused) = self.focused_index().filter(|&i| menu_key && self.can_focus(i)) else { return false };
-        if self.focused_link_menu(app, focused, tx) { return true; }
+        if self.focused_link_menu(app, focused, tx) || self.focused_link_default_menu(app, focused) { return true; }
         let [fx0, fy0, fx1, fy1] = self.drawn_box(focused);
         if let Some(active) = self.a11y_active_descendant(focused) {
             let inside = std::iter::successors(self.tree.nodes[active].parent, |&p| self.tree.nodes[p].parent).any(|p| p == focused);

@@ -82,7 +82,7 @@ fn redacted_label_set_content_wipes_spare_capacity_source_and_links() {
     // 3. Links attached to a redacted label have id, label and help wiped on `set_content` and `conceal`.
     let make_linked = || {
         rich("secret-text", vec![])
-            .link(Link::new(0..6, "https://secret.example/token").label("secret-link-label").help("secret-link-help"))
+            .link(Link::new(0..6, "https://secret.example/token").href("https://secret.example/href").label("secret-link-label").help("secret-link-help"))
             .secure()
     };
     let mut a = make_linked();
@@ -108,4 +108,12 @@ fn redacted_label_set_content_wipes_spare_capacity_source_and_links() {
     };
     let (_, check) = watch_release(help_ptr, help_len, || { c.text.as_mut().unwrap().conceal(); });
     assert_eq!(check, ReleaseCheck::Zeroed, "redacted link help must be wiped on conceal");
+
+    let mut d = make_linked();
+    let (href_ptr, href_len) = {
+        let h = d.text.as_ref().unwrap().cold.links[0].href.as_ref().unwrap();
+        (h.as_ptr(), h.len())
+    };
+    let (_, check) = watch_release(href_ptr, href_len, || { d.set_content("next"); });
+    assert_eq!(check, ReleaseCheck::Zeroed, "redacted link href must be wiped on set_content");
 }

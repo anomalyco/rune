@@ -572,6 +572,8 @@ pub struct Link {
     #[doc(hidden)]
     pub id: String,
     #[doc(hidden)]
+    pub href: Option<String>,
+    #[doc(hidden)]
     pub role: &'static str,
     #[doc(hidden)]
     pub label: Option<String>,
@@ -592,6 +594,7 @@ impl Link {
             start: range.start as u32,
             end: range.end as u32,
             id: id.into(),
+            href: None,
             role: "link",
             label: None,
             hover: LinkPaint::default(),
@@ -599,6 +602,21 @@ impl Link {
             focused: None,
             help: None,
         }
+    }
+    /// Real address behind this link (such as an `http:`, `https:` or `mailto:` URL) when `id`
+    /// is an internal key rather than a URL. Used by Rune's default link context menu
+    /// (`Copy Link`) and accessibility metadata; an empty string sets none.
+    ///
+    /// ```
+    /// use rune_text::Link;
+    ///
+    /// let link = Link::new(0..4, "doc-42").href("https://example.com/42");
+    /// assert_eq!(link.href.as_deref(), Some("https://example.com/42"));
+    /// ```
+    pub fn href(mut self, url: impl Into<String>) -> Self {
+        let url = url.into();
+        self.href = (!url.is_empty()).then_some(url);
+        self
     }
     /// Accessibility role, such as "button" for a file chip.
     pub fn role(mut self, role: &'static str) -> Self {
