@@ -1853,10 +1853,34 @@ test('consumer demand triggers flush the mirror and timer helpers pass attempt a
         bridge.cancelA11y(h);
         assert.equal(active.has(idleId), false, 'cancelA11y cancels pending requestIdleCallback');
 
+        timers.length = 0;
         bridge.scheduleA11yIdle(h, 6, 100);
+        const backstop6 = timers.find(t => t.kind === 'timeout');
         const idleId2 = timers.at(-1).id;
         active.get(idleId2).fn();
         assert.deepEqual(events.pop(), { kind: 'a11y_idle', attempt: 6 });
+        assert.equal(active.has(backstop6.id), false, 'firing requestIdleCallback clears its setTimeout backstop');
+
+        // Stalled requestIdleCallback (e.g. idle WebGL2 frame with no next rAF): the bounded
+        // setTimeout backstop fires a11y_idle once and cancels the stalled idle callback.
+        timers.length = 0;
+        bridge.scheduleA11yIdle(h, 7, 100);
+        const backstop = timers.find(t => t.kind === 'timeout');
+        const stalledIdle = timers.find(t => t.kind === 'idle');
+        assert.ok(backstop && stalledIdle, 'scheduleA11yIdle arms both requestIdleCallback and setTimeout backstop');
+        assert.ok(backstop.ms <= 16, `backstop fires within one 60 Hz frame, got ${backstop.ms}ms`);
+        active.get(backstop.id).fn();
+        assert.deepEqual(events.pop(), { kind: 'a11y_idle', attempt: 7 });
+        assert.equal(active.has(stalledIdle.id), false, 'backstop cancels stalled requestIdleCallback');
+
+        // cancelA11y cancels both requestIdleCallback and its setTimeout backstop.
+        timers.length = 0;
+        bridge.scheduleA11yIdle(h, 8, 100);
+        const b8 = timers.find(t => t.kind === 'timeout');
+        const i8 = timers.find(t => t.kind === 'idle');
+        bridge.cancelA11y(h);
+        assert.equal(active.has(b8.id), false, 'cancelA11y clears backstop timer');
+        assert.equal(active.has(i8.id), false, 'cancelA11y clears requestIdleCallback');
     } finally {
         globalThis.setTimeout = origSetTimeout;
         globalThis.clearTimeout = origClearTimeout;

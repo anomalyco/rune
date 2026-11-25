@@ -2270,24 +2270,32 @@ export function cancelA11y(h) {
         h.a11yTimer = 0;
     }
     if (h.a11yIdle) {
-        if (h.a11yIdle.kind === 'idle' && globalThis.cancelIdleCallback) cancelIdleCallback(h.a11yIdle.id);
-        else clearTimeout(h.a11yIdle.id);
+        if (h.a11yIdle.idleId && globalThis.cancelIdleCallback) cancelIdleCallback(h.a11yIdle.idleId);
+        if (h.a11yIdle.timerId) clearTimeout(h.a11yIdle.timerId);
         h.a11yIdle = null;
     }
 }
 
 // Schedules a post-frame idle mirror flush off `rAF` (`requestIdleCallback` with bounded timeout,
-// falling back to `setTimeout(..., 0)`).
+// paired with a one-frame `setTimeout` backstop because Blink can stall `requestIdleCallback`
+// past `{ timeout }` after an idle WebGL2 frame with no next `rAF`; falls back to
+// `setTimeout(..., 0)` where `requestIdleCallback` is absent).
 export function scheduleA11yIdle(h, attempt = 0, timeoutMs = 100) {
     cancelA11y(h);
     const due = () => {
+        const cur = h.a11yIdle;
+        if (!cur) return;
         h.a11yIdle = null;
+        if (cur.idleId && globalThis.cancelIdleCallback) cancelIdleCallback(cur.idleId);
+        if (cur.timerId) clearTimeout(cur.timerId);
         if (!h.disposed) h.send({ kind: 'a11y_idle', attempt });
     };
     if (globalThis.requestIdleCallback) {
-        h.a11yIdle = { kind: 'idle', id: requestIdleCallback(due, { timeout: timeoutMs }) };
+        const timerId = setTimeout(due, Math.max(0, Math.min(timeoutMs, 16)));
+        const idleId = requestIdleCallback(due, { timeout: timeoutMs });
+        h.a11yIdle = { idleId, timerId };
     } else {
-        h.a11yIdle = { kind: 'timeout', id: setTimeout(due, 0) };
+        h.a11yIdle = { idleId: 0, timerId: setTimeout(due, 0) };
     }
 }
 
