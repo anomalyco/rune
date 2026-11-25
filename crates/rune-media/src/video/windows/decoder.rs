@@ -339,7 +339,7 @@ fn run(pipe: &Pipe, job: Job) {
 }
 
 struct Decoder {
-    reader: IMFSourceReader,
+    reader: mf::Reader,
     facts: Facts,
     ring: Option<Ring>,
     audio_queue: Option<Queue>,
@@ -385,7 +385,7 @@ impl Decoder {
         // Software decoding still uploads its pictures from this thread, not the UI's.
         let manager = device.as_ref().filter(|_| !software).map(|d| d.manager(lib)).transpose()?;
         let decode = manager.as_ref().map_or(Decode::Cpu, Decode::Gpu);
-        let opened = mf::open(lib, &source, job.kind, decode, true)?;
+        let mut opened = mf::open(lib, source, job.kind, decode, true)?;
         let t_reader = us(t0);
         let duration = opened.duration;
         let picture = opened.picture;
@@ -396,7 +396,7 @@ impl Decoder {
         };
         let hardware = false;
         if job.start > 0.0 {
-            mf::seek(&opened.reader, job.start)?;
+            mf::seek(&mut opened.reader, job.start)?;
         }
         let meta = Meta { duration, size: picture.map(|p| p.natural), frame: picture.and_then(|p| p.frame_duration), sound: opened.has_sound };
         let facts = Facts { meta, picture, sound: opened.sound, hardware, gpu: ring.is_some() };
@@ -468,7 +468,7 @@ impl Decoder {
                             audio_end = None;
                             last_video_pts = None;
                             audio_skip_before = if ask.exact || self.video.is_none() { ask.to } else { f64::NEG_INFINITY };
-                            mf::seek(&self.reader, ask.to)?;
+                            mf::seek(&mut self.reader, ask.to)?;
                             self.reopen_streams();
                             if let Some(q) = &self.audio_queue {
                                 q.flush();
@@ -515,7 +515,7 @@ impl Decoder {
                             audio_skip_before = epoch;
                             (s.video_ended, s.audio_end) = (None, None);
                             drop(s);
-                            mf::seek(&self.reader, 0.0)?;
+                            mf::seek(&mut self.reader, 0.0)?;
                             self.reopen_streams();
                             s = pipe.lock();
                             continue;
@@ -585,7 +585,7 @@ impl Decoder {
                 Stream::Sound => { burst += 1; self.audio }
                 Stream::Picture => { burst = 0; self.video }
             };
-            let mut read = mf::read(&self.reader, index.unwrap_or(MF_SOURCE_READER_ANY_STREAM.0 as u32))?;
+            let mut read = mf::read(&mut self.reader, index.unwrap_or(MF_SOURCE_READER_ANY_STREAM.0 as u32))?;
             if read.flags & MF_SOURCE_READERF_ERROR.0 != 0 {
                 return Err("the decoder stopped with an error".into());
             }
@@ -664,7 +664,7 @@ impl Decoder {
             if !self.video_open
                 && let Some(last) = landing.ended()
             {
-                mf::seek(&self.reader, last)?;
+                mf::seek(&mut self.reader, last)?;
                 self.reopen_streams();
                 (audio_pts, audio_end, last_video_pts) = (None, None, None);
                 audio_skip_before = last;
@@ -827,6 +827,9 @@ impl Decoder {
                 // SAFETY: a plain query on a live texture.
                 unsafe { texture.GetDesc(&mut desc) };
                 self.facts.hardware = desc.BindFlags & D3D11_BIND_DECODER.0 as u32 != 0;
+                if self.facts.hardware {
+                    self.reader.confirm_hardware();
+                }
                 ring.copy(slot, texture, *index)
             }
             None => ring.upload(slot, &mf::nv12_bytes(sample, &picture)?),

@@ -193,8 +193,100 @@ pub(super) struct Sound {
     pub rate: u32,
 }
 
+/// Streaming lifecycle of one `IMFSourceReader` for seek-time reset decisions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReaderState {
+    /// Fresh `IMFSourceReader` before any `ReadSample`; seeking repositions in place.
+    Fresh,
+    /// `ReadSample` has started the decoder MFT's streaming pipeline.
+    Streaming { hardware_video: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReaderEvent {
+    Read,
+    HardwareConfirmed,
+    Seek { has_video: bool },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SeekAction {
+    /// Call `IMFSourceReader::SetCurrentPosition` on the current reader.
+    InPlace,
+    /// Release and recreate `IMFSourceReader` on the same `IMFMediaSource` before seeking so
+    /// `msmpeg2vdec.dll`'s `ThreadedDecode` worker never races flush/drain in
+    /// `CMFSampleList::WaitForMoreData`.
+    RebuildThenSeek,
+}
+
+pub(super) fn step_reader(state: &mut ReaderState, event: ReaderEvent) -> Option<SeekAction> {
+    match (*state, event) {
+        (ReaderState::Fresh, ReaderEvent::Read) => {
+            *state = ReaderState::Streaming { hardware_video: false };
+            None
+        }
+        (ReaderState::Streaming { .. }, ReaderEvent::Read) => None,
+        (ReaderState::Fresh | ReaderState::Streaming { .. }, ReaderEvent::HardwareConfirmed) => {
+            *state = ReaderState::Streaming { hardware_video: true };
+            None
+        }
+        (ReaderState::Fresh, ReaderEvent::Seek { .. })
+        | (ReaderState::Streaming { hardware_video: true }, ReaderEvent::Seek { .. })
+        | (ReaderState::Streaming { hardware_video: false }, ReaderEvent::Seek { has_video: false }) => Some(SeekAction::InPlace),
+        (ReaderState::Streaming { hardware_video: false }, ReaderEvent::Seek { has_video: true }) => {
+            *state = ReaderState::Fresh;
+            Some(SeekAction::RebuildThenSeek)
+        }
+    }
+}
+
+/// Owns an `IMFMediaSource` and its active `IMFSourceReader`, disconnected on reader release
+/// (`MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN`) so software video seeks can replace
+/// the reader on the same open media source without reopening files or network streams.
+pub(super) struct Reader {
+    lib: &'static Library,
+    /// Released before `source` is shut down in `Drop`.
+    reader: Option<IMFSourceReader>,
+    source: IMFMediaSource,
+    manager: Option<IMFDXGIDeviceManager>,
+    video: Option<u32>,
+    audio: Option<u32>,
+    state: ReaderState,
+}
+
+impl Reader {
+    /// Marks this reader as backed by a DXVA hardware video decoder so subsequent seeks stay
+    /// in place without recreating the hardware decoder session.
+    pub(super) fn confirm_hardware(&mut self) {
+        let _ = step_reader(&mut self.state, ReaderEvent::HardwareConfirmed);
+    }
+
+    #[cfg(test)]
+    pub(super) fn raw(&self) -> &IMFSourceReader {
+        self.reader.as_ref().expect("live source reader")
+    }
+
+    fn rebuild(&mut self) -> Result<(), String> {
+        // Release the old reader (and its `msmpeg2vdec.dll` instance) before creating a new one.
+        self.reader = None;
+        let decode = self.manager.as_ref().map_or(Decode::Cpu, Decode::Gpu);
+        let reader = build_reader(self.lib, &self.source, decode, self.video, self.audio)?;
+        self.reader = Some(reader);
+        Ok(())
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.reader = None;
+        // SAFETY: `MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN` kept `source` alive
+        // across reader releases; now that no reader holds it, shut it down cleanly.
+        unsafe { self.source.Shutdown() }.ok();
+    }
+}
+
 pub(super) struct Opened {
-    pub reader: IMFSourceReader,
+    pub reader: Reader,
     /// The video stream's index, which reads from any stream report.
     pub video: Option<u32>,
     pub picture: Option<Picture>,
@@ -214,10 +306,8 @@ pub(super) enum Decode<'a> {
     Cpu,
 }
 
-/// Reads `source` and sets up the streams `kind` plays: for video the first video stream as
-/// NV12 and, when `audio`, the first audio stream as float; for audio only the audio stream.
-pub(super) fn open(lib: &Library, source: &IMFMediaSource, kind: Kind, decode: Decode<'_>, audio: bool) -> Result<Opened, String> {
-    let attributes = lib.attributes(4)?;
+fn create_raw_reader(lib: &Library, source: &IMFMediaSource, decode: Decode<'_>) -> Result<IMFSourceReader, String> {
+    let attributes = lib.attributes(5)?;
     // SAFETY: plain attribute writes on an object this thread owns.
     unsafe {
         if let Decode::Gpu(manager) = decode {
@@ -226,40 +316,102 @@ pub(super) fn open(lib: &Library, source: &IMFMediaSource, kind: Kind, decode: D
         }
         // Converts a decoder's other output (P010, YUY2, interlaced) to progressive NV12.
         attributes.SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1).map_err(|e| e.message())?;
+        // Keep `source` alive when the reader is released so software seeks can swap in a fresh
+        // reader; `Reader::drop` shuts `source` down once done.
+        attributes.SetUINT32(&MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN, 1).map_err(|e| e.message())?;
     }
-    let reader = lib.reader(source, &attributes)?;
-    // SAFETY: stream selection and type negotiation on the reader this thread made.
+    lib.reader(source, &attributes)
+}
+
+fn build_reader(
+    lib: &Library,
+    source: &IMFMediaSource,
+    decode: Decode<'_>,
+    video: Option<u32>,
+    audio: Option<u32>,
+) -> Result<IMFSourceReader, String> {
+    let reader = create_raw_reader(lib, source, decode)?;
+    // SAFETY: stream selection and type negotiation on the fresh reader this thread owns.
     unsafe {
         reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false).ok();
-        let (video, audio_index) = streams(&reader);
-        let (video, picture) = match video.filter(|_| kind == Kind::Video) {
-            Some(index) => {
-                reader.SetStreamSelection(index, true).map_err(|e| e.message())?;
-                let wanted = lib.media_type()?;
-                wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(|e| e.message())?;
-                wanted.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).map_err(|e| e.message())?;
-                reader.SetCurrentMediaType(index, None, &wanted).map_err(|e| no_decoder(e, "video"))?;
-                cap_decoder_threads(&reader, index);
-                (Some(index), Some(picture(&reader.GetCurrentMediaType(index).map_err(|e| e.message())?)?))
-            }
-            None if kind == Kind::Video => return Err("no playable video track".into()),
-            None => (None, None),
-        };
-        let mut has_sound = audio_index.is_some();
-        let (audio, sound) = match audio_index.filter(|_| audio || kind == Kind::Audio) {
-            Some(index) => match sound(lib, &reader, index) {
-                Ok(sound) => (Some(index), Some(sound)),
-                Err(e) if kind == Kind::Audio => return Err(e),
-                Err(_) => {
-                    has_sound = false;
-                    (None, None)
+        if let Some(index) = video {
+            reader.SetStreamSelection(index, true).map_err(|e| e.message())?;
+            let wanted = lib.media_type()?;
+            wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(|e| e.message())?;
+            wanted.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).map_err(|e| e.message())?;
+            reader.SetCurrentMediaType(index, None, &wanted).map_err(|e| no_decoder(e, "video"))?;
+            cap_decoder_threads(&reader, index);
+        }
+        if let Some(index) = audio {
+            let _ = sound(lib, &reader, index)?;
+        }
+    }
+    Ok(reader)
+}
+
+/// Reads `source` and sets up the streams `kind` plays: for video the first video stream as
+/// NV12 and, when `audio`, the first audio stream as float; for audio only the audio stream.
+/// Takes ownership of `source` and shuts it down when the returned `Reader` drops (or on error).
+pub(super) fn open(lib: &'static Library, source: IMFMediaSource, kind: Kind, decode: Decode<'_>, audio: bool) -> Result<Opened, String> {
+    let manager = match decode {
+        Decode::Gpu(m) => Some(m.clone()),
+        Decode::Cpu => None,
+    };
+    struct Setup {
+        raw: IMFSourceReader,
+        video: Option<u32>,
+        picture: Option<Picture>,
+        audio: Option<u32>,
+        sound: Option<Sound>,
+        has_sound: bool,
+        duration: f64,
+    }
+    let setup = (|| -> Result<Setup, String> {
+        let reader = create_raw_reader(lib, &source, decode)?;
+        // SAFETY: stream selection and type negotiation on the reader this thread made.
+        unsafe {
+            reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false).ok();
+            let (video, audio_index) = streams(&reader);
+            let (video, picture) = match video.filter(|_| kind == Kind::Video) {
+                Some(index) => {
+                    reader.SetStreamSelection(index, true).map_err(|e| e.message())?;
+                    let wanted = lib.media_type()?;
+                    wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(|e| e.message())?;
+                    wanted.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).map_err(|e| e.message())?;
+                    reader.SetCurrentMediaType(index, None, &wanted).map_err(|e| no_decoder(e, "video"))?;
+                    cap_decoder_threads(&reader, index);
+                    (Some(index), Some(picture(&reader.GetCurrentMediaType(index).map_err(|e| e.message())?)?))
                 }
-            },
-            None if kind == Kind::Audio => return Err("no playable audio track".into()),
-            None => (None, None),
-        };
-        let duration = duration(&reader);
-        Ok(Opened { reader, video, picture, audio, sound, has_sound, duration })
+                None if kind == Kind::Video => return Err("no playable video track".into()),
+                None => (None, None),
+            };
+            let mut has_sound = audio_index.is_some();
+            let (audio, sound) = match audio_index.filter(|_| audio || kind == Kind::Audio) {
+                Some(index) => match sound(lib, &reader, index) {
+                    Ok(sound) => (Some(index), Some(sound)),
+                    Err(e) if kind == Kind::Audio => return Err(e),
+                    Err(_) => {
+                        has_sound = false;
+                        (None, None)
+                    }
+                },
+                None if kind == Kind::Audio => return Err("no playable audio track".into()),
+                None => (None, None),
+            };
+            let duration = duration(&reader);
+            Ok(Setup { raw: reader, video, picture, audio, sound, has_sound, duration })
+        }
+    })();
+    match setup {
+        Ok(Setup { raw, video, picture, audio, sound, has_sound, duration }) => {
+            let reader = Reader { lib, reader: Some(raw), source, manager, video, audio, state: ReaderState::Fresh };
+            Ok(Opened { reader, video, picture, audio, sound, has_sound, duration })
+        }
+        Err(e) => {
+            // SAFETY: open failed before `Reader` took ownership; shut down `source` now.
+            unsafe { source.Shutdown() }.ok();
+            Err(e)
+        }
     }
 }
 
@@ -397,13 +549,17 @@ unsafe fn duration(reader: &IMFSourceReader) -> f64 {
 }
 
 /// Moves the reader to `seconds`; it lands on the key frame at or before it.
-pub(super) fn seek(reader: &IMFSourceReader, seconds: f64) -> Result<(), String> {
+pub(super) fn seek(reader: &mut Reader, seconds: f64) -> Result<(), String> {
+    if step_reader(&mut reader.state, ReaderEvent::Seek { has_video: reader.video.is_some() }) == Some(SeekAction::RebuildThenSeek) {
+        reader.rebuild()?;
+    }
+    let raw = reader.reader.as_ref().ok_or("no active source reader")?;
     let mut at = PROPVARIANT::default();
     // SAFETY: a VT_I8 PROPVARIANT owns nothing, so it needs no clearing.
     unsafe {
         (*at.Anonymous.Anonymous).vt = VT_I8;
         (*at.Anonymous.Anonymous).Anonymous.hVal = (seconds.max(0.0) * TICKS) as i64;
-        reader.SetCurrentPosition(&GUID::zeroed(), &at).map_err(|e| format!("seek: {}", e.message()))
+        raw.SetCurrentPosition(&GUID::zeroed(), &at).map_err(|e| format!("seek: {}", e.message()))
     }
 }
 
@@ -587,10 +743,12 @@ pub(super) struct Read {
     pub sample: Option<IMFSample>,
 }
 
-pub(super) fn read(reader: &IMFSourceReader, stream: u32) -> Result<Read, String> {
+pub(super) fn read(reader: &mut Reader, stream: u32) -> Result<Read, String> {
+    let _ = step_reader(&mut reader.state, ReaderEvent::Read);
+    let raw = reader.reader.as_ref().ok_or("no active source reader")?;
     let (mut index, mut flags, mut time, mut sample) = (0u32, 0u32, 0i64, None);
     // SAFETY: a blocking read into locals.
-    unsafe { reader.ReadSample(stream, 0, Some(&mut index), Some(&mut flags), Some(&mut time), Some(&mut sample)) }
+    unsafe { raw.ReadSample(stream, 0, Some(&mut index), Some(&mut flags), Some(&mut time), Some(&mut sample)) }
         .map_err(|e| format!("decode: {}", e.message()))?;
     Ok(Read { stream: index, flags: flags as i32, time: time as f64 / TICKS, sample })
 }

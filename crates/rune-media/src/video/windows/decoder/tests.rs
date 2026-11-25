@@ -257,13 +257,13 @@ fn land_at_the_duration() -> (Vec<f64>, u32, f64, f64) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rune/tests/fixtures/rgbw.mp4");
     let lib = mf::library().unwrap();
     let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
-    let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, false).unwrap();
+    let mut opened = mf::open(lib, source, Kind::Video, Decode::Cpu, false).unwrap();
     let (video, frame) = (opened.video.unwrap(), opened.picture.unwrap().frame());
     let mut landing = Landing::at(opened.duration);
-    mf::seek(&opened.reader, opened.duration).unwrap();
+    mf::seek(&mut opened.reader, opened.duration).unwrap();
     let (mut kept, mut went_back) = (Vec::new(), 0);
     loop {
-        let read = mf::read(&opened.reader, video).unwrap();
+        let read = mf::read(&mut opened.reader, video).unwrap();
         if read.sample.is_some() && landing.keeps(read.time, frame) {
             kept.push(read.time);
         }
@@ -271,7 +271,7 @@ fn land_at_the_duration() -> (Vec<f64>, u32, f64, f64) {
             match landing.ended() {
                 Some(last) => {
                     went_back += 1;
-                    mf::seek(&opened.reader, last).unwrap();
+                    mf::seek(&mut opened.reader, last).unwrap();
                 }
                 None => break,
             }
@@ -297,23 +297,23 @@ fn a_real_clips_sound_reads_a_second_ahead_of_its_pictures_stream_by_stream() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
     let lib = mf::library().unwrap();
     let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
-    let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, true).unwrap();
+    let mut opened = mf::open(lib, source, Kind::Video, Decode::Cpu, true).unwrap();
     let (video, audio) = (opened.video.unwrap(), opened.audio.unwrap());
     // The sound alone, a second of it: no picture is read for it.
     let mut heard = Vec::new();
     while heard.last().is_none_or(|time| *time < 1.0) {
-        let read = mf::read(&opened.reader, audio).unwrap();
+        let read = mf::read(&mut opened.reader, audio).unwrap();
         assert_eq!(read.stream, audio);
         assert!(read.sample.is_some() && read.flags & MF_SOURCE_READERF_ENDOFSTREAM.0 == 0);
         heard.push(read.time);
     }
     assert!(heard[0] < 0.05 && heard.is_sorted(), "{heard:?}");
     // The pictures then read from the clip's start.
-    let picture = mf::read(&opened.reader, video).unwrap();
+    let picture = mf::read(&mut opened.reader, video).unwrap();
     assert_eq!(picture.stream, video);
     assert!(picture.sample.is_some() && picture.time < 0.1, "{}", picture.time);
     // And the sound goes on from where it was.
-    let next = mf::read(&opened.reader, audio).unwrap();
+    let next = mf::read(&mut opened.reader, audio).unwrap();
     assert!((1.0..1.1).contains(&next.time), "{}", next.time);
 }
 
@@ -341,7 +341,7 @@ fn a_muted_clip_keeps_its_audio_stream_selected_and_with_no_sound_output() {
     let audio = d.audio.expect("demo/rune.mp4 has an audio track");
     assert!(d.audio_open, "muted clip deselected its audio stream");
     // SAFETY: plain selection query on this thread's reader.
-    let selected = unsafe { d.reader.GetStreamSelection(audio) }.unwrap();
+    let selected = unsafe { d.reader.raw().GetStreamSelection(audio) }.unwrap();
     assert!(selected.as_bool(), "Media Foundation audio stream was deselected while muted");
 }
 
@@ -434,7 +434,7 @@ fn a_real_clip_unmuted_mid_clip_reads_audio_at_playback_position_without_seeking
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
     let lib = mf::library().unwrap();
     let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
-    let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, true).unwrap();
+    let mut opened = mf::open(lib, source, Kind::Video, Decode::Cpu, true).unwrap();
     let (video, audio, frame) = (opened.video.unwrap(), opened.audio.unwrap(), opened.picture.unwrap().frame());
 
     // Play muted up to 3.0 s: audio stream stays selected and advances via muted_audio_target,
@@ -443,13 +443,13 @@ fn a_real_clip_unmuted_mid_clip_reads_audio_at_playback_position_without_seeking
     let mut audio_pts: Option<f64> = None;
     let mut audio_reads = 0u32;
     while video_pts < 3.0 {
-        let pic = mf::read(&opened.reader, video).unwrap();
+        let pic = mf::read(&mut opened.reader, video).unwrap();
         assert_eq!(pic.stream, video);
         assert!(pic.sample.is_some());
         video_pts = pic.time;
         let target = muted_audio_target(Some(video_pts), Some(video_pts), frame, false, true);
         while muted_audio_want(audio_pts, 0.0, target) {
-            let snd = mf::read(&opened.reader, audio).unwrap();
+            let snd = mf::read(&mut opened.reader, audio).unwrap();
             assert_eq!(snd.stream, audio);
             assert!(snd.sample.is_some());
             audio_pts = Some(snd.time);
@@ -460,14 +460,14 @@ fn a_real_clip_unmuted_mid_clip_reads_audio_at_playback_position_without_seeking
 
     // Unmute at 3.0 s: the very next audio sample is right behind 3.0 s (not 0.0 s), and the
     // video stream continues past 3.0 s without any seek or gap.
-    let next_audio = mf::read(&opened.reader, audio).unwrap();
+    let next_audio = mf::read(&mut opened.reader, audio).unwrap();
     assert_eq!(next_audio.stream, audio);
     assert!(
         (2.8..3.05).contains(&next_audio.time),
         "expected audio near 3.0 s on mid-clip unmute, got {} s",
         next_audio.time
     );
-    let next_video = mf::read(&opened.reader, video).unwrap();
+    let next_video = mf::read(&mut opened.reader, video).unwrap();
     assert_eq!(next_video.stream, video);
     assert!(
         next_video.time >= video_pts && next_video.time < video_pts + frame * 2.0,
@@ -483,7 +483,7 @@ fn a_real_clip_keyframe_seek_lands_on_the_first_decoded_frame_without_skipping_f
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
     let lib = mf::library().unwrap();
     let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path)).unwrap()).unwrap();
-    let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, false).unwrap();
+    let mut opened = mf::open(lib, source, Kind::Video, Decode::Cpu, false).unwrap();
     let (video, frame) = (opened.video.unwrap(), opened.picture.unwrap().frame());
 
     // Pick a target mid-clip where MF seeks back to an earlier keyframe.
@@ -491,11 +491,11 @@ fn a_real_clip_keyframe_seek_lands_on_the_first_decoded_frame_without_skipping_f
     assert!(target > frame * 2.0, "fixture too short: {}", opened.duration);
 
     // Keyframe-only seek: keeps the very first picture returned after mf::seek.
-    mf::seek(&opened.reader, target).unwrap();
+    mf::seek(&mut opened.reader, target).unwrap();
     let mut fast = Landing::keyframe();
     let mut fast_reads = 0u32;
     let fast_pts = loop {
-        let read = mf::read(&opened.reader, video).unwrap();
+        let read = mf::read(&mut opened.reader, video).unwrap();
         assert!(read.flags & MF_SOURCE_READERF_ENDOFSTREAM.0 == 0, "unexpected EOS during fast seek");
         if read.sample.is_some() {
             fast_reads += 1;
@@ -508,11 +508,11 @@ fn a_real_clip_keyframe_seek_lands_on_the_first_decoded_frame_without_skipping_f
     assert!(fast_pts <= target + frame * 0.5, "keyframe at {fast_pts} s should be at or before target {target} s");
 
     // Exact seek to the same target: lands within half a frame of target, reading at least as many frames.
-    mf::seek(&opened.reader, target).unwrap();
+    mf::seek(&mut opened.reader, target).unwrap();
     let mut exact = Landing::at(target);
     let mut exact_reads = 0u32;
     let exact_pts = loop {
-        let read = mf::read(&opened.reader, video).unwrap();
+        let read = mf::read(&mut opened.reader, video).unwrap();
         assert!(read.flags & MF_SOURCE_READERF_ENDOFSTREAM.0 == 0, "unexpected EOS during exact seek");
         if read.sample.is_some() {
             exact_reads += 1;
@@ -528,76 +528,158 @@ fn a_real_clip_keyframe_seek_lands_on_the_first_decoded_frame_without_skipping_f
     }
 }
 
+#[test]
+fn reader_state_rebuilds_only_streaming_software_video_seeks() {
+    use mf::{ReaderEvent, ReaderState, SeekAction, step_reader};
+
+    // Fresh reader seeks in place (initial open seek or consecutive seeks before reading).
+    let mut state = ReaderState::Fresh;
+    assert_eq!(step_reader(&mut state, ReaderEvent::Seek { has_video: true }), Some(SeekAction::InPlace));
+    assert_eq!(state, ReaderState::Fresh);
+
+    // Once ReadSample has run, a software video seek rebuilds the reader and resets to Fresh.
+    assert_eq!(step_reader(&mut state, ReaderEvent::Read), None);
+    assert_eq!(state, ReaderState::Streaming { hardware_video: false });
+    assert_eq!(step_reader(&mut state, ReaderEvent::Seek { has_video: true }), Some(SeekAction::RebuildThenSeek));
+    assert_eq!(state, ReaderState::Fresh);
+
+    // Audio-only clips seek in place even while streaming.
+    assert_eq!(step_reader(&mut state, ReaderEvent::Read), None);
+    assert_eq!(step_reader(&mut state, ReaderEvent::Seek { has_video: false }), Some(SeekAction::InPlace));
+
+    // Hardware DXVA video decoders seek in place once confirmed.
+    assert_eq!(step_reader(&mut state, ReaderEvent::HardwareConfirmed), None);
+    assert_eq!(state, ReaderState::Streaming { hardware_video: true });
+    assert_eq!(step_reader(&mut state, ReaderEvent::Seek { has_video: true }), Some(SeekAction::InPlace));
+    assert_eq!(state, ReaderState::Streaming { hardware_video: true });
+}
+
 /// Multiple Media Foundation CPU readers seeking concurrently must never deadlock inside
-/// `IMFSourceReader::ReadSample`. Each worker runs behind a bounded timeout so a regression
-/// fails with a message instead of hanging the test binary.
+/// `IMFSourceReader::ReadSample`. Tracks each worker's phase and last-advance timestamp so a
+/// stall dumps every worker's state and distinguishes deadlock from slow progress under load.
 #[test]
 fn parallel_cpu_readers_seeking_repeatedly_complete_within_timeout() {
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{Barrier, mpsc};
     const WORKERS: usize = 6;
-    const TIMEOUT: Duration = Duration::from_secs(15);
+    const STALL_LIMIT: Duration = Duration::from_secs(10);
+    const TOTAL_LIMIT: Duration = Duration::from_secs(30);
+
+    let phase_name = |p: usize| match p {
+        0 => "init",
+        1 => "resolve",
+        2 => "open",
+        3 => "barrier",
+        4 => "seek",
+        5 => "read",
+        6 => "drop",
+        7 => "done",
+        _ => "unknown",
+    };
 
     let rgbw = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rune/tests/fixtures/rgbw.mp4");
     let demo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
     let barrier = Arc::new(Barrier::new(WORKERS));
     let (tx, rx) = mpsc::channel();
+    let started = rune_core::time::now();
+    let phases: Arc<[AtomicUsize; WORKERS]> = Arc::new(std::array::from_fn(|_| AtomicUsize::new(0)));
+    let steps: Arc<[AtomicUsize; WORKERS]> = Arc::new(std::array::from_fn(|_| AtomicUsize::new(0)));
+    let last_ms: Arc<[AtomicU64; WORKERS]> = Arc::new(std::array::from_fn(|_| AtomicU64::new(0)));
 
     for id in 0..WORKERS {
         let path = if id % 2 == 0 { rgbw.clone() } else { demo.clone() };
         let barrier = barrier.clone();
         let tx = tx.clone();
+        let phases = phases.clone();
+        let steps = steps.clone();
+        let last_ms = last_ms.clone();
         std::thread::spawn(move || {
+            let mark = |ph: usize, st: usize| {
+                phases[id].store(ph, Ordering::Release);
+                steps[id].store(st, Ordering::Release);
+                last_ms[id].store(started.elapsed().as_millis() as u64, Ordering::Release);
+            };
             // SAFETY: MTA COM for this worker thread; matched on exit after all COM objects drop.
             let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
             let result = (|| -> Result<(), String> {
+                mark(1, 0);
                 let lib = mf::library()?;
                 let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path))?)?;
-                let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, false)?;
+                mark(2, 0);
+                let mut opened = mf::open(lib, source, Kind::Video, Decode::Cpu, false)?;
                 let video = opened.video.ok_or("no video track")?;
                 let targets: &[f64] = if id % 2 == 0 {
                     &[0.125, 0.375, 0.125, 0.625, 0.375, 0.125, 0.875, 0.375]
                 } else {
                     &[0.5, 0.0, 1.0, 0.25, 0.75, 0.0]
                 };
+                mark(3, 0);
                 barrier.wait();
+                let mut step = 0usize;
                 for _round in 0..3 {
                     for &at in targets {
-                        mf::seek(&opened.reader, at)?;
+                        step += 1;
+                        mark(4, step);
+                        mf::seek(&mut opened.reader, at)?;
                         loop {
-                            let read = mf::read(&opened.reader, video)?;
+                            step += 1;
+                            mark(5, step);
+                            let read = mf::read(&mut opened.reader, video)?;
                             if read.sample.is_some() || read.flags & MF_SOURCE_READERF_ENDOFSTREAM.0 != 0 {
                                 break;
                             }
                         }
                     }
                 }
+                mark(6, step);
+                drop(opened);
                 Ok(())
             })();
             if com {
-                // SAFETY: matches `CoInitializeEx` above after `opened` and `source` dropped.
+                // SAFETY: matches `CoInitializeEx` above after `opened` dropped.
                 unsafe { CoUninitialize() };
             }
+            mark(7, steps[id].load(Ordering::Acquire) + 1);
             // The receiver may have already timed out and dropped.
             tx.send((id, result)).ok();
         });
     }
     drop(tx);
 
-    let deadline = rune_core::time::now() + TIMEOUT;
     let mut completed = 0usize;
+    let dump = |now_ms: u64| -> String {
+        (0..WORKERS)
+            .map(|i| {
+                let ph = phases[i].load(Ordering::Acquire);
+                let st = steps[i].load(Ordering::Acquire);
+                let stuck = now_ms.saturating_sub(last_ms[i].load(Ordering::Acquire));
+                format!("w{i}:{}#{st}({stuck}ms)", phase_name(ph))
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
     while completed < WORKERS {
-        let left = deadline.saturating_duration_since(rune_core::time::now());
-        match rx.recv_timeout(left) {
+        match rx.recv_timeout(Duration::from_millis(100)) {
             Ok((id, Ok(()))) => {
                 let _ = id;
                 completed += 1;
             }
             Ok((id, Err(e))) => panic!("parallel MF seek worker {id} failed: {e}"),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                panic!(
-                    "parallel MF seek timed out after {}s ({completed}/{WORKERS} workers completed): IMFSourceReader::ReadSample deadlocked",
-                    TIMEOUT.as_secs()
-                );
+                let elapsed = started.elapsed();
+                let now_ms = elapsed.as_millis() as u64;
+                let stalled = (0..WORKERS).any(|i| {
+                    phases[i].load(Ordering::Acquire) != 7
+                        && now_ms.saturating_sub(last_ms[i].load(Ordering::Acquire)) >= STALL_LIMIT.as_millis() as u64
+                });
+                if stalled || elapsed >= TOTAL_LIMIT {
+                    panic!(
+                        "parallel MF seek stalled after {:.1}s ({completed}/{WORKERS} completed): [{}]",
+                        elapsed.as_secs_f64(),
+                        dump(now_ms)
+                    );
+                }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 panic!("parallel MF seek worker panicked ({completed}/{WORKERS} completed)");
