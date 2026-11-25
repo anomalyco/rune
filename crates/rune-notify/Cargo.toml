@@ -3,7 +3,7 @@ name = "rune-notify"
 version = "0.0.1"
 edition.workspace = true
 license.workspace = true
-description = "System notifications for Rune apps: UNUserNotificationCenter on macOS, toast notifications on Windows."
+description = "System notifications for Rune apps: UNUserNotificationCenter on macOS, toast notifications on Windows, org.freedesktop.Notifications on Linux."
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
@@ -14,6 +14,14 @@ windows = { workspace = true, features = ["Data_Xml_Dom", "Foundation", "Foundat
 windows-registry = "0.6"
 # `#[windows::core::implement]` (the toast activator) names this crate.
 windows-core = { workspace = true }
+
+# The notification server over D-Bus, on its own async-io thread; the same zbus Rune's `dbus`
+# feature uses, so an app builds one copy.
+[target.'cfg(target_os = "linux")'.dependencies]
+async-channel = "2"
+async-io = "2"
+futures-lite = { version = "2", default-features = false, features = ["std"] }
+zbus = { version = "5.19", default-features = false, features = ["async-io"] }
 
 [lints]
 workspace = true

@@ -9,6 +9,14 @@
 //!   posts before either. With an activation scheme (`Identity::activation`) a click
 //!   opens a link on that scheme, which reaches the app whether it runs or not, as long as the
 //!   toast is in the notification center; `click_from_url` turns the link back into the click.
+//! - **Linux:** the desktop's notification server (`org.freedesktop.Notifications` on the session
+//!   bus), on its own connection and thread. `available` is whether one answered; the first call
+//!   connects, waiting up to about 2.5 s for a server to answer, so make it after the first
+//!   frame (`on_ready`). The XDG portal is not used: a sandboxed app needs permission to talk to
+//!   `org.freedesktop.Notifications`. Buttons post where the server shows actions; text boxes
+//!   (`Notification::reply`) are left out. A click comes back while the process that posted
+//!   runs, with the server's activation token (`Click::activation_token`) when it sends one.
+//!   `register` names the app and its desktop entry.
 //! - **Elsewhere:** `available` is false and every call does nothing.
 //!
 //! Notifications are silent: they never play a sound.
@@ -16,6 +24,8 @@
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "windows")]
@@ -28,23 +38,25 @@ pub struct Notification {
     title: String,
     body: String,
     info: Vec<(String, String)>,
-    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos", target_os = "windows")), allow(dead_code))]
     actions: Vec<Action>,
 }
 
 /// A button on a notification, or a text box with its send button.
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos", target_os = "windows")), allow(dead_code))]
 enum Action {
     Button { id: String, label: String },
     Reply { id: String, placeholder: String, label: String },
 }
 
 /// The user-info key a click on a button carries its id under (`Click::action`).
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos", target_os = "windows")), allow(dead_code))]
 const ACTION: &str = "rune.action";
 /// The prefix of the user-info keys a click carries a text box's words under (`Click::input`).
 const INPUT: &str = "rune.input.";
+/// The user-info key a click carries its activation token under (`Click::activation_token`).
+const TOKEN: &str = "rune.activation_token";
 
 impl Notification {
     /// Posting another notification with the same `id` replaces this one.
@@ -65,7 +77,8 @@ impl Notification {
 
     /// A button: a click on it comes back with `Click::action` = `id`, without the app coming
     /// forward (it acts where it is). Windows shows up to five, in order; macOS up to ten (its
-    /// banner shows two, the rest under Options). Elsewhere the notification posts without them.
+    /// banner shows two, the rest under Options); Linux as many as the notification server does,
+    /// none on one without actions. Elsewhere the notification posts without them.
     pub fn action(mut self, id: impl Into<String>, label: impl Into<String>) -> Self {
         self.actions.push(Action::Button { id: id.into(), label: label.into() });
         self
@@ -101,6 +114,13 @@ impl Click {
     /// What was typed in text box `id` (`Notification::reply`).
     pub fn input(&self, id: &str) -> Option<&str> {
         self.info.iter().find(|(k, _)| k.strip_prefix(INPUT) == Some(id)).map(|(_, v)| v.as_str())
+    }
+
+    /// Linux: the XDG activation token the notification server sent with the click, for the app
+    /// to raise its window with (on Wayland, a window can't take focus without one). None
+    /// elsewhere, or from a server that sends none.
+    pub fn activation_token(&self) -> Option<&str> {
+        self.get(TOKEN)
     }
 }
 
@@ -146,14 +166,20 @@ impl Identity {
 /// Windows: sets the process's `AppUserModelID` and registers the name and icon for it under
 /// `HKEY_CURRENT_USER\Software\Classes\AppUserModelId\<id>`, the identity an app without a
 /// package or Start-menu shortcut posts toasts with, and the activation scheme, if any, under
-/// `HKEY_CURRENT_USER\Software\Classes\<scheme>`. macOS reads the identity from the bundle, so
-/// this does nothing there, nor elsewhere.
+/// `HKEY_CURRENT_USER\Software\Classes\<scheme>`. Linux writes nothing: notifications carry the
+/// name, and the id as their desktop entry (`<id>.desktop`, where the server finds the app's
+/// icon). macOS reads the identity from the bundle, so this does nothing there, nor elsewhere.
 pub fn register(identity: &Identity) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         windows::register(identity)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        linux::register(&identity.id, &identity.name);
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
         let _ = identity;
         Ok(())
@@ -184,7 +210,7 @@ fn handler() -> &'static Mutex<Option<Handler>> {
     HANDLER.get_or_init(|| Mutex::new(None))
 }
 
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos", target_os = "windows")), allow(dead_code))]
 fn deliver(click: Click) {
     if let Some(f) = handler().lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         f(click);
@@ -192,8 +218,13 @@ fn deliver(click: Click) {
 }
 
 /// Whether this process can post: on macOS it runs from a `.app` bundle with a bundle
-/// identifier; on Windows `register` gave it an identity.
+/// identifier; on Windows `register` gave it an identity; on Linux a notification server answers
+/// on the session bus.
 pub fn available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        linux::available()
+    }
     #[cfg(target_os = "macos")]
     {
         mac::bundled()
@@ -202,7 +233,7 @@ pub fn available() -> bool {
     {
         windows::registered()
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         false
     }
@@ -210,10 +241,14 @@ pub fn available() -> bool {
 
 /// Posts `n` now (on macOS, asking for permission first if the person hasn't been asked).
 /// Returns false when the app can't post at all (not `available`), or Windows refused the toast.
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_variables))]
+#[cfg_attr(not(any(target_os = "linux", target_os = "macos", target_os = "windows")), allow(unused_variables))]
 pub fn post(n: &Notification) -> bool {
     if !available() {
         return false;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::post(n)
     }
     #[cfg(target_os = "macos")]
     {
@@ -224,18 +259,20 @@ pub fn post(n: &Notification) -> bool {
     {
         windows::post(n)
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         false
     }
 }
 
 /// Takes the app's delivered notifications with these ids out of Notification Center (on
-/// Windows, the notification center).
+/// Windows, the notification center; on Linux, the notification server).
 pub fn remove(ids: &[&str]) {
     if ids.is_empty() || !available() {
         return;
     }
+    #[cfg(target_os = "linux")]
+    linux::remove(ids);
     #[cfg(target_os = "macos")]
     mac::remove(ids);
     #[cfg(target_os = "windows")]
@@ -261,7 +298,8 @@ pub fn click_from_url(url: &str) -> Option<Click> {
 /// loop from it). macOS brings the app forward on a click; call `bring_to_front` for the window.
 /// Install it at launch: on macOS a click that launched the app arrives too. On Windows a click
 /// arrives while the process that posted the toast runs, unless the identity has an activation
-/// scheme: then every click comes as a link (`click_from_url`).
+/// scheme: then every click comes as a link (`click_from_url`). On Linux a click arrives while
+/// the process that posted runs.
 pub fn on_click(f: impl Fn(Click) + Send + Sync + 'static) {
     *handler().lock().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(f));
     #[cfg(target_os = "macos")]
