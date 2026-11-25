@@ -79,6 +79,15 @@ pub(crate) struct CxCore {
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
 }
 
+/// The host's safe-area insets in points, top/right/bottom/left: the browser's on the web,
+/// zero on native.
+pub(crate) fn safe_area_insets() -> [f32; 4] {
+    #[cfg(target_arch = "wasm32")]
+    { crate::platform::web::safe_area() }
+    #[cfg(not(target_arch = "wasm32"))]
+    { [0.0; 4] }
+}
+
 impl CxCore {
     pub(super) fn absorb(&mut self, other: CxCore) {
         self.reduced_motion = other.reduced_motion;
@@ -122,12 +131,7 @@ impl CxCore {
     pub(crate) fn set_titlebar(&mut self, titlebar: crate::Titlebar) { self.titlebar.titlebar = Some(titlebar); }
     pub(crate) fn accent(&self) -> Color { self.system_accent.accent(self.env.system_dark) }
     pub(crate) fn focus_color(&self) -> Color { self.system_accent.focus(self.env.system_dark) }
-    pub(crate) fn safe_area(&self) -> [f32; 4] {
-        #[cfg(target_arch = "wasm32")]
-        { crate::platform::web::safe_area() }
-        #[cfg(not(target_arch = "wasm32"))]
-        { [0.0; 4] }
-    }
+    pub(crate) fn safe_area(&self) -> [f32; 4] { safe_area_insets() }
     pub(crate) fn hover_none(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         { crate::platform::web::hover_none() }

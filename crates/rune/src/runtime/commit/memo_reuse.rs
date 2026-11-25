@@ -355,6 +355,7 @@ fn same_handlers(
         drag_out,
         drag_threshold,
         touch_at_once,
+        edge_drag,
         press_on_down,
         on_drag_start,
         on_drag_end,
@@ -410,6 +411,11 @@ fn same_handlers(
         && opt_rc_eq(&a.drag_out, drag_out)
         && a.drag_threshold == *drag_threshold
         && a.touch_at_once == *touch_at_once
+        && match (&a.edge_drag, edge_drag) {
+            (None, None) => true,
+            (Some((ea, wa, fa)), Some((eb, wb, fb))) => ea == eb && wa == wb && Rc::ptr_eq(fa, fb),
+            _ => false,
+        }
         && a.press_on_down == *press_on_down
         && opt_rc_eq(&a.on_drag_start, on_drag_start)
         && opt_rc_eq(&a.on_drag_end, on_drag_end)
