@@ -1629,14 +1629,17 @@ rune::App::new(spec).fit_content_height().run();
   content's height. Unless the app sets a minimum, its minimum height is 0 rather than the
   default 400 pt.
 - Overlays ignore these (`Tx::resize_window` included); use `OverlayHandle::resize`, or
-  `ConfiguredOverlay::fit_content_height` for an overlay whose height follows its content (a
-  candidate list, a HUD). It is sized to its content before each show and prewarm (at the
-  target monitor's scale and active `RendererKind`, clamped to the display's work area), so
-  its first frame draws at that height with no flash. While shown, a height change resizes
-  and re-places the overlay before painting in the same frame (no spring; on Wayland
-  layer-shell, holds the previous frame until the compositor confirms the new size). Its
-  width comes from `OverlaySpec::size` and `OverlayHandle::resize`, whose height it ignores;
-  give the root no fixed or `fill` height.
+  `ConfiguredOverlay::sizing(ContentSizing)` (`Fixed`, `Fit`, `FitHeight`, `FitWidth`) with
+  optional `min_size((w, h))` / `max_size((w, h))` — or `ConfiguredOverlay::fit_content_height()`
+  as shorthand for `ContentSizing::FitHeight` — for an overlay whose size follows its content
+  (a candidate list, a horizontal IME bar, a HUD). Fitted axes are measured before each show
+  and prewarm (at the target monitor's scale and active `RendererKind`, clamped to `min_size`,
+  `max_size`, and the display's work area, with text wrapping at `max_size.0`), so its first
+  frame draws at the exact content size with no flash. While shown, a content size change
+  resizes and re-places the overlay before painting in the same frame (no spring; on Wayland
+  layer-shell, holds the previous frame until the compositor confirms the new size).
+  `OverlaySpec::size` and `OverlayHandle::resize` set only non-fitted axes; give fitted axes
+  no fixed or `fill` size on the root.
 
 ### Window chrome and shell controls (OpenCode Desktop fidelity)
 

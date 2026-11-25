@@ -154,12 +154,12 @@ pub(super) fn overlay_screen_area_on(options: &OverlayOptions, previous: Option<
 }
 
 pub(super) fn overlay_rect_on(at: crate::overlay::Placement, options: &OverlayOptions, previous: Option<u32>) -> Option<NSRect> {
-    overlay_rect_on_fit(at, options, previous, false)
+    overlay_rect_on_sized(at, options, previous, crate::ContentSizing::Fixed)
 }
 
-pub(super) fn overlay_rect_on_fit(at: crate::overlay::Placement, options: &OverlayOptions, previous: Option<u32>, fit_height: bool) -> Option<NSRect> {
+pub(super) fn overlay_rect_on_sized(at: crate::overlay::Placement, options: &OverlayOptions, previous: Option<u32>, sizing: crate::ContentSizing) -> Option<NSRect> {
     let frame = target_screen(options, previous)?.frame();
-    let [x, y, w, h] = crate::overlay::sizing::local_rect_for_fit(at, options.placement, (frame.size.width as f32, frame.size.height as f32), fit_height);
+    let [x, y, w, h] = crate::overlay::sizing::local_rect_for(at, options.placement, (frame.size.width as f32, frame.size.height as f32), sizing);
     Some(NSRect::new(NSPoint::new(frame.origin.x + x as f64, frame.origin.y + frame.size.height - (y + h) as f64), NSSize::new(w as f64, h as f64)))
 }
 

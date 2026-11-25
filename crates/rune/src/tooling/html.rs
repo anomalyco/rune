@@ -50,7 +50,7 @@ fn export_core(
     document: bool,
     plan: ExportPlan,
 ) -> Result<(), String> {
-    core.host.fit_height = fit_height;
+    core.host.set_fit_height(fit_height);
     if document { core.page_mode(); }
     let mut taken: Vec<(f32, Vec<ExportNode>)> = Vec::with_capacity(plan.widths.len());
     for &w in &plan.widths {

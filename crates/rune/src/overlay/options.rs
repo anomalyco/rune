@@ -184,7 +184,9 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
     pub(crate) renderer: crate::RendererKind,
-    pub(crate) fit_height: bool,
+    pub(crate) sizing: crate::ContentSizing,
+    pub(crate) min_size: Option<(f32, f32)>,
+    pub(crate) max_size: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -352,16 +354,17 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// first visible frame, such as a notification stack's first card entering. By default
     /// an unretained overlay shows settled, at its target.
     pub fn animate_reveal(mut self) -> Self { self.animate_reveal = true; self }
-    /// Size the overlay's height to its content, as [`App::fit_content_height`](crate::App::fit_content_height)
-    /// does for a window: the root lays out at its natural height for the overlay's width.
+    /// Size the overlay's height to its content: shorthand for
+    /// `.sizing(ContentSizing::FitHeight)`.
+    ///
     /// Each show and prewarm measures what changed while hidden (at the target monitor's scale
-    /// and active [`RendererKind`](crate::RendererKind), clamped to the display's work area)
-    /// without committing, so the first frame presents at the content's height with no flash.
-    /// While shown, a height change resizes and re-places the overlay before painting in the
-    /// same frame (without a spring; on Wayland layer-shell, holds the previous frame until
-    /// the compositor confirms the new size). `OverlaySpec::size` and `OverlayHandle::resize`
-    /// set only the width; `Tx::resize_window` stays ignored. Give the root no fixed or `fill`
-    /// height.
+    /// and active [`RendererKind`](crate::RendererKind), clamped to [`Self::min_size`],
+    /// [`Self::max_size`], and the display's work area) without committing, so the first frame
+    /// presents at the content's height with no flash. While shown, a height change resizes
+    /// and re-places the overlay before painting in the same frame (no spring; on Wayland
+    /// layer-shell, holds the previous frame until the compositor confirms the new size).
+    /// `OverlaySpec::size` and `OverlayHandle::resize` set only the width; `Tx::resize_window`
+    /// stays ignored. Give the root no fixed or `fill` height.
     ///
     /// ```no_run
     /// use rune::{OverlayOptions, OverlaySpec, col, text};
@@ -372,7 +375,58 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// .options(OverlayOptions::default())
     /// .fit_content_height();
     /// ```
-    pub fn fit_content_height(mut self) -> Self { self.fit_height = true; self }
+    pub fn fit_content_height(self) -> Self { self.sizing(crate::ContentSizing::FitHeight) }
+    /// Selects how this overlay derives its surface dimensions from its layout content
+    /// (defaults to [`ContentSizing::Fixed`](crate::ContentSizing::Fixed)).
+    ///
+    /// With [`ContentSizing::Fit`](crate::ContentSizing::Fit),
+    /// [`ContentSizing::FitHeight`](crate::ContentSizing::FitHeight), or
+    /// [`ContentSizing::FitWidth`](crate::ContentSizing::FitWidth), Rune measures the view
+    /// before creating or showing the surface so the very first presented frame opens at the
+    /// exact measured size (no flash at a guessed size), and resizes in the same frame when
+    /// content grows or shrinks. Pair with [`Self::min_size`] and [`Self::max_size`] to clamp
+    /// fitted axes and wrap overflowing text at `max_size.0`.
+    ///
+    /// ```no_run
+    /// use rune::{ContentSizing, OverlayOptions, OverlaySpec, col, text};
+    ///
+    /// let _candidates = OverlaySpec::new("candidates", (0.0, 0.0), |items: &Vec<String>, _| {
+    ///     col().gap(2.0).padding(8.0).children(items.iter().map(|s| text(s)))
+    /// })
+    /// .options(OverlayOptions::default())
+    /// .sizing(ContentSizing::Fit)
+    /// .max_size((420.0, 320.0));
+    /// ```
+    pub fn sizing(mut self, sizing: crate::ContentSizing) -> Self { self.sizing = sizing; self }
+    /// Minimum logical size `(width, height)` in points for axes fitted by [`Self::sizing`].
+    /// Clamped to at least `(1.0, 1.0)` and never exceeding [`Self::max_size`] or the target
+    /// display's work area.
+    ///
+    /// ```no_run
+    /// use rune::{ContentSizing, OverlayOptions, OverlaySpec, el};
+    ///
+    /// let _hud = OverlaySpec::new("hud", (0.0, 0.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .sizing(ContentSizing::Fit)
+    ///     .min_size((120.0, 36.0));
+    /// ```
+    pub fn min_size(mut self, size: (f32, f32)) -> Self { self.min_size = Some(size); self }
+    /// Maximum logical size `(width, height)` in points for axes fitted by [`Self::sizing`].
+    /// Also applied as the root Taffy `max_size` constraint so wrapping text wraps at `size.0`
+    /// instead of laying out on one unbounded line; further capped by the target display's
+    /// work area and the surface's physical pixel limit.
+    ///
+    /// ```no_run
+    /// use rune::{ContentSizing, OverlayOptions, OverlaySpec, col, text};
+    ///
+    /// let _candidates = OverlaySpec::new("candidates", (0.0, 0.0), |items: &Vec<String>, _| {
+    ///     col().gap(2.0).padding(8.0).children(items.iter().map(|s| text(s)))
+    /// })
+    /// .options(OverlayOptions::default())
+    /// .sizing(ContentSizing::Fit)
+    /// .max_size((420.0, 320.0));
+    /// ```
+    pub fn max_size(mut self, size: (f32, f32)) -> Self { self.max_size = Some(size); self }
     /// While hidden, the overlay holds no GPU surface, swapchain or renderer. Each show makes the
     /// surface, and each hide drops it. Away from macOS, the GPU device and renderer then wait
     /// five minutes for the next surface (a window's or overlay's) before they go, so an overlay
@@ -522,7 +576,7 @@ impl<T: 'static> OverlaySpec<T> {
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
             frame_latency: None, on_materials: None, animate_reveal: false, release_after: None,
-            renderer: crate::RendererKind::Gpu, fit_height: false,
+            renderer: crate::RendererKind::Gpu, sizing: crate::ContentSizing::Fixed, min_size: None, max_size: None,
         }
     }
 }

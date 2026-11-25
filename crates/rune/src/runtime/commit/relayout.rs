@@ -33,9 +33,43 @@ impl Reuse {
     }
 }
 
-/// The root's size in a viewport; a window that fits its content takes its natural height.
-pub(in crate::runtime) fn root_size(viewport: (f32, f32), fit_height: bool) -> Size<Dimension> {
-    Size { width: length(viewport.0), height: if fit_height { auto() } else { length(viewport.1) } }
+/// Applies fixed viewport dimensions or content-sizing `auto()` + `(min, max)` bounds to the
+/// root node's Taffy style. Fitted axes preserve explicit pixel lengths on the root while
+/// turning `Auto` / `Percent` (e.g. `.w_full()`) into `auto()`, and apply `max_size` so
+/// wrapping text wraps at `max_w` instead of laying out on one unbounded line.
+pub(in crate::runtime) fn apply_root_sizing(
+    style: &mut CompactStyle,
+    viewport: (f32, f32),
+    sizing: crate::ContentSizing,
+    limits: crate::overlay::sizing::SizeLimits,
+) {
+    use taffy::util::MaybeResolve;
+    let fit_dim = |d: Dimension| {
+        if d.is_auto() || d.maybe_resolve(None, |_, _| 0.0).is_none() { auto() } else { d }
+    };
+    let width = if sizing.fits_width() { fit_dim(style.size().width) } else { length(viewport.0) };
+    let height = if sizing.fits_height() { fit_dim(style.size().height) } else { length(viewport.1) };
+    style.set_size(Size { width, height });
+    if let Some((min_w, min_h)) = limits.0 {
+        if sizing.fits_width() && min_w.is_finite() && min_w > 0.0 {
+            let v = style.min_size().width.maybe_resolve(None, |_, _| 0.0).map_or(min_w, |c| c.max(min_w));
+            style.set_min_width(LengthPercentageAuto::length(v));
+        }
+        if sizing.fits_height() && min_h.is_finite() && min_h > 0.0 {
+            let v = style.min_size().height.maybe_resolve(None, |_, _| 0.0).map_or(min_h, |c| c.max(min_h));
+            style.set_min_height(LengthPercentageAuto::length(v));
+        }
+    }
+    if let Some((max_w, max_h)) = limits.1 {
+        if sizing.fits_width() && max_w.is_finite() && max_w > 0.0 {
+            let v = style.max_size().width.maybe_resolve(None, |_, _| 0.0).map_or(max_w, |c| c.min(max_w));
+            style.set_max_width(LengthPercentageAuto::length(v));
+        }
+        if sizing.fits_height() && max_h.is_finite() && max_h > 0.0 {
+            let v = style.max_size().height.maybe_resolve(None, |_, _| 0.0).map_or(max_h, |c| c.min(max_h));
+            style.set_max_height(LengthPercentageAuto::length(v));
+        }
+    }
 }
 
 /// Whether a commit can lay `n` out again as it is. Layout rewrites the styles of
@@ -168,7 +202,7 @@ impl Measurement<'_> {
         self.memo.split_scratch = split;
         let root = nodes[0].taffy;
         let mut style = taffy.style(root).clone();
-        style.set_size(root_size(self.viewport, self.fit_height));
+        apply_root_sizing(&mut style, self.viewport, self.content_sizing, self.content_limits);
         taffy.set_style_and_mark_ancestors(root, style, std::iter::empty());
         // Restore authored unclamped styles on fitted anchored overlays and room styles on
         // `aspect_fit` elements so `solve` re-fits both against the new viewport.
@@ -271,12 +305,24 @@ impl Measurement<'_> {
     pub(in crate::runtime) fn solve(&mut self, text: &mut TextSystem, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>, reused: &[memo_reuse::ReusedSpan]) -> (LayoutEngine, Vec<Node>, Vec<(usize, CompactStyle)>) {
         let scale = self.env.scale;
         let room = Size {
-            width: AvailableSpace::Definite(self.viewport.0),
-            height: if self.fit_height { AvailableSpace::MaxContent } else { AvailableSpace::Definite(self.viewport.1) },
+            width: if self.content_sizing.fits_width() { AvailableSpace::MaxContent } else { AvailableSpace::Definite(self.viewport.0) },
+            height: if self.content_sizing.fits_height() { AvailableSpace::MaxContent } else { AvailableSpace::Definite(self.viewport.1) },
         };
         {
             let _layout_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Layout);
             compute_layout(&mut taffy, root_id, room, &nodes, text, scale);
+            if self.content_sizing.fits_width()
+                && let Some((max_w, _)) = self.content_limits.1
+                && max_w.is_finite()
+                && max_w > 0.0
+                && taffy.box_layout(root_id).size().width >= max_w - 0.5
+            {
+                let mut style = taffy.style(root_id).clone();
+                style.set_width(length(max_w));
+                taffy.set_style_and_mark_ancestors(root_id, style, std::iter::empty());
+                let wrapped_room = Size { width: AvailableSpace::Definite(max_w), ..room };
+                compute_layout(&mut taffy, root_id, wrapped_room, &nodes, text, scale);
+            }
             // `aspect_fit` elements laid out filling their room; fix each at the largest box
             // at its ratio inside it and lay out again, so siblings and alignment follow.
             let mut refit = false;

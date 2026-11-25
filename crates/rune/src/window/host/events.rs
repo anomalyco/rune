@@ -365,7 +365,7 @@ impl Host {
         };
         match event {
             WindowEvent::Moved(_) => {
-                record_reopen(&mut self.reopen, l, app.rt().host.fit_height);
+                record_reopen(&mut self.reopen, l, app.rt().host.fit_height());
                 let scale_changed = (scale - app.rt().window_scale()).abs() > f32::EPSILON;
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if !self.wayland && !scale_changed && chrome::sync_wm_state_core(app.rt_mut(), l) {
@@ -400,7 +400,7 @@ impl Host {
             }
             WindowEvent::Resized(size) => {
                 sync_chrome_core(app.rt_mut(), l, chrome, titlebar);
-                record_reopen(&mut self.reopen, l, app.rt().host.fit_height);
+                record_reopen(&mut self.reopen, l, app.rt().host.fit_height());
                 #[cfg(target_os = "windows")]
                 let maximize_changed = {
                     let maximized = l.is_maximized();
