@@ -286,7 +286,11 @@ Password fields take no files, and fields without a hook keep taking only text, 
 drop that carried only files or an image changes nothing there.
 
 `rune::web::open_url` accepts HTTP(S) and mail links and opens a tab with `noopener,noreferrer`. (`Tx::open_path` and `Tx::reveal_path` are desktop-only and return `OpenPathError::Unsupported` on web.)
-Call it from a user input handler. `Tx::open_url_same_tab` (or `rune::web::open_url_same_tab`)
+Call it from a user input handler: it returns an error when no click or key press is active,
+as browsers block the tab then. A tab blocked otherwise (a site's pop-up setting) can't be
+seen, since the browser hands back no window for a `noopener` tab, so `Tx::open_url_then`
+reports `Ok(())` for it; show the link to copy beside the button when that matters.
+`Tx::open_url_same_tab` (or `rune::web::open_url_same_tab`)
 replaces the page instead, and takes links relative to the page (`/notes/42`). A single-page
 app routes those itself with `App::same_tab_router`: it gets the absolute URL of each link on
 the page's origin and returns true when it handled it; otherwise, and for other origins, the

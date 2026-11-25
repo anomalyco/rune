@@ -70,6 +70,8 @@ pub(in crate::runtime) enum Action {
     /// A `Tx::open_file`, `Tx::open_files`, `Tx::save_file` or `Tx::open_folder` callback's id
     /// and the dialog's answer.
     FileDialog(u64, crate::file_dialog::DialogOutcome),
+    /// A `Tx::open_url_then` callback and what came of the open.
+    UrlOpened(crate::open_url::OpenedFn, Result<(), crate::open_url::OpenUrlError>),
     Focus(String, f32, f32),
     /// A text field's menu: the field, the window point it opens at, and the window point where a
     /// press asked for it (none from the keyboard).
@@ -110,7 +112,7 @@ impl ActionQueue {
         let input = !matches!(action, Action::Layout(..) | Action::ScreenLayout(..) | Action::DrawnLayout(..)
             | Action::Visible(..) | Action::VisibleRows(..) | Action::AtBottom(..) | Action::FarFromBottom(..)
             | Action::WindowFocus(_) | Action::Physical(crate::PhysicalInput::FocusLost, _) | Action::FinishIme
-            | Action::ClipboardRead(..) | Action::SelectionChange(..)) || at.is_some();
+            | Action::ClipboardRead(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
         self.0.push(Queued { action, at, input });
     }
     /// A stationary pointer was re-hit after layout; no pointer event asked for that hover.
@@ -231,6 +233,7 @@ fn handler_name(action: &Action) -> &'static str {
         Action::Paste(..) => "on_paste",
         Action::ClipboardRead(..) => "a `read_clipboard` callback",
         Action::FileDialog(..) => "a file dialog callback",
+        Action::UrlOpened(..) => "an `open_url_then` callback",
         _ => "a handler",
     })
 }
@@ -623,6 +626,10 @@ impl RuntimeCore {
                 true
             }
             Action::FileDialog(id, result) => self.run_file_dialog(app, id, result, &mut one),
+            Action::UrlOpened(f, result) => {
+                f(app.states(), result, &mut one);
+                true
+            }
             Action::Focus(path, x, y) => self.focus_input(app, path, x, y, &mut one),
             Action::FieldMenu(path, at, local) => self.field_menu(app, path, at, local, &mut one),
             Action::Blur => {

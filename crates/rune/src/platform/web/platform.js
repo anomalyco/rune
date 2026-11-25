@@ -37,10 +37,17 @@ export async function pngBytes(blob, max) {
     return blob && blob.size <= max ? new Uint8Array(await blob.arrayBuffer()) : undefined;
 }
 
+// Opens `url` in a new tab with no opener or referrer. False when no click or key press was
+// active, which browsers block: with `noopener` the browser returns null whether or not the
+// tab opened, so the page's user activation, read before `window.open` spends it, is all there
+// is to go on. Browsers without `navigator.userActivation` say true.
 export function openLink(url) {
     const parsed = new URL(url);
     if (!['https:', 'http:', 'mailto:'].includes(parsed.protocol)) throw new Error('Unsupported link scheme.');
+    const activation = navigator.userActivation;
+    const active = !activation || activation.isActive;
     window.open(parsed.href, '_blank', 'noopener,noreferrer');
+    return active;
 }
 
 // `url` resolved against the page, and whether it stays on the page's origin.
