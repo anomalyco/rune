@@ -48,6 +48,10 @@ unsafe extern "system" fn procedure(hwnd: HWND, msg: u32, w: usize, l: isize, _:
     if msg == WM_WTSSESSION_CHANGE && w == SESSION_LOCK {
         crate::clipboard::clear_secret_now();
     }
+    #[cfg(feature = "windows-system-material")]
+    if msg == WM_WTSSESSION_CHANGE && matches!(w, 0x1..=0x4) {
+        crate::system_material::windows::notify_wm_setting_change();
+    }
     if msg == WM_NCDESTROY {
         if let Some(unregister) = proc::<Unregister>(c"WTSUnRegisterSessionNotification") {
             // SAFETY: the window is still alive during WM_NCDESTROY.

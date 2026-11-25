@@ -331,6 +331,13 @@ impl RuntimeCore {
     pub fn set_tab_visits_controls(&mut self, on: bool) {
         self.kbd.tab_visits_controls = on;
     }
+    /// What [`Cx::system_contrast`] currently reports.
+    #[cfg_attr(not(all(target_os = "windows", feature = "windows-system-material")), allow(dead_code))]
+    #[inline]
+    pub(crate) fn system_contrast(&self) -> Option<crate::SystemContrast> {
+        self.host.system_contrast
+    }
+
     /// What [`Cx::system_contrast`] reports. Native Windows windows set it from the system's
     /// contrast theme as they open and when it changes; headless runs keep None.
     #[inline]

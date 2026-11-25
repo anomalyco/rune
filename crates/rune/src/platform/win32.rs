@@ -375,6 +375,10 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
         }
         _ => {}
     }
+    #[cfg(feature = "windows-system-material")]
+    if matches!(message, WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED) {
+        crate::system_material::windows::notify_wm_setting_change();
+    }
     // SAFETY: forwards the unhandled message to the next procedure in this window's subclass chain.
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
