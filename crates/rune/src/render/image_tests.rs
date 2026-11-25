@@ -601,3 +601,227 @@ fn memo_reuse_invalidates_when_pixels_tint_or_image_filter_changes() {
     rt.frame(0.0);
     assert_eq!(flags(&rt), 0);
 }
+
+#[test]
+fn gpu_pixels_wrap_and_tile_modes_and_atlas_isolation() {
+    use crate::color::Color;
+    use crate::el::{El, el, row};
+    use crate::render::{Gpu, KIND_IMAGE, OFFSCREEN_FORMAT, Offscreen, Renderer, instance::shader_consts as sc};
+    use crate::runtime::{Cx, Env, Runtime};
+    use crate::{ImageFilter, PixelsWrap};
+
+    // 4x4 asymmetric tile: distinct (R, G) per texel, blue = 40.
+    let tile = Pixels::new();
+    let mut rgba = Vec::with_capacity(4 * 4 * 4);
+    for y in 0..4u8 {
+        for x in 0..4u8 {
+            rgba.extend_from_slice(&[x * 75 + 20, y * 75 + 20, 40, 255]);
+        }
+    }
+    tile.set(4, 4, rgba);
+    // Bright magenta neighbour to prove wrapped taps never bleed across atlas slots.
+    let guard = Pixels::new();
+    guard.set(4, 4, [255, 0, 255, 255].repeat(16));
+    // 4x4 alpha mask for tinted tiling.
+    let mask = Pixels::new();
+    let mut mask_rgba = Vec::with_capacity(4 * 4 * 4);
+    for y in 0..4u8 {
+        for x in 0..4u8 {
+            let a = if x < 2 && y < 2 { 255 } else { 0 };
+            mask_rgba.extend_from_slice(&[0x2e, 0x34, 0x36, a]);
+        }
+    }
+    mask.set(4, 4, mask_rgba);
+
+    fn view(s: &(Pixels, Pixels, Pixels), _: &mut Cx<(Pixels, Pixels, Pixels)>) -> El {
+        row()
+            // 0..24: Repeat via pixels_tile (8x8 tiles -> 3x3 copies)
+            .child(el().size(24.0, 24.0).pixels_tile(&s.0, [8.0, 8.0]).image_filter(ImageFilter::Nearest))
+            // 24..48: Mirror around inset [8, 8, 8, 8]
+            .child(el().size(24.0, 24.0).pixels_wrap(&s.0, [8.0, 8.0, 8.0, 8.0], PixelsWrap::Mirror).image_filter(ImageFilter::Nearest))
+            // 48..72: Extend around inset [8, 8, 8, 8]
+            .child(el().size(24.0, 24.0).pixels_wrap(&s.0, [8.0, 8.0, 8.0, 8.0], PixelsWrap::Extend).image_filter(ImageFilter::Nearest))
+            // 72..96: Negative offset Repeat + rounded corners
+            .child(el().size(24.0, 24.0).radius(6.0).pixels_wrap(&s.0, [-4.0, -4.0, 8.0, 8.0], PixelsWrap::Repeat).image_filter(ImageFilter::Nearest))
+            // 96..120: Tinted pixels_tile
+            .child(el().size(24.0, 24.0).pixels_tile(&s.2, [8.0, 8.0]).pixels_tint(Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }).image_filter(ImageFilter::Nearest))
+            // 120..124: Plain untiled pixels (default path + atlas guard)
+            .child(el().size(4.0, 24.0).pixels(&s.1))
+    }
+
+    let mut rt = Runtime::new((tile, guard, mask), view, (124.0, 24.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let imgs: Vec<_> = rt.instances.iter().filter(|i| i.params[1] == KIND_IMAGE).collect();
+    assert_eq!(imgs.len(), 6);
+    assert_eq!(imgs[0].params[3] as u32, sc::IMAGE_WRAP_REPEAT);
+    assert_eq!(imgs[0].border, [0.0, 0.0, 8.0, 8.0]);
+    assert_eq!(imgs[1].params[3] as u32, sc::IMAGE_WRAP_MIRROR);
+    assert_eq!(imgs[1].border, [32.0, 8.0, 8.0, 8.0]);
+    assert_eq!(imgs[2].params[3] as u32, sc::IMAGE_WRAP_EXTEND);
+    assert_eq!(imgs[2].border, [56.0, 8.0, 8.0, 8.0]);
+    assert_eq!(imgs[3].params[3] as u32, sc::IMAGE_WRAP_REPEAT);
+    assert_eq!(imgs[3].border, [68.0, -4.0, 8.0, 8.0]);
+    assert_eq!(imgs[4].params[2] as u32, sc::IMAGE_FLAG_TINT | sc::IMAGE_FLAG_NEAREST);
+    assert_eq!(imgs[4].params[3] as u32, sc::IMAGE_WRAP_REPEAT);
+    // Default untiled image keeps border == [0; 4] and params[3] == 1.0.
+    assert_eq!(imgs[5].border, [0.0; 4]);
+    assert_eq!(imgs[5].params[3], 1.0);
+
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (124, 24));
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+    let target = Offscreen::new(&gpu.device, 124, 24);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, [0.0, 0.0, 0.0, 1.0]);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let out = target.read(&gpu.device);
+    let px = |x: usize, y: usize| -> [u8; 3] {
+        let p = &out[(y * 124 + x) * 4..(y * 124 + x) * 4 + 4];
+        [p[0], p[1], p[2]]
+    };
+    let expected_texel = |tx: i32, ty: i32| -> [u8; 3] {
+        [(tx as u8) * 75 + 20, (ty as u8) * 75 + 20, 40]
+    };
+
+    // Panel 0 (pixels_tile 8x8 -> 2 px per texel): check all 3x3 tiles match exact repeat.
+    for y in 0..24usize {
+        for x in 0..24usize {
+            let exp = expected_texel(((x / 2) % 4) as i32, ((y / 2) % 4) as i32);
+            let got = px(x, y);
+            assert!(got[0].abs_diff(exp[0]) <= 2 && got[1].abs_diff(exp[1]) <= 2 && got[2].abs_diff(exp[2]) <= 2,
+                "Repeat tile ({x},{y}): got {got:?}, expected {exp:?}");
+        }
+    }
+    // Panel 1 (Mirror around inset [8, 8, 8, 8]): left/right/top/bottom reflect symmetrically.
+    let mirror_idx = |k: i32| -> i32 {
+        let m = k.rem_euclid(8);
+        if m >= 4 { 7 - m } else { m }
+    };
+    for y in 0..24usize {
+        for x in 0..24usize {
+            let tx = mirror_idx((x as i32 - 8).div_euclid(2));
+            let ty = mirror_idx((y as i32 - 8).div_euclid(2));
+            let exp = expected_texel(tx, ty);
+            let got = px(24 + x, y);
+            assert!(got[0].abs_diff(exp[0]) <= 2 && got[1].abs_diff(exp[1]) <= 2 && got[2].abs_diff(exp[2]) <= 2,
+                "Mirror ({x},{y}): got {got:?}, expected {exp:?}");
+        }
+    }
+    // Panel 2 (Extend around inset [8, 8, 8, 8]): corners clamp to (0,0),(3,0),(0,3),(3,3).
+    for y in 0..24usize {
+        for x in 0..24usize {
+            let tx = (x as i32 - 8).div_euclid(2).clamp(0, 3);
+            let ty = (y as i32 - 8).div_euclid(2).clamp(0, 3);
+            let exp = expected_texel(tx, ty);
+            let got = px(48 + x, y);
+            assert!(got[0].abs_diff(exp[0]) <= 2 && got[1].abs_diff(exp[1]) <= 2 && got[2].abs_diff(exp[2]) <= 2,
+                "Extend ({x},{y}): got {got:?}, expected {exp:?}");
+        }
+    }
+    // Panel 3 (negative offset [-4, -4, 8, 8] + radius(6.0)): corner (0,0) clipped to clear,
+    // interior (12, 12) samples texel ((12 + 4)/2 % 4) = (0, 0).
+    assert_eq!(px(72, 0), [0, 0, 0], "rounded corner must clip wrapped image");
+    let p3_mid = px(72 + 12, 12);
+    let exp00 = expected_texel(0, 0);
+    assert!(p3_mid[0].abs_diff(exp00[0]) <= 2 && p3_mid[1].abs_diff(exp00[1]) <= 2,
+        "negative offset Repeat interior: got {p3_mid:?}, expected {exp00:?}");
+    // Panel 4 (tinted pixels_tile): top-left quadrant of every 8x8 tile is pure red, bottom-right is black.
+    for ty in 0..3usize {
+        for tx in 0..3usize {
+            assert_eq!(px(96 + tx * 8 + 1, ty * 8 + 1), [255, 0, 0], "tinted tile ({tx},{ty}) opaque quad");
+            assert_eq!(px(96 + tx * 8 + 6, ty * 8 + 6), [0, 0, 0], "tinted tile ({tx},{ty}) transparent quad");
+        }
+    }
+}
+
+#[test]
+fn pixels_wrap_and_tile_layout_mip_edges_and_memo() {
+    use crate::el::{El, col, el};
+    use crate::memo::memo;
+    use crate::render::{KIND_IMAGE, instance::shader_consts as sc};
+    use crate::runtime::{Cx, Env, Runtime};
+    use crate::{ImageFilter, PixelsWrap};
+
+    // 1. Layout: pixels_wrap and pixels_tile must NOT supply an intrinsic aspect ratio,
+    // while El::pixels still does.
+    let wide = Pixels::new();
+    wide.set(20, 10, vec![255; 20 * 10 * 4]);
+    fn layout_view(p: &Pixels, _: &mut Cx<Pixels>) -> El {
+        col()
+            .child(el().key("plain").w(100.0).pixels(p))
+            .child(el().key("tiled").w(100.0).pixels_tile(p, [20.0, 20.0]))
+            .child(el().key("wrapped").w(100.0).pixels_wrap(p, [0.0, 0.0, 20.0, 20.0], PixelsWrap::Extend))
+            .child(el().key("zero").size(40.0, 40.0).pixels_tile(p, [0.0, 10.0]))
+            .child(el().key("neg").size(40.0, 40.0).pixels_wrap(p, [0.0, 0.0, -4.0, 8.0], PixelsWrap::Repeat))
+            .child(el().key("nan").size(40.0, 40.0).pixels_wrap(p, [f32::NAN, 0.0, 8.0, 8.0], PixelsWrap::Mirror))
+    }
+    let mut rt = Runtime::new(wide, layout_view, (200.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let rect_of = |key: &str| {
+        let idx = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some(key)).expect(key);
+        rt.tree.nodes[idx].target
+    };
+    let r_plain = rect_of("plain");
+    let r_tiled = rect_of("tiled");
+    let r_wrapped = rect_of("wrapped");
+    assert_eq!(r_plain[3] - r_plain[1], 50.0, "El::pixels keeps intrinsic 2:1 height");
+    assert_eq!(r_tiled[3] - r_tiled[1], 0.0, "El::pixels_tile must not supply intrinsic aspect ratio");
+    assert_eq!(r_wrapped[3] - r_wrapped[1], 0.0, "El::pixels_wrap must not supply intrinsic aspect ratio");
+    // Only the plain image emitted a KIND_IMAGE instance (zero/neg/NaN rects draw nothing).
+    let imgs: Vec<_> = rt.instances.iter().filter(|i| i.params[1] == KIND_IMAGE).collect();
+    assert_eq!(imgs.len(), 1, "degenerate wrap rects must emit no KIND_IMAGE instance");
+
+    // 2. HiDPI & mip selection: 64x64 mipmapped image tiled at 8x8 pt at scale 2.0 (16x16 dev px)
+    // chooses 16x16 mip under Linear and 64x64 mip 0 under Nearest.
+    let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+    let big = cache.rgba(64, 64, [255, 0, 0, 255].repeat(64 * 64));
+    big.wait().expect("decodes 64x64");
+    fn mip_view(p: &Pixels, _: &mut Cx<Pixels>) -> El {
+        col()
+            .child(el().size(40.0, 40.0).pixels_tile(p, [8.0, 8.0]))
+            .child(el().size(40.0, 40.0).pixels_tile(p, [8.0, 8.0]).image_filter(ImageFilter::Nearest))
+    }
+    let mut rt_mip = Runtime::new(big.pixels().clone(), mip_view, (80.0, 100.0), Env::new(true, 2.0));
+    rt_mip.frame(0.0);
+    let mimgs: Vec<_> = rt_mip.instances.iter().filter(|i| i.params[1] == KIND_IMAGE).collect();
+    assert_eq!(mimgs.len(), 2);
+    assert_eq!([mimgs[0].uv[2], mimgs[0].uv[3]], [16.0, 16.0], "Linear selects 16x16 mip for 8pt*2x tile");
+    assert_eq!([mimgs[1].uv[2], mimgs[1].uv[3]], [64.0, 64.0], "Nearest keeps 64x64 mip 0");
+    assert_eq!([mimgs[0].border[2], mimgs[0].border[3]], [16.0, 16.0], "tile size scales by HiDPI");
+
+    // 3. Memo reuse invalidates when pixels_wrap rect or wrap mode changes.
+    struct MemoState {
+        px: Pixels,
+        wrap: Option<([f32; 4], PixelsWrap)>,
+    }
+    fn memo_view(s: &MemoState, _: &mut Cx<MemoState>) -> El {
+        let base = memo("w", (), || el().size(32.0, 32.0).pixels(&s.px));
+        match s.wrap {
+            Some((r, w)) => base.pixels_wrap(&s.px, r, w),
+            None => base,
+        }
+    }
+    let px = Pixels::new();
+    px.set(4, 4, vec![255; 4 * 4 * 4]);
+    let mut rt_m = Runtime::new(MemoState { px, wrap: None }, memo_view, (32.0, 32.0), Env::new(true, 1.0));
+    rt_m.frame(0.0);
+    let img0 = rt_m.instances.iter().find(|i| i.params[1] == KIND_IMAGE).unwrap();
+    assert_eq!((img0.params[3], img0.border), (1.0, [0.0; 4]));
+
+    rt_m.update(|s, _| s.wrap = Some(([2.0, 4.0, 8.0, 8.0], PixelsWrap::Repeat)));
+    rt_m.frame(0.0);
+    let img1 = rt_m.instances.iter().find(|i| i.params[1] == KIND_IMAGE).unwrap();
+    assert_eq!((img1.params[3] as u32, img1.border), (sc::IMAGE_WRAP_REPEAT, [2.0, 4.0, 8.0, 8.0]));
+
+    rt_m.update(|s, _| s.wrap = Some(([2.0, 4.0, 8.0, 8.0], PixelsWrap::Mirror)));
+    rt_m.frame(0.0);
+    let img2 = rt_m.instances.iter().find(|i| i.params[1] == KIND_IMAGE).unwrap();
+    assert_eq!(img2.params[3] as u32, sc::IMAGE_WRAP_MIRROR);
+
+    rt_m.update(|s, _| s.wrap = Some(([6.0, 4.0, 12.0, 8.0], PixelsWrap::Extend)));
+    rt_m.frame(0.0);
+    let img3 = rt_m.instances.iter().find(|i| i.params[1] == KIND_IMAGE).unwrap();
+    assert_eq!((img3.params[3] as u32, img3.border), (sc::IMAGE_WRAP_EXTEND, [6.0, 4.0, 12.0, 8.0]));
+}

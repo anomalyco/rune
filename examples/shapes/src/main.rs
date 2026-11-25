@@ -3,21 +3,23 @@
 //! under `FillRule::NonZero` and `FillRule::EvenOdd`, SVG 2 path data (`Path::from_svg`,
 //! `Shape::fill_svg`, `Shape::fill_svg_with`, `Shape::stroke_svg`), multi-hole circular cutouts
 //! (`El::cutout_circles`), nearest-neighbour pixel-art scaling (`El::image_filter`,
-//! `ImageFilter::Nearest`), and runtime alpha-tinted symbolic icons (`El::pixels_tint`).
+//! `ImageFilter::Nearest`), runtime alpha-tinted symbolic icons (`El::pixels_tint`), and
+//! wrapped/tiled images (`El::pixels_wrap`, `El::pixels_tile`, `PixelsWrap::{Repeat, Mirror, Extend}`).
 //! `cargo run -p shapes -- --snap shapes.png` renders it headless; time animates the waveform,
 //! so `--at 1.5` shows another moment.
 
 #![forbid(unsafe_code)]
 
 use rune::{
-    AppSpec, Color, Cx, El, FillRule, ImageFilter, LineCap, Path, Pixels, Shape, SurfaceFit, Tx,
-    canvas, col, el, memo, row, text,
+    AppSpec, Color, Cx, El, FillRule, ImageFilter, LineCap, Path, Pixels, PixelsWrap, Shape,
+    SurfaceFit, Tx, canvas, col, el, memo, row, text,
 };
 
 struct State {
     t: f32,
     sprite: Pixels,
     symbolic: Pixels,
+    motif: Pixels,
 }
 
 const INK: Color = Color {
@@ -330,6 +332,91 @@ fn pixel_sampling_and_tint(sprite: &Pixels, symbolic: &Pixels) -> El {
         ))
 }
 
+/// An asymmetric 8×8 directional motif (amber top-left corner, blue diagonal arrow, crisp border
+/// accents) so `Repeat`, `Mirror`, and `Extend` produce visually distinct patterns.
+fn wrap_motif() -> Pixels {
+    const PALETTE: [[u8; 4]; 5] = [
+        [24, 28, 38, 255],
+        [72, 132, 245, 255],
+        [255, 148, 72, 255],
+        [232, 238, 246, 255],
+        [72, 198, 146, 255],
+    ];
+    const GRID: [[usize; 8]; 8] = [
+        [2, 2, 2, 0, 0, 0, 0, 4],
+        [2, 3, 0, 0, 0, 1, 1, 0],
+        [2, 0, 0, 0, 1, 3, 1, 0],
+        [0, 0, 0, 1, 3, 1, 0, 0],
+        [0, 0, 1, 3, 1, 0, 0, 0],
+        [0, 1, 3, 1, 0, 0, 0, 0],
+        [0, 1, 1, 0, 0, 0, 4, 4],
+        [0, 0, 0, 0, 0, 4, 4, 4],
+    ];
+    let mut rgba = Vec::with_capacity(8 * 8 * 4);
+    for r in GRID {
+        for idx in r {
+            rgba.extend_from_slice(&PALETTE[idx]);
+        }
+    }
+    let px = Pixels::new();
+    px.set(8, 8, rgba);
+    px
+}
+
+fn pixel_wrap_and_tile(motif: &Pixels, symbolic: &Pixels) -> El {
+    let swatch = |title: &str, box_el: El| {
+        col()
+            .gap(6.0)
+            .child(box_el)
+            .child(text(title).color(INK))
+    };
+    let placed = [36.0, 14.0, 40.0, 40.0];
+    row()
+        .gap(16.0)
+        .child(swatch(
+            "pixels_tile (24x24)",
+            el()
+                .size(132.0, 68.0)
+                .radius(8.0)
+                .pixels_tile(motif, [24.0, 24.0])
+                .image_filter(ImageFilter::Nearest),
+        ))
+        .child(swatch(
+            "Wrap::Repeat",
+            el()
+                .size(132.0, 68.0)
+                .radius(8.0)
+                .pixels_wrap(motif, placed, PixelsWrap::Repeat)
+                .image_filter(ImageFilter::Nearest),
+        ))
+        .child(swatch(
+            "Wrap::Mirror",
+            el()
+                .size(132.0, 68.0)
+                .radius(8.0)
+                .pixels_wrap(motif, placed, PixelsWrap::Mirror)
+                .image_filter(ImageFilter::Nearest),
+        ))
+        .child(swatch(
+            "Wrap::Extend",
+            el()
+                .size(132.0, 68.0)
+                .radius(8.0)
+                .pixels_wrap(motif, placed, PixelsWrap::Extend)
+                .image_filter(ImageFilter::Nearest),
+        ))
+        .child(swatch(
+            "Tile + tint",
+            el()
+                .size(132.0, 68.0)
+                .radius(8.0)
+                .fill(Color { r: 0.12, g: 0.13, b: 0.16, a: 1.0 })
+                .pixels_tile(symbolic, [22.0, 22.0])
+                .pixels_tint(ACCENT.alpha(0.35))
+                .image_filter(ImageFilter::Nearest),
+        ))
+}
+
 fn view(s: &State, _: &mut Cx<State>) -> El {
     col()
         .key("root")
@@ -394,6 +481,12 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 .child(label("Image sampling & alpha tint: ImageFilter::Linear vs Nearest (4x4 sprite) and El::pixels_tint on a #2e3436 symbolic mask"))
                 .child(pixel_sampling_and_tint(&s.sprite, &s.symbolic)),
         )
+        .child(
+            col()
+                .gap(8.0)
+                .child(label("Image tiling & wrapping (El::pixels_tile, El::pixels_wrap): Repeat, Mirror, Extend, and tinted tiled motif"))
+                .child(pixel_wrap_and_tile(&s.motif, &s.symbolic)),
+        )
 }
 
 fn poll(s: &mut State, t: f64, _: &mut Tx) -> bool {
@@ -406,11 +499,12 @@ fn main() {
         poll: Some(poll),
         ..AppSpec::new(
             "Shapes",
-            (820.0, 880.0),
+            (820.0, 1010.0),
             || State {
                 t: 0.0,
                 sprite: pixel_sprite(),
                 symbolic: symbolic_icon(),
+                motif: wrap_motif(),
             },
             view,
         )

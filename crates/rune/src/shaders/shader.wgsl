@@ -260,6 +260,30 @@ fn image_texel(t: vec2<i32>, premultiplied: bool) -> vec4<f32> {
     return vec4<f32>(c.rgb * c.a, c.a);
 }
 
+// Wraps integer texel index `k` into `[0, n)` (`n >= 1`) so wrapped images never bleed into
+// neighbouring atlas slots: 3 = Repeat, 4 = Mirror (period 2n), otherwise Extend (2, clamp).
+fn wrap_texel(k: i32, n: i32, mode: u32) -> i32 {
+    if (mode == 3u) {
+        var m = k % n;
+        if (m < 0) {
+            m = m + n;
+        }
+        return m;
+    }
+    if (mode == 4u) {
+        let p = 2 * n;
+        var m = k % p;
+        if (m < 0) {
+            m = m + p;
+        }
+        if (m >= n) {
+            return p - 1 - m;
+        }
+        return m;
+    }
+    return clamp(k, 0, n - 1);
+}
+
 // Arc length to the point nearest `p` (rect-local) on the centre line of a `bw`-wide ring inside
 // the rounded rect, and the line's full length. It runs clockwise from where the top edge leaves
 // the top-left corner; corners count along their arcs.
@@ -494,27 +518,64 @@ fn fs(i: Out) -> @location(0) vec4<f32> {
             col = mix(i.fill, i.border, t) * (ring * dash_cov(arc.x, arc.y, i.uv.xyz));
         } else {
             // Image (kind 7): params.z is a bitmask: bit 0 = premultiplied, bit 1 = alpha tint in
-            // fill, bit 2 = nearest-neighbour sampling. params.w is reserved for wrap modes.
+            // fill, bit 2 = nearest-neighbour sampling. params.w selects wrap mode: <= 1.5 uses
+            // i.rect clamped to [lo, hi] (border unused); 2 = Extend, 3 = Repeat, 4 = Mirror
+            // against the placed rect in i.border.
             let flags = u32(max(i.params.z, 0.0) + 0.5);
             let premultiplied = (flags & 1u) != 0u;
             let tinted = (flags & 2u) != 0u;
             let nearest = (flags & 4u) != 0u;
+            let wrap = u32(max(i.params.w, 0.0) + 0.5);
             let lo = vec2<i32>(i.uv.xy);
             let hi = max(lo + vec2<i32>(i.uv.zw) - vec2<i32>(1), lo);
-            let uv_pos = (screen - i.rect.xy) * i.uv.zw / i.rect.zw;
             var c: vec4<f32>;
-            if (nearest) {
-                let t = clamp(lo + vec2<i32>(floor(uv_pos)), lo, hi);
-                c = image_texel(t, premultiplied);
+            if (wrap <= 1u) {
+                let uv_pos = (screen - i.rect.xy) * i.uv.zw / i.rect.zw;
+                if (nearest) {
+                    let t = clamp(lo + vec2<i32>(floor(uv_pos)), lo, hi);
+                    c = image_texel(t, premultiplied);
+                } else {
+                    // Bilinear, clamped to the image's own texels so neighbours in the atlas never bleed.
+                    let local = uv_pos - vec2<f32>(0.5);
+                    let base = floor(local);
+                    let f = local - base;
+                    let t0 = clamp(lo + vec2<i32>(base), lo, hi);
+                    let t1 = clamp(lo + vec2<i32>(base) + vec2<i32>(1, 1), lo, hi);
+                    c = mix(mix(image_texel(t0, premultiplied), image_texel(vec2<i32>(t1.x, t0.y), premultiplied), f.x),
+                            mix(image_texel(vec2<i32>(t0.x, t1.y), premultiplied), image_texel(t1, premultiplied), f.x), f.y);
+                }
+            } else if (i.border.z > 0.0 && i.border.w > 0.0) {
+                let dim = hi - lo + vec2<i32>(1);
+                var uv_pos = (screen - i.border.xy) * i.uv.zw / i.border.zw;
+                if (wrap == 2u) {
+                    uv_pos = clamp(uv_pos, vec2<f32>(-1.0), vec2<f32>(dim) + vec2<f32>(1.0));
+                } else {
+                    let period = vec2<f32>(dim) * select(1.0, 2.0, wrap == 4u);
+                    if (abs(uv_pos.x) > 1048576.0) {
+                        uv_pos.x = uv_pos.x - period.x * floor(uv_pos.x / period.x);
+                    }
+                    if (abs(uv_pos.y) > 1048576.0) {
+                        uv_pos.y = uv_pos.y - period.y * floor(uv_pos.y / period.y);
+                    }
+                }
+                if (nearest) {
+                    let b = vec2<i32>(floor(uv_pos));
+                    let t = lo + vec2<i32>(wrap_texel(b.x, dim.x, wrap), wrap_texel(b.y, dim.y, wrap));
+                    c = image_texel(t, premultiplied);
+                } else {
+                    let local = uv_pos - vec2<f32>(0.5);
+                    let base = floor(local);
+                    let f = local - base;
+                    let b = vec2<i32>(base);
+                    let tx0 = lo.x + wrap_texel(b.x, dim.x, wrap);
+                    let ty0 = lo.y + wrap_texel(b.y, dim.y, wrap);
+                    let tx1 = lo.x + wrap_texel(b.x + 1, dim.x, wrap);
+                    let ty1 = lo.y + wrap_texel(b.y + 1, dim.y, wrap);
+                    c = mix(mix(image_texel(vec2<i32>(tx0, ty0), premultiplied), image_texel(vec2<i32>(tx1, ty0), premultiplied), f.x),
+                            mix(image_texel(vec2<i32>(tx0, ty1), premultiplied), image_texel(vec2<i32>(tx1, ty1), premultiplied), f.x), f.y);
+                }
             } else {
-                // Bilinear, clamped to the image's own texels so neighbours in the atlas never bleed.
-                let local = uv_pos - vec2<f32>(0.5);
-                let base = floor(local);
-                let f = local - base;
-                let t0 = clamp(lo + vec2<i32>(base), lo, hi);
-                let t1 = clamp(lo + vec2<i32>(base) + vec2<i32>(1, 1), lo, hi);
-                c = mix(mix(image_texel(t0, premultiplied), image_texel(vec2<i32>(t1.x, t0.y), premultiplied), f.x),
-                        mix(image_texel(vec2<i32>(t0.x, t1.y), premultiplied), image_texel(t1, premultiplied), f.x), f.y);
+                c = vec4<f32>(0.0);
             }
             let cov = clamp(0.5 - d, 0.0, 1.0);
             if (tinted) {

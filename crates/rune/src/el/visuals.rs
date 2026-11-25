@@ -216,6 +216,7 @@ impl El {
         let cold = self.vis.cold_mut();
         cold.pixels = Some(pixels.clone());
         cold.pixels_fit = None;
+        cold.pixels_wrap = None;
         self
     }
     /// Shows `pixels` at its own aspect ratio, centred: `Fit` letterboxes the whole image inside
@@ -224,11 +225,65 @@ impl El {
         let cold = self.vis.cold_mut();
         cold.pixels = Some(pixels.clone());
         cold.pixels_fit = Some(fit);
+        cold.pixels_wrap = None;
         self
     }
-    /// Draws this element's [`Self::pixels`] / [`Self::pixels_fit`] image as an alpha mask tinted
-    /// in `color`, ignoring the image's own RGB channels and multiplying `color.a` with the
-    /// image's alpha (and the element's opacity and corner-radius coverage).
+    /// Places `pixels` at `rect` (`[x, y, w, h]` in points from the element's top-left, allowed
+    /// to reach outside the element) and fills the rest of the element by `wrap`:
+    /// [`PixelsWrap::Repeat`](crate::PixelsWrap::Repeat) tiles copies side by side,
+    /// [`PixelsWrap::Mirror`](crate::PixelsWrap::Mirror) reflects alternating tiles across each
+    /// edge, and [`PixelsWrap::Extend`](crate::PixelsWrap::Extend) extends the outermost edge
+    /// texels to the element's bounds.
+    ///
+    /// Matches Skia `SkTileMode::{kRepeat, kMirror, kClamp}` and wgpu
+    /// `AddressMode::{Repeat, MirrorRepeat, ClampToEdge}`. Clipped to the element's corner
+    /// radius and combines with [`Self::pixels_tint`] and [`Self::image_filter`]. Unlike
+    /// [`Self::pixels`], a wrapped image does not supply an intrinsic aspect ratio during layout.
+    /// A zero, negative, or non-finite width or height in `rect` draws nothing.
+    ///
+    /// ```
+    /// use rune::{Pixels, PixelsWrap, el};
+    ///
+    /// let photo = Pixels::new();
+    /// let backdrop = el()
+    ///     .size(320.0, 180.0)
+    ///     .pixels_wrap(&photo, [80.0, 10.0, 160.0, 160.0], PixelsWrap::Mirror);
+    /// # let _ = backdrop;
+    /// ```
+    pub fn pixels_wrap(
+        mut self,
+        pixels: &crate::pixels::Pixels,
+        rect: [f32; 4],
+        wrap: crate::PixelsWrap,
+    ) -> Self {
+        let cold = self.vis.cold_mut();
+        cold.pixels = Some(pixels.clone());
+        cold.pixels_fit = None;
+        cold.pixels_wrap = Some((rect, wrap));
+        self
+    }
+    /// Repeats `pixels` across the element from its top-left at `tile` (`[w, h]` points per
+    /// copy), clipping edge tiles to the element's bounds and corner radius.
+    ///
+    /// Equivalent to `self.pixels_wrap(pixels, [0.0, 0.0, tile[0], tile[1]], PixelsWrap::Repeat)`.
+    /// Matches CSS `background-repeat: repeat; background-size: <w> <h>; background-position: 0 0`.
+    /// Combines with [`Self::pixels_tint`] and [`Self::image_filter`], and does not supply an
+    /// intrinsic aspect ratio during layout.
+    ///
+    /// ```
+    /// use rune::{Pixels, el};
+    ///
+    /// let motif = Pixels::new();
+    /// let panel = el().size(240.0, 120.0).pixels_tile(&motif, [44.0, 92.0]);
+    /// # let _ = panel;
+    /// ```
+    pub fn pixels_tile(self, pixels: &crate::pixels::Pixels, tile: [f32; 2]) -> Self {
+        self.pixels_wrap(pixels, [0.0, 0.0, tile[0], tile[1]], crate::PixelsWrap::Repeat)
+    }
+    /// Draws this element's [`Self::pixels`] / [`Self::pixels_fit`] / [`Self::pixels_wrap`] /
+    /// [`Self::pixels_tile`] image as an alpha mask tinted in `color`, ignoring the image's own
+    /// RGB channels and multiplying `color.a` with the image's alpha (and the element's opacity
+    /// and corner-radius coverage).
     ///
     /// Matches CSS `mask-image` + `background-color`, SwiftUI `.renderingMode(.template)`,
     /// AppKit `NSImage.isTemplate`, GTK symbolic icons, and [`Self::icon_one_color`] for icons
@@ -248,8 +303,8 @@ impl El {
         self.vis.cold_mut().pixels_tint = Some(color);
         self
     }
-    /// Chooses how this element's [`Self::pixels`] / [`Self::pixels_fit`] image is sampled when
-    /// scaled: [`ImageFilter::Linear`](crate::ImageFilter::Linear) (default, bilinear with
+    /// Chooses how this element's [`Self::pixels`] / [`Self::pixels_fit`] / [`Self::pixels_wrap`] /
+    /// [`Self::pixels_tile`] image is sampled when scaled: [`ImageFilter::Linear`](crate::ImageFilter::Linear) (default, bilinear with
     /// prefiltered mips) or [`ImageFilter::Nearest`](crate::ImageFilter::Nearest)
     /// (nearest-neighbour from mip level 0, matching CSS `image-rendering: pixelated` and
     /// `wgpu::FilterMode::Nearest`).

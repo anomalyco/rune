@@ -591,8 +591,25 @@ fn srgb_tables() -> &'static ([f32; 256], [f32; 256]) {
     })
 }
 
+/// Wraps integer texel index `k` into `[0, n)` (`n >= 1`), mirroring `shader.wgsl` `wrap_texel`.
+fn wrap_texel(k: i32, n: i32, mode: u32) -> i32 {
+    if mode == shader_consts::IMAGE_WRAP_REPEAT {
+        let mut m = k % n;
+        if m < 0 { m += n; }
+        return m;
+    }
+    if mode == shader_consts::IMAGE_WRAP_MIRROR {
+        let p = 2 * n;
+        let mut m = k % p;
+        if m < 0 { m += p; }
+        if m >= n { return p - 1 - m; }
+        return m;
+    }
+    k.clamp(0, n - 1)
+}
+
 /// `KIND_IMAGE` at pixel centre `p`: bilinear or nearest-neighbour, optionally alpha-tinted,
-/// clamped to the image's own texels.
+/// clamped to the image's own texels or wrapped (`Extend`, `Repeat`, `Mirror`) against `i.border`.
 pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32; 4] {
     if !(i.rect[2] > 0.0 && i.rect[3] > 0.0 && i.uv[2] > 0.0 && i.uv[3] > 0.0)
         || !i.rect[2].is_finite() || !i.rect[3].is_finite()
@@ -603,8 +620,6 @@ pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32;
     }
     let half = [i.rect[2] * 0.5, i.rect[3] * 0.5];
     let d = sd_rounded([p[0] - i.rect[0] - half[0], p[1] - i.rect[1] - half[1]], half, i.radii);
-    let uv_pos = [(p[0] - i.rect[0]) * i.uv[2] / i.rect[2], (p[1] - i.rect[1]) * i.uv[3] / i.rect[3]];
-    if !uv_pos[0].is_finite() || !uv_pos[1].is_finite() { return [0.0; 4]; }
     let lo = [i.uv[0] as i32, i.uv[1] as i32];
     // A sub-texel crop (0 < uv < 1) spans less than one texel and samples `lo` without bleeding
     // into neighbouring atlas slots.
@@ -616,23 +631,66 @@ pub(super) fn image(i: &Instance, page: &super::Image<'_>, p: [f32; 2]) -> [f32;
     let pm = (flags & shader_consts::IMAGE_FLAG_PREMULTIPLIED) != 0;
     let tinted = (flags & shader_consts::IMAGE_FLAG_TINT) != 0;
     let nearest = (flags & shader_consts::IMAGE_FLAG_NEAREST) != 0;
-    let c = if nearest {
-        let t = [
-            lo[0].saturating_add(uv_pos[0].floor() as i32).clamp(lo[0], hi[0]),
-            lo[1].saturating_add(uv_pos[1].floor() as i32).clamp(lo[1], hi[1]),
-        ];
-        image_texel(page, t, pm)
+    let wrap = if i.params[3].is_finite() { (i.params[3].max(0.0) + 0.5) as u32 } else { 0 };
+    let c = if wrap <= 1 {
+        let uv_pos = [(p[0] - i.rect[0]) * i.uv[2] / i.rect[2], (p[1] - i.rect[1]) * i.uv[3] / i.rect[3]];
+        if !uv_pos[0].is_finite() || !uv_pos[1].is_finite() { return [0.0; 4]; }
+        if nearest {
+            let t = [
+                lo[0].saturating_add(uv_pos[0].floor() as i32).clamp(lo[0], hi[0]),
+                lo[1].saturating_add(uv_pos[1].floor() as i32).clamp(lo[1], hi[1]),
+            ];
+            image_texel(page, t, pm)
+        } else {
+            let local = [uv_pos[0] - 0.5, uv_pos[1] - 0.5];
+            let base = [local[0].floor(), local[1].floor()];
+            let f = [local[0] - base[0], local[1] - base[1]];
+            let bx = lo[0].saturating_add(base[0] as i32);
+            let by = lo[1].saturating_add(base[1] as i32);
+            let t0 = [bx.clamp(lo[0], hi[0]), by.clamp(lo[1], hi[1])];
+            let t1 = [bx.saturating_add(1).clamp(lo[0], hi[0]), by.saturating_add(1).clamp(lo[1], hi[1])];
+            let top = mix4(image_texel(page, t0, pm), image_texel(page, [t1[0], t0[1]], pm), f[0]);
+            let bottom = mix4(image_texel(page, [t0[0], t1[1]], pm), image_texel(page, t1, pm), f[0]);
+            mix4(top, bottom, f[1])
+        }
+    } else if i.border[2] > 0.0 && i.border[3] > 0.0 && i.border.iter().all(|v| v.is_finite()) {
+        let dim = [hi[0] - lo[0] + 1, hi[1] - lo[1] + 1];
+        let mut uv_pos = [(p[0] - i.border[0]) * i.uv[2] / i.border[2], (p[1] - i.border[1]) * i.uv[3] / i.border[3]];
+        if !uv_pos[0].is_finite() || !uv_pos[1].is_finite() { return [0.0; 4]; }
+        if wrap == shader_consts::IMAGE_WRAP_EXTEND {
+            uv_pos[0] = uv_pos[0].clamp(-1.0, dim[0] as f32 + 1.0);
+            uv_pos[1] = uv_pos[1].clamp(-1.0, dim[1] as f32 + 1.0);
+        } else {
+            let scale = if wrap == shader_consts::IMAGE_WRAP_MIRROR { 2.0 } else { 1.0 };
+            let period = [dim[0] as f32 * scale, dim[1] as f32 * scale];
+            if uv_pos[0].abs() > 1_048_576.0 {
+                uv_pos[0] -= period[0] * (uv_pos[0] / period[0]).floor();
+            }
+            if uv_pos[1].abs() > 1_048_576.0 {
+                uv_pos[1] -= period[1] * (uv_pos[1] / period[1]).floor();
+            }
+        }
+        if nearest {
+            let bx = uv_pos[0].floor() as i32;
+            let by = uv_pos[1].floor() as i32;
+            let t = [lo[0] + wrap_texel(bx, dim[0], wrap), lo[1] + wrap_texel(by, dim[1], wrap)];
+            image_texel(page, t, pm)
+        } else {
+            let local = [uv_pos[0] - 0.5, uv_pos[1] - 0.5];
+            let base = [local[0].floor(), local[1].floor()];
+            let f = [local[0] - base[0], local[1] - base[1]];
+            let bx = base[0] as i32;
+            let by = base[1] as i32;
+            let tx0 = lo[0] + wrap_texel(bx, dim[0], wrap);
+            let ty0 = lo[1] + wrap_texel(by, dim[1], wrap);
+            let tx1 = lo[0] + wrap_texel(bx.saturating_add(1), dim[0], wrap);
+            let ty1 = lo[1] + wrap_texel(by.saturating_add(1), dim[1], wrap);
+            let top = mix4(image_texel(page, [tx0, ty0], pm), image_texel(page, [tx1, ty0], pm), f[0]);
+            let bottom = mix4(image_texel(page, [tx0, ty1], pm), image_texel(page, [tx1, ty1], pm), f[0]);
+            mix4(top, bottom, f[1])
+        }
     } else {
-        let local = [uv_pos[0] - 0.5, uv_pos[1] - 0.5];
-        let base = [local[0].floor(), local[1].floor()];
-        let f = [local[0] - base[0], local[1] - base[1]];
-        let bx = lo[0].saturating_add(base[0] as i32);
-        let by = lo[1].saturating_add(base[1] as i32);
-        let t0 = [bx.clamp(lo[0], hi[0]), by.clamp(lo[1], hi[1])];
-        let t1 = [bx.saturating_add(1).clamp(lo[0], hi[0]), by.saturating_add(1).clamp(lo[1], hi[1])];
-        let top = mix4(image_texel(page, t0, pm), image_texel(page, [t1[0], t0[1]], pm), f[0]);
-        let bottom = mix4(image_texel(page, [t0[0], t1[1]], pm), image_texel(page, t1, pm), f[0]);
-        mix4(top, bottom, f[1])
+        [0.0; 4]
     };
     let cov = clamp01(0.5 - d);
     if tinted {
