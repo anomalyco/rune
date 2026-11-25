@@ -1,6 +1,7 @@
 //! The "Controls/Motion/Ambient pacing" playground story: demonstrates unsteered ambient motion
 //! alongside an input-steered spring, ready to run with `App::ambient_fps(60.0)` (pass
-//! `--ambient-fps 60` or `RUNE_AMBIENT_FPS=60` to the playground binary).
+//! `--ambient-fps 60` or `RUNE_AMBIENT_FPS=60` to the playground binary; `--ambient-fps` wins
+//! when both are set).
 
 use rune::tok::{self, radius, type_};
 use rune::{Color, Cycle, Cx, El, Spring, Story, TextStyle, col, el, row, text};

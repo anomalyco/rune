@@ -1224,6 +1224,20 @@ rune: commit took 14.2 ms, over RUNE_COMMIT_BUDGET_MS=8: view 9.0, layout 3.0 (t
 the view (63%); committed for poll
 ```
 
+Still text reuses its last emitted glyph quads per node piece in an LRU cache (`TextQuads`) bounded to 4,096
+entries and 8 MiB (with a 64-frame sweep of unused entries); past the cap, text draws through the normal glyph
+path with identical pixels.
+
+`PaintKeep` reuses the instances, hit targets, and glyph pages of unchanged subtrees across paints (both
+unshifted and scroll-shifted), and in debug builds its self-check also paints each reused subtree fresh and
+compares the two, logging any difference to stderr and falling back to the fresh paint (release builds compile
+the check out). Downstream debug builds do not panic on a mismatch by default (only this repository's own Cargo
+runs enable strict mode via `.cargo/config.toml`), so turning strict mode on in an app's own tests fails fast on
+any caching regression instead of only printing to stderr. Set `RUNE_PAINT_KEEP_STRICT=1` in the test
+environment, call `Runtime::set_paint_keep_strict(true)` on a headless `Runtime`, or assert
+`rt.paint_keep_mismatches() == 0` (which counts both unshifted and scroll-shifted mismatches and is always `0` in
+release builds).
+
 ### Requests off the main thread (`rune::Latest`)
 
 A search box, a mention list or a path completer asks once per keystroke and wants only the newest
@@ -2632,6 +2646,14 @@ buffer reuse (returns an empty `Vec` on the first frame, after replacing mips, o
 render copy or borrow holds it), and `Pixels::with_rgba(|w, h, bytes| ...)` to borrow the
 current straight-alpha frame without copying (the frame lock is released before the callback
 runs; returns `None` when empty or holding decoded mips).
+
+Across frames, `ImageAtlas` bounds retained unshown cache memory to `IMAGE_ATLAS_MAX_PAGES` (16
+pages), `IMAGE_ATLAS_MAX_BYTES` (64 MiB of decoded CPU pixels), and `IMAGE_ATLAS_MAX_SLOTS`
+(4,096 slots), evicting only least-recently-used unshown entries (which re-upload if drawn again).
+Every image drawn on the current frame stays resident without per-frame re-copy or GPU re-upload
+even when a scene exceeds those limits; once fewer images are shown and space opens on the first
+16 pages, overflow images relocate back into them on their next draw and the extra pages and GPU
+textures are freed.
 
 For static assets, construct an `ImageCache` once with the app's setup waker:
 
