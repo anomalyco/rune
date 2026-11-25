@@ -28,8 +28,7 @@ impl RuntimeCore {
         self.marks.clear();
         self.paint.icon_aprons.clear();
         self.surfaces.clear();
-        self.paint.materials.clear();
-        self.paint.material_fallbacks.clear();
+        self.paint.clear_materials();
         self.hit.hits.clear();
         self.hit.wheel_hits.clear();
         self.clear_help_hits();
@@ -757,7 +756,7 @@ impl RuntimeCore {
         }
         self.keep_close(None, &mut layers, &mut active_cache, &mut glyph_count);
         self.keep_end();
-        if self.paint.native_materials
+        if self.paint.tracks_native_materials()
             && !self.paint.material_fallbacks.is_empty()
             && !self.paint.material_fallback_warned
         {

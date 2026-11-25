@@ -395,6 +395,20 @@ pub(super) fn submit_and_present_window(
         let native = &mut l.native;
         native.materials.sync_before_present(draws, dark, native.mode.handover_mut())
     };
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    if host.wayland && let Some(blur) = l.native.wayland_backdrop.as_mut() {
+        let rt = host.app.rt();
+        blur.sync_frame_materials(
+            host.window_backdrop,
+            host.options.transparent,
+            l.surface.is_some().then_some(l.config.alpha_mode),
+            false,
+            (l.config.width, l.config.height),
+            rt.window_scale(),
+            rt.paint.wayland_material_blurs(),
+            false,
+        );
+    }
     #[cfg(not(target_os = "macos"))]
     gpu.queue.present(prepared.frame);
     #[cfg(all(target_os = "windows", feature = "windows-system-material"))]

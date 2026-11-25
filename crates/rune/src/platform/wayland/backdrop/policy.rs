@@ -1,11 +1,13 @@
 //! Pure eligibility policy, protocol state machine, and seam for Wayland behind-window blur.
 //!
 //! Compiles on every platform under `cfg(test)` so the eligibility matrix, protocol request
-//! ordering, resize/scale deduplication, runtime capability revocation, and teardown safety are
-//! proven off-screen without a live Wayland compositor.
+//! ordering, resize/scale deduplication, per-element `El::system_material` shaped blur,
+//! runtime capability revocation, and teardown safety are proven off-screen without a live
+//! Wayland compositor.
 
-use super::region::{RegionRect, RegionSpec, build_blur_rects};
+use super::region::{BlurRegion, RegionRect, RegionSpec, build_blur_region_rects};
 use crate::WindowBackdrop;
+use crate::system_material::Mode as MaterialMode;
 
 /// `ext_background_effect_manager_v1::capability::blur` bit (value 1 in
 /// `staging/ext-background-effect/ext-background-effect-v1.xml`).
@@ -87,8 +89,8 @@ pub(crate) struct WaylandBackdropInputs {
 /// independent of `inputs.requested`.
 ///
 /// Powers `Cx::window_backdrop_supported(WindowBackdrop::Blur)` even while
-/// `WindowBackdrop::None` is selected so settings UIs can enable or disable a frosted-glass
-/// toggle accurately.
+/// `WindowBackdrop::None` is selected so settings UIs and `El::system_material` views can
+/// query blur capability accurately.
 #[inline]
 pub(crate) const fn surface_supports_blur(inputs: WaylandBackdropInputs) -> bool {
     if !inputs.is_wayland || !inputs.transparent || inputs.cpu_painter {
@@ -115,7 +117,7 @@ pub(crate) const fn supported_mask(inputs: WaylandBackdropInputs) -> u8 {
     }
 }
 
-/// Pure eligibility rule for Linux Wayland behind-window blur.
+/// Pure eligibility rule for Linux Wayland whole-surface blur (`WindowBackdrop::Blur`).
 ///
 /// Only `WindowBackdrop::Blur` activates on Wayland; Windows-specific materials (`Mica`,
 /// `MicaAlt`, `Acrylic`) never activate on Linux.
@@ -128,12 +130,26 @@ pub(crate) const fn eligible_backdrop(inputs: WaylandBackdropInputs) -> Option<W
     }
 }
 
+/// Whether per-element `El::system_material` shaped Wayland blur mode should be enabled on
+/// `RuntimeCore`.
+///
+/// Active only when Wayland blur is supported on this surface, `WindowBackdrop::None` is active
+/// (`WindowBackdrop::Blur` takes precedence as whole-surface blur), and `RUNE_SYSTEM_MATERIAL`
+/// is not `off`.
+#[inline]
+pub(crate) const fn should_enable_wayland_blur_materials(
+    inputs: WaylandBackdropInputs,
+    active_window_backdrop: WindowBackdrop,
+    env_mode: MaterialMode,
+) -> bool {
+    !matches!(env_mode, MaterialMode::Off)
+        && matches!(inputs.requested, WindowBackdrop::None)
+        && matches!(active_window_backdrop, WindowBackdrop::None)
+        && surface_supports_blur(inputs)
+}
+
 /// Whether a Linux transparent window whose requested backdrop could not activate must clear its
 /// surface to an opaque theme-matched fallback so it never opens a transparent hole.
-///
-/// Applies only to non-overlay transparent windows that explicitly requested an active backdrop
-/// which did not activate. Overlays and default `WindowBackdrop::None` transparent windows keep
-/// their normal transparent clear.
 #[inline]
 pub(crate) const fn needs_opaque_fallback(
     is_overlay: bool,
@@ -180,27 +196,30 @@ pub(crate) trait WaylandBlurSeam {
 ///
 /// Guarantees:
 /// - In `Inactive`, no per-surface blur object exists on `wl_surface` (so `WindowBackdrop::None`
-///   never overrides Hyprland global blur rules).
+///   with no active material blurs never overrides Hyprland global blur rules).
 /// - In `ActiveExt`, `get_background_effect` is never called a second time (preventing the
-///   fatal `background_effect_exists` protocol error).
+///   fatal `background_effect_exists` protocol error across resize, springing animations, and
+///   seamless `WindowBackdrop::Blur` <-> `El::system_material` transitions).
 /// - In `Closed`, every subsequent sync is ignored (preventing the fatal `surface_destroyed`
 ///   protocol error).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum BlurState {
     #[default]
     Inactive,
-    ActiveExt { applied: RegionSpec },
-    ActiveKde { applied: RegionSpec },
+    ActiveExt { applied: BlurRegion },
+    ActiveKde { applied: BlurRegion },
     Closed,
 }
 
 /// Outcome of syncing [`SurfaceBlurTracker`] for one surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct BlurSync {
-    /// What `Cx::window_backdrop()` should report.
+    /// What `Cx::window_backdrop()` should report (`Blur` only for whole-surface blur).
     pub active: WindowBackdrop,
     /// Support bitmask for `Cx::window_backdrop_supported(...)`.
     pub supported_mask: u8,
+    /// Whether `RuntimeCore::set_wayland_blur_materials` should be enabled.
+    pub material_blur_enabled: bool,
     /// Whether a non-overlay transparent window should clear to an opaque fallback colour.
     pub opaque_fallback: bool,
     /// `true` whenever wire requests were sent that require a `wl_surface.commit` (for example
@@ -210,22 +229,54 @@ pub(crate) struct BlurSync {
 
 /// Per-`wl_surface` state machine driving `ext_background_effect_v1` and
 /// `org_kde_kwin_blur_manager` through [`WaylandBlurSeam`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SurfaceBlurTracker {
     state: BlurState,
 }
 
 impl SurfaceBlurTracker {
     #[cfg(test)]
-    pub(crate) const fn state(&self) -> BlurState {
-        self.state
+    pub(crate) fn state(&self) -> &BlurState {
+        &self.state
     }
 
-    /// Synchronizes blur protocol state on this surface against `inputs` and `region_spec`.
+    /// True when a per-surface blur object is currently live on the compositor.
+    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+    #[inline]
+    pub(crate) fn is_active(&self) -> bool {
+        matches!(self.state, BlurState::ActiveExt { .. } | BlurState::ActiveKde { .. })
+    }
+
+    /// Synchronizes whole-surface blur protocol state without per-element materials.
+    #[cfg(test)]
     pub(crate) fn sync<S: WaylandBlurSeam>(
         &mut self,
         inputs: WaylandBackdropInputs,
         region_spec: RegionSpec,
+        is_overlay: bool,
+        force_reapply: bool,
+        seam: &mut S,
+    ) -> BlurSync {
+        self.sync_with_materials(
+            inputs,
+            region_spec,
+            BlurRegion::Empty,
+            MaterialMode::Synced,
+            is_overlay,
+            force_reapply,
+            seam,
+        )
+    }
+
+    /// Synchronizes blur protocol state on this surface against whole-surface `inputs` and
+    /// per-element `material_region` (`WindowBackdrop::Blur` takes precedence).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sync_with_materials<S: WaylandBlurSeam>(
+        &mut self,
+        inputs: WaylandBackdropInputs,
+        whole_surface_spec: RegionSpec,
+        material_region: BlurRegion,
+        env_mode: MaterialMode,
         is_overlay: bool,
         force_reapply: bool,
         seam: &mut S,
@@ -235,6 +286,7 @@ impl SurfaceBlurTracker {
             return BlurSync {
                 active: WindowBackdrop::None,
                 supported_mask: 0,
+                material_blur_enabled: false,
                 opaque_fallback: needs_opaque_fallback(
                     is_overlay,
                     inputs.transparent,
@@ -245,49 +297,64 @@ impl SurfaceBlurTracker {
             };
         }
 
-        let target = eligible_backdrop(inputs);
+        let whole_target = eligible_backdrop(inputs);
         let mut needs_commit = false;
 
-        let active = match target {
-            None => {
-                needs_commit = self.deactivate(seam);
-                WindowBackdrop::None
-            }
+        let active = match whole_target {
             Some(WindowBackdrop::Blur) => {
-                if region_spec.is_empty() {
-                    // Never send an empty wl_region for an unconfigured/zero-sized surface; keep
-                    // any previously active state untouched until a valid size arrives.
-                    match self.state {
-                        BlurState::ActiveExt { .. } | BlurState::ActiveKde { .. } => {
+                if whole_surface_spec.is_empty() {
+                    // Never send an empty wl_region for a temporary 0x0 size; keep any active
+                    // whole-surface blur untouched until a valid size arrives.
+                    match &self.state {
+                        BlurState::ActiveExt { applied: BlurRegion::WholeSurface(_) }
+                        | BlurState::ActiveKde { applied: BlurRegion::WholeSurface(_) } => {
                             WindowBackdrop::Blur
                         }
-                        BlurState::Inactive | BlurState::Closed => WindowBackdrop::None,
+                        _ => WindowBackdrop::None,
                     }
                 } else {
-                    match inputs.protocol {
-                        CompositorProtocol::ExtBackgroundEffect { blur_capable: true } => {
-                            self.sync_ext(region_spec, force_reapply, seam, &mut needs_commit)
-                        }
-                        CompositorProtocol::KdeKwinBlur => {
-                            self.sync_kde(region_spec, force_reapply, seam, &mut needs_commit)
-                        }
-                        CompositorProtocol::ExtBackgroundEffect { blur_capable: false }
-                        | CompositorProtocol::None => {
-                            needs_commit = self.deactivate(seam);
-                            WindowBackdrop::None
-                        }
-                    }
+                    let applied = self.apply_region(
+                        inputs.protocol,
+                        BlurRegion::WholeSurface(whole_surface_spec),
+                        force_reapply,
+                        seam,
+                        &mut needs_commit,
+                    );
+                    if applied { WindowBackdrop::Blur } else { WindowBackdrop::None }
                 }
             }
-            Some(_) => {
-                needs_commit = self.deactivate(seam);
+            _ => {
+                let mat_enabled = should_enable_wayland_blur_materials(
+                    inputs,
+                    WindowBackdrop::None,
+                    env_mode,
+                );
+                if mat_enabled && !material_region.is_empty() {
+                    let _ = self.apply_region(
+                        inputs.protocol,
+                        material_region,
+                        force_reapply,
+                        seam,
+                        &mut needs_commit,
+                    );
+                } else {
+                    needs_commit = self.deactivate(seam);
+                }
                 WindowBackdrop::None
             }
         };
 
+        let material_blur_enabled =
+            should_enable_wayland_blur_materials(inputs, active, env_mode);
         let opaque_fallback =
             needs_opaque_fallback(is_overlay, inputs.transparent, inputs.requested, active);
-        BlurSync { active, supported_mask: supported, opaque_fallback, needs_commit }
+        BlurSync {
+            active,
+            supported_mask: supported,
+            material_blur_enabled,
+            opaque_fallback,
+            needs_commit,
+        }
     }
 
     /// Destroys any active per-surface blur object and marks the surface closed so later calls
@@ -300,6 +367,29 @@ impl SurfaceBlurTracker {
         let sent = self.deactivate(seam);
         self.state = BlurState::Closed;
         sent
+    }
+
+    fn apply_region<S: WaylandBlurSeam>(
+        &mut self,
+        protocol: CompositorProtocol,
+        region: BlurRegion,
+        force_reapply: bool,
+        seam: &mut S,
+        needs_commit: &mut bool,
+    ) -> bool {
+        match protocol {
+            CompositorProtocol::ExtBackgroundEffect { blur_capable: true } => {
+                self.sync_ext(region, force_reapply, seam, needs_commit)
+            }
+            CompositorProtocol::KdeKwinBlur => {
+                self.sync_kde(region, force_reapply, seam, needs_commit)
+            }
+            CompositorProtocol::ExtBackgroundEffect { blur_capable: false }
+            | CompositorProtocol::None => {
+                *needs_commit |= self.deactivate(seam);
+                false
+            }
+        }
     }
 
     fn deactivate<S: WaylandBlurSeam>(&mut self, seam: &mut S) -> bool {
@@ -321,14 +411,14 @@ impl SurfaceBlurTracker {
 
     fn sync_ext<S: WaylandBlurSeam>(
         &mut self,
-        spec: RegionSpec,
+        desired: BlurRegion,
         force_reapply: bool,
         seam: &mut S,
         needs_commit: &mut bool,
-    ) -> WindowBackdrop {
-        match self.state {
-            BlurState::ActiveExt { applied } if !force_reapply && applied == spec => {
-                return WindowBackdrop::Blur;
+    ) -> bool {
+        match &self.state {
+            BlurState::ActiveExt { applied } if !force_reapply && *applied == desired => {
+                return true;
             }
             BlurState::ActiveKde { .. } => {
                 *needs_commit |= self.deactivate(seam);
@@ -336,47 +426,45 @@ impl SurfaceBlurTracker {
             BlurState::Inactive | BlurState::ActiveExt { .. } | BlurState::Closed => {}
         }
 
-        let rects = build_blur_rects(spec);
+        let rects = build_blur_region_rects(&desired);
         if rects.is_empty() {
-            return WindowBackdrop::None;
+            *needs_commit |= self.deactivate(seam);
+            return false;
         }
         let Some(region) = seam.create_region() else {
-            return match self.state {
-                BlurState::ActiveExt { .. } => WindowBackdrop::Blur,
-                _ => WindowBackdrop::None,
-            };
+            return matches!(self.state, BlurState::ActiveExt { .. });
         };
         for rect in rects {
             seam.region_add(&region, rect);
         }
         if matches!(self.state, BlurState::Inactive) && !seam.ext_get_background_effect() {
             seam.region_destroy(region);
-            return WindowBackdrop::None;
+            return false;
         }
         seam.ext_set_blur_region(Some(&region));
         seam.region_destroy(region);
-        self.state = BlurState::ActiveExt { applied: spec };
+        self.state = BlurState::ActiveExt { applied: desired };
         *needs_commit = true;
-        WindowBackdrop::Blur
+        true
     }
 
     fn sync_kde<S: WaylandBlurSeam>(
         &mut self,
-        spec: RegionSpec,
+        desired: BlurRegion,
         force_reapply: bool,
         seam: &mut S,
         needs_commit: &mut bool,
-    ) -> WindowBackdrop {
-        match self.state {
+    ) -> bool {
+        match &self.state {
             BlurState::ActiveKde { applied } => {
-                if !force_reapply && applied == spec {
-                    return WindowBackdrop::Blur;
+                if !force_reapply && *applied == desired {
+                    return true;
                 }
-                // Under `org_kde_kwin_blur`, `set_region(None)` blurs the entire surface bounding
-                // box dynamically, so a square-to-square resize needs no extra wire request.
-                if !force_reapply && applied.is_square() && spec.is_square() {
-                    self.state = BlurState::ActiveKde { applied: spec };
-                    return WindowBackdrop::Blur;
+                // Under `org_kde_kwin_blur`, `set_region(None)` blurs the entire square surface
+                // dynamically, so a square-to-square whole-surface resize needs no wire traffic.
+                if !force_reapply && applied.is_kde_full_surface() && desired.is_kde_full_surface() {
+                    self.state = BlurState::ActiveKde { applied: desired };
+                    return true;
                 }
             }
             BlurState::ActiveExt { .. } => {
@@ -385,29 +473,36 @@ impl SurfaceBlurTracker {
             BlurState::Inactive | BlurState::Closed => {}
         }
 
-        let creating = matches!(self.state, BlurState::Inactive);
-        if creating && !seam.kde_create() {
-            return WindowBackdrop::None;
-        }
-
-        if spec.is_square() {
+        if desired.is_kde_full_surface() {
+            let creating = matches!(self.state, BlurState::Inactive);
+            if creating && !seam.kde_create() {
+                return false;
+            }
             seam.kde_set_region(None);
             seam.kde_commit();
-            self.state = BlurState::ActiveKde { applied: spec };
+            self.state = BlurState::ActiveKde { applied: desired };
             *needs_commit = true;
-            return WindowBackdrop::Blur;
+            return true;
         }
 
-        let rects = build_blur_rects(spec);
+        let rects = build_blur_region_rects(&desired);
+        if rects.is_empty() {
+            *needs_commit |= self.deactivate(seam);
+            return false;
+        }
+        let creating = matches!(self.state, BlurState::Inactive);
+        if creating && !seam.kde_create() {
+            return false;
+        }
         let Some(region) = seam.create_region() else {
             if creating {
                 seam.kde_unset();
                 seam.kde_release();
                 self.state = BlurState::Inactive;
                 *needs_commit = true;
-                return WindowBackdrop::None;
+                return false;
             }
-            return WindowBackdrop::Blur;
+            return true;
         };
         for rect in rects {
             seam.region_add(&region, rect);
@@ -415,8 +510,8 @@ impl SurfaceBlurTracker {
         seam.kde_set_region(Some(&region));
         seam.kde_commit();
         seam.region_destroy(region);
-        self.state = BlurState::ActiveKde { applied: spec };
+        self.state = BlurState::ActiveKde { applied: desired };
         *needs_commit = true;
-        WindowBackdrop::Blur
+        true
     }
 }

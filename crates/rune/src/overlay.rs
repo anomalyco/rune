@@ -811,6 +811,7 @@ impl OverlayCore {
             let Some(live) = self.surface.live_mut() else {
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 return;
             };
             let is_wayland_live = match &live.backing {
@@ -824,14 +825,17 @@ impl OverlayCore {
                 }
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 return;
             }
             let alpha_mode = Some(live.config.alpha_mode);
             let translucent = live.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
-            if live.wayland_backdrop.is_none()
-                && translucent
-                && requested == crate::WindowBackdrop::Blur
-            {
+            // Bind the shared manager-only controller on translucent Wayland overlays before
+            // Frame 1's view builds so `Cx::window_backdrop_supported(WindowBackdrop::Blur)`
+            // and `El::system_material` blur mode are accurate on Frame 1. Never creates a
+            // per-surface blur proxy until `WindowBackdrop::Blur` or an eligible material draw
+            // is present.
+            if live.wayland_backdrop.is_none() && translucent {
                 live.wayland_backdrop = match &live.backing {
                     Backing::Layer(layer) => {
                         let (d, w) = layer.raw_handles();
@@ -846,6 +850,7 @@ impl OverlayCore {
             let Some(blur) = live.wayland_backdrop.as_mut() else {
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 return;
             };
             let scale = if live.scale > 0.0 { live.scale } else { 1.0 };
@@ -854,17 +859,20 @@ impl OverlayCore {
                 scale,
                 0.0,
             );
-            let outcome = blur.sync(
+            let outcome = blur.sync_with_materials(
                 requested,
                 true,
                 alpha_mode,
                 false,
                 region_spec,
+                rt.paint.wayland_material_blurs(),
+                scale,
                 true,
                 force_reapply,
             );
             rt.set_window_backdrop(outcome.active);
             rt.set_window_backdrop_supported_mask(outcome.supported_mask);
+            rt.set_wayland_blur_materials(outcome.material_blur_enabled);
             if rt.stale() || outcome.needs_commit {
                 self.dirty = true;
             }
@@ -879,29 +887,6 @@ impl OverlayCore {
         }
     }
 
-    /// Wayland: lazily binds the shared per-display backdrop controller after the overlay's first
-    /// visible present when opened with `WindowBackdrop::None`, populating
-    /// `Cx::window_backdrop_supported(WindowBackdrop::Blur)` without adding a startup round-trip.
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    pub(super) fn wayland_backdrop_after_first_frame(&mut self, rt: &mut RuntimeCore) {
-        let Some(live) = self.surface.live_mut() else { return };
-        if live.wayland_backdrop.is_some() || live.config.alpha_mode == wgpu::CompositeAlphaMode::Opaque {
-            return;
-        }
-        live.wayland_backdrop = match &live.backing {
-            Backing::Layer(layer) if layer.is_live() => {
-                let (d, w) = layer.raw_handles();
-                crate::platform::wayland::backdrop::SurfaceBlur::from_raw_handles(d, w)
-            }
-            Backing::Window(window) if toplevel::is_toplevel(window) => {
-                crate::platform::wayland::backdrop::SurfaceBlur::for_window(window)
-            }
-            _ => None,
-        };
-        if live.wayland_backdrop.is_some() {
-            self.sync_window_backdrop(rt, false);
-        }
-    }
 
     /// Wayland: dispatches queued runtime capability events on the shared display controller and
     /// re-syncs this overlay if `Capability::Blur` changed.

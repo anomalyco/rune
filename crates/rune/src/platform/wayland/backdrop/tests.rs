@@ -242,7 +242,7 @@ fn default_none_and_opaque_make_zero_wayland_blur_calls() {
     assert!(!out.opaque_fallback);
     assert!(!out.needs_commit);
     assert!(seam.ops.is_empty(), "WindowBackdrop::None must make zero blur protocol calls");
-    assert_eq!(tracker.state(), BlurState::Inactive);
+    assert_eq!(tracker.state(), &BlurState::Inactive);
 
     // Force-reapply while None still makes zero calls.
     let out = tracker.sync(none_inputs, spec, false, true, &mut seam);
@@ -317,7 +317,7 @@ fn ext_protocol_request_order_dedup_resize_toggle_and_close() {
     assert!(out.needs_commit);
     assert!(!seam.ext_effect_live);
     assert_eq!(seam.ops, vec![Op::ExtDestroyEffect]);
-    assert_eq!(tracker.state(), BlurState::Inactive);
+    assert_eq!(tracker.state(), &BlurState::Inactive);
 
     // Re-enabling Blur cleanly creates a fresh surface effect object.
     seam.ops.clear();
@@ -332,7 +332,7 @@ fn ext_protocol_request_order_dedup_resize_toggle_and_close() {
     assert!(tracker.close(&mut seam));
     assert_eq!(seam.ops, vec![Op::ExtDestroyEffect]);
     assert!(!seam.ext_effect_live);
-    assert_eq!(tracker.state(), BlurState::Closed);
+    assert_eq!(tracker.state(), &BlurState::Closed);
 
     seam.ops.clear();
     let out = tracker.sync(inputs, spec, false, true, &mut seam);
@@ -519,5 +519,5 @@ fn empty_surface_size_never_emits_empty_wl_region() {
     let out = tracker.sync(inputs, empty, false, false, &mut seam);
     assert_eq!(out.active, WindowBackdrop::None);
     assert!(seam.ops.is_empty());
-    assert_eq!(tracker.state(), BlurState::Inactive);
+    assert_eq!(tracker.state(), &BlurState::Inactive);
 }

@@ -361,6 +361,7 @@ impl OverlayCore {
                     let rt = app.rt_mut();
                     rt.set_window_backdrop(crate::WindowBackdrop::None);
                     rt.set_window_backdrop_supported_mask(0);
+                    rt.set_wayland_blur_materials(false);
                     self.drop_hidden_images(app);
                 }
             }
@@ -370,6 +371,7 @@ impl OverlayCore {
                 let rt = app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 self.drop_hidden_images(app);
             }
         }
