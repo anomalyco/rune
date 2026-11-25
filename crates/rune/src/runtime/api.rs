@@ -226,8 +226,10 @@ impl<S: 'static> Runtime<S> {
     pub fn set_maximized(&mut self, maximized: bool) { self.core_mut().set_maximized(maximized); }
     /// Sets what [`Cx::is_full_screen`] reports, marking the view dirty when it changes.
     ///
-    /// Native windows update this from confirmed OS window state on create, resize, scale change,
-    /// focus, and macOS full-screen transitions. Headless runs default to `false`.
+    /// Native macOS windows flip this at the start of the Space transition
+    /// (`NSWindowWillEnterFullScreenNotification` / `NSWindowWillExitFullScreenNotification`) and
+    /// reconcile on completion or failure; Windows and Linux update from confirmed OS window state
+    /// on create, resize, scale change, and focus. Web and headless runs default to `false`.
     ///
     /// ```
     /// # use rune::{Cx, El, Env, Runtime, el};

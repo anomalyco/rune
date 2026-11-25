@@ -1503,9 +1503,12 @@ rune::App::new(spec).fit_content_height().run();
   layouts. `Cx::chrome_insets()` says what the controls take (`leading`, `trailing`, `height`; zero
   where the native frame stays, as on Linux; memos rebuild when it changes), `Cx::caption_color(c)`
   colours the caption symbols for an app theme, `Cx::titlebar_height(h)` changes the band's height
-  as the app runs (a UI zoom), `Cx::is_maximized()` and `Cx::is_full_screen()` report confirmed OS
-  maximized and full-screen state (invalidating views and memos on change; testable headlessly via
-  `Runtime::set_maximized` and `Runtime::set_full_screen`), and `Tx::toggle_maximized()`,
+  as the app runs (a UI zoom), `Cx::is_maximized()` reports confirmed OS maximized state and
+  `Cx::is_full_screen()` reports full-screen state (flipping at the start of the macOS Space
+  transition on `NSWindowWillEnterFullScreenNotification` / `NSWindowWillExitFullScreenNotification`
+  and reconciling on `DidEnter` / `DidExit` or failure, on OS confirmation on Windows and Linux,
+  and `false` on web/headless/overlays/panels; invalidating views and memos on change and testable
+  headlessly via `Runtime::set_maximized` and `Runtime::set_full_screen`), and `Tx::toggle_maximized()`,
   `Tx::toggle_full_screen()`, and `Tx::set_full_screen(bool)` request state changes.
   `cargo run -p rune --example custom_titlebar` shows it.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
