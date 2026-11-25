@@ -737,6 +737,13 @@ pub(crate) fn discard_prewarm() {
     prewarm::discard();
 }
 
+/// Non-blocking early cancellation called when the event loop starts exiting so in-flight GPU
+/// warm-up skips follow-up shader/frame/done work while windows tear down.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn cancel_prewarm() {
+    prewarm::cancel();
+}
+
 /// Cancels any in-flight GPU warm-up and waits up to `SHUTDOWN_TIMEOUT` for its worker
 /// threads to exit before process teardown.
 #[cfg(not(target_arch = "wasm32"))]

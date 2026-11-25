@@ -12,10 +12,12 @@ use rune_core::machine::Effects;
 
 use crate::time::Instant;
 
-/// Maximum time exit waits for in-flight GPU warm-up threads before leaving without running
-/// process destructors under a wedged driver call. Long enough for cold Vulkan init (~1 s),
-/// short enough to finish before `quit::QUIT_REPORT_EVERY` (3 s).
-pub(crate) const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+/// Last-resort maximum time exit waits for in-flight GPU warm-up threads before ending the
+/// process without running destructors under a wedged driver call. Generous enough that
+/// ordinary slow cold Vulkan/shader/software startup under heavy parallel load drains cleanly
+/// and returns from `App::run()` / `App::try_run()`, while still guaranteeing a truly hung
+/// driver call cannot hang the process forever.
+pub(crate) const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Clock source for warm-up deadlines and bounded shutdown waits (injected in tests).
 pub(crate) trait Clock: Send + Sync {
@@ -52,9 +54,9 @@ pub(crate) enum State {
     Running { until: Instant, workers: usize },
     /// A ready device is parked in the slot until `until`.
     Parked { until: Instant, workers: usize },
-    /// Exit cancelled warm-up while `workers > 0` threads are still finishing; waits until
-    /// `deadline`.
-    Cancelled { deadline: Instant, workers: usize },
+    /// Exit cancelled warm-up while `workers > 0` threads are still finishing; once
+    /// `Shutdown` starts the bounded wait, `deadline` is `Some(at)`.
+    Cancelled { deadline: Option<Instant>, workers: usize },
     /// Shutdown finished (`timed_out_workers == 0` when drained; `> 0` when the bound expired).
     Done { timed_out_workers: usize },
 }
@@ -105,6 +107,9 @@ pub(crate) enum Event {
     /// Non-blocking discard (during launch or headless): drops parked work or expires in-flight
     /// linger without blocking.
     Discard { now: Instant },
+    /// Non-blocking early cancellation as soon as `Windows::exiting` begins, before the event
+    /// loop returns and `Shutdown` starts the bounded wait.
+    Cancel,
     /// Exit-time cancellation with a bounded wait until `deadline`.
     Shutdown { deadline: Instant },
     /// A tracked worker thread exited (or failed to spawn).
@@ -239,12 +244,40 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
         }
         (State::NotStarted { .. } | State::Cancelled { .. } | State::Done { .. }, Event::Discard { .. }) => {}
 
+        (State::NotStarted { draining: 0 }, Event::Cancel) => {
+            *state = State::Done { timed_out_workers: 0 };
+            fx.push(Effect::NotifyWaiters);
+        }
+        (State::NotStarted { draining }, Event::Cancel) => {
+            *state = State::Cancelled { deadline: None, workers: draining };
+            fx.push(Effect::NotifyWaiters);
+        }
+        (State::Running { workers: 0, .. }, Event::Cancel) => {
+            *state = State::Done { timed_out_workers: 0 };
+            fx.push(Effect::NotifyWaiters);
+        }
+        (State::Running { workers, .. }, Event::Cancel) => {
+            *state = State::Cancelled { deadline: None, workers };
+            fx.push(Effect::NotifyWaiters);
+        }
+        (State::Parked { workers: 0, .. }, Event::Cancel) => {
+            *state = State::Done { timed_out_workers: 0 };
+            fx.push(Effect::DropPayload);
+            fx.push(Effect::NotifyWaiters);
+        }
+        (State::Parked { workers, .. }, Event::Cancel) => {
+            *state = State::Cancelled { deadline: None, workers };
+            fx.push(Effect::DropPayload);
+            fx.push(Effect::NotifyWaiters);
+        }
+        (State::Cancelled { .. } | State::Done { .. }, Event::Cancel) => {}
+
         (State::NotStarted { draining: 0 }, Event::Shutdown { .. }) => {
             *state = State::Done { timed_out_workers: 0 };
             fx.push(Effect::NotifyWaiters);
         }
         (State::NotStarted { draining }, Event::Shutdown { deadline }) => {
-            *state = State::Cancelled { deadline, workers: draining };
+            *state = State::Cancelled { deadline: Some(deadline), workers: draining };
             fx.push(Effect::NotifyWaiters);
         }
         (State::Running { workers: 0, .. }, Event::Shutdown { .. }) => {
@@ -252,7 +285,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
             fx.push(Effect::NotifyWaiters);
         }
         (State::Running { workers, .. }, Event::Shutdown { deadline }) => {
-            *state = State::Cancelled { deadline, workers };
+            *state = State::Cancelled { deadline: Some(deadline), workers };
             fx.push(Effect::NotifyWaiters);
         }
         (State::Parked { workers: 0, .. }, Event::Shutdown { .. }) => {
@@ -261,12 +294,13 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
             fx.push(Effect::NotifyWaiters);
         }
         (State::Parked { workers, .. }, Event::Shutdown { deadline }) => {
-            *state = State::Cancelled { deadline, workers };
+            *state = State::Cancelled { deadline: Some(deadline), workers };
             fx.push(Effect::DropPayload);
             fx.push(Effect::NotifyWaiters);
         }
         (State::Cancelled { deadline: cur, workers }, Event::Shutdown { deadline }) => {
-            *state = State::Cancelled { deadline: cur.min(deadline), workers };
+            let bound = cur.map_or(deadline, |existing| existing.min(deadline));
+            *state = State::Cancelled { deadline: Some(bound), workers };
             fx.push(Effect::NotifyWaiters);
         }
         (State::Done { .. }, Event::Shutdown { .. }) => {}
@@ -298,7 +332,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
             fx.push(Effect::DropPayload);
             fx.push(Effect::NotifyWaiters);
         }
-        (State::Cancelled { deadline, workers }, Event::Tick { now }) if now >= deadline => {
+        (State::Cancelled { deadline: Some(deadline), workers }, Event::Tick { now }) if now >= deadline => {
             *state = State::Done { timed_out_workers: workers };
             fx.push(Effect::NotifyWaiters);
         }
@@ -737,6 +771,28 @@ impl<T: Send + 'static, C: Clock + 'static> WarmSlot<T, C> {
         drop(dropped);
     }
 
+    /// Non-blocking early cancellation as soon as `Windows::exiting` starts: drops any parked
+    /// payload outside the lock, wakes idle linger/window waiters, and tells in-flight builders
+    /// to skip follow-up shader/frame/done work while the event loop tears down.
+    pub(crate) fn cancel(&self) {
+        let mut inner = self.lock();
+        let fx = step(&mut inner.state, Event::Cancel);
+        let mut dropped = None;
+        let mut notify = false;
+        for effect in fx {
+            match effect {
+                Effect::DropPayload => dropped = inner.payload.take(),
+                Effect::NotifyWaiters => notify = true,
+                _ => {}
+            }
+        }
+        if notify {
+            self.changed.notify_all();
+        }
+        drop(inner);
+        drop(dropped);
+    }
+
     /// Cancels all warm-up work and waits up to `timeout` for every tracked worker thread to
     /// exit. Returns [`ShutdownOutcome::Drained`] once zero workers remain, or
     /// [`ShutdownOutcome::TimedOut`] if a worker is still blocked past `timeout`.
@@ -768,7 +824,7 @@ impl<T: Send + 'static, C: Clock + 'static> WarmSlot<T, C> {
                 State::Done { timed_out_workers } => {
                     return ShutdownOutcome::TimedOut { remaining: timed_out_workers };
                 }
-                State::Cancelled { deadline, .. } => {
+                State::Cancelled { deadline: Some(deadline), .. } => {
                     let now = self.clock.now();
                     if now >= deadline {
                         let _ = step(&mut inner.state, Event::Tick { now });

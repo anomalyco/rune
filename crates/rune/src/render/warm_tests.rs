@@ -65,7 +65,7 @@ mod shutdown_machine {
     use std::time::Duration;
 
     use crate::render::warm_machine::{
-        Clock, Effect, Event, ShutdownOutcome, State, SystemClock, WarmSlot, step,
+        Clock, Effect, Event, SHUTDOWN_TIMEOUT, ShutdownOutcome, State, SystemClock, WarmSlot, step,
     };
     use crate::time::Instant;
 
@@ -86,7 +86,7 @@ mod shutdown_machine {
         let t30 = t0 + Duration::from_secs(30);
         let t40 = t0 + Duration::from_secs(40);
 
-        let cases: [(&str, State, Event, State, Vec<Effect>); 19] = [
+        let cases: [(&str, State, Event, State, Vec<Effect>); 24] = [
             (
                 "not started -> running on start",
                 State::NotStarted { draining: 0 },
@@ -131,9 +131,9 @@ mod shutdown_machine {
             ),
             (
                 "finish warm frame while cancelled -> drops payload and skips done",
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 Event::FinishWarmFrame { ok: true, now: t1 },
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 vec![Effect::DropPayload],
             ),
             (
@@ -158,52 +158,87 @@ mod shutdown_machine {
                 vec![Effect::NotifyWaiters],
             ),
             (
+                "early cancel while idle with zero workers -> done immediately",
+                State::NotStarted { draining: 0 },
+                Event::Cancel,
+                State::Done { timed_out_workers: 0 },
+                vec![Effect::NotifyWaiters],
+            ),
+            (
+                "early cancel while running -> cancelled with no bound yet",
+                State::Running { until: t30, workers: 2 },
+                Event::Cancel,
+                State::Cancelled { deadline: None, workers: 2 },
+                vec![Effect::NotifyWaiters],
+            ),
+            (
+                "early cancel while parked -> drops payload with no bound yet",
+                State::Parked { until: t30, workers: 1 },
+                Event::Cancel,
+                State::Cancelled { deadline: None, workers: 1 },
+                vec![Effect::DropPayload, Effect::NotifyWaiters],
+            ),
+            (
+                "tick while early-cancelled (no deadline yet) does not time out",
+                State::Cancelled { deadline: None, workers: 1 },
+                Event::Tick { now: t40 },
+                State::Cancelled { deadline: None, workers: 1 },
+                vec![],
+            ),
+            (
+                "shutdown installs bound on early-cancelled state",
+                State::Cancelled { deadline: None, workers: 1 },
+                Event::Shutdown { deadline: t30 },
+                State::Cancelled { deadline: Some(t30), workers: 1 },
+                vec![Effect::NotifyWaiters],
+            ),
+            (
                 "shutdown when idle with draining worker -> cancelled",
                 State::NotStarted { draining: 1 },
                 Event::Shutdown { deadline: t2 },
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 vec![Effect::NotifyWaiters],
             ),
             (
                 "shutdown while running -> cancelled waiting on workers",
                 State::Running { until: t30, workers: 2 },
                 Event::Shutdown { deadline: t2 },
-                State::Cancelled { deadline: t2, workers: 2 },
+                State::Cancelled { deadline: Some(t2), workers: 2 },
                 vec![Effect::NotifyWaiters],
             ),
             (
                 "shutdown while parked -> drops payload and cancels worker",
                 State::Parked { until: t30, workers: 1 },
                 Event::Shutdown { deadline: t2 },
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 vec![Effect::DropPayload, Effect::NotifyWaiters],
             ),
             (
                 "worker exit in cancelled decrements count",
-                State::Cancelled { deadline: t2, workers: 2 },
+                State::Cancelled { deadline: Some(t2), workers: 2 },
                 Event::WorkerExited,
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 vec![],
             ),
             (
                 "last worker exit in cancelled -> done drained",
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 Event::WorkerExited,
                 State::Done { timed_out_workers: 0 },
                 vec![Effect::NotifyWaiters],
             ),
             (
                 "shutdown bound expires with wedged worker -> done timed out",
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 Event::Tick { now: t2 },
                 State::Done { timed_out_workers: 1 },
                 vec![Effect::NotifyWaiters],
             ),
             (
                 "start rejected while cancelled",
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 Event::Start { until: t30 },
-                State::Cancelled { deadline: t2, workers: 1 },
+                State::Cancelled { deadline: Some(t2), workers: 1 },
                 vec![],
             ),
             (
@@ -250,6 +285,11 @@ mod shutdown_machine {
     impl Gate {
         fn new() -> Arc<Self> {
             Arc::new(Self { state: Mutex::new((false, false)), cv: Condvar::new() })
+        }
+        fn enter_only(&self) {
+            let mut s = self.state.lock().unwrap();
+            s.0 = true;
+            self.cv.notify_all();
         }
         fn enter_and_wait(&self) {
             let mut s = self.state.lock().unwrap();
@@ -425,5 +465,99 @@ mod shutdown_machine {
         drop(taken);
         assert_eq!(slot.shutdown(Duration::from_secs(10)), ShutdownOutcome::Drained);
         assert_eq!(slot.live_workers(), 0);
+    }
+
+    /// Proves #2067 at the shutdown/exit seam with no GPU: an ordinary slow warm-up (2.5 s,
+    /// e.g. parallel cold Vulkan/llvmpipe startup) must drain cleanly under `SHUTDOWN_TIMEOUT`
+    /// so `orderly_exit()` chooses `ExitAction::Return` and post-`run()` code executes, instead
+    /// of hitting `_exit(0)` at 2 s.
+    #[test]
+    fn orderly_exit_slow_warmup_beyond_two_seconds_drains_and_runs_post_run_code() {
+        let slot = Arc::new(WarmSlot::<u32, SystemClock>::new(SystemClock));
+        let entered = Gate::new();
+        let entered_worker = Arc::clone(&entered);
+        let frame_called = Arc::new(AtomicBool::new(false));
+        let done_called = Arc::new(AtomicBool::new(false));
+        let frame_flag = Arc::clone(&frame_called);
+        let done_flag = Arc::clone(&done_called);
+
+        WarmSlot::warm_then(
+            Arc::clone(&slot),
+            Duration::from_secs(30),
+            move || {
+                entered_worker.enter_only();
+                // Simulates an ordinary slow cold Vulkan/shader-cache startup (> 2 s).
+                std::thread::sleep(Duration::from_millis(2500));
+                Some(42u32)
+            },
+            move |v| {
+                frame_flag.store(true, Ordering::SeqCst);
+                Some(v)
+            },
+            move || {
+                done_flag.store(true, Ordering::SeqCst);
+            },
+        )
+        .expect("spawn warm_then");
+
+        entered.wait_entered();
+        let outcome = slot.shutdown(SHUTDOWN_TIMEOUT);
+        let action = crate::window::exit_action(outcome, false, None, false);
+        let mut post_run_code_ran = false;
+        if action == crate::window::ExitAction::Return {
+            post_run_code_ran = true;
+        }
+        // Ensure the background worker finishes before asserting so no thread leaks if the test fails.
+        let remaining = slot.wait_until_zero_workers(Duration::from_secs(10));
+        assert_eq!(outcome, ShutdownOutcome::Drained, "2.5 s slow warm-up must not hit last-resort timeout");
+        assert_eq!(action, crate::window::ExitAction::Return, "orderly_exit must return from run()");
+        assert!(post_run_code_ran, "code after App::run() must execute");
+        assert_eq!(remaining, 0);
+        assert!(!frame_called.load(Ordering::SeqCst), "cancelled warm_then must skip frame");
+        assert!(!done_called.load(Ordering::SeqCst), "cancelled warm_then must skip done");
+    }
+
+    /// Early non-blocking `cancel()` (called when `Windows::exiting` starts) tells in-flight
+    /// `warm_then` to skip `frame` and `done` immediately while teardown runs, so `shutdown()`
+    /// drains cleanly once `make` finishes.
+    #[test]
+    fn early_cancel_during_exiting_skips_follow_up_work_and_drains_before_shutdown() {
+        let slot = Arc::new(WarmSlot::<u32, SystemClock>::new(SystemClock));
+        let gate = Gate::new();
+        let gate_worker = Arc::clone(&gate);
+        let frame_called = Arc::new(AtomicBool::new(false));
+        let done_called = Arc::new(AtomicBool::new(false));
+        let frame_flag = Arc::clone(&frame_called);
+        let done_flag = Arc::clone(&done_called);
+
+        WarmSlot::warm_then(
+            Arc::clone(&slot),
+            Duration::from_secs(30),
+            move || {
+                gate_worker.enter_and_wait();
+                Some(9u32)
+            },
+            move |v| {
+                frame_flag.store(true, Ordering::SeqCst);
+                Some(v)
+            },
+            move || {
+                done_flag.store(true, Ordering::SeqCst);
+            },
+        )
+        .expect("spawn warm_then");
+
+        gate.wait_entered();
+        // Non-blocking early cancel as Windows::exiting begins.
+        slot.cancel();
+        assert!(matches!(slot.state(), State::Cancelled { deadline: None, workers } if workers >= 1));
+
+        // Worker finishes during exiting teardown before shutdown() is even called.
+        gate.release();
+        assert_eq!(slot.wait_until_zero_workers(Duration::from_secs(5)), 0);
+        assert_eq!(slot.state(), State::Done { timed_out_workers: 0 });
+        assert_eq!(slot.shutdown(SHUTDOWN_TIMEOUT), ShutdownOutcome::Drained);
+        assert!(!frame_called.load(Ordering::SeqCst), "early cancel must skip frame");
+        assert!(!done_called.load(Ordering::SeqCst), "early cancel must skip done");
     }
 }

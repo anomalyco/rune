@@ -113,8 +113,11 @@ pub(crate) fn park(gpu: Gpu, mut renderer: Renderer, linger: Duration) {
 /// A device for a future surface on a GPU that drives a display, with the renderer, and one
 /// pass run offscreen, so the device has drawn (`GpuEvent::Drew`).
 fn make(features: wgpu::Features) -> Option<Warmed> {
+    if SLOT.is_stopped() { return None; }
     super::gpu_events::starting();
-    let gpu = Gpu::try_for_display(Gpu::instance_for(features), features).ok()?;
+    let instance = Gpu::instance_for(features);
+    if SLOT.is_stopped() { return None; }
+    let gpu = Gpu::try_for_display(instance, features).ok()?;
     if SLOT.is_stopped() { return None; }
     let renderer = Renderer::try_new_warm(&gpu.device, FORMAT).ok()?;
     if SLOT.is_stopped() { return None; }
@@ -129,6 +132,7 @@ fn make(features: wgpu::Features) -> Option<Warmed> {
         ..Default::default()
     }));
     gpu.queue.submit([encoder.finish()]);
+    if SLOT.is_stopped() { return None; }
     rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
     if !SLOT.is_stopped() {
         super::gpu_events::presented();
@@ -151,6 +155,12 @@ pub(super) fn start() {}
 #[cfg_attr(test, allow(dead_code))]
 pub(super) fn discard() {
     SLOT.discard();
+}
+
+/// Non-blocking early cancellation called as soon as `Windows::exiting` starts so in-flight
+/// warm-up stops scheduling follow-up work while windows tear down.
+pub(super) fn cancel() {
+    SLOT.cancel();
 }
 
 /// Exit-time shutdown: cancels any in-flight warm-up and waits up to `timeout` for every
