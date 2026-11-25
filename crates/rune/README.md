@@ -1614,11 +1614,22 @@ const MOMENT: &[Beat] = &[
 el().key("moment").sequence(Sequence::new(MOMENT).delay(0.1))
 ```
 
-Each beat is a full opacity/scale pose at elapsed seconds; omitted values are 1.
+Each beat is a full pose at elapsed seconds: opacity and scale (omitted values are 1),
+`Beat::translate(x, y)` in points and `Beat::rotate(radians)` (omitted values are 0).
+Translate and rotate add to the element's `El::offset` and `El::rotate`, carry its
+subtree and hit testing along, and scale and rotate pivot on `El::origin`. An
+`El::live_offset` or `El::live_rotation` keeps its channel, and beats leave it alone.
+While a sequence plays (a repeating one from its start until it's dropped), and while a
+one-shot waits out its `delay` holding its first beat, `El::offset` and `El::rotate`
+changes land at once. Once a one-shot has finished, or before a repeating one starts,
+they spring as usual. Dropping a sequence springs the element back to its own offset
+and rotation. A row that
+rises in is `Beat::new(0.0).opacity(0.0).translate(0.0, 4.0)` then `Beat::new(0.2)`.
 `Beat::easing` sets the arriving segment's easing (default ease-in-out). Unchanged
 specs keep their progress across commits; changing the spec or mounting a new key
 replays it. Reduced motion and explicit settle land the final pose immediately.
-Scale changes presentation, not layout. This finite API is separate from the
+Scale, translate and rotate change presentation, not layout. Scale is uniform; beats
+have no separate x and y scale yet. This finite API is separate from the
 lower-level `rune_motion::Keyframes<T>` property-track builder.
 
 ### Shared-element motion
