@@ -344,6 +344,7 @@ fn same_handlers(
         hover_delay,
         hover_tracks_bounds,
         on_pointer_move,
+        pointer_lock,
         gestures,
         on_drag,
         drag_out,
@@ -398,6 +399,7 @@ fn same_handlers(
         && a.hover_delay == *hover_delay
         && a.hover_tracks_bounds == *hover_tracks_bounds
         && opt_rc_eq(&a.on_pointer_move, on_pointer_move)
+        && opt_rc_eq(&a.pointer_lock, pointer_lock)
         && same_gestures(&a.gestures, gestures)
         && opt_rc_eq(&a.on_drag, on_drag)
         && opt_rc_eq(&a.drag_out, drag_out)

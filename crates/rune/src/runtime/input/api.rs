@@ -90,6 +90,46 @@ impl<S: 'static> Runtime<S> {
     pub fn pressing(&self) -> bool { self.core().pressing() }
     #[inline(always)]
     pub fn pointer(&self) -> Option<(f32, f32)> { self.core().pointer() }
+    /// Whether an element in this runtime currently holds pointer lock
+    /// ([`El::pointer_lock`](crate::El::pointer_lock)).
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, el};
+    /// # fn view(_: &(), _: &mut Cx<()>) -> El {
+    /// #     el().key("view").size(200.0, 200.0).pointer_lock(|_: &mut (), _, _| {})
+    /// # }
+    /// let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// assert!(!rt.pointer_locked());
+    /// rt.pointer_down(100.0, 100.0);
+    /// assert!(rt.pointer_locked());
+    /// ```
+    #[inline(always)]
+    pub fn pointer_locked(&self) -> bool { self.core().pointer_locked() }
+
+    /// Feeds a relative mouse-motion delta `(dx, dy)` in points (right and down positive) while
+    /// pointer lock is held. Dropped when nothing holds pointer lock or when the delta is zero
+    /// or non-finite; consecutive deltas before a frame coalesce into one handler call.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, el};
+    /// # fn view_cam(_: &[f32; 2], _: &mut Cx<[f32; 2]>) -> El {
+    /// #     el().key("view").size(200.0, 200.0)
+    /// #         .pointer_lock(|s: &mut [f32; 2], [dx, dy], _| { s[0] += dx; s[1] += dy; })
+    /// # }
+    /// let mut rt = Runtime::new([0.0f32; 2], view_cam, (200.0, 200.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// rt.pointer_down(100.0, 100.0);
+    /// rt.pointer_motion(12.0, -3.0);
+    /// rt.pointer_motion(0.5, 0.0);
+    /// rt.frame(0.0);
+    /// assert_eq!(rt.state, [12.5, -3.0]);
+    /// ```
+    #[inline(always)]
+    pub fn pointer_motion(&mut self, dx: f32, dy: f32) { self.core_mut().pointer_motion(dx, dy); }
+
+    #[inline(always)]
+    pub(crate) fn set_pointer_lock_supported(&mut self, supported: bool) { self.core_mut().set_pointer_lock_supported(supported); }
     #[inline(always)]
     pub fn hit_regions(&self) -> &[[f32; 4]] { self.core().hit_regions() }
     #[inline(always)]

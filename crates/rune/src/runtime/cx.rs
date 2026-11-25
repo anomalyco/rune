@@ -68,6 +68,7 @@ pub(crate) struct CxCore {
     pub(super) system_scroll_bars: crate::platform::scroll_bars::SystemScrollBars,
     pub(super) system_languages: Option<Rc<[String]>>,
     pub(super) system_reduced_motion: bool,
+    pub(super) pointer_locked: bool,
     pub(super) reduced_motion: bool,
     pub(super) time_scale: f32,
     /// [`Cx::zoom`], read once the view returns.
@@ -142,6 +143,7 @@ impl CxCore {
     pub(crate) fn system_contrast(&self) -> Option<crate::SystemContrast> { self.system_contrast }
     pub(crate) fn system_increased_contrast(&self) -> bool { self.system_increased_contrast }
     pub(crate) fn system_reduced_motion(&self) -> bool { self.system_reduced_motion }
+    pub(crate) fn pointer_locked(&self) -> bool { self.pointer_locked }
     pub(crate) fn system_languages(&self) -> &[String] {
         match &self.system_languages {
             Some(langs) => langs,
@@ -369,6 +371,29 @@ impl<S> Cx<S> {
     /// The host's OS accessibility preference, independent of this commit's override.
     #[inline(always)]
     pub fn system_reduced_motion(&self) -> bool { self.core.system_reduced_motion() }
+    /// Whether an element in this window currently holds pointer lock
+    /// ([`El::pointer_lock`](crate::El::pointer_lock)).
+    ///
+    /// Views can toggle a "Click to look around" or "Press Esc to release" hint from this;
+    /// the view (and memos) rebuild whenever it changes. Always `false` on web, iOS, and
+    /// native overlays.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, el, text};
+    /// # fn view(_: &(), cx: &mut Cx<()>) -> El {
+    /// #     el().key("view").size(200.0, 200.0)
+    /// #         .pointer_lock(|_: &mut (), _, _| {})
+    /// #         .child(text(if cx.pointer_locked() { "Locked" } else { "Click to look" }))
+    /// # }
+    /// let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// assert!(!rt.pointer_locked());
+    /// rt.pointer_down(100.0, 100.0);
+    /// rt.frame(0.0);
+    /// assert!(rt.pointer_locked());
+    /// ```
+    #[inline(always)]
+    pub fn pointer_locked(&self) -> bool { self.core.pointer_locked() }
     /// The user's preferred languages as BCP 47 tags (RFC 5646), most preferred first (for
     /// example `["ar-EG", "en-US"]`). Queries the platform lazily on first read
     /// (`GetUserPreferredUILanguages` on Windows, `NSLocale.preferredLanguages` on macOS/iOS,

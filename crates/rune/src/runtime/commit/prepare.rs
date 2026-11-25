@@ -67,6 +67,7 @@ impl RuntimeCore {
             viewport: size,
             fit_height: false,
             system_reduced_motion: self.host.system_reduced_motion,
+            pointer_locked: self.pointer_locked(),
             titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
             maximized: self.host.maximized,

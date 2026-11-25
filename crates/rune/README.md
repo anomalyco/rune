@@ -563,7 +563,18 @@ policy changes are applied in the same mutation phase.
   (chorded presses while another button or capture is held are ignored), observers run in reverse
   tree order before that press's target actions (skipping inert, exiting, and behind-modal
   subtrees while including observers inside an active modal), and windows with no observer pay
-  one cached boolean check per press. `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
+  one cached boolean check per press. `.pointer_lock(|s, [dx, dy], tx| ..)` requests declarative
+  relative mouse-look capture on desktop windows (web, iOS, and overlays never capture): a primary
+  press whose primary target is that element captures (HUD buttons and covering elements do not),
+  hides the cursor while focused (`CursorGrabMode::Locked`, falling back to `Confined` on X11),
+  freezes the runtime pointer at the press point (ignoring `pointer_move`/`pointer_leave` so all
+  buttons and wheels land on the viewport), and delivers coalesced relative `[dx, dy]` deltas in
+  points (`tx.live_only()` supported; `DeviceEvent::MouseMotion` scaled by `1/scale_factor` on
+  Windows and X11). Escape releases and is consumed (after any drag cancel), and focus loss,
+  unmount, modal cover, disabled, or inert states release automatically; read `Cx::pointer_locked()`
+  in views (rebuilds views and memos on change), `Runtime::pointer_locked()` / `Runtime::pointer_motion(dx, dy)`
+  in tests, and `{"type": "pointer-motion", "dx": …, "dy": …}` (`ScriptEvent::PointerMotion`) in scripts.
+  `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
   logical keys `on_key` sees: the press-time and current focus chains first (keeping shared
   ancestors after both); when nothing is focused or focus rests on the open modal itself, every
   allowed `on_key_up` handler hears the release deepest-first (with the modal itself first if it
@@ -661,6 +672,7 @@ That event then skips the view, the diff and layout. The frame still draws the n
 values, hit tests against where they put elements, and reports `on_drawn_layout`; whatever
 else the handler asked of its `Tx` (a scroll, a copy, `wake_after`) still happens. It works in
 `on_wheel`, `on_magnify`, `on_rotate`, `on_smart_magnify`, `on_drag`, `on_pointer_move_local`,
+`pointer_lock`,
 `on_key`, `on_key_up`, a field's key handler, `on_physical_input`, the press and hover handlers,
 `on_layout_tx` and `on_drawn_layout_tx`, so a toolbar that floats over the selection by its own live offset
 follows a pan with no view re-run either. A handler that declines its event (returns false)

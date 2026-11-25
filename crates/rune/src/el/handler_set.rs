@@ -3,7 +3,7 @@
 use crate::cold::Empty;
 use crate::el::{
     A11yActionFn, AnyPressFn, AtBottomFn, Cursor, DragEndFn, DragFn, DragOutFn, DropSpec, LanguagesFn, LayoutFn,
-    LayoutTxFn, ModalSpec, PasteFn, PointerFn, PressFn, ScrollOffsetFn, SelectionChangeFn, SelectionCopy,
+    LayoutTxFn, ModalSpec, PasteFn, PointerFn, PointerMotionFn, PressFn, ScrollOffsetFn, SelectionChangeFn, SelectionCopy,
     VisibleRowsFn, WindowFocusFn,
 };
 
@@ -35,6 +35,8 @@ pub(crate) struct Handlers {
     /// `El::hover_tracks_bounds`.
     pub hover_tracks_bounds: bool,
     pub on_pointer_move: Option<PointerFn>,
+    /// `El::pointer_lock`: declarative relative mouse-look capture.
+    pub pointer_lock: Option<PointerMotionFn>,
     /// `on_wheel`, `on_magnify` and the other canvas handlers (`canvas_input.rs`).
     pub gestures: Option<Box<crate::input::canvas_input::CanvasInput>>,
     pub on_drag: Option<DragFn>,
@@ -83,6 +85,7 @@ pub(crate) struct HandlerSites {
     pub hover: Site,
     pub hover_change: Site,
     pub pointer_move: Site,
+    pub pointer_lock: Site,
     pub layout: Site,
     pub drawn_layout: Site,
     pub visible_rows: Site,
@@ -96,11 +99,13 @@ impl Handlers {
             || self.on_hover.is_some()
             || self.on_drag.is_some()
             || self.drag_out.is_some()
+            || self.pointer_lock.is_some()
     }
 
     #[inline]
     pub(crate) fn takes_hit(&self) -> bool {
         self.on_pointer_move.is_some()
+            || self.pointer_lock.is_some()
             || self.on_press.is_some()
             || self.on_double_press.is_some()
             || self.on_secondary_press.is_some()
@@ -134,6 +139,7 @@ impl Empty for Handlers {
         hover_delay: [0.0; 2],
         hover_tracks_bounds: false,
         on_pointer_move: None,
+        pointer_lock: None,
         gestures: None,
         on_drag: None,
         drag_out: None,
@@ -159,6 +165,6 @@ impl Empty for Handlers {
         press_scale: None,
         press_offset: None,
         #[cfg(debug_assertions)]
-        sites: HandlerSites { hover: None, hover_change: None, pointer_move: None, layout: None, drawn_layout: None, visible_rows: None },
+        sites: HandlerSites { hover: None, hover_change: None, pointer_move: None, pointer_lock: None, layout: None, drawn_layout: None, visible_rows: None },
     };
 }

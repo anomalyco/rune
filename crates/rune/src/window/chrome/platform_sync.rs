@@ -9,6 +9,7 @@ pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, s
     let focused = l.window.has_focus();
     secure_input.set(rt.has_secure_focus() && focused);
     l.apply_cursor_core(rt, focused);
+    l.apply_pointer_lock_core(rt);
     #[cfg(target_os = "macos")]
     if rt.zoom() == 1.0 {
         l.native.help.sync(&l.window, rt.help_regions());
@@ -41,7 +42,7 @@ impl Win {
     /// The runtime's cursor while the pointer is in the window, the arrow once it leaves.
     /// `Hidden` needs focus, so it can't outlive the window being active.
     pub(in crate::window) fn apply_cursor_core(&mut self, rt: &RuntimeCore, focused: bool) {
-        let want = match rt.cursor() { crate::el::Cursor::Hidden if !focused => crate::el::Cursor::Default, c => c };
+        let want = crate::window::pointer_lock::resolve_cursor(rt.cursor(), rt.pointer_locked(), focused);
         self.cursor.apply(&self.window, want, rt.pointer().is_some());
     }
 }

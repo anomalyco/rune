@@ -123,6 +123,18 @@ pub enum ScriptEvent {
     /// A hardware key or modifier change (`{"physical": …}`).
     Physical(crate::PhysicalInput),
     Pointer { action: PointerAction, at: ScriptPoint },
+    /// `{"type": "pointer-motion", "dx": …, "dy": …}`: relative mouse motion while pointer lock
+    /// is held (`El::pointer_lock`, `Runtime::pointer_motion`).
+    ///
+    /// ```
+    /// # use rune::tooling::ScriptEvent;
+    /// # let event = ScriptEvent::PointerMotion { dx: 40.0, dy: -2.5 };
+    /// # assert!(
+    /// // JSON script event: {"t": 0.2, "type": "pointer-motion", "dx": 40, "dy": -2.5}
+    /// matches!(event, ScriptEvent::PointerMotion { dx, dy } if dx == 40.0 && dy == -2.5)
+    /// # );
+    /// ```
+    PointerMotion { dx: f32, dy: f32 },
     /// The window gaining (true) or losing focus.
     Focus(bool),
     /// `{"reopen": true}`: the app reopened, as a click on its macOS Dock icon does.

@@ -37,6 +37,8 @@ impl RuntimeCore {
     /// phase. The innermost [`El::on_wheel`] handler there hears it first, bubbling through
     /// every ancestor past scroll views; what none takes scrolls as [`Self::wheel_xy`] does.
     pub fn wheel_event(&mut self, ev: WheelEvent) {
+        let (x, y) = self.locked_point(ev.x, ev.y);
+        let ev = WheelEvent { x, y, ..ev };
         if ev.phase == GesturePhase::Began { self.wheel_began(); }
         let moved = ev.dx != 0.0 || ev.dy != 0.0;
         if moved {
@@ -331,6 +333,7 @@ impl RuntimeCore {
             PointerButton::Secondary => return self.secondary_down(x, y),
             _ => {}
         }
+        let (x, y) = self.locked_point(x, y);
         let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
         self.pointer.note_button_down(button);
         if self.pointer.autoscroll_press(button) { self.pointer.pos = Some((x, y)); return; }
@@ -396,6 +399,7 @@ impl RuntimeCore {
 
     /// A mouse button came up at (x, y): the release of [`Self::button_down`].
     pub(crate) fn button_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32, button: PointerButton) {
+        let (x, y) = self.locked_point(x, y);
         self.pointer.note_button_up(button);
         self.pointer.release_tint(button);
         if button == PointerButton::Middle { self.frame.queue.note_middle_button_up(x, y); }
