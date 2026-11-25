@@ -14,6 +14,10 @@ impl El {
     /// `continuous_corners`. A window hosts at most [`App::max_native_materials`](crate::App::max_native_materials)
     /// native views (default [`MAX_NATIVE_MATERIALS`](crate::MAX_NATIVE_MATERIALS)); later visible
     /// elements draw their fallback and report [`ElementInfo::material_fallback`](crate::ElementInfo::material_fallback).
+    ///
+    /// For a whole-window OS backdrop on Windows 11 (Mica, Mica Alt, or Desktop Acrylic), use
+    /// [`WindowBackdrop`](crate::WindowBackdrop) instead. For an in-window blur of Rune's own
+    /// content on every platform, use [`El::backdrop_blur`](Self::backdrop_blur).
     pub fn system_material(mut self, material: crate::SystemMaterial) -> Self {
         if material == crate::SystemMaterial::Glass { self.vis_flags.set(crate::el::VisualFlags::CONTINUOUS_CORNERS, true); }
         self.cold_mut().material = Some(material);
@@ -26,8 +30,9 @@ impl El {
     /// bar. `sigma` is the Gaussian standard deviation in points, as in CSS
     /// `backdrop-filter: blur()`; 0 turns it off. Blurs past about 78 points at 2x stop growing.
     ///
-    /// Unlike `El::system_material`, which shows what is behind the window, this blurs Rune's
-    /// own content and looks the same on every platform. The element's own opacity (including its
+    /// Unlike [`El::system_material`](Self::system_material) (per-element behind-window blur on
+    /// macOS) and [`WindowBackdrop`](crate::WindowBackdrop) (whole-window OS backdrop on Windows
+    /// 11), this blurs Rune's own content and looks the same on every platform. The element's own opacity (including its
     /// default enter and exit fade) fades the blur with it while still blurring what sits behind
     /// the element, and its outer shadows leave the blurred interior clear. Blurs drawn into a
     /// target that can't be copied (no `COPY_SRC`, or a caller's own `wgpu::RenderPass` via

@@ -13,6 +13,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TRANSPARENT,
 };
 
+pub(crate) mod backdrop;
 mod cloak;
 pub(crate) mod dark_mode;
 pub(crate) mod dcomp_handover;

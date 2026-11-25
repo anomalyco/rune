@@ -40,6 +40,7 @@ use crate::tooling::Chrome;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod app_events;
+mod backdrop;
 #[cfg(not(target_arch = "wasm32"))]
 mod chrome;
 mod color_scheme;
@@ -75,6 +76,7 @@ mod win32;
 #[cfg(target_os = "windows")]
 pub(crate) fn warm_gpu_cache() -> Result<(), String> { win32::handover::warm_gpu_cache() }
 
+pub use backdrop::WindowBackdrop;
 pub use color_scheme::ColorScheme;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use color_scheme::{app_color_scheme, set_app_color_scheme_state, sync_window_theme, window_theme_for_platform};
@@ -170,6 +172,8 @@ pub(crate) enum WakeEvent {
     ExcludeFromCapture(usize, bool),
     #[cfg(not(target_arch = "wasm32"))]
     ColorScheme(usize, crate::ColorScheme),
+    #[cfg(not(target_arch = "wasm32"))]
+    WindowBackdrop(usize, crate::WindowBackdrop),
     /// App-wide color scheme changed (`AppHandle::set_color_scheme`): every host syncs with
     /// `app_color_scheme()`.
     #[cfg(not(target_arch = "wasm32"))]
@@ -533,7 +537,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let _handling = crate::quit::handling();
             let slot = match &event {
                 WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-                    | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
+                    | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::WindowBackdrop(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
                     | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) | WakeEvent::ResizeSync(i) => *i,
                 WakeEvent::Reopen => {
                     this.reopen(event_loop);

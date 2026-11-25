@@ -320,6 +320,10 @@ impl FrameHost for OverlayFrame<'_> {
     fn sync_after_step(&mut self, info: &mut StepInfo) {
         let now = self.now.unwrap_or_else(crate::time::now);
         info.update_ms = if self.app.has_compositor() { now.elapsed().as_secs_f64() * 1000.0 } else { 0.0 };
+        if let Some(backdrop) = self.app.rt_mut().host.window_backdrop_request.take() {
+            self.core.window_backdrop = backdrop;
+            self.core.sync_window_backdrop(self.app.rt_mut(), false);
+        }
         super::input::drop_window_requests(self.app.rt_mut());
         self.core.clipboard.flush_core(self.app.rt_mut());
         self.core.sync_ime(self.app);

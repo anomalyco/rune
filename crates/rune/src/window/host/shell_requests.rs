@@ -69,6 +69,14 @@ impl Host {
         }
     }
 
+    /// `Tx::set_window_backdrop`: applies a per-window system backdrop requested since the shell
+    /// last checked, retaining it on `Host` across native window recreation.
+    pub(in crate::window) fn apply_tx_window_backdrop(&mut self) {
+        if let Some(backdrop) = self.app.rt_mut().host.window_backdrop_request.take() {
+            self.set_window_backdrop(backdrop);
+        }
+    }
+
     /// `Tx::set_represented_file` and `Tx::set_document_edited`: applies macOS document state
     /// changes set since the shell last checked. Retained in `HostState` across native window
     /// recreation; no-op off macOS.

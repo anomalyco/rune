@@ -160,7 +160,7 @@ impl Host {
         );
         let Some(w) = &self.win else { return };
         let color_scheme = self.color_scheme;
-        crate::window::sync_window_theme(&mut self.applied_theme, target, |theme| {
+        let changed = crate::window::sync_window_theme(&mut self.applied_theme, target, |theme| {
             w.window.set_theme(theme);
             #[cfg(target_os = "macos")]
             if let Some(panel) = &w.native.panel {
@@ -169,6 +169,81 @@ impl Host {
             #[cfg(not(target_os = "macos"))]
             let _ = color_scheme;
         });
+        if changed {
+            self.sync_window_backdrop(true);
+        }
+    }
+
+    pub(in crate::window) fn set_window_backdrop(&mut self, backdrop: crate::WindowBackdrop) {
+        self.window_backdrop = backdrop;
+        self.sync_window_backdrop(false);
+    }
+
+    /// Synchronizes the window's OS system backdrop and updates `Cx::window_backdrop()`.
+    /// When `WindowBackdrop::None` has never been activated on this `HWND`, makes zero DWM calls.
+    pub(in crate::window) fn sync_window_backdrop(&mut self, force_reapply: bool) {
+        #[cfg(target_os = "windows")]
+        {
+            let requested = self.window_backdrop;
+            let effective_dark = match self.color_scheme.effective_for_window(crate::window::app_color_scheme()) {
+                crate::ColorScheme::Dark => true,
+                crate::ColorScheme::Light => false,
+                crate::ColorScheme::System => self.app.rt().env.system_dark,
+            };
+            let device_type = self.gpu.as_ref().map(|(gpu, _)| gpu.adapter.get_info().device_type);
+            let transparent = self.options.transparent;
+            let Some(w) = self.win.as_mut() else {
+                let rt = self.app.rt_mut();
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_backdrop_opaque_fallback(false);
+                return;
+            };
+            let Some(hwnd) = crate::platform::win32::hwnd(&w.window) else {
+                let rt = self.app.rt_mut();
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_backdrop_opaque_fallback(
+                    crate::platform::win32::backdrop::needs_opaque_fallback(
+                        false,
+                        transparent,
+                        requested,
+                        crate::WindowBackdrop::None,
+                    ),
+                );
+                return;
+            };
+            let inputs = crate::platform::win32::backdrop::BackdropInputs {
+                requested,
+                build: crate::platform::win32::dark_mode::windows_build(),
+                transparent,
+                swapchain: crate::render::Gpu::dx12_swapchain_kind(),
+                alpha_mode: w.surface.is_some().then_some(w.config.alpha_mode),
+                cpu_painter: matches!(
+                    w.native.mode,
+                    crate::window::win32::handover::SurfaceMode::Cpu { .. }
+                        | crate::window::win32::handover::SurfaceMode::HandingOver { .. }
+                ),
+                device_type,
+            };
+            let outcome = w.native.backdrop.sync(
+                hwnd as isize,
+                inputs,
+                false,
+                force_reapply,
+                Some(effective_dark),
+                &mut crate::platform::win32::backdrop::RealBackdropSeam,
+            );
+            let rt = self.app.rt_mut();
+            rt.set_window_backdrop(outcome.active);
+            rt.set_backdrop_opaque_fallback(outcome.opaque_fallback);
+            if rt.stale() {
+                w.request_redraw();
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = force_reapply;
+            self.app.rt_mut().set_window_backdrop(crate::WindowBackdrop::None);
+        }
     }
 
     pub(in crate::window) fn set_app_color_scheme(&mut self, scheme: crate::ColorScheme) {
@@ -238,7 +313,12 @@ impl Host {
                     #[cfg(target_os = "macos")]
                     if focus && self.started && let Some(w) = self.shown_win() { w.focus(); }
                 }
-                RevealEffect::OrderIn { focus } => { let focus = focus && !self.no_activate(); if let Some(w) = &mut self.win { w.show(focus); } }
+                RevealEffect::OrderIn { focus } => {
+                    let focus = focus && !self.no_activate();
+                    if let Some(w) = &mut self.win { w.show(focus); }
+                    #[cfg(target_os = "windows")]
+                    self.sync_window_backdrop(true);
+                }
                 RevealEffect::Unminimize => if let Some(w) = &self.win && !w.is_panel() { w.window.set_minimized(false) },
                 RevealEffect::Settle => {
                     if !built { self.app.rt_mut().settle_all(); }
@@ -445,6 +525,7 @@ impl Host {
         self.apply_tx_macos_document();
         self.show_title();
         self.apply_tx_color_scheme();
+        self.apply_tx_window_backdrop();
         if self.app.rt_mut().take_toggle_maximized() && let Some(w) = self.shown_win() {
             w.toggle_maximized();
             #[cfg(target_os = "windows")]
@@ -708,6 +789,9 @@ impl Host {
         self.gpu = None;
         self.app.release_compositor_gpu();
         let rt = self.app.rt_mut();
+        rt.set_window_backdrop(crate::WindowBackdrop::None);
+        #[cfg(target_os = "windows")]
+        rt.set_backdrop_opaque_fallback(false);
         rt.text.atlas.invalidate();
         rt.images.invalidate();
     }

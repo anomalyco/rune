@@ -115,6 +115,11 @@ pub(in crate::window) struct Native {
     pub(in crate::window) video_layers: crate::window::win32::video_layer::VideoLayers,
     /// Revokes the window's OLE drop target and prunes its registry entry when the window goes.
     pub(in crate::window) drop_target: Option<crate::platform::win32::drop_target::DropTarget>,
+    /// Cached DWM system backdrop state for this live `HWND` (`platform::win32::backdrop`).
+    pub(in crate::window) backdrop: crate::platform::win32::backdrop::BackdropTracker,
+    /// Last observed maximized state, so maximize/unmaximize transitions re-apply an active DWM
+    /// backdrop without touching plain drag-resizes.
+    pub(in crate::window) last_maximized: bool,
 }
 
 /// When a window's UI Automation adapter is made: with the window (a screen reader is running),

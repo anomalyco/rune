@@ -3371,13 +3371,57 @@ AppKit window level, `ConfiguredOverlay::macos_color_space` selects `MacColorSpa
 `examples/glass-panel` puts it together: a card that flies across a large window, hands off
 to a card-sized window that moves 60 times a second, and fades out.
 
+### Window backdrops (`WindowBackdrop`)
+
+```rust,ignore
+let opts = WindowOptions { transparent: true, ..Default::default() };
+let spec = AppSpec::new("Notes", (800.0, 600.0), || (), |_, cx| {
+    let bg = if cx.window_backdrop().is_active() { Color::TRANSPARENT } else { theme_bg(cx) };
+    el().w_full().h_full().fill(bg)
+});
+App::new(spec).window_options(opts).window_backdrop(WindowBackdrop::Mica).run();
+```
+
+Opt-in whole-window OS backdrop material behind the entire window or overlay (`WindowBackdrop::None`
+default, `Mica`, `MicaAlt`, `Acrylic`), configured with `App::window_backdrop`,
+`WindowSpec::window_backdrop`, or `ConfiguredOverlay::window_backdrop`, updated at runtime with
+`Tx::set_window_backdrop`, `WindowHandle::set_window_backdrop`, or
+`OverlayHandle::set_window_backdrop`, and queried in views with `Cx::window_backdrop()` (memo-tracked;
+headless tests can drive it with `Runtime::set_window_backdrop`).
+
+- **Windows 11 Build 22621+ (22H2)**: applies only the documented Win32 attribute
+  `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` (`DWMSBT_MAINWINDOW`, `DWMSBT_TABBEDWINDOW`,
+  `DWMSBT_TRANSIENTWINDOW`; `DWMSBT_NONE` when clearing) and syncs `DWMWA_USE_IMMERSIVE_DARK_MODE`
+  while active. Never uses undocumented `SetWindowCompositionAttribute`, accent policies, or
+  pre-22H2 `DWMWA_MICA_EFFECT`. Activates only on transparent windows and overlays presenting on a
+  hardware GPU through DirectComposition (`DxgiFromVisual`, `CompositeAlphaMode::PreMultiplied`,
+  not on the CPU painter or WARP). Re-applied across window recreation, hide/show,
+  maximize/unmaximize, device reattach, and theme updates.
+- **Zero cost when unused**: while `WindowBackdrop::None` is unchanged from default, Rune makes zero
+  DWM backdrop calls and existing windows, CPU-first launches, and headless renders stay unchanged.
+- **Microsoft activation and policy fallbacks**: by Microsoft design, Mica, Mica Alt, and Desktop
+  Acrylic fall back to a solid neutral colour when the window is inactive, on `WS_EX_NOACTIVATE`
+  overlays, in Battery Saver, in High Contrast, or when Transparency Effects are turned off.
+- **No transparent holes**: on Windows builds before 22621, opaque windows, `DxgiFromHwnd`, the
+  CPU painter, WARP, DWM error, macOS, Linux, web, and headless renders, `Cx::window_backdrop()`
+  reports `WindowBackdrop::None`. If a non-overlay Windows transparent window requested a non-`None`
+  backdrop that could not activate, Rune clears its surface to an opaque theme-matched fallback so
+  even a view that skips `cx.window_backdrop()` never opens a transparent hole.
+- **Live verification status**: eligibility, attribute constants, and lifecycle re-application are
+  unit-tested off-screen behind a Win32 seam; live visual composition on real Windows 11 hardware
+  has not yet been watched by the team and will be confirmed on issue #300. Try it with
+  `cargo run -p settings -- --backdrop mica`.
+
 ### Frosted panels
 
-Which blur a frosted panel needs depends on what sits behind it:
+Which blur a frosted surface needs depends on what sits behind it and whether it covers the whole
+window or one element:
 
-- **The desktop or other windows:** `El::system_material` above, in a transparent window. Only
-  the platform can see behind the window.
-- **The app's own content:** `El::backdrop_blur` below. (`El::blur(σ)` blurs the element's own
+- **The whole window over the desktop (Windows 11 22H2+):** `WindowBackdrop` above (`Mica`,
+  `MicaAlt`, `Acrylic`), in a transparent DirectComposition window or overlay.
+- **One rounded element over the desktop (macOS):** `El::system_material` above, in a transparent
+  window. Only the platform can see behind the window.
+- **The app's own content (every platform):** `El::backdrop_blur` below. (`El::blur(σ)` blurs the element's own
   subtree, not its backdrop.) For refraction, a saturation lift and grain on top of the blur,
   `rune-fx`'s `Fx::lens(LensParams { frost: 1.0, .. })` is Liquid Glass "regular": put
   `.effect_backdrop(true)` on its effect slot and draw through `Renderer::draw_with_backdrop`,
