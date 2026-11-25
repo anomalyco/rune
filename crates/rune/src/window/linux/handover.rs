@@ -17,17 +17,24 @@
 //! synchronization that would be a protocol error, which ends the app (`platform::cpu_frames`).
 //!
 //! A GPU that gives no device leaves the window on the CPU, fully live, its surface untouched.
+//! So does a software one (lavapipe, llvmpipe: `wgpu::DeviceType::Cpu`) under `CpuFirst::Auto`
+//! with no adapter named (`WGPU_ADAPTER_NAME`): `CpuPainter` draws the same frames for a fraction
+//! of its CPU time, so the window stays on the CPU (`GpuJob::SoftwareDeferred`) until a frame
+//! needs what only the GPU draws, and that frame takes the software GPU.
 //! A device whose surface can't be made (after the switch) gives the window back to the CPU only
 //! where a surface that came and went is known to leave nothing behind (`Retired::revive`); with
 //! explicit synchronization the window stays the GPU's and its surface is tried again as a lost
 //! one is (`Host::replace_lost_surface`).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::cpu_frame::{Cpu, RetiredCpu};
+use crate::gpu::fallback::Policy;
 use crate::render::{Gpu, Instance, Renderer};
 use crate::time::Instant;
+use crate::window::CpuFirst;
 use crate::window::WakeEvent;
 use crate::window::host::Host;
 use crate::window::surface::Win;
@@ -56,8 +63,13 @@ pub(in crate::window) enum GpuJob {
     Waiting { tries: u8, retry_at: Option<Instant> },
     /// Being made on a thread, which wakes the loop when it's done (`WakeEvent::GpuReady`).
     /// `latest`: what the window draws now, for the frame that thread draws once before it
-    /// reports (`warm_frame`); each CPU frame leaves its own here.
-    Building { tries: u8, latest: Arc<Mutex<Latest>> },
+    /// reports (`warm_frame`); each CPU frame leaves its own here. `pick`: what the thread found
+    /// and whether a software GPU is to be left alone (`Pick`).
+    Building { tries: u8, latest: Arc<Mutex<Latest>>, pick: Arc<Pick> },
+    /// The GPU made after the first frame was a software one, and the window stays on the CPU
+    /// (`defers_software`). Not tried again on idle; a frame that needs the GPU takes it
+    /// (`Host::start_gpu_for_needs_gpu`).
+    SoftwareDeferred,
     /// It failed `TRIES` times: the window stays on the CPU.
     Failed,
 }
@@ -68,6 +80,29 @@ pub(in crate::window) enum GpuJob {
 pub(in crate::window) struct Latest {
     pub(super) instances: Vec<Instance>,
     pub(super) size: (u32, u32),
+}
+
+/// What a GPU thread for a CPU window found, shared with the UI thread. `defer`: a software GPU
+/// leaves the window on the CPU (an idle hand-over under `defers_software`); a frame that needs
+/// the GPU clears it while the thread runs. `software`: the device the thread found is one.
+#[derive(Default)]
+pub(in crate::window) struct Pick {
+    defer: AtomicBool,
+    software: AtomicBool,
+}
+
+impl Pick {
+    fn new(defer: bool) -> Self { Pick { defer: AtomicBool::new(defer), software: AtomicBool::new(false) } }
+
+    /// Whether the window stays on the CPU with the GPU the thread made.
+    fn stays_on_cpu(&self) -> bool { self.defer.load(Ordering::Acquire) && self.software.load(Ordering::Acquire) }
+}
+
+/// Whether an idle hand-over leaves a software GPU (`wgpu::DeviceType::Cpu`) alone: under
+/// `CpuFirst::Auto` with the adapter Rune's own choice. A named adapter (`Policy::Pinned`) is
+/// what was asked for, and `Only` starts no idle hand-over at all.
+pub(super) fn defers_software(mode: CpuFirst, policy: Policy) -> bool {
+    mode == CpuFirst::Auto && policy == Policy::Automatic
 }
 
 /// A failed try is made again after this long.
@@ -130,7 +165,26 @@ impl Host {
     /// The first idle turn after the window's first CPU frame: the GPU starts on its thread
     /// (`CpuFirst::Only` or `RUNE_CPU_FIRST=only`: not until a frame needs it).
     pub(in crate::window) fn cpu_idle(&mut self) {
-        if self.gpu_owed() { self.start_gpu(); }
+        if self.gpu_owed() { self.start_gpu(self.idle_defers_software()); }
+    }
+
+    /// Whether a hand-over started on idle (or retried) leaves a software GPU alone.
+    fn idle_defers_software(&self) -> bool {
+        defers_software(self.effective_cpu_first(), crate::gpu::pick::env_policy())
+    }
+
+    /// A frame needs what only the GPU draws: the GPU starts now if it hasn't, software or not.
+    /// A window left on the CPU by a software GPU starts again; a thread at work keeps the GPU it
+    /// finds.
+    pub(super) fn start_gpu_for_needs_gpu(&mut self) {
+        let Some(w) = self.win.as_mut() else { return };
+        let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
+        match job {
+            GpuJob::Building { pick, .. } => { pick.defer.store(false, Ordering::Release); return; }
+            GpuJob::SoftwareDeferred => *job = GpuJob::Waiting { tries: 0, retry_at: None },
+            GpuJob::Waiting { .. } | GpuJob::Failed => {}
+        }
+        self.start_gpu(false);
     }
 
     /// Whether the GPU is due to start now (`cpu_idle`).
@@ -141,8 +195,9 @@ impl Host {
         self.effective_cpu_first().gpu_owed(due)
     }
 
-    /// Starts making the GPU for this window on a thread.
-    pub(super) fn start_gpu(&mut self) {
+    /// Starts making the GPU for this window on a thread. `defer`: a software GPU leaves the
+    /// window on the CPU (`defers_software`).
+    pub(super) fn start_gpu(&mut self, defer: bool) {
         let Some(w) = self.win.as_ref() else { return };
         let SurfaceMode::Cpu { job: GpuJob::Waiting { tries, retry_at }, .. } = &w.native.mode else { return };
         let (tries, retried) = (*tries, retry_at.is_some());
@@ -156,7 +211,12 @@ impl Host {
         let srgb = self.app.rt().srgb_blend();
         let latest = Arc::new(Mutex::new(Latest { instances: warm_instances(&self.app.rt().instances), size: (w.config.width, w.config.height) }));
         let drawn = latest.clone();
+        let pick = Arc::new(Pick::new(defer));
+        let found = pick.clone();
         let frame = move |gpu: &Gpu, renderer: &mut Renderer| {
+            found.software.store(gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu, Ordering::Release);
+            // A GPU the window won't take draws nothing for it.
+            if found.stays_on_cpu() { return; }
             let Latest { instances, size } = std::mem::take(&mut *drawn.lock().unwrap_or_else(|e| e.into_inner()));
             // The format a window's swap chain has here (`surface_config`); in another one the
             // hand-over frame makes its pipelines itself, as it did.
@@ -170,7 +230,7 @@ impl Host {
         match started {
             Ok(()) => {
                 crate::marks::mark("gpu.window.start");
-                *job = GpuJob::Building { tries: tries + 1, latest };
+                *job = GpuJob::Building { tries: tries + 1, latest, pick };
             }
             Err(error) => self.fail_gpu(format!("its thread couldn't start: {error}"), tries + 1),
         }
@@ -181,12 +241,21 @@ impl Host {
     /// With none, the window's surface is left alone and the CPU goes on drawing.
     pub(in crate::window) fn gpu_ready(&mut self) {
         let Some(w) = self.win.as_mut() else { return };
-        let SurfaceMode::Cpu { job: GpuJob::Building { tries, .. }, .. } = &w.native.mode else { return };
-        let tries = *tries;
+        let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
+        let GpuJob::Building { tries, pick, .. } = job else { return };
+        let (tries, stays) = (*tries, pick.stays_on_cpu());
         crate::marks::mark("gpu.window.ready");
         // Every adapter refused a device: a surface made now would only ask them again, on this
         // thread, and would put a driver on a window the CPU keeps drawing.
         if !crate::render::warm_gpu_made() { return self.fail_gpu("no GPU gave a device".into(), tries); }
+        // The only GPU is a software one: the CPU renderer goes on drawing the window, and the
+        // device waits in the warm slot until it lapses or a frame that needs it takes it.
+        if stays {
+            *job = GpuJob::SoftwareDeferred;
+            crate::marks::mark("gpu.window.software_deferred");
+            if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") { eprintln!("rune: the GPU is a software one: the window stays on the CPU renderer until a frame needs the GPU"); }
+            return;
+        }
         // The switch comes before the Vulkan surface, not after it: a driver may put its own
         // objects on the window as soon as its surface or swap chain exists.
         if w.native.mode.switch().is_none() { return; }
@@ -247,7 +316,8 @@ impl Host {
     pub(in crate::window) fn watch_handover(&mut self, now: Instant) {
         let Some(w) = self.win.as_ref() else { return };
         if let SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at: Some(at), .. }, .. } = &w.native.mode && now >= *at && w.first_frame.ready() {
-            self.start_gpu();
+            let defer = self.idle_defers_software();
+            self.start_gpu(defer);
         }
     }
 }

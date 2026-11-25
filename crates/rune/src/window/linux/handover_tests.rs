@@ -1,6 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use super::{GpuJob, SurfaceMode};
+use super::{GpuJob, Pick, SurfaceMode, defers_software};
+use crate::gpu::fallback::Policy;
+use crate::window::CpuFirst;
 use crate::platform::cpu_frames::Put;
 use crate::window::linux::cpu_frame::Cpu;
 
@@ -55,7 +57,7 @@ fn orders() -> Vec<Vec<Event>> {
 
 fn building(explicit_sync: bool) -> (SurfaceMode, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let (cpu, sent) = Cpu::fake(explicit_sync);
-    (SurfaceMode::Cpu { cpu, job: GpuJob::Building { tries: 1, latest: Default::default() } }, sent)
+    (SurfaceMode::Cpu { cpu, job: GpuJob::Building { tries: 1, latest: Default::default(), pick: Default::default() } }, sent)
 }
 
 #[test]
@@ -80,7 +82,7 @@ fn the_cpu_draws_every_event_until_the_switch_and_none_after_it() {
 
 #[test]
 fn a_window_switches_once_and_only_while_its_gpu_is_being_made() {
-    for job in [GpuJob::Waiting { tries: 0, retry_at: None }, GpuJob::Failed] {
+    for job in [GpuJob::Waiting { tries: 0, retry_at: None }, GpuJob::SoftwareDeferred, GpuJob::Failed] {
         let (cpu, sent) = Cpu::fake(false);
         let mut mode = SurfaceMode::Cpu { cpu, job };
         assert_eq!(mode.switch(), None);
@@ -128,4 +130,22 @@ fn only_a_window_that_switched_goes_back() {
     assert!(!mode.switch_back(GpuJob::Failed));
     assert!(matches!(mode, SurfaceMode::Cpu { job: GpuJob::Building { tries: 1, .. }, .. }));
     assert!(!SurfaceMode::Gpu.switch_back(GpuJob::Failed));
+}
+
+#[test]
+fn only_an_automatic_auto_hand_over_leaves_a_software_gpu_alone() {
+    assert!(defers_software(CpuFirst::Auto, Policy::Automatic));
+    assert!(!defers_software(CpuFirst::Auto, Policy::Pinned));
+    assert!(!defers_software(CpuFirst::Only, Policy::Automatic));
+    assert!(!defers_software(CpuFirst::Off, Policy::Automatic));
+}
+
+#[test]
+fn a_frame_that_needs_the_gpu_takes_the_software_one_a_thread_found() {
+    let pick = Pick::new(true);
+    pick.software.store(true, Ordering::Release);
+    assert!(pick.stays_on_cpu());
+    pick.defer.store(false, Ordering::Release);
+    assert!(!pick.stays_on_cpu());
+    assert!(!Pick::new(true).stays_on_cpu());
 }

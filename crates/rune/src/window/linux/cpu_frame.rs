@@ -300,10 +300,10 @@ impl FrameHost for CpuWindowFrame<'_> {
             }
             Err(_why) => {
                 // The frame needs what only the GPU draws (a native surface, a compositor's
-                // scene): the GPU starts now if it hasn't, and the window keeps its last frame
-                // until it's there.
+                // scene): the GPU starts now if it hasn't, even a software one, and the window
+                // keeps its last frame until it's there.
                 crate::marks::mark_once(&NEEDS_GPU, "cpu_first.needs_gpu");
-                self.host.start_gpu();
+                self.host.start_gpu_for_needs_gpu();
                 self.host.idle = false;
                 if let Some(l) = self.host.win.as_mut() { l.backoff_step(BackoffEvent::At(crate::time::now() + TIMER_FRAME)); }
                 RenderPrep::Abort
