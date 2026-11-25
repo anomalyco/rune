@@ -454,34 +454,40 @@ pub(crate) mod winrt_graph {
         let factory = compositor
             .CreateEffectFactory(&color_blend)
             .map_err(|e| format!("Compositor::CreateEffectFactory: {e}"))?;
-        let ext = factory
-            .ExtendedError()
-            .map_err(|e| format!("CompositionEffectFactory::ExtendedError: {e}"))?;
-        if ext.is_err() {
-            factory.Close().ok();
-            return Err(format!("CompositionEffectFactory ExtendedError: 0x{:08x}", ext.0 as u32));
-        }
-        let status = factory
-            .LoadStatus()
-            .map_err(|e| format!("CompositionEffectFactory::LoadStatus: {e}"))?;
-        // DWM may compile the effect asynchronously (`Pending` with `ExtendedError == S_OK`);
-        // `CreateBrush()` is valid for both `Success` and `Pending`, whereas `EffectTooComplex`
-        // or `Other` (or a failing `ExtendedError`) signals real compilation failure.
-        if !matches!(
-            status,
-            CompositionEffectFactoryLoadStatus::Success
-                | CompositionEffectFactoryLoadStatus::Pending
-        ) {
-            factory.Close().ok();
-            return Err(format!("CompositionEffectFactory LoadStatus: {}", status.0));
-        }
-        let brush = factory
-            .CreateBrush()
-            .map_err(|e| format!("CompositionEffectFactory::CreateBrush: {e}"))?;
+        let brush_res = (|| {
+            let ext = factory
+                .ExtendedError()
+                .map_err(|e| format!("CompositionEffectFactory::ExtendedError: {e}"))?;
+            if ext.is_err() {
+                return Err(format!(
+                    "CompositionEffectFactory ExtendedError: 0x{:08x}",
+                    ext.0 as u32
+                ));
+            }
+            let status = factory
+                .LoadStatus()
+                .map_err(|e| format!("CompositionEffectFactory::LoadStatus: {e}"))?;
+            // DWM may compile the effect asynchronously (`Pending` with `ExtendedError == S_OK`);
+            // `CreateBrush()` is valid for both `Success` and `Pending`, whereas `EffectTooComplex`
+            // or `Other` (or a failing `ExtendedError`) signals real compilation failure.
+            if !matches!(
+                status,
+                CompositionEffectFactoryLoadStatus::Success
+                    | CompositionEffectFactoryLoadStatus::Pending
+            ) {
+                return Err(format!("CompositionEffectFactory LoadStatus: {}", status.0));
+            }
+            factory
+                .CreateBrush()
+                .map_err(|e| format!("CompositionEffectFactory::CreateBrush: {e}"))
+        })();
+        // Always close the factory handle on both success and error paths.
         factory.Close().ok();
-        brush
-            .SetSourceParameter(&HSTRING::from(BACKDROP_PARAM), backdrop)
-            .map_err(|e| format!("SetSourceParameter(Backdrop): {e}"))?;
+        let brush = brush_res?;
+        if let Err(e) = brush.SetSourceParameter(&HSTRING::from(BACKDROP_PARAM), backdrop) {
+            brush.Close().ok();
+            return Err(format!("SetSourceParameter(Backdrop): {e}"));
+        }
         Ok(brush)
     }
 }

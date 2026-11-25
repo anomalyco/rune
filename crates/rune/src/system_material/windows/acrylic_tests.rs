@@ -391,6 +391,60 @@ fn brush_choice_degrades_gracefully_to_wcag_flat_tint_on_factory_failure() {
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 #[test]
 fn real_acrylic_effect_factory_compiles_all_six_brushes_without_window() {
-    real::smoke_test_real_acrylic_factory()
-        .expect("Windows 11 Compositor must compile our D2dEffect Acrylic graph and all 6 brushes");
+    match real::probe_host() {
+        probe::HostAvailability::Available { .. } => {
+            let compiled = real::compile_all_acrylic_brushes().expect(
+                "probe reported host available, so all 6 D2dEffect Acrylic brushes must compile",
+            );
+            assert_eq!(compiled, 6);
+        }
+        avail @ probe::HostAvailability::Unavailable { .. } => {
+            eprintln!("skipping live Windows Acrylic COM test: {}", avail.summary());
+            probe_tests::assert_production_falls_back_when_probe_unavailable(avail);
+        }
+    }
+}
+
+#[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+#[test]
+fn real_acrylic_effect_factory_succeeds_across_parallel_threads_and_same_thread_repeat() {
+    match real::probe_host() {
+        probe::HostAvailability::Available { .. } => {
+            // Same thread twice: second run reuses the thread's existing DispatcherQueue cleanly.
+            assert_eq!(
+                real::compile_all_acrylic_brushes()
+                    .expect("first same-thread Acrylic compile must succeed"),
+                6
+            );
+            assert_eq!(
+                real::compile_all_acrylic_brushes()
+                    .expect("second same-thread Acrylic compile must reuse DispatcherQueue"),
+                6
+            );
+
+            // Two parallel threads simultaneously attaching per-thread DispatcherQueues + Compositors.
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let handles: Vec<_> = (0..2)
+                .map(|idx| {
+                    let b = std::sync::Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        b.wait();
+                        let count = real::compile_all_acrylic_brushes()
+                            .unwrap_or_else(|e| panic!("parallel thread {idx} failed: {e}"));
+                        assert_eq!(count, 6);
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().expect("parallel Acrylic test thread must exit cleanly");
+            }
+        }
+        avail @ probe::HostAvailability::Unavailable { .. } => {
+            eprintln!(
+                "skipping parallel/repeat live Windows Acrylic COM test: {}",
+                avail.summary()
+            );
+            probe_tests::assert_production_falls_back_when_probe_unavailable(avail);
+        }
+    }
 }

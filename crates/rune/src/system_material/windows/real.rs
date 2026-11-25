@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use windows::Foundation::Numerics::Plane;
 use windows::System::{DispatcherQueue, DispatcherQueueController};
@@ -20,6 +21,7 @@ use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
 use windows::core::{HRESULT, Interface};
 
 use super::acrylic;
+use super::probe::{self, AcrylicBrushCache, HostAvailability, HostProbeSeam};
 use super::{
     ClipKind, Controller, EffectsPolicy, MaterialInputs, State, TintMode, VisualSpec,
     WindowsMaterialSeam,
@@ -96,6 +98,91 @@ fn vec2_zero<T: Default>(_: fn(&SpriteVisual) -> windows::core::Result<T>) -> T 
     T::default()
 }
 
+/// Queries `DwmIsCompositionEnabled` (`dwmapi.h`). Synchronous, requires no COM init, and
+/// returns `Ok(false)` or an `HRESULT` error on Session 0 / headless runners without DWM.
+fn dwm_composition_enabled() -> Result<bool, String> {
+    use windows_sys::Win32::Graphics::Dwm::DwmIsCompositionEnabled;
+    use windows_sys::core::BOOL;
+    let mut enabled: BOOL = 0;
+    // SAFETY: `DwmIsCompositionEnabled` writes one Win32 `BOOL` and never blocks.
+    let hr = unsafe { DwmIsCompositionEnabled(&raw mut enabled) };
+    if hr >= 0 {
+        Ok(enabled != 0)
+    } else {
+        Err(format!("0x{:08x}", hr as u32))
+    }
+}
+
+struct RealProbeSeam;
+
+impl HostProbeSeam for RealProbeSeam {
+    type Compositor = Compositor;
+    type BackdropBrush = CompositionBackdropBrush;
+
+    fn windows_build(&mut self) -> Option<u32> {
+        crate::platform::win32::dark_mode::windows_build()
+    }
+
+    fn dwm_composition_enabled(&mut self) -> Result<bool, String> {
+        dwm_composition_enabled()
+    }
+
+    fn ensure_dispatcher_queue(&mut self) -> Result<(), String> {
+        ensure_dispatcher_queue()
+    }
+
+    fn create_compositor(&mut self) -> Result<Self::Compositor, String> {
+        Compositor::new().map_err(|e| format!("Compositor::new: {e}"))
+    }
+
+    fn create_host_backdrop_brush(
+        &mut self,
+        compositor: &Self::Compositor,
+    ) -> Result<Self::BackdropBrush, String> {
+        compositor
+            .CreateHostBackdropBrush()
+            .map_err(|e| format!("CreateHostBackdropBrush: {e}"))
+    }
+
+    fn close_backdrop_brush(&mut self, brush: Self::BackdropBrush) {
+        brush.Close().ok();
+    }
+
+    fn close_compositor(&mut self, compositor: Self::Compositor) {
+        compositor.Close().ok();
+    }
+}
+
+#[cfg(test)]
+impl probe::AcrylicFactorySeam for RealProbeSeam {
+    type EffectBrush = CompositionEffectBrush;
+
+    fn create_acrylic_brush(
+        &mut self,
+        compositor: &Self::Compositor,
+        backdrop: &Self::BackdropBrush,
+        material: SystemMaterial,
+        dark: bool,
+    ) -> Result<Self::EffectBrush, String> {
+        acrylic::winrt_graph::create_acrylic_brush(compositor, backdrop, material, dark)
+    }
+
+    fn close_effect_brush(&mut self, brush: Self::EffectBrush) {
+        brush.Close().ok();
+    }
+}
+
+static HOST_AVAILABILITY: OnceLock<HostAvailability> = OnceLock::new();
+
+/// Single cached host-availability probe shared by production (`RealSeam`) and the live COM
+/// tests. Runs lazily at most once per process, closes every COM object it creates, and never
+/// panics or hangs.
+pub(super) fn probe_host() -> HostAvailability {
+    HOST_AVAILABILITY
+        .get_or_init(|| probe::probe_host_with(&mut RealProbeSeam))
+        .clone()
+}
+
 /// Sets `DwmSetWindowAttribute(hwnd, DWMWA_USE_HOSTBACKDROPBRUSH, &enabled, 4)`.
 fn set_dwm_host_backdrop(hwnd: isize, enabled: bool) -> Result<(), String> {
     use windows_sys::Win32::Foundation::HWND as SysHwnd;
@@ -161,16 +248,14 @@ struct TargetState {
     target: DesktopWindowTarget,
     root: ContainerVisual,
     brush: CompositionBackdropBrush,
-    /// At most 6 lazily created Acrylic effect brushes keyed by `(SystemMaterial, dark)`.
-    acrylic_brushes: HashMap<(SystemMaterial, bool), CompositionEffectBrush>,
-    /// Latched true if `CreateEffectFactory` / `ExtendedError()` / `CreateBrush` failed once,
-    /// degrading gracefully to WCAG >=4.5:1 flat tint rather than raw blur or `State::Failed`.
-    acrylic_failed: bool,
+    /// At most 6 lazily created Acrylic effect brushes keyed by `(SystemMaterial, dark)`;
+    /// closes cached brushes and latches flat-tint fallback on failure.
+    acrylic_cache: AcrylicBrushCache<CompositionEffectBrush>,
     visuals: HashMap<usize, RealSlot>,
 }
 
 impl TargetState {
-    fn close(self) {
+    fn close(mut self) {
         // Best-effort teardown of WinRT composition objects (may already be closed on device loss).
         for (_, slot) in self.visuals {
             slot.clip.close();
@@ -180,9 +265,9 @@ impl TargetState {
             }
             slot.visual.Close().ok();
         }
-        for (_, brush) in self.acrylic_brushes {
+        self.acrylic_cache.clear_with(|brush| {
             brush.Close().ok();
-        }
+        });
         self.target.SetRoot(None).ok();
         self.target.Close().ok();
         self.root.Close().ok();
@@ -195,30 +280,24 @@ impl TargetState {
         material: SystemMaterial,
         dark: bool,
     ) -> Option<&CompositionEffectBrush> {
-        if self.acrylic_failed {
-            return None;
-        }
-        let key = (material, dark);
-        if !self.acrylic_brushes.contains_key(&key) {
-            match acrylic::winrt_graph::create_acrylic_brush(
-                &self.compositor,
-                &self.brush,
-                material,
-                dark,
-            ) {
-                Ok(brush) => {
-                    self.acrylic_brushes.insert(key, brush);
-                }
-                Err(err) => {
-                    eprintln!(
-                        "rune: Windows Acrylic effect factory unavailable; falling back to flat tint: {err}"
-                    );
-                    self.acrylic_failed = true;
-                    return None;
-                }
+        let compositor = &self.compositor;
+        let backdrop = &self.brush;
+        match self.acrylic_cache.get_or_create(
+            material,
+            dark,
+            |m, d| acrylic::winrt_graph::create_acrylic_brush(compositor, backdrop, m, d),
+            |brush| {
+                brush.Close().ok();
+            },
+        ) {
+            Ok(brush) => brush,
+            Err(err) => {
+                eprintln!(
+                    "rune: Windows Acrylic effect factory unavailable; falling back to flat tint: {err}"
+                );
+                None
             }
         }
-        self.acrylic_brushes.get(&key)
     }
 }
 
@@ -228,6 +307,10 @@ struct RealSeam<'a> {
 }
 
 impl WindowsMaterialSeam for RealSeam<'_> {
+    fn probe_host(&mut self) -> HostAvailability {
+        probe_host()
+    }
+
     fn set_handover_topmost(&mut self, hwnd: isize, topmost: bool) -> Result<(), String> {
         match self.handover.as_deref_mut() {
             Some(handover) => handover.set_topmost(hwnd, topmost),
@@ -242,26 +325,53 @@ impl WindowsMaterialSeam for RealSeam<'_> {
     fn create_target(&mut self, hwnd: isize) -> Result<(), String> {
         ensure_dispatcher_queue()?;
         let compositor = Compositor::new().map_err(|e| format!("Compositor::new: {e}"))?;
-        let interop: ICompositorDesktopInterop =
-            compositor.cast().map_err(|e| format!("cast ICompositorDesktopInterop: {e}"))?;
+        let interop: ICompositorDesktopInterop = match compositor.cast() {
+            Ok(i) => i,
+            Err(e) => {
+                compositor.Close().ok();
+                return Err(format!("cast ICompositorDesktopInterop: {e}"));
+            }
+        };
         // SAFETY: `hwnd` is a live window of this process whose non-topmost composition target
         // slot was freed by moving `Handover` to `topmost = true`.
-        let target = unsafe { interop.CreateDesktopWindowTarget(HWND(hwnd as *mut _), false) }
-            .map_err(|e| format!("CreateDesktopWindowTarget: {e}"))?;
-        let root = compositor
-            .CreateContainerVisual()
-            .map_err(|e| format!("CreateContainerVisual: {e}"))?;
-        target.SetRoot(&root).map_err(|e| format!("DesktopWindowTarget::SetRoot: {e}"))?;
-        let brush = compositor
-            .CreateHostBackdropBrush()
-            .map_err(|e| format!("CreateHostBackdropBrush: {e}"))?;
+        let target = match unsafe { interop.CreateDesktopWindowTarget(HWND(hwnd as *mut _), false) }
+        {
+            Ok(t) => t,
+            Err(e) => {
+                compositor.Close().ok();
+                return Err(format!("CreateDesktopWindowTarget: {e}"));
+            }
+        };
+        let root = match compositor.CreateContainerVisual() {
+            Ok(r) => r,
+            Err(e) => {
+                target.Close().ok();
+                compositor.Close().ok();
+                return Err(format!("CreateContainerVisual: {e}"));
+            }
+        };
+        if let Err(e) = target.SetRoot(&root) {
+            root.Close().ok();
+            target.Close().ok();
+            compositor.Close().ok();
+            return Err(format!("DesktopWindowTarget::SetRoot: {e}"));
+        }
+        let brush = match compositor.CreateHostBackdropBrush() {
+            Ok(b) => b,
+            Err(e) => {
+                target.SetRoot(None).ok();
+                root.Close().ok();
+                target.Close().ok();
+                compositor.Close().ok();
+                return Err(format!("CreateHostBackdropBrush: {e}"));
+            }
+        };
         *self.target = Some(TargetState {
             compositor,
             target,
             root,
             brush,
-            acrylic_brushes: HashMap::new(),
-            acrylic_failed: false,
+            acrylic_cache: AcrylicBrushCache::new(),
             visuals: HashMap::new(),
         });
         Ok(())
@@ -575,29 +685,8 @@ impl Materials {
 }
 
 #[cfg(test)]
-pub(super) fn smoke_test_real_acrylic_factory() -> Result<(), String> {
-    ensure_dispatcher_queue()?;
-    let compositor = Compositor::new().map_err(|e| format!("Compositor::new: {e}"))?;
-    let backdrop = compositor
-        .CreateHostBackdropBrush()
-        .map_err(|e| format!("CreateHostBackdropBrush: {e}"))?;
-    let mut brushes = Vec::new();
-    for material in [SystemMaterial::Glass, SystemMaterial::Popover, SystemMaterial::Sidebar] {
-        for dark in [false, true] {
-            brushes.push(acrylic::winrt_graph::create_acrylic_brush(
-                &compositor,
-                &backdrop,
-                material,
-                dark,
-            )?);
-        }
-    }
-    for b in brushes {
-        b.Close().ok();
-    }
-    backdrop.Close().ok();
-    compositor.Close().ok();
-    Ok(())
+pub(super) fn compile_all_acrylic_brushes() -> Result<usize, String> {
+    probe::compile_all_acrylic_brushes_with(&mut RealProbeSeam)
 }
 
 impl Drop for Materials {

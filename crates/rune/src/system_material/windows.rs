@@ -317,6 +317,10 @@ pub(crate) enum State {
     /// A DWM or COM call failed on `hwnd`: rolled back to idle resources and latched failed for
     /// this HWND so later frames draw fallback fills with zero seam calls.
     Failed { hwnd: isize },
+    /// The single host-availability probe declared this host unable to run Windows 11
+    /// `HostBackdropBrush` materials (e.g. Windows 10 or Session 0 / headless runner): remembered
+    /// permanently so later frames draw fallback fills with zero probes or seam calls.
+    HostUnavailable,
 }
 
 /// Lifecycle events for the Windows system-material host state machine.
@@ -337,6 +341,11 @@ pub(crate) enum Event {
     /// Activation failed on `hwnd`: latch failed for this HWND and rebuild fallback if mounted.
     ActivationFailed {
         hwnd: isize,
+        found: bool,
+    },
+    /// The single host-availability probe returned `Unavailable`: latch permanently for this
+    /// controller so later frames never retry the probe or touch `Handover`.
+    HostProbeUnavailable {
         found: bool,
     },
     /// GPU device loss: tear down active visuals and clear any failure latch.
@@ -362,6 +371,7 @@ pub(crate) enum Effect {
 /// Pure state transition function for the Windows system-material lifecycle.
 pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
     match (*state, event) {
+        (State::HostUnavailable, _) => Effects::none(),
         (State::Idle, Event::Frame { hwnd: Some(hwnd), inputs, found: true }) if eligible(inputs) => {
             *state = State::Active { hwnd };
             Effects::two(Effect::Activate { hwnd }, Effect::RebuildFrame)
@@ -398,6 +408,10 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
             Effects::one(Effect::RequestRedraw)
         }
         (_, Event::PolicyChanged { .. }) => Effects::none(),
+        (_, Event::HostProbeUnavailable { found }) => {
+            *state = State::HostUnavailable;
+            if found { Effects::one(Effect::RebuildFrame) } else { Effects::none() }
+        }
         (_, Event::ActivationFailed { hwnd, found }) => {
             *state = State::Failed { hwnd };
             if found { Effects::one(Effect::RebuildFrame) } else { Effects::none() }
@@ -417,6 +431,11 @@ pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
 /// Narrow seam isolating all Win32 DWM, DirectComposition target-slot switching, and
 /// `Windows.UI.Composition` operations for off-screen unit testing on every platform.
 pub(crate) trait WindowsMaterialSeam {
+    /// Runs the single host-availability probe before touching `Handover` or DWM.
+    /// Production overrides this with the cached OS probe; test mocks default to `Available`.
+    fn probe_host(&mut self) -> probe::HostAvailability {
+        probe::HostAvailability::Available { build: MIN_HOST_BACKDROP_BUILD }
+    }
     /// Moves Rune's DirectComposition swap-chain target (`Handover`) to `topmost` (`true` = above
     /// child/non-topmost targets, `false` = default slot).
     fn set_handover_topmost(&mut self, hwnd: isize, topmost: bool) -> Result<(), String>;
@@ -465,6 +484,7 @@ pub(crate) struct Controller {
     clip: ClipKind,
     tint: TintMode,
     pub(super) state: State,
+    host_availability: Option<probe::HostAvailability>,
     had_materials: bool,
     next_slot_id: usize,
     slots: Vec<PooledSlot>,
@@ -477,6 +497,7 @@ impl Controller {
             clip,
             tint,
             state: State::Idle,
+            host_availability: None,
             had_materials: false,
             next_slot_id: 0,
             slots: Vec::new(),
@@ -495,6 +516,11 @@ impl Controller {
     #[cfg(test)]
     pub(crate) fn state(&self) -> State {
         self.state
+    }
+
+    #[cfg(test)]
+    pub(crate) fn host_availability(&self) -> Option<&probe::HostAvailability> {
+        self.host_availability.as_ref()
     }
 
     /// Called after layout/paint (before render) to activate or tear down native backdrop visuals.
@@ -516,6 +542,22 @@ impl Controller {
         for effect in effects {
             match effect {
                 Effect::Activate { hwnd } => {
+                    if self.host_availability.is_none() {
+                        self.host_availability = Some(seam.probe_host());
+                    }
+                    if let Some(avail @ probe::HostAvailability::Unavailable { .. }) =
+                        self.host_availability.as_ref()
+                    {
+                        eprintln!(
+                            "rune: Windows system material unavailable ({}); using fallback fill",
+                            avail.summary()
+                        );
+                        let fail_effects = step(
+                            &mut self.state,
+                            Event::HostProbeUnavailable { found: was_active && found },
+                        );
+                        return fail_effects.into_iter().any(|e| e == Effect::RebuildFrame);
+                    }
                     if let Err(err) = self.activate(hwnd, seam) {
                         eprintln!("rune: Windows system material activation failed: {err}");
                         // Only request a fallback rebuild when we were previously active (switching
@@ -728,6 +770,7 @@ impl Controller {
 pub(crate) mod acrylic;
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 mod policy;
+pub(crate) mod probe;
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 mod real;
 
@@ -738,5 +781,7 @@ pub(crate) use real::Materials;
 
 #[cfg(test)]
 mod acrylic_tests;
+#[cfg(test)]
+mod probe_tests;
 #[cfg(test)]
 mod tests;
