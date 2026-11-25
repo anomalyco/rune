@@ -300,9 +300,9 @@ impl Caption {
         Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: crate::labels::rtl(), layout: None, edges: false }
     }
 
-    /// The caption of Rune's own frame on Linux (`linux`) for a window in this state: `layout`'s buttons, at the
-    /// left when the layout puts them there (the right, in an app that reads right to left), and
-    /// resize edges while the window floats.
+    /// The caption of Rune's own frame on Linux (`linux`) for a window in this state:
+    /// `layout`'s buttons, at the left when the layout puts them there (the right, in an app
+    /// that reads right to left), and resize edges while the window floats.
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
     pub(crate) fn own_frame(height: f32, layout: linux::ButtonLayout, window: linux::WindowState) -> Self {
         Self {
