@@ -429,6 +429,10 @@ impl RuntimeCore {
     }
 
     pub(crate) fn descendant_label(&self, root: usize, end: usize) -> String {
+        self.descendant_label_with_mask(root, end, None)
+    }
+
+    fn descendant_label_with_mask(&self, root: usize, end: usize, mask: Option<&crate::a11y::node::A11yModalMask>) -> String {
         let mut parts = Vec::new();
         let mut j = root;
         while j < end {
@@ -437,7 +441,11 @@ impl RuntimeCore {
                 j = self.subtree_end(j).min(end);
                 continue;
             }
-            if !self.allowed(j) || self.subtree_exiting(j) || n.vis.opacity <= 0.01
+            let modal_ok = match mask {
+                Some(m) => !n.inert && m.visible(j),
+                None => self.allowed(j),
+            };
+            if !modal_ok || self.subtree_exiting(j) || n.vis.opacity <= 0.01
                 || (j > root && (n.a11y.hidden || n.handlers.on_press.is_some() || n.role == "button" || roles::web_control_role(n.role).is_some()))
             {
                 j = if j > root { self.subtree_end(j).min(end) } else { j + 1 };
@@ -501,6 +509,7 @@ impl RuntimeCore {
         let mut inline: Option<Inline> = None;
         let ends = self.subtree_ends();
         let selects = self.page_text_selects();
+        let modal_mask = self.a11y_modal_mask();
         // Open containers: (end of their node subtree, their item index).
         let mut open: Vec<(usize, usize)> = Vec::new();
         // Open scrollers and their drawn scroll shift [sx, sy] in view points: added back so
@@ -516,14 +525,21 @@ impl RuntimeCore {
             let parent = open.last().map(|&(_, item)| item);
             let n = &self.tree.nodes[i];
             let end = ends[i];
-            // An open modal's ancestors (the root among them) are outside its scope but hold it:
-            // go into them, saying nothing of them, so the modal is mirrored and the rest isn't.
-            if !n.inert && !self.modal_member(i) && self.modal_ancestor(i, end) {
-                i += 1;
+            if let Some(mask) = &modal_mask
+                && !mask.included[i]
+                && !mask.outer_modal[i]
+            {
+                // Non-modal ancestors holding an open modal or kept popup trigger are entered
+                // silently; everything else outside the modal is omitted.
+                if !n.inert && !self.subtree_exiting(i) && n.vis.opacity > 0.01 && !n.a11y.hidden && mask.ancestor[i] {
+                    i += 1;
+                } else {
+                    i = end;
+                }
                 last_flow_parent = None;
                 continue;
             }
-            if !self.allowed(i) || self.subtree_exiting(i) || n.vis.opacity <= 0.01 || n.a11y.hidden
+            if n.inert || self.subtree_exiting(i) || n.vis.opacity <= 0.01 || n.a11y.hidden
                 || matches!(n.role, "none" | "presentation")
             {
                 i = end;
@@ -613,7 +629,7 @@ impl RuntimeCore {
                 continue;
             }
             if let Some(href) = raw_href.and_then(|u| crate::open_url::check_href(u).ok()) {
-                let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
+                let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label_with_mask(i, end, modal_mask.as_ref()));
                 if !label.is_empty() && rect[2] > 0.0 && rect[3] > 0.0 {
                     let mut item = A11yItem::new("link", &n.path, rect);
                     item.text = label;
@@ -679,7 +695,7 @@ impl RuntimeCore {
                     || roles::web_control_role(self.tree.nodes[j].role).is_some()
             });
             if button_like && (!nested_press || control_role.is_some()) && rect[2] > 0.0 && rect[3] > 0.0 {
-                let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, end));
+                let label = self.mirror_name(i).unwrap_or_else(|| self.descendant_label_with_mask(i, end, modal_mask.as_ref()));
                 let value = self.mirror_value(i).unwrap_or_default().to_owned();
                 if !label.is_empty() || !value.is_empty() {
                     let mut item = A11yItem::new("button", &n.path, rect);

@@ -14,6 +14,8 @@ mod image_proof;
 #[cfg(target_arch = "wasm32")]
 mod input_proof;
 #[cfg(target_arch = "wasm32")]
+mod popup_modal_proof;
+#[cfg(target_arch = "wasm32")]
 mod rtl_proof;
 
 struct State {
@@ -89,6 +91,8 @@ pub fn start() {
     if a11y_proof::enabled() { a11y_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if aria_proof::enabled() { aria_proof::run(); return; }
+    #[cfg(target_arch = "wasm32")]
+    if popup_modal_proof::enabled() { popup_modal_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if rtl_proof::enabled() { rtl_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]

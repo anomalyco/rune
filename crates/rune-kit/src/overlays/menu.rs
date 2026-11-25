@@ -445,9 +445,16 @@ impl Menu {
         // A dropdown's trigger reads as open or closed; a context menu's is just where it opened.
         let open = self.open;
         let pointer = self.context || self.at.is_some();
+        let menu_key = format!("{}-menu", self.key);
         let trigger = anchor_trigger(
             anchor_key.clone(),
-            self.trigger.take().map(|t| if pointer { t } else { t.expanded(open) }),
+            self.trigger.take().map(|t| {
+                if pointer {
+                    t
+                } else {
+                    t.expanded(open).has_popup(rune::HasPopup::Menu).controls(menu_key)
+                }
+            }),
         );
         if !self.open {
             return trigger;
@@ -455,7 +462,7 @@ impl Menu {
         let (placement, gutter, key) = match self.at {
             Some((x, y)) => {
                 let point = format!("{}-point", self.key);
-                layer.push(el().key(point.clone()).absolute(x, y).size(0.0, 0.0));
+                layer.push(el().key(point.clone()).absolute(x, y).size(0.0, 0.0).a11y_hidden());
                 (Placement::BottomStart, 0.0, point)
             }
             None => (self.placement, self.gutter, anchor_key.clone()),

@@ -91,6 +91,19 @@ fn kit_menu_and_disabled_button_mirror_roles_and_disabled_state() {
         .unwrap_or_else(|| panic!("missing Disabled item menuitem: {items:?}"));
     assert_eq!(disabled_item.get("dis"), Some(&json!(true)));
     assert!(inside_menu(disabled_item), "Disabled item menuitem must sit inside menu container: {items:?}");
+
+    let trigger_item = items
+        .iter()
+        .find(|v| v["k"] == "button" && v["t"] == "Actions")
+        .unwrap_or_else(|| panic!("menu trigger must stay readable in web mirror: {items:?}"));
+    assert_eq!(trigger_item.get("x"), Some(&json!(true)));
+    assert_eq!(trigger_item.get("hp"), Some(&json!("menu")));
+    assert_eq!(trigger_item.get("ct"), Some(&json!("actions-menu")));
+    assert_eq!(trigger_item.get("dis"), None);
+    assert!(
+        !items.iter().any(|v| v["t"] == "Disabled button"),
+        "unrelated background button stays hidden in web mirror: {items:?}",
+    );
 }
 
 #[test]

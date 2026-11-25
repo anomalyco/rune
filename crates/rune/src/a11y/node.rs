@@ -13,6 +13,23 @@ use crate::runtime::RuntimeCore;
 /// Text named from an element's content stops here.
 const NAME_MAX: usize = 400;
 
+/// Which nodes stay visible in the accessibility tree and web mirror while an `El::modal` is
+/// open. Active modal members and (for anchored popup modals such as `menu` or `listbox`)
+/// their anchor trigger subtrees are in `included`; `outer_modal` marks enclosing outer modals
+/// that contain a kept trigger; `ancestor` marks all strict ancestors of `included` nodes.
+pub(crate) struct A11yModalMask {
+    pub(crate) included: Vec<bool>,
+    pub(crate) outer_modal: Vec<bool>,
+    pub(crate) ancestor: Vec<bool>,
+}
+
+impl A11yModalMask {
+    #[inline]
+    pub(crate) fn visible(&self, i: usize) -> bool {
+        self.included[i] || self.ancestor[i]
+    }
+}
+
 impl RuntimeCore {
     /// Node `i`'s role in the tree, or `None` when it joins its parent.
     pub(crate) fn a11y_role(&self, i: usize) -> Option<Role> {
@@ -295,7 +312,10 @@ impl RuntimeCore {
             Some(crate::LiveRegion::Off) => node.set_live(Live::Off),
             None => {}
         }
-        if modal { node.set_modal(); }
+        // Per WAI-ARIA 1.2 and Chromium Blink (`AXObject::IsModal`), only `dialog` and
+        // `alertdialog` carry the modal state; popup widgets (`menu`, `listbox`, `tree`,
+        // `grid`, `treegrid`) do not.
+        if modal && matches!(role, Role::Dialog | Role::AlertDialog) { node.set_modal(); }
         if !enabled { node.set_disabled(); }
         // Bounds: a scroll viewport's own box sits in the space its offset moves.
         let mut shift = w.shift;
@@ -351,7 +371,7 @@ impl RuntimeCore {
                 }
             }
         }
-        if w.scrolled { node.add_action(Ak::ScrollIntoView); }
+        if w.scrolled && self.allowed(i) { node.add_action(Ak::ScrollIntoView); }
         if let Some(input) = input { self.a11y_input(i, input, &mut node); }
         node
     }
@@ -388,6 +408,65 @@ impl RuntimeCore {
         self.live_named(None, key).filter(|&j| usable(j))
     }
 
+    /// Whether modal node `i` is an anchored popup widget (`menu`, `listbox`, `tree`,
+    /// `grid`, or `treegrid`) that keeps its trigger readable in the accessibility tree.
+    fn is_anchored_popup_modal(&self, i: usize) -> bool {
+        self.has_anchor(i) && self.a11y_role(i).is_some_and(roles::popup_modal)
+    }
+
+    /// Accessibility visibility mask while an `El::modal` is active, or `None` when no modal
+    /// is open. Modal dialogs keep only their members and ancestors; anchored popup modals
+    /// (`menu`, `listbox`, `tree`, `grid`, `treegrid`) also keep their anchor trigger subtree
+    /// and any enclosing outer modal readable (inert to actions).
+    pub(crate) fn a11y_modal_mask(&self) -> Option<A11yModalMask> {
+        let active = self.active_modal()?;
+        let n_nodes = self.tree.nodes.len();
+        let mut included = (0..n_nodes).map(|i| self.modal_member(i)).collect::<Vec<_>>();
+        let mut outer_modal = vec![false; n_nodes];
+        if self.is_anchored_popup_modal(active) {
+            let mut queue = vec![active];
+            let mut followed = vec![false; n_nodes];
+            let mut steps = 0usize;
+            while let Some(overlay) = queue.pop() {
+                if followed[overlay] || steps >= crate::runtime::anchor::MAX_ANCHOR_CHAIN {
+                    continue;
+                }
+                followed[overlay] = true;
+                steps += 1;
+                let Some(anchor) = self.anchor_of(overlay) else { continue };
+                let end = self.subtree_end(anchor);
+                for slot in &mut included[anchor..end] {
+                    *slot = true;
+                }
+                let mut p = self.tree.nodes[anchor].parent;
+                while let Some(a) = p {
+                    let an = &self.tree.nodes[a];
+                    let is_modal = an.handlers.get().is_some_and(|h| h.modal.is_some());
+                    if is_modal && !self.modal_member(a) {
+                        outer_modal[a] = true;
+                    }
+                    if self.has_anchor(a)
+                        && !followed[a]
+                        && (!is_modal || self.is_anchored_popup_modal(a))
+                    {
+                        queue.push(a);
+                    }
+                    p = an.parent;
+                }
+            }
+        }
+        let mut ancestor = vec![false; n_nodes];
+        for (i, &inc) in included.iter().enumerate() {
+            if !inc { continue; }
+            let mut p = self.tree.nodes[i].parent;
+            while let Some(j) = p.filter(|&j| !ancestor[j]) {
+                ancestor[j] = true;
+                p = self.tree.nodes[j].parent;
+            }
+        }
+        Some(A11yModalMask { included, outer_modal, ancestor })
+    }
+
     /// Whether node `j` appears in the accessibility tree (not hidden, exiting, unmounted,
     /// transparent, inside a secure ancestor, occluded by a modal, or role-omitted).
     fn a11y_in_tree(&self, j: usize) -> bool {
@@ -403,7 +482,10 @@ impl RuntimeCore {
             }
             p = an.parent;
         }
-        if self.active_modal().is_some() && !self.modal_member(j) {
+        if self.active_modal().is_some()
+            && !self.modal_member(j)
+            && !self.a11y_modal_mask().is_some_and(|m| m.visible(j))
+        {
             return false;
         }
         self.a11y_role(j).is_some()

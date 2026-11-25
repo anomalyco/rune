@@ -61,7 +61,7 @@ pub(crate) fn handler_state_ref<S: 'static>(state: &S) -> &dyn Any {
 pub(crate) mod driver;
 pub(crate) use driver::{AppDriver, AppRef, AppRefMut, RuntimeHooks, ViewDriver};
 
-mod anchor;
+pub(crate) mod anchor;
 mod api;
 mod commit;
 mod cx;
