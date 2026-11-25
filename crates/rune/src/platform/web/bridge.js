@@ -1361,7 +1361,7 @@ function safeHref(url) {
     return null;
 }
 
-const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div' };
+const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div', textbox: 'div' };
 const RANGE_ROLES = new Set(['slider', 'spinbutton', 'progressbar', 'meter', 'scrollbar']);
 
 function family(name) {
@@ -1426,7 +1426,7 @@ function itemStyle(h, item, origin) {
     if (item.k === 'link') return css + (item.dis
         ? 'display:block;overflow:hidden;text-decoration:none;pointer-events:none;font:14px/1.25 sans-serif;'
         : 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;');
-    if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
+    if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar' || item.k === 'textbox') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
     const fs = item.s || 14;
     if (!item.f) return css + `font:${fs}px/1.25 sans-serif;overflow:hidden;white-space:pre-wrap;pointer-events:none;`;
     const [fam, weight, lh, tracking, italic, align] = item.f;
@@ -1477,10 +1477,25 @@ function ensureA11yNode(h, item, tag, key) {
             el.addEventListener('click', ev => {
                 ev.preventDefault();
                 if (el.getAttribute('aria-disabled') === 'true') return;
-                h.send({ kind: 'a11y_press', path: item.p });
+                h.send({ kind: 'a11y_press', path: el._a11yPath });
             });
         }
         h.a11yNodes.set(key, el);
+    }
+    if (item.k === 'textbox' && !el._textboxBound) {
+        el._textboxBound = true;
+        el.tabIndex = h.page ? 0 : -1;
+        const focusField = () => {
+            if (el.getAttribute('aria-disabled') === 'true' || h.disposed || h.syncing) return;
+            h.send({ kind: 'a11y_press', path: el._a11yPath });
+        };
+        el.addEventListener('click', ev => {
+            ev.preventDefault();
+            focusField();
+        });
+        el.addEventListener('focus', () => {
+            focusField();
+        });
     }
     el._a11yPath = item.p;
     h.a11yByPath.set(item.p, el);
@@ -1518,6 +1533,10 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-valuetext', item.vt],
         ['aria-multiselectable', item.ms ? 'true' : undefined],
         ['aria-required', item.rq ? 'true' : undefined],
+        ['aria-multiline', item.ml ? 'true' : undefined],
+        ['aria-readonly', item.ro ? 'true' : undefined],
+        ['aria-invalid', item.inv ? 'true' : undefined],
+        ['aria-placeholder', item.ph],
         ['aria-haspopup', item.hp],
         ['aria-orientation', item.or],
         ['aria-autocomplete', item.ac],
@@ -1575,8 +1594,9 @@ function applyA11yItem(h, el, item, tag, origin) {
         }
     }
     const combobox = item.k === 'button' && item.o === 'combobox';
+    const textbox = item.k === 'textbox';
     const rangeControl = item.k === 'button' && (item.o === 'slider' || item.o === 'spinbutton');
-    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox || rangeControl) {
+    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox || textbox || rangeControl) {
         if (item.t) {
             if (el.getAttribute('aria-label') !== item.t) el.setAttribute('aria-label', item.t);
         } else if (el.getAttribute('aria-label') !== null) {
@@ -1617,7 +1637,7 @@ function applyA11yItem(h, el, item, tag, origin) {
     syncScrollContent(el, item.k === 'group' ? item.sc : null);
     const container = item.k === 'group' || item.k === 'scroll_x';
     const noContent = container || item.k === 'image' || item.k === 'progressbar';
-    const content = combobox ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
+    const content = (combobox || textbox) ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
     const sig = noContent ? '' : item.u?.length ? `${item.dis ? '1' : '0'}:${JSON.stringify(item.u)}` : content;
     if (!noContent && el._sig !== sig) {
         el._sig = sig;
@@ -1785,6 +1805,33 @@ function clearMirrorSelection(h) {
     h.mirrorSel = false;
 }
 
+function clearFocusProxy(el) {
+    for (const a of [...el.attributes]) {
+        if (a.name === 'role' || a.name.startsWith('aria-') || a.name === 'data-rune-selection') {
+            el.removeAttribute(a.name);
+        }
+    }
+    el.textContent = '';
+}
+
+function syncFieldA11y(field, f, defaultLabel) {
+    field.setAttribute('aria-label', (f && f.t) || defaultLabel);
+    const attrs = [
+        ['aria-description', f?.d || undefined],
+        ['aria-disabled', f?.dis ? 'true' : undefined],
+        ['aria-readonly', f?.ro ? 'true' : undefined],
+        ['aria-invalid', f?.inv ? 'true' : undefined],
+        ['aria-required', f?.rq ? 'true' : undefined],
+        ['aria-placeholder', f?.ph || undefined],
+        ['aria-autocomplete', f?.ac || undefined],
+        ['aria-multiline', field.tagName === 'TEXTAREA' && f ? (f.ml ? 'true' : 'false') : undefined],
+    ];
+    for (const [name, value] of attrs) {
+        if (value === undefined) field.removeAttribute(name);
+        else field.setAttribute(name, value);
+    }
+}
+
 export function focusA11y(h, json) {
     if (h.disposed || h.page) return;
     const f = json ? JSON.parse(json) : null;
@@ -1802,16 +1849,35 @@ export function focusA11y(h, json) {
     }
     if (!f) {
         h.canvas.removeAttribute('aria-activedescendant');
-        h.textarea.removeAttribute('aria-autocomplete');
+        h.textarea.removeAttribute('aria-activedescendant');
+        for (const p of h.focusProxies) clearFocusProxy(p);
+        syncFieldA11y(h.textarea, null, 'Text input');
+        syncFieldA11y(h.password, null, 'Password input');
         clearMirrorSelection(h);
         return;
     }
-    if (f.o === 'textbox') h.textarea.setAttribute('aria-label', f.t || 'Text input');
+    if (f.o === 'textbox' && !f.f) {
+        // The bridge's real <textarea> or <input type="password"> is the sole active control:
+        // clear the canvas focus proxies so no duplicate textbox node appears in the tree.
+        h.canvas.removeAttribute('aria-activedescendant');
+        h.textarea.removeAttribute('aria-activedescendant');
+        for (const p of h.focusProxies) clearFocusProxy(p);
+        if (f.sec) {
+            syncFieldA11y(h.password, f, 'Password input');
+            syncFieldA11y(h.textarea, null, 'Text input');
+        } else {
+            syncFieldA11y(h.textarea, f, 'Text input');
+            syncFieldA11y(h.password, null, 'Password input');
+        }
+        clearMirrorSelection(h);
+        return;
+    }
+    syncFieldA11y(h.password, null, 'Password input');
     if (f.f) h.textarea.setAttribute('aria-label', f.f);
+    clearFocusProxy(h.focusProxies[h.focusTurn]);
     h.focusTurn ^= 1;
     const el = h.focusProxies[h.focusTurn];
-    for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-') || a.name === 'data-rune-selection') el.removeAttribute(a.name);
-    el.textContent = '';
+    clearFocusProxy(el);
     el.setAttribute('role', f.o);
     el.setAttribute('aria-label', f.t ?? '');
     if (f.d) el.setAttribute('aria-description', f.d);
@@ -1825,6 +1891,9 @@ export function focusA11y(h, json) {
     if (f.b) el.setAttribute('aria-busy', 'true');
     if (f.ms) el.setAttribute('aria-multiselectable', 'true');
     if (f.rq) el.setAttribute('aria-required', 'true');
+    if (f.ml) el.setAttribute('aria-multiline', 'true');
+    if (f.inv) el.setAttribute('aria-invalid', 'true');
+    if (f.ph) el.setAttribute('aria-placeholder', f.ph);
     if (f.hp) el.setAttribute('aria-haspopup', f.hp);
     if (f.or) el.setAttribute('aria-orientation', f.or);
     if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
@@ -1854,9 +1923,8 @@ export function focusA11y(h, json) {
     }
     h.canvas.setAttribute('aria-activedescendant', el.id);
     // Typing in a field whose highlighted row this is (the palette): the field says it too.
-    if (f.o !== 'textbox') h.textarea.setAttribute('aria-activedescendant', el.id);
-    else h.textarea.removeAttribute('aria-activedescendant');
-    const taAc = f.fac ?? ((f.o === 'textbox' || f.o === 'combobox') ? f.ac : undefined);
+    h.textarea.setAttribute('aria-activedescendant', el.id);
+    const taAc = f.fac ?? (f.o === 'combobox' ? f.ac : undefined);
     if (taAc) h.textarea.setAttribute('aria-autocomplete', taAc);
     else h.textarea.removeAttribute('aria-autocomplete');
 }

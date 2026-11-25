@@ -3035,3 +3035,80 @@ test('coarse-pointer focus sites set inputMode=text and inert=false before focus
         bridge.destroy(h);
     }
 });
+
+test('syncA11y mirrors unfocused textboxes, forwards click/focus to a11y_press, and focusA11y syncs textarea/password with zero duplicate proxies', () => {
+    const { events, h } = setup();
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'textbox', p: '#0/name', r: [16, 16, 240, 32], o: 'textbox', t: 'Name', v: 'Ada', rq: true, ph: 'Your name' },
+            { k: 'textbox', p: '#0/reason', r: [16, 56, 240, 72], o: 'textbox', t: 'Reason', v: 'Line 1\nLine 2', ml: true, ph: 'Explain why' },
+            { k: 'textbox', p: '#0/pw', r: [16, 136, 240, 32], o: 'textbox', t: 'Password', rq: true, ph: 'Enter password' },
+            { k: 'textbox', p: '#0/ro', r: [16, 176, 240, 32], o: 'textbox', t: 'Token', v: 'fixed', ro: true },
+            { k: 'textbox', p: '#0/dis', r: [16, 216, 240, 32], o: 'textbox', t: 'Locked', v: 'nope', dis: true },
+            { k: 'textbox', p: '#0/bad', r: [16, 256, 240, 32], o: 'textbox', t: 'Email', v: 'bad@', inv: true },
+        ]));
+
+        const name = h.a11yNodes.get('div:#0/name');
+        assert.equal(name.getAttribute('role'), 'textbox');
+        assert.equal(name.getAttribute('aria-label'), 'Name');
+        assert.equal(name.getAttribute('aria-required'), 'true');
+        assert.equal(name.getAttribute('aria-placeholder'), 'Your name');
+        assert.equal(name.getAttribute('aria-multiline'), null);
+        assert.equal(name.textContent, 'Ada');
+
+        const reason = h.a11yNodes.get('div:#0/reason');
+        assert.equal(reason.getAttribute('aria-multiline'), 'true');
+        assert.equal(reason.textContent, 'Line 1\nLine 2');
+
+        const pw = h.a11yNodes.get('div:#0/pw');
+        assert.equal(pw.getAttribute('role'), 'textbox');
+        assert.equal(pw.getAttribute('aria-label'), 'Password');
+        assert.equal(pw.textContent, '', 'password mirror node carries no secret value');
+
+        assert.equal(h.a11yNodes.get('div:#0/ro').getAttribute('aria-readonly'), 'true');
+        assert.equal(h.a11yNodes.get('div:#0/dis').getAttribute('aria-disabled'), 'true');
+        assert.equal(h.a11yNodes.get('div:#0/bad').getAttribute('aria-invalid'), 'true');
+
+        // Click and focus on an enabled mirror textbox send a11y_press; disabled ignores both.
+        name.dispatchEvent({ type: 'click', preventDefault() {} });
+        reason.dispatchEvent({ type: 'focus' });
+        const dis = h.a11yNodes.get('div:#0/dis');
+        dis.dispatchEvent({ type: 'click', preventDefault() {} });
+        dis.dispatchEvent({ type: 'focus' });
+        assert.deepEqual(events, [
+            { kind: 'a11y_press', path: '#0/name' },
+            { kind: 'a11y_press', path: '#0/reason' },
+        ]);
+
+        // Focusing multiline Reason syncs aria-label + aria-multiline onto h.textarea and clears both focus proxies.
+        bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'Reason', ml: true, ph: 'Explain why', inv: true }));
+        assert.equal(h.textarea.getAttribute('aria-label'), 'Reason');
+        assert.equal(h.textarea.getAttribute('aria-multiline'), 'true');
+        assert.equal(h.textarea.getAttribute('aria-placeholder'), 'Explain why');
+        assert.equal(h.textarea.getAttribute('aria-invalid'), 'true');
+        assert.equal(h.canvas.getAttribute('aria-activedescendant'), null);
+        for (const p of h.focusProxies) {
+            assert.equal(p.getAttribute('role'), null, 'canvas focus proxies hold no duplicate textbox role');
+            assert.equal(p.getAttribute('aria-label'), null);
+        }
+
+        // Focusing password field syncs aria-label + states onto h.password and resets h.textarea.
+        bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'Password', sec: true, rq: true, ph: 'Enter password' }));
+        assert.equal(h.password.getAttribute('aria-label'), 'Password');
+        assert.equal(h.password.getAttribute('aria-required'), 'true');
+        assert.equal(h.password.getAttribute('aria-placeholder'), 'Enter password');
+        assert.equal(h.password.value, '');
+        assert.equal(h.textarea.getAttribute('aria-label'), 'Text input');
+        assert.equal(h.textarea.getAttribute('aria-multiline'), null);
+        for (const p of h.focusProxies) {
+            assert.equal(p.getAttribute('role'), null);
+        }
+
+        // Clearing focus resets both hidden fields cleanly.
+        bridge.focusA11y(h, '');
+        assert.equal(h.password.getAttribute('aria-label'), 'Password input');
+        assert.equal(h.password.getAttribute('aria-required'), null);
+    } finally {
+        bridge.destroy(h);
+    }
+});
