@@ -887,6 +887,25 @@ app.run();
   `AppHandle::close`, `WindowHandle::close`), quit/relaunch, teardown, and an already-exiting loop
   bypass `on_close_request`, and apps without the hook behave as before. Headless scripts deliver
   it with `{"close_request": true}`.
+- `App::on_quit_request(|s, tx| -> QuitResponse)` (also forwarded on `WindowSpec::on_quit_request`)
+  intercepts application-level quit requests on macOS (the Dock's Quit, the default application
+  Quit menu item / unhandled ⌘Q, logout, restart, and shutdown) before `quitting()` becomes true
+  or `App::on_quit` runs. When registered on any live non-finished host (including hidden
+  `keep_running` and `windowless` hosts; overlays and finished hosts are skipped), Rune returns
+  `NSTerminateLater` from `applicationShouldTerminate:`, asks live hosts in registration order
+  inside normal update transactions until the first returns `QuitResponse::Defer` or all return
+  `QuitResponse::Quit`, and sends `replyToApplicationShouldTerminate:` once outside any winit
+  handler. `QuitResponse::Defer` replies `NO` so the app stays open, commits state/`Tx` updates,
+  and draws its confirmation UI (cancelling a macOS logout or shutdown with macOS's standard
+  notice); a later `Tx::quit` or `AppHandle::quit` exits without asking again. Programmatic
+  quit/relaunch, last-main-window exit (already gated by `on_close_request`), teardown, panics,
+  and Force Quit bypass `on_quit_request`. Apps without `on_quit_request` return
+  `NSTerminateNow` immediately, unchanged. Note that macOS `NSSupportsSuddenTermination` or
+  `NSSupportsAutomaticTermination` in `Info.plist` can let the OS terminate an idle app without
+  calling `applicationShouldTerminate:`. On Windows, Linux, and web, `on_quit_request` compiles
+  as an honest no-op (use `on_close_request` for window closes; Windows `WM_QUERYENDSESSION` /
+  `ShutdownBlockReasonCreate`, Linux `org.freedesktop.portal.Inhibit`, and web `beforeunload`
+  are not interactive quit-dialog hooks). Headless scripts deliver it with `{"quit_request": true}`.
 - `App::on_window(|w: &WindowHandle| ..)` runs on the UI thread after every native creation, for
   icons, native styles, or display-bound protocol objects through `WindowHandle::with_raw_handle`
   and `WindowHandle::with_raw_display_handle`. Pair `with_raw_display_handle` with

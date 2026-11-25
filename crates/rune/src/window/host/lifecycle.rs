@@ -62,6 +62,22 @@ pub(in crate::window) enum CloseDecision {
     Defer,
 }
 
+/// Evaluates [`crate::App::on_quit_request`] for an OS application-level quit request without
+/// starting a quit or hiding the window. Flushes clipboard updates produced by the hook.
+pub(in crate::window) fn quit_request_core(
+    app: &mut dyn WindowApp,
+    clipboard: &mut crate::clipboard::Client,
+    finished: bool,
+    exiting: bool,
+) -> Option<crate::QuitResponse> {
+    if finished || exiting {
+        return None;
+    }
+    let response = app.run_on_quit_request()?;
+    clipboard.flush_core(app.rt_mut());
+    Some(response)
+}
+
 /// Evaluates [`crate::App::on_close_request`] for a native `WindowEvent::CloseRequested` without
 /// hiding the window or changing `Life` or `FirstFrame`.
 ///
@@ -537,7 +553,9 @@ impl Host {
             // A tracking menu holds the event loop until it ends.
             self.app.popup_cancel(&mut self.popup);
             self.app.file_dialog_cancel(&mut self.file_dialog);
-            event_loop.exit();
+            if !crate::quit::programmatic_quit() {
+                event_loop.exit();
+            }
             return;
         }
         #[cfg(target_os = "macos")]
@@ -668,7 +686,9 @@ impl Host {
                     let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
                     self.app.popup_cancel(&mut self.popup);
                     self.app.file_dialog_cancel(&mut self.file_dialog);
-                    event_loop.exit();
+                    if !crate::quit::programmatic_quit() {
+                        event_loop.exit();
+                    }
                 }
                 ShellCloseAction::ProgrammaticClose => self.close(event_loop),
                 ShellCloseAction::UserCloseRequest => self.close_requested(event_loop),
@@ -740,6 +760,37 @@ impl Host {
         }
     }
 
+    /// Handles an OS application-level quit request on this host. Runs [`App::on_quit_request`]
+    /// inside a normal update transaction, applies any `Tx` shell requests (for example `Tx::quit`
+    /// or `Tx::show_window`), and on `QuitResponse::Defer` requests a redraw (or covered frame /
+    /// pending wakes) so a confirmation dialog draws immediately once AppKit leaves modal mode.
+    pub(in crate::window) fn quit_request_in_turn(&mut self, event_loop: &ActiveEventLoop) -> Option<crate::QuitResponse> {
+        let response = quit_request_core(
+            &mut *self.app,
+            &mut self.clipboard,
+            self.life.finished(),
+            event_loop.exiting(),
+        )?;
+        self.shell(event_loop);
+        if response == crate::QuitResponse::Defer
+            && !self.life.finished()
+            && !event_loop.exiting()
+            && !crate::quit::quitting()
+        {
+            if let Some(w) = self.shown_win() {
+                if !self.life.covered() && !w.minimized() {
+                    w.request_redraw();
+                } else {
+                    self.covered_frame();
+                    self.shell(event_loop);
+                }
+            } else {
+                self.app.rt_mut().schedule_pending_wakes();
+            }
+        }
+        Some(response)
+    }
+
     pub(in crate::window) fn close(&mut self, event_loop: &ActiveEventLoop) {
         self.app.rt_mut().minimize_step(MinimizeEvent::Lost);
         if let Some(w) = &mut self.win {
@@ -790,7 +841,9 @@ impl Host {
             let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
             self.app.popup_cancel(&mut self.popup);
             self.app.file_dialog_cancel(&mut self.file_dialog);
-            event_loop.exit();
+            if !crate::quit::programmatic_quit() {
+                event_loop.exit();
+            }
             return;
         }
         if !self.keep_running {

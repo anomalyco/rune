@@ -70,6 +70,8 @@ pub(crate) trait Member {
     fn reopen(&mut self) -> Changes;
     /// Runs `App::on_close_request` and closes the window unless it defers.
     fn close_requested(&mut self) {}
+    /// Runs `App::on_quit_request` if live; returns `Some(QuitResponse)` when registered.
+    fn quit_requested(&mut self) -> Option<crate::QuitResponse> { None }
     fn menu(&self, item: &str) -> Result<(), crate::MenuError>;
     fn popup_open(&self) -> bool;
     fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError>;
@@ -102,6 +104,7 @@ trait DesktopApp {
     fn rt_mut(&mut self) -> &mut RuntimeCore;
     fn with_driver(&mut self, f: &mut dyn FnMut(&mut RuntimeCore, &mut dyn AppDriver));
     fn run_on_close_request(&mut self) -> Option<crate::CloseResponse>;
+    fn run_on_quit_request(&mut self) -> Option<crate::QuitResponse>;
     fn run_on_close(&mut self);
     fn run_on_reopen(&mut self, has_visible_windows: bool) -> bool;
     fn drain_updates(&mut self, menus: &mut crate::native_menu::MenuGuard) -> WindowRequests;
@@ -144,6 +147,7 @@ struct TypedDesktopApp<S: 'static> {
     shared: Arc<Shared<S>>,
     comp: Option<Box<dyn Compositor<S>>>,
     on_close_request: Option<fn(&mut S, &mut crate::Tx) -> crate::CloseResponse>,
+    on_quit_request: Option<fn(&mut S, &mut crate::Tx) -> crate::QuitResponse>,
     on_close: Option<fn(&mut S, &mut crate::Tx)>,
     on_reopen: Option<fn(&mut S, bool, &mut crate::Tx) -> bool>,
 }
@@ -158,6 +162,12 @@ impl<S: 'static> DesktopApp for TypedDesktopApp<S> {
     fn run_on_close_request(&mut self) -> Option<crate::CloseResponse> {
         let f = self.on_close_request?;
         let mut resp = crate::CloseResponse::Close;
+        self.rt.update(|s, tx| resp = f(s, tx));
+        Some(resp)
+    }
+    fn run_on_quit_request(&mut self) -> Option<crate::QuitResponse> {
+        let f = self.on_quit_request?;
+        let mut resp = crate::QuitResponse::Quit;
         self.rt.update(|s, tx| resp = f(s, tx));
         Some(resp)
     }
@@ -276,8 +286,8 @@ impl Window {
         let own = app.resolve_args(inherited_window_args(args, selected));
         let comp = app.compositor.take();
         let on_frame_encoded = app.on_frame_encoded.take();
-        let (open, keep_running, fit_height, on_close_request, on_close, on_reopen) = (
-            app.open, app.keep_running, app.fit_content_height, app.on_close_request, app.on_close, app.on_reopen,
+        let (open, keep_running, fit_height, on_close_request, on_quit_request, on_close, on_reopen) = (
+            app.open, app.keep_running, app.fit_content_height, app.on_close_request, app.on_quit_request, app.on_close, app.on_reopen,
         );
         let native = std::mem::take(&mut app.macos_window);
         let (chrome, titlebar) = (app.chrome, app.titlebar);
@@ -295,7 +305,7 @@ impl Window {
         }
         rt.configure(runtime);
         let (shared_core, shortcuts_core) = (shared.core.clone(), shared.shortcuts.core.clone());
-        let typed = Box::new(TypedDesktopApp { rt, shared, comp, on_close_request, on_close, on_reopen });
+        let typed = Box::new(TypedDesktopApp { rt, shared, comp, on_close_request, on_quit_request, on_close, on_reopen });
         Self::from_app(typed, WindowInit {
             key,
             shared_core,
@@ -629,6 +639,10 @@ impl Member for Window {
         changes
     }
     fn close_requested(&mut self) { Window::close_requested(self); }
+    fn quit_requested(&mut self) -> Option<crate::QuitResponse> {
+        if self.life.finished() { return None; }
+        self.app.run_on_quit_request()
+    }
     fn menu(&self, item: &str) -> Result<(), crate::MenuError> { self.menus.fire(item) }
     fn popup_open(&self) -> bool { self.app.rt().popup_menu().is_some() }
     fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError> { self.app.resolve_popup(picked) }

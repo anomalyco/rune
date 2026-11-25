@@ -21,6 +21,8 @@ use std::sync::Mutex;
 mod mac;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod relaunch;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod request;
 #[cfg(target_os = "windows")]
 mod win32;
 
@@ -275,19 +277,64 @@ pub fn quitting() -> bool {
 }
 
 /// Hooks the system's quit requests into the loop: `send` delivers a quit (`true` when the
-/// session ends now and the windows must close) to `Windows`. Once per process, on the UI thread.
+/// session ends now and the windows must close) to `Windows`, and `request` wakes the loop on
+/// macOS when `applicationShouldTerminate:` defers to registered `App::on_quit_request` hooks.
+/// Once per process, on the UI thread.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn install(send: impl Fn(bool) -> bool + 'static) {
+pub(crate) fn install(
+    send: impl Fn(bool) -> bool + 'static,
+    request: impl Fn() -> bool + 'static,
+) {
     #[cfg(target_os = "windows")]
-    win32::install(send);
+    { let _ = request; win32::install(send); }
     #[cfg(target_os = "macos")]
-    { let _ = send; mac::install(); }
+    { let _ = send; mac::install(request); }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let _ = send;
+    let _ = (send, request);
+}
+
+/// Updates whether any live non-finished host currently has `App::on_quit_request` registered.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn set_has_quit_request_hooks(any: bool) {
+    request::set_has_hooks(any);
+    #[cfg(target_os = "macos")]
+    if any {
+        mac::warn_if_foreign_delegate();
+    }
+}
+
+/// Whether an OS quit request is currently waiting for hosts' `on_quit_request` hooks to decide.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn quit_request_asking() -> bool {
+    request::is_asking()
+}
+
+/// Records the hooks' combined decision (`true` = allow quit, `false` = defer) for an in-flight
+/// macOS `NSTerminateLater` quit request and schedules the single common-mode reply.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn finish_quit_request(allow: bool) {
+    #[cfg(target_os = "macos")]
+    mac::finish_quit_request(allow);
+    #[cfg(not(target_os = "macos"))]
+    let _ = allow;
+}
+
+/// Notifies the quit-request machine that a programmatic quit/relaunch or last-window exit is
+/// starting. Returns `true` when a pending macOS `NSTerminateLater` reply was upgraded to YES
+/// and will end the app, so the caller should skip a redundant `event_loop.exit()`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn programmatic_quit() -> bool {
+    #[cfg(target_os = "macos")]
+    { mac::programmatic_quit() }
+    #[cfg(not(target_os = "macos"))]
+    { false }
 }
 
 /// Whether the event loop is inside one of its handlers, on the UI thread: a session message
-/// that arrives then (from a modal loop the handler runs) can't run the windows' hooks.
+/// that arrives then (from a modal loop the handler runs) can't run the windows' hooks, and on
+/// macOS a queued `replyToApplicationShouldTerminate:` waits until the outermost handler returns.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Loop {
@@ -304,7 +351,7 @@ thread_local! {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn handling() -> Handling { Handling(LOOP.replace(Loop::Handling)) }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub(crate) fn loop_state() -> Loop { LOOP.get() }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -312,5 +359,11 @@ pub(crate) struct Handling(Loop);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Drop for Handling {
-    fn drop(&mut self) { LOOP.set(self.0); }
+    fn drop(&mut self) {
+        LOOP.set(self.0);
+        #[cfg(target_os = "macos")]
+        if self.0 == Loop::Idle && !std::thread::panicking() {
+            mac::on_loop_idle();
+        }
+    }
 }
