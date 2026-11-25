@@ -213,11 +213,15 @@ impl super::OverlayCore {
             }
             None => (self.last_work_area, self.live_scale().unwrap_or_else(|| app.rt().window_scale())),
         };
+        #[cfg(target_os = "windows")]
+        let cpu_failed = self.cpu_layered_failed;
+        #[cfg(not(target_os = "windows"))]
+        let cpu_failed = false;
         let planned_kind = super::cpu::select_overlay_backend(
             super::cpu::OverlayTarget::current(),
             self.requested_renderer,
             app.has_compositor(),
-            self.cpu_layered_failed,
+            cpu_failed,
         )
         .renderer_kind();
         let width = match self.options.placement {
@@ -380,6 +384,7 @@ impl super::OverlayCore {
                 let scale = self.cpu.as_ref().map_or(1.0, |c| c.scale);
                 app.rt_mut().set_window_pixels(Some((pos.x, pos.y)));
                 self.origin_moved(app.rt_mut(), (pos.x as f32 / scale, pos.y as f32 / scale));
+                self.publish_screen_origin((pos.x, pos.y), scale);
             }
         }
         let scale = self.cpu.as_ref().map_or_else(|| crate::window::backing_scale(&window), |c| c.scale);
