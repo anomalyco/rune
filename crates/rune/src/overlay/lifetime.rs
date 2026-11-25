@@ -283,6 +283,8 @@ impl OverlayCore {
             if !all && renderer.has_oversized_uploads_in_flight() {
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
             }
+            // The textures of image pages `rt.images.rest()` freed: no frame drops them while resting.
+            renderer.rest_images(&app.rt().images);
             renderer.give_back(all, &mut app.rt_mut().text.atlas.resident_caches);
             if all {
                 // Non-blocking retirement on shared devices: poll once so completed submissions

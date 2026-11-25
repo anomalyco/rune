@@ -180,6 +180,22 @@ impl Renderer {
         self.refresh_layer_bindings(device);
     }
 
+    /// A window at rest (`window::rest`), after `ImageAtlas::rest`: drops the textures of pages
+    /// the atlas freed or forgot, which no frame drawn while resting or hidden would drop. Keeps
+    /// the textures of pages still holding images. Returns whether any texture was dropped.
+    pub(crate) fn rest_images(&mut self, images: &ImageAtlas) -> bool {
+        let mut dropped = self.images.len() > images.pages.len() && self.images[images.pages.len()..].iter().any(Option::is_some);
+        self.images.truncate(images.pages.len());
+        for (slot, page) in self.images.iter_mut().zip(&images.pages) {
+            if page.data.is_empty() && slot.take().is_some() { dropped = true; }
+        }
+        if dropped {
+            self.layers.clear_images();
+            self.images_changed();
+        }
+        dropped
+    }
+
     /// Drops every uploaded image page's GPU texture and any layer bind groups referencing them.
     /// Returns whether any texture was held. The next `upload_images` recreates textures for pages
     /// still present in `ImageAtlas`.

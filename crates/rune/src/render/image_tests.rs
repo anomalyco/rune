@@ -825,3 +825,52 @@ fn pixels_wrap_and_tile_layout_mip_edges_and_memo() {
     let img3 = rt_m.instances.iter().find(|i| i.params[1] == KIND_IMAGE).unwrap();
     assert_eq!((img3.params[3] as u32, img3.border), (sc::IMAGE_WRAP_EXTEND, [6.0, 4.0, 12.0, 8.0]));
 }
+
+/// A window at rest drops the textures of the image pages its atlas freed (no frame drops them
+/// while it rests or is hidden), keeps those of pages still showing, and uploads them again when
+/// they come back.
+#[test]
+fn rest_drops_textures_of_freed_image_pages() {
+    use crate::el::{El, el};
+    use crate::render::{Gpu, OFFSCREEN_FORMAT, Renderer};
+    use crate::runtime::{Cx, Env, Runtime};
+    type State = (Pixels, Pixels, bool);
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let big = el().size(2.0, 2.0).pixels(&s.1);
+        if s.2 { el().size(4.0, 4.0).pixels(&s.0).child(big) } else { el().size(4.0, 4.0).child(big) }
+    }
+    let (small, big) = (Pixels::new(), Pixels::new());
+    small.set(4, 4, [240, 30, 80, 255].repeat(16));
+    big.set(1100, 4, [255; 4].repeat(1100 * 4));
+    let mut rt = Runtime::new((small, big, true), view, (4.0, 4.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let upload = |rt: &mut Runtime<State>, renderer: &mut Renderer| {
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (4, 4));
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+    };
+    upload(&mut rt, &mut renderer);
+    let shelf = rt.images.pages.iter().position(|p| p.width < 1100).unwrap();
+    let standalone = 1 - shelf;
+    assert!(renderer.images.iter().all(Option::is_some), "both pages uploaded");
+    // The small image leaves the view; the last frame keeps its shelf page and texture.
+    rt.state.2 = false;
+    rt.invalidate();
+    rt.frame(0.1);
+    upload(&mut rt, &mut renderer);
+    assert!(renderer.images[shelf].is_some());
+    rt.images.rest();
+    assert!(rt.images.pages[shelf].data.is_empty() || rt.images.pages.len() <= shelf);
+    assert!(renderer.rest_images(&rt.images), "the freed page's texture is dropped");
+    assert_eq!(renderer.images.len(), rt.images.pages.len());
+    assert!(renderer.images.get(shelf).is_none_or(Option::is_none));
+    assert!(renderer.images[standalone].is_some(), "the page still showing keeps its texture");
+    assert!(!renderer.rest_images(&rt.images), "nothing more to drop");
+    // It comes back and is uploaded again.
+    rt.state.2 = true;
+    rt.invalidate();
+    rt.frame(0.2);
+    upload(&mut rt, &mut renderer);
+    assert!(renderer.images.iter().all(Option::is_some));
+}

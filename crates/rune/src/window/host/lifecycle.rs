@@ -793,6 +793,8 @@ impl Host {
             if !all && renderer.has_oversized_uploads_in_flight() {
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
             }
+            // The textures of image pages `rt.images.rest()` freed: no frame drops them while resting.
+            renderer.rest_images(&self.app.rt().images);
             renderer.give_back(all, &mut self.app.rt_mut().text.atlas.resident_caches);
             // Out of sight, what the last frame used goes too, and the staging chunks: an empty
             // submission and a wait land those frees now.

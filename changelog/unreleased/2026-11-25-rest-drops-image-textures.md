@@ -1,0 +1,1 @@
+- Fixed a resting or hidden window (and overlay) keeping the GPU textures of image atlas pages whose CPU copy rest had already freed until its next drawn frame: `window::rest` now drops those textures too, so large images no view still shows (PDF pages, photo previews) give their VRAM back while the window is idle or out of sight. Pages still showing keep their textures.
