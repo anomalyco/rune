@@ -40,7 +40,7 @@ fn showreel_gfx_rebuilds_fx_renderer_when_device_key_changes() {
     let mut gfx = Gfx::default();
 
     // First frame on device 1 (glass scene with mesh gradient and backdrop-blurred fluted glass).
-    let gpu1 = Gpu::headless();
+    let Some(gpu1) = Gpu::test_headless() else { return };
     let mut ui1 = Renderer::new(&gpu1.device, OFFSCREEN_FORMAT);
     ui1.attach_text(&mut rt.text.atlas);
     let off1 = Offscreen::new(&gpu1.device, size.0, size.1);
@@ -50,7 +50,7 @@ fn showreel_gfx_rebuilds_fx_renderer_when_device_key_changes() {
 
     // Replace the device and renderer at the same viewport size and target format,
     // then switch to the fire scene (simulated flames + heat haze backdrop).
-    let gpu2 = Gpu::headless();
+    let Some(gpu2) = Gpu::test_headless() else { return };
     let errors: Arc<Mutex<Vec<String>>> = Arc::default();
     {
         let errors = errors.clone();
@@ -85,7 +85,7 @@ fn showreel_gfx_release_gpu_drops_fx_and_rebuilds_cleanly() {
     rt.track_marks = true;
 
     let mut gfx = Gfx::default();
-    let gpu1 = Gpu::headless();
+    let Some(gpu1) = Gpu::test_headless() else { return };
     let mut ui1 = Renderer::new(&gpu1.device, OFFSCREEN_FORMAT);
     ui1.attach_text(&mut rt.text.atlas);
     let off1 = Offscreen::new(&gpu1.device, size.0, size.1);
@@ -96,7 +96,7 @@ fn showreel_gfx_release_gpu_drops_fx_and_rebuilds_cleanly() {
     gfx.release_gpu();
     assert!(gfx.fx.is_none(), "release_gpu must drop showreel Gfx::fx");
 
-    let gpu2 = Gpu::headless();
+    let Some(gpu2) = Gpu::test_headless() else { return };
     let mut ui2 = Renderer::new(&gpu2.device, OFFSCREEN_FORMAT);
     rt.text.atlas.invalidate();
     rt.images.invalidate();

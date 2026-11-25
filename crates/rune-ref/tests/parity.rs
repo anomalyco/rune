@@ -41,7 +41,7 @@ fn zero_instance() -> Instance {
 
 #[test]
 fn cpu_gpu_banded_rects_and_shadows() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let ring = Instance {
         rect: [8.0, 8.0, 48.0, 48.0],
         radii: [-8.0; 4],
@@ -79,7 +79,7 @@ fn cpu_gpu_banded_rects_and_shadows() {
 
 #[test]
 fn cpu_gpu_segments_and_triangles() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let instances = [
         // Round-cap diagonal stroke
         Instance {
@@ -138,7 +138,7 @@ fn cpu_gpu_segments_and_triangles() {
 
 #[test]
 fn cpu_gpu_negative_spread_inset_shadows() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let instances = [
         // Sharp negative-spread inset on square corners (must stay square, not round to +|spread|)
         Instance {
@@ -173,7 +173,7 @@ fn cpu_gpu_negative_spread_inset_shadows() {
 
 #[test]
 fn cpu_gpu_mixed_clip_radii_quantization() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     // Fractional mixed radii (0.5 px step) on a direct Primitive (not round-tripped from Instance)
     let mut fine = generate::scene(&[]);
     fine.width = 64;
@@ -219,7 +219,7 @@ fn cpu_gpu_mixed_clip_radii_quantization() {
 
 #[test]
 fn cpu_gpu_layer_expansion_offscreen_turns_and_scissor_inline() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
 
     // 1. Uncached opacity layer with small initial rect containing a child + outer drop shadow.
     let expanded = [
@@ -316,7 +316,7 @@ fn cpu_gpu_layer_expansion_offscreen_turns_and_scissor_inline() {
 
 #[test]
 fn cpu_gpu_effect_slot_with_mark_and_legacy_glyph_radii() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let mark: u32 = 0x1234_5678;
     let slot = Instance {
         rect: [8.0, 8.0, 24.0, 24.0],
@@ -359,7 +359,7 @@ fn cpu_gpu_effect_slot_with_mark_and_legacy_glyph_radii() {
 
 #[test]
 fn cpu_gpu_nested_cutout_circles_match_reference() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let mut rt = rune::Runtime::new(
         (),
         |_: &(), _: &mut rune::Cx<()>| {

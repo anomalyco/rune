@@ -59,7 +59,7 @@ fn render(
 
 #[test]
 fn soft_glow_coverage_matches_reference_blending_in_both_spaces() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let modes = [
         (FxBlend::Multiply, Separable::Multiply),
         (FxBlend::Screen, Separable::Screen),

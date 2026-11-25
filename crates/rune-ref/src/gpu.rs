@@ -88,7 +88,11 @@ pub struct GpuRenderer {
 }
 impl Default for GpuRenderer {
     fn default() -> Self {
-        let gpu = Gpu::new(Gpu::instance(), None);
+        Self::from_gpu(Gpu::new(Gpu::instance(), None))
+    }
+}
+impl GpuRenderer {
+    fn from_gpu(gpu: Gpu) -> Self {
         let info = gpu.adapter.get_info();
         let composite_tol = composite_tolerance(&info);
         eprintln!(
@@ -103,8 +107,28 @@ impl Default for GpuRenderer {
             text: TextSystem::default(),
         }
     }
-}
-impl GpuRenderer {
+
+    /// Creates a GPU reference renderer, returning an error instead of panicking when no GPU
+    /// adapter or device can be initialized.
+    ///
+    /// ```no_run
+    /// use rune_ref::gpu::GpuRenderer;
+    ///
+    /// let _gpu = GpuRenderer::try_new()?;
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn try_new() -> Result<Self, String> {
+        Gpu::try_new(Gpu::instance(), None).map(Self::from_gpu)
+    }
+
+    /// Like [`Self::try_new`], for tests: returns `None` (printing the standard skip line) when
+    /// no adapter exists and `RUNE_ALLOW_NO_GPU=1` is set; panics otherwise.
+    #[doc(hidden)]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn test_new() -> Option<Self> {
+        Gpu::test_headless().map(Self::from_gpu)
+    }
+
     pub fn adapter_info(&self) -> wgpu::AdapterInfo {
         self.gpu.adapter.get_info()
     }

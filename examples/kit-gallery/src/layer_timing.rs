@@ -45,7 +45,7 @@ fn disabled_controls_match_legacy_pixels() {
     let directory = std::path::PathBuf::from(std::env::var_os("RUNE_KIT_PIXEL_BASELINE").unwrap());
     let record = std::env::var_os("RUNE_KIT_RECORD_BASELINE").is_some();
     std::fs::create_dir_all(&directory).unwrap();
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     for dark in [false, true] {
         for scale in [1.0, 2.0] {
@@ -84,7 +84,7 @@ fn disabled_controls_match_legacy_pixels() {
 #[test]
 #[ignore = "manual disabled-controls GPU comparison; run on a build worker"]
 fn disabled_controls_gpu_cost() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     assert!(gpu.device.features().contains(wgpu::Features::TIMESTAMP_QUERY));
     eprintln!("adapter: {:?}", gpu.adapter.get_info());
     let text = rune::text::TextSystem::new(rune_theme_opencode::FONTS, rune_theme_opencode::FAMILIES);
