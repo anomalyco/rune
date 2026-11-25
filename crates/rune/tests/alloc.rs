@@ -344,7 +344,10 @@ fn overlay_send_pointer_steady_moves_allocate_nothing() {
     fn view(_: &(), _: &mut Cx<()>) -> El { el().size(120.0, 40.0).hit() }
     let mut app = App::new(AppSpec::new("inject-alloc", (120.0, 40.0), || (), view));
     let handle = app.overlay(OverlaySpec::new("inject-alloc", (120.0, 40.0), view), ());
+    // Warm each mutex once: on macOS `std::sync::Mutex` lazily allocates its `os_unfair_lock`
+    // box on first lock (never again in steady state).
     handle.send_pointer(PointerInput::move_to(10.0, 10.0));
+    let _ = handle.screen_to_local((0, 0));
     let before = allocs();
     for i in 0..500 {
         handle.send_pointer(PointerInput::move_to((i % 100) as f32, 20.0));
