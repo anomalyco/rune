@@ -225,6 +225,7 @@ pub(crate) fn flush_requests(rt: &mut RuntimeCore, app: &mut dyn AppDriver) {
     }
     rt.refuse_file_dialog("native file dialogs are unsupported in embedded views");
     rt.shell_request = None;
+    rt.host.user_close_request = false;
     rt.ignore_minimize("an embedded layer");
     rt.host.window_frame = None;
 }

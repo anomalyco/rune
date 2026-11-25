@@ -50,6 +50,9 @@ pub(crate) struct HostState {
     /// The height a window that fits its content last asked for, and the frame its move
     /// starts with. The host takes the hold as it starts the move.
     pub(crate) fit: FitWindow,
+    /// A user-initiated close request (`Tx::request_user_close`) waiting for the host's
+    /// `close_requested` gate.
+    pub(crate) user_close_request: bool,
     /// A handler or `update` asked to minimize the window (`Tx::minimize`); the shell takes it,
     /// after a show the same turn asked for (`window::Minimize`).
     pub(crate) minimize: crate::window::Minimize,
@@ -111,6 +114,7 @@ impl HostState {
             document_edited: Default::default(),
             fit_height: false,
             fit: Default::default(),
+            user_close_request: false,
             minimize: Default::default(),
             url_requests: Vec::new(),
             path_requests: Vec::new(),
@@ -466,6 +470,18 @@ impl RuntimeCore {
     #[inline]
     pub(super) fn fit_frame_holds(&mut self) -> bool {
         self.host.fit_frame_holds()
+    }
+
+    /// Takes a pending user-initiated close request (`Tx::request_user_close`).
+    #[inline]
+    pub(crate) fn take_user_close_request(&mut self) -> bool {
+        std::mem::take(&mut self.host.user_close_request)
+    }
+
+    /// Whether a user-initiated close request is pending for the host.
+    #[inline]
+    pub(crate) fn has_user_close_request(&self) -> bool {
+        self.host.user_close_request
     }
 }
 

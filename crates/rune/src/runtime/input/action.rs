@@ -261,6 +261,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.clear_secret |= one.clear_secret;
     if one.copy.is_some() { tx.copy = one.copy; }
     tx.shell = tx.shell.max(one.shell);
+    tx.user_close_request |= one.user_close_request;
     tx.minimize_order = tx.minimize_order.max(one.minimize_order);
     tx.toggle_maximized |= one.toggle_maximized;
     if one.full_screen.is_some() { tx.full_screen = one.full_screen; }

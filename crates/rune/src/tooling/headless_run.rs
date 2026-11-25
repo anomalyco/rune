@@ -127,6 +127,17 @@ pub enum ScriptEvent {
     Focus(bool),
     /// `{"reopen": true}`: the app reopened, as a click on its macOS Dock icon does.
     Reopen,
+    /// `{"close_request": true}`: a user-initiated close request (`App::on_close_request`).
+    ///
+    /// ```
+    /// # use rune::tooling::ScriptEvent;
+    /// # let event = ScriptEvent::CloseRequest;
+    /// # assert!(
+    /// // JSON script event: {"t": 0.1, "close_request": true}
+    /// matches!(event, ScriptEvent::CloseRequest)
+    /// # );
+    /// ```
+    CloseRequest,
     /// `{"open_url": …}`: a link the system opened with the app (`App::on_open_url`).
     OpenUrl(String),
     /// `{"open_files": […]}`: files the system opened with the app (`App::on_open_files`).

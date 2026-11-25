@@ -68,6 +68,8 @@ pub(crate) trait Member {
     fn reopen_hook(&mut self, has_visible_windows: bool) -> bool;
     /// Shows it in front with the keyboard, as the default reopen.
     fn reopen(&mut self) -> Changes;
+    /// Runs `App::on_close_request` and closes the window unless it defers.
+    fn close_requested(&mut self) {}
     fn menu(&self, item: &str) -> Result<(), crate::MenuError>;
     fn popup_open(&self) -> bool;
     fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError>;
@@ -99,6 +101,7 @@ trait DesktopApp {
     fn rt(&self) -> &RuntimeCore;
     fn rt_mut(&mut self) -> &mut RuntimeCore;
     fn with_driver(&mut self, f: &mut dyn FnMut(&mut RuntimeCore, &mut dyn AppDriver));
+    fn run_on_close_request(&mut self) -> Option<crate::CloseResponse>;
     fn run_on_close(&mut self);
     fn run_on_reopen(&mut self, has_visible_windows: bool) -> bool;
     fn drain_updates(&mut self, menus: &mut crate::native_menu::MenuGuard) -> WindowRequests;
@@ -140,6 +143,7 @@ struct TypedDesktopApp<S: 'static> {
     rt: Runtime<S>,
     shared: Arc<Shared<S>>,
     comp: Option<Box<dyn Compositor<S>>>,
+    on_close_request: Option<fn(&mut S, &mut crate::Tx) -> crate::CloseResponse>,
     on_close: Option<fn(&mut S, &mut crate::Tx)>,
     on_reopen: Option<fn(&mut S, bool, &mut crate::Tx) -> bool>,
 }
@@ -150,6 +154,12 @@ impl<S: 'static> DesktopApp for TypedDesktopApp<S> {
     fn with_driver(&mut self, f: &mut dyn FnMut(&mut RuntimeCore, &mut dyn AppDriver)) {
         let (core, mut driver) = self.rt.split_mut();
         f(core, &mut driver);
+    }
+    fn run_on_close_request(&mut self) -> Option<crate::CloseResponse> {
+        let f = self.on_close_request?;
+        let mut resp = crate::CloseResponse::Close;
+        self.rt.update(|s, tx| resp = f(s, tx));
+        Some(resp)
     }
     fn run_on_close(&mut self) {
         if let Some(f) = self.on_close { self.rt.update(f); }
@@ -266,8 +276,8 @@ impl Window {
         let own = app.resolve_args(inherited_window_args(args, selected));
         let comp = app.compositor.take();
         let on_frame_encoded = app.on_frame_encoded.take();
-        let (open, keep_running, fit_height, on_close, on_reopen) = (
-            app.open, app.keep_running, app.fit_content_height, app.on_close, app.on_reopen,
+        let (open, keep_running, fit_height, on_close_request, on_close, on_reopen) = (
+            app.open, app.keep_running, app.fit_content_height, app.on_close_request, app.on_close, app.on_reopen,
         );
         let native = std::mem::take(&mut app.macos_window);
         let (chrome, titlebar) = (app.chrome, app.titlebar);
@@ -284,7 +294,7 @@ impl Window {
         }
         rt.configure(runtime);
         let (shared_core, shortcuts_core) = (shared.core.clone(), shared.shortcuts.core.clone());
-        let typed = Box::new(TypedDesktopApp { rt, shared, comp, on_close, on_reopen });
+        let typed = Box::new(TypedDesktopApp { rt, shared, comp, on_close_request, on_close, on_reopen });
         Self::from_app(typed, WindowInit {
             key,
             shared_core,
@@ -411,6 +421,16 @@ impl Window {
         self.publish();
     }
 
+    /// As the native host handles a user-initiated close request: asks `App::on_close_request`
+    /// before closing, and keeps the window open on `CloseResponse::Defer`.
+    fn close_requested(&mut self) {
+        if !self.life.closes(self.keep_running, true) { return; }
+        match self.app.run_on_close_request() {
+            None | Some(crate::CloseResponse::Close) => self.close(),
+            Some(crate::CloseResponse::Defer) => {}
+        }
+    }
+
     /// As the native host closes (`Life::closes`): a headless window always exists.
     fn close(&mut self) {
         if !self.life.closes(self.keep_running, true) { return; }
@@ -508,9 +528,12 @@ impl Member for Window {
         for _ in 0..8 {
             // A headless desktop draws no Dock to minimize into (`Activation::Minimize` too).
             self.app.rt_mut().minimize_step(crate::window::MinimizeEvent::Lost);
+            let user_close = self.app.rt_mut().take_user_close_request();
             match self.app.rt_mut().shell_request.take() {
                 Some(Shell::Close) => self.close(),
-                Some(Shell::Quit | Shell::Relaunch) | None => {}
+                Some(Shell::Quit | Shell::Relaunch) => {}
+                None if user_close => self.close_requested(),
+                None => {}
             }
             if self.life.shown() {
                 self.app.open_popup_headless();
@@ -518,13 +541,14 @@ impl Member for Window {
                 self.app.cancel_popups();
                 self.app.rt_mut().refuse_file_dialog("cannot open a file dialog while the window is hidden");
             }
-            if self.app.rt().shell_request.is_none() { break; }
+            if self.app.rt().shell_request.is_none() && !self.app.rt().has_user_close_request() { break; }
         }
         changes
     }
 
     fn pending(&self) -> bool {
         self.shared_core.asks_window() || self.app.has_updates() || self.app.rt().shell_request.is_some()
+            || self.app.rt().has_user_close_request()
             || self.handle.as_ref().is_some_and(WindowHandle::headless_pending)
     }
 
@@ -603,6 +627,7 @@ impl Member for Window {
         self.request(WindowRequest::Open(None), &mut changes);
         changes
     }
+    fn close_requested(&mut self) { Window::close_requested(self); }
     fn menu(&self, item: &str) -> Result<(), crate::MenuError> { self.menus.fire(item) }
     fn popup_open(&self) -> bool { self.app.rt().popup_menu().is_some() }
     fn resolve_popup(&mut self, picked: Option<&str>) -> Result<(), crate::PopupMenuError> { self.app.resolve_popup(picked) }

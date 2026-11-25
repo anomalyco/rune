@@ -248,12 +248,13 @@ fn a_standard_close_or_minimize_key_acts_only_when_no_handler_takes_it() {
     };
     let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| el(), (100.0, 100.0), Env::default());
     press(&mut rt, Code::KeyW, 'w', Unhandled::Close);
-    assert_eq!(rt.shell_request.take(), Some(Shell::Close), "an unhandled ⌘W closes as the button would");
+    assert!(rt.take_user_close_request(), "an unhandled ⌘W requests a user close like the close button");
+    assert_eq!(rt.shell_request, None, "an unhandled ⌘W must not bypass on_close_request via Shell::Close");
     press(&mut rt, Code::KeyM, 'm', Unhandled::Minimize);
     assert!(rt.minimize_step(crate::window::MinimizeEvent::Taken) && rt.shell_request.is_none());
     rt.on_key = Some(|n, ev, _| { *n += 1; ev.is_command('w') });
     press(&mut rt, Code::KeyW, 'w', Unhandled::Close);
-    assert_eq!((rt.state, rt.shell_request), (1, None), "the app's own ⌘W wins, once");
+    assert_eq!((rt.state, rt.shell_request, rt.take_user_close_request()), (1, None, false), "the app's own ⌘W wins, once");
     press(&mut rt, Code::KeyM, 'm', Unhandled::Minimize);
     assert_eq!(rt.state, 2, "the app saw ⌘M first");
     assert!(rt.host.minimize.latched(), "and didn't take it");

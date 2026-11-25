@@ -110,6 +110,8 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub(crate) fn ignore_minimize(&mut self, what: &str) { self.core_mut().ignore_minimize(what); }
     #[inline(always)]
+    pub(crate) fn take_user_close_request(&mut self) -> bool { self.core_mut().take_user_close_request() }
+    #[inline(always)]
     pub(crate) fn minimize_step(&mut self, event: crate::window::MinimizeEvent) -> bool { self.core_mut().minimize_step(event) }
     #[inline(always)]
     pub(crate) fn schedule_pending_wakes(&mut self) { self.core_mut().schedule_pending_wakes(); }

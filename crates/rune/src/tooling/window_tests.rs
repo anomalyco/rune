@@ -263,3 +263,43 @@ fn headless_script_delivers_open_files_to_app_hook() {
     std::fs::remove_file(&tree).ok();
     assert!(dump.contains("alpha.torrent,beta.torrent"), "expected opened files in tree dump: {dump}");
 }
+
+#[test]
+fn headless_script_close_request_defers_shows_dialog_and_closes_on_confirm() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
+    let _turn = super::headless_run::test_turn();
+    let pid = std::process::id();
+    let script = std::env::temp_dir().join(format!("rune-close-request-{pid}.json"));
+    let tree = std::env::temp_dir().join(format!("rune-close-request-tree-{pid}.json"));
+    std::fs::write(&script, r#"[{"t": 0.0, "close_request": true}]"#).unwrap();
+
+    struct Draft { dirty: bool, prompt: bool, closes: u32 }
+    fn view(d: &Draft, _: &mut crate::Cx<Draft>) -> crate::El {
+        let label = if d.prompt { format!("save-dialog:closes={}", d.closes) } else { format!("editor:closes={}", d.closes) };
+        crate::el().w_full().h_full().child(crate::text(label).key("status"))
+    }
+
+    let spec = crate::AppSpec::new("close-req-script", (180.0, 60.0), || Draft { dirty: true, prompt: false, closes: 0 }, view);
+    let app = crate::App::new(spec)
+        .on_close_request(|d, _| {
+            if d.dirty {
+                d.prompt = true;
+                crate::CloseResponse::Defer
+            } else {
+                crate::CloseResponse::Close
+            }
+        })
+        .on_close(|d, _| d.closes += 1);
+    super::headless(app, super::Args {
+        script: Some(script.clone()),
+        tree: Some(tree.clone()),
+        frames: Some(4),
+        fps: 60.0,
+        scale: Some(1.0),
+        ..Default::default()
+    });
+    let dump = std::fs::read_to_string(&tree).unwrap();
+    std::fs::remove_file(&script).ok();
+    std::fs::remove_file(&tree).ok();
+    assert!(dump.contains("save-dialog:closes=0"), "expected deferred dialog with zero on_close calls in tree dump: {dump}");
+}

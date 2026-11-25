@@ -27,6 +27,7 @@ pub(super) trait HeadlessApp {
     fn rt_mut(&mut self) -> &mut RuntimeCore;
     fn with_driver(&mut self, f: &mut dyn FnMut(&mut RuntimeCore, &mut dyn AppDriver));
     fn run_reopen(&mut self);
+    fn run_close_request(&mut self) -> crate::CloseResponse;
     fn run_open_url(&mut self, url: &str);
     fn run_open_files(&mut self, paths: &[std::path::PathBuf]);
     fn drain_updates(&mut self, menus: &mut crate::native_menu::MenuGuard);
@@ -67,6 +68,8 @@ pub(super) struct TypedHeadlessApp<S: 'static> {
     pub(super) rt: Runtime<S>,
     pub(super) shared: Arc<Shared<S>>,
     pub(super) comp: Option<Box<dyn Compositor<S>>>,
+    pub(super) on_close_request: Option<fn(&mut S, &mut Tx) -> crate::CloseResponse>,
+    pub(super) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(super) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(super) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
     pub(super) on_open_files: Option<crate::open_url::incoming::OnOpenFiles<S>>,
@@ -81,6 +84,20 @@ impl<S: 'static> HeadlessApp for TypedHeadlessApp<S> {
     }
     fn run_reopen(&mut self) {
         if let Some(f) = self.on_reopen { self.rt.update(|s, tx| { f(s, true, tx); }); }
+    }
+    fn run_close_request(&mut self) -> crate::CloseResponse {
+        let decision = match self.on_close_request {
+            Some(f) => {
+                let mut resp = crate::CloseResponse::Close;
+                self.rt.update(|s, tx| { resp = f(s, tx); });
+                resp
+            }
+            None => crate::CloseResponse::Close,
+        };
+        if decision == crate::CloseResponse::Close && let Some(f) = self.on_close {
+            self.rt.update(f);
+        }
+        decision
     }
     fn run_open_url(&mut self, url: &str) {
         if let Some(f) = self.on_open_url { self.rt.update(|s, tx| f(s, url, tx)); }

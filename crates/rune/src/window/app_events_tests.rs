@@ -11,7 +11,7 @@ use crate::quit::{Effect, Event, State as QuitState, step as quit_step};
 use crate::runtime::{Env, Runtime};
 use crate::window::host::any_host::quit_hook_core;
 use crate::window::host::app::{WindowApp, test_app, test_app_with_close_request};
-use crate::window::host::lifecycle::{CloseDecision, close_request_core};
+use crate::window::host::lifecycle::{CloseDecision, ShellCloseAction, close_request_core, take_shell_action};
 use crate::window::state::FirstFrame;
 use crate::window::{AnyHost, Life, WakeEvent};
 use crate::{Cx, El, Tx, el};
@@ -594,6 +594,16 @@ impl GuardedHost {
     /// Programmatic close (`Tx::close_window`, `AppHandle::close`, `WindowHandle::close`):
     /// bypasses `on_close_request`, mutates `first_frame` / hides, runs `on_close`, and finishes
     /// or hides according to `keep_running`.
+    fn shell_step(&mut self) -> ShellCloseAction {
+        let action = take_shell_action(self.app.rt_mut());
+        match action {
+            ShellCloseAction::ProgrammaticClose => self.close(),
+            ShellCloseAction::UserCloseRequest => { let _ = self.close_requested(false); }
+            ShellCloseAction::Quit(_) | ShellCloseAction::Minimize | ShellCloseAction::None => {}
+        }
+        action
+    }
+
     fn close(&mut self) {
         self.first_frame.hide();
         if !self.life.closes(self.keep_running, true) { return; }
@@ -755,4 +765,89 @@ fn close_request_bypassed_when_exiting_terminating_or_already_closed_and_works_w
         assert_eq!(host.close_requested(false), CloseDecision::Close);
         assert_eq!(*events.borrow(), vec!["on_close_request", "on_close"]);
     }
+}
+
+#[test]
+fn unhandled_cmd_w_asks_on_close_request_before_closing() {
+    use crate::runtime::Unhandled;
+    use crate::{Key, KeyEvent, Mods, PhysicalInput, PhysicalKeyCode as Code};
+
+    let cmd = Mods { cmd: true, ..Mods::default() };
+    let send_cmd_w = |host: &mut GuardedHost| {
+        host.app.with_driver(&mut |rt, app| {
+            rt.physical_then(
+                app,
+                PhysicalInput::Key { key: Code::KeyW, mods: cmd, pressed: true, repeat: false },
+                Some(KeyEvent { key: Key::Command('w'), mods: cmd }),
+                None,
+                Some(Unhandled::Close),
+            );
+        });
+        host.app.frame(0.0);
+        host.shell_step()
+    };
+
+    // 1. Dirty window with on_close_request returning Defer stays open and mounts the prompt.
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mem = crate::clipboard::memory();
+    let mut host = GuardedHost::new(true, true, false, events.clone(), &mem);
+    assert_eq!(send_cmd_w(&mut host), ShellCloseAction::UserCloseRequest);
+    assert!(host.life.shown(), "unhandled Cmd+W must keep window open when on_close_request returns Defer");
+    assert_eq!(*events.borrow(), vec!["on_close_request"]);
+    host.app.frame(0.0);
+    assert!(host.app.rt().find("save-prompt").is_some());
+
+    // 2. Clean window (CloseResponse::Close) and unregistered window close through on_close.
+    for with_hook in [true, false] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut host = GuardedHost::new(false, with_hook, false, events.clone(), &mem);
+        assert_eq!(send_cmd_w(&mut host), ShellCloseAction::UserCloseRequest);
+        assert!(host.life.finished());
+        let expected = if with_hook { vec!["on_close_request", "on_close"] } else { vec!["on_close"] };
+        assert_eq!(*events.borrow(), expected);
+    }
+}
+
+#[test]
+fn assistive_click_on_custom_close_button_asks_on_close_request_before_closing() {
+    let mem = crate::clipboard::memory();
+
+    // 1. Dirty window with on_close_request returning Defer stays open and mounts the prompt.
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut host = GuardedHost::new(true, true, false, events.clone(), &mem);
+    host.app.rt_mut().set_caption(Some(crate::titlebar::Caption::new(36.0)));
+    host.app.frame(0.0);
+    assert!(
+        host.app.rt_mut().accessibility_action("rune-caption-close", accesskit::Action::Click, None),
+        "custom close button must accept AccessKit Click",
+    );
+    host.app.frame(0.0);
+    assert_eq!(host.shell_step(), ShellCloseAction::UserCloseRequest);
+    assert!(host.life.shown(), "assistive Click on custom close button must keep window open on Defer");
+    assert_eq!(*events.borrow(), vec!["on_close_request"]);
+    host.app.frame(0.0);
+    assert!(host.app.rt().find("save-prompt").is_some());
+
+    // 2. Clean window (CloseResponse::Close) and unregistered window close through on_close.
+    for with_hook in [true, false] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut host = GuardedHost::new(false, with_hook, false, events.clone(), &mem);
+        host.app.rt_mut().set_caption(Some(crate::titlebar::Caption::new(36.0)));
+        host.app.frame(0.0);
+        assert!(host.app.rt_mut().accessibility_action("rune-caption-close", accesskit::Action::Click, None));
+        host.app.frame(0.0);
+        assert_eq!(host.shell_step(), ShellCloseAction::UserCloseRequest);
+        assert!(host.life.finished());
+        let expected = if with_hook { vec!["on_close_request", "on_close"] } else { vec!["on_close"] };
+        assert_eq!(*events.borrow(), expected);
+    }
+
+    // 3. Precedence: Quit > programmatic Shell::Close (bypasses hook) > UserCloseRequest > Minimize.
+    let mut rt = Runtime::new((), |_: &(), _: &mut Cx<()>| el(), (100.0, 100.0), Env::default());
+    rt.update(|_, tx| { tx.minimize(); tx.request_user_close(); });
+    assert_eq!(take_shell_action(rt.core_mut()), ShellCloseAction::UserCloseRequest);
+    rt.update(|_, tx| { tx.request_user_close(); tx.close_window(); });
+    assert_eq!(take_shell_action(rt.core_mut()), ShellCloseAction::ProgrammaticClose);
+    rt.update(|_, tx| { tx.request_user_close(); tx.close_window(); tx.quit(); });
+    assert_eq!(take_shell_action(rt.core_mut()), ShellCloseAction::Quit(crate::quit::After::Exit));
 }

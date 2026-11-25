@@ -81,6 +81,7 @@ impl PositionOwner {
 /// An overlay has no window to ask: whatever a step requested of one is dropped.
 pub(super) fn drop_window_requests(rt: &mut RuntimeCore) {
     rt.shell_request = None;
+    rt.host.user_close_request = false;
     rt.ignore_minimize("an overlay");
     // Overlays size through `OverlayHandle::resize`, not `Tx::resize_window`.
     rt.host.window_frame = None;

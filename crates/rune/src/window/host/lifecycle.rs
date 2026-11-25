@@ -24,6 +24,32 @@ use crate::window::surface::{BackoffEvent, Win};
 #[cfg(target_os = "windows")]
 use crate::window::win32::covered_draw::CoveredDrawEvent;
 
+/// What `Host::shell` does with the pending shell, user-close, and minimize requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::window) enum ShellCloseAction {
+    Quit(crate::quit::After),
+    ProgrammaticClose,
+    UserCloseRequest,
+    Minimize,
+    None,
+}
+
+/// Resolves the next shell action with precedence: `Quit`/`Relaunch` > programmatic
+/// `Shell::Close` > user-initiated close request (`Tx::request_user_close`) > `Minimize`.
+pub(in crate::window) fn take_shell_action(rt: &mut crate::runtime::RuntimeCore) -> ShellCloseAction {
+    let minimize = shell_take_core(rt);
+    let user_close = rt.take_user_close_request();
+    match rt.shell_request.take() {
+        Some(shell @ (Shell::Quit | Shell::Relaunch)) => {
+            ShellCloseAction::Quit(shell.after().unwrap_or(crate::quit::After::Exit))
+        }
+        Some(Shell::Close) => ShellCloseAction::ProgrammaticClose,
+        None if user_close => ShellCloseAction::UserCloseRequest,
+        None if minimize => ShellCloseAction::Minimize,
+        None => ShellCloseAction::None,
+    }
+}
+
 /// What a host does after consulting [`crate::App::on_close_request`] for a native
 /// `WindowEvent::CloseRequested`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,18 +468,17 @@ impl Host {
             if self.app.rt().stale() { w.request_redraw(); }
         }
         for _ in 0..8 {
-            let minimize = shell_take_core(self.app.rt_mut());
-            match self.app.rt_mut().shell_request.take() {
-                Some(shell @ (Shell::Quit | Shell::Relaunch)) => {
-                    let after = shell.after().unwrap_or(crate::quit::After::Exit);
+            match take_shell_action(self.app.rt_mut()) {
+                ShellCloseAction::Quit(after) => {
                     let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
                     self.app.popup_cancel(&mut self.popup);
                     self.app.file_dialog_cancel(&mut self.file_dialog);
                     event_loop.exit();
                 }
-                Some(Shell::Close) => self.close(event_loop),
-                None if minimize => self.minimize(),
-                None => {}
+                ShellCloseAction::ProgrammaticClose => self.close(event_loop),
+                ShellCloseAction::UserCloseRequest => self.close_requested(event_loop),
+                ShellCloseAction::Minimize => self.minimize(),
+                ShellCloseAction::None => {}
             }
             if self.life.finished() || event_loop.exiting() {
                 self.app.popup_cancel(&mut self.popup);
@@ -477,7 +502,12 @@ impl Host {
             if self.file_dialog.open_core(self.app.rt_mut(), window.map(|w| &**w)) && let Some(w) = shown { w.request_redraw(); }
             // A callback that ran (a menu that couldn't open) may have asked to close, quit or
             // minimize.
-            if self.app.rt().shell_request.is_none() && !self.app.rt().host.minimize.field() { return; }
+            if self.app.rt().shell_request.is_none()
+                && !self.app.rt().has_user_close_request()
+                && !self.app.rt().host.minimize.field()
+            {
+                return;
+            }
         }
     }
 

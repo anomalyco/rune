@@ -388,6 +388,8 @@ pub(crate) enum Kind {
     Focus(bool),
     /// The app reopened (macOS: its Dock icon clicked).
     Reopen,
+    /// A user-initiated close request (`App::on_close_request`).
+    CloseRequest,
     /// A link the system opened with the app (`App::on_open_url`).
     OpenUrl(String),
     /// Files the system opened with the app (`App::on_open_files`).
@@ -483,7 +485,7 @@ pub(crate) fn script_input(
         Kind::ButtonUp(b) => core.button_up(app, x, y, *b),
         Kind::KeyUp(k) => { core.key_up(app, k.clone()); }
         Kind::PhysicalKey(event, k, base) => core.physical_key_input(app, *event, k.clone(), *base),
-        Kind::Mark(_) | Kind::Reopen | Kind::OpenUrl(_) | Kind::OpenFiles(_) | Kind::Menu(_) | Kind::PopupMenu(_)
+        Kind::Mark(_) | Kind::Reopen | Kind::CloseRequest | Kind::OpenUrl(_) | Kind::OpenFiles(_) | Kind::Menu(_) | Kind::PopupMenu(_)
         | Kind::FileDialog(_) | Kind::FileDialogFiles(_) | Kind::Shortcut(_) | Kind::Resize(..) => return false,
     }
     true
@@ -577,6 +579,7 @@ impl Ev {
             Kind::Mark(name) => ScriptEvent::Mark(name.clone()),
             Kind::Focus(focused) => ScriptEvent::Focus(*focused),
             Kind::Reopen => ScriptEvent::Reopen,
+            Kind::CloseRequest => ScriptEvent::CloseRequest,
             Kind::OpenUrl(url) => ScriptEvent::OpenUrl(url.clone()),
             Kind::OpenFiles(paths) => ScriptEvent::OpenFiles(paths.clone()),
             Kind::Menu(item) => ScriptEvent::Menu(item.clone()),
