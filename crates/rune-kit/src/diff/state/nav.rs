@@ -127,6 +127,11 @@ impl DiffState {
         self.view_w.set(r[2]);
     }
 
+    /// The height the view draws a code line at, so row estimates match what it lays out.
+    pub(crate) fn set_line_height(&self, h: f32) {
+        self.line_h.set(if h > 0.0 { h } else { LINE_H });
+    }
+
     pub(crate) fn view_width(&self) -> f32 {
         self.view_w.get()
     }
@@ -206,7 +211,7 @@ impl DiffState {
             Row::File(_) => HEADER_H,
             Row::Note(_) => NOTE_H,
             Row::Gap { .. } => GAP_H,
-            _ => LINE_H,
+            _ => self.line_h.get(),
         }
     }
 }
