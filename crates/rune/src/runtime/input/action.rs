@@ -556,10 +556,13 @@ impl RuntimeCore {
             }
             Action::SecondaryPress(path, point) => {
                 let Some(n) = self.node(&path).filter(|n| !self.is_exiting(n.id)) else { return false };
-                let Some(f) = n.handlers.on_secondary_press.clone() else { return false };
-                log_event!(self, "secondary press {path}");
-                f(app.states(), point, &mut one);
-                true
+                if let Some(f) = n.handlers.on_secondary_press.clone() {
+                    log_event!(self, "secondary press {path}");
+                    f(app.states(), point, &mut one);
+                    true
+                } else {
+                    self.open_image_menu_at(app, &path, point.window_x, point.window_y)
+                }
             }
             Action::SecondaryRepost { modal, outer, down, up } => {
                 self.run_secondary_repost(app, &modal, outer.as_deref(), down, up, &mut one)

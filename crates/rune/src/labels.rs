@@ -99,6 +99,38 @@ pub enum Label<'a> {
     /// assert_eq!(rune::labels::label(rune::Label::CopyLink), "Link kopieren");
     /// ```
     CopyLink,
+    /// An opted-in image's context-menu item that saves its original source bytes or file
+    /// (English: `"Save Image As…"`).
+    ///
+    /// ```
+    /// rune::set_labels(|label| match label {
+    ///     rune::Label::SaveImageAs => Some("Bild speichern unter…".into()),
+    ///     _ => None,
+    /// });
+    /// assert_eq!(rune::labels::label(rune::Label::SaveImageAs), "Bild speichern unter…");
+    /// ```
+    SaveImageAs,
+    /// An opted-in image's context-menu item that copies the image to the clipboard
+    /// (English: `"Copy Image"`).
+    ///
+    /// ```
+    /// rune::set_labels(|label| match label {
+    ///     rune::Label::CopyImage => Some("Bild kopieren".into()),
+    ///     _ => None,
+    /// });
+    /// assert_eq!(rune::labels::label(rune::Label::CopyImage), "Bild kopieren");
+    /// ```
+    CopyImage,
+    /// An opted-in image's context-menu item that copies its URL (English: `"Copy Image Address"`).
+    ///
+    /// ```
+    /// rune::set_labels(|label| match label {
+    ///     rune::Label::CopyImageAddress => Some("Bildadresse kopieren".into()),
+    ///     _ => None,
+    /// });
+    /// assert_eq!(rune::labels::label(rune::Label::CopyImageAddress), "Bildadresse kopieren");
+    /// ```
+    CopyImageAddress,
 }
 
 type Namer = Arc<dyn Fn(Label<'_>) -> Option<String> + Send + Sync>;
@@ -186,6 +218,9 @@ pub(crate) fn english(label: Label<'_>) -> String {
         Label::MoreNestedLines(n) => format!("{n} more nested lines"),
         Label::OpenLink => "Open Link".into(),
         Label::CopyLink => "Copy Link".into(),
+        Label::SaveImageAs => "Save Image As…".into(),
+        Label::CopyImage => "Copy Image".into(),
+        Label::CopyImageAddress => "Copy Image Address".into(),
     }
 }
 

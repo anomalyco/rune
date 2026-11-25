@@ -67,6 +67,8 @@ pub struct VisualCold {
     pub(crate) pixels_tint: Option<Color>,
     /// Sampling filter for `pixels` (`El::image_filter`); `Linear` by default.
     pub(crate) image_filter: crate::ImageFilter,
+    /// Opt-in image context menu (`El::image_menu`).
+    pub(crate) image_menu: Option<Rc<crate::ImageMenu>>,
     /// An effect slot (`El::effect`).
     pub(crate) effect: Option<crate::el::effect::EffectSlot>,
     /// Backdrop blur standard deviation in points (`El::backdrop_blur`); 0 is off.
@@ -185,6 +187,7 @@ impl Empty for VisualCold {
         pixels_wrap: None,
         pixels_tint: None,
         image_filter: crate::ImageFilter::Linear,
+        image_menu: None,
         effect: None,
         backdrop_blur: 0.0,
         hover_motion: None,

@@ -67,7 +67,7 @@ impl RuntimeCore {
         let handlers = n.handlers.get();
         let enabled = !self.node_disabled(i);
         let pressable = enabled && handlers.is_some_and(|h| h.on_press.is_some());
-        let secondary = enabled && handlers.is_some_and(|h| h.on_secondary_press.is_some());
+        let secondary = enabled && (handlers.is_some_and(|h| h.on_secondary_press.is_some()) || self.has_image_menu(i));
         let read_only = self.is_node_read_only(i);
         let (input, has_access) = (
             enabled && n.input.is_some(),

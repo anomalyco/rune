@@ -110,6 +110,17 @@ impl Tx {
         self.set_copy(crate::ClipboardWrite::image(image.clone()), Some(cb));
     }
 
+    /// State-independent `copy_image_then`, for Rune's built-in image context menu.
+    pub(crate) fn copy_image_any(
+        &mut self,
+        image: &crate::Image,
+        on_result: impl FnOnce(Result<(), crate::CopyImageError>, &mut Tx) + 'static,
+    ) {
+        let f: CopyImageFn = Box::new(move |_, result, tx| on_result(result, tx));
+        let cb = CopyImageCallback(Rc::new(std::cell::Cell::new(Some(f))));
+        self.set_copy(crate::ClipboardWrite::image(image.clone()), Some(cb));
+    }
+
     /// Exclude this text from clipboard histories and clear it after `clear_after` if unchanged.
     /// The handle reports whether the copy still holds the clipboard, and can clear it early.
     pub fn copy_secret(&mut self, text: impl Into<String>, clear_after: std::time::Duration) -> crate::SecretCopy {
