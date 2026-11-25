@@ -161,9 +161,9 @@ pub(super) fn margins(b: &Block, s: &MarkdownStyle) -> (f32, f32) {
             (top, bottom)
         }
         Block::Code { .. } | Block::Diff(_) | Block::Mermaid(_) => (s.code_margin[0], s.code_margin[1]),
-        Block::List { .. } => (8.0, 12.0),
-        Block::Quote(_) => (16.0, 16.0),
-        Block::Rule => (32.0, 32.0),
+        Block::List { .. } => (s.block_margin[0][0], s.block_margin[0][1]),
+        Block::Quote(_) => (s.block_margin[1][0], s.block_margin[1][1]),
+        Block::Rule => (s.block_margin[2][0], s.block_margin[2][1]),
         Block::Table(_) => (s.table_margin[0], s.table_margin[1]),
         Block::Image { .. } => (s.image_margin[0], s.image_margin[1]),
     }
