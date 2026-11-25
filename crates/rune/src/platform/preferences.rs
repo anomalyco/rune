@@ -73,7 +73,7 @@ pub(crate) fn reduced_motion() -> bool {
 #[cfg(any(test, target_os = "linux"))]
 pub(crate) const DEFAULT_DOUBLE_CLICK_MS: u32 = 500;
 /// Default double-click interval (seconds) when the Linux desktop reports none.
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(any(test, all(target_os = "linux", feature = "dbus")))]
 pub(crate) const DEFAULT_DOUBLE_CLICK_SECS: f64 = DEFAULT_DOUBLE_CLICK_MS as f64 / 1000.0;
 /// Bounds for a Linux desktop's reported double-click interval (milliseconds).
 #[cfg(any(test, target_os = "linux"))]

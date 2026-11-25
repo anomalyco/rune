@@ -24,12 +24,12 @@ thread_local! {
     /// surfaces `acquire` reconfigured and got a drawable from.
     static MISSED: Cell<([u32; 4], u32)> = const { Cell::new(([0; 4], 0)) };
     /// Test-only in-memory capture sink for asserting logged frame records without touching disk.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     static CAPTURED: RefCell<Option<Vec<serde_json::Value>>> = const { RefCell::new(None) };
 }
 
 /// Captures every JSON frame line emitted to [`frame`] on the current thread during `f`.
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 pub(crate) fn capture_frames<R>(f: impl FnOnce() -> R) -> (R, Vec<serde_json::Value>) {
     struct Guard(Option<Vec<serde_json::Value>>);
     impl Drop for Guard {
@@ -51,7 +51,7 @@ pub(crate) fn capture_frames<R>(f: impl FnOnce() -> R) -> (R, Vec<serde_json::Va
 
 /// Whether frames are logged in this process.
 pub(crate) fn on() -> bool {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     if CAPTURED.with_borrow(|c| c.is_some()) {
         return true;
     }
@@ -188,7 +188,7 @@ pub(crate) fn frame(f: Frame) {
     let (missed, reconfigured) = MISSED.replace(([0; 4], 0));
     if missed != [0; 4] || reconfigured > 0 { line["missed"] = serde_json::json!({ "occluded": missed[0], "timeout": missed[1], "outdated": missed[2], "unconfigured": missed[3], "reconfigured": reconfigured }); }
     line["loop_check"] = serde_json::json!(f.loop_check.map(|(n, d)| [n as f64, if d.is_finite() { f64::from(d) } else { -1.0 }]));
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     CAPTURED.with_borrow_mut(|slot| {
         if let Some(lines) = slot.as_mut() {
             lines.push(line.clone());

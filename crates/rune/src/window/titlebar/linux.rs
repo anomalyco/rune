@@ -79,6 +79,7 @@ pub(crate) struct Sides {
 
 impl Sides {
     pub(crate) const NONE: Sides = Sides { top: false, right: false, bottom: false, left: false };
+    #[cfg(test)]
     pub(crate) const ALL: Sides = Sides { top: true, right: true, bottom: true, left: true };
 
     pub(crate) fn any(self) -> bool {
