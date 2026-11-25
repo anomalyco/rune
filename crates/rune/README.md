@@ -2163,7 +2163,7 @@ drops. On macOS that's
 macOS, Windows and X11. Wayland reports no file drags in winit 0.30, and the web build has no
 paths to give.
 
-Headless scripts drag and drop files at a point or an element's centre:
+Headless scripts drag and drop files at a point or the centre of an element's shown part:
 `{"drag_files": {"paths": ["a.png"], "key": "zone"}}` moves a drag there, and
 `{"drag_files": "leave"}` takes it away. `{"drop_files": {"paths": ["a.png"], "at": [120, 80],
 "hover": 0.4}}` drags the files there, holds them for 0.4 s so a strip shows the highlight, then
