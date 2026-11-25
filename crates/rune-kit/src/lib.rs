@@ -68,6 +68,7 @@ pub use controls::checkbox::Checkbox;
 pub use controls::field::Field;
 pub use controls::radio::RadioGroup;
 pub use controls::radio::RadioItem;
+pub use controls::radio::RadioSurface;
 pub use controls::segmented::SegmentedControl;
 pub use controls::shortcut_recorder::ShortcutRecorder;
 pub use controls::shortcut_recorder::ShortcutRecorderState;
