@@ -393,10 +393,6 @@ impl BackdropBlur {
         }
     }
 
-    /// Lets go of the pooled backdrops of every format but `live`'s, which the renderer dropped.
-    pub(super) fn keep_backdrops(&mut self, live: &[wgpu::TextureFormat]) {
-        self.first.retain(|(f, _)| live.contains(f));
-    }
 
     pub(super) fn ensure_composite(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         ensure_composite_in(device, &self.composite_layout, &mut self.composite, &mut self.composite_precompiled, &mut self.composites, format);
@@ -526,20 +522,18 @@ impl Renderer {
         blur.ensure_composite(device, self.format);
         for (format, _) in &self.extra { blur.ensure_composite(device, *format); }
         if self.layers.targets.iter().any(Option::is_some) { blur.ensure_composite(device, layers::FORMAT); }
-        // Where the copy a record reads sits in the window, and its size: the whole frame for a
-        // record drawn straight into the frame, the pooled copy in a layer target's format for
-        // one drawn into a layer (`Renderer::backdrop_reads`).
-        let whole = ([0.0; 2], [vw as f32, vh as f32]);
-        let frames = [whole, self.backdrops.iter().find(|b| b.format == layers::FORMAT).map_or(whole, |b| {
+        // Where the pooled copies sit in the window, and their size (`Renderer::backdrop_frame`:
+        // the same for every format).
+        let (corner, held) = self.backdrops.iter().find(|b| b.format == self.format).map_or(([0.0; 2], [vw as f32, vh as f32]), |b| {
             ([b.origin[0] as f32, b.origin[1] as f32], [b.texture.width() as f32, b.texture.height() as f32])
-        })];
+        });
         let mut placed = Vec::new();
         let mut need = [STEP; 2];
         let records = self.effects.iter().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur));
         for (at, i) in records {
             let Some(plan) = plan_region(i, (vw, vh)) else { continue };
             for k in 0..2 { need[k] = need[k].max(plan.size[k]); }
-            placed.push((*at, plan.levels, plan.share, plan.region, plan.origin, frames[usize::from(self.layers.draws_into_target(*at))]));
+            placed.push((*at, plan.levels, plan.share, plan.region, plan.origin));
         }
         if placed.is_empty() { return; }
         let slots = blur.ensure_capacity(device, placed.len(), &self.backdrops);
@@ -551,7 +545,7 @@ impl Renderer {
         let Some(pyramid) = &blur.pyramid else { return };
         let extent = [pyramid.size[0] as f32 * 2.0, pyramid.size[1] as f32 * 2.0];
         let mut levels_data = vec![0u8; placed.len() * SLOTS * SLOT as usize];
-        for (slot, (at, n, share, region, origin, (corner, held))) in placed.into_iter().enumerate() {
+        for (slot, (at, n, share, region, origin)) in placed.into_iter().enumerate() {
             let inside = [(region[0] - origin[0]) / extent[0], (region[1] - origin[1]) / extent[1],
                 (region[2] - origin[0]) / extent[0], (region[3] - origin[1]) / extent[1]];
             let place = [origin[0], origin[1], extent[0], extent[1]];

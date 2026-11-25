@@ -345,27 +345,15 @@ impl Renderer {
         self.sync_resident_caches(&mut atlas.resident_caches);
         self.backdrop_used = self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.kind() == Some(Kind::BackdropBlur));
         if self.backdrop_used {
-            // A backdrop drawn straight into the frame reads a copy of the whole frame, in every
-            // format the frame may be drawn in. One drawn into a layer's own target reads that
-            // target's format: when no frame backdrop shares the copy, it holds only what the
-            // layers' backdrops read.
-            let (frame, layer) = self.backdrop_reads(viewport);
-            let mut live = Vec::with_capacity(self.extra.len() + 2);
-            if frame {
-                for index in 0..=self.extra.len() {
-                    let format = if index == 0 { self.format } else { self.extra[index - 1].0 };
-                    self.ensure_backdrop(device, format, [0, 0, viewport.0, viewport.1], true);
-                    live.push(format);
-                }
+            // Every pooled copy holds the same part of the window, so a backdrop reads the same
+            // texels whichever format its pass draws in.
+            let (origin, size) = self.backdrop_frame(viewport);
+            self.ensure_backdrop(device, self.format, origin, size);
+            for index in 0..self.extra.len() {
+                self.ensure_backdrop(device, self.extra[index].0, origin, size);
             }
-            if let Some((bounds, whole)) = layer.filter(|_| !live.contains(&layers::FORMAT)) {
-                self.ensure_backdrop(device, layers::FORMAT, bounds, whole);
-                live.push(layers::FORMAT);
-            }
-            // The copies no backdrop of this frame reads go now, not at the next rest.
-            if self.backdrops.iter().any(|b| !live.contains(&b.format)) {
-                self.backdrops.retain(|b| live.contains(&b.format));
-                if let Some(blur) = &mut self.backdrop_blur { blur.keep_backdrops(&live); }
+            if self.layers.targets.iter().any(Option::is_some) {
+                self.ensure_backdrop(device, layers::FORMAT, origin, size);
             }
         }
         self.prepare_backdrop_blur(device, queue, viewport);

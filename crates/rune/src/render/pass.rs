@@ -13,7 +13,7 @@ pub(super) struct Backdrop {
 
 /// A backdrop that holds only blurred regions is sized in these steps, so a region that grows or
 /// moves by a few pixels makes no texture.
-const BACKDROP_STEP: u32 = 64;
+pub(super) const BACKDROP_STEP: u32 = 64;
 
 /// The pass a frame records into. Only a pass the renderer opened itself can end mid-frame
 /// (`split`): the caller's own `draw_range` pass has no encoder to copy its target and re-open it.
@@ -272,27 +272,16 @@ impl<'p> std::ops::DerefMut for ActivePass<'_, 'p> {
 }
 
 impl Renderer {
-    /// The pooled backdrop of `format` holds `bounds` (`[x0, y0, x1, y1]`, window device pixels)
-    /// from here on. `whole` is a copy of the whole target, for an effect that reads what is
-    /// below it at the target's own size: exactly that size, at the origin. Otherwise the frame's
-    /// blurred regions alone: a texture kept while it holds them and isn't four times their area
-    /// (a frosted pill in a 2560x1440 window keeps kilobytes, where a copy of the window in a
-    /// layer's format is 28 MB).
-    pub(super) fn ensure_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, bounds: [u32; 4], whole: bool) {
-        let origin = if whole { [0, 0] } else { [bounds[0], bounds[1]] };
-        let need = [bounds[2].saturating_sub(bounds[0]).max(1), bounds[3].saturating_sub(bounds[1]).max(1)];
-        let need = if whole { need } else { need.map(|v| v.next_multiple_of(BACKDROP_STEP)) };
-        if let Some(b) = self.backdrops.iter_mut().find(|b| b.format == format) {
-            let have = [b.texture.width(), b.texture.height()];
-            let fits = if whole { have == need } else {
-                have[0] >= need[0] && have[1] >= need[1] && have[0] as u64 * have[1] as u64 <= 4 * need[0] as u64 * need[1] as u64
-            };
-            if fits {
-                b.origin = origin;
-                return;
-            }
+    /// The pooled backdrop of `format` sits at `origin` in the window and is `size` device
+    /// pixels (`Renderer::backdrop_frame`): kept when it has that size, made again otherwise.
+    pub(super) fn ensure_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, origin: [u32; 2], size: [u32; 2]) {
+        if let Some(b) = self.backdrops.iter_mut().find(|b| b.format == format)
+            && [b.texture.width(), b.texture.height()] == size
+        {
+            b.origin = origin;
+            return;
         }
-        let (width, height) = (need[0], need[1]);
+        let (width, height) = (size[0].max(1), size[1].max(1));
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("effect backdrop"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
