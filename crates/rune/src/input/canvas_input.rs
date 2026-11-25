@@ -36,8 +36,8 @@ pub struct WheelEvent {
     /// Point-precise deltas (a trackpad or a free-spinning wheel), rather than the line steps of
     /// a notched mouse wheel, which an app may want to smooth.
     pub precise: bool,
-    /// Whole notches of a mouse wheel on a platform whose browsers ease them (Windows): an
-    /// unclaimed delta eases there as Chromium's does (`Runtime::set_wheel_glide`).
+    /// Whole notches of a mouse wheel on a platform whose browsers ease them (macOS, Windows,
+    /// and Linux): an unclaimed delta eases there as Chromium's does (`Runtime::set_wheel_glide`).
     pub notch: bool,
 }
 
