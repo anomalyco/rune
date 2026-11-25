@@ -796,7 +796,8 @@ impl Host {
             if !all && renderer.has_oversized_uploads_in_flight() {
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
             }
-            renderer.give_back(all, &mut self.app.rt_mut().text.atlas.resident_caches);
+            let rt = self.app.rt_mut();
+            renderer.give_back(all, &mut rt.text.atlas.resident_caches, &rt.images);
             // Out of sight, what the last frame used goes too, and the staging chunks: an empty
             // submission and a wait land those frees now.
             if all {
