@@ -1,17 +1,26 @@
 #![allow(unsafe_code)]
-//! Verifies that steady-state PCM push and position/capacity queries on `AudioOutput` allocate
-//! zero bytes on the heap.
+//! Verifies that steady-state PCM push, position/capacity queries, and active playback on the
+//! `AudioOutput` worker thread allocate zero bytes on the heap.
 
 use rune_media::{AudioOutput, AudioOutputSpec, SampleFormat};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static SERIAL: Mutex<()> = Mutex::new(());
 use std::time::Duration;
 
 struct Counting;
 thread_local! { static ALLOCS: Cell<usize> = const { Cell::new(0) }; }
-fn bump() { ALLOCS.try_with(|c| c.set(c.get() + 1)).ok(); }
+static GLOBAL_ALLOCS: AtomicUsize = AtomicUsize::new(0);
 
-// SAFETY: forwards every allocation call to `System`, only counting allocations on this thread.
+fn bump() {
+    GLOBAL_ALLOCS.fetch_add(1, Ordering::Relaxed);
+    ALLOCS.try_with(|c| c.set(c.get() + 1)).ok();
+}
+
+// SAFETY: forwards every allocation call to `System`, counting thread-local and process-wide calls.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: Layout) -> *mut u8 {
         bump();
@@ -43,6 +52,7 @@ fn allocs() -> usize {
 
 #[test]
 fn steady_push_and_position_queries_allocate_nothing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let audio = AudioOutput::open_silent(
         AudioOutputSpec::new(SampleFormat::I16, 48_000, 2)
             .buffer_duration(Duration::from_millis(500)),
@@ -75,4 +85,42 @@ fn steady_push_and_position_queries_allocate_nothing() {
     }
     let delta = allocs() - before;
     assert_eq!(delta, 0, "steady-state AudioOutput push/read allocated {delta} times");
+}
+
+#[test]
+fn audio_worker_thread_allocates_nothing_while_playing() {
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let audio = AudioOutput::open_silent(
+        AudioOutputSpec::new(SampleFormat::I16, 48_000, 2)
+            .buffer_duration(Duration::from_millis(500)),
+    )
+    .unwrap();
+    let chunk = vec![500i16; 480 * 2]; // 10 ms stereo chunk
+    for _ in 0..20 {
+        assert_eq!(audio.push_i16(&chunk), Ok(480));
+    }
+    audio.play();
+    // Wait until the worker thread has allocated its one-time scratch buffer and written at least
+    // two quanta so steady-state playback is underway.
+    let deadline = rune_core::time::now() + Duration::from_secs(2);
+    while audio.heard_frames() < 960 {
+        assert!(rune_core::time::now() < deadline, "audio worker did not start playing");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    let start_heard = audio.heard_frames();
+    let before_global = GLOBAL_ALLOCS.load(Ordering::SeqCst);
+    // Stream ~120 ms of live audio across the worker thread while pushing and polling position.
+    while audio.heard_frames() < start_heard + 5_760 {
+        if audio.has_capacity(480) {
+            let _ = audio.push_i16(&chunk);
+        }
+        let _ = audio.position();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let delta_global = GLOBAL_ALLOCS.load(Ordering::SeqCst) - before_global;
+    assert_eq!(
+        delta_global, 0,
+        "steady-state playing AudioOutput (including worker thread) allocated {delta_global} times"
+    );
 }

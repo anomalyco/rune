@@ -32,16 +32,7 @@ fn linux_vm_rss_kib() -> Option<u64> {
     None
 }
 
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn linux_malloc_trim() -> (i32, std::time::Duration) {
-    unsafe extern "C" {
-        fn malloc_trim(pad: usize) -> i32;
-    }
-    let t0 = rune::time::now();
-    // SAFETY: glibc's malloc_trim(0) trims free chunks back to the OS and takes no pointers.
-    let res = unsafe { malloc_trim(0) };
-    (res, t0.elapsed())
-}
+
 
 #[path = "../examples/markdown_large_bench/fixture.rs"]
 mod fixture;
@@ -151,17 +142,33 @@ fn large_markdown_close_and_rest_returns_near_start_page_baseline() {
 
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     {
-        let (trim_res, trim_dur) = linux_malloc_trim();
+        assert!(
+            rune::__heap_trim::uses_glibc_allocator(),
+            "Counting::system() on Linux/glibc must be recognized as glibc-backed"
+        );
+        rune::__heap_trim::wait_idle();
+        rune::__heap_trim::reset_cooldown();
+        let calls_before = rune::__heap_trim::trim_calls();
+        // Trigger Rune's own rest-time heap trim (same entrypoint as Host::give_back, no manual
+        // malloc_trim call in this test).
+        rune::__heap_trim::on_rest();
+        rune::__heap_trim::wait_idle();
+        let calls_after = rune::__heap_trim::trim_calls();
+        let trim_dur = rune::__heap_trim::last_trim_duration();
         let rss_after_trim = linux_vm_rss_kib();
+        assert_eq!(calls_after, calls_before + 1, "rest should trigger exactly one guarded trim");
+        let start_mib = rss_start.unwrap_or(0) as f64 / 1024.0;
+        let rested_mib = rss_rested_before_trim.unwrap_or(0) as f64 / 1024.0;
+        let after_mib = rss_after_trim.unwrap_or(0) as f64 / 1024.0;
         eprintln!(
-            "linux VmRSS (MiB): start={:.2} loaded={:.2} closed={:.2} rested={:.2} after_malloc_trim={:.2} (trim_ret={} trim_ms={:.2})",
-            rss_start.unwrap_or(0) as f64 / 1024.0,
+            "linux VmRSS (MiB): start={start_mib:.2} loaded={:.2} closed={:.2} rested_before_trim={rested_mib:.2} after_rune_rest_trim={after_mib:.2} (trim_ms={:.2})",
             rss_loaded.unwrap_or(0) as f64 / 1024.0,
             rss_closed.unwrap_or(0) as f64 / 1024.0,
-            rss_rested_before_trim.unwrap_or(0) as f64 / 1024.0,
-            rss_after_trim.unwrap_or(0) as f64 / 1024.0,
-            trim_res,
             trim_dur.as_secs_f64() * 1000.0
+        );
+        assert!(
+            after_mib <= start_mib + 15.0,
+            "VmRSS after Rune rest trim ({after_mib:.2} MiB) exceeded start-page baseline ({start_mib:.2} MiB) + 15 MiB"
         );
     }
 
@@ -348,4 +355,126 @@ fn perf_active_and_rest_timings() {
     eprintln!(
         "PERF first_frame={first_frame_ms:.2}ms scroll20={scroll_ms:.2}ms active_flip={flip_ms:.2}ms rest={rest_ms:.2}ms reopen={reopen_ms:.2}ms"
     );
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+#[ignore = "manual perf-profile benchmark measuring malloc_trim duration, RSS drop, and cross-thread arena wait"]
+fn perf_malloc_trim_contention_and_scale() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    assert!(rune::__heap_trim::uses_glibc_allocator());
+
+    fn measure_scale(label: &str, copies: usize) {
+        let mut rt = Runtime::new(AppState { doc: None }, view, (900.0, 700.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        settle_exits(&mut rt);
+        // Prime and trim once so start RSS reflects a clean start page.
+        rune::__heap_trim::wait_idle();
+        rune::__heap_trim::reset_cooldown();
+        rune::__heap_trim::on_rest();
+        rune::__heap_trim::wait_idle();
+        let rss_start = linux_vm_rss_kib().unwrap_or(0) as f64 / 1024.0;
+
+        let mut big = String::new();
+        for i in 0..copies {
+            if i > 0 {
+                big.push_str(&format!("\n\n# Part {i}\n\n"));
+            }
+            big.push_str(&generate_large_guide());
+        }
+        rt.update(|s, tx| {
+            tx.instant();
+            s.doc = Some(big);
+        });
+        rt.frame(1.0 / 60.0);
+        let rss_loaded = linux_vm_rss_kib().unwrap_or(0) as f64 / 1024.0;
+
+        // Close document and rest Runtime (frees Rust heap, before glibc trim).
+        rt.update(|s, tx| {
+            tx.instant();
+            s.doc = None;
+        });
+        rt.frame(1.0 / 60.0);
+        settle_exits(&mut rt);
+        rt.rest();
+        let rss_before_trim = linux_vm_rss_kib().unwrap_or(0) as f64 / 1024.0;
+
+        // Spin another thread doing continuous small/medium heap allocations across the trim to
+        // measure the worst arena-lock pause an allocating thread experiences during malloc_trim.
+        let running = Arc::new(AtomicBool::new(true));
+        let ready = Arc::new(AtomicBool::new(false));
+        let worst_ns = Arc::new(AtomicU64::new(0));
+        let iters = Arc::new(AtomicU64::new(0));
+        let r_flag = Arc::clone(&running);
+        let r_ready = Arc::clone(&ready);
+        let r_worst = Arc::clone(&worst_ns);
+        let r_iters = Arc::clone(&iters);
+        let contender = std::thread::spawn(move || {
+            let mut ring: Vec<Vec<u8>> = Vec::with_capacity(64);
+            for i in 0..64 {
+                ring.push(vec![i as u8; 2048]);
+            }
+            r_ready.store(true, Ordering::Release);
+            let mut idx = 0usize;
+            while r_flag.load(Ordering::Relaxed) {
+                // Allocate 2 KiB (above glibc's 1,032 B tcache limit so it must acquire an arena
+                // lock) and touch one byte so the compiler keeps it.
+                let t0 = rune::time::now();
+                let mut v = Vec::with_capacity(2048 + (idx & 63) * 64);
+                v.push(idx as u8);
+                std::hint::black_box(&v);
+                ring[idx & 63] = v;
+                let dt = t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+                r_worst.fetch_max(dt, Ordering::Relaxed);
+                r_iters.fetch_add(1, Ordering::Relaxed);
+                idx = idx.wrapping_add(1);
+            }
+            std::hint::black_box(ring);
+        });
+        while !ready.load(Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        // Reset worst_ns right before triggering trim so startup cost is excluded.
+        worst_ns.store(0, Ordering::Release);
+        let calls_before = rune::__heap_trim::trim_calls();
+        rune::__heap_trim::reset_cooldown();
+        rune::__heap_trim::on_rest();
+
+        // Also allocate on the main thread (main_arena, where the freed document lived) while the
+        // background malloc-trim task runs so we measure worst-case main_arena mutex contention.
+        let mut main_ring: Vec<Vec<u8>> = (0..32).map(|i| vec![i as u8; 2048]).collect();
+        let mut main_worst_ns = 0u64;
+        let mut main_iters = 0u64;
+        let mut midx = 0usize;
+        while rune::__heap_trim::trim_calls() == calls_before {
+            let t0 = rune::time::now();
+            let mut v = Vec::with_capacity(2048 + (midx & 31) * 64);
+            v.push(midx as u8);
+            std::hint::black_box(&v);
+            main_ring[midx & 31] = v;
+            let dt = t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+            main_worst_ns = main_worst_ns.max(dt);
+            main_iters += 1;
+            midx = midx.wrapping_add(1);
+        }
+        std::hint::black_box(main_ring);
+        rune::__heap_trim::wait_idle();
+        running.store(false, Ordering::Relaxed);
+        contender.join().unwrap();
+
+        let trim_ms = rune::__heap_trim::last_trim_duration().as_secs_f64() * 1000.0;
+        let other_pause_ms = worst_ns.load(Ordering::Relaxed) as f64 / 1_000_000.0;
+        let main_pause_ms = main_worst_ns as f64 / 1_000_000.0;
+        let rss_after_trim = linux_vm_rss_kib().unwrap_or(0) as f64 / 1024.0;
+        eprintln!(
+            "PERF_TRIM [{label}]: start={rss_start:.2}MiB loaded={rss_loaded:.2}MiB before_trim={rss_before_trim:.2}MiB after_trim={rss_after_trim:.2}MiB trim_ms={trim_ms:.2} other_thread_pause_ms={other_pause_ms:.2} main_arena_pause_ms={main_pause_ms:.2} other_iters={} main_iters={main_iters}",
+            iters.load(Ordering::Relaxed)
+        );
+    }
+
+    measure_scale("1x_950KB", 1);
+    measure_scale("3x_2850KB", 3);
 }

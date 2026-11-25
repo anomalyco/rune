@@ -111,3 +111,5 @@ pub(crate) fn low_memory() -> bool { false }
 pub(crate) const fn should_poll_on_idle_rest(is_macos: bool, oversized_in_flight: bool) -> bool {
     is_macos || oversized_in_flight
 }
+
+pub(crate) use super::heap_trim::{maybe_trim_heap, set_trim_enabled as set_heap_trim_enabled};

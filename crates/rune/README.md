@@ -1232,6 +1232,23 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   ignored by Rune's native Metal backend, wgpu's Metal backend, and browser backends (WebGPU/WebGL2).
   In `Manual`, `block_size` bounds suballocator block sizes rather than texture or buffer sizes:
   larger resources still succeed via dedicated allocations.
+- **Memory at rest and Linux/glibc heap trimming (`App::trim_heap_at_rest`).** When a window or
+  overlay goes to rest (after 10 s without drawing, 1 s under low memory, or immediately when
+  hidden, minimised, or fully covered), Rune releases off-screen text layouts and glyph runs,
+  unused images, dormant scene slots, oversized node/paint/memo buffers, and spare GPU targets,
+  then runs `App::on_rest`. On Linux with glibc, freed arena chunks stay resident in `VmRSS`
+  until trimmed, so after rest finishes its releases Rune calls `malloc_trim(0)` once off the UI
+  thread on its shared task pool—coalesced across resting windows and overlays with a 30 s
+  cooldown and never on a periodic idle timer. Because glibc holds each arena's lock while
+  trimming it, a thread allocating in the same arena during a large trim can pause for ~7 ms on a
+  ~206 MiB freed heap and ~14 ms on a ~387 MiB freed heap (more than one 120 Hz frame at 8.3 ms);
+  apps with allocating latency-sensitive threads can turn it off with
+  `App::trim_heap_at_rest(false)` or `RUNE_MALLOC_TRIM=0` (Rune's own `AudioOutput` worker
+  allocates nothing while playing). Apps using a custom `#[global_allocator]` (such as mimalloc
+  or jemalloc) or an `LD_PRELOAD` allocator see a no-op: a once-per-process runtime probe checks
+  whether Rust allocations move glibc's `mallinfo2`/`mallinfo` counters and skips trimming
+  otherwise, and non-glibc targets (macOS, Windows, musl, Android, iOS, and `wasm32`) compile it
+  out completely.
 - **Opt-in effect pipeline warming, per effect (`App::prewarm_effects(PrewarmEffects::BACKDROP_BLUR)`,
   `WindowSpec::prewarm_effects`, `Renderer::set_prewarm_effects`).** Off by default, so apps pay
   no background compilation CPU, driver memory, or worker thread for effects they never draw, and
