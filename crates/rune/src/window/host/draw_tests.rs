@@ -158,6 +158,8 @@ impl FrameHost for MockWindowFrame {
             ReacquireReason::Reblend => self.reblend(),
             #[cfg(any(test, target_os = "macos"))]
             ReacquireReason::NativeMaterials => true,
+            #[cfg(not(target_arch = "wasm32"))]
+            ReacquireReason::ContentResize => true,
         }
     }
 

@@ -86,6 +86,8 @@ pub(crate) mod keys;
 mod lifetime;
 pub(crate) mod options;
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod sizing;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/placement.rs"]
 mod placement;
 #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
@@ -637,6 +639,13 @@ pub(in crate::overlay) struct OverlayCore {
     /// Windows: permanent CPU layered overlay host (`None` on GPU overlays).
     #[cfg(target_os = "windows")]
     cpu: Option<cpu::CpuOverlay>,
+    /// Last resolved logical work area `(w, h)` of the overlay's target display.
+    pub(in crate::overlay) last_work_area: Option<(f32, f32)>,
+    /// Wayland layer-shell async resize configure state machine.
+    #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    pub(in crate::overlay) wayland_resize: sizing::WaylandResize,
+    /// Cached `fit_content_height` flag for placement helpers that don't borrow `OverlayApp`.
+    pub(in crate::overlay) fit_height: bool,
     /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,
@@ -741,6 +750,9 @@ impl OverlayCore {
             compositor_override_logged: false,
             #[cfg(target_os = "windows")]
             cpu: None,
+            last_work_area: None,
+            wayland_resize: sizing::WaylandResize::Ready,
+            fit_height: false,
             #[cfg(test)]
             layer_frame_pending: false,
             #[cfg(test)]
@@ -1026,7 +1038,7 @@ impl OverlayCore {
     fn position_window(&self, event_loop: &ActiveEventLoop, window: &Window) {
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel {
-            panel.place(self.at, &self.options);
+            panel.place_fit(self.at, &self.options, self.fit_height);
             return;
         }
         if let Some(p) = position(event_loop, self.at, &self.options) {
@@ -1112,15 +1124,16 @@ impl OverlayCore {
     }
 
     fn resolve_size(&mut self, event_loop: &ActiveEventLoop) {
+        let fit = self.fit_height && !matches!(self.options.placement, Some(OverlayPlacement::FullScreen));
         let at = Placement { size: self.canvas_size, ..self.at };
         #[cfg(target_os = "macos")]
-        if let Some(rect) = self.panel.as_ref().map_or_else(|| crate::platform::macos::overlay_rect(at, &self.options), |panel| panel.rect(at, &self.options)) {
+        if !fit && let Some(rect) = self.panel.as_ref().map_or_else(|| crate::platform::macos::overlay_rect(at, &self.options), |panel| panel.rect(at, &self.options)) {
             self.at.size = (rect.size.width as f32, rect.size.height as f32);
             return;
         }
         if let Some(monitor) = monitor(event_loop, &self.options.display) {
             let area = monitor.size().to_logical::<f32>(monitor.scale_factor());
-            let rect = crate::overlay::options::local_rect(at, self.options.placement, (area.width, area.height));
+            let rect = sizing::local_rect_for_fit(at, self.options.placement, (area.width, area.height), fit);
             self.at.size = (rect[2], rect[3]);
         }
     }

@@ -10,16 +10,9 @@ impl OverlayCore {
     /// draws at it. It measures without committing: the first visible frame builds as any
     /// show's does, so the show settles or, with `animate_reveal`, plays what the state
     /// started, and that frame's commit keeps its own bookkeeping.
+    #[cfg(test)]
     pub(super) fn fit_for_show(&mut self, app: &mut dyn OverlayApp) {
-        if !app.rt().host.fit_height { return; }
-        let size = self.canvas_size;
-        let rt = app.rt_mut();
-        if rt.window_viewport() != size {
-            let scale = rt.window_scale();
-            rt.set_viewport(size, scale);
-        }
-        // The show's `resolve_size` places it, and a live surface takes it as a resize.
-        if app.rt().stats.commits == 0 || app.rt().stale() { self.canvas_size.1 = app.content_height(); }
+        self.fit_for_show_in(app, None);
     }
 
     pub(super) fn show_fading(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, fade: Duration) {
@@ -34,7 +27,7 @@ impl OverlayCore {
         }
         self.accent_changed(app.rt_mut(), crate::system_accent());
         self.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
-        if !self.presence.fading() { self.fit_for_show(app); }
+        if !self.presence.fading() { self.fit_for_show_in(app, Some(event_loop)); }
         #[cfg(target_os = "windows")]
         if self.uses_cpu_layered(app) && self.show_cpu(app, event_loop, fade) {
             return;
@@ -111,6 +104,7 @@ impl OverlayCore {
         // (`park`): both wait.
         let parks = cfg!(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))) && !wayland;
         if !surface && !parks { return; }
+        self.fit_for_show_in(app, Some(event_loop));
         self.resolve_size(event_loop);
         let made = if wayland {
             self.layer(app, event_loop).or_else(|| self.xwayland(app)).or_else(|| self.toplevel(app, event_loop))
@@ -410,6 +404,7 @@ impl OverlayCore {
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => {
+                self.wayland_resize.step(super::sizing::WaylandResizeEvent::Reset);
                 self.surface.take_live();
                 let rt = app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);

@@ -90,6 +90,16 @@ pub(crate) fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     Some(h.hwnd.get() as HWND)
 }
 
+/// Atomically updates an overlay window's physical desktop origin and size in one `SetWindowPos`.
+#[allow(unsafe_code)]
+pub(crate) fn set_window_rect(window: &winit::window::Window, origin: (i32, i32), size: (u32, u32)) {
+    let Some(hwnd) = hwnd(window) else { return };
+    // SAFETY: live window owned by this thread; `SWP_NOZORDER | SWP_NOACTIVATE` moves and resizes atomically.
+    unsafe {
+        SetWindowPos(hwnd, std::ptr::null_mut(), origin.0, origin.1, size.0.max(1) as i32, size.1.max(1) as i32, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
 /// When the display shows its next refresh after `now`, from DWM's timing (`now` plus a 60 Hz
 /// frame when DWM won't say).
 #[allow(unsafe_code)]

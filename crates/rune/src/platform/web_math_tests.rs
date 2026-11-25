@@ -606,6 +606,8 @@ mod web_frame_host_tests {
             match reason {
                 ReacquireReason::Reblend => self.reblend(),
                 ReacquireReason::NativeMaterials => true,
+                #[cfg(not(target_arch = "wasm32"))]
+                ReacquireReason::ContentResize => true,
             }
         }
 

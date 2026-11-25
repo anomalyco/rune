@@ -667,6 +667,10 @@ impl OverlayCore {
         at.size = size.unwrap_or(at.size);
         if at != self.at || options_changed || reset_position {
             self.at = at;
+            if self.fits_height_active(app.rt()) && (requests.size.is_some() || options_changed) {
+                self.fit_for_show_in(app, Some(event_loop));
+                self.dirty = true;
+            }
             self.resolve_size(event_loop);
             if self.at.size != old_size {
                 self.resized(app, event_loop);

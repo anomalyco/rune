@@ -177,7 +177,7 @@ impl AnyHost for OverlayHost {
         #[cfg(target_os = "macos")]
         if matches!(event, WakeEvent::DisplayTick(_)) {
             if self.core.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.paced()) {
-                self.core.draw(&mut *self.app);
+                self.core.draw(&mut *self.app, Some(event_loop));
             } else if let Some(pacing) = self.core.surface.live_mut().and_then(|l| l.pacing.as_mut()) {
                 pacing.stop_expired();
             }
@@ -280,6 +280,10 @@ impl AnyHost for OverlayHost {
         match event {
             WindowEvent::Moved(_) => {
                 core.position_owner.step(input::PositionEvent::WindowMoved);
+                if core.fit_height {
+                    let (area, _) = core.target_metrics(event_loop);
+                    if area.is_some() { core.last_work_area = area; }
+                }
                 if let Some(live) = core.surface.live() && let Some(w) = live.backing.window() {
                     let scale = crate::window::backing_scale(w);
                     if (scale - live.scale).abs() > f32::EPSILON && let Some(gpu) = core.gpu.clone() {
@@ -294,6 +298,11 @@ impl AnyHost for OverlayHost {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if core.fit_height {
+                    let (area, _) = core.target_metrics(event_loop);
+                    if area.is_some() { core.last_work_area = area; }
+                    core.dirty = true;
+                }
                 if let Some(gpu) = core.gpu.clone() {
                     core.rescale(app, &gpu, scale_factor as f32);
                 }
@@ -436,9 +445,9 @@ impl AnyHost for OverlayHost {
         if !core.presence.shown() {
             core.hidden_input(app);
             #[cfg(target_os = "windows")]
-            let more = if core.has_cpu() { core.draw_cpu(app) } else { core.draw(app) };
+            let more = if core.has_cpu() { core.draw_cpu(app, Some(_event_loop)) } else { core.draw(app, Some(_event_loop)) };
             #[cfg(not(target_os = "windows"))]
-            let more = core.draw(app);
+            let more = core.draw(app, Some(_event_loop));
             return core.a11y_turn(app.rt_mut()) || more;
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -471,9 +480,9 @@ impl AnyHost for OverlayHost {
             }
         }
         #[cfg(target_os = "windows")]
-        let more = if core.has_cpu() { core.draw_cpu(app) } else { core.draw(app) };
+        let more = if core.has_cpu() { core.draw_cpu(app, Some(_event_loop)) } else { core.draw(app, Some(_event_loop)) };
         #[cfg(not(target_os = "windows"))]
-        let more = core.draw(app);
+        let more = core.draw(app, Some(_event_loop));
         core.apply_cursor(app.rt());
         core.a11y_turn(app.rt_mut()) || more
     }

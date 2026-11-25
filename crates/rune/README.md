@@ -1630,10 +1630,13 @@ rune::App::new(spec).fit_content_height().run();
   default 400 pt.
 - Overlays ignore these (`Tx::resize_window` included); use `OverlayHandle::resize`, or
   `ConfiguredOverlay::fit_content_height` for an overlay whose height follows its content (a
-  candidate list, a HUD). It is sized to its content before each show, so its first frame
-  draws at that height, and while shown a change of height resizes it at once (no spring) on
-  the next event-loop turn. Its width comes from `OverlaySpec::size` and
-  `OverlayHandle::resize`, whose height it ignores; give the root no fixed or `fill` height.
+  candidate list, a HUD). It is sized to its content before each show and prewarm (at the
+  target monitor's scale and active `RendererKind`, clamped to the display's work area), so
+  its first frame draws at that height with no flash. While shown, a height change resizes
+  and re-places the overlay before painting in the same frame (no spring; on Wayland
+  layer-shell, holds the previous frame until the compositor confirms the new size). Its
+  width comes from `OverlaySpec::size` and `OverlayHandle::resize`, whose height it ignores;
+  give the root no fixed or `fill` height.
 
 ### Window chrome and shell controls (OpenCode Desktop fidelity)
 

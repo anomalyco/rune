@@ -421,6 +421,7 @@ impl super::OverlayCore {
         use winit::window::{Window, WindowLevel};
 
         if self.cpu.is_some() || (!showing && self.defers_gpu()) { return true; }
+        self.fit_for_show_in(app, Some(event_loop));
         self.resolve_size(event_loop);
         let flags = layered::window_attrs_for_cpu_layered();
         let mut attrs = Window::default_attributes()
@@ -574,9 +575,12 @@ impl super::OverlayCore {
         if let Some(cpu) = self.cpu.as_mut() { cpu.engine.invalidate_full(); }
         let now = crate::time::now();
         let (animating, _dt) = super::frame::step(app, &mut self.clock, now, false);
+        if let Some(next) = self.take_live_fit_resize(app.rt_mut()) {
+            self.apply_content_resize_cpu(app, Some(event_loop), next);
+        }
         self.sync_cpu_after_step(app);
         crate::system_material::announce(&mut self.on_materials, app.rt());
-        let origin = self.cpu_window_origin(&window);
+        let origin = self.origin.map_or_else(|| self.cpu_window_origin(&window), |p| (p.x, p.y));
         let Some(hwnd) = crate::platform::win32::hwnd(&window) else {
             self.fallback_from_cpu_layered(app, event_loop, true, "overlay window has no HWND".into());
             return false;
@@ -711,7 +715,7 @@ impl super::OverlayCore {
     /// Draws one frame on the Windows CPU layered path and paces animating frames via
     /// `PollPace` + `vsync_grid` (stopping all wakes when idle). Always returns `false` so the
     /// event loop sleeps until the next vblank tick instead of spinning `ControlFlow::Poll`.
-    pub(super) fn draw_cpu(&mut self, app: &mut dyn super::OverlayApp) -> bool {
+    pub(super) fn draw_cpu(&mut self, app: &mut dyn super::OverlayApp, event_loop: Option<&winit::event_loop::ActiveEventLoop>) -> bool {
         let now = crate::time::now();
         self.presence_due(app, now);
         if !self.presence.drawing() {
@@ -734,6 +738,9 @@ impl super::OverlayCore {
         self.meter.redraw(true);
         let frame_now = crate::time::now();
         let (animating, _dt) = super::frame::step(app, &mut self.clock, frame_now, false);
+        if let Some(next) = self.take_live_fit_resize(app.rt_mut()) {
+            self.apply_content_resize_cpu(app, event_loop, next);
+        }
         self.sync_cpu_after_step(app);
         crate::system_material::announce(&mut self.on_materials, app.rt());
         let alpha = match self.presence {
@@ -743,7 +750,7 @@ impl super::OverlayCore {
             _ => 255,
         };
         let Some(window) = self.cpu.as_ref().map(|c| c.window.clone()) else { return false };
-        let origin = self.cpu_window_origin(&window);
+        let origin = self.origin.map_or_else(|| self.cpu_window_origin(&window), |p| (p.x, p.y));
         let Some(hwnd) = crate::platform::win32::hwnd(&window) else { return false };
         let prev_degraded = self.cpu.as_ref().and_then(|c| c.engine.active_degraded());
         let outcome = {
