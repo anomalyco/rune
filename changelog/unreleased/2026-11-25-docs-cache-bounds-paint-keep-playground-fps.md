@@ -1,0 +1,1 @@
+- Docs: documented `ImageAtlas` retention and overflow bounds, `TextQuads` cache bounds, `PaintKeep` strict mode (`RUNE_PAINT_KEEP_STRICT`, `Runtime::set_paint_keep_strict`, `Runtime::paint_keep_mismatches`), and the `playground` example's `RUNE_REVEAL_FPS` / `RUNE_AMBIENT_FPS` environment variables.

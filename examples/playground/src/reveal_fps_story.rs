@@ -1,6 +1,7 @@
 //! The "Controls/Motion/Reveal pacing" playground story: demonstrates `El::reveal` word fades
 //! with optional concurrent motion, ready to run with `App::reveal_fps(30.0)` (pass
-//! `--reveal-fps 30` to the playground binary).
+//! `--reveal-fps 30` or `RUNE_REVEAL_FPS=30` to the playground binary; `--reveal-fps` wins
+//! when both are set).
 
 use rune::tok::{self, radius, type_};
 use rune::{Color, Cycle, Cx, El, Story, TextStyle, col, el, row, text};
