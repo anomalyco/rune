@@ -31,6 +31,7 @@ pub(in crate::window) enum Redraw {
     /// The window paints, and wants the next frame.
     PaintingAgain,
     /// The window painted and wants the next frame, which the turn's end asks for.
+    #[cfg(any(not(target_os = "macos"), test))]
     Wants,
 }
 
@@ -43,8 +44,10 @@ pub(in crate::window) enum RedrawEvent {
     #[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
     DrewOutsidePaint,
     /// A paint starts.
+    #[cfg(not(target_os = "macos"))]
     Paint,
     /// The paint ends.
+    #[cfg(not(target_os = "macos"))]
     Painted,
     /// The loop's turn ends. `paints`: the window is on screen, and Windows puts its paint off
     /// behind the others'.
@@ -69,13 +72,20 @@ impl Redraw {
             (Painting | PaintingAgain, Ask(_)) => (PaintingAgain, E::None),
             // The first ask's time is how long it has waited.
             (Asked { at }, Ask(_)) => (Asked { at }, E::Request),
-            (Idle | Satisfied | Wants, Ask(now)) => (Asked { at: now }, E::Request),
+            (Idle | Satisfied, Ask(now)) => (Asked { at: now }, E::Request),
+            #[cfg(any(not(target_os = "macos"), test))]
+            (Wants, Ask(now)) => (Asked { at: now }, E::Request),
             (Asked { .. }, DrewOutsidePaint) => (Satisfied, E::None),
             (state, DrewOutsidePaint) => (state, E::None),
+            #[cfg(not(target_os = "macos"))]
             (_, Paint) => (Painting, E::None),
+            #[cfg(not(target_os = "macos"))]
             (Painting, Painted) => (Idle, E::None),
+            #[cfg(not(target_os = "macos"))]
             (PaintingAgain, Painted) => (Wants, E::None),
+            #[cfg(not(target_os = "macos"))]
             (state, Painted) => (state, E::None),
+            #[cfg(any(not(target_os = "macos"), test))]
             (Wants, TurnEnds { now, .. }) => (Asked { at: now }, E::Request),
             (Asked { at }, TurnEnds { now, paints: true }) if now >= at + STARVE => (Painting, E::PaintNow),
             (state, TurnEnds { .. }) => (state, E::None),

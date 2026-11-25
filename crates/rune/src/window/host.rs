@@ -94,7 +94,7 @@ pub(in crate::window) struct Host {
     /// Its place among the windows receiving links (`App::on_open_url`) and files (`App::on_open_files`).
     pub(in crate::window) _incoming: crate::open_url::incoming::Listeners,
     pub(in crate::window) release_gpu: bool,
-    #[cfg_attr(not(any(target_os = "windows", target_os = "linux", test)), allow(dead_code))]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(in crate::window) cpu_first: crate::CpuFirst,
     pub(in crate::window) prewarm_effects: crate::PrewarmEffects,
     pub(in crate::window) open_at_start: bool,
@@ -226,6 +226,7 @@ struct HostInit {
     args: Args,
     keep_running: bool,
     release_gpu: bool,
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     cpu_first: crate::CpuFirst,
     prewarm_effects: crate::PrewarmEffects,
     open_at_start: bool,
@@ -272,8 +273,10 @@ impl Host {
         let windows_window = std::mem::take(&mut app.windows_window);
         let exclude_from_capture = app.exclude_from_capture;
         let color_scheme = app.color_scheme;
-        let (open, keep_running, release_gpu, cpu_first, prewarm_effects, fit_height, float_on_open) = (
-            app.open, app.keep_running, app.release_gpu, app.cpu_first, app.prewarm_effects, app.fit_content_height, app.float_on_open,
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        let cpu_first = app.cpu_first;
+        let (open, keep_running, release_gpu, prewarm_effects, fit_height, float_on_open) = (
+            app.open, app.keep_running, app.release_gpu, app.prewarm_effects, app.fit_content_height, app.float_on_open,
         );
         let (open_inactive, open_as, chrome, titlebar) = (app.open_inactive, app.open_as, app.chrome, app.titlebar);
         let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
@@ -322,6 +325,7 @@ impl Host {
             args,
             keep_running,
             release_gpu,
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
             prewarm_effects,
             open_at_start: open,
@@ -369,6 +373,7 @@ impl Host {
             mut args,
             keep_running,
             release_gpu,
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
             prewarm_effects,
             open_at_start,
@@ -490,6 +495,7 @@ impl Host {
             turn: any_host::Turn::Between,
             _incoming: incoming,
             release_gpu,
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
             prewarm_effects,
             open_at_start,
@@ -574,7 +580,7 @@ impl Host {
 
     /// Effective CPU-first policy for this window, with `RUNE_CPU_FIRST` taking precedence over
     /// `App::cpu_first` / `WindowSpec::cpu_first`.
-    #[cfg_attr(not(any(target_os = "windows", target_os = "linux", test)), allow(dead_code))]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(in crate::window) fn effective_cpu_first(&self) -> crate::CpuFirst {
         self.cpu_first.effective()
     }

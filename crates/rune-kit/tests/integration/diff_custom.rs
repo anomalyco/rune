@@ -3,10 +3,14 @@
 //! memoised rows, and split-mode rendering, selection and copying with per-side original text.
 
 use rune::runtime::ElementInfo;
-use rune::{Color, Cx, El, Env, Key, KeyEvent, Mods, Runtime, col, row, text};
+#[cfg(feature = "syntax")]
+use rune::Color;
+use rune::{Cx, El, Env, Key, KeyEvent, Mods, Runtime, col, row, text};
 use rune_kit::Kit;
 use rune_kit::diff::{DiffMode, DiffOptions, DiffState, DiffView, Expand, FileDiff, LineRange, LineRef, Side};
-use rune_kit::syntax::{Syntax, SyntaxTheme};
+#[cfg(feature = "syntax")]
+use rune_kit::syntax::Syntax;
+use rune_kit::syntax::SyntaxTheme;
 
 struct App {
     diff: DiffState,
@@ -83,6 +87,7 @@ fn press(rt: &mut Runtime<App>, end: &str) {
     settle(rt);
 }
 
+#[cfg(feature = "syntax")]
 fn has_instance_color(rt: &Runtime<App>, c: Color) -> bool {
     rt.instances.iter().any(|inst| {
         (inst.fill[0] - c.r).abs() < 1e-3

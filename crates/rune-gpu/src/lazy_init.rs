@@ -52,6 +52,7 @@ pub(crate) struct SubresourceRange {
     pub layers: u32,
 }
 
+#[cfg(test)]
 impl SubresourceRange {
     pub(crate) fn single(mip: u32, layer: u32) -> Self {
         Self { base_mip: mip, mips: 1, base_layer: layer, layers: 1 }

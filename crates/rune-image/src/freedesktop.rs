@@ -616,6 +616,7 @@ mod spec {
     }
 
     /// Resolves a `.desktop` entry's `Icon=` in `data_dirs` (uses `hicolor` when no theme is given).
+    #[cfg(test)]
     pub(crate) fn icon_file(entry: &Path, px: u32, data_dirs: &[PathBuf]) -> Option<PathBuf> {
         icon_file_scaled(entry, px, 1, Some("hicolor"), data_dirs, None)
     }

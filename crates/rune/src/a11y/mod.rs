@@ -306,6 +306,7 @@ impl Adapter {
 
     /// Tells assistive clients the window's content changed, so one that looked before this
     /// adapter existed asks again.
+    #[cfg(target_os = "windows")]
     pub(crate) fn notify_structure(&self) {
         #[cfg(all(feature = "accessibility", target_os = "windows"))]
         self.inner.notify(tree::Changes { structure: true, moved: false });

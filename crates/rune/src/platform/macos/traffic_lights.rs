@@ -174,12 +174,10 @@ unsafe fn hold_object(object: &AnyObject) {
             let original = Arc::new(AtomicUsize::new(method_getImplementation(method) as usize));
             let call = original.clone();
             let block = block2::RcBlock::new(move |this: *mut AnyObject| {
-                // SAFETY: `call` holds the original `-(void)layout` IMP replaced on `class`.
-                unsafe {
-                    let imp: unsafe extern "C" fn(*mut AnyObject, Sel) = std::mem::transmute(call.load(Ordering::Acquire));
-                    imp(this, sel!(layout));
-                    after_layout(this);
-                }
+                // `call` holds the original `-(void)layout` IMP replaced on `class`.
+                let imp: unsafe extern "C" fn(*mut AnyObject, Sel) = std::mem::transmute(call.load(Ordering::Acquire));
+                imp(this, sel!(layout));
+                after_layout(this);
             });
             let imp = imp_implementationWithBlock(block2::RcBlock::as_ptr(&block).cast());
             if imp.is_null() {
@@ -191,12 +189,10 @@ unsafe fn hold_object(object: &AnyObject) {
         } else if let Some(parent) = parent {
             let types = method_getTypeEncoding(method);
             let block = block2::RcBlock::new(move |this: *mut AnyObject| {
-                // SAFETY: `this` is a live instance of `class` and `parent` implements `-layout`.
-                unsafe {
-                    if !this.is_null() {
-                        let _: () = msg_send![super(&*this, parent), layout];
-                        after_layout(this);
-                    }
+                // `this` is a live instance of `class` and `parent` implements `-layout`.
+                if !this.is_null() {
+                    let _: () = msg_send![super(&*this, parent), layout];
+                    after_layout(this);
                 }
             });
             let imp = imp_implementationWithBlock(block2::RcBlock::as_ptr(&block).cast());

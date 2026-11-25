@@ -63,6 +63,7 @@ pub(crate) enum Event {
     /// The loop closed the windows for the session's end (`Effect::CloseAndExit`).
     WindowsClosed,
     /// The system took the quit back (another app refused a logoff): the app runs on.
+    #[cfg(target_os = "windows")]
     Cancel,
     /// The event loop ended.
     Exited,
@@ -94,6 +95,7 @@ pub(crate) fn step(state: State, event: Event) -> (State, Vec<Effect>) {
         (Quitting(Hooks::Ran, was), Start { ending, after }) => (Quitting(Hooks::Ran, was.max(after)), close(ending)),
         (Quitting(_, after), HooksRan) => (Quitting(Hooks::Ran, after), vec![]),
         (Quitting(..), WindowsClosed) => (Closed, vec![]),
+        #[cfg(target_os = "windows")]
         (Running | Quitting(..), Cancel) => (Running, vec![]),
         (Running, HooksRan | WindowsClosed) => (Running, vec![]),
     }
