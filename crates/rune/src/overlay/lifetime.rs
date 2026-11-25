@@ -210,6 +210,9 @@ impl OverlayCore {
         // then releases what it held.
         #[cfg(target_os = "macos")]
         { self.fn_key(app); self.media_keys(app); self.prime.stop(); }
+        // Answer any activation-token requests queued before a synchronous hide (such as
+        // `Shell::Close` from an input handler) while the surface is still shown and live.
+        self.answer_tokens();
         // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
         let fade = if cfg!(any(target_os = "macos", target_os = "windows")) { fade } else { Duration::ZERO };
         let effects = self.presence.step(presence::Event::Hide { fade, now: crate::time::now() }, self.release);
@@ -325,6 +328,8 @@ impl OverlayCore {
         app.rt_mut().cancel_pointer();
         self.apply_cursor(app.rt());
         self.hidden_input(app);
+        // Any token requested by `on_focus(false)` while already hiding cannot wait for a live surface.
+        self.drain_tokens_none();
         let Some(live) = self.surface.live() else { return };
         match &live.backing {
             Backing::Window(window) => {
