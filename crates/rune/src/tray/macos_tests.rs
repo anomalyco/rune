@@ -365,5 +365,10 @@ fn fake_host_set_icon_set_title_rect_and_check_menu_items() {
     let off_main_rect = std::thread::spawn(move || for_thread.rect()).join().unwrap();
     assert_eq!(off_main_rect, Some([2320, 0, 92, 48]));
 
+    // Removing all tray items on exit hides the status item immediately before Drop runs.
+    remove_all_on_main();
+    assert!(fake.removed.get(), "remove_all must remove live status items immediately");
+    assert_eq!(native.rect(), None);
+
     drop(native);
 }

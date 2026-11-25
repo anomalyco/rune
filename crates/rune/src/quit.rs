@@ -125,10 +125,11 @@ pub fn fast_exit(last: fn()) {
 /// [`fast_exit`]): windows, GPU devices and threads are dropped and `run` returns, for an app with
 /// work after `run` or destructors that must run. Call it before the app runs.
 ///
-/// In-flight background GPU warm-up is cancelled as soon as the event loop begins exiting, and
-/// exit waits up to 30 seconds for those warm-up threads to finish so slow driver or shader
+/// Windows, overlays and tray icons are hidden and removed before exit waits for any in-flight
+/// background GPU warm-up. Warm-up is cancelled as soon as the event loop begins exiting, and
+/// exit waits up to 10 seconds for those warm-up threads to finish so slow driver or shader
 /// startup under load drains cleanly and `run` returns. As a last resort against a driver call
-/// that is truly hung, if a warm-up thread has still not exited after 30 seconds, Rune logs to
+/// that is truly hung, if a warm-up thread has still not exited after 10 seconds, Rune logs to
 /// stderr and ends the process immediately (`_exit` on Unix, `TerminateProcess` on Windows)
 /// without running destructors under the stuck thread or returning from `run`.
 pub fn orderly_exit() {
