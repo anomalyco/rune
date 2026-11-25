@@ -1,4 +1,4 @@
-//! A notched mouse wheel's motion, as Chromium animates it on Windows and Linux
+//! A notched mouse wheel's motion, as Chromium animates it on macOS, Windows, and Linux
 //! (`cc/animation/scroll_offset_animation_curve.cc`, a mouse wheel's `kInverseDelta` curve):
 //! each notch moves the target, and the offset eases there over a time that shrinks as the
 //! distance grows (200 ms for 120 device pixels or less, 100 ms for 480 or more), on

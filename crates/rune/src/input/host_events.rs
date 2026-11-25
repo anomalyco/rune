@@ -430,6 +430,25 @@ pub(crate) fn web_wheel(
     (outcome != WheelOutcome::Ignored, None)
 }
 
+/// Returns whether a winit wheel delta comes from a discrete mouse-wheel notch on a platform
+/// whose browsers ease notched wheels.
+///
+/// On macOS, AppKit's `hasPreciseScrollingDeltas == false` (mapped by winit to `LineDelta`)
+/// already isolates discrete physical mouse wheels from trackpads, Magic Mouse, Mighty Mouse,
+/// and smooth-scroll utilities (`PixelDelta`), while OS scroll acceleration makes those line
+/// deltas fractional; matching Chromium (`components/input/web_input_event_builders_mac.mm`
+/// and `cc/input/input_handler.cc::ShouldAnimateScroll`), every macOS `LineDelta` is a notch.
+/// On Windows and Linux, whole lines are a notched wheel while a free-spinning wheel or a
+/// precision touchpad sends fractions (the run decides, `WheelLock::notched`).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn line_delta_is_notch(delta: MouseScrollDelta, is_macos: bool, is_win_or_linux: bool) -> bool {
+    match delta {
+        MouseScrollDelta::LineDelta(_, _) if is_macos => true,
+        MouseScrollDelta::LineDelta(x, y) if is_win_or_linux => x.fract() == 0.0 && y.fract() == 0.0,
+        _ => false,
+    }
+}
+
 /// Translates a winit `MouseWheel` event into runtime pinch-wheel, `WheelEvent`, or
 /// pointer-less phase begin/end notifications, scaled into view points.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -453,11 +472,11 @@ pub(crate) fn wheel(
         MouseScrollDelta::LineDelta(_, y) if !shift => Some(y),
         _ => None,
     };
-    // Whole lines are a notched wheel; a free-spinning wheel or a precision touchpad
-    // sends fractions (the run decides, `WheelLock::notched`). On Linux winit gives a
-    // wheel's detents as whole lines too and a touchpad's as fractions or pixels.
-    let notch = cfg!(any(target_os = "windows", target_os = "linux"))
-        && matches!(delta, MouseScrollDelta::LineDelta(x, y) if x.fract() == 0.0 && y.fract() == 0.0);
+    let notch = line_delta_is_notch(
+        delta,
+        cfg!(target_os = "macos"),
+        cfg!(any(target_os = "windows", target_os = "linux")),
+    );
     let _ = wheel_core(
         rt,
         WheelInput {
@@ -716,3 +735,7 @@ pub(crate) fn refresh_focus_preferences(
 #[cfg(test)]
 #[path = "host_events_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "host_events_wheel_tests.rs"]
+mod wheel_tests;
