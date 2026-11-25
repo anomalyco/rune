@@ -763,6 +763,10 @@ impl Host {
         // press changes.
         #[cfg(target_os = "windows")]
         if let Some(l) = &self.win { sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar); }
+        // A Linux frame of Rune's own takes the desktop's button layout, which the settings
+        // portal asks for this paint to show, and whether the window is maximized.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if crate::titlebar::linux::chosen() && let Some(l) = &self.win { sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar); }
         self.redraw();
         self.shell(event_loop);
         // What asked for a frame while it painted waits for the turn's end.
