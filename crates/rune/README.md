@@ -3056,6 +3056,15 @@ is one more host on the event loop
   or the display connection fails, the overlay hides, marks itself `Availability::Unavailable`
   with `failure()` populated, and fires `on_availability`; a later successful `show()`
   clears `failure()` and transitions back to `Availability::Available`.
+- Wayland without layer-shell (GNOME): an overlay that takes no input, or the pointer when
+  `OverlayOptions::xwayland_input` opts in, shows on XWayland as an override-redirect window.
+  Failing that (no XWayland, `KeyPolicy::OnDemand`, or pointer input without the opt-in), it
+  falls back to an undecorated, transparent xdg toplevel carrying the app's id, destroyed on
+  hide. The protocol gives a toplevel no position or stacking, and its input region is the whole
+  surface or nothing, so `capabilities()` reports `placement` and `always_on_top` as
+  `Unsupported`, and `click_through` too under `OverlayInput::Regions`; the compositor may also
+  focus it when it maps (`nonactivating_keys` is `Unsupported`). Every other backend reports
+  those three `Supported`.
 - X11: an override-redirect notification window, empty input shape unless interactive.
 - macOS: winit's view (and the Metal layer wgpu draws into) moves into a non-activating
   `NSPanel` (`NonactivatingPanel`, `becomesKeyOnlyIfNeeded`) at status level (25) on every

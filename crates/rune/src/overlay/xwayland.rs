@@ -13,9 +13,8 @@ impl OverlayCore {
         let wake = self.shared.wake.lock().unwrap().clone();
         let surface = crate::platform::x11::xwayland::XwaylandSurface::new(self.name, self.at, &self.options, input, wake)?;
         let scale = surface.scale();
-        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
-            capture_exclusion: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Unsupported, nonactivating_keys: OverlaySupport::Unsupported,
-        };
+        let unsupported = OverlaySupport::Unsupported;
+        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities::placed(unsupported, unsupported, unsupported);
         self.attach(app, Backing::Xwayland(surface), scale)
     }
 

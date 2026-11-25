@@ -9,6 +9,8 @@
 //!   Without layer-shell (GNOME), an overlay that takes no input shows on XWayland instead
 //!   (`x11/xwayland.rs`): an override-redirect ARGB window with an empty input shape. One that
 //!   takes the pointer does too when its host opts in (`OverlayOptions::xwayland_input`).
+//!   Failing both, it falls back to an undecorated transparent toplevel (`toplevel.rs`) that
+//!   reports degraded placement, stacking and click-through in its capabilities.
 //! - X11: an override-redirect notification window, with an empty input shape unless
 //!   interactive. A `KeyPolicy::OnDemand` one sets the input focus itself on `request_keys` and
 //!   on a click.
@@ -100,6 +102,9 @@ use retire::Retire;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/surface.rs"]
 mod surface;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "overlay/toplevel.rs"]
+mod toplevel;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/xwayland.rs"]
 pub(crate) mod xwayland;
@@ -410,7 +415,8 @@ enum Backing {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Layer(crate::platform::layer_shell::LayerSurface),
     /// Wayland without layer-shell: an X11 window on XWayland, for overlays that take no input
-    /// or whose host opted in to pointer input there.
+    /// or whose host opted in to pointer input there. Without that either, a Wayland toplevel
+    /// (`Window`, `toplevel.rs`).
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }

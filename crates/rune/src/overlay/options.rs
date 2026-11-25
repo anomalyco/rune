@@ -392,11 +392,33 @@ pub enum OverlaySupport {
     Failed,
 }
 
+/// What the overlay's backend can do. `Unsupported` in `placement`, `always_on_top` or
+/// `click_through` marks a degraded backing, such as the plain Wayland toplevel an overlay
+/// falls back to without layer-shell or XWayland (GNOME), so an app can adapt.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OverlayCapabilities {
     pub capture_exclusion: OverlaySupport,
     pub nonactivating_keys: OverlaySupport,
     pub global_pointer: OverlaySupport,
+    /// The overlay goes where its edge, rect or display target says. A Wayland toplevel can't
+    /// position itself: the compositor places it.
+    pub placement: OverlaySupport,
+    /// The overlay stays above other windows. A Wayland toplevel stacks like any window.
+    pub always_on_top: OverlaySupport,
+    /// Clicks outside `OverlayInput::Regions` hit regions reach what's under the overlay. A
+    /// Wayland toplevel takes no input at all under `OverlayInput::None`, but under `Regions`
+    /// its whole surface takes clicks.
+    pub click_through: OverlaySupport,
+}
+
+impl OverlayCapabilities {
+    /// A backend that places, stacks and passes clicks through as asked (every one but the
+    /// Wayland toplevel fallback), with what else it reports.
+    #[cfg_attr(any(target_arch = "wasm32", target_os = "ios", target_os = "android"), allow(dead_code))]
+    pub(crate) const fn placed(capture_exclusion: OverlaySupport, nonactivating_keys: OverlaySupport, global_pointer: OverlaySupport) -> Self {
+        let s = OverlaySupport::Supported;
+        OverlayCapabilities { capture_exclusion, nonactivating_keys, global_pointer, placement: s, always_on_top: s, click_through: s }
+    }
 }
 
 /// Bounds in logical points, local to a display. Also shared by native placement tests.
