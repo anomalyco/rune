@@ -180,6 +180,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
         .on_close(|_, _| {})
         .on_quit(|_, _| {})
         .turn_scope(|_| {}, |_| {})
+        .on_display_events(|_| false, |_, _| false)
         .on_reopen(|_, _, _| false)
         .on_open_url(|_, _, _| {})
         .on_open_files(|_, _, _| {})
@@ -205,6 +206,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
     assert!(window.app.on_rest.is_some() && window.app.on_close_request.is_some() && window.app.on_close.is_some() && window.app.on_quit.is_some());
     assert!(window.app.turn_scope.is_some() && window.app.on_reopen.is_some() && window.app.on_open_url.is_some() && window.app.on_open_files.is_some());
     assert!(window.app.on_window.is_some() && window.app.on_ready.is_some() && window.app.on_display_close.is_some());
+    assert!(window.app.display_events.is_some());
     assert!(window.app.on_frame_encoded.is_some() && window.app.on_frame_presented.is_some() && window.app.on_frame_drawn.is_some());
     assert!(window.app.compositor.is_some());
 

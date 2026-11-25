@@ -32,10 +32,13 @@ use std::sync::Arc;
 use crate::el::Tx;
 use crate::tooling::{AppSpec, Args};
 
+mod display_events;
 #[path = "app/web.rs"]
 mod web;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use web::with_font;
+
+pub(crate) use display_events::{DisplayEvents, DisplayWatch};
 
 pub(crate) type Update<S> = Box<dyn FnOnce(&mut S, &mut Tx) -> bool + Send>;
 /// `App::on_window`'s hook, run after each native window creation.
@@ -123,6 +126,7 @@ pub struct App<S: 'static> {
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
     pub(crate) turn_scope: Option<TurnScope<S>>,
+    pub(crate) display_events: Option<DisplayEvents<S>>,
     pub(crate) on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
@@ -194,6 +198,7 @@ impl<S: 'static> App<S> {
             on_close: None,
             on_quit: None,
             turn_scope: None,
+            display_events: None,
             on_rest: None,
             on_reopen: None,
             on_open_url: None,

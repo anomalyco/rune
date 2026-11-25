@@ -90,6 +90,7 @@ impl MockWindowFrame {
             on_quit: None,
             on_reopen: None,
             turn_scope: None,
+            display_events: None,
             keep_layout: None,
             kept_layout: None,
         };
@@ -302,6 +303,7 @@ fn cursor_moved_skips_redraw_within_same_hovered_row_and_keeps_quiet_timer_and_l
         on_quit: None,
         on_reopen: None,
         turn_scope: None,
+        display_events: None,
         keep_layout: None,
         kept_layout: None,
     };
@@ -663,6 +665,7 @@ fn window_app_forwards_release_compositor_gpu() {
         on_quit: None,
         on_reopen: None,
         turn_scope: None,
+        display_events: None,
         keep_layout: None,
         kept_layout: None,
     });

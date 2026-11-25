@@ -852,6 +852,14 @@ app.run();
   once on the UI thread immediately before the event loop drops windows and tears down the native
   display connection (after `on_close` and `on_quit`), so foreign proxies or queues bound on
   winit's display can be destroyed before the display closes.
+- `App::on_display_events(pending, dispatch)` (also forwarded on `WindowSpec::on_display_events`)
+  gives an event queue the app keeps on winit's display a turn on the UI thread: at the end of
+  each turn of a started, open window Rune calls `pending(&S)` (with wayland-client,
+  `queue.prepare_read().is_none()`), and when it returns true runs `dispatch(&mut S, &mut Tx)`
+  in the next turn like `AppHandle::update_if`, so it can change state and ask for a frame; a
+  dispatch still queued isn't queued again. On Wayland winit also wakes on every display read
+  while the hook is set, so a read that only filled the app's queue still gets a turn;
+  elsewhere only the end-of-turn check runs.
 - `AppSpec::min_size` sets the smallest window (None keeps 420×400).
 - `AppHandle::set_dock_icon(bool)` switches macOS between the regular and accessory activation
   policies at runtime.
