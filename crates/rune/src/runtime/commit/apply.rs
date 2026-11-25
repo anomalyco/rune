@@ -11,7 +11,7 @@ impl RuntimeCore {
     /// state (or latched a follow-up focus request), so `commit` can reflect it in the same frame.
     pub(in crate::runtime) fn apply(&mut self, app: &mut dyn AppDriver, measured: Measured, tx: &Tx) -> bool {
         let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
-        let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, titlebar, caret_read, wm_state_read, memo_flattened, memo_reused, taken_paths, .. } = measured;
+        let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, titlebar, caret_read, wm_state_read, memo_flattened, memo_reused, taken_paths, above_fit_styles, .. } = measured;
         let rebound_press = self.rebound_press_path(&nodes);
         self.commit.defaults = defaults;
         if crate::tooling::interaction::active() { self.interaction_reused(&memo_reused); }
@@ -612,7 +612,7 @@ impl RuntimeCore {
         self.motion.sync_loops(&self.tree.nodes, &self.scene, self.t, self.clock, self.time_scale, time_scaled, any_loop, tx.commit.lands() || self.reduced_motion);
         taffy.compact_if_sparse(|me, slot| self.tree.nodes[me as usize].taffy = slot);
         self.commit.layout = taffy;
-        self.commit.reuse.built(self.env.scale, self.paint.srgb_blend());
+        self.commit.reuse.built(self.env.scale, self.paint.srgb_blend(), above_fit_styles);
         self.text.end_commit();
         self.commit.dirty = false;
         self.commit.relayout = false;

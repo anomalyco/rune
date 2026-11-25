@@ -426,8 +426,9 @@ impl Measurement<'_> {
 
     /// Bounds each placed `anchored_fit` overlay that overflows its bounds on the main axis
     /// (neither side of its anchor fits) or the cross axis (wider/taller than the bounds minus
-    /// margins), through its style. True when any changed, so layout runs again.
-    pub(super) fn fit_anchored(&self, taffy: &mut LayoutEngine, nodes: &[Node]) -> bool {
+    /// margins), through its style. Records each clamped node's unclamped style in `saved` so
+    /// a later `Relayout` can restore it before re-fitting. True when any changed.
+    pub(super) fn fit_anchored(&self, taffy: &mut LayoutEngine, nodes: &[Node], saved: &mut Vec<(usize, CompactStyle)>) -> bool {
         let mut changed = false;
         for (i, n) in nodes.iter().enumerate() {
             let Some(a) = n.above.as_ref().filter(|a| a.fit) else { continue };
@@ -446,6 +447,7 @@ impl Measurement<'_> {
             let cross_bound = cross_fit_bound(a, cross_len * k, bounds);
             if main_bound.is_none() && cross_bound.is_none() { continue; }
             let mut style = taffy.style(n.taffy).clone();
+            saved.push((i, style.clone()));
             if let Some(bound) = main_bound {
                 if vertical {
                     clamp_max_height(&mut style, bound / k);

@@ -726,7 +726,7 @@ impl Measurement<'_> {
         self.memo.path_scratch = path_buf;
         taffy.finish_flatten();
         let root_id = nodes[0].taffy;
-        let (layout, mut nodes) = self.solve(text, taffy, root_id, nodes, &reused);
+        let (layout, mut nodes, above_fit_styles) = self.solve(text, taffy, root_id, nodes, &reused);
         if self.measure_virtuals(&nodes, false) {
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &[]);
             nodes.clear();
@@ -754,6 +754,7 @@ impl Measurement<'_> {
             memo_reused: reused,
             taken_paths: Vec::new(),
             selection: Vec::new(),
+            above_fit_styles,
         })
     }
 }
