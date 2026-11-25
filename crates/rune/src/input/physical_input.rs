@@ -34,6 +34,7 @@ impl Drop for PhysicalInput {
 }
 
 pub(crate) type Handler = std::rc::Rc<dyn Fn(crate::states::States<'_>, &PhysicalInput, &mut crate::Tx) -> bool>;
+pub(crate) type FocusLostFn = std::rc::Rc<dyn Fn(crate::states::States<'_>, &mut crate::Tx)>;
 
 impl crate::El {
     /// Receives physical keys before logical editing, app shortcuts and focus navigation.
@@ -42,6 +43,23 @@ impl crate::El {
         f: impl Fn(&mut S, &PhysicalInput, &mut crate::Tx) -> bool + 'static) -> Self {
         self.cold_mut().focus.physical = Some(std::rc::Rc::new(move |state, event, tx| {
             state.cast::<S>().is_some_and(|s| f(s, event, tx))
+        }));
+        self
+    }
+    /// Called when this element has focus and loses it: the window deactivating (another app,
+    /// a hidden window) or focus moving off it inside the window. It only observes: the
+    /// element's `on_physical_input` and held modifier keys still hear `FocusLost` as if it
+    /// weren't there, and the view builds again with what `f` changed.
+    ///
+    /// ```
+    /// use rune::{El, el};
+    ///
+    /// struct App { left: u32 }
+    /// let _field: El = el().focusable(true).on_focus_lost(|s: &mut App, _| s.left += 1);
+    /// ```
+    pub fn on_focus_lost<S: 'static>(mut self, f: impl Fn(&mut S, &mut crate::Tx) + 'static) -> Self {
+        self.cold_mut().focus.focus_lost = Some(std::rc::Rc::new(move |state, tx| {
+            if let Some(s) = state.cast::<S>() { f(s, tx); }
         }));
         self
     }

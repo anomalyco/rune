@@ -213,6 +213,26 @@ macro_rules! field_hook_forwarders {
             self.edits.pill_secondary(f);
             self
         }
+        /// Called when the focused inner editor loses focus: the window losing focus (another
+        /// app, a hidden window), Tab, a click elsewhere or `Tx::focus` moving it off, so a form
+        /// can commit a half-typed value. Return stays [`Self::on_submit`]. An open IME
+        /// composition is finished first. Not called for a field removed from the view while
+        /// focused. Skipped when disabled. Keys are untouched: held modifiers still release
+        /// ([`El::on_focus_lost`](rune::El::on_focus_lost)).
+        /// ```
+        /// # use rune::TextEdit;
+        /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
+        /// # struct App { edit: TextEdit, saved: String }
+        /// # let s = App { edit: TextEdit::default(), saved: String::new() };
+        /// # let k = Kit::neutral(true);
+        /// # let _ =
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_blur(|s: &mut App, _| s.saved = s.edit.text.clone()).build(&k)")]
+        /// # ;
+        /// ```
+        pub fn on_blur<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+            self.edits.blur(f);
+            self
+        }
     };
 }
 
@@ -256,6 +276,9 @@ impl EditActs {
     }
     fn pill_secondary<S: 'static>(&mut self, f: impl Fn(&mut S, &str, rune::PointerPress, &mut Tx) -> bool + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_pill_secondary(f)));
+    }
+    fn blur<S: 'static>(&mut self, f: impl Fn(&mut S, &mut Tx) + 'static) {
+        self.handlers.push(Box::new(move |e: El| e.on_focus_lost(f)));
     }
     fn secondary_press<S: 'static>(&mut self, f: impl Fn(&mut S, rune::PointerPress, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_secondary_press(f)));

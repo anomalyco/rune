@@ -10,6 +10,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(inline_js = "
 export function enabled() { return new URLSearchParams(location.search).has('input-proof'); }
 export function auditEnabled() { return new URLSearchParams(location.search).has('audit'); }
+export function keyboardResizeEnabled() { return new URLSearchParams(location.search).has('keyboard-resize'); }
 export function mediaKeysEnabled() { return new URLSearchParams(location.search).has('media-keys'); }
 export function queryZoom() {
     const z = parseFloat(new URLSearchParams(location.search).get('zoom') ?? '1');
@@ -28,11 +29,17 @@ export function reportAudit(json) {
 export function reportScroll(x, y) {
     window.__auditScroll = { x, y };
 }
+export function reportKeyboardResize(secretLength, bottom, dismisses) {
+    window.__keyboardResizeProof = { secretLength, bottom, dismisses,
+        polls: (window.__keyboardResizeProof?.polls ?? 0) + 1 };
+}
 ")]
 extern "C" {
     pub fn enabled() -> bool;
     #[wasm_bindgen(js_name = auditEnabled)]
     fn audit_enabled() -> bool;
+    #[wasm_bindgen(js_name = keyboardResizeEnabled)]
+    fn keyboard_resize_enabled() -> bool;
     #[wasm_bindgen(js_name = mediaKeysEnabled)]
     fn media_keys_enabled() -> bool;
     #[wasm_bindgen(js_name = queryZoom)]
@@ -42,6 +49,8 @@ extern "C" {
     fn report_audit(json: &str);
     #[wasm_bindgen(js_name = reportScroll)]
     fn report_scroll(x: f32, y: f32);
+    #[wasm_bindgen(js_name = reportKeyboardResize)]
+    fn report_keyboard_resize(secret_length: usize, bottom: &str, dismisses: u32);
 }
 
 struct State {
@@ -247,9 +256,65 @@ fn run_audit() {
     app.run();
 }
 
+struct KeyboardResizeState {
+    secret: TextEdit,
+    bottom: TextEdit,
+    read_only: TextEdit,
+    dismisses: u32,
+}
+
+impl Default for KeyboardResizeState {
+    fn default() -> Self {
+        Self {
+            secret: TextEdit::default().secure(),
+            bottom: TextEdit::default(),
+            read_only: TextEdit::new("Read only"),
+            dismisses: 0,
+        }
+    }
+}
+
+fn keyboard_resize_view(s: &KeyboardResizeState, _: &mut Cx<KeyboardResizeState>) -> El {
+    report_keyboard_resize(s.secret.text.chars().count(), &s.bottom.text, s.dismisses);
+    col().w_full().h_full()
+        .child(
+            row().w_full().h(56.0).padding(8.0).gap(8.0)
+                .child(el().key("dismiss").focusable(true).size(110.0, 40.0).child(text("Dismiss"))
+                    .on_press(|s: &mut KeyboardResizeState| s.dismisses += 1))
+                .child(text_input(&s.read_only, tok::type_::BODY).key("readonly").label("Read only")
+                    .size(220.0, 40.0).read_only(true)),
+        )
+        .child(
+            col().w_full().grow(1.0).min_h(0.0).padding(16.0)
+                .child(el().w_full().h(180.0))
+                .child(text_input(&s.secret, tok::type_::BODY).key("secret").label("Secret")
+                    .single_line().w_full().h(48.0).shrink().min_h(0.0)
+                    .on_edit(|s: &mut KeyboardResizeState| &mut s.secret)),
+        )
+        .child(
+            col().w_full().h(200.0).padding(16.0)
+                .child(text_input(&s.bottom, tok::type_::BODY).key("bottom").label("Bottom")
+                    .single_line().w_full().h(48.0)
+                    .on_edit(|s: &mut KeyboardResizeState| &mut s.bottom)),
+        )
+}
+
+fn run_keyboard_resize() {
+    let mut spec = AppSpec::new("Keyboard resize proof", (390.0, 699.0), KeyboardResizeState::default, keyboard_resize_view);
+    spec.poll = Some(|s, _, _| {
+        report_keyboard_resize(s.secret.text.chars().count(), &s.bottom.text, s.dismisses);
+        false
+    });
+    App::new(spec).run();
+}
+
 pub fn run() {
     if audit_enabled() {
         run_audit();
+        return;
+    }
+    if keyboard_resize_enabled() {
+        run_keyboard_resize();
         return;
     }
     let mut spec = AppSpec::new("Input proof", (390.0, 760.0), State::default, view);

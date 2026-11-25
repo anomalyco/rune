@@ -60,24 +60,29 @@ impl RuntimeCore {
         // Subtree blur runs once after rasterization, never on each primitive as well.
         let blur = 0.0;
         let k_px = sc * s;
-        let native_material = match n.material {
+        let (native_material, wayland_candidate) = match n.material {
             // A dimmed-out element takes no native view: its fallback draws nothing and does not
             // count as a cap fallback.
             Some(material) if effective_opacity * n.vis.paint_alpha > 0.001 => {
                 if self.paint.materials.len() < self.paint.max_native_materials {
                     let radius = crate::system_material::clamp_radius(radii, w, h);
                     let continuous = n.vis_flags.continuous_corners();
+                    let material_opacity = effective_opacity * n.vis.paint_alpha;
                     self.paint.materials.push(crate::system_material::MaterialDraw {
                         id: n.id, material, rect: [r[0], r[1], w, h], radius, continuous,
-                        opacity: effective_opacity * n.vis.paint_alpha,
+                        opacity: material_opacity,
                     });
-                    self.paint.native_materials.then_some(if continuous { -radius } else { radius })
+                    let hole_r = if continuous { -radius } else { radius };
+                    let native = self.paint.native_materials.then_some(hole_r);
+                    let wayland = (!self.paint.native_materials && self.paint.wayland_blur_materials)
+                        .then_some((radius, hole_r, material_opacity));
+                    (native, wayland)
                 } else {
                     self.paint.material_fallbacks.push(n.id);
-                    None
+                    (None, None)
                 }
             }
-            _ => None,
+            _ => (None, None),
         };
         let stuck_k = if self.tree.has_sticky { (self.scroll.stuck[i].abs() / sticky::SHADOW_RAMP).min(1.0) } else { 0.0 };
         let stuck_shadows: (f32, &[crate::el::Shadow]) = match &n.sticky {
@@ -96,17 +101,35 @@ impl RuntimeCore {
         } else {
             0.0
         };
-        let rest_fill = match n.material {
-            _ if native_material.is_some() => Color::TRANSPARENT,
-            Some(_) => self.color(n.id, P_FILL, crate::system_material::fallback_fill(n.vis.fill, self.env.system_dark)),
-            None => self.color(n.id, P_FILL, n.vis.fill),
-        };
+        let mut wayland_blur_hole = None;
         let (resolved_fill, fill_replace_w) = if native_material.is_some() {
             (Color::TRANSPARENT, 0.0)
+        } else if let Some((radius, hole_r, material_opacity)) = wayland_candidate {
+            let rest_fill = self.color(n.id, P_FILL, n.vis.fill);
+            let (resolved, w_rep) = paint_tracks::replace_color(
+                rest_fill, if focus_flat { None } else { n.vis.hover_fill }, hov_v, n.vis.press_fill, prs_v,
+            );
+            if resolved.a * o < 1.0 {
+                // Translucent tint or missing fill: punch the outer-shadow interior hole and
+                // add to Wayland's blur region while opacity stays at or above the threshold.
+                wayland_blur_hole = Some(hole_r);
+                if material_opacity >= crate::system_material::WAYLAND_BLUR_MIN_OPACITY {
+                    self.paint.wayland_material_blurs.push(
+                        crate::system_material::WaylandMaterialBlur {
+                            rect: [r[0], r[1], w, h], radius, clip, opacity: material_opacity,
+                        },
+                    );
+                }
+            }
+            (resolved, w_rep)
         } else {
+            let rest_fill = match n.material {
+                Some(_) => self.color(n.id, P_FILL, crate::system_material::fallback_fill(n.vis.fill, self.env.system_dark)),
+                None => self.color(n.id, P_FILL, n.vis.fill),
+            };
             paint_tracks::replace_color(rest_fill, if focus_flat { None } else { n.vis.hover_fill }, hov_v, n.vis.press_fill, prs_v)
         };
-        let casts = !n.vis.shadows.is_empty() && native_material.is_none() && blur_hole.is_none() && n.material.is_none();
+        let casts = !n.vis.shadows.is_empty() && native_material.is_none() && wayland_blur_hole.is_none() && blur_hole.is_none() && n.material.is_none();
         let fill_a = if casts { resolved_fill.a } else { 0.0 };
         let solid = casts && fill_a >= 1.0;
         // A box that paints itself solid hides the middle of its shadows (bands.rs). Dimmed
@@ -118,7 +141,7 @@ impl RuntimeCore {
         let dim_hole = ((solid && o < 1.0) || see_through).then(|| crate::system_material::clamp_radius(radii, w, h) * if n.vis_flags.continuous_corners() { -1.0 } else { 1.0 });
         let cast = shadow_paint::Caster {
             rect: [r[0], r[1], w, h], radii, shape: if n.vis_flags.continuous_corners() { radii.map(|v| -v) } else { radii },
-            k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(blur_hole).or(dim_hole), opaque,
+            k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(wayland_blur_hole).or(blur_hole).or(dim_hole), opaque,
         };
         for (k, sh) in n.vis.shadows.iter().chain(stuck_shadows.1).enumerate() {
             let c = if k >= n.vis.shadows.len() { sh.color.alpha(sh.color.a * stuck_shadows.0) }

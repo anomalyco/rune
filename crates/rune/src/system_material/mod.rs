@@ -48,6 +48,22 @@ pub const MAX_NATIVE_MATERIALS: usize = 4;
 /// exhaust AppKit backdrop surfaces.
 pub(crate) const MAX_NATIVE_MATERIALS_CAP: usize = 64;
 
+/// Minimum effective element opacity required to remain in a Wayland compositor blur region.
+/// Wayland blur protocols (`ext_background_effect_v1`, `org_kde_kwin_blur`) have no opacity
+/// parameter, so dropping an element below 0.10 prevents a full-strength blur ghost during
+/// exit fades.
+pub(crate) const WAYLAND_BLUR_MIN_OPACITY: f32 = 0.10;
+
+/// Per-frame physical-pixel geometry and ancestor clip for one `El::system_material` element
+/// participating in Wayland compositor blur (`platform::wayland::backdrop`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WaylandMaterialBlur {
+    pub rect: [f32; 4],
+    pub radius: f32,
+    pub clip: [f32; 4],
+    pub opacity: f32,
+}
+
 /// Clamp a configured per-window native material cap to the internal ceiling.
 pub(crate) fn clamp_max_native_materials(max: usize) -> usize {
     max.min(MAX_NATIVE_MATERIALS_CAP)
@@ -165,9 +181,13 @@ pub(crate) fn present_draws(rt: &crate::runtime::RuntimeCore) -> (&[MaterialDraw
     (rt.paint.materials(), rt.window_scale())
 }
 
+/// Callback registered by [`ConfiguredOverlay::on_materials`](crate::ConfiguredOverlay::on_materials).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) type OnMaterials = Box<dyn FnMut(MaterialFrame<'_>)>;
+
 /// Hands a frame about to present to `ConfiguredOverlay::on_materials`, when one is set.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn announce(hook: &mut Option<Box<dyn FnMut(MaterialFrame<'_>)>>, rt: &crate::runtime::RuntimeCore) {
+pub(crate) fn announce(hook: &mut Option<OnMaterials>, rt: &crate::runtime::RuntimeCore) {
     if let Some(hook) = hook {
         let (draws, scale) = present_draws(rt);
         hook(MaterialFrame::new(draws, scale));
@@ -274,7 +294,7 @@ impl Mode {
         }
     }
 
-    #[cfg_attr(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"), all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(crate) fn from_env() -> Mode {
         Mode::parse(rune_core::env::var("RUNE_SYSTEM_MATERIAL").as_deref())
     }

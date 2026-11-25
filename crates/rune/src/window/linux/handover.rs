@@ -377,6 +377,7 @@ impl Host {
         if let Err(error) = self.reattach(crate::gpu::fallback::GpuMode::Hardware) { return self.fail_surface(error.message, tries); }
         let on_software = self.gpu.as_ref().is_some_and(|(gpu, _)| gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu);
         if on_software && let Some(w) = self.win.as_mut() { w.surface_retries.note_software(); }
+        self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
         crate::marks::mark("gpu.window.attached");
         if let Some(w) = self.win.as_ref() { w.request_redraw(); }
     }
@@ -420,6 +421,7 @@ impl Host {
         w.surface = None;
         self.gpu = None;
         self.app.release_compositor_gpu();
+        self.app.rt_mut().set_renderer_kind(crate::RendererKind::Cpu);
         w.request_redraw();
     }
 

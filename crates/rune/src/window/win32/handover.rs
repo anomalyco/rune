@@ -421,6 +421,7 @@ impl Host {
                     crate::marks::mark("window.shown");
                 }
                 w.presented = None;
+                self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
                 crate::marks::mark("gpu.window.handed");
             }
         }
@@ -568,6 +569,7 @@ impl Host {
                 w.presented = None;
                 // What was asked for while the GPU finished its frame draws now, on the GPU.
                 w.request_redraw();
+                self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
                 self.sync_window_backdrop(false);
                 self.on_resize_sync_event(super::resize_sync::Event::Handover);
             }
@@ -591,6 +593,7 @@ impl Host {
         w.surface = None;
         self.gpu = None;
         self.app.release_compositor_gpu();
+        self.app.rt_mut().set_renderer_kind(crate::RendererKind::Cpu);
         w.request_redraw();
     }
 

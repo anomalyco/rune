@@ -305,6 +305,7 @@ impl FrameHost for OverlayFrame<'_> {
                     swapchain: crate::render::Gpu::dx12_swapchain_kind(),
                     alpha_mode: Some(live.config.alpha_mode),
                     cpu_painter: false,
+                    renderer_kind: self.app.rt().renderer_kind(),
                     device_type,
                     window_backdrop,
                     mode: live.materials.mode(),
@@ -420,7 +421,7 @@ impl FrameHost for OverlayFrame<'_> {
         ) else {
             return crate::time::now();
         };
-        let materials_ok = frame::submit_and_present(live, renderer, gpu, self.app.rt(), prepared.encoder, prepared.frame, self.prewarm, &mut self.core.on_materials);
+        let materials_ok = frame::submit_and_present(live, renderer, gpu, self.app.rt(), self.core.window_backdrop, prepared.encoder, prepared.frame, self.prewarm, &mut self.core.on_materials);
         // The next frame waits for the room this one took (`slot`).
         #[cfg(target_os = "windows")]
         live.slot.presented();
@@ -458,10 +459,7 @@ impl FrameHost for OverlayFrame<'_> {
         crate::haptics::flush_live(self.app.rt_mut(), !self.prewarm);
         if !self.prewarm { self.core.meter.presented(); self.core.note_presented(submitted); }
         self.core.dirty = false;
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if !self.prewarm {
-            self.core.wayland_backdrop_after_first_frame(self.app.rt_mut());
-        }
+
         let Some(live) = self.core.surface.live_mut() else {
             self.more = false;
             return;
@@ -621,10 +619,7 @@ impl OverlayCore {
     /// overlay answers `None`, committed with its next frame. One anchored to an element waits
     /// for the frame that commits what changed since the last.
     pub(super) fn open_popup(&mut self, app: &mut dyn OverlayApp) {
-        let window = match self.surface.live().map(|l| &l.backing) {
-            Some(Backing::Window(w)) if self.presence.shown() && !self.presence.occluded() => Some(w.clone()),
-            _ => None,
-        };
+        let window = (self.presence.shown() && !self.presence.occluded()).then(|| self.live_window().cloned()).flatten();
         if app.popup_open(&mut self.popup, window.as_ref(), true) { self.dirty = true; }
     }
 

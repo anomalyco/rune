@@ -20,6 +20,7 @@ mod offscreen;
 mod outlines;
 mod pass;
 mod pipelines;
+mod renderer_kind;
 // The kept frame it checks exists only where partial frames do (`damaged`).
 #[cfg(target_os = "windows")]
 mod pixel_check;
@@ -117,6 +118,7 @@ pub use device::prewarm_gpu;
 pub use device::prewarm_gpu_on;
 pub use device::set_gpu_memory_policy;
 pub use effect_warm::PrewarmEffects;
+pub use renderer_kind::RendererKind;
 #[doc(hidden)]
 pub use fill::FillDrift;
 pub use first_use::builtin_wgsl_hash;

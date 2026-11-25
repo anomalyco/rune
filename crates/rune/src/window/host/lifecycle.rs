@@ -256,6 +256,7 @@ impl Host {
                 let rt = self.app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 rt.set_backdrop_opaque_fallback(false);
                 return;
             };
@@ -270,6 +271,7 @@ impl Host {
                 let rt = self.app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 rt.set_backdrop_opaque_fallback(fallback);
                 if rt.stale() {
                     w.request_redraw();
@@ -288,7 +290,8 @@ impl Host {
                 && matches!(alpha_mode, Some(m) if m != wgpu::CompositeAlphaMode::Opaque);
             // When WindowBackdrop::Blur is requested at creation or runtime, bind immediately so
             // the first presented frame is blurred; when WindowBackdrop::None is active before
-            // frame 1, defer binding the shared display manager until `run_on_ready`.
+            // frame 1, defer binding until `prepare_wayland_material_blur` (if materials mount)
+            // or `run_on_ready`.
             if w.native.wayland_backdrop.is_none()
                 && translucent_gpu
                 && requested == crate::WindowBackdrop::Blur
@@ -306,6 +309,7 @@ impl Host {
                 let rt = self.app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 rt.set_backdrop_opaque_fallback(fallback);
                 if rt.stale() {
                     w.request_redraw();
@@ -323,18 +327,21 @@ impl Host {
                 scale,
                 csd_radius,
             );
-            let outcome = blur.sync(
+            let outcome = blur.sync_with_materials(
                 requested,
                 transparent,
                 alpha_mode,
                 cpu_painter,
                 region_spec,
+                self.app.rt().paint.wayland_material_blurs(),
+                scale,
                 false,
                 force_reapply,
             );
             let rt = self.app.rt_mut();
             rt.set_window_backdrop(outcome.active);
             rt.set_window_backdrop_supported_mask(outcome.supported_mask);
+            rt.set_wayland_blur_materials(outcome.material_blur_enabled);
             rt.set_backdrop_opaque_fallback(outcome.opaque_fallback);
             if rt.stale() || outcome.needs_commit {
                 w.request_redraw();
@@ -834,6 +841,7 @@ impl Host {
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             {
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 rt.set_backdrop_opaque_fallback(false);
             }
         } else if let Some(w) = self.win.as_mut() {
@@ -922,6 +930,8 @@ impl Host {
         ))]
         {
             rt.set_window_backdrop_supported_mask(0);
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            rt.set_wayland_blur_materials(false);
             rt.set_backdrop_opaque_fallback(false);
         }
         rt.text.atlas.invalidate();

@@ -294,10 +294,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     text, layout, hover/focus/selection, theme and scale) with an optional `.cache_key(u64)` hint.
   - **Live fallback:** while any node inside the subtree animates (springs, transitions, loops,
     growth, word reveals, flights) or hosts a live compositor `El::effect` slot, `NativeSurface`,
-    image pixels or focused text input, the subtree bypasses the cache and draws live, then re-caches
-    once settled. A subtree holding an `El::system_material` element always draws live, on every
-    platform and with or without a native material view, so its rect stays listed in
-    `Runtime::system_materials` every frame.
+    native or Wayland-blur `SystemMaterial`, image pixels or focused text input, the subtree
+    bypasses the cache and draws live, then re-caches once settled. A subtree holding a
+    fallback-only `El::system_material` (native and Wayland blur modes off) stays cached and replays
+    its recorded material rects—translated and scaled with the cached layer—into
+    `Runtime::system_materials` and `ConfiguredOverlay::on_materials` when reused.
   - **Scale and budget:** while an ancestor's live scale or scale spring is changing without view
     commits, the existing cached texture is composited with clamped bilinear filtering and
     re-rasterized at the new device-pixel resolution once the scale holds still for 0.1 s.
@@ -3231,6 +3232,31 @@ is one more host on the event loop
   defaults and `OverlayPlacement::Edge`) anchor inside all four sides of `Display::work_area()`
   (`GetMonitorInfoW`'s `rcWork` in `platform/win32.rs`), while `OverlayPlacement::Rect` and
   `OverlayPlacement::FullScreen` stay in full display coordinates.
+- Opt-in CPU rendering on Windows (`ConfiguredOverlay::renderer(RendererKind::Cpu)`, default
+  `RendererKind::Gpu`): keeps a transparent Windows overlay on `CpuPainter` for its whole
+  lifetime and presents premultiplied BGRA frames (`clear = [0.0; 4]`, `lcd = false`) through
+  documented Win32 `UpdateLayeredWindowIndirect` (`ULW_ALPHA`) without creating a GPU device,
+  swap chain, or `wgpu::Surface` (and without calling `SetLayeredWindowAttributes`; fade-out
+  steps `BLENDFUNCTION::SourceConstantAlpha` without repainting). Query the active renderer in
+  any window or overlay view with memo-tracked `Cx::renderer_kind()` (and set it in headless
+  tests with `Runtime::set_renderer_kind`). The backing DIB is bounded to 8192×8192 / 128 MiB,
+  reused across steady frames with zero heap allocations, and freed when the overlay hides.
+  On macOS, Linux, iOS, and web in this step, `RendererKind::Cpu` is ignored cleanly (staying on
+  GPU with `Cx::renderer_kind() == RendererKind::Gpu`); macOS has no CPU painter, and Linux
+  transparent CPU overlays (`wl_shm` ARGB8888 / 32-bit ARGB X11) are a planned follow-up on the
+  same builder. Trade-offs: layered CPU overlays have no DXGI swap chain or hardware vsync queue
+  and pace animations with `PollPace` + `DwmGetCompositionTimingInfo` (expect minor cadence drift
+  on high-refresh monitors, ~4–5% measured at 165 Hz; keep continuous 120–165 Hz animating
+  overlays on `RendererKind::Gpu`); `WindowBackdrop` reports `WindowBackdrop::None`
+  (`window_backdrop_supported` returns `false`), `El::system_material` draws its fallback fill
+  (refusing `windows-system-material` host backdrop visuals), `.compositor(...)` overrides
+  `RendererKind::Cpu` back to GPU, and `NativeSurface`, `El::blur`, non-90° `El::rotate`, nested
+  `El::backdrop_blur`, and `FontSmoothing::Slug` require the GPU (degradable modifiers paint
+  without the GPU-only effect; non-degradable features hold the previous frame or fail frame 1
+  cleanly). Under `ULW_ALPHA`, Win32 treats pixels with `alpha == 0` as click-through before
+  `WM_NCHITTEST` (invisible hit targets need `alpha >= 1/255`). Pass `--cpu` to
+  `examples/overlay-lab` to try it. Live Windows desktop presentation has not yet been watched by
+  the team.
 - Keys: `OverlayOptions::keys: KeyPolicy::OnDemand` lets an overlay take the keyboard on
   `OverlayHandle::request_keys` or a click, and `capabilities().nonactivating_keys` says whether
   its backend can: the macOS panel becomes key, a layer-shell (v4) surface asks for keyboard
@@ -3499,10 +3525,27 @@ Diagnostic switches for hardware verification: `RUNE_WIN_MATERIAL_CLIP=geo`
 (light/dark neutral tint child visual), and `RUNE_WIN_OVERLAY_NO_LAYERED=1` (omit
 `WS_EX_LAYERED` on overlays).
 
-Opaque windows, other platforms and headless renders draw the element's fill instead, or a
-neutral tint when it has none; native views never appear in offscreen output, so goldens stay
-deterministic. `RUNE_SYSTEM_MATERIAL=legacy` forces the pre-26 view, `unsynced` moves the views
-outside the drawable's transaction (for comparison) and `off` draws the fallback.
+On Linux Wayland, `El::system_material` drives per-element shaped compositor blur on transparent
+GPU windows and overlays (`zwlr_layer_shell_v1` and toplevel fallbacks) whenever
+`WindowBackdrop::None` is active and the compositor advertises `ext_background_effect_v1`
+(`Capability::Blur`) or `org_kde_kwin_blur_manager` (opt out with `RUNE_SYSTEM_MATERIAL=off`).
+Unlike macOS and Windows (where native material views sit behind the element and replace its
+fill), Wayland compositor blur has no tint of its own: translucent fills are kept as the tint,
+unfilled elements draw transparent instead of the opaque fallback, outer-shadow interior holes
+are punched, opaque fills (`alpha >= 1.0`) stay opaque with no blur region, elements below
+`0.10` opacity leave the region, ancestor clips and all four rounded corners are decomposed
+conservatively inward into logical `wl_region` spans (bounded at 512 rects per surface), and
+updates flush right before present so region and pixels commit atomically. Use
+`Cx::window_backdrop_supported(WindowBackdrop::Blur)` to query capability for both
+`WindowBackdrop::Blur` (whole surface, taking precedence) and `El::system_material` (per
+element). Shaped per-element Wayland blur is unit-tested off-screen and awaiting live compositor
+confirmation on issue #1381.
+
+Opaque windows, X11/XWayland, unsupported compositors, web and headless renders draw the
+element's fill instead, or a neutral tint when it has none; native materials never appear in
+offscreen output, so goldens stay deterministic. `RUNE_SYSTEM_MATERIAL=legacy` forces the pre-26
+macOS view, `unsynced` moves macOS views outside the drawable's transaction (for comparison) and
+`off` disables native materials on macOS, Windows, and Wayland.
 `examples/glass-card` flies a card over a test pattern (pass `--overlay` for a springing pill
 inside a transparent non-activating overlay); research note 26 has the measurements.
 
@@ -3586,10 +3629,12 @@ default, `Mica`, `MicaAlt`, `Acrylic`, `Blur`), configured with `App::window_bac
   backdrop that could not activate, Rune clears its surface to an opaque theme-matched fallback so
   even a view that skips `cx.window_backdrop()` never opens a transparent hole.
 - **Live verification status**: Windows 11 Mica, Mica Alt, and Desktop Acrylic have been verified
-  on live Windows 11 hardware (#300). Wayland protocol seams, region geometry, and lifecycle
-  teardown are unit-tested off-screen; live visual composition on real Wayland compositors (#1381)
-  has not yet been watched by the team. Try it with `cargo run -p settings -- --backdrop mica`
-  (Windows) or `cargo run -p settings -- --backdrop blur` (Linux Wayland).
+  on live Windows 11 hardware (#300), and whole-surface Wayland `WindowBackdrop::Blur` on a
+  `zwlr_layer_shell_v1` overlay has been verified live on KDE Plasma / KWin 6.8.3. Toplevel
+  Wayland windows, other compositors, and per-element `El::system_material` shaped blur are
+  unit-tested off-screen and awaiting live reports on issue #1381. Try it with
+  `cargo run -p settings -- --backdrop mica` (Windows) or
+  `cargo run -p settings -- --backdrop blur` (Linux Wayland).
 
 ### Frosted panels
 
@@ -3598,8 +3643,9 @@ window or one element:
 
 - **The whole window over the desktop (Windows 11 22H2+ / Linux Wayland):** `WindowBackdrop` above
   (`Mica`, `MicaAlt`, `Acrylic` on Windows; `Blur` on Wayland), in a transparent window or overlay.
-- **One rounded element over the desktop (macOS):** `El::system_material` above, in a transparent
-  window. Only the platform can see behind the window.
+- **One or more rounded elements over the desktop (macOS / Linux Wayland / opt-in Windows 11):**
+  `El::system_material` above, in a transparent window or overlay. Only the platform can see behind
+  the window.
 - **The app's own content (every platform):** `El::backdrop_blur` below. (`El::blur(σ)` blurs the element's own
   subtree, not its backdrop.) For refraction, a saturation lift and grain on top of the blur,
   `rune-fx`'s `Fx::lens(LensParams { frost: 1.0, .. })` is Liquid Glass "regular": put
