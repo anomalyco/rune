@@ -84,6 +84,9 @@ pub struct Tx {
     /// Elements to hold where they show across this commit (`Tx::keep_on_screen`).
     pub(crate) keep_on_screen: Vec<String>,
     pub(crate) wakes: Vec<std::time::Duration>,
+    /// `Tx::request_poll`: asks for another `poll` round in this frame (or a wake on the next
+    /// turn when called outside a frame, such as from `AppHandle::update`).
+    pub(crate) request_poll: bool,
     pub(crate) shell: Option<Shell>,
     /// User-initiated close request (macOS unhandled ⌘W / Window › Close, assistive activation of
     /// the custom caption close button): routes through `App::on_close_request` instead of
@@ -426,15 +429,35 @@ impl Tx {
         self.wakes.push(duration);
     }
 
-    /// Ask for a poll on the next frame. `poll` runs at the start of a frame, before that
-    /// frame's handlers, so work a handler leaves in state for `poll` would otherwise wait
-    /// for the next input or wake. Call this from the handler that queued it. The same as
-    /// `wake_after(Duration::ZERO)`; it collapses into that frame's one poll.
+    /// Ask for `poll` to run again for work queued in state.
+    ///
+    /// Called during a frame (from a handler—including a [`Tx::live_only`] handler—or from
+    /// `poll`), this runs one more round of that same frame's `poll` loop before the view
+    /// commits (bounded by `MAX_POLL_ROUNDS` = 4). Called outside a frame (such as from
+    /// [`AppHandle::update`](crate::AppHandle::update)), this schedules a poll on the next turn.
+    /// Ordinary non-`live_only` handlers already trigger a same-frame follow-up `poll`
+    /// automatically and do not need to call this.
+    ///
+    /// ```no_run
+    /// use rune::{El, Tx, el};
+    ///
+    /// struct State { dirty_query: bool }
+    ///
+    /// fn row() -> El {
+    ///     el().on_hover_change(|s: &mut State, inside, tx: &mut Tx| {
+    ///         tx.live_only();
+    ///         if inside {
+    ///             s.dirty_query = true;
+    ///             tx.request_poll();
+    ///         }
+    ///     })
+    /// }
+    /// ```
     #[cfg_attr(feature = "frame-profile", track_caller)]
     pub fn request_poll(&mut self) {
         #[cfg(feature = "frame-profile")]
         crate::frame::live_log::waker(std::panic::Location::caller(), std::time::Duration::ZERO);
-        self.wakes.push(std::time::Duration::ZERO);
+        self.request_poll = true;
     }
 
     /// The window's logical clock in seconds as this handler or poll runs: the `clock` `poll`

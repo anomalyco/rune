@@ -269,10 +269,17 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// Defaults to the app's `App::font_smoothing`; `Tx::set_font_smoothing` switches it
     /// while running.
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self { self.font_smoothing = Some(mode); self }
-    /// Called before each frame; true means state changed, not that another frame is due.
-    /// Defaults to the app's poll when its state type matches this overlay's. Other state
-    /// types have no inherited poll. Use `Tx::wake_after` for the next timed update;
-    /// deadlines also run while hidden, like the window host, without drawing.
+    /// Called at the start of every frame (unless a resting timer's poll already stood for it)
+    /// so background data and timers can update the tree before input routes. Queued input and
+    /// event handlers then run; whenever a non-`live_only` handler runs, `poll` runs again at the
+    /// same frame clock before the view commits, alternating with any input `poll` itself queues
+    /// (`Tx::send_key`) up to 4 follow-up rounds so work queued in a turn never waits for the next
+    /// mouse move or wake. Idle frames, animation-only frames, `Tx::live_only` handlers, layout
+    /// observers, and overlays without `poll` run no extra poll; call `Tx::request_poll` from a
+    /// `live_only` handler or outside a frame when one is still needed. True means state changed,
+    /// not that another frame is due. Defaults to the app's poll when its state type matches this
+    /// overlay's. Use `Tx::wake_after` for the next timed update; deadlines also run while hidden,
+    /// like the window host, without drawing.
     pub fn poll(mut self, f: fn(&mut T, f64, &mut crate::Tx) -> bool) -> Self { self.poll = Some(f); self }
     /// Draw every rendered overlay frame, including hidden prewarm frames, through this
     /// compositor. `Frame::draw_ui` keeps the overlay's transparent clear. Runtime-only

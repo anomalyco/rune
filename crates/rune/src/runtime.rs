@@ -215,6 +215,8 @@ pub(crate) use window_requests::HostState;
 #[cfg(test)]
 mod hidden_wake_tests;
 #[cfg(test)]
+mod poll_after_handlers_tests;
+#[cfg(test)]
 mod timer_wake_tests;
 #[cfg(test)]
 mod grid_tests;
@@ -302,9 +304,15 @@ macro_rules! runtime_core_fields {
             )*
             pub(crate) _core_end: CoreEnd,
             pub state: S,
-            /// Called at the start of every frame with the clock, before that frame's handlers; return
-            /// true when state changed (new data). Work a handler queues for it waits for the next
-            /// frame, which the handler asks for with `Tx::request_poll`.
+            /// Called at the start of every frame with the clock (unless a resting timer's poll
+            /// already stood for it) so background data and timers can update the tree before
+            /// input routes. Queued input and event handlers then run; whenever a non-`live_only`
+            /// handler runs, `poll` runs again at the same frame clock before the view commits,
+            /// alternating with any input `poll` itself queues (`Tx::send_key`) up to 4 follow-up
+            /// rounds so work queued in a turn never waits for the next mouse move or wake. Idle
+            /// frames, animation-only frames, `Tx::live_only` handlers, layout observers, and apps
+            /// without `poll` run no extra poll; call `Tx::request_poll` from a `live_only` handler
+            /// or outside a frame when one is still needed. Return true when state changed.
             pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
             /// Called for keys unhandled by the focused control; return true to consume it.
             pub on_key: Option<fn(&mut S, &KeyEvent, &mut Tx) -> bool>,

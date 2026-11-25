@@ -105,13 +105,13 @@ fn covered_window_poll_send_key_delivers_each_key_in_same_wake_with_poll_clock()
         reach_next_timer(&mut rt);
         covered_step(&mut rt);
 
+        let poll_clock = rt.state.polls[polls_before];
         assert_eq!(
-            rt.state.polls.len(),
-            polls_before + 1,
-            "Tab {}: covered wake must run poll once, not double-poll",
+            rt.state.polls[polls_before..],
+            [poll_clock, poll_clock],
+            "Tab {}: covered wake runs initial poll + one post-handler follow-up poll at the same poll clock",
             i + 1
         );
-        let poll_clock = *rt.state.polls.last().unwrap();
         assert_eq!(
             rt.state.focuses.len(),
             i + 1,
@@ -284,7 +284,8 @@ fn hidden_wake_drains_chained_keys_with_bound_and_honors_handler_timers() {
     let polls_before = rt.state.polls;
     let wake_clock = rt.core().now_clock();
     assert!(rt.hidden_wake());
-    assert_eq!(rt.state.polls, polls_before + 1, "chained drain must not double-poll");
+    // 1 initial poll + 1 post-"a" follow-up poll + 1 post-"b" follow-up poll (all inside one frame).
+    assert_eq!(rt.state.polls, polls_before + 3, "initial poll + follow-up poll after each chained handler");
     assert_eq!(
         rt.state.focuses,
         [("a", wake_clock), ("b", wake_clock)],
@@ -312,15 +313,17 @@ fn hidden_wake_drains_chained_keys_with_bound_and_honors_handler_timers() {
     let polls_before = rt.state.polls;
     let commits_before = rt.stats.commits;
     rt.hidden_wake();
-    assert_eq!(rt.state.polls, polls_before + 1, "bounded spin must still poll only once");
+    // 1 initial poll + MAX_POLL_ROUNDS follow-up polls inside the single bounded frame.
+    assert_eq!(rt.state.polls, polls_before + 1 + frame::drain::MAX_POLL_ROUNDS as u32);
     assert_eq!(
         rt.state.focuses.len(),
         1 + frame::drain::MAX_POLL_ROUNDS,
-        "re-sending handler must stop at 1 + MAX_POLL_ROUNDS frames",
+        "re-sending handler must stop at 1 + MAX_POLL_ROUNDS rounds",
     );
     assert_eq!(
         rt.stats.commits - commits_before,
         (1 + frame::drain::MAX_POLL_ROUNDS) as u64,
+        "routed Key::Tab commits once per bounded round inside the single frame",
     );
     assert!(rt.has_input_waiting(), "excess re-sent key remains queued rather than spinning");
     assert!(rt.wake_deadline().is_some(), "hitting the cap schedules a continuation wake");

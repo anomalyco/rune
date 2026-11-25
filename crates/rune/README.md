@@ -669,9 +669,16 @@ policy changes are applied in the same mutation phase.
   text or text field with `Tx::text_offset_at(key, x, y, f)` and
   `Runtime::text_offset_at(key, x, y)`.
 - **App hooks**: `AppSpec::setup` (once, with a `Waker` for background threads), `poll(state, clock,
-  tx)` at the start of every frame (before that frame's handlers, so a handler that queues work
-  for it calls `tx.request_poll()` to have the next frame poll it), `on_key`, and `extra_args()` for the app's own flags, ready before
-  `run` (to choose the file a window opens).
+  tx)`, `on_key`, and `extra_args()` for the app's own flags, ready before
+  `run` (to choose the file a window opens). At the start of a frame, `poll` runs (unless a
+  resting timer's poll already stood for it) so background data and timers can update the tree
+  before input routes. Queued input and event handlers then run; whenever a non-`live_only`
+  handler runs, `poll` runs again at the same frame clock before the view commits, alternating
+  with any input `poll` itself queues (`Tx::send_key`) up to 4 follow-up rounds so work queued
+  in a turn never waits for the next mouse move or wake. Idle frames, animation-only frames,
+  `Tx::live_only` handlers, layout observers, and apps without `poll` run no extra poll; call
+  `tx.request_poll()` from a `live_only` handler (for another round in the same frame) or outside
+  a frame (for the next turn) when one is still needed.
   `tx.wake_after(Duration::from_millis(250))` schedules a poll on the unscaled app clock,
   even when poll returns false. Equal deadlines coalesce; the shell sleeps until the earliest
   deadline without a timer thread. Every deadline due by a frame collapses into that frame's

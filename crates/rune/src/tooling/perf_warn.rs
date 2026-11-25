@@ -393,7 +393,7 @@ pub(crate) fn handler_site(name: &str, path: &str) -> String {
 pub(crate) fn poll_round_cap(rounds: usize) {
     warn_once("poll_round_cap".into(), || {
         format!(
-            "turn hit MAX_POLL_ROUNDS ({rounds}) with queued work still waiting; deferring              continuation to the next wake"
+            "turn hit MAX_POLL_ROUNDS ({rounds}) with queued work still waiting; deferring continuation to the next wake"
         )
     });
 }

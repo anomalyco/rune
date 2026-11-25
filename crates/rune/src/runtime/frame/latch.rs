@@ -38,6 +38,9 @@ impl RuntimeCore {
         // An update runs at `now_clock()` (`begin_update`); if a resting timer's frame is
         // still pending, cancel it so the upcoming frame polls at the newer clock instead of
         // running handlers at the earlier poll's clock.
+        if std::mem::take(&mut one.request_poll) {
+            one.wakes.push(std::time::Duration::ZERO);
+        }
         self.cancel_timer_frame();
         merge(&mut self.frame.pending, one);
         self.commit.dirty |= changed;

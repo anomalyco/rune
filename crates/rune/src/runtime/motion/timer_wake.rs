@@ -44,6 +44,8 @@ pub(crate) struct FrameState {
     pub(super) live_only_check: bool,
     wake_deadlines: Vec<f64>,
     timer_wake: TimerWake,
+    /// Whether the latest `frame_step` hit `frame::drain::MAX_POLL_ROUNDS`.
+    poll_capped: bool,
     pub(in crate::runtime) queue: ActionQueue,
     pub(in crate::runtime) live: live_latch::LiveLane,
 }
@@ -58,6 +60,7 @@ impl FrameState {
             pending: Tx::default(),
             wake_deadlines: Vec::new(),
             timer_wake: Default::default(),
+            poll_capped: false,
             idle_meter: Default::default(),
             last_dt: 0.0,
             frame_target: None,
@@ -259,6 +262,16 @@ impl FrameState {
     }
 
     #[inline]
+    pub(in crate::runtime) fn set_poll_capped(&mut self, capped: bool) {
+        self.poll_capped = capped;
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn poll_capped(&self) -> bool {
+        self.poll_capped
+    }
+
+    #[inline]
     pub(in crate::runtime) fn drain_due_wakes(&mut self, due: usize) {
         self.wake_deadlines.drain(..due);
     }
@@ -420,6 +433,9 @@ impl RuntimeCore {
         let asks_frame = one.srgb_blend.is_some_and(|b| b != self.paint.srgb_blend()) || one.font_smoothing.is_some_and(|m| m != self.text.smoothing) || self.changes_families(&one) || (one.blur && self.kbd.focus.path().is_some());
         self.latch_requests(app, &mut one);
         let stale = changed || one.frame_work() || patched || asks_frame || self.frame.queue.len() > queued;
+        if std::mem::take(&mut one.request_poll) {
+            one.wakes.push(std::time::Duration::ZERO);
+        }
         merge(&mut self.frame.pending, one);
         stale
     }

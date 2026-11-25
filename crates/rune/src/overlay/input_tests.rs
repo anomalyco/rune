@@ -718,19 +718,20 @@ fn occluded_and_hidden_overlay_wakes_deliver_poll_keys_once_with_poll_clock_and_
     let polls_before = overlay.rt.state.polls.len();
     overlay.rt.state.send_tab = true;
     overlay.advance();
-    assert_eq!(overlay.rt.state.polls.len(), polls_before + 1, "hidden overlay must not double-poll");
-    let poll_clock = *overlay.rt.state.polls.last().unwrap();
+    let poll_clock = overlay.rt.state.polls[polls_before];
+    assert_eq!(overlay.rt.state.polls[polls_before..], [poll_clock, poll_clock], "hidden overlay runs initial + post-handler follow-up poll at poll_clock");
     assert_eq!(overlay.rt.state.focuses, [("one", poll_clock)]);
     assert!(!overlay.rt.has_input_waiting());
 
-    // 2. Shown but occluded overlay: poll sends Tab -> delivered in the same wake, 1 poll.
+    // 2. Shown but occluded overlay: poll sends Tab -> delivered in the same wake at poll_clock.
     overlay.presence = Presence::Shown { occluded: true };
     assert!(overlay.frameless());
     overlay.rt.frame.test_clock_mut().unwrap().seek(10.5);
     let polls_before = overlay.rt.state.polls.len();
     overlay.rt.state.send_tab = true;
     overlay.advance();
-    assert_eq!(overlay.rt.state.polls.len(), polls_before + 1, "occluded overlay must not double-poll");
+    let poll_clock = overlay.rt.state.polls[polls_before];
+    assert_eq!(overlay.rt.state.polls[polls_before..], [poll_clock, poll_clock], "occluded overlay runs initial + post-handler follow-up poll at poll_clock");
     let poll_clock = *overlay.rt.state.polls.last().unwrap();
     assert_eq!(overlay.rt.state.focuses.last().copied(), Some(("two", poll_clock)));
     assert!(!overlay.rt.has_input_waiting());

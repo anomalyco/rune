@@ -902,7 +902,7 @@ fn clipboard_receive_marks_shown_overlay_dirty_without_advancing_and_advances_fr
     assert!(app.rt.state.pasted.is_empty(), "paste handler must run in the drawn frame, not sync");
     app.rt.frame(0.0);
     assert!(!app.rt.has_pending_input());
-    assert_eq!(app.rt.state.polls, polls_before + 1, "drawn frame steps poll once");
+    assert_eq!(app.rt.state.polls, polls_before + 2, "drawn frame runs initial poll + post-paste follow-up poll");
     assert_eq!(app.rt.state.pasted, ["shown"]);
 
     // Fading out (still drawing, non-frameless): also leaves stepping to draw.
@@ -933,7 +933,7 @@ fn clipboard_receive_marks_shown_overlay_dirty_without_advancing_and_advances_fr
     core.clipboard_due(&mut app);
     assert!(core.dirty);
     assert!(!app.rt.has_pending_input(), "hidden overlay must drain the clipboard reply immediately");
-    assert_eq!(app.rt.state.polls, polls_before + 1, "hidden overlay advances once");
+    assert_eq!(app.rt.state.polls, polls_before + 2, "hidden overlay runs initial poll + post-paste follow-up poll");
     assert_eq!(app.rt.state.pasted, ["shown", "fading", "hidden"]);
 
     // Shown but occluded (frameless): advances immediately since no frame will draw while covered.
@@ -946,7 +946,7 @@ fn clipboard_receive_marks_shown_overlay_dirty_without_advancing_and_advances_fr
     core.clipboard_due(&mut app);
     assert!(core.dirty);
     assert!(!app.rt.has_pending_input(), "occluded overlay must drain the clipboard reply immediately");
-    assert_eq!(app.rt.state.polls, polls_before + 1, "occluded overlay advances once");
+    assert_eq!(app.rt.state.polls, polls_before + 2, "occluded overlay runs initial poll + post-paste follow-up poll");
     assert_eq!(app.rt.state.pasted, ["shown", "fading", "hidden", "occluded"]);
 }
 
