@@ -1,7 +1,7 @@
 //! The app's icon from image bytes (the Dock's on macOS, its windows' and the taskbar's on
-//! Windows), so an app needs no platform glue of its own.
+//! Windows, its windows' on Linux), so an app needs no platform glue of its own.
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 use std::sync::Mutex;
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +22,11 @@ static LAUNCHED: AtomicBool = AtomicBool::new(false);
 /// - **Windows:** `bytes` is a PNG or JPEG, best square and 256 px or more. Each window opened
 ///   after the call shows it in its title bar, on the taskbar and in Alt+Tab, so call it before
 ///   `run`.
+/// - **Linux:** `bytes` is a PNG or JPEG, best square and 256 px or more. Each window opened
+///   after the call carries it, so call it before `run`: on Wayland through
+///   `xdg-toplevel-icon-v1` where the compositor has it (KWin, Labwc, Muffin; elsewhere the
+///   compositor keeps using the desktop entry), on X11 as `_NET_WM_ICON`. Either way the window
+///   shows it in title bars and window switchers when no desktop entry matches the app id.
 /// - Does nothing elsewhere.
 pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -37,7 +42,12 @@ pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
         let size = |px: u32| image::imageops::resize(&image, px, px, image::imageops::FilterType::Lanczos3).into_raw();
         *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = Some(WindowsIcon::Pixels { small: size(SMALL), big: size(BIG) });
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        let image = image::load_from_memory(&bytes.into()).map_err(|e| format!("set_app_icon: {e}"))?.into_rgba8();
+        *LINUX.lock().unwrap_or_else(|e| e.into_inner()) = Some(linux_pixels(&image));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     let _ = bytes;
     Ok(())
 }
@@ -92,6 +102,29 @@ pub(crate) fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window
     attrs.with_window_icon(small).with_taskbar_icon(big)
 }
 
+/// Linux: the icon's square RGBA pixels, `LINUX_SIZE` on a side.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+static LINUX: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+/// Linux: one size serves both protocols; the compositor or window manager scales it down.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+const LINUX_SIZE: u32 = 256;
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+fn linux_pixels(image: &image::RgbaImage) -> Vec<u8> {
+    image::imageops::resize(image, LINUX_SIZE, LINUX_SIZE, image::imageops::FilterType::Lanczos3).into_raw()
+}
+
+/// Linux: `attrs` with the app's icon, once `set_app_icon` has one. winit sends it as
+/// `xdg-toplevel-icon-v1` on Wayland (before the window's first commit) and `_NET_WM_ICON` on X11.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(crate) fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+    let icon = LINUX.lock().unwrap_or_else(|e| e.into_inner());
+    match icon.as_ref() {
+        None => attrs,
+        Some(rgba) => attrs.with_window_icon(winit::window::Icon::from_rgba(rgba.clone(), LINUX_SIZE, LINUX_SIZE).ok()),
+    }
+}
+
 /// The event loop exists: sets an icon asked for before `run` once the main queue drains, which
 /// is after AppKit finishes launching (it would show the bundle's icon over an earlier one).
 #[cfg(target_os = "macos")]
@@ -140,5 +173,24 @@ mod tests {
         // Without an event loop nothing touches NSApplication, so a headless run stays windowless.
         assert!(!LAUNCHED.load(Ordering::Acquire));
         assert!(PENDING.lock().unwrap().is_some());
+    }
+}
+
+#[cfg(all(test, unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+mod linux_tests {
+    use super::*;
+
+    fn png(px: u32) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbaImage::from_pixel(px, px, image::Rgba([40, 120, 220, 255])).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn an_icon_must_be_an_image_and_reaches_each_new_window() {
+        assert!(set_app_icon(b"not an image".to_vec()).is_err());
+        assert!(set_app_icon(png(16)).is_ok());
+        assert_eq!(LINUX.lock().unwrap().as_ref().map(Vec::len), Some((LINUX_SIZE * LINUX_SIZE * 4) as usize));
+        assert!(with_icon(winit::window::WindowAttributes::default()).window_icon.is_some());
     }
 }
