@@ -112,6 +112,8 @@ pub(crate) struct ElCold {
     pub(crate) list_disc: Option<[f32; 3]>,
     /// `El::level` and `El::expanded`.
     pub(crate) a11y: A11y,
+    /// `El::data`: one value per type.
+    pub(crate) data: Vec<crate::el::data::ElData>,
     #[cfg(debug_assertions)]
     pub(crate) scroll_source: Option<&'static std::panic::Location<'static>>,
     #[cfg(debug_assertions)]
@@ -168,6 +170,7 @@ impl Empty for ElCold {
         aspect_fit: 0.0,
         list_disc: None,
         a11y: A11y::EMPTY,
+        data: Vec::new(),
         #[cfg(debug_assertions)]
         scroll_source: None,
         #[cfg(debug_assertions)]

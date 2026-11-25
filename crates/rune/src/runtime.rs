@@ -224,6 +224,8 @@ mod drop_tests;
 #[cfg(test)]
 mod elements_tests;
 #[cfg(test)]
+mod data_tests;
+#[cfg(test)]
 mod any_handlers_tests;
 #[cfg(test)]
 mod on_key_tests;
