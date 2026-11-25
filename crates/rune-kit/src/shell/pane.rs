@@ -216,10 +216,13 @@ impl PaneState {
         self.grip.press(GripStart { width: self.width, open: self.is_open() }, Some(at));
     }
     /// The drag on its edge moved to `at`, `travel` points wider than where it started.
-    pub(super) fn drag_grip(&mut self, at: [f32; 2], travel: f32) {
+    /// Returns true when the pane's visible state (`width` or `dock`) changed.
+    pub(super) fn drag_grip(&mut self, at: [f32; 2], travel: f32) -> bool {
+        let before = (self.width, self.dock);
         if let Some(start) = self.grip.moved(at).copied() {
             self.drag_to(start.width + travel);
         }
+        (self.width, self.dock) != before
     }
     /// The drag on its edge ended; a cancelled one puts the pane back as it was.
     pub(super) fn release_grip(&mut self, cancelled: bool) {

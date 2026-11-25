@@ -1,0 +1,1 @@
+- `rune-kit` (`SplitView`): call `Tx::live_only()` on resize-drag `Phase::Move` events that leave `PaneState`'s width and open/dock state unchanged (clamped at `min`/`max`, vertical-only travel, sub-0.5 pt rounding, or dragging further while collapsed), eliminating redundant view commits.
