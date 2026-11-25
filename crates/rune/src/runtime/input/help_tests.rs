@@ -709,3 +709,79 @@ fn help_look_side_and_arrow_update_a11y_tooltip_on_keyboard_focus() {
     let bounds = tip_node.1.bounds().expect("Tooltip bounds");
     assert!(bounds.y1 <= anchor[1] as f64, "a11y tooltip bounds reflect Top placement: {bounds:?}");
 }
+
+/// A filled dot, for an inline icon.
+const DOT: crate::Icon = crate::Icon { name: "dot", view: 16.0, body: r#"<circle cx="8" cy="8" r="6" fill="currentColor"/>"# };
+
+/// A text with an inline icon before its second word: the icon has a name and a tooltip; the
+/// text has its own tooltip when the state is negative. Scaled by the state's size.
+fn iconed(k: &f32, _: &mut Cx<f32>) -> El {
+    let icon = crate::InlineIcon::glyph(&DOT).size(14.0).gap(4.0).label("Terminal").help("From the terminal");
+    let mut label = crate::text("see MMMM").key("quote").font(crate::TextStyle::new(16.0, 400.0)).inline_icon(4, icon);
+    if *k < 0.0 { label = label.help("The whole quote"); }
+    el().w_full().h_full().child(el().pin(Some(10.0), Some(10.0), None, None).scale(k.abs()).child(label))
+}
+
+#[test]
+fn an_inline_icon_shows_its_own_help_under_its_square() {
+    for k in [1.0, 1.6] {
+        let mut rt = Runtime::new(k, iconed, (400.0, 300.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        let i = rt.tree.nodes.iter().position(|n| n.text.is_some()).unwrap();
+        let boxes = rt.core().inline_icon_boxes(i, rt.drawn_box(i));
+        assert_eq!(boxes.len(), 1, "zoom {k}: one icon with help: {boxes:?}");
+        let (pill, b) = boxes[0];
+        assert_eq!(pill, 0);
+        let side = 14.0 * k;
+        assert!((b[2] - b[0] - side).abs() < 1.0 && (b[3] - b[1] - side).abs() < 1.0, "zoom {k}: the icon's own square, {side} a side: {b:?}");
+        let e = rt.drawn_box(i);
+        assert!(b[0] > e[0] + 16.0 * k && b[2] < e[2] && b[1] >= e[1] - 1.0 && b[3] <= e[3] + 1.0, "zoom {k}: after the first word, inside the text {e:?}: {b:?}");
+        let (text, r) = rest(&mut rt, (b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5).expect("tip on the icon");
+        assert_eq!(text, "From the terminal");
+        assert!(r[1] >= b[3] && r[0] < b[2] && r[0] + r[2] > b[0], "zoom {k}: tip {r:?} sits under the icon {b:?}");
+        assert!(rest(&mut rt, (b[2] + e[2]) * 0.5, (b[1] + b[3]) * 0.5).is_none(), "zoom {k}: the word after it shows none");
+        assert!(rest(&mut rt, 300.0, 250.0).is_none(), "leaving hides it");
+    }
+}
+
+#[test]
+fn an_inline_icons_help_is_its_own_over_its_elements() {
+    let mut rt = Runtime::new(-1.0, iconed, (400.0, 300.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    let i = rt.tree.nodes.iter().position(|n| n.text.is_some()).unwrap();
+    let (b, e) = (rt.core().inline_icon_boxes(i, rt.drawn_box(i))[0].1, rt.drawn_box(i));
+    let (text, _) = rest(&mut rt, (b[0] + b[2]) * 0.5, (b[1] + b[3]) * 0.5).expect("tip on the icon");
+    assert_eq!(text, "From the terminal");
+    let (text, r) = rest(&mut rt, (b[2] + e[2]) * 0.5, (b[1] + b[3]) * 0.5).expect("tip on the word");
+    assert_eq!(text, "The whole quote");
+    assert!(r[1] >= e[3], "the element's tip hangs under the element {e:?}: {r:?}");
+}
+
+#[test]
+fn a_named_inline_icon_is_an_image_in_the_accessibility_tree_where_it_draws() {
+    use accesskit::Role;
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let font = crate::TextStyle::new(16.0, 400.0);
+        crate::col().w_full().gap(8.0)
+            .child(crate::text("from zsh").key("quote").font(font).inline_icon(5, crate::InlineIcon::glyph(&DOT).label("Terminal").help("Terminal")))
+            .child(crate::text("plain icon").key("plain").font(font).inline_icon(6, crate::InlineIcon::glyph(&DOT)))
+            .child(crate::text("said more").key("more").font(font).inline_icon(5, crate::InlineIcon::glyph(&DOT).label("Browser").help("From the browser")))
+    }
+    let mut rt = Runtime::new((), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = rt.accessibility_tree();
+    let images: Vec<_> = tree.nodes.iter().filter(|(_, n)| n.role() == Role::Image).collect();
+    assert_eq!(images.len(), 2, "an icon without a name is decoration: {:?}", images.iter().map(|(_, n)| n.label()).collect::<Vec<_>>());
+    let named = |label: &str| images.iter().find(|(_, n)| n.label() == Some(label)).unwrap_or_else(|| panic!("no image named {label}"));
+    let (id, terminal) = named("Terminal");
+    assert_eq!(terminal.description(), None, "help that repeats the name is not said twice");
+    assert_eq!(named("Browser").1.description(), Some("From the browser"));
+    // It is its text's child, and sits where the icon draws inside it.
+    let (_, quote) = tree.nodes.iter().find(|(_, n)| n.author_id() == Some("quote")).expect("the text's node");
+    assert!(quote.children().contains(id), "the image is the text's child");
+    let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("quote")).unwrap();
+    let (b, e) = (rt.core().inline_icon_boxes(i, rt.drawn_box(i))[0].1, rt.drawn_box(i));
+    let (r, q) = (terminal.bounds().expect("the image's bounds"), quote.bounds().expect("the text's bounds"));
+    assert!(((r.x0 - q.x0) - f64::from(b[0] - e[0])).abs() <= 1.0 && ((r.y0 - q.y0) - f64::from(b[1] - e[1])).abs() <= 1.0, "image {r:?} in text {q:?}; icon {b:?} in {e:?}");
+    assert!((r.x1 - r.x0 - 14.0).abs() <= 1.0 && (r.y1 - r.y0 - 14.0).abs() <= 1.0, "the icon's 14 point square: {r:?}");
+}
