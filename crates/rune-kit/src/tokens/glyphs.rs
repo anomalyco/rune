@@ -1,6 +1,6 @@
 //! The small built-in glyphs components draw (check marks, chevrons, close, stars). Geometric
 //! shapes, not an icon catalog; a theme may replace any of them through `Kit::glyph`.
-//! `MIC`, `KEYBOARD`, `CURSOR_TEXT`, `ARROW_RIGHT`, `SPARKLE`, `STAR` and `STAR_FILLED` have no `Glyphs` slot: draw them with `icon(&glyphs::MIC, 16.0)`.
+//! `MIC`, `KEYBOARD`, `EYEDROPPER`, `CURSOR_TEXT`, `ARROW_RIGHT`, `SPARKLE`, `STAR` and `STAR_FILLED` have no `Glyphs` slot: draw them with `icon(&glyphs::MIC, 16.0)`.
 
 use rune::Icon;
 
@@ -76,6 +76,12 @@ pub static TRIANGLE_RIGHT: Icon = Icon {
 pub static DASH: Icon =
     Icon { name: "kit-dash", view: 20.0, body: r#"<rect x="5" y="9.5" width="10" height="1" fill="currentColor"/>"# };
 
+/// An eyedropper. Not a `Glyphs` slot: `icon(&glyphs::EYEDROPPER, 16.0)`.
+pub static EYEDROPPER: Icon = Icon {
+    name: "kit-eyedropper",
+    view: 16.0,
+    body: r#"<path d="M9.5 4.5L11.5 6.5M8.5 5.5L10.5 7.5L4.5 13.5H2.5V11.5L8.5 5.5Z" stroke="currentColor" stroke-linejoin="round"/><path d="M9.5 4.5L11 3C11.8 2.2 13 2.2 13.6 2.9C14.3 3.5 14.3 4.7 13.5 5.5L12 7" stroke="currentColor" stroke-linejoin="round"/>"#,
+};
 /// A microphone. Not a `Glyphs` slot: `icon(&glyphs::MIC, 16.0)`.
 pub static MIC: Icon = Icon {
     name: "kit-mic",

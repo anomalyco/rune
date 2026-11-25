@@ -7,7 +7,7 @@ use rune::Icon;
 use rune::text::icon_coverage;
 use rune_kit::glyphs;
 
-const ALL: [&Icon; 28] = [
+const ALL: [&Icon; 29] = [
     &glyphs::CHECK,
     &glyphs::CHECK_SMALL,
     &glyphs::CHEVRON_DOWN,
@@ -30,6 +30,7 @@ const ALL: [&Icon; 28] = [
     &glyphs::FILE_TEXT,
     &glyphs::FILE_IMAGE,
     &glyphs::MIC,
+    &glyphs::EYEDROPPER,
     &glyphs::KEYBOARD,
     &glyphs::CURSOR_TEXT,
     &glyphs::ARROW_RIGHT,
@@ -198,7 +199,7 @@ fn write_sheet(path: &std::path::Path, rows: &[Row]) {
 
 #[test]
 fn extra_glyphs_rasterize_with_ink() {
-    for icon in [&glyphs::MIC, &glyphs::KEYBOARD, &glyphs::CURSOR_TEXT, &glyphs::ARROW_RIGHT, &glyphs::SPARKLE] {
+    for icon in [&glyphs::MIC, &glyphs::EYEDROPPER, &glyphs::KEYBOARD, &glyphs::CURSOR_TEXT, &glyphs::ARROW_RIGHT, &glyphs::SPARKLE] {
         let ink: u32 = icon_coverage(icon, 32).iter().map(|&a| a as u32).sum();
         assert!(ink > 2000, "{} has no ink", icon.name);
     }
