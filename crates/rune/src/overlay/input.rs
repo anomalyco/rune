@@ -359,6 +359,12 @@ impl OverlayCore {
             match self.surface.live_mut() {
                 Some(Live { backing: Backing::Layer(layer), .. }) => layer.set_input(resolved),
                 Some(Live { backing: Backing::Xwayland(surface), .. }) => surface.set_input(resolved),
+                // A Wayland toplevel's input region is all or nothing.
+                Some(Live { backing: Backing::Window(window), .. }) if super::toplevel::is_toplevel(window) => {
+                    window.set_cursor_hittest(resolved != OverlayInput::None).ok();
+                    let caps = super::toplevel::toplevel_capabilities(resolved);
+                    self.shared.native.lock().unwrap().1 = caps;
+                }
                 _ => {}
             }
         }
