@@ -36,16 +36,16 @@ fn pipelines_are_built_for_what_frames_draw() {
 
     let shape = Shape::rounded(16.0, 16.0, 32.0, 32.0, 6.0);
     let glow = Fx::glow(GlowParams::default()).on(shape);
-    draw(&gpu, &mut fx, window, &[glow], &[]);
+    draw(&gpu, &mut fx, window, std::slice::from_ref(&glow), &[]);
     assert_eq!(fx.built_pipelines(), 1, "a glow builds the glow");
-    draw(&gpu, &mut fx, window, &[glow], &[]);
+    draw(&gpu, &mut fx, window, std::slice::from_ref(&glow), &[]);
     assert_eq!(fx.built_pipelines(), 1, "and keeps it");
 
     let fire = Fx::fire(FireParams::default()).on(shape);
-    draw(&gpu, &mut fx, window, &[glow, fire, glow], &[FxSlot::default(), FxSlot::default(), FxSlot::default().blend(FxBlend::Screen)]);
+    draw(&gpu, &mut fx, window, &[glow.clone(), fire, glow.clone()], &[FxSlot::default(), FxSlot::default(), FxSlot::default().blend(FxBlend::Screen)]);
     assert_eq!(fx.built_pipelines(), 3, "a fire and a screen-blended glow build one each");
 
-    draw(&gpu, &mut fx, layer, &[glow], &[]);
+    draw(&gpu, &mut fx, layer, std::slice::from_ref(&glow), &[]);
     assert_eq!(fx.built_pipelines(), 4, "another format builds its own when drawn into");
 
     fx.build_every_pipeline();

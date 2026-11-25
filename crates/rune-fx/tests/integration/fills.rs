@@ -321,7 +321,7 @@ fn plastic_never_paints_past_its_coverage() {
             for (color, intensity) in [(rgb(0xffffff), 1.0), (rgb(0xffd60a), 1.0), (rgb(0xd7263d), 0.5), (rgb(0x202226), 1.0)] {
                 let p = PlasticParams { color, roughness, ..PlasticParams::glossy() };
                 for layer in [Fx::fill(p.intensity(intensity)).on(key()), Fx::fill(p.border(6.0)).on(key())] {
-                    let img = render(w, h, s, srgb, &[layer]);
+                    let img = render(w, h, s, srgb, std::slice::from_ref(&layer));
                     let worst = img.iter().map(|p| p[0].max(p[1]).max(p[2]) - p[3]).fold(f32::MIN, f32::max);
                     assert!(worst <= 2e-3, "srgb {srgb} roughness {roughness} {color:?} x{intensity}: rgb exceeds alpha by {worst}");
                     let centre = img[(h / 2 * w + w / 2) as usize];

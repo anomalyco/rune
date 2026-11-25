@@ -239,6 +239,15 @@ fn launch_frames_hold_two_drawables_until_the_window_rests() {
     assert_eq!(launch.settle(true, t0), None);
 }
 
+#[test]
+fn a_requested_frame_latency_only_lowers_the_default() {
+    use crate::window::surface::{FRAME_LATENCY, frame_latency};
+    assert_eq!(frame_latency(None), FRAME_LATENCY);
+    assert_eq!(frame_latency(Some(0)), 1, "a swap chain holds at least one frame");
+    assert_eq!(frame_latency(Some(1)), 1);
+    assert_eq!(frame_latency(Some(9)), FRAME_LATENCY, "never more than the platform's default");
+}
+
 /// The poll's timer on the runtime's logical clock.
 const COMP_PERIOD: Duration = Duration::from_secs(5);
 

@@ -64,7 +64,7 @@ fn layers_that_draw_nothing_never_keep_the_loop_awake() {
     for (live, silent) in pairs {
         let live = live.on(card()).at(1.0);
         assert!(live.is_animating() && live.pack().is_some(), "{live:?}");
-        assert!(!live.opacity(0.0).is_animating(), "zero opacity: {live:?}");
+        assert!(!live.clone().opacity(0.0).is_animating(), "zero opacity: {live:?}");
         let silent = silent.on(card()).at(1.0);
         assert!(!silent.is_animating() && silent.pack().is_none(), "{silent:?}");
     }
@@ -120,13 +120,13 @@ fn opacity_zero_is_culled() {
 #[test]
 fn zaps_and_bursts_live_out_their_window_then_cull() {
     let zap = Fx::electric(ElectricParams { style: ElectricStyle::Arc { a: [0.0, 0.0], b: [200.0, 40.0] }, zap: Some(1.0), ..Default::default() }).on(card());
-    assert!(zap.at(0.9).pack().is_none());
-    assert!(zap.at(1.2).pack().is_some() && zap.at(1.2).is_animating());
-    assert!(zap.at(1.0 + ElectricParams::ZAP_LIFE + 0.01).pack().is_none());
+    assert!(zap.clone().at(0.9).pack().is_none());
+    assert!(zap.clone().at(1.2).pack().is_some() && zap.clone().at(1.2).is_animating());
+    assert!(zap.clone().at(1.0 + ElectricParams::ZAP_LIFE + 0.01).pack().is_none());
     let p = SparkleParams { burst: Some(2.0), ..Default::default() };
     let burst = Fx::sparkles(p).on(card());
-    assert!(burst.at(2.3).pack().is_some());
-    assert!(!burst.at(2.0 + p.burst_life() + 0.01).is_animating());
+    assert!(burst.clone().at(2.3).pack().is_some());
+    assert!(!burst.clone().at(2.0 + p.burst_life() + 0.01).is_animating());
     let mut data = Vec::new();
     let (_, n) = cpu::sparkles(&p, card().rect, 2.0 + p.burst_life() + 0.01, 1, false, &mut data);
     assert_eq!(n, 0.0, "every burst star is gone by burst_life()");
@@ -464,4 +464,12 @@ fn support_needs_vertex_and_fragment_storage_and_two_buffers() {
     assert_eq!(fx_support(&vertex_only, &wgpu::Limits::default()), Err(FxUnsupported::FragmentStorage));
     let one = wgpu::Limits { max_storage_buffers_per_shader_stage: 1, ..wgpu::Limits::default() };
     assert_eq!(fx_support(&full, &one), Err(FxUnsupported::StorageBuffers { needed: 2, allowed: 1 }));
+}
+
+#[test]
+fn motion_samples_stay_out_of_every_layer() {
+    // `MotionSamples` is about 2 KiB; inline, it would make every `Fx` and `FxLayer` that big.
+    assert!(std::mem::size_of::<MotionSamples>() > 2048);
+    assert!(std::mem::size_of::<Fx>() <= 256, "Fx is {} bytes", std::mem::size_of::<Fx>());
+    assert!(std::mem::size_of::<FxLayer>() <= 384, "FxLayer is {} bytes", std::mem::size_of::<FxLayer>());
 }
