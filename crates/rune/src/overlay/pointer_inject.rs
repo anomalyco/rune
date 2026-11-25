@@ -242,6 +242,12 @@ impl OverlayCore {
         *self.shared.screen_transform.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = transform;
     }
 
+    #[cfg(target_os = "windows")]
+    pub(super) fn publish_screen_origin(&self, origin: (i32, i32), scale: f32) {
+        let transform = (self.presence.shown() && scale.is_finite() && scale > 0.0).then_some((origin, scale));
+        *self.shared.screen_transform.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = transform;
+    }
+
     pub(super) fn clear_screen_transform(&self) {
         *self.shared.screen_transform.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
