@@ -670,13 +670,12 @@ impl Host {
                 if let Some((x, y)) = button_at(app, &l.window) {
                     match state {
                         ElementState::Pressed => app.rt_mut().secondary_down(x, y),
-                        ElementState::Released => {
-                            app.secondary_up(x, y);
-                            // At the pointer, while it's still where the click was.
-                            let rt = app.rt_mut();
-                            if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu, Some((x * rt.zoom(), y * rt.zoom()))); }
-                        }
+                        ElementState::Released => app.secondary_up(x, y),
                     }
+                    // At the pointer, while it's still where the click was (on press for Wayland's
+                    // button-press serial, on release for Windows and X11).
+                    let rt = app.rt_mut();
+                    if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu, Some((x * rt.zoom(), y * rt.zoom()))); }
                 }
                 l.request_redraw();
             }

@@ -22,6 +22,8 @@ pub(in crate::runtime) struct Titlebar {
     native_band: f32,
     /// The window menu the shell opens next.
     window_menu: Option<WindowMenu>,
+    /// Whether and when a secondary click on a bare `.window_drag()` region opens the window menu.
+    window_menu_trigger: WindowMenuTrigger,
     /// What `Cx::chrome_insets` reports.
     pub(in crate::runtime) insets: crate::ChromeInsets,
     /// The Windows caption buttons the view gets drawn over it, with their state.
@@ -73,6 +75,22 @@ pub(crate) enum WindowMenu {
     Pointer,
     /// Under the window's top-left corner, from the keyboard: Alt+Space no handler took.
     Keyboard,
+}
+
+/// Whether and when a secondary click on a bare `.window_drag()` region opens the OS/WM
+/// window menu.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum WindowMenuTrigger {
+    /// This window has no titlebar window menu.
+    #[default]
+    None,
+    /// Open on secondary press (Wayland: `xdg_toplevel.show_window_menu` needs the press
+    /// serial while winit's `latest_button_serial()` still holds it).
+    OnPress,
+    /// Open on secondary release (Windows custom frame: `WM_NCRBUTTONUP`; X11: after the X
+    /// server releases winit's implicit button-press pointer grab).
+    OnRelease,
 }
 
 /// Pointer travel (points, per axis) from a deferred bare `.window_drag()` mouse press before
@@ -154,8 +172,9 @@ pub(in crate::runtime) enum Event {
     Empty { now: f64, point: (f32, f32), interval: f64, band: bool },
     /// A primary press on an interactive or non-drag element.
     OtherPress,
-    /// A secondary press; `region` when it landed on a bare drag region of a custom titlebar.
-    SecondaryDown { region: bool },
+    /// A secondary press: `None` outside a bare drag region (or when the window has no menu),
+    /// `OnPress` to open immediately (Wayland), or `OnRelease` to arm until release (Windows, X11).
+    SecondaryDown { trigger: WindowMenuTrigger },
     /// A secondary release; `region` when it is over a bare drag region now.
     SecondaryUp { region: bool },
     /// Pointer cancellation or stage replacement ends both halves of any pending press.
@@ -252,13 +271,25 @@ pub(in crate::runtime) fn step(state: &mut TitlebarPress, event: Event) -> Effec
             *state = keep_secondary(state, next);
             if double { Effects::one(Request::Action(TitlebarAction::DoubleClick)) } else { Effects::none() }
         }
-        Event::SecondaryDown { region } => {
+        Event::SecondaryDown { trigger } => {
             let kept = match *state {
                 TitlebarPress::Holding(_) => None,
                 _ => pair(state),
             };
-            *state = if region { TitlebarPress::SecondaryOnRegion(kept) } else { armed(kept) };
-            Effects::none()
+            match trigger {
+                WindowMenuTrigger::None => {
+                    *state = armed(kept);
+                    Effects::none()
+                }
+                WindowMenuTrigger::OnPress => {
+                    *state = armed(kept);
+                    Effects::one(Request::Menu)
+                }
+                WindowMenuTrigger::OnRelease => {
+                    *state = TitlebarPress::SecondaryOnRegion(kept);
+                    Effects::none()
+                }
+            }
         }
         Event::SecondaryUp { region } => {
             let TitlebarPress::SecondaryOnRegion(pair) = *state else { return Effects::none() };
@@ -394,6 +425,13 @@ impl RuntimeCore {
         self.commit.dirty = true;
     }
 
+    /// Sets whether and when a secondary click on a bare `.window_drag()` region opens the
+    /// window menu.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn set_window_menu_trigger(&mut self, trigger: WindowMenuTrigger) {
+        self.host.titlebar.window_menu_trigger = trigger;
+    }
+
     /// What a run without a window reports and draws for `App::titlebar` on this platform, as
     /// its window would at rest: `Cx::titlebar_inset`, `Cx::chrome_insets` and the caption
     /// buttons. Returns the frame the headless traffic-light checks see.
@@ -493,12 +531,27 @@ impl RuntimeCore {
         std::mem::take(&mut self.host.titlebar.set_changed)
     }
 
+    /// Effective trigger for a bare `.window_drag()` secondary click: explicit host capability,
+    /// falling back to release when a Windows caption is installed directly (e.g. headless tests).
+    fn window_menu_trigger(&self) -> WindowMenuTrigger {
+        match self.host.titlebar.window_menu_trigger {
+            WindowMenuTrigger::None if self.host.titlebar.caption.is_some() => WindowMenuTrigger::OnRelease,
+            trigger => trigger,
+        }
+    }
+
     /// Notes whether a secondary press at (x, y) landed on a bare `.window_drag()` region of a
-    /// custom titlebar, where its release opens the window menu.
+    /// window that can show a window menu, opening it on press (Wayland) or arming it for release
+    /// (Windows, X11).
     pub(in crate::runtime) fn secondary_region_down(&mut self, x: f32, y: f32, captured: bool) {
-        let region = !captured && self.host.titlebar.caption.is_some()
-            && self.primary_target(x, y).is_some_and(|t| self.bare_drag_region(t));
-        self.host.titlebar.act(Event::SecondaryDown { region });
+        let trigger = if !captured
+            && self.primary_target(x, y).is_some_and(|t| self.bare_drag_region(t))
+        {
+            self.window_menu_trigger()
+        } else {
+            WindowMenuTrigger::None
+        };
+        self.host.titlebar.act(Event::SecondaryDown { trigger });
     }
 
     /// A secondary release that ends the press `secondary_region_down` noted on a drag region
@@ -606,3 +659,6 @@ impl RuntimeCore {
 #[cfg(test)]
 #[path = "titlebar_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "titlebar_window_menu_tests.rs"]
+mod window_menu_tests;

@@ -92,19 +92,24 @@ pub(in crate::window) fn sync_chrome_core(rt: &mut RuntimeCore, w: &Win, chrome:
     rt.set_maximized(w.is_maximized());
     rt.set_full_screen(full_screen);
     let _ = sync_wm_state_core(rt, w);
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    rt.set_window_menu_trigger(resolve_window_menu_trigger(false, None, cfg!(target_os = "windows") && caption.is_some()));
 }
 
 /// Reads platform window-manager state (decoration mode, tiled edges, allowed actions) and updates
 /// `rt`, returning whether the view was dirtied. Only X11 queries properties today; Wayland,
-/// macOS, and Windows honestly leave the state at its default unknown values.
+/// macOS, and Windows honestly leave the state at its default unknown values. On Linux this also
+/// updates the titlebar secondary-click window-menu trigger from the same `_NET_SUPPORTED` read.
 pub(in crate::window) fn sync_wm_state_core(rt: &mut RuntimeCore, w: &Win) -> bool {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     {
-        let state = if is_wayland_window(&w.window) {
+        let wayland = is_wayland_window(&w.window);
+        let state = if wayland {
             crate::WindowManagerState::default()
         } else {
             crate::platform::x11::wm_state::read(&w.window)
         };
+        rt.set_window_menu_trigger(resolve_window_menu_trigger(wayland, state.actions.window_menu, false));
         rt.sync_window_manager_state(state)
     }
     #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
@@ -237,6 +242,29 @@ pub(in crate::window) fn window_menu(window: &Window, menu: crate::runtime::Wind
     }
     #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     let _ = (window, menu, at);
+}
+
+/// Resolves the titlebar secondary-click window-menu trigger from platform capabilities:
+/// Wayland opens on press (for `xdg_toplevel.show_window_menu`'s press serial) unless the
+/// compositor explicitly reported `window_menu == Some(false)`; X11 opens on release when
+/// `WindowActions::window_menu` is `Some(true)` (`_GTK_SHOW_WINDOW_MENU` in `_NET_SUPPORTED`,
+/// after X11's implicit pointer grab ends); Windows custom frames open on release (`WM_NCRBUTTONUP`).
+pub(in crate::window) const fn resolve_window_menu_trigger(
+    wayland: bool,
+    wm_window_menu: Option<bool>,
+    windows_caption: bool,
+) -> crate::runtime::WindowMenuTrigger {
+    if wayland {
+        if matches!(wm_window_menu, Some(false)) {
+            crate::runtime::WindowMenuTrigger::None
+        } else {
+            crate::runtime::WindowMenuTrigger::OnPress
+        }
+    } else if matches!(wm_window_menu, Some(true)) || windows_caption {
+        crate::runtime::WindowMenuTrigger::OnRelease
+    } else {
+        crate::runtime::WindowMenuTrigger::None
+    }
 }
 
 /// Whether Alt+Space opens this window's window menu when no handler takes it: on Wayland every

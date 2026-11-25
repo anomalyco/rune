@@ -540,7 +540,10 @@ impl Host {
             crate::platform::win32::apply_window_styles(&w.window, &self.windows_window);
         }
         if let Some(menu) = self.app.rt_mut().take_window_menu() && let Some(w) = self.shown_win() {
-            chrome::window_menu(&w.window, menu, None);
+            let rt = self.app.rt();
+            let at = (menu == crate::runtime::WindowMenu::Pointer)
+                .then(|| rt.pointer().map(|(x, y)| (x * rt.zoom(), y * rt.zoom()))).flatten();
+            chrome::window_menu(&w.window, menu, at);
         }
         // A new `Cx::set_titlebar` or `Cx::titlebar_height` resizes the caption buttons and the band
         // the frame hit-tests, and moves the traffic lights.

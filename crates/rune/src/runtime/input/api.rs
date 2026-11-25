@@ -418,6 +418,9 @@ impl<S: 'static> Runtime<S> {
     #[cfg(test)]
     #[inline(always)]
     pub(crate) fn set_caption(&mut self, caption: Option<crate::titlebar::Caption>) { self.core_mut().set_caption(caption); }
+    #[cfg(test)]
+    #[inline(always)]
+    pub(crate) fn set_window_menu_trigger(&mut self, trigger: WindowMenuTrigger) { self.core_mut().set_window_menu_trigger(trigger); }
     #[inline(always)]
     pub(crate) fn headless_chrome(&mut self, chrome: crate::Chrome, titlebar: Option<crate::Titlebar>, borderless: bool) -> crate::Chrome {
         self.core_mut().headless_chrome(chrome, titlebar, borderless)
