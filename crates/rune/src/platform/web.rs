@@ -449,6 +449,7 @@ impl ApplicationHandler<Wake> for Browser {
             Ok(window) => Arc::new(window),
             Err(e) => { error(&e.to_string(), existing.as_ref(), self.embedded, self.document); self.end(event_loop); return; }
         };
+        crate::window::displays::track(&window);
         let canvas = window.canvas().expect("winit web canvas");
         if !canvas.has_attribute("tabindex") {
             canvas.set_attribute("tabindex", "0").ok();

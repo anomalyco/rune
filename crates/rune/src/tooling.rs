@@ -313,6 +313,8 @@ fn run_window_factory(options: crate::RunOptions, args: Args, factory: Factory) 
         {
             crate::render::discard_prewarm();
             let displays = desktop(&args, read_script(&args).as_ref()).displays();
+            crate::window::displays::reset();
+            crate::window::displays::remember(&displays);
             headless_window(factory(&displays), &displays, args, options)
         }
         #[cfg(not(any(feature = "tooling", debug_assertions)))]

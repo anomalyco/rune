@@ -2570,6 +2570,11 @@ click-through presentation at that display's physical origin and size.
 desktop pixels (`GetMonitorInfoW`'s `rcWork` excluding the taskbar and docked app
 bars on Windows; `(position, size)` elsewhere or when disconnected). Options
 also support initially hidden windows and per-window minimum sizes.
+`rune::displays()` reads the same list again while the app runs (on the UI thread,
+through an open window), so an app can find a monitor plugged in after launch and
+`open_window` an overlay window on it. With no window open it returns the list last
+read; headless runs return their virtual desktop. Rune does not yet report when
+displays change.
 
 On macOS, `MacWindowOptions` (via `App::macos_window`, `WindowSpec::macos_window`,
 `WindowOptions::macos`, or `ConfiguredWindowOptions::macos`) configures AppKit properties
