@@ -667,3 +667,19 @@ fn async_policy_refusal_and_unmount_and_stale_grant_leave_no_stuck_state() {
     assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Off);
     assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Ungrab));
 }
+
+#[test]
+fn async_policy_duplicate_grant_from_in_place_option_upgrade_is_idempotent() {
+    let mut rt = make_rt(Scene::playing());
+    rt.core_mut().set_pointer_lock_policy(super::LockPolicy::Async);
+    rt.pointer_down(150.0, 100.0);
+    rt.pointer_up(150.0, 100.0);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Grab));
+    assert!(rt.core_mut().pointer_lock_granted());
+    assert!(rt.pointer_locked());
+    // A second pointerlockchange from upgrading options in place (W3C Pointer Lock 2.0 step 6.3.2)
+    // leaves the lock active with no view invalidation and no host effect.
+    assert!(!rt.core_mut().pointer_lock_granted());
+    assert!(rt.pointer_locked());
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), None);
+}

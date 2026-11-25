@@ -596,8 +596,8 @@ policy changes are applied in the same mutation phase.
   relative mouse-look capture on desktop windows and web browsers (iOS and native overlays never
   capture): a primary press whose primary target is that element captures (HUD buttons and covering
   elements do not), hides the cursor while focused (desktop `CursorGrabMode::Locked`, falling back
-  to `Confined` on X11; web `canvas.requestPointerLock({ unadjustedMovement: true })` with cached
-  `NotSupportedError` fallback to plain `requestPointerLock()` inside the user gesture), freezes the
+  to `Confined` on X11; web plain `canvas.requestPointerLock()` synchronously inside the user gesture, then
+  upgrading in place to `{ unadjustedMovement: true }` once locked where supported), freezes the
   runtime pointer at the press point (ignoring `pointer_move`/`pointer_leave` so all buttons and
   wheels land on the viewport), and delivers coalesced relative `[dx, dy]` deltas in logical points
   (`tx.live_only()` supported; `DeviceEvent::MouseMotion` scaled by `1/scale_factor` on Windows and
