@@ -1,0 +1,1 @@
+- Tests (`rune` `runtime::timer_wake_tests`): drive all 16 resting-timer tests through `ManualClock` (`FrameState::set_test_clock`) instead of shifting `rt.wall_start` against the real wall clock, eliminating load-induced drift against timer deadlines.
