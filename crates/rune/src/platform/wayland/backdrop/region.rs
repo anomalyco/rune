@@ -5,7 +5,8 @@
 //! - Whole-surface blur (`WindowBackdrop::Blur`): square surfaces emit `[0, 0, w, h]`; Wayland
 //!   client-side decorated windows with rounded bottom corners
 //!   (`WindowExtWayland::content_corner_radius > 0`) decompose the bottom band into symmetric
-//!   1-point horizontal span rectangles strictly inside the corner arcs.
+//!   1-point horizontal span rectangles strictly inside the corner arcs, and the top band the
+//!   same way under a frame without a headerbar (`WindowExtWayland::has_headerless_frame`).
 //! - Per-element shaped blur (`El::system_material` while `WindowBackdrop::None` is active):
 //!   quantizes each element conservatively inward into surface-local logical coordinates,
 //!   decomposes all four rounded corners into symmetric 1-point horizontal span rects strictly
@@ -38,6 +39,9 @@ pub(crate) struct RegionRect {
 pub(crate) struct RegionSpec {
     pub logical_size: (i32, i32),
     pub bottom_corner_radius: i32,
+    /// The top two corners take `bottom_corner_radius` too: the client-side frame has no
+    /// headerbar over them (`with_top_corners`).
+    pub top_corners: bool,
 }
 
 impl RegionSpec {
@@ -52,7 +56,15 @@ impl RegionSpec {
         let logical_size = logical_surface_size(physical_size, window_scale);
         let bottom_corner_radius =
             normalize_bottom_corner_radius(bottom_corner_radius_points, logical_size);
-        Self { logical_size, bottom_corner_radius }
+        Self { logical_size, bottom_corner_radius, top_corners: false }
+    }
+
+    /// The same region with its top two corners rounded as its bottom two are, where `top` says
+    /// the window's client-side frame has no headerbar. A square region, and one too short for
+    /// arcs at both ends, keeps its top as it was.
+    pub(crate) fn with_top_corners(mut self, top: bool) -> Self {
+        self.top_corners = top && self.bottom_corner_radius > 0 && self.logical_size.1 >= 2 * self.bottom_corner_radius;
+        self
     }
 
     /// True when either logical dimension is zero or negative (degenerate/unconfigured surface).
@@ -267,13 +279,25 @@ pub(crate) fn build_blur_rects(spec: RegionSpec) -> Vec<RegionRect> {
         return vec![RegionRect { x: 0, y: 0, width: w, height: h }];
     }
 
-    let mut rects = Vec::with_capacity(r as usize + 1);
-    if h > r {
-        rects.push(RegionRect { x: 0, y: 0, width: w, height: h - r });
-    }
-
     let radius_f = f64::from(r);
     let radius_sq = radius_f * radius_f;
+    // The top band's rows, where a frame without a headerbar rounds the top corners: the bottom
+    // band's mirror, each row measured at its upper edge, the one farther from the arcs' centres.
+    let top = if spec.top_corners && h >= 2 * r { r } else { 0 };
+    let mut rects = Vec::with_capacity((r + top) as usize + 1);
+    for row in 0..top {
+        let dy = f64::from(top - row);
+        let dx = (radius_sq - dy * dy).max(0.0).sqrt();
+        let inset = ((radius_f - dx).ceil() as i32).clamp(0, w / 2);
+        let span_w = w - inset * 2;
+        if span_w > 0 {
+            rects.push(RegionRect { x: inset, y: row, width: span_w, height: 1 });
+        }
+    }
+    if h > r + top {
+        rects.push(RegionRect { x: 0, y: top, width: w, height: h - r - top });
+    }
+
     let y_start = h - r;
     for row in 0..r {
         let dy = f64::from(row + 1);
