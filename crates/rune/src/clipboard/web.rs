@@ -87,19 +87,26 @@ impl Client {
                         let obj = js_sys::Object::new();
                         if latest.get() != generation {
                             err_cell.set(Some(CopyImageError::Superseded));
-                            let _ = js_sys::Reflect::set(&obj, &"error".into(), &"copy superseded".into());
+                            if js_sys::Reflect::set(&obj, &"error".into(), &"copy superseded".into()).is_err() {
+                                return wasm_bindgen::JsValue::NULL;
+                            }
                             return obj.into();
                         }
                         match copy.encode_image() {
                             Ok(()) => {
                                 let png = copy.content().image().map_or(&[][..], ClipboardImage::png);
                                 let arr = js_sys::Uint8Array::from(png);
-                                let _ = js_sys::Reflect::set(&obj, &"png".into(), &arr);
+                                if js_sys::Reflect::set(&obj, &"png".into(), &arr).is_err() {
+                                    err_cell.set(Some(CopyImageError::Failed("failed to build clipboard PNG payload".into())));
+                                    return wasm_bindgen::JsValue::NULL;
+                                }
                             }
                             Err(err) => {
                                 let msg = err.to_string();
                                 err_cell.set(Some(err));
-                                let _ = js_sys::Reflect::set(&obj, &"error".into(), &msg.into());
+                                if js_sys::Reflect::set(&obj, &"error".into(), &msg.into()).is_err() {
+                                    return wasm_bindgen::JsValue::NULL;
+                                }
                             }
                         }
                         obj.into()
