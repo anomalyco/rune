@@ -2515,6 +2515,27 @@ drops them. `--trace` records `drop-hover:true:<path>`, `drop-hover:false:<path>
 - Once the frame finishes, desktop hosts execute the request off the UI thread: `NSWorkspace` on macOS (`openURL:configuration:completionHandler:` / `activateFileViewerSelectingURLs:` after background path resolution), a background STA worker calling `ShellExecuteW` / `SHOpenFolderAndSelectItems` on Windows, and the shared portal worker on Linux (`org.freedesktop.portal.OpenURI.OpenFile` for open, `org.freedesktop.FileManager1.ShowItems` then `OpenURI.OpenDirectory` for reveal, falling back to `xdg-open`).
 - Headless runs and tests launch nothing and capture every request as `PathRequest { path, action: PathAction }` via `Runtime::take_path_requests()`. `examples/drop-files` shows Open and Reveal buttons for dropped files.
 
+### Keeping secrets (`rune::credentials`)
+
+`Credentials::system()` keeps an API token or password in the platform's credential store between launches: the Keychain on macOS and iOS, Credential Manager on Windows, the Secret Service on Linux (with the default `dbus` feature). Each credential is keyed by a service name and holds one account name and a secret as bytes; `write` replaces what the service held (a failed write leaves it as it was), `read` returns `Option<Credential>`, `delete` is fine when nothing is stored. The web, Android and Linux without `dbus` return `CredentialError::Unsupported`, so the app can ask again each launch.
+
+Every call blocks and may show a system prompt, so run it off the UI thread and land the answer in `poll`. Keep the `Result`, so "nothing stored" (`Ok(None)`) stays apart from a store that refused (`Denied`, `Unsupported`, `Failed`):
+
+```rust
+// state: token: Latest<Result<Option<Credential>, CredentialError>>
+s.token.request("com.example.images.api", |service| Credentials::system().read(service));
+// poll:
+let Some(answer) = s.token.take() else { return false };
+match answer {
+    Ok(Some(found)) => s.api_token = Some(found),
+    Ok(None) => s.ask_for_token = true,
+    Err(e) => s.error = Some(e.to_string()),
+}
+true
+```
+
+Headless work never touches the person's store: once the process has a headless run (`--snap`, `--script`, `--tree`, `--html` and the like, through `run` or `App::args`), has built a runtime with `App::headless_runtime`, or runs with `RUNE_CREDENTIALS=memory`, `Credentials::system()` is one in-memory store shared by the process. Windows, overlays and an app's own `Runtime::new` (thumbnails, an export) keep the platform's store, so a test that drives `Runtime::new` itself, or makes no runtime at all, looks like the app: use `Credentials::memory()` there (a store of its own) or set `RUNE_CREDENTIALS=memory`. On Linux, Rune's items carry `xdg:schema` `dev.rune.Credential` beside `service` and `account`, so other apps' items for the same service name stay untouched. `Credential`'s `Debug` output redacts the secret, and the copy a `Credential` holds is zeroed on drop (copies the platform's API or D-Bus make are outside Rune's reach).
+
 ### Pop-up and context menus
 
 `tx.popup_menu(menu, anchor, on_pick)` opens a native menu once the handler's frame is done.

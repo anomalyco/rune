@@ -25,6 +25,7 @@ mod window;
 
 pub mod clipboard;
 pub mod compose;
+pub mod credentials;
 pub mod drag_out;
 pub mod el;
 pub mod file_dialog;
