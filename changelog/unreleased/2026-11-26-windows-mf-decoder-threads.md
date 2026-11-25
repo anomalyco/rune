@@ -1,0 +1,1 @@
+- Video (Windows Media Foundation): capped the video decoder MFT's internal worker threads (`CODECAPI_AVDecNumWorkerThreads = 2`) in `rune-media` before streaming starts, preventing a deadlock inside `IMFSourceReader::ReadSample` after `SetCurrentPosition` when multiple readers seek concurrently in the same process.

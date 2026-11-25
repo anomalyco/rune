@@ -20,6 +20,11 @@ use windows::core::{GUID, HRESULT, HSTRING, Interface, PCSTR, PCWSTR};
 const MF_VERSION: u32 = 0x0002_0070;
 /// 100 ns units per second, Media Foundation's clock.
 pub(super) const TICKS: f64 = 10_000_000.0;
+/// Software decoder worker-thread cap (`CODECAPI_AVDecNumWorkerThreads`). Left at its default
+/// (`-1`), Microsoft's H.264 decoder (`msmpeg2vdec.dll`) spawns up to 16 threads per reader and
+/// can deadlock inside `IMFSourceReader::ReadSample` after `SetCurrentPosition` when multiple
+/// readers seek concurrently in the same process.
+const DECODER_WORKER_THREADS: u32 = 2;
 
 type Startup = unsafe extern "system" fn(u32, u32) -> HRESULT;
 type CreateAttributes = unsafe extern "system" fn(*mut *mut core::ffi::c_void, u32) -> HRESULT;
@@ -234,6 +239,7 @@ pub(super) fn open(lib: &Library, source: &IMFMediaSource, kind: Kind, decode: D
                 wanted.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).map_err(|e| e.message())?;
                 wanted.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).map_err(|e| e.message())?;
                 reader.SetCurrentMediaType(index, None, &wanted).map_err(|e| no_decoder(e, "video"))?;
+                cap_decoder_threads(&reader, index);
                 (Some(index), Some(picture(&reader.GetCurrentMediaType(index).map_err(|e| e.message())?)?))
             }
             None if kind == Kind::Video => return Err("no playable video track".into()),
@@ -254,6 +260,28 @@ pub(super) fn open(lib: &Library, source: &IMFMediaSource, kind: Kind, decode: D
         };
         let duration = duration(&reader);
         Ok(Opened { reader, video, picture, audio, sound, has_sound, duration })
+    }
+}
+
+/// Caps the video decoder MFT's internal worker threads before streaming starts.
+unsafe fn cap_decoder_threads(reader: &IMFSourceReader, stream: u32) {
+    let Ok(ex) = reader.cast::<IMFSourceReaderEx>() else { return };
+    for index in 0..4 {
+        let mut category = GUID::zeroed();
+        let mut transform = None;
+        // SAFETY: querying transforms on a live reader this thread owns.
+        if unsafe { ex.GetTransformForStream(stream, index, Some(&mut category), &mut transform) }.is_err() {
+            break;
+        }
+        if category == MFT_CATEGORY_VIDEO_DECODER
+            && let Some(transform) = transform
+            // SAFETY: reading the live transform's attribute store before streaming starts.
+            && let Ok(attrs) = unsafe { transform.GetAttributes() }
+        {
+            // SAFETY: best-effort codec attribute write; unsupported codecs return an error.
+            unsafe { attrs.SetUINT32(&CODECAPI_AVDecNumWorkerThreads, DECODER_WORKER_THREADS) }.ok();
+            break;
+        }
     }
 }
 

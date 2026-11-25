@@ -528,4 +528,82 @@ fn a_real_clip_keyframe_seek_lands_on_the_first_decoded_frame_without_skipping_f
     }
 }
 
+/// Multiple Media Foundation CPU readers seeking concurrently must never deadlock inside
+/// `IMFSourceReader::ReadSample`. Each worker runs behind a bounded timeout so a regression
+/// fails with a message instead of hanging the test binary.
+#[test]
+fn parallel_cpu_readers_seeking_repeatedly_complete_within_timeout() {
+    use std::sync::{Barrier, mpsc};
+    const WORKERS: usize = 6;
+    const TIMEOUT: Duration = Duration::from_secs(15);
+
+    let rgbw = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rune/tests/fixtures/rgbw.mp4");
+    let demo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/rune.mp4");
+    let barrier = Arc::new(Barrier::new(WORKERS));
+    let (tx, rx) = mpsc::channel();
+
+    for id in 0..WORKERS {
+        let path = if id % 2 == 0 { rgbw.clone() } else { demo.clone() };
+        let barrier = barrier.clone();
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            // SAFETY: MTA COM for this worker thread; matched on exit after all COM objects drop.
+            let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+            let result = (|| -> Result<(), String> {
+                let lib = mf::library()?;
+                let source = lib.resolve(&mf::Target::from_source(&MediaSource::File(path))?)?;
+                let opened = mf::open(lib, &source, Kind::Video, Decode::Cpu, false)?;
+                let video = opened.video.ok_or("no video track")?;
+                let targets: &[f64] = if id % 2 == 0 {
+                    &[0.125, 0.375, 0.125, 0.625, 0.375, 0.125, 0.875, 0.375]
+                } else {
+                    &[0.5, 0.0, 1.0, 0.25, 0.75, 0.0]
+                };
+                barrier.wait();
+                for _round in 0..3 {
+                    for &at in targets {
+                        mf::seek(&opened.reader, at)?;
+                        loop {
+                            let read = mf::read(&opened.reader, video)?;
+                            if read.sample.is_some() || read.flags & MF_SOURCE_READERF_ENDOFSTREAM.0 != 0 {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            if com {
+                // SAFETY: matches `CoInitializeEx` above after `opened` and `source` dropped.
+                unsafe { CoUninitialize() };
+            }
+            // The receiver may have already timed out and dropped.
+            tx.send((id, result)).ok();
+        });
+    }
+    drop(tx);
+
+    let deadline = rune_core::time::now() + TIMEOUT;
+    let mut completed = 0usize;
+    while completed < WORKERS {
+        let left = deadline.saturating_duration_since(rune_core::time::now());
+        match rx.recv_timeout(left) {
+            Ok((id, Ok(()))) => {
+                let _ = id;
+                completed += 1;
+            }
+            Ok((id, Err(e))) => panic!("parallel MF seek worker {id} failed: {e}"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!(
+                    "parallel MF seek timed out after {}s ({completed}/{WORKERS} workers completed): IMFSourceReader::ReadSample deadlocked",
+                    TIMEOUT.as_secs()
+                );
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("parallel MF seek worker panicked ({completed}/{WORKERS} completed)");
+            }
+        }
+    }
+}
+
 
