@@ -74,7 +74,7 @@ pub(crate) struct HostState {
     pub(in crate::runtime) deferred_field_menu_pick: Option<(u64, String)>,
     /// Test-only seam forcing `App::on_field_menu` even where `popup_menu_supported()` is true.
     #[cfg(test)]
-    pub(in crate::runtime) force_field_menu_fallback: bool,
+    pub(crate) force_field_menu_fallback: bool,
     /// The file dialog asked for (`Tx::open_file`, `Tx::save_file`) and not yet answered.
     pub(in crate::runtime) file_dialog: crate::file_dialog::DialogState,
     /// File dialog callbacks, by id, until their answer runs.

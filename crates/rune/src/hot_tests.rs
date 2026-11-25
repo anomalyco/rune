@@ -484,3 +484,70 @@ fn cx_defaults_survive_hot_builds_and_discard_panicked_writes() {
     assert!(rt.commit.defaults.force_focus_rings, "cx.force_focus_rings survives hot builds");
     assert!(rt.commit.defaults.web_focus, "cx.web_focus survives hot builds");
 }
+
+#[test]
+fn panicking_on_field_menu_patch_falls_back_with_owned_request() {
+    struct State {
+        edit: TextEdit,
+        requests: Vec<crate::FieldMenuRequest>,
+    }
+    impl Default for State {
+        fn default() -> Self {
+            Self { edit: TextEdit::new("hello"), requests: Vec::new() }
+        }
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().size(300.0, 200.0).child(
+            text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("field")
+                .on_edit(|s: &mut State| &mut s.edit)
+                .size(200.0, 32.0),
+        )
+    }
+
+    CALLS.set(0);
+    let mut rt = crate::App::new(AppSpec::new("hot-field-menu", (300.0, 200.0), State::default, view))
+        .on_field_menu(|s: &mut State, req: crate::FieldMenuRequest, _| {
+            panics_once();
+            s.requests.push(req);
+        })
+        .headless_runtime((300.0, 200.0), Env::new(true, 1.0));
+    rt.core_mut().host.force_field_menu_fallback = true;
+    rt.frame(0.0);
+
+    let (x, y) = rt.find("field").unwrap();
+    rt.secondary_down(x, y);
+    rt.secondary_up(x, y);
+    rt.frame(0.0);
+    assert_eq!(CALLS.get(), 2, "startup on_field_menu runs once after the patched one panics");
+    assert_eq!(rt.state.requests.len(), 1);
+    assert_eq!(rt.state.requests[0].field_key(), Some("field"));
+    assert!(!rt.state.requests[0].menu().entries().is_empty());
+
+    // Subsequent non-panicking call delivers normally.
+    rt.secondary_down(x, y);
+    rt.secondary_up(x, y);
+    rt.frame(0.0);
+    assert_eq!(CALLS.get(), 3);
+    assert_eq!(rt.state.requests.len(), 2);
+}
+
+#[test]
+fn patched_or_original_evaluates_and_reuses_non_copy_args() {
+    fn record(out: &mut Vec<String>, payload: String) {
+        panics_once();
+        out.push(payload);
+    }
+
+    CALLS.set(0);
+    let mut out = Vec::new();
+    let mut built = 0usize;
+    let mut make_payload = || {
+        built += 1;
+        format!("payload-{built}")
+    };
+    patched_or_original!("non_copy_test", record as fn(&mut Vec<String>, String), &mut out, make_payload());
+    assert_eq!(built, 1, "argument expressions must be evaluated once");
+    assert_eq!(CALLS.get(), 2, "fallback runs once after panic");
+    assert_eq!(out, ["payload-1"]);
+}
