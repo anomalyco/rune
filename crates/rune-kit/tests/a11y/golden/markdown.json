@@ -106,12 +106,17 @@
             {
               "children": [
                 {
+                  "name": "1.",
+                  "role": "list-marker"
+                },
+                {
                   "key": "b0",
                   "name": "Update",
                   "role": "label"
                 }
               ],
               "key": "i0",
+              "listStyle": "numeric",
               "name": "Update",
               "position": 1,
               "role": "list-item"
@@ -119,12 +124,17 @@
             {
               "children": [
                 {
+                  "name": "2.",
+                  "role": "list-marker"
+                },
+                {
                   "key": "b0",
                   "name": "Restart",
                   "role": "label"
                 }
               ],
               "key": "i1",
+              "listStyle": "numeric",
               "name": "Restart",
               "position": 2,
               "role": "list-item"

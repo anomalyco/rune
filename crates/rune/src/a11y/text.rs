@@ -31,7 +31,7 @@ impl RuntimeCore {
     /// links and named inline icons of any text, pushed after it as its children.
     pub(super) fn a11y_text_nodes(&self, i: usize, w: &Walk, out: &mut Vec<(AkId, AkNode)>) {
         let n = &self.tree.nodes[i];
-        if n.is_secure() { return; }
+        if n.is_secure() || n.role == "list-marker" { return; }
         if let Some(g) = n.vis.grid.as_deref() {
             return self.a11y_grid_rows(i, g, w, out);
         }

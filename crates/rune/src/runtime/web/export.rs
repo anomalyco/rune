@@ -96,7 +96,12 @@ impl RuntimeCore {
         let label = n.label.as_deref().filter(|s| !s.trim().is_empty());
         let pixels = n.vis.cold.pixels.as_ref().filter(|_| n.vis.cold.pixels_wrap.is_none() && i + 1 == self.subtree_end(i));
         let pixels_url = pixels.and_then(|p| p.source_url());
-        let tag: &'static str = if let Some(t) = roles::container_tag(n.role) {
+        let list_start = (n.role == "list")
+            .then(|| n.a11y.more.as_deref().and_then(|m| m.list_start))
+            .flatten();
+        let tag: &'static str = if list_start.is_some() {
+            "ol"
+        } else if let Some(t) = roles::container_tag(n.role) {
             t
         } else if href.is_some() {
             "a"
@@ -114,6 +119,7 @@ impl RuntimeCore {
         if matches!(tag, "a" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6") || roles::container_tag(n.role).is_some() {
             if let Some(id) = anchor_id(n.key.as_deref()) { write!(attrs, " id=\"{id}\"").ok(); }
         }
+        if let Some(start) = list_start.filter(|&s| s != 1) { write!(attrs, " start=\"{start}\"").ok(); }
         if let Some(role) = roles::container_aria(n.role) { write!(attrs, " role=\"{role}\"").ok(); }
         if let Some(h) = &href { write!(attrs, " href=\"{}\"", escape(h)).ok(); }
         if let Some(url) = pixels_url {
@@ -128,7 +134,7 @@ impl RuntimeCore {
             let role = matches!(n.role, "image" | "img").then_some(" role=\"img\"").unwrap_or("");
             write!(attrs, "{role} aria-label=\"{}\"", escape(l)).ok();
         }
-        if n.a11y.hidden { attrs.push_str(" aria-hidden=\"true\""); }
+        if n.a11y.hidden || n.role == "list-marker" { attrs.push_str(" aria-hidden=\"true\""); }
         let mut decls = css::layout(&self.commit.layout.style(n.taffy).to_style(), i == 0);
         let [x0, y0, x1, y1] = n.target;
         css::paint(&n.vis, (x1 - x0, y1 - y0), &mut decls);

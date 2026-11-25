@@ -1654,7 +1654,11 @@ function itemStyle(h, item, origin) {
     const left = round1(x - origin[0]);
     const top = round1(y - origin[1]);
     let css = `position:absolute;left:${left}px;top:${top}px;width:${w}px;height:${bh}px;margin:0;padding:0;border:0;background:transparent;color:transparent;`;
-    if (item.k === 'group') return css + (item.sc ? 'overflow:hidden;list-style:none;pointer-events:none;' : 'overflow:visible;list-style:none;pointer-events:none;');
+    if (item.k === 'group') {
+        const overflow = item.sc ? 'overflow:hidden;' : 'overflow:visible;';
+        const list = item.g === 'ol' || item.g === 'li' ? '' : 'list-style:none;';
+        return css + overflow + list + 'pointer-events:none;';
+    }
     // A page's horizontal scroller: the browser scrolls it natively, so a flick inside a code
     // block scrolls the block at the compositor's rate while a vertical drag still scrolls the
     // page.
@@ -1744,6 +1748,12 @@ function applyA11yItem(h, el, item, tag, origin) {
     const css = itemStyle(h, item, origin);
     if (el._css !== css) { el._css = css; el.style.cssText = css; }
     if (item.i) el.id = item.i; else el.removeAttribute('id');
+    if (tag === 'ol' && item.st !== undefined) {
+        const v = String(item.st);
+        if (el.getAttribute('start') !== v) el.setAttribute('start', v);
+    } else if (el.getAttribute('start') !== null) {
+        el.removeAttribute('start');
+    }
     // `El::description` and `El::described_by`'s words: what a reader says after the name.
     if (item.d) el.setAttribute('aria-description', item.d); else el.removeAttribute('aria-description');
     // Role-carrying containers, live text (`status`, `alert`, `log`), images and progressbars.

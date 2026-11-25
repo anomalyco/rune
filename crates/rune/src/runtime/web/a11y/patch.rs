@@ -219,6 +219,7 @@ pub(super) fn item_json_fields(
     if let Some(cc) = aria.column_count { obj.insert("cc".into(), json!(cc)); }
     if let Some(ri) = aria.row_index { obj.insert("ri".into(), json!(ri)); }
     if let Some(ci) = aria.column_index { obj.insert("ci".into(), json!(ci)); }
+    if let Some(st) = aria.list_start { obj.insert("st".into(), json!(st)); }
     if let Some(dir) = dir {
         obj.insert("dir".into(), json!(dir));
     }

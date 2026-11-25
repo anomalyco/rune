@@ -142,7 +142,7 @@ impl Renderer {
                         open_tail: false,
                         allow_memo: false,
                         idx: 0,
-                        col: col().role("list").w_full(),
+                        col: list_container(*start),
                         pending_item: None,
                     }],
                     dirs,
@@ -255,7 +255,7 @@ impl Renderer {
                                     _ => self.s.list_indent,
                                 };
                                 let space = if self.s.list_outside { rune::text::measure("x x", &[], self.s.body, None).0 - rune::text::measure("xx", &[], self.s.body, None).0 } else { 0.0 };
-                                stack.push(RenderFrame::List { list_block: b, start: *start, items, pre_items: pb.map(|p| &*p.items), item_maps, saved_flow: saved, indent, space, open_tail: child_open_tail, allow_memo: am, idx: 0, col: col().role("list").w_full(), pending_item: None });
+                                stack.push(RenderFrame::List { list_block: b, start: *start, items, pre_items: pb.map(|p| &*p.items), item_maps, saved_flow: saved, indent, space, open_tail: child_open_tail, allow_memo: am, idx: 0, col: list_container(*start), pending_item: None });
                                 descended = true;
                                 break;
                             }
@@ -304,10 +304,11 @@ impl Renderer {
                         } else if let Some((checked, marker_offset)) = task {
                             *list_col = std::mem::replace(list_col, el()).child(self.task_item_body((k, real_n), *indent, &items[k], item_body, marker_offset, checked).mt(gap_mt));
                         } else {
-                            let marker = self.list_marker(*start, k, *indent, *space);
+                            let marker = self.with_reveal(self.list_marker(*start, k, *indent, *space));
+                            let marker = if start.is_some() { marker.role("list-marker") } else { marker.a11y_hidden() };
                             *list_col = std::mem::replace(list_col, el()).child(
                                 row().key(format!("i{k}")).role("listitem").position_in_set(k + 1, real_n).w_full().mt(gap_mt)
-                                    .child(self.with_reveal(marker).a11y_hidden())
+                                    .child(marker)
                                     .child(item_body.shrink()),
                             );
                         }
@@ -369,10 +370,11 @@ impl Renderer {
                                     });
                                     self.next_source.set(src_at + src_n);
                                     self.next_task.set(task_at + task_n);
-                                    let marker = self.list_marker(st, k, ind, sp);
+                                    let marker = self.with_reveal(self.list_marker(st, k, ind, sp));
+                                    let marker = if st.is_some() { marker.role("list-marker") } else { marker.a11y_hidden() };
                                     *list_col = std::mem::replace(list_col, el()).child(
                                         row().key(format!("i{k}")).role("listitem").position_in_set(k + 1, real_n).w_full().mt(gap_mt)
-                                            .child(self.with_reveal(marker).a11y_hidden())
+                                            .child(marker)
                                             .child(body),
                                     );
                                     continue;
@@ -555,6 +557,14 @@ impl Renderer {
             Block::Rule => el().w_full().h(0.5).fill(s.rule),
             Block::List { .. } | Block::Quote(_) => unreachable!(),
         }
+    }
+}
+
+fn list_container(start: Option<u64>) -> El {
+    let c = col().role("list").w_full();
+    match start {
+        Some(n) => c.list_start(n),
+        None => c,
     }
 }
 

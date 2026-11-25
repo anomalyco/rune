@@ -3705,3 +3705,43 @@ test('delayed activeElement settle at 60ms, 500ms, 2s, and 5s+input reconciles w
         Object.defineProperty(globalThis, 'clearTimeout', { configurable: true, value: origClearTimeout });
     }
 });
+
+test('syncA11y mirrors ordered lists as <ol> with start attribute and preserves native list markers on <ol>/<li> while keeping <ul> list-style:none', () => {
+    const { h } = setup();
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'group', g: 'ol', p: '#0/ord1', r: [0, 0, 200, 40] },
+            { k: 'group', g: 'li', p: '#0/ord1/i0', r: [0, 0, 200, 20], a: 0 },
+            { k: 'text', p: '#0/ord1/i0/b0', r: [20, 0, 180, 20], t: 'First', a: 1 },
+            { k: 'group', g: 'ol', p: '#0/ord3', r: [0, 50, 200, 40], st: 3 },
+            { k: 'group', g: 'li', p: '#0/ord3/i0', r: [0, 50, 200, 20], a: 3 },
+            { k: 'text', p: '#0/ord3/i0/b0', r: [20, 50, 180, 20], t: 'Third', a: 4 },
+            { k: 'group', g: 'ul', p: '#0/bul', r: [0, 100, 200, 40] },
+            { k: 'group', g: 'li', p: '#0/bul/i0', r: [0, 100, 200, 20], a: 6 },
+            { k: 'text', p: '#0/bul/i0/b0', r: [20, 100, 180, 20], t: 'Bullet', a: 7 },
+        ]));
+
+        const [ol1, ol3, ul] = h.a11y.children;
+        assert.equal(ol1.tagName, 'OL');
+        assert.equal(ol1.getAttribute('start'), null, 'default start=1 omits start attribute');
+        assert.equal(ol1.children[0].tagName, 'LI');
+        assert.ok(!ol1.style.cssText.includes('list-style:none'), '<ol> keeps native decimal marker semantics');
+        assert.ok(!ol1.children[0].style.cssText.includes('list-style:none'), '<li> inherits list-style from parent list');
+
+        assert.equal(ol3.tagName, 'OL');
+        assert.equal(ol3.getAttribute('start'), '3', 'ordered list starting at 3 sets start="3"');
+        assert.equal(ol3.children[0].tagName, 'LI');
+
+        assert.equal(ul.tagName, 'UL');
+        assert.equal(ul.getAttribute('start'), null);
+        assert.ok(ul.style.cssText.includes('list-style:none'), '<ul> keeps list-style:none');
+
+        // Patch start from 3 -> 5 -> cleared (default 1).
+        bridge.syncA11y(h, JSON.stringify({ p: 1, u: [{ k: 'group', g: 'ol', p: '#0/ord3', r: [0, 50, 200, 40], st: 5 }] }));
+        assert.equal(ol3.getAttribute('start'), '5');
+        bridge.syncA11y(h, JSON.stringify({ p: 1, u: [{ k: 'group', g: 'ol', p: '#0/ord3', r: [0, 50, 200, 40] }] }));
+        assert.equal(ol3.getAttribute('start'), null);
+    } finally {
+        bridge.destroy(h);
+    }
+});

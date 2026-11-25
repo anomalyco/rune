@@ -190,6 +190,8 @@ pub(crate) struct A11yMore {
     pub controls: Option<String>,
     /// `El::owns`'s key (ARIA `aria-owns`).
     pub owns: Option<String>,
+    /// Starting ordinal of an ordered `"list"` element (HTML `<ol start="…">`).
+    pub list_start: Option<u64>,
 }
 
 /// Accessibility state beyond role and label (`El::level`, `El::expanded`, `El::secure`, and
@@ -561,6 +563,23 @@ impl El {
     /// such as headings do not.
     pub fn position_in_set(mut self, position: usize, size: usize) -> Self {
         self.cold_mut().a11y.more().set = Some((position, size));
+        self
+    }
+    /// Marks a `"list"` element as an ordered list starting at `start` (HTML `<ol start="…">`).
+    ///
+    /// On web, the accessibility mirror and static HTML export emit `<ol>` (with `start` when
+    /// `start != 1`) instead of `<ul>`. Natively, `"listitem"` children receive
+    /// `accesskit::ListStyle::Numeric` and `"list-marker"` children expose their number.
+    ///
+    /// ```
+    /// # use rune::{col, row, text};
+    /// let _ = col()
+    ///     .role("list")
+    ///     .list_start(3)
+    ///     .child(row().role("listitem").child(text("Third")));
+    /// ```
+    pub fn list_start(mut self, start: u64) -> Self {
+        self.cold_mut().a11y.more().list_start = Some(start);
         self
     }
     /// Total number of rows in a `table`, `grid` or `treegrid` (ARIA `aria-rowcount`), when
