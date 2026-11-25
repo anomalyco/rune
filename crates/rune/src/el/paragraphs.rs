@@ -64,6 +64,11 @@ impl El {
         }
         let Some(t) = self.text.take() else { return self };
         let cursor = self.handlers.cursor;
+        // The I-beam `El::selectable` gave stays its own on every piece, so an
+        // `El::selection_enabled(false)` subtree still takes it back; the column, which keeps no
+        // text, drops it.
+        let given = t.flags.has(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR) && cursor == Some(Cursor::Text);
+        if given { self.handlers.cursor = None; }
         let a11y_disabled = self.cold.a11y.disabled;
         let focus_disabled = self.cold.focus.disabled;
         let focus_opt_out = self.cold.focus.opt_out;
@@ -76,6 +81,7 @@ impl El {
             }
             let links = paragraph(&t, k, range, k == last, &mut e);
             if let Some(c) = cursor { e = e.cursor(c); }
+            if given && let Some(pt) = &mut e.text { pt.flags.set(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR, true); }
             if a11y_disabled { e.cold_mut().a11y.disabled = true; }
             if focus_disabled || focus_opt_out {
                 let f = &mut *e.cold_mut().focus;

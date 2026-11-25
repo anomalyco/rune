@@ -33,7 +33,32 @@ fn a_handler_reads_a_row_it_removes_where_it_stood() {
     let mut rt = runtime();
     let before = rt.presented("row-3");
     read(&mut rt, "row-3", Some(3));
-    assert!(rt.presented("row-3").is_none(), "the row is gone after the commit");
+    assert!(!rt.state.rows.contains(&3), "the handler removed the row from the model");
+    assert_eq!(rt.state.layout, Some(Some([0.0, 60.0, 100.0, 20.0])));
+    assert_eq!(rt.state.presented, Some(before));
+    // A removed row is drawn until its exit ends (`Runtime::presented` answers "exiting or not"):
+    // after the commit it is on its way out, and gone once the exit is over.
+    assert!(rt.elements().iter().any(|e| e.key.as_deref() == Some("row-3") && e.exiting), "the row is leaving after the commit");
+    for _ in 0..180 {
+        if rt.presented("row-3").is_none() { break; }
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(rt.presented("row-3").is_none(), "the row is gone once its exit ends");
+}
+
+#[test]
+fn an_instant_removal_reads_where_it_stood_and_is_unmounted_from_presented() {
+    let mut rt = runtime();
+    let before = rt.presented("row-3");
+    rt.update(|s, tx| {
+        s.rows.retain(|&r| r != 3);
+        tx.instant();
+        tx.read_layout("row-3", |s: &mut S, rect, _| s.layout = Some(rect));
+        tx.read_presented("row-3", |s: &mut S, drawn, _| s.presented = Some(drawn));
+    });
+    rt.frame(0.0);
+    assert!(rt.find("row-3").is_none(), "the row left the live tree after the commit");
+    assert!(rt.presented("row-3").is_none(), "an instant-removed unmounted row must not be reported as presented");
     assert_eq!(rt.state.layout, Some(Some([0.0, 60.0, 100.0, 20.0])));
     assert_eq!(rt.state.presented, Some(before));
 }

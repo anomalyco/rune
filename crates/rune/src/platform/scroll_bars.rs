@@ -146,6 +146,7 @@ pub(crate) fn reread() -> SystemScrollBars {
 /// Starts following scroller-style changes (`NSPreferredScrollerStyleDidChangeNotification`), once
 /// per process: each change rereads the preference and asks every window to redraw, which hands it
 /// to its runtime. Main thread.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn watch() {
     #[cfg(target_os = "macos")]
     mac::watch();

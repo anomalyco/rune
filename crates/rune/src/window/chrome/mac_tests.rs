@@ -98,3 +98,121 @@ fn double_click_action_ignores_panels_under_every_system_setting() {
     assert_eq!(double_click_action(Some("None"), false), DoubleClickAction::None);
     assert_eq!(double_click_action(None, false), DoubleClickAction::Zoom);
 }
+
+#[test]
+#[allow(unsafe_code)]
+fn full_screen_watch_flips_on_will_notifications_and_recovers_from_failures() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use objc2::rc::Retained;
+    use objc2_foundation::NSObject;
+    use super::super::full_screen::State;
+
+    let post = |name: &str, object: &AnyObject| {
+        let center_class = AnyClass::get(c"NSNotificationCenter").unwrap();
+        // SAFETY: posts a named notification on the default notification center for `object`.
+        unsafe {
+            let center: Retained<AnyObject> = msg_send![center_class, defaultCenter];
+            let name = NSString::from_str(name);
+            let _: () = msg_send![&*center, postNotificationName: &*name, object: object];
+        }
+    };
+
+    let target = NSObject::new();
+    let sibling = NSObject::new();
+    let redraws = Rc::new(Cell::new(0usize));
+    let count = redraws.clone();
+    // SAFETY: `target` is a live `NSObject` owned by this test; `watch` removes all observers on drop.
+    let watch = unsafe {
+        FullScreenWatch::observe_object(&target, State::Windowed, move || {
+            count.set(count.get() + 1);
+        })
+    };
+
+    assert_eq!(watch.state(), State::Windowed);
+    assert!(!watch.is_full_screen());
+    assert!(!watch.take());
+
+    // Notifications for another object are ignored.
+    post("NSWindowWillEnterFullScreenNotification", &sibling);
+    assert_eq!(watch.state(), State::Windowed);
+    assert!(!watch.is_full_screen());
+    assert_eq!(redraws.get(), 0);
+
+    // Normal enter flips at WillEnter and settles at DidEnter.
+    post("NSWindowWillEnterFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::Entering);
+    assert!(watch.is_full_screen());
+    assert!(watch.take());
+    assert_eq!(redraws.get(), 1);
+
+    // Duplicate WillEnter does not request another redraw.
+    post("NSWindowWillEnterFullScreenNotification", &target);
+    assert!(!watch.take());
+    assert_eq!(redraws.get(), 1);
+
+    post("NSWindowDidEnterFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::FullScreen);
+    assert!(watch.is_full_screen());
+    assert!(watch.take());
+    assert_eq!(redraws.get(), 2);
+
+    // Normal exit flips at WillExit and stays Exiting even while winit still holds fullscreen.
+    post("NSWindowWillExitFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::Exiting);
+    assert!(!watch.is_full_screen());
+    assert!(watch.take());
+    assert_eq!(redraws.get(), 3);
+
+    watch.sync(true, true);
+    assert_eq!(watch.state(), State::Exiting);
+    assert!(!watch.is_full_screen());
+
+    post("NSWindowDidExitFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::Windowed);
+    assert!(!watch.is_full_screen());
+    assert!(watch.take());
+    assert_eq!(redraws.get(), 4);
+
+    // Failed enter (AppKit posts DidExit): returns to Windowed and redraws.
+    post("NSWindowWillEnterFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::Entering);
+    assert!(watch.is_full_screen());
+    assert!(watch.take());
+    assert_eq!(redraws.get(), 5);
+
+    post("NSWindowDidExitFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::Windowed);
+    assert!(!watch.is_full_screen());
+    assert!(watch.take());
+    assert_eq!(redraws.get(), 6);
+
+    // Failed enter (winit cleared fullscreen without DidExit): sync recovers to Windowed.
+    post("NSWindowWillEnterFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::Entering);
+    assert!(watch.take());
+    watch.sync(false, false);
+    assert_eq!(watch.state(), State::Windowed);
+    assert!(!watch.is_full_screen());
+
+    // Failed exit (AppKit aborts exit and stays in full screen via DidEnter): returns to FullScreen and redraws.
+    post("NSWindowDidEnterFullScreenNotification", &target);
+    assert!(watch.take());
+    post("NSWindowWillExitFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::Exiting);
+    assert!(!watch.is_full_screen());
+    assert!(watch.take());
+    let before_abort = redraws.get();
+    post("NSWindowDidEnterFullScreenNotification", &target);
+    assert_eq!(watch.state(), State::FullScreen);
+    assert!(watch.is_full_screen());
+    assert!(watch.take());
+    assert_eq!(redraws.get(), before_abort + 1);
+
+    // Dropping the watch unregisters all four observers.
+    let before_drop = redraws.get();
+    drop(watch);
+    post("NSWindowWillExitFullScreenNotification", &target);
+    post("NSWindowDidExitFullScreenNotification", &target);
+    assert_eq!(redraws.get(), before_drop);
+}

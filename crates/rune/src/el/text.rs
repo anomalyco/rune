@@ -569,7 +569,7 @@ impl El {
     /// still streaming in, whose last lines would move as each word arrives.
     pub fn wrap_greedy(mut self) -> Self {
         if let Some(t) = &mut self.text {
-            t.greedy = true;
+            t.flags.set(crate::el::text_spec::TextFlags::GREEDY, true);
         }
         self
     }
@@ -698,7 +698,11 @@ impl El {
         self.one_line(|t| {
             t.truncate = false;
             t.truncate_fade = true;
-            t.fade_em = em.max(0.0);
+            // The usual width is the cold block's own: only another one writes (and allocates) it.
+            let em = em.max(0.0);
+            if t.cold.fade_em != em {
+                t.cold.fade_em = em;
+            }
         })
     }
     /// Streaming word reveal (see [`TextSpec::reveal`]).
@@ -883,6 +887,7 @@ impl El {
             t.selectable = on;
             if on && self.handlers.cursor.is_none() {
                 self.handlers.cursor = Some(Cursor::Text);
+                t.flags.set(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR, true);
             }
         }
         self

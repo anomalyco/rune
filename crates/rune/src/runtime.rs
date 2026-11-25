@@ -40,7 +40,7 @@ pub(crate) fn handler_state<S: 'static>(state: &mut S) -> &mut dyn Any {
 }
 
 /// Calls an app's runtime callback (`poll`, `on_key`, `on_focus`, `on_mods`,
-/// `on_visibility`, `on_ime`). With `rune/hot` it goes through subsecond's jump table,
+/// `on_visibility`, `on_ime`, `on_field_menu`). With `rune/hot` it goes through subsecond's jump table,
 /// so a patched body runs instead of the pointer captured at startup, and a panicking patch
 /// falls back to that pointer.
 macro_rules! app_call {
@@ -92,6 +92,7 @@ mod system_settings;
 mod text_fill;
 mod turn;
 mod types;
+mod virtual_items;
 mod virtual_list;
 mod visible;
 mod web;
@@ -117,8 +118,9 @@ pub(crate) use input::field_menu;
 pub use input::help_look::HelpLook;
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_imports))]
 pub(crate) use input::physical::Unhandled;
-#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 pub(crate) use input::pointer_lock::LockEffect;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use input::pointer_lock::LockPolicy;
 pub(crate) use input::titlebar::WindowMenu;
 #[cfg(target_os = "windows")]
 pub(crate) use input::titlebar::{DragHit, drag_hit_at};
@@ -178,6 +180,7 @@ pub(crate) use selection::links::count_span_box_queries;
 pub(crate) use selection::links::origin as text_origin;
 pub(crate) use selection::selectable;
 pub use selection::selectable::{SelectedText, SelectionChange, TextSelection};
+pub use selection::field_lines::TextLine;
 pub use selection::text_marks::TextMark;
 use selection::{caret, click as input_click, links, select_all, text_marks};
 
@@ -239,6 +242,8 @@ mod virtual_store_tests;
 mod select_all_tests;
 #[cfg(test)]
 mod selection_api_tests;
+#[cfg(test)]
+mod selection_enabled_tests;
 #[cfg(test)]
 mod anchored_grow_tests;
 #[cfg(test)]

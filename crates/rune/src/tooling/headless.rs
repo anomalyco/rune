@@ -99,6 +99,8 @@ fn single_window_list_only(args: &Args) -> bool {
 
 fn try_headless_multi(main: crate::AnyWindowSpec, windows: Vec<crate::AnyWindowSpec>, args: Args, accessory: bool) -> Result<(), StartError> {
     let displays = desktop(&args, read_script(&args).as_ref()).displays();
+    crate::window::displays::reset();
+    crate::window::displays::remember(&displays);
     headless_window(std::iter::once(main).chain(windows).collect(), &displays, args, crate::RunOptions { accessory })
 }
 
@@ -119,6 +121,8 @@ pub(crate) fn try_headless<S: 'static>(mut app: crate::app::App<S>, args: Args) 
         if single_window_list_only(&args) { return Ok(()); }
         let scale = args.scale.unwrap_or(2.0);
         let options = app.window_options.clone();
+        crate::window::displays::reset();
+        crate::window::displays::remember(&desktop(&args, read_script(&args).as_ref()).displays());
         return headless_window_spec(app, options, args, scale);
     }
     let windows = std::mem::take(&mut app.windows);

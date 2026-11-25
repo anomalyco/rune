@@ -93,7 +93,7 @@ fn a_finger_past_the_slop_picks_one_mode_with_only_its_own_data() {
     let mut rt = rig();
     let list = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
     rt.touch(1, TouchPhase::Started, 100.0, 200.0, 0.0);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pending { scroll: Some(list) }), "pending, it holds the viewport under it");
+    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pending { scroll: Some(list), edge: None }), "pending, it holds the viewport under it");
     rt.touch(1, TouchPhase::Moved, 100.0, 150.0, 0.01);
     assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pan { scroll: list, horizontal: false }));
     rt.touch(1, TouchPhase::Ended, 100.0, 150.0, 0.02);
@@ -257,7 +257,7 @@ fn an_active_modal_blocks_touch_window_drag() {
     rt.update(|s, _| s.modal_open = true);
     rt.frame(1.0 / 60.0);
     rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pending { scroll: None }));
+    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pending { scroll: None, edge: None }));
     rt.touch(1, TouchPhase::Moved, 270.0, 20.0, 0.02);
     assert_eq!(rt.take_titlebar_action(), None);
     rt.touch(1, TouchPhase::Ended, 270.0, 20.0, 0.04);

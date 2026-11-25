@@ -62,7 +62,7 @@ pub(crate) fn drag_hit_at(hits: &[DragHit], x: f32, y: f32) -> bool {
 
 /// The window menu (Restore, Move, Size, Minimize, Maximize, Close) a custom titlebar opens
 /// where the native title bar would.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum WindowMenu {
     /// At the pointer: a secondary click on a bare `.window_drag()` region.

@@ -1,0 +1,1 @@
+- API: narrowed `rune_gpu::pick::is_hardware_dxgi_adapter` to `pub(crate)` and marked the internal WARP/DXGI helpers (`WARP_VENDOR_ID`, `WARP_DEVICE_ID`, `has_hardware_dxgi_in`, `dxgi_has_hardware_adapter`) and degraded CPU-paint helpers (`render::cpu_boot::Scene::degraded`, `NeedsGpu::is_degradable`) `#[doc(hidden)]`.

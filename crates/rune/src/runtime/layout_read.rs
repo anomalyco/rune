@@ -205,6 +205,7 @@ pub(crate) struct LayoutSeen {
     pub(crate) rects: LayoutRects,
     pub(super) reads: LayoutReads,
     /// Whether `rects` are the last launch's, for the first view (`layout_seed`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) seeded: super::layout_seed::Seeded,
 }
 
@@ -636,7 +637,7 @@ impl RuntimeCore {
             measured = self.measure(app, tx);
         }
         if !settled { self.layout_moved(Some(std::mem::take(&mut measured.layout_reads)), Some((&measured.nodes, &measured.selection)), true); }
-        let LayoutSeen { rects, reads, seeded: _ } = &mut self.commit.layout_seen;
+        let LayoutSeen { rects, reads, .. } = &mut self.commit.layout_seen;
         rects.retain(|k, _| reads.iter().any(|r| r.key == *k));
         rects.placements.retain(|k, _| reads.iter().any(|r| r.key.strip_prefix(ANCHOR) == Some(k.as_str())));
         if !rects.contains_key(SELECTION) { rects.selection = Rc::default(); }

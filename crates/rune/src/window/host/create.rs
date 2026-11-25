@@ -69,6 +69,7 @@ impl Host {
                 attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(attrs, id, id);
                 attrs = winit::platform::x11::WindowAttributesExtX11::with_name(attrs, id, id);
             }
+            attrs = crate::platform::app_icon::with_icon(attrs);
             if self.float_on_open { attrs = float_on_open::fixed(attrs, &self.options, size); }
             if let Some(token) = token {
                 let token = winit::window::ActivationToken::from_raw(token);
@@ -86,6 +87,7 @@ impl Host {
         #[cfg(target_os = "windows")]
         let attrs = self.windows_window.apply_attributes(crate::platform::app_icon::with_icon(winit::platform::windows::WindowAttributesExtWindows::with_drag_and_drop(attrs.with_visible(false).with_active(false), false)));
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        crate::window::displays::track(&window);
         self.applied_theme = effective_theme;
         crate::marks::mark("window.native");
         // Before first show or CPU paint so no capture sees a frame and no taskbar button flashes.
@@ -521,6 +523,8 @@ impl Host {
         crate::marks::mark("window.created");
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
         if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
+        // After `on_window`, which may resize it, and before its first focus and frame.
+        self.creation_geometry();
         if let (Some(w), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) {
             #[cfg(target_os = "macos")]
             if let Some(pacing) = &mut w.native.pacing { pacing.update_display(&w.window); }

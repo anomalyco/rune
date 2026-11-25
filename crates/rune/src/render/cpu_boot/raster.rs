@@ -6,6 +6,7 @@
 
 mod glyph;
 mod segments;
+mod turn;
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,6 +31,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
     let clear = [q(clear[2]), q(clear[1]), q(clear[0]), q(clear[3])];
     let mut report = Report { threads: exec.threads(), ..Report::default() };
     if tiles.is_empty() { return report; }
+    let turned = turn::prerender(scene, bins, tiles, exec, wide);
     // Each record's blur, or None when no tile painted this frame shows it.
     let mut blurred: Vec<Option<backdrop::Blurred>> = Vec::with_capacity(bins.blurs.len());
     // A backdrop blur splits the frame: what's under it is painted everywhere first.
@@ -45,7 +47,7 @@ pub(super) fn run(scene: &Scene<'_>, bins: &Bins, target: &mut Target<'_>, tiles
             let mut layers: Vec<Scratch> = Vec::new();
             let mut occ: Vec<Occluder> = Vec::new();
             let mut painter = Painter { scene, bins, surface, stats: &mut stats, pow: &mut pow, layers: &mut layers, depth: 0, tile: [0; 4],
-                occ: &mut occ, n: 0, breaks: Vec::new(), segs: Vec::new(), blurred: done };
+                occ: &mut occ, n: 0, breaks: Vec::new(), segs: Vec::new(), blurred: done, turned: &turned };
             // A big frame goes out a page-wide run of tiles at a time (16 tiles: 1,024 pixels of
             // each row, about a page), so threads fault in pages of their own rather than all
             // queuing on the same ones (a fresh buffer: 12,969 to 9,992 µs); a small one tile at
@@ -261,6 +263,8 @@ struct Painter<'p, 's> {
     segs: Vec<Segment>,
     /// The blurs of the frame's backdrop blur records painted so far, in order.
     blurred: &'p [Option<backdrop::Blurred>],
+    /// Each turned layer's upright contents, by plan (`turn::prerender`).
+    turned: &'p [Option<turn::Turned>],
 }
 
 impl Painter<'_, '_> {
@@ -312,7 +316,10 @@ impl Painter<'_, '_> {
         self.n = n;
         match i.kind() {
             Some(Kind::Layer) => self.open(n),
-            Some(Kind::LayerEnd) => self.close(i, r),
+            Some(Kind::LayerEnd) => match self.bins.scope.get(&n).filter(|&&p| self.bins.layers[p as usize].turn.is_some()) {
+                Some(&p) => self.turned(p as usize, r),
+                None => self.close(i, r),
+            },
             Some(Kind::Glyph) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.glyph(i, r, &clip); }
             Some(Kind::Image) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.image(i, r, &clip); }
             Some(kind @ (Kind::Rect | Kind::Gradient)) => { let clip = Clip::of_stops(i, self.scene.fade_stops); self.shaded(i, kind, r, &clip, interior(i)); }
@@ -339,7 +346,7 @@ impl Painter<'_, '_> {
     fn open(&mut self, n: u32) {
         let Some(&plan) = self.bins.scope.get(&n) else { return };
         let l = &self.bins.layers[plan as usize];
-        if l.show != Show::Render { return; }
+        if l.show != Show::Render || l.turn.is_some() { return; }
         if self.layers.len() == self.depth { self.layers.push(Scratch { px: vec![[0.0; 4]; TILE_PX], additive: false, plan: 0 }); }
         let s = &mut self.layers[self.depth];
         s.px.fill([0.0; 4]);

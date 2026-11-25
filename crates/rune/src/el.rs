@@ -29,8 +29,10 @@ mod growth;
 mod handler_set;
 mod handlers;
 mod help;
+mod highlight_texts;
 mod input;
 mod isolates;
+pub(crate) mod items;
 mod layout;
 pub(crate) mod layout_watch;
 mod live_colors;
@@ -41,6 +43,7 @@ mod pixel_snap;
 mod rare;
 mod ride_trailing;
 mod scroll;
+mod selection_scope;
 mod selection_style;
 mod sticky;
 mod text;
@@ -63,10 +66,11 @@ pub(crate) use focus::FocusSpec;
 pub(crate) use focus::ModalSpec;
 pub(crate) use handler_set::Handlers;
 pub use grid::{GridRow, grid};
-pub use handlers::{Drag, Phase, PointerEvent, PointerPress};
+pub use handlers::{Drag, Phase, PointerEvent, PointerPress, SwipeEdge};
 pub(crate) use handlers::{A11yActionFn, AnyPressFn, DragEndFn, DragFn, DragOutFn, InputKeyFn, PointerFn, PointerMotionFn, PressFn, SetValueFn, StepFn, StepLimitFn, WindowDrag};
 pub(crate) use help::{HELP_KEY, HELP_ROW, help_words};
 pub use input::{InputSpec, auto_grow, edit_access, text_input};
+pub use items::VirtualItems;
 #[doc(hidden)]
 pub use layout::PathBind;
 pub use pills::{InlineIcon, InlineImage};
@@ -77,6 +81,7 @@ pub(crate) use scroll::FadeStyle;
 pub use scroll::ScrollFade;
 pub use scroll::ScrollSpec;
 pub(crate) use scroll::{AtBottomFn, ScrollAxes, ScrollEdges, VisibleRowsFn};
+pub(crate) use selection_scope::{apply_selection_off, selection_off};
 pub use selection_style::SelectionStyle;
 pub(crate) use sticky::{Sticky, StickyEdge};
 pub(crate) use text_spec::{Elide, InlineAnchor, TextDir, TextDirEvent, step_text_dir, wipe_links, wipe_string};
@@ -236,6 +241,7 @@ pub(crate) type InputPasteFn = Rc<dyn Fn(crate::states::States<'_>, &crate::Clip
 pub(crate) type InputCopyFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx) -> Option<crate::ClipboardContent>>;
 pub(crate) type PickFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::Picked>, &mut Tx)>;
 pub(crate) type TextOffsetFn = Box<dyn FnOnce(crate::states::States<'_>, Option<usize>, &mut Tx)>;
+pub(crate) type TextLineFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::TextLine>, &mut Tx)>;
 pub(crate) type ElementsReadFn = Box<dyn FnOnce(crate::states::States<'_>, &[crate::ElementInfo], &mut Tx)>;
 pub(crate) type LayoutReadFn = Box<dyn FnOnce(crate::states::States<'_>, Option<[f32; 4]>, &mut Tx)>;
 pub(crate) type PresentedReadFn = Box<dyn FnOnce(crate::states::States<'_>, Option<([f32; 4], f32)>, &mut Tx)>;
@@ -255,6 +261,11 @@ pub(crate) enum PickRead {
         y: f32,
         f: Rc<std::cell::Cell<Option<TextOffsetFn>>>,
     },
+    TextLine {
+        key: String,
+        byte: usize,
+        f: Rc<std::cell::Cell<Option<TextLineFn>>>,
+    },
     Elements {
         f: Rc<std::cell::Cell<Option<ElementsReadFn>>>,
     },
@@ -272,6 +283,7 @@ impl std::fmt::Debug for PickRead {
         match self {
             Self::Element { .. } => f.write_str("PickRead::Element"),
             Self::TextOffset { .. } => f.write_str("PickRead::TextOffset"),
+            Self::TextLine { .. } => f.write_str("PickRead::TextLine"),
             Self::Elements { .. } => f.write_str("PickRead::Elements"),
             Self::Layout { .. } => f.write_str("PickRead::Layout"),
             Self::Presented { .. } => f.write_str("PickRead::Presented"),

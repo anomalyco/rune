@@ -93,6 +93,8 @@ pub(crate) struct ElCold {
     pub(crate) virtual_rows_append_only: bool,
     /// [`El::virtual_overscan`](crate::El::virtual_overscan), clamped `(overscan, edge)` in viewports.
     pub(crate) virtual_overscan: Option<(f32, f32)>,
+    /// [`El::virtual_items`](crate::El::virtual_items): app-windowed keyed item source.
+    pub(crate) virtual_items: Option<Rc<dyn crate::el::items::VirtualItems>>,
     /// The memo this element was expanded from (`El::expand_memo`) to mount virtual rows.
     pub(crate) expanded_memo: Option<Rc<crate::memo::Built>>,
     pub(crate) glide: Option<crate::growth::FoldGlide>,
@@ -114,12 +116,17 @@ pub(crate) struct ElCold {
     pub(crate) a11y: A11y,
     /// `El::data`: one value per type.
     pub(crate) data: Vec<crate::el::data::ElData>,
+    /// `El::selection_enabled`: `Some(false)` turns off the selectable texts in this subtree,
+    /// `Some(true)` turns them back on under an ancestor's `false`; `None` inherits.
+    pub(crate) selection_enabled: Option<bool>,
     #[cfg(debug_assertions)]
     pub(crate) scroll_source: Option<&'static std::panic::Location<'static>>,
     #[cfg(debug_assertions)]
     pub(crate) virtual_source: Option<&'static std::panic::Location<'static>>,
     #[cfg(debug_assertions)]
     pub(crate) virtual_append_source: Option<&'static std::panic::Location<'static>>,
+    #[cfg(debug_assertions)]
+    pub(crate) virtual_items_source: Option<&'static std::panic::Location<'static>>,
 }
 
 impl Empty for ElCold {
@@ -158,6 +165,7 @@ impl Empty for ElCold {
         virtual_rows_version: None,
         virtual_rows_append_only: false,
         virtual_overscan: None,
+        virtual_items: None,
         expanded_memo: None,
         glide: None,
         input: None,
@@ -171,12 +179,15 @@ impl Empty for ElCold {
         list_disc: None,
         a11y: A11y::EMPTY,
         data: Vec::new(),
+        selection_enabled: None,
         #[cfg(debug_assertions)]
         scroll_source: None,
         #[cfg(debug_assertions)]
         virtual_source: None,
         #[cfg(debug_assertions)]
         virtual_append_source: None,
+        #[cfg(debug_assertions)]
+        virtual_items_source: None,
     };
 }
 

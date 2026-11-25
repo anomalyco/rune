@@ -41,6 +41,18 @@ impl types::TreeState {
 impl RuntimeCore {
     pub(in crate::runtime) fn virtual_window_changed(&self) -> bool {
         self.commit.virtuals.iter().any(|(path, v)| self.wants_window(path, v))
+            || self.virtual_items_changed()
+    }
+
+    fn virtual_items_changed(&self) -> bool {
+        if self.commit.virtual_items.is_empty() {
+            return false;
+        }
+        let focused = self.kbd.focus.path();
+        self.commit.virtual_items.iter().any(|(path, c)| {
+            let Some(i) = self.tree.id_of_path(path).and_then(|id| self.tree.index_of_id(id)) else { return false };
+            !self.subtree_exiting(i) && c.wants_window(path, focused)
+        })
     }
 
     /// Whether any live virtual list's viewport reaches past its mounted rows, leaving part of it
@@ -186,27 +198,45 @@ impl RuntimeCore {
     /// the unfilled range stops shrinking.
     pub(in crate::runtime) fn virtual_filling(&mut self) -> bool {
         let now = self.clock;
-        let (wanted, moved) = self.virtual_demand();
-        // A wake must draw nothing for a list that finished, unmounted or stopped filling: it
-        // retires the wait, and the deadline it left draws no frame of its own.
-        if !wanted {
-            self.commit.virtual_fill.step(FillEvent::Frame { now, wanted: false, missing: 0, moved: false });
-            return false;
-        }
-        // The fill's own deadline, which it clears when it leaves the wait: a deadline a retired
-        // run left behind is not this call's cause, so the frame is read as any other.
-        if let Some(attempt) = self.commit.virtual_fill.wake(now) {
-            return !self.commit.virtual_fill.step(FillEvent::Due { attempt, now }).is_empty();
-        }
-        // The count is only read at the bound, so a fill that finishes inside it costs none.
-        let missing = if self.commit.virtual_fill.at_bound() { self.virtual_unfilled() } else { 0 };
-        let mut draw = false;
-        for effect in self.commit.virtual_fill.step(FillEvent::Frame { now, wanted, missing, moved }) {
-            match effect {
-                FillEffect::Draw => draw = true,
-                FillEffect::WakeAt(due) => self.wake_at(due),
+        let rows_draw = {
+            let (wanted, moved) = self.virtual_demand();
+            if !wanted {
+                self.commit.virtual_fill.step(FillEvent::Frame { now, wanted: false, missing: 0, moved: false });
+                false
+            } else if let Some(attempt) = self.commit.virtual_fill.wake(now) {
+                !self.commit.virtual_fill.step(FillEvent::Due { attempt, now }).is_empty()
+            } else {
+                let missing = if self.commit.virtual_fill.at_bound() { self.virtual_unfilled() } else { 0 };
+                let mut draw = false;
+                for effect in self.commit.virtual_fill.step(FillEvent::Frame { now, wanted, missing, moved }) {
+                    match effect {
+                        FillEffect::Draw => draw = true,
+                        FillEffect::WakeAt(due) => self.wake_at(due),
+                    }
+                }
+                draw
             }
-        }
-        draw
+        };
+        let items_draw = if self.commit.virtual_items.is_empty() {
+            self.commit.virtual_items.step_fill(now, false, 0, false).0
+        } else {
+            let focused = self.kbd.focus.path();
+            let (mut wanted, mut missing, mut version_changed) = (false, 0usize, false);
+            for (path, c) in self.commit.virtual_items.iter() {
+                let Some(i) = self.tree.id_of_path(path).and_then(|id| self.tree.index_of_id(id)) else { continue };
+                if self.subtree_exiting(i) { continue; }
+                if c.wants_window(path, focused) {
+                    wanted = true;
+                    missing += c.unfilled();
+                    version_changed |= c.version_changed();
+                }
+            }
+            let (draw, wake_due) = self.commit.virtual_items.step_fill(now, wanted, missing, version_changed);
+            if let Some(due) = wake_due {
+                self.wake_at(due);
+            }
+            draw
+        };
+        rows_draw || items_draw
     }
 }

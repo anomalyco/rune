@@ -13,9 +13,8 @@ impl OverlayCore {
         let wake = self.shared.wake.lock().unwrap().clone();
         let surface = crate::platform::x11::xwayland::XwaylandSurface::new(self.name, self.at, &self.options, input, wake)?;
         let scale = surface.scale();
-        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
-            capture_exclusion: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Unsupported, nonactivating_keys: OverlaySupport::Unsupported,
-        };
+        let unsupported = OverlaySupport::Unsupported;
+        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities::placed(unsupported, unsupported, unsupported);
         self.attach(app, Backing::Xwayland(surface), scale)
     }
 
@@ -29,7 +28,7 @@ impl OverlayCore {
 /// the pointer only by its host's opt-in; one that asks for keys never does.
 #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
 pub(super) fn xwayland_allowed(input: OverlayInput, keys: KeyPolicy, opted_in: bool) -> bool {
-    keys != KeyPolicy::OnDemand && (input == OverlayInput::None || opted_in)
+    !keys.takes_keys() && (input == OverlayInput::None || opted_in)
 }
 
 /// Visibility and input state of an `XwaylandSurface`.

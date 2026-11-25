@@ -540,11 +540,22 @@ impl RuntimeCore {
         ))
     }
 
+    /// Index of the first node matching `selector` (key or key path) that is still presented in
+    /// `self.scene` (exiting or not; unmounted nodes awaiting `prune_exited` are skipped so
+    /// [`Self::presented`] and [`Self::presented_pose`] agree with [`Self::elements`] and paint).
+    fn presented_index(&self, selector: &str) -> Option<usize> {
+        self.tree.nodes.iter().enumerate().position(|(i, n)| {
+            crate::flight::selects(selector, &n.path, n.key.as_deref())
+                && self.scene.presented(n.id).is_some()
+                && !self.subtree_unmounted(i)
+        })
+    }
+
     /// Drawn rect `[x, y, w, h]` in points and effective opacity (ancestors included) of the
     /// element keyed `key` (or key path such as `card-2/title`), exiting or not, as of the last
     /// frame.
     pub fn presented(&self, key: &str) -> Option<([f32; 4], f32)> {
-        let i = self.tree.selects_index(key)?;
+        let i = self.presented_index(key)?;
         Some((*self.paint.drawn.get(i)?, self.paint.inh_scratch.get(i)?.opacity))
     }
 
@@ -611,6 +622,13 @@ impl RuntimeCore {
                         self.commit.dirty = true;
                     }
                 }
+                crate::el::PickRead::TextLine { key, byte, f } => {
+                    let line = self.text_line(&key, byte);
+                    if let Some(f) = f.take() {
+                        f(app.states(), line, tx);
+                        self.commit.dirty = true;
+                    }
+                }
                 crate::el::PickRead::Elements { f } => {
                     if let Some(f) = f.take() {
                         let list = elements.get_or_insert_with(|| self.elements());
@@ -643,7 +661,7 @@ impl RuntimeCore {
     /// demand: nothing runs per frame for it. This is a driver/headless read: running view
     /// functions and handlers do not hold a `Runtime`.
     pub fn presented_pose(&self, key: &str) -> Option<Pose> {
-        let i = self.tree.selects_index(key)?;
+        let i = self.presented_index(key)?;
         let n = &self.tree.nodes[i];
         let store = self.scene.store();
         let shadows = n.vis.shadows.iter().enumerate().map(|(k, sh)| {

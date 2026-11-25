@@ -9,6 +9,8 @@
 //!   Without layer-shell (GNOME), an overlay that takes no input shows on XWayland instead
 //!   (`x11/xwayland.rs`): an override-redirect ARGB window with an empty input shape. One that
 //!   takes the pointer does too when its host opts in (`OverlayOptions::xwayland_input`).
+//!   Failing both, it falls back to an undecorated transparent toplevel (`toplevel.rs`) that
+//!   reports degraded placement, stacking and click-through in its capabilities.
 //! - X11: an override-redirect notification window, with an empty input shape unless
 //!   interactive. A `KeyPolicy::OnDemand` one sets the input focus itself on `request_keys` and
 //!   on a click.
@@ -92,7 +94,7 @@ mod presence;
 #[cfg(not(target_arch = "wasm32"))]
 use presence::{Presence, Release};
 mod requests;
-use requests::{Requests, Update, Visibility};
+use requests::{KeyRequest, Requests, Update, Visibility};
 #[cfg(not(target_arch = "wasm32"))]
 mod retire;
 #[cfg(not(target_arch = "wasm32"))]
@@ -100,6 +102,9 @@ use retire::Retire;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/surface.rs"]
 mod surface;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "overlay/toplevel.rs"]
+mod toplevel;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/xwayland.rs"]
 pub(crate) mod xwayland;
@@ -198,7 +203,10 @@ impl SharedCore {
     fn refollow_pointer(&self) { self.request(|q| q.refollow = true); }
     fn set_placement(&self, placement: Option<OverlayPlacement>) { self.request(|q| q.placement = Some(placement)); }
     fn set_display(&self, display: DisplayTarget) { self.request(|q| q.display = Some(display)); }
-    fn request_keys(&self) { self.request(|q| q.request_keys = true); }
+    fn request_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Take)); }
+    fn release_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Release)); }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn activation_token(&self, reply: requests::TokenReply) { self.request(|q| q.tokens.push(reply)); }
     fn window_number(&self) -> Option<u32> { self.native.lock().unwrap().0 }
     fn capture_exclusion(&self) -> OverlaySupport { self.capabilities().capture_exclusion }
     fn capabilities(&self) -> crate::OverlayCapabilities { self.native.lock().unwrap().1 }
@@ -278,9 +286,30 @@ impl<T: 'static> OverlayHandle<T> {
     pub fn set_display(&self, display: DisplayTarget) { self.shared.core.set_display(display); }
 
     /// Request keyboard focus without application activation, for a shown `KeyPolicy::OnDemand`
-    /// overlay where `capabilities().nonactivating_keys` is `Supported` (see `KeyPolicy`).
+    /// or `KeyPolicy::Exclusive` overlay where `capabilities().nonactivating_keys` is
+    /// `Supported` (see `KeyPolicy`).
     #[inline(always)]
     pub fn request_keys(&self) { self.shared.core.request_keys(); }
+
+    /// Gives the keys back without hiding: on Wayland layer-shell the surface's keyboard
+    /// interactivity returns to none, the layer stays mapped, and the overlay hears a blur at
+    /// once (compositors may send no `wl_keyboard.leave`). A later `request_keys` takes them
+    /// again. Other hosts do nothing yet. The latest of `request_keys` and `release_keys` in
+    /// one event-loop turn wins.
+    #[inline(always)]
+    pub fn release_keys(&self) { self.shared.core.release_keys(); }
+
+    /// Asks for an XDG activation token to hand a program launched from the overlay (as
+    /// `XDG_ACTIVATION_TOKEN`), so the compositor lets its window come to the front. Call it
+    /// before hiding the overlay: `reply` runs on the event loop's next turn, ahead of that
+    /// turn's show or hide, with None off Wayland's layer shell, while the overlay has no
+    /// surface, or when the compositor gives no token.
+    pub fn activation_token(&self, reply: impl FnOnce(Option<String>) + Send + 'static) {
+        #[cfg(target_arch = "wasm32")]
+        reply(None);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.shared.core.activation_token(Box::new(reply));
+    }
 
     /// macOS panel CGWindowID for an explicit ScreenCaptureKit exclusion filter. Available
     /// at native creation (see `on_created`/`prewarm`); a new one with each window made.
@@ -400,7 +429,8 @@ enum Backing {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Layer(crate::platform::layer_shell::LayerSurface),
     /// Wayland without layer-shell: an X11 window on XWayland, for overlays that take no input
-    /// or whose host opted in to pointer input there.
+    /// or whose host opted in to pointer input there. Without that either, a Wayland toplevel
+    /// (`Window`, `toplevel.rs`).
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }
@@ -466,6 +496,9 @@ pub(in crate::overlay) struct OverlayCore {
     /// `ConfiguredOverlay::macos_level` or the last `set_macos_level`.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     macos_level: Option<isize>,
+    /// `ConfiguredOverlay::macos_color_space`.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(in crate::overlay) macos_color_space: crate::MacColorSpace,
     shared: Arc<SharedCore>,
     clipboard: crate::clipboard::Client,
     popup: crate::popup_menu::Presenter,
@@ -542,6 +575,7 @@ impl OverlayCore {
         options: OverlayOptions,
         on_created: Option<Box<dyn FnMut(crate::OverlayCreated)>>,
         macos_level: Option<isize>,
+        macos_color_space: crate::MacColorSpace,
         animate_reveal: bool,
         release_after: Option<Duration>,
     ) -> Self {
@@ -570,6 +604,7 @@ impl OverlayCore {
             origin: None,
             interactive,
             macos_level,
+            macos_color_space,
             shared,
             clipboard: Default::default(),
             popup: Default::default(),

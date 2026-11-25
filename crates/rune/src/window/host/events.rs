@@ -67,7 +67,7 @@ impl Host {
         let mut redraw = false;
         for pressed in changes {
             redraw |= self.app.physical_with_fallback(crate::PhysicalInput::Key {
-                key: winit::keyboard::KeyCode::Fn, mods: map_mods(self.mods), pressed, repeat: false,
+                key: winit::keyboard::KeyCode::Fn, mods: map_mods(self.mods), pressed, repeat: false, text: None, consumed_mods: Default::default(),
             }, None);
         }
         if redraw && let Some(l) = &self.win { l.request_redraw(); }

@@ -1,0 +1,1 @@
+- Hot reload: fixed `patched_or_original!` in `crates/rune/src/hot.rs` so owned non-`Copy` `Clone` callback arguments (such as `FieldMenuRequest` in `App::on_field_menu`) compile and fall back cleanly under `--features hot` instead of failing with a moved-value error, and added `cargo check-hot` (`.cargo/config.toml`, `scripts/check-local.sh --hot` / `--all`).

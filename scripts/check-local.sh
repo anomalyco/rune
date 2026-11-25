@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fast, opt-in local developer checks for Rune (pure POSIX bash/awk/grep; no Python required).
-# Usage: scripts/check-local.sh [--wasm] [--all] [--tests] [--help]
+# Usage: scripts/check-local.sh [--wasm] [--hot] [--all] [--tests] [--help]
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -18,19 +18,22 @@ Default steps:
 
 Options:
   --wasm        Also run cargo check-wasm and cargo check-webgl
-  --all         Check and lint --workspace --all-targets instead of default members
+  --hot         Also run cargo check-hot (rune with --features hot)
+  --all         Check and lint --workspace --all-targets instead of default members (includes --hot)
   --tests       Also run cargo test-fast
   -h, --help    Show this help message and exit
 EOF
 }
 
 run_wasm=0
+run_hot=0
 run_all=0
 run_tests=0
 
 for arg in "$@"; do
   case "$arg" in
     --wasm) run_wasm=1 ;;
+    --hot) run_hot=1 ;;
     --all) run_all=1 ;;
     --tests) run_tests=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -130,8 +133,12 @@ if [ "$run_wasm" -eq 1 ]; then
   run_step "cargo check-webgl" cargo check-webgl
 fi
 
+if [ "$run_hot" -eq 1 ] || [ "$run_all" -eq 1 ]; then
+  run_step "cargo check-hot" cargo check-hot
+fi
+
 if [ "$run_tests" -eq 1 ]; then
-  run_step "cargo test-fast" cargo test-fast
+  run_step "cargo test-fast" env RUNE_PAINT_KEEP_STRICT=1 cargo test-fast
 fi
 
 total_elapsed=$((SECONDS - total_start))

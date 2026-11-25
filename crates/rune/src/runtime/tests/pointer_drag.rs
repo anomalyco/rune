@@ -108,7 +108,7 @@ fn a_stationary_escape_keeps_the_run_of_clicks() {
     let mut rt = click_run_runtime();
     rt.pointer_down(10.0, 10.0);
     rt.physical_key_input(crate::PhysicalInput::Key { key: crate::PhysicalKeyCode::Escape,
-        mods: crate::Mods::default(), pressed: true, repeat: false }, KeyEvent { key: crate::Key::Escape, mods: crate::Mods::default() }, None);
+        mods: crate::Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default() }, KeyEvent { key: crate::Key::Escape, mods: crate::Mods::default() }, None);
     rt.pointer_up(10.0, 10.0);
     rt.pointer_down(10.0, 10.0);
     rt.frame(0.0);
@@ -139,7 +139,7 @@ fn native_escape_with_a_logical_fallback_cancels_the_drag() {
     rt.pointer_down(10.0, 10.0);
     rt.frame(0.0);
     rt.physical_key_input(crate::PhysicalInput::Key { key: crate::PhysicalKeyCode::Escape,
-        mods: crate::Mods::default(), pressed: true, repeat: false }, KeyEvent { key: crate::Key::Escape, mods: crate::Mods::default() }, None);
+        mods: crate::Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default() }, KeyEvent { key: crate::Key::Escape, mods: crate::Mods::default() }, None);
     rt.frame(0.0);
     assert_eq!(rt.state, [true]);
     rt.pointer_up(10.0, 10.0);

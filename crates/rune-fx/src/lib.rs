@@ -22,6 +22,7 @@ mod params;
 mod pipes;
 mod renderer;
 mod sim;
+mod support;
 #[cfg(test)]
 mod tests;
 
@@ -79,6 +80,8 @@ pub use renderer::FxRenderer;
 pub use renderer::FxStats;
 pub use renderer::MaskPyramid;
 pub use rune_motion::Rect;
+pub use support::FxUnsupported;
+pub use support::fx_support;
 
 pub(crate) use pack::*;
 pub(crate) use params::corners;

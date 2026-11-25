@@ -13,7 +13,7 @@ use winit::window::Window;
 
 use crate::edit::Ime;
 use crate::runtime::{AppDriver, RuntimeCore, Unhandled};
-use crate::window::{key_base, map_key_event, map_mods};
+use crate::window::{consumed_mods, key_base, map_key_event, map_mods, platform_text};
 
 /// Host-neutral key input over plain Rune types.
 pub(crate) struct KeyInput {
@@ -24,6 +24,10 @@ pub(crate) struct KeyInput {
     pub pressed: bool,
     pub repeat: bool,
     pub unhandled: Option<Unhandled>,
+    /// The platform text for the key (`PhysicalInput::Key::text`).
+    pub text: Option<String>,
+    /// The modifiers the platform spent producing `text`.
+    pub consumed_mods: crate::Mods,
 }
 
 /// Host-neutral wheel input in window points (before dividing by `rt.zoom()`).
@@ -297,7 +301,14 @@ pub(crate) fn keyboard_core(
     if let Some(key) = input.physical {
         rt.physical_then(
             app,
-            crate::PhysicalInput::Key { key, mods: input.mods, pressed: input.pressed, repeat: input.repeat },
+            crate::PhysicalInput::Key {
+                key,
+                mods: input.mods,
+                pressed: input.pressed,
+                repeat: input.repeat,
+                text: input.text,
+                consumed_mods: input.consumed_mods,
+            },
             logical,
             input.base,
             input.unhandled,
@@ -338,6 +349,8 @@ pub(crate) fn keyboard(
         PhysicalKey::Code(key) => Some(key),
         PhysicalKey::Unidentified(_) => None,
     };
+    let text = platform_text(event);
+    let consumed_mods = consumed_mods(event, text.as_deref(), map_mods(mods));
     keyboard_core(
         rt,
         app,
@@ -349,6 +362,8 @@ pub(crate) fn keyboard(
             pressed,
             repeat: event.repeat,
             unhandled,
+            text,
+            consumed_mods,
         },
     )
 }

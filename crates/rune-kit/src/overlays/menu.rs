@@ -6,11 +6,15 @@
 //! (`ui/src/navigation/menu/machine.ts`): focus returns to the trigger as the menu closes,
 //! without a ring when the pointer opened it.
 
-use rune::{El, Icon, PointerPress, TextStyle, Tx, col, el, icon, row, text};
+use std::any::Any;
+use std::rc::Rc;
+use std::time::Duration;
+
+use rune::{El, Icon, Key, KeyEvent, PointerPress, TextStyle, Tx, col, el, icon, row, text};
 
 use super::overlay::{Modal, Placement, anchor_trigger, dismissal, push_anchored_modal, scrim_key, trigger_key};
 use super::popover::{anchored, fit_scroll_bar};
-use crate::{Acts, Kit, State};
+use crate::{Kit, State};
 
 /// A menu at a secondary-press position. Store the point from `El::on_secondary_press`
 /// in app state; clear it in `on_close` and item callbacks. Uses Menu's flipping anchor.
@@ -20,6 +24,80 @@ pub fn context_menu(key: impl Into<String>, trigger: El, point: Option<PointerPr
     match point {
         Some(p) => menu.at(p.x, p.y),
         None => menu,
+    }
+}
+
+/// How long the pointer rests on a row before its submenu opens, or before a sibling row closes
+/// an open submenu (so a diagonal move into the submenu crosses other rows without closing it).
+const SUBMENU_HOVER_DELAY: Duration = Duration::from_millis(200);
+
+type AnyState = dyn Any + 'static;
+type SetOpen = Rc<dyn Fn(&mut AnyState, bool)>;
+type HoverFn = Rc<dyn Fn(&mut AnyState, bool, &mut Tx)>;
+type KeyFn = Rc<dyn Fn(&mut AnyState, &KeyEvent, &mut Tx) -> bool>;
+type Bind<F> = Rc<dyn Fn(El, F) -> El>;
+/// Closers of every controlled submenu open in a menu, its nested submenus' included.
+type Closers = Rc<[SetOpen]>;
+/// An item's select handler, attached once the menu knows which submenus to close with it.
+type Select = Box<dyn FnOnce(El, Closers) -> El>;
+/// `Menu::on_close`'s dismissal, built once the menu knows which submenus to close with it.
+type Dismiss = Box<dyn FnOnce(Closers) -> (El, Modal)>;
+
+/// Closes the menu's open controlled submenus, so the next time it opens they start closed.
+fn close_submenus(closers: &[SetOpen], s: &mut AnyState) {
+    for close in closers {
+        close(&mut *s, false);
+    }
+}
+
+/// Collects the closers of `entries`' open controlled submenus and of submenus open inside them.
+fn open_submenus(entries: &[MenuEntry], out: &mut Vec<SetOpen>) {
+    for entry in entries {
+        if let MenuEntry::Item(item) = entry
+            && let Some((sub, true)) = &item.sub
+        {
+            if let Some(t) = &item.sub_toggle {
+                out.push(t.set.clone());
+            }
+            open_submenus(sub, out);
+        }
+    }
+}
+
+/// A submenu's open callback ([`MenuItem::on_submenu`]) with the app's state type erased, and
+/// binders that attach state-typed hover and key handlers, so a menu can wire its rows without
+/// being generic over the app.
+#[derive(Clone)]
+struct SubToggle {
+    set: SetOpen,
+    hover: Bind<HoverFn>,
+    key: Bind<KeyFn>,
+}
+
+impl SubToggle {
+    fn new<S: 'static>(f: impl Fn(&mut S, bool) + 'static) -> SubToggle {
+        SubToggle {
+            set: Rc::new(move |s: &mut AnyState, open: bool| {
+                if let Some(s) = s.downcast_mut::<S>() {
+                    f(s, open);
+                }
+            }),
+            hover: Rc::new(|e: El, h: HoverFn| e.on_hover_change(move |s: &mut S, inside: bool, tx: &mut Tx| h(s as &mut AnyState, inside, tx))),
+            key: Rc::new(|e: El, h: KeyFn| e.on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| h(s as &mut AnyState, ev, tx))),
+        }
+    }
+}
+
+fn plain(ev: &KeyEvent) -> bool {
+    ev.mods == rune::Mods::default()
+}
+
+/// The arrows that enter and leave a submenu where the key arrived: Right and Left, swapped
+/// right to left, as the submenu's chevron and Rune's focus navigation swap.
+fn submenu_arrows(tx: &Tx) -> (Key, Key) {
+    match tx.key_direction() {
+        rune::Direction::Rtl => (Key::Left, Key::Right),
+        _ => (Key::Right, Key::Left),
     }
 }
 
@@ -50,8 +128,9 @@ pub struct MenuItem {
     sub: Option<(Vec<MenuEntry>, bool)>,
     sub_placement: Placement,
     sub_min_width: f32,
+    sub_toggle: Option<SubToggle>,
     state: State,
-    acts: Acts,
+    selects: Vec<Select>,
 }
 
 impl MenuItem {
@@ -70,8 +149,9 @@ impl MenuItem {
             sub: None,
             sub_placement: Placement::RightStart,
             sub_min_width: 160.0,
+            sub_toggle: None,
             state: State::Rest,
-            acts: Acts::default(),
+            selects: Vec::new(),
         }
     }
     /// Explicit element key for this item row instead of the default positional
@@ -142,6 +222,49 @@ impl MenuItem {
         self.sub = Some((entries, open));
         self
     }
+    /// Lets the menu open and close this item's submenu: `f(state, open)` should store `open`
+    /// for the next [`Self::submenu`]. With it, Right, Return and Space on the row open the
+    /// submenu and move focus into it, and Left or Escape inside it closes only the submenu and
+    /// returns focus to the row (the WAI-ARIA menu pattern). Right to left ([`El::dir`]), Left
+    /// opens and Right closes, as the row's chevron points. The keys don't change when the
+    /// submenu flips to the other side for lack of room. Resting the pointer on the row opens
+    /// it, and resting on another row of the same menu (disabled rows included) closes it, after
+    /// a short delay.
+    ///
+    /// The menu also closes its open submenus through `f` when it is dismissed
+    /// ([`Menu::on_close`]: Escape, a press outside) and when an item other than a checkbox or
+    /// radio is picked ([`Self::on_select`]). An app that closes the menu any other way (setting
+    /// its `open` flag itself) clears the submenu flags too, or the menu reopens with them open.
+    ///
+    /// All `on_submenu` callbacks in one menu must take the same state type: the menu wires its
+    /// rows' hover with the first one's, and a callback for another type does nothing on hover.
+    ///
+    /// ```
+    /// use rune::El;
+    /// use rune_kit::{Button, Kit, Menu, MenuEntry, MenuItem};
+    ///
+    /// #[derive(Default)]
+    /// struct App { menu_open: bool, share_open: bool }
+    ///
+    /// fn file_menu(s: &App, k: &Kit, layer: &mut Vec<El>) -> El {
+    ///     Menu::new("file")
+    ///         .trigger(Button::new("File").build(k))
+    ///         .item(
+    ///             MenuItem::new("Share")
+    ///                 .submenu(vec![MenuEntry::item(MenuItem::new("Mail"))], s.share_open)
+    ///                 .on_submenu(|s: &mut App, open| s.share_open = open),
+    ///         )
+    ///         .open(s.menu_open)
+    ///         // The menu clears `share_open` itself before this runs.
+    ///         .on_close(|s: &mut App| s.menu_open = false)
+    ///         .build(k, layer)
+    /// }
+    /// # let _ = file_menu(&App::default(), &Kit::neutral(true), &mut Vec::new());
+    /// ```
+    pub fn on_submenu<S: 'static>(mut self, f: impl Fn(&mut S, bool) + 'static) -> Self {
+        self.sub_toggle = Some(SubToggle::new(f));
+        self
+    }
     /// Where an open submenu anchors relative to this item row (default
     /// [`Placement::RightStart`]). For example, [`Placement::LeftStart`] places the submenu's
     /// right edge against the item row's left edge.
@@ -182,16 +305,22 @@ impl MenuItem {
         }
         self
     }
-    pub fn on_select<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
-        self.acts.press(f);
-        self
+    /// Runs `f` when the item is picked. Picking an item that isn't a checkbox or radio
+    /// ([`Self::checked`]) also closes the menu's open [`Self::on_submenu`] submenus first.
+    pub fn on_select<S: 'static>(self, f: impl Fn(&mut S) + 'static) -> Self {
+        self.on_select_tx(move |s: &mut S, _: &mut Tx| f(s))
     }
     pub fn on_select_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.acts.press_tx(f);
+        self.selects.push(Box::new(move |e: El, closers: Closers| {
+            e.on_press_tx(move |s: &mut S, tx: &mut Tx| {
+                close_submenus(&closers, s);
+                f(s, tx)
+            })
+        }));
         self
     }
 
-    fn build(self, k: &Kit, standard: bool, fallback_key: String, layer: &mut Vec<El>) -> El {
+    fn build(self, k: &Kit, standard: bool, fallback_key: String, row_hover: Option<RowHover>, tree: &Closers, layer: &mut Vec<El>) -> El {
         let key = self.key.unwrap_or(fallback_key);
         let a11y_name = self.a11y_label.unwrap_or_else(|| self.label.clone());
         let c = &k.c;
@@ -288,6 +417,47 @@ impl MenuItem {
                 .opacity(if on { 1.0 } else { 0.0 });
             e = e.child(el().key("indicator").size(16.0, 16.0).center().child(mark).a11y_hidden());
         }
+        let sub_open = self.sub.as_ref().is_some_and(|s| s.1);
+        let toggle = self.sub.as_ref().and(self.sub_toggle.clone()).filter(|_| !disabled);
+        if let Some(t) = &toggle {
+            let set = t.set.clone();
+            let sub_menu = format!("{key}-sub-menu");
+            e = (t.key)(
+                e,
+                Rc::new(move |s: &mut AnyState, ev: &KeyEvent, tx: &mut Tx| {
+                    if !plain(ev) || !(ev.key == submenu_arrows(tx).0 || ev.key == Key::Enter || ev.key == Key::Text(" ".into())) {
+                        return false;
+                    }
+                    if !sub_open {
+                        set(s, true);
+                    }
+                    // Its first focusable item (APG menu: the submenu opens with focus inside).
+                    tx.focus_when_shown(sub_menu.clone(), true);
+                    true
+                }),
+            );
+        }
+        if let Some(h) = row_hover {
+            // A disabled row still closes an open sibling submenu; it just opens nothing.
+            let own = toggle.as_ref().filter(|_| !sub_open).map(|t| t.set.clone());
+            let RowHover { bind, index, close: closers } = h;
+            e = bind(
+                e.hover_delays(SUBMENU_HOVER_DELAY, Duration::ZERO),
+                Rc::new(move |s: &mut AnyState, inside: bool, _: &mut Tx| {
+                    if !inside {
+                        return;
+                    }
+                    for (i, close) in closers.iter() {
+                        if *i != index {
+                            close(&mut *s, false);
+                        }
+                    }
+                    if let Some(open) = &own {
+                        open(&mut *s, true);
+                    }
+                }),
+            );
+        }
         if let Some((entries, open)) = self.sub {
             // It points where the submenu opens: left, right to left (`menu.css`).
             e = e.child(icon(k.glyph.caret_right, 16.0).key("chevron").a11y_hidden().mirror_in_rtl().color(if standard {
@@ -300,15 +470,46 @@ impl MenuItem {
                 let label = (!a11y_name.trim().is_empty()).then_some(a11y_name);
                 let sub = Menu { key: format!("{key}-sub"), label, entries, standard, min_width, ..Menu::new("") };
                 let mut deeper = Vec::new();
-                let surface = sub.surface(k, &mut deeper);
+                let mut surface = sub.surface(k, tree, &mut deeper);
+                if let Some(t) = &toggle {
+                    let (set, row_key) = (t.set.clone(), key.clone());
+                    surface = (t.key)(
+                        surface,
+                        Rc::new(move |s: &mut AnyState, ev: &KeyEvent, tx: &mut Tx| {
+                            if !plain(ev) || !(ev.key == submenu_arrows(tx).1 || ev.key == Key::Escape) {
+                                return false;
+                            }
+                            set(s, false);
+                            tx.focus(row_key.clone(), true);
+                            true
+                        }),
+                    );
+                }
                 layer.push(anchored(k, surface, &key, self.sub_placement, 0.0));
                 layer.extend(deeper);
             }
         }
         e = k.disabled_dim(e, disabled && !standard);
         // A popup opens on its checked item (NSPopUpButton).
-        self.acts.apply(e.focusable(!disabled).focus_selected(self.checked == Some(true)).disabled(disabled), !disabled)
+        let mut e = e.focusable(!disabled).focus_selected(self.checked == Some(true)).disabled(disabled);
+        if !disabled {
+            // A checkbox or radio pick may keep the menu open, so it leaves submenus alone.
+            let closers: Closers = if self.checked.is_some() { Rc::new([]) } else { tree.clone() };
+            for select in self.selects {
+                e = select(e, closers.clone());
+            }
+        }
+        e
     }
+}
+
+/// What a row of a menu with controlled submenus does when the pointer rests on it.
+struct RowHover {
+    bind: Bind<HoverFn>,
+    /// This row's entry index, so it doesn't close its own submenu.
+    index: usize,
+    /// The menu's open submenus: entry index and closer, shared by every row.
+    close: Rc<[(usize, SetOpen)]>,
 }
 
 /// A dropdown menu: `Menu::new("file").trigger(button).item(..).open(s.open).build(&kit, &mut layer)`.
@@ -325,7 +526,7 @@ pub struct Menu {
     at: Option<(f32, f32)>,
     /// A context menu: its trigger is the area it opens over, not a button that opens it.
     context: bool,
-    dismiss: Option<(El, Modal)>,
+    dismiss: Option<Dismiss>,
 }
 
 impl Menu {
@@ -403,11 +604,19 @@ impl Menu {
     }
     /// Presses outside and Escape close the menu. While open it holds keyboard focus.
     pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
-        self.dismiss = Some(dismissal(scrim_key(&self.key), f));
+        let key = scrim_key(&self.key);
+        // Escape and an outside press also close the open controlled submenus, so the menu
+        // reopens with them closed.
+        self.dismiss = Some(Box::new(move |closers: Closers| {
+            dismissal(key, move |s: &mut S| {
+                close_submenus(&closers, s);
+                f(s)
+            })
+        }));
         self
     }
 
-    fn surface(self, k: &Kit, layer: &mut Vec<El>) -> El {
+    fn surface(self, k: &Kit, tree: &Closers, layer: &mut Vec<El>) -> El {
         let c = &k.c;
         let standard = self.standard;
         let mut frame = col().key(format!("{}-menu", self.key)).role("menu").focus_group().min_w(self.min_width).items_stretch();
@@ -420,9 +629,29 @@ impl Menu {
             k.elevate(frame.radius(6.0).fill(c.layer_01), &k.elevation.floating)
         };
         let mut list = col().key("rows").items_stretch().padding(if standard { 4.0 } else { 2.0 });
+        // Rows hear a resting pointer only when some row here has a submenu the menu controls:
+        // that row opens on it, and every other row closes the open one.
+        let toggles: Vec<(usize, SubToggle, bool)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match e {
+                MenuEntry::Item(item) => {
+                    let open = item.sub.as_ref()?.1;
+                    item.sub_toggle.clone().map(|t| (i, t, open))
+                }
+                _ => None,
+            })
+            .collect();
+        let bind = toggles.first().map(|(_, t, _)| t.hover.clone());
+        let open_closers: Rc<[(usize, SetOpen)]> =
+            toggles.iter().filter(|(_, _, open)| *open).map(|(i, t, _)| (*i, t.set.clone())).collect();
         for (i, entry) in self.entries.into_iter().enumerate() {
             list = list.child(match entry {
-                MenuEntry::Item(item) => item.build(k, standard, format!("{}-item{i}", self.key), layer),
+                MenuEntry::Item(item) => {
+                    let hover = bind.clone().map(|bind| RowHover { bind, index: i, close: open_closers.clone() });
+                    item.build(k, standard, format!("{}-item{i}", self.key), hover, tree, layer)
+                }
                 MenuEntry::Separator => {
                     let (m, color) = if standard { (4.0, c.border_weak) } else { (2.0, c.border_muted) };
                     el().key(format!("sep{i}")).h(1.0).mt(m).mb(m).ml(-m).mr(-m).fill(color).a11y_hidden()
@@ -469,8 +698,11 @@ impl Menu {
         };
         // Submenus anchor to items inside this surface, so they mount after it.
         let mut subs = Vec::new();
-        let dismiss = self.dismiss.take();
-        let surface = self.surface(k, &mut subs).focus_return(anchor_key);
+        let mut open_subs = Vec::new();
+        open_submenus(&self.entries, &mut open_subs);
+        let tree: Closers = open_subs.into();
+        let dismiss = self.dismiss.take().map(|d| d(tree.clone()));
+        let surface = self.surface(k, &tree, &mut subs).focus_return(anchor_key);
         push_anchored_modal(k, layer, dismiss, surface, &key, placement, gutter);
         layer.extend(subs);
         trigger

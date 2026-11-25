@@ -21,3 +21,15 @@ fn extra_args_are_ready_before_any_window() {
         .unwrap();
     assert!(status.success(), "the child read its extras before run");
 }
+
+#[test]
+fn tooling_flags_match_build_profile() {
+    let list = rune::tooling::flags();
+    assert_eq!(list, rune::tooling::Args::flags());
+    if cfg!(any(feature = "tooling", feature = "hot", debug_assertions)) {
+        assert!(!list.is_empty());
+        assert!(list.iter().any(|f| f.name == "--snap"));
+    } else {
+        assert!(list.is_empty());
+    }
+}

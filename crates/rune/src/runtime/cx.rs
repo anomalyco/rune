@@ -79,6 +79,15 @@ pub(crate) struct CxCore {
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
 }
 
+/// The host's safe-area insets in points, top/right/bottom/left: the browser's on the web,
+/// zero on native.
+pub(crate) fn safe_area_insets() -> [f32; 4] {
+    #[cfg(target_arch = "wasm32")]
+    { crate::platform::web::safe_area() }
+    #[cfg(not(target_arch = "wasm32"))]
+    { [0.0; 4] }
+}
+
 impl CxCore {
     pub(super) fn absorb(&mut self, other: CxCore) {
         self.reduced_motion = other.reduced_motion;
@@ -122,12 +131,7 @@ impl CxCore {
     pub(crate) fn set_titlebar(&mut self, titlebar: crate::Titlebar) { self.titlebar.titlebar = Some(titlebar); }
     pub(crate) fn accent(&self) -> Color { self.system_accent.accent(self.env.system_dark) }
     pub(crate) fn focus_color(&self) -> Color { self.system_accent.focus(self.env.system_dark) }
-    pub(crate) fn safe_area(&self) -> [f32; 4] {
-        #[cfg(target_arch = "wasm32")]
-        { crate::platform::web::safe_area() }
-        #[cfg(not(target_arch = "wasm32"))]
-        { [0.0; 4] }
-    }
+    pub(crate) fn safe_area(&self) -> [f32; 4] { safe_area_insets() }
     pub(crate) fn hover_none(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         { crate::platform::web::hover_none() }
@@ -208,10 +212,12 @@ impl<S> Cx<S> {
     pub fn system_dark(&self) -> bool { self.core.system_dark() }
     /// Points from the window's leading edge to the trailing edge of the macOS traffic lights
     /// drawn over the content, for a top bar's leading inset: 0 when nothing is drawn there (full
-    /// screen, a titled window whose content starts below its titlebar, other platforms). The
-    /// view re-runs when it changes, as entering and leaving full screen do. Headless runs report
-    /// [`Chrome::titlebar_inset`](crate::Chrome::titlebar_inset). A `memo` closure that reads
-    /// it needs it in its version.
+    /// screen, a titled window whose content starts below its titlebar, other platforms). On
+    /// macOS it drops to 0 as soon as entering full screen begins
+    /// (`NSWindowWillEnterFullScreenNotification`), and stays 0 while exiting until AppKit
+    /// clears full screen and reattaches the traffic lights to the window. The view re-runs when
+    /// it changes. Headless runs report [`Chrome::titlebar_inset`](crate::Chrome::titlebar_inset).
+    /// A `memo` closure that reads it needs it in its version.
     #[inline(always)]
     pub fn titlebar_inset(&self) -> f32 { self.core.titlebar_inset() }
     /// What the window's own controls take of a titlebar the app draws (`App::titlebar`):
@@ -236,17 +242,32 @@ impl<S> Cx<S> {
     #[inline(always)]
     pub fn is_maximized(&self) -> bool { self.core.is_maximized() }
     /// Whether the host window is currently in full screen (a native full-screen Space on
-    /// macOS, borderless full screen over its display on Windows and Linux), as confirmed by
-    /// the window system. The view and any `memo` closures rebuild automatically when this
-    /// changes, including when the user enters or leaves full screen from the window manager
-    /// or macOS Esc / green button. Returns `false` in headless runs unless set with
-    /// [`Runtime::set_full_screen`], and for overlays, adopted macOS panels, and staged
-    /// playground subviews.
+    /// macOS, borderless full screen over its display on Windows and Linux).
+    ///
+    /// When the value changes by platform:
+    /// - **macOS**: flips at the start of the native Space transition on AppKit's
+    ///   `NSWindowWillEnterFullScreenNotification` and
+    ///   `NSWindowWillExitFullScreenNotification` (matching Chrome's full-screen state), and
+    ///   reconciles on `NSWindowDidEnterFullScreenNotification`,
+    ///   `NSWindowDidExitFullScreenNotification`, or a failed transition.
+    /// - **Windows and Linux**: updates when the window system confirms the borderless
+    ///   full-screen state (on create, resize, scale change, or focus).
+    /// - **Web, overlays, adopted macOS panels, and staged playground subviews**: always
+    ///   `false`.
+    /// - **Headless runs**: `false` unless set with [`Runtime::set_full_screen`].
+    ///
+    /// The view and any `memo` closures rebuild automatically when this changes, including
+    /// when the user enters or leaves full screen via the green button, Esc, keyboard
+    /// shortcuts, the window manager, or [`Tx::set_full_screen`] / [`Tx::toggle_full_screen`].
     ///
     /// ```
-    /// # use rune::{Cx, El, text};
+    /// # use rune::{Cx, El, row, text};
     /// fn titlebar(_: &(), cx: &mut Cx<()>) -> El {
-    ///     text(if cx.is_full_screen() { "Exit full screen" } else { "Full screen" })
+    ///     let full = cx.is_full_screen();
+    ///     row()
+    ///         .pl(cx.titlebar_inset())
+    ///         .child(text(if full { "Exit full screen" } else { "Full screen" }))
+    ///         .on_press_tx(move |_: &mut (), tx| tx.set_full_screen(!full))
     /// }
     /// ```
     #[inline(always)]
@@ -375,8 +396,9 @@ impl<S> Cx<S> {
     /// ([`El::pointer_lock`](crate::El::pointer_lock)).
     ///
     /// Views can toggle a "Click to look around" or "Press Esc to release" hint from this;
-    /// the view (and memos) rebuild whenever it changes. Always `false` on web, iOS, and
-    /// native overlays.
+    /// the view (and memos) rebuild whenever it changes. On web, becomes `true` once the browser
+    /// grants pointer lock (`pointerlockchange`) and stays `false` if refused. Always `false` on
+    /// iOS and native overlays.
     ///
     /// ```
     /// # use rune::{Cx, El, Env, Runtime, el, text};

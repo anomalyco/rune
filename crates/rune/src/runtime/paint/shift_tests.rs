@@ -149,6 +149,7 @@ fn virtual_rows_scroll_copies_rows_and_matches_fresh_paint() {
             rt.frame(1.0 / 120.0);
             verified_kept = verified_kept.max(rt.paint.keep.last_kept);
             assert_eq!(rt.paint.keep.verify_mismatches, 0, "scale={scale} step={step}: debug verify mismatch");
+            assert_eq!(rt.paint_keep_mismatches(), 0, "scale={scale} step={step}: unified paint_keep_mismatches");
         }
         assert!(
             verified_kept > 1000,

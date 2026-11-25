@@ -555,3 +555,106 @@ fn give_back_truncates_trailing_empty_image_pages_at_rest() {
         assert_eq!(c.texture_memory.read(), base_mem, "truncated page HAL texture memory reclaimed at idle rest");
     }
 }
+
+/// A steady scene showing more than `IMAGE_ATLAS_MAX_PAGES` (16) pages on every frame must keep
+/// all overflow pages resident with zero CPU re-copies and zero GPU texture uploads per frame,
+/// and still compact back under the bound once the visible set shrinks.
+#[test]
+fn steady_overflow_image_atlas_uploads_zero_pages_per_frame() {
+    use crate::pixels::{IMAGE_ATLAS_MAX_PAGES, ImageAtlas, Pixels};
+
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let (device, queue) = (&gpu.device, &gpu.queue);
+    let mut renderer = Renderer::new(device, OFFSCREEN_FORMAT);
+    let mut text = crate::text::TextSystem::new(&[], ("Inter", "Inter"));
+    let target = Offscreen::new(device, 8, 8);
+
+    let count = IMAGE_ATLAS_MAX_PAGES + 4;
+    let (w, h) = (900u32, 900u32);
+    let imgs: Vec<Pixels> = (0..count)
+        .map(|i| {
+            let p = Pixels::new();
+            p.set(w, h, [10 + i as u8 * 10, 120, 200, 255].repeat((w * h) as usize));
+            p
+        })
+        .collect();
+
+    let mut images = ImageAtlas::default();
+    // Frame 0: initial placement and GPU upload of all 20 pages.
+    let mut prev_placed: Vec<_> = imgs.iter().map(|p| images.place(p, [w as f32, h as f32]).unwrap()).collect();
+    images.end_frame();
+    renderer.upload_images(device, queue, &mut images);
+    assert_eq!(images.pages.len(), count);
+    assert_eq!(renderer.image_texture_count(), count);
+
+    #[cfg(feature = "test-gpu-counters")]
+    let steady_hal_textures = device.get_internal_counters().hal.textures.read();
+
+    // Frames 1..=5: steady scene past the 16-page / 64 MiB bound.
+    for frame in 1..=5usize {
+        let mut slots_moved = 0usize;
+        for (i, img) in imgs.iter().enumerate() {
+            let placed = images.place(img, [w as f32, h as f32]).unwrap();
+            if placed != prev_placed[i] {
+                slots_moved += 1;
+                prev_placed[i] = placed;
+            }
+        }
+        images.end_frame();
+        let dirty_pages = images.pages.iter().filter(|p| p.dirty.is_some()).count();
+        let stats_before = renderer.uploads.stats();
+        renderer.upload_images(device, queue, &mut images);
+        let stats_after = renderer.uploads.stats();
+        let upload_writes = stats_after.writes - stats_before.writes;
+        let upload_bytes = stats_after.bytes - stats_before.bytes;
+        assert_eq!(slots_moved, 0, "frame {frame}: steady overflow must move 0 slots");
+        assert_eq!(dirty_pages, 0, "frame {frame}: steady overflow must dirty 0 pages");
+        assert_eq!(upload_writes, 0, "frame {frame}: steady overflow must perform 0 GPU texture writes");
+        assert_eq!(upload_bytes, 0, "frame {frame}: steady overflow must upload 0 bytes to GPU");
+        #[cfg(feature = "test-gpu-counters")]
+        assert_eq!(
+            device.get_internal_counters().hal.textures.read(),
+            steady_hal_textures,
+            "frame {frame}: steady overflow must not churn HAL textures",
+        );
+    }
+
+    // Shrink to 10 visible images (6 from 0..16 + the 4 overflow images 16..20): overflow images
+    // relocate onto freed pages < 16 and GPU texture count drops from 20 to 10.
+    let kept: Vec<usize> = (0..6).chain(IMAGE_ATLAS_MAX_PAGES..count).collect();
+    for _ in 0..2 {
+        for &i in &kept {
+            images.place(&imgs[i], [w as f32, h as f32]).unwrap();
+        }
+        images.end_frame();
+        renderer.upload_images(device, queue, &mut images);
+    }
+    assert!(images.pages.len() <= IMAGE_ATLAS_MAX_PAGES);
+    assert_eq!(renderer.image_texture_count(), kept.len());
+
+    // Draw one of the relocated overflow images (imgs[16]) and verify exact pixels on GPU.
+    let relocated = images.place(&imgs[IMAGE_ATLAS_MAX_PAGES], [w as f32, h as f32]).unwrap();
+    assert!(relocated.page < IMAGE_ATLAS_MAX_PAGES);
+    images.end_frame();
+    renderer.upload_images(device, queue, &mut images);
+    let inst = Instance {
+        rect: [0.0, 0.0, 8.0, 8.0],
+        radii: [0.0; 4],
+        fill: [0.0, 0.0, 0.0, 1.0],
+        border: [0.0; 4],
+        params: [relocated.page as f32, KIND_IMAGE, 0.0, 1.0],
+        uv: relocated.rect.map(|v| v as f32),
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    renderer.prepare(device, queue, &mut text.atlas, std::slice::from_ref(&inst), (8, 8));
+    let mut enc = device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, [0.0; 4]);
+    target.copy(&mut enc);
+    renderer.submit(queue, enc);
+    let out = target.read(device);
+    let want = [10 + IMAGE_ATLAS_MAX_PAGES as u8 * 10, 120, 200, 255];
+    for (got, want) in out[..4].iter().zip(want) {
+        assert!(got.abs_diff(want) <= 1, "relocated pixel {got} != {want}");
+    }
+}

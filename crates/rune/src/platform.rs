@@ -4,6 +4,7 @@ pub(crate) mod activation;
 pub(crate) mod app_icon;
 #[cfg(target_os = "linux")]
 pub(crate) mod cpu_frames;
+pub(crate) mod desktop_settings;
 #[cfg(target_os = "macos")]
 pub(crate) mod display_link;
 #[cfg(any(test, target_os = "macos"))]

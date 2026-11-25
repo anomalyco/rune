@@ -14,6 +14,7 @@ pub(crate) enum Cause {
     Queued,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Cause {
     pub(crate) fn name(self) -> &'static str {
         match self {

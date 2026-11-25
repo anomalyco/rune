@@ -26,7 +26,7 @@ pub(crate) mod sidebar;
 mod split_view;
 mod table;
 
-use controls::{button_all_states, button_focus, button_icon, button_playground, button_shortcuts, button_sizes, button_variants, checkbox_basic, checkbox_custom_icon, checkbox_hidden_label, checkbox_states, icon_button_all_states, icon_button_playground, icon_button_sizes, icon_button_variants, radio_basic, radio_controlled, radio_states, slider_basic, slider_sizes, slider_states, switch_appearances, switch_basic, switch_hidden_label, switch_sizes, switch_states, switch_web};
+use controls::{button_all_states, button_focus, button_icon, button_playground, button_shortcuts, button_sizes, button_variants, checkbox_basic, checkbox_custom_icon, checkbox_hidden_label, checkbox_states, icon_button_all_states, icon_button_playground, icon_button_sizes, icon_button_variants, radio_basic, radio_controlled, radio_states, radio_surfaces, slider_basic, slider_sizes, slider_states, switch_appearances, switch_basic, switch_hidden_label, switch_sizes, switch_states, switch_web};
 use display::{a11y_aria_properties, accordion_basic, accordion_multiple, accordion_single, badge_accent, badge_appearances, badge_basic, badge_high_contrast, badge_subtle, card_error, card_info, card_normal, card_success, card_warning, collapsible_basic, collapsible_ghost, keybind_all, keybind_keep_case, keybind_multiple, keybind_playground, keybind_symbols, keybind_variants, list_active_icon, list_basic, list_delegated_a11y, list_divider, list_empty, list_grouped, list_no_search, list_with_add, loader_basic, loader_sizes, progress_basic, progress_indeterminate, progress_no_label, rolling_text_basic, scroll_view_thumb, segmented_basic, segmented_controlled, segmented_rich, spinner_basic, spinner_sizes};
 use inputs::{field_direct_child, field_invalid, field_text_input, field_textarea, select_disabled, select_grouped, select_invalid, select_playground, select_states, select_step_closed, select_with_field, text_input_appearances, text_input_controlled, text_input_copy, text_input_hooks, text_input_playground, text_input_read_only, text_input_states, text_input_with_field, textarea_code_keys, textarea_composer, textarea_controlled, textarea_focus_caret, textarea_playground, textarea_states, textarea_with_field};
 use markdown::{
@@ -104,6 +104,12 @@ macro_rules! stories {
             if $id == "rune-table--overscan" {
                 s.table = TableState::new().key("overscan-table");
                 s.pick.insert("table-overscan".into(), "tight".into());
+                s.table_menu = None;
+            }
+            if $id == "rune-table--virtual-columns" {
+                s.table = TableState::new().key("vc-table");
+                s.pick.insert("table-frozen".into(), "2".into());
+                s.pick.remove("vc-last");
                 s.table_menu = None;
             }
             if $id == "rune-image--decode" {
@@ -214,6 +220,7 @@ stories! {
     "ui-radio--basic" => radio_basic,
     "ui-radio--controlled" => radio_controlled,
     "ui-radio--states" => radio_states,
+    "ui-radio--surfaces" => radio_surfaces,
     "ui-text-input--playground" => text_input_playground,
     "ui-text-input--with-copy-button" => text_input_copy,
     "ui-text-input--controlled" => text_input_controlled,
@@ -362,6 +369,7 @@ stories! {
     "rune-table--options" => table::options,
     "rune-table--wide" => table::wide,
     "rune-table--overscan" => table::overscan,
+    "rune-table--virtual-columns" => table::virtual_columns,
     "rune-diff--localized" => diff::localized,
     "rune-diff--custom" => diff::custom,
     "rune-diff--scroll-bars" => diff::scroll_bars,

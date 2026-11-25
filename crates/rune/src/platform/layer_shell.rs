@@ -32,6 +32,7 @@ use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
 use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 
+mod activation;
 mod compose;
 mod dead;
 mod text_input;
@@ -94,6 +95,9 @@ struct State {
     text_input_manager: Option<ZwpTextInputManagerV3>,
     text_input: Option<ZwpTextInputV3>,
     text_input_state: text_input_machine::State,
+    /// The serial of the user's last key or button press on the surface, which an activation
+    /// token request presents as proof of interaction.
+    input_serial: Option<u32>,
 }
 
 impl Dispatch<WlOutput, ()> for State {
@@ -145,8 +149,13 @@ impl State {
         let compose_action = keyboard::compose_action(pressed, repeat, mods);
         let fallback = key_event(xkb, self.compose.for_key(compose_action), key, physical, pressed, repeat);
         if let Some(code) = physical {
+            let text = match &fallback {
+                Some(crate::KeyEvent { key: crate::Key::Text(t), .. }) if pressed => Some(t.clone()),
+                _ => None,
+            };
+            let consumed_mods = crate::window::consumed_from(false, mods, text.as_deref(), unmodified_text(xkb, key).as_deref());
             self.input.push(Input::Physical(
-                crate::PhysicalInput::Key { key: code, mods, pressed, repeat },
+                crate::PhysicalInput::Key { key: code, mods, pressed, repeat, text, consumed_mods },
                 fallback,
             ));
         } else if let Some(key) = fallback {
@@ -237,8 +246,9 @@ impl Dispatch<WlPointer, ()> for State {
                 state.step_pointer(pointer::Event::Reset);
                 state.input.push(Input::Leave);
             }
-            wl_pointer::Event::Button { button, state: wayland_client::WEnum::Value(button_state), .. } if state.over.inside() => {
+            wl_pointer::Event::Button { serial, button, state: wayland_client::WEnum::Value(button_state), .. } if state.over.inside() => {
                 let pressed = button_state == wl_pointer::ButtonState::Pressed;
+                if pressed { state.input_serial = Some(serial); }
                 match pointer::button_from_linux(button) {
                     crate::PointerButton::Primary => {
                         state.input.push(Input::Button(pressed));
@@ -340,9 +350,10 @@ impl Dispatch<WlKeyboard, ()> for State {
             wl_keyboard::Event::RepeatInfo { rate, delay } => {
                 state.step_repeat(repeat::Event::RepeatInfo { rate, delay_ms: delay });
             }
-            wl_keyboard::Event::Key { key, state: wayland_client::WEnum::Value(key_state), .. } if state.keyboard_focus.focused() => {
+            wl_keyboard::Event::Key { serial, key, state: wayland_client::WEnum::Value(key_state), .. } if state.keyboard_focus.focused() => {
                 match key_state {
                     wl_keyboard::KeyState::Pressed => {
+                        state.input_serial = Some(serial);
                         state.emit_key(key, true, false);
                         let repeats = state.xkb.as_ref().is_some_and(|xkb| xkb.get_keymap().key_repeats(xkb::Keycode::new(key + 8)));
                         state.step_repeat(repeat::Event::Press { key, repeats, now: crate::time::now() });
@@ -376,6 +387,14 @@ fn key_mods(state: &xkbcommon::xkb::State) -> crate::Mods {
     use xkbcommon::xkb;
     let active = |name: &str| state.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
     crate::input::key_table::mods_from_keys(active(xkb::MOD_NAME_SHIFT), active(xkb::MOD_NAME_CTRL), active(xkb::MOD_NAME_ALT), active(xkb::MOD_NAME_LOGO))
+}
+
+/// The text `key` types in its current layout with no modifiers (its first shift level).
+fn unmodified_text(state: &xkbcommon::xkb::State, key: u32) -> Option<String> {
+    use xkbcommon::xkb;
+    let code = xkb::Keycode::new(key + 8);
+    let sym = *state.get_keymap().key_get_syms_by_level(code, state.key_get_layout(code), 0).first()?;
+    Some(xkb::keysym_to_utf8(sym)).filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
 }
 
 fn feed_compose(compose: &mut xkbcommon::xkb::compose::State, sym: xkbcommon::xkb::Keysym) -> keyboard::ComposeOutcome {
@@ -739,7 +758,7 @@ impl LayerSurface {
     #[allow(unsafe_code)]
     pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
-        let want_keys = options.keys == crate::KeyPolicy::OnDemand;
+        let want_keys = options.keys.takes_keys();
         if want_keys { compose::warm(); }
         // SAFETY: winit owns this `wl_display` for the life of the event loop, which outlives
         // every overlay; a foreign backend never closes it.
@@ -898,12 +917,40 @@ impl LayerSurface {
         if let Some(seat) = &self.seat { self.state.update_seat(seat, &self.queue.handle()); }
     }
 
-    pub fn request_keys(&self) -> bool {
+    /// Asks for keyboard interactivity: exclusive for `KeyPolicy::Exclusive`, else on demand.
+    /// True when an earlier `release_keys` left the compositor's focus on our surface (no
+    /// `wl_keyboard.leave` came), so the overlay is focused again at once, for the caller to
+    /// deliver; otherwise focus follows the compositor's `enter`.
+    pub fn request_keys(&mut self) -> bool {
         if !keyboard::can_request_keys(self.options.keys, self.layer.version()) { return false; }
-        self.layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        let mode = if self.options.keys == crate::KeyPolicy::Exclusive { KeyboardInteractivity::Exclusive } else { KeyboardInteractivity::OnDemand };
+        self.layer.set_keyboard_interactivity(mode);
         self.surface.commit();
         self.queue.flush().ok();
-        true
+        let effects = keyboard::step(&mut self.state.keyboard_focus, keyboard::FocusEvent::Requested);
+        effects.into_iter().any(|keyboard::FocusEffect::Focus(focused)| focused)
+    }
+
+    /// Sets keyboard interactivity back to none on the mapped layer, for `release_keys`. Some
+    /// compositors send no `wl_keyboard.leave` for it, so the surface stops repeat and drops its
+    /// focus itself (`FocusState::Released`); a leave that does arrive later changes nothing,
+    /// and a later `request_keys` refocuses if none came. True when it held the keys, for the
+    /// caller to deliver the blur at once.
+    pub fn release_keys(&mut self) -> bool {
+        if !self.options.keys.takes_keys() { return false; }
+        self.layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        self.surface.commit();
+        self.queue.flush().ok();
+        self.state.step_repeat(repeat::Event::Stop);
+        self.state.reset_compose();
+        let effects = keyboard::step(&mut self.state.keyboard_focus, keyboard::FocusEvent::Released);
+        effects.into_iter().any(|keyboard::FocusEffect::Focus(focused)| !focused)
+    }
+
+    /// An XDG activation token for a program launched from the overlay; see `activation`.
+    pub fn activation_token(&self) -> Option<String> {
+        let globals = self.globals.as_ref()?;
+        activation::request(&self.conn, globals, &self.surface, self.seat.as_ref().zip(self.state.input_serial))
     }
 
     pub fn supports_keys(&self) -> bool {

@@ -211,6 +211,10 @@ pub(super) fn item_json_fields(
     if let Some(ac) = aria.auto_complete { obj.insert("ac".into(), json!(ac)); }
     if let Some(ct) = aria.controls.as_deref() { obj.insert("ct".into(), json!(ct)); }
     if let Some(ow) = aria.owns.as_deref() { obj.insert("ow".into(), json!(ow)); }
+    if let Some(rc) = aria.row_count { obj.insert("rc".into(), json!(rc)); }
+    if let Some(cc) = aria.column_count { obj.insert("cc".into(), json!(cc)); }
+    if let Some(ri) = aria.row_index { obj.insert("ri".into(), json!(ri)); }
+    if let Some(ci) = aria.column_index { obj.insert("ci".into(), json!(ci)); }
     if let Some(dir) = dir {
         obj.insert("dir".into(), json!(dir));
     }

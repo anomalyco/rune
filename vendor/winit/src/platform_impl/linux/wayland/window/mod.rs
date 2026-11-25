@@ -132,6 +132,9 @@ impl Window {
         // Set the window title.
         window_state.set_title(attributes.title);
 
+        // Set the window icon before the first commit.
+        window_state.set_window_icon(attributes.window_icon.map(|icon| icon.inner));
+
         // Set the min and max sizes. We must set the hints upon creating a window, so
         // we use the default `1.` scaling...
         let min_size = attributes.min_inner_size.map(|size| size.to_logical(1.));
@@ -442,7 +445,9 @@ impl Window {
     pub fn set_window_level(&self, _level: WindowLevel) {}
 
     #[inline]
-    pub(crate) fn set_window_icon(&self, _window_icon: Option<PlatformIcon>) {}
+    pub(crate) fn set_window_icon(&self, window_icon: Option<PlatformIcon>) {
+        self.window_state.lock().unwrap().set_window_icon(window_icon);
+    }
 
     #[inline]
     pub fn set_minimized(&self, minimized: bool) {

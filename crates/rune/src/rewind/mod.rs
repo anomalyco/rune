@@ -104,6 +104,7 @@ impl Rewind {
     pub fn bytes(&self) -> usize { self.lock().bytes() }
 
     /// A window at rest (`window::rest`): what the recording no longer refers to goes.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn rest(&self) { self.lock().rest(); }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, tape::Tape> {

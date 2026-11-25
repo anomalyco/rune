@@ -40,7 +40,7 @@ use app::TypedWindowApp;
 
 /// The only parts of `AppSpec<S>` the window host reads after construction.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::window) struct WindowGeometry {
+pub(in crate::window) struct SpecGeometry {
     pub title: &'static str,
     pub size: (f32, f32),
     pub min_size: Option<(f32, f32)>,
@@ -81,7 +81,9 @@ pub(in crate::window) struct Host {
     pub(in crate::window) life: Life,
     /// False for windows `App::window` added: they live as long as the loop, never keep it.
     pub(in crate::window) keeps_loop: bool,
-    pub(in crate::window) geometry: WindowGeometry,
+    pub(in crate::window) geometry: SpecGeometry,
+    /// The last sample `App::on_window_geometry` heard.
+    pub(in crate::window) geometry_watch: super::geometry::GeometryWatch,
     pub(in crate::window) args: Args,
     pub(in crate::window) keep_running: bool,
     /// What the window still owes after its first frame (`post_frame`).
@@ -222,7 +224,7 @@ struct HostInit {
     on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     #[cfg(target_os = "macos")]
     ambient_period: Option<std::time::Duration>,
-    geometry: WindowGeometry,
+    geometry: SpecGeometry,
     args: Args,
     keep_running: bool,
     release_gpu: bool,
@@ -282,6 +284,7 @@ impl Host {
         let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
             app.on_close_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
         );
+        let on_geometry = app.on_window_geometry;
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
@@ -297,9 +300,9 @@ impl Host {
         let shortcuts = crate::shortcuts::Guard::attach(&shared, prepared.waker.clone(), false, wayland);
         let menus = crate::native_menu::MenuGuard::attach(&shared, false);
         let shared_core = shared.core.clone();
-        let geometry = WindowGeometry { title: spec.title, size: spec.size, min_size: spec.min_size };
+        let geometry = SpecGeometry { title: spec.title, size: spec.size, min_size: spec.min_size };
         let typed = Box::new(TypedWindowApp {
-            rt, shared, comp, on_frame_drawn, on_close_request, on_close, on_rest, on_quit, on_reopen, turn_scope,
+            rt, shared, comp, on_frame_drawn, on_close_request, on_close, on_rest, on_quit, on_reopen, on_geometry, turn_scope,
             keep_layout, kept_layout: layout_seed,
         });
         Self::from_app(typed, HostInit {
@@ -487,6 +490,7 @@ impl Host {
             life: Life::Unopened,
             keeps_loop,
             geometry,
+            geometry_watch: Default::default(),
             args,
             keep_running,
             #[cfg(target_os = "windows")]

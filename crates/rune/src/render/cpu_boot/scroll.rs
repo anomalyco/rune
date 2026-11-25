@@ -164,6 +164,8 @@ fn same(scene: &Scene<'_>, bins: &Bins, prev: &Prev, n: u32, m: u32, dy: i32, bo
     let kind = a.kind();
     if !movable(kind) { return false; }
     let marker = matches!(kind, Some(Kind::Layer | Kind::LayerEnd));
+    // A turned layer's end draws its contents turned, which moving rows doesn't follow.
+    if marker && bins.scope.get(&n).is_some_and(|&p| bins.layers[p as usize].turn.is_some()) { return false; }
     if wa == wb {
         // In place: it must look the same everywhere it reaches over both.
         return if marker { layer_same(bins, prev, n, m, 0) && layer_covers(scene, bins, n, both) } else { flat_over(a, both) || rows_alike(a, both) };

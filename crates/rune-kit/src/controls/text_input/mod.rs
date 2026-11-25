@@ -17,13 +17,14 @@ fn kit_rich_style(k: &Kit) -> RichStyle {
 }
 
 /// Shared shell painting (text-input.css:5-75, textarea.css): the base fill, input elevation,
-/// hover overlay, a 1 point focus or invalid ring just inside the box in place of the shadow,
-/// disabled dimming.
+/// hover overlay, a 1 point focus or invalid ring just inside the box in place of the shadow
+/// (or the kit's own radius and ring, `Kit::metrics.field`), disabled dimming.
 fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
     let c = &k.c;
+    let m = k.field_metrics();
     let hover = state == State::Hover && !invalid && !focused;
     let e = k.hover_surface(
-        e.radius(k.radius.md).token_motion(k.motion.control),
+        e.radius(m.radius).token_motion(k.motion.control),
         c.bg_base,
         c.hover,
         hover,
@@ -37,9 +38,9 @@ fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
         return if focused || state == State::Focus { e.outline(2.0, 2.0, highlight) } else { e };
     }
     if invalid {
-        e.outline(1.0, -1.0, c.danger.fg)
+        e.outline(m.focus_width, m.focus_offset, c.danger.fg)
     } else if focused || state == State::Focus {
-        e.outline(1.0, -1.0, c.border_focus)
+        e.outline(m.focus_width, m.focus_offset, c.border_focus)
     } else {
         k.elevate(e, k.elevation.input())
     }
@@ -552,7 +553,8 @@ impl TextInput {
         let ink = if red { c.danger.fg } else { c.text_base };
         let hint = if red { c.danger.fg } else { c.text_faint };
         let style = self.style.unwrap_or(k.ty.ui_compact);
-        let base: f32 = if self.large { 32.0 } else { 28.0 };
+        let m = k.field_metrics();
+        let base: f32 = if self.large { m.large_height } else { m.height };
         let height = self.height.map_or_else(|| base.max(style.line_px() + 12.0), |h| h.max(style.line_px()));
         let field = text_input(&self.edit, style)
             .single_line()
@@ -578,16 +580,17 @@ impl TextInput {
         // there, as an `input` cuts its own text, rather than running on to the border.
         let mut value = row().key("value").grow(1.0).shrink().min_w(0.0).gap(6.0).center_y().clip_rounded(0.0);
         if let Some(i) = self.leading {
-            value = value.child(el().key("leading").pl(8.0).center().child(icon(i, self.leading_size).color(c.icon_muted)).a11y_hidden());
+            value = value.child(el().key("leading").pl(m.padding_x).center().child(icon(i, self.leading_size).color(c.icon_muted)).a11y_hidden());
         } else {
-            value = value.child(el().w(2.0));
+            // With the 6 point gap after it, the text starts `padding_x` in (6 at least).
+            value = value.child(el().w((m.padding_x - 6.0).max(0.0)));
         }
         value = value.child(field);
         // The editor inside carries the name; the box only routes presses to it.
         let mut e = row()
             .role("textbox")
             .h(height)
-            .pr(8.0)
+            .pr(m.padding_x)
             .gap(8.0)
             .child(value);
         e = match self.width {
@@ -613,7 +616,7 @@ impl TextInput {
                 .child(icon(glyph, 16.0).color(c.icon_muted))
                 .disabled(disabled);
             if self.clear {
-                b = b.mr(-8.0);
+                b = b.mr(-m.padding_x);
             }
             if !disabled {
                 b = self.copy_acts.apply(k.interactive(b.hit()), true);

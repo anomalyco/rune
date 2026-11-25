@@ -60,7 +60,7 @@ fn losing_window_focus_cancels_a_held_drag() {
 fn physical_escape_cancels_a_held_drag_too() {
     let mut rt = held();
     rt.physical_input(rune::PhysicalInput::Key {
-        key: rune::PhysicalKeyCode::Escape, mods: Mods::default(), pressed: true, repeat: false,
+        key: rune::PhysicalKeyCode::Escape, mods: Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default(),
     });
     rt.frame(0.0);
     assert_eq!(rt.state.drags.last(), Some(&(Phase::Up, true, 30.0)));
