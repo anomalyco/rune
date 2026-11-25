@@ -120,6 +120,7 @@ impl OverlayCore {
     /// layer overlay sets it through cursor-shape-v1; without that, the pointer keeps the cursor
     /// it arrived with.
     pub(super) fn apply_cursor(&mut self, rt: &RuntimeCore) {
+        if self.pointer_owner.is_injected() { return; }
         let input = self.options.input.resolved(self.interactive);
         let over = rt.pointer().is_some_and(|(x, y)| {
             x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1
@@ -142,6 +143,9 @@ impl OverlayCore {
 
     #[cfg_attr(any(target_os = "ios", target_os = "android"), allow(dead_code))]
     pub(super) fn observe_pointer(&mut self, app: &mut dyn OverlayApp, x: f32, y: f32) {
+        if self.pointer_owner.step(pointer_inject::OwnershipEvent::Move(pointer_inject::InputSource::Native)).is_empty() {
+            return;
+        }
         if app.rt().pointer_captured() || (x >= 0.0 && y >= 0.0 && x < self.at.size.0 && y < self.at.size.1) {
             self.dirty |= app.observe_pointer(x, y);
             self.begin_drag_out(app.rt_mut());
@@ -247,28 +251,27 @@ impl OverlayCore {
 
     /// A left press or release, at the panel's click point when it has one.
     pub(super) fn left_button(&mut self, app: &mut dyn OverlayApp, pressed: bool, point: Option<(f32, f32)>) {
-        if pressed {
-            if let Some((x, y)) = point { app.pointer_move(x, y); }
-            if let Some((x, y)) = app.rt().pointer() {
-                app.pointer_down(x, y);
-                app.rt_mut().physical_input(crate::PhysicalInput::Modifiers(crate::window::map_mods(self.mods)));
-                if !self.take_titlebar_action(app) {
-                    self.position_owner.step(PositionEvent::LeftReleased);
-                }
-            }
+        let ev = if pressed {
+            pointer_inject::OwnershipEvent::Down { source: pointer_inject::InputSource::Native, button: crate::PointerButton::Primary }
         } else {
-            if let Some((x, y)) = point.or(app.rt().pointer()) {
-                // `pointer_up` moves to the release point itself, after disarming a drag-out: a
-                // release never starts an OS drag.
-                app.pointer_up(x, y);
-            }
-            self.position_owner.step(PositionEvent::LeftReleased);
-        }
-        self.dirty = true;
+            pointer_inject::OwnershipEvent::Up { source: pointer_inject::InputSource::Native, button: crate::PointerButton::Primary }
+        };
+        if self.pointer_owner.step(ev).is_empty() { return; }
+        self.dispatch_button(
+            app,
+            pointer_inject::InputSource::Native,
+            crate::PointerButton::Primary,
+            pressed,
+            point,
+            crate::window::map_mods(self.mods),
+        );
     }
 
     /// winit reported the pointer at (x, y).
     pub(super) fn cursor_moved(&mut self, app: &mut dyn OverlayApp, x: f32, y: f32) {
+        if self.pointer_owner.step(pointer_inject::OwnershipEvent::Move(pointer_inject::InputSource::Native)).is_empty() {
+            return;
+        }
         self.dirty |= app.observe_pointer(x, y);
         self.take_titlebar_action(app);
         self.begin_drag_out(app.rt_mut());
@@ -726,6 +729,7 @@ impl OverlayCore {
             self.refollow(app, event_loop, point);
         }
         self.apply_input(app.rt());
+        self.drain_injected_pointers(app);
         if self.presence.shown() {
             #[cfg(target_os = "macos")]
             if let Some(panel) = &self.panel { self.shared.native.lock().unwrap().1.global_pointer = panel.global_pointer(); }

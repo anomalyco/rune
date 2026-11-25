@@ -3334,6 +3334,17 @@ is one more host on the event loop
   `OverlayInput::Regions`. Titlebar double-clicks are ignored, and a user-dragged overlay keeps
   its position across shows, resizes, and `follow_pointer` until the app sends a new placement
   request. Wayland layer-shell overlays cannot be interactively dragged and ignore it.
+- Pointer injection: `OverlayHandle::send_pointer(PointerInput)` (paired with
+  `OverlayHandle::screen_to_local((x_px, y_px)) -> Option<(f32, f32)>`) forwards external
+  pointer streams (for example from a low-level hook or another thread) through the same
+  hit-testing, hover, press, drag, and wheel pipeline as native input, bypassing
+  `OverlayInput::None` and `OverlayInput::Regions` click-through gating across GPU, Windows
+  CPU layered, macOS panel, X11, and Wayland layer-shell overlays. Queued in a bounded
+  128-slot zero-allocation ring buffer (coalescing consecutive moves), dropped while hidden
+  or fading out, and arbitrated by an explicit ownership state machine (latest source wins
+  in idle/hover; active capture ignores the other source until release, cancel, or hide).
+  Injected events never move or set the OS cursor, never activate or focus the overlay, and
+  refuse native `window_drag` and OS `drag_out` sessions.
 - `Tx::copy` works in overlays (a meeting capsule's Copy button).
 - Unsupported: hover in a non-key macOS panel (mouse-moved events go to the key window).
 

@@ -2,7 +2,7 @@
 //! full-screen area pickers, with optional capture exclusion.
 
 use std::sync::{Arc, Mutex};
-use rune::{Align, App, AppSpec, Color, Cx, Display, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, RendererKind, RunOptions, ScreenEdge, Tx, WindowHandle, WindowSpec, WindowsWindowOptions, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, Cx, Display, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, PointerButton, PointerInput, RendererKind, RunOptions, ScreenEdge, Tx, WindowHandle, WindowSpec, WindowsWindowOptions, col, el, row, text};
 
 const BLUE: Color = Color { r: 0.25, g: 0.55, b: 1.0, a: 1.0 };
 const DARK: Color = Color { r: 0.055, g: 0.065, b: 0.085, a: 0.97 };
@@ -60,6 +60,21 @@ fn format_work_area(display: &Display) -> String {
     let ((wx, wy), (ww, wh)) = display.work_area();
     let ((dx, dy), (dw, dh)) = (display.position, display.size);
     format!("work_area ({wx},{wy}) {ww}×{wh} / display ({dx},{dy}) {dw}×{dh}")
+}
+fn inject_demo(s: &mut State) {
+    let Some(pill) = s.handles.lock().ok().and_then(|h| h.pill.clone()) else { return };
+    s.hovered = "Injecting cross-thread pointer sweep...".into();
+    std::thread::spawn(move || {
+        let steps = [(120.0, 68.0), (220.0, 68.0), (340.0, 68.0)];
+        for (x, y) in steps {
+            pill.send_pointer(PointerInput::move_to(x, y));
+            std::thread::sleep(std::time::Duration::from_millis(90));
+        }
+        let (x, y) = steps[2];
+        pill.send_pointer(PointerInput::down(x, y, PointerButton::Primary));
+        pill.send_pointer(PointerInput::up(x, y, PointerButton::Primary));
+        pill.send_pointer(PointerInput::Leave);
+    });
 }
 fn cycle_edge(s: &mut State) {
     s.edge_slot = (s.edge_slot + 1) % EDGE_SLOTS.len();
@@ -156,6 +171,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .child(chip("Screen", show_picker)).child(chip("iPhone", |s| s.expanded = !s.expanded));
     if s.expanded { chips = chips.child(chip("Route", |s| s.expanded = false)); }
     chips = chips.child(chip("Paste", |s| s.expanded = !s.expanded))
+        .child(chip("Inject", inject_demo))
         .child(chip("Edge", cycle_edge))
         .child(chip("×", |s| { if let Some(pill) = &s.handles.lock().unwrap().pill { pill.hide(); } }));
     let status = if !s.hovered.is_empty() { s.hovered.as_str() } else { s.work_area.as_str() };
@@ -177,6 +193,7 @@ fn spec() -> AppSpec<State> {
                 s.work_area = "Bottom · End · work_area (0,0) 1920×1032 / display (0,0) 1920×1080".into();
             }),
             ("picker", |s| { s.picker = true; s.selection = Some([140.0, 100.0, 560.0, 320.0]); }),
+            ("pointer-inject", |s| { s.hovered = "Injected · OverlayHandle::screen_to_local + send_pointer".into(); }),
             ("native-window", |s| { s.native_window = true; s.exclude_from_capture = true; s.undecorated_shadow = true; }),
         ],
         fonts: &[], families: ("sans-serif", "monospace"), setup: None, poll: None, on_key: Some(key) }

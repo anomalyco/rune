@@ -71,6 +71,7 @@ impl OverlayCore {
         }
         let effects = self.presence.step(presence::Event::Show, self.release);
         self.carry_out(app, effects);
+        self.publish_screen_transform(app.rt());
         self.hidden_pace.reset();
         self.backoff_step(crate::window::BackoffEvent::Revealed);
         // Shown onto sleeping displays or under another window, the panel stays occluded.
@@ -348,6 +349,9 @@ impl OverlayCore {
         self.mods = Default::default();
         self.control_click = false;
         self.ime.clear();
+        self.pointer_owner.step(pointer_inject::OwnershipEvent::Reset);
+        self.drop_injected_pointers();
+        self.publish_screen_transform(app.rt());
         app.popup_cancel(&mut self.popup);
         app.rt_mut().cancel_pointer();
         self.apply_cursor(app.rt());

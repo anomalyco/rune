@@ -571,22 +571,27 @@ impl OverlayCore {
             .then(crate::input::time::arrived_now);
         match input {
             Input::Move(x, y) => {
-                let zoom = app.rt().zoom();
-                self.dirty |= app.observe_pointer(x / zoom, y / zoom);
+                self.native_surface_move(app, x, y);
                 return;
             }
-            Input::Leave => app.rt_mut().pointer_leave(),
-            Input::Button(down) => if let Some((x, y)) = app.rt().pointer() {
-                if down { app.pointer_down(x, y); } else { app.pointer_up(x, y); }
-            },
-            Input::Secondary(down) => if let Some((x, y)) = app.rt().pointer() { if down { app.rt_mut().secondary_down(x, y) } else { app.secondary_up(x, y) } },
-            Input::ExtraButton(button, down) => if let Some((x, y)) = app.rt().pointer() {
-                if down { app.button_down(x, y, button); } else { app.button_up(x, y, button); }
-            },
+            Input::Leave => {
+                self.native_pointer_leave(app);
+                return;
+            }
+            Input::Button(down) => {
+                self.native_button(app, crate::PointerButton::Primary, down);
+                return;
+            }
+            Input::Secondary(down) => {
+                self.native_button(app, crate::PointerButton::Secondary, down);
+                return;
+            }
+            Input::ExtraButton(button, down) => {
+                self.native_button(app, button, down);
+                return;
+            }
             Input::Wheel(wheel) => {
-                if crate::input::host_events::wheel_core(app.rt_mut(), wheel) == crate::input::host_events::WheelOutcome::Ignored {
-                    return;
-                }
+                if !self.native_surface_wheel(app, wheel) { return; }
             }
             Input::Focus(focused) => {
                 app.window_focus(focused);

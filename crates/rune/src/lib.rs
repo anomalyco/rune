@@ -200,6 +200,8 @@ pub use input::chord::ChordMod;
 pub use input::chord::KeyPlatform;
 pub use input::chord::Keybind;
 pub use input::physical_input::PhysicalInput;
+pub use input::pointer_input::PointerInput;
+pub use input::pointer_input::WheelDelta;
 pub use input::time::last_input;
 pub use jump_list::JumpItem;
 pub use jump_list::JumpList;

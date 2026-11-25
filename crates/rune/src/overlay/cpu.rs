@@ -609,6 +609,7 @@ impl super::OverlayCore {
         super::frame::record_presented(false);
         let effects = self.presence.step(super::presence::Event::Show, self.release);
         self.carry_out(app, effects);
+        self.publish_screen_transform(app.rt());
         self.hidden_pace.reset();
         self.backoff_step(crate::window::BackoffEvent::Revealed);
         let submitted = crate::time::now();
@@ -650,6 +651,7 @@ impl super::OverlayCore {
         (cpu.scale, cpu.size) = (scale, next_size);
         cpu.engine.invalidate_full();
         app.rt_mut().set_viewport(self.at.size, scale);
+        self.publish_screen_transform(app.rt());
         self.dirty = true;
     }
 
@@ -665,6 +667,7 @@ impl super::OverlayCore {
     /// Releases the CPU overlay's DIB, a11y adapter, Win32 subclass, and window in safe order.
     pub(super) fn release_cpu(&mut self) {
         let cpu = self.cpu.take();
+        self.clear_screen_transform();
         if let Some(CpuOverlay { a11y, engine, window, .. }) = cpu {
             drop(a11y);
             drop(engine);
