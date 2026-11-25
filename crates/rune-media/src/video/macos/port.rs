@@ -8,9 +8,11 @@ use crate::native_surface::{ByteFrame, NativeSurface};
 use crate::video::phases::Item;
 use crate::video::turn::Port;
 use crate::video::{Kind, MediaSource, Meta, Shared};
+use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{AnyThread, MainThreadMarker};
+use objc2::runtime::{AnyObject, Bool};
+use objc2::{AnyThread, MainThreadMarker, msg_send};
+use rune_core::main_queue::on_main;
 use objc2_av_foundation::{AVPlayer, AVPlayerItem, AVPlayerItemStatus, AVPlayerItemVideoOutput};
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType};
 use objc2_core_video::{
@@ -49,6 +51,14 @@ fn create_player(source: &MediaSource, headers: &[(String, String)], kind: Kind,
     // SAFETY: `item` is a live `AVPlayerItem` and `mtm` proves we are on the main thread.
     let player = unsafe { AVPlayer::playerWithPlayerItem(Some(&item), mtm) };
     Ok(Objects { player, item, output })
+}
+
+fn can_step(item: &AVPlayerItem, frames: i32) -> bool {
+    if frames == 0 {
+        return true;
+    }
+    // SAFETY: `item` is a live `AVPlayerItem` accessed on the main thread under `shared.native`.
+    unsafe { if frames > 0 { item.canStepForward() } else { item.canStepBackward() } }
 }
 
 /// Seconds on the host clock (`CACurrentMediaTime`'s) for an `Instant`.
@@ -188,9 +198,45 @@ impl Port for Av<'_> {
     }
 
     fn seek_to(&mut self, at: f64, exact: bool) {
+        self.player().suppress_cm = None;
         let tolerance = if exact { asset::zero() } else { asset::positive_infinity() };
         // SAFETY: `player` is a live `AVPlayer` accessed on the main thread with valid `CMTime` values.
         unsafe { self.objects().player.seekToTime_toleranceBefore_toleranceAfter(asset::cm(at), tolerance, tolerance) };
+    }
+
+    fn snap_for_step(&mut self, attempt: Attempt, frames: i32) -> bool {
+        let Some(target) = self.native.player.as_ref().and_then(|p| p.shown_cm) else {
+            return false;
+        };
+        if !can_step(&self.objects().item, frames) {
+            return false;
+        }
+        self.player().suppress_cm = Some(target);
+        let clip = Arc::downgrade(self.shared);
+        let done = RcBlock::new(move |finished: Bool| {
+            let finished = finished.as_bool();
+            let clip = clip.clone();
+            on_main(move || {
+                if let Some(clip) = clip.upgrade() {
+                    super::snap_done(&clip, attempt, finished);
+                }
+            });
+        });
+        let player = &self.objects().player;
+        let zero = asset::zero();
+        // SAFETY: `player` is a live `AVPlayer` accessed on the main thread, `target` and `zero`
+        // are valid `CMTime` values, and `&*done` is a live `RcBlock` copied by AVFoundation for
+        // `seekToTime:toleranceBefore:toleranceAfter:completionHandler:`.
+        unsafe {
+            let _: () = msg_send![
+                player,
+                seekToTime: target,
+                toleranceBefore: zero,
+                toleranceAfter: zero,
+                completionHandler: &*done
+            ];
+        }
+        true
     }
 
     fn step_by(&mut self, frames: i32) -> bool {
@@ -198,9 +244,7 @@ impl Port for Av<'_> {
             return true;
         }
         let item = &self.objects().item;
-        // SAFETY: `item` is a live `AVPlayerItem` accessed on the main thread under `shared.native`.
-        let can = unsafe { if frames > 0 { item.canStepForward() } else { item.canStepBackward() } };
-        if !can {
+        if !can_step(item, frames) {
             return false;
         }
         // SAFETY: `item` is a live `AVPlayerItem` accessed on the main thread and `canStep*` returned true.
@@ -209,12 +253,16 @@ impl Port for Av<'_> {
     }
 
     fn set_rate(&mut self, rate: f32) {
+        if rate > 0.0 {
+            self.player().suppress_cm = None;
+        }
         let player = &self.objects().player;
         // SAFETY: `player` is a live `AVPlayer` accessed on the main thread.
         unsafe { if rate > 0.0 { player.setRate(rate) } else { player.pause() } };
     }
 
     fn restart(&mut self, rate: f32) {
+        self.player().suppress_cm = None;
         let player = &self.objects().player;
         // SAFETY: `player` is a live `AVPlayer` accessed on the main thread with valid `CMTime` values.
         unsafe {
@@ -225,7 +273,7 @@ impl Port for Av<'_> {
 
     fn frame(&mut self, next_id: &mut dyn FnMut() -> u64) -> (f64, Result<Option<f64>, String>) {
         let (surface, target) = self.target.unwrap();
-        let p = self.native.player.as_ref().unwrap();
+        let p = self.native.player.as_mut().unwrap();
         let output = p.objects.as_ref().unwrap().output.as_ref().unwrap();
         // SAFETY: `output` is a live `AVPlayerItemVideoOutput` attached to this player's item.
         let item_time = unsafe { output.itemTimeForHostTime(host_seconds(target)) };
@@ -237,11 +285,18 @@ impl Port for Av<'_> {
                 // SAFETY: `output` is live and `&mut shown` is a valid writable `CMTime` out-pointer.
                 unsafe { output.copyPixelBufferForItemTime_itemTimeForDisplay(item_time, &mut shown) }
         {
-            let id = next_id();
-            // SAFETY: AVPlayerItemVideoOutput hands out finished buffers it no longer writes.
-            let pushed = unsafe { PixelBuffer::from_raw(Retained::as_ptr(&buffer) as *mut _) }
-                .and_then(|b| surface.push_oriented(b, id, p.orient));
-            landed = pushed.map(|_| Some(asset::seconds(shown)));
+            // Discard any duplicate buffer AVFoundation re-emits at the exact `CMTime` snapped to
+            // before stepping so it neither flashes nor ends `Settle::Seeking` before the step lands.
+            let suppressed = p.suppress_cm.is_some_and(|prev| asset::same_cm(shown, prev));
+            if !suppressed {
+                p.suppress_cm = None;
+                p.shown_cm = Some(shown);
+                let id = next_id();
+                // SAFETY: AVPlayerItemVideoOutput hands out finished buffers it no longer writes.
+                let pushed = unsafe { PixelBuffer::from_raw(Retained::as_ptr(&buffer) as *mut _) }
+                    .and_then(|b| surface.push_oriented(b, id, p.orient));
+                landed = pushed.map(|_| Some(asset::seconds(shown)));
+            }
         }
         (asset::seconds(item_time), landed)
     }

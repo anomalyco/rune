@@ -28,8 +28,7 @@ impl RuntimeCore {
         self.marks.clear();
         self.paint.icon_aprons.clear();
         self.surfaces.clear();
-        self.paint.materials.clear();
-        self.paint.material_fallbacks.clear();
+        self.paint.clear_materials();
         self.hit.hits.clear();
         self.hit.wheel_hits.clear();
         self.clear_help_hits();
@@ -189,7 +188,7 @@ impl RuntimeCore {
             let mark = if n.vis.mark != 0 { n.vis.mark } else { pinh.mark };
             let mut own = p.opacity;
             let mut hit_own = own * group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, 1.0);
-            own *= group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, pinh.group);
+            own *= group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, group_lit(&self.scene, n, pinh.group));
             let base_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
             let hover_owner = n.vis.tracks_hover_paint() || n.vis_flags.hover_group();
             let group = if hover_owner {
@@ -757,7 +756,7 @@ impl RuntimeCore {
         }
         self.keep_close(None, &mut layers, &mut active_cache, &mut glyph_count);
         self.keep_end();
-        if self.paint.native_materials
+        if self.paint.tracks_native_materials()
             && !self.paint.material_fallbacks.is_empty()
             && !self.paint.material_fallback_warned
         {

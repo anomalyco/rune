@@ -46,6 +46,18 @@ hot = ["dep:subsecond", "dep:dioxus-devtools"]
 # reject an app built with it. Off, the lookup isn't compiled in, and a non-key overlay's
 # cursor shows only while its app is frontmost.
 macos-background-cursor = []
+# Windows 11 Build 22000+: opt-in per-element behind-window blur for `El::system_material` on
+# transparent DirectComposition windows and overlays using documented `DWMWA_USE_HOSTBACKDROPBRUSH`
+# and `Windows.UI.Composition` (`Compositor::CreateHostBackdropBrush`). Off by default while live
+# Windows 11 hardware checks confirm unfocused overlay blur and spring tracking; off, no
+# `Windows.UI.Composition` types or WinRT composition features are compiled in.
+windows-system-material = [
+    "windows/System",
+    "windows/UI_Composition",
+    "windows/UI_Composition_Desktop",
+    "windows/Foundation_Numerics",
+    "windows/Win32_System_WinRT_Composition",
+]
 # macOS: play Ogg (Vorbis, Opus) and WebM/Matroska audio, which AVFoundation can't read, by
 # decoding it in Rust (symphonia, opuscule) and handing AVPlayer the PCM. Off, those clips
 # fail at once with a clear message.
@@ -166,7 +178,7 @@ accesskit_macos = { version = "0.27.2", optional = true }
 # Names for the interaction watchdog's stack samples (`tooling::interaction::stack`).
 rustc-demangle = "0.1"
 objc2-foundation = { workspace = true, features = ["std", "NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSObject", "NSRange", "NSValue", "NSProcessInfo", "NSString", "NSThread", "NSURL", "NSUserDefaults", "objc2-core-foundation"] }
-objc2-app-kit = { workspace = true, features = ["std", "bitflags", "objc2-core-foundation", "NSApplication", "NSButton", "NSCell", "NSColorSpace", "NSControl", "NSEvent", "NSFont", "NSFontDescriptor", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWindow", "NSColor", "NSGraphics", "NSPanel", "NSScreen", "NSPasteboard", "NSPasteboardItem", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGraphicsContext", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSAttributedString"] }
+objc2-app-kit = { workspace = true, features = ["std", "bitflags", "objc2-core-foundation", "NSApplication", "NSButton", "NSCell", "NSColorSpace", "NSControl", "NSEvent", "NSFont", "NSFontDescriptor", "NSHapticFeedback", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView", "NSWindow", "NSColor", "NSGraphics", "NSPanel", "NSScreen", "NSPasteboard", "NSPasteboardItem", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSGraphicsContext", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSAttributedString"] }
 objc2-core-video = { workspace = true, features = ["std", "CVBase", "CVDisplayLink", "CVHostTime", "CVReturn", "objc2-core-graphics"] }
 objc2-core-graphics = { workspace = true, features = ["std", "CGColorSpace"] }
 
@@ -175,6 +187,7 @@ raw-window-handle = "0.6"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging", "unstable"] }
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 x11rb = { version = "0.13", features = ["shape", "xinput", "randr", "allow-unsafe-code", "dl-libxcb"] }
 xkbcommon = "0.9"

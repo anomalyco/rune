@@ -21,6 +21,59 @@ pub(super) enum KeyRequest {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) type TokenReply = Box<dyn FnOnce(Option<String>) + Send>;
 
+/// Pending `OverlayHandle::activation_token` replies, plus whether the overlay is still alive
+/// to answer them. Once `Closed` (when `OverlayCore` drops), late callers answer `None`
+/// immediately instead of hanging forever.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) enum TokenQueue {
+    Open(Vec<TokenReply>),
+    Closed,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for TokenQueue {
+    fn default() -> Self { Self::Open(Vec::new()) }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TokenQueue {
+    /// Queues `reply` while open, or returns it back when closed so the caller can invoke
+    /// `reply(None)` outside the requests mutex.
+    pub(super) fn push(&mut self, reply: TokenReply) -> Option<TokenReply> {
+        match self {
+            Self::Open(pending) => {
+                pending.push(reply);
+                None
+            }
+            Self::Closed => Some(reply),
+        }
+    }
+
+    /// Takes every queued reply while keeping the queue in its current state.
+    pub(super) fn take(&mut self) -> Vec<TokenReply> {
+        match self {
+            Self::Open(pending) => std::mem::take(pending),
+            Self::Closed => Vec::new(),
+        }
+    }
+
+    /// Transitions to `Closed` and returns every previously queued reply.
+    pub(super) fn close(&mut self) -> Vec<TokenReply> {
+        match std::mem::replace(self, Self::Closed) {
+            Self::Open(pending) => pending,
+            Self::Closed => Vec::new(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        match self {
+            Self::Open(pending) => pending.len(),
+            Self::Closed => 0,
+        }
+    }
+}
+
 /// A show or a hide, fading the window's alpha over its duration (zero: at once; see
 /// `OverlayHandle::fade_in` and `fade_out` for where windows fade).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,7 +105,7 @@ pub(super) struct Requests {
     /// `OverlayHandle::activation_token` replies, answered before this turn's show or hide,
     /// while the surface may still have the keys.
     #[cfg(not(target_arch = "wasm32"))]
-    pub tokens: Vec<TokenReply>,
+    pub tokens: TokenQueue,
     /// The `setup` waker fired.
     #[cfg(not(target_arch = "wasm32"))]
     pub woken: bool,
@@ -66,13 +119,35 @@ impl Requests {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl OverlayCore {
-    /// None off Wayland's layer shell, or while the overlay has no surface.
+    /// None off Wayland's layer shell, while the overlay is not shown, or while it has no surface.
     pub(super) fn activation_token(&self) -> Option<String> {
+        if !self.presence.shown() { return None; }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(super::Live { backing: super::Backing::Layer(layer), .. }) = self.surface.live() {
             return layer.activation_token();
         }
         None
+    }
+
+    /// Answers every queued `OverlayHandle::activation_token` reply once using the live surface
+    /// while shown (or `None` otherwise), outside the requests mutex.
+    pub(super) fn answer_tokens(&self) {
+        let pending = self.shared.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.take();
+        for reply in pending { reply(self.activation_token()); }
+    }
+
+    /// Answers every queued `OverlayHandle::activation_token` reply once with `None`, outside
+    /// the requests mutex (used when tearing down a closed/refused surface or finishing a hide).
+    pub(super) fn drain_tokens_none(&self) {
+        let pending = self.shared.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.take();
+        for reply in pending { reply(None); }
+    }
+
+    /// Marks the overlay dropped and answers every queued `OverlayHandle::activation_token`
+    /// reply once with `None`; later calls on any surviving handle answer `None` immediately.
+    pub(super) fn close_tokens(&self) {
+        let pending = self.shared.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.close();
+        for reply in pending { reply(None); }
     }
 
     /// Keeps the window out of screen recordings, or lets recorders see it again. A window

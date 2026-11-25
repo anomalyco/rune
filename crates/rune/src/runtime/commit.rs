@@ -403,9 +403,11 @@ pub(super) struct Measurement<'a> {
     pub(super) pointer_locked: bool,
     pub(super) titlebar_inset: f32,
     pub(super) chrome: crate::ChromeInsets,
+    pub(super) safe_area: [f32; 4],
     pub(super) maximized: bool,
     pub(super) full_screen: bool,
     pub(super) window_backdrop: crate::WindowBackdrop,
+    pub(super) window_backdrop_supported: u8,
     /// Caption buttons drawn over the view's root.
     pub(super) caption: Option<crate::titlebar::Caption>,
     pub(super) system_accent: crate::SystemAccent,
@@ -455,6 +457,8 @@ pub(super) struct Measurement<'a> {
     pub(super) kept_lists: Vec<(String, Vec<bool>)>,
     pub(super) caret: Option<(String, [f32; 4])>,
     pub(super) caret_read: bool,
+    pub(super) wm_state: crate::WindowManagerState,
+    pub(super) wm_state_read: bool,
     pub(super) layout_seen: layout_read::LayoutRects,
     pub(super) layout_reads: layout_read::LayoutReads,
 }
@@ -470,6 +474,7 @@ pub(super) struct Measured {
     pub(super) defaults: cx::ViewDefaults,
     pub(super) titlebar: crate::titlebar::TitlebarSet,
     pub(super) caret_read: bool,
+    pub(super) wm_state_read: Option<bool>,
     pub(super) layout_reads: layout_read::LayoutReads,
     pub(super) memo_flattened: Option<Vec<memo_reuse::PendingFlat>>,
     pub(super) memo_reused: Vec<memo_reuse::ReusedSpan>,

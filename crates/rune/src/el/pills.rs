@@ -110,7 +110,8 @@ impl El {
     /// stays on the line of the word that follows it, as an icon before a link does on a web
     /// page, and sits centred on that word's letters. Its glyph takes `icon`'s colour or the
     /// element's; an image (a site's favicon) draws as it is. Selection and copy skip it. With no
-    /// word after `at`, or over a pill, it draws nothing.
+    /// word after `at`, or over a pill, it draws nothing. It is decoration unless it has a name
+    /// ([`InlineIcon::label`]) or a tooltip ([`InlineIcon::help`]).
     ///
     /// ```
     /// # use rune::{Icon, InlineIcon, Span, rich};
@@ -134,8 +135,8 @@ impl El {
             return self;
         }
         let at = t.cold.pills.partition_point(|p| p.start < start);
-        let InlineIcon { icon, image, size, gap, radius, color } = icon;
-        let bare = Some(Box::new(BareIcon { size, gap, radius, image, replace: None }));
+        let InlineIcon { icon, image, size, gap, radius, color, label, help } = icon;
+        let bare = Some(Box::new(BareIcon { size, gap, radius, image, replace: None, label, help }));
         t.cold.pills.insert(at, PillChip { start, end, icon, image: None, bg: None, fg: color, ring: None, radius: None, bare });
         self
     }
@@ -173,7 +174,7 @@ impl El {
         let at = t.cold.pills.partition_point(|p| p.start < start);
         let InlineImage { pixels, width, ascent, descent, bleed } = image;
         let replace = Some(Replace { width, ascent, descent, bleed });
-        let bare = Some(Box::new(BareIcon { size: 0.0, gap: 0.0, radius: 0.0, image: Some(pixels), replace }));
+        let bare = Some(Box::new(BareIcon { size: 0.0, gap: 0.0, radius: 0.0, image: Some(pixels), replace, label: None, help: None }));
         t.cold.pills.insert(at, PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare });
         self
     }
@@ -279,16 +280,18 @@ pub struct InlineIcon {
     gap: f32,
     radius: f32,
     color: Option<Color>,
+    label: Option<String>,
+    help: Option<String>,
 }
 
 impl InlineIcon {
     /// `icon`, drawn in [`Self::color`] or the element's text colour.
     pub fn glyph(icon: &'static crate::Icon) -> Self {
-        Self { icon: Some(icon), image: None, size: 14.0, gap: 4.0, radius: 0.0, color: None }
+        Self { icon: Some(icon), image: None, size: 14.0, gap: 4.0, radius: 0.0, color: None, label: None, help: None }
     }
     /// An image (decoded pixels, such as a site's favicon), scaled to fit the square.
     pub fn image(pixels: crate::Pixels) -> Self {
-        Self { icon: None, image: Some(pixels), size: 14.0, gap: 4.0, radius: 0.0, color: None }
+        Self { icon: None, image: Some(pixels), size: 14.0, gap: 4.0, radius: 0.0, color: None, label: None, help: None }
     }
     /// Its side in points.
     pub fn size(mut self, points: f32) -> Self {
@@ -308,6 +311,23 @@ impl InlineIcon {
     /// A glyph's colour.
     pub fn color(mut self, c: Color) -> Self {
         self.color = Some(c);
+        self
+    }
+    /// Its name for assistive technology, as an `<img>`'s `aria-label`: the text's element
+    /// gains an image named `label` in the accessibility tree, where the icon draws. Without
+    /// one the icon is decoration and a reader skips it. An empty name is none.
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        let label = label.into();
+        self.label = (!label.is_empty()).then_some(label);
+        self
+    }
+    /// A tooltip shown while the pointer rests on the icon, as [`El::help`] shows an element's
+    /// (an HTML `title`): after the same delay, in the same look, under the icon. It is the
+    /// icon's own, over any help its element has. A named icon also reads it as its description
+    /// when it says something its name doesn't. An empty text is none.
+    pub fn help(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        self.help = (!text.is_empty()).then_some(text);
         self
     }
 }

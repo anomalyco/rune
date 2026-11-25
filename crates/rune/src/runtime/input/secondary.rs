@@ -242,6 +242,7 @@ impl RuntimeCore {
             rtl: n.flow == crate::el::Flow::Rtl,
             window: [x, y],
             screen: self.screen_at(x, y),
+            edge: None,
         };
         let path = n.path.clone();
         let drag_handler = n.handlers.on_drag.clone();

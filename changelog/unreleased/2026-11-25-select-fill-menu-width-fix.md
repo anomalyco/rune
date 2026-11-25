@@ -1,0 +1,1 @@
+- Kit: fixed `Select`'s open listbox `.shrink()` clobbering its default `160` pt minimum width, made `Select::fill()` shrink inside horizontal rows without overflowing, guarded non-finite `Select::menu_width` values, and added compiled doc examples and layout tests.

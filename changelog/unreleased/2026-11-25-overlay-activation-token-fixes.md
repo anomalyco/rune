@@ -1,0 +1,1 @@
+- Overlays: `OverlayHandle::activation_token` now captures touch-down serials alongside pointer-button and key presses, skips closed or unshown surfaces, drains the temporary Wayland queue after proxy destruction, and answers pending or post-drop requests with `None` on hide, close, or drop.

@@ -15,6 +15,7 @@ mod ambient_fps_story;
 mod any_handlers;
 mod any_press;
 mod emoji_family_story;
+mod haptics_story;
 mod inline_box_story;
 mod mount;
 mod pick;
@@ -744,6 +745,7 @@ fn main() {
                         .variant("25 / 75 · centred col", |s| { s.align = 1; s.split = 0.25; })
                         .variant("65 / 35 · row center_y", |s| { s.align = 3; s.split = 0.65; }),
                 )
+                .story(haptics_story::story())
                 .story(text_indent_story::story())
                 .story(inline_box_story::story())
                 .story(emoji_family_story::story())

@@ -853,6 +853,10 @@ impl<S: 'static> WindowSpec<S> {
         /// ```
         color_scheme(scheme: crate::ColorScheme);
         /// Opt-in whole-window system backdrop material, like [`App::window_backdrop`].
+        /// On Windows 11, DWM draws the material only while the window is the foreground window
+        /// and shows its own flat fallback while unfocused (so a non-activating window never shows
+        /// the live material even while [`Cx::window_backdrop`](crate::Cx::window_backdrop) is
+        /// active); pair with [`Self::on_focus`] if the view needs to distinguish focused state.
         ///
         /// ```no_run
         /// use rune::{AppSpec, WindowBackdrop, WindowOptions, WindowSpec, el};
@@ -998,6 +1002,24 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         ambient_fps(fps: f32);
+        /// Cap the swap chain's frame latency on macOS (`1` = 2 drawables, `2` = 3 drawables;
+        /// clamped to `1..=2`, default `2`), like [`App::frame_latency`]. Ignored on Windows,
+        /// Linux, and the web.
+        ///
+        /// With two drawables a frame that runs late waits instead of overlapping the next; at
+        /// 120 Hz that can show as a dropped frame during fast animation, whereas for a rarely
+        /// animating window it is the right trade. Applied at surface creation rather than live.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let _spec = WindowSpec::new(
+        ///     "panel",
+        ///     AppSpec::new("Panel", (488.0, 873.0), || (), |_, _| el()),
+        /// )
+        /// .frame_latency(1);
+        /// ```
+        frame_latency(frames: u32);
         /// Keep this window's layout reads across launches, like `App::layout_seed`.
         layout_seed(seed: Option<crate::LayoutSeed>, keep: impl FnMut(crate::LayoutSeed) + 'static);
         /// Draw every frame of this window through `compositor`, like `App::compositor`.

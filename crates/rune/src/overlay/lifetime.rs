@@ -154,6 +154,10 @@ impl OverlayCore {
         allow(dead_code)
     )]
     pub(super) fn layer_closed(&mut self, app: &mut dyn OverlayApp, reason: Option<&str>) {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(blur) = self.surface.live_mut().and_then(|l| l.wayland_backdrop.as_mut()) {
+            blur.mark_closed();
+        }
         let reason = reason.unwrap_or("compositor closed layer surface").to_owned();
         self.surface_refused(app, reason);
     }
@@ -206,6 +210,9 @@ impl OverlayCore {
         // then releases what it held.
         #[cfg(target_os = "macos")]
         { self.fn_key(app); self.media_keys(app); self.prime.stop(); }
+        // Answer any activation-token requests queued before a synchronous hide (such as
+        // `Shell::Close` from an input handler) while the surface is still shown and live.
+        self.answer_tokens();
         // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
         let fade = if cfg!(any(target_os = "macos", target_os = "windows")) { fade } else { Duration::ZERO };
         let effects = self.presence.step(presence::Event::Hide { fade, now: crate::time::now() }, self.release);
@@ -304,7 +311,14 @@ impl OverlayCore {
         // and a hidden overlay hears none. A focused one blurs here, so `on_focus(false)` runs
         // and the next show's focus is a change; what it held is released.
         if self.options.keys.takes_keys() {
-            if app.rt().window_has_focus() { app.window_focus(false); }
+            if app.rt().window_has_focus() {
+                app.window_focus(false);
+                // The overlay is already hiding: discard a close request from `on_focus(false)` so
+                // a fade-out's native blur (or the next show's focus event) cannot hide it again.
+                if matches!(app.rt().shell_request, Some(crate::el::Shell::Close)) {
+                    app.rt_mut().shell_request = None;
+                }
+            }
             app.rt_mut().keys_lost();
         }
         self.mods = Default::default();
@@ -314,6 +328,8 @@ impl OverlayCore {
         app.rt_mut().cancel_pointer();
         self.apply_cursor(app.rt());
         self.hidden_input(app);
+        // Any token requested by `on_focus(false)` while already hiding cannot wait for a live surface.
+        self.drain_tokens_none();
         let Some(live) = self.surface.live() else { return };
         match &live.backing {
             Backing::Window(window) => {
@@ -342,12 +358,20 @@ impl OverlayCore {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 if super::toplevel::is_toplevel(window) {
                     self.surface.take_live();
+                    let rt = app.rt_mut();
+                    rt.set_window_backdrop(crate::WindowBackdrop::None);
+                    rt.set_window_backdrop_supported_mask(0);
+                    rt.set_wayland_blur_materials(false);
                     self.drop_hidden_images(app);
                 }
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => {
                 self.surface.take_live();
+                let rt = app.rt_mut();
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 self.drop_hidden_images(app);
             }
         }

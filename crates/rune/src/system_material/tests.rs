@@ -552,3 +552,14 @@ fn fallback_notice_formats_single_and_multiple_overflows() {
     let many = fallback_notice(2, 6, 4);
     assert!(many.contains("2 of 6") && many.contains("5..=6") && many.contains("limit 4"), "{many}");
 }
+
+#[test]
+fn apps_read_the_frames_material_rects_without_native_views() {
+    let rt = runtime(one_card, false);
+    assert_eq!(rt.system_materials(), rt.paint.materials());
+    let (draws, scale) = present_draws(rt.core());
+    let frame = MaterialFrame::new(draws, scale);
+    assert_eq!(frame.scale(), 2.0);
+    assert_eq!(frame.draws().len(), 1);
+    assert_eq!(frame.draws()[0].points(frame.scale()), ([30.0, 20.0, 120.0, 60.0], 18.0));
+}

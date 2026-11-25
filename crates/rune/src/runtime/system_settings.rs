@@ -50,6 +50,25 @@ impl window_requests::HostState {
     }
 
     #[inline]
+    pub(super) fn set_window_backdrop_supported(&mut self, backdrop: crate::WindowBackdrop, supported: bool) -> bool {
+        let bit = backdrop.support_bit();
+        if bit == 0 {
+            return false;
+        }
+        let next = if supported { self.window_backdrop_supported | bit } else { self.window_backdrop_supported & !bit };
+        if next == self.window_backdrop_supported { return false; }
+        self.window_backdrop_supported = next;
+        true
+    }
+
+    #[inline]
+    pub(super) fn set_window_backdrop_supported_mask(&mut self, mask: u8) -> bool {
+        if mask == self.window_backdrop_supported { return false; }
+        self.window_backdrop_supported = mask;
+        true
+    }
+
+    #[inline]
     pub(super) fn set_backdrop_opaque_fallback(&mut self, fallback: bool) -> bool {
         if fallback == self.backdrop_opaque_fallback { return false; }
         self.backdrop_opaque_fallback = fallback;
@@ -105,6 +124,22 @@ impl window_requests::HostState {
             return false;
         }
         self.system_languages = Some(Rc::from(normalized));
+        self.languages_gen = self.languages_gen.wrapping_add(1);
+        true
+    }
+
+    #[inline]
+    pub(crate) fn safe_area(&self) -> [f32; 4] {
+        self.safe_area.unwrap_or_else(crate::runtime::cx::safe_area_insets)
+    }
+
+    pub(super) fn set_safe_area(&mut self, insets: [f32; 4]) -> bool {
+        let clean = insets.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+        let prev = self.safe_area();
+        self.safe_area = Some(clean);
+        if prev == clean {
+            return false;
+        }
         self.languages_gen = self.languages_gen.wrapping_add(1);
         true
     }
@@ -168,6 +203,13 @@ impl window_requests::HostState {
     pub(crate) fn overlay_scroll_bars(&self) -> bool {
         self.scroll_bars.state.is_overlay()
     }
+
+    #[inline]
+    pub(super) fn set_window_manager_state(&mut self, state: crate::WindowManagerState) -> bool {
+        if state == self.wm_state { return false; }
+        self.wm_state = state;
+        true
+    }
 }
 
 impl RuntimeCore {
@@ -200,6 +242,13 @@ impl RuntimeCore {
         if self.host.set_full_screen(full_screen) { self.commit.dirty = true; }
     }
 
+    /// What [`Cx::window_backdrop`] currently reports.
+    #[cfg_attr(not(all(target_os = "windows", feature = "windows-system-material")), allow(dead_code))]
+    #[inline]
+    pub(crate) fn window_backdrop(&self) -> crate::WindowBackdrop {
+        self.host.window_backdrop
+    }
+
     /// What [`Cx::window_backdrop`] reports. Native hosts set it only after the OS confirms the
     /// backdrop is active; a change re-runs the view and its memos.
     #[inline]
@@ -207,7 +256,37 @@ impl RuntimeCore {
         if self.host.set_window_backdrop(backdrop) { self.commit.dirty = true; }
     }
 
-    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    /// Sets whether `backdrop` is reported supported by [`Cx::window_backdrop_supported`] for
+    /// headless tests or hosts; a change re-runs the view and its memos. `WindowBackdrop::None` is
+    /// always supported and ignores changes.
+    #[inline]
+    pub fn set_window_backdrop_supported(&mut self, backdrop: crate::WindowBackdrop, supported: bool) {
+        if self.host.set_window_backdrop_supported(backdrop, supported) { self.commit.dirty = true; }
+    }
+
+    /// Replaces the entire supported-backdrop bitmask atomically; a change re-runs the view and
+    /// its memos.
+    #[cfg_attr(
+        not(any(
+            target_os = "windows",
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")),
+            test
+        )),
+        allow(dead_code)
+    )]
+    #[inline]
+    pub(crate) fn set_window_backdrop_supported_mask(&mut self, mask: u8) {
+        if self.host.set_window_backdrop_supported_mask(mask) { self.commit.dirty = true; }
+    }
+
+    #[cfg_attr(
+        not(any(
+            target_os = "windows",
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")),
+            test
+        )),
+        allow(dead_code)
+    )]
     #[inline]
     pub(crate) fn set_backdrop_opaque_fallback(&mut self, fallback: bool) {
         if self.host.set_backdrop_opaque_fallback(fallback) { self.commit.dirty = true; }
@@ -257,6 +336,20 @@ impl RuntimeCore {
         if self.host.set_languages(languages) { self.commit.dirty = true; }
     }
 
+    /// Current safe-area insets `[top, right, bottom, left]` in logical points: the host override
+    /// set via [`Self::set_safe_area`], else browser insets on `wasm32`, else `[0.0; 4]`.
+    #[inline]
+    pub(crate) fn safe_area(&self) -> [f32; 4] {
+        self.host.safe_area()
+    }
+
+    /// Sets the safe-area insets `[top, right, bottom, left]` in logical points reported by
+    /// [`Cx::safe_area`] and used for [`El::on_edge_drag`] bands. Negative or non-finite values
+    /// clamp to `0.0`. A change re-runs the view and its memos.
+    pub fn set_safe_area(&mut self, insets: [f32; 4]) {
+        if self.host.set_safe_area(insets) { self.commit.dirty = true; }
+    }
+
     #[inline]
     pub(crate) fn system_scroll_bars_state(&self) -> crate::platform::scroll_bars::SystemScrollBars {
         self.host.system_scroll_bars_state()
@@ -289,5 +382,29 @@ impl RuntimeCore {
     #[inline]
     pub fn set_system_scroller_jumps(&mut self, jumps: bool) {
         if self.host.set_system_scroller_jumps(jumps) { self.commit.dirty = true; }
+    }
+
+    /// The last stored [`crate::WindowManagerState`].
+    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+    #[inline]
+    pub(crate) fn window_manager_state(&self) -> crate::WindowManagerState {
+        self.host.wm_state
+    }
+
+    /// What [`Cx::decoration_mode`], [`Cx::tiled_edges`], and [`Cx::window_actions`] report.
+    /// Updates the stored state and marks the runtime dirty when it changed and the last
+    /// committed view read any of those accessors. Returns whether the runtime was dirtied.
+    #[inline]
+    pub(crate) fn sync_window_manager_state(&mut self, state: crate::WindowManagerState) -> bool {
+        if !self.host.set_window_manager_state(state) { return false; }
+        if !self.host.wm_state_read { return false; }
+        self.commit.dirty = true;
+        true
+    }
+
+    /// What [`Cx::decoration_mode`], [`Cx::tiled_edges`], and [`Cx::window_actions`] report.
+    #[inline]
+    pub fn set_window_manager_state(&mut self, state: crate::WindowManagerState) {
+        let _ = self.sync_window_manager_state(state);
     }
 }

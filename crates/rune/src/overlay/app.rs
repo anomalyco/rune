@@ -254,7 +254,7 @@ fn build_parts<S, T: 'static>(
 ) -> (OverlayCore, TypedOverlayApp<T>, OverlayHandle<T>, bool) {
     let ConfiguredOverlay {
         spec, options, on_key, on_created, on_availability, poll, compositor, setup, mut runtime, font_smoothing,
-        macos_level, macos_color_space, window_backdrop, animate_reveal, release_after,
+        macos_level, macos_color_space, window_backdrop, frame_latency, on_materials, animate_reveal, release_after,
     } = configured;
     let inherits_font_smoothing = font_smoothing.is_none();
     runtime.font_smoothing = font_smoothing.unwrap_or(app_font_smoothing);
@@ -272,7 +272,7 @@ fn build_parts<S, T: 'static>(
     }));
     rt.set_live_visible(false);
     let at = Placement { size: spec.size, edge: spec.edge, margin: spec.margin, align: spec.align, inset: spec.inset };
-    let core = OverlayCore::new(
+    let mut core = OverlayCore::new(
         rt.core_mut(),
         shared_core,
         spec.name,
@@ -286,6 +286,8 @@ fn build_parts<S, T: 'static>(
         animate_reveal,
         release_after,
     );
+    core.frame_latency = frame_latency;
+    core.on_materials = on_materials;
     let typed = TypedOverlayApp { rt, compositor, setup, on_availability, shared: shared.clone() };
     (core, typed, OverlayHandle { shared }, inherits_font_smoothing)
 }
@@ -463,6 +465,8 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn hidden_input(&mut self) { with_app!(self, |core, app| core.hidden_input(&mut app)) }
     pub(super) fn apply_input(&mut self) { self.core.apply_input(self.rt.core()) }
     pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) { with_app!(self, |core, app| core.left_button(&mut app, pressed, point)) }
+    #[cfg(test)]
+    pub(super) fn cursor_moved(&mut self, x: f32, y: f32) { with_app!(self, |core, app| core.cursor_moved(&mut app, x, y)) }
     pub(super) fn touch_event(&mut self, touch: &winit::event::Touch) {
         with_app!(self, |core, app| {
             let app: &mut dyn OverlayApp = &mut app;

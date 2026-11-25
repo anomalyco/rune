@@ -536,6 +536,7 @@ impl FrameHost for CpuWindowFrame<'_> {
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
         let now = self.now.unwrap_or(submitted);
         self.host.meter.presented();
+        crate::haptics::flush_live(self.host.app.rt_mut(), false);
         self.host.frame_reports.drawn(self.encoded, None, now, info.update_ms);
         self.host.app.inspect_frame();
         let Some(l) = self.host.win.as_mut() else { return };

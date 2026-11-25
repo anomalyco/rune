@@ -212,7 +212,9 @@ impl RuntimeCore {
                     || n.vis.pixels.is_some()
                     || n.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image))
                     || n.vis.surface.is_some()
-                    || (n.material.is_some() && self.paint.native_materials)
+                    // Material rects are listed only while painting, and apps read them
+                    // (`Runtime::system_materials`) with or without native views.
+                    || n.material.is_some()
                     // Never retain a raster of a secret, even when the field is unfocused.
                     || n.text.as_ref().is_some_and(|t| t.redacted)
                     || n.input.as_ref().is_some_and(|inp| inp.edit.focused || inp.edit.is_secure())

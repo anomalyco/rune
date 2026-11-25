@@ -33,7 +33,7 @@ fn a_focused_key_taking_overlay_blurs_on_hide_and_hears_the_next_shows_focus() {
 /// An overlay that never had focus hears no blur when it hides.
 #[test]
 fn an_unfocused_overlay_hears_no_blur_on_hide() {
-    for keys in [KeyPolicy::None, KeyPolicy::OnDemand] {
+    for keys in [KeyPolicy::None, KeyPolicy::OnDemand, KeyPolicy::Exclusive] {
         let mut overlay = overlay(keys);
         overlay.presence = Presence::Shown { occluded: false };
         overlay.rt.frame(0.0);
@@ -41,4 +41,90 @@ fn an_unfocused_overlay_hears_no_blur_on_hide() {
         overlay.rt.frame(0.0);
         assert!(overlay.rt.state.is_empty(), "{keys:?}");
     }
+}
+
+/// An `on_focus(false)` handler that closes the overlay on blur must not leave a stale
+/// `Shell::Close` behind when the overlay is already hiding (including during a macOS or Windows
+/// fade-out, where `hidden_input` does not advance), and a native `Focused(false)` that follows
+/// must neither repeat `on_focus(false)` nor re-hide the overlay.
+#[test]
+fn shell_close_from_hide_blur_does_not_linger_or_abort_a_fade() {
+    for keys in [KeyPolicy::OnDemand, KeyPolicy::Exclusive] {
+        let app = AppSpec::new("launcher", (40.0, 20.0), Vec::new, view);
+        let spec = OverlaySpec::new("launcher", app.size, view)
+            .options(OverlayOptions { keys, ..Default::default() })
+            .on_focus(|seen: &mut Vec<bool>, focused, tx| {
+                seen.push(focused);
+                if !focused { tx.close_window(); }
+            });
+        let (mut overlay, _) = Overlay::new(spec, Vec::new(), &app);
+        overlay.rt.frame(0.0);
+
+        // Immediate hide while focused.
+        overlay.presence = Presence::Shown { occluded: false };
+        overlay.rt.window_focus(true);
+        overlay.hide();
+        assert_eq!(overlay.rt.state, [true, false], "{keys:?}");
+        assert_eq!(overlay.rt.shell_request, None, "{keys:?}: immediate hide discards its own blur's Shell::Close");
+        assert!(!overlay.presence.shown(), "{keys:?}");
+
+        // Fading hide while focused (macOS/Windows keep drawing through the fade, so hidden_input
+        // does not run): Shell::Close must still be cleared so the subsequent native blur does not
+        // abort the fade-out or hide the overlay twice.
+        overlay.presence = Presence::Shown { occluded: false };
+        overlay.rt.window_focus(true);
+        overlay.hide_fading(std::time::Duration::from_millis(150));
+        assert_eq!(overlay.rt.state, [true, false, true, false], "{keys:?}");
+        assert_eq!(overlay.rt.shell_request, None, "{keys:?}: fade-out hide discards its own blur's Shell::Close");
+        if cfg!(any(target_os = "macos", target_os = "windows")) {
+            assert!(overlay.presence.fading(), "{keys:?}: blur close request must not abort the fade-out");
+        }
+        // Native Focused(false) arriving after hide (macOS ResignKey / Windows SW_HIDE).
+        overlay.rt.window_focus(false);
+        assert_eq!(overlay.rt.state, [true, false, true, false], "{keys:?}: native blur after hide is deduplicated");
+        assert_eq!(overlay.rt.shell_request, None, "{keys:?}");
+
+        // Blur-first path (clicking outside): on_focus(false) queues Shell::Close, host takes it
+        // and calls hide(), and hide_window does not fire a second blur.
+        overlay.presence = Presence::Shown { occluded: false };
+        overlay.rt.window_focus(true);
+        overlay.rt.window_focus(false);
+        assert_eq!(overlay.rt.shell_request.take(), Some(crate::el::Shell::Close), "{keys:?}");
+        overlay.hide();
+        assert_eq!(overlay.rt.state, [true, false, true, false, true, false], "{keys:?}");
+        assert_eq!(overlay.rt.shell_request, None, "{keys:?}");
+    }
+}
+
+/// Native platforms (macOS, Windows) still deliver `WindowEvent::Focused(false)` when the panel or
+/// window hides. Both `ConfiguredOverlay::on_focus` and `El::on_window_focus` must hear each edge
+/// exactly once across show -> hide -> native blur -> show.
+#[test]
+fn native_blur_after_hide_does_not_double_report_focus_loss() {
+    #[derive(Default)]
+    struct Seen { callback: Vec<bool>, element: Vec<bool> }
+    fn focus_view(_: &Seen, _: &mut Cx<Seen>) -> El {
+        el().size(20.0, 20.0).on_window_focus(|s: &mut Seen, focused, _| s.element.push(focused))
+    }
+    let app = AppSpec::new("focus", (40.0, 20.0), Seen::default, focus_view);
+    let spec = OverlaySpec::new("focus", app.size, focus_view)
+        .options(OverlayOptions { keys: KeyPolicy::OnDemand, ..Default::default() })
+        .on_focus(|s: &mut Seen, focused, _| s.callback.push(focused));
+    let (mut overlay, _) = Overlay::new(spec, Seen::default(), &app);
+    overlay.rt.frame(0.0);
+
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.window_focus(true);
+    overlay.advance();
+    overlay.hide();
+    // Native WindowEvent::Focused(false) after hide_window (macOS ResignKey / Windows SW_HIDE).
+    overlay.rt.window_focus(false);
+    overlay.hidden_input();
+    // Next show regains focus.
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.window_focus(true);
+    overlay.advance();
+
+    assert_eq!(overlay.rt.state.callback, [true, false, true]);
+    assert_eq!(overlay.rt.state.element, [true, false, true]);
 }

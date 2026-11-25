@@ -83,7 +83,7 @@ pub(crate) enum Acquire<D> {
 pub(crate) enum ReacquireReason {
     /// Native system materials (e.g. macOS visual effect views) turned on during the step; the
     /// host rebuilds with native materials enabled before re-acquiring.
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
     NativeMaterials,
     /// A handler changed `Tx::set_srgb_blend`; the surface and renderer reconfigure for the new
     /// target format before re-acquiring.

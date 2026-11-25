@@ -56,7 +56,7 @@ target/perf/examples/light bench
 
 | Input | Form | Notes |
 |---|---|---|
-| Primitives | `&[Prim]`, device px, in draw order | Rune's instance rect and radii plus `z` (bottom, top, bevel width, bevel height), `gloss`/`roughness`, flags `OCCLUDER` / `EMISSIVE` / `RAISED`, emitted radiance, albedo. Painter's order decides which surface owns a pixel. |
+| Primitives | `&[Prim]`, device px, in draw order | Rune's instance rect and radii plus `z` (bottom, top, bevel width, bevel height), `gloss`/`roughness`, flags `OCCLUDER` / `EMISSIVE` / `RAISED` / `UNLIT` (`Prim::unlit`: its own pixels keep the designed colour, while an emitter still lights its neighbours), emitted radiance, albedo. Painter's order decides which surface owns a pixel. |
 | Lights | `&[Light]`, up to 8 | position + height, linear colour × intensity, source radius, range, optional torch cone (`spot`), `shafts`, `bulb`, `specular`, `softness`. Animate any field with Rune springs; fade a light out with `scaled(k)` (lights cool, never cut). |
 | UI colour | `base`: the frame without text (linear, filterable; Rgba16Float works) | Used as albedo. |
 | Text | `text`: glyphs only, premultiplied linear, transparent elsewhere | Lit like the surface beneath, clamped by `TextPolicy { floor, ceiling }`, so shadows never crush it and highlights never wash it out. `lit: 0` leaves text unlit. |

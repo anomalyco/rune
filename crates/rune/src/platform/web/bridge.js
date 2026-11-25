@@ -288,7 +288,12 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (h.disposed) return;
         const locked = document.pointerLockElement === canvas;
         if (locked) {
-            if (!h.pointerLockPending && !h.pointerLocked) {
+            if (h.pointerLocked) {
+                // Second pointerlockchange from an in-place option upgrade (W3C Pointer Lock 2.0
+                // step 6.3.2): already locked, no duplicate event to Rust.
+                return;
+            }
+            if (!h.pointerLockPending) {
                 // Lock arrived after Rune cancelled or unmounted: exit immediately.
                 if (typeof document.exitPointerLock === 'function') {
                     try { document.exitPointerLock(); } catch {}
@@ -298,7 +303,9 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             h.pointerLocked = true;
             h.pointerLockPending = false;
             h.pointerLockHasPromise = false;
+            const seq = h.pointerLockSeq;
             send({ kind: 'pointer_lock', locked: true });
+            upgradeUnadjustedMovement(h, seq);
         } else if (h.pointerLocked) {
             h.pointerLocked = false;
             h.pointerLockPending = false;
@@ -698,8 +705,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }
     queueMicrotask(() => {
         if (!h.disposed && !embedded && !page && document.activeElement === document.body) {
-            (h.key ? h.field : canvas).focus({ preventScroll: true });
-            if (h.key) reselect(h);
+            if (h.key) focusInput(h);
+            else canvas.focus({ preventScroll: true });
         }
     });
     return h;
@@ -716,6 +723,18 @@ function reselect(h) {
         try { h.textarea.setSelectionRange(start, end, direction); }
         finally { h.syncing = syncing; }
     }
+}
+
+// Prepares and focuses the active hidden input (`h.textarea` or `h.password`) when `h.key` is set.
+// Sets `inert = false` and `inputMode = 'text'` BEFORE calling `focus()` so iOS Safari evaluates
+// `shouldShowAutomaticKeyboardUI` with an editable `inputMode` at the moment of focus (while
+// keeping `opacity: 0` so WebKit suppresses native selection UI and zoom-to-focus per r238146).
+function focusInput(h) {
+    const field = h.field;
+    field.inert = false;
+    field.inputMode = 'text';
+    if (document.activeElement !== field) field.focus({ preventScroll: true });
+    reselect(h);
 }
 
 export function sync(h, key, text, base, anchor, focus, secure) {
@@ -747,8 +766,11 @@ export function sync(h, key, text, base, anchor, focus, secure) {
             h.selection = [start, end, direction];
         }
         if (editing && active !== h.field) activate(h);
-        else if (active === h.canvas) h.field.focus({ preventScroll: true });
-        reselect(h);
+        else if (active === h.canvas) focusInput(h);
+        else {
+            h.field.inputMode = 'text';
+            reselect(h);
+        }
         (secure ? h.textarea : h.password).inert = true;
     }
     h.syncing = false;
@@ -775,11 +797,40 @@ export function syncMediaKeys(h, enabled) {
     h.mediaKeys = !!enabled;
 }
 
-// Requests pointer lock on the canvas inside a user gesture. Tries `{ unadjustedMovement: true }`
-// first for raw unaccelerated deltas where supported, caching and falling back to plain
-// `requestPointerLock()` on `NotSupportedError` or synchronous `TypeError`. Any refusal
-// (`SecurityError`, missing API, or failed fallback) reports `{ kind: 'pointer_lock', locked: false }`
-// so Rune's state machine returns cleanly to Ready without getting stuck.
+// Upgrades an already-active plain pointer lock to `{ unadjustedMovement: true }` in place
+// (W3C Pointer Lock 2.0 step 6.3). If unsupported, the original plain lock remains intact and
+// the fallback is cached so later locks skip the upgrade.
+function upgradeUnadjustedMovement(h, seq) {
+    if (h.disposed || h.pointerLockUnadjustedFailed || !h.pointerLocked || h.pointerLockSeq !== seq) return;
+    const canvas = h.canvas;
+    if (document.pointerLockElement !== canvas || typeof canvas.requestPointerLock !== 'function') return;
+    try {
+        const res = canvas.requestPointerLock({ unadjustedMovement: true });
+        if (res && typeof res.then === 'function') {
+            res.then(
+                () => {},
+                err => {
+                    if (err && err.name === 'NotSupportedError') {
+                        h.pointerLockUnadjustedFailed = true;
+                    }
+                },
+            );
+        } else {
+            h.pointerLockUnadjustedFailed = true;
+        }
+    } catch (err) {
+        if (err && (err.name === 'NotSupportedError' || err.name === 'TypeError')) {
+            h.pointerLockUnadjustedFailed = true;
+        }
+    }
+}
+
+// Requests plain pointer lock synchronously inside the user gesture so the first click never
+// depends on an asynchronous retry (which can lose transient activation or race a stale
+// `pointerlockerror` when a platform rejects `unadjustedMovement`). Once `pointerlockchange`
+// confirms the lock, `upgradeUnadjustedMovement` upgrades it in place where supported. Any
+// refusal (`SecurityError`, missing API, or `pointerlockerror`) reports
+// `{ kind: 'pointer_lock', locked: false, refused: true }` so Rune returns cleanly to Ready.
 export function requestPointerLock(h) {
     if (h.disposed) return;
     const canvas = h.canvas;
@@ -798,70 +849,28 @@ export function requestPointerLock(h) {
         h.pointerLockHasPromise = false;
         h.send({ kind: 'pointer_lock', locked: false, refused: true });
     };
-    const invoke = opts => {
+    h.syncing = true;
+    try {
         h.pointerLockCalling = true;
         h.pointerLockSyncError = false;
+        let res;
         try {
-            return opts === undefined ? canvas.requestPointerLock() : canvas.requestPointerLock(opts);
+            res = canvas.requestPointerLock();
         } finally {
             h.pointerLockCalling = false;
         }
-    };
-    const tryPlain = () => {
-        if (h.disposed || h.pointerLockSeq !== seq) return;
-        try {
-            const res = invoke(undefined);
-            if (res && typeof res.then === 'function') {
-                h.pointerLockHasPromise = true;
-                h.pointerLockSyncError = false;
-                res.then(
-                    () => { if (h.pointerLockSeq === seq) h.pointerLockHasPromise = false; },
-                    fail,
-                );
-            } else if (h.pointerLockSyncError) {
-                h.pointerLockSyncError = false;
-                fail();
-            }
-        } catch {
+        if (res && typeof res.then === 'function') {
+            // Keep `pointerLockHasPromise` true until `pointerlockchange` or `fail`, never
+            // clearing it in a fulfillment microtask before `pointerlockchange` fires.
+            h.pointerLockHasPromise = true;
+            h.pointerLockSyncError = false;
+            res.then(() => {}, fail);
+        } else if (h.pointerLockSyncError) {
+            h.pointerLockSyncError = false;
             fail();
         }
-    };
-    h.syncing = true;
-    try {
-        if (h.pointerLockUnadjustedFailed) {
-            tryPlain();
-            return;
-        }
-        try {
-            const res = invoke({ unadjustedMovement: true });
-            if (res && typeof res.then === 'function') {
-                h.pointerLockHasPromise = true;
-                h.pointerLockSyncError = false;
-                res.then(
-                    () => { if (h.pointerLockSeq === seq) h.pointerLockHasPromise = false; },
-                    err => {
-                        if (h.disposed || h.pointerLockSeq !== seq) return;
-                        h.pointerLockHasPromise = false;
-                        if (err && err.name === 'NotSupportedError') {
-                            h.pointerLockUnadjustedFailed = true;
-                            tryPlain();
-                            return;
-                        }
-                        fail();
-                    },
-                );
-            } else if (h.pointerLockSyncError) {
-                h.pointerLockSyncError = false;
-                fail();
-            }
-        } catch (err) {
-            if (err && (err.name === 'NotSupportedError' || err.name === 'TypeError')) {
-                h.pointerLockUnadjustedFailed = true;
-                tryPlain();
-            } else {
-                fail();
-            }
-        }
+    } catch {
+        fail();
     } finally {
         h.syncing = false;
     }
@@ -1352,7 +1361,7 @@ function safeHref(url) {
     return null;
 }
 
-const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div' };
+const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div', textbox: 'div' };
 const RANGE_ROLES = new Set(['slider', 'spinbutton', 'progressbar', 'meter', 'scrollbar']);
 
 function family(name) {
@@ -1417,7 +1426,7 @@ function itemStyle(h, item, origin) {
     if (item.k === 'link') return css + (item.dis
         ? 'display:block;overflow:hidden;text-decoration:none;pointer-events:none;font:14px/1.25 sans-serif;'
         : 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;');
-    if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
+    if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar' || item.k === 'textbox') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
     const fs = item.s || 14;
     if (!item.f) return css + `font:${fs}px/1.25 sans-serif;overflow:hidden;white-space:pre-wrap;pointer-events:none;`;
     const [fam, weight, lh, tracking, italic, align] = item.f;
@@ -1468,10 +1477,25 @@ function ensureA11yNode(h, item, tag, key) {
             el.addEventListener('click', ev => {
                 ev.preventDefault();
                 if (el.getAttribute('aria-disabled') === 'true') return;
-                h.send({ kind: 'a11y_press', path: item.p });
+                h.send({ kind: 'a11y_press', path: el._a11yPath });
             });
         }
         h.a11yNodes.set(key, el);
+    }
+    if (item.k === 'textbox' && !el._textboxBound) {
+        el._textboxBound = true;
+        el.tabIndex = h.page ? 0 : -1;
+        const focusField = () => {
+            if (el.getAttribute('aria-disabled') === 'true' || h.disposed || h.syncing) return;
+            h.send({ kind: 'a11y_press', path: el._a11yPath });
+        };
+        el.addEventListener('click', ev => {
+            ev.preventDefault();
+            focusField();
+        });
+        el.addEventListener('focus', () => {
+            focusField();
+        });
     }
     el._a11yPath = item.p;
     h.a11yByPath.set(item.p, el);
@@ -1509,6 +1533,10 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-valuetext', item.vt],
         ['aria-multiselectable', item.ms ? 'true' : undefined],
         ['aria-required', item.rq ? 'true' : undefined],
+        ['aria-multiline', item.ml ? 'true' : undefined],
+        ['aria-readonly', item.ro ? 'true' : undefined],
+        ['aria-invalid', item.inv ? 'true' : undefined],
+        ['aria-placeholder', item.ph],
         ['aria-haspopup', item.hp],
         ['aria-orientation', item.or],
         ['aria-autocomplete', item.ac],
@@ -1566,8 +1594,9 @@ function applyA11yItem(h, el, item, tag, origin) {
         }
     }
     const combobox = item.k === 'button' && item.o === 'combobox';
+    const textbox = item.k === 'textbox';
     const rangeControl = item.k === 'button' && (item.o === 'slider' || item.o === 'spinbutton');
-    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox || rangeControl) {
+    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox || textbox || rangeControl) {
         if (item.t) {
             if (el.getAttribute('aria-label') !== item.t) el.setAttribute('aria-label', item.t);
         } else if (el.getAttribute('aria-label') !== null) {
@@ -1608,7 +1637,7 @@ function applyA11yItem(h, el, item, tag, origin) {
     syncScrollContent(el, item.k === 'group' ? item.sc : null);
     const container = item.k === 'group' || item.k === 'scroll_x';
     const noContent = container || item.k === 'image' || item.k === 'progressbar';
-    const content = combobox ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
+    const content = (combobox || textbox) ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
     const sig = noContent ? '' : item.u?.length ? `${item.dis ? '1' : '0'}:${JSON.stringify(item.u)}` : content;
     if (!noContent && el._sig !== sig) {
         el._sig = sig;
@@ -1776,6 +1805,33 @@ function clearMirrorSelection(h) {
     h.mirrorSel = false;
 }
 
+function clearFocusProxy(el) {
+    for (const a of [...el.attributes]) {
+        if (a.name === 'role' || a.name.startsWith('aria-') || a.name === 'data-rune-selection') {
+            el.removeAttribute(a.name);
+        }
+    }
+    el.textContent = '';
+}
+
+function syncFieldA11y(field, f, defaultLabel) {
+    field.setAttribute('aria-label', (f && f.t) || defaultLabel);
+    const attrs = [
+        ['aria-description', f?.d || undefined],
+        ['aria-disabled', f?.dis ? 'true' : undefined],
+        ['aria-readonly', f?.ro ? 'true' : undefined],
+        ['aria-invalid', f?.inv ? 'true' : undefined],
+        ['aria-required', f?.rq ? 'true' : undefined],
+        ['aria-placeholder', f?.ph || undefined],
+        ['aria-autocomplete', f?.ac || undefined],
+        ['aria-multiline', field.tagName === 'TEXTAREA' && f ? (f.ml ? 'true' : 'false') : undefined],
+    ];
+    for (const [name, value] of attrs) {
+        if (value === undefined) field.removeAttribute(name);
+        else field.setAttribute(name, value);
+    }
+}
+
 export function focusA11y(h, json) {
     if (h.disposed || h.page) return;
     const f = json ? JSON.parse(json) : null;
@@ -1793,16 +1849,35 @@ export function focusA11y(h, json) {
     }
     if (!f) {
         h.canvas.removeAttribute('aria-activedescendant');
-        h.textarea.removeAttribute('aria-autocomplete');
+        h.textarea.removeAttribute('aria-activedescendant');
+        for (const p of h.focusProxies) clearFocusProxy(p);
+        syncFieldA11y(h.textarea, null, 'Text input');
+        syncFieldA11y(h.password, null, 'Password input');
         clearMirrorSelection(h);
         return;
     }
-    if (f.o === 'textbox') h.textarea.setAttribute('aria-label', f.t || 'Text input');
+    if (f.o === 'textbox' && !f.f) {
+        // The bridge's real <textarea> or <input type="password"> is the sole active control:
+        // clear the canvas focus proxies so no duplicate textbox node appears in the tree.
+        h.canvas.removeAttribute('aria-activedescendant');
+        h.textarea.removeAttribute('aria-activedescendant');
+        for (const p of h.focusProxies) clearFocusProxy(p);
+        if (f.sec) {
+            syncFieldA11y(h.password, f, 'Password input');
+            syncFieldA11y(h.textarea, null, 'Text input');
+        } else {
+            syncFieldA11y(h.textarea, f, 'Text input');
+            syncFieldA11y(h.password, null, 'Password input');
+        }
+        clearMirrorSelection(h);
+        return;
+    }
+    syncFieldA11y(h.password, null, 'Password input');
     if (f.f) h.textarea.setAttribute('aria-label', f.f);
+    clearFocusProxy(h.focusProxies[h.focusTurn]);
     h.focusTurn ^= 1;
     const el = h.focusProxies[h.focusTurn];
-    for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-') || a.name === 'data-rune-selection') el.removeAttribute(a.name);
-    el.textContent = '';
+    clearFocusProxy(el);
     el.setAttribute('role', f.o);
     el.setAttribute('aria-label', f.t ?? '');
     if (f.d) el.setAttribute('aria-description', f.d);
@@ -1816,6 +1891,9 @@ export function focusA11y(h, json) {
     if (f.b) el.setAttribute('aria-busy', 'true');
     if (f.ms) el.setAttribute('aria-multiselectable', 'true');
     if (f.rq) el.setAttribute('aria-required', 'true');
+    if (f.ml) el.setAttribute('aria-multiline', 'true');
+    if (f.inv) el.setAttribute('aria-invalid', 'true');
+    if (f.ph) el.setAttribute('aria-placeholder', f.ph);
     if (f.hp) el.setAttribute('aria-haspopup', f.hp);
     if (f.or) el.setAttribute('aria-orientation', f.or);
     if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
@@ -1845,9 +1923,8 @@ export function focusA11y(h, json) {
     }
     h.canvas.setAttribute('aria-activedescendant', el.id);
     // Typing in a field whose highlighted row this is (the palette): the field says it too.
-    if (f.o !== 'textbox') h.textarea.setAttribute('aria-activedescendant', el.id);
-    else h.textarea.removeAttribute('aria-activedescendant');
-    const taAc = f.fac ?? ((f.o === 'textbox' || f.o === 'combobox') ? f.ac : undefined);
+    h.textarea.setAttribute('aria-activedescendant', el.id);
+    const taAc = f.fac ?? (f.o === 'combobox' ? f.ac : undefined);
     if (taAc) h.textarea.setAttribute('aria-autocomplete', taAc);
     else h.textarea.removeAttribute('aria-autocomplete');
 }
@@ -2138,10 +2215,8 @@ export function activate(h) {
     // A page's canvas is `tabindex="-1"`: focusing it on a tap would only drop the reader's text
     // selection or a link's focus. An input that took the keyboard still gets it.
     if (h.page && !h.key) return;
-    const field = h.key ? h.field : h.canvas;
-    if (h.key) field.inputMode = 'text';
-    if (document.activeElement !== field) field.focus({ preventScroll: true });
-    if (h.key) reselect(h);
+    if (h.key) focusInput(h);
+    else if (document.activeElement !== h.canvas) h.canvas.focus({ preventScroll: true });
 }
 
 // Browser `File` handles a paste or drop offered the focused field, by id, for

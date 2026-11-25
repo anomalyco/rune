@@ -8,23 +8,23 @@ use crate::time::Instant;
 /// shaders compile, which left a settled window one drawable (about 12 MB at 980x760) heavier.
 /// Raising the count later makes no drawable until a frame needs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::window) enum LaunchDrawables {
+pub(crate) enum LaunchDrawables {
     Capped { steady: u32, since: Option<Instant> },
     Steady,
 }
 
 impl LaunchDrawables {
-    pub(in crate::window) const LAUNCH: Duration = Duration::from_secs(1);
+    pub(crate) const LAUNCH: Duration = Duration::from_secs(1);
 
     /// Caps a new surface's `config` at two drawables.
-    pub(in crate::window) fn cap(config: &mut wgpu::SurfaceConfiguration) -> Self {
+    pub(crate) fn cap(config: &mut wgpu::SurfaceConfiguration) -> Self {
         if config.desired_maximum_frame_latency <= 1 { return Self::Steady; }
         let steady = std::mem::replace(&mut config.desired_maximum_frame_latency, 1);
         Self::Capped { steady, since: None }
     }
 
     /// After a frame on screen: the frame latency to configure, once, when launch ends.
-    pub(in crate::window) fn settle(&mut self, idle: bool, now: Instant) -> Option<u32> {
+    pub(crate) fn settle(&mut self, idle: bool, now: Instant) -> Option<u32> {
         let Self::Capped { steady, since } = self else { return None };
         let since = *since.get_or_insert(now);
         if !idle && now.duration_since(since) < Self::LAUNCH { return None; }

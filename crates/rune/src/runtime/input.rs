@@ -34,3 +34,4 @@ pub(super) mod primary_selection;
 pub(super) mod secondary;
 pub(super) mod titlebar;
 pub(super) mod touch;
+pub(super) mod touch_machine;

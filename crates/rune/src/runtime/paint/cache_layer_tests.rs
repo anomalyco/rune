@@ -297,3 +297,74 @@ fn an_app_stepped_el_scale_keeps_its_settle_window() {
     }
     assert!((2..=12).contains(&frames), "settle window runs for ~0.1 s then stops: {frames}");
 }
+
+/// A material element under `El::cache()` keeps its rect in `Runtime::system_materials` on
+/// frames where only something outside the cache moves, with native materials off. The control
+/// (a plain fill in the same place) shows that the cache would otherwise reuse its raster on
+/// those frames, skipping the paint that lists material rects.
+#[test]
+fn a_material_under_a_cache_stays_listed_while_something_else_animates() {
+    fn view(s: &(f32, bool), _: &mut Cx<(f32, bool)>) -> El {
+        let card = crate::el().absolute(30.0, 20.0).size(120.0, 60.0).radius(18.0);
+        let card = if s.1 { card.system_material(crate::SystemMaterial::Glass) } else { card.fill(Color::WHITE) };
+        crate::el().size(200.0, 120.0)
+            .child(crate::el().key("cache").size(200.0, 100.0).cache().child(card))
+            .child(crate::el().key("dot").absolute(s.0, 100.0).size(10.0, 10.0).fill(Color::WHITE))
+    }
+    let run = |material: bool, check: &mut dyn FnMut(&Runtime<(f32, bool)>)| {
+        let mut rt = Runtime::new((0.0_f32, material), view, (200.0, 120.0), Env { scale: 2.0, system_dark: true });
+        rt.paint.set_native_materials(false);
+        rt.frame(0.0);
+        rt.frame(1.0 / 60.0);
+        check(&rt);
+        rt.update(|s, tx| { s.0 = 150.0; tx.motion(crate::Spring::new(0.3, 0.0)); });
+        rt.frame(1.0 / 120.0);
+        for _ in 0..3 {
+            rt.frame(0.05);
+            assert!(rt.animating, "the sibling is still moving");
+            check(&rt);
+        }
+    };
+    // Control: with a plain fill the cache keeps a raster across the sibling's motion.
+    run(false, &mut |rt: &Runtime<(f32, bool)>| {
+        let i = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("cache")).unwrap();
+        assert!(rt.paint.node_caches.contains_key(&rt.tree.nodes[i].id), "the plain subtree is cached");
+    });
+    let mut first = None;
+    run(true, &mut |rt: &Runtime<(f32, bool)>| {
+        let now = rt.system_materials().to_vec();
+        assert_eq!(now.len(), 1, "a cached ancestor must not hide the material's rect");
+        assert_eq!(now[0].rect, [60.0, 40.0, 240.0, 120.0]);
+        assert_eq!(*first.get_or_insert_with(|| now.clone()), now);
+    });
+}
+
+/// Proves that a resident `El::cache()` subtree without any `El::system_material` still elides
+/// its inner quads while a sibling animates, with zero `PaintKeep` mismatches.
+#[test]
+fn cached_subtree_without_material_elides_inner_quads_unchanged() {
+    fn view(x: &f32, _: &mut Cx<f32>) -> El {
+        crate::el().size(200.0, 120.0)
+            .child(
+                crate::el().key("plain-cache").size(160.0, 80.0).cache()
+                    .child(crate::el().absolute(4.0, 4.0).size(40.0, 30.0).fill(Color::WHITE))
+                    .child(crate::el().absolute(52.0, 4.0).size(40.0, 30.0).fill(Color::WHITE))
+                    .child(crate::el().absolute(100.0, 4.0).size(40.0, 30.0).fill(Color::WHITE)),
+            )
+            .child(crate::el().key("mover").absolute(*x, 90.0).size(10.0, 10.0).fill(Color::WHITE))
+    }
+    let mut rt = Runtime::new(0.0_f32, view, (200.0, 120.0), Env { scale: 1.0, system_dark: true });
+    rt.frame(0.0);
+    let cache_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("plain-cache")).unwrap().id;
+    let first_instances = rt.instances.len();
+    assert!(first_instances >= 5, "initial frame paints cached children + layer markers: {first_instances}");
+    let sig = rt.paint.node_caches.get(&cache_id).expect("plain subtree must cache").signature;
+    rt.text.atlas.resident_caches.insert(cache_id.0, sig);
+
+    rt.update(|x, tx| { *x = 120.0; tx.motion(crate::Spring::new(0.3, 0.0)); });
+    rt.frame(1.0 / 60.0);
+    assert!(rt.animating);
+    assert!(rt.system_materials().is_empty());
+    assert!(rt.instances.len() < first_instances, "resident plain cache must elide inner children ({} vs {})", rt.instances.len(), first_instances);
+    assert_eq!(rt.paint_keep_mismatches(), 0);
+}

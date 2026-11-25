@@ -179,6 +179,8 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) macos_level: Option<isize>,
     pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) window_backdrop: crate::WindowBackdrop,
+    pub(crate) frame_latency: Option<u32>,
+    pub(crate) on_materials: Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
 }
@@ -312,6 +314,38 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.on_availability = Some(f);
         self
     }
+    /// Called on the event thread with each frame's
+    /// [`El::system_material`](crate::El::system_material) rects
+    /// ([`MaterialFrame`](crate::MaterialFrame)), after the frame is built and just before it
+    /// presents, hidden prewarm frames included; an idle overlay draws no frames and so calls
+    /// nothing. Where Rune hosts no native material (everywhere but macOS) the element draws only
+    /// its fallback fill, so an app can keep its own backdrop (a companion window or composition
+    /// visual) under these rects in step with the frame. Give the element a translucent
+    /// [`El::fill`](crate::El::fill) of its own to replace the neutral fallback tint. A frame
+    /// lists no rects once the last material element is gone. It only runs for frames that
+    /// present, so hiding the overlay ([`OverlayHandle::hide`](crate::OverlayHandle::hide)),
+    /// releasing its surface (`release_gpu_when_hidden`, `release_gpu_after`) or losing it sends
+    /// no final empty frame: hide the backdrop alongside the app's own `hide` calls and when
+    /// [`on_availability`](Self::on_availability) reports the overlay unavailable.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, SystemMaterial, el};
+    ///
+    /// let _overlay = OverlaySpec::new("island", (720.0, 200.0), |_: &(), _| {
+    ///     el().w(240.0).h(44.0).radius(22.0).system_material(SystemMaterial::Glass)
+    /// })
+    /// .options(OverlayOptions::default())
+    /// .on_materials(|frame| {
+    ///     for draw in frame.draws() {
+    ///         let (_rect, _radius) = draw.points(frame.scale());
+    ///         // Move this app's own backdrop visual to `_rect` with `_radius` corners.
+    ///     }
+    /// });
+    /// ```
+    pub fn on_materials(mut self, f: impl FnMut(crate::MaterialFrame<'_>) + 'static) -> Self {
+        self.on_materials = Some(Box::new(f));
+        self
+    }
     /// Showing doesn't settle motion: what the state started while hidden plays from the
     /// first visible frame, such as a notification stack's first card entering. By default
     /// an unretained overlay shows settled, at its target.
@@ -368,10 +402,14 @@ impl<T: 'static> ConfiguredOverlay<T> {
     ///
     /// Update at runtime with
     /// [`OverlayHandle::set_window_backdrop`](crate::OverlayHandle::set_window_backdrop) or
-    /// [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop), and read the OS-confirmed
-    /// backdrop with [`Cx::window_backdrop`](crate::Cx::window_backdrop). Note that Windows 11
-    /// Mica and Desktop Acrylic follow window activation by design, so non-activating overlays
-    /// (`KeyPolicy::None`) may display the OS solid inactive fallback colour.
+    /// [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop), and read whether the OS
+    /// accepted the backdrop attribute with [`Cx::window_backdrop`](crate::Cx::window_backdrop).
+    ///
+    /// By Microsoft design, Windows 11 draws Mica, Mica Alt, and Desktop Acrylic only while the
+    /// window is the foreground window and shows its own flat solid fallback otherwise. A
+    /// non-activating overlay ([`KeyPolicy::None`]) never takes focus and therefore never shows
+    /// the live material—even while `cx.window_backdrop().is_active()` is `true`. Pair with
+    /// [`Self::on_focus`] (on a key-taking overlay) to tell "active and focused" from "active".
     ///
     /// ```no_run
     /// use rune::{OverlayOptions, OverlaySpec, WindowBackdrop, el};
@@ -382,6 +420,26 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// ```
     pub fn window_backdrop(mut self, backdrop: crate::WindowBackdrop) -> Self {
         self.window_backdrop = backdrop;
+        self
+    }
+    /// Cap the swap chain's frame latency on macOS (`1` = 2 drawables, `2` = 3 drawables;
+    /// clamped to `1..=2`, default `2`). Ignored on Windows, Linux, and the web.
+    ///
+    /// With two drawables a frame that runs late waits instead of overlapping the next; at
+    /// 120 Hz that can show as a dropped frame during fast animation, whereas for a rarely
+    /// animating overlay it is the right trade. Applied when the surface is created rather than
+    /// changed live (changing `CAMetalLayer.maximumDrawableCount` while visible forces a
+    /// synchronous reconfigure and can reallocate drawables or drop a frame).
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, el};
+    ///
+    /// let _overlay = OverlaySpec::new("panel", (488.0, 873.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .frame_latency(1);
+    /// ```
+    pub fn frame_latency(mut self, latency: u32) -> Self {
+        self.frame_latency = Some(latency.clamp(1, 2));
         self
     }
 }
@@ -396,7 +454,7 @@ impl<T: 'static> OverlaySpec<T> {
             spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
-            animate_reveal: false, release_after: None,
+            frame_latency: None, on_materials: None, animate_reveal: false, release_after: None,
         }
     }
 }

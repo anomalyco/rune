@@ -90,7 +90,7 @@ pub(crate) enum Event {
     WindowReady,
     /// Commit generation or active modal changed; `has_targets` is `RuntimeCore::has_drop_targets()`.
     TreeSynced { key: SyncKey, has_targets: bool, now: Instant },
-    /// `wayland_drop::install` failed (compositor lacks `wl_data_device_manager`).
+    /// `wayland::drop::install` failed (compositor lacks `wl_data_device_manager`).
     BindFailed,
     /// The teardown grace timer fired at `now` for `attempt`.
     GraceDue { attempt: Attempt, now: Instant },

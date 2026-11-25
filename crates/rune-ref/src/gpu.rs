@@ -197,7 +197,12 @@ pub fn text_run(scene: &mut Scene, seed: u64) {
             p.uv[1] += 960.0;
         }
     }
-    for y in 0..scene.atlas.height.min(32) as usize {
+    let copy_rows = scene.atlas.height.min(32) as usize;
+    let need_bytes = (960 + copy_rows) * ATLAS_SIZE as usize;
+    if text.atlas.data.len() < need_bytes {
+        text.atlas.data.resize(need_bytes, 0);
+    }
+    for y in 0..copy_rows {
         let n = scene.atlas.width.min(32) as usize;
         let start = (y + 960) * ATLAS_SIZE as usize + 960;
         text.atlas.data[start..start + n].copy_from_slice(
@@ -222,9 +227,10 @@ pub fn text_run(scene: &mut Scene, seed: u64) {
             clip_radii: None,
         });
     }
+    let atlas_height = (text.atlas.data.len() / ATLAS_SIZE as usize) as u32;
     scene.atlas = crate::Atlas {
         width: ATLAS_SIZE,
-        height: ATLAS_SIZE,
+        height: atlas_height,
         data: text.atlas.data,
     };
 }

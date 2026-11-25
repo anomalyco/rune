@@ -227,12 +227,17 @@ fn window_drag_in_window_backed_overlay_starts_drag_and_keeps_children_interacti
 
     // Bare .window_drag() header [160..300, 0..40] starts a native window drag and drains the action.
     overlay.left_button(true, Some((220.0, 20.0)));
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        assert_eq!(overlay.core.test_window_drags, 0, "Linux defers mouse drag until motion crosses threshold");
+        overlay.cursor_moved(230.0, 20.0);
+    }
     assert_eq!(overlay.core.test_window_drags, 1, "bare .window_drag() starts a window drag");
-    assert_eq!(overlay.rt.take_titlebar_action(), None, "TitlebarAction::Drag must be consumed in left_button");
+    assert_eq!(overlay.rt.take_titlebar_action(), None, "TitlebarAction::Drag must be consumed");
     assert!(!overlay.rt.pointer_captured(), "window drag must not leave pointer capture stuck");
     assert_eq!(overlay.core.position_owner, PositionOwner::Dragging);
     overlay.left_button(false, Some((220.0, 20.0)));
-    assert_eq!(overlay.core.position_owner, PositionOwner::Managed, "zero-movement click releases back to Managed");
+    assert_eq!(overlay.core.position_owner, PositionOwner::Managed, "release returns to Managed");
 
     // Interactive child button [0..60, 0..40] inside .window_drag() keeps its press.
     overlay.left_button(true, Some((30.0, 20.0)));
@@ -269,18 +274,42 @@ fn window_drag_in_window_backed_overlay_starts_drag_and_keeps_children_interacti
 #[test]
 fn window_drag_double_click_is_drained_without_starting_a_second_drag() {
     let mut overlay = drag_bar_overlay(true);
+    let expected_first = u32::from(!cfg!(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))));
 
-    // First press starts the drag.
+    // First press starts the drag immediately off Linux, or stays deferred on Linux.
     overlay.left_button(true, Some((220.0, 20.0)));
-    assert_eq!(overlay.core.test_window_drags, 1);
+    assert_eq!(overlay.core.test_window_drags, expected_first);
     overlay.left_button(false, Some((220.0, 20.0)));
 
     // Second press within double-click interval emits TitlebarAction::DoubleClick, which overlays
     // drain and ignore (no maximize/minimize and no second drag).
     overlay.left_button(true, Some((220.0, 20.0)));
     assert_eq!(overlay.rt.take_titlebar_action(), None, "TitlebarAction::DoubleClick must be drained");
-    assert_eq!(overlay.core.test_window_drags, 1, "double-click on overlay drag region must not start a drag");
+    assert_eq!(overlay.core.test_window_drags, expected_first, "double-click on overlay drag region must not start a drag");
     overlay.left_button(false, Some((220.0, 20.0)));
+}
+
+#[test]
+fn deferred_overlay_window_drag_starts_only_after_crossing_threshold() {
+    use super::PositionOwner;
+
+    let mut overlay = drag_bar_overlay(true);
+    overlay.rt.core_mut().set_defer_titlebar_drag(true);
+
+    // Stationary click starts no drag.
+    overlay.left_button(true, Some((220.0, 20.0)));
+    assert_eq!(overlay.core.test_window_drags, 0);
+    overlay.cursor_moved(225.0, 20.0);
+    assert_eq!(overlay.core.test_window_drags, 0);
+    assert_eq!(overlay.core.position_owner, PositionOwner::Managed);
+
+    // Crossing the 8 pt drag threshold starts the native move from cursor_moved.
+    overlay.cursor_moved(228.0, 20.0);
+    assert_eq!(overlay.core.test_window_drags, 1);
+    assert_eq!(overlay.rt.take_titlebar_action(), None);
+    assert_eq!(overlay.core.position_owner, PositionOwner::Dragging);
+    overlay.left_button(false, Some((228.0, 20.0)));
+    assert_eq!(overlay.core.position_owner, PositionOwner::Managed);
 }
 
 #[test]
@@ -306,10 +335,12 @@ fn window_drag_clears_capture_disarms_drag_out_and_applies_pending_input() {
     overlay.rt.set_viewport(app.size, 1.0);
     overlay.rt.frame(0.0);
 
-    // Queue a deferred input-mode switch and press the bare window-drag region: pointer capture
+    // Queue a deferred input-mode switch and drag the bare window-drag region: pointer capture
     // is not held, no drag-out request remains, and deferred input applies cleanly.
     overlay.core.pending_input = Some(OverlayInput::Regions);
     overlay.left_button(true, Some((150.0, 20.0)));
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    overlay.cursor_moved(160.0, 20.0);
     assert_eq!(overlay.core.test_window_drags, 1);
     assert!(!overlay.rt.pointer_captured());
     assert!(overlay.rt.core_mut().take_drag_out().is_none(), "drag-out must not remain armed");
@@ -322,6 +353,8 @@ fn window_drag_without_window_backing_drains_action_without_starting_drag() {
 
     let mut overlay = drag_bar_overlay(false);
     overlay.left_button(true, Some((220.0, 20.0)));
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    overlay.cursor_moved(230.0, 20.0);
     assert_eq!(overlay.core.test_window_drags, 0, "non-window backing (e.g. Wayland layer-shell) ignores drag");
     assert_eq!(overlay.rt.take_titlebar_action(), None, "TitlebarAction::Drag must still be drained");
     assert_eq!(overlay.core.position_owner, PositionOwner::Managed);
@@ -511,13 +544,127 @@ fn macos_window_drag_in_overlay_starts_drag_and_pointer_released_clears_native_c
     assert!(!pointer.captured(), "native panel capture clears once OS drag takes mouse-up");
 }
 
+type TokenLog = Arc<std::sync::Mutex<Vec<(&'static str, Option<String>)>>>;
+
 #[test]
-fn activation_token_waits_for_the_next_turn_and_keeps_every_reply() {
-    let req = requests_after(|h| {
-        h.activation_token(|_| {});
-        h.hide();
-        h.activation_token(|_| {});
-    });
+fn activation_token_answers_ahead_of_hide_and_returns_none_when_hidden_or_non_layer() {
+    use super::{Overlay, OverlayOptions, OverlaySpec, Presence};
+    use crate::tooling::AppSpec;
+    use crate::{Cx, El};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El { crate::el().size(40.0, 20.0) }
+    let app = AppSpec::new("launcher", (40.0, 20.0), || (), view);
+    let spec = OverlaySpec::new("launcher", app.size, view).options(OverlayOptions::default());
+    let (mut overlay, handle) = Overlay::new(spec, (), &app);
+    overlay.rt.frame(0.0);
+
+    let log: TokenLog = Arc::default();
+    let push = |tag: &'static str| {
+        let log = log.clone();
+        move |tok: Option<String>| log.lock().unwrap().push((tag, tok))
+    };
+
+    // Queuing activation_token and hide in one turn keeps both token replies in FIFO order so
+    // sync() answers them before Visibility::Hide runs.
+    overlay.presence = Presence::Shown { occluded: false };
+    handle.activation_token(push("first"));
+    handle.hide();
+    handle.activation_token(push("second"));
+    let mut req = std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap());
     assert_eq!(req.tokens.len(), 2);
     assert_eq!(req.visible(), Some(false));
+    for reply in req.tokens.take() {
+        assert!(overlay.presence.shown(), "sync answers tokens while the overlay is still shown");
+        reply(overlay.activation_token());
+    }
+    overlay.hide();
+    assert!(!overlay.presence.shown());
+    assert_eq!(*log.lock().unwrap(), [("first", None), ("second", None)]);
+
+    // Hidden overlay answers None once; fading-out overlay answers None once too.
+    handle.activation_token(push("hidden"));
+    overlay.answer_tokens();
+    overlay.answer_tokens();
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.hide_fading(std::time::Duration::from_millis(150));
+    handle.activation_token(push("fading"));
+    overlay.answer_tokens();
+    assert_eq!(
+        *log.lock().unwrap(),
+        [("first", None), ("second", None), ("hidden", None), ("fading", None)]
+    );
+}
+
+#[test]
+fn activation_token_drains_with_none_on_hide_close_refusal_and_drop() {
+    use super::{KeyPolicy, Overlay, OverlayOptions, OverlaySpec, Presence};
+    use crate::tooling::AppSpec;
+    use crate::{Cx, El};
+
+    struct State {
+        handle: Option<OverlayHandle<State>>,
+        log: TokenLog,
+    }
+    fn view(_: &State, _: &mut Cx<State>) -> El { crate::el().size(40.0, 20.0) }
+    let log: TokenLog = Arc::default();
+    let app = AppSpec::new("launcher", (40.0, 20.0), || (), |_, _| crate::el());
+    let spec = OverlaySpec::new("launcher", app.size, view)
+        .options(OverlayOptions { keys: KeyPolicy::OnDemand, ..Default::default() })
+        .on_focus(|s: &mut State, focused, _| {
+            if !focused && let Some(h) = &s.handle {
+                let log = s.log.clone();
+                h.activation_token(move |tok| log.lock().unwrap().push(("from_blur", tok)));
+            }
+        });
+    let (mut overlay, handle) = Overlay::new(spec, State { handle: None, log: log.clone() }, &app);
+    overlay.rt.state.handle = Some(handle.clone());
+    overlay.rt.frame(0.0);
+
+    let push = |tag: &'static str| {
+        let log = log.clone();
+        move |tok: Option<String>| log.lock().unwrap().push((tag, tok))
+    };
+
+    // Synchronous hide (e.g. Shell::Close) drains queued tokens before hiding and drains any
+    // token requested inside on_focus(false) during hide_window, answering each exactly once.
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.window_focus(true);
+    handle.activation_token(push("before_hide"));
+    overlay.hide();
+    overlay.answer_tokens();
+    assert_eq!(*log.lock().unwrap(), [("before_hide", None), ("from_blur", None)]);
+    assert_eq!(overlay.shared.core.requests.lock().unwrap().tokens.len(), 0);
+
+    // Compositor layer close / surface refusal answers pending tokens with None once.
+    overlay.presence = Presence::Shown { occluded: false };
+    handle.activation_token(push("on_close"));
+    overlay.layer_closed(Some("compositor closed layer surface"));
+    overlay.answer_tokens();
+    assert_eq!(*log.lock().unwrap(), [("before_hide", None), ("from_blur", None), ("on_close", None)]);
+
+    // Dropping the overlay answers queued tokens with None (even when a reply re-entrantly asks
+    // for another token), and calls after drop answer None immediately without hanging.
+    let reentrant_handle = handle.clone();
+    let reentrant_log = log.clone();
+    handle.activation_token(move |tok| {
+        reentrant_log.lock().unwrap().push(("on_drop_1", tok));
+        let inner_log = reentrant_log.clone();
+        reentrant_handle.activation_token(move |tok2| inner_log.lock().unwrap().push(("reentrant", tok2)));
+    });
+    handle.activation_token(push("on_drop_2"));
+    drop(overlay);
+    handle.activation_token(push("after_drop"));
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            ("before_hide", None),
+            ("from_blur", None),
+            ("on_close", None),
+            ("on_drop_1", None),
+            ("reentrant", None),
+            ("on_drop_2", None),
+            ("after_drop", None),
+        ]
+    );
 }

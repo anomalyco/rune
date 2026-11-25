@@ -68,9 +68,11 @@ impl RuntimeCore {
             // The window's controls are in its points; the view's are over the zoom.
             titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
+            safe_area: self.safe_area(),
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
             window_backdrop: self.host.window_backdrop,
+            window_backdrop_supported: self.host.window_backdrop_supported,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
@@ -85,6 +87,8 @@ impl RuntimeCore {
             titlebar: self.titlebar_set(),
             caret: self.edit.caret.clone(),
             caret_read: false,
+            wm_state: self.host.wm_state,
+            wm_state_read: false,
             layout_seen: self.commit.layout_seen.rects.clone(),
             layout_reads: Vec::new(),
             commits: self.commit.commits,
@@ -211,8 +215,18 @@ impl Measurement<'_> {
         let flags = u32::from(self.maximized)
             | (u32::from(self.full_screen) << 1)
             | (u32::from(self.pointer_locked) << 2)
-            | (u32::from(self.window_backdrop.to_u8()) << 3);
+            | (u32::from(self.window_backdrop.to_u8()) << 3)
+            | (u32::from(self.window_backdrop_supported) << 25);
         [self.titlebar_inset.to_bits(), leading, trailing, height, flags]
+    }
+
+    /// Combines [`Self::chrome_bits`] with the 17-bit [`crate::WindowManagerState`] encoding
+    /// in bits `8..=24` of word 4 so `memo` closures rebuild on decoration mode, tiled edges,
+    /// or window action changes without overlapping backdrop flags or growing the key.
+    pub(in crate::runtime) fn memo_chrome_bits(&self) -> [u32; 5] {
+        let mut bits = self.chrome_bits();
+        bits[4] |= self.wm_state.bits() << 8;
+        bits
     }
 
     pub(in crate::runtime) fn finish(self, text: &mut TextSystem, tx: &Tx) -> Measured {
@@ -252,6 +266,7 @@ impl Measurement<'_> {
             defaults: self.defaults.clone(),
             titlebar: self.titlebar,
             caret_read: self.caret_read,
+            wm_state_read: Some(self.wm_state_read),
             layout_reads: self.layout_reads,
             memo_flattened: Some(memo_pending),
             memo_reused,
@@ -514,6 +529,7 @@ impl Measurement<'_> {
             maximized: this.maximized,
             full_screen: this.full_screen,
             window_backdrop: this.window_backdrop,
+            window_backdrop_supported: this.window_backdrop_supported,
             caption_color: None,
             titlebar: Default::default(),
             system_accent: this.system_accent,
@@ -529,6 +545,9 @@ impl Measurement<'_> {
             defaults: Default::default(),
             caret: this.caret.clone(),
             caret_read: std::cell::Cell::new(false),
+            wm_state: this.wm_state,
+            wm_state_read: std::cell::Cell::new(false),
+            safe_area: this.safe_area,
             layout: this.layout_seen.clone(),
             layout_reads: Default::default(),
         };
@@ -537,7 +556,7 @@ impl Measurement<'_> {
             let cx = fresh_cx(self);
             #[cfg(feature = "hot")]
             let emptied = self.memo.emptied();
-            let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, self.languages_gen, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
+            let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, self.languages_gen, crate::theme::blends_srgb(), self.memo_chrome_bits(), cx.caret.clone(), cx.layout.clone());
             let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
             // The view and the rows it builds measure text with the window's own text system.
             #[cfg(not(feature = "hot"))]
@@ -563,7 +582,7 @@ impl Measurement<'_> {
                         self.virtual_culled.clear();
                         self.virtual_inputs.clear();
                         let cx = fresh_cx(self);
-                        let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, self.languages_gen, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
+                        let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, self.languages_gen, crate::theme::blends_srgb(), self.memo_chrome_bits(), cx.caret.clone(), cx.layout.clone());
                         let (root, cx) = crate::hot::original_only(|| self.root_view(cx));
                         (crate::hot::original_only(|| self.build_tree(root, tx, force_all, keep_windows)), cx, memo)
                     }
@@ -580,6 +599,7 @@ impl Measurement<'_> {
             self.titlebar = cx.titlebar;
             // Reads made by memos this build reused count as made again.
             self.caret_read = cx.caret_read.get() || replayed.caret;
+            self.wm_state_read = cx.wm_state_read.get();
             self.layout_reads = cx.layout_reads.take();
             for read in replayed.layout { layout_read::note_read_at(&mut self.layout_reads, &read.key, read.same, read.at); }
 

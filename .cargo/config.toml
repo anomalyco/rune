@@ -11,9 +11,14 @@ linker = "rust-lld"
 [alias]
 lint = "clippy --lib --bins --tests"
 lint-all = "clippy --workspace --all-targets"
-check-wasm = "clippy -p rune --no-default-features --target wasm32-unknown-unknown --no-deps -- -A clippy::all -A clippy::unwrap_used -A clippy::expect_used -A clippy::todo -D clippy::disallowed_methods -D clippy::disallowed_types -D warnings"
-check-webgl = "clippy -p rune --no-default-features --features webgl --target wasm32-unknown-unknown --no-deps -- -A clippy::all -A clippy::unwrap_used -A clippy::expect_used -A clippy::todo -D clippy::disallowed_methods -D clippy::disallowed_types -D warnings"
+lint-wasm = "clippy -p rune --no-default-features --target wasm32-unknown-unknown --no-deps -- -A clippy::all -A clippy::unwrap_used -A clippy::expect_used -A clippy::todo -D clippy::disallowed_methods -D clippy::disallowed_types -D warnings"
+lint-webgl = "clippy -p rune --no-default-features --features webgl --target wasm32-unknown-unknown --no-deps -- -A clippy::all -A clippy::unwrap_used -A clippy::expect_used -A clippy::todo -D clippy::disallowed_methods -D clippy::disallowed_types -D warnings"
+check-wasm = "check -p rune --no-default-features --target wasm32-unknown-unknown"
+check-webgl = "check -p rune --no-default-features --features webgl --target wasm32-unknown-unknown"
 check-hot = "check -p rune --features hot --tests"
+check-gpu-tests = "check -p rune -p rune-gpu -p rune-light --features rune/test-gpu-counters,rune-gpu/test-gpu-counters,rune-light/test-gpu-counters --tests"
+check-win-material = "check -p rune --features windows-system-material --tests"
+check-linux-noop = "check -p rune --features rune/test-gpu-counters,rune-gpu/test-gpu-counters,rune/test-gpu-noop --tests"
 test-fast = "test -p rune -p rune-mermaid -p rune-kit --features rune-kit/markdown,rune-kit/mermaid"
 
 # Panic on any PaintKeep debug self-check mismatch in this repository's own cargo runs

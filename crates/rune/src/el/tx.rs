@@ -385,7 +385,7 @@ impl Tx {
     /// or a text flight. A `wake_after` only schedules.
     pub(crate) fn frame_work(&self) -> bool {
         !self.pick_reads.is_empty() || !self.scroll_to.is_empty() || !self.scroll_bottom.is_empty() || !self.scroll_pages.is_empty() || !self.scroll_offsets.is_empty()
-            || !self.scroll_stops.is_empty() || !self.keep_on_screen.is_empty() || !self.text_flights.is_empty() || !self.launches.is_empty() || self.select.is_some() || self.field_menu_resolution.is_some()
+            || !self.scroll_stops.is_empty() || !self.keep_on_screen.is_empty() || !self.text_flights.is_empty() || !self.launches.is_empty() || !self.haptics.is_empty() || self.select.is_some() || self.field_menu_resolution.is_some()
     }
 
     /// An app marker on the next frame, e.g. `tx.trace_event(format_args!("lab:{step:?}"))`.
@@ -570,7 +570,9 @@ impl Tx {
     /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows and overlays, this
     /// applies `DWMWA_SYSTEMBACKDROP_TYPE`. Never flips
     /// [`Cx::window_backdrop`](crate::Cx::window_backdrop) optimistically: views observe the new
-    /// backdrop only once the OS confirms it. Ignored on web and headless.
+    /// backdrop only once the OS accepts the attribute (Windows draws the live material only while
+    /// the window is the foreground window and shows a flat fallback while unfocused). Ignored on
+    /// web and headless.
     ///
     /// ```no_run
     /// use rune::{El, WindowBackdrop, el};

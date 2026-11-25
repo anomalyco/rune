@@ -143,10 +143,8 @@ impl RuntimeCore {
         if let Some(edited) = tx.document_edited.take() { self.host.document_edited.set(edited); }
         if let Some((text, how)) = tx.announce.take() { self.host.announcement.say(text, how); }
         if !tx.haptics.is_empty() {
-            // `open_urls_natively` is set for live windows, overlays and the web, which have no
-            // haptics player yet: they drop requests. Headless runs and embedding hosts keep them.
-            let keep = !self.host.open_urls_natively;
-            self.host.haptics.push(std::mem::take(&mut tx.haptics), keep);
+            let now = self.now_clock();
+            self.host.haptics.push_at(tx.haptics.drain(..), now);
         }
         if let Some(mut request) = tx.window_frame.take() {
             request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring));

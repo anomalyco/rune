@@ -101,6 +101,7 @@ impl Running {
 
     pub(super) fn apply_frame_requests(&mut self, window: &Window) {
         let rt = self.app.rt_mut();
+        crate::haptics::flush_live(rt, false);
         let _ = rt.host.window_color_scheme.take();
         let _ = rt.host.window_backdrop_request.take();
         let _ = rt.host.represented_file.take_change();
@@ -311,12 +312,14 @@ impl FrameHost for WebFrameHost<'_> {
                     self.r.app.covered_wake();
                     self.r.clipboard.flush_core(self.r.app.rt_mut());
                 }
+                crate::haptics::flush_live(self.r.app.rt_mut(), false);
             }
             web_math::WebMissAction::RetryNextFrame => {
                 if !stepped {
                     self.r.app.covered_wake();
                     self.r.clipboard.flush_core(self.r.app.rt_mut());
                 }
+                crate::haptics::flush_live(self.r.app.rt_mut(), false);
                 self.window.request_redraw();
             }
         }

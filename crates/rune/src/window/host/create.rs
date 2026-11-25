@@ -104,6 +104,8 @@ impl Host {
         self.register_resize_sync(&window);
         #[cfg(target_os = "windows")]
         crate::platform::win32::press_point::install(&window);
+        #[cfg(target_os = "windows")]
+        crate::platform::win32::dark_mode::install_theme_refresh(&window);
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
         let frame = self.titlebar.map(|t| self.app.rt().titlebar_set().over(t))
@@ -219,15 +221,15 @@ impl Host {
         let phys = window.inner_size();
         let srgb_blend = self.app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
+        let frame_latency = crate::window::frame_latency(self.frame_latency);
         let features = self.app.compositor_features();
         let transparent = self.options.transparent;
         // A window with a client-side frame keeps its pixels' alpha for the frame's corner arcs;
         // one under a compositor that draws the decorations itself keeps the surface it always had.
         let client_frame = self.client_frame(&window);
         #[cfg(target_os = "windows")]
-        let dcomp_handover = if crate::window::win32::resize_sync::enabled()
-            && !transparent
-            && !launcher
+        let dcomp_handover = if ((crate::window::win32::resize_sync::enabled() && !transparent && !launcher)
+            || (cfg!(feature = "windows-system-material") && transparent))
             && matches!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual)
         {
             crate::platform::win32::hwnd(&window)
@@ -253,6 +255,7 @@ impl Host {
             let initial = drawable_size(None, (phys.width, phys.height), max_surface_dim(Some(gpu)));
             let (mut config, translucent) = surface_config(surface, &gpu.adapter, initial, srgb_blend)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
+            config.desired_maximum_frame_latency = frame_latency;
             #[cfg(target_os = "macos")]
             let launch_drawables = LaunchDrawables::cap(&mut config);
             if transparent || client_frame {
@@ -547,6 +550,10 @@ impl Host {
                 self.app.window_focus(true);
             }
         }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.wayland && self.options.transparent {
+            self.sync_window_backdrop(false);
+        }
         // The first frame, now, so the window comes on screen with it instead of empty for a
         // frame or two. AppKit has ordered the window in, but it reaches the screen with this
         // turn's Core Animation commit, so nothing reports it visible yet.
@@ -656,10 +663,17 @@ impl Host {
         // Unregister any swap-chain wait before dropping the surface, even if replacement fails.
         #[cfg(target_os = "windows")]
         {
+            #[cfg(feature = "windows-system-material")]
+            {
+                let native = &mut w.native;
+                native.materials.on_device_loss(native.mode.handover_mut());
+            }
             w.native.slot.reset();
             w.native.damage.reset();
             self.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
         }
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        self.app.rt_mut().paint.set_native_materials(false);
         let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
         drop(w.surface.take());
         #[cfg(target_os = "macos")]
@@ -682,6 +696,7 @@ impl Host {
         let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
         let srgb_blend = self.app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
+        let frame_latency = crate::window::frame_latency(self.frame_latency);
         let client_frame = self.client_frame(&window);
         let make_surface = |instance: &wgpu::Instance| {
             #[cfg(target_os = "windows")]
@@ -695,6 +710,7 @@ impl Host {
             let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
             let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
+            config.desired_maximum_frame_latency = frame_latency;
             if transparent || client_frame {
                 config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
             }

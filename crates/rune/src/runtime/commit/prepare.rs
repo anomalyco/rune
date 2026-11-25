@@ -71,9 +71,11 @@ impl RuntimeCore {
             pointer_locked: self.pointer_locked(),
             titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
+            safe_area: self.safe_area(),
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
             window_backdrop: self.host.window_backdrop,
+            window_backdrop_supported: self.host.window_backdrop_supported,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
@@ -88,6 +90,8 @@ impl RuntimeCore {
             titlebar: self.titlebar_set(),
             caret: None,
             caret_read: false,
+            wm_state: self.host.wm_state,
+            wm_state_read: false,
             // The rects the window last laid out, as its next frame reads them, so a view that
             // measures against them (a header fitting its title) measures here too.
             layout_seen: self.commit.layout_seen.rects.clone(),

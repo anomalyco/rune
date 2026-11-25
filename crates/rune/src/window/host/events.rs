@@ -96,7 +96,7 @@ impl Host {
         let native = self.win.as_ref().map(|l| crate::platform::win32::drop_target::take(&l.window)).unwrap_or_default();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let (native, wayland_drop_lost) = match self.win.as_ref().filter(|l| l.native.drop_target.is_some()) {
-            Some(l) => crate::platform::wayland_drop::take(&l.window),
+            Some(l) => crate::platform::wayland::drop::take(&l.window),
             None => (Vec::new(), false),
         };
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -364,11 +364,16 @@ impl Host {
         match event {
             WindowEvent::Moved(_) => {
                 record_reopen(&mut self.reopen, l, app.rt().host.fit_height);
+                let scale_changed = (scale - app.rt().window_scale()).abs() > f32::EPSILON;
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if !self.wayland && !scale_changed && chrome::sync_wm_state_core(app.rt_mut(), l) {
+                    l.request_redraw();
+                }
                 // winit queues `ScaleFactorChanged` in `kCFRunLoopDefaultMode`, which waits
                 // until a window drag ends; resize the surface and draw synchronously inside the
                 // current Core Animation transaction when a drag crosses displays so the new
                 // `contentsScale` and new-scale drawable land together with no flash.
-                if (scale - app.rt().window_scale()).abs() > f32::EPSILON {
+                if scale_changed {
                     let size = l.window.inner_size();
                     if size.width > 0 && size.height > 0 {
                         l.resize_surface(gpu, size);
@@ -439,6 +444,10 @@ impl Host {
                 let viewport = (l.config.width as f32 / scale, l.config.height as f32 / scale);
                 if !resized && viewport == app.rt().window_viewport() && scale == app.rt().window_scale() {
                     if restored || origin_moved || app.rt().stale() { l.request_redraw(); }
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    if self.wayland && self.options.transparent {
+                        self.sync_window_backdrop(false);
+                    }
                     return;
                 }
                 let asked = FrameMove::take_jump(&mut self.frame_move, viewport);
@@ -462,6 +471,10 @@ impl Host {
                     return;
                 }
                 l.request_redraw();
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if self.wayland && self.options.transparent {
+                    self.sync_window_backdrop(false);
+                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 #[cfg(target_os = "macos")]
@@ -503,6 +516,10 @@ impl Host {
                         #[cfg(not(target_os = "macos"))]
                         l.request_redraw();
                     }
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    if self.wayland && self.options.transparent {
+                        self.sync_window_backdrop(false);
+                    }
                 }
             }
             WindowEvent::ThemeChanged(theme) => {
@@ -510,7 +527,19 @@ impl Host {
                     app.rt_mut().set_system_dark(theme == Theme::Dark);
                     l.request_redraw();
                     #[cfg(target_os = "windows")]
-                    self.sync_window_backdrop(true);
+                    {
+                        // winit's `set_theme` does not update `preferred_theme`, so
+                        // `WM_SETTINGCHANGE` resets a runtime `ColorScheme::Light`/`Dark`
+                        // override to the OS theme; restore the explicit override if one is set.
+                        if let Some(explicit) = self
+                            .color_scheme
+                            .effective_for_window(crate::window::app_color_scheme())
+                            .winit_theme()
+                        {
+                            l.window.set_theme(Some(explicit));
+                        }
+                        self.sync_window_backdrop(true);
+                    }
                 }
             }
             WindowEvent::ModifiersChanged(m) => {
@@ -590,6 +619,11 @@ impl Host {
                     position.x as f32 / input_scale,
                     position.y as f32 / input_scale,
                 );
+                // Deferred mouse drags on Linux cross the drag threshold during motion while the
+                // original press serial is still current on Wayland.
+                if let Some(action) = app.rt_mut().take_titlebar_action() {
+                    l.titlebar_action(action);
+                }
                 // AppKit needs the drag session started inside this mouse-dragged event.
                 if let Some(start) = drag_out {
                     let rt = app.rt();
@@ -660,13 +694,12 @@ impl Host {
                 if let Some((x, y)) = button_at(app, &l.window) {
                     match state {
                         ElementState::Pressed => app.rt_mut().secondary_down(x, y),
-                        ElementState::Released => {
-                            app.secondary_up(x, y);
-                            // At the pointer, while it's still where the click was.
-                            let rt = app.rt_mut();
-                            if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu, Some((x * rt.zoom(), y * rt.zoom()))); }
-                        }
+                        ElementState::Released => app.secondary_up(x, y),
                     }
+                    // At the pointer, while it's still where the click was (on press for Wayland's
+                    // button-press serial, on release for Windows and X11).
+                    let rt = app.rt_mut();
+                    if let Some(menu) = rt.take_window_menu() { chrome::window_menu(&l.window, menu, Some((x * rt.zoom(), y * rt.zoom()))); }
                 }
                 l.request_redraw();
             }
@@ -782,6 +815,14 @@ impl Host {
         // portal asks for this paint to show, and whether the window is maximized.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if crate::titlebar::linux::chosen() && let Some(l) = &self.win { sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar); }
+        // X11 `PropertyNotify` on EWMH/GTK WM-state atoms sets a per-window flag and asks for
+        // `RedrawRequested`; sync chrome only when that flag fired (zero IPC on ordinary redraws).
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if !self.wayland && let Some(l) = &self.win
+            && winit::platform::x11::WindowExtX11::take_wm_state_changed(&*l.window)
+        {
+            sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar);
+        }
         self.redraw();
         self.shell(event_loop);
         // What asked for a frame while it painted waits for the turn's end.

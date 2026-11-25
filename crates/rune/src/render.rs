@@ -119,6 +119,7 @@ pub use device::set_gpu_memory_policy;
 pub use effect_warm::PrewarmEffects;
 #[doc(hidden)]
 pub use fill::FillDrift;
+pub use first_use::builtin_wgsl_hash;
 pub use first_use::make_layer_blur;
 pub use first_use::make_straight_alpha;
 pub use first_use::precompiled_misses;

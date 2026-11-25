@@ -1,0 +1,1 @@
+- rune-light: text on a `Prim::unlit` surface now bypasses `TextPolicy` floor/ceiling clamping so glyphs always keep their designed colour, matching the `Prim::unlit` contract.

@@ -180,7 +180,11 @@ impl Running {
         if reset {
             cancel_ime(&self.input.handle);
         }
-        if self.app.rt().web_context(&mut self.input.mirror) || reset {
+        // While a finger is still down, wait for the touch release (`TouchPhase::Ended`, which
+        // calls `sync_input(true)` inside the `touchend` gesture) instead of focusing the hidden
+        // input prematurely from a mid-tap `requestAnimationFrame` outside any user gesture.
+        let defer_touch_sync = !focus && self.app.rt().touching();
+        if !defer_touch_sync && (self.app.rt().web_context(&mut self.input.mirror) || reset) {
             let m = &self.input.mirror;
             sync(&self.input.handle, &m.key, &m.text, m.base, m.anchor, m.focus, m.secure);
         }
@@ -362,6 +366,7 @@ impl Running {
         }
         self.full_redraw = true;
         let mut activate = false;
+        let mut a11y_press = false;
         let mut flush_a11y = false;
         // What a person typed, scrolled, hovered, pasted or activated through the page's own
         // elements is live input too: stamp its arrival time (`Tx::input_time`) and `last_input`.
@@ -509,7 +514,11 @@ impl Running {
                 }
             }
             Some("key") => activate = self.app.web_key(event),
-            Some("a11y_press" | "a11y_link") => { let _ = self.app.rt_mut().web_a11y_action(event); flush_a11y = true; }
+            Some("a11y_press" | "a11y_link") => {
+                let _ = self.app.rt_mut().web_a11y_action(event);
+                a11y_press = event["kind"].as_str() == Some("a11y_press");
+                flush_a11y = true;
+            }
             // The page's menu (`showMenu`) was picked from or dismissed.
             Some("menu") => {
                 if self.app.resolve_popup(event["id"].as_str()).is_err() { self.app.resolve_popup(None).ok(); }
@@ -585,6 +594,7 @@ impl Running {
         self.app.frame(0.0);
         self.apply_frame_requests(window);
         self.clipboard.flush_core(self.app.rt_mut());
+        let activate = activate || (a11y_press && self.app.rt().web_has_editable_focus());
         self.sync_input(activate);
         if flush_a11y {
             self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand);

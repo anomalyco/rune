@@ -294,8 +294,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     text, layout, hover/focus/selection, theme and scale) with an optional `.cache_key(u64)` hint.
   - **Live fallback:** while any node inside the subtree animates (springs, transitions, loops,
     growth, word reveals, flights) or hosts a live compositor `El::effect` slot, `NativeSurface`,
-    native `SystemMaterial`, image pixels or focused text input, the subtree bypasses the cache and draws live,
-    then re-caches once settled.
+    image pixels or focused text input, the subtree bypasses the cache and draws live, then re-caches
+    once settled. A subtree holding an `El::system_material` element always draws live, on every
+    platform and with or without a native material view, so its rect stays listed in
+    `Runtime::system_materials` every frame.
   - **Scale and budget:** while an ancestor's live scale or scale spring is changing without view
     commits, the existing cached texture is composited with clamped bilinear filtering and
     re-rasterized at the new device-pixel resolution once the scale holds still for 0.1 s.
@@ -557,10 +559,29 @@ policy changes are applied in the same mutation phase.
   and the element then hears the rest of that gesture, its momentum included, wherever the
   pointer goes, until it declines (passing the delta to outer handlers and then scrolling) or a
   modifier change starts a new unphased gesture. `.on_magnify(|s, e: MagnifyEvent, tx| -> bool)` hears trackpad
-  pinches (scale by `1 + delta`) at the pointer: macOS reports them, and Ctrl + wheel also
-  goes to `on_magnify` (`1.2^ticks - 1` per line-delta notch, or `dy / 200` per pixel-precise
-  point, with `MagnifyEvent::wheel == true`) when one is under the pointer. `.on_rotate` and `.on_smart_magnify` (a two-finger double tap)
-  are macOS only. `.pointer_buttons([PointerButton::Middle])` lets the middle, back, forward,
+  and touchscreen two-finger pinches (scale by `1 + delta`) at the pointer or fingers' midpoint:
+  macOS trackpads and touchscreens (`Runtime::touch`, after a 16 pt span slop subtracted on activation
+  with a 16 pt floor, cancelling the first finger's pending press, hold, drag or pan with no click or
+  fling, keeping the surviving finger quiescent on lift with re-pinch ratcheting, and ignoring 3rd+
+  fingers) report phased `Began`/`Moved`/`Ended` pinches (`wheel: false`) locked to the accepting
+  `Began` handler until `Ended`, and Ctrl + wheel also goes to `on_magnify` (`1.2^ticks - 1` per
+  line-delta notch, or `dy / 200` per pixel-precise point, with `MagnifyEvent::wheel == true`) when
+  one is under the pointer. On a touchscreen, two fingers moving together over an `on_wheel`,
+  `on_magnify`, or `on_rotate` handler also deliver midpoint panning through `on_wheel` with
+  `WheelEvent::touch == true` and `precise == true` (8 pt slop subtracted on activation, or started
+  at `(0, 0)` when pinch begins; handler-only, locked to the `Began` owner, never scrolling outer
+  scroll views, emitted before `on_magnify` on the same move so pan and zoom keep both fingers
+  pinned) and counterclockwise turns through `.on_rotate` (8° angular slop subtracted on activation
+  with at least 16 pt between the fingers, locked from `Began` to `Ended`; macOS trackpads also
+  feed `on_rotate` with the same owner lock). Over plain scroll areas without `on_wheel`,
+  `on_magnify`, or `on_rotate`, a second finger stays ignored. `.on_edge_drag(edge: SwipeEdge, width, |s, d: &mut Drag, tx| ..)`
+  lets an ancestor (app root drawer, detail-page back swipe) claim a touch swipe starting within
+  `[0, safe_inset + width]` of a window edge (using `Runtime::set_safe_area([top, right, bottom, left])`
+  or browser safe-area insets) when its first move past 8 pt slop goes mostly away from that edge,
+  cancelling any child press/drag/pan (with `Drag::edge() == Some(edge)`, multi-edge and corner
+  disambiguation, paint-order occlusion by raised overlays and modals, and cancelled `Phase::Up`
+  delivery on unmount, Escape, focus loss, modal open, or `cancel_pointer`). `.on_smart_magnify` (a two-finger
+  double tap) is macOS only. `.pointer_buttons([PointerButton::Middle])` lets the middle, back, forward,
   or other buttons press and drag the element through its own `on_press` and `on_drag`, from
   anywhere inside it; `tx.button()` says which button. Including `PointerButton::Secondary` lets
   a right-button drag drive `on_drag` (with `tx.button() == PointerButton::Secondary`) while a
@@ -583,8 +604,8 @@ policy changes are applied in the same mutation phase.
   relative mouse-look capture on desktop windows and web browsers (iOS and native overlays never
   capture): a primary press whose primary target is that element captures (HUD buttons and covering
   elements do not), hides the cursor while focused (desktop `CursorGrabMode::Locked`, falling back
-  to `Confined` on X11; web `canvas.requestPointerLock({ unadjustedMovement: true })` with cached
-  `NotSupportedError` fallback to plain `requestPointerLock()` inside the user gesture), freezes the
+  to `Confined` on X11; web plain `canvas.requestPointerLock()` synchronously inside the user gesture, then
+  upgrading in place to `{ unadjustedMovement: true }` once locked where supported), freezes the
   runtime pointer at the press point (ignoring `pointer_move`/`pointer_leave` so all buttons and
   wheels land on the viewport), and delivers coalesced relative `[dx, dy]` deltas in logical points
   (`tx.live_only()` supported; `DeviceEvent::MouseMotion` scaled by `1/scale_factor` on Windows and
@@ -1469,6 +1490,12 @@ For an app's own perf log, with nothing changed about how its windows draw:
   panels) bounds both steered and ambient frames, and combining `ambient_fps` with `App::reveal_fps` paces
   reveal-only tails on the `reveal_fps` timer while concurrent unsteered motion paces at `ambient_fps`. Enforced
   on macOS `DisplayLink` windows today; Windows, Linux, web, overlays, and headless runs ignore it.
+- **`App::frame_latency(frames)`** (also on `WindowSpec::frame_latency` and
+  `ConfiguredOverlay::frame_latency`) caps a macOS surface's swap-chain latency at creation time
+  (`1` = 2 `CAMetalLayer` drawables, `2` = 3 drawables; clamped to `1..=2`, default `2`). Ignored
+  on Windows, Linux, and the web. With two drawables a frame that runs late waits instead of
+  overlapping the next, which at 120 Hz can show as a dropped frame during fast animation; for a
+  rarely animating window or overlay it saves one full window-sized IOSurface.
 
 ### Compact tray-controlled windows
 
@@ -1599,6 +1626,25 @@ rune::App::new(spec).fit_content_height().run();
   headlessly via `Runtime::set_maximized` and `Runtime::set_full_screen`), and `Tx::toggle_maximized()`,
   `Tx::toggle_full_screen()`, and `Tx::set_full_screen(bool)` request state changes.
   `cargo run -p rune --example custom_titlebar` shows it.
+- **Window-manager state** (`Cx::decoration_mode()`, `Cx::tiled_edges()`, `Cx::window_actions()`,
+  backed by `DecorationMode`, `TiledEdges`, `WindowActions`, and `WindowManagerState`): reactive
+  tri-state accessors preserving explicit unknown values (`DecorationMode::Unknown` and `None`)
+  wherever the platform or window manager does not report a fact. Reading views and their `memo`
+  closures rebuild automatically on change, while views that never read them do no extra work.
+  On Linux Wayland, Rune reads `xdg-decoration` and `xdg_toplevel` configure state gated by
+  protocol version (`>= 2` for tiled edges — reporting the exact `TILED_*` states the compositor
+  sends, so extensions tiling via vertical maximize report only top and bottom — `>= 5` for
+  `wm_capabilities` combined with window resizability for `maximize`, and `close: Some(true)` once
+  configured, matching GTK4) and wakes on decoration-mode or capability changes without a resize;
+  on Linux X11, Rune reads `_NET_FRAME_EXTENTS` (preserving the non-fullscreen mode during and
+  right after full screen), `_GTK_EDGE_CONSTRAINTS` (preferring Mutter's reparented frame parent),
+  `_NET_WM_STATE` / `_NET_WORKAREA` (reporting `TiledEdges::ALL` while maximized consistently with
+  Wayland and resolving flush half-tile side edges), per-window `_NET_WM_ALLOWED_ACTIONS`, and
+  root `_NET_SUPPORTED` in pipelined queries on chrome sync, window move, and `PropertyNotify`
+  (zero X11 round trips on ordinary redraws). Layer-shell overlays, macOS, Windows, web, adopted macOS
+  panels, and staged playground subviews report unknown values. Testable headlessly via
+  `Runtime::set_window_manager_state`;
+  `cargo run -p rune --example custom_titlebar` displays the live values.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
   that set a few more end with `..AppSpec::new(..)`. Window chrome lives on the builders, keeping
   existing exhaustive `AppSpec` literals source-compatible.
@@ -2583,6 +2629,42 @@ true
 
 Headless work never touches the person's store: once the process has a headless run (`--snap`, `--script`, `--tree`, `--html` and the like, through `run` or `App::args`), has built a runtime with `App::headless_runtime`, or runs with `RUNE_CREDENTIALS=memory`, `Credentials::system()` is one in-memory store shared by the process. Windows, overlays and an app's own `Runtime::new` (thumbnails, an export) keep the platform's store, so a test that drives `Runtime::new` itself, or makes no runtime at all, looks like the app: use `Credentials::memory()` there (a store of its own) or set `RUNE_CREDENTIALS=memory`. On Linux, Rune's items carry `xdg:schema` `dev.rune.Credential` beside `service` and `account`, so other apps' items for the same service name stay untouched. `Credential`'s `Debug` output redacts the secret, and the copy a `Credential` holds is zeroed on drop (copies the platform's API or D-Bus make are outside Rune's reach).
 
+### System haptic feedback (`Tx::haptic`)
+
+Handlers request semantic haptic feedback without knowing which platform they run on:
+
+```rust
+el().key("stop").on_press_tx(|s: &mut App, tx: &mut Tx| {
+    s.detent = next_detent(s.detent);
+    tx.haptic(Haptic::Selection);
+});
+```
+
+An embedding host drains queued requests right after each `LayerHost::frame()` call (on the main thread) and forwards them to the platform's native feedback generator:
+
+```rust
+let frame = host.frame();
+for haptic in host.take_haptics() { play_native(haptic); }
+```
+
+- **Types**: `Haptic::Selection`, `Haptic::Impact(ImpactStrength::{Light, Medium, Heavy, Soft, Rigid})` and `Haptic::Notify(HapticOutcome::{Success, Warning, Error})`. There is intentionally no `is_available()` query: like AppKit `NSHapticFeedbackManager`, UIKit `UIFeedbackGenerator`, SwiftUI `SensoryFeedback`, Flutter `HapticFeedback` and Android `HapticFeedbackConstants`, requests are fire-and-forget no-ops where unsupported or muted by system settings.
+- **Timing, cooldown and bounds**: requests made during a frame (including `on_mount` and deferred field menus) commit once at the end of the frame so feedback aligns with the presented pixels, and `Tx::haptic` marks `frame_work` without dirtying the view (compatible with `Tx::live_only()`). Identical `Haptic` variants within 30 ms on the runtime clock are coalesced while different variants fire immediately. Pending requests sit in a fixed inline 32-entry ring buffer (oldest dropped first, zero heap allocation).
+- **Platform mapping**:
+
+| Rune `Haptic` | iOS (embedding host after `LayerHost::frame()`) | Android (embedding host via `View.performHapticFeedback`) | macOS (Rune windows & overlays via `NSHapticFeedbackManager`) | Windows / Linux / Web |
+| --- | --- | --- | --- | --- |
+| `Selection` | `UISelectionFeedbackGenerator.selectionChanged()` | `SEGMENT_TICK` (API 34+, fallback `CLOCK_TICK`) | `LevelChange` (`PerformanceTime::Now`) | no-op |
+| `Impact(Light)` | `UIImpactFeedbackGenerator(style: .light, view:).impactOccurred()` | `VIRTUAL_KEY` | `Alignment` (`PerformanceTime::Now`) | no-op |
+| `Impact(Medium)` | `UIImpactFeedbackGenerator(style: .medium, view:).impactOccurred()` | `KEYBOARD_TAP` | `Generic` (`PerformanceTime::Now`) | no-op |
+| `Impact(Heavy)` | `UIImpactFeedbackGenerator(style: .heavy, view:).impactOccurred()` | `CONTEXT_CLICK` (API 23+, fallback `LONG_PRESS`) | `Generic` (`PerformanceTime::Now`) | no-op |
+| `Impact(Soft)` | `UIImpactFeedbackGenerator(style: .soft, view:).impactOccurred()` | `SEGMENT_FREQUENT_TICK` (API 34+, fallback `CLOCK_TICK`) | `Alignment` (`PerformanceTime::Now`) | no-op |
+| `Impact(Rigid)` | `UIImpactFeedbackGenerator(style: .rigid, view:).impactOccurred()` | `CONTEXT_CLICK` (API 23+, fallback `KEYBOARD_TAP`) | `Generic` (`PerformanceTime::Now`) | no-op |
+| `Notify(Success)` | `UINotificationFeedbackGenerator(view:).notificationOccurred(.success)` | `CONFIRM` (API 30+, compat fallback `VIRTUAL_KEY`) | no-op | no-op |
+| `Notify(Warning)` | `UINotificationFeedbackGenerator(view:).notificationOccurred(.warning)` | `KEYBOARD_TAP` | no-op | no-op |
+| `Notify(Error)` | `UINotificationFeedbackGenerator(view:).notificationOccurred(.error)` | `REJECT` (API 30+, compat fallback `LONG_PRESS`) | no-op | no-op |
+
+- **Platform notes**: on iOS, prefer iOS 17.5+ view-bound `UIFeedbackGenerator(view:)` initialisers and host-managed `prepare()`. On Android, use `HapticFeedbackConstants` / `HapticFeedbackConstantsCompat` on the host `View` (no `VIBRATE` permission required). On macOS, shown Rune windows and overlays drain and play haptics right after presentation (and on unchanged frames for boundary bumps), while hidden/covered/prewarm frames discard them; `Notify(_)` is silent because AppKit has no notification patterns (matching SwiftUI). Web never calls `Navigator.vibrate` (non-Baseline, Android-only millisecond buzzes unsupported on iOS Safari). `examples/playground` includes a `Controls/Haptics` story. Tactile output has not yet been tested on a physical iPhone, Android device, or Force Touch trackpad, so the 30 ms cooldown and macOS pattern mapping may be tuned after hardware feedback.
+
 ### Pop-up and context menus
 
 `tx.popup_menu(menu, anchor, on_pick)` opens a native menu once the handler's frame is done.
@@ -3169,6 +3251,11 @@ is one more host on the event loop
   backends it does nothing yet. No safety net exists yet: an app whose event loop hangs while an
   `Exclusive` layer holds the keys leaves the desktop without a keyboard until it exits or is
   killed.
+- Activation tokens: `OverlayHandle::activation_token(reply)` asks a shown Wayland layer-shell
+  overlay's compositor for an `xdg_activation_v1` token using the latest pointer-button, key, or
+  touch-down serial on the surface, answering ahead of the same turn's `hide()` so a program
+  launched with `XDG_ACTIVATION_TOKEN` can come to the front under focus-stealing prevention.
+  Other platforms, hidden or closed overlays, and dropped handles answer `None`.
 - Checked under headless sway (layer shell, and Xwayland for X11) and on macOS (panel level,
   bounds, hide and reshow). Windows builds are checked with `cargo xwin clippy` only.
 - `El::window_drag()` (and `El::no_window_drag()`) moves window-backed overlays (Windows, macOS
@@ -3392,15 +3479,57 @@ clamped to 64). Visible material elements past the limit draw their fallback ins
 `ElementInfo::material_fallback = true`, emit `"materialFallback": true` in `--tree` JSON, and
 log a one-time notice to stderr when native materials are active.
 
+Off macOS Rune hosts no native material and the element draws its fallback, but the frame's
+material rects are still public, so an app can drive its own backdrop under them (on Windows, a
+companion window or composition visual). `Runtime::system_materials` lists the last built frame's
+`MaterialDraw`s (element id, material, rect and corner radius in physical pixels, `points(scale)`
+for window points), readable from `App::on_frame_drawn`. `ConfiguredOverlay::on_materials` hears
+each overlay frame's (`MaterialFrame`: draws and window scale) just before it presents. Give the
+element a translucent `fill` of its own to replace the neutral fallback tint. The hook runs only
+for presented frames: hiding the overlay, releasing or losing its surface sends no final empty
+frame, so hide the backdrop with the app's own `OverlayHandle::hide` calls and on
+`ConfiguredOverlay::on_availability`.
+
 Rune draws the shadow, so make the window larger than the card and turn the system shadow off
 with `MacWindowOptions::default().shadow(false)`, or the window gets a second, rectangular
 shadow. An outer shadow under a material leaves the material's interior clear.
 
-Opaque windows, other platforms and headless renders draw the element's fill instead, or a
-neutral tint when it has none; native views never appear in offscreen output, so goldens stay
-deterministic. `RUNE_SYSTEM_MATERIAL=legacy` forces the pre-26 view, `unsynced` moves the views
-outside the drawable's transaction (for comparison) and `off` draws the fallback.
-`examples/glass-card` flies a card over a test pattern; research note 26 has the measurements.
+On Windows 11 Build 22000+, an off-by-default `windows-system-material` Cargo feature backs
+`El::system_material` on transparent DirectComposition hardware-GPU windows and overlays with
+documented `DWMWA_USE_HOSTBACKDROPBRUSH` and `Windows.UI.Composition`
+(`Compositor::CreateHostBackdropBrush`) clipped per frame under Rune's swap-chain visual. While
+the feature is off (the default), no `Windows.UI.Composition` types are compiled in; while on,
+windows without `El::system_material` allocate no compositor or dispatcher queue, and active
+`WindowBackdrop` (`DWMWA_SYSTEMBACKDROP_TYPE`), opaque windows, Windows 10, `DxgiFromHwnd`, CPU
+painter frames, software/WARP adapters, and `RUNE_SYSTEM_MATERIAL=off` draw the fallback fill.
+Diagnostic switches for hardware verification: `RUNE_WIN_MATERIAL_CLIP=geo`
+(`CompositionGeometricClip` instead of `RectangleClip`), `RUNE_WIN_MATERIAL_TINT=subtle`
+(light/dark neutral tint child visual), and `RUNE_WIN_OVERLAY_NO_LAYERED=1` (omit
+`WS_EX_LAYERED` on overlays).
+
+On Linux Wayland, `El::system_material` drives per-element shaped compositor blur on transparent
+GPU windows and overlays (`zwlr_layer_shell_v1` and toplevel fallbacks) whenever
+`WindowBackdrop::None` is active and the compositor advertises `ext_background_effect_v1`
+(`Capability::Blur`) or `org_kde_kwin_blur_manager` (opt out with `RUNE_SYSTEM_MATERIAL=off`).
+Unlike macOS and Windows (where native material views sit behind the element and replace its
+fill), Wayland compositor blur has no tint of its own: translucent fills are kept as the tint,
+unfilled elements draw transparent instead of the opaque fallback, outer-shadow interior holes
+are punched, opaque fills (`alpha >= 1.0`) stay opaque with no blur region, elements below
+`0.10` opacity leave the region, ancestor clips and all four rounded corners are decomposed
+conservatively inward into logical `wl_region` spans (bounded at 512 rects per surface), and
+updates flush right before present so region and pixels commit atomically. Use
+`Cx::window_backdrop_supported(WindowBackdrop::Blur)` to query capability for both
+`WindowBackdrop::Blur` (whole surface, taking precedence) and `El::system_material` (per
+element). Shaped per-element Wayland blur is unit-tested off-screen and awaiting live compositor
+confirmation on issue #1381.
+
+Opaque windows, X11/XWayland, unsupported compositors, web and headless renders draw the
+element's fill instead, or a neutral tint when it has none; native materials never appear in
+offscreen output, so goldens stay deterministic. `RUNE_SYSTEM_MATERIAL=legacy` forces the pre-26
+macOS view, `unsynced` moves macOS views outside the drawable's transaction (for comparison) and
+`off` disables native materials on macOS, Windows, and Wayland.
+`examples/glass-card` flies a card over a test pattern (pass `--overlay` for a springing pill
+inside a transparent non-activating overlay); research note 26 has the measurements.
 
 To match a native AppKit card on top of the material, three more opt-ins:
 
@@ -3422,52 +3551,83 @@ to a card-sized window that moves 60 times a second, and fades out.
 
 ```rust,ignore
 let opts = WindowOptions { transparent: true, ..Default::default() };
-let spec = AppSpec::new("Notes", (800.0, 600.0), || (), |_, cx| {
-    let bg = if cx.window_backdrop().is_active() { Color::TRANSPARENT } else { theme_bg(cx) };
+let spec = AppSpec::new("Files", (960.0, 640.0), || (), |_, cx| {
+    let base = theme_bg(cx);
+    let bg = match cx.window_backdrop() {
+        WindowBackdrop::Blur => base.alpha(0.75),
+        b if b.is_active() => Color::TRANSPARENT,
+        _ => base,
+    };
     el().w_full().h_full().fill(bg)
 });
-App::new(spec).window_options(opts).window_backdrop(WindowBackdrop::Mica).run();
+App::new(spec).window_options(opts).window_backdrop(WindowBackdrop::Blur).run();
 ```
 
 Opt-in whole-window OS backdrop material behind the entire window or overlay (`WindowBackdrop::None`
-default, `Mica`, `MicaAlt`, `Acrylic`), configured with `App::window_backdrop`,
+default, `Mica`, `MicaAlt`, `Acrylic`, `Blur`), configured with `App::window_backdrop`,
 `WindowSpec::window_backdrop`, or `ConfiguredOverlay::window_backdrop`, updated at runtime with
 `Tx::set_window_backdrop`, `WindowHandle::set_window_backdrop`, or
-`OverlayHandle::set_window_backdrop`, and queried in views with `Cx::window_backdrop()` (memo-tracked;
-headless tests can drive it with `Runtime::set_window_backdrop`).
+`OverlayHandle::set_window_backdrop`, and queried in views with `Cx::window_backdrop()` and
+`Cx::window_backdrop_supported(backdrop)` (both memo-tracked; headless tests can drive them with
+`Runtime::set_window_backdrop` and `Runtime::set_window_backdrop_supported`).
 
-- **Windows 11 Build 22621+ (22H2)**: applies only the documented Win32 attribute
-  `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` (`DWMSBT_MAINWINDOW`, `DWMSBT_TABBEDWINDOW`,
-  `DWMSBT_TRANSIENTWINDOW`; `DWMSBT_NONE` when clearing) and syncs `DWMWA_USE_IMMERSIVE_DARK_MODE`
-  while active. Never uses undocumented `SetWindowCompositionAttribute`, accent policies, or
-  pre-22H2 `DWMWA_MICA_EFFECT`. Activates only on transparent windows and overlays presenting on a
-  hardware GPU through DirectComposition (`DxgiFromVisual`, `CompositeAlphaMode::PreMultiplied`,
-  not on the CPU painter or WARP). Re-applied across window recreation, hide/show,
-  maximize/unmaximize, device reattach, and theme updates.
-- **Zero cost when unused**: while `WindowBackdrop::None` is unchanged from default, Rune makes zero
-  DWM backdrop calls and existing windows, CPU-first launches, and headless renders stay unchanged.
-- **Microsoft activation and policy fallbacks**: by Microsoft design, Mica, Mica Alt, and Desktop
-  Acrylic fall back to a solid neutral colour when the window is inactive, on `WS_EX_NOACTIVATE`
-  overlays, in Battery Saver, in High Contrast, or when Transparency Effects are turned off.
-- **No transparent holes**: on Windows builds before 22621, opaque windows, `DxgiFromHwnd`, the
-  CPU painter, WARP, DWM error, macOS, Linux, web, and headless renders, `Cx::window_backdrop()`
-  reports `WindowBackdrop::None`. If a non-overlay Windows transparent window requested a non-`None`
+- **Windows 11 Build 22621+ (22H2)**: `Mica`, `MicaAlt`, and `Acrylic` apply only the documented
+  Win32 attribute `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` (`DWMSBT_MAINWINDOW`,
+  `DWMSBT_TABBEDWINDOW`, `DWMSBT_TRANSIENTWINDOW`; `DWMSBT_NONE` when clearing) and sync
+  `DWMWA_USE_IMMERSIVE_DARK_MODE` while active. Never uses undocumented
+  `SetWindowCompositionAttribute`, accent policies, or pre-22H2 `DWMWA_MICA_EFFECT`. Activates
+  only on transparent windows and overlays presenting on a hardware GPU through DirectComposition
+  (`DxgiFromVisual`, `CompositeAlphaMode::PreMultiplied`, not on the CPU painter or WARP).
+  Re-applied across window recreation, hide/show, maximize/unmaximize, device reattach, and theme
+  updates.
+- **Linux Wayland (`WindowBackdrop::Blur`)**: binds `ext_background_effect_v1` (version 1,
+  checking `Capability::Blur`; KWin 6.7+, GNOME Mutter 51+, Hyprland 0.56+, niri 26.04+, COSMIC
+  1.11) with `org_kde_kwin_blur_manager` (version 1) as fallback only when
+  `ext_background_effect_v1` is absent (KDE Plasma 5.x–6.6.x). Works on transparent GPU toplevel
+  windows, toplevel-fallback overlays, and `zwlr_layer_shell_v1` overlays, using surface-local
+  logical `wl_region` coordinates (approximating `sctk-adwaita` rounded bottom corners) and
+  tracking runtime `capabilities` changes with zero background threads. Unlike Windows Mica or
+  Acrylic (which paint DWM's own tint behind `Color::TRANSPARENT`), Wayland blur is untinted:
+  draw a translucent fill (such as `bg.alpha(0.75)`) over it when `cx.window_backdrop() ==
+  WindowBackdrop::Blur`.
+- **Zero cost when unused**: opaque windows make zero DWM or Wayland registry/blur calls.
+  Transparent Wayland windows left at `WindowBackdrop::None` never create a per-surface blur
+  object (preserving Hyprland global blur rules) and bind only the shared display manager lazily
+  after the first frame to populate `Cx::window_backdrop_supported(WindowBackdrop::Blur)`.
+- **Active state and compositor policies**: on Windows 11, DWM draws Mica, Mica Alt, and Desktop
+  Acrylic only while the window is the foreground window and shows its own solid neutral fallback
+  when unfocused, in Battery Saver, in High Contrast, or when Transparency Effects are turned off.
+  `Cx::window_backdrop().is_active()` stays `true` once DWM accepts the attribute (including on
+  non-activating `KeyPolicy::None` overlays, which never take focus and never show the live
+  material); apps wanting their own unfocused fill can pair `cx.window_backdrop().is_active()`
+  with `App::on_focus` or `El::on_window_focus`. On Wayland, neither `ext_background_effect_v1`
+  nor `org_kde_kwin_blur_manager` couples blur to focus—compositors such as KWin blur mapped
+  unfocused windows and layer-shell overlays alike—though blur appearance remains subject to
+  compositor policy.
+- **No transparent holes**: on Windows builds before 22621, X11/XWayland, unsupported Wayland
+  compositors (or when blur capability is revoked), opaque windows, `DxgiFromHwnd`, the CPU
+  painter, WARP, DWM error, macOS, web, and headless renders, `Cx::window_backdrop()` reports
+  `WindowBackdrop::None`. If a non-overlay Windows or Linux transparent window requested an active
   backdrop that could not activate, Rune clears its surface to an opaque theme-matched fallback so
   even a view that skips `cx.window_backdrop()` never opens a transparent hole.
-- **Live verification status**: eligibility, attribute constants, and lifecycle re-application are
-  unit-tested off-screen behind a Win32 seam; live visual composition on real Windows 11 hardware
-  has not yet been watched by the team and will be confirmed on issue #300. Try it with
-  `cargo run -p settings -- --backdrop mica`.
+- **Live verification status**: Windows 11 Mica, Mica Alt, and Desktop Acrylic have been verified
+  on live Windows 11 hardware (#300), and whole-surface Wayland `WindowBackdrop::Blur` on a
+  `zwlr_layer_shell_v1` overlay has been verified live on KDE Plasma / KWin 6.8.3. Toplevel
+  Wayland windows, other compositors, and per-element `El::system_material` shaped blur are
+  unit-tested off-screen and awaiting live reports on issue #1381. Try it with
+  `cargo run -p settings -- --backdrop mica` (Windows) or
+  `cargo run -p settings -- --backdrop blur` (Linux Wayland).
 
 ### Frosted panels
 
 Which blur a frosted surface needs depends on what sits behind it and whether it covers the whole
 window or one element:
 
-- **The whole window over the desktop (Windows 11 22H2+):** `WindowBackdrop` above (`Mica`,
-  `MicaAlt`, `Acrylic`), in a transparent DirectComposition window or overlay.
-- **One rounded element over the desktop (macOS):** `El::system_material` above, in a transparent
-  window. Only the platform can see behind the window.
+- **The whole window over the desktop (Windows 11 22H2+ / Linux Wayland):** `WindowBackdrop` above
+  (`Mica`, `MicaAlt`, `Acrylic` on Windows; `Blur` on Wayland), in a transparent window or overlay.
+- **One or more rounded elements over the desktop (macOS / Linux Wayland / opt-in Windows 11):**
+  `El::system_material` above, in a transparent window or overlay. Only the platform can see behind
+  the window.
 - **The app's own content (every platform):** `El::backdrop_blur` below. (`El::blur(σ)` blurs the element's own
   subtree, not its backdrop.) For refraction, a saturation lift and grain on top of the blur,
   `rune-fx`'s `Fx::lens(LensParams { frost: 1.0, .. })` is Liquid Glass "regular": put

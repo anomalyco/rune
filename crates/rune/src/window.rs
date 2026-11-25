@@ -22,6 +22,8 @@ use winit::window::Window;
 use winit::raw_window_handle::HasWindowHandle;
 
 use crate::app::WindowRequest;
+#[cfg(all(test, target_os = "linux", feature = "test-gpu-noop"))]
+use crate::frame::surface_stats::SurfaceMeter;
 use crate::frame::surface_stats::SurfaceStats;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::render::Gpu;
@@ -72,6 +74,7 @@ mod warm_frame;
 mod wayland_wake;
 #[cfg(target_os = "windows")]
 mod win32;
+pub(crate) mod wm_state;
 /// `crate::warm_gpu_cache` on Windows (`win32::handover`).
 #[cfg(target_os = "windows")]
 pub(crate) fn warm_gpu_cache() -> Result<(), String> { win32::handover::warm_gpu_cache() }
@@ -105,7 +108,7 @@ pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use surface::{
     Backoff, BackoffEffect, BackoffEvent, ConfigureError, HiddenPace, acquire_checked, configure,
-    configure_checked, reblend_core, poll_timer_deadline_core, surface_config,
+    configure_checked, frame_latency, reblend_core, poll_timer_deadline_core, surface_config,
     timer_deadline_core, timer_wants_frame_core,
 };
 pub(crate) use surface::{Missed, Presented, TIMER_FRAME, rebuild_renderer_core};
@@ -119,6 +122,8 @@ pub(crate) use surface::{
     HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, TimerFrame,
     timer_deadline, timer_wants_frame, wall_wake_deadline,
 };
+#[cfg(all(test, target_os = "linux", feature = "test-gpu-noop"))]
+use surface::acquire;
 #[cfg(target_os = "windows")]
 pub(crate) use win32::poll_pace;
 #[cfg(target_os = "windows")]
@@ -137,7 +142,7 @@ pub(crate) use host::app::{TypedWindowApp, WindowApp};
 #[cfg(test)]
 use state::{WakeFacts, WakeWork};
 #[cfg(all(test, target_os = "macos"))]
-use surface::LaunchDrawables;
+pub(crate) use surface::LaunchDrawables;
 #[cfg(test)]
 use surface::{SurfaceRetries, composing};
 
@@ -696,7 +701,10 @@ impl ApplicationHandler<WakeEvent> for Windows {
             },
             || {
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-                crate::platform::wayland_drop::shutdown();
+                {
+                    crate::platform::wayland::drop::shutdown();
+                    crate::platform::wayland::backdrop::shutdown();
+                }
                 crate::marks::mark("windows.dropped");
                 crate::clipboard::shutdown();
             },

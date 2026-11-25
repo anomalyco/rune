@@ -14,6 +14,9 @@ pub(crate) struct HostState {
     pub(in crate::runtime) full_screen: bool,
     /// Confirmed OS-active whole-window backdrop reported by [`Cx::window_backdrop`].
     pub(in crate::runtime) window_backdrop: crate::WindowBackdrop,
+    /// Bitmask of non-`None` `WindowBackdrop` variants currently supported by the active host
+    /// surface and OS/compositor, reported by [`Cx::window_backdrop_supported`].
+    pub(in crate::runtime) window_backdrop_supported: u8,
     /// When `true` on a transparent window, `clear_color()` clears to an opaque theme-matched
     /// fallback so a requested backdrop that could not activate never opens a transparent hole.
     pub(in crate::runtime) backdrop_opaque_fallback: bool,
@@ -95,6 +98,12 @@ pub(crate) struct HostState {
     pub(in crate::runtime) a11y: Option<Box<crate::a11y::tree::A11yTree>>,
     /// The band of a taller document the window draws (`App::web_document`).
     pub(in crate::runtime) page: Option<web_page::Page>,
+    pub(in crate::runtime) wm_state: crate::WindowManagerState,
+    /// Whether the last committed view read `Cx::decoration_mode`, `Cx::tiled_edges`, or `Cx::window_actions`.
+    pub(in crate::runtime) wm_state_read: bool,
+    /// Host-supplied safe-area insets `[top, right, bottom, left]` in logical points
+    /// (`Runtime::set_safe_area`); `None` falls back to browser insets on wasm32 or `[0.0; 4]`.
+    pub(in crate::runtime) safe_area: Option<[f32; 4]>,
 }
 
 impl HostState {
@@ -109,6 +118,7 @@ impl HostState {
             maximized: false,
             full_screen: false,
             window_backdrop: crate::WindowBackdrop::None,
+            window_backdrop_supported: 0,
             backdrop_opaque_fallback: false,
             system_reduced_motion: false,
             system_accent: crate::SystemAccent::DEFAULT,
@@ -151,6 +161,9 @@ impl HostState {
             haptics: Default::default(),
             a11y: None,
             page: None,
+            wm_state: crate::WindowManagerState::default(),
+            wm_state_read: false,
+            safe_area: None,
         }
     }
 

@@ -37,6 +37,19 @@ impl RuntimeCore {
         self.paint.max_native_materials()
     }
 
+    #[cfg_attr(
+        not(any(
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")),
+            test
+        )),
+        allow(dead_code)
+    )]
+    pub(crate) fn set_wayland_blur_materials(&mut self, on: bool) {
+        if self.paint.set_wayland_blur_materials(on) {
+            self.commit.dirty = true;
+        }
+    }
+
     pub fn fade_stops(&self) -> [f32; 2] {
         self.tree.fade_stops
     }

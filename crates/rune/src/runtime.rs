@@ -122,6 +122,8 @@ pub(crate) use input::pointer_lock::LockEffect;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use input::pointer_lock::LockPolicy;
 pub(crate) use input::titlebar::WindowMenu;
+#[cfg(any(not(target_arch = "wasm32"), test))]
+pub(crate) use input::titlebar::WindowMenuTrigger;
 #[cfg(target_os = "windows")]
 pub(crate) use input::titlebar::{DragHit, drag_hit_at};
 pub use input::touch::TouchPhase;

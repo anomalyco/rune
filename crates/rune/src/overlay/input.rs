@@ -246,6 +246,7 @@ impl OverlayCore {
     /// winit reported the pointer at (x, y).
     pub(super) fn cursor_moved(&mut self, app: &mut dyn OverlayApp, x: f32, y: f32) {
         self.dirty |= app.observe_pointer(x, y);
+        self.take_titlebar_action(app);
         self.begin_drag_out(app.rt_mut());
     }
 
@@ -552,6 +553,7 @@ impl OverlayCore {
         } else {
             self.advance_at(app, now);
         }
+        crate::haptics::flush_live(app.rt_mut(), false);
         self.backoff_step(crate::window::BackoffEvent::Missed { missed, paced, now });
         let pacing = self.pacing_state(missed != crate::window::Missed::Occluded);
         self.meter.set_pacing(pacing);
@@ -591,7 +593,7 @@ impl OverlayCore {
         if app.rt().live_pending() { self.dirty = true; }
         self.drag_ends_due(app);
         let mut requests = std::mem::take(&mut *self.shared.requests.lock().unwrap());
-        for reply in std::mem::take(&mut requests.tokens) { reply(self.activation_token()); }
+        for reply in requests.tokens.take() { reply(self.activation_token()); }
         if let Some(input) = requests.input { self.pending_input = Some(input); }
         self.apply_input(app.rt());
         if let Some(exclude) = requests.exclude_from_capture { self.set_capture_exclusion(exclude); }

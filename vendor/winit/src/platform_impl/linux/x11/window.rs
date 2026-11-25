@@ -2,6 +2,7 @@ use std::ffi::CString;
 use std::mem::replace;
 use std::os::raw::*;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::{cmp, env};
 
@@ -124,6 +125,7 @@ pub struct UnownedWindow {
     pub shared_state: Mutex<SharedState>,
     redraw_sender: WakeSender<WindowId>,
     activation_sender: WakeSender<super::ActivationToken>,
+    wm_state_changed: AtomicBool,
 }
 
 macro_rules! leap {
@@ -351,6 +353,7 @@ impl UnownedWindow {
             shared_state: SharedState::new(guessed_monitor, &window_attrs),
             redraw_sender: event_loop.redraw_sender.clone(),
             activation_sender: event_loop.activation_sender.clone(),
+            wm_state_changed: AtomicBool::new(false),
         };
 
         // Title must be set before mapping. Some tiling window managers (i.e. i3) use the window
@@ -824,6 +827,19 @@ impl UnownedWindow {
             flusher.check().expect("Failed to change window fullscreen state");
             self.invalidate_cached_frame_extents();
         }
+    }
+
+    /// Rune: records that an EWMH/GTK window-manager property changed on this window.
+    #[inline]
+    pub(crate) fn mark_wm_state_changed(&self) {
+        self.wm_state_changed.store(true, Ordering::Release);
+    }
+
+    /// Rune: returns and clears whether an EWMH/GTK window-manager property changed since
+    /// the last check (`WindowExtX11::take_wm_state_changed`).
+    #[inline]
+    pub fn take_wm_state_changed(&self) -> bool {
+        self.wm_state_changed.swap(false, Ordering::AcqRel)
     }
 
     // Called by EventProcessor when a VisibilityNotify event is received

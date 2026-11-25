@@ -29,8 +29,7 @@ impl RuntimeCore {
         app: &mut dyn AppDriver,
         tx: &mut Tx,
         commits0: u64,
-        open_urls: &mut Vec<crate::open_url::Link>,
-        open_paths: &mut Vec<crate::open_path::PathRequest>,
+        end_of_frame: &mut super::EndOfFrameRequests,
         max_rounds: usize,
     ) -> usize {
         if max_rounds == 0 || (!self.tree.has_mount && self.commit.mounted_seen_empty()) {
@@ -79,8 +78,7 @@ impl RuntimeCore {
                 }
                 merge(&mut round_tx, one);
             }
-            open_urls.extend(std::mem::take(&mut round_tx.open_urls));
-            open_paths.extend(std::mem::take(&mut round_tx.open_paths));
+            end_of_frame.extend_from(&mut round_tx);
             self.latch_requests(app, &mut round_tx);
             self.schedule_wakes(round_tx.wakes.drain(..));
 

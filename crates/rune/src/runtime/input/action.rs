@@ -197,7 +197,8 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::EdgeDrag(..) => "on_edge_drag",
         Action::Key { .. } => "on_key",
         Action::KeyUp(_) => "on_key_up",
-        Action::Wheel { .. } | Action::WheelRepost(_) => "on_wheel",
+        Action::Wheel { .. } | Action::WheelRepost(_)
+        | Action::Gesture(_, gesture_dispatch::Gesture::TouchWheel(_)) => "on_wheel",
         Action::Gesture(_, gesture_dispatch::Gesture::Magnify(_)) => "on_magnify",
         Action::Gesture(_, gesture_dispatch::Gesture::Rotate(_)) => "on_rotate",
         Action::Gesture(_, gesture_dispatch::Gesture::SmartMagnify(..)) => "on_smart_magnify",
@@ -569,7 +570,17 @@ impl RuntimeCore {
                 true
             }
             Action::EdgeDrag(path, mut d) => {
-                let Some((.., f)) = self.node(&path).and_then(|n| n.handlers.edge_drag.clone()) else { return false };
+                let gone = (d.phase == Phase::Up && d.cancelled)
+                    .then(|| self.pointer.touch.take_edge_gone(&path))
+                    .flatten();
+                let Some(f) = gone.or_else(|| {
+                    let edge = d.edge?;
+                    self.node(&path).and_then(|n| {
+                        n.handlers.edge_drags.as_deref().and_then(|e| e.get(edge)).map(|(_, f)| f.clone())
+                    })
+                }) else {
+                    return false;
+                };
                 if d.phase == Phase::Move {
                     one.commit = one.commit.instant();
                 }

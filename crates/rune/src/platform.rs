@@ -35,9 +35,7 @@ pub(crate) mod ready_signal;
 pub(crate) mod reopen;
 pub(crate) mod scroll_bars;
 #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-pub(crate) mod wayland_drop;
-#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-pub(crate) mod wayland_output;
+pub(crate) mod wayland;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 #[cfg(any(target_arch = "wasm32", test))]

@@ -69,5 +69,9 @@ libc = { workspace = true }
 [target.'cfg(all(not(target_vendor = "apple"), not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 wgpu = { workspace = true, features = ["vulkan"] }
 
+[[test]]
+name = "step_after_seek_macos"
+harness = false
+
 [lints]
 workspace = true

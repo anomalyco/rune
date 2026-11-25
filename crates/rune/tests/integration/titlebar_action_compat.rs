@@ -21,6 +21,11 @@ fn titlebar_action_exhaustive_match_compiles_and_resize_uses_separate_accessor()
 
     rt.pointer_move(100.0, 20.0);
     rt.pointer_down(100.0, 20.0);
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        assert_eq!(rt.take_titlebar_action(), None, "Linux defers mouse drag until motion crosses threshold");
+        rt.pointer_move(110.0, 20.0);
+    }
     let action = rt.take_titlebar_action().expect("drag action");
     assert_eq!(classify_titlebar_action(action), "drag");
     assert_eq!(rt.take_resize_action(), None);
