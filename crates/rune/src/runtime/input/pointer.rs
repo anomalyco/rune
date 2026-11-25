@@ -585,6 +585,26 @@ impl RuntimeCore {
     #[inline]
     pub fn hit_regions(&self) -> &[[f32; 4]] { self.hit.overlay_hits() }
 
+    /// The element the pointer's shape is read from: the pressed one while a gesture holds the
+    /// pointer (the text that holds the selection while a drag selects), else the one under
+    /// (`x`, `y`), or the held hover while moving layout holds it.
+    fn cursor_origin(&self, x: f32, y: f32) -> Option<usize> {
+        match self.pointer.press.path() {
+            Some(_) if self.edit.selectable.phase.dragging() => self.selection_holder(),
+            Some(p) => self.live_index(p).filter(|&i| self.allowed(i)),
+            // Moving layout holds hover: the cursor stays with what the pointer was over.
+            None => self.held_hover().flatten().or_else(|| self.cursor_target(x, y)),
+        }
+    }
+
+    /// The path of the element [`Self::cursor`] reads the shape from, for the tree dump. `None`
+    /// while the pointer is outside the window, over no element, or panning an autoscroll.
+    pub(crate) fn cursor_path(&self) -> Option<&str> {
+        let (x, y) = self.pointer.pos.filter(|&(x, y)| self.in_viewport(x, y))?;
+        if self.autoscroll_cursor().is_some() { return None; }
+        self.cursor_origin(x, y).map(|i| self.tree.nodes[i].path.as_str())
+    }
+
     /// The pointer shape the shell should show: the pressed element's while a gesture holds
     /// the pointer, else the one under it in the current frame (the held hover while moving
     /// layout holds it), from the nearest ancestor that sets one. The arrow while the pointer is outside the window.
@@ -594,13 +614,7 @@ impl RuntimeCore {
         // An element on its way out has no cursor: `Cursor::Hidden` ends when it's removed.
         // Selectable text and hoverable hit targets keep their own cursor inside a pressable or
         // draggable ancestor.
-        let target = match self.pointer.press.path() {
-            Some(_) if self.edit.selectable.phase.dragging() => self.selection_holder(),
-            Some(p) => self.live_index(p).filter(|&i| self.allowed(i)),
-            // Moving layout holds hover: the cursor stays with what the pointer was over.
-            None => self.held_hover().flatten().or_else(|| self.cursor_target(x, y)),
-        };
-        let Some(mut i) = target else {
+        let Some(mut i) = self.cursor_origin(x, y) else {
             return crate::el::Cursor::Default;
         };
         if self.tree.nodes[i].handlers.cursor.is_none()
