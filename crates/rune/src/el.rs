@@ -29,6 +29,7 @@ mod growth;
 mod handler_set;
 mod handlers;
 mod help;
+mod highlight_texts;
 mod input;
 mod isolates;
 mod layout;
