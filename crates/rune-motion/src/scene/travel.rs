@@ -33,7 +33,7 @@ impl Scene {
         anim: impl Into<LayoutAnim>,
     ) {
         let Some(a) = self.slot(from) else { return };
-        let (mut start, mut vel) = self.exact_world(a);
+        let (mut start, mut vel) = self.exact_shown(a);
         for k in 0..4 {
             let (off, anc, anc_to) = if k % 2 == 0 {
                 (offset.x, anchor.x, anchor_to.x)
@@ -61,7 +61,7 @@ impl Scene {
         anim: impl Into<LayoutAnim>,
     ) {
         let Some(a) = self.slot(from) else { return };
-        let (mut start, mut vel) = self.exact_world(a);
+        let (mut start, mut vel) = self.exact_shown(a);
         let t = [travel.x, travel.y];
         let tv = [travel_vel.x, travel_vel.y];
         for k in 0..4 {
@@ -94,7 +94,8 @@ impl Scene {
         self.track_animate(b, prop::FILL, to_fill, anim.y);
         self.intent(to, Intent::POSITION | Intent::SIZE | Intent::SHAPE, anim.y.curve.logical_duration());
         let start_rect = Rect::from_edges(start[0], start[1], start[2], start[3]);
-        let end_rect = self.nodes[b].frame.translated(self.parent_target_origin(b));
+        let own = self.current::<Vec2>(b, prop::OFFSET).unwrap_or(Vec2::ZERO);
+        let end_rect = self.nodes[b].frame.translated(self.parent_target_origin(b)).translated(own);
         self.handovers.push(Handover { from, to, start: start_rect, end: end_rect });
         self.remove_now(a);
     }
@@ -139,7 +140,12 @@ impl Scene {
     pub fn path_lead(&self, id: NodeId) -> Option<[Vec2; 2]> {
         let i = self.slot(id)?;
         let path = self.nodes[i].path?;
-        let (on, laid) = (self.path_dual(i, path, path.origin), self.laid_dual(i));
+        let (on, mut laid) = (self.path_dual(i, path, path.origin), self.laid_dual(i));
+        let mut off = [D::c(0.0); 2];
+        self.lanes_dual(i, prop::OFFSET.id, &mut off);
+        for k in 0..4 {
+            laid[k] = laid[k].add(off[k % 2]);
+        }
         // The presented snap step: 1/64 of a device pixel.
         let q = 1.0 / (64.0 * self.store.pixel_scale());
         let size = |e: [D; 4], k: usize| e[k + 2].x - e[k].x;
@@ -176,7 +182,8 @@ impl Scene {
     pub(super) fn start_path(&mut self, i: usize, start: [f32; 4], vel: [f32; 4], anim: LayoutAnim) {
         let end_local = self.nodes[i].frame;
         let po = self.parent_target_origin(i);
-        let end = end_local.translated(po).edges();
+        let own = self.current::<Vec2>(i, prop::OFFSET).unwrap_or(Vec2::ZERO);
+        let end = end_local.translated(po).translated(own).edges();
         // Project the current edge velocity onto each axis' path to keep it moving the same way.
         let px = axis_progress_velocity(start[0], start[2], end[0], end[2], vel[0], vel[2]);
         let py = axis_progress_velocity(start[1], start[3], end[1], end[3], vel[1], vel[3]);
