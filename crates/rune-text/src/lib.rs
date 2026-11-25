@@ -35,6 +35,7 @@ mod measure;
 #[doc(hidden)]
 pub mod outline;
 mod paragraphs;
+mod positioned;
 #[doc(hidden)]
 pub mod profile;
 mod raster;
@@ -231,6 +232,11 @@ pub use paragraphs::TextLayout;
 pub use paragraphs::common_end;
 pub use paragraphs::common_start;
 pub use parley;
+#[doc(hidden)]
+pub use positioned::PositionedA11yChunk;
+#[doc(hidden)]
+pub use positioned::PositionedA11yLines;
+pub use positioned::PositionedText;
 #[doc(hidden)]
 pub use raster::coretext_match;
 pub use raster::coretext_match::FontSmoothing;
