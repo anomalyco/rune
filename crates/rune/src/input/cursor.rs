@@ -17,7 +17,11 @@ pub enum Cursor {
     Default,
     Pointer,
     Text,
+    /// An open hand (CSS `grab`), over something a drag moves. Windows has no such system
+    /// cursor, so there it draws Chromium's.
     Grab,
+    /// A closed hand (CSS `grabbing`), while the drag holds it. Chromium's on Windows, as for
+    /// [`Cursor::Grab`].
     Grabbing,
     NotAllowed,
     Move,
@@ -67,9 +71,11 @@ pub enum Cursor {
     /// cursor, so there it draws Chromium's.
     Cell,
     /// The system's magnifier with a plus (CSS `zoom-in`), at the size of every other system
-    /// cursor: over a picture that opens larger.
+    /// cursor: over a picture that opens larger. Windows has no such system cursor, so there it
+    /// draws Chromium's.
     ZoomIn,
-    /// The magnifier with a minus (CSS `zoom-out`).
+    /// The magnifier with a minus (CSS `zoom-out`). Chromium's on Windows, as for
+    /// [`Cursor::ZoomIn`].
     ZoomOut,
     /// No OS cursor (CSS `none`), for views that draw their own. It shows again as soon as the
     /// pointer leaves the element or the window, the element goes away, or the host loses the
@@ -107,6 +113,24 @@ pub struct CursorImage {
 /// 32 px bitmap doubled.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) const CELL: CursorImage = CursorImage { bytes: include_bytes!("cursor/cell.png"), hot: [7.0, 7.0], crisp: true };
+
+/// The picture Windows shows for `c` where it has no system cursor of its own: Chromium's Windows
+/// cursors (`ui/resources/cursors/*.cur`), each pixel of their 32 px bitmaps doubled, with their
+/// hot spots. winit's stand-ins there are the four-way move arrows for both hands and the arrow
+/// for both magnifiers. (Chromium's `col-resize` and `row-resize` invert the screen under them,
+/// which a colour cursor can't; those stay the system's two-way arrows.)
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn windows_image(c: Cursor) -> Option<CursorImage> {
+    let picture = |bytes: &'static [u8], hot: [f32; 2]| CursorImage { bytes, hot, crisp: true };
+    match c {
+        Cursor::Cell => Some(CELL),
+        Cursor::Grab => Some(picture(include_bytes!("cursor/grab.png"), [13.0, 13.0])),
+        Cursor::Grabbing => Some(picture(include_bytes!("cursor/grabbing.png"), [13.0, 13.0])),
+        Cursor::ZoomIn => Some(picture(include_bytes!("cursor/zoom_in.png"), [6.0, 6.0])),
+        Cursor::ZoomOut => Some(picture(include_bytes!("cursor/zoom_out.png"), [6.0, 6.0])),
+        _ => None,
+    }
+}
 
 /// The pan cursor a middle-click autoscroll shows (`runtime/input/autoscroll.rs`): Chromium's
 /// Windows `pan_*` cursors, each pixel of their 32 px bitmaps doubled, which Blink picks the way
