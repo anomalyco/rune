@@ -19,7 +19,6 @@ pub enum NativeDisplayId {
 impl DisplayId {
     pub fn native_id(&self) -> Option<NativeDisplayId> { self.1 }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn from_monitor(monitor: winit::monitor::MonitorHandle, _wayland: bool) -> Self {
         #[cfg(target_os = "macos")]
         let native = { use winit::platform::macos::MonitorHandleExtMacOS; Some(NativeDisplayId::MacOS(monitor.native_id())) };

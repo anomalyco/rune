@@ -428,6 +428,7 @@ impl OverlayCore {
                 return None;
             }
         };
+        crate::window::displays::track(&window);
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
         #[cfg(all(target_os = "linux", feature = "dbus"))]

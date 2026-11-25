@@ -87,6 +87,7 @@ impl Host {
         #[cfg(target_os = "windows")]
         let attrs = self.windows_window.apply_attributes(crate::platform::app_icon::with_icon(winit::platform::windows::WindowAttributesExtWindows::with_drag_and_drop(attrs.with_visible(false).with_active(false), false)));
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        crate::window::displays::track(&window);
         self.applied_theme = effective_theme;
         crate::marks::mark("window.native");
         // Before first show or CPU paint so no capture sees a frame and no taskbar button flashes.
