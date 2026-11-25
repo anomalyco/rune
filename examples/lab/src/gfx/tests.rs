@@ -6,7 +6,7 @@ use rune::runtime::Runtime;
 use crate::knobs::{Scene, specs};
 use crate::{Lab, ui};
 
-use super::LabGfx;
+use super::{LabGfx, apply_opacity};
 
 fn draw_on(gfx: &mut LabGfx, rt: &mut Runtime<Lab>, gpu: &Gpu, ui_ren: &mut Renderer, off: &Offscreen, dt: f64) {
     rt.frame(dt);
@@ -29,6 +29,52 @@ fn draw_on(gfx: &mut LabGfx, rt: &mut Runtime<Lab>, gpu: &Gpu, ui_ren: &mut Rend
 }
 
 static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[test]
+fn apply_opacity_preserves_windfoil_glyph_outline_record_in_border() {
+    use rune::render::{Instance, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_RECT, NO_CLIP};
+
+    let glyph = Instance {
+        rect: [10.0, 20.0, 9.0, 14.0],
+        radii: [10.5, 31.0, 0.006, 1.0],
+        fill: [0.4, 0.8, 0.6, 1.0],
+        border: [4172.0, 128.0, 0.25, 1.0],
+        params: [0.0, KIND_GLYPH, 0.0, 0.6],
+        uv: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let faded_glyph = apply_opacity(&glyph, 0.5);
+    assert_eq!(faded_glyph.fill, [0.2, 0.4, 0.3, 0.5]);
+    assert_eq!(faded_glyph.border, glyph.border, "Windfoil outline record metadata in border must not be scaled by opacity");
+
+    let wrapped_img = Instance {
+        border: [12.0, 24.0, 64.0, 48.0],
+        params: [0.0, KIND_IMAGE, 0.0, 3.0],
+        ..glyph
+    };
+    assert_eq!(apply_opacity(&wrapped_img, 0.5).border, wrapped_img.border, "wrapped image placement rect in border must not be scaled");
+
+    let box_inst = Instance {
+        border: [0.2, 0.4, 0.6, 0.8],
+        params: [1.0, KIND_RECT, 0.0, 1.0],
+        ..glyph
+    };
+    let faded_box = apply_opacity(&box_inst, 0.5);
+    assert_eq!(faded_box.border, [0.1, 0.2, 0.3, 0.4]);
+    assert_eq!(faded_box.params[3], 0.5);
+
+    let grad = Instance {
+        border: [0.2, 0.4, 0.6, 0.8],
+        uv: [0.8, 0.6, 0.4, 1.0],
+        params: [1.0, KIND_GRADIENT, 0.0, 1.0],
+        ..glyph
+    };
+    let faded_grad = apply_opacity(&grad, 0.5);
+    assert_eq!(faded_grad.border, [0.1, 0.2, 0.3, 0.4]);
+    assert_eq!(faded_grad.uv, [0.4, 0.3, 0.2, 0.5]);
+    assert_eq!(faded_grad.params[3], 0.5);
+}
 
 #[test]
 fn lab_gfx_rebuilds_resources_and_hdr_format_when_device_key_changes() {
