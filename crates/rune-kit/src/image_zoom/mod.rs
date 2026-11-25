@@ -334,6 +334,7 @@ struct PreviewCore {
     labels: [String; 4],
     format: fn(u32) -> String,
     controls: Option<rune::Transition>,
+    pan_cursors: bool,
 }
 
 impl PreviewCore {
@@ -345,6 +346,7 @@ impl PreviewCore {
             labels: ["Zoom out".into(), "Zoom to fit".into(), "Zoom in".into(), "Close".into()],
             format: |n| format!("{n}%"),
             controls: None,
+            pan_cursors: true,
         }
     }
 
@@ -360,9 +362,10 @@ impl PreviewCore {
         if zoom.zoomed() {
             // A zoomed image fades out across the padding instead of being cut at the edge; a
             // fitted one never reaches it.
-            body_el = body_el
-                .clip_fade_linear(PAD, PAD, PAD, PAD)
-                .cursor(if zoom.dragging() { Cursor::Grabbing } else { Cursor::Grab });
+            body_el = body_el.clip_fade_linear(PAD, PAD, PAD, PAD);
+            if self.pan_cursors {
+                body_el = body_el.cursor(if zoom.dragging() { Cursor::Grabbing } else { Cursor::Grab });
+            }
         }
         // The preview holds focus, so its keys reach it before the app's (which zoom the window
         // on the same shortcuts) wherever the pointer pressed.
@@ -449,6 +452,14 @@ impl<S: 'static> Preview<S> {
     /// How the level reads, from a whole percentage (`141%` unless set).
     pub fn format_level(mut self, f: fn(u32) -> String) -> Self {
         self.core.format = f;
+        self
+    }
+
+    /// Whether a zoomed image shows the open hand, and the closed one while it is dragged (CSS
+    /// `grab` and `grabbing`). On unless set; off, the preview sets no cursor, so the arrow
+    /// shows, as over a fitted image. Dragging pans either way.
+    pub fn pan_cursors(mut self, on: bool) -> Self {
+        self.core.pan_cursors = on;
         self
     }
 
