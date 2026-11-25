@@ -285,7 +285,7 @@ impl Surface for NativeSurface {
             .collect::<Result<Vec<_>, _>>()?;
 
         let present_semaphores = (0..images.len())
-            .map(|i| Arc::new(Mutex::new(SwapchainPresentSemaphores::new(i))))
+            .map(|i| Arc::new(Mutex::new(SwapchainPresentSemaphores::new(&device.shared, i))))
             .collect::<Vec<_>>();
 
         Ok(Box::new(NativeSwapchain {
@@ -395,24 +395,15 @@ impl Swapchain for NativeSwapchain {
             unsafe { device.shared.raw.destroy_fence(fence, None) }
         }
 
-        // We cannot take this by value, as the function returns `self`.
-        for semaphore in self.acquire_semaphores.drain(..) {
-            let arc_removed = Arc::into_inner(semaphore).expect(
-                "Trying to destroy a SwapchainAcquireSemaphore that is still in use by a SurfaceTexture",
-            );
-            let mutex_removed = arc_removed.into_inner();
-
-            unsafe { mutex_removed.destroy(&device.shared.raw) };
-        }
-
-        for semaphore in self.present_semaphores.drain(..) {
-            let arc_removed = Arc::into_inner(semaphore).expect(
-                "Trying to destroy a SwapchainPresentSemaphores that is still in use by a SurfaceTexture",
-            );
-            let mutex_removed = arc_removed.into_inner();
-
-            unsafe { mutex_removed.destroy(&device.shared.raw) };
-        }
+        // Drop the swapchain's own Arc references to its semaphores. Each semaphore wrapper
+        // owns an `Arc<DeviceShared>` and calls `vkDestroySemaphore` in `Drop` when its final
+        // Arc is released: on healthy teardown that happens immediately here; when wgpu-core's
+        // `Surface::drop` still holds an `acquired_texture` across `unconfigure()` after a
+        // submit-time `Device::Lost` (because `Surface::present`/`discard` bailed out at
+        // `check_is_valid()?`), releasing the swapchain's Arc avoids panicking and destroys the
+        // semaphores cleanly when `Surface::drop` drops `acquired_texture` immediately after.
+        self.acquire_semaphores.clear();
+        self.present_semaphores.clear();
     }
 
     unsafe fn acquire(
@@ -681,8 +672,8 @@ impl NativeSwapchain {
 }
 
 /// Semaphore used to acquire a swapchain image.
-#[derive(Debug)]
 struct SwapchainAcquireSemaphore {
+    device: Arc<DeviceShared>,
     /// A semaphore that is signaled when this image is safe for us to modify.
     ///
     /// When [`vkAcquireNextImageKHR`] returns the index of the next swapchain
@@ -730,8 +721,9 @@ struct SwapchainAcquireSemaphore {
 }
 
 impl SwapchainAcquireSemaphore {
-    fn new(device: &DeviceShared, index: usize) -> Result<Self, crate::DeviceError> {
+    fn new(device: &Arc<DeviceShared>, index: usize) -> Result<Self, crate::DeviceError> {
         Ok(Self {
+            device: Arc::clone(device),
             acquire: device
                 .new_binary_semaphore(&format!("SwapchainImageSemaphore: Index {index} acquire"))?,
             should_wait_for_acquire: true,
@@ -766,15 +758,28 @@ impl SwapchainAcquireSemaphore {
         self.should_wait_for_acquire = true;
     }
 
-    unsafe fn destroy(&self, device: &ash::Device) {
+}
+
+impl core::fmt::Debug for SwapchainAcquireSemaphore {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SwapchainAcquireSemaphore")
+            .field("acquire", &self.acquire)
+            .field("should_wait_for_acquire", &self.should_wait_for_acquire)
+            .field("previously_used_submission_index", &self.previously_used_submission_index)
+            .finish()
+    }
+}
+
+impl Drop for SwapchainAcquireSemaphore {
+    fn drop(&mut self) {
         unsafe {
-            device.destroy_semaphore(self.acquire, None);
+            self.device.raw.destroy_semaphore(self.acquire, None);
         }
     }
 }
 
-#[derive(Debug)]
 struct SwapchainPresentSemaphores {
+    device: Arc<DeviceShared>,
     /// A pool of semaphores for ordering presentation after drawing.
     ///
     /// The first [`present_index`] semaphores in this vector are:
@@ -821,8 +826,9 @@ struct SwapchainPresentSemaphores {
 }
 
 impl SwapchainPresentSemaphores {
-    pub fn new(frame_index: usize) -> Self {
+    pub fn new(device: &Arc<DeviceShared>, frame_index: usize) -> Self {
         Self {
+            device: Arc::clone(device),
             present: Vec::new(),
             present_index: 0,
             frame_index,
@@ -876,10 +882,23 @@ impl SwapchainPresentSemaphores {
         self.present[0..self.present_index].to_vec()
     }
 
-    unsafe fn destroy(&self, device: &ash::Device) {
+}
+
+impl core::fmt::Debug for SwapchainPresentSemaphores {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SwapchainPresentSemaphores")
+            .field("present", &self.present)
+            .field("present_index", &self.present_index)
+            .field("frame_index", &self.frame_index)
+            .finish()
+    }
+}
+
+impl Drop for SwapchainPresentSemaphores {
+    fn drop(&mut self) {
         unsafe {
             for sem in &self.present {
-                device.destroy_semaphore(*sem, None);
+                self.device.raw.destroy_semaphore(*sem, None);
             }
         }
     }

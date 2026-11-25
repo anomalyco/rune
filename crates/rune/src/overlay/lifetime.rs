@@ -585,6 +585,7 @@ impl OverlayCore {
     /// screen-sized panels that join every Space empty Mission Control's Space thumbnails.
     /// There the window goes too, and the next show makes a new one.
     pub(super) fn park(&mut self) {
+        self.assert_no_live_frame_texture();
         self.rest = crate::window::Rest::Rested;
         #[cfg(target_os = "windows")]
         if self.has_cpu() {

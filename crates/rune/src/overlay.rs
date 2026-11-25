@@ -702,6 +702,9 @@ pub(in crate::overlay) struct OverlayCore {
     gpu_loss_latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>,
     /// Whether terminal GPU teardown has already run on this overlay.
     terminal_gpu_entered: bool,
+    /// Tracks whether a `wgpu::SurfaceTexture` acquired from this overlay's surface is alive on
+    /// the stack so surface/GPU teardown never runs before the frame's texture drops.
+    frame_teardown: crate::render::loss_latch::FrameTeardownState,
     /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
     pub(in crate::overlay) frame_latency: Option<u32>,
     /// `ConfiguredOverlay::on_materials`, called before each present.
@@ -823,6 +826,7 @@ impl OverlayCore {
             prewarm_effects: crate::PrewarmEffects::NONE,
             gpu_loss_latch: None,
             terminal_gpu_entered: false,
+            frame_teardown: crate::render::loss_latch::FrameTeardownState::Idle,
             frame_latency: None,
             on_materials: None,
             requested_renderer: crate::RendererKind::Gpu,

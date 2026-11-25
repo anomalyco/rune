@@ -10,7 +10,10 @@ use winit::keyboard::ModifiersState;
 use super::Host;
 use super::create::{alpha_mode, alpha_pass};
 use crate::app::{Activation, WindowRequest};
-use crate::render::loss_latch::{GpuFailureKind, GpuLossLatch, GpuLossPolicy};
+use crate::render::loss_latch::{
+    FrameTeardownEffect, FrameTeardownEvent, FrameTeardownState, GpuFailureKind, GpuLossLatch,
+    GpuLossPolicy,
+};
 use crate::render::{Gpu, SurfaceSetupError};
 use crate::window::chrome;
 use crate::window::file_drop::FileDrop;
@@ -29,6 +32,9 @@ pub(in crate::window) struct TerminalLoss {
     latch: Option<Arc<GpuLossLatch>>,
     /// Whether [`Host::enter_terminal_gpu_loss`] has already torn down GPU/surface resources.
     entered: bool,
+    /// Tracks whether a `wgpu::SurfaceTexture` acquired from this window's surface is currently
+    /// alive on the stack (active under both `Terminal` and `Recover`).
+    frame_teardown: FrameTeardownState,
 }
 
 impl TerminalLoss {
@@ -40,7 +46,23 @@ impl TerminalLoss {
             GpuLossPolicy::Terminal => Some(latch.unwrap_or_else(GpuLossLatch::new)),
             GpuLossPolicy::Recover => None,
         };
-        Self { policy, latch, entered: false }
+        Self { policy, latch, entered: false, frame_teardown: FrameTeardownState::Idle }
+    }
+
+    #[inline]
+    pub(in crate::window) fn has_live_texture(&self) -> bool {
+        self.frame_teardown.has_live_texture()
+    }
+
+    #[inline]
+    pub(in crate::window) fn note_frame_texture_acquired_direct(&mut self) {
+        let _ = self.frame_teardown.step(FrameTeardownEvent::TextureAcquired);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[inline]
+    pub(in crate::window) fn note_frame_texture_released_direct(&mut self) {
+        let _ = self.frame_teardown.step(FrameTeardownEvent::TextureReleased);
     }
 
     #[inline]
@@ -113,6 +135,26 @@ impl Host {
     /// has run if the latch tripped. Returns `true` when this host is permanently latched.
     ///
     /// Fast path for `GpuLossPolicy::Recover`: single branch, zero atomics, returns `false`.
+    /// Marks that the frame's `wgpu::SurfaceTexture` has been consumed by `queue.present` or
+    /// dropped, running any deferred terminal GPU teardown now that no texture is outstanding.
+    #[inline]
+    pub(in crate::window) fn note_frame_texture_released(&mut self) {
+        let effects = self.terminal_loss.frame_teardown.step(FrameTeardownEvent::TextureReleased);
+        if effects.into_iter().any(|e| e == FrameTeardownEffect::TeardownNow) {
+            self.enter_terminal_gpu_loss();
+        }
+    }
+
+    /// Debug self-check at every surface teardown or reconfiguration point: no `SurfaceTexture`
+    /// acquired from this window's surface may still be alive.
+    #[inline]
+    pub(in crate::window) fn assert_no_live_frame_texture(&self) {
+        debug_assert!(
+            std::thread::panicking() || !self.terminal_loss.has_live_texture(),
+            "surface teardown or reconfiguration while a SurfaceTexture is still alive",
+        );
+    }
+
     pub(in crate::window) fn poll_gpu_loss(&mut self) -> bool {
         if !self.terminal_loss.is_terminal() {
             return false;
@@ -127,20 +169,40 @@ impl Host {
             }
         }
         if self.terminal_loss.is_failed() {
-            self.enter_terminal_gpu_loss();
+            self.request_terminal_teardown();
             return true;
         }
         false
     }
 
+    /// Records terminal teardown in the frame-teardown state machine: tears down immediately when
+    /// `Idle`, or defers teardown until `note_frame_texture_released()` when a `SurfaceTexture`
+    /// is currently alive on the stack.
+    fn request_terminal_teardown(&mut self) {
+        if let Some(reason) = self.terminal_loss.reason() {
+            self.shared.set_window_error(Some(reason));
+        }
+        let effects = self.terminal_loss.frame_teardown.step(FrameTeardownEvent::LossNoticed);
+        if effects.into_iter().any(|e| e == FrameTeardownEffect::TeardownNow) {
+            self.enter_terminal_gpu_loss();
+        }
+    }
+
     /// Polls `gpu.device` once under `Terminal` so any synchronous validation or device-lost
     /// callback produced by encoding or submission runs before the next GPU boundary.
+    /// Treats `PollFailed::Lost` (including wgpu 30's caught `Error in Device::poll` panic) as a
+    /// real device loss rather than silently discarding it.
     pub(in crate::window) fn poll_device_for_terminal_loss(&mut self) -> bool {
         if !self.terminal_loss.is_terminal() {
             return false;
         }
         if let Some((gpu, _)) = self.gpu.as_ref() {
-            rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+            if matches!(rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll), Err(rune_gpu::health::PollFailed::Lost)) {
+                gpu.mark_lost();
+                if let Some(latch) = self.terminal_loss.latch().cloned() && !latch.is_failed() {
+                    let _ = latch.record_device_lost(false, "the GPU device was lost");
+                }
+            }
         }
         self.poll_gpu_loss()
     }
@@ -161,7 +223,7 @@ impl Host {
         if let Some(latch) = self.terminal_loss.latch().cloned() {
             let _ = latch.record_failure(kind, reason);
         }
-        self.enter_terminal_gpu_loss();
+        self.request_terminal_teardown();
     }
 
     /// Single place carrying out the after-latch transition on a `GpuLossPolicy::Terminal` window:
@@ -170,6 +232,7 @@ impl Host {
     /// resources (`release_compositor_gpu`), clears `gpu_pool` if pointing at the failed GPU,
     /// stops pacing/timers/redraws, and cancels active input state without hiding the window.
     pub(in crate::window) fn enter_terminal_gpu_loss(&mut self) {
+        self.assert_no_live_frame_texture();
         if let Some(reason) = self.terminal_loss.reason() {
             self.shared.set_window_error(Some(reason));
         }
@@ -319,6 +382,7 @@ impl Host {
     /// `release_compositor_gpu()`. Latches permanently if recreation or `configure_checked` fails.
     #[allow(unsafe_code)]
     pub(in crate::window) fn recreate_surface_same_device(&mut self) -> bool {
+        self.assert_no_live_frame_texture();
         if self.poll_gpu_loss() {
             return false;
         }

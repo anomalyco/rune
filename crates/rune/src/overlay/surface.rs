@@ -482,6 +482,7 @@ impl OverlayCore {
     }
 
     pub(super) fn rescale(&mut self, app: &mut dyn OverlayApp, gpu: &Gpu, scale: f32) {
+        self.assert_no_live_frame_texture();
         let Some(live) = self.surface.live_mut() else { return };
         if (live.scale - scale).abs() < f32::EPSILON {
             return;
@@ -555,6 +556,7 @@ impl OverlayCore {
 
     /// Drops the surface and every native owner of its window; the next show makes new ones.
     pub(super) fn release(&mut self) {
+        self.assert_no_live_frame_texture();
         // The surface must disappear before returning the adopted view or removing subclasses.
         // Keep winit's Window alive until after those native owners have unwound, too.
         let backing = match self.surface.release() {

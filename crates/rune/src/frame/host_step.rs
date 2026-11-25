@@ -409,6 +409,12 @@ pub(crate) trait FrameHost {
     #[inline]
     fn prepare_reacquire(&mut self, _reason: ReacquireReason, _info: &mut StepInfo) -> bool { true }
 
+    /// Called immediately after [`run`] drops an acquired drawable early (before post-step
+    /// reacquisition, diagnostic miss, or Wayland content-resize hold) so hosts can release
+    /// frame-texture tracking before any surface teardown or reconfiguration.
+    #[inline]
+    fn on_drawable_dropped(&mut self) {}
+
     /// Handles a missed acquire or failed reconfiguration. `stepped` is `true` iff the runtime
     /// already stepped for this frame, so the host must not step it a second time.
     #[inline]
@@ -534,6 +540,7 @@ pub(crate) fn run<H: FrameHost>(host: &mut H) -> Outcome {
             Effects::One(Effect::Sync) => break,
             Effects::One(Effect::DropAndReacquire(reason)) => {
                 drop(drawable);
+                host.on_drawable_dropped();
                 let reacquired = if host.prepare_reacquire(reason, &mut info) {
                     host.acquire()
                 } else {
@@ -554,12 +561,14 @@ pub(crate) fn run<H: FrameHost>(host: &mut H) -> Outcome {
             #[cfg(any(test, feature = "frame-profile"))]
             Effects::One(Effect::DropAndMiss(missed)) => {
                 drop(drawable);
+                host.on_drawable_dropped();
                 host.on_missed(missed, true);
                 return phase.outcome();
             }
             #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
             Effects::One(Effect::DropAndHold) => {
                 drop(drawable);
+                host.on_drawable_dropped();
                 return phase.outcome();
             }
             _ => unreachable!(),

@@ -972,6 +972,7 @@ impl Host {
     /// that releases its GPU when closed. The next `open` makes a window, a device and a surface
     /// (an app that sees `AppHandle::window_error` and the window gone can ask for one).
     pub(in crate::window) fn release(&mut self) {
+        self.assert_no_live_frame_texture();
         #[cfg(target_os = "windows")]
         self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Destroy);
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]

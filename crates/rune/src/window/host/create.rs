@@ -667,6 +667,7 @@ impl Host {
     /// this keeps failing.
     #[allow(unsafe_code)]
     pub(in crate::window) fn reattach(&mut self, mode: crate::gpu::fallback::GpuMode) -> Result<(), ReattachError> {
+        self.assert_no_live_frame_texture();
         if self.is_terminal_gpu_policy() {
             return Err(ReattachError::other("terminal GPU loss policy refuses device replacement"));
         }
@@ -931,6 +932,7 @@ impl Host {
     /// and hides the native window (`stop_showing`, `wind_down`), then the window, device and
     /// surface go. An app sees `window_error` and can `open` the window again.
     pub(in crate::window) fn give_up_surface(&mut self, reason: String) -> bool {
+        self.assert_no_live_frame_texture();
         eprintln!("rune: {reason}");
         self.record_live_window_state();
         self.stop_showing();

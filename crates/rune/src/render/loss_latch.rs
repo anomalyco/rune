@@ -129,6 +129,110 @@ pub(crate) enum LatchEffect {
     Wake,
 }
 
+/// Explicit lifecycle state tracking whether a frame's `wgpu::SurfaceTexture` is currently alive
+/// on the stack, so surface/GPU teardown NEVER runs while a `SurfaceTexture` is outstanding.
+///
+/// Dropping `wgpu::Surface` before its acquired `wgpu::SurfaceTexture` panics in `wgpu-core`
+/// (`Cannot get non-existent resource SurfaceId`) and in the Vulkan swapchain HAL
+/// (`Trying to destroy a SwapchainAcquireSemaphore that is still in use by a SurfaceTexture`).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum FrameTeardownState {
+    /// No `SurfaceTexture` acquired from this surface is currently alive.
+    #[default]
+    Idle,
+    /// A `SurfaceTexture` is alive (`acquire` succeeded; not yet presented or dropped).
+    /// Surface and GPU teardown are forbidden in this state.
+    TextureAlive,
+    /// A terminal failure was noticed while `TextureAlive`: recorded on the latch, and teardown
+    /// is deferred until `TextureReleased` fires immediately after the `SurfaceTexture` drops.
+    TextureAlivePendingTeardown,
+}
+
+/// Events driving [`step_frame_teardown`].
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameTeardownEvent {
+    /// `acquire` returned a live `wgpu::SurfaceTexture`.
+    TextureAcquired,
+    /// A terminal GPU failure was noticed while polling or handling an error.
+    LossNoticed,
+    /// The acquired `wgpu::SurfaceTexture` was consumed by `queue.present` or dropped.
+    TextureReleased,
+}
+
+/// Effect emitted by [`step_frame_teardown`].
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FrameTeardownEffect {
+    /// Safe to drop `wgpu::Surface`, `Gpu`, and compositor GPU resources now.
+    TeardownNow,
+}
+
+/// Pure transition function enforcing that GPU/surface teardown never runs while a frame's
+/// `wgpu::SurfaceTexture` is still alive.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn step_frame_teardown(
+    state: &mut FrameTeardownState,
+    event: FrameTeardownEvent,
+) -> Effects<FrameTeardownEffect> {
+    match (*state, event) {
+        (FrameTeardownState::Idle, FrameTeardownEvent::TextureAcquired) => {
+            *state = FrameTeardownState::TextureAlive;
+            Effects::none()
+        }
+        (FrameTeardownState::Idle, FrameTeardownEvent::LossNoticed) => {
+            Effects::one(FrameTeardownEffect::TeardownNow)
+        }
+        (FrameTeardownState::TextureAlive, FrameTeardownEvent::LossNoticed) => {
+            *state = FrameTeardownState::TextureAlivePendingTeardown;
+            Effects::none()
+        }
+        (FrameTeardownState::TextureAlivePendingTeardown, FrameTeardownEvent::LossNoticed) => {
+            Effects::none()
+        }
+        (FrameTeardownState::TextureAlive, FrameTeardownEvent::TextureReleased) => {
+            *state = FrameTeardownState::Idle;
+            Effects::none()
+        }
+        (FrameTeardownState::TextureAlivePendingTeardown, FrameTeardownEvent::TextureReleased) => {
+            *state = FrameTeardownState::Idle;
+            Effects::one(FrameTeardownEffect::TeardownNow)
+        }
+        (FrameTeardownState::Idle, FrameTeardownEvent::TextureReleased) => Effects::none(),
+        (FrameTeardownState::TextureAlive, FrameTeardownEvent::TextureAcquired)
+        | (FrameTeardownState::TextureAlivePendingTeardown, FrameTeardownEvent::TextureAcquired) => {
+            debug_assert!(false, "TextureAcquired while a SurfaceTexture is already alive");
+            Effects::none()
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl FrameTeardownState {
+    #[inline]
+    pub(crate) const fn has_live_texture(self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+
+    #[inline]
+    pub(crate) fn step(&mut self, event: FrameTeardownEvent) -> Effects<FrameTeardownEffect> {
+        step_frame_teardown(self, event)
+    }
+}
+
+/// Whether a frame's acquired `SurfaceTexture` should be presented after `renderer.submit`.
+///
+/// Returns `false` under BOTH `GpuLossPolicy::Terminal` and `GpuLossPolicy::Recover` once the
+/// device is lost or a terminal latch has tripped: a texture from a lost device must be dropped
+/// without calling `pre_present_notify()` (which arms an unfulfillable Wayland frame callback)
+/// or `queue.present()`.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub(crate) const fn should_present_after_submit(gpu_lost: bool, terminal_failed: bool) -> bool {
+    !gpu_lost && !terminal_failed
+}
+
 /// Advances `state` on `event`, returning at most a one-shot [`LatchEffect::Wake`].
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn step(state: &mut LatchState, event: LatchEvent) -> Effects<LatchEffect> {

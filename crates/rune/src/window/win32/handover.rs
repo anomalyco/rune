@@ -477,6 +477,7 @@ impl Host {
         let SurfaceMode::HandingOver { done, readback, paused: false, .. } = &mut l.native.mode else { return };
         let Some(surface) = l.surface.as_ref() else { return };
         let Ok(frame) = acquire(surface, gpu, &l.config, l.surface_ok, 1, &mut self.meter) else { return };
+        self.terminal_loss.note_frame_texture_acquired_direct();
         let target_format = if self.app.rt().srgb_blend() { l.config.format.remove_srgb_suffix() } else { l.config.format };
         debug_assert_eq!(renderer.format(), target_format);
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor { format: (target_format != l.config.format).then_some(target_format), ..Default::default() });
@@ -520,15 +521,26 @@ impl Host {
             Readback { buffer, row, size: (width, height) }
         });
         if self.terminal_loss.is_terminal() {
-            rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+            if matches!(rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll), Err(rune_gpu::health::PollFailed::Lost)) {
+                gpu.mark_lost();
+            }
             if gpu.sample_removal() || gpu.is_lost() || self.terminal_loss.is_failed() {
-                drop((enc, frame));
+                drop((enc, view, frame));
+                self.note_frame_texture_released();
                 let _ = self.poll_gpu_loss();
                 return;
             }
         }
         renderer.submit(&gpu.queue, enc);
+        drop(view);
+        if gpu.is_lost() {
+            drop(frame);
+            self.note_frame_texture_released();
+            let _ = self.poll_gpu_loss();
+            return;
+        }
         gpu.queue.present(frame);
+        self.terminal_loss.note_frame_texture_released_direct();
         l.native.slot.presented();
         let flag = Arc::new(AtomicBool::new(false));
         let set = flag.clone();
