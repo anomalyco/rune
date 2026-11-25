@@ -32,6 +32,7 @@ mod event_loop;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use event_loop::{ExitAction, exit_action};
 mod file_drop;
+pub(crate) mod geometry;
 mod handle;
 mod host;
 mod keys;
@@ -593,6 +594,8 @@ impl ApplicationHandler<WakeEvent> for Windows {
             for host in this.hosts.iter_mut().flatten() {
                 animating |= host.about_to_wait(event_loop);
             }
+            // A window an idle hook closed (`App::on_window_geometry`) goes before the loop sleeps.
+            if this.hosts.iter().flatten().any(|host| host.finished()) { this.cleanup(event_loop); }
             // The frames windows want next (`redraw`), and on Windows the paints the system keeps
             // putting off behind another window's.
             let now = crate::time::now();

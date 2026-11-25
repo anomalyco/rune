@@ -500,6 +500,8 @@ impl Host {
         crate::marks::mark("window.created");
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
         if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
+        // After `on_window`, which may resize it, and before its first focus and frame.
+        self.creation_geometry();
         if let (Some(w), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) {
             #[cfg(target_os = "macos")]
             if let Some(pacing) = &mut w.native.pacing { pacing.update_display(&w.window); }

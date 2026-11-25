@@ -852,6 +852,13 @@ app.run();
   once on the UI thread immediately before the event loop drops windows and tears down the native
   display connection (after `on_close` and `on_quit`), so foreign proxies or queues bound on
   winit's display can be destroyed before the display closes.
+- `App::on_window_geometry(|s, g: WindowGeometry, tx| -> bool)` (also on `WindowSpec`) reports
+  the native window's applied content size in physical pixels (`physical_size`), its
+  `scale_factor`, and `has_output` (whether it's on a monitor). It runs at every native creation
+  before the first focus and frame, then at idle when a value changed, including a Wayland
+  window entering an output at scale 1 with no resize or scale event. Unchanged samples run
+  nothing and draw nothing. Opting in queries size, scale and output on every idle turn (on X11
+  the size query waits on the server); headless tooling and the web don't call it.
 - `AppSpec::min_size` sets the smallest window (None keeps 420×400).
 - `AppHandle::set_dock_icon(bool)` switches macOS between the regular and accessory activation
   policies at runtime.

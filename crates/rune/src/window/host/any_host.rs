@@ -384,6 +384,7 @@ impl Host {
     }
 
     fn about_to_wait_in_turn(&mut self, event_loop: &ActiveEventLoop) -> bool {
+        if self.idle_geometry(event_loop) { return false; }
         #[cfg(target_os = "macos")]
         {
             self.fn_key();

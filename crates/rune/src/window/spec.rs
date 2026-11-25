@@ -924,6 +924,9 @@ impl<S: 'static> WindowSpec<S> {
         on_window(f: impl FnMut(&crate::WindowHandle) + 'static);
         /// Called on the event thread after the first frame is ready, once per native creation.
         on_ready(f: impl FnMut(&crate::WindowHandle) + 'static);
+        /// Hears this window's applied content size, scale and output presence, like
+        /// [`App::on_window_geometry`](crate::App::on_window_geometry).
+        on_window_geometry(f: fn(&mut S, crate::WindowGeometry, &mut crate::Tx) -> bool);
         /// Runs once on the UI thread immediately before the event loop drops windows and closes
         /// the native display connection, like [`App::on_display_close`].
         ///
