@@ -136,6 +136,15 @@ impl Prim {
     /// Draw this surface at its designed colour: no ambient, direct light, GI or specular on its own pixels (text
     /// on it too); exposure and the air in front (shafts, bulbs) still apply. With `emissive`, a glowing element
     /// that lights its neighbours but keeps its hue under a lamp.
+    ///
+    /// ```
+    /// use rune_light::{FLAG_EMISSIVE, FLAG_UNLIT, Prim};
+    ///
+    /// let glow = Prim::rect(16.0, 16.0, 80.0, 32.0)
+    ///     .emissive([0.06, 0.32, 1.7])
+    ///     .unlit();
+    /// assert_eq!(glow.flags() & (FLAG_EMISSIVE | FLAG_UNLIT), FLAG_EMISSIVE | FLAG_UNLIT);
+    /// ```
     pub fn unlit(self) -> Prim {
         self.set(FLAG_UNLIT, true)
     }

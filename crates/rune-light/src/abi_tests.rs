@@ -97,6 +97,9 @@ fn wgsl_uniform_storage_and_flags_match_rust() {
     check_u32_const("common.wgsl", &gbuf_mod, "F_HINT", FLAG_GI_HINT);
     check_u32_const("common.wgsl", &gbuf_mod, "F_UNLIT", FLAG_UNLIT);
 
+    let comp_src = format!("{}\n{}", crate::gpu::COMMON, include_str!("shaders/composite.wgsl"));
+    let _ = parse("common+composite.wgsl", &comp_src);
+
     let gi_src = format!("{}\n{}", crate::gpu::COMMON, crate::gpu::gi_section("cascades"));
     let (gi_mod, gi_layout) = parse("common+gi(cascades).wgsl", &gi_src);
     check_struct(

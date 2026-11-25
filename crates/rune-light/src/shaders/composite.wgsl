@@ -190,7 +190,7 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         airc = airc + flv * F.gi.y;
     }
 
-    var lightf = irr + diffuse + gi_irr;
+    let lightf = irr + diffuse + gi_irr;
     // A dark UI colour is nearly black as a material; a small albedo floor lets light pools and shadows read
     // on it while ambient keeps the designed look.
     var col = base.rgb * irr + (base.rgb + vec3<f32>(F.ext.x)) * (diffuse + gi_irr) + spec;
@@ -199,12 +199,11 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     }
     if (unlit) {
         col = base.rgb;
-        lightf = vec3<f32>(1.0);
         spec = vec3<f32>(0.0);
     }
 
     // Text: lit like the surface under it, but clamped so shadows never crush it and highlights never wash it.
-    let tf = mix(vec3<f32>(1.0), clamp(lightf, vec3<f32>(F.text.x), vec3<f32>(F.text.y)), F.text.z);
+    let tf = select(mix(vec3<f32>(1.0), clamp(lightf, vec3<f32>(F.text.x), vec3<f32>(F.text.y)), F.text.z), vec3<f32>(1.0), unlit);
     col = col * (1.0 - text.a) + text.rgb * tf + spec * text.a * F.text.w;
     col = col + airc * (1.0 - 0.6 * text.a);
 
