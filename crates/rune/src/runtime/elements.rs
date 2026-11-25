@@ -611,6 +611,13 @@ impl RuntimeCore {
                         self.commit.dirty = true;
                     }
                 }
+                crate::el::PickRead::TextLine { key, byte, f } => {
+                    let line = self.text_line(&key, byte);
+                    if let Some(f) = f.take() {
+                        f(app.states(), line, tx);
+                        self.commit.dirty = true;
+                    }
+                }
                 crate::el::PickRead::Elements { f } => {
                     if let Some(f) = f.take() {
                         let list = elements.get_or_insert_with(|| self.elements());

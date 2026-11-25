@@ -1,9 +1,9 @@
-//! Presented-frame text hit-testing queries on [`Tx`].
+//! Presented-frame text hit-testing and line queries on [`Tx`].
 
 use std::cell::Cell;
 use std::rc::Rc;
 
-use crate::el::{PickRead, TextOffsetFn};
+use crate::el::{PickRead, TextLineFn, TextOffsetFn};
 use crate::Tx;
 
 impl Tx {
@@ -54,6 +54,50 @@ impl Tx {
             key: key.into(),
             x,
             y,
+            f: Rc::new(Cell::new(Some(f))),
+        });
+    }
+
+    /// The visual line holding byte `byte` of the text field named `key` (focused or not), as
+    /// [`Runtime::text_line`] reads it from the last layout: its box in window points and the
+    /// first bytes of it and the lines beside it. Runs `f` after this handler, before its view
+    /// commit. `f` receives `None` when `key` is missing, exiting, not a text field, or secure.
+    /// Queries queued by `f` itself wait until the next frame.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, TextEdit, TextLine, TextStyle, col, text_input};
+    /// # #[derive(Default)] struct S { edit: TextEdit, line: Option<TextLine> }
+    /// # fn view(s: &S, _: &mut Cx<S>) -> El {
+    /// col().size(240.0, 80.0).child(
+    ///     text_input(&s.edit, TextStyle::new(14.0, 400.0)).key("field").w_full()
+    ///         .on_edit(|s: &mut S| &mut s.edit)
+    ///         .on_secondary_press(|s: &mut S, _, tx| {
+    ///             tx.text_line("field", s.edit.focus, |s: &mut S, line, _| s.line = line);
+    ///         }),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S { edit: TextEdit::new("one\ntwo"), line: None }, view, (240.0, 80.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # let (x, y) = rt.find("field").unwrap();
+    /// # rt.secondary_down(x, y);
+    /// # rt.secondary_up(x, y);
+    /// # rt.frame(0.0);
+    /// # assert!(rt.state.line.is_some());
+    /// ```
+    ///
+    /// [`Runtime::text_line`]: crate::Runtime::text_line
+    pub fn text_line<S: 'static>(
+        &mut self,
+        key: impl Into<String>,
+        byte: usize,
+        f: impl FnOnce(&mut S, Option<crate::TextLine>, &mut Tx) + 'static,
+    ) {
+        let f: TextLineFn = Box::new(move |s, line, tx| {
+            if let Some(s) = s.cast::<S>() { f(s, line, tx); }
+        });
+        self.pick_reads.push(PickRead::TextLine {
+            key: key.into(),
+            byte,
             f: Rc::new(Cell::new(Some(f))),
         });
     }

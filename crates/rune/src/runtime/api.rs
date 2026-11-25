@@ -470,6 +470,30 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn text_offset_at(&self, key: &str, x: f32, y: f32) -> Option<usize> { self.core().text_offset_at(key, x, y) }
+    /// The visual line holding byte `byte` of the text field named `key`, focused or not, from
+    /// the last layout: its box in window points and the first bytes of it and the lines
+    /// beside it. `None` when `key` is missing, exiting, not a text field, or secure. Running
+    /// handlers can use [`Tx::text_line`] without holding a `Runtime`; [`Self::text_offset_at`]
+    /// goes the other way, from a point to a byte.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, TextEdit, TextStyle, col, text_input};
+    ///
+    /// let edit = TextEdit::new("one\ntwo\nthree");
+    /// let mut rt = Runtime::new(
+    ///     edit,
+    ///     |e: &TextEdit, _| col().size(200.0, 120.0).child(text_input(e, TextStyle::new(14.0, 400.0)).key("f").w_full()),
+    ///     (200.0, 120.0),
+    ///     Env::new(true, 1.0),
+    /// );
+    /// rt.frame(0.0);
+    /// let two = rt.text_line("f", 5).unwrap();
+    /// assert_eq!((two.start, two.prev, two.next), (4, Some(0), Some(8)));
+    /// let one = rt.text_line("f", 0).unwrap();
+    /// assert!(two.rect[1] > one.rect[1]);
+    /// ```
+    #[inline(always)]
+    pub fn text_line(&self, key: &str, byte: usize) -> Option<crate::TextLine> { self.core().text_line(key, byte) }
     #[inline(always)]
     pub fn contains(&self, key: &str, x: f32, y: f32) -> bool { self.core().contains(key, x, y) }
     #[inline(always)]
