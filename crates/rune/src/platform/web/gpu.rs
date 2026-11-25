@@ -345,8 +345,9 @@ pub(super) fn configure_surface(side: &GpuSide) {
     });
 }
 
-/// Runs a due configure retry if the surface is not suspended.
-pub(super) fn drain_configure_retry(side: &GpuSide, suspended: bool) {
+/// Runs a due configure retry if the surface is not suspended. Returns `true` when it
+/// reconfigured the surface (which clears the canvas and invalidates the last presented frame).
+pub(super) fn drain_configure_retry(side: &GpuSide, suspended: bool) -> bool {
     let mut due = side.retry_due.take();
     let should_configure = {
         let mut h = side.health.borrow_mut();
@@ -357,6 +358,7 @@ pub(super) fn drain_configure_retry(side: &GpuSide, suspended: bool) {
     if should_configure {
         configure_surface(side);
     }
+    should_configure
 }
 
 pub(super) fn can_draw(side: &GpuSide) -> bool {

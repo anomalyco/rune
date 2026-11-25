@@ -513,8 +513,8 @@ impl Browser {
         let (fatal_error, should_end, try_gpu_came, first_presented_at, non_ambient_drawn_at, embedded, document) = {
             let mut running = self.running.borrow_mut();
             let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
-            if let Some(side) = r.draw.gpu() {
-                gpu::drain_configure_retry(side, r.suspended);
+            if r.draw.gpu().is_some_and(|side| gpu::drain_configure_retry(side, r.suspended)) {
+                r.last_presented = None;
             }
             let mut host = WebFrameHost {
                 r,

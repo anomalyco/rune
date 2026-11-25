@@ -463,8 +463,12 @@ pub(crate) const CONFIGURE_MAX_FAILURES: u8 = 5;
 /// Health and retry state of a web canvas surface's configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SurfaceHealth {
-    /// Ready to draw (or awaiting the answer to the latest `active` configure).
-    Ready { failures: u8, active: Option<crate::machine::Attempt> },
+    /// Configured and ready to draw; `failures` counts prior consecutive failures until a clean present.
+    Ready { failures: u8 },
+    /// Configure `attempt` is in flight (awaiting its sync or async error-scope outcome).
+    Configuring { failures: u8, attempt: crate::machine::Attempt },
+    /// Configure `attempt` is in flight and a frame already presented; clears `failures` once `attempt` succeeds.
+    ConfiguringPresented { failures: u8, attempt: crate::machine::Attempt },
     /// A configure was refused; a retry timer is armed for `attempt`.
     WaitingRetry { failures: u8, attempt: crate::machine::Attempt },
     /// Exhausted retries; no further configures or draws run until a resize arrives.
@@ -473,7 +477,7 @@ pub(crate) enum SurfaceHealth {
 
 impl Default for SurfaceHealth {
     fn default() -> Self {
-        Self::Ready { failures: 0, active: None }
+        Self::Ready { failures: 0 }
     }
 }
 
@@ -506,7 +510,7 @@ pub(crate) enum SurfaceHealthEffect {
 impl SurfaceHealth {
     /// Whether the surface can currently acquire and draw frames.
     pub(crate) fn can_draw(&self) -> bool {
-        matches!(self, Self::Ready { .. })
+        matches!(self, Self::Ready { .. } | Self::Configuring { .. } | Self::ConfiguringPresented { .. })
     }
 
     /// Consumes a due retry attempt when not suspended and returns whether to reconfigure now.
@@ -530,52 +534,62 @@ impl SurfaceHealth {
     ) -> crate::machine::Effects<SurfaceHealthEffect> {
         use crate::machine::Effects;
         match (*self, event) {
-            (Self::Ready { failures, .. } | Self::WaitingRetry { failures, .. }, SurfaceHealthEvent::Begin(attempt)) => {
-                *self = Self::Ready { failures, active: Some(attempt) };
+            (Self::Ready { failures } | Self::Configuring { failures, .. } | Self::ConfiguringPresented { failures, .. } | Self::WaitingRetry { failures, .. }, SurfaceHealthEvent::Begin(attempt)) => {
+                *self = Self::Configuring { failures, attempt };
                 Effects::none()
             }
             (Self::GaveUp, SurfaceHealthEvent::Begin(attempt)) => {
-                *self = Self::Ready { failures: 0, active: Some(attempt) };
+                *self = Self::Configuring { failures: 0, attempt };
                 Effects::none()
             }
-            (Self::Ready { failures, active: Some(expected) }, SurfaceHealthEvent::Outcome { attempt, error })
+            (Self::Configuring { failures, attempt: expected }, SurfaceHealthEvent::Outcome { attempt, error: None })
                 if attempt == expected =>
             {
-                match error {
-                    None => {
-                        *self = Self::Ready { failures, active: None };
-                        Effects::none()
-                    }
-                    Some(why) => {
-                        let next = failures.saturating_add(1);
-                        if next >= CONFIGURE_MAX_FAILURES {
-                            *self = Self::GaveUp;
-                            return Effects::one(SurfaceHealthEffect::ReportGaveUp(why));
-                        }
-                        let retry = seq.next();
-                        let delay = CONFIGURE_RETRY_BASE * (1u32 << (next - 1));
-                        *self = Self::WaitingRetry { failures: next, attempt: retry };
-                        let schedule = SurfaceHealthEffect::ScheduleRetry { attempt: retry, delay };
-                        if next == 1 {
-                            Effects::two(SurfaceHealthEffect::ReportFirst(why), schedule)
-                        } else {
-                            Effects::one(schedule)
-                        }
-                    }
+                *self = Self::Ready { failures };
+                Effects::none()
+            }
+            (Self::ConfiguringPresented { attempt: expected, .. }, SurfaceHealthEvent::Outcome { attempt, error: None })
+                if attempt == expected =>
+            {
+                *self = Self::Ready { failures: 0 };
+                Effects::none()
+            }
+            (
+                Self::Configuring { failures, attempt: expected }
+                | Self::ConfiguringPresented { failures, attempt: expected },
+                SurfaceHealthEvent::Outcome { attempt, error: Some(why) },
+            ) if attempt == expected => {
+                let next = failures.saturating_add(1);
+                if next >= CONFIGURE_MAX_FAILURES {
+                    *self = Self::GaveUp;
+                    return Effects::one(SurfaceHealthEffect::ReportGaveUp(why));
+                }
+                let retry = seq.next();
+                let delay = CONFIGURE_RETRY_BASE * (1u32 << (next - 1));
+                *self = Self::WaitingRetry { failures: next, attempt: retry };
+                let schedule = SurfaceHealthEffect::ScheduleRetry { attempt: retry, delay };
+                if next == 1 {
+                    Effects::two(SurfaceHealthEffect::ReportFirst(why), schedule)
+                } else {
+                    Effects::one(schedule)
                 }
             }
             (Self::WaitingRetry { failures, attempt: expected }, SurfaceHealthEvent::RetryDue(attempt))
                 if attempt == expected =>
             {
-                *self = Self::Ready { failures, active: None };
+                *self = Self::Ready { failures };
                 Effects::one(SurfaceHealthEffect::Configure)
             }
-            (Self::Ready { active, .. }, SurfaceHealthEvent::Presented) => {
-                *self = Self::Ready { failures: 0, active };
+            (Self::Ready { .. }, SurfaceHealthEvent::Presented) => {
+                *self = Self::Ready { failures: 0 };
+                Effects::none()
+            }
+            (Self::Configuring { failures, attempt }, SurfaceHealthEvent::Presented) => {
+                *self = Self::ConfiguringPresented { failures, attempt };
                 Effects::none()
             }
             (Self::GaveUp | Self::WaitingRetry { .. }, SurfaceHealthEvent::Resized) => {
-                *self = Self::Ready { failures: 0, active: None };
+                *self = Self::Ready { failures: 0 };
                 Effects::none()
             }
             _ => Effects::none(),
