@@ -156,7 +156,9 @@ impl Renderer {
     }
 
     /// Uploads changed rows of the runtime's image atlas (`El::pixels`), creating its texture on
-    /// first use.
+    /// first use. Note: `ImageCache` decodes on CPU only; `upload_images`, `FillPass`, and
+    /// `build_surfaces` run strictly inside frame preparation, which is unreachable once
+    /// `GpuLossPolicy::Terminal` latches.
     pub fn upload_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
         if images.pages.is_empty() && self.images.is_empty() { return self.refresh_layer_bindings(device); }
         let staging = self.uploads.staging(device, queue);

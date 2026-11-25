@@ -84,6 +84,13 @@ pub(crate) struct HostState {
     pub(crate) open_urls_natively: bool,
     /// Pop-up menus asked for (`Tx::popup_menu`) and not yet answered, oldest first.
     pub(in crate::runtime) popups: popup_dispatch::Popups,
+    /// Lifecycle state of the in-window fallback pop-up menu delivered to `App::on_popup_menu`.
+    pub(in crate::runtime) popup_fallback: popup_fallback::PopupFallbackState,
+    /// Monotonic token tagging each opened fallback pop-up menu.
+    pub(in crate::runtime) popup_fallback_seq: u64,
+    /// Test-only seam forcing `App::on_popup_menu` even where `popup_menu_supported()` is true.
+    #[cfg(test)]
+    pub(crate) force_popup_menu_fallback: bool,
     /// Pending text-field menu delivered to `App::on_field_menu`, awaiting `Tx::resolve_field_menu`.
     pub(in crate::runtime) field_menu_fallback: Option<Box<crate::runtime::field_menu::PendingFieldMenu>>,
     /// Monotonic token tagging each opened fallback field menu so a deferred pick never matches a newer menu.
@@ -164,6 +171,10 @@ impl HostState {
             url_scheme_requests: Vec::new(),
             open_urls_natively: false,
             popups: Default::default(),
+            popup_fallback: Default::default(),
+            popup_fallback_seq: 0,
+            #[cfg(test)]
+            force_popup_menu_fallback: false,
             field_menu_fallback: None,
             field_menu_seq: 0,
             deferred_field_menu_pick: None,

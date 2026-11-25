@@ -27,7 +27,9 @@ use crate::runtime::Waker;
 use crate::Runtime;
 use crate::{PointerPress, Shortcut, Tx};
 
+mod request;
 mod style;
+pub use request::PopupMenuRequest;
 pub use style::PopupMenuStyle;
 
 #[cfg(target_os = "macos")]
@@ -597,6 +599,17 @@ impl Presenter {
     }
 
     pub(crate) fn open_core(&mut self, rt: &mut crate::runtime::RuntimeCore, app: &mut dyn crate::runtime::AppDriver, window: Option<&Arc<Window>>, paints: bool) -> bool {
+        if rt.popup_menu_fallback_active(app) {
+            if window.is_none() {
+                if rt.popup_menu().is_some() {
+                    rt.cancel_popups(app);
+                    return true;
+                }
+                return false;
+            }
+            if paints && rt.popup_waits_for_layout() { return true; }
+            return rt.deliver_popup_menu_fallback_from_host(app);
+        }
         let mut redraw = false;
         loop {
             if window.is_some() && paints && rt.popup_waits_for_layout() { return true; }

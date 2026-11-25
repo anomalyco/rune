@@ -2773,7 +2773,16 @@ row().key("theme").child(text(theme_title(&s.theme)))
   `FieldMenuRequest` (`field_key`, `field_path`, `point`, `menu` / `PopupMenu::entries`) to
   your hook so you can render it in-window and run the chosen action with
   `tx.resolve_field_menu(Some(id))` (or `None` to cancel), while macOS and Windows keep their
-  native menus unchanged. `cargo run -p rune --example popup_menu` shows both kinds.
+  native menus unchanged. For a general Linux in-window fallback covering every Rune pop-up menu
+  (`Tx::popup_menu`, selectable-text Copy, default link/image menus, and text-field menus when
+  `on_field_menu` is unset), opt in with `App::on_popup_menu(|s, req, tx| ...)` (also on
+  `WindowSpec` and `ConfiguredOverlay`): when `!popup_menu_supported() && !cfg!(target_arch = "wasm32")`,
+  Rune hands a `PopupMenuRequest` (`menu`, `into_menu`, `anchor`, `point`, `anchor_rect`,
+  `min_width`, `positioned`) to your hook and you answer with `tx.resolve_popup_menu(Some(id))`
+  or `None` (in `rune-kit`, `Menu::from_popup_menu` renders it in one call). `popup_menu_supported()`
+  continues reporting platform-native support (`false` on Linux, `true` on macOS/Windows), and
+  macOS, Windows, and web keep their existing menu presenters untouched. `cargo run -p rune --example popup_menu`
+  and `cargo run -p kit-gallery -- --scene rune-menu--popup-menu-fallback` show them.
 - **Web style**: on the web the menu is the page's own elements (`role="menu"`), light or dark
   as the window draws. `PopupMenu::style(PopupMenuStyle::new().background(..).text(..))` draws
   it from the app's palette instead: `background`, `text`, `muted`, `separator`, `highlight`,

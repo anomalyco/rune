@@ -148,3 +148,130 @@ fn overlay_failure_trips_shared_app_latch_and_wakes_app_once() {
     assert_eq!(shared_app.window_error().as_deref(), Some("overlay surface refused config"));
     assert_eq!(app_wakes.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn overlay_park_does_not_park_terminal_gpu_into_global_warm_slot_or_falsely_latch() {
+    if !crate::render::Gpu::test_adapter_available() {
+        return;
+    }
+    let latch = GpuLossLatch::new();
+    let releases = Arc::new(AtomicUsize::new(0));
+    let (mut overlay, _handle) = make_overlay(Arc::clone(&latch), Arc::clone(&releases));
+    let gpu = Arc::new(
+        crate::render::Gpu::try_for_display(crate::render::Gpu::wgpu_instance(), wgpu::Features::empty())
+            .expect("display wgpu device"),
+    );
+    let renderer = crate::render::Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);
+    overlay.core.attach_terminal_gpu_latch(&gpu);
+    overlay.core.gpu = Some(gpu);
+    overlay.core.renderer = Some(renderer);
+
+    // Clear any pre-existing parked GPU before exercising OverlayCore::park.
+    let _ = crate::render::warmup::take_parked_gpu_for_test();
+
+    overlay.core.park();
+    assert!(
+        !latch.is_failed(),
+        "clean OverlayCore::park must not falsely trip the app's terminal latch",
+    );
+    assert!(
+        crate::render::warmup::take_parked_gpu_for_test().is_none(),
+        "OverlayCore::park must never park a Terminal-latch-bound GPU into the global warm slot",
+    );
+}
+
+#[test]
+fn overlay_warm_offscreen_latches_on_compositor_validation_error_and_marks_unavailable() {
+    if !crate::render::Gpu::test_adapter_available() {
+        return;
+    }
+    struct BadCompositor(Arc<AtomicUsize>);
+    impl Compositor<State> for BadCompositor {
+        fn render(&mut self, f: &mut Frame<'_, State>) {
+            drop(f.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("overlay-warm-offscreen-validation"),
+                size: 4,
+                usage: wgpu::BufferUsages::empty(),
+                mapped_at_creation: false,
+            }));
+        }
+        fn release_gpu(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let latch = GpuLossLatch::new();
+    let releases = Arc::new(AtomicUsize::new(0));
+    let app_spec = AppSpec::new("ov-warm", (64.0, 32.0), State::default, view);
+    let configured = OverlaySpec::new("ov-warm", app_spec.size, view)
+        .options(OverlayOptions::default())
+        .compositor(BadCompositor(Arc::clone(&releases)))
+        .on_availability(on_avail);
+    let (mut overlay, handle) = Overlay::new(configured, State::default(), &app_spec);
+    overlay.core.gpu_loss_latch = Some(Arc::clone(&latch));
+    overlay.rt.state.handle = Some(handle.clone());
+    let gpu = Arc::new(
+        crate::render::Gpu::try_for_display(crate::render::Gpu::wgpu_instance(), wgpu::Features::empty())
+            .expect("display wgpu device"),
+    );
+    let renderer = crate::render::Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);
+    overlay.core.attach_terminal_gpu_latch(&gpu);
+    overlay.core.gpu = Some(gpu);
+    overlay.core.renderer = Some(renderer);
+    overlay.ready(false);
+
+    overlay.warm_offscreen((64, 32));
+    assert!(latch.is_failed(), "validation error in warm_offscreen must latch Terminal");
+    assert!(overlay.core.gpu.is_none(), "warm_offscreen must tear down overlay GPU on latch");
+    assert_eq!(handle.availability(), Availability::Unavailable);
+    assert!(handle.failure().is_some());
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn overlay_compositor_features_destroying_retained_device_latches_and_clears_native_materials() {
+    if !crate::render::Gpu::test_adapter_available() {
+        return;
+    }
+    struct DestroyingFeatures {
+        gpu: Arc<crate::render::Gpu>,
+        releases: Arc<AtomicUsize>,
+    }
+    impl Compositor<State> for DestroyingFeatures {
+        fn features(&self) -> wgpu::Features {
+            self.gpu.device.destroy();
+            wgpu::Features::empty()
+        }
+        fn render(&mut self, _f: &mut Frame<'_, State>) {}
+        fn release_gpu(&mut self) {
+            self.releases.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let gpu = Arc::new(
+        crate::render::Gpu::try_for_display(crate::render::Gpu::wgpu_instance(), wgpu::Features::empty())
+            .expect("display wgpu device"),
+    );
+    let latch = GpuLossLatch::new();
+    let releases = Arc::new(AtomicUsize::new(0));
+    let app_spec = AppSpec::new("ov-feat", (64.0, 32.0), State::default, view);
+    let configured = OverlaySpec::new("ov-feat", app_spec.size, view)
+        .options(OverlayOptions::default())
+        .compositor(DestroyingFeatures { gpu: Arc::clone(&gpu), releases: Arc::clone(&releases) })
+        .on_availability(on_avail);
+    let (mut overlay, handle) = Overlay::new(configured, State::default(), &app_spec);
+    overlay.core.gpu_loss_latch = Some(Arc::clone(&latch));
+    overlay.rt.state.handle = Some(handle.clone());
+    overlay.core.attach_terminal_gpu_latch(&gpu);
+    overlay.core.gpu = Some(gpu);
+    overlay.rt.core_mut().paint.set_native_materials(true);
+    overlay.ready(true);
+
+    // Mirror OverlayCore::attach after Compositor::features(): features() destroys the retained
+    // device, then poll_device_for_terminal_loss polls and latches before any fallback attach.
+    let _ = overlay.compositor.as_ref().unwrap().features();
+    assert!(overlay.poll_device_for_terminal_loss());
+    assert!(latch.is_failed());
+    assert!(overlay.core.gpu.is_none());
+    assert!(!overlay.rt.core().paint.native_materials(), "latched overlay clears native_materials");
+    assert_eq!(handle.availability(), Availability::Unavailable);
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
+}

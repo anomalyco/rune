@@ -245,6 +245,9 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn acquire(&mut self) -> Acquire<wgpu::SurfaceTexture> {
+        if self.core.poll_terminal_gpu_loss(self.app) {
+            return Acquire::Missed(crate::window::Missed::Unconfigured);
+        }
         let (Some(live), Some(gpu)) = (self.core.surface.live(), self.core.gpu.as_ref()) else {
             return Acquire::Missed(crate::window::Missed::Unconfigured);
         };
@@ -289,6 +292,9 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn post_step_check(&mut self, _info: &mut StepInfo) -> PostStepCheck {
+        if self.core.poll_terminal_gpu_loss(self.app) {
+            return PostStepCheck::Keep;
+        }
         if !self.content_resized && let Some(next) = self.core.take_live_fit_resize(self.app.rt_mut()) {
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             if self.core.wayland_request_content_resize(next) {
@@ -346,6 +352,9 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn prepare_reacquire(&mut self, reason: ReacquireReason, info: &mut StepInfo) -> bool {
+        if self.core.poll_terminal_gpu_loss(self.app) {
+            return false;
+        }
         match reason {
             #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
             ReacquireReason::NativeMaterials => {
@@ -362,7 +371,15 @@ impl FrameHost for OverlayFrame<'_> {
             }
             ReacquireReason::Reblend => {
                 let _ = info;
-                self.reblend_surface()
+                let ok = self.reblend_surface();
+                if !ok && self.core.is_terminal_gpu_policy() {
+                    self.core.latch_terminal_loss_latch(
+                        self.app,
+                        crate::render::loss_latch::GpuFailureKind::SurfaceFailed,
+                        "its GPU surface refused blend reconfiguration",
+                    );
+                }
+                ok
             }
             ReacquireReason::ContentResize => {
                 let _ = info;
@@ -439,10 +456,16 @@ impl FrameHost for OverlayFrame<'_> {
         if let Some(alpha) = &live.alpha {
             alpha.draw(&mut prepared.encoder, &prepared.view);
         }
+        if self.core.poll_device_for_terminal_loss(self.app) {
+            return false;
+        }
         comp_animating
     }
 
     fn submit_and_present(&mut self, prepared: PreparedOverlayFrame, _info: &StepInfo) -> Instant {
+        if self.core.poll_device_for_terminal_loss(self.app) {
+            return crate::time::now();
+        }
         let terminal = self.core.is_terminal_gpu_policy();
         let (Some(live), Some(renderer), Some(gpu)) = (
             self.core.surface.live_mut(),
@@ -808,6 +831,7 @@ impl OverlayCore {
 
     /// Warm glyphs/pipelines and, on macOS, the retained alpha-zero host's actual surface.
     pub(super) fn warm(&mut self, app: &mut dyn OverlayApp) {
+        if self.poll_terminal_gpu_loss(app) { return; }
         app.frame(0.0);
         app.rt_mut().settle_all();
         app.frame(0.0);
@@ -816,6 +840,7 @@ impl OverlayCore {
     }
 
     pub(super) fn warm_frame(&mut self, app: &mut dyn OverlayApp) {
+        if self.poll_terminal_gpu_loss(app) { return; }
         self.publish_regions(app.rt());
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel {
@@ -823,6 +848,7 @@ impl OverlayCore {
             self.dirty = true;
             self.draw_frame(app, None, true);
             if let Some(gpu) = &self.gpu { rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok(); }
+            let _ = self.poll_terminal_gpu_loss(app);
             return;
         }
         let Some(live) = self.surface.live() else { return };
@@ -830,21 +856,31 @@ impl OverlayCore {
     }
 
     pub(super) fn warm_offscreen(&mut self, app: &mut dyn OverlayApp, size: (u32, u32)) {
-        let (Some(renderer), Some(gpu)) = (&mut self.renderer, &self.gpu) else { return };
-        let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("overlay prewarm"), size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: renderer.format(), usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
-        });
-        let view = target.create_view(&Default::default());
-        let mut enc = gpu.device.create_command_encoder(&Default::default());
-        render_frame(app, OverlayRenderArgs {
-            device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
-            target: &view, format: renderer.format(), size,
-            dt: 0.0, update_ms: 0.0, ui: renderer,
-        });
-        renderer.submit(&gpu.queue, enc);
-        rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+        if self.poll_device_for_terminal_loss(app) { return; }
+        let (enc, _target) = {
+            let (Some(renderer), Some(gpu)) = (&mut self.renderer, &self.gpu) else { return };
+            let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("overlay prewarm"), size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: renderer.format(), usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
+            });
+            let view = target.create_view(&Default::default());
+            let mut enc = gpu.device.create_command_encoder(&Default::default());
+            render_frame(app, OverlayRenderArgs {
+                device: &gpu.device, queue: &gpu.queue, encoder: &mut enc,
+                target: &view, format: renderer.format(), size,
+                dt: 0.0, update_ms: 0.0, ui: renderer,
+            });
+            (enc, target)
+        };
+        // Pre-submit poll so a validation/destroy error inside `render_compositor` aborts before
+        // `renderer.submit`, then post-submit wait + poll catches async submission failure.
+        if self.poll_device_for_terminal_loss(app) { return; }
+        if let (Some(renderer), Some(gpu)) = (&mut self.renderer, &self.gpu) {
+            renderer.submit(&gpu.queue, enc);
+            rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok();
+        }
+        let _ = self.poll_terminal_gpu_loss(app);
     }
 }
 

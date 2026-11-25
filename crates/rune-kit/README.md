@@ -257,8 +257,9 @@ an app that closes the menu some other way clears the flags itself. All `on_subm
 one menu take the same state type. Side-placed
 menus and submenus clamp on both axes via `El::anchored_fit` when they would overflow a small
 window so long submenus shrink and scroll inside the viewport (see
-`rune-menu--submenu-small-window`, and `rune-menu--field-menu-fallback` for rendering
-`App::on_field_menu` with `Menu`).
+`rune-menu--submenu-small-window`, `rune-menu--field-menu-fallback` for rendering
+`App::on_field_menu` with `Menu`, and `Menu::from_popup_menu` + `Menu::on_close_tx` for
+rendering `App::on_popup_menu` in one call — see `rune-menu--popup-menu-fallback`).
 
 ### Accessibility
 
