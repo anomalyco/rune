@@ -155,3 +155,136 @@ fn fitting_before_an_animated_reveal_lets_the_new_card_enter() {
     }
 }
 
+#[test]
+fn same_frame_live_resize_presents_zero_frames_at_old_height_on_gpu_and_cpu_layered() {
+    use super::super::sizing::{clamp_fitted_height, local_rect_for_fit};
+    use crate::{OverlayPlacement, ScreenEdge};
+
+    // 1. Live height change while shown is consumed immediately by `take_live_fit_resize`
+    //    (used in `OverlayFrame::post_step_check` and `draw_cpu` before paint/present),
+    //    with zero frames presented at the old height and nothing deferred to the next turn.
+    let mut overlay = shown_once(2);
+    overlay.core.at.size = overlay.canvas_size;
+    overlay.core.last_work_area = Some((1920.0, 1080.0));
+    overlay.presence = Presence::Shown { occluded: false };
+    set_rows(&mut overlay, 5);
+    overlay.rt.frame(0.0);
+    let next = overlay
+        .core
+        .take_live_fit_resize(overlay.rt.core_mut())
+        .expect("live height change resizes before present in the same frame");
+    assert_eq!(next, (200.0, 100.0));
+    // Nothing left for `take_window_requests` to defer to the next turn.
+    overlay.take_window_requests();
+    assert_eq!(queued(&overlay), (None, None), "must not defer resize to next event-loop turn");
+
+    // 2. Clamp across fractional monitor scales (1.0, 1.25, 1.5, 2.0, 3.0), work area, and 0 height.
+    for scale in [1.0f32, 1.25, 1.5, 2.0, 3.0] {
+        let h = clamp_fitted_height(41.1, Some((1920.0, 1080.0)), scale, 8192);
+        let px = h * scale;
+        assert!((px - px.round()).abs() < 1e-4, "scale {scale}: {h} pt -> {px} px must be whole");
+        assert!(h >= 41.1 - 1e-5);
+    }
+    assert_eq!(clamp_fitted_height(0.0, Some((1920.0, 1080.0)), 1.5, 8192), 1.0, "zero height clamps to 1 pt floor");
+    assert_eq!(clamp_fitted_height(2000.0, Some((1920.0, 600.0)), 1.0, 8192), 600.0, "work area clamps height");
+
+    // 3. OverlayPlacement::Rect preserves (x, y) and fixed width while taking fitted height.
+    let at = super::super::Placement { size: (200.0, 88.0), edge: ScreenEdge::Top, margin: 0.0, align: crate::Align::Center, inset: 0.0 };
+    let rect_p = Some(OverlayPlacement::Rect { x: 30.0, y: 50.0, width: 240.0, height: 10.0 });
+    assert_eq!(local_rect_for_fit(at, rect_p, (1920.0, 1080.0), true), [30.0, 50.0, 240.0, 88.0]);
+    assert_eq!(local_rect_for_fit(at, rect_p, (1920.0, 1080.0), false), [30.0, 50.0, 240.0, 10.0]);
+}
+
+#[test]
+fn fit_window_converts_cx_zoom_to_window_points_for_overlays() {
+    fn zoomed_view(rows: &usize, cx: &mut Cx<usize>) -> El {
+        cx.zoom(1.5);
+        col().w_full().children((0..*rows).map(|i| el().key(format!("r{i}")).size(100.0, 20.0)))
+    }
+    let app = AppSpec::new("zoom", (300.0, 400.0), || 2usize, zoomed_view);
+    let spec = OverlaySpec::new("zoom", app.size, zoomed_view).options(Default::default()).fit_content_height();
+    let (mut overlay, _) = Overlay::new(spec, 2, &app);
+    overlay.rt.wall_start = None;
+    overlay.fit_for_show();
+    // First commit latches zoom=1.5; 2 rows * 20 view pt * 1.5 zoom = 60 window pt.
+    overlay.rt.set_viewport(overlay.canvas_size, 1.0);
+    overlay.rt.frame(0.0);
+    let _ = overlay.core.take_live_fit_resize(overlay.rt.core_mut());
+    overlay.rt.set_viewport((300.0, 60.0), 1.0);
+    overlay.core.at.size = (300.0, 60.0);
+    overlay.presence = Presence::Shown { occluded: false };
+
+    // Grow to 4 rows: 4 * 20 * 1.5 = 120 window pt (not 80 unzoomed view pt).
+    overlay.rt.update(|n, _| *n = 4);
+    overlay.rt.frame(0.0);
+    let next = overlay.core.take_live_fit_resize(overlay.rt.core_mut()).expect("zoomed overlay resizes in window points");
+    assert_eq!(next, (300.0, 120.0));
+}
+
+#[test]
+fn wayland_pending_configure_machine_holds_previous_frame_until_configured() {
+    use super::super::sizing::{WaylandResize, WaylandResizeEffect, WaylandResizeEvent};
+
+    let mut m = WaylandResize::default();
+    assert!(!m.is_pending());
+    let eff: Vec<_> = m.step(WaylandResizeEvent::RequestResize((200, 100))).into_iter().collect();
+    assert_eq!(eff, vec![WaylandResizeEffect::CommitAndHold((200, 100))]);
+    assert!(m.is_pending());
+    // Duplicate request is ignored while pending.
+    assert!(m.step(WaylandResizeEvent::RequestResize((200, 100))).is_empty());
+    // Compositor clamps to 96: leaves pending and applies confirmed height.
+    let eff: Vec<_> = m.step(WaylandResizeEvent::Configured((200, 96))).into_iter().collect();
+    assert_eq!(eff, vec![WaylandResizeEffect::ApplyConfigured((200, 96))]);
+    assert!(!m.is_pending());
+}
+
+#[test]
+fn cpu_layered_fitted_overlay_resizes_dib_atomically_before_present() {
+    #[cfg(target_os = "windows")]
+    use crate::platform::win32::layered::{DibHeaderSpec, LayeredSeam, LayeredUpdate, ULW_ALPHA, bounded_layered_size};
+    #[cfg(all(test, not(target_os = "windows")))]
+    use crate::platform::win32_layered::{DibHeaderSpec, LayeredSeam, LayeredUpdate, ULW_ALPHA, bounded_layered_size};
+
+    #[derive(Default)]
+    struct Seam { created: Vec<DibHeaderSpec>, updates: Vec<LayeredUpdate> }
+    struct Surf { w: u32, h: u32, px: Vec<u8> }
+    impl LayeredSeam for Seam {
+        type Surface = Surf;
+        fn create_surface(&mut self, header: DibHeaderSpec) -> Result<Self::Surface, String> {
+            self.created.push(header);
+            let (w, h) = header.dimensions();
+            Ok(Surf { w, h, px: vec![0u8; w as usize * h as usize * 4] })
+        }
+        fn surface_pixels<'a>(&self, s: &'a mut Self::Surface) -> (&'a mut [u8], usize) { let st = s.w as usize * 4; (&mut s.px, st) }
+        fn surface_size(&self, s: &Self::Surface) -> (u32, u32) { (s.w, s.h) }
+        fn update_layered(&mut self, _: isize, _: &Self::Surface, u: LayeredUpdate) -> Result<(), String> { self.updates.push(u); Ok(()) }
+    }
+
+    let mut overlay = overlay(2);
+    overlay.core.requested_renderer = crate::RendererKind::Cpu;
+    overlay.rt.core_mut().transparent = true;
+    overlay.fit_for_show();
+    assert_eq!(overlay.canvas_size, (200.0, 40.0));
+    overlay.core.at.size = overlay.canvas_size;
+    overlay.rt.set_viewport(overlay.canvas_size, 1.5);
+    overlay.rt.frame(0.0);
+    let mut engine = super::super::cpu::CpuPaintEngine::new(Seam::default(), 1);
+    let px1 = bounded_layered_size(overlay.core.at.size, 1.5);
+    engine.paint_and_present("fit", 1, (10, 20), px1, 255, overlay.rt.core_mut());
+    assert_eq!(engine.presenter().seam().updates[0].size, (300, 60));
+    assert_eq!(engine.presenter().seam().updates[0].flags, ULW_ALPHA);
+
+    // Grow while shown: take_live_fit_resize runs before paint_and_present -> 0 frames at old size.
+    overlay.presence = Presence::Shown { occluded: false };
+    set_rows(&mut overlay, 5);
+    overlay.rt.frame(0.0);
+    let next = overlay.core.take_live_fit_resize(overlay.rt.core_mut()).expect("same-frame grow");
+    assert_eq!(next, (200.0, 100.0));
+    overlay.core.at.size = next;
+    let px2 = bounded_layered_size(next, 1.5);
+    engine.paint_and_present("fit", 1, (10, 20), px2, 255, overlay.rt.core_mut());
+    assert_eq!(engine.presenter().seam().updates[1].size, (300, 150));
+    assert_eq!(engine.presenter().seam().updates[1].dirty, None);
+}
+
+

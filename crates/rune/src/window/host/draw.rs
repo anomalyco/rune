@@ -642,6 +642,8 @@ impl FrameHost for WindowFrame<'_> {
                 let _ = info;
                 self.reblend_surface()
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            ReacquireReason::ContentResize => true,
         }
     }
 

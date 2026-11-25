@@ -354,12 +354,24 @@ impl<T: 'static> ConfiguredOverlay<T> {
     pub fn animate_reveal(mut self) -> Self { self.animate_reveal = true; self }
     /// Size the overlay's height to its content, as [`App::fit_content_height`](crate::App::fit_content_height)
     /// does for a window: the root lays out at its natural height for the overlay's width.
-    /// Each show measures what changed while it was hidden and takes that height before the
-    /// overlay's first frame, so a candidate list or HUD whose size follows its text never
-    /// shows at a stale size. While shown, a change of height resizes the overlay on the next
-    /// event-loop turn, without a spring. `OverlaySpec::size` and `OverlayHandle::resize` set
-    /// only the width; the height is always the content's. `Tx::resize_window` stays ignored,
-    /// as for any overlay. Give the root no fixed or `fill` height.
+    /// Each show and prewarm measures what changed while hidden (at the target monitor's scale
+    /// and active [`RendererKind`](crate::RendererKind), clamped to the display's work area)
+    /// without committing, so the first frame presents at the content's height with no flash.
+    /// While shown, a height change resizes and re-places the overlay before painting in the
+    /// same frame (without a spring; on Wayland layer-shell, holds the previous frame until
+    /// the compositor confirms the new size). `OverlaySpec::size` and `OverlayHandle::resize`
+    /// set only the width; `Tx::resize_window` stays ignored. Give the root no fixed or `fill`
+    /// height.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, col, text};
+    ///
+    /// let _candidates = OverlaySpec::new("candidates", (320.0, 0.0), |items: &Vec<String>, _| {
+    ///     col().gap(2.0).padding(8.0).children(items.iter().map(|s| text(s)))
+    /// })
+    /// .options(OverlayOptions::default())
+    /// .fit_content_height();
+    /// ```
     pub fn fit_content_height(mut self) -> Self { self.fit_height = true; self }
     /// While hidden, the overlay holds no GPU surface, swapchain or renderer. Each show makes the
     /// surface, and each hide drops it. Away from macOS, the GPU device and renderer then wait

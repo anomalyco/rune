@@ -277,13 +277,16 @@ impl HostState {
         tx: &Tx,
         first: bool,
     ) {
-        let height = height.ceil_to(scale).max(1.0);
-        if !self.fit.ask(height, viewport.1) { return; }
-        // An overlay resizes through its host, at once.
+        // An overlay resizes through its host in window points at `window_scale`, matching
+        // `content_height_from` and `OverlayCore::canvas_size` under `Cx::zoom`.
         if self.native_overlay {
-            self.overlay_fit = Some(height);
+            let window_h = self.content_height_from(height);
+            if !self.fit.ask(window_h, self.zoom.window.1) { return; }
+            self.overlay_fit = Some(window_h);
             return;
         }
+        let height = height.ceil_to(scale).max(1.0);
+        if !self.fit.ask(height, viewport.1) { return; }
         let jump = first || tx.commit.snaps() || tx.relayout || reduced_motion;
         // Only a macOS window and headless runs move the frame on a spring.
         if !jump && self.window_resting && (cfg!(target_os = "macos") || headless) { self.fit.hold = FitHold::Asked; }

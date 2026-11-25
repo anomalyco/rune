@@ -295,6 +295,7 @@ fn build_parts<S, T: 'static>(
     core.frame_latency = frame_latency;
     core.on_materials = on_materials;
     core.requested_renderer = renderer;
+    core.fit_height = fit_height;
     let typed = TypedOverlayApp { rt, compositor, setup, on_availability, shared: shared.clone() };
     (core, typed, OverlayHandle { shared }, inherits_font_smoothing)
 }
@@ -442,7 +443,7 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<crate::render::Gpu>>>) {
         with_app!(self, |core, app| core.connect(&mut app, wake, frame_wake, slot_wake, gpu))
     }
-    pub(super) fn draw(&mut self) -> bool { with_app!(self, |core, app| core.draw(&mut app)) }
+    pub(super) fn draw(&mut self) -> bool { with_app!(self, |core, app| core.draw(&mut app, None)) }
     #[cfg(target_os = "macos")]
     pub(super) fn warm(&mut self) { with_app!(self, |core, app| core.warm(&mut app)) }
     pub(super) fn warm_offscreen(&mut self, size: (u32, u32)) { with_app!(self, |core, app| core.warm_offscreen(&mut app, size)) }
