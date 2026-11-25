@@ -44,7 +44,7 @@ Private working set in MB. One laptop with two adapters: an Intel Iris Xe (integ
 | **Rune** (Direct3D 12): an empty window | 23.3 | 69.1 |
 | + a line of text | **22.2** | **69.6** |
 | + a backdrop blur | 33.5 | 75.4 |
-| The text window's first launch (shader and pipeline caches cold) | 27.7 | 69.7 |
+| The text window's first launch (Rune's own shader and pipeline caches cold) | 27.7 | 69.7 |
 
 What Rune adds over the bare Direct3D 12 frame: 16.8 MB on Intel, 9.4 MB on the RTX.
 
@@ -79,4 +79,4 @@ GPUI's own hello on the same machine and day (Direct3D 11, read after 8 seconds 
 ## Not explained
 
 - The empty window reads 1.1 MB over the text window on Intel (23.3 against 22.2) and 0.5 MB under it on the RTX. One run each.
-- The first launch on Intel holds 5.5 MB more than the later ones. On the RTX it does not.
+- The first launch on Intel holds 5.5 MB more than the later ones. On the RTX it does not. Only Rune's own caches were cold in that row: Direct3D's shader cache for the program was not cleared between runs.
