@@ -35,6 +35,10 @@ impl RuntimeCore {
             self.latch_requests(app, &mut one);
             None
         };
+        // An update runs at `now_clock()` (`begin_update`); if a resting timer's frame is
+        // still pending, cancel it so the upcoming frame polls at the newer clock instead of
+        // running handlers at the earlier poll's clock.
+        self.cancel_timer_frame();
         merge(&mut self.frame.pending, one);
         self.commit.dirty |= changed;
         (stale, minimize)
@@ -146,7 +150,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn transaction(&self, app: &dyn ViewDriver) -> Tx {
         let focused_link = self.focused_index().and_then(|i| self.edit.focused_link_id(&self.tree.nodes[i]));
         Tx { trace: self.tracing().then(crate::el::TraceCalls::default), mods: self.kbd.held_mods, selection: self.selection_snapshot(app),
-            input_time: crate::input::time::current(), clock: self.clock, scale: self.env.scale, focus_visible: self.kbd.focus.keyboard(),
+            input_time: crate::input::time::current(), clock: self.polled_at(), scale: self.env.scale, focus_visible: self.kbd.focus.keyboard(),
             focused: self.focused_key(), focused_path: self.kbd.focus.owned(), focused_link,
             assistive: self.host.a11y.is_some() || cfg!(target_arch = "wasm32"), window_hidden: !self.live_visible(), ..Tx::default() }
     }

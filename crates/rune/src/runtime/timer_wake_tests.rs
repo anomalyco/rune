@@ -371,3 +371,156 @@ fn an_earlier_app_timer_does_not_draw_before_a_play_after_step_is_due() {
     assert_eq!(rt.playground_state::<StoryClock>().unwrap().steps, 1);
     assert_eq!(rt.stats.commits, commits + 1);
 }
+
+#[derive(Default)]
+struct HandlerClockApp {
+    polls: Vec<f64>,
+    focuses: Vec<(&'static str, f64)>,
+    update_clock: Option<f64>,
+    send_tab: bool,
+    handler_wake_at: Option<f64>,
+}
+
+fn handler_clock_view(_: &HandlerClockApp, _: &mut Cx<HandlerClockApp>) -> El {
+    let button = |key: &'static str| {
+        crate::el()
+            .key(key)
+            .role("button")
+            .label(key)
+            .focusable(true)
+            .size(60.0, 24.0)
+            .on_focus_change(move |s: &mut HandlerClockApp, focused, tx: &mut Tx| {
+                if focused {
+                    s.focuses.push((key, tx.clock()));
+                    if let Some(delay) = s.handler_wake_at.take() {
+                        tx.wake_at(tx.clock() + delay);
+                    }
+                }
+            })
+    };
+    crate::col().children([button("one"), button("two"), button("three")])
+}
+
+fn handler_clock_poll(s: &mut HandlerClockApp, now: f64, tx: &mut Tx) -> bool {
+    s.polls.push(now);
+    tx.wake_after(PERIOD);
+    if std::mem::take(&mut s.send_tab) {
+        tx.send_key(crate::KeyEvent { key: crate::Key::Tab, mods: crate::Mods::default() });
+        true
+    } else {
+        false
+    }
+}
+
+fn handler_clock_runtime() -> Runtime<HandlerClockApp> {
+    let mut rt = Runtime::new(HandlerClockApp::default(), handler_clock_view, (240.0, 120.0), Env::default());
+    rt.set_tab_visits_controls(true);
+    rt.poll = Some(handler_clock_poll);
+    rt.wall_start = Some(crate::time::now());
+    rt.frame(0.0);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert!(!rt.animating && rt.rests());
+    rt
+}
+
+#[test]
+fn handlers_in_a_resting_timer_s_frame_see_the_poll_s_clock() {
+    let mut rt = handler_clock_runtime();
+    let polls_before = rt.state.polls.len();
+    rt.state.send_tab = true;
+    rt.state.handler_wake_at = Some(0.5);
+    assert!(host_wake(&mut rt, |_| true), "resting poll that sends Tab asks for a frame");
+    let polled = *rt.state.polls.last().unwrap();
+    assert_eq!(rt.state.polls.len(), polls_before + 1);
+
+    // The frame arrives a fraction of a millisecond (4 ms here) after the resting poll.
+    advance(&mut rt, 0.004);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert_eq!(rt.state.polls.len(), polls_before + 1, "the resting timer's frame does not poll again");
+    assert!(rt.clock > polled, "the runtime clock advanced to the frame's wall time");
+    assert_eq!(
+        rt.state.focuses,
+        [("one", polled)],
+        "handlers in the frame standing for a resting poll must see that poll's clock",
+    );
+    // A handler calling `tx.wake_at(tx.clock() + 0.5)` still schedules a deadline >= due.
+    let expected_due = polled + 0.5;
+    let next_due = rt.wake_deadline().expect("handler wake_at is armed");
+    assert!(next_due >= expected_due, "scheduled deadline {next_due} must reach requested {expected_due}");
+
+    // On an ordinary frame, poll runs and handlers see that frame's poll clock.
+    rt.key(crate::KeyEvent { key: crate::Key::Tab, mods: crate::Mods::default() });
+    advance(&mut rt, 0.01);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    let ordinary_poll = *rt.state.polls.last().unwrap();
+    assert_eq!(rt.state.polls.len(), polls_before + 2);
+    assert_eq!(
+        rt.state.focuses.last().copied(),
+        Some(("two", ordinary_poll)),
+        "ordinary frame handlers see that frame's poll clock",
+    );
+}
+
+#[test]
+fn an_update_after_resting_wake_cancels_the_timer_frame_so_clock_never_goes_backwards() {
+    let mut rt = handler_clock_runtime();
+    let polls_before = rt.state.polls.len();
+    rt.state.send_tab = true;
+    assert!(host_wake(&mut rt, |_| true));
+    let polled = *rt.state.polls.last().unwrap();
+
+    // An update runs between resting_wake_frame(true) and its frame at a later wall clock.
+    advance(&mut rt, 0.004);
+    rt.update(|s, tx| {
+        s.update_clock = Some(tx.clock());
+    });
+    let update_clock = rt.state.update_clock.unwrap();
+    assert!(update_clock > polled);
+
+    // The frame must run a fresh poll instead of running handlers at the older `polled` clock.
+    advance(&mut rt, 0.002);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert_eq!(rt.state.polls.len(), polls_before + 2, "an intervening update requires a fresh poll");
+    let frame_poll = *rt.state.polls.last().unwrap();
+    assert!(frame_poll >= update_clock, "frame poll clock {frame_poll} must not go backwards past {update_clock}");
+    assert_eq!(rt.state.focuses, [("one", frame_poll)]);
+    // The resting poll's own timer was scheduled from `polled` when the timer frame was cancelled.
+    assert!(rt.wake_deadline().is_some_and(|d| d >= polled + PERIOD.as_secs_f64() - 1e-6));
+}
+
+#[test]
+fn playground_play_press_in_a_resting_timer_s_frame_sees_the_poll_s_clock() {
+    type Scene = (&'static str, fn(&mut HandlerClockApp));
+    static SCENES: &[Scene] = &[("Repro/Clock", |_| {})];
+    let mut spec = crate::AppSpec::new("play_clock", (800.0, 400.0), HandlerClockApp::default, handler_clock_view);
+    spec.scenes = SCENES;
+    let playground = crate::Playground::new()
+        .enabled(true)
+        .trigger("Repro/Clock", 'r', "Press Tab", |_, play| {
+            play.focus("one", true);
+            play.after(5.0, |s: &mut HandlerClockApp, play| {
+                s.polls.push(play.clock());
+                play.press(crate::Key::Tab);
+            });
+        });
+    let mut rt = crate::App::new(spec)
+        .tab_visits_controls(true)
+        .playground(playground)
+        .headless_runtime((800.0, 400.0), Env::default());
+    rt.wall_start = Some(crate::time::now());
+    rt.frame(0.0);
+    rt.open_playground("Repro/Clock", None);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert!(!rt.animating && rt.rests());
+
+    assert!(host_wake(&mut rt, |_| true), "due Play::after step asks for a frame");
+    let polled = *rt.playground_state::<HandlerClockApp>().unwrap().polls.last().unwrap();
+    advance(&mut rt, 0.004);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert!(rt.clock > polled);
+    assert_eq!(
+        rt.playground_state::<HandlerClockApp>().unwrap().focuses.last().copied(),
+        Some(("two", polled)),
+        "handlers triggered by Play::press on a resting wake must see the resting poll's clock",
+    );
+}
