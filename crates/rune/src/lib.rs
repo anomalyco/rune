@@ -237,7 +237,9 @@ pub use overlay::options::OverlaySupport;
 pub use pixels::Pixels;
 pub use platform::accent::SystemAccent;
 pub use platform::accent::system_accent;
+pub use platform::app_icon::AppIcon;
 pub use platform::app_icon::set_app_icon;
+pub use platform::app_icon::set_app_icon_choice;
 #[cfg(target_os = "windows")]
 pub use platform::app_icon::set_app_icon_resource;
 pub use platform::desktop_settings::DesktopSetting;
