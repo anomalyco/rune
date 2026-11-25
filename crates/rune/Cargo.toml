@@ -369,6 +369,10 @@ name = "wayland_display_queue"
 harness = false
 
 [[test]]
+name = "wayland_window_geometry"
+harness = false
+
+[[test]]
 name = "macos_overlay_drag_out"
 harness = false
 

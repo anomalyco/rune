@@ -101,22 +101,75 @@ impl GeometryWatch {
     }
 }
 
+/// Queries `sample` only when the app opted into `App::on_window_geometry`, ensuring apps without
+/// the hook perform zero native window queries (avoiding X11 server round trips).
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub(in crate::window) fn sample_if_watched(
+    watches: bool,
+    watch: &mut GeometryWatch,
+    initial: bool,
+    sample: impl FnOnce() -> WindowGeometry,
+) -> Option<WindowGeometry> {
+    if !watches { return None; }
+    watch.observe(sample(), initial)
+}
+
+/// Selects the first entered output that is still present in `live`, mirroring vendored winit's
+/// Wayland `Window::current_monitor` filtering of removed `wl_output` globals.
+#[cfg(test)]
+pub(crate) fn select_live_output<T: Copy + PartialEq>(entered: &[T], live: &[T]) -> Option<T> {
+    entered.iter().copied().find(|output| live.contains(output))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl Host {
+    /// Marks the native window created and runs the creation callbacks in order: `on_created`,
+    /// `on_window`, and the initial `App::on_window_geometry` sample (before the first focus and
+    /// frame). Every native window open path (GPU creation/recreation, Linux CPU-first, and
+    /// Windows CPU-first) calls this helper so none can skip the creation sample. Returns `false`
+    /// if `check_gpu_loss` observed a lost GPU during `on_window`.
+    pub(in crate::window) fn announce_created(&mut self, check_gpu_loss: bool) -> bool {
+        crate::marks::mark("window.created");
+        if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
+        if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
+        if check_gpu_loss && self.poll_gpu_loss() { return false; }
+        // After `on_window`, which may resize it, and before its first focus and frame.
+        self.creation_geometry();
+        true
+    }
+
+    /// Whether `on_created`, `on_window`, or `on_window_geometry` already asked to close, quit,
+    /// or minimize the window during creation, so synchronous first-frame paths draw nothing.
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    pub(in crate::window) fn closing_at_creation(&self) -> bool {
+        let rt = self.app.rt();
+        rt.shell_request.is_some() || rt.has_user_close_request() || rt.host.minimize.field()
+    }
+
     /// At native creation: runs the hook now, before the window's first focus and frame.
     pub(in crate::window) fn creation_geometry(&mut self) {
-        if !self.app.watches_geometry() { return; }
         let Some(w) = &self.win else { return };
-        let Some(sample) = self.geometry_watch.observe(WindowGeometry::sample(&w.window), true) else { return };
+        let Some(sample) = sample_if_watched(
+            self.app.watches_geometry(),
+            &mut self.geometry_watch,
+            true,
+            || WindowGeometry::sample(&w.window),
+        ) else { return };
         self.app.run_on_geometry(sample);
     }
 
     /// At idle: runs the hook as an update when the sample changed, so its frame and window
     /// requests go as an update's do. True when that finished the window (a close it asked for).
     pub(in crate::window) fn idle_geometry(&mut self, event_loop: &ActiveEventLoop) -> bool {
-        if !self.started || self.life.finished() || !self.app.watches_geometry() { return false; }
+        if !self.started || self.life.finished() { return false; }
         let Some(w) = &self.win else { return false };
-        let Some(sample) = self.geometry_watch.observe(WindowGeometry::sample(&w.window), false) else { return false };
+        let Some(sample) = sample_if_watched(
+            self.app.watches_geometry(),
+            &mut self.geometry_watch,
+            false,
+            || WindowGeometry::sample(&w.window),
+        ) else { return false };
         self.app.queue_on_geometry(sample);
         self.drain(event_loop, false);
         self.publish();

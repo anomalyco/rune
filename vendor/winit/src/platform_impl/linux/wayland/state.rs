@@ -338,6 +338,8 @@ impl OutputHandler for WinitState {
 
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: WlOutput) {
         self.monitors.lock().unwrap().push(MonitorHandle::new(output));
+        // Rune: wake `AboutToWait` in case `wl_surface.enter` arrived before `wl_output.done`.
+        self.dispatched_events = true;
     }
 
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, updated: WlOutput) {
@@ -355,6 +357,8 @@ impl OutputHandler for WinitState {
         let removed = MonitorHandle::new(removed);
         if let Some(pos) = monitors.iter().position(|output| output == &removed) {
             monitors.remove(pos);
+            // Rune: wake `AboutToWait` even when the compositor sent no `wl_surface.leave`.
+            self.dispatched_events = true;
         }
     }
 }
@@ -377,6 +381,8 @@ impl CompositorHandler for WinitState {
         _: &WlSurface,
         _: &WlOutput,
     ) {
+        // Rune: wake `AboutToWait` so output-presence hooks see entry at scale 1 without resize.
+        self.dispatched_events = true;
     }
 
     fn surface_leave(
@@ -386,6 +392,8 @@ impl CompositorHandler for WinitState {
         _: &WlSurface,
         _: &WlOutput,
     ) {
+        // Rune: wake `AboutToWait` so output-presence hooks see leave without resize.
+        self.dispatched_events = true;
     }
 
     fn scale_factor_changed(
