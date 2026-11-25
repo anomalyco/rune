@@ -66,14 +66,21 @@ impl WriteStamp {
     }
 }
 
+/// An image or pixel handle waiting to be encoded as PNG off the event thread.
+#[derive(Clone)]
+enum PendingImage {
+    Image(crate::Image),
+    Pixels(crate::Pixels),
+}
+
 /// A pending clipboard write. Debug output never includes its contents.
 #[derive(Clone)]
 pub struct ClipboardWrite {
     content: ClipboardContent,
     clear_after: Option<Duration>,
     secret: Option<Arc<Unwritten>>,
-    /// A decoded image to copy, encoded as PNG where the write is carried out.
-    image: Option<crate::Image>,
+    /// A decoded image or `Pixels` handle to copy, encoded as PNG where the write is carried out.
+    image: Option<PendingImage>,
     /// Straight-alpha sRGB RGBA8 retained beside the encoded PNG so Windows (`CF_DIBV5`) and
     /// Linux (`arboard`) write without decoding the PNG back to pixels.
     #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
@@ -98,7 +105,13 @@ impl ClipboardWrite {
     }
     /// `Tx::copy_image`: the image alone, encoded off the event thread on native platforms.
     pub(crate) fn image(image: crate::Image) -> Self {
-        Self { image: Some(image), ..Self::new(ClipboardContent::default()) }
+        Self { image: Some(PendingImage::Image(image)), ..Self::new(ClipboardContent::default()) }
+    }
+    /// Internal `Pixels` copy path (for default image context menus): copies any `El::pixels`
+    /// or `El::pixels_fit` element off the event thread without storing an `Image` handle.
+    #[allow(dead_code)]
+    pub(crate) fn pixels(pixels: crate::Pixels) -> Self {
+        Self { image: Some(PendingImage::Pixels(pixels)), ..Self::new(ClipboardContent::default()) }
     }
     #[cfg(target_arch = "wasm32")]
     fn has_pending_image(&self) -> bool { self.image.is_some() }
@@ -116,10 +129,19 @@ impl ClipboardWrite {
     /// when the image is still decoding, failed to decode, or exceeds clipboard size limits;
     /// the write then leaves the clipboard as it was.
     fn encode_image(&mut self) -> Result<(), CopyImageError> {
-        let Some(image) = self.image.take() else { return Ok(()) };
-        if let Some(err) = image.error() { return Err(CopyImageError::DecodeFailed(err.clone())); }
-        if !image.is_ready() { return Err(CopyImageError::NotReady); }
-        let Some((w, h, rgba)) = image.to_rgba() else { return Err(CopyImageError::NotReady); };
+        let Some(pending) = self.image.take() else { return Ok(()) };
+        let (w, h, rgba) = match pending {
+            PendingImage::Image(image) => {
+                if let Some(err) = image.error() { return Err(CopyImageError::DecodeFailed(err.clone())); }
+                if !image.is_ready() { return Err(CopyImageError::NotReady); }
+                let Some(px) = image.to_rgba() else { return Err(CopyImageError::NotReady); };
+                px
+            }
+            PendingImage::Pixels(pixels) => {
+                let Some(px) = pixels.to_rgba() else { return Err(CopyImageError::NotReady); };
+                px
+            }
+        };
         if !valid_image_size(w, h) { return Err(CopyImageError::TooLarge); }
         let png_bytes = crate::drag_out::encode_png(w, h, &rgba)
             .ok_or_else(|| CopyImageError::Failed("failed to encode PNG".into()))?;

@@ -820,3 +820,30 @@ fn to_rgba_reads_decoded_pixels_back_straight_and_svg_at_its_intrinsic_size() {
     assert!(bad.wait().is_err());
     assert_eq!(bad.to_rgba(), None);
 }
+
+#[test]
+fn pixels_to_rgba_handles_empty_raw_rgba_and_decoded_mips() {
+    let px = Pixels::new();
+    assert_eq!(px.to_rgba(), None);
+
+    // Raw straight RGBA from Pixels::set round-trips bit-exactly (including partial alpha).
+    let raw = vec![10, 20, 30, 255, 40, 50, 60, 77, 1, 2, 3, 0];
+    px.set(3, 1, raw.clone());
+    assert_eq!(px.to_rgba(), Some((3, 1, raw)));
+
+    // Decoded mip-backed Pixels (from Image::pixels) delegates to the same readback helper.
+    let cache = ImageCache::new(Arc::new(|| {}));
+    let img = cache.rgba(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]);
+    img.wait().unwrap();
+    assert_eq!(img.pixels().to_rgba(), img.to_rgba());
+
+    #[cfg(feature = "svg")]
+    {
+        const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="6"><rect width="12" height="6" fill="#309050"/></svg>"##;
+        let svg = cache.load(SVG);
+        assert_eq!(svg.wait(), Ok([24, 12]));
+        assert_eq!(svg.pixels().to_rgba(), svg.to_rgba());
+        let (w, h, _) = svg.pixels().to_rgba().unwrap();
+        assert_eq!((w, h), (12, 6));
+    }
+}
