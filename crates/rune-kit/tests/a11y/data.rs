@@ -382,3 +382,48 @@ fn diff_view_and_scroll_bars_xy_hide_bar_chrome_from_a11y() {
     assert_eq!(node(&xy_tree, "cell")["name"], "Board cell");
     no_echo(&xy_tree);
 }
+
+fn charts(_: &App, _: &mut Cx<App>) -> El {
+    let k = kit();
+    col()
+        .w(400.0)
+        .gap(16.0)
+        .child(
+            LineChart::new("usage")
+                .label("Usage")
+                .labels(["Mon", "Tue", "Wed"])
+                .series("CPU", [12.0, f32::NAN, 41.0])
+                .series("Memory", [40.0, 42.0, 45.0])
+                .format(|v| format!("{v:.0}%"))
+                .build(&k),
+        )
+        .child(BarChart::new("files").label("Files").bar("Rust", 412.0).bar("Docs", f32::NAN).build(&k))
+        .child(BarChart::new("langs").label("Languages").bar("Rust", 3.0).bar("Lua", 1.0).horizontal().build(&k))
+}
+
+#[test]
+fn charts_read_each_band_as_a_list_item_with_its_values() {
+    let rt = mount(App::default(), charts);
+    let tree = rt.accessibility_json();
+    let items = |key: &str| -> Vec<(String, String, u64)> {
+        let chart = node(&tree, key);
+        assert_eq!(said(chart).0, "group");
+        let list = node(chart, "bands");
+        assert_eq!(said(list).0, "list");
+        with_role(list, "list-item")
+            .into_iter()
+            .map(|n| (said(n).0.to_owned(), said(n).1.to_owned(), n["position"].as_u64().unwrap_or(0)))
+            .collect()
+    };
+    let li = |name: &str, at: u64| ("list-item".to_owned(), name.to_owned(), at);
+    assert_eq!(said(node(&tree, "usage")).1, "Usage");
+    assert_eq!(
+        items("usage"),
+        vec![li("Mon: CPU 12%, Memory 40%", 1), li("Tue: CPU –, Memory 42%", 2), li("Wed: CPU 41%, Memory 45%", 3)],
+        "a gap reads as a dash, not through the app's format"
+    );
+    assert_eq!(items("files"), vec![li("Rust: 412", 1), li("Docs: –", 2)]);
+    assert_eq!(items("langs"), vec![li("Rust: 3", 1), li("Lua: 1", 2)]);
+    no_echo(&tree);
+    golden("charts", &tree);
+}
