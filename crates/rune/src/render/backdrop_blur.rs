@@ -393,9 +393,9 @@ impl BackdropBlur {
         }
     }
 
-    /// Lets go of the pooled backdrop of `format`, which `Renderer::give_back` drops.
-    pub(super) fn unbind_backdrop(&mut self, format: wgpu::TextureFormat) {
-        self.first.retain(|(f, _)| *f != format);
+    /// Lets go of the pooled backdrops of every format but `live`'s, which the renderer dropped.
+    pub(super) fn keep_backdrops(&mut self, live: &[wgpu::TextureFormat]) {
+        self.first.retain(|(f, _)| live.contains(f));
     }
 
     pub(super) fn ensure_composite(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
@@ -526,14 +526,20 @@ impl Renderer {
         blur.ensure_composite(device, self.format);
         for (format, _) in &self.extra { blur.ensure_composite(device, *format); }
         if self.layers.targets.iter().any(Option::is_some) { blur.ensure_composite(device, layers::FORMAT); }
-        let viewport = [vw as f32, vh as f32];
+        // Where the copy a record reads sits in the window, and its size: the whole frame for a
+        // record drawn straight into the frame, the pooled copy in a layer target's format for
+        // one drawn into a layer (`Renderer::backdrop_reads`).
+        let whole = ([0.0; 2], [vw as f32, vh as f32]);
+        let frames = [whole, self.backdrops.iter().find(|b| b.format == layers::FORMAT).map_or(whole, |b| {
+            ([b.origin[0] as f32, b.origin[1] as f32], [b.texture.width() as f32, b.texture.height() as f32])
+        })];
         let mut placed = Vec::new();
         let mut need = [STEP; 2];
         let records = self.effects.iter().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur));
         for (at, i) in records {
             let Some(plan) = plan_region(i, (vw, vh)) else { continue };
             for k in 0..2 { need[k] = need[k].max(plan.size[k]); }
-            placed.push((*at, plan.levels, plan.share, plan.region, plan.origin));
+            placed.push((*at, plan.levels, plan.share, plan.region, plan.origin, frames[usize::from(self.layers.draws_into_target(*at))]));
         }
         if placed.is_empty() { return; }
         let slots = blur.ensure_capacity(device, placed.len(), &self.backdrops);
@@ -545,15 +551,16 @@ impl Renderer {
         let Some(pyramid) = &blur.pyramid else { return };
         let extent = [pyramid.size[0] as f32 * 2.0, pyramid.size[1] as f32 * 2.0];
         let mut levels_data = vec![0u8; placed.len() * SLOTS * SLOT as usize];
-        for (slot, (at, n, share, region, origin)) in placed.into_iter().enumerate() {
+        for (slot, (at, n, share, region, origin, (corner, held))) in placed.into_iter().enumerate() {
             let inside = [(region[0] - origin[0]) / extent[0], (region[1] - origin[1]) / extent[1],
                 (region[2] - origin[0]) / extent[0], (region[3] - origin[1]) / extent[1]];
             let place = [origin[0], origin[1], extent[0], extent[1]];
             for m in 0..SLOTS {
-                // The first down pass reads the window-sized backdrop; the rest read the pyramid.
+                // The first down pass reads the pooled backdrop, which holds the window from
+                // `corner` for `held` pixels; the rest read the pyramid.
                 let (region, map) = if m == MIPS as usize {
-                    ([region[0] / viewport[0], region[1] / viewport[1], region[2] / viewport[0], region[3] / viewport[1]],
-                        [extent[0] / viewport[0], extent[1] / viewport[1], origin[0] / viewport[0], origin[1] / viewport[1]])
+                    ([(region[0] - corner[0]) / held[0], (region[1] - corner[1]) / held[1], (region[2] - corner[0]) / held[0], (region[3] - corner[1]) / held[1]],
+                        [extent[0] / held[0], extent[1] / held[1], (origin[0] - corner[0]) / held[0], (origin[1] - corner[1]) / held[1]])
                 } else {
                     (inside, [1.0, 1.0, 0.0, 0.0])
                 };

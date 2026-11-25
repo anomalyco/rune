@@ -88,7 +88,7 @@ impl Layers {
     }
 
     /// Whether instance `at` sits inside a group this frame draws into a target of its own.
-    fn draws_into_target(&self, at: u32) -> bool {
+    pub(super) fn draws_into_target(&self, at: u32) -> bool {
         self.plan.iter().enumerate().any(|(i, l)| l.begin < at && at < l.end && matches!(self.planner.dispositions.get(i), Some(Disposition::Render { .. })))
     }
 
@@ -295,10 +295,33 @@ impl Renderer {
         ONCE.call_once(|| procwatch::alloc::sites::contribute("rune-gpu", || POOLS.lock().unwrap_or_else(|e| e.into_inner()).clone()));
     }
 
-    /// Whether one of the frame's backdrops (a blur, or an effect that reads what is below it)
-    /// draws into a layer's own target, so the copy it reads has that target's format.
-    pub(super) fn backdrop_in_layer(&self) -> bool {
-        self.effects.iter().any(|(at, i)| (i.params[0] != 0.0 || i.kind() == Some(Kind::BackdropBlur)) && self.layers.draws_into_target(*at))
+    /// What the frame's backdrops read: whether any is drawn straight into the frame, and for
+    /// the ones drawn into a layer's own target the window device pixels `[x0, y0, x1, y1]` they
+    /// read and whether that is the whole target. A blur reads its region; an effect that reads
+    /// what is below it reads the whole target.
+    pub(super) fn backdrop_reads(&self, (vw, vh): (u32, u32)) -> (bool, Option<([u32; 4], bool)>) {
+        let (mut frame, mut layer) = (false, None::<([u32; 4], bool)>);
+        for (at, i) in &self.effects {
+            let (rect, whole) = if i.kind() == Some(Kind::BackdropBlur) {
+                let Some(plan) = backdrop_blur::plan_region(i, (vw, vh)) else { continue };
+                let r = plan.region;
+                ([r[0].floor().max(0.0) as u32, r[1].floor().max(0.0) as u32, (r[2].ceil().max(0.0) as u32).min(vw), (r[3].ceil().max(0.0) as u32).min(vh)], false)
+            } else if i.params[0] != 0.0 {
+                ([0, 0, vw, vh], true)
+            } else {
+                continue;
+            };
+            if !self.layers.draws_into_target(*at) {
+                frame = true;
+                continue;
+            }
+            layer = Some(match layer {
+                Some((b, w)) => ([b[0].min(rect[0]), b[1].min(rect[1]), b[2].max(rect[2]), b[3].max(rect[3])], w || whole),
+                None => (rect, whole),
+            });
+        }
+        // A whole copy starts at the target's corner whatever else shares it.
+        (frame, layer.map(|(b, whole)| if whole { ([0, 0, vw, vh], true) } else { (b, false) }))
     }
 
     /// What a window at rest gives back (`window::rest`): every spare target (the first menu,
@@ -325,10 +348,6 @@ impl Renderer {
         if all || !self.backdrop_used {
             self.backdrops.clear();
             if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
-        } else if !self.backdrop_in_layer() && FORMAT != self.format && self.extra.iter().all(|(format, _)| *format != FORMAT) {
-            // The copy in a layer target's format, which the last frame's backdrops didn't read.
-            self.backdrops.retain(|b| b.format != FORMAT);
-            if let Some(blur) = &mut self.backdrop_blur { blur.unbind_backdrop(FORMAT); }
         }
         if !all {
             self.uploads.trim_oversized();
