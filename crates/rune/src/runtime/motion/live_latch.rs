@@ -401,6 +401,19 @@ impl timer_wake::FrameState {
                         };
                         apply(scene, node.id, p, enter, leave, Color::decode, op, |_, _| false);
                     }
+                    Property::RangeValue => {
+                        // Assistive technology hears where a smoothed value lands, not each spring step.
+                        let bits = match op {
+                            LatchOp::Snap(b) | LatchOp::Set(b) | LatchOp::Pulse { rest: b, .. } => b,
+                        };
+                        let v = f64::from(f32::decode(bits));
+                        if let Some(r) = cold.a11y.more.as_deref_mut().and_then(|m| m.range.as_mut())
+                            && r.value != v
+                        {
+                            r.value = v;
+                            text_changed |= scene.contains(node.id);
+                        }
+                    }
                     Property::Rect => {
                         let frame_of = |b| {
                             let [x, y, w, h] = <[f32; 4]>::decode(b);

@@ -1,0 +1,1 @@
+- Accessibility: `El::live_range_value` binds a `range_value`'s number to a `Live<f32>` (or a smoothed binding or a `Tween`), so a progress bar or meter updates its value for assistive technology without a view commit; the bounds stay those of `range_value` (0 to 1 without one), and a rebuild keeps the last latched number.
