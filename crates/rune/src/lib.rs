@@ -61,6 +61,7 @@ pub use accesskit;
 pub use app::App;
 pub use app::AppHandle;
 pub use app::CloseResponse;
+pub use app::QuitResponse;
 pub use clipboard::ClipboardContent;
 pub use clipboard::ClipboardImage;
 pub use clipboard::ClipboardWrite;

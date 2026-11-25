@@ -214,7 +214,7 @@ impl Host {
             WakeEvent::ResizeSync(_) => self.handle_resize_sync_wake(),
             #[cfg(not(target_os = "windows"))]
             WakeEvent::ResizeSync(_) => {}
-            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::FileDrop | WakeEvent::LayerPending | WakeEvent::AppColorScheme => {}
+            WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::QuitRequest | WakeEvent::FileDrop | WakeEvent::LayerPending | WakeEvent::AppColorScheme => {}
         }
     }
 

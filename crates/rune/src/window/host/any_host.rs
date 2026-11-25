@@ -108,6 +108,10 @@ impl AnyHost for Host {
 
     // What reaches the app's state runs in its turn scope (`App::turn_scope`).
     fn terminate(&mut self) { self.in_turn(Self::terminate_in_turn) }
+    fn has_quit_request(&self) -> bool { !self.life.finished() && self.app.has_quit_request() }
+    fn quit_request_hook(&mut self, event_loop: &ActiveEventLoop) -> Option<crate::QuitResponse> {
+        self.in_turn(|h| h.quit_request_in_turn(event_loop))
+    }
     fn quit_hook(&mut self) { self.in_turn(Self::quit_hook_in_turn) }
     fn vanish(&mut self) {
         if let Some(w) = self.shown_win() { w.hide(); }

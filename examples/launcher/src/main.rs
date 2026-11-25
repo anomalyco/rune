@@ -21,8 +21,9 @@ use std::path::PathBuf;
 
 use rune::{
     Align, App, AppHandle, AppSpec, CloseResponse, Color, Cx, DisplayTarget, El, Image, ImageCache,
-    Key, KeyEvent, MacWindowOptions, OverlayPlacement, ResizeEdge, ScreenEdge, SurfaceFit,
-    TextEdit, Tx, Waker, WindowOptions, WindowSpec, col, el, row, spacer, text, text_input,
+    Key, KeyEvent, MacWindowOptions, OverlayPlacement, QuitResponse, ResizeEdge, ScreenEdge,
+    SurfaceFit, TextEdit, Tx, Waker, WindowOptions, WindowSpec, col, el, row, spacer, text,
+    text_input,
 };
 
 /// Recording with `--desktop`: there is no native chrome, so the app draws its own.
@@ -66,12 +67,19 @@ fn note_path(index: usize) -> PathBuf {
     PathBuf::from(format!("/tmp/rune-notes/{}", NOTES[index].file))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnsavedPrompt {
+    None,
+    Close,
+    Quit,
+}
+
 struct Notes {
     selected: usize,
     focused: bool,
     represented_attached: bool,
     edited: [bool; NOTES.len()],
-    close_prompt: bool,
+    prompt: UnsavedPrompt,
     cache: Option<ImageCache>,
     icons: Vec<Image>,
 }
@@ -89,17 +97,26 @@ impl Notes {
 
     fn clear_unsaved(&mut self, tx: &mut Tx) {
         self.edited = [false; NOTES.len()];
-        self.close_prompt = false;
+        self.prompt = UnsavedPrompt::None;
         tx.set_document_edited(false);
     }
 }
 
 fn notes_close_request(s: &mut Notes, _tx: &mut Tx) -> CloseResponse {
     if s.has_unsaved() {
-        s.close_prompt = true;
+        s.prompt = UnsavedPrompt::Close;
         CloseResponse::Defer
     } else {
         CloseResponse::Close
+    }
+}
+
+fn notes_quit_request(s: &mut Notes, _tx: &mut Tx) -> QuitResponse {
+    if s.has_unsaved() {
+        s.prompt = UnsavedPrompt::Quit;
+        QuitResponse::Defer
+    } else {
+        QuitResponse::Quit
     }
 }
 
@@ -215,30 +232,37 @@ fn notes_view(s: &Notes, _: &mut Cx<Notes>) -> El {
     let mut root = col().w_full().h_full().fill(t.card)
         .child(if DESKTOP.load(Ordering::Relaxed) { title_bar } else { el().h(28.0) })
         .child(row().w_full().grow(1.0).child(list).child(page));
-    if s.close_prompt {
+    if s.prompt != UnsavedPrompt::None {
+        let is_quit = s.prompt == UnsavedPrompt::Quit;
         let unsaved = s.edited.iter().filter(|&&d| d).count();
+        let verb = if is_quit { "quitting" } else { "closing" };
         let prompt_body = if unsaved == 1 {
-            "1 note has unsaved changes. Save before closing?".to_owned()
+            format!("1 note has unsaved changes. Save before {verb}?")
         } else {
-            format!("{unsaved} notes have unsaved changes. Save before closing?")
+            format!("{unsaved} notes have unsaved changes. Save before {verb}?")
+        };
+        let (discard_label, save_label) = if is_quit {
+            ("Discard & Quit", "Save & Quit")
+        } else {
+            ("Discard & Close", "Save & Close")
         };
         let cancel = chip("close-cancel", "Cancel", false)
-            .on_press(|s: &mut Notes| s.close_prompt = false);
-        let discard = chip("close-discard", "Discard & Close", false)
-            .on_press_tx(|s: &mut Notes, tx| {
+            .on_press(|s: &mut Notes| s.prompt = UnsavedPrompt::None);
+        let discard = chip("close-discard", discard_label, false)
+            .on_press_tx(move |s: &mut Notes, tx| {
                 s.clear_unsaved(tx);
-                tx.close_window();
+                if is_quit { tx.quit(); } else { tx.close_window(); }
             });
-        let save = chip("close-save", "Save & Close", true)
-            .on_press_tx(|s: &mut Notes, tx| {
+        let save = chip("close-save", save_label, true)
+            .on_press_tx(move |s: &mut Notes, tx| {
                 s.clear_unsaved(tx);
-                tx.close_window();
+                if is_quit { tx.quit(); } else { tx.close_window(); }
             });
         let dialog = col()
             .key("close-confirm-dialog")
             .role("dialog")
             .label("Unsaved changes")
-            .modal(true, |s: &mut Notes| s.close_prompt = false)
+            .modal(true, |s: &mut Notes| s.prompt = UnsavedPrompt::None)
             .w(340.0)
             .padding(18.0)
             .gap(12.0)
@@ -345,7 +369,12 @@ fn main() {
                 ("unsaved-close", |s| {
                     s.load_icons(Arc::new(|| {}), true);
                     s.edited[0] = true;
-                    s.close_prompt = true;
+                    s.prompt = UnsavedPrompt::Close;
+                }),
+                ("unsaved-quit", |s| {
+                    s.load_icons(Arc::new(|| {}), true);
+                    s.edited[0] = true;
+                    s.prompt = UnsavedPrompt::Quit;
                 }),
             ],
             ..AppSpec::new(
@@ -356,7 +385,7 @@ fn main() {
                     focused: true,
                     represented_attached: true,
                     edited: [false; NOTES.len()],
-                    close_prompt: false,
+                    prompt: UnsavedPrompt::None,
                     cache: None,
                     icons: Vec::new(),
                 },
@@ -373,6 +402,7 @@ fn main() {
                     .accepts_first_mouse(false),
             )
             .on_close_request(notes_close_request)
+            .on_quit_request(notes_quit_request)
             .on_focus(|s, focused, _| s.focused = focused);
         let launcher_spec = AppSpec::<Launcher> {
             setup: Some(|s, w| s.load_icons(w, false)),
@@ -435,7 +465,7 @@ mod tests {
             focused: true,
             represented_attached: true,
             edited: [false; NOTES.len()],
-            close_prompt: false,
+            prompt: UnsavedPrompt::None,
             cache: None,
             icons: Vec::new(),
         };
@@ -460,7 +490,7 @@ mod tests {
             focused: true,
             represented_attached: true,
             edited: [false; NOTES.len()],
-            close_prompt: false,
+            prompt: UnsavedPrompt::None,
             cache: None,
             icons: Vec::new(),
         };
@@ -489,7 +519,7 @@ mod tests {
             focused: true,
             represented_attached: true,
             edited: [false; NOTES.len()],
-            close_prompt: false,
+            prompt: UnsavedPrompt::None,
             cache: None,
             icons: Vec::new(),
         };
@@ -500,7 +530,7 @@ mod tests {
         let mut decision = CloseResponse::Defer;
         rt.update(|s, tx| decision = notes_close_request(s, tx));
         assert_eq!(decision, CloseResponse::Close);
-        assert!(!rt.state.close_prompt);
+        assert_eq!(rt.state.prompt, UnsavedPrompt::None);
 
         // Mark a note edited, then trigger close request -> defers and displays modal dialog.
         rt.update(|s, tx| {
@@ -509,7 +539,7 @@ mod tests {
             decision = notes_close_request(s, tx);
         });
         assert_eq!(decision, CloseResponse::Defer);
-        assert!(rt.state.close_prompt);
+        assert_eq!(rt.state.prompt, UnsavedPrompt::Close);
         rt.frame(0.1);
         assert!(rt.find("close-confirm-dialog").is_some());
 
@@ -528,7 +558,7 @@ mod tests {
         rt.pointer_down(cx, cy);
         rt.pointer_up(cx, cy);
         rt.frame(0.2);
-        assert!(!rt.state.close_prompt);
+        assert_eq!(rt.state.prompt, UnsavedPrompt::None);
         assert!(rt.find("close-confirm-dialog").is_none());
         assert_eq!(rt.shell_request, None);
 
@@ -540,8 +570,65 @@ mod tests {
         rt.pointer_down(sx, sy);
         rt.pointer_up(sx, sy);
         rt.frame(0.4);
-        assert!(!rt.state.close_prompt);
+        assert_eq!(rt.state.prompt, UnsavedPrompt::None);
         assert!(!rt.state.has_unsaved());
         assert_eq!(rt.shell_request, Some(rune::Shell::Close));
+    }
+
+    #[test]
+    fn notes_quit_request_defers_when_edited_and_dialog_cancels_or_quits() {
+        let state = Notes {
+            selected: 0,
+            focused: true,
+            represented_attached: true,
+            edited: [false; NOTES.len()],
+            prompt: UnsavedPrompt::None,
+            cache: None,
+            icons: Vec::new(),
+        };
+        let mut rt = Runtime::new(state, notes_view, (560.0, 340.0), Env { system_dark: true, scale: 2.0 });
+        rt.frame(0.0);
+
+        let mut decision = QuitResponse::Defer;
+        rt.update(|s, tx| decision = notes_quit_request(s, tx));
+        assert_eq!(decision, QuitResponse::Quit);
+        assert_eq!(rt.state.prompt, UnsavedPrompt::None);
+
+        rt.update(|s, tx| {
+            s.edited[0] = true;
+            tx.set_document_edited(true);
+            decision = notes_quit_request(s, tx);
+        });
+        assert_eq!(decision, QuitResponse::Defer);
+        assert_eq!(rt.state.prompt, UnsavedPrompt::Quit);
+        rt.frame(0.1);
+        assert!(rt.find("close-confirm-dialog").is_some());
+
+        let tree = rt.accessibility_tree();
+        assert!(tree.nodes.iter().any(|(_, n)| n.role() == rune::accesskit::Role::Dialog && n.label() == Some("Unsaved changes")));
+        for expected in ["Cancel", "Discard & Quit", "Save & Quit"] {
+            assert!(
+                tree.nodes.iter().any(|(_, n)| n.role() == rune::accesskit::Role::Button && n.label() == Some(expected)),
+                "missing dialog button {expected}",
+            );
+        }
+
+        let (cx, cy) = rt.find("close-cancel").unwrap();
+        rt.pointer_down(cx, cy);
+        rt.pointer_up(cx, cy);
+        rt.frame(0.2);
+        assert_eq!(rt.state.prompt, UnsavedPrompt::None);
+        assert_eq!(rt.shell_request, None);
+
+        rt.update(|s, tx| decision = notes_quit_request(s, tx));
+        assert_eq!(decision, QuitResponse::Defer);
+        rt.frame(0.3);
+        let (sx, sy) = rt.find("close-save").unwrap();
+        rt.pointer_down(sx, sy);
+        rt.pointer_up(sx, sy);
+        rt.frame(0.4);
+        assert_eq!(rt.state.prompt, UnsavedPrompt::None);
+        assert!(!rt.state.has_unsaved());
+        assert_eq!(rt.shell_request, Some(rune::Shell::Quit));
     }
 }

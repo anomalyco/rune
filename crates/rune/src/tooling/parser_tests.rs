@@ -94,6 +94,21 @@ fn script_events_close_request_reaches_headless_host() {
 }
 
 #[test]
+fn script_events_quit_request_reaches_headless_host() {
+    let script = parse_script(json!([
+        {"t": 0.25, "quit_request": true},
+    ]));
+    assert_eq!(script.len(), 1);
+    assert_eq!(script[0].t, 0.25);
+    assert!(matches!(script[0].public().event, ScriptEvent::QuitRequest));
+    assert!(matches!(script[0].kind, Kind::QuitRequest));
+
+    let mut rt = Runtime::new((), |_: &(), _: &mut crate::Cx<()>| crate::el(), (100.0, 100.0), Env::default());
+    let (core, mut app) = rt.split_mut();
+    assert!(!script_input(core, &mut app, &script[0].kind, (0.0, 0.0)), "quit_request is handled at the headless host, not script_input");
+}
+
+#[test]
 fn script_events_answer_a_pop_up_menu() {
     let kinds: Vec<_> = parse_script(json!([{"t": 0.2, "type": "menu-cancel"}, {"t": 0.1, "type": "menu-pick", "id": "dark"}]))
         .into_iter().map(|e| {

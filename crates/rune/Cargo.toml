@@ -378,6 +378,10 @@ name = "macos_callback_panic"
 harness = false
 
 [[test]]
+name = "macos_quit_request"
+harness = false
+
+[[test]]
 name = "tray_macos"
 harness = false
 

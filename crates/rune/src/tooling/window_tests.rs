@@ -303,3 +303,43 @@ fn headless_script_close_request_defers_shows_dialog_and_closes_on_confirm() {
     std::fs::remove_file(&tree).ok();
     assert!(dump.contains("save-dialog:closes=0"), "expected deferred dialog with zero on_close calls in tree dump: {dump}");
 }
+
+#[test]
+fn headless_script_quit_request_defers_and_shows_dialog_without_running_on_quit() {
+    if !crate::render::Gpu::test_adapter_available() { return; }
+    let _turn = super::headless_run::test_turn();
+    let pid = std::process::id();
+    let script = std::env::temp_dir().join(format!("rune-quit-request-{pid}.json"));
+    let tree = std::env::temp_dir().join(format!("rune-quit-request-tree-{pid}.json"));
+    std::fs::write(&script, r#"[{"t": 0.0, "quit_request": true}]"#).unwrap();
+
+    struct Draft { dirty: bool, prompt: bool, quits: u32 }
+    fn view(d: &Draft, _: &mut crate::Cx<Draft>) -> crate::El {
+        let label = if d.prompt { format!("quit-dialog:quits={}", d.quits) } else { format!("editor:quits={}", d.quits) };
+        crate::el().w_full().h_full().child(crate::text(label).key("status"))
+    }
+
+    let spec = crate::AppSpec::new("quit-req-script", (180.0, 60.0), || Draft { dirty: true, prompt: false, quits: 0 }, view);
+    let app = crate::App::new(spec)
+        .on_quit_request(|d, _| {
+            if d.dirty {
+                d.prompt = true;
+                crate::QuitResponse::Defer
+            } else {
+                crate::QuitResponse::Quit
+            }
+        })
+        .on_quit(|d, _| d.quits += 1);
+    super::headless(app, super::Args {
+        script: Some(script.clone()),
+        tree: Some(tree.clone()),
+        frames: Some(4),
+        fps: 60.0,
+        scale: Some(1.0),
+        ..Default::default()
+    });
+    let dump = std::fs::read_to_string(&tree).unwrap();
+    std::fs::remove_file(&script).ok();
+    std::fs::remove_file(&tree).ok();
+    assert!(dump.contains("quit-dialog:quits=0"), "expected deferred quit dialog with zero on_quit calls in tree dump: {dump}");
+}

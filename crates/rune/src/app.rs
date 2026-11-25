@@ -32,6 +32,9 @@ use std::sync::Arc;
 use crate::el::Tx;
 use crate::tooling::{AppSpec, Args};
 
+#[path = "app/quit_request.rs"]
+mod quit_request;
+pub use quit_request::QuitResponse;
 #[path = "app/web.rs"]
 mod web;
 #[cfg(target_arch = "wasm32")]
@@ -123,6 +126,7 @@ pub struct App<S: 'static> {
     pub(crate) standard_menus: bool,
     pub(crate) keep_running: bool,
     pub(crate) on_close_request: Option<fn(&mut S, &mut Tx) -> CloseResponse>,
+    pub(crate) on_quit_request: Option<fn(&mut S, &mut Tx) -> QuitResponse>,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -203,6 +207,7 @@ impl<S: 'static> App<S> {
             standard_menus: false,
             keep_running: false,
             on_close_request: None,
+            on_quit_request: None,
             on_close: None,
             on_quit: None,
             #[cfg(not(target_arch = "wasm32"))]
