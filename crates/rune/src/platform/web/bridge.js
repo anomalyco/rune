@@ -631,15 +631,20 @@ export function syncFamilies(h, sans, mono) {
 // A pop-up menu (`Tx::popup_menu`, a field's menu with its spelling suggestions, selected
 // text's Copy) as the page's own elements: `role="menu"` with keyboard, pointer and screen
 // reader use, top-left at window point (x, y) of the canvas, at least `minWidth` wide, light or
-// dark as the window draws. A pick or a dismissal is sent once: `{ kind: 'menu', id }`, `id`
-// null when dismissed.
+// dark as the window draws, with what the menu's `style` (`PopupMenuStyle`) sets in place of
+// those defaults. A pick or a dismissal is sent once: `{ kind: 'menu', id }`, `id` null when
+// dismissed.
 export function showMenu(h, json, x, y, minWidth, dark) {
     closeMenu(h, false);
     const spec = JSON.parse(json);
     const box = h.canvas.getBoundingClientRect();
-    const colors = dark
+    const style = spec.style || {};
+    const colors = Object.assign(dark
         ? { bg: '#2b2b2b', fg: '#f2f2f2', muted: '#8f8f8f', line: '#454545', hover: '#3d3d3d' }
-        : { bg: '#ffffff', fg: '#1a1a1a', muted: '#8c8c8c', line: '#e0e0e0', hover: '#ebebeb' };
+        : { bg: '#ffffff', fg: '#1a1a1a', muted: '#8c8c8c', line: '#e0e0e0', hover: '#ebebeb' },
+        Object.fromEntries(['bg', 'fg', 'muted', 'line', 'hover'].filter(k => /^#[0-9a-f]{8}$/i.test(style[k])).map(k => [k, style[k]])));
+    const len = (k, fallback) => Number.isFinite(style[k]) && style[k] >= 0 ? style[k] : fallback;
+    const pad = len('padding', 4), radius = len('radius', 8), itemRadius = len('itemRadius', 4);
     const menus = [];
     let answered = false;
     const answer = (id) => {
@@ -653,7 +658,13 @@ export function showMenu(h, json, x, y, minWidth, dark) {
         menu.setAttribute('data-rune-menu', '');
         menu.setAttribute('role', 'menu');
         menu.tabIndex = -1;
-        menu.style.cssText = `position:fixed;left:0;top:0;z-index:2147483647;box-sizing:border-box;min-width:${Math.max(min, 160)}px;max-height:calc(100vh - 8px);overflow-y:auto;padding:4px;margin:0;background:${colors.bg};color:${colors.fg};border:1px solid ${colors.line};border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.18);font:13px/18px system-ui,sans-serif;user-select:none;-webkit-user-select:none;outline:none`;
+        menu.style.cssText = `position:fixed;left:0;top:0;z-index:2147483647;box-sizing:border-box;min-width:${Math.max(min, 160)}px;max-height:calc(100vh - 8px);overflow-y:auto;padding:${pad}px;margin:0;background:${colors.bg};color:${colors.fg};border:1px solid ${colors.line};border-radius:${radius}px;box-shadow:0 4px 16px rgba(0,0,0,.18);font:13px/18px system-ui,sans-serif;user-select:none;-webkit-user-select:none;outline:none`;
+        // The style's font as properties of their own, set after the defaults: a family the
+        // browser can't parse (an unclosed quote) is rejected alone, keeping the default family,
+        // size and line height and every other declaration.
+        if (Number.isFinite(style.fontSize) && style.fontSize > 0) menu.style.fontSize = `${style.fontSize}px`;
+        if (Number.isFinite(style.lineHeight) && style.lineHeight > 0) menu.style.lineHeight = `${style.lineHeight}px`;
+        if (typeof style.fontFamily === 'string' && style.fontFamily) menu.style.fontFamily = style.fontFamily;
         const rows = [];
         for (const entry of spec.items) {
             if (entry.separator) {
@@ -671,7 +682,7 @@ export function showMenu(h, json, x, y, minWidth, dark) {
             if (!enabled) row.setAttribute('aria-disabled', 'true');
             if (sub) row.setAttribute('aria-haspopup', 'menu');
             row.tabIndex = -1;
-            row.style.cssText = `display:flex;align-items:center;gap:16px;padding:4px 10px 4px 26px;border-radius:4px;position:relative;cursor:default;white-space:nowrap;color:${enabled ? colors.fg : colors.muted};outline:none`;
+            row.style.cssText = `display:flex;align-items:center;gap:16px;padding:4px 10px 4px 26px;border-radius:${itemRadius}px;position:relative;cursor:default;white-space:nowrap;color:${enabled ? colors.fg : colors.muted};outline:none`;
             const title = document.createElement('span');
             title.style.flex = '1';
             title.textContent = sub ? entry.submenu : entry.title;
@@ -739,7 +750,7 @@ export function showMenu(h, json, x, y, minWidth, dark) {
         if (!parent || parent.child?.parentItem === item) return parent?.child;
         closeFrom(menus.indexOf(parent) + 1);
         const r = item.row.getBoundingClientRect();
-        const child = open(item.sub, r.right - 4, r.top - 5, 0, item);
+        const child = open(item.sub, r.right - 4, r.top - pad - 1, 0, item);
         parent.child = child;
         return child;
     };

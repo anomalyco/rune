@@ -1971,6 +1971,55 @@ test('showMenu dismissal falls back to canvas only when no field is focused and 
     }
 });
 
+test('showMenu keeps its defaults without a style and draws with what a style sets', () => {
+    const items = [{ id: 'a', title: 'Action' }, { separator: true }, { id: 'b', title: 'Off', enabled: false }];
+    const { body, h } = setup();
+    const mounted = () => body.children.find(el => el.getAttribute('data-rune-menu') !== null);
+
+    bridge.showMenu(h, JSON.stringify({ items }), 10, 10, 160, true);
+    let menu = mounted();
+    assert.match(menu.style.cssText, /padding:4px;/);
+    assert.match(menu.style.cssText, /background:#2b2b2b;/);
+    assert.match(menu.style.cssText, /border-radius:8px;/);
+    assert.match(menu.style.cssText, /font:13px\/18px system-ui,sans-serif;/);
+    assert.match(menu.children[0].style.cssText, /border-radius:4px;/);
+    bridge.hideMenu(h);
+
+    const style = { bg: '#102030ff', fg: '#fafafaff', muted: '#808080ff', line: '#334455ff', fontFamily: 'Inter, sans-serif',
+        fontSize: 15, lineHeight: 22, padding: 6, radius: 0, itemRadius: 2 };
+    bridge.showMenu(h, JSON.stringify({ items, style }), 10, 10, 160, false);
+    menu = mounted();
+    assert.match(menu.style.cssText, /padding:6px;/);
+    assert.match(menu.style.cssText, /background:#102030ff;color:#fafafaff;border:1px solid #334455ff;border-radius:0px;/);
+    assert.match(menu.style.cssText, /font:13px\/18px system-ui,sans-serif;user-select:none;/);
+    assert.equal(menu.style.fontSize, '15px');
+    assert.equal(menu.style.lineHeight, '22px');
+    assert.equal(menu.style.fontFamily, 'Inter, sans-serif');
+    assert.match(menu.children[0].style.cssText, /border-radius:2px;.*color:#fafafaff;/);
+    assert.match(menu.children[1].style.cssText, /background:#334455ff/);
+    assert.match(menu.children[2].style.cssText, /color:#808080ff;/);
+    assert.equal(menu.getAttribute('role'), 'menu');
+    // An unset colour keeps the light default.
+    menu.children[0].dispatchEvent({ type: 'pointerenter' });
+    assert.equal(menu.children[0].style.background, '#ebebeb');
+    bridge.hideMenu(h);
+
+    // A family with an unclosed quote or comment stays out of cssText, so it can't swallow the
+    // declarations after it; zero font sizes and colours that aren't `#rrggbbaa` keep defaults.
+    for (const fontFamily of ['"Inter', "/* Inter"]) {
+        bridge.showMenu(h, JSON.stringify({ items, style: { fontFamily, fontSize: 0, lineHeight: 0, bg: 'red;x:y' } }), 10, 10, 160, false);
+        menu = mounted();
+        assert.ok(!menu.style.cssText.includes(fontFamily));
+        assert.match(menu.style.cssText, /background:#ffffff;/);
+        assert.match(menu.style.cssText, /font:13px\/18px system-ui,sans-serif;user-select:none;-webkit-user-select:none;outline:none$/);
+        assert.equal(menu.style.fontFamily, fontFamily);
+        assert.equal(menu.style.fontSize, undefined);
+        assert.equal(menu.style.lineHeight, undefined);
+        bridge.hideMenu(h);
+    }
+    bridge.destroy(h);
+});
+
 test('takeTouchTimestamp captures PointerEvent.timeStamp in FIFO order, expands coalesced moves, clamps and bounds to 64', () => {
     const { win, canvas, h } = setup();
     const origPerf = globalThis.performance;

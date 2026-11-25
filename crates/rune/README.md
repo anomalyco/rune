@@ -2465,8 +2465,15 @@ row().key("theme").child(text(theme_title(&s.theme)))
   your hook so you can render it in-window and run the chosen action with
   `tx.resolve_field_menu(Some(id))` (or `None` to cancel), while macOS and Windows keep their
   native menus unchanged. `cargo run -p rune --example popup_menu` shows both kinds.
-- **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`) while a
-  menu is open, and `--trace` notes `popup-menu:open`, `popup-menu:pick:{id}` and
+- **Web style**: on the web the menu is the page's own elements (`role="menu"`), light or dark
+  as the window draws. `PopupMenu::style(PopupMenuStyle::new().background(..).text(..))` draws
+  it from the app's palette instead: `background`, `text`, `muted`, `separator`, `highlight`,
+  `font_family`, `font_size`, `line_height`, `padding`, `corner_radius` and
+  `item_corner_radius`, each unset one keeping its default. Submenus use the top menu's style
+  (their own isn't used or shown in `--tree`); keyboard, pointer and screen-reader use don't
+  change, and native menus ignore it.
+- **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`, and
+  `style` when set) while a menu is open, and `--trace` notes `popup-menu:open`, `popup-menu:pick:{id}` and
   `popup-menu:cancel`. Scripts answer it with `{"type": "menu-pick", "id": "dark"}` or
   `{"type": "menu-cancel"}`. In Rust tests, `rt.popup_menu()` returns the open `PopupMenu`
   with read-only `entries()` (`&[PopupEntry]`), `selected_id()`, and `PopupItem` getters
