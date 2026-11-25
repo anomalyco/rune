@@ -742,6 +742,7 @@ let app = rune::App::new(spec)
     .keep_running()                // closing the window keeps the process, state and loop
     .release_gpu_when_closed()     // optional: drop the GPU device while closed
     .gpu_memory_policy(GpuMemoryPolicy::MemoryUsage) // optional: wgpu suballocation policy
+    .cpu_first(CpuFirst::Auto)     // optional: Windows/Linux/web startup CPU-first policy
     .accessory()                   // macOS: menu-bar app, no Dock icon (h.set_dock_icon(true) shows it)
     .standard_menus()              // macOS: Edit, Minimize ⌘M and Close ⌘W (no Quit); regular apps get them anyway
     .on_close_request(|s, tx| CloseResponse::Defer) // optional: intercept native close before hiding
@@ -997,6 +998,17 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   if the MSL, flags or library hash changed, run `scripts/precompile-metal-shaders.sh` (needs
   Xcode's Metal toolchain) and commit the updated libraries and hash files. Metal binary archives on
   wgpu's backend would need `wgpu-hal` support.
+- **Startup CPU-first policy (`CpuFirst`, `App::cpu_first`, `WindowSpec::cpu_first`).** On Windows,
+  Linux, and full-window web pages, opaque windows open on Rune's live CPU renderer (`CpuPainter`
+  on desktop, the 2D canvas on web) and hand over to the GPU in the background once the first frame
+  is shown (`CpuFirst::Auto`, the default). Apps can choose `CpuFirst::Only` to stay on the CPU
+  renderer (skipping background idle handover on Windows and Linux until a frame hits a GPU-only
+  feature, and staying on the 2D canvas without requesting WebGPU or WebGL2 on web) or
+  `CpuFirst::Off` to skip CPU-first startup and open directly on the GPU. `RUNE_CPU_FIRST`
+  (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the builder without a rebuild
+  (`0` or `off` for `Off`, `only` for `Only`, `auto` for `Auto`; unset, empty, or unrecognized
+  values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored on macOS, iOS, headless
+  runs, transparent windows, and inline/document web pages.
 - **GPU memory policy (`GpuMemoryPolicy`).** By default Rune creates wgpu devices with
   `GpuMemoryPolicy::MemoryUsage` (smaller suballocation blocks than wgpu's `Performance` default).
   Apps can choose `MemoryUsage`, `Performance`, or `Manual { block_size }` at startup via
