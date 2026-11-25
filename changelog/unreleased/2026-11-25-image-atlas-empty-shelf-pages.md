@@ -1,0 +1,1 @@
+- Image atlas: `ImageAtlas::end_frame` now frees the CPU buffer of any shelf page left with zero slots even when a higher-indexed page stays active, allowing `Renderer::upload_images` to drop its GPU texture immediately instead of retaining up to 4 MiB per empty middle page until `rest()`.

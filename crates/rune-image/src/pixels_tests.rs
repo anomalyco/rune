@@ -741,3 +741,70 @@ fn place_at_filtered_nearest_requests_mip_zero_while_linear_uses_downsampled_mip
     assert!(atlas.has_slot(img.pixels(), 2), "Linear and Nearest slots coexist in the same atlas");
     assert!(lin.premultiplied && near.premultiplied);
 }
+
+#[test]
+fn empty_middle_shelf_page_frees_buffer_and_reuses_cleanly() {
+    let mut atlas = ImageAtlas::default();
+    let p0: Vec<Pixels> = (0..4)
+        .map(|i| {
+            let p = Pixels::new();
+            p.set(512, 512, [10 + i, 20, 30, 255].repeat(512 * 512));
+            p
+        })
+        .collect();
+    let p1: Vec<Pixels> = (0..4)
+        .map(|i| {
+            let p = Pixels::new();
+            p.set(512, 512, [40 + i, 50, 60, 255].repeat(512 * 512));
+            p
+        })
+        .collect();
+    let p2 = Pixels::new();
+    p2.set(64, 64, [200, 100, 50, 255].repeat(64 * 64));
+
+    let p0_placed: Vec<_> = p0.iter().map(|p| atlas.place(p, [512.0; 2]).unwrap()).collect();
+    for p in &p1 {
+        assert_eq!(atlas.place(p, [512.0; 2]).unwrap().page, 1);
+    }
+    let p2_placed = atlas.place(&p2, [64.0; 2]).unwrap();
+    assert_eq!(p2_placed.page, 2);
+    atlas.end_frame();
+
+    let before_bytes: usize = atlas.pages.iter().map(|p| p.data.len()).sum();
+    assert_eq!(atlas.pages.len(), 3);
+    assert_eq!(before_bytes, 4 * 1024 * 1024 + 4 * 1024 * 1024 + 1024 * 128 * 4);
+
+    // Draw only page 2: page 1 loses all its slots while page 2 keeps the pages vec at length 3.
+    assert_eq!(atlas.place(&p2, [64.0; 2]), Some(p2_placed));
+    atlas.end_frame();
+
+    assert_eq!(atlas.pages.len(), 3);
+    assert_eq!(atlas.pages[0].data.len(), 4 * 1024 * 1024, "page 0 keeps its cached slots");
+    assert!(
+        atlas.pages[1].data.is_empty() && atlas.pages[1].data.capacity() == 0,
+        "empty middle shelf page must free its 4 MiB buffer, still holds {} bytes",
+        atlas.pages[1].data.len(),
+    );
+    assert_eq!(atlas.pages[2].data.len(), 1024 * 128 * 4);
+    let after_bytes: usize = atlas.pages.iter().map(|p| p.data.len()).sum();
+    assert_eq!(after_bytes, before_bytes - 4 * 1024 * 1024);
+
+    // invalidate() must not mark an empty freed page dirty.
+    atlas.invalidate();
+    assert_eq!(atlas.pages[1].dirty, None);
+    assert_eq!(atlas.pages[0].dirty, Some((0, atlas.pages[0].height)));
+    assert_eq!(atlas.pages[2].dirty, Some((0, atlas.pages[2].height)));
+
+    // A new 64x64 image reuses the freed middle page at its initial 128-row height, while page 0
+    // and page 2 keep their placed slots and pixels intact.
+    let reused = Pixels::new();
+    reused.set(64, 64, [77, 88, 99, 255].repeat(64 * 64));
+    let reused_placed = atlas.place(&reused, [64.0; 2]).unwrap();
+    assert_eq!(reused_placed.page, 1);
+    assert_eq!(reused_placed.rect, [0, 0, 64, 64]);
+    assert_eq!(atlas.pages[1].height, 128);
+    assert_eq!(&atlas.pages[1].data[..4], &[77, 88, 99, 255]);
+    assert_eq!(atlas.place(&p0[0], [512.0; 2]), Some(p0_placed[0]));
+    assert_eq!(atlas.place(&p2, [64.0; 2]), Some(p2_placed));
+    assert_eq!(&atlas.pages[2].data[..4], &[200, 100, 50, 255]);
+}
