@@ -87,6 +87,9 @@ impl RuntimeCore {
         if let Some(picked) = tx.field_menu_resolution.take() {
             self.latch_field_menu_resolution(app, picked, tx);
         }
+        if let Some(picked) = tx.popup_menu_resolution.take() {
+            self.latch_popup_menu_resolution(app, picked, tx);
+        }
         self.shell_request = self.shell_request.max(tx.shell.take());
         self.host.user_close_request |= std::mem::take(&mut tx.user_close_request);
         if tx.minimize_order.take().is_some() { self.minimize_step(crate::window::MinimizeEvent::Asked); }
@@ -139,7 +142,7 @@ impl RuntimeCore {
             self.edit.clipboard_reads.push((self.edit.next_clipboard_read, read));
             self.edit.read_requests.push(self.edit.next_clipboard_read);
         }
-        self.host.popups.extend(tx.popups.drain(..).filter_map(|call| call.take()));
+        self.latch_popups(app, tx);
         for request in tx.file_dialogs.drain(..).filter_map(|call| call.take()) {
             self.request_file_dialog(request);
         }

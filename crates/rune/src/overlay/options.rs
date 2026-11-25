@@ -212,6 +212,20 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.runtime.on_field_menu = Some(f);
         self
     }
+    /// Fallback handler for pop-up and context menus when native pop-ups are unavailable (such as
+    /// Linux), like [`App::on_popup_menu`](crate::App::on_popup_menu).
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, PopupMenuRequest, Tx, el};
+    ///
+    /// let _overlay = OverlaySpec::new("quick", (320.0, 200.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .on_popup_menu(|_: &mut (), _req: PopupMenuRequest, _tx: &mut Tx| {});
+    /// ```
+    pub fn on_popup_menu(mut self, f: fn(&mut T, crate::PopupMenuRequest, &mut crate::Tx)) -> Self {
+        self.runtime.on_popup_menu = Some(f);
+        self
+    }
     /// Composite this overlay's translucent fills, blurs, shadows, images, video and text in
     /// sRGB (gamma) space instead of linear light, matching CSS and Core Animation (on by
     /// default). With a `Compositor`, `Frame::srgb_blend` says which encoding its passes must

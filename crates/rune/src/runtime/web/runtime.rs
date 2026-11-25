@@ -137,7 +137,7 @@ impl RuntimeCore {
         let tx = &self.frame.pending;
         if self.web_release_needs_frame() || self.kbd.focus_request.is_some() || tx.blur || tx.focus_to.is_some() || tx.select.is_some() || !tx.keys.is_empty()
             || tx.copy.is_some() || tx.paste || !tx.clipboard_reads.is_empty() || !tx.pick_reads.is_empty()
-            || !tx.open_urls.is_empty() || !tx.open_paths.is_empty() || !tx.url_schemes.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.field_menu_resolution.is_some() || tx.clear_secret {
+            || !tx.open_urls.is_empty() || !tx.open_paths.is_empty() || !tx.url_schemes.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.field_menu_resolution.is_some() || tx.popup_menu_resolution.is_some() || tx.clear_secret {
             return None;
         }
         if self.focused_input_read_only() || self.focused_input_disabled() { return None; }

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use rune::{El, Icon, Key, KeyEvent, PointerPress, TextStyle, Tx, col, el, icon, row, text};
 
-use super::overlay::{Modal, Placement, anchor_trigger, dismissal, push_anchored_modal, scrim_key, trigger_key};
+use super::overlay::{Modal, Placement, anchor_trigger, dismissal_tx, push_anchored_modal, scrim_key, trigger_key};
 use super::popover::{anchored, fit_scroll_bar};
 use crate::{Kit, State};
 
@@ -524,6 +524,10 @@ pub struct Menu {
     gutter: f32,
     min_width: f32,
     at: Option<(f32, f32)>,
+    /// Explicit anchor rectangle `[x, y, w, h]` in view points (e.g. from `PopupMenuRequest`).
+    anchor_rect: Option<[f32; 4]>,
+    /// Explicit focus-return target key when closing (defaults to `{key}-trigger`).
+    focus_return: Option<String>,
     /// A context menu: its trigger is the area it opens over, not a button that opens it.
     context: bool,
     dismiss: Option<Dismiss>,
@@ -542,6 +546,8 @@ impl Menu {
             gutter: 6.0,
             min_width: 160.0,
             at: None,
+            anchor_rect: None,
+            focus_return: None,
             context: false,
             dismiss: None,
         }
@@ -603,16 +609,40 @@ impl Menu {
         self
     }
     /// Presses outside and Escape close the menu. While open it holds keyboard focus.
-    pub fn on_close<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
+    pub fn on_close<S: 'static>(self, f: impl Fn(&mut S) + 'static) -> Self {
+        self.on_close_tx(move |s: &mut S, _: &mut Tx| f(s))
+    }
+    /// Like [`Self::on_close`], also passing the transaction [`Tx`] so the close handler can
+    /// resolve a pop-up menu ([`Tx::resolve_popup_menu`]) or move focus in the same commit.
+    ///
+    /// ```
+    /// use rune::Tx;
+    /// use rune_kit::Menu;
+    ///
+    /// struct App { open: bool }
+    /// let _menu = Menu::new("file").on_close_tx(|s: &mut App, tx: &mut Tx| {
+    ///     s.open = false;
+    ///     tx.resolve_popup_menu(None);
+    /// });
+    /// ```
+    pub fn on_close_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         let key = scrim_key(&self.key);
         // Escape and an outside press also close the open controlled submenus, so the menu
         // reopens with them closed.
         self.dismiss = Some(Box::new(move |closers: Closers| {
-            dismissal(key, move |s: &mut S| {
+            dismissal_tx(key, move |s: &mut S, tx: &mut Tx| {
                 close_submenus(&closers, s);
-                f(s)
+                f(s, tx)
             })
         }));
+        self
+    }
+    pub(super) fn with_anchor_rect(mut self, rect: [f32; 4]) -> Self {
+        self.anchor_rect = Some(rect);
+        self
+    }
+    pub(super) fn with_focus_return(mut self, key: String) -> Self {
+        self.focus_return = Some(key);
         self
     }
 
@@ -688,13 +718,18 @@ impl Menu {
         if !self.open {
             return trigger;
         }
-        let (placement, gutter, key) = match self.at {
-            Some((x, y)) => {
+        let (placement, gutter, key) = match (self.anchor_rect, self.at) {
+            (Some([x, y, w, h]), _) => {
+                let rect_key = format!("{}-anchor", self.key);
+                layer.push(el().key(rect_key.clone()).absolute(x, y).size(w, h).a11y_hidden());
+                (self.placement, self.gutter, rect_key)
+            }
+            (None, Some((x, y))) => {
                 let point = format!("{}-point", self.key);
                 layer.push(el().key(point.clone()).absolute(x, y).size(0.0, 0.0).a11y_hidden());
                 (Placement::BottomStart, 0.0, point)
             }
-            None => (self.placement, self.gutter, anchor_key.clone()),
+            (None, None) => (self.placement, self.gutter, anchor_key.clone()),
         };
         // Submenus anchor to items inside this surface, so they mount after it.
         let mut subs = Vec::new();
@@ -702,7 +737,8 @@ impl Menu {
         open_submenus(&self.entries, &mut open_subs);
         let tree: Closers = open_subs.into();
         let dismiss = self.dismiss.take().map(|d| d(tree.clone()));
-        let surface = self.surface(k, &tree, &mut subs).focus_return(anchor_key);
+        let return_to = self.focus_return.take().unwrap_or(anchor_key);
+        let surface = self.surface(k, &tree, &mut subs).focus_return(return_to);
         push_anchored_modal(k, layer, dismiss, surface, &key, placement, gutter);
         layer.extend(subs);
         trigger
