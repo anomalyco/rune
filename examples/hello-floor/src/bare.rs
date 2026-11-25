@@ -24,8 +24,9 @@ fn main() {
     bare::run();
 }
 
+// A measuring program: a step that fails stops it at once, with the call's own error.
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[allow(unsafe_code, clippy::unwrap_used, clippy::expect_used)]
 mod bare {
     use std::cell::RefCell;
 
