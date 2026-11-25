@@ -118,7 +118,8 @@ impl RuntimeCore {
             let n = &self.tree.nodes[i];
             let Some(p) = self.scene.presented(n.id) else { continue };
             let mut pinh = n.parent.map_or_else(|| self.root_inh(), |pr| self.paint.inh_scratch[pr]);
-            if pinh.anchor_hidden {
+            if pinh.anchor_hidden || super::super::commit::inline::is_elided_inline_child(&self.tree.nodes, i) {
+                pinh.anchor_hidden = true;
                 self.paint.inh_scratch[i] = pinh;
                 self.paint.drawn[i] = [0.0; 4];
                 self.paint.seen[i] = false;

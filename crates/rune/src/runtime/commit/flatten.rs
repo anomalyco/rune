@@ -188,6 +188,7 @@ fn prepare_text(
             cold.rings.clear();
             cold.overlines.clear();
             cold.span_boxes.clear();
+            cold.inline_boxes.clear();
             cold.line_fills.clear();
             cold.text_indent = 0.0;
             cold.advance_in = None;
@@ -219,6 +220,7 @@ fn prepare_text(
             || !t.cold.strikes.is_empty()
             || !t.cold.overlines.is_empty()
             || !t.cold.span_boxes.is_empty()
+            || !t.cold.inline_boxes.is_empty()
             || !t.cold.highlights.is_empty()
             || !t.cold.line_fills.is_empty()
             || !t.cold.blocks.is_empty()
@@ -431,7 +433,7 @@ impl StyleBuf for Cow<'_, CompactStyle> {
 }
 
 #[derive(Clone, Copy)]
-struct ChildEnv { me: usize, motion: Spring, in_row: RowLayout, row: bool, sx: Option<ScrollXChild> }
+struct ChildEnv { me: usize, motion: Spring, in_row: RowLayout, row: bool, sx: Option<ScrollXChild>, attach_taffy: bool }
 
 struct RefScratch<'a> {
     style: Cow<'a, CompactStyle>,
@@ -569,13 +571,13 @@ impl FlattenEl for El {
         if let Some(built) = &memo {
             for (i, c) in built.children.children.iter().enumerate() {
                 let (kid, kid_dirty) = flatten_ref(c, Some(env.me), path_buf, i, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
-                taffy.push_child(kid);
+                if env.attach_taffy { taffy.push_child(kid); }
                 children_dirty |= kid_dirty;
             }
         }
         for (j, c) in children.into_iter().enumerate() {
             let (kid, kid_dirty) = flatten_owned(c, Some(env.me), path_buf, shared_len + j, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
-            taffy.push_child(kid);
+            if env.attach_taffy { taffy.push_child(kid); }
             children_dirty |= kid_dirty;
         }
         children_dirty
@@ -619,7 +621,7 @@ impl<'e> FlattenEl for &'e El {
         let mut children_dirty = false;
         for (i, c) in el.all_children().enumerate() {
             let (kid, kid_dirty) = flatten_ref(c, Some(env.me), path_buf, i, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
-            taffy.push_child(kid);
+            if env.attach_taffy { taffy.push_child(kid); }
             children_dirty |= kid_dirty;
         }
         children_dirty
@@ -828,12 +830,13 @@ fn flatten_node<E: FlattenEl>(
         r => r,
     };
     let row = matches!(style.as_ref().flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
+    let attach_taffy = nodes[me].text.as_ref().is_none_or(|t| t.cold.inline_boxes.is_empty());
     let child_mark = taffy.begin_children();
-    let env = ChildEnv { me, motion, in_row: child_in_row, row, sx: child_sx };
+    let env = ChildEnv { me, motion, in_row: child_in_row, row, sx: child_sx, attach_taffy };
     let mut children_dirty = E::flatten_children(children, env, path_buf, taffy, nodes, scale, memo_ctx);
     for (k, extra) in extra_children.into_iter().enumerate() {
         let (kid, kid_dirty) = flatten_owned(extra, Some(env.me), path_buf, child_count + k, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
-        taffy.push_child(kid);
+        if attach_taffy { taffy.push_child(kid); }
         children_dirty |= kid_dirty;
     }
     path_buf.truncate(prev_len);

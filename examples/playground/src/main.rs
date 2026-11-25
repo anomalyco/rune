@@ -15,6 +15,7 @@ mod ambient_fps_story;
 mod any_handlers;
 mod any_press;
 mod emoji_family_story;
+mod inline_box_story;
 mod mount;
 mod pick;
 mod reveal_fps_story;
@@ -735,6 +736,7 @@ fn main() {
                         .variant("65 / 35 · row center_y", |s| { s.align = 3; s.split = 0.65; }),
                 )
                 .story(text_indent_story::story())
+                .story(inline_box_story::story())
                 .story(emoji_family_story::story())
                 .story(reveal_fps_story::story())
                 .story(

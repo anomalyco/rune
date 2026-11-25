@@ -617,7 +617,8 @@ impl RuntimeCore {
             }
             if !w.gone {
                 w.gone = n.is_moved_stub() || n.a11y.hidden || n.vis.opacity <= 0.01 || self.is_exiting(n.id)
-                    || !self.scene.contains(n.id);
+                    || !self.scene.contains(n.id)
+                    || crate::runtime::is_elided_inline_child(&self.tree.nodes, i);
             }
             if !w.gone && !w.modal_gone {
                 w.modal_gone = modal_mask.as_ref().is_some_and(|m| !m.visible(i));

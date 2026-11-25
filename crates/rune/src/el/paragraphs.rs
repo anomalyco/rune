@@ -58,7 +58,7 @@ impl El {
                 Some(*last)
             })
             .collect();
-        let whole = t.redacted || t.cold.live.is_some() || t.cold.advance_in.is_some() || t.truncate || t.truncate_fade || t.max_lines > 0;
+        let whole = t.redacted || t.cold.live.is_some() || t.cold.advance_in.is_some() || !t.cold.inline_boxes.is_empty() || t.truncate || t.truncate_fade || t.max_lines > 0;
         if whole || dirs.iter().all(|&d| d == dirs[0]) {
             return self;
         }

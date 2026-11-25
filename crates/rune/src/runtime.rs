@@ -98,6 +98,7 @@ mod web;
 mod window_requests;
 mod zoom;
 
+pub(crate) use commit::inline::is_elided_inline_child;
 pub(crate) use commit::memo_reuse;
 pub(crate) use commit::path as element_path;
 pub(crate) use commit::text_layout::{caret_index, text_width};
