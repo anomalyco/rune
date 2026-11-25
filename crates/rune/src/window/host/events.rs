@@ -208,6 +208,10 @@ impl Host {
             WakeEvent::GpuReady(_) => self.gpu_ready(),
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             WakeEvent::GpuReady(_) => {}
+            #[cfg(target_os = "windows")]
+            WakeEvent::ResizeSync(_) => self.handle_resize_sync_wake(),
+            #[cfg(not(target_os = "windows"))]
+            WakeEvent::ResizeSync(_) => {}
             WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::FileDrop | WakeEvent::LayerPending | WakeEvent::AppColorScheme => {}
         }
     }
@@ -400,9 +404,19 @@ impl Host {
                     l.stop_pacing();
                     l.presented = None;
                     app.rt_mut().cancel_timer_frame();
-                    self.idle = true; return;
+                    self.idle = true;
+                    #[cfg(target_os = "windows")]
+                    self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Hide);
+                    return;
                 }
                 let origin_moved = sync_screen_origin_core(app.rt_mut(), &l.window);
+                #[cfg(target_os = "windows")]
+                if self.try_handle_drag_resize(size, scale, event_loop) {
+                    return;
+                }
+                let Some(l) = self.win.as_mut() else { return };
+                let gpu = self.gpu.as_ref().map(|(gpu, _)| &**gpu);
+                let app = &mut *self.app;
                 // A frame Rune moved itself has its drawable and viewport already.
                 let resized = l.resize_surface(gpu, size);
                 #[cfg(target_os = "macos")]

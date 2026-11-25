@@ -183,6 +183,7 @@ impl Host {
             self.look();
             self.hand_over_if_done();
             if self.win.as_ref().is_some_and(|w| w.native.mode.cpu_draws()) { return self.draw_cpu(resizing); }
+            if self.try_draw_drag_resize() { return; }
         }
         // Linux: so does one there (`linux::cpu_frame`).
         #[cfg(target_os = "linux")]
@@ -650,6 +651,8 @@ impl FrameHost for WindowFrame<'_> {
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
         let now = self.state.now.unwrap_or(submitted);
         if self.host.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost()) {
+            #[cfg(target_os = "windows")]
+            self.host.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
             let outcome = if let Some(l) = self.host.win.as_mut() {
                 #[cfg(target_os = "windows")]
                 l.native.slot.reset();

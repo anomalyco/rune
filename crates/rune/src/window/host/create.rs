@@ -94,6 +94,8 @@ impl Host {
         #[cfg(target_os = "windows")]
         crate::platform::win32::follow_suggested_rect(&window);
         #[cfg(target_os = "windows")]
+        self.register_resize_sync(&window);
+        #[cfg(target_os = "windows")]
         crate::platform::win32::press_point::install(&window);
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
@@ -215,7 +217,31 @@ impl Host {
         // A window with a client-side frame keeps its pixels' alpha for the frame's corner arcs;
         // one under a compositor that draws the decorations itself keeps the surface it always had.
         let client_frame = self.client_frame(&window);
-        let make_surface = |instance: &wgpu::Instance| instance.create_surface(window.clone()).map_err(|e| e.to_string());
+        #[cfg(target_os = "windows")]
+        let dcomp_handover = if crate::window::win32::resize_sync::enabled()
+            && !transparent
+            && !launcher
+            && matches!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual)
+        {
+            crate::platform::win32::hwnd(&window)
+                .and_then(|hwnd| crate::platform::win32::dcomp_handover::Handover::new(hwnd as isize).ok())
+        } else {
+            None
+        };
+        #[cfg(target_os = "windows")]
+        let dcomp_visual = dcomp_handover.as_ref().map(|h| h.visual());
+        #[allow(unsafe_code)]
+        let make_surface = |instance: &wgpu::Instance| {
+            #[cfg(target_os = "windows")]
+            if let Some(visual) = dcomp_visual {
+                // SAFETY: `dcomp_handover` lives in `Win::native.mode` as long as this surface.
+                return unsafe {
+                    instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual))
+                }
+                .map_err(|e| e.to_string());
+            }
+            instance.create_surface(window.clone()).map_err(|e| e.to_string())
+        };
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, prewarmed: Option<Renderer>| -> Result<_, SurfaceSetupError> {
             let initial = drawable_size(None, (phys.width, phys.height), max_surface_dim(Some(gpu)));
             let (mut config, translucent) = surface_config(surface, &gpu.adapter, initial, srgb_blend)
@@ -303,7 +329,7 @@ impl Host {
             None => {
                 // A shared device that can't composite this window's translucent pixels gets its own.
                 let cached = self.gpu_pool.borrow().upgrade().filter(|gpu| !gpu.is_lost()).and_then(|gpu| {
-                    let surface = gpu.instance.create_surface(window.clone()).ok()?;
+                    let surface = make_surface(&gpu.instance).ok()?;
                     crate::render::translucency::serves(&gpu, &surface, features, transparent).then_some((gpu, surface))
                 });
                 if let Some((gpu, surface)) = cached {
@@ -433,7 +459,11 @@ impl Host {
         cloak.extend(crate::time::now() + win::READY_FALLBACK);
         #[cfg(target_os = "windows")]
         let native = {
-            Native { cloak, frame, a11y_start, ..Default::default() }
+            let mode = match dcomp_handover {
+                Some(handover) => handover::SurfaceMode::Rebinding { handover },
+                None => handover::SurfaceMode::Gpu,
+            };
+            Native { cloak, frame, mode, a11y_start, ..Default::default() }
         };
         #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let native = Native::default();
@@ -593,7 +623,12 @@ impl Host {
         w.presented = None;
         // Unregister any swap-chain wait before dropping the surface, even if replacement fails.
         #[cfg(target_os = "windows")]
-        { w.native.slot.reset(); w.native.damage.reset(); }
+        {
+            w.native.slot.reset();
+            w.native.damage.reset();
+            self.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
+        }
+        let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
         drop(w.surface.take());
         #[cfg(target_os = "macos")]
         self.frame_presented.reset();

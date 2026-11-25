@@ -93,6 +93,8 @@ use surface::acquire;
 #[cfg(target_os = "windows")]
 pub(crate) use win32::poll_pace;
 #[cfg(target_os = "windows")]
+pub(crate) use win32::resize_sync::valid_rects as win32_valid_rects;
+#[cfg(target_os = "windows")]
 pub(crate) use win32::slot;
 
 use host::Host;
@@ -152,6 +154,9 @@ pub(crate) enum WakeEvent {
     /// Windows: the GPU a CPU-drawn window was waiting for is made, or failed (`cpu_frame`).
     #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
     GpuReady(usize),
+    /// Windows: `WM_EXITSIZEMOVE` arrived on a window using `RUNE_RESIZE_SYNC` (`resize_sync`).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    ResizeSync(usize),
     /// Wayland: native `wl_data_device` drop events or pipe reads are ready for `Host::flush_files`.
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
     FileDrop,
@@ -503,7 +508,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let slot = match &event {
                 WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
                     | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
-                    | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) => *i,
+                    | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) | WakeEvent::ResizeSync(i) => *i,
                 WakeEvent::Reopen => {
                     this.reopen(event_loop);
                     this.cleanup(event_loop);
