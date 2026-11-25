@@ -11,7 +11,6 @@ pub(crate) struct PaintState {
     pub(in crate::runtime) inh_scratch: Vec<Inh>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
     pub(crate) drawn: Vec<[f32; 4]>,
-    pub(super) quads_frame: u64,
     /// Opt-in gamma-space (sRGB) blending for translucent fills, shadows and blurs.
     pub(in crate::runtime) srgb_blend: bool,
     /// The shell shows native views for the first `max_native_materials` of `materials`; their
@@ -80,9 +79,9 @@ pub(crate) struct PaintState {
     pub(in crate::runtime) node_caches: HashMap<NodeId, NodeCache>,
     /// The device rows of each field with waiting paragraphs its last paint showed (`text_fill`).
     pub(in crate::runtime) text_rows: HashMap<NodeId, (f32, f32)>,
-    /// Each still text's quads as it drew them, by node and layout id, and the paint they were
-    /// last used in (`paint_content`): a frame that draws it the same copies them.
-    pub(super) text_quads: HashMap<(NodeId, crate::text::LayoutId), (crate::el::grid::DrawnRow, u64)>,
+    /// Each still text piece's quads as it last drew them (`paint_content`), replaced in place
+    /// when a node's layout changes and bounded in entries and bytes.
+    pub(in crate::runtime) text_quads: quads::TextQuads,
     /// `El::system_material` elements built this frame, in paint order.
     pub(super) materials: Vec<crate::system_material::MaterialDraw>,
     /// Per-window cap on native `El::system_material` views (default `MAX_NATIVE_MATERIALS`,
@@ -111,7 +110,6 @@ impl PaintState {
         Self {
             inh_scratch: Vec::new(),
             drawn: Vec::new(),
-            quads_frame: 0,
             srgb_blend: false,
             native_materials: false,
             videos_active: false,
@@ -148,7 +146,7 @@ impl PaintState {
             cache_inside_scratch: Vec::new(),
             node_caches: HashMap::default(),
             text_rows: HashMap::default(),
-            text_quads: HashMap::default(),
+            text_quads: quads::TextQuads::new(),
             materials: Vec::new(),
             max_native_materials: crate::MAX_NATIVE_MATERIALS,
             material_fallbacks: Vec::new(),

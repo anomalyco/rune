@@ -1,0 +1,1 @@
+- Paint: keyed `PaintState::text_quads` by `(NodeId, piece_index)` instead of `(NodeId, LayoutId)` and bounded it to 4,096 entries and 8 MiB with LRU eviction, so changing plain and `LiveText` labels drop their superseded glyph quads immediately instead of retaining up to 64–127 frames of dead layouts.

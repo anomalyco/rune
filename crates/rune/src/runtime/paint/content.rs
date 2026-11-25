@@ -786,7 +786,7 @@ impl RuntimeCore {
                 // A still text whose quads this frame would draw as the last one did copies them,
                 // as `El::grid` rows do: `quads` is the entry to record them under otherwise.
                 let mut copied = false;
-                let mut quads: Option<((NodeId, crate::text::LayoutId), u64, usize, usize)> = None;
+                let mut quads = None;
                 let mut pages: Option<Vec<(u16, u32)>> = None;
                 let zoom = if let (Some(r), Some((_, at))) = (&n.run_layout, &spec.cold.advance_in)
                     && let Some(x) = r.x(*at)
@@ -813,6 +813,9 @@ impl RuntimeCore {
                     let bytes = reveal.is_some() || !link_fx.is_empty() || has_hl_fg || selected_ink.is_some();
                     // A secret's glyphs aren't kept past the frame that draws them.
                     let secret = spec.redacted || n.input.as_ref().is_some_and(|i| i.edit.is_secure());
+                    if secret {
+                        self.paint.text_quads.remove(n.id, piece.index);
+                    }
                     let shared = piece.shared.or(laid.single());
                     let still = scale_motion == ScaleMotion::Still && glide == [0.0; 2] && !bytes && !place_masks
                         && !self.motion.flights().iter().any(|f| f.lands(&n.path, n.key.as_deref()));
@@ -828,10 +831,9 @@ impl RuntimeCore {
                         for sp in spans.iter() {
                             (sp.start, sp.end, sp.color.map(|c| premul(c, o, srgb).map(f32::to_bits))).hash(&mut h);
                         }
-                        let (id, key) = ((n.id, layout_id), h.finish());
-                        match self.paint.text_quads.get_mut(&id).filter(|(d, _)| d.key == key) {
-                            Some((d, used)) => {
-                                *used = self.paint.quads_frame;
+                        let key = h.finish();
+                        match self.paint.text_quads.get(n.id, piece.index, layout_id, key) {
+                            Some(d) => {
                                 self.instances.extend_from_slice(&d.instances);
                                 d.pages.iter().for_each(|&(page, texels)| self.text.touch_quad(page, texels));
                                 *glyph_count += d.glyphs;
@@ -842,7 +844,7 @@ impl RuntimeCore {
                                 }
                             }
                             None => {
-                                quads = Some((id, key, self.instances.len(), *glyph_count));
+                                quads = Some(((n.id, piece.index), layout_id, key, self.instances.len(), *glyph_count));
                                 pages = Some(Vec::new());
                             }
                         }
@@ -918,9 +920,9 @@ impl RuntimeCore {
                         }
                     }
                 }
-                if let (Some((id, key, start, glyphs)), Some(pages)) = (quads, pages) {
+                if let (Some(((node, piece_index), layout_id, key, start, glyphs)), Some(pages)) = (quads, pages) {
                     let d = crate::el::grid::DrawnRow { key, instances: self.instances[start..].to_vec(), pages, glyphs: *glyph_count - glyphs };
-                    self.paint.text_quads.insert(id, (d, self.paint.quads_frame));
+                    self.paint.text_quads.insert(node, piece_index, layout_id, d);
                 }
             }
             if let (Some(c), Some(inp)) = (caret, &n.input) {
