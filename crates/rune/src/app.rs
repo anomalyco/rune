@@ -244,6 +244,35 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Opt-in preferred colour emoji font family (or comma-separated CSS family list) tried first
+    /// for emoji graphemes (`Emoji_Presentation`, `U+FE0F`, ZWJ sequences, keycaps, skin tones,
+    /// and regional-indicator flags) across every text slot (`Family::Sans`, `Family::Mono`,
+    /// `Family::SystemMono`, `Family::Named`, and inline mono spans).
+    ///
+    /// Precedence for emoji graphemes is: this explicit `emoji_family` first, then any colour
+    /// emoji font explicitly named in the active family stack (`AppSpec::families`,
+    /// `Tx::set_font_families`, or `Family::Named`), then the lazily loaded system emoji font,
+    /// then the active text stack. Plain text symbols without `U+FE0F` (such as `❤` or
+    /// `☺\u{FE0E}`) keep their monochrome text faces. Uncovered emoji still fall back to the
+    /// system emoji font, and the system emoji font is not loaded when every emoji in a string is
+    /// already covered.
+    ///
+    /// Passing an empty or whitespace-only string normalizes to `None` (default system emoji
+    /// fallback). Switch or clear at runtime with [`Tx::set_emoji_family`] or
+    /// [`Runtime::set_emoji_family`](crate::Runtime::set_emoji_family).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// let spec = AppSpec::new("Chat", (640.0, 480.0), || (), |_, _| el());
+    /// App::new(spec).emoji_family("Twemoji").run();
+    /// ```
+    pub fn emoji_family(mut self, family: impl Into<String>) -> Self {
+        let family = family.into();
+        self.runtime.emoji_family = crate::text::normalize_emoji_family(Some(&family));
+        self
+    }
+
     /// Configure this window's frame. Overlays retain their own native behaviour.
     pub fn chrome(mut self, chrome: crate::Chrome) -> Self {
         self.chrome = chrome;
@@ -482,7 +511,11 @@ impl<S: 'static> App<S> {
     /// Uses this app's fonts and font smoothing (`ConfiguredOverlay::font_smoothing` overrides it).
     /// Headless runs don't draw overlays.
     pub fn overlay<T: 'static>(&mut self, spec: impl Into<crate::ConfiguredOverlay<T>>, state: T) -> crate::overlay::OverlayHandle<T> {
-        let (mut overlay, handle) = crate::overlay::OverlayHost::new(spec.into(), state, &self.spec, self.runtime.font_smoothing);
+        let mut configured = spec.into();
+        if configured.runtime.emoji_family.is_none() {
+            configured.runtime.emoji_family = self.runtime.emoji_family.clone();
+        }
+        let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
         overlay.set_prewarm_effects(self.prewarm_effects);
         self.overlays.push(Box::new(overlay));
         handle

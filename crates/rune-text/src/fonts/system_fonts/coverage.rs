@@ -10,7 +10,7 @@ use crate::{TextSystem, family_list, fonts::fallback, named_list};
 #[cfg(any(windows, target_vendor = "apple"))]
 use super::SYMBOL_FAMILIES;
 use super::{
-    is_cjk, load_families, needs_no_font, platform, reader_has_color_table,
+    emoji_family_list, is_cjk, load_families, needs_no_font, platform, reader_has_color_table,
     register_script_fallbacks, register_system_cjk,
 };
 
@@ -176,6 +176,27 @@ impl TextSystem {
         color
     }
 
+    /// `FamilyId`s resolved from the app's opt-in `preferred_emoji` setting, lazily loading any
+    /// installed system font it names on first emoji encounter. Empty when `preferred_emoji` is
+    /// `None` or resolves to no registered family.
+    fn preferred_emoji_family_ids(&mut self) -> Vec<FamilyId> {
+        let Some(list) = self.preferred_emoji.clone() else {
+            return Vec::new();
+        };
+        self.load_installed_emoji(&list);
+        let mut ids = Vec::new();
+        push_family_ids(&mut self.font_cx.collection, emoji_family_list(&list), &mut ids);
+        ids
+    }
+
+    /// Resolved family names for the app's opt-in `preferred_emoji` setting, in shaping order.
+    pub(crate) fn preferred_emoji_family_names(&mut self) -> Vec<String> {
+        let ids = self.preferred_emoji_family_ids();
+        ids.into_iter()
+            .filter_map(|id| self.font_cx.collection.family_name(id).map(str::to_owned))
+            .collect()
+    }
+
     /// Family names of colour fonts explicitly selected by name in the active stack for `family`
     /// (or the mono-span stack when `mono_span` is true), in shaping order.
     pub(crate) fn selected_color_family_names(&mut self, family: rune_core::tok::Family, mono_span: bool) -> Vec<String> {
@@ -287,6 +308,7 @@ impl TextSystem {
         let mut mono_cov = (!mono_spans.is_empty() && !matches!(style.family, rune_core::tok::Family::Mono | rune_core::tok::Family::SystemMono))
             .then(|| FamilyCoverage::from_ids(self.active_family_ids(style.family, true), attributes));
         let mut cjk_own_cov: Option<FamilyCoverage> = None;
+        let mut preferred_emoji_cov: Option<FamilyCoverage> = None;
         let mut selected_color_primary: Option<FamilyCoverage> = None;
         let mut selected_color_mono: Option<FamilyCoverage> = None;
 
@@ -336,6 +358,15 @@ impl TextSystem {
             if route == Some(fallback::Route::Emoji) {
                 if needs_no_font(ch) {
                     continue;
+                }
+                if self.preferred_emoji.is_some() {
+                    let pref_cov = preferred_emoji_cov.get_or_insert_with(|| {
+                        let ids = self.preferred_emoji_family_ids();
+                        FamilyCoverage::from_ids(ids, attributes)
+                    });
+                    if pref_cov.covers(&mut self.font_cx, ch) {
+                        continue;
+                    }
                 }
                 let in_mono = !mono_spans.is_empty() && mono_spans.get(idx).is_some();
                 let color_cov = if in_mono {

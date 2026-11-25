@@ -355,7 +355,7 @@ fn fontconfig_extracts_names_weights_and_monospace_from_collection_paths() {
 }
 /// Returns `(family_name, glyph_id)` for every shaped glyph in `layout` plus the count of
 /// colour glyph quads emitted by `glyphs_for_layout`.
-fn glyph_signature(ts: &mut TextSystem, text: &str, spans: &[Span], style: TextStyle) -> (Vec<(String, u32)>, usize, f32) {
+pub(super) fn glyph_signature(ts: &mut TextSystem, text: &str, spans: &[Span], style: TextStyle) -> (Vec<(String, u32)>, usize, f32) {
     let layout = ts.layout_rich(text, spans, style, 2.0, None);
     let mut glyphs = Vec::new();
     for line in layout.lines() {
@@ -556,7 +556,7 @@ fn mono_span_checks_mono_font_coverage_not_sans() {
 /// Builds a minimal valid SFNT font based on bundled IBM Plex Mono with a custom family `name`,
 /// a Format 12 `cmap` mapping `codepoints` to nonzero glyph IDs `1..=N`, and an optional `COLR`
 /// table record so colour-font detection recognises it.
-fn make_test_font(family: &str, codepoints: &[char], is_color: bool) -> Vec<u8> {
+pub(super) fn make_test_font(family: &str, codepoints: &[char], is_color: bool) -> Vec<u8> {
     const BASE: &[u8] = include_bytes!("../../../../rune/assets/IBMPlexMono-Regular.ttf");
     let num = u16::from_be_bytes([BASE[4], BASE[5]]) as usize;
     let mut tables: Vec<([u8; 4], Vec<u8>)> = Vec::with_capacity(num + 1);
@@ -664,7 +664,7 @@ fn make_test_font(family: &str, codepoints: &[char], is_color: bool) -> Vec<u8> 
 }
 
 /// Registers synthetic font bytes into `ts.font_cx.collection`, returning its `FamilyId`.
-fn register_test_font(ts: &mut TextSystem, bytes: Vec<u8>) -> FamilyId {
+pub(super) fn register_test_font(ts: &mut TextSystem, bytes: Vec<u8>) -> FamilyId {
     let blob = parley::fontique::Blob::new(std::sync::Arc::new(bytes));
     let added = ts.font_cx.collection.register_fonts(blob, None);
     assert_eq!(added.len(), 1, "synthetic font must register one family");

@@ -123,6 +123,8 @@ pub struct Tx {
     pub(crate) rewind: Option<Option<crate::rewind::Rewind>>,
     pub(crate) font_smoothing: Option<crate::text::FontSmoothing>,
     pub(crate) font_families: Option<(String, String)>,
+    /// `Tx::set_emoji_family`: `Some(Some(name))` sets, `Some(None)` clears to system fallback.
+    pub(crate) emoji_family: Option<Option<String>>,
     /// `Tx::add_font`: new font bytes were registered during this handler.
     pub(crate) fonts_added: bool,
     pub(crate) blur: bool,
@@ -801,6 +803,29 @@ impl Tx {
     /// on parallel threads isolate `measure` with [`rune::text::with_families`](crate::text::with_families).
     pub fn set_font_families(&mut self, sans: impl Into<String>, mono: impl Into<String>) {
         self.font_families = Some((sans.into(), mono.into()));
+    }
+
+    /// Sets or clears the opt-in preferred colour emoji font family (or comma-separated CSS family
+    /// list) for every window and overlay on this thread, and for windows opened later, as
+    /// [`App::emoji_family`](crate::App::emoji_family) does at launch.
+    ///
+    /// Precedence for emoji graphemes is: this explicit `emoji_family` first, then any colour
+    /// emoji font explicitly named in the active family stack (`AppSpec::families`,
+    /// [`Self::set_font_families`], or `Family::Named`), then the lazily loaded system emoji
+    /// font, then the active text stack. Pass `None` or an empty / whitespace-only string to clear
+    /// the override and restore default emoji fallback. Asking for the value already active costs
+    /// nothing; changing it drops shaped layouts, rebuilds memoized subtrees, updates
+    /// [`rune::text::measure`](crate::text::measure), and advances
+    /// [`rune::text::font_epoch`](crate::text::font_epoch).
+    ///
+    /// ```
+    /// # use rune::Tx;
+    /// # let mut tx = Tx::default();
+    /// tx.set_emoji_family(Some("Twemoji"));
+    /// tx.set_emoji_family(None);
+    /// ```
+    pub fn set_emoji_family(&mut self, family: Option<&str>) {
+        self.emoji_family = Some(crate::text::normalize_emoji_family(family));
     }
 
     /// Registers font bytes (TTF, OTF, TTC, or variable font) into the process-wide font

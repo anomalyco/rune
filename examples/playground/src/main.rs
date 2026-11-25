@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod any_handlers;
+mod emoji_family_story;
 mod mount;
 mod pick;
 mod scroll_anchor_story;
@@ -713,6 +714,7 @@ fn main() {
                         .variant("65 / 35 · row center_y", |s| { s.align = 3; s.split = 0.65; }),
                 )
                 .story(text_indent_story::story())
+                .story(emoji_family_story::story())
                 .story(
                     Story::new("Text/Runtime font", RuntimeFont::default, runtime_font_view)
                         .trigger('l', "Register font bytes", |s, play| {

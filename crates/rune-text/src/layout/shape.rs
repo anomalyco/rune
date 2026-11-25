@@ -225,6 +225,11 @@ impl TextSystem {
             settings
         };
         let has_emoji_route = routes.iter().any(|(_, r)| *r == Route::Emoji);
+        let preferred_emoji = if has_emoji_route {
+            self.preferred_emoji_family_names()
+        } else {
+            Vec::new()
+        };
         let selected_emoji_sans = if has_emoji_route {
             self.selected_color_family_names(style.family, false)
         } else {
@@ -282,16 +287,27 @@ impl TextSystem {
                 }
                 Route::Emoji => {
                     let selected = if mono_span { &selected_emoji_mono } else { &selected_emoji_sans };
-                    if selected.is_empty() && emoji.is_empty() {
+                    if preferred_emoji.is_empty() && selected.is_empty() && emoji.is_empty() {
                         continue;
                     }
                     let stack = 2 + mono_span as usize;
                     stacks[stack].get_or_insert_with(|| {
                         let base = if mono_span { &mono } else { &sans };
-                        selected
+                        preferred_emoji
                             .iter()
                             .map(|name| FontFamilyName::named(name.as_str()))
-                            .chain(emoji.iter().map(|name| FontFamilyName::named(name)))
+                            .chain(
+                                selected
+                                    .iter()
+                                    .filter(|name| !preferred_emoji.iter().any(|p| p == *name))
+                                    .map(|name| FontFamilyName::named(name.as_str())),
+                            )
+                            .chain(
+                                emoji
+                                    .iter()
+                                    .filter(|name| !preferred_emoji.iter().any(|p| p == **name))
+                                    .map(|name| FontFamilyName::named(name)),
+                            )
                             .chain(base.iter().cloned())
                             .collect()
                     });

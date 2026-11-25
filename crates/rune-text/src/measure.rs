@@ -32,12 +32,13 @@ pub fn ascii_metrics(style: TextStyle) -> Option<([f32; 95], f32, bool)> {
 }
 
 struct Fonts {
-    /// Bumped by any change, of fonts or families.
+    /// Bumped by any change, of fonts, families, or preferred emoji family.
     generation: u64,
     /// The `generation` that last changed the fonts.
     fonts_generation: u64,
     fonts: Vec<&'static [u8]>,
     families: (String, String),
+    emoji_family: Option<String>,
     /// Zero for the process-wide state; a thread's own [`THREAD_FONTS`] or a [`with_families`] /
     /// [`with_fonts`] scope's own non-zero number otherwise.
     scope: u64,
@@ -135,6 +136,7 @@ fn ensure_fonts(slot: &mut Option<Fonts>) -> &mut Fonts {
         fonts_generation: next_fonts_generation(),
         fonts: Vec::new(),
         families: ("Inter".to_owned(), "ui-monospace".to_owned()),
+        emoji_family: None,
         scope: 0,
     })
 }
@@ -143,11 +145,16 @@ fn apply_fonts(
     slot: &mut Option<Fonts>,
     fonts: &[&'static [u8]],
     families: (&str, &str),
+    emoji_family: Option<&str>,
     preferred_fg: Option<u64>,
     new_scope: impl FnOnce() -> u64,
 ) -> u64 {
     let same_fonts = slot.as_ref().is_some_and(|f| f.fonts == fonts);
-    if same_fonts && slot.as_ref().is_some_and(|f| f.families.0 == families.0 && f.families.1 == families.1) {
+    if same_fonts
+        && slot
+            .as_ref()
+            .is_some_and(|f| f.families.0 == families.0 && f.families.1 == families.1 && f.emoji_family.as_deref() == emoji_family)
+    {
         return slot.as_ref().expect("same_fonts implies Some").fonts_generation;
     }
     let generation = slot.as_ref().map_or(1, |f| f.generation + 1);
@@ -157,21 +164,28 @@ fn apply_fonts(
     };
     let scope = slot.as_ref().map_or_else(new_scope, |f| f.scope);
     let families = (families.0.to_owned(), families.1.to_owned());
-    *slot = Some(Fonts { generation, fonts_generation, fonts: fonts.to_vec(), families, scope });
+    let emoji_family = emoji_family.map(str::to_owned);
+    *slot = Some(Fonts { generation, fonts_generation, fonts: fonts.to_vec(), families, emoji_family, scope });
     fonts_generation
 }
 
 /// Called by every [`TextSystem::new`]; the next measurement uses these fonts.
 pub(crate) fn note_fonts(fonts: &[&'static [u8]], families: (&str, &str)) {
+    note_fonts_with_emoji(fonts, families, None);
+}
+
+/// Called by [`TextSystem::for_window`]; the next measurement uses these fonts, families, and
+/// chosen emoji family without double-bumping `font_epoch`.
+pub(crate) fn note_fonts_with_emoji(fonts: &[&'static [u8]], families: (&str, &str), emoji_family: Option<&str>) {
     if OVERRIDE.with_borrow(Option::is_some) {
         OVERRIDE.with_borrow_mut(|slot| {
-            apply_fonts(slot, fonts, families, None, || 0);
+            apply_fonts(slot, fonts, families, emoji_family, None, || 0);
         });
         return;
     }
-    let global_fg = with_global(|slot| apply_fonts(slot, fonts, families, None, || 0));
+    let global_fg = with_global(|slot| apply_fonts(slot, fonts, families, emoji_family, None, || 0));
     THREAD_FONTS.with_borrow_mut(|slot| {
-        apply_fonts(slot, fonts, families, Some(global_fg), || SCOPES.fetch_add(1, Ordering::Relaxed));
+        apply_fonts(slot, fonts, families, emoji_family, Some(global_fg), || SCOPES.fetch_add(1, Ordering::Relaxed));
     });
 }
 
@@ -193,9 +207,34 @@ pub(crate) fn note_families(sans: &str, mono: &str) {
     with_global(|slot| apply_families(slot, sans, mono));
 }
 
-/// Changes whenever the fonts or families [`measure`] uses on this thread change, as when an app
-/// calls [`crate::add_font`], `Tx::add_font`, `Tx::set_font_families`, or this thread builds a
-/// [`TextSystem`] with different fonts. A cache of measured sizes mixes it into its key.
+fn apply_emoji_family(slot: &mut Option<Fonts>, emoji_family: Option<&str>) {
+    let Some(f) = slot.as_mut() else { return };
+    if f.emoji_family.as_deref() != emoji_family {
+        f.generation += 1;
+        f.emoji_family = emoji_family.map(str::to_owned);
+    }
+}
+
+/// Called by [`TextSystem::set_emoji_family`]; the next measurement uses this emoji family.
+pub(crate) fn note_emoji_family(emoji_family: Option<&str>) {
+    if OVERRIDE.with_borrow(Option::is_some) {
+        OVERRIDE.with_borrow_mut(|slot| apply_emoji_family(slot, emoji_family));
+        return;
+    }
+    THREAD_FONTS.with_borrow_mut(|slot| apply_emoji_family(slot, emoji_family));
+    with_global(|slot| {
+        let f = ensure_fonts(slot);
+        if f.emoji_family.as_deref() != emoji_family {
+            f.generation += 1;
+            f.emoji_family = emoji_family.map(str::to_owned);
+        }
+    });
+}
+
+/// Changes whenever the fonts, families, or preferred emoji family [`measure`] uses on this thread
+/// change, as when an app calls [`crate::add_font`], `Tx::add_font`, `Tx::set_font_families`,
+/// `Tx::set_emoji_family`, or this thread builds a [`TextSystem`] with different fonts. A cache of
+/// measured sizes mixes it into its key.
 ///
 /// A thread that has built its own [`TextSystem`] or holds a [`with_families`] or [`with_fonts`]
 /// guard has an epoch in its own scope, distinct from the process-wide epoch and from other
@@ -276,6 +315,7 @@ pub fn with_families(sans: &str, mono: &str) -> FamiliesGuard {
             fonts_generation: f.fonts_generation,
             fonts: f.fonts.clone(),
             families: (sans.to_owned(), mono.to_owned()),
+            emoji_family: f.emoji_family.clone(),
             scope,
         }
     });
@@ -329,6 +369,7 @@ pub fn with_fonts(fonts: &[&'static [u8]], families: (&str, &str)) -> FontsGuard
         fonts_generation,
         fonts: fonts.to_vec(),
         families: (families.0.to_owned(), families.1.to_owned()),
+        emoji_family: None,
         scope,
     };
     let previous = OVERRIDE.with_borrow_mut(|o| o.replace(seeded));
@@ -419,20 +460,22 @@ pub(super) fn with_text<R>(f: impl FnOnce(&mut TextSystem) -> R) -> R {
         let current = font_epoch();
         if m.as_ref().is_none_or(|m| m.generation != current) {
             let faces = crate::fonts::full_faces::count() as u64;
-            let (base_epoch, fonts_generation, fonts, (sans, mono)) = with_state(|slot| {
+            let (base_epoch, fonts_generation, fonts, (sans, mono), emoji_family) = with_state(|slot| {
                 let f = ensure_fonts(slot);
-                (epoch_of(f), f.fonts_generation, f.fonts.clone(), f.families.clone())
+                (epoch_of(f), f.fonts_generation, f.fonts.clone(), f.families.clone(), f.emoji_family.clone())
             });
             let epoch = combine_face_epoch(base_epoch, faces);
             match m.as_mut() {
-                // Only the families or runtime-added faces changed: the loaded fonts stay.
+                // Only the families, emoji family, or runtime-added faces changed: the loaded fonts stay.
                 Some(m) if m.fonts_generation == fonts_generation => {
                     m.text.follow_full_faces();
                     m.text.apply_families(&sans, &mono);
+                    m.text.apply_emoji_family(emoji_family.as_deref());
                     m.generation = epoch;
                 }
                 _ => {
-                    let text = TextSystem::new_local(&fonts, (&sans, &mono));
+                    let mut text = TextSystem::new_local(&fonts, (&sans, &mono));
+                    text.apply_emoji_family(emoji_family.as_deref());
                     *m = Some(Measurer { generation: epoch, fonts_generation, text, calls: 0 });
                 }
             }
