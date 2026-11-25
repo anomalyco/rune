@@ -192,6 +192,7 @@ impl Measurement<'_> {
             defaults: self.defaults.clone(),
             titlebar: self.titlebar,
             caret_read: self.caret_read,
+            wm_state_read: None,
             layout_reads: self.layout_reads,
             memo_flattened: None,
             memo_reused: reused,

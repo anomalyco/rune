@@ -1595,6 +1595,17 @@ rune::App::new(spec).fit_content_height().run();
   headlessly via `Runtime::set_maximized` and `Runtime::set_full_screen`), and `Tx::toggle_maximized()`,
   `Tx::toggle_full_screen()`, and `Tx::set_full_screen(bool)` request state changes.
   `cargo run -p rune --example custom_titlebar` shows it.
+- **Window-manager state** (`Cx::decoration_mode()`, `Cx::tiled_edges()`, `Cx::window_actions()`,
+  backed by `DecorationMode`, `TiledEdges`, `WindowActions`, and `WindowManagerState`): reactive
+  tri-state accessors preserving explicit unknown values (`DecorationMode::Unknown` and `None`)
+  wherever the platform or window manager does not report a fact. Reading views and their `memo`
+  closures rebuild automatically on change, while views that never read them do no extra work.
+  On Linux X11, Rune reads `_NET_FRAME_EXTENTS`, `_GTK_EDGE_CONSTRAINTS`, per-window
+  `_NET_WM_ALLOWED_ACTIONS`, and root `_NET_SUPPORTED` in pipelined queries on chrome sync and
+  window move (zero X11 round trips on ordinary redraws); Wayland (pending follow-up winit
+  support), macOS, Windows, web, overlays, adopted macOS panels, and staged playground subviews
+  report unknown values. Testable headlessly via `Runtime::set_window_manager_state`;
+  `cargo run -p rune --example custom_titlebar` displays the live values.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
   that set a few more end with `..AppSpec::new(..)`. Window chrome lives on the builders, keeping
   existing exhaustive `AppSpec` literals source-compatible.

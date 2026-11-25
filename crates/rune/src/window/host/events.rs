@@ -364,11 +364,16 @@ impl Host {
         match event {
             WindowEvent::Moved(_) => {
                 record_reopen(&mut self.reopen, l, app.rt().host.fit_height);
+                let scale_changed = (scale - app.rt().window_scale()).abs() > f32::EPSILON;
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if !self.wayland && !scale_changed && chrome::sync_wm_state_core(app.rt_mut(), l) {
+                    l.request_redraw();
+                }
                 // winit queues `ScaleFactorChanged` in `kCFRunLoopDefaultMode`, which waits
                 // until a window drag ends; resize the surface and draw synchronously inside the
                 // current Core Animation transaction when a drag crosses displays so the new
                 // `contentsScale` and new-scale drawable land together with no flash.
-                if (scale - app.rt().window_scale()).abs() > f32::EPSILON {
+                if scale_changed {
                     let size = l.window.inner_size();
                     if size.width > 0 && size.height > 0 {
                         l.resize_surface(gpu, size);

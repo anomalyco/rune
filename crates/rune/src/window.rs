@@ -72,6 +72,7 @@ mod warm_frame;
 mod wayland_wake;
 #[cfg(target_os = "windows")]
 mod win32;
+pub(crate) mod wm_state;
 /// `crate::warm_gpu_cache` on Windows (`win32::handover`).
 #[cfg(target_os = "windows")]
 pub(crate) fn warm_gpu_cache() -> Result<(), String> { win32::handover::warm_gpu_cache() }
