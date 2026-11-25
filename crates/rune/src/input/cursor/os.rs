@@ -230,6 +230,12 @@ fn icon(c: Cursor) -> CursorIcon {
         Cursor::ResizeNs => CursorIcon::NsResize,
         Cursor::ResizeNwse => CursorIcon::NwseResize,
         Cursor::ResizeNesw => CursorIcon::NeswResize,
+        Cursor::ResizeN => CursorIcon::NResize,
+        Cursor::ResizeE => CursorIcon::EResize,
+        Cursor::ResizeS => CursorIcon::SResize,
+        Cursor::ResizeW => CursorIcon::WResize,
+        Cursor::Alias => CursorIcon::Alias,
+        Cursor::Copy => CursorIcon::Copy,
         Cursor::Crosshair => CursorIcon::Crosshair,
         Cursor::Cell => CursorIcon::Cell,
         Cursor::ZoomIn => CursorIcon::ZoomIn,
@@ -288,6 +294,12 @@ mod tests {
             (Cursor::ResizeNs, MacCursor::ResizeNs),
             (Cursor::ResizeNwse, MacCursor::ResizeNwse),
             (Cursor::ResizeNesw, MacCursor::ResizeNesw),
+            (Cursor::ResizeN, MacCursor::ResizeN),
+            (Cursor::ResizeE, MacCursor::ResizeE),
+            (Cursor::ResizeS, MacCursor::ResizeS),
+            (Cursor::ResizeW, MacCursor::ResizeW),
+            (Cursor::Alias, MacCursor::Alias),
+            (Cursor::Copy, MacCursor::Copy),
             (Cursor::Crosshair, MacCursor::Crosshair),
             (Cursor::ZoomIn, MacCursor::ZoomIn),
             (Cursor::ZoomOut, MacCursor::ZoomOut),
@@ -304,20 +316,106 @@ mod tests {
     }
 
     #[test]
-    fn resize_cursors_map_to_winit_and_css_names() {
-        let pairs = [
-            (Cursor::ResizeColumn, CursorIcon::ColResize, "col-resize"),
-            (Cursor::ResizeRow, CursorIcon::RowResize, "row-resize"),
-            (Cursor::ResizeEw, CursorIcon::EwResize, "ew-resize"),
-            (Cursor::ResizeNs, CursorIcon::NsResize, "ns-resize"),
-            (Cursor::ResizeNwse, CursorIcon::NwseResize, "nwse-resize"),
-            (Cursor::ResizeNesw, CursorIcon::NeswResize, "nesw-resize"),
+    fn every_cursor_variant_maps_to_winit_and_css_names() {
+        static PNG: [u8; 4] = [1, 2, 3, 4];
+        let image = crate::cursor::CursorImage::png(&PNG, [0.0, 0.0]);
+        let all = [
+            Cursor::Default, Cursor::Pointer, Cursor::Text, Cursor::Grab, Cursor::Grabbing,
+            Cursor::NotAllowed, Cursor::Move, Cursor::ResizeColumn, Cursor::ResizeRow,
+            Cursor::ResizeEw, Cursor::ResizeNs, Cursor::ResizeNwse, Cursor::ResizeNesw,
+            Cursor::ResizeN, Cursor::ResizeE, Cursor::ResizeS, Cursor::ResizeW,
+            Cursor::Alias, Cursor::Copy, Cursor::Crosshair, Cursor::Cell,
+            Cursor::ZoomIn, Cursor::ZoomOut, Cursor::Help, Cursor::Progress,
+            Cursor::Hidden, Cursor::Image(image),
         ];
-        for (cursor, expected_icon, expected_css) in pairs {
+        // Exhaustive match so adding a Cursor variant fails to compile until tested here.
+        let expected = |c: Cursor| -> (CursorIcon, &'static str) {
+            match c {
+                Cursor::Default => (CursorIcon::Default, "default"),
+                Cursor::Pointer => (CursorIcon::Pointer, "pointer"),
+                Cursor::Text => (CursorIcon::Text, "text"),
+                Cursor::Grab => (CursorIcon::Grab, "grab"),
+                Cursor::Grabbing => (CursorIcon::Grabbing, "grabbing"),
+                Cursor::NotAllowed => (CursorIcon::NotAllowed, "not-allowed"),
+                Cursor::Move => (CursorIcon::Move, "move"),
+                Cursor::ResizeColumn => (CursorIcon::ColResize, "col-resize"),
+                Cursor::ResizeRow => (CursorIcon::RowResize, "row-resize"),
+                Cursor::ResizeEw => (CursorIcon::EwResize, "ew-resize"),
+                Cursor::ResizeNs => (CursorIcon::NsResize, "ns-resize"),
+                Cursor::ResizeNwse => (CursorIcon::NwseResize, "nwse-resize"),
+                Cursor::ResizeNesw => (CursorIcon::NeswResize, "nesw-resize"),
+                Cursor::ResizeN => (CursorIcon::NResize, "n-resize"),
+                Cursor::ResizeE => (CursorIcon::EResize, "e-resize"),
+                Cursor::ResizeS => (CursorIcon::SResize, "s-resize"),
+                Cursor::ResizeW => (CursorIcon::WResize, "w-resize"),
+                Cursor::Alias => (CursorIcon::Alias, "alias"),
+                Cursor::Copy => (CursorIcon::Copy, "copy"),
+                Cursor::Crosshair => (CursorIcon::Crosshair, "crosshair"),
+                Cursor::Cell => (CursorIcon::Cell, "cell"),
+                Cursor::ZoomIn => (CursorIcon::ZoomIn, "zoom-in"),
+                Cursor::ZoomOut => (CursorIcon::ZoomOut, "zoom-out"),
+                Cursor::Help => (CursorIcon::Help, "help"),
+                Cursor::Progress => (CursorIcon::Progress, "progress"),
+                Cursor::Hidden => (CursorIcon::Default, "none"),
+                Cursor::Image(_) => (CursorIcon::Default, "image"),
+            }
+        };
+        for cursor in all {
+            let (expected_icon, expected_css) = expected(cursor);
             let mapped = icon(cursor);
-            assert_eq!(mapped, expected_icon);
-            assert_eq!(mapped.name(), expected_css);
+            assert_eq!(mapped, expected_icon, "{cursor:?}");
+            assert_eq!(cursor.css_name(), expected_css, "{cursor:?}");
+            if !matches!(cursor, Cursor::Hidden | Cursor::Image(_)) {
+                assert_eq!(mapped.name(), expected_css, "{cursor:?}");
+            }
         }
+    }
+
+    #[test]
+    fn one_way_resize_alias_and_copy_cursors_resolve_inherit_and_hold() {
+        use crate::{Cx, El, Env, Runtime, col, el};
+
+        let cases = [
+            ("n", Cursor::ResizeN),
+            ("e", Cursor::ResizeE),
+            ("s", Cursor::ResizeS),
+            ("w", Cursor::ResizeW),
+            ("alias", Cursor::Alias),
+            ("copy", Cursor::Copy),
+        ];
+        fn view(_: &(), _: &mut Cx<()>) -> El {
+            col().size(200.0, 260.0)
+                .child(el().key("n").size(200.0, 30.0).hit().cursor(Cursor::ResizeN)
+                    .child(el().key("n-child").size(100.0, 30.0)))
+                .child(el().key("e").size(200.0, 30.0).hit().cursor(Cursor::ResizeE))
+                .child(el().key("s").size(200.0, 30.0).hit().cursor(Cursor::ResizeS))
+                .child(el().key("w").size(200.0, 30.0).cursor(Cursor::ResizeW).on_press(|_: &mut ()| {}))
+                .child(el().key("alias").size(200.0, 30.0).hit().cursor(Cursor::Alias))
+                .child(el().key("copy").size(200.0, 30.0).hit().cursor(Cursor::Copy))
+                .child(el().key("inert-copy").size(200.0, 30.0).hit().inert().cursor(Cursor::Copy))
+                .child(el().key("plain").size(200.0, 50.0))
+        }
+        let mut rt = Runtime::new((), view, (200.0, 260.0), Env::new(false, 1.0));
+        rt.frame(0.0);
+        for (i, (key, expected)) in cases.iter().enumerate() {
+            let y = i as f32 * 30.0 + 15.0;
+            rt.pointer_move(50.0, y);
+            assert_eq!(rt.cursor(), *expected, "{key}");
+        }
+        // Child inherits ResizeN.
+        rt.pointer_move(20.0, 15.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeN);
+        // Inert element does not claim Copy.
+        rt.pointer_move(100.0, 195.0);
+        assert_eq!(rt.cursor(), Cursor::Default);
+        // Held press on ResizeW keeps it outside its bounds.
+        rt.pointer_move(100.0, 105.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeW);
+        rt.pointer_down(100.0, 105.0);
+        rt.pointer_move(100.0, 235.0);
+        assert_eq!(rt.cursor(), Cursor::ResizeW);
+        rt.pointer_up(100.0, 235.0);
+        assert_eq!(rt.cursor(), Cursor::Default);
     }
 
     #[test]

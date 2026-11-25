@@ -689,6 +689,12 @@ fn layer_shell_maps_diagonal_and_bidirectional_resize_cursors() {
     assert_eq!(super::shape(Cursor::ResizeNs), Shape::NsResize);
     assert_eq!(super::shape(Cursor::ResizeNwse), Shape::NwseResize);
     assert_eq!(super::shape(Cursor::ResizeNesw), Shape::NeswResize);
+    assert_eq!(super::shape(Cursor::ResizeN), Shape::NResize);
+    assert_eq!(super::shape(Cursor::ResizeE), Shape::EResize);
+    assert_eq!(super::shape(Cursor::ResizeS), Shape::SResize);
+    assert_eq!(super::shape(Cursor::ResizeW), Shape::WResize);
+    assert_eq!(super::shape(Cursor::Alias), Shape::Alias);
+    assert_eq!(super::shape(Cursor::Copy), Shape::Copy);
 }
 
 #[test]

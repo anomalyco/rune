@@ -4,7 +4,10 @@ import test from 'node:test';
 class FakeElement {
     constructor(tagName) {
         this.tagName = tagName.toUpperCase();
-        this.style = { cssText: '', width: '', height: '', left: '', top: '' };
+        this.style = {
+            cssText: '', width: '', height: '', left: '', top: '', cursor: '',
+            removeProperty(name) { if (name === 'cursor') this.cursor = ''; },
+        };
         this.attributes = new Map();
         this.children = [];
         this.parentElement = null;
@@ -401,4 +404,15 @@ test('writeClipboardImage creates ClipboardItem with Promise<Blob> synchronously
         Object.defineProperty(globalThis, 'ClipboardItem', { value: origCI, configurable: true });
         Object.defineProperty(globalThis, 'CompressionStream', { value: origCS, configurable: true });
     }
+});
+
+test('setCursor applies CSS cursor keywords for one-way resize, alias, and copy and clears on empty', () => {
+    const { doc } = installDom();
+    const canvas = doc.createElement('canvas');
+    for (const css of ['n-resize', 'e-resize', 's-resize', 'w-resize', 'alias', 'copy']) {
+        platform.setCursor(canvas, css);
+        assert.equal(canvas.style.cursor, css);
+    }
+    platform.setCursor(canvas, '');
+    assert.equal(canvas.style.cursor, '');
 });

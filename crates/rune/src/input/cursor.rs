@@ -6,6 +6,17 @@ pub(crate) mod os;
 /// The pointer's shape over an element (CSS `cursor`). Elements without one inherit their
 /// nearest ancestor's; text fields default to [`Cursor::Text`], everything else to the arrow.
 ///
+/// Platform mapping for the one-way resize, alias, and copy variants:
+///
+/// | Variant | Web (CSS) | macOS (AppKit) | Windows | Linux X11 (`cursor-icon`) | Linux Wayland (`wp-cursor-shape-v1`) |
+/// |---|---|---|---|---|---|
+/// | [`Cursor::ResizeN`] | `n-resize` | `+[NSCursor resizeUpCursor]` | `IDC_SIZENS` (two-way; no one-way system cursor, matching Chrome) | `n-resize` (alt `top_side`) | `Shape::NResize` (`n-resize` / `top_side` theme fallback) |
+/// | [`Cursor::ResizeE`] | `e-resize` | `+[NSCursor resizeRightCursor]` | `IDC_SIZEWE` (two-way; no one-way system cursor, matching Chrome) | `e-resize` (alt `right_side`) | `Shape::EResize` (`e-resize` / `right_side` theme fallback) |
+/// | [`Cursor::ResizeS`] | `s-resize` | `+[NSCursor resizeDownCursor]` | `IDC_SIZENS` (two-way; no one-way system cursor, matching Chrome) | `s-resize` (alt `bottom_side`) | `Shape::SResize` (`s-resize` / `bottom_side` theme fallback) |
+/// | [`Cursor::ResizeW`] | `w-resize` | `+[NSCursor resizeLeftCursor]` | `IDC_SIZEWE` (two-way; no one-way system cursor, matching Chrome) | `w-resize` (alt `left_side`) | `Shape::WResize` (`w-resize` / `left_side` theme fallback) |
+/// | [`Cursor::Alias`] | `alias` | `+[NSCursor dragLinkCursor]` | Chromium's `aliasb.cur` bitmap (no system cursor; winit falls back to `IDC_ARROW`) | `alias` (alt `link`) | `Shape::Alias` (`alias` / `link` theme fallback) |
+/// | [`Cursor::Copy`] | `copy` | `+[NSCursor dragCopyCursor]` | Chromium's `copy.cur` bitmap (no system cursor; winit falls back to `IDC_ARROW`) | `copy` | `Shape::Copy` (`copy` theme fallback) |
+///
 /// A macOS overlay is rarely the key window, so it sets its cursor directly while the pointer
 /// is over its hit area. macOS honours that only while the overlay's app is frontmost, unless
 /// `rune` is built with the `macos-background-cursor` feature. That feature uses a private
@@ -65,6 +76,73 @@ pub enum Cursor {
     /// # ;
     /// ```
     ResizeNesw,
+    /// One-way upward resize (CSS `n-resize`), for a horizontal edge at its lower limit that can
+    /// only move north. Shows AppKit's `resizeUpCursor` on macOS, `n-resize`/`top_side` on Linux
+    /// and the web, and Windows's two-way vertical `IDC_SIZENS` (Windows has no one-way resize
+    /// cursor, matching Chrome).
+    ///
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
+    /// el().size(120.0, 8.0).hit().cursor(Cursor::ResizeN)
+    /// # ;
+    /// ```
+    ResizeN,
+    /// One-way rightward resize (CSS `e-resize`), for a vertical edge at its left limit that can
+    /// only move east. Shows AppKit's `resizeRightCursor` on macOS, `e-resize`/`right_side` on
+    /// Linux and the web, and Windows's two-way horizontal `IDC_SIZEWE` (matching Chrome).
+    ///
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
+    /// el().size(8.0, 120.0).hit().cursor(Cursor::ResizeE)
+    /// # ;
+    /// ```
+    ResizeE,
+    /// One-way downward resize (CSS `s-resize`), for a horizontal edge at its upper limit that can
+    /// only move south. Shows AppKit's `resizeDownCursor` on macOS, `s-resize`/`bottom_side` on
+    /// Linux and the web, and Windows's two-way vertical `IDC_SIZENS` (matching Chrome).
+    ///
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
+    /// el().size(120.0, 8.0).hit().cursor(Cursor::ResizeS)
+    /// # ;
+    /// ```
+    ResizeS,
+    /// One-way leftward resize (CSS `w-resize`), for a vertical edge at its right limit that can
+    /// only move west. Shows AppKit's `resizeLeftCursor` on macOS, `w-resize`/`left_side` on
+    /// Linux and the web, and Windows's two-way horizontal `IDC_SIZEWE` (matching Chrome).
+    ///
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
+    /// el().size(8.0, 120.0).hit().cursor(Cursor::ResizeW)
+    /// # ;
+    /// ```
+    ResizeW,
+    /// An alias or shortcut will be created (CSS `alias`). Shows AppKit's `dragLinkCursor` on
+    /// macOS, `alias`/`link` on Linux and the web, and Chromium's Windows `alias` bitmap on
+    /// Windows (Windows has no system alias cursor).
+    ///
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
+    /// el().size(80.0, 28.0).hit().cursor(Cursor::Alias)
+    /// # ;
+    /// ```
+    Alias,
+    /// Something is to be copied (CSS `copy`). Shows AppKit's `dragCopyCursor` on macOS, `copy`
+    /// on Linux and the web, and Chromium's Windows `copy` bitmap on Windows (Windows has no
+    /// system copy cursor).
+    ///
+    /// ```
+    /// # use rune::{Cursor, el};
+    /// # let _ =
+    /// el().size(80.0, 28.0).hit().cursor(Cursor::Copy)
+    /// # ;
+    /// ```
+    Copy,
     /// A precise-selection cross (CSS `crosshair`), for picking a point or dragging out a rect.
     Crosshair,
     /// A thick white plus (CSS `cell`), over a spreadsheet's cells. Windows has no such system
@@ -112,6 +190,12 @@ impl Cursor {
             Cursor::ResizeNs => "ns-resize",
             Cursor::ResizeNwse => "nwse-resize",
             Cursor::ResizeNesw => "nesw-resize",
+            Cursor::ResizeN => "n-resize",
+            Cursor::ResizeE => "e-resize",
+            Cursor::ResizeS => "s-resize",
+            Cursor::ResizeW => "w-resize",
+            Cursor::Alias => "alias",
+            Cursor::Copy => "copy",
             Cursor::Crosshair => "crosshair",
             Cursor::Cell => "cell",
             Cursor::ZoomIn => "zoom-in",
@@ -157,13 +241,16 @@ pub(crate) const CELL: CursorImage = CursorImage { bytes: include_bytes!("cursor
 
 /// The picture Windows shows for `c` where it has no system cursor of its own: Chromium's Windows
 /// cursors (`ui/resources/cursors/*.cur`), each pixel of their 32 px bitmaps doubled, with their
-/// hot spots. winit's stand-ins there are the four-way move arrows for both hands and the arrow
-/// for both magnifiers. (Chromium's `col-resize` and `row-resize` invert the screen under them,
-/// which a colour cursor can't; those stay the system's two-way arrows.)
+/// hot spots. winit's stand-ins there are the four-way move arrows for both hands and the plain
+/// arrow for `Cell`, `Alias`, `Copy`, and both magnifiers. (Chromium's `col-resize` and
+/// `row-resize` invert the screen under them, which a colour cursor can't, and one-way resizes
+/// stay Windows's two-way arrows as Chrome shows them.)
 #[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn windows_image(c: Cursor) -> Option<CursorImage> {
     let picture = |bytes: &'static [u8], hot: [f32; 2]| CursorImage { bytes, hot, crisp: true };
     match c {
+        Cursor::Alias => Some(picture(include_bytes!("cursor/alias.png"), [7.0, 4.0])),
+        Cursor::Copy => Some(picture(include_bytes!("cursor/copy.png"), [7.0, 4.0])),
         Cursor::Cell => Some(CELL),
         Cursor::Grab => Some(picture(include_bytes!("cursor/grab.png"), [13.0, 13.0])),
         Cursor::Grabbing => Some(picture(include_bytes!("cursor/grabbing.png"), [13.0, 13.0])),
@@ -257,6 +344,12 @@ pub(crate) enum MacCursor {
     ResizeNs,
     ResizeNwse,
     ResizeNesw,
+    ResizeN,
+    ResizeE,
+    ResizeS,
+    ResizeW,
+    Alias,
+    Copy,
     Crosshair,
     ZoomIn,
     ZoomOut,
@@ -283,6 +376,12 @@ pub(crate) fn mac_cursor(cursor: Cursor) -> MacCursor {
         Cursor::ResizeNs => MacCursor::ResizeNs,
         Cursor::ResizeNwse => MacCursor::ResizeNwse,
         Cursor::ResizeNesw => MacCursor::ResizeNesw,
+        Cursor::ResizeN => MacCursor::ResizeN,
+        Cursor::ResizeE => MacCursor::ResizeE,
+        Cursor::ResizeS => MacCursor::ResizeS,
+        Cursor::ResizeW => MacCursor::ResizeW,
+        Cursor::Alias => MacCursor::Alias,
+        Cursor::Copy => MacCursor::Copy,
         Cursor::Crosshair => MacCursor::Crosshair,
         Cursor::ZoomIn => MacCursor::ZoomIn,
         Cursor::ZoomOut => MacCursor::ZoomOut,

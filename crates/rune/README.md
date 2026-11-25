@@ -220,8 +220,9 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
   presses, hovers, cursors, scrolls, drops and tooltips go to whatever is under it, nothing inside
   takes focus, and `ElementInfo::inert` reports it (a document drawn under an editor's canvas).
 - **Cursors**: `.cursor(Cursor::Pointer)` and the other system shapes (including
-  `ResizeColumn`, `ResizeRow`, bidirectional `ResizeEw` / `ResizeNs`, and diagonal
-  `ResizeNwse` / `ResizeNesw`); children inherit their nearest ancestor's. Set
+  `ResizeColumn`, `ResizeRow`, bidirectional `ResizeEw` / `ResizeNs`, diagonal
+  `ResizeNwse` / `ResizeNesw`, one-way `ResizeN` / `ResizeE` / `ResizeS` / `ResizeW`,
+  `Alias`, and `Copy`); children inherit their nearest ancestor's. Set
   `cx.press_cursor(Cursor::Pointer)` on `Cx` for a view-wide opt-in default cursor over pressable
   elements (`on_press` / `on_double_press`) that set no cursor of their own; it wins over
   inherited ancestor cursors while explicit `.cursor(..)`, `disabled`/`aria_disabled` controls
