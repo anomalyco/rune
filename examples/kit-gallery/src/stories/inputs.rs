@@ -605,7 +605,13 @@ pub(super) fn select_with_field(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
             .label("Fruit")
             .info()
             .prefix("Optional helper")
-            .control(fruit_select(s, "select").build(k, layer))
+            .control(
+                fruit_select(s, "select")
+                    .appearance(SelectAppearance::Field)
+                    .fill()
+                    .menu_width(280.0)
+                    .build(k, layer),
+            )
             .suffix("After selection")
             .build(k),
     )
