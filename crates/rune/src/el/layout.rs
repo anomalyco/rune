@@ -515,6 +515,9 @@ impl El {
         self.style.set_justify_content(JustifyContent::SPACE_EVENLY);
         self
     }
+    /// Minimum width in points. Preserved by [`El::shrink`] and the single-line truncation
+    /// builders in either call order; pass `.min_w(0.0)` after an earlier explicit minimum to
+    /// override it down to zero.
     #[inline]
     pub fn min_w(mut self, w: f32) -> Self {
         self.set_min_w(w);
@@ -644,17 +647,39 @@ impl El {
         self.style.set_pad_right(p);
         self
     }
-    /// Allow shrinking below content size along the parent's main axis.
+    /// Sets `flex-shrink: 1` and lowers an automatic `min-width` to `0`, preserving any explicit
+    /// [`El::min_w`] regardless of call order and leaving `min-height` untouched (nested vertical
+    /// flex columns still need explicit [`El::min_h`]`(0.0)`). To override an earlier explicit
+    /// minimum down to zero, call `.min_w(0.0)` after.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el, row};
+    ///
+    /// let mut rt = Runtime::new(
+    ///     (),
+    ///     |_: &(), _| row().w(100.0)
+    ///         .child(el().key("a").w(300.0).min_w(160.0).shrink())
+    ///         .child(el().key("b").w(300.0).shrink().min_w(160.0)),
+    ///     (100.0, 100.0),
+    ///     Env::new(true, 1.0),
+    /// );
+    /// rt.frame(0.0);
+    /// assert_eq!(rt.presented("a").unwrap().0[2], 160.0);
+    /// assert_eq!(rt.presented("b").unwrap().0[2], 160.0);
+    /// ```
     #[inline]
     pub fn shrink(mut self) -> Self {
         self.set_shrink();
         self
     }
-    /// [`El::shrink`] in place.
+    /// [`El::shrink`] in place: sets `flex-shrink: 1` and lowers an automatic `min-width` to `0`
+    /// while preserving any explicit [`El::min_w`] and leaving `min-height` untouched.
     #[inline]
     pub fn set_shrink(&mut self) -> &mut Self {
         self.style.set_flex_shrink(1.0);
-        self.style.set_min_width(length(0.0));
+        if self.style.min_size().width.is_auto() {
+            self.style.set_min_width(length(0.0));
+        }
         self
     }
     /// Lay children out in `n` equal columns, each as wide as the widest child needs (CSS

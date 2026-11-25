@@ -505,3 +505,34 @@ return {
     }
     assert!(!shows(&rt, "n"), "exit = none still goes at once");
 }
+
+#[test]
+fn shrink_and_truncate_preserve_explicit_min_w_regardless_of_prop_order() {
+    let src = r#"
+local ui = require("@rune/ui")
+local LONG = "A very long single-line label that exceeds three hundred points when laid out at default size"
+local BASE = table.freeze({ w = 300, minW = 160, shrink = true })
+return {
+    render = function()
+        return ui.col({ w = 400, h = 400 }, {
+            ui.row({ w = 100 }, { ui.box({ key = "shrink_min", w = 300, h = 20, minW = 160, shrink = true }) }),
+            ui.row({ w = 200 }, { ui.box({ key = "shrink_mid", w = 300, h = 20, minW = 160, shrink = true }) }),
+            ui.row({ w = 100 }, { ui.box({ key = "shrink_auto", w = 300, h = 20, shrink = true }) }),
+            ui.row({ w = 100 }, { ui.box(BASE, { key = "shrink_zero", h = 20, minW = 0 }) }),
+            ui.row({ w = 100 }, { ui.text(LONG, { key = "trunc_min", minW = 160, truncate = true }) }),
+            ui.row({ w = 100 }, { ui.text(LONG, { key = "fade_min", minW = 160, fadeOut = true }) }),
+            ui.row({ w = 100 }, { ui.text(LONG, { key = "trunc_auto", truncate = true }) }),
+        })
+    end,
+}
+"#;
+    let (rt, logged) = render_runtime(src, (400.0, 400.0));
+    assert!(logged.borrow().is_empty(), "unexpected logs: {:?}", logged.borrow());
+    assert_eq!(rect_of(&rt, "shrink_min")[2], 160.0, "minW=160 + shrink=true stops at 160");
+    assert_eq!(rect_of(&rt, "shrink_mid")[2], 200.0, "minW=160 + shrink=true shrinks from 300 to 200");
+    assert_eq!(rect_of(&rt, "shrink_auto")[2], 100.0, "shrink=true without minW shrinks to 100");
+    assert_eq!(rect_of(&rt, "shrink_zero")[2], 100.0, "later minW=0 overrides BASE minW=160");
+    assert_eq!(rect_of(&rt, "trunc_min")[2], 160.0, "minW=160 + truncate=true stops at 160");
+    assert_eq!(rect_of(&rt, "fade_min")[2], 160.0, "minW=160 + fadeOut=true stops at 160");
+    assert_eq!(rect_of(&rt, "trunc_auto")[2], 100.0, "truncate=true without minW shrinks to 100");
+}
