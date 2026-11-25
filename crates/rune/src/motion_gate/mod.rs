@@ -4,7 +4,10 @@
 //!
 //! An app lists cells, one scenario in one circumstance each, and runs them in a test:
 //!
-//! ```ignore
+//! ```no_run
+//! # use rune::{Cx, El, Env, Runtime, el};
+//! # #[derive(Default)] struct State;
+//! # fn view(_: &State, _: &mut Cx<State>) -> El { el().key("add").size(40.0, 40.0) }
 //! use rune::motion_gate::{self, AllowRow, Job, Run};
 //!
 //! const ALLOW: &[AllowRow] = &[
@@ -20,10 +23,10 @@
 //!     r.rec
 //! }
 //!
-//! #[test]
 //! fn motion_gate() {
 //!     motion_gate::gate_rows(vec![("add-row/wide".into(), Box::new(add_row) as Job)], ALLOW);
 //! }
+//! # motion_gate();
 //! ```
 //!
 //! [`gate`] reads its settings from the environment, which `scripts/motion-audit/gate` sets:

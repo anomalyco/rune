@@ -85,11 +85,15 @@ impl El {
     /// marker beside a scrolling row, by its own [`El::live_offset`]) says [`Tx::live_only`],
     /// and a scroll runs no view.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Live, el};
+    /// # struct Board { marker_y: Live<f32> }
+    /// # let _ = el()
     /// .on_layout_tx(|s: &mut Board, [_, y, _, _], tx| {
     ///     s.marker_y.set(y);
     ///     tx.live_only();
     /// })
+    /// # ;
     /// ```
     #[track_caller]
     pub fn on_layout_tx<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4], &mut Tx) + 'static) -> Self {
@@ -163,11 +167,17 @@ impl El {
     /// [`El::live_offset`] follows a camera pan with no view re-run at all: the handler sets
     /// the toolbar's live offset and says [`Tx::live_only`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Live, el};
+    /// # const TOOLBAR_W: f32 = 120.0;
+    /// # const TOOLBAR_H: f32 = 32.0;
+    /// # struct Canvas { toolbar_at: Live<[f32; 2]> }
+    /// # let _ = el()
     /// .on_drawn_layout_tx(|s: &mut Canvas, [x, y, w, _], tx| {
     ///     s.toolbar_at.set([x + w / 2.0 - TOOLBAR_W / 2.0, y - TOOLBAR_H - 8.0]);
     ///     tx.live_only();
     /// })
+    /// # ;
     /// ```
     #[track_caller]
     pub fn on_drawn_layout_tx<S: 'static>(mut self, f: impl Fn(&mut S, [f32; 4], &mut Tx) + 'static) -> Self {
@@ -244,11 +254,16 @@ impl El {
     /// is known once the frame is drawn; to ride a scroll in the same frame, follow the offset
     /// with [`El::on_scroll_offset`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Color, Live, el};
+    /// # let row = el();
+    /// # let accent = Color::WHITE;
     /// let ring = Live::new([0.0; 4]);
-    /// row.drawn_rect_into(&ring);
+    /// let row = row.drawn_rect_into(&ring);
     /// // at the root, outside the scroll:
+    /// # let _ = (row,
     /// el().pin(Some(0.0), Some(0.0), None, None).live_rect(&ring).border(1.0, accent)
+    /// # );
     /// ```
     pub fn drawn_rect_into(mut self, rect: &crate::Live<[f32; 4]>) -> Self {
         self.handlers.drawn_rect = Some(rect.clone());
@@ -261,10 +276,13 @@ impl El {
     /// shrinks as the page scrolls, or a shadow that fades in past the top. It can't change
     /// state; set live values from it.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Live, ScrollPos, ScrollSpec, col};
     /// let title_k = Live::new(1.0);
     /// let k = title_k.clone();
-    /// col().scroll(ScrollSpec::default()).on_scroll_offset(move |at: ScrollPos| k.set(1.0 - (at.offset[1] / 80.0).clamp(0.0, 1.0) * 0.4))
+    /// # let _ =
+    /// col().scroll(ScrollSpec::default()).on_scroll_offset(move |at: ScrollPos| { k.set(1.0 - (at.offset[1] / 80.0).clamp(0.0, 1.0) * 0.4); })
+    /// # ;
     /// ```
     pub fn on_scroll_offset(mut self, f: impl Fn(ScrollPos) + 'static) -> Self {
         self.handlers.on_scroll_offset = Some(Rc::new(f));

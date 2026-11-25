@@ -154,9 +154,14 @@ pub enum ScriptEvent {
     OpenUrl(String),
     /// `{"open_files": […]}`: files the system opened with the app (`App::on_open_files`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::path::PathBuf;
+    /// # use rune::tooling::ScriptEvent;
+    /// # let event = ScriptEvent::OpenFiles(vec![PathBuf::from("a.torrent"), PathBuf::from("b.torrent")]);
+    /// # assert!(
     /// // JSON script event: {"t": 0.1, "open_files": ["a.torrent", "b.torrent"]}
     /// matches!(event, ScriptEvent::OpenFiles(ref paths) if paths.len() == 2)
+    /// # );
     /// ```
     OpenFiles(Vec<std::path::PathBuf>),
     /// `{"type": "resize", "dw": …, "dh": …, "dur": …}`: a person resizing the window, one step

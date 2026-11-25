@@ -365,13 +365,17 @@ impl Tx {
     /// dismissed or this platform has no native menu ([`popup_menu_supported`]). Exactly one
     /// call per request. A menu asked for while another is open opens after it closes.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{PopupMenu, Tx, el};
+    /// # struct Settings { theme: String }
+    /// # let _ = el()
     /// .on_press_tx(|_: &mut Settings, tx: &mut Tx| {
     ///     let menu = PopupMenu::picker([("system", "System"), ("light", "Light"), ("dark", "Dark")], "system");
     ///     tx.popup_menu(menu, "theme-button", |s: &mut Settings, picked, _| {
     ///         if let Some(id) = picked { s.theme = id.into(); }
     ///     });
     /// })
+    /// # ;
     /// ```
     pub fn popup_menu<S: 'static>(
         &mut self,

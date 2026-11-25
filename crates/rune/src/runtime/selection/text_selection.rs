@@ -34,13 +34,16 @@ impl TextSelection {
     /// UTF-8 text, so [`texts`](Self::texts) and [`text`](Self::text) hold only the prefix
     /// collected before stopping. Always `false` when every selected text is mounted.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::col;
+    /// # let _ =
     /// col().selection_group(true).selection_copy(|sel| {
     ///     if sel.truncated() {
     ///         return Some(format!("{}\n[selection truncated]", sel.text()));
     ///     }
     ///     None
     /// })
+    /// # ;
     /// ```
     pub fn truncated(&self) -> bool { self.truncated }
 }

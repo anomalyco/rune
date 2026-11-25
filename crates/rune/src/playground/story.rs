@@ -7,12 +7,22 @@ use super::*;
 /// animations included, until the playground closes. R makes it again. Handlers built for `P`
 /// change it.
 ///
-/// ```ignore
+/// ```
+/// # use rune::{Cx, El, Story, Tx, el};
+/// # struct Upload { done: bool }
+/// # impl Upload {
+/// #     fn new() -> Self { Self { done: false } }
+/// #     fn tick(&mut self, _: f64, _: &mut Tx) -> bool { false }
+/// # }
+/// # fn upload_view(_: &Upload, _: &mut Cx<Upload>) -> El { el() }
+/// # fn upload_knobs(_: &Upload, _: &mut Cx<Upload>) -> El { el() }
+/// # let _ =
 /// Story::new("Progress/Upload", Upload::new, upload_view)
 ///     .poll(Upload::tick)
 ///     .trigger('r', "Run", |u, play| play.after(0.5, |u, _| u.done = true))
 ///     .trigger('f', "Finish", |u, _| u.done = true)
 ///     .side(upload_knobs)
+/// # ;
 /// ```
 pub struct Story<P: 'static> {
     pub(super) name: &'static str,
@@ -86,11 +96,27 @@ impl<P: 'static> Story<P> {
     /// doesn't. Keys it leaves do what they do anywhere in the side column: ↑ and ↓ move on to
     /// the controls below, and letters run triggers.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Cx, El, KeyEvent, Story, Tx, el};
+    /// # mod rune_knobs {
+    /// #     use rune::{El, KeyEvent, Tx, el};
+    /// #     #[derive(Default)] pub struct Knobs;
+    /// #     pub struct Group;
+    /// #     pub struct Style;
+    /// #     pub fn inline<S: 'static>(_: &Knobs, _: &'static [Group], _: Style, _: fn(&mut S) -> &mut Knobs, _: bool) -> El { el() }
+    /// #     pub fn side_key<S: 'static>(_: &'static [Group], _: fn(&mut S) -> &mut Knobs) -> impl Fn(&mut S, &KeyEvent, &mut Tx) -> bool + 'static {
+    /// #         |_, _, _| false
+    /// #     }
+    /// # }
+    /// # const GROUPS: &[rune_knobs::Group] = &[];
+    /// # fn style(_: &Cx<State>) -> rune_knobs::Style { rune_knobs::Style }
+    /// # #[derive(Default)] struct State { knobs: rune_knobs::Knobs }
+    /// # let _ = Story::new("Knobs", State::default, |_, _| el())
     /// .side_keys(
     ///     |s, active, cx| rune_knobs::inline(&s.knobs, GROUPS, style(cx), |s: &mut State| &mut s.knobs, active),
     ///     rune_knobs::side_key(GROUPS, |s: &mut State| &mut s.knobs),
     /// )
+    /// # ;
     /// ```
     pub fn side_keys(mut self, view: impl Fn(&P, bool, &mut Cx<P>) -> El + 'static, key: impl Fn(&mut P, &KeyEvent, &mut Tx) -> bool + 'static) -> Self {
         self.side = Some(Box::new(view));
@@ -102,8 +128,13 @@ impl<P: 'static> Story<P> {
     /// [`Stage::Scroll`] for a page taller than the stage, or [`Stage::Fill`] for a story the
     /// size of a window.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Cx, El, Stage, Story, el};
+    /// # #[derive(Default)] struct Settings;
+    /// # fn settings(_: &Settings, _: &mut Cx<Settings>) -> El { el() }
+    /// # let _ =
     /// Story::new("Settings/All", Settings::default, settings).stage(Stage::Scroll)
+    /// # ;
     /// ```
     pub fn stage(mut self, stage: Stage) -> Self {
         self.stage = stage;

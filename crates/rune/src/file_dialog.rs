@@ -362,7 +362,12 @@ impl Tx {
     /// up: it's a sheet on macOS, owned by the window on Windows, and the desktop portal's
     /// chooser on Linux.
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::path::PathBuf;
+    /// # use rune::{FileDialogOptions, Tx, el};
+    /// # struct App { error: Option<String> }
+    /// # impl App { fn import(&mut self, _: PathBuf) {} }
+    /// # let _ = el()
     /// .on_press_tx(|_: &mut App, tx: &mut Tx| {
     ///     let options = FileDialogOptions { title: "Import".into(), ..Default::default() }.filter("Export", &["json"]);
     ///     tx.open_file(options, |s: &mut App, result, _| match result {
@@ -371,6 +376,7 @@ impl Tx {
     ///         Err(e) => s.error = Some(e.to_string()),
     ///     });
     /// })
+    /// # ;
     /// ```
     pub fn open_file<S: 'static>(&mut self, options: FileDialogOptions, on_answer: impl FnOnce(&mut S, FileDialogResult, &mut Tx) + 'static) {
         self.file_dialog(FileDialogKind::Open, options, on_answer);

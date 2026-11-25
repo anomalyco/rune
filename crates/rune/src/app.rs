@@ -7,7 +7,12 @@
 //! (macOS, Windows, X11) and destroys it on Wayland, where a hidden toplevel doesn't exist;
 //! the GPU device and renderer stay either way.
 //!
-//! ```ignore
+//! ```no_run
+//! # use rune::{AppSpec, el};
+//! # struct State { snapshot: String }
+//! # enum Request { Activate(String), Snapshot(String), Quit }
+//! # fn requests() -> Vec<Request> { Vec::new() }
+//! # let spec = AppSpec::new("App", (640.0, 480.0), || State { snapshot: String::new() }, |_, _| el());
 //! let app = rune::App::new(spec).windowless().keep_running();
 //! let handle = app.handle();
 //! std::thread::spawn(move || {
@@ -516,8 +521,14 @@ impl<S: 'static> App<S> {
     /// session's worktree and branch while Alt is down. Return nothing: it can't take the key
     /// from anyone, and [`Tx::live_only`] says the view reads nothing that changed.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{AppSpec, el};
+    /// # struct App { alt_held: bool }
+    /// # let spec = AppSpec::new("App", (640.0, 480.0), || App { alt_held: false }, |_, _| el());
+    /// # let app = rune::App::new(spec);
+    /// # let _ =
     /// app.on_modifiers(|s: &mut App, mods, _| s.alt_held = mods.alt)
+    /// # ;
     /// ```
     pub fn on_modifiers(mut self, f: fn(&mut S, crate::Mods, &mut Tx)) -> Self {
         self.runtime.on_mods = Some(f);
