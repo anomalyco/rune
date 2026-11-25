@@ -426,6 +426,17 @@ impl Tx {
         self.wakes.push(duration);
     }
 
+    /// Ask for a poll on the next frame. `poll` runs at the start of a frame, before that
+    /// frame's handlers, so work a handler leaves in state for `poll` would otherwise wait
+    /// for the next input or wake. Call this from the handler that queued it. The same as
+    /// `wake_after(Duration::ZERO)`; it collapses into that frame's one poll.
+    #[cfg_attr(feature = "frame-profile", track_caller)]
+    pub fn request_poll(&mut self) {
+        #[cfg(feature = "frame-profile")]
+        crate::frame::live_log::waker(std::panic::Location::caller(), std::time::Duration::ZERO);
+        self.wakes.push(std::time::Duration::ZERO);
+    }
+
     /// The window's logical clock in seconds as this handler or poll runs: the `clock` `poll`
     /// gets, and the frame's for a handler. Headless runs step it virtually, so a state
     /// machine that stamps its timers with it (`rune::machine`) runs the same in a script.
