@@ -71,11 +71,14 @@ pub enum CpuFirst {
     ///
     /// On Windows and Linux, a frame that hits a GPU-only feature still triggers GPU handover so
     /// the frame can render; transparent windows and windows that already have a GPU keep using
-    /// the GPU. On full-window web pages, stays on the 2D CPU canvas without requesting WebGPU or
-    /// WebGL2.
+    /// the GPU (on Linux, a visible window whose GPU can't make its surface, such as with no
+    /// Vulkan driver installed, opens on the CPU renderer whatever the mode). On full-window web
+    /// pages, stays on the 2D CPU canvas without requesting WebGPU or WebGL2.
     Only,
     /// Skip CPU-first startup and open directly on the GPU (on web, skip the 2D CPU canvas underlay
-    /// and start directly on WebGPU/WebGL2).
+    /// and start directly on WebGPU/WebGL2). On Linux, a visible window whose GPU can't make its
+    /// surface (no Vulkan driver installed) still opens on the CPU renderer and tries the GPU
+    /// again in the background, rather than failing to open.
     Off,
 }
 

@@ -73,20 +73,31 @@ impl Retired {
 
 impl Frames {
     /// For `window`, whose frames are `size` device pixels at first. `alpha`: the frame's alpha
-    /// is composited, premultiplied (a Wayland client-side frame's corner arcs); otherwise it's
-    /// ignored. None when the display has no way to show CPU frames that is known to be exact
-    /// (no `wl_shm`; an X11 visual that isn't 24-bit true colour in B, G, R, X byte order): the
-    /// window then opens on the GPU, as it did.
+    /// is composited, premultiplied (a Wayland client-side frame's corner arcs, a transparent
+    /// window), where the display can (`Frames::alpha`); otherwise it's ignored. None when the
+    /// display has no way to show CPU frames that is known to be exact (no `wl_shm`; an X11
+    /// visual that isn't true colour in B, G, R, X byte order, 24-bit, or 32-bit with alpha for
+    /// an `alpha` window): the window then opens on the GPU, as it did.
     pub(crate) fn new(window: &Window, size: (u32, u32), alpha: bool) -> Option<Frames> {
         match (window.display_handle().ok()?.as_raw(), window.window_handle().ok()?.as_raw()) {
             (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(handle)) => {
                 wayland::Frames::new(display.display.as_ptr().cast(), handle.surface.as_ptr().cast(), size, alpha).map(Frames::Wayland)
             }
-            (_, RawWindowHandle::Xlib(handle)) if !alpha => {
-                x11::Frames::new(u32::try_from(handle.window).ok()?, u32::try_from(handle.visual_id).ok()?).map(Frames::X11)
+            (_, RawWindowHandle::Xlib(handle)) => {
+                x11::Frames::new(u32::try_from(handle.window).ok()?, u32::try_from(handle.visual_id).ok()?, alpha).map(Frames::X11)
             }
-            (_, RawWindowHandle::Xcb(handle)) if !alpha => x11::Frames::new(handle.window.get(), handle.visual_id?.get()).map(Frames::X11),
+            (_, RawWindowHandle::Xcb(handle)) => x11::Frames::new(handle.window.get(), handle.visual_id?.get(), alpha).map(Frames::X11),
             _ => None,
+        }
+    }
+
+    /// Whether the display composites the frames' alpha (premultiplied); otherwise it's ignored.
+    pub(crate) fn alpha(&self) -> bool {
+        match self {
+            Frames::Wayland(frames) => frames.alpha(),
+            Frames::X11(frames) => frames.alpha(),
+            #[cfg(test)]
+            Frames::Fake(_) => false,
         }
     }
 

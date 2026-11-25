@@ -101,6 +101,16 @@ pub(in crate::window) fn opens_on_cpu(host: &Host) -> bool {
 }
 
 impl Host {
+    /// The rest of `try_create` for a window no GPU could draw (`error`: no Vulkan driver is
+    /// installed, say) before any put a surface on it: it opens on the CPU, as an opaque window
+    /// without a GPU does, and its GPU is tried again in the background (`handover`). `Err` is
+    /// `error` when the display takes no CPU frames either.
+    pub(in crate::window) fn open_on_cpu_after(&mut self, event_loop: &ActiveEventLoop, window: Arc<Window>, a11y: Option<crate::a11y::Adapter>, built: bool, error: String) -> Result<(), String> {
+        if self.open_on_cpu(event_loop, window, a11y, built).is_err() { return Err(error); }
+        eprintln!("rune: no GPU could draw the window {}; it opens on the CPU renderer: {error}", self.native_handle.key());
+        Ok(())
+    }
+
     /// The rest of `try_create` for a window that opens on the CPU: no GPU, no surface. A
     /// Wayland window comes on screen with its first frame (it has no buffer, and so isn't
     /// shown, before). `Err` gives the window back when the display takes no CPU frames, for
@@ -108,9 +118,14 @@ impl Host {
     pub(in crate::window) fn open_on_cpu(&mut self, event_loop: &ActiveEventLoop, window: Arc<Window>, a11y: Option<crate::a11y::Adapter>, built: bool) -> Result<(), (Arc<Window>, Option<crate::a11y::Adapter>)> {
         let phys = window.inner_size();
         let size = drawable_size(None, (phys.width, phys.height), max_surface_dim(None));
-        // A client-side frame's window keeps its pixels' alpha for the frame's corner arcs.
-        let client_frame = self.client_frame(&window);
-        let Some(frames) = Frames::new(&window, size, client_frame) else { return Err((window, a11y)) };
+        // A client-side frame's window keeps its pixels' alpha for the frame's corner arcs, a
+        // transparent one for all of them (where the display composites a CPU frame's alpha).
+        let transparent = self.options.transparent;
+        let Some(frames) = Frames::new(&window, size, transparent || self.client_frame(&window)) else { return Err((window, a11y)) };
+        let alpha = frames.alpha();
+        if transparent && !alpha {
+            eprintln!("transparency unavailable for {}; using an opaque window", self.native_handle.key());
+        }
         crate::render::cpu_boot::attach_text(&mut self.app.rt_mut().text.atlas);
         let cpu = Cpu { frames, painter: CpuPainter::new(painter_threads()), half: HalfRounding::default(), radius: 0. };
         crate::marks::mark("cpu.side");
@@ -121,7 +136,7 @@ impl Host {
             height: size.1,
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: FRAME_LATENCY,
-            alpha_mode: if client_frame { wgpu::CompositeAlphaMode::PreMultiplied } else { wgpu::CompositeAlphaMode::Opaque },
+            alpha_mode: if alpha { wgpu::CompositeAlphaMode::PreMultiplied } else { wgpu::CompositeAlphaMode::Opaque },
             view_formats: vec![],
             color_space: Default::default(),
         };
@@ -130,6 +145,7 @@ impl Host {
             let rt = self.app.rt_mut();
             rt.set_system_dark(crate::platform::preferences::window_dark(&window, self.args.theme.as_deref()));
             rt.set_viewport((size.0 as f32 / scale, size.1 as f32 / scale), scale);
+            rt.transparent = transparent && alpha;
             // Reopening paints the settled state in the first frame (guarantee 8).
             if self.shown && !built { rt.settle_all(); }
         }

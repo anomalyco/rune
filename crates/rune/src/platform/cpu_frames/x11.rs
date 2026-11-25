@@ -1,7 +1,8 @@
 //! X11: CPU frames kept in one buffer and put to the window as an image (`PutImage`), on a
 //! connection of this window's own: the server takes the bytes as the frame's, with nothing to
-//! convert, only for a 24-bit true-colour visual whose pixels are B, G, R, X in memory, so only
-//! such a window gets frames here.
+//! convert, only for a true-colour visual whose pixels are B, G, R, X in memory, so only such a
+//! window gets frames here: a 24-bit one, or a 32-bit one (a transparent window's, whose fourth
+//! byte is the premultiplied alpha a compositor blends) for frames that keep their alpha.
 //!
 //! The server keeps nothing of a window that isn't on screen yet or was covered (no backing
 //! store), and says so with an Expose: this connection asks for the window's, and the frame that
@@ -9,7 +10,7 @@
 
 use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::Event;
-use x11rb::protocol::xproto::{ChangeWindowAttributesAux, ConnectionExt, CreateGCAux, EventMask, ImageFormat, ImageOrder, VisualClass};
+use x11rb::protocol::xproto::{ChangeWindowAttributesAux, ConnectionExt, CreateGCAux, EventMask, ImageFormat, ImageOrder, Setup, VisualClass};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
@@ -22,6 +23,8 @@ pub(crate) struct Frames {
     conn: RustConnection,
     window: u32,
     gc: u32,
+    /// The window's depth: 24, or 32 when its pixels carry alpha.
+    depth: u8,
     buffer: Vec<u8>,
     size: (u32, u32),
     /// The buffer holds the frame painted last.
@@ -32,22 +35,31 @@ pub(crate) struct Frames {
     most: usize,
 }
 
+/// The depth of a window with `visual` whose frames go out here as they are: 24, or 32 for
+/// `alpha` frames; None when the server would take the bytes as something else (not true colour
+/// in B, G, R, X byte order, or no 32-bit pixmap format for the depth).
+pub(super) fn frame_depth(setup: &Setup, visual: u32, alpha: bool) -> Option<u8> {
+    let depth = setup.roots.iter().flat_map(|root| &root.allowed_depths).filter(|d| d.depth == 24 || (alpha && d.depth == 32)).find_map(|d| {
+        d.visuals.iter().any(|v| {
+            v.visual_id == visual && v.class == VisualClass::TRUE_COLOR && (v.red_mask, v.green_mask, v.blue_mask) == (0xff0000, 0xff00, 0xff)
+        }).then_some(d.depth)
+    })?;
+    let exact = setup.image_byte_order == ImageOrder::LSB_FIRST
+        && setup.pixmap_formats.iter().any(|f| f.depth == depth && f.bits_per_pixel == 32);
+    exact.then_some(depth)
+}
+
 impl Frames {
-    pub(super) fn new(window: u32, visual: u32) -> Option<Frames> {
+    /// `alpha`: a 32-bit visual is taken too, its frames' alpha composited.
+    pub(super) fn new(window: u32, visual: u32, alpha: bool) -> Option<Frames> {
         let (conn, _) = x11rb::connect(None).ok()?;
-        let setup = conn.setup();
-        let exact = setup.image_byte_order == ImageOrder::LSB_FIRST
-            && setup.pixmap_formats.iter().any(|f| f.depth == 24 && f.bits_per_pixel == 32)
-            && setup.roots.iter().flat_map(|root| &root.allowed_depths).filter(|d| d.depth == 24).flat_map(|d| &d.visuals).any(|v| {
-                v.visual_id == visual && v.class == VisualClass::TRUE_COLOR && (v.red_mask, v.green_mask, v.blue_mask) == (0xff0000, 0xff00, 0xff)
-            });
-        if !exact { return None; }
+        let depth = frame_depth(conn.setup(), visual, alpha)?;
         let gc = conn.generate_id().ok()?;
         conn.create_gc(gc, window, &CreateGCAux::new().graphics_exposures(0)).ok()?;
         conn.change_window_attributes(window, &ChangeWindowAttributesAux::new().event_mask(EventMask::EXPOSURE)).ok()?;
         // Asks the server once how long a request may be.
         let most = conn.maximum_request_bytes().saturating_sub(HEADER);
-        Some(Frames { conn, window, gc, buffer: Vec::new(), size: (0, 0), painted: false, exposed: false, most })
+        Some(Frames { conn, window, gc, depth, buffer: Vec::new(), size: (0, 0), painted: false, exposed: false, most })
     }
 
     pub(super) fn begin(&mut self, size: (u32, u32)) -> Option<Canvas<'_>> {
@@ -82,12 +94,14 @@ impl Frames {
                 }
                 &strip[..]
             };
-            if self.conn.put_image(ImageFormat::Z_PIXMAP, self.window, self.gc, (x1 - x0) as u16, rows as u16, x0 as i16, y as i16, 0, 24, image).is_err() { return false; }
+            if self.conn.put_image(ImageFormat::Z_PIXMAP, self.window, self.gc, (x1 - x0) as u16, rows as u16, x0 as i16, y as i16, 0, self.depth, image).is_err() { return false; }
             y += rows;
         }
         if matches!(put, Put::All) { self.exposed = false; }
         self.conn.flush().is_ok()
     }
+
+    pub(super) fn alpha(&self) -> bool { self.depth == 32 }
 
     pub(super) fn exposed(&mut self, wait: bool) -> bool {
         if wait { self.conn.sync().ok(); }
@@ -110,3 +124,7 @@ impl Drop for Frames {
         self.conn.flush().ok();
     }
 }
+
+#[cfg(test)]
+#[path = "x11_tests.rs"]
+mod tests;

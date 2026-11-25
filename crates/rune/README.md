@@ -1059,7 +1059,13 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   Windows). `RUNE_CPU_FIRST` (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the
   builder without a rebuild (`0` or `off` for `Off`, `only` for `Only`, `auto` for `Auto`; unset,
   empty, or unrecognized values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored
-  on macOS, iOS, headless runs, transparent windows, and inline/document web pages.
+  on macOS, iOS, headless runs, transparent windows, and inline/document web pages. On Linux, under
+  every mode including `Off`, a visible window whose GPU setup fails before any GPU surface was
+  made on it (no Vulkan driver installed: `Failed to create surface for any enabled backend`)
+  opens on `CpuPainter` instead of failing to open, transparent windows included, and tries the GPU
+  again in the background as a CPU-first window does. A transparent window's CPU frames keep their
+  premultiplied alpha (`wl_shm` `Argb8888` on Wayland, a 32-bit ARGB visual on X11); an X11 window
+  without a 32-bit visual draws opaque. Hidden windows still return the GPU error.
 - **GPU memory policy (`GpuMemoryPolicy`).** By default Rune creates wgpu devices with
   `GpuMemoryPolicy::MemoryUsage` (smaller suballocation blocks than wgpu's `Performance` default).
   Apps can choose `MemoryUsage`, `Performance`, or `Manual { block_size }` at startup via

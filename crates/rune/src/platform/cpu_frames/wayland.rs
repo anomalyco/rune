@@ -177,6 +177,8 @@ impl Frames {
         Some(frames)
     }
 
+    pub(super) fn alpha(&self) -> bool { self.format == wl_shm::Format::Argb8888 }
+
     fn new_pool(&mut self, size: (u32, u32)) -> Option<Pool> {
         let (width, height) = (size.0.max(1), size.1.max(1));
         let stride = width as usize * 4;

@@ -25,6 +25,7 @@ pub(in crate::window) mod app;
 pub(in crate::window) mod create;
 pub(in crate::window) mod draw;
 pub(in crate::window) mod events;
+mod gpu_pick;
 pub(in crate::window) mod lifecycle;
 mod render;
 pub(in crate::window) mod shell_requests;

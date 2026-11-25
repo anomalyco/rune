@@ -41,7 +41,8 @@ use crate::window::surface::Win;
 use crate::window::warm_frame::{warm_frame, warm_instances};
 
 /// Where a window's frames go. Windows that need the GPU from their first frame (a translucent
-/// window, a second window) are `Gpu` from the start.
+/// window, a second window) are `Gpu` from the start, unless no GPU can make their surface (no
+/// Vulkan driver installed): then they are `Cpu` too (`Host::open_on_cpu_after`).
 #[derive(Default)]
 pub(in crate::window) enum SurfaceMode {
     #[default]
