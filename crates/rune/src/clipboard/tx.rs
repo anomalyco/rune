@@ -26,10 +26,14 @@ impl Tx {
     /// the image, else the HTML beside the text, else the text. The web writes text, HTML and
     /// the image. Forms a platform can't hold are skipped silently.
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::path::PathBuf;
+    /// # use rune::{ClipboardContent, ClipboardImage, Tx};
+    /// # fn _copy(tx: &mut Tx, image: ClipboardImage, path: PathBuf) {
     /// tx.copy_rich(ClipboardContent::new("Ship it").with_html("<b>Ship</b> it"));
     /// tx.copy_rich(ClipboardContent::default().with_image(image));
     /// tx.copy_rich(ClipboardContent::default().with_files([path]));
+    /// # }
     /// ```
     pub fn copy_rich(&mut self, content: crate::ClipboardContent) {
         self.copy = Some(crate::ClipboardWrite::new(content));
@@ -58,8 +62,12 @@ impl Tx {
     /// nothing readable. HTML is sanitised, and on macOS made from RTF when that's all there
     /// is. Nothing is pasted anywhere. The web asks the browser, which may prompt or refuse.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::Tx;
+    /// # struct Composer { preview: Option<String> }
+    /// # fn _read(tx: &mut Tx) {
     /// tx.read_clipboard(|s: &mut Composer, content, _| s.preview = content.html().map(Into::into));
+    /// # }
     /// ```
     pub fn read_clipboard<S: 'static>(&mut self, f: impl FnOnce(&mut S, &crate::ClipboardContent, &mut Tx) + 'static) {
         let f: ReadFn = Box::new(move |s, content, tx| {

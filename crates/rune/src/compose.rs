@@ -14,7 +14,15 @@ use crate::runtime::Runtime;
 /// resources per `EffectSite::mark`, read the slot's `EffectSite::data`, and drop a mark's
 /// resources once a frame passes without it:
 ///
-/// ```ignore
+/// ```
+/// # use std::collections::{HashMap, HashSet};
+/// # use rune::{Compositor, Frame, render::EffectSite};
+/// # struct App;
+/// # struct Wave;
+/// # impl Wave {
+/// #     fn new(_: &wgpu::Device) -> Self { Self }
+/// #     fn draw(&mut self, _: &wgpu::Device, _: &wgpu::Queue, _: &mut wgpu::RenderPass<'_>, _: &EffectSite<'_>, _: [f32; 4]) {}
+/// # }
 /// struct Hud { waves: HashMap<u32, Wave>, seen: HashSet<u32> }
 ///
 /// impl Compositor<App> for Hud {

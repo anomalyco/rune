@@ -327,8 +327,15 @@ impl El {
     /// The leading icon for each [`Mark::Pill`](crate::Mark::Pill) chip in a [`text_input`],
     /// by the pill's id (`None`: no icon). The icon takes the label's colour.
     ///
-    /// ```ignore
-    /// text_input(s.draft.clone(), body).pill_icon(|id| id.starts_with("file:").then_some(&FILE))
+    /// ```
+    /// # use rune::{Icon, TextEdit, TextStyle, text_input};
+    /// # const FILE: Icon = Icon { name: "file", view: 16.0, body: "" };
+    /// # struct App { draft: TextEdit }
+    /// # let s = App { draft: TextEdit::default() };
+    /// # let body = TextStyle::new(14.0, 400.0);
+    /// # let _ =
+    /// text_input(&s.draft, body).pill_icon(|id| id.starts_with("file:").then_some(&FILE))
+    /// # ;
     /// ```
     ///
     /// The closure may capture state; it runs each time the field is built, so a pill follows
@@ -374,11 +381,20 @@ impl El {
     /// The closure may capture app state; it runs each time the field is built, and what it
     /// returns is drawn, so a cached subtree restyles when that state changes.
     ///
-    /// ```ignore
-    /// text_input(s.draft.clone(), body).pill_style({
+    /// ```
+    /// # use std::collections::HashSet;
+    /// # use rune::{Color, Icon, PillStyle, TextEdit, TextStyle, text_input};
+    /// # const PURPLE: Color = Color::WHITE;
+    /// # const BOT: Icon = Icon { name: "bot", view: 16.0, body: "" };
+    /// # struct App { draft: TextEdit, agents: HashSet<String> }
+    /// # let s = App { draft: TextEdit::default(), agents: HashSet::new() };
+    /// # let body = TextStyle::new(14.0, 400.0);
+    /// # let _ =
+    /// text_input(&s.draft, body).pill_style({
     ///     let agents = s.agents.clone();
     ///     move |id| if agents.contains(id) { PillStyle::default().bg(PURPLE).icon(&BOT) } else { PillStyle::default() }
     /// })
+    /// # ;
     /// ```
     pub fn pill_style(mut self, style: impl Fn(&str) -> PillStyle + 'static) -> Self {
         if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
@@ -917,9 +933,13 @@ impl El {
     /// UTF-8 text and sets [`TextSelection::truncated`]. The nearest such element around both ends
     /// of the selection answers. Kit's `Markdown::copy_source` is one.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::col;
+    /// # let note = String::from("# Note");
+    /// # let _ =
     /// col().selection_group(true)
     ///     .selection_copy(move |sel| sel.texts().iter().all(|t| t.is_whole()).then(|| note.clone()))
+    /// # ;
     /// ```
     ///
     /// [`TextSelection::text`]: crate::TextSelection::text
@@ -938,10 +958,14 @@ impl El {
     /// press making it releases ([`dragging`](crate::SelectionChange::dragging)). A press leaving
     /// only a caret isn't heard. Call [`Tx::live_only`] when the view reads nothing that changed.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::col;
+    /// # struct Notes { whole_note_highlight: bool }
+    /// # let _ =
     /// col().selection_group(true).on_selection_change(|s: &mut Notes, change, _| {
     ///     if change.started() { s.whole_note_highlight = false; }
     /// })
+    /// # ;
     /// ```
     ///
     /// [`SelectionChange`]: crate::SelectionChange
@@ -974,8 +998,12 @@ impl El {
     /// one: the larger of the two texts' asks, one by default. Two leaves a blank line, as a web
     /// page's paragraphs copy. Texts side by side still take a tab.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::text;
+    /// # let para = "first para";
+    /// # let _ =
     /// text(para).selectable(true).copy_breaks(2, 2) // "first para\n\nsecond para"
+    /// # ;
     /// ```
     pub fn copy_breaks(mut self, before: u8, after: u8) -> Self {
         if let Some(t) = &mut self.text { t.cold.copy_breaks = [before, after]; }

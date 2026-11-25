@@ -128,9 +128,14 @@ impl Cursor {
 /// 32×32 pt cursor, and its hot spot (the point that clicks) in points from the top-left,
 /// clamped into the image.
 ///
-/// ```ignore
-/// const PENCIL: CursorImage = CursorImage::png(include_bytes!("pencil.png"), [2.0, 30.0]);
+/// ```
+/// # use rune::{Cursor, CursorImage, el};
+/// # const PENCIL_PNG: &[u8] = &[];
+/// # let canvas = el();
+/// const PENCIL: CursorImage = CursorImage::png(PENCIL_PNG, [2.0, 30.0]); // e.g. include_bytes!("pencil.png")
+/// # let _ =
 /// canvas.cursor(Cursor::Image(PENCIL))
+/// # ;
 /// ```
 ///
 /// Two images are the same cursor when they have the same bytes and hot spot. Comparing one

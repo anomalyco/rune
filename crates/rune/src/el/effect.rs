@@ -29,9 +29,15 @@ impl El {
     /// carries [`Self::effect_data`]. Give each slot that can be on screen at once its own mark,
     /// such as one per page, so an outgoing slot and its replacement keep separate resources:
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Transition, effect};
+    /// # const HUD_BASE: u32 = 100;
+    /// # struct Page { id: u32, wave_id: u32, phase: f32 }
+    /// # let page = Page { id: 1, wave_id: 2, phase: 0.5 };
+    /// # let _ =
     /// effect(HUD_BASE + page.id).effect_data([page.wave_id as f32, page.phase, 0.0, 0.0])
-    ///     .key(page.id).transition(Transition::opacity())
+    ///     .key(page.id.to_string()).transition(Transition::opacity())
+    /// # ;
     /// ```
     ///
     /// The slot is where the element is presented: `El::scale`, `El::offset`, `live_scale`,

@@ -325,10 +325,15 @@ impl El {
     /// [`Drag`] gives them, so a canvas finds what was right-clicked at any zoom. Open the menu
     /// at [`PointerEvent::window`].
     ///
-    /// ```ignore
-    /// .on_secondary_press_local(|s: &mut Canvas, p, tx| {
+    /// ```
+    /// # use rune::{PointerPress, el};
+    /// # struct Canvas { menu: Option<(usize, PointerPress)> }
+    /// # impl Canvas { fn shape_at(&self, _: f32, _: f32) -> usize { 0 } }
+    /// # let _ = el()
+    /// .on_secondary_press_local(|s: &mut Canvas, p, _tx| {
     ///     s.menu = Some((s.shape_at(p.x, p.y), p.window()));
     /// })
+    /// # ;
     /// ```
     pub fn on_secondary_press_local<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {
         self.handlers.on_secondary_press = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));

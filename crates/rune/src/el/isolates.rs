@@ -20,8 +20,14 @@ impl El {
     /// ([`El::pill`]) is an `Auto` isolate unless one is set over it. On a field this does
     /// nothing: a field isolates its own pills.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Direction, Span, rich};
+    /// # let text = "run npm install now";
+    /// # let spans: Vec<Span> = Vec::new();
+    /// # let code = 4..15;
+    /// # let _ =
     /// rich(text, spans).isolate(code.clone(), Direction::Ltr)
+    /// # ;
     /// ```
     pub fn isolate(mut self, range: Range<usize>, dir: Direction) -> Self {
         if self.cold.input.is_some() {

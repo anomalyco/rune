@@ -102,13 +102,17 @@ impl Tx {
     /// tells that move from the hand's. Ask again from the repeat, with the repeat interval, to
     /// keep going; releasing or cancelling the press ends it.
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::time::Duration;
+    /// # use rune::{Phase, el};
+    /// # let _ = el()
     /// .on_drag_any(|d, tx| {
     ///     if d.phase == Phase::Down || tx.drag_repeat() {
     ///         tx.scroll_page("list", 1);
     ///         tx.drag_repeat_after(Duration::from_millis(if tx.drag_repeat() { 60 } else { 300 }));
     ///     }
     /// })
+    /// # ;
     /// ```
     pub fn drag_repeat_after(&mut self, delay: Duration) { self.drag_repeat_after = Some(delay); }
 

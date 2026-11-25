@@ -25,10 +25,14 @@ impl El {
     /// list in one scroll). It windows against the nearest viewport around it. Layout panics
     /// with the element's path otherwise.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, GrowthSpec, ScrollSpec, col};
+    /// # let rows: Vec<El> = Vec::new();
+    /// # let _ =
     /// col().scroll(ScrollSpec { stick_bottom: false }).grow(1.0).child(
     ///     col().key("rows").growth(GrowthSpec::default()).virtualize(32.0).children(rows),
     /// )
+    /// # ;
     /// ```
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn virtualize(mut self, estimated_row_height: f32) -> Self {
@@ -72,7 +76,14 @@ impl El {
     /// rows are inserted or removed above it, so a handler holding `i` would act on whatever
     /// item moved into that slot.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, GrowthSpec, ScrollSpec, col, el, memo};
+    /// # struct Message { id: String, revision: u64 }
+    /// # struct App { messages: Vec<Message> }
+    /// # impl App { fn open(&mut self, _: &str) {} }
+    /// # fn message(_: &Message) -> El { el() }
+    /// # let s = App { messages: Vec::new() };
+    /// # let _ =
     /// col().scroll(ScrollSpec { stick_bottom: true }).grow(1.0).child(
     ///     col().key("rows").growth(GrowthSpec::default()).virtual_rows(s.messages.len(), 72.0,
     ///         |s: &App, i| s.messages[i].id.as_str().into(),
@@ -82,6 +93,7 @@ impl El {
     ///             memo(&m.id, m.revision, || message(m).on_press(move |s: &mut App| s.open(&id)))
     ///         }),
     /// )
+    /// # ;
     /// ```
     #[cfg_attr(debug_assertions, track_caller)]
     pub fn virtual_rows<S: 'static>(

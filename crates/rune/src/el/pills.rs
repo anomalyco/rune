@@ -16,8 +16,12 @@ impl El {
     /// boundaries; empty, out-of-range or overlapping ones are skipped. On a field this does
     /// nothing: style its pills with [`El::pill_style`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Color, PillStyle, text};
+    /// # let (chip, ink) = (Color::WHITE, Color::BLACK);
+    /// # let _ =
     /// text("ask @reviewer to look").pill(4..13, PillStyle::new().bg(chip).fg(ink))
+    /// # ;
     /// ```
     pub fn pill(self, range: Range<usize>, style: PillStyle) -> Self {
         self.pills([(range, style)])
@@ -108,8 +112,13 @@ impl El {
     /// element's; an image (a site's favicon) draws as it is. Selection and copy skip it. With no
     /// word after `at`, or over a pill, it draws nothing.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Icon, InlineIcon, Span, rich};
+    /// # const GLOBE: Icon = Icon { name: "globe", view: 16.0, body: "" };
+    /// # let spans: Vec<Span> = Vec::new();
+    /// # let _ =
     /// rich("see the docs", spans).inline_icon(8, InlineIcon::glyph(&GLOBE).size(14.0).gap(4.0))
+    /// # ;
     /// ```
     pub fn inline_icon(mut self, at: usize, icon: InlineIcon) -> Self {
         if self.cold.input.is_some() {
@@ -139,8 +148,12 @@ impl El {
     /// no newline; empty, out-of-range or overlapping ones are skipped. On a field this does
     /// nothing.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{InlineImage, Pixels, text};
+    /// # let pixels = Pixels::new();
+    /// # let _ =
     /// text("so $e^x$ grows").inline_image(3..8, InlineImage::new(pixels, 14.0, 9.0, 0.5))
+    /// # ;
     /// ```
     pub fn inline_image(mut self, range: Range<usize>, image: InlineImage) -> Self {
         if self.cold.input.is_some() {
