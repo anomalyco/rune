@@ -220,10 +220,12 @@ impl OverlayCore {
         let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
         let srgb_blend = app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
+        let frame_latency = crate::window::frame_latency(self.frame_latency);
         let make_surface = |instance: &wgpu::Instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, existing: Option<Renderer>| -> Result<_, crate::render::SurfaceSetupError> {
             let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend)
                 .ok_or_else(|| crate::render::SurfaceSetupError::unsupported("the GPU adapter can't present to this overlay"))?;
+            config.desired_maximum_frame_latency = frame_latency;
             let info = gpu.adapter.get_info();
             match translucent {
                 Some(mode) => config.alpha_mode = mode,

@@ -581,6 +581,8 @@ pub(in crate::overlay) struct OverlayCore {
     position_owner: input::PositionOwner,
     /// The effect pipelines this overlay's renderer compiles ahead of their first use.
     prewarm_effects: crate::PrewarmEffects,
+    /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
+    frame_latency: Option<u32>,
     /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,
@@ -677,6 +679,7 @@ impl OverlayCore {
             refollow_away: None,
             position_owner: input::PositionOwner::Managed,
             prewarm_effects: crate::PrewarmEffects::NONE,
+            frame_latency: None,
             #[cfg(test)]
             layer_frame_pending: false,
             #[cfg(test)]

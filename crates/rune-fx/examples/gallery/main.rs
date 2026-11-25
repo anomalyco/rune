@@ -131,7 +131,8 @@ impl<'a> B<'a> {
         self.fx_with(l, FxSlot::default());
     }
     fn fx_with(&mut self, l: FxLayer, slot: FxSlot) {
-        let l = l.at(if l.time == 0.0 { self.t } else { l.time }).reduced(self.reduced);
+        let t = if l.time == 0.0 { self.t } else { l.time };
+        let l = l.at(t).reduced(self.reduced);
         self.ops.push(Op::Fx(self.layers.len()));
         self.layers.push(l);
         self.slots.push(slot);

@@ -179,6 +179,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) macos_level: Option<isize>,
     pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) window_backdrop: crate::WindowBackdrop,
+    pub(crate) frame_latency: Option<u32>,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
 }
@@ -384,6 +385,26 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.window_backdrop = backdrop;
         self
     }
+    /// How many frames this overlay's swap chain may hold that the compositor hasn't shown yet.
+    /// The default is two on macOS and Linux and one on Windows. Values are clamped to between
+    /// one and that default, so this can only lower it.
+    ///
+    /// On macOS each frame of latency costs one overlay-sized drawable (Metal keeps latency + 1).
+    /// For a 488x873 pt panel at 2x, that is about 7 MB. `frame_latency(1)` keeps two. An overlay
+    /// that animates rarely loses nothing. One that animates continuously can miss a frame when
+    /// one runs long, because there is no spare drawable to start the next one in.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, el};
+    ///
+    /// let _overlay = OverlaySpec::new("panel", (488.0, 873.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .frame_latency(1);
+    /// ```
+    pub fn frame_latency(mut self, latency: u32) -> Self {
+        self.frame_latency = Some(latency);
+        self
+    }
 }
 
 impl<T: 'static> OverlaySpec<T> {
@@ -396,7 +417,7 @@ impl<T: 'static> OverlaySpec<T> {
             spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
-            animate_reveal: false, release_after: None,
+            frame_latency: None, animate_reveal: false, release_after: None,
         }
     }
 }

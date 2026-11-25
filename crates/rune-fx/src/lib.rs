@@ -278,14 +278,16 @@ impl<T: Copy> OneShots<T> {
 
 // ---------------------------------------------------------------- Fx / layers
 
-#[derive(Clone, Copy, Debug)]
+/// Not `Copy`: motion blur's samples (`MotionSamples`, about 2 KiB) are boxed so every other
+/// effect, and every `FxLayer`, stays small.
+#[derive(Clone, Debug)]
 pub enum Fx {
     Glow(GlowParams),
     Pulse(PulseParams),
     Electric(ElectricParams),
     Fire(FireParams),
     Distort(DistortParams),
-    MotionBlur(MotionBlurParams, MotionSamples),
+    MotionBlur(MotionBlurParams, Box<MotionSamples>),
     Shimmer(ShimmerParams),
     Sparkles(SparkleParams),
     Aurora(AuroraParams),
@@ -310,7 +312,7 @@ pub struct Source {
 /// Default unclipped rectangle for [`FxSlot::clip`], matching `rune::render::NO_CLIP`.
 pub const NO_CLIP: [f32; 4] = [-1e6, -1e6, 1e6, 1e6];
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct FxLayer {
     pub fx: Fx,
     pub shape: Shape,
@@ -417,7 +419,7 @@ impl Fx {
     pub fn fire(p: FireParams) -> Fx { Fx::Fire(p) }
     pub fn distort(p: DistortParams) -> Fx { Fx::Distort(p) }
     pub fn lens(p: LensParams) -> Fx { Fx::Distort(DistortParams::Lens(p)) }
-    pub fn motion_blur(p: MotionBlurParams, s: MotionSamples) -> Fx { Fx::MotionBlur(p, s) }
+    pub fn motion_blur(p: MotionBlurParams, s: MotionSamples) -> Fx { Fx::MotionBlur(p, Box::new(s)) }
     pub fn shimmer(p: ShimmerParams) -> Fx { Fx::Shimmer(p) }
     pub fn sparkles(p: SparkleParams) -> Fx { Fx::Sparkles(p) }
     pub fn aurora(p: AuroraParams) -> Fx { Fx::Aurora(p) }
