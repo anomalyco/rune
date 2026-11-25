@@ -317,6 +317,7 @@ pub enum Shell {
     Relaunch,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Shell {
     /// What follows the app's exit for this request, when it quits.
     pub(crate) fn after(self) -> Option<crate::quit::After> {
@@ -882,6 +883,7 @@ impl Tx {
     }
 
     /// Takes `prepare_text`'s request if it is for a window of state `S`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn take_prepared<S: 'static>() -> Option<(fn(&S, &mut crate::Cx<S>) -> crate::El, Option<(f32, f32)>)> {
         if !Self::prepare_owed::<S>() { return None; }
         let (view, size) = PREPARE.with_borrow_mut(Option::take)?;
@@ -889,6 +891,7 @@ impl Tx {
     }
 
     /// Whether `prepare_text` holds a request for a window of state `S`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn prepare_owed<S: 'static>() -> bool {
         PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, _)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
     }

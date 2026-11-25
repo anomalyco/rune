@@ -177,6 +177,7 @@ impl RuntimeCore {
 
     /// The next frame motion asks for at its own cadence (a loop's next step, a video's next
     /// picture), on `wake_deadline`'s clock.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn motion_wake_deadline(&self) -> Option<f64> {
         self.motion.loop_wake().map(|w| w.0)
     }

@@ -156,6 +156,7 @@ impl FrameClock {
         (step, starts)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn frame_step(&mut self, at: Instant, running: bool) -> Step {
         self.begin(at, running).0
     }

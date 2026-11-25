@@ -418,6 +418,7 @@ impl RuntimeCore {
     /// Whether user input is queued in the action queue (`ActionQueue::has_input`), as
     /// distinguished from layout and state observers. Hosts check this before resting so
     /// queued input never waits for a later timer.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn has_input_waiting(&self) -> bool {
         self.frame.queue.has_input()
     }
