@@ -10,6 +10,8 @@ pub(crate) struct InheritedFlatten {
     pub(in crate::runtime) parent_is_stack: bool,
     pub(in crate::runtime) instant_changes: bool,
     pub(in crate::runtime) inert: bool,
+    /// The parent's `El::selection_enabled(false)` subtree.
+    pub(in crate::runtime) selection_off: bool,
     /// The parent's flow (`El::dir`).
     pub(in crate::runtime) flow: crate::el::Flow,
     pub(in crate::runtime) directed: bool,
@@ -227,7 +229,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
         focus, looping, loop_times, trace_name, trace_namespace, role, label, live, above, above_boundary, motion, frame_motion, opacity_motion, lead,
         animated_changes, option_as_alt, window_resize, transition, transition_motion, enter_in_instant, matched, matched_motion, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
-        virtual_rows_version, virtual_rows_append_only, virtual_overscan, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, wheel_scrolls, on_path, data,
+        virtual_rows_version, virtual_rows_append_only, virtual_overscan, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, selection_enabled, wheel_scrolls, on_path, data,
         expanded_memo: _,
         #[cfg(debug_assertions)]
         scroll_source: _,
@@ -281,6 +283,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.material == *material
         && a.aspect_fit == *aspect_fit
         && a.a11y == *a11y
+        && a.selection_enabled == *selection_enabled
         && a.wheel_scrolls == *wheel_scrolls
         && opt_rc_eq(&a.on_path, on_path)
         && a.data.len() == data.len()
@@ -502,6 +505,7 @@ pub(in crate::runtime) fn inherited_for(
             parent_is_stack,
             instant_changes,
             inert,
+            selection_off: parent.is_some_and(|p| nodes[p].selection_off),
             flow: parent.map_or(crate::el::Flow::Ltr, |p| nodes[p].flow),
             directed: parent.is_some_and(|p| nodes[p].directed),
             trace_namespace,

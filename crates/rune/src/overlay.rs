@@ -92,7 +92,7 @@ mod presence;
 #[cfg(not(target_arch = "wasm32"))]
 use presence::{Presence, Release};
 mod requests;
-use requests::{Requests, Update, Visibility};
+use requests::{KeyRequest, Requests, Update, Visibility};
 #[cfg(not(target_arch = "wasm32"))]
 mod retire;
 #[cfg(not(target_arch = "wasm32"))]
@@ -198,7 +198,8 @@ impl SharedCore {
     fn refollow_pointer(&self) { self.request(|q| q.refollow = true); }
     fn set_placement(&self, placement: Option<OverlayPlacement>) { self.request(|q| q.placement = Some(placement)); }
     fn set_display(&self, display: DisplayTarget) { self.request(|q| q.display = Some(display)); }
-    fn request_keys(&self) { self.request(|q| q.request_keys = true); }
+    fn request_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Take)); }
+    fn release_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Release)); }
     fn window_number(&self) -> Option<u32> { self.native.lock().unwrap().0 }
     fn capture_exclusion(&self) -> OverlaySupport { self.capabilities().capture_exclusion }
     fn capabilities(&self) -> crate::OverlayCapabilities { self.native.lock().unwrap().1 }
@@ -278,9 +279,18 @@ impl<T: 'static> OverlayHandle<T> {
     pub fn set_display(&self, display: DisplayTarget) { self.shared.core.set_display(display); }
 
     /// Request keyboard focus without application activation, for a shown `KeyPolicy::OnDemand`
-    /// overlay where `capabilities().nonactivating_keys` is `Supported` (see `KeyPolicy`).
+    /// or `KeyPolicy::Exclusive` overlay where `capabilities().nonactivating_keys` is
+    /// `Supported` (see `KeyPolicy`).
     #[inline(always)]
     pub fn request_keys(&self) { self.shared.core.request_keys(); }
+
+    /// Gives the keys back without hiding: on Wayland layer-shell the surface's keyboard
+    /// interactivity returns to none, the layer stays mapped, and the overlay hears a blur at
+    /// once (compositors may send no `wl_keyboard.leave`). A later `request_keys` takes them
+    /// again. Other hosts do nothing yet. The latest of `request_keys` and `release_keys` in
+    /// one event-loop turn wins.
+    #[inline(always)]
+    pub fn release_keys(&self) { self.shared.core.release_keys(); }
 
     /// macOS panel CGWindowID for an explicit ScreenCaptureKit exclusion filter. Available
     /// at native creation (see `on_created`/`prewarm`); a new one with each window made.

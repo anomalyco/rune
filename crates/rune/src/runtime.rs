@@ -242,6 +242,8 @@ mod select_all_tests;
 #[cfg(test)]
 mod selection_api_tests;
 #[cfg(test)]
+mod selection_enabled_tests;
+#[cfg(test)]
 mod anchored_grow_tests;
 #[cfg(test)]
 mod languages_tests;

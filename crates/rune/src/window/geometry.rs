@@ -5,9 +5,12 @@
 //! output at scale 1 gets neither, yet it went from no output to one. Sampling at idle catches
 //! that. An app that doesn't set the hook samples nothing.
 
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::ActiveEventLoop;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::Window;
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::host::Host;
 use crate::el::Tx;
 
@@ -26,6 +29,7 @@ pub struct WindowGeometry {
     pub has_output: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl WindowGeometry {
     /// Reads the native window now. On X11 the size is a blocking round trip to the server.
     pub(in crate::window) fn sample(window: &Window) -> Self {
@@ -39,6 +43,7 @@ impl WindowGeometry {
 }
 
 /// `App::on_window_geometry`'s hook.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) type OnWindowGeometry<S> = fn(&mut S, WindowGeometry, &mut Tx) -> bool;
 
 impl<S: 'static> crate::App<S> {
@@ -68,18 +73,24 @@ impl<S: 'static> crate::App<S> {
     ///     })
     ///     .run();
     /// ```
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     pub fn on_window_geometry(mut self, f: fn(&mut S, WindowGeometry, &mut Tx) -> bool) -> Self {
-        self.on_window_geometry = Some(f);
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.on_window_geometry = Some(f); }
+        #[cfg(target_arch = "wasm32")]
+        let _ = f;
         self
     }
 }
 
 /// The last sample `App::on_window_geometry` heard, so an unchanged one runs nothing.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub(in crate::window) struct GeometryWatch {
     last: Option<WindowGeometry>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl GeometryWatch {
     /// The sample to report: always at creation (`initial`), otherwise only when it differs
     /// from the last one reported.
@@ -90,6 +101,7 @@ impl GeometryWatch {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Host {
     /// At native creation: runs the hook now, before the window's first focus and frame.
     pub(in crate::window) fn creation_geometry(&mut self) {

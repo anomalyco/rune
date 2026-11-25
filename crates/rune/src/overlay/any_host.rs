@@ -209,7 +209,7 @@ impl AnyHost for OverlayHost {
             app.window_focus(*focused);
             if !*focused {
                 core.control_click = false;
-                if core.options.keys == KeyPolicy::OnDemand
+                if core.options.keys.takes_keys()
                     && let Some(window) = core.surface.live().and_then(|l| l.backing.window())
                 {
                     crate::platform::ime::cancel(window);
@@ -318,7 +318,7 @@ impl AnyHost for OverlayHost {
                 host_events::refresh_focus_preferences(app.rt_mut(), None);
                 core.dirty = true;
             }
-            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if core.options.keys == KeyPolicy::OnDemand => {
+            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if core.options.keys.takes_keys() => {
                 if event.state == winit::event::ElementState::Pressed
                     && let Some(window) = core.surface.live().and_then(|l| l.backing.window())
                     && let Some(text) = crate::platform::ime::take_direct_commit(window)
@@ -329,7 +329,7 @@ impl AnyHost for OverlayHost {
                     core.dirty |= app.keyboard(&event, core.mods);
                 }
             }
-            WindowEvent::Ime(ime) if core.options.keys == KeyPolicy::OnDemand => {
+            WindowEvent::Ime(ime) if core.options.keys.takes_keys() => {
                 if let Some(window) = core.surface.live().and_then(|l| l.backing.window()) {
                     host_events::ime(app.rt_mut(), window, &mut core.ime, ime);
                     core.dirty = true;

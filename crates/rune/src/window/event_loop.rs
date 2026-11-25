@@ -118,6 +118,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     // A relaunch goes on once the app it restarts has exited.
     crate::render::reopen_prewarm();
     crate::relaunch::wait_for_previous();
+    super::displays::reset();
     crate::tooling::perf_warn::launch::run_starts();
     crate::platform::ready_signal::run_starts();
     // `RUNE_OPEN_INACTIVE` (a tool's launch): the app doesn't take activation at launch either.

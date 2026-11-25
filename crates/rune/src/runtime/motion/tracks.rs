@@ -440,7 +440,16 @@ impl MotionState {
         }
     }
 
-    /// Writes each active slide loop's current offset into `scene` before stepping tracks.
+    /// Writes each active slide loop's current offset, and each moving sequence's translate
+    /// and rotate (on top of `El::offset` and `El::rotate`), into `scene` before stepping tracks.
+    ///
+    /// A moving sequence writes while it plays. When it isn't playing it writes only when the
+    /// channel's target isn't the pose it holds: a waiting one-shot holds its first beat (so a
+    /// change lands there at once), and a finished one rests on its last beat, which is where
+    /// commit aims `El::offset` and `El::rotate` (`Sequence::rest`), so later changes spring. A
+    /// repeating sequence that hasn't started holds its first beat, its rest too. A dropped
+    /// sequence writes nothing, and commit springs the element home. A channel a live binding
+    /// owns (`El::live_offset`, `El::live_rotation`) is left alone.
     pub(in crate::runtime) fn step_loops_into_scene(
         &self,
         nodes: &[Node],
@@ -449,12 +458,32 @@ impl MotionState {
         reduced_motion: bool,
     ) {
         for (id, track) in &self.loops {
-            if let Some([x, y]) = track.offset(scene.store().node_time(*id), reduced_motion)
+            let now = scene.store().node_time(*id);
+            if let Some([x, y]) = track.offset(now, reduced_motion)
                 && let Some(n) = node_index.get(id).map(|&i| &nodes[i])
             {
                 let offset = rune_motion::Vec2::new(x * n.local.w, y * n.local.h);
                 if scene.get(*id, prop::OFFSET) != Some(offset) {
                     scene.set(*id, prop::OFFSET, offset);
+                }
+            } else if let Some(([x, y], turn)) = track.motion(now, reduced_motion)
+                && let Some(n) = node_index.get(id).map(|&i| &nodes[i])
+            {
+                let playing = track.active(now);
+                let live = |p: crate::live::Property| n.live.iter().any(|b| b.property == p);
+                if !live(crate::live::Property::Offset) {
+                    let offset = rune_motion::Vec2::new(n.vis.offset[0] + x, n.vis.offset[1] + y);
+                    let due = if playing { scene.get(*id, prop::OFFSET) } else { scene.store().target(*id, prop::OFFSET) };
+                    if due != Some(offset) {
+                        scene.set(*id, prop::OFFSET, offset);
+                    }
+                }
+                if !live(crate::live::Property::Rotation) {
+                    let turn = n.vis.rotate + turn;
+                    let due = if playing { scene.get(*id, prop::ROTATION) } else { scene.store().target(*id, prop::ROTATION) };
+                    if due != Some(turn) {
+                        scene.set(*id, prop::ROTATION, turn);
+                    }
                 }
             }
         }
@@ -804,3 +833,7 @@ impl RuntimeCore {
         moving
     }
 }
+
+#[cfg(test)]
+#[path = "tracks_tests.rs"]
+mod tests;

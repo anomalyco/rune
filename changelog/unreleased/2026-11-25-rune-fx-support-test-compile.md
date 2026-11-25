@@ -1,0 +1,1 @@
+- Tests (`rune-fx`): fix `tests::support_needs_vertex_and_fragment_storage_and_two_buffers` to construct WebGL2 `wgpu::DownlevelCapabilities` directly instead of calling nonexistent `DownlevelCapabilities::lower_bound()`, and add a real-adapter integration test (`supported_accepts_real_adapter_and_matches_new`) gated on `Gpu::test_headless()`.

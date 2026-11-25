@@ -701,6 +701,8 @@ impl El {
     /// text element) inside this one.
     pub fn cursor(mut self, cursor: Cursor) -> Self {
         self.handlers.cursor = Some(cursor);
+        // The app's own cursor, which `El::selection_enabled(false)` leaves alone.
+        if let Some(t) = &mut self.text && t.selectable_cursor { t.selectable_cursor = false; }
         self
     }
     /// Pressing this element moves the window (or a window-backed overlay; pair with `.hit()`

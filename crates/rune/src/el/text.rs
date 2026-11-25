@@ -883,6 +883,7 @@ impl El {
             t.selectable = on;
             if on && self.handlers.cursor.is_none() {
                 self.handlers.cursor = Some(Cursor::Text);
+                t.selectable_cursor = true;
             }
         }
         self
