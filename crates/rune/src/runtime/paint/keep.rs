@@ -668,6 +668,7 @@ fn static_ok(n: &Node) -> bool {
 fn dynamic_ok(rt: &RuntimeCore, i: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) -> bool {
     let id = rt.tree.nodes[i].id;
     !sel.iter().any(|r| r.0 == i) && !marks.iter().any(|r| r.0 == i)
+        && rt.caret_browse_collapsed_on(i).is_none()
         && !rt.motion.reveal_fading(id)
         && !rt.motion.has_loop(id)
         && (rt.paint.static_scales.is_empty() || !rt.paint.static_scales.contains_key(&id))

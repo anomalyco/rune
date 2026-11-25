@@ -91,6 +91,8 @@ pub(crate) struct TextCold {
     pub(crate) on_link_secondary: Option<LinkSecondaryFn>,
     /// Measured as its slice at this byte of the run (see [`El::advance_in`](crate::El::advance_in)).
     pub(crate) advance_in: Option<(crate::text::Run, usize)>,
+    /// See [`El::caret`](crate::El::caret): caret colour for [`El::caret_browsing`](crate::El::caret_browsing) selectable text.
+    pub(crate) caret: Option<Color>,
     /// See [`El::selection_color`](crate::El::selection_color).
     pub(crate) selection: Color,
     /// See [`El::selection_style`](crate::El::selection_style): it takes over `selection`.
@@ -143,6 +145,7 @@ impl Empty for TextCold {
         on_link: None,
         on_link_secondary: None,
         advance_in: None,
+        caret: None,
         selection: crate::el::DEFAULT_SELECTION,
         selection_style: None,
         uncopied: Vec::new(),

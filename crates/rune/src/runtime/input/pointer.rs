@@ -393,8 +393,14 @@ impl RuntimeCore {
             .find(|&p| (self.tree.nodes[p].focus.key.is_some() || self.focuses_on_click(p)) && self.can_focus(p) && !self.tree.nodes[p].focus.keyboard_only)).flatten();
         let in_textbox = std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent).any(|p| self.textbox_input(p).is_some());
         let below = n.focus.below;
+        let caret_host = (!below && !on_link && !keeps && !preserve_focus)
+            .then(|| self.selectable_at(x, y).and_then(|s| self.caret_browsing_host_of(s)))
+            .flatten()
+            .filter(|&h| self.can_focus(h) && !self.tree.nodes[h].focus.keyboard_only);
         if !below && !on_link && !keeps && takes_focus && !self.is_selectable(ti) {
             self.frame.queue.push(Action::FocusControl(n.path.clone()));
+        } else if let Some(host) = caret_host {
+            self.frame.queue.push(Action::FocusControl(self.tree.nodes[host].path.clone()));
         } else if !below && !on_link && !keeps && let Some(p) = keyed {
             self.frame.queue.push(Action::FocusControl(self.tree.nodes[p].path.clone()));
         } else if !below && !on_link && !in_textbox && !preserve_focus {

@@ -4,7 +4,8 @@ use super::*;
 
 /// The previous grapheme boundary, so a caret or backspace takes a ZWJ emoji, flag or skin
 /// tone whole.
-pub(crate) fn prev_char(s: &str, i: usize) -> usize {
+#[doc(hidden)]
+pub fn prev_char(s: &str, i: usize) -> usize {
     use unicode_segmentation::UnicodeSegmentation;
     s[..i].grapheme_indices(true).next_back().map_or(0, |(j, _)| j)
 }
@@ -25,7 +26,8 @@ pub(crate) fn prev_backspace(s: &str, i: usize) -> usize {
     s[..i].char_indices().next_back().map_or(0, |(j, _)| j)
 }
 
-pub(crate) fn next_char(s: &str, i: usize) -> usize {
+#[doc(hidden)]
+pub fn next_char(s: &str, i: usize) -> usize {
     use unicode_segmentation::UnicodeSegmentation;
     s[i..].graphemes(true).next().map_or(i, |g| i + g.len())
 }

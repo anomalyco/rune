@@ -2154,6 +2154,16 @@ and its `on_secondary_press` wins over the Copy menu. A drag that selects text d
 Inside a draggable row (`on_drag` or `drag_out`), dragging drags the row and double- and
 triple-clicks still select words and lines. Text with its own handlers keeps them.
 
+`El::caret_browsing(true)` opts a selectable text or `selection_group(true)` container into
+keyboard caret browsing (off by default, leaving ordinary selectable text non-focusable): the
+element becomes focusable via click or Tab, draws a 1.5 pt caret when focused and collapsed
+(`El::caret` sets its colour, else the text's foreground), moves by character, word
+(`Ctrl`/`Option`+Left/Right), visual line (preserving a sticky horizontal column across shorter
+lines and sibling texts), page (`PageUp`/`PageDown`), and line or document `Home`/`End`, extends
+selections with `Shift` across mounted siblings, collapses a non-empty selection on plain
+Left/Right, scrolls enclosing viewports to keep the caret visible, keeps `Cmd/Ctrl+C` and
+`Cmd/Ctrl+A`, and publishes the caret and selection to AccessKit and the web accessibility mirror.
+
 The selection lives in the runtime, so selecting never re-runs the view or re-lays out the text.
 `El::selection_color` sets the highlight for selectable text and text fields alike, and both draw
 it the same way; kit's `k.selection()` is the colour its `TextInput` uses, so pass it to match.

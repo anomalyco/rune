@@ -508,7 +508,7 @@ impl RuntimeCore {
         // Tabbing away or into a field takes the selection's keyboard; a hovered row doesn't.
         if moved
             && let Some(p) = path.as_deref()
-            && self.text_selection().is_some_and(|(held, _)| held != p)
+            && self.text_selection().is_some_and(|(held, _)| !path_holds(p, held))
             && (keyboard || self.node(p).is_some_and(|n| n.input.is_some()) || self.commit.virtual_inputs.contains_key(p))
         {
             self.clear_text_selection();
@@ -565,6 +565,9 @@ impl RuntimeCore {
             self.kbd.focus.remember_scope(mark, at);
         }
         self.sync_side_focus(app);
+        if moved && let Some(fi) = self.focused_index() && self.is_caret_browsing_node(&self.tree.nodes[fi]) {
+            self.enter_caret_browsing_focus(fi);
+        }
         // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
         // Focus that stayed where it was, shown as it was (every commit's focus pass, most of
         // the time), moves no group: the frame's own interaction pass sees the rest.
@@ -921,6 +924,7 @@ impl RuntimeCore {
             if !self.kbd.tab_visits_all() {
                 // A control that owns its keyboard (`El::on_key`) is a list of its own.
                 order.retain(|&i| self.tree.nodes[i].input.is_some() || self.tree.nodes[i].focus.key.is_some()
+                    || self.is_caret_browsing_node(&self.tree.nodes[i])
                     || self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.tree.nodes[g].role)));
             }
             if order.is_empty() { return self.active_modal().is_some(); }
@@ -977,6 +981,7 @@ impl RuntimeCore {
         // When a focusable `focus_group` container holds focus itself, navigation and typeahead
         // enter its items directly (WAI-ARIA Menu and Listbox container focus).
         if self.tree.nodes[i].input.is_none()
+            && !self.is_caret_browsing_node(&self.tree.nodes[i])
             && let Some(g) = self.focus_group(i).or_else(|| self.tree.nodes[i].focus.group.then_some(i))
         {
             let items: Vec<_> = (0..self.tree.nodes.len()).filter(|&j| self.can_focus(j) && self.focus_group(j) == Some(g)).collect();
