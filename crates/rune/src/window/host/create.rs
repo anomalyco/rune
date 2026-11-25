@@ -69,6 +69,7 @@ impl Host {
                 attrs = winit::platform::wayland::WindowAttributesExtWayland::with_name(attrs, id, id);
                 attrs = winit::platform::x11::WindowAttributesExtX11::with_name(attrs, id, id);
             }
+            attrs = crate::platform::app_icon::with_icon(attrs);
             if self.float_on_open { attrs = float_on_open::fixed(attrs, &self.options, size); }
             if let Some(token) = token {
                 let token = winit::window::ActivationToken::from_raw(token);
