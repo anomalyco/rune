@@ -1,5 +1,6 @@
-use super::clear_corners;
-use crate::render::csd_corners::Rounding;
+//! Clearing a CPU frame's rounded corners: the pixels a frame painted, outside the arcs.
+
+use super::{Rounding, clear_corners};
 
 const W: u32 = 64;
 const H: u32 = 48;

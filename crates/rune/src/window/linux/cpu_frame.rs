@@ -19,7 +19,7 @@ use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, RenderPrep, StepInfo};
 use crate::platform::cpu_frames::{Frames, Put, Retired};
 use crate::render::cpu_boot::{CpuPainter, HalfRounding, Scene, Target};
-use crate::render::csd_corners::Rounding;
+use crate::render::csd_corners::{Rounding, clear_corners};
 use crate::window::CpuFirst;
 use crate::runtime::RuntimeCore;
 use crate::time::Instant;
@@ -438,40 +438,8 @@ impl FrameHost for CpuWindowFrame<'_> {
     }
 }
 
-/// What `render::csd_corners` does to a GPU frame, to the pixels a CPU frame just painted
-/// (`rects`): outside the arcs of `rounding`'s corners (the bottom two, and the top two under a
-/// frame without a headerbar) the frame composites nothing, and a pixel an arc crosses keeps the
-/// arc's coverage of it.
-pub(super) fn clear_corners(bytes: &mut [u8], stride: usize, size: (u32, u32), rounding: Rounding, rects: &[[u32; 4]]) {
-    let radius = rounding.radius;
-    let reach = radius.ceil() as u32;
-    let painted = |x: u32, y: u32| rects.iter().any(|r| x >= r[0] && x < r[2] && y >= r[1] && y < r[3]);
-    for (centre, (side, rise)) in rounding.corners((size.0 as f32, size.1 as f32)) {
-        let xs = if side < 0. { 0..reach.min(size.0) } else { size.0.saturating_sub(reach)..size.0 };
-        let ys = if rise < 0. { 0..reach.min(size.1) } else { size.1.saturating_sub(reach)..size.1 };
-        for y in ys {
-            for x in xs.clone() {
-                let at = (x as f32 + 0.5, y as f32 + 0.5);
-                // The corner's square: from the arc's centre out to the window's edges.
-                let inside = (at.0 - centre.0) * side >= 0. && (at.1 - centre.1) * rise >= 0.;
-                if !inside || !painted(x, y) { continue; }
-                let distance = ((at.0 - centre.0).powi(2) + (at.1 - centre.1).powi(2)).sqrt();
-                let t = (distance - (radius - 0.5)).clamp(0., 1.);
-                let keep = 1. - t * t * (3. - 2. * t);
-                if keep >= 1. { continue; }
-                let pixel = y as usize * stride + x as usize * 4;
-                for byte in &mut bytes[pixel..pixel + 4] { *byte = (f32::from(*byte) * keep + 0.5) as u8; }
-            }
-        }
-    }
-}
-
 static FIRST_CPU: AtomicBool = AtomicBool::new(false);
 static FIRST_LAYOUT: AtomicBool = AtomicBool::new(false);
 static FIRST_MASKS: AtomicBool = AtomicBool::new(false);
 static FIRST_PAINT: AtomicBool = AtomicBool::new(false);
 static NEEDS_GPU: AtomicBool = AtomicBool::new(false);
-
-#[cfg(test)]
-#[path = "cpu_frame_tests.rs"]
-mod tests;
