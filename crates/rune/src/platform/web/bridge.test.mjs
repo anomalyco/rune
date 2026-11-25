@@ -45,8 +45,14 @@ class FakeNode {
     setAttribute(name, value) { this._attrs.set(name, String(value)); }
     removeAttribute(name) { this._attrs.delete(name); }
     getAttribute(name) { return this._attrs.get(name) ?? null; }
+    hasAttribute(name) { return this._attrs.has(name); }
 
     get firstElementChild() { return this.children[0] ?? null; }
+    get previousElementSibling() {
+        if (!this.parentElement) return null;
+        const i = this.parentElement.children.indexOf(this);
+        return i > 0 ? this.parentElement.children[i - 1] : null;
+    }
     get nextElementSibling() {
         if (!this.parentElement) return null;
         const i = this.parentElement.children.indexOf(this);
@@ -3110,5 +3116,74 @@ test('syncA11y mirrors unfocused textboxes, forwards click/focus to a11y_press, 
         assert.equal(h.password.getAttribute('aria-required'), null);
     } finally {
         bridge.destroy(h);
+    }
+});
+
+test('syncVisualViewport shifts covered focused fields above the keyboard without blurring or resizing, and clears on retract or blur', () => {
+    const { doc, body, canvas, h } = setup({ coarsePointer: true });
+    const cpu = doc.createElement('canvas');
+    cpu.setAttribute('data-rune-cpu', '');
+    body.insertBefore(cpu, canvas);
+    try {
+        // Focus password field at mid-screen (y=260..284), already visible above h=362.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        bridge.syncCaret(h, 24, 260, 2, 24);
+        assert.equal(doc.activeElement, h.password);
+        assert.equal(h.password.inert, false);
+        assert.equal(h.password.inputMode, 'text');
+
+        bridge.syncVisualViewport(h, 0, 389, 699);
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        assert.equal(doc.activeElement, h.password, 'visualViewport shrink must not blur focused password input');
+        assert.equal(h.password.inert, false);
+        assert.equal(h.password.inputMode, 'text');
+        assert.equal(canvas.style.transform || '', '', 'already-visible field needs no canvas shift');
+        assert.equal(cpu.style.transform || '', '');
+        assert.equal(h.a11y.style.transform || '', '');
+
+        // Move focus to a lower plain field (y=520..544) covered by the keyboard (visBottom=362).
+        bridge.sync(h, 'bottom', 'hi', 0, 2, 2, false);
+        bridge.syncCaret(h, 24, 520, 2, 24);
+        assert.equal(doc.activeElement, h.textarea);
+        // shift = min(544 + 16 - 362, 520 - 16, 699 - 362) = 198
+        assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)');
+        assert.equal(cpu.style.transform, 'translate3d(0, -198px, 0)');
+        assert.equal(h.a11y.style.transform, 'translate3d(0, -198px, 0)');
+        assert.equal(h.textarea.style.top, '322px', 'hidden input tracks visual shifted caret position');
+
+        // Keyboard retracts back to full layout height: transform clears cleanly while keeping focus.
+        bridge.syncVisualViewport(h, 0, 699, 699);
+        assert.equal(canvas.style.transform, '');
+        assert.equal(cpu.style.transform, '');
+        assert.equal(h.a11y.style.transform, '');
+        assert.equal(h.textarea.style.top, '520px');
+        assert.equal(doc.activeElement, h.textarea);
+
+        // Re-open keyboard and blur: clearing focus resets transform immediately.
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)');
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        assert.equal(canvas.style.transform, '');
+        assert.equal(cpu.style.transform, '');
+        assert.equal(h.a11y.style.transform, '');
+        assert.equal(h.textarea.inert, true);
+        assert.equal(h.password.inert, true);
+    } finally {
+        bridge.destroy(h);
+        cpu.remove();
+    }
+
+    // Embedded and document (page) modes must never overwrite canvas transform.
+    for (const opts of [{ embedded: true }, { page: true }]) {
+        const ctx = setup(opts);
+        try {
+            bridge.sync(ctx.h, 'f', 'abc', 0, 3, 3, false);
+            bridge.syncCaret(ctx.h, 24, 520, 2, 24);
+            bridge.syncVisualViewport(ctx.h, 0, 362, 699);
+            assert.equal(ctx.canvas.style.transform || '', '');
+        } finally {
+            bridge.destroy(ctx.h);
+        }
     }
 });

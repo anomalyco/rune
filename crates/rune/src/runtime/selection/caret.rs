@@ -283,8 +283,18 @@ impl RuntimeCore {
                 }
                 let Some(r) = self.caret_rect(&self.tree.nodes, i) else { return };
                 let a = usize::from(!horizontal);
-                let start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
-                let view = f64::from(self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
+                let mut start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
+                let mut end = start + (self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
+                if !horizontal && let Some((vis_top, vis_bottom)) = self.host.visual_viewport_y {
+                    let zoom = self.host.zoom().max(1e-3);
+                    let clipped_start = start.max(vis_top / zoom);
+                    let clipped_end = end.min(vis_bottom / zoom);
+                    if clipped_end > clipped_start {
+                        start = clipped_start;
+                        end = clipped_end;
+                    }
+                }
+                let view = f64::from(end - start);
                 let (at, len) = (f64::from(r[a] - start), f64::from(r[a + 2]));
                 let margin = f64::from(self.tree.nodes[v].scroll_edges.margin);
                 let delta = scroll_edge::reveal(0.0, at, len, view, margin);
@@ -312,6 +322,21 @@ impl RuntimeCore {
             self.commit_virtual_scroll(app, &Tx::default());
             self.step_scroll(0.0);
         }
+    }
+
+    /// Updates the visible vertical band of the host's visual viewport in window points (or `None`
+    /// when the full layout viewport is visible) so `follow_caret` reveals focused fields above an
+    /// on-screen keyboard without resizing the layout viewport.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn set_visual_viewport_y(&mut self, band: Option<(f32, f32)>) {
+        self.host.visual_viewport_y = band;
+    }
+
+    /// Requests `follow_caret` on the next frame so an already-focused field scrolls into the
+    /// visible band after an on-screen keyboard shrinks the visual viewport.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn request_caret_follow(&mut self) {
+        self.edit.caret_follow = true;
     }
 
     /// Promotes a pending `El::on_input_key` snapshot into `caret_follow` when the committed tree's
