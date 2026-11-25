@@ -325,6 +325,9 @@ pub struct FxLayer {
     pub opacity: f32,
 }
 
+const _: () = assert!(std::mem::size_of::<Fx>() <= 168);
+const _: () = assert!(std::mem::size_of::<FxLayer>() <= 256);
+
 /// How an effect layer composites onto the target beneath it (`FxSlot::blend`).
 ///
 /// `Normal` uses premultiplied source-over (allowing additive light where `rgb > a`).
