@@ -157,6 +157,7 @@ struct Fake {
     log: Vec<Cmd>,
     output_devices: Vec<Option<String>>,
     seeks: Vec<(f64, bool)>,
+    snaps: Vec<(Attempt, i32)>,
     steps: Vec<i32>,
     can_step_forward: bool,
     can_step_backward: bool,
@@ -240,6 +241,13 @@ impl Port for Fake {
         self.log.push(Cmd::Seek(at));
         self.seeks.push((at, exact));
     }
+    fn snap_for_step(&mut self, attempt: Attempt, frames: i32) -> bool {
+        let can = if frames > 0 { self.can_step_forward } else if frames < 0 { self.can_step_backward } else { true };
+        if can {
+            self.snaps.push((attempt, frames));
+        }
+        can
+    }
     fn step_by(&mut self, frames: i32) -> bool {
         let can = if frames > 0 { self.can_step_forward } else if frames < 0 { self.can_step_backward } else { true };
         if can {
@@ -288,7 +296,7 @@ impl New {
         let kind = if audio { Kind::Audio } else { Kind::Video };
         Self {
             c: Control { muted: !audio, kind, ..Control::default() },
-            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new(), output_devices: Vec::new(), seeks: Vec::new(), steps: Vec::new(), can_step_forward: true, can_step_backward: true, poster_pts: 0.0 },
+            fake: Fake { script: Script::READY, checked: false, surface: !audio, done: None, kept: None, asked: Attempt::default(), pending: Vec::new(), player: false, now, log: Vec::new(), output_devices: Vec::new(), seeks: Vec::new(), snaps: Vec::new(), steps: Vec::new(), can_step_forward: true, can_step_backward: true, poster_pts: 0.0 },
         }
     }
 
@@ -355,6 +363,10 @@ impl New {
         super::super::turn::carry(&mut self.c, &mut self.fake, effects);
     }
 
+    fn snap_done(&mut self, attempt: Attempt, finished: bool) {
+        super::super::turn::snap_done(&mut self.c, &mut self.fake, attempt, finished);
+    }
+
     fn run(&mut self, sym: Sym) {
         match sym {
             Sym::Play => self.send(Event::Play),
@@ -417,7 +429,7 @@ impl New {
             player_rate,
             settle: match settle {
                 Settle::Still => SettleView::Still,
-                Settle::Seeking { since, to } => SettleView::Seeking(since, to),
+                Settle::Seeking { since, to } | Settle::Snapping { since, to, .. } => SettleView::Seeking(since, to),
                 Settle::Holding { to } => SettleView::Holding(to),
             },
             shown,
