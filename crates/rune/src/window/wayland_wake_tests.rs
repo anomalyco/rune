@@ -96,7 +96,17 @@ impl Harness {
     }
 
     fn end_turn(&mut self, hosts: &[Option<Box<dyn AnyHost>>]) {
-        let effects = about_to_wait(&mut self.state, hosts);
+        let effects = about_to_wait(&mut self.state, hosts, false, false);
+        self.apply(effects);
+    }
+
+    fn end_turn_with_display(
+        &mut self,
+        hosts: &[Option<Box<dyn AnyHost>>],
+        has_display_watch: bool,
+        has_pending_display: bool,
+    ) {
+        let effects = about_to_wait(&mut self.state, hosts, has_display_watch, has_pending_display);
         self.apply(effects);
     }
 }
@@ -234,4 +244,53 @@ fn hiding_all_layer_overlays_and_exiting_clear_wake_flag_once() {
     // Exiting while already inactive emits nothing.
     let exit_again = step(&mut h.state, Event::Exiting);
     assert!(exit_again.is_empty());
+}
+
+#[test]
+fn display_queue_watch_toggles_wake_on_read_coalesces_mid_turn_pending_and_works_windowless() {
+    // Windowless daemon (empty host list) with no watch never enables wake_on_read.
+    let no_hosts: Vec<Option<Box<dyn AnyHost>>> = Vec::new();
+    let mut h = Harness::default();
+    for _ in 0..5 {
+        h.end_turn_with_display(&no_hosts, false, false);
+    }
+    assert_eq!(h.state, State::Inactive);
+    assert!(h.set_wake_calls.is_empty());
+    assert_eq!(h.wakes_sent, 0);
+
+    // Registering a display queue watch enables SetWakeOnRead(true) once, and 20 idle turns emit
+    // zero wakes and zero extra flag toggles.
+    for _ in 0..20 {
+        h.end_turn_with_display(&no_hosts, true, false);
+    }
+    assert_eq!(h.state, State::Watching);
+    assert_eq!(h.set_wake_calls, vec![true]);
+    assert_eq!(h.wakes_sent, 0);
+
+    // A mid-turn read leaves events pending: emits one coalesced SendWake.
+    h.end_turn_with_display(&no_hosts, true, true);
+    assert_eq!(h.state, State::WakeQueued);
+    assert_eq!(h.wakes_sent, 1);
+    h.end_turn_with_display(&no_hosts, true, true);
+    assert_eq!(h.wakes_sent, 1, "in-flight display wake must coalesce");
+
+    // Wake arrives and queue drains: returns to Watching without extra wakes.
+    h.deliver_wake_if_queued();
+    assert_eq!(h.state, State::Watching);
+    h.end_turn_with_display(&no_hosts, true, false);
+    assert_eq!(h.state, State::Watching);
+    assert_eq!(h.wakes_sent, 1);
+
+    // Dropping the last watch clears SetWakeOnRead(false) once.
+    h.end_turn_with_display(&no_hosts, false, false);
+    assert_eq!(h.state, State::Inactive);
+    assert_eq!(h.set_wake_calls, vec![true, false]);
+
+    // Re-registering and exiting clears SetWakeOnRead(false) once.
+    h.end_turn_with_display(&no_hosts, true, false);
+    assert_eq!(h.set_wake_calls, vec![true, false, true]);
+    let exit_effects = step(&mut h.state, Event::Exiting);
+    h.apply(exit_effects);
+    assert_eq!(h.state, State::Inactive);
+    assert_eq!(h.set_wake_calls, vec![true, false, true, false]);
 }

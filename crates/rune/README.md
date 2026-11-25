@@ -915,7 +915,13 @@ app.run();
   `App::on_display_close(|| ..)` (also forwarded on `WindowSpec::on_display_close`), which runs
   once on the UI thread immediately before the event loop drops windows and tears down the native
   display connection (after `on_close` and `on_quit`), so foreign proxies or queues bound on
-  winit's display can be destroyed before the display closes.
+  winit's display can be destroyed before the display closes. To dispatch secondary Wayland
+  `wl_display` event queues on the UI thread without a reader thread, register
+  `rune::watch_display_queue(pending, dispatch) -> DisplayQueueWatch` (for `wayland-client`,
+  `queue.prepare_read().is_none()` and `queue.dispatch_pending(&mut state)`): several watches may
+  live across multi-window or `.windowless().keep_running()` apps, wake-on-read stays off when no
+  watch is active, every watch is stopped and its closures dropped before `on_display_close` runs,
+  and on X11, macOS, Windows, and web the guard compiles as an inert no-op.
 - `App::on_window_geometry(|s, g: WindowGeometry, tx| -> bool)` (also on `WindowSpec`) reports
   the native window's applied content size in physical pixels (`physical_size`), its
   `scale_factor`, and `has_output` (whether it's on a monitor). It runs at every native creation

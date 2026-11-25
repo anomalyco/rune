@@ -119,6 +119,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     crate::render::reopen_prewarm();
     crate::relaunch::wait_for_previous();
     super::displays::reset();
+    super::display_queue::reset_closed();
     crate::tooling::perf_warn::launch::run_starts();
     crate::platform::ready_signal::run_starts();
     // `RUNE_OPEN_INACTIVE` (a tool's launch): the app doesn't take activation at launch either.

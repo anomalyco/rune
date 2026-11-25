@@ -105,6 +105,7 @@ pub(super) fn cleanup_hosts(
         for host in hosts.iter_mut().flatten() { host.terminate(); }
     }
     if no_main && !exiting {
+        display_queue::stop_all();
         run_display_close(on_display_close);
     }
     // The last window closing ends a fast-exiting app: its host isn't dropped first, which
@@ -175,6 +176,7 @@ pub(super) fn exiting_hosts(
         }
     }
     for host in hosts.iter_mut().flatten() { host.cancel_menus(); }
+    display_queue::stop_all();
     run_display_close(on_display_close);
     if !error_exit && flags.fast_exit {
         return ExitStep::FastExit;

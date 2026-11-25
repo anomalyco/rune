@@ -907,3 +907,68 @@ fn orderly_exiting_hides_and_drops_hosts_and_removes_trays_before_warmup_wait() 
         "every window, overlay, and tray icon must be hidden/removed before shutdown_prewarm waits",
     );
 }
+
+#[test]
+fn display_queue_watches_stop_and_drop_strictly_before_on_display_close_on_every_exit() {
+    use crate::window::display_queue;
+    struct DropLog { events: Rc<RefCell<Vec<String>>>, label: &'static str }
+    impl Drop for DropLog {
+        fn drop(&mut self) { self.events.borrow_mut().push(self.label.into()); }
+    }
+    let attach_watch = |events: &Rc<RefCell<Vec<String>>>| {
+        display_queue::stop_all();
+        display_queue::reset_closed();
+        let log = DropLog { events: events.clone(), label: "watch:drop" };
+        display_queue::watch_display_queue(move || { let _ = &log; true }, || {})
+    };
+    // 1. Normal last-window close (orderly and fast_exit).
+    for fast_exit in [false, true] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let _watch = attach_watch(&events);
+        let mut main = TestHost::new("main", true, events.clone(), &mem, None).with_drop_log();
+        main.close();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(main))];
+        let mut hooks = vec![log_display_close(&events, "main")];
+        let mut q = QuitState::Running;
+        assert!(cleanup_hosts(&mut hosts, &mut hooks, true, false, fast_exit, step_quit(&mut q)));
+        let expected = if fast_exit {
+            vec!["main:on_close", "main:on_quit", "watch:drop", "main:on_display_close"]
+        } else {
+            vec!["main:on_close", "main:on_quit", "watch:drop", "main:on_display_close", "main:drop"]
+        };
+        assert_eq!(*events.borrow(), expected, "fast_exit={fast_exit}");
+        assert!(!display_queue::has_watches());
+    }
+    // 2. App quit, OS quit, and error exits via exiting_hosts.
+    for (label, flags, expected) in [
+        (
+            "app_quit",
+            ExitFlags { has_startup_error: false, has_display_error: false, loop_exiting: true, quitting: true, fast_exit: false },
+            vec!["main:vanish", "main:on_quit", "watch:drop", "main:on_display_close"],
+        ),
+        (
+            "os_quit",
+            ExitFlags { has_startup_error: false, has_display_error: false, loop_exiting: false, quitting: false, fast_exit: false },
+            vec!["main:vanish", "main:on_quit", "main:on_close", "watch:drop", "main:on_display_close"],
+        ),
+        (
+            "display_error",
+            ExitFlags { has_startup_error: false, has_display_error: true, loop_exiting: true, quitting: false, fast_exit: false },
+            vec!["watch:drop", "main:on_display_close"],
+        ),
+    ] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mem = crate::clipboard::memory();
+        let _watch = attach_watch(&events);
+        let main = TestHost::new("main", true, events.clone(), &mem, None).with_drop_log();
+        let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(main))];
+        let mut hooks = vec![log_display_close(&events, "main")];
+        let mut q = QuitState::Running;
+        let _ = exiting_hosts(&mut hosts, &mut hooks, flags, step_quit(&mut q));
+        assert_eq!(*events.borrow(), expected, "{label}");
+        assert!(!display_queue::has_watches());
+        assert!(hosts[0].is_some(), "{label}: host drops after on_display_close");
+    }
+    display_queue::reset_closed();
+}
