@@ -131,9 +131,10 @@ impl ModalScope {
     fn build(nodes: &[Node], is_exiting: impl Fn(usize) -> bool, is_unmounted: impl Fn(usize) -> bool) -> Option<Self> {
         let index = nodes.iter().enumerate().rev()
             .find(|(i, n)| n.handlers.get().is_some_and(|h| h.modal.is_some()) && !is_exiting(*i) && !is_unmounted(*i)).map(|(i, _)| i)?;
-        // The Windows caption buttons are the window's, not the view's: a modal in the view
-        // leaves them to the pointer and assistive technology, as the native ones are.
-        let caption = |n: &Node| n.key.as_deref() == Some(crate::titlebar::BUTTONS_KEY)
+        // The caption buttons are the window's, not the view's: a modal in the view leaves them
+        // to the pointer and assistive technology, as the native ones are. So are a Linux
+        // frame's resize edges (`titlebar::linux`).
+        let caption = |n: &Node| matches!(n.key.as_deref(), Some(crate::titlebar::BUTTONS_KEY | crate::titlebar::EDGES_KEY))
             && n.parent.is_some_and(|p| nodes[p].key.as_deref() == Some(crate::titlebar::FRAME_KEY));
         let mut members: Vec<bool> = nodes.iter().enumerate().map(|(i, n)| i == index || caption(n)).collect();
         // Portals are root siblings. Follow their anchor ownership, including chained

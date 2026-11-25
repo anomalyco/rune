@@ -199,6 +199,8 @@ mod dbus {
     const ENABLE_ANIMATIONS_KEY: &str = "enable-animations";
     const MOUSE_NAMESPACE: &str = "org.gnome.desktop.peripherals.mouse";
     const DOUBLE_CLICK_KEY: &str = "double-click";
+    const WM_NAMESPACE: &str = "org.gnome.desktop.wm.preferences";
+    const BUTTON_LAYOUT_KEY: &str = "button-layout";
     /// How long the portal has for its first answer, from when the worker starts, before the
     /// first window stops waiting for it (as sctk-adwaita waits for its frame's); a slower answer
     /// redraws the windows when it arrives.
@@ -354,6 +356,21 @@ mod dbus {
         if record_fallback_double_click(&DOUBLE_CLICK, ms) { redraw_windows(); }
     }
 
+    /// Unwraps a string portal value (`org.gnome.desktop.wm.preferences` `button-layout`).
+    pub(super) fn string_value<'a>(value: &'a Value<'_>) -> Option<&'a str> {
+        match value {
+            Value::Str(s) => Some(s.as_str()),
+            Value::Value(inner) => string_value(inner),
+            _ => None,
+        }
+    }
+
+    /// The caption buttons a window with Rune's own frame draws (`titlebar::linux`).
+    fn store_button_layout(value: &Value<'_>) {
+        let Some(layout) = string_value(value) else { return };
+        if crate::titlebar::linux::set_desktop_layout(layout) { redraw_windows(); }
+    }
+
     fn start() {
         let (ready, first) = mpsc::sync_channel(1);
         let worker = std::thread::Builder::new().name("rune-appearance-portal".into()).spawn(move || {
@@ -389,6 +406,13 @@ mod dbus {
                 if let Ok(v) = &anim_res { store_enable_animations(v); }
                 let dbl_res = read_setting(&portal, MOUSE_NAMESPACE, DOUBLE_CLICK_KEY).await;
                 if let Ok(v) = &dbl_res { store_double_click(v); }
+                // Only a Wayland session's windows can have Rune's own frame, whose caption
+                // buttons this lays out: an X11 session doesn't ask.
+                if crate::env::var_os("WAYLAND_DISPLAY").is_some()
+                    && let Ok(v) = read_setting(&portal, WM_NAMESPACE, BUTTON_LAYOUT_KEY).await
+                {
+                    store_button_layout(&v);
+                }
                 let read_ok = scheme_res.is_ok() || reduced_res.is_ok() || anim_res.is_ok() || dbl_res.is_ok();
                 let unavailable = matches!(scheme_res, Err(true))
                     && matches!(reduced_res, Err(true))
@@ -443,6 +467,7 @@ mod dbus {
                 (APPEARANCE_NAMESPACE, REDUCED_MOTION_KEY) => { store_reduced_motion(&value); keep_now(); }
                 (GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY) => { store_enable_animations(&value); keep_now(); }
                 (MOUSE_NAMESPACE, DOUBLE_CLICK_KEY) => store_double_click(&value),
+                (WM_NAMESPACE, BUTTON_LAYOUT_KEY) => store_button_layout(&value),
                 _ => {}
             }
             // Rune's own keys first; the app's callbacks run on their own thread.

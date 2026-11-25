@@ -518,6 +518,8 @@ impl State {
             maximizable: style & WS_MAXIMIZEBOX != 0,
             hidden: !framed(hwnd) || !self.controls.get(),
             mirrored: crate::labels::rtl(),
+            layout: None,
+            edges: crate::titlebar::linux::Sides::NONE,
         }
     }
 }

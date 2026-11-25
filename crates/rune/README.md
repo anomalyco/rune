@@ -1661,8 +1661,17 @@ rune::App::new(spec).fit_content_height().run();
   Maximize or Restore, and Close for assistive technology (localized through `rune::set_labels`
   with `Label::Minimize`, `Label::Maximize`, `Label::Restore`, and `Label::Close`), still in
   reach while the view holds a modal. A window that isn't resizable never maximizes: its maximize button is dimmed, with no snap
-  layouts. `Cx::chrome_insets()` says what the controls take (`leading`, `trailing`, `height`; zero
-  where the native frame stays, as on Linux; memos rebuild when it changes), `Cx::caption_color(c)`
+  layouts. Linux on Wayland, where the compositor draws no window frame (GNOME: no `xdg-decoration`),
+  loses the grey bar winit would draw above the app's titlebar: Rune draws the caption buttons the
+  desktop's `button-layout` names (GNOME's default is close alone; a layout on the left puts them
+  there; all three at the right where no settings portal says) as round buttons in the band, the
+  window resizes from a 5 point band inside its edges (none along a side the compositor tiled), a
+  button the window can't act on isn't drawn (`Cx::window_actions`), and `.window_drag()` regions move it,
+  maximize it on a double click and open the compositor's window menu on a right click. That window
+  has no shadow and square corners. X11 and compositors that draw the frame themselves (KDE, Sway,
+  Hyprland) keep the native frame; `RUNE_LINUX_FRAME=0` keeps winit's everywhere and `=1` draws
+  Rune's under any Wayland compositor. `Cx::chrome_insets()` says what the controls take (`leading`,
+  `trailing`, `height`; zero where the native frame stays; memos rebuild when it changes), `Cx::caption_color(c)`
   colours the caption symbols for an app theme, `Cx::titlebar_height(h)` changes the band's height
   as the app runs (a UI zoom), `Cx::is_maximized()` reports confirmed OS maximized state and
   `Cx::is_full_screen()` reports full-screen state (flipping at the start of the macOS Space

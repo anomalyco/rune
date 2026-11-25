@@ -11,7 +11,7 @@ use super::{
 };
 
 fn caption() -> Caption {
-    Caption { height: 36.0, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: false }
+    Caption { height: 36.0, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: false, layout: None, edges: crate::titlebar::linux::Sides::NONE }
 }
 
 /// An 800 px wide restored window at 96 dpi with an 8 px top resize edge, the point in client pixels.

@@ -856,6 +856,10 @@ impl Host {
         // press changes.
         #[cfg(target_os = "windows")]
         if let Some(l) = &self.win { sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar); }
+        // A Linux frame of Rune's own takes the desktop's button layout, which the settings
+        // portal asks for this paint to show, and whether the window is maximized.
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if crate::titlebar::linux::chosen() && let Some(l) = &self.win { sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar); }
         // X11 `PropertyNotify` on EWMH/GTK WM-state atoms sets a per-window flag and asks for
         // `RedrawRequested`; sync chrome only when that flag fired (zero IPC on ordinary redraws).
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

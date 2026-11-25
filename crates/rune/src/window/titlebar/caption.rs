@@ -1,13 +1,17 @@
 //! The Windows caption buttons as elements, drawn as Electron's `titleBarOverlay` draws them
 //! (Chromium's Windows 11 icon painter): a 10 px symbol with a stroke of one device pixel,
 //! hover and press washes of the symbol colour, and a red close button.
+//!
+//! A Linux frame's buttons (`Caption::layout`) are GNOME's instead: the same symbols on
+//! round washes of the symbol colour, which the pointer presses as it does any element. Its
+//! resize edges are elements too (`edges`).
 
 use std::rc::Rc;
 
 use crate::el::{el, row};
-use crate::{Color, El, LineCap, Shape};
+use crate::{Color, El, LineCap, ResizeEdge, Shape};
 
-use super::{Caption, CaptionButton, CaptionState, Titlebar};
+use super::{Caption, CaptionButton, CaptionState, Titlebar, linux};
 
 /// The close button's hover fill, Windows' own red.
 const CLOSE_RED: Color = Color { r: 0.807_5, g: 0.005_8, b: 0.016_9, a: 1.0 };
@@ -20,10 +24,32 @@ const CLOSE_PRESSED_ALPHA: f32 = 0x98 as f32 / 255.0;
 /// disabled text.
 const DISABLED_ALPHA: f32 = 0x5C as f32 / 255.0;
 
+/// A round button's circle, in points: libadwaita's window controls.
+const ROUND_CIRCLE: f32 = 24.0;
+/// The room a round button takes of the row: its circle and 5 points either side.
+const ROUND_CELL: f32 = 34.0;
+/// Points between two round buttons' cells.
+const ROUND_GAP: f32 = 3.0;
+/// Points between the row of round buttons and the window's edge.
+const ROUND_PAD: f32 = 7.0;
+/// A round button's wash at rest, under the pointer and pressed, as fractions of the symbol
+/// colour's alpha: libadwaita's window controls.
+const ROUND_ALPHA: f32 = 0.1;
+const ROUND_HOVER_ALPHA: f32 = 0.15;
+const ROUND_PRESSED_ALPHA: f32 = 0.3;
+
 /// A button's width and height in points at `scale`, each a whole number of pixels.
 pub(super) fn size(height: f32, scale: f32) -> (f32, f32) {
     let snap = |pt: f32| (pt * scale).round().max(1.0) / scale;
     (snap(Titlebar::CAPTION_BUTTON_WIDTH), snap(height))
+}
+
+/// Points a row of `n` round buttons takes from the window's edge at `scale`: each part a whole
+/// number of pixels, as `round_buttons` lays them out.
+pub(super) fn round_width(n: usize, scale: f32) -> f32 {
+    if n == 0 { return 0.0; }
+    let snap = |pt: f32| (pt * scale).round().max(1.0) / scale;
+    snap(ROUND_PAD) + snap(ROUND_CELL) * n as f32 + snap(ROUND_GAP) * (n - 1) as f32
 }
 
 /// The view's root under the caption buttons, in a frame of Rune's own the window's size: the
@@ -32,20 +58,59 @@ pub(super) fn size(height: f32, scale: f32) -> (f32, f32) {
 /// (`Runtime::refresh_modal_index`). `symbol` is the glyph colour (`Cx::caption_color`). A
 /// full-screen window keeps the frame with no buttons in it, so the view's paths stay. `scale`
 /// is the view's (device pixels per view point) and `zoom` its `Cx::zoom`: the buttons keep the
-/// window's size at every zoom, as Electron's `titleBarOverlay` does.
+/// window's size at every zoom, as Electron's `titleBarOverlay` does. A Linux frame's
+/// resize edges lie over the view and under the buttons.
 pub(crate) fn frame(root: El, caption: &Caption, symbol: Color, (scale, zoom): (f32, f32), fit_height: bool) -> El {
     let root = if fit_height { root.w_full() } else { root.w_full().h_full() };
-    el().key(FRAME_KEY).child(root).children((!caption.hidden).then(|| buttons(caption, symbol, scale, zoom)))
+    let shown = !caption.buttons().is_empty();
+    el().key(FRAME_KEY).child(root).children(caption.edges.any().then(|| edges(zoom, caption.edges))).children(shown.then(|| buttons(caption, symbol, scale, zoom)))
 }
 
 /// The frame `frame` puts around the view's root.
 pub(crate) const FRAME_KEY: &str = "rune-frame";
 /// The row of caption buttons in it.
 pub(crate) const BUTTONS_KEY: &str = "rune-caption";
+/// A Linux frame's resize edges in it.
+pub(crate) const EDGES_KEY: &str = "rune-frame-edges";
 
+/// The band inside the window's edges that resizes it: `linux::EDGE` window points deep along
+/// each of `sides`, and `linux::CORNER` along both sides of a corner for the diagonals, where
+/// both of them resize. Each part is a `.window_resize()` element, so the pointer shows the
+/// resize cursor over it and a press there goes to the compositor, not to what the view drew
+/// under it. A side the compositor tiled has no band, and the band beside it runs to that end.
+fn edges(zoom: f32, sides: linux::Sides) -> El {
+    use ResizeEdge::{East, North, NorthEast, NorthWest, South, SouthEast, SouthWest, West};
+    // Window points, drawn in the view's.
+    let (e, c) = (linux::EDGE / zoom, linux::CORNER / zoom);
+    let near = Some(0.0);
+    let band = |key: &'static str, edge: ResizeEdge, [left, top, right, bottom]: [Option<f32>; 4], (w, h): (Option<f32>, Option<f32>)| {
+        let part = el().key(key).pin(left, top, right, bottom).window_resize(edge).a11y_hidden();
+        let part = if let Some(w) = w { part.w(w) } else { part };
+        if let Some(h) = h { part.h(h) } else { part }
+    };
+    // A corner is two arms, one along each of its sides.
+    let arms = |x: &'static str, y: &'static str, edge: ResizeEdge, at: [Option<f32>; 4]| {
+        [band(x, edge, at, (Some(c), Some(e))), band(y, edge, at, (Some(e), Some(c)))]
+    };
+    let (nw, ne) = (sides.top && sides.left, sides.top && sides.right);
+    let (sw, se) = (sides.bottom && sides.left, sides.bottom && sides.right);
+    // A side's band stops short of a corner that has arms.
+    let inset = |corner: bool| Some(if corner { c } else { 0.0 });
+    let mut parts = Vec::with_capacity(12);
+    if sides.top { parts.push(band("n", North, [inset(nw), near, inset(ne), None], (None, Some(e)))); }
+    if sides.bottom { parts.push(band("s", South, [inset(sw), None, inset(se), near], (None, Some(e)))); }
+    if sides.left { parts.push(band("w", West, [near, inset(nw), None, inset(sw)], (Some(e), None))); }
+    if sides.right { parts.push(band("e", East, [None, inset(ne), near, inset(se)], (Some(e), None))); }
+    if nw { parts.extend(arms("nw-x", "nw-y", NorthWest, [near, near, None, None])); }
+    if ne { parts.extend(arms("ne-x", "ne-y", NorthEast, [None, near, near, None])); }
+    if sw { parts.extend(arms("sw-x", "sw-y", SouthWest, [near, None, None, near])); }
+    if se { parts.extend(arms("se-x", "se-y", SouthEast, [None, None, near, near])); }
+    el().key(EDGES_KEY).dir(crate::Direction::Ltr).pin(near, near, near, near).children(parts)
+}
 /// The buttons pinned to the frame's top-right corner (top-left mirrored), over everything the
 /// view drew.
 fn buttons(caption: &Caption, symbol: Color, scale: f32, zoom: f32) -> El {
+    if caption.layout.is_some() { return round_buttons(caption, symbol, scale, zoom); }
     // Sized in window points at the window's scale, then drawn in the view's points.
     let window = scale / zoom;
     let (w, h) = size(caption.height, window);
@@ -72,23 +137,58 @@ fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h
         _ if hovered => (symbol.alpha(symbol.a * HOVER_ALPHA), symbol),
         _ => (Color::TRANSPARENT, symbol),
     };
+    let e = button_el(caption, button).size(w, h).fill(fill).child(symbol_el(button, caption.maximized, ink, (w, h), scales));
+    // The mouse presses them through the window procedure; assistive technology invokes these.
+    // A dimmed button has nothing to invoke.
+    if enabled { acting(e, button) } else { e }
+}
+
+/// A Linux frame's buttons: round, in a row at the frame's top-right corner (top-left
+/// mirrored), each centred in the titlebar's height. The row keeps the window's size at every
+/// zoom, as the Windows buttons do; only the circles take the pointer, so the titlebar between
+/// them still moves the window.
+fn round_buttons(caption: &Caption, symbol: Color, scale: f32, zoom: f32) -> El {
+    let window = scale / zoom;
+    // A whole number of pixels in window points, in the view's points.
+    let snap = |pt: f32| (pt * window).round().max(1.0) / window / zoom;
+    let (cell, d, h) = (snap(ROUND_CELL), snap(ROUND_CIRCLE), snap(caption.height));
+    let cells: Vec<El> = caption.buttons().iter()
+        .map(|&button| row().size(cell, h).center().child(round_button(caption, button, symbol, d, (scale, window))))
+        .collect();
+    let cells: Vec<El> = if caption.mirrored { cells.into_iter().rev().collect() } else { cells };
+    let (left, right) = if caption.mirrored { (Some(0.0), None) } else { (None, Some(0.0)) };
+    let bar = row().key(BUTTONS_KEY).dir(crate::Direction::Ltr).pin(left, Some(0.0), right, None).gap(snap(ROUND_GAP));
+    let bar = if caption.mirrored { bar.pl(snap(ROUND_PAD)) } else { bar.pr(snap(ROUND_PAD)) };
+    bar.children(cells)
+}
+
+fn round_button(caption: &Caption, button: CaptionButton, symbol: Color, d: f32, scales: (f32, f32)) -> El {
+    let enabled = caption.enabled(button);
+    let wash = |alpha: f32| symbol.alpha(symbol.a * alpha);
+    let ink = if enabled { symbol } else { wash(DISABLED_ALPHA) };
+    let e = button_el(caption, button).size(d, d).radius(d / 2.0).fill(wash(ROUND_ALPHA))
+        .child(symbol_el(button, caption.maximized, ink, (d, d), scales));
+    if enabled { acting(e.hover_fill(wash(ROUND_HOVER_ALPHA)).press_fill(wash(ROUND_PRESSED_ALPHA)), button) } else { e }
+}
+
+/// A caption button's element, keyed and named for assistive technology: the same on both frames.
+fn button_el(caption: &Caption, button: CaptionButton) -> El {
     let (key, label) = match button {
         CaptionButton::Minimize => ("rune-caption-minimize", caption_label(crate::Label::Minimize)),
         CaptionButton::Maximize if caption.maximized => ("rune-caption-maximize", caption_label(crate::Label::Restore)),
         CaptionButton::Maximize => ("rune-caption-maximize", caption_label(crate::Label::Maximize)),
         CaptionButton::Close => ("rune-caption-close", caption_label(crate::Label::Close)),
     };
-    let mut e = el().key(key).role("button").label(label).focusable(false).disabled(!enabled).size(w, h).fill(fill)
-        .child(symbol_el(button, caption.maximized, ink, (w, h), scales));
-    // The mouse presses them through the window procedure; assistive technology invokes these.
-    // A dimmed button has nothing to invoke.
-    if enabled {
-        e.handlers.on_press = Some(Rc::new(move |_, tx: &mut crate::Tx| match button {
-            CaptionButton::Minimize => tx.minimize(),
-            CaptionButton::Maximize => tx.toggle_maximized(),
-            CaptionButton::Close => tx.request_user_close(),
-        }));
-    }
+    el().key(key).role("button").label(label).focusable(false).disabled(!caption.enabled(button))
+}
+
+/// `e`, doing what `button` does to its window when it is pressed or invoked.
+fn acting(mut e: El, button: CaptionButton) -> El {
+    e.handlers.on_press = Some(Rc::new(move |_, tx: &mut crate::Tx| match button {
+        CaptionButton::Minimize => tx.minimize(),
+        CaptionButton::Maximize => tx.toggle_maximized(),
+        CaptionButton::Close => tx.request_user_close(),
+    }));
     e
 }
 

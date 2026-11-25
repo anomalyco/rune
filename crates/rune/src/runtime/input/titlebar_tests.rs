@@ -901,3 +901,173 @@ fn deferred_window_drag_runtime_double_click_drag_leave_cancel_and_invariants() 
         assert!(!super::drag_hit_at(&hits, 80.0, 20.0), "custom on_double_press region stays HTCLIENT on Windows");
     }
 }
+
+/// Rune's own frame on Linux (`titlebar::linux`): its buttons and resize edges are elements, so a
+/// run without a window presses them as the pointer does, on every platform.
+mod linux_frame {
+    use crate::el::el;
+    use crate::runtime::Runtime;
+    use crate::titlebar::linux::{ButtonLayout, Sides, WindowState};
+    use crate::titlebar::{BUTTONS_KEY, Caption, EDGES_KEY};
+    use crate::{Cursor, Cx, El, Env, ResizeEdge};
+
+    const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true, minimizable: true, maximizable: true, tiled: Sides::NONE };
+
+    #[derive(Default)]
+    struct State {
+        presses: usize,
+        modal: bool,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let sheet = s.modal.then(|| el().key("sheet").size(120.0, 80.0).modal(true, |s: &mut State| s.modal = false));
+        el().key("root").w_full().h_full().on_press(|s: &mut State| s.presses += 1).children(sheet)
+    }
+
+    /// The frame's caption for a desktop `layout` in an app that reads left to right.
+    fn caption(layout: &str, window: WindowState) -> Caption {
+        let layout = ButtonLayout::parse(layout);
+        Caption { mirrored: layout.leading, ..Caption::own_frame(44.0, layout, window) }
+    }
+
+    fn rig(caption: Caption) -> Runtime<State> {
+        let mut rt = Runtime::new(State::default(), view, (400.0, 300.0), Env::new(true, 1.0));
+        rt.set_caption(Some(caption));
+        rt.frame(0.0);
+        rt
+    }
+
+    fn drawn(rt: &Runtime<State>, key: &str) -> Option<[f32; 4]> {
+        rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some(key)).map(|i| rt.drawn_box(i))
+    }
+
+    fn near(a: [f32; 4], b: [f32; 4]) -> bool {
+        a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3)
+    }
+
+    fn click(rt: &mut Runtime<State>, (x, y): (f32, f32), at: f64) {
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(at);
+    }
+
+    fn centre([x0, y0, x1, y1]: [f32; 4]) -> (f32, f32) {
+        ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    }
+
+    #[test]
+    fn the_buttons_the_layout_names_sit_at_its_side_in_the_band() {
+        // GNOME's default: close alone, a 24 pt circle in the band's middle, 12 pt from the edge.
+        let close = caption("appmenu:close", FLOATING);
+        let rt = rig(close);
+        let bar = drawn(&rt, BUTTONS_KEY).expect("the buttons' row");
+        assert!(near(bar, [400.0 - close.width(1.0), 0.0, 400.0, 44.0]), "{bar:?}");
+        let button = drawn(&rt, "rune-caption-close").expect("close");
+        assert!(near(button, [364.0, 10.0, 388.0, 34.0]), "{button:?}");
+        assert!(drawn(&rt, "rune-caption-minimize").is_none() && drawn(&rt, "rune-caption-maximize").is_none());
+
+        // All three at the left, close nearest the window's edge.
+        let left = caption("close,minimize,maximize:appmenu", FLOATING);
+        let rt = rig(left);
+        let bar = drawn(&rt, BUTTONS_KEY).expect("the buttons' row");
+        assert!(near(bar, [0.0, 0.0, left.width(1.0), 44.0]), "{bar:?}");
+        let lefts: Vec<f32> = ["rune-caption-close", "rune-caption-minimize", "rune-caption-maximize"]
+            .iter().map(|key| drawn(&rt, key).expect("a button")[0]).collect();
+        assert!(near([lefts[0], lefts[1], lefts[2], 0.0], [12.0, 49.0, 86.0, 0.0]), "{lefts:?}");
+
+        // Full screen draws none, and a layout that names none neither.
+        let full = rig(caption("appmenu:close", WindowState { full_screen: true, ..FLOATING }));
+        assert!(drawn(&full, BUTTONS_KEY).is_none() && drawn(&full, EDGES_KEY).is_none());
+        assert!(drawn(&rig(caption("appmenu:", FLOATING)), BUTTONS_KEY).is_none());
+    }
+
+    #[test]
+    fn the_band_inside_the_edges_resizes_the_window_and_the_rest_is_the_views() {
+        use ResizeEdge::{East, North, NorthEast, NorthWest, South, SouthEast, SouthWest, West};
+        let mut rt = rig(caption("appmenu:close", FLOATING));
+        let cases = [
+            ((200.0, 2.0), North, Cursor::ResizeNs),
+            ((200.0, 297.0), South, Cursor::ResizeNs),
+            ((2.0, 150.0), West, Cursor::ResizeEw),
+            ((397.0, 150.0), East, Cursor::ResizeEw),
+            ((2.0, 2.0), NorthWest, Cursor::ResizeNwse),
+            // Along a side, within 16 pt of its corner.
+            ((10.0, 2.0), NorthWest, Cursor::ResizeNwse),
+            ((2.0, 10.0), NorthWest, Cursor::ResizeNwse),
+            ((390.0, 3.0), NorthEast, Cursor::ResizeNesw),
+            ((397.0, 12.0), NorthEast, Cursor::ResizeNesw),
+            ((3.0, 290.0), SouthWest, Cursor::ResizeNesw),
+            ((397.0, 297.0), SouthEast, Cursor::ResizeNwse),
+        ];
+        for ((x, y), edge, cursor) in cases {
+            rt.pointer_move(x, y);
+            assert_eq!(rt.cursor(), cursor, "at {x}, {y}");
+            rt.pointer_down(x, y);
+            assert_eq!(rt.take_resize_action(), Some(edge), "at {x}, {y}");
+            rt.pointer_up(x, y);
+        }
+        rt.frame(0.1);
+        assert_eq!(rt.state.presses, 0, "a press on the band never reaches the view");
+
+        // Past the band's 5 pt, and 16 pt in from a corner, the view has the press.
+        for (i, at) in [(200.0, 150.0), (200.0, 6.0), (20.0, 20.0)].into_iter().enumerate() {
+            rt.pointer_down(at.0, at.1);
+            assert_eq!(rt.take_resize_action(), None, "at {at:?}");
+            rt.pointer_up(at.0, at.1);
+            rt.frame(0.2 + i as f64 / 10.0);
+            assert_eq!(rt.state.presses, i + 1, "at {at:?}");
+        }
+
+        // A maximized window, and one that can't be resized, have no band.
+        for window in [WindowState { maximized: true, ..FLOATING }, WindowState { resizable: false, ..FLOATING }] {
+            let mut rt = rig(caption("appmenu:close", window));
+            assert!(drawn(&rt, EDGES_KEY).is_none(), "{window:?}");
+            rt.pointer_down(200.0, 2.0);
+            assert_eq!(rt.take_resize_action(), None, "{window:?}");
+        }
+    }
+
+    #[test]
+    fn a_window_tiled_to_the_left_half_resizes_from_its_free_side_only() {
+        use ResizeEdge::East;
+        // Tiled on its top, left and bottom: the right side is the one a neighbour shares.
+        let tiled = Sides { right: false, ..Sides::ALL };
+        let mut rt = rig(caption("appmenu:close", WindowState { tiled, ..FLOATING }));
+        // The free side's band runs the window's whole height: its corners have no arms.
+        for at in [(397.0, 150.0), (397.0, 2.0), (397.0, 297.0)] {
+            rt.pointer_move(at.0, at.1);
+            assert_eq!(rt.cursor(), Cursor::ResizeEw, "at {at:?}");
+            rt.pointer_down(at.0, at.1);
+            assert_eq!(rt.take_resize_action(), Some(East), "at {at:?}");
+            rt.pointer_up(at.0, at.1);
+        }
+        // The tiled sides are the view's again.
+        for (i, at) in [(200.0, 2.0), (2.0, 150.0), (200.0, 297.0), (2.0, 2.0)].into_iter().enumerate() {
+            rt.pointer_down(at.0, at.1);
+            assert_eq!(rt.take_resize_action(), None, "at {at:?}");
+            rt.pointer_up(at.0, at.1);
+            rt.frame(0.1 + i as f64 / 10.0);
+            assert_eq!(rt.state.presses, i + 1, "at {at:?}");
+        }
+    }
+
+    #[test]
+    fn the_pointer_presses_the_buttons_and_a_modal_leaves_the_frame_in_reach() {
+        let mut rt = rig(caption("appmenu:minimize,maximize,close", FLOATING));
+        let maximize = centre(drawn(&rt, "rune-caption-maximize").expect("maximize"));
+        click(&mut rt, maximize, 0.1);
+        assert!(rt.take_toggle_maximized(), "a press on Maximize asks the window to maximize");
+        assert_eq!(rt.state.presses, 0, "the view under the button saw nothing");
+
+        // The frame is the window's, not the view's: a modal in the view blocks neither.
+        rt.update(|s, _| s.modal = true);
+        rt.frame(0.2);
+        rt.pointer_down(200.0, 2.0);
+        assert_eq!(rt.take_resize_action(), Some(ResizeEdge::North));
+        rt.pointer_up(200.0, 2.0);
+        click(&mut rt, maximize, 0.3);
+        assert!(rt.take_toggle_maximized());
+        assert!(rt.state.modal, "neither press was one outside the modal");
+    }
+}

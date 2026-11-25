@@ -1,6 +1,6 @@
-//! The window's controls over the app's titlebar: the macOS traffic lights and the Windows
-//! custom frame (`App::titlebar`), and what they take of it (`Cx::titlebar_inset`,
-//! `Cx::chrome_insets`, the caption buttons drawn over the view).
+//! The window's controls over the app's titlebar: the macOS traffic lights, the Windows custom
+//! frame and Rune's own frame on Linux (`App::titlebar`), and what they take of it
+//! (`Cx::titlebar_inset`, `Cx::chrome_insets`, the caption buttons drawn over the view).
 #![cfg_attr(target_arch = "wasm32", allow(dead_code))]
 
 #[cfg(not(target_os = "macos"))]
@@ -131,13 +131,16 @@ fn lights_right(w: &Win) -> bool {
 }
 
 /// Whether Rune replaced the native title bar: macOS draws the app's titlebar under its
-/// transparent one; Windows has the custom frame.
+/// transparent one; Windows has the custom frame, and Linux Rune's own where the Wayland
+/// compositor draws none (`titlebar::linux`).
 fn custom_frame(w: &Win) -> bool {
     #[cfg(target_os = "windows")]
     return w.native.frame.is_some();
     #[cfg(target_os = "macos")]
     { let _ = w; true }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    { let _ = w; crate::titlebar::linux::chosen() }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
     { let _ = w; false }
 }
 
@@ -152,7 +155,25 @@ fn caption(w: &Win, titlebar: Option<crate::Titlebar>) -> Option<crate::titlebar
         }
         f.caption(&w.window)
     });
-    #[cfg(not(target_os = "windows"))]
+    // Rune's own frame: the desktop's buttons, and resize edges while the window floats.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    return titlebar.filter(|_| crate::titlebar::linux::chosen()).map(|t| {
+        // What the compositor allows and which sides it tiled, as `Cx::window_actions` and
+        // `Cx::tiled_edges` report them.
+        let wm = linux_wm_state::read_wayland(&w.window);
+        let tiled = wm.tiled_edges.unwrap_or_default();
+        let window = crate::titlebar::linux::WindowState {
+            maximized: w.is_maximized(),
+            full_screen: w.is_full_screen(),
+            resizable: w.window.is_resizable(),
+            minimizable: wm.actions.minimize != Some(false),
+            maximizable: wm.actions.maximize != Some(false),
+            tiled: crate::titlebar::linux::Sides { top: tiled.top, right: tiled.right, bottom: tiled.bottom, left: tiled.left },
+        };
+        let caption = crate::titlebar::Caption::own_frame(t.height(), crate::titlebar::linux::desktop_layout(), window);
+        crate::titlebar::Caption { hidden: caption.hidden || !t.has_controls(), ..caption }
+    });
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     { let _ = (w, titlebar); None }
 }
 
