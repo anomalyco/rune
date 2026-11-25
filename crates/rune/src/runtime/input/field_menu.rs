@@ -24,6 +24,7 @@ pub(crate) struct FieldMenu {
 /// A pending fallback field menu delivered to `App::on_field_menu`, awaiting
 /// `Tx::resolve_field_menu`.
 pub(crate) struct PendingFieldMenu {
+    pub(crate) token: u64,
     pub(crate) menu: PopupMenu,
     pub(crate) field: FieldMenu,
 }
@@ -140,7 +141,11 @@ impl RuntimeCore {
         log_event!(self, "field menu {path}");
         let field = FieldMenu { path: path.clone(), word, suggestions, toggle, languages };
         if self.field_menu_fallback_active() && app.has_on_field_menu() {
-            self.host.field_menu_fallback = Some(Box::new(PendingFieldMenu { menu: menu.clone(), field }));
+            self.host.field_menu_seq = self.host.field_menu_seq.wrapping_add(1);
+            let token = self.host.field_menu_seq;
+            self.host.deferred_field_menu_pick = None;
+            self.host.field_menu_fallback = Some(Box::new(PendingFieldMenu { token, menu: menu.clone(), field }));
+            one.field_menu_opened = true;
             self.trace_event("field-menu:open");
             let request = crate::FieldMenuRequest::new(field_key, path, crate::PointerPress { x: at.0, y: at.1 }, menu);
             app.on_field_menu(request, one);
@@ -153,6 +158,81 @@ impl RuntimeCore {
             field: Some(Box::new(field)),
         });
         true
+    }
+
+    /// Handles `Tx::resolve_field_menu` during request latching.
+    ///
+    /// Dismissals (`None`) cancel immediately. Picks (`Some(id)`) run immediately when the target
+    /// field is currently reachable, or defer until right after the commit when an active modal
+    /// (such as a closing in-window `rune_kit::Menu`) currently blocks `self.live(&field.path)`.
+    pub(in crate::runtime) fn latch_field_menu_resolution(&mut self, app: &mut dyn AppDriver, picked: Option<String>, one: &mut Tx) {
+        let Some(pending) = self.host.field_menu_fallback.as_ref() else { return };
+        if let Some(id) = picked.as_deref() {
+            let Some(item) = pending.menu.find(id) else { return };
+            if !item.enabled { return; }
+            if self.active_modal().is_some() && self.live(&pending.field.path).is_none() {
+                self.host.deferred_field_menu_pick = Some((pending.token, id.to_owned()));
+                self.commit.dirty = true;
+                return;
+            }
+        }
+        self.host.deferred_field_menu_pick = None;
+        self.resolve_field_menu_fallback(app, picked.as_deref(), one);
+    }
+
+    /// Resolves a deferred `Tx::resolve_field_menu(Some(id))` right after a commit unmounts the
+    /// modal menu that covered the target field, latching its clipboard/focus effects and
+    /// committing any state change in the same frame.
+    pub(in crate::runtime) fn finish_deferred_field_menu(
+        &mut self,
+        app: &mut dyn AppDriver,
+        tx: &mut Tx,
+        open_urls: Option<&mut Vec<crate::open_url::Link>>,
+        open_paths: Option<&mut Vec<crate::open_path::PathRequest>>,
+    ) {
+        let Some((token, id)) = self.host.deferred_field_menu_pick.take() else { return };
+        let Some(pending) = self.host.field_menu_fallback.as_ref() else { return };
+        if pending.token != token || self.live(&pending.field.path).is_none() {
+            return;
+        }
+        let mut post_tx = self.transaction(app);
+        self.resolve_field_menu_fallback(app, Some(&id), &mut post_tx);
+        let wanted_paste = post_tx.paste;
+        let mut urls = std::mem::take(&mut post_tx.open_urls);
+        let mut paths = std::mem::take(&mut post_tx.open_paths);
+        self.latch_requests(app, &mut post_tx);
+        if wanted_paste && self.edit.clipboard().is_some() {
+            for queued in std::mem::take(&mut self.frame.queue) {
+                if !matches!(queued.action, Action::Paste(..)) {
+                    self.frame.queue.push_queued(queued);
+                    continue;
+                }
+                if self.run_action(app, queued.action, &mut post_tx) {
+                    self.commit.dirty = true;
+                }
+            }
+            urls.extend(std::mem::take(&mut post_tx.open_urls));
+            paths.extend(std::mem::take(&mut post_tx.open_paths));
+            self.latch_requests(app, &mut post_tx);
+        }
+        if let Some(dst) = open_urls {
+            dst.extend(urls);
+        } else {
+            post_tx.open_urls.extend(urls);
+        }
+        if let Some(dst) = open_paths {
+            dst.extend(paths);
+        } else {
+            post_tx.open_paths.extend(paths);
+        }
+        self.schedule_wakes(post_tx.wakes.drain(..));
+        if self.commit.dirty || self.commit.relayout || self.kbd.focus_request.is_some() {
+            self.capture_keeps(&mut post_tx);
+            self.commit.set_state_unchanged(false);
+            self.commit_for(app, &post_tx, CommitWhy::DIRTY);
+            self.apply_keeps(app);
+        }
+        merge(tx, post_tx);
     }
 
     /// Resolves the pending fallback field menu delivered to `App::on_field_menu` when

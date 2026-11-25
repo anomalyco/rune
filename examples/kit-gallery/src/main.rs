@@ -257,7 +257,7 @@ fn view(s: &G, cx: &mut Cx<G>) -> El {
     rune_kit::root(col().key("frame").fill(k.c.page).padding(24.0).child(body), overlays)
 }
 
-fn main() {
+fn build_app() -> rune::App<G> {
     rune::App::new(AppSpec {
         scenes: stories::SCENES,
         setup: Some(|s, waker| s.images.set_waker(waker)),
@@ -275,7 +275,10 @@ fn main() {
         s.field_menu = Some(req);
         s.on.remove("fm-preview");
     })
-    .run();
+}
+
+fn main() {
+    build_app().run();
 }
 
 #[cfg(test)]
@@ -298,6 +301,56 @@ mod tests {
                     assert_eq!(s.story, *id);
                 }
             }
+        }
+    }
+
+    /// Drives the `rune-menu--field-menu-fallback` story headless: opens the field menu,
+    /// chooses Cut and Paste (through the modal `rune_kit::Menu` on platforms without native
+    /// pop-ups, or `resolve_popup` on platforms with native pop-ups), and checks the edit.
+    #[test]
+    fn field_menu_fallback_story_drives_cut_and_paste() {
+        let board = rune::clipboard::memory();
+        let mut rt = build_app().headless_runtime((720.0, 480.0), rune::Env::new(true, 1.0));
+        rt.use_clipboard(&board);
+        let (_, setup) = stories::SCENES
+            .iter()
+            .find(|(id, _)| *id == "rune-menu--field-menu-fallback")
+            .expect("field-menu-fallback scene");
+        rt.update(|s, _| {
+            setup(s);
+            s.on.remove("fm-preview");
+            s.field_menu_edit.focused = true;
+            s.field_menu_edit.set_selection(0, 11);
+        });
+        rt.frame(0.0);
+
+        rt.key(rune::KeyEvent::from(rune::Key::ContextMenu));
+        rt.frame(0.0);
+        if rune::popup_menu_supported() {
+            assert!(rt.popup_menu().is_some());
+            rt.resolve_popup(Some("cut")).unwrap();
+            rt.frame(0.0);
+            assert_eq!(board.content().as_ref().map(|c| c.text()), Some("Select text"));
+            assert_eq!(rt.state.field_menu_edit.text, ", right-click or press Shift+F10");
+        } else {
+            assert!(rt.state.field_menu.is_some(), "on_field_menu mounts modal rune_kit::Menu");
+            let (x, y) = rt.find("fm-cut").expect("fm-cut item in modal Menu");
+            rt.pointer_down(x, y);
+            rt.pointer_up(x, y);
+            rt.frame(0.0);
+            assert!(rt.state.field_menu.is_none());
+            assert_eq!(rt.state.field_menu_last.as_deref(), Some("cut"));
+            assert!(rt.state.field_menu_edit.focused);
+            assert_eq!(board.content().as_ref().map(|c| c.text()), Some("Select text"));
+            assert_eq!(rt.state.field_menu_edit.text, ", right-click or press Shift+F10");
+
+            rt.key(rune::KeyEvent::from(rune::Key::ContextMenu));
+            rt.frame(0.0);
+            let (px, py) = rt.find("fm-paste").expect("fm-paste item in modal Menu");
+            rt.pointer_down(px, py);
+            rt.pointer_up(px, py);
+            rt.frame(0.0);
+            assert_eq!(rt.state.field_menu_edit.text, "Select text, right-click or press Shift+F10");
         }
     }
 }
