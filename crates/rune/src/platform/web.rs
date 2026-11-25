@@ -79,6 +79,14 @@ enum Wake {
     StartGpu(crate::machine::Attempt),
     /// A CPU-first WebGPU probe failed; defer WebGL2 fallback until quiet or stay on CPU.
     WebGpuFailed,
+    /// An async browser WebGPU error-scope check (`uber_check` or feature breaker) answered.
+    GpuCheck,
+    /// The empty-queue barrier after `Renderer::try_new` resolved (`HandoverEvent::Built`).
+    HandoverBuilt,
+    /// The hand-over GPU frame's `onSubmittedWorkDone` resolved (`HandoverEvent::GpuDone`).
+    HandoverDone(crate::machine::Attempt),
+    /// The hand-over `FINISH_LIMIT` timeout fired (`HandoverEvent::Tick`).
+    HandoverTimeout(crate::machine::Attempt),
     App,
     /// A live value published: asks for a frame only while one is still pending.
     Live,
@@ -511,7 +519,11 @@ impl ApplicationHandler<Wake> for Browser {
             }
             Wake::StartGpu(attempt) => { self.gpu_startup_due(attempt); return; }
             Wake::WebGpuFailed => { self.webgpu_probe_failed(); return; }
-            Wake::App => self.hand_over_if_done(),
+            Wake::GpuCheck => { self.on_gpu_check(); return; }
+            Wake::HandoverBuilt => { self.on_handover_built(); return; }
+            Wake::HandoverDone(attempt) => { self.on_handover_done(attempt); return; }
+            Wake::HandoverTimeout(attempt) => { self.on_handover_timeout(attempt); return; }
+            Wake::App => self.poll_handover_timeout(),
             Wake::Live => {
                 if let Some(r) = &mut *self.running.borrow_mut() && r.app.rt().live_pending() {
                     r.full_redraw = true;

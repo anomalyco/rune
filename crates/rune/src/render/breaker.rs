@@ -134,19 +134,41 @@ impl Breakers {
         health.step(&mut self.seq, event)
     }
 
-    /// Whether a check is waiting on the browser, which a later frame picks up.
+    /// Whether a check is waiting on the browser, which wakes the web host when answered.
     pub(super) fn checking(&self) -> bool {
         [&self.isolation, &self.plus_lighter, &self.layer_blur].iter().any(|h| matches!(h, Health::Checking { .. }))
+    }
+
+    /// Non-destructive check for whether any pending browser check already has an answer.
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn has_answer(&self) -> bool {
+        [&self.isolation, &self.plus_lighter, &self.layer_blur].iter().any(|h| {
+            matches!(h, Health::Checking { answer, .. } if answer.lock().unwrap_or_else(|e| e.into_inner()).is_some())
+        })
     }
 }
 
 const FEATURES: [Feature; 3] = [Feature::Isolation, Feature::PlusLighter, Feature::LayerBlur];
 
 impl Renderer {
-    /// Whether a frame drew a fallback while the browser checks a pipeline; draw another soon, and
-    /// it draws with the pipeline if the device took it.
-    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    /// Whether an async browser error-scope check (primary uber shader or lazy feature breaker)
+    /// is still waiting for `popErrorScope()` to resolve.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
     pub(crate) fn checking_gpu(&self) -> bool { self.breakers.checking() || self.uber_check.checking() }
+
+    /// Advances any lazy feature breakers whose async browser error-scope check has answered,
+    /// without encoding a GPU frame. Returns `true` when at least one breaker settled.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn poll_breaker_checks(&mut self, device: &wgpu::Device) -> bool {
+        let mut settled = false;
+        for feature in FEATURES {
+            if let Some(answer) = self.breakers.health(feature).answered() {
+                self.run_breaker(device, feature, answer);
+                settled = true;
+            }
+        }
+        settled
+    }
 
     /// Takes the answers that came since the last frame, then builds what `wanted` needs.
     pub(super) fn check_features(&mut self, device: &wgpu::Device, wanted: impl Fn(Feature) -> bool) {
@@ -169,8 +191,15 @@ impl Renderer {
         while let Some(effect) = queue.pop_front() {
             match effect {
                 Effect::Build => {
+                    #[cfg(target_arch = "wasm32")]
+                    let wake = self.uber_check_wake.clone();
                     let verdict = self.harvest_warmed_feature(device, feature)
-                        .unwrap_or_else(|| checked(device, || self.build_feature(device, feature)));
+                        .unwrap_or_else(|| {
+                            #[cfg(target_arch = "wasm32")]
+                            { checked(device, &wake, || self.build_feature(device, feature)) }
+                            #[cfg(not(target_arch = "wasm32"))]
+                            { checked(device, || self.build_feature(device, feature)) }
+                        });
                     queue.extend(self.breakers.step(feature, Event::Built(verdict)));
                 }
                 Effect::Drop => self.drop_feature(feature),
@@ -240,14 +269,20 @@ fn checked(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
 /// `GPUDevice`), wgpu's thread-local scopes resolve synchronously so refused optional pipelines
 /// (such as `Rgba16Float` layers where half-float render targets are absent) still fall back.
 #[cfg(target_arch = "wasm32")]
-fn checked(device: &wgpu::Device, build: impl FnOnce()) -> Verdict {
+fn checked(device: &wgpu::Device, wake: &super::shader_check::WakeSlot, build: impl FnOnce()) -> Verdict {
     let Some(scopes) = crate::platform::web::health::Scopes::push(device) else {
         return checked_sync_scopes(device, build);
     };
     build();
     let answer = Answer::default();
     let to = answer.clone();
-    scopes.pop(move |error| *to.lock().unwrap_or_else(|e| e.into_inner()) = Some(error));
+    let wake = wake.clone();
+    scopes.pop(move |error| {
+        *to.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
+        if let Some(wake) = wake.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            wake();
+        }
+    });
     Verdict::Later(answer)
 }
 
