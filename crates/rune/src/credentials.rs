@@ -40,6 +40,11 @@
 //! A failed `write` leaves what the service held before. A [`Credential`]'s `Debug` output never
 //! shows its secret, and the copy it holds is zeroed when it is dropped; copies the platform's
 //! own API or the D-Bus connection make are outside Rune's reach.
+//!
+//! Verification status: the Windows backend has been exercised against the real Credential
+//! Manager through an opt-in ignored test. The macOS/iOS Keychain and Linux Secret Service
+//! backends have been compiled and unit-tested behind internal seams, without live calls to a
+//! real Keychain or Secret Service daemon.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -49,9 +54,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use zeroize::Zeroizing;
 
-#[cfg(target_vendor = "apple")]
+#[cfg(any(test, target_vendor = "apple"))]
 mod apple;
-#[cfg(all(target_os = "linux", feature = "dbus"))]
+#[cfg(any(test, all(target_os = "linux", feature = "dbus")))]
 mod secret_service;
 #[cfg(test)]
 mod tests;
@@ -67,8 +72,9 @@ pub const MEMORY_ENV: &str = "RUNE_CREDENTIALS";
 pub enum CredentialError {
     /// The service name was empty.
     Empty,
-    /// The service or account name can't be stored (it holds a NUL character, say), or the
-    /// secret is larger than the store keeps (Credential Manager keeps 2,560 bytes).
+    /// The service or account name can't be stored (it holds a NUL character or exceeds the
+    /// store's length limit), or the secret is larger than the store keeps (Credential Manager
+    /// keeps 2,560 bytes).
     Invalid,
     /// This platform has no credential store (the web, Android, Linux without the `dbus`
     /// feature).
@@ -101,7 +107,11 @@ pub struct Credential {
 
 impl Credential {
     pub(crate) fn new(account: String, secret: Vec<u8>) -> Self {
-        Self { account, secret: Zeroizing::new(secret) }
+        Self::from_zeroizing(account, Zeroizing::new(secret))
+    }
+
+    pub(crate) fn from_zeroizing(account: String, secret: Zeroizing<Vec<u8>>) -> Self {
+        Self { account, secret }
     }
 
     /// The account name it was written with.
@@ -158,9 +168,10 @@ impl Credentials {
     /// Stores `secret` for `service` under `account`, replacing what `service` held; a failed write
     /// leaves it as it was. Blocks; call it off the UI thread.
     ///
-    /// On Linux the write is done once the new item is stored; removing the service's items for
-    /// other accounts afterwards is a tidy-up, and one it couldn't remove (in a locked collection,
-    /// say) is older, so [`read`](Self::read) returns the new one.
+    /// On Linux the write is done once the new item is stored; removing other unlocked items for
+    /// the service afterwards (including duplicates in other collections) is a tidy-up, and one
+    /// it couldn't remove (in a locked collection, say) is older, so [`read`](Self::read) returns
+    /// the new one.
     ///
     /// Rune keeps one item per service. On macOS and iOS, when another tool left several Keychain
     /// items for the service under different accounts, this fails with
