@@ -56,6 +56,7 @@ impl FrameHost for OverlayFrame<'_> {
     type Prepared = PreparedOverlayFrame;
 
     fn gate(&mut self) -> Gate {
+        if self.core.poll_terminal_gpu_loss(self.app) { return Gate::Skip; }
         let timer = !self.core.quiet.step(frame::QuietEvent::FrameStarts).is_empty();
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.core.surface.live_mut() {
@@ -442,6 +443,7 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn submit_and_present(&mut self, prepared: PreparedOverlayFrame, _info: &StepInfo) -> Instant {
+        let terminal = self.core.is_terminal_gpu_policy();
         let (Some(live), Some(renderer), Some(gpu)) = (
             self.core.surface.live_mut(),
             self.core.renderer.as_mut(),
@@ -455,6 +457,9 @@ impl FrameHost for OverlayFrame<'_> {
         live.slot.presented();
         frame::record_presented(self.prewarm);
         crate::render::gpu_events::presented();
+        if terminal {
+            rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+        }
         if !self.prewarm && !gpu.is_lost() {
             renderer.warm_effects(&gpu.device);
         }
@@ -473,6 +478,7 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
+        if self.core.poll_terminal_gpu_loss(self.app) { self.more = false; return; }
         // If the device was lost during a layer surface's own present, Mesa never committed the
         // buffer or the `wl_surface.frame` callback we just requested, so take the surface down
         // instead of waiting on a callback that will never arrive.

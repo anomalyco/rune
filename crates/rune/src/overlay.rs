@@ -75,6 +75,9 @@ mod draw;
 #[path = "overlay/frame.rs"]
 mod frame;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "overlay/gpu_loss.rs"]
+mod gpu_loss;
+#[cfg(not(target_arch = "wasm32"))]
 use frame::{OverlayRenderArgs, idle_after, render_frame, step};
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/input.rs"]
@@ -540,8 +543,11 @@ pub(crate) trait PendingOverlay: AnyHost {
     fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>);
     fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing);
     fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects);
+    fn set_gpu_loss_latch(&mut self, latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>);
     #[cfg(test)]
     fn font_smoothing(&self) -> crate::FontSmoothing;
+    #[cfg(test)]
+    fn gpu_loss_latch(&self) -> Option<Arc<crate::render::loss_latch::GpuLossLatch>>;
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -692,6 +698,10 @@ pub(in crate::overlay) struct OverlayCore {
     pointer_owner: pointer_inject::PointerOwnership,
     /// The effect pipelines this overlay's renderer compiles ahead of their first use.
     prewarm_effects: crate::PrewarmEffects,
+    /// Shared terminal GPU-loss latch inherited from the owning `App` when `GpuLossPolicy::Terminal`.
+    gpu_loss_latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>,
+    /// Whether terminal GPU teardown has already run on this overlay.
+    terminal_gpu_entered: bool,
     /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
     pub(in crate::overlay) frame_latency: Option<u32>,
     /// `ConfiguredOverlay::on_materials`, called before each present.
@@ -811,6 +821,8 @@ impl OverlayCore {
             position_owner: input::PositionOwner::Managed,
             pointer_owner: pointer_inject::PointerOwnership::Idle,
             prewarm_effects: crate::PrewarmEffects::NONE,
+            gpu_loss_latch: None,
+            terminal_gpu_entered: false,
             frame_latency: None,
             on_materials: None,
             requested_renderer: crate::RendererKind::Gpu,

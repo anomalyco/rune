@@ -16,6 +16,7 @@ impl OverlayCore {
     }
 
     pub(super) fn show_fading(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, fade: Duration) {
+        if self.poll_terminal_gpu_loss(app) { return; }
         if self.presence.shown() { return; }
         // Hidden, it missed the redraws a new accent or portal preference asks for.
         app.rt_mut().set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
@@ -92,6 +93,7 @@ impl OverlayCore {
     /// only its window at startup and parks it; its surface, and the GPU device for the first,
     /// wait for the show.
     pub(super) fn prepare(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, showing: bool) {
+        if self.poll_terminal_gpu_loss(app) { return; }
         #[cfg(target_os = "windows")]
         if self.uses_cpu_layered(app) {
             self.prepare_cpu(app, event_loop, showing);

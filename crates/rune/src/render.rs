@@ -12,6 +12,7 @@ mod dxbc;
 mod effect_warm;
 mod fill;
 mod first_use;
+pub(crate) mod loss_latch;
 mod gpu_loss;
 mod instance;
 mod layers;
@@ -56,6 +57,7 @@ pub(crate) mod surface_alpha;
 pub(crate) mod translucency;
 
 pub mod cpu_boot;
+pub use loss_latch::GpuLossPolicy;
 
 #[cfg(test)]
 mod abi_tests;
