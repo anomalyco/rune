@@ -160,6 +160,17 @@ impl RuntimeCore {
         }
     }
 
+    /// Blurs the focused editable field when the browser's hidden input lost DOM focus externally
+    /// (for example, iOS keyboard dismissal or focus moving outside the canvas). Matches `key` so
+    /// a stale blur never clears a field that took focus afterwards.
+    pub(crate) fn web_field_blur(&mut self, key: &str) -> bool {
+        if key.is_empty() || self.kbd.focus.path() != Some(key) || self.focused_input().is_none() {
+            return false;
+        }
+        self.frame.queue.push(Action::Blur);
+        true
+    }
+
     pub(crate) fn web_key(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value) -> bool {
         let flag = |key: &str| event[key].as_bool().unwrap_or(false);
         let mods = crate::input::key_table::web_mods(flag("shift"), flag("ctrl"), flag("alt"), flag("meta"));

@@ -417,3 +417,52 @@ fn web_secure_replace_replaces_typed_text_clears_and_leaks_nothing() {
     rt.frame(0.0);
     assert_eq!(rt.state.pw.text, "kept-secret");
 }
+
+#[test]
+fn web_field_blur_clears_matching_focused_input_fires_on_focus_change_and_ignores_stale_keys() {
+    struct State {
+        a: crate::TextEdit,
+        b: crate::TextEdit,
+        blurs: Vec<&'static str>,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        crate::col().w_full().h_full()
+            .child(crate::text_input(&s.a, crate::tok::type_::BODY).key("a").size(200.0, 36.0)
+                .on_edit(|s: &mut State| &mut s.a)
+                .on_focus_change(|s: &mut State, focused, _| if !focused { s.blurs.push("a"); }))
+            .child(crate::text_input(&s.b, crate::tok::type_::BODY).key("b").size(200.0, 36.0)
+                .on_edit(|s: &mut State| &mut s.b)
+                .on_focus_change(|s: &mut State, focused, _| if !focused { s.blurs.push("b"); }))
+    }
+    let mut rt = Runtime::new(
+        State { a: crate::TextEdit::new("one").secure(), b: crate::TextEdit::new("two"), blurs: Vec::new() },
+        view, (300.0, 120.0), Env::default(),
+    );
+    rt.frame(0.0);
+    let a_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("a")).unwrap().path.clone();
+    let b_path = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("b")).unwrap().path.clone();
+
+    rt.set_focus(Some(a_path.clone()), true);
+    rt.frame(0.0);
+    assert!(rt.state.a.focused);
+    let mut mirror = Mirror::default();
+    assert!(rt.web_context(&mut mirror) && mirror.key == a_path);
+
+    // Stale or empty key is ignored and leaves focus intact.
+    assert!(!rt.core_mut().web_field_blur(""));
+    assert!(!rt.core_mut().web_field_blur(&b_path));
+    rt.frame(0.0);
+    assert!(rt.state.a.focused && rt.state.blurs.is_empty());
+
+    // Matching key queues Action::Blur, clears editing focus/caret, fires on_focus_change(false),
+    // and clears web_context mirror key so bridge.js tears down the hidden input.
+    assert!(rt.core_mut().web_field_blur(&a_path));
+    rt.frame(0.0);
+    assert!(!rt.state.a.focused && !rt.has_focus());
+    assert_eq!(rt.state.blurs, vec!["a"]);
+    assert!(rt.web_context(&mut mirror) && mirror.key.is_empty());
+
+    // Repeated blur after focus is already cleared is a no-op.
+    assert!(!rt.core_mut().web_field_blur(&a_path));
+    assert_eq!(rt.state.blurs, vec!["a"]);
+}
