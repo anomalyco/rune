@@ -169,6 +169,8 @@ pub(crate) struct Node {
     pub(super) virtual_mount: bool,
     /// Built from `El::virtualize` or `El::virtual_rows`.
     pub(super) virtual_list: bool,
+    /// Built from `El::virtual_items`.
+    pub(super) virtual_items: bool,
     /// `El::selection_group`.
     pub(super) selection_group: bool,
     pub(super) window_drag: crate::el::WindowDrag,
@@ -256,6 +258,7 @@ impl Node {
             group_fade: old.group_fade,
             virtual_mount: false,
             virtual_list: false,
+            virtual_items: false,
             selection_group: false,
             window_drag: crate::el::WindowDrag::None,
             ime_cursor: false,

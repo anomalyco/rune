@@ -395,3 +395,76 @@ fn record_mismatch_counts_both_plain_and_scroll_and_enforces_strict_policy() {
     );
     assert_eq!(rt.paint_keep_mismatches(), 4);
 }
+
+#[test]
+fn exiting_child_in_tree_order_never_leaks_ghost_instances_after_unmount() {
+    use crate::ScrollSpec;
+
+    struct Swap {
+        custom: bool,
+    }
+
+    fn view(s: &Swap, _: &mut Cx<Swap>) -> El {
+        let content = if s.custom {
+            row()
+                .key("old")
+                .size(120.0, 24.0)
+                .fill(Color { r: 0.9, g: 0.2, b: 0.2, a: 1.0 })
+                .transition(crate::Transition::opacity())
+                .child(el().key("old-dot").size(8.0, 8.0).fill(Color::WHITE))
+        } else {
+            row()
+                .key("new")
+                .size(120.0, 24.0)
+                .fill(Color { r: 0.2, g: 0.5, b: 0.9, a: 1.0 })
+                .transition(crate::Transition::none())
+        };
+        // A sticky sibling keeps `tree_order == true` across the frame where `old` unmounts,
+        // matching a diff file header with `sticky_left` whose custom child fades out.
+        let hdr = col()
+            .key("hdr")
+            .w_full()
+            .h(40.0)
+            .sticky_left(0.0)
+            .child(row().key("inner").w_full().h(36.0).child(content));
+        col()
+            .key("scroll")
+            .size(300.0, 200.0)
+            .scroll(ScrollSpec { stick_bottom: false })
+            .scroll_xy()
+            .child(col().key("list").w(500.0).child(hdr).child(el().key("body").w_full().h(400.0)))
+    }
+
+    let make = || {
+        let mut rt = Runtime::new(Swap { custom: true }, view, (300.0, 200.0), Env::new(true, 2.0));
+        rt.frame(0.0);
+        for _ in 0..10 {
+            rt.frame(1.0 / 60.0);
+        }
+        rt.state.custom = false;
+        rt.invalidate();
+        rt
+    };
+
+    // 1. Debug strict mode must find zero PaintKeep mismatches across exit and unmount.
+    let mut rt_dbg = make();
+    rt_dbg.set_paint_keep_strict(true);
+    for f in 0..40 {
+        rt_dbg.frame(1.0 / 60.0);
+        assert_eq!(rt_dbg.paint_keep_mismatches(), 0, "frame {f}: unexpected PaintKeep mismatch");
+    }
+
+    // 2. Release-like mode (force_copy = true) must match a fresh unskipped paint byte-for-byte
+    //    on every frame, including the frame right after the exiting child unmounts.
+    let mut rt_copy = make();
+    let mut rt_fresh = make();
+    rt_copy.core_mut().paint.keep.force_copy = true;
+    for f in 0..40 {
+        rt_copy.frame(1.0 / 60.0);
+        rt_fresh.core_mut().paint.keep.off_once = true;
+        rt_fresh.frame(1.0 / 60.0);
+        let a = bytemuck::cast_slice::<Instance, u8>(&rt_copy.core().instances);
+        let b = bytemuck::cast_slice::<Instance, u8>(&rt_fresh.core().instances);
+        assert_eq!(a, b, "frame {f}: release-mode PaintKeep copied stale exiting child instances");
+    }
+}

@@ -56,6 +56,7 @@ pub(crate) struct CxCore {
     pub(super) chrome: crate::ChromeInsets,
     pub(super) maximized: bool,
     pub(super) full_screen: bool,
+    pub(super) window_backdrop: crate::WindowBackdrop,
     /// `Cx::caption_color`, read once the view returns.
     pub(super) caption_color: Option<Color>,
     /// `Cx::foreground` and `Cx::focus_ring`, read once the view returns.
@@ -77,6 +78,15 @@ pub(crate) struct CxCore {
     pub(super) caret_read: std::cell::Cell<bool>,
     pub(super) layout: layout_read::LayoutRects,
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
+}
+
+/// The host's safe-area insets in points, top/right/bottom/left: the browser's on the web,
+/// zero on native.
+pub(crate) fn safe_area_insets() -> [f32; 4] {
+    #[cfg(target_arch = "wasm32")]
+    { crate::platform::web::safe_area() }
+    #[cfg(not(target_arch = "wasm32"))]
+    { [0.0; 4] }
 }
 
 impl CxCore {
@@ -101,6 +111,7 @@ impl CxCore {
         self.chrome = crate::ChromeInsets::default();
         self.maximized = false;
         self.full_screen = false;
+        self.window_backdrop = crate::WindowBackdrop::None;
     }
 
     pub(crate) fn env(&self) -> Env { self.env }
@@ -109,6 +120,7 @@ impl CxCore {
     pub(crate) fn chrome_insets(&self) -> crate::ChromeInsets { self.chrome }
     pub(crate) fn is_maximized(&self) -> bool { self.maximized }
     pub(crate) fn is_full_screen(&self) -> bool { self.full_screen }
+    pub(crate) fn window_backdrop(&self) -> crate::WindowBackdrop { self.window_backdrop }
     pub(crate) fn caption_color(&mut self, color: Color) { self.caption_color = Some(color); }
     pub(crate) fn foreground(&mut self, color: Color) { self.defaults.foreground = Some(color); }
     pub(crate) fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
@@ -122,12 +134,7 @@ impl CxCore {
     pub(crate) fn set_titlebar(&mut self, titlebar: crate::Titlebar) { self.titlebar.titlebar = Some(titlebar); }
     pub(crate) fn accent(&self) -> Color { self.system_accent.accent(self.env.system_dark) }
     pub(crate) fn focus_color(&self) -> Color { self.system_accent.focus(self.env.system_dark) }
-    pub(crate) fn safe_area(&self) -> [f32; 4] {
-        #[cfg(target_arch = "wasm32")]
-        { crate::platform::web::safe_area() }
-        #[cfg(not(target_arch = "wasm32"))]
-        { [0.0; 4] }
-    }
+    pub(crate) fn safe_area(&self) -> [f32; 4] { safe_area_insets() }
     pub(crate) fn hover_none(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         { crate::platform::web::hover_none() }
@@ -268,6 +275,29 @@ impl<S> Cx<S> {
     /// ```
     #[inline(always)]
     pub fn is_full_screen(&self) -> bool { self.core.is_full_screen() }
+    /// The whole-window system backdrop material currently active behind this window or overlay,
+    /// as confirmed by the operating system.
+    ///
+    /// Returns [`WindowBackdrop::None`](crate::WindowBackdrop::None) whenever no backdrop was
+    /// requested or the platform cannot activate one (Windows builds before 22621, opaque
+    /// windows, plain HWND swap chains, the CPU painter, software/WARP adapters, DWM error,
+    /// macOS, Linux, web, staged playground subviews, and headless runs unless set via
+    /// [`Runtime::set_window_backdrop`]). The view and any `memo` closures rebuild automatically
+    /// when this changes.
+    ///
+    /// ```
+    /// # use rune::{Color, Cx, El, el};
+    /// fn root(_: &(), cx: &mut Cx<()>) -> El {
+    ///     let bg = if cx.window_backdrop().is_active() {
+    ///         Color::TRANSPARENT
+    ///     } else {
+    ///         rune::tok::theme(cx.system_dark()).bg
+    ///     };
+    ///     el().w_full().h_full().fill(bg)
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn window_backdrop(&self) -> crate::WindowBackdrop { self.core.window_backdrop() }
     /// The colour of the Windows caption buttons' symbols (Electron's `titleBarOverlay`
     /// `symbolColor`), for a titlebar whose colours follow the app's theme rather than the
     /// system's light or dark setting: by default black in light mode, white in dark. Their

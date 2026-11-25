@@ -491,6 +491,18 @@ policy changes are applied in the same mutation phase.
   follows it again.
   `.scroll_edge_fade(w)` fades a viewport's top and bottom only while content is hidden under
   them (strength = hidden extent / 15 pt), and `.scroll_margin(pts)` stops revealed rows clear of it.
+- **Virtual items** (`El::virtual_items(Rc<dyn VirtualItems>)`, `VirtualItems`): an app-windowed
+  keyed container for 2D canvases, node graphs, and LOD scenes positioned under `live_offset` /
+  `live_scale` (no scroll viewport or growth stack required). `VirtualItems::version()` is polled
+  in O(1) each frame so idle windows do no work; when the version changes, the commit takes the
+  remount fast path without re-running `view`. Staying items keep their retained subtrees,
+  `NodeId`, paint-keep epochs, `memo` entries, and `Live` / `LiveText` subscriptions without
+  calling `build`; leaving items unmount immediately except an item holding keyboard focus (or a
+  focused descendant), which stays pinned and mounted until focus leaves it; entering items mount
+  settled (no entrance animation while panning) up to optional `mount_budget()` per frame ordered
+  by `mount_priority(key)`, while mounted children always render in `keys()` back-to-front order.
+  Multi-frame fills use an explicit backoff/stall state machine so runaway version churn settles
+  safely. See the `Lists/Virtual items canvas` story in `examples/playground`.
 - **Sticky headers and bars** (`.sticky_top(inset)`, `.sticky_bottom(inset)`, `.stuck_shadow(shadow)`,
   `tx.keep_on_screen(key)`, `runtime/scroll/sticky.rs`): an element inside a vertical scroll viewport pins to the
   nearest scroll viewport's top or bottom edge (offset inward by `inset`) while its parent stays in
@@ -906,7 +918,10 @@ app.run();
   The default looks again after the hooks, so a window a hook opened counts as showing.
   Rune adds `applicationShouldHandleReopen:hasVisibleWindows:` to winit's app delegate, which
   lacks it. An app that installs its own reopen Apple event handler replaces AppKit's, which is
-  what asks the delegate, so Rune's reopening never runs; use `on_reopen` instead. Other platforms
+  what asks the delegate, so Rune's reopening never runs; use `on_reopen` instead. On Windows and
+  Linux a reopen is a later launch without links (or files, on Linux) handed to the running app
+  by `rune::single_instance`, and on Linux also `org.freedesktop.Application.Activate` or
+  `ActivateAction` (see "Links and relaunches on Windows" and "on Linux" below). Other platforms
   have no reopen, so the hook never runs there. Headless scripts send it with `{"reopen": true}`.
 - Links opened with the app (macOS): `App::on_open_url(|s, url: &str, tx| ..)` runs on the main
   thread for each `myapp://...` link the system hands the app (`open`, a browser, another app),
@@ -935,8 +950,10 @@ app.run();
 
   Launch Services learns the scheme when the bundle is opened or registered (`lsregister -f
   MyApp.app`); then `open 'myapp://x'` launches or reaches the app. A bare `cargo run` binary has
-  no bundle and gets no links. iOS isn't wired yet (winit owns the scene delegate), and Linux
-  passes a link to a new process as a launch argument, so the hook never runs there.
+  no bundle and gets no links. iOS isn't wired yet (winit owns the scene delegate). On Linux the
+  hook receives the links among the launch arguments, and with `rune::single_instance` those of
+  later launches and of `org.freedesktop.Application.Open` (see "Links and relaunches on Linux"
+  below).
 - Files opened with the app (macOS): `App::on_open_files(|s, paths: &[PathBuf], tx| ..)` (and
   `WindowSpec::on_open_files`) runs on the main thread for each batch of files the system hands
   the app (Finder double-click or "Open With", files dropped on the Dock icon, or `open -a MyApp
@@ -981,8 +998,13 @@ app.run();
   ```
 
   Register the bundle (`lsregister -f MyApp.app`) so Launch Services learns the document types.
-  Never called on Windows or Linux, which pass opened files to a new process as launch arguments.
-  Headless scripts send it with `{"open_files": ["a.torrent"]}`.
+  Never called on Windows, which passes opened files to a new process as launch arguments. On
+  Linux it receives the local `file://` URIs among the launch arguments (`Exec=myapp %U` in the
+  desktop entry), and with `rune::single_instance` those of later launches and of
+  `org.freedesktop.Application.Open` calls (below). A plain path argument isn't one: the first
+  process reads its own from its arguments, and a later launch's are not passed on (that launch
+  reopens the app), so use `%U` rather than `%F`. Headless scripts send it with
+  `{"open_files": ["a.torrent"]}`.
 - Links and relaunches on Windows: Windows starts a new process for each launch, passing a link
   as an argument. The hook receives the links among the first process's arguments
   (`scheme://…`) like the launching link on macOS. Call `rune::single_instance("com.example.myapp")`
@@ -1005,6 +1027,35 @@ app.run();
   binary not running from a bundle and older macOS answer `UrlSchemeError::Unsupported`.
   Headless runs and tests change nothing: they record the scheme for
   `Runtime::take_url_scheme_requests` and answer `Ok(())`.
+- Links and relaunches on Linux: `rune::single_instance("com.example.myapp")` keeps one process
+  as on Windows, over a Unix socket in `$XDG_RUNTIME_DIR`. A later launch sends its arguments and
+  its activation token (`XDG_ACTIVATION_TOKEN`, `DESKTOP_STARTUP_ID`) to the running process and
+  `single_instance` returns false. Its links reach `on_open_url` and its local `file://` URIs
+  `on_open_files`; a launch with neither reopens the app (`App::on_reopen`, then the default).
+  `rune::url_schemes` works as on Windows, for launch arguments and `Open`'s links alike. A
+  launch that comes while the app quits starts it again with its arguments (an `Open`, its URIs)
+  and its token as `XDG_ACTIVATION_TOKEN`. The token goes to the window the launch brings
+  forward: the one the default reopen shows or, when one already shows, that window; otherwise
+  the next window the app opens (`AppHandle::open()` from `on_open_url`), within 20 s. A
+  reopen's token that no window took (an `on_reopen` hook handled it without opening one) is
+  dropped once the reopen is done.
+  With the `dbus` feature (on by default) the first process also owns the id on the session bus
+  and serves `org.freedesktop.Application` at `/com/example/myapp` (dots as slashes, dashes as
+  underscores): `Activate` and `ActivateAction` reopen the app (the action's name isn't passed
+  on), and `Open` sends links to `on_open_url` and `file://` URIs to `on_open_files`, with the
+  platform data's `activation-token` kept as above. The id must be a valid bus name (two or more
+  dot-separated elements of ASCII letters, digits, `_` and `-`, none starting with a digit), or
+  only the socket is used. The name is taken without queueing, so while an earlier process
+  still holds it (it hasn't exited or called `rune::release_instance`) the new one serves only
+  the socket. For `DBusActivatable=true`, name the desktop entry `com.example.myapp.desktop`
+  (with `MimeType=x-scheme-handler/myapp;` for a scheme) and install a session service file,
+  `~/.local/share/dbus-1/services/com.example.myapp.service`:
+
+  ```ini
+  [D-BUS Service]
+  Name=com.example.myapp
+  Exec=/path/to/myapp
+  ```
 - Edge overlays (HUDs): see `App::overlay` below.
 
 ### Launching fast
@@ -2503,6 +2554,27 @@ drops them. `--trace` records `drop-hover:true:<path>`, `drop-hover:false:<path>
 - Once the frame finishes, desktop hosts execute the request off the UI thread: `NSWorkspace` on macOS (`openURL:configuration:completionHandler:` / `activateFileViewerSelectingURLs:` after background path resolution), a background STA worker calling `ShellExecuteW` / `SHOpenFolderAndSelectItems` on Windows, and the shared portal worker on Linux (`org.freedesktop.portal.OpenURI.OpenFile` for open, `org.freedesktop.FileManager1.ShowItems` then `OpenURI.OpenDirectory` for reveal, falling back to `xdg-open`).
 - Headless runs and tests launch nothing and capture every request as `PathRequest { path, action: PathAction }` via `Runtime::take_path_requests()`. `examples/drop-files` shows Open and Reveal buttons for dropped files.
 
+### Keeping secrets (`rune::credentials`)
+
+`Credentials::system()` keeps an API token or password in the platform's credential store between launches: the Keychain on macOS and iOS, Credential Manager on Windows, the Secret Service on Linux (with the default `dbus` feature). Each credential is keyed by a service name and holds one account name and a secret as bytes; `write` replaces what the service held (a failed write leaves it as it was), `read` returns `Option<Credential>`, `delete` is fine when nothing is stored. The web, Android and Linux without `dbus` return `CredentialError::Unsupported`, so the app can ask again each launch.
+
+Every call blocks and may show a system prompt, so run it off the UI thread and land the answer in `poll`. Keep the `Result`, so "nothing stored" (`Ok(None)`) stays apart from a store that refused (`Denied`, `Unsupported`, `Failed`):
+
+```rust
+// state: token: Latest<Result<Option<Credential>, CredentialError>>
+s.token.request("com.example.images.api", |service| Credentials::system().read(service));
+// poll:
+let Some(answer) = s.token.take() else { return false };
+match answer {
+    Ok(Some(found)) => s.api_token = Some(found),
+    Ok(None) => s.ask_for_token = true,
+    Err(e) => s.error = Some(e.to_string()),
+}
+true
+```
+
+Headless work never touches the person's store: once the process has a headless run (`--snap`, `--script`, `--tree`, `--html` and the like, through `run` or `App::args`), has built a runtime with `App::headless_runtime`, or runs with `RUNE_CREDENTIALS=memory`, `Credentials::system()` is one in-memory store shared by the process. Windows, overlays and an app's own `Runtime::new` (thumbnails, an export) keep the platform's store, so a test that drives `Runtime::new` itself, or makes no runtime at all, looks like the app: use `Credentials::memory()` there (a store of its own) or set `RUNE_CREDENTIALS=memory`. On Linux, Rune's items carry `xdg:schema` `dev.rune.Credential` beside `service` and `account`, so other apps' items for the same service name stay untouched. `Credential`'s `Debug` output redacts the secret, and the copy a `Credential` holds is zeroed on drop (copies the platform's API or D-Bus make are outside Rune's reach).
+
 ### Pop-up and context menus
 
 `tx.popup_menu(menu, anchor, on_pick)` opens a native menu once the handler's frame is done.
@@ -3338,13 +3410,57 @@ AppKit window level, `ConfiguredOverlay::macos_color_space` selects `MacColorSpa
 `examples/glass-panel` puts it together: a card that flies across a large window, hands off
 to a card-sized window that moves 60 times a second, and fades out.
 
+### Window backdrops (`WindowBackdrop`)
+
+```rust,ignore
+let opts = WindowOptions { transparent: true, ..Default::default() };
+let spec = AppSpec::new("Notes", (800.0, 600.0), || (), |_, cx| {
+    let bg = if cx.window_backdrop().is_active() { Color::TRANSPARENT } else { theme_bg(cx) };
+    el().w_full().h_full().fill(bg)
+});
+App::new(spec).window_options(opts).window_backdrop(WindowBackdrop::Mica).run();
+```
+
+Opt-in whole-window OS backdrop material behind the entire window or overlay (`WindowBackdrop::None`
+default, `Mica`, `MicaAlt`, `Acrylic`), configured with `App::window_backdrop`,
+`WindowSpec::window_backdrop`, or `ConfiguredOverlay::window_backdrop`, updated at runtime with
+`Tx::set_window_backdrop`, `WindowHandle::set_window_backdrop`, or
+`OverlayHandle::set_window_backdrop`, and queried in views with `Cx::window_backdrop()` (memo-tracked;
+headless tests can drive it with `Runtime::set_window_backdrop`).
+
+- **Windows 11 Build 22621+ (22H2)**: applies only the documented Win32 attribute
+  `DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)` (`DWMSBT_MAINWINDOW`, `DWMSBT_TABBEDWINDOW`,
+  `DWMSBT_TRANSIENTWINDOW`; `DWMSBT_NONE` when clearing) and syncs `DWMWA_USE_IMMERSIVE_DARK_MODE`
+  while active. Never uses undocumented `SetWindowCompositionAttribute`, accent policies, or
+  pre-22H2 `DWMWA_MICA_EFFECT`. Activates only on transparent windows and overlays presenting on a
+  hardware GPU through DirectComposition (`DxgiFromVisual`, `CompositeAlphaMode::PreMultiplied`,
+  not on the CPU painter or WARP). Re-applied across window recreation, hide/show,
+  maximize/unmaximize, device reattach, and theme updates.
+- **Zero cost when unused**: while `WindowBackdrop::None` is unchanged from default, Rune makes zero
+  DWM backdrop calls and existing windows, CPU-first launches, and headless renders stay unchanged.
+- **Microsoft activation and policy fallbacks**: by Microsoft design, Mica, Mica Alt, and Desktop
+  Acrylic fall back to a solid neutral colour when the window is inactive, on `WS_EX_NOACTIVATE`
+  overlays, in Battery Saver, in High Contrast, or when Transparency Effects are turned off.
+- **No transparent holes**: on Windows builds before 22621, opaque windows, `DxgiFromHwnd`, the
+  CPU painter, WARP, DWM error, macOS, Linux, web, and headless renders, `Cx::window_backdrop()`
+  reports `WindowBackdrop::None`. If a non-overlay Windows transparent window requested a non-`None`
+  backdrop that could not activate, Rune clears its surface to an opaque theme-matched fallback so
+  even a view that skips `cx.window_backdrop()` never opens a transparent hole.
+- **Live verification status**: eligibility, attribute constants, and lifecycle re-application are
+  unit-tested off-screen behind a Win32 seam; live visual composition on real Windows 11 hardware
+  has not yet been watched by the team and will be confirmed on issue #300. Try it with
+  `cargo run -p settings -- --backdrop mica`.
+
 ### Frosted panels
 
-Which blur a frosted panel needs depends on what sits behind it:
+Which blur a frosted surface needs depends on what sits behind it and whether it covers the whole
+window or one element:
 
-- **The desktop or other windows:** `El::system_material` above, in a transparent window. Only
-  the platform can see behind the window.
-- **The app's own content:** `El::backdrop_blur` below. (`El::blur(σ)` blurs the element's own
+- **The whole window over the desktop (Windows 11 22H2+):** `WindowBackdrop` above (`Mica`,
+  `MicaAlt`, `Acrylic`), in a transparent DirectComposition window or overlay.
+- **One rounded element over the desktop (macOS):** `El::system_material` above, in a transparent
+  window. Only the platform can see behind the window.
+- **The app's own content (every platform):** `El::backdrop_blur` below. (`El::blur(σ)` blurs the element's own
   subtree, not its backdrop.) For refraction, a saturation lift and grain on top of the blur,
   `rune-fx`'s `Fx::lens(LensParams { frost: 1.0, .. })` is Liquid Glass "regular": put
   `.effect_backdrop(true)` on its effect slot and draw through `Renderer::draw_with_backdrop`,

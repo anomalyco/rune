@@ -102,6 +102,7 @@ impl Running {
     pub(super) fn apply_frame_requests(&mut self, window: &Window) {
         let rt = self.app.rt_mut();
         let _ = rt.host.window_color_scheme.take();
+        let _ = rt.host.window_backdrop_request.take();
         let _ = rt.host.represented_file.take_change();
         let _ = rt.host.document_edited.take_change();
         if !self.embedded

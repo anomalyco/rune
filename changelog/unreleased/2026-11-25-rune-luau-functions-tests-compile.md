@@ -1,0 +1,1 @@
+- Tests (`rune-luau`): fix `functions_tests` to extract `ScriptError` via `.err().expect(..)` instead of `Result::expect_err`, which required `El: Debug` and prevented `rune-luau` tests from compiling.

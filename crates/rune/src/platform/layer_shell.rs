@@ -32,6 +32,7 @@ use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
 use crate::{OverlayInput, OverlayOptions, OverlayPlacement};
 
+mod activation;
 mod compose;
 mod dead;
 mod text_input;
@@ -94,6 +95,9 @@ struct State {
     text_input_manager: Option<ZwpTextInputManagerV3>,
     text_input: Option<ZwpTextInputV3>,
     text_input_state: text_input_machine::State,
+    /// The serial of the user's last key or button press on the surface, which an activation
+    /// token request presents as proof of interaction.
+    input_serial: Option<u32>,
 }
 
 impl Dispatch<WlOutput, ()> for State {
@@ -242,8 +246,9 @@ impl Dispatch<WlPointer, ()> for State {
                 state.step_pointer(pointer::Event::Reset);
                 state.input.push(Input::Leave);
             }
-            wl_pointer::Event::Button { button, state: wayland_client::WEnum::Value(button_state), .. } if state.over.inside() => {
+            wl_pointer::Event::Button { serial, button, state: wayland_client::WEnum::Value(button_state), .. } if state.over.inside() => {
                 let pressed = button_state == wl_pointer::ButtonState::Pressed;
+                if pressed { state.input_serial = Some(serial); }
                 match pointer::button_from_linux(button) {
                     crate::PointerButton::Primary => {
                         state.input.push(Input::Button(pressed));
@@ -345,9 +350,10 @@ impl Dispatch<WlKeyboard, ()> for State {
             wl_keyboard::Event::RepeatInfo { rate, delay } => {
                 state.step_repeat(repeat::Event::RepeatInfo { rate, delay_ms: delay });
             }
-            wl_keyboard::Event::Key { key, state: wayland_client::WEnum::Value(key_state), .. } if state.keyboard_focus.focused() => {
+            wl_keyboard::Event::Key { serial, key, state: wayland_client::WEnum::Value(key_state), .. } if state.keyboard_focus.focused() => {
                 match key_state {
                     wl_keyboard::KeyState::Pressed => {
+                        state.input_serial = Some(serial);
                         state.emit_key(key, true, false);
                         let repeats = state.xkb.as_ref().is_some_and(|xkb| xkb.get_keymap().key_repeats(xkb::Keycode::new(key + 8)));
                         state.step_repeat(repeat::Event::Press { key, repeats, now: crate::time::now() });
@@ -939,6 +945,12 @@ impl LayerSurface {
         self.state.reset_compose();
         let effects = keyboard::step(&mut self.state.keyboard_focus, keyboard::FocusEvent::Released);
         effects.into_iter().any(|keyboard::FocusEffect::Focus(focused)| !focused)
+    }
+
+    /// An XDG activation token for a program launched from the overlay; see `activation`.
+    pub fn activation_token(&self) -> Option<String> {
+        let globals = self.globals.as_ref()?;
+        activation::request(&self.conn, globals, &self.surface, self.seat.as_ref().zip(self.state.input_serial))
     }
 
     pub fn supports_keys(&self) -> bool {

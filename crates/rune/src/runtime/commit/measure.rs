@@ -70,6 +70,7 @@ impl RuntimeCore {
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
+            window_backdrop: self.host.window_backdrop,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
@@ -98,6 +99,7 @@ impl RuntimeCore {
             scrolls: &mut self.scroll.scrolls,
             scroll_requests: &self.scroll.requests,
             virtuals: &mut self.commit.virtuals,
+            virtual_items: &mut self.commit.virtual_items,
             virtual_culled: &mut self.commit.virtual_culled,
             virtual_inputs: &mut self.commit.virtual_inputs,
             stats: &mut self.stats,
@@ -202,13 +204,14 @@ impl Measurement<'_> {
     }
 
     /// What a memo scope hashes of the window's controls and state (`Cx::titlebar_inset`,
-    /// `Cx::chrome_insets`, `Cx::is_maximized`, `Cx::is_full_screen`), so memos that read them
-    /// rebuild when they change.
+    /// `Cx::chrome_insets`, `Cx::is_maximized`, `Cx::is_full_screen`, `Cx::window_backdrop`), so
+    /// memos that read them rebuild when they change.
     pub(in crate::runtime) fn chrome_bits(&self) -> [u32; 5] {
         let [leading, trailing, height] = self.chrome.bits();
         let flags = u32::from(self.maximized)
             | (u32::from(self.full_screen) << 1)
-            | (u32::from(self.pointer_locked) << 2);
+            | (u32::from(self.pointer_locked) << 2)
+            | (u32::from(self.window_backdrop.to_u8()) << 3);
         [self.titlebar_inset.to_bits(), leading, trailing, height, flags]
     }
 
@@ -222,6 +225,7 @@ impl Measurement<'_> {
             self.pass = Pass::of(passes);
             self.virtual_culled.clear();
             self.virtual_inputs.clear();
+            self.virtual_items.clear_staged();
             self.windowed.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
@@ -283,7 +287,9 @@ impl Measurement<'_> {
         let selection_off = crate::el::selection_off(el.cold.selection_enabled, selection_off);
         let bound = crate::el::virtual_list::height_bound(&el.style, bound);
         let is_virtual = el.cold.virtual_estimate.is_some();
+        let is_virtual_items = el.cold.virtual_items.is_some();
         if let Some(estimate) = el.cold.virtual_estimate {
+            assert!(!is_virtual_items, "element at {path:?} cannot combine `.virtual_items(..)` with `.virtualize(..)` / `.virtual_rows(..)`");
             let w = match self.windowed.remove(&path) {
                 Some(w) => w,
                 None => self.window(el, &path, estimate, scroll, tx, force_all),
@@ -295,6 +301,16 @@ impl Measurement<'_> {
             el.style.set_pad_top(w.pad_top);
             el.style.set_pad_bottom(w.pad_bottom);
             self.populate_virtual_children(el, &path, source, inert, selection_off, group);
+        } else if let Some(source) = el.cold.virtual_items.clone() {
+            assert!(el.children.is_empty(), "`.virtual_items(..)` at {path:?} builds its own items; it takes no children");
+            el.children = self.virtual_items.populate_rebuild(
+                &path,
+                source,
+                force_all,
+                self.focused,
+                self.key_warnings,
+                self.virtual_culled,
+            );
         }
         let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children);
         // A virtual stack windows against the nearest scroll viewport around it, its rows' lists
@@ -497,6 +513,7 @@ impl Measurement<'_> {
             chrome: this.chrome,
             maximized: this.maximized,
             full_screen: this.full_screen,
+            window_backdrop: this.window_backdrop,
             caption_color: None,
             titlebar: Default::default(),
             system_accent: this.system_accent,
@@ -768,6 +785,7 @@ impl RuntimeCore {
     /// Records which row of each virtual list holds focus, by key, so the row is still built
     /// after it scrolls out. Walks the node tree, since a key may itself contain `/`.
     pub(in crate::runtime) fn track_focused_rows(&mut self) {
+        self.commit.virtual_items.track_focused(&self.tree.nodes, self.kbd.focus.path());
         if self.commit.virtuals.is_empty() { return; }
         let focused = self.kbd.focus.path().and_then(|f| self.tree.nodes.iter().position(|n| n.path == f));
         for (path, v) in self.commit.virtuals.iter_mut() {
@@ -834,6 +852,9 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<ScrollCtx<'_>>, bou
         None => &el.children,
     };
     let bound = crate::el::virtual_list::height_bound(&el.style, bound);
+    if el.cold.virtual_items.is_some() {
+        return false;
+    }
     let is_virtual = el.cold.virtual_estimate.is_some();
     if is_virtual {
         if el.cold.virtual_rows.is_none() {

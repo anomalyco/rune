@@ -229,7 +229,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
         focus, looping, loop_times, trace_name, trace_namespace, role, label, live, above, above_boundary, motion, frame_motion, opacity_motion, lead,
         animated_changes, option_as_alt, window_resize, transition, transition_motion, enter_in_instant, matched, matched_motion, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
-        virtual_rows_version, virtual_rows_append_only, virtual_overscan, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, selection_enabled, wheel_scrolls, on_path, data,
+        virtual_rows_version, virtual_rows_append_only, virtual_overscan, virtual_items, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, selection_enabled, wheel_scrolls, on_path, data,
         expanded_memo: _,
         #[cfg(debug_assertions)]
         scroll_source: _,
@@ -237,6 +237,8 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         virtual_source: _,
         #[cfg(debug_assertions)]
         virtual_append_source: _,
+        #[cfg(debug_assertions)]
+        virtual_items_source: _,
     } = b;
     crate::cold::Cold::ptr_eq(&a.focus, focus)
         && opt_box_eq(&a.looping, looping)
@@ -271,6 +273,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.virtual_rows_version == *virtual_rows_version
         && a.virtual_rows_append_only == *virtual_rows_append_only
         && a.virtual_overscan == *virtual_overscan
+        && opt_rc_eq(&a.virtual_items, virtual_items)
         && a.glide == *glide
         && a.input.is_none()
         && input.is_none()
@@ -355,6 +358,7 @@ fn same_handlers(
         drag_out,
         drag_threshold,
         touch_at_once,
+        edge_drag,
         press_on_down,
         on_drag_start,
         on_drag_end,
@@ -410,6 +414,11 @@ fn same_handlers(
         && opt_rc_eq(&a.drag_out, drag_out)
         && a.drag_threshold == *drag_threshold
         && a.touch_at_once == *touch_at_once
+        && match (&a.edge_drag, edge_drag) {
+            (None, None) => true,
+            (Some((ea, wa, fa)), Some((eb, wb, fb))) => ea == eb && wa == wb && Rc::ptr_eq(fa, fb),
+            _ => false,
+        }
         && a.press_on_down == *press_on_down
         && opt_rc_eq(&a.on_drag_start, on_drag_start)
         && opt_rc_eq(&a.on_drag_end, on_drag_end)

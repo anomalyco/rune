@@ -32,16 +32,93 @@ pub(crate) fn originals_only() -> bool {
     ORIGINAL_ONLY.get()
 }
 
+/// Reuses one callback argument across a patched call and its startup fallback if the patched
+/// body panics:
+/// - `&mut T` reborrows for the patched attempt and hands the same mutable reference to the fallback;
+/// - any `T: Clone` (`Copy` values, shared references, or owned `Clone` types such as
+///   [`crate::FieldMenuRequest`]) clones for the patched attempt and moves the original into the
+///   fallback on panic.
+///
+/// Inherent methods on `HotArg<&mut T>` take precedence over [`HotCloneArg`] via method
+/// resolution, without `unsafe` or specialization.
+pub(crate) struct HotArg<T>(pub(crate) T);
+
+impl<'a, T: ?Sized> HotArg<&'a mut T> {
+    #[inline(always)]
+    pub(crate) fn attempt(&mut self) -> &mut T {
+        self.0
+    }
+
+    #[inline(always)]
+    pub(crate) fn fallback(self) -> &'a mut T {
+        self.0
+    }
+}
+
+pub(crate) trait HotCloneArg {
+    type Output;
+    fn attempt(&mut self) -> Self::Output;
+    fn fallback(self) -> Self::Output;
+}
+
+impl<T: Clone> HotCloneArg for HotArg<T> {
+    type Output = T;
+
+    #[inline(always)]
+    fn attempt(&mut self) -> T {
+        self.0.clone()
+    }
+
+    #[inline(always)]
+    fn fallback(self) -> T {
+        self.0
+    }
+}
+
+/// Binds arguments against `f`'s parameter types so `&mut` places (such as `self.state`)
+/// reborrow automatically before wrapping each argument in [`HotArg`].
+#[inline(always)]
+pub(crate) fn wrap_args_1<A0, R>(_: fn(A0) -> R, a0: A0) -> (HotArg<A0>,) {
+    (HotArg(a0),)
+}
+
+#[inline(always)]
+pub(crate) fn wrap_args_2<A0, A1, R>(_: fn(A0, A1) -> R, a0: A0, a1: A1) -> (HotArg<A0>, HotArg<A1>) {
+    (HotArg(a0), HotArg(a1))
+}
+
+#[inline(always)]
+pub(crate) fn wrap_args_3<A0, A1, A2, R>(_: fn(A0, A1, A2) -> R, a0: A0, a1: A1, a2: A2) -> (HotArg<A0>, HotArg<A1>, HotArg<A2>) {
+    (HotArg(a0), HotArg(a1), HotArg(a2))
+}
+
 /// Calls `f` through the patch table; if the patched code panics, calls the startup `f` once
 /// instead, as a panicking view renders the original. Side effects of the panicked call stay.
+///
+/// Each argument expression is evaluated once into a [`HotArg`] so owned non-`Copy` `Clone`
+/// arguments (such as [`crate::FieldMenuRequest`]) work alongside `&mut T` and `Copy` arguments.
 macro_rules! patched_or_original {
-    ($what:literal, $f:expr, $($arg:expr),* $(,)?) => {{
+    ($what:literal, $f:expr, $a0:expr $(,)?) => {
+        $crate::hot::patched_or_original!(@invoke $what, $f, wrap_args_1, (a0), ($a0))
+    };
+    ($what:literal, $f:expr, $a0:expr, $a1:expr $(,)?) => {
+        $crate::hot::patched_or_original!(@invoke $what, $f, wrap_args_2, (a0, a1), ($a0, $a1))
+    };
+    ($what:literal, $f:expr, $a0:expr, $a1:expr, $a2:expr $(,)?) => {
+        $crate::hot::patched_or_original!(@invoke $what, $f, wrap_args_3, (a0, a1, a2), ($a0, $a1, $a2))
+    };
+    (@invoke $what:literal, $f:expr, $wrap:ident, ($($id:ident),+), ($($arg:expr),+)) => {{
+        use $crate::hot::HotCloneArg as _;
+        $crate::hot::HotArg(()).attempt();
         let f = $f;
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| subsecond::HotFn::current(f).call(($($arg,)*)))) {
+        let ($(mut $id,)+) = $crate::hot::$wrap(f, $($arg),+);
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            subsecond::HotFn::current(f).call(($($id.attempt(),)+))
+        })) {
             Ok(value) => value,
             Err(_) => {
                 eprintln!(concat!("rune-hot: patched ", $what, " panicked; calling the original"));
-                f($($arg),*)
+                f($($id.fallback()),+)
             }
         }
     }};
@@ -52,6 +129,7 @@ pub(crate) use patched_or_original;
 /// `WindowSpec::from_app` or `App::window`: the same typed `Runtime<S>` a native window
 /// builds, so its view and callbacks patch the way they do on screen.
 pub(crate) fn snap_window<S: 'static>(app: crate::App<S>, args: Args) {
+    crate::credentials::note_headless_runtime();
     let (spec, state, _, runtime) = app.into_parts(args.scene.as_deref());
     headless(&spec, state, args, runtime);
 }

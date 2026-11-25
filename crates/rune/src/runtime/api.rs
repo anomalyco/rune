@@ -242,6 +242,25 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn set_full_screen(&mut self, full_screen: bool) { self.core_mut().set_full_screen(full_screen); }
+    /// Sets what [`Cx::window_backdrop`] reports for headless tests, marking the view and its
+    /// memos dirty when it changes.
+    ///
+    /// Native windows and overlays update this only when the OS confirms an active backdrop
+    /// (Windows 11 Build 22621+ `DWMWA_SYSTEMBACKDROP_TYPE`). Headless runs default to
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None).
+    ///
+    /// ```
+    /// # use rune::{Color, Cx, El, Env, Runtime, WindowBackdrop, el};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     let bg = if cx.window_backdrop().is_active() { Color::TRANSPARENT } else { Color::BLACK };
+    ///     el().w_full().h_full().fill(bg)
+    /// }
+    /// let mut rt = Runtime::new((), view, (200.0, 100.0), Env::default());
+    /// rt.set_window_backdrop(WindowBackdrop::Mica);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_window_backdrop(&mut self, backdrop: crate::WindowBackdrop) { self.core_mut().set_window_backdrop(backdrop); }
     #[inline(always)]
     pub(crate) fn system_accent(&self) -> crate::SystemAccent { self.core().system_accent() }
     #[inline(always)]

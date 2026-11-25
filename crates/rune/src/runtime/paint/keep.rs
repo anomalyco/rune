@@ -737,7 +737,7 @@ fn static_ok(n: &Node) -> bool {
 }
 
 /// What the runtime holds for a node besides it: selection, marks, reveals, loops, scales
-/// settling, sticky holds and folds.
+/// settling, sticky holds, exiting subtrees and folds.
 fn dynamic_ok(rt: &RuntimeCore, i: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) -> bool {
     let id = rt.tree.nodes[i].id;
     !sel.iter().any(|r| r.0 == i) && !marks.iter().any(|r| r.0 == i)
@@ -747,6 +747,7 @@ fn dynamic_ok(rt: &RuntimeCore, i: usize, sel: &[(usize, usize, usize)], marks: 
         && (rt.paint.static_scales.is_empty() || !rt.paint.static_scales.contains_key(&id))
         && rt.paint.row_mask[i] < 0.0
         && rt.scroll.hold_of(&rt.tree.nodes[i].path).is_none()
+        && (rt.scene.exiting().is_empty() || !rt.subtree_exiting(i))
 }
 
 #[cfg(test)]

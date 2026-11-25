@@ -87,6 +87,7 @@ pub(super) enum Lcd {
     Unbuilt,
     /// No shipped bytecode takes it here, so its WGSL compiles on a thread of its own (FXC takes
     /// about a minute for it on a Windows laptop) and subpixel text draws grayscale meanwhile.
+    #[cfg(not(target_arch = "wasm32"))]
     Building(std::sync::mpsc::Receiver<Result<wgpu::RenderPipeline, String>>),
     Built(wgpu::RenderPipeline),
     /// It can't be built here: subpixel text draws grayscale from now on.
@@ -362,6 +363,7 @@ impl Renderer {
             };
             if matches!(self.lcd, Lcd::Built(_)) { self.lcd_built(); }
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if let Lcd::Building(done) = &self.lcd {
             match done.try_recv() {
                 Ok(Ok(pipeline)) => {
