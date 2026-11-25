@@ -702,7 +702,7 @@ impl El {
     pub fn cursor(mut self, cursor: Cursor) -> Self {
         self.handlers.cursor = Some(cursor);
         // The app's own cursor, which `El::selection_enabled(false)` leaves alone.
-        if let Some(t) = &mut self.text && t.selectable_cursor { t.selectable_cursor = false; }
+        if let Some(t) = &mut self.text && t.flags.has(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR) { t.flags.set(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR, false); }
         self
     }
     /// Pressing this element moves the window (or a window-backed overlay; pair with `.hit()`

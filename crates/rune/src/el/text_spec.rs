@@ -45,13 +45,11 @@ pub struct TextSpec {
     pub(crate) case: Option<crate::TextCase>,
     /// See [`El::selectable`](crate::El::selectable).
     pub(crate) selectable: bool,
-    /// [`El::selectable`](crate::El::selectable) gave the element its `Cursor::Text`, which an
-    /// [`El::selection_enabled`](crate::El::selection_enabled)`(false)` subtree takes back.
-    pub(crate) selectable_cursor: bool,
     pub(crate) redacted: bool,
     pub(crate) wrap_anywhere: bool,
-    /// See [`El::wrap_greedy`](crate::El::wrap_greedy).
-    pub(crate) greedy: bool,
+    /// Packed internal booleans (`GREEDY`, `SELECTABLE_CURSOR`), keeping `TextSpec` at 224 bytes
+    /// without allocating `TextCold` on plain selectable text.
+    pub(crate) flags: TextFlags,
     /// See [`El::exact_lines`](crate::El::exact_lines): the height is its lines' own, unrounded,
     /// unless [`El::rounded_lines`](crate::El::rounded_lines) rounds it to device pixels.
     pub(crate) exact_lines: bool,
@@ -59,6 +57,26 @@ pub struct TextSpec {
     pub(crate) by_line: bool,
     /// The paragraph direction it lays out in (see [`TextDir`]).
     pub(crate) dir: TextDir,
+}
+
+/// Packed internal booleans on [`TextSpec`] (one bit each).
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TextFlags(u8);
+
+impl TextFlags {
+    /// See [`El::wrap_greedy`](crate::El::wrap_greedy).
+    pub(crate) const GREEDY: u8 = 1 << 0;
+    /// [`El::selectable`](crate::El::selectable) gave the element its `Cursor::Text`, which an
+    /// [`El::selection_enabled`](crate::El::selection_enabled)`(false)` subtree takes back.
+    pub(crate) const SELECTABLE_CURSOR: u8 = 1 << 1;
+
+    #[inline(always)]
+    pub(crate) const fn has(self, bit: u8) -> bool { self.0 & bit != 0 }
+
+    #[inline(always)]
+    pub(crate) fn set(&mut self, bit: u8, on: bool) {
+        if on { self.0 |= bit; } else { self.0 &= !bit; }
+    }
 }
 
 pub(crate) use rune_text::TextDir;
@@ -218,15 +236,17 @@ impl TextSpec {
             justify: false,
             case: None,
             selectable: false,
-            selectable_cursor: false,
             redacted: false,
             wrap_anywhere: false,
-            greedy: false,
+            flags: TextFlags::default(),
             exact_lines: true,
             by_line: false,
             dir: TextDir::Auto,
         }
     }
+
+    #[inline(always)]
+    pub(crate) const fn greedy(&self) -> bool { self.flags.has(TextFlags::GREEDY) }
 
     /// Borrowed read-only layout inputs for `rune-text`.
     pub(crate) fn as_text_input(&self, scale: f32, input: bool) -> crate::text::TextInput<'_> {
@@ -319,7 +339,7 @@ impl TextSpec {
 
     /// Whether its lines break as Chromium's `text-wrap-style: pretty` does ([`crate::text::set_pretty_wrap`]).
     pub(crate) fn pretty(&self) -> bool {
-        crate::text::pretty_wrap() && !self.greedy && !self.redacted && !self.justify
+        crate::text::pretty_wrap() && !self.flags.has(TextFlags::GREEDY) && !self.redacted && !self.justify
     }
 
     /// [`crate::text::shape_key`] of this text in its direction.

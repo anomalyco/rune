@@ -55,7 +55,7 @@ pub(crate) fn apply_selection_off(
     if !t.selectable { return; }
     let t: &mut TextSpec = t;
     t.selectable = false;
-    if t.selectable_cursor && handlers.cursor == Some(Cursor::Text) {
+    if t.flags.has(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR) && handlers.cursor == Some(Cursor::Text) {
         handlers.cursor = None;
     }
 }
