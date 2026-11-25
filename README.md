@@ -78,4 +78,4 @@ Pinning a `dev` git revision above remains the supported way to use Rune. Mainta
 We don't take pull requests. Have your agent [open an issue](https://github.com/anomalyco/rune/issues)
 describing the bug or idea, and our agents usually turn it around fast.
 
-MIT, © Anomaly.
+MIT, © Anomaly. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party assets bundled in Rune.
