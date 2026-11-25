@@ -2522,7 +2522,7 @@ recreation and ignored on other platforms:
   Metal backend and the wgpu backend (and overlay panels) show sRGB colours as sRGB on wide-gamut
   displays, matching AppKit and browsers. `MacColorSpace::Unmanaged` clears both to `nil` so
   framebuffer values reach the display unmodified, preserved across resizes and pixel-format
-  reconfigures.
+  reconfigures (`ConfiguredOverlay::macos_color_space` provides the same opt-out for overlays).
 - `.accepts_first_mouse(bool)` sets `NSView.acceptsFirstMouse(for:)` through winit's
   `with_accepts_first_mouse` on all macOS windows (bordered, full-size-content, borderless, and
   non-activating panels); pass `false` so clicking an inactive window only activates it without
@@ -3230,7 +3230,9 @@ To match a native AppKit card on top of the material, three more opt-ins:
   `blur` to twice it.
 
 For panels, `ConfiguredOverlay::macos_level` and `OverlayHandle::set_macos_level` set the
-AppKit window level, and `OverlayHandle::fade_in` and `fade_out` fade the window's alpha.
+AppKit window level, `ConfiguredOverlay::macos_color_space` selects `MacColorSpace::Srgb`
+(default) or `MacColorSpace::Unmanaged` (matching `MacWindowOptions::color_space`), and
+`OverlayHandle::fade_in` and `fade_out` fade the window's alpha.
 `examples/glass-panel` puts it together: a card that flies across a large window, hands off
 to a card-sized window that moves 60 times a second, and fades out.
 
