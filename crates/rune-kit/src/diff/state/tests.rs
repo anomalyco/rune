@@ -149,6 +149,21 @@ fn the_visible_file_follows_rows_at_the_top() {
     assert_eq!(s.row_from(7, 25.0), Some(8));
 }
 
+#[test]
+fn row_from_follows_the_views_line_height() {
+    // Every line changes: header row 0, then 60 line rows with no folds between them.
+    let old = numbered(30);
+    let new: String = (1..=30).map(|i| format!("new {i}\n")).collect();
+    let s = DiffState::new(vec![FileDiff::from_texts("a.txt", &old, &new)]);
+    assert_eq!(s.rows.len(), 61);
+    assert_eq!(s.row_from(1, 200.0), Some(11), "20 pt lines by default");
+    s.set_line_height(28.0);
+    assert_eq!(s.row_from(1, 280.0), Some(11), "ten 28 pt lines down is ten rows");
+    assert_eq!(s.row_from(11, -280.0), Some(1));
+    s.set_line_height(0.0);
+    assert_eq!(s.row_from(1, 200.0), Some(11), "a zero height falls back to 20 pt");
+}
+
 fn render_diff(state: DiffState) -> rune::Runtime<DiffState> {
     fn view(s: &DiffState, _: &mut rune::Cx<DiffState>) -> rune::El {
         let k = crate::Kit::neutral(true);
