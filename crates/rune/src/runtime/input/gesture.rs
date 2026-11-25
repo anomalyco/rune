@@ -10,6 +10,9 @@ use crate::{GesturePhase, MagnifyEvent, PointerButton, RotateEvent, WheelEvent};
 /// A trackpad gesture or extra mouse button press at a window point, queued for the handlers under it.
 #[derive(Clone, Copy, Debug)]
 pub(in crate::runtime) enum Gesture {
+    /// Handler-only two-finger touchscreen pan (`WheelEvent::touch == true`): never scrolls
+    /// scroll views and never touches `WheelLock`.
+    TouchWheel(WheelEvent),
     Magnify(MagnifyEvent),
     Rotate(RotateEvent),
     SmartMagnify(f32, f32),
@@ -26,10 +29,18 @@ pub(crate) enum WheelStart {
     At(Option<usize>),
 }
 
-/// Effective phased-magnify state at queue time, taking already-queued non-wheel
-/// `Gesture::Magnify` actions into account ahead of `PointerState::magnify_owner`.
+/// Which phased canvas gesture channel owns a `GestureOwner` slot on `PointerState`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum QueuedMagnify {
+enum PhasedChannel {
+    Magnify,
+    Rotate,
+    TouchWheel,
+}
+
+/// Effective phased-gesture state at queue time, taking already-queued actions on the same
+/// channel into account ahead of `PointerState::gesture_owners`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuedPhased {
     Idle,
     Active,
     Declined,
@@ -48,6 +59,10 @@ impl RuntimeCore {
     pub fn wheel_event(&mut self, ev: WheelEvent) {
         let (x, y) = self.locked_point(ev.x, ev.y);
         let ev = WheelEvent { x, y, ..ev };
+        if ev.touch {
+            self.touch_wheel_event_at(ev, (x, y));
+            return;
+        }
         if ev.phase == GesturePhase::Began { self.wheel_began(); }
         let moved = ev.dx != 0.0 || ev.dy != 0.0;
         if moved {
@@ -186,6 +201,21 @@ impl RuntimeCore {
         Some(Tx::took(f(app.states(), WheelEvent { x, y, ..ev }, tx), tx))
     }
 
+    /// Handler-only two-finger touchscreen pan (`WheelEvent::touch == true`): locked to its
+    /// accepting `Began` `on_wheel` handler until `Ended`, never falling through to scroll views
+    /// or mutating `WheelLock`.
+    pub(in crate::runtime) fn touch_wheel_event_at(&mut self, ev: WheelEvent, hit: (f32, f32)) {
+        let ev = WheelEvent { touch: true, ..ev };
+        self.offer_phased_gesture(
+            PhasedChannel::TouchWheel,
+            ev.phase,
+            (ev.x, ev.y),
+            hit,
+            |g| g.wheel.is_some(),
+            Gesture::TouchWheel(ev),
+        );
+    }
+
     /// A trackpad or touchscreen pinch at window point (`ev.x`, `ev.y`) for the
     /// [`El::on_magnify`] handlers there, innermost first. Phased non-wheel pinches
     /// (`Began` / `Moved` / `Ended`) lock the accepting `Began` handler until `Ended`.
@@ -200,78 +230,121 @@ impl RuntimeCore {
             self.offer_gesture(ev.x, ev.y, |g| g.magnify.is_some(), Gesture::Magnify(ev));
             return;
         }
-        let (queued_state, has_queued_phased) = self.queued_magnify_state();
-        match ev.phase {
+        self.offer_phased_gesture(
+            PhasedChannel::Magnify,
+            ev.phase,
+            (ev.x, ev.y),
+            hit,
+            |g| g.magnify.is_some(),
+            Gesture::Magnify(ev),
+        );
+    }
+
+    /// A two-finger trackpad or touchscreen rotation at window point (`ev.x`, `ev.y`) for the
+    /// [`El::on_rotate`] handlers there, innermost first. Phased rotations (`Began` / `Moved` /
+    /// `Ended`) lock the accepting `Began` handler until `Ended`.
+    pub fn rotate_event(&mut self, ev: RotateEvent) {
+        self.rotate_event_at(ev, (ev.x, ev.y));
+    }
+
+    /// Like [`Self::rotate_event`], resolving `Began`'s candidate chain at `hit` while
+    /// delivering `(ev.x, ev.y)` in the owning handler's local coordinates.
+    pub(in crate::runtime) fn rotate_event_at(&mut self, ev: RotateEvent, hit: (f32, f32)) {
+        self.offer_phased_gesture(
+            PhasedChannel::Rotate,
+            ev.phase,
+            (ev.x, ev.y),
+            hit,
+            |g| g.rotate.is_some(),
+            Gesture::Rotate(ev),
+        );
+    }
+
+    fn gesture_owner(&self, channel: PhasedChannel) -> &capture::GestureOwner {
+        match channel {
+            PhasedChannel::Magnify => &self.pointer.gesture_owners.magnify,
+            PhasedChannel::Rotate => &self.pointer.gesture_owners.rotate,
+            PhasedChannel::TouchWheel => &self.pointer.gesture_owners.touch_wheel,
+        }
+    }
+
+    fn gesture_owner_mut(&mut self, channel: PhasedChannel) -> &mut capture::GestureOwner {
+        match channel {
+            PhasedChannel::Magnify => &mut self.pointer.gesture_owners.magnify,
+            PhasedChannel::Rotate => &mut self.pointer.gesture_owners.rotate,
+            PhasedChannel::TouchWheel => &mut self.pointer.gesture_owners.touch_wheel,
+        }
+    }
+
+    fn offer_phased_gesture(
+        &mut self,
+        channel: PhasedChannel,
+        phase: GesturePhase,
+        pos: (f32, f32),
+        hit: (f32, f32),
+        has: impl Fn(&CanvasInput) -> bool,
+        gesture: Gesture,
+    ) {
+        let (queued_state, has_queued_phased) = self.queued_phased_state(channel);
+        match phase {
             GesturePhase::Began => {
-                let chain = self.gesture_chain(hit.0, hit.1, |g| g.magnify.is_some());
+                let chain = self.gesture_chain(hit.0, hit.1, has);
                 if !chain.is_empty() || has_queued_phased {
-                    self.frame.queue.push(Action::Gesture(chain, Gesture::Magnify(ev)));
+                    self.frame.queue.push(Action::Gesture(chain, gesture));
                 } else {
-                    self.pointer.magnify_owner = capture::MagnifyOwner::Declined;
+                    *self.gesture_owner_mut(channel) = capture::GestureOwner::Declined;
                 }
             }
             GesturePhase::Moved => match queued_state {
-                QueuedMagnify::Active => {
-                    self.frame.queue.push(Action::Gesture(Vec::new(), Gesture::Magnify(ev)));
-                }
-                QueuedMagnify::Declined => {}
-                QueuedMagnify::Idle => {
-                    self.offer_gesture(ev.x, ev.y, |g| g.magnify.is_some(), Gesture::Magnify(ev));
-                }
+                QueuedPhased::Active => self.frame.queue.push(Action::Gesture(Vec::new(), gesture)),
+                QueuedPhased::Declined => {}
+                QueuedPhased::Idle => self.offer_gesture(pos.0, pos.1, has, gesture),
             },
             GesturePhase::Ended => match queued_state {
-                QueuedMagnify::Active => {
-                    self.frame.queue.push(Action::Gesture(Vec::new(), Gesture::Magnify(ev)));
-                }
-                QueuedMagnify::Declined => {
+                QueuedPhased::Active => self.frame.queue.push(Action::Gesture(Vec::new(), gesture)),
+                QueuedPhased::Declined => {
                     if has_queued_phased {
-                        self.frame.queue.push(Action::Gesture(Vec::new(), Gesture::Magnify(ev)));
+                        self.frame.queue.push(Action::Gesture(Vec::new(), gesture));
                     } else {
-                        self.pointer.magnify_owner = capture::MagnifyOwner::Idle;
+                        *self.gesture_owner_mut(channel) = capture::GestureOwner::Idle;
                     }
                 }
-                QueuedMagnify::Idle => {
-                    self.offer_gesture(ev.x, ev.y, |g| g.magnify.is_some(), Gesture::Magnify(ev));
-                }
+                QueuedPhased::Idle => self.offer_gesture(pos.0, pos.1, has, gesture),
             },
         }
     }
 
-    /// Effective phased-magnify state after all already-queued non-wheel `Gesture::Magnify`
-    /// actions, plus whether any non-wheel `Gesture::Magnify` is currently waiting in the queue.
-    fn queued_magnify_state(&self) -> (QueuedMagnify, bool) {
+    fn queued_phased_state(&self, channel: PhasedChannel) -> (QueuedPhased, bool) {
         let mut has_queued_phased = false;
         let mut latest = None;
         for action in self.frame.queue.iter() {
-            if let Action::Gesture(chain, Gesture::Magnify(q)) = action
-                && !q.wheel
-            {
-                has_queued_phased = true;
-                match q.phase {
-                    GesturePhase::Began => {
-                        latest = Some(if chain.is_empty() {
-                            QueuedMagnify::Declined
-                        } else {
-                            QueuedMagnify::Active
-                        });
-                    }
-                    GesturePhase::Ended => latest = Some(QueuedMagnify::Idle),
-                    GesturePhase::Moved => {}
+            let Some((chain, phase)) = (match (channel, action) {
+                (PhasedChannel::Magnify, Action::Gesture(c, Gesture::Magnify(q))) if !q.wheel => Some((c, q.phase)),
+                (PhasedChannel::Rotate, Action::Gesture(c, Gesture::Rotate(q))) => Some((c, q.phase)),
+                (PhasedChannel::TouchWheel, Action::Gesture(c, Gesture::TouchWheel(q))) => Some((c, q.phase)),
+                _ => None,
+            }) else {
+                continue;
+            };
+            has_queued_phased = true;
+            match phase {
+                GesturePhase::Began => {
+                    latest = Some(if chain.is_empty() {
+                        QueuedPhased::Declined
+                    } else {
+                        QueuedPhased::Active
+                    });
                 }
+                GesturePhase::Ended => latest = Some(QueuedPhased::Idle),
+                GesturePhase::Moved => {}
             }
         }
-        let state = latest.unwrap_or(match &self.pointer.magnify_owner {
-            capture::MagnifyOwner::Idle => QueuedMagnify::Idle,
-            capture::MagnifyOwner::Owned(_) => QueuedMagnify::Active,
-            capture::MagnifyOwner::Declined => QueuedMagnify::Declined,
+        let state = latest.unwrap_or(match self.gesture_owner(channel) {
+            capture::GestureOwner::Idle => QueuedPhased::Idle,
+            capture::GestureOwner::Owned(_) => QueuedPhased::Active,
+            capture::GestureOwner::Declined => QueuedPhased::Declined,
         });
         (state, has_queued_phased)
-    }
-
-    /// A two-finger rotation at window point (`ev.x`, `ev.y`) for the [`El::on_rotate`]
-    /// handlers there, innermost first.
-    pub fn rotate_event(&mut self, ev: RotateEvent) {
-        self.offer_gesture(ev.x, ev.y, |g| g.rotate.is_some(), Gesture::Rotate(ev));
     }
 
     /// A two-finger double tap at window point (x, y) for the [`El::on_smart_magnify`]
@@ -311,52 +384,89 @@ impl RuntimeCore {
         Some(Tx::took(f(app.states(), MagnifyEvent { x, y, ..ev }, tx), tx))
     }
 
-    fn dispatch_magnify_chain(&mut self, app: &mut dyn AppDriver, chain: &[String], ev: MagnifyEvent, tx: &mut Tx) -> Option<String> {
+    fn call_rotate(&mut self, app: &mut dyn AppDriver, path: &str, ev: RotateEvent, tx: &mut Tx) -> Option<bool> {
+        let (i, f) = self.gesture_handler(path, |g| g.rotate.clone())?;
+        let [x, y] = self.to_local(i, ev.x, ev.y);
+        Some(Tx::took(f(app.states(), RotateEvent { x, y, ..ev }, tx), tx))
+    }
+
+    fn dispatch_phased_chain(
+        &mut self,
+        app: &mut dyn AppDriver,
+        chain: &[String],
+        tx: &mut Tx,
+        call: &impl Fn(&mut Self, &mut dyn AppDriver, &str, &mut Tx) -> Option<bool>,
+    ) -> Option<String> {
         for path in chain {
-            if self.call_magnify(app, path, ev, tx) == Some(true) {
+            if call(self, app, path, tx) == Some(true) {
                 return Some(path.clone());
             }
         }
         None
     }
 
-    fn run_magnify(&mut self, app: &mut dyn AppDriver, chain: Vec<String>, ev: MagnifyEvent, tx: &mut Tx) -> bool {
-        if ev.wheel {
-            return self.dispatch_magnify_chain(app, &chain, ev, tx).is_some();
-        }
-        match ev.phase {
+    fn run_phased_gesture(
+        &mut self,
+        app: &mut dyn AppDriver,
+        channel: PhasedChannel,
+        phase: GesturePhase,
+        chain: &[String],
+        tx: &mut Tx,
+        call: impl Fn(&mut Self, &mut dyn AppDriver, &str, &mut Tx) -> Option<bool>,
+    ) -> bool {
+        match phase {
             GesturePhase::Began => {
-                if let Some(owner) = self.dispatch_magnify_chain(app, &chain, ev, tx) {
-                    self.pointer.magnify_owner = capture::MagnifyOwner::Owned(owner);
+                if let Some(owner) = self.dispatch_phased_chain(app, chain, tx, &call) {
+                    *self.gesture_owner_mut(channel) = capture::GestureOwner::Owned(owner);
                     true
                 } else {
-                    self.pointer.magnify_owner = capture::MagnifyOwner::Declined;
+                    *self.gesture_owner_mut(channel) = capture::GestureOwner::Declined;
                     false
                 }
             }
-            GesturePhase::Moved => match self.pointer.magnify_owner.clone() {
-                capture::MagnifyOwner::Owned(path) => {
-                    if self.call_magnify(app, &path, ev, tx) == Some(true) {
+            GesturePhase::Moved => match self.gesture_owner(channel).clone() {
+                capture::GestureOwner::Owned(path) => {
+                    if call(self, app, &path, tx) == Some(true) {
                         true
                     } else {
-                        self.pointer.magnify_owner = capture::MagnifyOwner::Declined;
+                        *self.gesture_owner_mut(channel) = capture::GestureOwner::Declined;
                         false
                     }
                 }
-                capture::MagnifyOwner::Declined => false,
-                capture::MagnifyOwner::Idle => self.dispatch_magnify_chain(app, &chain, ev, tx).is_some(),
+                capture::GestureOwner::Declined => false,
+                capture::GestureOwner::Idle => self.dispatch_phased_chain(app, chain, tx, &call).is_some(),
             },
-            GesturePhase::Ended => match std::mem::take(&mut self.pointer.magnify_owner) {
-                capture::MagnifyOwner::Owned(path) => self.call_magnify(app, &path, ev, tx) == Some(true),
-                capture::MagnifyOwner::Declined => false,
-                capture::MagnifyOwner::Idle => self.dispatch_magnify_chain(app, &chain, ev, tx).is_some(),
+            GesturePhase::Ended => match std::mem::take(self.gesture_owner_mut(channel)) {
+                capture::GestureOwner::Owned(path) => call(self, app, &path, tx) == Some(true),
+                capture::GestureOwner::Declined => false,
+                capture::GestureOwner::Idle => self.dispatch_phased_chain(app, chain, tx, &call).is_some(),
             },
         }
     }
 
     pub(in crate::runtime) fn run_gesture(&mut self, app: &mut dyn AppDriver, chain: Vec<String>, gesture: Gesture, tx: &mut Tx) -> bool {
-        if let Gesture::Magnify(ev) = gesture {
-            return self.run_magnify(app, chain, ev, tx);
+        match gesture {
+            Gesture::TouchWheel(ev) => {
+                return self.run_phased_gesture(app, PhasedChannel::TouchWheel, ev.phase, &chain, tx, |rt, app, path, tx| {
+                    rt.call_wheel(app, path, ev, tx)
+                });
+            }
+            Gesture::Magnify(ev) if ev.wheel => {
+                return self.dispatch_phased_chain(app, &chain, tx, &|rt, app, path, tx| {
+                    rt.call_magnify(app, path, ev, tx)
+                }).is_some();
+            }
+            Gesture::Magnify(ev) => {
+                return self.run_phased_gesture(app, PhasedChannel::Magnify, ev.phase, &chain, tx, |rt, app, path, tx| {
+                    rt.call_magnify(app, path, ev, tx)
+                });
+            }
+            Gesture::Rotate(ev) => {
+                return self.run_phased_gesture(app, PhasedChannel::Rotate, ev.phase, &chain, tx, |rt, app, path, tx| {
+                    rt.call_rotate(app, path, ev, tx)
+                });
+            }
+            Gesture::SmartMagnify(..) | Gesture::Button { .. } => {}
         }
         if let Gesture::Button { button, x, y, released } = gesture {
             tx.button = button;
@@ -378,15 +488,11 @@ impl RuntimeCore {
         }
         for path in chain {
             let taken = match gesture {
-                Gesture::Rotate(ev) => self.gesture_handler(&path, |g| g.rotate.clone()).map(|(i, f)| {
-                    let [x, y] = self.to_local(i, ev.x, ev.y);
-                    Tx::took(f(app.states(), RotateEvent { x, y, ..ev }, tx), tx)
-                }),
                 Gesture::SmartMagnify(x, y) => self.gesture_handler(&path, |g| g.smart_magnify.clone()).map(|(i, f)| {
                     let [x, y] = self.to_local(i, x, y);
                     Tx::took(f(app.states(), x, y, tx), tx)
                 }),
-                Gesture::Magnify(_) | Gesture::Button { .. } => unreachable!(),
+                Gesture::TouchWheel(_) | Gesture::Magnify(_) | Gesture::Rotate(_) | Gesture::Button { .. } => unreachable!(),
             };
             if taken == Some(true) { return true; }
         }

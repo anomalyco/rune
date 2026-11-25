@@ -197,7 +197,8 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::EdgeDrag(..) => "on_edge_drag",
         Action::Key { .. } => "on_key",
         Action::KeyUp(_) => "on_key_up",
-        Action::Wheel { .. } | Action::WheelRepost(_) => "on_wheel",
+        Action::Wheel { .. } | Action::WheelRepost(_)
+        | Action::Gesture(_, gesture_dispatch::Gesture::TouchWheel(_)) => "on_wheel",
         Action::Gesture(_, gesture_dispatch::Gesture::Magnify(_)) => "on_magnify",
         Action::Gesture(_, gesture_dispatch::Gesture::Rotate(_)) => "on_rotate",
         Action::Gesture(_, gesture_dispatch::Gesture::SmartMagnify(..)) => "on_smart_magnify",

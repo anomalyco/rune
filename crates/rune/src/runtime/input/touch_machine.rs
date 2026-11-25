@@ -14,12 +14,16 @@ use crate::machine::Effects;
 
 /// How far (points) a single finger travels before its touch is a drag or a pan, not a tap.
 pub(super) const TOUCH_SLOP: f32 = 8.0;
+/// Midpoint travel (points) before a two-finger pan emits `Began` (subtracted on activation).
+pub(super) const PAN_SLOP: f32 = TOUCH_SLOP;
 /// Span change (points) two fingers travel before a pinch emits `Began` (Chromium/Android
 /// `span_slop = 2 * touch_slop`). Subtracted on activation so the first `Moved` does not jump.
 pub(super) const SPAN_SLOP: f32 = TOUCH_SLOP * 2.0;
-/// Safety floor (points) for active pinch span ratios so coincident or collapsing fingers never
-/// divide by zero or produce non-finite / zero-scale deltas.
+/// Safety floor (points) for active pinch span ratios and minimum span for touch rotation so
+/// coincident or collapsing fingers never divide by zero or produce spurious angles.
 pub(super) const MIN_SPAN: f32 = 16.0;
+/// Angular turn (degrees) before two-finger rotation emits `Began` (subtracted on activation).
+pub(super) const ROTATE_SLOP_DEG: f32 = 8.0;
 /// A finger held this long (seconds) before lifting throws nothing.
 pub(super) const FLING_HOLD: f64 = 0.1;
 
@@ -98,14 +102,27 @@ pub(super) struct Finger {
 /// Which two-finger gesture channels have a live, allowed handler under the initial midpoint.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct TwoFingerTargets {
+    pub(super) wheel: bool,
     pub(super) magnify: bool,
+    pub(super) rotate: bool,
 }
 
 impl TwoFingerTargets {
     #[inline]
     pub(super) const fn any(self) -> bool {
-        self.magnify
+        self.wheel || self.magnify || self.rotate
     }
+}
+
+/// Per-channel recognition phase for two-finger midpoint pan (`El::on_wheel`, `touch: true`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum PanChannel {
+    /// No `on_wheel` handler lay under the initial midpoint.
+    Disabled,
+    /// Waiting for midpoint displacement `> PAN_SLOP`, or for `pinch` to begin.
+    Armed,
+    /// `Began` was emitted; `prev_mid` is the last emitted midpoint.
+    Active { prev_mid: (f32, f32) },
 }
 
 /// Per-channel recognition phase for two-finger pinch (`El::on_magnify`).
@@ -119,28 +136,54 @@ pub(super) enum PinchChannel {
     Active { prev_span: f32 },
 }
 
+/// Per-channel recognition phase for two-finger rotation (`El::on_rotate`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum RotateChannel {
+    /// No `on_rotate` handler lay under the initial midpoint.
+    Disabled,
+    /// Waiting for `span >= MIN_SPAN` and cumulative turn `> ROTATE_SLOP_DEG`.
+    /// `anchored` is false until the fingers first separate to `MIN_SPAN`.
+    Armed { anchored: bool, prev_angle: f32, cumulative: f32 },
+    /// `Began` was emitted; `prev_angle` is the last valid finger-line angle (at `span >= MIN_SPAN`).
+    Active { prev_angle: f32 },
+}
+
 /// Two active fingers tracked together after cancelling any single-finger press/hold/pan.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct TwoFinger {
     pub(super) first: Contact,
     pub(super) second: Contact,
     /// Midpoint where the two-finger gesture began; used to resolve `Began`'s handler chain
-    /// even if the midpoint drifted slightly past an edge while crossing `SPAN_SLOP`.
+    /// even if the midpoint drifted slightly past an edge while crossing slop.
     pub(super) initial_mid: (f32, f32),
     /// Latest finite midpoint between the two fingers in window points.
     pub(super) mid: (f32, f32),
+    pub(super) pan: PanChannel,
     pub(super) pinch: PinchChannel,
+    pub(super) rotate: RotateChannel,
 }
 
 impl TwoFinger {
     pub(super) fn new(first: Contact, second: Contact, targets: TwoFingerTargets) -> Self {
         let initial_mid = midpoint(first.pos, second.pos);
+        let initial_span = span(first.pos, second.pos);
+        let pan = if targets.wheel { PanChannel::Armed } else { PanChannel::Disabled };
         let pinch = if targets.magnify {
-            PinchChannel::Armed { initial_span: span(first.pos, second.pos) }
+            PinchChannel::Armed { initial_span }
         } else {
             PinchChannel::Disabled
         };
-        Self { first, second, initial_mid, mid: initial_mid, pinch }
+        let rotate = if targets.rotate {
+            if initial_span.is_finite() && initial_span >= MIN_SPAN {
+                let angle = finger_angle_deg(first.pos, second.pos);
+                RotateChannel::Armed { anchored: angle.is_finite(), prev_angle: if angle.is_finite() { angle } else { 0.0 }, cumulative: 0.0 }
+            } else {
+                RotateChannel::Armed { anchored: false, prev_angle: 0.0, cumulative: 0.0 }
+            }
+        } else {
+            RotateChannel::Disabled
+        };
+        Self { first, second, initial_mid, mid: initial_mid, pan, pinch, rotate }
     }
 }
 
@@ -245,7 +288,9 @@ pub(super) enum TouchEffect {
     CancelChildForEdge,
     EdgeDrag { node: NodeId, phase: crate::Phase, origin: (f32, f32), pos: (f32, f32), cancelled: bool },
     CommitHold { origin: (f32, f32) },
+    EmitTouchWheel { dx: f32, dy: f32, mid: (f32, f32), hit: (f32, f32), phase: GesturePhase },
     EmitMagnify { delta: f32, mid: (f32, f32), hit: (f32, f32), phase: GesturePhase },
+    EmitRotate { degrees: f32, mid: (f32, f32), hit: (f32, f32), phase: GesturePhase },
 }
 
 #[inline]
@@ -256,6 +301,23 @@ pub(super) fn midpoint(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
 #[inline]
 pub(super) fn span(a: (f32, f32), b: (f32, f32)) -> f32 {
     (a.0 - b.0).hypot(a.1 - b.1)
+}
+
+/// Angle of the vector from `a` to `b` in degrees, positive counterclockwise in screen
+/// coordinates (`+x` right, `+y` down).
+#[inline]
+pub(super) fn finger_angle_deg(a: (f32, f32), b: (f32, f32)) -> f32 {
+    (-(b.1 - a.1)).atan2(b.0 - a.0).to_degrees()
+}
+
+/// Wraps an angular delta in degrees into `(-180.0, 180.0]`.
+#[inline]
+pub(super) fn wrap_deg(deg: f32) -> f32 {
+    if !deg.is_finite() {
+        return 0.0;
+    }
+    let r = (deg + 180.0).rem_euclid(360.0) - 180.0;
+    if r == -180.0 { 180.0 } else { r }
 }
 
 /// Pure transition function for touchscreen contact state.
@@ -440,8 +502,9 @@ fn step_single_end(
 }
 
 /// Processes a move while two fingers are tracked. Ignores any third or further finger.
-/// Two-finger midpoint pan (`on_wheel`) and touch rotation (`on_rotate`) attach before and
-/// after [`step_pinch_channel`] respectively.
+/// Emits events strictly in order: two-finger pan (`on_wheel`, `touch: true`), then pinch
+/// (`on_magnify`), then rotation (`on_rotate`), so pan followed by zoom keeps both fingers
+/// pinned to their world points.
 fn step_two_finger_move(tf: &mut TwoFinger, id: u64, pos: (f32, f32)) -> Effects<TouchEffect> {
     if id == tf.first.id {
         tf.first.pos = pos;
@@ -454,17 +517,78 @@ fn step_two_finger_move(tf: &mut TwoFinger, id: u64, pos: (f32, f32)) -> Effects
     if next_mid.0.is_finite() && next_mid.1.is_finite() {
         tf.mid = next_mid;
     }
+    let raw_span = span(tf.first.pos, tf.second.pos);
     let mut effects = Effects::none();
-    step_pinch_channel(tf, span(tf.first.pos, tf.second.pos), &mut effects);
+    step_pan_channel(tf, &mut effects);
+    let mut pinch_effects = Effects::none();
+    let pinch_began = step_pinch_channel(tf, raw_span, &mut pinch_effects);
+    if pinch_began && matches!(tf.pan, PanChannel::Armed) {
+        // Matching Chromium `GestureProvider::SendImpl` on `kGesturePinchBegin`: begin pan at
+        // the current midpoint with (0, 0) ahead of `Magnify(Began)` so subsequent moves track
+        // both fingers 1:1 without waiting another 8 pt.
+        tf.pan = PanChannel::Active { prev_mid: tf.mid };
+        effects.push(TouchEffect::EmitTouchWheel {
+            dx: 0.0,
+            dy: 0.0,
+            mid: tf.mid,
+            hit: tf.initial_mid,
+            phase: GesturePhase::Began,
+        });
+    }
+    effects.extend(pinch_effects);
+    step_rotate_channel(tf, raw_span, &mut effects);
     effects
 }
 
-fn step_pinch_channel(tf: &mut TwoFinger, raw_span: f32, effects: &mut Effects<TouchEffect>) {
+fn step_pan_channel(tf: &mut TwoFinger, effects: &mut Effects<TouchEffect>) {
+    match tf.pan {
+        PanChannel::Disabled => {}
+        PanChannel::Armed => {
+            let (dx0, dy0) = (tf.mid.0 - tf.initial_mid.0, tf.mid.1 - tf.initial_mid.1);
+            let dist = dx0.hypot(dy0);
+            if !dist.is_finite() || dist <= PAN_SLOP {
+                return;
+            }
+            let scale = (dist - PAN_SLOP) / dist;
+            let (dx, dy) = (dx0 * scale, dy0 * scale);
+            tf.pan = PanChannel::Active { prev_mid: tf.mid };
+            effects.push(TouchEffect::EmitTouchWheel {
+                dx: 0.0,
+                dy: 0.0,
+                mid: tf.mid,
+                hit: tf.initial_mid,
+                phase: GesturePhase::Began,
+            });
+            effects.push(TouchEffect::EmitTouchWheel {
+                dx,
+                dy,
+                mid: tf.mid,
+                hit: tf.mid,
+                phase: GesturePhase::Moved,
+            });
+        }
+        PanChannel::Active { ref mut prev_mid } => {
+            let (dx, dy) = (tf.mid.0 - prev_mid.0, tf.mid.1 - prev_mid.1);
+            *prev_mid = tf.mid;
+            if (dx != 0.0 || dy != 0.0) && dx.is_finite() && dy.is_finite() {
+                effects.push(TouchEffect::EmitTouchWheel {
+                    dx,
+                    dy,
+                    mid: tf.mid,
+                    hit: tf.mid,
+                    phase: GesturePhase::Moved,
+                });
+            }
+        }
+    }
+}
+
+fn step_pinch_channel(tf: &mut TwoFinger, raw_span: f32, effects: &mut Effects<TouchEffect>) -> bool {
     if !raw_span.is_finite() {
-        return;
+        return false;
     }
     match tf.pinch {
-        PinchChannel::Disabled => {}
+        PinchChannel::Disabled => false,
         PinchChannel::Armed { initial_span } => {
             let initial = if initial_span.is_finite() { initial_span } else { raw_span };
             let diff = raw_span - initial;
@@ -472,7 +596,7 @@ fn step_pinch_channel(tf: &mut TwoFinger, raw_span: f32, effects: &mut Effects<T
                 if !initial_span.is_finite() {
                     tf.pinch = PinchChannel::Armed { initial_span: initial };
                 }
-                return;
+                return false;
             }
             let boundary = if diff > 0.0 {
                 (initial + SPAN_SLOP).max(MIN_SPAN)
@@ -495,6 +619,7 @@ fn step_pinch_channel(tf: &mut TwoFinger, raw_span: f32, effects: &mut Effects<T
                 hit: tf.mid,
                 phase: GesturePhase::Moved,
             });
+            true
         }
         PinchChannel::Active { ref mut prev_span } => {
             let curr = raw_span.max(MIN_SPAN);
@@ -507,6 +632,61 @@ fn step_pinch_channel(tf: &mut TwoFinger, raw_span: f32, effects: &mut Effects<T
                 hit: tf.mid,
                 phase: GesturePhase::Moved,
             });
+            false
+        }
+    }
+}
+
+fn step_rotate_channel(tf: &mut TwoFinger, raw_span: f32, effects: &mut Effects<TouchEffect>) {
+    if !raw_span.is_finite() || raw_span < MIN_SPAN {
+        return;
+    }
+    let angle = finger_angle_deg(tf.first.pos, tf.second.pos);
+    if !angle.is_finite() {
+        return;
+    }
+    match tf.rotate {
+        RotateChannel::Disabled => {}
+        RotateChannel::Armed { anchored, prev_angle, cumulative } => {
+            if !anchored {
+                tf.rotate = RotateChannel::Armed { anchored: true, prev_angle: angle, cumulative: 0.0 };
+                return;
+            }
+            let next_cum = cumulative + wrap_deg(angle - prev_angle);
+            if next_cum.abs() <= ROTATE_SLOP_DEG {
+                tf.rotate = RotateChannel::Armed { anchored: true, prev_angle: angle, cumulative: next_cum };
+                return;
+            }
+            let excess = if next_cum > 0.0 {
+                next_cum - ROTATE_SLOP_DEG
+            } else {
+                next_cum + ROTATE_SLOP_DEG
+            };
+            tf.rotate = RotateChannel::Active { prev_angle: angle };
+            effects.push(TouchEffect::EmitRotate {
+                degrees: 0.0,
+                mid: tf.mid,
+                hit: tf.initial_mid,
+                phase: GesturePhase::Began,
+            });
+            effects.push(TouchEffect::EmitRotate {
+                degrees: excess,
+                mid: tf.mid,
+                hit: tf.mid,
+                phase: GesturePhase::Moved,
+            });
+        }
+        RotateChannel::Active { ref mut prev_angle } => {
+            let degrees = wrap_deg(angle - *prev_angle);
+            *prev_angle = angle;
+            if degrees != 0.0 {
+                effects.push(TouchEffect::EmitRotate {
+                    degrees,
+                    mid: tf.mid,
+                    hit: tf.mid,
+                    phase: GesturePhase::Moved,
+                });
+            }
         }
     }
 }
@@ -524,15 +704,32 @@ fn step_two_finger_end(
     } else {
         return None;
     };
+    let mid = if cancelled || !pos.0.is_finite() || !pos.1.is_finite() {
+        tf.mid
+    } else {
+        midpoint(remaining.pos, pos)
+    };
     let mut effects = Effects::none();
+    if matches!(tf.pan, PanChannel::Active { .. }) {
+        effects.push(TouchEffect::EmitTouchWheel {
+            dx: 0.0,
+            dy: 0.0,
+            mid,
+            hit: mid,
+            phase: GesturePhase::Ended,
+        });
+    }
     if matches!(tf.pinch, PinchChannel::Active { .. }) {
-        let mid = if cancelled || !pos.0.is_finite() || !pos.1.is_finite() {
-            tf.mid
-        } else {
-            midpoint(remaining.pos, pos)
-        };
         effects.push(TouchEffect::EmitMagnify {
             delta: 0.0,
+            mid,
+            hit: mid,
+            phase: GesturePhase::Ended,
+        });
+    }
+    if matches!(tf.rotate, RotateChannel::Active { .. }) {
+        effects.push(TouchEffect::EmitRotate {
+            degrees: 0.0,
             mid,
             hit: mid,
             phase: GesturePhase::Ended,
