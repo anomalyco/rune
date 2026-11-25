@@ -40,7 +40,7 @@ pub(crate) fn handler_state<S: 'static>(state: &mut S) -> &mut dyn Any {
 }
 
 /// Calls an app's runtime callback (`poll`, `on_key`, `on_focus`, `on_mods`,
-/// `on_visibility`, `on_ime`). With `rune/hot` it goes through subsecond's jump table,
+/// `on_visibility`, `on_ime`, `on_field_menu`). With `rune/hot` it goes through subsecond's jump table,
 /// so a patched body runs instead of the pointer captured at startup, and a panicking patch
 /// falls back to that pointer.
 macro_rules! app_call {
