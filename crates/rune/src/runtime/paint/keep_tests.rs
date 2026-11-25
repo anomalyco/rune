@@ -190,3 +190,136 @@ fn live_text_copied_between_changes_and_repainted_on_update() {
     assert_eq!(rt.core().paint.keep.check_mismatches, 0);
     assert_eq!(rt.core().paint.keep.kept, cells_subtree);
 }
+
+#[test]
+fn held_header_after_dropping_sticky_never_copies_stale_paint() {
+    use crate::{GrowthSpec, ScrollSpec};
+
+    const STEPS: usize = 40;
+    const STEP_H: f32 = 28.0;
+    const HDR_H: f32 = 28.0;
+    const GROUP_TOP: f32 = 200.0;
+
+    #[derive(Clone, Copy)]
+    struct Fold {
+        open: bool,
+        sticky_shut: bool,
+        drop_steps: bool,
+        virtualized: bool,
+    }
+
+    fn build_group(s: &Fold) -> El {
+        let shown = if s.open { STEPS } else { 0 };
+        let mut hdr = row()
+            .key("hdr")
+            .w_full()
+            .h(HDR_H)
+            .fill(Color { r: 0.25, g: 0.35, b: 0.55, a: 1.0 })
+            .on_press(|_: &mut Fold| {})
+            .child(text("Section header").font(TextStyle::new(12.0, 600.0)));
+        if shown > 0 || s.sticky_shut {
+            hdr = hdr.sticky_top(0.0);
+        }
+        let mut g = col().key("group").w_full().child(hdr);
+        let laid = if s.drop_steps { shown } else { STEPS };
+        if laid > 0 {
+            let steps = col()
+                .key("steps")
+                .w_full()
+                .children((0..laid).map(|k| el().key(format!("step-{k}")).w_full().h(STEP_H)));
+            let held = col().key("steps-box").w_full();
+            g = g.child(if shown == laid { held } else { held.h(0.0) }.child(steps));
+        }
+        g
+    }
+
+    fn build_row(s: &Fold, i: usize) -> El {
+        match i {
+            0 => el().key("before").w_full().h(GROUP_TOP),
+            1 => col().key("turn").w_full().child(build_group(s)),
+            2 => el().key("after").w_full().h(100.0).fill(Color { r: 0.15, g: 0.15, b: 0.18, a: 1.0 }),
+            _ => el().key("tail").w_full().h(100.0),
+        }
+    }
+
+    fn view(s: &Fold, _: &mut Cx<Fold>) -> El {
+        let mut stack = col().key("stack").w_full().growth(GrowthSpec::default());
+        if s.virtualized {
+            let keys = ["before", "turn", "after", "tail"];
+            stack = stack.virtual_rows(4, 100.0, move |_: &Fold, i| keys[i].into(), build_row);
+        } else {
+            for i in 0..4 {
+                stack = stack.child(build_row(s, i));
+            }
+        }
+        col().key("scroll").size(300.0, 200.0).scroll(ScrollSpec { stick_bottom: true }).child(stack)
+    }
+
+    for sticky_shut in [false, true] {
+        for drop_steps in [false, true] {
+            for virtualized in [false, true] {
+                let init = Fold { open: true, sticky_shut, drop_steps, virtualized };
+                let setup = || {
+                    let mut rt = Runtime::new(init, view, (300.0, 200.0), Env::new(true, 1.0));
+                    rt.frame(0.0);
+                    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, GROUP_TOP + 500.0));
+                    for _ in 0..4 {
+                        rt.frame(1.0 / 120.0);
+                    }
+                    rt.update(|s, tx| {
+                        s.open = false;
+                        tx.keep_on_screen("hdr");
+                    });
+                    rt
+                };
+
+                // 1. Debug verify mode must record zero keep_check mismatches.
+                let mut rt_dbg = setup();
+                for f in 0..180 {
+                    rt_dbg.frame(1.0 / 120.0);
+                    assert_eq!(
+                        rt_dbg.core().paint.keep.check_mismatches,
+                        0,
+                        "sticky_shut={sticky_shut} drop_steps={drop_steps} virtualized={virtualized} frame={f}: debug keep_check mismatch"
+                    );
+                }
+
+                // 2. Release-like mode (force_copy = true) must match a full unskipped paint bit-for-bit.
+                let mut rt_copy = setup();
+                let mut rt_fresh = setup();
+                rt_copy.core_mut().paint.keep.force_copy = true;
+                for f in 0..180 {
+                    rt_copy.frame(1.0 / 120.0);
+                    rt_fresh.core_mut().paint.keep.off_once = true;
+                    rt_fresh.frame(1.0 / 120.0);
+                    let a = bytemuck::cast_slice::<Instance, u8>(&rt_copy.core().instances);
+                    let b = bytemuck::cast_slice::<Instance, u8>(&rt_fresh.core().instances);
+                    assert_eq!(
+                        a, b,
+                        "sticky_shut={sticky_shut} drop_steps={drop_steps} virtualized={virtualized} frame={f}: release-mode PaintKeep instances differ from full paint"
+                    );
+                    assert_eq!(
+                        rt_copy.core().hit.hits,
+                        rt_fresh.core().hit.hits,
+                        "sticky_shut={sticky_shut} drop_steps={drop_steps} virtualized={virtualized} frame={f}: hits differ"
+                    );
+                    assert_eq!(
+                        rt_copy.core().paint.drawn,
+                        rt_fresh.core().paint.drawn,
+                        "sticky_shut={sticky_shut} drop_steps={drop_steps} virtualized={virtualized} frame={f}: drawn rects differ"
+                    );
+                    assert_eq!(
+                        rt_copy.core().scroll.stuck,
+                        rt_fresh.core().scroll.stuck,
+                        "sticky_shut={sticky_shut} drop_steps={drop_steps} virtualized={virtualized} frame={f}: scroll.stuck differs"
+                    );
+                    assert_eq!(
+                        rt_copy.core().scroll.sticky_frame,
+                        rt_fresh.core().scroll.sticky_frame,
+                        "sticky_shut={sticky_shut} drop_steps={drop_steps} virtualized={virtualized} frame={f}: sticky_frame differs"
+                    );
+                }
+            }
+        }
+    }
+}
