@@ -298,9 +298,13 @@ impl OverlayCore {
     /// Input stops, and the native window hides over `fade`. A fading window stays up while
     /// `presence_due` steps its alpha (Windows), then hides it.
     fn hide_window(&mut self, app: &mut dyn OverlayApp, fade: Duration) {
-        // A hide need not report a blur, and a hidden overlay hears none: what it held is
-        // released.
-        if self.options.keys.takes_keys() { app.rt_mut().keys_lost(); }
+        // A hide need not report a blur (a Wayland surface goes without `wl_keyboard.leave`),
+        // and a hidden overlay hears none. A focused one blurs here, so `on_focus(false)` runs
+        // and the next show's focus is a change; what it held is released.
+        if self.options.keys.takes_keys() {
+            if app.rt().window_has_focus() { app.window_focus(false); }
+            app.rt_mut().keys_lost();
+        }
         self.mods = Default::default();
         self.control_click = false;
         self.ime.clear();
@@ -555,3 +559,7 @@ impl OverlayCore {
         *self.shared.surface.lock().unwrap() = None;
     }
 }
+
+#[cfg(test)]
+#[path = "lifetime_tests.rs"]
+mod tests;

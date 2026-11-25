@@ -491,6 +491,18 @@ policy changes are applied in the same mutation phase.
   follows it again.
   `.scroll_edge_fade(w)` fades a viewport's top and bottom only while content is hidden under
   them (strength = hidden extent / 15 pt), and `.scroll_margin(pts)` stops revealed rows clear of it.
+- **Virtual items** (`El::virtual_items(Rc<dyn VirtualItems>)`, `VirtualItems`): an app-windowed
+  keyed container for 2D canvases, node graphs, and LOD scenes positioned under `live_offset` /
+  `live_scale` (no scroll viewport or growth stack required). `VirtualItems::version()` is polled
+  in O(1) each frame so idle windows do no work; when the version changes, the commit takes the
+  remount fast path without re-running `view`. Staying items keep their retained subtrees,
+  `NodeId`, paint-keep epochs, `memo` entries, and `Live` / `LiveText` subscriptions without
+  calling `build`; leaving items unmount immediately except an item holding keyboard focus (or a
+  focused descendant), which stays pinned and mounted until focus leaves it; entering items mount
+  settled (no entrance animation while panning) up to optional `mount_budget()` per frame ordered
+  by `mount_priority(key)`, while mounted children always render in `keys()` back-to-front order.
+  Multi-frame fills use an explicit backoff/stall state machine so runaway version churn settles
+  safely. See the `Lists/Virtual items canvas` story in `examples/playground`.
 - **Sticky headers and bars** (`.sticky_top(inset)`, `.sticky_bottom(inset)`, `.stuck_shadow(shadow)`,
   `tx.keep_on_screen(key)`, `runtime/scroll/sticky.rs`): an element inside a vertical scroll viewport pins to the
   nearest scroll viewport's top or bottom edge (offset inward by `inset`) while its parent stays in

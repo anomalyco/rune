@@ -74,7 +74,7 @@ pub(crate) struct HostState {
     pub(in crate::runtime) deferred_field_menu_pick: Option<(u64, String)>,
     /// Test-only seam forcing `App::on_field_menu` even where `popup_menu_supported()` is true.
     #[cfg(test)]
-    pub(in crate::runtime) force_field_menu_fallback: bool,
+    pub(crate) force_field_menu_fallback: bool,
     /// The file dialog asked for (`Tx::open_file`, `Tx::save_file`) and not yet answered.
     pub(in crate::runtime) file_dialog: crate::file_dialog::DialogState,
     /// File dialog callbacks, by id, until their answer runs.
@@ -82,6 +82,8 @@ pub(crate) struct HostState {
     pub(in crate::runtime) next_file_dialog: u64,
     /// `Tx::announce`'s last words, for the accessibility tree's live region.
     pub(crate) announcement: crate::a11y::Announcement,
+    /// `Tx::haptic` requests waiting for `Runtime::take_haptics`.
+    pub(crate) haptics: crate::haptics::Haptics,
     /// The accessibility tree, while an assistive client listens (`a11y/tree.rs`).
     pub(in crate::runtime) a11y: Option<Box<crate::a11y::tree::A11yTree>>,
     /// The band of a taller document the window draws (`App::web_document`).
@@ -136,6 +138,7 @@ impl HostState {
             file_dialog_answers: Vec::new(),
             next_file_dialog: 0,
             announcement: Default::default(),
+            haptics: Default::default(),
             a11y: None,
             page: None,
         }

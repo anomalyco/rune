@@ -107,6 +107,8 @@ pub struct Tx {
     /// `Tx::announce`: what a screen reader says after this handler.
     pub(crate) announce: Option<(String, crate::LiveRegion)>,
     pub(crate) open_urls: Vec<crate::open_url::Link>,
+    /// `Tx::haptic`, in order.
+    pub(crate) haptics: Vec<crate::Haptic>,
     pub(crate) open_paths: Vec<crate::open_path::PathRequest>,
     /// `AppHandle::register_url_scheme`: schemes to claim with the system.
     pub(crate) url_schemes: Vec<crate::open_url::scheme::Claim>,

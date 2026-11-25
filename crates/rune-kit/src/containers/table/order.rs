@@ -125,6 +125,15 @@ impl TableState {
         self.reorder.is_held()
     }
 
+    /// Visible index of the column whose header is currently pressed or being dragged.
+    pub(super) fn held_column_index(&self) -> Option<usize> {
+        match self.reorder.get() {
+            Some(&ColumnLift::Pressed { index }) => Some(index),
+            Some(&ColumnLift::Dragging { from, .. }) => Some(from),
+            None => None,
+        }
+    }
+
     /// The pointer moved to `at` while a header is held: true when this shows the drag's release
     /// was lost (its header unmounted), and the column drag ended.
     pub(super) fn column_pointer(&mut self, at: [f32; 2]) -> bool {
@@ -166,8 +175,14 @@ impl TableState {
                 if d.cancelled {
                     return None;
                 }
-                let widths: Vec<f32> =
-                    self.visible_columns(columns).iter().map(|c| self.laid_out_width(&c.id).unwrap_or(c.min)).collect();
+                let widths: Vec<f32> = self
+                    .visible_columns(columns)
+                    .iter()
+                    .map(|c| {
+                        self.laid_out_width(&c.id)
+                            .unwrap_or_else(|| super::window::resolved_min_width(c, c.resolved_width(self.column_width(&c.id))))
+                    })
+                    .collect();
                 if from >= widths.len() {
                     return None;
                 }

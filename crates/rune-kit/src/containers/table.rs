@@ -45,7 +45,9 @@ use crate::grip::Grip;
 use crate::list_nav::{NavAction, NavPolicy, page_size};
 
 mod order;
+mod render;
 mod view;
+mod window;
 
 pub use view::Table;
 
@@ -336,6 +338,7 @@ pub struct TableState {
     anchor_hint: std::cell::Cell<usize>,
     viewport: f32,
     row_height: f32,
+    columns: window::ColumnWindow,
 }
 
 impl Default for TableState {
@@ -363,6 +366,7 @@ impl TableState {
             anchor_hint: std::cell::Cell::new(0),
             viewport: 0.0,
             row_height: 28.0,
+            columns: window::ColumnWindow::default(),
         }
     }
     /// The table's element key (`"table"` by default). Its rows are keyed by id inside it, and
@@ -599,11 +603,14 @@ impl TableState {
         }
     }
 
-    fn report_column_width(&mut self, id: &str, width: f32, tx: &mut Tx) {
+    fn report_column_width(&mut self, id: &str, width: f32, live_only: bool, tx: &mut Tx) {
         if self.laid_out.get(id).copied() == Some(width) {
             tx.live_only();
         } else {
             self.laid_out.insert(id.to_owned(), width);
+            if live_only {
+                tx.live_only();
+            }
         }
     }
 
@@ -613,7 +620,8 @@ impl TableState {
         dir
     }
 
-    fn update_viewport(&mut self, height: f32, row_height: f32, tx: &mut Tx) {
+    fn update_viewport(&mut self, x: f32, height: f32, row_height: f32, tx: &mut Tx) {
+        self.columns.set_viewport_x(x);
         if self.viewport == height && self.row_height == row_height {
             tx.live_only();
         }
@@ -621,15 +629,30 @@ impl TableState {
         self.row_height = row_height;
     }
 
+    fn update_scroll_x(&mut self, content_x: f32, band: window::BandParams, tx: &mut Tx) {
+        self.columns.observe_content_x(content_x, band, tx);
+    }
+
+    fn set_focused_column(&mut self, id: &str, within: bool, in_base_window: bool, tx: &mut Tx) {
+        self.columns.set_focused_column(id, within, in_base_window, tx);
+    }
+
+    fn resizing_column(&self) -> Option<&str> {
+        self.resize.get().map(|d| d.id.as_str())
+    }
+
     fn resize_drag(&mut self, c: &TableColumn, d: &Drag) {
         let id = &c.id;
         match d.phase {
             Phase::Down => {
                 let (restore, laid_out) = (self.column_width(id), self.laid_out.get(id).copied());
-                self.resize.press(ColumnDrag { restore, from: restore.or(laid_out).unwrap_or(c.min) }, Some(d.window_point()));
+                self.resize.press(
+                    ColumnDrag { id: id.clone(), restore, from: restore.or(laid_out).unwrap_or(c.min) },
+                    Some(d.window_point()),
+                );
             }
-            Phase::Move => if let Some(drag) = self.resize.moved(d.window_point()).copied() {
-                self.set_column_width(id.clone(), c.clamp(drag.from + d.dx));
+            Phase::Move => if let Some(from) = self.resize.moved(d.window_point()).map(|drag| drag.from) {
+                self.set_column_width(id.clone(), c.clamp(from + d.dx));
             },
             Phase::Up => match self.resize.release() {
                 Some(ColumnDrag { restore: Some(w), .. }) if d.cancelled() => self.set_column_width(id.clone(), w),
@@ -648,10 +671,10 @@ enum KeyOutcome {
     Open(usize),
 }
 
-/// A drag on a column's edge: the width a cancel puts back (`None`: none of its own), and the
-/// width it started from.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct ColumnDrag { restore: Option<f32>, from: f32 }
+/// A drag on a column's edge: its column id, the width a cancel puts back (`None`: none of its
+/// own), and the width it started from.
+#[derive(Clone, Debug, PartialEq)]
+struct ColumnDrag { id: String, restore: Option<f32>, from: f32 }
 
 /// A table's metrics and colours. [`TableStyle::from_kit`] takes them from the theme;
 /// `MarkdownStyle::table_like` draws Markdown tables with the same font, padding and rules.

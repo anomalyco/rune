@@ -510,3 +510,14 @@ fn macos_window_drag_in_overlay_starts_drag_and_pointer_released_clears_native_c
     pointer.released();
     assert!(!pointer.captured(), "native panel capture clears once OS drag takes mouse-up");
 }
+
+#[test]
+fn activation_token_waits_for_the_next_turn_and_keeps_every_reply() {
+    let req = requests_after(|h| {
+        h.activation_token(|_| {});
+        h.hide();
+        h.activation_token(|_| {});
+    });
+    assert_eq!(req.tokens.len(), 2);
+    assert_eq!(req.visible(), Some(false));
+}

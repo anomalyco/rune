@@ -205,6 +205,8 @@ impl SharedCore {
     fn set_display(&self, display: DisplayTarget) { self.request(|q| q.display = Some(display)); }
     fn request_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Take)); }
     fn release_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Release)); }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn activation_token(&self, reply: requests::TokenReply) { self.request(|q| q.tokens.push(reply)); }
     fn window_number(&self) -> Option<u32> { self.native.lock().unwrap().0 }
     fn capture_exclusion(&self) -> OverlaySupport { self.capabilities().capture_exclusion }
     fn capabilities(&self) -> crate::OverlayCapabilities { self.native.lock().unwrap().1 }
@@ -296,6 +298,18 @@ impl<T: 'static> OverlayHandle<T> {
     /// one event-loop turn wins.
     #[inline(always)]
     pub fn release_keys(&self) { self.shared.core.release_keys(); }
+
+    /// Asks for an XDG activation token to hand a program launched from the overlay (as
+    /// `XDG_ACTIVATION_TOKEN`), so the compositor lets its window come to the front. Call it
+    /// before hiding the overlay: `reply` runs on the event loop's next turn, ahead of that
+    /// turn's show or hide, with None off Wayland's layer shell, while the overlay has no
+    /// surface, or when the compositor gives no token.
+    pub fn activation_token(&self, reply: impl FnOnce(Option<String>) + Send + 'static) {
+        #[cfg(target_arch = "wasm32")]
+        reply(None);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.shared.core.activation_token(Box::new(reply));
+    }
 
     /// macOS panel CGWindowID for an explicit ScreenCaptureKit exclusion filter. Available
     /// at native creation (see `on_created`/`prewarm`); a new one with each window made.

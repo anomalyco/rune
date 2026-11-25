@@ -1514,6 +1514,10 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-autocomplete', item.ac],
         ['aria-controls', item.ct],
         ['aria-owns', item.ow],
+        ['aria-rowcount', item.rc !== undefined ? String(item.rc) : undefined],
+        ['aria-colcount', item.cc !== undefined ? String(item.cc) : undefined],
+        ['aria-rowindex', item.ri !== undefined ? String(item.ri) : undefined],
+        ['aria-colindex', item.ci !== undefined ? String(item.ci) : undefined],
     ];
     for (const [name, value] of rangeAttrs) {
         if (value === undefined) {
@@ -1817,6 +1821,10 @@ export function focusA11y(h, json) {
     if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
     if (f.ct) el.setAttribute('aria-controls', f.ct);
     if (f.ow) el.setAttribute('aria-owns', f.ow);
+    if (f.rc !== undefined) el.setAttribute('aria-rowcount', String(f.rc));
+    if (f.cc !== undefined) el.setAttribute('aria-colcount', String(f.cc));
+    if (f.ri !== undefined) el.setAttribute('aria-rowindex', String(f.ri));
+    if (f.ci !== undefined) el.setAttribute('aria-colindex', String(f.ci));
     if (f.ro) el.setAttribute('aria-readonly', 'true');
     if (f.sel) {
         el.setAttribute('data-rune-selection', JSON.stringify(f.sel));
