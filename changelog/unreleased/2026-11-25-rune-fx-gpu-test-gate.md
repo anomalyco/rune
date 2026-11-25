@@ -1,0 +1,1 @@
+- Tests (`rune-fx`): route every GPU integration test through `Gpu::test_headless`, `Gpu::test_on`, or `Gpu::test_adapter_available` and `App::try_run` so GPU-less hosts skip cleanly with `RUNE_ALLOW_NO_GPU=1` instead of panicking or aborting with exit code 2, while hosts with a real GPU continue to run every test with zero skips.
