@@ -176,6 +176,12 @@ impl PaintState {
         self.native_materials
     }
 
+    #[cfg(test)]
+    #[inline]
+    pub(in crate::runtime) fn keep_check_mismatches(&self) -> usize {
+        self.keep.check_mismatches
+    }
+
     #[cfg(any(test, target_os = "macos"))]
     #[inline]
     pub(crate) fn set_native_materials(&mut self, native: bool) {

@@ -164,6 +164,59 @@ impl El {
         t.cold.pills.insert(at, PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare });
         self
     }
+
+    /// Reserves an atomic in-flow [`InlineBox`](crate::InlineBox) before UTF-8 byte offset `at`
+    /// of a [`text`](crate::text()) or [`rich`](crate::rich) element and lays `child` out inside
+    /// that room, like a CSS `display: inline-block` element.
+    ///
+    /// `child` is sized to `slot`'s width and height, moves and wraps whole with the text line,
+    /// grows line height when taller than the line, and receives its own painting, hit testing,
+    /// keyboard focus, and accessibility node. Selection and copy over the surrounding text skip
+    /// the box. When `truncate` or `max_lines` cuts the text before `at`, the elided child is
+    /// hidden from painting, hit testing, focus, and accessibility.
+    ///
+    /// `at` may equal `text.len()` (for a trailing badge or arrow, or an empty string). On a
+    /// [`text_input`](crate::text_input), a non-text element, or an out-of-range / non-char-boundary
+    /// `at`, this is a no-op.
+    ///
+    /// ```
+    /// # use rune::{Color, InlineAlign, InlineBox, el, text};
+    /// # let chip_bg = Color::WHITE.alpha(0.12);
+    /// let slot = InlineBox::new(72.0, 18.0).align(InlineAlign::TextCenter);
+    /// let badge = el().fill(chip_bg).radius(4.0).child(text("config.toml"));
+    /// let _line = text("Open  and edit it.").wrap().inline(5, slot, badge);
+    /// ```
+    pub fn inline(mut self, at: usize, slot: crate::text::InlineBox, child: El) -> Self {
+        if self.cold.input.is_some() {
+            return self;
+        }
+        let memo_len = self.memo_children().map_or(0, |m| m.children.len());
+        let has_memo = self.memo.is_some();
+        let Some(t) = self.text.as_mut() else { return self };
+        if at > t.content.len() || !t.content.is_char_boundary(at) {
+            return self;
+        }
+        let child = child.w(slot.width()).h(slot.height());
+        let at32 = at as u32;
+        if child.flags.has(crate::el::ElFlags::HAS_VIRTUAL) {
+            self.flags.set(crate::el::ElFlags::HAS_VIRTUAL, true);
+        }
+        if !has_memo && self.children.len() == t.cold.inline_boxes.len() {
+            let pos = t.cold.inline_boxes.partition_point(|b| b.at <= at32);
+            self.children.insert(pos, child);
+            for b in &mut t.cold.inline_boxes[pos..] {
+                b.child += 1;
+            }
+            t.cold.inline_boxes.insert(pos, crate::text::InlineBoxRun { at: at32, slot, child: pos as u32 });
+        } else {
+            self.flags.set(crate::el::ElFlags::MEMO_EXTENDED, has_memo);
+            let ord = memo_len + self.children.len();
+            self.children.push(child);
+            t.cold.inline_boxes.push(crate::text::InlineBoxRun { at: at32, slot, child: ord as u32 });
+        }
+        t.shape = None;
+        self
+    }
 }
 
 /// An image set in text by [`El::inline_image`]: `width` points wide, `ascent` points above

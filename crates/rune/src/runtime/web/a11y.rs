@@ -542,6 +542,7 @@ impl RuntimeCore {
             }
             if n.inert || self.subtree_exiting(i) || n.vis.opacity <= 0.01 || n.a11y.hidden
                 || matches!(n.role, "none" | "presentation")
+                || crate::runtime::commit::inline::is_elided_inline_child(&self.tree.nodes, i)
             {
                 i = end;
                 last_flow_parent = None;

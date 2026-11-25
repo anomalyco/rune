@@ -6,6 +6,7 @@ pub(super) mod apply;
 pub(super) mod apply_scratch;
 mod device;
 pub(super) mod flatten;
+pub(in crate::runtime) mod inline;
 #[cfg(debug_assertions)]
 pub(super) mod layout_diagnostics;
 pub(super) mod measure;

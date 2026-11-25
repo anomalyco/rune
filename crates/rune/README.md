@@ -439,7 +439,10 @@ policy changes are applied in the same mutation phase.
   (`Span`), wrapping with absolute line height and letter spacing, `.truncate()` with an ellipsis,
   inline-code backgrounds that merge where they touch, padded inline boxes (`SpanBox`, `El::span_box`
   / `El::span_boxes`) with layout-affecting horizontal padding, per-corner radii `[tl, tr, br, bl]`
-  and inset borders for adjacent chips, byte-range overlines (`El::overline` / `El::overlines`)
+  and inset borders for adjacent chips, in-flow inline element boxes (`El::inline`, `InlineBox`,
+  `InlineAlign`, `rune::text::measure_inline` / `measure_inline_with`) that reserve atomic CSS
+  `inline-block` slots inside wrapped static text for interactive child `El`s with their own
+  painting, hit testing, keyboard focus, and accessibility nodes, byte-range overlines (`El::overline` / `El::overlines`)
   that split across wrapped lines and coexist with underline and strikethrough, and first-line /
   hanging indentation (`El::text_indent` / `El::set_text_indent`, following CSS `text-indent`,
   with negative values pulling line 0 into leading padding and mirroring in RTL). `.align(..)` and

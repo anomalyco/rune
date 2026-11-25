@@ -99,6 +99,9 @@ impl TextSpec {
         for b in &mut cold.span_boxes {
             (b.start, b.end) = marked.range(b.start, b.end);
         }
+        for b in &mut cold.inline_boxes {
+            b.at = marked.range(b.at, b.at).0;
+        }
         for h in &mut cold.highlights {
             (h.start, h.end) = marked.range(h.start, h.end);
         }

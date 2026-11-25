@@ -220,7 +220,7 @@ impl NodePrint {
             }
         };
         type TextPart = (&'static str, fn(&TextSpec) -> u64, Option<fn(&TextSpec) -> String>);
-        let parts: [TextPart; 12] = [
+        let parts: [TextPart; 13] = [
             ("text", |t| key(|h| t.cold.live.is_none().then_some(&t.content).hash(h)), Some(snippet)),
             ("text colour", |t| key(|h| rgba(t.color).hash(h)), Some(|t| colour(t.color))),
             ("text style", |t| key(|h| bits(&[t.style.size, t.style.weight]).hash(h)), Some(|t| format!("{:.1}pt weight {}", t.style.size, t.style.weight))),
@@ -251,6 +251,16 @@ impl NodePrint {
                     b.style.pad_right().to_bits(),
                     b.style.corner_radii().map(f32::to_bits),
                     b.style.border_ring().map(|(c, w)| (c, w.to_bits())),
+                ).hash(h);
+            }), None),
+            ("inline boxes", |t| key(|h| for b in &t.cold.inline_boxes {
+                (
+                    b.at,
+                    b.slot.width().to_bits(),
+                    b.slot.height().to_bits(),
+                    b.slot.alignment(),
+                    b.slot.baseline_offset().map(f32::to_bits),
+                    b.child,
                 ).hash(h);
             }), None),
             ("highlights", |t| key(|h| for hl in &t.cold.highlights {

@@ -270,9 +270,9 @@ impl Measurement<'_> {
             self.place(&taffy, &mut nodes);
         }
         let mut span_idx = 0usize;
-        for (i, n) in nodes.iter_mut().enumerate() {
-            let Some(spec) = &n.text else { continue };
-            let w = (taffy.box_layout(n.taffy).w - n.inset[0] - n.inset[2]).max(0.0);
+        for i in 0..nodes.len() {
+            let Some(spec) = nodes[i].text.as_deref() else { continue };
+            let w = (taffy.box_layout(nodes[i].taffy).w - nodes[i].inset[0] - nodes[i].inset[2]).max(0.0);
             if spec.cold.live.is_some() {
                 while span_idx < reused.len() && reused[span_idx].new_start + reused[span_idx].len <= i {
                     span_idx += 1;
@@ -282,23 +282,26 @@ impl Measurement<'_> {
                     .filter(|s| i >= s.new_start && i < s.new_start + s.len)
                     .and_then(|s| self.nodes.get(s.old_start + (i - s.new_start)));
                 let width_sensitive = spec.wrap || spec.truncate || spec.max_lines > 0;
-                let kept_valid = n.text_layout.is_some()
+                let kept_valid = nodes[i].text_layout.is_some()
                     && reused_old.is_some_and(|old| {
                         !width_sensitive || (old.local.w - old.inset[0] - old.inset[2]).max(0.0) == w
                     });
                 if kept_valid {
                     continue;
                 }
-                if n.cold.get().is_some_and(|c| c.live_text_seen.is_some()) {
-                    lay_out_text_inner(text, n, w, scale, true);
-                    n.epoch = crate::runtime::paint_keep::next_epoch();
+                if nodes[i].cold.get().is_some_and(|c| c.live_text_seen.is_some()) {
+                    lay_out_text_inner(text, &mut nodes[i], w, scale, true);
+                    nodes[i].epoch = crate::runtime::paint_keep::next_epoch();
                     continue;
                 }
                 if reused_old.is_some() {
-                    n.epoch = crate::runtime::paint_keep::next_epoch();
+                    nodes[i].epoch = crate::runtime::paint_keep::next_epoch();
                 }
             }
-            lay_out_text(text, n, w, scale);
+            lay_out_text(text, &mut nodes[i], w, scale);
+            if nodes[i].text.as_ref().is_some_and(|t| !t.cold.inline_boxes.is_empty()) {
+                inline::place_inline_children(&mut taffy, text, &mut nodes, i, scale);
+            }
         }
 
         (taffy, nodes)
