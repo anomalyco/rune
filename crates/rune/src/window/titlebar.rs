@@ -292,7 +292,8 @@ pub(crate) struct Caption {
     pub layout: Option<linux::ButtonLayout>,
     /// The sides the frame resizes the window from, by a band inside them (`caption::edges`):
     /// a Linux frame's, on a resizable window that is neither maximized nor full screen, less
-    /// the sides the compositor tiled.
+    /// the sides the compositor tiled; none where winit's frame around the window has the
+    /// resize handles.
     pub edges: linux::Sides,
 }
 
@@ -304,10 +305,11 @@ impl Caption {
     /// The caption of Rune's own frame on Linux (`linux`) for a window in this state:
     /// `layout`'s buttons, at the left when the layout puts them there (the right, in an app
     /// that reads right to left), the ones the compositor allows, and resize edges along the
-    /// sides that are free while the window floats.
+    /// sides that are free while the window floats, unless a frame around it resizes it
+    /// (`linux::WindowState::outer_frame`).
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
     pub(crate) fn own_frame(height: f32, layout: linux::ButtonLayout, window: linux::WindowState) -> Self {
-        let floats = window.resizable && !window.maximized && !window.full_screen;
+        let floats = window.resizable && !window.maximized && !window.full_screen && !window.outer_frame;
         let free = |tiled: bool| floats && !tiled;
         Self {
             maximized: window.maximized,

@@ -9,7 +9,7 @@ use smithay_client_toolkit::{
     subcompositor::{SubcompositorState, SubsurfaceData},
 };
 
-use crate::theme::{BORDER_SIZE, CORNER_RADIUS, HEADER_SIZE, RESIZE_HANDLE_SIZE};
+use crate::theme::{BORDER_SIZE, CORNER_RADIUS, RESIZE_HANDLE_SIZE};
 use crate::{pointer::Location, wl_typed::WlTyped};
 
 /// The bottom part's input zone, which is its resize handle: it starts at the window's bottom
@@ -30,6 +30,9 @@ pub(crate) fn bottom_input_rect(surface_width: u32) -> Rect {
 #[derive(Debug)]
 pub struct DecorationParts {
     parts: [Part; 5],
+    /// The header bar's height: `HEADER_SIZE`, or zero for a frame without one, whose top part is
+    /// the bottom part's mirror (it reaches a corner radius into the window, for its top corners).
+    header: u32,
 }
 
 impl DecorationParts {
@@ -46,6 +49,7 @@ impl DecorationParts {
         base_surface: &WlTyped<WlSurface, SurfaceData>,
         subcompositor: &SubcompositorState,
         queue_handle: &QueueHandle<State>,
+        header: u32,
     ) -> Self
     where
         State: Dispatch<WlSurface, SurfaceData> + Dispatch<WlSubsurface, SubsurfaceData> + 'static,
@@ -59,9 +63,11 @@ impl DecorationParts {
                 queue_handle,
                 Rect {
                     x: -(BORDER_SIZE as i32),
-                    y: -(HEADER_SIZE as i32 + BORDER_SIZE as i32),
+                    y: -(header as i32 + BORDER_SIZE as i32),
                     width: 0, // Defined by `Self::resize`.
-                    height: BORDER_SIZE,
+                    // Without a header it reaches below the window's top edge, so the visible
+                    // border can follow the rounded corners the content leaves it.
+                    height: if header == 0 { BORDER_SIZE + CORNER_RADIUS } else { BORDER_SIZE },
                 },
                 Some(Rect {
                     x: BORDER_SIZE as i32 - RESIZE_HANDLE_SIZE as i32,
@@ -77,7 +83,7 @@ impl DecorationParts {
                 queue_handle,
                 Rect {
                     x: -(BORDER_SIZE as i32),
-                    y: -(HEADER_SIZE as i32),
+                    y: -(header as i32),
                     width: BORDER_SIZE,
                     height: 0, // Defined by `Self::resize`.
                 },
@@ -95,7 +101,7 @@ impl DecorationParts {
                 queue_handle,
                 Rect {
                     x: 0, // Defined by `Self::resize`.
-                    y: -(HEADER_SIZE as i32),
+                    y: -(header as i32),
                     width: BORDER_SIZE,
                     height: 0, // Defined by `Self::resize`.
                 },
@@ -128,15 +134,22 @@ impl DecorationParts {
                 queue_handle,
                 Rect {
                     x: 0,
-                    y: -(HEADER_SIZE as i32),
+                    y: -(header as i32),
                     width: 0, // Defined by `Self::resize`.
-                    height: HEADER_SIZE,
+                    height: header,
                 },
                 None,
             ),
         ];
 
-        Self { parts }
+        // The parts stack in the order they were made, and a part that reaches over the window
+        // draws its border and corners over the side parts' shadow, as the bottom one does: a
+        // top part without a header goes above the side parts too.
+        if header == 0 {
+            parts[Self::TOP].subsurface.place_above(parts[Self::RIGHT].surface.inner());
+        }
+
+        Self { parts, header }
     }
 
     pub fn parts(&self) -> std::iter::Enumerate<std::slice::Iter<Part>> {
@@ -175,7 +188,7 @@ impl DecorationParts {
         self.parts[Self::TOP].input_rect.as_mut().unwrap().width =
             self.parts[Self::TOP].surface_rect.width - (BORDER_SIZE * 2) + (RESIZE_HANDLE_SIZE * 2);
 
-        self.parts[Self::LEFT].surface_rect.height = height + HEADER_SIZE;
+        self.parts[Self::LEFT].surface_rect.height = height + self.header;
         self.parts[Self::LEFT].input_rect.as_mut().unwrap().height =
             self.parts[Self::LEFT].surface_rect.height;
 

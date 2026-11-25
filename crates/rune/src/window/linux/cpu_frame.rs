@@ -19,6 +19,7 @@ use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, RenderPrep, StepInfo};
 use crate::platform::cpu_frames::{Frames, Put, Retired};
 use crate::render::cpu_boot::{CpuPainter, HalfRounding, Scene, Target};
+use crate::render::csd_corners::Rounding;
 use crate::window::CpuFirst;
 use crate::runtime::RuntimeCore;
 use crate::time::Instant;
@@ -41,8 +42,8 @@ pub(in crate::window) struct Cpu {
     painter: CpuPainter,
     /// How the GPU that takes over rounds half floats.
     half: HalfRounding,
-    /// The radius the frames' bottom corners were last cleared at (`clear_corners`).
-    radius: f32,
+    /// The corners the frames were last cleared outside of (`clear_corners`).
+    rounding: Rounding,
 }
 
 /// A window's CPU side after the window went to the GPU (`Cpu::retire`): it draws nothing and
@@ -52,13 +53,13 @@ pub(in crate::window) struct RetiredCpu {
     pub(super) frames: Retired,
     painter: CpuPainter,
     half: HalfRounding,
-    radius: f32,
+    rounding: Rounding,
 }
 
 impl Cpu {
     /// The window goes to the GPU (`handover::SurfaceMode::switch`).
     pub(super) fn retire(self) -> RetiredCpu {
-        RetiredCpu { frames: self.frames.retire(), painter: self.painter, half: self.half, radius: self.radius }
+        RetiredCpu { frames: self.frames.retire(), painter: self.painter, half: self.half, rounding: self.rounding }
     }
 }
 
@@ -67,7 +68,7 @@ impl Cpu {
     /// A CPU side with no display behind it, and the count of frames a display would have had.
     pub(super) fn fake(explicit_sync: bool) -> (Cpu, Arc<std::sync::atomic::AtomicUsize>) {
         let (frames, sent) = crate::platform::cpu_frames::fake::Frames::new(explicit_sync);
-        (Cpu { frames, painter: CpuPainter::new(1), half: HalfRounding::default(), radius: 0. }, sent)
+        (Cpu { frames, painter: CpuPainter::new(1), half: HalfRounding::default(), rounding: Rounding::SQUARE }, sent)
     }
 }
 
@@ -75,14 +76,14 @@ impl RetiredCpu {
     /// The CPU side back, where the display allows that (`Retired::revive`); its next frame is
     /// painted and sent whole.
     pub(super) fn revive(self) -> Result<Cpu, RetiredCpu> {
-        let RetiredCpu { frames, mut painter, half, radius } = self;
+        let RetiredCpu { frames, mut painter, half, rounding } = self;
         match frames.revive() {
             Ok(mut frames) => {
                 frames.forget();
                 painter.forget();
-                Ok(Cpu { frames, painter, half, radius })
+                Ok(Cpu { frames, painter, half, rounding })
             }
-            Err(frames) => Err(RetiredCpu { frames, painter, half, radius }),
+            Err(frames) => Err(RetiredCpu { frames, painter, half, rounding }),
         }
     }
 }
@@ -161,7 +162,7 @@ impl Host {
         let Some(frames) = Frames::new(&window, size, want_alpha) else { return Err((window, a11y)) };
         let has_alpha = frames.has_alpha();
         crate::render::cpu_boot::attach_text(&mut self.app.rt_mut().text.atlas);
-        let cpu = Cpu { frames, painter: CpuPainter::new(painter_threads()), half: HalfRounding::default(), radius: 0. };
+        let cpu = Cpu { frames, painter: CpuPainter::new(painter_threads()), half: HalfRounding::default(), rounding: Rounding::SQUARE };
         crate::marks::mark("cpu.side");
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -315,7 +316,7 @@ impl FrameHost for CpuWindowFrame<'_> {
 
     fn prepare_render(&mut self, _drawable: (), _info: &mut StepInfo) -> RenderPrep<Option<Vec<[u32; 4]>>> {
         let has_comp = self.host.app.has_compositor();
-        let radius = self.host.win.as_ref().map_or(0., |l| self.host.corner_radius(l));
+        let rounding = self.host.win.as_ref().map_or(Rounding::SQUARE, |l| self.host.rounding(l));
         let Some(l) = self.host.win.as_mut() else { return RenderPrep::Abort };
         let (width, height) = (l.config.width, l.config.height);
         let rt = self.host.app.rt_mut();
@@ -336,8 +337,8 @@ impl FrameHost for CpuWindowFrame<'_> {
             .font_smoothing(rt.font_smoothing());
         // The corners' arcs moved (the window was maximized, or left it): every pixel is painted
         // again, as nothing says which the last clearing changed.
-        if cpu.radius != radius {
-            cpu.radius = radius;
+        if cpu.rounding != rounding {
+            cpu.rounding = rounding;
             cpu.frames.forget();
         }
         let Cpu { frames, painter, .. } = &mut *cpu;
@@ -351,7 +352,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         let painted = painter.paint(&scene, &mut Target::with_stride(&mut *canvas.bytes, width, height, stride));
         match painted {
             Ok(painted) => {
-                clear_corners(canvas.bytes, stride, (width, height), radius, &painted.rects);
+                clear_corners(canvas.bytes, stride, (width, height), rounding, &painted.rects);
                 crate::marks::mark_once(&FIRST_PAINT, "frame.first.painted");
                 if !kept { self.owed = true; }
                 RenderPrep::Ready(Some(painted.rects))
@@ -363,7 +364,7 @@ impl FrameHost for CpuWindowFrame<'_> {
                 if CpuFirst::linux_degraded_when_gpu_failed(gpu_failed, why)
                     && let Ok(painted) = painter.paint(&scene.degraded(true), &mut Target::with_stride(&mut *canvas.bytes, width, height, stride))
                 {
-                    clear_corners(canvas.bytes, stride, (width, height), radius, &painted.rects);
+                    clear_corners(canvas.bytes, stride, (width, height), rounding, &painted.rects);
                     crate::marks::mark_once(&FIRST_PAINT, "frame.first.painted");
                     if !kept { self.owed = true; }
                     return RenderPrep::Ready(Some(painted.rects));
@@ -438,19 +439,21 @@ impl FrameHost for CpuWindowFrame<'_> {
 }
 
 /// What `render::csd_corners` does to a GPU frame, to the pixels a CPU frame just painted
-/// (`rects`): outside the arcs of the two bottom corners (`radius` device pixels) the frame
-/// composites nothing, and a pixel an arc crosses keeps the arc's coverage of it.
-pub(super) fn clear_corners(bytes: &mut [u8], stride: usize, size: (u32, u32), radius: f32, rects: &[[u32; 4]]) {
-    if radius <= 0. { return; }
-    let (width, height) = (size.0 as f32, size.1 as f32);
+/// (`rects`): outside the arcs of `rounding`'s corners (the bottom two, and the top two under a
+/// frame without a headerbar) the frame composites nothing, and a pixel an arc crosses keeps the
+/// arc's coverage of it.
+pub(super) fn clear_corners(bytes: &mut [u8], stride: usize, size: (u32, u32), rounding: Rounding, rects: &[[u32; 4]]) {
+    let radius = rounding.radius;
     let reach = radius.ceil() as u32;
     let painted = |x: u32, y: u32| rects.iter().any(|r| x >= r[0] && x < r[2] && y >= r[1] && y < r[3]);
-    for (centre, xs) in [((radius, height - radius), 0..reach.min(size.0)), ((width - radius, height - radius), size.0.saturating_sub(reach)..size.0)] {
-        for y in size.1.saturating_sub(reach)..size.1 {
+    for (centre, (side, rise)) in rounding.corners((size.0 as f32, size.1 as f32)) {
+        let xs = if side < 0. { 0..reach.min(size.0) } else { size.0.saturating_sub(reach)..size.0 };
+        let ys = if rise < 0. { 0..reach.min(size.1) } else { size.1.saturating_sub(reach)..size.1 };
+        for y in ys {
             for x in xs.clone() {
                 let at = (x as f32 + 0.5, y as f32 + 0.5);
                 // The corner's square: from the arc's centre out to the window's edges.
-                let inside = at.1 >= centre.1 && if centre.0 == radius { at.0 <= centre.0 } else { at.0 >= centre.0 };
+                let inside = (at.0 - centre.0) * side >= 0. && (at.1 - centre.1) * rise >= 0.;
                 if !inside || !painted(x, y) { continue; }
                 let distance = ((at.0 - centre.0).powi(2) + (at.1 - centre.1).powi(2)).sqrt();
                 let t = (distance - (radius - 0.5)).clamp(0., 1.);

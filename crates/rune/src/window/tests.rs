@@ -885,8 +885,8 @@ fn a_square_window_never_fades_its_corners() {
         });
     }
     let mut pass = crate::render::csd_corners::CsdCorners::new(&gpu.device, OFFSCREEN_FORMAT);
-    pass.prepare(&gpu.queue, size, 0.);
-    surface::corners::draw(Some(&pass), &mut enc, &target.view, 0.);
+    pass.prepare(&gpu.queue, size, crate::render::csd_corners::Rounding::SQUARE);
+    surface::corners::draw(Some(&pass), &mut enc, &target.view, crate::render::csd_corners::Rounding::SQUARE);
     target.copy(&mut enc);
     gpu.queue.submit([enc.finish()]);
     let pixels = target.read(&gpu.device);

@@ -911,7 +911,7 @@ mod linux_frame {
     use crate::titlebar::{BUTTONS_KEY, Caption, EDGES_KEY};
     use crate::{Cursor, Cx, El, Env, ResizeEdge};
 
-    const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true, minimizable: true, maximizable: true, tiled: Sides::NONE };
+    const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true, minimizable: true, maximizable: true, tiled: Sides::NONE, outer_frame: false };
 
     #[derive(Default)]
     struct State {
@@ -1019,8 +1019,9 @@ mod linux_frame {
             assert_eq!(rt.state.presses, i + 1, "at {at:?}");
         }
 
-        // A maximized window, and one that can't be resized, have no band.
-        for window in [WindowState { maximized: true, ..FLOATING }, WindowState { resizable: false, ..FLOATING }] {
+        // A maximized window, one that can't be resized, and one whose frame around it has the
+        // resize handles have no band.
+        for window in [WindowState { maximized: true, ..FLOATING }, WindowState { resizable: false, ..FLOATING }, WindowState { outer_frame: true, ..FLOATING }] {
             let mut rt = rig(caption("appmenu:close", window));
             assert!(drawn(&rt, EDGES_KEY).is_none(), "{window:?}");
             rt.pointer_down(200.0, 2.0);

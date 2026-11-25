@@ -98,7 +98,11 @@ impl Window {
 
         // We prefer server side decorations, however to not have decorations we ask for client
         // side decorations instead.
-        let default_decorations = if attributes.decorations {
+        //
+        // Rune: and for a frame without a header bar, which is the client's to draw: the
+        // compositor's frame would put a bar of its own above the window's.
+        let headerless = attributes.platform_specific.headerless_frame;
+        let default_decorations = if attributes.decorations && !headerless {
             WindowDecorations::RequestServer
         } else {
             WindowDecorations::RequestClient
@@ -120,6 +124,9 @@ impl Window {
         window_state.set_transparent(attributes.transparent);
 
         window_state.set_blur(attributes.blur);
+
+        // Rune: before the first configure, which makes the frame.
+        window_state.set_headerless_frame(headerless);
 
         // Set the decorations hint.
         window_state.set_decorate(attributes.decorations);
@@ -439,6 +446,13 @@ impl Window {
     #[inline]
     pub fn has_client_side_frame(&self) -> bool {
         self.window_state.lock().unwrap().has_client_side_frame()
+    }
+
+
+    /// Rune: see `WindowExtWayland::has_headerless_frame`.
+    #[inline]
+    pub fn has_headerless_frame(&self) -> bool {
+        self.window_state.lock().unwrap().has_headerless_frame()
     }
 
     /// Rune: see `WindowExtWayland::wayland_wm_state`.

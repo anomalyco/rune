@@ -73,6 +73,8 @@ impl ApplicationName {
 pub struct PlatformSpecificWindowAttributes {
     pub name: Option<ApplicationName>,
     pub activation_token: Option<ActivationToken>,
+    /// Rune: see `WindowAttributesExtWayland::with_headerless_frame`.
+    pub headerless_frame: bool,
     #[cfg(x11_platform)]
     pub x11: X11WindowAttributes,
 }
@@ -96,6 +98,7 @@ impl Default for PlatformSpecificWindowAttributes {
         Self {
             name: None,
             activation_token: None,
+            headerless_frame: false,
             #[cfg(x11_platform)]
             x11: X11WindowAttributes {
                 visual_id: None,

@@ -110,6 +110,15 @@ pub trait WindowExtWayland {
     /// could be made, and on X11.
     fn has_client_side_frame(&self) -> bool;
 
+    /// Rune: whether a client-side frame without a header bar draws around the window
+    /// (`WindowAttributesExtWayland::with_headerless_frame`), whatever state it is in: the
+    /// content then takes the arc of `content_corner_radius` at its top corners as well as its
+    /// bottom ones, and the frame's handles, outside the window's edges, resize it.
+    ///
+    /// False when the compositor draws the decorations all the same, when decorations are off,
+    /// when no frame could be made, and on X11.
+    fn has_headerless_frame(&self) -> bool;
+
     /// Rune: confirmed Wayland `xdg_toplevel` / `xdg-decoration` state from the latest configure:
     /// `(is_server_decoration, tiled_edges [top, right, bottom, left], wm_capabilities bits)`.
     ///
@@ -152,6 +161,18 @@ impl WindowExtWayland for Window {
         }
     }
 
+
+    #[inline]
+    fn has_headerless_frame(&self) -> bool {
+        #[allow(clippy::single_match)]
+        match &self.window {
+            #[cfg(x11_platform)]
+            crate::platform_impl::Window::X(_) => false,
+            #[cfg(wayland_platform)]
+            crate::platform_impl::Window::Wayland(window) => window.has_headerless_frame(),
+        }
+    }
+
     #[inline]
     fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
         #[allow(clippy::single_match)]
@@ -174,6 +195,15 @@ pub trait WindowAttributesExtWayland {
     /// For details about application ID conventions, see the
     /// [Desktop Entry Spec](https://specifications.freedesktop.org/desktop-entry-spec/desktop-entry-spec-latest.html#desktop-file-id)
     fn with_name(self, general: impl Into<String>, instance: impl Into<String>) -> Self;
+
+    /// Rune: makes the client-side frame of a decorated window without its header bar: the
+    /// shadow, the one-point border and the resize handles around a window that draws its own
+    /// title bar and buttons, with all four corners rounded while it floats. The window asks the
+    /// compositor for client-side decorations, so a compositor that would draw a frame of its
+    /// own leaves it to the window; one that draws its frame all the same keeps it, and the
+    /// window then has none of its own (`WindowExtWayland::has_headerless_frame`). Nothing
+    /// changes on X11.
+    fn with_headerless_frame(self, headerless: bool) -> Self;
 }
 
 impl WindowAttributesExtWayland for WindowAttributes {
@@ -181,6 +211,12 @@ impl WindowAttributesExtWayland for WindowAttributes {
     fn with_name(mut self, general: impl Into<String>, instance: impl Into<String>) -> Self {
         self.platform_specific.name =
             Some(crate::platform_impl::ApplicationName::new(general.into(), instance.into()));
+        self
+    }
+
+    #[inline]
+    fn with_headerless_frame(mut self, headerless: bool) -> Self {
+        self.platform_specific.headerless_frame = headerless;
         self
     }
 }

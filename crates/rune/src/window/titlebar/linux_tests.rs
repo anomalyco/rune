@@ -3,7 +3,7 @@ use crate::titlebar::Caption;
 
 use CaptionButton::{Close, Maximize, Minimize};
 
-const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true, minimizable: true, maximizable: true, tiled: Sides::NONE };
+const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true, minimizable: true, maximizable: true, tiled: Sides::NONE, outer_frame: false };
 
 #[test]
 fn the_layout_follows_gnomes_setting() {
@@ -101,4 +101,19 @@ fn a_tiled_side_has_no_resize_edge() {
     assert_eq!(Caption::own_frame(44.0, layout, WindowState { tiled: Sides::ALL, ..FLOATING }).edges, Sides::NONE);
     // Tiled and maximized: none, whatever is tiled.
     assert!(!Caption::own_frame(44.0, layout, WindowState { tiled: left_half, maximized: true, ..FLOATING }).edges.any());
+}
+
+#[test]
+fn a_frame_around_the_window_takes_the_resize_edges_and_leaves_the_buttons() {
+    let layout = ButtonLayout::default();
+    // winit's frame, less its header bar, has the handles outside the window: no band inside.
+    let framed = Caption::own_frame(44.0, layout, WindowState { outer_frame: true, ..FLOATING });
+    assert_eq!(framed.edges, Sides::NONE);
+    // Everything else is the same caption: the buttons, their room and what they can do.
+    let bare = Caption::own_frame(44.0, layout, FLOATING);
+    assert_eq!(framed, Caption { edges: Sides::NONE, ..bare });
+    assert_eq!(framed.buttons().to_vec(), bare.buttons().to_vec());
+    // Tiled on a side or not, the frame keeps the handles.
+    let left_half = Sides { right: false, ..Sides::ALL };
+    assert_eq!(Caption::own_frame(44.0, layout, WindowState { outer_frame: true, tiled: left_half, ..FLOATING }).edges, Sides::NONE);
 }

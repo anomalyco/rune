@@ -5,9 +5,11 @@
 //! (`vendor/sctk-adwaita`). The content's own surface is a rectangle, so its square corners would
 //! show past that border. This fades the pixels outside the arc at the two bottom corners, which
 //! the frame's border covers, so the surface composites them fully transparent. The top corners
-//! need nothing: the headerbar's own surface covers the content's top edge.
+//! need nothing under a frame with a headerbar, whose own surface covers the content's top edge;
+//! a frame without one (around a window that draws its own title bar, `titlebar::linux`) leaves
+//! the content its top corners too, and all four fade ([`Rounding::top`]).
 //!
-//! The fade multiplies whatever the app drew there, so it assumes the content is opaque in the two
+//! The fade multiplies whatever the app drew there, so it assumes the content is opaque in the
 //! corner squares: Rune's root fill is (an app's window is opaque unless it asked to be
 //! translucent, and then its own alpha fades with the corners rather than behind them). A pixel the
 //! arc crosses keeps its colour and loses the same share of its alpha, which is the frame's ring's
@@ -15,6 +17,42 @@
 //! into, the one-pixel fade's encoded colour can sit a step above what its alpha alone would say:
 //! the blend is linear while the stored value is encoded, the same rounding Rune's own blending
 //! takes there.
+
+/// The corners a client-side frame leaves the window's content round.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Rounding {
+    /// The arcs' radius in device pixels; zero for a square window.
+    pub radius: f32,
+    /// The top two corners are round as well as the bottom two: the frame has no headerbar.
+    pub top: bool,
+}
+
+impl Rounding {
+    /// A window with square corners: maximized, tiled, full screen, or without such a frame.
+    pub const SQUARE: Rounding = Rounding { radius: 0., top: false };
+
+    /// The bottom two corners at `radius` device pixels, under a frame with a headerbar.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn bottom(radius: f32) -> Self { Self { radius, top: false } }
+
+    /// Whether any corner is round.
+    pub fn is_round(self) -> bool { self.radius > 0. }
+
+    /// Each round corner's arc centre in a `size` target, with the way its square reaches from
+    /// there to the window's edges (`-1` left or up, `1` right or down): bottom left, bottom
+    /// right, then the top two.
+    pub fn corners(self, size: (f32, f32)) -> impl Iterator<Item = ((f32, f32), (f32, f32))> {
+        let (r, (width, height)) = (self.radius, size);
+        [
+            ((r, height - r), (-1., 1.)),
+            ((width - r, height - r), (1., 1.)),
+            ((r, r), (-1., -1.)),
+            ((width - r, r), (1., -1.)),
+        ]
+        .into_iter()
+        .take(if !self.is_round() { 0 } else if self.top { 4 } else { 2 })
+    }
+}
 
 /// A pipeline that fades out what is outside a rounded corner's arc, and leaves everything inside
 /// it. It multiplies the target by the arc's coverage, so a pixel the arc crosses keeps exactly its
@@ -29,8 +67,8 @@ pub(crate) struct CsdCorners {
     pipeline: wgpu::RenderPipeline,
     format: wgpu::TextureFormat,
     vertices: wgpu::Buffer,
-    /// The radius, in device pixels, and target size `vertices` were written for.
-    prepared: Option<(f32, (u32, u32))>,
+    /// The corners and target size `vertices` were written for.
+    prepared: Option<(Rounding, (u32, u32))>,
 }
 
 impl CsdCorners {
@@ -120,8 +158,8 @@ struct Vertex {
         });
         let vertices = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rounded corners"),
-            // Two corners, two triangles each, five values a vertex.
-            size: 12 * stride,
+            // Up to four corners, two triangles each, five values a vertex.
+            size: 24 * stride,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -131,21 +169,23 @@ struct Vertex {
     /// The format it draws into: a surface that changed its format needs another pass.
     pub fn format(&self) -> wgpu::TextureFormat { self.format }
 
-    /// Whether it already clears `size` with arcs of `radius` device pixels.
-    pub fn is_prepared_for(&self, size: (u32, u32), radius: f32) -> bool { self.prepared == Some((radius, size)) }
+    /// Whether it already clears `size` with `rounding`'s arcs.
+    pub fn is_prepared_for(&self, size: (u32, u32), rounding: Rounding) -> bool { self.prepared == Some((rounding, size)) }
 
-    /// Writes the two bottom corner squares of a `size` target, whose arcs have `radius` device
-    /// pixels. A radius of zero draws nothing: production never asks for one (`window::surface::corners`).
-    pub fn prepare(&mut self, queue: &wgpu::Queue, size: (u32, u32), radius: f32) {
-        if self.is_prepared_for(size, radius) || radius <= 0. { return; }
+    /// Writes the corner squares of a `size` target for `rounding`: the bottom two, and the top
+    /// two under a frame without a headerbar. A radius of zero draws nothing: production never
+    /// asks for one (`window::surface::corners`).
+    pub fn prepare(&mut self, queue: &wgpu::Queue, size: (u32, u32), rounding: Rounding) {
+        if self.is_prepared_for(size, rounding) || !rounding.is_round() { return; }
         let (width, height) = (size.0.max(1) as f32, size.1.max(1) as f32);
-        let mut vertices: Vec<f32> = Vec::with_capacity(12 * 5);
+        let radius = rounding.radius;
+        let mut vertices: Vec<f32> = Vec::with_capacity(24 * 5);
         // Each corner's square runs from the arc's centre out to the window's edges, a radius
-        // either way; the bottom two sit a radius in from the foot's sides and off its edge, one
-        // reaching left and the other right.
-        for (centre, side) in [((radius, height - radius), -1.), ((width - radius, height - radius), 1.)] {
+        // either way: the centres sit a radius in from the window's sides and from its foot (or
+        // its head), and each square reaches left or right, and down or up, from there.
+        for (centre, (side, rise)) in rounding.corners((width, height)) {
             for (u, v) in [(0., 0.), (1., 0.), (0., 1.), (1., 0.), (1., 1.), (0., 1.)] {
-                let (x, y) = (centre.0 + side * u * radius, centre.1 + v * radius);
+                let (x, y) = (centre.0 + side * u * radius, centre.1 + rise * v * radius);
                 vertices.extend_from_slice(&[
                     x / width * 2.0 - 1.0,
                     1.0 - y / height * 2.0,
@@ -156,15 +196,13 @@ struct Vertex {
             }
         }
         queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(&vertices));
-        self.prepared = Some((radius, size));
+        self.prepared = Some((rounding, size));
     }
 
     /// Fades out what lies outside the arcs, leaving every other pixel of `target` as it was
     /// drawn: it is a premultiplied composition, before a straight-alpha surface converts it.
     pub fn draw(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
-        if self.prepared.is_none() {
-            return;
-        }
+        let Some((rounding, _)) = self.prepared else { return };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("rounded corners"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -180,7 +218,7 @@ struct Vertex {
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
-        pass.draw(0..12, 0..1);
+        pass.draw(0..if rounding.top { 24 } else { 12 }, 0..1);
     }
 }
 

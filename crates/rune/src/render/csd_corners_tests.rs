@@ -1,15 +1,15 @@
-//! Clearing a window's rounded bottom corners on the GPU: what stays, and what goes.
+//! Clearing a window's rounded corners on the GPU: what stays, and what goes.
 
-use super::CsdCorners;
+use super::{CsdCorners, Rounding};
 use crate::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen};
 
-/// A target of opaque red, its corners faded at `radius` device pixels.
+/// A target of opaque red, its bottom corners faded at `radius` device pixels.
 fn cleared(gpu: &Gpu, size: (u32, u32), radius: f32) -> Vec<u8> {
-    cleared_with(gpu, size, radius, OFFSCREEN_FORMAT)
+    cleared_with(gpu, size, Rounding::bottom(radius), OFFSCREEN_FORMAT)
 }
 
-/// [`cleared`] into a target of `format`.
-fn cleared_with(gpu: &Gpu, size: (u32, u32), radius: f32, format: wgpu::TextureFormat) -> Vec<u8> {
+/// A target of opaque red in `format`, the corners `rounding` names faded.
+fn cleared_with(gpu: &Gpu, size: (u32, u32), rounding: Rounding, format: wgpu::TextureFormat) -> Vec<u8> {
     let target = Offscreen::with_format(&gpu.device, size.0, size.1, format);
     let mut pass = CsdCorners::new(&gpu.device, format);
     let mut enc = gpu.device.create_command_encoder(&Default::default());
@@ -31,7 +31,7 @@ fn cleared_with(gpu: &Gpu, size: (u32, u32), radius: f32, format: wgpu::TextureF
             multiview_mask: None,
         });
     }
-    pass.prepare(&gpu.queue, (size.0, size.1), radius);
+    pass.prepare(&gpu.queue, (size.0, size.1), rounding);
     pass.draw(&mut enc, &target.view);
     target.copy(&mut enc);
     gpu.queue.submit([enc.finish()]);
@@ -63,6 +63,50 @@ fn the_bottom_corners_clear_and_nothing_else() {
     assert_eq!(at(&pixels, width, (width - 1, height - 1 - radius as u32))[3], 255, "above the arc's centre stays");
     // The top two corners are the headerbar's business.
     assert_eq!(at(&pixels, width, (width - 1, 0))[3], 255, "the top right corner keeps its pixel");
+}
+
+/// A frame without a headerbar leaves the content all four corners: the top two fade as the
+/// bottom two do, each the other's mirror, and nothing else changes.
+#[test]
+fn a_frame_without_a_headerbar_clears_all_four_corners() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let (width, height) = (40, 30);
+    let radius = 6.;
+    let pixels = cleared_with(&gpu, (width, height), Rounding { radius, top: true }, OFFSCREEN_FORMAT);
+    for corner in [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)] {
+        assert_eq!(at(&pixels, width, corner)[3], 0, "{corner:?} clears");
+    }
+    // Where the arcs meet the window's edges, and everywhere between the corners' squares.
+    for inside in [(radius as u32, 1), (width - 1 - radius as u32, 1), (0, radius as u32), (width - 1, radius as u32), (width / 2, 0), (0, height / 2), (width / 2, height / 2)] {
+        assert_eq!(at(&pixels, width, inside)[3], 255, "{inside:?} stays");
+    }
+    // The four squares are one picture, mirrored: the same coverage at the same distance.
+    for y in 0..radius as u32 {
+        for x in 0..radius as u32 {
+            let top_left = at(&pixels, width, (x, y))[3];
+            for (what, mirror) in [("top right", (width - 1 - x, y)), ("bottom left", (x, height - 1 - y)), ("bottom right", (width - 1 - x, height - 1 - y))] {
+                assert!(top_left.abs_diff(at(&pixels, width, mirror)[3]) <= 1, "({x}, {y}): the top left has {top_left}, the {what} {}", at(&pixels, width, mirror)[3]);
+            }
+        }
+    }
+    // The bottom two alone leave the top as it was.
+    let bottom = cleared(&gpu, (width, height), radius);
+    assert_eq!(at(&bottom, width, (0, 0))[3], 255, "under a headerbar the top left keeps its pixel");
+}
+
+/// The corners a rounding names: none for a square window, the bottom two under a headerbar,
+/// all four without one, each with the way its square reaches to the window's edges.
+#[test]
+fn a_rounding_names_its_corners() {
+    let size = (40., 30.);
+    assert_eq!(Rounding::SQUARE.corners(size).count(), 0);
+    assert_eq!(Rounding { radius: 0., top: true }.corners(size).count(), 0, "no radius, no corner");
+    assert!(!Rounding::SQUARE.is_round() && Rounding::bottom(6.).is_round());
+    let bottom: Vec<_> = Rounding::bottom(6.).corners(size).collect();
+    assert_eq!(bottom, [((6., 24.), (-1., 1.)), ((34., 24.), (1., 1.))]);
+    let all: Vec<_> = Rounding { radius: 6., top: true }.corners(size).collect();
+    assert_eq!(all[..2], bottom[..]);
+    assert_eq!(all[2..], [((6., 6.), (-1., -1.)), ((34., 6.), (1., -1.))]);
 }
 
 /// The arcs follow the radius: a wider one takes more of the corner.
@@ -105,8 +149,8 @@ fn a_square_window_draws_nothing() {
         });
     }
     let mut pass = CsdCorners::new(&gpu.device, OFFSCREEN_FORMAT);
-    pass.prepare(&gpu.queue, size, 0.);
-    assert!(!pass.is_prepared_for(size, 0.), "a square window prepares no pass");
+    pass.prepare(&gpu.queue, size, Rounding::SQUARE);
+    assert!(!pass.is_prepared_for(size, Rounding::SQUARE), "a square window prepares no pass");
     // And the pass draws nothing when nothing was prepared for it.
     pass.draw(&mut enc, &target.view);
     target.copy(&mut enc);
@@ -126,7 +170,7 @@ fn both_target_views_fade_the_corners() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let size = (40, 30);
     for format in [OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR] {
-        let pixels = cleared_with(&gpu, size, 6., format);
+        let pixels = cleared_with(&gpu, size, Rounding::bottom(6.), format);
         assert_eq!(at(&pixels, size.0, (0, 0))[3], 255, "{format:?}: the top left keeps its pixel");
         assert_eq!(at(&pixels, size.0, (0, size.1 - 1))[3], 0, "{format:?}: the bottom corner fades");
         assert_eq!(at(&pixels, size.0, (6, 27))[3], 255, "{format:?}: inside the arc stays");
