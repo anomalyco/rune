@@ -370,7 +370,7 @@ fn escape_releases_and_consumes_on_logical_and_physical_paths_with_drag_preceden
     assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Grab));
     let mods = Mods::default();
     rt.physical_key_input(
-        PhysicalInput::Key { key: PhysicalKeyCode::Escape, mods, pressed: true, repeat: false },
+        PhysicalInput::Key { key: PhysicalKeyCode::Escape, mods, pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
         KeyEvent::from(Key::Escape),
         None,
     );

@@ -88,7 +88,7 @@ pub(crate) use event_loop::finish_run;
 pub(crate) use event_loop::run_windows;
 #[cfg(any(test, target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) use file_drop::FileStep;
-pub(crate) use keys::{key_base, map_key_event, map_mods};
+pub(crate) use keys::{consumed_from, consumed_mods, key_base, map_key_event, map_mods, platform_text};
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) use keys::web_key_base_str;
 pub(crate) use state::frame;

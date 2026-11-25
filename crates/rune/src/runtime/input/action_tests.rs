@@ -179,8 +179,8 @@ fn headless_input_helpers_set_input_waiting_in_poll() {
     rt.key_with(down.clone(), PhysicalKeyCode::ArrowDown, None);
     assert!(poll_step(&mut rt), "key_with");
 
-    let phys = PhysicalInput::Key { key: PhysicalKeyCode::KeyA, mods: Mods::default(), pressed: true, repeat: false };
-    rt.physical_input(phys);
+    let phys = PhysicalInput::Key { key: PhysicalKeyCode::KeyA, mods: Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default() };
+    rt.physical_input(phys.clone());
     assert!(poll_step(&mut rt), "physical_input");
 
     rt.physical_key_input(phys, down, Some('a'));

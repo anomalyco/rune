@@ -28,7 +28,7 @@ fn dvorak_shift_command_o_reaches_the_app_with_a_field_focused() {
     let command = if cfg!(target_os = "macos") { ModifiersState::SUPER } else { ModifiersState::CONTROL };
     let logical = map_key(&WKey::Character("O".into()), command | ModifiersState::SHIFT).unwrap();
     rt.physical_with_fallback(PhysicalInput::Key {
-        key: PhysicalKeyCode::KeyS, mods: logical.mods, pressed: true, repeat: false,
+        key: PhysicalKeyCode::KeyS, mods: logical.mods, pressed: true, repeat: false, text: None, consumed_mods: Default::default(),
     }, Some(logical));
     rt.frame(0.0);
     assert!(rt.state.opened);
@@ -49,7 +49,7 @@ fn dvorak_paste_uses_the_logical_character_not_the_physical_period() {
     let logical = map_key(&WKey::Character("v".into()), command).unwrap();
     assert_eq!(logical.key, Key::Command('v'));
     rt.physical_with_fallback(PhysicalInput::Key {
-        key: PhysicalKeyCode::Period, mods: logical.mods, pressed: true, repeat: false,
+        key: PhysicalKeyCode::Period, mods: logical.mods, pressed: true, repeat: false, text: None, consumed_mods: Default::default(),
     }, Some(logical));
     rt.frame(0.0);
     let target = rt.edit.paste_request.take().expect("Dvorak Command-V requests the clipboard");
@@ -209,7 +209,7 @@ fn dead_key_sequences_type_their_text_and_insert_into_a_field() {
     let send = |rt: &mut Runtime<Field>, key: KeyCode, logical: WKey, text: Option<&str>, mods: ModifiersState| {
         let ev = map_parts(cfg!(target_os = "windows"), code(key), &logical, text, mods);
         rt.physical_with_fallback(
-            PhysicalInput::Key { key, mods: map_mods(mods), pressed: true, repeat: false },
+            PhysicalInput::Key { key, mods: map_mods(mods), pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
             ev,
         );
         rt.frame(0.0);
@@ -602,7 +602,7 @@ fn web_key_and_base_table_matches_chrome_and_native_across_layouts() {
             });
             rt.frame(0.0);
             rt.physical_key_input(
-                PhysicalInput::Key { key: case.physical, mods: ev.mods, pressed: true, repeat: false },
+                PhysicalInput::Key { key: case.physical, mods: ev.mods, pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
                 ev,
                 canvas_base,
             );
@@ -663,4 +663,34 @@ fn web_key_and_base_table_matches_chrome_and_native_across_layouts() {
             }
         }
     }
+}
+
+#[test]
+fn consumed_mods_follow_what_the_platform_spent_on_the_text() {
+    let m = |shift, ctrl, alt, logo| Mods { shift, ctrl, alt, logo, cmd: ctrl };
+    let none = Mods::default();
+    for windows in [false, true] {
+        // Shift+a types 'A': Shift is spent. Ctrl+Shift keeps Shift for the chord.
+        assert_eq!(consumed_from(windows, m(true, false, false, false), Some("A"), Some("a")), Mods { shift: true, ..none });
+        assert_eq!(consumed_from(windows, m(true, true, false, false), Some("A"), Some("a")), none);
+        // Option+d types '∂': Alt is spent. Alt+f that types 'f' leaves Alt for an ESC prefix.
+        assert_eq!(consumed_from(windows, m(false, false, true, false), Some("∂"), Some("d")), Mods { alt: true, ..none });
+        assert_eq!(consumed_from(windows, m(false, false, true, false), Some("f"), Some("f")), none);
+        // Unknown unmodified text counts as differing.
+        assert_eq!(consumed_from(windows, m(false, false, true, false), Some("["), None), Mods { alt: true, ..none });
+        // logo is never spent, and nothing is without text (an uncomposed dead key).
+        assert_eq!(consumed_from(windows, m(true, false, true, true), Some("Å"), Some("a")), Mods { shift: true, alt: true, ..none });
+        assert_eq!(consumed_from(windows, m(true, true, true, true), None, Some("a")), none);
+        // Named keys' control text spends nothing: Alt+Enter keeps its ESC prefix, Shift+Tab is back-tab.
+        assert_eq!(consumed_from(windows, m(false, false, true, false), Some("\r"), None), none);
+        assert_eq!(consumed_from(windows, m(true, false, false, false), Some("\t"), None), none);
+        assert_eq!(consumed_from(windows, m(true, false, true, false), Some("\u{8}"), None), none);
+    }
+    // Windows AltGr (Ctrl+Alt with text) spends Ctrl, cmd and Alt, and Shift when it changed the text.
+    let altgr = Mods { ctrl: true, cmd: true, alt: true, ..none };
+    assert_eq!(consumed_from(true, m(false, true, true, false), Some("@"), Some("q")), altgr);
+    assert_eq!(consumed_from(true, m(true, true, true, false), Some("Ω"), Some("ω")), Mods { shift: true, ..altgr });
+    assert_eq!(consumed_from(true, m(false, true, true, false), None, Some("b")), none);
+    // Elsewhere Ctrl+Alt is a chord: Alt is spent only by differing text, Shift not under Ctrl.
+    assert_eq!(consumed_from(false, m(true, true, true, false), Some("Ω"), Some("ω")), Mods { alt: true, ..none });
 }

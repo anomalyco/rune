@@ -145,8 +145,13 @@ impl State {
         let compose_action = keyboard::compose_action(pressed, repeat, mods);
         let fallback = key_event(xkb, self.compose.for_key(compose_action), key, physical, pressed, repeat);
         if let Some(code) = physical {
+            let text = match &fallback {
+                Some(crate::KeyEvent { key: crate::Key::Text(t), .. }) if pressed => Some(t.clone()),
+                _ => None,
+            };
+            let consumed_mods = crate::window::consumed_from(false, mods, text.as_deref(), unmodified_text(xkb, key).as_deref());
             self.input.push(Input::Physical(
-                crate::PhysicalInput::Key { key: code, mods, pressed, repeat },
+                crate::PhysicalInput::Key { key: code, mods, pressed, repeat, text, consumed_mods },
                 fallback,
             ));
         } else if let Some(key) = fallback {
@@ -376,6 +381,14 @@ fn key_mods(state: &xkbcommon::xkb::State) -> crate::Mods {
     use xkbcommon::xkb;
     let active = |name: &str| state.mod_name_is_active(name, xkb::STATE_MODS_EFFECTIVE);
     crate::input::key_table::mods_from_keys(active(xkb::MOD_NAME_SHIFT), active(xkb::MOD_NAME_CTRL), active(xkb::MOD_NAME_ALT), active(xkb::MOD_NAME_LOGO))
+}
+
+/// The text `key` types in its current layout with no modifiers (its first shift level).
+fn unmodified_text(state: &xkbcommon::xkb::State, key: u32) -> Option<String> {
+    use xkbcommon::xkb;
+    let code = xkb::Keycode::new(key + 8);
+    let sym = *state.get_keymap().key_get_syms_by_level(code, state.key_get_layout(code), 0).first()?;
+    Some(xkb::keysym_to_utf8(sym)).filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
 }
 
 fn feed_compose(compose: &mut xkbcommon::xkb::compose::State, sym: xkbcommon::xkb::Keysym) -> keyboard::ComposeOutcome {

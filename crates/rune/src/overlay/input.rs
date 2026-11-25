@@ -383,7 +383,7 @@ impl OverlayCore {
         if !self.presence.shown() || self.options.keys != KeyPolicy::OnDemand { return; }
         for pressed in changes {
             self.dirty |= app.physical_with_fallback(crate::PhysicalInput::Key {
-                key: winit::keyboard::KeyCode::Fn, mods: crate::window::map_mods(self.mods), pressed, repeat: false,
+                key: winit::keyboard::KeyCode::Fn, mods: crate::window::map_mods(self.mods), pressed, repeat: false, text: None, consumed_mods: Default::default(),
             }, None);
         }
     }
