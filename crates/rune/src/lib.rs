@@ -121,6 +121,7 @@ pub use el::SelectionStyle;
 pub use el::Shadow;
 pub use el::Shell;
 pub use el::Side;
+pub use el::SwipeEdge;
 pub use el::Tx;
 pub use el::VirtualItems;
 pub use el::anchor_rect;

@@ -105,6 +105,36 @@ impl El {
         self.handlers.touch_at_once = true;
         self
     }
+    /// A finger that lands within `width` points of the window's `edge` (measured from the
+    /// safe area's edge where the host reports one) and first moves mostly away from it, past
+    /// the touch slop, drives this element's `f` as an [`El::on_drag`] would: Down where it
+    /// landed, then Move, then Up (check [`Drag::cancelled`]). It wins over everything under
+    /// the finger: a child's `on_drag` or [`El::touch_drags_at_once`], a scroll viewport's pan,
+    /// a tap. A child's drag that already heard Down hears a cancelled Up, and nothing is
+    /// pressed. A first move along the edge or back toward it leaves the touch to the content,
+    /// as iOS's `UIScreenEdgePanGestureRecognizer` does. So an [`El::touch_drags_at_once`]
+    /// element inside a zone waits for the touch slop before it drags (it still has no long
+    /// press). An `on_edge_drag` element that leaves the tree mid-gesture hears nothing more,
+    /// not even a final Up, unlike an `on_drag` whose element leaves.
+    ///
+    /// Put it on an ancestor of what's at the edge: the app root for a drawer, an item page for
+    /// a back swipe. Where several on the finger's hit path take the same touch, the innermost
+    /// wins, so an open page's back swipe beats the root's drawer. A mouse never starts one.
+    ///
+    /// On iOS the system's own edge gestures can still take the touch first; a host that wants
+    /// the swipe defers them with `preferredScreenEdgesDeferringSystemGestures`.
+    ///
+    /// ```
+    /// # use rune::{Drag, Phase, SwipeEdge, col};
+    /// # struct App { drawer: f32 }
+    /// col().on_edge_drag(SwipeEdge::Left, 20.0, |s: &mut App, d: &mut Drag, _| {
+    ///     s.drawer = if d.phase == Phase::Up && d.cancelled() { 0.0 } else { d.dx.max(0.0) };
+    /// });
+    /// ```
+    pub fn on_edge_drag<S: 'static>(mut self, edge: SwipeEdge, width: f32, f: impl Fn(&mut S, &mut Drag, &mut Tx) + 'static) -> Self {
+        self.handlers.edge_drag = Some((edge, width.max(0.0), Rc::new(move |s, d, tx| f(downcast::<S>(s), d, tx))));
+        self
+    }
     /// A menu button: a mouse's primary button runs [`El::on_press`] as it goes down, and that
     /// press's release runs nothing (the web's Kobalte `Menu.Trigger` opens on `pointerdown`).
     /// A press that's then cancelled or released elsewhere has already run it. A key, a screen
@@ -139,6 +169,15 @@ impl El {
         self.handlers.on_drag_end = Some(Rc::new(move |s, outcome, tx| f(downcast::<S>(s), outcome, tx)));
         self
     }
+}
+
+/// The window edge an [`El::on_edge_drag`] swipe starts from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SwipeEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

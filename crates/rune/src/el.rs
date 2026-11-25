@@ -66,7 +66,7 @@ pub(crate) use focus::FocusSpec;
 pub(crate) use focus::ModalSpec;
 pub(crate) use handler_set::Handlers;
 pub use grid::{GridRow, grid};
-pub use handlers::{Drag, Phase, PointerEvent, PointerPress};
+pub use handlers::{Drag, Phase, PointerEvent, PointerPress, SwipeEdge};
 pub(crate) use handlers::{A11yActionFn, AnyPressFn, DragEndFn, DragFn, DragOutFn, InputKeyFn, PointerFn, PointerMotionFn, PressFn, SetValueFn, StepFn, StepLimitFn, WindowDrag};
 pub(crate) use help::{HELP_KEY, HELP_ROW, help_words};
 pub use input::{InputSpec, auto_grow, edit_access, text_input};
