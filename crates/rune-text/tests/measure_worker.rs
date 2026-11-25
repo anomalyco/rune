@@ -62,4 +62,38 @@ fn worker_thread_inherits_fonts_and_follows_set_families() {
         assert_eq!(worker_guarded, plex_w, "guarded notes must not change worker thread measure");
         assert_eq!(worker_epoch_guarded, worker_epoch_after, "guarded notes must not change global font_epoch");
     }
+
+    // Two unguarded TextSystem threads calling set_emoji_family concurrently stay isolated from
+    // each other's measure() and font_epoch(), while a worker thread that never built a TextSystem
+    // follows unguarded set_emoji_family changes.
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let done = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let r1 = ready.clone();
+    let d1 = done.clone();
+    let thread_a = std::thread::spawn(move || {
+        let mut a = TextSystem::new(&[INTER], ("Inter", "ui-monospace"));
+        assert!(a.set_emoji_family(Some("Inter")));
+        let ep_before = font_epoch();
+        let w_before = measure("Hello world", &[], style, None).0;
+        r1.wait();
+        d1.wait();
+        (w_before, measure("Hello world", &[], style, None).0, ep_before, font_epoch())
+    });
+    let thread_b = std::thread::spawn(move || {
+        ready.wait();
+        let mut b = TextSystem::new(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));
+        let ep0 = font_epoch();
+        assert!(b.set_emoji_family(Some("IBM Plex Mono")));
+        let ep1 = font_epoch();
+        assert!(b.set_emoji_family(None));
+        let ep2 = font_epoch();
+        done.wait();
+        (ep0, ep1, ep2)
+    });
+    let (w_before, w_after, ep_before, ep_after) = thread_a.join().unwrap();
+    let (ep0, ep1, ep2) = thread_b.join().unwrap();
+    assert_eq!(w_before, w_after, "another thread's unguarded set_emoji_family disturbed measure");
+    assert_eq!(ep_before, ep_after, "another thread's unguarded set_emoji_family disturbed font_epoch");
+    assert_ne!(ep0, ep1, "set_emoji_family must advance its own thread's font_epoch");
+    assert_ne!(ep1, ep2, "clearing emoji_family must advance its own thread's font_epoch");
 }
