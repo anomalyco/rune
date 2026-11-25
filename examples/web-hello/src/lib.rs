@@ -23,6 +23,8 @@ mod pointer_lock_proof;
 mod popup_modal_proof;
 #[cfg(target_arch = "wasm32")]
 mod rtl_proof;
+#[cfg(target_arch = "wasm32")]
+mod textbox_mirror_proof;
 
 struct State {
     messages: Vec<String>,
@@ -107,6 +109,8 @@ pub fn start() {
     if popup_modal_proof::enabled() { popup_modal_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if rtl_proof::enabled() { rtl_proof::run(); return; }
+    #[cfg(target_arch = "wasm32")]
+    if textbox_mirror_proof::enabled() { textbox_mirror_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if input_proof::enabled() { input_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
