@@ -214,6 +214,7 @@ impl Host {
             let rt = self.app.rt_mut();
             rt.set_system_dark(crate::platform::preferences::window_dark(&window, self.args.theme.as_deref()));
             rt.set_viewport((size.0 as f32 / scale, size.1 as f32 / scale), scale);
+            rt.set_renderer_kind(crate::RendererKind::Cpu);
             // Reopening paints the settled state in the first frame (guarantee 8).
             if self.shown && !built { rt.settle_all(); }
         }

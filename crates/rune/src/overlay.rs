@@ -66,6 +66,9 @@ mod any_host;
 #[path = "overlay/app.rs"]
 mod app;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "overlay/cpu.rs"]
+mod cpu;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/draw.rs"]
 mod draw;
 #[cfg(not(target_arch = "wasm32"))]
@@ -621,7 +624,18 @@ pub(in crate::overlay) struct OverlayCore {
     /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
     pub(in crate::overlay) frame_latency: Option<u32>,
     /// `ConfiguredOverlay::on_materials`, called before each present.
-    on_materials: Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>,
+    on_materials: Option<crate::system_material::OnMaterials>,
+    /// `ConfiguredOverlay::renderer` (defaults to `RendererKind::Gpu`).
+    pub(in crate::overlay) requested_renderer: crate::RendererKind,
+    /// Windows: latched once if layered CPU setup fails so the overlay falls back to GPU once.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    cpu_layered_failed: bool,
+    /// Logged once when `RendererKind::Cpu` is paired with `.compositor(...)`.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    compositor_override_logged: bool,
+    /// Windows: permanent CPU layered overlay host (`None` on GPU overlays).
+    #[cfg(target_os = "windows")]
+    cpu: Option<cpu::CpuOverlay>,
     /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,
@@ -720,6 +734,11 @@ impl OverlayCore {
             prewarm_effects: crate::PrewarmEffects::NONE,
             frame_latency: None,
             on_materials: None,
+            requested_renderer: crate::RendererKind::Gpu,
+            cpu_layered_failed: false,
+            compositor_override_logged: false,
+            #[cfg(target_os = "windows")]
+            cpu: None,
             #[cfg(test)]
             layer_frame_pending: false,
             #[cfg(test)]
@@ -766,6 +785,17 @@ impl OverlayCore {
     pub(super) fn sync_window_backdrop(&mut self, rt: &mut RuntimeCore, force_reapply: bool) {
         #[cfg(target_os = "windows")]
         {
+            if self.cpu.is_some() {
+                let inputs = cpu::cpu_backdrop_inputs(
+                    self.window_backdrop,
+                    crate::platform::win32::dark_mode::windows_build(),
+                );
+                let supported = crate::platform::win32::backdrop::windows_supported_mask(inputs);
+                rt.set_window_backdrop(crate::WindowBackdrop::None);
+                rt.set_window_backdrop_supported_mask(supported);
+                if rt.stale() { self.dirty = true; }
+                return;
+            }
             let Some(live) = self.surface.live() else {
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
@@ -940,9 +970,45 @@ impl OverlayCore {
         if let Some(origin) = crate::window::screen_origin(window) { self.origin_moved(rt, origin); }
     }
 
+    /// The overlay's live winit window, on either the GPU or Windows CPU layered path.
+    pub(super) fn live_window(&self) -> Option<&Arc<Window>> {
+        if let Some(window) = self.surface.live().and_then(|l| l.backing.window()) {
+            return Some(window);
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(cpu) = &self.cpu {
+            return Some(&cpu.window);
+        }
+        None
+    }
+
+    /// The overlay's live backing scale, on either the GPU or Windows CPU layered path.
+    pub(super) fn live_scale(&self) -> Option<f32> {
+        if let Some(live) = self.surface.live() {
+            return Some(live.scale);
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(cpu) = &self.cpu {
+            return Some(cpu.scale);
+        }
+        None
+    }
+
+    /// Whether the overlay currently holds a live surface (GPU or Windows CPU layered).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(super) fn is_live(&self) -> bool {
+        if self.surface.live().is_some() {
+            return true;
+        }
+        #[cfg(target_os = "windows")]
+        if self.cpu.is_some() {
+            return true;
+        }
+        false
+    }
+
     fn sync_live_origin(&mut self, rt: &mut RuntimeCore) {
-        let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) else { return };
-        let window = window.clone();
+        let Some(window) = self.live_window().cloned() else { return };
         self.sync_origin(rt, &window);
     }
 
@@ -1000,6 +1066,11 @@ impl OverlayCore {
     }
 
     fn resized(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) {
+        #[cfg(target_os = "windows")]
+        if self.cpu.is_some() {
+            self.resized_cpu(app, event_loop);
+            return;
+        }
         // A parked window takes the size now; its surface is made at it.
         if let Some(Backing::Window(w)) = self.surface.parked() {
             let w = w.clone();
@@ -1077,7 +1148,7 @@ impl OverlayCore {
     /// The display containing `point` when a window-backed `UnderPointer` overlay isn't on it.
     fn pointer_display_away(&self, event_loop: &ActiveEventLoop, point: (i32, i32)) -> Option<winit::monitor::MonitorHandle> {
         if self.options.display != DisplayTarget::UnderPointer { return None; }
-        let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) else { return None };
+        let Some(window) = self.live_window() else { return None };
         event_loop.available_monitors().find(|m| {
             let (p, s) = (m.position(), m.size());
             point.0 >= p.x && point.1 >= p.y && i64::from(point.0) < i64::from(p.x) + i64::from(s.width)

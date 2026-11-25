@@ -21,6 +21,14 @@ impl OverlayCore {
     #[cfg(target_os = "windows")]
     pub(super) fn sync_poll_pace(&mut self, rt: &RuntimeCore, now: Instant) {
         let active = self.poll_pace_active();
+        if let Some(cpu) = self.cpu.as_mut() {
+            let window = cpu.window.clone();
+            cpu.poll_pace.sync_with(rt, now, active, |previous| {
+                let mhz = window.current_monitor().and_then(|m| m.refresh_rate_millihertz());
+                crate::platform::win32::vsync_grid(now, mhz, previous)
+            });
+            return;
+        }
         let Some(live) = self.surface.live_mut() else { return };
         let window = live.backing.window().cloned();
         live.poll_pace.sync_with(rt, now, active, |previous| {
@@ -30,6 +38,10 @@ impl OverlayCore {
     }
 
     pub(super) fn poll_deadline(&self, rt: &RuntimeCore) -> Option<Instant> {
+        #[cfg(target_os = "windows")]
+        if let Some(cpu) = &self.cpu {
+            return cpu.poll_pace.deadline_for(rt, self.poll_pace_active());
+        }
         #[cfg(target_os = "windows")]
         if let Some(live) = self.surface.live() {
             return live.poll_pace.deadline_for(rt, self.poll_pace_active());
@@ -69,7 +81,11 @@ impl OverlayCore {
     /// Answers what assistive clients asked of the overlay and sends its tree's changes. An
     /// action draws the frame that runs it.
     fn a11y_turn(&mut self, rt: &mut RuntimeCore) -> bool {
-        let Some(adapter) = self.surface.live_mut().and_then(|l| l.a11y.as_mut()) else { return false };
+        #[cfg(target_os = "windows")]
+        let adapter = self.surface.live_mut().and_then(|l| l.a11y.as_mut()).or_else(|| self.cpu.as_mut().and_then(|c| c.a11y.as_mut()));
+        #[cfg(not(target_os = "windows"))]
+        let adapter = self.surface.live_mut().and_then(|l| l.a11y.as_mut());
+        let Some(adapter) = adapter else { return false };
         let queued = adapter.service_core(rt, self.name);
         if queued {
             self.dirty = true;
@@ -172,6 +188,10 @@ impl AnyHost for OverlayHost {
     }
 
     fn owns(&self, id: WindowId) -> bool {
+        #[cfg(target_os = "windows")]
+        if self.core.cpu.as_ref().is_some_and(|c| c.window.id() == id) {
+            return true;
+        }
         let window = match self.core.surface.backing() {
             Some(Backing::Window(w)) => Some(w),
             _ => None,
@@ -184,10 +204,14 @@ impl AnyHost for OverlayHost {
         let app = &mut *self.app;
         if !matches!(event, WindowEvent::RedrawRequested) { core.meter.waited(); }
         #[cfg(target_os = "windows")]
-        if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. })
-            && let Some(live) = core.surface.live_mut()
-        {
-            let _ = live.poll_pace.step(crate::window::poll_pace::PollPaceEvent::DisplayChanged);
+        if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }) {
+            if let Some(live) = core.surface.live_mut() {
+                let _ = live.poll_pace.step(crate::window::poll_pace::PollPaceEvent::DisplayChanged);
+            }
+            if let Some(cpu) = core.cpu.as_mut() {
+                let _ = cpu.poll_pace.step(crate::window::poll_pace::PollPaceEvent::DisplayChanged);
+                cpu.pace_grid = None;
+            }
         }
         #[cfg(target_os = "macos")]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } | WindowEvent::Occluded(_))
@@ -210,9 +234,9 @@ impl AnyHost for OverlayHost {
             if !*focused {
                 core.control_click = false;
                 if core.options.keys.takes_keys()
-                    && let Some(window) = core.surface.live().and_then(|l| l.backing.window())
+                    && let Some(window) = core.live_window().cloned()
                 {
-                    crate::platform::ime::cancel(window);
+                    crate::platform::ime::cancel(&window);
                     window.set_ime_allowed(false);
                     core.ime.clear();
                 }
@@ -260,10 +284,20 @@ impl AnyHost for OverlayHost {
                         core.rescale(app, &gpu, scale);
                     }
                 }
+                #[cfg(target_os = "windows")]
+                if let Some(window) = core.cpu.as_ref().map(|c| c.window.clone()) {
+                    let scale = crate::window::backing_scale(&window);
+                    core.rescale_cpu(app, scale);
+                    core.dirty = true;
+                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(gpu) = core.gpu.clone() {
                     core.rescale(app, &gpu, scale_factor as f32);
+                }
+                #[cfg(target_os = "windows")]
+                if core.has_cpu() {
+                    core.rescale_cpu(app, scale_factor as f32);
                 }
             }
             WindowEvent::RedrawRequested | WindowEvent::Resized(_) => {
@@ -290,7 +324,7 @@ impl AnyHost for OverlayHost {
                 core.dirty = true;
             }
             WindowEvent::MouseWheel { delta, phase, .. } if input_enabled => {
-                let scale = core.surface.live().map_or(1.0, |l| l.scale);
+                let scale = core.live_scale().unwrap_or(1.0);
                 host_events::wheel(app.rt_mut(), delta, host_events::gesture_phase(phase), scale, core.mods);
                 core.dirty = true;
             }
@@ -320,18 +354,18 @@ impl AnyHost for OverlayHost {
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } if core.options.keys.takes_keys() => {
                 if event.state == winit::event::ElementState::Pressed
-                    && let Some(window) = core.surface.live().and_then(|l| l.backing.window())
-                    && let Some(text) = crate::platform::ime::take_direct_commit(window)
+                    && let Some(window) = core.live_window().cloned()
+                    && let Some(text) = crate::platform::ime::take_direct_commit(&window)
                 {
-                    host_events::ime(app.rt_mut(), window, &mut core.ime, winit::event::Ime::Commit(text));
+                    host_events::ime(app.rt_mut(), &window, &mut core.ime, winit::event::Ime::Commit(text));
                     core.dirty = true;
                 } else {
                     core.dirty |= app.keyboard(&event, core.mods);
                 }
             }
             WindowEvent::Ime(ime) if core.options.keys.takes_keys() => {
-                if let Some(window) = core.surface.live().and_then(|l| l.backing.window()) {
-                    host_events::ime(app.rt_mut(), window, &mut core.ime, ime);
+                if let Some(window) = core.live_window().cloned() {
+                    host_events::ime(app.rt_mut(), &window, &mut core.ime, ime);
                     core.dirty = true;
                 }
             }
@@ -399,6 +433,9 @@ impl AnyHost for OverlayHost {
         // A fading-out overlay takes no input; it only draws its exit.
         if !core.presence.shown() {
             core.hidden_input(app);
+            #[cfg(target_os = "windows")]
+            let more = if core.has_cpu() { core.draw_cpu(app) } else { core.draw(app) };
+            #[cfg(not(target_os = "windows"))]
             let more = core.draw(app);
             return core.a11y_turn(app.rt_mut()) || more;
         }
@@ -408,7 +445,7 @@ impl AnyHost for OverlayHost {
             core.follow_pointer(app, _event_loop, desktop);
         }
         #[cfg(target_os = "windows")]
-        if core.surface.live().is_some() && let Some(point) = core.native.as_ref().and_then(|p| p.take_pointer()) && app.rt().pointer() != Some(point) {
+        if core.is_live() && let Some(point) = core.native.as_ref().and_then(|p| p.take_pointer()) && app.rt().pointer() != Some(point) {
             core.observe_pointer(app, point.0, point.1);
             if let Some(point) = crate::platform::win32::pointer_position() { core.follow_pointer(app, _event_loop, point); }
         }
@@ -431,6 +468,9 @@ impl AnyHost for OverlayHost {
                 }
             }
         }
+        #[cfg(target_os = "windows")]
+        let more = if core.has_cpu() { core.draw_cpu(app) } else { core.draw(app) };
+        #[cfg(not(target_os = "windows"))]
         let more = core.draw(app);
         core.apply_cursor(app.rt());
         core.a11y_turn(app.rt_mut()) || more

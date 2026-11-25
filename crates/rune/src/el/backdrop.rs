@@ -24,7 +24,12 @@ impl El {
     ///   [`WindowBackdrop::Blur`](crate::WindowBackdrop::Blur) to choose translucent vs opaque
     ///   fills with one check.
     /// - **Elsewhere**: in opaque windows, X11/XWayland, unsupported compositors, web, and
-    ///   headless renders, the element's fill (or a neutral tint without one) draws instead.
+    ///   headless renders, the element's fill (or a neutral tint without one) draws instead. Under
+    ///   [`El::cache`](Self::cache), a fallback-only material keeps reusing its cached raster and
+    ///   replays its recorded rect (translated and scaled with the layer) into
+    ///   [`Runtime::system_materials`](crate::Runtime::system_materials) and
+    ///   [`ConfiguredOverlay::on_materials`](crate::ConfiguredOverlay::on_materials), while an
+    ///   active native or Wayland blur mode draws the subtree live.
     ///
     /// `Glass` also turns on `continuous_corners`, the only curve `NSGlassEffectView` draws, so
     /// the fill, clip and shadow hole match the glass; `Popover` and `Sidebar` follow

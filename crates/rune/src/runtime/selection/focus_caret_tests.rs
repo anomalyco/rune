@@ -502,3 +502,82 @@ fn edges_empty_huge_rtl_nested_reduced_motion_inert_and_virtual() {
         "virtual input r95 caret {caret:?} inside viewport {vp:?}"
     );
 }
+
+#[test]
+fn focused_input_survives_viewport_resize_that_squeezes_height_to_zero() {
+    let mut rt = Runtime::new(
+        TextEdit::new("abc").secure(),
+        |e: &TextEdit, _: &mut Cx<TextEdit>| {
+            col().w_full().h_full()
+                .child(el().w_full().h(56.0))
+                .child(
+                    col().w_full().grow(1.0).min_h(0.0).padding(16.0)
+                        .child(el().w_full().h(180.0))
+                        .child(text_input(e, style()).key("secret").label("Secret")
+                            .single_line().w_full().h(48.0).shrink().min_h(0.0)
+                            .on_edit(|s: &mut TextEdit| s)),
+                )
+                .child(el().w_full().h(200.0))
+        },
+        (390.0, 699.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let (fx, fy) = rt.find("secret").expect("secret field at full height");
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.focused && rt.has_focus());
+
+    let mut mirror = crate::runtime::web_runtime::Mirror::default();
+    assert!(rt.web_context(&mut mirror));
+    assert!(!mirror.key.is_empty());
+
+    // Shrink viewport to 362 pt (squeezing the flex-shrink field to 0 pt height on relayout):
+    // a pure viewport resize must not clear editing focus or tear down the web editing key.
+    rt.set_viewport((390.0, 362.0), 1.0);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.focused && rt.has_focus(), "viewport resize must keep focused text field active");
+    assert!(!rt.web_context(&mut mirror) && !mirror.key.is_empty(), "web editing key must remain active");
+
+    // Restoring full height leaves the field focused and editable.
+    rt.set_viewport((390.0, 699.0), 1.0);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.focused && rt.has_focus());
+}
+
+#[test]
+fn follow_caret_scrolls_focused_field_into_visual_viewport_above_keyboard() {
+    let mut rt = Runtime::new(
+        TextEdit::new("hello"),
+        |e: &TextEdit, _: &mut Cx<TextEdit>| {
+            col().key("vp").w_full().h_full().scroll(ScrollSpec::default())
+                .child(el().w_full().h(500.0))
+                .child(text_input(e, style()).key("lower").label("Lower").w_full().h(48.0)
+                    .on_edit(|s: &mut TextEdit| s))
+                .child(el().w_full().h(400.0))
+        },
+        (390.0, 699.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let (fx, fy) = rt.find("lower").expect("lower field visible in layout viewport");
+    rt.pointer_down(fx, fy);
+    rt.pointer_up(fx, fy);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.focused);
+    assert_eq!(scroll_y(&rt, "vp"), 0.0, "field starts inside 699 pt layout viewport");
+
+    // On-screen keyboard shrinks visualViewport to [0, 362] while layout viewport stays 699 pt.
+    rt.core_mut().set_visual_viewport_y(Some((0.0, 362.0)));
+    rt.core_mut().request_caret_follow();
+    rt.frame(1.0 / 60.0);
+    let (_, caret) = caret_and_viewport(&rt, "vp", "lower");
+    assert!(scroll_y(&rt, "vp") > 100.0, "scroll container moved down to reveal lower field: {}", scroll_y(&rt, "vp"));
+    assert!(caret[1] >= 0.0 && caret[1] + caret[3] <= 362.5, "caret {caret:?} must sit inside visual viewport [0, 362]");
+
+    // Clearing the visual viewport band keeps focus and normal layout behavior.
+    rt.core_mut().set_visual_viewport_y(None);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.focused);
+}

@@ -294,10 +294,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     text, layout, hover/focus/selection, theme and scale) with an optional `.cache_key(u64)` hint.
   - **Live fallback:** while any node inside the subtree animates (springs, transitions, loops,
     growth, word reveals, flights) or hosts a live compositor `El::effect` slot, `NativeSurface`,
-    image pixels or focused text input, the subtree bypasses the cache and draws live, then re-caches
-    once settled. A subtree holding an `El::system_material` element always draws live, on every
-    platform and with or without a native material view, so its rect stays listed in
-    `Runtime::system_materials` every frame.
+    native or Wayland-blur `SystemMaterial`, image pixels or focused text input, the subtree
+    bypasses the cache and draws live, then re-caches once settled. A subtree holding a
+    fallback-only `El::system_material` (native and Wayland blur modes off) stays cached and replays
+    its recorded material rects—translated and scaled with the cached layer—into
+    `Runtime::system_materials` and `ConfiguredOverlay::on_materials` when reused.
   - **Scale and budget:** while an ancestor's live scale or scale spring is changing without view
     commits, the existing cached texture is composited with clamped bilinear filtering and
     re-rasterized at the new device-pixel resolution once the scale holds still for 0.1 s.
@@ -3240,6 +3241,31 @@ is one more host on the event loop
   defaults and `OverlayPlacement::Edge`) anchor inside all four sides of `Display::work_area()`
   (`GetMonitorInfoW`'s `rcWork` in `platform/win32.rs`), while `OverlayPlacement::Rect` and
   `OverlayPlacement::FullScreen` stay in full display coordinates.
+- Opt-in CPU rendering on Windows (`ConfiguredOverlay::renderer(RendererKind::Cpu)`, default
+  `RendererKind::Gpu`): keeps a transparent Windows overlay on `CpuPainter` for its whole
+  lifetime and presents premultiplied BGRA frames (`clear = [0.0; 4]`, `lcd = false`) through
+  documented Win32 `UpdateLayeredWindowIndirect` (`ULW_ALPHA`) without creating a GPU device,
+  swap chain, or `wgpu::Surface` (and without calling `SetLayeredWindowAttributes`; fade-out
+  steps `BLENDFUNCTION::SourceConstantAlpha` without repainting). Query the active renderer in
+  any window or overlay view with memo-tracked `Cx::renderer_kind()` (and set it in headless
+  tests with `Runtime::set_renderer_kind`). The backing DIB is bounded to 8192×8192 / 128 MiB,
+  reused across steady frames with zero heap allocations, and freed when the overlay hides.
+  On macOS, Linux, iOS, and web in this step, `RendererKind::Cpu` is ignored cleanly (staying on
+  GPU with `Cx::renderer_kind() == RendererKind::Gpu`); macOS has no CPU painter, and Linux
+  transparent CPU overlays (`wl_shm` ARGB8888 / 32-bit ARGB X11) are a planned follow-up on the
+  same builder. Trade-offs: layered CPU overlays have no DXGI swap chain or hardware vsync queue
+  and pace animations with `PollPace` + `DwmGetCompositionTimingInfo` (expect minor cadence drift
+  on high-refresh monitors, ~4–5% measured at 165 Hz; keep continuous 120–165 Hz animating
+  overlays on `RendererKind::Gpu`); `WindowBackdrop` reports `WindowBackdrop::None`
+  (`window_backdrop_supported` returns `false`), `El::system_material` draws its fallback fill
+  (refusing `windows-system-material` host backdrop visuals), `.compositor(...)` overrides
+  `RendererKind::Cpu` back to GPU, and `NativeSurface`, `El::blur`, non-90° `El::rotate`, nested
+  `El::backdrop_blur`, and `FontSmoothing::Slug` require the GPU (degradable modifiers paint
+  without the GPU-only effect; non-degradable features hold the previous frame or fail frame 1
+  cleanly). Under `ULW_ALPHA`, Win32 treats pixels with `alpha == 0` as click-through before
+  `WM_NCHITTEST` (invisible hit targets need `alpha >= 1/255`). Pass `--cpu` to
+  `examples/overlay-lab` to try it. Live Windows desktop presentation has not yet been watched by
+  the team.
 - Keys: `OverlayOptions::keys: KeyPolicy::OnDemand` lets an overlay take the keyboard on
   `OverlayHandle::request_keys` or a click, and `capabilities().nonactivating_keys` says whether
   its backend can: the macOS panel becomes key, a layer-shell (v4) surface asks for keyboard

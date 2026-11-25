@@ -181,9 +181,13 @@ pub(crate) fn present_draws(rt: &crate::runtime::RuntimeCore) -> (&[MaterialDraw
     (rt.paint.materials(), rt.window_scale())
 }
 
+/// Callback registered by [`ConfiguredOverlay::on_materials`](crate::ConfiguredOverlay::on_materials).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) type OnMaterials = Box<dyn FnMut(MaterialFrame<'_>)>;
+
 /// Hands a frame about to present to `ConfiguredOverlay::on_materials`, when one is set.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn announce(hook: &mut Option<Box<dyn FnMut(MaterialFrame<'_>)>>, rt: &crate::runtime::RuntimeCore) {
+pub(crate) fn announce(hook: &mut Option<OnMaterials>, rt: &crate::runtime::RuntimeCore) {
     if let Some(hook) = hook {
         let (draws, scale) = present_draws(rt);
         hook(MaterialFrame::new(draws, scale));

@@ -446,6 +446,9 @@ impl RuntimeCore {
                     cur_scale: eff_scale,
                     scale,
                     env_scale: s,
+                    effective_opacity,
+                    material_start: self.paint.materials.len(),
+                    fallback_start: self.paint.material_fallbacks.len(),
                     paint_hash,
                     pass,
                 });

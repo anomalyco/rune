@@ -302,6 +302,24 @@ impl<S: 'static> Runtime<S> {
     pub fn set_window_backdrop_supported(&mut self, backdrop: crate::WindowBackdrop, supported: bool) {
         self.core_mut().set_window_backdrop_supported(backdrop, supported);
     }
+    /// Sets what [`Cx::renderer_kind`] reports for headless tests, marking the view and its
+    /// memos dirty when it changes. Defaults to [`RendererKind::Gpu`](crate::RendererKind::Gpu).
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, RendererKind, Runtime, el};
+    /// let mut rt = Runtime::new(
+    ///     (),
+    ///     |_: &(), cx: &mut Cx<()>| if cx.renderer_kind().is_cpu() { el() } else { el().blur(8.0) },
+    ///     (200.0, 100.0),
+    ///     Env::default(),
+    /// );
+    /// rt.set_renderer_kind(RendererKind::Cpu);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_renderer_kind(&mut self, kind: crate::RendererKind) {
+        self.core_mut().set_renderer_kind(kind);
+    }
     #[inline(always)]
     pub(crate) fn system_accent(&self) -> crate::SystemAccent { self.core().system_accent() }
     #[inline(always)]
