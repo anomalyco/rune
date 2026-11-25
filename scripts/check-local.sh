@@ -17,7 +17,8 @@ Default steps:
   4. cargo clippy --lib --bins (default workspace members)
 
 Options:
-  --wasm        Also run cargo check-wasm and cargo check-webgl
+  --wasm        Also run cargo check-wasm and cargo check-webgl (warnings warn)
+  --strict      Run strict web lints (cargo lint-wasm and cargo lint-webgl, warnings denied)
   --hot         Also run cargo check-hot (rune with --features hot)
   --features    Also check optional/no-default feature sets (gpu counters, Linux noop, rune optional features, rune-kit --all-features)
   --all         Check and lint --workspace --all-targets instead of default members (includes --hot and --features)
@@ -27,6 +28,7 @@ EOF
 }
 
 run_wasm=0
+run_strict=0
 run_hot=0
 run_features=0
 run_all=0
@@ -35,6 +37,7 @@ run_tests=0
 for arg in "$@"; do
   case "$arg" in
     --wasm) run_wasm=1 ;;
+    --strict) run_strict=1 ;;
     --hot) run_hot=1 ;;
     --features) run_features=1 ;;
     --all) run_all=1 ;;
@@ -131,7 +134,10 @@ else
   run_step "cargo clippy --lib --bins" cargo clippy --lib --bins
 fi
 
-if [ "$run_wasm" -eq 1 ]; then
+if [ "$run_strict" -eq 1 ]; then
+  run_step "cargo lint-wasm" cargo lint-wasm
+  run_step "cargo lint-webgl" cargo lint-webgl
+elif [ "$run_wasm" -eq 1 ]; then
   run_step "cargo check-wasm" cargo check-wasm
   run_step "cargo check-webgl" cargo check-webgl
 fi
