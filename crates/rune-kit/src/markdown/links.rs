@@ -20,9 +20,10 @@ impl Markdown {
     pub fn on_link<S: 'static>(self, f: impl Fn(&mut S, &str) + 'static) -> Self {
         self.on_link_tx(move |s: &mut S, url, _| f(s, url))
     }
-    /// [`Self::on_link`] with the [`Tx`] of the press, for a handler that opens a screen, scrolls
-    /// or copies in the same commit (an app's own `scheme:id` links, say). Replaces any earlier
-    /// `on_link` or `on_link_tx` handler (the later call wins).
+    /// [`Self::on_link`] with the [`Tx`] of the press, for a handler that opens a screen, scrolls,
+    /// copies, or anchors a popover beside the activated link via [`Tx::link_rect`] in the same
+    /// commit (an app's own `scheme:id` links, say). Replaces any earlier `on_link` or `on_link_tx`
+    /// handler (the later call wins).
     pub fn on_link_tx<S: 'static>(mut self, f: impl Fn(&mut S, &str, &mut Tx) + 'static) -> Self {
         let tag = fn_tag(&f);
         let f = Rc::new(f);

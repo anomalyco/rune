@@ -35,6 +35,8 @@ pub struct G {
     pub open: Option<String>,
     /// Context menu anchor from a story's `on_secondary_press`.
     pub menu_at: Option<rune::PointerPress>,
+    /// Link popover state (`url`, `[left, top, width, height]`) from `Tx::link_rect`.
+    pub link_popover: Option<(String, [f32; 4])>,
     pub edits: [TextEdit; 12],
     pub read_only_edits: [TextEdit; 2],
     pub nowrap_code: TextEdit,
@@ -110,6 +112,7 @@ fn init() -> G {
         values: HashMap::new(),
         open: None,
         menu_at: None,
+        link_popover: None,
         edits: Default::default(),
         read_only_edits: [
             TextEdit::new("https://api.example.com/v1/workspaces/rune"),

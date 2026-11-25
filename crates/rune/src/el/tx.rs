@@ -119,6 +119,8 @@ pub struct Tx {
     pub(crate) touch_tap: bool,
     /// `Tx::press_point`.
     pub(crate) press_point: Option<PointerEvent>,
+    /// `Tx::link_rect`.
+    pub(crate) link_rect: Option<[f32; 4]>,
     /// Modifier keys held as the handler runs.
     pub(crate) mods: crate::Mods,
     pub(crate) srgb_blend: Option<bool>,

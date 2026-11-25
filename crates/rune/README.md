@@ -683,12 +683,17 @@ top-left, which is what popups and context menus anchor to.
 | `Cx::layout`, `layout_with`, `layout_size`, `memo::layout` (view reads) | `[x, y, w, h]`, as laid out, every scroll viewport at its origin, so a scroll doesn't re-run the view | window |
 | `Cx::window_layout`, `window_layout_with`, `memo::window_layout` | `[x, y, w, h]`, as laid out, after scrolling | window |
 | `Cx::anchor_placement`, `memo::anchor_placement` | resolved `(Side, Align)` of an anchored overlay after RTL mirroring and flipping; re-runs only when the resolved placement changes | physical side/align |
+| `on_link` (`Tx::link_rect`) | `[left, top, width, height]` of the activated link's first drawn line box (pointer, keyboard, or a11y) | window |
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
 `on_press_tx`, `on_background_press_tx`, `on_double_press_tx`, and `on_middle_press` expose
 the pointer activation position through `tx.press_point() -> Option<PointerEvent>` (element-local
 `x`/`y` and window `window_x`/`window_y` on mouse or touch activation, `None` on keyboard or
-assistive-technology activation and outside press handlers). Add `.hover_tracks_bounds()` to an
+assistive-technology activation and outside press handlers). Inside `El::on_link` (and
+`Markdown::on_link_tx`), `tx.link_rect() -> Option<[f32; 4]>` returns `[left, top, width, height]`
+in window points for the activated link's first drawn line box on pointer click, touch tap,
+keyboard Enter/Space, and assistive-technology activation (`None` in every other handler and when
+the link was not drawn this frame). Add `.hover_tracks_bounds()` to an
 element to make `on_hover_change` and hover/press paint tracks follow whether a held press is
 currently inside its clipped/`press_scale`-compensated hit bounds and inside the window (including
 on coordinate-less pointer-leave) without ending capture or changing ancestor defaults. `on_hover`,
