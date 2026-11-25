@@ -183,6 +183,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) on_materials: Option<crate::system_material::OnMaterials>,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
+    pub(crate) renderer: crate::RendererKind,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -442,6 +443,50 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.frame_latency = Some(latency.clamp(1, 2));
         self
     }
+    /// Selects which rendering backend presents this overlay (defaults to
+    /// [`RendererKind::Gpu`](crate::RendererKind::Gpu)).
+    ///
+    /// On Windows, [`RendererKind::Cpu`](crate::RendererKind::Cpu) keeps a transparent overlay on
+    /// Rune's CPU painter (`CpuPainter`) for its whole lifetime and presents premultiplied BGRA
+    /// frames through a documented Win32 layered window (`UpdateLayeredWindowIndirect` with
+    /// `ULW_ALPHA`), creating no GPU device, swap chain, or `wgpu::Surface`. On macOS, Linux, iOS,
+    /// and web in this step, `RendererKind::Cpu` is ignored cleanly (the overlay stays on GPU and
+    /// [`Cx::renderer_kind`](crate::Cx::renderer_kind) reports `RendererKind::Gpu`); macOS has no
+    /// CPU painter, and Linux transparent CPU overlays (`wl_shm` ARGB8888 / 32-bit ARGB X11) are a
+    /// planned follow-up on this same builder.
+    ///
+    /// Trade-offs and limits on Windows CPU overlays:
+    /// - **Frame pacing**: layered windows have no DXGI swap chain or hardware vsync queue; frames
+    ///   are paced with `DwmGetCompositionTimingInfo` and the monitor refresh rate, which can show
+    ///   minor cadence drift (~4–5% measured at 165 Hz). Keep continuously animating 120–165 Hz
+    ///   overlays on [`RendererKind::Gpu`](crate::RendererKind::Gpu).
+    /// - **GPU-only features**: [`WindowBackdrop`](crate::WindowBackdrop) reports
+    ///   `WindowBackdrop::None` (`Cx::window_backdrop_supported` returns `false`),
+    ///   [`El::system_material`](crate::El::system_material) draws its fallback fill (even with the
+    ///   `windows-system-material` feature enabled, because CPU overlays have no DirectComposition
+    ///   swap chain; query [`Cx::renderer_kind`](crate::Cx::renderer_kind) to detect CPU mode),
+    ///   [`Self::compositor`] overrides `RendererKind::Cpu` back to GPU, and `NativeSurface`,
+    ///   `El::blur`, non-90° `El::rotate`, nested `El::backdrop_blur`, and `FontSmoothing::Slug`
+    ///   require the GPU (degradable modifiers paint without the GPU-only effect; non-degradable
+    ///   features hold the previous frame or fail frame 1 cleanly). Query
+    ///   [`Cx::renderer_kind`](crate::Cx::renderer_kind) inside the view to adapt.
+    /// - **Hit-testing**: under `ULW_ALPHA`, Win32 treats pixels with `alpha == 0` as click-through
+    ///   before `WM_NCHITTEST`; an invisible hit target needs `alpha >= 1/255`.
+    /// - **Verification status**: live Windows desktop presentation has not yet been watched by the
+    ///   team.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, RendererKind, el};
+    ///
+    /// let _candidates = OverlaySpec::new("candidates", (320.0, 220.0), |_: &(), cx| {
+    ///     let card = if cx.renderer_kind().is_cpu() { el().w_full().h_full() } else { el().w_full().h_full().blur(8.0) };
+    ///     card
+    /// }).options(OverlayOptions::default()).renderer(RendererKind::Cpu);
+    /// ```
+    pub fn renderer(mut self, kind: crate::RendererKind) -> Self {
+        self.renderer = kind;
+        self
+    }
 }
 
 impl<T: 'static> OverlaySpec<T> {
@@ -455,6 +500,7 @@ impl<T: 'static> OverlaySpec<T> {
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
             frame_latency: None, on_materials: None, animate_reveal: false, release_after: None,
+            renderer: crate::RendererKind::Gpu,
         }
     }
 }

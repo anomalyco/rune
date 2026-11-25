@@ -599,6 +599,7 @@ impl FrameHost for WindowFrame<'_> {
                     swapchain: crate::render::Gpu::dx12_swapchain_kind(),
                     alpha_mode: l.surface.is_some().then_some(l.config.alpha_mode),
                     cpu_painter: l.native.mode.cpu_draws(),
+                    renderer_kind: self.host.app.rt().renderer_kind(),
                     device_type,
                     window_backdrop,
                     mode: l.native.materials.mode(),

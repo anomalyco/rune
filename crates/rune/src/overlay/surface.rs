@@ -371,6 +371,7 @@ impl OverlayCore {
         let alpha = (config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
             .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
         rt.transparent = true;
+        rt.set_renderer_kind(crate::RendererKind::Gpu);
         rt.set_viewport(self.at.size, scale);
         #[cfg(target_os = "macos")]
         let pacing = self.frame_wake.clone().and_then(|wake| {
@@ -525,6 +526,7 @@ impl OverlayCore {
         self.panel.take();
         #[cfg(target_os = "windows")]
         {
+            self.release_cpu();
             self.native.take();
             self.backdrop_tracker = Default::default();
         }

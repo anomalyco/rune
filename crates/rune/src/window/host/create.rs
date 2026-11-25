@@ -521,6 +521,7 @@ impl Host {
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
         if launcher { self.win.as_mut().unwrap().first_frame.prepare(crate::time::now()); }
+        self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
         self.sync_window_backdrop(false);
         self.apply_placement(event_loop);
         #[cfg(target_os = "macos")]

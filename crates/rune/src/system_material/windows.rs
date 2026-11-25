@@ -32,6 +32,9 @@ pub(crate) struct MaterialInputs {
     pub alpha_mode: Option<wgpu::CompositeAlphaMode>,
     /// `true` while drawing through the CPU painter (`SurfaceMode::Cpu` / `HandingOver`).
     pub cpu_painter: bool,
+    /// Active renderer kind (`RendererKind::Cpu` overlays have no DXGI swap chain and never
+    /// host Windows 11 backdrop visuals; views query `Cx::renderer_kind()`).
+    pub renderer_kind: crate::RendererKind,
     /// Active GPU adapter type, or `None` when no GPU device is attached.
     pub device_type: Option<wgpu::DeviceType>,
     /// Active whole-window `WindowBackdrop` (`DWMWA_SYSTEMBACKDROP_TYPE` is mutually exclusive
@@ -71,7 +74,7 @@ pub(crate) const fn eligible(inputs: MaterialInputs) -> bool {
     if !matches!(inputs.alpha_mode, Some(wgpu::CompositeAlphaMode::PreMultiplied)) {
         return false;
     }
-    if inputs.cpu_painter {
+    if inputs.cpu_painter || inputs.renderer_kind.is_cpu() {
         return false;
     }
     if matches!(inputs.device_type, Some(wgpu::DeviceType::Cpu) | None) {

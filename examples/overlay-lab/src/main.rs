@@ -2,7 +2,7 @@
 //! full-screen area pickers, with optional capture exclusion.
 
 use std::sync::{Arc, Mutex};
-use rune::{Align, App, AppSpec, Color, Cx, Display, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, RunOptions, ScreenEdge, Tx, WindowHandle, WindowSpec, WindowsWindowOptions, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, Cx, Display, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, RendererKind, RunOptions, ScreenEdge, Tx, WindowHandle, WindowSpec, WindowsWindowOptions, col, el, row, text};
 
 const BLUE: Color = Color { r: 0.25, g: 0.55, b: 1.0, a: 1.0 };
 const DARK: Color = Color { r: 0.055, g: 0.065, b: 0.085, a: 0.97 };
@@ -98,7 +98,7 @@ fn chip(label: &'static str, action: fn(&mut State)) -> El {
         .on_hover(move |s: &mut State| { s.hovered = label.into(); })
         .on_press(move |s: &mut State| { eprintln!("overlay-lab chip {label}"); action(s); })
 }
-fn view(s: &State, _: &mut Cx<State>) -> El {
+fn view(s: &State, cx: &mut Cx<State>) -> El {
     if s.native_window {
         let capture_label = if s.exclude_from_capture { "Capture: Excluded" } else { "Capture: Visible" };
         let flags = format!(
@@ -159,6 +159,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .child(chip("Edge", cycle_edge))
         .child(chip("×", |s| { if let Some(pill) = &s.handles.lock().unwrap().pill { pill.hide(); } }));
     let status = if !s.hovered.is_empty() { s.hovered.as_str() } else { s.work_area.as_str() };
+    let status = if cx.renderer_kind().is_cpu() {
+        if status.is_empty() { "CPU layered".to_owned() } else { format!("CPU layered · {status}") }
+    } else {
+        status.to_owned()
+    };
     col().w_full().h_full().center().gap(8.0).child(chips)
         .child(text(status).color(BLUE))
 }
@@ -264,6 +269,8 @@ fn main() {
         return;
     }
     rune::run_windows_with(RunOptions { accessory: true }, |displays| {
+        let cpu_overlay = std::env::args().any(|a| a == "--cpu");
+        let overlay_renderer = if cpu_overlay { RendererKind::Cpu } else { RendererKind::Gpu };
         let exclude = std::env::var_os("OVERLAY_LAB_INCLUDE_IN_CAPTURE").is_none();
         let handles = Arc::new(Mutex::new(Handles::default()));
         let mut app = App::new(spec()).windowless();
@@ -276,7 +283,7 @@ fn main() {
             let picker = app.overlay(OverlaySpec::new("Rune picker", (680.0, 160.0), view).options(OverlayOptions {
                 display: target, placement: Some(OverlayPlacement::FullScreen), level: OverlayLevel::AboveStatus,
                 input: OverlayInput::All, exclude_from_capture: exclude, keys: KeyPolicy::OnDemand, prewarm: true, ..Default::default()
-            }).on_key(key).on_created(|created| eprintln!("overlay-lab picker created {created:?}")), state);
+            }).renderer(overlay_renderer).on_key(key).on_created(|created| eprintln!("overlay-lab picker created {created:?}")), state);
             handles.lock().unwrap().pickers.push(picker);
         }
         let mut state = init();
@@ -285,7 +292,7 @@ fn main() {
         let pill = app.overlay(OverlaySpec { margin: 40.0, ..OverlaySpec::new("Rune pill", (680.0, 160.0), view) }.options(OverlayOptions {
             display: DisplayTarget::UnderPointer, follow_pointer: true,
             input: OverlayInput::Regions, exclude_from_capture: exclude, level: OverlayLevel::AboveOverlays, prewarm: true, ..Default::default()
-        }).on_created(|created| eprintln!("overlay-lab pill created {created:?}")), state);
+        }).renderer(overlay_renderer).on_created(|created| eprintln!("overlay-lab pill created {created:?}")), state);
         handles.lock().unwrap().pill = Some(pill.clone());
         #[cfg(target_os = "macos")]
         native_probe(pill.clone(), app.handle());

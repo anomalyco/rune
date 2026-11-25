@@ -69,6 +69,13 @@ impl window_requests::HostState {
     }
 
     #[inline]
+    pub(super) fn set_renderer_kind(&mut self, kind: crate::RendererKind) -> bool {
+        if kind == self.renderer_kind { return false; }
+        self.renderer_kind = kind;
+        true
+    }
+
+    #[inline]
     pub(super) fn set_backdrop_opaque_fallback(&mut self, fallback: bool) -> bool {
         if fallback == self.backdrop_opaque_fallback { return false; }
         self.backdrop_opaque_fallback = fallback;
@@ -277,6 +284,18 @@ impl RuntimeCore {
     #[inline]
     pub(crate) fn set_window_backdrop_supported_mask(&mut self, mask: u8) {
         if self.host.set_window_backdrop_supported_mask(mask) { self.commit.dirty = true; }
+    }
+
+    /// What [`Cx::renderer_kind`] reports; a change re-runs the view and its memos.
+    #[inline]
+    pub fn set_renderer_kind(&mut self, kind: crate::RendererKind) {
+        if self.host.set_renderer_kind(kind) { self.commit.dirty = true; }
+    }
+
+    #[cfg_attr(not(any(all(target_os = "windows", feature = "windows-system-material"), test)), allow(dead_code))]
+    #[inline]
+    pub(crate) fn renderer_kind(&self) -> crate::RendererKind {
+        self.host.renderer_kind
     }
 
     #[cfg_attr(
