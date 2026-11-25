@@ -337,3 +337,18 @@ fn steady_cpu_overlay_frame_allocates_nothing_and_default_gpu_frame_unchanged() 
     }
     assert_eq!(allocs() - before_cpu, 0, "steady CPU overlay frames must allocate nothing after warm-up");
 }
+
+#[test]
+fn overlay_send_pointer_steady_moves_allocate_nothing() {
+    use rune::{App, AppSpec, OverlaySpec, PointerInput, el};
+    fn view(_: &(), _: &mut Cx<()>) -> El { el().size(120.0, 40.0).hit() }
+    let mut app = App::new(AppSpec::new("inject-alloc", (120.0, 40.0), || (), view));
+    let handle = app.overlay(OverlaySpec::new("inject-alloc", (120.0, 40.0), view), ());
+    handle.send_pointer(PointerInput::move_to(10.0, 10.0));
+    let before = allocs();
+    for i in 0..500 {
+        handle.send_pointer(PointerInput::move_to((i % 100) as f32, 20.0));
+        let _ = handle.screen_to_local((i, i));
+    }
+    assert_eq!(allocs() - before, 0, "steady-state send_pointer moves and screen_to_local must allocate nothing");
+}

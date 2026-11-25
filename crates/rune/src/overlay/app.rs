@@ -476,6 +476,13 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) { with_app!(self, |core, app| core.left_button(&mut app, pressed, point)) }
     #[cfg(test)]
     pub(super) fn cursor_moved(&mut self, x: f32, y: f32) { with_app!(self, |core, app| core.cursor_moved(&mut app, x, y)) }
+    #[cfg(test)]
+    pub(super) fn drain_injected_pointers(&mut self) { with_app!(self, |core, app| core.drain_injected_pointers(&mut app)) }
+    #[cfg(test)]
+    pub(super) fn dispatch_pointer(&mut self, source: super::pointer_inject::InputSource, event: crate::PointerInput) {
+        with_app!(self, |core, app| core.dispatch_pointer(&mut app, source, event))
+    }
+
     pub(super) fn touch_event(&mut self, touch: &winit::event::Touch) {
         with_app!(self, |core, app| {
             let app: &mut dyn OverlayApp = &mut app;

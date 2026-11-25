@@ -272,7 +272,9 @@ impl AnyHost for OverlayHost {
         // A click gives an overlay that may take keys the focus, as it does the macOS panel; the
         // window manager gives an override-redirect window none.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. } = event && let Some(x11) = &core.x11 { x11.request_keys(); }
+        if let WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. } = event
+            && !core.pointer_owner.captured_by_injected()
+            && let Some(x11) = &core.x11 { x11.request_keys(); }
         use crate::input::host_events;
         if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
             && (app.rt().touching() || host_events::touch_promoted()) { return; }
@@ -322,13 +324,10 @@ impl AnyHost for OverlayHost {
                 core.cursor_moved(app, x, y);
             }
             WindowEvent::CursorLeft { .. } if input_enabled => {
-                app.rt_mut().pointer_leave();
-                core.dirty = true;
+                core.native_pointer_leave(app);
             }
             WindowEvent::MouseWheel { delta, phase, .. } if input_enabled => {
-                let scale = core.live_scale().unwrap_or(1.0);
-                host_events::wheel(app.rt_mut(), delta, host_events::gesture_phase(phase), scale, core.mods);
-                core.dirty = true;
+                core.native_mouse_wheel(app, delta, phase);
             }
             WindowEvent::PinchGesture { delta, phase, .. } if input_enabled => {
                 core.dirty |= host_events::magnify(app.rt_mut(), delta, host_events::gesture_phase(phase));
@@ -377,9 +376,8 @@ impl AnyHost for OverlayHost {
                     core.control_click = cfg!(target_os = "macos") && core.mods.control_key();
                 }
                 if core.control_click {
-                    if input_enabled && let Some((x, y)) = app.rt().pointer() {
-                        if pressed { app.rt_mut().secondary_down(x, y); } else { app.secondary_up(x, y); }
-                        core.dirty = true;
+                    if input_enabled {
+                        core.native_button(app, crate::PointerButton::Secondary, pressed);
                     }
                     if !pressed { core.control_click = false; }
                     core.apply_input(app.rt());
@@ -404,18 +402,12 @@ impl AnyHost for OverlayHost {
                 core.apply_input(app.rt());
             }
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Right, .. } if input_enabled => {
-                if let Some((x, y)) = app.rt().pointer() {
-                    if state.is_pressed() { app.rt_mut().secondary_down(x, y); } else { app.secondary_up(x, y); }
-                    core.dirty = true;
-                }
+                core.native_button(app, crate::PointerButton::Secondary, state.is_pressed());
                 core.apply_input(app.rt());
             }
             WindowEvent::MouseInput { state, button, .. } if input_enabled => {
-                if let Some((x, y)) = app.rt().pointer() {
-                    let button = crate::window::pointer_button(button);
-                    if state.is_pressed() { app.button_down(x, y, button); } else { app.button_up(x, y, button); }
-                    core.dirty = true;
-                }
+                let button = crate::window::pointer_button(button);
+                core.native_button(app, button, state.is_pressed());
                 core.apply_input(app.rt());
             }
             _ => {}

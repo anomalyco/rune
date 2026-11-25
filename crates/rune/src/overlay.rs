@@ -88,6 +88,9 @@ pub(crate) mod options;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/placement.rs"]
 mod placement;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "overlay/pointer_inject.rs"]
+mod pointer_inject;
 #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub(crate) use placement::monitor_at;
 #[cfg(not(target_arch = "wasm32"))]
@@ -186,6 +189,12 @@ pub(in crate::overlay) struct SharedCore {
     pub(in crate::overlay) wake: Mutex<Option<Waker>>,
     /// What the overlay's meter last published.
     pub(in crate::overlay) stats: Arc<Mutex<crate::SurfaceStats>>,
+    /// Bounded zero-allocation ring buffer of app-injected `PointerInput` events.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::overlay) pointers: Mutex<pointer_inject::PointerQueue>,
+    /// Latest physical top-left origin and backing scale for `OverlayHandle::screen_to_local`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::overlay) screen_transform: Mutex<Option<((i32, i32), f32)>>,
 }
 
 impl SharedCore {
@@ -247,6 +256,16 @@ impl SharedCore {
     }
     fn failure(&self) -> Option<String> { self.failure.lock().unwrap().clone() }
     fn surface_description(&self) -> Option<String> { self.surface.lock().unwrap().clone() }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn send_pointer(&self, event: crate::PointerInput) {
+        let should_wake = self.pointers.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(event);
+        if should_wake { self.wake(); }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn screen_to_local(&self, screen_px: (i32, i32)) -> Option<(f32, f32)> {
+        let transform = *self.screen_transform.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        pointer_inject::screen_to_local(transform, screen_px)
+    }
 }
 
 pub(in crate::overlay) struct Shared<T> {
@@ -332,6 +351,54 @@ impl<T: 'static> OverlayHandle<T> {
         reply(None);
         #[cfg(not(target_arch = "wasm32"))]
         self.shared.core.activation_token(Box::new(reply));
+    }
+
+    /// Injects a pointer event from an external source (such as a low-level hook or another
+    /// thread) into this overlay's hit-testing, hover, press, drag, and wheel pipeline.
+    ///
+    /// Coordinates in `event` are overlay-local logical points from the top-left corner (as
+    /// returned by [`Self::screen_to_local`]). Injected events bypass `OverlayInput::None` and
+    /// `OverlayInput::Regions` OS click-through gating, are dropped while the overlay is hidden,
+    /// fading out, or not yet created, never move or change the OS cursor, never activate or
+    /// focus the overlay, and never start native `window_drag` or OS `drag_out` sessions.
+    ///
+    /// ```no_run
+    /// # fn forward(overlay: &rune::OverlayHandle<()>, hook_x: i32, hook_y: i32) {
+    /// use rune::{PointerButton, PointerInput};
+    ///
+    /// if let Some((x, y)) = overlay.screen_to_local((hook_x, hook_y)) {
+    ///     overlay.send_pointer(PointerInput::move_to(x, y));
+    ///     overlay.send_pointer(PointerInput::down(x, y, PointerButton::Primary));
+    ///     overlay.send_pointer(PointerInput::up(x, y, PointerButton::Primary));
+    /// }
+    /// # }
+    /// ```
+    #[inline(always)]
+    pub fn send_pointer(&self, event: crate::PointerInput) {
+        #[cfg(target_arch = "wasm32")]
+        let _ = event;
+        #[cfg(not(target_arch = "wasm32"))]
+        self.shared.core.send_pointer(event);
+    }
+
+    /// Converts desktop physical screen pixels into overlay-local logical points suitable for
+    /// [`Self::send_pointer`], using the overlay's last published position and backing scale
+    /// with zero OS calls. Returns `None` while the overlay is hidden, fading out, not yet
+    /// created, or on hosts without global window positions (Wayland).
+    ///
+    /// ```no_run
+    /// # fn convert(overlay: &rune::OverlayHandle<()>) {
+    /// if let Some((x, y)) = overlay.screen_to_local((320, 180)) {
+    ///     overlay.send_pointer(rune::PointerInput::move_to(x, y));
+    /// }
+    /// # }
+    /// ```
+    #[inline(always)]
+    pub fn screen_to_local(&self, screen_px: (i32, i32)) -> Option<(f32, f32)> {
+        #[cfg(target_arch = "wasm32")]
+        { let _ = screen_px; None }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.shared.core.screen_to_local(screen_px)
     }
 
     /// macOS panel CGWindowID for an explicit ScreenCaptureKit exclusion filter. Available
@@ -620,6 +687,8 @@ pub(in crate::overlay) struct OverlayCore {
     refollow_away: Option<winit::monitor::MonitorHandle>,
     /// Whether placement requests or a user window drag owns this overlay's position.
     position_owner: input::PositionOwner,
+    /// Interleaving ownership between native OS pointer events and `OverlayHandle::send_pointer`.
+    pointer_owner: pointer_inject::PointerOwnership,
     /// The effect pipelines this overlay's renderer compiles ahead of their first use.
     prewarm_effects: crate::PrewarmEffects,
     /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
@@ -732,6 +801,7 @@ impl OverlayCore {
             meter,
             refollow_away: None,
             position_owner: input::PositionOwner::Managed,
+            pointer_owner: pointer_inject::PointerOwnership::Idle,
             prewarm_effects: crate::PrewarmEffects::NONE,
             frame_latency: None,
             on_materials: None,
@@ -970,6 +1040,7 @@ impl OverlayCore {
     fn sync_origin(&mut self, rt: &mut RuntimeCore, window: &Window) {
         rt.set_window_pixels(window.inner_position().ok().map(|p| (p.x, p.y)));
         if let Some(origin) = crate::window::screen_origin(window) { self.origin_moved(rt, origin); }
+        self.publish_screen_transform(rt);
     }
 
     /// The overlay's live winit window, on either the GPU or Windows CPU layered path.
