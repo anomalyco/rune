@@ -214,6 +214,7 @@ impl Host {
         let phys = window.inner_size();
         let srgb_blend = self.app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
+        let frame_latency = crate::window::frame_latency(self.frame_latency);
         let features = self.app.compositor_features();
         let transparent = self.options.transparent;
         // A window with a client-side frame keeps its pixels' alpha for the frame's corner arcs;
@@ -248,6 +249,7 @@ impl Host {
             let initial = drawable_size(None, (phys.width, phys.height), max_surface_dim(Some(gpu)));
             let (mut config, translucent) = surface_config(surface, &gpu.adapter, initial, srgb_blend)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
+            config.desired_maximum_frame_latency = frame_latency;
             #[cfg(target_os = "macos")]
             let launch_drawables = LaunchDrawables::cap(&mut config);
             if transparent || client_frame {
@@ -677,6 +679,7 @@ impl Host {
         let prev = self.win.as_ref().map(|w| (w.config.width, w.config.height));
         let srgb_blend = self.app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
+        let frame_latency = crate::window::frame_latency(self.frame_latency);
         let client_frame = self.client_frame(&window);
         let make_surface = |instance: &wgpu::Instance| {
             #[cfg(target_os = "windows")]
@@ -690,6 +693,7 @@ impl Host {
             let size = drawable_size(prev, (raw_size.width, raw_size.height), max_surface_dim(Some(gpu)));
             let (mut config, translucent) = surface_config(surface, &gpu.adapter, size, srgb_blend)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU adapter can't present to this window"))?;
+            config.desired_maximum_frame_latency = frame_latency;
             if transparent || client_frame {
                 config.alpha_mode = alpha_mode(transparent, client_frame, translucent);
             }

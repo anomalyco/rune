@@ -159,6 +159,8 @@ pub struct App<S: 'static> {
     pub(crate) exclude_from_capture: Option<bool>,
     pub(crate) color_scheme: crate::ColorScheme,
     pub(crate) window_backdrop: crate::WindowBackdrop,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) frame_latency: Option<u32>,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) canvas_id: Option<String>,
@@ -232,6 +234,7 @@ impl<S: 'static> App<S> {
             exclude_from_capture: None,
             color_scheme: crate::ColorScheme::System,
             window_backdrop: crate::WindowBackdrop::None,
+            frame_latency: None,
             compositor: None,
             window_options: crate::WindowOptions::default(),
             canvas_id: None,
@@ -1175,6 +1178,27 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn ambient_fps(mut self, fps: f32) -> Self {
         self.ambient_period = ambient_period_from_fps(fps);
+        self
+    }
+
+    /// Cap the swap chain's frame latency on macOS (`1` = 2 drawables, `2` = 3 drawables;
+    /// clamped to `1..=2`, default `2`). Ignored on Windows, Linux, and the web.
+    ///
+    /// With two drawables a frame that runs late waits instead of overlapping the next; at
+    /// 120 Hz that can show as a dropped frame during fast animation, whereas for a rarely
+    /// animating window it is the right trade. Applied when the surface is created (and on
+    /// GPU surface reattach) rather than changed live (changing `CAMetalLayer.maximumDrawableCount`
+    /// while visible forces a synchronous reconfigure and can reallocate drawables or drop a frame).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Panel", (488.0, 873.0), || (), |_, _| el()))
+    ///     .frame_latency(1)
+    ///     .run();
+    /// ```
+    pub fn frame_latency(mut self, frames: u32) -> Self {
+        self.frame_latency = Some(frames.clamp(1, 2));
         self
     }
 

@@ -1482,6 +1482,12 @@ For an app's own perf log, with nothing changed about how its windows draw:
   panels) bounds both steered and ambient frames, and combining `ambient_fps` with `App::reveal_fps` paces
   reveal-only tails on the `reveal_fps` timer while concurrent unsteered motion paces at `ambient_fps`. Enforced
   on macOS `DisplayLink` windows today; Windows, Linux, web, overlays, and headless runs ignore it.
+- **`App::frame_latency(frames)`** (also on `WindowSpec::frame_latency` and
+  `ConfiguredOverlay::frame_latency`) caps a macOS surface's swap-chain latency at creation time
+  (`1` = 2 `CAMetalLayer` drawables, `2` = 3 drawables; clamped to `1..=2`, default `2`). Ignored
+  on Windows, Linux, and the web. With two drawables a frame that runs late waits instead of
+  overlapping the next, which at 120 Hz can show as a dropped frame during fast animation; for a
+  rarely animating window or overlay it saves one full window-sized IOSurface.
 
 ### Compact tray-controlled windows
 
