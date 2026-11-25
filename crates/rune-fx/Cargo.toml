@@ -30,6 +30,9 @@ ab_glyph = "0.2.32"
 png = { workspace = true }
 
 [[test]]
+name = "alloc"
+
+[[test]]
 name = "integration"
 
 [lints]

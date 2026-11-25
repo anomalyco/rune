@@ -470,6 +470,39 @@ fn support_needs_vertex_and_fragment_storage_and_two_buffers() {
 fn motion_samples_stay_out_of_every_layer() {
     // `MotionSamples` is about 2 KiB; inline, it would make every `Fx` and `FxLayer` that big.
     assert!(std::mem::size_of::<MotionSamples>() > 2048);
-    assert!(std::mem::size_of::<Fx>() <= 256, "Fx is {} bytes", std::mem::size_of::<Fx>());
-    assert!(std::mem::size_of::<FxLayer>() <= 384, "FxLayer is {} bytes", std::mem::size_of::<FxLayer>());
+    assert!(std::mem::size_of::<Fx>() <= 168, "Fx is {} bytes", std::mem::size_of::<Fx>());
+    assert!(std::mem::size_of::<FxLayer>() <= 256, "FxLayer is {} bytes", std::mem::size_of::<FxLayer>());
+    assert!(
+        2_400 * std::mem::size_of::<FxLayer>() <= 600 * 1024,
+        "2,400 FxLayers take {} bytes",
+        2_400 * std::mem::size_of::<FxLayer>()
+    );
+}
+
+#[test]
+fn motion_blur_in_place_sample_update_packs_identically() {
+    let rest = Rect::new(48.0, 24.0, 48.0, 48.0);
+    let shape = Shape::rounded(rest.x, rest.y, rest.w, rest.h, 8.0);
+    let src = Rect::new(0.0, 0.0, 160.0, 96.0);
+    let p = MotionBlurParams::default();
+    let s1 = MotionSamples::from_track(&p, rest, 0.05, 1.0, |t| Pose { x: t * 900.0, ..Default::default() });
+    let s2 = MotionSamples::from_track(&p, rest, 0.15, 1.0, |t| Pose { x: t * 1800.0, ..Default::default() });
+
+    let mut reused = Fx::motion_blur(p, s1).on(shape).source(0, src).at(0.05);
+    if let Fx::MotionBlur(_, samples) = &mut reused.fx {
+        **samples = s2;
+    }
+    reused.time = 0.15;
+    let fresh = Fx::motion_blur(p, s2).on(shape).source(0, src).at(0.15);
+
+    let (k_reused, mut i_reused, b_reused) = reused.pack().unwrap();
+    let (k_fresh, mut i_fresh, b_fresh) = fresh.pack().unwrap();
+    let (mut xf_reused, mut xf_fresh) = (Vec::new(), Vec::new());
+    reused.fill(&mut i_reused, &mut xf_reused);
+    fresh.fill(&mut i_fresh, &mut xf_fresh);
+
+    assert_eq!(k_reused, k_fresh);
+    assert_eq!(b_reused, b_fresh);
+    assert_eq!(bytemuck::bytes_of(&i_reused), bytemuck::bytes_of(&i_fresh));
+    assert_eq!(xf_reused, xf_fresh);
 }
