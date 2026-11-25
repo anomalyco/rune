@@ -12,7 +12,6 @@
 use crate::render::cpu_boot::{CpuPainter, NeedsGpu, Scene, Target};
 #[cfg(any(target_os = "windows", test))]
 use crate::runtime::RuntimeCore;
-#[cfg(any(target_os = "windows", test))]
 use crate::RendererKind;
 
 #[cfg(target_os = "windows")]
@@ -21,7 +20,6 @@ use crate::platform::win32::layered::{self, LayeredPresenter, LayeredSeam, RealL
 use crate::platform::win32_layered::{LayeredPresenter, LayeredSeam};
 
 /// Target OS classification for the pure overlay backend selection policy.
-#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OverlayTarget {
     Windows,
@@ -30,7 +28,6 @@ pub(crate) enum OverlayTarget {
     Other,
 }
 
-#[cfg(target_os = "windows")]
 impl OverlayTarget {
     #[inline]
     pub(crate) const fn current() -> Self {
@@ -47,7 +44,6 @@ impl OverlayTarget {
 }
 
 /// Pure backend selection decision for an overlay.
-#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum OverlayBackendChoice {
     /// Default GPU presentation through `wgpu`.
@@ -62,14 +58,12 @@ pub(crate) enum OverlayBackendChoice {
     GpuPlatformUnsupported,
 }
 
-#[cfg(any(target_os = "windows", test))]
 impl OverlayBackendChoice {
     #[inline]
     pub(crate) const fn is_cpu_layered(self) -> bool {
         matches!(self, Self::WindowsCpuLayered)
     }
 
-    #[cfg(test)]
     #[inline]
     pub(crate) const fn renderer_kind(self) -> RendererKind {
         if self.is_cpu_layered() {
@@ -84,7 +78,6 @@ impl OverlayBackendChoice {
 ///
 /// An overlay enters `WindowsCpuLayered` if and only if:
 /// `target == Windows && requested == RendererKind::Cpu && !has_compositor && !cpu_layered_failed`.
-#[cfg(any(target_os = "windows", test))]
 #[inline]
 pub(crate) const fn select_overlay_backend(
     target: OverlayTarget,
