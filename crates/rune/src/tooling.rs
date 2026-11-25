@@ -178,6 +178,8 @@ mod crop;
 #[path = "tooling/eased_input.rs"]
 mod eased_input;
 pub(crate) use eased_input::step_resize;
+#[path = "tooling/flags.rs"]
+mod flags;
 #[path = "tooling/headless.rs"]
 mod headless;
 #[path = "tooling/loop_check.rs"]
@@ -195,6 +197,7 @@ mod trace;
 
 pub use args::{Args, is_headless};
 pub use args::{RELAUNCH_DROPS, without_relaunch_drops};
+pub use flags::{FlagSpec, FlagValue, flags};
 pub(crate) use args::*;
 pub use headless::headless;
 #[cfg(not(target_arch = "wasm32"))]
