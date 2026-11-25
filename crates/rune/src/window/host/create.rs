@@ -688,7 +688,7 @@ impl Host {
             self.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
         }
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
-        self.app.rt_mut().paint.set_native_materials(false);
+        self.app.rt_mut().paint.set_windows_acrylic_materials(false);
         let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
         drop(w.surface.take());
         #[cfg(target_os = "macos")]

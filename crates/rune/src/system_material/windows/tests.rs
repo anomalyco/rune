@@ -194,14 +194,13 @@ fn diagnostic_env_parsers_and_visual_spec_clamping() {
     assert_eq!(ClipKind::parse(Some(" geo ")), ClipKind::Geometric);
     assert_eq!(ClipKind::parse(Some("geometric")), ClipKind::Geometric);
 
-    assert_eq!(TintMode::parse(None), TintMode::None);
-    assert_eq!(TintMode::parse(Some("none")), TintMode::None);
-    assert_eq!(TintMode::parse(Some(" subtle ")), TintMode::Subtle);
-    assert_eq!(tint_color(TintMode::None, true), None);
-    assert_eq!(tint_color(TintMode::None, false), None);
-    assert!(tint_color(TintMode::Subtle, true).is_some());
-    assert!(tint_color(TintMode::Subtle, false).is_some());
-    assert_ne!(tint_color(TintMode::Subtle, true), tint_color(TintMode::Subtle, false));
+    assert_eq!(TintMode::parse(None), TintMode::Acrylic);
+    assert_eq!(TintMode::parse(Some("acrylic")), TintMode::Acrylic);
+    assert_eq!(TintMode::parse(Some(" flat ")), TintMode::Flat);
+    assert_eq!(TintMode::parse(Some(" subtle ")), TintMode::Flat);
+    assert_eq!(TintMode::parse(Some(" raw ")), TintMode::Raw);
+    assert_eq!(TintMode::parse(Some("none")), TintMode::Raw);
+    assert_ne!(acrylic::flat_tint_color(true), acrylic::flat_tint_color(false));
 
     assert!(!parse_bool_env(None));
     assert!(!parse_bool_env(Some("0")));
@@ -212,28 +211,35 @@ fn diagnostic_env_parsers_and_visual_spec_clamping() {
     let spec = VisualSpec::from_draw(
         draw(1, SystemMaterial::Popover, [12.5, 24.0, 200.0, 48.0], 999.0, 1.5),
         ClipKind::Rectangle,
-        None,
+        TintMode::Acrylic,
+        true,
     );
     assert_eq!(spec.offset, [12.5, 24.0]);
     assert_eq!(spec.size, [200.0, 48.0]);
     assert_eq!(spec.radius, 24.0, "radius clamped to half shorter side");
     assert_eq!(spec.opacity, 1.0, "opacity clamped to 1.0");
+    assert_eq!(spec.material, SystemMaterial::Popover);
+    assert!(spec.dark);
+    assert_eq!(spec.tint_mode, TintMode::Acrylic);
 
     let neg = VisualSpec::from_draw(
         draw(2, SystemMaterial::Glass, [0.0, 0.0, -5.0, 10.0], f32::NAN, -0.3),
         ClipKind::Geometric,
-        Some([0x38, 0x20, 0x20, 0x22]),
+        TintMode::Flat,
+        false,
     );
     assert_eq!(neg.size, [0.0, 10.0]);
     assert_eq!(neg.radius, 0.0);
     assert_eq!(neg.opacity, 0.0);
     assert_eq!(neg.clip, ClipKind::Geometric);
-    assert_eq!(neg.tint, Some([0x38, 0x20, 0x20, 0x22]));
+    assert_eq!(neg.material, SystemMaterial::Glass);
+    assert!(!neg.dark);
+    assert_eq!(neg.tint_mode, TintMode::Flat);
 }
 
 #[test]
 fn zero_seam_calls_when_no_material_is_asked_for() {
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::default();
     assert_eq!(ctrl.mode(), Mode::Synced);
     assert!(!ctrl.native());
@@ -254,7 +260,7 @@ fn zero_seam_calls_when_no_material_is_asked_for() {
 
 #[test]
 fn activation_sequence_visual_updates_dedup_and_teardown_on_empty() {
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::default();
     let hwnd = 0x1001;
 
@@ -273,7 +279,7 @@ fn activation_sequence_visual_updates_dedup_and_teardown_on_empty() {
     // Present runs BEFORE CreateVisual / UpdateVisual / Commit so DWM never commits ahead of Present.
     let pill = draw(10, SystemMaterial::Popover, [250.0, 16.0, 220.0, 48.0], 24.0, 0.95);
     assert!(present_frame(&mut ctrl, &[pill], true, &mut seam));
-    let expected_spec = VisualSpec::from_draw(pill, ClipKind::Rectangle, None);
+    let expected_spec = VisualSpec::from_draw(pill, ClipKind::Rectangle, TintMode::Acrylic, true);
     assert_eq!(seam.calls(), vec![
         Call::Present,
         Call::CreateVisual(0),
@@ -293,7 +299,7 @@ fn activation_sequence_visual_updates_dedup_and_teardown_on_empty() {
     assert!(present_frame(&mut ctrl, &[moved], true, &mut seam));
     assert_eq!(seam.calls(), vec![
         Call::Present,
-        Call::UpdateVisual(0, VisualSpec::from_draw(moved, ClipKind::Rectangle, None)),
+        Call::UpdateVisual(0, VisualSpec::from_draw(moved, ClipKind::Rectangle, TintMode::Acrylic, true)),
         Call::Commit,
     ]);
     seam.clear();
@@ -313,7 +319,7 @@ fn activation_sequence_visual_updates_dedup_and_teardown_on_empty() {
 
 #[test]
 fn slot_reuse_hiding_pruning_cap_and_diagnostic_clip_tint() {
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Geometric, TintMode::Subtle);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Geometric, TintMode::Flat);
     let mut seam = FakeSeam::default();
     let hwnd = 0x2002;
 
@@ -327,11 +333,11 @@ fn slot_reuse_hiding_pruning_cap_and_diagnostic_clip_tint() {
     assert_eq!(seam.calls(), vec![
         Call::Present,
         Call::CreateVisual(0),
-        Call::UpdateVisual(0, VisualSpec::from_draw(a, ClipKind::Geometric, tint_color(TintMode::Subtle, true))),
+        Call::UpdateVisual(0, VisualSpec::from_draw(a, ClipKind::Geometric, TintMode::Flat, true)),
         Call::CreateVisual(1),
-        Call::UpdateVisual(1, VisualSpec::from_draw(b, ClipKind::Geometric, tint_color(TintMode::Subtle, true))),
+        Call::UpdateVisual(1, VisualSpec::from_draw(b, ClipKind::Geometric, TintMode::Flat, true)),
         Call::CreateVisual(2),
-        Call::UpdateVisual(2, VisualSpec::from_draw(c, ClipKind::Geometric, tint_color(TintMode::Subtle, true))),
+        Call::UpdateVisual(2, VisualSpec::from_draw(c, ClipKind::Geometric, TintMode::Flat, true)),
         Call::Commit,
     ]);
     seam.clear();
@@ -341,7 +347,7 @@ fn slot_reuse_hiding_pruning_cap_and_diagnostic_clip_tint() {
     assert_eq!(seam.calls(), vec![
         Call::Present,
         // b kept its own slot 1; dark->light changed its subtle tint color.
-        Call::UpdateVisual(1, VisualSpec::from_draw(b, ClipKind::Geometric, tint_color(TintMode::Subtle, false))),
+        Call::UpdateVisual(1, VisualSpec::from_draw(b, ClipKind::Geometric, TintMode::Flat, false)),
         Call::HideVisual(0),
         Call::HideVisual(2),
         Call::RemoveVisual(2),
@@ -354,7 +360,7 @@ fn slot_reuse_hiding_pruning_cap_and_diagnostic_clip_tint() {
     assert!(present_frame(&mut ctrl, &[b, d], false, &mut seam));
     assert_eq!(seam.calls(), vec![
         Call::Present,
-        Call::UpdateVisual(0, VisualSpec::from_draw(d, ClipKind::Geometric, tint_color(TintMode::Subtle, false))),
+        Call::UpdateVisual(0, VisualSpec::from_draw(d, ClipKind::Geometric, TintMode::Flat, false)),
         Call::Commit,
     ]);
     seam.clear();
@@ -370,7 +376,7 @@ fn slot_reuse_hiding_pruning_cap_and_diagnostic_clip_tint() {
 
 #[test]
 fn ineligibility_while_mounted_tears_down_and_requests_fallback_rebuild() {
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::default();
     let hwnd = 0x3003;
 
@@ -392,7 +398,7 @@ fn ineligibility_while_mounted_tears_down_and_requests_fallback_rebuild() {
 
 #[test]
 fn teardown_on_window_close_and_device_loss_recovery() {
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::default();
     let hwnd = 0x4004;
 
@@ -437,7 +443,7 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
     let hwnd = 0x5005;
 
     // 1. Failure on SetHandoverTopmost(true).
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::failing(FailAt::HandoverTopmostTrue);
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert!(!ctrl.native());
@@ -449,7 +455,7 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
     assert!(seam.calls().is_empty());
 
     // 2. Failure on CreateTarget rolls back Handover to topmost = false.
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::failing(FailAt::CreateTarget);
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert_eq!(ctrl.state(), State::Failed { hwnd });
@@ -462,7 +468,7 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
     assert!(!seam.handover_topmost);
 
     // 3. Failure on DWMWA_USE_HOSTBACKDROPBRUSH=true rolls back target, attribute, and Handover.
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::failing(FailAt::SetHostBackdropTrue);
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert_eq!(ctrl.state(), State::Failed { hwnd });
@@ -479,7 +485,7 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
 
     // 4. Mid-frame failure during CreateVisual / UpdateVisual / Commit rolls back and latches.
     for fail_at in [FailAt::CreateVisual, FailAt::UpdateVisual, FailAt::Commit] {
-        let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+        let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
         let mut seam = FakeSeam::failing(fail_at);
         assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
         seam.clear();
@@ -511,7 +517,7 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
     }
 
     // 5. Recreated window with a new HWND clears the old HWND latch.
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::failing(FailAt::CreateTarget);
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert_eq!(ctrl.state(), State::Failed { hwnd });
@@ -525,7 +531,7 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
 #[test]
 fn hide_visual_failure_rolls_back_and_latches() {
     let hwnd = 0x7007;
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::failing(FailAt::HideVisual);
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     let a = draw(1, SystemMaterial::Popover, [0.0, 0.0, 100.0, 40.0], 20.0, 1.0);
@@ -541,7 +547,7 @@ fn hide_visual_failure_rolls_back_and_latches() {
 
 #[test]
 fn cpu_renderer_overlay_refuses_windows_system_material_and_stays_idle() {
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::default();
     let cpu_overlay = MaterialInputs { renderer_kind: crate::RendererKind::Cpu, ..base_inputs() };
     assert!(!eligible(cpu_overlay));
@@ -553,14 +559,12 @@ fn cpu_renderer_overlay_refuses_windows_system_material_and_stays_idle() {
 
 #[test]
 fn effects_off_at_start_never_activates_and_draws_fallback_fill() {
-    use crate::{Color, Env, Runtime, el};
+    use crate::{Env, Runtime, el};
 
-    const FALLBACK: Color = Color { r: 0.12, g: 0.12, b: 0.14, a: 0.92 };
     fn view(_: &(), _: &mut crate::Cx<()>) -> crate::El {
         el().key("pill")
             .size(220.0, 48.0)
             .radius(24.0)
-            .fill(FALLBACK)
             .system_material(SystemMaterial::Popover)
     }
 
@@ -575,11 +579,11 @@ fn effects_off_at_start_never_activates_and_draws_fallback_fill() {
     for (idx, off_policy) in disabled_policies.into_iter().enumerate() {
         let hwnd = 0x9000 + idx as isize;
         let mut rt = Runtime::new((), view, (400.0, 120.0), Env::new(true, 1.0));
-        let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+        let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
         let mut seam = FakeSeam::default();
 
         // Frame 1 starts with native_materials = false (fallback fill drawn).
-        rt.paint.set_native_materials(ctrl.native());
+        rt.paint.set_windows_acrylic_materials(ctrl.native());
         rt.frame(0.0);
         let found = !rt.system_materials().is_empty();
         assert!(found, "material draw is still collected while fallback is active");
@@ -606,7 +610,7 @@ fn effects_off_at_start_never_activates_and_draws_fallback_fill() {
             Call::SetHostBackdropBrush(hwnd, true),
         ]);
         // Rebuilt frame with native_materials = true omits the fallback fill.
-        rt.paint.set_native_materials(ctrl.native());
+        rt.paint.set_windows_acrylic_materials(ctrl.native());
         rt.frame(0.0);
         assert!(
             rt.instances.iter().all(|inst| inst.fill[3] == 0.0),
@@ -617,25 +621,23 @@ fn effects_off_at_start_never_activates_and_draws_fallback_fill() {
 
 #[test]
 fn effects_disabled_while_mounted_tears_down_and_repaints_fallback_then_reactivates() {
-    use crate::{Color, Env, Runtime, el};
+    use crate::{Env, Runtime, el};
 
-    const FALLBACK: Color = Color { r: 0.12, g: 0.12, b: 0.14, a: 0.92 };
     fn view(_: &(), _: &mut crate::Cx<()>) -> crate::El {
         el().key("pill")
             .size(220.0, 48.0)
             .radius(24.0)
-            .fill(FALLBACK)
             .system_material(SystemMaterial::Popover)
     }
     let hwnd = 0xA001;
     let mut rt = Runtime::new((), view, (400.0, 120.0), Env::new(true, 1.0));
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::default();
 
     // Activate on Frame 1 when effects are enabled.
     rt.frame(0.0);
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
-    rt.paint.set_native_materials(ctrl.native());
+    rt.paint.set_windows_acrylic_materials(ctrl.native());
     rt.frame(0.0);
     assert!(present_frame(&mut ctrl, rt.system_materials(), true, &mut seam));
     assert!(rt.instances.iter().all(|inst| inst.fill[3] == 0.0));
@@ -657,7 +659,7 @@ fn effects_disabled_while_mounted_tears_down_and_repaints_fallback_then_reactiva
     seam.clear();
 
     // Redraw paints fallback fill and makes zero seam calls while still off.
-    rt.paint.set_native_materials(ctrl.native());
+    rt.paint.set_windows_acrylic_materials(ctrl.native());
     rt.frame(0.0);
     assert!(rt.instances.iter().any(|inst| inst.fill[3] > 0.5), "fallback fill must draw");
     let off_inputs = MaterialInputs { effects: transparency_off, ..base_inputs() };
@@ -685,14 +687,14 @@ fn effects_disabled_while_mounted_tears_down_and_repaints_fallback_then_reactiva
         Call::SetHostBackdropBrush(hwnd, false),
         Call::SetHandoverTopmost(hwnd, false),
     ]);
-    rt.paint.set_native_materials(ctrl.native());
+    rt.paint.set_windows_acrylic_materials(ctrl.native());
     rt.frame(0.0);
     assert!(rt.instances.iter().any(|inst| inst.fill[3] > 0.5), "same-frame rebuild draws fallback fill");
 }
 
 #[test]
 fn policy_changed_is_noop_without_mounted_materials_or_when_failed() {
-    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
     let mut seam = FakeSeam::default();
 
     // Window with no material elements never redraws or touches the seam on policy changes.
@@ -794,14 +796,8 @@ fn present_runs_before_visual_update_and_commit_across_fractional_scales() {
         let (w, h, r) = if s.expanded { s.large_dims } else { s.small_dims };
         let label = if s.expanded { "Expanded HUD pill (300 ms spring)" } else { "Dynamic pill" };
         let fg = if cx.system_dark() { Color::WHITE } else { Color { r: 0.08, g: 0.08, b: 0.1, a: 1.0 } };
-        let fallback = if cx.system_dark() {
-            Color { r: 0.12, g: 0.12, b: 0.14, a: 0.92 }
-        } else {
-            Color { r: 0.94, g: 0.94, b: 0.96, a: 0.92 }
-        };
         col().key("overlay-root").w_full().h_full().items_center().pt(24.0).child(
             row().key("overlay-pill").size(w, h).radius(r).px(20.0).center().clip_soft(0.0)
-                .fill(fallback)
                 .border(1.0, fg.alpha(0.22))
                 .shadow(10.0, 28.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.32 })
                 .system_material(SystemMaterial::Popover)
@@ -823,11 +819,11 @@ fn present_runs_before_visual_update_and_commit_across_fractional_scales() {
                 (720.0, 200.0),
                 Env::new(true, scale),
             );
-            let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+            let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::Acrylic);
             let mut seam = FakeSeam::default();
             rt.frame(0.0);
             assert!(ctrl.update(Some(0xD001), base_inputs(), true, &mut seam));
-            rt.paint.set_native_materials(true);
+            rt.paint.set_windows_acrylic_materials(true);
             rt.frame(0.0);
             assert!(present_frame(&mut ctrl, rt.system_materials(), true, &mut seam));
             seam.clear();

@@ -20,6 +20,12 @@ pub(crate) struct PaintState {
     /// Wayland compositor behind-window blur backs `El::system_material` elements on this
     /// transparent surface when `WindowBackdrop::None` is active.
     pub(super) wayland_blur_materials: bool,
+    /// Windows 11 Acrylic behind-window blur backs non-opaque `El::system_material` elements on
+    /// this transparent DirectComposition surface using Wayland-aligned fill rules (opaque fills
+    /// stay opaque and unblurred; translucent fills tint over Acrylic; no fill paints transparent
+    /// so Acrylic supplies the theme-aware system tint).
+    #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+    pub(super) windows_acrylic_materials: bool,
     /// A drawn video is playing or seeking: keep drawing frames.
     pub(super) videos_active: bool,
     /// A drawn animated SVG icon is advancing right now: keep drawing frames.
@@ -91,6 +97,11 @@ pub(crate) struct PaintState {
     /// Wayland blur regions emitted by `El::system_material` elements this frame (empty unless
     /// `wayland_blur_materials` is enabled).
     pub(super) wayland_material_blurs: Vec<crate::system_material::WaylandMaterialBlur>,
+    /// Non-opaque `El::system_material` draws eligible for Windows 11 Acrylic visuals this frame
+    /// (excludes elements whose resolved fill is opaque `alpha * opacity >= 1.0`, while
+    /// `materials` still records all visible material elements for `Runtime::system_materials`).
+    #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+    pub(super) windows_material_draws: Vec<crate::system_material::MaterialDraw>,
     /// Per-window cap on native `El::system_material` views (default `MAX_NATIVE_MATERIALS`,
     /// clamped to `MAX_NATIVE_MATERIALS_CAP`).
     pub(super) max_native_materials: usize,
@@ -120,6 +131,8 @@ impl PaintState {
             srgb_blend: true,
             native_materials: false,
             wayland_blur_materials: false,
+            #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+            windows_acrylic_materials: false,
             videos_active: false,
             animated_icons: false,
             animated_icons_shown: false,
@@ -157,6 +170,8 @@ impl PaintState {
             text_quads: quads::TextQuads::new(),
             materials: Vec::new(),
             wayland_material_blurs: Vec::new(),
+            #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+            windows_material_draws: Vec::new(),
             max_native_materials: crate::MAX_NATIVE_MATERIALS,
             material_fallbacks: Vec::new(),
             material_fallback_warned: false,
@@ -213,10 +228,16 @@ impl PaintState {
         }
     }
 
-    #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+    #[cfg(any(test, target_os = "macos"))]
     #[inline]
     pub(crate) fn set_native_materials(&mut self, native: bool) {
         self.native_materials = native;
+    }
+
+    #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+    #[inline]
+    pub(crate) fn set_windows_acrylic_materials(&mut self, on: bool) {
+        self.windows_acrylic_materials = on;
     }
 
     #[inline]
@@ -230,6 +251,10 @@ impl PaintState {
 
     #[inline]
     pub(crate) fn tracks_native_materials(&self) -> bool {
+        #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+        if self.windows_acrylic_materials {
+            return true;
+        }
         self.native_materials || self.wayland_blur_materials
     }
 
@@ -527,11 +552,19 @@ impl PaintState {
         self.materials.clear();
         self.material_fallbacks.clear();
         self.wayland_material_blurs.clear();
+        #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+        self.windows_material_draws.clear();
     }
 
     #[inline]
     pub(crate) fn materials(&self) -> &[crate::system_material::MaterialDraw] {
         &self.materials
+    }
+
+    #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+    #[inline]
+    pub(crate) fn windows_material_draws(&self) -> &[crate::system_material::MaterialDraw] {
+        &self.windows_material_draws
     }
 
     #[cfg_attr(

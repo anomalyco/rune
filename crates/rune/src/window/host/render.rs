@@ -445,7 +445,7 @@ pub(super) fn submit_and_present_window(
     #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
     let materials_ok = {
         let rt = host.app.rt();
-        let (draws, _) = crate::system_material::present_draws(rt);
+        let draws = crate::system_material::windows_present_draws(rt);
         let dark = rt.env.system_dark;
         let native = &mut l.native;
         native.materials.present(draws, dark, native.mode.handover_mut(), || {
@@ -456,7 +456,7 @@ pub(super) fn submit_and_present_window(
     gpu.queue.present(prepared.frame);
     #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
     if !materials_ok {
-        host.app.rt_mut().paint.set_native_materials(false);
+        host.app.rt_mut().paint.set_windows_acrylic_materials(false);
         l.request_redraw();
     }
     // A window that opened on the CPU is the GPU's from this frame (`linux::handover`).
