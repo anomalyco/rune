@@ -1,0 +1,1 @@
+- `scripts/rune-dev`: a body-only edit to a method in an inherent impl (`impl S { fn view(&self) ... }`) now hot patches like a free function body instead of asking for a restart (#2413); `const fn` methods, methods or impls with attributes other than `doc`, `inline`, `cold` and `allow`, impl headers, signatures, other impl items and trait impl methods still need a restart.
