@@ -369,10 +369,14 @@ impl<T: 'static> ConfiguredOverlay<T> {
     ///
     /// Update at runtime with
     /// [`OverlayHandle::set_window_backdrop`](crate::OverlayHandle::set_window_backdrop) or
-    /// [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop), and read the OS-confirmed
-    /// backdrop with [`Cx::window_backdrop`](crate::Cx::window_backdrop). Note that Windows 11
-    /// Mica and Desktop Acrylic follow window activation by design, so non-activating overlays
-    /// (`KeyPolicy::None`) may display the OS solid inactive fallback colour.
+    /// [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop), and read whether the OS
+    /// accepted the backdrop attribute with [`Cx::window_backdrop`](crate::Cx::window_backdrop).
+    ///
+    /// By Microsoft design, Windows 11 draws Mica, Mica Alt, and Desktop Acrylic only while the
+    /// window is the foreground window and shows its own flat solid fallback otherwise. A
+    /// non-activating overlay ([`KeyPolicy::None`]) never takes focus and therefore never shows
+    /// the live material—even while `cx.window_backdrop().is_active()` is `true`. Pair with
+    /// [`Self::on_focus`] (on a key-taking overlay) to tell "active and focused" from "active".
     ///
     /// ```no_run
     /// use rune::{OverlayOptions, OverlaySpec, WindowBackdrop, el};

@@ -225,9 +225,11 @@ impl WindowHandle {
     /// at runtime, retained across native window recreation.
     ///
     /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows, this updates
-    /// `DWMWA_SYSTEMBACKDROP_TYPE` and reports the confirmed state through
-    /// [`Cx::window_backdrop`](crate::Cx::window_backdrop). Safe to call from any thread; requests
-    /// made before the window starts apply once it does. Ignored on web and headless.
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` and reports whether the OS accepted the attribute through
+    /// [`Cx::window_backdrop`](crate::Cx::window_backdrop) (Windows draws the live material only
+    /// while the window is the foreground window and shows a flat fallback while unfocused). Safe
+    /// to call from any thread; requests made before the window starts apply once it does. Ignored
+    /// on web and headless.
     ///
     /// ```no_run
     /// use rune::{AppSpec, WindowBackdrop, WindowSpec, el};

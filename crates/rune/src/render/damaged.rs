@@ -56,6 +56,12 @@ impl Renderer {
     /// most `MAX_RECTS`) of a `size` drawable of `format`, cleared to `clear`.
     pub(crate) fn arm_damage(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, rects: &[[u32; 4]], clear: [f32; 4], size: (u32, u32), format: wgpu::TextureFormat) {
         let mut d = self.damage.lock().unwrap();
+        // The clearing quad blends: only an opaque clear stands for `LoadOp::Clear`.
+        if clear[3] != 1.0 {
+            d.armed.clear();
+            d.drawn = Some(Err("clear"));
+            return;
+        }
         if d.retained.as_ref().is_none_or(|r| (r.texture.width(), r.texture.height()) != size || r.texture.format() != format) {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("last frame"),
@@ -208,6 +214,11 @@ impl Renderer {
         #[cfg(target_os = "windows")]
         let looped = std::mem::take(&mut d.looped);
         if d.armed.is_empty() { return false; }
+        if d.clear[3] != 1.0 {
+            d.armed.clear();
+            d.drawn = Some(Err("clear"));
+            return false;
+        }
         if let Err(why) = self.redraws_in_place() {
             d.drawn = Some(Err(why));
             return false;
@@ -373,3 +384,7 @@ fn cull_runs(instances: &[Instance], units: &Units, rects: &[[i32; 4]], always: 
     let layers = units.iter().any(|(u, _)| instances[u.start as usize].kind() == Some(Kind::Layer) && runs.iter().flatten().any(|r| r.start <= u.start && u.end <= r.end));
     (rects.iter().map(|r| [r[0] as u32, r[1] as u32, (r[2] - r[0]) as u32, (r[3] - r[1]) as u32]).collect(), runs, layers)
 }
+
+#[cfg(test)]
+#[path = "damaged_tests.rs"]
+mod tests;

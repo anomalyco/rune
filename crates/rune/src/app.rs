@@ -532,16 +532,27 @@ impl<S: 'static> App<S> {
     /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows
     /// (`WindowOptions { transparent: true, .. }`), this applies the documented
     /// `DWMWA_SYSTEMBACKDROP_TYPE` attribute. Views read [`Cx::window_backdrop`](crate::Cx::window_backdrop)
-    /// to see what the OS actually activated. Update at runtime with
-    /// [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop) or
+    /// to see whether the OS accepted the backdrop attribute.
+    ///
+    /// By Microsoft design, Windows draws Mica, Mica Alt, and Desktop Acrylic only while the window
+    /// is the foreground window and shows its own solid neutral fallback when unfocused (so a
+    /// non-activating window or overlay that never takes focus never shows the live material, even
+    /// while `cx.window_backdrop().is_active()` is `true`). Pair `cx.window_backdrop()` with
+    /// [`App::on_focus`](Self::on_focus) or [`El::on_window_focus`](crate::El::on_window_focus)
+    /// when a view needs to distinguish "backdrop active and focused" from "backdrop active".
+    /// Update at runtime with [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop) or
     /// [`WindowHandle::set_window_backdrop`](crate::WindowHandle::set_window_backdrop).
     ///
     /// ```no_run
     /// use rune::{App, AppSpec, Color, WindowBackdrop, WindowOptions, el};
     ///
+    /// struct State { focused: bool }
+    ///
     /// let opts = WindowOptions { transparent: true, ..Default::default() };
-    /// let spec = AppSpec::new("Notes", (800.0, 600.0), || (), |_, cx| {
-    ///     let bg = if cx.window_backdrop().is_active() {
+    /// let spec = AppSpec::new("Notes", (800.0, 600.0), || State { focused: true }, |s, cx| {
+    ///     // Check `s.focused` as well if you want a custom fill instead of Windows' flat
+    ///     // unfocused fallback while the window is in the background.
+    ///     let bg = if cx.window_backdrop().is_active() && s.focused {
     ///         Color::TRANSPARENT
     ///     } else {
     ///         rune::tok::theme(cx.system_dark()).bg
@@ -551,6 +562,7 @@ impl<S: 'static> App<S> {
     /// App::new(spec)
     ///     .window_options(opts)
     ///     .window_backdrop(WindowBackdrop::Mica)
+    ///     .on_focus(|s, focused, _| s.focused = focused)
     ///     .run();
     /// ```
     pub fn window_backdrop(mut self, backdrop: crate::WindowBackdrop) -> Self {
