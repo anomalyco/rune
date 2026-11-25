@@ -27,7 +27,7 @@ fn draw(gpu: &Gpu, fx: &mut FxRenderer, format: wgpu::TextureFormat, layers: &[F
 
 #[test]
 fn pipelines_are_built_for_what_frames_draw() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let window = wgpu::TextureFormat::Rgba8UnormSrgb;
     let layer = wgpu::TextureFormat::Rgba16Float;
     let mut fx = FxRenderer::new(&gpu.device, window, FxOptions::default());

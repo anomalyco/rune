@@ -68,7 +68,7 @@ fn frames(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<Vec<u16>> {
 
 #[test]
 fn simulated_fire_matches_wgpus_frame_for_frame() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let got = frames(&gpu.device, &gpu.queue);
     let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
     if cfg!(target_os = "windows") {
@@ -77,7 +77,7 @@ fn simulated_fire_matches_wgpus_frame_for_frame() {
         desc.backends = wgpu::Backends::DX12;
         desc.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::Fxc;
     }
-    let wgpu = Gpu::new(wgpu::Instance::new(desc), None);
+    let Some(wgpu) = Gpu::test_on(wgpu::Instance::new(desc)) else { return };
     let want = frames(&wgpu.device, &wgpu.queue);
     for (n, (got, want)) in got.iter().zip(&want).enumerate() {
         assert!(got.iter().all(|w| w & 0x7c00 != 0x7c00), "frame {n} is finite");
