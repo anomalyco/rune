@@ -168,6 +168,13 @@ impl window_requests::HostState {
     pub(crate) fn overlay_scroll_bars(&self) -> bool {
         self.scroll_bars.state.is_overlay()
     }
+
+    #[inline]
+    pub(super) fn set_window_manager_state(&mut self, state: crate::WindowManagerState) -> bool {
+        if state == self.wm_state { return false; }
+        self.wm_state = state;
+        true
+    }
 }
 
 impl RuntimeCore {
@@ -289,5 +296,22 @@ impl RuntimeCore {
     #[inline]
     pub fn set_system_scroller_jumps(&mut self, jumps: bool) {
         if self.host.set_system_scroller_jumps(jumps) { self.commit.dirty = true; }
+    }
+
+    /// What [`Cx::decoration_mode`], [`Cx::tiled_edges`], and [`Cx::window_actions`] report.
+    /// Updates the stored state and marks the runtime dirty when it changed and the last
+    /// committed view read any of those accessors. Returns whether the runtime was dirtied.
+    #[inline]
+    pub(crate) fn sync_window_manager_state(&mut self, state: crate::WindowManagerState) -> bool {
+        if !self.host.set_window_manager_state(state) { return false; }
+        if !self.host.wm_state_read { return false; }
+        self.commit.dirty = true;
+        true
+    }
+
+    /// What [`Cx::decoration_mode`], [`Cx::tiled_edges`], and [`Cx::window_actions`] report.
+    #[inline]
+    pub fn set_window_manager_state(&mut self, state: crate::WindowManagerState) {
+        let _ = self.sync_window_manager_state(state);
     }
 }

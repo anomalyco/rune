@@ -95,6 +95,9 @@ pub(crate) struct HostState {
     pub(in crate::runtime) a11y: Option<Box<crate::a11y::tree::A11yTree>>,
     /// The band of a taller document the window draws (`App::web_document`).
     pub(in crate::runtime) page: Option<web_page::Page>,
+    pub(in crate::runtime) wm_state: crate::WindowManagerState,
+    /// Whether the last committed view read `Cx::decoration_mode`, `Cx::tiled_edges`, or `Cx::window_actions`.
+    pub(in crate::runtime) wm_state_read: bool,
 }
 
 impl HostState {
@@ -151,6 +154,8 @@ impl HostState {
             haptics: Default::default(),
             a11y: None,
             page: None,
+            wm_state: crate::WindowManagerState::default(),
+            wm_state_read: false,
         }
     }
 

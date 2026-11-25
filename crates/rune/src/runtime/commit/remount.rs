@@ -321,7 +321,7 @@ impl Measurement<'_> {
             self.system_reduced_motion,
             self.languages_gen,
             crate::theme::blends_srgb(),
-            self.chrome_bits(),
+            self.memo_chrome_bits(),
             self.caret.clone(),
             self.layout_seen.clone(),
         );
@@ -748,6 +748,7 @@ impl Measurement<'_> {
             defaults: self.defaults.clone(),
             titlebar: self.titlebar,
             caret_read: self.caret_read,
+            wm_state_read: None,
             layout_reads: self.layout_reads,
             memo_flattened: Some(pending),
             memo_reused: reused,

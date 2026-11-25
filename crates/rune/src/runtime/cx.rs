@@ -76,6 +76,8 @@ pub(crate) struct CxCore {
     pub(super) zoom: f32,
     pub(super) caret: Option<(String, [f32; 4])>,
     pub(super) caret_read: std::cell::Cell<bool>,
+    pub(super) wm_state: crate::WindowManagerState,
+    pub(super) wm_state_read: std::cell::Cell<bool>,
     pub(super) layout: layout_read::LayoutRects,
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
 }
@@ -96,6 +98,7 @@ impl CxCore {
         self.zoom = other.zoom;
         self.defaults = other.defaults;
         self.caret_read.set(self.caret_read.get() || other.caret_read.get());
+        self.wm_state_read.set(self.wm_state_read.get() || other.wm_state_read.get());
         let mut reads = self.layout_reads.borrow_mut();
         for read in other.layout_reads.into_inner() {
             layout_read::note_read_at(&mut reads, &read.key, read.same, read.at);
@@ -107,6 +110,7 @@ impl CxCore {
     }
 
     pub(crate) fn clear_chrome(&mut self) {
+        self.wm_state = crate::WindowManagerState::default();
         self.titlebar_inset = 0.0;
         self.chrome = crate::ChromeInsets::default();
         self.maximized = false;
@@ -172,6 +176,18 @@ impl CxCore {
         crate::memo::read_caret(key, rect);
         rect
     }
+    pub(crate) fn decoration_mode(&self) -> crate::DecorationMode {
+        self.wm_state_read.set(true);
+        self.wm_state.decoration_mode
+    }
+    pub(crate) fn tiled_edges(&self) -> Option<crate::TiledEdges> {
+        self.wm_state_read.set(true);
+        self.wm_state.tiled_edges
+    }
+    pub(crate) fn window_actions(&self) -> crate::WindowActions {
+        self.wm_state_read.set(true);
+        self.wm_state.actions
+    }
 }
 
 /// Passed to view functions: the environment, plus runtime settings a view may declare.
@@ -230,6 +246,76 @@ impl<S> Cx<S> {
     /// window would.
     #[inline(always)]
     pub fn chrome_insets(&self) -> crate::ChromeInsets { self.core.chrome_insets() }
+    /// Confirmed decoration mode reported by the window manager or compositor.
+    ///
+    /// - **Linux X11**: read from `_NET_FRAME_EXTENTS` (any non-zero extent ->
+    ///   [`DecorationMode::Server`], all zeroes -> [`DecorationMode::Client`], absent ->
+    ///   [`DecorationMode::Unknown`]). Never inferred from missing actions or `is_decorated()`.
+    /// - **Wayland, macOS, Windows, web, overlays, adopted macOS panels, staged playground
+    ///   subviews, and headless runs**: [`DecorationMode::Unknown`] unless set in headless runs
+    ///   with [`Runtime::set_window_manager_state`].
+    ///
+    /// Views that read this accessor (and their `memo` closures) rebuild automatically when it
+    /// changes.
+    ///
+    /// ```
+    /// # use rune::{Cx, DecorationMode, El, text};
+    /// fn header(_: &(), cx: &mut Cx<()>) -> El {
+    ///     text(match cx.decoration_mode() {
+    ///         DecorationMode::Client => "CSD",
+    ///         DecorationMode::Server => "SSD",
+    ///         _ => "Unknown",
+    ///     })
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn decoration_mode(&self) -> crate::DecorationMode { self.core.decoration_mode() }
+    /// Confirmed per-edge tiled state reported by the window manager or compositor.
+    ///
+    /// Returns `None` when unknown and `Some(TiledEdges::NONE)` when known untiled.
+    ///
+    /// - **Linux X11**: read from `_GTK_EDGE_CONSTRAINTS` (bits 0=top, 2=right, 4=bottom, 6=left),
+    ///   returning `Some(TiledEdges::NONE)` when absent while advertised in `_NET_SUPPORTED`, and
+    ///   `None` otherwise.
+    /// - **Wayland, macOS, Windows, web, overlays, adopted macOS panels, staged playground
+    ///   subviews, and headless runs**: `None` unless set in headless runs with
+    ///   [`Runtime::set_window_manager_state`].
+    ///
+    /// Views that read this accessor (and their `memo` closures) rebuild automatically when it
+    /// changes.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, el};
+    /// fn frame(_: &(), cx: &mut Cx<()>) -> El {
+    ///     let tiled = cx.tiled_edges().is_some_and(|e| e.any());
+    ///     el().radius(if tiled { 0.0 } else { 10.0 })
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn tiled_edges(&self) -> Option<crate::TiledEdges> { self.core.tiled_edges() }
+    /// Window actions the window manager allows for this window, with `None` for any action the
+    /// platform or window manager did not report.
+    ///
+    /// - **Linux X11**: `minimize`, `maximize` (`_NET_WM_ACTION_MAXIMIZE_HORZ` and
+    ///   `_NET_WM_ACTION_MAXIMIZE_VERT`), `fullscreen`, and `close` from per-window
+    ///   `_NET_WM_ALLOWED_ACTIONS`; `window_menu` from `_GTK_SHOW_WINDOW_MENU` in root
+    ///   `_NET_SUPPORTED`.
+    /// - **Wayland, macOS, Windows, web, overlays, adopted macOS panels, staged playground
+    ///   subviews, and headless runs**: all `None` unless set in headless runs with
+    ///   [`Runtime::set_window_manager_state`].
+    ///
+    /// Views that read this accessor (and their `memo` closures) rebuild automatically when it
+    /// changes.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, text};
+    /// fn buttons(_: &(), cx: &mut Cx<()>) -> El {
+    ///     let can_max = cx.window_actions().maximize != Some(false);
+    ///     text(if can_max { "Maximize" } else { "No maximize" })
+    /// }
+    /// ```
+    #[inline(always)]
+    pub fn window_actions(&self) -> crate::WindowActions { self.core.window_actions() }
     /// Whether the host window is currently maximized (zoomed on macOS), as confirmed by the
     /// window system. The view and any `memo` closures rebuild automatically when this changes;
     /// `Tx::toggle_maximized` never flips it optimistically before the OS confirms the change.

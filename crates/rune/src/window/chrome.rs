@@ -91,6 +91,27 @@ pub(in crate::window) fn sync_chrome_core(rt: &mut RuntimeCore, w: &Win, chrome:
     rt.set_caption(caption);
     rt.set_maximized(w.is_maximized());
     rt.set_full_screen(full_screen);
+    let _ = sync_wm_state_core(rt, w);
+}
+
+/// Reads platform window-manager state (decoration mode, tiled edges, allowed actions) and updates
+/// `rt`, returning whether the view was dirtied. Only X11 queries properties today; Wayland,
+/// macOS, and Windows honestly leave the state at its default unknown values.
+pub(in crate::window) fn sync_wm_state_core(rt: &mut RuntimeCore, w: &Win) -> bool {
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        let state = if is_wayland_window(&w.window) {
+            crate::WindowManagerState::default()
+        } else {
+            crate::platform::x11::wm_state::read(&w.window)
+        };
+        rt.sync_window_manager_state(state)
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    {
+        let _ = (rt, w);
+        false
+    }
 }
 
 /// The traffic lights sit at the window's right: a right-to-left app on macOS.

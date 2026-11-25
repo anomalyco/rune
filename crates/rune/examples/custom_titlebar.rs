@@ -42,6 +42,9 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
     let insets = cx.chrome_insets();
     let full_screen = cx.is_full_screen();
     let inset = cx.titlebar_inset();
+    let decoration_mode = cx.decoration_mode();
+    let tiled_edges = cx.tiled_edges();
+    let window_actions = cx.window_actions();
     let button = |key: &'static str, label: &'static str| row().key(key).px(10.0).h(28.0).radius(6.0).center_y()
         .fill(faint.alpha(0.2)).hover(faint.alpha(0.3)).press(faint.alpha(0.45)).role("button").label(label)
         .child(text(label).color(ink));
@@ -74,6 +77,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
             .child(text("Drag the band to move the window; double-click it to maximize; right-click it for the window menu.").color(ink).wrap())
             .child(note)
             .child(line(format!("chrome insets: leading {:.0}, trailing {:.0}, height {:.0} | full screen: {}, titlebar inset: {:.0}", insets.leading, insets.trailing, insets.height, full_screen, inset)))
+            .child(line(format!("wm: mode {:?} | tiled {:?} | actions menu={:?} max={:?} min={:?} full={:?} close={:?}", decoration_mode, tiled_edges, window_actions.window_menu, window_actions.maximize, window_actions.minimize, window_actions.fullscreen, window_actions.close)))
             .child(line(format!("scale {:.2}, theme presses {}", cx.env().scale, s.presses)))
             .child(line(format!(
                 "caption labels: {} / {} ({}) / {}",

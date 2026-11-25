@@ -208,6 +208,22 @@ impl<S: 'static> Runtime<S> {
     pub fn set_system_dark(&mut self, dark: bool) { self.core_mut().set_system_dark(dark); }
     #[inline(always)]
     pub fn set_titlebar_inset(&mut self, points: f32) { self.core_mut().set_titlebar_inset(points); }
+    /// Sets what [`Cx::decoration_mode`], [`Cx::tiled_edges`], and [`Cx::window_actions`] report,
+    /// marking the view dirty when it changes and the last committed view read any of them.
+    ///
+    /// ```
+    /// # use rune::{Cx, DecorationMode, El, Env, Runtime, WindowManagerState, el};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     el().w(if cx.decoration_mode() == DecorationMode::Client { 100.0 } else { 50.0 })
+    /// }
+    /// let mut rt = Runtime::new((), view, (200.0, 100.0), Env::default());
+    /// rt.set_window_manager_state(WindowManagerState::default().with_decoration_mode(DecorationMode::Client));
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_window_manager_state(&mut self, state: crate::WindowManagerState) {
+        self.core_mut().set_window_manager_state(state);
+    }
     /// Sets what [`Cx::is_maximized`] reports, marking the view dirty when it changes.
     ///
     /// Native windows update this from confirmed OS window state on create, resize, scale change,
