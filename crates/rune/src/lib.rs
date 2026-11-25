@@ -63,6 +63,7 @@ pub use clipboard::ClipboardImage;
 pub use clipboard::ClipboardWrite;
 pub use clipboard::SecretCopy;
 pub use clipboard::SecretState;
+pub use clipboard::WebFile;
 pub use color::Color;
 pub use color::oklch;
 pub use color::oklcha;
