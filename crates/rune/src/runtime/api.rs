@@ -601,6 +601,12 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn take_url_requests(&mut self) -> Vec<String> { self.core_mut().host.take_url_requests() }
 
+    /// Takes the schemes [`AppHandle::register_url_scheme`](crate::AppHandle::register_url_scheme)
+    /// asked to claim that this runtime didn't claim with the system (lowercased, in order): all
+    /// of them in headless runs and tests, none in a live window.
+    #[inline(always)]
+    pub fn take_url_scheme_requests(&mut self) -> Vec<String> { self.core_mut().host.take_url_scheme_requests() }
+
     /// Takes the local path open and reveal requests queued by [`Tx::open_path`] and
     /// [`Tx::reveal_path`] that this runtime didn't execute natively (all of them in headless runs
     /// and tests, none in a live desktop window).
