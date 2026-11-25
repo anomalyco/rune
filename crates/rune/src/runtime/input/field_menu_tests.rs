@@ -459,3 +459,276 @@ fn disabled_and_aria_disabled_text_inputs_with_on_edit_are_not_secondary_targets
         "read_only input must stay distinct from disabled"
     );
 }
+
+#[test]
+fn modal_menu_resolve_field_menu_refocuses_and_runs_cut_copy_paste_select_all_and_spellcheck() {
+    struct ModalState {
+        edit: TextEdit,
+        spellcheck: bool,
+        menu: Option<FieldMenuRequest>,
+        keep_open: bool,
+        root_pastes: usize,
+    }
+
+    fn modal_view(s: &ModalState, _: &mut Cx<ModalState>) -> El {
+        let mut root = col()
+            .size(400.0, 300.0)
+            .on_paste(|s: &mut ModalState, _, _| s.root_pastes += 1)
+            .on_spellcheck(s.spellcheck, |s: &mut ModalState, on, _| s.spellcheck = on)
+            .child(
+                text_input(&s.edit, TextStyle::new(14.0, 400.0))
+                    .key("field")
+                    .label("Modal field")
+                    .on_edit(|s: &mut ModalState| &mut s.edit)
+                    .size(200.0, 32.0),
+            );
+        if let Some(req) = &s.menu {
+            let keep_open = s.keep_open;
+            let mut surface = col()
+                .key("field-menu")
+                .role("menu")
+                .focus_group()
+                .focus_return("missing-trigger")
+                .absolute(req.point().x, req.point().y)
+                .modal_tx(true, |s: &mut ModalState, tx: &mut Tx| {
+                    s.menu = None;
+                    tx.resolve_field_menu(None);
+                });
+            for entry in req.menu().entries() {
+                if let PopupEntry::Item(item) = entry {
+                    let id = item.id().to_owned();
+                    let enabled = item.is_enabled();
+                    let mut row = el()
+                        .key(format!("fm-{id}"))
+                        .role("menuitem")
+                        .size(120.0, 24.0)
+                        .focusable(enabled)
+                        .disabled(!enabled);
+                    if enabled {
+                        row = row.on_press_tx(move |s: &mut ModalState, tx: &mut Tx| {
+                            if !keep_open {
+                                s.menu = None;
+                            }
+                            tx.resolve_field_menu(Some(&id));
+                        });
+                    }
+                    surface = surface.child(row);
+                }
+            }
+            root = root.child(surface);
+        }
+        root
+    }
+
+    let board = crate::clipboard::memory();
+    let spec = AppSpec::new(
+        "modal-field-menu",
+        (400.0, 300.0),
+        || {
+            let mut edit = TextEdit::new("hello world");
+            edit.set_selection(0, 5);
+            ModalState { edit, spellcheck: true, menu: None, keep_open: false, root_pastes: 0 }
+        },
+        modal_view,
+    );
+    let mut rt = App::new(spec)
+        .on_field_menu(|s: &mut ModalState, req: FieldMenuRequest, _| s.menu = Some(req))
+        .headless_runtime((400.0, 300.0), Env::new(true, 1.0));
+    rt.core_mut().host.force_field_menu_fallback = true;
+    rt.use_clipboard(&board);
+    rt.frame(0.0);
+
+    let click = |rt: &mut Runtime<ModalState>, key: &str| {
+        let (x, y) = rt.find(key).unwrap_or_else(|| panic!("missing {key}"));
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+    };
+
+    // Open field menu via ContextMenu key -> mounts modal menu.
+    rt.update(|s, _| { s.edit.focused = true; s.edit.set_selection(0, 5); });
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    assert!(rt.state.menu.is_some());
+    assert!(rt.core().active_modal().is_some(), "modal menu is active");
+
+    // 1. Clicking Cut in the modal menu closes it, refocuses the field, copies, and edits in one frame.
+    click(&mut rt, "fm-cut");
+    assert!(rt.state.menu.is_none());
+    assert!(rt.state.edit.focused, "field refocuses after modal Cut");
+    assert_eq!(board.content().as_ref().map(|c| c.text()), Some("hello"), "modal Cut copies selection");
+    assert_eq!(rt.state.edit.text, " world", "modal Cut removes selected text");
+
+    // 2. Clicking Paste in the modal menu pastes into the field (never leaking to root on_paste).
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    click(&mut rt, "fm-paste");
+    assert_eq!(rt.state.root_pastes, 0, "paste must not leak to unfocused root on_paste");
+    assert!(rt.state.edit.focused, "field refocuses after modal Paste");
+    assert_eq!(rt.state.edit.text, "hello world", "modal Paste inserts clipboard text into field");
+
+    // 3. Clicking Copy from the modal menu copies the new selection.
+    rt.update(|s, _| s.edit.set_selection(6, 11));
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    click(&mut rt, "fm-copy");
+    assert_eq!(board.content().as_ref().map(|c| c.text()), Some("world"), "modal Copy copies selection");
+
+    // 4. Clicking Spellcheck toggles app spellcheck and refocuses field.
+    assert!(rt.state.spellcheck);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    click(&mut rt, "fm-spellcheck");
+    assert!(!rt.state.spellcheck, "modal Spellcheck toggles state");
+
+    // 5. Clicking Select All off macOS selects the whole field.
+    if !cfg!(target_os = "macos") {
+        rt.update(|s, _| s.edit.set_caret(0));
+        rt.frame(0.0);
+        rt.key(KeyEvent::from(Key::ContextMenu));
+        rt.frame(0.0);
+        click(&mut rt, "fm-select-all");
+        assert_eq!(rt.state.edit.range(), (0, "hello world".len()), "modal Select All selects all text");
+    }
+
+    // 6. Closing the modal and resolving from Runtime::update works on the next frame too.
+    rt.update(|s, _| s.edit.set_selection(0, 5));
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    assert!(rt.core().active_modal().is_some());
+    rt.update(|s, tx| { s.menu = None; tx.resolve_field_menu(Some("copy")); });
+    rt.frame(0.0);
+    assert_eq!(board.content().as_ref().map(|c| c.text()), Some("hello"), "update closing modal + resolve_field_menu works");
+
+    // 7. If the handler leaves the modal open, the action does not fire behind the active modal.
+    rt.update(|s, _| { s.edit.set_selection(0, 5); s.keep_open = true; });
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::ContextMenu));
+    rt.frame(0.0);
+    click(&mut rt, "fm-cut");
+    assert!(rt.state.menu.is_some());
+    assert_eq!(rt.state.edit.text, "hello world", "blocked behind modal that stayed open");
+    assert!(rt.core().host.field_menu_fallback.is_some(), "fallback stays pending when modal did not close");
+}
+
+#[test]
+fn dismiss_repost_onto_second_field_does_not_clobber_new_field_menu() {
+    struct TwoFields {
+        a: TextEdit,
+        b: TextEdit,
+        menu: Option<FieldMenuRequest>,
+        opened_keys: Vec<Option<String>>,
+    }
+
+    fn two_view(s: &TwoFields, _: &mut Cx<TwoFields>) -> El {
+        let st = TextStyle::new(14.0, 400.0);
+        let mut root = col()
+            .size(400.0, 300.0)
+            .gap(16.0)
+            .child(
+                text_input(&s.a, st)
+                    .key("field-a")
+                    .label("Field A")
+                    .on_edit(|s: &mut TwoFields| &mut s.a)
+                    .size(200.0, 32.0),
+            )
+            .child(
+                text_input(&s.b, st)
+                    .key("field-b")
+                    .label("Field B")
+                    .on_edit(|s: &mut TwoFields| &mut s.b)
+                    .size(200.0, 32.0),
+            );
+        if let Some(req) = &s.menu {
+            let mut surface = col()
+                .key("field-menu")
+                .role("menu")
+                .focus_group()
+                .absolute(220.0, 120.0)
+                .modal_tx(true, |s: &mut TwoFields, tx: &mut Tx| {
+                    s.menu = None;
+                    tx.resolve_field_menu(None);
+                });
+            for entry in req.menu().entries() {
+                if let PopupEntry::Item(item) = entry {
+                    let id = item.id().to_owned();
+                    let enabled = item.is_enabled();
+                    let mut row = el()
+                        .key(format!("fm-{id}"))
+                        .role("menuitem")
+                        .size(120.0, 24.0)
+                        .focusable(enabled)
+                        .disabled(!enabled);
+                    if enabled {
+                        row = row.on_press_tx(move |s: &mut TwoFields, tx: &mut Tx| {
+                            s.menu = None;
+                            tx.resolve_field_menu(Some(&id));
+                        });
+                    }
+                    surface = surface.child(row);
+                }
+            }
+            root = root.child(surface);
+        }
+        root
+    }
+
+    let board = crate::clipboard::memory();
+    let spec = AppSpec::new(
+        "repost-field-menu",
+        (400.0, 300.0),
+        || TwoFields {
+            a: TextEdit::new("alpha"),
+            b: TextEdit::new("bravo"),
+            menu: None,
+            opened_keys: Vec::new(),
+        },
+        two_view,
+    );
+    let mut rt = App::new(spec)
+        .on_field_menu(|s: &mut TwoFields, req: FieldMenuRequest, _| {
+            s.opened_keys.push(req.field_key().map(str::to_owned));
+            s.menu = Some(req);
+        })
+        .headless_runtime((400.0, 300.0), Env::new(true, 1.0));
+    rt.core_mut().host.force_field_menu_fallback = true;
+    rt.use_clipboard(&board);
+    rt.frame(0.0);
+
+    // Open field A's modal menu.
+    let (ax, ay) = rt.find("field-a").unwrap();
+    rt.core_mut().secondary_down_for(ax, ay, super::secondary::SecondaryPlatform::Windows);
+    rt.secondary_up(ax, ay);
+    rt.frame(0.0);
+    assert_eq!(rt.state.opened_keys, [Some("field-a".to_owned())]);
+    assert!(rt.core().active_modal().is_some());
+
+    // Pre-select "bravo" in field B, then right-click field B in the same frame (DismissRepost).
+    rt.update(|s, _| s.b.set_selection(0, 5));
+    let (bx, by) = rt.find("field-b").unwrap();
+    rt.core_mut().secondary_down_for(bx, by, super::secondary::SecondaryPlatform::Windows);
+    rt.secondary_up(bx, by);
+    rt.frame(0.0);
+
+    assert_eq!(
+        rt.state.opened_keys,
+        [Some("field-a".to_owned()), Some("field-b".to_owned())],
+        "DismissRepost opens field B's menu",
+    );
+    assert!(
+        rt.core().host.field_menu_fallback.is_some(),
+        "field A's stale resolve_field_menu(None) must not clobber field B's new field_menu_fallback",
+    );
+
+    // Resolving Paste or Select All / Copy on field B's new modal menu acts on field B.
+    board.set_content(crate::ClipboardContent::new("Z"));
+    let (px, py) = rt.find("fm-paste").expect("field B's paste item");
+    rt.pointer_down(px, py);
+    rt.pointer_up(px, py);
+    rt.frame(0.0);
+    assert!(rt.state.b.text.contains('Z'), "field B received paste: {:?}", rt.state.b.text);
+    assert_eq!(rt.state.a.text, "alpha", "field A stayed untouched");
+}

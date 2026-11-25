@@ -353,6 +353,9 @@ impl RuntimeCore {
             if routed {
                 self.latch_playground(app, &mut tx);
                 self.latch_focus(&mut tx);
+                if let Some(picked) = tx.field_menu_resolution.take() {
+                    self.latch_field_menu_resolution(app, picked, &mut tx);
+                }
             }
             // Both callbacks see ordinary &mut S. After the next mutation a single view
             // cannot tell which one introduced a row. Observe the poll's tree now, without
@@ -381,6 +384,7 @@ impl RuntimeCore {
                     #[cfg(debug_assertions)]
                     { let check = self.frame.take_live_check(); self.compare_live_check(check); ran_other = false; }
                     self.apply_keeps(app);
+                    self.finish_deferred_field_menu(app, &mut tx, None, None);
                     ran = false;
                 }
                 if split {
@@ -493,6 +497,7 @@ impl RuntimeCore {
             { let check = self.frame.take_live_check(); self.compare_live_check(check); }
             self.apply_keeps(app);
         }
+        self.finish_deferred_field_menu(app, &mut tx, Some(&mut open_urls), Some(&mut open_paths));
         #[cfg(debug_assertions)]
         { self.frame.clear_live_check(); }
         let mount_rounds = self.deliver_mounts(

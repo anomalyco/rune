@@ -109,6 +109,9 @@ pub struct Tx {
     pub(crate) popups: Vec<crate::popup_menu::Call>,
     /// `Tx::resolve_field_menu`: `Some(Some(id))` picks an item, `Some(None)` dismisses.
     pub(crate) field_menu_resolution: Option<Option<String>>,
+    /// A handler in this transaction opened a new fallback field menu (`App::on_field_menu`),
+    /// superseding any earlier action's stale `field_menu_resolution` in the same frame.
+    pub(crate) field_menu_opened: bool,
     pub(crate) file_dialogs: Vec<crate::file_dialog::Call>,
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The mouse button driving this press or drag (`Tx::button`).

@@ -66,6 +66,10 @@ pub(crate) struct HostState {
     pub(in crate::runtime) popups: popup_dispatch::Popups,
     /// Pending text-field menu delivered to `App::on_field_menu`, awaiting `Tx::resolve_field_menu`.
     pub(in crate::runtime) field_menu_fallback: Option<Box<crate::runtime::field_menu::PendingFieldMenu>>,
+    /// Monotonic token tagging each opened fallback field menu so a deferred pick never matches a newer menu.
+    pub(in crate::runtime) field_menu_seq: u64,
+    /// `Tx::resolve_field_menu(Some(id))` deferred until after the frame's commit unmounts a closing modal.
+    pub(in crate::runtime) deferred_field_menu_pick: Option<(u64, String)>,
     /// Test-only seam forcing `App::on_field_menu` even where `popup_menu_supported()` is true.
     #[cfg(test)]
     pub(in crate::runtime) force_field_menu_fallback: bool,
@@ -121,6 +125,8 @@ impl HostState {
             open_urls_natively: false,
             popups: Default::default(),
             field_menu_fallback: None,
+            field_menu_seq: 0,
+            deferred_field_menu_pick: None,
             #[cfg(test)]
             force_field_menu_fallback: false,
             file_dialog: Default::default(),
