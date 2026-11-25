@@ -342,7 +342,7 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
         if lb > la {
             let label = clean_slice(spec, la, lb);
             if !label.is_empty() {
-                if let Ok(href) = crate::open_url::check_href(&link.id) {
+                if let Ok(href) = crate::open_url::check_href(link.href.as_deref().unwrap_or(&link.id)) {
                     let description = link_description(link.help.as_deref(), &label);
                     out.push(A11yRun {
                         text: label,

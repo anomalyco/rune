@@ -36,6 +36,28 @@ impl Markdown {
         ));
         self
     }
+    /// Whether right-clicking (or pressing the context-menu key on) a Markdown link with a real
+    /// address (`http:`, `https:`, `mailto:`) opens Rune's default Open Link / Copy Link
+    /// context menu (`true` by default; see [`El::link_menu`](rune::El::link_menu)).
+    ///
+    /// Yields to [`Self::on_link_secondary`] and any ancestor [`El::on_secondary_press`](rune::El::on_secondary_press).
+    /// Pass `false` to opt out while keeping plain selectable-text Copy.
+    ///
+    /// ```
+    /// # use rune_kit::{Kit, Markdown};
+    /// # struct App;
+    /// # impl App { fn open(&mut self, _: &str) {} }
+    /// # let kit = Kit::neutral(true);
+    /// let _view = Markdown::new("See [Rune](https://example.com/rune).")
+    ///     .on_link(|s: &mut App, url| s.open(url))
+    ///     .link_menu(false)
+    ///     .build(&kit);
+    /// ```
+    pub fn link_menu(mut self, on: bool) -> Self {
+        self.link_menu = on;
+        self
+    }
+
     /// Called with a link's destination and the point (window points) when a right-click (or
     /// macOS control-click) lands on it: a menu for that link (Open, Copy Link). It takes the
     /// press from the menus of the elements around the Markdown, which still get right-clicks
@@ -202,6 +224,7 @@ impl Renderer {
             None => hover(url),
         };
         let e = inl.links.iter().fold(e, |e, (a, b, url)| e.link(Link::new(*a..*b, url.clone()).hover(hover_at(*a, *b, url)).help(help(url))));
+        let e = if self.link_menu { e } else { e.link_menu(false) };
         let e = match &self.on_link { Some((f, _)) => f(e), None => e };
         let e = match &self.on_link_secondary { Some((f, _)) => f(e), None => e };
         match &self.on_link_hover { Some((f, _)) => f(e), None => e }

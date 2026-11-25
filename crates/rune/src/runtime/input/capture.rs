@@ -163,13 +163,24 @@ impl Press {
     pub(crate) fn hold(&mut self, held: Held) { *self = Self::Held(Box::new(held)); }
 }
 
+/// Which kind of link a secondary press began on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SecondaryLink {
+    /// Explicit `El::on_link_secondary` handler: wins over ancestors and claims `"app"` on web.
+    Explicit(usize),
+    /// Default Open Link / Copy Link menu: yields to ancestors and leaves web mouse right-clicks
+    /// to the browser's `<a href>` menu.
+    Default(usize),
+}
+
 /// The secondary button's hold: the element whose menu it opens on release, the link of its
-/// text it began on (`on_link_secondary`), and whether the pointer left the window meanwhile.
+/// text it began on (`on_link_secondary` or default link menu), and whether the pointer left
+/// the window meanwhile.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum Secondary {
     #[default]
     Up,
-    Held { path: String, link: Option<usize>, left: bool },
+    Held { path: String, link: Option<SecondaryLink>, left: bool },
     /// An outside secondary press dismissed (or was swallowed by) an active modal; release does
     /// nothing, and on web `secondary_claim()` returns `"app"` so the browser's own context menu
     /// stays closed.

@@ -279,6 +279,7 @@ pub struct Markdown {
     on_link: Option<LinkWire>,
     on_link_secondary: Option<LinkWire>,
     on_link_hover: Option<LinkWire>,
+    link_menu: bool,
     link_look: Option<LinkLook>,
     link_help: Option<LinkHelp>,
     on_task: Option<TaskWire>,
@@ -311,7 +312,7 @@ thread_local! {
 
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
-        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, on_link_hover: None, link_look: None, link_help: None, link_ring: None, code_link: None,
+        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, on_link_hover: None, link_menu: true, link_look: None, link_help: None, link_ring: None, code_link: None,
             on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, wrap_anywhere: false, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
             diagram_frame: None, code_frame: None, diff_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, emoji: None, images: None, on_image: None }
@@ -625,13 +626,16 @@ impl Markdown {
                 style,
                 &self.block_keys,
                 &self.highlights,
-                self.autolink,
                 self.reveal.to_bits(),
-                self.tasks_read_only,
-                self.selectable,
-                self.scroll_wide,
-                self.wrap_code,
-                self.wrap_anywhere,
+                [
+                    self.autolink,
+                    self.tasks_read_only,
+                    self.link_menu,
+                    self.selectable,
+                    self.scroll_wide,
+                    self.wrap_code,
+                    self.wrap_anywhere,
+                ],
                 self.tentative,
             ));
             return rune::memo::cached(h, || self.render_uncached(style));
@@ -659,7 +663,7 @@ impl Markdown {
         let root_dir = dirs.of_slice(&blocks).or(self.tentative);
         let code_frame = (self.code_frame.is_some() || self.code_wrap.is_some() || self.wrap_code)
             .then(|| CodeWire { frame: self.code_frame, wrap: self.code_wrap, wrap_default: self.wrap_code });
-        let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, on_link_hover: self.on_link_hover, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
+        let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, on_link_hover: self.on_link_hover, link_menu: self.link_menu, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, wrap_anywhere: self.wrap_anywhere, tentative: self.tentative,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), next_diff: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
