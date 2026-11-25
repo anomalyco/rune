@@ -137,7 +137,7 @@ impl Dev {
 /// The same two facts, read out of the branch's press.
 fn state_of(press: titlebar::TitlebarPress) -> (Option<(f64, (f32, f32))>, bool) {
     match press {
-        titlebar::TitlebarPress::Rest => (None, false),
+        titlebar::TitlebarPress::Rest | titlebar::TitlebarPress::Toggling | titlebar::TitlebarPress::Settled { .. } => (None, false),
         titlebar::TitlebarPress::Holding(pair) | titlebar::TitlebarPress::Armed(pair) => (Some((pair.at, pair.point)), false),
         titlebar::TitlebarPress::SecondaryOnRegion(pair) => (pair.map(|pair| (pair.at, pair.point)), true),
     }

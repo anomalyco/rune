@@ -667,7 +667,7 @@ impl Host {
                 // Deferred mouse drags on Linux cross the drag threshold during motion while the
                 // original press serial is still current on Wayland.
                 if let Some(action) = app.rt_mut().take_titlebar_action() {
-                    l.titlebar_action(action);
+                    l.run_titlebar_action(app.rt_mut(), action);
                 }
                 // AppKit needs the drag session started inside this mouse-dragged event.
                 if let Some(start) = drag_out {
@@ -699,7 +699,7 @@ impl Host {
                 }
                 app.touch(&touch);
                 if let Some(action) = app.rt_mut().take_titlebar_action() {
-                    l.titlebar_action(action);
+                    l.run_titlebar_action(app.rt_mut(), action);
                 }
                 if let Some(edge) = app.rt_mut().take_resize_action() {
                     let _ = l.drag_resize_window(edge);
@@ -723,7 +723,7 @@ impl Host {
                             app.rt_mut().physical_input(crate::PhysicalInput::Modifiers(map_mods(self.mods)));
                             // AppKit needs the drag started inside this mouse-down.
                             if let Some(action) = app.rt_mut().take_titlebar_action() {
-                                l.titlebar_action(action);
+                                l.run_titlebar_action(app.rt_mut(), action);
                             }
                             if let Some(edge) = app.rt_mut().take_resize_action() {
                                 let _ = l.drag_resize_window(edge);
