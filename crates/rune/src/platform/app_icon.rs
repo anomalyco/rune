@@ -1,20 +1,63 @@
-//! The app's icon from image bytes (the Dock's on macOS, its windows' and the taskbar's on
-//! Windows), so an app needs no platform glue of its own.
+//! The app's icon: the bundle's own, image bytes, or a light/dark pair (the Dock's on macOS, its
+//! windows' and the taskbar's on Windows, its windows' on Linux), so an app needs no platform glue
+//! of its own.
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 use std::sync::Mutex;
-#[cfg(target_os = "macos")]
-use std::sync::atomic::{AtomicBool, Ordering};
 
-/// The icon waiting for the main thread, newest wins.
+/// What the app's icon is: the bundle's (or executable's) own, one image, or a light/dark pair
+/// that follows the app's Appearance. Pass it to [`set_app_icon_choice`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppIcon {
+    /// The icon the app was built with. On macOS this hands the Dock back the bundle's compiled
+    /// icon (`setApplicationIconImage(nil)`), so a layered icon keeps the system's dark and tinted
+    /// styles.
+    Bundle,
+    /// One image, whatever the Appearance.
+    Image(Vec<u8>),
+    /// `light` under a light Appearance and `dark` under a dark one.
+    Pair { light: Vec<u8>, dark: Vec<u8> },
+}
+
+impl AppIcon {
+    /// The image shown when the app's Appearance is dark (`dark`) or light: `None` for the
+    /// bundle's own icon. Pure, so a test can check the choice without AppKit.
+    pub fn shown(&self, dark: bool) -> Option<&[u8]> {
+        match self {
+            AppIcon::Bundle => None,
+            AppIcon::Image(bytes) => Some(bytes.as_slice()),
+            AppIcon::Pair { light, dark: night } => Some(if dark { night.as_slice() } else { light.as_slice() }),
+        }
+    }
+
+    /// Whether the shown icon changes with the Appearance.
+    pub fn follows_appearance(&self) -> bool {
+        matches!(self, AppIcon::Pair { .. })
+    }
+
+    /// The images it holds, to check before showing any.
+    #[cfg(any(target_os = "macos", test))]
+    fn images(&self) -> impl Iterator<Item = &[u8]> {
+        let (a, b): (Option<&[u8]>, Option<&[u8]>) = match self {
+            AppIcon::Bundle => (None, None),
+            AppIcon::Image(bytes) => (Some(bytes.as_slice()), None),
+            AppIcon::Pair { light, dark } => (Some(light.as_slice()), Some(dark.as_slice())),
+        };
+        a.into_iter().chain(b)
+    }
+}
+
+/// The icon the app asked for and how many times it has asked, newest wins. `None` until it
+/// asks, so Rune leaves the Dock alone.
 #[cfg(target_os = "macos")]
-static PENDING: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+static CURRENT: Mutex<Option<(u64, AppIcon)>> = Mutex::new(None);
 /// The event loop has started, so AppKit is ours to call.
 #[cfg(target_os = "macos")]
-static LAUNCHED: AtomicBool = AtomicBool::new(false);
+static LAUNCHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The app's icon while it runs, in place of the bundle's or executable's. Call it from any
-/// thread. A headless run sets nothing. Fails when the bytes aren't an image.
+/// thread. A headless run sets nothing. Fails when the bytes aren't an image. The same as
+/// `set_app_icon_choice(AppIcon::Image(bytes))`.
 ///
 /// - **macOS:** `bytes` is an `.icns`, PNG, TIFF or anything else `NSImage` reads, shown as the
 ///   Dock and app-switcher icon. Before `run`, Rune sets it once the app finishes launching; a
@@ -22,23 +65,83 @@ static LAUNCHED: AtomicBool = AtomicBool::new(false);
 /// - **Windows:** `bytes` is a PNG or JPEG, best square and 256 px or more. Each window opened
 ///   after the call shows it in its title bar, on the taskbar and in Alt+Tab, so call it before
 ///   `run`.
+/// - **Linux:** `bytes` is a PNG or JPEG, best square and 256 px or more. Each window opened
+///   after the call carries it, so call it before `run`: on Wayland through
+///   `xdg-toplevel-icon-v1` where the compositor has it (KWin, Labwc, Muffin; elsewhere the
+///   compositor keeps using the desktop entry), on X11 as `_NET_WM_ICON`. Either way the window
+///   shows it in title bars and window switchers when no desktop entry matches the app id.
 /// - Does nothing elsewhere.
 pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
+    set_app_icon_choice(AppIcon::Image(bytes.into())).map_err(|e| e.replacen("set_app_icon_choice", "set_app_icon", 1))
+}
+
+/// The app's icon: the bundle's own, one image, or a light/dark pair. Call it from any thread,
+/// before `run` or later; a later call replaces the earlier one. A headless run sets nothing.
+/// Fails when any of the bytes aren't an image.
+///
+/// - **macOS:** the Dock and app-switcher icon, set once the app finishes launching (AppKit
+///   paints the bundle's icon over an earlier one). `AppIcon::Bundle` gives back the bundle's
+///   compiled icon exactly as macOS shows it. `AppIcon::Pair` follows the app's
+///   `effectiveAppearance`, with or without a window open, so an app that forces Light or Dark
+///   gets the matching side. Finder's icon for the bundle doesn't change.
+/// - **Windows:** as [`set_app_icon`] for `Image`. `Pair` checks both images and shows `light`
+///   (Rune doesn't follow the taskbar's theme). `Bundle` drops the image for windows opened
+///   afterwards: they show the icon resource given to `set_app_icon_resource` if the app gave
+///   one, else Windows' default window icon (Rune doesn't load the executable's icon by itself).
+/// - **Linux:** as [`set_app_icon`] for `Image`. `Pair` checks both images and shows `light`.
+///   `Bundle` drops the image, so windows opened afterwards carry none and the compositor or
+///   window manager finds one through the app's desktop entry.
+/// - Does nothing elsewhere.
+pub fn set_app_icon_choice(icon: AppIcon) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let bytes = bytes.into();
-        if decode(&bytes).is_none() { return Err("set_app_icon: the bytes aren't an image AppKit reads".into()); }
-        *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(bytes);
+        use std::sync::atomic::Ordering;
+        if icon.images().any(|bytes| decode(bytes).is_none()) {
+            return Err("set_app_icon_choice: the bytes aren't an image AppKit reads".into());
+        }
+        {
+            let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
+            let asked = current.as_ref().map_or(0, |(n, _)| n + 1);
+            *current = Some((asked, icon));
+        }
         if LAUNCHED.load(Ordering::Acquire) { crate::platform::main_queue::on_main(apply); }
     }
     #[cfg(target_os = "windows")]
     {
-        let image = image::load_from_memory(&bytes.into()).map_err(|e| format!("set_app_icon: {e}"))?.into_rgba8();
+        let bytes = match icon {
+            AppIcon::Bundle => {
+                let resource = *RESOURCE.lock().unwrap_or_else(|e| e.into_inner());
+                *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = resource.map(WindowsIcon::Resource);
+                return Ok(());
+            }
+            AppIcon::Image(bytes) => bytes,
+            AppIcon::Pair { light, dark } => {
+                image::load_from_memory(&dark).map_err(|e| format!("set_app_icon_choice: {e}"))?;
+                light
+            }
+        };
+        let image = image::load_from_memory(&bytes).map_err(|e| format!("set_app_icon_choice: {e}"))?.into_rgba8();
         let size = |px: u32| image::imageops::resize(&image, px, px, image::imageops::FilterType::Lanczos3).into_raw();
         *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = Some(WindowsIcon::Pixels { small: size(SMALL), big: size(BIG) });
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let _ = bytes;
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        let bytes = match icon {
+            AppIcon::Bundle => {
+                *LINUX.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                return Ok(());
+            }
+            AppIcon::Image(bytes) => bytes,
+            AppIcon::Pair { light, dark } => {
+                image::load_from_memory(&dark).map_err(|e| format!("set_app_icon_choice: {e}"))?;
+                light
+            }
+        };
+        let image = image::load_from_memory(&bytes).map_err(|e| format!("set_app_icon_choice: {e}"))?.into_rgba8();
+        *LINUX.lock().unwrap_or_else(|e| e.into_inner()) = Some(linux_pixels(&image));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+    let _ = icon;
     Ok(())
 }
 
@@ -48,6 +151,7 @@ pub fn set_app_icon(bytes: impl Into<Vec<u8>>) -> Result<(), String> {
 /// 128 px (a PNG-compressed image larger than that is never asked for). Call it before `run`.
 #[cfg(target_os = "windows")]
 pub fn set_app_icon_resource(id: u16) {
+    *RESOURCE.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
     *WINDOWS.lock().unwrap_or_else(|e| e.into_inner()) = Some(WindowsIcon::Resource(id));
 }
 
@@ -64,6 +168,9 @@ enum WindowsIcon {
 
 #[cfg(target_os = "windows")]
 static WINDOWS: Mutex<Option<WindowsIcon>> = Mutex::new(None);
+/// The icon resource `set_app_icon_resource` named, which `AppIcon::Bundle` goes back to.
+#[cfg(target_os = "windows")]
+static RESOURCE: Mutex<Option<u16>> = Mutex::new(None);
 #[cfg(target_os = "windows")]
 const SMALL: u32 = 32;
 #[cfg(target_os = "windows")]
@@ -92,11 +199,34 @@ pub(crate) fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window
     attrs.with_window_icon(small).with_taskbar_icon(big)
 }
 
+/// Linux: the icon's square RGBA pixels, `LINUX_SIZE` on a side.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+static LINUX: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+/// Linux: one size serves both protocols; the compositor or window manager scales it down.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+const LINUX_SIZE: u32 = 256;
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+fn linux_pixels(image: &image::RgbaImage) -> Vec<u8> {
+    image::imageops::resize(image, LINUX_SIZE, LINUX_SIZE, image::imageops::FilterType::Lanczos3).into_raw()
+}
+
+/// Linux: `attrs` with the app's icon, once `set_app_icon` has one. winit sends it as
+/// `xdg-toplevel-icon-v1` on Wayland (before the window's first commit) and `_NET_WM_ICON` on X11.
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(crate) fn with_icon(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+    let icon = LINUX.lock().unwrap_or_else(|e| e.into_inner());
+    match icon.as_ref() {
+        None => attrs,
+        Some(rgba) => attrs.with_window_icon(winit::window::Icon::from_rgba(rgba.clone(), LINUX_SIZE, LINUX_SIZE).ok()),
+    }
+}
+
 /// The event loop exists: sets an icon asked for before `run` once the main queue drains, which
 /// is after AppKit finishes launching (it would show the bundle's icon over an earlier one).
 #[cfg(target_os = "macos")]
 pub(crate) fn launched() {
-    LAUNCHED.store(true, Ordering::Release);
+    LAUNCHED.store(true, std::sync::atomic::Ordering::Release);
     crate::platform::main_queue::on_main(apply);
 }
 
@@ -113,32 +243,10 @@ fn decode(bytes: &[u8]) -> Option<objc2::rc::Retained<objc2_app_kit::NSImage>> {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
-fn apply() {
-    let Some(mtm) = objc2::MainThreadMarker::new() else { return };
-    let Some(bytes) = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take() else { return };
-    let Some(image) = decode(&bytes) else { return };
-    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
-    // SAFETY: on the main thread, with an image AppKit decoded.
-    unsafe { app.setApplicationIconImage(Some(&image)) };
-}
+mod mac;
+#[cfg(target_os = "macos")]
+use mac::apply;
 
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::*;
-
-    fn png() -> Vec<u8> {
-        let mut out = std::io::Cursor::new(Vec::new());
-        image::RgbaImage::from_pixel(16, 16, image::Rgba([40, 120, 220, 255])).write_to(&mut out, image::ImageFormat::Png).unwrap();
-        out.into_inner()
-    }
-
-    #[test]
-    fn an_icon_must_be_an_image_and_waits_for_launch() {
-        assert!(set_app_icon(b"not an image".to_vec()).is_err());
-        assert!(set_app_icon(png()).is_ok());
-        // Without an event loop nothing touches NSApplication, so a headless run stays windowless.
-        assert!(!LAUNCHED.load(Ordering::Acquire));
-        assert!(PENDING.lock().unwrap().is_some());
-    }
-}
+#[cfg(test)]
+#[path = "app_icon_tests.rs"]
+mod tests;

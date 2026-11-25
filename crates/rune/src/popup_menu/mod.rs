@@ -14,11 +14,14 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 
 use serde_json::{Value, json};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::Window;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::Waker;
 #[cfg(test)]
 use crate::Runtime;
@@ -41,12 +44,18 @@ pub(crate) use win32::{enter_menu_loop, layout, turns};
 /// Platforms without native menus: nothing opens, so every request answers `None` at once.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod host {
+    #[cfg(not(target_arch = "wasm32"))]
     use super::{Arc, Rc, Session, Show, Waker, Window};
     pub(super) const SUPPORTED: bool = false;
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) type Tracking = ();
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn show(_: &Arc<Window>, _: Show, _: Rc<Session>, _: Option<Waker>) -> bool { false }
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn stop(_: Tracking) {}
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn scheme(_: bool) {}
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn start(_: Waker) {}
 }
 
@@ -57,6 +66,7 @@ pub fn popup_menu_supported() -> bool { host::SUPPORTED }
 
 /// The event loop starts. `turn` runs its idle turn (due timers, overlays), for a platform whose
 /// menus hold the event loop in a modal loop of their own while they track.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn start(turn: Waker) { host::start(turn); }
 
 /// One choice in a [`PopupMenu`]: enabled and unchecked unless set.
@@ -465,6 +475,7 @@ impl Show {
 /// menu is `Opening` until the platform puts it up, `Open` while it tracks, and ends
 /// `Resolved` with its answer, or `Cancelled` when its window goes away first. A cancelled
 /// menu never opens (or stops tracking), and its answer is dropped.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub(crate) enum Phase {
@@ -479,12 +490,14 @@ pub(crate) enum Phase {
 }
 
 /// One native menu, from the host handing it over until its answer is read.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub(crate) struct Session {
     phase: RefCell<Phase>,
 }
 
 // Only macOS and Windows open menus; elsewhere every request answers `None` before a session.
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 impl Session {
     /// `Opening` → `Open`, as the menu comes up. False when it was cancelled first.
@@ -536,12 +549,14 @@ impl Session {
 
 /// One window's native menu: opens what its runtime asks for, and hands the answer back after
 /// `wake` brings the host to its inbox.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub(crate) struct Presenter {
     session: Option<Rc<Session>>,
     wake: Option<Waker>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Presenter {
     pub(crate) fn new(wake: Waker) -> Self { Self { session: None, wake: Some(wake) } }
 
@@ -621,6 +636,7 @@ impl Presenter {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Presenter {
     fn drop(&mut self) { self.stop(); }
 }

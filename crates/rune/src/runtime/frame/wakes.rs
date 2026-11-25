@@ -111,10 +111,11 @@ impl RuntimeCore {
         self.physical_input(crate::PhysicalInput::FocusLost);
     }
 
-    /// Keyboard input, a focus change, a file drag step or a file dialog answer is queued for the
-    /// next frame.
+    /// Keyboard input, a focus change, a file drag step, a file dialog answer or an
+    /// `open_url_then` result is queued for the next frame. A browser that comes to the front
+    /// can hide the window, and its result still has to reach the app.
     pub(crate) fn keys_queued(&self) -> bool {
-        self.frame.queue.iter().any(|a| matches!(a, Action::Physical(..) | Action::Key { .. } | Action::KeyUp(_) | Action::WindowFocus(_) | Action::Files(_) | Action::FileDialog(..)))
+        self.frame.queue.iter().any(|a| matches!(a, Action::Physical(..) | Action::Key { .. } | Action::KeyUp(_) | Action::WindowFocus(_) | Action::Files(_) | Action::FileDialog(..) | Action::UrlOpened(..)))
     }
 
     /// Host time on the logical clock.
@@ -177,6 +178,7 @@ impl RuntimeCore {
 
     /// The next frame motion asks for at its own cadence (a loop's next step, a video's next
     /// picture), on `wake_deadline`'s clock.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn motion_wake_deadline(&self) -> Option<f64> {
         self.motion.loop_wake().map(|w| w.0)
     }

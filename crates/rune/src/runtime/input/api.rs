@@ -310,7 +310,7 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn key_with(&mut self, event: KeyEvent, physical: crate::PhysicalKeyCode, base: Option<char>) {
-        let input = PhysicalInput::Key { key: physical, mods: event.mods, pressed: true, repeat: false };
+        let input = PhysicalInput::Key { key: physical, mods: event.mods, pressed: true, repeat: false, text: None, consumed_mods: Default::default() };
         self.physical_key_input(input, event, base);
     }
 
@@ -331,7 +331,7 @@ impl<S: 'static> Runtime<S> {
     /// rt.frame(0.0);
     /// let mods = Mods::default();
     /// rt.physical_key_input(
-    ///     PhysicalInput::Key { key: PhysicalKeyCode::KeyJ, mods, pressed: true, repeat: true },
+    ///     PhysicalInput::Key { key: PhysicalKeyCode::KeyJ, mods, pressed: true, repeat: true, text: None, consumed_mods: Default::default() },
     ///     KeyEvent { key: Key::Text("j".into()), mods },
     ///     Some('j'),
     /// );

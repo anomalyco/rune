@@ -14,6 +14,7 @@ command prefix (a build-queue lease, say); by default it's plain cargo.
 """
 import argparse
 from dataclasses import dataclass
+import fnmatch
 import hashlib
 import json
 import os
@@ -294,6 +295,57 @@ def array_end(text, i):
     raise ValueError("unterminated TOML array")
 
 
+def posix_str(path):
+    """The path as `full_match` sees it: normalised, with `.` as the empty path."""
+    text = str(PurePosixPath(path))
+    return "" if text == "." else text
+
+
+def glob_regex(glob):
+    """A regex for `PurePosixPath.full_match(glob)`: `*`, `?` and `[...]` stay inside one
+    segment, and a `**` segment matches any number of them (`src/**` still needs one past `src`)."""
+    def segment(seg):
+        if seg == "*":
+            return "[^/]+"
+        out, i = "", 0
+        while i < len(seg):
+            c = seg[i]
+            # As in fnmatch: a `]` right after `[` or `[!` is part of the set, not its end.
+            close = seg.find("]", i + (3 if seg[i + 1:i + 2] == "!" else 2)) if c == "[" else -1
+            if c == "*":
+                out += "[^/]*"
+            elif c == "?":
+                out += "[^/]"
+            elif close != -1:
+                # fnmatch handles ranges, escapes and `!` the way pathlib does (a negated set can match
+                # `/` there too); `(?s:[...])\Z` comes back.
+                out += fnmatch.translate(seg[i:close + 1]).removesuffix(r"\Z")
+                i = close
+            else:
+                out += re.escape(c)
+            i += 1
+        return out
+    segs = posix_str(glob).split("/")
+    out = ""
+    for i, seg in enumerate(segs):
+        last = i == len(segs) - 1
+        if seg == "**" and last:
+            out += ".*"
+        elif seg == "**":
+            out += "(?:[^/]+/)*"
+        else:
+            out += segment(seg) + ("" if last else "/")
+    return re.compile(rf"(?s:{out})\Z")
+
+
+def full_match(path, glob):
+    """`PurePosixPath(path).full_match(glob)`, which needs Python 3.13, on older Pythons too."""
+    path = PurePosixPath(path)
+    if hasattr(path, "full_match"):
+        return path.full_match(glob)
+    return glob_regex(glob).match(posix_str(path)) is not None
+
+
 def staged_workspace(text, staged):
     """The app's workspace manifest with `members` and `default-members` cut to the staged
     package directories (relative to it). Cargo loads every member, and the build Mac has
@@ -309,7 +361,7 @@ def staged_workspace(text, staged):
         found = re.compile(rf"(?m)^[ \t]*{re.escape(key)}[ \t]*=[ \t]*(?=\[)").search(text, header.end(), end.start() if end else len(text))
         if not found:
             continue
-        kept = sorted(d for d in staged if d not in excluded and any(PurePosixPath(d).full_match(norm(g)) for g in workspace[key]))
+        kept = sorted(d for d in staged if d not in excluded and any(full_match(d, norm(g)) for g in workspace[key]))
         stop = array_end(text, found.end())
         text = text[:found.end()] + json.dumps(kept) + text[stop:]
     return text
@@ -336,7 +388,7 @@ def patchable(crate, globs):
         if not key.startswith(prefix) or not key.endswith(".rs"):
             return False
         path = PurePosixPath(key.removeprefix(prefix))
-        return any(path.full_match(glob) for glob in globs)
+        return any(full_match(path, glob) for glob in globs)
     return allowed
 
 

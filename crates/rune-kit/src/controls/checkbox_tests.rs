@@ -68,3 +68,51 @@ fn indeterminate_draws_dash_and_custom_icon_overrides() {
     let mark = els.iter().find(|e| e.key.as_deref() == Some("mark") && e.path.starts_with(&unchecked.path)).unwrap();
     assert_eq!(mark.opacity, 0.0, "unchecked hides its mark");
 }
+
+#[test]
+fn kit_checked_colours_hold_at_rest_and_under_the_pointer() {
+    const FILL: Color = Color { r: 0.1, g: 0.2, b: 0.9, a: 1.0 };
+    const BORDER: Color = Color { r: 0.1, g: 0.2, b: 0.7, a: 1.0 };
+    const MARK: Color = Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 };
+    fn kit() -> Kit {
+        let mut k = Kit::neutral(true);
+        k.metrics.checkbox = Some(crate::CheckboxColors { fill: FILL, border: BORDER, mark: MARK });
+        k
+    }
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let (base, k) = (Kit::neutral(true), kit());
+        col()
+            .child(Checkbox::new(true).label("On").build(&k).key("on"))
+            .child(Checkbox::new(true).state(State::Hover).label("Hover").build(&k).key("hover"))
+            .child(Checkbox::new(false).label("Off").build(&k).key("off"))
+            .child(Checkbox::new(false).label("Off default").build(&base).key("off-default"))
+            .child(Checkbox::new(true).label("On default").build(&base).key("on-default"))
+    }
+
+    let mut rt = Runtime::new((), view, (200.0, 400.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let els = rt.elements();
+    let part = |root: &str, key: &str| {
+        let path = &els.iter().find(|e| e.key.as_deref() == Some(root)).unwrap_or_else(|| panic!("no {root}")).path;
+        els.iter().find(|e| e.key.as_deref() == Some(key) && e.path.starts_with(path)).unwrap_or_else(|| panic!("no {key} in {root}")).clone()
+    };
+    let (k, base) = (kit(), Kit::neutral(true));
+
+    let (control, mark) = (part("on", "control"), part("on", "mark"));
+    assert_eq!((control.fill, control.border_color, mark.text_color), (FILL, Some(BORDER), Some(MARK)));
+
+    let (control, mark) = (part("hover", "control"), part("hover", "mark"));
+    assert_eq!(control.fill, crate::over(k.c.hover, FILL), "hover keeps the kit's fill under the overlay");
+    assert_ne!(control.fill, k.c.surface_hover);
+    assert_eq!((control.border_color, mark.text_color), (Some(BORDER), Some(MARK)));
+
+    // Unchecked boxes and kits without checked colours look as they did.
+    let (off, off_default) = (part("off", "control"), part("off-default", "control"));
+    assert_eq!((off.fill, off.border_color), (off_default.fill, off_default.border_color));
+    assert_eq!((off.fill, off.border_color), (Color::TRANSPARENT, Some(base.c.border_weak)));
+    let (control, mark) = (part("on-default", "control"), part("on-default", "mark"));
+    assert_eq!((control.fill, control.border_color), (base.c.surface_weak, Some(base.c.std_border)));
+    assert_eq!(mark.text_color, Some(base.c.std_icon));
+}

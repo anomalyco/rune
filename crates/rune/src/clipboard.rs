@@ -35,6 +35,7 @@ mod native;
 mod primary;
 #[cfg(target_arch = "wasm32")]
 mod web;
+pub(crate) mod web_file;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::tiff_to_png;
 pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
@@ -42,6 +43,7 @@ pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
 use content::valid_image_size;
 pub use html::sanitize_html;
 pub use secret::{SecretCopy, SecretState};
+pub use web_file::{MAX_WEB_FILES, WebFile};
 use secret::{Alarm, Hold, HoldEffect, HoldEvent, Slot, Unwritten, step_hold};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
@@ -82,10 +84,15 @@ impl std::fmt::Debug for ClipboardWrite {
 }
 
 #[derive(Clone)]
-enum Route { System(mpsc::Sender<Request>), Memory(MemoryClipboard) }
+enum Route {
+    #[cfg(not(target_arch = "wasm32"))]
+    System(mpsc::Sender<Request>),
+    Memory(MemoryClipboard),
+}
 impl Route {
     fn send(&self, request: Request) {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Route::System(worker) => { worker.send(request).ok(); }
             Route::Memory(m) => m.handle(request),
         }
@@ -119,10 +126,12 @@ impl Notify {
     fn send(&self) { self.changed.store(true, Ordering::SeqCst); (self.wake)(); }
 }
 enum Request {
+    #[cfg(not(target_arch = "wasm32"))]
     Shutdown,
     Write(ClipboardWrite, Option<Notify>),
     /// Clear this secret, or whichever secret is held, if the clipboard still holds it.
     Clear(Option<Arc<Slot>>),
+    #[cfg(not(target_arch = "wasm32"))]
     Read { purpose: Purpose, reply: mpsc::Sender<Reply>, wake: Waker },
 }
 impl Purpose {
@@ -335,8 +344,8 @@ pub(crate) fn clear_secret_now() {
 }
 
 /// Called by the shared event-loop exit path, including overlay-only applications.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn shutdown() {
-    #[cfg(not(target_arch = "wasm32"))]
     native::shutdown();
 }
 
@@ -351,6 +360,7 @@ trait Backend {
 }
 /// How often the worker checks that a held secret is still on the clipboard. Where there is no
 /// change count (Linux) it compares the text's fingerprint, so it checks less often.
+#[cfg(not(target_arch = "wasm32"))]
 const WATCH: Duration = if cfg!(any(target_os = "macos", target_os = "windows")) {
     Duration::from_millis(250)
 } else {
@@ -379,6 +389,7 @@ impl WriteSteps for RealTime {
 #[derive(Default)]
 struct Core { keys: RandomState, seq: Seq, hold: Hold, alarm: Option<Alarm>, own_pills: Option<OwnPills> }
 impl Core {
+    #[cfg(not(target_arch = "wasm32"))]
     fn next_check(&self) -> Option<Instant> {
         self.hold.next_check(crate::time::now() + WATCH)
     }
@@ -387,9 +398,11 @@ impl Core {
         match request {
             Request::Write(copy, notify) => self.write(cb, copy, notify, &RealTime),
             Request::Clear(which) => self.clear(cb, which.as_ref()),
+            #[cfg(not(target_arch = "wasm32"))]
             Request::Read { purpose, reply, wake } => {
                 if let Some(answer) = self.answer(cb, purpose) && reply.send(answer).is_ok() { wake(); }
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Request::Shutdown => {}
         }
     }

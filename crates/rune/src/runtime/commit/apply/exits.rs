@@ -236,16 +236,25 @@ pub(super) fn carry_live_bindings(
         if old.cold.get().is_none_or(|c| c.live.is_empty()) { continue; }
         if let Some(&i) = node_index.get(&old.id) {
             let mut kept = paint_tracks::LiveColors::default();
+            let mut kept_range = false;
             if let Some(cold) = nodes[i].cold.get_mut_if_some() {
                 for bound in &mut cold.live {
                     if let Some(previous) = old.live.iter().find(|b| b.property == bound.property && Arc::ptr_eq(&b.source, &bound.source)) {
                         bound.seen = if tx.commit.lands() { None } else { previous.seen };
                         kept.add(bound.property);
+                        kept_range |= bound.property == crate::live::Property::RangeValue;
                     }
                 }
             }
             // A kept colour binding keeps the colour it last latched until it publishes again.
             kept.carry(old, &mut nodes[i]);
+            // So does a kept live range value, over the number the view built with.
+            if kept_range
+                && let Some(v) = old.a11y.more.as_deref().and_then(|m| m.range).map(|r| r.value)
+                && let Some(r) = nodes[i].cold.get_mut_if_some().and_then(|c| c.a11y.more.as_deref_mut()).and_then(|m| m.range.as_mut())
+            {
+                r.value = v;
+            }
             // Removing a binding restores the normal property, including transform defaults.
             for previous in &old.live {
                 if !nodes[i].live.iter().any(|b| b.property == previous.property) {

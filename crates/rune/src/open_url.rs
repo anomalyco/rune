@@ -8,9 +8,13 @@
 //!
 //! macOS asks `NSWorkspace`, Windows `ShellExecuteW`, Linux runs `xdg-open`. Headless runs and
 //! tests never open anything: they keep the requests for [`crate::Runtime::take_url_requests`].
+//!
+//! [`Tx::open_url_then`](crate::Tx::open_url_then) also hands the app what came of the open, on
+//! a later frame, for an inline error or a link to copy instead.
 
 pub(crate) mod incoming;
 pub(crate) mod instance;
+pub(crate) mod scheme;
 
 const MAX_LEN: usize = 8192;
 
@@ -45,6 +49,71 @@ pub(crate) struct Link {
     pub url: String,
     /// `Tx::open_url_same_tab`: replace the page on web rather than open a tab.
     pub same_tab: bool,
+    /// `Tx::open_url_then`: what runs with the open's result.
+    pub opened: Option<Opened>,
+}
+
+/// What `Tx::open_url_then` runs with the open's result.
+pub(crate) type OpenedFn = Box<dyn FnOnce(crate::states::States<'_>, Result<(), OpenUrlError>, &mut crate::Tx)>;
+
+/// A link's callback. `Tx` is `Clone`; clones share it and the runtime takes it once.
+#[derive(Clone)]
+pub(crate) struct Opened(std::rc::Rc<std::cell::Cell<Option<OpenedFn>>>);
+
+impl Opened {
+    pub(crate) fn take(&self) -> Option<OpenedFn> { self.0.take() }
+}
+
+impl std::fmt::Debug for Opened {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Opened") }
+}
+
+impl PartialEq for Opened {
+    fn eq(&self, other: &Self) -> bool { std::rc::Rc::ptr_eq(&self.0, &other.0) }
+}
+impl Eq for Opened {}
+
+impl crate::Tx {
+    /// [`Tx::open_url`](crate::Tx::open_url), and `on_result` runs, as an update on a later
+    /// frame, with what came of the open: `Ok(())` once the system or browser took the link,
+    /// or [`OpenUrlError::Failed`] when it couldn't, so the app can show an inline error or
+    /// the link to copy. A link refused here returns its error and `on_result` never runs.
+    ///
+    /// What "took the link" means differs: macOS and Windows say whether a handler opened it;
+    /// Linux whether `xdg-open` started, not whether it found a browser. The web can't see a
+    /// blocked tab, since a tab opened without an opener is never handed back; it fails a link
+    /// asked for outside a click or key press, which browsers block, and reports `Ok(())` for
+    /// the rest. Headless runs and tests record the link and report `Ok(())`.
+    ///
+    /// ```ignore
+    /// .on_press_tx(|_: &mut App, tx: &mut Tx| {
+    ///     let _ = tx.open_url_then("https://example.com/", |s: &mut App, result, _| {
+    ///         s.link_error = result.err().map(|e| e.to_string());
+    ///     });
+    /// })
+    /// ```
+    pub fn open_url_then<S: 'static>(&mut self, url: &str, on_result: impl FnOnce(&mut S, Result<(), OpenUrlError>, &mut crate::Tx) + 'static) -> Result<(), OpenUrlError> {
+        let url = check(url)?;
+        self.open_urls.push(Link { url, same_tab: false, opened: Some(opened(on_result)) });
+        Ok(())
+    }
+
+    /// [`Tx::open_url_same_tab`](crate::Tx::open_url_same_tab) with
+    /// [`Tx::open_url_then`](crate::Tx::open_url_then)'s result. On web a link the app's
+    /// `same_tab_router` handles, or one the browser loads, reports `Ok(())`.
+    pub fn open_url_same_tab_then<S: 'static>(&mut self, url: &str, on_result: impl FnOnce(&mut S, Result<(), OpenUrlError>, &mut crate::Tx) + 'static) -> Result<(), OpenUrlError> {
+        let url = check_same_tab(url)?;
+        self.open_urls.push(Link { url, same_tab: true, opened: Some(opened(on_result)) });
+        Ok(())
+    }
+}
+
+fn opened<S: 'static>(on_result: impl FnOnce(&mut S, Result<(), OpenUrlError>, &mut crate::Tx) + 'static) -> Opened {
+    let f: OpenedFn = Box::new(move |s, result, tx| {
+        // None once the playground has dropped the stage that asked.
+        if let Some(s) = s.cast::<S>() { on_result(s, result, tx); }
+    });
+    Opened(std::rc::Rc::new(std::cell::Cell::new(Some(f))))
 }
 
 /// The link to open, trimmed and with a lowercase scheme, or why it can't be.
@@ -143,25 +212,33 @@ fn valid_authority(authority: &str) -> bool {
 }
 
 impl crate::runtime::HostState {
-    pub(crate) fn open_urls(&mut self, links: Vec<Link>) {
-        for link in links {
-            if self.open_urls_natively {
-                #[cfg(target_arch = "wasm32")]
-                let opened = if link.same_tab { crate::platform::web::open_url_same_tab(&link.url).map_err(OpenUrlError::Failed) } else { open(&link.url) };
-                #[cfg(not(target_arch = "wasm32"))]
-                let opened = open(&link.url);
-                if let Err(e) = opened { eprintln!("rune: open_url({}): {e}", link.url); }
-            } else {
-                self.push_url_request(link.url);
-            }
+    /// Opens `link`, or records it off a window, where it counts as taken.
+    pub(crate) fn open_link(&mut self, link: &Link) -> Result<(), OpenUrlError> {
+        if !self.open_urls_natively {
+            self.push_url_request(link.url.clone());
+            return Ok(());
         }
+        #[cfg(target_arch = "wasm32")]
+        let opened = if link.same_tab { crate::platform::web::open_url_same_tab(&link.url).map_err(OpenUrlError::Failed) } else { open(&link.url) };
+        #[cfg(not(target_arch = "wasm32"))]
+        let opened = open(&link.url);
+        if let Err(e) = &opened { eprintln!("rune: open_url({}): {e}", link.url); }
+        opened
     }
 }
 
 impl crate::runtime::RuntimeCore {
-    #[inline]
     pub(crate) fn open_urls(&mut self, links: Vec<Link>) {
-        self.host.open_urls(links);
+        self.open_urls_with(links, crate::runtime::HostState::open_link);
+    }
+
+    /// `open_urls` with the opener as a seam, for tests: each `Tx::open_url_then` callback is
+    /// queued with its link's result.
+    pub(crate) fn open_urls_with(&mut self, links: Vec<Link>, mut open: impl FnMut(&mut crate::runtime::HostState, &Link) -> Result<(), OpenUrlError>) {
+        for link in links {
+            let result = open(&mut self.host, &link);
+            if let Some(f) = link.opened.as_ref().and_then(Opened::take) { self.url_opened(f, result); }
+        }
     }
 }
 
@@ -383,6 +460,39 @@ mod tests {
             "https://example.com/clicked",
         ]);
         assert!(rt.take_url_requests().is_empty());
+    }
+
+    #[test]
+    fn open_url_then_hands_the_app_each_open_result_on_a_later_frame() {
+        type Seen = Vec<(&'static str, Result<(), OpenUrlError>)>;
+        let mut rt = Runtime::new(Seen::new(), |_, _| el().size(10.0, 10.0), (50.0, 50.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let mut refused = None;
+        rt.update(|_, tx| {
+            tx.open_url_then("https://example.com/docs", |seen: &mut Seen, result, _| seen.push(("docs", result))).unwrap();
+            refused = Some(tx.open_url_then("file:///etc/hosts", |seen: &mut Seen, result, _| seen.push(("file", result))));
+        });
+        rt.frame(1.0 / 60.0);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(refused, Some(Err(OpenUrlError::UnsupportedScheme("file".into()))));
+        assert_eq!(rt.state, [("docs", Ok(()))], "a recorded link counts as taken; a refused one never calls back");
+        assert_eq!(rt.take_url_requests(), ["https://example.com/docs"]);
+
+        rt.state.clear();
+        let link = |url: &str, name: &'static str| Link {
+            url: url.into(),
+            same_tab: false,
+            opened: Some(opened(move |seen: &mut Seen, result, _| seen.push((name, result)))),
+        };
+        let links = vec![link("https://example.com/a", "a"), Link { opened: None, ..link("https://example.com/b", "b") }, link("https://example.com/c", "c")];
+        rt.core_mut().open_urls_with(links, |_, link| {
+            if link.url.ends_with("/a") { Ok(()) } else { Err(OpenUrlError::Failed("blocked".into())) }
+        });
+        assert!(!rt.core().rests(), "a queued result asks for a frame");
+        assert!(rt.keys_queued(), "a hidden window, say behind the browser, steps a frame to deliver it");
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state, [("a", Ok(())), ("c", Err(OpenUrlError::Failed("blocked".into())))]);
+        assert!(rt.take_url_requests().is_empty(), "the seam's opener stands in for the host");
     }
 
     #[test]

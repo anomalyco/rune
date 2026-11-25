@@ -119,6 +119,19 @@ pub(crate) fn decode_argv(args: impl IntoIterator<Item = std::ffi::OsString>) ->
 }
 
 impl Args {
+    /// Static metadata for every command-line flag Rune's tooling parser accepts in this build.
+    ///
+    /// Alias of [`crate::tooling::flags`].
+    ///
+    /// ```
+    /// use rune::tooling::{Args, flags};
+    ///
+    /// assert_eq!(Args::flags(), flags());
+    /// ```
+    pub const fn flags() -> &'static [super::flags::FlagSpec] {
+        super::flags::flags()
+    }
+
     /// Default tooling arguments, with no flags active.
     pub(crate) fn defaults() -> Args {
         Args { fps: 60.0, every: 1, cols: 10, cpu_boot_threads: 6, ..Default::default() }
@@ -172,70 +185,69 @@ impl Args {
             *i += 1;
             argv.get(*i).cloned().unwrap_or_else(|| die(&format!("{} needs a value", argv[*i - 1])))
         };
+        use super::flags::{FlagId, lookup_flag};
         while i < argv.len() {
-            match argv[i].as_str() {
+            match lookup_flag(argv[i].as_str()) {
                 #[cfg(feature = "hot")]
-                "--hot" => crate::hot::enable(),
+                Some(FlagId::Hot) => crate::hot::enable(),
                 #[cfg(feature = "hot")]
-                "--snap-on-patch" => a.snap_on_patch = Some(val(&mut i).into()),
+                Some(FlagId::SnapOnPatch) => a.snap_on_patch = Some(val(&mut i).into()),
                 #[cfg(feature = "hot")]
-                "--hot-control" => a.hot_control = Some(val(&mut i).into()),
-                #[cfg(not(feature = "hot"))]
-                "--hot" | "--snap-on-patch" | "--hot-control" => die("live editing requires the rune/hot feature; use scripts/rune-dev"),
-                "--snap" => a.snap = Some(val(&mut i).into()),
-                "--scene" => a.scene = Some(val(&mut i)),
-                "--playground" => a.playground = Some(crate::playground::arg(&argv, &mut i)),
-                "--variant" => a.variant = Some(val(&mut i)),
-                "--whole-window" => a.whole_window = true,
-                "--settle" => a.settle = true,
-                "--at" => {
+                Some(FlagId::HotControl) => a.hot_control = Some(val(&mut i).into()),
+                Some(FlagId::Snap) => a.snap = Some(val(&mut i).into()),
+                Some(FlagId::Scene) => a.scene = Some(val(&mut i)),
+                Some(FlagId::Playground) => a.playground = Some(crate::playground::arg(&argv, &mut i)),
+                Some(FlagId::Variant) => a.variant = Some(val(&mut i)),
+                Some(FlagId::WholeWindow) => a.whole_window = true,
+                Some(FlagId::Settle) => a.settle = true,
+                Some(FlagId::At) => {
                     let v = val(&mut i);
                     a.at_mark = mark_time(&v);
                     a.at = a.at_mark.is_none().then(|| num(&v));
                 }
-                "--size" => a.size = Some(parse_size(&val(&mut i)).unwrap_or_else(|e| die(&e))),
-                "--scale" => a.scale = Some(parse_scale(&val(&mut i)).unwrap_or_else(|e| die(&e))),
-                "--theme" => a.theme = Some(val(&mut i)),
-                "--scroll-bars" => a.scroll_bars = Some(parse_scroll_bars(&val(&mut i)).unwrap_or_else(|e| die(&e))),
-                "--script" => a.script = Some(val(&mut i).into()),
-                "--frames" => a.frames = Some(num(&val(&mut i)) as usize),
-                "--start" => {
+                Some(FlagId::Size) => a.size = Some(parse_size(&val(&mut i)).unwrap_or_else(|e| die(&e))),
+                Some(FlagId::Scale) => a.scale = Some(parse_scale(&val(&mut i)).unwrap_or_else(|e| die(&e))),
+                Some(FlagId::Theme) => a.theme = Some(val(&mut i)),
+                Some(FlagId::ScrollBars) => a.scroll_bars = Some(parse_scroll_bars(&val(&mut i)).unwrap_or_else(|e| die(&e))),
+                Some(FlagId::Script) => a.script = Some(val(&mut i).into()),
+                Some(FlagId::Frames) => a.frames = Some(num(&val(&mut i)) as usize),
+                Some(FlagId::Start) => {
                     let v = val(&mut i);
                     a.start_mark = mark_time(&v);
                     if a.start_mark.is_none() { a.start = num(&v); }
                 }
-                "--fps" => a.fps = num(&val(&mut i)),
-                "--out" => a.out = Some(val(&mut i).into()),
-                "--video" => a.video = Some(val(&mut i).into()),
-                "--duration" => {
+                Some(FlagId::Fps) => a.fps = num(&val(&mut i)),
+                Some(FlagId::Out) => a.out = Some(val(&mut i).into()),
+                Some(FlagId::Video) => a.video = Some(val(&mut i).into()),
+                Some(FlagId::Duration) => {
                     let v = val(&mut i);
                     a.duration = Some(if v == "auto" { Length::Auto } else { Length::Seconds(num(&v)) });
                 }
-                "--keys" => {
+                Some(FlagId::Keys) => {
                     let corner = argv.get(i + 1).and_then(|v| crate::input::keycaps::Corner::parse(v));
                     if corner.is_some() { i += 1; }
                     a.keys = Some(corner.unwrap_or_default());
                 }
-                "--keys-theme" => {
+                Some(FlagId::KeysTheme) => {
                     let v = val(&mut i);
                     a.keys_theme = crate::input::keycaps::parse_theme(&v).unwrap_or_else(|| die("--keys-theme is auto, light or dark"));
                 }
-                "--pointer" => a.pointer = true,
-                "--desktop" => a.desktop = Some(val(&mut i).into()),
-                "--tree" => a.tree = Some(val(&mut i).into()),
-                "--html" => a.html = Some(val(&mut i).into()),
-                "--html-template" => a.html_template = Some(val(&mut i).into()),
-                "--html-widths" => {
+                Some(FlagId::Pointer) => a.pointer = true,
+                Some(FlagId::Desktop) => a.desktop = Some(val(&mut i).into()),
+                Some(FlagId::Tree) => a.tree = Some(val(&mut i).into()),
+                Some(FlagId::Html) => a.html = Some(val(&mut i).into()),
+                Some(FlagId::HtmlTemplate) => a.html_template = Some(val(&mut i).into()),
+                Some(FlagId::HtmlWidths) => {
                     let v = val(&mut i);
                     a.html_widths = v.split(',').map(|w| positive(w).unwrap_or_else(|| die(&format!("--html-widths is a list of widths above 0: {v}")))).collect();
                 }
-                "--trace" => a.trace = Some(val(&mut i).into()),
-                "--native" => a.native = true,
-                "--realtime" => a.realtime = true,
-                "--window-script" => a.window_script = Some(val(&mut i).into()),
-                "--trace-all" => a.trace_all = true,
-                "--strip" => a.strip = Some(val(&mut i).into()),
-                "--crop" => {
+                Some(FlagId::Trace) => a.trace = Some(val(&mut i).into()),
+                Some(FlagId::Native) => a.native = true,
+                Some(FlagId::Realtime) => a.realtime = true,
+                Some(FlagId::WindowScript) => a.window_script = Some(val(&mut i).into()),
+                Some(FlagId::TraceAll) => a.trace_all = true,
+                Some(FlagId::Strip) => a.strip = Some(val(&mut i).into()),
+                Some(FlagId::Crop) => {
                     let v = val(&mut i);
                     match v.split(',').map(|s| s.trim().parse::<f32>()).collect::<Result<Vec<_>, _>>() {
                         Ok(r) if r.len() == 4 => a.crops.push([r[0], r[1], r[2], r[3]]),
@@ -243,20 +255,26 @@ impl Args {
                         _ => a.crop_key = Some(v),
                     }
                 }
-                "--cols" => a.cols = (num(&val(&mut i)) as usize).max(1),
-                "--every" => a.every = (num(&val(&mut i)) as usize).max(1),
-                "--list-scenes" => a.list_scenes = true,
-                "--first-pixels" => a.first_pixels = true,
-                "--window" => a.window = Some(val(&mut i)),
-                "--list-windows" => a.list_windows = true,
-                "--chrome" => a.chrome_overlay = true,
-                "--cpu-boot" => a.cpu_boot = Some(val(&mut i).into()),
-                "--cpu-boot-threads" => a.cpu_boot_threads = (num(&val(&mut i)) as usize).max(1),
-                "-h" | "--help" => {
+                Some(FlagId::Cols) => a.cols = (num(&val(&mut i)) as usize).max(1),
+                Some(FlagId::Every) => a.every = (num(&val(&mut i)) as usize).max(1),
+                Some(FlagId::ListScenes) => a.list_scenes = true,
+                Some(FlagId::FirstPixels) => a.first_pixels = true,
+                Some(FlagId::Window) => a.window = Some(val(&mut i)),
+                Some(FlagId::ListWindows) => a.list_windows = true,
+                Some(FlagId::Chrome) => a.chrome_overlay = true,
+                Some(FlagId::CpuBoot) => a.cpu_boot = Some(val(&mut i).into()),
+                Some(FlagId::CpuBootThreads) => a.cpu_boot_threads = (num(&val(&mut i)) as usize).max(1),
+                Some(FlagId::Help) => {
                     eprintln!("{HELP}");
                     std::process::exit(0);
                 }
-                other => extra.push(other.to_owned()),
+                None => {
+                    #[cfg(not(feature = "hot"))]
+                    if matches!(argv[i].as_str(), "--hot" | "--snap-on-patch" | "--hot-control") {
+                        die("live editing requires the rune/hot feature; use scripts/rune-dev");
+                    }
+                    extra.push(argv[i].clone());
+                }
             }
             i += 1;
         }
@@ -326,7 +344,7 @@ pub fn is_headless() -> bool {
     *HEADLESS.get_or_init(|| Args::parse_process().headless())
 }
 
-const HELP: &str = "usage: <app> [window]
+pub(super) const HELP: &str = "usage: <app> [window]
   --snap out.png        render offscreen (no window) at --at seconds
   --scene NAME          start from a named scene (--list-scenes)
   --playground [NAME]   open App::playground at launch, at a story; headless too

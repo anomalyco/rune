@@ -47,6 +47,7 @@ impl Presented {
         Self::settle_core(this, rt.core(), config, moving, next_tick, rests, composed)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn settle_core(this: &mut Option<Self>, rt: &RuntimeCore, config: &wgpu::SurfaceConfiguration,
         moving: bool, next_tick: Option<crate::time::Instant>, rests: bool, composed: bool) -> bool {
         let idle = !(moving || rt.stale() || rt.live_pending() || rt.host.window_frame.is_some()

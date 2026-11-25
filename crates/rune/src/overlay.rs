@@ -9,6 +9,8 @@
 //!   Without layer-shell (GNOME), an overlay that takes no input shows on XWayland instead
 //!   (`x11/xwayland.rs`): an override-redirect ARGB window with an empty input shape. One that
 //!   takes the pointer does too when its host opts in (`OverlayOptions::xwayland_input`).
+//!   Failing both, it falls back to an undecorated transparent toplevel (`toplevel.rs`) that
+//!   reports degraded placement, stacking and click-through in its capabilities.
 //! - X11: an override-redirect notification window, with an empty input shape unless
 //!   interactive. A `KeyPolicy::OnDemand` one sets the input focus itself on `request_keys` and
 //!   on a click.
@@ -20,59 +22,96 @@
 //!   one is made without `WS_EX_NOACTIVATE`, so a click or `request_keys` activates it.
 //! - With `release_gpu_when_hidden`, hidden means destroyed on Windows and macOS too.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::cell::RefCell;
+#[cfg(not(target_arch = "wasm32"))]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Weak;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 use winit::dpi::LogicalSize;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event::{StartCause, WindowEvent};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::ActiveEventLoop;
+#[cfg(not(target_arch = "wasm32"))]
 use winit::window::{Window, WindowId, WindowLevel};
 
 use crate::el::{Align, El, Tx};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::frame::clock::FrameClock;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::render::{Gpu, Renderer};
-use crate::runtime::{Cx, RuntimeCore, Waker};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::runtime::RuntimeCore;
+use crate::runtime::{Cx, Waker};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::window::{AnyHost, WakeEvent};
 #[cfg(target_os = "windows")]
 use crate::window::slot::{Slot, Take};
-use crate::{DisplayTarget, KeyPolicy, OverlayInput, OverlayOptions, OverlayPlacement, OverlaySupport};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::{KeyPolicy, OverlayOptions};
+use crate::{DisplayTarget, OverlayInput, OverlayPlacement, OverlaySupport};
 
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/any_host.rs"]
 mod any_host;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/app.rs"]
 mod app;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/draw.rs"]
 mod draw;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/frame.rs"]
 mod frame;
+#[cfg(not(target_arch = "wasm32"))]
 use frame::{OverlayRenderArgs, idle_after, render_frame, step};
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/input.rs"]
 mod input;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod keys;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/lifetime.rs"]
 mod lifetime;
 pub(crate) mod options;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/placement.rs"]
 mod placement;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub(crate) use placement::monitor_at;
+#[cfg(not(target_arch = "wasm32"))]
 use placement::{monitor, position};
+#[cfg(not(target_arch = "wasm32"))]
 mod presence;
+#[cfg(not(target_arch = "wasm32"))]
 use presence::{Presence, Release};
 mod requests;
-use requests::{Requests, Update, Visibility};
+use requests::{KeyRequest, Requests, Update, Visibility};
+#[cfg(not(target_arch = "wasm32"))]
 mod retire;
+#[cfg(not(target_arch = "wasm32"))]
 use retire::Retire;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/surface.rs"]
 mod surface;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "overlay/toplevel.rs"]
+mod toplevel;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/xwayland.rs"]
 pub(crate) mod xwayland;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use app::OverlayHost;
+#[cfg(not(target_arch = "wasm32"))]
 use app::OverlayApp;
 #[cfg(test)]
 use crate::compose::{Compositor, Frame};
@@ -164,7 +203,8 @@ impl SharedCore {
     fn refollow_pointer(&self) { self.request(|q| q.refollow = true); }
     fn set_placement(&self, placement: Option<OverlayPlacement>) { self.request(|q| q.placement = Some(placement)); }
     fn set_display(&self, display: DisplayTarget) { self.request(|q| q.display = Some(display)); }
-    fn request_keys(&self) { self.request(|q| q.request_keys = true); }
+    fn request_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Take)); }
+    fn release_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Release)); }
     fn window_number(&self) -> Option<u32> { self.native.lock().unwrap().0 }
     fn capture_exclusion(&self) -> OverlaySupport { self.capabilities().capture_exclusion }
     fn capabilities(&self) -> crate::OverlayCapabilities { self.native.lock().unwrap().1 }
@@ -220,6 +260,11 @@ impl<T> Clone for OverlayHandle<T> {
 }
 
 impl<T: 'static> OverlayHandle<T> {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn disconnected() -> Self {
+        Self { shared: Arc::new(Shared { core: Arc::default(), updates: Mutex::default() }) }
+    }
+
     /// Takes effect on the next event-loop turn, or after the current owned drag releases.
     #[inline(always)]
     pub fn set_input(&self, input: OverlayInput) { self.shared.core.set_input(input); }
@@ -239,9 +284,18 @@ impl<T: 'static> OverlayHandle<T> {
     pub fn set_display(&self, display: DisplayTarget) { self.shared.core.set_display(display); }
 
     /// Request keyboard focus without application activation, for a shown `KeyPolicy::OnDemand`
-    /// overlay where `capabilities().nonactivating_keys` is `Supported` (see `KeyPolicy`).
+    /// or `KeyPolicy::Exclusive` overlay where `capabilities().nonactivating_keys` is
+    /// `Supported` (see `KeyPolicy`).
     #[inline(always)]
     pub fn request_keys(&self) { self.shared.core.request_keys(); }
+
+    /// Gives the keys back without hiding: on Wayland layer-shell the surface's keyboard
+    /// interactivity returns to none, the layer stays mapped, and the overlay hears a blur at
+    /// once (compositors may send no `wl_keyboard.leave`). A later `request_keys` takes them
+    /// again. Other hosts do nothing yet. The latest of `request_keys` and `release_keys` in
+    /// one event-loop turn wins.
+    #[inline(always)]
+    pub fn release_keys(&self) { self.shared.core.release_keys(); }
 
     /// macOS panel CGWindowID for an explicit ScreenCaptureKit exclusion filter. Available
     /// at native creation (see `on_created`/`prewarm`); a new one with each window made.
@@ -346,6 +400,7 @@ impl<T: 'static> OverlayHandle<T> {
 }
 
 /// An overlay before the event loop runs: the shell gives it a wake-up and the GPU pool.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) trait PendingOverlay: AnyHost {
     fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>);
     fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing);
@@ -354,16 +409,19 @@ pub(crate) trait PendingOverlay: AnyHost {
     fn font_smoothing(&self) -> crate::FontSmoothing;
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 enum Backing {
     Window(Arc<Window>),
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Layer(crate::platform::layer_shell::LayerSurface),
     /// Wayland without layer-shell: an X11 window on XWayland, for overlays that take no input
-    /// or whose host opted in to pointer input there.
+    /// or whose host opted in to pointer input there. Without that either, a Wayland toplevel
+    /// (`Window`, `toplevel.rs`).
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Backing {
     fn window(&self) -> Option<&Arc<Window>> {
         match self {
@@ -375,6 +433,7 @@ impl Backing {
 }
 
 /// A shown overlay. The wgpu surface drops before what it draws into.
+#[cfg(not(target_arch = "wasm32"))]
 struct Live {
     /// The OS accessibility adapter for this surface.
     a11y: Option<crate::a11y::Adapter>,
@@ -407,6 +466,7 @@ struct Live {
 }
 
 /// All non-generic state of an overlay host, compiled once.
+#[cfg(not(target_arch = "wasm32"))]
 pub(in crate::overlay) struct OverlayCore {
     on_created: Option<Box<dyn FnMut(crate::OverlayCreated)>>,
     pending_input: Option<OverlayInput>,
@@ -422,6 +482,9 @@ pub(in crate::overlay) struct OverlayCore {
     /// `ConfiguredOverlay::macos_level` or the last `set_macos_level`.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     macos_level: Option<isize>,
+    /// `ConfiguredOverlay::macos_color_space`.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(in crate::overlay) macos_color_space: crate::MacColorSpace,
     shared: Arc<SharedCore>,
     clipboard: crate::clipboard::Client,
     popup: crate::popup_menu::Presenter,
@@ -486,6 +549,7 @@ pub(in crate::overlay) struct OverlayCore {
     test_window_drags: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl OverlayCore {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -497,6 +561,7 @@ impl OverlayCore {
         options: OverlayOptions,
         on_created: Option<Box<dyn FnMut(crate::OverlayCreated)>>,
         macos_level: Option<isize>,
+        macos_color_space: crate::MacColorSpace,
         animate_reveal: bool,
         release_after: Option<Duration>,
     ) -> Self {
@@ -525,6 +590,7 @@ impl OverlayCore {
             origin: None,
             interactive,
             macos_level,
+            macos_color_space,
             shared,
             clipboard: Default::default(),
             popup: Default::default(),
@@ -818,7 +884,7 @@ mod state_walk_tests;
 mod lost_release_tests;
 
 /// A Windows overlay's alpha (255 opaque) at `now`, fading out linearly over `length` until `end`.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg(any(target_os = "windows", test))]
 fn fade_alpha(end: Instant, length: Duration, now: Instant) -> u8 {
     if length.is_zero() { return 0; }
     let left = end.saturating_duration_since(now).as_secs_f64() / length.as_secs_f64();

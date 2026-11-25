@@ -503,10 +503,30 @@ impl Win {
         { self.window.is_maximized() }
     }
 
+    /// Reconciles the macOS full-screen watch against the live window's winit and AppKit flags.
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn sync_full_screen(&self) {
+        if self.is_panel() { return; }
+        let winit_full_screen = self.window.fullscreen().is_some();
+        let style_mask_full_screen = crate::window::chrome::mac::style_mask_full_screen(&self.window);
+        self.native.full_screen.sync(winit_full_screen, style_mask_full_screen);
+    }
+
+    /// Current macOS full-screen transition phase. Adopted panels always stay `Windowed`.
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn full_screen_state(&self) -> crate::window::chrome::full_screen::State {
+        if self.is_panel() { return crate::window::chrome::full_screen::State::Windowed; }
+        self.native.full_screen.state()
+    }
+
     /// Whether the native window is currently full screen. Adopted macOS panels never enter
-    /// full screen.
+    /// full screen. On macOS this reads the window's transition watch so full-screen state flips
+    /// at AppKit's `WillEnter` / `WillExit` notifications instead of waiting for winit's `DidExit`.
     pub(in crate::window) fn is_full_screen(&self) -> bool {
-        !self.is_panel() && self.window.fullscreen().is_some()
+        #[cfg(target_os = "macos")]
+        { crate::window::chrome::full_screen::window_is_full_screen(self.native.full_screen.state(), self.is_panel()) }
+        #[cfg(not(target_os = "macos"))]
+        { !self.is_panel() && self.window.fullscreen().is_some() }
     }
 
     /// Snapshot of the live native window's state and bounds for recreating it the same way
@@ -599,8 +619,17 @@ impl Win {
 
     /// Takes this window full screen or brings it back. Adopted macOS panels ignore it.
     pub(in crate::window) fn toggle_full_screen(&self) {
-        if self.is_panel() { return; }
-        crate::window::chrome::toggle_full_screen(&self.window);
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(target) = crate::window::chrome::full_screen::toggle_target(self.native.full_screen.state(), self.is_panel()) {
+                self.set_full_screen(target);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            if self.is_panel() { return; }
+            self.set_full_screen(!self.is_full_screen());
+        }
     }
 
     /// Starts an interactive OS/compositor window resize from `edge`, returning whether the

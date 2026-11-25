@@ -17,6 +17,7 @@ mod a11y;
 mod anchor;
 mod backdrop;
 mod child_exit;
+pub(crate) mod data;
 mod direction;
 pub(crate) mod drop;
 pub(crate) mod effect;
@@ -28,6 +29,7 @@ mod growth;
 mod handler_set;
 mod handlers;
 mod help;
+mod highlight_texts;
 mod input;
 mod isolates;
 mod layout;
@@ -40,6 +42,7 @@ mod pixel_snap;
 mod rare;
 mod ride_trailing;
 mod scroll;
+mod selection_scope;
 mod selection_style;
 mod sticky;
 mod text;
@@ -76,6 +79,7 @@ pub(crate) use scroll::FadeStyle;
 pub use scroll::ScrollFade;
 pub use scroll::ScrollSpec;
 pub(crate) use scroll::{AtBottomFn, ScrollAxes, ScrollEdges, VisibleRowsFn};
+pub(crate) use selection_scope::{apply_selection_off, selection_off};
 pub use selection_style::SelectionStyle;
 pub(crate) use sticky::{Sticky, StickyEdge};
 pub(crate) use text_spec::{Elide, InlineAnchor, TextDir, TextDirEvent, step_text_dir, wipe_links, wipe_string};
@@ -235,6 +239,7 @@ pub(crate) type InputPasteFn = Rc<dyn Fn(crate::states::States<'_>, &crate::Clip
 pub(crate) type InputCopyFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx) -> Option<crate::ClipboardContent>>;
 pub(crate) type PickFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::Picked>, &mut Tx)>;
 pub(crate) type TextOffsetFn = Box<dyn FnOnce(crate::states::States<'_>, Option<usize>, &mut Tx)>;
+pub(crate) type TextLineFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::TextLine>, &mut Tx)>;
 pub(crate) type ElementsReadFn = Box<dyn FnOnce(crate::states::States<'_>, &[crate::ElementInfo], &mut Tx)>;
 pub(crate) type LayoutReadFn = Box<dyn FnOnce(crate::states::States<'_>, Option<[f32; 4]>, &mut Tx)>;
 pub(crate) type PresentedReadFn = Box<dyn FnOnce(crate::states::States<'_>, Option<([f32; 4], f32)>, &mut Tx)>;
@@ -254,6 +259,11 @@ pub(crate) enum PickRead {
         y: f32,
         f: Rc<std::cell::Cell<Option<TextOffsetFn>>>,
     },
+    TextLine {
+        key: String,
+        byte: usize,
+        f: Rc<std::cell::Cell<Option<TextLineFn>>>,
+    },
     Elements {
         f: Rc<std::cell::Cell<Option<ElementsReadFn>>>,
     },
@@ -271,6 +281,7 @@ impl std::fmt::Debug for PickRead {
         match self {
             Self::Element { .. } => f.write_str("PickRead::Element"),
             Self::TextOffset { .. } => f.write_str("PickRead::TextOffset"),
+            Self::TextLine { .. } => f.write_str("PickRead::TextLine"),
             Self::Elements { .. } => f.write_str("PickRead::Elements"),
             Self::Layout { .. } => f.write_str("PickRead::Layout"),
             Self::Presented { .. } => f.write_str("PickRead::Presented"),

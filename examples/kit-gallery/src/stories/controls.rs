@@ -375,6 +375,33 @@ pub(super) fn radio_states(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         )
 }
 
+/// `ui-radio--surfaces`: the controls on the base background and on layer 1, each default,
+/// selected and disabled, then invalid.
+pub(super) fn radio_surfaces(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
+    let column = |label: &str, surface: RadioSurface| {
+        col()
+            .gap(20.0)
+            .child(
+                RadioGroup::new()
+                    .label(label)
+                    .surface(surface)
+                    .item(RadioItem::new("Default", false))
+                    .item(RadioItem::new("Selected", true))
+                    .item(RadioItem::new("Disabled", false).disabled(true))
+                    .build(k),
+            )
+            .child(
+                RadioGroup::new()
+                    .label("Invalid")
+                    .surface(surface)
+                    .invalid(true)
+                    .item(RadioItem::new("Invalid", false))
+                    .build(k),
+            )
+    };
+    row().gap(32.0).items_start().child(column("Base", RadioSurface::Base)).child(column("Layer 1", RadioSurface::Layer1))
+}
+
 // Slider
 
 pub(super) fn slider_basic(s: &G, k: &Kit, _: &mut Vec<El>) -> El {

@@ -29,6 +29,7 @@ mod macos;
 mod windows;
 
 /// Whether this platform's windows start OS drag sessions.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
 /// Pointer travel (points, straight-line) from the press before a drag session starts.
@@ -207,6 +208,7 @@ enum Placement {
     /// Over the element's top-left, at the element's full (unclipped) size unless sized.
     Element,
     /// Top-left at this point, at the image's own size (the snapshot's pixel-aligned crop).
+    #[cfg(not(target_arch = "wasm32"))]
     At(f32, f32),
 }
 
@@ -249,6 +251,7 @@ impl DragImage {
                 let (w, h) = self.size.unwrap_or((bounds[2], bounds[3]));
                 [bounds[0], bounds[1], w.max(1.0), h.max(1.0)]
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Placement::At(x, y) => [x, y, w, h],
         }
     }
@@ -292,6 +295,8 @@ pub enum DragOutcome {
 /// threshold.
 pub(crate) struct DragOutStart {
     pub path: String,
+    // Read by desktop drag_out::begin on macOS/Windows; constructed by shared runtime pointer handling.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub item: DragItem,
     /// The element's visible drawn rect in window points: x, y, w, h.
     pub rect: [f32; 4],
@@ -320,6 +325,7 @@ pub(crate) fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>
 
 /// Draws the last frame's instances again offscreen and reads back `rect` (window points), so
 /// the drag shows what the user grabbed. `None` for formats it can't read back.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn snapshot(gpu: &crate::render::Gpu, renderer: &crate::render::Renderer, size: (u32, u32), scale: f32, clear: [f32; 4], rect: [f32; 4]) -> Option<DragImage> {
     let format = renderer.format();
     let bgra = match format {
@@ -356,6 +362,7 @@ pub(crate) fn snapshot(gpu: &crate::render::Gpu, renderer: &crate::render::Rende
 }
 
 /// `rect` (points) in device pixels, clamped to the frame: x, y, w, h. `None` when empty.
+#[cfg(not(target_arch = "wasm32"))]
 fn crop(rect: [f32; 4], scale: f32, size: (u32, u32)) -> Option<[u32; 4]> {
     let x0 = (rect[0] * scale).floor().clamp(0.0, size.0 as f32) as u32;
     let y0 = (rect[1] * scale).floor().clamp(0.0, size.1 as f32) as u32;
@@ -367,6 +374,7 @@ fn crop(rect: [f32; 4], scale: f32, size: (u32, u32)) -> Option<[u32; 4]> {
 /// Frame pixels are premultiplied, in the surface's channel order. On `*Srgb` targets the bytes
 /// hold `srgb_encode(linear_rgb * a)` and must be un-premultiplied in linear light; on non-sRGB
 /// targets (`srgb_blend`) they hold `srgb_encode(linear_rgb) * a` and divide directly.
+#[cfg(not(target_arch = "wasm32"))]
 fn to_straight_rgba(pixels: &mut [u8], bgra: bool, srgb_target: bool) {
     if bgra {
         for p in pixels.chunks_exact_mut(4) {
@@ -391,6 +399,7 @@ fn to_straight_rgba(pixels: &mut [u8], bgra: bool, srgb_target: bool) {
 
 /// Starts the OS drag session for `start` from inside the pointer event that crossed the
 /// threshold. `done` runs once with how it ended (also when it couldn't start: `Cancelled`).
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_variables))]
 pub(crate) fn begin(window: &winit::window::Window, start: DragOutStart, snapshot: Option<DragImage>, done: Box<dyn FnOnce(DragOutcome)>) {
     #[cfg(target_os = "macos")]

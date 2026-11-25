@@ -6,7 +6,7 @@ pub enum LoopKind {
     Opacity { low: f32, high: f32 },
     /// Piecewise-linear, wall-clock opacity sampled at display rate or a fixed cadence.
     OpacityCycle(Cycle),
-    /// Finite opacity/scale choreography; holds its last pose at rest.
+    /// Finite opacity/scale/translate/rotate choreography; holds its last pose at rest.
     Sequence(Sequence),
     Rotation,
     /// An eased one-way sweep that wraps, in fractions of the node's own size (an
@@ -269,6 +269,15 @@ impl LoopTrack {
         let a = self.amplitude.sample(now);
         Some([0, 1].map(|i| (from[i] + (to[i] - from[i]) * t) * a))
     }
+    /// A moving [`Sequence`]'s translate (points) and rotate (radians) now; `None` for other
+    /// kinds and for sequences that only fade and scale. Once the element drops the sequence
+    /// ([`Self::enabled`] `false`) it lets go at once, one-shot or repeating, so the element's
+    /// own offset and rotation spring it home.
+    pub fn motion(&self, now: f64, reduced: bool) -> Option<([f32; 2], f32)> {
+        let LoopKind::Sequence(frames) = self.spec.kind else { return None };
+        if !frames.moves() || self.amplitude.target() <= 0.0 { return None; }
+        self.pose(now, reduced).map(|p| (p.translate, p.rotate))
+    }
     pub fn pose(&self, now: f64, reduced: bool) -> Option<Beat> {
         let LoopKind::Sequence(frames) = self.spec.kind else { return None };
         if frames.repeating {
@@ -278,6 +287,8 @@ impl LoopTrack {
             if a < 1.0 {
                 p.opacity = 1.0 + (p.opacity - 1.0) * a;
                 p.scale = (1.0 + (p.scale - 1.0) * a).max(0.0);
+                p.translate = p.translate.map(|v| v * a);
+                p.rotate *= a;
             }
             return Some(p);
         }

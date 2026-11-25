@@ -21,6 +21,8 @@ mod tests;
 pub struct Tx {
     pub(crate) shortcut_activation_token: Option<String>,
     pub(crate) key_repeat: bool,
+    /// `Tx::key_direction`.
+    pub(crate) key_rtl: bool,
     /// `Tx::drag_repeat`.
     pub(crate) drag_repeat: bool,
     /// `Tx::drag_repeat_after`.
@@ -106,6 +108,8 @@ pub struct Tx {
     pub(crate) announce: Option<(String, crate::LiveRegion)>,
     pub(crate) open_urls: Vec<crate::open_url::Link>,
     pub(crate) open_paths: Vec<crate::open_path::PathRequest>,
+    /// `AppHandle::register_url_scheme`: schemes to claim with the system.
+    pub(crate) url_schemes: Vec<crate::open_url::scheme::Claim>,
     pub(crate) trace: Option<TraceCalls>,
     pub(crate) popups: Vec<crate::popup_menu::Call>,
     /// `Tx::resolve_field_menu`: `Some(Some(id))` picks an item, `Some(None)` dismisses.
@@ -317,6 +321,7 @@ pub enum Shell {
     Relaunch,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Shell {
     /// What follows the app's exit for this request, when it quits.
     pub(crate) fn after(self) -> Option<crate::quit::After> {
@@ -498,7 +503,8 @@ impl Tx {
     /// its display, which hides a custom titlebar's caption buttons (`Cx::chrome_insets`).
     /// Does nothing for overlays, macOS non-activating panels, and headless runs. When both
     /// `toggle_full_screen` and [`Self::set_full_screen`] run in one turn, the last call wins.
-    /// Read the confirmed OS state with [`crate::Cx::is_full_screen`].
+    /// Read the current full-screen state with [`crate::Cx::is_full_screen`] (flips at transition
+    /// start on macOS and on OS confirmation on Windows and Linux).
     pub fn toggle_full_screen(&mut self) {
         self.full_screen = Some(FullScreenRequest::Toggle);
     }
@@ -508,8 +514,9 @@ impl Tx {
     /// its display, on macOS a native full-screen Space. Does nothing for overlays, macOS
     /// non-activating panels, and headless runs, and is a no-op when the window is already in
     /// the requested state. When multiple calls to `set_full_screen` or
-    /// [`Self::toggle_full_screen`] run in one turn, the last call wins. Read the confirmed OS
-    /// state with [`crate::Cx::is_full_screen`].
+    /// [`Self::toggle_full_screen`] run in one turn, the last call wins. Read the current
+    /// full-screen state with [`crate::Cx::is_full_screen`] (flips at transition start on macOS
+    /// and on OS confirmation on Windows and Linux).
     ///
     /// ```
     /// # use rune::{el, Tx};
@@ -607,8 +614,9 @@ impl Tx {
     /// for `http:` and `https:`, the mail app for `mailto:`. Other schemes (`file:`, an app's
     /// own) and malformed links are refused here with the reason and nothing opens. Headless
     /// runs and tests open nothing; read the requests with `Runtime::take_url_requests`.
+    /// [`Tx::open_url_then`] also says whether the open worked.
     pub fn open_url(&mut self, url: &str) -> Result<(), crate::open_url::OpenUrlError> {
-        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check(url)?, same_tab: false });
+        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check(url)?, same_tab: false, opened: None });
         Ok(())
     }
 
@@ -618,7 +626,7 @@ impl Tx {
     /// On web a link without a scheme (`/notes/42`) is relative to the page. Native opens it as
     /// `open_url` does, and headless runs record it with the others.
     pub fn open_url_same_tab(&mut self, url: &str) -> Result<(), crate::open_url::OpenUrlError> {
-        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check_same_tab(url)?, same_tab: true });
+        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check_same_tab(url)?, same_tab: true, opened: None });
         Ok(())
     }
 
@@ -882,6 +890,7 @@ impl Tx {
     }
 
     /// Takes `prepare_text`'s request if it is for a window of state `S`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn take_prepared<S: 'static>() -> Option<(fn(&S, &mut crate::Cx<S>) -> crate::El, Option<(f32, f32)>)> {
         if !Self::prepare_owed::<S>() { return None; }
         let (view, size) = PREPARE.with_borrow_mut(Option::take)?;
@@ -889,6 +898,7 @@ impl Tx {
     }
 
     /// Whether `prepare_text` holds a request for a window of state `S`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn prepare_owed<S: 'static>() -> bool {
         PREPARE.with_borrow(|a| a.as_ref().is_some_and(|(view, _)| view.is::<fn(&S, &mut crate::Cx<S>) -> crate::El>()))
     }

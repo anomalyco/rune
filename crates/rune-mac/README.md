@@ -11,7 +11,7 @@ blinking or taking focus.
 | `saved_size(name) -> Option<(f32, f32)>` | The size `remember_frame(name)` saved, to open the window at (`AppSpec::size`), so the layout doesn't animate to it at launch. |
 | `toggle_full_screen()`, `is_full_screen()` | The key window's macOS full screen (the green button, ⌃⌘F). |
 | `busy(on)` | Holds `scripts/mac-app`'s relaunch while on, for work a relaunch would lose. |
-| `notify` | `rune-notify`, re-exported: system notifications on macOS (`UNUserNotificationCenter`) and Windows (toasts). See its README. |
+| `notify` | `rune-notify`, re-exported: system notifications on macOS (`UNUserNotificationCenter`), Windows (toasts) and Linux (`org.freedesktop.Notifications`). See its README. |
 
 Off macOS every helper is a no-op: `remember_frame` returns true, `saved_size` returns `None`,
 `is_full_screen` returns false, and the rest do nothing.

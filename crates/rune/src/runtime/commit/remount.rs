@@ -30,6 +30,7 @@ struct ListPlan {
     rows: Rc<crate::el::virtual_rows::RowSource>,
     list_group: Option<String>,
     inert: bool,
+    selection_off: bool,
     quiet: Vec<bool>,
     built_rows: Vec<(usize, El)>,
 }
@@ -201,6 +202,7 @@ impl Measurement<'_> {
 
             let list_group = v.selection.scope.group_path.clone();
             let inert = v.selection.scope.inert;
+            let selection_off = v.selection.scope.selection_off;
             // Cleared in place: a later plan that falls back keeps this list's buffers too.
             v.selection.pins.clear_texts();
             let rows = v.selection.pins.source().and_then(|s| s.rebuild())
@@ -235,6 +237,7 @@ impl Measurement<'_> {
                 rows,
                 list_group,
                 inert,
+                selection_off,
                 quiet: Vec::new(),
                 built_rows: Vec::new(),
             });
@@ -281,6 +284,7 @@ impl Measurement<'_> {
                         i,
                         plan.list_group.as_deref(),
                         plan.inert,
+                        plan.selection_off,
                     );
                 }
             }
@@ -297,6 +301,7 @@ impl Measurement<'_> {
                     i,
                     plan.list_group.as_deref(),
                     plan.inert,
+                    plan.selection_off,
                 );
             }
             for (pos, row_i) in plan.range.clone().enumerate() {

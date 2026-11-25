@@ -801,3 +801,49 @@ fn degraded_mode_paints_all_degradable_needs_gpu_scenes_and_refuses_non_degradab
         NeedsGpu::Target
     );
 }
+
+#[test]
+fn transparent_cpu_painter_clears_to_zero_alpha_and_premultiplies_translucent_pixels() {
+    let size = (64u32, 32u32);
+    let atlas = Atlas::new();
+    let images = ImageAtlas::default();
+
+    // 1. Transparent window (clear_color == [0.0; 4]): untouched pixels are fully transparent
+    // [0, 0, 0, 0] BGRA, and a 50%-alpha red card is premultiplied BGRA (B=0, G=0, R≈128, A≈128).
+    let translucent_red = Color { r: 1.0, g: 0.0, b: 0.0, a: 0.5 }.premul_srgb(1.0);
+    let card = rect([16.0, 8.0, 32.0, 16.0], translucent_red, NO_CLIP);
+    let mut painter = CpuPainter::new(1);
+    let mut transparent_buf = vec![0xAAu8; (size.0 * size.1 * 4) as usize];
+    painter
+        .paint(
+            &Scene::new(&[card], &atlas, &images, size, [0.0; 4]).srgb_blend(true),
+            &mut Target::new(&mut transparent_buf, size.0, size.1),
+        )
+        .expect("transparent CPU paint");
+    let px = |buf: &[u8], x: u32, y: u32| -> [u8; 4] {
+        let i = ((y * size.0 + x) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    };
+    assert_eq!(px(&transparent_buf, 2, 2), [0, 0, 0, 0], "empty area must be clear zero alpha");
+    let inside = px(&transparent_buf, 24, 14);
+    assert_eq!(inside[0], 0);
+    assert_eq!(inside[1], 0);
+    assert!((inside[2] as i32 - 128).abs() <= 1, "premultiplied R: {inside:?}");
+    assert!((inside[3] as i32 - 128).abs() <= 1, "premultiplied A: {inside:?}");
+
+    // 2. Opaque fallback (e.g. X11 24-bit visual without ARGB, rt.transparent == false):
+    // clear_color carries the opaque theme background so untouched pixels have alpha 255 and
+    // show the theme background rather than transparent black.
+    let bg = [0.2, 0.4, 0.6, 1.0];
+    let mut opaque_buf = vec![0u8; (size.0 * size.1 * 4) as usize];
+    let mut opaque_painter = CpuPainter::new(1);
+    opaque_painter
+        .paint(
+            &Scene::new(&[card], &atlas, &images, size, bg).srgb_blend(true),
+            &mut Target::new(&mut opaque_buf, size.0, size.1),
+        )
+        .expect("opaque fallback CPU paint");
+    let corner = px(&opaque_buf, 2, 2);
+    assert_eq!(corner[3], 255, "opaque fallback must paint solid background alpha");
+    assert!(corner[0] > 140 && corner[1] > 90 && corner[2] > 40, "expected theme bg BGRA, got {corner:?}");
+}

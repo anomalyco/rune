@@ -150,6 +150,7 @@ impl Presents {
     }
 
     /// Whether any line still waits for its present time.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn waiting(&mut self) -> bool {
         self.poll();
         self.pending.iter().any(|p| matches!(p.present, Present::Waiting { .. }))

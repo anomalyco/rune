@@ -19,8 +19,10 @@ use sctk::reexports::protocols::wp::fractional_scale::v1::client::wp_fractional_
 use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
 use sctk::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
+use sctk::reexports::protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1;
 
 use sctk::compositor::{CompositorState, Region, SurfaceData, SurfaceDataExt};
+use sctk::globals::GlobalData;
 use sctk::seat::pointer::{PointerDataExt, ThemedPointer};
 use sctk::shell::xdg::window::{DecorationMode, Window, WindowConfigure};
 use sctk::shell::xdg::XdgSurface;
@@ -36,7 +38,8 @@ use crate::error::{ExternalError, NotSupportedError};
 use crate::platform_impl::wayland::logical_to_physical_rounded;
 use crate::platform_impl::wayland::types::cursor::{CustomCursor, SelectedCursor};
 use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
-use crate::platform_impl::{PlatformCustomCursor, WindowId};
+use crate::platform_impl::wayland::types::xdg_toplevel_icon::ToplevelIcon;
+use crate::platform_impl::{PlatformCustomCursor, PlatformIcon, WindowId};
 use crate::window::{CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme};
 
 use crate::platform_impl::wayland::seat::{
@@ -62,6 +65,12 @@ pub struct WindowState {
 
     // A shared pool where to allocate custom cursors.
     custom_cursor_pool: Arc<Mutex<SlotPool>>,
+
+    /// Xdg toplevel icon manager, to set the window's icon.
+    xdg_toplevel_icon_manager: Option<XdgToplevelIconManagerV1>,
+
+    /// The window's current icon, whose buffer the compositor may still read.
+    toplevel_icon: Option<ToplevelIcon>,
 
     /// The last received configure.
     pub last_configure: Option<WindowConfigure>,
@@ -185,8 +194,12 @@ impl WindowState {
             .fractional_scaling_manager
             .as_ref()
             .map(|fsm| fsm.fractional_scaling(window.wl_surface(), queue_handle));
+        let xdg_toplevel_icon_manager =
+            winit_state.xdg_toplevel_icon_manager.as_ref().map(|manager| manager.global().clone());
 
         Self {
+            toplevel_icon: None,
+            xdg_toplevel_icon_manager,
             blur: None,
             blur_manager: winit_state.kwin_blur_manager.clone(),
             compositor,
@@ -1181,6 +1194,41 @@ impl WindowState {
 
         self.window.set_title(&title);
         self.title = title;
+    }
+
+    /// Set the window's icon through `xdg_toplevel_icon_v1`, when the compositor has it.
+    pub(crate) fn set_window_icon(&mut self, window_icon: Option<PlatformIcon>) {
+        let Some(manager) = self.xdg_toplevel_icon_manager.as_ref() else {
+            if window_icon.is_some() {
+                info!("`xdg_toplevel_icon_manager_v1` is not supported");
+            }
+            return;
+        };
+
+        let (toplevel_icon, xdg_toplevel_icon) = match window_icon {
+            Some(icon) => {
+                let mut pool = self.custom_cursor_pool.lock().unwrap();
+                let toplevel_icon = match ToplevelIcon::new(&icon, &mut pool) {
+                    Ok(toplevel_icon) => toplevel_icon,
+                    Err(error) => {
+                        warn!("Error setting window icon: {error}");
+                        return;
+                    },
+                };
+                let xdg_toplevel_icon = manager.create_icon(&self.queue_handle, GlobalData);
+                toplevel_icon.add_buffer(&xdg_toplevel_icon);
+                (Some(toplevel_icon), Some(xdg_toplevel_icon))
+            },
+            None => (None, None),
+        };
+
+        manager.set_icon(self.window.xdg_toplevel(), xdg_toplevel_icon.as_ref());
+        self.toplevel_icon = toplevel_icon;
+
+        // The icon object is immutable once set; the toplevel keeps what it showed.
+        if let Some(xdg_toplevel_icon) = xdg_toplevel_icon {
+            xdg_toplevel_icon.destroy();
+        }
     }
 
     /// Mark the window as transparent.

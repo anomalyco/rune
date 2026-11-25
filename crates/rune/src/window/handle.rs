@@ -24,6 +24,7 @@ pub(super) enum Route {
     /// No host yet, or a headless run, which takes them each turn (`take_headless`).
     Unbound { queued: Vec<Request> },
     /// The host's event loop and slot.
+    #[cfg(not(target_arch = "wasm32"))]
     Bound { proxy: EventLoopProxy<WakeEvent>, slot: usize },
 }
 
@@ -41,6 +42,7 @@ impl WindowHandle {
     pub(crate) fn new(key: &str) -> Self { Self { native: Arc::default(), key: key.into() } }
 
     /// Routes requests to the window's host, starting with those queued before it existed.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn bind(&self, proxy: EventLoopProxy<WakeEvent>, slot: usize) {
         let mut route = self.native.route.lock().unwrap();
         if let Route::Unbound { queued } = &mut *route {
@@ -54,6 +56,7 @@ impl WindowHandle {
     pub(crate) fn take_headless(&self) -> Vec<WakeEvent> {
         let queued = match &mut *self.native.route.lock().unwrap() {
             Route::Unbound { queued } => std::mem::take(queued),
+            #[cfg(not(target_arch = "wasm32"))]
             Route::Bound { .. } => Vec::new(),
         };
         queued.into_iter().map(|request| request(0)).collect()
@@ -66,6 +69,7 @@ impl WindowHandle {
 
     pub(super) fn send(&self, request: impl FnOnce(usize) -> WakeEvent + Send + 'static) {
         match &mut *self.native.route.lock().unwrap() {
+            #[cfg(not(target_arch = "wasm32"))]
             Route::Bound { proxy, slot } => { proxy.send_event(request(*slot)).ok(); }
             Route::Unbound { queued } => queued.push(Box::new(request)),
         }
@@ -160,7 +164,10 @@ impl WindowHandle {
         Ok(())
     }
     pub fn set_always_on_top(&self, on: bool) {
+        #[cfg(not(target_arch = "wasm32"))]
         self.send(move |slot| WakeEvent::Level(slot, on));
+        #[cfg(target_arch = "wasm32")]
+        let _ = on;
     }
     /// Sets whether this window is excluded from screen captures, retained across native
     /// recreation and overriding any creation-time `exclude_from_capture` option.
@@ -182,7 +189,10 @@ impl WindowHandle {
     /// let _ = spec;
     /// ```
     pub fn set_exclude_from_capture(&self, exclude: bool) {
+        #[cfg(not(target_arch = "wasm32"))]
         self.send(move |slot| WakeEvent::ExcludeFromCapture(slot, exclude));
+        #[cfg(target_arch = "wasm32")]
+        let _ = exclude;
     }
     /// Overrides this window's native light or dark chrome at runtime, retained across native
     /// recreation.
@@ -206,7 +216,10 @@ impl WindowHandle {
     /// let _ = spec;
     /// ```
     pub fn set_color_scheme(&self, scheme: crate::ColorScheme) {
+        #[cfg(not(target_arch = "wasm32"))]
         self.send(move |slot| WakeEvent::ColorScheme(slot, scheme));
+        #[cfg(target_arch = "wasm32")]
+        let _ = scheme;
     }
     /// Physical desktop pixels; retained across recreation. Unsupported on Wayland.
     pub fn set_position(&self, position: (i32, i32)) {
@@ -239,6 +252,19 @@ impl WindowHandle {
     }
     pub fn show(&self) { self.set_visible(true); }
     pub fn hide(&self) { self.set_visible(false); }
+    /// [`hide`](Self::hide), with the native window off the screen before this returns, so a
+    /// screen grab made next in the same handler doesn't see it. Call it on the UI thread.
+    ///
+    /// On Windows the window hides with DWM's fade turned off (`DWMWA_TRANSITIONS_FORCEDISABLED`
+    /// around `ShowWindow(SW_HIDE)`) and this returns after `DwmFlush`, once DWM has composed a
+    /// frame without it; it blocks for up to one refresh. Elsewhere it is [`hide`](Self::hide).
+    /// Either way the window's host still takes the hide on its next turn (keys released, frames
+    /// stopped), as with [`hide`](Self::hide).
+    pub fn hide_now(&self) {
+        #[cfg(target_os = "windows")]
+        if let Ok(window) = self.window() { crate::platform::win32::hide_now(&window); }
+        self.hide();
+    }
     /// Focus/activate an already-visible window, restoring it if minimized. Wayland requests attention.
     pub fn focus(&self) { self.send(WakeEvent::Focus); }
     /// Show, restore and activate, creating the window if needed (see `AppHandle::open`).
@@ -295,7 +321,7 @@ impl WindowHandle {
 pub(super) fn native_window_number(window: &Window) -> Option<u32> {
     u32::try_from(crate::platform::macos::ns_window(window)?.windowNumber()).ok().filter(|n| *n != 0)
 }
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
 pub(super) fn native_window_number(_: &Window) -> Option<u32> { None }
 
 #[cfg(test)]

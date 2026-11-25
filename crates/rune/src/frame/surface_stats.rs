@@ -3,11 +3,15 @@
 //! a second for more than two seconds is a bug (it spins a core and, on wgpu 30.0.1, leaks a
 //! texture id per failed acquisition), so the meter says so once, in release builds too.
 
-use std::sync::{Arc, Mutex};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use crate::time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::machine::Effects;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::window::Missed;
 
 /// Counts of one surface's frame work.
@@ -39,6 +43,7 @@ impl SurfaceCounts {
     /// Every `get_current_texture` call that gave no drawable.
     pub fn failed(&self) -> u64 { self.occluded + self.timeouts + self.outdated }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn since(&self, earlier: &SurfaceCounts) -> SurfaceCounts {
         SurfaceCounts {
             redraws: self.redraws - earlier.redraws,
@@ -54,6 +59,7 @@ impl SurfaceCounts {
     }
 
     /// Per second over `secs`, rounded.
+    #[cfg(not(target_arch = "wasm32"))]
     fn per(&self, secs: f64) -> SurfaceCounts {
         let r = |n: u64| (n as f64 / secs).round() as u64;
         SurfaceCounts {
@@ -126,13 +132,17 @@ impl SurfaceStats {
 
 /// A surface with more failed acquisitions or unpaced redraws a second than this is spinning:
 /// above any display's refresh rate.
+#[cfg(not(target_arch = "wasm32"))]
 const SPIN_RATE: u64 = 400;
 /// Seconds in a row over `SPIN_RATE` before the meter says so.
+#[cfg(not(target_arch = "wasm32"))]
 const SPIN_SECONDS: u32 = 2;
+#[cfg(not(target_arch = "wasm32"))]
 const WINDOW: Duration = Duration::from_secs(1);
 const STALE: Duration = Duration::from_secs(2);
 
 /// Counts one surface's frames, rolls them into per-second rates and publishes them.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct SurfaceMeter {
     totals: SurfaceCounts,
     /// `totals` when the current one-second window began.
@@ -146,6 +156,7 @@ pub(crate) struct SurfaceMeter {
 }
 
 /// Whether the surface is spinning, by whole one-second windows.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Spin {
     /// The last window was under `SPIN_RATE`, or none has rolled.
@@ -157,17 +168,20 @@ enum Spin {
 }
 
 /// A one-second window rolled over, `spinning` when its rates were over `SPIN_RATE`.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 struct Rolled {
     spinning: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SpinEffect {
     /// Say the surface has spun for `seconds`.
     Warn { seconds: u32 },
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn step(spin: &mut Spin, event: Rolled) -> Effects<SpinEffect> {
     let seconds = match *spin {
         Spin::Warned => return Effects::none(),
@@ -184,6 +198,7 @@ fn step(spin: &mut Spin, event: Rolled) -> Effects<SpinEffect> {
     Effects::none()
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SurfaceMeter {
     pub(crate) fn new(name: &str, shared: Arc<Mutex<SurfaceStats>>) -> Self {
         shared.lock().unwrap().name = name.to_owned();
@@ -224,7 +239,9 @@ impl SurfaceMeter {
         match missed {
             Missed::Occluded => self.totals.occluded += 1,
             Missed::Timeout => self.totals.timeouts += 1,
-            Missed::Outdated | Missed::Unconfigured => self.totals.outdated += 1,
+            #[cfg(not(target_arch = "wasm32"))]
+            Missed::Outdated => self.totals.outdated += 1,
+            Missed::Unconfigured => self.totals.outdated += 1,
         }
         self.tick(crate::time::now());
     }
@@ -272,6 +289,7 @@ impl SurfaceMeter {
 
 /// Whether the loop turned on a deadline that was still ahead when it slept: an overdue one
 /// turns it at once, as a poll does.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn slept(cause: winit::event::StartCause) -> bool {
     matches!(cause, winit::event::StartCause::ResumeTimeReached { start, requested_resume } if requested_resume > start)
 }

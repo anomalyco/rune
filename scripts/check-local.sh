@@ -131,7 +131,7 @@ if [ "$run_wasm" -eq 1 ]; then
 fi
 
 if [ "$run_tests" -eq 1 ]; then
-  run_step "cargo test-fast" cargo test-fast
+  run_step "cargo test-fast" env RUNE_PAINT_KEEP_STRICT=1 cargo test-fast
 fi
 
 total_elapsed=$((SECONDS - total_start))

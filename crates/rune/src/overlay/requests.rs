@@ -5,9 +5,17 @@ use std::time::Duration;
 
 use crate::el::Tx;
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::OverlayCore;
 
 pub(super) type Update<T> = Box<dyn FnOnce(&mut T, &mut Tx) -> bool + Send>;
+
+/// `OverlayHandle::request_keys` or `release_keys`; the latest of the two in a turn wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum KeyRequest {
+    Take,
+    Release,
+}
 
 /// A show or a hide, fading the window's alpha over its duration (zero: at once; see
 /// `OverlayHandle::fade_in` and `fade_out` for where windows fade).
@@ -23,7 +31,8 @@ pub(super) struct Requests {
     pub follow_pointer: Option<bool>,
     pub placement: Option<Option<crate::OverlayPlacement>>,
     pub display: Option<crate::DisplayTarget>,
-    pub request_keys: bool,
+    /// `request_keys` or `release_keys`: the latest wins.
+    pub keys: Option<KeyRequest>,
     /// Move to the display under the pointer now (`OverlayHandle::refollow_pointer`).
     pub refollow: bool,
     /// The latest show or hide wins.
@@ -36,6 +45,7 @@ pub(super) struct Requests {
     pub exclude_from_capture: Option<bool>,
     pub xwayland_input: Option<bool>,
     /// The `setup` waker fired.
+    #[cfg(not(target_arch = "wasm32"))]
     pub woken: bool,
 }
 
@@ -45,6 +55,7 @@ impl Requests {
     pub fn visible(&self) -> Option<bool> { self.visibility.map(|v| matches!(v, Visibility::Show(_))) }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl OverlayCore {
     /// Keeps the window out of screen recordings, or lets recorders see it again. A window
     /// made later (Wayland recreates on hide) starts from the same option.

@@ -26,12 +26,12 @@
 //! explicit synchronization the window stays the GPU's and its surface is tried again as a lost
 //! one is (`Host::replace_lost_surface`).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::cpu_frame::{Cpu, RetiredCpu};
 use crate::gpu::fallback::Policy;
+use crate::machine::Effects;
 use crate::render::{Gpu, Instance, Renderer};
 use crate::time::Instant;
 use crate::window::CpuFirst;
@@ -41,7 +41,9 @@ use crate::window::surface::Win;
 use crate::window::warm_frame::{warm_frame, warm_instances};
 
 /// Where a window's frames go. Windows that need the GPU from their first frame (a translucent
-/// window, a second window) are `Gpu` from the start.
+/// window, a second window) are `Gpu` from the start; a visible translucent window whose
+/// pre-swapchain GPU startup fails under `CpuFirst::Auto`/`Only` (automatic adapter selection)
+/// falls back to `SurfaceMode::Cpu { job: GpuJob::Failed, .. }`.
 #[derive(Default)]
 pub(in crate::window) enum SurfaceMode {
     #[default]
@@ -82,20 +84,106 @@ pub(in crate::window) struct Latest {
     pub(super) size: (u32, u32),
 }
 
-/// What a GPU thread for a CPU window found, shared with the UI thread. `defer`: a software GPU
-/// leaves the window on the CPU (an idle hand-over under `defers_software`); a frame that needs
-/// the GPU clears it while the thread runs. `software`: the device the thread found is one.
-#[derive(Default)]
+/// Explicit state machine shared between the background GPU thread and the UI thread for one
+/// `GpuJob::Building` attempt, keeping the warm-frame decision and `gpu_ready`'s handover
+/// decision in lockstep so `gpu_ready` never switches to an unwarmed software GPU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PickState {
+    /// The worker has not yet inspected the adapter (`defer_software`: true for an automatic idle
+    /// hand-over, false once a frame needs the GPU or software GPUs are allowed).
+    Pending { defer_software: bool },
+    /// The worker found a software adapter while `defer_software` was true and skipped
+    /// `warm_frame`. `needs_gpu_arrived` records whether a `NeedsGpu` frame arrived after the
+    /// worker skipped warming and before `gpu_ready` consumed the result.
+    Deferred { needs_gpu_arrived: bool },
+    /// The worker accepted the adapter and is running (or finished) `warm_frame` off-thread.
+    Warmed,
+}
+
+/// Events fed into [`step_pick`] by the GPU thread and the UI thread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PickEvent {
+    /// A frame hit `NeedsGpu` on the UI thread while `GpuJob::Building` is in flight.
+    NeedsGpu,
+    /// The GPU thread obtained a device and asks whether to run `warm_frame`.
+    AdapterFound { software: bool },
+    /// The UI thread's `gpu_ready` consumes the finished worker's outcome.
+    Ready,
+}
+
+/// Effects returned by [`step_pick`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PickEffect {
+    /// GPU thread: run `warm_frame` off-thread before signalling `GpuReady`.
+    RunWarmFrame,
+    /// GPU thread: skip `warm_frame` (software GPU deferred on idle).
+    SkipWarmFrame,
+    /// UI thread (`gpu_ready`): stay on CPU in `GpuJob::SoftwareDeferred`.
+    DeferSoftware,
+    /// UI thread (`gpu_ready`): switch to the warmed GPU (`SurfaceMode::switch` + `reattach`).
+    SwitchToGpu,
+    /// UI thread (`gpu_ready`): `NeedsGpu` arrived after the worker skipped `warm_frame`;
+    /// restart `start_gpu(false)` so the worker runs `warm_frame` off-thread before switching.
+    RestartForWarmFrame,
+}
+
+/// Pure transition for [`PickState`]: the warm-frame decision and `gpu_ready`'s switch decision
+/// share one state, so `SwitchToGpu` is never emitted after `SkipWarmFrame`.
+pub(super) fn step_pick(state: &mut PickState, event: PickEvent) -> Effects<PickEffect> {
+    match (*state, event) {
+        (PickState::Pending { .. }, PickEvent::NeedsGpu) => {
+            *state = PickState::Pending { defer_software: false };
+            Effects::none()
+        }
+        (PickState::Deferred { .. }, PickEvent::NeedsGpu) => {
+            *state = PickState::Deferred { needs_gpu_arrived: true };
+            Effects::none()
+        }
+        (PickState::Warmed, PickEvent::NeedsGpu) => Effects::none(),
+        (PickState::Pending { defer_software: true }, PickEvent::AdapterFound { software: true }) => {
+            *state = PickState::Deferred { needs_gpu_arrived: false };
+            Effects::one(PickEffect::SkipWarmFrame)
+        }
+        (PickState::Pending { .. }, PickEvent::AdapterFound { .. }) => {
+            *state = PickState::Warmed;
+            Effects::one(PickEffect::RunWarmFrame)
+        }
+        (PickState::Deferred { .. }, PickEvent::AdapterFound { .. }) => {
+            Effects::one(PickEffect::SkipWarmFrame)
+        }
+        (PickState::Warmed, PickEvent::AdapterFound { .. }) => {
+            Effects::one(PickEffect::RunWarmFrame)
+        }
+        (PickState::Deferred { needs_gpu_arrived: false }, PickEvent::Ready) => {
+            Effects::one(PickEffect::DeferSoftware)
+        }
+        (PickState::Deferred { needs_gpu_arrived: true }, PickEvent::Ready) => {
+            Effects::one(PickEffect::RestartForWarmFrame)
+        }
+        (PickState::Warmed | PickState::Pending { .. }, PickEvent::Ready) => {
+            Effects::one(PickEffect::SwitchToGpu)
+        }
+    }
+}
+
+/// Synchronized [`PickState`] shared between the GPU worker thread and the UI thread.
 pub(in crate::window) struct Pick {
-    defer: AtomicBool,
-    software: AtomicBool,
+    state: Mutex<PickState>,
+}
+
+impl Default for Pick {
+    fn default() -> Self { Self::new(false) }
 }
 
 impl Pick {
-    fn new(defer: bool) -> Self { Pick { defer: AtomicBool::new(defer), software: AtomicBool::new(false) } }
+    pub(super) fn new(defer_software: bool) -> Self {
+        Pick { state: Mutex::new(PickState::Pending { defer_software }) }
+    }
 
-    /// Whether the window stays on the CPU with the GPU the thread made.
-    fn stays_on_cpu(&self) -> bool { self.defer.load(Ordering::Acquire) && self.software.load(Ordering::Acquire) }
+    pub(super) fn step(&self, event: PickEvent) -> Effects<PickEffect> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        step_pick(&mut state, event)
+    }
 }
 
 /// Whether an idle hand-over leaves a software GPU (`wgpu::DeviceType::Cpu`) alone: under
@@ -180,7 +268,10 @@ impl Host {
         let Some(w) = self.win.as_mut() else { return };
         let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
         match job {
-            GpuJob::Building { pick, .. } => { pick.defer.store(false, Ordering::Release); return; }
+            GpuJob::Building { pick, .. } => {
+                for _ in pick.step(PickEvent::NeedsGpu) {}
+                return;
+            }
             GpuJob::SoftwareDeferred => *job = GpuJob::Waiting { tries: 0, retry_at: None },
             GpuJob::Waiting { .. } | GpuJob::Failed => {}
         }
@@ -214,9 +305,13 @@ impl Host {
         let pick = Arc::new(Pick::new(defer));
         let found = pick.clone();
         let frame = move |gpu: &Gpu, renderer: &mut Renderer| {
-            found.software.store(gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu, Ordering::Release);
+            let software = gpu.adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+            let run_warm = found
+                .step(PickEvent::AdapterFound { software })
+                .into_iter()
+                .any(|e| e == PickEffect::RunWarmFrame);
             // A GPU the window won't take draws nothing for it.
-            if found.stays_on_cpu() { return; }
+            if !run_warm { return; }
             let Latest { instances, size } = std::mem::take(&mut *drawn.lock().unwrap_or_else(|e| e.into_inner()));
             // The format a window's swap chain has here (`surface_config`); in another one the
             // hand-over frame makes its pipelines itself, as it did.
@@ -243,18 +338,35 @@ impl Host {
         let Some(w) = self.win.as_mut() else { return };
         let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
         let GpuJob::Building { tries, pick, .. } = job else { return };
-        let (tries, stays) = (*tries, pick.stays_on_cpu());
+        let (tries, pick) = (*tries, pick.clone());
         crate::marks::mark("gpu.window.ready");
         // Every adapter refused a device: a surface made now would only ask them again, on this
         // thread, and would put a driver on a window the CPU keeps drawing.
         if !crate::render::warm_gpu_made() { return self.fail_gpu("no GPU gave a device".into(), tries); }
-        // The only GPU is a software one: the CPU renderer goes on drawing the window, and the
-        // device waits in the warm slot until it lapses or a frame that needs it takes it.
-        if stays {
-            *job = GpuJob::SoftwareDeferred;
-            crate::marks::mark("gpu.window.software_deferred");
-            if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") { eprintln!("rune: the GPU is a software one: the window stays on the CPU renderer until a frame needs the GPU"); }
-            return;
+        for effect in pick.step(PickEvent::Ready) {
+            match effect {
+                PickEffect::DeferSoftware => {
+                    // The only GPU is a software one: the CPU renderer goes on drawing the window,
+                    // and the device waits in the warm slot until it lapses or a frame needs it.
+                    if let SurfaceMode::Cpu { job, .. } = &mut w.native.mode {
+                        *job = GpuJob::SoftwareDeferred;
+                    }
+                    crate::marks::mark("gpu.window.software_deferred");
+                    if std::env::var_os("RUNE_GPU_LOG").is_some_and(|v| v != "0") { eprintln!("rune: the GPU is a software one: the window stays on the CPU renderer until a frame needs the GPU"); }
+                    return;
+                }
+                PickEffect::RestartForWarmFrame => {
+                    // NeedsGpu arrived after the worker skipped warm_frame and before gpu_ready
+                    // ran: restart with software allowed so warm_frame compiles layer/effect
+                    // shaders off-thread (reusing the warmed device) before switching.
+                    if let SurfaceMode::Cpu { job, .. } = &mut w.native.mode {
+                        *job = GpuJob::Waiting { tries: 0, retry_at: None };
+                    }
+                    self.start_gpu(false);
+                    return;
+                }
+                PickEffect::SwitchToGpu | PickEffect::RunWarmFrame | PickEffect::SkipWarmFrame => {}
+            }
         }
         // The switch comes before the Vulkan surface, not after it: a driver may put its own
         // objects on the window as soon as its surface or swap chain exists.

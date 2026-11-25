@@ -70,15 +70,18 @@ pub enum CloseResponse {
 }
 
 /// `App::turn_scope`'s hooks.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct TurnScope<S> {
     pub(crate) enter: fn(&mut S),
     pub(crate) leave: fn(&mut S),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S> Clone for TurnScope<S> {
     fn clone(&self) -> Self { *self }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<S> Copy for TurnScope<S> {}
 
 /// Normalizes an opt-in frame-rate cap (Hz): positive finite values clamp to at least `1.0` Hz,
@@ -122,16 +125,22 @@ pub struct App<S: 'static> {
     pub(crate) on_close_request: Option<fn(&mut S, &mut Tx) -> CloseResponse>,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) turn_scope: Option<TurnScope<S>>,
     pub(crate) on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     pub(crate) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
     pub(crate) on_open_files: Option<crate::open_url::incoming::OnOpenFiles<S>>,
     pub(crate) shared: Arc<Shared<S>>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) has_overlays: bool,
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) on_ready: Option<OnWindow>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) on_window_geometry: Option<crate::window::geometry::OnWindowGeometry<S>>,
     pub(crate) on_display_close: Option<OnDisplayClose>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     pub(crate) on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
@@ -193,16 +202,22 @@ impl<S: 'static> App<S> {
             on_close_request: None,
             on_close: None,
             on_quit: None,
+            #[cfg(not(target_arch = "wasm32"))]
             turn_scope: None,
             on_rest: None,
             on_reopen: None,
             on_open_url: None,
             on_open_files: None,
             shared,
+            #[cfg(not(target_arch = "wasm32"))]
             overlays: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            has_overlays: false,
             windows: Vec::new(),
             on_window: None,
             on_ready: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            on_window_geometry: None,
             on_display_close: None,
             on_frame_encoded: None,
             on_frame_presented: None,
@@ -292,6 +307,7 @@ impl<S: 'static> App<S> {
     /// `Tx::set_font_smoothing` switches it while running.
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self {
         self.runtime.font_smoothing = mode;
+        #[cfg(not(target_arch = "wasm32"))]
         for overlay in &mut self.overlays {
             overlay.inherit_font_smoothing(mode);
         }
@@ -600,14 +616,23 @@ impl<S: 'static> App<S> {
     /// Uses this app's fonts and font smoothing (`ConfiguredOverlay::font_smoothing` overrides it).
     /// Headless runs don't draw overlays.
     pub fn overlay<T: 'static>(&mut self, spec: impl Into<crate::ConfiguredOverlay<T>>, state: T) -> crate::overlay::OverlayHandle<T> {
-        let mut configured = spec.into();
-        if configured.runtime.emoji_family.is_none() {
-            configured.runtime.emoji_family = self.runtime.emoji_family.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut configured = spec.into();
+            if configured.runtime.emoji_family.is_none() {
+                configured.runtime.emoji_family = self.runtime.emoji_family.clone();
+            }
+            let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
+            overlay.set_prewarm_effects(self.prewarm_effects);
+            self.overlays.push(Box::new(overlay));
+            handle
         }
-        let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
-        overlay.set_prewarm_effects(self.prewarm_effects);
-        self.overlays.push(Box::new(overlay));
-        handle
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (spec, state);
+            self.has_overlays = true;
+            crate::overlay::OverlayHandle::disconnected()
+        }
     }
 
     /// Adds an ordinary window with its own state type to this app's event loop, such as a
@@ -672,7 +697,11 @@ impl<S: 'static> App<S> {
     /// GPU handover on idle (on Windows and Linux, a frame that hits a GPU-only feature still
     /// triggers GPU handover so it can render; on web, stays on the 2D canvas without requesting
     /// WebGPU/WebGL2). [`crate::CpuFirst::Off`] skips CPU-first startup and opens directly on the
-    /// GPU. Ignored on macOS, iOS, headless runs, and inline/document web pages.
+    /// GPU without falling back to the CPU renderer. Transparent windows always open on the GPU
+    /// on Windows and whenever a GPU surface can be made on Linux; on Linux under `Auto` or `Only`
+    /// (with automatic adapter selection), a visible transparent window whose pre-swapchain GPU
+    /// startup fails falls back to `CpuPainter` with alpha buffers (or 24-bit opaque if X11 gives
+    /// no 32-bit visual). Ignored on macOS, iOS, headless runs, and inline/document web pages.
     ///
     /// `RUNE_CPU_FIRST` (or `globalThis.RUNE_CPU_FIRST` on web) overrides this setting without a
     /// rebuild (`0`/`off`, `only`, `auto`), matching `RUNE_GPU_BACKEND`.
@@ -712,6 +741,7 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn prewarm_effects(mut self, effects: impl Into<crate::PrewarmEffects>) -> Self {
         self.prewarm_effects = effects.into();
+        #[cfg(not(target_arch = "wasm32"))]
         for overlay in &mut self.overlays {
             overlay.set_prewarm_effects(self.prewarm_effects);
         }
@@ -856,8 +886,12 @@ impl<S: 'static> App<S> {
     /// (an event, a wake, a frame, a hook), and `leave` after it, so state the app's windows
     /// share can move into the state of the window whose turn it is and back. The windows of
     /// one event loop take turns, never two at once. Native windows only.
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     pub fn turn_scope(mut self, enter: fn(&mut S), leave: fn(&mut S)) -> Self {
-        self.turn_scope = Some(TurnScope { enter, leave });
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.turn_scope = Some(TurnScope { enter, leave }); }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (enter, leave);
         self
     }
 
@@ -892,8 +926,10 @@ impl<S: 'static> App<S> {
     /// Windows: the links among the launch arguments (`scheme://…`), as Windows passes a link to
     /// the process it starts, and with `rune::single_instance` the links of every later launch,
     /// which that launch hands to this process instead of opening a window. The app registers its
-    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install). Never
-    /// called on other platforms (Linux passes links to a new process as arguments).
+    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install), and
+    /// names it with `rune::url_schemes` so only arguments on it are links: without that a flag's
+    /// URL value (`--server http://localhost:4096`) is one too. Never called on other platforms
+    /// (Linux passes links to a new process as arguments).
     pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut Tx)) -> Self {
         self.on_open_url = Some(f);
         self

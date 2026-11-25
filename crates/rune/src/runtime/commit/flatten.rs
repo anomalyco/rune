@@ -250,7 +250,7 @@ fn prepare_text(
     let measure = text.as_ref().map(|t| t.shape.map_or(0, |s| s.1) ^ u64::from(t.wrap) ^ (u64::from(t.truncate || t.truncate_fade) << 1)
         ^ ((t.max_lines as u64) << 2)
         ^ (u64::from(input.is_some_and(|i| i.edit.is_revealed()) || t.cold.secure_revealed) << 3)
-        ^ (u64::from(t.wrap_anywhere) << 4) ^ (u64::from(t.greedy) << 5) ^ (u64::from(t.by_line) << 6)
+        ^ (u64::from(t.wrap_anywhere) << 4) ^ (u64::from(t.greedy()) << 5) ^ (u64::from(t.by_line) << 6)
         ^ ((t.elide as u64) << 7)
         ^ if t.cold.text_indent == 0.0 { 0 } else { u64::from(t.cold.text_indent.to_bits()).wrapping_mul(0x517c_c1b7_2722_0a95) }
         ^ t.cold.advance_in.as_ref().map_or(0, |(run, at)| run.hash.rotate_left(3) ^ (*at as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)));
@@ -330,7 +330,7 @@ fn needs_node_cold(c: &crate::el::ElCold, meta: &ColdMeta) -> bool {
         || c.trace_name.is_some() || c.looping.is_some() || c.loop_times.is_some() || c.frame_motion.is_some() || c.opacity_motion.is_some()
         || c.transition_motion.is_some() || c.enter_in_instant || c.matched_motion.is_some()
         || c.lead.is_some() || c.glide.is_some() || c.material.is_some()
-        || c.help_cut || c.help_side.is_some() || c.help_open
+        || c.help_cut || c.help_side.is_some() || c.help_open || !c.data.is_empty()
         || c.scroll_axes != crate::el::ScrollAxes::Y
         || c.scroll_edges != crate::el::ScrollEdges::default()
         || c.a11y != crate::el::A11y::default();
@@ -347,7 +347,7 @@ fn node_cold_meta_only(meta: ColdMeta) -> NodeCold {
         transition: None, transition_motion: None, enter_in_instant: false, matched: None, matched_motion: None, above: None, above_boundary: None, resolved_anchor: None, scroll: None, scroll_axes: crate::el::ScrollAxes::Y,
         scroll_edges: crate::el::ScrollEdges::default(), wheel_scrolls: None, sticky: None, growth: None, glide: None,
         a11y: crate::el::A11y::EMPTY, pixel_aspect: meta.pixel_aspect, aspect_fit: meta.aspect_fit,
-        material: None, help: None, help_cut: false, help_side: None, help_open: false,
+        material: None, help: None, help_cut: false, help_side: None, help_open: false, data: Vec::new(),
         #[cfg(debug_assertions)]
         scroll_source: None,
     }
@@ -474,6 +474,7 @@ macro_rules! node_cold_from {
             glide: $c.glide, a11y: take_field!($mode, $c.a11y),
             pixel_aspect: $m.pixel_aspect, aspect_fit: $m.aspect_fit, material: $c.material,
             help: take_field!($mode, $c.help), help_cut: $c.help_cut, help_side, help_open: $c.help_open,
+            data: take_field!($mode, $c.data),
             #[cfg(debug_assertions)]
             scroll_source: $c.scroll_source,
         }
@@ -715,6 +716,7 @@ fn flatten_node<E: FlattenEl>(
     let (flow, dir_effect) = crate::el::step_direction(parent_flow, crate::el::DirEvent::of(el_ref));
     let directed = flags.dir().is_some() || parent.is_some_and(|p| nodes[p].directed);
     let inert = flags.has(ElFlags::INERT) || parent.is_some_and(|p| nodes[p].inert);
+    let selection_off = crate::el::selection_off(el_ref.cold.selection_enabled, parent.is_some_and(|p| nodes[p].selection_off));
     let mirror = dir_effect == crate::el::DirEffect::Mirror;
     let (mut s, mut input) = el.new_scratch();
     if let Some(sx) = parent_sx { apply_scroll_x_child(el.style_mut(&mut s), sx); }
@@ -790,7 +792,8 @@ fn flatten_node<E: FlattenEl>(
     } else {
         0
     };
-    let (key, mut handlers, text, vis, cold, style, children) = el.finish(s);
+    let (key, mut handlers, mut text, vis, cold, style, children) = el.finish(s);
+    if selection_off { crate::el::apply_selection_off(&mut text, &mut handlers); }
     let extra_children = if let Some(bind) = on_path {
         let mut patch = crate::el::PathBind::default();
         bind(&path, &mut patch);
@@ -818,7 +821,7 @@ fn flatten_node<E: FlattenEl>(
         animated_changes,
         streaming: flags.has(ElFlags::STREAMING),
         whole: flags.has(ElFlags::WHOLE),
-        inert, flow, directed, pin, scale_track: false, group_fade: false,
+        inert, selection_off, flow, directed, pin, scale_track: false, group_fade: false,
         virtual_mount: flags.has(ElFlags::VIRTUAL_MOUNT),
         virtual_list,
         selection_group: flags.has(ElFlags::SELECTION_GROUP),
@@ -832,6 +835,7 @@ fn flatten_node<E: FlattenEl>(
     });
     if nodes[me].focus.caret_browsing
         && !nodes[me].focus.opt_out
+        && !selection_off
         && nodes[me].input.is_none()
         && (nodes[me].selection_group || nodes[me].text.as_ref().is_some_and(|t| t.selectable && !t.redacted))
     {

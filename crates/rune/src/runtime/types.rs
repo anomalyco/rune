@@ -63,6 +63,8 @@ pub(crate) struct NodeCold {
     pub(super) help_side: Option<crate::Side>,
     /// `El::help_open`.
     pub(super) help_open: bool,
+    /// `El::data`.
+    pub(super) data: Vec<crate::el::data::ElData>,
     #[cfg(debug_assertions)]
     pub(super) scroll_source: Option<&'static std::panic::Location<'static>>,
 }
@@ -102,6 +104,7 @@ impl crate::cold::Empty for NodeCold {
         help_cut: false,
         help_side: None,
         help_open: false,
+        data: Vec::new(),
         #[cfg(debug_assertions)]
         scroll_source: None,
     };
@@ -150,6 +153,8 @@ pub(crate) struct Node {
     pub(super) whole: bool,
     /// Inside an `El::inert` subtree (this element or an ancestor).
     pub(crate) inert: bool,
+    /// Inside an `El::selection_enabled(false)` subtree no `true` reopens: its texts don't select.
+    pub(crate) selection_off: bool,
     /// The direction it lays out in (`El::dir`, its own or inherited): right to left, its
     /// children's x mirror inside it and its inset's sides swap.
     pub(crate) flow: crate::el::Flow,
@@ -243,6 +248,7 @@ impl Node {
             streaming: false,
             whole: false,
             inert: false,
+            selection_off: old.selection_off,
             flow: old.flow,
             directed: old.directed,
             pin: old.pin,

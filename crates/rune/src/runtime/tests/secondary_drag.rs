@@ -257,6 +257,8 @@ fn secondary_drag_escape_cancel_delivers_cancelled_up_and_suppresses_menu() {
             mods: crate::Mods::default(),
             pressed: true,
             repeat: false,
+            text: None,
+            consumed_mods: Default::default(),
         },
         KeyEvent { key: crate::Key::Escape, mods: crate::Mods::default() },
         None,

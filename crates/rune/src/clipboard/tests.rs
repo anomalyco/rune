@@ -336,3 +336,23 @@ fn system_clipboard_revision_matches_platform_support() {
         assert_eq!((first, second), (None, None));
     }
 }
+
+#[test]
+fn web_event_files_become_bounded_handles() {
+    let many: Vec<_> = (1..=40).map(|id| serde_json::json!({ "id": id, "name": "a.pdf", "type": "application/pdf", "size": 9 })).collect();
+    let files = web_file::from_event(&serde_json::Value::Array(many));
+    assert_eq!(files.len(), MAX_WEB_FILES);
+    assert_eq!((files[0].name(), files[0].mime(), files[0].size()), ("a.pdf", "application/pdf", 9));
+    assert!(web_file::from_event(&serde_json::json!([{ "name": "no id" }])).is_empty());
+    assert!(web_file::from_event(&serde_json::Value::Null).is_empty());
+}
+
+#[test]
+fn web_files_are_rich_and_text_forms_drop_them() {
+    let files = web_file::from_event(&serde_json::json!([{ "id": 1, "name": "a.zip", "type": "", "size": 3 }]));
+    let content = ClipboardContent::new("").with_web_files(files);
+    assert!(content.is_rich() && !content.has_plain());
+    assert!(!format!("{content:?}").contains("a.zip"), "Debug never shows names");
+    assert_eq!(content.web_files().len(), 1);
+    assert!(content.text_forms().is_none(), "a rich field without a hook hears nothing of a files-only paste");
+}

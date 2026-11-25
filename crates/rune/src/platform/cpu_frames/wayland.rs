@@ -156,7 +156,15 @@ impl Slots {
     pub(super) fn latest(&self) -> Option<usize> { self.latest }
 }
 
+/// `wl_shm` buffer format for a Wayland CPU-painted window: premultiplied ARGB8888 when alpha
+/// is composited, opaque XRGB8888 otherwise. Both are mandatory in the core Wayland protocol.
+pub(super) const fn shm_format(alpha: bool) -> wl_shm::Format {
+    if alpha { wl_shm::Format::Argb8888 } else { wl_shm::Format::Xrgb8888 }
+}
+
 impl Frames {
+    pub(super) fn has_alpha(&self) -> bool { self.format == wl_shm::Format::Argb8888 }
+
     pub(super) fn new(display: *mut std::ffi::c_void, surface: *mut std::ffi::c_void, size: (u32, u32), alpha: bool) -> Option<Frames> {
         // SAFETY: winit owns this `wl_display` and keeps it alive for the event loop, which
         // outlives every window; a foreign backend never closes it.
@@ -170,7 +178,7 @@ impl Frames {
         let id = unsafe { ObjectId::from_ptr(WlSurface::interface(), surface.cast()) }.ok()?;
         let surface = WlSurface::from_id(&conn, id).ok()?;
         // Both formats are ones every compositor takes.
-        let format = if alpha { wl_shm::Format::Argb8888 } else { wl_shm::Format::Xrgb8888 };
+        let format = shm_format(alpha);
         let mut frames = Frames { conn, queue, state: State::default(), shm, surface, format, pool: None, made: 0, explicit_sync };
         frames.pool = frames.new_pool(size);
         frames.pool.as_ref()?.touch_first();

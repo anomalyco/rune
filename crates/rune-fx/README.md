@@ -137,6 +137,15 @@ Fx::fill(FlutedGlassParams { rib: 10.0, frost: 0.4, ..FlutedGlassParams::reeded(
 
 ## Integration contract (for the Rune renderer)
 
+**Device requirements**
+- Every effect reads storage buffers in its vertex and fragment shaders, so rune-fx needs
+  `DownlevelFlags::VERTEX_STORAGE` and `FRAGMENT_STORAGE` and at least 2
+  `max_storage_buffers_per_shader_stage`. WebGL2 has none of these. Call
+  `FxRenderer::supported(&adapter, &device)` (or `fx_support` with the capabilities and limits)
+  before `FxRenderer::new` and skip effects when it returns `Err(FxUnsupported)`; `new` panics on
+  a device with too few storage buffers. The opt-in fire simulation (`set_fire_sim`) also needs
+  compute shaders.
+
 **Inputs per layer**
 - Node shape in points: a rounded rect, capsule or circle (`Shape`), or a mask texture plus the
   rect it covers (`Source`).

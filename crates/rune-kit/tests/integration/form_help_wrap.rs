@@ -314,6 +314,8 @@ fn shortcut_recorder_error_wraps_inside_recorder_width() {
             mods: Mods { ctrl: true, ..Mods::default() },
             pressed: true,
             repeat: false,
+            text: None,
+            consumed_mods: Mods::default(),
         });
         for _ in 0..60 {
             rt.frame(1.0 / 60.0);

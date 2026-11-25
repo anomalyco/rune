@@ -1,6 +1,7 @@
 //! The "Controls/Motion/Loops & press offset" story: tactile `El::press_offset`, continuous
 //! `Sequence::repeating()` scale+opacity keyframes, and a finite 2× `LoopSpec::slide` shimmer
-//! via `El::loop_times(2)` that rests idle until replayed.
+//! via `El::loop_times(2)` that rests idle until replayed, and one-shot rows that rise into
+//! place with a turning star (`Beat::translate`, `Beat::rotate`).
 
 use rune::tok::{self, radius, type_};
 use rune::{Beat, Color, Curve, Cx, Easing, El, LoopSpec, Sequence, col, el, row, text};
@@ -11,15 +12,29 @@ const PULSE_BEATS: &[Beat] = &[
     Beat::new(0.9).opacity(0.35).scale(0.78).easing(Easing::EASE_IN_OUT),
 ];
 
+/// A row rising into place while it fades in.
+const RISE_BEATS: &[Beat] = &[
+    Beat::new(0.0).opacity(0.0).translate(0.0, 6.0),
+    Beat::new(0.24).easing(Easing::EASE_OUT),
+];
+/// Its star turning upright as it grows in.
+const STAR_BEATS: &[Beat] = &[
+    Beat::new(0.0).opacity(0.0).scale(0.6).rotate(-0.42),
+    Beat::new(0.32).easing(Easing::EASE_OUT),
+];
+/// Rows the rise list holds before it stops adding.
+pub(crate) const MAX_ROWS: usize = 3;
+
 pub(crate) struct LoopsPressDemo {
     pub(crate) pulsing: bool,
     pub(crate) shimmer_gen: u32,
+    pub(crate) rows: usize,
     pub(crate) presses: usize,
 }
 
 impl Default for LoopsPressDemo {
     fn default() -> Self {
-        Self { pulsing: true, shimmer_gen: 0, presses: 0 }
+        Self { pulsing: true, shimmer_gen: 0, rows: 0, presses: 0 }
     }
 }
 
@@ -79,6 +94,20 @@ pub(crate) fn view(s: &LoopsPressDemo, cx: &mut Cx<LoopsPressDemo>) -> El {
         .on_press(|s: &mut LoopsPressDemo| s.shimmer_gen = s.shimmer_gen.wrapping_add(1))
         .child(text("Replay 2×").font(type_::LABEL).color(t.text));
 
+    // Rows append into a fixed-height list, so nothing beside them moves.
+    let rise_rows = col().key("rise-rows").w(220.0).h(MAX_ROWS as f32 * 28.0 + 8.0).gap(4.0).children((0..s.rows).map(|i| {
+        row().key(format!("rise-row-{i}")).h(28.0).px(10.0).gap(8.0).center_y().radius(radius::SM)
+            .fill(t.card).border(1.0, t.card_border).sequence(Sequence::new(RISE_BEATS))
+            .child(el().key(format!("rise-star-{i}")).size(12.0, 12.0).radius(2.0).fill(accent)
+                .sequence(Sequence::new(STAR_BEATS).delay(0.06)))
+            .child(text(format!("Risen row {}", i + 1)).font(type_::LABEL).color(t.text))
+    }));
+    let add_btn = row().key("add-row").h(28.0).px(12.0).center().radius(radius::SM)
+        .fill(t.control_track).hover_fill(t.hover)
+        .role("button").label("Add rising row").focusable(true)
+        .on_press(|s: &mut LoopsPressDemo| s.rows = (s.rows + 1).min(MAX_ROWS))
+        .child(text("Add row").font(type_::LABEL).color(t.text));
+
     col().w_full().h_full().center().padding(16.0).child(
         col().w_full().max_w(380.0).gap(14.0)
             .child(text("El::press_offset · Sequence::repeating() · El::loop_times(2)").font(type_::LABEL).color(t.text_secondary))
@@ -87,7 +116,8 @@ pub(crate) fn view(s: &LoopsPressDemo, cx: &mut Cx<LoopsPressDemo>) -> El {
             .child(row().w_full().h(40.0).px(12.0).center_y().justify_between().radius(radius::MD).fill(t.card).border(1.0, t.card_border)
                 .child(row().gap(10.0).center_y().child(dots).child(text("Sequence::repeating()").font(type_::LABEL).color(t.text)))
                 .child(pulse_toggle))
-            .child(row().w_full().gap(10.0).center_y().child(shimmer_pill).child(replay_btn)),
+            .child(row().w_full().gap(10.0).center_y().child(shimmer_pill).child(replay_btn))
+            .child(row().w_full().gap(10.0).child(rise_rows).child(add_btn)),
     )
 }
 
@@ -98,7 +128,7 @@ mod tests {
 
     #[test]
     fn loops_press_story_exposes_controls_shifts_on_press_and_shimmer_sleeps_idle() {
-        let mut rt = Runtime::new(LoopsPressDemo { pulsing: false, shimmer_gen: 0, presses: 0 }, view, (520.0, 320.0), Env::new(true, 1.0));
+        let mut rt = Runtime::new(LoopsPressDemo { pulsing: false, ..Default::default() }, view, (520.0, 320.0), Env::new(true, 1.0));
         rt.frame(0.0);
         let tree = rt.accessibility_json().to_string();
         assert!(tree.contains("Keycap press offset"));
@@ -131,6 +161,23 @@ mod tests {
         assert_eq!(rt.state.shimmer_gen, 1);
         rt.frame(0.1);
         assert!(rt.animating, "replayed shimmer is active");
+
+        // An added row rises into place and its star turns upright, then both rest.
+        let rect = |rt: &Runtime<LoopsPressDemo>, k: &str| rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k)).map(|e| e.rect);
+        let (ax, ay) = rt.find("add-row").unwrap();
+        rt.pointer_move(ax, ay);
+        rt.pointer_down(ax, ay);
+        rt.pointer_up(ax, ay);
+        rt.frame(0.0);
+        for _ in 0..6 { rt.frame(1.0 / 120.0); }
+        let rising = rect(&rt, "rise-row-0").unwrap();
+        let turning = rt.presented_pose("rise-star-0").unwrap().rotation();
+        for _ in 0..120 { rt.frame(1.0 / 120.0); }
+        let rest = rect(&rt, "rise-row-0").unwrap();
+        assert!(rising[1] > rest[1] + 1.0, "row rises into place: {rising:?} -> {rest:?}");
+        assert!(turning < -0.1, "star starts turned: {turning}");
+        assert_eq!(rt.presented_pose("rise-star-0").unwrap().rotation(), 0.0);
+        assert!(!rt.animating, "rows land still");
     }
 
     #[test]
@@ -155,6 +202,12 @@ mod tests {
         run.play(0.08);
         run.act("replay up", |rt| { let (x, y) = rt.find("replay-shimmer").unwrap(); rt.pointer_up(x, y); });
         run.play(1.3);
+        for n in 0..2 {
+            run.act(&format!("add row {n} down"), |rt| { let (x, y) = rt.find("add-row").unwrap(); rt.pointer_move(x, y); rt.pointer_down(x, y); });
+            run.play(0.05);
+            run.act(&format!("add row {n} up"), |rt| { let (x, y) = rt.find("add-row").unwrap(); rt.pointer_up(x, y); });
+            run.play(0.5);
+        }
         run.act("pause pulse down", |rt| { let (x, y) = rt.find("toggle-pulse").unwrap(); rt.pointer_move(x, y); rt.pointer_down(x, y); });
         run.play(0.05);
         run.act("pause pulse up", |rt| { let (x, y) = rt.find("toggle-pulse").unwrap(); rt.pointer_up(x, y); });

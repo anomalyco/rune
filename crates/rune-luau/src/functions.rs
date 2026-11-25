@@ -45,6 +45,16 @@ impl Script {
         rune::memo::memo_with_hash(id.clone(), mix(version, i.salt.get()), || i.render_with::<S>(dark, f, args).key(id))
     }
 
+    /// Renders `f(view, args...)` once, outside any memo, and returns the error instead of the
+    /// error card: a host showing graphics to an audience keeps its last good tree on air, or
+    /// draws its own fallback, when a render fails. A script that failed to start or stopped
+    /// returns its stored error ([`Script::error`]), or [`ErrorKind::Missing`] without one.
+    pub fn try_render_fn<S: 'static>(&self, dark: bool, f: &Function, args: impl IntoLuaMulti) -> Result<El, ScriptError> {
+        let i = &self.inner;
+        i.dark.set(dark);
+        i.try_render_with::<S>(dark, f, args)
+    }
+
     /// Runs `f(args...)` as a task, so it may wait: a command's `run`, a signal from the host.
     /// With `tx`, the deadline it sets arms on the transaction.
     pub fn spawn_fn(&self, f: &Function, args: impl IntoLuaMulti, tx: Option<&mut Tx>) -> Result<(), ScriptError> {
@@ -121,15 +131,19 @@ impl Inner {
     }
 
     fn render_with<S: 'static>(&self, dark: bool, f: &Function, args: impl IntoLuaMulti) -> El {
-        let attach = attach::<S>();
-        let card = |message: &str| error_card(message, &self.options.palette, dark, attach, self.weak.clone());
+        self.try_render_with::<S>(dark, f, args).unwrap_or_else(|err| error_card(&err.message, &self.options.palette, dark, attach::<S>(), self.weak.clone()))
+    }
+
+    /// One render of `f(view, args...)`: the element, or the error a failed or stopped script
+    /// gives (logged, and the memo salt moved so the next render runs again).
+    fn try_render_with<S: 'static>(&self, dark: bool, f: &Function, args: impl IntoLuaMulti) -> Result<El, ScriptError> {
         if let Some(err) = self.failed.borrow().as_ref() {
-            return card(&err.message);
+            return Err(err.clone());
         }
-        let Some(vm) = self.vm() else { return card("the script isn't running") };
+        let Some(vm) = self.vm() else { return Err(ScriptError::new(ErrorKind::Missing, "the script isn't running")) };
         let reduced_motion = self.reduced_motion.get();
         let env = self.env(&vm, dark, reduced_motion);
-        let built = with_frame(attach, env.clone(), || {
+        let built = with_frame(attach::<S>(), env.clone(), || {
             self.timed(&vm, |vm| {
                 vm.view.raw_set("dark", dark)?;
                 vm.view.raw_set("reducedMotion", reduced_motion)?;
@@ -145,11 +159,15 @@ impl Inner {
         if env.memo_failed.get() {
             self.salt.set(self.salt.get().wrapping_add(1));
         }
-        built.unwrap_or_else(|err| {
+        built.map_err(|err| {
             let err = ScriptError::from(err);
             self.log(LogLevel::Error, &err.message);
             self.salt.set(self.salt.get().wrapping_add(1));
-            card(&err.message)
+            err
         })
     }
 }
+
+#[cfg(test)]
+#[path = "functions_tests.rs"]
+mod tests;

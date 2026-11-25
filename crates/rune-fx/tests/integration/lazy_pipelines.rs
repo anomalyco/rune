@@ -51,3 +51,10 @@ fn pipelines_are_built_for_what_frames_draw() {
     fx.build_every_pipeline();
     assert_eq!(fx.built_pipelines(), 32, "eight families, two blends, two formats");
 }
+
+#[test]
+fn supported_accepts_real_adapter_and_matches_new() {
+    let Some(gpu) = Gpu::test_headless() else { return };
+    assert_eq!(FxRenderer::supported(&gpu.adapter, &gpu.device), Ok(()));
+    let _fx = FxRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb, FxOptions::default());
+}

@@ -14,15 +14,18 @@
 //! a loop handler runs (a modal loop inside one), it can only end that loop and let the hooks
 //! run once the handler returns.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 
 #[cfg(target_os = "macos")]
 mod mac;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod relaunch;
 #[cfg(target_os = "windows")]
 mod win32;
 
 /// Where the app's quit is.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum State {
     /// The app runs.
@@ -37,6 +40,7 @@ pub(crate) enum State {
 }
 
 /// The windows' `App::on_quit` hooks, for a quit.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Hooks {
     /// Not run yet.
@@ -53,6 +57,7 @@ pub(crate) enum After {
     Relaunch,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Event {
     /// Something asks to quit: `Tx::quit` or `Tx::relaunch`, the last window closing, macOS
@@ -70,6 +75,7 @@ pub(crate) enum Event {
 }
 
 /// What the loop does for a step, in order.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Effect {
     /// Every open window runs `App::on_quit`, then the loop sends `Event::HooksRan`.
@@ -81,6 +87,7 @@ pub(crate) enum Effect {
     Relaunch,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn step(state: State, event: Event) -> (State, Vec<Effect>) {
     use {Effect::*, Event::*, State::*};
     let close = |ending: bool| if ending { vec![CloseAndExit] } else { vec![] };
@@ -101,6 +108,7 @@ pub(crate) fn step(state: State, event: Event) -> (State, Vec<Effect>) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 static STATE: Mutex<State> = Mutex::new(State::Running);
 static FAST_EXIT: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
 
@@ -200,6 +208,7 @@ pub(crate) fn end_process_with_code(code: i32) -> ! {
 }
 
 /// Steps the app's quit, returning what the loop must do.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn send(event: Event) -> Vec<Effect> {
     let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
     let (next, effects) = step(*state, event);
@@ -250,6 +259,7 @@ fn where_the_quit_is() -> String {
     last
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn state() -> State { *STATE.lock().unwrap_or_else(|e| e.into_inner()) }
 
 /// Whether the app is quitting: a quit started and the system didn't cancel it. A window's
@@ -258,12 +268,15 @@ pub(crate) fn state() -> State { *STATE.lock().unwrap_or_else(|e| e.into_inner()
 /// window's place in the list). False while the app runs, including when its last window
 /// closes, whose `on_close` runs before the quit starts.
 pub fn quitting() -> bool {
-    !matches!(state(), State::Running)
+    #[cfg(not(target_arch = "wasm32"))]
+    { !matches!(state(), State::Running) }
+    #[cfg(target_arch = "wasm32")]
+    { false }
 }
 
 /// Hooks the system's quit requests into the loop: `send` delivers a quit (`true` when the
 /// session ends now and the windows must close) to `Windows`. Once per process, on the UI thread.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn install(send: impl Fn(bool) -> bool + 'static) {
     #[cfg(target_os = "windows")]
     win32::install(send);
@@ -275,25 +288,29 @@ pub(crate) fn install(send: impl Fn(bool) -> bool + 'static) {
 
 /// Whether the event loop is inside one of its handlers, on the UI thread: a session message
 /// that arrives then (from a modal loop the handler runs) can't run the windows' hooks.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Loop {
     Idle,
     Handling,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 thread_local! {
     static LOOP: std::cell::Cell<Loop> = const { std::cell::Cell::new(Loop::Idle) };
 }
 
 /// Marks the loop handling an event until the guard drops.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn handling() -> Handling { Handling(LOOP.replace(Loop::Handling)) }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg(target_os = "windows")]
 pub(crate) fn loop_state() -> Loop { LOOP.get() }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Handling(Loop);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Handling {
     fn drop(&mut self) { LOOP.set(self.0); }
 }

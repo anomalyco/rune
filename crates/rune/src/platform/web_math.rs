@@ -286,7 +286,9 @@ pub(crate) fn web_miss_action(missed: crate::window::Missed) -> WebMissAction {
     match missed {
         Missed::Unconfigured => WebMissAction::Fatal,
         Missed::Occluded => WebMissAction::CoveredOnly,
-        Missed::Timeout | Missed::Outdated => WebMissAction::RetryNextFrame,
+        Missed::Timeout => WebMissAction::RetryNextFrame,
+        #[cfg(not(target_arch = "wasm32"))]
+        Missed::Outdated => WebMissAction::RetryNextFrame,
     }
 }
 

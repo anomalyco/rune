@@ -257,6 +257,27 @@ class ExternalTests(unittest.TestCase):
                     "external/rune/crates/rune/src/runtime.rs"]:
             self.assertFalse(allowed(key), key)
 
+    def test_glob_fallback_matches_full_match_before_python_3_13(self):
+        globs = ["src/ui/*.rs", "src/views/**/*.rs", "src/**", "**", "**/*.rs", "*", "crates/*", "a?c", "[ab]*/x", "[!a]*",
+                 "src/**/mod.rs", "x.rs", "[!]", "[!]a]", "[]]", "[]a]x", "**/**", "[!a]/x"]
+        paths = ["src/ui/list.rs", "src/ui/nested/list.rs", "src/views/c.rs", "src/views/a/b/c.rs", "src", "src/a", "src/a/b",
+                 "main.rs", "crates/rune", "crates/rune/src", "abc", "a/c", "b/x", "c/x", "bin", "src/mod.rs", "src/a/mod.rs",
+                 "x.rs", "xyrs", "a/x.rs", "[!]", "!", "]", "a", "b", "]x", "ax", "."]
+        has_full_match = hasattr(dev.PurePosixPath, "full_match")
+        for glob in globs:
+            for path in paths:
+                fallback = dev.glob_regex(glob).match(dev.posix_str(path)) is not None
+                self.assertEqual(fallback, dev.full_match(path, glob), (glob, path))
+                if has_full_match:
+                    self.assertEqual(fallback, dev.PurePosixPath(path).full_match(glob), (glob, path))
+        # Fixed answers from Python 3.13's full_match, so the fallback is checked where it runs.
+        for glob, path, expected in [("src/views/**/*.rs", "src/views/c.rs", True), ("src/ui/*.rs", "src/ui/nested/list.rs", False),
+                                     ("**", "src", True), ("**", "src/a", True), ("src/**", "src", False), ("src/**", "src/a/b", True),
+                                     ("a/**/b", "a/b", True), ("[!a]*", "abc", False), ("[!a]*", "bin", True), ("[!]", "!", False),
+                                     ("[!]", "[!]", True), ("[!]a]", "b", True), ("[!]a]", "]", False), ("[]]", "]", True),
+                                     ("**", ".", True), ("*", ".", False), ("**/**", ".", True)]:
+            self.assertEqual(dev.glob_regex(glob).match(dev.posix_str(path)) is not None, expected, (glob, path))
+
 
 def ws_frame(opcode, payload, fin=True):
     return dev.frame(opcode, payload, fin)

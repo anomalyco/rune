@@ -59,6 +59,10 @@ extern "C" {
     fn cancel_touch_hold_confirm(handle: &JsValue);
     #[wasm_bindgen(js_name = supportsLiveTouchContextMenu)]
     fn supports_live_touch_context_menu() -> bool;
+    #[wasm_bindgen(js_name = requestPointerLock)]
+    fn request_pointer_lock(handle: &JsValue);
+    #[wasm_bindgen(js_name = exitPointerLock)]
+    fn exit_pointer_lock(handle: &JsValue);
 }
 
 pub(super) fn live_touch_context_menu() -> bool {
@@ -162,6 +166,14 @@ impl Running {
         }
     }
 
+    fn sync_pointer_lock(&mut self) {
+        match self.app.rt_mut().take_pointer_lock_effect() {
+            Some(crate::runtime::LockEffect::Grab) => request_pointer_lock(&self.input.handle),
+            Some(crate::runtime::LockEffect::Ungrab) => exit_pointer_lock(&self.input.handle),
+            None => {}
+        }
+    }
+
     pub(super) fn sync_input(&mut self, focus: bool) {
         self.sync_touch_hold();
         let (reset, caret) = crate::input::host_events::ime_sync_state(self.app.rt_mut());
@@ -237,6 +249,7 @@ impl Running {
             self.input.scroll_x = next;
         }
         if focus { activate(&self.input.handle); }
+        self.sync_pointer_lock();
     }
 
     fn run_a11y_schedule(&mut self, event: crate::runtime::web_a11y::schedule::ScheduleEvent) {
@@ -437,10 +450,32 @@ impl Running {
                 return true;
             }
             Some("leave") => {
-                if self.app.rt().touching() { return false; }
+                if self.app.rt().touching() || self.app.rt().pointer_locked() { return false; }
                 self.app.rt_mut().pointer_leave();
                 self.cursor.apply(window, crate::el::Cursor::Default, false);
                 return true;
+            }
+            Some("pointer_motion") => {
+                let dx = event["dx"].as_f64().unwrap_or(0.0) as f32;
+                let dy = event["dy"].as_f64().unwrap_or(0.0) as f32;
+                if !self.app.rt().pointer_locked() || (dx == 0.0 && dy == 0.0) {
+                    return false;
+                }
+                self.app.rt_mut().pointer_motion(dx, dy);
+                return true;
+            }
+            Some("pointer_lock") => {
+                let locked = event["locked"].as_bool().unwrap_or(false);
+                let changed = if locked {
+                    self.app.rt_mut().pointer_lock_granted()
+                } else {
+                    self.app.rt_mut().pointer_lock_lost()
+                };
+                self.sync_pointer_lock();
+                if !changed {
+                    return false;
+                }
+                flush_a11y = true;
             }
             Some(kind @ ("edit" | "selection" | "preedit")) => {
                 self.app.web_edit(event, &mut self.input.mirror);
@@ -458,6 +493,8 @@ impl Running {
                 if let serde_json::Value::String(html) = event["html"].take() && !html.is_empty() {
                     content = content.with_html(html);
                 }
+                // Claim the page's file handles now, so dropping the paste releases them.
+                let content = content.with_web_files(crate::clipboard::web_file::from_event(&event["files"]));
                 let image = (event["image"].as_bool() == Some(true)).then_some(&self.input.handle);
                 self.app.paste_event(&self.clipboard, content, image);
             }
@@ -566,12 +603,16 @@ impl Running {
             WindowEvent::CursorMoved { position, .. } if !self.app.rt().touching() => {
                 let (x, y) = crate::input::host_events::physical_point(self.app.rt(), position.x, position.y);
                 let changed = self.app.observe_pointer(x, y);
-                self.cursor.apply(window, self.app.rt().cursor(), true);
+                if !self.app.rt().pointer_locked() {
+                    self.cursor.apply(window, self.app.rt().cursor(), true);
+                }
                 return changed;
             }
             WindowEvent::CursorLeft { .. } if !self.app.rt().touching() => {
                 self.app.rt_mut().pointer_leave();
-                self.cursor.apply(window, crate::el::Cursor::Default, false);
+                if !self.app.rt().pointer_locked() {
+                    self.cursor.apply(window, crate::el::Cursor::Default, false);
+                }
             }
             WindowEvent::MouseInput { button, state, .. } if !self.app.rt().touching() => {
                 immediate = true;
@@ -691,7 +732,9 @@ impl Running {
             let focus = activate.should_activate(self.app.rt());
             self.sync_input(focus);
             let rt = self.app.rt();
-            self.cursor.apply(window, rt.cursor(), rt.pointer().is_some());
+            if !rt.pointer_locked() {
+                self.cursor.apply(window, rt.cursor(), rt.pointer().is_some());
+            }
         }
         true
     }

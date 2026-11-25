@@ -359,6 +359,12 @@ impl OverlayCore {
             match self.surface.live_mut() {
                 Some(Live { backing: Backing::Layer(layer), .. }) => layer.set_input(resolved),
                 Some(Live { backing: Backing::Xwayland(surface), .. }) => surface.set_input(resolved),
+                // A Wayland toplevel's input region is all or nothing.
+                Some(Live { backing: Backing::Window(window), .. }) if super::toplevel::is_toplevel(window) => {
+                    window.set_cursor_hittest(resolved != OverlayInput::None).ok();
+                    let caps = super::toplevel::toplevel_capabilities(resolved);
+                    self.shared.native.lock().unwrap().1 = caps;
+                }
                 _ => {}
             }
         }
@@ -380,10 +386,10 @@ impl OverlayCore {
     #[cfg(target_os = "macos")]
     pub(super) fn fn_key(&mut self, app: &mut dyn OverlayApp) {
         let Some(changes) = self.surface.live().and_then(|l| l.fn_key.as_ref()).map(|f| f.take()) else { return };
-        if !self.presence.shown() || self.options.keys != KeyPolicy::OnDemand { return; }
+        if !self.presence.shown() || !self.options.keys.takes_keys() { return; }
         for pressed in changes {
             self.dirty |= app.physical_with_fallback(crate::PhysicalInput::Key {
-                key: winit::keyboard::KeyCode::Fn, mods: crate::window::map_mods(self.mods), pressed, repeat: false,
+                key: winit::keyboard::KeyCode::Fn, mods: crate::window::map_mods(self.mods), pressed, repeat: false, text: None, consumed_mods: Default::default(),
             }, None);
         }
     }
@@ -392,7 +398,7 @@ impl OverlayCore {
     #[cfg(target_os = "macos")]
     pub(super) fn media_keys(&mut self, app: &mut dyn OverlayApp) {
         let Some(events) = self.surface.live().and_then(|l| l.media_keys.as_ref()).map(|m| m.take()) else { return };
-        if !self.presence.shown() || self.options.keys != KeyPolicy::OnDemand { return; }
+        if !self.presence.shown() || !self.options.keys.takes_keys() { return; }
         for (decoded, mods) in events {
             self.dirty |= app.media_key(decoded, mods);
         }
@@ -680,16 +686,20 @@ impl OverlayCore {
             if let Some(x11) = &self.x11 { self.shared.native.lock().unwrap().1.global_pointer = x11.global_pointer(); }
         }
         #[cfg(target_os = "macos")]
-        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
+        if requests.keys == Some(KeyRequest::Take) && self.presence.shown() && self.options.keys.takes_keys()
             && let Some(panel) = &self.panel { panel.request_keys(); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
-            && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live() { layer.request_keys(); }
+        if requests.keys == Some(KeyRequest::Take) && self.presence.shown() && self.options.keys.takes_keys()
+            && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut()
+            && layer.request_keys() { self.surface_input(app, crate::platform::layer_shell::Input::Focus(true)); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
+        if requests.keys == Some(KeyRequest::Release) && let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut()
+            && layer.release_keys() { self.surface_input(app, crate::platform::layer_shell::Input::Focus(false)); }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if requests.keys == Some(KeyRequest::Take) && self.presence.shown() && self.options.keys.takes_keys()
             && let Some(x11) = &self.x11 { x11.request_keys(); }
         #[cfg(target_os = "windows")]
-        if requests.request_keys && self.presence.shown() && self.options.keys == KeyPolicy::OnDemand
+        if requests.keys == Some(KeyRequest::Take) && self.presence.shown() && self.options.keys.takes_keys()
             && let Some(native) = &self.native { native.request_keys(); }
     }
 }

@@ -10,8 +10,7 @@ use std::rc::Rc;
 use rune::{Color, Cursor, Drag, El, GrowthSpec, Icon, Phase, ScrollSpec, Tx, col, icon, memo, rich, row, text};
 
 use super::model::{LineKind, Side};
-use super::state::{Annotation, DiffMode, DiffState, Expand, HEADER_H, LINE_H, LineRange, LineRef, Row};
-use crate::syntax::SyntaxTheme;
+use super::state::{Annotation, DiffMode, DiffState, Expand, HEADER_H, LineRange, LineRef, Row};
 use crate::{Kit, ScrollBar, ScrollBarStyle};
 
 mod chrome;
@@ -108,7 +107,7 @@ impl<S: 'static> DiffBind for DiffHandlers<S> {
 
     fn bind_list(&self, list: El, count: usize, view: Rc<View>) -> El {
         let (get, row_get, vis_mut, on_file) = (self.get.clone(), self.get.clone(), self.get_mut.clone(), self.on_visible_file.clone());
-        list.virtual_rows(count, LINE_H, keys(get), move |s: &S, i| view.row(s, row_get(s), i))
+        list.virtual_rows(count, view.look.line_h(), keys(get), move |s: &S, i| view.row(s, row_get(s), i))
             .on_visible_rows(move |s: &mut S, rows| {
                 let (reported, sticky_changed) = vis_mut(s).set_visible_rows(rows);
                 if let (Some(f), Some(cb)) = (reported, &on_file) {
@@ -202,7 +201,7 @@ enum DiffScrollBar {
 pub struct DiffView<S> {
     key: String,
     fold_row: FoldRow,
-    syntax_theme: Option<SyntaxTheme>,
+    look: look::LookSpec,
     labels: Option<labels::LabelsFn>,
     scroll_bar: DiffScrollBar,
     handlers: DiffHandlers<S>,
@@ -213,7 +212,7 @@ impl<S: 'static> DiffView<S> {
         DiffView {
             key: "diff".into(),
             fold_row: FoldRow::default(),
-            syntax_theme: None,
+            look: look::LookSpec::default(),
             labels: None,
             scroll_bar: DiffScrollBar::None,
             handlers: DiffHandlers {
@@ -294,28 +293,6 @@ impl<S: 'static> DiffView<S> {
     /// ```
     pub fn file_header(mut self, f: impl Fn(&S, usize, bool) -> El + 'static) -> Self {
         self.handlers.file_header = Some(Rc::new(f));
-        self
-    }
-
-    /// Override the syntax highlighting palette (by default [`SyntaxTheme::from_kit`]).
-    ///
-    /// ```
-    /// # use rune_kit::{Kit, diff::{DiffState, DiffView}};
-    /// # struct App { diff: DiffState }
-    /// # let s = &App { diff: DiffState::default() };
-    /// # let k = Kit::neutral(true);
-    /// use rune::Color;
-    /// use rune_kit::syntax::{Syntax, SyntaxTheme};
-    ///
-    /// let theme = SyntaxTheme::from_kit(&k).with(Syntax::Keyword, Color { r: 0.9, g: 0.3, b: 0.6, a: 1.0 });
-    /// # let _ =
-    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
-    ///     .syntax_theme(theme)
-    ///     .build(s, &k)
-    /// # ;
-    /// ```
-    pub fn syntax_theme(mut self, theme: SyntaxTheme) -> Self {
-        self.syntax_theme = Some(theme);
         self
     }
 
@@ -410,7 +387,7 @@ impl<S: 'static> DiffView<S> {
             DiffScrollBar::Styled(style) => Some(style),
         };
         let view = Rc::new(View {
-            look: Look::new(k, self.syntax_theme),
+            look: Look::new(k, self.look),
             fold_row: self.fold_row,
             labels: self.labels,
             labels_version,
@@ -492,6 +469,7 @@ impl View {
         if !wrap && let Some(r) = rune::memo::layout(&scroll_path) {
             st.set_viewport(r);
         }
+        st.set_line_height(self.look.line_h());
         let count = st.rows.len();
         let mut list = col().key("rows").w_full().growth(GrowthSpec::default()).selection_group(true).role("list").label(self.label(DiffLabel::List));
         if !wrap {
@@ -671,14 +649,14 @@ impl View {
             .child(self.number(st, i, f, c.old, Side::Old, c.kind, selected, digits).key("no"))
             .child(self.number(st, i, f, c.new, Side::New, c.kind, selected, digits).key("nn"));
         if let Some(at) = self.unified_comment_target(f, c) {
-            gutter = gutter.child(self.plus(f, at).absolute(BAR + 2.0 * l.number_w(digits) - 10.0, 2.0));
+            gutter = gutter.child(self.plus(f, at).absolute(BAR + 2.0 * l.number_w(digits) - 10.0, l.plus_y()));
         }
         if !st.wraps() {
             gutter = gutter.sticky_left(0.0);
         }
         row()
             .w_full()
-            .min_h(LINE_H)
+            .min_h(l.line_h())
             .items_start()
             .fill(fill)
             .hover(l.hover)
@@ -695,7 +673,7 @@ impl View {
         let half = |side: Side, c: Option<Cell<'a>>| -> El {
             let l = &self.look;
             let key = if side == Side::Old { "old" } else { "new" };
-            let mut h = row().key(key).w_frac(if single.is_some() { 1.0 } else { 0.5 }).min_w(0.0).min_h(LINE_H).items_start().self_stretch();
+            let mut h = row().key(key).w_frac(if single.is_some() { 1.0 } else { 0.5 }).min_w(0.0).min_h(l.line_h()).items_start().self_stretch();
             let Some(c) = c else {
                 return h.fill(l.empty_bg);
             };
@@ -722,11 +700,11 @@ impl View {
                 .child(self.number(st, i, f, n, side, kind, selected, digits).key("n"))
                 .child(self.code(st, f, &cell, copy, side, &st.keys[i]).key("code"));
             if let Some(at) = n.map(|n| LineRef::new(side, n)).filter(|&at| self.bind.can_comment(f, at)) {
-                h = h.child(self.plus(f, at).absolute(BAR + l.number_w(digits) - 10.0, 2.0));
+                h = h.child(self.plus(f, at).absolute(BAR + l.number_w(digits) - 10.0, l.plus_y()));
             }
             h
         };
-        let line = row().w_full().min_h(LINE_H).items_stretch();
+        let line = row().w_full().min_h(self.look.line_h()).items_stretch();
         // An added or deleted file has one side: it takes the whole width, as one column.
         match single {
             Some(Side::Old) => line.child(half(Side::Old, old)),
@@ -752,7 +730,7 @@ impl View {
     fn number(&self, st: &DiffState, i: usize, f: usize, n: Option<u32>, side: Side, kind: LineKind, selected: bool, digits: u32) -> El {
         let l = &self.look;
         let unified = st.mode() == DiffMode::Unified;
-        let mut c = row().w(l.number_w(digits)).min_h(LINE_H).self_stretch().px(8.0).justify_end().items_start().a11y_hidden();
+        let mut c = row().w(l.number_w(digits)).min_h(l.line_h()).self_stretch().px(8.0).justify_end().items_start().a11y_hidden();
         if !unified {
             c = c.fill(l.gutter_fill(kind, selected));
         }

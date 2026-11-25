@@ -264,7 +264,19 @@ the caret, while events with no `inputType`, `insertReplacementText`, multi-grap
 `insertText`, or any input while the element matches `:autofill`/`:-webkit-autofill`
 replace the field's whole value (including clearing it when empty). Leaving a field returns
 focus to the canvas so
-shortcuts and Tab keep working. Continuous pointer movement and wheel events wait for rAF.
+shortcuts and Tab keep working. Continuous pointer movement, pointer-lock motion (`El::pointer_lock`) and wheel events wait for rAF.
+
+`El::pointer_lock` uses the W3C Pointer Lock API: a primary press on the element requests
+`canvas.requestPointerLock({ unadjustedMovement: true })` synchronously inside the `pointerdown`
+user gesture, caching a fallback to plain `canvas.requestPointerLock()` when a platform rejects
+`unadjustedMovement` with `NotSupportedError`. `Cx::pointer_locked()` stays `false` until
+`pointerlockchange` confirms `document.pointerLockElement === canvas`. While locked, relative
+deltas arrive from `PointerEvent.movementX`/`movementY` in CSS pixels (logical points, independent
+of `Cx::zoom`) and coalesce into one handler call per animation frame. Browser-driven exits
+(Escape, tab switch, or `document.exitPointerLock()`) and refusals (missing gesture, Chrome's
+post-Escape cooldown, unfocused document, or `pointerlockerror`) return cleanly to unlocked state
+(`Cx::pointer_locked() == false`) so a subsequent click can capture again. Open
+`web-hello?pointer-lock-proof` to try it in a browser.
 
 `Tx::copy` and `Tx::request_paste` use the browser clipboard. Call them from a user input
 handler: permission and transient-activation rules still apply. Native Paste events work
@@ -273,8 +285,24 @@ browser cannot promise native clipboard-history exclusion or conditional timed c
 `rune::clipboard::revision()` returns `None` on the web because browsers expose no clipboard
 change counter.
 
+Files pasted into, or dropped on the canvas while, a Rune text field has the keyboard reach that
+field's `on_input_paste` (or a root `on_paste_content`) as `ClipboardContent::web_files`: up to
+`rune::clipboard::MAX_WEB_FILES` browser `File` handles with a name, type and size, no path,
+and no bytes read. `WebFile::read(max)` reads the ones the app takes, and `WebFile::js_file`
+hands the `File` itself to page JavaScript (an upload, say). The page keeps a handle while any
+clone of its `WebFile` lives and lets go of it when the last one drops; handles Rust doesn't
+take from an event are let go of when it returns. Some files come twice: a pasted or dropped
+PNG is also `content.image()`, and the first dropped file's contents are also `content.text()`
+when it is a text (or untyped) file of at most 1 MiB; a bigger one arrives as a handle alone.
+Password fields take no files, and fields without a hook keep taking only text, so a paste or
+drop that carried only files or an image changes nothing there.
+
 `rune::web::open_url` accepts HTTP(S) and mail links and opens a tab with `noopener,noreferrer`. (`Tx::open_path` and `Tx::reveal_path` are desktop-only and return `OpenPathError::Unsupported` on web.)
-Call it from a user input handler. `Tx::open_url_same_tab` (or `rune::web::open_url_same_tab`)
+Call it from a user input handler: it returns an error when no click or key press is active,
+as browsers block the tab then. A tab blocked otherwise (a site's pop-up setting) can't be
+seen, since the browser hands back no window for a `noopener` tab, so `Tx::open_url_then`
+reports `Ok(())` for it; show the link to copy beside the button when that matters.
+`Tx::open_url_same_tab` (or `rune::web::open_url_same_tab`)
 replaces the page instead, and takes links relative to the page (`/notes/42`). A single-page
 app routes those itself with `App::same_tab_router`: it gets the absolute URL of each link on
 the page's origin and returns true when it handled it; otherwise, and for other origins, the

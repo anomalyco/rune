@@ -5,6 +5,7 @@ use crate::{App, AppSpec};
 pub(crate) struct PlaceRequest {
     pub display: crate::DisplayTarget,
     pub placement: crate::OverlayPlacement,
+    #[cfg(not(target_arch = "wasm32"))]
     pub pointer: Option<(i32, i32)>,
     /// The caller's target, before sampling the pointer; headless runs resolve this.
     pub requested: crate::DisplayTarget,
@@ -13,7 +14,13 @@ pub(crate) struct PlaceRequest {
 impl PlaceRequest {
     pub fn new(display: crate::DisplayTarget, placement: crate::OverlayPlacement) -> Self {
         #[allow(unused_mut)] // Only desktop hosts can sample a pointer's display.
-        let mut request = Self { requested: display.clone(), display, placement, pointer: None };
+        let mut request = Self {
+            requested: display.clone(),
+            display,
+            placement,
+            #[cfg(not(target_arch = "wasm32"))]
+            pointer: None,
+        };
         if request.display == crate::DisplayTarget::UnderPointer {
             #[cfg(target_os = "macos")]
             { request.display = crate::platform::macos::pointer_display().map_or(crate::DisplayTarget::Primary,
@@ -155,6 +162,7 @@ pub(crate) fn native_bounds_for(
 }
 
 /// A window's minimum content size when neither `WindowOptions` nor `AppSpec` sets one.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const DEFAULT_MIN_SIZE: (f32, f32) = (420.0, 400.0);
 
 #[derive(Clone, Debug)]
@@ -238,6 +246,7 @@ impl WindowOptions {
 
     /// The window's minimum and maximum content sizes, with `AppSpec::min_size` as the
     /// fallback minimum.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn size_limits(&self, app_min: Option<(f32, f32)>) -> ((f32, f32), Option<(f32, f32)>) {
         let mut min = self.min_size.or(app_min).unwrap_or(DEFAULT_MIN_SIZE);
         if let Some(max) = self.max_size { min = (min.0.min(max.0), min.1.min(max.1)); }
@@ -246,10 +255,12 @@ impl WindowOptions {
 
     /// The minimum a window that fits its content height opens with: the content sets the
     /// height, so the default minimum height doesn't apply.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn fit_min_size(&self, app_min: Option<(f32, f32)>) -> Option<(f32, f32)> {
         if app_min.is_none() && self.min_size.is_none() { Some((DEFAULT_MIN_SIZE.0, 0.0)) } else { app_min }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn attributes_with_theme(
         &self,
         title: &str,
@@ -261,6 +272,7 @@ impl WindowOptions {
         self.attributes(title, size, app_min, visible).with_theme(theme)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn attributes(&self, title: &str, size: (f32, f32), app_min: Option<(f32, f32)>, visible: bool) -> winit::window::WindowAttributes {
         use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
         use winit::window::{Window, WindowButtons, WindowLevel};
@@ -924,6 +936,9 @@ impl<S: 'static> WindowSpec<S> {
         on_window(f: impl FnMut(&crate::WindowHandle) + 'static);
         /// Called on the event thread after the first frame is ready, once per native creation.
         on_ready(f: impl FnMut(&crate::WindowHandle) + 'static);
+        /// Hears this window's applied content size, scale and output presence, like
+        /// [`App::on_window_geometry`](crate::App::on_window_geometry).
+        on_window_geometry(f: fn(&mut S, crate::WindowGeometry, &mut crate::Tx) -> bool);
         /// Runs once on the UI thread immediately before the event loop drops windows and closes
         /// the native display connection, like [`App::on_display_close`].
         ///
@@ -1030,6 +1045,7 @@ pub fn open_window<S: 'static>(spec: WindowSpec<S>) -> crate::WindowHandle {
 }
 
 /// The windows `open_window` queued since the last call.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn take_opened() -> Vec<AnyWindowSpec> {
     OPENED.with(|o| std::mem::take(&mut *o.borrow_mut()))
 }
@@ -1087,10 +1103,12 @@ impl OpenAs {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn maximizes(self) -> bool {
         matches!(self, OpenAs::Maximized | OpenAs::FullScreen { maximized: true })
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn full_screens(self) -> bool {
         matches!(self, OpenAs::FullScreen { .. })
     }
@@ -1119,6 +1137,7 @@ impl AnyWindowSpec {
         self.0.desktop(args, selected, scale)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn start(self, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>> {
         self.0.start(inherited, cx)
     }
@@ -1134,6 +1153,7 @@ trait ErasedWindow {
     fn resolve_args(&mut self, inherited: crate::tooling::Args) -> crate::tooling::Args;
     fn headless(self: Box<Self>, args: crate::tooling::Args, scale: f32) -> Result<(), crate::tooling::StartError>;
     fn desktop(self: Box<Self>, args: &crate::tooling::Args, selected: bool, scale: f32) -> Box<dyn crate::desktop::Member>;
+    #[cfg(not(target_arch = "wasm32"))]
     fn start(self: Box<Self>, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>>;
 }
 
@@ -1163,12 +1183,14 @@ impl<S: 'static> ErasedWindow for Erased<S> {
         let Erased { spec, handle, secondary } = *self;
         Box::new(crate::desktop::Window::new(spec, handle, args, selected, !secondary, scale))
     }
+    #[cfg(not(target_arch = "wasm32"))]
     fn start(self: Box<Self>, inherited: crate::tooling::Args, cx: crate::window::Start<'_>) -> Option<Box<dyn crate::window::AnyHost>> {
         let inherited = secondary_args(self.secondary, &self.spec.key, inherited);
         crate::window::start(self.spec, self.handle, !self.secondary, inherited, cx)
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn secondary_args(secondary: bool, key: &str, mut inherited: crate::tooling::Args) -> crate::tooling::Args {
     // A secondary window is not what --scene or --size describe unless --window selects it.
     if secondary && inherited.window.as_deref() != Some(key) {

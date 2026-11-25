@@ -468,7 +468,10 @@ impl RuntimeCore {
             .take_while(|&j| self.allowed(j) && !self.subtree_exiting(j))
             .filter_map(|j| self.tree.nodes[j].focus.key.clone())
             .collect();
-        handlers.into_iter().any(|f| Tx::took(f(app.states(), ev, tx), tx))
+        let rtl = std::mem::replace(&mut tx.key_rtl, self.tree.nodes[i].flow == crate::el::Flow::Rtl);
+        let took = handlers.into_iter().any(|f| Tx::took(f(app.states(), ev, tx), tx));
+        tx.key_rtl = rtl;
+        took
     }
 
     pub(in crate::runtime) fn focused_input(&self) -> Option<&InputSpec> {
@@ -597,6 +600,10 @@ impl RuntimeCore {
     }
     pub(crate) fn read_result(&mut self, id: u64, content: crate::ClipboardContent) {
         self.frame.queue.push(Action::ClipboardRead(id, content));
+    }
+    /// Queues a `Tx::open_url_then` callback with what came of its open.
+    pub(crate) fn url_opened(&mut self, f: crate::open_url::OpenedFn, result: Result<(), crate::open_url::OpenUrlError>) {
+        self.frame.queue.push(Action::UrlOpened(f, result));
     }
 
     /// The focused field's text around its selection, for the platform's input method.

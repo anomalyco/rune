@@ -4,13 +4,16 @@ use std::rc::Rc;
 #[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::{ControlFlow, EventLoop};
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::app::App;
 use crate::tooling::Args;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::windows::WindowSpec;
 #[cfg(not(target_arch = "wasm32"))]
 use super::{WakeEvent, Windows};
 use super::Factory;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run<S: 'static>(app: App<S>, args: Args) -> Result<(), String> {
     let accessory = app.accessory;
     run_configured(Box::new(move |_| vec![WindowSpec::from_app("main", app).into()]), args, accessory)
@@ -22,6 +25,7 @@ pub(crate) fn run_windows(factory: Factory, args: Args, options: crate::RunOptio
 
 /// Without a display (no `WAYLAND_DISPLAY` or `DISPLAY`, a refused X11 connection) the event
 /// loop can't be built.
+#[cfg(not(target_arch = "wasm32"))]
 fn event_loop_error(error: winit::error::EventLoopError) -> String {
     format!("event loop: {error}")
 }
@@ -114,6 +118,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     // A relaunch goes on once the app it restarts has exited.
     crate::render::reopen_prewarm();
     crate::relaunch::wait_for_previous();
+    super::displays::reset();
     crate::tooling::perf_warn::launch::run_starts();
     crate::platform::ready_signal::run_starts();
     // `RUNE_OPEN_INACTIVE` (a tool's launch): the app doesn't take activation at launch either.
