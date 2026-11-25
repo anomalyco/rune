@@ -4046,6 +4046,71 @@ buttons, titlebar and rounded bottom corners are drawn by the vendored frame.
 When you update Rune, check its [root `Cargo.toml`](../../Cargo.toml) at the new revision and
 use that same `rev` for Rune and every patch.
 
+#### From a mirror or without network
+
+Cargo treats each git URL and `rev` as a separate source, so every Rune line (`rune`, any other
+Rune crate and every patch) must name the same URL and the same `rev`. Moving `rune` to a mirror
+and leaving a patch on github.com, or the other way round, makes two sources: a second Rune crate
+from the other one is a second copy of Rune whose types don't match the first, and a patch from it
+can be a different version than Rune asks for, which Cargo skips with a ``Patch `naga` was not used
+in the crate graph`` warning. Pick one of these, in this order:
+
+- **Rewrite the URL in git (recommended).** Keep the public URL in your manifests and have git
+  fetch from the mirror. In `.cargo/config.toml`:
+
+  ```toml
+  [net]
+  git-fetch-with-cli = true
+  ```
+
+  and on the CI runner (or in its image), with your mirror's URL:
+
+  ```sh
+  git config --global url."https://ghe.example.com/mirrors/rune".insteadOf "https://github.com/anomalyco/rune"
+  ```
+
+  `git-fetch-with-cli` has Cargo run `git` for fetches, and `git` reads `insteadOf`. `Cargo.lock`
+  keeps `git+https://github.com/anomalyco/rune?rev=<rev>#<commit>`, so it is the same with and
+  without the mirror, and machines that can reach github.com need no setup. The mirror must have
+  the commit before you bump to it.
+- **Name the mirror in the manifest.** Put the mirror's URL on all of the lines at once.
+  `Cargo.lock` records the mirror's URL in each Rune package's `source`, so everyone who builds the
+  app needs access to the mirror, and moving back is a change to every line and the lock.
+- **Vendor.** `cargo vendor` copies every dependency, Rune's git crates included, into `vendor/`
+  and prints a `[source]` table for `.cargo/config.toml` that replaces crates.io and the Rune git
+  source with that folder. `Cargo.lock` doesn't change. Builds need no network; each bump re-runs
+  `cargo vendor` where the network (or the mirror) is reachable and commits the result.
+
+For CI without network access: with the first two, fetch once where the mirror is reachable
+(`cargo fetch` with the committed lock) and build with `--offline` (or `--frozen`, or
+`CARGO_NET_OFFLINE=true`) from that warm `CARGO_HOME`; vendoring needs no fetch at all. Keep one
+stable `CARGO_HOME` path across jobs. Cargo compiles a git dependency from its checkout under
+`$CARGO_HOME/git/checkouts` and fingerprints it by that path, so a `CARGO_HOME` per checkout
+fetches Rune again and rebuilds every dependency even with a cached `target/`.
+
+#### Bumping Rune
+
+1. Pick a `dev` rev (with a mirror, check that it has the commit).
+2. Read Rune's root `Cargo.toml` at that rev (`git show <rev>:Cargo.toml` in a clone of Rune or of
+   the mirror). Set the `rev` on `rune` and on every patch, and add or remove patch entries to
+   match its `[patch.crates-io]` list.
+3. Run `cargo check`, which moves `Cargo.lock` to the new rev, and look for ``Patch `…` was not
+   used in the crate graph`` warnings: each one is a patch on the wrong URL, the wrong rev, or one
+   Rune no longer needs.
+4. For a web build, match the `wasm-bindgen-cli` your CI images and Dockerfiles install to the
+   `wasm-bindgen` version in your `Cargo.lock`; `scripts/web-build.sh` refuses any other CLI.
+   [`WEB.md`](../../WEB.md) names the version Rune uses at that rev.
+
+[`scripts/check_rune_pins.py`](../../scripts/check_rune_pins.py) checks steps 2 to 4 with no
+network: one URL and `rev` on every Rune line, the patch list against Rune's at that rev, one Rune
+commit in `Cargo.lock`, and (with `--wasm-bindgen-cli`) the CLI pin. Copy it into your app and run
+it in CI:
+
+```sh
+git -C path/to/rune show <rev>:Cargo.toml > rune-Cargo.toml
+python3 check_rune_pins.py --rune-manifest rune-Cargo.toml --wasm-bindgen-cli 0.2.129
+```
+
 ### Linux
 
 Linux builds link `libxkbcommon` (layer-shell and display-targeted overlays) and
