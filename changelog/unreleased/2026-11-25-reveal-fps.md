@@ -1,0 +1,1 @@
+- Streaming word reveals: added opt-in `App::reveal_fps`, `WindowSpec::reveal_fps`, `ConfiguredOverlay::reveal_fps`, and `Runtime::{set_reveal_fps, reveal_fps}` (default `0.0` = full display rate) to cap the wake rate when `El::reveal` word fades are the only active animation across macOS, Windows, Linux, and web while riding along at full rate whenever another animation runs.

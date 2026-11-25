@@ -225,6 +225,32 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
 }
 
 #[test]
+fn app_window_spec_and_overlay_reveal_fps_default_and_normalize() {
+    let spec = || AppSpec::new("chat", (640.0, 480.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).runtime.reveal_fps, 0.0);
+    assert_eq!(WindowSpec::new("chat", spec()).app.runtime.reveal_fps, 0.0);
+
+    let app = App::new(spec()).reveal_fps(30.0);
+    assert_eq!(app.runtime.reveal_fps, 30.0);
+    assert_eq!(WindowSpec::from_app("chat", app).app.runtime.reveal_fps, 30.0);
+
+    assert_eq!(WindowSpec::new("chat", spec()).reveal_fps(40.0).app.runtime.reveal_fps, 40.0);
+    assert_eq!(WindowSpec::new("chat", spec()).reveal_fps(0.25).app.runtime.reveal_fps, 1.0);
+    for raw in [0.0, -0.0, -30.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        assert_eq!(WindowSpec::new("chat", spec()).reveal_fps(raw).app.runtime.reveal_fps, 0.0);
+    }
+
+    let overlay = crate::OverlaySpec::new("stream", (320.0, 200.0), |_: &(), _| crate::el())
+        .options(crate::OverlayOptions::default())
+        .reveal_fps(30.0);
+    assert_eq!(overlay.runtime.reveal_fps, 30.0);
+    let overlay_clamped = crate::OverlaySpec::new("stream-low", (320.0, 200.0), |_: &(), _| crate::el())
+        .options(crate::OverlayOptions::default())
+        .reveal_fps(0.5);
+    assert_eq!(overlay_clamped.runtime.reveal_fps, 1.0);
+}
+
+#[test]
 fn display_work_area_falls_back_to_full_bounds_for_headless_displays() {
     let primary = Display {
         id: None,

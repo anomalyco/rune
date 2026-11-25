@@ -574,7 +574,15 @@ policy changes are applied in the same mutation phase.
   shaped layout. A width rewrap can shrink the row; completion lands at its full measured height.
 - **Stream edges** (`edge::{FEATHER, FAST_FEATHER, NO_MASK, WORD_FADE}`): the feather mask under a
   growing row and the word-fade duration. `.reveal(word_fade)` fades appended words in, staggered from
-  20 ms down to 5.5 ms as a backlog builds.
+  20 ms down to 5.5 ms as a backlog builds. By default word fades pace at the display's full refresh
+  rate (`0.0`); opt in to a lower reveal-only wake rate across macOS, Windows, Linux, and web with
+  `App::reveal_fps(fps)` (also on `WindowSpec`, `ConfiguredOverlay`, and
+  `Runtime::{set_reveal_fps, reveal_fps}`; finite positive rates clamp to at least `1.0` Hz,
+  non-positive or non-finite values normalize to `0.0`). `30.0` Hz is recommended because it
+  divides both 60 Hz and 120 Hz displays cleanly without beat judder (Apple WWDC21 Session 10147),
+  though any positive rate (such as `40.0`) is accepted. Whenever another animation runs alongside
+  a word fade, the fade rides along at that animation's full rate; once all words finish, the
+  runtime clears its wake deadline and draws nothing at rest.
 - **Settling** (`Tx::settle()`): no animation, every track lands, and removed nodes unmount at once.
   Opening a session lands at the bottom on its first frame with nothing animating in.
 - **Turn actions**: a transcript view can reserve a stable tail and crossfades Working into the

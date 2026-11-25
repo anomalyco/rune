@@ -36,6 +36,7 @@ mod read_only_input;
 mod relayout;
 mod remount;
 mod reveal_chain;
+mod reveal_fps;
 mod reveal_phase;
 mod scroll_carried;
 mod scroll_children;

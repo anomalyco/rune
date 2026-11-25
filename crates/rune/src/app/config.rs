@@ -22,7 +22,22 @@ pub(crate) struct RuntimeConfig<S: 'static> {
     pub(crate) font_smoothing: crate::FontSmoothing,
     pub(crate) emoji_family: Option<String>,
     pub(crate) max_native_materials: usize,
+    pub(crate) reveal_fps: f32,
     pub(crate) dev_stats: Option<fn() -> String>,
+}
+
+impl<S: 'static> RuntimeConfig<S> {
+    /// Normalizes a wake-rate cap (Hz) for `El::reveal` word fades: finite positive values clamp
+    /// to at least `1.0` Hz, while zero, negative, NaN and infinite values normalize to `0.0`
+    /// (uncapped display rate).
+    #[inline]
+    pub(crate) fn normalize_reveal_fps(fps: f32) -> f32 {
+        if fps.is_finite() && fps > 0.0 {
+            fps.max(1.0)
+        } else {
+            0.0
+        }
+    }
 }
 
 impl<S: 'static> Clone for RuntimeConfig<S> {
@@ -40,6 +55,7 @@ impl<S: 'static> Clone for RuntimeConfig<S> {
             font_smoothing: self.font_smoothing,
             emoji_family: self.emoji_family.clone(),
             max_native_materials: self.max_native_materials,
+            reveal_fps: self.reveal_fps,
             dev_stats: self.dev_stats,
         }
     }
@@ -60,6 +76,7 @@ impl<S: 'static> Default for RuntimeConfig<S> {
             font_smoothing: crate::FontSmoothing::default(),
             emoji_family: None,
             max_native_materials: crate::MAX_NATIVE_MATERIALS,
+            reveal_fps: 0.0,
             dev_stats: None,
         }
     }
@@ -117,8 +134,10 @@ impl<S: 'static> Runtime<S> {
             font_smoothing,
             emoji_family,
             max_native_materials,
+            reveal_fps,
             dev_stats,
         } = config;
+        self.core_mut().set_reveal_fps(reveal_fps);
         self.hooks.on_focus = on_focus;
         self.hooks.on_mods = on_mods;
         self.hooks.on_visibility = on_visibility;
@@ -168,6 +187,7 @@ mod tests {
             .font_smoothing(FontSmoothing::Off)
             .emoji_family("Twemoji")
             .max_native_materials(6)
+            .reveal_fps(30.0)
             .dev_stats(stats)
     }
 
@@ -185,6 +205,7 @@ mod tests {
         assert_eq!(rt.font_smoothing(), FontSmoothing::Off);
         assert_eq!(rt.emoji_family(), Some("Twemoji"));
         assert_eq!(rt.max_native_materials(), 6);
+        assert_eq!(rt.reveal_fps(), 30.0);
         assert_eq!(rt.host.app_stats.map(|f| f()).as_deref(), Some("ok"));
 
         // tab_visits_controls overrides full_keyboard_access(false) so Tab reaches a focusable control.
@@ -215,6 +236,7 @@ mod tests {
         assert_eq!(cfg.font_smoothing, FontSmoothing::default());
         assert_eq!(cfg.emoji_family, None);
         assert_eq!(cfg.max_native_materials, crate::MAX_NATIVE_MATERIALS);
+        assert_eq!(cfg.reveal_fps, 0.0);
         assert!(cfg.on_focus.is_none() && cfg.on_mods.is_none() && cfg.on_visibility.is_none() && cfg.on_ime.is_none() && cfg.on_field_menu.is_none() && cfg.dev_stats.is_none());
     }
 }

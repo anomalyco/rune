@@ -208,6 +208,25 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.runtime.max_native_materials = crate::system_material::clamp_max_native_materials(max);
         self
     }
+    /// Cap the wake rate (Hz) used when `El::reveal` word fades are the only active animation in
+    /// this overlay (`0.0`, default = full display rate; positive finite values clamp to at least
+    /// `1.0` Hz, non-positive or non-finite values normalize to `0.0`), like
+    /// [`App::reveal_fps`](crate::App::reveal_fps).
+    ///
+    /// `30.0` Hz is recommended because it divides both 60 Hz and 120 Hz displays cleanly without
+    /// beat judder (Apple WWDC21 Session 10147), though any positive rate is accepted.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, el};
+    ///
+    /// let _overlay = OverlaySpec::new("stream", (360.0, 220.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .reveal_fps(30.0);
+    /// ```
+    pub fn reveal_fps(mut self, fps: f32) -> Self {
+        self.runtime.reveal_fps = crate::app::RuntimeConfig::<T>::normalize_reveal_fps(fps);
+        self
+    }
     /// How this overlay rasterises and places glyphs (see [`crate::FontSmoothing`]).
     /// Defaults to the app's `App::font_smoothing`; `Tx::set_font_smoothing` switches it
     /// while running.
