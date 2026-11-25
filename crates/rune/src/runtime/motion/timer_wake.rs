@@ -244,9 +244,18 @@ impl FrameState {
 
     #[inline]
     pub(in crate::runtime) fn begin_frame_poll(&mut self, clock: f64) -> (bool, usize) {
+        if matches!(self.timer_wake, TimerWake::FollowUp { .. }) {
+            let polled = self.timer_wake.frame_polled(false);
+            return (polled, 0);
+        }
         let polled = self.timer_wake.frame_polled(self.wake_deadlines.first().is_some_and(|t| *t <= clock));
         let due = self.wake_deadlines.partition_point(|t| *t <= clock);
         (polled, due)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_follow_up_poll(&mut self, at: f64) {
+        self.timer_wake = self.timer_wake.step(TimerWakeEvent::FollowUp { at }).0;
     }
 
     #[inline]
@@ -283,11 +292,16 @@ pub(in crate::runtime) enum TimerWake {
     Asked { at: f64 },
     /// A frame took the poll at `polled_at` as its own.
     Taken { polled_at: f64 },
+    /// Follow-up zero-dt frame draining queued input inside the same hidden or covered wake:
+    /// `poll` already ran at `at` and newly scheduled timers stay armed for the next host wake.
+    FollowUp { at: f64 },
 }
 
 pub(in crate::runtime) enum TimerWakeEvent {
     /// A resting wake's poll ran `at` and asked for a frame.
     Asked { at: f64 },
+    /// A hidden or covered wake's follow-up frame drains queued input without re-polling.
+    FollowUp { at: f64 },
     /// A frame polls; `due`: a deadline came due since the timer's poll, so it polls again.
     Frame { due: bool },
     /// The frame asked for won't stand for its poll: the window hid or showed, or a wake asks
@@ -303,10 +317,16 @@ impl TimerWake {
     pub(in crate::runtime) fn step(self, event: TimerWakeEvent) -> (TimerWake, Option<f64>) {
         match (self, event) {
             (_, TimerWakeEvent::Asked { at }) => (TimerWake::Asked { at }, None),
+            (_, TimerWakeEvent::FollowUp { at }) => (TimerWake::FollowUp { at }, None),
             (_, TimerWakeEvent::PollAlone) => (TimerWake::Idle, None),
-            (TimerWake::Asked { at }, TimerWakeEvent::Frame { due: false }) => (TimerWake::Taken { polled_at: at }, Some(at)),
+            (TimerWake::Asked { at }, TimerWakeEvent::Frame { due: false })
+            | (TimerWake::FollowUp { at }, TimerWakeEvent::Frame { .. }) => {
+                (TimerWake::Taken { polled_at: at }, Some(at))
+            }
             (_, TimerWakeEvent::Frame { .. }) => (TimerWake::Idle, None),
-            (TimerWake::Asked { at }, TimerWakeEvent::Cancel) => (TimerWake::Idle, Some(at)),
+            (TimerWake::Asked { at } | TimerWake::FollowUp { at }, TimerWakeEvent::Cancel) => {
+                (TimerWake::Idle, Some(at))
+            }
             (state, TimerWakeEvent::Cancel) => (state, None),
         }
     }
@@ -347,6 +367,26 @@ impl RuntimeCore {
         let wakes = std::mem::take(&mut self.frame.pending.wakes);
         self.schedule_wakes(wakes);
         stale
+    }
+
+    /// Runs a hidden poll; if it leaves input or drag ends queued, arms `TimerWake::FollowUp`
+    /// (preserving the poll's clock and pending wakes without re-polling) and reports
+    /// `(stale, true)`. Otherwise schedules the poll's wakes and reports `(stale, false)`.
+    pub(crate) fn poll_hidden_or_arm_follow_up(&mut self, app: &mut dyn AppDriver) -> (bool, bool) {
+        let now = self.now_clock();
+        if self.frame.timer_wake.asked() && self.frame.wake_deadlines.first().is_none_or(|t| *t > now) {
+            self.cancel_timer_frame();
+            return (self.needs_commit(), self.has_pending_input() || self.drag_ends_pending());
+        }
+        let stale = self.poll_alone(app);
+        if self.has_pending_input() || self.drag_ends_pending() {
+            let polled = self.clock;
+            self.frame.set_follow_up_poll(polled);
+            return (stale, true);
+        }
+        let wakes = std::mem::take(&mut self.frame.pending.wakes);
+        self.schedule_wakes(wakes);
+        (stale, false)
     }
 
     /// `poll_hidden`, leaving the poll's `wake_after`s in `pending`.
@@ -421,9 +461,8 @@ impl RuntimeCore {
     }
 
     /// Whether user input is queued in the action queue (`ActionQueue::has_input`), as
-    /// distinguished from layout and state observers. Hosts check this before resting so
-    /// queued input never waits for a later timer.
-    #[cfg(not(target_arch = "wasm32"))]
+    /// distinguished from layout and state observers. Hosts check this before resting and
+    /// hidden wakes check it after a poll or frame so queued input never waits for a later timer.
     pub(crate) fn has_input_waiting(&self) -> bool {
         self.frame.queue.has_input()
     }
@@ -465,3 +504,5 @@ impl RuntimeCore {
         self.frame.wake_deadlines.first().is_some_and(|t| *t <= self.clock)
     }
 }
+
+

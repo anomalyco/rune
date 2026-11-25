@@ -621,7 +621,7 @@ impl Host {
     /// polled.
     pub(in crate::window) fn poll_hidden(&mut self, event_loop: &ActiveEventLoop, shows: bool) -> bool {
         if event_loop.exiting() || self.shown_win().is_some() { return false; }
-        let changed = self.app.poll_hidden();
+        let changed = if !shows && !self.launcher() { self.app.hidden_wake() } else { self.app.poll_hidden() };
         self.clipboard.flush_core(self.app.rt_mut());
         // A show this turn minimizes after it: this poll holds the ask across its own shell, and
         // a callback's ask during that shell is the one it takes first.

@@ -428,7 +428,7 @@ impl OverlayCore {
     /// An overlay that draws nothing delivers queued input without drawing, such as the
     /// releases of the modifier keys held when it hid, rather than when it next shows.
     pub(super) fn hidden_input(&mut self, app: &mut dyn OverlayApp) {
-        if !self.presence.drawing() && app.rt().keys_queued() { self.advance(app); }
+        if !self.presence.drawing() && (app.rt().has_input_waiting() || app.rt().keys_queued() || app.rt().drag_ends_pending()) { self.advance(app); }
     }
 
     /// Fn changes the monitor saw since the loop last turned. A hidden overlay drops them: its
@@ -521,8 +521,7 @@ impl OverlayCore {
             !self.retained() || !self.hidden_pace.ready(now)
         };
         if !polls_only { return self.commit_at(app, now); }
-        app.poll_hidden();
-        if app.rt().has_pending_input() { return self.commit_at(app, now); }
+        if app.poll_hidden_for_wake() { return self.commit_at(app, now); }
         self.take_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
         self.open_popup(app);
@@ -543,6 +542,7 @@ impl OverlayCore {
         } else {
             app.frame(0.0);
         }
+        app.drain_hidden_input();
         self.take_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
         self.open_popup(app);
@@ -753,6 +753,7 @@ impl OverlayCore {
         }
         self.apply_input(app.rt());
         self.drain_injected_pointers(app);
+        if self.frameless() && (app.rt().has_input_waiting() || app.rt().drag_ends_pending()) { self.advance(app); }
         if self.presence.shown() {
             #[cfg(target_os = "macos")]
             if let Some(panel) = &self.panel { self.shared.native.lock().unwrap().1.global_pointer = panel.global_pointer(); }

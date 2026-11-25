@@ -463,6 +463,7 @@ impl Running {
             }
             Some("visibility") => {
                 let visible = event["visible"].as_bool().unwrap_or(false);
+                let was_visible = self.shared.is_visible();
                 self.last_presented = None;
                 self.shared.set_visible(visible);
                 self.app.set_live_visible(visible);
@@ -483,6 +484,9 @@ impl Running {
                     self.sync_input(false);
                     self.app.rt_mut().rest();
                     return false;
+                }
+                if !was_visible {
+                    self.app.rt_mut().settle_all();
                 }
                 if event["focused"].as_bool().unwrap_or(false) {
                     self.app.window_focus(true);

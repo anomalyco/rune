@@ -1,6 +1,7 @@
 //! Frame loop, clocks, wake deadlines, request latching and motion/paint-order stepping.
 use super::*;
 
+pub(in crate::runtime) mod drain;
 mod latch;
 mod motion;
 mod mount;
@@ -167,18 +168,52 @@ impl RuntimeCore {
     }
 
     /// A hidden or covered host's due timer or wake. `poll` and due timers run now; the view
-    /// and layout wait, dirty, for the frame that shows the host. Queued input and drag ends take a frame
-    /// without drawing (`hidden_timer_frame`) so their handlers hear them now. Returns whether
-    /// the last drawn frame went out of date.
+    /// and layout wait, dirty, for the frame that shows the host. Queued input and drag ends—
+    /// whether already waiting at entry or queued by `poll` (such as `Tx::send_key`,
+    /// `Play::press`, or a paste)—take a zero-dt frame without drawing (`hidden_timer_frame`)
+    /// so their handlers hear them in this same wake with the poll's clock, then drain chained
+    /// input through [`drain::drain_turn`]. Returns whether the last drawn frame went out of date.
     pub(crate) fn hidden_wake(&mut self, app: &mut dyn AppDriver) -> bool {
-        if self.has_pending_input() || self.drag_ends_pending() {
-            let commits = self.stats.commits;
+        let commits = self.stats.commits;
+        let mut poll_stale = false;
+        let wake_clock = if self.has_pending_input() || self.drag_ends_pending() {
             self.hidden_timer_frame(app);
-            // File steps held for that frame's build land in another.
-            if self.files_held() { self.hidden_timer_frame(app); }
-            return self.stats.commits != commits;
+            self.polled_at()
+        } else {
+            let (stale, pending) = self.poll_hidden_or_arm_follow_up(app);
+            poll_stale = stale;
+            if !pending {
+                return poll_stale;
+            }
+            let polled = self.clock;
+            self.hidden_timer_frame(app);
+            polled
+        };
+        self.drain_hidden_input(app, wake_clock);
+        poll_stale || self.stats.commits != commits
+    }
+
+    /// Drains chained user input, drag ends, or held file steps left queued after a non-drawable
+    /// frame through [`drain::drain_turn`], preserving `wake_clock` without re-polling. When
+    /// [`drain::MAX_POLL_ROUNDS`] is hit with work still waiting, schedules a continuation wake
+    /// (paced by `TIMER_FRAME` on the host) instead of spinning.
+    pub(crate) fn drain_hidden_input(&mut self, app: &mut dyn AppDriver, wake_clock: f64) {
+        let outcome = drain::drain_turn(
+            self,
+            |rt| rt.hidden_follow_up_waiting(),
+            |rt, _| {
+                rt.frame.set_follow_up_poll(wake_clock);
+                rt.hidden_timer_frame(app);
+            },
+        );
+        if outcome.capped {
+            self.schedule_wakes_from(wake_clock, [std::time::Duration::ZERO]);
         }
-        self.poll_hidden(app)
+    }
+
+    #[inline]
+    fn hidden_follow_up_waiting(&self) -> bool {
+        self.has_input_waiting() || self.drag_ends_pending() || self.files_held()
     }
 
     /// [`Runtime::hidden_wake`] for a shown window that can't draw (covered, minimised, on a
@@ -195,7 +230,10 @@ impl RuntimeCore {
             && (self.a11y_activation_build_pending() || self.has_focus_request())
             && (self.needs_commit() || self.commit.commits == 0)
         {
+            let wake_clock = self.polled_at();
+            self.frame.set_follow_up_poll(wake_clock);
             self.hidden_timer_frame(app);
+            self.drain_hidden_input(app, wake_clock);
         }
         stale
     }
@@ -713,3 +751,5 @@ impl RuntimeCore {
         !self.tree.aspect_snap.is_empty()
     }
 }
+
+

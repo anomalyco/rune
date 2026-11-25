@@ -249,6 +249,21 @@ pub(crate) fn web_frame_gate(
     }
 }
 
+/// Whether a web wake (due timer or app wake) runs `covered_wake` directly instead of calling
+/// `request_redraw`: browsers pause `requestAnimationFrame` while a tab is hidden, and a
+/// zero-size suspended canvas skips drawing in [`web_frame_gate`].
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub(crate) fn web_wake_covered(hidden: bool, suspended: bool) -> bool {
+    hidden || suspended
+}
+
+/// Next timer wait target on the web while hidden or suspended: floors overdue/zero timers by
+/// one frame interval after `polled_at` so `wake_after(Duration::ZERO)` never spins.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+pub(crate) fn web_hidden_timer_target(deadline: f64, polled_at: f64) -> f64 {
+    deadline.max(polled_at + crate::window::TIMER_FRAME.as_secs_f64())
+}
+
 /// Whether a presented GPU frame can be recorded in [`crate::window::Presented`] so a later
 /// redraw that builds the same pixels skips acquiring and presenting a canvas texture.
 pub(crate) fn should_record_presented(
