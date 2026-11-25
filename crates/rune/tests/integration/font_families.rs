@@ -1,5 +1,5 @@
 use std::hash::{Hash, Hasher};
-use rune::{Family, OpticalSize, TextStyle, text::{Span, TextSystem}};
+use rune::{Family, OpticalSize, TextStyle, text::{ATLAS_SIZE, Span, TextSystem}};
 
 const INTER: &[u8] = include_bytes!("../../assets/Inter-Regular.ttf");
 const PLEX: &[u8] = include_bytes!("../../../../themes/opencode/assets/fonts/IBMPlexMono-Regular.ttf");
@@ -82,7 +82,12 @@ fn default_faces_keep_batch_c_pixels() {
                 q.uv.map(f32::to_bits).hash(&mut hash);
             }
         }
-        system.atlas.data.hash(&mut hash);
+        // The page as its texture has it. The CPU copy holds only the rows in use (it starts at 128
+        // rows and grows, #2260); the rest of the 2048 x 2048 page is zero, as it was when the copy
+        // held every row, so the values below still stand for the same pixels.
+        let mut page = system.atlas.data.clone();
+        page.resize((ATLAS_SIZE * ATLAS_SIZE) as usize, 0);
+        page.hash(&mut hash);
         // At 2× the inline Plex span grows the line, as Chromium's does (#983): each font's box
         // has its ascent and descent rounded to device px and its half-leading floored, and the
         // line is the largest reach above the baseline plus the largest below. Plex reaches a
