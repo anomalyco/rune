@@ -48,6 +48,14 @@ pub(in crate::runtime) fn push_shape(out: &mut Vec<Instance>, shape: &Shape, ori
                 let (verts, tris) = crate::shape::triangulate_compound(contours, *rule);
                 push_triangles(out, &verts, &tris, at, fill, clip, fade);
             }
+            Op::FillArea { area, color } => {
+                let fill = premul(*color, opacity, srgb);
+                if fill[3] <= 0.0005 {
+                    continue;
+                }
+                let (verts, tris) = area.triangles();
+                push_triangles(out, verts, tris, at, fill, clip, fade);
+            }
         }
     }
 }

@@ -360,19 +360,24 @@ pub(super) fn svg(shape: &crate::Shape, size: (f32, f32)) -> String {
                 let d = &mut fill.get_or_insert_with(|| (*c, String::new())).1;
                 write!(d, "M{}Z", points(pts).replace(' ', "L")).ok();
             }
-            crate::shape::Op::FillCompound { contours, rule, color: c } => {
+            crate::shape::Op::FillCompound { .. } | crate::shape::Op::FillArea { .. } => {
+                let (contours, rule, c) = match op {
+                    crate::shape::Op::FillCompound { contours, rule, color } => (contours.as_slice(), *rule, *color),
+                    crate::shape::Op::FillArea { area, color } => (area.contours(), area.rule(), *color),
+                    _ => unreachable!(),
+                };
                 flush(&mut out, &mut fill);
                 let mut d = String::new();
                 for pts in contours {
                     write!(d, "M{}Z", points(pts).replace(' ', "L")).ok();
                 }
                 if !d.is_empty() {
-                    let attr = if *rule == crate::shape::FillRule::EvenOdd {
+                    let attr = if rule == crate::shape::FillRule::EvenOdd {
                         " fill-rule=\"evenodd\""
                     } else {
                         ""
                     };
-                    write!(out, "<path fill=\"{}\"{attr} d=\"{d}\"/>", color(*c)).ok();
+                    write!(out, "<path fill=\"{}\"{attr} d=\"{d}\"/>", color(c)).ok();
                 }
             }
             crate::shape::Op::Stroke { points: pts, closed, width, cap, color: c } => {
