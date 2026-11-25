@@ -18,8 +18,12 @@ impl El {
     ///   `org_kde_kwin_blur_manager` (opt out with `RUNE_SYSTEM_MATERIAL=off`). Because Wayland
     ///   compositor blur has no tint of its own, Wayland mode keeps a translucent fill as the tint
     ///   (drawing transparent when no fill is set), punches the outer-shadow interior hole, clips
-    ///   the blur region to ancestor clips and rounded corners, drops elements below 0.10 opacity,
-    ///   and leaves opaque fills (`alpha >= 1.0`) unchanged without adding them to the blur region.
+    ///   the blur region to ancestor clips and rounded corners, and leaves opaque fills
+    ///   (`alpha >= 1.0`) unchanged without adding them to the blur region. Because Wayland blur
+    ///   protocols have no opacity parameter, compositor blur is all-or-nothing under a fading
+    ///   element: it stays at full strength until effective opacity drops below `0.10`, then turns
+    ///   off. Respects [`App::max_native_materials`](crate::App::max_native_materials) (default 4;
+    ///   elements beyond the limit draw their fallback fill).
     ///   Query [`Cx::window_backdrop_supported`](crate::Cx::window_backdrop_supported) with
     ///   [`WindowBackdrop::Blur`](crate::WindowBackdrop::Blur) to choose translucent vs opaque
     ///   fills with one check.

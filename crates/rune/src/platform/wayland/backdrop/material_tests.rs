@@ -565,3 +565,59 @@ fn material_inside_el_cache_stays_in_wayland_blur_region_across_frames() {
         assert_eq!(now, first.as_slice(), "cached material blur rect & clip must persist on frame {step}");
     }
 }
+
+#[test]
+fn toplevel_unprompted_update_snaps_while_tx_animated_springs_with_blur_region() {
+    // Reproduces the glass-card toplevel vs overlay contrast: toplevel windows run with
+    // `motion_needs_cause` (`tooling::runtime_for`), so a background `AppHandle::update`
+    // without `tx.animated()` snaps in 1 frame (`Commit::Unprompted`), while calling
+    // `tx.animated()` drives the spring and updates `wayland_material_blurs` every frame.
+    fn card_view(docked: &bool, _: &mut Cx<bool>) -> El {
+        let (x, y, w, h, r) = if *docked {
+            (470.0, 386.0, 250.0, 60.0, 30.0)
+        } else {
+            (70.0, 60.0, 400.0, 260.0, 28.0)
+        };
+        el().w_full().h_full().child(
+            el().key("card").absolute(x, y).size(w, h).radius(r)
+                .system_material(SystemMaterial::Glass)
+                .motion(crate::Spring::new(0.7, 0.22)),
+        )
+    }
+
+    let mut toplevel = Runtime::new(false, card_view, (760.0, 480.0), Env::new(true, 1.0));
+    toplevel.motion.enable_motion_needs_cause();
+    toplevel.core_mut().set_wayland_blur_materials(true);
+    toplevel.frame(0.0);
+    assert!((toplevel.core().paint.wayland_material_blurs()[0].rect[0] - 70.0).abs() < 1.0);
+
+    // Without `tx.animated()`: unprompted update snaps to docked target in 1 frame.
+    toplevel.update(|docked, _| *docked = true);
+    assert!(!toplevel.frame(1.0 / 120.0), "unprompted toplevel update snaps immediately");
+    assert!((toplevel.core().paint.wayland_material_blurs()[0].rect[0] - 470.0).abs() < 1.0);
+
+    // With `tx.animated()`: springs across many frames with blur region moving every frame.
+    toplevel.update(|docked, tx| {
+        *docked = false;
+        tx.animated();
+    });
+    let mut frames = 0usize;
+    let mut saw_mid = false;
+    while toplevel.frame(1.0 / 120.0) && frames < 240 {
+        frames += 1;
+        let x = toplevel.core().paint.wayland_material_blurs()[0].rect[0];
+        if x > 90.0 && x < 450.0 {
+            saw_mid = true;
+        }
+    }
+    assert!(frames > 30, "tx.animated() must animate toplevel spring, got {frames} frames");
+    assert!(saw_mid, "blur region must track intermediate spring positions");
+    assert!((toplevel.core().paint.wayland_material_blurs()[0].rect[0] - 70.0).abs() < 1.0);
+
+    // Overlay (`motion_needs_cause == false`): animates even without `tx.animated()`.
+    let mut overlay = Runtime::new(false, card_view, (760.0, 480.0), Env::new(true, 1.0));
+    overlay.core_mut().set_wayland_blur_materials(true);
+    overlay.frame(0.0);
+    overlay.update(|docked, _| *docked = true);
+    assert!(overlay.frame(1.0 / 120.0), "overlay without motion_needs_cause animates by default");
+}
