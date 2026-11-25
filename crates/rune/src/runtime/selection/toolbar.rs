@@ -88,6 +88,44 @@ impl RuntimeCore {
         None
     }
 
+    /// A primary press on `target` (None: on nothing). On selectable text it starts a selection
+    /// (one click places it — or arms waiting for drag slop on an inline link — two select a word,
+    /// three a paragraph, and Shift extends the current one into another text of its group).
+    /// Anywhere else it clears the selection.
+    pub(in crate::runtime) fn selection_down(&mut self, target: Option<usize>, x: f32, y: f32) {
+        use super::selectable::{Unit, phase, virtual_selection::EndRef, with_trailing_space};
+        let Some(i) = target.filter(|&i| self.is_selectable(i)) else {
+            self.clear_text_selection();
+            self.edit.selectable.presses.clear();
+            return;
+        };
+        let on_link = self.link_at(i, x, y).is_some();
+        let Some(at) = self.text_index_at(i, x, y) else { return };
+        let path = self.tree.nodes[i].path.clone();
+        let content = self.content_of(i).to_owned();
+        let now = self.now_clock();
+        let clicks = self.edit.selectable.presses.press(&path, now, (x, y), self.double_click_interval).min(3);
+        let i_end = EndRef::Mounted(i);
+        let holder = self.selection_holder_end().filter(|&h| h == i_end || self.end_same_group(h, i_end));
+        match holder {
+            // Keep the anchor; the focus follows the pointer from here.
+            Some(h) if clicks == 1 && self.edit.selectable.shift => {
+                self.select_step(phase::Event::Extend { focus: at, far: (h != i_end).then(|| phase::Far::new(path, content)) });
+            }
+            // A first press on an inline link stays unarmed until pointer motion crosses drag slop,
+            // so clicks and trembling clicks still open the link while drags start text selection.
+            _ if clicks == 1 && on_link => {
+                self.select_step(phase::Event::Arm { path, content, at, wait_slop: true });
+            }
+            _ => {
+                let unit = match clicks { 1 => Unit::Char, 2 => Unit::Word, _ => Unit::Paragraph };
+                let origin = self.unit_in(i, at, unit);
+                let origin = if unit == Unit::Word { with_trailing_space(&content, origin) } else { origin };
+                self.select_step(phase::Event::Press { path, content, unit, origin });
+            }
+        }
+    }
+
     /// Primary press on a list item's non-selectable marker: single click arms a drag anchored at
     /// byte 0 of `i` without selecting or moving any caret; Shift+click extends to byte 0; double-
     /// and triple-click select the first word or paragraph of `i` (never the marker itself).
@@ -107,7 +145,7 @@ impl RuntimeCore {
                 });
             }
             _ if clicks == 1 => {
-                self.select_step(phase::Event::Arm { path, content });
+                self.select_step(phase::Event::Arm { path, content, at: 0, wait_slop: false });
             }
             _ => {
                 let unit = if clicks == 2 { Unit::Word } else { Unit::Paragraph };
@@ -123,7 +161,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn armed_marker_in_focused_caret_host(&self) -> bool {
         let Some(host) = self.caret_browsing_focused_host() else { return false };
         let Some((sel, _, armed)) = self.edit.selectable.phase.drag_selection() else { return false };
-        armed && self.live(&sel.path).is_some_and(|i| self.caret_browsing_host_of(i) == Some(host))
+        armed == Some(false) && self.live(&sel.path).is_some_and(|i| self.caret_browsing_host_of(i) == Some(host))
     }
 
     /// The selection side of a primary press on `target` at (x, y): it starts or clears a

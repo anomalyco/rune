@@ -194,7 +194,7 @@ impl RuntimeCore {
     /// A press at (x, y) on text field `ji`, down at `down_at`; `second` when it's the second
     /// of a double press; `link` when the press landed on a link in `ji`'s own text; `direct`
     /// when the press landed directly on `ji` rather than an outer `role="textbox"` wrapper.
-    pub(in crate::runtime) fn input_down(&mut self, ji: usize, (x, y): (f32, f32), down_at: f64, second: bool, link: Option<usize>, direct: bool) {
+    pub(in crate::runtime) fn input_down(&mut self, ji: usize, (x, y): (f32, f32), down_at: f64, second: bool, link: Option<usize>, direct: bool, touch: bool) {
         let now = self.now_clock();
         let shift = self.kbd.held_mods.shift;
         // Its text drew scaled or rotated with its box: map the press back to the rest layout.
@@ -231,9 +231,9 @@ impl RuntimeCore {
             screen: self.screen_at(x, y),
             edge: None,
         };
-        self.pointer.hold_press(
-            capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None).on_link(link),
-        );
+        let mut held = capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None).on_link(link);
+        held.touch = touch;
+        self.pointer.hold_press(held);
     }
 
     /// Focuses text field `ji` with its caret at (x, y), as a single click does, but holds no

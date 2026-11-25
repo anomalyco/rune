@@ -57,10 +57,11 @@ pub(in crate::runtime) enum Phase {
     Empty,
     /// A selection no press is making.
     Placed(Selection),
-    /// A primary press on a non-selectable list marker armed a drag anchored at byte 0 of its
-    /// item's first selectable text without placing a selection or moving any caret unless the
-    /// pointer drags out of byte 0. `prior` keeps a collapsed caret to restore on a bare click.
-    Armed { selection: Selection, prior: Option<Box<Selection>> },
+    /// A primary press on a non-selectable list marker or an inline link armed a drag anchored
+    /// at `selection.origin` without placing a selection or moving any caret unless the pointer
+    /// drags (past drag slop when `wait_slop` is true). `prior` keeps a collapsed caret to restore
+    /// on a bare click.
+    Armed { selection: Selection, prior: Option<Box<Selection>>, wait_slop: bool },
     /// The held press is extending this selection by `unit`, keeping whole the unit it began on
     /// (`Selection::origin`).
     Dragging { selection: Selection, unit: Unit },
@@ -89,11 +90,12 @@ impl Phase {
         matches!(self, Phase::Dragging { .. } | Phase::Armed { .. })
     }
 
-    /// Active drag selection and granularity (including an armed marker drag at `Unit::Char`).
-    pub(in crate::runtime) fn drag_selection(&self) -> Option<(&Selection, Unit, bool)> {
+    /// Active drag selection, granularity, and armed state (`None` while dragging,
+    /// `Some(wait_slop)` while armed).
+    pub(in crate::runtime) fn drag_selection(&self) -> Option<(&Selection, Unit, Option<bool>)> {
         match self {
-            Phase::Dragging { selection, unit } => Some((selection, *unit, false)),
-            Phase::Armed { selection, .. } => Some((selection, Unit::Char, true)),
+            Phase::Dragging { selection, unit } => Some((selection, *unit, None)),
+            Phase::Armed { selection, wait_slop, .. } => Some((selection, Unit::Char, Some(*wait_slop))),
             Phase::Empty | Phase::Placed(_) => None,
         }
     }
@@ -149,8 +151,9 @@ pub(in crate::runtime) enum Reach<'a> {
 pub(in crate::runtime) enum Event<'a> {
     /// A primary press placed a new selection, `origin` in text `path`, to be extended by `unit`.
     Press { path: String, content: String, unit: Unit, origin: (usize, usize) },
-    /// A primary press on a non-selectable list marker armed a drag anchored at byte 0 of `path`.
-    Arm { path: String, content: String },
+    /// A primary press on a non-selectable list marker or an inline link armed a drag anchored
+    /// at byte `at` of `path`, waiting for drag slop when `wait_slop` is true.
+    Arm { path: String, content: String, at: usize, wait_slop: bool },
     /// A Shift-press keeps the anchor and moves the focus to `focus`, in `far` or the anchor's
     /// text; the drag that follows extends by character.
     Extend { focus: usize, far: Option<Far> },
@@ -182,12 +185,12 @@ pub(in crate::runtime) fn step(phase: &mut Phase, event: Event<'_>) -> Effects<E
             *phase = Phase::Dragging { selection: Selection::new(path, content, origin, origin), unit };
             Effects::one(Effect::Seal)
         }
-        Event::Arm { path, content } => {
+        Event::Arm { path, content, at, wait_slop } => {
             let prior = match std::mem::take(phase) {
                 Phase::Placed(prev) if prev.anchor == prev.focus && prev.far.is_none() => Some(Box::new(prev)),
                 _ => None,
             };
-            *phase = Phase::Armed { selection: Selection::new(path, content, (0, 0), (0, 0)), prior };
+            *phase = Phase::Armed { selection: Selection::new(path, content, (at, at), (at, at)), prior, wait_slop };
             Effects::one(Effect::SyncPins)
         }
         Event::Extend { focus, far } => {

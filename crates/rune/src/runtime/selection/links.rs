@@ -417,7 +417,7 @@ impl RuntimeCore {
         let path = &self.tree.nodes[i].path;
         let hovered = self.pointer.pos.filter(|_| self.pointer.hovered.as_deref() == Some(path))
             .and_then(|(x, y)| self.link_at(i, x, y));
-        let pressed = self.pointer.press_held().filter(|h| h.path == *path && h.inside()).and_then(|h| h.link).filter(|&k| hovered == Some(k));
+        let pressed = self.pointer.press_held().filter(|h| h.path == *path && h.inside() && !h.moved).and_then(|h| h.link).filter(|&k| hovered == Some(k));
         let focused = self.edit.link_focus().filter(|_| self.kbd.focus.keyboard() && self.kbd.focus.path() == Some(path));
         (hovered, pressed, focused)
     }

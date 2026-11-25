@@ -688,7 +688,7 @@ fn a_drag_inside_a_static_texts_link_does_not_open_it() {
         // A plain click, and one that wobbles within the click slop, still open it.
         rt.pointer_down(at(0.5), y);
         rt.pointer_up(at(0.5), y);
-        rt.frame(0.0);
+        rt.frame(1.0);
         rt.pointer_down(at(0.5), y);
         rt.pointer_move(at(0.5) + 2.0, y);
         rt.pointer_up(at(0.5) + 2.0, y);

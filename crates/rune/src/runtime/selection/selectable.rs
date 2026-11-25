@@ -643,38 +643,6 @@ impl RuntimeCore {
         (v[0] < v[2] && v[1] < v[3]).then_some(v)
     }
 
-    /// A primary press on `target` (None: on nothing). On selectable text away from its links it
-    /// starts a selection: one click places it, two select a word, three a paragraph, and Shift
-    /// extends the current one, into another text of its selection group too. Anywhere else it
-    /// clears the selection.
-    pub(in crate::runtime) fn selection_down(&mut self, target: Option<usize>, x: f32, y: f32) {
-        use virtual_selection::EndRef;
-        let Some(i) = target.filter(|&i| self.is_selectable(i) && self.link_at(i, x, y).is_none()) else {
-            self.clear_text_selection();
-            self.edit.selectable.presses.clear();
-            return;
-        };
-        let Some(at) = self.text_index_at(i, x, y) else { return };
-        let path = self.tree.nodes[i].path.clone();
-        let content = self.content_of(i).to_owned();
-        let now = self.now_clock();
-        let clicks = self.edit.selectable.presses.press(&path, now, (x, y), self.double_click_interval).min(3);
-        let i_end = EndRef::Mounted(i);
-        let holder = self.selection_holder_end().filter(|&h| h == i_end || self.end_same_group(h, i_end));
-        match holder {
-            // Keep the anchor; the focus follows the pointer from here.
-            Some(h) if clicks == 1 && self.edit.selectable.shift => {
-                self.select_step(phase::Event::Extend { focus: at, far: (h != i_end).then(|| phase::Far::new(path, content)) });
-            }
-            _ => {
-                let unit = match clicks { 1 => Unit::Char, 2 => Unit::Word, _ => Unit::Paragraph };
-                let origin = self.unit_in(i, at, unit);
-                let origin = if unit == Unit::Word { with_trailing_space(&content, origin) } else { origin };
-                self.select_step(phase::Event::Press { path, content, unit, origin });
-            }
-        }
-    }
-
     /// Snapshot of an in-progress text selection drag's endpoints, used to detect whether a
     /// pointer move changed the painted selection.
     pub(in crate::runtime) fn selection_drag_snapshot(&self) -> Option<(usize, usize, Option<String>)> {
@@ -688,7 +656,12 @@ impl RuntimeCore {
     pub(in crate::runtime) fn selection_drag(&mut self, x: f32, y: f32) {
         use virtual_selection::EndRef;
         let Some((selection, unit, armed)) = self.edit.selectable.phase.drag_selection() else { return };
-        let (origin, armed_path) = (selection.origin, armed.then(|| selection.path.clone()));
+        if armed == Some(true)
+            && !self.pointer.press_held().is_some_and(|h| h.moved && h.hit != crate::runtime::capture::Hit::Cancelled)
+        {
+            return;
+        }
+        let (origin, armed_path) = (selection.origin, armed.is_some().then(|| selection.path.clone()));
         let h = match armed_path {
             Some(path) => self.live(&path).filter(|&i| self.is_selectable(i)).map(EndRef::Mounted),
             None => self.selection_holder_end(),
