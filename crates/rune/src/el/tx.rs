@@ -602,8 +602,9 @@ impl Tx {
     /// for `http:` and `https:`, the mail app for `mailto:`. Other schemes (`file:`, an app's
     /// own) and malformed links are refused here with the reason and nothing opens. Headless
     /// runs and tests open nothing; read the requests with `Runtime::take_url_requests`.
+    /// [`Tx::open_url_then`] also says whether the open worked.
     pub fn open_url(&mut self, url: &str) -> Result<(), crate::open_url::OpenUrlError> {
-        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check(url)?, same_tab: false });
+        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check(url)?, same_tab: false, opened: None });
         Ok(())
     }
 
@@ -613,7 +614,7 @@ impl Tx {
     /// On web a link without a scheme (`/notes/42`) is relative to the page. Native opens it as
     /// `open_url` does, and headless runs record it with the others.
     pub fn open_url_same_tab(&mut self, url: &str) -> Result<(), crate::open_url::OpenUrlError> {
-        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check_same_tab(url)?, same_tab: true });
+        self.open_urls.push(crate::open_url::Link { url: crate::open_url::check_same_tab(url)?, same_tab: true, opened: None });
         Ok(())
     }
 

@@ -598,6 +598,10 @@ impl RuntimeCore {
     pub(crate) fn read_result(&mut self, id: u64, content: crate::ClipboardContent) {
         self.frame.queue.push(Action::ClipboardRead(id, content));
     }
+    /// Queues a `Tx::open_url_then` callback with what came of its open.
+    pub(crate) fn url_opened(&mut self, f: crate::open_url::OpenedFn, result: Result<(), crate::open_url::OpenUrlError>) {
+        self.frame.queue.push(Action::UrlOpened(f, result));
+    }
 
     /// The focused field's text around its selection, for the platform's input method.
     pub(crate) fn ime_text(&self) -> Option<crate::edit::ImeText> {
