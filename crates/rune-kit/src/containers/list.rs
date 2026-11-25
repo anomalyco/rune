@@ -64,6 +64,20 @@ impl List {
         self
     }
     /// Where the search field's `TextEdit` lives in the app's state; `f` may capture (a panel id).
+    ///
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, List};
+    /// # struct Panel { search: TextEdit }
+    /// # struct App { panels: Vec<Panel> }
+    /// # let app = App { panels: vec![Panel { search: TextEdit::new("") }] };
+    /// # let k = Kit::neutral(true);
+    /// let id = 0;
+    /// let _ = List::new()
+    ///     .search(&app.panels[id].search, "Filter")
+    ///     .on_search_edit(move |s: &mut App| &mut s.panels[id].search)
+    ///     .build(&k);
+    /// ```
     pub fn on_search_edit<S: 'static>(
         mut self,
         f: impl for<'a> Fn(&'a mut S) -> &'a mut TextEdit + 'static,

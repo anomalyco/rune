@@ -1,0 +1,1 @@
+- `rune-kit`: widened the remaining `El`-forwarding handler/lens builders (`SidebarRow::{reorder, reorder_tx}`, `SplitView::{sidebar, inspector}`, `TabStrip::drag_state`, `Tree::new`, `Preview::new`, `Stage::new`, and `Canvas::{new, scaled}`) from plain `fn` pointers to closures (`impl Fn(...) + 'static`), completing the closure sweep started in #2371 (Refs #2368).

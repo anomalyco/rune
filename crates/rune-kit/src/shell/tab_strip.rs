@@ -200,7 +200,7 @@ pub const BAND_PAST: usize = 40;
 type Each<S> = Rc<dyn Fn(&mut S, &str, &mut Tx)>;
 type Hover<S> = Rc<dyn Fn(&mut S, &str, bool, &mut Tx)>;
 type Commit<S, T> = Rc<dyn Fn(&mut S, T, &mut Tx)>;
-type Access<S> = fn(&mut S) -> &mut TabDragState;
+type Access<S> = Rc<dyn for<'a> Fn(&'a mut S) -> &'a mut TabDragState>;
 
 /// One tab: `TabItem::new(id, title).avatar(..).status(..)`.
 pub struct TabItem<'a, S: 'static> {
@@ -253,7 +253,7 @@ impl<S: 'static> TabBind for TabHandlers<S> {
     fn has_access(&self) -> bool { self.access.is_some() }
 
     fn bind_root_hover(&self, root: El) -> El {
-        let Some(access) = self.access else { return root };
+        let Some(access) = self.access.clone() else { return root };
         root.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
             // Only letting go of the width lock a close left changes what the strip draws.
             if inside || !access(s).leave() {
@@ -263,7 +263,7 @@ impl<S: 'static> TabBind for TabHandlers<S> {
     }
 
     fn bind_torn_anchor(&self, place: El) -> El {
-        let Some(access) = self.access else { return place };
+        let Some(access) = self.access.clone() else { return place };
         place.on_layout_tx(move |s: &mut S, r, tx: &mut Tx| {
             access(s).report_rect(r);
             tx.live_only();
@@ -271,9 +271,9 @@ impl<S: 'static> TabBind for TabHandlers<S> {
     }
 
     fn bind_close_button(&self, button: IconButton, id: String, lock: f32) -> IconButton {
-        let (access, on_close) = (self.access, self.close.clone());
+        let (access, on_close) = (self.access.clone(), self.close.clone());
         button.on_press_tx(move |s: &mut S, tx: &mut Tx| {
-            if let Some(a) = access.filter(|_| lock > 0.0) {
+            if let Some(a) = access.as_ref().filter(|_| lock > 0.0) {
                 a(s).width_lock = Some(lock);
             }
             if let Some(f) = &on_close {
@@ -283,22 +283,22 @@ impl<S: 'static> TabBind for TabHandlers<S> {
     }
 
     fn bind_tab(&self, mut slot: El, ctx: TabBindCtx<'_>) -> El {
-        let (access, lane, vertical, lock) = (self.access, ctx.lane, ctx.vertical, ctx.lock);
+        let (access, lane, vertical, lock) = (self.access.clone(), ctx.lane, ctx.vertical, ctx.lock);
         let (select_early, active) = (ctx.select_early, ctx.active);
         let reveal = (ctx.scroll_key.to_owned(), format!("t-{}", ctx.id));
         if let Some(close) = self.close.clone().filter(|_| ctx.closable) {
-            let id = ctx.id.to_owned();
+            let (id, access) = (ctx.id.to_owned(), access.clone());
             slot = slot.on_middle_press(move |s: &mut S, tx: &mut Tx| {
-                if let Some(a) = access.filter(|_| lock > 0.0) {
+                if let Some(a) = access.as_ref().filter(|_| lock > 0.0) {
                     a(s).width_lock = Some(lock);
                 }
                 close(s, &id, tx);
             });
         }
         {
-            let (id, select, reveal) = (ctx.id.to_owned(), self.select.clone(), reveal.clone());
+            let (id, select, reveal, access) = (ctx.id.to_owned(), self.select.clone(), reveal.clone(), access.clone());
             slot = slot.on_press_tx(move |s: &mut S, tx: &mut Tx| {
-                if let Some(a) = access && a(s).take_swallowed_click() {
+                if let Some(a) = &access && a(s).take_swallowed_click() {
                     tx.live_only();
                     return;
                 }
@@ -313,9 +313,9 @@ impl<S: 'static> TabBind for TabHandlers<S> {
             slot = slot.on_double_press_tx(move |s: &mut S, tx: &mut Tx| f(s, &id, tx));
         }
         if access.is_some() || self.hover.is_some() {
-            let (id, hover) = (ctx.id.to_owned(), self.hover.clone());
+            let (id, hover, access) = (ctx.id.to_owned(), self.hover.clone(), access.clone());
             slot = slot.on_hover_change(move |s: &mut S, inside, tx: &mut Tx| {
-                if let Some(a) = access {
+                if let Some(a) = &access {
                     a(s).set_hovered(&id, inside);
                 }
                 // The strip draws nothing from it (its hover groups do): only the app's handler can
@@ -448,9 +448,9 @@ impl<'a, S: 'static> TabStrip<'a, S> {
     pub fn trailing_width(mut self, points: f32) -> Self { self.core.trailing_width = points.max(0.0); self }
     /// The strip's gestures, kept in the app's state; `access` finds them there. Without it the
     /// tabs select and close but don't drag, and closing doesn't lock their width.
-    pub fn drag_state(mut self, state: &TabDragState, access: fn(&mut S) -> &mut TabDragState) -> Self {
+    pub fn drag_state(mut self, state: &TabDragState, access: impl for<'s> Fn(&'s mut S) -> &'s mut TabDragState + 'static) -> Self {
         self.core.drag = Some(state.clone());
-        self.handlers.access = Some(access);
+        self.handlers.access = Some(Rc::new(access));
         self
     }
     /// The colour under the strip (default `bg_deep`), which a dragged tab and the close slot
