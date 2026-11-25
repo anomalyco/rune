@@ -121,6 +121,7 @@ pub use el::Shadow;
 pub use el::Shell;
 pub use el::Side;
 pub use el::Tx;
+pub use el::VirtualItems;
 pub use el::anchor_rect;
 pub use el::anchor_rect_in;
 pub use el::auto_grow;
