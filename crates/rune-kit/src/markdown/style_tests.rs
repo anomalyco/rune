@@ -656,3 +656,115 @@ fn list_quote_and_rule_margins_preserve_defaults_and_apply_overrides() {
     let even = gaps(base.paragraph_margin(0.0, 6.0).list_margin(0.0, 6.0).quote_margin(0.0, 6.0).rule_margin(0.0, 6.0));
     assert!(even.iter().all(|g| (g - 6.0).abs() < 0.5), "even gaps {even:?}");
 }
+
+#[test]
+fn list_quote_rule_margins_first_last_nesting_collapsing_and_cache_isolation() {
+    use super::cache::PARSES;
+    let k = crate::Kit::neutral(false);
+    let base = MarkdownStyle::from_kit(&k);
+
+    // 1. Reporter's exact example: paragraphs 6 apart, list_margin(0, 6) makes all gaps even.
+    const REPORTER_DOC: &str = "One.\n\nTwo.\n\n- item\n\nThree.";
+    let measure_gaps = |doc: &str, n: usize, style: MarkdownStyle| -> (Vec<f32>, [f32; 4], [f32; 4], [f32; 4]) {
+        let mut rt = Runtime::new(
+            (doc.to_owned(), style),
+            |(doc, st): &(String, MarkdownStyle), _: &mut Cx<(String, MarkdownStyle)>| col().w(600.0).child(Markdown::new(doc.as_str()).render(st).key("md")),
+            (600.0, 1200.0),
+            Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        let rects: Vec<[f32; 4]> = (0..n).map(|i| rect_of(&rt, &format!("b{i}"))).collect();
+        let gaps = rects.windows(2).map(|w| w[1][1] - (w[0][1] + w[0][3])).collect();
+        let md = rect_of(&rt, "md");
+        (gaps, md, rects[0], *rects.last().unwrap())
+    };
+    let (def_gaps, _, _, _) = measure_gaps(REPORTER_DOC, 4, base.clone().paragraph_margin(0.0, 6.0));
+    for (got, want) in def_gaps.iter().zip([6.0, 8.0, 12.0]) {
+        assert!((got - want).abs() < 0.5, "default list gaps {def_gaps:?}");
+    }
+    let (even_gaps, _, _, _) = measure_gaps(REPORTER_DOC, 4, base.clone().paragraph_margin(0.0, 6.0).list_margin(0.0, 6.0));
+    assert!(even_gaps.iter().all(|g| (g - 6.0).abs() < 0.5), "even list gaps {even_gaps:?}");
+
+    // 2. First block top margin and last block bottom margin are suppressed for list, quote, rule.
+    let big = base.clone().list_margin(40.0, 40.0).quote_margin(40.0, 40.0).rule_margin(40.0, 40.0);
+    for doc in ["- only list", "> only quote", "---"] {
+        let (_, md, first, last) = measure_gaps(doc, 1, big.clone());
+        assert!(first[1].abs() < 0.01, "first block top suppressed for {doc:?}: {first:?}");
+        assert!(((last[1] + last[3]) - (md[1] + md[3])).abs() < 0.5, "last block bottom suppressed for {doc:?}: last={last:?} md={md:?}");
+    }
+
+    // 3. Rule next to a heading collapses via max(rule_bottom, heading_top) (same CSS rule as #1403).
+    let (rh_big, _, _, _) = measure_gaps("---\n\n## Next", 2, base.clone().rule_margin(10.0, 44.0).heading_margin(2, 24.0, 10.0));
+    assert!((rh_big[0] - 44.0).abs() < 0.5, "rule(44) + h2(24) collapses to 44: {rh_big:?}");
+    let (rh_small, _, _, _) = measure_gaps("---\n\n## Next", 2, base.clone().rule_margin(10.0, 6.0).heading_margin(2, 24.0, 10.0));
+    assert!((rh_small[0] - 24.0).abs() < 0.5, "rule(6) + h2(24) collapses to 24: {rh_small:?}");
+
+    // 4. Nested list inside a list item keeps its own 4 pt spacing regardless of list_margin.
+    let mut rt_nested = Runtime::new(
+        base.clone().list_margin(30.0, 30.0),
+        |st: &MarkdownStyle, _: &mut Cx<MarkdownStyle>| {
+            col().w(600.0).child(Markdown::new("- parent\n  - nested").render(st).key("md"))
+        },
+        (600.0, 400.0),
+        Env::new(false, 1.0),
+    );
+    rt_nested.frame(0.0);
+    let parent_p = by_path_suffix(&rt_nested, "/b0/i0/#1/b0").rect;
+    let nested_list = by_path_suffix(&rt_nested, "/b0/i0/#1/b1").rect;
+    let nested_gap = nested_list[1] - (parent_p[1] + parent_p[3]);
+    assert!((nested_gap - 4.0).abs() < 0.5, "nested list keeps 4 pt top margin, got {nested_gap}");
+
+    // 5. List inside a quote collapses through the quote (max(quote_bottom, list_bottom)).
+    let (ql_gaps, _, _, _) = measure_gaps(
+        "> - quoted item\n\nAfter.",
+        2,
+        base.clone().quote_margin(4.0, 4.0).list_margin(4.0, 26.0).paragraph_margin(0.0, 4.0),
+    );
+    assert!((ql_gaps[0] - 26.0).abs() < 0.5, "list inside quote collapses out to 26: {ql_gaps:?}");
+
+    // 6. Changing list/quote/rule margins re-lays out (RENDERS increases) and does NOT re-parse (PARSES == (0, 0)).
+    const CACHE_DOC: &str = "Unique-2365-cache-proof.\n\n- item\n\n> quote\n\n---\n\nEnd.";
+    let mut rt_cache = Runtime::new(
+        6.0f32,
+        |m: &f32, _: &mut Cx<f32>| {
+            let st = MarkdownStyle::neutral(false)
+                .paragraph_margin(0.0, 6.0)
+                .list_margin(*m, *m)
+                .quote_margin(*m, *m)
+                .rule_margin(*m, *m);
+            col().w(500.0).child(Markdown::new(CACHE_DOC).render(&st).key("md"))
+        },
+        (500.0, 800.0),
+        Env::new(false, 1.0),
+    );
+    rt_cache.frame(0.0);
+    let y_end_before = rect_of(&rt_cache, "b4")[1];
+    RENDERS.with(|n| n.set(0));
+    PARSES.with(|p| p.set((0, 0)));
+    rt_cache.update(|m, tx| { tx.instant(); *m = 28.0; });
+    rt_cache.frame(1.0 / 60.0);
+    assert!(RENDERS.with(Cell::get) > 0, "margin change must re-render/re-layout");
+    assert_eq!(PARSES.with(Cell::get), (0, 0), "margin change must not re-parse cached source");
+    let y_end_after = rect_of(&rt_cache, "b4")[1];
+    assert!(y_end_after > y_end_before + 60.0, "blocks moved further apart: before={y_end_before} after={y_end_after}");
+
+    // 7. Same source rendered with two styles in one frame keeps independent layouts in the memo.
+    const SHARED_DOC: &str = "Shared-2365.\n\n- item\n\nAfter.";
+    let mut rt_two = Runtime::new(
+        (),
+        |_: &(), _: &mut Cx<()>| {
+            let tight = MarkdownStyle::neutral(false).paragraph_margin(0.0, 6.0).list_margin(6.0, 6.0);
+            let loose = MarkdownStyle::neutral(false).paragraph_margin(0.0, 6.0).list_margin(30.0, 30.0);
+            col().w(500.0)
+                .child(Markdown::new(SHARED_DOC).render(&tight).key("tight"))
+                .child(Markdown::new(SHARED_DOC).render(&loose).key("loose"))
+        },
+        (500.0, 800.0),
+        Env::new(false, 1.0),
+    );
+    rt_two.frame(0.0);
+    let tight_h = rect_of(&rt_two, "tight")[3];
+    let loose_h = rect_of(&rt_two, "loose")[3];
+    assert!(((loose_h - tight_h) - 48.0).abs() < 1.0, "two styles on same source must not collide in memo: tight={tight_h} loose={loose_h}");
+}
+

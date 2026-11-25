@@ -621,9 +621,11 @@ Top-level paragraphs stay capped at a comfortable reading width (`prose_width`) 
 ## Margins and square fences
 
 - Lists and nested code stay inside the prose measure.
-- Tighter `paragraph_margin` and `heading_margin` pull related sections closer.
+- Tighter `paragraph_margin`, `heading_margin`, `list_margin`, `quote_margin` and `rule_margin` pull related sections closer.
 
 > Quoted remarks also follow the prose cap while full-bleed blocks below span the column.
+
+---
 
 ```rust
 pub fn render(style: &MarkdownStyle, src: &str) -> El {
@@ -653,6 +655,9 @@ pub(super) fn markdown_styled(_: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .paragraph_margin(0.0, 10.0)
         .heading_margin(1, 16.0, 8.0)
         .heading_margin(2, 16.0, 6.0)
+        .list_margin(4.0, 8.0)
+        .quote_margin(10.0, 10.0)
+        .rule_margin(16.0, 16.0)
         .image_margin(12.0, 12.0)
         .code_block_radius(0.0)
         .table_full_width(true);
