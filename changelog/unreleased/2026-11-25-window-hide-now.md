@@ -1,0 +1,1 @@
+- Windows: added `WindowHandle::hide_now`, which hides the native window before it returns, with DWM's fade turned off (`DWMWA_TRANSITIONS_FORCEDISABLED` around `ShowWindow(SW_HIDE)`) and after `DwmFlush`, so a screen grab in the same handler doesn't see a captioned window; elsewhere it is `hide` (#181).

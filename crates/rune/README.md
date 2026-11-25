@@ -1131,7 +1131,8 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   Mac app" below).
 - **Reuse a hidden window.** `keep_running()` / `windowless()` plus `AppHandle::hide()`, `show()` and `open()`
   (or `WindowOptions::launcher_panel()` for a retained panel that reveals cached pixels) make a re-summon cost a
-  show instead of a launch.
+  show instead of a launch. `WindowHandle::hide_now()` hides at once, for a screen grab in the same handler
+  (on Windows without DWM's fade, returning after `DwmFlush`).
 - **Windows: the first frame needs no GPU.** A window opens on the CPU renderer: its first frame is painted into
   a buffer, copied to the window with GDI while it is cloaked, and shown; a below-normal thread then makes the
   adapter, device, swap chain and pipelines and takes the frames over. What is left before that frame is the

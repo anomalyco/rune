@@ -16,6 +16,14 @@ fn an_unbound_handle_queues_its_requests_for_the_host_or_a_headless_run() {
     assert!(matches!(handle.take_headless()[..], [WakeEvent::Window(0, WindowRequest::Hide)]));
 }
 
+/// `hide_now` with no native window still asks the host to hide, as `hide` does.
+#[test]
+fn hide_now_queues_the_hosts_hide() {
+    let handle = WindowHandle::new("shot");
+    handle.hide_now();
+    assert!(matches!(handle.take_headless()[..], [WakeEvent::Window(0, WindowRequest::Hide)]));
+}
+
 #[test]
 fn handle_queues_exclude_from_capture_requests_in_order() {
     let handle = WindowHandle::new("private");
