@@ -3608,7 +3608,8 @@ if let Some(menu) = rt.popup_menu() {
   `raised`, `focused`, `exiting`, ...), `Tx::read_elements` (deferred presented-frame element
   reads from handlers and `poll`), `rt.element_at` / `element_at_with` / `Tx::element_at_with`
   (`Pick::{transparent, interactive, drop_targets}` to skip passive layers or target drop zones,
-  and `Picked::{path, key, rect, local}` for drawn bounds and element-local coordinates),
+  `Picked::{path, key, rect, local}` for drawn bounds and element-local coordinates, and
+  `Picked::data::<T>()` for the nearest value attached with `El::data` on the hit path),
   `rt.accessibility_json()` / `rt.accessibility_tree()`, and `rt.popup_menu()`
   (`PopupMenu::entries()`, `selected_id()`, `find()`).
 

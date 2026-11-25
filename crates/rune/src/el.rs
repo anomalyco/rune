@@ -17,6 +17,7 @@ mod a11y;
 mod anchor;
 mod backdrop;
 mod child_exit;
+pub(crate) mod data;
 mod direction;
 pub(crate) mod drop;
 pub(crate) mod effect;
