@@ -341,6 +341,7 @@ impl Measurement<'_> {
         v.set_gap(crate::el::virtual_list::gap_y(&el.style));
         v.nested = nested;
         v.no_anchor = el.cold.scroll_edges.no_anchor || scroll_no_anchor;
+        let overscan_changed = v.set_overscan(el.cold.virtual_overscan);
         // The viewport's own pin moves its offset; the list windows where that leaves it.
         let held = pinned;
         let (list_offset, pinned) = v.locate(offset, held);
@@ -420,7 +421,7 @@ impl Measurement<'_> {
         // A live-only check's commit keeps the rows mounted now while they still cover the
         // viewport, as skipping the commit would: re-picking the overscan for a viewport that
         // changed since would build rows the handler had nothing to do with.
-        if self.hold_windows && same && self.pass.spreads_rows() && !force_all && !v.needs_window(offset, pinned) {
+        if self.hold_windows && same && !overscan_changed && self.pass.spreads_rows() && !force_all && !v.needs_window(offset, pinned) {
             v.hold(offset, pinned);
         } else {
             v.select(offset, pinned, budget.then_some(&shown));

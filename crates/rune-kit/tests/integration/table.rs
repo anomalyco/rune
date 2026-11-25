@@ -651,6 +651,89 @@ fn cursor_outline_can_be_disabled_in_multi_select_while_default_keeps_it() {
     assert!(!has_row_outline(&rt_single, "f1"), "single-select draws no cursor outline");
 }
 
+#[test]
+fn table_virtual_overscan_forwards_and_reduces_mounted_nodes() {
+    struct OverscanApp {
+        rows: usize,
+        table: TableState,
+        overscan: Option<(f32, f32)>,
+    }
+    fn overscan_view(s: &OverscanApp, _: &mut Cx<OverscanApp>) -> El {
+        let k = Kit::neutral(true);
+        let mut t = Table::new(
+            |s: &OverscanApp| &s.table,
+            |s: &mut OverscanApp| &mut s.table,
+            |s: &OverscanApp| s.rows,
+            |_: &OverscanApp, i| Cow::Owned(format!("r{i}")),
+        )
+        .name("Signals")
+        .column(TableColumn::new("id", "ID").width(80.0))
+        .column(TableColumn::new("val", "Value").width(100.0).align(Align::End))
+        .column(TableColumn::new("state", "State").flex(1.0).min(100.0))
+        .cell(|_: &OverscanApp, i, col| match col {
+            "id" => Cell::text(format!("sig-{i:04}")).mono(),
+            "val" => Cell::text(format!("{:.2}", i as f32 * 0.25)).mono(),
+            _ => Cell::text("ok"),
+        });
+        if let Some((o, e)) = s.overscan {
+            t = t.virtual_overscan(o, e);
+        }
+        col().size(500.0, 300.0).child(t.build(s, &k).h(300.0))
+    }
+
+    let run = |overscan: Option<(f32, f32)>| {
+        let mut rt = Runtime::new(
+            OverscanApp { rows: 5_000, table: TableState::new(), overscan },
+            overscan_view,
+            (500.0, 300.0),
+            Env::new(true, 1.0),
+        );
+        for _ in 0..30 {
+            if !rt.frame(1.0 / 60.0) { break; }
+        }
+        rt.update(|_, tx| {
+            tx.scroll_to_instant("table/viewport", 0.0, 2_500.0 * 28.0);
+        });
+        for _ in 0..80 {
+            if !rt.frame(1.0 / 60.0) { break; }
+        }
+        assert!(!rt.frame(1.0 / 60.0), "table overscan={overscan:?} must settle idle");
+        // Body rows have role "row" excluding the single "header" row.
+        let body_rows = rt.elements().into_iter().filter(|e| e.role == "row" && e.key.as_deref() != Some("header")).count();
+        let nodes = rt.stats.layout_nodes;
+        (rt, body_rows, nodes)
+    };
+
+    let (_, def_rows, def_nodes) = run(None);
+    let (_, explicit_rows, explicit_nodes) = run(Some((2.0, 1.75)));
+    assert_eq!(def_rows, explicit_rows, "explicit (2.0, 1.75) matches default table");
+    assert_eq!(def_nodes, explicit_nodes, "explicit (2.0, 1.75) matches default table nodes");
+
+    let (mut rt_tight, tight_rows, tight_nodes) = run(Some((0.5, 0.25)));
+    let (_, zero_rows, zero_nodes) = run(Some((0.0, 0.0)));
+    assert!(tight_rows < def_rows / 2, "tight ({tight_rows}) must mount under half of default ({def_rows})");
+    assert!(tight_nodes < def_nodes / 2, "tight nodes ({tight_nodes}) must be under half of default ({def_nodes})");
+    assert!(zero_rows < tight_rows, "zero ({zero_rows}) mounts fewer rows than tight ({tight_rows})");
+    assert!(zero_nodes < tight_nodes, "zero nodes ({zero_nodes}) fewer than tight ({tight_nodes})");
+
+    // Scrolling and accessibility roles remain intact with custom virtual_overscan.
+    for _ in 0..30 {
+        rt_tight.wheel(250.0, 150.0, -18.0);
+        rt_tight.frame(1.0 / 60.0);
+    }
+    for _ in 0..30 {
+        if !rt_tight.frame(1.0 / 60.0) { break; }
+    }
+    assert!(!rt_tight.frame(1.0 / 60.0), "tight table settles idle after wheel scroll");
+    let tree = rt_tight.accessibility_json();
+    fn find_grid(v: &serde_json::Value) -> Option<&serde_json::Value> {
+        if v["role"] == "grid" { return Some(v); }
+        v["children"].as_array()?.iter().find_map(find_grid)
+    }
+    let grid = find_grid(&tree).expect("grid role present");
+    assert_eq!(grid["name"], "Signals");
+}
+
 // Benchmark ---------------------------------------------------------------------------------
 
 fn percentile(v: &mut [f64], p: f64) -> f64 {

@@ -99,6 +99,11 @@ macro_rules! stories {
                 s.table.hide_column("region");
                 s.table_menu = None;
             }
+            if $id == "rune-table--overscan" {
+                s.table = TableState::new().key("overscan-table");
+                s.pick.insert("table-overscan".into(), "tight".into());
+                s.table_menu = None;
+            }
             if $id == "rune-image--decode" {
                 s.images.enter(true);
             }
@@ -351,6 +356,7 @@ stories! {
     "rune-split-view--flat-main" => split_view::flat_main,
     "rune-table--options" => table::options,
     "rune-table--wide" => table::wide,
+    "rune-table--overscan" => table::overscan,
     "rune-diff--localized" => diff::localized,
     "rune-diff--custom" => diff::custom,
     "rune-diff--scroll-bars" => diff::scroll_bars,

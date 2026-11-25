@@ -456,7 +456,14 @@ policy changes are applied in the same mutation phase.
   rows remount settled. The measurement pass expands the window before drawing if estimates leave
   a gap. Render coordinates are rebased near the window and scroll extents use double precision.
   Use `El::virtual_rows` to build only rows in the mounted window; `.virtualize` still visits
-  every row on commit.
+  every row on commit. By default a list keeps `2.0` viewports of overscan on each side and moves
+  its window when the viewport comes within `1.75` viewports of either edge (`0.5` for
+  `.virtualize`). Call `.virtual_overscan(overscan, edge)` to tune that per list (for example
+  `.virtual_overscan(0.5, 0.25)` for long fixed-height tables): smaller values mount fewer
+  offscreen rows and cut per-frame scroll work at the cost of more frequent window-move commits,
+  while larger values commit less often at the cost of more mounted nodes (`overscan` clamps to
+  `0.0..=8.0`, `edge` clamps strictly below `overscan` when `overscan > 0.0`, and non-finite
+  values are ignored).
   `tx.scroll_into_view(key)` reveals a row, including one outside the realized window.
   `tx.scroll_page(key, pages)` pages the viewport keyed `key` (or containing it) by `pages` × 90%
   of its height, as Page Up and Page Down do; a `stick_bottom` viewport that lands on its end

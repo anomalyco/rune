@@ -44,6 +44,9 @@ pub(crate) struct VirtualList {
     /// Rows are built by index (`El::virtual_rows`), so a commit costs only the rows it mounts.
     /// Such a list moves its window in small steps and spreads rows new to it over frames.
     pub indexed: bool,
+    /// Opt-in `(overscan, edge)` in viewports (`El::virtual_overscan`), already clamped;
+    /// `None` keeps `OVERSCAN` and `INDEXED_EDGE` (or `EAGER_EDGE` for `virtualize`).
+    overscan_override: Option<(f32, f32)>,
     /// The rows the last applied commit mounted. Every measurement of a commit compares with
     /// these, not with the pass before it.
     pub shown: HashSet<String>,
@@ -198,16 +201,38 @@ fn fixed_height(style: &CompactStyle) -> f32 {
     length(style.max_size().height).map_or(h, |m| h.min(m)).max(min)
 }
 
-/// How far ahead an index-built list keeps rows mounted, in viewports either side.
+/// How far ahead a virtual list keeps rows mounted by default, in viewports either side.
 const OVERSCAN: f32 = 2.0;
+/// Maximum opt-in overscan (`El::virtual_overscan`), in viewports either side.
+pub(crate) const MAX_OVERSCAN: f32 = 8.0;
 /// An index-built list moves its window once the viewport comes this close to its edge.
 const INDEXED_EDGE: f32 = 1.75;
+/// An eager `El::virtualize` list moves its window once the viewport comes this close to its edge.
+const EAGER_EDGE: f32 = 0.5;
 /// How much of an index-built list's overscan, in viewports per side, may be new in one commit.
 /// Rows past it mount over the next frames, so a jump or a prepended page doesn't shape it all
 /// in one frame.
 const INDEXED_BUDGET: f32 = 0.5;
 /// The fewest rows a list pinned to its end keeps mounted above the end, whatever its overscan.
 const PINNED_ROWS: usize = 32;
+
+/// Clamps `(overscan, edge)` for `El::virtual_overscan`: returns `None` when either argument is
+/// non-finite, clamps `overscan` to `0.0..=MAX_OVERSCAN`, and keeps `edge` strictly below
+/// `overscan` when `overscan > 0.0` (or `0.0` when `overscan == 0.0`) so `needs_window` cannot
+/// oscillate on consecutive frames.
+pub(crate) fn clamp_virtual_overscan(overscan: f32, edge: f32) -> Option<(f32, f32)> {
+    if !overscan.is_finite() || !edge.is_finite() {
+        return None;
+    }
+    let overscan = if overscan <= 0.0 { 0.0 } else { overscan.min(MAX_OVERSCAN) };
+    let edge = if overscan == 0.0 {
+        0.0
+    } else {
+        let max_edge = (overscan - 0.05).min(overscan * 0.95).max(0.0);
+        if edge <= 0.0 { 0.0 } else { edge.min(max_edge) }
+    };
+    Some((overscan, edge))
+}
 
 impl VirtualList {
     pub fn height(&self, key: &str) -> f32 {
@@ -550,6 +575,22 @@ impl VirtualList {
         }
     }
 
+    pub(crate) fn set_overscan(&mut self, override_vp: Option<(f32, f32)>) -> bool {
+        let changed = self.overscan_override != override_vp;
+        self.overscan_override = override_vp;
+        changed
+    }
+
+    #[inline]
+    pub(crate) fn overscan_vp(&self) -> f32 {
+        self.overscan_override.map_or(OVERSCAN, |(o, _)| o)
+    }
+
+    #[inline]
+    pub(crate) fn edge_vp(&self) -> f32 {
+        self.overscan_override.map_or(if self.indexed { INDEXED_EDGE } else { EAGER_EDGE }, |(_, e)| e)
+    }
+
     pub fn set_height(&mut self, key: &str, height: f32) {
         let Some(i) = self.index_of(key) else { return };
         self.measured[i] = Some(height);
@@ -676,7 +717,7 @@ impl VirtualList {
                 // The viewport's own rows always mount; the overscan takes new rows up to a budget.
                 let first = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= offset).max(start);
                 let last = sums[..self.keys.len()].partition_point(|&s| self.pad_top + s < offset + self.viewport).max(first);
-                let budget = self.viewport * INDEXED_BUDGET;
+                let budget = self.viewport * INDEXED_BUDGET.min(self.overscan_vp());
                 let mut spent = 0.0;
                 let mut from = first;
                 while from > start {
@@ -704,9 +745,10 @@ impl VirtualList {
         // Rows drawn in the viewport stay while motion still shows them where layout has moved
         // them out (rows below a fold gliding open), within an overscan of the window.
         let (mut lo, mut hi) = (start, end);
+        let overscan_px = self.viewport * self.overscan_vp();
         for i in self.drawn.iter().filter_map(|k| self.index_of(k)) {
-            if i < start && self.prefix(start) - self.prefix(i) <= self.viewport * OVERSCAN { lo = lo.min(i); }
-            if i >= end && self.row_end(i + 1) - self.row_end(end) <= self.viewport * OVERSCAN { hi = hi.max(i + 1); }
+            if i < start && self.prefix(start) - self.prefix(i) <= overscan_px { lo = lo.min(i); }
+            if i >= end && self.row_end(i + 1) - self.row_end(end) <= overscan_px { hi = hi.max(i + 1); }
         }
         (start, end) = (lo, hi);
         // A row still at its estimate grows or shrinks once measured; anchoring to it would move
@@ -750,8 +792,9 @@ impl VirtualList {
     /// The rows within the overscan around `offset`: rows ending at or above its top go, rows
     /// starting above its bottom stay.
     fn overscan(&self, offset: f32) -> (usize, usize) {
-        let lo = offset - self.viewport * OVERSCAN;
-        let hi = offset + self.viewport * (1.0 + OVERSCAN);
+        let overscan = self.overscan_vp();
+        let lo = offset - self.viewport * overscan;
+        let hi = offset + self.viewport * (1.0 + overscan);
         let sums = self.sums();
         let start = sums[1..].partition_point(|&s| self.pad_top + s - self.gap <= lo);
         (start, sums[..self.keys.len()].partition_point(|&s| self.pad_top + s < hi))
@@ -776,25 +819,24 @@ impl VirtualList {
     pub fn needs_window(&self, offset: f32, pinned: bool) -> bool {
         if self.keys.is_empty() { return false; }
         if pinned { return self.range.end != self.keys.len(); }
-        let edge = self.viewport * if self.indexed { INDEXED_EDGE } else { 0.5 };
-        let top = self.pad_top + self.before;
-        let bottom = self.pad_top + self.row_end(self.range.end);
+        let edge = self.viewport * self.edge_vp();
+        let top = self.pad_top + self.before - self.gap;
         (self.range.start > 0 && offset < top + edge)
-            || (self.range.end < self.keys.len() && offset + self.viewport > bottom - edge)
+            || (self.range.end < self.keys.len() && offset + self.viewport > self.pad_top + self.prefix(self.range.end) - edge)
     }
 
     /// Whether the viewport at `offset` (or the end when `pinned`) reaches past the mounted rows,
     /// leaving part of it blank.
     pub fn viewport_uncovered(&self, offset: f32, pinned: bool) -> bool {
         if self.keys.is_empty() { return false; }
-        let end = self.row_end(self.range.end);
         if pinned {
+            let end = self.row_end(self.range.end);
             let mounted = (end - self.before).max(0.0);
             self.range.end < self.keys.len() || (self.range.start > 0 && mounted < self.viewport)
         } else {
             let offset = offset.min(self.max_offset());
-            (self.range.start > 0 && offset < self.pad_top + self.before)
-                || (self.range.end < self.keys.len() && offset + self.viewport > self.pad_top + end)
+            (self.range.start > 0 && offset < self.pad_top + self.before - self.gap)
+                || (self.range.end < self.keys.len() && offset + self.viewport > self.pad_top + self.prefix(self.range.end))
         }
     }
 
@@ -816,6 +858,9 @@ impl VirtualList {
         end.saturating_sub(start) - mounted
     }
 }
+
+#[cfg(test)]
+mod overscan_tests;
 
 #[cfg(test)]
 mod rekey_tests;
