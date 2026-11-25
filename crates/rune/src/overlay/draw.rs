@@ -305,6 +305,7 @@ impl FrameHost for OverlayFrame<'_> {
                     swapchain: crate::render::Gpu::dx12_swapchain_kind(),
                     alpha_mode: Some(live.config.alpha_mode),
                     cpu_painter: false,
+                    renderer_kind: self.app.rt().renderer_kind(),
                     device_type,
                     window_backdrop,
                     mode: live.materials.mode(),
@@ -618,10 +619,7 @@ impl OverlayCore {
     /// overlay answers `None`, committed with its next frame. One anchored to an element waits
     /// for the frame that commits what changed since the last.
     pub(super) fn open_popup(&mut self, app: &mut dyn OverlayApp) {
-        let window = match self.surface.live().map(|l| &l.backing) {
-            Some(Backing::Window(w)) if self.presence.shown() && !self.presence.occluded() => Some(w.clone()),
-            _ => None,
-        };
+        let window = (self.presence.shown() && !self.presence.occluded()).then(|| self.live_window().cloned()).flatten();
         if app.popup_open(&mut self.popup, window.as_ref(), true) { self.dirty = true; }
     }
 

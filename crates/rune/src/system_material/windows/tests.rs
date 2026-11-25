@@ -9,6 +9,7 @@ fn base_inputs() -> MaterialInputs {
         swapchain: wgpu::Dx12SwapchainKind::DxgiFromVisual,
         alpha_mode: Some(wgpu::CompositeAlphaMode::PreMultiplied),
         cpu_painter: false,
+        renderer_kind: crate::RendererKind::Gpu,
         device_type: Some(wgpu::DeviceType::DiscreteGpu),
         window_backdrop: WindowBackdrop::None,
         mode: Mode::Synced,
@@ -151,6 +152,7 @@ fn eligibility_matrix_requires_all_preconditions() {
     assert!(!eligible(MaterialInputs { alpha_mode: Some(wgpu::CompositeAlphaMode::Opaque), ..ok }), "opaque alpha rejected");
     assert!(!eligible(MaterialInputs { alpha_mode: Some(wgpu::CompositeAlphaMode::PostMultiplied), ..ok }), "post-multiplied rejected");
     assert!(!eligible(MaterialInputs { cpu_painter: true, ..ok }), "CPU painter rejected");
+    assert!(!eligible(MaterialInputs { renderer_kind: crate::RendererKind::Cpu, ..ok }), "CPU renderer overlay rejected");
     assert!(!eligible(MaterialInputs { device_type: None, ..ok }), "missing GPU rejected");
     assert!(!eligible(MaterialInputs { device_type: Some(wgpu::DeviceType::Cpu), ..ok }), "WARP software adapter rejected");
     assert!(!eligible(MaterialInputs { window_backdrop: WindowBackdrop::Mica, ..ok }), "active Mica rejected");
@@ -500,4 +502,16 @@ fn hide_visual_failure_rolls_back_and_latches() {
     assert_eq!(ctrl.state(), State::Failed { hwnd });
     assert!(!seam.handover_topmost);
     assert!(!seam.target_open);
+}
+
+#[test]
+fn cpu_renderer_overlay_refuses_windows_system_material_and_stays_idle() {
+    let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+    let mut seam = FakeSeam::default();
+    let cpu_overlay = MaterialInputs { renderer_kind: crate::RendererKind::Cpu, ..base_inputs() };
+    assert!(!eligible(cpu_overlay));
+    assert!(!ctrl.update(Some(0x8008), cpu_overlay, true, &mut seam));
+    assert_eq!(ctrl.state(), State::Idle);
+    assert!(!ctrl.native());
+    assert!(seam.calls.is_empty(), "CPU overlay must make zero DWM/Composition calls");
 }

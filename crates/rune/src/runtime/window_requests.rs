@@ -17,6 +17,8 @@ pub(crate) struct HostState {
     /// Bitmask of non-`None` `WindowBackdrop` variants currently supported by the active host
     /// surface and OS/compositor, reported by [`Cx::window_backdrop_supported`].
     pub(in crate::runtime) window_backdrop_supported: u8,
+    /// Active renderer backing this window or overlay, reported by [`Cx::renderer_kind`].
+    pub(in crate::runtime) renderer_kind: crate::RendererKind,
     /// When `true` on a transparent window, `clear_color()` clears to an opaque theme-matched
     /// fallback so a requested backdrop that could not activate never opens a transparent hole.
     pub(in crate::runtime) backdrop_opaque_fallback: bool,
@@ -123,6 +125,7 @@ impl HostState {
             full_screen: false,
             window_backdrop: crate::WindowBackdrop::None,
             window_backdrop_supported: 0,
+            renderer_kind: crate::RendererKind::Gpu,
             backdrop_opaque_fallback: false,
             system_reduced_motion: false,
             system_accent: crate::SystemAccent::DEFAULT,

@@ -287,3 +287,53 @@ fn cached_fallback_material_steady_frames_allocate_nothing() {
     }
     assert_eq!(allocs() - before, 0, "cached fallback material recording/replay must allocate nothing in steady frames");
 }
+
+#[test]
+fn steady_cpu_overlay_frame_allocates_nothing_and_default_gpu_frame_unchanged() {
+    use rune::{Color, RendererKind};
+    use rune::render::cpu_boot::{CpuPainter, Scene, Target, attach_text};
+
+    fn overlay_view(_: &(), cx: &mut Cx<()>) -> El {
+        let card = col()
+            .size(160.0, 48.0)
+            .padding(8.0)
+            .radius(10.0)
+            .fill(Color { r: 0.1, g: 0.12, b: 0.16, a: 0.9 })
+            .child(text("Candidate 1").font(rune::TextStyle::new(13.0, 400.0)).color(Color::WHITE));
+        if cx.renderer_kind().is_cpu() { card } else { card.blur(8.0) }
+    }
+
+    // 1. Default RendererKind::Gpu steady frame still allocates nothing.
+    let mut gpu_rt = Runtime::new((), overlay_view, (160.0, 48.0), Env::new(true, 1.0));
+    gpu_rt.frame(0.0);
+    gpu_rt.settle_all();
+    gpu_rt.frame(0.0);
+    let before_gpu = allocs();
+    for _ in 0..30 {
+        let _ = gpu_rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(allocs() - before_gpu, 0, "default Gpu steady overlay frames must allocate nothing");
+
+    // 2. Opt-in RendererKind::Cpu steady frame (runtime + transparent Scene + CpuPainter) allocates nothing.
+    let mut rt = Runtime::new((), overlay_view, (160.0, 48.0), Env::new(true, 1.0));
+    rt.set_renderer_kind(RendererKind::Cpu);
+    attach_text(&mut rt.text.atlas);
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let size = (160u32, 48u32);
+    let mut painter = CpuPainter::new(1);
+    painter.fill_masks(&mut rt.text.atlas);
+    let mut dib = vec![0u8; size.0 as usize * size.1 as usize * 4];
+    let first_scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, [0.0; 4]).lcd(false);
+    painter.paint(&first_scene, &mut Target::new(&mut dib, size.0, size.1)).expect("warm CPU overlay frame");
+
+    let before_cpu = allocs();
+    for _ in 0..30 {
+        let _ = rt.frame(1.0 / 60.0);
+        let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, [0.0; 4]).lcd(false);
+        let painted = painter.paint(&scene, &mut Target::new(&mut dib, size.0, size.1)).expect("steady CPU overlay frame");
+        assert!(painted.rects.is_empty());
+    }
+    assert_eq!(allocs() - before_cpu, 0, "steady CPU overlay frames must allocate nothing after warm-up");
+}

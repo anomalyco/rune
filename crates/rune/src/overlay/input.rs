@@ -107,8 +107,9 @@ impl OverlayCore {
             layer.set_cursor(if active { want } else { crate::el::Cursor::Default });
             return;
         }
-        let (Some(Live { backing: Backing::Window(window), .. }), Some(cursor)) = (self.surface.live(), &mut self.cursor) else { return };
-        cursor.apply(window, want, active);
+        let Some(window) = self.live_window().cloned() else { return };
+        let Some(cursor) = &mut self.cursor else { return };
+        cursor.apply(&window, want, active);
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel { panel.set_cursor(active.then_some(want)); }
     }
@@ -129,18 +130,17 @@ impl OverlayCore {
         let Some(start) = rt.take_drag_out() else { return };
         self.dirty = true;
         let (sink, path) = (rt.drag_end_sink(), start.path.clone());
-        #[allow(irrefutable_let_patterns)]
-        let Some(Live { backing: Backing::Window(window), config, scale, .. }) = self.surface.live() else {
+        let Some(window) = self.live_window().cloned() else {
             sink.borrow_mut().push((path, crate::DragOutcome::Cancelled));
             return;
         };
-        let image = match (&self.gpu, &self.renderer) {
-            (Some(gpu), Some(renderer)) if start.item.drag_image().is_none() =>
-                crate::drag_out::snapshot(gpu, renderer, (config.width, config.height), *scale, rt.clear_color(), start.rect),
+        let image = match (self.surface.live(), &self.gpu, &self.renderer) {
+            (Some(live), Some(gpu), Some(renderer)) if start.item.drag_image().is_none() =>
+                crate::drag_out::snapshot(gpu, renderer, (live.config.width, live.config.height), live.scale, rt.clear_color(), start.rect),
             _ => None,
         };
         let wake = self.shared.wake.lock().unwrap().clone();
-        crate::drag_out::begin(window, start, image, Box::new(move |outcome| {
+        crate::drag_out::begin(&window, start, image, Box::new(move |outcome| {
             sink.borrow_mut().push((path, outcome));
             if let Some(wake) = wake { wake(); }
         }));
@@ -179,11 +179,9 @@ impl OverlayCore {
             self.dirty = true;
             return true;
         }
-        #[allow(irrefutable_let_patterns)]
-        let Some(Backing::Window(window)) = self.surface.live().map(|l| &l.backing) else {
+        let Some(window) = self.live_window().cloned() else {
             return false;
         };
-        let window = window.clone();
         self.start_native_window_drag(app, &window);
         // The OS move loop consumes mouse-up, so release native pointer capture now rather than
         // waiting for a missed-release grace or leaving input regions stuck captured.
@@ -328,11 +326,12 @@ impl OverlayCore {
             surface.regions(rt.hit_regions());
             return false;
         }
-        let Some(live) = self.surface.live() else { return false };
+        let Some(scale) = self.live_scale() else { return false };
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel { panel.set_regions(rt.hit_regions()); }
         #[cfg(target_os = "windows")]
-        if let Some(native) = &self.native { native.set_regions(rt.hit_regions(), live.scale); }
+        if let Some(native) = &self.native { native.set_regions(rt.hit_regions(), scale); }
+        let Some(live) = self.surface.live() else { return false };
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if self.options.input.resolved(self.interactive) == OverlayInput::Regions && let Some(x11) = &mut self.x11 { x11.regions(rt.hit_regions(), live.scale); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -656,7 +655,13 @@ impl OverlayCore {
                     }
                     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                     Some(Backing::Xwayland(surface)) => surface.place(self.at, &self.options),
-                    None => {}
+                    None => {
+                        #[cfg(target_os = "windows")]
+                        if let Some(w) = self.cpu.as_ref().map(|c| c.window.clone()) {
+                            self.place_window(app.rt_mut(), event_loop, &w);
+                            self.rescale_cpu(app, crate::window::backing_scale(&w));
+                        }
+                    }
                 }
             }
         }
