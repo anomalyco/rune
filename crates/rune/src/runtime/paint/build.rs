@@ -122,7 +122,7 @@ impl RuntimeCore {
                 self.paint.inh_scratch[i] = pinh;
                 self.paint.drawn[i] = [0.0; 4];
                 self.paint.seen[i] = false;
-                self.keep_painted(i, false);
+                self.keep_painted(i, false, None);
                 continue;
             }
             // A stuck header's title (its first child) fades as the next header comes up.
@@ -163,7 +163,7 @@ impl RuntimeCore {
                     self.paint.inh_scratch[i] = pinh;
                     self.paint.drawn[i] = [0.0; 4];
                     self.paint.seen[i] = false;
-                    self.keep_painted(i, false);
+                    self.keep_painted(i, false, None);
                     continue;
                 }
             }
@@ -746,7 +746,7 @@ impl RuntimeCore {
             if self.tree.has_sticky {
                 self.fade_below_header(i, s);
             }
-            self.keep_painted(i, !self.paint.node_animated_icon && own_turn.is_none() && !opens_snap_layer && snap_layer == 0 && !in_cache && !skip_paint && cover.is_none() && !is_flight && !raised);
+            self.keep_painted(i, !self.paint.node_animated_icon && own_turn.is_none() && !opens_snap_layer && snap_layer == 0 && !in_cache && !skip_paint && cover.is_none() && !is_flight && !raised, Some(paint_keep::ShiftNode { screen_r, r, rect_pt, m, visible, can_snap, gliding, isolate, unmasked: p.mask.is_none(), hover_owner, effective_opacity }));
         }
         if !self.paint.icon_anim_mounts.is_empty() {
             self.paint.icon_anim_mounts.retain(|(id, _), _| self.tree.node_index.contains_key(id));
