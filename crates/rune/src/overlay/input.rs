@@ -353,6 +353,8 @@ impl OverlayCore {
             return false;
         }
         let Some(scale) = self.live_scale() else { return false };
+        #[cfg(not(target_os = "windows"))]
+        let _ = scale;
         #[cfg(target_os = "macos")]
         if let Some(panel) = &self.panel { panel.set_regions(rt.hit_regions()); }
         #[cfg(target_os = "windows")]

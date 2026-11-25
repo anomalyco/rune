@@ -196,6 +196,7 @@ impl FrameProfile {
         let _ = (host, animating, next_tick);
     }
 
+    #[cfg(any(target_os = "windows", feature = "frame-profile"))]
     #[inline]
     pub(in crate::window) fn flush_core(
         &mut self,
