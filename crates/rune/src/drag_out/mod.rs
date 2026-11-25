@@ -10,9 +10,9 @@
 //! [`DragOutcome::Cancelled`] and the image slides back.
 //!
 //! macOS runs the session with `NSDraggingSource`, Windows with OLE's `DoDragDrop` and the shell's
-//! drag image (`windows`). Wayland and X11 don't start one yet: there `drag_out` is ignored and the
-//! element keeps its ordinary press and `on_drag` behaviour; their backends slot in behind the
-//! same types.
+//! drag image (`windows`), and Wayland with `wl_data_source` sharing `platform::wayland::drop`'s
+//! per-display `wl_data_device` (`platform::wayland::drag_source`). X11 doesn't start one yet:
+//! there `drag_out` is ignored and the element keeps its ordinary press and `on_drag` behaviour.
 //!
 //! Windows start the session from the mouse-dragged event AppKit is delivering. Overlay panels
 //! track the pointer by polling, so there may be no such event; the overlay then builds a
@@ -29,9 +29,14 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
-/// Whether this platform's windows start OS drag sessions.
+/// Whether a host window on this platform starts OS drag sessions (`wayland` enables Linux
+/// Wayland `wl_data_source`; X11 remains unsupported).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) const SUPPORTED: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+pub(crate) const fn supported(wayland: bool) -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
+        || (cfg!(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))
+            && wayland)
+}
 
 /// Pointer travel (points, straight-line) from the press before a drag session starts.
 /// AppKit views commonly use 4; GTK's default is 8; Windows' `SM_CXDRAG` is 4 pixels.
@@ -119,7 +124,9 @@ impl DragItem {
     /// On macOS each MIME type is written to the first `NSPasteboardItem` under its UTI (or a
     /// deterministic `dyn.*` UTI for unregistered types). On Windows each MIME type is registered
     /// as a clipboard format (`RegisterClipboardFormatW`, cached process-wide up to 256 distinct
-    /// custom names) and attached to the OLE `IDataObject`.
+    /// custom names) and attached to the OLE `IDataObject`. On Wayland each MIME type is offered
+    /// on `wl_data_source` in insertion order (overriding any colliding built-in MIME type) and
+    /// streamed off the UI thread over a non-blocking pipe.
     ///
     /// ```
     /// # use rune::DragItem;
@@ -372,7 +379,7 @@ impl DragImage {
 
     /// The image composited over an opaque `backing`, blended in linear light as the window
     /// blends. `None` if the PNG doesn't decode.
-    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(crate) fn over(&self, backing: Color) -> Option<Self> {
         let mut rgba = crate::image::png_rgba8(&self.png).ok()?;
         let bg = [backing.r, backing.g, backing.b];
@@ -415,10 +422,10 @@ pub(crate) struct DragOutStart {
     /// The element's visible drawn rect in window points: x, y, w, h.
     pub rect: [f32; 4],
     /// The element's whole drawn rect, before scroll clipping.
-    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub bounds: [f32; 4],
     /// Where the pointer went down, in window points.
-    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub press: (f32, f32),
 }
 
@@ -517,18 +524,39 @@ fn to_straight_rgba(pixels: &mut [u8], bgra: bool, srgb_target: bool) {
 /// Starts the OS drag session for `start` from inside the pointer event that crossed the
 /// threshold. `done` runs once with how it ended (also when it couldn't start: `Cancelled`).
 #[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_variables))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(unused_variables))]
 pub(crate) fn begin(window: &winit::window::Window, start: DragOutStart, snapshot: Option<DragImage>, done: Box<dyn FnOnce(DragOutcome)>) {
     #[cfg(target_os = "macos")]
     { let picture = picture(&start.item, snapshot); macos::begin(window, start, picture, done); }
     #[cfg(target_os = "windows")]
     { let picture = picture(&start.item, snapshot); windows::begin(window, start, picture, done); }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        let picture = picture(&start.item, snapshot);
+        let scale = window.scale_factor() as f32;
+        let offers = crate::platform::wayland::drag_source::mime::offers_from_item(&start.item);
+        let actions_mask = crate::platform::wayland::drag_source::mime::dnd_action_mask(
+            start.item.offers(DragOperation::Copy),
+            start.item.offers(DragOperation::Move),
+        );
+        let icon = picture.as_ref().and_then(|img| {
+            crate::platform::wayland::drag_source::icon::prepare_icon(img, start.bounds, start.press, scale)
+        });
+        crate::platform::wayland::drop::begin_drag(
+            window,
+            start.item.drops_within_app(),
+            offers,
+            actions_mask,
+            icon,
+            done,
+        );
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))))]
     done(DragOutcome::Cancelled);
 }
 
 /// The item's own image, else the snapshot, over the item's backing colour if it has one.
-#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
 fn picture(item: &DragItem, snapshot: Option<DragImage>) -> Option<DragImage> {
     let picture = item.drag_image().cloned().or(snapshot)?;
     match item.backing() {

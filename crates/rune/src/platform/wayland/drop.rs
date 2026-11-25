@@ -6,14 +6,16 @@
 
 pub(crate) mod binding;
 pub(crate) mod machine;
-mod uri;
+pub(crate) mod uri;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-mod pipe;
+pub(in crate::platform::wayland) mod pipe;
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(in crate::platform::wayland) mod watch;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod wire;
 
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-pub(crate) use wire::{DropTarget, install, shutdown, take};
+pub(crate) use wire::{DropTarget, begin_drag, has_active_drag, install, shutdown, take};
 
 #[cfg(test)]
 #[path = "drop/tests.rs"]

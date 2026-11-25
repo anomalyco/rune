@@ -280,6 +280,8 @@ impl Host {
         self.close_hook();
         self.app.popup_cancel(&mut self.popup);
         self.app.file_dialog_cancel(&mut self.file_dialog);
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        self.wayland_drop_closed();
     }
 
     fn quit_hook_in_turn(&mut self) {

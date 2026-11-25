@@ -5,7 +5,7 @@ use crate::machine::{Attempt, Seq};
 use crate::time::Instant;
 
 fn key(commit: u64, modal: Option<usize>) -> SyncKey {
-    SyncKey { commit, modal }
+    SyncKey { commit, modal, active_drag: false }
 }
 
 fn step_vec(seq: &mut Seq, state: &mut State, event: Event) -> Vec<Effect> {
@@ -233,4 +233,108 @@ fn close_display_lost_and_bind_failed_transition_table() {
     h2.apply(Event::WindowClosed);
     assert_eq!(h2.active_threads, 0);
     assert_eq!(h2.threads_joined, 1);
+}
+
+#[test]
+fn drag_out_only_tree_triggers_lazy_binding_and_respects_exiting_modal_and_active_drag() {
+    use crate::{Cx, DragItem, DragOutcome, El, Env, Runtime, Transition, col, el};
+
+    #[derive(Default)]
+    struct S {
+        card: bool,
+        card_exit: bool,
+        modal: bool,
+        modal_card: bool,
+    }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let mut root = col().size(200.0, 200.0);
+        if s.card {
+            let mut card = el()
+                .key("card")
+                .size(100.0, 40.0)
+                .drag_out(|_: &S| Some(DragItem::new().text("card")));
+            if s.card_exit {
+                card = card.transition(Transition::opacity());
+            }
+            root = root.child(card);
+        }
+        if s.modal {
+            let mut m = col().key("modal").modal(true, |_: &mut S| {}).size(150.0, 150.0);
+            if s.modal_card {
+                m = m.child(
+                    el().key("mcard")
+                        .size(80.0, 30.0)
+                        .drag_out(|_: &S| Some(DragItem::new().text("mcard"))),
+                );
+            }
+            root = root.child(m);
+        }
+        root
+    }
+
+    let mut rt = Runtime::new(S { card: true, ..Default::default() }, view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    assert!(!rt.core().has_drop_targets());
+    assert!(rt.core().has_drag_out());
+
+    // Lazy binding binds once after WindowReady for a drag_out-only tree.
+    let mut h = Harness::new();
+    let sync = |rt: &Runtime<S>, h: &mut Harness| {
+        let k = SyncKey {
+            commit: rt.core().commit.commits,
+            modal: rt.core().active_modal(),
+            active_drag: rt.core().has_active_drag_out(),
+        };
+        let has = rt.core().has_drop_targets() || rt.core().has_drag_out() || rt.core().has_active_drag_out();
+        h.sync_frame(k, has);
+    };
+    sync(&rt, &mut h);
+    assert_eq!(h.binds, 0, "must defer before first frame");
+    h.apply(Event::WindowReady);
+    assert_eq!(h.binds, 1, "drag_out-only tree binds once after first frame");
+
+    // os_drag = false disables has_drag_out.
+    rt.set_os_drag(false);
+    assert!(!rt.core().has_drag_out());
+    rt.set_os_drag(true);
+    assert!(rt.core().has_drag_out());
+
+    // Exiting card does not count as mounted drag_out.
+    rt.update(|s, _| s.card_exit = true);
+    rt.frame(1.0 / 60.0);
+    rt.update(|s, _| s.card = false);
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.core().has_drag_out(), "exiting drag_out element must not count");
+
+    // Active modal without drag_out hides background drag_out.
+    rt.update(|s, _| { s.card = true; s.card_exit = false; s.modal = true; });
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.core().has_drag_out());
+    rt.update(|s, _| s.modal_card = true);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.core().has_drag_out());
+
+    // An in-flight drag keeps has_active_drag_out() true even if the card unmounts on drag start.
+    rt.update(|s, _| { s.modal = false; s.modal_card = false; s.card = true; });
+    rt.frame(1.0 / 60.0);
+    rt.pointer_move(20.0, 20.0);
+    rt.pointer_down(20.0, 20.0);
+    rt.pointer_move(50.0, 20.0);
+    let start = rt.take_drag_out().expect("drag-out started");
+    rt.update(|s, _| s.card = false);
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.core().has_drag_out());
+    assert!(rt.core().has_active_drag_out(), "active drag stays tracked until on_drag_end");
+    sync(&rt, &mut h);
+    h.advance(TEARDOWN_GRACE * 2);
+    assert_eq!(h.unbinds, 0, "binding must stay alive while drag is in flight");
+
+    // Once the drag finishes, grace timer unbinds cleanly.
+    rt.drag_end_sink().borrow_mut().push((start.path, DragOutcome::Copied));
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.core().has_active_drag_out());
+    sync(&rt, &mut h);
+    h.advance(TEARDOWN_GRACE);
+    assert_eq!(h.unbinds, 1);
 }

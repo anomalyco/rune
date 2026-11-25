@@ -656,6 +656,10 @@ impl Host {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if l.native.drag_serial.is_some() {
+                    crate::platform::wayland::serial::wire::drain_window(&l.window);
+                }
                 let input_scale = app.rt().input_scale();
                 let (redraw, drag_out) = cursor_moved_core(
                     app,
@@ -671,16 +675,7 @@ impl Host {
                 }
                 // AppKit needs the drag session started inside this mouse-dragged event.
                 if let Some(start) = drag_out {
-                    let rt = app.rt();
-                    let image = self.gpu.as_ref().filter(|_| start.item.drag_image().is_none()).and_then(|(gpu, renderer)|
-                        crate::drag_out::snapshot(gpu, renderer, (l.config.width, l.config.height), scale, rt.clear_color(), start.rect));
-                    let (sink, path) = (rt.drag_end_sink(), start.path.clone());
-                    let handle = self.native_handle.clone();
-                    crate::drag_out::begin(&l.window, start, image, Box::new(move |outcome| {
-                        sink.borrow_mut().push((path, outcome));
-                        handle.send(WakeEvent::App);
-                    }));
-                    l.apply_cursor_core(rt, false);
+                    begin_host_drag_out(self.gpu.as_ref(), l, app.rt(), &self.native_handle, scale, start);
                 }
                 if redraw {
                     l.request_redraw();
@@ -693,6 +688,10 @@ impl Host {
                 l.request_redraw();
             }
             WindowEvent::Touch(touch) => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if l.native.drag_serial.is_some() {
+                    crate::platform::wayland::serial::wire::drain_window(&l.window);
+                }
                 #[cfg(target_os = "macos")]
                 if touch.phase == winit::event::TouchPhase::Started {
                     app.rt_mut().set_native_titlebar_band(mac::native_titlebar_band(&l.window));
@@ -704,9 +703,16 @@ impl Host {
                 if let Some(edge) = app.rt_mut().take_resize_action() {
                     let _ = l.drag_resize_window(edge);
                 }
+                if let Some(start) = app.rt_mut().take_drag_out() {
+                    begin_host_drag_out(self.gpu.as_ref(), l, app.rt(), &self.native_handle, scale, start);
+                }
                 l.request_redraw();
             }
             WindowEvent::MouseInput { state, button: MouseButton::Left, .. } => {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if l.native.drag_serial.is_some() {
+                    crate::platform::wayland::serial::wire::drain_window(&l.window);
+                }
                 if state == ElementState::Pressed {
                     crate::marks::input_arrived(false);
                     self.control_click = cfg!(target_os = "macos") && self.mods.control_key();
@@ -760,6 +766,27 @@ impl Host {
             _ => {}
         }
     }
+}
+
+/// Starts an armed OS drag-out session from a pointer or touch move event.
+fn begin_host_drag_out(
+    gpu: Option<&(std::sync::Arc<crate::render::Gpu>, crate::render::Renderer)>,
+    l: &mut crate::window::surface::Win,
+    rt: &crate::runtime::RuntimeCore,
+    native_handle: &crate::window::handle::WindowHandle,
+    scale: f32,
+    start: crate::drag_out::DragOutStart,
+) {
+    let image = gpu.filter(|_| start.item.drag_image().is_none()).and_then(|(gpu, renderer)| {
+        crate::drag_out::snapshot(gpu, renderer, (l.config.width, l.config.height), scale, rt.clear_color(), start.rect)
+    });
+    let (sink, path) = (rt.drag_end_sink(), start.path.clone());
+    let handle = native_handle.clone();
+    crate::drag_out::begin(&l.window, start, image, Box::new(move |outcome| {
+        sink.borrow_mut().push((path, outcome));
+        handle.send(WakeEvent::App);
+    }));
+    l.apply_cursor_core(rt, false);
 }
 
 /// Applies a pointer move in view points, returning whether the host must request a redraw and

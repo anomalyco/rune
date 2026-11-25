@@ -481,7 +481,7 @@ impl Host {
             rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(args.scroll_bars));
             rt.frame.enable_trace_channels(args.trace.is_some());
             rt.set_live_waker(Arc::new(move || { live_proxy.send_event(WakeEvent::Live(slot)).ok(); }));
-            rt.set_os_drag(crate::drag_out::SUPPORTED);
+            rt.set_os_drag(crate::drag_out::supported(wayland));
             rt.transparent = options.transparent;
             rt.track_marks = has_comp;
             rt.wall_start = Some(crate::time::now());

@@ -7,25 +7,29 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 /// Bound on joining a signalled watch or pipe-reader thread during teardown.
-pub(super) const THREAD_JOIN_BOUND: Duration = Duration::from_millis(500);
+pub(in crate::platform::wayland) const THREAD_JOIN_BOUND: Duration = Duration::from_millis(500);
 
 /// Completion signal paired with a `JoinHandle` so teardown can do a real bounded join.
 #[derive(Clone)]
-pub(super) struct DoneFlag(Arc<(Mutex<bool>, Condvar)>);
+pub(in crate::platform::wayland) struct DoneFlag(Arc<(Mutex<bool>, Condvar)>);
 
 impl DoneFlag {
-    pub(super) fn new() -> (Self, Self) {
+    pub(in crate::platform::wayland) fn new() -> (Self, Self) {
         let inner = Arc::new((Mutex::new(false), Condvar::new()));
         (Self(inner.clone()), Self(inner))
     }
 
-    pub(super) fn mark_done(&self) {
+    pub(in crate::platform::wayland) fn mark_done(&self) {
         let (lock, cond) = &*self.0;
         *lock.lock().unwrap_or_else(|e| e.into_inner()) = true;
         cond.notify_all();
     }
 
-    pub(super) fn wait_bound(&self, bound: Duration) -> bool {
+    pub(in crate::platform::wayland) fn is_done(&self) -> bool {
+        *self.0.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub(in crate::platform::wayland) fn wait_bound(&self, bound: Duration) -> bool {
         let (lock, cond) = &*self.0;
         let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         let (guard, _) = cond.wait_timeout_while(guard, bound, |done| !*done).unwrap_or_else(|e| e.into_inner());
@@ -34,14 +38,14 @@ impl DoneFlag {
 }
 
 /// Marks `DoneFlag` on drop so the signal fires even if the worker thread unwinds.
-pub(super) struct SignalOnDrop(pub(super) DoneFlag);
+pub(in crate::platform::wayland) struct SignalOnDrop(pub(in crate::platform::wayland) DoneFlag);
 
 impl Drop for SignalOnDrop {
     fn drop(&mut self) { self.0.mark_done(); }
 }
 
 /// Waits up to `bound` for `done` to fire, then performs a real `JoinHandle::join`.
-pub(super) fn join_bounded(handle: std::thread::JoinHandle<()>, done: &DoneFlag, bound: Duration) -> bool {
+pub(in crate::platform::wayland) fn join_bounded(handle: std::thread::JoinHandle<()>, done: &DoneFlag, bound: Duration) -> bool {
     if done.wait_bound(bound) {
         handle.join().ok();
         true
@@ -222,7 +226,7 @@ pub(super) fn read_fd_bounded(
 /// Creates a close-on-exec pipe whose read end is non-blocking and whose write end stays blocking
 /// for compatibility with Wayland drag sources that write synchronously.
 #[allow(unsafe_code)]
-pub(super) fn make_pipe() -> Option<(OwnedFd, OwnedFd)> {
+pub(in crate::platform::wayland) fn make_pipe() -> Option<(OwnedFd, OwnedFd)> {
     let mut fds = [0 as RawFd; 2];
     #[cfg(target_os = "linux")]
     {
