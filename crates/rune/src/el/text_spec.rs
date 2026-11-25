@@ -45,6 +45,9 @@ pub struct TextSpec {
     pub(crate) case: Option<crate::TextCase>,
     /// See [`El::selectable`](crate::El::selectable).
     pub(crate) selectable: bool,
+    /// [`El::selectable`](crate::El::selectable) gave the element its `Cursor::Text`, which an
+    /// [`El::selection_enabled`](crate::El::selection_enabled)`(false)` subtree takes back.
+    pub(crate) selectable_cursor: bool,
     pub(crate) redacted: bool,
     pub(crate) wrap_anywhere: bool,
     /// See [`El::wrap_greedy`](crate::El::wrap_greedy).
@@ -215,6 +218,7 @@ impl TextSpec {
             justify: false,
             case: None,
             selectable: false,
+            selectable_cursor: false,
             redacted: false,
             wrap_anywhere: false,
             greedy: false,

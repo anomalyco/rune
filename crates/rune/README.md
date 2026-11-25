@@ -2216,6 +2216,26 @@ and its `on_secondary_press` wins over the Copy menu. A drag that selects text d
 Inside a draggable row (`on_drag` or `drag_out`), dragging drags the row and double- and
 triple-clicks still select words and lines. Text with its own handlers keeps them.
 
+`El::selection_enabled(false)` turns selection off for every selectable text in an element and
+everything under it, as SwiftUI's `.textSelection(.disabled)` does for a view's subtree, so one
+app setting ("Enable text selection") set on the view's root reaches every text: no drag,
+double- or triple-click, Cmd+A, `tx.select_text`, `tx.select_all_text` or copy, and those texts
+leave the selection group they sit in. `El::selection_enabled(true)` on a descendant turns them
+back on for its subtree (an id meant to be copied), and a subtree that sets neither follows its
+nearest ancestor that did. It doesn't make text selectable by itself: texts still ask with
+`selectable(true)`. A text it turns off drops the I-beam `selectable` gave it, while a cursor set
+with `El::cursor` stays. Turning it off under a held selection clears that selection at the next
+commit. Unbuilt `virtual_rows` / `virtualize` rows follow it, so a Cmd+A or copy across them leaves
+their turned-off texts out, and a `caret_browsing` group inside a turned-off subtree doesn't take
+focus.
+
+```rust
+col()
+    .selection_enabled(settings.text_selection)
+    .child(text(&message.body).selectable(true))
+    .child(text(&message.id).selectable(true).selection_enabled(true))
+```
+
 `El::caret_browsing(true)` opts a selectable text or `selection_group(true)` container into
 keyboard caret browsing (off by default, leaving ordinary selectable text non-focusable): the
 element becomes focusable via click or Tab, draws a 1.5 pt caret when focused and collapsed

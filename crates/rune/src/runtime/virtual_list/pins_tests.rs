@@ -34,7 +34,7 @@ fn row_el(key: &str) -> El {
 
 /// Collects `key`'s texts the way a commit does, into the state itself.
 fn write(pins: &mut Pins, key: &str) {
-    collect_row_into_pins(pins, &row_el(key), "/list", key, index_of(key), None, false);
+    collect_row_into_pins(pins, &row_el(key), "/list", key, index_of(key), None, false, false);
 }
 
 /// The texts and provider `row_el` gives for `key`, written out rather than run through the
@@ -177,7 +177,7 @@ fn apply(pins: &mut Pins, event: Ev) {
             } else {
                 let (mut texts, mut providers) = (Vec::new(), Vec::new());
                 collect_virtual_row_selection(
-                    &row_el(key), "/list", key, index_of(key), None, false, &mut texts, &mut providers,
+                    &row_el(key), "/list", key, index_of(key), None, false, false, &mut texts, &mut providers,
                 );
                 (texts, providers)
             };
