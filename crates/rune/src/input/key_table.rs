@@ -5,7 +5,7 @@
 use winit::keyboard::NamedKey;
 
 use super::chord::{ChordKey, ChordMod, KeyPlatform};
-use crate::edit::{Key, Mods};
+use crate::edit::{Key, MediaKey, Mods};
 
 /// One modifier's parse aliases (canonical first) and keycap labels per platform.
 #[derive(Clone, Copy, Debug)]
@@ -100,6 +100,14 @@ pub(crate) const NAMED_KEYS: &[NamedKeySpec] = &[
     NamedKeySpec::new(ChordKey::PrintScreen, Key::PrintScreen, NamedKey::PrintScreen, "PrintScreen", &["printscreen", "prtsc"], "Print Screen", "Print Screen").overlay("PrtSc"),
     NamedKeySpec::new(ChordKey::ScrollLock, Key::ScrollLock, NamedKey::ScrollLock, "ScrollLock", &["scrolllock"], "Scroll Lock", "Scroll Lock").overlay("ScrLk"),
     NamedKeySpec::new(ChordKey::Pause, Key::Pause, NamedKey::Pause, "Pause", &["pause", "break"], "Pause", "Pause"),
+    NamedKeySpec::new(ChordKey::Media(MediaKey::PlayPause), Key::Media(MediaKey::PlayPause), NamedKey::MediaPlayPause, "MediaPlayPause", &["mediaplaypause", "playpause"], "⏯", "Play/Pause"),
+    NamedKeySpec::new(ChordKey::Media(MediaKey::Play), Key::Media(MediaKey::Play), NamedKey::MediaPlay, "MediaPlay", &["mediaplay"], "▶", "Play"),
+    NamedKeySpec::new(ChordKey::Media(MediaKey::Pause), Key::Media(MediaKey::Pause), NamedKey::MediaPause, "MediaPause", &["mediapause"], "⏸", "Pause"),
+    NamedKeySpec::new(ChordKey::Media(MediaKey::Next), Key::Media(MediaKey::Next), NamedKey::MediaTrackNext, "MediaTrackNext", &["mediatracknext", "medianext"], "⏭", "Next Track"),
+    NamedKeySpec::new(ChordKey::Media(MediaKey::Previous), Key::Media(MediaKey::Previous), NamedKey::MediaTrackPrevious, "MediaTrackPrevious", &["mediatrackprevious", "mediaprevious", "mediaprev"], "⏮", "Previous Track"),
+    NamedKeySpec::new(ChordKey::Media(MediaKey::Stop), Key::Media(MediaKey::Stop), NamedKey::MediaStop, "MediaStop", &["mediastop"], "⏹", "Stop"),
+    NamedKeySpec::new(ChordKey::Media(MediaKey::FastForward), Key::Media(MediaKey::FastForward), NamedKey::MediaFastForward, "MediaFastForward", &["mediafastforward", "fastforward"], "⏩", "Fast Forward"),
+    NamedKeySpec::new(ChordKey::Media(MediaKey::Rewind), Key::Media(MediaKey::Rewind), NamedKey::MediaRewind, "MediaRewind", &["mediarewind", "rewind"], "⏪", "Rewind"),
 ];
 
 const WINIT_FUNCTION_KEYS: &[NamedKey] = &[

@@ -80,7 +80,7 @@ impl TextEdit {
 
     fn key_inner(&mut self, ev: &KeyEvent, layout: Option<TextFlow<'_>>, read_only: bool) -> EditOutcome {
         let mut out = EditOutcome::default();
-        if matches!(ev.key, Key::Modifier { .. }) { return out; }
+        if matches!(ev.key, Key::Modifier { .. } | Key::Media(_)) { return out; }
         // Any key but Up and Down lets the column go.
         let column = std::mem::take(&mut self.column);
         self.sync_invariants();
@@ -324,7 +324,7 @@ impl TextEdit {
                 }
                 _ => {}
             },
-            Key::Function(_) | Key::ContextMenu | Key::Insert | Key::PrintScreen | Key::ScrollLock | Key::Pause | Key::Modifier { .. } => {}
+            Key::Function(_) | Key::ContextMenu | Key::Insert | Key::PrintScreen | Key::ScrollLock | Key::Pause | Key::Media(_) | Key::Modifier { .. } => {}
         }
         out
     }

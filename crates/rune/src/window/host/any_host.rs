@@ -350,7 +350,10 @@ impl Host {
 
     fn about_to_wait_in_turn(&mut self, event_loop: &ActiveEventLoop) -> bool {
         #[cfg(target_os = "macos")]
-        self.fn_key();
+        {
+            self.fn_key();
+            self.media_keys();
+        }
         self.flush_files(event_loop);
         // Another window switched the font families (`Tx::set_font_families`).
         if self.app.rt_mut().follow_font_families() && let Some(w) = &mut self.win {

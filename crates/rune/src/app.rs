@@ -344,6 +344,35 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Opt into hardware media transport keys ([`Key::Media`](crate::Key::Media): Play/Pause,
+    /// Play, Pause, Next, Previous, Stop, Fast Forward, Rewind) in `on_key`, `El::on_key`,
+    /// `El::on_key_preview`, `El::on_key_up`, and `Chord`.
+    ///
+    /// Off by default so apps that do not control media playback receive no new keys and, on
+    /// macOS, never install the local `NSEventTypeSystemDefined` monitor that claims system
+    /// media keys while the window is key. Text fields ignore media keys so they still reach
+    /// `on_key` while typing.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, Key, MediaKey, el};
+    ///
+    /// let spec = AppSpec {
+    ///     on_key: Some(|playing: &mut bool, ev, _| {
+    ///         if ev.key == Key::Media(MediaKey::PlayPause) {
+    ///             *playing = !*playing;
+    ///             return true;
+    ///         }
+    ///         false
+    ///     }),
+    ///     ..AppSpec::new("Player", (480.0, 320.0), || false, |_, _| el())
+    /// };
+    /// App::new(spec).media_keys().run();
+    /// ```
+    pub fn media_keys(mut self) -> Self {
+        self.runtime.media_keys = true;
+        self
+    }
+
     /// Tab and Shift-Tab visit every focusable control, buttons included, whatever the system's
     /// keyboard navigation setting. Off (the default), Tab follows macOS: with Keyboard
     /// navigation off it visits only text fields and lists.

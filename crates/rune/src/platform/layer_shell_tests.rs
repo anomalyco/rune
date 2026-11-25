@@ -1,6 +1,6 @@
 use super::{feed_compose, named_keysym, read_keymap_fd};
 use crate::platform::layer_shell_machine::keyboard::MAX_KEYMAP_BYTES;
-use crate::Key;
+use crate::{Key, MediaKey};
 
 #[test]
 fn special_keysyms_are_named_keys() {
@@ -10,6 +10,17 @@ fn special_keysyms_are_named_keys() {
         (0xffbe, Key::Function(1)), (0xffd5, Key::Function(24)), (0xff55, Key::PageUp),
     ] {
         assert_eq!(named_keysym(symbol), Some(key), "keysym {symbol:#x}");
+    }
+    for (symbol, media) in [
+        (xkbcommon::xkb::keysyms::KEY_XF86AudioPlay, MediaKey::Play),
+        (xkbcommon::xkb::keysyms::KEY_XF86AudioPause, MediaKey::Pause),
+        (xkbcommon::xkb::keysyms::KEY_XF86AudioNext, MediaKey::Next),
+        (xkbcommon::xkb::keysyms::KEY_XF86AudioPrev, MediaKey::Previous),
+        (xkbcommon::xkb::keysyms::KEY_XF86AudioStop, MediaKey::Stop),
+        (xkbcommon::xkb::keysyms::KEY_XF86AudioForward, MediaKey::FastForward),
+        (xkbcommon::xkb::keysyms::KEY_XF86AudioRewind, MediaKey::Rewind),
+    ] {
+        assert_eq!(named_keysym(symbol), Some(Key::Media(media)), "media keysym {symbol:#x}");
     }
     assert_eq!(named_keysym(0x61), None);
 }

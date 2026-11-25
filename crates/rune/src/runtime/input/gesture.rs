@@ -412,6 +412,7 @@ impl RuntimeCore {
     /// and a frame is needed. A host with physical keys passes the release's logical key to
     /// `physical_then` instead, so the focused `on_physical_input` hears it first.
     pub(crate) fn key_up(&mut self, app: &mut dyn AppDriver, ev: KeyEvent) -> bool {
+        if matches!(ev.key, crate::Key::Media(_)) && !self.kbd.media_keys { return false; }
         if !self.wants_key_up() { return false; }
         if self.frame.queue.is_empty() && !self.commit.dirty && self.eat_ime_key_up(app) { return false; }
         self.frame.queue.push(Action::KeyUp(ev));
@@ -446,6 +447,7 @@ impl RuntimeCore {
     /// element with a handler (deepest first), inside the open modal if there is one. If focus moved since the key went down, the element that had
     /// focus on the press (and its ancestors) hears the release first.
     pub(in crate::runtime) fn route_key_up(&mut self, app: &mut dyn AppDriver, ev: &KeyEvent, tx: &mut Tx) -> bool {
+        if matches!(ev.key, crate::Key::Media(_)) && !self.kbd.media_keys { return false; }
         if self.eat_ime_key_up(app) { return false; }
         tx.focused = self.focused_key();
         let pressed = self.kbd.route_key_release().and_then(|p| self.live_index(&p));

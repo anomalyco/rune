@@ -26,6 +26,8 @@ pub(in crate::window) struct Native {
     pub(in crate::window) full_screen: crate::window::chrome::mac::FullScreenWatch,
     /// Fn presses, which winit doesn't send, while the app wants modifier keys.
     pub(in crate::window) fn_key: Option<crate::input::fn_key::FnKey>,
+    /// Hardware media keys (`NSEventTypeSystemDefined`), while the app opts into `App::media_keys`.
+    pub(in crate::window) media_keys: Option<crate::input::media_keys::MediaKeys>,
     /// The new window's first frames, which may draw before AppKit reports it on screen.
     pub(in crate::window) prime: Prime,
     pub(in crate::window) launch_drawables: super::LaunchDrawables,

@@ -361,6 +361,14 @@ impl OverlayCore {
             Backing::Window(window) if rt.modifier_keys() => crate::input::fn_key::FnKey::new(window),
             _ => None,
         };
+        #[cfg(target_os = "macos")]
+        let media_keys = match &backing {
+            Backing::Window(window) if rt.media_keys() => {
+                let shared = self.shared.clone();
+                crate::input::media_keys::MediaKeys::new(window, Arc::new(move || shared.wake()))
+            }
+            _ => None,
+        };
         Some(Live {
             #[cfg(target_os = "macos")]
             pacing,
@@ -368,6 +376,8 @@ impl OverlayCore {
             materials: crate::system_material::macos::Materials::new(),
             #[cfg(target_os = "macos")]
             fn_key,
+            #[cfg(target_os = "macos")]
+            media_keys,
             #[cfg(target_os = "macos")]
             present: None,
             // A new swap chain holds none of ours, and its waitable object is its own.

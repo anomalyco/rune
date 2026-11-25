@@ -250,6 +250,14 @@ mod tests {
         for (named, key) in [
             (NamedKey::ScrollLock, Key::ScrollLock), (NamedKey::Pause, Key::Pause), (NamedKey::ContextMenu, Key::ContextMenu),
             (NamedKey::PrintScreen, Key::PrintScreen), (NamedKey::Insert, Key::Insert),
+            (NamedKey::MediaPlayPause, Key::Media(crate::MediaKey::PlayPause)),
+            (NamedKey::MediaPlay, Key::Media(crate::MediaKey::Play)),
+            (NamedKey::MediaPause, Key::Media(crate::MediaKey::Pause)),
+            (NamedKey::MediaTrackNext, Key::Media(crate::MediaKey::Next)),
+            (NamedKey::MediaTrackPrevious, Key::Media(crate::MediaKey::Previous)),
+            (NamedKey::MediaStop, Key::Media(crate::MediaKey::Stop)),
+            (NamedKey::MediaFastForward, Key::Media(crate::MediaKey::FastForward)),
+            (NamedKey::MediaRewind, Key::Media(crate::MediaKey::Rewind)),
         ] {
             assert_eq!(map_key(&WKey::Named(named), ModifiersState::empty()).map(|ev| ev.key.clone()), Some(key));
         }

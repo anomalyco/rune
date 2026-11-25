@@ -293,15 +293,16 @@ pub(crate) fn keyboard_core(
     app: &mut dyn AppDriver,
     input: KeyInput,
 ) -> bool {
+    let logical = input.logical.filter(|ev| rt.media_keys() || !matches!(ev.key, crate::Key::Media(_)));
     if let Some(key) = input.physical {
         rt.physical_then(
             app,
             crate::PhysicalInput::Key { key, mods: input.mods, pressed: input.pressed, repeat: input.repeat },
-            input.logical,
+            logical,
             input.base,
             input.unhandled,
         )
-    } else if let Some(ev) = input.logical {
+    } else if let Some(ev) = logical {
         if !input.pressed {
             rt.key_up(app, ev)
         } else {
@@ -327,8 +328,12 @@ pub(crate) fn keyboard(
     unhandled: Option<Unhandled>,
 ) -> bool {
     let pressed = event.state == ElementState::Pressed;
-    // A release's logical key only matters to `on_key_up` handlers.
-    let logical = (pressed || rt.wants_key_up()).then(|| map_key_event(event, mods)).flatten();
+    // A release's logical key only matters to `on_key_up` handlers. Media keys stay hidden
+    // unless the runtime opted in (`App::media_keys`), so opt-out apps see no new keys.
+    let logical = (pressed || rt.wants_key_up())
+        .then(|| map_key_event(event, mods))
+        .flatten()
+        .filter(|ev| rt.media_keys() || !matches!(ev.key, crate::Key::Media(_)));
     let physical = match event.physical_key {
         PhysicalKey::Code(key) => Some(key),
         PhysicalKey::Unidentified(_) => None,

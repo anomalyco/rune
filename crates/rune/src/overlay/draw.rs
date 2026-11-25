@@ -542,15 +542,25 @@ impl OverlayCore {
                     return;
                 }
             }
-            Input::Key(key) => app.rt_mut().key(key),
-            Input::KeyRepeat(key) => app.rt_mut().repeat_key(key),
+            Input::Key(key) => {
+                if matches!(key.key, crate::Key::Media(_)) && !app.rt().media_keys() { return; }
+                app.rt_mut().key(key);
+            }
+            Input::KeyRepeat(key) => {
+                if matches!(key.key, crate::Key::Media(_)) && !app.rt().media_keys() { return; }
+                app.rt_mut().repeat_key(key);
+            }
             Input::KeyUp(key) => {
                 self.dirty |= app.key_up(key);
                 return;
             }
             Input::Physical(event, fallback) => {
                 let keep = matches!(event, crate::PhysicalInput::Key { pressed: true, .. }) || app.rt().wants_key_up();
-                self.dirty |= app.physical_with_fallback(event, fallback.filter(|_| keep));
+                let media_keys = app.rt().media_keys();
+                self.dirty |= app.physical_with_fallback(
+                    event,
+                    fallback.filter(|ev| keep && (media_keys || !matches!(ev.key, crate::Key::Media(_)))),
+                );
                 return;
             }
             Input::Ime(ime) if self.options.keys == KeyPolicy::OnDemand => {

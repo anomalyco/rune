@@ -203,7 +203,7 @@ impl OverlayCore {
         // Any Fn change the monitor saw reaches the view while it's still shown; the hide
         // then releases what it held.
         #[cfg(target_os = "macos")]
-        { self.fn_key(app); self.prime.stop(); }
+        { self.fn_key(app); self.media_keys(app); self.prime.stop(); }
         // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
         let fade = if cfg!(any(target_os = "macos", target_os = "windows")) { fade } else { Duration::ZERO };
         let effects = self.presence.step(presence::Event::Hide { fade, now: crate::time::now() }, self.release);

@@ -10,6 +10,7 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(inline_js = "
 export function enabled() { return new URLSearchParams(location.search).has('input-proof'); }
 export function auditEnabled() { return new URLSearchParams(location.search).has('audit'); }
+export function mediaKeysEnabled() { return new URLSearchParams(location.search).has('media-keys'); }
 export function queryZoom() {
     const z = parseFloat(new URLSearchParams(location.search).get('zoom') ?? '1');
     return Number.isFinite(z) && z > 0 ? z : 1;
@@ -32,6 +33,8 @@ extern "C" {
     pub fn enabled() -> bool;
     #[wasm_bindgen(js_name = auditEnabled)]
     fn audit_enabled() -> bool;
+    #[wasm_bindgen(js_name = mediaKeysEnabled)]
+    fn media_keys_enabled() -> bool;
     #[wasm_bindgen(js_name = queryZoom)]
     fn query_zoom() -> f32;
     fn report(plain: &str, display: &str, single: &str, secret_length: usize, submits: u32, shortcuts: u32, visible: bool, window_visible: bool);
@@ -237,7 +240,7 @@ fn run_audit() {
         ));
         true
     });
-    let app = App::new(spec);
+    let app = if media_keys_enabled() { App::new(spec).media_keys() } else { App::new(spec) };
     let handle = app.handle();
     let state_handle = handle.clone();
     handle.update(move |s, _| s.handle = Some(state_handle));

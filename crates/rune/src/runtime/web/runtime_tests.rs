@@ -226,6 +226,39 @@ fn web_key_keeps_cmd_space_as_text_and_normalizes_non_ascii_chords() {
 }
 
 #[test]
+fn web_key_gates_media_keys_on_opt_in_and_maps_all_w3c_media_names() {
+    type Seen = Vec<crate::Key>;
+    fn view(_: &Seen, _: &mut Cx<Seen>) -> El { crate::el() }
+    let mut rt = Runtime::new(Seen::new(), view, (100.0, 100.0), Env::default());
+    rt.on_key = Some(|s, ev, _| { s.push(ev.key.clone()); true });
+    rt.frame(0.0);
+
+    // Off by default: DOM media keys do not reach handlers.
+    rt.web_key(&json!({"kind":"key", "key":"MediaPlayPause", "code":"MediaPlayPause"}));
+    rt.frame(0.0);
+    assert!(rt.state.is_empty());
+
+    // Opted in: every W3C media key name maps cleanly.
+    rt.set_media_keys(true);
+    let cases = [
+        ("MediaPlayPause", crate::MediaKey::PlayPause),
+        ("MediaPlay", crate::MediaKey::Play),
+        ("MediaPause", crate::MediaKey::Pause),
+        ("MediaTrackNext", crate::MediaKey::Next),
+        ("MediaTrackPrevious", crate::MediaKey::Previous),
+        ("MediaStop", crate::MediaKey::Stop),
+        ("MediaFastForward", crate::MediaKey::FastForward),
+        ("MediaRewind", crate::MediaKey::Rewind),
+    ];
+    for (dom, expected) in cases {
+        rt.web_key(&json!({"kind":"key", "key":dom, "code":dom}));
+        rt.frame(0.0);
+        assert_eq!(rt.state.last(), Some(&crate::Key::Media(expected)), "{dom}");
+    }
+    assert_eq!(rt.state.len(), cases.len());
+}
+
+#[test]
 fn clearing_text_in_on_input_change_resyncs_mirror_after_each_dom_edit() {
     #[derive(Default)]
     struct S { edit: crate::TextEdit, sent: Vec<String>, copy: bool, blur: bool }

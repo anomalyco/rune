@@ -598,6 +598,14 @@ policy changes are applied in the same mutation phase.
   the change, as AppKit's flagsChanged does. Off by default; they never type, select, move focus
   or fire shortcuts, and a chord still arrives as before. Fn reaches macOS windows and overlays
   only: Windows and Linux keyboards handle Fn in firmware and never report it.
+- **Hardware media keys**: `App::media_keys()` (also on `WindowSpec`, `ConfiguredOverlay`, and
+  `Runtime::set_media_keys`) delivers hardware media transport keys as `Key::Media(MediaKey)`
+  (`PlayPause`, `Play`, `Pause`, `Next`, `Previous`, `Stop`, `FastForward`, `Rewind`) to
+  `on_key`, `El::on_key`, `El::on_key_preview`, `El::on_key_up`, and `Chord` (`"playpause"`,
+  `"mediatracknext"`, `"mediatrackprevious"`, ...). Off by default so apps without it receive no
+  new keys and on macOS never install the local `NSEventTypeSystemDefined` monitor that claims
+  system media keys while key. Text fields ignore `Key::Media` so playback keys still reach
+  `on_key` while typing.
 - **Tooling**: scripts gain `type`, `key`, `paste`, `scroll` (`dy`, and `dx` for a horizontal
   swipe) and `fling` (`v`, and `vx`). Traces carry motion-trace
   intents (settle cuts, growing rows, word reveals) and clipped visible rects.

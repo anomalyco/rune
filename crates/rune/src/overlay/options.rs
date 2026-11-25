@@ -228,6 +228,18 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// Like `App::modifier_keys`: send modifier keys pressed and released on their own
     /// (`Key::Modifier`) to `on_key` and the focused input. Off by default.
     pub fn modifier_keys(mut self) -> Self { self.runtime.modifier_keys = true; self }
+    /// Like [`App::media_keys`](crate::App::media_keys): opt into hardware media transport
+    /// keys ([`Key::Media`](crate::Key::Media)) for this overlay. Off by default.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, el};
+    ///
+    /// let overlay = OverlaySpec::new("mini-player", (240.0, 64.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .media_keys();
+    /// let _ = overlay;
+    /// ```
+    pub fn media_keys(mut self) -> Self { self.runtime.media_keys = true; self }
     /// Like `AppSpec::setup`: called once with a waker other threads use when new data arrives
     /// (an `ImageCache` decode, a channel). It runs on the event thread when the event loop
     /// starts, before the overlay's first frame and before updates queued through its handle.

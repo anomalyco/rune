@@ -9,6 +9,7 @@ impl RuntimeCore {
         one.by_keys = true;
         one.focused = self.focused_key();
         if matches!(ev.key, crate::Key::Modifier { .. }) { return !repeat && self.route_modifier(app, ev, one); }
+        if matches!(ev.key, crate::Key::Media(_)) && !self.kbd.media_keys { return false; }
         // Any other key while Ctrl and Shift are down makes them a shortcut, not a direction.
         self.kbd.disarm_direction_chord();
         one.key_repeat = repeat;
@@ -66,7 +67,8 @@ impl RuntimeCore {
         }
         let input_handles = match &ev.key {
             crate::edit::Key::Function(_) | crate::edit::Key::ContextMenu | crate::edit::Key::Tab | crate::edit::Key::PageUp | crate::edit::Key::PageDown
-            | crate::edit::Key::Insert | crate::edit::Key::PrintScreen | crate::edit::Key::ScrollLock | crate::edit::Key::Pause => false,
+            | crate::edit::Key::Insert | crate::edit::Key::PrintScreen | crate::edit::Key::ScrollLock | crate::edit::Key::Pause
+            | crate::edit::Key::Media(_) => false,
             crate::edit::Key::Command(_) => match ev.edit_command() {
                 Some('a') => true,
                 Some('z') => !read_only,
@@ -512,8 +514,17 @@ impl RuntimeCore {
         self.queue_key(ev, false);
     }
 
+    /// Opt into hardware media transport keys (`Key::Media`). Off by default.
+    #[inline]
+    pub(crate) fn set_media_keys(&mut self, enabled: bool) { self.kbd.media_keys = enabled; }
+
+    /// Whether this runtime accepts hardware media transport keys (`Key::Media`).
+    #[inline]
+    pub(crate) fn media_keys(&self) -> bool { self.kbd.media_keys }
+
     /// [`Runtime::key`]; `stage` routes it to the open playground's stage, for `Play::press`.
     pub(in crate::runtime) fn queue_key(&mut self, ev: KeyEvent, stage: bool) {
+        if matches!(ev.key, crate::Key::Media(_)) && !self.kbd.media_keys { return; }
         self.dismiss_help();
         // A key ends a middle-click autoscroll, and does nothing else.
         if self.pointer.autoscroll_key() { return; }
@@ -525,6 +536,7 @@ impl RuntimeCore {
     /// Queue an auto-repeat of a held key, as the OS sends after the first press. Handlers see
     /// `Tx::key_repeat` true for it.
     pub fn repeat_key(&mut self, ev: KeyEvent) {
+        if matches!(ev.key, crate::Key::Media(_)) && !self.kbd.media_keys { return; }
         self.frame.queue.push(Action::Key { ev, repeat: true, stage: false });
     }
 

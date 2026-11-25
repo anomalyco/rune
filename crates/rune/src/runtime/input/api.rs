@@ -212,6 +212,40 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn modifier_keys(&self) -> bool { self.core().modifier_keys() }
 
+    /// Opt into hardware media transport keys ([`Key::Media`](crate::Key::Media)), matching
+    /// [`App::media_keys`](crate::App::media_keys). Off by default so apps without it receive
+    /// no media key events.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Key, KeyEvent, MediaKey, Runtime, el};
+    /// # fn view(_: &bool, _: &mut Cx<bool>) -> El { el().size(100.0, 100.0) }
+    /// let mut rt = Runtime::new(false, view, (100.0, 100.0), Env::new(true, 1.0));
+    /// rt.set_media_keys(true);
+    /// rt.on_key = Some(|playing, ev, _| {
+    ///     if ev.key == Key::Media(MediaKey::PlayPause) { *playing = !*playing; return true; }
+    ///     false
+    /// });
+    /// rt.frame(0.0);
+    /// rt.key(KeyEvent::from(Key::Media(MediaKey::PlayPause)));
+    /// rt.frame(0.0);
+    /// assert!(rt.state);
+    /// ```
+    #[inline(always)]
+    pub fn set_media_keys(&mut self, enabled: bool) { self.core_mut().set_media_keys(enabled); }
+
+    /// Whether hardware media transport keys ([`Key::Media`](crate::Key::Media)) are enabled
+    /// for this runtime.
+    ///
+    /// ```
+    /// # use rune::{Env, Runtime, el};
+    /// let mut rt = Runtime::new((), |_, _| el(), (100.0, 100.0), Env::new(true, 1.0));
+    /// assert!(!rt.media_keys());
+    /// rt.set_media_keys(true);
+    /// assert!(rt.media_keys());
+    /// ```
+    #[inline(always)]
+    pub fn media_keys(&self) -> bool { self.core().media_keys() }
+
     /// Queue a key press carrying its physical key code ([`Tx::physical_key`](crate::Tx::physical_key))
     /// and unmodified layout character ([`Tx::key_base`](crate::Tx::key_base)), as a window host
     /// delivers a key press. Use [`Self::physical_key_input`] to also send auto-repeat or release

@@ -293,6 +293,8 @@ pub(crate) struct KeyboardState {
     pub(in crate::runtime) full_keyboard_access: bool,
     /// `App::tab_visits_controls`: Tab visits every control whatever `full_keyboard_access` says.
     pub(in crate::runtime) tab_visits_controls: bool,
+    /// `App::media_keys`: deliver hardware media transport keys (`Key::Media`). Off by default.
+    pub(in crate::runtime) media_keys: bool,
     /// This commit's focus is a `Tx::return_focus` hand-back, which a modal opening in it
     /// doesn't take as where focus was.
     focus_returned: bool,
@@ -314,6 +316,7 @@ impl KeyboardState {
             keys_lost: false,
             full_keyboard_access: true,
             tab_visits_controls: false,
+            media_keys: false,
             modal_focus: crate::runtime::modal_focus::ModalFocus::Closed,
             focus_before_commit: None,
             focus_request: None,

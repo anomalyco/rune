@@ -388,6 +388,16 @@ impl OverlayCore {
         }
     }
 
+    /// Hardware media keys the monitor saw since the loop last turned.
+    #[cfg(target_os = "macos")]
+    pub(super) fn media_keys(&mut self, app: &mut dyn OverlayApp) {
+        let Some(events) = self.surface.live().and_then(|l| l.media_keys.as_ref()).map(|m| m.take()) else { return };
+        if !self.presence.shown() || self.options.keys != KeyPolicy::OnDemand { return; }
+        for (decoded, mods) in events {
+            self.dirty |= app.media_key(decoded, mods);
+        }
+    }
+
     /// Handle updates, and the `setup` waker (new data arrived) re-runs the view. A shown
     /// overlay draws a frame, which polls; a hidden one polls now, as for a due timer, and
     /// re-runs the view when it shows (`advance_at`).
