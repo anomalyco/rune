@@ -335,6 +335,7 @@ fn same_handlers(
         on_double_press,
         on_secondary_press,
         on_middle_press,
+        on_any_press,
         on_hover,
         on_hover_change,
         on_focus_change,
@@ -388,6 +389,7 @@ fn same_handlers(
         && opt_rc_eq(&a.on_double_press, on_double_press)
         && opt_rc_eq(&a.on_secondary_press, on_secondary_press)
         && opt_rc_eq(&a.on_middle_press, on_middle_press)
+        && opt_rc_eq(&a.on_any_press, on_any_press)
         && opt_rc_eq(&a.on_hover, on_hover)
         && opt_rc_eq(&a.on_hover_change, on_hover_change)
         && opt_rc_eq(&a.on_focus_change, on_focus_change)

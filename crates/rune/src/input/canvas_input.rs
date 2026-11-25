@@ -269,6 +269,7 @@ impl Tx {
     /// [`PointerButton::Primary`] unless the element opted in to others with
     /// [`El::pointer_buttons`] (including `Secondary` for `on_drag`); in `on_link`, `Middle` for
     /// a middle click on the link; in [`El::on_middle_press`], `Middle`; in [`El::on_button`],
-    /// the extra button that was pressed. Other handlers see `Primary`.
+    /// the extra button that was pressed; in [`El::on_any_press`], the button that went down.
+    /// Other handlers see `Primary`.
     pub fn button(&self) -> PointerButton { self.button }
 }

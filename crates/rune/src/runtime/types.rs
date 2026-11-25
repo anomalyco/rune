@@ -625,6 +625,7 @@ pub(crate) struct TreeState {
     pub(in crate::runtime) has_drawn_layout: bool,
     pub(in crate::runtime) has_mount: bool,
     pub(in crate::runtime) has_key_up: bool,
+    pub(in crate::runtime) has_any_press: bool,
     pub(in crate::runtime) node_index: NodeIndex,
     /// The node ids the last build indexed its scratch by.
     pub(in crate::runtime) built_ids: Vec<NodeId>,
@@ -664,6 +665,7 @@ impl TreeState {
             has_drawn_layout: false,
             has_mount: false,
             has_key_up: false,
+            has_any_press: false,
             built: false,
             has_playground: false,
             node_index: NodeIndex::default(),

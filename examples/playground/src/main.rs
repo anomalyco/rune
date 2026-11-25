@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 mod any_handlers;
+mod any_press;
 mod emoji_family_story;
 mod mount;
 mod pick;
@@ -665,6 +666,12 @@ fn main() {
                         .variant("Closed", |_| {})
                         .variant("Popup blocking", |s| { s.popup_open = true; s.pass_through = false; })
                         .variant("Pass-through cover", |s| { s.popup_open = true; s.pass_through = true; }),
+                )
+                .story(
+                    Story::new("Controls/Popups/Passive press observer", any_press::AnyPressDemo::default, any_press::view)
+                        .trigger('o', "Toggle popup", |s, _| s.popup_open = !s.popup_open)
+                        .variant("Open", |_| {})
+                        .variant("Closed", |s| s.popup_open = false),
                 )
                 .story(
                     Story::new("Controls/Buttons/Press cursor & bounds", press_pointer::PressPointerDemo::default, press_pointer::view)

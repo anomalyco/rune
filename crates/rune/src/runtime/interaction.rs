@@ -68,6 +68,7 @@ impl RuntimeCore {
             Action::SecondaryPress(p, _) => ("on_secondary_press", 3, Some(p)),
             Action::SecondaryRepost { .. } => ("on_secondary_press", 3, None),
             Action::MiddlePress(p, ..) => ("on_middle_press", 3, Some(p)),
+            Action::AnyPress(p, ..) => ("on_any_press", 2, Some(p)),
             Action::Link(p, ..) => ("on_link", 3, Some(p)),
             Action::LinkSecondary(p, ..) => ("on_link_secondary", 3, Some(p)),
             Action::Dismiss(p) => ("dismiss", 3, Some(p)),

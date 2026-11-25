@@ -28,6 +28,8 @@ pub(in crate::runtime) enum Action {
     DoublePress(String, Option<PointerEvent>),
     /// `El::on_middle_press`.
     MiddlePress(String, Option<PointerEvent>),
+    /// `El::on_any_press`: passive window-wide mouse button-down observer.
+    AnyPress(String, crate::PointerButton, PointerEvent),
     /// A text's link and the button that clicked it (the primary or the middle).
     Link(String, usize, crate::PointerButton),
     /// `El::on_link_secondary`: the text, its link and the press.
@@ -173,6 +175,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::Press(..) => "on_press",
         Action::DoublePress(..) => "on_double_press",
         Action::MiddlePress(..) => "on_middle_press",
+        Action::AnyPress(..) => "on_any_press",
         Action::Link(..) => "on_link",
         Action::LinkSecondary(..) => "on_link_secondary",
         Action::SecondaryPress(..) => "on_secondary_press",
@@ -194,7 +197,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
 #[cfg(debug_assertions)]
 pub(in crate::runtime) fn action_path(action: &Action) -> Option<&str> {
     match action {
-        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path, ..) | Action::MiddlePress(path, ..)
+        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path, ..) | Action::MiddlePress(path, ..) | Action::AnyPress(path, ..)
         | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
         Action::Wheel { chain, .. } => chain.as_deref().and_then(|c| c.first()).map(String::as_str),
@@ -493,6 +496,14 @@ impl RuntimeCore {
                 one.button = crate::PointerButton::Middle;
                 one.press_point = point;
                 f(app.states(), &mut one);
+                true
+            }
+            Action::AnyPress(path, button, point) => {
+                let Some(i) = self.live_index(&path).filter(|&i| self.allowed(i)) else { return false };
+                let Some(f) = self.tree.nodes[i].handlers.on_any_press.clone() else { return false };
+                log_event!(self, "any press {path}");
+                one.button = button;
+                f(app.states(), button, point, &mut one);
                 true
             }
             Action::Link(path, k, button) => {

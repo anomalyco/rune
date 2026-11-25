@@ -229,6 +229,9 @@ pub(in crate::runtime) struct PointerState {
     pub(in crate::runtime) hover_paused: bool,
     /// The host starts OS drags, so `drag_out` elements start one (headless tools act as one).
     pub(in crate::runtime) os_drag: bool,
+    /// Distinct bits for currently held named mouse buttons (Primary..Forward), for
+    /// `PointerEvent::pressing` and `El::on_any_press` chord suppression.
+    buttons_down: u8,
     pub(in crate::runtime) hovered: Option<String>,
     /// Elements with `on_hover_change` that the pointer is inside.
     pub(in crate::runtime) hover_within: Vec<String>,
@@ -265,6 +268,8 @@ pub(in crate::runtime) struct PointerState {
     pub(in crate::runtime) drag_ends: crate::drag_out::DragEnds,
     /// Drag-outs whose `on_drag_start` ran and whose `on_drag_end` hasn't yet.
     pub(in crate::runtime) drags_open: usize,
+    /// Currently held `PointerButton::Other(n)` ids (empty unless an extra button is held).
+    other_buttons_down: Vec<u16>,
 }
 
 impl PointerState {
@@ -292,10 +297,62 @@ impl PointerState {
             help: Default::default(),
             file_drag: Default::default(),
             os_drag: true,
+            buttons_down: 0,
             drag_out_request: None,
             drag_ends: Default::default(),
             drags_open: 0,
+            other_buttons_down: Vec::new(),
         }
+    }
+
+    const BTN_PRIMARY: u8 = 1 << 0;
+    const BTN_SECONDARY: u8 = 1 << 1;
+    const BTN_MIDDLE: u8 = 1 << 2;
+    const BTN_BACK: u8 = 1 << 3;
+    const BTN_FORWARD: u8 = 1 << 4;
+
+    #[inline]
+    const fn button_bit(button: PointerButton) -> u8 {
+        match button {
+            PointerButton::Primary => Self::BTN_PRIMARY,
+            PointerButton::Secondary => Self::BTN_SECONDARY,
+            PointerButton::Middle => Self::BTN_MIDDLE,
+            PointerButton::Back => Self::BTN_BACK,
+            PointerButton::Forward => Self::BTN_FORWARD,
+            PointerButton::Other(_) => 0,
+        }
+    }
+
+    /// Whether any mouse button is currently held down anywhere in the window.
+    #[inline]
+    pub(in crate::runtime) fn any_button_down(&self) -> bool {
+        self.buttons_down != 0 || !self.other_buttons_down.is_empty()
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn note_button_down(&mut self, button: PointerButton) {
+        if let PointerButton::Other(id) = button {
+            if !self.other_buttons_down.contains(&id) {
+                self.other_buttons_down.push(id);
+            }
+        } else {
+            self.buttons_down |= Self::button_bit(button);
+        }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn note_button_up(&mut self, button: PointerButton) {
+        if let PointerButton::Other(id) = button {
+            self.other_buttons_down.retain(|&b| b != id);
+        } else {
+            self.buttons_down &= !Self::button_bit(button);
+        }
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn clear_buttons_down(&mut self) {
+        self.buttons_down = 0;
+        self.other_buttons_down.clear();
     }
 
     #[inline]
@@ -445,6 +502,7 @@ impl PointerState {
     pub(in crate::runtime) fn clear_for_stage(&mut self) {
         self.press = Press::default();
         self.secondary = Secondary::Up;
+        self.clear_buttons_down();
         self.hovered = None;
         self.hover_gone.clear();
         self.drag_gone.clear();

@@ -2,9 +2,9 @@
 //! `Cold<Handlers>`, so elements without callbacks pay one pointer.
 use crate::cold::Empty;
 use crate::el::{
-    A11yActionFn, AtBottomFn, Cursor, DragEndFn, DragFn, DragOutFn, DropSpec, LanguagesFn, LayoutFn, LayoutTxFn,
-    ModalSpec, PasteFn, PointerFn, PressFn, ScrollOffsetFn, SelectionChangeFn, SelectionCopy, VisibleRowsFn,
-    WindowFocusFn,
+    A11yActionFn, AnyPressFn, AtBottomFn, Cursor, DragEndFn, DragFn, DragOutFn, DropSpec, LanguagesFn, LayoutFn,
+    LayoutTxFn, ModalSpec, PasteFn, PointerFn, PressFn, ScrollOffsetFn, SelectionChangeFn, SelectionCopy,
+    VisibleRowsFn, WindowFocusFn,
 };
 
 #[derive(Clone)]
@@ -22,6 +22,8 @@ pub(crate) struct Handlers {
     pub on_secondary_press: Option<PointerFn>,
     /// `El::on_middle_press`.
     pub on_middle_press: Option<PressFn>,
+    /// `El::on_any_press`: passive window-wide mouse button-down observer.
+    pub on_any_press: Option<AnyPressFn>,
     pub on_hover: Option<PressFn>,
     pub on_hover_change: Option<WindowFocusFn>,
     /// `El::on_focus_change`: this element gained (`true`) or lost (`false`) focus.
@@ -124,6 +126,7 @@ impl Empty for Handlers {
         on_double_press: None,
         on_secondary_press: None,
         on_middle_press: None,
+        on_any_press: None,
         on_hover: None,
         on_hover_change: None,
         on_focus_change: None,

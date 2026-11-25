@@ -61,6 +61,7 @@ impl capture::PointerState {
     #[inline]
     pub(in crate::runtime) fn abandon_secondary(&mut self) {
         self.clear_secondary();
+        self.note_button_up(crate::PointerButton::Secondary);
     }
 }
 
@@ -163,8 +164,11 @@ impl RuntimeCore {
     }
 
     pub(super) fn secondary_down_for(&mut self, x: f32, y: f32, platform: SecondaryPlatform) {
+        let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
+        self.pointer.note_button_down(crate::PointerButton::Secondary);
         self.pointer.pos = Some((x, y));
         if self.pointer.autoscroll_press(crate::PointerButton::Secondary) { return; }
+        if starts_gesture { self.queue_any_press(crate::PointerButton::Secondary, x, y); }
         self.release_hover_hold();
         self.kbd.focus.step(focus_machine::FocusEvent::Pointed);
         self.dismiss_help();
@@ -308,6 +312,7 @@ impl RuntimeCore {
     }
 
     pub(crate) fn secondary_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+        self.pointer.note_button_up(crate::PointerButton::Secondary);
         let mut drag_left = false;
         let dragged = if self.pointer.press.held().is_some_and(|h| h.button == crate::PointerButton::Secondary) {
             drag_left = self.pointer.press.held().is_some_and(|h| h.left);
@@ -338,7 +343,10 @@ impl RuntimeCore {
             && self.secondary_target(x, y) == Some(path.as_str())
         {
             let i = self.tree.nodes.iter().position(|n| n.path == path);
-            let point = i.map_or(PointerEvent { x, y, window_x: x, window_y: y }, |i| self.pointer_event(i, x, y));
+            let point = i.map_or(
+                PointerEvent { x, y, window_x: x, window_y: y, pressing: self.pointer.any_button_down() },
+                |i| self.pointer_event(i, x, y),
+            );
             let link = i.and_then(|i| self.secondary_link_at(i, x, y));
             // Like a primary link press, it must end on the link it began on; one that moved
             // onto, off or between links opens nothing.
