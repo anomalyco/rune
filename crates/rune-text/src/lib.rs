@@ -181,6 +181,8 @@ pub use layout::span::TextHighlight;
 #[doc(hidden)]
 pub use layout::span::flatten_spans;
 #[doc(hidden)]
+pub use layout::tabular::TabularGlyphs;
+#[doc(hidden)]
 pub use layout::underline::line_end;
 #[doc(hidden)]
 pub use layout::underline::underline_edges;
@@ -311,6 +313,8 @@ pub struct TextSystem {
     line_scan: Option<paragraphs::LineScan>,
     /// Printable ASCII's advances and line height per style and scale (`paragraphs::AsciiLine`).
     ascii: HashMap<u64, Option<Rc<paragraphs::AsciiLine>>>,
+    /// Shaper-verified tabular-digit templates for single-line live text (`layout::tabular`).
+    tabular: layout::tabular::TabularCache,
     runs: Cache<Rc<RunLayout>>,
     generation: u32,
     /// Incremented whenever [`Self::drop_shaped`] clears shaped caches so stale
@@ -484,6 +488,7 @@ impl TextSystem {
             last_diff: None,
             line_scan: None,
             ascii: HashMap::default(),
+            tabular: Default::default(),
             runs: Default::default(),
             generation: 0,
             shaped_epoch: 0,

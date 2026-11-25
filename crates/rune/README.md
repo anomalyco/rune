@@ -1576,7 +1576,9 @@ The placeholder determines layout even after a view rebuild. Only the changed
 run reshapes; overflow clips to that box. Equal strings do not shape or wake a
 host. Hidden hosts keep the latest value and sample it on return. Publication
 uses a short mutex and can allocate; it is not an audio-callback API. Plain
-single-line labels (including `.truncate_fade()`) shape one line directly;
+single-line labels (including `.truncate_fade()`) shape one line directly, and short
+ASCII readings whose digits are proven tabular by the shaper and OpenType tables (such
+as `'tnum' 1` or monospace faces) swap digit glyph IDs without full reshaping;
 `.wrap()`, `.truncate()` (and `truncate_middle` / `truncate_head`), and
 `.max_lines(n)` re-wrap or re-elide inside the existing box width without
 reflowing siblings. Incompatible combinations (rich spans, links, pills,
