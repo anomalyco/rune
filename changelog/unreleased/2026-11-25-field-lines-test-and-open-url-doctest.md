@@ -1,0 +1,1 @@
+- Fixed `runtime::selection::field_lines::tests` to use the bundled default face instead of `.mono()` so `a_byte_mid_line_sees_the_short_soft_wrapped_line_after_it` passes without system monospace fonts, and compiled the `Tx::open_url_then` doc example in `crates/rune/src/open_url.rs`.
