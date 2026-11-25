@@ -96,10 +96,12 @@ impl RuntimeCore {
                 x0: round(r[0] + w.shift[0]), y0: round(r[1] + w.shift[1]),
                 x1: round(r[2] + w.shift[0]), y1: round(r[3] + w.shift[1]),
             });
+            let disabled = self.node_disabled(i) || n.inert;
+            if disabled { link.set_disabled(); }
             if self.allowed(i) {
-                if spec.cold.on_link.is_some() { link.add_action(Ak::Click); }
+                if !disabled && spec.cold.on_link.is_some() { link.add_action(Ak::Click); }
                 if self.can_focus(i) { link.add_action(Ak::Focus); }
-                if spec.cold.on_link_secondary.is_some() { link.add_action(Ak::ShowContextMenu); }
+                if !disabled && spec.cold.on_link_secondary.is_some() { link.add_action(Ak::ShowContextMenu); }
             }
             let id = link_id(n.id, k);
             out[me].1.push_child(id);

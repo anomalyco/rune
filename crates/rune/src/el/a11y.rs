@@ -367,7 +367,9 @@ impl El {
         if disabled || !self.cold.is_empty() {
             let cold = self.cold_mut();
             cold.a11y.disabled = disabled;
-            if disabled { let f = &mut *cold.focus; f.enabled = false; f.opt_out = true; }
+            let f = &mut *cold.focus;
+            f.disabled = disabled;
+            if disabled { f.enabled = false; f.opt_out = true; }
         }
         self
     }

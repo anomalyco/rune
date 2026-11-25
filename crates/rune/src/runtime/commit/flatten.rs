@@ -778,7 +778,12 @@ fn flatten_node<E: FlattenEl>(
     let option_as_alt = el_r.cold.option_as_alt;
     let window_drag = el_r.window_drag_mode();
     let virtual_list = el_r.cold.virtual_estimate.is_some();
-    let focus = el_r.cold.focus.clone();
+    let mut focus = el_r.cold.focus.clone();
+    if (focus.disabled || focus.opt_out) && (focus.enabled || !focus.opt_out) {
+        let f = &mut *focus;
+        f.enabled = false;
+        f.opt_out = true;
+    }
     let on_path = el_r.cold.get().and_then(|c| c.on_path.clone());
     let child_count = if on_path.is_some() {
         el_r.memo.as_ref().map_or(0, |b| b.children.children.len()) + el_r.children.len()

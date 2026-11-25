@@ -609,7 +609,10 @@ impl RuntimeCore {
         {
             return if self.input_pointer_cursor(i, x, y) { crate::el::Cursor::Pointer } else { crate::el::Cursor::Text };
         }
-        if self.is_selectable(i) && !self.edit.selectable.phase.dragging() && self.link_at(i, x, y).is_some() {
+        if (self.is_selectable(i) || self.tree.nodes[i].handlers.cursor.is_none())
+            && !self.edit.selectable.phase.dragging()
+            && self.link_at(i, x, y).is_some()
+        {
             return crate::el::Cursor::Pointer;
         }
         if self.tree.nodes[i].handlers.cursor.is_none()
