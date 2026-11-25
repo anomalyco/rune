@@ -24,8 +24,8 @@ impl RuntimeCore {
     /// Recomputes node-derived presence flags in a single pass over `self.nodes`.
     /// Returns whether any node has a loop spec.
     pub(in crate::runtime) fn refresh_node_flags(&mut self) -> bool {
-        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut mount, mut key_up, mut any_press, mut pointer_lock, mut sticky, mut raise, mut any_loop) =
-            (false, false, false, false, false, false, false, false, false, false, false);
+        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut mount, mut key_up, mut any_press, mut link_hover, mut pointer_lock, mut sticky, mut raise, mut any_loop) =
+            (false, false, false, false, false, false, false, false, false, false, false, false);
         let (mut ordered, mut above) = (false, false);
         let mut fade_stops: Option<[f32; 2]> = None;
         for n in &self.tree.nodes {
@@ -43,6 +43,7 @@ impl RuntimeCore {
                 any_press |= h.on_any_press.is_some();
                 pointer_lock |= h.pointer_lock.is_some();
             }
+            link_hover |= n.text.as_deref().is_some_and(|t| t.cold.get().is_some_and(|c| c.on_link_hover.is_some()));
             key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
             raise |= n.vis_flags.raise();
             ordered |= n.vis.paint_order != 0;
@@ -61,6 +62,7 @@ impl RuntimeCore {
         self.tree.has_mount = mount;
         self.tree.has_key_up = key_up;
         self.tree.has_any_press = any_press;
+        self.tree.has_link_hover = link_hover;
         self.tree.has_pointer_lock = pointer_lock;
         self.tree.has_sticky = self.holding() || sticky;
         self.tree.has_raise = raise;

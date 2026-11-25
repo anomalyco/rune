@@ -3,6 +3,7 @@ mod markdown_blocks_and_highlights;
 mod markdown_copy_source;
 mod markdown_diff_frame;
 mod markdown_find;
+mod markdown_link_hover;
 mod markdown_link_menu;
 mod markdown_link_rect;
 mod markdown_quote_frame;

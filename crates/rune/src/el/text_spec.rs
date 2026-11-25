@@ -1,7 +1,7 @@
 //! [`TextSpec`]: what a text element shows and how it lays out.
 use crate::cold::{Cold, Empty};
 use crate::color::Color;
-use crate::el::{Align, LinkFn, LinkSecondaryFn};
+use crate::el::{Align, LinkFn, LinkHoverFn, LinkSecondaryFn};
 use crate::text::{Link, Span};
 use crate::tok::TextStyle;
 
@@ -89,6 +89,7 @@ pub(crate) struct TextCold {
     pub(crate) links: Vec<Link>,
     pub(crate) on_link: Option<LinkFn>,
     pub(crate) on_link_secondary: Option<LinkSecondaryFn>,
+    pub(crate) on_link_hover: Option<LinkHoverFn>,
     /// See [`El::link_cursor`](crate::El::link_cursor).
     pub(crate) link_cursor: Option<crate::el::Cursor>,
     /// Measured as its slice at this byte of the run (see [`El::advance_in`](crate::El::advance_in)).
@@ -146,6 +147,7 @@ impl Empty for TextCold {
         links: Vec::new(),
         on_link: None,
         on_link_secondary: None,
+        on_link_hover: None,
         link_cursor: None,
         advance_in: None,
         caret: None,

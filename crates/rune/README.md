@@ -728,6 +728,7 @@ top-left, which is what popups and context menus anchor to.
 | `Cx::window_layout`, `window_layout_with`, `memo::window_layout` | `[x, y, w, h]`, as laid out, after scrolling | window |
 | `Cx::anchor_placement`, `memo::anchor_placement` | resolved `(Side, Align)` of an anchored overlay after RTL mirroring and flipping; re-runs only when the resolved placement changes | physical side/align |
 | `on_link` (`Tx::link_rect`) | `[left, top, width, height]` of the activated link's first drawn line box (pointer, keyboard, or a11y) | window |
+| `on_link_hover` | `Option<[left, top, width, height]>` of the hovered link's hit line box on enter/switch, `None` on leave | window |
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
 `on_press_tx`, `on_background_press_tx`, `on_double_press_tx`, and `on_middle_press` expose
@@ -737,7 +738,7 @@ assistive-technology activation and outside press handlers). Inside `El::on_link
 `Markdown::on_link_tx`), `tx.link_rect() -> Option<[f32; 4]>` returns `[left, top, width, height]`
 in window points for the activated link's first drawn line box on pointer click, touch tap,
 keyboard Enter/Space, and assistive-technology activation (`None` in every other handler and when
-the link was not drawn this frame). Add `.hover_tracks_bounds()` to an
+the link was not drawn this frame). `El::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)` fires only on transitions between hovered links (and `(None, None)` when hover ends via pointer leave, scroll under a stationary pointer, overlying hit occlusion, unmount, rebuild, or turning disabled/inert; touch has no hover and windows without a handler pay no pointer-move work), reporting the hit line box in window points and sharing geometry with `Tx::link_rect()`. Read `tx.pressing() -> bool` inside `on_link_hover` or any other handler to tell whether any mouse button is currently held down (matching `PointerEvent::pressing`). Add `.hover_tracks_bounds()` to an
 element to make `on_hover_change` and hover/press paint tracks follow whether a held press is
 currently inside its clipped/`press_scale`-compensated hit bounds and inside the window (including
 on coordinate-less pointer-leave) without ending capture or changing ancestor defaults. `on_hover`,

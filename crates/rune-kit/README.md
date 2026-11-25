@@ -443,7 +443,10 @@ draws Markdown tables with the same font, padding and rules.
 Feature `markdown`: `Markdown::new(src).build(&kit)`, or without a kit
 `Markdown::new(src).render(&MarkdownStyle::neutral(dark))`.
 It renders CommonMark plus GFM tables, and is built for streaming: re-render with the longer
-source each time, and earlier blocks stay mounted.
+source each time, and earlier blocks stay mounted. `Markdown::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)`
+reports the hovered link's destination and hit line box in window points (activating link hover
+tracking even without `on_link` or `on_link_secondary`, and leaving the old block before entering
+the new one across paragraphs; see `rune-markdown--link-hover` in `kit-gallery`).
 
 - **Tables** keep their header row, per-column alignment and inline formatting. Columns start
   at their content's width, so a table with room never wraps a cell, and shrink in proportion

@@ -580,10 +580,12 @@ impl RuntimeCore {
             self.pointer.pos = None;
             self.pointer.hovered = None;
             self.refresh_hover_within();
+            self.refresh_link_hover(false);
         } else {
             self.pointer.set_left(true);
             self.pointer.hovered = None;
             self.refresh_hover_within();
+            self.refresh_link_hover(false);
         }
     }
 

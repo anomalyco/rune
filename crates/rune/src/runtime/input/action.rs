@@ -36,6 +36,9 @@ pub(in crate::runtime) enum Action {
     Link(String, usize, crate::PointerButton),
     /// `El::on_link_secondary`: the text, its link and the press.
     LinkSecondary(String, usize, PointerEvent),
+    /// `El::on_link_hover`: the text, hovered link id (or `None` on leave), hit line box
+    /// `[left, top, width, height]` in window points, and whether any mouse button was held.
+    LinkHover(String, Option<String>, Option<[f32; 4]>, bool),
     SecondaryPress(String, PointerEvent),
     /// A same-frame outside secondary press that dismissed a menu modal on Windows and waits for
     /// the dismissal to commit and rebuild hit-testing before resolving what lies under it.
@@ -182,6 +185,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::AnyPress(..) => "on_any_press",
         Action::Link(..) => "on_link",
         Action::LinkSecondary(..) => "on_link_secondary",
+        Action::LinkHover(..) => "on_link_hover",
         Action::SecondaryPress(..) => "on_secondary_press",
         Action::Drag(..) | Action::DragRepeat(..) => "on_drag",
         Action::DragStart(_) => "on_drag_start",
@@ -202,7 +206,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
 pub(in crate::runtime) fn action_path(action: &Action) -> Option<&str> {
     match action {
         Action::PointerMove(path, _) | Action::PointerLockMotion(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path, ..) | Action::MiddlePress(path, ..) | Action::AnyPress(path, ..)
-        | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
+        | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::LinkHover(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
         Action::Wheel { chain, .. } => chain.as_deref().and_then(|c| c.first()).map(String::as_str),
         Action::Gesture(chain, _) => chain.first().map(String::as_str),
@@ -522,6 +526,10 @@ impl RuntimeCore {
                 self.press_link(app, &path, k, &mut one)
             }
             Action::LinkSecondary(path, k, point) => self.secondary_press_link(app, &path, k, point, &mut one),
+            Action::LinkHover(path, url, rect, pressing) => {
+                one.pressing = pressing;
+                self.dispatch_link_hover(app, &path, url.as_deref(), rect, &mut one)
+            }
             Action::SecondaryPress(path, point) => {
                 let Some(n) = self.node(&path).filter(|n| !self.is_exiting(n.id)) else { return false };
                 let Some(f) = n.handlers.on_secondary_press.clone() else { return false };

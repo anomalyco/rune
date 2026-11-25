@@ -116,6 +116,8 @@ pub struct Tx {
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The mouse button driving this press or drag (`Tx::button`).
     pub(crate) button: crate::PointerButton,
+    /// Whether any mouse button was held down anywhere in the window ([`Tx::pressing`]).
+    pub(crate) pressing: bool,
     pub(crate) touch_tap: bool,
     /// `Tx::press_point`.
     pub(crate) press_point: Option<PointerEvent>,

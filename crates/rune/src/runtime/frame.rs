@@ -192,7 +192,7 @@ impl RuntimeCore {
             // any hover-delay timer, so deliver them before a later leave deadline fires.
             let mut input = Vec::new();
             for q in std::mem::take(&mut self.frame.queue) {
-                if matches!(q.action, Action::HoverChange(..)) {
+                if matches!(q.action, Action::HoverChange(..) | Action::LinkHover(..)) {
                     self.frame.queue.push_queued(q);
                 } else {
                     input.push(q);
@@ -443,7 +443,7 @@ impl RuntimeCore {
         // A handler asked for a menu: the hover it takes ends in this commit, not a frame later.
         if self.release_pointer_for_popup() {
             for queued in std::mem::take(&mut self.frame.queue) {
-                if !matches!(queued.action, Action::HoverChange(..)) { self.frame.queue.push_queued(queued); continue; }
+                if !matches!(queued.action, Action::HoverChange(..) | Action::LinkHover(..)) { self.frame.queue.push_queued(queued); continue; }
                 #[cfg(debug_assertions)]
                 let checks = self.frame.live_checks();
                 let r = self.run_action(app, queued.action, &mut tx);

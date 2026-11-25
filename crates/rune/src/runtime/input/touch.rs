@@ -201,6 +201,9 @@ pub(in crate::runtime) fn step_hold(seq: &mut Seq, state: &mut HoldState, event:
 pub(in crate::runtime) struct Touch {
     pub(in crate::runtime) scroll: Option<scroll_touch::TouchScroll>,
     finger: Option<Finger>,
+    /// True while inside `touch_down` or `touch_up`, so synthetic pointer moves/leaves emitted
+    /// by touch handling never start a mouse link hover.
+    in_touch: bool,
     hold_seq: Seq,
     hold: HoldState,
     policy: TouchHoldPolicy,
@@ -268,6 +271,12 @@ impl capture::PointerState {
     #[inline]
     pub(in crate::runtime) fn touching(&self) -> bool {
         self.touch.finger.is_some()
+    }
+
+    /// Whether a touch finger is active or a touch down/up event is being processed now.
+    #[inline]
+    pub(in crate::runtime) fn is_touch_input(&self) -> bool {
+        self.touch.finger.is_some() || self.touch.in_touch
     }
 
     /// Next wake deadline on the runtime clock for an armed touch hold, or `None` when idle.
@@ -345,6 +354,12 @@ impl RuntimeCore {
     }
 
     fn touch_down(&mut self, app: &mut dyn AppDriver, id: u64, x: f32, y: f32, time: f64) {
+        self.pointer.touch.in_touch = true;
+        self.touch_down_inner(app, id, x, y, time);
+        self.pointer.touch.in_touch = false;
+    }
+
+    fn touch_down_inner(&mut self, app: &mut dyn AppDriver, id: u64, x: f32, y: f32, time: f64) {
         if self.pointer.touch.finger.is_some() { return; }
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(app, x, y);
@@ -426,6 +441,12 @@ impl RuntimeCore {
     }
 
     fn touch_up(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64, cancelled: bool) {
+        self.pointer.touch.in_touch = true;
+        self.touch_up_inner(app, id, x, y, time, cancelled);
+        self.pointer.touch.in_touch = false;
+    }
+
+    fn touch_up_inner(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64, cancelled: bool) {
         let Some(f) = self.pointer.touch.finger.take_if(|f| f.id == id) else { return };
         let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
         let _ = self.apply_hold_effects(effects);
