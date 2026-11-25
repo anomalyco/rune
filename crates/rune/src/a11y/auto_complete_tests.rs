@@ -417,11 +417,14 @@ fn auto_complete_edges_secure_disabled_read_only_and_rtl() {
     let rtl = find(&json, "rtl").unwrap();
     assert_eq!((&rtl["name"], &rtl["value"], &rtl["autoComplete"]), (&json!("الفاكهة"), &json!("تفاح"), &json!("list")));
 
-    // Web mirror never emits secure editable comboboxes or leaks their value, while mirroring the rest.
+    // Web mirror never leaks a secure editable combobox's value. An unfocused secure input is
+    // mirrored like a password field: a plain textbox with its name and no value, never a
+    // combobox, so nothing in the mirror offers its completions.
     let a11y_str = rt.a11y_json();
     assert!(!a11y_str.contains("hunter2"), "secure combobox value must not leak: {a11y_str}");
     let items: Vec<Value> = serde_json::from_str(&a11y_str).unwrap();
-    assert!(!items.iter().any(|v| v["t"] == "Secret"), "secure combobox omitted from web mirror");
+    let w_sec = items.iter().find(|v| v["t"] == "Secret").expect("secure combobox mirrored as a textbox");
+    assert_eq!((&w_sec["k"], &w_sec["o"], w_sec.get("v")), (&json!("textbox"), &json!("textbox"), None), "secure combobox in web mirror: {w_sec}");
     let w_dis = items.iter().find(|v| v["t"] == "Disabled combo").expect("disabled combo in web mirror");
     assert_eq!((&w_dis["ac"], &w_dis["dis"]), (&json!("inline"), &json!(true)));
     assert!(!rt.web_a11y_action(&json!({ "kind": "a11y_press", "path": w_dis["p"].as_str().unwrap() })));
