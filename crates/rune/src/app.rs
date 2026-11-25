@@ -139,6 +139,7 @@ pub struct App<S: 'static> {
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) on_ready: Option<OnWindow>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) on_window_geometry: Option<crate::window::geometry::OnWindowGeometry<S>>,
     pub(crate) on_display_close: Option<OnDisplayClose>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
@@ -215,6 +216,7 @@ impl<S: 'static> App<S> {
             windows: Vec::new(),
             on_window: None,
             on_ready: None,
+            #[cfg(not(target_arch = "wasm32"))]
             on_window_geometry: None,
             on_display_close: None,
             on_frame_encoded: None,
@@ -924,8 +926,10 @@ impl<S: 'static> App<S> {
     /// Windows: the links among the launch arguments (`scheme://…`), as Windows passes a link to
     /// the process it starts, and with `rune::single_instance` the links of every later launch,
     /// which that launch hands to this process instead of opening a window. The app registers its
-    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install). Never
-    /// called on other platforms (Linux passes links to a new process as arguments).
+    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install), and
+    /// names it with `rune::url_schemes` so only arguments on it are links: without that a flag's
+    /// URL value (`--server http://localhost:4096`) is one too. Never called on other platforms
+    /// (Linux passes links to a new process as arguments).
     pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut Tx)) -> Self {
         self.on_open_url = Some(f);
         self

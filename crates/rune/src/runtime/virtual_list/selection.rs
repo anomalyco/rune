@@ -64,6 +64,7 @@ pub(crate) fn collect_virtual_row_selection(
     row_index: usize,
     list_group: Option<&str>,
     list_inert: bool,
+    list_selection_off: bool,
     texts: &mut Vec<OffscreenText>,
     copy_providers: &mut Vec<(String, SelectionCopy)>,
 ) {
@@ -71,7 +72,7 @@ pub(crate) fn collect_virtual_row_selection(
     let row_path = crate::runtime::flatten::node_path(list_path, Some(row_key), 0);
     walk_row_el(
         row_el, list_path, row_key, row_index, &row_path, "",
-        list_group, list_inert, &mut order_in_row, texts, copy_providers,
+        list_group, list_inert, list_selection_off, &mut order_in_row, texts, copy_providers,
     );
 }
 
@@ -86,10 +87,11 @@ pub(crate) fn collect_row_into_pins(
     row_index: usize,
     list_group: Option<&str>,
     list_inert: bool,
+    list_selection_off: bool,
 ) {
     if let Some((texts, providers)) = pins.text_buffers() {
         collect_virtual_row_selection(
-            row_el, list_path, row_key, row_index, list_group, list_inert, texts, providers,
+            row_el, list_path, row_key, row_index, list_group, list_inert, list_selection_off, texts, providers,
         );
     }
 }
@@ -104,11 +106,13 @@ fn walk_row_el<'a>(
     rel_path: &str,
     parent_group: Option<&'a str>,
     parent_inert: bool,
+    parent_selection_off: bool,
     order_in_row: &mut usize,
     texts: &mut Vec<OffscreenText>,
     copy_providers: &mut Vec<(String, SelectionCopy)>,
 ) {
     let inert = parent_inert || el.flags.has(crate::el::ElFlags::INERT);
+    let selection_off = crate::el::selection_off(el.cold.selection_enabled, parent_selection_off);
     let group = if el.flags.has(crate::el::ElFlags::SELECTION_GROUP) { Some(path) } else { parent_group };
     if !inert && let Some(f) = el.handlers.get().and_then(|h| h.selection_copy.as_ref()) {
         copy_providers.push((path.to_owned(), f.clone()));
@@ -116,7 +120,7 @@ fn walk_row_el<'a>(
     let is_row = el.style.display() == Display::Flex
         && matches!(el.style.flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
     let mut had_child_text = false;
-    if !inert && el.cold.input.is_none() && let Some(t) = &el.text && t.selectable && !t.redacted {
+    if !inert && !selection_off && el.cold.input.is_none() && let Some(t) = &el.text && t.selectable && !t.redacted {
         let mut spec = TextSpec::clone(t);
         spec.apply_isolates();
         spec.apply_case();
@@ -141,7 +145,7 @@ fn walk_row_el<'a>(
         let before_len = texts.len();
         walk_row_el(
             child, list_path, row_key, row_index, &child_path, &child_rel,
-            group, inert, order_in_row, texts, copy_providers,
+            group, inert, selection_off, order_in_row, texts, copy_providers,
         );
         if texts.len() > before_len {
             if had_child_text {

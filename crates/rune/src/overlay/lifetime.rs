@@ -84,7 +84,7 @@ impl OverlayCore {
         if !surface && !parks { return; }
         self.resolve_size(event_loop);
         let made = if wayland {
-            self.layer(app, event_loop).or_else(|| self.xwayland(app))
+            self.layer(app, event_loop).or_else(|| self.xwayland(app)).or_else(|| self.toplevel(app, event_loop))
         } else if self.surface.parked().is_some() || self.window(app, event_loop).is_some() {
             // macOS made the surface with its panel; elsewhere the window waits parked.
             match self.surface.take_live() {
@@ -298,9 +298,13 @@ impl OverlayCore {
     /// Input stops, and the native window hides over `fade`. A fading window stays up while
     /// `presence_due` steps its alpha (Windows), then hides it.
     fn hide_window(&mut self, app: &mut dyn OverlayApp, fade: Duration) {
-        // A hide need not report a blur, and a hidden overlay hears none: what it held is
-        // released.
-        if self.options.keys == KeyPolicy::OnDemand { app.rt_mut().keys_lost(); }
+        // A hide need not report a blur (a Wayland surface goes without `wl_keyboard.leave`),
+        // and a hidden overlay hears none. A focused one blurs here, so `on_focus(false)` runs
+        // and the next show's focus is a change; what it held is released.
+        if self.options.keys.takes_keys() {
+            if app.rt().window_has_focus() { app.window_focus(false); }
+            app.rt_mut().keys_lost();
+        }
         self.mods = Default::default();
         self.control_click = false;
         self.ime.clear();
@@ -311,7 +315,7 @@ impl OverlayCore {
         let Some(live) = self.surface.live() else { return };
         match &live.backing {
             Backing::Window(window) => {
-                if self.options.keys == KeyPolicy::OnDemand {
+                if self.options.keys.takes_keys() {
                     crate::platform::ime::cancel(window);
                     window.set_ime_allowed(false);
                 }
@@ -332,6 +336,12 @@ impl OverlayCore {
                 let _ = fade;
                 #[cfg(not(target_os = "windows"))]
                 window.set_visible(false);
+                // Wayland can't hide a toplevel: it goes with the hide, as a layer surface does.
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                if super::toplevel::is_toplevel(window) {
+                    self.surface.take_live();
+                    self.drop_hidden_images(app);
+                }
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => {
@@ -374,10 +384,11 @@ impl OverlayCore {
             if w > 0 { self.at.size.0 = w as f32; }
             if h > 0 { self.at.size.1 = h as f32; }
         }
-        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
-            capture_exclusion: OverlaySupport::Unsupported, global_pointer: OverlaySupport::Unsupported,
-            nonactivating_keys: if layer.supports_keys() { OverlaySupport::Supported } else { OverlaySupport::Unsupported },
-        };
+        self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities::placed(
+            OverlaySupport::Unsupported,
+            if layer.supports_keys() { OverlaySupport::Supported } else { OverlaySupport::Unsupported },
+            OverlaySupport::Unsupported,
+        );
         self.attach(app, Backing::Layer(layer), scale as f32)
     }
 
@@ -428,6 +439,7 @@ impl OverlayCore {
                 return None;
             }
         };
+        crate::window::displays::track(&window);
         #[cfg(target_os = "macos")]
         crate::native_menu::adopt_standard_view();
         #[cfg(all(target_os = "linux", feature = "dbus"))]
@@ -447,9 +459,9 @@ impl OverlayCore {
             self.panel = Some(crate::platform::macos::Panel::adopt(&window, self.at, self.interactive, &self.options, self.macos_color_space, wake)?);
             let panel = self.panel.as_ref().unwrap();
             if let Some(level) = self.macos_level { panel.set_level(level); }
-            let native = (Some(panel.window_number()), crate::OverlayCapabilities {
-                capture_exclusion: panel.capture_exclusion(), nonactivating_keys: super::keys::keys_support(self.options.keys, true), global_pointer: OverlaySupport::Supported,
-            });
+            let native = (Some(panel.window_number()), crate::OverlayCapabilities::placed(
+                panel.capture_exclusion(), super::keys::keys_support(self.options.keys, true), OverlaySupport::Supported,
+            ));
             *self.shared.native.lock().unwrap() = native;
         }
         #[cfg(not(target_os = "macos"))]
@@ -459,9 +471,9 @@ impl OverlayCore {
             {
                 self.x11 = crate::platform::x11::overlay::InputWindow::new(&window, self.shared.wake.lock().unwrap().clone(), self.options.input.resolved(self.interactive), self.options.follow_pointer, self.options.keys);
                 if self.options.input == OverlayInput::Regions && self.x11.is_none() { return None; }
-                self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
-                    capture_exclusion: OverlaySupport::Unsupported, nonactivating_keys: super::keys::keys_support(self.options.keys, self.x11.is_some()), global_pointer: OverlaySupport::Supported,
-                };
+                self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities::placed(
+                    OverlaySupport::Unsupported, super::keys::keys_support(self.options.keys, self.x11.is_some()), OverlaySupport::Supported,
+                );
             }
             #[cfg(target_os = "windows")]
             {
@@ -473,9 +485,9 @@ impl OverlayCore {
                         return None;
                     }
                 }
-                self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities {
-                    capture_exclusion: self.native.as_ref().unwrap().capture_exclusion(), nonactivating_keys: super::keys::keys_support(self.options.keys, true), global_pointer: OverlaySupport::Supported,
-                };
+                self.shared.native.lock().unwrap().1 = crate::OverlayCapabilities::placed(
+                    self.native.as_ref().unwrap().capture_exclusion(), super::keys::keys_support(self.options.keys, true), OverlaySupport::Supported,
+                );
             }
         }
         self.place_window(app.rt_mut(), event_loop, &window);
@@ -547,3 +559,7 @@ impl OverlayCore {
         *self.shared.surface.lock().unwrap() = None;
     }
 }
+
+#[cfg(test)]
+#[path = "lifetime_tests.rs"]
+mod tests;

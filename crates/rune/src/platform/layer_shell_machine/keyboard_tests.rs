@@ -26,6 +26,27 @@ fn keyboard_focus_emits_focus_edges_and_releases_on_seat_loss_or_other_surface()
 }
 
 #[test]
+fn released_keys_blur_at_once_and_a_request_refocuses_when_no_leave_came() {
+    use super::keyboard::{FocusEffect, FocusEvent, FocusState, step};
+    let edges = |state: &mut FocusState, event| step(state, event).into_iter().collect::<Vec<_>>();
+    let mut state = FocusState::Focused;
+    assert_eq!(edges(&mut state, FocusEvent::Released), [FocusEffect::Focus(false)]);
+    assert!(!state.focused(), "keys after a release are dropped");
+    // The compositor sent no leave, so it may send no enter either: the request refocuses.
+    assert_eq!(edges(&mut state, FocusEvent::Requested), [FocusEffect::Focus(true)]);
+    assert!(edges(&mut state, FocusEvent::EnterOurs).is_empty(), "a late enter adds nothing");
+    // A compositor that does send leave: no second blur, and the next request waits for enter.
+    assert_eq!(edges(&mut state, FocusEvent::Released), [FocusEffect::Focus(false)]);
+    assert!(edges(&mut state, FocusEvent::LeaveOurs).is_empty());
+    assert!(edges(&mut state, FocusEvent::Requested).is_empty());
+    assert_eq!(edges(&mut state, FocusEvent::EnterOurs), [FocusEffect::Focus(true)]);
+    // Releasing an unfocused overlay changes nothing.
+    let mut state = FocusState::Unfocused;
+    assert!(edges(&mut state, FocusEvent::Released).is_empty());
+    assert_eq!(state, FocusState::Unfocused);
+}
+
+#[test]
 fn layer_shell_key_translation_handles_ctrl_modifiers_space_and_non_ascii_layouts() {
     use super::keyboard::{can_request_keys, key_event_from, supports_keys};
     use crate::{Key, KeyPolicy, Mods, PhysicalKeyCode};
@@ -55,6 +76,10 @@ fn layer_shell_key_translation_handles_ctrl_modifiers_space_and_non_ascii_layout
     assert!(supports_keys(KeyPolicy::OnDemand, 4, true));
     assert!(!supports_keys(KeyPolicy::OnDemand, 3, true));
     assert!(!supports_keys(KeyPolicy::OnDemand, 4, false));
+    // Exclusive interactivity is in every layer-shell version; it still needs a seat.
+    assert!(can_request_keys(KeyPolicy::Exclusive, 1));
+    assert!(supports_keys(KeyPolicy::Exclusive, 3, true));
+    assert!(!supports_keys(KeyPolicy::Exclusive, 4, false));
 }
 
 #[test]

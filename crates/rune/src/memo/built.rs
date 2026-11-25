@@ -70,6 +70,7 @@ fn el_flatten_reusable(e: &El) -> bool {
     // (`Measurement::keeps_windows`); one built from children isn't.
     let indexed = c.virtual_rows.is_some();
     (c.virtual_estimate.is_none() || indexed)
+        && c.virtual_items.is_none()
         && (c.growth.is_none() || indexed)
         && c.aspect_fit <= 0.0
         && c.above.is_none()

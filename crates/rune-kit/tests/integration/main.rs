@@ -45,6 +45,7 @@ mod switch_snap;
 mod table;
 mod table_columns;
 mod table_reorder;
+mod table_virtual_columns;
 mod text_area_chrome;
 mod text_area_focus_caret;
 mod text_area_grow;

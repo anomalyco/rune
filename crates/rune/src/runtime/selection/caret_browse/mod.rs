@@ -60,11 +60,12 @@ pub(super) enum StepOut {
 impl RuntimeCore {
     /// Whether node `n` is an opt-in caret-browsing host: a non-input `El::caret_browsing(true)`
     /// element that has not opted out of focus and is either a `selection_group` or selectable,
-    /// non-redacted text.
+    /// non-redacted text, outside an `El::selection_enabled(false)` subtree.
     #[inline]
     pub(crate) fn is_caret_browsing_node(&self, n: &Node) -> bool {
         !n.focus.opt_out
             && n.focus.caret_browsing
+            && !n.selection_off
             && n.input.is_none()
             && (n.selection_group || n.text.as_ref().is_some_and(|t| t.selectable && !t.redacted))
     }

@@ -98,6 +98,7 @@ impl RuntimeCore {
             scrolls: &mut self.scroll.scrolls,
             scroll_requests: &self.scroll.requests,
             virtuals: &mut self.commit.virtuals,
+            virtual_items: &mut self.commit.virtual_items,
             virtual_culled: &mut self.commit.virtual_culled,
             virtual_inputs: &mut self.commit.virtual_inputs,
             stats: &mut self.stats,
@@ -181,7 +182,7 @@ impl Measurement<'_> {
         // Index-built rows build here, so memos inside them share the view's cache. A window that
         // fits its content lays its root out at its natural height, which nothing bounds.
         let bound = if self.fit_height { f32::INFINITY } else { self.viewport.1 };
-        self.window_tree(&mut root, "", 0, None, tx, force_all, bound, false, None, false, keep_windows);
+        self.window_tree(&mut root, "", 0, None, tx, force_all, bound, false, false, None, false, keep_windows);
         root
     }
 
@@ -222,6 +223,7 @@ impl Measurement<'_> {
             self.pass = Pass::of(passes);
             self.virtual_culled.clear();
             self.virtual_inputs.clear();
+            self.virtual_items.clear_staged();
             self.windowed.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
@@ -267,7 +269,7 @@ impl Measurement<'_> {
     /// `bound` is the most `el` can be tall (see [`crate::el::virtual_list::height_bound`]); `scroll`
     /// is the scroll viewport `el` is the content of.
     #[allow(clippy::too_many_arguments)]
-    fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, bound: f32, inert: bool, group: Option<&str>, parent_sx: bool, keep_windows: bool) {
+    fn window_tree(&mut self, el: &mut El, parent: &str, index: usize, scroll: Option<ScrollCtx<'_>>, tx: &Tx, force_all: bool, bound: f32, inert: bool, selection_off: bool, group: Option<&str>, parent_sx: bool, keep_windows: bool) {
         if !el.flags.has(ElFlags::HAS_VIRTUAL) {
             return;
         }
@@ -280,9 +282,12 @@ impl Measurement<'_> {
         }
         el.expand_memo();
         let inert = inert || el.flags.has(ElFlags::INERT);
+        let selection_off = crate::el::selection_off(el.cold.selection_enabled, selection_off);
         let bound = crate::el::virtual_list::height_bound(&el.style, bound);
         let is_virtual = el.cold.virtual_estimate.is_some();
+        let is_virtual_items = el.cold.virtual_items.is_some();
         if let Some(estimate) = el.cold.virtual_estimate {
+            assert!(!is_virtual_items, "element at {path:?} cannot combine `.virtual_items(..)` with `.virtualize(..)` / `.virtual_rows(..)`");
             let w = match self.windowed.remove(&path) {
                 Some(w) => w,
                 None => self.window(el, &path, estimate, scroll, tx, force_all),
@@ -293,7 +298,17 @@ impl Measurement<'_> {
             }
             el.style.set_pad_top(w.pad_top);
             el.style.set_pad_bottom(w.pad_bottom);
-            self.populate_virtual_children(el, &path, source, inert, group);
+            self.populate_virtual_children(el, &path, source, inert, selection_off, group);
+        } else if let Some(source) = el.cold.virtual_items.clone() {
+            assert!(el.children.is_empty(), "`.virtual_items(..)` at {path:?} builds its own items; it takes no children");
+            el.children = self.virtual_items.populate_rebuild(
+                &path,
+                source,
+                force_all,
+                self.focused,
+                self.key_warnings,
+                self.virtual_culled,
+            );
         }
         let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children);
         // A virtual stack windows against the nearest scroll viewport around it, its rows' lists
@@ -307,7 +322,7 @@ impl Measurement<'_> {
         for (i, child) in el.children.iter_mut().enumerate() {
             if !child.flags.has(ElFlags::HAS_VIRTUAL) { continue; }
             let bound = bounds.of(child);
-            self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, child_group, child_sx, keep_windows);
+            self.window_tree(child, &path, i, scroll, tx, force_all, bound, inert, selection_off, child_group, child_sx, keep_windows);
         }
     }
 
@@ -646,12 +661,13 @@ impl Measurement<'_> {
         path: &str,
         source: Option<Rc<crate::el::virtual_rows::RowSource>>,
         inert: bool,
+        selection_off: bool,
         group: Option<&str>,
     ) {
         let state = self.app.states_ref();
         let v = self.virtuals.get_mut(path).unwrap();
         let list_group = if el.flags.has(ElFlags::SELECTION_GROUP) { Some(path.to_owned()) } else { group.map(str::to_owned) };
-        v.selection.scope = selectable::virtual_selection::Scope { group_path: list_group.clone(), inert };
+        v.selection.scope = selectable::virtual_selection::Scope { group_path: list_group.clone(), inert, selection_off };
         // Refill the kept rows' texts in place, so the vectors' allocations carry over and a
         // builder that panics partway leaves what it already collected.
         v.selection.pins.clear_texts();
@@ -698,7 +714,7 @@ impl Measurement<'_> {
                     collect_virtual_inputs(&row, path, i, inert, self.virtual_inputs);
                     if pinned.contains(&i) {
                         selectable::virtual_selection::collect_row_into_pins(
-                            &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert,
+                            &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert, selection_off,
                         );
                     }
                 }
@@ -706,7 +722,7 @@ impl Measurement<'_> {
                     if Some(i) == focused { continue; }
                     let row = build(i);
                     selectable::virtual_selection::collect_row_into_pins(
-                        &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert,
+                        &mut v.selection.pins, &row, path, &v.keys[i], i, list_group.as_deref(), inert, selection_off,
                     );
                 }
                 el.children = v.range.clone().zip(quiet).map(|(i, quiet)| {
@@ -749,7 +765,7 @@ impl Measurement<'_> {
                     collect_virtual_inputs(&child, path, i, inert, self.virtual_inputs);
                     if pinned.contains(&i) {
                         selectable::virtual_selection::collect_row_into_pins(
-                            &mut v.selection.pins, &child, path, &v.keys[i], i, list_group.as_deref(), inert,
+                            &mut v.selection.pins, &child, path, &v.keys[i], i, list_group.as_deref(), inert, selection_off,
                         );
                     }
                     v.selection.stored.insert(i, child);
@@ -766,6 +782,7 @@ impl RuntimeCore {
     /// Records which row of each virtual list holds focus, by key, so the row is still built
     /// after it scrolls out. Walks the node tree, since a key may itself contain `/`.
     pub(in crate::runtime) fn track_focused_rows(&mut self) {
+        self.commit.virtual_items.track_focused(&self.tree.nodes, self.kbd.focus.path());
         if self.commit.virtuals.is_empty() { return; }
         let focused = self.kbd.focus.path().and_then(|f| self.tree.nodes.iter().position(|n| n.path == f));
         for (path, v) in self.commit.virtuals.iter_mut() {
@@ -832,6 +849,9 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<ScrollCtx<'_>>, bou
         None => &el.children,
     };
     let bound = crate::el::virtual_list::height_bound(&el.style, bound);
+    if el.cold.virtual_items.is_some() {
+        return false;
+    }
     let is_virtual = el.cold.virtual_estimate.is_some();
     if is_virtual {
         if el.cold.virtual_rows.is_none() {

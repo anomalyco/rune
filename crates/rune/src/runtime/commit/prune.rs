@@ -89,6 +89,15 @@ impl RuntimeCore {
                     .is_some_and(|n| n.virtual_list)
             });
         }
+        if !self.commit.virtual_items.is_empty() {
+            let Self { commit, tree, .. } = self;
+            commit.virtual_items.retain_matching(|path| {
+                tree.path_ids.get(path)
+                    .and_then(|id| tree.node_index.get(id))
+                    .and_then(|&i| tree.nodes.get(i))
+                    .is_some_and(|n| n.virtual_items)
+            });
+        }
         if prune_paths {
             self.prune_path_ids();
         }

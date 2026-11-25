@@ -145,6 +145,55 @@ fn map_parts_with_mods(windows: bool, physical: PhysicalKey, logical: &WKey, tex
     Some(ev)
 }
 
+/// The platform's text for a key press, for `PhysicalInput::Key::text`: the text the layout
+/// typed ([`typed_text`], so Shift+Space on a Persian layout is ZWNJ, not the logical key's
+/// `" "`), `None` when it is empty and for a release. A Ctrl chord keeps the key's own text
+/// (`"c"` for Ctrl+C, not `"\x03"`); Enter's `"\r"` and other keys' control text stay.
+pub(crate) fn platform_text(event: &winit::event::KeyEvent) -> Option<String> {
+    if event.state != winit::event::ElementState::Pressed { return None; }
+    typed_text(event).filter(|t| !t.is_empty()).map(str::to_owned)
+}
+
+/// The modifiers the platform spent producing `text` ([`platform_text`]), for
+/// `PhysicalInput::Key::consumed_mods`, measured against the key's unmodified text.
+pub(crate) fn consumed_mods(event: &winit::event::KeyEvent, text: Option<&str>, mods: Mods) -> Mods {
+    consumed_from(cfg!(target_os = "windows"), mods, text, unmodified_text(event).as_deref())
+}
+
+/// `unmodified` is the key's text with no modifiers held, `None` when the host doesn't know it;
+/// then any text counts as differing. Alt is spent when the text differs from it, Shift when it
+/// does and Ctrl is not held. On Windows, Ctrl+Alt that typed text is AltGr: Ctrl (with `cmd`,
+/// which is Ctrl there) and Alt are spent, and Shift too when it is held and the text differs.
+/// `logo` is never spent, and nothing is without text or for control text (Enter's `"\r"`,
+/// Tab's `"\t"`, Backspace, Escape, Delete), so Alt+Enter keeps Alt and Shift+Tab keeps Shift.
+pub(crate) fn consumed_from(windows: bool, mods: Mods, text: Option<&str>, unmodified: Option<&str>) -> Mods {
+    let Some(text) = text.filter(|t| !t.chars().any(char::is_control)) else { return Mods::default() };
+    let differs = unmodified != Some(text);
+    if windows && mods.ctrl && mods.alt {
+        return Mods { ctrl: true, cmd: mods.cmd, alt: true, shift: mods.shift && differs, logo: false };
+    }
+    Mods { alt: mods.alt && differs, shift: mods.shift && !mods.ctrl && differs, ..Mods::default() }
+}
+
+/// The text `event`'s key types with no modifiers, as [`key_base`] reads it.
+fn unmodified_text(event: &winit::event::KeyEvent) -> Option<String> {
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    {
+        use winit::keyboard::NamedKey;
+        use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+        match event.key_without_modifiers() {
+            WKey::Character(s) => Some(s.to_string()),
+            WKey::Named(NamedKey::Space) => Some(" ".to_owned()),
+            _ => None,
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    {
+        let _ = event;
+        None
+    }
+}
+
 /// The character `event`'s key types under the current layout with no modifiers, for
 /// `Tx::key_base`.
 pub(crate) fn key_base(event: &winit::event::KeyEvent, m: ModifiersState) -> Option<char> {

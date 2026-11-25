@@ -491,6 +491,18 @@ policy changes are applied in the same mutation phase.
   follows it again.
   `.scroll_edge_fade(w)` fades a viewport's top and bottom only while content is hidden under
   them (strength = hidden extent / 15 pt), and `.scroll_margin(pts)` stops revealed rows clear of it.
+- **Virtual items** (`El::virtual_items(Rc<dyn VirtualItems>)`, `VirtualItems`): an app-windowed
+  keyed container for 2D canvases, node graphs, and LOD scenes positioned under `live_offset` /
+  `live_scale` (no scroll viewport or growth stack required). `VirtualItems::version()` is polled
+  in O(1) each frame so idle windows do no work; when the version changes, the commit takes the
+  remount fast path without re-running `view`. Staying items keep their retained subtrees,
+  `NodeId`, paint-keep epochs, `memo` entries, and `Live` / `LiveText` subscriptions without
+  calling `build`; leaving items unmount immediately except an item holding keyboard focus (or a
+  focused descendant), which stays pinned and mounted until focus leaves it; entering items mount
+  settled (no entrance animation while panning) up to optional `mount_budget()` per frame ordered
+  by `mount_priority(key)`, while mounted children always render in `keys()` back-to-front order.
+  Multi-frame fills use an explicit backoff/stall state machine so runaway version churn settles
+  safely. See the `Lists/Virtual items canvas` story in `examples/playground`.
 - **Sticky headers and bars** (`.sticky_top(inset)`, `.sticky_bottom(inset)`, `.stuck_shadow(shadow)`,
   `tx.keep_on_screen(key)`, `runtime/scroll/sticky.rs`): an element inside a vertical scroll viewport pins to the
   nearest scroll viewport's top or bottom edge (offset inward by `inset`) while its parent stays in
@@ -990,7 +1002,9 @@ app.run();
   process over a per-user named pipe and lets it take the foreground, and `single_instance`
   returns false so `main` returns without opening a window. Its links reach the hook; a launch
   without links reopens the app (`App::on_reopen`, then the default, which also brings the front
-  window forward, restored). Register the scheme for the user, usually at install:
+  window forward, restored). Call `rune::url_schemes(["myapp"])` before it to name the app's own
+  schemes: then only arguments on them are links, and a flag's URL value
+  (`--server http://localhost:4096`) isn't one. Register the scheme for the user, usually at install:
   `HKEY_CURRENT_USER\Software\Classes\myapp` with an empty `URL Protocol` value and
   `shell\open\command` set to `"C:\path\to\myapp.exe" "%1"`.
   `scripts/mac-app --scheme myapp` writes that entry and registers the bundle for you (see
@@ -1614,11 +1628,22 @@ const MOMENT: &[Beat] = &[
 el().key("moment").sequence(Sequence::new(MOMENT).delay(0.1))
 ```
 
-Each beat is a full opacity/scale pose at elapsed seconds; omitted values are 1.
+Each beat is a full pose at elapsed seconds: opacity and scale (omitted values are 1),
+`Beat::translate(x, y)` in points and `Beat::rotate(radians)` (omitted values are 0).
+Translate and rotate add to the element's `El::offset` and `El::rotate`, carry its
+subtree and hit testing along, and scale and rotate pivot on `El::origin`. An
+`El::live_offset` or `El::live_rotation` keeps its channel, and beats leave it alone.
+While a sequence plays (a repeating one from its start until it's dropped), and while a
+one-shot waits out its `delay` holding its first beat, `El::offset` and `El::rotate`
+changes land at once. Once a one-shot has finished, or before a repeating one starts,
+they spring as usual. Dropping a sequence springs the element back to its own offset
+and rotation. A row that
+rises in is `Beat::new(0.0).opacity(0.0).translate(0.0, 4.0)` then `Beat::new(0.2)`.
 `Beat::easing` sets the arriving segment's easing (default ease-in-out). Unchanged
 specs keep their progress across commits; changing the spec or mounting a new key
 replays it. Reduced motion and explicit settle land the final pose immediately.
-Scale changes presentation, not layout. This finite API is separate from the
+Scale, translate and rotate change presentation, not layout. Scale is uniform; beats
+have no separate x and y scale yet. This finite API is separate from the
 lower-level `rune_motion::Keyframes<T>` property-track builder.
 
 ### Shared-element motion
@@ -2216,6 +2241,26 @@ and its `on_secondary_press` wins over the Copy menu. A drag that selects text d
 Inside a draggable row (`on_drag` or `drag_out`), dragging drags the row and double- and
 triple-clicks still select words and lines. Text with its own handlers keeps them.
 
+`El::selection_enabled(false)` turns selection off for every selectable text in an element and
+everything under it, as SwiftUI's `.textSelection(.disabled)` does for a view's subtree, so one
+app setting ("Enable text selection") set on the view's root reaches every text: no drag,
+double- or triple-click, Cmd+A, `tx.select_text`, `tx.select_all_text` or copy, and those texts
+leave the selection group they sit in. `El::selection_enabled(true)` on a descendant turns them
+back on for its subtree (an id meant to be copied), and a subtree that sets neither follows its
+nearest ancestor that did. It doesn't make text selectable by itself: texts still ask with
+`selectable(true)`. A text it turns off drops the I-beam `selectable` gave it, while a cursor set
+with `El::cursor` stays. Turning it off under a held selection clears that selection at the next
+commit. Unbuilt `virtual_rows` / `virtualize` rows follow it, so a Cmd+A or copy across them leaves
+their turned-off texts out, and a `caret_browsing` group inside a turned-off subtree doesn't take
+focus.
+
+```rust
+col()
+    .selection_enabled(settings.text_selection)
+    .child(text(&message.body).selectable(true))
+    .child(text(&message.id).selectable(true).selection_enabled(true))
+```
+
 `El::caret_browsing(true)` opts a selectable text or `selection_group(true)` container into
 keyboard caret browsing (off by default, leaving ordinary selectable text non-focusable): the
 element becomes focusable via click or Tab, draws a 1.5 pt caret when focused and collapsed
@@ -2550,6 +2595,11 @@ click-through presentation at that display's physical origin and size.
 desktop pixels (`GetMonitorInfoW`'s `rcWork` excluding the taskbar and docked app
 bars on Windows; `(position, size)` elsewhere or when disconnected). Options
 also support initially hidden windows and per-window minimum sizes.
+`rune::displays()` reads the same list again while the app runs (on the UI thread,
+through an open window), so an app can find a monitor plugged in after launch and
+`open_window` an overlay window on it. With no window open it returns the list last
+read; headless runs return their virtual desktop. Rune does not yet report when
+displays change.
 
 On macOS, `MacWindowOptions` (via `App::macos_window`, `WindowSpec::macos_window`,
 `WindowOptions::macos`, or `ConfiguredWindowOptions::macos`) configures AppKit properties
@@ -3020,6 +3070,15 @@ is one more host on the event loop
   or the display connection fails, the overlay hides, marks itself `Availability::Unavailable`
   with `failure()` populated, and fires `on_availability`; a later successful `show()`
   clears `failure()` and transitions back to `Availability::Available`.
+- Wayland without layer-shell (GNOME): an overlay that takes no input, or the pointer when
+  `OverlayOptions::xwayland_input` opts in, shows on XWayland as an override-redirect window.
+  Failing that (no XWayland, `KeyPolicy::OnDemand`, or pointer input without the opt-in), it
+  falls back to an undecorated, transparent xdg toplevel carrying the app's id, destroyed on
+  hide. The protocol gives a toplevel no position or stacking, and its input region is the whole
+  surface or nothing, so `capabilities()` reports `placement` and `always_on_top` as
+  `Unsupported`, and `click_through` too under `OverlayInput::Regions`; the compositor may also
+  focus it when it maps (`nonactivating_keys` is `Unsupported`). Every other backend reports
+  those three `Supported`.
 - X11: an override-redirect notification window, empty input shape unless interactive.
 - macOS: winit's view (and the Metal layer wgpu draws into) moves into a non-activating
   `NSPanel` (`NonactivatingPanel`, `becomesKeyOnlyIfNeeded`) at status level (25) on every
@@ -3035,6 +3094,13 @@ is one more host on the event loop
   its backend can: the macOS panel becomes key, a layer-shell (v4) surface asks for keyboard
   interactivity, an X11 window sets the input focus itself, and a Windows window is made without
   `WS_EX_NOACTIVATE` and takes the foreground when Windows lets the process. XWayland can't.
+  `KeyPolicy::Exclusive` is the same except on layer-shell (any version), where `request_keys`
+  asks for exclusive interactivity, so the overlay keeps the keys wherever the pointer goes
+  (Hyprland's `follow_mouse` moves on-demand focus away). `OverlayHandle::release_keys` sets a
+  layer's interactivity back to none and blurs the overlay without destroying it; on other
+  backends it does nothing yet. No safety net exists yet: an app whose event loop hangs while an
+  `Exclusive` layer holds the keys leaves the desktop without a keyboard until it exits or is
+  killed.
 - Checked under headless sway (layer shell, and Xwayland for X11) and on macOS (panel level,
   bounds, hide and reshow). Windows builds are checked with `cargo xwin clippy` only.
 - `El::window_drag()` (and `El::no_window_drag()`) moves window-backed overlays (Windows, macOS
@@ -3593,6 +3659,26 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
   if let Some(run) = rune::tooling::headless_run() {
       let typed = run.events().iter().filter(|e| matches!(e.event, ScriptEvent::Key { .. })).count();
       let end_card = run.mark("end").unwrap_or(run.script_end() + 1.0);
+  }
+  ```
+- **Listing Rune's flags in an app-owned CLI**: an app that parses its own command line (with
+  `clap`, `lexopt`, or a custom parser) and forwards Rune flags via `App::args` can read
+  `rune::tooling::flags()` (or `rune::tooling::Args::flags()`) for the static `&'static [FlagSpec]`
+  table of every flag Rune's parser accepts in the current build (long name, optional short alias,
+  `FlagValue::{None, Required, Optional}`, one-line description, optional Cargo feature gate, and
+  repeatability). Feature-gated flags (`hot`) appear only when enabled; a release build without
+  `tooling` or `hot` returns an empty slice (`&[]`) because no process flags are parsed there.
+
+  ```rust
+  use rune::tooling::{FlagValue, flags};
+
+  for flag in flags() {
+      match flag.value {
+          FlagValue::None => println!("  {}  {}", flag.name, flag.description),
+          FlagValue::Required(v) => println!("  {} {v}  {}", flag.name, flag.description),
+          FlagValue::Optional(v) => println!("  {} [{v}]  {}", flag.name, flag.description),
+          _ => println!("  {}  {}", flag.name, flag.description),
+      }
   }
   ```
 - **Timing**: every headless run prints per-frame CPU time (update, build and encode/submit, without

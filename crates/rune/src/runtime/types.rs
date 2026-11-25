@@ -153,6 +153,8 @@ pub(crate) struct Node {
     pub(super) whole: bool,
     /// Inside an `El::inert` subtree (this element or an ancestor).
     pub(crate) inert: bool,
+    /// Inside an `El::selection_enabled(false)` subtree no `true` reopens: its texts don't select.
+    pub(crate) selection_off: bool,
     /// The direction it lays out in (`El::dir`, its own or inherited): right to left, its
     /// children's x mirror inside it and its inset's sides swap.
     pub(crate) flow: crate::el::Flow,
@@ -167,6 +169,8 @@ pub(crate) struct Node {
     pub(super) virtual_mount: bool,
     /// Built from `El::virtualize` or `El::virtual_rows`.
     pub(super) virtual_list: bool,
+    /// Built from `El::virtual_items`.
+    pub(super) virtual_items: bool,
     /// `El::selection_group`.
     pub(super) selection_group: bool,
     pub(super) window_drag: crate::el::WindowDrag,
@@ -246,6 +250,7 @@ impl Node {
             streaming: false,
             whole: false,
             inert: false,
+            selection_off: old.selection_off,
             flow: old.flow,
             directed: old.directed,
             pin: old.pin,
@@ -253,6 +258,7 @@ impl Node {
             group_fade: old.group_fade,
             virtual_mount: false,
             virtual_list: false,
+            virtual_items: false,
             selection_group: false,
             window_drag: crate::el::WindowDrag::None,
             ime_cursor: false,

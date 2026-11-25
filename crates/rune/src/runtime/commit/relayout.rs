@@ -114,6 +114,8 @@ impl RuntimeCore {
                 }
             };
         }
+        // A full view rebuild resets any stalled virtual_items fill so fresh app state can fill.
+        self.commit.virtual_items.reset_fill();
         // A first commit has no layout to refresh from: its view is given the last launch's
         // rects when the app kept them (`layout_seed`).
         if !self.seed_layout_reads() { self.refresh_layout_seen(); }
@@ -231,7 +233,7 @@ impl Measurement<'_> {
                 let (offset, pinned) = v.at(s.offset as f32, s.pinned());
                 v.needs_window(offset, pinned) || v.spare(offset, pinned) > v.viewport
             })
-        })
+        }) || self.virtual_items.iter().any(|(path, c)| c.wants_window(path, self.focused))
     }
 
     /// Lays `nodes` out from `root_id` at the viewport, places them, and lays out their text.

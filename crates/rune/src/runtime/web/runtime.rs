@@ -102,7 +102,7 @@ impl RuntimeCore {
     /// for the next: layout, visibility, rows shown, a selection's change) waits for the display.
     fn web_needs_event(action: &Action) -> bool {
         matches!(action, Action::Press(..) | Action::DoublePress(..) | Action::MiddlePress(..) | Action::AnyPress(..) | Action::Link(..) | Action::LinkSecondary(..)
-            | Action::SecondaryPress(..) | Action::SecondaryRepost { .. } | Action::Drag(..) | Action::DragRepeat(..) | Action::DragStart(_) | Action::DragEnd(..) | Action::Dismiss(_)
+            | Action::SecondaryPress(..) | Action::SecondaryRepost { .. } | Action::Drag(..) | Action::DragRepeat(..) | Action::DragStart(_) | Action::DragEnd(..) | Action::EdgeDrag(..) | Action::Dismiss(_)
             | Action::FieldMenu(..) | Action::Files(_) | Action::Paste(..) | Action::ClipboardRead(..) | Action::FileDialog(..) | Action::Key { .. }
             | Action::KeyUp(_) | Action::Physical(..) | Action::Focus(..) | Action::FocusControl(_) | Action::Blur)
     }
@@ -188,7 +188,11 @@ impl RuntimeCore {
         let activate = event_key.key == crate::Key::Tab;
         let repeat = flag("repeat");
         if let Some(key) = code {
-            self.physical_then(app, crate::PhysicalInput::Key { key, mods, pressed: true, repeat }, Some(event_key), base, None);
+            // Only Space reaches here as text (other text arrives as typed input), so the
+            // unmodified key is `base`.
+            let text = match &event_key.key { crate::Key::Text(t) => Some(t.clone()), _ => None };
+            let consumed_mods = crate::window::consumed_from(false, mods, text.as_deref(), base.map(String::from).as_deref());
+            self.physical_then(app, crate::PhysicalInput::Key { key, mods, pressed: true, repeat, text, consumed_mods }, Some(event_key), base, None);
         } else if repeat {
             self.repeat_key(event_key);
         } else {

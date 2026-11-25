@@ -1,0 +1,1 @@
+- Overlays: hiding a focused `KeyPolicy::OnDemand` or `Exclusive` overlay now reports the blur, so `on_focus(false)` runs on hide and the next show's `on_focus(true)` is heard; before, a Wayland layer-shell or toplevel overlay, whose surface goes without `wl_keyboard.leave`, heard `on_focus` only on its first show.

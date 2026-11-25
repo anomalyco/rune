@@ -150,6 +150,10 @@ pub(crate) mod keyboard {
         #[default]
         Unfocused,
         Focused,
+        /// `release_keys` blurred the overlay, but the compositor has sent no `wl_keyboard.leave`
+        /// yet and may never send one: it may still count our surface as focused, so a later
+        /// `request_keys` may get no new `enter`. Keys are dropped here.
+        Released,
     }
 
     impl FocusState {
@@ -163,6 +167,10 @@ pub(crate) mod keyboard {
         EnterOther,
         LeaveOurs,
         KeyboardGone,
+        /// `release_keys` set keyboard interactivity to none.
+        Released,
+        /// `request_keys` asked for keyboard interactivity again.
+        Requested,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,6 +188,21 @@ pub(crate) mod keyboard {
             (FocusState::Focused, FocusEvent::EnterOther | FocusEvent::LeaveOurs | FocusEvent::KeyboardGone) => {
                 *state = FocusState::Unfocused;
                 Effects::one(FocusEffect::Focus(false))
+            }
+            (FocusState::Focused, FocusEvent::Released) => {
+                *state = FocusState::Released;
+                Effects::one(FocusEffect::Focus(false))
+            }
+            // The compositor never took the keys away, so it may not hand them back with an
+            // `enter`: the request refocuses. A compositor that does send `enter` lands here too.
+            (FocusState::Released, FocusEvent::Requested | FocusEvent::EnterOurs) => {
+                *state = FocusState::Focused;
+                Effects::one(FocusEffect::Focus(true))
+            }
+            // The late leave (or another surface's enter) settles it; the blur was already sent.
+            (FocusState::Released, FocusEvent::EnterOther | FocusEvent::LeaveOurs | FocusEvent::KeyboardGone) => {
+                *state = FocusState::Unfocused;
+                Effects::none()
             }
             _ => Effects::none(),
         }
@@ -312,9 +335,14 @@ pub(crate) mod keyboard {
     }
 
     /// Whether a layer-shell overlay with `policy` may request keyboard interactivity on
-    /// `zwlr_layer_surface_v1` `layer_version`.
+    /// `zwlr_layer_surface_v1` `layer_version`. On-demand needs version 4; exclusive is in
+    /// every version.
     pub(crate) fn can_request_keys(policy: crate::KeyPolicy, layer_version: u32) -> bool {
-        policy == crate::KeyPolicy::OnDemand && layer_version >= 4
+        match policy {
+            crate::KeyPolicy::None => false,
+            crate::KeyPolicy::OnDemand => layer_version >= 4,
+            crate::KeyPolicy::Exclusive => true,
+        }
     }
 
     /// Whether a layer-shell overlay reports `nonactivating_keys` support.

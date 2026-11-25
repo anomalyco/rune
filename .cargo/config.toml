@@ -13,6 +13,7 @@ lint = "clippy --lib --bins --tests"
 lint-all = "clippy --workspace --all-targets"
 check-wasm = "check -p rune --no-default-features --target wasm32-unknown-unknown"
 check-webgl = "check -p rune --no-default-features --features webgl --target wasm32-unknown-unknown"
+check-hot = "check -p rune --features hot --tests"
 test-fast = "test -p rune -p rune-mermaid -p rune-kit --features rune-kit/markdown,rune-kit/mermaid"
 
 # Panic on any PaintKeep debug self-check mismatch in this repository's own cargo runs
