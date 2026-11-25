@@ -107,7 +107,7 @@ impl RuntimeCore {
                 }
                 EndRef::Offscreen(vi, ti) => {
                     let t = self.offscreen_text(vi, ti);
-                    if a >= b || b > t.spec.content.len() { return None; }
+                    if a >= b || b > t.spec.content_str().len() { return None; }
                     let piece = offscreen_piece(t, a..b, base_path);
                     let text = piece.text().to_owned();
                     Some(TextSelection { texts: vec![piece], text, backward: self.selection_backward(), truncated: false })
@@ -137,7 +137,7 @@ impl RuntimeCore {
                     let end_ref = EndRef::Offscreen(vi0, ti);
                     let ord = self.tree_order(end_ref);
                     if ord < first_ord || ord > last_ord { continue; }
-                    let len = t.spec.content.len();
+                    let len = t.spec.content_str().len();
                     let a = if end_ref == first_end { first_byte.min(len) } else { 0 };
                     let b = if end_ref == last_end { last_byte.min(len) } else { len };
                     if a >= b { continue; }
@@ -240,7 +240,7 @@ impl RuntimeCore {
                         if t.group_path.as_deref() != Some(g_path) { continue; }
                         let ord = (list_node * 2 + 1, r, t.order_in_row);
                         if ord < first_ord || ord > last_ord { continue; }
-                        let len = t.spec.content.len();
+                        let len = t.spec.content_str().len();
                         let a = if ord == first_ord { first_byte.min(len) } else { 0 };
                         let b = if ord == last_ord { last_byte.min(len) } else { len };
                         if a >= b { continue; }
@@ -488,7 +488,7 @@ impl RuntimeCore {
                     SelectRequest::Range(_, byte_range) => {
                         if let Some(t) = texts.iter().find(|t| t.path == selector || crate::flight::selects(selector, &t.path, t.key.as_deref())) {
                             let target_path = t.path.clone();
-                            let content = t.spec.content.clone();
+                            let content = t.spec.content_str().to_owned();
                             let (a, b) = (
                                 floor_boundary(&content, byte_range.start),
                                 floor_boundary(&content, byte_range.end.max(byte_range.start)),

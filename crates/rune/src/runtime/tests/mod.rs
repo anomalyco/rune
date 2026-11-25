@@ -33,6 +33,7 @@ mod one_snap;
 mod picture_scale;
 mod pointer_drag;
 mod pointer_hit;
+mod positioned_text;
 mod press_moving;
 mod press_pointer;
 mod read_only_input;

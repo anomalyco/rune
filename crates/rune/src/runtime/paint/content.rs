@@ -1,6 +1,7 @@
 //! Leaf content painting inside a box: vector shapes, images, icons and rich text.
 use super::*;
 
+#[derive(Clone, Copy)]
 pub(in crate::runtime) struct LeafBox {
     pub r: [f32; 4],
     pub r_exact: [f32; 4],
@@ -276,6 +277,8 @@ impl RuntimeCore {
             } else if drawn > 1e-4 && let Some(q) = self.text.icon_quad_facing(ic, px, pos, facing) {
                 self.push_icon(icon_inst(&q, pos, drawn, turn, premul(color, o, srgb), clip, fade));
             }
+        } else if n.text.as_deref().is_some_and(|t| t.positioned().is_some()) {
+            self.paint_positioned_text(i, &b, text_color, sel_ranges, mark_ranges);
         } else if let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) {
             let flow = laid.view();
             let link_fx = link_fx.unwrap();

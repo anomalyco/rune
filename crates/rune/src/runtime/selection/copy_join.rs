@@ -71,14 +71,14 @@ impl CopyJoin {
 
 /// `range` takes `spec` from its first copied byte.
 fn from_start(spec: &TextSpec, range: &Range<usize>) -> bool {
-    let len = spec.content.len();
+    let len = spec.content_str().len();
     let first = if spec.cold.uncopied.is_empty() { 0 } else { trim_uncopied(&spec.cold.uncopied, (0, len)).0 };
     !range.is_empty() && range.start <= first
 }
 
 /// `range` covers the entire copied content of `spec` (ignoring leading/trailing `El::uncopied`).
 pub(super) fn is_whole_copied(spec: &TextSpec, range: &Range<usize>) -> bool {
-    let len = spec.content.len();
+    let len = spec.content_str().len();
     if range.is_empty() || len == 0 {
         return false;
     }

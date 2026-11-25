@@ -210,7 +210,16 @@ impl RuntimeCore {
     fn span_inline_boxes(&self, n: &Node, rect: [f32; 4], z: f32, spans: impl IntoIterator<Item = (u32, u32)>) -> Vec<(usize, [f32; 4])> {
         let mut spans = spans.into_iter().peekable();
         if spans.peek().is_none() { return Vec::new(); }
-        let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return Vec::new() };
+        let Some(spec) = &n.text else { return Vec::new() };
+        if let Some(pt) = spec.positioned() {
+            let tf = super::positioned::PositionedTransform::from_window_box(n, pt, rect, z);
+            let mut out = Vec::new();
+            for (k, (start, end)) in spans.enumerate() {
+                pt.for_each_range_box(start as usize, end as usize, |r| out.push((k, tf.rect_x0y0x1y1(r))));
+            }
+            return out;
+        }
+        let Some(laid) = &n.text_layout else { return Vec::new() };
         let flow = laid.view();
         let s = self.env.scale;
         let [ox, oy] = origin(n, spec, flow, rect, s, z);
@@ -233,7 +242,16 @@ impl RuntimeCore {
     fn span_boxes_indexed(&self, n: &Node, rect: [f32; 4], z: f32, spans: impl IntoIterator<Item = (usize, u32, u32)>) -> Vec<(usize, [f32; 4])> {
         let mut spans = spans.into_iter().peekable();
         if spans.peek().is_none() { return Vec::new(); }
-        let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return Vec::new() };
+        let Some(spec) = &n.text else { return Vec::new() };
+        if let Some(pt) = spec.positioned() {
+            let tf = super::positioned::PositionedTransform::from_window_box(n, pt, rect, z);
+            let mut out = Vec::new();
+            for (k, start, end) in spans {
+                pt.for_each_range_box(start as usize, end as usize, |r| out.push((k, tf.rect_x0y0x1y1(r))));
+            }
+            return out;
+        }
+        let Some(laid) = &n.text_layout else { return Vec::new() };
         let flow = laid.view();
         let s = self.env.scale;
         let [ox, oy] = origin(n, spec, flow, rect, s, z);
@@ -333,9 +351,25 @@ impl RuntimeCore {
         spans: impl IntoIterator<Item = (u32, u32)>,
     ) -> Option<usize> {
         let n = &self.tree.nodes[i];
-        let (Some(spec), Some(laid)) = (n.text.as_deref(), n.text_layout.as_ref()) else { return None };
+        let spec = n.text.as_deref()?;
         let (rect, ux, uy) = self.unturned_box_and_point(i, x, y);
         if !ux.is_finite() || !uy.is_finite() { return None; }
+        if let Some(pt) = spec.positioned() {
+            let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+            let tf = super::positioned::PositionedTransform::from_window_box(n, pt, rect, z);
+            for (k, (start, end)) in spans.into_iter().enumerate() {
+                let mut matched = false;
+                pt.for_each_range_box(start as usize, end as usize, |r| {
+                    let b = tf.rect_x0y0x1y1(r);
+                    if contains([b[0] - scroll_x, b[1], b[2] - scroll_x, b[3]], ux, uy) {
+                        matched = true;
+                    }
+                });
+                if matched { return Some(k); }
+            }
+            return None;
+        }
+        let laid = n.text_layout.as_ref()?;
         let flow = laid.view();
         let s = self.env.scale;
         let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);

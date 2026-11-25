@@ -619,7 +619,7 @@ impl RuntimeCore {
                     && let Some(spec) = self.tree.nodes[first].text.as_ref()
                 {
                     let pills = pill_ranges(spec);
-                    crate::edit::next_word_in(&spec.content, 0, &pills)
+                    crate::edit::next_word_in(spec.content_str(), 0, &pills)
                 } else {
                     0
                 };
@@ -628,7 +628,7 @@ impl RuntimeCore {
             Landing::WordBackward => {
                 let byte = self.tree.nodes[last].text.as_ref().map_or(0, |spec| {
                     let pills = pill_ranges(spec);
-                    crate::edit::prev_word_in(&spec.content, spec.content.len(), &pills)
+                    crate::edit::prev_word_in(spec.content_str(), spec.content_str().len(), &pills)
                 });
                 (last, byte, parley::Affinity::Downstream)
             }

@@ -117,6 +117,8 @@ pub(crate) struct InlineAnchor {
 pub(crate) struct TextCold {
     /// Plain live run. Layout is measured from the authored placeholder before latching it.
     pub(crate) live: Option<crate::LiveText>,
+    /// App-positioned glyph-less text layer (`rune::positioned_text`), shared via `Arc`.
+    pub(crate) positioned: Option<crate::text::PositionedText>,
     pub(crate) links: Vec<Link>,
     pub(crate) on_link: Option<LinkFn>,
     pub(crate) on_link_secondary: Option<LinkSecondaryFn>,
@@ -180,6 +182,7 @@ pub(crate) struct TextCold {
 impl Empty for TextCold {
     const EMPTY: &'static Self = &TextCold {
         live: None,
+        positioned: None,
         links: Vec::new(),
         on_link: None,
         on_link_secondary: None,
@@ -249,6 +252,29 @@ impl TextSpec {
         }
     }
 
+    /// A glyph-less positioned text layer backed by `positioned` (selectable by default,
+    /// leaving `content` empty so view builds copy zero bytes).
+    pub(crate) fn new_positioned(positioned: crate::text::PositionedText) -> TextSpec {
+        let mut spec = TextSpec::new(String::new());
+        spec.selectable = true;
+        spec.flags.set(TextFlags::SELECTABLE_CURSOR, true);
+        spec.cold.positioned = Some(positioned);
+        spec
+    }
+
+    /// The backing `PositionedText`, when this text was created with `rune::positioned_text`.
+    #[inline(always)]
+    pub(crate) fn positioned(&self) -> Option<&crate::text::PositionedText> {
+        self.cold.positioned.as_ref()
+    }
+
+    /// The text's content bytes: `positioned.text()` when backed by `PositionedText`, else
+    /// `self.content`.
+    #[inline(always)]
+    pub(crate) fn content_str(&self) -> &str {
+        self.cold.positioned.as_ref().map_or(self.content.as_str(), crate::text::PositionedText::text)
+    }
+
     #[inline(always)]
     pub(crate) const fn greedy(&self) -> bool { self.flags.has(TextFlags::GREEDY) }
 
@@ -281,7 +307,7 @@ impl TextSpec {
 impl std::fmt::Debug for TextSpec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TextSpec")
-            .field("content", &if self.redacted { "[redacted]" } else { &self.content })
+            .field("content", &if self.redacted { "[redacted]" } else { self.content_str() })
             .field("style", &self.style)
             .field("color", &self.color)
             .field("align", &self.align)
@@ -415,13 +441,13 @@ impl TextSpec {
 
     /// The string as authored, before [`El::text_case`](crate::El::text_case).
     pub(crate) fn source_text(&self) -> &str {
-        self.source.as_ref().map_or(&self.content, |s| &s.text)
+        self.source.as_ref().map_or_else(|| self.content_str(), |s| &s.text)
     }
 
     /// The authored text of `content[start..end]`.
     pub(crate) fn source_slice(&self, start: u32, end: u32) -> Option<&str> {
         match &self.source {
-            None => self.content.get(start as usize..end as usize),
+            None => self.content_str().get(start as usize..end as usize),
             Some(s) => s.text.get(s.source(start, false) as usize..s.source(end, true) as usize),
         }
     }

@@ -158,7 +158,17 @@ impl RuntimeCore {
     /// Pushes the line boxes of bytes `a..b` of node `j`'s text onto `out`.
     fn text_boxes(&self, nodes: &[Node], j: usize, a: usize, b: usize, out: &mut Vec<[f32; 4]>) {
         let n = &nodes[j];
-        let (Some(spec), Some(laid)) = (&n.text, &n.text_layout) else { return };
+        let Some(spec) = n.text.as_ref() else { return };
+        if let Some(pt) = spec.positioned() {
+            let len = pt.len();
+            let (a, b) = (a.min(len), b.min(len));
+            if a >= b { return; }
+            let [x, y, w, h] = self.laid_out(nodes, j);
+            let tf = super::selection::positioned::PositionedTransform::from_window_box(n, pt, [x, y, x + w, y + h], 1.0);
+            pt.for_each_range_box(a, b, |r| out.push(tf.rect_xywh(r)));
+            return;
+        }
+        let Some(laid) = &n.text_layout else { return };
         let flow = laid.view();
         let len = spec.content.len();
         let (a, b) = (a.min(len), b.min(len));

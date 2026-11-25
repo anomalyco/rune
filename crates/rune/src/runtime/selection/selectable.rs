@@ -274,7 +274,7 @@ impl RuntimeCore {
     }
 
     pub(in crate::runtime) fn content_of(&self, i: usize) -> &str {
-        self.tree.nodes[i].text.as_ref().map_or("", |t| t.content.as_str())
+        self.tree.nodes[i].text.as_ref().map_or("", |t| t.content_str())
     }
 
     /// The selection group node `i` is in: its nearest `El::selection_group` ancestor.
@@ -586,10 +586,16 @@ impl RuntimeCore {
     /// Byte offset of node `i`'s text under window point (x, y), where it was drawn this frame.
     pub(in crate::runtime) fn text_index_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
         let n = &self.tree.nodes[i];
-        let (spec, flow) = (n.text.as_ref()?, n.text_layout.as_ref()?.view());
-        let s = self.env.scale;
+        let spec = n.text.as_ref()?;
         let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0).max(1e-4);
         let (rect, x, y) = self.unturned_box_and_point(i, x, y);
+        if let Some(pt) = spec.positioned() {
+            let tf = super::positioned::PositionedTransform::from_window_box(n, pt, rect, z);
+            let [sx, sy] = tf.to_source(x, y)?;
+            return Some(pt.hit(sx, sy).0);
+        }
+        let flow = n.text_layout.as_ref()?.view();
+        let s = self.env.scale;
         let [ox, oy] = links::origin(n, spec, flow, rect, s, z);
         let px = s / z;
         let at = flow.hit((x - ox) * px, (y - oy) * px).index;
@@ -686,7 +692,7 @@ impl RuntimeCore {
             phase::Reach::Anchor
         } else {
             let n = &self.tree.nodes[j];
-            phase::Reach::Far { path: &n.path, content: n.text.as_ref().map_or("", |t| t.content.as_str()) }
+            phase::Reach::Far { path: &n.path, content: n.text.as_ref().map_or("", |t| t.content_str()) }
         };
         let effects = phase::step(&mut self.edit.selectable.phase, phase::Event::Drag { anchor, focus, reach });
         self.carry_select(effects);

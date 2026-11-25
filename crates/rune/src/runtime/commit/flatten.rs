@@ -230,6 +230,14 @@ fn prepare_text(
             t.cold.live = None;
         }
     }
+    if let Some(pt) = text.as_deref().and_then(TextSpec::positioned) {
+        let secure_measure = text.as_ref().is_some_and(|t| t.redacted);
+        let vb = pt.view_box_size().map_or(0u64, |[w, h]| {
+            u64::from(w.to_bits()).wrapping_mul(0x517c_c1b7_2722_0a95) ^ u64::from(h.to_bits()).rotate_left(17)
+        });
+        let key = pt.id().wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ vb ^ 0x706f_7369_7469_6f6e;
+        return (Some(if secure_measure { 0 } else { key }), secure_measure);
+    }
     if input.is_none()
         && text.as_ref().is_some_and(|t| !t.cold.isolates.is_empty() || !t.cold.pills.is_empty())
         && let Some(t) = text
