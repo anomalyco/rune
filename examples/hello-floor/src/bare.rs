@@ -4,7 +4,8 @@
 //!
 //!   hello-floor-bare win32              a window, filled by GDI
 //!   hello-floor-bare d3d12 device       ... and a Direct3D 12 device on the adapter
-//!   hello-floor-bare d3d12 swapchain    ... a command queue and a two-buffer flip swap chain
+//!   hello-floor-bare d3d12 queue        ... and a command queue
+//!   hello-floor-bare d3d12 swapchain    ... and a two-buffer flip swap chain
 //!   hello-floor-bare d3d12 frame        ... one cleared and presented frame (the default step)
 //!   hello-floor-bare d3d11 device | swapchain | frame      the same through Direct3D 11
 //!
@@ -47,6 +48,7 @@ mod bare {
     #[derive(Clone, Copy, PartialEq, PartialOrd)]
     enum Step {
         Device,
+        Queue,
         SwapChain,
         Frame,
     }
@@ -57,6 +59,7 @@ mod bare {
         D3d11Device { _device: ID3D11Device, _ctx: ID3D11DeviceContext },
         D3d11 { device: ID3D11Device, ctx: ID3D11DeviceContext, swap: IDXGISwapChain1, draws: bool },
         D3d12Device { _device: ID3D12Device },
+        D3d12Queue { _device: ID3D12Device, _queue: ID3D12CommandQueue },
         D3d12Swap { _device: ID3D12Device, _queue: ID3D12CommandQueue, _swap: IDXGISwapChain3 },
         D3d12 { device: ID3D12Device, queue: ID3D12CommandQueue, alloc: ID3D12CommandAllocator, list: ID3D12GraphicsCommandList, swap: IDXGISwapChain3, heap: ID3D12DescriptorHeap, fence: ID3D12Fence, value: u64 },
     }
@@ -157,6 +160,7 @@ mod bare {
         let api = args.next().unwrap_or_else(|| "win32".into());
         let step = match args.next().as_deref() {
             Some("device") => Step::Device,
+            Some("queue") => Step::Queue,
             Some("swapchain") => Step::SwapChain,
             _ => Step::Frame,
         };
@@ -200,7 +204,7 @@ mod bare {
                     let (mut device, mut ctx) = (None, None);
                     D3D11CreateDevice(&adapter(), D3D_DRIVER_TYPE_UNKNOWN, HMODULE::default(), D3D11_CREATE_DEVICE_BGRA_SUPPORT, None, D3D11_SDK_VERSION, Some(&mut device), None, Some(&mut ctx)).unwrap();
                     let (device, ctx): (ID3D11Device, ID3D11DeviceContext) = (device.unwrap(), ctx.unwrap());
-                    if step == Step::Device {
+                    if step <= Step::Queue {
                         GPU.set(Gpu::D3d11Device { _device: device, _ctx: ctx });
                     } else {
                         let swap = factory().CreateSwapChainForHwnd(&device, hwnd, &desc, None, None).unwrap();
@@ -215,6 +219,10 @@ mod bare {
                         GPU.set(Gpu::D3d12Device { _device: device });
                     } else {
                         let queue: ID3D12CommandQueue = device.CreateCommandQueue(&D3D12_COMMAND_QUEUE_DESC { Type: D3D12_COMMAND_LIST_TYPE_DIRECT, ..Default::default() }).unwrap();
+                        if step == Step::Queue {
+                            GPU.set(Gpu::D3d12Queue { _device: device, _queue: queue });
+                            return show(hwnd);
+                        }
                         let swap: IDXGISwapChain3 = factory().CreateSwapChainForHwnd(&queue, hwnd, &desc, None, None).unwrap().cast().unwrap();
                         if step == Step::SwapChain {
                             GPU.set(Gpu::D3d12Swap { _device: device, _queue: queue, _swap: swap });
@@ -230,7 +238,15 @@ mod bare {
                 }
                 _ => {}
             }
-            draw(None);
+            show(hwnd);
+        }
+    }
+
+    /// Draws the first frame (at the `frame` step), shows the window and runs its messages.
+    fn show(hwnd: HWND) {
+        draw(None);
+        // SAFETY: the window made by `run`, on its thread; `msg` is this loop's.
+        unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE).ok().ok();
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {

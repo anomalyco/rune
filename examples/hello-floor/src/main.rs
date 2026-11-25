@@ -11,7 +11,9 @@
 //! `HELLO_FLOOR_MEMORY_POLICY` sets the GPU suballocation policy before the device is made
 //! (`memory-usage`, Rune's default; `performance`; or `manual:<min>-<max>` in MiB, as
 //! `manual:4-64`). `HELLO_FLOOR_WARM` names the effect pipelines compiled ahead of their first
-//! use (`none`, `all`, `backdrop`). `WGPU_ADAPTER_NAME` picks the GPU, as in every Rune app.
+//! use (`none`, `all`, `backdrop`). `WGPU_ADAPTER_NAME` picks the GPU, as in every Rune app, and
+//! `RUNE_CPU_FIRST=only` keeps the window on Rune's CPU renderer: no GPU device at all until a
+//! frame needs one (the `effect` step does).
 
 #![forbid(unsafe_code)]
 #![cfg_attr(windows, windows_subsystem = "windows")]
