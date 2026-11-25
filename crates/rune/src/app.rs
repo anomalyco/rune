@@ -128,7 +128,10 @@ pub struct App<S: 'static> {
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
     pub(crate) on_open_files: Option<crate::open_url::incoming::OnOpenFiles<S>>,
     pub(crate) shared: Arc<Shared<S>>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) has_overlays: bool,
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) on_ready: Option<OnWindow>,
@@ -199,7 +202,10 @@ impl<S: 'static> App<S> {
             on_open_url: None,
             on_open_files: None,
             shared,
+            #[cfg(not(target_arch = "wasm32"))]
             overlays: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            has_overlays: false,
             windows: Vec::new(),
             on_window: None,
             on_ready: None,
@@ -292,6 +298,7 @@ impl<S: 'static> App<S> {
     /// `Tx::set_font_smoothing` switches it while running.
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self {
         self.runtime.font_smoothing = mode;
+        #[cfg(not(target_arch = "wasm32"))]
         for overlay in &mut self.overlays {
             overlay.inherit_font_smoothing(mode);
         }
@@ -600,14 +607,23 @@ impl<S: 'static> App<S> {
     /// Uses this app's fonts and font smoothing (`ConfiguredOverlay::font_smoothing` overrides it).
     /// Headless runs don't draw overlays.
     pub fn overlay<T: 'static>(&mut self, spec: impl Into<crate::ConfiguredOverlay<T>>, state: T) -> crate::overlay::OverlayHandle<T> {
-        let mut configured = spec.into();
-        if configured.runtime.emoji_family.is_none() {
-            configured.runtime.emoji_family = self.runtime.emoji_family.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut configured = spec.into();
+            if configured.runtime.emoji_family.is_none() {
+                configured.runtime.emoji_family = self.runtime.emoji_family.clone();
+            }
+            let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
+            overlay.set_prewarm_effects(self.prewarm_effects);
+            self.overlays.push(Box::new(overlay));
+            handle
         }
-        let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
-        overlay.set_prewarm_effects(self.prewarm_effects);
-        self.overlays.push(Box::new(overlay));
-        handle
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (spec, state);
+            self.has_overlays = true;
+            crate::overlay::OverlayHandle::disconnected()
+        }
     }
 
     /// Adds an ordinary window with its own state type to this app's event loop, such as a
@@ -712,6 +728,7 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn prewarm_effects(mut self, effects: impl Into<crate::PrewarmEffects>) -> Self {
         self.prewarm_effects = effects.into();
+        #[cfg(not(target_arch = "wasm32"))]
         for overlay in &mut self.overlays {
             overlay.set_prewarm_effects(self.prewarm_effects);
         }

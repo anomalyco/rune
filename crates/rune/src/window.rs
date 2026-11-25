@@ -2,40 +2,60 @@
 //! factories share the same input, rendering, activation and close/reopen paths.
 
 use std::sync::{Arc, Mutex, Weak, atomic::{AtomicBool, AtomicU32, Ordering}};
+#[cfg(not(target_arch = "wasm32"))]
 use std::{cell::RefCell, rc::Rc};
 #[cfg(test)]
 use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 use winit::application::ApplicationHandler;
-use winit::event::{MouseButton, StartCause, TouchPhase, WindowEvent};
+#[cfg(not(target_arch = "wasm32"))]
+use winit::event::{StartCause, WindowEvent};
+use winit::event::{MouseButton, TouchPhase};
+#[cfg(not(target_arch = "wasm32"))]
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
-use winit::window::{Window, WindowId};
+#[cfg(not(target_arch = "wasm32"))]
+use winit::window::WindowId;
+use winit::window::Window;
 use winit::raw_window_handle::HasWindowHandle;
 
 use crate::app::WindowRequest;
 use crate::frame::surface_stats::SurfaceStats;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::render::Gpu;
-use crate::runtime::{AppDriver, Runtime, RuntimeCore};
+#[cfg(test)]
+use crate::runtime::Runtime;
+use crate::runtime::{AppDriver, RuntimeCore};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::tooling::Args;
-use crate::windows::{AnyWindowSpec, Display, WindowSpec};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::windows::WindowSpec;
+use crate::windows::{AnyWindowSpec, Display};
 #[cfg(test)]
 use crate::el::Tx;
 #[cfg(test)]
 use crate::tooling::Chrome;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod app_events;
+#[cfg(not(target_arch = "wasm32"))]
 mod chrome;
 mod color_scheme;
 mod cpu_first;
 mod event_loop;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use event_loop::{ExitAction, exit_action};
+#[cfg(not(target_arch = "wasm32"))]
 mod file_drop;
 mod handle;
+#[cfg(not(target_arch = "wasm32"))]
 mod host;
 mod keys;
+#[cfg(not(target_arch = "wasm32"))]
 mod panic_trap;
+#[cfg(not(target_arch = "wasm32"))]
 mod pointer_lock;
 pub mod spec;
 mod state;
@@ -45,6 +65,7 @@ pub(crate) mod titlebar;
 mod linux;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod warm_frame;
+#[cfg(not(target_arch = "wasm32"))]
 mod wayland_wake;
 #[cfg(target_os = "windows")]
 mod win32;
@@ -53,6 +74,7 @@ mod win32;
 pub(crate) fn warm_gpu_cache() -> Result<(), String> { win32::handover::warm_gpu_cache() }
 
 pub use color_scheme::ColorScheme;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use color_scheme::{app_color_scheme, set_app_color_scheme_state, sync_window_theme, window_theme_for_platform};
 pub use cpu_first::CpuFirst;
 #[cfg(target_arch = "wasm32")]
@@ -69,14 +91,18 @@ pub(crate) use keys::{key_base, map_key_event, map_mods};
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) use keys::web_key_base_str;
 pub(crate) use state::frame;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use state::rest;
-pub(crate) use state::{Life, Minimize, MinimizeEvent, Rest, RestEffect, RestEvent, Sight};
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use state::{Rest, RestEffect, RestEvent};
+pub(crate) use state::{Life, Minimize, MinimizeEvent, Sight};
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use surface::{
-    Backoff, BackoffEffect, BackoffEvent, ConfigureError, HiddenPace, Missed,
-    Presented, TIMER_FRAME, acquire_checked, configure, configure_checked, reblend_core,
-    rebuild_renderer_core, poll_timer_deadline_core, surface_config, timer_deadline_core,
-    timer_wants_frame_core,
+    Backoff, BackoffEffect, BackoffEvent, HiddenPace, acquire_checked, configure,
+    configure_checked, reblend_core, poll_timer_deadline_core, surface_config,
+    timer_deadline_core, timer_wants_frame_core,
 };
+pub(crate) use surface::{ConfigureError, Missed, Presented, TIMER_FRAME, rebuild_renderer_core};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use surface::configure_then;
 #[cfg(target_os = "macos")]
@@ -94,6 +120,7 @@ pub(crate) use win32::resize_sync::valid_rects as win32_valid_rects;
 #[cfg(target_os = "windows")]
 pub(crate) use win32::slot;
 
+#[cfg(not(target_arch = "wasm32"))]
 use host::Host;
 #[cfg(test)]
 use chrome::uses_drag_regions;
@@ -109,6 +136,7 @@ use surface::LaunchDrawables;
 use surface::{SurfaceRetries, composing};
 
 /// Records a presented frame and wakes Windows' deferred ICU word segmenter on the first one.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn frame_presented() {
     if crate::marks::presented() {
         #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
@@ -119,13 +147,28 @@ pub(crate) fn frame_presented() {
 #[cfg(test)]
 mod tests;
 
+// Slot indices on shared headless/desktop variants are only read by the native event loop;
+// wasm32's virtual_desktop matches by variant.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) enum WakeEvent {
+    #[cfg(not(target_arch = "wasm32"))]
     DisplayTick(usize),
-    App(usize), Live(usize), Window(usize, WindowRequest), Focus(usize),
-    Position(usize, (i32, i32)), Level(usize, bool), ExcludeFromCapture(usize, bool),
+    #[cfg(not(target_arch = "wasm32"))]
+    App(usize),
+    #[cfg(not(target_arch = "wasm32"))]
+    Live(usize),
+    Window(usize, WindowRequest),
+    Focus(usize),
+    Position(usize, (i32, i32)),
+    #[cfg(not(target_arch = "wasm32"))]
+    Level(usize, bool),
+    #[cfg(not(target_arch = "wasm32"))]
+    ExcludeFromCapture(usize, bool),
+    #[cfg(not(target_arch = "wasm32"))]
     ColorScheme(usize, crate::ColorScheme),
     /// App-wide color scheme changed (`AppHandle::set_color_scheme`): every host syncs with
     /// `app_color_scheme()`.
+    #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     AppColorScheme,
     Place(usize, crate::windows::PlaceRequest),
@@ -159,10 +202,12 @@ pub(crate) enum WakeEvent {
     FileDrop,
     /// Wayland: a live layer surface already has events queued in libwayland from a mid-turn read;
     /// wakes the immediate next turn so `about_to_wait` drains it without entering `ControlFlow::Poll`.
+    #[cfg(not(target_arch = "wasm32"))]
     LayerPending,
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) trait AnyHost {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, _cause: StartCause) {}
     fn wake_deadline(&self) -> Option<Instant> { None }
@@ -223,6 +268,7 @@ pub(crate) trait AnyHost {
 /// remains alive. When another loop-keeping host stays alive or one has already created a window,
 /// a finished host's startup error is logged to stderr; otherwise the first error is stored in
 /// `startup_error` so `run` / `try_run` returns it.
+#[cfg(not(target_arch = "wasm32"))]
 fn collect_startup_errors(
     hosts: &mut [Option<Box<dyn AnyHost>>],
     any_shown: &mut bool,
@@ -244,6 +290,7 @@ fn collect_startup_errors(
 
 /// Builds every host, attaching its shortcut and menu guards, before any resumes: a window's
 /// first updates drain on resume and may register on a later window.
+#[cfg(not(target_arch = "wasm32"))]
 fn start_all<T, H>(items: Vec<T>, mut build: impl FnMut(usize, T) -> Option<H>, resume: impl FnMut(&mut H)) -> Vec<Option<H>> {
     let mut hosts: Vec<_> = items.into_iter().enumerate().map(|(slot, item)| build(slot, item)).collect();
     hosts.iter_mut().flatten().for_each(resume);
@@ -252,6 +299,7 @@ fn start_all<T, H>(items: Vec<T>, mut build: impl FnMut(usize, T) -> Option<H>, 
 
 type Factory = Box<dyn FnOnce(&[Display]) -> Vec<AnyWindowSpec>>;
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Windows {
     factory: Option<Factory>,
     args: Args,
@@ -275,6 +323,7 @@ struct Windows {
     /// before the event loop drops windows and tears down the native display.
     on_display_close: Vec<crate::app::OnDisplayClose>,
 }
+#[cfg(not(target_arch = "wasm32"))]
 impl Windows {
     /// On macOS, catches panics before they cross winit's `extern "C"` AppKit delegate or view
     /// boundary, skips subsequent callbacks, and requests loop exit so `run` re-raises the
@@ -387,6 +436,7 @@ impl Windows {
 }
 
 /// What a window needs from the shell to start, whatever its state type.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) struct Start<'a> {
     proxy: EventLoopProxy<WakeEvent>,
     slot: usize,
@@ -398,6 +448,7 @@ pub(crate) struct Start<'a> {
     on_display_close: &'a mut Vec<crate::app::OnDisplayClose>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Start<'_> {
     fn inherit_args(&self, mut inherited: Args) -> Args {
         if inherited.native && !self.traced {
@@ -409,6 +460,7 @@ impl Start<'_> {
 }
 
 /// Starts one window's host, or renders it headless when its own arguments ask for that.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHandle>, keeps_loop: bool, inherited: Args, cx: Start<'_>) -> Option<Box<dyn AnyHost>> {
     let args = spec.app.resolve_args(cx.inherit_args(inherited));
     #[cfg(not(any(feature = "tooling", debug_assertions)))]
@@ -423,6 +475,7 @@ pub(crate) fn start<S: 'static>(mut spec: WindowSpec<S>, handle: Option<WindowHa
     Some(Box::new(Host::new(spec, handle, args, cx, keeps_loop, incoming)))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ApplicationHandler<WakeEvent> for Windows {
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
         self.guard(event_loop, |this| {
@@ -684,10 +737,11 @@ impl ApplicationHandler<WakeEvent> for Windows {
 /// or a programmatic focus request (`Runtime::covered_wake`).
 /// Uncovering settles first, so that frame builds once and paints motion where it would have
 /// ended, as Core Animation's time-based motion has by the time a covered window shows again.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[inline(always)]
 pub(crate) fn covered_step<S: 'static>(rt: &mut Runtime<S>) { rt.covered_wake(); }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     return winit::platform::wayland::ActiveEventLoopExtWayland::is_wayland(event_loop);
@@ -703,6 +757,7 @@ pub(crate) fn is_wayland(event_loop: &ActiveEventLoop) -> bool {
 /// `DisplayTarget::Primary` is in. Elsewhere than macOS that's desktop pixels from the
 /// primary's origin over the window's scale, as `overlay::position` converts the other way.
 /// Wayland hides it.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn screen_origin(window: &Window) -> Option<(f32, f32)> {
     #[cfg(target_os = "macos")]
     return crate::platform::macos::content_origin(window);
@@ -718,6 +773,7 @@ pub(crate) fn screen_origin(window: &Window) -> Option<(f32, f32)> {
 /// Tells `rt` where `window`'s content is on screen: in points for `El::on_screen_layout`
 /// ([`screen_origin`]), and in desktop pixels for `Drag::screen_point`. True when that moved
 /// an `El::on_screen_layout` element.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn sync_screen_origin_core(rt: &mut RuntimeCore, window: &Window) -> bool {
     rt.set_window_pixels(window.inner_position().ok().map(|p| (p.x, p.y)));
     screen_origin(window).is_some_and(|o| rt.set_window_origin(o))
@@ -725,6 +781,7 @@ pub(crate) fn sync_screen_origin_core(rt: &mut RuntimeCore, window: &Window) -> 
 
 /// The scale an overlay draws at. On macOS, read from the panel AppKit shows, and before it's
 /// ordered in from the display holding most of its frame, where it will appear.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn backing_scale(window: &Window) -> f32 {
     #[cfg(target_os = "macos")]
     if let Some(scale) = crate::platform::macos::backing_scale(window) { return scale; }
@@ -742,7 +799,7 @@ pub(crate) fn pointer_button(button: MouseButton) -> crate::PointerButton {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg(not(target_arch = "wasm32"))]
 fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
     match phase {
         TouchPhase::Started => crate::GesturePhase::Began,
@@ -766,7 +823,7 @@ pub(crate) fn touch_core_at(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch
 }
 
 /// Hands a winit touch to the runtime, timed on a clock that starts with the first touch.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn touch_core(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch: &winit::event::Touch) {
     static START: std::sync::OnceLock<crate::time::Instant> = std::sync::OnceLock::new();
     let time = START.get_or_init(crate::time::now).elapsed().as_secs_f64();

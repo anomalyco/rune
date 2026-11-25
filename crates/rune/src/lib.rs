@@ -43,6 +43,7 @@ pub mod tooling;
 pub mod tray;
 
 pub(crate) use input::cursor;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use quit::relaunch;
 pub(crate) use rune_core::cold;
 pub(crate) use rune_gpu as gpu;

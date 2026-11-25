@@ -41,7 +41,7 @@ pub fn single_instance(id: &str) -> bool {
         crate::relaunch::wait_for_previous_release();
         windows::claim(id)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_arch = "wasm32")))]
     crate::relaunch::wait_for_previous();
     #[cfg(target_os = "linux")]
     {

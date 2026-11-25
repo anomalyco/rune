@@ -3,7 +3,9 @@
 //! same in both. The native host's `Win` holds the window's resources while it has them: a
 //! hidden window may have let them go (`App::release_gpu_when_hidden`, Wayland's unmapping).
 
-use super::sight::{Cover, Sight};
+#[cfg(not(target_arch = "wasm32"))]
+use super::sight::Cover;
+use super::sight::Sight;
 
 /// A window's life.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -23,12 +25,14 @@ impl Life {
     pub(crate) fn shown(self) -> bool { matches!(self, Life::Shown { .. }) }
 
     /// Shown, and on screen as far as anything says.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn uncovered(self) -> bool { self == Life::Shown { sight: Sight::Seen } }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn covered(self) -> bool { matches!(self, Life::Shown { sight: Sight::Covered(_) }) }
 
     /// Shown, and `cover` says none of it shows.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[cfg(target_os = "windows")]
     pub(crate) fn covered_by(self, cover: Cover) -> bool { matches!(self, Life::Shown { sight } if sight.has(cover)) }
 
     pub(crate) fn finished(self) -> bool { self == Life::Finished }
@@ -55,6 +59,7 @@ impl Life {
 
     /// `cover` starts or stops saying a shown window can't be seen. Returns whether it was
     /// covered. A window off screen has nothing to cover: showing uncovers it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn cover(&mut self, cover: Cover, on: bool) -> bool {
         let Life::Shown { sight } = self else { return false };
         let was = sight.covered();
@@ -68,6 +73,7 @@ impl Life {
     /// without a window (`!keep_running`) and has never created one (`!shown`) finishes so the
     /// run ends with the error; `keep_running` (including `windowless`) and windows that already
     /// showed stay alive so a later open can retry.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn fail_create(&mut self, keep_running: bool, shown: bool) -> bool {
         if !keep_running && !shown {
             self.finish();

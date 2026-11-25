@@ -224,7 +224,9 @@ impl SurfaceMeter {
         match missed {
             Missed::Occluded => self.totals.occluded += 1,
             Missed::Timeout => self.totals.timeouts += 1,
-            Missed::Outdated | Missed::Unconfigured => self.totals.outdated += 1,
+            #[cfg(not(target_arch = "wasm32"))]
+            Missed::Outdated => self.totals.outdated += 1,
+            Missed::Unconfigured => self.totals.outdated += 1,
         }
         self.tick(crate::time::now());
     }
