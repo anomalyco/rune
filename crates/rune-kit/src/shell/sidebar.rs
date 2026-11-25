@@ -542,7 +542,7 @@ impl SidebarRow {
     pub fn renaming<S: 'static>(
         self,
         edit: &TextEdit,
-        access: fn(&mut S) -> &mut TextEdit,
+        access: impl for<'a> Fn(&'a mut S) -> &'a mut TextEdit + 'static,
         commit: impl Fn(&mut S, &mut Tx) + 'static,
         cancel: impl Fn(&mut S, &mut Tx) + 'static,
     ) -> Self {

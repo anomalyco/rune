@@ -1,0 +1,1 @@
+- rune-kit `List::on_search_edit` and `SidebarRow::renaming`'s `access` take any `Fn(&mut S) -> &mut TextEdit + 'static` closure instead of a plain `fn` pointer, so the handler can capture which panel's field it edits; plain functions still work.
