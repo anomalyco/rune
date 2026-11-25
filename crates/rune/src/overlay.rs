@@ -582,7 +582,7 @@ pub(in crate::overlay) struct OverlayCore {
     /// The effect pipelines this overlay's renderer compiles ahead of their first use.
     prewarm_effects: crate::PrewarmEffects,
     /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
-    frame_latency: Option<u32>,
+    pub(in crate::overlay) frame_latency: Option<u32>,
     /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,

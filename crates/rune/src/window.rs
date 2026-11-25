@@ -142,7 +142,7 @@ pub(crate) use host::app::{TypedWindowApp, WindowApp};
 #[cfg(test)]
 use state::{WakeFacts, WakeWork};
 #[cfg(all(test, target_os = "macos"))]
-use surface::LaunchDrawables;
+pub(crate) use surface::LaunchDrawables;
 #[cfg(test)]
 use surface::{SurfaceRetries, composing};
 

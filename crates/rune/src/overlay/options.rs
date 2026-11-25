@@ -389,14 +389,14 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.window_backdrop = backdrop;
         self
     }
-    /// How many frames this overlay's swap chain may hold that the compositor hasn't shown yet.
-    /// The default is two on macOS and Linux and one on Windows. Values are clamped to between
-    /// one and that default, so this can only lower it.
+    /// Cap the swap chain's frame latency on macOS (`1` = 2 drawables, `2` = 3 drawables;
+    /// clamped to `1..=2`, default `2`). Ignored on Windows, Linux, and the web.
     ///
-    /// On macOS each frame of latency costs one overlay-sized drawable (Metal keeps latency + 1).
-    /// For a 488x873 pt panel at 2x, that is about 7 MB. `frame_latency(1)` keeps two. An overlay
-    /// that animates rarely loses nothing. One that animates continuously can miss a frame when
-    /// one runs long, because there is no spare drawable to start the next one in.
+    /// With two drawables a frame that runs late waits instead of overlapping the next; at
+    /// 120 Hz that can show as a dropped frame during fast animation, whereas for a rarely
+    /// animating overlay it is the right trade. Applied when the surface is created rather than
+    /// changed live (changing `CAMetalLayer.maximumDrawableCount` while visible forces a
+    /// synchronous reconfigure and can reallocate drawables or drop a frame).
     ///
     /// ```no_run
     /// use rune::{OverlayOptions, OverlaySpec, el};
@@ -406,7 +406,7 @@ impl<T: 'static> ConfiguredOverlay<T> {
     ///     .frame_latency(1);
     /// ```
     pub fn frame_latency(mut self, latency: u32) -> Self {
-        self.frame_latency = Some(latency);
+        self.frame_latency = Some(latency.clamp(1, 2));
         self
     }
 }

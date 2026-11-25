@@ -236,3 +236,28 @@ fn an_overlay_keeps_the_system_credential_store() {
     });
     assert!(!noted.join().unwrap(), "a real app's overlay must not switch credentials to memory");
 }
+#[test]
+fn overlay_frame_latency_defaults_to_none_clamps_and_retains() {
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+    let app = AppSpec::new("overlay-latency", (120.0, 80.0), || (), view);
+
+    let default_cfg = OverlaySpec::new("default", app.size, view).options(Default::default());
+    assert_eq!(default_cfg.frame_latency, None);
+    let (default_overlay, _) = Overlay::new(default_cfg, (), &app);
+    assert_eq!(default_overlay.core.frame_latency, None);
+
+    for (input, expected) in [(0, 1), (1, 1), (2, 2), (3, 2), (u32::MAX, 2)] {
+        let cfg = OverlaySpec::new("clamped", app.size, view)
+            .options(Default::default())
+            .frame_latency(input);
+        assert_eq!(cfg.frame_latency, Some(expected), "input {input}");
+        let (overlay, _) = Overlay::new(cfg, (), &app);
+        assert_eq!(overlay.core.frame_latency, Some(expected), "OverlayCore input {input}");
+
+        let host_cfg = OverlaySpec::new("host-clamped", app.size, view)
+            .options(Default::default())
+            .frame_latency(input);
+        let (host, _) = OverlayHost::new(host_cfg, (), &app, FontSmoothing::default());
+        assert_eq!(host.core.frame_latency, Some(expected), "OverlayHost input {input}");
+    }
+}

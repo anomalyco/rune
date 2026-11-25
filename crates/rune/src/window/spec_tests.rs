@@ -747,3 +747,23 @@ fn mac_window_options_color_space_defaults_to_srgb_and_retains_override() {
     assert_eq!(unmanaged.with_portable_exclude(Some(true)).color_space, MacColorSpace::Unmanaged);
     assert_eq!(unmanaged.with_runtime_document(None, Some(&true)).color_space, MacColorSpace::Unmanaged);
 }
+#[test]
+fn app_and_window_spec_frame_latency_clamps_and_retains() {
+    let spec = || AppSpec::new("panel", (488.0, 873.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).frame_latency, None);
+    assert_eq!(App::new(spec()).frame_latency(0).frame_latency, Some(1));
+    assert_eq!(App::new(spec()).frame_latency(1).frame_latency, Some(1));
+    assert_eq!(App::new(spec()).frame_latency(2).frame_latency, Some(2));
+    assert_eq!(App::new(spec()).frame_latency(3).frame_latency, Some(2));
+    assert_eq!(App::new(spec()).frame_latency(u32::MAX).frame_latency, Some(2));
+
+    let from_app = WindowSpec::from_app("panel", App::new(spec()).frame_latency(1));
+    assert_eq!(from_app.app.frame_latency, Some(1));
+
+    let via_spec = WindowSpec::new("panel", spec()).frame_latency(0);
+    assert_eq!(via_spec.app.frame_latency, Some(1));
+    // Replacing WindowOptions keeps portable/window-level frame_latency intact.
+    assert_eq!(via_spec.options(WindowOptions::default()).app.frame_latency, Some(1));
+
+    assert_eq!(WindowSpec::new("panel", spec()).frame_latency(3).app.frame_latency, Some(2));
+}

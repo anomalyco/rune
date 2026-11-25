@@ -69,6 +69,8 @@ pub(in crate::window) struct Host {
     /// Requested whole-window system backdrop (`App::window_backdrop`, `Tx::set_window_backdrop`,
     /// `WindowHandle::set_window_backdrop`), retained across native window recreation.
     pub(in crate::window) window_backdrop: crate::WindowBackdrop,
+    /// Optional macOS swap-chain frame latency (`App::frame_latency`).
+    pub(in crate::window) frame_latency: Option<u32>,
     /// Last winit theme applied to the live `self.win`, avoiding redundant `set_theme` calls.
     pub(in crate::window) applied_theme: Option<winit::window::Theme>,
     pub(in crate::window) native_handle: WindowHandle,
@@ -219,6 +221,7 @@ struct HostInit {
     exclude_from_capture: Option<bool>,
     color_scheme: crate::ColorScheme,
     window_backdrop: crate::WindowBackdrop,
+    frame_latency: Option<u32>,
     native_handle: WindowHandle,
     on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     on_window: Option<crate::app::OnWindow>,
@@ -280,6 +283,7 @@ impl Host {
         let exclude_from_capture = app.exclude_from_capture;
         let color_scheme = app.color_scheme;
         let window_backdrop = app.window_backdrop;
+        let frame_latency = app.frame_latency;
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let cpu_first = app.cpu_first;
         let (open, keep_running, release_gpu, prewarm_effects, fit_height, float_on_open) = (
@@ -321,6 +325,7 @@ impl Host {
             exclude_from_capture,
             color_scheme,
             window_backdrop,
+            frame_latency,
             native_handle,
             on_created,
             on_window,
@@ -370,6 +375,7 @@ impl Host {
             exclude_from_capture,
             color_scheme,
             window_backdrop,
+            frame_latency,
             native_handle,
             on_created,
             on_window,
@@ -485,6 +491,7 @@ impl Host {
             exclude_from_capture,
             color_scheme,
             window_backdrop,
+            frame_latency,
             applied_theme: None,
             native_handle,
             on_created,

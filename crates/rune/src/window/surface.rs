@@ -32,7 +32,7 @@ pub(crate) use configure::{ConfigureErrorKind, classify_scope_error};
 #[cfg(target_arch = "wasm32")]
 pub(crate) use configure::configure_then;
 #[cfg(target_os = "macos")]
-pub(in crate::window) use launch_drawables::LaunchDrawables;
+pub(crate) use launch_drawables::LaunchDrawables;
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::window) use loop_frame::LoopFrame;
 #[cfg(not(target_arch = "wasm32"))]
@@ -71,11 +71,32 @@ mod occluded_surface_tests;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const FRAME_LATENCY: u32 = if cfg!(target_os = "windows") { 1 } else { 2 };
 
-/// The frame latency a surface asked for `requested` gets: at least one, and never more than
-/// `FRAME_LATENCY`. `None` is `FRAME_LATENCY`.
+/// Resolves an optional `frame_latency` request for a platform whose default is
+/// `default_latency`: only macOS honours `requested` (clamped to `1..=2`, where `1` = 2
+/// drawables and `2` = 3 drawables); Windows, Linux, and the web ignore it and keep
+/// `default_latency`.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn frame_latency(requested: Option<u32>) -> u32 {
-    requested.map_or(FRAME_LATENCY, |n| n.clamp(1, FRAME_LATENCY))
+pub(crate) const fn effective_frame_latency(
+    requested: Option<u32>,
+    is_macos: bool,
+    default_latency: u32,
+) -> u32 {
+    if !is_macos {
+        return default_latency;
+    }
+    match requested {
+        Some(n) if n <= 1 => 1,
+        Some(_) => 2,
+        None => default_latency,
+    }
+}
+
+/// The frame latency a surface asked for `requested` gets on the current platform:
+/// macOS clamps `requested` to `1..=2` (default `2`); Windows and Linux ignore it and keep
+/// `FRAME_LATENCY`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const fn frame_latency(requested: Option<u32>) -> u32 {
+    effective_frame_latency(requested, cfg!(target_os = "macos"), FRAME_LATENCY)
 }
 
 /// The largest 2D surface side accepted while no GPU device is attached yet (Windows CPU boot, or
