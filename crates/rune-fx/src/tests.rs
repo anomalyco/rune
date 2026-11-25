@@ -249,6 +249,71 @@ fn zero_amplitude_electricity_is_a_straight_finite_line() {
     }
 }
 
+#[test]
+fn lens_veil_packs_in_c0_alpha_and_clamps_edges() {
+    let def = LensParams::default();
+    assert_eq!(def.veil, 0.0);
+    assert_eq!(def.frost_sigma, LensParams::DEFAULT_FROST_SIGMA);
+    assert_eq!(LensParams::DEFAULT_FROST_SIGMA, 18.0);
+
+    let layer = Fx::lens(def).on(card());
+    assert!(!layer.is_animating());
+    let (_, inst, _) = layer.pack().unwrap();
+    assert_eq!(inst.c0, [1.0, 1.0, 1.0, 0.0]);
+
+    let dark = rgb(0x18181b);
+    let veiled = Fx::lens(LensParams { tint: dark, veil: 0.6, ..Default::default() }).on(card());
+    assert!(!veiled.is_animating());
+    let (_, inst, _) = veiled.pack().unwrap();
+    assert_eq!(inst.c0, [dark.0[0], dark.0[1], dark.0[2], 0.6]);
+
+    for (raw, want) in [
+        (-0.5, 0.0),
+        (0.0, 0.0),
+        (0.35, 0.35),
+        (1.0, 1.0),
+        (2.5, 1.0),
+        (f32::NAN, 0.0),
+        (f32::INFINITY, 0.0),
+        (f32::NEG_INFINITY, 0.0),
+    ] {
+        let (_, inst, _) = Fx::lens(LensParams { tint: dark, veil: raw, ..Default::default() }).on(card()).pack().unwrap();
+        assert_eq!(inst.c0[3], want, "veil={raw:?}");
+    }
+}
+
+#[test]
+fn lens_frost_blur_pt_scales_with_frost_sigma_and_clamps_edges() {
+    assert_eq!(crate::pack::LENS_FROST_SIGMA, LensParams::DEFAULT_FROST_SIGMA);
+    assert_eq!(LensParams::default().frost_blur_pt(), 0.0);
+    assert_eq!(LensParams { frost: 1.0, ..Default::default() }.frost_blur_pt(), 18.0);
+    assert_eq!(LensParams { frost: 0.5, ..Default::default() }.frost_blur_pt(), 9.0);
+    assert_eq!(LensParams { frost: 1.0, frost_sigma: 6.0, ..Default::default() }.frost_blur_pt(), 6.0);
+    assert_eq!(LensParams { frost: 1.0, frost_sigma: 32.0, ..Default::default() }.frost_blur_pt(), 32.0);
+    assert_eq!(LensParams { frost: 1.0, frost_sigma: 1000.0, ..Default::default() }.frost_blur_pt(), 1000.0);
+    assert_eq!(LensParams { frost: 2.0, frost_sigma: 28.0, ..Default::default() }.frost_blur_pt(), 28.0);
+
+    for (frost, sigma) in [
+        (0.0, 28.0),
+        (-0.5, 28.0),
+        (1.0, 0.0),
+        (1.0, -12.0),
+        (f32::NAN, 18.0),
+        (1.0, f32::NAN),
+        (f32::INFINITY, 18.0),
+        (1.0, f32::INFINITY),
+        (1.0, f32::NEG_INFINITY),
+    ] {
+        let p = LensParams { frost, frost_sigma: sigma, ..Default::default() };
+        assert_eq!(p.frost_blur_pt(), 0.0, "frost={frost:?}, frost_sigma={sigma:?}");
+        let (_, inst, _) = Fx::lens(p).on(card()).pack().unwrap();
+        assert_eq!(inst.p1[1], 0.0, "zero effective blur clears shader frost: frost={frost:?}, frost_sigma={sigma:?}");
+    }
+
+    // Fluted glass stays on the fixed 18 pt constant.
+    assert_eq!(crate::pack::LENS_FROST_SIGMA, 18.0);
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn wgsl_uniform_and_storage_layouts_match_rust() {
@@ -308,6 +373,15 @@ fn wgsl_uniform_and_storage_layouts_match_rust() {
     check(
         "common+glow.wgsl",
         &fx_src,
+        &[
+            ("Globals", std::mem::size_of::<Globals>(), globals_fields),
+            ("Inst", std::mem::size_of::<InstRaw>(), inst_fields),
+        ],
+    );
+    let distort_src = format!("{}\n{}\n{}", crate::pipes::CLIP, crate::pipes::COMMON, crate::pipes::SOURCES[4].1);
+    check(
+        "common+distort.wgsl",
+        &distort_src,
         &[
             ("Globals", std::mem::size_of::<Globals>(), globals_fields),
             ("Inst", std::mem::size_of::<InstRaw>(), inst_fields),

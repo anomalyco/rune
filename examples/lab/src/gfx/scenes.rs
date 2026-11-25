@@ -545,6 +545,7 @@ impl Live {
                     Anchor::Over(node::CHROMA),
                 );
                 let q = cv.w([dp.x, dp.y]);
+                let veil = cv.k("veil");
                 push(
                     Fx::lens(LensParams {
                         depth: cv.k("depth"),
@@ -552,6 +553,9 @@ impl Live {
                         dispersion: cv.k("dispersion"),
                         magnification: cv.k("magnification"),
                         frost: cv.k("frost"),
+                        frost_sigma: cv.k("frost_sigma"),
+                        tint: if veil > 0.0 { rgb(0x18181b) } else { rgb(0xffffff) },
+                        veil,
                         presence: cv.a,
                         second: Some(Shape::circle(q[0], q[1], 26.0)),
                         union_k: 26.0,

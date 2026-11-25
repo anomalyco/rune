@@ -386,6 +386,17 @@ pub struct LensParams {
     pub union_k: f32,
     /// 0..1: morph the union toward `second` alone.
     pub morph: f32,
+    /// Blur sigma in points at `frost = 1.0` (default [`Self::DEFAULT_FROST_SIGMA`], 18.0 pt).
+    ///
+    /// Combined with `frost` via [`Self::frost_blur_pt`]. The backdrop blur pyramid reaches
+    /// 64 device pixels (32 pt at 2× scale, 64 pt at 1×).
+    pub frost_sigma: f32,
+    /// 0..1: mixes the glass body toward `tint` after the multiplicative tint and under the rim
+    /// light (default `0.0`).
+    ///
+    /// Use this for floating glass surfaces (pills, menus) that need their own colour over busy
+    /// backdrops so text on top stays readable.
+    pub veil: f32,
 }
 
 impl Default for LensParams {
@@ -405,7 +416,45 @@ impl Default for LensParams {
             second: None,
             union_k: 22.0,
             morph: 0.0,
+            frost_sigma: Self::DEFAULT_FROST_SIGMA,
+            veil: 0.0,
         }
+    }
+}
+
+impl LensParams {
+    /// Default blur sigma in points of a fully frosted lens (`frost = 1.0`).
+    ///
+    /// ```
+    /// # use rune_fx::LensParams;
+    /// assert_eq!(LensParams::default().frost_sigma, LensParams::DEFAULT_FROST_SIGMA);
+    /// assert_eq!(LensParams::DEFAULT_FROST_SIGMA, 18.0);
+    /// ```
+    pub const DEFAULT_FROST_SIGMA: f32 = 18.0;
+
+    /// Effective backdrop blur sigma in points (`frost.clamp(0.0, 1.0) * frost_sigma.max(0.0)`),
+    /// returning `0.0` if either input is non-finite or non-positive.
+    ///
+    /// The backdrop blur pyramid reaches 64 device pixels (32 pt at 2× scale, 64 pt at 1×).
+    ///
+    /// ```
+    /// # use rune_fx::{Fx, LensParams, Shape, rgb};
+    /// let pill = LensParams {
+    ///     frost: 1.0,
+    ///     frost_sigma: 28.0,
+    ///     tint: rgb(0x18181b),
+    ///     veil: 0.6,
+    ///     ..Default::default()
+    /// };
+    /// assert_eq!(pill.frost_blur_pt(), 28.0);
+    /// let _layer = Fx::lens(pill).on(Shape::capsule(24.0, 24.0, 220.0, 48.0));
+    /// ```
+    pub fn frost_blur_pt(&self) -> f32 {
+        if !self.frost.is_finite() || !self.frost_sigma.is_finite() {
+            return 0.0;
+        }
+        let blur = self.frost.clamp(0.0, 1.0) * self.frost_sigma.max(0.0);
+        if blur.is_finite() { blur } else { 0.0 }
     }
 }
 

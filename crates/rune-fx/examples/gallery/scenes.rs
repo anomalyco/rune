@@ -219,7 +219,7 @@ pub(super) fn scene(name: &str, b: &mut B) {
             }
         }
         "distort" => {
-            b.background("Distortion", "liquid-glass lens (gooey union) · shockwave · CRT · chromatic split");
+            b.background("Distortion", "liquid-glass lens (gooey union, veiled 28 pt frost) · shockwave · CRT · chromatic split");
             // Page content beneath.
             let tiles = [(0x8b5cf6, 0x5b21b6), (0xfb923c, 0xea580c), (0x2dd4bf, 0x0f766e), (0xf472b6, 0xbe185d)];
             for (i, (a, c)) in tiles.iter().enumerate() {
@@ -245,7 +245,15 @@ pub(super) fn scene(name: &str, b: &mut B) {
             b.fx(Fx::lens(LensParams { second: Some(Shape::circle(lx, 116.0, 30.0)), union_k: 26.0, ..Default::default() })
                 .on(Shape::capsule(140.0, 84.0, 200.0, 64.0)));
             b.backdrop();
-            b.fx(Fx::lens(LensParams { frost: 1.0, ..Default::default() }).on(Shape::capsule(388.0, 92.0, 220.0, 66.0)));
+            b.fx(Fx::lens(LensParams {
+                frost: 1.0,
+                frost_sigma: 28.0,
+                tint: rgb(0x18181b),
+                veil: 0.6,
+                ..Default::default()
+            })
+            .on(Shape::capsule(388.0, 92.0, 220.0, 66.0)));
+            b.text_c(498.0, 125.0, "Veiled glass · 28 pt", 13.0, 2, col(0xf3f4f6, 1.0));
             b.backdrop();
             b.fx(Fx::distort(DistortParams::shockwave([470.0, 150.0], 0.0)).on(Shape::rounded(0.0, 0.0, W, H, 0.0)));
             b.backdrop();

@@ -171,6 +171,17 @@ fn main() {
                     let i = specs(Scene::Lens).iter().position(|k| k.id == "frost").unwrap();
                     s.vals[Scene::Lens.idx()][i] = 1.0;
                 }),
+                ("lens-veil", |s| {
+                    s.scene = Scene::Lens;
+                    let set = |vals: &mut [f32], id: &str, v: f32| {
+                        let i = specs(Scene::Lens).iter().position(|k| k.id == id).unwrap();
+                        vals[i] = v;
+                    };
+                    let row = &mut s.vals[Scene::Lens.idx()];
+                    set(row, "frost", 1.0);
+                    set(row, "frost_sigma", 28.0);
+                    set(row, "veil", 0.6);
+                }),
                 ("extras", |s| s.scene = Scene::Extras),
                 ("motion-thrown", thrown),
                 ("fire-reduced", |s| {
