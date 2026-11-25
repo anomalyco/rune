@@ -7,11 +7,12 @@
 use super::{DragImage, DragItem, DragOperation, DragOutStart, DragOutcome, path_text};
 use std::cell::{Cell, RefCell};
 use objc2::{AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, rc::Retained, sel,
-    runtime::{AnyObject, NSObjectProtocol, ProtocolObject}};
+    runtime::{AnyClass, AnyObject, NSObjectProtocol, ProtocolObject}};
 use objc2_app_kit::{NSApplication, NSDragOperation, NSDraggingContext, NSDraggingFormation, NSDraggingItem,
     NSDraggingSession, NSDraggingSource, NSEvent, NSEventModifierFlags, NSEventType, NSImage,
     NSPasteboardItem, NSPasteboardTypeFileURL, NSPasteboardTypePNG, NSPasteboardTypeString, NSPasteboardTypeURL,
     NSPasteboardType, NSView, NSWindow};
+use objc2_core_foundation::{CFRetained, CFString};
 use objc2_foundation::{NSArray, NSData, NSObject, NSPoint, NSRect, NSSize, NSString, NSURL};
 
 type Done = Box<dyn FnOnce(DragOutcome)>;
@@ -210,28 +211,106 @@ fn image_and_frame(start: &DragOutStart, picture: Option<&DragImage>) -> (Option
     }
 }
 
-/// One pasteboard item per file, the PNG and text riding on the first (or alone without files).
+#[link(name = "CoreServices", kind = "framework")]
+unsafe extern "C" {
+    static kUTTagClassMIMEType: *const CFString;
+    static kUTTypeData: *const CFString;
+    fn UTTypeCreatePreferredIdentifierForTag(
+        in_tag_class: *const CFString,
+        in_tag: *const CFString,
+        in_conforming_to_uti: *const CFString,
+    ) -> *mut CFString;
+}
+
+/// Converts a MIME type string to a macOS Uniform Type Identifier (UTI) conforming to
+/// `public.data`, following Chromium's pasteboard mapping: `UniformTypeIdentifiers`
+/// `+[UTType typeWithMIMEType:conformingToType:]` when available, falling back to
+/// CoreServices `UTTypeCreatePreferredIdentifierForTag(kUTTagClassMIMEType, ..., kUTTypeData)`
+/// so unregistered MIME types still receive a deterministic `dyn.*` UTI.
+fn mime_to_uti(mime: &str) -> Option<Retained<NSPasteboardType>> {
+    mime_to_uti_uttype(mime).or_else(|| mime_to_uti_core_services(mime))
+}
+
+fn mime_to_uti_uttype(mime: &str) -> Option<Retained<NSPasteboardType>> {
+    let cls = AnyClass::get(c"UTType")?;
+    let ns_mime = NSString::from_str(mime);
+    let data_id = NSString::from_str("public.data");
+    // SAFETY: `UTType` is Apple's `UniformTypeIdentifiers` class; `typeWithIdentifier:` and
+    // `typeWithMIMEType:conformingToType:` return a `UTType` or nil, and `identifier` returns
+    // an `NSString`.
+    unsafe {
+        let data_type: Option<Retained<AnyObject>> = msg_send![cls, typeWithIdentifier: &*data_id];
+        let ut: Option<Retained<AnyObject>> = msg_send![cls, typeWithMIMEType: &*ns_mime, conformingToType: data_type.as_deref()];
+        let ut = ut?;
+        let id: Retained<NSString> = msg_send![&ut, identifier];
+        (id.length() > 0).then_some(id)
+    }
+}
+
+fn mime_to_uti_core_services(mime: &str) -> Option<Retained<NSPasteboardType>> {
+    let tag = CFString::from_str(mime);
+    // SAFETY: `UTTypeCreatePreferredIdentifierForTag` follows the Create Rule, returning either
+    // null or a +1 retained `CFString` which `CFRetained` releases on drop.
+    let uti = unsafe {
+        let raw = UTTypeCreatePreferredIdentifierForTag(
+            kUTTagClassMIMEType,
+            (&*tag) as *const CFString,
+            kUTTypeData,
+        );
+        CFRetained::from_raw(std::ptr::NonNull::new(raw)?)
+    };
+    let s = uti.to_string();
+    (!s.is_empty()).then(|| NSString::from_str(&s))
+}
+
+/// One pasteboard item per file, with PNG, text, and custom MIME data riding on the first (or
+/// alone when there are no files). Explicit custom entries take precedence over built-in types
+/// that map to the same UTI.
 fn pasteboard_items(start: &DragOutStart) -> Vec<Retained<NSPasteboardItem>> {
     // SAFETY: Foundation and AppKit pasteboard calls with live objects; AppKit's type
     // constants are immutable statics.
     unsafe {
         let item = &start.item;
+        let custom: Vec<(Retained<NSPasteboardType>, &[u8])> = item
+            .custom_data()
+            .filter_map(|(mime, bytes)| Some((mime_to_uti(mime)?, bytes)))
+            .collect();
+        let overrides = |builtin: &NSPasteboardType| custom.iter().any(|(uti, _)| **uti == *builtin);
         let mut out = Vec::new();
-        for path in item.paths() {
+        for (i, path) in item.paths().iter().enumerate() {
             let text = path_text(path);
             let ns_path = NSString::from_str(&text);
             let url = NSURL::fileURLWithPath(&ns_path);
             let Some(url) = url.absoluteString() else { continue };
             let p = NSPasteboardItem::new();
-            p.setString_forType(&url, NSPasteboardTypeFileURL);
-            p.setString_forType(&url, NSPasteboardTypeURL);
-            if item.plain_text().is_none() { p.setString_forType(&ns_path, NSPasteboardTypeString); }
+            if i > 0 || !overrides(NSPasteboardTypeFileURL) {
+                p.setString_forType(&url, NSPasteboardTypeFileURL);
+            }
+            if i > 0 || !overrides(NSPasteboardTypeURL) {
+                p.setString_forType(&url, NSPasteboardTypeURL);
+            }
+            if item.plain_text().is_none() && (i > 0 || !overrides(NSPasteboardTypeString)) {
+                p.setString_forType(&ns_path, NSPasteboardTypeString);
+            }
             out.push(p);
         }
-        if item.png_data().is_some() || item.plain_text().is_some() {
-            let p = match out.first() { Some(p) => p.clone(), None => { out.push(NSPasteboardItem::new()); out[0].clone() } };
-            if let Some(png) = item.png_data() { p.setData_forType(&NSData::with_bytes(png), NSPasteboardTypePNG); }
-            if let Some(text) = item.plain_text() { p.setString_forType(&NSString::from_str(text), NSPasteboardTypeString); }
+        if item.png_data().is_some() || item.plain_text().is_some() || !custom.is_empty() {
+            let p = match out.first() {
+                Some(p) => p.clone(),
+                None => {
+                    out.push(NSPasteboardItem::new());
+                    out[0].clone()
+                }
+            };
+            if let Some(png) = item.png_data() && !overrides(NSPasteboardTypePNG) {
+                p.setData_forType(&NSData::with_bytes(png), NSPasteboardTypePNG);
+            }
+            if let Some(text) = item.plain_text() && !overrides(NSPasteboardTypeString) {
+                p.setString_forType(&NSString::from_str(text), NSPasteboardTypeString);
+            }
+            for (uti, bytes) in custom {
+                p.setData_forType(&NSData::with_bytes(bytes), &uti);
+            }
         }
         out
     }
@@ -301,5 +380,80 @@ mod tests {
     #[test]
     fn a_panicking_end_callback_does_not_unwind() {
         report(Box::new(|_| panic!("boom")), DragOutcome::Cancelled);
+    }
+
+    #[test]
+    fn mime_to_uti_maps_standard_and_custom_types() {
+        assert_eq!(mime_to_uti("image/png").map(|s| s.to_string()).as_deref(), Some("public.png"));
+        assert_eq!(mime_to_uti("text/html").map(|s| s.to_string()).as_deref(), Some("public.html"));
+        let gnome_a = mime_to_uti("x-special/gnome-copied-files").expect("gnome UTI").to_string();
+        let gnome_b = mime_to_uti("x-special/gnome-copied-files").expect("deterministic UTI").to_string();
+        assert_eq!(gnome_a, gnome_b, "dynamic UTI must be deterministic");
+        assert!(gnome_a.starts_with("dyn."), "unregistered MIME should synthesize dyn.* UTI, got {gnome_a}");
+        let kde = mime_to_uti("application/x-kde-cutselection").expect("kde UTI").to_string();
+        assert!(kde.starts_with("dyn."), "got {kde}");
+        assert_ne!(gnome_a, kde);
+        let uri_list = mime_to_uti("text/uri-list").expect("uri-list UTI").to_string();
+        assert!(!uri_list.is_empty());
+    }
+
+    fn start_for(item: DragItem) -> DragOutStart {
+        DragOutStart { path: "row".into(), item, rect: [0.0, 0.0, 100.0, 24.0], bounds: [0.0, 0.0, 100.0, 24.0], press: (10.0, 10.0) }
+    }
+
+    #[test]
+    fn pasteboard_items_round_trip_custom_mime_data_on_private_pasteboard() {
+        let Some(pb) = crate::platform::macos::test_pasteboard::unique() else { return };
+        let item = DragItem::new()
+            .data("text/uri-list", "sftp://host/file.txt\r\n")
+            .data("x-special/gnome-copied-files", "copy\nsftp://host/file.txt")
+            .data("application/x-kde-cutselection", b"0".as_slice())
+            .data("application/x-rune-test-id", b"drag-42".as_slice());
+        let items = pasteboard_items(&start_for(item));
+        assert_eq!(items.len(), 1);
+        let objects: Vec<Retained<ProtocolObject<dyn objc2_app_kit::NSPasteboardWriting>>> =
+            items.into_iter().map(ProtocolObject::from_retained).collect();
+        pb.clearContents();
+        assert!(pb.writeObjects(&NSArray::from_retained_slice(&objects)));
+        for (mime, expected) in [
+            ("text/uri-list", b"sftp://host/file.txt\r\n".as_slice()),
+            ("x-special/gnome-copied-files", b"copy\nsftp://host/file.txt".as_slice()),
+            ("application/x-kde-cutselection", b"0".as_slice()),
+            ("application/x-rune-test-id", b"drag-42".as_slice()),
+        ] {
+            let uti = mime_to_uti(mime).expect("UTI");
+            let got = pb.dataForType(&uti).expect("round-tripped data").to_vec();
+            assert_eq!(got, expected, "mismatch for {mime} ({uti})");
+        }
+    }
+
+    #[test]
+    fn pasteboard_items_let_custom_data_override_builtin_png_and_ride_on_first_file() {
+        let Some(pb) = crate::platform::macos::test_pasteboard::unique() else { return };
+        let item = DragItem::new()
+            .file("/tmp/first.txt")
+            .file("/tmp/second.txt")
+            .png(b"builtin-png".as_slice())
+            .data("image/png", b"override-png".as_slice())
+            .data("application/x-kde-cutselection", b"0".as_slice());
+        let items = pasteboard_items(&start_for(item));
+        assert_eq!(items.len(), 2);
+        let objects: Vec<Retained<ProtocolObject<dyn objc2_app_kit::NSPasteboardWriting>>> =
+            items.into_iter().map(ProtocolObject::from_retained).collect();
+        pb.clearContents();
+        assert!(pb.writeObjects(&NSArray::from_retained_slice(&objects)));
+        let written = pb.pasteboardItems().expect("pasteboard items");
+        assert_eq!(written.count(), 2);
+        let first = written.objectAtIndex(0);
+        let second = written.objectAtIndex(1);
+        let kde_uti = mime_to_uti("application/x-kde-cutselection").expect("kde UTI");
+        // SAFETY: `NSPasteboardTypePNG` and `NSPasteboardTypeFileURL` are immutable AppKit statics.
+        unsafe {
+            assert_eq!(first.dataForType(NSPasteboardTypePNG).map(|d| d.to_vec()), Some(b"override-png".to_vec()));
+            assert!(first.stringForType(NSPasteboardTypeFileURL).is_some());
+            assert_eq!(first.dataForType(&kde_uti).map(|d| d.to_vec()), Some(b"0".to_vec()));
+            assert!(second.stringForType(NSPasteboardTypeFileURL).is_some());
+            assert!(second.dataForType(&kde_uti).is_none(), "custom data rides on the first item only");
+        }
     }
 }

@@ -18,7 +18,7 @@
 #![allow(unsafe_code)]
 
 use std::cell::{Cell, RefCell};
-use std::sync::{OnceLock, atomic::{AtomicUsize, Ordering}};
+use std::sync::{Mutex, OnceLock, atomic::{AtomicUsize, Ordering}};
 
 use windows::Win32::Foundation::{DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HGLOBAL, POINT, SIZE, S_OK};
 use windows::Win32::Graphics::Gdi::HBITMAP;
@@ -146,13 +146,7 @@ fn session(p: &Pending) -> Option<DragOutcome> {
     // `fRelease` belong to the data object.
     unsafe {
         OleInitialize(None).ok();
-        let data = data_object(item)?;
-        if let Some(png) = item.png_data() { set(&data, png_format(), hglobal(png)?); }
-        let text = item.plain_text().map(str::to_owned).or_else(|| item.paths().first().map(|f| native(f)));
-        if let Some(text) = text {
-            let units: Vec<u16> = text.encode_utf16().chain([0]).collect();
-            set(&data, CF_UNICODETEXT.0, hglobal(std::slice::from_raw_parts(units.as_ptr().cast(), units.len() * 2))?);
-        }
+        let data = populate_data_object(item)?;
         if let Ok(helper) = CoCreateInstance::<_, IDragSourceHelper>(&CLSID_DragDropHelper, None, CLSCTX_INPROC_SERVER) {
             let picture = p.picture.as_ref().and_then(|pic| drag_image(pic, &p.start, p.scale));
             match picture {
@@ -169,6 +163,68 @@ fn session(p: &Pending) -> Option<DragOutcome> {
         let result = DoDragDrop(&data, &source, effects(item), &mut effect);
         if !within_app { crate::platform::win32::drop_target::mute(false); }
         Some(if result == DRAGDROP_S_DROP { outcome(effect) } else { DragOutcome::Cancelled })
+    }
+}
+
+/// Maximum distinct custom MIME clipboard formats registered per process via
+/// `RegisterClipboardFormatW`. Windows' session USER atom table holds 16,384 entries and
+/// registered clipboard formats cannot be freed until session end, so this cap prevents a
+/// caller from exhausting the table (matching Chromium's bounded registration guard).
+const MAX_CUSTOM_FORMATS: usize = 256;
+
+struct FormatCache {
+    by_name: rustc_hash::FxHashMap<String, u16>,
+}
+
+impl FormatCache {
+    fn new() -> Self { Self { by_name: rustc_hash::FxHashMap::default() } }
+
+    fn get_or_register(&mut self, mime: &str, register: impl FnOnce(&str) -> u16) -> Option<u16> {
+        let key = mime.to_ascii_lowercase();
+        if let Some(&id) = self.by_name.get(&key) {
+            return Some(id);
+        }
+        if self.by_name.len() >= MAX_CUSTOM_FORMATS {
+            return None;
+        }
+        let id = register(mime);
+        if id == 0 {
+            return None;
+        }
+        self.by_name.insert(key, id);
+        Some(id)
+    }
+}
+
+fn custom_format(mime: &str) -> Option<u16> {
+    static CACHE: OnceLock<Mutex<FormatCache>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(FormatCache::new()));
+    let mut guard = cache.lock().unwrap_or_else(|e| e.into_inner());
+    guard.get_or_register(mime, |name| {
+        // SAFETY: `wide(name)` is a NUL-terminated UTF-16 string.
+        unsafe { windows_sys::Win32::System::DataExchange::RegisterClipboardFormatW(wide(name).as_ptr()) as u16 }
+    })
+}
+
+/// Builds and populates the shell `IDataObject` with built-in formats (files, PNG, text) and any
+/// custom MIME entries from `DragItem::data`.
+unsafe fn populate_data_object(item: &DragItem) -> Option<IDataObject> {
+    // SAFETY: caller ensures COM/OLE is initialized on this thread; every HGLOBAL handed to
+    // `set` is either owned by `data` on success or freed on error.
+    unsafe {
+        let data = data_object(item)?;
+        if let Some(png) = item.png_data() { set(&data, png_format(), hglobal(png)?); }
+        let text = item.plain_text().map(str::to_owned).or_else(|| item.paths().first().map(|f| native(f)));
+        if let Some(text) = text {
+            let units: Vec<u16> = text.encode_utf16().chain([0]).collect();
+            set(&data, CF_UNICODETEXT.0, hglobal(std::slice::from_raw_parts(units.as_ptr().cast(), units.len() * 2))?);
+        }
+        for (mime, bytes) in item.custom_data() {
+            let Some(fmt) = custom_format(mime) else { continue };
+            let Some(medium) = hglobal(bytes) else { continue };
+            set(&data, fmt, medium);
+        }
+        Some(data)
     }
 }
 
@@ -206,25 +262,36 @@ fn drop_files(item: &DragItem) -> Option<HGLOBAL> {
 }
 
 fn hglobal(bytes: &[u8]) -> Option<HGLOBAL> {
-    use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
-    // SAFETY: a new movable block of the bytes' size, filled while locked.
+    use windows_sys::Win32::Foundation::GlobalFree;
+    use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalUnlock};
+    // SAFETY: a new zeroed movable block of at least 1 byte (Windows refuses to lock a 0-byte
+    // GMEM_MOVEABLE handle), filled while locked and freed if locking fails.
     unsafe {
-        let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len().max(1));
+        let h = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, bytes.len().max(1));
         if h.is_null() { return None; }
         let p = GlobalLock(h);
-        if p.is_null() { return None; }
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p.cast(), bytes.len());
+        if p.is_null() {
+            GlobalFree(h);
+            return None;
+        }
+        if !bytes.is_empty() {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), p.cast(), bytes.len());
+        }
         GlobalUnlock(h);
         Some(HGLOBAL(h))
     }
 }
 
-/// Hands `medium` to `data` as `format`; the data object owns it from then on.
+/// Hands `medium` to `data` as `format`; the data object owns it on success, otherwise it is
+/// freed here so a refused format does not leak.
 unsafe fn set(data: &IDataObject, format: u16, medium: HGLOBAL) {
     let format = FORMATETC { cfFormat: format, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
-    let medium = STGMEDIUM { tymed: TYMED_HGLOBAL.0 as u32, u: STGMEDIUM_0 { hGlobal: medium }, pUnkForRelease: std::mem::ManuallyDrop::new(None) };
-    // SAFETY: a valid format and an HGLOBAL medium the call takes ownership of.
-    unsafe { data.SetData(&format, &medium, true).ok(); }
+    let stg = STGMEDIUM { tymed: TYMED_HGLOBAL.0 as u32, u: STGMEDIUM_0 { hGlobal: medium }, pUnkForRelease: std::mem::ManuallyDrop::new(None) };
+    // SAFETY: a valid format and an HGLOBAL medium the call takes ownership of on success.
+    if unsafe { data.SetData(&format, &stg, true) }.is_err() {
+        // SAFETY: `SetData` failed, so ownership of `medium` remained with the caller.
+        unsafe { windows_sys::Win32::Foundation::GlobalFree(medium.0); }
+    }
 }
 
 fn png_format() -> u16 {
@@ -290,4 +357,107 @@ impl IDropSource_Impl for Source_Impl {
     }
 
     fn GiveFeedback(&self, _: DROPEFFECT) -> HRESULT { DRAGDROP_S_USEDEFAULTCURSORS }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::System::Com::DATADIR_GET;
+    use windows::Win32::System::Ole::ReleaseStgMedium;
+
+    #[test]
+    fn format_cache_reuses_entries_and_caps_at_256() {
+        let mut cache = FormatCache::new();
+        let calls = Cell::new(0u16);
+        let reg = |_: &str| {
+            let n = calls.get() + 1;
+            calls.set(n);
+            0xC000 + n
+        };
+        let first = cache.get_or_register("text/uri-list", reg);
+        assert_eq!(first, Some(0xC001));
+        assert_eq!(cache.get_or_register("text/uri-list", reg), Some(0xC001));
+        assert_eq!(cache.get_or_register("TEXT/URI-LIST", reg), Some(0xC001));
+        assert_eq!(calls.get(), 1, "exact and case-variant lookups must reuse the cached format");
+
+        // A failed registration (0) is not cached and does not consume a slot.
+        assert_eq!(cache.get_or_register("application/x-fail", |_| 0), None);
+        assert_eq!(cache.by_name.len(), 1);
+
+        for i in 1..MAX_CUSTOM_FORMATS {
+            let name = format!("application/x-rune-cap-{i}");
+            assert!(cache.get_or_register(&name, reg).is_some());
+        }
+        assert_eq!(cache.by_name.len(), MAX_CUSTOM_FORMATS);
+        let before = calls.get();
+        assert_eq!(cache.get_or_register("application/x-rune-overflow", reg), None);
+        assert_eq!(calls.get(), before, "overflow must not call RegisterClipboardFormatW");
+        assert_eq!(cache.get_or_register("text/uri-list", reg), Some(0xC001), "existing entries stay reachable at the cap");
+    }
+
+    #[test]
+    fn populate_data_object_enumerates_and_reads_custom_formats_in_process() {
+        let item = DragItem::new()
+            .data("text/uri-list", "sftp://host/file.txt\r\n")
+            .data("x-special/gnome-copied-files", "copy\nsftp://host/file.txt")
+            .data("application/x-kde-cutselection", b"0".as_slice())
+            .data("application/x-rune-test-id", b"drag-42".as_slice());
+
+        // SAFETY: in-process COM/OLE data object test (no window, no DoDragDrop, no clipboard).
+        unsafe {
+            OleInitialize(None).ok();
+            let data = populate_data_object(&item).expect("IDataObject");
+
+            let enumerator = data.EnumFormatEtc(DATADIR_GET.0 as u32).expect("EnumFormatEtc");
+            let mut enumerated = Vec::new();
+            let mut slot = [FORMATETC::default(); 1];
+            let mut fetched = 0u32;
+            while enumerator.Next(&mut slot, Some(&mut fetched)) == S_OK && fetched == 1 {
+                enumerated.push(slot[0].cfFormat);
+            }
+
+            for (mime, expected) in [
+                ("text/uri-list", b"sftp://host/file.txt\r\n".as_slice()),
+                ("x-special/gnome-copied-files", b"copy\nsftp://host/file.txt".as_slice()),
+                ("application/x-kde-cutselection", b"0".as_slice()),
+                ("application/x-rune-test-id", b"drag-42".as_slice()),
+            ] {
+                let fmt = custom_format(mime).expect("registered clipboard format");
+                assert!(enumerated.contains(&fmt), "EnumFormatEtc missing format {fmt} for {mime}; got {enumerated:?}");
+                let query = FORMATETC {
+                    cfFormat: fmt,
+                    ptd: std::ptr::null_mut(),
+                    dwAspect: DVASPECT_CONTENT.0,
+                    lindex: -1,
+                    tymed: TYMED_HGLOBAL.0 as u32,
+                };
+                let mut stg = data.GetData(&query).expect("GetData");
+                assert_eq!(stg.tymed, TYMED_HGLOBAL.0 as u32);
+                let h = stg.u.hGlobal.0;
+                let size = windows_sys::Win32::System::Memory::GlobalSize(h);
+                let ptr = windows_sys::Win32::System::Memory::GlobalLock(h);
+                assert!(!ptr.is_null());
+                let got = std::slice::from_raw_parts(ptr.cast::<u8>(), size).to_vec();
+                windows_sys::Win32::System::Memory::GlobalUnlock(h);
+                ReleaseStgMedium(&mut stg);
+                assert_eq!(got, expected, "payload mismatch for {mime}");
+            }
+        }
+    }
+
+    #[test]
+    fn drag_image_hotspot_sets_shdragimage_offset() {
+        let img = DragImage::rgba(48, 48, &[255; 48 * 48 * 4]).unwrap().size(48.0, 48.0).hotspot(12.0, 18.0);
+        let start = DragOutStart {
+            path: "row".into(),
+            item: DragItem::new().image(img.clone()),
+            rect: [0.0, 0.0, 100.0, 30.0],
+            bounds: [0.0, 0.0, 100.0, 30.0],
+            press: (50.0, 60.0),
+        };
+        let shdi = drag_image(&img, &start, 1.0).expect("SHDRAGIMAGE");
+        assert_eq!((shdi.ptOffset.x, shdi.ptOffset.y), (12, 18));
+        // SAFETY: `shdi.hbmpDragImage` was created by `CreateDIBSection` above and is not handed to the shell.
+        unsafe { windows_sys::Win32::Graphics::Gdi::DeleteObject(shdi.hbmpDragImage.0); }
+    }
 }

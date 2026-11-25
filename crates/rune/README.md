@@ -2572,12 +2572,16 @@ Or ask from a handler, with no executor or waker to wire up:
 
 ### Dragging out to other apps (`drag_out`)
 
-`.drag_out(..)` makes an element a system drag source: drag it into Finder, Mail or System
-Settings and the other app receives files, PNG data or text.
+`.drag_out(..)` makes an element a system drag source: drag it into Finder, Explorer, Mail or
+System Settings and the other app receives files, PNG data, plain text, or custom MIME bytes.
 
 ```rust
 el().child(text("Example"))
-    .drag_out(|s: &App| Some(DragItem::new().file("/Applications/Example.app")))
+    .drag_out(|s: &App| {
+        Some(DragItem::new()
+            .file("/Applications/Example.app")
+            .data("text/uri-list", "sftp://host/file.txt\r\n"))
+    })
     .on_drag_end(|s: &mut App, outcome, _tx| s.last_drop = Some(outcome))
 ```
 
@@ -2587,14 +2591,27 @@ released before the threshold still runs `on_press`; a drag-out element never ru
 Once the system drag starts, Rune drops the pointer capture and hover, so nothing stays pressed.
 Files are offered as copies (`DragItem::allow_move` also offers a move), an app bundle can be
 dropped into System Settings' privacy lists, and the picture under the pointer is a snapshot of
-the element unless `DragItem::image` sets one. `on_drag_end` receives `DragOutcome::Copied`,
-`Moved`, `Linked` or `Cancelled`. The app's own windows take no drop from its drags unless
-`DragItem::within_app` offers it to them: their `on_drop_files` targets then receive the files
-as they would from Finder (an image dragged from a list into a composer).
+the element unless `DragItem::image` sets one (call `DragImage::hotspot(x, y)` to pin an
+image-local point under the pointer instead of centring the image). `on_drag_end` receives
+`DragOutcome::Copied`, `Moved`, `Linked` or `Cancelled`. The app's own windows take no drop
+from its drags unless `DragItem::within_app` offers it to them: their `on_drop_files` targets
+then receive the files as they would from Finder (an image dragged from a list into a composer).
 
-macOS only for now. Elsewhere `drag_out` is ignored and the element keeps its press and
-`on_drag` behaviour. Headless runs record `drag-out <path>` in `--trace` and mark the node
-`dragOut` in `--tree`. `examples/drag-out` drags a file, an app and some text.
+Custom MIME payloads use `DragItem::data(mime, bytes)` (read back with `data_for` and
+`custom_data`). Entries keep their insertion order (repeating a MIME type replaces its bytes in
+place), and each `DragItem` is bounded to `drag_out::MAX_CUSTOM_DATA_ENTRIES` (64) entries and
+`drag_out::MAX_CUSTOM_DATA_BYTES` (32 MiB) total. On macOS each MIME type is converted to a
+Uniform Type Identifier via `UniformTypeIdentifiers` (`UTType`) / `CoreServices` (with a
+deterministic `dyn.*` UTI for unregistered MIME types) and written onto the first
+`NSPasteboardItem`. On Windows each MIME type is registered with `RegisterClipboardFormatW` and
+attached to the OLE `IDataObject` via `TYMED_HGLOBAL`, backed by a process-wide cache capped at
+256 distinct custom format names so callers cannot exhaust Windows' unreleasable 16k USER atom
+table.
+
+macOS and Windows run native OS drag sessions; on Linux `drag_out` is ignored for now and the
+element keeps its press and `on_drag` behaviour. Headless runs record `drag-out <path>` in
+`--trace` and mark the node `dragOut` in `--tree`. `examples/drag-out` drags a file, an app
+and some text.
 
 ### Dropping files in from other apps (`on_drop_files`)
 

@@ -142,6 +142,115 @@ fn readback_unpremultiplies_and_swaps_bgra() {
 }
 
 #[test]
+fn custom_data_preserves_order_and_replaces_in_place() {
+    let item = DragItem::new()
+        .data("text/uri-list", "sftp://host/a.txt\r\n")
+        .data("x-special/gnome-copied-files", "copy\nsftp://host/a.txt")
+        .data("application/x-kde-cutselection", b"0".as_slice())
+        .data("application/x-app-drag-id", b"id-1".as_slice())
+        .data("x-special/gnome-copied-files", "cut\nsftp://host/a.txt");
+
+    assert!(!item.is_empty());
+    let entries: Vec<(&str, &[u8])> = item.custom_data().collect();
+    assert_eq!(item.custom_data().len(), 4);
+    assert_eq!(entries, [
+        ("text/uri-list", b"sftp://host/a.txt\r\n".as_slice()),
+        ("x-special/gnome-copied-files", b"cut\nsftp://host/a.txt".as_slice()),
+        ("application/x-kde-cutselection", b"0".as_slice()),
+        ("application/x-app-drag-id", b"id-1".as_slice()),
+    ]);
+    assert_eq!(item.data_for("x-special/gnome-copied-files"), Some(b"cut\nsftp://host/a.txt".as_slice()));
+    assert_eq!(item.data_for("text/plain"), None);
+
+    // An empty byte payload is still a valid custom entry and makes the item non-empty.
+    let marker = DragItem::new().data("application/x-marker", b"".as_slice());
+    assert!(!marker.is_empty());
+    assert_eq!(marker.data_for("application/x-marker"), Some(b"".as_slice()));
+}
+
+#[test]
+fn custom_data_validates_mime_strings() {
+    let max_ok = "a".repeat(255);
+    let too_long = "a".repeat(256);
+    let item = DragItem::new()
+        .data("", b"x".as_slice())
+        .data(" text/plain", b"x".as_slice())
+        .data("text/plain ", b"x".as_slice())
+        .data("text/plain\0", b"x".as_slice())
+        .data("text/plain\n", b"x".as_slice())
+        .data("text/plain\r", b"x".as_slice())
+        .data("text/plain\t", b"x".as_slice())
+        .data("text/plain\x1f", b"x".as_slice())
+        .data("text/plain\x7f", b"x".as_slice())
+        .data("text/caf\u{00e9}", b"x".as_slice())
+        .data(too_long, b"x".as_slice());
+    assert!(item.is_empty(), "all invalid MIME entries must be ignored");
+    assert_eq!(item.custom_data().len(), 0);
+
+    let ok = DragItem::new()
+        .data(&max_ok, b"ok".as_slice())
+        .data("text/plain; charset=utf-8", b"hello".as_slice());
+    assert_eq!(ok.custom_data().len(), 2);
+    assert_eq!(ok.data_for(&max_ok), Some(b"ok".as_slice()));
+    assert_eq!(ok.data_for("text/plain; charset=utf-8"), Some(b"hello".as_slice()));
+}
+
+#[test]
+fn custom_data_enforces_entry_and_byte_bounds() {
+    let mut item = DragItem::new();
+    for i in 0..MAX_CUSTOM_DATA_ENTRIES {
+        item = item.data(format!("application/x-entry-{i}"), [i as u8]);
+    }
+    assert_eq!(item.custom_data().len(), MAX_CUSTOM_DATA_ENTRIES);
+    // The 65th distinct entry is ignored, while replacing an existing entry still works.
+    item = item.data("application/x-overflow", b"nope".as_slice());
+    assert_eq!(item.custom_data().len(), MAX_CUSTOM_DATA_ENTRIES);
+    assert_eq!(item.data_for("application/x-overflow"), None);
+    item = item.data("application/x-entry-0", b"updated".as_slice());
+    assert_eq!(item.data_for("application/x-entry-0"), Some(b"updated".as_slice()));
+
+    // Total byte bound: 32 MiB fits, +1 byte is rejected, in-place replacement subtracts old size.
+    let half = MAX_CUSTOM_DATA_BYTES / 2;
+    let sized = DragItem::new()
+        .data("application/x-a", vec![1u8; half])
+        .data("application/x-b", vec![2u8; MAX_CUSTOM_DATA_BYTES - half]);
+    assert_eq!(sized.custom_data().len(), 2);
+    let rejected_new = sized.clone().data("application/x-c", b"x".as_slice());
+    assert_eq!(rejected_new.data_for("application/x-c"), None);
+    // Replacing `a` with an oversized payload leaves `a` untouched.
+    let rejected_replace = sized.clone().data("application/x-a", vec![9u8; half + 1]);
+    assert_eq!(rejected_replace.data_for("application/x-a").map(<[u8]>::len), Some(half));
+    assert_eq!(rejected_replace.data_for("application/x-a").unwrap()[0], 1);
+    // Replacing `a` with a payload of the same size fits because the old `a` size is subtracted.
+    let replaced = sized.data("application/x-a", vec![7u8; half]);
+    assert_eq!(replaced.data_for("application/x-a").unwrap()[0], 7);
+    assert_eq!(replaced.custom_data().len(), 2);
+}
+
+#[test]
+fn drag_image_hotspot_places_frame_and_survives_backing() {
+    let rect = [20.0, 40.0, 200.0, 32.0];
+    let press = (50.0, 60.0);
+    let image = DragImage::rgba(4, 4, &[255, 0, 0, 128].repeat(16)).unwrap();
+    assert_eq!(image.hotspot_point(), None);
+    assert_eq!(image.clone().over_element().hotspot_point(), None);
+
+    let hot = image.clone().size(48.0, 48.0).hotspot(12.0, 18.0);
+    assert_eq!(hot.hotspot_point(), Some((12.0, 18.0)));
+    assert_eq!(hot.frame(rect, press, (64.0, 64.0)), [38.0, 42.0, 48.0, 48.0]);
+
+    let natural_hot = image.clone().hotspot(5.0, 10.0);
+    assert_eq!(natural_hot.frame(rect, press, (64.0, 32.0)), [45.0, 50.0, 64.0, 32.0]);
+
+    let sanitized = image.clone().hotspot(f32::NAN, f32::INFINITY);
+    assert_eq!(sanitized.hotspot_point(), Some((0.0, 0.0)));
+
+    let flat = hot.over(Color::WHITE).unwrap();
+    assert_eq!(flat.hotspot_point(), Some((12.0, 18.0)));
+    assert_eq!(flat.frame(rect, press, (64.0, 64.0)), [38.0, 42.0, 48.0, 48.0]);
+}
+
+#[test]
 fn snapshot_unpremultiplies_correctly_on_srgb_and_unorm_targets() {
     use crate::render::{Gpu, Instance, KIND_RECT, NO_CLIP, Renderer};
     let Some(gpu) = Gpu::test_headless() else { return };
