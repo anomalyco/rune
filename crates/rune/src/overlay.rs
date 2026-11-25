@@ -431,7 +431,7 @@ enum Backing {
     /// Wayland without layer-shell: an X11 window on XWayland, for overlays that take no input
     /// or whose host opted in to pointer input there. Without that either, a Wayland toplevel
     /// (`Window`, `toplevel.rs`).
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(x11)]
     Xwayland(crate::platform::x11::xwayland::XwaylandSurface),
 }
 
@@ -441,7 +441,9 @@ impl Backing {
         match self {
             Backing::Window(w) => Some(w),
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            Backing::Layer(_) | Backing::Xwayland(_) => None,
+            Backing::Layer(_) => None,
+            #[cfg(x11)]
+            Backing::Xwayland(_) => None,
         }
     }
 }
@@ -508,7 +510,7 @@ pub(in crate::overlay) struct OverlayCore {
     panel: Option<crate::platform::macos::Panel>,
     #[cfg(target_os = "windows")]
     native: Option<crate::platform::win32::OverlayWindow>,
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(x11)]
     x11: Option<crate::platform::x11::overlay::InputWindow>,
     surface: surface::Surface,
     /// `ConfiguredOverlay::release_gpu_when_hidden` or `release_gpu_after`.
@@ -615,7 +617,7 @@ impl OverlayCore {
             panel: None,
             #[cfg(target_os = "windows")]
             native: None,
-            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            #[cfg(x11)]
             x11: None,
             mods: Default::default(),
             control_click: false,
@@ -732,7 +734,7 @@ impl OverlayCore {
         if let Some(p) = position(event_loop, self.at, &self.options) {
             window.set_outer_position(p);
         }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         if let Some(x11) = &self.x11 { x11.update_geometry(); }
     }
 
@@ -763,7 +765,7 @@ impl OverlayCore {
             let _ = app;
             window.set_visible(true);
         }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         if let Some(x11) = &self.x11 { x11.show(self.options.level); }
     }
 
@@ -786,7 +788,7 @@ impl OverlayCore {
                 layer.place(self.at);
                 layer.commit();
             }
-            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            #[cfg(x11)]
             Backing::Xwayland(surface) => surface.place(self.at, &self.options),
         }
         if let Some(gpu) = self.gpu.clone() {
@@ -820,7 +822,7 @@ impl OverlayCore {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
+    #[cfg(any(target_os = "windows", x11))]
     fn follow_pointer(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, point: (i32, i32)) {
         if !self.position_owner.is_managed() || !self.options.follow_pointer { return; }
         self.move_to_pointer_display(app, event_loop, point);
@@ -832,12 +834,12 @@ impl OverlayCore {
         crate::platform::win32::pointer_position()
     }
 
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(x11)]
     fn sample_pointer(event_loop: &ActiveEventLoop) -> Option<(i32, i32)> {
         (!crate::window::is_wayland(event_loop)).then(crate::platform::x11::overlay::pointer_position).flatten()
     }
 
-    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+    #[cfg(not(any(target_os = "windows", x11)))]
     fn sample_pointer(_: &ActiveEventLoop) -> Option<(i32, i32)> {
         None
     }

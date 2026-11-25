@@ -199,24 +199,33 @@ pub(in crate::window) fn window_menu(window: &Window, menu: crate::runtime::Wind
     // pointer, or the window's top-left corner.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     {
-        use crate::platform::x11::window_menu::{At, show_window_menu};
         use crate::runtime::WindowMenu;
         if is_wayland_window(window) {
             let (x, y) = match menu { WindowMenu::Keyboard => (0.0, 0.0), WindowMenu::Pointer => at.unwrap_or((0.0, 0.0)) };
             window.show_window_menu(winit::dpi::LogicalPosition::new(f64::from(x.max(0.0)), f64::from(y.max(0.0))));
             return;
         }
-        let scale = window.scale_factor();
-        let at = match (menu, at) {
-            (WindowMenu::Keyboard, _) => At::Window(0, 0),
-            (WindowMenu::Pointer, Some((x, y))) => At::Window((f64::from(x) * scale).round() as i32, (f64::from(y) * scale).round() as i32),
-            (WindowMenu::Pointer, None) => At::Pointer,
-        };
-        show_window_menu(window, at);
+        #[cfg(x11)]
+        {
+            use crate::platform::x11::window_menu::{At, show_window_menu};
+            let scale = window.scale_factor();
+            let at = match (menu, at) {
+                (WindowMenu::Keyboard, _) => At::Window(0, 0),
+                (WindowMenu::Pointer, Some((x, y))) => At::Window((f64::from(x) * scale).round() as i32, (f64::from(y) * scale).round() as i32),
+                (WindowMenu::Pointer, None) => At::Pointer,
+            };
+            show_window_menu(window, at);
+        }
     }
     #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     let _ = (window, menu, at);
 }
+
+/// Whether the X11 window manager advertises `_GTK_SHOW_WINDOW_MENU` for `window`.
+#[cfg(x11)]
+fn x11_window_menu(window: &Window) -> bool { crate::platform::x11::window_menu::has_window_menu(window) }
+#[cfg(wayland_only)]
+fn x11_window_menu(_: &Window) -> bool { false }
 
 /// Whether Alt+Space opens this window's window menu when no handler takes it: on Wayland every
 /// toplevel can ask; on X11, when the window manager advertises `_GTK_SHOW_WINDOW_MENU`.
@@ -224,7 +233,7 @@ pub(in crate::window) fn has_window_menu(window: &Window) -> bool {
     #[cfg(target_os = "windows")]
     return crate::platform::win32::has_window_menu(window);
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    return is_wayland_window(window) || crate::platform::x11::window_menu::has_window_menu(window);
+    return is_wayland_window(window) || x11_window_menu(window);
     #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     { let _ = window; false }
 }

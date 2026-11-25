@@ -172,13 +172,13 @@ impl ClipboardImage {
         Some(Self { png, size })
     }
     /// Encodes 8-bit RGBA pixels, row by row, as PNG.
-    #[cfg_attr(any(target_os = "macos", target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+    #[cfg_attr(any(target_os = "macos", target_os = "ios", target_os = "android", target_arch = "wasm32", wayland_only), allow(dead_code))]
     pub(crate) fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Option<Self> {
         if !valid_image_size(width, height) { return None; }
         Self::from_png(crate::drag_out::encode_png(width, height, rgba)?)
     }
     /// Decodes the PNG to 8-bit RGBA, for clipboards that take pixels.
-    #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+    #[cfg(any(target_os = "windows", x11))]
     pub(crate) fn to_rgba(&self) -> Option<image::RgbaImage> {
         crate::image::png_rgba8(&self.png).ok()
     }

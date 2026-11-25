@@ -1,10 +1,35 @@
 //! Linux's primary selection on the OS (X11 `PRIMARY`, Wayland's primary selection through
-//! data control): its own worker over arboard, beside the clipboard's, so a primary read never
+//! data control): its own worker over arboard (wl-clipboard-rs without the `x11` feature,
+//! `clipboard::wayland`), beside the clipboard's, so a primary read never
 //! waits behind a clipboard read and a secret's hold never sees it. What goes on it and where a
 //! middle click pastes it is the runtime's (`runtime/input/primary_selection.rs`).
-use arboard::{GetExtLinux, LinuxClipboardKind, SetExtLinux};
-
 use super::*;
+
+#[cfg(not(wayland_only))]
+type Board = arboard::Clipboard;
+#[cfg(wayland_only)]
+type Board = super::wayland::Clipboard;
+
+#[cfg(not(wayland_only))]
+fn open() -> Option<Board> { arboard::Clipboard::new().ok() }
+#[cfg(wayland_only)]
+fn open() -> Option<Board> { Board::open() }
+
+#[cfg(not(wayland_only))]
+fn write(board: &mut Board, text: String) {
+    use arboard::{LinuxClipboardKind, SetExtLinux};
+    board.set().clipboard(LinuxClipboardKind::Primary).text(text).ok();
+}
+#[cfg(wayland_only)]
+fn write(board: &mut Board, text: String) { board.write_primary(text); }
+
+#[cfg(not(wayland_only))]
+fn read(board: &mut Board) -> Option<String> {
+    use arboard::{GetExtLinux, LinuxClipboardKind};
+    board.get().clipboard(LinuxClipboardKind::Primary).text().ok().filter(|t| !t.is_empty())
+}
+#[cfg(wayland_only)]
+fn read(board: &mut Board) -> Option<String> { board.read_primary() }
 
 enum Request {
     Write(String),
@@ -26,14 +51,14 @@ fn worker() -> &'static mpsc::Sender<Request> {
 }
 
 fn run(requests: mpsc::Receiver<Request>) {
-    let mut board: Option<arboard::Clipboard> = None;
+    let mut board: Option<Board> = None;
     for request in requests {
-        if board.is_none() { board = arboard::Clipboard::new().ok(); }
+        if board.is_none() { board = open(); }
         let Some(cb) = board.as_mut() else { continue };
         match request {
-            Request::Write(text) => { cb.set().clipboard(LinuxClipboardKind::Primary).text(text).ok(); }
+            Request::Write(text) => write(cb, text),
             Request::Read { target, reply, wake } => {
-                let text = cb.get().clipboard(LinuxClipboardKind::Primary).text().ok().filter(|t| !t.is_empty());
+                let text = read(cb);
                 let answer = Purpose::Paste(Some(target), Forms::Text).reply(text.map(|t| ClipboardContent::from(Zeroizing::new(t))));
                 if let Some(answer) = answer && reply.send(answer).is_ok() { wake(); }
             }

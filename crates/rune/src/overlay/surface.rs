@@ -154,7 +154,9 @@ impl OverlayCore {
         let a11y = self.shared.wake.lock().unwrap().clone().and_then(|wake| match &backing {
             Backing::Window(window) => crate::a11y::Adapter::new(window, wake),
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            Backing::Layer(_) | Backing::Xwayland(_) => crate::a11y::Adapter::windowless(wake),
+            Backing::Layer(_) => crate::a11y::Adapter::windowless(wake),
+            #[cfg(x11)]
+            Backing::Xwayland(_) => crate::a11y::Adapter::windowless(wake),
         });
         #[cfg(target_os = "macos")]
         let moved = self.panel.as_ref().map(|p| p.raw_handles());
@@ -188,7 +190,7 @@ impl OverlayCore {
                     }
                     .ok()
                 }
-                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                #[cfg(x11)]
                 Backing::Xwayland(surface) => {
                     let (display, window) = surface.raw_handles()?;
                     // SAFETY: the X window and its connection outlive this wgpu surface (`Live`
@@ -472,7 +474,7 @@ impl OverlayCore {
         self.panel.take();
         #[cfg(target_os = "windows")]
         self.native.take();
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         self.x11.take();
         drop(backing);
         self.position_owner.step(input::PositionEvent::WindowReleased);

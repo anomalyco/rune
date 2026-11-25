@@ -23,6 +23,7 @@ use winit::window::Window;
 #[cfg(test)]
 pub(crate) mod fake;
 mod wayland;
+#[cfg(x11)]
 mod x11;
 
 /// The buffer a frame is painted into: B, G, R, A bytes, `stride` from one row to the next,
@@ -44,8 +45,12 @@ pub(crate) enum Put<'a> {
 }
 
 /// A window's CPU frames on their way to the screen.
+// Without the `x11` feature a test build's only other variant is the small `Fake`; one `Frames`
+// per window, so the size difference costs nothing worth a box.
+#[cfg_attr(all(test, wayland_only), allow(clippy::large_enum_variant))]
 pub(crate) enum Frames {
     Wayland(wayland::Frames),
+    #[cfg(x11)]
     X11(x11::Frames),
     /// Frames that go nowhere and count what a display would have had.
     #[cfg(test)]
@@ -82,9 +87,11 @@ impl Frames {
             (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(handle)) => {
                 wayland::Frames::new(display.display.as_ptr().cast(), handle.surface.as_ptr().cast(), size, alpha).map(Frames::Wayland)
             }
+            #[cfg(x11)]
             (_, RawWindowHandle::Xlib(handle)) => {
                 x11::Frames::new(u32::try_from(handle.window).ok()?, u32::try_from(handle.visual_id).ok()?, alpha).map(Frames::X11)
             }
+            #[cfg(x11)]
             (_, RawWindowHandle::Xcb(handle)) => x11::Frames::new(handle.window.get(), handle.visual_id?.get(), alpha).map(Frames::X11),
             _ => None,
         }
@@ -95,6 +102,7 @@ impl Frames {
     pub(crate) fn has_alpha(&self) -> bool {
         match self {
             Frames::Wayland(frames) => frames.has_alpha(),
+            #[cfg(x11)]
             Frames::X11(frames) => frames.has_alpha(),
             #[cfg(test)]
             Frames::Fake(frames) => frames.alpha,
@@ -106,6 +114,7 @@ impl Frames {
     pub(crate) fn begin(&mut self, size: (u32, u32)) -> Option<Canvas<'_>> {
         match self {
             Frames::Wayland(frames) => frames.begin(size),
+            #[cfg(x11)]
             Frames::X11(frames) => frames.begin(size),
             #[cfg(test)]
             Frames::Fake(frames) => frames.begin(size),
@@ -116,6 +125,7 @@ impl Frames {
     pub(crate) fn present(&mut self, put: Put<'_>) -> bool {
         match self {
             Frames::Wayland(frames) => frames.present(put),
+            #[cfg(x11)]
             Frames::X11(frames) => frames.present(put),
             #[cfg(test)]
             Frames::Fake(frames) => frames.present(put),
@@ -125,9 +135,11 @@ impl Frames {
     /// Whether the display asked for the window's pixels again since the last call (X11: an
     /// Expose; the server keeps nothing of a window that was covered or not yet mapped).
     /// `wait`: every request the display has had so far is answered first (a round trip).
+    #[cfg_attr(not(x11), allow(unused_variables))]
     pub(crate) fn exposed(&mut self, wait: bool) -> bool {
         match self {
             Frames::Wayland(_) => false,
+            #[cfg(x11)]
             Frames::X11(frames) => frames.exposed(wait),
             #[cfg(test)]
             Frames::Fake(_) => false,
@@ -138,6 +150,7 @@ impl Frames {
     pub(crate) fn forget(&mut self) {
         match self {
             Frames::Wayland(frames) => frames.forget(),
+            #[cfg(x11)]
             Frames::X11(frames) => frames.forget(),
             #[cfg(test)]
             Frames::Fake(frames) => frames.forget(),
@@ -148,7 +161,9 @@ impl Frames {
     /// module's rule). Called before the window's Vulkan surface is made. X11: returns once the
     /// server has every frame sent so far, so what the driver's connection draws lands after
     /// them. Wayland: one connection, nothing to wait for.
+    #[cfg_attr(not(x11), allow(unused_mut))]
     pub(crate) fn retire(mut self) -> Retired {
+        #[cfg(x11)]
         if let Frames::X11(frames) = &mut self { frames.exposed(true); }
         Retired(self)
     }
@@ -158,6 +173,7 @@ impl Frames {
     fn explicit_sync(&self) -> bool {
         match self {
             Frames::Wayland(frames) => frames.explicit_sync(),
+            #[cfg(x11)]
             Frames::X11(_) => false,
             #[cfg(test)]
             Frames::Fake(frames) => frames.explicit_sync,
@@ -172,6 +188,7 @@ impl Frames {
     pub(crate) fn last(&self) -> Option<(Vec<u8>, (u32, u32))> {
         match self {
             Frames::Wayland(frames) => frames.last(),
+            #[cfg(x11)]
             Frames::X11(frames) => frames.last(),
             #[cfg(test)]
             Frames::Fake(frames) => frames.last(),
@@ -180,6 +197,7 @@ impl Frames {
 }
 
 /// The smallest rectangle around `rects`, cut to `size`; None when it's empty.
+#[cfg_attr(not(any(test, x11)), allow(dead_code))]
 fn bounds(rects: &[[u32; 4]], size: (u32, u32)) -> Option<[u32; 4]> {
     let all = rects.iter().fold([u32::MAX, u32::MAX, 0, 0], |u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]);
     let cut = [all[0].min(size.0), all[1].min(size.1), all[2].min(size.0), all[3].min(size.1)];

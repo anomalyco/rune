@@ -2,19 +2,19 @@
 //! a position on every platform (macOS has no `draggingUpdated:`, and Windows and X11 drop
 //! the point they're given), and no pointer moves arrive while the drag lasts. The host
 //! samples the system pointer instead, when the drag enters, each frame while it's over the
-//! window, and when it drops.
+//! window, and when it drops. Linux samples it over X11 only, with the `x11` feature.
 use winit::window::Window;
 
 #[derive(Default)]
 pub(crate) struct DropPointer {
     /// A connection kept for the drag, so sampling 60 times a second doesn't reconnect.
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(x11)]
     x11: Option<(x11rb::rust_connection::RustConnection, u32)>,
 }
 
 impl DropPointer {
     pub(crate) fn new() -> Self {
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         return Self {
             x11: x11rb::connect(None).ok().and_then(|(c, screen)| {
                 use x11rb::connection::Connection as _;
@@ -47,7 +47,7 @@ impl DropPointer {
             let (x, y) = crate::platform::win32::pointer_position()?;
             return screen_to_window(window, (x, y));
         }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         {
             use x11rb::protocol::xproto::ConnectionExt as _;
             let (c, root) = self.x11.as_ref()?;
@@ -61,7 +61,7 @@ impl DropPointer {
 
 /// A screen point in physical pixels, in `window`'s content in points. `None` when the window
 /// can't say where it is (Wayland, including an X11 connection under XWayland).
-#[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+#[cfg(any(target_os = "windows", x11))]
 fn screen_to_window(window: &Window, (x, y): (i32, i32)) -> Option<(f32, f32)> {
     let origin = window.inner_position().ok()?;
     let scale = window.scale_factor() as f32;

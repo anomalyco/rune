@@ -1,4 +1,5 @@
-//! The OS clipboard: one worker thread over arboard, and the per-OS reads and writes.
+//! The OS clipboard: one worker thread over arboard (or, on Linux without the `x11` feature,
+//! wl-clipboard-rs: `clipboard::wayland`), and the per-OS reads and writes.
 
 use super::*;
 
@@ -54,7 +55,11 @@ fn worker() -> &'static mpsc::Sender<Request> {
     if cfg!(test) {
         panic!("unit test reached the OS clipboard; install a test clipboard (`rt.use_clipboard` or `Client::use_memory`)");
     }
-    &WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok())).sender
+    #[cfg(not(wayland_only))]
+    let open = || arboard::Clipboard::new().ok();
+    #[cfg(wayland_only)]
+    let open = super::wayland::Clipboard::open;
+    &WORKER.get_or_init(|| Worker::spawn(open)).sender
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -73,7 +78,7 @@ pub(super) fn shutdown() {
     if let Some(worker) = WORKER.get() { worker.stop(); }
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", wayland_only)))]
 impl Backend for arboard::Clipboard {
     fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { write(self, copy) }
     fn text(&mut self) -> Option<Zeroizing<String>> { self.get_text().ok().map(Zeroizing::new) }
@@ -136,7 +141,7 @@ fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() 
     drop(clipboard);
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", wayland_only)))]
 fn write(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), String> {
     let content = &copy.content;
     if copy.clear_after.is_none() && content.is_rich() {
@@ -150,7 +155,7 @@ fn write(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), Strin
 
 /// Windows and Linux hold one of Rune's forms per write: the files, else the image, else HTML
 /// beside the text (CF_HTML, `text/html`), else the text. RTF isn't written.
-#[cfg(all(not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"), not(wayland_only)))]
 fn write_one_form(cb: &mut arboard::Clipboard, content: &ClipboardContent) -> Result<(), String> {
     let error = |e: arboard::Error| e.to_string();
     if !content.files().is_empty() { return cb.set().file_list(content.files()).map_err(error); }
@@ -165,7 +170,7 @@ fn write_one_form(cb: &mut arboard::Clipboard, content: &ClipboardContent) -> Re
     }
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
+#[cfg(not(any(target_os = "ios", target_os = "android", wayland_only)))]
 fn write_text(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), arboard::Error> {
     let text = copy.content.text();
     if copy.clear_after.is_none() { return cb.set_text(text); }

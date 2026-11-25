@@ -237,7 +237,7 @@ impl AnyHost for OverlayHost {
             core.sync_live_origin(app.rt_mut());
         }
         if !core.presence.shown() { return; }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. })
             && let Some(x11) = &core.x11 { x11.update_geometry(); }
         #[cfg(target_os = "windows")]
@@ -245,7 +245,7 @@ impl AnyHost for OverlayHost {
             && let Some(native) = &core.native { native.update_geometry(); }
         // A click gives an overlay that may take keys the focus, as it does the macOS panel; the
         // window manager gives an override-redirect window none.
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         if let WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. } = event && let Some(x11) = &core.x11 { x11.request_keys(); }
         use crate::input::host_events;
         if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
@@ -402,7 +402,7 @@ impl AnyHost for OverlayHost {
             let more = core.draw(app);
             return core.a11y_turn(app.rt_mut()) || more;
         }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         if let Some(live) = core.surface.live() && let Some(x11) = &core.x11 && let Some((point, desktop)) = x11.take_pointer(live.scale) {
             core.observe_pointer(app, point.0, point.1);
             core.follow_pointer(app, _event_loop, desktop);

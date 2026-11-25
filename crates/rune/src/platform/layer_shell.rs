@@ -549,6 +549,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
 /// Wakes the event loop when an XWayland overlay's own X connection becomes readable.
 /// Wayland layer surfaces wake through winit's `set_wake_on_wayland_read` instead of a
 /// background reader thread.
+#[cfg_attr(wayland_only, allow(dead_code))]
 pub(crate) struct Watch {
     stop: Arc<AtomicBool>,
     /// How many times the overlay has dispatched, so the watcher waits for the loop to read
@@ -558,6 +559,7 @@ pub(crate) struct Watch {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
+#[cfg_attr(wayland_only, allow(dead_code))]
 impl Watch {
     #[allow(unsafe_code)]
     pub(crate) fn spawn(fd: RawFd, wake: Waker) -> Watch {

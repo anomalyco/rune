@@ -66,7 +66,7 @@ impl<C> QueryCache<C> {
 
 /// Maps an `x11rb` query result into `QueryOutcome`: X11 protocol errors and missing extensions
 /// leave the connection healthy, while transport errors mean the connection must be dropped.
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 pub(crate) fn classify_reply<T>(result: Result<Option<T>, x11rb::errors::ReplyError>) -> QueryOutcome<T> {
     use x11rb::errors::{ConnectionError, ReplyError};
     match result {
@@ -81,7 +81,7 @@ pub(crate) fn classify_reply<T>(result: Result<Option<T>, x11rb::errors::ReplyEr
 /// Maps an `x11rb` result that may also allocate an XID into `QueryOutcome`: X11 protocol
 /// errors and missing extensions leave the connection healthy, while transport errors or an
 /// exhausted XID range mean the connection must be dropped.
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 pub(crate) fn classify_reply_or_id<T>(result: Result<Option<T>, x11rb::errors::ReplyOrIdError>) -> QueryOutcome<T> {
     use x11rb::errors::{ConnectionError, ReplyOrIdError};
     match result {
@@ -93,14 +93,14 @@ pub(crate) fn classify_reply_or_id<T>(result: Result<Option<T>, x11rb::errors::R
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 pub(super) struct X11Connection {
     pub(super) connection: x11rb::rust_connection::RustConnection,
     pub(super) screen: usize,
     pub(super) root: u32,
 }
 
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 impl X11Connection {
     fn connect() -> Option<Self> {
         use x11rb::connection::Connection as _;
@@ -116,12 +116,12 @@ impl X11Connection {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 static SHARED: QueryCache<X11Connection> = QueryCache::new();
 
 /// Runs one X11 request on the process's shared lazily-opened X11 connection, dropping and
 /// reconnecting once on a transport error.
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 pub(super) fn with_connection<T>(run: impl FnMut(&X11Connection) -> QueryOutcome<T>) -> Option<T> {
     SHARED.query(X11Connection::connect, run)
 }

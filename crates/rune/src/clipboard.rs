@@ -33,6 +33,8 @@ mod macos;
 mod native;
 #[cfg(target_os = "linux")]
 mod primary;
+#[cfg(wayland_only)]
+mod wayland;
 #[cfg(target_arch = "wasm32")]
 mod web;
 pub(crate) mod web_file;

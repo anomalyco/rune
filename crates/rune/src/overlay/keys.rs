@@ -8,7 +8,7 @@ use crate::{KeyPolicy, OverlaySupport};
 
 /// Whether an overlay window with `policy` may take keyboard focus. Windows makes one that may
 /// without `WS_EX_NOACTIVATE`; X11 gives it the focus on `request_keys` and on a click.
-#[cfg_attr(not(any(target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos", x11)), allow(dead_code))]
 pub(crate) fn can_take_keys(policy: KeyPolicy) -> bool {
     policy.takes_keys()
 }
@@ -16,7 +16,7 @@ pub(crate) fn can_take_keys(policy: KeyPolicy) -> bool {
 /// What an overlay with `policy` reports as `OverlayCapabilities::nonactivating_keys`.
 /// `focuser`: the platform piece that focuses it is there (X11's own connection, which a server
 /// without the SHAPE extension doesn't get; always there for the macOS panel and on Windows).
-#[cfg_attr(not(any(target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos", x11)), allow(dead_code))]
 pub(crate) fn keys_support(policy: KeyPolicy, focuser: bool) -> OverlaySupport {
     if can_take_keys(policy) && focuser { OverlaySupport::Supported } else { OverlaySupport::Unsupported }
 }

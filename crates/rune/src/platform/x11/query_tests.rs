@@ -109,7 +109,7 @@ fn recovers_once_server_returns_after_disconnect() {
     assert_eq!(connects.get(), 3);
 }
 
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 #[test]
 fn classify_reply_distinguishes_protocol_errors_from_disconnects() {
     use x11rb::errors::{ConnectionError, ReplyError};
@@ -144,7 +144,7 @@ fn classify_reply_distinguishes_protocol_errors_from_disconnects() {
     );
 }
 
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 #[test]
 fn classify_reply_or_id_distinguishes_protocol_errors_from_disconnects() {
     use x11rb::errors::{ConnectionError, ReplyOrIdError};

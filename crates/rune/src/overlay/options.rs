@@ -24,7 +24,7 @@ impl DisplayId {
         let native = { use winit::platform::macos::MonitorHandleExtMacOS; Some(NativeDisplayId::MacOS(monitor.native_id())) };
         #[cfg(target_os = "windows")]
         let native = { use winit::platform::windows::MonitorHandleExtWindows; Some(NativeDisplayId::Windows(monitor.hmonitor())) };
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        #[cfg(x11)]
         let native = Some(if _wayland {
             use winit::platform::wayland::MonitorHandleExtWayland;
             NativeDisplayId::Wayland(monitor.native_id())
@@ -32,6 +32,9 @@ impl DisplayId {
             use winit::platform::x11::MonitorHandleExtX11;
             NativeDisplayId::X11Crtc(monitor.native_id())
         });
+        // Without the `x11` feature every Linux monitor is a Wayland output.
+        #[cfg(all(unix, not(x11), not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        let native = { use winit::platform::wayland::MonitorHandleExtWayland; Some(NativeDisplayId::Wayland(monitor.native_id())) };
         #[cfg(any(target_os = "ios", target_os = "android", target_arch = "wasm32"))]
         let native = None;
         Self(monitor, native)

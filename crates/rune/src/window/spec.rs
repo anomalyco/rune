@@ -27,7 +27,7 @@ impl PlaceRequest {
                 |id| crate::DisplayTarget::Native(crate::NativeDisplayId::MacOS(id))); }
             #[cfg(target_os = "windows")]
             { request.pointer = crate::platform::win32::pointer_position(); }
-            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            #[cfg(x11)]
             { request.pointer = crate::platform::x11::overlay::pointer_position(); }
         }
         request

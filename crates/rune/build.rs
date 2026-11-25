@@ -22,6 +22,7 @@ const FS_ENTRY: &str = "@fragment\nfn fs(i: Out) -> @location(0) vec4<f32> {";
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
+    x11_cfg();
     // Paths are from the package's folder, where cargo runs this.
     let read = |path: &str| {
         println!("cargo::rerun-if-changed={path}");
@@ -810,5 +811,21 @@ fn parse_shader_consts(src: &WgslSources<'_>) -> ParsedShaderConsts {
         pinned_kind_off_decl: pinned_kind.line,
         pinned_kinds: [kind_rect, kind_shadow, kind_glyph],
         generated: out,
+    }
+}
+
+/// `cfg(x11)`: a Linux or BSD build with the `x11` feature, where X11 windows, overlays,
+/// shortcuts, pointer queries and arboard's clipboard are compiled in. `cfg(wayland_only)`: the
+/// same targets without it, Wayland only, with the clipboard on wl-clipboard-rs (Cargo.toml, `x11`).
+fn x11_cfg() {
+    println!("cargo::rustc-check-cfg=cfg(x11)");
+    println!("cargo::rustc-check-cfg=cfg(wayland_only)");
+    let os = std::env::var_os("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let unix = std::env::var_os("CARGO_CFG_UNIX").is_some();
+    if !unix || ["macos", "ios", "android"].iter().any(|apple_or_android| os == *apple_or_android) { return; }
+    if std::env::var_os("CARGO_FEATURE_X11").is_some() {
+        println!("cargo::rustc-cfg=x11");
+    } else {
+        println!("cargo::rustc-cfg=wayland_only");
     }
 }

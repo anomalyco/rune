@@ -6,7 +6,7 @@ impl OverlayCore {
     /// The compositor has no layer-shell (GNOME): an overlay that takes no input shows on
     /// XWayland when there is one, and so does one that takes the pointer when its host opted
     /// in (`OverlayOptions::xwayland_input`).
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(x11)]
     pub(super) fn xwayland(&mut self, app: &mut dyn OverlayApp) -> Option<Live> {
         let input = self.options.input.resolved(self.interactive);
         if !xwayland_allowed(input, self.options.keys, self.options.xwayland_input) { return None; }
@@ -18,7 +18,7 @@ impl OverlayCore {
         self.attach(app, Backing::Xwayland(surface), scale)
     }
 
-    #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    #[cfg(not(x11))]
     pub(super) fn xwayland(&mut self, _app: &mut dyn OverlayApp) -> Option<Live> {
         None
     }
@@ -26,7 +26,7 @@ impl OverlayCore {
 
 /// Whether an overlay may show on XWayland: one that takes no input always may; one that takes
 /// the pointer only by its host's opt-in; one that asks for keys never does.
-#[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+#[cfg_attr(not(x11), allow(dead_code))]
 pub(super) fn xwayland_allowed(input: OverlayInput, keys: KeyPolicy, opted_in: bool) -> bool {
     !keys.takes_keys() && (input == OverlayInput::None || opted_in)
 }
@@ -37,21 +37,21 @@ pub(super) fn xwayland_allowed(input: OverlayInput, keys: KeyPolicy, opted_in: b
 /// never captures clicks before its first `show()`. Showing transitions it to `Shown`, draining
 /// any stray events, applying the pending input policy, mapping the window above siblings, and
 /// starting the socket watch when input is enabled.
-#[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+#[cfg_attr(not(any(test, x11)), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SurfaceState {
     Hidden { input: OverlayInput, can_watch: bool },
     Shown { input: OverlayInput, can_watch: bool, watching: bool },
 }
 
-#[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+#[cfg_attr(not(any(test, x11)), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SurfaceEvent {
     Show,
     SetInput(OverlayInput),
 }
 
-#[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+#[cfg_attr(not(any(test, x11)), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SurfaceEffect {
     Drain,
@@ -60,7 +60,7 @@ pub(crate) enum SurfaceEffect {
     StartWatch,
 }
 
-#[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+#[cfg_attr(not(any(test, x11)), allow(dead_code))]
 impl SurfaceState {
     pub(crate) fn new(input: OverlayInput, has_wake: bool) -> Self {
         Self::Hidden { input, can_watch: input != OverlayInput::None && has_wake }
@@ -84,7 +84,7 @@ impl SurfaceState {
     }
 }
 
-#[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+#[cfg_attr(not(any(test, x11)), allow(dead_code))]
 pub(crate) fn step(state: &mut SurfaceState, event: SurfaceEvent) -> crate::machine::Effects<SurfaceEffect> {
     use crate::machine::Effects;
     match (*state, event) {

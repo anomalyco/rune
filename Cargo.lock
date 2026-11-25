@@ -3877,6 +3877,7 @@ dependencies = [
  "windows-registry",
  "windows-sys 0.61.2",
  "winit",
+ "wl-clipboard-rs",
  "x11rb",
  "xkbcommon",
  "zbus",

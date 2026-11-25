@@ -2052,6 +2052,7 @@ to hand a web view as is. RTF is passed through untouched.
 | macOS | text, `public.html`, `public.rtf` in one pasteboard change | HTML; else RTF converted to HTML (TextEdit, Notes, Pages); else text | `public.png` as is, else `public.tiff` converted to PNG |
 | Windows | text and CF_HTML (`HTML Format`); no RTF | CF_HTML fragment, else text | `PNG`, else `CF_DIBV5`, through arboard, encoded as PNG |
 | Linux (X11, Wayland data-control) | text and `text/html`; no RTF | `text/html`, else text | `image/png` through arboard, decoded and encoded again |
+| Linux without the `x11` feature (Wayland data-control) | text and `text/html` through wl-clipboard-rs; no RTF | `text/html`, else text | `image/png` as is |
 | Web | `text/plain` and `text/html` through the async Clipboard API; no RTF | `text/html` from the paste event or `navigator.clipboard.read()`, else text | `image/png` from the paste event's files or `navigator.clipboard.read()` |
 
 `rune::clipboard::revision()` returns the OS clipboard's change counter as `Option<u64>`
@@ -3514,6 +3515,18 @@ VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json target/debug/settings
 Without `libxkbcommon-x11-0` every windowed example panics at startup with
 `Library libxkbcommon-x11.so could not be loaded`; installing the package fixes
 it, and the app then runs under Xvfb. Headless `--snap` runs don't need a display or the XKB library.
+
+An app that only runs on Wayland can turn off the default `x11` feature
+(`default-features = false`, then list the defaults it keeps). Without it winit's X11 backend,
+`x11rb` and arboard aren't built and no X library is linked: there are no X11 windows, no
+XWayland overlay fallback on compositors without layer-shell (overlays fall back to a Wayland
+toplevel there), no X11 global shortcuts, no X11
+window menu (`_GTK_SHOW_WINDOW_MENU`) and no pointer sampling for file drags, and the clipboard and primary selection use Wayland's
+data-control protocol through wl-clipboard-rs (text, HTML, files and PNG images). That needs a
+compositor with data control (`zwlr_data_control_manager_v1` or `ext_data_control_manager_v1`):
+on one without it there is no clipboard at all, not even between the app's own text fields, and
+no XWayland fallback as arboard has. Copy and paste then do nothing and a secret copy reports
+`no clipboard`.
 
 ## Agent tooling (headless, no window, same renderer, fixed virtual clock)
 

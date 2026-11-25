@@ -123,6 +123,7 @@ fn wayland_shm_format_selects_argb8888_for_alpha_and_xrgb8888_for_opaque() {
     assert_eq!(super::wayland::shm_format(false), Format::Xrgb8888);
 }
 
+#[cfg(x11)]
 #[test]
 fn x11_visual_matching_supports_32bit_argb_and_24bit_opaque_fallback() {
     use super::x11::{PixmapFormat, VisualFormat, VisualInfo, match_visual};

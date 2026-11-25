@@ -101,7 +101,7 @@ pub(crate) fn remove_message_chunks(token: &str) -> Option<Vec<StartupChunk>> {
 /// with the token's `_TIME` timestamp and broadcasts `remove: ID=<escaped>` via
 /// `_NET_STARTUP_INFO_BEGIN` / `_NET_STARTUP_INFO`. Returns `false` when the token is invalid,
 /// the window has no X11 handle, or the X server cannot be reached.
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 pub(crate) fn activate(window: &winit::window::Window, token: &str) -> bool {
     use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
     use x11rb::connection::Connection as _;

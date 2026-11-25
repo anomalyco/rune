@@ -13,9 +13,9 @@ mod service;
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", x11))]
 mod x11;
-#[cfg(any(target_os = "linux", test))]
+#[cfg(any(all(target_os = "linux", x11), test))]
 mod x11_repeat;
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 mod wayland;
@@ -137,7 +137,8 @@ impl LinuxEnv<'_> {
 /// Chooses and opens the Linux global shortcuts backend for `env`. Native Wayland apps require
 /// the GlobalShortcuts portal; an XWayland app in a Wayland session tries the portal first so
 /// shortcuts fire while native Wayland windows have focus, falling back to X11 grabs when the
-/// portal is unavailable or `dbus` is disabled. Real X11 sessions open X11 directly.
+/// portal is unavailable or `dbus` is disabled. Real X11 sessions open X11 directly. Without the
+/// `x11` feature there are no X11 grabs: opening X11 returns `ShortcutError::Unsupported`.
 #[cfg(any(test, target_os = "linux"))]
 fn open_linux_backend<T>(
     env: LinuxEnv<'_>,
@@ -159,6 +160,7 @@ fn open_linux_backend<T>(
 }
 
 #[cfg(target_os = "linux")]
+#[cfg_attr(not(any(x11, feature = "dbus")), allow(unused_variables))]
 fn linux_backend(wayland: bool, sink: Sink) -> Result<NativeBackend, ShortcutError> {
     let session_type = crate::env::var("XDG_SESSION_TYPE");
     let wayland_display = crate::env::var("WAYLAND_DISPLAY");
@@ -178,7 +180,12 @@ fn linux_backend(wayland: bool, sink: Sink) -> Result<NativeBackend, ShortcutErr
             #[cfg(not(feature = "dbus"))]
             { Err(ShortcutError::Unsupported) }
         },
-        || Ok(Box::new(x11::Native::new(sink.clone())?) as NativeBackend),
+        || {
+            #[cfg(x11)]
+            { Ok(Box::new(x11::Native::new(sink.clone())?) as NativeBackend) }
+            #[cfg(not(x11))]
+            { Err(ShortcutError::Unsupported) }
+        },
     )
 }
 

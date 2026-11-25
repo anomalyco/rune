@@ -783,6 +783,7 @@ pub(crate) fn exclusive_zone(placement: Option<crate::OverlayPlacement>) -> i32 
 pub(crate) mod connection {
     /// What one `poll(2)` call on a display socket saw.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(wayland_only, allow(dead_code))]
     pub(crate) enum WatchPoll {
         /// `poll` timed out without socket activity.
         TimedOut,
@@ -797,6 +798,7 @@ pub(crate) mod connection {
 
     /// What `Watch::spawn` does next after one `poll(2)` call.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    #[cfg_attr(wayland_only, allow(dead_code))]
     pub(crate) enum WatchAction {
         /// Keep polling without waking the event loop.
         Continue,
@@ -808,6 +810,7 @@ pub(crate) mod connection {
         Stop,
     }
 
+    #[cfg_attr(wayland_only, allow(dead_code))]
     pub(crate) fn watch_action(poll: WatchPoll) -> WatchAction {
         match poll {
             WatchPoll::TimedOut | WatchPoll::Interrupted => WatchAction::Continue,

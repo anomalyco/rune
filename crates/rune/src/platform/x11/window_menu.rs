@@ -18,7 +18,7 @@ pub(crate) fn advertised(supported: &[u32], atom: u32) -> bool {
     atom != 0 && supported.contains(&atom)
 }
 
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 mod native {
     use super::{advertised, show_window_menu_data};
     use x11rb::connection::Connection as _;
@@ -101,7 +101,7 @@ mod native {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+#[cfg(x11)]
 pub(crate) use native::{At, has_window_menu, show_window_menu};
 
 #[cfg(test)]

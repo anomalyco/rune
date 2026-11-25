@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 # What a desktop app builds Rune with on the way to its first frame, plus the built-in Inter.
-rune = { workspace = true, default-features = false, features = ["accessibility", "embedded-fonts", "metal-backend", "svg"] }
+rune = { workspace = true, default-features = false, features = ["accessibility", "embedded-fonts", "metal-backend", "svg", "x11"] }
 
 [lints]
 workspace = true
