@@ -3647,6 +3647,26 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
       let end_card = run.mark("end").unwrap_or(run.script_end() + 1.0);
   }
   ```
+- **Listing Rune's flags in an app-owned CLI**: an app that parses its own command line (with
+  `clap`, `lexopt`, or a custom parser) and forwards Rune flags via `App::args` can read
+  `rune::tooling::flags()` (or `rune::tooling::Args::flags()`) for the static `&'static [FlagSpec]`
+  table of every flag Rune's parser accepts in the current build (long name, optional short alias,
+  `FlagValue::{None, Required, Optional}`, one-line description, optional Cargo feature gate, and
+  repeatability). Feature-gated flags (`hot`) appear only when enabled; a release build without
+  `tooling` or `hot` returns an empty slice (`&[]`) because no process flags are parsed there.
+
+  ```rust
+  use rune::tooling::{FlagValue, flags};
+
+  for flag in flags() {
+      match flag.value {
+          FlagValue::None => println!("  {}  {}", flag.name, flag.description),
+          FlagValue::Required(v) => println!("  {} {v}  {}", flag.name, flag.description),
+          FlagValue::Optional(v) => println!("  {} [{v}]  {}", flag.name, flag.description),
+          _ => println!("  {}  {}", flag.name, flag.description),
+      }
+  }
+  ```
 - **Timing**: every headless run prints per-frame CPU time (update, build and encode/submit, without
   readback).
 - **Startup**: `--first-pixels` emits a flushed marker after the first offscreen GPU readback.
