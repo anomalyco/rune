@@ -188,9 +188,13 @@ impl El {
     /// the box. When `truncate` or `max_lines` cuts the text before `at`, the elided child is
     /// hidden from painting, hit testing, focus, and accessibility.
     ///
-    /// `at` may equal `text.len()` (for a trailing badge or arrow, or an empty string). On a
-    /// [`text_input`](crate::text_input), a non-text element, or an out-of-range / non-char-boundary
-    /// `at`, this is a no-op.
+    /// `at` may equal `text.len()` (for a trailing badge or arrow, or an empty string). When
+    /// combined with [`El::live_text`], each live update keeps the box in flow and repositions
+    /// `child` inside the element's fixed box without rebuilding the view: a box authored at
+    /// `at == placeholder.len()` on a non-empty placeholder stays anchored at the end as the live
+    /// string grows or shrinks, while any earlier offset stays at byte `at` clamped down to the
+    /// nearest UTF-8 char boundary in the new string. On a [`text_input`](crate::text_input), a
+    /// non-text element, or an out-of-range / non-char-boundary `at`, this is a no-op.
     ///
     /// ```
     /// # use rune::{Color, InlineAlign, InlineBox, el, text};
@@ -209,6 +213,10 @@ impl El {
         if at > t.content.len() || !t.content.is_char_boundary(at) {
             return self;
         }
+        let anchor = crate::el::InlineAnchor {
+            at: at as u32,
+            trailing: at == t.content.len() && !t.content.is_empty(),
+        };
         let child = child.w(slot.width()).h(slot.height());
         let at32 = at as u32;
         if child.flags.has(crate::el::ElFlags::HAS_VIRTUAL) {
@@ -221,11 +229,13 @@ impl El {
                 b.child += 1;
             }
             t.cold.inline_boxes.insert(pos, crate::text::InlineBoxRun { at: at32, slot, child: pos as u32 });
+            t.cold.inline_anchors.insert(pos, anchor);
         } else {
             self.flags.set(crate::el::ElFlags::MEMO_EXTENDED, has_memo);
             let ord = memo_len + self.children.len();
             self.children.push(child);
             t.cold.inline_boxes.push(crate::text::InlineBoxRun { at: at32, slot, child: ord as u32 });
+            t.cold.inline_anchors.push(anchor);
         }
         t.shape = None;
         self

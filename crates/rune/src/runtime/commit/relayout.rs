@@ -287,11 +287,17 @@ impl Measurement<'_> {
                         !width_sensitive || (old.local.w - old.inset[0] - old.inset[2]).max(0.0) == w
                     });
                 if kept_valid {
+                    if nodes[i].text.as_ref().is_some_and(|t| !t.cold.inline_boxes.is_empty()) {
+                        inline::place_inline_children(&mut taffy, text, &mut nodes, i, scale);
+                    }
                     continue;
                 }
                 if nodes[i].cold.get().is_some_and(|c| c.live_text_seen.is_some()) {
                     lay_out_text_inner(text, &mut nodes[i], w, scale, true);
                     nodes[i].epoch = crate::runtime::paint_keep::next_epoch();
+                    if nodes[i].text.as_ref().is_some_and(|t| !t.cold.inline_boxes.is_empty()) {
+                        inline::place_inline_children(&mut taffy, text, &mut nodes, i, scale);
+                    }
                     continue;
                 }
                 if reused_old.is_some() {

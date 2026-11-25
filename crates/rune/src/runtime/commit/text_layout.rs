@@ -334,7 +334,7 @@ pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scal
             str_buf.push_str(Elision::ELLIPSIS);
             str_buf.push_str(&content[e.tail..]);
             if spec.cold.live.is_some() {
-                text.layout_cut_live(&input, &str_buf, &span_buf, scale, None, parley::Alignment::Start)
+                text.layout_cut_live_inline(&input, &str_buf, &span_buf, &inline_buf, scale, None, parley::Alignment::Start)
             } else {
                 text.layout_cut_inline(&input, &str_buf, &span_buf, &inline_buf, scale, None, parley::Alignment::Start, true)
             }
@@ -610,7 +610,7 @@ pub(in crate::runtime) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale:
             str_buf.push_str(Elision::ELLIPSIS);
             str_buf.push_str(&content[e.tail..]);
             if spec.cold.live.is_some() {
-                text.layout_cut_live(&input, &str_buf, &span_buf, scale, Some(max_w), align)
+                text.layout_cut_live_inline(&input, &str_buf, &span_buf, &inline_buf, scale, Some(max_w), align)
             } else {
                 text.layout_cut_inline(&input, &str_buf, &span_buf, &inline_buf, scale, Some(max_w), align, true)
             }

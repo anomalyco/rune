@@ -289,7 +289,23 @@ impl TextSystem {
         max_width: Option<f32>,
         align: Alignment,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, spec.blocks, spec.text_indent, &[], &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Owned, spec.base())
+        self.layout_cut_live_inline(spec, text, spans, &[], scale, max_width, align)
+    }
+
+    /// [`Self::layout_cut_live`] carrying kept [`InlineBoxRun`]s across truncation or line clamping.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn layout_cut_live_inline(
+        &mut self,
+        spec: &TextInput<'_>,
+        text: &str,
+        spans: &[Span],
+        inline_boxes: &[InlineBoxRun],
+        scale: f32,
+        max_width: Option<f32>,
+        align: Alignment,
+    ) -> Rc<Layout<Ink>> {
+        self.layout_keyed(None, text, spans, spec.blocks, spec.text_indent, &[], &[], inline_boxes, spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Owned, spec.base())
     }
 }
 
