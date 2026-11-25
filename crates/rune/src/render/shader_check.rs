@@ -178,6 +178,13 @@ impl UberCheck {
         matches!(self, Self::Checking { .. })
     }
 
+    /// Non-destructive check for whether a browser answer has already been written.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn has_answer(&self) -> bool {
+        let Self::Checking { answer, .. } = self else { return false };
+        answer.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+
     #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
     pub(crate) fn answered(&self) -> Option<UberCheckEvent> {
         let Self::Checking { attempt, answer } = self else { return None };

@@ -654,6 +654,19 @@ impl Renderer {
         }
     }
 
+    /// Pre-checks the lazy layer pipelines (`Isolation`, `PlusLighter`, `LayerBlur`) that
+    /// `instances` require without acquiring a canvas texture or encoding a GPU frame.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn precheck_layer_features(&mut self, device: &wgpu::Device, instances: &[Instance]) {
+        let (isolation, plus_lighter, blur) = needed_layer_features(instances);
+        if !isolation && !plus_lighter && !blur && !self.breakers.checking() { return; }
+        self.check_features(device, |feature| match feature {
+            breaker::Feature::Isolation => isolation,
+            breaker::Feature::PlusLighter => plus_lighter,
+            breaker::Feature::LayerBlur => blur,
+        });
+    }
+
     /// Builds and checks the pipelines this frame's layers need (`breaker`), and plans the frame
     /// without the ones the device refused or hasn't taken yet: a dissolve as source-over, a blur
     /// unblurred. Whether layers can isolate; when they can't, each group draws in its parent.
@@ -922,4 +935,43 @@ impl Renderer {
         }
         self.draw_with_effects(pass, format, cursor..range.end, target, hook);
     }
+}
+
+/// Scans `instances` for visible layer scopes that require `Feature::Isolation`,
+/// `Feature::PlusLighter`, or `Feature::LayerBlur`, matching `prepare_layers` / `isolates`.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(super) fn needed_layer_features(instances: &[Instance]) -> (bool, bool, bool) {
+    let (mut isolation, mut plus_lighter, mut blur) = (false, false, false);
+    let mut stack: Vec<(bool, bool)> = Vec::new();
+    for i in instances {
+        match i.kind() {
+            Some(Kind::Layer) => {
+                let (parent_hidden, parent_additive) = stack.last().copied().unwrap_or((false, false));
+                let opacity = i.fill[3].clamp(0.0, 1.0);
+                let hidden = parent_hidden || opacity == 0.0;
+                let additive = i.params[0] == 1.0;
+                stack.push((hidden, additive));
+                if !hidden {
+                    let sigma = layer_blur::sigma(i.params[2]);
+                    let cache = i.params[3] == 1.0;
+                    let turn = i.border[1] != 0.0;
+                    let hole = if cache { [0.0; 4] } else { i.radii };
+                    plus_lighter |= additive;
+                    blur |= sigma > 0.0;
+                    isolation |= cache
+                        || opacity != 1.0
+                        || additive
+                        || parent_additive
+                        || sigma > 0.0
+                        || i.fade[3] != 0
+                        || i.clip != NO_CLIP
+                        || turn
+                        || hole[3] != 0.0;
+                }
+            }
+            Some(Kind::LayerEnd) => { stack.pop(); }
+            _ => {}
+        }
+    }
+    (isolation, plus_lighter, blur)
 }
