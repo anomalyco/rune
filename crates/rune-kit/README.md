@@ -447,7 +447,7 @@ the header (sorting, resizing, reordering and header hooks included) and
 `Table::visible_columns(s)` gives the shown columns in order to size each cell with
 `TableColumn::size_el`; `TableState::laid_out_width` is a flex column's resolved width and
 `TableState::dragged_column` the header being dragged and how far.
-`Table::new` takes closures, so its accessors can capture (several tables over one state). `virtual_overscan(overscan, edge)` forwards `El::virtual_overscan` to the table's internal `virtual_rows` list (default `2.0` viewports either side, `1.75` edge; `rune-table--overscan` in the gallery compares presets on 10,000 rows). The keys are the arrows, Page
+`Table::new` takes closures, so its accessors can capture (several tables over one state). `virtual_overscan(overscan, edge)` forwards `El::virtual_overscan` to the table's internal `virtual_rows` list (default `2.0` viewports either side, `1.75` edge; `rune-table--overscan` in the gallery compares presets on 10,000 rows). Inside `scroll_wide(true)`, opt-in `virtual_columns(true)` windows non-frozen columns to the horizontal viewport plus overscan (keeping resized, reordered, and focused or caret-browsed columns mounted) and `frozen_columns(count)` pins the leading `count` visible columns to the left edge with opaque fills under the sticky header; both report true ARIA grid counts and 1-based row/column indices (`rune-table--virtual-columns` in the gallery demonstrates a 10,000 × 200 sheet). The keys are the arrows, Page
 Up and Down, Home, End, Return (`on_open`), and in a multi-select table Shift and Cmd-A. Roles
 are `grid`, `row`, `columnheader` and `gridcell`. 100,000 rows scroll at 0.4 ms a frame (p50)
 and 3.4 ms when rows mount (p95) (`--test integration table::`).

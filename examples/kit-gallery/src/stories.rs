@@ -106,6 +106,12 @@ macro_rules! stories {
                 s.pick.insert("table-overscan".into(), "tight".into());
                 s.table_menu = None;
             }
+            if $id == "rune-table--virtual-columns" {
+                s.table = TableState::new().key("vc-table");
+                s.pick.insert("table-frozen".into(), "2".into());
+                s.pick.remove("vc-last");
+                s.table_menu = None;
+            }
             if $id == "rune-image--decode" {
                 s.images.enter(true);
             }
@@ -363,6 +369,7 @@ stories! {
     "rune-table--options" => table::options,
     "rune-table--wide" => table::wide,
     "rune-table--overscan" => table::overscan,
+    "rune-table--virtual-columns" => table::virtual_columns,
     "rune-diff--localized" => diff::localized,
     "rune-diff--custom" => diff::custom,
     "rune-diff--scroll-bars" => diff::scroll_bars,

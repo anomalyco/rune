@@ -83,7 +83,8 @@ impl CommitState {
                 n.id == scroll_id
                     && n.path == v.scroll_path
                     && n.scroll.is_some()
-                    && !n.scroll_axes.x()
+                    && n.scroll_axes.y()
+                    && (!n.scroll_axes.x() || tree.nodes[list_idx].parent != Some(scroll_idx))
                     && n.growth.is_none()
             }) {
                 return false;
