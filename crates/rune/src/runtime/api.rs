@@ -514,6 +514,29 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn live_only_warnings(&self) -> &[String] { self.core().live_only_warnings() }
 
+    /// Debug builds: opt into panicking when `PaintKeep`'s self-check detects that a copied
+    /// subtree would differ from a fresh paint (unshifted or scroll-shifted).
+    ///
+    /// Off by default in downstream debug runs (which log the mismatch to stderr and paint fresh);
+    /// set `RUNE_PAINT_KEEP_STRICT=1` or call this method in tests to fail fast. No-op in release
+    /// builds.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::new(true, 1.0));
+    /// rt.set_paint_keep_strict(true);
+    /// rt.frame(0.0);
+    /// assert_eq!(rt.paint_keep_mismatches(), 0);
+    /// ```
+    #[inline(always)]
+    pub fn set_paint_keep_strict(&mut self, strict: bool) { self.core_mut().paint.set_paint_keep_strict(strict); }
+
+    /// Debug builds: total `PaintKeep` self-check mismatches observed on this runtime across both
+    /// unshifted and scroll-shifted copies. Always `0` in release builds.
+    #[inline(always)]
+    pub fn paint_keep_mismatches(&self) -> usize { self.core().paint.keep_check_mismatches() }
+
     #[inline(always)]
     pub(crate) fn live_wake(&self) -> &Arc<crate::live::Wake> { self.core().live_wake() }
     #[inline(always)]

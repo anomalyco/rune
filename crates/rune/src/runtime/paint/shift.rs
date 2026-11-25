@@ -621,11 +621,8 @@ pub(super) fn check_shifted(rt: &mut RuntimeCore, r: usize, o: usize, plan: Shif
     if now.glyphs[1] - now.glyphs[0] != was.glyphs[1] - was.glyphs[0] { differ.push("glyph count"); }
     if k.pages[range(now.pages)] != k.prev_pages[range(was.pages)] { differ.push("atlas pages"); }
     if !differ.is_empty() {
-        #[cfg(test)]
-        {
-            rt.paint.keep.verify_mismatches += 1;
-        }
-        eprintln!("rune: paint keep (scroll): {} would have copied what differs: {}", rt.tree.nodes[r].path, differ.join(", "));
+        let path = rt.tree.nodes[r].path.as_str();
+        rt.paint.keep.record_mismatch(true, path, &differ);
     }
 }
 

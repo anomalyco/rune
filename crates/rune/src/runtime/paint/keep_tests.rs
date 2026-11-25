@@ -323,3 +323,75 @@ fn held_header_after_dropping_sticky_never_copies_stale_paint() {
         }
     }
 }
+
+#[test]
+fn record_mismatch_counts_both_plain_and_scroll_and_enforces_strict_policy() {
+    // Downstream debug builds (is_test = false) must never panic by default.
+    assert!(!should_panic_on_mismatch(false, false, None));
+    assert!(!should_panic_on_mismatch(false, false, Some("0")));
+    assert!(!should_panic_on_mismatch(false, false, Some("2")));
+    assert!(should_panic_on_mismatch(false, false, Some("1")));
+    assert!(should_panic_on_mismatch(true, false, None));
+    assert!(should_panic_on_mismatch(true, false, Some("0")));
+
+    // Rune's own unit tests (is_test = true) panic unless explicitly opted out with "0".
+    assert!(should_panic_on_mismatch(false, true, None));
+    assert!(should_panic_on_mismatch(false, true, Some("1")));
+    assert!(!should_panic_on_mismatch(false, true, Some("0")));
+    assert!(should_panic_on_mismatch(true, true, Some("0")));
+
+    let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::new(true, 1.0));
+    assert_eq!(rt.paint_keep_mismatches(), 0);
+    assert!(!rt.core().paint.keep.strict_check);
+    rt.set_paint_keep_strict(true);
+    assert!(rt.core().paint.keep.strict_check);
+    rt.set_paint_keep_strict(false);
+    assert!(!rt.core().paint.keep.strict_check);
+
+    // With allow_check_mismatch, both unshifted and scroll-shifted mismatches increment the unified counter without panicking.
+    rt.core_mut().paint.keep.allow_check_mismatch = true;
+    rt.core_mut().paint.keep.record_mismatch(false, "root/a", &["instances"]);
+    assert_eq!(rt.core().paint.keep.check_mismatches, 1);
+    assert_eq!(rt.core().paint.keep.verify_mismatches, 0);
+    assert_eq!(rt.paint_keep_mismatches(), 1);
+    assert_eq!(rt.core().paint.keep_check_mismatches(), 1);
+
+    rt.core_mut().paint.keep.record_mismatch(true, "root/b", &["drawn rects", "hits"]);
+    assert_eq!(rt.core().paint.keep.check_mismatches, 1);
+    assert_eq!(rt.core().paint.keep.verify_mismatches, 1);
+    assert_eq!(rt.paint_keep_mismatches(), 2);
+    assert_eq!(rt.core().paint.keep_check_mismatches(), 2);
+
+    // With allow_check_mismatch off and strict mode on, both plain and scroll mismatches panic with the diagnostic.
+    rt.core_mut().paint.keep.allow_check_mismatch = false;
+    rt.set_paint_keep_strict(true);
+    let plain_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rt.core_mut().paint.keep.record_mismatch(false, "root/a", &["instances"]);
+    }))
+    .expect_err("plain mismatch must panic in strict mode");
+    let plain_msg = plain_panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| plain_panic.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert_eq!(
+        plain_msg,
+        "rune: paint keep: root/a would have copied what differs: instances (set RUNE_PAINT_KEEP_STRICT=1 to panic)"
+    );
+    assert_eq!(rt.paint_keep_mismatches(), 3);
+
+    let scroll_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        rt.core_mut().paint.keep.record_mismatch(true, "root/b", &["drawn rects", "hits"]);
+    }))
+    .expect_err("scroll mismatch must panic in strict mode");
+    let scroll_msg = scroll_panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| scroll_panic.downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    assert_eq!(
+        scroll_msg,
+        "rune: paint keep (scroll): root/b would have copied what differs: drawn rects, hits (set RUNE_PAINT_KEEP_STRICT=1 to panic)"
+    );
+    assert_eq!(rt.paint_keep_mismatches(), 4);
+}

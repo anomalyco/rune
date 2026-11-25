@@ -1,0 +1,1 @@
+- Paint reuse (`PaintKeep`): unified unshifted and scroll-shifted debug self-check mismatch counters (`Runtime::paint_keep_mismatches()`), added opt-in strict panic mode (`RUNE_PAINT_KEEP_STRICT=1` and `Runtime::set_paint_keep_strict(true)`), and enabled strict mode in Rune's own tests while keeping downstream debug builds non-panicking by default.
