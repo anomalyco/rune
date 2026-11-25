@@ -619,3 +619,37 @@ fn macos_window_options_apply_attributes_preserves_defaults_and_applies_override
         .apply_attributes(base, false, false);
     assert!(format!("{explicit_true:?}").contains("accepts_first_mouse: true"));
 }
+
+#[test]
+fn mac_window_options_color_space_defaults_to_srgb_and_retains_override() {
+    assert_eq!(MacColorSpace::default(), MacColorSpace::Srgb);
+    assert_eq!(MacWindowOptions::default().color_space, MacColorSpace::Srgb);
+
+    let unmanaged = MacWindowOptions::default().color_space(MacColorSpace::Unmanaged);
+    assert_eq!(unmanaged.color_space, MacColorSpace::Unmanaged);
+    assert_eq!(unmanaged.clone().color_space(MacColorSpace::Srgb).color_space, MacColorSpace::Srgb);
+
+    let spec = || AppSpec::new("color", (480.0, 360.0), || (), |_, _| crate::el());
+    let app = App::new(spec()).macos_window(unmanaged.clone());
+    assert_eq!(app.macos_window.color_space, MacColorSpace::Unmanaged);
+
+    let from_app = WindowSpec::from_app("color", app);
+    assert_eq!(from_app.app.macos_window.color_space, MacColorSpace::Unmanaged);
+
+    let via_spec = WindowSpec::new("color", spec()).macos_window(unmanaged.clone());
+    assert_eq!(via_spec.app.macos_window.color_space, MacColorSpace::Unmanaged);
+    // Replacing WindowOptions via WindowSpec::options resets MacWindowOptions back to defaults.
+    assert_eq!(via_spec.options(WindowOptions::default()).app.macos_window.color_space, MacColorSpace::Srgb);
+
+    let configured = WindowSpec::new("cfg", spec()).configured_options(
+        WindowOptions::default().macos(unmanaged.clone()),
+    );
+    assert_eq!(configured.app.macos_window.color_space, MacColorSpace::Unmanaged);
+
+    let amended = WindowOptions::launcher_panel().macos(|m| m.color_space(MacColorSpace::Unmanaged));
+    assert!(amended.native.launcher && amended.native.nonactivating_panel);
+    assert_eq!(amended.native.color_space, MacColorSpace::Unmanaged);
+
+    assert_eq!(unmanaged.with_portable_exclude(Some(true)).color_space, MacColorSpace::Unmanaged);
+    assert_eq!(unmanaged.with_runtime_document(None, Some(&true)).color_space, MacColorSpace::Unmanaged);
+}

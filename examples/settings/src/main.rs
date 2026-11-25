@@ -6,7 +6,7 @@ use rune::tok::{self, Theme, motion, radius, space, type_};
 #[cfg(feature = "frame-profile")]
 #[global_allocator]
 static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
-use rune::{Align, App, AppHandle, AppSpec, Color, ColorScheme, Cx, El, MenuItem, ScrollSpec, Spring, Tx, col, el, row, text};
+use rune::{Align, App, AppHandle, AppSpec, Color, ColorScheme, Cx, El, MacColorSpace, MacWindowOptions, MenuItem, ScrollSpec, Spring, Tx, col, el, row, text};
 
 const DEFAULT_FONT_ID: &str = "__default__";
 
@@ -740,6 +740,10 @@ fn native_menu_items() -> Vec<MenuItem<Settings>> {
     ]
 }
 
+fn parse_mac_color_space(value: Option<&str>) -> MacColorSpace {
+    if value.is_some_and(|v| v.trim().eq_ignore_ascii_case("unmanaged")) { MacColorSpace::Unmanaged } else { MacColorSpace::Srgb }
+}
+
 fn main() {
     let spec = AppSpec::<Settings> {
         scenes: &[
@@ -762,9 +766,10 @@ fn main() {
         ],
         ..AppSpec::new("Settings", (620.0, 640.0), Settings::default, view)
     };
-    let app = native_menu_items()
-        .into_iter()
-        .fold(App::new(spec).color_scheme(ColorScheme::System), App::menu_item);
+    let color_space = parse_mac_color_space(rune::env::var("SETTINGS_MAC_COLOR_SPACE").as_deref());
+    let base = App::new(spec).color_scheme(ColorScheme::System)
+        .macos_window(MacWindowOptions::default().color_space(color_space));
+    let app = native_menu_items().into_iter().fold(base, App::menu_item);
     let handle = app.handle();
     app.init(move || Settings {
         app_handle: Some(handle),
@@ -793,4 +798,14 @@ fn appearance_picker_switches_color_scheme_and_updates_accessibility_state() {
         let selected = tree.nodes.iter().find(|(_, n)| n.label() == Some(label)).expect("segment a11y node");
         assert_eq!(selected.1.toggled(), Some(rune::accesskit::Toggled::True));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn mac_color_space_env_parser_defaults_to_srgb_and_accepts_unmanaged() {
+    assert_eq!(parse_mac_color_space(None), MacColorSpace::Srgb);
+    assert_eq!(parse_mac_color_space(Some("")), MacColorSpace::Srgb);
+    assert_eq!(parse_mac_color_space(Some("srgb")), MacColorSpace::Srgb);
+    assert_eq!(parse_mac_color_space(Some("unmanaged")), MacColorSpace::Unmanaged);
+    assert_eq!(parse_mac_color_space(Some(" UNMANAGED ")), MacColorSpace::Unmanaged);
 }

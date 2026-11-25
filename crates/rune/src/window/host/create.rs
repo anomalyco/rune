@@ -361,7 +361,7 @@ impl Host {
         let (gpu, renderer) = self.gpu.as_mut().unwrap();
         rebuild_renderer_core(&gpu.device, renderer, target_format, self.app.rt_mut());
         #[cfg(target_os = "macos")]
-        crate::platform::macos::pin_contents_top_left(&surface);
+        crate::platform::macos::pin_contents_top_left(&surface, self.macos_window.color_space);
         #[cfg(target_os = "macos")]
         crate::platform::macos::window_shape::apply_corners(&window, &self.macos_window, self.options.transparent, self.options.borderless);
         // Metal's PostMultiplied mode only makes CAMetalLayer non-opaque; Core Animation
@@ -660,7 +660,7 @@ impl Host {
         rebuild_renderer_core(&gpu.device, &mut renderer, target_format, self.app.rt_mut());
         let alpha = alpha_pass(&gpu, transparent, &config, target_format);
         #[cfg(target_os = "macos")]
-        crate::platform::macos::pin_contents_top_left(&surface);
+        crate::platform::macos::pin_contents_top_left(&surface, self.macos_window.color_space);
         // The new surface reports presents where the old one did, to the log the window kept
         // (`try_create`): the shadow built on that log keeps re-sampling.
         #[cfg(target_os = "macos")]

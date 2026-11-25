@@ -301,6 +301,32 @@ pub(crate) const fn needs_no_redirection_bitmap(
     transparent && matches!(swapchain, wgpu::Dx12SwapchainKind::DxgiFromVisual)
 }
 
+/// Colour space for a macOS window's presentation (`NSWindow.colorSpace` and its
+/// `CAMetalLayer.colorspace`).
+///
+/// Defaults to [`Self::Srgb`] so both the native Metal backend and the wgpu backend colour-manage
+/// sRGB colours on wide-gamut Mac displays, matching AppKit windows, browsers, Windows DXGI, and
+/// Linux Vulkan. Ignored on other platforms.
+///
+/// ```no_run
+/// use rune::{App, AppSpec, MacColorSpace, MacWindowOptions, el};
+///
+/// App::new(AppSpec::new("Raw", (640.0, 420.0), || (), |_, _| el()))
+///     .macos_window(MacWindowOptions::default().color_space(MacColorSpace::Unmanaged))
+///     .run();
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum MacColorSpace {
+    /// Colour-manage the window as sRGB (`NSColorSpace.sRGBColorSpace` and
+    /// `kCGColorSpaceSRGB`), matching AppKit windows and Rune's native Metal backend.
+    #[default]
+    Srgb,
+    /// Leave `NSWindow.colorSpace` unset (`nil`) and clear `CAMetalLayer.colorspace` so
+    /// framebuffer values reach the display unmodified.
+    Unmanaged,
+}
+
 /// AppKit properties for an ordinary window, reapplied on native recreation.
 /// Omitted properties keep winit's defaults.
 #[derive(Clone, Debug, Default)]
@@ -318,6 +344,7 @@ pub struct MacWindowOptions {
     pub(crate) title_from_file: bool,
     pub(crate) document_edited: bool,
     pub(crate) show_title: bool,
+    pub(crate) color_space: MacColorSpace,
 }
 
 impl MacWindowOptions {
@@ -435,6 +462,25 @@ impl MacWindowOptions {
     /// ```
     pub fn show_title(mut self, show: bool) -> Self {
         self.show_title = show;
+        self
+    }
+    /// Sets how macOS colour-manages this window (`NSWindow.colorSpace` and its
+    /// `CAMetalLayer.colorspace`).
+    ///
+    /// Defaults to [`MacColorSpace::Srgb`], matching AppKit windows, browsers, and Rune's
+    /// native Metal backend on wide-gamut displays across both the Metal and wgpu backends.
+    /// Pass [`MacColorSpace::Unmanaged`] to leave `NSWindow.colorSpace` unset (`nil`) and
+    /// clear `CAMetalLayer.colorspace` so framebuffer values reach the display unmodified.
+    /// Retained across native recreation and GPU surface reattach; ignored on other platforms.
+    ///
+    /// ```no_run
+    /// use rune::{MacColorSpace, MacWindowOptions};
+    ///
+    /// let opts = MacWindowOptions::default().color_space(MacColorSpace::Unmanaged);
+    /// let _ = opts;
+    /// ```
+    pub fn color_space(mut self, color_space: MacColorSpace) -> Self {
+        self.color_space = color_space;
         self
     }
 

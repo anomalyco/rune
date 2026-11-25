@@ -427,6 +427,7 @@ pub use window::spec as windows;
 pub use windows::AnyWindowSpec;
 pub use windows::ConfiguredWindowOptions;
 pub use windows::Display;
+pub use windows::MacColorSpace;
 pub use windows::MacWindowOptions;
 pub use windows::ResizeEdge;
 pub use windows::RunOptions;
