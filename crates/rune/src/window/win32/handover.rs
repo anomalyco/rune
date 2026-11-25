@@ -518,13 +518,14 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU can't present to this window"))?;
             configure_checked(surface, gpu, &config).map_err(|error| SurfaceSetupError::from_configure("", error))?;
             let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
-            let renderer = match prewarmed {
+            let mut renderer = match prewarmed {
                 Some(mut renderer) => {
                     renderer.try_set_format(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?;
                     renderer
                 }
                 None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
             };
+            renderer.attach_gpu(gpu);
             Ok((config, renderer))
         },
     ).map_err(format_window_setup_error)?;

@@ -31,6 +31,15 @@ export function watchGpu(device, onError, onLost) {
     });
 }
 
+// Clears any single-slot JS `device.onuncapturederror` handler installed by an embedded renderer
+// while leaving Rune's `addEventListener('uncapturederror', ...)` and `device.lost.then(...)`
+// listeners intact without registering duplicates.
+export function restoreGpu(device) {
+    if (device && 'onuncapturederror' in device) {
+        device.onuncapturederror = null;
+    }
+}
+
 export function pushScopes(device) {
     device.pushErrorScope('validation');
     device.pushErrorScope('out-of-memory');

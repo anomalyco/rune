@@ -220,10 +220,11 @@ pub(super) fn gpu_side(
     let backend = gpu.adapter.get_info().backend;
     let is_gl = backend == wgpu::Backend::Gl;
     let watch_proxy = proxy.clone();
-    health::watch(&gpu.device, move |why| {
+    let restore = health::watch(&gpu.device, gpu.lost_flag(), move |why| {
         *lost.borrow_mut() = Some(if is_gl { Loss::WebGl(why) } else { Loss::WebGpu(why) });
         watch_proxy.send_event(Wake::App).ok();
     });
+    gpu.set_web_restore(restore);
     let mut renderer = match prebuilt {
         Some(mut renderer) => {
             if renderer.format() != format {
@@ -233,6 +234,7 @@ pub(super) fn gpu_side(
         }
         None => Renderer::try_new(&gpu.device, format)?,
     };
+    renderer.attach_gpu(&gpu);
     let check_proxy = proxy.clone();
     renderer.set_uber_check_wake(std::sync::Arc::new(move || {
         check_proxy.send_event(Wake::App).ok();

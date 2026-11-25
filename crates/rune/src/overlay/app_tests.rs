@@ -138,3 +138,55 @@ fn overlay_app_forwards_release_compositor_gpu() {
     host.app.release_compositor_gpu();
     assert_eq!(releases.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn overlay_compositor_exposes_instance_and_adapter_when_gpu_is_attached() {
+    use std::sync::{Arc, Mutex};
+    use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+
+    #[derive(Default)]
+    struct Seen {
+        has_instance: bool,
+        adapter_info: Option<wgpu::AdapterInfo>,
+        device_info: Option<wgpu::AdapterInfo>,
+    }
+    struct Probe(Arc<Mutex<Seen>>);
+    impl Compositor<()> for Probe {
+        fn render(&mut self, f: &mut Frame<'_, ()>) {
+            let mut seen = self.0.lock().unwrap();
+            seen.has_instance = f.instance().is_some();
+            seen.adapter_info = f.adapter().map(wgpu::Adapter::get_info);
+            seen.device_info = Some(f.device.adapter_info());
+            f.restore_device_callbacks();
+            f.draw_ui();
+        }
+    }
+
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(32.0, 16.0) }
+    let Some(gpu) = Gpu::test_headless().map(Arc::new) else { return };
+    let app = AppSpec::new("overlay-host-handles", (32.0, 16.0), || (), view);
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let spec = OverlaySpec::new("overlay-host-handles", app.size, view)
+        .options(Default::default())
+        .compositor(Probe(Arc::clone(&seen)));
+    let (mut overlay, _) = Overlay::new(spec, (), &app);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.attach_gpu(&gpu);
+    overlay.renderer = Some(renderer);
+    overlay.gpu = Some(Arc::clone(&gpu));
+    overlay.rt.transparent = true;
+    overlay.rt.frame(0.0);
+
+    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    overlay.render_offscreen(&gpu, &mut enc, &target.view, OFFSCREEN_FORMAT, (32, 16), 0.0);
+    overlay.renderer.as_mut().unwrap().submit(&gpu.queue, enc);
+
+    let seen = seen.lock().unwrap();
+    assert!(seen.has_instance, "overlay Frame::instance must be Some when gpu is attached");
+    assert_eq!(
+        seen.adapter_info,
+        seen.device_info,
+        "overlay Frame::adapter info must match Frame::device.adapter_info()",
+    );
+}

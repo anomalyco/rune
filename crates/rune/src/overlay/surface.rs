@@ -251,6 +251,7 @@ impl OverlayCore {
                 }
                 None => Renderer::try_new_classified(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)?,
             };
+            renderer.attach_gpu(gpu);
             renderer.set_prewarm_effects(prewarm_effects);
             Ok((config, translucent.is_none(), renderer))
         };

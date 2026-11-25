@@ -2895,6 +2895,17 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
 - The `Frame` gives the device, queue, encoder, target view and format, `dt`, the time
   `Runtime::frame` took (`update_ms`), the runtime (instances, marks, clock `t`, pointer, state,
   `presented(key)` → drawn rect and effective opacity), and Rune's `Renderer`.
+- **Sharing Rune's GPU with an external renderer.** `Frame::instance()` and `Frame::adapter()`
+  borrow the `wgpu::Instance` and `wgpu::Adapter` that created `Frame::device` (returning `Some`
+  on all Rune-managed hosts: Windows DX12, Linux Vulkan, macOS wgpu, macOS/iOS native Metal, and
+  browser WebGPU/WebGL2; returning `None` for a standalone `Renderer::new` with no attached
+  `Gpu`). Key external engine state on `Frame::device_key()`, drop it in
+  `Compositor::release_gpu`, and call `Frame::restore_device_callbacks()` right after initializing
+  a renderer that overwrites wgpu's single-slot `set_device_lost_callback` or
+  `on_uncaptured_error` handlers so Rune keeps owning device-loss recovery and bounded error
+  logging. On macOS, engines that need depth/stencil, MSAA, render bundles, indirect draws, or
+  other wgpu features beyond Rune's native Metal subset should opt into
+  `App::gpu_backend(GpuBackend::Wgpu)` and `prewarm_gpu_on(GpuBackend::Wgpu)`.
 - `Renderer::prepare_lists` uploads several instance lists in one buffer (one glyph upload) and
   returns their ranges; `encode_layers` records isolated groups before the containing pass;
   `draw_range` draws complete scopes into that pass; `add_format` builds the uber

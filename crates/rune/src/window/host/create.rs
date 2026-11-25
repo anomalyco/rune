@@ -242,6 +242,7 @@ impl Host {
             };
             crate::marks::note("uber", renderer.uber_shader());
             crate::marks::mark("renderer.ready");
+            renderer.attach_gpu(gpu);
             renderer.set_srgb_blend(srgb_blend);
             renderer.set_prewarm_effects(prewarm_effects);
             #[cfg(target_os = "macos")]
@@ -639,6 +640,7 @@ impl Host {
                 }
                 None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
             };
+            renderer.attach_gpu(gpu);
             renderer.set_srgb_blend(srgb_blend);
             renderer.set_prewarm_effects(prewarm_effects);
             Ok((config, renderer))
