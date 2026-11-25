@@ -430,7 +430,15 @@ when they fit, with a sticky header over vertical scrolling; `TableState::hide_c
 `show_column`, `set_column_hidden`, and `is_column_hidden` toggle column visibility while
 preserving resized widths; `on_header_secondary_press` and `on_column_fit` hook header context
 menus and edge double-click fit-to-content; and `TableColumn` getters plus `TableColumn::size_el`
-expose column sizing for custom rows (`rune-table--wide` in the gallery shows these together). `virtual_overscan(overscan, edge)` forwards `El::virtual_overscan` to the table's internal `virtual_rows` list (default `2.0` viewports either side, `1.75` edge; `rune-table--overscan` in the gallery compares presets on 10,000 rows). The keys are the arrows, Page
+expose column sizing for custom rows (`rune-table--wide` in the gallery shows these together).
+`on_reorder(|s, from, to, tx| ..)` lets a header drag sideways move its column, kept in
+`TableState::column_order` (`set_column_order`, `move_column`, `reset_column_order`); a press
+that doesn't move still sorts. For rows the app draws itself, `Table::header(s, k)` builds only
+the header (sorting, resizing, reordering and header hooks included) and
+`Table::visible_columns(s)` gives the shown columns in order to size each cell with
+`TableColumn::size_el`; `TableState::laid_out_width` is a flex column's resolved width and
+`TableState::dragged_column` the header being dragged and how far.
+`Table::new` takes closures, so its accessors can capture (several tables over one state). `virtual_overscan(overscan, edge)` forwards `El::virtual_overscan` to the table's internal `virtual_rows` list (default `2.0` viewports either side, `1.75` edge; `rune-table--overscan` in the gallery compares presets on 10,000 rows). The keys are the arrows, Page
 Up and Down, Home, End, Return (`on_open`), and in a multi-select table Shift and Cmd-A. Roles
 are `grid`, `row`, `columnheader` and `gridcell`. 100,000 rows scroll at 0.4 ms a frame (p50)
 and 3.4 ms when rows mount (p95) (`--test integration table::`).
