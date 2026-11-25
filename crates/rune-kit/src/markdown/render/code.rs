@@ -41,9 +41,32 @@ impl OverflowCache {
     }
 }
 
+fn rest_code_caches() {
+    ASCII_METRICS.try_with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut() {
+            c.clear();
+            if c.capacity() > 32 { c.shrink_to(0); }
+        }
+    }).ok();
+    OVERFLOW_CACHE.try_with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut() {
+            c.map.clear();
+            c.order.clear();
+            if c.map.capacity() > 32 { c.map.shrink_to(0); }
+            if c.order.capacity() > 32 { c.order.shrink_to(0); }
+        }
+    }).ok();
+}
+
 thread_local! {
-    static ASCII_METRICS: RefCell<HashMap<u64, AsciiMetrics>> = RefCell::new(HashMap::new());
-    static OVERFLOW_CACHE: RefCell<OverflowCache> = RefCell::new(OverflowCache::default());
+    static ASCII_METRICS: RefCell<HashMap<u64, AsciiMetrics>> = {
+        rune::register_thread_rest_hook(rest_code_caches);
+        RefCell::new(HashMap::new())
+    };
+    static OVERFLOW_CACHE: RefCell<OverflowCache> = {
+        rune::register_thread_rest_hook(rest_code_caches);
+        RefCell::new(OverflowCache::default())
+    };
 }
 
 /// Cached printable-ASCII advances, widest advance, and `fixed_pitch` for `(font, font_epoch)`,

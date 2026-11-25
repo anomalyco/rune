@@ -22,6 +22,31 @@ pub(crate) struct ApplyScratch {
     pub(in crate::runtime) remap: Vec<Option<usize>>,
 }
 
+impl ApplyScratch {
+    pub(in crate::runtime) fn rest(&mut self) {
+        fn shrink<T>(v: &mut Vec<T>) {
+            v.clear();
+            if v.capacity() > 64 { v.shrink_to(64); }
+        }
+        shrink(&mut self.culled);
+        shrink(&mut self.concealed);
+        shrink(&mut self.rows);
+        shrink(&mut self.new_ids);
+        self.new_set.clear();
+        if self.new_set.capacity() > 64 { self.new_set.shrink_to(64); }
+        shrink(&mut self.order);
+        shrink(&mut self.time_scales);
+        shrink(&mut self.arrivals);
+        shrink(&mut self.mounted);
+        shrink(&mut self.slid);
+        shrink(&mut self.top_moved);
+        shrink(&mut self.held);
+        shrink(&mut self.old_ids);
+        shrink(&mut self.moved_spans);
+        shrink(&mut self.remap);
+    }
+}
+
 /// Drops the un-moved `Node`s in `old_nodes` and returns the empty `Vec<Node>` allocation for the
 /// next commit's `flatten`, skipping `moved` memo spans whose placeholders own nothing.
 #[allow(unsafe_code)]

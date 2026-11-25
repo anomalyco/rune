@@ -95,6 +95,10 @@ name = "markdown"
 required-features = ["markdown"]
 
 [[test]]
+name = "rest_memory"
+required-features = ["markdown"]
+
+[[test]]
 name = "mermaid"
 required-features = ["markdown", "mermaid"]
 

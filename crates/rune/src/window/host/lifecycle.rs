@@ -1086,12 +1086,7 @@ impl Host {
     }
 
     fn give_back(&mut self, all: bool) {
-        {
-            let rt = self.app.rt_mut();
-            rt.text.rest();
-            rt.images.rest();
-            if let Some(rewind) = rt.motion.rewind() { rewind.rest(); }
-        }
+        self.app.rt_mut().rest();
         self.app.run_on_rest();
         if let Some((gpu, renderer)) = &mut self.gpu {
             // Poll once (non-blocking) at idle rest on macOS (retiring completed Metal command

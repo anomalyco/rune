@@ -284,6 +284,13 @@ impl ItemContainer {
 
 impl VirtualItemsState {
     #[inline]
+    pub(in crate::runtime) fn rest(&mut self) {
+        let cap = (self.containers.len().saturating_mul(2)).max(16);
+        if self.containers.capacity() > cap {
+            self.containers.shrink_to(cap);
+        }
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.containers.is_empty()
     }

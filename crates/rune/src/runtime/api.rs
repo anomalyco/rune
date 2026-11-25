@@ -707,6 +707,11 @@ impl<S: 'static> Runtime<S> {
     pub(crate) fn cancel_timer_frame(&mut self) { self.core_mut().cancel_timer_frame(); }
     #[inline(always)]
     pub(crate) fn rests(&self) -> bool { self.core().rests() }
+    /// Releases state not needed to redraw the current view, as `window::rest` does after
+    /// `REST_AFTER`.
+    #[doc(hidden)]
+    #[inline(always)]
+    pub fn rest(&mut self) { self.core_mut().rest(); }
 
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     #[inline(always)]

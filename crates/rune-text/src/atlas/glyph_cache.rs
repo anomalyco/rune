@@ -155,6 +155,10 @@ impl GlyphCache {
         self.entries.retain(|_, e| e.layout.strong_count() > 0);
         self.spare = None;
         self.bytes = self.entries.values().map(Entry::size).sum();
+        let cap = (self.entries.len().saturating_mul(2)).max(64);
+        if self.entries.capacity() > cap {
+            self.entries.shrink_to(cap);
+        }
     }
 
     /// Drops entries whose layout is gone, then the least recently painted while over budget.

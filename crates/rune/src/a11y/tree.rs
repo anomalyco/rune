@@ -98,6 +98,17 @@ enum ModalLive {
 }
 
 impl A11yTree {
+    pub(crate) fn rest(&mut self) {
+        let cap = (self.sent.len().saturating_mul(2)).max(64);
+        if self.sent.capacity() > cap { self.sent.shrink_to(cap); }
+        let sc = (self.scrollers.len().saturating_mul(2)).max(16);
+        if self.scrollers.capacity() > sc { self.scrollers.shrink_to(sc); }
+        let lf = (self.long_fields.len().saturating_mul(2)).max(16);
+        if self.long_fields.capacity() > lf { self.long_fields.shrink_to(lf); }
+        let lm = (self.live_modal.len().saturating_mul(2)).max(16);
+        if self.live_modal.capacity() > lm { self.live_modal.shrink_to(lm); }
+    }
+
     pub(super) fn is_live_muted(&self, id: AkId) -> bool {
         matches!(self.live_modal.get(&id.0), Some(ModalLive::Muted(_)))
     }

@@ -183,6 +183,51 @@ impl PaintState {
     }
 
     #[inline]
+    pub(in crate::runtime) fn rest(&mut self, live_nodes: usize, live_inst: usize, node_index: &NodeIndex) {
+        fn shrink_vec<T>(v: &mut Vec<T>, floor: usize) {
+            let cap = (v.len().saturating_mul(2)).max(floor);
+            if v.capacity() > cap { v.shrink_to(cap); }
+        }
+        fn shrink_map<K: Eq + std::hash::Hash, V, S: std::hash::BuildHasher>(m: &mut std::collections::HashMap<K, V, S>, floor: usize) {
+            let cap = (m.len().saturating_mul(2)).max(floor);
+            if m.capacity() > cap { m.shrink_to(cap); }
+        }
+        let nf = (live_nodes.saturating_mul(2)).max(64);
+        shrink_vec(&mut self.inh_scratch, nf);
+        shrink_vec(&mut self.drawn, nf);
+        shrink_vec(&mut self.row_dy, nf);
+        shrink_vec(&mut self.row_h, nf);
+        shrink_vec(&mut self.row_mask, nf);
+        shrink_vec(&mut self.drawn_scale, nf);
+        shrink_vec(&mut self.seen, nf);
+        shrink_vec(&mut self.turn_scratch, 16);
+        shrink_vec(&mut self.unturned_drawn, 16);
+        shrink_vec(&mut self.row_lifts, 16);
+        shrink_vec(&mut self.layer_paint_order, 32);
+        shrink_vec(&mut self.lifted_anchors, 16);
+        shrink_vec(&mut self.dissolve_scratch, 32);
+        shrink_vec(&mut self.glyph_scratch, 64);
+        shrink_vec(&mut self.deco_scratch, 32);
+        shrink_vec(&mut self.layer_scratch, 32);
+        shrink_vec(&mut self.cache_live_scratch, 32);
+        shrink_vec(&mut self.cache_check_scratch, 32);
+        shrink_vec(&mut self.cache_paint_scratch, 32);
+        shrink_vec(&mut self.cache_inside_scratch, 32);
+        shrink_vec(&mut self.materials, 16);
+        shrink_vec(&mut self.wayland_material_blurs, 16);
+        #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+        shrink_vec(&mut self.windows_material_draws, 16);
+        shrink_vec(&mut self.material_fallbacks, 16);
+        shrink_vec(&mut self.icon_aprons, 16);
+        shrink_map(&mut self.node_caches, 16);
+        shrink_map(&mut self.text_rows, 16);
+        shrink_map(&mut self.static_scales, 16);
+        shrink_map(&mut self.icon_anim_mounts, 16);
+        shrink_map(&mut self.last_anchor_targets, 16);
+        self.text_quads.rest(|id| node_index.contains_key(&id));
+        self.keep.rest(live_nodes, live_inst);
+    }
+
     pub(in crate::runtime) fn srgb_blend(&self) -> bool {
         self.srgb_blend
     }

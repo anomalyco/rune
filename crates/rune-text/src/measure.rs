@@ -84,6 +84,17 @@ thread_local! {
 /// the window lays out. Moves `text` into thread-local storage for the duration of `f` and restores
 /// it on return or unwind.
 #[doc(hidden)]
+/// Trims this thread's fallback measurement `TextSystem` (when one was created) at rest.
+pub(crate) fn rest() {
+    MEASURER.try_with(|cell| {
+        if let Ok(mut slot) = cell.try_borrow_mut()
+            && let Some(m) = slot.as_mut()
+        {
+            m.text.rest();
+        }
+    }).ok();
+}
+
 pub fn lend<R>(text: &mut TextSystem, f: impl FnOnce() -> R) -> R {
     struct Restore<'a> {
         dest: &'a mut TextSystem,

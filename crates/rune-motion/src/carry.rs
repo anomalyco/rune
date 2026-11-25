@@ -37,6 +37,13 @@ impl<T> Carry<T> {
     pub(crate) fn as_slice(&self) -> &[T] {
         &self.items
     }
+
+    pub(crate) fn shrink(&mut self) {
+        let cap = (self.items.len().saturating_mul(2)).max(16);
+        if self.items.capacity() > cap {
+            self.items.shrink_to(cap);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -178,6 +178,35 @@ impl CommitState {
         self.commit_gen = generation;
     }
 
+    pub(in crate::runtime) fn rest(&mut self) {
+        fn shrink_map<K: Eq + std::hash::Hash, V, S: std::hash::BuildHasher>(m: &mut std::collections::HashMap<K, V, S>, floor: usize) {
+            let cap = (m.len().saturating_mul(2)).max(floor);
+            if m.capacity() > cap { m.shrink_to(cap); }
+        }
+        fn shrink_set<K: Eq + std::hash::Hash, S: std::hash::BuildHasher>(s: &mut std::collections::HashSet<K, S>, floor: usize) {
+            let cap = (s.len().saturating_mul(2)).max(floor);
+            if s.capacity() > cap { s.shrink_to(cap); }
+        }
+        self.memo.rest();
+        self.apply_scratch.rest();
+        shrink_map(&mut self.layout_seen.rects, 32);
+        let reads_cap = (self.layout_seen.reads.len().saturating_mul(2)).max(32);
+        if self.layout_seen.reads.capacity() > reads_cap { self.layout_seen.reads.shrink_to(reads_cap); }
+        shrink_map(&mut self.layout_fired, 32);
+        shrink_map(&mut self.screen_fired, 32);
+        shrink_map(&mut self.drawn_fired, 32);
+        shrink_map(&mut self.visible_fired, 32);
+        shrink_set(&mut self.mounted_seen, 64);
+        shrink_map(&mut self.virtuals, 16);
+        self.virtual_items.rest();
+        shrink_set(&mut self.virtual_culled, 16);
+        shrink_map(&mut self.virtual_inputs, 16);
+        let fit_cap = (self.reuse.above_fit_styles.len().saturating_mul(2)).max(16);
+        if self.reuse.above_fit_styles.capacity() > fit_cap {
+            self.reuse.above_fit_styles.shrink_to(fit_cap);
+        }
+    }
+
     #[cfg(debug_assertions)]
     #[inline]
     pub(in crate::runtime) fn last_commit_clock(&self) -> f64 {

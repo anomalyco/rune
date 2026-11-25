@@ -86,6 +86,8 @@ mod paint;
 mod paint_probe;
 mod pick;
 mod playground;
+mod rest;
+pub use rest::register_thread_rest_hook;
 mod scroll;
 pub(crate) mod selection;
 mod system_settings;

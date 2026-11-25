@@ -669,7 +669,7 @@ pub(crate) struct TreeState {
     /// Whether this runtime has an attached playground (`hooks.playground.is_some()`).
     pub(crate) has_playground: bool,
     pub(in crate::runtime) exit_mask: exit_mask::Mask,
-    key_index: key_index::KeyIndex,
+    pub(in crate::runtime) key_index: key_index::KeyIndex,
     /// Packed explicit piecewise-linear scroll-fade stops (`ScrollFade::stops`) for `Globals::flags[2..4]`.
     pub(in crate::runtime) fade_stops: [f32; 2],
 }

@@ -130,6 +130,37 @@ impl MemoCache {
         self.present_len = 0;
     }
 
+    pub(crate) fn rest(&mut self) {
+        fn shrink_vec<T>(v: &mut Vec<T>, floor: usize) {
+            let cap = (v.len().saturating_mul(2)).max(floor);
+            if v.capacity() > cap { v.shrink_to(cap); }
+        }
+        fn shrink_map<K: Eq + std::hash::Hash, V, S: std::hash::BuildHasher>(m: &mut std::collections::HashMap<K, V, S>, floor: usize) {
+            let cap = (m.len().saturating_mul(2)).max(floor);
+            if m.capacity() > cap { m.shrink_to(cap); }
+        }
+        shrink_map(&mut self.entries, 64);
+        shrink_map(&mut self.flattened, 64);
+        self.pending_scratch.clear();
+        self.reused_scratch.clear();
+        self.skip_scratch.clear();
+        self.split_scratch.clear();
+        self.taken_paths_scratch.clear();
+        self.path_scratch.clear();
+        self.id_scratch.clear();
+        self.pure_counts.clear();
+        self.nested_scratch.clear();
+        shrink_vec(&mut self.pending_scratch, 32);
+        shrink_vec(&mut self.reused_scratch, 32);
+        shrink_vec(&mut self.skip_scratch, 32);
+        shrink_vec(&mut self.split_scratch, 64);
+        shrink_vec(&mut self.taken_paths_scratch, 32);
+        if self.path_scratch.capacity() > 256 { self.path_scratch.shrink_to(256); }
+        if self.id_scratch.capacity() > 256 { self.id_scratch.shrink_to(256); }
+        shrink_map(&mut self.pure_counts, 32);
+        shrink_vec(&mut self.nested_scratch, 32);
+    }
+
     /// No memos, counting passes on from this cache's, for a build that must start from scratch.
     #[cfg(feature = "hot")]
     pub(crate) fn emptied(&self) -> MemoCache {

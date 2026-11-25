@@ -13,9 +13,10 @@
 //! shows it again makes its targets afresh.
 //!
 //! Either way the runtime's caches go back to what the screen on show uses: text layouts the last
-//! two commits didn't use and their glyph runs (`TextSystem::rest`), images no element showed in
-//! the last frame and the CPU copies of pages left empty (`ImageAtlas::rest`). Then the app's
-//! `App::on_rest` runs, for its own caches.
+//! commit didn't use and their glyph runs (`TextSystem::rest`), images no element showed in the
+//! last frame and the CPU copies of pages left empty (`ImageAtlas::rest`), dormant scene slots,
+//! oversized node/paint/memo buffers, and companion thread-local caches (`RuntimeCore::rest`).
+//! Then the app's `App::on_rest` runs, for its own caches.
 
 use std::time::Duration;
 

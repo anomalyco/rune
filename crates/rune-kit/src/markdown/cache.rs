@@ -76,6 +76,7 @@ pub(super) struct Cache {
 
 impl Cache {
     fn new(bytes: usize) -> Self {
+        rune::register_thread_rest_hook(rest_caches);
         Cache { docs: Budget::new(bytes), last: None }
     }
 
@@ -83,6 +84,22 @@ impl Cache {
     pub(super) fn peek(&self, src: &str, hard_breaks: bool) -> Option<&Parsed> {
         self.docs.peek(&(src, hard_breaks) as &dyn CacheLookup)
     }
+
+    fn rest(&mut self) {
+        self.docs.rest();
+        if self.last.as_ref().is_some_and(|k| self.docs.peek(k as &dyn CacheLookup).is_none()) {
+            self.last = None;
+        }
+    }
+}
+
+fn rest_caches() {
+    CACHE.try_with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut() { c.rest(); }
+    }).ok();
+    STREAMS.try_with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut() { c.rest(); }
+    }).ok();
 }
 
 thread_local! {
