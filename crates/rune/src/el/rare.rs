@@ -114,6 +114,9 @@ pub(crate) struct ElCold {
     pub(crate) a11y: A11y,
     /// `El::data`: one value per type.
     pub(crate) data: Vec<crate::el::data::ElData>,
+    /// `El::selection_enabled`: `Some(false)` turns off the selectable texts in this subtree,
+    /// `Some(true)` turns them back on under an ancestor's `false`; `None` inherits.
+    pub(crate) selection_enabled: Option<bool>,
     #[cfg(debug_assertions)]
     pub(crate) scroll_source: Option<&'static std::panic::Location<'static>>,
     #[cfg(debug_assertions)]
@@ -171,6 +174,7 @@ impl Empty for ElCold {
         list_disc: None,
         a11y: A11y::EMPTY,
         data: Vec::new(),
+        selection_enabled: None,
         #[cfg(debug_assertions)]
         scroll_source: None,
         #[cfg(debug_assertions)]

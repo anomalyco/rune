@@ -418,13 +418,15 @@ impl RuntimeCore {
     /// In a page, which nodes' text the browser selects without `El::selectable`, as a web page's
     /// text selects: all of it but text inside something that takes the pointer (mirrored text
     /// takes the pointer from the canvas, so it would swallow that control's press) or inside
-    /// `El::unselectable`. Empty outside a page. A parent always comes before its children.
+    /// `El::unselectable` or an `El::selection_enabled(false)` subtree (where only
+    /// `El::selectable` text a descendant's `true` reopens selects). Empty outside a page. A
+    /// parent always comes before its children.
     pub(crate) fn page_text_selects(&self) -> Vec<bool> {
         if self.host.page.is_none() { return Vec::new(); }
         let mut out = vec![false; self.tree.nodes.len()];
         for (i, n) in self.tree.nodes.iter().enumerate() {
             let inherited = n.parent.is_none_or(|p| out[p]);
-            out[i] = inherited && !n.a11y.unselectable && !takes_pointer(n);
+            out[i] = inherited && !n.a11y.unselectable && !n.selection_off && !takes_pointer(n);
         }
         out
     }
