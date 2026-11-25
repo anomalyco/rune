@@ -110,6 +110,7 @@ impl Host {
     /// (`Backoff`), with its display link stopped so no tick redraws sooner. `stepped` when this
     /// frame already ran the runtime.
     pub(in crate::window) fn missed_frame(&mut self, missed: Missed, stepped: bool) {
+        if self.poll_device_for_terminal_loss() { return; }
         #[cfg(feature = "frame-profile")]
         crate::frame::live_log::missed(match missed { Missed::Occluded => 0, Missed::Timeout => 1, Missed::Outdated => 2, Missed::Unconfigured => 3 });
         let Some(l) = self.win.as_mut() else { return };
@@ -179,6 +180,7 @@ impl Host {
     /// Draws a frame. `resizing` draws one for a size the user just dragged the window to, at
     /// once: AppKit shows the new size when the event returns, with or without it.
     pub(in crate::window) fn draw(&mut self, resizing: bool) {
+        if self.poll_gpu_loss() { return; }
         // Windows: a window still on the CPU renderer draws there (`cpu_frame`).
         #[cfg(target_os = "windows")]
         {
@@ -243,6 +245,7 @@ impl FrameHost for WindowFrame<'_> {
     type Prepared = PreparedWindowFrame;
 
     fn gate(&mut self) -> Gate {
+        if self.host.poll_gpu_loss() { return Gate::Skip; }
         let launcher = self.host.launcher();
         let Some(l) = self.host.win.as_ref() else { return Gate::Skip };
         let hidden = launcher && !self.host.life.shown();
@@ -395,8 +398,10 @@ impl FrameHost for WindowFrame<'_> {
             #[cfg(target_os = "macos")]
             l.set_live_resize(false);
             l.backoff_step(BackoffEvent::Lapsed);
-            #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+            #[cfg(target_os = "macos")]
             { self.host.app.rt_mut().paint.set_native_materials(l.native.materials.native()); }
+            #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+            { self.host.app.rt_mut().paint.set_windows_acrylic_materials(l.native.materials.native()); }
             if self.host.frame_reports.wanted() { self.host.frame_reports.set_refresh(display_hz(l)); }
             Gate::QuietTimer
         } else {
@@ -417,8 +422,10 @@ impl FrameHost for WindowFrame<'_> {
         l.set_live_resize(self.resizing && self.state.live_resize);
         // Acquire before latching live values so a drawable wait cannot age the input.
         l.backoff_step(BackoffEvent::Lapsed);
-        #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+        #[cfg(target_os = "macos")]
         { self.host.app.rt_mut().paint.set_native_materials(l.native.materials.native()); }
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        { self.host.app.rt_mut().paint.set_windows_acrylic_materials(l.native.materials.native()); }
         if self.host.frame_reports.wanted() { self.host.frame_reports.set_refresh(display_hz(l)); }
     }
 
@@ -449,6 +456,7 @@ impl FrameHost for WindowFrame<'_> {
             }
         };
         self.state.profile.take_loop_check(self.host.app.rt_mut());
+        let _ = self.host.poll_gpu_loss();
         StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: self.state.target }
     }
 
@@ -495,6 +503,7 @@ impl FrameHost for WindowFrame<'_> {
     }
 
     fn acquire(&mut self) -> Acquire<wgpu::SurfaceTexture> {
+        if self.host.poll_gpu_loss() { return Acquire::Missed(Missed::Unconfigured); }
         self.state.profile.mark_start();
         let (Some(l), Some((gpu, _))) = (self.host.win.as_mut(), self.host.gpu.as_ref()) else {
             return Acquire::Missed(Missed::Unconfigured);
@@ -559,6 +568,7 @@ impl FrameHost for WindowFrame<'_> {
         };
         // `RUNE_LOOP_CHECK=1`: how the loop-only step this frame stood in for compares with it.
         self.state.profile.take_loop_check(self.host.app.rt_mut());
+        let _ = self.host.poll_gpu_loss();
         StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: self.state.target }
     }
 
@@ -590,8 +600,13 @@ impl FrameHost for WindowFrame<'_> {
             let device_type = self.host.gpu.as_ref().map(|(gpu, _)| gpu.adapter.get_info().device_type);
             let transparent = self.host.options.transparent;
             let window_backdrop = self.host.app.rt().window_backdrop();
-            let found = !self.host.app.rt().paint.materials().is_empty();
-            if let Some(l) = self.host.win.as_mut() {
+            let found = !self.host.app.rt().paint.windows_material_draws().is_empty();
+            let high_contrast = self.host.app.rt().system_contrast().is_some();
+            if let Some(l) = self.host.win.as_mut()
+                && (found || l.native.materials.native())
+            {
+                let mut effects = crate::system_material::windows::current_policy();
+                effects.high_contrast |= high_contrast;
                 let hwnd = crate::platform::win32::hwnd(&l.window).map(|h| h as isize);
                 let inputs = crate::system_material::windows::MaterialInputs {
                     transparent,
@@ -604,6 +619,7 @@ impl FrameHost for WindowFrame<'_> {
                     window_backdrop,
                     mode: l.native.materials.mode(),
                     has_handover: l.native.mode.handover().is_some(),
+                    effects,
                 };
                 let native = &mut l.native;
                 if native.materials.update(hwnd, inputs, found, native.mode.handover_mut()) {
@@ -628,11 +644,18 @@ impl FrameHost for WindowFrame<'_> {
             #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
             ReacquireReason::NativeMaterials => {
                 // Rebuild with the updated native-materials state before acquiring the replacement drawable.
-                #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
-                let native = self.host.win.as_ref().is_some_and(|l| l.native.materials.native());
+                #[cfg(target_os = "macos")]
+                {
+                    let native = self.host.win.as_ref().is_some_and(|l| l.native.materials.native());
+                    self.host.app.rt_mut().paint.set_native_materials(native);
+                }
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                {
+                    let native = self.host.win.as_ref().is_some_and(|l| l.native.materials.native());
+                    self.host.app.rt_mut().paint.set_windows_acrylic_materials(native);
+                }
                 #[cfg(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))))]
-                let native = true;
-                self.host.app.rt_mut().paint.set_native_materials(native);
+                self.host.app.rt_mut().paint.set_native_materials(true);
                 let more = self.host.app.frame(0.0);
                 info.runtime_animating |= more;
                 info.animating |= more;
@@ -642,6 +665,8 @@ impl FrameHost for WindowFrame<'_> {
                 let _ = info;
                 self.reblend_surface()
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            ReacquireReason::ContentResize => true,
         }
     }
 
@@ -696,6 +721,7 @@ impl FrameHost for WindowFrame<'_> {
     }
 
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
+        if self.host.poll_gpu_loss() { return; }
         let now = self.state.now.unwrap_or(submitted);
         if self.host.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost()) {
             #[cfg(target_os = "windows")]
@@ -822,7 +848,7 @@ fn loop_step(clock: &mut FrameClock, rt: &mut RuntimeCore, at: Instant) -> Resul
 }
 
 /// The window's display refresh: its display link's on macOS, else the monitor's.
-pub(super) fn display_hz(l: &Win) -> Option<f64> {
+pub(in crate::window) fn display_hz(l: &Win) -> Option<f64> {
     #[cfg(target_os = "macos")]
     if let Some(pacing) = &l.native.pacing { return Some(pacing.refresh_hz()); }
     l.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map(|hz| hz as f64 / 1000.0)

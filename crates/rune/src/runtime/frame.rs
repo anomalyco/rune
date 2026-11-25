@@ -160,7 +160,7 @@ impl RuntimeCore {
     /// is ordered in and its first drawable taken. Lands every track, as showing does.
     /// Returns whether it built; the first frame then has nothing left to build.
     pub(crate) fn build_for_show(&mut self, app: &mut dyn AppDriver) -> bool {
-        if !self.host.fit_height || self.commit.commits == 0 || !self.stale() { return false; }
+        if !self.host.content_sizing.fits_any() || self.commit.commits == 0 || !self.stale() { return false; }
         self.settle_all();
         self.hidden_timer_frame(app);
         true
@@ -393,6 +393,9 @@ impl RuntimeCore {
                 if let Some(picked) = tx.field_menu_resolution.take() {
                     self.latch_field_menu_resolution(app, picked, &mut tx);
                 }
+                if let Some(picked) = tx.popup_menu_resolution.take() {
+                    self.latch_popup_menu_resolution(app, picked, &mut tx);
+                }
             }
             // Both callbacks see ordinary &mut S. After the next mutation a single view
             // cannot tell which one introduced a row. Observe the poll's tree now, without
@@ -420,6 +423,7 @@ impl RuntimeCore {
                     { let check = self.frame.take_live_check(); self.compare_live_check(check); ran_other = false; }
                     self.apply_keeps(app);
                     self.finish_deferred_field_menu(app, &mut tx, None);
+                    self.finish_deferred_popup_menu(app, &mut tx, None);
                     ran = false;
                 }
                 if split {
@@ -531,6 +535,7 @@ impl RuntimeCore {
             self.apply_keeps(app);
         }
         self.finish_deferred_field_menu(app, &mut tx, Some(&mut end_of_frame));
+        self.finish_deferred_popup_menu(app, &mut tx, Some(&mut end_of_frame));
         #[cfg(debug_assertions)]
         { self.frame.clear_live_check(); }
         let mount_rounds = self.deliver_mounts(
@@ -602,7 +607,10 @@ impl RuntimeCore {
         }
         let dt = if self.fit_frame_holds() { 0.0 } else { dt };
         let instant_scroll = tx.commit.snaps() || self.settled;
-        let animating = self.step_motion(app, dt, instant_scroll) || live_animating;
+        let mut animating = self.step_motion(app, dt, instant_scroll) || live_animating;
+        if self.deliver_popup_menu_fallback_after_paint(app, &mut tx, Some(&mut end_of_frame)) {
+            animating |= self.step_motion(app, 0.0, true);
+        }
         self.stats.shaped = self.text.shaped - shaped0;
         let filling = self.virtual_filling();
         if live_animating { self.motion.add_anim_sources(AnimSource::LIVE); }

@@ -16,6 +16,8 @@
 mod stories;
 
 #[cfg(test)]
+mod gallery_tests;
+#[cfg(test)]
 mod layer_timing;
 
 use std::collections::{HashMap, HashSet};
@@ -47,9 +49,14 @@ pub struct G {
     pub field_menu_edit: TextEdit,
     pub field_menu: Option<rune::FieldMenuRequest>,
     pub field_menu_last: Option<String>,
+    pub popup_menu: Option<rune::PopupMenuRequest>,
+    pub popup_menu_last: Option<String>,
+    pub popup_menu_theme: String,
     pub focus_caret_edit: TextEdit,
     pub aria_combo_edit: TextEdit,
     pub combo: rune_kit::ComboboxState,
+    pub combo_animated: rune_kit::ComboboxState,
+    pub combo_localized: rune_kit::ComboboxState,
     /// The sidebar reorder story's state.
     pub reorder: stories::sidebar::ReorderDemo,
     /// The file tree story's files.
@@ -69,7 +76,7 @@ pub struct G {
     /// The table options story's state, row count and open row context menu.
     pub table: rune_kit::TableState,
     pub table_rows: usize,
-    pub table_menu: Option<(String, rune::PointerPress)>,
+    pub table_menu: Option<(&'static str, String, rune::PointerPress)>,
     /// The diff stories' state and most recent comment anchor.
     pub diff: rune_kit::diff::DiffState,
     pub diff_custom: rune_kit::diff::DiffState,
@@ -135,9 +142,14 @@ fn init() -> G {
         field_menu_edit: TextEdit::new("Select text, right-click or press Shift+F10"),
         field_menu: None,
         field_menu_last: None,
+        popup_menu: None,
+        popup_menu_last: None,
+        popup_menu_theme: "system".into(),
         focus_caret_edit: TextEdit::new(stories::focus_caret_sample()),
         aria_combo_edit: TextEdit::new("Ap"),
         combo: Default::default(),
+        combo_animated: Default::default(),
+        combo_localized: Default::default(),
         reorder: Default::default(),
         files: files(),
         scroll_files: scroll_files(),
@@ -261,8 +273,14 @@ fn view(s: &G, cx: &mut Cx<G>) -> El {
     let mut overlays = Vec::new();
     let body = stories::render(s, k, &mut overlays);
     stories::field_menu::mount_live_field_menu(s, k, &mut overlays);
-    // Storybook's decorator: the page colour and 24 px of padding around the story.
-    rune_kit::root(col().key("frame").fill(k.c.page).padding(24.0).child(body), overlays)
+    stories::popup_menu::mount_live_popup_menu(s, k, &mut overlays);
+    let frame = if s.story == "index" {
+        col().key("frame").w_full().h_full().fill(k.c.page).child(body)
+    } else {
+        // Storybook's decorator: the page colour and 24 px of padding around the story.
+        col().key("frame").fill(k.c.page).padding(24.0).child(body)
+    };
+    rune_kit::root(frame, overlays)
 }
 
 fn build_app() -> rune::App<G> {
@@ -282,6 +300,9 @@ fn build_app() -> rune::App<G> {
     .on_field_menu(|s: &mut G, req, _| {
         s.field_menu = Some(req);
         s.on.remove("fm-preview");
+    })
+    .on_popup_menu(|s: &mut G, req, _| {
+        s.popup_menu = Some(req);
     })
 }
 
@@ -359,6 +380,56 @@ mod tests {
             rt.pointer_up(px, py);
             rt.frame(0.0);
             assert_eq!(rt.state.field_menu_edit.text, "Select text, right-click or press Shift+F10");
+        }
+    }
+
+    /// Drives the `rune-menu--popup-menu-fallback` story headless: opens the key-anchored picker
+    /// and the point-anchored context menu (with Share submenu) and verifies both native and
+    /// Linux `App::on_popup_menu` + `Menu::from_popup_menu` paths.
+    #[test]
+    fn popup_menu_fallback_story_drives_picker_and_submenu() {
+        let mut rt = build_app().headless_runtime((720.0, 480.0), rune::Env::new(true, 1.0));
+        let (_, setup) = stories::SCENES
+            .iter()
+            .find(|(id, _)| *id == "rune-menu--popup-menu-fallback")
+            .expect("popup-menu-fallback scene");
+        rt.update(|s, _| setup(s));
+        rt.frame(0.0);
+
+        let (bx, by) = rt.find("pm-picker-btn").expect("picker button");
+        rt.pointer_down(bx, by);
+        rt.pointer_up(bx, by);
+        rt.frame(0.0);
+        if rune::popup_menu_supported() {
+            assert!(rt.state.popup_menu.is_none());
+            assert!(rt.popup_menu().is_some());
+            rt.resolve_popup(Some("dark")).unwrap();
+            rt.frame(0.0);
+            assert_eq!(rt.state.popup_menu_theme, "dark");
+        } else {
+            assert!(rt.state.popup_menu.is_some(), "on_popup_menu mounts Menu::from_popup_menu");
+            let (dx, dy) = rt.find("popup-menu-fallback-item-dark").expect("dark item in Menu");
+            rt.pointer_down(dx, dy);
+            rt.pointer_up(dx, dy);
+            rt.frame(0.0);
+            assert!(rt.state.popup_menu.is_none());
+            assert_eq!(rt.state.popup_menu_theme, "dark");
+
+            let (cx, cy) = rt.find("pm-ctx-area").expect("context area");
+            rt.secondary_down(cx, cy);
+            rt.secondary_up(cx, cy);
+            rt.frame(0.0);
+            assert!(rt.state.popup_menu.is_some());
+            let (sx, sy) = rt.find("popup-menu-fallback-sub-4").expect("Share submenu row");
+            rt.pointer_down(sx, sy);
+            rt.pointer_up(sx, sy);
+            rt.frame(0.0);
+            let (mx, my) = rt.find("popup-menu-fallback-item-mail").expect("Mail submenu item");
+            rt.pointer_down(mx, my);
+            rt.pointer_up(mx, my);
+            rt.frame(0.0);
+            assert!(rt.state.popup_menu.is_none());
+            assert_eq!(rt.state.popup_menu_last.as_deref(), Some("mail"));
         }
     }
 }

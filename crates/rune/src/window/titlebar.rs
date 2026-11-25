@@ -5,8 +5,8 @@
 //! window's controls over the app's: AppKit's traffic lights at the leading edge on macOS, and
 //! the minimize, maximize and close buttons at the trailing edge on Windows, which Rune draws
 //! as elements over the view. On Linux, where the Wayland compositor draws no frame of its own
-//! (GNOME), Rune draws the buttons the desktop's button layout names, and the window resizes from
-//! a band inside its edges (`linux`). The app keeps clear of [`ChromeInsets`] and marks the parts
+//! (GNOME), Rune draws the buttons the desktop's button layout names, and the window keeps the
+//! client-side frame's shadow, rounded corners and resize handles (`linux`). The app keeps clear of [`ChromeInsets`] and marks the parts
 //! that move the window with `.window_drag()`; hit targets inside them keep their presses.
 
 use crate::Chrome;
@@ -30,11 +30,12 @@ pub(crate) use caption::{BUTTONS_KEY, EDGES_KEY, FRAME_KEY, frame};
 /// - **Linux on Wayland, where the compositor draws no window frame (GNOME):** no title bar
 ///   either, in place of the grey bar winit would draw above the app's. Rune draws the caption
 ///   buttons the desktop's button layout names (GNOME's default, `appmenu:close`, is close
-///   alone; a layout on the left puts them there) as round buttons in the band, and the window
-///   resizes from a band just inside its edges. `.window_drag()` regions move it, maximize it on
-///   a double click and open the compositor's window menu on a right click. The window has no
-///   shadow and square corners. `RUNE_LINUX_FRAME=0` keeps winit's frame, and `=1` draws Rune's
-///   under any Wayland compositor.
+///   alone; a layout on the left puts them there) as round buttons in the band. `.window_drag()`
+///   regions move it, maximize it on a double click and open the compositor's window menu on a
+///   right click. The window keeps the client-side frame's shadow, border and four rounded
+///   corners while it floats, and resizes from the frame's handles outside its edges; where that
+///   frame can't be made it is square and resizes from a band just inside its edges.
+///   `RUNE_LINUX_FRAME=0` keeps winit's frame, and `=1` draws Rune's under any Wayland compositor.
 /// - **Elsewhere** (X11, and Wayland compositors that draw the frame themselves: KDE, Sway,
 ///   Hyprland): the native frame stays and [`ChromeInsets`] is zero.
 ///

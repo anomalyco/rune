@@ -257,8 +257,9 @@ an app that closes the menu some other way clears the flags itself. All `on_subm
 one menu take the same state type. Side-placed
 menus and submenus clamp on both axes via `El::anchored_fit` when they would overflow a small
 window so long submenus shrink and scroll inside the viewport (see
-`rune-menu--submenu-small-window`, and `rune-menu--field-menu-fallback` for rendering
-`App::on_field_menu` with `Menu`).
+`rune-menu--submenu-small-window`, `rune-menu--field-menu-fallback` for rendering
+`App::on_field_menu` with `Menu`, and `Menu::from_popup_menu` + `Menu::on_close_tx` for
+rendering `App::on_popup_menu` in one call — see `rune-menu--popup-menu-fallback`).
 
 ### Accessibility
 
@@ -462,11 +463,11 @@ draws Markdown tables with the same font, padding and rules.
 Feature `markdown`: `Markdown::new(src).build(&kit)`, or without a kit
 `Markdown::new(src).render(&MarkdownStyle::neutral(dark))`.
 It renders CommonMark plus GFM tables, and is built for streaming: re-render with the longer
-source each time, and earlier blocks stay mounted. `Markdown::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)`
+source each time, and earlier blocks stay mounted. Real-URL links (`http:`, `https:`, `mailto:`) get Rune's default Open Link / Copy Link context menu on right-click and Menu / Shift+F10 (yielding to `Markdown::on_link_secondary` and ancestor `on_secondary_press`; opt out with `Markdown::link_menu(false)`). `Markdown::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)`
 reports the hovered link's destination and hit line box in window points (activating link hover
 tracking even without `on_link` or `on_link_secondary`, and leaving the old block before entering
 the new one across paragraphs; see `rune-markdown--link-hover` in `kit-gallery`).
-`Markdown::emoji(|name| Option<Pixels>)` draws `:name:` shortcodes in prose (not in code, math or
+To give Markdown images a right-click context menu (Save Image As…, Copy Image, Copy Image Address), compose `El::image_menu` inside `Markdown::image_frame(|el, frame| el.image_menu(ImageMenu::new(frame.image).save_bytes(..).address(frame.src)))` (see `rune-image--decode` in `kit-gallery`). `Markdown::emoji(|name| Option<Pixels>)` draws `:name:` shortcodes in prose (not in code, math or
 a link showing its address) as the app's pictures, 1.2 em tall on the baseline; selection, copy and
 search still see the shortcode. The pictures are drawn only, with no hover or press of their own.
 

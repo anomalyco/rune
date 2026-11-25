@@ -150,6 +150,7 @@ impl OverlayCore {
     /// Creates the wgpu surface (and the GPU device, if this is the first surface).
     #[allow(unsafe_code)]
     pub(super) fn attach(&mut self, app: &mut dyn OverlayApp, backing: Backing, scale: f32) -> Option<Live> {
+        if self.poll_terminal_gpu_loss(app) { return None; }
         // First, before the surface binds the view (macOS may observe it).
         let a11y = self.shared.wake.lock().unwrap().clone().and_then(|wake| match &backing {
             Backing::Window(window) => crate::a11y::Adapter::new(window, wake),
@@ -222,9 +223,18 @@ impl OverlayCore {
             }
         };
         let features = app.compositor_features();
+        // Re-poll any retained GPU and check the terminal latch right after `Compositor::features()`
+        // so a device lost or destroyed inside that callback never falls through to replacement.
+        if self.poll_device_for_terminal_loss(app) {
+            return None;
+        }
         // A device that died while the overlay was hidden (a driver reset, a resume from
         // Modern Standby) can configure nothing: the next surface gets a new one.
         if self.gpu.as_ref().is_some_and(|gpu| gpu.is_lost()) {
+            if self.is_terminal_gpu_policy() {
+                self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::DeviceLost, "its GPU device was lost");
+                return None;
+            }
             self.gpu = None;
             self.renderer = None;
             app.release_compositor_gpu();
@@ -277,13 +287,44 @@ impl OverlayCore {
         };
         let (surface, (config, opaque_fallback, mut renderer), reused_renderer) = match reused {
             Some((gpu, surface)) => {
-                let own_renderer = self.gpu.as_ref().is_some_and(|own| Arc::ptr_eq(own, &gpu))
+                let already_own = self.gpu.as_ref().is_some_and(|own| Arc::ptr_eq(own, &gpu));
+                if !already_own {
+                    self.attach_terminal_gpu_latch(&gpu);
+                }
+                let own_renderer = already_own
                     .then(|| self.renderer.take())
                     .flatten();
                 let had_own = own_renderer.is_some();
                 match setup_surface(&gpu, &surface, own_renderer) {
-                    Ok(configured) => { self.gpu = Some(gpu); (surface, configured, had_own) }
+                    Ok(configured) => {
+                        if self.poll_device_for_terminal_loss(app) {
+                            drop((surface, configured));
+                            if !already_own && let Some(latch) = &self.gpu_loss_latch {
+                                gpu.detach_terminal_latch(latch);
+                            }
+                            return None;
+                        }
+                        self.gpu = Some(gpu);
+                        (surface, configured, had_own)
+                    }
                     Err(err) => {
+                        if self.is_terminal_gpu_policy() {
+                            let lost = err.kind == crate::gpu::fallback::Failure::DeviceLost || gpu.is_lost();
+                            if let Some(latch) = &self.gpu_loss_latch {
+                                gpu.detach_terminal_latch(latch);
+                            }
+                            if lost && self.gpu_pool.borrow().upgrade().is_some_and(|p| Arc::ptr_eq(&p, &gpu)) {
+                                *self.gpu_pool.borrow_mut() = Weak::default();
+                            }
+                            drop((surface, gpu));
+                            let kind = if lost {
+                                crate::render::loss_latch::GpuFailureKind::DeviceLost
+                            } else {
+                                crate::render::loss_latch::GpuFailureKind::SurfaceFailed
+                            };
+                            self.latch_terminal_loss_latch(app, kind, err.message);
+                            return None;
+                        }
                         if crate::gpu::fallback::decide(Gpu::env_fallback_policy(), err.kind)
                             != crate::gpu::fallback::Decision::MoveOn
                         {
@@ -323,12 +364,22 @@ impl OverlayCore {
                 }
             }
             None => {
+                if self.is_terminal_gpu_policy() && self.gpu.is_some() {
+                    // Never discard an existing Terminal overlay device to make a replacement.
+                    self.latch_terminal_loss_latch(
+                        app,
+                        crate::render::loss_latch::GpuFailureKind::SurfaceFailed,
+                        "could not create a surface on the overlay's GPU device",
+                    );
+                    return None;
+                }
                 if self.gpu.is_some() {
                     self.gpu = None;
                     self.renderer = None;
                     app.release_compositor_gpu();
                 }
-                let made = Gpu::for_surface_setup(
+                let made = Gpu::for_surface_setup_with_latch(
+                    self.gpu_loss_latch.as_ref(),
                     features,
                     true,
                     make_surface,
@@ -337,16 +388,25 @@ impl OverlayCore {
                 let (gpu, surface, configured) = match made {
                     Ok(made) => made,
                     Err(err) => {
-                        self.fail(app, err.message);
+                        if self.is_terminal_gpu_policy() {
+                            self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::InitFailed, err.message);
+                        } else {
+                            self.fail(app, err.message);
+                        }
                         return None;
                     }
                 };
                 // The old renderer's buffers live on the old device; a new one was built above.
                 self.renderer = None;
                 let gpu = Arc::new(gpu);
+                self.attach_terminal_gpu_latch(&gpu);
                 *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
                 crate::render::surface_gpu(&gpu);
                 self.gpu = Some(gpu);
+                if self.poll_device_for_terminal_loss(app) {
+                    drop((surface, configured));
+                    return None;
+                }
                 (surface, configured, false)
             }
         };
@@ -433,7 +493,12 @@ impl OverlayCore {
         // DX12 `configure` calls `ResizeBuffers` on the same swap chain, preserving its waitable
         // semaphore and count; on failure `surface_refused` -> `release` resets the slot.
         if let Err(error) = crate::window::configure(&live.surface, gpu, &live.config) {
-            self.surface_refused(app, format!("could not resize its GPU surface: {error}"));
+            let msg = format!("could not resize its GPU surface: {error}");
+            if self.is_terminal_gpu_policy() {
+                self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::SurfaceFailed, msg);
+            } else {
+                self.surface_refused(app, msg);
+            }
             return;
         }
         #[cfg(target_os = "macos")]
@@ -442,6 +507,7 @@ impl OverlayCore {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }
         app.rt_mut().set_viewport(self.at.size, scale);
+        self.publish_screen_transform(app.rt());
         self.dirty = true;
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.sync_window_backdrop(app.rt_mut(), false);
@@ -457,7 +523,10 @@ pub(crate) fn overlay_rescale_size(size: (f32, f32), scale: f32, max_dim: u32) -
 
 impl Drop for OverlayCore {
     fn drop(&mut self) {
+        self.prepare_clean_gpu_drop();
         self.close_tokens();
+        self.clear_screen_transform();
+        self.drop_injected_pointers();
         *self.shared.native.lock().unwrap() = Default::default();
         self.set_availability(Availability::Unavailable);
         self.release();
@@ -480,7 +549,7 @@ impl OverlayCore {
         self.hide(app);
         self.release();
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
-        app.rt_mut().paint.set_native_materials(false);
+        app.rt_mut().paint.set_windows_acrylic_materials(false);
         self.fail(app, reason);
     }
 
@@ -533,7 +602,9 @@ impl OverlayCore {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.x11.take();
         drop(backing);
+        self.wayland_resize.step(super::sizing::WaylandResizeEvent::Reset);
         self.position_owner.step(input::PositionEvent::WindowReleased);
+        self.clear_screen_transform();
         self.shared.native.lock().unwrap().0 = None;
     }
 }

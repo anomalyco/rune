@@ -20,12 +20,19 @@ const PRINTED: usize = 16;
 /// [`crate::compose::Frame::restore_device_callbacks`] re-register Rune's single-slot wgpu
 /// callbacks against the same state after an embedded engine replaces them, without storing a
 /// `wgpu::Device` or `Arc<Gpu>` inside `Renderer`.
+#[cfg(not(target_arch = "wasm32"))]
+type TerminalLatches = Arc<Mutex<Vec<Arc<super::loss_latch::GpuLossLatch>>>>;
+
 #[derive(Clone)]
 pub(crate) struct GpuCallbacks {
     lost: Arc<AtomicBool>,
     uncaptured_logged: Arc<AtomicBool>,
     #[cfg(not(target_arch = "wasm32"))]
     printed: Arc<Mutex<Printed>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    terminal: TerminalLatches,
+    #[cfg(not(target_arch = "wasm32"))]
+    clean_drop: Arc<AtomicBool>,
     #[cfg(target_arch = "wasm32")]
     web: Arc<Mutex<Option<crate::platform::web::health::WebRestore>>>,
 }
@@ -41,15 +48,33 @@ pub(crate) struct GpuHost {
     callbacks: GpuCallbacks,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl GpuHost {
+    pub(crate) fn is_lost_or_terminal_failed(&self) -> bool {
+        self.callbacks.is_lost() || self.callbacks.any_terminal_failed()
+    }
+}
+
 impl GpuCallbacks {
     pub(crate) fn new(device: &wgpu::Device, draws_surfaces: bool) -> Self {
         let lost = Arc::new(AtomicBool::new(false));
-        install_lost_callback(device, &lost);
+        #[cfg(not(target_arch = "wasm32"))]
+        let terminal: TerminalLatches = Arc::default();
+        #[cfg(not(target_arch = "wasm32"))]
+        let clean_drop = Arc::new(AtomicBool::new(false));
+        #[cfg(not(target_arch = "wasm32"))]
+        install_lost_callback(device, &lost, Arc::clone(&terminal), Arc::clone(&clean_drop));
+        #[cfg(target_arch = "wasm32")]
+        install_lost_callback_web(device, &lost);
         let callbacks = Self {
             lost,
             uncaptured_logged: Arc::new(AtomicBool::new(false)),
             #[cfg(not(target_arch = "wasm32"))]
             printed: Arc::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            terminal,
+            #[cfg(not(target_arch = "wasm32"))]
+            clean_drop,
             #[cfg(target_arch = "wasm32")]
             web: Arc::default(),
         };
@@ -57,6 +82,73 @@ impl GpuCallbacks {
             callbacks.install_surface_error_policy(device);
         }
         callbacks
+    }
+
+    /// Attaches a `GpuLossPolicy::Terminal` latch to this shared callback state and installs both
+    /// device-lost and uncaptured-error callbacks (even under `cfg(test)`) onto the same latch.
+    /// Uses multiset registration so multiple owners sharing one `Arc<GpuLossLatch>` (for example
+    /// an app's main window and owned overlay on a pooled `Gpu`) each detach their own hold
+    /// independently.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn attach_terminal_latch(
+        &self,
+        device: &wgpu::Device,
+        latch: Arc<super::loss_latch::GpuLossLatch>,
+    ) {
+        {
+            let mut list = self.terminal.lock().unwrap_or_else(|e| e.into_inner());
+            list.push(latch);
+        }
+        self.uncaptured_logged.store(true, Ordering::Release);
+        install_lost_callback(device, &self.lost, Arc::clone(&self.terminal), Arc::clone(&self.clean_drop));
+        install_uncaptured_terminal(
+            device,
+            Arc::clone(&self.printed),
+            Arc::clone(&self.terminal),
+        );
+    }
+
+    /// Removes one registration of `latch` from this GPU's terminal-latch list so a clean release
+    /// or park of one window/overlay never suppresses `DeviceLostReason::Destroyed` on sibling
+    /// `Terminal` owners still sharing the same `Gpu`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn detach_terminal_latch(&self, latch: &Arc<super::loss_latch::GpuLossLatch>) {
+        let mut list = self.terminal.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pos) = list.iter().position(|existing| Arc::ptr_eq(existing, latch)) {
+            list.swap_remove(pos);
+        }
+    }
+
+    /// True if any `Terminal` latch still attached to this device has tripped.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn any_terminal_failed(&self) -> bool {
+        self.terminal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|l| l.is_failed())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn mark_lost(&self) {
+        self.lost.store(true, Ordering::Release);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn mark_clean_drop(&self) {
+        self.clean_drop.store(true, Ordering::Release);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn notify_removed(&self) {
+        self.lost.store(true, Ordering::Release);
+        let latches = self.terminal.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        for latch in latches {
+            let _ = latch.record_failure(
+                super::loss_latch::GpuFailureKind::DeviceRemoved,
+                "the GPU device was removed (D3D12)",
+            );
+        }
     }
 
     pub(crate) fn install_surface_error_policy(&self, device: &wgpu::Device) {
@@ -97,8 +189,15 @@ impl GpuCallbacks {
     pub(crate) fn restore(&self, device: &wgpu::Device) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            install_lost_callback(device, &self.lost);
-            if self.uncaptured_logged.load(Ordering::Acquire) && should_log_uncaptured() {
+            install_lost_callback(device, &self.lost, Arc::clone(&self.terminal), Arc::clone(&self.clean_drop));
+            let has_terminal = !self.terminal.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
+            if has_terminal {
+                install_uncaptured_terminal(
+                    device,
+                    Arc::clone(&self.printed),
+                    Arc::clone(&self.terminal),
+                );
+            } else if self.uncaptured_logged.load(Ordering::Acquire) && should_log_uncaptured() {
                 log_uncaptured(device, Arc::clone(&self.printed));
             }
         }
@@ -110,25 +209,51 @@ impl GpuCallbacks {
             } else if device.as_webgpu().is_some() {
                 crate::platform::web::health::restore_webgpu(device);
             } else {
-                install_lost_callback(device, &self.lost);
+                install_lost_callback_web(device, &self.lost);
             }
         }
     }
 }
 
-fn install_lost_callback(device: &wgpu::Device, lost: &Arc<AtomicBool>) {
+#[cfg(not(target_arch = "wasm32"))]
+fn install_lost_callback(
+    device: &wgpu::Device,
+    lost: &Arc<AtomicBool>,
+    terminal: TerminalLatches,
+    clean_drop: Arc<AtomicBool>,
+) {
     let lost_by_callback = Arc::clone(lost);
     device.set_device_lost_callback(move |reason, message| {
         // Before anything reads it: a lost device's surface can't be configured, and wgpu
         // reports that failure nowhere (`is_lost`).
         lost_by_callback.store(true, Ordering::Release);
+        let destroyed = matches!(reason, wgpu::DeviceLostReason::Destroyed);
+        let intentional_drop = destroyed && clean_drop.load(Ordering::Acquire);
+        if !intentional_drop {
+            let latches = terminal.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if !latches.is_empty() {
+                let text = if message.trim().is_empty() {
+                    format!("the GPU device was lost ({reason:?})")
+                } else {
+                    format!("the GPU device was lost ({reason:?}): {message}")
+                };
+                for latch in latches {
+                    let _ = latch.record_device_lost(destroyed, text.clone());
+                }
+            }
+        }
         // No panic here, in tests either: wgpu calls this inside its own work (a submission,
         // a queue's drop) and a panic there could abort the process. A test fails at its
         // next wait instead (`rune_gpu::health::poll` returns `Lost`).
-        #[cfg(not(target_arch = "wasm32"))]
         eprintln!("rune: the GPU device was lost ({reason:?}): {message}");
-        #[cfg(target_arch = "wasm32")]
-        let _ = (reason, message);
+    });
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_lost_callback_web(device: &wgpu::Device, lost: &Arc<AtomicBool>) {
+    let lost_by_callback = Arc::clone(lost);
+    device.set_device_lost_callback(move |_reason, _message| {
+        lost_by_callback.store(true, Ordering::Release);
     });
 }
 
@@ -180,6 +305,52 @@ impl Gpu {
     /// new GPU and surface instead (`Host::reattach`).
     /// On D3D12 the device is asked too: wgpu hears of a removal only at the next submission.
     pub fn is_lost(&self) -> bool { self.callbacks.is_lost() || self.removal.removed() }
+
+    /// Attaches a `GpuLossPolicy::Terminal` latch onto this GPU's shared `GpuCallbacks`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn attach_terminal_latch(&self, latch: Arc<super::loss_latch::GpuLossLatch>) {
+        self.callbacks.attach_terminal_latch(&self.device, latch);
+    }
+
+    /// Samples Windows D3D12 device removal and latches attached terminal latches immediately.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn sample_removal(&self) -> bool {
+        if self.removal.removed() {
+            self.callbacks.notify_removed();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Marks this GPU lost so shared overlays and sibling windows stop using it.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn mark_lost(&self) {
+        self.callbacks.mark_lost();
+    }
+
+    /// Removes one registration of `latch` from this GPU's shared callbacks.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn detach_terminal_latch(&self, latch: &Arc<super::loss_latch::GpuLossLatch>) {
+        self.callbacks.detach_terminal_latch(latch);
+    }
+
+    /// Marks an upcoming drop of this healthy GPU as intentional ONLY when the caller holds the
+    /// final `Arc` (`is_last_arc == true`), after detaching `latch` from this GPU's callbacks.
+    /// When other owners still share this `Gpu`, removes only `latch` without setting the
+    /// device-wide `clean_drop` flag so sibling `Terminal` windows still catch `Destroyed`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn prepare_clean_drop_for(
+        &self,
+        latch: &Arc<super::loss_latch::GpuLossLatch>,
+        is_last_arc: bool,
+    ) {
+        self.callbacks.detach_terminal_latch(latch);
+        if is_last_arc && !latch.is_failed() {
+            self.callbacks.mark_clean_drop();
+            latch.detach();
+        }
+    }
 
     /// Captures the owning instance, adapter, and shared callback state for a [`Renderer`].
     pub(crate) fn host(&self) -> GpuHost {
@@ -235,6 +406,43 @@ struct Printed {
 /// Prints each uncaptured error once, up to `PRINTED` distinct messages, then one line saying
 /// further ones are not shown. A scoped error (a `push_error_scope`, as `window::configure`
 /// uses) still goes to its scope first; this is the fallback for errors nothing else caught.
+#[cfg(not(target_arch = "wasm32"))]
+fn install_uncaptured_terminal(
+    device: &wgpu::Device,
+    printed: Arc<Mutex<Printed>>,
+    terminal: TerminalLatches,
+) {
+    device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+        let message = error.to_string();
+        // Only real DeviceLost/DeviceRemoved sets `callbacks.lost = true`. On an uncaptured
+        // error, trip and detach only the attached `Terminal` latches so a sibling `Recover`
+        // window sharing a healthy `Gpu` keeps drawing uninterrupted.
+        let latches = {
+            let mut list = terminal.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut *list)
+        };
+        for latch in latches {
+            let _ = latch.record_failure(
+                super::loss_latch::GpuFailureKind::UncapturedError,
+                format!("uncaptured GPU error: {message}"),
+            );
+        }
+        let line = {
+            let mut printed = printed.lock().unwrap_or_else(|e| e.into_inner());
+            if printed.silenced || printed.seen.contains(&message) {
+                None
+            } else if printed.seen.len() < PRINTED {
+                printed.seen.push(message.clone());
+                Some(format!("rune: a GPU error went uncaptured: {message}"))
+            } else {
+                printed.silenced = true;
+                Some(format!("rune: {PRINTED} distinct GPU errors went uncaptured; further uncaptured GPU errors are not shown"))
+            }
+        };
+        if let Some(line) = line { eprintln!("{line}"); }
+    }));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn log_uncaptured(device: &wgpu::Device, printed: Arc<Mutex<Printed>>) {
     device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {

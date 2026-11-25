@@ -60,6 +60,8 @@ pub struct Tx {
     /// The viewport moved only because the window's own resize animation stepped it.
     pub(crate) window_step: bool,
     pub(crate) copy: Option<crate::ClipboardWrite>,
+    pub(crate) copy_image_callback: Option<CopyImageCallback>,
+    pub(crate) superseded_copy_images: Vec<CopyImageCallback>,
     pub(crate) paste: bool,
     pub(crate) clipboard_reads: Vec<ClipboardRead>,
     pub(crate) pick_reads: Vec<PickRead>,
@@ -120,6 +122,11 @@ pub struct Tx {
     /// A handler in this transaction opened a new fallback field menu (`App::on_field_menu`),
     /// superseding any earlier action's stale `field_menu_resolution` in the same frame.
     pub(crate) field_menu_opened: bool,
+    /// `Tx::resolve_popup_menu`: `Some(Some(id))` picks an item, `Some(None)` dismisses.
+    pub(crate) popup_menu_resolution: Option<Option<String>>,
+    /// A handler in this transaction opened a new fallback popup menu (`App::on_popup_menu`),
+    /// superseding any earlier action's stale `popup_menu_resolution` in the same frame.
+    pub(crate) popup_menu_opened: bool,
     pub(crate) file_dialogs: Vec<crate::file_dialog::Call>,
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The mouse button driving this press or drag (`Tx::button`).
@@ -385,7 +392,7 @@ impl Tx {
     /// or a text flight. A `wake_after` only schedules.
     pub(crate) fn frame_work(&self) -> bool {
         !self.pick_reads.is_empty() || !self.scroll_to.is_empty() || !self.scroll_bottom.is_empty() || !self.scroll_pages.is_empty() || !self.scroll_offsets.is_empty()
-            || !self.scroll_stops.is_empty() || !self.keep_on_screen.is_empty() || !self.text_flights.is_empty() || !self.launches.is_empty() || !self.haptics.is_empty() || self.select.is_some() || self.field_menu_resolution.is_some()
+            || !self.scroll_stops.is_empty() || !self.keep_on_screen.is_empty() || !self.text_flights.is_empty() || !self.launches.is_empty() || !self.haptics.is_empty() || self.select.is_some() || self.field_menu_resolution.is_some() || self.popup_menu_resolution.is_some()
     }
 
     /// An app marker on the next frame, e.g. `tx.trace_event(format_args!("lab:{step:?}"))`.

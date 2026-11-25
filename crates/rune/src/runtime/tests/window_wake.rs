@@ -57,7 +57,7 @@ fn a_window_resize_step_keeps_springs_and_flights_going() {
 fn a_window_that_fits_its_content_refits_after_a_user_resize() {
     fn view(_: &(), _: &mut Cx<()>) -> El { col().key("root").w_full().child(el().size(100.0, 90.0)) }
     let mut rt = Runtime::new((), view, (300.0, 400.0), Env::new(true, 1.0));
-    rt.host.fit_height = true;
+    rt.host.set_fit_height(true);
     let height = rt.content_height();
     rt.set_viewport((300.0, height), 1.0);
     rt.frame(0.0);
@@ -80,7 +80,7 @@ fn a_hidden_window_that_fits_its_content_learns_its_height_before_it_shows() {
         col().key("root").w_full().children((0..s.0).map(|_| el().size(100.0, 40.0)))
     }
     let mut rt = Runtime::new((1, false), view, (300.0, 400.0), Env::new(true, 1.0));
-    rt.host.fit_height = true;
+    rt.host.set_fit_height(true);
     let height = rt.content_height();
     rt.set_viewport((300.0, height), 1.0);
     rt.frame(0.0);

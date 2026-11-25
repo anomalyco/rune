@@ -604,6 +604,19 @@ impl Win {
         }
     }
 
+    /// Carries out a titlebar action while fencing `TitlebarAction::DoubleClick` in `rt`'s press
+    /// machine so clicks whose native timestamps precede the end of a blocking toggle (macOS
+    /// `NSWindow::zoom:`) are dropped instead of replaying queued drags and zooms.
+    pub(in crate::window) fn run_titlebar_action(
+        &self,
+        rt: &mut crate::runtime::RuntimeCore,
+        action: crate::runtime::TitlebarAction,
+    ) {
+        rt.run_titlebar_action_with(action, |a| self.titlebar_action(a));
+    }
+
+
+
     /// Maximizes or restores this window. Adopted macOS panels ignore it.
     pub(in crate::window) fn toggle_maximized(&self) {
         if self.is_panel() { return; }

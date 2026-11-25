@@ -11,6 +11,8 @@ use std::sync::{OnceLock, atomic::{AtomicU8, Ordering}};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+#[cfg(feature = "windows-system-material")]
+use windows_sys::Win32::UI::WindowsAndMessaging::{WM_SYSCOLORCHANGE, WM_THEMECHANGED};
 use windows_sys::Win32::UI::WindowsAndMessaging::{WM_NCDESTROY, WM_SETTINGCHANGE};
 
 /// `PreferredAppMode`: follow the system's app mode, or force one.
@@ -204,6 +206,10 @@ unsafe extern "system" fn theme_subclass(
     } else if message == WM_NCDESTROY {
         // SAFETY: removes this subclass from the window being destroyed.
         unsafe { RemoveWindowSubclass(hwnd, Some(theme_subclass), THEME_SUBCLASS); }
+    }
+    #[cfg(feature = "windows-system-material")]
+    if matches!(message, WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED) {
+        crate::system_material::windows::notify_wm_setting_change();
     }
     // SAFETY: forwards the message to the next procedure in this window's subclass chain (winit).
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }

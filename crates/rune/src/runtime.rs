@@ -87,7 +87,7 @@ mod paint_probe;
 mod pick;
 mod playground;
 mod scroll;
-mod selection;
+pub(crate) mod selection;
 mod system_settings;
 mod text_fill;
 mod turn;
@@ -134,7 +134,7 @@ use input::primary_selection;
 use input::{
     app_ime, autoscroll, capture, drop as drop_dispatch, focus, focus_machine,
     gesture as gesture_dispatch, help, hit, hover, hover_delay, key_releases, modal_focus,
-    modifier_keys, physical as physical_dispatch, popup as popup_dispatch, press_repeat, press_run,
+    modifier_keys, physical as physical_dispatch, popup as popup_dispatch, popup_fallback, press_repeat, press_run,
     titlebar, touch as touch_input,
 };
 use input::action::*;
@@ -183,6 +183,7 @@ pub(crate) use selection::links::origin as text_origin;
 pub(crate) use selection::selectable;
 pub use selection::selectable::{SelectedText, SelectionChange, TextSelection};
 pub use selection::field_lines::TextLine;
+pub use selection::image_menu::ImageMenu;
 pub use selection::text_marks::TextMark;
 use selection::{caret, click as input_click, links, select_all, text_marks};
 

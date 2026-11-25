@@ -246,6 +246,9 @@ struct Path {
     end_local: Rect,
     /// Its parent's root-space target origin as the last frame drew it.
     origin: Vec2,
+    /// Matched source rotation (radians) blended along the shortest arc into the node's own
+    /// `prop::ROTATION` as travel runs from 0 to 1. `None` for non-matched screen paths.
+    start_rotation: Option<f32>,
 }
 
 #[derive(Clone)]

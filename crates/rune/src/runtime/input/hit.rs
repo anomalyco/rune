@@ -477,6 +477,7 @@ impl RuntimeCore {
         let n = &self.tree.nodes[i];
         let hits_before = self.hit.hits_len();
         if (n.vis_flags.hit() || n.handlers.get().is_some_and(crate::el::Handlers::takes_hit) || n.input.is_some() || n.role == "textbox" || n.window_drag != crate::el::WindowDrag::None || n.focus.get().is_some_and(|f| f.enabled)
+            || n.vis.cold.get().is_some_and(|c| c.image_menu.is_some())
             || n.text.as_ref().is_some_and(|t| t.selectable || !t.cold.links.is_empty()))
             && !self.subtree_exiting(i)
             && self.allowed(i) && effective_opacity > 0.001 && visible

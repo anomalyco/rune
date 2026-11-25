@@ -398,7 +398,8 @@ pub(super) struct Measurement<'a> {
     pub(super) app: &'a dyn ViewDriver,
     pub(super) env: Env,
     pub(super) viewport: (f32, f32),
-    pub(super) fit_height: bool,
+    pub(super) content_sizing: crate::ContentSizing,
+    pub(super) content_limits: crate::overlay::sizing::SizeLimits,
     pub(super) system_reduced_motion: bool,
     pub(super) pointer_locked: bool,
     pub(super) titlebar_inset: f32,
@@ -483,6 +484,9 @@ pub(super) struct Measured {
     /// The selection as the measure began, before reused `memo` subtrees left the last
     /// commit's nodes.
     pub(super) selection: Vec<layout_read::SelectedRange>,
+    /// Authored styles of `anchored_fit` overlays whose max-size `fit_anchored` clamped in this
+    /// pass, so a later `Relayout` restores them before re-fitting at the new viewport.
+    pub(super) above_fit_styles: Vec<(usize, CompactStyle)>,
 }
 
 impl RuntimeCore {

@@ -427,7 +427,7 @@ fn web_frame_host_invokes_on_frame_drawn_only_on_drawn_frames() {
                     WebAcquireAction::ReconfigureAndRetry => Acquire::Missed(Missed::Outdated),
                 },
                 WebDrawKind::Cpu | WebDrawKind::HandingOver { .. } => Acquire::Ready(()),
-                WebDrawKind::ContextLost | WebDrawKind::Moving => Acquire::Missed(Missed::Unconfigured),
+                WebDrawKind::ContextLost | WebDrawKind::TerminalFailed | WebDrawKind::Moving => Acquire::Missed(Missed::Unconfigured),
             }
         }
 

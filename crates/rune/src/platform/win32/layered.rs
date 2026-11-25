@@ -361,6 +361,7 @@ impl<S: LayeredSeam> LayeredPresenter<S> {
 
     /// Marks the next present as needing a full-window update (`prcDirty = NULL`), for example
     /// after resize, DPI change, or re-show.
+    #[cfg(target_os = "windows")]
     pub(crate) fn invalidate_full(&mut self) {
         self.needs_full_present = true;
     }

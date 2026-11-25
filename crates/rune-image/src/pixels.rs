@@ -299,6 +299,52 @@ impl Pixels {
         Some(f(width, height, &rgba))
     }
 
+    /// Reads the current pixels back as straight-alpha sRGB RGBA8 (`width * height * 4` bytes,
+    /// rows top first), whether this handle holds raw RGBA from [`Pixels::set`] /
+    /// [`Pixels::replace`] or decoded mipmaps from [`crate::ImageCache`]. Returns `None` when
+    /// empty or not yet decoded.
+    ///
+    /// Releases the frame lock before copying or converting pixels, so it does not block
+    /// rendering. For mip-backed images, follows [`crate::Image::to_rgba`]'s rounding and
+    /// SVG intrinsic-size rules.
+    ///
+    /// ```
+    /// use rune_image::Pixels;
+    ///
+    /// let pixels = Pixels::new();
+    /// assert_eq!(pixels.to_rgba(), None);
+    /// pixels.set(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 128]);
+    /// assert_eq!(pixels.to_rgba(), Some((2, 1, vec![255, 0, 0, 255, 0, 0, 255, 128])));
+    /// ```
+    pub fn to_rgba(&self) -> Option<(u32, u32, Vec<u8>)> {
+        let (width, height, data) = {
+            let frame = self.inner.frame.lock().unwrap();
+            (frame.width, frame.height, frame.data.clone())
+        };
+        match data {
+            FrameData::Empty => None,
+            FrameData::Rgba(rgba) => (width > 0 && height > 0).then(|| (width, height, (*rgba).clone())),
+            FrameData::Mips(decoded) => crate::readback::decoded_to_rgba(&decoded),
+        }
+    }
+
+    /// Borrows the current frame's pixels (straight RGBA or mip-0 linear-premultiplied) for
+    /// off-thread un-premultiplication and PNG encoding on web.
+    #[doc(hidden)]
+    pub fn with_copy_pixels<R>(&self, f: impl FnOnce(crate::CopyPixels<'_>) -> R) -> Option<R> {
+        let (width, height, data) = {
+            let frame = self.inner.frame.lock().unwrap();
+            (frame.width, frame.height, frame.data.clone())
+        };
+        match data {
+            FrameData::Empty => None,
+            FrameData::Rgba(rgba) => (width > 0 && height > 0).then(|| {
+                f(crate::CopyPixels::Straight { width, height, bytes: std::borrow::Cow::Borrowed(&rgba) })
+            }),
+            FrameData::Mips(decoded) => crate::readback::with_decoded_copy_pixels(&decoded, f),
+        }
+    }
+
     pub(crate) fn advance_ticket(&self) -> u64 {
         self.inner.ticket.fetch_add(1, Ordering::AcqRel) + 1
     }

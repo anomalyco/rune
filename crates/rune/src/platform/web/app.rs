@@ -47,6 +47,7 @@ pub(super) struct PendingApp {
     pub(super) fit_height: bool,
     pub(super) srgb_blend: bool,
     pub(super) cpu_first: crate::CpuFirst,
+    pub(super) gpu_loss_policy: crate::GpuLossPolicy,
     pub(super) font_urls: Vec<String>,
     pub(super) late_font_urls: Vec<String>,
     pub(super) on_ready: Option<OnWindow>,
@@ -112,6 +113,10 @@ impl dyn WebApp + '_ {
 
     pub(super) fn covered_wake(&mut self) {
         self.driver(|rt, app| { rt.covered_wake(app); });
+    }
+
+    pub(super) fn poll_hidden(&mut self) -> bool {
+        self.driver(|rt, app| rt.poll_hidden(app))
     }
 
     pub(super) fn set_live_visible(&mut self, visible: bool) {
@@ -222,6 +227,7 @@ impl<S: 'static> TypedWebApp<S> {
         let fit_height = app.fit_content_height;
         let srgb_blend = app.runtime.srgb_blend;
         let cpu_first = app.cpu_first;
+        let gpu_loss_policy = app.gpu_loss_policy;
         let font_urls = std::mem::take(&mut app.font_urls);
         let late_font_urls = std::mem::take(&mut app.late_font_urls);
         let on_ready = app.on_ready.take();
@@ -250,6 +256,7 @@ impl<S: 'static> TypedWebApp<S> {
             fit_height,
             srgb_blend,
             cpu_first,
+            gpu_loss_policy,
             font_urls,
             late_font_urls,
             on_ready,

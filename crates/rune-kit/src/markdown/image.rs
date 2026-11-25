@@ -45,7 +45,19 @@ impl Markdown {
 
     /// Draws `f(image, frame)` in place of each image that shows its picture, so an app can
     /// open it larger on a press (`markdown.css`'s `cursor: zoom-in`, a button named by its alt
-    /// text) or key it for a flight into a viewer.
+    /// text), key it for a flight into a viewer, or attach an opt-in
+    /// [`ImageMenu`](rune::ImageMenu) (`el.image_menu(ImageMenu::new(frame.image)...)`).
+    ///
+    /// ```
+    /// # use rune::ImageMenu;
+    /// # use rune_kit::{Kit, Markdown};
+    /// # let kit = Kit::neutral(true);
+    /// let _doc = Markdown::new("![Diagram](https://example.com/diagram.svg)")
+    ///     .image_frame(|el, frame| {
+    ///         el.image_menu(ImageMenu::new(frame.image).address(frame.src))
+    ///     })
+    ///     .build(&kit);
+    /// ```
     pub fn image_frame(mut self, f: impl Fn(El, &ImageFrame<'_>) -> El + 'static) -> Self {
         self.on_image = Some(Rc::new(f));
         self

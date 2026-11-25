@@ -238,6 +238,25 @@ fn downsample_rows(w: u32, h: u32, src: &[u8], rows: std::ops::Range<u32>, out: 
         emit(sum, (x1 - x0) * (y1 - y0));
     }}
 }
+/// Mip 0's linear-premultiplied bytes back to straight-alpha sRGB RGBA8, undoing
+/// [`MipSteps::new`]: opaque pixels are unchanged, and a translucent one keeps the colour its
+/// premultiplied bytes still hold.
+pub(super) fn straight_rgba(pixels: &[u8]) -> Vec<u8> {
+    let srgb = &*SRGB;
+    let mut out = pixels.to_vec();
+    for p in out.as_chunks_mut::<4>().0 {
+        match p[3] {
+            255 => {}
+            0 => *p = [0; 4],
+            alpha => {
+                let a = alpha as f32 / 255.0;
+                for c in 0..3 { p[c] = srgb.encode(srgb.decode[p[c] as usize] / a, 255); }
+            }
+        }
+    }
+    out
+}
+
 pub(super) fn byte(v: f32) -> u8 { (v.clamp(0.0, 1.0) * 255.0).round() as u8 }
 
 /// sRGB transfer tables, so mip generation runs no `powf` per pixel.

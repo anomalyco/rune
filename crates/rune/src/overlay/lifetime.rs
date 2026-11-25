@@ -4,7 +4,19 @@
 use super::*;
 
 impl OverlayCore {
+    /// An overlay that fits its content (`ConfiguredOverlay::fit_content_height`) about to
+    /// show: when its state, input or width changed since its last commit, or it has none,
+    /// measures its content at its width and takes that height, so the first frame shown
+    /// draws at it. It measures without committing: the first visible frame builds as any
+    /// show's does, so the show settles or, with `animate_reveal`, plays what the state
+    /// started, and that frame's commit keeps its own bookkeeping.
+    #[cfg(test)]
+    pub(super) fn fit_for_show(&mut self, app: &mut dyn OverlayApp) {
+        self.fit_for_show_in(app, None);
+    }
+
     pub(super) fn show_fading(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, fade: Duration) {
+        if self.poll_terminal_gpu_loss(app) { return; }
         if self.presence.shown() { return; }
         // Hidden, it missed the redraws a new accent or portal preference asks for.
         app.rt_mut().set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
@@ -16,6 +28,7 @@ impl OverlayCore {
         }
         self.accent_changed(app.rt_mut(), crate::system_accent());
         self.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
+        if !self.presence.fading() { self.fit_for_show_in(app, Some(event_loop)); }
         #[cfg(target_os = "windows")]
         if self.uses_cpu_layered(app) && self.show_cpu(app, event_loop, fade) {
             return;
@@ -59,6 +72,7 @@ impl OverlayCore {
         }
         let effects = self.presence.step(presence::Event::Show, self.release);
         self.carry_out(app, effects);
+        self.publish_screen_transform(app.rt());
         self.hidden_pace.reset();
         self.backoff_step(crate::window::BackoffEvent::Revealed);
         // Shown onto sleeping displays or under another window, the panel stays occluded.
@@ -79,6 +93,7 @@ impl OverlayCore {
     /// only its window at startup and parks it; its surface, and the GPU device for the first,
     /// wait for the show.
     pub(super) fn prepare(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, showing: bool) {
+        if self.poll_terminal_gpu_loss(app) { return; }
         #[cfg(target_os = "windows")]
         if self.uses_cpu_layered(app) {
             self.prepare_cpu(app, event_loop, showing);
@@ -92,6 +107,7 @@ impl OverlayCore {
         // (`park`): both wait.
         let parks = cfg!(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))) && !wayland;
         if !surface && !parks { return; }
+        self.fit_for_show_in(app, Some(event_loop));
         self.resolve_size(event_loop);
         let made = if wayland {
             self.layer(app, event_loop).or_else(|| self.xwayland(app)).or_else(|| self.toplevel(app, event_loop))
@@ -335,6 +351,9 @@ impl OverlayCore {
         self.mods = Default::default();
         self.control_click = false;
         self.ime.clear();
+        self.pointer_owner.step(pointer_inject::OwnershipEvent::Reset);
+        self.drop_injected_pointers();
+        self.publish_screen_transform(app.rt());
         app.popup_cancel(&mut self.popup);
         app.rt_mut().cancel_pointer();
         self.apply_cursor(app.rt());
@@ -391,6 +410,7 @@ impl OverlayCore {
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             Backing::Layer(_) | Backing::Xwayland(_) => {
+                self.wayland_resize.step(super::sizing::WaylandResizeEvent::Reset);
                 self.surface.take_live();
                 let rt = app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
@@ -591,21 +611,39 @@ impl OverlayCore {
         // The device goes to the next surface rather than with this one; one another
         // surface still draws with stays there, polled without waiting so finished frames
         // retire now and anything still in flight retires on a later turn.
+        let latch = self.gpu_loss_latch.clone();
         match (self.gpu.take(), self.renderer.take()) {
             (Some(gpu), Some(renderer)) => match Arc::try_unwrap(gpu) {
                 Ok(gpu) => {
                     self.retire.clear();
-                    crate::render::park_gpu(gpu, renderer);
+                    if let Some(latch) = &latch {
+                        // Never park a Terminal-latch-bound (or failed) GPU into the global warm
+                        // slot: 5-minute expiry would falsely trip the latch or hand it to another
+                        // owner. Detach cleanly and drop it instead.
+                        gpu.prepare_clean_drop_for(latch, true);
+                        drop((renderer, gpu));
+                    } else {
+                        crate::render::park_gpu(gpu, renderer);
+                    }
                 }
                 Err(gpu) => {
+                    if let Some(latch) = &latch {
+                        gpu.detach_terminal_latch(latch);
+                    }
                     drop(renderer);
                     self.retire.retire_now(&gpu, crate::time::now());
                 }
             },
             (Some(gpu), None) => {
                 if Arc::strong_count(&gpu) > 1 {
+                    if let Some(latch) = &latch {
+                        gpu.detach_terminal_latch(latch);
+                    }
                     self.retire.retire_now(&gpu, crate::time::now());
                 } else {
+                    if let Some(latch) = &latch {
+                        gpu.prepare_clean_drop_for(latch, true);
+                    }
                     self.retire.clear();
                 }
             }
@@ -618,3 +656,7 @@ impl OverlayCore {
 #[cfg(test)]
 #[path = "lifetime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "fit_tests.rs"]
+mod fit_tests;

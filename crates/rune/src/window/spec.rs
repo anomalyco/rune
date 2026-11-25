@@ -883,6 +883,17 @@ impl<S: 'static> WindowSpec<S> {
         tab_visits_controls(on: bool);
         /// Release this window's GPU device and renderer when it closes, like `App::release_gpu_when_closed`.
         release_gpu_when_closed();
+        /// Sets how this window responds to GPU device loss or uncaptured errors, like
+        /// [`App::gpu_loss_policy`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, GpuLossPolicy, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("main", AppSpec::new("Main", (800.0, 600.0), || (), |_, _| el()))
+        ///     .gpu_loss_policy(GpuLossPolicy::Terminal);
+        /// let _ = spec;
+        /// ```
+        gpu_loss_policy(policy: crate::GpuLossPolicy);
         /// Configure CPU-first startup and handover for this window, like [`App::cpu_first`].
         ///
         /// ```no_run
@@ -893,6 +904,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         cpu_first(mode: crate::CpuFirst);
+        /// Configure the Windows drag-only synchronized resize path for this window, like
+        /// [`App::resize_sync`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, ResizeSync, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("settings", AppSpec::new("Settings", (620.0, 520.0), || (), |_, _| el()))
+        ///     .resize_sync(ResizeSync::On);
+        /// let _ = spec;
+        /// ```
+        resize_sync(mode: crate::ResizeSync);
         /// Name the effect pipelines this window compiles ahead of their first use, like [`App::prewarm_effects`].
         ///
         /// ```no_run
@@ -913,6 +935,16 @@ impl<S: 'static> WindowSpec<S> {
         on_ime(f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool);
         /// Fallback handler for text-field menus when native pop-ups are unavailable, like `App::on_field_menu`.
         on_field_menu(f: fn(&mut S, crate::FieldMenuRequest, &mut crate::Tx));
+        /// Fallback handler for pop-up and context menus when native pop-ups are unavailable
+        /// (such as Linux), like [`App::on_popup_menu`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, PopupMenuRequest, Tx, WindowSpec, el};
+        ///
+        /// let _spec = WindowSpec::new("main", AppSpec::new("Main", (480.0, 320.0), || (), |_, _| el()))
+        ///     .on_popup_menu(|_: &mut (), _req: PopupMenuRequest, _tx: &mut Tx| {});
+        /// ```
+        on_popup_menu(f: fn(&mut S, crate::PopupMenuRequest, &mut crate::Tx));
         /// Intercepts a native close request before hiding or closing this window, like
         /// [`App::on_close_request`].
         ///
@@ -926,6 +958,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         on_close_request(f: fn(&mut S, &mut crate::Tx) -> crate::CloseResponse);
+        /// [`App::on_quit_request`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, QuitResponse, WindowSpec, el};
+        ///
+        /// let _window = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 320.0), || true, |_, _| el()))
+        ///     .on_quit_request(|dirty, _| {
+        ///         if *dirty { QuitResponse::Defer } else { QuitResponse::Quit }
+        ///     });
+        /// ```
+        on_quit_request(f: fn(&mut S, &mut crate::Tx) -> crate::QuitResponse);
         /// Runs whenever this window closes, like `App::on_close`.
         on_close(f: fn(&mut S, &mut crate::Tx));
         /// Runs in this window when the app starts to quit, like `App::on_quit`.

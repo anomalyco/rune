@@ -407,8 +407,8 @@ impl RuntimeCore {
             // `El::rotate`: this subtree draws into a layer turned about its origin.
             // The layer takes the clips from above; the node's own clips apply inside, upright.
             let own_turn = p.transform.rotate;
-            let own_turn = (own_turn != 0.0 && own_turn.is_finite() && own_turn.abs() > 1e-6 && !is_flight).then_some(own_turn);
-            let turn_pivot = [centre_to[0] * s, centre_to[1] * s];
+            let own_turn = (own_turn != 0.0 && own_turn.is_finite() && own_turn.abs() > 1e-6).then_some(own_turn);
+            let turn_pivot = pose::turn_pivot(flight_dest, n.vis.origin, rect_pt, centre_to, s);
             let (node_turn, turn_index) = if pinh.turn == 0 && own_turn.is_none() {
                 (None, 0)
             } else {

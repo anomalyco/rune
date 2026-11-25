@@ -69,6 +69,8 @@ pub(in crate::runtime) enum Action {
     Paste(crate::ClipboardContent, Option<Option<String>>),
     /// A `Tx::read_clipboard` callback's id and what the clipboard held.
     ClipboardRead(u64, crate::ClipboardContent),
+    /// A `Tx::copy_image_then` callback's id and what came of the copy.
+    CopyImageDone(u64, Result<(), crate::CopyImageError>),
     /// A `Tx::open_file`, `Tx::open_files`, `Tx::save_file` or `Tx::open_folder` callback's id
     /// and the dialog's answer.
     FileDialog(u64, crate::file_dialog::DialogOutcome),
@@ -114,7 +116,7 @@ impl ActionQueue {
         let input = !matches!(action, Action::Layout(..) | Action::ScreenLayout(..) | Action::DrawnLayout(..)
             | Action::Visible(..) | Action::VisibleRows(..) | Action::AtBottom(..) | Action::FarFromBottom(..)
             | Action::WindowFocus(_) | Action::Physical(crate::PhysicalInput::FocusLost, _) | Action::FinishIme
-            | Action::ClipboardRead(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
+            | Action::ClipboardRead(..) | Action::CopyImageDone(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
         self.0.push(Queued { action, at, input });
     }
     /// A stationary pointer was re-hit after layout; no pointer event asked for that hover.
@@ -236,6 +238,7 @@ fn handler_name(action: &Action) -> &'static str {
         Action::Ime(_) | Action::FinishIme => "a text input's edit",
         Action::Paste(..) => "on_paste",
         Action::ClipboardRead(..) => "a `read_clipboard` callback",
+        Action::CopyImageDone(..) => "a `copy_image_then` callback",
         Action::FileDialog(..) => "a file dialog callback",
         Action::UrlOpened(..) => "an `open_url_then` callback",
         _ => "a handler",
@@ -278,11 +281,22 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     } else if one.field_menu_resolution.is_some() {
         tx.field_menu_resolution = one.field_menu_resolution;
     }
+    if one.popup_menu_opened {
+        tx.popup_menu_opened = true;
+        tx.popup_menu_resolution = one.popup_menu_resolution;
+    } else if one.popup_menu_resolution.is_some() {
+        tx.popup_menu_resolution = one.popup_menu_resolution;
+    }
     tx.file_dialogs.extend(one.file_dialogs);
     if let Some(request) = one.window_frame { tx.window_frame = Some(tx.window_frame.unwrap_or_default().merge(request)); }
     if one.clear_secret && tx.copy.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { tx.copy = None; }
     tx.clear_secret |= one.clear_secret;
-    if one.copy.is_some() { tx.copy = one.copy; }
+    tx.superseded_copy_images.extend(one.superseded_copy_images);
+    if one.copy.is_some() {
+        if let Some(old) = tx.copy_image_callback.take() { tx.superseded_copy_images.push(old); }
+        tx.copy = one.copy;
+        tx.copy_image_callback = one.copy_image_callback;
+    }
     tx.shell = tx.shell.max(one.shell);
     tx.user_close_request |= one.user_close_request;
     tx.minimize_order = tx.minimize_order.max(one.minimize_order);
@@ -535,17 +549,20 @@ impl RuntimeCore {
                 one.button = button;
                 self.press_link(app, &path, k, &mut one)
             }
-            Action::LinkSecondary(path, k, point) => self.secondary_press_link(app, &path, k, point, &mut one),
+            Action::LinkSecondary(path, k, point) => self.secondary_press_link_or_menu(app, &path, k, point, &mut one),
             Action::LinkHover(path, url, rect, pressing) => {
                 one.pressing = pressing;
                 self.dispatch_link_hover(app, &path, url.as_deref(), rect, &mut one)
             }
             Action::SecondaryPress(path, point) => {
                 let Some(n) = self.node(&path).filter(|n| !self.is_exiting(n.id)) else { return false };
-                let Some(f) = n.handlers.on_secondary_press.clone() else { return false };
-                log_event!(self, "secondary press {path}");
-                f(app.states(), point, &mut one);
-                true
+                if let Some(f) = n.handlers.on_secondary_press.clone() {
+                    log_event!(self, "secondary press {path}");
+                    f(app.states(), point, &mut one);
+                    true
+                } else {
+                    self.open_image_menu_at(app, &path, point.window_x, point.window_y)
+                }
             }
             Action::SecondaryRepost { modal, outer, down, up } => {
                 self.run_secondary_repost(app, &modal, outer.as_deref(), down, up, &mut one)
@@ -656,6 +673,14 @@ impl RuntimeCore {
                 true
             }
             Action::FileDialog(id, result) => self.run_file_dialog(app, id, result, &mut one),
+            Action::CopyImageDone(id, result) => {
+                if let Some(f) = self.edit.take_copy_image_callback(id) {
+                    f(app.states(), result, &mut one);
+                    true
+                } else {
+                    false
+                }
+            }
             Action::UrlOpened(f, result) => {
                 f(app.states(), result, &mut one);
                 true

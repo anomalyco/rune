@@ -219,7 +219,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         hoverLink: null, hoverLinkLeave: null, hoverClientX: NaN, hoverClientY: NaN,
         forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false,
-        visualViewport: null, keyboardShiftY: 0,
+        visualViewport: null, keyboardShiftY: 0, pendingFieldBlur: false, domFocused: false, focusGen: 0, reconcileRaf: 0, reconcileTimer: 0, reconcileFollowUp: false,
+        pressedPointers: new Map(), pointerEndTimers: new Map(), pointerGen: 0,
         pointerLocked: false, pointerLockPending: false, pointerLockSeq: 0, pointerLockHasPromise: false, pointerLockCalling: false, pointerLockSyncError: false, pointerLockUnadjustedFailed: false };
     // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
     const send = (event, after) => {
@@ -262,19 +263,176 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             if (h.touchTimestamps.length > MAX_TOUCH_TIMESTAMPS) h.touchTimestamps.shift();
         }
     };
+    const clearPointerEndTimer = pid => {
+        const id = h.pointerEndTimers.get(pid);
+        if (id) {
+            clearTimeout(id);
+            h.pointerEndTimers.delete(pid);
+        }
+    };
+    const clearAllPointerEndTimers = () => {
+        for (const id of h.pointerEndTimers.values()) clearTimeout(id);
+        h.pointerEndTimers.clear();
+    };
+    h.clearAllPointerEndTimers = clearAllPointerEndTimers;
     listen(window, 'pointerdown', event => {
+        if (ownsTarget(event.target) && typeof event.pointerId === 'number') {
+            clearPointerEndTimer(event.pointerId);
+            h.pressedPointers.set(event.pointerId, ++h.pointerGen);
+        }
         if (event.target === canvas && event.pointerType === 'touch' && h.activeTouchId === null) {
             h.activeTouchId = event.pointerId;
         }
         recordTouchTimestamp(false, event);
     }, { capture: true, passive: true });
-    listen(window, 'pointermove', event => recordTouchTimestamp(true, event), { capture: true, passive: true });
-    const clearActiveTouch = event => {
-        if (event.pointerType === 'touch' && event.pointerId === h.activeTouchId) h.activeTouchId = null;
+    const RECONCILE_BACKOFF_MS = [40, 120, 400, 1200, 1200];
+    const cancelReconcile = () => {
+        if (h.reconcileRaf) {
+            if (typeof globalThis.cancelAnimationFrame === 'function') globalThis.cancelAnimationFrame(h.reconcileRaf);
+            else clearTimeout(h.reconcileRaf);
+            h.reconcileRaf = 0;
+        }
+        if (h.reconcileTimer) {
+            clearTimeout(h.reconcileTimer);
+            h.reconcileTimer = 0;
+        }
+        h.reconcileFollowUp = false;
+    };
+    const reconcileFocus = (clearPending = false) => {
+        if (h.disposed || h.syncing) return false;
+        if (h.activeTouchId !== null || h.pressedPointers.size > 0) return false;
+        if (clearPending) h.pendingFieldBlur = false;
+        if (!h.key || !h.domFocused || typeof h.menu?.done === 'function') return false;
+        if (document.activeElement === h.field) return false;
+        if (typeof document.hasFocus === 'function' && !document.hasFocus()) return false;
+        if (document.hidden) return false;
+        h.pendingFieldBlur = false;
+        h.domFocused = false;
+        cancelReconcile();
+        send({ kind: 'field_blur', key: h.key });
+        return true;
+    };
+    // Bounded reconciliation after blur, focusout, focusin, window focus, visibility return, or
+    // visualViewport resize so event-order races (delayed activeElement settlement, transient
+    // window blur during keyboard hide, or visualViewport retraction after a suppressed blur)
+    // clear a stale caret without adding any idle timer or frame loop. Tagged with focusGen so a
+    // newer focus cancels any stale check. When followUp is true (blur/focusout fired while
+    // activeElement was still h.field), a short bounded back-off checks at next rAF, +40, +120,
+    // +400, +1200, and +1200 ms (~3 s total) and then stops; document focusin and subsequent user
+    // input (keydown/wheel/pointermove/pointerup) catch arbitrarily late settles at zero idle cost.
+    const scheduleReconcile = (followUp = false) => {
+        if (h.disposed || !h.key || !h.domFocused) return;
+        if (followUp) h.reconcileFollowUp = true;
+        if (h.reconcileRaf) return;
+        if (h.reconcileTimer) {
+            if (document.activeElement === h.field) return;
+            clearTimeout(h.reconcileTimer);
+            h.reconcileTimer = 0;
+        }
+        const gen = h.focusGen;
+        const scheduleBackoff = idx => {
+            if (idx >= RECONCILE_BACKOFF_MS.length || h.disposed || gen !== h.focusGen) {
+                h.pendingFieldBlur = false;
+                h.reconcileFollowUp = false;
+                return;
+            }
+            if (!h.key || !h.domFocused || document.activeElement !== h.field) {
+                reconcileFocus(true);
+                return;
+            }
+            h.reconcileTimer = setTimeout(() => {
+                h.reconcileTimer = 0;
+                if (h.disposed || gen !== h.focusGen) return;
+                const last = idx + 1 >= RECONCILE_BACKOFF_MS.length;
+                if (reconcileFocus(last)) return;
+                if (!last && h.reconcileFollowUp && h.key && h.domFocused && document.activeElement === h.field) {
+                    scheduleBackoff(idx + 1);
+                } else {
+                    h.pendingFieldBlur = false;
+                    h.reconcileFollowUp = false;
+                }
+            }, RECONCILE_BACKOFF_MS[idx]);
+        };
+        const run = () => {
+            h.reconcileRaf = 0;
+            if (h.disposed || gen !== h.focusGen) return;
+            const more = h.reconcileFollowUp;
+            if (reconcileFocus(!more)) return;
+            if (more && !h.disposed && gen === h.focusGen && h.key && h.domFocused && document.activeElement === h.field) {
+                scheduleBackoff(0);
+            } else {
+                h.pendingFieldBlur = false;
+                h.reconcileFollowUp = false;
+            }
+        };
+        if (typeof globalThis.requestAnimationFrame === 'function') {
+            h.reconcileRaf = globalThis.requestAnimationFrame(run);
+        } else {
+            h.reconcileRaf = setTimeout(run, 0);
+        }
+    };
+    h.cancelReconcile = cancelReconcile;
+    h.scheduleReconcile = scheduleReconcile;
+    const checkFieldBlur = () => {
+        if (!h.pendingFieldBlur) return;
+        if (!reconcileFocus(false)) scheduleReconcile(true);
+    };
+    const reconcileOnActivity = () => {
+        if (h.disposed || h.syncing || !h.key || !h.domFocused || typeof h.menu?.done === 'function') return;
+        if (document.activeElement === h.field) return;
+        reconcileFocus(false);
+    };
+    listen(document, 'focusin', event => {
+        if (h.disposed || h.syncing || !h.key || !h.domFocused || typeof h.menu?.done === 'function') return;
+        if (event.target === h.field) return;
+        h.pendingFieldBlur = true;
+        queueMicrotask(checkFieldBlur);
+    });
+    listen(window, 'keydown', reconcileOnActivity, { capture: true, passive: true });
+    listen(window, 'wheel', reconcileOnActivity, { capture: true, passive: true });
+    listen(window, 'pointermove', event => {
+        recordTouchTimestamp(true, event);
+        reconcileOnActivity();
+    }, { capture: true, passive: true });
+    const finishPointer = (pid, gen) => {
+        if (gen === undefined || h.pressedPointers.get(pid) !== gen) return;
+        clearPointerEndTimer(pid);
+        h.pressedPointers.delete(pid);
+        if (h.disposed) return;
+        if (h.pressedPointers.size === 0) applyKeyboardShift(h);
+        if (h.pendingFieldBlur) queueMicrotask(checkFieldBlur);
+        else if (h.key && h.domFocused && document.activeElement !== h.field) queueMicrotask(reconcileOnActivity);
+    };
+    const capturePointerEnd = event => {
+        const pid = event.pointerId;
+        if (event.pointerType === 'touch' && pid === h.activeTouchId) {
+            h.activeTouchId = null;
+        }
+        // Fallback if a page listener stops propagation before window bubble phase runs;
+        // tagged with this press's generation and cancelled on bubblePointerEnd or a new press.
+        const gen = typeof pid === 'number' ? h.pressedPointers.get(pid) : undefined;
+        if (gen !== undefined) {
+            clearPointerEndTimer(pid);
+            h.pointerEndTimers.set(pid, setTimeout(() => {
+                h.pointerEndTimers.delete(pid);
+                finishPointer(pid, gen);
+            }, 0));
+        } else if (h.pendingFieldBlur) {
+            queueMicrotask(checkFieldBlur);
+        }
         recordTouchTimestamp(false, event);
     };
-    listen(window, 'pointerup', clearActiveTouch, { capture: true, passive: true });
-    listen(window, 'pointercancel', clearActiveTouch, { capture: true, passive: true });
+    // Release pressedPointers in window bubble phase — AFTER winit's target-phase listener on
+    // canvas has already read offsetX/offsetY and completed the press. (A microtask queued from
+    // capture phase runs at the per-listener microtask checkpoint BEFORE canvas's listener.)
+    const bubblePointerEnd = event => {
+        const pid = event.pointerId;
+        if (typeof pid === 'number') finishPointer(pid, h.pressedPointers.get(pid));
+    };
+    listen(window, 'pointerup', capturePointerEnd, { capture: true, passive: true });
+    listen(window, 'pointercancel', capturePointerEnd, { capture: true, passive: true });
+    listen(window, 'pointerup', bubblePointerEnd, { passive: true });
+    listen(window, 'pointercancel', bubblePointerEnd, { passive: true });
     listen(window, 'keyup', event => {
         if (ownsTarget(event.target) && !(event.target === canvas && MOD_KEYS.includes(event.key))) syncMods(event);
     }, { capture: true, passive: true });
@@ -283,8 +441,15 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(window, 'keyup', event => {
         if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
     }, { passive: true });
-    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); });
-    listen(document, 'visibilitychange', () => { if (document.hidden) { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); } });
+    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); });
+    listen(window, 'focus', () => { if (h.key && h.domFocused && document.activeElement !== h.field) scheduleReconcile(false); });
+    listen(document, 'visibilitychange', () => {
+        if (document.hidden) {
+            h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h);
+        } else if (h.key && h.domFocused && document.activeElement !== h.field) {
+            scheduleReconcile(false);
+        }
+    });
     listen(document, 'pointerlockchange', () => {
         if (h.disposed) return;
         const locked = document.pointerLockElement === canvas;
@@ -424,7 +589,21 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             key(event.key, event);
         });
         listen(field, 'keyup', event => { h.shift = event.shiftKey; });
-        listen(field, 'blur', () => { h.shift = false; });
+        listen(field, 'focus', () => {
+            if (!h.disposed && h.key && field === h.field) {
+                h.focusGen += 1;
+                h.domFocused = true;
+                h.pendingFieldBlur = false;
+                cancelReconcile();
+            }
+        });
+        const onFieldLostFocus = () => {
+            if (h.disposed || h.syncing || !h.key || field !== h.field) return;
+            h.pendingFieldBlur = true;
+            queueMicrotask(checkFieldBlur);
+        };
+        listen(field, 'blur', () => { h.shift = false; onFieldLostFocus(); });
+        listen(field, 'focusout', onFieldLostFocus);
     }
     listen(textarea, 'select', () => {
         if (h.syncing || h.composing || document.activeElement !== textarea) return;
@@ -730,11 +909,19 @@ function reselect(h) {
 // Sets `inert = false` and `inputMode = 'text'` BEFORE calling `focus()` so iOS Safari evaluates
 // `shouldShowAutomaticKeyboardUI` with an editable `inputMode` at the moment of focus (while
 // keeping `opacity: 0` so WebKit suppresses native selection UI and zoom-to-focus per r238146).
-function focusInput(h) {
+// When `force` is true (called from `activate()` inside a user gesture), `focus()` runs even when
+// `field` is already `document.activeElement` so WebKit's `Element::focus` invokes
+// `elementDidRefocus` (r188405/r290646) to re-present the keyboard if dismissed while staying a
+// zero-flicker no-op when the keyboard is already showing (r242833).
+function focusInput(h, force = false) {
     const field = h.field;
+    h.focusGen += 1;
+    h.pendingFieldBlur = false;
+    h.cancelReconcile?.();
     field.inert = false;
     field.inputMode = 'text';
-    if (document.activeElement !== field) field.focus({ preventScroll: true });
+    if (force || document.activeElement !== field) field.focus({ preventScroll: true });
+    if (document.activeElement === field) h.domFocused = true;
     reselect(h);
 }
 
@@ -749,6 +936,10 @@ export function sync(h, key, text, base, anchor, focus, secure) {
     h.password.value = '';
     h.field = secure ? h.password : h.textarea;
     if (!key) {
+        h.focusGen += 1;
+        h.pendingFieldBlur = false;
+        h.domFocused = false;
+        h.cancelReconcile?.();
         h.selection = null;
         h.textarea.value = '';
         if (editing) h.canvas.focus({ preventScroll: true });
@@ -767,9 +958,10 @@ export function sync(h, key, text, base, anchor, focus, secure) {
             h.selection = [start, end, direction];
         }
         if (editing && active !== h.field) activate(h);
-        else if (active === h.canvas) focusInput(h);
+        else if (active === h.canvas && !h.pendingFieldBlur) focusInput(h);
         else {
             h.field.inputMode = 'text';
+            if (active === h.field) h.domFocused = true;
             reselect(h);
         }
         (secure ? h.textarea : h.password).inert = true;
@@ -1118,6 +1310,7 @@ function keyboardShift(h) {
 }
 
 function applyKeyboardShift(h) {
+    if (h.pressedPointers.size > 0) return;
     const shift = keyboardShift(h);
     const prev = h.keyboardShiftY || 0;
     if (Math.abs(shift - prev) < 0.5) return;
@@ -1137,6 +1330,7 @@ function applyKeyboardShift(h) {
 export function syncVisualViewport(h, top, bottom, layoutH) {
     h.visualViewport = layoutH > 0 && bottom > top ? { top, bottom, layoutH } : null;
     applyKeyboardShift(h);
+    if (h.key && h.domFocused && document.activeElement !== h.field) h.scheduleReconcile?.();
 }
 
 // The focused field's IME area in window points: the page's own text field sits there, so an
@@ -2257,7 +2451,7 @@ export function activate(h) {
     // A page's canvas is `tabindex="-1"`: focusing it on a tap would only drop the reader's text
     // selection or a link's focus. An input that took the keyboard still gets it.
     if (h.page && !h.key) return;
-    if (h.key) focusInput(h);
+    if (h.key) focusInput(h, true);
     else if (document.activeElement !== h.canvas) h.canvas.focus({ preventScroll: true });
 }
 
@@ -2312,6 +2506,9 @@ export function destroy(h) {
     h.disposed = true;
     h.image = undefined;
     clearTimeout(h.staticTimer);
+    h.clearAllPointerEndTimers?.();
+    h.pressedPointers?.clear();
+    h.cancelReconcile?.();
     cancelTouchHoldConfirm(h);
     disarmLink(h);
     h.pendingLinkDrag = null;

@@ -158,6 +158,8 @@ impl<E: EmbedSurface> FrameHost for EmbedFrameHost<'_, E> {
             ReacquireReason::Reblend => self.surface.reblend(),
             #[cfg(any(test, target_os = "macos"))]
             ReacquireReason::NativeMaterials => true,
+            #[cfg(not(target_arch = "wasm32"))]
+            ReacquireReason::ContentResize => true,
         }
     }
 

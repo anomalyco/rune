@@ -1,0 +1,1 @@
+- Web: added single-shot next-frame focus reconciliation after hidden-input `blur`/`focusout`, `window` `focus`, `visibilitychange`, and `visualViewport` updates so event-order races on iOS Safari keyboard dismissal clear stale carets without adding idle frame work.

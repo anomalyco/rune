@@ -232,3 +232,173 @@ test('preferredLanguages reads navigator.languages with navigator.language fallb
         Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
     }
 });
+
+async function decodeTestPng(png) {
+    // Verify PNG signature, parse IHDR/sRGB/IDAT/IEND chunks and CRCs, inflate IDAT, unfilter Sub rows.
+    assert.deepEqual(png.slice(0, 8), new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const dv = new DataView(png.buffer, png.byteOffset, png.byteLength);
+    let pos = 8, width = 0, height = 0, hasSrgb = false, hasIend = false;
+    const idatChunks = [];
+    while (pos < png.byteLength) {
+        const len = dv.getUint32(pos);
+        const type = String.fromCharCode(png[pos + 4], png[pos + 5], png[pos + 6], png[pos + 7]);
+        const data = png.subarray(pos + 8, pos + 8 + len);
+        if (type === 'IHDR') { width = dv.getUint32(pos + 8); height = dv.getUint32(pos + 12); }
+        else if (type === 'sRGB') { hasSrgb = data.length === 1 && data[0] === 0; }
+        else if (type === 'IDAT') { idatChunks.push(data); }
+        else if (type === 'IEND') { hasIend = true; }
+        pos += 12 + len;
+    }
+    assert.ok(hasSrgb && hasIend, 'PNG must contain sRGB and IEND chunks');
+    const ds = new DecompressionStream('deflate');
+    const w = ds.writable.getWriter();
+    for (const c of idatChunks) w.write(c);
+    w.close();
+    const inflated = new Uint8Array(await new Response(ds.readable).arrayBuffer());
+    const rowBytes = width * 4;
+    assert.equal(inflated.byteLength, height * (rowBytes + 1));
+    const rgba = new Uint8Array(height * rowBytes);
+    for (let y = 0; y < height; y++) {
+        const filter = inflated[y * (rowBytes + 1)];
+        assert.ok(filter === 0 || filter === 1);
+        for (let i = 0; i < rowBytes; i++) {
+            const raw = inflated[y * (rowBytes + 1) + 1 + i];
+            const left = (filter === 1 && i >= 4) ? rgba[y * rowBytes + i - 4] : 0;
+            rgba[y * rowBytes + i] = (raw + left) & 0xff;
+        }
+    }
+    return { width, height, rgba };
+}
+
+test('encodePngAsync produces valid bit-exact PNG for straight and linear-premultiplied RGBA and enforces maxBytes', async () => {
+    // Straight RGBA with opaque, translucent, and transparent pixels round-trips bit-exactly.
+    const straight = new Uint8Array([
+        255, 0, 0, 255, 10, 200, 30, 77,
+        1, 2, 3, 0, 128, 64, 32, 255,
+    ]);
+    const res = await platform.encodePngAsync(2, 2, straight, false, 1024 * 1024);
+    assert.ok(res.png instanceof Uint8Array);
+    const dec = await decodeTestPng(res.png);
+    assert.equal(dec.width, 2);
+    assert.equal(dec.height, 2);
+    assert.deepEqual(dec.rgba, straight);
+
+    // Premultiplied mip 0: opaque stays exact, alpha==0 zeroes RGB, translucent un-premultiplies in linear light.
+    const premul = new Uint8Array([
+        200, 100, 50, 255, 99, 88, 77, 0,
+        188, 0, 0, 128, 0, 0, 0, 255,
+    ]);
+    const res2 = await platform.encodePngAsync(2, 2, premul, true, 1024 * 1024);
+    const dec2 = await decodeTestPng(res2.png);
+    assert.deepEqual(dec2.rgba.slice(0, 4), new Uint8Array([200, 100, 50, 255]));
+    assert.deepEqual(dec2.rgba.slice(4, 8), new Uint8Array([0, 0, 0, 0]));
+    assert.ok(Math.abs(dec2.rgba[8] - 255) <= 1 && dec2.rgba[11] === 128, `unpremul half-alpha red: ${dec2.rgba.slice(8, 12)}`);
+
+    // Size cap enforcement returns too_large.
+    const tinyCap = await platform.encodePngAsync(2, 2, straight, false, 64);
+    assert.equal(tinyCap.code, 'too_large');
+    assert.equal(tinyCap.png, undefined);
+});
+
+test('writeClipboardImage creates ClipboardItem with Promise<Blob> synchronously, encodes off-turn, and enforces supersede and errors', async () => {
+    const origNav = globalThis.navigator;
+    const origCI = globalThis.ClipboardItem;
+    const origCS = globalThis.CompressionStream;
+    try {
+        let writtenItems = null;
+        let extractCalled = false;
+        class FakeClipboardItem {
+            constructor(forms) { this.forms = forms; }
+        }
+        Object.defineProperty(globalThis, 'ClipboardItem', { value: FakeClipboardItem, configurable: true });
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                clipboard: {
+                    async write(items) {
+                        writtenItems = items;
+                        const blob = await items[0].forms['image/png'];
+                        return blob;
+                    },
+                },
+            },
+            configurable: true,
+        });
+
+        const pixels = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255]);
+        const promise = platform.writeClipboardImage(
+            (wantRaw) => {
+                extractCalled = true;
+                assert.equal(wantRaw, true);
+                return { width: 2, height: 1, bytes: pixels, premul: false };
+            },
+            () => true,
+            32 * 1024 * 1024,
+        );
+        // Clipboard.write and ClipboardItem must have been called synchronously inside the gesture,
+        // BEFORE extract() runs on a later turn.
+        assert.equal(extractCalled, false, 'extract must not run synchronously on the input turn');
+        assert.equal(writtenItems?.length, 1);
+        assert.ok(writtenItems[0].forms['image/png'] instanceof Promise);
+
+        const blob = await promise;
+        assert.equal(extractCalled, true);
+        assert.equal(blob.type, 'image/png');
+        const dec = await decodeTestPng(new Uint8Array(await blob.arrayBuffer()));
+        assert.deepEqual(dec.rgba, pixels);
+
+        // Post-encode supersession rejects without resolving the blob.
+        await assert.rejects(
+            platform.writeClipboardImage(
+                () => ({ width: 2, height: 1, bytes: pixels, premul: false }),
+                () => false,
+                32 * 1024 * 1024,
+            ),
+            /superseded/,
+        );
+
+        // Too-large PNG routes code to checkOutcome and rejects.
+        const seenCodes = [];
+        await assert.rejects(
+            platform.writeClipboardImage(
+                () => ({ width: 2, height: 1, bytes: pixels, premul: false }),
+                (code) => { seenCodes.push(code); return false; },
+                32,
+            ),
+            /size limits/,
+        );
+        assert.deepEqual(seenCodes, ['too_large']);
+
+        // Legacy fallback when CompressionStream is absent asks extract(false) for pre-encoded PNG.
+        Object.defineProperty(globalThis, 'CompressionStream', { value: undefined, configurable: true });
+        const legacyPng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+        const legacyBlob = await platform.writeClipboardImage(
+            (wantRaw) => { assert.equal(wantRaw, false); return { png: legacyPng }; },
+            () => true,
+            32 * 1024 * 1024,
+        );
+        assert.deepEqual(new Uint8Array(await legacyBlob.arrayBuffer()), legacyPng);
+        Object.defineProperty(globalThis, 'CompressionStream', { value: origCS, configurable: true });
+
+        // Browser clipboard rejection (e.g. outside user gesture) propagates and cancels the
+        // deferred timer so neither extract nor checkOutcome runs after settlement.
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { clipboard: { write: () => Promise.reject(new Error('NotAllowedError')) } },
+            configurable: true,
+        });
+        let calledAfterReject = false;
+        await assert.rejects(
+            platform.writeClipboardImage(
+                () => { calledAfterReject = true; return { width: 2, height: 1, bytes: pixels, premul: false }; },
+                () => { calledAfterReject = true; return true; },
+                32 * 1024 * 1024,
+            ),
+            /NotAllowedError/,
+        );
+        await new Promise((r) => setTimeout(r, 20));
+        assert.equal(calledAfterReject, false, 'deferred encode callbacks must not run after write rejects');
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        Object.defineProperty(globalThis, 'ClipboardItem', { value: origCI, configurable: true });
+        Object.defineProperty(globalThis, 'CompressionStream', { value: origCS, configurable: true });
+    }
+});

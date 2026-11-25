@@ -87,6 +87,9 @@ impl RuntimeCore {
         if let Some(picked) = tx.field_menu_resolution.take() {
             self.latch_field_menu_resolution(app, picked, tx);
         }
+        if let Some(picked) = tx.popup_menu_resolution.take() {
+            self.latch_popup_menu_resolution(app, picked, tx);
+        }
         self.shell_request = self.shell_request.max(tx.shell.take());
         self.host.user_close_request |= std::mem::take(&mut tx.user_close_request);
         if tx.minimize_order.take().is_some() { self.minimize_step(crate::window::MinimizeEvent::Asked); }
@@ -103,7 +106,22 @@ impl RuntimeCore {
             self.edit.clear_secret_request = true;
             self.edit.pill_copy = None;
         }
-        if let Some(copy) = tx.copy.take() {
+        for superseded in tx.superseded_copy_images.drain(..).filter_map(|cb| cb.take()) {
+            self.edit.next_clipboard_read += 1;
+            let id = self.edit.next_clipboard_read;
+            self.edit.copy_image_callbacks.push((id, superseded));
+            self.copy_image_result(id, Err(crate::CopyImageError::Superseded));
+        }
+        if let Some(mut copy) = tx.copy.take() {
+            if let Some(prev_id) = self.copy_request.as_mut().and_then(crate::ClipboardWrite::take_copy_image_id) {
+                self.copy_image_result(prev_id, Err(crate::CopyImageError::Superseded));
+            }
+            if let Some(cb) = tx.copy_image_callback.take().and_then(|cb| cb.take()) {
+                self.edit.next_clipboard_read += 1;
+                let id = self.edit.next_clipboard_read;
+                self.edit.copy_image_callbacks.push((id, cb));
+                copy.set_copy_image_id(id);
+            }
             self.edit.pill_copy = (!copy.is_secret())
                 .then(|| copy.content().html())
                 .flatten()
@@ -124,7 +142,7 @@ impl RuntimeCore {
             self.edit.clipboard_reads.push((self.edit.next_clipboard_read, read));
             self.edit.read_requests.push(self.edit.next_clipboard_read);
         }
-        self.host.popups.extend(tx.popups.drain(..).filter_map(|call| call.take()));
+        self.latch_popups(app, tx);
         for request in tx.file_dialogs.drain(..).filter_map(|call| call.take()) {
             self.request_file_dialog(request);
         }

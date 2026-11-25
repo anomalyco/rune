@@ -156,7 +156,9 @@ impl Renderer {
     }
 
     /// Uploads changed rows of the runtime's image atlas (`El::pixels`), creating its texture on
-    /// first use.
+    /// first use. Note: `ImageCache` decodes on CPU only; `upload_images`, `FillPass`, and
+    /// `build_surfaces` run strictly inside frame preparation, which is unreachable once
+    /// `GpuLossPolicy::Terminal` latches.
     pub fn upload_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, images: &mut ImageAtlas) {
         if images.pages.is_empty() && self.images.is_empty() { return self.refresh_layer_bindings(device); }
         let staging = self.uploads.staging(device, queue);
@@ -394,12 +396,15 @@ impl Renderer {
         self.sync_resident_caches(&mut atlas.resident_caches);
         self.backdrop_used = self.effects.iter().any(|(_, i)| i.params[0] != 0.0 || i.kind() == Some(Kind::BackdropBlur));
         if self.backdrop_used {
-            self.ensure_backdrop(device, self.format, viewport);
+            // Every pooled copy holds the same part of the window, so a backdrop reads the same
+            // texels whichever format its pass draws in.
+            let (origin, size) = self.backdrop_frame(viewport);
+            self.ensure_backdrop(device, self.format, origin, size);
             for index in 0..self.extra.len() {
-                self.ensure_backdrop(device, self.extra[index].0, viewport);
+                self.ensure_backdrop(device, self.extra[index].0, origin, size);
             }
             if self.layers.targets.iter().any(Option::is_some) {
-                self.ensure_backdrop(device, layers::FORMAT, viewport);
+                self.ensure_backdrop(device, layers::FORMAT, origin, size);
             }
         }
         self.prepare_backdrop_blur(device, queue, viewport);

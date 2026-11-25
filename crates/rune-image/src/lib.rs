@@ -30,6 +30,7 @@ mod mips;
 pub mod pixels;
 #[doc(hidden)]
 pub mod place;
+mod readback;
 mod shelf;
 mod svg;
 #[cfg(test)]
@@ -49,6 +50,8 @@ pub use place::Align;
 pub use place::ImageFilter;
 pub use place::PixelsWrap;
 pub use place::SurfaceFit;
+#[doc(hidden)]
+pub use readback::CopyPixels;
 #[doc(hidden)]
 pub use svg::svg_rgba;
 pub use svg::svg_rgba_cover;

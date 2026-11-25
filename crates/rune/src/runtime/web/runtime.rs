@@ -137,7 +137,7 @@ impl RuntimeCore {
         let tx = &self.frame.pending;
         if self.web_release_needs_frame() || self.kbd.focus_request.is_some() || tx.blur || tx.focus_to.is_some() || tx.select.is_some() || !tx.keys.is_empty()
             || tx.copy.is_some() || tx.paste || !tx.clipboard_reads.is_empty() || !tx.pick_reads.is_empty()
-            || !tx.open_urls.is_empty() || !tx.open_paths.is_empty() || !tx.url_schemes.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.field_menu_resolution.is_some() || tx.clear_secret {
+            || !tx.open_urls.is_empty() || !tx.open_paths.is_empty() || !tx.url_schemes.is_empty() || !tx.file_dialogs.is_empty() || !tx.popups.is_empty() || tx.field_menu_resolution.is_some() || tx.popup_menu_resolution.is_some() || tx.clear_secret {
             return None;
         }
         if self.focused_input_read_only() || self.focused_input_disabled() { return None; }
@@ -158,6 +158,17 @@ impl RuntimeCore {
             Some(input) => mirror.update(self.kbd.focus.path().unwrap_or_default(), Some(&input.edit)),
             None => mirror.update("", None),
         }
+    }
+
+    /// Blurs the focused editable field when the browser's hidden input lost DOM focus externally
+    /// (for example, iOS keyboard dismissal or focus moving outside the canvas). Matches `key` so
+    /// a stale blur never clears a field that took focus afterwards.
+    pub(crate) fn web_field_blur(&mut self, key: &str) -> bool {
+        if key.is_empty() || self.kbd.focus.path() != Some(key) || self.focused_input().is_none() {
+            return false;
+        }
+        self.frame.queue.push(Action::Blur);
+        true
     }
 
     pub(crate) fn web_key(&mut self, app: &mut dyn AppDriver, event: &serde_json::Value) -> bool {

@@ -14,10 +14,13 @@ impl Client {
         self.flush_primary(rt);
         // Nothing to clear before the first write.
         if std::mem::take(&mut rt.edit.clear_secret_request) && let Some(w) = WORKER.get() { w.sender.send(Request::Clear(None)).ok(); }
-        if let Some(copy) = rt.copy_request.take() {
-            let worker = worker();
-            copy.bind(Route::System(worker.clone()));
-            worker.send(Request::Write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() }))).ok();
+        if let Some(mut copy) = rt.copy_request.take() {
+            let worker = worker_handle();
+            copy.bind(Route::System(worker.sender.clone()));
+            if let Some(id) = copy.copy_image_id() {
+                copy.attach_copy_reply(CopyReply { id, sender: self.sender.clone(), wake: self.wake.clone() });
+            }
+            worker.send_write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() }), revision());
         }
         if let Some(target) = rt.edit.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
         for id in std::mem::take(&mut rt.edit.read_requests) { self.read_for(Purpose::Read(id)); }
@@ -29,6 +32,7 @@ static WORKER: OnceLock<Worker> = OnceLock::new();
 pub(super) fn worker_started() -> bool { WORKER.get().is_some() }
 pub(super) struct Worker {
     pub(super) sender: mpsc::Sender<Request>,
+    latest_write: Arc<AtomicU64>,
     join: Mutex<Option<(std::thread::JoinHandle<()>, mpsc::Receiver<()>)>>,
 }
 impl Worker {
@@ -40,7 +44,12 @@ impl Worker {
             // Backend dropped (including Linux handoff) before acknowledging completion.
             done.send(()).ok();
         }).expect("clipboard worker");
-        Self { sender, join: Mutex::new(Some((handle, completed))) }
+        Self { sender, latest_write: Arc::new(AtomicU64::new(0)), join: Mutex::new(Some((handle, completed))) }
+    }
+    pub(super) fn send_write(&self, mut copy: ClipboardWrite, notify: Option<Notify>, revision_before: Option<u64>) {
+        let generation = self.latest_write.fetch_add(1, Ordering::AcqRel) + 1;
+        copy.stamp(generation, self.latest_write.clone(), revision_before);
+        self.sender.send(Request::Write(copy, notify)).ok();
     }
     pub(super) fn stop(&self) {
         let Some((handle, completed)) = self.join.lock().unwrap().take() else { return };
@@ -50,16 +59,20 @@ impl Worker {
     }
 }
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-fn worker() -> &'static mpsc::Sender<Request> {
+fn worker_handle() -> &'static Worker {
     if cfg!(test) {
         panic!("unit test reached the OS clipboard; install a test clipboard (`rt.use_clipboard` or `Client::use_memory`)");
     }
-    &WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok())).sender
+    WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok()))
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
+fn worker_handle() -> &'static Worker {
+    WORKER.get_or_init(|| Worker::spawn(|| None::<Board>))
+}
+
 fn worker() -> &'static mpsc::Sender<Request> {
-    &WORKER.get_or_init(|| Worker::spawn(|| None::<Board>)).sender
+    &worker_handle().sender
 }
 
 /// Called by the shared event-loop exit path, including overlay-only applications.
@@ -124,9 +137,12 @@ fn run_worker<B: Backend>(recv: mpsc::Receiver<Request>, mut open: impl FnMut() 
         if matches!(request, Request::Clear(_)) && core.hold.is_free() { continue; }
         if clipboard.is_none() { clipboard = open(); }
         let Some(cb) = &mut clipboard else {
-            if let Request::Write(copy, notify) = request && let Some(slot) = copy.slot() {
-                slot.set(SecretState::Failed("no clipboard".into()));
-                if let Some(n) = notify { n.send(); }
+            if let Request::Write(mut copy, notify) = request {
+                if let Some(r) = copy.take_copy_reply() { r.send(Err(CopyImageError::Failed("no clipboard".into()))); }
+                if let Some(slot) = copy.slot() {
+                    slot.set(SecretState::Failed("no clipboard".into()));
+                    if let Some(n) = notify { n.send(); }
+                }
             }
             continue;
         };
@@ -143,25 +159,200 @@ fn write(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), Strin
         #[cfg(target_os = "macos")]
         { return macos::write(&objc2_app_kit::NSPasteboard::generalPasteboard(), content); }
         #[cfg(not(target_os = "macos"))]
-        return write_one_form(cb, content);
+        return write_one_form(cb, copy);
     }
     write_text(cb, copy).map_err(|e| e.to_string())
 }
 
 /// Windows and Linux hold one of Rune's forms per write: the files, else the image, else HTML
 /// beside the text (CF_HTML, `text/html`), else the text. RTF isn't written.
+///
+/// An image write never falls through to `set_text` when pixel extraction fails: returning an
+/// error leaves the existing clipboard contents untouched instead of wiping them with empty text.
 #[cfg(all(not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-fn write_one_form(cb: &mut arboard::Clipboard, content: &ClipboardContent) -> Result<(), String> {
-    let error = |e: arboard::Error| e.to_string();
-    if !content.files().is_empty() { return cb.set().file_list(content.files()).map_err(error); }
-    #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "ios", target_os = "android")))))]
-    if let Some(rgba) = content.image().and_then(ClipboardImage::to_rgba) {
-        let (width, height) = (rgba.width() as usize, rgba.height() as usize);
-        return cb.set_image(arboard::ImageData { width, height, bytes: rgba.into_raw().into() }).map_err(error);
+pub(super) enum OneForm<'a> {
+    Files(&'a [std::path::PathBuf]),
+    Image { png: &'a [u8], width: u32, height: u32, rgba: std::borrow::Cow<'a, [u8]> },
+    Html(&'a str, &'a str),
+    Text(&'a str),
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+pub(super) fn prepare_one_form(copy: &ClipboardWrite) -> Result<OneForm<'_>, String> {
+    let content = &copy.content;
+    if !content.files().is_empty() { return Ok(OneForm::Files(content.files())); }
+    if let Some(image) = content.image() {
+        let (width, height, rgba) = extract_image_rgba(image, copy.encoded_rgba.as_ref())?;
+        return Ok(OneForm::Image { png: image.png(), width, height, rgba });
     }
     match content.html() {
-        Some(html) => cb.set().html(html, Some(content.text())).map_err(error),
-        None => cb.set_text(content.text()).map_err(error),
+        Some(html) => Ok(OneForm::Html(html, content.text())),
+        None => Ok(OneForm::Text(content.text())),
+    }
+}
+
+#[cfg(all(not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+fn write_one_form(cb: &mut arboard::Clipboard, copy: &ClipboardWrite) -> Result<(), String> {
+    let error = |e: arboard::Error| e.to_string();
+    match prepare_one_form(copy)? {
+        OneForm::Files(files) => cb.set().file_list(files).map_err(error),
+        OneForm::Image { png, width, height, rgba } => {
+            #[cfg(target_os = "windows")]
+            {
+                let _ = cb;
+                windows_write_image(png, width, height, &rgba)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = png;
+                cb.set_image(arboard::ImageData { width: width as usize, height: height as usize, bytes: rgba }).map_err(error)
+            }
+        }
+        OneForm::Html(html, text) => cb.set().html(html, Some(text)).map_err(error),
+        OneForm::Text(text) => cb.set_text(text).map_err(error),
+    }
+}
+
+/// Returns straight-alpha sRGB RGBA8 for `image`, borrowing the pre-encoded buffer carried by
+/// `ClipboardWrite` when it matches so `Tx::copy_image` skips decoding its freshly encoded PNG.
+#[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+fn extract_image_rgba<'a>(
+    image: &ClipboardImage,
+    pre: Option<&'a (u32, u32, Arc<[u8]>)>,
+) -> Result<(u32, u32, std::borrow::Cow<'a, [u8]>), String> {
+    if let Some((w, h, bytes)) = pre
+        && (*w, *h) == image.size()
+        && usize::try_from(*w)
+            .ok()
+            .and_then(|w| usize::try_from(*h).ok().and_then(|h| w.checked_mul(h)?.checked_mul(4)))
+            == Some(bytes.len())
+    {
+        return Ok((*w, *h, std::borrow::Cow::Borrowed(bytes)));
+    }
+    let rgba = image.to_rgba().ok_or_else(|| "failed to decode clipboard image".to_string())?;
+    Ok((rgba.width(), rgba.height(), std::borrow::Cow::Owned(rgba.into_raw())))
+}
+
+/// Packs straight-alpha sRGB RGBA8 into a bottom-up 32-bit `CF_DIBV5` (`BITMAPV5HEADER` + BGRA
+/// pixels, `BI_BITFIELDS`, `LCS_sRGB`) so legacy Windows apps (Paint, Word) paste it cleanly
+/// alongside the registered `"PNG"` format.
+#[cfg(target_os = "windows")]
+pub(super) fn pack_dibv5(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    const HEADER: usize = 124;
+    const BI_BITFIELDS: u32 = 3;
+    const LCS_SRGB: u32 = 0x7352_4742;
+    const LCS_GM_IMAGES: u32 = 4;
+    if width == 0 || height == 0 { return None; }
+    let w_i32 = i32::try_from(width).ok()?;
+    let h_i32 = i32::try_from(height).ok()?;
+    let row_bytes = usize::try_from(width).ok()?.checked_mul(4)?;
+    let pixel_bytes = row_bytes.checked_mul(usize::try_from(height).ok()?)?;
+    if rgba.len() != pixel_bytes { return None; }
+    let size_image = u32::try_from(pixel_bytes).ok()?;
+    let total = HEADER.checked_add(pixel_bytes)?;
+    let mut out = vec![0u8; total];
+    out[0..4].copy_from_slice(&(HEADER as u32).to_le_bytes());
+    out[4..8].copy_from_slice(&w_i32.to_le_bytes());
+    out[8..12].copy_from_slice(&h_i32.to_le_bytes());
+    out[12..14].copy_from_slice(&1u16.to_le_bytes());
+    out[14..16].copy_from_slice(&32u16.to_le_bytes());
+    out[16..20].copy_from_slice(&BI_BITFIELDS.to_le_bytes());
+    out[20..24].copy_from_slice(&size_image.to_le_bytes());
+    out[40..44].copy_from_slice(&0x00FF_0000u32.to_le_bytes());
+    out[44..48].copy_from_slice(&0x0000_FF00u32.to_le_bytes());
+    out[48..52].copy_from_slice(&0x0000_00FFu32.to_le_bytes());
+    out[52..56].copy_from_slice(&0xFF00_0000u32.to_le_bytes());
+    out[56..60].copy_from_slice(&LCS_SRGB.to_le_bytes());
+    out[108..112].copy_from_slice(&LCS_GM_IMAGES.to_le_bytes());
+    for y in 0..height as usize {
+        let src_row = &rgba[(height as usize - 1 - y) * row_bytes..][..row_bytes];
+        let dst_row = &mut out[HEADER + y * row_bytes..][..row_bytes];
+        for (src, dst) in src_row.as_chunks::<4>().0.iter().zip(dst_row.as_chunks_mut::<4>().0.iter_mut()) {
+            dst[0] = src[2];
+            dst[1] = src[1];
+            dst[2] = src[0];
+            dst[3] = src[3];
+        }
+    }
+    Some(out)
+}
+
+/// Writes registered `"PNG"` first and `CF_DIBV5` second in one clipboard transaction, matching
+/// Chromium's `ClipboardWin::WriteBitmap`. Allocates both buffers before emptying the clipboard
+/// so a failure never wipes what the user already had.
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+fn windows_write_image(png: &[u8], width: u32, height: u32, rgba: &[u8]) -> Result<(), String> {
+    use windows_sys::Win32::Foundation::{GlobalFree, HGLOBAL};
+    use windows_sys::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    };
+    use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+    const CF_DIBV5: u32 = 17;
+    const PNG_NAME: &[u16] = &[b'P' as u16, b'N' as u16, b'G' as u16, 0];
+
+    fn alloc_global(bytes: &[u8]) -> Result<HGLOBAL, String> {
+        if bytes.is_empty() { return Err("empty clipboard image buffer".into()); }
+        // SAFETY: allocates a movable global memory block of `bytes.len()`, copies `bytes` into
+        // the locked pointer, and unlocks before returning ownership of the handle to the caller.
+        unsafe {
+            let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len());
+            if h.is_null() { return Err("GlobalAlloc failed for clipboard image".into()); }
+            let ptr = GlobalLock(h) as *mut u8;
+            if ptr.is_null() {
+                let _ = GlobalFree(h);
+                return Err("GlobalLock failed for clipboard image".into());
+            }
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+            let _ = GlobalUnlock(h);
+            Ok(h)
+        }
+    }
+
+    let dib = pack_dibv5(width, height, rgba).ok_or_else(|| "clipboard image exceeds DIB size limits".to_string())?;
+    let png_h = alloc_global(png)?;
+    let dib_h = match alloc_global(&dib) {
+        Ok(h) => h,
+        Err(e) => {
+            // SAFETY: `png_h` was allocated by `alloc_global` and has not been handed to Windows.
+            unsafe { let _ = GlobalFree(png_h); }
+            return Err(e);
+        }
+    };
+    // SAFETY: `PNG_NAME` is NUL-terminated; clipboard is opened, emptied, populated, and closed;
+    // handles transferred to `SetClipboardData` are owned by Windows on success and freed here on failure.
+    unsafe {
+        let png_fmt = RegisterClipboardFormatW(PNG_NAME.as_ptr());
+        let mut opened = false;
+        for _ in 0..5 {
+            if OpenClipboard(core::ptr::null_mut()) != 0 { opened = true; break; }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if !opened {
+            let _ = GlobalFree(png_h);
+            let _ = GlobalFree(dib_h);
+            return Err("OpenClipboard failed".into());
+        }
+        if EmptyClipboard() == 0 {
+            let _ = CloseClipboard();
+            let _ = GlobalFree(png_h);
+            let _ = GlobalFree(dib_h);
+            return Err("EmptyClipboard failed".into());
+        }
+        let png_ok = if png_fmt != 0 && !SetClipboardData(png_fmt, png_h).is_null() {
+            true
+        } else {
+            let _ = GlobalFree(png_h);
+            false
+        };
+        let dib_ok = if !SetClipboardData(CF_DIBV5, dib_h).is_null() {
+            true
+        } else {
+            let _ = GlobalFree(dib_h);
+            false
+        };
+        let _ = CloseClipboard();
+        if png_ok || dib_ok { Ok(()) } else { Err("SetClipboardData failed for clipboard image".into()) }
     }
 }
 

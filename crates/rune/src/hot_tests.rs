@@ -370,6 +370,7 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
         mods: Vec<crate::Mods>,
         visibility: Vec<bool>,
         close_requests: u32,
+        quit_requests: u32,
         closes: u32,
         quits: u32,
         rests: u32,
@@ -390,6 +391,7 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
         .on_modifiers(|s, m, _| { panics_once(); s.mods.push(m); })
         .on_visibility(|s, v, _| { panics_once(); s.visibility.push(v); })
         .on_close_request(|s, _| { panics_once(); s.close_requests += 1; crate::CloseResponse::Defer })
+        .on_quit_request(|s, _| { panics_once(); s.quit_requests += 1; crate::QuitResponse::Defer })
         .on_close(|s, _| { panics_once(); s.closes += 1; })
         .on_quit(|s, _| { panics_once(); s.quits += 1; })
         .on_rest(|s, _| { panics_once(); s.rests += 1; true })
@@ -422,6 +424,10 @@ fn remaining_app_hooks_dispatch_through_patch_table_with_panic_fallback() {
     CALLS.set(0);
     assert_eq!(win.run_on_close_request(), Some(crate::CloseResponse::Defer));
     assert_eq!((win.rt.state.close_requests, CALLS.get()), (1, 2), "on_close_request");
+
+    CALLS.set(0);
+    assert_eq!(win.run_on_quit_request(), Some(crate::QuitResponse::Defer));
+    assert_eq!((win.rt.state.quit_requests, CALLS.get()), (1, 2), "on_quit_request");
 
     CALLS.set(0);
     win.run_on_close();
@@ -530,6 +536,42 @@ fn panicking_on_field_menu_patch_falls_back_with_owned_request() {
     rt.frame(0.0);
     assert_eq!(CALLS.get(), 3);
     assert_eq!(rt.state.requests.len(), 2);
+}
+
+#[test]
+fn panicking_on_popup_menu_patch_falls_back_with_owned_request() {
+    #[derive(Default)]
+    struct State {
+        requests: Vec<crate::PopupMenuRequest>,
+        picks: Vec<Option<String>>,
+    }
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        col().size(300.0, 200.0).child(el().key("btn").size(120.0, 32.0).on_press_tx(|_: &mut State, tx: &mut crate::Tx| {
+            let menu = crate::PopupMenu::new().item(crate::PopupItem::new("ok", "OK"));
+            tx.popup_menu(menu, "btn", |s: &mut State, picked, _| s.picks.push(picked.map(str::to_owned)));
+        }))
+    }
+
+    CALLS.set(0);
+    let mut rt = crate::App::new(AppSpec::new("hot-popup-menu", (300.0, 200.0), State::default, view))
+        .on_popup_menu(|s: &mut State, req: crate::PopupMenuRequest, _| {
+            panics_once();
+            s.requests.push(req);
+        })
+        .headless_runtime((300.0, 200.0), Env::new(true, 1.0));
+    rt.core_mut().host.force_popup_menu_fallback = true;
+    rt.frame(0.0);
+
+    let (x, y) = rt.find("btn").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    assert_eq!(CALLS.get(), 2, "startup on_popup_menu runs once after the patched one panics");
+    assert_eq!(rt.state.requests.len(), 1);
+    assert_eq!(rt.state.requests[0].menu().entries().len(), 1);
+    rt.update(|_, tx| tx.resolve_popup_menu(Some("ok")));
+    rt.frame(0.0);
+    assert_eq!(rt.state.picks, [Some("ok".to_owned())]);
 }
 
 #[test]

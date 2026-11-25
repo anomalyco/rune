@@ -295,7 +295,7 @@ pub(super) fn text(spec: &TextSpec, d: &mut Decls) {
 pub(super) fn text_html(spec: &TextSpec) -> String {
     let content = &spec.content;
     let hrefs: Vec<Option<String>> = spec.cold.links.iter()
-        .map(|l| crate::open_url::check_href(&l.id).ok())
+        .map(|l| crate::open_url::check_href(l.href.as_deref().unwrap_or(&l.id)).ok())
         .collect();
     let mut cuts: Vec<usize> = vec![0, content.len()];
     for s in &spec.spans { cuts.extend([s.start as usize, s.end as usize]); }

@@ -27,13 +27,13 @@ mod surface;
 pub(crate) mod traffic_lights;
 pub(crate) mod window_shape;
 
-pub(crate) use geometry::{backing_scale, content_origin, display_bounds, outer_size, overlay_rect, place_window, pointer_display, set_window_frame, window_geometry};
+pub(crate) use geometry::{backing_scale, content_origin, display_bounds, outer_size, overlay_rect, overlay_screen_area, place_window, pointer_display, set_window_frame, window_geometry};
 pub(crate) use pointer::PointerState;
 pub(crate) use presentation::Prewarm;
 #[cfg(test)]
 pub(crate) use surface::layer_occluded;
 pub(crate) use surface::{PresumeShown, flush_while_launching, launching, pin_contents_top_left, present_with_transaction, surface_occluded, sync_contents_scale, window_occluded};
-use geometry::{overlay_rect_on, screen_id};
+use geometry::{overlay_rect_on, overlay_rect_on_sized, screen_id};
 use pointer::MouseMonitors;
 use presence::Presence;
 use surface::{apply_window_color_space, occlusion_hidden};
@@ -318,12 +318,20 @@ impl Panel {
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
     pub fn place(&self, at: crate::overlay::Placement, options: &OverlayOptions) {
-        let Some(rect) = self.rect(at, options) else { return };
+        self.place_sized(at, options, crate::ContentSizing::Fixed);
+    }
+
+    pub fn place_sized(&self, at: crate::overlay::Placement, options: &OverlayOptions, sizing: crate::ContentSizing) {
+        let Some(rect) = overlay_rect_on_sized(at, options, self.panel.screen().map(|s| screen_id(&s)), sizing) else { return };
         if self.panel.frame() != rect {
             self.window.setFrame_display(rect, false);
             self.panel.setFrame_display(rect, true);
             if self.presence.get().visible() { self.pointer.observe(&self.panel, self.wake.as_ref()); }
         }
+    }
+
+    pub fn screen_area(&self, _at: crate::overlay::Placement, options: &OverlayOptions) -> Option<(f32, f32)> {
+        geometry::overlay_screen_area_on(options, self.panel.screen().map(|s| screen_id(&s)))
     }
 
     /// Resizes the panel in place, keeping its top-left corner fixed (for a user-dragged overlay).

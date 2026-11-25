@@ -29,8 +29,8 @@ export function reportAudit(json) {
 export function reportScroll(x, y) {
     window.__auditScroll = { x, y };
 }
-export function reportKeyboardResize(secretLength, bottom, dismisses) {
-    window.__keyboardResizeProof = { secretLength, bottom, dismisses,
+export function reportKeyboardResize(secretLength, bottom, dismisses, shiftedClicks, secretFocused, bottomFocused, secretBlurs, bottomBlurs) {
+    window.__keyboardResizeProof = { secretLength, bottom, dismisses, shiftedClicks, secretFocused, bottomFocused, secretBlurs, bottomBlurs,
         polls: (window.__keyboardResizeProof?.polls ?? 0) + 1 };
 }
 ")]
@@ -50,7 +50,7 @@ extern "C" {
     #[wasm_bindgen(js_name = reportScroll)]
     fn report_scroll(x: f32, y: f32);
     #[wasm_bindgen(js_name = reportKeyboardResize)]
-    fn report_keyboard_resize(secret_length: usize, bottom: &str, dismisses: u32);
+    fn report_keyboard_resize(secret_length: usize, bottom: &str, dismisses: u32, shifted_clicks: u32, secret_focused: bool, bottom_focused: bool, secret_blurs: u32, bottom_blurs: u32);
 }
 
 struct State {
@@ -261,6 +261,9 @@ struct KeyboardResizeState {
     bottom: TextEdit,
     read_only: TextEdit,
     dismisses: u32,
+    shifted_clicks: u32,
+    secret_blurs: u32,
+    bottom_blurs: u32,
 }
 
 impl Default for KeyboardResizeState {
@@ -270,12 +273,24 @@ impl Default for KeyboardResizeState {
             bottom: TextEdit::default(),
             read_only: TextEdit::new("Read only"),
             dismisses: 0,
+            shifted_clicks: 0,
+            secret_blurs: 0,
+            bottom_blurs: 0,
         }
     }
 }
 
 fn keyboard_resize_view(s: &KeyboardResizeState, _: &mut Cx<KeyboardResizeState>) -> El {
-    report_keyboard_resize(s.secret.text.chars().count(), &s.bottom.text, s.dismisses);
+    report_keyboard_resize(
+        s.secret.text.chars().count(),
+        &s.bottom.text,
+        s.dismisses,
+        s.shifted_clicks,
+        s.secret.focused,
+        s.bottom.focused,
+        s.secret_blurs,
+        s.bottom_blurs,
+    );
     col().w_full().h_full()
         .child(
             row().w_full().h(56.0).padding(8.0).gap(8.0)
@@ -289,20 +304,38 @@ fn keyboard_resize_view(s: &KeyboardResizeState, _: &mut Cx<KeyboardResizeState>
                 .child(el().w_full().h(180.0))
                 .child(text_input(&s.secret, tok::type_::BODY).key("secret").label("Secret")
                     .single_line().w_full().h(48.0).shrink().min_h(0.0)
-                    .on_edit(|s: &mut KeyboardResizeState| &mut s.secret)),
+                    .on_edit(|s: &mut KeyboardResizeState| &mut s.secret)
+                    .on_focus_change(|s: &mut KeyboardResizeState, focused, _| {
+                        if !focused { s.secret_blurs += 1; }
+                    }))
+                .child(el().w_full().grow(1.0).min_h(0.0))
+                .child(el().key("shifted-btn").focusable(true).w_full().h(48.0).child(text("Shifted action"))
+                    .on_press(|s: &mut KeyboardResizeState| s.shifted_clicks += 1)),
         )
         .child(
             col().w_full().h(200.0).padding(16.0)
                 .child(text_input(&s.bottom, tok::type_::BODY).key("bottom").label("Bottom")
                     .single_line().w_full().h(48.0)
-                    .on_edit(|s: &mut KeyboardResizeState| &mut s.bottom)),
+                    .on_edit(|s: &mut KeyboardResizeState| &mut s.bottom)
+                    .on_focus_change(|s: &mut KeyboardResizeState, focused, _| {
+                        if !focused { s.bottom_blurs += 1; }
+                    })),
         )
 }
 
 fn run_keyboard_resize() {
     let mut spec = AppSpec::new("Keyboard resize proof", (390.0, 699.0), KeyboardResizeState::default, keyboard_resize_view);
     spec.poll = Some(|s, _, _| {
-        report_keyboard_resize(s.secret.text.chars().count(), &s.bottom.text, s.dismisses);
+        report_keyboard_resize(
+            s.secret.text.chars().count(),
+            &s.bottom.text,
+            s.dismisses,
+            s.shifted_clicks,
+            s.secret.focused,
+            s.bottom.focused,
+            s.secret_blurs,
+            s.bottom_blurs,
+        );
         false
     });
     App::new(spec).run();

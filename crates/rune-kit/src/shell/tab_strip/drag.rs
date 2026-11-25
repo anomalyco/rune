@@ -372,6 +372,16 @@ impl TabDragState {
         release
     }
 
+    /// How far a break before tab `before` sits from its place, `[x, y]`: with the tabs after a
+    /// torn-out tab, which close the gap it left. A reorder moves no break, as it stays between
+    /// two of them.
+    pub(super) fn break_shift(&self, before: usize, vertical: bool) -> [f32; 2] {
+        match self.gesture {
+            Gesture::Dragging { mode: TabDragMode::TearOut { from, .. }, grab, .. } if before > from => if vertical { [0.0, -grab.pitch] } else { [-grab.pitch, 0.0] },
+            _ => [0.0; 2],
+        }
+    }
+
     /// How far tab `index` sits from its place, `[x, y]`.
     pub(super) fn shift(&self, index: usize, vertical: bool) -> [f32; 2] {
         let axis = |along: f32| if vertical { [0.0, along] } else { [along, 0.0] };

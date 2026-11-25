@@ -62,6 +62,7 @@ mod keys;
 mod panic_trap;
 #[cfg(not(target_arch = "wasm32"))]
 mod pointer_lock;
+mod resize_sync;
 pub mod spec;
 mod state;
 mod surface;
@@ -87,6 +88,7 @@ pub use cpu_first::CpuFirst;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use cpu_first::WebStart;
 pub use handle::WindowHandle;
+pub use resize_sync::ResizeSync;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
 #[cfg(test)]
@@ -197,6 +199,10 @@ pub(crate) enum WakeEvent {
     /// with `true` the session ends now and the windows close.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Quit(bool),
+    /// macOS `applicationShouldTerminate:` deferred to `App::on_quit_request` hooks.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    QuitRequest,
     /// An assistive client asked something of a surface's accessibility tree (`crate::a11y`):
     /// the host answers at the end of the turn this wakes.
     #[cfg_attr(not(feature = "accessibility"), allow(dead_code))]
@@ -217,6 +223,11 @@ pub(crate) enum WakeEvent {
     /// wakes the immediate next turn so `about_to_wait` drains it without entering `ControlFlow::Poll`.
     #[cfg(not(target_arch = "wasm32"))]
     LayerPending,
+    /// Windows: system effects policy changed (Transparency effects, Energy/Battery Saver,
+    /// `CompositionCapabilities`, High Contrast, or Remote Desktop); every host reconciles
+    /// `El::system_material` native vs fallback state.
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    MaterialPolicyChanged,
 }
 
 /// What `Windows` needs of a host, whatever its state type: an app window or an overlay.
@@ -246,6 +257,10 @@ pub(crate) trait AnyHost {
     fn take_startup_error(&mut self) -> Option<String> { None }
     /// The OS is ending the app without Rune asking: run close hooks before the hosts drop.
     fn terminate(&mut self) {}
+    /// Whether this live host has `App::on_quit_request` registered (overlays return false).
+    fn has_quit_request(&self) -> bool { false }
+    /// Asks `App::on_quit_request` inside a normal update transaction (overlays return None).
+    fn quit_request_hook(&mut self, _event_loop: &ActiveEventLoop) -> Option<crate::QuitResponse> { None }
     /// The app starts to quit: runs `App::on_quit` (including in a window whose close ended the app).
     fn quit_hook(&mut self) {}
     /// The app quits: off the screen now, before any hook runs.
@@ -275,6 +290,10 @@ pub(crate) trait AnyHost {
     /// Syncs this host's native window theme with the current process-wide `app_color_scheme()`.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     fn apply_app_color_scheme(&mut self) {}
+    /// Windows: reconciles `El::system_material` native vs fallback state after a system effects
+    /// policy notification.
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    fn on_material_policy_changed(&mut self) {}
 }
 
 /// Collects startup creation errors from finished hosts and returns whether any loop-keeping host
@@ -388,6 +407,7 @@ impl Windows {
                 if let Some(Some(host)) = self.hosts.get_mut(slot) { host.resumed(event_loop); }
                 self.connect_overlays(overlays, event_loop);
             }
+            app_events::sync_quit_request_hooks(&self.hosts);
         }
     }
 
@@ -422,7 +442,7 @@ impl Windows {
         if exiting || should_exit {
             for host in self.hosts.iter_mut().flatten() { host.cancel_menus(); }
         }
-        if should_exit {
+        if should_exit && !(ok && crate::quit::programmatic_quit()) {
             event_loop.exit();
         }
     }
@@ -529,8 +549,14 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 let proxy = this.proxy.clone();
                 crate::open_url::instance::on_relaunch(move || proxy.send_event(WakeEvent::Reopen).is_ok());
             }
-            let proxy = this.proxy.clone();
-            crate::quit::install(move |ending| proxy.send_event(WakeEvent::Quit(ending)).is_ok());
+            #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+            {
+                let proxy = this.proxy.clone();
+                crate::system_material::windows::set_policy_waker(std::sync::Arc::new(move || {
+                    proxy.send_event(WakeEvent::MaterialPolicyChanged).ok();
+                }));
+            }
+            app_events::install_quit(&this.hosts, &this.proxy);
             crate::open_url::incoming::settle();
             // A window opened at launch took it; a GPU kept for a later one would sit idle until then.
             crate::render::discard_prewarm();
@@ -555,6 +581,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
                     this.cleanup(event_loop);
                     return;
                 }
+                WakeEvent::QuitRequest => { this.quit_request(event_loop); this.cleanup(event_loop); return; }
                 WakeEvent::Turn => { #[cfg(not(target_arch = "wasm32"))] this.turn(event_loop); return; }
                 WakeEvent::FileDrop => return,
                 WakeEvent::AppColorScheme => {
@@ -565,6 +592,13 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 }
                 WakeEvent::LayerPending => {
                     let _ = wayland_wake::step(&mut this.wayland_wake, wayland_wake::Event::WakeReceived);
+                    return;
+                }
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                WakeEvent::MaterialPolicyChanged => {
+                    for host in this.hosts.iter_mut().flatten() {
+                        host.on_material_policy_changed();
+                    }
                     return;
                 }
             };

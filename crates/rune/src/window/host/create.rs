@@ -37,6 +37,9 @@ use crate::window::{WakeEvent, sync_screen_origin_core};
 impl Host {
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(unused_variables))]
     pub(in crate::window) fn try_create(&mut self, event_loop: &ActiveEventLoop, token: Option<String>, focus: bool) -> Result<(), String> {
+        if self.poll_gpu_loss() {
+            return Err(self.terminal_loss.reason().unwrap_or_else(|| "the GPU device was lost".into()));
+        }
         // A released window reopens at the height its content reached while it was gone.
         crate::marks::mark("window.create");
         let built = self.shown && self.build_for_show();
@@ -118,7 +121,7 @@ impl Host {
         let cloak = crate::platform::win32::Cloak::default();
         // Its first frame on the CPU renderer, painted before it shows (`cpu_frame`).
         #[cfg(target_os = "windows")]
-        let cpu_first = visible && !launcher && cpu_frame::opens_on_cpu(self);
+        let cpu_first = visible && !launcher && !self.is_terminal_gpu_policy() && cpu_frame::opens_on_cpu(self);
         #[cfg(target_os = "windows")]
         if visible && !cpu_first {
             // Unfocused (`App::open_inactive` or `WindowsWindowOptions::no_activate`), it never activates.
@@ -214,7 +217,7 @@ impl Host {
         // Linux: its first frame on the CPU renderer too, sent before any GPU is made
         // (`linux::cpu_frame`); a display that takes no CPU frames gives the window back.
         #[cfg(target_os = "linux")]
-        let (window, a11y) = if visible && crate::window::linux::cpu_frame::opens_on_cpu(self) {
+        let (window, a11y) = if visible && !self.is_terminal_gpu_policy() && crate::window::linux::cpu_frame::opens_on_cpu(self) {
             match self.open_on_cpu(event_loop, window, a11y, built) {
                 Ok(()) => return Ok(()),
                 Err(back) => back,
@@ -231,7 +234,7 @@ impl Host {
         // one under a compositor that draws the decorations itself keeps the surface it always had.
         let client_frame = self.client_frame(&window);
         #[cfg(target_os = "windows")]
-        let dcomp_handover = if ((crate::window::win32::resize_sync::enabled() && !transparent && !launcher)
+        let dcomp_handover = if ((self.resize_sync_enabled() && !transparent && !launcher)
             || (cfg!(feature = "windows-system-material") && transparent))
             && matches!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual)
         {
@@ -320,6 +323,12 @@ impl Host {
                                 return Err(format_window_setup_error(err));
                             }
                             Decision::MoveOn => {
+                                if self.is_terminal_gpu_policy() {
+                                    drop((surface, gpu));
+                                    self.app.release_compositor_gpu();
+                                    *self.gpu_pool.borrow_mut() = Weak::default();
+                                    return Err(format_window_setup_error(err));
+                                }
                                 let instance = gpu.instance.clone();
                                 let first_info = gpu.adapter.get_info();
                                 let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
@@ -358,6 +367,11 @@ impl Host {
                                     return Err(format_window_setup_error(err));
                                 }
                                 Decision::MoveOn => {
+                                    if self.is_terminal_gpu_policy() {
+                                        drop((surface, gpu));
+                                        *self.gpu_pool.borrow_mut() = Weak::default();
+                                        return Err(format_window_setup_error(err));
+                                    }
                                     let instance = gpu.instance.clone();
                                     let first_info = gpu.adapter.get_info();
                                     let excluded = Gpu::candidate_info(0, &gpu.adapter, Some(&surface));
@@ -377,12 +391,12 @@ impl Host {
                     }
                 } else {
                     #[cfg(target_os = "linux")]
-                    let (gpu, surface, configured) = match Gpu::for_surface_setup(
-                        features, transparent, make_surface, setup_surface,
+                    let (gpu, surface, configured) = match Gpu::for_surface_setup_with_latch(
+                        self.terminal_loss.latch(), features, transparent, make_surface, setup_surface,
                     ) {
                         Ok(ok) => ok,
                         Err(err) => {
-                            if self.effective_cpu_first().transparent_gpu_fallback(
+                            if !self.is_terminal_gpu_policy() && self.effective_cpu_first().transparent_gpu_fallback(
                                 visible,
                                 transparent,
                                 crate::gpu::pick::env_policy(),
@@ -397,8 +411,8 @@ impl Host {
                         }
                     };
                     #[cfg(not(target_os = "linux"))]
-                    let (gpu, surface, configured) = Gpu::for_surface_setup(
-                        features, transparent, make_surface, setup_surface,
+                    let (gpu, surface, configured) = Gpu::for_surface_setup_with_latch(
+                        self.terminal_loss.latch(), features, transparent, make_surface, setup_surface,
                     ).map_err(format_window_setup_error)?;
                     let gpu = Arc::new(gpu);
                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);
@@ -418,6 +432,7 @@ impl Host {
             self.app.rt_mut().transparent = config.alpha_mode != wgpu::CompositeAlphaMode::Opaque;
         }
         let target_format = if srgb_blend { config.format.remove_srgb_suffix() } else { config.format };
+        self.terminal_loss.attach_gpu(&gpu);
         self.gpu = Some((gpu, renderer));
         let (gpu, renderer) = self.gpu.as_mut().unwrap();
         rebuild_renderer_core(&gpu.device, renderer, target_format, self.app.rt_mut());
@@ -537,6 +552,7 @@ impl Host {
         crate::marks::mark("window.created");
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
         if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
+        if self.poll_gpu_loss() { return Ok(()); }
         // After `on_window`, which may resize it, and before its first focus and frame.
         self.creation_geometry();
         if let (Some(w), Some((gpu, ..))) = (self.win.as_mut(), self.gpu.as_ref()) {
@@ -654,6 +670,9 @@ impl Host {
     /// this keeps failing.
     #[allow(unsafe_code)]
     pub(in crate::window) fn reattach(&mut self, mode: crate::gpu::fallback::GpuMode) -> Result<(), ReattachError> {
+        if self.is_terminal_gpu_policy() {
+            return Err(ReattachError::other("terminal GPU loss policy refuses device replacement"));
+        }
         let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
         let window = w.window.clone();
         // The old surface goes before the device that made it and before the new surface is
@@ -677,7 +696,7 @@ impl Host {
             self.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
         }
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
-        self.app.rt_mut().paint.set_native_materials(false);
+        self.app.rt_mut().paint.set_windows_acrylic_materials(false);
         let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
         drop(w.surface.take());
         #[cfg(target_os = "macos")]
@@ -841,7 +860,24 @@ impl Host {
     pub(in crate::window) fn replace_lost_surface(&mut self) -> bool {
         let lost = self.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost());
         let surface_missing = self.win.as_ref().is_some_and(|w| !w.surface_ok || w.surface.is_none());
-        if !lost && !surface_missing { return true; }
+        match super::gpu_loss::decide_lost_surface(
+            if self.is_terminal_gpu_policy() { crate::GpuLossPolicy::Terminal } else { crate::GpuLossPolicy::Recover },
+            self.gpu_loss_failed(),
+            lost,
+            surface_missing,
+        ) {
+            super::gpu_loss::LostSurfaceAction::Healthy => return true,
+            super::gpu_loss::LostSurfaceAction::LatchTerminal => {
+                if !self.poll_gpu_loss() {
+                    self.latch_loss_latch(crate::render::loss_latch::GpuFailureKind::DeviceLost, "the GPU device was lost");
+                }
+                return false;
+            }
+            super::gpu_loss::LostSurfaceAction::RecreateSurfaceSameDevice => {
+                return self.recreate_surface_same_device();
+            }
+            super::gpu_loss::LostSurfaceAction::Recover => {}
+        }
         let now = crate::time::now();
         let policy = Gpu::env_fallback_policy();
         let software_available = crate::gpu::fallback::software_fallback_available();
@@ -948,7 +984,7 @@ impl ReattachError {
 
 /// The pass that turns premultiplied pixels into straight alpha for a `PostMultiplied` surface on
 /// a backend that composites premultiplied pixels (all but Metal).
-fn alpha_pass(gpu: &Gpu, transparent: bool, config: &wgpu::SurfaceConfiguration, format: wgpu::TextureFormat)
+pub(super) fn alpha_pass(gpu: &Gpu, transparent: bool, config: &wgpu::SurfaceConfiguration, format: wgpu::TextureFormat)
     -> Option<crate::render::surface_alpha::AlphaSurface> {
     (transparent && config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied
         && gpu.adapter.get_info().backend != wgpu::Backend::Metal)

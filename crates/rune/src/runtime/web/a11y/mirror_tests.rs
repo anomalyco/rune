@@ -875,3 +875,85 @@ fn unfocused_text_inputs_areas_and_passwords_mirror_states_omit_secrets_and_hide
     assert!(after_pw.iter().all(|v| v["p"] != pw["p"]), "focused password omitted from mirror");
     assert!(after_pw.iter().any(|v| v["p"] == reason["p"]), "previously focused Reason returns to mirror");
 }
+
+#[test]
+fn secure_editable_combobox_strips_combobox_metadata_suggestions_and_focus_delegation() {
+    use crate::{AutoComplete, Color, HasPopup, TextEdit, text_input};
+
+    struct Scene {
+        secret: TextEdit,
+    }
+    fn view(s: &Scene, _: &mut Cx<Scene>) -> El {
+        col().role("main").size(400.0, 240.0)
+            .child(
+                text_input(&s.secret, crate::tok::type_::BODY)
+                    .single_line()
+                    .key("sec")
+                    .role("combobox")
+                    .label("Secret")
+                    .placeholder("Enter secret", Color::WHITE)
+                    .required(true)
+                    .auto_complete(AutoComplete::Both)
+                    .has_popup(HasPopup::Listbox)
+                    .controls("sec-list")
+                    .owns("sec-list")
+                    .expanded(true)
+                    .active_descendant("sec-opt")
+                    .size(240.0, 32.0)
+                    .on_edit(|s: &mut Scene| &mut s.secret),
+            )
+            .child(
+                col().key("sec-list").role("listbox").label("Secret suggestions").secure()
+                    .child(el().key("sec-opt").role("option").label("hunter2-completion").size(200.0, 24.0)
+                        .child(crate::text("hunter2-completion"))),
+            )
+    }
+
+    let mut rt = Runtime::new(
+        Scene { secret: TextEdit::new("hunter2").secure() },
+        view,
+        (400.0, 240.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    // 1. Unfocused: mirrored as a plain secure textbox (name + states + placeholder), never as a
+    //    combobox and never leaking value, bullet mask, suggestions, or autocomplete/popup links.
+    let raw = rt.a11y_json();
+    assert!(!raw.contains("hunter2"), "secret and suggestion text must not leak: {raw}");
+    assert!(!raw.contains('•'), "bullet mask must not leak: {raw}");
+    let items = items_json(&rt);
+    let sec = find_key(&items, "sec");
+    assert_eq!(
+        (&sec["k"], &sec["o"], &sec["t"], sec.get("rq"), sec.get("ph")),
+        (&json!("textbox"), &json!("textbox"), &json!("Secret"), Some(&json!(true)), Some(&json!("Enter secret"))),
+    );
+    for forbidden in ["v", "ac", "hp", "ct", "ow", "x"] {
+        assert_eq!(sec.get(forbidden), None, "unfocused secure combobox must not expose {forbidden}: {sec}");
+    }
+
+    // 2. Focused: omitted from [data-rune-a11y] (zero duplicate textbox), and focus proxy targets
+    //    <input type="password"> (o: textbox, sec: true) without delegating to active_descendant
+    //    suggestion options or leaking value, mask, expanded, or autocomplete/popup attributes.
+    let mut mirror = A11yMirror::default();
+    let _ = rt.core().web_a11y_patch(&mut mirror);
+    assert!(rt.core_mut().web_a11y_action(&json!({ "kind": "a11y_press", "path": sec["p"] })));
+    rt.frame(0.0);
+    assert!(rt.state.secret.focused);
+
+    let after = rt.a11y_json();
+    assert!(!after.contains("hunter2") && !after.contains('•'), "focused mirror must not leak: {after}");
+    let after_items: Vec<Value> = serde_json::from_str(&after).unwrap();
+    assert!(after_items.iter().all(|v| v["p"] != sec["p"]), "focused secure combobox omitted from mirror");
+
+    let focus_str = rt.core().web_a11y_focus(&mut mirror).expect("password focus proxy").to_owned();
+    assert!(!focus_str.contains("hunter2") && !focus_str.contains('•'), "focus proxy must not leak: {focus_str}");
+    let focus: Value = serde_json::from_str(&focus_str).unwrap();
+    assert_eq!(
+        (&focus["o"], &focus["t"], focus.get("sec"), focus.get("rq"), focus.get("ph")),
+        (&json!("textbox"), &json!("Secret"), Some(&json!(true)), Some(&json!(true)), Some(&json!("Enter secret"))),
+    );
+    for forbidden in ["v", "ac", "fac", "f", "hp", "ct", "ow", "x"] {
+        assert_eq!(focus.get(forbidden), None, "focused secure combobox must not expose {forbidden}: {focus}");
+    }
+}

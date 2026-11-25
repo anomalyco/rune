@@ -30,6 +30,15 @@ fn collect_virtual_inputs_in(el: &El, parent: &str, index: usize, inert: bool, r
     }
 }
 
+struct ViewMeasured {
+    layout: LayoutEngine,
+    nodes: Vec<Node>,
+    pending: Vec<memo_reuse::PendingFlat>,
+    reused: Vec<memo_reuse::ReusedSpan>,
+    taken: Vec<(u32, u32)>,
+    above_fit_styles: Vec<(usize, CompactStyle)>,
+}
+
 impl RuntimeCore {
     pub(in crate::runtime) fn measure(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
         self.measure_pass(app, tx, true)
@@ -62,7 +71,11 @@ impl RuntimeCore {
             app,
             env: self.env,
             viewport: self.viewport,
-            fit_height: self.host.fit_height,
+            content_sizing: self.host.content_sizing,
+            content_limits: (
+                self.host.content_limits.0.map(|(w, h)| (w / self.host.zoom.k, h / self.host.zoom.k)),
+                self.host.content_limits.1.map(|(w, h)| (w / self.host.zoom.k, h / self.host.zoom.k)),
+            ),
             system_reduced_motion: self.host.system_reduced_motion,
             pointer_locked: self.pointer_locked(),
             // The window's controls are in its points; the view's are over the zoom.
@@ -187,7 +200,7 @@ impl Measurement<'_> {
         }
         // Index-built rows build here, so memos inside them share the view's cache. A window that
         // fits its content lays its root out at its natural height, which nothing bounds.
-        let bound = if self.fit_height { f32::INFINITY } else { self.viewport.1 };
+        let bound = if self.content_sizing.fits_height() { f32::INFINITY } else { self.viewport.1 };
         self.window_tree(&mut root, "", 0, None, tx, force_all, bound, false, false, None, false, keep_windows);
         root
     }
@@ -205,7 +218,7 @@ impl Measurement<'_> {
         let height = cx.titlebar.height.or(cx.titlebar.titlebar.map(|t| t.height())).unwrap_or(caption.height);
         let hidden = caption.hidden || cx.titlebar.titlebar.is_some_and(|t| !t.has_controls());
         let caption = crate::titlebar::Caption { height, hidden, ..*caption };
-        (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.fit_height), cx)
+        (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.content_sizing.fits_height()), cx)
     }
 
     /// What a memo scope hashes of the window's controls and state (`Cx::titlebar_inset`,
@@ -236,7 +249,7 @@ impl Measurement<'_> {
     }
 
     pub(in crate::runtime) fn finish_from(mut self, text: &mut TextSystem, tx: &Tx, mut passes: usize) -> Measured {
-        let (layout, nodes, memo_pending, memo_reused, taken_paths) = loop {
+        let ViewMeasured { layout, nodes, pending: memo_pending, reused: memo_reused, taken: taken_paths, above_fit_styles } = loop {
             passes += 1;
             self.pass = Pass::of(passes);
             self.virtual_culled.clear();
@@ -245,17 +258,17 @@ impl Measurement<'_> {
             self.windowed.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
-            let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(text, tx, self.pass.forced());
-            if !self.measure_virtuals(&nodes, tx.commit.lands()) { break (layout, nodes, pending, reused, taken); }
-            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
-            nodes.clear();
-            *self.spare_nodes = nodes;
-            reused.clear();
-            taken.clear();
-            self.memo.pending_scratch = pending;
-            self.memo.reused_scratch = reused;
-            self.memo.taken_paths_scratch = taken;
-            *self.layout = layout;
+            let mut vm = self.measure_view(text, tx, self.pass.forced());
+            if !self.measure_virtuals(&vm.nodes, tx.commit.lands()) { break vm; }
+            memo_reuse::restore_moved_nodes(self.nodes, &mut vm.nodes, &vm.reused, &vm.taken);
+            vm.nodes.clear();
+            *self.spare_nodes = vm.nodes;
+            vm.reused.clear();
+            vm.taken.clear();
+            self.memo.pending_scratch = vm.pending;
+            self.memo.reused_scratch = vm.reused;
+            self.memo.taken_paths_scratch = vm.taken;
+            *self.layout = vm.layout;
         };
         // Exiting virtual subtrees still use their origin and measured extent while
         // fading. Runtime prunes this metadata with the retained scene nodes.
@@ -274,6 +287,7 @@ impl Measurement<'_> {
             memo_reused,
             taken_paths,
             selection: Vec::new(),
+            above_fit_styles,
         }
     }
 
@@ -522,7 +536,7 @@ impl Measurement<'_> {
         self.kept_lists.extend(quiet);
         true
     }
-    fn measure_view(&mut self, text: &mut TextSystem, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>, Vec<(u32, u32)>) {
+    fn measure_view(&mut self, text: &mut TextSystem, tx: &Tx, force_all: bool) -> ViewMeasured {
         let scale = self.env.scale;
         let fresh_cx = |this: &Self| cx::CxCore {
             env: this.env,
@@ -613,7 +627,7 @@ impl Measurement<'_> {
             nodes.reserve(self.nodes.len().max(32));
             // Root constraints are part of the retained style, not a dirty write after flattening.
             // A window that fits its content lays the root out at its natural height.
-            root.style.set_size(relayout::root_size(self.viewport, self.fit_height));
+            relayout::apply_root_sizing(&mut root.style, self.viewport, self.content_sizing, self.content_limits);
             let (mut pending, mut reused, mut taken_paths, root_id, missed_virtual_memo) = {
                 let mut pending = std::mem::take(&mut self.memo.pending_scratch);
                 pending.clear();
@@ -676,8 +690,8 @@ impl Measurement<'_> {
             }
             if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, text, &reused); }
             taffy.finish_flatten();
-            let (taffy, nodes) = self.solve(text, taffy, root_id, nodes, &reused);
-            break (taffy, nodes, pending, reused, taken_paths);
+            let (taffy, nodes, above_fit_styles) = self.solve(text, taffy, root_id, nodes, &reused);
+            break ViewMeasured { layout: taffy, nodes, pending, reused, taken: taken_paths, above_fit_styles };
         }
     }
 

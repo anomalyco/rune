@@ -63,7 +63,7 @@ pub(super) fn options(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
             if !s.table.is_selected(&id) {
                 s.table.select(id.clone());
             }
-            s.table_menu = Some((id.clone(), p));
+            s.table_menu = Some(("options", id.clone(), p));
         });
         if !cursor_outline && selected {
             r = r.child(
@@ -83,10 +83,11 @@ pub(super) fn options(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     .grow(1.0)
     .min_h(0.0);
 
-    let target = s.table_menu.as_ref().map(|(id, _)| id.clone()).unwrap_or_default();
+    let menu = s.table_menu.as_ref().filter(|(which, _, _)| *which == "options");
+    let target = menu.map(|(_, id, _)| id.clone()).unwrap_or_default();
     let copy_id = target.clone();
     let solo_id = target.clone();
-    let table_with_menu = context_menu("table-row-menu", table, s.table_menu.as_ref().map(|(_, p)| *p))
+    let table_with_menu = context_menu("table-row-menu", table, menu.map(|(_, _, p)| *p))
         .item(
             MenuItem::new(format!("Copy {target}")).on_select_tx(move |s: &mut G, tx: &mut Tx| {
                 tx.copy(&copy_id);
@@ -219,7 +220,7 @@ pub(super) fn wide(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
             _ => Cell::text(format!("tr_{:08x}{:08x}", i * 2654435761, i + 97)).mono().muted(),
         })
         .on_header_secondary_press(|s: &mut G, col, press, _| {
-            s.table_menu = Some((col.to_owned(), press));
+            s.table_menu = Some(("wide", col.to_owned(), press));
         })
         .on_column_fit(|s: &mut G, col, _| {
             let w = fit_width_for(col);
@@ -230,7 +231,8 @@ pub(super) fn wide(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         .grow(1.0)
         .min_h(0.0);
 
-    let target_id = s.table_menu.as_ref().map(|(id, _)| id.clone()).unwrap_or_default();
+    let menu_state = s.table_menu.as_ref().filter(|(which, _, _)| *which == "wide");
+    let target_id = menu_state.map(|(_, id, _)| id.clone()).unwrap_or_default();
     let target_title = cols
         .iter()
         .find(|col| col.id() == target_id)
@@ -239,7 +241,7 @@ pub(super) fn wide(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     let fit_id = target_id.clone();
     let reset_id = target_id.clone();
     let hide_id = target_id.clone();
-    let mut menu = context_menu("table-header-menu", table, s.table_menu.as_ref().map(|(_, p)| *p))
+    let mut menu = context_menu("table-header-menu", table, menu_state.map(|(_, _, p)| *p))
         .item(MenuItem::new(format!("Fit {target_title} to content")).on_select(move |s: &mut G| {
             let w = fit_width_for(&fit_id);
             s.table.set_column_width(fit_id.clone(), w);

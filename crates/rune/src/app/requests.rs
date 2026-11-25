@@ -103,6 +103,10 @@ pub(crate) struct SharedCore {
     /// `AppHandle::quit` was called, or the web app is ending.
     pub(crate) quitting: AtomicBool,
     pub(crate) window_error: Mutex<Option<String>>,
+    /// Shared terminal GPU-loss latch synced from `App::gpu_loss_policy` so any `AppHandle`
+    /// cloned before or after `.gpu_loss_policy(...)` sees the app's latch.
+    #[cfg(not(target_arch = "wasm32"))]
+    gpu_loss_latch: Mutex<Option<Arc<crate::render::loss_latch::GpuLossLatch>>>,
 }
 
 impl SharedCore {
@@ -198,6 +202,19 @@ impl SharedCore {
 
     pub(crate) fn window_error(&self) -> Option<String> {
         self.window_error.lock().unwrap().clone()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn set_gpu_loss_latch(
+        &self,
+        latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>,
+    ) {
+        *self.gpu_loss_latch.lock().unwrap_or_else(|e| e.into_inner()) = latch;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn gpu_loss_latch(&self) -> Option<Arc<crate::render::loss_latch::GpuLossLatch>> {
+        self.gpu_loss_latch.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub(crate) fn set_window_error(&self, error: Option<String>) {

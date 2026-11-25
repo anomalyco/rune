@@ -337,3 +337,50 @@ fn steady_cpu_overlay_frame_allocates_nothing_and_default_gpu_frame_unchanged() 
     }
     assert_eq!(allocs() - before_cpu, 0, "steady CPU overlay frames must allocate nothing after warm-up");
 }
+
+#[test]
+fn overlay_send_pointer_steady_moves_allocate_nothing() {
+    use rune::{App, AppSpec, OverlaySpec, PointerInput, el};
+    fn view(_: &(), _: &mut Cx<()>) -> El { el().size(120.0, 40.0).hit() }
+    let mut app = App::new(AppSpec::new("inject-alloc", (120.0, 40.0), || (), view));
+    let handle = app.overlay(OverlaySpec::new("inject-alloc", (120.0, 40.0), view), ());
+    // Warm each mutex once: on macOS `std::sync::Mutex` lazily allocates its `os_unfair_lock`
+    // box on first lock (never again in steady state).
+    handle.send_pointer(PointerInput::move_to(10.0, 10.0));
+    let _ = handle.screen_to_local((0, 0));
+    let before = allocs();
+    for i in 0..500 {
+        handle.send_pointer(PointerInput::move_to((i % 100) as f32, 20.0));
+        let _ = handle.screen_to_local((i, i));
+    }
+    assert_eq!(allocs() - before, 0, "steady-state send_pointer moves and screen_to_local must allocate nothing");
+}
+
+#[test]
+fn content_sized_fit_overlay_steady_frame_allocates_nothing() {
+    use rune::{Color, ContentSizing, OverlayOptions, OverlaySpec};
+
+    fn candidate_view(items: &Vec<&'static str>, _: &mut Cx<Vec<&'static str>>) -> El {
+        col()
+            .padding(8.0)
+            .gap(4.0)
+            .radius(8.0)
+            .fill(Color { r: 0.08, g: 0.1, b: 0.14, a: 0.94 })
+            .children(items.iter().map(|s| text(*s).font(rune::TextStyle::new(13.0, 400.0)).color(Color::WHITE)))
+    }
+
+    let _cfg = OverlaySpec::new("candidates", (0.0, 0.0), candidate_view)
+        .options(OverlayOptions::default())
+        .sizing(ContentSizing::Fit)
+        .max_size((420.0, 320.0));
+
+    let mut rt = Runtime::new(vec!["1. alpha", "2. beta", "3. gamma"], candidate_view, (140.0, 88.0), Env::new(true, 1.5));
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let before = allocs();
+    for _ in 0..30 {
+        let _ = rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(allocs() - before, 0, "steady frames of a content-sized overlay must allocate nothing");
+}

@@ -395,3 +395,53 @@ fn on_focus_lost_observes_without_ending_held_modifiers_silently() {
     assert_eq!(modifiers(&rt.state.app), [(Modifier::AltLeft, true), (Modifier::AltLeft, false)]);
     assert!(rt.elements().iter().any(|e| e.text.as_deref() == Some("lost 1")), "the view builds again");
 }
+
+#[test]
+fn on_focus_lost_order_with_physical_and_focus_change_and_no_unused_cost() {
+    #[derive(Default)]
+    struct S { log: Vec<&'static str>, take_physical: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let take = s.take_physical;
+        col().size(300.0, 200.0)
+            .child(
+                el().key("a").size(100.0, 40.0).focusable(true)
+                    .on_physical_input(move |s: &mut S, ev, _| {
+                        if matches!(ev, PhysicalInput::FocusLost) {
+                            s.log.push("physical");
+                            return take;
+                        }
+                        false
+                    })
+                    .on_focus_lost(|s: &mut S, _| s.log.push("focus_lost"))
+                    .on_focus_change(|s: &mut S, focused, _| {
+                        s.log.push(if focused { "focus_in" } else { "focus_out" });
+                    }),
+            )
+            .child(el().key("b").size(100.0, 40.0).focusable(true))
+    }
+    let mut rt = Runtime::new(S { log: Vec::new(), take_physical: true }, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    // Unused FocusSpec::EMPTY keeps focus_lost None without allocating.
+    assert!(<crate::el::FocusSpec as crate::cold::Empty>::EMPTY.focus_lost.is_none());
+
+    rt.update(|_, tx| tx.focus("a", false));
+    rt.frame(0.0);
+    assert_eq!(rt.state.log, ["focus_in"]);
+    rt.state.log.clear();
+
+    // Window deactivation: physical -> focus_lost (even when physical returned true); no focus_change.
+    rt.window_focus(false);
+    rt.frame(0.0);
+    assert_eq!(rt.state.log, ["physical", "focus_lost"]);
+    rt.state.log.clear();
+
+    // Window returns: no blur; focus is still on "a".
+    rt.window_focus(true);
+    rt.frame(0.0);
+    assert!(rt.state.log.is_empty());
+
+    // Moving focus inside the window: physical -> focus_lost -> focus_out.
+    rt.update(|_, tx| tx.focus("b", false));
+    rt.frame(0.0);
+    assert_eq!(rt.state.log, ["physical", "focus_lost", "focus_out"]);
+}

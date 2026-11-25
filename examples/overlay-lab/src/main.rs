@@ -2,7 +2,7 @@
 //! full-screen area pickers, with optional capture exclusion.
 
 use std::sync::{Arc, Mutex};
-use rune::{Align, App, AppSpec, Color, Cx, Display, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, RendererKind, RunOptions, ScreenEdge, Tx, WindowHandle, WindowSpec, WindowsWindowOptions, col, el, row, text};
+use rune::{Align, App, AppSpec, Color, ContentSizing, Cx, Display, DisplayTarget, El, Key, KeyEvent, KeyPolicy, OverlayHandle, OverlayInput, OverlayLevel, OverlayOptions, OverlayPlacement, OverlaySpec, Phase, PointerButton, PointerInput, RendererKind, RunOptions, ScreenEdge, Tx, WindowHandle, WindowSpec, WindowsWindowOptions, col, el, row, text};
 
 const BLUE: Color = Color { r: 0.25, g: 0.55, b: 1.0, a: 1.0 };
 const DARK: Color = Color { r: 0.055, g: 0.065, b: 0.085, a: 0.97 };
@@ -22,8 +22,16 @@ struct Handles {
     pickers: Vec<OverlayHandle<State>>,
     window: Option<WindowHandle>,
 }
+const CANDIDATE_SETS: &[&[&str]] = &[
+    &["1. hi", "2. ok"],
+    &["1. candidate", "2. completion", "3. composition", "4. confirm"],
+    &["1. Short", "2. A much longer candidate entry that wraps cleanly inside max_size", "3. Multi-monitor DPI fit", "4. CPU & GPU parity", "5. Click to cycle"],
+];
+
 struct State {
     underlay: bool,
+    candidates: bool,
+    candidate_step: usize,
     native_window: bool,
     exclude_from_capture: bool,
     undecorated_shadow: bool,
@@ -43,7 +51,7 @@ struct State {
 }
 fn init() -> State {
     State {
-        underlay: false, native_window: false, exclude_from_capture: true, undecorated_shadow: true,
+        underlay: false, candidates: false, candidate_step: 0, native_window: false, exclude_from_capture: true, undecorated_shadow: true,
         no_activate: false, tool_window: false, hit_only: false, clicks: 0, picker: false, expanded: false,
         edge_slot: 0, hovered: String::new(), work_area: String::new(), selection: None, selection_at_press: None,
         pointer: rune::Live::new([160.0, 100.0]), handles: Arc::default(),
@@ -60,6 +68,21 @@ fn format_work_area(display: &Display) -> String {
     let ((wx, wy), (ww, wh)) = display.work_area();
     let ((dx, dy), (dw, dh)) = (display.position, display.size);
     format!("work_area ({wx},{wy}) {ww}×{wh} / display ({dx},{dy}) {dw}×{dh}")
+}
+fn inject_demo(s: &mut State) {
+    let Some(pill) = s.handles.lock().ok().and_then(|h| h.pill.clone()) else { return };
+    s.hovered = "Injecting cross-thread pointer sweep...".into();
+    std::thread::spawn(move || {
+        let steps = [(120.0, 68.0), (220.0, 68.0), (340.0, 68.0)];
+        for (x, y) in steps {
+            pill.send_pointer(PointerInput::move_to(x, y));
+            std::thread::sleep(std::time::Duration::from_millis(90));
+        }
+        let (x, y) = steps[2];
+        pill.send_pointer(PointerInput::down(x, y, PointerButton::Primary));
+        pill.send_pointer(PointerInput::up(x, y, PointerButton::Primary));
+        pill.send_pointer(PointerInput::Leave);
+    });
 }
 fn cycle_edge(s: &mut State) {
     s.edge_slot = (s.edge_slot + 1) % EDGE_SLOTS.len();
@@ -146,6 +169,21 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         }
         return root;
     }
+    if s.candidates {
+        let items = CANDIDATE_SETS[s.candidate_step % CANDIDATE_SETS.len()];
+        let mode = if cx.renderer_kind().is_cpu() { "CPU" } else { "GPU" };
+        return col()
+            .key("candidates-card")
+            .hit()
+            .padding(10.0)
+            .gap(4.0)
+            .radius(10.0)
+            .fill(DARK)
+            .border(1.0, BLUE.alpha(0.45))
+            .on_press(|s: &mut State| s.candidate_step = (s.candidate_step + 1) % CANDIDATE_SETS.len())
+            .child(text(format!("Candidates ({mode} · click to resize)")).color(BLUE))
+            .children(items.iter().map(|line| text(*line).wrap().color(Color::WHITE)));
+    }
     if s.hit_only {
         return col().w_full().h_full().center().child(el().key("hit-only").size(300.0, 48.0).hit()
             .fill(DARK).child(text("Native hit region").color(Color::WHITE)));
@@ -156,6 +194,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .child(chip("Screen", show_picker)).child(chip("iPhone", |s| s.expanded = !s.expanded));
     if s.expanded { chips = chips.child(chip("Route", |s| s.expanded = false)); }
     chips = chips.child(chip("Paste", |s| s.expanded = !s.expanded))
+        .child(chip("Inject", inject_demo))
         .child(chip("Edge", cycle_edge))
         .child(chip("×", |s| { if let Some(pill) = &s.handles.lock().unwrap().pill { pill.hide(); } }));
     let status = if !s.hovered.is_empty() { s.hovered.as_str() } else { s.work_area.as_str() };
@@ -177,6 +216,8 @@ fn spec() -> AppSpec<State> {
                 s.work_area = "Bottom · End · work_area (0,0) 1920×1032 / display (0,0) 1920×1080".into();
             }),
             ("picker", |s| { s.picker = true; s.selection = Some([140.0, 100.0, 560.0, 320.0]); }),
+            ("pointer-inject", |s| { s.hovered = "Injected · OverlayHandle::screen_to_local + send_pointer".into(); }),
+            ("candidates", |s| { s.candidates = true; s.candidate_step = 2; }),
             ("native-window", |s| { s.native_window = true; s.exclude_from_capture = true; s.undecorated_shadow = true; }),
         ],
         fonts: &[], families: ("sans-serif", "monospace"), setup: None, poll: None, on_key: Some(key) }
@@ -270,6 +311,7 @@ fn main() {
     }
     rune::run_windows_with(RunOptions { accessory: true }, |displays| {
         let cpu_overlay = std::env::args().any(|a| a == "--cpu");
+        let candidates_mode = std::env::args().any(|a| a == "--candidates");
         let overlay_renderer = if cpu_overlay { RendererKind::Cpu } else { RendererKind::Gpu };
         let exclude = std::env::var_os("OVERLAY_LAB_INCLUDE_IN_CAPTURE").is_none();
         let handles = Arc::new(Mutex::new(Handles::default()));
@@ -288,11 +330,19 @@ fn main() {
         }
         let mut state = init();
         state.handles = handles.clone();
+        state.candidates = candidates_mode;
         state.work_area = displays.iter().find(|d| d.primary).or_else(|| displays.first()).map(format_work_area).unwrap_or_default();
-        let pill = app.overlay(OverlaySpec { margin: 40.0, ..OverlaySpec::new("Rune pill", (680.0, 160.0), view) }.options(OverlayOptions {
+        let mut pill_cfg = OverlaySpec {
+            margin: 40.0,
+            ..OverlaySpec::new("Rune pill", if candidates_mode { (0.0, 0.0) } else { (680.0, 160.0) }, view)
+        }.options(OverlayOptions {
             display: DisplayTarget::UnderPointer, follow_pointer: true,
             input: OverlayInput::Regions, exclude_from_capture: exclude, level: OverlayLevel::AboveOverlays, prewarm: true, ..Default::default()
-        }).renderer(overlay_renderer).on_created(|created| eprintln!("overlay-lab pill created {created:?}")), state);
+        }).renderer(overlay_renderer).on_created(|created| eprintln!("overlay-lab pill created {created:?}"));
+        if candidates_mode {
+            pill_cfg = pill_cfg.sizing(ContentSizing::Fit).max_size((420.0, 320.0));
+        }
+        let pill = app.overlay(pill_cfg, state);
         handles.lock().unwrap().pill = Some(pill.clone());
         #[cfg(target_os = "macos")]
         native_probe(pill.clone(), app.handle());
