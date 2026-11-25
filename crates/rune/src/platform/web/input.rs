@@ -323,7 +323,12 @@ impl Running {
             }
             Some("touch_hold") => {
                 let id = event["id"].as_u64().unwrap_or(0);
-                if !self.app.host_touch_hold(id) { return false; }
+                {
+                    let now = crate::time::now();
+                    let _input = crate::input::time::scope(Some(now));
+                    if !self.app.host_touch_hold(id) { return false; }
+                    crate::input::time::record_last(now);
+                }
                 self.full_redraw = true;
                 self.app.frame(0.0);
                 self.apply_frame_requests(window);
@@ -336,11 +341,10 @@ impl Running {
         self.full_redraw = true;
         let mut activate = false;
         let mut flush_a11y = false;
-        // What a person typed or pressed through the page's own elements is input too, for
-        // `rune::last_input` (an app holds background work while someone types).
-        if matches!(event["kind"].as_str(), Some("edit" | "preedit" | "selection" | "key" | "paste" | "a11y_press" | "a11y_link")) {
-            crate::input::time::typed();
-        }
+        // What a person typed, scrolled, hovered, pasted or activated through the page's own
+        // elements is live input too: stamp its arrival time (`Tx::input_time`) and `last_input`.
+        let _input = event["kind"].as_str().is_some_and(crate::input::time::is_web_dom_input)
+            .then(crate::input::time::arrived_now);
         match event["kind"].as_str() {
             Some("viewport") => {
                 let insets = std::array::from_fn(|i| event["insets"][i].as_f64().unwrap_or(0.0).max(0.0) as f32);

@@ -94,41 +94,31 @@ impl Host {
         let f = &mut self.files;
         let rt = self.app.rt_mut();
         let zoom = rt.zoom();
-        let view_at = |(x, y): (f32, f32)| (x / zoom, y / zoom);
-        let mut queued = false;
-        // Native drop targets (AppKit, Win32 OLE) report each step in window points; winit's
-        // fallback events omit the position, so the host samples the pointer for them.
-        for step in native.into_iter().chain(std::mem::take(&mut f.steps)) {
-            queued |= match step {
-                FileStep::Enter(paths, Some(p)) => { rt.drag_files(paths, Some(view_at(p))); true }
-                FileStep::Enter(paths, None) => {
-                    let pointer = crate::input::drop_pointer::DropPointer::new();
-                    f.at = pointer.sample(&l.window, zoom).or_else(|| rt.pointer());
-                    f.pointer = Some(pointer);
-                    rt.drag_files(paths, f.at);
-                    true
-                }
-                FileStep::Move(p) => rt.drag_files_to(Some(view_at(p))),
-                FileStep::Drop(paths, Some(p)) => { rt.drop_files(paths, Some(view_at(p))); true }
-                FileStep::Drop(paths, None) => {
-                    // A drop with no drag before it (Windows' WM_DROPFILES) samples too.
-                    let pointer = f.pointer.take().unwrap_or_else(crate::input::drop_pointer::DropPointer::new);
-                    let at = pointer.sample(&l.window, zoom).or(f.at.take()).or_else(|| rt.pointer());
-                    rt.drop_files(paths, at);
-                    true
-                }
-                FileStep::Leave => {
-                    f.pointer = None;
-                    f.at = None;
-                    rt.drag_files_leave();
-                    true
-                }
-            };
-        }
+        // Native drop targets (AppKit, Win32 OLE, Wayland) report each step in window points;
+        // winit's fallback events omit the position, so the host samples the pointer for them.
+        let steps: Vec<_> = native.into_iter().chain(std::mem::take(&mut f.steps)).collect();
+        let mut queued = f.dispatch_steps(
+            rt,
+            steps,
+            |f| {
+                let pointer = crate::input::drop_pointer::DropPointer::new();
+                f.at = pointer.sample(&l.window, zoom);
+                f.pointer = Some(pointer);
+                f.at
+            },
+            |f| {
+                // A drop with no drag before it (Windows' WM_DROPFILES) samples too.
+                let pointer = f.pointer.take().unwrap_or_else(crate::input::drop_pointer::DropPointer::new);
+                pointer.sample(&l.window, zoom).or(f.at.take())
+            },
+        );
         // Sampled even when still, which also notices a target that unmounted under the drag.
         if !queued && let Some(at) = f.pointer.as_ref().and_then(|p| p.sample(&l.window, zoom)) {
             f.at = Some(at);
+            let now = crate::time::now();
+            let _input = crate::input::time::scope(Some(now));
             queued = rt.drag_files_to(Some(at));
+            if queued { crate::input::time::record_last(now); }
         }
         if !queued { return; }
         if !self.life.covered() && !l.minimized() { l.request_redraw(); } else {

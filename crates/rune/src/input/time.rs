@@ -11,15 +11,34 @@ thread_local! {
     static LAST: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
-/// When this thread's windows last took an input event (a key, the pointer, a wheel or a
-/// gesture) from the platform: the moment it was dispatched, not its `Tx::input_time`, so
-/// input dispatched after a frame is always later than that frame. `None` before any.
+/// When this thread's windows last took an input event (a key, the pointer, a wheel, a touch,
+/// a file drag/drop or a gesture) from the platform: the moment it was dispatched, not its
+/// `Tx::input_time`, so input dispatched after a frame is always later than that frame. `None`
+/// before any.
 pub fn last_input() -> Option<Instant> { LAST.with(Cell::get) }
 
-/// Input the platform delivered outside a window event (a browser page's own text field): it
-/// counts for [`last_input`].
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(crate) fn typed() { LAST.with(|c| c.set(Some(crate::time::now()))); }
+/// Records `at` as the latest live input dispatch time for [`last_input`].
+pub(crate) fn record_last(at: Instant) { LAST.with(|c| c.set(Some(at))); }
+
+/// A scope for live host input delivered outside a winit [`WindowEvent`](winit::event::WindowEvent)
+/// (native file drag-and-drop steps, Wayland layer-shell input, browser DOM input), stamped now
+/// and recorded for [`last_input`].
+pub(crate) fn arrived_now() -> Scope {
+    let now = crate::time::now();
+    record_last(now);
+    scope(Some(now))
+}
+
+/// Whether a browser `dom_event` `kind` is live user input that stamps `Tx::input_time` and
+/// [`last_input`]. (`"touch_hold"` is stamped separately only when it fires a hold.)
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+pub(crate) fn is_web_dom_input(kind: &str) -> bool {
+    matches!(
+        kind,
+        "edit" | "preedit" | "selection" | "secure" | "secure_replace"
+            | "key" | "paste" | "a11y_press" | "a11y_link" | "leave" | "wheel_page" | "hover"
+    )
+}
 
 /// The arrival time of the input being dispatched on this thread, if any.
 pub(crate) fn current() -> Option<Instant> { CURRENT.with(Cell::get) }
@@ -41,9 +60,11 @@ enum Kind {
     Key,
     Mouse,
     Wheel,
+    Touch,
     Magnify,
     Rotate,
     SmartMagnify,
+    Files,
 }
 
 impl Kind {
@@ -53,9 +74,11 @@ impl Kind {
             E::KeyboardInput { .. } | E::ModifiersChanged(_) | E::Ime(_) => Kind::Key,
             E::MouseInput { .. } | E::CursorMoved { .. } | E::CursorLeft { .. } => Kind::Mouse,
             E::MouseWheel { .. } => Kind::Wheel,
+            E::Touch(_) => Kind::Touch,
             E::PinchGesture { .. } => Kind::Magnify,
             E::RotationGesture { .. } => Kind::Rotate,
             E::DoubleTapGesture { .. } => Kind::SmartMagnify,
+            E::HoveredFile(_) | E::DroppedFile(_) | E::HoveredFileCancelled => Kind::Files,
             _ => return None,
         })
     }
@@ -86,6 +109,7 @@ fn native(kind: Kind) -> Option<Instant> {
         Kind::Magnify => ty == T::Magnify,
         Kind::Rotate => ty == T::Rotate,
         Kind::SmartMagnify => ty == T::SmartMagnify,
+        Kind::Touch | Kind::Files => false,
     };
     // The uptime is read after the event, so never before its timestamp.
     matches.then(|| since_boot(crate::time::now(), NSProcessInfo::processInfo().systemUptime(), timestamp))
