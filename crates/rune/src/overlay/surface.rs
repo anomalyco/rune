@@ -378,7 +378,8 @@ impl OverlayCore {
                     self.renderer = None;
                     app.release_compositor_gpu();
                 }
-                let made = Gpu::for_surface_setup(
+                let made = Gpu::for_surface_setup_with_latch(
+                    self.gpu_loss_latch.as_ref(),
                     features,
                     true,
                     make_surface,

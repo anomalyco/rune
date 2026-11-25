@@ -363,13 +363,25 @@ impl<S: 'static> crate::App<S> {
         {
             match policy {
                 GpuLossPolicy::Terminal => {
-                    let latch = self.gpu_loss_latch.get_or_insert_with(GpuLossLatch::new).clone();
+                    let latch = self
+                        .gpu_loss_latch
+                        .get_or_insert_with(|| {
+                            let latch = GpuLossLatch::new();
+                            let shared = Arc::clone(&self.shared.core);
+                            latch.add_wake(Arc::new(move |reason| {
+                                shared.set_window_error(Some(reason.to_owned()));
+                            }));
+                            latch
+                        })
+                        .clone();
+                    self.shared.core.set_gpu_loss_latch(Some(Arc::clone(&latch)));
                     for overlay in &mut self.overlays {
                         overlay.set_gpu_loss_latch(Some(Arc::clone(&latch)));
                     }
                 }
                 GpuLossPolicy::Recover => {
                     self.gpu_loss_latch = None;
+                    self.shared.core.set_gpu_loss_latch(None);
                     for overlay in &mut self.overlays {
                         overlay.set_gpu_loss_latch(None);
                     }
@@ -377,6 +389,56 @@ impl<S: 'static> crate::App<S> {
             }
         }
         self
+    }
+}
+
+impl<S: 'static> crate::AppHandle<S> {
+    /// App-attributed form of [`crate::warm_gpu_with`] on Windows and Linux (no-op on macOS and
+    /// `wasm32`).
+    ///
+    /// Under [`GpuLossPolicy::Recover`] (the default), behaves like [`crate::warm_gpu_with`]:
+    /// warms a GPU device on a background thread and runs `prepare` with the new or live
+    /// `wgpu::Device`.
+    ///
+    /// Under [`GpuLossPolicy::Terminal`], binds this app's failure latch to the warm-up work and
+    /// ready device (whether this handle was cloned before or after
+    /// [`App::gpu_loss_policy`](crate::App::gpu_loss_policy)): refuses warm-up once latched,
+    /// latches the app if device creation, `prepare`, or the parked device fails (instead of
+    /// silently discarding the failed device and creating a replacement when a window or overlay
+    /// opens), and detaches cleanly on normal linger expiry, discard, or shutdown so clean drops
+    /// never falsely trip the latch.
+    ///
+    /// While a cold warm-up is already running or parked, later calls extend its linger deadline
+    /// without replacing the initiating owner or callback.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, GpuLossPolicy, el};
+    ///
+    /// fn build_embedded_pipelines(_device: &wgpu::Device) {}
+    ///
+    /// let spec = AppSpec::new("App", (960.0, 640.0), || (), |_, _| el());
+    /// let app = App::new(spec).gpu_loss_policy(GpuLossPolicy::Terminal);
+    /// let handle = app.handle();
+    /// handle.warm_gpu_with(wgpu::Features::empty(), |device| {
+    ///     build_embedded_pipelines(device);
+    /// });
+    /// app.run();
+    /// ```
+    pub fn warm_gpu_with(
+        &self,
+        features: wgpu::Features,
+        prepare: impl FnOnce(&wgpu::Device) + Send + 'static,
+    ) {
+        #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+        {
+            let owner = self.shared.core.gpu_loss_latch();
+            if owner.as_ref().is_some_and(|l| l.is_failed()) {
+                return;
+            }
+            crate::render::warmup::warm_gpu_with_owner(features, owner, Box::new(prepare));
+        }
+        #[cfg(any(target_os = "macos", target_arch = "wasm32"))]
+        let _ = (features, prepare);
     }
 }
 

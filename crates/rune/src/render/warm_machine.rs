@@ -504,6 +504,23 @@ impl<T: Send + 'static, C: Clock + 'static> WarmSlot<T, C> {
         make: impl FnOnce() -> Option<T> + Send + 'static,
         prepare: Option<Box<dyn FnOnce(&T) + Send>>,
     ) {
+        let prepare = prepare.map(|f| -> Box<dyn FnOnce(&T) -> bool + Send> {
+            Box::new(move |warmed: &T| {
+                f(warmed);
+                true
+            })
+        });
+        Self::start_warm_checked(handle, linger, make, prepare);
+    }
+
+    /// Like [`Self::start_warm`], except `prepare` returns whether the built payload is still
+    /// healthy to park: returning `false` drops the payload immediately instead of parking it.
+    pub(crate) fn start_warm_checked<H: SlotHandle<T, C>>(
+        handle: H,
+        linger: Duration,
+        make: impl FnOnce() -> Option<T> + Send + 'static,
+        prepare: Option<Box<dyn FnOnce(&T) -> bool + Send>>,
+    ) {
         let spawn = {
             let slot = handle.slot();
             let until = slot.clock.now() + linger;
@@ -523,10 +540,14 @@ impl<T: Send + 'static, C: Clock + 'static> WarmSlot<T, C> {
                 return;
             }
             let mut made = make();
+            let mut prepare_ok = true;
             if let (Some(warmed), Some(prepare)) = (&made, prepare) {
                 if !slot.is_stopped() {
-                    prepare(warmed);
+                    prepare_ok = prepare(warmed);
                 }
+            }
+            if !prepare_ok {
+                drop(made.take());
             }
             let now = slot.clock.now();
             let mut inner = slot.lock();

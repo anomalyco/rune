@@ -184,7 +184,7 @@ pub(crate) fn present_draws(rt: &crate::runtime::RuntimeCore) -> (&[MaterialDraw
 /// Non-opaque material draws for Windows 11 Acrylic visuals (excludes elements whose resolved
 /// fill is opaque, matching Wayland's fill rules while `Runtime::system_materials` and
 /// `on_materials` keep listing every visible material element).
-#[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+#[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 pub(crate) fn windows_present_draws(rt: &crate::runtime::RuntimeCore) -> &[MaterialDraw] {
     rt.paint.windows_material_draws()
 }
