@@ -1,0 +1,1 @@
+- Paint keep: allow unchanged `LiveText` nodes to be copied across frames by bumping `node.epoch` in `latch_live` whenever a `LiveText` value changes.

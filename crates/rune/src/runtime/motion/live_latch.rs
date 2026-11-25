@@ -284,8 +284,11 @@ impl timer_wake::FrameState {
                     }
                 }
             }
-            if node_text_changed && !node.is_secure() && scene.contains(node.id) {
-                text_changed = true;
+            if node_text_changed {
+                node.epoch = crate::runtime::paint_keep::next_epoch();
+                if !node.is_secure() && scene.contains(node.id) {
+                    text_changed = true;
+                }
             }
             if layout_text_in_place {
                 super::super::commit::relayout::lay_out_live_text_in_place(text, node, scale);
