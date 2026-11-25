@@ -11,8 +11,9 @@
 //! - **X11**: `CursorGrabMode::Locked` returns `NotSupported`, so it falls back to
 //!   `CursorGrabMode::Confined` (`xcb_grab_pointer`); XInput2 `RawMotion` device counts are
 //!   divided by `scale_factor()`.
-//! - **Web & iOS**: pointer lock is disabled in the runtime (`set_pointer_lock_supported(false)`),
-//!   so elements never capture.
+//! - **Web**: handled asynchronously in `platform/web` via the browser Pointer Lock API
+//!   (`requestPointerLock`, `pointerlockchange`, `pointerlockerror`, `movementX`/`movementY`).
+//! - **iOS & native overlays**: pointer lock is disabled (`set_pointer_lock_supported(false)`).
 
 use winit::window::CursorGrabMode;
 

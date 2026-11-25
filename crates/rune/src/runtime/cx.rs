@@ -392,8 +392,9 @@ impl<S> Cx<S> {
     /// ([`El::pointer_lock`](crate::El::pointer_lock)).
     ///
     /// Views can toggle a "Click to look around" or "Press Esc to release" hint from this;
-    /// the view (and memos) rebuild whenever it changes. Always `false` on web, iOS, and
-    /// native overlays.
+    /// the view (and memos) rebuild whenever it changes. On web, becomes `true` once the browser
+    /// grants pointer lock (`pointerlockchange`) and stays `false` if refused. Always `false` on
+    /// iOS and native overlays.
     ///
     /// ```
     /// # use rune::{Cx, El, Env, Runtime, el, text};
