@@ -15,7 +15,7 @@ use std::sync::Mutex;
 use super::CaptionButton;
 
 /// Points along the window's edges, inside it, that resize it.
-pub(crate) const EDGE: f32 = 6.0;
+pub(crate) const EDGE: f32 = 5.0;
 /// Points from a corner, along either edge, that resize the window diagonally.
 pub(crate) const CORNER: f32 = 16.0;
 

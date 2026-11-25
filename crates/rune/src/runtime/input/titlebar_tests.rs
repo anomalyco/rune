@@ -679,8 +679,8 @@ mod linux_frame {
         rt.frame(0.1);
         assert_eq!(rt.state.presses, 0, "a press on the band never reaches the view");
 
-        // Past the band's 6 pt, and 16 pt in from a corner, the view has the press.
-        for (i, at) in [(200.0, 150.0), (200.0, 7.0), (20.0, 20.0)].into_iter().enumerate() {
+        // Past the band's 5 pt, and 16 pt in from a corner, the view has the press.
+        for (i, at) in [(200.0, 150.0), (200.0, 6.0), (20.0, 20.0)].into_iter().enumerate() {
             rt.pointer_down(at.0, at.1);
             assert_eq!(rt.take_resize_action(), None, "at {at:?}");
             rt.pointer_up(at.0, at.1);

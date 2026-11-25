@@ -1533,7 +1533,7 @@ rune::App::new(spec).fit_content_height().run();
   loses the grey bar winit would draw above the app's titlebar: Rune draws the caption buttons the
   desktop's `button-layout` names (GNOME's default is close alone; a layout on the left puts them
   there; all three at the right where no settings portal says) as round buttons in the band, the
-  window resizes from a 6 point band inside its edges, and `.window_drag()` regions move it,
+  window resizes from a 5 point band inside its edges, and `.window_drag()` regions move it,
   maximize it on a double click and open the compositor's window menu on a right click. That window
   has no shadow and square corners. X11 and compositors that draw the frame themselves (KDE, Sway,
   Hyprland) keep the native frame; `RUNE_LINUX_FRAME=0` keeps winit's everywhere and `=1` draws
