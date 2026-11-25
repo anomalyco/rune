@@ -87,6 +87,11 @@ impl Layers {
         })
     }
 
+    /// Whether instance `at` sits inside a group this frame draws into a target of its own.
+    fn draws_into_target(&self, at: u32) -> bool {
+        self.plan.iter().enumerate().any(|(i, l)| l.begin < at && at < l.end && matches!(self.planner.dispositions.get(i), Some(Disposition::Render { .. })))
+    }
+
     /// Kept textures get the budget left after this frame's visible caches.
     fn trim_retained(&mut self, active_bytes: u64) {
         let available = self.cache_budget.saturating_sub(active_bytes);
@@ -290,6 +295,12 @@ impl Renderer {
         ONCE.call_once(|| procwatch::alloc::sites::contribute("rune-gpu", || POOLS.lock().unwrap_or_else(|e| e.into_inner()).clone()));
     }
 
+    /// Whether one of the frame's backdrops (a blur, or an effect that reads what is below it)
+    /// draws into a layer's own target, so the copy it reads has that target's format.
+    pub(super) fn backdrop_in_layer(&self) -> bool {
+        self.effects.iter().any(|(at, i)| (i.params[0] != 0.0 || i.kind() == Some(Kind::BackdropBlur)) && self.layers.draws_into_target(*at))
+    }
+
     /// What a window at rest gives back (`window::rest`): every spare target (the first menu,
     /// hover or session after it makes its own again, within a frame's run-to-run spread on an
     /// Iris Xe), cache textures no layer drew last frame, and the backdrop copies and blur pyramid
@@ -314,6 +325,10 @@ impl Renderer {
         if all || !self.backdrop_used {
             self.backdrops.clear();
             if let Some(blur) = &mut self.backdrop_blur { blur.give_back(); }
+        } else if !self.backdrop_in_layer() && FORMAT != self.format && self.extra.iter().all(|(format, _)| *format != FORMAT) {
+            // The copy in a layer target's format, which the last frame's backdrops didn't read.
+            self.backdrops.retain(|b| b.format != FORMAT);
+            if let Some(blur) = &mut self.backdrop_blur { blur.unbind_backdrop(FORMAT); }
         }
         if !all {
             self.uploads.trim_oversized();

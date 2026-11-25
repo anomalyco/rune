@@ -349,7 +349,10 @@ impl Renderer {
             for index in 0..self.extra.len() {
                 self.ensure_backdrop(device, self.extra[index].0, viewport);
             }
-            if self.layers.targets.iter().any(Option::is_some) {
+            // A copy in a layer target's format only when a backdrop draws into such a target:
+            // a frosted bar beside an unrelated layer reads the window's copy alone, and this
+            // one is window-sized (28 MB at 2560x1440).
+            if self.backdrop_in_layer() {
                 self.ensure_backdrop(device, layers::FORMAT, viewport);
             }
         }

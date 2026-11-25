@@ -393,6 +393,11 @@ impl BackdropBlur {
         }
     }
 
+    /// Lets go of the pooled backdrop of `format`, which `Renderer::give_back` drops.
+    pub(super) fn unbind_backdrop(&mut self, format: wgpu::TextureFormat) {
+        self.first.retain(|(f, _)| *f != format);
+    }
+
     pub(super) fn ensure_composite(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         ensure_composite_in(device, &self.composite_layout, &mut self.composite, &mut self.composite_precompiled, &mut self.composites, format);
     }
