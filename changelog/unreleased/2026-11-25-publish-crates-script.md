@@ -1,0 +1,1 @@
+- Packaging: added `scripts/publish-crates.sh` and `scripts/publish-crates-readme.md` to stage, verify, and publish `0.0.0-dev.N` crates.io snapshots (`rune-ui` with `[lib] name = "rune"` and twelve `rune-ui-*` internal crates) from a clean `git archive` without modifying committed workspace manifests.
