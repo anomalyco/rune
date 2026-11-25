@@ -364,9 +364,14 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             WM_NCCALCSIZE if wparam != 0 => {
                 let params = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
                 let outer = params.rgrc[0];
+                let old_client = params.rgrc[2];
                 DefSubclassProc(hwnd, message, wparam, lparam);
                 params.rgrc[0] = nccalcsize_restored(outer, params.rgrc[0]);
                 if IsZoomed(hwnd) != 0 { fit_maximized(hwnd, &outer, &mut params.rgrc[0]); }
+                if super::dpi_drag::wants_valid_rects(hwnd) {
+                    super::dpi_drag::apply_valid_rects(params, old_client);
+                    return WVR_VALIDRECTS as LRESULT;
+                }
                 return 0;
             }
             WM_NCHITTEST => {

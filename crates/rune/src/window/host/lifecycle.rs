@@ -554,6 +554,8 @@ impl Host {
         }
         self.secure_input.set(false);
         if !self.closes() { return; }
+        #[cfg(target_os = "windows")]
+        self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Destroy);
         crate::marks::mark("window.close");
         // The last window of an app that ends fast goes as a bare window's close does: its hook,
         // then the window destroyed at once, with no hide before it. The quit runs after it and
@@ -668,6 +670,8 @@ impl Host {
     /// cursor back to normal, and the native window hidden. No event loop is needed, so a window
     /// that loses its surface does the same from `draw` (`Host::replace_lost_surface`).
     pub(in crate::window) fn wind_down(&mut self) {
+        #[cfg(target_os = "windows")]
+        self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Hide);
         self.app.rt_mut().keys_lost();
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
@@ -694,6 +698,8 @@ impl Host {
     /// that releases its GPU when closed. The next `open` makes a window, a device and a surface
     /// (an app that sees `AppHandle::window_error` and the window gone can ask for one).
     pub(in crate::window) fn release(&mut self) {
+        #[cfg(target_os = "windows")]
+        self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Destroy);
         self.win = None;
         #[cfg(target_os = "macos")]
         self.frame_presented.reset();

@@ -6,6 +6,9 @@
 
 pub mod backend;
 pub mod configure;
+#[cfg(target_os = "windows")]
+#[doc(hidden)]
+pub mod d3d11_interop;
 pub mod fallback;
 pub mod health;
 #[cfg(any(test, all(target_vendor = "apple", feature = "metal-backend")))]

@@ -1009,7 +1009,16 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   chain cannot composite transparency (transparent windows degrade to opaque with a log), cannot
   host DirectComposition video layers (video falls back to UI-drawn playback), skips the seamless
   visual commit and NVIDIA G-SYNC premultiplied VRR guard on CPU-to-GPU handover, and Windows
-  overlays (`App::overlay`) refuse cleanly because they require DirectComposition. After editing
+  overlays (`App::overlay`) refuse cleanly because they require DirectComposition.
+  `RUNE_RESIZE_SYNC=1` (Windows, off by default) opts opaque app windows with a Rune-owned
+  DirectComposition `Handover` into a drag-only synchronized resize path between
+  `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` using public APIs only: drag frames render into a
+  D3D12 shared texture synchronized via shared fences into a D3D11 `DXGI_SWAP_EFFECT_DISCARD`
+  copy-model HWND swap chain presented inside `WM_PAINT`, paired with `WM_NCCALCSIZE`
+  `WVR_VALIDRECTS` and `WM_ERASEBKGND` suppression, with zero presents to the hidden D3D12
+  composition swap chain during the drag. Transparent windows, overlays, `DxgiFromHwnd`, and
+  CPU/handover/rebinding windows always keep the normal path; with `RUNE_RESIZE_SYNC` unset or
+  `0`, no D3D11 device, shared texture, or second swap chain is created. After editing
   `clip.wgsl` or `shader.wgsl`, run
   `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac;
   if the MSL, flags or library hash changed, run `scripts/precompile-metal-shaders.sh` (needs
