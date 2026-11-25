@@ -255,7 +255,10 @@ context and converts window-relative UTF-16 positions to UTF-8 boundaries before
 Composition holds the mirror stable until commit and replaces the composing word's range.
 Mobile `beforeinput` line breaks use Rune's Enter rules: submit, or Shift/Alt+Enter newline
 in a multiline field. A completed touch tap focuses the editor synchronously;
-a pan scrolls instead, with momentum and a damped edge return.
+a pan scrolls instead, with momentum and a damped edge return. On iOS Safari the hidden input
+stays transparent (`opacity: 0`) so WebKit suppresses its native selection handles, callout bar
+and zoom-to-focus (WebKit r238146); by design, long-pressing a field shows Rune's own
+Cut/Copy/Paste/Select All menu rather than the native iOS callout bar.
 
 Secure fields use an `<input type="password">` with `autocomplete="current-password"` and
 autocorrect, autocapitalize and spellcheck disabled. It is emptied after every input; the
@@ -314,8 +317,9 @@ App::new(spec).same_tab_router(|href| router.push(href)) // true: routed with pu
 tx.open_url_same_tab("/notes/42")?;                       // from a handler
 ```
  `Cx::safe_area()` returns top/right/bottom/left insets in
-points (zero on native). Apply them inside a full-canvas background. The canvas follows
-`visualViewport` when a software keyboard reduces the visible height. Keep the generated
+points (zero on native). Apply them inside a full-canvas background. Full-window canvases keep their layout-viewport size when `visualViewport` shrinks for an
+on-screen keyboard; Rune scrolls enclosing vertical scroll viewports (`follow_caret`) and shifts
+still-covered focused fields into the visible band with `translate3d`. Keep the generated
 page's `viewport-fit=cover` meta tag and the textarea's 16 px font size.
 
 ## HTTP requests (fetch)
