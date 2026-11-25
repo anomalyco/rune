@@ -194,6 +194,7 @@ pub(crate) fn reopen_done() {
 
 /// The token a window opens with: its own, or else (Linux) the one a launch handed to this
 /// process (`single_instance`) left for the window it brings forward, used once.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn handed_token(own: Option<String>) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
