@@ -99,3 +99,14 @@ pub(crate) fn low_memory() -> bool {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn low_memory() -> bool { false }
+/// Whether `give_back(false)` (visible idle rest after [`REST_AFTER`]) should issue one
+/// non-blocking `Device::poll(Poll)` before trimming renderer caches.
+///
+/// Always `true` on macOS: Metal retains each presented frame's `MTLCommandBuffer`,
+/// `CAMetalDrawable` (IOSurface), and `Keep` texture/buffer references in its retire queue
+/// until the next submit or poll, and polling on macOS is a non-blocking shared-event read
+/// with no DX12 post-poll penalty. Elsewhere, poll only when recyclable oversized staging
+/// chunks are in flight (avoiding the 4–9 ms Intel Iris Xe DX12 post-poll cost).
+pub(crate) const fn should_poll_on_idle_rest(is_macos: bool, oversized_in_flight: bool) -> bool {
+    is_macos || oversized_in_flight
+}

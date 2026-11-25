@@ -313,10 +313,11 @@ impl OverlayCore {
         }
         let gpu = self.gpu.clone();
         if let (Some(gpu), Some(renderer)) = (gpu, &mut self.renderer) {
-            // Poll once (non-blocking) at idle rest only if recyclable oversized chunks are in
-            // flight so their completed buffers return before `give_back(false)` trims them;
-            // ordinary overlays skip polling to avoid the 4-9 ms Iris Xe post-poll penalty.
-            if !all && renderer.has_oversized_uploads_in_flight() {
+            // Poll once (non-blocking) at idle rest on macOS (retiring completed Metal command
+            // buffers, drawables, and `Keep` texture/buffer references at zero GPU-wait cost) or
+            // when recyclable oversized chunks are in flight; ordinary Windows/Linux overlays skip
+            // polling to avoid the 4-9 ms Iris Xe post-poll penalty.
+            if !all && crate::window::rest::should_poll_on_idle_rest(cfg!(target_os = "macos"), renderer.has_oversized_uploads_in_flight()) {
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
             }
             let rt = app.rt_mut();
