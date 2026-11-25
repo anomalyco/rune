@@ -4,8 +4,7 @@ use super::*;
 use crate::{Cx, El, Env};
 use std::time::Duration;
 
-/// The poll's timer. The runtime follows the real clock, so it is long enough that a stalled
-/// test machine never finds a timer due that the test didn't move the clock to.
+/// The poll's timer, driven on a deterministic `ManualClock`.
 const PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
@@ -28,34 +27,42 @@ fn poll(s: &mut App, _: f64, tx: &mut Tx) -> bool {
     s.step || s.polls == s.change_at
 }
 
+/// Installs a deterministic manual clock while keeping `wall_start` set so `Runtime` takes the
+/// windowed frame path (skipping headless `timer_step` sub-stepping). Both `now_clock()` and
+/// `wall_clock()` read `ManualClock` ahead of `wall_start`, so real wall time never drifts.
+fn install_clock<S>(rt: &mut Runtime<S>) {
+    rt.wall_start = Some(crate::time::now());
+    rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+}
+
 fn runtime(app: App) -> Runtime<App> {
     let mut rt = Runtime::new(app, view, (200.0, 50.0), Env::default());
     rt.poll = Some(poll);
-    rt.wall_start = Some(crate::time::now());
+    install_clock(&mut rt);
     rt.frame(0.0);
     rt.frame(crate::frame::clock::RESUME_STEP);
     assert!(!rt.animating);
     rt
 }
 
-/// Moves the wall clock `secs` on.
+/// Moves the manual test clock `secs` on.
 fn advance<S>(rt: &mut Runtime<S>, secs: f64) {
-    rt.wall_start = rt.wall_start.map(|t| t - Duration::from_secs_f64(secs));
+    let clock = rt.frame.test_clock_mut().expect("test clock installed");
+    clock.seek(clock.now() + secs);
 }
 
-/// Moves the wall clock to just past every armed timer: the setup frames each armed one a
-/// moment apart in real time, and the later ones would otherwise outlast the poll.
+/// Moves the manual test clock to just past every armed timer.
 fn reach_timer<S>(rt: &mut Runtime<S>) {
     let due = rt.frame.wake_deadlines().last().copied().expect("a timer is armed");
-    let now = rt.wall_start.unwrap().elapsed().as_secs_f64();
-    advance(rt, (due - now).max(0.0) + 1e-4);
+    let clock = rt.frame.test_clock_mut().expect("test clock installed");
+    clock.seek(clock.now().max(due + 1e-4));
 }
 
-/// Moves the wall clock to just past the earliest armed timer.
+/// Moves the manual test clock to just past the earliest armed timer.
 fn reach_next_timer<S>(rt: &mut Runtime<S>) {
     let due = rt.wake_deadline().expect("a timer is armed");
-    let now = rt.wall_start.unwrap().elapsed().as_secs_f64();
-    advance(rt, (due - now).max(0.0) + 1e-4);
+    let clock = rt.frame.test_clock_mut().expect("test clock installed");
+    clock.seek(clock.now().max(due + 1e-4));
 }
 
 /// As the window host's `new_events`: a resting window polls first, `shell` runs what that
@@ -258,7 +265,7 @@ fn a_resting_window_polls_an_open_playground_story_and_draws_only_on_change() {
     let mut rt = crate::App::new(spec)
         .playground(crate::Playground::new().enabled(true).story(story))
         .headless_runtime((800.0, 400.0), Env::default());
-    rt.wall_start = Some(crate::time::now());
+    install_clock(&mut rt);
     rt.frame(0.0);
     rt.open_playground("Repro/Clock", None);
     rt.frame(crate::frame::clock::RESUME_STEP);
@@ -308,7 +315,7 @@ fn a_resting_window_runs_playground_play_after_steps_and_queues_pressed_keys() {
     let mut rt = crate::App::new(spec)
         .playground(playground)
         .headless_runtime((800.0, 400.0), Env::default());
-    rt.wall_start = Some(crate::time::now());
+    install_clock(&mut rt);
     rt.frame(0.0);
     rt.open_playground("Repro/Steps", None);
     rt.frame(crate::frame::clock::RESUME_STEP);
@@ -343,7 +350,7 @@ fn an_earlier_app_timer_does_not_draw_before_a_play_after_step_is_due() {
     let mut rt = crate::App::new(spec)
         .playground(crate::Playground::new().enabled(true).story(story))
         .headless_runtime((800.0, 400.0), Env::default());
-    rt.wall_start = Some(crate::time::now());
+    install_clock(&mut rt);
     rt.frame(0.0);
     rt.open_playground("Repro/Delayed", None);
     rt.frame(crate::frame::clock::RESUME_STEP);
@@ -416,7 +423,7 @@ fn handler_clock_runtime() -> Runtime<HandlerClockApp> {
     let mut rt = Runtime::new(HandlerClockApp::default(), handler_clock_view, (240.0, 120.0), Env::default());
     rt.set_tab_visits_controls(true);
     rt.poll = Some(handler_clock_poll);
-    rt.wall_start = Some(crate::time::now());
+    install_clock(&mut rt);
     rt.frame(0.0);
     rt.frame(crate::frame::clock::RESUME_STEP);
     assert!(!rt.animating && rt.rests());
@@ -507,7 +514,7 @@ fn playground_play_press_in_a_resting_timer_s_frame_sees_the_poll_s_clock() {
         .tab_visits_controls(true)
         .playground(playground)
         .headless_runtime((800.0, 400.0), Env::default());
-    rt.wall_start = Some(crate::time::now());
+    install_clock(&mut rt);
     rt.frame(0.0);
     rt.open_playground("Repro/Clock", None);
     rt.frame(crate::frame::clock::RESUME_STEP);
@@ -570,7 +577,7 @@ fn resting_wake_with_queued_input_refuses_to_rest_until_delivered() {
         .tab_visits_controls(true)
         .playground(playground)
         .headless_runtime((800.0, 400.0), Env::default());
-    pg.wall_start = Some(crate::time::now());
+    install_clock(&mut pg);
     pg.frame(0.0);
     pg.open_playground("Repro/Guard", None);
     pg.frame(crate::frame::clock::RESUME_STEP);
