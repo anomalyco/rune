@@ -508,6 +508,37 @@ impl RuntimeCore {
         let r = self.paint.drawn.get(i).copied()?;
         Some((r[0] + r[2] * 0.5, r[1] + r[3] * 0.5))
     }
+    /// Where a script event aimed at `key` lands, in points: the centre of the part of the element
+    /// that is shown, its drawn box inside its ancestors' clips and the window. An element taller
+    /// than its scroll viewport, or partly scrolled out, is hit where it can be seen and not at a
+    /// centre that lies outside the window. `Err` names the key, its box and what is shown of the
+    /// window when no part of the element is shown: an event sent there reaches nothing, and the
+    /// script would end as if it had acted. A link or highlight keyed `key`, and an element in a
+    /// rotated subtree, keep [`Runtime::find`]'s point.
+    pub(crate) fn find_shown(&self, key: &str) -> Result<(f32, f32), String> {
+        let Some(i) = self.live_named(None, key) else {
+            return self.find_link(key).or_else(|| self.find_highlight(key)).ok_or_else(|| format!("no element with key {key:?}"));
+        };
+        let Some(r) = self.paint.drawn.get(i).copied() else { return Err(format!("no element with key {key:?}")) };
+        if self.paint.inh_scratch.get(i).is_some_and(|h| h.turn != 0) {
+            return Ok((r[0] + r[2] * 0.5, r[1] + r[3] * 0.5));
+        }
+        let edges = [r[0], r[1], r[0] + r[2], r[1] + r[3]];
+        let clip = self.tree.nodes[i].parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(NO_CLIP, |h| h.clip).map(|v| v / self.env.scale);
+        let window = [0.0, 0.0, self.viewport.0, self.viewport.1];
+        let shown = intersect(intersect(edges, clip), window);
+        // An element with no width or height of its own (an anchor) is shown when its line is.
+        let across = shown[2] > shown[0] || (r[2] == 0.0 && shown[2] >= shown[0]);
+        let down = shown[3] > shown[1] || (r[3] == 0.0 && shown[3] >= shown[1]);
+        if across && down {
+            return Ok(((shown[0] + shown[2]) * 0.5, (shown[1] + shown[3]) * 0.5));
+        }
+        let within = intersect(clip, window);
+        Err(format!(
+            "the element with key {key:?} is not shown: its box [{}, {}, {}, {}] (x, y, width, height) lies outside what is drawn of the window [{}, {}, {}, {}]; scroll it into view first, or aim at a point with \"x\" and \"y\"",
+            r[0], r[1], r[2], r[3], within[0], within[1], (within[2] - within[0]).max(0.0), (within[3] - within[1]).max(0.0),
+        ))
+    }
 
     /// Drawn rect `[x, y, w, h]` in points and effective opacity (ancestors included) of the
     /// element keyed `key` (or key path such as `card-2/title`), exiting or not, as of the last

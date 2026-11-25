@@ -397,6 +397,41 @@ mod tests {
     }
 
     #[test]
+    fn an_event_aimed_at_a_key_lands_on_the_part_that_is_shown() {
+        // A list 800 high in a scroll viewport 50 high: the list's centre is far below the window.
+        // A script's wheel aimed at the list must land where the list can be seen.
+        fn view(_: &u32, _: &mut crate::Cx<u32>) -> crate::El {
+            let list = crate::col().key("list").children((0..40).map(|i| crate::el().key(format!("row-{i}")).size(100.0, 20.0).fill(crate::Color::WHITE)));
+            crate::col()
+                .child(crate::el().key("top").size(100.0, 20.0).fill(crate::Color::WHITE))
+                .child(crate::col().key("viewport").size(100.0, 50.0).scroll(crate::ScrollSpec::default()).child(list))
+        }
+        let mut rt = crate::runtime::Runtime::new(0u32, view, (100.0, 80.0), crate::runtime::Env::new(true, 1.0));
+        rt.frame(0.0);
+        let at = |key: &str| crate::tooling::script_point(rt.core(), &Ev { t: 0.0, kind: Kind::Move, pos: Pos::Key(key.into()) }, (0.0, 0.0));
+        let rect = |key: &str| rt.core().presented(key).expect("laid out").0;
+        let (viewport, list, row2, row30) = (rect("viewport"), rect("list"), rect("row-2"), rect("row-30"));
+        let bottom = viewport[1] + viewport[3];
+        // The centre of what the viewport shows of a box `[x, y, w, h]`.
+        let shown = |r: [f32; 4]| (r[0] + r[2] * 0.5, (r[1].max(viewport[1]) + (r[1] + r[3]).min(bottom)) * 0.5);
+        // Wholly shown: the centre, as before.
+        assert_eq!(at("top"), Ok(rt.find("top").expect("laid out")));
+        assert_eq!(at("row-1"), Ok(rt.find("row-1").expect("laid out")));
+        // The list's own centre is below the window; the event lands on the part the viewport shows.
+        assert!(list[1] + list[3] * 0.5 > 80.0, "the list's centre is outside the window: {list:?}");
+        assert_eq!(at("list"), Ok(shown(list)));
+        assert!(shown(list).1 < bottom, "inside the viewport: {:?}", shown(list));
+        // Row 2 straddles the viewport's bottom edge: its upper part shows.
+        assert!(row2[1] < bottom && row2[1] + row2[3] > bottom, "row 2 is cut by the viewport: {row2:?} in {viewport:?}");
+        assert_eq!(at("row-2"), Ok(shown(row2)));
+        // Row 30 is scrolled out: an error naming the key, not an event sent into nothing.
+        assert!(row30[1] >= bottom, "row 30 is below the viewport: {row30:?}");
+        let err = at("row-30").expect_err("no part of row 30 is shown");
+        assert!(err.starts_with("the element with key \"row-30\" is not shown: its box ["), "{err}");
+        assert!(err.contains("\"x\" and \"y\""), "{err}");
+        assert_eq!(at("nothing"), Err(String::from("no element with key \"nothing\"")));
+    }
+    #[test]
     fn the_system_pointer_is_dropped_and_everything_else_passes() {
         let device = DeviceId::dummy();
         for pointer in [

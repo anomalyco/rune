@@ -5,6 +5,14 @@ without a code change (goldens, layout, input), newest first, with the rev that 
 
 ## dev
 
+- **A script event aimed at a `key` lands on the part of the element that is shown** (`--script`,
+  `--window-script`, `drag_files` / `drop_files` with `"key"`): the centre of its drawn box inside
+  its ancestors' clips and the window. Before, it landed on the box's own centre: for an element
+  taller than its scroll viewport or scrolled out of it that point is outside the window, the
+  event reached nothing and the script ended as if it had acted. An element no part of which is
+  shown now ends the script with an error naming the key and its box (scroll it into view first,
+  or aim at `"x"` / `"y"`). Wholly shown elements are hit where they were.
+
 - `RollingText` now remembers at most 512 labels (and 256 KiB of text) per thread, dropping the least recently built; a label that comes back after that starts its roll over (t841).
 
 - Docs: a "Fast apps" page (rules with before and after snippets, the memo lesson) and `scripts/app-audit <repo>`, a quick grep for the slow patterns it lists; no API change.

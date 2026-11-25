@@ -491,14 +491,16 @@ pub(crate) fn script_input(
     true
 }
 
-/// Where a script event lands, in view points: a point over the view's zoom, an element's centre
-/// found when the event runs, the pointer for a wheel-like event without a point of its own, or
-/// an offset from the last press. The headless host and `--window-script` both land events here.
+/// Where a script event lands, in view points: a point over the view's zoom, the centre of the
+/// shown part of an element found when the event runs (`RuntimeCore::find_shown`: an element no
+/// part of which is shown is an error, not an event sent to a point nothing is drawn at), the
+/// pointer for a wheel-like event without a point of its own, or an offset from the last press.
+/// The headless host and `--window-script` both land events here.
 pub(crate) fn script_point(rt: &RuntimeCore, e: &Ev, last_down: (f32, f32)) -> Result<(f32, f32), String> {
     Ok(match &e.pos {
         // A script's points are the window's; the view's are over its zoom.
         Pos::Xy(x, y) => (*x / rt.zoom(), *y / rt.zoom()),
-        Pos::Key(key) => rt.find(key).ok_or_else(|| format!("no element with key {key:?}"))?,
+        Pos::Key(key) => rt.find_shown(key)?,
         Pos::Rel(_, _) if e.kind.at_pointer() => rt.pointer().unwrap_or((0.0, 0.0)),
         Pos::Rel(dx, dy) => (last_down.0 + dx, last_down.1 + dy),
     })

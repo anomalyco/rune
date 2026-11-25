@@ -212,7 +212,8 @@ pub enum PointerAction {
 pub enum ScriptPoint {
     /// Points from the window's top-left.
     At(f32, f32),
-    /// The centre of the element with this key (or path suffix), found when the event runs.
+    /// The centre of the shown part of the element with this key (or path suffix), found when the
+    /// event runs: its box inside its ancestors' clips and the window. No part shown is an error.
     Element(String),
     /// An offset from the last pointer-down position (drags, the release of a tap).
     FromDown(f32, f32),
