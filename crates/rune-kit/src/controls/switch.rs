@@ -57,7 +57,8 @@ impl Switch {
         self
     }
     /// The track and knob of an `NSSwitch` of this size on macOS 27: Mini (36 × 16, the size
-    /// System Settings uses) unless set. The standard appearance keeps its own size.
+    /// System Settings uses) unless set, or the kit's own size from `Kit::metrics.switch`. The
+    /// standard and web appearances keep their own size.
     pub fn control_size(mut self, s: ControlSize) -> Self {
         self.size = s;
         self
@@ -116,14 +117,9 @@ impl Switch {
     }
 
     fn compact_control(&self, k: &Kit) -> El {
-        // NSSwitch's capsule track and pill knob, measured on macOS 27: (track w, h, knob w, h, inset).
-        let (tw, th, kw, kh, inset) = match self.size {
-            ControlSize::Mini => (36.0, 16.0, 21.0, 14.0, 1.0),
-            ControlSize::Small => (44.0, 20.0, 26.0, 16.0, 2.0),
-            ControlSize::Regular => (54.0, 24.0, 32.0, 20.0, 2.0),
-            ControlSize::Large => (64.0, 28.0, 38.0, 24.0, 2.0),
-            ControlSize::ExtraLarge => (80.0, 36.0, 48.0, 30.0, 3.0),
-        };
+        // A capsule track and pill knob: NSSwitch's, measured on macOS 27, unless the kit sets its own.
+        let m = k.switch_metrics(self.size);
+        let (tw, th, kw, kh, inset) = (m.track_width, m.track_height, m.knob_width, m.knob_height, m.inset);
         // The knob stretches towards the middle on hover, and further while pressed.
         let stretch = match self.state {
             State::Hover => (kh * 0.15f32).round(),
