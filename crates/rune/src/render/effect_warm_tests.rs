@@ -299,7 +299,7 @@ fn worker_builds_only_the_named_effects() {
 
 #[test]
 fn worker_compiles_nothing_while_the_window_draws_and_a_drop_ends_its_rest_at_once() {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
     let Some(gpu) = Gpu::test_headless() else { return };
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     renderer.set_prewarm_effects(PrewarmEffects::BACKDROP_BLUR);
@@ -318,7 +318,7 @@ fn worker_compiles_nothing_while_the_window_draws_and_a_drop_ends_its_rest_at_on
     renderer.warm_effects(&gpu.device);
     assert!(renderer.effect_warm.is_warming());
     // Frames keep coming for 600 ms, a few ms apart: the worker never sees the window rest.
-    let drawing = Instant::now();
+    let drawing = crate::time::now();
     while drawing.elapsed() < Duration::from_millis(600) {
         let _ = render_offscreen(&gpu, &mut renderer, &target, &mut atlas, &plain);
         std::thread::sleep(Duration::from_millis(5));
@@ -338,7 +338,7 @@ fn worker_compiles_nothing_while_the_window_draws_and_a_drop_ends_its_rest_at_on
     let _ = render_offscreen(&gpu, &mut resting, &target, &mut atlas, &plain);
     resting.warm_effects(&gpu.device);
     assert!(resting.effect_warm.is_warming());
-    let dropping = Instant::now();
+    let dropping = crate::time::now();
     drop(resting);
     assert!(dropping.elapsed() < Duration::from_secs(20), "drop woke the resting worker instead of waiting out its rest: {:?}", dropping.elapsed());
 }

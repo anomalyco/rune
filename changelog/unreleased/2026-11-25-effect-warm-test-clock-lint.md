@@ -1,0 +1,1 @@
+- Tests (`rune` `render::effect_warm_tests`): replace disallowed `std::time::Instant::now` with `crate::time::now` in `worker_compiles_nothing_while_the_window_draws_and_a_drop_ends_its_rest_at_once` so `cargo lint` and `cargo lint-all` pass.
