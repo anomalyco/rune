@@ -786,3 +786,76 @@ fn screen_travel_preserves_own_offset_on_entry_and_exit() {
     s.frame_at(3.0);
     assert_eq!(s.presented(n).unwrap().rect, Rect::new(130.0, 70.0, 40.0, 40.0));
 }
+
+#[test]
+fn match_geometry_blends_own_rotation_along_shortest_arc_and_rematches() {
+    let angle_diff = |a: f32, b: f32| {
+        let mut d = (b - a).rem_euclid(core::f32::consts::TAU);
+        if d > core::f32::consts::PI {
+            d -= core::f32::consts::TAU;
+        }
+        d.abs()
+    };
+
+    // 1. Both rotated (0.3 -> 0.9) and mid-flight re-match to 1.2.
+    let mut s = Scene::new();
+    let (a, b, c) = (NodeId(1), NodeId(2), NodeId(3));
+    s.insert(a, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.set(a, prop::ROTATION, 0.3);
+    s.frame_at(0.0);
+    assert!((s.presented(a).unwrap().transform.rotate - 0.3).abs() < 1e-5);
+
+    s.insert(b, spec(200.0, 100.0, 40.0, 40.0), Mount::Initial);
+    s.set(b, prop::ROTATION, 0.9);
+    s.match_geometry(a, b, LayoutAnim::new(motion::REFLOW).screen());
+    s.frame_at(0.001);
+    assert!(angle_diff(s.presented(b).unwrap().transform.rotate, 0.3) < 0.02);
+
+    let mut t = 0.001;
+    for _ in 0..15 {
+        t += 1.0 / 120.0;
+        s.frame_at(t);
+    }
+    let mid_rot = s.presented(b).unwrap().transform.rotate;
+    assert!(mid_rot > 0.4 && mid_rot < 0.85, "mid_rot={mid_rot}");
+
+    s.insert(c, spec(100.0, 200.0, 40.0, 40.0), Mount::Initial);
+    s.set(c, prop::ROTATION, 1.2);
+    let travel = s.get(b, prop::TRAVEL).unwrap();
+    let travel_vel = s.store().sample_velocity(b, prop::TRAVEL).unwrap_or(Vec2::ZERO);
+    s.match_geometry_from_flight(b, c, [0.0; 4], travel, travel_vel, 1.0, LayoutAnim::new(motion::REFLOW).screen());
+    t += 0.001;
+    s.frame_at(t);
+    assert!(angle_diff(s.presented(c).unwrap().transform.rotate, mid_rot) < 0.03);
+    s.frame_at(t + 3.0);
+    assert!((s.presented(c).unwrap().transform.rotate - 1.2).abs() < 1e-4);
+
+    // 2. Shortest arc wrap-around across +/-PI (3.0 -> -3.0) never passes near 0.
+    let mut s = Scene::new();
+    let (a, b) = (NodeId(10), NodeId(11));
+    s.insert(a, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.set(a, prop::ROTATION, 3.0);
+    s.frame_at(0.0);
+    s.insert(b, spec(200.0, 100.0, 40.0, 40.0), Mount::Initial);
+    s.set(b, prop::ROTATION, -3.0);
+    s.match_geometry(a, b, LayoutAnim::new(motion::REFLOW).screen());
+    for k in 1..200 {
+        s.frame_at(k as f64 / 120.0);
+        let r = s.presented(b).unwrap().transform.rotate;
+        assert!(angle_diff(r, core::f32::consts::PI) < 0.35, "frame {k}: took long arc: {r}");
+    }
+
+    // 3. Late target rotation (live_rotation latch order) and same-rect path_lead hold.
+    let mut s = Scene::new();
+    let (a, b) = (NodeId(20), NodeId(21));
+    s.insert(a, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.frame_at(0.0);
+    s.insert(b, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.match_geometry(a, b, LayoutAnim::new(motion::REFLOW).screen());
+    s.set(b, prop::ROTATION, 0.8);
+    s.frame_at(0.001);
+    assert!(s.presented(b).unwrap().transform.rotate < 0.05, "late target rotation applied early");
+    assert!(s.path_lead(b).is_none(), "path_lead must hold while rotation still differs");
+    s.frame_at(3.0);
+    assert!((s.presented(b).unwrap().transform.rotate - 0.8).abs() < 1e-4);
+}

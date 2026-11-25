@@ -235,7 +235,14 @@ impl Scene {
         let s = if reduced { [s[0], 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0] } else { s };
         let own_opacity = self.values(i, prop::OPACITY.id).map_or(n.opacity, |v| v[0]);
         let own_scale = self.values(i, prop::SCALE.id).map_or(1.0, |v| v[0]);
-        let rotation = self.values(i, prop::ROTATION.id).map_or(0.0, |v| v[0]);
+        let own_rotation = self.values(i, prop::ROTATION.id).map_or(0.0, |v| v[0]);
+        let rotation = match n.path {
+            Some(Path { start_rotation: Some(sr), .. }) => {
+                let p = self.values(i, prop::TRAVEL.id).map_or([1.0, 1.0], |v| [v[0], v[1]]);
+                travel::blend_rotation(sr, own_rotation, 0.5 * (p[0] + p[1]))
+            }
+            _ => own_rotation,
+        };
         let own_blur = self.values(i, prop::BLUR.id).map_or(0.0, |v| v[0]);
         let radius = self.values(i, prop::RADIUS.id).map_or(n.radius, Corners::read_lanes);
         let fill = self.values(i, prop::FILL.id).map_or(n.fill, Color::read_lanes);
