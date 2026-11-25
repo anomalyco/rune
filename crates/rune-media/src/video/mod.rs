@@ -32,15 +32,25 @@
 mod foreign;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "windows", test))]
+mod nv12;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod phases;
 #[cfg(target_os = "macos")]
 use macos as backend;
 #[cfg(all(test, target_os = "macos"))]
 pub(crate) use macos::test_frames;
+mod thumbnails;
+#[cfg(test)]
+mod thumbnails_tests;
 #[cfg(any(target_os = "macos", test))]
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod turn;
+
+pub use thumbnails::Thumbnail;
+pub use thumbnails::ThumbnailPrecision;
+pub use thumbnails::ThumbnailRequest;
+pub use thumbnails::Thumbnails;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod unsupported;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -247,6 +257,19 @@ impl MediaRequest {
     /// A video, muted, as [`Player::url`].
     pub fn video(self) -> Player {
         Player::create(MediaSource::Url(self.url), Kind::Video, self.headers)
+    }
+    /// Starts a [`ThumbnailRequest`] for this URL, carrying the configured request headers.
+    ///
+    /// ```no_run
+    /// let strip = rune_media::Player::request("https://example.com/clip.mp4")
+    ///     .header("Authorization", "Bearer token")
+    ///     .thumbnails()
+    ///     .times([0.0, 2.0])
+    ///     .start();
+    /// assert_eq!(strip.len(), 2);
+    /// ```
+    pub fn thumbnails(self) -> ThumbnailRequest {
+        ThumbnailRequest::with_headers(MediaSource::Url(self.url), self.headers)
     }
 }
 

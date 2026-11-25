@@ -19,7 +19,7 @@ mod inbox;
 mod layer;
 mod machine;
 mod mf;
-mod still;
+pub(super) mod still;
 mod vsync;
 
 use super::*;

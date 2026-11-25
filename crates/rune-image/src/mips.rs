@@ -21,7 +21,7 @@ pub(super) fn mip_chain_with_intrinsic(
 
 /// Target dimensions fitting `(w, h)` inside `max_px` square while preserving aspect ratio.
 /// Never upscales and never rounds either side below 1.
-pub(super) fn scaled_dimensions(w: u32, h: u32, max_px: u32) -> (u32, u32) {
+pub fn scaled_dimensions(w: u32, h: u32, max_px: u32) -> (u32, u32) {
     let longest = w.max(h);
     if max_px == 0 || longest <= max_px {
         return (w, h);
@@ -35,6 +35,28 @@ pub(super) fn scaled_dimensions(w: u32, h: u32, max_px: u32) -> (u32, u32) {
     }
 }
 
+/// Validates straight-alpha RGBA8 `bytes` and resamples them in linear-premultiplied light to
+/// `(nw, nh)`. Returns `bytes` unchanged when `(nw, nh) == (w, h)`.
+pub fn downsample_rgba_to(
+    w: u32,
+    h: u32,
+    bytes: Vec<u8>,
+    nw: u32,
+    nh: u32,
+) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    if w == 0 || h == 0 || nw == 0 || nh == 0
+        || w > super::MAX_SIDE || h > super::MAX_SIDE
+        || nw > super::MAX_SIDE || nh > super::MAX_SIDE
+        || bytes.len() != w as usize * h as usize * 4
+    {
+        return Err(ImageError("RGBA image dimensions or byte length are invalid".into()));
+    }
+    if (nw, nh) == (w, h) {
+        return Ok((w, h, bytes));
+    }
+    Ok((nw, nh, downsample_rgba(w, h, &bytes, nw, nh)))
+}
+
 /// Validates straight-alpha RGBA8 `bytes` and, when `max_px` is `Some` and smaller than the
 /// longest side, downsamples them in linear-premultiplied light to fit `max_px`.
 pub(super) fn maybe_downsample_rgba(
@@ -43,17 +65,11 @@ pub(super) fn maybe_downsample_rgba(
     bytes: Vec<u8>,
     max_px: Option<u32>,
 ) -> Result<(u32, u32, Vec<u8>), ImageError> {
-    if w == 0 || h == 0 || w > super::MAX_SIDE || h > super::MAX_SIDE
-        || bytes.len() != w as usize * h as usize * 4
-    {
-        return Err(ImageError("RGBA image dimensions or byte length are invalid".into()));
-    }
-    let Some(max_px) = max_px else { return Ok((w, h, bytes)); };
-    let (nw, nh) = scaled_dimensions(w, h, max_px);
-    if (nw, nh) == (w, h) {
-        return Ok((w, h, bytes));
-    }
-    Ok((nw, nh, downsample_rgba(w, h, &bytes, nw, nh)))
+    let (nw, nh) = match max_px {
+        Some(max_px) => scaled_dimensions(w, h, max_px),
+        None => (w, h),
+    };
+    downsample_rgba_to(w, h, bytes, nw, nh)
 }
 
 /// Area-resamples straight-alpha sRGB RGBA8 `(w × h)` down to `(nw × nh)` in linear-premultiplied
