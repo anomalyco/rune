@@ -522,10 +522,17 @@ impl<S: 'static, T: 'static> Tree<S, T> {
     /// on the cursor row, or an assistive `ShowContextMenu` action on it. `point` is in window
     /// points; store it with the id and build a [`crate::context_menu`] there.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::PointerPress;
+    /// # use rune_kit::{FileNode, Kit, Tree, TreeModel};
+    /// # struct App { files: TreeModel<FileNode<()>>, menu: Option<(String, PointerPress)> }
+    /// # let s = &App { files: TreeModel::new(), menu: None };
+    /// # let kit = Kit::neutral(true);
+    /// # let _ =
     /// Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
     ///     .on_menu(|s: &mut App, id, point, _| s.menu = Some((id.to_owned(), point)))
     ///     .build(s, &kit)
+    /// # ;
     /// ```
     pub fn on_menu(mut self, f: impl Fn(&mut S, &str, PointerPress, &mut Tx) + 'static) -> Self {
         self.handlers.on_menu = Some(Rc::new(f));
@@ -534,10 +541,16 @@ impl<S: 'static, T: 'static> Tree<S, T> {
     /// Draws a kit scroll bar on the tree's viewport using [`ScrollBarStyle::from_kit`] when
     /// `on` is true, following [`rune::system_scroll_bars`]. Off by default.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{FileNode, Kit, Tree, TreeModel};
+    /// # struct App { files: TreeModel<FileNode<()>> }
+    /// # let s = &App { files: TreeModel::new() };
+    /// # let kit = Kit::neutral(true);
+    /// # let _ =
     /// Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
     ///     .scroll_bar(true)
     ///     .build(s, &kit)
+    /// # ;
     /// ```
     pub fn scroll_bar(mut self, on: bool) -> Self {
         self.core.scroll_bar = if on { TreeScrollBar::Kit } else { TreeScrollBar::None };
@@ -546,10 +559,16 @@ impl<S: 'static, T: 'static> Tree<S, T> {
     /// Draws a scroll bar on the tree's viewport in `style`, following
     /// [`rune::system_scroll_bars`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{FileNode, Kit, ScrollBarStyle, Tree, TreeModel};
+    /// # struct App { files: TreeModel<FileNode<()>> }
+    /// # let s = &App { files: TreeModel::new() };
+    /// # let kit = Kit::neutral(true);
+    /// # let _ =
     /// Tree::new(|s: &App| &s.files, |s: &mut App| &mut s.files, FileNode::label)
     ///     .scroll_bar_styled(ScrollBarStyle::scroll_view(&kit))
     ///     .build(s, &kit)
+    /// # ;
     /// ```
     pub fn scroll_bar_styled(mut self, style: ScrollBarStyle) -> Self {
         self.core.scroll_bar = TreeScrollBar::Styled(style);

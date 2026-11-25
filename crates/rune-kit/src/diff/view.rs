@@ -181,12 +181,23 @@ enum DiffScrollBar {
 /// it in the view. It fills the height it's given and scrolls; Cmd-C, `j`/`k` and `]`/`[` work
 /// once the app routes keys to [`DiffState::key`].
 ///
-/// ```ignore
+/// ```
+/// # use rune::{El, el};
+/// # use rune_kit::{Kit, diff::{Annotation, DiffState, DiffView, LineRange}};
+/// # struct FileTree;
+/// # impl FileTree { fn reveal(&mut self, _: usize) {} }
+/// # struct App { diff: DiffState, tree: FileTree }
+/// # impl App { fn compose(&mut self, _: LineRange) {} }
+/// # fn comment(_: &App, _: &str) -> El { el() }
+/// # let s = &App { diff: DiffState::default(), tree: FileTree };
+/// # let k = Kit::neutral(true);
+/// # let _ =
 /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
 ///     .annotation(|s: &App, a: &Annotation| comment(s, &a.id))
 ///     .on_comment(|s: &mut App, lines, _| s.compose(lines))
 ///     .on_visible_file(|s: &mut App, f| s.tree.reveal(f))
 ///     .build(s, &k)
+/// # ;
 /// ```
 pub struct DiffView<S> {
     key: String,
@@ -231,7 +242,12 @@ impl<S: 'static> DiffView<S> {
     /// Returning `None` (or an empty or whitespace-only string) keeps the default English text
     /// for that [`DiffLabel`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, diff::{DiffLabel, DiffState, DiffView}};
+    /// # struct App { diff: DiffState }
+    /// # let s = &App { diff: DiffState::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
     ///     .labels(|label| match label {
     ///         DiffLabel::ExpandFile => Some("Déplier le fichier".into()),
@@ -240,6 +256,7 @@ impl<S: 'static> DiffView<S> {
     ///         _ => None,
     ///     })
     ///     .build(s, &k)
+    /// # ;
     /// ```
     pub fn labels(mut self, f: impl Fn(DiffLabel<'_>) -> Option<String> + 'static) -> Self {
         self.labels = Some(Rc::new(f));
@@ -320,11 +337,18 @@ impl<S: 'static> DiffView<S> {
     /// the new side is tried first and the old side is used as a fallback so old-side-only filters
     /// work on context lines too.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, diff::{DiffState, DiffView, LineRange, Side}};
+    /// # struct App { diff: DiffState }
+    /// # impl App { fn compose(&mut self, _: LineRange) {} }
+    /// # let s = &App { diff: DiffState::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
     ///     .on_comment(|s: &mut App, lines, _| s.compose(lines))
     ///     .comment_filter(|_, at| at.side == Side::New)
     ///     .build(s, &k)
+    /// # ;
     /// ```
     pub fn comment_filter(mut self, f: impl Fn(usize, LineRef) -> bool + 'static) -> Self {
         self.handlers.comment_filter = Some(Rc::new(f));

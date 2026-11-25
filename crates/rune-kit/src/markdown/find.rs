@@ -46,7 +46,10 @@ impl Case {
 ///
 /// The returned matches feed straight into [`Markdown::highlights`]:
 ///
-/// ```ignore
+/// ```
+/// # use rune_kit::{Case, Kit, Markdown, markdown};
+/// # let (src, query) = ("Hello **world**", "world");
+/// # let kit = Kit::neutral(true);
 /// let view = Markdown::new(src).highlights(markdown::find(src, query, Case::Insensitive)).build(&kit);
 /// ```
 pub fn find(src: &str, query: &str, case: Case) -> Vec<Vec<Range<usize>>> {

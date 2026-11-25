@@ -11,8 +11,16 @@
 //! and Page Down jump, Return opens, and with [`TableState::multi_select`] Shift extends,
 //! Cmd-click toggles and Cmd-A selects every row.
 //!
-//! ```ignore
+//! ```
+//! # use rune::Align;
+//! # use rune_kit::{Cell, Kit, SortDir, Table, TableColumn, TableState};
+//! # struct File { id: String, name: String, size: u64 }
+//! # fn format_size(n: u64) -> String { format!("{n} B") }
 //! struct App { files: Vec<File>, table: TableState }
+//! # impl App { fn sort_files(&mut self, _: &str, _: SortDir) {} }
+//! # let s = &App { files: Vec::new(), table: TableState::new() };
+//! # let kit = Kit::neutral(true);
+//! # let _ =
 //! Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.files.len(), |s: &App, i| s.files[i].id.as_str().into())
 //!     .column(TableColumn::new("name", "Name").flex(2.0).min(160.0).sortable())
 //!     .column(TableColumn::new("size", "Size").width(90.0).align(Align::End).sortable())
@@ -20,8 +28,9 @@
 //!         "name" => Cell::text(&s.files[i].name),
 //!         _ => Cell::text(format_size(s.files[i].size)).mono(),
 //!     })
-//!     .on_sort(|s: &mut App, col, dir| s.sort_files(col, dir))
+//!     .on_sort(|s: &mut App, col, dir, _| s.sort_files(col, dir))
 //!     .build(s, &kit)
+//! # ;
 //! ```
 
 use std::borrow::Cow;

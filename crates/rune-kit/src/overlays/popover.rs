@@ -15,7 +15,12 @@ use crate::{Kit, Placement};
 /// windows. It appears at once and only fades on close. Push the result into the layer given to
 /// [`crate::root`].
 ///
-/// ```ignore
+/// ```
+/// # use rune::{col, el};
+/// # use rune_kit::{Kit, Placement, popover};
+/// # let kit = Kit::neutral(true);
+/// # let rows = el();
+/// # let mut layer = Vec::new();
 /// let surface = popover::raised(&kit, col().child(rows), kit.radius.md);
 /// layer.push(popover::anchored(&kit, surface, "menu-trigger", Placement::BottomStart, 4.0));
 /// ```
@@ -44,7 +49,11 @@ pub(crate) fn fit(content: El, anchor: &str, side: Side, align: Align, gap: f32)
 /// The popover surface style: raised fill, half-strength border, `radius` corners and the
 /// medium shadow.
 ///
-/// ```ignore
+/// ```
+/// # use rune::{col, el};
+/// # use rune_kit::{Kit, popover};
+/// # let kit = Kit::neutral(true);
+/// # let body = el();
 /// let surface = popover::raised(&kit, col().padding(8.0).child(body), kit.radius.md);
 /// ```
 pub fn raised(k: &Kit, el: El, radius: f32) -> El {
@@ -55,7 +64,10 @@ pub fn raised(k: &Kit, el: El, radius: f32) -> El {
 /// so a list longer than the window has room for scrolls, its edges fading. Put it in a
 /// column with `.min_h(0.0)` up to the surface.
 ///
-/// ```ignore
+/// ```
+/// # use rune::{El, col};
+/// # use rune_kit::popover;
+/// # let rows: Vec<El> = Vec::new();
 /// let body = col().min_h(0.0).child(popover::fit_scroll(col().children(rows)));
 /// ```
 pub fn fit_scroll(rows: El) -> El {

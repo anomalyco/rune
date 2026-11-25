@@ -2,7 +2,11 @@
 //! [`SyntaxTheme`]. [`Markdown`](crate::Markdown) colours its code fences with it, and the same
 //! output paints any other text, such as code in a composer or a diff.
 //!
-//! ```ignore
+//! ```
+//! # use rune_kit::{Kit, syntax::{Highlight, Highlighter, SyntaxTheme}};
+//! # let kit = Kit::neutral(true);
+//! # let (code, code_start) = ("fn main() {}", 0);
+//! # fn my_brainfuck(_: &str) -> Vec<Highlight> { Vec::new() }
 //! // The built-in lexers, cached per (language, code):
 //! let found = rune_kit::syntax::highlight(Some("rust"), code);
 //! // Colour-only spans, shifted to where the code starts in a longer text:

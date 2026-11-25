@@ -334,11 +334,18 @@ impl TextInput {
     /// focus ([`El::reveal_caret_on_focus`](rune::El::reveal_caret_on_focus)). Off by default
     /// (`false`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, TextInput};
+    /// # struct App { name: TextEdit }
+    /// # let s = App { name: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextInput::new(&s.name)
     ///     .reveal_caret_on_focus(true)
     ///     .on_edit(|s: &mut App| &mut s.name)
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn reveal_caret_on_focus(mut self, on: bool) -> Self {
         self.edits.visual(move |e| e.reveal_caret_on_focus(on));
@@ -474,8 +481,15 @@ impl TextInput {
     /// Undo/Redo, IME, and spellcheck edits. Pair with [`Self::on_edit`] so the runtime can
     /// move the caret and selection in your [`TextEdit`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::TextEdit;
+    /// # use rune_kit::{Kit, TextInput};
+    /// # struct App { endpoint: TextEdit }
+    /// # let s = App { endpoint: TextEdit::default() };
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// TextInput::new(&s.endpoint).read_only(true).on_edit(|s: &mut App| &mut s.endpoint).build(&k)
+    /// # ;
     /// ```
     pub fn read_only(mut self, read_only: bool) -> Self {
         self.read_only = read_only;

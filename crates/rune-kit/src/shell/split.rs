@@ -112,8 +112,11 @@ impl SidebarToggle {
     /// (`show`) and open (`hide`), replacing `"Show sidebar"` and `"Hide sidebar"`. Empty or
     /// blank strings keep the default for that state.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::shell::SidebarToggle;
+    /// # let _ =
     /// SidebarToggle::new().labels("显示侧边栏", "隐藏侧边栏")
+    /// # ;
     /// ```
     pub fn labels(mut self, show: &'static str, hide: &'static str) -> Self {
         self.show_label = (!show.trim().is_empty()).then_some(show);
@@ -236,11 +239,19 @@ impl SplitView {
     /// (`left` for an open sidebar, `right` for an open inspector, `top` when a toolbar sits
     /// above the pane). Default `false`.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::el;
+    /// # use rune_kit::{Kit, shell::{PaneState, SplitView}};
+    /// # struct App { sidebar: PaneState }
+    /// # let s = App { sidebar: PaneState::new(240.0) };
+    /// # let (main, sidebar) = (el(), el());
+    /// # let kit = Kit::neutral(true);
+    /// # let _ =
     /// SplitView::new(main)
     ///     .sidebar(&s.sidebar, |s: &mut App| &mut s.sidebar, sidebar)
     ///     .flat_main(true)
     ///     .build(&kit)
+    /// # ;
     /// ```
     pub fn flat_main(mut self, on: bool) -> Self {
         self.flat = on;
@@ -513,8 +524,14 @@ impl Page {
     /// Draws the content pane flat instead of as a rounded card, matching
     /// [`SplitView::flat_main`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::el;
+    /// # use rune_kit::{Kit, shell::Page};
+    /// # let body = el();
+    /// # let kit = Kit::neutral(true);
+    /// # let _ =
     /// Page::new(body).title("Settings").flat_main(true).build(&kit)
+    /// # ;
     /// ```
     pub fn flat_main(mut self, on: bool) -> Self {
         self.flat = on;

@@ -7,7 +7,14 @@
 //! while streaming is fine: an unclosed fence is a code block that keeps growing (a diagram
 //! fence draws as it grows; see Diagrams).
 //!
-//! ```ignore
+//! ```
+//! # use rune_kit::{Kit, Markdown, MarkdownStyle};
+//! # struct App;
+//! # impl App { fn open(&mut self, _: &str) {} }
+//! # struct Msg { text: String }
+//! # let message = Msg { text: "# Hello".into() };
+//! # let dark = true;
+//! # let kit = Kit::neutral(dark);
 //! let view = Markdown::new(&message.text).reveal(0.18).on_link(|s: &mut App, url| s.open(url)).build(&kit);
 //! // Without a Kit:
 //! let view = Markdown::new(&message.text).render(&MarkdownStyle::neutral(dark));
@@ -319,7 +326,10 @@ impl Markdown {
     /// [`Runtime::elements`](rune::Runtime::elements) reports a `mark` per rendered fragment.
     /// Empty/out-of-source ranges paint nothing; partial UTF-8 characters expand to boundaries.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Case, Kit, Markdown, markdown};
+    /// # let (src, query) = ("Hello **world**", "world");
+    /// # let kit = Kit::neutral(true);
     /// let view = Markdown::new(src).highlights(markdown::find(src, query, Case::Insensitive)).build(&kit);
     /// ```
     pub fn highlights(mut self, highlights: impl IntoIterator<Item = impl HighlightItem>) -> Self {
@@ -462,8 +472,14 @@ impl Markdown {
     /// controls on it (a button that opens it larger) or key it. Fences that draw as their
     /// source, or nothing yet while streaming, don't come here.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, col};
+    /// # use rune_kit::Markdown;
+    /// # fn open_button(_: &str) -> El { col() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).diagram_frame(|card, d| col().key(format!("diagram-{}", d.index)).child(card).child(open_button(d.source)))
+    /// # ;
     /// ```
     #[cfg(feature = "mermaid")]
     pub fn diagram_frame(mut self, f: impl Fn(El, &DiagramFrame<'_>) -> El + 'static) -> Self {
@@ -475,8 +491,14 @@ impl Markdown {
     /// controls on it (a Copy button). Diagrams that draw as their source and diff fences don't
     /// come here (see [`Self::diff_frame`]).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, col};
+    /// # use rune_kit::Markdown;
+    /// # fn copy_button(_: &str) -> El { col() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).code_frame(|card, c| col().key(format!("code-{}", c.index)).child(card).child(copy_button(c.source)))
+    /// # ;
     /// ```
     pub fn code_frame(mut self, f: impl Fn(El, &CodeFrame<'_>) -> El + 'static) -> Self {
         self.code_frame = Some(Rc::new(f));
@@ -522,8 +544,14 @@ impl Markdown {
     /// Draws `f(quote, frame)` in place of each block quote, so an app can put its own controls
     /// on it (a button that copies the whole quote). Quotes inside a quote come here too.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, col};
+    /// # use rune_kit::Markdown;
+    /// # fn copy_button(_: &str) -> El { col() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).quote_frame(|quote, q| col().child(quote).child(copy_button(q.text)))
+    /// # ;
     /// ```
     pub fn quote_frame(mut self, f: impl Fn(El, &QuoteFrame<'_>) -> El + 'static) -> Self {
         self.quote_frame = Some(Rc::new(f));
@@ -536,11 +564,16 @@ impl Markdown {
     /// [`SyntaxTheme`] colours, or a colour of its own. See [`Highlighter`] for caching, and
     /// [`syntax::builtin`](crate::syntax::builtin) to fall back on for other languages.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Markdown, syntax::Highlight};
+    /// # fn my_cobol(_: &str) -> Vec<Highlight> { Vec::new() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).highlight(|lang, code| match lang {
     ///     Some("cobol") => my_cobol(code),
     ///     _ => rune_kit::syntax::builtin(lang, code),
     /// })
+    /// # ;
     /// ```
     pub fn highlight(self, f: impl Fn(Option<&str>, &str) -> Vec<crate::syntax::Highlight> + 'static) -> Self {
         self.highlighter(Highlighter::new(f))

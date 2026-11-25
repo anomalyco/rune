@@ -10,10 +10,22 @@
 //! The app owns an [`ImageZoom`] and hands [`Preview`] a lens to it. While a glide runs it asks
 //! for frames: call [`ImageZoom::poll`] from the app's poll.
 //!
-//! ```ignore
+//! ```
+//! # use rune::{Pixels, el};
+//! # use rune_kit::{ImageZoom, Kit, Preview};
+//! # struct Photo(Pixels);
+//! # impl Photo { fn size(&self) -> [f32; 2] { [100.0, 100.0] } fn pixels(&self) -> &Pixels { &self.0 } }
+//! # struct App { zoom: ImageZoom, viewing: Option<usize> }
+//! # let s = App { zoom: ImageZoom::new(), viewing: Some(0) };
+//! # let image = Photo(Pixels::new());
+//! # let kit = Kit::neutral(true);
+//! # let window = [800.0, 600.0];
+//! # let reduced_motion = false;
+//! # let _ =
 //! Preview::new(|s: &mut App| &mut s.zoom, image.size(), el().pixels(image.pixels()))
-//!     .on_close(|s: &mut App, tx| s.viewing = None)
-//!     .build(&s.zoom, &kit, window)
+//!     .on_close(|s: &mut App, _tx| s.viewing = None)
+//!     .build(&s.zoom, &kit, window, reduced_motion)
+//! # ;
 //! ```
 
 pub mod gesture;
