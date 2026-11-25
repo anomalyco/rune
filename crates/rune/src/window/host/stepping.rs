@@ -182,7 +182,7 @@ impl Host {
         });
         if needs_attach && let Some(w) = self.win.as_mut() {
             w.native.wayland_backdrop =
-                crate::platform::wayland_backdrop::SurfaceBlur::for_window(&w.window);
+                crate::platform::backdrop::SurfaceBlur::for_window(&w.window);
             if w.native.wayland_backdrop.is_some() {
                 self.sync_window_backdrop(false);
             }

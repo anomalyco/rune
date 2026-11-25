@@ -219,7 +219,7 @@ fn run_configured(factory: Factory, args: Args, accessory: bool) -> Result<(), S
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     {
         crate::platform::wayland_drop::shutdown();
-        crate::platform::wayland_backdrop::shutdown();
+        crate::platform::backdrop::shutdown();
     }
     crate::clipboard::shutdown(); // Also cover an event-loop error before `exiting`.
     crate::platform::ready_signal::clear();
