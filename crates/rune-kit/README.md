@@ -257,7 +257,12 @@ same commit (see `rune-overlays--tx-callbacks`). `Select::step_closed(true)` opt
 `Select` into stepping through choices with Up and Down via `on_choose` without opening the
 popup, clamping at the ends while `Alt+Down`, Space and clicking still open it (see
 `rune-select--step-closed`, and `rune-focus--keyboard` for `El::press_on_return()` and
-entering a `focus_group` from a focused container). `Menu::label` names the open `role="menu"`
+entering a `focus_group` from a focused container). `Kit::metrics` also covers overlays (`DialogMetrics`, `PopupRowMetrics`, `SelectMetrics`,
+`PopoverMetrics`, and `MenuMetrics`), with `::kit(&k)` constructors whose radii follow
+`k.radius.{sm,md}` automatically (see `rune-overlays--metrics` in the gallery). `Menu::padding`,
+`Menu::separator_spacing(above, below)`, and `Menu::inner_border` override a menu's row padding,
+separator spacing, and inner border per instance (propagating to open submenus), and
+`Menu::separator_keyed` assigns a separator a stable key without changing `MenuEntry`. `Menu::label` names the open `role="menu"`
 surface; `MenuItem::key` assigns a stable key instead of positional `{menu_key}-item{i}` so
 inserting rows above keeps focus; `MenuItem::a11y_label` separates the accessible name (and
 typeahead / submenu name) from truncated drawn text; and `MenuItem::submenu_placement` (default

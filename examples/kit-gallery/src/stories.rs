@@ -25,6 +25,7 @@ mod link_hover;
 mod link_popover;
 mod markdown;
 mod metrics;
+mod overlay_metrics;
 mod overlays;
 pub(crate) mod sidebar;
 mod split_view;
@@ -278,6 +279,7 @@ stories! {
     "rune-tooltip--help-arrow" => tooltip_help_arrow,
     "components-hover-card--basic" => hover_card_basic,
     "rune-hover-card--placements" => hover_card_placements,
+    "rune-overlays--metrics" => overlay_metrics::overlays_metrics,
     "rune-overlays--tx-callbacks" => overlays_tx_callbacks,
     "rune-focus--keyboard" => focus_keyboard,
     "rune-focus--key-preview" => combobox::key_preview,

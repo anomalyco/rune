@@ -7,7 +7,7 @@ use rune::{Color, TextStyle};
 
 use crate::{ControlSize, Kit};
 
-fn non_neg(v: f32) -> f32 {
+pub(crate) fn non_neg(v: f32) -> f32 {
     if v.is_finite() && v > 0.0 { v } else { 0.0 }
 }
 
@@ -290,13 +290,150 @@ impl StandardSwitchMetrics {
     }
 }
 
+/// A [`Dialog`](crate::Dialog)'s panel corner radius, header padding, and optional title style.
+///
+/// ```
+/// # use rune_kit::{DialogMetrics, Kit};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.dialog = Some(DialogMetrics { padding: 12.0, ..DialogMetrics::kit(&k) });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DialogMetrics {
+    pub radius: f32,
+    /// Padding on every side of the header. The 16 point viewport margin around the panel stays.
+    pub padding: f32,
+    /// Override for the title text style. `None` keeps the built-in styles (15/20 with a
+    /// description, `k.ty.ui_medium` on a 16 line without).
+    pub title: Option<TextStyle>,
+}
+
+impl DialogMetrics {
+    /// The built-in dialog: `k.radius.md` corners, 16 point header padding, and the built-in
+    /// title styles (`title: None`).
+    pub fn kit(k: &Kit) -> DialogMetrics {
+        DialogMetrics { radius: k.radius.md, padding: 16.0, title: None }
+    }
+}
+
+/// Row height and highlight corner radius shared by compact [`Menu`](crate::Menu) items,
+/// [`Select`](crate::Select) listbox rows, and [`PopupList`](crate::PopupList) rows.
+///
+/// ```
+/// # use rune_kit::{Kit, PopupRowMetrics};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.popup_row = Some(PopupRowMetrics { height: 24.0, ..PopupRowMetrics::kit(&k) });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupRowMetrics {
+    pub height: f32,
+    pub radius: f32,
+}
+
+impl PopupRowMetrics {
+    /// The built-in row: 28 points tall with `k.radius.sm` corners.
+    pub fn kit(k: &Kit) -> PopupRowMetrics {
+        PopupRowMetrics { height: 28.0, radius: k.radius.sm }
+    }
+}
+
+/// A [`Select`](crate::Select) trigger's chevron icon size and its bounding box in field
+/// appearance.
+///
+/// ```
+/// # use rune_kit::{Kit, SelectMetrics};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.select = Some(SelectMetrics { chevron: 14.0, ..SelectMetrics::kit(&k) });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SelectMetrics {
+    pub chevron: f32,
+    pub chevron_box: f32,
+}
+
+impl SelectMetrics {
+    /// The built-in chevron: a 16 point icon inside a 20 point box.
+    pub fn kit(_k: &Kit) -> SelectMetrics {
+        SelectMetrics { chevron: 16.0, chevron_box: 20.0 }
+    }
+}
+
+/// A [`Popover`](crate::Popover)'s default minimum and maximum surface width.
+///
+/// ```
+/// # use rune_kit::{Kit, PopoverMetrics};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.popover = Some(PopoverMetrics { min_width: 160.0, ..PopoverMetrics::kit(&k) });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopoverMetrics {
+    pub min_width: f32,
+    pub max_width: f32,
+}
+
+impl PopoverMetrics {
+    /// The built-in width clamp: 200 to 320 points.
+    pub fn kit(_k: &Kit) -> PopoverMetrics {
+        PopoverMetrics { min_width: 200.0, max_width: 320.0 }
+    }
+}
+
+/// Theme-wide defaults for a [`Menu`](crate::Menu)'s row padding, space above and below each
+/// separator, and standard-appearance inner border width. Per-menu builders
+/// ([`Menu::padding`](crate::Menu::padding),
+/// [`Menu::separator_spacing`](crate::Menu::separator_spacing),
+/// [`Menu::inner_border`](crate::Menu::inner_border)) override these for one menu and its
+/// open submenus.
+///
+/// ```
+/// # use rune_kit::{Kit, MenuMetrics};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.menu = Some(MenuMetrics {
+///     padding: 4.0,
+///     standard_inner_border: 0.0,
+///     ..MenuMetrics::kit(&k)
+/// });
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MenuMetrics {
+    /// Padding around rows in a compact menu.
+    pub padding: f32,
+    /// Padding around rows in a standard menu.
+    pub standard_padding: f32,
+    /// Space above a separator in a compact menu.
+    pub separator_above: f32,
+    /// Space below a separator in a compact menu.
+    pub separator_below: f32,
+    /// Space above a separator in a standard menu.
+    pub standard_separator_above: f32,
+    /// Space below a separator in a standard menu.
+    pub standard_separator_below: f32,
+    /// Inner border width of a standard menu (`0.0` omits the border).
+    pub standard_inner_border: f32,
+}
+
+impl MenuMetrics {
+    /// The built-in menu spacing: 2 pt padding and separator margins for compact, 4 pt for
+    /// standard, and a 1 pt standard inner border.
+    pub fn kit(_k: &Kit) -> MenuMetrics {
+        MenuMetrics {
+            padding: 2.0,
+            standard_padding: 4.0,
+            separator_above: 2.0,
+            separator_below: 2.0,
+            standard_separator_above: 4.0,
+            standard_separator_below: 4.0,
+            standard_inner_border: 1.0,
+        }
+    }
+}
+
 /// Overrides for metrics some controls otherwise fix in code. `Metrics::default()` overrides
 /// nothing.
 ///
 /// ```
 /// # use rune_kit::{
-/// #     BySize, ButtonMetrics, FieldMetrics, KeybindMetrics, Kit, ProgressMetrics,
-/// #     SegmentedMetrics, SwitchLook,
+/// #     BySize, ButtonMetrics, DialogMetrics, FieldMetrics, KeybindMetrics, Kit, MenuMetrics,
+/// #     PopupRowMetrics, ProgressMetrics, SegmentedMetrics, SwitchLook,
 /// # };
 /// let mut k = Kit::neutral(true);
 /// // Tailwind's 24/28/32/36 buttons.
@@ -317,7 +454,7 @@ impl StandardSwitchMetrics {
 ///     focus_offset: 0.0,
 ///     ..FieldMetrics::kit(&k)
 /// });
-/// // Dense flat controls.
+/// // Dense flat controls and overlays.
 /// k.metrics.segmented = Some(SegmentedMetrics { height: 24.0, padding_x: 8.0, ..SegmentedMetrics::kit(&k) });
 /// k.metrics.disclosure_header_height = Some(26.0);
 /// k.metrics.progress = Some(ProgressMetrics { height: 6.0, ..ProgressMetrics::kit(&k) });
@@ -325,6 +462,9 @@ impl StandardSwitchMetrics {
 /// k.metrics.keybind = Some(KeybindMetrics { height: 16.0, ..KeybindMetrics::kit(&k) });
 /// k.metrics.text_area_min_height = Some(60.0);
 /// k.metrics.switch_look = Some(SwitchLook { track_border: 1.0, ..SwitchLook::flat(&k) });
+/// k.metrics.dialog = Some(DialogMetrics { padding: 12.0, ..DialogMetrics::kit(&k) });
+/// k.metrics.popup_row = Some(PopupRowMetrics { height: 24.0, ..PopupRowMetrics::kit(&k) });
+/// k.metrics.menu = Some(MenuMetrics { standard_inner_border: 0.0, ..MenuMetrics::kit(&k) });
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Metrics {
@@ -364,6 +504,19 @@ pub struct Metrics {
     /// Standard [`Switch`](crate::Switch) (`Switch::standard`) track and thumb geometry; else
     /// [`StandardSwitchMetrics::kit`].
     pub standard_switch: Option<StandardSwitchMetrics>,
+
+    // Overlays (#2362, #2364).
+    /// [`Dialog`](crate::Dialog) radius, header padding, and title style; else [`DialogMetrics::kit`].
+    pub dialog: Option<DialogMetrics>,
+    /// Compact [`Menu`](crate::Menu), [`Select`](crate::Select), and [`PopupList`](crate::PopupList)
+    /// row height and radius; else [`PopupRowMetrics::kit`].
+    pub popup_row: Option<PopupRowMetrics>,
+    /// [`Select`](crate::Select) trigger chevron; else [`SelectMetrics::kit`].
+    pub select: Option<SelectMetrics>,
+    /// [`Popover`](crate::Popover) default width limits; else [`PopoverMetrics::kit`].
+    pub popover: Option<PopoverMetrics>,
+    /// [`Menu`](crate::Menu) padding, separator spacing, and standard inner border; else [`MenuMetrics::kit`].
+    pub menu: Option<MenuMetrics>,
 }
 
 impl Kit {
@@ -422,5 +575,36 @@ impl Kit {
     }
     pub(crate) fn radius_md(&self) -> f32 {
         non_neg(self.radius.md)
+    }
+
+    pub(crate) fn dialog_metrics(&self) -> DialogMetrics {
+        let m = self.metrics.dialog.unwrap_or_else(|| DialogMetrics::kit(self));
+        DialogMetrics { radius: non_neg(m.radius), padding: non_neg(m.padding), title: m.title }
+    }
+    pub(crate) fn popup_row_metrics(&self) -> PopupRowMetrics {
+        let m = self.metrics.popup_row.unwrap_or_else(|| PopupRowMetrics::kit(self));
+        PopupRowMetrics { height: non_neg(m.height), radius: non_neg(m.radius) }
+    }
+    pub(crate) fn select_metrics(&self) -> SelectMetrics {
+        let m = self.metrics.select.unwrap_or_else(|| SelectMetrics::kit(self));
+        SelectMetrics { chevron: non_neg(m.chevron), chevron_box: non_neg(m.chevron_box) }
+    }
+    pub(crate) fn popover_metrics(&self) -> PopoverMetrics {
+        let m = self.metrics.popover.unwrap_or_else(|| PopoverMetrics::kit(self));
+        let min_width = non_neg(m.min_width);
+        let max_width = non_neg(m.max_width).max(min_width);
+        PopoverMetrics { min_width, max_width }
+    }
+    pub(crate) fn menu_metrics(&self) -> MenuMetrics {
+        let m = self.metrics.menu.unwrap_or_else(|| MenuMetrics::kit(self));
+        MenuMetrics {
+            padding: non_neg(m.padding),
+            standard_padding: non_neg(m.standard_padding),
+            separator_above: non_neg(m.separator_above),
+            separator_below: non_neg(m.separator_below),
+            standard_separator_above: non_neg(m.standard_separator_above),
+            standard_separator_below: non_neg(m.standard_separator_below),
+            standard_inner_border: non_neg(m.standard_inner_border),
+        }
     }
 }

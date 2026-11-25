@@ -12,9 +12,11 @@ use super::overlay::{Modal, Placement, content_key, dismissal, dismissal_tx, pus
 use super::popover::fit_scroll_bar;
 use crate::{Kit, State, over};
 
-/// The listbox's tallest: its 4-point padding, six 30-point rows (28 tall, 2 apart), and most
-/// of the seventh, whose label shows fading under the edge.
-const LISTBOX_MAX_HEIGHT: f32 = 4.0 + 6.0 * 30.0 + 22.0;
+/// The listbox's tallest: its 4-point padding, six rows (2 points apart), and most of the
+/// seventh, whose label shows fading under the edge (206 points at the default 28-point row).
+fn listbox_max_height(row_height: f32) -> f32 {
+    4.0 + 6.0 * (row_height + 2.0) + (row_height - 6.0).max(0.0)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SelectAppearance {
@@ -289,6 +291,7 @@ impl Select {
             return trigger;
         }
         let c = &k.c;
+        let row_m = k.popup_row_metrics();
         let anchor_key = trigger_key(&self.key);
         // About six and three-quarter rows tall at most, so a longer list shows its next row's label
         // fading under the edge and reads as one that scrolls (hex#840); consecutive options
@@ -304,7 +307,7 @@ impl Select {
                     list = list.child(
                         row()
                             .key(format!("group{i}"))
-                            .h(28.0)
+                            .h(row_m.height)
                             .px(12.0)
                             .center_y()
                             .child(text(g).font(k.ty.small_medium).color(c.text_faint)),
@@ -319,12 +322,12 @@ impl Select {
                 .focusable(true).focus_selected(selected)
                 .label(o.clone())
                 .position_in_set(i + 1, count)
-                .h(28.0)
+                .h(row_m.height)
                 .pl(12.0)
                 .pr(6.0)
                 .gap(8.0)
                 .center_y()
-                .radius(4.0)
+                .radius(row_m.radius)
                 .mt(if after_item { 2.0 } else { 0.0 })
                 .child(
                     text(o.clone()).key("label").font(k.ty.ui_compact).color(c.text_base).grow(1.0).shrink().truncate().a11y_hidden(),
@@ -353,7 +356,7 @@ impl Select {
             .label(name)
             .focus_group()
             .focus_return(&anchor_key)
-            .max_h(LISTBOX_MAX_HEIGHT)
+            .max_h(listbox_max_height(row_m.height))
             .min_h(0.0)
             .shrink();
         let listbox = match self.menu_width {
@@ -362,7 +365,7 @@ impl Select {
         };
         let content = k.elevate(
             listbox
-                .radius(6.0)
+                .radius(k.radius_md())
                 .fill(c.layer_01)
                 .child(fit_scroll_bar(k, &self.key, list)),
             &k.elevation.floating,
@@ -381,6 +384,7 @@ impl Select {
             Some(v) => (v.clone(), if red { c.danger.fg } else { c.text_base }),
             None => (self.placeholder.clone(), if red { c.danger.fg } else { c.text_faint }),
         };
+        let sm = k.select_metrics();
         let chevron: &'static Icon = if self.open { k.glyph.chevron_up } else { k.glyph.chevron_down };
         // Named for what it chooses, its value the chosen option; the text and chevron inside
         // show the same.
@@ -406,7 +410,7 @@ impl Select {
                     .gap(4.0)
                     .radius(k.radius.sm)
                     .child(text(label).key("value").font(font).color(ink).truncate().a11y_hidden())
-                    .child(icon(chevron, 16.0).key("chevron").color(c.icon_muted).a11y_hidden());
+                    .child(icon(chevron, sm.chevron).key("chevron").color(c.icon_muted).a11y_hidden());
                 k.overlay_state(t, self.state, hover, !disabled)
             }
             SelectAppearance::Field => {
@@ -427,7 +431,7 @@ impl Select {
                             .a11y_hidden(),
                     )
                     .child(
-                        el().size(20.0, 20.0).center().child(icon(chevron, 16.0).key("chevron").color(c.icon_muted)).a11y_hidden(),
+                        el().size(sm.chevron_box, sm.chevron_box).center().child(icon(chevron, sm.chevron).key("chevron").color(c.icon_muted)).a11y_hidden(),
                     );
                 // select.css:34-35, 100-108: a 1 point ring just inside the box, in place of the
                 // shadow, while focus is in the closed field (`:focus-within`) or it's invalid.

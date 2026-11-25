@@ -173,6 +173,7 @@ fn pure_hover_sweep_commits_only_on_stateful_hover_stories() {
     );
 }
 
+
 const PINNED_CONTROL_STORIES: &[&str] = &[
     "ui-segmented-control--basic",
     "ui-segmented-control--controlled",
@@ -300,5 +301,116 @@ fn pinned_control_stories_snapshot() {
         assert_eq!(exp_lines.len(), got_lines.len(), "story count changed");
         let diffs: Vec<_> = exp_lines.iter().zip(&got_lines).filter(|(a, b)| a != b).collect();
         assert!(diffs.is_empty(), "default look drifted for {} story/theme combos:\n{diffs:#?}", diffs.len());
+    }
+}
+
+/// Standing check: every overlay story under `Kit::neutral` and `rune_theme_opencode::kit`
+/// produces bit-identical element geometry and GPU paint instances whether `Kit::metrics` is
+/// left at `Metrics::default()` or explicitly populated with each overlay metric's `::kit(&k)`.
+#[test]
+fn overlay_default_metrics_match_explicit_kit_defaults() {
+    use rune_kit::{DialogMetrics, MenuMetrics, PopoverMetrics, PopupRowMetrics, SelectMetrics};
+
+    const OVERLAY_STORIES: &[&str] = &[
+        "ui-menu--basic",
+        "ui-menu--appearances",
+        "ui-menu--with-submenu",
+        "rune-menu--submenu-options",
+        "ui-menu--with-radio",
+        "ui-select--playground",
+        "ui-select--grouped",
+        "rune-select--states",
+        "rune-popup-list--composer",
+        "ui-dialog--basic",
+        "rune-dialog--fit",
+        "components-popover--basic",
+    ];
+
+    thread_local! {
+        static EXPLICIT: Cell<bool> = const { Cell::new(false) };
+    }
+
+    fn pin_view(s: &G, cx: &mut Cx<G>) -> El {
+        let base = kit(s, cx.system_dark());
+        let mut owned = base.clone();
+        if EXPLICIT.get() {
+            owned.metrics.dialog = Some(DialogMetrics::kit(base));
+            owned.metrics.popup_row = Some(PopupRowMetrics::kit(base));
+            owned.metrics.select = Some(SelectMetrics::kit(base));
+            owned.metrics.popover = Some(PopoverMetrics::kit(base));
+            owned.metrics.menu = Some(MenuMetrics::kit(base));
+        }
+        let mut overlays = Vec::new();
+        let (_, f) = stories::STORIES
+            .iter()
+            .find(|(id, _)| *id == s.story)
+            .expect("story");
+        let body = f(s, &owned, &mut overlays);
+        let frame = col().key("frame").fill(owned.c.page).padding(24.0).child(body);
+        rune_kit::root(frame, overlays)
+    }
+
+    fn snapshot(neutral: bool, dark: bool, id: &str, explicit_metrics: bool) -> (Vec<String>, Vec<[u32; 32]>) {
+        EXPLICIT.set(explicit_metrics);
+        let (_, setup) = stories::SCENES.iter().find(|(s, _)| *s == id).expect("scene");
+        let mut g = init();
+        g.neutral = neutral;
+        g.palette = false;
+        setup(&mut g);
+        if id == "ui-menu--with-submenu" {
+            g.on.insert("recent".into());
+        }
+        let mut rt = rune::Runtime::new(g, pin_view, (720.0, 480.0), rune::Env::new(dark, 1.0));
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(0.0);
+        let els = rt
+            .elements()
+            .into_iter()
+            .map(|e| {
+                let ts = e.text_style.as_ref().map(|s| {
+                    (s.size.to_bits(), s.weight.to_bits(), s.line_height.to_bits(), s.tracking.to_bits())
+                });
+                format!(
+                    "{}|{:?}|{:?}|{:?}|{:#x}|{:?}|{:?}|{:?}|{:?}",
+                    e.path,
+                    e.key,
+                    e.rect.map(f32::to_bits),
+                    e.target.map(f32::to_bits),
+                    e.radius.to_bits(),
+                    e.inset.map(f32::to_bits),
+                    e.fill,
+                    e.border_color,
+                    ts,
+                )
+            })
+            .collect();
+        let insts = rt
+            .instances
+            .iter()
+            .map(|i| {
+                let mut words = [0u32; 32];
+                for (k, v) in i.rect.iter().chain(&i.radii).chain(&i.fill).chain(&i.border).chain(&i.params).chain(&i.uv).chain(&i.clip).enumerate() {
+                    words[k] = v.to_bits();
+                }
+                words[28..32].copy_from_slice(&i.fade);
+                words
+            })
+            .collect();
+        (els, insts)
+    }
+
+    for (theme, neutral, dark) in [
+        ("neutral-dark", true, true),
+        ("neutral-light", true, false),
+        ("opencode-dark", false, true),
+        ("opencode-light", false, false),
+    ] {
+        for &id in OVERLAY_STORIES {
+            let def = snapshot(neutral, dark, id, false);
+            let exp = snapshot(neutral, dark, id, true);
+            assert_eq!(def.0, exp.0, "layout/elements diverged for {theme} {id}");
+            assert_eq!(def.1, exp.1, "paint instances diverged for {theme} {id}");
+        }
     }
 }

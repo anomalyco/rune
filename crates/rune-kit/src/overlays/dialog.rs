@@ -81,13 +81,17 @@ impl Dialog {
     }
     pub fn build(self, k: &Kit, layer: &mut Vec<El>) {
         if !self.open { return; }
+        let dm = k.dialog_metrics();
+        let title_font = dm.title.unwrap_or_else(|| {
+            if self.description.is_some() { TextStyle { size: 15.0, tracking: -0.13, ..k.ty.ui_medium }.lh(20.0) }
+            else { k.ty.ui_medium.lh(16.0) }
+        });
         let mut title = col().grow(1.0).shrink().gap(4.0).child(text(self.title.clone())
-            .font(if self.description.is_some() { TextStyle { size: 15.0, tracking: -0.13, ..k.ty.ui_medium }.lh(20.0) }
-                else { k.ty.ui_medium.lh(16.0) }).color(k.c.text_base));
+            .font(title_font).color(k.c.text_base));
         if let Some(description) = self.description.clone() {
             title = title.child(text(description).font(k.ty.ui.lh(20.0)).color(k.c.text_muted).wrap().w_full());
         }
-        let mut header = row().key("header").w_full().padding(16.0).items_start().child(title);
+        let mut header = row().key("header").w_full().padding(dm.padding).items_start().child(title);
         if let Some(button) = self.button {
             let close_label = self.close_label
                 .filter(|l| !l.trim().is_empty())
@@ -103,7 +107,7 @@ impl Dialog {
         let (panel, body) = if self.fit { (col(), body) } else { (col().h(368.0), body.grow(1.0)) };
         let panel = panel.description(self.description.unwrap_or_default());
         let panel = k.elevate(panel.key(format!("{}-dialog", self.key)).role("dialog").label(self.title.clone())
-            .w_full().max_w(self.width).shrink().min_h(0.0).radius(6.0).fill(k.c.layer_01)
+            .w_full().max_w(self.width).shrink().min_h(0.0).radius(dm.radius).fill(k.c.layer_01)
             .child(header)
             .child(body)
             .token_motion(k.motion.overlay), &k.elevation.overlay);

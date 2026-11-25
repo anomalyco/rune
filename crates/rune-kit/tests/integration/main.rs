@@ -27,6 +27,7 @@ mod menu_look;
 mod menu_open;
 mod menu_submenu_keys;
 mod menu_submenu_nav;
+mod overlay_metrics;
 mod palette_seed_compat;
 mod popover_focus;
 mod popup_list;
