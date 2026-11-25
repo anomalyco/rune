@@ -538,7 +538,7 @@ search still see the shortcode. The pictures are drawn only, with no hover or pr
   top-level paragraphs, headings, lists and quotes at a readable measure while code blocks, diffs,
   diagrams, tables, images and rules keep the full column width; `inline_code_text(color)` colours
   ordinary inline code glyphs without changing code inside links or `Markdown::code_link`;
-  `paragraph_margin`, `heading_margin(level, top, bottom)` and `image_margin` override vertical
+  `paragraph_margin`, `heading_margin(level, top, bottom)`, `list_margin`, `quote_margin`, `rule_margin` and `image_margin` override vertical
   block spacing while preserving CSS margin collapsing and list-item rules; and
   `code_block_radius(radius)` overrides the 6 pt corner radius on fenced code and diff cards.
   `Markdown::wrap_anywhere(true)` enables CSS `overflow-wrap: anywhere` on paragraphs, headings,
