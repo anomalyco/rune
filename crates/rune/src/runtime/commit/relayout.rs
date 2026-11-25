@@ -138,6 +138,7 @@ impl Measurement<'_> {
                 let kept = slot.text_layout.take().filter(|l| matches!(l, TextLayout::Paragraphs(_)));
                 let mut copy = Node { elided: None, virtual_mount: false, text_layout: kept, epoch: crate::runtime::paint_keep::next_epoch(), ..slot.clone() };
                 copy.clear_run_layout();
+                copy.clear_tabular_layout();
                 nodes.push(copy);
             } else {
                 let stub = Node::moved_stub(slot);
@@ -145,6 +146,7 @@ impl Measurement<'_> {
                 if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) {
                     n.text_layout = None;
                     n.elided = None;
+                    n.clear_tabular_layout();
                 }
                 n.clear_run_layout();
                 n.virtual_mount = false;
@@ -391,6 +393,7 @@ pub(in crate::runtime) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f
 }
 
 fn lay_out_text_inner(text: &mut TextSystem, n: &mut Node, w: f32, scale: f32, live: bool) {
+    n.clear_tabular_layout();
     let Some(spec) = &n.text else { return };
     // A cell of a run draws from the run's layout (and keeps it cached) instead of its own.
     let run = spec.cold.advance_in.as_ref().map(|(run, at)| (text.run_layout(run, spec.style, scale), *at));

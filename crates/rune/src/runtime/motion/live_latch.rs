@@ -272,14 +272,24 @@ impl timer_wake::FrameState {
             if let Some(spec) = &mut node.text
                 && let Some(live) = &spec.cold.live
             {
-                let seen = &mut node.cold.live_text_seen;
+                let cold = &mut *node.cold;
+                let seen = &mut cold.live_text_seen;
                 if let Some(live_text) = live.read(seen) && spec.source_text() != &*live_text {
                     spec.replace_content(live_text.to_string());
                     spec.apply_case();
                     node_text_changed = true;
                     if !spec.wrap && !spec.truncate && spec.max_lines == 0 {
-                        node.text_layout = Some(TextLayout::Single(text.layout_live(&spec.content, spec.style, scale)));
+                        let tabular_ok = spec.cold.text_indent == 0.0
+                            && spec.dir != crate::text::TextDir::Fixed(crate::el::Flow::Rtl);
+                        if tabular_ok {
+                            let layout = text.layout_live_tabular_into(&spec.content, spec.style, scale, &mut cold.tabular_layout);
+                            node.text_layout = Some(TextLayout::Single(layout));
+                        } else {
+                            cold.tabular_layout = None;
+                            node.text_layout = Some(TextLayout::Single(text.layout_live(&spec.content, spec.style, scale)));
+                        }
                     } else {
+                        cold.tabular_layout = None;
                         layout_text_in_place = true;
                     }
                 }

@@ -22,6 +22,8 @@ pub(crate) struct NodeCold {
     pub(super) live: Vec<crate::live::Bound>,
     /// The run a cell measures and draws from (see `El::advance_in`).
     pub(super) run_layout: Option<Rc<crate::text::RunLayout>>,
+    /// Verified tabular-digit glyph substitution for a single-line `LiveText` node.
+    pub(super) tabular_layout: Option<Rc<crate::text::TabularGlyphs>>,
     pub(super) live_text_seen: Option<u128>,
     pub(super) looping: Option<Box<rune_motion::LoopSpec>>,
     pub(super) loop_times: Option<u32>,
@@ -72,6 +74,7 @@ impl crate::cold::Empty for NodeCold {
         label: None,
         live: Vec::new(),
         run_layout: None,
+        tabular_layout: None,
         live_text_seen: None,
         looping: None,
         loop_times: None,
@@ -196,6 +199,13 @@ impl Node {
     pub(super) fn clear_run_layout(&mut self) {
         if self.cold.get().is_some_and(|c| c.run_layout.is_some()) {
             self.cold_mut().run_layout = None;
+        }
+    }
+
+    #[inline]
+    pub(super) fn clear_tabular_layout(&mut self) {
+        if self.cold.get().is_some_and(|c| c.tabular_layout.is_some()) {
+            self.cold_mut().tabular_layout = None;
         }
     }
 

@@ -103,6 +103,7 @@ fn move_slice(
         if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) {
             n.text_layout = None;
             n.elided = None;
+            n.clear_tabular_layout();
         }
         n.clear_run_layout();
         n.scale_track = false;
@@ -379,6 +380,7 @@ impl Measurement<'_> {
                     n.text_layout = None;
                     n.elided = None;
                     n.clear_run_layout();
+        n.clear_tabular_layout();
                     n.scale_track = false;
                     n.group_fade = false;
                     n.virtual_mount = false;

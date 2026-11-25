@@ -819,6 +819,7 @@ impl RuntimeCore {
                     let shared = piece.shared.or(laid.single());
                     let still = scale_motion == ScaleMotion::Still && glide == [0.0; 2] && !bytes && !place_masks
                         && !self.motion.flights().iter().any(|f| f.lands(&n.path, n.key.as_deref()));
+                    let tabular = n.cold.get().and_then(|c| c.tabular_layout.as_deref());
                     // A layout whose stamp the id table dropped draws from its glyphs, uncopied.
                     if let Some(l) = shared.filter(|_| still && !direct && !secret)
                         && let Some(layout_id) = self.text.layout_id(l)
@@ -827,6 +828,7 @@ impl RuntimeCore {
                         let mut h = rune_motion::Fx::default();
                         (origin.map(f32::to_bits), clip.map(f32::to_bits), fade.map(f32::to_bits), shown.map(f32::to_bits), [tk, raster, s].map(f32::to_bits)).hash(&mut h);
                         (premul(color, o, srgb).map(f32::to_bits), srgb, self.text.emit_key()).hash(&mut h);
+                        tabular.map_or(0u64, crate::text::TabularGlyphs::value_id).hash(&mut h);
                         spans.len().hash(&mut h);
                         for sp in spans.iter() {
                             (sp.start, sp.end, sp.color.map(|c| premul(c, o, srgb).map(f32::to_bits))).hash(&mut h);
@@ -849,17 +851,29 @@ impl RuntimeCore {
                             }
                         }
                     }
-                    match shared.filter(|_| !direct && !secret) {
-                        _ if copied => {}
-                        Some(l) => self.text.glyphs_in_band_cached(l, r_origin, raster, bytes, band.clone(), &mut self.paint.glyph_scratch),
-                        None => self.text.glyphs_in_band(layout, r_origin, raster, bytes, band.clone(), &mut self.paint.glyph_scratch),
+                    if !copied {
+                        if let Some(tab) = tabular {
+                            self.text.glyphs_for_tabular(tab, r_origin, raster, bytes, band.clone(), &mut self.paint.glyph_scratch);
+                        } else {
+                            match shared.filter(|_| !direct && !secret) {
+                                Some(l) => self.text.glyphs_in_band_cached(l, r_origin, raster, bytes, band.clone(), &mut self.paint.glyph_scratch),
+                                None => self.text.glyphs_in_band(layout, r_origin, raster, bytes, band.clone(), &mut self.paint.glyph_scratch),
+                            }
+                        }
                     }
-                    if place_masks && !secret && let Some(layout) = shared {
-                        // Landing: the masks the next frame draws, placed now and not drawn.
-                        let mut masks = Vec::new();
-                        self.text.set_emit(crate::text::outline::Emit::Atlas);
-                        self.text.glyphs_in_band_cached(layout, r_origin, raster, bytes, band, &mut masks);
-                        self.text.set_emit(crate::text::outline::Emit::Outline);
+                    if place_masks && !secret {
+                        if let Some(tab) = tabular {
+                            let mut masks = Vec::new();
+                            self.text.set_emit(crate::text::outline::Emit::Atlas);
+                            self.text.glyphs_for_tabular(tab, r_origin, raster, bytes, band, &mut masks);
+                            self.text.set_emit(crate::text::outline::Emit::Outline);
+                        } else if let Some(layout) = shared {
+                            // Landing: the masks the next frame draws, placed now and not drawn.
+                            let mut masks = Vec::new();
+                            self.text.set_emit(crate::text::outline::Emit::Atlas);
+                            self.text.glyphs_in_band_cached(layout, r_origin, raster, bytes, band, &mut masks);
+                            self.text.set_emit(crate::text::outline::Emit::Outline);
+                        }
                     }
                     tk / raster
                 };

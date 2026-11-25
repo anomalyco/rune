@@ -196,6 +196,7 @@ impl TextSystem {
         self.elisions.clear();
         self.runs.clear();
         self.ascii.clear();
+        self.tabular.clear();
         self.paragraphs.clear();
         self.last_paragraphs = None;
         self.primary_traks.clear();

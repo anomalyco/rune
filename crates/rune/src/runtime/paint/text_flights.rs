@@ -67,7 +67,11 @@ impl state::PaintState {
             self.glyph_scratch.clear();
             text.set_glyph_inks(spec.color, &[]);
             text.set_emit(text.moving_emit());
-            text.glyphs_for_layout(layout, s, [origin[0] * s, origin[1] * s], false, &mut self.glyph_scratch);
+            if let Some(tab) = n.cold.get().and_then(|c| c.tabular_layout.as_deref()) {
+                text.glyphs_for_tabular(tab, [origin[0] * s, origin[1] * s], 1.0, false, f32::NEG_INFINITY..f32::INFINITY, &mut self.glyph_scratch);
+            } else {
+                text.glyphs_for_layout(layout, s, [origin[0] * s, origin[1] * s], false, &mut self.glyph_scratch);
+            }
             text.set_emit(crate::text::outline::Emit::Atlas);
             for q in &self.glyph_scratch {
                 let Some(q) = glyph_or_image(q, text, images, premul(spec.color, 1.0, srgb), NO_CLIP, [0.0; 4]) else { continue };

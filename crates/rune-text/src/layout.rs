@@ -20,4 +20,5 @@ pub(crate) mod run;
 mod shape;
 pub(crate) mod span;
 pub(crate) mod span_map;
+pub(crate) mod tabular;
 pub(crate) mod underline;
