@@ -72,21 +72,32 @@ impl Retired {
 }
 
 impl Frames {
-    /// For `window`, whose frames are `size` device pixels at first. `alpha`: the frame's alpha
-    /// is composited, premultiplied (a Wayland client-side frame's corner arcs); otherwise it's
-    /// ignored. None when the display has no way to show CPU frames that is known to be exact
-    /// (no `wl_shm`; an X11 visual that isn't 24-bit true colour in B, G, R, X byte order): the
-    /// window then opens on the GPU, as it did.
+    /// For `window`, whose frames are `size` device pixels at first. `alpha`: request buffers
+    /// that composite premultiplied alpha (`wl_shm::Format::Argb8888` on Wayland; 32-bit ARGB
+    /// TrueColor visual on X11, falling back to 24-bit opaque if the server gave no 32-bit
+    /// visual). Check [`Frames::has_alpha`] to see whether the created buffers actually carry
+    /// alpha. Returns `None` when the display has no matching CPU buffer path.
     pub(crate) fn new(window: &Window, size: (u32, u32), alpha: bool) -> Option<Frames> {
         match (window.display_handle().ok()?.as_raw(), window.window_handle().ok()?.as_raw()) {
             (RawDisplayHandle::Wayland(display), RawWindowHandle::Wayland(handle)) => {
                 wayland::Frames::new(display.display.as_ptr().cast(), handle.surface.as_ptr().cast(), size, alpha).map(Frames::Wayland)
             }
-            (_, RawWindowHandle::Xlib(handle)) if !alpha => {
-                x11::Frames::new(u32::try_from(handle.window).ok()?, u32::try_from(handle.visual_id).ok()?).map(Frames::X11)
+            (_, RawWindowHandle::Xlib(handle)) => {
+                x11::Frames::new(u32::try_from(handle.window).ok()?, u32::try_from(handle.visual_id).ok()?, alpha).map(Frames::X11)
             }
-            (_, RawWindowHandle::Xcb(handle)) if !alpha => x11::Frames::new(handle.window.get(), handle.visual_id?.get()).map(Frames::X11),
+            (_, RawWindowHandle::Xcb(handle)) => x11::Frames::new(handle.window.get(), handle.visual_id?.get(), alpha).map(Frames::X11),
             _ => None,
+        }
+    }
+
+    /// Whether these buffers composite premultiplied alpha (`wl_shm::Format::Argb8888` on
+    /// Wayland; a 32-bit ARGB TrueColor visual on X11). False means opaque presentation.
+    pub(crate) fn has_alpha(&self) -> bool {
+        match self {
+            Frames::Wayland(frames) => frames.has_alpha(),
+            Frames::X11(frames) => frames.has_alpha(),
+            #[cfg(test)]
+            Frames::Fake(frames) => frames.alpha,
         }
     }
 
