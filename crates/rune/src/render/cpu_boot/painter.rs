@@ -129,7 +129,7 @@ impl CpuPainter {
         let start = crate::time::now();
         // A recoloured frame draws what the last one did, so whatever it needed it still does.
         if self.flags == Some(scene.flags()) && let Some(p) = self.recoloured(scene, target, start) { return Ok(p); }
-        if let Some(why) = scene.needs_gpu() { return Err(why); }
+        if let Some(why) = scene.blocking_needs_gpu() { return Err(why); }
         self.flags = Some(scene.flags());
         let bins = Bins::of(scene);
         let binned = crate::time::now();

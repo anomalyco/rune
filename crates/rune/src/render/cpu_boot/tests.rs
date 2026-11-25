@@ -635,3 +635,169 @@ fn scroll_upload_plan_handles_fractional_dpr_and_straddling_tiles() {
         assert_eq!(rects_surface, expected, "painted.rects fallback surface diverged at scroll_y={scroll_y}");
     }
 }
+
+#[test]
+fn needs_gpu_degradable_classification_covers_every_variant() {
+    use super::NeedsGpu;
+
+    for reason in [
+        NeedsGpu::LinearBlend,
+        NeedsGpu::NativeSurface,
+        NeedsGpu::LayerBlur,
+        NeedsGpu::TurnedLayer,
+        NeedsGpu::BackdropBlur,
+        NeedsGpu::Effect,
+    ] {
+        assert!(reason.is_degradable(), "{reason:?} should be degradable");
+    }
+
+    for reason in [
+        NeedsGpu::SlugText,
+        NeedsGpu::OutlineGlyph,
+        NeedsGpu::UnknownKind,
+        NeedsGpu::Target,
+    ] {
+        assert!(!reason.is_degradable(), "{reason:?} must not be degradable");
+    }
+}
+
+#[test]
+fn degraded_mode_paints_all_degradable_needs_gpu_scenes_and_refuses_non_degradable() {
+    use super::NeedsGpu;
+    use crate::render::{KIND_EFFECT, KIND_GLYPH, KIND_LAYER, KIND_LAYER_END, shader_consts};
+    use crate::text::FontSmoothing;
+
+    let size = (96u32, 64u32);
+    let clear = [0.0, 0.0, 0.0, 1.0];
+    let atlas = Atlas::new();
+    let images = ImageAtlas::default();
+    let box_inst = rect([16.0, 16.0, 32.0, 24.0], [1.0, 0.0, 0.0, 1.0], NO_CLIP);
+
+    let paint_degraded = |instances: &[Instance], configure: &dyn Fn(Scene<'_>) -> Scene<'_>| -> Result<Vec<u8>, NeedsGpu> {
+        let mut painter = CpuPainter::new(1);
+        let mut buf = vec![0u8; (size.0 * size.1 * 4) as usize];
+        let scene = configure(Scene::new(instances, &atlas, &images, size, clear));
+        painter.paint(&scene.degraded(true), &mut Target::new(&mut buf, size.0, size.1))?;
+        Ok(buf)
+    };
+
+    // Baseline plain red box for pixel comparison (BGRA: B=0, G=0, R=255, A=255).
+    let pixel_at = |buf: &[u8], x: u32, y: u32| -> [u8; 4] {
+        let i = ((y * size.0 + x) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    };
+
+    // 1. LayerBlur: exact refuses; degraded paints the layer's contents unblurred.
+    let layer_blur = vec![
+        Instance {
+            rect: [16.0, 16.0, 32.0, 24.0],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            params: [0.0, KIND_LAYER, 8.0, 0.0],
+            clip: NO_CLIP,
+            ..rect([0.0; 4], [0.0; 4], NO_CLIP)
+        },
+        box_inst,
+        Instance { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..rect([0.0; 4], [0.0; 4], NO_CLIP) },
+    ];
+    let scene = Scene::new(&layer_blur, &atlas, &images, size, clear);
+    assert_eq!(scene.needs_gpu(), Some(NeedsGpu::LayerBlur));
+    assert_eq!(paint(&scene, &mut Target::new(&mut vec![0u8; (size.0 * size.1 * 4) as usize], size.0, size.1), 1).unwrap_err(), NeedsGpu::LayerBlur);
+    let px = paint_degraded(&layer_blur, &|s| s).expect("LayerBlur paints degraded");
+    assert_eq!(pixel_at(&px, 24, 24), [0, 0, 255, 255]);
+
+    // 2. TurnedLayer: exact refuses; degraded paints unrotated.
+    let turned_layer = vec![
+        Instance {
+            rect: [16.0, 16.0, 32.0, 24.0],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [0.0, 0.35, 0.0, 0.0],
+            params: [0.0, KIND_LAYER, 0.0, 0.0],
+            clip: NO_CLIP,
+            ..rect([0.0; 4], [0.0; 4], NO_CLIP)
+        },
+        box_inst,
+        Instance { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..rect([0.0; 4], [0.0; 4], NO_CLIP) },
+    ];
+    assert_eq!(Scene::new(&turned_layer, &atlas, &images, size, clear).needs_gpu(), Some(NeedsGpu::TurnedLayer));
+    let px = paint_degraded(&turned_layer, &|s| s).expect("TurnedLayer paints degraded");
+    assert_eq!(pixel_at(&px, 24, 24), [0, 0, 255, 255]);
+
+    // 3. Nested BackdropBlur inside a translucent Show::Render layer (plus a top-level BackdropBlur):
+    // nested blur is skipped unblurred without breaking the open layer stack, while the layer's
+    // own box still composites over the background.
+    let nested_backdrop = vec![
+        rect([0.0, 0.0, 96.0, 64.0], [0.0, 0.0, 1.0, 1.0], NO_CLIP),
+        Instance {
+            rect: [0.0, 0.0, 16.0, 16.0],
+            params: [6.0, KIND_BACKDROP_BLUR, 0.0, 1.0],
+            clip: NO_CLIP,
+            ..rect([0.0; 4], [0.0; 4], NO_CLIP)
+        },
+        Instance {
+            rect: [16.0, 16.0, 32.0, 24.0],
+            fill: [0.0, 0.0, 0.0, 0.5],
+            params: [0.0, KIND_LAYER, 0.0, 0.0],
+            clip: NO_CLIP,
+            ..rect([0.0; 4], [0.0; 4], NO_CLIP)
+        },
+        Instance {
+            rect: [16.0, 16.0, 32.0, 24.0],
+            params: [10.0, KIND_BACKDROP_BLUR, 0.0, 1.0],
+            clip: NO_CLIP,
+            ..rect([0.0; 4], [0.0; 4], NO_CLIP)
+        },
+        box_inst,
+        Instance { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..rect([0.0; 4], [0.0; 4], NO_CLIP) },
+    ];
+    assert_eq!(Scene::new(&nested_backdrop, &atlas, &images, size, clear).needs_gpu(), Some(NeedsGpu::BackdropBlur));
+    let px = paint_degraded(&nested_backdrop, &|s| s).expect("nested BackdropBlur paints degraded");
+    // 0.5-opacity red composited over opaque blue -> roughly [128, 0, 128, 255] in BGRA.
+    let c = pixel_at(&px, 24, 24);
+    assert!(c[2] > 100 && c[0] > 100, "nested layer content must still composite cleanly: {c:?}");
+
+    // 4. Effect with compositor(true): paints blank for effect slot, preserves other rects.
+    let effect = vec![
+        box_inst,
+        Instance { rect: [56.0, 16.0, 24.0, 24.0], params: [0.0, KIND_EFFECT, 0.0, 1.0], clip: NO_CLIP, ..rect([0.0; 4], [0.0; 4], NO_CLIP) },
+    ];
+    assert_eq!(Scene::new(&effect, &atlas, &images, size, clear).compositor(true).needs_gpu(), Some(NeedsGpu::Effect));
+    let px = paint_degraded(&effect, &|s| s.compositor(true)).expect("Effect paints degraded");
+    assert_eq!(pixel_at(&px, 24, 24), [0, 0, 255, 255]);
+    assert_eq!(pixel_at(&px, 64, 24), [0, 0, 0, 255]);
+
+    // 5. NativeSurface: paints blank for native surface, preserves other rects.
+    assert_eq!(Scene::new(&[box_inst], &atlas, &images, size, clear).native_surfaces(true).needs_gpu(), Some(NeedsGpu::NativeSurface));
+    let px = paint_degraded(&[box_inst], &|s| s.native_surfaces(true)).expect("NativeSurface paints degraded");
+    assert_eq!(pixel_at(&px, 24, 24), [0, 0, 255, 255]);
+
+    // 6. LinearBlend: paints in sRGB encoding.
+    assert_eq!(Scene::new(&[box_inst], &atlas, &images, size, clear).srgb_blend(false).needs_gpu(), Some(NeedsGpu::LinearBlend));
+    let px = paint_degraded(&[box_inst], &|s| s.srgb_blend(false)).expect("LinearBlend paints degraded");
+    assert_eq!(pixel_at(&px, 24, 24), [0, 0, 255, 255]);
+
+    // Non-degradable reasons MUST still fail in degraded mode, even when paired with a degradable one.
+    assert_eq!(paint_degraded(&layer_blur, &|s| s.font_smoothing(FontSmoothing::Slug)), Err(NeedsGpu::SlugText));
+
+    let slug_glyph = vec![
+        box_inst,
+        Instance {
+            rect: [20.0, 20.0, 10.0, 10.0],
+            radii: [0.0, 0.0, 0.0, 1.0],
+            border: [0.0, 0.0, 0.0, shader_consts::OUTLINE_MODE_SLUG as f32],
+            params: [0.0, KIND_GLYPH, 0.0, 1.0],
+            clip: NO_CLIP,
+            ..rect([0.0; 4], [0.0; 4], NO_CLIP)
+        },
+    ];
+    assert_eq!(paint_degraded(&slug_glyph, &|s| s.srgb_blend(false)), Err(NeedsGpu::OutlineGlyph));
+
+    let unknown = vec![Instance { params: [0.0, 99.0, 0.0, 1.0], ..box_inst }];
+    assert_eq!(paint_degraded(&unknown, &|s| s.srgb_blend(false)), Err(NeedsGpu::UnknownKind));
+
+    let mut painter = CpuPainter::new(1);
+    let mut small = vec![0u8; 4];
+    assert_eq!(
+        painter.paint(&Scene::new(&layer_blur, &atlas, &images, size, clear).degraded(true), &mut Target::new(&mut small, 1, 1)).unwrap_err(),
+        NeedsGpu::Target
+    );
+}

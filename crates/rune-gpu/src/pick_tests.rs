@@ -118,6 +118,39 @@ fn the_gpu_driving_the_primary_display_is_picked() {
 }
 
 #[test]
+fn dxgi_hardware_classifier_excludes_flagged_software_and_headless_warp() {
+    use super::{WARP_DEVICE_ID, WARP_VENDOR_ID, has_hardware_dxgi_in, is_hardware_dxgi_adapter};
+
+    // Real discrete, integrated, and non-WARP virtual GPUs are hardware candidates.
+    assert!(is_hardware_dxgi_adapter(0x10DE, 0x2C05, false));
+    assert!(is_hardware_dxgi_adapter(0x1002, 0x13C0, false));
+    assert!(is_hardware_dxgi_adapter(0x8086, 0x56A0, false));
+    assert!(is_hardware_dxgi_adapter(0x1AB8, 0x4005, false));
+
+    // Flagged WARP, headless non-software WARP (0x1414:0x008C), and any other software-flagged
+    // adapter are excluded.
+    assert!(!is_hardware_dxgi_adapter(WARP_VENDOR_ID, WARP_DEVICE_ID, true));
+    assert!(!is_hardware_dxgi_adapter(WARP_VENDOR_ID, WARP_DEVICE_ID, false));
+    assert!(!is_hardware_dxgi_adapter(0x1234, 0x5678, true));
+
+    // Adapter list classification:
+    assert!(!has_hardware_dxgi_in(&[]));
+    assert!(!has_hardware_dxgi_in(&[(WARP_VENDOR_ID, WARP_DEVICE_ID, true)]));
+    assert!(!has_hardware_dxgi_in(&[
+        (WARP_VENDOR_ID, WARP_DEVICE_ID, false),
+        (WARP_VENDOR_ID, WARP_DEVICE_ID, true),
+    ]));
+    assert!(has_hardware_dxgi_in(&[
+        (0x10DE, 0x2C05, false),
+        (WARP_VENDOR_ID, WARP_DEVICE_ID, true),
+    ]));
+    assert!(has_hardware_dxgi_in(&[
+        (0x1AB8, 0x4005, false),
+        (WARP_VENDOR_ID, WARP_DEVICE_ID, true),
+    ]));
+}
+
+#[test]
 fn adapter_name_pins_fallback_policy() {
     use crate::fallback::Policy;
     assert_eq!(super::policy_for_adapter_name(None), Policy::Automatic);

@@ -266,8 +266,15 @@ mod dxgi {
                 unsafe { a.GetDesc1() }.ok().map(|d| (a, d))
             })
             .collect();
+        let is_hardware = |d: &DXGI_ADAPTER_DESC1| {
+            super::is_hardware_dxgi_adapter(
+                d.VendorId,
+                d.DeviceId,
+                d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0,
+            )
+        };
         let hardware: Vec<&(IDXGIAdapter1, DXGI_ADAPTER_DESC1)> =
-            all.iter().filter(|(_, d)| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0).collect();
+            all.iter().filter(|(_, d)| is_hardware(d)).collect();
         let count = hardware.len();
         let by_preference = |preference: DXGI_GPU_PREFERENCE| -> Option<IDXGIAdapter1> {
             let factory6 = factory.cast::<IDXGIFactory6>().ok()?;
@@ -278,7 +285,7 @@ mod dxgi {
                 })
                 .find(|a| {
                     // SAFETY: `a` is a live `IDXGIAdapter1` returned by `EnumAdapterByGpuPreference`.
-                    unsafe { a.GetDesc1() }.is_ok_and(|d| d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 == 0)
+                    unsafe { a.GetDesc1() }.is_ok_and(|d| is_hardware(&d))
                 })
         };
         let description = |d: &DXGI_ADAPTER_DESC1| {
@@ -340,6 +347,26 @@ mod dxgi {
         Some(Ok((Pick { adapter, reason, compositor: None }, count)))
     }
 
+    /// Zero-device DXGI probe: returns `Some(true)` if any hardware DXGI adapter exists (after
+    /// excluding both `DXGI_ADAPTER_FLAG_SOFTWARE` and headless non-software WARP entries with
+    /// `VendorId == 0x1414 && DeviceId == 0x008C`), `Some(false)` if only software adapters exist,
+    /// or `None` if DXGI factory creation fails. Creates no D3D12 device and loads no GPU driver.
+    pub(super) fn has_hardware_adapter() -> Option<bool> {
+        // SAFETY: a DXGI factory and its adapters, asked only for their descriptions.
+        let factory = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }.ok()?;
+        let mut adapters = Vec::new();
+        for i in 0.. {
+            // SAFETY: `factory` is a live `IDXGIFactory1`; out-of-range `i` returns `DXGI_ERROR_NOT_FOUND`.
+            let Ok(adapter) = (unsafe { factory.EnumAdapters1(i) }) else { break };
+            // SAFETY: `adapter` is a live `IDXGIAdapter1` returned by `EnumAdapters1`.
+            if let Ok(desc) = unsafe { adapter.GetDesc1() } {
+                let software_flag = desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0;
+                adapters.push((desc.VendorId, desc.DeviceId, software_flag));
+            }
+        }
+        Some(super::has_hardware_dxgi_in(&adapters))
+    }
+
     /// Picks a DXGI software adapter (`DXGI_ADAPTER_FLAG_SOFTWARE`, i.e. WARP) without creating a
     /// device on any hardware adapter. Returns `None` when the instance is not DX12 or `wgpu-hal`
     /// is unpatched so the caller falls through to wgpu's `force_fallback_adapter`.
@@ -385,6 +412,39 @@ fn by_display(displays: &[(u32, u32)], adapters: &[(wgpu::AdapterInfo, bool)]) -
     displays.iter().find_map(|ids| {
         adapters.iter().position(|(info, usable)| *usable && info.device_type != wgpu::DeviceType::Cpu && (info.vendor, info.device) == *ids)
     })
+}
+
+/// PCI vendor ID of Microsoft's WARP software rasterizer (`Microsoft Basic Render Driver`).
+pub const WARP_VENDOR_ID: u32 = 0x1414;
+/// PCI device ID of Microsoft's WARP software rasterizer (`Microsoft Basic Render Driver`).
+pub const WARP_DEVICE_ID: u32 = 0x008C;
+
+/// Whether a DXGI adapter description (`vendor_id`, `device_id`, `software_flag`) represents a
+/// hardware GPU rather than WARP or another software adapter.
+///
+/// Excludes both adapters marked with `DXGI_ADAPTER_FLAG_SOFTWARE` and headless non-software
+/// WARP entries (`0x1414:0x008C`) that Windows exposes on headless / RDP sessions.
+pub const fn is_hardware_dxgi_adapter(vendor_id: u32, device_id: u32, software_flag: bool) -> bool {
+    !software_flag && !(vendor_id == WARP_VENDOR_ID && device_id == WARP_DEVICE_ID)
+}
+
+/// Whether a slice of DXGI adapter descriptors `(vendor_id, device_id, software_flag)` contains
+/// at least one hardware adapter.
+pub fn has_hardware_dxgi_in(adapters: &[(u32, u32, bool)]) -> bool {
+    adapters
+        .iter()
+        .any(|&(vendor_id, device_id, software_flag)| {
+            is_hardware_dxgi_adapter(vendor_id, device_id, software_flag)
+        })
+}
+
+/// Zero-device DXGI check on Windows: returns `Some(true)` if any hardware DXGI adapter exists
+/// (excluding both `DXGI_ADAPTER_FLAG_SOFTWARE` and headless non-software WARP entries
+/// `0x1414:0x008C`), `Some(false)` if only software adapters exist, or `None` if DXGI factory
+/// creation fails. Makes no D3D12 device and loads no driver.
+#[cfg(target_os = "windows")]
+pub fn dxgi_has_hardware_adapter() -> Option<bool> {
+    dxgi::has_hardware_adapter()
 }
 
 /// Fallback policy for an optional user-supplied adapter name (`WGPU_ADAPTER_NAME`).
