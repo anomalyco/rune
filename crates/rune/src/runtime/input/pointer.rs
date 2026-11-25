@@ -147,7 +147,7 @@ impl RuntimeCore {
         self.pointer.clear_secondary();
         self.pointer.clear_tint();
         self.pointer.clear_buttons_down();
-        self.pointer.magnify_owner = capture::MagnifyOwner::Idle;
+        self.pointer.gesture_owners.clear();
         self.pointer_leave();
         self.drag_files_leave();
     }

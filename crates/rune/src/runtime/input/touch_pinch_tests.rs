@@ -607,7 +607,7 @@ fn declining_unmounting_owner_live_only_and_cancel_pointer() {
 
     // 5. cancel_pointer() resets MagnifyOwner to Idle.
     rt_live.cancel_pointer();
-    assert_eq!(rt_live.pointer.magnify_owner, capture::MagnifyOwner::Idle);
+    assert_eq!(rt_live.pointer.gesture_owners.magnify, capture::GestureOwner::Idle);
 }
 
 #[test]
@@ -631,7 +631,7 @@ fn trackpad_phased_pinch_locks_owner_while_ctrl_wheel_and_unphased_magnify_stay_
     assert!(!rt.has_pending_input(), "declined phased Moved queues nothing");
     rt.magnify_event(MagnifyEvent::new(0.0).at(100.0, 100.0).phase(GesturePhase::Ended));
     assert!(!rt.has_pending_input());
-    assert_eq!(rt.pointer.magnify_owner, capture::MagnifyOwner::Idle);
+    assert_eq!(rt.pointer.gesture_owners.magnify, capture::GestureOwner::Idle);
     rt.frame(1.0 / 60.0);
     assert!(rt.state.magnifies.is_empty());
 
@@ -654,7 +654,7 @@ fn pinch_channel_disabled_emits_nothing_on_move_or_end() {
     let tf = TwoFinger::new(
         Contact { id: 1, pos: (100.0, 100.0) },
         Contact { id: 2, pos: (200.0, 100.0) },
-        TwoFingerTargets { magnify: false },
+        TwoFingerTargets::default(),
     );
     assert_eq!(tf.pinch, PinchChannel::Disabled);
     let mut state = TouchState::TwoFinger(tf);

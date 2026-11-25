@@ -326,12 +326,27 @@ impl RuntimeCore {
         self.pointer.touch.in_touch = false;
     }
 
-    /// Queries which two-finger gesture channels have a live, allowed handler under window point
-    /// `mid`. Step 1 checks `on_magnify` only; two-finger pan (`on_wheel`) and rotation
-    /// (`on_rotate`) extend this single lookup.
+    /// Queries which two-finger gesture channels have a live, allowed handler (`on_wheel`,
+    /// `on_magnify`, or `on_rotate`) under window point `mid`. Plain scroll viewports without an
+    /// `on_wheel` handler do not match, keeping two-finger touches ignored over scroll lists.
     fn two_finger_targets(&self, mid: (f32, f32)) -> TwoFingerTargets {
-        let magnify = !self.gesture_chain(mid.0, mid.1, |g| g.magnify.is_some()).is_empty();
-        TwoFingerTargets { magnify }
+        let mut targets = TwoFingerTargets::default();
+        let mut at = self.chain_start(mid.0, mid.1);
+        while let Some(i) = at {
+            if self.subtree_exiting(i) || !self.allowed(i) {
+                break;
+            }
+            if let Some(g) = self.tree.nodes[i].handlers.gestures.as_deref() {
+                targets.wheel |= g.wheel.is_some();
+                targets.magnify |= g.magnify.is_some();
+                targets.rotate |= g.rotate.is_some();
+                if targets.wheel && targets.magnify && targets.rotate {
+                    break;
+                }
+            }
+            at = self.tree.nodes[i].parent;
+        }
+        targets
     }
 
     fn apply_touch_effects(&mut self, app: &dyn ViewDriver, effects: Effects<TouchEffect>) {
@@ -367,9 +382,21 @@ impl RuntimeCore {
                     self.secondary_down(x, y);
                     self.secondary_up(app, x, y);
                 }
+                TouchEffect::EmitTouchWheel { dx, dy, mid, hit, phase } => {
+                    self.touch_wheel_event_at(
+                        crate::WheelEvent::new(dx, dy).at(mid.0, mid.1).phase(phase).precise(true).touch(true),
+                        hit,
+                    );
+                }
                 TouchEffect::EmitMagnify { delta, mid, hit, phase } => {
                     self.magnify_event_at(
                         crate::MagnifyEvent::new(delta).at(mid.0, mid.1).phase(phase),
+                        hit,
+                    );
+                }
+                TouchEffect::EmitRotate { degrees, mid, hit, phase } => {
+                    self.rotate_event_at(
+                        crate::RotateEvent::new(degrees).at(mid.0, mid.1).phase(phase),
                         hit,
                     );
                 }
@@ -530,3 +557,7 @@ mod tests;
 #[cfg(test)]
 #[path = "touch_pinch_tests.rs"]
 mod pinch_tests;
+
+#[cfg(test)]
+#[path = "touch_multi_tests.rs"]
+mod multi_tests;

@@ -1,8 +1,9 @@
 //! Canvas input: an infinite canvas driven headlessly, no window. The world sits under one
 //! `live_offset` and `live_scale` (the camera), so a pan or zoom moves it without a relayout.
 //!
-//! - The wheel and a two-finger trackpad scroll pan (`on_wheel`).
+//! - The wheel, a two-finger trackpad scroll, and a two-finger touchscreen drag pan (`on_wheel`, with `WheelEvent::touch`).
 //! - A pinch zooms about the pointer or fingers' midpoint (`on_magnify`; trackpad, touchscreen two-finger pinch, or Ctrl + wheel).
+//! - A two-finger touchscreen or trackpad twist turns the camera angle (`on_rotate`).
 //! - Space held with a drag pans; the release ends it (`on_key_up`).
 //! - The middle button drags to pan (`pointer_buttons`, `Tx::button`).
 //! - "Focus" centres the selected node and glides its row in the layers list into view
@@ -12,7 +13,7 @@
 //!   the view.
 //!
 //! cargo run -p rune --example canvas_input
-use rune::{Color, Cx, Drag, El, Env, Key, KeyEvent, Live, MagnifyEvent, Mods, Phase, PointerButton, Runtime, ScrollSpec, Tx, WheelEvent, col, el, row};
+use rune::{Color, Cx, Drag, El, Env, Key, KeyEvent, Live, MagnifyEvent, Mods, Phase, PointerButton, RotateEvent, Runtime, ScrollSpec, Tx, WheelEvent, col, el, row};
 
 const CANVAS: f32 = 400.0;
 const NODES: usize = 30;
@@ -22,6 +23,7 @@ struct Canvas {
     /// The camera: drawn = centre + (world - centre) * zoom + pan, about the world's centre.
     pan: [f32; 2],
     zoom: f32,
+    angle_deg: f32,
     live_pan: Live<[f32; 2]>,
     live_zoom: Live<f32>,
     space: bool,
@@ -85,6 +87,11 @@ fn view(s: &Canvas, _: &mut Cx<Canvas>) -> El {
             tx.live_only();
             true
         })
+        .on_rotate(|s: &mut Canvas, e: RotateEvent, tx| {
+            s.angle_deg += e.degrees;
+            tx.live_only();
+            true
+        })
         .pointer_buttons([PointerButton::Middle])
         .on_drag(|s: &mut Canvas, d: &mut Drag, tx: &mut Tx| {
             if tx.button() == PointerButton::Middle || s.space { s.drag_pan(d); tx.live_only(); }
@@ -123,7 +130,7 @@ fn settle(rt: &mut Runtime<Canvas>) {
 
 fn main() {
     let state = Canvas {
-        pan: [0.0, 0.0], zoom: 1.0, live_pan: Live::new([0.0, 0.0]), live_zoom: Live::new(1.0),
+        pan: [0.0, 0.0], zoom: 1.0, angle_deg: 0.0, live_pan: Live::new([0.0, 0.0]), live_zoom: Live::new(1.0),
         space: false, pan_at_press: [0.0, 0.0], selected: 7, toolbar: None,
     };
     let mut rt = Runtime::new(state, view, (600.0, CANVAS), Env::new(true, 1.0));
@@ -216,5 +223,27 @@ fn main() {
     settle(&mut rt);
     assert!(rt.state.zoom > zoom_before && !rt.touching(), "touch pinch zoomed: {} -> {}", zoom_before, rt.state.zoom);
     println!("touch pinch  -> zoom {:.2} -> {:.2}", zoom_before, rt.state.zoom);
+
+    // Touchscreen two-finger parallel drag pans via `on_wheel` (`WheelEvent::touch == true`).
+    let pan_before = rt.state.pan;
+    rt.touch(3, rune::TouchPhase::Started, 150.0, 200.0, 0.10);
+    rt.touch(4, rune::TouchPhase::Started, 250.0, 200.0, 0.11);
+    rt.touch(3, rune::TouchPhase::Moved, 180.0, 200.0, 0.12);
+    rt.touch(4, rune::TouchPhase::Moved, 280.0, 200.0, 0.13);
+    rt.touch(4, rune::TouchPhase::Ended, 280.0, 200.0, 0.14);
+    rt.touch(3, rune::TouchPhase::Ended, 180.0, 200.0, 0.15);
+    settle(&mut rt);
+    assert!(rt.state.pan[0] > pan_before[0] && !rt.touching(), "touch pan moved: {:?} -> {:?}", pan_before, rt.state.pan);
+    println!("touch pan    -> pan {:?} -> {:?}", pan_before, rt.state.pan);
+
+    // Touchscreen two-finger twist rotates via `on_rotate` after the 8 deg angular slop.
+    rt.touch(5, rune::TouchPhase::Started, 150.0, 200.0, 0.20);
+    rt.touch(6, rune::TouchPhase::Started, 250.0, 200.0, 0.21);
+    rt.touch(6, rune::TouchPhase::Moved, 220.71, 129.29, 0.22); // 45 deg CCW
+    rt.touch(6, rune::TouchPhase::Ended, 220.71, 129.29, 0.23);
+    rt.touch(5, rune::TouchPhase::Ended, 150.0, 200.0, 0.24);
+    settle(&mut rt);
+    assert!(rt.state.angle_deg > 30.0 && !rt.touching(), "touch rotate turned: {}", rt.state.angle_deg);
+    println!("touch rotate -> angle {:.1} deg", rt.state.angle_deg);
     println!("ok");
 }
