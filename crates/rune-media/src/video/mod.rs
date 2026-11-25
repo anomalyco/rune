@@ -298,7 +298,18 @@ pub enum Kind {
 /// A video or audio clip. Clones share one player; dropping the last clone (and, for video,
 /// every element showing it) stops and frees it. Video starts muted; audio starts unmuted.
 ///
-/// ```ignore
+/// ```no_run
+/// # mod rune {
+/// #     pub use rune_media::Player;
+/// #     pub enum SurfaceFit { Fit }
+/// #     pub struct El;
+/// #     impl El {
+/// #         pub fn w(self, _: f32) -> Self { self }
+/// #         pub fn h(self, _: f32) -> Self { self }
+/// #         pub fn video(self, _: &Player, _: SurfaceFit) -> Self { self }
+/// #     }
+/// #     pub fn el() -> El { El }
+/// # }
 /// let clip = rune::Player::file("capture.mov");
 /// clip.set_looping(true);
 /// clip.play();

@@ -1,11 +1,15 @@
 //! Byte gauges for memory the Rust allocator never sees: pixel buffers, IOSurfaces, GPU
 //! textures, model weights mapped by a C library, or a queue you want named in a warning.
 //!
-//! ```ignore
+//! ```
+//! # struct Cache;
+//! # impl Cache { fn bytes(&self) -> usize { 0 } }
+//! # let (width, height, cache) = (64usize, 64usize, Cache);
 //! static FRAMES: procwatch::Gauge = procwatch::Gauge::new("video.frames");
 //!
 //! let lease = FRAMES.track(width * height * 4); // subtracted again when `lease` drops
 //! FRAMES.set(cache.bytes());                    // or report a total you measure yourself
+//! # drop(lease);
 //! ```
 //!
 //! A snapshot subtracts the counted heap and every gauge from the footprint; what's left

@@ -10,8 +10,8 @@
 //! comes due. A timer, reply or dialog answer whose attempt the state no longer holds is stale
 //! and changes nothing.
 //!
-//! ```ignore
-//! use rune::machine::{Attempt, Effects, Seq};
+//! ```
+//! use rune_core::machine::{Attempt, Effects, Seq};
 //!
 //! enum State { Idle, Waiting { attempt: Attempt, due: f64 }, Open }
 //! enum Event { Enter { now: f64 }, Leave, Due { attempt: Attempt, now: f64 } }
@@ -35,6 +35,11 @@
 //!         _ => Effects::none(),
 //!     }
 //! }
+//! # struct App { seq: Seq, tip: State }
+//! # struct Tx;
+//! # impl Tx { fn clock(&self) -> f64 { 0.0 } fn wake_at(&mut self, _: f64) {} }
+//! # let mut s = App { seq: Seq::default(), tip: State::Idle };
+//! # let mut tx = Tx;
 //!
 //! // The caller: a handler steps and carries the effects out.
 //! for effect in step(&mut s.seq, &mut s.tip, Event::Enter { now: tx.clock() }) {

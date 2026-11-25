@@ -401,8 +401,11 @@ impl TextEdit {
     /// [`allow_color`](Self::allow_color) or by including `Mark::Color(String::new())` here), and
     /// [`Mark::Pill`] always is: pills are the app's own tokens, not formatting.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_edit::{Mark, TextEdit};
+    /// # let _ =
     /// TextEdit::new("").rich().allow_marks([Mark::Bold, Mark::Italic, Mark::Strike, Mark::Code, Mark::Link(String::new())])
+    /// # ;
     /// ```
     pub fn allow_marks(mut self, marks: impl IntoIterator<Item = Mark>) -> Self {
         let pill = 1 << Mark::Pill(String::new()).kind_order();
@@ -578,9 +581,12 @@ impl TextEdit {
     /// paragraph, list item or quote above it, as `Shift+Return` makes, so a draft rebuilt with
     /// [`from_parts`](Self::from_parts) keeps them. Line 0 and lines past the end are dropped.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_edit::{Block, TextEdit};
     /// // "one" then "two" on a new line of the same bullet.
+    /// # let _ =
     /// TextEdit::from_parts("one\ntwo", vec![], vec![Block::Bullet(0); 2]).with_soft_breaks(vec![1])
+    /// # ;
     /// ```
     pub fn with_soft_breaks(mut self, lines: Vec<u32>) -> Self {
         self.set_soft_breaks(lines);
