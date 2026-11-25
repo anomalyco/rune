@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Cx, El, Env, el};
+use crate::{Color, Cx, El, Env, el};
 
 #[derive(Default)]
 struct State { theme: String, picks: Vec<Option<String>>, anchor: Option<PopupAnchor>, hovers: Vec<bool>, extra: bool }
@@ -370,4 +370,19 @@ fn headless_runtime_can_inspect_open_popup_menu_entries_and_selected_id() {
         if title == "More" && matches!(menu.entries(), [PopupEntry::Item(i)] if i.id() == "share")));
     rt.resolve_popup(Some("copy")).unwrap();
     assert!(rt.popup_menu().is_none());
+}
+
+#[test]
+fn a_style_reaches_the_menu_json_with_only_what_it_sets() {
+    let plain = PopupMenu::new().item(PopupItem::new("open", "Open"));
+    assert!(plain.to_json().get("style").is_none());
+    let style = PopupMenuStyle::new().background(Color::BLACK).highlight(Color::WHITE.alpha(0.5))
+        .font_family("  \"Inter, sans-serif ").corner_radius(0.0).padding(-2.0).font_size(f32::NAN).line_height(0.0);
+    let inner = PopupMenu::new().item(PopupItem::new("share", "Share")).style(PopupMenuStyle::new().text(Color::BLACK));
+    let v = plain.submenu("More", inner).style(style).to_json();
+    assert_eq!(v["style"], serde_json::json!({
+        "bg": "#000000ff", "hover": "#ffffff80", "fontFamily": "\"Inter, sans-serif", "radius": 0.0, "padding": 0.0,
+    }));
+    // A submenu draws with the top menu's style, so its own isn't sent.
+    assert!(v["items"][1]["menu"].get("style").is_none());
 }
