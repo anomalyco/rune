@@ -254,12 +254,19 @@ impl<S> Cx<S> {
     pub fn chrome_insets(&self) -> crate::ChromeInsets { self.core.chrome_insets() }
     /// Confirmed decoration mode reported by the window manager or compositor.
     ///
+    /// - **Linux Wayland**: read directly from `xdg-decoration` / `xdg_toplevel` configure state
+    ///   (`Unknown` before the initial configure, `Server` or `Client` afterwards; never inferred
+    ///   from capabilities). Layer-shell overlays are not toplevels and stay `Unknown`.
     /// - **Linux X11**: read from `_NET_FRAME_EXTENTS` (any non-zero extent ->
-    ///   [`DecorationMode::Server`], all zeroes -> [`DecorationMode::Client`], absent ->
-    ///   [`DecorationMode::Unknown`]). Never inferred from missing actions or `is_decorated()`.
-    /// - **Wayland, macOS, Windows, web, overlays, adopted macOS panels, staged playground
-    ///   subviews, and headless runs**: [`DecorationMode::Unknown`] unless set in headless runs
-    ///   with [`Runtime::set_window_manager_state`].
+    ///   [`DecorationMode::Server`], all zeroes -> [`DecorationMode::Client`]). When absent,
+    ///   reports [`DecorationMode::Client`] only if the app requested no native frame
+    ///   (`WindowOptions { borderless: true, .. }`), an EWMH WM is managing the window, and the WM
+    ///   did not reparent it into a frame (Mutter omits `_NET_FRAME_EXTENTS` on frameless windows);
+    ///   otherwise [`DecorationMode::Unknown`]. Never infers `Server` from `is_decorated()` or
+    ///   missing actions.
+    /// - **macOS, Windows, web, overlays, adopted macOS panels, staged playground subviews, and
+    ///   headless runs**: [`DecorationMode::Unknown`] unless set in headless runs with
+    ///   [`Runtime::set_window_manager_state`].
     ///
     /// Views that read this accessor (and their `memo` closures) rebuild automatically when it
     /// changes.
@@ -280,11 +287,17 @@ impl<S> Cx<S> {
     ///
     /// Returns `None` when unknown and `Some(TiledEdges::NONE)` when known untiled.
     ///
-    /// - **Linux X11**: read from `_GTK_EDGE_CONSTRAINTS` (bits 0=top, 2=right, 4=bottom, 6=left),
-    ///   returning `Some(TiledEdges::NONE)` when absent while advertised in `_NET_SUPPORTED`, and
-    ///   `None` otherwise.
-    /// - **Wayland, macOS, Windows, web, overlays, adopted macOS panels, staged playground
-    ///   subviews, and headless runs**: `None` unless set in headless runs with
+    /// - **Linux Wayland**: read from `xdg_toplevel` `TILED_*` configure states when
+    ///   `xdg_toplevel.version() >= 2`, and `None` before initial configure, on v1 compositors, or
+    ///   for layer-shell overlays.
+    /// - **Linux X11**: read from `_GTK_EDGE_CONSTRAINTS` on the client window or (for
+    ///   server-decorated windows reparented by Mutter) its parent frame window (bits 0=top,
+    ///   2=right, 4=bottom, 6=left), refined with `_NET_WM_STATE_MAXIMIZED_VERT`/`HORZ` against
+    ///   `_NET_WORKAREA` when a half-tiled window sits flush with a work-area edge. Returns
+    ///   `Some(TiledEdges::NONE)` when absent while advertised in `_NET_SUPPORTED`, and `None`
+    ///   otherwise.
+    /// - **macOS, Windows, web, overlays, adopted macOS panels, staged playground subviews, and
+    ///   headless runs**: `None` unless set in headless runs with
     ///   [`Runtime::set_window_manager_state`].
     ///
     /// Views that read this accessor (and their `memo` closures) rebuild automatically when it
@@ -302,12 +315,15 @@ impl<S> Cx<S> {
     /// Window actions the window manager allows for this window, with `None` for any action the
     /// platform or window manager did not report.
     ///
+    /// - **Linux Wayland**: `window_menu`, `maximize`, `minimize`, and `fullscreen` from
+    ///   `xdg_toplevel::wm_capabilities` when `xdg_toplevel.version() >= 5` (`None` below v5, before
+    ///   initial configure, or for layer-shell overlays); `close` is always `None`.
     /// - **Linux X11**: `minimize`, `maximize` (`_NET_WM_ACTION_MAXIMIZE_HORZ` and
     ///   `_NET_WM_ACTION_MAXIMIZE_VERT`), `fullscreen`, and `close` from per-window
     ///   `_NET_WM_ALLOWED_ACTIONS`; `window_menu` from `_GTK_SHOW_WINDOW_MENU` in root
     ///   `_NET_SUPPORTED`.
-    /// - **Wayland, macOS, Windows, web, overlays, adopted macOS panels, staged playground
-    ///   subviews, and headless runs**: all `None` unless set in headless runs with
+    /// - **macOS, Windows, web, overlays, adopted macOS panels, staged playground subviews, and
+    ///   headless runs**: all `None` unless set in headless runs with
     ///   [`Runtime::set_window_manager_state`].
     ///
     /// Views that read this accessor (and their `memo` closures) rebuild automatically when it

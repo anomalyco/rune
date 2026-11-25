@@ -1621,11 +1621,15 @@ rune::App::new(spec).fit_content_height().run();
   tri-state accessors preserving explicit unknown values (`DecorationMode::Unknown` and `None`)
   wherever the platform or window manager does not report a fact. Reading views and their `memo`
   closures rebuild automatically on change, while views that never read them do no extra work.
-  On Linux X11, Rune reads `_NET_FRAME_EXTENTS`, `_GTK_EDGE_CONSTRAINTS`, per-window
-  `_NET_WM_ALLOWED_ACTIONS`, and root `_NET_SUPPORTED` in pipelined queries on chrome sync and
-  window move (zero X11 round trips on ordinary redraws); Wayland (pending follow-up winit
-  support), macOS, Windows, web, overlays, adopted macOS panels, and staged playground subviews
-  report unknown values. Testable headlessly via `Runtime::set_window_manager_state`;
+  On Linux Wayland, Rune reads `xdg-decoration` and `xdg_toplevel` configure state gated by
+  protocol version (`>= 2` for tiled edges, `>= 5` for `wm_capabilities`, `close: None`) and
+  wakes on decoration-mode or capability changes without a resize; on Linux X11, Rune reads
+  `_NET_FRAME_EXTENTS`, `_GTK_EDGE_CONSTRAINTS` (on the client window or Mutter's reparented
+  frame parent), `_NET_WM_STATE` / `_NET_WORKAREA` for half-tiles, per-window
+  `_NET_WM_ALLOWED_ACTIONS`, and root `_NET_SUPPORTED` in pipelined queries on chrome sync, window
+  move, and `PropertyNotify` (zero X11 round trips on ordinary redraws). Layer-shell overlays, macOS, Windows, web, adopted macOS
+  panels, and staged playground subviews report unknown values. Testable headlessly via
+  `Runtime::set_window_manager_state`;
   `cargo run -p rune --example custom_titlebar` displays the live values.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
   that set a few more end with `..AppSpec::new(..)`. Window chrome lives on the builders, keeping

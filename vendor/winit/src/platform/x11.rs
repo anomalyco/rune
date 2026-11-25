@@ -137,9 +137,25 @@ impl<T> EventLoopBuilderExtX11 for EventLoopBuilder<T> {
 }
 
 /// Additional methods on [`Window`] that are specific to X11.
-pub trait WindowExtX11 {}
+pub trait WindowExtX11 {
+    /// Rune: returns and clears whether an EWMH/GTK window-manager property (`_NET_WM_STATE`,
+    /// `_NET_WM_ALLOWED_ACTIONS`, `_GTK_EDGE_CONSTRAINTS`, or `_NET_FRAME_EXTENTS`) changed on
+    /// this window since the last call. Always `false` on Wayland.
+    fn take_wm_state_changed(&self) -> bool;
+}
 
-impl WindowExtX11 for Window {}
+impl WindowExtX11 for Window {
+    #[inline]
+    fn take_wm_state_changed(&self) -> bool {
+        #[allow(clippy::single_match)]
+        match &self.window {
+            #[cfg(x11_platform)]
+            crate::platform_impl::Window::X(window) => window.take_wm_state_changed(),
+            #[cfg(wayland_platform)]
+            crate::platform_impl::Window::Wayland(_) => false,
+        }
+    }
+}
 
 /// Additional methods on [`WindowAttributes`] that are specific to X11.
 pub trait WindowAttributesExtX11 {
