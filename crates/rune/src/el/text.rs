@@ -569,7 +569,7 @@ impl El {
     /// still streaming in, whose last lines would move as each word arrives.
     pub fn wrap_greedy(mut self) -> Self {
         if let Some(t) = &mut self.text {
-            t.greedy = true;
+            t.flags.set(crate::el::text_spec::TextFlags::GREEDY, true);
         }
         self
     }
@@ -883,7 +883,7 @@ impl El {
             t.selectable = on;
             if on && self.handlers.cursor.is_none() {
                 self.handlers.cursor = Some(Cursor::Text);
-                t.selectable_cursor = true;
+                t.flags.set(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR, true);
             }
         }
         self
