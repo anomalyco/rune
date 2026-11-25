@@ -182,10 +182,33 @@ impl El {
         self
     }
 
-    /// Trackpad pinches over this element: return true to take one. The innermost handler
-    /// under the pointer hears it first. macOS reports pinches; Ctrl + wheel also reaches
-    /// `on_magnify` (with `MagnifyEvent::wheel == true`), using `1.2^ticks - 1` for line-delta
-    /// notches and `dy / 200` for pixel-precise deltas.
+    /// Trackpad and touchscreen two-finger pinches over this element: return `true` to take one.
+    /// The innermost handler under the pointer (or fingers' midpoint) hears it first. Phased
+    /// non-wheel pinches (`Began` / `Moved` / `Ended` from macOS trackpads and touchscreens, with
+    /// `MagnifyEvent::wheel == false`) lock the accepting `Began` handler until `Ended` even if
+    /// the pointer or midpoint drifts outside its bounds. Ctrl + wheel also reaches `on_magnify`
+    /// (with `MagnifyEvent::wheel == true`), using `1.2^ticks - 1` for line-delta notches and
+    /// `dy / 200` for pixel-precise deltas.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, MagnifyEvent, Runtime, TouchPhase, el};
+    /// # fn view(_: &f32, _: &mut Cx<f32>) -> El {
+    /// #     el().size(200.0, 200.0).on_magnify(|zoom: &mut f32, e: MagnifyEvent, tx| {
+    /// #         *zoom *= 1.0 + e.delta;
+    /// #         tx.live_only();
+    /// #         true
+    /// #     })
+    /// # }
+    /// let mut rt = Runtime::new(1.0f32, view, (200.0, 200.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// rt.touch(1, TouchPhase::Started, 60.0, 100.0, 0.0);
+    /// rt.touch(2, TouchPhase::Started, 140.0, 100.0, 0.01);
+    /// rt.touch(2, TouchPhase::Moved, 180.0, 100.0, 0.02);
+    /// rt.touch(2, TouchPhase::Ended, 180.0, 100.0, 0.03);
+    /// rt.touch(1, TouchPhase::Ended, 60.0, 100.0, 0.04);
+    /// rt.frame(1.0 / 60.0);
+    /// assert!(rt.state > 1.0);
+    /// ```
     pub fn on_magnify<S: 'static>(mut self, f: impl Fn(&mut S, MagnifyEvent, &mut Tx) -> bool + 'static) -> Self {
         self.canvas_input().magnify = Some(Rc::new(move |s, e, tx| f(state::<S>(s), e, tx)));
         self

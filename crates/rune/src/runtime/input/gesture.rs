@@ -26,6 +26,15 @@ pub(crate) enum WheelStart {
     At(Option<usize>),
 }
 
+/// Effective phased-magnify state at queue time, taking already-queued non-wheel
+/// `Gesture::Magnify` actions into account ahead of `PointerState::magnify_owner`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QueuedMagnify {
+    Idle,
+    Active,
+    Declined,
+}
+
 /// Points of pixel-precise Ctrl + wheel per unit of magnification, where a pinch arrives that way.
 const PINCH_WHEEL: f32 = 200.0;
 /// Zoom factor per vertical line-delta wheel notch with Ctrl held, matching Chromium's
@@ -177,10 +186,86 @@ impl RuntimeCore {
         Some(Tx::took(f(app.states(), WheelEvent { x, y, ..ev }, tx), tx))
     }
 
-    /// A trackpad pinch at window point (`ev.x`, `ev.y`) for the [`El::on_magnify`] handlers
-    /// there, innermost first.
+    /// A trackpad or touchscreen pinch at window point (`ev.x`, `ev.y`) for the
+    /// [`El::on_magnify`] handlers there, innermost first. Phased non-wheel pinches
+    /// (`Began` / `Moved` / `Ended`) lock the accepting `Began` handler until `Ended`.
     pub fn magnify_event(&mut self, ev: MagnifyEvent) {
-        self.offer_gesture(ev.x, ev.y, |g| g.magnify.is_some(), Gesture::Magnify(ev));
+        self.magnify_event_at(ev, (ev.x, ev.y));
+    }
+
+    /// Like [`Self::magnify_event`], resolving `Began`'s candidate chain at `hit` while
+    /// delivering `(ev.x, ev.y)` in the owning handler's local coordinates.
+    pub(in crate::runtime) fn magnify_event_at(&mut self, ev: MagnifyEvent, hit: (f32, f32)) {
+        if ev.wheel {
+            self.offer_gesture(ev.x, ev.y, |g| g.magnify.is_some(), Gesture::Magnify(ev));
+            return;
+        }
+        let (queued_state, has_queued_phased) = self.queued_magnify_state();
+        match ev.phase {
+            GesturePhase::Began => {
+                let chain = self.gesture_chain(hit.0, hit.1, |g| g.magnify.is_some());
+                if !chain.is_empty() || has_queued_phased {
+                    self.frame.queue.push(Action::Gesture(chain, Gesture::Magnify(ev)));
+                } else {
+                    self.pointer.magnify_owner = capture::MagnifyOwner::Declined;
+                }
+            }
+            GesturePhase::Moved => match queued_state {
+                QueuedMagnify::Active => {
+                    self.frame.queue.push(Action::Gesture(Vec::new(), Gesture::Magnify(ev)));
+                }
+                QueuedMagnify::Declined => {}
+                QueuedMagnify::Idle => {
+                    self.offer_gesture(ev.x, ev.y, |g| g.magnify.is_some(), Gesture::Magnify(ev));
+                }
+            },
+            GesturePhase::Ended => match queued_state {
+                QueuedMagnify::Active => {
+                    self.frame.queue.push(Action::Gesture(Vec::new(), Gesture::Magnify(ev)));
+                }
+                QueuedMagnify::Declined => {
+                    if has_queued_phased {
+                        self.frame.queue.push(Action::Gesture(Vec::new(), Gesture::Magnify(ev)));
+                    } else {
+                        self.pointer.magnify_owner = capture::MagnifyOwner::Idle;
+                    }
+                }
+                QueuedMagnify::Idle => {
+                    self.offer_gesture(ev.x, ev.y, |g| g.magnify.is_some(), Gesture::Magnify(ev));
+                }
+            },
+        }
+    }
+
+    /// Effective phased-magnify state after all already-queued non-wheel `Gesture::Magnify`
+    /// actions, plus whether any non-wheel `Gesture::Magnify` is currently waiting in the queue.
+    fn queued_magnify_state(&self) -> (QueuedMagnify, bool) {
+        let mut has_queued_phased = false;
+        let mut latest = None;
+        for action in self.frame.queue.iter() {
+            if let Action::Gesture(chain, Gesture::Magnify(q)) = action
+                && !q.wheel
+            {
+                has_queued_phased = true;
+                match q.phase {
+                    GesturePhase::Began => {
+                        latest = Some(if chain.is_empty() {
+                            QueuedMagnify::Declined
+                        } else {
+                            QueuedMagnify::Active
+                        });
+                    }
+                    GesturePhase::Ended => latest = Some(QueuedMagnify::Idle),
+                    GesturePhase::Moved => {}
+                }
+            }
+        }
+        let state = latest.unwrap_or(match &self.pointer.magnify_owner {
+            capture::MagnifyOwner::Idle => QueuedMagnify::Idle,
+            capture::MagnifyOwner::Owned(_) => QueuedMagnify::Active,
+            capture::MagnifyOwner::Declined => QueuedMagnify::Declined,
+        });
+        (state, has_queued_phased)
     }
 
     /// A two-finger rotation at window point (`ev.x`, `ev.y`) for the [`El::on_rotate`]
@@ -220,7 +305,59 @@ impl RuntimeCore {
         if !chain.is_empty() { self.frame.queue.push(Action::Gesture(chain, gesture)); }
     }
 
+    fn call_magnify(&mut self, app: &mut dyn AppDriver, path: &str, ev: MagnifyEvent, tx: &mut Tx) -> Option<bool> {
+        let (i, f) = self.gesture_handler(path, |g| g.magnify.clone())?;
+        let [x, y] = self.to_local(i, ev.x, ev.y);
+        Some(Tx::took(f(app.states(), MagnifyEvent { x, y, ..ev }, tx), tx))
+    }
+
+    fn dispatch_magnify_chain(&mut self, app: &mut dyn AppDriver, chain: &[String], ev: MagnifyEvent, tx: &mut Tx) -> Option<String> {
+        for path in chain {
+            if self.call_magnify(app, path, ev, tx) == Some(true) {
+                return Some(path.clone());
+            }
+        }
+        None
+    }
+
+    fn run_magnify(&mut self, app: &mut dyn AppDriver, chain: Vec<String>, ev: MagnifyEvent, tx: &mut Tx) -> bool {
+        if ev.wheel {
+            return self.dispatch_magnify_chain(app, &chain, ev, tx).is_some();
+        }
+        match ev.phase {
+            GesturePhase::Began => {
+                if let Some(owner) = self.dispatch_magnify_chain(app, &chain, ev, tx) {
+                    self.pointer.magnify_owner = capture::MagnifyOwner::Owned(owner);
+                    true
+                } else {
+                    self.pointer.magnify_owner = capture::MagnifyOwner::Declined;
+                    false
+                }
+            }
+            GesturePhase::Moved => match self.pointer.magnify_owner.clone() {
+                capture::MagnifyOwner::Owned(path) => {
+                    if self.call_magnify(app, &path, ev, tx) == Some(true) {
+                        true
+                    } else {
+                        self.pointer.magnify_owner = capture::MagnifyOwner::Declined;
+                        false
+                    }
+                }
+                capture::MagnifyOwner::Declined => false,
+                capture::MagnifyOwner::Idle => self.dispatch_magnify_chain(app, &chain, ev, tx).is_some(),
+            },
+            GesturePhase::Ended => match std::mem::take(&mut self.pointer.magnify_owner) {
+                capture::MagnifyOwner::Owned(path) => self.call_magnify(app, &path, ev, tx) == Some(true),
+                capture::MagnifyOwner::Declined => false,
+                capture::MagnifyOwner::Idle => self.dispatch_magnify_chain(app, &chain, ev, tx).is_some(),
+            },
+        }
+    }
+
     pub(in crate::runtime) fn run_gesture(&mut self, app: &mut dyn AppDriver, chain: Vec<String>, gesture: Gesture, tx: &mut Tx) -> bool {
+        if let Gesture::Magnify(ev) = gesture {
+            return self.run_magnify(app, chain, ev, tx);
+        }
         if let Gesture::Button { button, x, y, released } = gesture {
             tx.button = button;
             for path in chain {
@@ -241,10 +378,6 @@ impl RuntimeCore {
         }
         for path in chain {
             let taken = match gesture {
-                Gesture::Magnify(ev) => self.gesture_handler(&path, |g| g.magnify.clone()).map(|(i, f)| {
-                    let [x, y] = self.to_local(i, ev.x, ev.y);
-                    Tx::took(f(app.states(), MagnifyEvent { x, y, ..ev }, tx), tx)
-                }),
                 Gesture::Rotate(ev) => self.gesture_handler(&path, |g| g.rotate.clone()).map(|(i, f)| {
                     let [x, y] = self.to_local(i, ev.x, ev.y);
                     Tx::took(f(app.states(), RotateEvent { x, y, ..ev }, tx), tx)
@@ -253,7 +386,7 @@ impl RuntimeCore {
                     let [x, y] = self.to_local(i, x, y);
                     Tx::took(f(app.states(), x, y, tx), tx)
                 }),
-                Gesture::Button { .. } => unreachable!(),
+                Gesture::Magnify(_) | Gesture::Button { .. } => unreachable!(),
             };
             if taken == Some(true) { return true; }
         }
@@ -262,7 +395,7 @@ impl RuntimeCore {
 
     /// The elements under window point (x, y) with a handler `has` picks, innermost first,
     /// walking every ancestor up to the root (or open modal) past scroll views.
-    fn gesture_chain(&self, x: f32, y: f32, has: impl Fn(&CanvasInput) -> bool) -> Vec<String> {
+    pub(super) fn gesture_chain(&self, x: f32, y: f32, has: impl Fn(&CanvasInput) -> bool) -> Vec<String> {
         self.gesture_chain_from(self.chain_start(x, y), has)
     }
 
