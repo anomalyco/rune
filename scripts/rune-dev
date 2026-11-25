@@ -11,6 +11,7 @@ Only view function bodies can patch. All other build inputs require a restart.
 --local (or RUNE_DEV_LOCAL=1) compiles and runs the app on this machine, with no build Mac, and
 rebuilds and relaunches it after an edit that needs a restart. RUNE_DEV_WRAP runs that under a
 command prefix (a build-queue lease, say); by default it's plain cargo.
+RUNE_DEV_TARGET_DIR sets cargo's target directory and RUNE_DEV_JOBS (else CARGO_BUILD_JOBS) its jobs.
 """
 import argparse
 from dataclasses import dataclass
@@ -926,6 +927,26 @@ def local(argv):
             print("rune-dev: restarting with the new build", flush=True)
 
 
+def cache_dir():
+    return Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rune-dev"
+
+
+def build_env(opts):
+    """Cargo's environment for the guard and app builds.
+
+    RUNE_DEV_TARGET_DIR picks the target directory; an external app's run defaults to the user's
+    cache, so a read-only Rune checkout (a Cargo git dependency) is never written. RUNE_DEV_JOBS,
+    else an exported CARGO_BUILD_JOBS, sets the job count; 2 when neither is set."""
+    target = os.environ.get("RUNE_DEV_TARGET_DIR")
+    if not target:
+        staged = (ROOT / ".rune-dev-files.json").exists()
+        target = ROOT / "target/live-edit-build" if opts.example or staged else \
+            cache_dir() / f"build-{hashlib.sha256(str(ROOT).encode()).hexdigest()[:12]}"
+    jobs = os.environ.get("RUNE_DEV_JOBS") or os.environ.get("CARGO_BUILD_JOBS") or "2"
+    return dict(os.environ, RUSTC_WRAPPER="", CARGO_INCREMENTAL="1", CARGO_BUILD_JOBS=jobs, RUNE_DEV_GUARDED="1", RUNE_HOT="1",
+                CARGO_TARGET_DIR=str(Path(target).expanduser().absolute()))
+
+
 def run(args):
     global EXTERNAL
     opts = parse(args)
@@ -935,8 +956,7 @@ def run(args):
     # The build Mac's copy parks in desk mode, so it needs no app arguments. A local run's file
     # flags are relative to where it was started.
     app_args = app_argv(opts, Path.cwd() if opts.local else ROOT) if not opts.desk else (["--hot"] if opts.example else [])
-    env = dict(os.environ, RUSTC_WRAPPER="", CARGO_INCREMENTAL="1", CARGO_BUILD_JOBS="2", RUNE_DEV_GUARDED="1", RUNE_HOT="1",
-               CARGO_TARGET_DIR=str(ROOT / "target/live-edit-build"))
+    env = build_env(opts)
     env.pop("RUNE_HOT_PARK", None)
     guard_root = ROOT / "tools/rune-dev-guard"
     subprocess.run(["cargo", "build", "--manifest-path", str(guard_root / "Cargo.toml")], env=env, check=True)
@@ -954,7 +974,7 @@ def run(args):
             EXTERNAL = external_layout(opts.manifest_path)
             crate = EXTERNAL.crate
         # Outside any checkout: Cargo would take an enclosing [workspace] for the app's.
-        mirror = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "rune-dev" / hashlib.sha256(f"{ROOT}\0{crate}".encode()).hexdigest()[:12]
+        mirror = cache_dir() / hashlib.sha256(f"{ROOT}\0{crate}".encode()).hexdigest()[:12]
         name, has_profile = crate_settings(source(crate), source("external"))
         package = opts.package or name
         if package == name:

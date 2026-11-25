@@ -4530,7 +4530,10 @@ each PNG and matching `.json` tree into this checkout. Install **Dioxus CLI 0.7.
 as `dx` in Cargo's bin directory first (`RUNE_DX` overrides the path); the
 Homebrew/Deno command with the same name is unrelated. The first build is a full
 development build; subsequent runs reuse `target/rune-dev/<example>`.
-Compiler artifacts live in `target/live-edit-build`.
+Compiler artifacts live in `target/live-edit-build` for an example, and under
+`$XDG_CACHE_HOME/rune-dev` (or `~/.cache/rune-dev`) for an app's crate, so a read-only Rune
+checkout such as a Cargo git dependency is never written; `RUNE_DEV_TARGET_DIR` picks another
+directory. Builds run with `RUNE_DEV_JOBS`, else an exported `CARGO_BUILD_JOBS`, else 2 jobs.
 
 `--local` (or `RUNE_DEV_LOCAL=1`) skips the worker setup: the compiler, the edit guard and
 the app all run on this machine, and an edit that needs a restart rebuilds and relaunches the

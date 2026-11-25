@@ -125,6 +125,21 @@ class ArgumentTests(unittest.TestCase):
         with self.assertRaises(SystemExit), patch("sys.stderr"):
             dev.parse([*argv, "--local", "--desk"])
 
+    def test_builds_leave_the_checkout_for_an_app_and_take_the_jobs_from_the_environment(self):
+        app = dev.parse(["--manifest-path", "app/Cargo.toml", "--patch", "src/view.rs", "--local"])
+        example = dev.parse(["settings", "--local"])
+        with tempfile.TemporaryDirectory() as temp, patch.object(dev, "ROOT", Path(temp) / "rune"), patch.dict(os.environ, {"XDG_CACHE_HOME": temp}, clear=False):
+            for name in ["RUNE_DEV_TARGET_DIR", "RUNE_DEV_JOBS", "CARGO_BUILD_JOBS"]:
+                os.environ.pop(name, None)
+            self.assertEqual(dev.build_env(example)["CARGO_TARGET_DIR"], str(Path(temp) / "rune/target/live-edit-build"))
+            self.assertEqual(Path(dev.build_env(app)["CARGO_TARGET_DIR"]).parent, Path(temp) / "rune-dev")
+            self.assertEqual(dev.build_env(app)["CARGO_BUILD_JOBS"], "2")
+            os.environ.update(RUNE_DEV_TARGET_DIR=str(Path(temp) / "out"), CARGO_BUILD_JOBS="12")
+            env = dev.build_env(app)
+            self.assertEqual((env["CARGO_TARGET_DIR"], env["CARGO_BUILD_JOBS"]), (str(Path(temp) / "out"), "12"))
+            os.environ["RUNE_DEV_JOBS"] = "6"
+            self.assertEqual(dev.build_env(example)["CARGO_BUILD_JOBS"], "6")
+
     def test_a_local_run_rebuilds_after_a_restart_and_returns_the_apps_exit(self):
         with patch.dict(os.environ, {}, clear=False), patch.object(dev, "run", side_effect=[dev.Restart(), dev.Restart(), 3]) as run, patch("sys.stdout", io.StringIO()) as out:
             os.environ.pop("RUNE_DEV_WRAP", None)
