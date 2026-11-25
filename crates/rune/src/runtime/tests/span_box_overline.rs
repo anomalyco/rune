@@ -15,10 +15,11 @@ const STRIKE_C: Color = Color { r: 0.2, g: 0.82, b: 0.32, a: 1.0 };
 const UNDER_C: Color = Color { r: 0.22, g: 0.45, b: 0.95, a: 1.0 };
 
 fn approx_color(inst: &[f32; 4], c: Color) -> bool {
-    (inst[0] - c.r).abs() < 0.03
-        && (inst[1] - c.g).abs() < 0.03
-        && (inst[2] - c.b).abs() < 0.03
-        && (inst[3] - c.a).abs() < 0.03
+    let want = c.premul_srgb(1.0);
+    (inst[0] - want[0]).abs() < 0.03
+        && (inst[1] - want[1]).abs() < 0.03
+        && (inst[2] - want[2]).abs() < 0.03
+        && (inst[3] - want[3]).abs() < 0.03
 }
 
 fn render_cpu<S: 'static>(rt: &Runtime<S>, w: u32, h: u32) -> Vec<u8> {

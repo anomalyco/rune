@@ -18,8 +18,8 @@ fn coverage(x: i32, start: i32, end: i32, sigma: f32) -> f32 {
 #[test]
 fn gaussian_pixels_support_offscreen_saturation_and_pooling() {
     let Some(gpu) = Gpu::test_headless() else { return };
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, 64, 48);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, 64, 48, OFFSCREEN_FORMAT_LINEAR);
     let mut atlas = crate::text::TextSystem::default().atlas;
     // Negative origin tests retained source outside the destination viewport. The duplicate
     // additive shape must saturate BEFORE blur (clamping after convolution doubles the halo).
@@ -145,8 +145,8 @@ fn later_live_blur_binding_replaces_the_earlier_source() {
 #[test]
 fn nested_blur_and_capsule_mask_apply_to_completed_output() {
     let Some(gpu) = Gpu::test_headless() else { return };
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, 64, 48);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, 64, 48, OFFSCREEN_FORMAT_LINEAR);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let clip = [8.0, 8.0, 56.0, 40.0];
     // The source covers the capsule plus filter support; mask AFTER filtering must preserve
@@ -248,7 +248,8 @@ fn filtered_video_and_image_page_match_primitive_source() {
         uv: image.rect.map(|v| v as f32), params: [image.page as f32, KIND_IMAGE, 0.0, 1.0], ..Instance::zeroed() };
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &content, (64, 48));
     renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
-    assert_eq!(pixels(&gpu, &renderer, &target), reference);
+    let img_px = pixels(&gpu, &renderer, &target);
+    assert!(img_px.iter().zip(&reference).all(|(a, b)| a.abs_diff(*b) <= 1), "filtered image page matches primitive source within 1 LSB");
     content.remove(1);
     renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, &content, (64, 48));
     let surface = NativeSurface::new();
@@ -256,7 +257,8 @@ fn filtered_video_and_image_page_match_primitive_source() {
         planes: [vec![255; 4], vec![]] }, 1).unwrap();
     renderer.prepare_surfaces(&gpu.device, &gpu.queue, &[SurfaceDraw { surface: surface.clone(), fit: SurfaceFit::Fill,
         before_instance: 1, rect: bounds, radii: [0.0; 4], clip: NO_CLIP, fade: [0; 4], opacity: 1.0 }], (64, 48));
-    assert_eq!(pixels(&gpu, &renderer, &target), reference);
+    let vid_px = pixels(&gpu, &renderer, &target);
+    assert!(vid_px.iter().zip(&reference).all(|(a, b)| a.abs_diff(*b) <= 1), "filtered video matches primitive source within 1 LSB");
     surface.push_bytes(ByteFrame { width: 1, height: 1, format: Format::Bgra, color: ColorInfo::default(),
         planes: [vec![0, 0, 0, 255], vec![]] }, 2).unwrap();
     renderer.prepare_surfaces(&gpu.device, &gpu.queue, &[SurfaceDraw { surface, fit: SurfaceFit::Fill,

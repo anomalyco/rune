@@ -1,7 +1,7 @@
 //! Clearing a window's rounded bottom corners on the GPU: what stays, and what goes.
 
 use super::CsdCorners;
-use crate::render::{Gpu, Offscreen, OFFSCREEN_FORMAT};
+use crate::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen};
 
 /// A target of opaque red, its corners faded at `radius` device pixels.
 fn cleared(gpu: &Gpu, size: (u32, u32), radius: f32) -> Vec<u8> {
@@ -125,7 +125,7 @@ fn a_square_window_draws_nothing() {
 fn both_target_views_fade_the_corners() {
     let Some(gpu) = Gpu::test_headless() else { return };
     let size = (40, 30);
-    for format in [OFFSCREEN_FORMAT, OFFSCREEN_FORMAT.remove_srgb_suffix()] {
+    for format in [OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR] {
         let pixels = cleared_with(&gpu, size, 6., format);
         assert_eq!(at(&pixels, size.0, (0, 0))[3], 255, "{format:?}: the top left keeps its pixel");
         assert_eq!(at(&pixels, size.0, (0, size.1 - 1))[3], 0, "{format:?}: the bottom corner fades");

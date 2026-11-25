@@ -123,7 +123,8 @@ on_each_backend!(
 fn video_transfers_match_reference_in_linear_and_srgb_blend_on(gpu: Gpu) {
     let mut linear_renderer = SurfaceRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
     let mut srgb_renderer = SurfaceRenderer::new(&gpu.device, wgpu::TextureFormat::Rgba8Unorm);
-    srgb_renderer.set_srgb_blend(true);
+    assert!(!linear_renderer.srgb_blend(), "Rgba8UnormSrgb defaults to linear blending");
+    assert!(srgb_renderer.srgb_blend(), "Rgba8Unorm defaults to sRGB blending");
 
     let surface = NativeSurface::new();
     let mut id = 0u64;

@@ -350,8 +350,24 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub(crate) fn follow_font_families(&mut self) -> bool { self.core_mut().follow_font_families() }
 
+    /// Enables or disables sRGB-encoded blending for translucent fills, shadows, blurs, images
+    /// and video, matching [`App::srgb_blend`](crate::App::srgb_blend).
+    ///
+    /// On by default (`true`), matching `App` windows and [`crate::render::OFFSCREEN_FORMAT`].
+    /// Pass `false` to blend in linear light (paired with [`crate::render::OFFSCREEN_FORMAT_LINEAR`]
+    /// and [`Renderer::set_srgb_blend`](crate::render::Renderer::set_srgb_blend) set to `false`).
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::new(true, 1.0));
+    /// assert!(rt.srgb_blend());
+    /// rt.set_srgb_blend(false);
+    /// assert!(!rt.srgb_blend());
+    /// ```
     #[inline(always)]
     pub fn set_srgb_blend(&mut self, enabled: bool) { self.core_mut().set_srgb_blend(enabled); }
+    /// Whether this runtime blends colours in sRGB-encoded space (`true` by default).
     #[inline(always)]
     pub fn srgb_blend(&self) -> bool { self.core().srgb_blend() }
     /// Set the maximum number of native `El::system_material` views this runtime admits per frame

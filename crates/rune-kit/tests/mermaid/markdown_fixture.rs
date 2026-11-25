@@ -116,6 +116,8 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
 fn render(src: &'static str, dark: bool, streaming: bool, width: f32) -> String {
     let text = TextSystem::new(rune_theme_opencode::FONTS, rune_theme_opencode::FAMILIES);
     let mut rt = Runtime::with_text(S { src, dark, streaming }, view, (width, 900.0), Env::new(dark, 2.0), text);
+    // Keep stored golden JSONs bit-identical to linear-light token resolution.
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt.frame(1.0);
     let mut out = String::from("[\n");

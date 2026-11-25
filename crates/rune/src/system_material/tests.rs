@@ -54,6 +54,7 @@ fn one_card(_: &u8, _: &mut Cx<u8>) -> El {
 
 fn runtime(view: fn(&u8, &mut Cx<u8>) -> El, native: bool) -> Runtime<u8> {
     let mut rt = Runtime::new(0, view, (200.0, 120.0), Env { scale: 2.0, system_dark: true });
+    rt.set_srgb_blend(false);
     rt.paint.set_native_materials(native);
     rt.frame(0.0);
     rt
@@ -326,7 +327,7 @@ fn srgb_blend_frost_over_a_native_material_reads_as_core_animation() {
         rt.paint.set_native_materials(true);
         rt.set_srgb_blend(srgb);
         rt.frame(0.0);
-        let format = if srgb { crate::render::OFFSCREEN_FORMAT.remove_srgb_suffix() } else { crate::render::OFFSCREEN_FORMAT };
+        let format = if srgb { crate::render::OFFSCREEN_FORMAT } else { crate::render::OFFSCREEN_FORMAT_LINEAR };
         let mut renderer = Renderer::new(&gpu.device, format);
         renderer.set_srgb_blend(srgb);
         let target = Offscreen::with_format(&gpu.device, 400, 240, format);

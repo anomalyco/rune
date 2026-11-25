@@ -78,6 +78,7 @@ fn single_line_fields_follow_the_caret_both_ways() {
     let mut draft = TextEdit::new("");
     draft.focused = true;
     let mut rt = Runtime::new(S { draft }, |s: &S, _: &mut rune::Cx<S>| single_line_view(s), (300.0, 300.0), Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     for word in ["a long single line ", "that runs well past ", "the field's width"] {
         rt.ime(Ime::Commit(word.into()));

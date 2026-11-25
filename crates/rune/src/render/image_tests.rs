@@ -119,7 +119,7 @@ fn an_image_over_its_fill_fades_into_a_soft_edge_like_a_flat_fill() {
 
 #[test]
 fn gpu_static_mips_alpha_clip_and_page_order_match_pixels() {
-    use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    use crate::render::{Gpu, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
     use crate::{Cx, El, Env, Runtime, el, image::ImageCache};
     type State = (Pixels, Pixels, bool);
     fn view(s: &State, _: &mut Cx<State>) -> El {
@@ -138,9 +138,10 @@ fn gpu_static_mips_alpha_clip_and_page_order_match_pixels() {
     let image = cache.rgba(64, 64, checker);
     image.wait().unwrap();
     let Some(gpu) = Gpu::test_headless() else { return };
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, 8, 8);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, 8, 8, OFFSCREEN_FORMAT_LINEAR);
     let mut rt = Runtime::new((image.pixels().clone(), Pixels::new(), false), view, (8.0, 8.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     let mut draw = |rt: &mut Runtime<State>| {
         rt.frame(0.0);
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (8, 8));
@@ -602,7 +603,7 @@ fn gpu_image_filter_nearest_keeps_crisp_blocks_and_mip_zero() {
 fn gpu_pixels_tint_recolors_alpha_mask_in_linear_and_srgb_blend() {
     use crate::color::Color;
     use crate::el::{El, el, row};
-    use crate::render::{Gpu, KIND_IMAGE, OFFSCREEN_FORMAT, Offscreen, Renderer, instance::shader_consts as sc};
+    use crate::render::{Gpu, KIND_IMAGE, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer, instance::shader_consts as sc};
     use crate::runtime::{Cx, Env, Runtime};
     use crate::ImageFilter;
 
@@ -653,7 +654,7 @@ fn gpu_pixels_tint_recolors_alpha_mask_in_linear_and_srgb_blend() {
         assert_eq!(imgs[3].params[2] as u32, sc::IMAGE_FLAG_TINT | sc::IMAGE_FLAG_NEAREST);
 
         let Some(gpu) = Gpu::test_headless() else { continue };
-        let format = if srgb_blend { wgpu::TextureFormat::Bgra8Unorm } else { OFFSCREEN_FORMAT };
+        let format = if srgb_blend { wgpu::TextureFormat::Bgra8Unorm } else { OFFSCREEN_FORMAT_LINEAR };
         let mut renderer = Renderer::new(&gpu.device, format);
         renderer.set_srgb_blend(srgb_blend);
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (64, 16));

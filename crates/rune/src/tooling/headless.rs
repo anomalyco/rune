@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::app::SharedCore;
-use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use crate::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use crate::runtime::RuntimeCore;
 use crate::time::Instant;
 
@@ -218,7 +218,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let t0 = crate::time::now();
     let features = app.compositor_features();
     let srgb_blend = app.rt().srgb_blend();
-    let target_format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+    let target_format = if srgb_blend { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR };
     let (gpu, mut renderer) = Gpu::for_headless_setup(features, |gpu| {
         Renderer::try_new_classified(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)
     })

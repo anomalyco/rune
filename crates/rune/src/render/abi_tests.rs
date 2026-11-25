@@ -744,7 +744,7 @@ fn gpu_spring_opacity_folding_matches_cpu_across_all_kinds() {
             })
             .collect();
 
-        for (format, srgb_blend) in [(OFFSCREEN_FORMAT, false), (wgpu::TextureFormat::Bgra8Unorm, true)] {
+        for (format, srgb_blend) in [(OFFSCREEN_FORMAT_LINEAR, false), (wgpu::TextureFormat::Bgra8Unorm, true)] {
             atlas.dirty = Some((0, 16));
             let mut r_cpu = Renderer::new(&gpu.device, format);
             r_cpu.set_srgb_blend(srgb_blend);

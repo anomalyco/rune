@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use parley::PositionedLayoutItem;
 
 use crate::color::{hex, srgb_encode};
-use crate::render::{Gpu, NO_CLIP, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use crate::render::{Gpu, NO_CLIP, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use crate::text::{FontSmoothing, GlyphQuad, TextSystem};
 use crate::tok::{Family, TextStyle};
 
@@ -414,7 +414,7 @@ impl Harness {
         // The coverage exponent a window's paint applies, so the sheets are what an app draws.
         let exponent = self.text.coverage_exponent(fill);
         let instances: Vec<_> = quads.iter().map(|q| { let mut g = crate::runtime::glyph(q, fill, NO_CLIP, [0.0; 4]); g.params[3] = exponent; g }).collect();
-        let format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+        let format = if srgb_blend { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR };
         let renderer = self.renderer.get_or_insert_with(|| Renderer::new(&self.gpu.device, format));
         renderer.set_format(&self.gpu.device, format);
         renderer.set_srgb_blend(srgb_blend);

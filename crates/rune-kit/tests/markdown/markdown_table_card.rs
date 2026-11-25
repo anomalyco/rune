@@ -338,6 +338,7 @@ fn an_outlined_table_header_rounds_inside_the_outline() {
     }
     for (src, bottom) in [("| A | B |\n|---|---|\n| a | b |\n", 0.0), ("| A | B |\n|---|---|\n", 5.5)] {
         let mut rt = Runtime::new(src.to_owned(), styled, (480.0, 400.0), Env::new(true, 1.0));
+        rt.set_srgb_blend(false);
         rt.frame(0.0);
         let fill = rt.instances.iter().find(|i| i.fill == [HEAD.r, HEAD.g, HEAD.b, HEAD.a]).expect("the header's fill");
         assert_eq!(rune::render::unpack_clip_radii(fill.fade[3]), [5.5, 5.5, bottom, bottom], "{src:?}");

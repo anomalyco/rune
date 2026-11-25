@@ -22,6 +22,7 @@ fn clamp(content: &'static str, lines: usize, marked: Option<(usize, usize)>, wi
         col().w_full().child(t)
     }
     let mut rt = Runtime::new((content, lines, marked), view, (width, 400.0), Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt
 }

@@ -226,6 +226,7 @@ fn plain_invalid_disabled_and_forced_colors() {
         (360.0, 560.0),
         Env::new(true, 1.0),
     );
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     let k = Kit::neutral(true);
 

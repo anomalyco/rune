@@ -10,7 +10,7 @@ use serde_json::json;
 
 use crate::AnyWindowSpec;
 use crate::desktop::displays::VirtualDesktop;
-use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use crate::render::{Gpu, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use crate::tooling::headless_run::WindowFrame;
 use crate::tooling::{Args, Ev, Kind, Pos, Shot, Timeline, Trace, die};
 
@@ -365,8 +365,9 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     let features = desk.members.iter().fold(wgpu::Features::empty(), |f, m| f | m.features());
     let need_overlay = args.keys.is_some() || args.pointer;
     let (gpu, overlay_renderer) = Gpu::for_headless_setup(features, |gpu| {
-        let renderer = Renderer::try_new_classified(&gpu.device, OFFSCREEN_FORMAT)
+        let mut renderer = Renderer::try_new_classified(&gpu.device, OFFSCREEN_FORMAT_LINEAR)
             .map_err(crate::render::SurfaceSetupError::from_shader)?;
+        renderer.set_srgb_blend(false);
         Ok(need_overlay.then_some(renderer))
     })
     .map_err(|e| e.message)?;
@@ -378,12 +379,15 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
     if let Some(path) = &args.video {
         writer.video(path, fps).unwrap_or_else(|e| die(&e));
     }
-    let target = Offscreen::new(&gpu.device, wp, hp);
+    let target = Offscreen::with_format(&gpu.device, wp, hp, OFFSCREEN_FORMAT_LINEAR);
     let mut readback = crate::tooling::record::Readback::new(&gpu.device, &target, crate::tooling::record::DEPTH);
     let mut in_flight = crate::tooling::record::InFlight::new(crate::tooling::record::DEPTH);
     let mut slots: Vec<Option<Slot>> = (0..n).map(|_| None).collect();
-    let mut overlay = overlay_renderer
-        .map(|renderer| (crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer), renderer));
+    let mut overlay = overlay_renderer.map(|renderer| {
+        let mut ov = crate::input::keycaps::Overlay::new(size, scale, args.keys, args.keys_theme, args.pointer);
+        ov.set_srgb_blend(false);
+        (ov, renderer)
+    });
     let dark = args.theme.as_deref() != Some("light");
     let init_ms = t0.elapsed().as_secs_f64() * 1000.0;
 

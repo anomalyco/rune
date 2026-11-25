@@ -385,6 +385,7 @@ fn strike_on_text_input_survives_spans_and_follows_preedit() {
     edit.set_caret(0);
     let rich = TextEdit::from_html("<del>old</del> and more");
     let mut rt = Runtime::new(App { edit, rich }, view, (320.0, 140.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
 
     let strikes_of = |rt: &Runtime<App>, key: &str| {

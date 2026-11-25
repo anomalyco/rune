@@ -12,7 +12,7 @@ use crate::el::Shell;
 use crate::frame::clock::FrameClock;
 use crate::frame::encoded::{FrameReports, OnFrameEncoded};
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, RenderPrep, StepInfo, draw_ui, prepare_gpu_resources};
-use crate::render::{Gpu, OFFSCREEN_FORMAT, Renderer};
+use crate::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Renderer};
 use crate::runtime::{AppDriver, Env, Runtime, RuntimeCore};
 use crate::time::Instant;
 use crate::tooling::{Args, FrameTiming, Kind, Trace, headless::{step_window_frame, take_window_frame}};
@@ -679,7 +679,7 @@ struct DesktopFrame<'a> {
 impl DesktopFrame<'_> {
     #[inline]
     fn target_format(&self) -> wgpu::TextureFormat {
-        if self.window.app.rt().srgb_blend() { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT }
+        if self.window.app.rt().srgb_blend() { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR }
     }
 }
 

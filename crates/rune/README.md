@@ -103,20 +103,34 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     change every frame (`examples/shapes`). SVG export emits `fill-rule="evenodd"` for `FillRule::EvenOdd`.
     Translucent strokes blend twice where segments overlap at a joint; fills do not overlap.
   - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`). Circular alpha cutouts (`El::cutout_circle` for one hole, `El::cutout_circles` for several intersected holes) isolate the element and its subtree into one layer per hole so backdrops show through without wrappers (`examples/shapes`).
-  - Windows blend in sRGB-encoded space by default, as Core Animation, CoreText and CSS do.
+  - Every path blends in sRGB-encoded space by default — `App` windows, overlays, standalone
+    `Runtime::new` / `Runtime::with_text`, `Renderer::new` (for `Rgba8Unorm` / `Bgra8Unorm`
+    targets), `SurfaceRenderer::new`, and `OFFSCREEN_FORMAT` (`Rgba8Unorm`, used by
+    `Offscreen::new`) — as Core Animation, CoreText, Skia and CSS do. Floating-point HDR targets
+    (`Rgba16Float`) and `*Srgb` targets (`OFFSCREEN_FORMAT_LINEAR` / `Rgba8UnormSrgb`,
+    `Bgra8UnormSrgb`) stay in linear light by default.
     `.srgb_blend(false)` on `App`, `WindowSpec` or `ConfiguredOverlay` opts out into linear-light
-    blending (colour premultiplied in linear light, drawn into an sRGB target). sRGB blending
+    blending (colour premultiplied in linear light, drawn into an `*Srgb` target). sRGB blending
     encodes premultiplied colours in sRGB (`Color::premul_srgb`) and renders into a non-sRGB
-    target view (`format.remove_srgb_suffix()`). With a `Compositor`, `Frame::srgb_blend()` and `Frame::format` tell it which encoding and view its own passes must match.
-    A runtime the app draws itself (`Runtime::with_text`, a headless snapshot) opts in with
-    `Runtime::set_srgb_blend(true)`, then draws with `Renderer::set_srgb_blend(true)` into a
-    non-sRGB target cleared to `clear_color()`; hover and press tints follow the mode.
+    target view (`format.remove_srgb_suffix()`). With a `Compositor`, `Frame::srgb_blend()` and
+    `Frame::format` tell it which encoding and view its own passes must match.
     `Renderer::render_runtime_to_offscreen(device, queue, target, rt)` runs the full offscreen
     pass (`upload_images`, `prepare_surfaces`, fade stops, UI prepare, `draw`, `Offscreen::copy`,
-    and `submit`) for CPU readback through `Offscreen::read`.
+    and `submit`) for CPU readback through `Offscreen::read`; `Offscreen::format()` and
+    `SurfaceRenderer::srgb_blend()` report the active format and blend mode.
     A handler switches a running window with `Tx::set_srgb_blend(bool)`: the frame that switches
     reconfigures the surface and rebuilds the renderer once (the web canvas keeps its format and
     changes its view).
+    **Migrating linear offscreen callers:** apps that drive `App` windows or `App` headless
+    `--snap` see no pixel change. Apps that drive standalone `Runtime`, `Renderer`,
+    `SurfaceRenderer`, or `Offscreen::new` directly and expect linear-light pixels see darker
+    translucent blends (for example, black at 19% alpha over `#F7F8FA` shifts from `225, 226, 228`
+    to `200, 201, 203`, matching an `App` window) — and any branch written as
+    `if srgb { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT }` now picks
+    `Rgba8Unorm` on both sides and produces wrong pixels without a compile error. To restore
+    linear-light blending off screen, replace `OFFSCREEN_FORMAT` with `OFFSCREEN_FORMAT_LINEAR`
+    (`Rgba8UnormSrgb`) in linear branches and opt in explicitly:
+    `rt.set_srgb_blend(false); let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR); renderer.set_srgb_blend(false); let target = Offscreen::with_format(&gpu.device, w, h, OFFSCREEN_FORMAT_LINEAR);`.
   - The Retina scale is applied throughout.
 - **Text** (`text.rs`): Parley 0.12 lays out embedded Inter 4.1 (OFL, `assets/`). On macOS and in
   Mac browsers, swash 0.2 outlines are rasterised by default through a port of CoreGraphics' glyph

@@ -391,12 +391,9 @@ fn runtime_scene(ctx: &Ctx, t: f32) -> Vec<u8> {
             )
     }
 
-    let format = OFFSCREEN_FORMAT.remove_srgb_suffix();
-    let mut renderer = Renderer::new(&ctx.device, format);
-    renderer.set_srgb_blend(true);
-    let target = Offscreen::with_format(&ctx.device, PW, PH, format);
+    let mut renderer = Renderer::new(&ctx.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&ctx.device, PW, PH);
     let mut rt = Runtime::new(swatch, view, (W, H), Env::new(true, S));
-    rt.set_srgb_blend(true);
     rt.frame(t as f64);
     renderer.render_runtime_to_offscreen(&ctx.device, &ctx.queue, &target, &mut rt);
     target.read(&ctx.device)

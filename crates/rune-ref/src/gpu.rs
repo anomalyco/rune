@@ -1,7 +1,7 @@
 //! Adapter to the production renderer. No copied WGSL or substitute GPU pipeline.
 use crate::{Primitive, Scene};
 use rune::{
-    render::{Gpu, Instance, OFFSCREEN_FORMAT, Offscreen, Renderer},
+    render::{Gpu, Instance, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer},
     text::{ATLAS_SIZE, TextSystem},
 };
 
@@ -95,7 +95,8 @@ impl Default for GpuRenderer {
             "reference adapter: {} ({:?}, vendor=0x{:04x}) single_tolerance={DEFAULT_TOLERANCE} composite_tolerance={composite_tol}",
             info.name, info.backend, info.vendor
         );
-        let renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+        renderer.set_srgb_blend(false);
         Self {
             gpu,
             renderer,
@@ -141,7 +142,7 @@ impl GpuRenderer {
             &instances,
             (scene.width, scene.height),
         );
-        let target = Offscreen::new(&self.gpu.device, scene.width, scene.height);
+        let target = Offscreen::with_format(&self.gpu.device, scene.width, scene.height, OFFSCREEN_FORMAT_LINEAR);
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         self.renderer.draw(&mut encoder, &target.view, scene.clear);
         target.copy(&mut encoder);
