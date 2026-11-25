@@ -222,6 +222,8 @@ fn icon(c: Cursor) -> CursorIcon {
         Cursor::Cell => CursorIcon::Cell,
         Cursor::ZoomIn => CursorIcon::ZoomIn,
         Cursor::ZoomOut => CursorIcon::ZoomOut,
+        Cursor::Help => CursorIcon::Help,
+        Cursor::Progress => CursorIcon::Progress,
     }
 }
 
@@ -277,6 +279,8 @@ mod tests {
             (Cursor::Crosshair, MacCursor::Crosshair),
             (Cursor::ZoomIn, MacCursor::ZoomIn),
             (Cursor::ZoomOut, MacCursor::ZoomOut),
+            (Cursor::Help, MacCursor::Help),
+            (Cursor::Progress, MacCursor::Progress),
             (Cursor::Hidden, MacCursor::Transparent),
             (Cursor::Move, MacCursor::MoveImage),
             (Cursor::Cell, MacCursor::CellImage),
