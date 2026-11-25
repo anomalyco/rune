@@ -13,6 +13,7 @@ pub(super) mod grid;
 pub(super) mod helpers;
 pub(super) mod keep;
 pub(super) mod pixel_snap;
+pub(super) mod quads;
 pub(super) mod raster_check;
 pub(super) mod shadow;
 pub(super) mod shape;

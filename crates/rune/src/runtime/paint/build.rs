@@ -12,12 +12,8 @@ impl RuntimeCore {
         let snap_px = |v: f32| grid(v, s) * s;
         self.keep_swap();
         self.instances.clear();
-        self.paint.quads_frame += 1;
         // Quads a text hasn't drawn with for a while go, with the layouts they hold.
-        if self.paint.quads_frame % 64 == 0 {
-            let frame = self.paint.quads_frame;
-            self.paint.text_quads.retain(|_, (_, used)| frame - *used < 64);
-        }
+        self.paint.text_quads.begin_frame();
         let mut pinned_pages = 0u32;
         for f in self.motion.flights() {
             for q in &f.glyphs {
