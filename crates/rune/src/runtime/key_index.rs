@@ -75,6 +75,19 @@ impl KeyIndex {
         (self.built == Some(NodesId::of(nodes, commit))).then_some(self)
     }
 
+    pub(super) fn rest(&mut self) {
+        self.built = None;
+        self.seen = None;
+        self.keys.clear();
+        self.next_key.clear();
+        self.marks.clear();
+        self.mark_chain.clear();
+        if self.keys.capacity() > 64 { self.keys.shrink_to(0); }
+        if self.next_key.capacity() > 64 { self.next_key.shrink_to(0); }
+        if self.marks.capacity() > 64 { self.marks.shrink_to(0); }
+        if self.mark_chain.capacity() > 64 { self.mark_chain.shrink_to(0); }
+    }
+
     /// The nodes changed under the same commit.
     pub(super) fn forget(&mut self) {
         self.built = None;

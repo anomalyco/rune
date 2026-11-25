@@ -46,9 +46,24 @@ fn auto_layout(natural: &[f32], fit: &[f32], avail: f32, full: bool) -> Vec<f32>
     natural.iter().zip(fit).map(|(w, f)| f + (w - f).max(0.0) * k).collect()
 }
 
+fn rest_table_caches() {
+    WIDTHS.try_with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut() { c.rest(); }
+    }).ok();
+    ROW_WIDTHS.try_with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut() { c.rest(); }
+    }).ok();
+}
+
 thread_local! {
-    static WIDTHS: RefCell<Budget<(u64, u64), Rc<Columns>>> = RefCell::new(Budget::new(WIDTHS_BYTES));
-    static ROW_WIDTHS: RefCell<Budget<(u64, u64), Rc<RowWidths>>> = RefCell::new(Budget::new(ROW_WIDTHS_BYTES));
+    static WIDTHS: RefCell<Budget<(u64, u64), Rc<Columns>>> = {
+        rune::register_thread_rest_hook(rest_table_caches);
+        RefCell::new(Budget::new(WIDTHS_BYTES))
+    };
+    static ROW_WIDTHS: RefCell<Budget<(u64, u64), Rc<RowWidths>>> = {
+        rune::register_thread_rest_hook(rest_table_caches);
+        RefCell::new(Budget::new(ROW_WIDTHS_BYTES))
+    };
 }
 
 fn font_key(f: TextStyle) -> (u32, u32, u32, u32, String) {

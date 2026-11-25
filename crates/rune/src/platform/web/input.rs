@@ -481,6 +481,7 @@ impl Running {
                     self.apply_frame_requests(window);
                     self.clipboard.flush_core(self.app.rt_mut());
                     self.sync_input(false);
+                    self.app.rt_mut().rest();
                     return false;
                 }
                 if event["focused"].as_bool().unwrap_or(false) {

@@ -119,6 +119,22 @@ impl TextQuads {
         }
     }
 
+    /// Drops cached quads for unmounted nodes and shrinks the bucket table at rest.
+    pub(in crate::runtime) fn rest(&mut self, is_live: impl Fn(NodeId) -> bool) {
+        let bytes = &mut self.bytes;
+        self.entries.retain(|&(id, _), e| {
+            let keep = is_live(id);
+            if !keep {
+                *bytes -= entry_bytes(&e.drawn);
+            }
+            keep
+        });
+        let cap = (self.entries.len().saturating_mul(2)).max(64);
+        if self.entries.capacity() > cap {
+            self.entries.shrink_to(cap);
+        }
+    }
+
     fn evict(&mut self, keep_stamp: u64) {
         if self.max_entries == 0 || self.max_bytes == 0 {
             self.entries.clear();

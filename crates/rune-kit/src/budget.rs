@@ -72,6 +72,17 @@ impl<K: Hash + Eq, V> Budget<K, V> {
         self.bytes
     }
 
+    /// Drops entries not used in the last commit and shrinks sparse bucket capacity at rest.
+    pub(crate) fn rest(&mut self) {
+        let now = rune::commit_generation();
+        self.map.retain(|_, s| now > 0 && s.commit == now);
+        self.bytes = self.map.values().map(|s| s.bytes).sum();
+        let cap = (self.map.len().saturating_mul(2)).max(8);
+        if self.map.capacity() > cap {
+            self.map.shrink_to(cap);
+        }
+    }
+
     pub(crate) fn insert(&mut self, key: K, value: V, bytes: usize) {
         self.clock += 1;
         let slot = Slot { value, bytes, used: self.clock, commit: rune::commit_generation() };

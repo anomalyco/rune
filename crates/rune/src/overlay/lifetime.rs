@@ -305,12 +305,7 @@ impl OverlayCore {
     }
 
     fn give_back(&mut self, app: &mut dyn OverlayApp, all: bool, now: Instant) {
-        {
-            let rt = app.rt_mut();
-            rt.text.rest();
-            rt.images.rest();
-            if let Some(rewind) = rt.motion.rewind() { rewind.rest(); }
-        }
+        app.rt_mut().rest();
         let gpu = self.gpu.clone();
         if let (Some(gpu), Some(renderer)) = (gpu, &mut self.renderer) {
             // Poll once (non-blocking) at idle rest on macOS (retiring completed Metal command

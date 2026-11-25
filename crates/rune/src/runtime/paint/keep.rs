@@ -709,6 +709,52 @@ mod shift;
 mod slide;
 pub(in crate::runtime) use shift::ShiftNode;
 
+impl PaintKeep {
+    /// Releases excess capacity in `PaintKeep`'s stale swap buffers and live record arrays at rest
+    /// while keeping the last paint's `recs`/`shift`/`pages` intact for the next paint.
+    pub(in crate::runtime) fn rest(&mut self, live_nodes: usize, live_inst: usize) {
+        fn clear_shrink<T>(v: &mut Vec<T>, floor: usize) {
+            v.clear();
+            if v.capacity() > floor { v.shrink_to(floor); }
+        }
+        fn shrink<T>(v: &mut Vec<T>, floor: usize) {
+            let cap = (v.len().saturating_mul(2)).max(floor);
+            if v.capacity() > cap { v.shrink_to(cap); }
+        }
+        let nf = (live_nodes.saturating_mul(2)).max(64);
+        let inf = (live_inst.saturating_mul(2)).max(128);
+        shrink(&mut self.recs, nf);
+        shrink(&mut self.shift, nf);
+        shrink(&mut self.pages, 64);
+        shrink(&mut self.moved, 64);
+        clear_shrink(&mut self.prev, nf);
+        clear_shrink(&mut self.prev_shift, nf);
+        clear_shrink(&mut self.prev_pages, 64);
+        clear_shrink(&mut self.instances, inf);
+        clear_shrink(&mut self.marks, inf);
+        clear_shrink(&mut self.hits, nf);
+        clear_shrink(&mut self.wheel, nf);
+        clear_shrink(&mut self.overlay, 32);
+        clear_shrink(&mut self.help, 32);
+        clear_shrink(&mut self.drop, 32);
+        clear_shrink(&mut self.drawn, nf);
+        clear_shrink(&mut self.drawn_scale, nf);
+        clear_shrink(&mut self.seen, nf);
+        clear_shrink(&mut self.inh, nf);
+        clear_shrink(&mut self.sticky_frame, 32);
+        clear_shrink(&mut self.moved_at, nf);
+        clear_shrink(&mut self.old, nf);
+        clear_shrink(&mut self.end, nf);
+        clear_shrink(&mut self.clean, nf);
+        clear_shrink(&mut self.fits, nf);
+        clear_shrink(&mut self.open, 64);
+        self.by_id.clear();
+        if self.by_id.capacity() > nf { self.by_id.shrink_to(nf); }
+        clear_shrink(&mut self.verify, nf);
+        clear_shrink(&mut self.verify_shift, nf);
+    }
+}
+
 /// `now` with room for as much as `was` holds room for.
 fn twin<T>(now: &mut Vec<T>, was: &Vec<T>) {
     if now.capacity() < was.capacity() {

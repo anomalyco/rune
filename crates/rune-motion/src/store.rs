@@ -20,6 +20,7 @@ use crate::spring::Spring;
 use crate::value::{Animatable, MAX_LANES, lanes};
 
 mod clock;
+mod compact;
 mod lanes;
 mod started;
 mod tracks;
@@ -39,6 +40,10 @@ pub struct TrackId {
 impl TrackId {
     pub(crate) fn index_usize(self) -> usize {
         self.index as usize
+    }
+
+    pub(crate) fn set_index(&mut self, index: u32) {
+        self.index = index;
     }
 }
 

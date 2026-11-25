@@ -44,6 +44,23 @@ impl NodeIndex {
 
     pub(in crate::runtime) fn contains_key(&self, id: &NodeId) -> bool { self.get(id).is_some() }
     pub(in crate::runtime) fn len(&self) -> usize { self.len }
+
+    pub(in crate::runtime) fn rest(&mut self, nodes: &[super::Node]) {
+        let target_slots = nodes.len().max(1).next_power_of_two();
+        let slot_floor = (target_slots.saturating_mul(2)).max(64);
+        let overflow_floor = (self.overflow.len().saturating_mul(2)).max(32);
+        if self.slots.capacity() > slot_floor || self.overflow.capacity() > overflow_floor {
+            self.rebuild(nodes.len());
+            for (i, n) in nodes.iter().enumerate() {
+                self.insert(n.id, i);
+            }
+            self.slots.shrink_to(target_slots.max(64));
+            let ov_cap = (self.overflow.len().saturating_mul(2)).max(16);
+            if self.overflow.capacity() > ov_cap {
+                self.overflow.shrink_to(ov_cap);
+            }
+        }
+    }
 }
 
 impl std::ops::Index<&NodeId> for NodeIndex {

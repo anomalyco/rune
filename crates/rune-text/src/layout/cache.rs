@@ -133,20 +133,55 @@ impl TextSystem {
         self.generation = g.wrapping_add(1);
     }
 
-    /// A window at rest (`window::rest`): drops every layout the last two commits didn't use,
-    /// and the glyph runs drawn from them. A view shown again after it shapes afresh, as one
-    /// shown for the first time does.
+    /// A window at rest (`window::rest`): drops every layout not used by the last commit,
+    /// shrinks sparse cache tables and scratch buffers, and drops orphaned glyph runs.
+    /// The two-commit grace stays in `end_commit` for active view flips; at rest only what
+    /// redraws the current screen stays cached.
     #[doc(hidden)]
     pub fn rest(&mut self) {
-        // `end_commit` moved the generation on after the last commit.
-        let g = self.generation.wrapping_sub(1);
-        evict_to(&mut self.layouts, g, 0);
-        evict_to(&mut self.paragraphs, g, 0);
-        evict_to(&mut self.elisions, g, 0);
-        evict_to(&mut self.runs, g, 0);
+        fn shrink_map<K: Eq + std::hash::Hash, V, S: std::hash::BuildHasher>(m: &mut std::collections::HashMap<K, V, S>, floor: usize) {
+            let cap = (m.len().saturating_mul(2)).max(floor);
+            if m.capacity() > cap {
+                m.shrink_to(cap);
+            }
+        }
+        fn shrink_vec<T>(v: &mut Vec<T>, floor: usize) {
+            let cap = (v.len().saturating_mul(2)).max(floor);
+            if v.capacity() > cap {
+                v.shrink_to(cap);
+            }
+        }
+        if self.generation > 0 {
+            // `end_commit` moved the generation on after the last commit.
+            let g = self.generation.wrapping_sub(1);
+            self.layouts.retain(|_, e| e.used == g);
+            self.paragraphs.retain(|_, e| e.used == g);
+            self.elisions.retain(|_, e| e.used == g);
+            self.runs.retain(|_, e| e.used == g);
+        }
         let layouts = &self.layouts;
         self.shapes.retain(|_, key| layouts.contains_key(key));
+        self.superseded.clear();
+        self.last_paragraphs = None;
+        self.last_diff = None;
+        self.line_scan = None;
+        shrink_map(&mut self.layouts, 64);
+        shrink_map(&mut self.paragraphs, 32);
+        shrink_map(&mut self.elisions, 32);
+        shrink_map(&mut self.runs, 32);
+        shrink_map(&mut self.shapes, 64);
+        if self.superseded.capacity() > 64 {
+            self.superseded.shrink_to(0);
+        }
+        self.layout_cx = parley::LayoutContext::new();
+        self.cluster_scratch.clear();
+        self.ink_spans.clear();
+        self.coords_scratch.clear();
+        shrink_vec(&mut self.cluster_scratch, 64);
+        shrink_vec(&mut self.ink_spans, 64);
+        shrink_vec(&mut self.coords_scratch, 32);
         self.glyph_cache.drop_orphans();
+        crate::measure::rest();
     }
 
     /// The keys of the layouts held now, for [`Self::keep_prepared`].
@@ -220,3 +255,7 @@ impl TextSystem {
     #[doc(hidden)]
     pub fn cached_elision_count(&self) -> usize { self.elisions.len() }
 }
+
+#[cfg(test)]
+#[path = "cache_tests.rs"]
+mod tests;

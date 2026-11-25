@@ -405,8 +405,17 @@ struct Entry {
     out: Rc<[Highlight]>,
 }
 
+fn rest_syntax_cache() {
+    CACHE.try_with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut() { c.rest(); }
+    }).ok();
+}
+
 thread_local! {
-    static CACHE: RefCell<Budget<u64, Entry>> = RefCell::new(Budget::new(CACHE_BYTES));
+    static CACHE: RefCell<Budget<u64, Entry>> = {
+        rune::register_thread_rest_hook(rest_syntax_cache);
+        RefCell::new(Budget::new(CACHE_BYTES))
+    };
 }
 
 fn hash_of(v: impl Hash) -> u64 {

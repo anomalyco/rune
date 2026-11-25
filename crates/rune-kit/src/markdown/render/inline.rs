@@ -9,8 +9,20 @@ use super::{Renderer, hash_of};
 #[cfg(feature = "math")]
 const INLINE_MATH_SIZE: f32 = 1.1 / 1.21;
 
+fn rest_pad_sizes() {
+    PAD_SIZES.try_with(|c| {
+        if let Ok(mut c) = c.try_borrow_mut() {
+            c.clear();
+            if c.capacity() > 32 { c.shrink_to(0); }
+        }
+    }).ok();
+}
+
 thread_local! {
-    static PAD_SIZES: RefCell<std::collections::HashMap<u64, f32>> = RefCell::new(std::collections::HashMap::new());
+    static PAD_SIZES: RefCell<std::collections::HashMap<u64, f32>> = {
+        rune::register_thread_rest_hook(rest_pad_sizes);
+        RefCell::new(std::collections::HashMap::new())
+    };
 }
 
 /// The size that sets inline code's padding spaces (`PAD`, in the text's own `font`) to `pad`
@@ -25,7 +37,12 @@ fn pad_size(font: TextStyle, pad: f32) -> f32 {
     let wide = |size: f32| (rune::text::measure(&probe, &[], TextStyle { size, ..font }, None).0 / 64.0).max(0.1);
     let first = font.size * pad / wide(font.size);
     let size = first * pad / wide(first);
-    PAD_SIZES.with_borrow_mut(|m| m.insert(key, size));
+    PAD_SIZES.with_borrow_mut(|m| {
+        if m.len() >= 64 {
+            m.clear();
+        }
+        m.insert(key, size);
+    });
     size
 }
 
