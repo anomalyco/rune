@@ -387,19 +387,41 @@ impl El {
         self
     }
     /// Requests declarative pointer lock on this element for relative mouse-look (games, 3D
-    /// viewports).
+    /// viewports) on desktop windows and web browsers.
     ///
     /// A primary mouse press whose primary target is this element captures the pointer (a press
     /// on a child control that handles primary input or on a covering element does not). While
     /// captured, the OS cursor is hidden whenever the window has focus, `pointer_move` and
     /// `pointer_leave` are ignored so the runtime pointer stays at the capturing press point,
-    /// and relative mouse motion arrives as coalesced `[dx, dy]` deltas in points (right and
-    /// down positive). Pressing Escape (consuming the key, after any drag cancel), losing window
-    /// focus, covering the element with a modal, disabling/marking it inert, or removing
-    /// `pointer_lock` releases the capture. Call [`Tx::live_only`] when updating only
-    /// [`Live`](crate::Live) camera values to skip view rebuilds.
+    /// and relative mouse motion arrives as coalesced `[dx, dy]` deltas in logical points (right
+    /// and down positive). Pressing Escape (after any drag cancel), losing window/tab focus,
+    /// covering the element with a modal, disabling/marking it inert, or removing `pointer_lock`
+    /// releases the capture. Call [`Tx::live_only`] when updating only [`Live`](crate::Live)
+    /// camera values to skip view rebuilds.
     ///
-    /// Desktop windows only: on web, iOS, and native overlays the element never captures.
+    /// Platform behaviour:
+    /// - **Windows**: grabs with `CursorGrabMode::Locked` (1×1 clip), falling back to `Confined`;
+    ///   raw device motion (`WM_INPUT`) is divided by `scale_factor()`. If both modes fail, the
+    ///   error is logged to stderr and raw device motion still arrives.
+    /// - **macOS**: grabs with `CursorGrabMode::Locked` (`CGAssociateMouseAndMouseCursorPosition`);
+    ///   `NSEvent` deltas are already in logical points.
+    /// - **Wayland**: grabs with `CursorGrabMode::Locked` (`zwp_pointer_constraints_v1`), falling
+    ///   back to `Confined`; `zwp_relative_pointer_v1` deltas are already in logical surface units.
+    /// - **X11**: `Locked` is unsupported so it falls back to `CursorGrabMode::Confined`
+    ///   (`xcb_grab_pointer`); XInput2 `RawMotion` counts are divided by `scale_factor()`.
+    /// - **Web**: inside the primary press user gesture, calls
+    ///   `canvas.requestPointerLock({ unadjustedMovement: true })` and caches a fallback to plain
+    ///   `canvas.requestPointerLock()` if the browser rejects with `NotSupportedError`.
+    ///   [`Cx::pointer_locked`](crate::Cx::pointer_locked) stays `false` until the browser grants
+    ///   lock (`pointerlockchange`), relative deltas come from `PointerEvent.movementX`/`movementY`
+    ///   in CSS pixels (logical points, independent of `Cx::zoom`), and browser-driven exits
+    ///   (Escape, which the browser handles without delivering a key event, or tab switch) end the
+    ///   capture via `pointerlockchange`. If the browser refuses (no gesture, Chrome's post-Escape
+    ///   cooldown, unfocused document, or `pointerlockerror`), `Cx::pointer_locked()` stays
+    ///   `false`, normal pointer input continues without getting stuck, and a later press can try
+    ///   again.
+    /// - **iOS and native overlays**: unsupported; the element never captures and
+    ///   `Cx::pointer_locked()` stays `false`.
     ///
     /// ```
     /// # use rune::{Cx, El, Env, Key, KeyEvent, Runtime, el};

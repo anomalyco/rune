@@ -568,15 +568,19 @@ policy changes are applied in the same mutation phase.
   tree order before that press's target actions (skipping inert, exiting, and behind-modal
   subtrees while including observers inside an active modal), and windows with no observer pay
   one cached boolean check per press. `.pointer_lock(|s, [dx, dy], tx| ..)` requests declarative
-  relative mouse-look capture on desktop windows (web, iOS, and overlays never capture): a primary
-  press whose primary target is that element captures (HUD buttons and covering elements do not),
-  hides the cursor while focused (`CursorGrabMode::Locked`, falling back to `Confined` on X11),
-  freezes the runtime pointer at the press point (ignoring `pointer_move`/`pointer_leave` so all
-  buttons and wheels land on the viewport), and delivers coalesced relative `[dx, dy]` deltas in
-  points (`tx.live_only()` supported; `DeviceEvent::MouseMotion` scaled by `1/scale_factor` on
-  Windows and X11). Escape releases and is consumed (after any drag cancel), and focus loss,
-  unmount, modal cover, disabled, or inert states release automatically; read `Cx::pointer_locked()`
-  in views (rebuilds views and memos on change), `Runtime::pointer_locked()` / `Runtime::pointer_motion(dx, dy)`
+  relative mouse-look capture on desktop windows and web browsers (iOS and native overlays never
+  capture): a primary press whose primary target is that element captures (HUD buttons and covering
+  elements do not), hides the cursor while focused (desktop `CursorGrabMode::Locked`, falling back
+  to `Confined` on X11; web `canvas.requestPointerLock({ unadjustedMovement: true })` with cached
+  `NotSupportedError` fallback to plain `requestPointerLock()` inside the user gesture), freezes the
+  runtime pointer at the press point (ignoring `pointer_move`/`pointer_leave` so all buttons and
+  wheels land on the viewport), and delivers coalesced relative `[dx, dy]` deltas in logical points
+  (`tx.live_only()` supported; `DeviceEvent::MouseMotion` scaled by `1/scale_factor` on Windows and
+  X11; `PointerEvent.movementX`/`movementY` CSS pixels on web). Escape releases and is consumed
+  (handled natively by the browser via `pointerlockchange` on web), and focus loss, unmount, modal
+  cover, disabled, inert states, or browser refusal (`pointerlockerror` / cooldown / unfocused
+  document) leave `Cx::pointer_locked()` false with no stuck state; read `Cx::pointer_locked()` in
+  views (rebuilds views and memos on change), `Runtime::pointer_locked()` / `Runtime::pointer_motion(dx, dy)`
   in tests, and `{"type": "pointer-motion", "dx": …, "dy": …}` (`ScriptEvent::PointerMotion`) in scripts.
   `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
   logical keys `on_key` sees: the press-time and current focus chains first (keeping shared

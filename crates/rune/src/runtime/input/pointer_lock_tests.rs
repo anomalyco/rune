@@ -567,3 +567,103 @@ fn apps_without_pointer_lock_keep_flag_false_and_role_unchanged() {
         .expect("cam node");
     assert_eq!(cam.role, "group", "pointer_lock alone leaves role unchanged");
 }
+
+#[test]
+fn async_policy_requests_on_press_and_waits_for_platform_grant_and_exit() {
+    let mut rt = make_rt(Scene::playing());
+    rt.core_mut().set_pointer_lock_policy(super::LockPolicy::Async);
+    assert!(!rt.pointer_locked());
+
+    // Primary press enters Pending (owes Grab) without flipping pointer_locked() yet.
+    rt.pointer_down(150.0, 100.0);
+    assert!(!rt.pointer_locked(), "Cx::pointer_locked stays false while awaiting browser grant");
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Pending);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Grab));
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), None);
+    rt.pointer_up(150.0, 100.0);
+    rt.frame(0.0);
+    assert!(!rt.state.locked_seen.get());
+
+    // Motion before grant is dropped.
+    rt.pointer_motion(10.0, 5.0);
+    rt.frame(0.0);
+    assert!(rt.state.motions.is_empty());
+
+    // Browser confirms pointer lock via pointerlockchange -> Locked (no extra host effect).
+    assert!(rt.core_mut().pointer_lock_granted());
+    assert!(rt.pointer_locked());
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), None);
+    rt.frame(0.0);
+    assert!(rt.state.locked_seen.get(), "Cx::pointer_locked updates to true on grant");
+
+    // Relative motion from movementX/movementY coalesces and delivers cleanly.
+    rt.pointer_motion(30.0, 15.0);
+    rt.pointer_motion(15.0, -10.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.motions, vec![[45.0, 5.0]]);
+
+    // Browser exits lock on Escape or tab switch (pointerlockchange -> null): back to Ready,
+    // Cx::pointer_locked flips false, no redundant Ungrab owed.
+    assert!(rt.core_mut().pointer_lock_lost());
+    assert!(!rt.pointer_locked());
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Ready);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), None);
+    rt.frame(0.0);
+    assert!(!rt.state.locked_seen.get());
+    rt.pointer_motion(9.0, 9.0);
+    rt.frame(0.0);
+    assert_eq!(rt.state.motions.len(), 1, "motion after browser exit is dropped");
+}
+
+#[test]
+fn async_policy_refusal_and_unmount_and_stale_grant_leave_no_stuck_state() {
+    let mut rt = make_rt(Scene::playing());
+    rt.core_mut().set_pointer_lock_policy(super::LockPolicy::Async);
+
+    // 1. Browser refuses (cooldown / no gesture / unfocused document): Pending -> Ready.
+    rt.pointer_down(150.0, 100.0);
+    rt.pointer_up(150.0, 100.0);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Grab));
+    assert!(!rt.core_mut().pointer_lock_lost(), "is_locked stayed false on refusal");
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Ready);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), None);
+
+    // Next click requests again cleanly (not stuck in Pending).
+    rt.pointer_down(150.0, 100.0);
+    rt.pointer_up(150.0, 100.0);
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Pending);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Grab));
+
+    // 2. Focus loss while Pending returns to Ready and owes Ungrab; stale late grant owes Ungrab.
+    rt.window_focus(false);
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Ready);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Ungrab));
+    assert!(!rt.core_mut().pointer_lock_granted());
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Ready);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Ungrab));
+
+    // 3. Unmount while Pending before host synced cancels Grab cleanly.
+    rt.window_focus(true);
+    rt.frame(0.0);
+    rt.pointer_down(150.0, 100.0);
+    rt.pointer_up(150.0, 100.0);
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Pending);
+    rt.update(|s, _| s.playing = false);
+    rt.frame(0.0);
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Off);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), None);
+
+    // 4. Unmount while Locked owes Ungrab so the browser calls exitPointerLock().
+    rt.update(|s, _| s.playing = true);
+    rt.frame(0.0);
+    rt.pointer_down(150.0, 100.0);
+    rt.pointer_up(150.0, 100.0);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Grab));
+    assert!(rt.core_mut().pointer_lock_granted());
+    assert!(rt.pointer_locked());
+    rt.update(|s, _| s.playing = false);
+    rt.frame(0.0);
+    assert!(!rt.pointer_locked());
+    assert_eq!(rt.core().pointer.pointer_lock.state(), LockState::Off);
+    assert_eq!(rt.core_mut().take_pointer_lock_effect(), Some(LockEffect::Ungrab));
+}

@@ -264,7 +264,19 @@ the caret, while events with no `inputType`, `insertReplacementText`, multi-grap
 `insertText`, or any input while the element matches `:autofill`/`:-webkit-autofill`
 replace the field's whole value (including clearing it when empty). Leaving a field returns
 focus to the canvas so
-shortcuts and Tab keep working. Continuous pointer movement and wheel events wait for rAF.
+shortcuts and Tab keep working. Continuous pointer movement, pointer-lock motion (`El::pointer_lock`) and wheel events wait for rAF.
+
+`El::pointer_lock` uses the W3C Pointer Lock API: a primary press on the element requests
+`canvas.requestPointerLock({ unadjustedMovement: true })` synchronously inside the `pointerdown`
+user gesture, caching a fallback to plain `canvas.requestPointerLock()` when a platform rejects
+`unadjustedMovement` with `NotSupportedError`. `Cx::pointer_locked()` stays `false` until
+`pointerlockchange` confirms `document.pointerLockElement === canvas`. While locked, relative
+deltas arrive from `PointerEvent.movementX`/`movementY` in CSS pixels (logical points, independent
+of `Cx::zoom`) and coalesce into one handler call per animation frame. Browser-driven exits
+(Escape, tab switch, or `document.exitPointerLock()`) and refusals (missing gesture, Chrome's
+post-Escape cooldown, unfocused document, or `pointerlockerror`) return cleanly to unlocked state
+(`Cx::pointer_locked() == false`) so a subsequent click can capture again. Open
+`web-hello?pointer-lock-proof` to try it in a browser.
 
 `Tx::copy` and `Tx::request_paste` use the browser clipboard. Call them from a user input
 handler: permission and transient-activation rules still apply. Native Paste events work

@@ -360,7 +360,7 @@ impl Browser {
         {
             let rt = app.rt_mut();
             rt.set_os_drag(false);
-            rt.set_pointer_lock_supported(false);
+            rt.set_pointer_lock_policy(crate::runtime::LockPolicy::Async);
             rt.wall_start = Some(now);
             rt.host.open_urls_natively = true;
             rt.frame.set_record_events(false);
