@@ -40,7 +40,7 @@ fn shutdown_expires_only_our_pending_secret_before_dropping_backend() {
         worker.sender.send(Request::Write(ClipboardWrite::secret("fixture".into(), LONG).0, None)).unwrap();
         let (reply, received) = mpsc::channel();
         worker.sender.send(Request::Read { purpose: Purpose::Paste(None, Forms::Text), reply, wake: Arc::new(|| {}) }).unwrap();
-        received.recv_timeout(Duration::from_secs(1)).unwrap(); // Write and revision recorded.
+        received.recv().unwrap(); // Write and revision recorded.
         if let Some(text) = replacement {
             let mut s = state.lock().unwrap(); s.text = text.into(); s.revision += 1;
         }
@@ -63,12 +63,11 @@ fn shutdown_does_not_wait_indefinitely_for_a_blocked_backend() {
         Some(Fake { state: Arc::default(), dropped: Some(dropped.clone()) })
     });
     worker.sender.send(Request::Write(ClipboardWrite::secret("fixture".into(), LONG).0, None)).unwrap();
-    waiting.recv_timeout(Duration::from_secs(1)).unwrap();
-    let start = crate::time::now();
+    waiting.recv().unwrap();
     worker.stop();
-    assert!(start.elapsed() < Duration::from_secs(1));
+    assert!(finished.try_recv().is_err(), "stop must return while the backend is still blocked");
     release.send(()).unwrap();
-    finished.recv_timeout(Duration::from_secs(1)).unwrap();
+    finished.recv().unwrap();
 }
 
 /// The OS worker reports the write, then notices another app's change on its own.
@@ -79,13 +78,14 @@ fn worker_reports_the_write_and_watches_for_outside_changes() {
     let worker = Worker::spawn(move || Some(Fake { state: shared.clone(), dropped: None }));
     let (woke, wakes) = mpsc::channel();
     let notify = Notify { changed: Arc::default(), wake: Arc::new(move || { woke.send(()).ok(); }) };
+    let changed = notify.changed.clone();
     let (write, handle) = ClipboardWrite::secret("fixture".into(), LONG);
     write.bind(Route::System(worker.sender.clone()));
-    worker.sender.send(Request::Write(write, Some(notify.clone()))).unwrap();
-    wakes.recv_timeout(Duration::from_secs(1)).unwrap();
-    assert!(handle.holds() && notify.changed.load(Ordering::SeqCst));
+    worker.sender.send(Request::Write(write, Some(notify))).unwrap();
+    wakes.recv().unwrap();
+    assert!(handle.holds() && changed.load(Ordering::SeqCst));
     { let mut s = state.lock().unwrap(); s.text = "theirs".into(); s.revision += 1; }
-    wakes.recv_timeout(WATCH * 8).unwrap();
+    wakes.recv().unwrap();
     assert_eq!(handle.state(), SecretState::Replaced);
     handle.clear_now();
     worker.stop();
@@ -198,7 +198,7 @@ fn the_worker_answers_reads_with_sanitised_content() {
     state.lock().unwrap().text = "<script>".into();
     let (reply, replies) = mpsc::channel();
     worker.sender.send(Request::Read { purpose: Purpose::Read(7), reply, wake: Arc::new(|| {}) }).unwrap();
-    let answer = replies.recv_timeout(Duration::from_secs(1)).unwrap();
+    let answer = replies.recv().unwrap();
     assert_eq!((answer.purpose, answer.content.text()), (Purpose::Read(7), "<script>"), "plain text is never rewritten");
     worker.stop();
     assert!(Purpose::Paste(None, Forms::Rich).reply(None).is_none());

@@ -526,6 +526,8 @@ pub(crate) struct Watch {
     /// How many times the overlay has dispatched, so the watcher waits for the loop to read
     /// what woke it instead of spinning on a socket that stays readable until then.
     turns: Arc<(Mutex<u64>, Condvar)>,
+    #[cfg(test)]
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Watch {
@@ -534,7 +536,7 @@ impl Watch {
         let stop = Arc::new(AtomicBool::new(false));
         let turns = Arc::new((Mutex::new(0u64), Condvar::new()));
         let (stopped, seen) = (stop.clone(), turns.clone());
-        std::thread::Builder::new().name("rune-layer-watch".into()).spawn(move || {
+        let thread = std::thread::Builder::new().name("rune-layer-watch".into()).spawn(move || {
             while !stopped.load(Ordering::Acquire) {
                 let mut poll = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
                 // SAFETY: one pollfd for a display socket. winit's outlives the event loop; an
@@ -576,7 +578,21 @@ impl Watch {
                 }
             }
         }).ok();
-        Watch { stop, turns }
+        #[cfg(not(test))]
+        drop(thread);
+        Watch {
+            stop,
+            turns,
+            #[cfg(test)]
+            thread,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn join(mut self) {
+        if let Some(handle) = self.thread.take() {
+            handle.join().ok();
+        }
     }
 
     pub(crate) fn turned(&self) {

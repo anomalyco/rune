@@ -1,0 +1,1 @@
+- Tests (`rune-core`, `rune`): replace real-clock upper bounds, short `recv_timeout` waits, and fixed sleeps with event-driven synchronization across `latest`, `clipboard`, `overlay`, Win32 `slot`/`popup_menu`, and Linux `layer_shell`/`wayland_drop` tests so they do not flake under heavy CPU load.
