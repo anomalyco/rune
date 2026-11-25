@@ -633,11 +633,13 @@ fn run_handover_sample(kind: &str) {
     assert!(reason.is_degradable());
 
     // Spawn off-thread cold software-GPU handover (matching win32/handover.rs) while the UI thread
-    // keeps painting live degraded CPU frames paced at ~60 Hz.
+    // keeps painting live degraded CPU frames paced at ~60 Hz. The Renderer stays on the worker
+    // thread that created it (it is `!Send` on macOS) and only timings and memory metrics return.
     let instances_for_bg = rt.instances.clone();
     let clear = rt.clear_color();
     let done = Arc::new(AtomicBool::new(false));
     let done_bg = done.clone();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
     let bg = std::thread::spawn(move || {
         let t0 = rune::time::now();
         let gpu = Gpu::headless();
@@ -654,12 +656,23 @@ fn run_handover_sample(kind: &str) {
         }
         let t3 = rune::time::now();
         done_bg.store(true, Ordering::Release);
-        (gpu, renderer, target, (t1 - t0).as_secs_f64() * 1e3, (t2 - t1).as_secs_f64() * 1e3, (t3 - t2).as_secs_f64() * 1e3, (t3 - t0).as_secs_f64() * 1e3)
+        if release_rx.recv().is_err() {
+            // Main thread exited before signaling; sample and drop cleanly anyway.
+        }
+        let after = sample_memory();
+        drop((target, renderer, gpu));
+        (
+            (t1 - t0).as_secs_f64() * 1e3,
+            (t2 - t1).as_secs_f64() * 1e3,
+            (t3 - t2).as_secs_f64() * 1e3,
+            (t3 - t0).as_secs_f64() * 1e3,
+            after,
+        )
     });
 
     let mut ui_frames = 0usize;
     let mut ui_max_ms = 0.0f64;
-    while !done.load(Ordering::Acquire) {
+    while !done.load(Ordering::Acquire) && !bg.is_finished() {
         let f0 = rune::time::now();
         rt.update(|s, _| s.hovered = ui_frames % 16);
         rt.frame(1.0 / 60.0);
@@ -674,10 +687,12 @@ fn run_handover_sample(kind: &str) {
         std::thread::sleep(Duration::from_millis(16));
     }
 
-    let (_gpu, _renderer, _target, gpu_create, renderer_new, first_frame, total) = bg.join().expect("handover bg thread");
     drop(painter);
     drop(pixels);
-    let after = sample_memory();
+    if release_tx.send(()).is_err() {
+        // Worker exited early; bg.join() below surfaces any panic.
+    }
+    let (gpu_create, renderer_new, first_frame, total, after) = bg.join().expect("handover bg thread");
 
     println!(
         "HANDOVER kind={kind}|gpu_create={gpu_create:.3}|renderer_new={renderer_new:.3}|first_frame={first_frame:.3}|total={total:.3}|before_priv={:.3}|after_priv={:.3}|ui_frames={ui_frames}|ui_max_ms={ui_max_ms:.3}",
