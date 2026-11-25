@@ -76,7 +76,8 @@ impl Divider {
         Divider { vertical: true }
     }
     pub fn build(self, k: &Kit) -> El {
+        let thickness = k.divider_thickness();
         let e = el().role("separator").fill(k.c.border_base);
-        if self.vertical { e.w(1.0).h_full() } else { e.h(1.0).w_full() }
+        if self.vertical { e.w(thickness).h_full() } else { e.h(thickness).w_full() }
     }
 }

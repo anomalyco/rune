@@ -24,6 +24,7 @@ mod inputs;
 mod link_hover;
 mod link_popover;
 mod markdown;
+mod metrics;
 mod overlays;
 pub(crate) mod sidebar;
 mod split_view;
@@ -320,6 +321,8 @@ stories! {
     "rune-keybind--symbols" => keybind_symbols,
     "rune-keybind--keep-case" => keybind_keep_case,
     "rune-switch--sizes" => switch_sizes,
+    "rune-switch--flat" => metrics::switch_flat,
+    "rune-metrics--themes" => metrics::metrics_themes,
     "rune-slider--basic" => slider_basic,
     "rune-slider--sizes" => slider_sizes,
     "rune-slider--states" => slider_states,

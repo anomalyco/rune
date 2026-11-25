@@ -159,14 +159,18 @@ impl Progress {
             root = root.child(header.a11y_hidden());
         }
         root = report(root, self.value);
+        let m = k.progress_metrics();
+        let (height, border_width) = (m.height, m.border_width);
         let mut track = row()
             .key("track")
             .w_full()
-            .h(8.0)
+            .h(height)
             .radius(999.0)
-            .fill(c.surface_base)
-            .border(1.0, c.border_weak)
-            .clip_soft(0.0);
+            .fill(c.surface_base);
+        if border_width > 0.0 {
+            track = track.border(border_width, c.border_weak);
+        }
+        track = track.clip_soft(0.0);
         let fill = el().key("fill").h_full().radius(999.0).fill(c.border_active);
         track = track.child(match self.value {
             Some(v) => fill.w_frac(v.clamp(0.0, 1.0)),

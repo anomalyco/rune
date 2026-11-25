@@ -55,6 +55,23 @@ let mut k = rune_kit::Kit::from_palette(rune_kit::PaletteSeed {
 k.radius.sm = 3.0;
 ```
 
+**Component metrics (`Kit::metrics`).** Controls whose corner radii match the radius scale (`SegmentedControl` `md`, `Collapsible` trigger `sm`, `Keybind` `xs`) read `k.radius` automatically. Override per-component heights, padding, radii, borders or flat switch chrome on `k.metrics` (all entries default to `None`, keeping the built-in values; start from each type's `::kit(&k)` constructor with `..`):
+
+```rust
+let mut k = rune_kit::Kit::neutral(true);
+k.radius.md = 8.0;
+k.metrics.segmented = Some(rune_kit::SegmentedMetrics { height: 24.0, padding_x: 8.0, ..rune_kit::SegmentedMetrics::kit(&k) });
+k.metrics.disclosure_header_height = Some(26.0);
+k.metrics.progress = Some(rune_kit::ProgressMetrics { border_width: 0.0, ..rune_kit::ProgressMetrics::kit(&k) });
+k.metrics.divider_thickness = Some(0.5);
+k.metrics.keybind = Some(rune_kit::KeybindMetrics { height: 16.0, ..rune_kit::KeybindMetrics::kit(&k) });
+k.metrics.text_area_min_height = Some(60.0);
+k.metrics.standard_switch = Some(rune_kit::StandardSwitchMetrics { track_width: 32.0, track_height: 18.0, ..rune_kit::StandardSwitchMetrics::kit(&k) });
+k.metrics.switch_look = Some(rune_kit::SwitchLook { track_border: 1.0, ..rune_kit::SwitchLook::flat(&k) });
+```
+
+For a one-off flat compact or web switch without changing the theme, call `Switch::new(on).flat()`. See `rune-metrics--themes` and `rune-switch--flat` in `examples/kit-gallery`.
+
 Layers step OKLab lightness away from `bg`; borders, hover and press are `fg` at low alpha,
 as a browser blends it (solved over `bg`, `k.blend_over`, when built in a window that blends in
 linear light). Secondary text uses OKLab with contrast floors of 4.5:1

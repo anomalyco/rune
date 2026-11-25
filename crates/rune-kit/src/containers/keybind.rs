@@ -55,6 +55,8 @@ impl Keybind {
             KeybindVariant::Neutral => (c.layer_03, c.text_muted),
             KeybindVariant::Ghost => (rune::Color::TRANSPARENT, c.text_faint),
         };
+        let m = k.keybind_metrics();
+        let (height, radius, padding_x) = (m.height, m.radius, m.padding_x);
         let font = TextStyle { line_height: 11.0, ..k.ty.small_medium };
         let label = self.keys.join(" ");
         let keep_case = self.keep_case;
@@ -63,11 +65,11 @@ impl Keybind {
                 let cap = if keep_case { key } else { keycap(key) };
                 row()
                     .key(format!("key{i}"))
-                    .min_w(14.0)
-                    .h(14.0)
-                    .px(4.0)
+                    .min_w(height)
+                    .h(height)
+                    .px(padding_x)
                     .center()
-                    .radius(2.0)
+                    .radius(radius)
                     .fill(fill)
                     .child(text(cap).font(font).color(ink))
                     .a11y_hidden()
