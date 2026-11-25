@@ -14,10 +14,11 @@ use crate::time::Instant;
 
 /// Last-resort maximum time exit waits for in-flight GPU warm-up threads before ending the
 /// process without running destructors under a wedged driver call. Generous enough that
-/// ordinary slow cold Vulkan/shader/software startup under heavy parallel load drains cleanly
-/// and returns from `App::run()` / `App::try_run()`, while still guaranteeing a truly hung
-/// driver call cannot hang the process forever.
-pub(crate) const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+/// ordinary slow cold Vulkan/shader/software startup under parallel load drains cleanly and
+/// returns from `App::run()` / `App::try_run()`, while matching `relaunch::WAIT` and
+/// `open_url::instance::HANDED_WAIT` (both 10 s) so a hung driver does not linger holding
+/// locks past a relaunch wait.
+pub(crate) const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Clock source for warm-up deadlines and bounded shutdown waits (injected in tests).
 pub(crate) trait Clock: Send + Sync {

@@ -629,17 +629,28 @@ impl ApplicationHandler<WakeEvent> for Windows {
         }
         let effects = wayland_wake::step(&mut self.wayland_wake, wayland_wake::Event::Exiting);
         self.apply_wayland_wake(event_loop, effects);
-        // Surfaces go while winit's display connection is still open (layer surfaces live on it).
-        self.hosts.clear();
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        crate::platform::wayland_drop::shutdown();
-        crate::marks::mark("windows.dropped");
-        crate::clipboard::shutdown();
-        if matches!(step, app_events::ExitStep::Orderly { relaunch: true }) {
-            crate::relaunch::spawn();
-        }
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        crate::open_url::instance::exited();
+        // Surfaces and tray icons go while winit's display connection is still open (layer
+        // surfaces live on it) and before `run_app` returns to `shutdown_prewarm()`, so nothing
+        // stays visible on screen if a background GPU warm-up thread is slow or hung.
+        app_events::finish_orderly_exiting(
+            &mut self.hosts,
+            matches!(step, app_events::ExitStep::Orderly { relaunch: true }),
+            || {
+                #[cfg(not(target_arch = "wasm32"))]
+                crate::tray::remove_all();
+            },
+            || {
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                crate::platform::wayland_drop::shutdown();
+                crate::marks::mark("windows.dropped");
+                crate::clipboard::shutdown();
+            },
+            || crate::relaunch::spawn(),
+            || {
+                #[cfg(any(target_os = "windows", target_os = "linux"))]
+                crate::open_url::instance::exited();
+            },
+        );
     }
 }
 

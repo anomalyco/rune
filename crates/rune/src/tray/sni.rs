@@ -5,7 +5,7 @@ use super::{DBUSMENU_ROOT as ROOT, DbusMenu, DbusMenuValue, Handler, TrayError, 
 use crate::platform::portal;
 use async_channel::{Sender, unbounded};
 use futures_lite::{FutureExt, StreamExt};
-use std::{collections::HashMap, sync::{Arc, Mutex, mpsc}, thread::JoinHandle, time::Duration};
+use std::{collections::HashMap, sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}, mpsc}, thread::JoinHandle, time::Duration};
 use zbus::{
     Connection, Proxy,
     object_server::SignalEmitter,
@@ -32,7 +32,19 @@ enum Command {
     IconName(String),
     Title(String),
 }
-pub(super) struct Native { commands: Option<Sender<Command>>, worker: Option<JoinHandle<()>> }
+/// Live tray command channels so exit (`tray::remove_all`) can close every StatusNotifierItem
+/// D-Bus connection immediately before any warm-up drain wait, without waiting for `Tray::drop`.
+static LIVE: Mutex<Vec<(u64, Sender<Command>)>> = Mutex::new(Vec::new());
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+pub(super) fn remove_all() {
+    let live = std::mem::take(&mut *LIVE.lock().unwrap_or_else(|e| e.into_inner()));
+    for (_, tx) in live {
+        tx.close();
+    }
+}
+
+pub(super) struct Native { id: u64, commands: Option<Sender<Command>>, worker: Option<JoinHandle<()>> }
 
 fn backend(e: impl std::fmt::Display) -> TrayError { TrayError::Backend(e.to_string()) }
 
@@ -229,7 +241,11 @@ impl Native {
             });
         }).map_err(backend)?;
         match result.recv() {
-            Ok(Ok(())) => Ok(Self { commands: Some(commands), worker: Some(worker) }),
+            Ok(Ok(())) => {
+                let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+                LIVE.lock().unwrap_or_else(|e| e.into_inner()).push((id, commands.clone()));
+                Ok(Self { id, commands: Some(commands), worker: Some(worker) })
+            }
             Ok(Err(e)) => { worker.join().ok(); Err(e) }
             Err(_) => { worker.join().ok(); Err(backend("tray thread exited")) }
         }
@@ -256,6 +272,7 @@ impl Native {
 
 impl Drop for Native {
     fn drop(&mut self) {
+        LIVE.lock().unwrap_or_else(|e| e.into_inner()).retain(|(id, _)| *id != self.id);
         self.commands.take();
         if let Some(worker) = self.worker.take() { worker.join().ok(); }
     }
@@ -423,5 +440,16 @@ mod tests {
         ]);
         let toggled = dbus_menu.get_property(*hud_id, "toggle-state".into()).unwrap();
         assert_eq!(i32::try_from(&toggled).ok(), Some(1));
+    }
+
+    #[test]
+    fn remove_all_closes_live_channels_immediately() {
+        let (tx, rx) = unbounded::<Command>();
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        LIVE.lock().unwrap_or_else(|e| e.into_inner()).push((id, tx.clone()));
+        assert!(!tx.is_closed());
+        remove_all();
+        assert!(tx.is_closed(), "remove_all must close live SNI channels so D-Bus disconnects at once");
+        assert!(rx.is_closed());
     }
 }

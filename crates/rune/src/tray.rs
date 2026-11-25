@@ -177,8 +177,11 @@ pub struct Tray {
 /// (`crate::fast_exit`). Elsewhere the icon goes with the process: its D-Bus name (Linux) or
 /// status item (macOS) ends when the connection does.
 #[cfg(not(target_arch = "wasm32"))]
+/// Removes every live tray icon at once without waiting for `Tray::drop` (called by fast exit
+/// and by `Windows::exiting` before any background GPU warm-up drain wait so no tray icon
+/// stays visible on screen after the user quits). Safe to call before `Tray::drop`.
 pub(crate) fn remove_all() {
-    #[cfg(target_os = "windows")]
+    #[cfg(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows"))]
     native::remove_all();
 }
 

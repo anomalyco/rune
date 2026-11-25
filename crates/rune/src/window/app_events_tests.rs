@@ -5,7 +5,7 @@ use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
-use super::{ExitFlags, ExitStep, cleanup_hosts, exiting_hosts, is_error_exit, quit_hosts, run_display_close};
+use super::{ExitFlags, ExitStep, cleanup_hosts, exiting_hosts, finish_orderly_exiting, is_error_exit, quit_hosts, run_display_close};
 use crate::clipboard::MemoryClipboard;
 use crate::quit::{Effect, Event, State as QuitState, step as quit_step};
 use crate::runtime::{Env, Runtime};
@@ -850,4 +850,60 @@ fn assistive_click_on_custom_close_button_asks_on_close_request_before_closing()
     assert_eq!(take_shell_action(rt.core_mut()), ShellCloseAction::ProgrammaticClose);
     rt.update(|_, tx| { tx.request_user_close(); tx.close_window(); tx.quit(); });
     assert_eq!(take_shell_action(rt.core_mut()), ShellCloseAction::Quit(crate::quit::After::Exit));
+}
+
+#[test]
+fn orderly_exiting_hides_and_drops_hosts_and_removes_trays_before_warmup_wait() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mem = crate::clipboard::memory();
+    let main_host = TestHost::new("main", true, events.clone(), &mem, None).with_drop_log();
+    let overlay_host = TestHost::new("overlay", false, events.clone(), &mem, None).with_drop_log();
+    let mut hosts: Vec<Option<Box<dyn AnyHost>>> = vec![Some(Box::new(main_host)), Some(Box::new(overlay_host))];
+    let mut display_close = vec![log_display_close(&events, "main")];
+    let mut quit_state = QuitState::Quitting(crate::quit::Hooks::Owed, crate::quit::After::Exit);
+
+    let step = exiting_hosts(
+        &mut hosts,
+        &mut display_close,
+        ExitFlags {
+            has_startup_error: false,
+            has_display_error: false,
+            loop_exiting: true,
+            quitting: true,
+            fast_exit: false,
+        },
+        step_quit(&mut quit_state),
+    );
+    assert_eq!(step, ExitStep::Orderly { relaunch: false });
+
+    finish_orderly_exiting(
+        &mut hosts,
+        false,
+        || events.borrow_mut().push("tray:remove_all".into()),
+        || events.borrow_mut().push("platform:shutdown".into()),
+        || events.borrow_mut().push("relaunch:spawn".into()),
+        || events.borrow_mut().push("instance:exited".into()),
+    );
+    assert!(hosts.is_empty(), "all window and overlay hosts must be dropped before warm-up wait");
+
+    // Only after exiting finishes and run_app returns does shutdown_prewarm() wait.
+    events.borrow_mut().push("warm:shutdown_wait".into());
+
+    assert_eq!(
+        *events.borrow(),
+        vec![
+            "main:vanish",
+            "overlay:vanish",
+            "main:on_quit",
+            "overlay:on_quit",
+            "main:on_display_close",
+            "main:drop",
+            "overlay:drop",
+            "tray:remove_all",
+            "platform:shutdown",
+            "instance:exited",
+            "warm:shutdown_wait",
+        ],
+        "every window, overlay, and tray icon must be hidden/removed before shutdown_prewarm waits",
+    );
 }

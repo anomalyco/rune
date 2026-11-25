@@ -146,6 +146,27 @@ pub(super) fn exiting_hosts(
     ExitStep::Orderly { relaunch }
 }
 
+/// Runs the non-blocking orderly teardown steps inside `Windows::exiting` before the event loop
+/// returns and `shutdown_prewarm()` begins its bounded wait: drops every host (windows and
+/// overlays), removes every live tray icon so nothing stays visible on screen during a slow or
+/// hung warm-up drain, shuts down platform helpers, and hands off relaunch / single-instance exit.
+pub(super) fn finish_orderly_exiting(
+    hosts: &mut Vec<Option<Box<dyn AnyHost>>>,
+    relaunch: bool,
+    remove_trays: impl FnOnce(),
+    shutdown_platform: impl FnOnce(),
+    spawn_relaunch: impl FnOnce(),
+    mark_instance_exited: impl FnOnce(),
+) {
+    hosts.clear();
+    remove_trays();
+    shutdown_platform();
+    if relaunch {
+        spawn_relaunch();
+    }
+    mark_instance_exited();
+}
+
 impl Windows {
     /// The app starts to quit (`crate::quit`): every open window (and any window whose close this
     /// turn ended the app) runs `App::on_quit`, once per quit. A session ending now (`ending`)

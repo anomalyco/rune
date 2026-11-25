@@ -525,6 +525,21 @@ fn remove_item(id: u64) {
     live.host.remove();
 }
 
+fn remove_all_on_main() {
+    let ids: Vec<u64> = ITEMS.with(|map| map.borrow().keys().copied().collect());
+    for id in ids {
+        remove_item(id);
+    }
+}
+
+pub(super) fn remove_all() {
+    if MainThreadMarker::new().is_some() {
+        remove_all_on_main();
+    } else {
+        crate::platform::main_queue::on_main(remove_all_on_main);
+    }
+}
+
 pub(super) struct Native {
     id: u64,
     model: Arc<Mutex<Model>>,
