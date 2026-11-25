@@ -150,14 +150,16 @@ impl Damage {
         let glyph_refill = atlas.pending_fills && atlas.rasterized == prev_rasterized;
         let (now, why) = match (
             in_place && !whole_frames(),
+            clear[3] == 1.0,
             prev_shape.is_some_and(|s| s.size == size && s.clear == clear && s.swap == swap),
             prev_shape.is_some_and(|s| s.atlas_resets == atlas.resets),
             !glyph_refill,
         ) {
-            (false, _, _, _) => (Area::All, "not in place"),
-            (_, false, _, _) => (Area::All, "new size, colour or swap chain"),
-            (_, _, false, _) => (Area::All, "glyph atlas reset"),
-            (_, _, _, false) => (Area::All, "glyph atlas fill"),
+            (false, _, _, _, _) => (Area::All, "not in place"),
+            (_, false, _, _, _) => (Area::All, "translucent clear"),
+            (_, _, false, _, _) => (Area::All, "new size, colour or swap chain"),
+            (_, _, _, false, _) => (Area::All, "glyph atlas reset"),
+            (_, _, _, _, false) => (Area::All, "glyph atlas fill"),
             _ => {
                 let now = changed(&self.last, instances, size, &mut self.scratch);
                 self.seen = match &now { Area::Rects(r) => r.iter().copied().reduce(join), Area::All | Area::Many => None };

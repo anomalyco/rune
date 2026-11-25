@@ -197,6 +197,12 @@ impl<S: 'static> Runtime<S> {
         core.content_height(&app)
     }
 
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn measure_content(&mut self) -> (f32, f32) {
+        let (core, app) = self.split_mut();
+        core.measure_content(&app)
+    }
+
     #[inline(always)]
     pub(crate) fn set_window_origin(&mut self, origin: (f32, f32)) -> bool {
         self.core_mut().set_window_origin(origin)
@@ -208,6 +214,22 @@ impl<S: 'static> Runtime<S> {
     pub fn set_system_dark(&mut self, dark: bool) { self.core_mut().set_system_dark(dark); }
     #[inline(always)]
     pub fn set_titlebar_inset(&mut self, points: f32) { self.core_mut().set_titlebar_inset(points); }
+    /// Sets what [`Cx::decoration_mode`], [`Cx::tiled_edges`], and [`Cx::window_actions`] report,
+    /// marking the view dirty when it changes and the last committed view read any of them.
+    ///
+    /// ```
+    /// # use rune::{Cx, DecorationMode, El, Env, Runtime, WindowManagerState, el};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     el().w(if cx.decoration_mode() == DecorationMode::Client { 100.0 } else { 50.0 })
+    /// }
+    /// let mut rt = Runtime::new((), view, (200.0, 100.0), Env::default());
+    /// rt.set_window_manager_state(WindowManagerState::default().with_decoration_mode(DecorationMode::Client));
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_window_manager_state(&mut self, state: crate::WindowManagerState) {
+        self.core_mut().set_window_manager_state(state);
+    }
     /// Sets what [`Cx::is_maximized`] reports, marking the view dirty when it changes.
     ///
     /// Native windows update this from confirmed OS window state on create, resize, scale change,
@@ -242,6 +264,68 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn set_full_screen(&mut self, full_screen: bool) { self.core_mut().set_full_screen(full_screen); }
+    /// Sets what [`Cx::window_backdrop`] reports for headless tests, marking the view and its
+    /// memos dirty when it changes.
+    ///
+    /// Native windows and overlays update this only when the OS confirms an active backdrop
+    /// (Windows 11 Build 22621+ `DWMWA_SYSTEMBACKDROP_TYPE`). Headless runs default to
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None).
+    ///
+    /// ```
+    /// # use rune::{Color, Cx, El, Env, Runtime, WindowBackdrop, el};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     let bg = if cx.window_backdrop().is_active() { Color::TRANSPARENT } else { Color::BLACK };
+    ///     el().w_full().h_full().fill(bg)
+    /// }
+    /// let mut rt = Runtime::new((), view, (200.0, 100.0), Env::default());
+    /// rt.set_window_backdrop(WindowBackdrop::Mica);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_window_backdrop(&mut self, backdrop: crate::WindowBackdrop) { self.core_mut().set_window_backdrop(backdrop); }
+    /// Sets what [`Cx::window_backdrop_supported`] reports for `backdrop` in headless tests,
+    /// marking the view and its memos dirty when it changes.
+    ///
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None) is always reported supported and
+    /// ignores calls to this setter. Headless runs default to `false` for all non-`None`
+    /// variants.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, WindowBackdrop, el};
+    /// let mut rt = Runtime::new(
+    ///     (),
+    ///     |_: &(), cx: &mut Cx<()>| {
+    ///         let _ = cx.window_backdrop_supported(WindowBackdrop::Blur);
+    ///         el()
+    ///     },
+    ///     (200.0, 100.0),
+    ///     Env::default(),
+    /// );
+    /// rt.set_window_backdrop_supported(WindowBackdrop::Blur, true);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_window_backdrop_supported(&mut self, backdrop: crate::WindowBackdrop, supported: bool) {
+        self.core_mut().set_window_backdrop_supported(backdrop, supported);
+    }
+    /// Sets what [`Cx::renderer_kind`] reports for headless tests, marking the view and its
+    /// memos dirty when it changes. Defaults to [`RendererKind::Gpu`](crate::RendererKind::Gpu).
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, RendererKind, Runtime, el};
+    /// let mut rt = Runtime::new(
+    ///     (),
+    ///     |_: &(), cx: &mut Cx<()>| if cx.renderer_kind().is_cpu() { el() } else { el().blur(8.0) },
+    ///     (200.0, 100.0),
+    ///     Env::default(),
+    /// );
+    /// rt.set_renderer_kind(RendererKind::Cpu);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_renderer_kind(&mut self, kind: crate::RendererKind) {
+        self.core_mut().set_renderer_kind(kind);
+    }
     #[inline(always)]
     pub(crate) fn system_accent(&self) -> crate::SystemAccent { self.core().system_accent() }
     #[inline(always)]

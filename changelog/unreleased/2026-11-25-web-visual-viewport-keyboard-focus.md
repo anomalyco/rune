@@ -1,0 +1,1 @@
+- Web: kept full-window canvases sized to the layout viewport during `visualViewport` resizes (such as iOS Safari and Android Chrome's on-screen keyboard) instead of shrinking the canvas CSS box, scrolled or shifted obscured focused fields into the visible area, and preserved text-input focus across tight viewport relayouts.

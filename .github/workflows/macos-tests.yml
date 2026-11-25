@@ -16,9 +16,9 @@ permissions:
   contents: read
   actions: read
 
-# One run at a time: a newer run cancels an older one still testing.
+# One run per branch at a time: a newer run on the same branch cancels an older one still testing.
 concurrency:
-  group: macos-tests
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:

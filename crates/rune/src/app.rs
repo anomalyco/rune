@@ -32,6 +32,9 @@ use std::sync::Arc;
 use crate::el::Tx;
 use crate::tooling::{AppSpec, Args};
 
+#[path = "app/quit_request.rs"]
+mod quit_request;
+pub use quit_request::QuitResponse;
 #[path = "app/web.rs"]
 mod web;
 #[cfg(target_arch = "wasm32")]
@@ -116,6 +119,10 @@ pub struct App<S: 'static> {
     pub(crate) open: bool,
     pub(crate) release_gpu: bool,
     pub(crate) cpu_first: crate::CpuFirst,
+    pub(crate) resize_sync: crate::ResizeSync,
+    pub(crate) gpu_loss_policy: crate::GpuLossPolicy,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) gpu_loss_latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>,
     pub(crate) prewarm_effects: crate::PrewarmEffects,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) accessory: bool,
@@ -123,6 +130,7 @@ pub struct App<S: 'static> {
     pub(crate) standard_menus: bool,
     pub(crate) keep_running: bool,
     pub(crate) on_close_request: Option<fn(&mut S, &mut Tx) -> CloseResponse>,
+    pub(crate) on_quit_request: Option<fn(&mut S, &mut Tx) -> QuitResponse>,
     pub(crate) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(crate) on_quit: Option<fn(&mut S, &mut Tx)>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -158,6 +166,9 @@ pub struct App<S: 'static> {
     pub(crate) windows_window: crate::WindowsWindowOptions,
     pub(crate) exclude_from_capture: Option<bool>,
     pub(crate) color_scheme: crate::ColorScheme,
+    pub(crate) window_backdrop: crate::WindowBackdrop,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) frame_latency: Option<u32>,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) canvas_id: Option<String>,
@@ -195,11 +206,16 @@ impl<S: 'static> App<S> {
             open: true,
             release_gpu: false,
             cpu_first: crate::CpuFirst::Auto,
+            resize_sync: crate::ResizeSync::Auto,
+            gpu_loss_policy: crate::GpuLossPolicy::Recover,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_loss_latch: None,
             prewarm_effects: crate::PrewarmEffects::NONE,
             accessory: false,
             standard_menus: false,
             keep_running: false,
             on_close_request: None,
+            on_quit_request: None,
             on_close: None,
             on_quit: None,
             #[cfg(not(target_arch = "wasm32"))]
@@ -230,6 +246,8 @@ impl<S: 'static> App<S> {
             windows_window: crate::WindowsWindowOptions::default(),
             exclude_from_capture: None,
             color_scheme: crate::ColorScheme::System,
+            window_backdrop: crate::WindowBackdrop::None,
+            frame_latency: None,
             compositor: None,
             window_options: crate::WindowOptions::default(),
             canvas_id: None,
@@ -523,6 +541,51 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Opt-in whole-window system backdrop material ([`WindowBackdrop`](crate::WindowBackdrop)),
+    /// applied on creation and retained across native window recreation. Defaults to
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None).
+    ///
+    /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows
+    /// (`WindowOptions { transparent: true, .. }`), this applies the documented
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` attribute. Views read [`Cx::window_backdrop`](crate::Cx::window_backdrop)
+    /// to see whether the OS accepted the backdrop attribute.
+    ///
+    /// By Microsoft design, Windows draws Mica, Mica Alt, and Desktop Acrylic only while the window
+    /// is the foreground window and shows its own solid neutral fallback when unfocused (so a
+    /// non-activating window or overlay that never takes focus never shows the live material, even
+    /// while `cx.window_backdrop().is_active()` is `true`). Pair `cx.window_backdrop()` with
+    /// [`App::on_focus`](Self::on_focus) or [`El::on_window_focus`](crate::El::on_window_focus)
+    /// when a view needs to distinguish "backdrop active and focused" from "backdrop active".
+    /// Update at runtime with [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop) or
+    /// [`WindowHandle::set_window_backdrop`](crate::WindowHandle::set_window_backdrop).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, Color, WindowBackdrop, WindowOptions, el};
+    ///
+    /// struct State { focused: bool }
+    ///
+    /// let opts = WindowOptions { transparent: true, ..Default::default() };
+    /// let spec = AppSpec::new("Notes", (800.0, 600.0), || State { focused: true }, |s, cx| {
+    ///     // Check `s.focused` as well if you want a custom fill instead of Windows' flat
+    ///     // unfocused fallback while the window is in the background.
+    ///     let bg = if cx.window_backdrop().is_active() && s.focused {
+    ///         Color::TRANSPARENT
+    ///     } else {
+    ///         rune::tok::theme(cx.system_dark()).bg
+    ///     };
+    ///     el().w_full().h_full().fill(bg)
+    /// });
+    /// App::new(spec)
+    ///     .window_options(opts)
+    ///     .window_backdrop(WindowBackdrop::Mica)
+    ///     .on_focus(|s, focused, _| s.focused = focused)
+    ///     .run();
+    /// ```
+    pub fn window_backdrop(mut self, backdrop: crate::WindowBackdrop) -> Self {
+        self.window_backdrop = backdrop;
+        self
+    }
+
     /// Called once per native focus transition, including while hidden or occluded.
     /// Headless scripts deliver the same callback with `{"focus": false}`.
     pub fn on_focus(mut self, f: fn(&mut S, bool, &mut Tx)) -> Self {
@@ -624,6 +687,9 @@ impl<S: 'static> App<S> {
             }
             let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
             overlay.set_prewarm_effects(self.prewarm_effects);
+            if let Some(latch) = &self.gpu_loss_latch {
+                overlay.set_gpu_loss_latch(Some(Arc::clone(latch)));
+            }
             self.overlays.push(Box::new(overlay));
             handle
         }
@@ -717,6 +783,8 @@ impl<S: 'static> App<S> {
         self.cpu_first = mode;
         self
     }
+
+
 
     /// Names the optional effect GPU pipelines this app's windows and overlays compile in the
     /// background before their first use ([`PrewarmEffects`](crate::PrewarmEffects)): isolated
@@ -906,8 +974,9 @@ impl<S: 'static> App<S> {
     /// in an accessory app. With several windows, every window's hook runs, in window order,
     /// and any true skips the default. Windows: runs when the app is launched again without a
     /// link while it runs, once `rune::single_instance` made it the app's one process; the
-    /// default then also brings the front window forward, restored. Never called on other
-    /// platforms. Headless scripts deliver it with `{"reopen": true}`.
+    /// default then also brings the front window forward, restored. Linux: the same, and on
+    /// `org.freedesktop.Application.Activate`; the default uses the launch's activation token.
+    /// Never called on other platforms. Headless scripts deliver it with `{"reopen": true}`.
     pub fn on_reopen(mut self, f: fn(&mut S, bool, &mut Tx) -> bool) -> Self {
         self.on_reopen = Some(f);
         self
@@ -928,8 +997,9 @@ impl<S: 'static> App<S> {
     /// which that launch hands to this process instead of opening a window. The app registers its
     /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install), and
     /// names it with `rune::url_schemes` so only arguments on it are links: without that a flag's
-    /// URL value (`--server http://localhost:4096`) is one too. Never called on other platforms
-    /// (Linux passes links to a new process as arguments).
+    /// URL value (`--server http://localhost:4096`) is one too. Linux: the same (never a `file:`
+    /// URI), and `org.freedesktop.Application.Open`'s links; see the README. Never called on
+    /// other platforms.
     pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut Tx)) -> Self {
         self.on_open_url = Some(f);
         self
@@ -946,8 +1016,10 @@ impl<S: 'static> App<S> {
     /// (`CFBundleDocumentTypes`, see the README). With several windows whose apps have the hook,
     /// the first still running receives files.
     ///
-    /// Never called on Windows or Linux, which pass opened files to a new process as launch
-    /// arguments. Headless scripts deliver it with `{"open_files": ["a.torrent"]}`.
+    /// Linux: the `file://` URIs among the launch arguments (`Exec=myapp %U`, not `%F`), with
+    /// `rune::single_instance` a later launch's too, and `org.freedesktop.Application.Open`'s;
+    /// see the README. Never called on Windows, which passes opened files to a new process as
+    /// launch arguments. Headless scripts deliver it with `{"open_files": ["a.torrent"]}`.
     ///
     /// ```no_run
     /// use std::path::PathBuf;
@@ -1124,6 +1196,27 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn ambient_fps(mut self, fps: f32) -> Self {
         self.ambient_period = ambient_period_from_fps(fps);
+        self
+    }
+
+    /// Cap the swap chain's frame latency on macOS (`1` = 2 drawables, `2` = 3 drawables;
+    /// clamped to `1..=2`, default `2`). Ignored on Windows, Linux, and the web.
+    ///
+    /// With two drawables a frame that runs late waits instead of overlapping the next; at
+    /// 120 Hz that can show as a dropped frame during fast animation, whereas for a rarely
+    /// animating window it is the right trade. Applied when the surface is created (and on
+    /// GPU surface reattach) rather than changed live (changing `CAMetalLayer.maximumDrawableCount`
+    /// while visible forces a synchronous reconfigure and can reallocate drawables or drop a frame).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// App::new(AppSpec::new("Panel", (488.0, 873.0), || (), |_, _| el()))
+    ///     .frame_latency(1)
+    ///     .run();
+    /// ```
+    pub fn frame_latency(mut self, frames: u32) -> Self {
+        self.frame_latency = Some(frames.clamp(1, 2));
         self
     }
 

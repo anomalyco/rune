@@ -16,6 +16,8 @@
 mod stories;
 
 #[cfg(test)]
+mod gallery_tests;
+#[cfg(test)]
 mod layer_timing;
 
 use std::collections::{HashMap, HashSet};
@@ -50,6 +52,8 @@ pub struct G {
     pub focus_caret_edit: TextEdit,
     pub aria_combo_edit: TextEdit,
     pub combo: rune_kit::ComboboxState,
+    pub combo_animated: rune_kit::ComboboxState,
+    pub combo_localized: rune_kit::ComboboxState,
     /// The sidebar reorder story's state.
     pub reorder: stories::sidebar::ReorderDemo,
     /// The file tree story's files.
@@ -69,7 +73,7 @@ pub struct G {
     /// The table options story's state, row count and open row context menu.
     pub table: rune_kit::TableState,
     pub table_rows: usize,
-    pub table_menu: Option<(String, rune::PointerPress)>,
+    pub table_menu: Option<(&'static str, String, rune::PointerPress)>,
     /// The diff stories' state and most recent comment anchor.
     pub diff: rune_kit::diff::DiffState,
     pub diff_custom: rune_kit::diff::DiffState,
@@ -138,6 +142,8 @@ fn init() -> G {
         focus_caret_edit: TextEdit::new(stories::focus_caret_sample()),
         aria_combo_edit: TextEdit::new("Ap"),
         combo: Default::default(),
+        combo_animated: Default::default(),
+        combo_localized: Default::default(),
         reorder: Default::default(),
         files: files(),
         scroll_files: scroll_files(),
@@ -261,8 +267,13 @@ fn view(s: &G, cx: &mut Cx<G>) -> El {
     let mut overlays = Vec::new();
     let body = stories::render(s, k, &mut overlays);
     stories::field_menu::mount_live_field_menu(s, k, &mut overlays);
-    // Storybook's decorator: the page colour and 24 px of padding around the story.
-    rune_kit::root(col().key("frame").fill(k.c.page).padding(24.0).child(body), overlays)
+    let frame = if s.story == "index" {
+        col().key("frame").w_full().h_full().fill(k.c.page).child(body)
+    } else {
+        // Storybook's decorator: the page colour and 24 px of padding around the story.
+        col().key("frame").fill(k.c.page).padding(24.0).child(body)
+    };
+    rune_kit::root(frame, overlays)
 }
 
 fn build_app() -> rune::App<G> {

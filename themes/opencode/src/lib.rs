@@ -288,10 +288,46 @@ mod tests {
             assert_eq!(linear.c.hover, rune::theme::srgb_equivalent(authored, linear.c.bg_base));
             assert_ne!(linear.c.hover.a, authored.a);
             assert!(std::ptr::eq(super::kit(dark), srgb), "windows blend in sRGB by default");
-            // Shadows too: light's floating elevation is `#0000000a 0px 8px 16px 0px, #00000014 …`.
+            // Shadows too: light's floating elevation is `#0000001f 0px 0px 0px 0.5px, #00000014 …`.
             if !dark {
                 let alphas: Vec<u8> = srgb.elevation.floating.iter().map(|s| (s.color.a * 255.0).round() as u8).collect();
-                assert_eq!(alphas[..3], [0x0a, 0x14, 0x1f], "sRGB blending paints the authored shadow alpha");
+                assert_eq!(alphas[..3], [0x1f, 0x14, 0x0a], "sRGB blending paints the authored shadow alpha");
+            }
+        }
+    }
+
+    /// `@opencode/ui` lists an elevation's layers in Figma's order, the first on top: the 0.5 px
+    /// ring (in dark, the top light line before it) over the drops, nearest drop first. In dark
+    /// the ring is light and the drops are dark, so the order is what the ring's edge looks like.
+    #[test]
+    fn elevation_layers_are_listed_ring_first_then_the_drops() {
+        for dark in [false, true] {
+            let k = rune::theme::with_blend(true, || super::kit(dark));
+            let e = &k.elevation;
+            let outer = [("raised", &e.raised), ("floating", &e.floating), ("overlay", &e.overlay), ("button_neutral", &e.button_neutral)];
+            for (name, layers) in outer {
+                let ring = layers.iter().position(|s| s.blur == 0.0 && s.spread == 0.5).unwrap_or_else(|| panic!("{name} has a ring"));
+                let drops: Vec<usize> = (0..layers.len()).filter(|&i| layers[i].blur > 0.0).collect();
+                assert!(drops.iter().all(|&i| i > ring), "{name} (dark {dark}): the ring paints over the drops: {layers:?}");
+                assert!(drops.windows(2).all(|w| layers[w[0]].blur <= layers[w[1]].blur), "{name}: nearest drop first");
+                if dark {
+                    assert!(layers[0].y == -0.5 && layers[0].color.r > 0.9, "{name}: the top light line is first: {layers:?}");
+                    assert!(layers[ring].color.r > 0.9 && layers[drops[0]].color.r < 0.1, "{name}: a light ring over dark drops");
+                }
+            }
+            // The contrast button: the lower inset before the upper one, both before the ring, the drop last.
+            let c = &e.button_contrast;
+            let ring = c.iter().position(|s| !s.inset && s.blur == 0.0 && s.spread == 0.5).expect("contrast ring");
+            let drop = c.iter().position(|s| !s.inset && s.blur > 0.0).expect("contrast drop");
+            assert!(ring < drop && drop == c.len() - 1, "contrast (dark {dark}): {c:?}");
+            let insets: Vec<f32> = c.iter().filter(|s| s.inset).map(|s| s.y).collect();
+            if !dark {
+                assert_eq!(insets, [-1.0, 1.0], "the lower inset is listed before the upper one");
+                assert!(c.iter().position(|s| s.inset).unwrap() < ring);
+            }
+            // The switches: the inset ring first.
+            for layers in [&e.switch_off, &e.switch_on] {
+                assert!(layers[0].inset && layers[0].spread == 0.5 && layers[0].blur == 0.0, "{layers:?}");
             }
         }
     }

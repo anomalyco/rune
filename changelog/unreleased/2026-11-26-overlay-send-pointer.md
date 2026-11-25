@@ -1,0 +1,1 @@
+- Overlays: `OverlayHandle::send_pointer(PointerInput)` and `OverlayHandle::screen_to_local((i32, i32))` (with crate-root `PointerInput` and `WheelDelta`) inject external pointer events from any thread through Rune's native hit-testing, hover, press, drag, and wheel pipeline across GPU, Windows CPU layered, macOS, X11, and Wayland overlays.

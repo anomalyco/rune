@@ -5,6 +5,7 @@ pub(crate) const WGSL: &str = include_str!("../shaders/surface_alpha.wgsl");
 
 /// Render targets of `*Srgb` formats hold sRGB-encoded premultiplied linear colour. PNG uses
 /// straight sRGB colour, so un-premultiply in linear light, not in the encoded byte domain.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn straight_alpha(pixels: &mut [u8]) {
     for pixel in pixels.chunks_exact_mut(4) {
         let alpha = f32::from(pixel[3]) / 255.0;
@@ -20,10 +21,14 @@ pub(crate) fn straight_alpha(pixels: &mut [u8]) {
 
 pub(crate) struct AlphaSurface {
     pub view: wgpu::TextureView,
+    // Keeps the backing texture alive for view/bind; resize() reads its extent on non-wasm32.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     texture: wgpu::Texture,
     pipeline: wgpu::RenderPipeline,
+    #[cfg(not(target_arch = "wasm32"))]
     layout: wgpu::BindGroupLayout,
     bind: wgpu::BindGroup,
+    #[cfg(not(target_arch = "wasm32"))]
     format: wgpu::TextureFormat,
 }
 
@@ -93,7 +98,16 @@ impl AlphaSurface {
             make(&super::dxbc::Shaders::one(module))
         }, |(_, pipeline)| pipeline);
         let (texture, view, bind) = Self::target(device, &layout, format, size);
-        Self { texture, view, bind, pipeline, layout, format }
+        Self {
+            texture,
+            view,
+            bind,
+            pipeline,
+            #[cfg(not(target_arch = "wasm32"))]
+            layout,
+            #[cfg(not(target_arch = "wasm32"))]
+            format,
+        }
     }
     fn target(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, format: wgpu::TextureFormat, size: (u32, u32))
         -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
@@ -110,6 +124,7 @@ impl AlphaSurface {
         });
         (texture, view, bind)
     }
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn resize(&mut self, device: &wgpu::Device, size: (u32, u32)) {
         if (self.texture.width(), self.texture.height()) == (size.0.max(1), size.1.max(1)) { return; }
         (self.texture, self.view, self.bind) = Self::target(device, &self.layout, self.format, size);

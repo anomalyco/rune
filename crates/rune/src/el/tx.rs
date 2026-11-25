@@ -60,6 +60,8 @@ pub struct Tx {
     /// The viewport moved only because the window's own resize animation stepped it.
     pub(crate) window_step: bool,
     pub(crate) copy: Option<crate::ClipboardWrite>,
+    pub(crate) copy_image_callback: Option<CopyImageCallback>,
+    pub(crate) superseded_copy_images: Vec<CopyImageCallback>,
     pub(crate) paste: bool,
     pub(crate) clipboard_reads: Vec<ClipboardRead>,
     pub(crate) pick_reads: Vec<PickRead>,
@@ -100,6 +102,7 @@ pub struct Tx {
     pub(crate) drag_paths: Option<Rc<[std::path::PathBuf]>>,
     pub(crate) title: Option<String>,
     pub(crate) color_scheme: Option<crate::ColorScheme>,
+    pub(crate) window_backdrop: Option<crate::WindowBackdrop>,
     /// `Tx::set_represented_file`: `Some(Some(path))` sets, `Some(None)` clears.
     pub(crate) represented_file: Option<Option<std::path::PathBuf>>,
     /// `Tx::set_document_edited`.
@@ -384,7 +387,7 @@ impl Tx {
     /// or a text flight. A `wake_after` only schedules.
     pub(crate) fn frame_work(&self) -> bool {
         !self.pick_reads.is_empty() || !self.scroll_to.is_empty() || !self.scroll_bottom.is_empty() || !self.scroll_pages.is_empty() || !self.scroll_offsets.is_empty()
-            || !self.scroll_stops.is_empty() || !self.keep_on_screen.is_empty() || !self.text_flights.is_empty() || !self.launches.is_empty() || self.select.is_some() || self.field_menu_resolution.is_some()
+            || !self.scroll_stops.is_empty() || !self.keep_on_screen.is_empty() || !self.text_flights.is_empty() || !self.launches.is_empty() || !self.haptics.is_empty() || self.select.is_some() || self.field_menu_resolution.is_some()
     }
 
     /// An app marker on the next frame, e.g. `tx.trace_event(format_args!("lab:{step:?}"))`.
@@ -561,6 +564,28 @@ impl Tx {
     /// ```
     pub fn set_color_scheme(&mut self, scheme: crate::ColorScheme) {
         self.color_scheme = Some(scheme);
+    }
+
+    /// Requests a whole-window system backdrop material ([`WindowBackdrop`](crate::WindowBackdrop))
+    /// after this handler, retained across native window recreation (last call in a turn wins).
+    ///
+    /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows and overlays, this
+    /// applies `DWMWA_SYSTEMBACKDROP_TYPE`. Never flips
+    /// [`Cx::window_backdrop`](crate::Cx::window_backdrop) optimistically: views observe the new
+    /// backdrop only once the OS accepts the attribute (Windows draws the live material only while
+    /// the window is the foreground window and shows a flat fallback while unfocused). Ignored on
+    /// web and headless.
+    ///
+    /// ```no_run
+    /// use rune::{El, WindowBackdrop, el};
+    ///
+    /// let button: El = el().on_press_tx(|_: &mut (), tx| {
+    ///     tx.set_window_backdrop(WindowBackdrop::Mica);
+    /// });
+    /// let _ = button;
+    /// ```
+    pub fn set_window_backdrop(&mut self, backdrop: crate::WindowBackdrop) {
+        self.window_backdrop = Some(backdrop);
     }
 
     /// Sets or clears this window's represented document path on macOS (`NSWindow.representedURL`),

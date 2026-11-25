@@ -255,7 +255,13 @@ context and converts window-relative UTF-16 positions to UTF-8 boundaries before
 Composition holds the mirror stable until commit and replaces the composing word's range.
 Mobile `beforeinput` line breaks use Rune's Enter rules: submit, or Shift/Alt+Enter newline
 in a multiline field. A completed touch tap focuses the editor synchronously;
-a pan scrolls instead, with momentum and a damped edge return.
+a pan scrolls instead, with momentum and a damped edge return. On iOS Safari the hidden input
+stays transparent (`opacity: 0`) so WebKit suppresses its native selection handles, callout bar
+and zoom-to-focus (WebKit r238146); by design, long-pressing a field shows Rune's own
+Cut/Copy/Paste/Select All menu rather than the native iOS callout bar. If iOS hides the
+software keyboard while leaving the hidden input as `document.activeElement` (for example with a
+hardware keyboard or iPad's keyboard-hide key), the field remains focused and keeps drawing its
+caret like a native iOS text field, and tapping it again re-presents the keyboard.
 
 Secure fields use an `<input type="password">` with `autocomplete="current-password"` and
 autocorrect, autocapitalize and spellcheck disabled. It is emptied after every input; the
@@ -267,9 +273,10 @@ focus to the canvas so
 shortcuts and Tab keep working. Continuous pointer movement, pointer-lock motion (`El::pointer_lock`) and wheel events wait for rAF.
 
 `El::pointer_lock` uses the W3C Pointer Lock API: a primary press on the element requests
-`canvas.requestPointerLock({ unadjustedMovement: true })` synchronously inside the `pointerdown`
-user gesture, caching a fallback to plain `canvas.requestPointerLock()` when a platform rejects
-`unadjustedMovement` with `NotSupportedError`. `Cx::pointer_locked()` stays `false` until
+plain `canvas.requestPointerLock()` synchronously inside the `pointerdown` user gesture so the
+first click never depends on an asynchronous retry; once `pointerlockchange` confirms the lock,
+it upgrades in place to `{ unadjustedMovement: true }` where supported (caching
+`NotSupportedError` so the plain lock stays intact and later locks skip the upgrade). `Cx::pointer_locked()` stays `false` until
 `pointerlockchange` confirms `document.pointerLockElement === canvas`. While locked, relative
 deltas arrive from `PointerEvent.movementX`/`movementY` in CSS pixels (logical points, independent
 of `Cx::zoom`) and coalesce into one handler call per animation frame. Browser-driven exits
@@ -313,8 +320,9 @@ App::new(spec).same_tab_router(|href| router.push(href)) // true: routed with pu
 tx.open_url_same_tab("/notes/42")?;                       // from a handler
 ```
  `Cx::safe_area()` returns top/right/bottom/left insets in
-points (zero on native). Apply them inside a full-canvas background. The canvas follows
-`visualViewport` when a software keyboard reduces the visible height. Keep the generated
+points (zero on native). Apply them inside a full-canvas background. Full-window canvases keep their layout-viewport size when `visualViewport` shrinks for an
+on-screen keyboard; Rune scrolls enclosing vertical scroll viewports (`follow_caret`) and shifts
+still-covered focused fields into the visible band with `translate3d`. Keep the generated
 page's `viewport-fit=cover` meta tag and the textarea's 16 px font size.
 
 ## HTTP requests (fetch)

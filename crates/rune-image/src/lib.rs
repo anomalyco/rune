@@ -30,6 +30,7 @@ mod mips;
 pub mod pixels;
 #[doc(hidden)]
 pub mod place;
+mod readback;
 mod shelf;
 mod svg;
 #[cfg(test)]

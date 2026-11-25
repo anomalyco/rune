@@ -6,12 +6,14 @@ use rune::tok::{self, Theme, motion, radius, space, type_};
 #[cfg(feature = "frame-profile")]
 #[global_allocator]
 static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
-use rune::{Align, App, AppHandle, AppSpec, Color, ColorScheme, Cx, El, MacColorSpace, MacWindowOptions, MenuItem, ScrollSpec, Spring, Tx, col, el, row, text};
+use rune::{Align, App, AppHandle, AppSpec, Color, ColorScheme, Cx, El, MacColorSpace, MacWindowOptions, MenuItem, ResizeSync, ScrollSpec, Spring, Tx, WindowBackdrop, WindowOptions, col, el, row, text};
 
 const DEFAULT_FONT_ID: &str = "__default__";
 
 struct Settings {
     appearance: ColorScheme,
+    backdrop_enabled: bool,
+    backdrop: WindowBackdrop,
     app_handle: Option<AppHandle<Settings>>,
     accent: usize,
     launch_at_login: bool,
@@ -32,6 +34,8 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             appearance: ColorScheme::System,
+            backdrop_enabled: false,
+            backdrop: WindowBackdrop::None,
             app_handle: None,
             accent: 0,
             launch_at_login: true,
@@ -228,10 +232,25 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
         },
     );
 
+    let active_backdrop = cx.window_backdrop();
+    let blur_supported = cx.window_backdrop_supported(WindowBackdrop::Blur);
+    let window_bg = match active_backdrop {
+        WindowBackdrop::Blur => t.bg.alpha(0.75),
+        b if b.is_active() => Color::TRANSPARENT,
+        _ => t.bg,
+    };
+    let mut appearance_rows = vec![
+        setting_row(p, "theme", "Theme", None, segmented(p, s.appearance)),
+        setting_row(p, "accent", "Accent colour", None, swatches(p, s.accent, dark)),
+    ];
+    if s.backdrop_enabled || active_backdrop.is_active() {
+        appearance_rows.push(backdrop_row(p, s.backdrop, active_backdrop, blur_supported));
+    }
+
     let window = col()
         .key("window")
         .role("window")
-        .fill(t.bg)
+        .fill(window_bg)
         .child(titlebar(p, cx.chrome_insets(), cx.is_maximized(), cx.is_full_screen()))
         .child(
             col()
@@ -244,15 +263,7 @@ fn view(s: &Settings, cx: &mut Cx<Settings>) -> El {
                 .pb(space::S6)
                 .gap(space::S6)
                 .clip_fade(0.0, space::S1, 0.0, space::S6)
-                .child(section(
-                    p,
-                    "appearance",
-                    "Appearance",
-                    [
-                        setting_row(p, "theme", "Theme", None, segmented(p, s.appearance)),
-                        setting_row(p, "accent", "Accent colour", None, swatches(p, s.accent, dark)),
-                    ],
-                ))
+                .child(section(p, "appearance", "Appearance", appearance_rows))
                 .child(section(
                     p,
                     "general",
@@ -501,7 +512,9 @@ fn sheet_button(
         .child(text(label).key("label").font(type_::LABEL).color(if primary { Color::WHITE } else { p.t.text }).a11y_hidden())
 }
 
-fn section<const N: usize>(p: Paint, key: &str, title: &str, rows: [El; N]) -> El {
+fn section(p: Paint, key: &str, title: &str, rows: impl IntoIterator<Item = El>) -> El {
+    let rows: Vec<El> = rows.into_iter().collect();
+    let count = rows.len();
     let mut card = col()
         .key("card")
         .padding(space::S1)
@@ -512,7 +525,7 @@ fn section<const N: usize>(p: Paint, key: &str, title: &str, rows: [El; N]) -> E
         .shadow(8.0, 24.0, p.t.shadow_soft);
     for (i, r) in rows.into_iter().enumerate() {
         card = card.child(r);
-        if i + 1 < N {
+        if i + 1 < count {
             card = card.child(el().key(format!("sep{i}")).h(p.hair).ml(space::S3).mr(space::S3).fill(p.t.separator).a11y_hidden());
         }
     }
@@ -740,6 +753,156 @@ fn native_menu_items() -> Vec<MenuItem<Settings>> {
     ]
 }
 
+const BACKDROPS: [(WindowBackdrop, &str); 5] = [
+    (WindowBackdrop::None, "None"),
+    (WindowBackdrop::Blur, "Blur"),
+    (WindowBackdrop::Mica, "Mica"),
+    (WindowBackdrop::MicaAlt, "Mica Alt"),
+    (WindowBackdrop::Acrylic, "Acrylic"),
+];
+
+fn backdrop_name(backdrop: WindowBackdrop) -> &'static str {
+    BACKDROPS.iter().find_map(|&(b, name)| (b == backdrop).then_some(name)).unwrap_or("None")
+}
+
+fn backdrop_row(p: Paint, requested: WindowBackdrop, active: WindowBackdrop, blur_supported: bool) -> El {
+    let status = if active.is_active() {
+        format!("Active: {}", backdrop_name(active))
+    } else if blur_supported {
+        "Blur supported".to_owned()
+    } else {
+        "Inactive".to_owned()
+    };
+    let (w, h, pad) = (314.0, 28.0, 2.0);
+    let seg = (w - 2.0 * pad) / BACKDROPS.len() as f32;
+    let idx = BACKDROPS.iter().position(|(b, _)| *b == requested).unwrap_or(0);
+    let mut segs = row().key("backdrop-segments");
+    for (i, (b, name)) in BACKDROPS.into_iter().enumerate() {
+        let selected = i == idx;
+        segs = segs.child(
+            el().key(format!("backdrop-{name}"))
+                .role("segment")
+                .label(format!("Backdrop {name}"))
+                .checked(selected)
+                .focusable(true)
+                .size(seg, h - 2.0 * pad)
+                .center()
+                .radius(radius::SM)
+                .hover(if selected { Color::TRANSPARENT } else { p.t.hover })
+                .on_press_tx(move |s: &mut Settings, tx| {
+                    s.backdrop = b;
+                    tx.set_window_backdrop(b);
+                })
+                .child(
+                    text(name)
+                        .key("label")
+                        .font(type_::LABEL)
+                        .color(if selected { p.t.text } else { p.t.text_secondary })
+                        .a11y_hidden(),
+                ),
+        );
+    }
+    let switcher = el()
+        .key("backdrop-segmented")
+        .role("segmented")
+        .size(w, h)
+        .padding(pad)
+        .radius(radius::MD)
+        .fill(p.t.control_track)
+        .motion(motion::SNAPPY)
+        .child(
+            el().key("indicator")
+                .size(seg, h - 2.0 * pad)
+                .absolute(pad + idx as f32 * seg, pad)
+                .radius(radius::SM)
+                .fill(p.t.indicator)
+                .shadow(1.0, 3.0, p.t.shadow)
+                .shadow(0.0, 0.5, p.t.edge)
+                .lead(motion::LEAD, motion::DEFAULT)
+                .a11y_hidden(),
+        )
+        .child(segs);
+    let badge = el()
+        .key("backdrop-status")
+        .role("status")
+        .label(format!("Window backdrop: {status}"))
+        .h(22.0)
+        .px(space::S2)
+        .center()
+        .radius(radius::SM)
+        .fill(if active.is_active() { p.accent.alpha(0.16) } else { p.t.control_track })
+        .child(
+            text(status)
+                .key("label")
+                .font(type_::LABEL)
+                .color(if active.is_active() { p.accent } else { p.t.text_secondary })
+                .a11y_hidden(),
+        );
+    setting_row(
+        p,
+        "backdrop-row",
+        "Backdrop",
+        None,
+        row().key("backdrop-controls").center_y().gap(space::S2).child(badge).child(switcher),
+    )
+}
+
+fn parse_backdrop_value(raw: &str) -> Option<WindowBackdrop> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(WindowBackdrop::None),
+        "blur" => Some(WindowBackdrop::Blur),
+        "mica" => Some(WindowBackdrop::Mica),
+        "mica-alt" | "mica_alt" | "micaalt" => Some(WindowBackdrop::MicaAlt),
+        "acrylic" => Some(WindowBackdrop::Acrylic),
+        _ => None,
+    }
+}
+
+fn parse_backdrop_arg(args: &[String]) -> Option<WindowBackdrop> {
+    let mut out = None;
+    let mut i = 0;
+    while i < args.len() {
+        if let Some(val) = args[i].strip_prefix("--backdrop=") {
+            if let Some(b) = parse_backdrop_value(val) {
+                out = Some(b);
+            }
+        } else if args[i] == "--backdrop"
+            && let Some(val) = args.get(i + 1)
+            && let Some(b) = parse_backdrop_value(val)
+        {
+            out = Some(b);
+            i += 1;
+        }
+        i += 1;
+    }
+    out
+}
+
+fn parse_resize_sync_arg(args: &[String]) -> ResizeSync {
+    let parse_val = |v: &str| match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(ResizeSync::On),
+        "0" | "false" | "no" | "off" => Some(ResizeSync::Off),
+        "auto" => Some(ResizeSync::Auto),
+        _ => None,
+    };
+    let mut out = ResizeSync::Auto;
+    let mut i = 0;
+    while i < args.len() {
+        if let Some(val) = args[i].strip_prefix("--resize-sync=") {
+            if let Some(mode) = parse_val(val) { out = mode; }
+        } else if args[i] == "--resize-sync" {
+            if let Some(next) = args.get(i + 1).and_then(|v| parse_val(v)) {
+                out = next;
+                i += 1;
+            } else {
+                out = ResizeSync::On;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 fn parse_mac_color_space(value: Option<&str>) -> MacColorSpace {
     if value.is_some_and(|v| v.trim().eq_ignore_ascii_case("unmanaged")) { MacColorSpace::Unmanaged } else { MacColorSpace::Srgb }
 }
@@ -750,6 +913,10 @@ fn main() {
             ("default", |_| {}),
             ("light", |s| s.appearance = ColorScheme::Light),
             ("dark", |s| s.appearance = ColorScheme::Dark),
+            ("backdrop", |s| {
+                s.backdrop_enabled = true;
+                s.backdrop = WindowBackdrop::Mica;
+            }),
             ("reduced-motion", |s| s.reduce_motion = true),
             ("toggles-off", |s| {
                 s.launch_at_login = false;
@@ -767,15 +934,103 @@ fn main() {
         ..AppSpec::new("Settings", (620.0, 640.0), Settings::default, view)
     };
     let color_space = parse_mac_color_space(rune::env::var("SETTINGS_MAC_COLOR_SPACE").as_deref());
-    let base = App::new(spec).color_scheme(ColorScheme::System)
+    let cli_backdrop = parse_backdrop_arg(rune::extra_args());
+    let cli_resize_sync = parse_resize_sync_arg(rune::extra_args());
+    let mut base = App::new(spec)
+        .color_scheme(ColorScheme::System)
+        .resize_sync(cli_resize_sync)
         .macos_window(MacWindowOptions::default().color_space(color_space));
+    if let Some(backdrop) = cli_backdrop {
+        base = base
+            .window_options(WindowOptions { transparent: true, ..Default::default() })
+            .window_backdrop(backdrop);
+    }
     let app = native_menu_items().into_iter().fold(base, App::menu_item);
     let handle = app.handle();
     app.init(move || Settings {
         app_handle: Some(handle),
+        backdrop_enabled: cli_backdrop.is_some(),
+        backdrop: cli_backdrop.unwrap_or(WindowBackdrop::None),
         ..Settings::default()
     })
     .run();
+}
+
+#[test]
+fn parse_resize_sync_cli_flag_handles_all_variants() {
+    assert_eq!(parse_resize_sync_arg(&[]), ResizeSync::Auto);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync".into()]), ResizeSync::On);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync=on".into()]), ResizeSync::On);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync=off".into()]), ResizeSync::Off);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync=auto".into()]), ResizeSync::Auto);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync".into(), "off".into()]), ResizeSync::Off);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync".into(), "--backdrop".into()]), ResizeSync::On);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync=unknown".into()]), ResizeSync::Auto);
+}
+
+#[test]
+fn parse_backdrop_cli_flag_handles_all_variants() {
+    assert_eq!(parse_backdrop_arg(&[]), None);
+    assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "none".into()]), Some(WindowBackdrop::None));
+    assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "mica".into()]), Some(WindowBackdrop::Mica));
+    assert_eq!(parse_backdrop_arg(&["--backdrop=mica-alt".into()]), Some(WindowBackdrop::MicaAlt));
+    assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "ACRYLIC".into()]), Some(WindowBackdrop::Acrylic));
+    assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "blur".into()]), Some(WindowBackdrop::Blur));
+    assert_eq!(parse_backdrop_arg(&["--backdrop=BLUR".into()]), Some(WindowBackdrop::Blur));
+    assert_eq!(parse_backdrop_arg(&["--backdrop".into(), "unknown".into()]), None);
+}
+
+#[test]
+fn backdrop_switcher_updates_state_and_cx_window_backdrop_controls_status() {
+    // Default view omits the opt-in backdrop row so existing snaps remain unchanged.
+    let mut default_rt = rune::Runtime::new(Settings::default(), view, (620.0, 520.0), rune::Env::new(true, 1.0));
+    default_rt.frame(0.0);
+    assert!(default_rt.find("backdrop-status").is_none());
+
+    // Opt-in backdrop mode displays the switcher and reacts to Cx::window_backdrop().
+    let mut rt = rune::Runtime::new(
+        Settings { backdrop_enabled: true, ..Settings::default() },
+        view,
+        (620.0, 640.0),
+        rune::Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let status_label = |rt: &mut rune::Runtime<Settings>| {
+        rt.accessibility_tree()
+            .nodes
+            .iter()
+            .find(|(_, node)| node.author_id() == Some("backdrop-status"))
+            .and_then(|(_, node)| node.label().map(str::to_owned))
+    };
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Inactive".into()));
+
+    let (x, y) = rt.find("backdrop-Mica").expect("Mica backdrop segment");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    assert_eq!(rt.state.backdrop, WindowBackdrop::Mica);
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Inactive".into()));
+
+    rt.set_window_backdrop(WindowBackdrop::Mica);
+    rt.frame(1.0);
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Active: Mica".into()));
+
+    rt.set_window_backdrop(WindowBackdrop::MicaAlt);
+    rt.frame(2.0);
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Active: Mica Alt".into()));
+
+    rt.set_window_backdrop(WindowBackdrop::None);
+    rt.frame(3.0);
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Inactive".into()));
+
+    // Capability query reports Wayland Blur support even while WindowBackdrop::None is active.
+    rt.set_window_backdrop_supported(WindowBackdrop::Blur, true);
+    rt.frame(4.0);
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Blur supported".into()));
+
+    rt.set_window_backdrop(WindowBackdrop::Blur);
+    rt.frame(5.0);
+    assert_eq!(status_label(&mut rt), Some("Window backdrop: Active: Blur".into()));
 }
 
 #[test]

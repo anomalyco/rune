@@ -46,6 +46,13 @@ pub fn make_layer_blur(device: &wgpu::Device) {
     drop(layer_blur::Pipeline::new(device, super::layers::FORMAT));
 }
 
+/// First 32 hex chars of the BLAKE3 of `wgsl` with `\r\n` normalised to `\n`, matching
+/// `crates/rune-gpu/src/metal/builtin_table.rs` (`SOURCES`).
+#[doc(hidden)]
+pub fn builtin_wgsl_hash(wgsl: &str) -> String {
+    blake3::hash(wgsl.replace("\r\n", "\n").as_bytes()).to_hex()[..32].to_string()
+}
+
 /// How many pipelines Rune's Metal backend compiled at runtime because its precompiled library
 /// lacked them; `None` on any other backend.
 #[doc(hidden)]

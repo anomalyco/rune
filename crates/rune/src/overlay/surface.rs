@@ -150,6 +150,7 @@ impl OverlayCore {
     /// Creates the wgpu surface (and the GPU device, if this is the first surface).
     #[allow(unsafe_code)]
     pub(super) fn attach(&mut self, app: &mut dyn OverlayApp, backing: Backing, scale: f32) -> Option<Live> {
+        if self.poll_terminal_gpu_loss(app) { return None; }
         // First, before the surface binds the view (macOS may observe it).
         let a11y = self.shared.wake.lock().unwrap().clone().and_then(|wake| match &backing {
             Backing::Window(window) => crate::a11y::Adapter::new(window, wake),
@@ -158,6 +159,16 @@ impl OverlayCore {
         });
         #[cfg(target_os = "macos")]
         let moved = self.panel.as_ref().map(|p| p.raw_handles());
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        let handover = match &backing {
+            Backing::Window(w) if matches!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual) => {
+                crate::platform::win32::hwnd(w)
+                    .and_then(|hwnd| crate::platform::win32::dcomp_handover::Handover::new(hwnd as isize).ok())
+            }
+            _ => None,
+        };
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        let dcomp_visual = handover.as_ref().map(|h| h.visual());
         let make = |instance: &wgpu::Instance| -> Option<wgpu::Surface<'static>> {
             match &backing {
                 Backing::Window(w) => {
@@ -170,6 +181,14 @@ impl OverlayCore {
                                 raw_display_handle: Some(display),
                                 raw_window_handle: window,
                             })
+                        }
+                        .ok();
+                    }
+                    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                    if let Some(visual) = dcomp_visual {
+                        // SAFETY: `handover` lives in `Live` and drops strictly after `surface`.
+                        return unsafe {
+                            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual))
                         }
                         .ok();
                     }
@@ -207,6 +226,10 @@ impl OverlayCore {
         // A device that died while the overlay was hidden (a driver reset, a resume from
         // Modern Standby) can configure nothing: the next surface gets a new one.
         if self.gpu.as_ref().is_some_and(|gpu| gpu.is_lost()) {
+            if self.is_terminal_gpu_policy() {
+                self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::DeviceLost, "its GPU device was lost");
+                return None;
+            }
             self.gpu = None;
             self.renderer = None;
             app.release_compositor_gpu();
@@ -220,10 +243,12 @@ impl OverlayCore {
         let (w, h) = ((self.at.size.0 * scale).round() as u32, (self.at.size.1 * scale).round() as u32);
         let srgb_blend = app.rt().srgb_blend();
         let prewarm_effects = self.prewarm_effects;
+        let frame_latency = crate::window::frame_latency(self.frame_latency);
         let make_surface = |instance: &wgpu::Instance| make(instance).ok_or_else(|| "could not create its GPU surface".to_owned());
         let setup_surface = |gpu: &Gpu, surface: &wgpu::Surface<'_>, existing: Option<Renderer>| -> Result<_, crate::render::SurfaceSetupError> {
             let (mut config, translucent) = crate::window::surface_config(surface, &gpu.adapter, (w, h), srgb_blend)
                 .ok_or_else(|| crate::render::SurfaceSetupError::unsupported("the GPU adapter can't present to this overlay"))?;
+            config.desired_maximum_frame_latency = frame_latency;
             let info = gpu.adapter.get_info();
             match translucent {
                 Some(mode) => config.alpha_mode = mode,
@@ -264,6 +289,17 @@ impl OverlayCore {
                 match setup_surface(&gpu, &surface, own_renderer) {
                     Ok(configured) => { self.gpu = Some(gpu); (surface, configured, had_own) }
                     Err(err) => {
+                        if self.is_terminal_gpu_policy() {
+                            drop((surface, gpu));
+                            *self.gpu_pool.borrow_mut() = Weak::default();
+                            let kind = if err.kind == crate::gpu::fallback::Failure::DeviceLost {
+                                crate::render::loss_latch::GpuFailureKind::DeviceLost
+                            } else {
+                                crate::render::loss_latch::GpuFailureKind::SurfaceFailed
+                            };
+                            self.latch_terminal_loss_latch(app, kind, err.message);
+                            return None;
+                        }
                         if crate::gpu::fallback::decide(Gpu::env_fallback_policy(), err.kind)
                             != crate::gpu::fallback::Decision::MoveOn
                         {
@@ -317,7 +353,11 @@ impl OverlayCore {
                 let (gpu, surface, configured) = match made {
                     Ok(made) => made,
                     Err(err) => {
-                        self.fail(app, err.message);
+                        if self.is_terminal_gpu_policy() {
+                            self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::InitFailed, err.message);
+                        } else {
+                            self.fail(app, err.message);
+                        }
                         return None;
                     }
                 };
@@ -331,6 +371,7 @@ impl OverlayCore {
             }
         };
         let gpu = self.gpu.clone()?;
+        self.attach_terminal_gpu_latch(&gpu);
         let rt = app.rt_mut();
         if opaque_fallback {
             eprintln!("transparency unavailable for overlay {}; drawing it opaque", self.name);
@@ -351,6 +392,7 @@ impl OverlayCore {
         let alpha = (config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied && gpu.adapter.get_info().backend != wgpu::Backend::Metal)
             .then(|| crate::render::surface_alpha::AlphaSurface::new(&gpu.device, target_format, (config.width, config.height)));
         rt.transparent = true;
+        rt.set_renderer_kind(crate::RendererKind::Gpu);
         rt.set_viewport(self.at.size, scale);
         #[cfg(target_os = "macos")]
         let pacing = self.frame_wake.clone().and_then(|wake| {
@@ -370,6 +412,10 @@ impl OverlayCore {
             }
             _ => None,
         };
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        if let Some(h) = &handover && let Err(error) = h.commit() {
+            eprintln!("rune: overlay {} DirectComposition commit failed: {error}", self.name);
+        }
         Some(Live {
             #[cfg(target_os = "macos")]
             pacing,
@@ -381,11 +427,17 @@ impl OverlayCore {
             media_keys,
             #[cfg(target_os = "macos")]
             present: None,
+            #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+            materials: crate::system_material::windows::Materials::new(),
+            #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+            handover,
             // A new swap chain holds none of ours, and its waitable object is its own.
             #[cfg(target_os = "windows")]
             slot: Slot::default(),
             #[cfg(target_os = "windows")]
             poll_pace: crate::window::poll_pace::PollPace::default(),
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            wayland_backdrop: None,
             a11y, alpha, surface, config, backing, scale,
         })
     }
@@ -402,7 +454,12 @@ impl OverlayCore {
         // DX12 `configure` calls `ResizeBuffers` on the same swap chain, preserving its waitable
         // semaphore and count; on failure `surface_refused` -> `release` resets the slot.
         if let Err(error) = crate::window::configure(&live.surface, gpu, &live.config) {
-            self.surface_refused(app, format!("could not resize its GPU surface: {error}"));
+            let msg = format!("could not resize its GPU surface: {error}");
+            if self.is_terminal_gpu_policy() {
+                self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::SurfaceFailed, msg);
+            } else {
+                self.surface_refused(app, msg);
+            }
             return;
         }
         #[cfg(target_os = "macos")]
@@ -411,7 +468,10 @@ impl OverlayCore {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }
         app.rt_mut().set_viewport(self.at.size, scale);
+        self.publish_screen_transform(app.rt());
         self.dirty = true;
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        self.sync_window_backdrop(app.rt_mut(), false);
     }
 }
 
@@ -424,6 +484,10 @@ pub(crate) fn overlay_rescale_size(size: (f32, f32), scale: f32, max_dim: u32) -
 
 impl Drop for OverlayCore {
     fn drop(&mut self) {
+        self.prepare_clean_gpu_drop();
+        self.close_tokens();
+        self.clear_screen_transform();
+        self.drop_injected_pointers();
         *self.shared.native.lock().unwrap() = Default::default();
         self.set_availability(Availability::Unavailable);
         self.release();
@@ -442,8 +506,11 @@ impl OverlayCore {
     /// Its surface refused a new configuration: the overlay hides and drops it, so wgpu never
     /// panics on its next drawable. The next show tries a new one.
     pub(super) fn surface_refused(&mut self, app: &mut dyn OverlayApp, reason: String) {
+        self.drain_tokens_none();
         self.hide(app);
         self.release();
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        app.rt_mut().paint.set_native_materials(false);
         self.fail(app, reason);
     }
 
@@ -457,12 +524,29 @@ impl OverlayCore {
                 // The present worker joins, and the display link stops, before the surface goes.
                 #[cfg(target_os = "macos")]
                 { live.present.take(); live.pacing.take(); }
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                live.materials.teardown(live.handover.as_mut());
                 // The wait for the swap chain's room is unregistered before the surface drops.
                 #[cfg(target_os = "windows")]
                 live.slot.reset();
-                let Live { alpha, surface, backing, .. } = live;
+                let Live {
+                    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                    wayland_backdrop,
+                    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                    materials,
+                    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                    handover,
+                    alpha, surface, backing, ..
+                } = live;
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                drop(materials);
+                // Destroy per-surface Wayland blur proxy strictly before `backing`'s `wl_surface`.
+                #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+                drop(wayland_backdrop);
                 drop(alpha);
                 drop(surface);
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                drop(handover);
                 Some(backing)
             }
             Some(SurfaceEffect::Parked(backing)) => Some(backing),
@@ -471,11 +555,17 @@ impl OverlayCore {
         #[cfg(target_os = "macos")]
         self.panel.take();
         #[cfg(target_os = "windows")]
-        self.native.take();
+        {
+            self.release_cpu();
+            self.native.take();
+            self.backdrop_tracker = Default::default();
+        }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.x11.take();
         drop(backing);
+        self.wayland_resize.step(super::sizing::WaylandResizeEvent::Reset);
         self.position_owner.step(input::PositionEvent::WindowReleased);
+        self.clear_screen_transform();
         self.shared.native.lock().unwrap().0 = None;
     }
 }

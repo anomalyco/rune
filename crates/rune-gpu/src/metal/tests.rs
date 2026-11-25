@@ -716,3 +716,37 @@ fn metal_surface_configure_preserves_layer_colorspace() {
     assert!(layer.colorspace().is_none(), "sRGB format configure must not re-tag an unmanaged layer");
     drop(surface);
 }
+/// Configuring a standalone off-screen `CAMetalLayer` (never attached to any window or view)
+/// translates `desired_maximum_frame_latency` into `CAMetalLayer.maximumDrawableCount`
+/// (`1` -> 2 drawables, `2` -> 3 drawables, clamped to `2..=3`).
+#[allow(unsafe_code)]
+#[test]
+fn metal_surface_configure_sets_maximum_drawable_count_from_frame_latency() {
+    use objc2_quartz_core::CAMetalLayer;
+    let layer = CAMetalLayer::new();
+    assert!(layer.superlayer().is_none(), "off-screen layer is never attached to a window");
+    let instance = super::instance();
+    let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
+    // SAFETY: `layer` outlives `surface`.
+    let surface = unsafe { instance.create_surface_unsafe(target) }.expect("MetalSurface");
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).expect("MetalAdapter");
+    let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("MetalDevice");
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        width: 64,
+        height: 32,
+        present_mode: wgpu::PresentMode::Fifo,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        view_formats: vec![],
+        color_space: wgpu::SurfaceColorSpace::Auto,
+    };
+
+    for (latency, expected_drawables) in [(2, 3), (1, 2), (0, 2), (4, 3)] {
+        config.desired_maximum_frame_latency = latency;
+        surface.configure(&device, &config);
+        assert_eq!(layer.maximumDrawableCount(), expected_drawables, "latency {latency}");
+    }
+    drop(surface);
+}

@@ -69,6 +69,8 @@ pub(in crate::runtime) enum Action {
     Paste(crate::ClipboardContent, Option<Option<String>>),
     /// A `Tx::read_clipboard` callback's id and what the clipboard held.
     ClipboardRead(u64, crate::ClipboardContent),
+    /// A `Tx::copy_image_then` callback's id and what came of the copy.
+    CopyImageDone(u64, Result<(), crate::CopyImageError>),
     /// A `Tx::open_file`, `Tx::open_files`, `Tx::save_file` or `Tx::open_folder` callback's id
     /// and the dialog's answer.
     FileDialog(u64, crate::file_dialog::DialogOutcome),
@@ -114,7 +116,7 @@ impl ActionQueue {
         let input = !matches!(action, Action::Layout(..) | Action::ScreenLayout(..) | Action::DrawnLayout(..)
             | Action::Visible(..) | Action::VisibleRows(..) | Action::AtBottom(..) | Action::FarFromBottom(..)
             | Action::WindowFocus(_) | Action::Physical(crate::PhysicalInput::FocusLost, _) | Action::FinishIme
-            | Action::ClipboardRead(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
+            | Action::ClipboardRead(..) | Action::CopyImageDone(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
         self.0.push(Queued { action, at, input });
     }
     /// A stationary pointer was re-hit after layout; no pointer event asked for that hover.
@@ -197,7 +199,8 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::EdgeDrag(..) => "on_edge_drag",
         Action::Key { .. } => "on_key",
         Action::KeyUp(_) => "on_key_up",
-        Action::Wheel { .. } | Action::WheelRepost(_) => "on_wheel",
+        Action::Wheel { .. } | Action::WheelRepost(_)
+        | Action::Gesture(_, gesture_dispatch::Gesture::TouchWheel(_)) => "on_wheel",
         Action::Gesture(_, gesture_dispatch::Gesture::Magnify(_)) => "on_magnify",
         Action::Gesture(_, gesture_dispatch::Gesture::Rotate(_)) => "on_rotate",
         Action::Gesture(_, gesture_dispatch::Gesture::SmartMagnify(..)) => "on_smart_magnify",
@@ -235,6 +238,7 @@ fn handler_name(action: &Action) -> &'static str {
         Action::Ime(_) | Action::FinishIme => "a text input's edit",
         Action::Paste(..) => "on_paste",
         Action::ClipboardRead(..) => "a `read_clipboard` callback",
+        Action::CopyImageDone(..) => "a `copy_image_then` callback",
         Action::FileDialog(..) => "a file dialog callback",
         Action::UrlOpened(..) => "an `open_url_then` callback",
         _ => "a handler",
@@ -281,7 +285,12 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     if let Some(request) = one.window_frame { tx.window_frame = Some(tx.window_frame.unwrap_or_default().merge(request)); }
     if one.clear_secret && tx.copy.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { tx.copy = None; }
     tx.clear_secret |= one.clear_secret;
-    if one.copy.is_some() { tx.copy = one.copy; }
+    tx.superseded_copy_images.extend(one.superseded_copy_images);
+    if one.copy.is_some() {
+        if let Some(old) = tx.copy_image_callback.take() { tx.superseded_copy_images.push(old); }
+        tx.copy = one.copy;
+        tx.copy_image_callback = one.copy_image_callback;
+    }
     tx.shell = tx.shell.max(one.shell);
     tx.user_close_request |= one.user_close_request;
     tx.minimize_order = tx.minimize_order.max(one.minimize_order);
@@ -290,6 +299,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.keys.extend(one.keys);
     if one.title.is_some() { tx.title = one.title; }
     if one.color_scheme.is_some() { tx.color_scheme = one.color_scheme; }
+    if one.window_backdrop.is_some() { tx.window_backdrop = one.window_backdrop; }
     if one.represented_file.is_some() { tx.represented_file = one.represented_file; }
     if one.document_edited.is_some() { tx.document_edited = one.document_edited; }
     if one.announce.is_some() { tx.announce = one.announce; }
@@ -533,7 +543,7 @@ impl RuntimeCore {
                 one.button = button;
                 self.press_link(app, &path, k, &mut one)
             }
-            Action::LinkSecondary(path, k, point) => self.secondary_press_link(app, &path, k, point, &mut one),
+            Action::LinkSecondary(path, k, point) => self.secondary_press_link_or_menu(app, &path, k, point, &mut one),
             Action::LinkHover(path, url, rect, pressing) => {
                 one.pressing = pressing;
                 self.dispatch_link_hover(app, &path, url.as_deref(), rect, &mut one)
@@ -568,7 +578,17 @@ impl RuntimeCore {
                 true
             }
             Action::EdgeDrag(path, mut d) => {
-                let Some((.., f)) = self.node(&path).and_then(|n| n.handlers.edge_drag.clone()) else { return false };
+                let gone = (d.phase == Phase::Up && d.cancelled)
+                    .then(|| self.pointer.touch.take_edge_gone(&path))
+                    .flatten();
+                let Some(f) = gone.or_else(|| {
+                    let edge = d.edge?;
+                    self.node(&path).and_then(|n| {
+                        n.handlers.edge_drags.as_deref().and_then(|e| e.get(edge)).map(|(_, f)| f.clone())
+                    })
+                }) else {
+                    return false;
+                };
                 if d.phase == Phase::Move {
                     one.commit = one.commit.instant();
                 }
@@ -644,6 +664,14 @@ impl RuntimeCore {
                 true
             }
             Action::FileDialog(id, result) => self.run_file_dialog(app, id, result, &mut one),
+            Action::CopyImageDone(id, result) => {
+                if let Some(f) = self.edit.take_copy_image_callback(id) {
+                    f(app.states(), result, &mut one);
+                    true
+                } else {
+                    false
+                }
+            }
             Action::UrlOpened(f, result) => {
                 f(app.states(), result, &mut one);
                 true

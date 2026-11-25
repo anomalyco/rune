@@ -67,6 +67,14 @@ impl<'a> TabItemCore<'a> {
     }
 }
 
+/// A [`TabBreak`](super::TabBreak): what stands before tab `before` and is not a tab.
+pub(super) struct TabBreakCore {
+    pub key: String,
+    pub before: usize,
+    pub el: El,
+    pub length: f32,
+}
+
 /// What every tab of one strip shares while it builds.
 pub(super) struct Strip {
     pub drag: TabDragState,
@@ -108,6 +116,7 @@ pub(super) struct TabStripCore<'a> {
     pub orientation: TabOrientation,
     pub items: Vec<TabItemCore<'a>>,
     pub lazy: Option<(Vec<TabSlot<'a>>, Build<'a>)>,
+    pub breaks: Vec<TabBreakCore>,
     pub active: Option<&'a str>,
     pub viewport: Option<f32>,
     pub overflow: Option<TabOverflow>,
@@ -136,6 +145,7 @@ impl<'a> TabStripCore<'a> {
             orientation,
             items: Vec::new(),
             lazy: None,
+            breaks: Vec::new(),
             active: None,
             viewport: None,
             overflow: None,
@@ -174,12 +184,36 @@ impl<'a> TabStripCore<'a> {
         let count = slots.len();
         let pinned = slots.iter().filter(|t| t.pinned).count();
         let mut drag = self.drag.take().unwrap_or_default();
+        // The breaks in the strip's order, each before a tab that exists or after the last.
+        let mut breaks = std::mem::take(&mut self.breaks);
+        for b in &mut breaks {
+            b.before = b.before.min(count);
+        }
+        breaks.sort_by_key(|b| b.before);
+        // A break's length along the strip with the gaps it brings: one more gap in a horizontal
+        // row; down a sidebar the tabs reach half the gap toward it and it pads the other half,
+        // on each side something stands on.
+        let last_break = breaks.len().saturating_sub(1);
+        let pads: Vec<[f32; 2]> = breaks
+            .iter()
+            .enumerate()
+            .map(|(n, b)| if vertical { [if n > 0 || b.before > 0 { gap / 2.0 } else { 0.0 }, if n < last_break || b.before < count { gap / 2.0 } else { 0.0 }] } else { [0.0, gap] })
+            .collect();
+        // Which tabs a break stands before (at `count`: after the last tab), and the room they take.
+        let mut broken = vec![false; count + 1];
+        let mut room = vec![0.0f32; count + 1];
+        for (b, pad) in breaks.iter().zip(&pads) {
+            broken[b.before] = true;
+            room[b.before] += pad[0] + b.length + pad[1];
+        }
         let trailing = if self.trailing.is_some() { self.trailing_width + gap } else { 0.0 };
+        // What a horizontal strip's tabs don't share: the trailing action and the breaks.
+        let taken = trailing + room.iter().sum::<f32>();
         // A tab coming in from another strip takes its share already, so it lands in its gap as is.
         let incoming = usize::from(drag.incoming().is_some());
         let (tab_w, pinned_w) = match overflow {
             TabOverflow::ShrinkThenScroll { max_width, pinned_width, min_width, .. } => {
-                let w = self.viewport.map_or(max_width.max(min_width), |v| overflow.tab_width(v - trailing, count - pinned + incoming, pinned, gap));
+                let w = self.viewport.map_or(max_width.max(min_width), |v| overflow.tab_width(v - taken, count - pinned + incoming, pinned, gap));
                 (drag.width_lock.map_or(w, |l| l.max(min_width)), pinned_width)
             }
             TabOverflow::Scroll { .. } => (f32::INFINITY, f32::INFINITY),
@@ -195,7 +229,7 @@ impl<'a> TabStripCore<'a> {
         let auto = auto_scroll::view(&format!("{}-scroll", self.key));
         let mut landing = None;
         if let Some(point) = drag.incoming() {
-            let slot = landing_slot(&pitches, pinned, point, &auto, vertical);
+            let slot = landing_slot(&pitches, &room, pinned, point, &auto, vertical);
             landing = Some(slot);
             drag.open_gap(slot, pitch(false, false));
         }
@@ -235,7 +269,9 @@ impl<'a> TabStripCore<'a> {
             let mut start = 0.0;
             let mut built: Vec<bool> = pitches
                 .iter()
-                .map(|p| {
+                .zip(&room)
+                .map(|(p, before)| {
+                    start += before;
                     let near = start < hi && start + p > lo;
                     start += p;
                     near
@@ -267,7 +303,20 @@ impl<'a> TabStripCore<'a> {
                 el.w(len - gap).h(st.row_height)
             });
         };
+        // The breaks, each wrapped to carry its gaps and to follow the tabs after a torn-out one.
+        let mut pending = breaks.into_iter().zip(pads).peekable();
+        let mut place_breaks = |tabs: &mut Vec<El>, upto: usize| {
+            while let Some((b, pad)) = pending.next_if(|(b, _)| b.before <= upto) {
+                let shift = st.drag.break_shift(b.before, vertical);
+                let wrap = el().key(format!("{}-break-{}", st.list_key, b.key)).motion(rune_motion::motion::REFLOW).offset(shift[0], shift[1]).child(b.el);
+                tabs.push(if vertical { wrap.w_full().pt(pad[0]).pb(pad[1]) } else { wrap });
+            }
+        };
         for i in 0..count {
+            if broken[i] {
+                space(&mut tabs, &mut run, i);
+                place_breaks(&mut tabs, i);
+            }
             if shown.as_ref().is_some_and(|b| !b[i]) {
                 let (from, len) = run.unwrap_or((i, 0.0));
                 run = Some((from, len + pitches[i]));
@@ -278,13 +327,17 @@ impl<'a> TabStripCore<'a> {
             let pin = slots[i].pinned;
             let width = (!vertical).then_some(if pin { pinned_w } else { tab_w });
             let (lo, hi) = if pin { (0, pinned) } else { (pinned, count) };
+            // A drag stops at a break: the tab's lane is the tabs between the breaks around it.
+            let lo = (lo..=i).rev().find(|&j| broken[j]).unwrap_or(lo);
+            let hi = (i + 1..hi).find(|&j| broken[j]).unwrap_or(hi);
             let at = tab::Place {
                 index: i,
                 lane: Lane { index: i, lo, hi, pitch: pitches[i], pinned: pin, tear },
                 width,
                 density: if pin { TabDensity::IconOnly } else { width.map_or(TabDensity::Full, TabOverflow::density_for) },
                 active: quiet(i),
-                separator: !vertical && i > 0 && !quiet(i) && !quiet(i - 1),
+                separator: !vertical && i > 0 && !quiet(i) && !quiet(i - 1) && !broken[i],
+                reach: [i > 0 || broken[0], i + 1 < count || broken[count]],
             };
             let (tab, ghost) = tab::build(item, at, (i > 0).then(|| slots[i - 1].id.as_ref()), &st, bind, k);
             if let (Some(layer), Some(ghost)) = (layer.as_deref_mut(), ghost) {
@@ -294,6 +347,7 @@ impl<'a> TabStripCore<'a> {
             tabs.push(tab);
         }
         space(&mut tabs, &mut run, count);
+        place_breaks(&mut tabs, count);
         // The incoming tab's place: an empty slot its own length, which the tabs after it make
         // room for on the reorder spring and the tab takes when it's let go.
         if let Some((slot, pitch)) = st.drag.gap() {
@@ -342,11 +396,12 @@ fn band(list_key: &str, scroll_key: &str, vertical: bool, step: f32, fallback: f
 /// The slot a tab dragged in from another strip lands in at `point` (view points): after each
 /// unpinned tab whose middle the point has passed, measured with each tab's own length (`pitches`)
 /// from where the strip's viewport drew and how far it has scrolled.
-fn landing_slot(pitches: &[f32], pinned: usize, point: [f32; 2], auto: &auto_scroll::View, vertical: bool) -> usize {
+fn landing_slot(pitches: &[f32], room: &[f32], pinned: usize, point: [f32; 2], auto: &auto_scroll::View, vertical: bool) -> usize {
     let a = usize::from(vertical);
     let along = point[a] - auto_scroll::rect(auto)[a] + auto_scroll::offset(auto, vertical);
     let mut start = 0.0;
     for (i, pitch) in pitches.iter().enumerate() {
+        start += room[i];
         if i >= pinned && along < start + pitch / 2.0 {
             return i;
         }

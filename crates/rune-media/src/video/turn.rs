@@ -32,6 +32,11 @@ pub(super) trait Port {
     fn set_volume(&mut self, volume: f32);
     fn set_output_device(&mut self, uid: Option<&str>);
     fn seek_to(&mut self, at: f64, exact: bool);
+    /// Starts a zero-tolerance seek to the presented frame's exact native timestamp before
+    /// stepping by `frames`, delivering `Event::SnapDone { attempt, finished }` when done.
+    /// Returns `false` when native stepping is unavailable (or no native frame timestamp is known),
+    /// so the caller falls back to an exact seek immediately.
+    fn snap_for_step(&mut self, attempt: Attempt, frames: i32) -> bool;
     /// Steps by `frames` video pictures when the native item supports it; returns `false` to fall
     /// back to an exact `seek_to`.
     fn step_by(&mut self, frames: i32) -> bool;
@@ -82,8 +87,15 @@ pub(super) fn carry(c: &mut Control, port: &mut impl Port, effects: Effects<Effe
             Effect::SetVolume(volume) => port.set_volume(volume),
             Effect::SetOutputDevice => port.set_output_device(c.output_device.as_deref()),
             Effect::SeekTo { at, exact } => port.seek_to(at, exact),
+            Effect::SnapForStep { attempt, frames } => {
+                if !port.snap_for_step(attempt, frames) {
+                    send(c, port, Event::SnapDone { attempt, finished: false });
+                }
+            }
             Effect::StepBy { frames, fallback } => {
-                if !port.step_by(frames) {
+                if port.step_by(frames) {
+                    step(c, Event::Stepped);
+                } else {
                     port.seek_to(fallback, true);
                 }
             }
@@ -102,6 +114,13 @@ fn send(c: &mut Control, port: &mut impl Port, event: Event) {
 pub(super) fn reconcile(c: &mut Control, port: &mut impl Port, now: Instant) {
     if port.alive() {
         send(c, port, Event::Reconcile { now });
+    }
+}
+
+/// A snap-before-step seek completed (or was interrupted) on the main thread.
+pub(super) fn snap_done(c: &mut Control, port: &mut impl Port, attempt: Attempt, finished: bool) {
+    if port.alive() {
+        send(c, port, Event::SnapDone { attempt, finished });
     }
 }
 
@@ -145,19 +164,23 @@ pub(super) fn turn(c: &mut Control, port: &mut impl Port, now: Instant) -> Turn 
     reconcile(c, port, now);
     match (c.kind, c.stage.ready()) {
         (Kind::Video, true) => {
-            let (item_time, landed) = port.frame(&mut || c.next_frame_id());
-            match landed {
-                Ok(Some(shown)) => {
-                    step(c, Event::Framed { shown });
+            // While snapping to the already-shown frame before stepping, do not pull or present
+            // pixel buffers so the snap cannot flash a frame or clear the step early.
+            if !c.stage.snapping() {
+                let (item_time, landed) = port.frame(&mut || c.next_frame_id());
+                match landed {
+                    Ok(Some(shown)) => {
+                        step(c, Event::Framed { shown });
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        c.fail(e);
+                        send(c, port, Event::Release);
+                        return Turn::Idle;
+                    }
                 }
-                Ok(None) => {}
-                Err(e) => {
-                    c.fail(e);
-                    send(c, port, Event::Release);
-                    return Turn::Idle;
-                }
+                follow(c, port, Some(item_time), now);
             }
-            follow(c, port, Some(item_time), now);
         }
         (Kind::Video, false) => {}
         (Kind::Audio, false) => return Turn::Loading,

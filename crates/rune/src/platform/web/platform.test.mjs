@@ -110,98 +110,82 @@ function makeCpuCanvas(doc) {
     return cpu;
 }
 
-test('viewport keeps the CPU canvas CSS bounds aligned when visualViewport shrinks and scrolls', async () => {
-    const { doc, body, visualViewport } = installDom({ width: 390, height: 844 });
+test('viewport keeps GPU and CPU canvases at layout-viewport CSS bounds while reporting visualViewport band', async () => {
+    const { doc, body, visualViewport } = installDom({ width: 390, height: 699 });
     const over = doc.createElement('canvas');
     over.style.width = '100%';
     over.style.height = '100%';
+    over.style.left = '0';
+    over.style.top = '0';
     body.append(over);
     const cpu = makeCpuCanvas(doc);
     body.insertBefore(cpu, over);
 
-    const dispose = platform.viewport(over, () => {}, false);
+    const events = [];
+    const dispose = platform.viewport(over, msg => events.push(JSON.parse(msg)), false);
     await Promise.resolve();
 
-    assert.equal(over.style.width, '390px');
-    assert.equal(over.style.height, '844px');
-    assert.equal(cpu.style.width, '390px');
-    assert.equal(cpu.style.height, '844px');
-    assert.equal(cpu.style.left, '0px');
-    assert.equal(cpu.style.top, '0px');
+    assert.equal(over.style.width, '100%');
+    assert.equal(over.style.height, '100%');
+    assert.equal(cpu.style.width, '100%');
+    assert.equal(cpu.style.height, '100%');
+    assert.deepEqual(events.find(e => e.kind === 'viewport')?.visual, [0, 699, 699]);
 
-    visualViewport.height = 514;
+    // Keyboard presentation on iOS Safari shrinks visualViewport (699 -> 389 -> 362) while leaving
+    // the layout viewport untouched: neither canvas CSS box may shrink or shift.
+    events.length = 0;
+    visualViewport.height = 389;
     visualViewport.dispatchEvent({ type: 'resize' });
-    assert.equal(over.style.height, '514px');
-    assert.equal(cpu.style.height, '514px');
-    assert.equal(cpu.style.width, '390px');
+    visualViewport.height = 362;
+    visualViewport.dispatchEvent({ type: 'resize' });
+    assert.equal(over.style.width, '100%');
+    assert.equal(over.style.height, '100%');
+    assert.equal(cpu.style.width, '100%');
+    assert.equal(cpu.style.height, '100%');
+    assert.deepEqual(events.map(e => e.visual), [[0, 389, 699], [0, 362, 699]]);
 
+    events.length = 0;
     visualViewport.offsetLeft = 12;
     visualViewport.offsetTop = 24;
     visualViewport.dispatchEvent({ type: 'scroll' });
-    assert.equal(over.style.left, '12px');
-    assert.equal(over.style.top, '24px');
-    assert.equal(cpu.style.left, '12px');
-    assert.equal(cpu.style.top, '24px');
+    assert.equal(over.style.left, '0');
+    assert.equal(over.style.top, '0');
+    assert.equal(cpu.style.left, '0');
+    assert.equal(cpu.style.top, '0');
+    assert.deepEqual(events.map(e => e.visual), [[24, 386, 699]]);
 
-    // Removing the CPU canvas after GPU hand-over stops updating it cleanly.
-    cpu.remove();
-    visualViewport.height = 700;
+    // Pinch-zoom shrinks visualViewport by 1/scale: do not report it as a keyboard inset.
+    events.length = 0;
+    visualViewport.scale = 2;
     visualViewport.dispatchEvent({ type: 'resize' });
-    assert.equal(over.style.height, '700px');
-    assert.equal(cpu.style.height, '514px');
+    assert.deepEqual(events.map(e => e.visual), [null]);
+
+    // Unzoomed retraction restores full layout height band.
+    events.length = 0;
+    visualViewport.scale = 1;
+    visualViewport.offsetTop = 0;
+    visualViewport.height = 699;
+    visualViewport.dispatchEvent({ type: 'resize' });
+    assert.deepEqual(events.map(e => e.visual), [[0, 699, 699]]);
 
     dispose();
 });
 
-test('viewport syncs a CPU canvas inserted later after GPU device loss', async () => {
+test('viewport reports null visual band for embedded canvases and leaves unrelated siblings untouched', async () => {
     const { doc, body, visualViewport } = installDom({ width: 390, height: 844 });
-    const over = doc.createElement('canvas');
-    body.append(over);
-
-    const dispose = platform.viewport(over, () => {}, false);
-    await Promise.resolve();
-
-    visualViewport.height = 514;
-    visualViewport.dispatchEvent({ type: 'resize' });
-    assert.equal(over.style.height, '514px');
-
-    const cpu = makeCpuCanvas(doc);
-    body.insertBefore(cpu, over);
-
-    visualViewport.height = 844;
-    visualViewport.dispatchEvent({ type: 'resize' });
-    assert.equal(over.style.height, '844px');
-    assert.equal(cpu.style.height, '844px');
-
-    dispose();
-});
-
-test('viewport leaves unrelated sibling canvases and embedded canvases untouched', async () => {
-    const { doc, body, visualViewport } = installDom({ width: 390, height: 844 });
-    const foreign = doc.createElement('canvas');
-    foreign.setAttribute('aria-hidden', 'true');
-    foreign.style.height = '100%';
-    const over = doc.createElement('canvas');
-    body.append(foreign, over);
-
-    const disposeFull = platform.viewport(over, () => {}, false);
-    await Promise.resolve();
-    visualViewport.height = 514;
-    visualViewport.dispatchEvent({ type: 'resize' });
-    assert.equal(over.style.height, '514px');
-    assert.equal(foreign.style.height, '100%');
-    disposeFull();
-
     const embedded = doc.createElement('canvas');
     embedded.style.height = '100%';
     const cpu = makeCpuCanvas(doc);
     body.append(cpu, embedded);
-    const disposeEmbedded = platform.viewport(embedded, () => {}, true);
+    const events = [];
+    const disposeEmbedded = platform.viewport(embedded, msg => events.push(JSON.parse(msg)), true);
     await Promise.resolve();
+    events.length = 0;
     visualViewport.height = 400;
     visualViewport.dispatchEvent({ type: 'resize' });
     assert.equal(embedded.style.height, '100%');
     assert.equal(cpu.style.height, '100%');
+    assert.deepEqual(events.map(e => e.visual), [null]);
     disposeEmbedded();
 });
 
@@ -246,5 +230,65 @@ test('preferredLanguages reads navigator.languages with navigator.language fallb
         assert.equal(events.length, 0);
     } finally {
         Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+    }
+});
+
+test('writeClipboardImage creates ClipboardItem with Promise<Blob> synchronously and encodes off-turn', async () => {
+    const origNav = globalThis.navigator;
+    const origCI = globalThis.ClipboardItem;
+    try {
+        let writtenItems = null;
+        let makePngCalled = false;
+        class FakeClipboardItem {
+            constructor(forms) { this.forms = forms; }
+        }
+        Object.defineProperty(globalThis, 'ClipboardItem', { value: FakeClipboardItem, configurable: true });
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                clipboard: {
+                    async write(items) {
+                        writtenItems = items;
+                        const blob = await items[0].forms['image/png'];
+                        return blob;
+                    },
+                },
+            },
+            configurable: true,
+        });
+
+        const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+        const promise = platform.writeClipboardImage(() => {
+            makePngCalled = true;
+            return { png: pngBytes };
+        });
+        // Clipboard.write and ClipboardItem must have been called synchronously inside the gesture,
+        // BEFORE makePng() runs on a later turn.
+        assert.equal(makePngCalled, false, 'makePng must not run synchronously on the input turn');
+        assert.equal(writtenItems?.length, 1);
+        assert.ok(writtenItems[0].forms['image/png'] instanceof Promise);
+
+        const blob = await promise;
+        assert.equal(makePngCalled, true);
+        assert.equal(blob.type, 'image/png');
+        assert.deepEqual(new Uint8Array(await blob.arrayBuffer()), pngBytes);
+
+        // Abort from makePng rejects without resolving a blob.
+        await assert.rejects(
+            platform.writeClipboardImage(() => ({ error: 'image exceeds limit' })),
+            /image exceeds limit/,
+        );
+
+        // Browser clipboard rejection (e.g. outside user gesture) propagates.
+        Object.defineProperty(globalThis, 'navigator', {
+            value: { clipboard: { write: () => Promise.reject(new Error('NotAllowedError')) } },
+            configurable: true,
+        });
+        await assert.rejects(
+            platform.writeClipboardImage(() => ({ png: pngBytes })),
+            /NotAllowedError/,
+        );
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        Object.defineProperty(globalThis, 'ClipboardItem', { value: origCI, configurable: true });
     }
 });

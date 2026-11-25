@@ -64,7 +64,7 @@ fn layers_that_draw_nothing_never_keep_the_loop_awake() {
     for (live, silent) in pairs {
         let live = live.on(card()).at(1.0);
         assert!(live.is_animating() && live.pack().is_some(), "{live:?}");
-        assert!(!live.opacity(0.0).is_animating(), "zero opacity: {live:?}");
+        assert!(!live.clone().opacity(0.0).is_animating(), "zero opacity: {live:?}");
         let silent = silent.on(card()).at(1.0);
         assert!(!silent.is_animating() && silent.pack().is_none(), "{silent:?}");
     }
@@ -120,13 +120,13 @@ fn opacity_zero_is_culled() {
 #[test]
 fn zaps_and_bursts_live_out_their_window_then_cull() {
     let zap = Fx::electric(ElectricParams { style: ElectricStyle::Arc { a: [0.0, 0.0], b: [200.0, 40.0] }, zap: Some(1.0), ..Default::default() }).on(card());
-    assert!(zap.at(0.9).pack().is_none());
-    assert!(zap.at(1.2).pack().is_some() && zap.at(1.2).is_animating());
-    assert!(zap.at(1.0 + ElectricParams::ZAP_LIFE + 0.01).pack().is_none());
+    assert!(zap.clone().at(0.9).pack().is_none());
+    assert!(zap.clone().at(1.2).pack().is_some() && zap.clone().at(1.2).is_animating());
+    assert!(zap.clone().at(1.0 + ElectricParams::ZAP_LIFE + 0.01).pack().is_none());
     let p = SparkleParams { burst: Some(2.0), ..Default::default() };
     let burst = Fx::sparkles(p).on(card());
-    assert!(burst.at(2.3).pack().is_some());
-    assert!(!burst.at(2.0 + p.burst_life() + 0.01).is_animating());
+    assert!(burst.clone().at(2.3).pack().is_some());
+    assert!(!burst.clone().at(2.0 + p.burst_life() + 0.01).is_animating());
     let mut data = Vec::new();
     let (_, n) = cpu::sparkles(&p, card().rect, 2.0 + p.burst_life() + 0.01, 1, false, &mut data);
     assert_eq!(n, 0.0, "every burst star is gone by burst_life()");
@@ -464,4 +464,45 @@ fn support_needs_vertex_and_fragment_storage_and_two_buffers() {
     assert_eq!(fx_support(&vertex_only, &wgpu::Limits::default()), Err(FxUnsupported::FragmentStorage));
     let one = wgpu::Limits { max_storage_buffers_per_shader_stage: 1, ..wgpu::Limits::default() };
     assert_eq!(fx_support(&full, &one), Err(FxUnsupported::StorageBuffers { needed: 2, allowed: 1 }));
+}
+
+#[test]
+fn motion_samples_stay_out_of_every_layer() {
+    // `MotionSamples` is about 2 KiB; inline, it would make every `Fx` and `FxLayer` that big.
+    assert!(std::mem::size_of::<MotionSamples>() > 2048);
+    assert!(std::mem::size_of::<Fx>() <= 168, "Fx is {} bytes", std::mem::size_of::<Fx>());
+    assert!(std::mem::size_of::<FxLayer>() <= 256, "FxLayer is {} bytes", std::mem::size_of::<FxLayer>());
+    assert!(
+        2_400 * std::mem::size_of::<FxLayer>() <= 600 * 1024,
+        "2,400 FxLayers take {} bytes",
+        2_400 * std::mem::size_of::<FxLayer>()
+    );
+}
+
+#[test]
+fn motion_blur_in_place_sample_update_packs_identically() {
+    let rest = Rect::new(48.0, 24.0, 48.0, 48.0);
+    let shape = Shape::rounded(rest.x, rest.y, rest.w, rest.h, 8.0);
+    let src = Rect::new(0.0, 0.0, 160.0, 96.0);
+    let p = MotionBlurParams::default();
+    let s1 = MotionSamples::from_track(&p, rest, 0.05, 1.0, |t| Pose { x: t * 900.0, ..Default::default() });
+    let s2 = MotionSamples::from_track(&p, rest, 0.15, 1.0, |t| Pose { x: t * 1800.0, ..Default::default() });
+
+    let mut reused = Fx::motion_blur(p, s1).on(shape).source(0, src).at(0.05);
+    if let Fx::MotionBlur(_, samples) = &mut reused.fx {
+        **samples = s2;
+    }
+    reused.time = 0.15;
+    let fresh = Fx::motion_blur(p, s2).on(shape).source(0, src).at(0.15);
+
+    let (k_reused, mut i_reused, b_reused) = reused.pack().unwrap();
+    let (k_fresh, mut i_fresh, b_fresh) = fresh.pack().unwrap();
+    let (mut xf_reused, mut xf_fresh) = (Vec::new(), Vec::new());
+    reused.fill(&mut i_reused, &mut xf_reused);
+    fresh.fill(&mut i_fresh, &mut xf_fresh);
+
+    assert_eq!(k_reused, k_fresh);
+    assert_eq!(b_reused, b_fresh);
+    assert_eq!(bytemuck::bytes_of(&i_reused), bytemuck::bytes_of(&i_fresh));
+    assert_eq!(xf_reused, xf_fresh);
 }

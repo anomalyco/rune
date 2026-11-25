@@ -441,6 +441,12 @@ impl Window {
         self.window_state.lock().unwrap().has_client_side_frame()
     }
 
+    /// Rune: see `WindowExtWayland::wayland_wm_state`.
+    #[inline]
+    pub fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
+        self.window_state.lock().unwrap().wayland_wm_state()
+    }
+
     #[inline]
     pub fn set_window_level(&self, _level: WindowLevel) {}
 

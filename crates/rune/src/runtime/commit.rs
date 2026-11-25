@@ -398,13 +398,18 @@ pub(super) struct Measurement<'a> {
     pub(super) app: &'a dyn ViewDriver,
     pub(super) env: Env,
     pub(super) viewport: (f32, f32),
-    pub(super) fit_height: bool,
+    pub(super) content_sizing: crate::ContentSizing,
+    pub(super) content_limits: crate::overlay::sizing::SizeLimits,
     pub(super) system_reduced_motion: bool,
     pub(super) pointer_locked: bool,
     pub(super) titlebar_inset: f32,
     pub(super) chrome: crate::ChromeInsets,
+    pub(super) safe_area: [f32; 4],
     pub(super) maximized: bool,
     pub(super) full_screen: bool,
+    pub(super) window_backdrop: crate::WindowBackdrop,
+    pub(super) window_backdrop_supported: u8,
+    pub(super) renderer_kind: crate::RendererKind,
     /// Caption buttons drawn over the view's root.
     pub(super) caption: Option<crate::titlebar::Caption>,
     pub(super) system_accent: crate::SystemAccent,
@@ -454,6 +459,8 @@ pub(super) struct Measurement<'a> {
     pub(super) kept_lists: Vec<(String, Vec<bool>)>,
     pub(super) caret: Option<(String, [f32; 4])>,
     pub(super) caret_read: bool,
+    pub(super) wm_state: crate::WindowManagerState,
+    pub(super) wm_state_read: bool,
     pub(super) layout_seen: layout_read::LayoutRects,
     pub(super) layout_reads: layout_read::LayoutReads,
 }
@@ -469,6 +476,7 @@ pub(super) struct Measured {
     pub(super) defaults: cx::ViewDefaults,
     pub(super) titlebar: crate::titlebar::TitlebarSet,
     pub(super) caret_read: bool,
+    pub(super) wm_state_read: Option<bool>,
     pub(super) layout_reads: layout_read::LayoutReads,
     pub(super) memo_flattened: Option<Vec<memo_reuse::PendingFlat>>,
     pub(super) memo_reused: Vec<memo_reuse::ReusedSpan>,
@@ -476,6 +484,9 @@ pub(super) struct Measured {
     /// The selection as the measure began, before reused `memo` subtrees left the last
     /// commit's nodes.
     pub(super) selection: Vec<layout_read::SelectedRange>,
+    /// Authored styles of `anchored_fit` overlays whose max-size `fit_anchored` clamped in this
+    /// pass, so a later `Relayout` restores them before re-fitting at the new viewport.
+    pub(super) above_fit_styles: Vec<(usize, CompactStyle)>,
 }
 
 impl RuntimeCore {

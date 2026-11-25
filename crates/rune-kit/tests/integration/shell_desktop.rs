@@ -122,6 +122,11 @@ fn the_main_pane_is_framed_and_the_toolbar_sits_inside_it() {
     assert_eq!((toolbar[1], toolbar[3]), (8.0, 48.0), "the toolbar is the pane's top 48 points");
     let (x, y) = (500.0, 4.0);
     rt.pointer_down(x, y);
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        assert!(rt.take_titlebar_action().is_none());
+        rt.pointer_move(x + 10.0, y);
+    }
     assert_eq!(rt.take_titlebar_action(), Some(rune::TitlebarAction::Drag), "the strip above the pane drags the window");
     rt.pointer_up(x, y);
 

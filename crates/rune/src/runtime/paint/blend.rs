@@ -37,6 +37,19 @@ impl RuntimeCore {
         self.paint.max_native_materials()
     }
 
+    #[cfg_attr(
+        not(any(
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")),
+            test
+        )),
+        allow(dead_code)
+    )]
+    pub(crate) fn set_wayland_blur_materials(&mut self, on: bool) {
+        if self.paint.set_wayland_blur_materials(on) {
+            self.commit.dirty = true;
+        }
+    }
+
     pub fn fade_stops(&self) -> [f32; 2] {
         self.tree.fade_stops
     }
@@ -56,7 +69,23 @@ impl RuntimeCore {
     }
 
     pub fn clear_color(&self) -> [f32; 4] {
-        if self.transparent { return [0.0; 4]; }
+        if self.transparent {
+            if !self.host.backdrop_opaque_fallback {
+                return [0.0; 4];
+            }
+            let root_fill = self.tree.nodes.get(self.app_root())
+                .map_or(Color::TRANSPARENT, |n| self.color(n.id, P_FILL, n.vis.fill));
+            let c = if root_fill.a >= 1.0 {
+                root_fill
+            } else {
+                crate::system_material::fallback_fill(Color::TRANSPARENT, self.env.system_dark)
+            };
+            return if self.paint.srgb_blend {
+                [srgb_encode(c.r), srgb_encode(c.g), srgb_encode(c.b), 1.0]
+            } else {
+                [c.r, c.g, c.b, 1.0]
+            };
+        }
         self.tree.nodes.get(self.app_root()).map_or([0.0, 0.0, 0.0, 1.0], |n| {
             let c = self.color(n.id, P_FILL, n.vis.fill);
             if self.paint.srgb_blend {

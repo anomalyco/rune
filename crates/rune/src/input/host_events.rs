@@ -464,17 +464,17 @@ fn line_delta_is_notch(delta: MouseScrollDelta, is_macos: bool, is_win_or_linux:
     }
 }
 
-/// Translates a winit `MouseWheel` event into runtime pinch-wheel, `WheelEvent`, or
-/// pointer-less phase begin/end notifications, scaled into view points.
+/// Translates a `MouseScrollDelta` with host-neutral `Mods` into runtime pinch-wheel,
+/// `WheelEvent`, or pointer-less phase begin/end notifications, scaled into view points.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn wheel(
+pub(crate) fn wheel_from_delta(
     rt: &mut RuntimeCore,
     delta: MouseScrollDelta,
     phase: crate::GesturePhase,
     scale: f32,
-    mods: ModifiersState,
-) {
-    let shift = crate::runtime::SHIFT_TURNS_WHEEL && mods.shift_key() && !mods.control_key();
+    mods: crate::Mods,
+) -> WheelOutcome {
+    let shift = crate::runtime::SHIFT_TURNS_WHEEL && mods.shift && !mods.ctrl;
     // In window points: a wheel turns as far on screen at any zoom, as Chromium's does,
     // and a pinch is the same gesture whatever the zoom.
     #[cfg(target_os = "windows")]
@@ -492,13 +492,13 @@ pub(crate) fn wheel(
         cfg!(target_os = "macos"),
         cfg!(any(target_os = "windows", target_os = "linux")),
     );
-    let _ = wheel_core(
+    wheel_core(
         rt,
         WheelInput {
             dx,
             dy,
             ticks,
-            mods: map_mods(mods),
+            mods,
             phase,
             precise,
             notch,
@@ -507,7 +507,20 @@ pub(crate) fn wheel(
             // apart); a real pinch still arrives as its own gesture.
             pinch: true,
         },
-    );
+    )
+}
+
+/// Translates a winit `MouseWheel` event into runtime pinch-wheel, `WheelEvent`, or
+/// pointer-less phase begin/end notifications, scaled into view points.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn wheel(
+    rt: &mut RuntimeCore,
+    delta: MouseScrollDelta,
+    phase: crate::GesturePhase,
+    scale: f32,
+    mods: ModifiersState,
+) {
+    let _ = wheel_from_delta(rt, delta, phase, scale, map_mods(mods));
 }
 
 /// Translates a winit `PinchGesture` at the current pointer; returns true when delivered.

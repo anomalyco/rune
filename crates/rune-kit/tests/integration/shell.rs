@@ -318,6 +318,11 @@ fn the_title_bar_clears_the_traffic_lights_and_drags_the_window() {
         let (x, y) = rt.find(key).unwrap();
         rt.pointer_move(x, y);
         rt.pointer_down(x, y);
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        {
+            assert!(rt.take_titlebar_action().is_none(), "deferred on press: {key}");
+            rt.pointer_move(x + 10.0, y);
+        }
         assert_eq!(rt.take_titlebar_action() == Some(TitlebarAction::Drag), drags, "{key}");
         rt.pointer_up(x, y);
         rt.frame(1.0 / 60.0);
@@ -661,6 +666,11 @@ fn page_matches_split_views_toolbar_and_frame_pixel_for_pixel() {
     // Titlebar drags the window; leading button keeps its press.
     let (tx, ty) = rt.find("title").unwrap();
     rt.pointer_down(tx, ty);
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        assert!(rt.take_titlebar_action().is_none());
+        rt.pointer_move(tx + 10.0, ty);
+    }
     assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
     rt.pointer_up(tx, ty);
     let (lx, ly) = rt.find("lead").unwrap();

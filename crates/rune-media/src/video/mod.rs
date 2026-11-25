@@ -933,6 +933,8 @@ pub(crate) struct Control {
     /// Fences poster requests: a request for a new time or a native player taking over moves
     /// it on.
     posters: Seq,
+    /// Fences snap-before-step seeks: a newer snap, seek, play or step moves past earlier ones.
+    snaps: Seq,
     /// The time the current poster attempt asked for; None once a player took over.
     poster_at: Option<f64>,
     /// The poster attempt started for a paused seek, until its frame lands or is overtaken.
@@ -962,6 +964,7 @@ impl Default for Control {
             run: Run::default(),
             stage: Stage::default(),
             posters: Seq::default(),
+            snaps: Seq::default(),
             poster_at: None,
             poster_seeking: None,
             generation: 0,

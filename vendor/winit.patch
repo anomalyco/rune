@@ -2371,3 +2371,223 @@ diff --git a/src/platform_impl/linux/wayland/window/state.rs b/src/platform_impl
      /// Mark the window as transparent.
      #[inline]
      pub fn set_transparent(&mut self, transparent: bool) {
+diff --git a/src/platform/wayland.rs b/src/platform/wayland.rs
+index 7b22e69f0..fb28071f2 100644
+--- a/src/platform/wayland.rs
++++ b/src/platform/wayland.rs
+@@ -109,6 +109,13 @@ pub trait WindowExtWayland {
+     /// False when the compositor draws the decorations, when decorations are off, when no frame
+     /// could be made, and on X11.
+     fn has_client_side_frame(&self) -> bool;
++
++    /// Rune: confirmed Wayland `xdg_toplevel` / `xdg-decoration` state from the latest configure:
++    /// `(is_server_decoration, tiled_edges [top, right, bottom, left], wm_capabilities bits)`.
++    ///
++    /// Returns `None` before the initial configure and on X11. `tiled_edges` is `None` below
++    /// `xdg_toplevel` v2 and `wm_capabilities` is `None` below v5.
++    fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)>;
+ }
+ 
+ impl WindowExtWayland for Window {
+@@ -144,6 +151,17 @@ impl WindowExtWayland for Window {
+             crate::platform_impl::Window::Wayland(window) => window.has_client_side_frame(),
+         }
+     }
++
++    #[inline]
++    fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
++        #[allow(clippy::single_match)]
++        match &self.window {
++            #[cfg(x11_platform)]
++            crate::platform_impl::Window::X(_) => None,
++            #[cfg(wayland_platform)]
++            crate::platform_impl::Window::Wayland(window) => window.wayland_wm_state(),
++        }
++    }
+ }
+ 
+ /// Additional methods on [`WindowAttributes`] that are specific to Wayland.
+diff --git a/src/platform/x11.rs b/src/platform/x11.rs
+index 4ab900c94..416c6dc20 100644
+--- a/src/platform/x11.rs
++++ b/src/platform/x11.rs
+@@ -137,9 +137,25 @@ impl<T> EventLoopBuilderExtX11 for EventLoopBuilder<T> {
+ }
+ 
+ /// Additional methods on [`Window`] that are specific to X11.
+-pub trait WindowExtX11 {}
++pub trait WindowExtX11 {
++    /// Rune: returns and clears whether an EWMH/GTK window-manager property (`_NET_WM_STATE`,
++    /// `_NET_WM_ALLOWED_ACTIONS`, `_GTK_EDGE_CONSTRAINTS`, or `_NET_FRAME_EXTENTS`) changed on
++    /// this window since the last call. Always `false` on Wayland.
++    fn take_wm_state_changed(&self) -> bool;
++}
+ 
+-impl WindowExtX11 for Window {}
++impl WindowExtX11 for Window {
++    #[inline]
++    fn take_wm_state_changed(&self) -> bool {
++        #[allow(clippy::single_match)]
++        match &self.window {
++            #[cfg(x11_platform)]
++            crate::platform_impl::Window::X(window) => window.take_wm_state_changed(),
++            #[cfg(wayland_platform)]
++            crate::platform_impl::Window::Wayland(_) => false,
++        }
++    }
++}
+ 
+ /// Additional methods on [`WindowAttributes`] that are specific to X11.
+ pub trait WindowAttributesExtX11 {
+diff --git a/src/platform_impl/linux/wayland/window/mod.rs b/src/platform_impl/linux/wayland/window/mod.rs
+index 428449df4..d37580a1d 100644
+--- a/src/platform_impl/linux/wayland/window/mod.rs
++++ b/src/platform_impl/linux/wayland/window/mod.rs
+@@ -441,6 +441,12 @@ impl Window {
+         self.window_state.lock().unwrap().has_client_side_frame()
+     }
+ 
++    /// Rune: see `WindowExtWayland::wayland_wm_state`.
++    #[inline]
++    pub fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
++        self.window_state.lock().unwrap().wayland_wm_state()
++    }
++
+     #[inline]
+     pub fn set_window_level(&self, _level: WindowLevel) {}
+ 
+diff --git a/src/platform_impl/linux/wayland/window/state.rs b/src/platform_impl/linux/wayland/window/state.rs
+index f0b5936ef..6714852de 100644
+--- a/src/platform_impl/linux/wayland/window/state.rs
++++ b/src/platform_impl/linux/wayland/window/state.rs
+@@ -419,6 +419,9 @@ impl WindowState {
+ 
+         let new_state = configure.state;
+         let old_state = self.last_configure.as_ref().map(|configure| configure.state);
++        let old_decoration_mode =
++            self.last_configure.as_ref().map(|configure| configure.decoration_mode);
++        let old_capabilities = self.last_configure.as_ref().map(|configure| configure.capabilities);
+ 
+         let state_change_requires_resize = old_state
+             .map(|old_state| {
+@@ -426,6 +429,8 @@ impl WindowState {
+                     .symmetric_difference(new_state)
+                     .difference(XdgWindowState::ACTIVATED | XdgWindowState::SUSPENDED)
+                     .is_empty()
++                    || old_decoration_mode != Some(configure.decoration_mode)
++                    || old_capabilities != Some(configure.capabilities)
+             })
+             // NOTE: `None` is present for the initial configure, thus we must always resize.
+             .unwrap_or(true);
+@@ -650,6 +655,26 @@ impl WindowState {
+             && self.frame.is_some()
+     }
+ 
++    /// Rune: confirmed Wayland `xdg_toplevel` / `xdg-decoration` state from `last_configure`,
++    /// gated by `xdg_toplevel` protocol version (`>= 2` for tiled edges, `>= 5` for
++    /// `wm_capabilities`).
++    #[inline]
++    pub fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
++        let configure = self.last_configure.as_ref()?;
++        let server = matches!(configure.decoration_mode, DecorationMode::Server);
++        let version = self.window.xdg_toplevel().version();
++        let tiled = (version >= 2).then(|| {
++            [
++                configure.is_tiled_top(),
++                configure.is_tiled_right(),
++                configure.is_tiled_bottom(),
++                configure.is_tiled_left(),
++            ]
++        });
++        let capabilities = (version >= 5).then(|| configure.capabilities.bits());
++        Some((server, tiled, capabilities))
++    }
++
+     /// Rune: the radius, in logical points, of the arc the window's content takes at its bottom
+     /// corners, which the client-side frame leaves it (the frame's visible border lies just
+     /// outside it). Zero when no client-side frame is drawn, and when the frame draws the window
+diff --git a/src/platform_impl/linux/x11/atoms.rs b/src/platform_impl/linux/x11/atoms.rs
+index c6d96c8fe..cc6248e75 100644
+--- a/src/platform_impl/linux/x11/atoms.rs
++++ b/src/platform_impl/linux/x11/atoms.rs
+@@ -93,7 +93,9 @@ atom_manager! {
+     None: b"None",
+ 
+     // Miscellaneous Atoms
++    _GTK_EDGE_CONSTRAINTS,
+     _GTK_THEME_VARIANT,
++    _NET_WM_ALLOWED_ACTIONS,
+     _MOTIF_WM_HINTS,
+     _NET_ACTIVE_WINDOW,
+     _NET_CLIENT_LIST,
+diff --git a/src/platform_impl/linux/x11/event_processor.rs b/src/platform_impl/linux/x11/event_processor.rs
+index 79f5c114f..ce78af014 100644
+--- a/src/platform_impl/linux/x11/event_processor.rs
++++ b/src/platform_impl/linux/x11/event_processor.rs
+@@ -857,6 +857,18 @@ impl EventProcessor {
+             || atom == atoms[_XSETTINGS_SETTINGS]
+         {
+             self.process_dpi_change(&mut callback);
++        } else if atom == atoms[_NET_WM_STATE]
++            || atom == atoms[_NET_WM_ALLOWED_ACTIONS]
++            || atom == atoms[_GTK_EDGE_CONSTRAINTS]
++            || atom == atoms[_NET_FRAME_EXTENTS]
++        {
++            let xwindow = xev.window as xproto::Window;
++            if self.with_window(xwindow, |window| window.mark_wm_state_changed()).is_some() {
++                callback(&self.target, Event::WindowEvent {
++                    window_id: mkwid(xwindow),
++                    event: WindowEvent::RedrawRequested,
++                });
++            }
+         }
+     }
+ 
+diff --git a/src/platform_impl/linux/x11/window.rs b/src/platform_impl/linux/x11/window.rs
+index 7e15d5f24..3cdcecfd3 100644
+--- a/src/platform_impl/linux/x11/window.rs
++++ b/src/platform_impl/linux/x11/window.rs
+@@ -2,6 +2,7 @@ use std::ffi::CString;
+ use std::mem::replace;
+ use std::os::raw::*;
+ use std::path::Path;
++use std::sync::atomic::{AtomicBool, Ordering};
+ use std::sync::{Arc, Mutex, MutexGuard};
+ use std::{cmp, env};
+ 
+@@ -124,6 +125,7 @@ pub struct UnownedWindow {
+     pub shared_state: Mutex<SharedState>,
+     redraw_sender: WakeSender<WindowId>,
+     activation_sender: WakeSender<super::ActivationToken>,
++    wm_state_changed: AtomicBool,
+ }
+ 
+ macro_rules! leap {
+@@ -351,6 +353,7 @@ impl UnownedWindow {
+             shared_state: SharedState::new(guessed_monitor, &window_attrs),
+             redraw_sender: event_loop.redraw_sender.clone(),
+             activation_sender: event_loop.activation_sender.clone(),
++            wm_state_changed: AtomicBool::new(false),
+         };
+ 
+         // Title must be set before mapping. Some tiling window managers (i.e. i3) use the window
+@@ -826,6 +829,19 @@ impl UnownedWindow {
+         }
+     }
+ 
++    /// Rune: records that an EWMH/GTK window-manager property changed on this window.
++    #[inline]
++    pub(crate) fn mark_wm_state_changed(&self) {
++        self.wm_state_changed.store(true, Ordering::Release);
++    }
++
++    /// Rune: returns and clears whether an EWMH/GTK window-manager property changed since
++    /// the last check (`WindowExtX11::take_wm_state_changed`).
++    #[inline]
++    pub fn take_wm_state_changed(&self) -> bool {
++        self.wm_state_changed.swap(false, Ordering::AcqRel)
++    }
++
+     // Called by EventProcessor when a VisibilityNotify event is received
+     pub(crate) fn visibility_notify(&self) {
+         let mut shared_state = self.shared_state_lock();

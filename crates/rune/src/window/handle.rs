@@ -221,6 +221,29 @@ impl WindowHandle {
         #[cfg(target_arch = "wasm32")]
         let _ = scheme;
     }
+    /// Requests a whole-window system backdrop material ([`WindowBackdrop`](crate::WindowBackdrop))
+    /// at runtime, retained across native window recreation.
+    ///
+    /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows, this updates
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` and reports whether the OS accepted the attribute through
+    /// [`Cx::window_backdrop`](crate::Cx::window_backdrop) (Windows draws the live material only
+    /// while the window is the foreground window and shows a flat fallback while unfocused). Safe
+    /// to call from any thread; requests made before the window starts apply once it does. Ignored
+    /// on web and headless.
+    ///
+    /// ```no_run
+    /// use rune::{AppSpec, WindowBackdrop, WindowSpec, el};
+    ///
+    /// let spec = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+    ///     .on_created(|handle| handle.set_window_backdrop(WindowBackdrop::Mica));
+    /// let _ = spec;
+    /// ```
+    pub fn set_window_backdrop(&self, backdrop: crate::WindowBackdrop) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.send(move |slot| WakeEvent::WindowBackdrop(slot, backdrop));
+        #[cfg(target_arch = "wasm32")]
+        let _ = backdrop;
+    }
     /// Physical desktop pixels; retained across recreation. Unsupported on Wayland.
     pub fn set_position(&self, position: (i32, i32)) {
         self.send(move |slot| WakeEvent::Position(slot, position));

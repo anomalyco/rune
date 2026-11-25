@@ -11,6 +11,8 @@ use super::*;
 use crate::machine::Effects;
 
 /// Host grant policy for declarative pointer lock.
+// All three host policies exist on every target so desktop tests exercise browser/iOS transitions.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LockPolicy {
     /// Host does not support pointer lock (iOS, native overlays): never captures.

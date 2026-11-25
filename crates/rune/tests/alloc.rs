@@ -195,3 +195,192 @@ fn text_lend_allocates_nothing() {
     }
     assert_eq!(allocs() - before, 0, "lend must not heap-allocate when swapping placeholder");
 }
+
+#[test]
+fn small_overlay_text_atlas_stays_256_kib_and_steady_frames_allocate_nothing() {
+    use rune::Color;
+    use rune::render::cpu_boot::{Scene, Target, paint, record};
+
+    fn bar(_: &(), _: &mut Cx<()>) -> El {
+        col().size(200.0, 28.0).fill(Color::BLACK)
+            .child(text("12:34 PM  82%").font(rune::TextStyle::new(13.0, 400.0)).color(Color::WHITE))
+    }
+
+    let mut rt = Runtime::new((), bar, (200.0, 28.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    assert_eq!(
+        rt.text.atlas.data.len(),
+        256 * 1024,
+        "small overlay CPU glyph atlas must stay at 256 KiB instead of 4 MiB",
+    );
+    assert!(rt.text.atlas.pages.is_empty());
+
+    // CPU-first painter and RCB1 recording round-trip must both handle the shorter 256 KiB page safely
+    // and render identical non-blank pixels.
+    let size = (400, 56);
+    let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, [0.0, 0.0, 0.0, 1.0]);
+    let mut direct = vec![0u8; size.0 as usize * size.1 as usize * 4];
+    paint(&scene, &mut Target::new(&mut direct, size.0, size.1), 1).expect("direct CPU paint");
+    assert!(direct.chunks_exact(4).any(|p| p[0] > 0), "CPU painter drew text from 256 KiB atlas");
+
+    let encoded = record::encode(&scene);
+    let decoded = record::Recording::decode(&encoded).expect("RCB1 recording decodes shorter atlas page");
+    let mut replayed = vec![0u8; size.0 as usize * size.1 as usize * 4];
+    paint(&decoded.scene(), &mut Target::new(&mut replayed, size.0, size.1), 1).expect("replayed CPU paint");
+    assert_eq!(direct, replayed, "RCB1 replay matches direct CPU paint byte for byte");
+
+    // Steady frames drawing known glyphs allocate nothing.
+    rt.settle_all();
+    rt.frame(0.0);
+    let before = allocs();
+    for _ in 0..30 {
+        let _ = rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(allocs() - before, 0, "steady frames with cached glyphs must allocate nothing");
+
+    // Growing past 128 rows in a denser text scene doubles atlas.data cleanly and paints intact text.
+    fn dense(_: &(), _: &mut Cx<()>) -> El {
+        let mut root = col().size(400.0, 400.0).fill(Color::BLACK);
+        for sz in [12.0, 16.0, 22.0, 30.0, 42.0, 56.0] {
+            root = root.child(
+                text("AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789")
+                    .font(rune::TextStyle::new(sz, 400.0))
+                    .color(Color::WHITE),
+            );
+        }
+        root
+    }
+    let mut dense_rt = Runtime::new((), dense, (400.0, 400.0), Env::new(true, 2.0));
+    dense_rt.frame(0.0);
+    assert!(dense_rt.text.atlas.data.len() >= 512 * 1024, "dense multi-size text grew atlas past 256 KiB");
+    let dsize = (800, 800);
+    let dscene = Scene::new(&dense_rt.instances, &dense_rt.text.atlas, &dense_rt.images, dsize, [0.0, 0.0, 0.0, 1.0]);
+    let mut dout = vec![0u8; dsize.0 as usize * dsize.1 as usize * 4];
+    paint(&dscene, &mut Target::new(&mut dout, dsize.0, dsize.1), 1).expect("dense CPU paint");
+    assert!(dout.chunks_exact(4).any(|p| p[0] > 0), "CPU painter drew text after atlas growth");
+}
+
+#[test]
+fn cached_fallback_material_steady_frames_allocate_nothing() {
+    use rune::{Color, Live, SystemMaterial, el};
+    fn view(offset: &Live<[f32; 2]>, _: &mut Cx<Live<[f32; 2]>>) -> El {
+        el().size(320.0, 160.0).child(
+            el().key("wrap").size(240.0, 80.0).live_offset(offset).child(
+                el().key("cached-pill").size(240.0, 80.0).cache()
+                    .child(el().absolute(10.0, 16.0).size(220.0, 48.0).radius(24.0).system_material(SystemMaterial::Glass))
+                    .child(el().absolute(10.0, 68.0).size(40.0, 8.0).fill(Color::WHITE)),
+            ),
+        )
+    }
+    let off = Live::new([0.0, 0.0]);
+    let mut rt = Runtime::new(off.clone(), view, (320.0, 160.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    off.set([1.0, 0.0]);
+    rt.frame(1.0 / 60.0);
+    let before = allocs();
+    for i in 1..=60 {
+        let dx = i as f32;
+        off.set([dx, 2.0]);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.system_materials().len(), 1);
+        assert_eq!(rt.system_materials()[0].rect, [10.0 + dx, 18.0, 220.0, 48.0]);
+    }
+    assert_eq!(allocs() - before, 0, "cached fallback material recording/replay must allocate nothing in steady frames");
+}
+
+#[test]
+fn steady_cpu_overlay_frame_allocates_nothing_and_default_gpu_frame_unchanged() {
+    use rune::{Color, RendererKind};
+    use rune::render::cpu_boot::{CpuPainter, Scene, Target, attach_text};
+
+    fn overlay_view(_: &(), cx: &mut Cx<()>) -> El {
+        let card = col()
+            .size(160.0, 48.0)
+            .padding(8.0)
+            .radius(10.0)
+            .fill(Color { r: 0.1, g: 0.12, b: 0.16, a: 0.9 })
+            .child(text("Candidate 1").font(rune::TextStyle::new(13.0, 400.0)).color(Color::WHITE));
+        if cx.renderer_kind().is_cpu() { card } else { card.blur(8.0) }
+    }
+
+    // 1. Default RendererKind::Gpu steady frame still allocates nothing.
+    let mut gpu_rt = Runtime::new((), overlay_view, (160.0, 48.0), Env::new(true, 1.0));
+    gpu_rt.frame(0.0);
+    gpu_rt.settle_all();
+    gpu_rt.frame(0.0);
+    let before_gpu = allocs();
+    for _ in 0..30 {
+        let _ = gpu_rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(allocs() - before_gpu, 0, "default Gpu steady overlay frames must allocate nothing");
+
+    // 2. Opt-in RendererKind::Cpu steady frame (runtime + transparent Scene + CpuPainter) allocates nothing.
+    let mut rt = Runtime::new((), overlay_view, (160.0, 48.0), Env::new(true, 1.0));
+    rt.set_renderer_kind(RendererKind::Cpu);
+    attach_text(&mut rt.text.atlas);
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let size = (160u32, 48u32);
+    let mut painter = CpuPainter::new(1);
+    painter.fill_masks(&mut rt.text.atlas);
+    let mut dib = vec![0u8; size.0 as usize * size.1 as usize * 4];
+    let first_scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, [0.0; 4]).lcd(false);
+    painter.paint(&first_scene, &mut Target::new(&mut dib, size.0, size.1)).expect("warm CPU overlay frame");
+
+    let before_cpu = allocs();
+    for _ in 0..30 {
+        let _ = rt.frame(1.0 / 60.0);
+        let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, [0.0; 4]).lcd(false);
+        let painted = painter.paint(&scene, &mut Target::new(&mut dib, size.0, size.1)).expect("steady CPU overlay frame");
+        assert!(painted.rects.is_empty());
+    }
+    assert_eq!(allocs() - before_cpu, 0, "steady CPU overlay frames must allocate nothing after warm-up");
+}
+
+#[test]
+fn overlay_send_pointer_steady_moves_allocate_nothing() {
+    use rune::{App, AppSpec, OverlaySpec, PointerInput, el};
+    fn view(_: &(), _: &mut Cx<()>) -> El { el().size(120.0, 40.0).hit() }
+    let mut app = App::new(AppSpec::new("inject-alloc", (120.0, 40.0), || (), view));
+    let handle = app.overlay(OverlaySpec::new("inject-alloc", (120.0, 40.0), view), ());
+    // Warm each mutex once: on macOS `std::sync::Mutex` lazily allocates its `os_unfair_lock`
+    // box on first lock (never again in steady state).
+    handle.send_pointer(PointerInput::move_to(10.0, 10.0));
+    let _ = handle.screen_to_local((0, 0));
+    let before = allocs();
+    for i in 0..500 {
+        handle.send_pointer(PointerInput::move_to((i % 100) as f32, 20.0));
+        let _ = handle.screen_to_local((i, i));
+    }
+    assert_eq!(allocs() - before, 0, "steady-state send_pointer moves and screen_to_local must allocate nothing");
+}
+
+#[test]
+fn content_sized_fit_overlay_steady_frame_allocates_nothing() {
+    use rune::{Color, ContentSizing, OverlayOptions, OverlaySpec};
+
+    fn candidate_view(items: &Vec<&'static str>, _: &mut Cx<Vec<&'static str>>) -> El {
+        col()
+            .padding(8.0)
+            .gap(4.0)
+            .radius(8.0)
+            .fill(Color { r: 0.08, g: 0.1, b: 0.14, a: 0.94 })
+            .children(items.iter().map(|s| text(*s).font(rune::TextStyle::new(13.0, 400.0)).color(Color::WHITE)))
+    }
+
+    let _cfg = OverlaySpec::new("candidates", (0.0, 0.0), candidate_view)
+        .options(OverlayOptions::default())
+        .sizing(ContentSizing::Fit)
+        .max_size((420.0, 320.0));
+
+    let mut rt = Runtime::new(vec!["1. alpha", "2. beta", "3. gamma"], candidate_view, (140.0, 88.0), Env::new(true, 1.5));
+    rt.frame(0.0);
+    rt.settle_all();
+    rt.frame(0.0);
+    let before = allocs();
+    for _ in 0..30 {
+        let _ = rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(allocs() - before, 0, "steady frames of a content-sized overlay must allocate nothing");
+}

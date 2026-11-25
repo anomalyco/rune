@@ -295,9 +295,32 @@ fn frame_duration_and_presented_time_handle_unopened_unknown_audio_and_failure()
     assert_eq!(a.shared.ctl.lock().unwrap().pending, None);
 }
 
+/// Runs a synchronous headless decode test behind a hard deadline so a backend deadlock fails
+/// with a message instead of hanging the test suite.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn run_with_timeout(name: &str, limit: std::time::Duration, body: impl FnOnce() + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+        // The test thread may have already timed out and dropped the receiver.
+        tx.send(res).ok();
+    });
+    match rx.recv_timeout(limit) {
+        Ok(Ok(())) => {}
+        Ok(Err(payload)) => std::panic::resume_unwind(payload),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            panic!("{name} timed out after {}s", limit.as_secs());
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("{name} worker exited without reporting a result");
+        }
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn headless_step_and_presented_time_walk_every_frame_of_real_mp4_and_clamp() {
+    run_with_timeout("headless_step_and_presented_time_walk_every_frame_of_real_mp4_and_clamp", std::time::Duration::from_secs(20), || {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rune/tests/fixtures/rgbw.mp4");
     let v = Video::file(path);
     let wake = rune_core::live::Wake::new(Arc::new(|| {}));
@@ -358,6 +381,7 @@ fn headless_step_and_presented_time_walk_every_frame_of_real_mp4_and_clamp() {
     assert!(!v.is_playing());
     assert!(!pull(0.6));
     assert!((v.presented_time().unwrap() - 0.75).abs() < 1e-3, "{:?}", v.presented_time());
+    });
 }
 
 /// The parked list is process-wide: these tests take turns so each sees only its own clips.
@@ -741,4 +765,58 @@ fn preload_decodes_the_first_frame_before_anything_draws_it() {
     let audio = Player::audio(sound("silence.wav"));
     macos::preload(&audio.shared);
     assert_eq!(macos::test_poster(&audio.shared), None, "audio has no poster to warm");
+}
+
+/// Exercises the synchronous headless virtual-clock (`Clock::Virtual`) path across exact seeks
+/// spanning the full width of each frame followed by `Player::step`. Display playback paths
+/// (`Clock::Display`) are verified separately in `tests/step_after_seek_macos.rs` and
+/// `tests/step_after_seek_windows.rs`.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[test]
+fn headless_step_after_exact_seek_uses_presented_frame_across_whole_frame_width() {
+    run_with_timeout("headless_step_after_exact_seek_uses_presented_frame_across_whole_frame_width", std::time::Duration::from_secs(20), || {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rune/tests/fixtures/rgbw.mp4");
+    let v = Video::file(path);
+    let wake = rune_core::live::Wake::new(Arc::new(|| {}));
+    let pull = |clock: f64| v.shared.pull(v.surface(), Clock::Virtual(clock), &wake).active;
+    assert!(!pull(0.0));
+    let tick = 1.0 / 16_384.0;
+    for (seek_t, from_pts, delta, want_pts) in [
+        (0.00, 0.00, 1, 0.25),
+        (0.06, 0.00, 1, 0.25),
+        (0.125, 0.00, 1, 0.25),
+        (0.18, 0.00, 1, 0.25),
+        (0.25 - tick, 0.00, 1, 0.25),
+        (0.25, 0.25, -1, 0.00),
+        (0.43, 0.25, 1, 0.50),
+        (0.43, 0.25, -1, 0.00),
+        (0.50 - tick, 0.25, 1, 0.50),
+        (0.50 - tick, 0.25, -1, 0.00),
+        (0.68, 0.50, 1, 0.75),
+        (0.68, 0.50, -1, 0.25),
+        (0.93, 0.75, -1, 0.50),
+        (1.00 - tick, 0.75, -1, 0.50),
+    ] {
+        v.seek(seek_t);
+        assert!(!pull(0.0));
+        let pts = v.presented_time().unwrap();
+        assert!((pts - from_pts).abs() < 1e-3, "seek({seek_t}): got {pts}, want {from_pts}");
+        v.step(delta);
+        assert!(!pull(0.0));
+        let after = v.presented_time().unwrap();
+        assert!((after - want_pts).abs() < 1e-3, "seek({seek_t}) then step({delta:+}): got {after}, want {want_pts}");
+    }
+    // First and last frame clamps after seeking into the second half of frame 0 / frame 3.
+    v.seek(0.18);
+    assert!(!pull(0.0));
+    v.step(-1);
+    assert!(!pull(0.0));
+    assert!(v.presented_time().unwrap().abs() < 1e-3);
+
+    v.seek(0.93);
+    assert!(!pull(0.0));
+    v.step(1);
+    assert!(!pull(0.0));
+    assert!((v.presented_time().unwrap() - 0.75).abs() < 1e-3);
+    });
 }

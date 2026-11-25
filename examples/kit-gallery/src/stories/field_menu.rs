@@ -95,7 +95,9 @@ pub(super) fn menu_submenu_small_window(s: &G, k: &Kit, layer: &mut Vec<El>) -> 
             }))
         })
         .collect();
-    let point = s.menu_at.or(Some(PointerPress { x: 130.0, y: 60.0 }));
+    let point = s.menu_at.or_else(|| {
+        (s.story == "rune-menu--submenu-small-window").then_some(PointerPress { x: 130.0, y: 60.0 })
+    });
     let trigger = context_menu("small-ctx", el().size(360.0, 220.0), point)
         .label("File actions")
         .item(MenuItem::new("Open"))

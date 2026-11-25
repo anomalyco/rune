@@ -248,3 +248,82 @@ fn overlay_panel_color_space_options_drive_panel_seam_and_metal_layer() {
     assert_eq!(layer_colorspace_name(&layer), None, "Unmanaged overlay clears CAMetalLayer.colorspace to nil");
     drop(surface);
 }
+/// Verifies on a standalone off-screen `CAMetalLayer` (never attached to any `NSWindow` or
+/// `NSView`) that `frame_latency` and `LaunchDrawables` drive `maximumDrawableCount` as
+/// specified on both Rune's native Metal backend and wgpu's Metal backend: default (`None`)
+/// starts capped at 2 drawables and raises to 3 once settled, whereas `Some(1)` stays steady
+/// at 2 drawables before and after settle.
+#[test]
+fn metal_layer_maximum_drawable_count_follows_frame_latency_and_launch_drawables() {
+    use std::time::Duration;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use crate::window::{LaunchDrawables, frame_latency};
+
+    let check_instance = |instance: wgpu::Instance, label: &str| {
+        // SAFETY: new off-screen layer, never added to a window or view, used on this thread only.
+        let layer: Retained<AnyObject> = unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] };
+        // SAFETY: `layer` is a live `CAMetalLayer`; `superlayer` returns a borrowed `CALayer*` or null.
+        let superlayer: *const AnyObject = unsafe { msg_send![&*layer, superlayer] };
+        assert!(superlayer.is_null(), "{label}: off-screen layer must stay detached");
+        let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
+        // SAFETY: `layer` outlives `surface`.
+        let surface = unsafe { instance.create_surface_unsafe(target) }.expect("Metal surface");
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }))
+        .expect("Metal adapter");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("Metal device");
+        let mut config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            width: 64,
+            height: 32,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: frame_latency(None),
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
+        };
+        let max_drawables = || -> usize {
+            // SAFETY: `layer` is a live `CAMetalLayer`; `maximumDrawableCount` returns `NSUInteger`.
+            unsafe { msg_send![&*layer, maximumDrawableCount] }
+        };
+
+        // Default (`None` -> latency 2): capped at 2 drawables at launch, 3 after settle.
+        let t0 = crate::time::now();
+        let mut launch = LaunchDrawables::cap(&mut config);
+        surface.configure(&device, &config);
+        assert_eq!(max_drawables(), 2, "{label}: launch cap holds 2 drawables");
+        let steady = launch.settle(true, t0).expect("default launch raises to steady latency 2");
+        assert_eq!(steady, 2);
+        config.desired_maximum_frame_latency = steady;
+        surface.configure(&device, &config);
+        assert_eq!(max_drawables(), 3, "{label}: settled default holds 3 drawables");
+
+        // Opt-in `frame_latency(1)`: `LaunchDrawables::cap` returns Steady and stays at 2.
+        config.desired_maximum_frame_latency = frame_latency(Some(1));
+        let mut launch = LaunchDrawables::cap(&mut config);
+        surface.configure(&device, &config);
+        assert_eq!(max_drawables(), 2, "{label}: frame_latency(1) keeps 2 drawables");
+        assert_eq!(launch.settle(true, t0), None);
+        assert_eq!(launch.settle(false, t0 + Duration::from_secs(2)), None);
+        assert_eq!(max_drawables(), 2, "{label}: frame_latency(1) stays at 2 after settle");
+
+        // Clamping: 0 -> 1 (2 drawables), 3 -> 2 (3 drawables).
+        config.desired_maximum_frame_latency = frame_latency(Some(0));
+        surface.configure(&device, &config);
+        assert_eq!(max_drawables(), 2, "{label}: 0 clamps to 2 drawables");
+        config.desired_maximum_frame_latency = frame_latency(Some(3));
+        surface.configure(&device, &config);
+        assert_eq!(max_drawables(), 3, "{label}: 3 clamps to 3 drawables");
+        drop(surface);
+    };
+
+    #[cfg(feature = "metal-backend")]
+    check_instance(crate::gpu::metal::instance(), "native-metal");
+
+    let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+    desc.backends = wgpu::Backends::METAL;
+    check_instance(wgpu::Instance::new(desc), "wgpu-metal");
+}

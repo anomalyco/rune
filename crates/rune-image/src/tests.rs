@@ -787,3 +787,185 @@ fn load_scaled_decodes_only_first_frame_of_animated_gif_and_apng() {
     assert!(d_apng.motion.is_none(), "load_scaled() must keep only frame 0 of APNG");
     assert_eq!(&d_apng.mips[0].pixels[..4], &[0, 255, 0, 255], "frame 0 is green");
 }
+
+#[test]
+fn to_rgba_reads_decoded_pixels_back_straight_and_svg_at_its_intrinsic_size() {
+    let cache = ImageCache::new(Arc::new(|| {}));
+    let source = image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 100, y as u8 * 200, 30, [255, 128, 0][x as usize]]));
+    let mut png = Vec::new();
+    source.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let image = cache.load(png);
+    image.wait().unwrap();
+    let (w, h, rgba) = image.to_rgba().unwrap();
+    assert_eq!((w, h), (3, 2));
+    for (got, want) in rgba.chunks(4).zip(source.pixels()) {
+        match want.0[3] {
+            0 => assert_eq!(got, [0; 4], "fully transparent pixels hold no colour"),
+            255 => assert_eq!(got, want.0, "opaque pixels round-trip exactly"),
+            _ => assert!(got.iter().zip(want.0).all(|(g, w)| g.abs_diff(w) <= 2), "{got:?} vs {:?}", want.0),
+        }
+    }
+
+    #[cfg(feature = "svg")]
+    {
+        const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8"><rect width="16" height="8" fill="#2060a0"/></svg>"##;
+        let svg = cache.load(SVG);
+        assert_eq!(svg.wait(), Ok([32, 16]));
+        let (w, h, rgba) = svg.to_rgba().unwrap();
+        assert_eq!((w, h, rgba.len()), (16, 8, 16 * 8 * 4), "an SVG copies at its intrinsic size, not its 2x raster");
+        assert_eq!(&rgba[..4], &[0x20, 0x60, 0xa0, 255]);
+    }
+
+    let bad = cache.load(b"not an image".as_slice());
+    assert!(bad.wait().is_err());
+    assert_eq!(bad.to_rgba(), None);
+}
+
+#[test]
+fn pixels_to_rgba_handles_empty_raw_rgba_and_decoded_mips() {
+    let px = Pixels::new();
+    assert_eq!(px.to_rgba(), None);
+
+    // Raw straight RGBA from Pixels::set round-trips bit-exactly (including partial alpha).
+    let raw = vec![10, 20, 30, 255, 40, 50, 60, 77, 1, 2, 3, 0];
+    px.set(3, 1, raw.clone());
+    assert_eq!(px.to_rgba(), Some((3, 1, raw)));
+
+    // Decoded mip-backed Pixels (from Image::pixels) delegates to the same readback helper.
+    let cache = ImageCache::new(Arc::new(|| {}));
+    let img = cache.rgba(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]);
+    img.wait().unwrap();
+    assert_eq!(img.pixels().to_rgba(), img.to_rgba());
+
+    #[cfg(feature = "svg")]
+    {
+        const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="12" height="6"><rect width="12" height="6" fill="#309050"/></svg>"##;
+        let svg = cache.load(SVG);
+        assert_eq!(svg.wait(), Ok([24, 12]));
+        assert_eq!(svg.pixels().to_rgba(), svg.to_rgba());
+        let (w, h, _) = svg.pixels().to_rgba().unwrap();
+        assert_eq!((w, h), (12, 6));
+    }
+}
+
+/// Exhaustively checks all 256 sRGB values across every alpha (`0..=255`) through mip 0
+/// premultiplication and `straight_rgba` readback: opaque (`255`) is bit-exact, `0` zeroes
+/// RGB, and translucent values stay within quantified linear-premul bounds.
+#[test]
+fn to_rgba_roundtrip_error_across_all_256_values_and_alphas() {
+    let mut rgba = Vec::with_capacity(256 * 256 * 4);
+    for a in 0..=255u8 {
+        for v in 0..=255u8 {
+            rgba.extend_from_slice(&[v, v, v, a]);
+        }
+    }
+    let cache = ImageCache::new(Arc::new(|| {}));
+    let img = cache.rgba(256, 256, rgba);
+    img.wait().unwrap();
+    let (w, h, out) = img.to_rgba().unwrap();
+    assert_eq!((w, h), (256, 256));
+
+    let (mut max_opaque, mut max_a128, mut max_a32) = (0u8, 0u8, 0u8);
+    for a in 0..=255u8 {
+        for v in 0..=255u8 {
+            let idx = (a as usize * 256 + v as usize) * 4;
+            let got = [out[idx], out[idx + 1], out[idx + 2], out[idx + 3]];
+            assert_eq!(got[3], a, "alpha channel must round-trip exactly");
+            if a == 0 {
+                assert_eq!(got, [0, 0, 0, 0], "alpha 0 zeroes RGB");
+                continue;
+            }
+            let err = got[0].abs_diff(v);
+            if a == 255 { max_opaque = max_opaque.max(err); }
+            else {
+                if a >= 128 { max_a128 = max_a128.max(err); }
+                if a >= 32 { max_a32 = max_a32.max(err); }
+            }
+        }
+    }
+    assert_eq!(max_opaque, 0, "opaque 8-bit sRGB pixels must round-trip bit-exactly");
+    assert!(max_a128 <= 1, "high-alpha (>=128) quantization error: {max_a128}");
+    assert!(max_a32 <= 4, "mid-alpha (>=32) quantization error: {max_a32}");
+}
+
+/// Round-trip readback for every format ImageCache draws: PNG, EXIF-rotated JPEG, WebP,
+/// animated GIF (frame 0), SVG (`load` intrinsic and `svg` smaller raster), and AVIF.
+#[test]
+fn to_rgba_roundtrips_every_supported_format() {
+    let cache = ImageCache::new(Arc::new(|| {}));
+
+    // 1. EXIF-rotated JPEG (16x8 rotated 90° CW -> 8x16, red top / blue bottom)
+    let jpg_src = image::RgbImage::from_fn(16, 8, |x, _| if x < 8 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) });
+    let mut jpg = Vec::new();
+    jpg_src.write_to(&mut std::io::Cursor::new(&mut jpg), image::ImageFormat::Jpeg).unwrap();
+    let mut tiff = b"II*\0".to_vec();
+    tiff.extend_from_slice(&8u32.to_le_bytes());
+    tiff.extend_from_slice(&1u16.to_le_bytes());
+    tiff.extend_from_slice(&[0x12, 0x01, 3, 0, 1, 0, 0, 0, 6, 0, 0, 0]);
+    tiff.extend_from_slice(&0u32.to_le_bytes());
+    let mut app1 = b"Exif\0\0".to_vec();
+    app1.extend_from_slice(&tiff);
+    let mut rotated = jpg[..2].to_vec();
+    rotated.extend_from_slice(&[0xff, 0xe1]);
+    rotated.extend_from_slice(&(app1.len() as u16 + 2).to_be_bytes());
+    rotated.extend_from_slice(&app1);
+    rotated.extend_from_slice(&jpg[2..]);
+    let jpg_img = cache.load(rotated);
+    assert_eq!(jpg_img.wait(), Ok([8, 16]));
+    let (jw, jh, jrgba) = jpg_img.to_rgba().unwrap();
+    assert_eq!((jw, jh), (8, 16));
+    let top_px = &jrgba[(2 * 8 + 4) * 4..][..4];
+    let bot_px = &jrgba[(13 * 8 + 4) * 4..][..4];
+    assert!(top_px[0] > 200 && top_px[2] < 60 && top_px[3] == 255, "EXIF top red: {top_px:?}");
+    assert!(bot_px[2] > 200 && bot_px[0] < 60 && bot_px[3] == 255, "EXIF bottom blue: {bot_px:?}");
+
+    // 2. WebP (still)
+    let mut webp = Vec::new();
+    let webp_src = image::RgbaImage::from_fn(3, 2, |x, _| if x == 0 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 255, 0, 255]) });
+    webp_src.write_to(&mut std::io::Cursor::new(&mut webp), image::ImageFormat::WebP).unwrap();
+    let webp_img = cache.load(webp);
+    assert_eq!(webp_img.wait(), Ok([3, 2]));
+    let (ww, wh, wrgba) = webp_img.to_rgba().unwrap();
+    assert_eq!((ww, wh), (3, 2));
+    assert_eq!(&wrgba[..4], &[255, 0, 0, 255]);
+    assert_eq!(&wrgba[4..8], &[0, 255, 0, 255]);
+
+    // 3. GIF (animated 2 frames: red frame 0, blue frame 1 -> to_rgba returns frame 0)
+    let mut gif = Vec::new();
+    {
+        use image::codecs::gif::GifEncoder;
+        use image::{Delay, Frame};
+        let mut enc = GifEncoder::new(&mut gif);
+        let f0 = image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255]));
+        let f1 = image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 0, 255, 255]));
+        enc.encode_frame(Frame::from_parts(f0, 0, 0, Delay::from_numer_denom_ms(100, 1))).unwrap();
+        enc.encode_frame(Frame::from_parts(f1, 0, 0, Delay::from_numer_denom_ms(100, 1))).unwrap();
+    }
+    let gif_img = cache.load(gif);
+    assert_eq!(gif_img.wait(), Ok([2, 2]));
+    let (gw, gh, grgba) = gif_img.to_rgba().unwrap();
+    assert_eq!((gw, gh), (2, 2));
+    assert_eq!(&grgba[..4], &[255, 0, 0, 255], "animated GIF copies frame 0");
+
+    // 4. SVG via ImageCache::svg rasterized smaller than intrinsic copies at raster size
+    #[cfg(feature = "svg")]
+    {
+        const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32"><rect width="64" height="32" fill="#1080c0"/></svg>"##;
+        let small = cache.svg(SVG, 16.0, 1.0);
+        assert_eq!(small.wait(), Ok([16, 8]));
+        let (sw, sh, srgba) = small.to_rgba().unwrap();
+        assert_eq!((sw, sh), (16, 8), "SVG rasterized smaller via cache.svg copies at raster size");
+        assert_eq!(&srgba[..4], &[0x10, 0x80, 0xc0, 255]);
+    }
+
+    // 5. AVIF still (under avif feature)
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../www/public/img/hello-320.avif");
+        let bytes = std::fs::read(&path).unwrap();
+        let avif = cache.load(bytes);
+        let [aw, ah] = avif.wait().unwrap();
+        let (rw, rh, argba) = avif.to_rgba().unwrap();
+        assert_eq!((rw, rh, argba.len()), (aw, ah, aw as usize * ah as usize * 4));
+    }
+}

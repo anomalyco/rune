@@ -712,6 +712,16 @@ impl El {
     pub fn hover_group_focus(self) -> Self {
         self.hover_group()
     }
+    /// [`Self::hover_group`] that only the pointer lights: keyboard focus on it or inside it
+    /// doesn't, as CSS `:hover` alone. What the group reveals still shows for focus of its own
+    /// ([`Self::group_opacity`] on a focused control), and [`Self::group_focus_within`] names
+    /// one more element whose focus shows it: a row whose chevron shows while its toggle has
+    /// focus and whose menu button shows while it has focus itself, each without the other.
+    pub fn hover_group_pointer(mut self) -> Self {
+        self.vis_flags.set(VisualFlags::HOVER_GROUP, true);
+        self.vis.cold_mut().hover_pointer_only = true;
+        self
+    }
     /// Curves for this element's hover track: `enter` when the pointer arrives, `exit` when it
     /// leaves (e.g. a delayed reveal).
     pub fn hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
@@ -768,6 +778,34 @@ impl El {
     /// Text or icon colour while the nearest ancestor group is hovered.
     pub fn group_color(mut self, c: Color) -> Self {
         self.vis.cold_mut().group_color = Some(c);
+        self
+    }
+    /// This element's [`Self::group_opacity`] and [`Self::group_color`] also show while
+    /// keyboard focus is on or inside its ancestor keyed `key` (as given to [`Self::key`]), as
+    /// CSS `group-focus-visible/<name>` does: a glyph inside a button that shows while the
+    /// button has focus, whatever lights the hover group around them. The nearest ancestor
+    /// with that key is the one; without one this does nothing.
+    pub fn group_focus_within(mut self, key: impl Into<Rc<str>>) -> Self {
+        self.vis.cold_mut().group_focus = Some(key.into());
+        self
+    }
+    /// Curves of this element's own for its [`Self::group_opacity`] and [`Self::group_color`]:
+    /// `enter` when its hover group lights or keyboard focus shows it, `exit` when neither
+    /// does any more. Without it the element follows its group's hover track, so everything
+    /// the group reveals moves on the group's curves ([`Self::hover_motion`]); with it, one
+    /// member can fade (a CSS `transition` on that element) beside others that cut.
+    ///
+    /// ```
+    /// use rune::{Anim, Curve, Easing, el};
+    ///
+    /// let fade = Curve::tween(0.15, Easing::EASE_IN_OUT);
+    /// let row = el().hover_group().hover_motion(Anim::INSTANT, Anim::INSTANT)
+    ///     .child(el().group_opacity(0.0, 1.0).group_motion(fade, fade))
+    ///     .child(el().group_opacity(0.0, 1.0));
+    /// # let _ = row;
+    /// ```
+    pub fn group_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
+        self.vis.cold_mut().group_motion = Some(Rc::new((enter.into(), exit.into())));
         self
     }
     /// While a press on this element is held, the text and icons in it (its own included) draw

@@ -330,3 +330,197 @@ fn unzoomed_matched_flight_matches_baseline_frames() {
         );
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+enum OffsetGateCase {
+    Source,
+    Target,
+    Both,
+    Live,
+    Rematch,
+}
+
+fn record_matched_offset(case: OffsetGateCase) -> crate::motion_gate::Recording {
+    struct App {
+        step: u8,
+        case: OffsetGateCase,
+        src_live: Live<[f32; 2]>,
+        dst_live: Live<[f32; 2]>,
+    }
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let mut root = el().key("root").size(400.0, 300.0);
+        match s.step {
+            0 => {
+                let mut a = el().key("a").matched("t").size(40.0, 40.0).radius(6.0).fill(Color::WHITE);
+                match s.case {
+                    OffsetGateCase::Source | OffsetGateCase::Both | OffsetGateCase::Rematch => a = a.offset(30.0, 20.0),
+                    OffsetGateCase::Live => a = a.live_offset(&s.src_live),
+                    OffsetGateCase::Target => {}
+                }
+                root = root.child(a);
+            }
+            1 => {
+                let mut b = el().key("b").matched("t").size(40.0, 40.0).absolute(200.0, 100.0).radius(6.0).fill(Color::WHITE);
+                match s.case {
+                    OffsetGateCase::Target | OffsetGateCase::Both | OffsetGateCase::Rematch => b = b.offset(-50.0, 40.0),
+                    OffsetGateCase::Live => b = b.live_offset(&s.dst_live),
+                    OffsetGateCase::Source => {}
+                }
+                root = root.child(b);
+            }
+            _ => {
+                let c = el().key("c").matched("t").size(40.0, 40.0).absolute(240.0, 200.0).offset(15.0, -25.0).radius(6.0).fill(Color::WHITE);
+                root = root.child(c);
+            }
+        }
+        root
+    }
+    let state = App {
+        step: 0,
+        case,
+        src_live: Live::new([30.0, 20.0]),
+        dst_live: Live::new([-50.0, 40.0]),
+    };
+    let mut run = crate::motion_gate::Run::new(
+        Runtime::new(state, view, (400.0, 300.0), Env::new(true, 1.0)),
+        120.0,
+    );
+    run.idle(0.3);
+    run.step();
+    run.act("switch", |rt| rt.update(|s, _| s.step = 1));
+    if matches!(case, OffsetGateCase::Rematch) {
+        run.play(0.12);
+        run.act("rematch", |rt| rt.update(|s, _| s.step = 2));
+    }
+    run.play(1.2);
+    run.rec
+}
+
+#[test]
+fn matched_offset_motion_gate() {
+    use OffsetGateCase::*;
+    let cases = [Source, Target, Both, Live, Rematch];
+    crate::motion_gate::gate_rows(
+        cases.into_iter().map(|case| {
+            (format!("matched-offset/{case:?}"), Box::new(move || record_matched_offset(case)) as crate::motion_gate::Job)
+        }).collect(),
+        &[],
+    );
+}
+
+#[test]
+fn rotated_matched_flight_emits_turned_layer_every_frame() {
+    use crate::render::KIND_LAYER;
+    fn view(moved: &bool, _: &mut Cx<bool>) -> El {
+        let mut root = el().key("root").size(400.0, 300.0);
+        if !*moved {
+            root = root.child(el().key("a").matched("t").size(40.0, 40.0).rotate(0.3).fill(Color::WHITE));
+        } else {
+            root = root.child(el().key("b").matched("t").size(40.0, 40.0).absolute(200.0, 100.0).rotate(0.7).fill(Color::WHITE));
+        }
+        root
+    }
+    let mut rt = Runtime::new(false, view, (400.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|m, _| *m = true);
+    let mut prev_angle = 0.3f32;
+    let mut flew = 0usize;
+    for frame in 0..180 {
+        rt.frame(1.0 / 120.0);
+        let turned = rt.instances.iter().find(|q| q.params[1] == KIND_LAYER && q.border[1].abs() > 1e-6);
+        let layer = turned.unwrap_or_else(|| panic!("frame {frame}: missing turned layer during rotated flight"));
+        let angle = layer.border[1];
+        assert!(angle >= prev_angle - 1e-3 && angle <= 0.7 + 1e-3, "frame {frame}: angle {prev_angle} -> {angle}");
+        // Turned layer pivot stays at the centre of the flying rect.
+        let drawn = rt.presented("b").unwrap().0;
+        let cx = drawn[0] + drawn[2] * 0.5;
+        let cy = drawn[1] + drawn[3] * 0.5;
+        assert!((layer.border[2] - cx).abs() < 1.0 && (layer.border[3] - cy).abs() < 1.0,
+            "frame {frame}: pivot ({}, {}) disagrees with drawn centre ({cx}, {cy})", layer.border[2], layer.border[3]);
+        prev_angle = angle;
+        if !rt.motion.flying.is_empty() {
+            flew += 1;
+        }
+    }
+    assert!(flew > 10, "observed flying frames with turned layer");
+    assert!((prev_angle - 0.7).abs() < 1e-3);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RotGateCase {
+    Source,
+    Target,
+    Both,
+    Live,
+    Rematch,
+}
+
+fn record_matched_rotation(case: RotGateCase) -> crate::motion_gate::Recording {
+    struct App {
+        step: u8,
+        case: RotGateCase,
+        src_live: Live<f32>,
+        dst_live: Live<f32>,
+    }
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let mut root = el().key("root").size(400.0, 300.0);
+        match s.step {
+            0 => {
+                let mut a = el().key("a").matched("t").size(40.0, 40.0).radius(6.0).fill(Color::WHITE);
+                match s.case {
+                    RotGateCase::Source => a = a.rotate(0.5),
+                    RotGateCase::Both | RotGateCase::Rematch => a = a.rotate(0.2),
+                    RotGateCase::Live => a = a.live_rotation(&s.src_live),
+                    RotGateCase::Target => {}
+                }
+                root = root.child(a);
+            }
+            1 => {
+                let mut b = el().key("b").matched("t").size(40.0, 40.0).absolute(200.0, 100.0).radius(6.0).fill(Color::WHITE);
+                match s.case {
+                    RotGateCase::Target => b = b.rotate(0.5),
+                    RotGateCase::Both | RotGateCase::Rematch => b = b.rotate(0.6),
+                    RotGateCase::Live => b = b.live_rotation(&s.dst_live),
+                    RotGateCase::Source => {}
+                }
+                root = root.child(b);
+            }
+            _ => {
+                let c = el().key("c").matched("t").size(40.0, 40.0).absolute(260.0, 180.0).rotate(0.75).radius(6.0).fill(Color::WHITE);
+                root = root.child(c);
+            }
+        }
+        root
+    }
+    let state = App {
+        step: 0,
+        case,
+        src_live: Live::new(0.2),
+        dst_live: Live::new(0.6),
+    };
+    let mut run = crate::motion_gate::Run::new(
+        Runtime::new(state, view, (400.0, 300.0), Env::new(true, 1.0)),
+        120.0,
+    );
+    run.idle(0.3);
+    run.step();
+    run.act("switch", |rt| rt.update(|s, _| s.step = 1));
+    if matches!(case, RotGateCase::Rematch) {
+        run.play(0.12);
+        run.act("rematch", |rt| rt.update(|s, _| s.step = 2));
+    }
+    run.play(1.2);
+    run.rec
+}
+
+#[test]
+fn matched_rotation_motion_gate() {
+    use RotGateCase::*;
+    let cases = [Source, Target, Both, Live, Rematch];
+    crate::motion_gate::gate_rows(
+        cases.into_iter().map(|case| {
+            (format!("matched-rotation/{case:?}"), Box::new(move || record_matched_rotation(case)) as crate::motion_gate::Job)
+        }).collect(),
+        &[],
+    );
+}

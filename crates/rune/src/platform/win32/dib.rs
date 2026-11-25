@@ -12,7 +12,7 @@
 
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP,
+    BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP,
     HDC, HGDIOBJ, RGBQUAD, ReleaseDC, SRCCOPY, SelectObject,
 };
 
@@ -32,14 +32,15 @@ impl Dib {
     /// something writes them. None when GDI refuses (out of memory).
     pub(crate) fn new(width: u32, height: u32) -> Option<Dib> {
         let (width, height) = (width.max(1), height.max(1));
+        let header = super::layered::DibHeaderSpec::top_down_bgra(width, height);
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: width as i32,
-                biHeight: -(height as i32),
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB,
+                biWidth: header.width,
+                biHeight: header.height,
+                biPlanes: header.planes,
+                biBitCount: header.bit_count,
+                biCompression: header.compression,
                 biSizeImage: 0,
                 biXPelsPerMeter: 0,
                 biYPelsPerMeter: 0,
@@ -68,6 +69,12 @@ impl Dib {
 
     /// Bytes from one row to the next.
     pub(crate) fn stride(&self) -> usize { self.width as usize * 4 }
+
+    /// Memory DC with this DIB selected, for `UpdateLayeredWindowIndirect`.
+    pub(crate) fn dc(&self) -> HDC { self.dc }
+
+    /// Allocated dimensions `(width, height)` in pixels.
+    pub(crate) fn size(&self) -> (u32, u32) { (self.width, self.height) }
 
     /// The pixels, for the renderer to paint into.
     pub(crate) fn bytes(&mut self) -> &mut [u8] {

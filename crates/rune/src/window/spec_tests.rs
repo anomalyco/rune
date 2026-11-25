@@ -177,6 +177,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
         .on_ime(|_, _, _| false)
         .on_field_menu(|_, _, _| {})
         .on_close_request(|_, _| crate::CloseResponse::Close)
+        .on_quit_request(|_, _| crate::QuitResponse::Quit)
         .on_close(|_, _| {})
         .on_quit(|_, _| {})
         .turn_scope(|_| {}, |_| {})
@@ -202,7 +203,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
     assert!(window.app.fit_content_height && window.app.float_on_open && window.app.open_inactive);
     assert!(window.app.open_as.maximizes() && window.app.open_as.full_screens());
     assert!(window.app.release_gpu && window.app.keep_running);
-    assert!(window.app.on_rest.is_some() && window.app.on_close_request.is_some() && window.app.on_close.is_some() && window.app.on_quit.is_some());
+    assert!(window.app.on_rest.is_some() && window.app.on_close_request.is_some() && window.app.on_quit_request.is_some() && window.app.on_close.is_some() && window.app.on_quit.is_some());
     assert!(window.app.turn_scope.is_some() && window.app.on_reopen.is_some() && window.app.on_open_url.is_some() && window.app.on_open_files.is_some());
     assert!(window.app.on_window.is_some() && window.app.on_ready.is_some() && window.app.on_display_close.is_some());
     assert!(window.app.on_frame_encoded.is_some() && window.app.on_frame_presented.is_some() && window.app.on_frame_drawn.is_some());
@@ -586,6 +587,29 @@ fn app_and_window_spec_cpu_first_default_auto_and_retain_builder_value() {
 }
 
 #[test]
+fn app_and_window_spec_resize_sync_default_auto_and_retain_per_window_value() {
+    let spec = || AppSpec::new("settings", (620.0, 520.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).resize_sync, crate::ResizeSync::Auto);
+    assert_eq!(WindowSpec::new("main", spec()).app.resize_sync, crate::ResizeSync::Auto);
+
+    // App::resize_sync stores On/Off/Auto and survives WindowSpec::from_app.
+    let app_on = App::new(spec()).resize_sync(crate::ResizeSync::On);
+    assert_eq!(app_on.resize_sync, crate::ResizeSync::On);
+    let from_app = WindowSpec::from_app("main", app_on);
+    assert_eq!(from_app.app.resize_sync, crate::ResizeSync::On);
+
+    // Two WindowSpecs in one process keep independent per-window modes and survive options().
+    let win_a = WindowSpec::new("a", spec()).resize_sync(crate::ResizeSync::On);
+    let win_b = WindowSpec::new("b", spec()).resize_sync(crate::ResizeSync::Off);
+    assert_eq!(win_a.app.resize_sync, crate::ResizeSync::On);
+    assert_eq!(win_b.app.resize_sync, crate::ResizeSync::Off);
+    let reset = win_a.options(WindowOptions::default());
+    assert_eq!(reset.app.resize_sync, crate::ResizeSync::On);
+    let back_to_auto = reset.resize_sync(crate::ResizeSync::Auto);
+    assert_eq!(back_to_auto.app.resize_sync, crate::ResizeSync::Auto);
+}
+
+#[test]
 fn mac_window_options_document_and_first_mouse_defaults_and_retention() {
     let default = MacWindowOptions::default();
     assert_eq!(default.accepts_first_mouse, None);
@@ -746,4 +770,24 @@ fn mac_window_options_color_space_defaults_to_srgb_and_retains_override() {
 
     assert_eq!(unmanaged.with_portable_exclude(Some(true)).color_space, MacColorSpace::Unmanaged);
     assert_eq!(unmanaged.with_runtime_document(None, Some(&true)).color_space, MacColorSpace::Unmanaged);
+}
+#[test]
+fn app_and_window_spec_frame_latency_clamps_and_retains() {
+    let spec = || AppSpec::new("panel", (488.0, 873.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).frame_latency, None);
+    assert_eq!(App::new(spec()).frame_latency(0).frame_latency, Some(1));
+    assert_eq!(App::new(spec()).frame_latency(1).frame_latency, Some(1));
+    assert_eq!(App::new(spec()).frame_latency(2).frame_latency, Some(2));
+    assert_eq!(App::new(spec()).frame_latency(3).frame_latency, Some(2));
+    assert_eq!(App::new(spec()).frame_latency(u32::MAX).frame_latency, Some(2));
+
+    let from_app = WindowSpec::from_app("panel", App::new(spec()).frame_latency(1));
+    assert_eq!(from_app.app.frame_latency, Some(1));
+
+    let via_spec = WindowSpec::new("panel", spec()).frame_latency(0);
+    assert_eq!(via_spec.app.frame_latency, Some(1));
+    // Replacing WindowOptions keeps portable/window-level frame_latency intact.
+    assert_eq!(via_spec.options(WindowOptions::default()).app.frame_latency, Some(1));
+
+    assert_eq!(WindowSpec::new("panel", spec()).frame_latency(3).app.frame_latency, Some(2));
 }

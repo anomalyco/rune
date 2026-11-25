@@ -1,0 +1,1 @@
+- Overlays: added `ContentSizing` (`Fixed`, `Fit`, `FitHeight`, `FitWidth`) and `ConfiguredOverlay::{sizing, min_size, max_size}` sharing a single backing field with `ConfiguredOverlay::fit_content_height()` (now shorthand for `.sizing(ContentSizing::FitHeight)`), with CSS `fit-content(max_w)` text wrapping, work-area clamping, and an `overlay-lab --candidates` demo (Refs #2307).

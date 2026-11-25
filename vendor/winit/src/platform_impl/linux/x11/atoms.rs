@@ -93,7 +93,9 @@ atom_manager! {
     None: b"None",
 
     // Miscellaneous Atoms
+    _GTK_EDGE_CONSTRAINTS,
     _GTK_THEME_VARIANT,
+    _NET_WM_ALLOWED_ACTIONS,
     _MOTIF_WM_HINTS,
     _NET_ACTIVE_WINDOW,
     _NET_CLIENT_LIST,

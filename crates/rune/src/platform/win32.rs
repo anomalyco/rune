@@ -13,6 +13,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_TRANSPARENT,
 };
 
+pub(crate) mod backdrop;
 mod cloak;
 pub(crate) mod dark_mode;
 pub(crate) mod dcomp_handover;
@@ -22,6 +23,7 @@ pub(crate) mod drop_target;
 mod frame;
 mod hide_now;
 pub(crate) mod jump_list;
+pub(crate) mod layered;
 pub(crate) mod occlusion;
 mod placement;
 pub(crate) mod press_point;
@@ -86,6 +88,16 @@ pub(crate) fn load_system_dll(name: &str) -> windows_sys::Win32::Foundation::HMO
 pub(crate) fn hwnd(window: &winit::window::Window) -> Option<HWND> {
     let RawWindowHandle::Win32(h) = window.window_handle().ok()?.as_raw() else { return None };
     Some(h.hwnd.get() as HWND)
+}
+
+/// Atomically updates an overlay window's physical desktop origin and size in one `SetWindowPos`.
+#[allow(unsafe_code)]
+pub(crate) fn set_window_rect(window: &winit::window::Window, origin: (i32, i32), size: (u32, u32)) {
+    let Some(hwnd) = hwnd(window) else { return };
+    // SAFETY: live window owned by this thread; `SWP_NOZORDER | SWP_NOACTIVATE` moves and resizes atomically.
+    unsafe {
+        SetWindowPos(hwnd, std::ptr::null_mut(), origin.0, origin.1, size.0.max(1) as i32, size.1.max(1) as i32, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
 }
 
 /// When the display shows its next refresh after `now`, from DWM's timing (`now` plus a 60 Hz
@@ -358,7 +370,14 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             input.clicks.borrow_mut().push_back((down, point));
         }
         WM_CAPTURECHANGED => input.captured.set(false),
+        WM_SETTINGCHANGE if dark_mode::should_refresh_color_policy(lparam) => {
+            dark_mode::refresh_color_policy();
+        }
         _ => {}
+    }
+    #[cfg(feature = "windows-system-material")]
+    if matches!(message, WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED) {
+        crate::system_material::windows::notify_wm_setting_change();
     }
     // SAFETY: forwards the unhandled message to the next procedure in this window's subclass chain.
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
@@ -372,13 +391,23 @@ pub(crate) struct OverlayWindow {
     observing: bool,
     exclusion: OverlaySupport,
     keys: crate::KeyPolicy,
+    /// When true, the window presents via `UpdateLayeredWindowIndirect` (`ULW_ALPHA`) and
+    /// must never call `SetLayeredWindowAttributes`.
+    layered_cpu: bool,
 }
 impl OverlayWindow {
-    #[allow(unsafe_code)]
     pub fn new(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Result<Self, String> {
+        Self::new_with_mode(window, interactive, options, wake, false)
+    }
+    pub fn new_layered_cpu(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Result<Self, String> {
+        Self::new_with_mode(window, interactive, options, wake, true)
+    }
+    #[allow(unsafe_code)]
+    fn new_with_mode(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>, layered_cpu: bool) -> Result<Self, String> {
         let hwnd = hwnd(window).ok_or("the overlay window has no Win32 handle")?;
         let mode = options.input.resolved(interactive);
-        overlay_styles(hwnd, mode, options.keys)?;
+        if layered_cpu { overlay_styles_layered_cpu(hwnd, mode, options.keys); }
+        else { overlay_styles(hwnd, mode, options.keys)?; }
         let exclusion = if options.exclude_from_capture {
             if set_hwnd_exclude_from_capture(hwnd, true) { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
@@ -391,7 +420,7 @@ impl OverlayWindow {
             unsafe { drop(Rc::from_raw(data)); }
             return Err(format!("SetWindowSubclass failed: {}", last_error()));
         }
-        Ok(Self { input, observing: false, exclusion, watch: None, wake, keys: options.keys })
+        Ok(Self { input, observing: false, exclusion, watch: None, wake, keys: options.keys, layered_cpu })
     }
     pub fn capture_exclusion(&self) -> OverlaySupport { self.exclusion }
     pub fn set_capture_exclusion(&mut self, exclude: bool) -> OverlaySupport {
@@ -460,7 +489,8 @@ impl OverlayWindow {
         let hwnd = self.input.hwnd;
         // Opaque again, after any fade-out.
         self.input.fading.set(false);
-        overlay_styles(hwnd, self.input.input.get(), self.keys)?;
+        if self.layered_cpu { overlay_styles_layered_cpu(hwnd, self.input.input.get(), self.keys); }
+        else { overlay_styles(hwnd, self.input.input.get(), self.keys)?; }
         // SAFETY: Win32 calls on a live window owned by this thread.
         let visible = unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -495,6 +525,9 @@ impl OverlayWindow {
     #[allow(unsafe_code)]
     pub fn fade(&self, alpha: u8) {
         if !self.input.fading.replace(true) { self.observe_current(); }
+        if self.layered_cpu { return; }
+        #[cfg(feature = "windows-system-material")]
+        if crate::system_material::windows::overlay_no_layered() { return; }
         // SAFETY: a Win32 call on a live layered window owned by this thread.
         unsafe { SetLayeredWindowAttributes(self.input.hwnd, 0, alpha, LWA_ALPHA); }
     }
@@ -535,16 +568,34 @@ impl Drop for OverlayWindow {
 fn overlay_styles(hwnd: HWND, mode: OverlayInput, keys: crate::KeyPolicy) -> Result<(), String> {
     let through = if mode == OverlayInput::All { 0 } else { WS_EX_TRANSPARENT };
     let no_activate = if crate::overlay::keys::can_take_keys(keys) { 0 } else { WS_EX_NOACTIVATE };
+    #[cfg(feature = "windows-system-material")]
+    let skip_layered = crate::system_material::windows::overlay_no_layered();
+    #[cfg(not(feature = "windows-system-material"))]
+    let skip_layered = false;
     // SAFETY: style changes on a live window owned by this thread.
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        let next = style | WS_EX_LAYERED | no_activate | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
+        let base = if skip_layered { style & !WS_EX_LAYERED } else { style | WS_EX_LAYERED };
+        let next = base | no_activate | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
         if next != style { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next as isize); }
-        if SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) == 0 {
+        if !skip_layered && SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) == 0 {
             return Err(format!("SetLayeredWindowAttributes failed: {}", last_error()));
         }
     }
     Ok(())
+}
+
+/// Style setup for a CPU layered overlay (`UpdateLayeredWindowIndirect` + `ULW_ALPHA`): sets
+/// `WS_EX_LAYERED` without `WS_EX_NOREDIRECTIONBITMAP` and never calls
+/// `SetLayeredWindowAttributes`.
+#[allow(unsafe_code)]
+fn overlay_styles_layered_cpu(hwnd: HWND, mode: OverlayInput, keys: crate::KeyPolicy) {
+    // SAFETY: style changes on a live window owned by this thread.
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let next = layered::overlay_layered_ex_style(style, mode, keys);
+        if next != style { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next as isize); }
+    }
 }
 
 #[allow(unsafe_code)]

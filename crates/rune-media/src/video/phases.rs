@@ -44,8 +44,19 @@ pub(super) enum Stage {
     /// A player that can't play yet.
     Loading { created: Instant, muted: bool, volume: f32, output: u64 },
     /// A player that can. `rate` was last applied to it (0 = paused); `shown` is the item time
-    /// of the frame on the surface.
-    Ready { created: Instant, muted: bool, volume: f32, output: u64, rate: f32, settle: Settle, shown: Option<f64> },
+    /// of the frame on the surface; `cursor` tracks whether the native item's current time stands
+    /// on that frame's exact start.
+    Ready { created: Instant, muted: bool, volume: f32, output: u64, rate: f32, settle: Settle, shown: Option<f64>, cursor: FrameCursor },
+}
+
+/// Whether the native player's current time stands on the presented frame's exact start
+/// (`Aligned`, as after native `stepByCount`) or may lie inside a frame (`OffBoundary`, as after
+/// a seek, playback, or a seek-based step fallback).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum FrameCursor {
+    #[default]
+    OffBoundary,
+    Aligned,
 }
 
 impl Stage {
@@ -61,6 +72,11 @@ impl Stage {
     pub(super) fn running(self) -> bool {
         matches!(self, Stage::Ready { rate, .. } if rate > 0.0)
     }
+
+    /// Snapping an off-boundary player back to the presented frame's exact start before stepping.
+    pub(super) fn snapping(self) -> bool {
+        matches!(self, Stage::Ready { settle: Settle::Snapping { .. }, .. })
+    }
 }
 
 /// Where the player's last seek stands.
@@ -73,6 +89,9 @@ pub(super) enum Settle {
     /// A paused seek within the frame on screen: nothing to wait for, but the player may report
     /// the old position until it lands, so the handle's time holds.
     Holding { to: f64 },
+    /// Snapping an off-boundary native player to the presented frame's exact start before
+    /// stepping by `frames`; guarded by `attempt`.
+    Snapping { attempt: Attempt, since: Instant, to: f64, frames: i32 },
 }
 
 impl Settle {
@@ -80,6 +99,11 @@ impl Settle {
     /// any earlier seek, as the player cancels that one.
     pub(super) fn seek(&mut self, to: f64, same_frame: bool, now: Instant) {
         *self = if same_frame { Settle::Holding { to } } else { Settle::Seeking { since: now, to } };
+    }
+
+    /// A snap-before-step seek targeting `to` after stepping by `frames`, fenced by `attempt`.
+    pub(super) fn snap(&mut self, attempt: Attempt, to: f64, frames: i32, now: Instant) {
+        *self = Settle::Snapping { attempt, since: now, to, frames };
     }
 
     /// A new frame reached the surface.
@@ -101,10 +125,13 @@ impl Settle {
 
     /// A seek that hasn't landed by `now` stops being waited for.
     pub(super) fn expire(&mut self, now: Instant) {
-        if let Settle::Seeking { since, .. } = *self
-            && now.saturating_duration_since(since) > SEEK_PATIENCE
-        {
-            *self = Settle::Still;
+        match *self {
+            Settle::Seeking { since, .. } | Settle::Snapping { since, .. }
+                if now.saturating_duration_since(since) > SEEK_PATIENCE =>
+            {
+                *self = Settle::Still;
+            }
+            _ => {}
         }
     }
 
@@ -115,7 +142,7 @@ impl Settle {
 
     /// A frame (or position) is still to come.
     pub(super) fn waiting(self) -> bool {
-        matches!(self, Settle::Seeking { .. })
+        matches!(self, Settle::Seeking { .. } | Settle::Snapping { .. })
     }
 }
 
@@ -158,6 +185,10 @@ pub(super) enum Event {
     Item { item: Item, now: Instant },
     /// The handle's intent is due at the player.
     Reconcile { now: Instant },
+    /// A snap-before-step seek for `attempt` completed (`finished == true`) or was interrupted.
+    SnapDone { attempt: Attempt, finished: bool },
+    /// Native `stepByCount` ran (rather than falling back to a seek), leaving the cursor aligned.
+    Stepped,
     /// A new frame reached the surface, at this item time.
     Framed { shown: f64 },
     /// The player reports its position, and that it stopped though told to run; `frame_time`
@@ -189,6 +220,9 @@ pub(super) enum Effect {
     SetVolume(f32),
     SetOutputDevice,
     SeekTo { at: f64, exact: bool },
+    /// Snap an off-boundary native player to the presented frame's exact start before stepping by
+    /// `frames`, reporting completion under `attempt`.
+    SnapForStep { attempt: Attempt, frames: i32 },
     /// Step by `frames` on the native item when supported, else fall back to an exact seek to `fallback`.
     StepBy { frames: i32, fallback: f64 },
     /// 0 pauses.
@@ -214,6 +248,12 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                     }
                 }
             }
+            if let Stage::Ready { settle, cursor, .. } = &mut c.stage {
+                if matches!(*settle, Settle::Snapping { .. }) {
+                    *settle = Settle::Still;
+                }
+                *cursor = FrameCursor::OffBoundary;
+            }
             c.run = Run::Playing { anchor: None };
         }
         Event::Pause => {
@@ -226,6 +266,12 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
             let seconds = c.duration.map_or(seconds, |d| seconds.min(d));
             c.pending = Some(Pending::Seek(Seek { at: seconds, exact }));
             c.time = seconds;
+            if let Stage::Ready { settle, cursor, .. } = &mut c.stage {
+                if matches!(*settle, Settle::Snapping { .. }) {
+                    *settle = Settle::Still;
+                }
+                *cursor = FrameCursor::OffBoundary;
+            }
             match c.run {
                 Run::Ended => c.run = Run::Paused,
                 Run::Playing { .. } => c.run = Run::Playing { anchor: None },
@@ -270,6 +316,13 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
                         && meta.step_from(shown, frames).is_none()
                     {
                         return Effects::none();
+                    }
+                    // A newer step supersedes an in-flight snap so its stale completion is ignored
+                    // while keeping is_seeking_stage() true until reconcile issues the exact seek.
+                    if let Stage::Ready { settle, .. } = &mut c.stage
+                        && let Settle::Snapping { since, to, .. } = *settle
+                    {
+                        *settle = Settle::Seeking { since, to };
                     }
                     c.pending = Some(Pending::Step(frames));
                 }
@@ -354,6 +407,26 @@ pub(super) fn step(c: &mut Control, event: Event) -> Effects<Effect> {
         }
         Event::Item { item, now } => return item_reports(c, item, now),
         Event::Reconcile { now } => return reconcile(c, now),
+        Event::SnapDone { attempt, finished } => {
+            if !c.failed()
+                && let Stage::Ready { settle, cursor, .. } = &mut c.stage
+                && let Settle::Snapping { attempt: active, since, to, frames } = *settle
+                && active == attempt
+            {
+                *settle = Settle::Seeking { since, to };
+                *cursor = FrameCursor::OffBoundary;
+                return Effects::one(if finished {
+                    Effect::StepBy { frames, fallback: to }
+                } else {
+                    Effect::SeekTo { at: to, exact: true }
+                });
+            }
+        }
+        Event::Stepped => {
+            if let Stage::Ready { cursor, .. } = &mut c.stage {
+                *cursor = FrameCursor::Aligned;
+            }
+        }
         Event::Framed { shown: at } => {
             if let Stage::Ready { shown, settle, .. } = &mut c.stage {
                 *shown = Some(at);
@@ -546,7 +619,7 @@ fn item_reports(c: &mut Control, item: Item, now: Instant) -> Effects<Effect> {
         return Effects::one(Effect::DropPlayer);
     }
     if item == Item::Ready && !c.stage.ready() {
-        c.stage = Stage::Ready { created, muted, volume, output, rate: 0.0, settle: Settle::Still, shown: None };
+        c.stage = Stage::Ready { created, muted, volume, output, rate: 0.0, settle: Settle::Still, shown: None, cursor: FrameCursor::OffBoundary };
         let mut effects = Effects::one(Effect::Orient);
         if !c.opened() {
             effects.push(Effect::ReadFacts);
@@ -579,9 +652,10 @@ fn reconcile(c: &mut Control, now: Instant) -> Effects<Effect> {
         effects.push(Effect::SetOutputDevice);
     }
     let playing = c.playing();
-    if let Stage::Ready { rate, settle, shown, .. } = &mut c.stage {
+    if let Stage::Ready { rate, settle, shown, cursor, .. } = &mut c.stage {
         match c.pending.take() {
             Some(Pending::Seek(seek)) => {
+                *cursor = FrameCursor::OffBoundary;
                 effects.push(Effect::SeekTo { at: seek.at, exact: seek.exact });
                 // A paused seek within the frame on screen brings no new frame to wait for.
                 let same_frame = !playing && c.meta.zip(*shown).is_some_and(|(m, shown)| m.frame_index(shown) == m.frame_index(seek.at));
@@ -590,24 +664,35 @@ fn reconcile(c: &mut Control, now: Instant) -> Effects<Effect> {
             Some(Pending::Step(frames)) => {
                 if *rate != 0.0 {
                     *rate = 0.0;
+                    *cursor = FrameCursor::OffBoundary;
                     effects.push(Effect::SetRate(0.0));
                 }
-                let was_pending = settle.pending();
-                let base = if was_pending { c.time } else { (*shown).or(c.presented).unwrap_or(c.time) };
+                let was_waiting = settle.waiting();
+                let base = if was_waiting { c.time } else { (*shown).or(c.presented).unwrap_or(c.time) };
                 if let Some(meta) = c.meta {
                     if let Some((next, delta)) = meta.step_from(base, frames) {
                         let target = meta.frame_time(next);
                         c.time = target;
-                        if !was_pending && shown.is_some() {
-                            effects.push(Effect::StepBy { frames: delta, fallback: target });
+                        if !was_waiting && shown.is_some() {
+                            if *cursor == FrameCursor::Aligned {
+                                *cursor = FrameCursor::OffBoundary;
+                                effects.push(Effect::StepBy { frames: delta, fallback: target });
+                                settle.seek(target, false, now);
+                            } else {
+                                let attempt = c.snaps.next();
+                                settle.snap(attempt, target, delta, now);
+                                effects.push(Effect::SnapForStep { attempt, frames: delta });
+                            }
                         } else {
+                            *cursor = FrameCursor::OffBoundary;
                             effects.push(Effect::SeekTo { at: target, exact: true });
+                            settle.seek(target, false, now);
                         }
-                        settle.seek(target, false, now);
                     }
                 } else {
                     let target = (base + f64::from(frames) * DEFAULT_FRAME).max(0.0);
                     c.time = target;
+                    *cursor = FrameCursor::OffBoundary;
                     effects.push(Effect::SeekTo { at: target, exact: true });
                     settle.seek(target, false, now);
                 }
@@ -617,6 +702,9 @@ fn reconcile(c: &mut Control, now: Instant) -> Effects<Effect> {
         let want = if playing { c.rate } else { 0.0 };
         if *rate != want {
             *rate = want;
+            if want > 0.0 {
+                *cursor = FrameCursor::OffBoundary;
+            }
             effects.push(Effect::SetRate(want));
         }
     }
@@ -641,9 +729,10 @@ fn follow(c: &mut Control, current: f64, stopped: bool, frame_time: Option<f64>,
     };
     let restart = c.observe(time, at_end);
     let playing = c.playing();
-    let Stage::Ready { rate, settle, .. } = &mut c.stage else { return Effects::none() };
+    let Stage::Ready { rate, settle, cursor, .. } = &mut c.stage else { return Effects::none() };
     if restart {
         *rate = c.rate;
+        *cursor = FrameCursor::OffBoundary;
         settle.seek(0.0, false, now);
         // A loop is news for anything showing play counts or progress from zero.
         c.generation += 1;

@@ -6,6 +6,43 @@ mod motion;
 mod mount;
 mod wakes;
 
+/// Side effects collected across a frame (`open_urls`, `open_paths`, `haptics`) and committed
+/// once at the end of [`RuntimeCore::frame`] so they align with the presented frame.
+#[derive(Default)]
+pub(in crate::runtime) struct EndOfFrameRequests {
+    pub open_urls: Vec<crate::open_url::Link>,
+    pub open_paths: Vec<crate::open_path::PathRequest>,
+    pub haptics: Vec<crate::Haptic>,
+}
+
+impl EndOfFrameRequests {
+    pub(in crate::runtime) fn take_from(tx: &mut Tx) -> Self {
+        Self {
+            open_urls: std::mem::take(&mut tx.open_urls),
+            open_paths: std::mem::take(&mut tx.open_paths),
+            haptics: std::mem::take(&mut tx.haptics),
+        }
+    }
+
+    pub(in crate::runtime) fn extend_from(&mut self, tx: &mut Tx) {
+        self.open_urls.extend(std::mem::take(&mut tx.open_urls));
+        self.open_paths.extend(std::mem::take(&mut tx.open_paths));
+        self.haptics.extend(std::mem::take(&mut tx.haptics));
+    }
+
+    pub(in crate::runtime) fn extend(&mut self, other: Self) {
+        self.open_urls.extend(other.open_urls);
+        self.open_paths.extend(other.open_paths);
+        self.haptics.extend(other.haptics);
+    }
+
+    pub(in crate::runtime) fn restore_into(self, tx: &mut Tx) {
+        tx.open_urls.extend(self.open_urls);
+        tx.open_paths.extend(self.open_paths);
+        tx.haptics.extend(self.haptics);
+    }
+}
+
 impl RuntimeCore {
     /// The last committed frame is out of date: state changed (an update, poll or handler), or
     /// one asked for a scroll or text flight that waits for the next frame.
@@ -123,7 +160,7 @@ impl RuntimeCore {
     /// is ordered in and its first drawable taken. Lands every track, as showing does.
     /// Returns whether it built; the first frame then has nothing left to build.
     pub(crate) fn build_for_show(&mut self, app: &mut dyn AppDriver) -> bool {
-        if !self.host.fit_height || self.commit.commits == 0 || !self.stale() { return false; }
+        if !self.host.content_sizing.fits_any() || self.commit.commits == 0 || !self.stale() { return false; }
         self.settle_all();
         self.hidden_timer_frame(app);
         true
@@ -363,11 +400,9 @@ impl RuntimeCore {
             let split = self.motion.motion_needs_cause() && why & CommitWhy::POLL != 0 && (input || routed);
             if split || (ran || self.commit.dirty || !tx.scroll_to.is_empty()) && routed {
                 if split {
-                    let links = std::mem::take(&mut tx.open_urls);
-                    let paths = std::mem::take(&mut tx.open_paths);
+                    let deferred = EndOfFrameRequests::take_from(&mut tx);
                     self.latch_requests(app, &mut tx);
-                    tx.open_urls = links;
-                    tx.open_paths = paths;
+                    deferred.restore_into(&mut tx);
                 }
                 if ran || self.commit.dirty {
                     self.motion.capture_flights(&self.tree.nodes, &mut self.paint, &mut self.text, self.env.scale, self.viewport, self.t, &mut tx);
@@ -384,7 +419,7 @@ impl RuntimeCore {
                     #[cfg(debug_assertions)]
                     { let check = self.frame.take_live_check(); self.compare_live_check(check); ran_other = false; }
                     self.apply_keeps(app);
-                    self.finish_deferred_field_menu(app, &mut tx, None, None);
+                    self.finish_deferred_field_menu(app, &mut tx, None);
                     ran = false;
                 }
                 if split {
@@ -437,8 +472,7 @@ impl RuntimeCore {
         }
         #[cfg(target_os = "linux")]
         self.note_primary_selection(app);
-        let mut open_urls = std::mem::take(&mut tx.open_urls);
-        let mut open_paths = std::mem::take(&mut tx.open_paths);
+        let mut end_of_frame = EndOfFrameRequests::take_from(&mut tx);
         self.latch_requests(app, &mut tx);
         // A handler asked for a menu: the hover it takes ends in this commit, not a frame later.
         if self.release_pointer_for_popup() {
@@ -451,8 +485,7 @@ impl RuntimeCore {
                 { ran_other |= r && checks == self.frame.live_checks(); }
                 if r { ran = true; why |= if queued.input { CommitWhy::INPUT } else { CommitWhy::DIRTY }; }
             }
-            open_urls.extend(std::mem::take(&mut tx.open_urls));
-            open_paths.extend(std::mem::take(&mut tx.open_paths));
+            end_of_frame.extend_from(&mut tx);
             self.latch_requests(app, &mut tx);
         }
         self.release_files();
@@ -497,15 +530,14 @@ impl RuntimeCore {
             { let check = self.frame.take_live_check(); self.compare_live_check(check); }
             self.apply_keeps(app);
         }
-        self.finish_deferred_field_menu(app, &mut tx, Some(&mut open_urls), Some(&mut open_paths));
+        self.finish_deferred_field_menu(app, &mut tx, Some(&mut end_of_frame));
         #[cfg(debug_assertions)]
         { self.frame.clear_live_check(); }
         let mount_rounds = self.deliver_mounts(
             app,
             &mut tx,
             commits0,
-            &mut open_urls,
-            &mut open_paths,
+            &mut end_of_frame,
             mount::MAX_MOUNT_ROUNDS,
         );
         tx.keep_on_screen.clear();
@@ -532,8 +564,7 @@ impl RuntimeCore {
                 app,
                 &mut tx,
                 commits0,
-                &mut open_urls,
-                &mut open_paths,
+                &mut end_of_frame,
                 mount::MAX_MOUNT_ROUNDS - mount_rounds,
             );
             if late_rounds > 0 {
@@ -586,8 +617,12 @@ impl RuntimeCore {
             self.frame.idle_frame_ends(self.clock, self.animating, clear, self.viewport, self.env.scale, self.paint.srgb_blend(), self.transparent, self.images.copies, &self.instances, opaque, title);
         }
         self.interaction_built();
-        if !open_urls.is_empty() { self.open_urls(open_urls); }
-        if !open_paths.is_empty() { self.open_paths(open_paths); }
+        if !end_of_frame.open_urls.is_empty() { self.open_urls(end_of_frame.open_urls); }
+        if !end_of_frame.open_paths.is_empty() { self.open_paths(end_of_frame.open_paths); }
+        if !end_of_frame.haptics.is_empty() {
+            let now = self.clock;
+            self.host.haptics.push_at(end_of_frame.haptics, now);
+        }
         self.animating
     }
 
@@ -629,11 +664,9 @@ impl RuntimeCore {
     /// input's own commit animate what it changes. `apply` clears the settle latch as this
     /// commit applies it: the settle is spent here, so nothing is deferred or dropped.
     fn settle_before_input(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, why: &mut u16) {
-        let links = std::mem::take(&mut tx.open_urls);
-        let paths = std::mem::take(&mut tx.open_paths);
+        let deferred = EndOfFrameRequests::take_from(tx);
         self.latch_requests(app, tx);
-        tx.open_urls = links;
-        tx.open_paths = paths;
+        deferred.restore_into(tx);
         self.motion.capture_flights(&self.tree.nodes, &mut self.paint, &mut self.text, self.env.scale, self.viewport, self.t, tx);
         tx.settle();
         self.settled |= tx.commit.lands();

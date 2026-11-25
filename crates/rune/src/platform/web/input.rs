@@ -41,6 +41,8 @@ extern "C" {
     fn sync_wheel(handle: &JsValue, used: bool);
     #[wasm_bindgen(js_name = syncCaret)]
     fn sync_caret(handle: &JsValue, x: f32, y: f32, w: f32, h: f32);
+    #[wasm_bindgen(js_name = syncVisualViewport)]
+    fn sync_visual_viewport(handle: &JsValue, top: f32, bottom: f32, layout_height: f32);
     #[wasm_bindgen(js_name = cancelIme)]
     fn cancel_ime(handle: &JsValue);
     #[wasm_bindgen(js_name = syncFamilies)]
@@ -98,6 +100,9 @@ pub(super) struct Bridge {
     scroll_x: Vec<(String, f32, bool)>,
     /// The IME area the page's text field was last put at.
     caret: Option<[f32; 4]>,
+    /// Latest unzoomed visual viewport band `[top, bottom, layout_h]` and last value synced to JS.
+    visual_viewport: Option<[f32; 3]>,
+    visual_viewport_sent: Option<[f32; 3]>,
     /// `Tx::announce`'s calls the page's live regions have said.
     announced: u32,
     /// Explicit state machine scheduling deferred/off-rAF mirror flushes.
@@ -135,7 +140,7 @@ impl Bridge {
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(), is_mac: is_mac(), control_click: false,
             mirror: Default::default(), a11y: Default::default(),
-            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, announced: 0, a11y_seq: Default::default(), a11y_schedule: Default::default(), families: Default::default(), media_keys: false }
+            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, visual_viewport: None, visual_viewport_sent: None, announced: 0, a11y_seq: Default::default(), a11y_schedule: Default::default(), families: Default::default(), media_keys: false }
     }
 
     /// The first frame is on screen: a page swaps its static export for the live mirror.
@@ -180,7 +185,11 @@ impl Running {
         if reset {
             cancel_ime(&self.input.handle);
         }
-        if self.app.rt().web_context(&mut self.input.mirror) || reset {
+        // While a finger is still down, wait for the touch release (`TouchPhase::Ended`, which
+        // calls `sync_input(true)` inside the `touchend` gesture) instead of focusing the hidden
+        // input prematurely from a mid-tap `requestAnimationFrame` outside any user gesture.
+        let defer_touch_sync = !focus && self.app.rt().touching();
+        if !defer_touch_sync && (self.app.rt().web_context(&mut self.input.mirror) || reset) {
             let m = &self.input.mirror;
             sync(&self.input.handle, &m.key, &m.text, m.base, m.anchor, m.focus, m.secure);
         }
@@ -200,6 +209,11 @@ impl Running {
         if self.input.caret != caret {
             self.input.caret = caret;
             if let Some([x, y, w, h]) = self.input.caret { sync_caret(&self.input.handle, x, y, w, h); }
+        }
+        if self.input.visual_viewport != self.input.visual_viewport_sent {
+            self.input.visual_viewport_sent = self.input.visual_viewport;
+            let [top, bottom, layout_h] = self.input.visual_viewport.unwrap_or([0.0; 3]);
+            sync_visual_viewport(&self.input.handle, top, bottom, layout_h);
         }
         let (sans, mono) = rt.font_families();
         if !self.input.document && (self.input.families.0 != sans || self.input.families.1 != mono) {
@@ -362,6 +376,7 @@ impl Running {
         }
         self.full_redraw = true;
         let mut activate = false;
+        let mut a11y_press = false;
         let mut flush_a11y = false;
         // What a person typed, scrolled, hovered, pasted or activated through the page's own
         // elements is live input too: stamp its arrival time (`Tx::input_time`) and `last_input`.
@@ -371,12 +386,36 @@ impl Running {
             Some("viewport") => {
                 let insets = std::array::from_fn(|i| event["insets"][i].as_f64().unwrap_or(0.0).max(0.0) as f32);
                 let h = event["h"].as_f64().unwrap_or(0.0).max(0.0) as f32;
+                let visual = event["visual"].as_array().and_then(|v| {
+                    let (top, bottom, layout_h) = (v.first()?.as_f64()? as f32, v.get(1)?.as_f64()? as f32, v.get(2)?.as_f64()? as f32);
+                    (layout_h > 0.0 && bottom > top).then_some([top, bottom, layout_h])
+                });
+                let visual_y = visual
+                    .filter(|&[top, bottom, layout_h]| top > 1.0 || layout_h - bottom > 1.0)
+                    .map(|[top, bottom, _]| (top, bottom));
+                let visual_moved = self.input.visual_viewport != visual;
+                if visual_moved {
+                    self.input.visual_viewport = visual;
+                    self.app.rt_mut().set_visual_viewport_y(visual_y);
+                }
                 // A phone reports the visual viewport on every scroll frame as its toolbar moves;
-                // when neither the safe area nor the largest viewport moved, there's nothing to do.
+                // skip work unless safe area, largest viewport, or visual keyboard band moved.
                 let moved = LARGE_VIEWPORT.replace(h) != h;
-                if INSETS.replace(insets) == insets && !moved { return false; }
-                if moved { self.resize_surface(window, window.inner_size(), window.scale_factor() as f32); }
-                self.app.rt_mut().invalidate();
+                let insets_moved = INSETS.replace(insets) != insets;
+                if !insets_moved && !moved {
+                    if !visual_moved { return false; }
+                    if self.app.rt().web_has_editable_focus() {
+                        if visual_y.is_some() { self.app.rt_mut().request_caret_follow(); }
+                    } else {
+                        self.input.visual_viewport_sent = visual;
+                        let [top, bottom, layout_h] = visual.unwrap_or([0.0; 3]);
+                        sync_visual_viewport(&self.input.handle, top, bottom, layout_h);
+                        return false;
+                    }
+                } else {
+                    if moved { self.resize_surface(window, window.inner_size(), window.scale_factor() as f32); }
+                    self.app.rt_mut().invalidate();
+                }
             }
             Some("dpr") => {
                 let size = window.inner_size();
@@ -484,6 +523,9 @@ impl Running {
                 if kind == "edit" && self.sync_live_edit() { return true; }
             }
             Some("sync") => self.input.mirror.invalidate(), // Composition's final sync was deferred by the DOM.
+            Some("field_blur") => {
+                if !self.app.rt_mut().web_field_blur(event["key"].as_str().unwrap_or_default()) { return false; }
+            }
             Some("paste") => {
                 let text = match event["text"].take() {
                     serde_json::Value::String(s) => s,
@@ -509,7 +551,11 @@ impl Running {
                 }
             }
             Some("key") => activate = self.app.web_key(event),
-            Some("a11y_press" | "a11y_link") => { let _ = self.app.rt_mut().web_a11y_action(event); flush_a11y = true; }
+            Some("a11y_press" | "a11y_link") => {
+                let _ = self.app.rt_mut().web_a11y_action(event);
+                a11y_press = event["kind"].as_str() == Some("a11y_press");
+                flush_a11y = true;
+            }
             // The page's menu (`showMenu`) was picked from or dismissed.
             Some("menu") => {
                 if self.app.resolve_popup(event["id"].as_str()).is_err() { self.app.resolve_popup(None).ok(); }
@@ -585,6 +631,7 @@ impl Running {
         self.app.frame(0.0);
         self.apply_frame_requests(window);
         self.clipboard.flush_core(self.app.rt_mut());
+        let activate = activate || (a11y_press && self.app.rt().web_has_editable_focus());
         self.sync_input(activate);
         if flush_a11y {
             self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand);

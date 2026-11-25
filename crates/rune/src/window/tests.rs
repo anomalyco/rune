@@ -239,6 +239,33 @@ fn launch_frames_hold_two_drawables_until_the_window_rests() {
     assert_eq!(launch.settle(true, t0), None);
 }
 
+#[test]
+fn a_requested_frame_latency_only_lowers_the_default() {
+    use crate::window::surface::{FRAME_LATENCY, effective_frame_latency, frame_latency};
+
+    // macOS: default 2 (3 drawables); requested values clamp to 1..=2.
+    assert_eq!(effective_frame_latency(None, true, 2), 2);
+    assert_eq!(effective_frame_latency(Some(0), true, 2), 1, "clamps 0 up to 1");
+    assert_eq!(effective_frame_latency(Some(1), true, 2), 1);
+    assert_eq!(effective_frame_latency(Some(2), true, 2), 2);
+    assert_eq!(effective_frame_latency(Some(3), true, 2), 2, "clamps above 2 down to 2");
+    assert_eq!(effective_frame_latency(Some(u32::MAX), true, 2), 2);
+
+    // Linux (default 2) and Windows (default 1): every requested value is ignored.
+    for req in [None, Some(0), Some(1), Some(2), Some(3), Some(u32::MAX)] {
+        assert_eq!(effective_frame_latency(req, false, 2), 2, "Linux ignores frame_latency({req:?})");
+        assert_eq!(effective_frame_latency(req, false, 1), 1, "Windows ignores frame_latency({req:?})");
+    }
+
+    // Host platform matches effective_frame_latency(req, cfg!(target_os = "macos"), FRAME_LATENCY).
+    assert_eq!(frame_latency(None), FRAME_LATENCY);
+    let expected_one = if cfg!(target_os = "macos") { 1 } else { FRAME_LATENCY };
+    assert_eq!(frame_latency(Some(0)), expected_one);
+    assert_eq!(frame_latency(Some(1)), expected_one);
+    assert_eq!(frame_latency(Some(2)), FRAME_LATENCY);
+    assert_eq!(frame_latency(Some(9)), FRAME_LATENCY);
+}
+
 /// The poll's timer on the runtime's logical clock.
 const COMP_PERIOD: Duration = Duration::from_secs(5);
 

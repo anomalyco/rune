@@ -77,6 +77,8 @@ pub(crate) struct TextInputState {
     pub(crate) read_requests: Vec<u64>,
     /// Their callbacks, until the clipboard answers.
     pub(in crate::runtime) clipboard_reads: Vec<(u64, crate::el::ReadFn)>,
+    /// Pending `Tx::copy_image_then` callbacks, until the clipboard worker or browser settles.
+    pub(in crate::runtime) copy_image_callbacks: Vec<(u64, crate::el::CopyImageFn)>,
     /// The plain text and pill ranges of this runtime's last copy that held pills, for web
     /// clipboard pastes where the OS worker does not own the pasteboard.
     pub(in crate::runtime) pill_copy: Option<(zeroize::Zeroizing<String>, Vec<(std::ops::Range<usize>, String)>)>,
@@ -111,6 +113,7 @@ impl TextInputState {
             paste_request: None,
             read_requests: Vec::new(),
             clipboard_reads: Vec::new(),
+            copy_image_callbacks: Vec::new(),
             pill_copy: None,
             next_clipboard_read: 0,
             clear_secret_request: false,
@@ -169,6 +172,12 @@ impl TextInputState {
     pub(in crate::runtime) fn take_clipboard_read(&mut self, id: u64) -> Option<crate::el::ReadFn> {
         let i = self.clipboard_reads.iter().position(|(read, _)| *read == id)?;
         Some(self.clipboard_reads.remove(i).1)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_copy_image_callback(&mut self, id: u64) -> Option<crate::el::CopyImageFn> {
+        let i = self.copy_image_callbacks.iter().position(|(k, _)| *k == id)?;
+        Some(self.copy_image_callbacks.remove(i).1)
     }
 
     #[inline]
@@ -283,8 +292,18 @@ impl RuntimeCore {
                 }
                 let Some(r) = self.caret_rect(&self.tree.nodes, i) else { return };
                 let a = usize::from(!horizontal);
-                let start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
-                let view = f64::from(self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
+                let mut start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
+                let mut end = start + (self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);
+                if !horizontal && let Some((vis_top, vis_bottom)) = self.host.visual_viewport_y {
+                    let zoom = self.host.zoom().max(1e-3);
+                    let clipped_start = start.max(vis_top / zoom);
+                    let clipped_end = end.min(vis_bottom / zoom);
+                    if clipped_end > clipped_start {
+                        start = clipped_start;
+                        end = clipped_end;
+                    }
+                }
+                let view = f64::from(end - start);
                 let (at, len) = (f64::from(r[a] - start), f64::from(r[a + 2]));
                 let margin = f64::from(self.tree.nodes[v].scroll_edges.margin);
                 let delta = scroll_edge::reveal(0.0, at, len, view, margin);
@@ -312,6 +331,21 @@ impl RuntimeCore {
             self.commit_virtual_scroll(app, &Tx::default());
             self.step_scroll(0.0);
         }
+    }
+
+    /// Updates the visible vertical band of the host's visual viewport in window points (or `None`
+    /// when the full layout viewport is visible) so `follow_caret` reveals focused fields above an
+    /// on-screen keyboard without resizing the layout viewport.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn set_visual_viewport_y(&mut self, band: Option<(f32, f32)>) {
+        self.host.visual_viewport_y = band;
+    }
+
+    /// Requests `follow_caret` on the next frame so an already-focused field scrolls into the
+    /// visible band after an on-screen keyboard shrinks the visual viewport.
+    #[cfg(any(target_arch = "wasm32", test))]
+    pub(crate) fn request_caret_follow(&mut self) {
+        self.edit.caret_follow = true;
     }
 
     /// Promotes a pending `El::on_input_key` snapshot into `caret_follow` when the committed tree's

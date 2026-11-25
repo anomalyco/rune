@@ -34,9 +34,11 @@ impl RuntimeCore {
 
     /// Whether the change needs a layout.
     pub(in crate::runtime) fn change_viewport(&mut self, viewport: (f32, f32), scale: f32) -> bool {
-        // A window that fits its content lays out the same at any height: its own resize
-        // mustn't cut short the layout springs it is following.
-        if self.host.fit_height && viewport.0 == self.viewport.0 && scale == self.env.scale {
+        // A window or overlay that fits content on an axis lays out the same when only fitted
+        // axes change: its own resize must not loop relayout or cut short child springs.
+        let fixed_w_same = self.host.content_sizing.fits_width() || viewport.0 == self.viewport.0;
+        let fixed_h_same = self.host.content_sizing.fits_height() || viewport.1 == self.viewport.1;
+        if self.host.content_sizing.fits_any() && fixed_w_same && fixed_h_same && scale == self.env.scale {
             self.viewport = viewport;
             return false;
         }
@@ -59,7 +61,7 @@ impl RuntimeCore {
     /// Losing focus is also `keys_lost`.
     pub(crate) fn window_focus(&mut self, app: &mut dyn AppDriver, focused: bool) {
         // Every focus gain, even one a hide without blur left unreported.
-        if focused { self.kbd.keys_lost = false; }
+        if focused { self.kbd.keys_lost = false; self.kbd.focus_lost_sent = false; }
         if self.host.window_focused != Some(focused) {
             // Refocused, the pointer where it was hovers again; blurred, it waits for a move.
             if focused && self.host.window_focused == Some(false) { self.pointer.hover_paused = false; }
@@ -103,6 +105,7 @@ impl RuntimeCore {
     }
 
     /// The last focus change the window reported was a gain.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn window_has_focus(&self) -> bool { self.host.window_focused == Some(true) }
 
     /// The window gets no more keys: it lost focus or hid, which may never report a blur. The

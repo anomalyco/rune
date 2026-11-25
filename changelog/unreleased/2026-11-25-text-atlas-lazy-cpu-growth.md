@@ -1,0 +1,1 @@
+- Text atlas: `Atlas::data` and secondary `AtlasPage::data` now start at 2048×128 (256 KiB) on the first glyph and grow in power-of-two row steps up to 2048×2048 (4 MiB) as shelves fill, saving ~3.75 MiB per small overlay or window.

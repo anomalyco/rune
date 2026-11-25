@@ -21,13 +21,13 @@ export function gpuSummary(device) {
 // Calls `onError(kind, message)` for each uncaptured error and keeps it out of the browser's own
 // log (`onError` logs what's worth logging), and `onLost(reason, message)` once if the device is
 // lost for any reason but being destroyed.
-export function watchGpu(device, onError, onLost) {
+export function watchGpu(device, onError, onLost, terminal) {
     device.addEventListener('uncapturederror', (event) => {
         event.preventDefault();
         onError(event.error?.constructor?.name ?? 'GPUError', event.error?.message ?? '');
     });
     device.lost.then((info) => {
-        if (info.reason !== 'destroyed') onLost(info.reason ?? 'unknown', info.message ?? '');
+        if (terminal || info.reason !== 'destroyed') onLost(info.reason ?? 'unknown', info.message ?? '');
     });
 }
 
@@ -59,11 +59,11 @@ export function popScopes(device) {
 // Watches `canvas` for WebGL2 context loss and restore. Calls `event.preventDefault()` on loss
 // so the browser can restore the context, and caches the existing context handle once so
 // `webglWatchLost` checks `isContextLost()` without calling `getContext` on every frame.
-export function watchWebglContext(canvas, onLost, onRestored) {
+export function watchWebglContext(canvas, preventDefault, onLost, onRestored) {
     let gl = canvas.getContext('webgl2');
     let lost = !gl || gl.isContextLost();
     const handleLost = (event) => {
-        event.preventDefault();
+        if (preventDefault) event.preventDefault();
         lost = true;
         const detail = event.statusMessage ? `: ${event.statusMessage}` : '';
         onLost(`WebGL2 context lost${detail}`);

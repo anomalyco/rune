@@ -55,6 +55,7 @@ mod native {
         let supported = conn.intern_atom(false, b"_NET_SUPPORTED")?;
         let menu = conn.intern_atom(true, b"_GTK_SHOW_WINDOW_MENU")?;
         let (supported, menu) = (supported.reply()?.atom, menu.reply()?.atom);
+        if menu == 0 { return Ok(None); }
         let atoms = conn.get_property(false, root, supported, AtomEnum::ATOM, 0, 4096)?.reply()?;
         let atoms: Vec<u32> = atoms.value32().map(Iterator::collect).unwrap_or_default();
         Ok(advertised(&atoms, menu).then_some(menu))
@@ -83,6 +84,7 @@ mod native {
                 let (x, y) = match at {
                     At::Window(x, y) => {
                         let to = conn.translate_coordinates(xwindow, root, x.clamp(-32768, 32767) as i16, y.clamp(-32768, 32767) as i16)?.reply()?;
+                        if !to.same_screen { return Ok(None) }
                         (i32::from(to.dst_x), i32::from(to.dst_y))
                     }
                     At::Pointer => {

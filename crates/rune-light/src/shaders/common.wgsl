@@ -37,6 +37,8 @@ const F_EMIT: u32 = 2u;
 const F_RAISED: u32 = 4u;
 // Seen only by the GI tracer's distance (marks where extra emission may be); never a surface.
 const F_HINT: u32 = 8u;
+// Its own pixels show the designed colour, untouched by any light.
+const F_UNLIT: u32 = 16u;
 
 fn flags_of(p: Prim) -> u32 {
     return u32(p.mat.z + 0.5);

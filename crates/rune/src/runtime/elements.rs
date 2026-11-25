@@ -399,7 +399,7 @@ impl RuntimeCore {
                     fill: self.color(n.id, P_FILL, n.vis.fill),
                     border_color: (n.vis.border_width() > 0.0).then(|| self.color(n.id, P_BORDER, n.vis.border())),
                     text_color: paint_tracks::text_color(n)
-                        .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group))),
+                        .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), group_lit(&self.scene, n, self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group)))),
                     text_style: n.text.as_deref().map(|spec| {
                         let family = if secure {
                             self.text.resolved_family(spec.style.family)
@@ -678,7 +678,7 @@ impl RuntimeCore {
                     || (!self.reduced_motion && self.motion.loop_active(id, store.node_time(id)))
             });
         Some(Pose {
-            rotation: self.scene.get(n.id, prop::ROTATION).unwrap_or(n.vis.rotate),
+            rotation: self.scene.presented(n.id).map_or(n.vis.rotate, |p| p.transform.rotate),
             scale: self.paint.inh_scratch.get(i)?.scale,
             shadows,
             moving,

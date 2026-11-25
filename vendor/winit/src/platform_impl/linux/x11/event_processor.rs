@@ -857,6 +857,18 @@ impl EventProcessor {
             || atom == atoms[_XSETTINGS_SETTINGS]
         {
             self.process_dpi_change(&mut callback);
+        } else if atom == atoms[_NET_WM_STATE]
+            || atom == atoms[_NET_WM_ALLOWED_ACTIONS]
+            || atom == atoms[_GTK_EDGE_CONSTRAINTS]
+            || atom == atoms[_NET_FRAME_EXTENTS]
+        {
+            let xwindow = xev.window as xproto::Window;
+            if self.with_window(xwindow, |window| window.mark_wm_state_changed()).is_some() {
+                callback(&self.target, Event::WindowEvent {
+                    window_id: mkwid(xwindow),
+                    event: WindowEvent::RedrawRequested,
+                });
+            }
         }
     }
 

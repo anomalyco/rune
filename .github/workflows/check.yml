@@ -1,0 +1,32 @@
+name: check
+
+# Fast Linux compile check for core crates (rune and rune-kit) on pull requests and pushes to dev.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: check
+          cache-on-failure: true
+      - run: cargo check -p rune -p rune-kit

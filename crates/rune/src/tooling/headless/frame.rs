@@ -206,8 +206,10 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
                 self.state.reblend_offscreen(self.app.rt_mut());
                 true
             }
-            #[cfg(any(test, target_os = "macos"))]
+            #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
             ReacquireReason::NativeMaterials => true,
+            #[cfg(not(target_arch = "wasm32"))]
+            ReacquireReason::ContentResize => true,
         }
     }
 

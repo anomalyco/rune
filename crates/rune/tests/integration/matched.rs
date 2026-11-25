@@ -1,4 +1,4 @@
-use rune::{Color, Cx, El, Env, Runtime, Spring, Transition, col, el, row};
+use rune::{Color, Cx, El, Env, Live, Runtime, ScrollSpec, Spring, Transition, col, el, row};
 
 /// A tile that lives in the left box (40 pt) or, zoomed, in the right box (160 pt).
 fn view(zoomed: &bool, _: &mut Cx<bool>) -> El {
@@ -296,4 +296,376 @@ fn a_flights_content_flies_with_it_without_fading_in() {
             assert!(o > 0.999, "frame {frame}: {key} drawn at {o:.3}");
         }
     }
+}
+
+#[derive(Default)]
+struct OffsetState {
+    step: u8,
+    src_off: Option<[f32; 2]>,
+    dst_off: Option<[f32; 2]>,
+    src_live: Option<Live<[f32; 2]>>,
+    dst_live: Option<Live<[f32; 2]>>,
+    src_scale: Option<f32>,
+    dst_scale: Option<f32>,
+    src_live_scale: Option<Live<f32>>,
+    dst_live_scale: Option<Live<f32>>,
+    src_rot: Option<f32>,
+    dst_rot: Option<f32>,
+    anc_src_off: Option<[f32; 2]>,
+    anc_dst_off: Option<[f32; 2]>,
+}
+
+fn offset_view(s: &OffsetState, _: &mut Cx<OffsetState>) -> El {
+    let mut root = el().key("root").size(400.0, 300.0);
+    if s.step == 0 {
+        let mut a = el().key("a").matched("t").size(40.0, 40.0).fill(Color::WHITE).radius(4.0);
+        if let Some([x, y]) = s.src_off { a = a.offset(x, y); }
+        if let Some(l) = &s.src_live { a = a.live_offset(l); }
+        if let Some(k) = s.src_scale { a = a.scale(k); }
+        if let Some(l) = &s.src_live_scale { a = a.live_scale(l); }
+        if let Some(r) = s.src_rot { a = a.rotate(r); }
+        if let Some([ax, ay]) = s.anc_src_off {
+            root = root.child(el().key("anc-a").size(400.0, 300.0).offset(ax, ay).child(a));
+        } else {
+            root = root.child(a);
+        }
+    } else if s.step == 1 {
+        let mut b = el().key("b").matched("t").size(40.0, 40.0).absolute(200.0, 100.0).fill(Color::WHITE).radius(4.0);
+        if let Some([x, y]) = s.dst_off { b = b.offset(x, y); }
+        if let Some(l) = &s.dst_live { b = b.live_offset(l); }
+        if let Some(k) = s.dst_scale { b = b.scale(k); }
+        if let Some(l) = &s.dst_live_scale { b = b.live_scale(l); }
+        if let Some(r) = s.dst_rot { b = b.rotate(r); }
+        if let Some([ax, ay]) = s.anc_dst_off {
+            root = root.child(el().key("anc-b").size(400.0, 300.0).offset(ax, ay).child(b));
+        } else {
+            root = root.child(b);
+        }
+    } else {
+        let c = el().key("c").matched("t").size(40.0, 40.0).absolute(100.0, 200.0).offset(15.0, -25.0).fill(Color::WHITE).radius(4.0);
+        root = root.child(c);
+    }
+    root
+}
+
+fn settle_offset(rt: &mut Runtime<OffsetState>) {
+    rt.frame(0.0);
+    for _ in 0..30 { rt.frame(1.0 / 120.0); }
+}
+
+fn fly_offset(rt: &mut Runtime<OffsetState>, key: &str) -> ([f32; 4], [f32; 4], f32) {
+    rt.frame(0.001);
+    let first = rt.presented(key).expect(key).0;
+    let mut prev = first;
+    let mut worst_step = 0.0f32;
+    for _ in 0..360 {
+        rt.frame(1.0 / 120.0);
+        let cur = rt.presented(key).expect(key).0;
+        worst_step = worst_step.max(jump(cur, prev));
+        prev = cur;
+    }
+    (first, prev, worst_step)
+}
+
+#[test]
+fn matched_own_offset_source_starts_at_source_presented_rect() {
+    let mut rt = Runtime::new(
+        OffsetState { src_off: Some([30.0, 20.0]), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [30.0, 20.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, worst_step) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.0, "first flight frame dropped source offset: src={src:?}, first={first:?}");
+    assert!(worst_step < 12.0, "continuous flight without jumps: worst_step={worst_step}");
+    assert_eq!(rest, [200.0, 100.0, 40.0, 40.0]);
+}
+
+#[test]
+fn matched_own_offset_target_starts_at_source_and_lands_with_target_offset() {
+    let mut rt = Runtime::new(
+        OffsetState { dst_off: Some([-50.0, 40.0]), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [0.0, 0.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, worst_step) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.0, "first flight frame applied target offset early: src={src:?}, first={first:?}");
+    assert!(worst_step < 12.0, "continuous flight without jumps: worst_step={worst_step}");
+    assert_eq!(rest, [150.0, 140.0, 40.0, 40.0]);
+}
+
+#[test]
+fn matched_own_offset_both_flies_between_presented_rects() {
+    let mut rt = Runtime::new(
+        OffsetState { src_off: Some([30.0, 20.0]), dst_off: Some([-50.0, 40.0]), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [30.0, 20.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, worst_step) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.0, "both offsets: src={src:?}, first={first:?}");
+    assert!(worst_step < 12.0, "continuous flight without jumps: worst_step={worst_step}");
+    assert_eq!(rest, [150.0, 140.0, 40.0, 40.0]);
+}
+
+#[test]
+fn matched_own_live_offset_source_target_and_moving() {
+    // 1. Source live_offset (settled)
+    let src_live = Live::new([30.0, 20.0]);
+    let mut rt = Runtime::new(
+        OffsetState { src_live: Some(src_live.clone()), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [30.0, 20.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, worst_step) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.0, "source live_offset: src={src:?}, first={first:?}");
+    assert!(worst_step < 12.0, "source live_offset continuous: {worst_step}");
+    assert_eq!(rest, [200.0, 100.0, 40.0, 40.0]);
+
+    // 2. Source live_offset moving without commits: uses the last drawn frame's offset.
+    let src_live = Live::new([10.0, 5.0]);
+    let mut rt = Runtime::new(
+        OffsetState { src_live: Some(src_live.clone()), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    src_live.set([45.0, 35.0]);
+    rt.frame(1.0 / 120.0);
+    let drawn = rt.presented("a").unwrap().0;
+    assert_eq!(drawn, [45.0, 35.0, 40.0, 40.0]);
+    // Mutate again without drawing before the switch: the last drawn value ([45, 35]) counts.
+    src_live.set([90.0, 80.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, _) = fly_offset(&mut rt, "b");
+    assert!(jump(first, drawn) < 1.0, "moving live_offset must start from last drawn rect: drawn={drawn:?}, first={first:?}");
+    assert_eq!(rest, [200.0, 100.0, 40.0, 40.0]);
+
+    // 3. Target live_offset (settled and mutated mid-flight)
+    let dst_live = Live::new([-50.0, 40.0]);
+    let mut rt = Runtime::new(
+        OffsetState { dst_live: Some(dst_live.clone()), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [0.0, 0.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    rt.frame(0.001);
+    let first = rt.presented("b").unwrap().0;
+    assert!(jump(first, src) < 1.0, "target live_offset applied early: src={src:?}, first={first:?}");
+    // Step part way, then shift target live_offset mid-flight.
+    for _ in 0..10 { rt.frame(1.0 / 120.0); }
+    dst_live.set([-20.0, 60.0]);
+    for _ in 0..360 { rt.frame(1.0 / 120.0); }
+    assert_eq!(rt.presented("b").unwrap().0, [180.0, 160.0, 40.0, 40.0]);
+
+    // 4. Both live_offset
+    let src_live = Live::new([30.0, 20.0]);
+    let dst_live = Live::new([-50.0, 40.0]);
+    let mut rt = Runtime::new(
+        OffsetState { src_live: Some(src_live), dst_live: Some(dst_live), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [30.0, 20.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, worst_step) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.0, "both live_offset: src={src:?}, first={first:?}");
+    assert!(worst_step < 12.0, "both live_offset continuous: {worst_step}");
+    assert_eq!(rest, [150.0, 140.0, 40.0, 40.0]);
+}
+
+#[test]
+fn matched_ancestor_offset_guard() {
+    let mut rt = Runtime::new(
+        OffsetState { anc_src_off: Some([30.0, 20.0]), anc_dst_off: Some([-50.0, 40.0]), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [30.0, 20.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, worst_step) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.0, "ancestor offsets: src={src:?}, first={first:?}");
+    assert!(worst_step < 12.0, "ancestor offsets continuous: {worst_step}");
+    assert_eq!(rest, [150.0, 140.0, 40.0, 40.0]);
+}
+
+#[test]
+fn matched_own_offset_mid_flight_rematch_continues_from_presented_rect() {
+    let mut rt = Runtime::new(
+        OffsetState { src_off: Some([30.0, 20.0]), dst_off: Some([-50.0, 40.0]), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    rt.update(|s, _| s.step = 1);
+    for _ in 0..15 { rt.frame(1.0 / 120.0); }
+    let mid = rt.presented("b").unwrap().0;
+    assert!(mid[0] > 45.0 && mid[0] < 135.0, "mid-flight before rematch: {mid:?}");
+    rt.update(|s, _| s.step = 2);
+    rt.frame(0.001);
+    let after = rt.presented("c").unwrap().0;
+    assert!(jump(after, mid) < 2.0, "mid-flight rematch jumped: mid={mid:?}, after={after:?}");
+    let mut prev = after;
+    let mut worst = 0.0f32;
+    for _ in 0..360 {
+        rt.frame(1.0 / 120.0);
+        let cur = rt.presented("c").unwrap().0;
+        worst = worst.max(jump(cur, prev));
+        prev = cur;
+    }
+    assert!(worst < 12.0, "continuous after rematch: {worst}");
+    assert_eq!(prev, [115.0, 175.0, 40.0, 40.0]);
+}
+
+#[test]
+fn matched_own_offset_reduced_motion_swaps_at_target_presented_rect() {
+    let mut rt = Runtime::new(
+        OffsetState { src_off: Some([30.0, 20.0]), dst_off: Some([-50.0, 40.0]), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    rt.set_system_reduced_motion(true);
+    settle_offset(&mut rt);
+    assert_eq!(rt.presented("a").unwrap().0, [30.0, 20.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.presented("b").unwrap().0, [150.0, 140.0, 40.0, 40.0]);
+}
+
+#[test]
+fn matched_own_offset_inside_scroll_view() {
+    fn view(switched: &bool, _: &mut Cx<bool>) -> El {
+        let mut inner = col().key("inner").w_full()
+            .child(el().w_full().h(200.0));
+        if !*switched {
+            inner = inner.child(el().key("a").matched("t").size(40.0, 40.0).offset(25.0, 15.0).fill(Color::WHITE));
+        } else {
+            inner = inner.child(el().size(40.0, 40.0));
+        }
+        inner = inner.child(el().w_full().h(400.0));
+        let scroller = col().key("list").size(300.0, 200.0).scroll(ScrollSpec { stick_bottom: false }).child(inner);
+        let mut root = el().key("root").size(400.0, 300.0).child(scroller);
+        if *switched {
+            root = root.child(el().key("b").matched("t").size(40.0, 40.0).absolute(220.0, 80.0).offset(-30.0, 20.0).fill(Color::WHITE));
+        }
+        root
+    }
+    let mut rt = Runtime::new(false, view, (400.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.wheel(150.0, 100.0, -150.0);
+    for _ in 0..30 { rt.frame(1.0 / 60.0); }
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [25.0, 65.0, 40.0, 40.0]);
+    rt.update(|s, _| *s = true);
+    rt.frame(0.001);
+    let first = rt.presented("b").unwrap().0;
+    assert!(jump(first, src) < 1.0, "scrolled source own offset: src={src:?}, first={first:?}");
+    for _ in 0..360 { rt.frame(1.0 / 120.0); }
+    assert_eq!(rt.presented("b").unwrap().0, [190.0, 100.0, 40.0, 40.0]);
+}
+
+#[test]
+fn matched_own_scale_with_and_without_own_offset() {
+    // Source scale(2.0) + offset(30, 20)
+    let mut rt = Runtime::new(
+        OffsetState { src_off: Some([30.0, 20.0]), src_scale: Some(2.0), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    // Center of [30, 20, 40, 40] is (50, 40); scaled 2x -> [10, 0, 80, 80].
+    assert_eq!(src, [10.0, 0.0, 80.0, 80.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, worst) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.5, "source scale+offset: src={src:?}, first={first:?}");
+    assert!(worst < 15.0, "continuous: {worst}");
+    assert_eq!(rest, [200.0, 100.0, 40.0, 40.0]);
+
+    // Target scale(2.0) + offset(-50, 40)
+    let mut rt = Runtime::new(
+        OffsetState { dst_off: Some([-50.0, 40.0]), dst_scale: Some(2.0), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [0.0, 0.0, 40.0, 40.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, worst) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.5, "target scale+offset: src={src:?}, first={first:?}");
+    assert!(worst < 15.0, "continuous: {worst}");
+    // Unscaled target is [150, 140, 40, 40], center (170, 160), scaled 2x -> [130, 120, 80, 80].
+    assert_eq!(rest, [130.0, 120.0, 80.0, 80.0]);
+
+    // Mid-flight rematch when target has own scale(2.0)
+    let mut rt = Runtime::new(
+        OffsetState { dst_scale: Some(2.0), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    rt.update(|s, _| s.step = 1);
+    for _ in 0..15 { rt.frame(1.0 / 120.0); }
+    let mid = rt.presented("b").unwrap().0;
+    rt.update(|s, _| s.step = 2);
+    rt.frame(0.001);
+    let after = rt.presented("c").unwrap().0;
+    assert!(jump(after, mid) < 2.0, "mid-flight rematch of scaled target jumped: mid={mid:?}, after={after:?}");
+}
+
+#[test]
+fn matched_own_live_scale_and_rotated_source_offset() {
+    // Source live_scale(2.0) + live_offset([30, 20])
+    let mut rt = Runtime::new(
+        OffsetState {
+            src_live: Some(Live::new([30.0, 20.0])),
+            src_live_scale: Some(Live::new(2.0)),
+            ..Default::default()
+        },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    assert_eq!(src, [10.0, 0.0, 80.0, 80.0]);
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, _) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.5, "source live_scale+live_offset: src={src:?}, first={first:?}");
+    assert_eq!(rest, [200.0, 100.0, 40.0, 40.0]);
+
+    // Target live_scale(2.0) + live_offset([-50, 40])
+    let mut rt = Runtime::new(
+        OffsetState {
+            dst_live: Some(Live::new([-50.0, 40.0])),
+            dst_live_scale: Some(Live::new(2.0)),
+            ..Default::default()
+        },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, _) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.5, "target live_scale+live_offset: src={src:?}, first={first:?}");
+    assert_eq!(rest, [130.0, 120.0, 80.0, 80.0]);
+
+    // Rotated source with own offset: flight starts at the rotated, offset presented rect.
+    let mut rt = Runtime::new(
+        OffsetState { src_off: Some([30.0, 20.0]), src_rot: Some(0.5), ..Default::default() },
+        offset_view, (400.0, 300.0), Env::new(true, 1.0),
+    );
+    settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
+    rt.update(|s, _| s.step = 1);
+    let (first, rest, _) = fly_offset(&mut rt, "b");
+    assert!(jump(first, src) < 1.0, "rotated source keeps own offset and rotation: src={src:?}, first={first:?}");
+    assert_eq!(rest, [200.0, 100.0, 40.0, 40.0]);
 }

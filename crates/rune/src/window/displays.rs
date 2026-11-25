@@ -91,7 +91,7 @@ fn read(source: &impl Monitors) -> Vec<Display> {
     let wayland_outputs = wayland
         .then(|| source.display_handle().ok())
         .flatten()
-        .map(|display| crate::platform::wayland_output::query(display.as_raw()))
+        .map(|display| crate::platform::wayland::output::query(display.as_raw()))
         .unwrap_or_default();
     let primary = source.primary();
     source.monitors().into_iter().map(|m| {
@@ -100,9 +100,9 @@ fn read(source: &impl Monitors) -> Vec<Display> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let (position, size, scale) = match id.native_id() {
             Some(crate::NativeDisplayId::Wayland(output_id)) => {
-                let resolved = crate::platform::wayland_output::resolve(
+                let resolved = crate::platform::wayland::output::resolve(
                     wayland_outputs.get(&output_id),
-                    crate::platform::wayland_output::ResolvedOutput {
+                    crate::platform::wayland::output::ResolvedOutput {
                         position: fallback.0,
                         size: fallback.1,
                         scale: fallback.2,

@@ -91,19 +91,19 @@ mod flags {
 
         pub fn answer(&mut self, cb: &mut Fake, purpose: Purpose) -> Option<Reply> {
             let mut reply = purpose.answer(cb)?;
-            if let Some(own) = &self.own_pills {
+            if let Reply::Content { content, .. } = &mut reply && let Some(own) = &self.own_pills {
                 let rev_ok = match (own.revision, cb.revision()) {
                     (Some(a), Some(b)) => a == b,
                     (None, None) => true,
                     _ => false,
                 };
-                let html_ok = reply.content.html().is_some_and(|h| {
+                let html_ok = content.html().is_some_and(|h| {
                     let frag = crate::TextEdit::from_html(h);
                     frag.pills().count() == own.pills.len()
                         && frag.pills().zip(&own.pills).all(|((r1, id1), (r2, id2))| r1 == *r2 && id1 == id2)
                 });
-                if rev_ok && self.keys.hash_one(reply.content.text()) == own.text_print && html_ok {
-                    reply.content.own_pills = true;
+                if rev_ok && self.keys.hash_one(content.text()) == own.text_print && html_ok {
+                    content.own_pills = true;
                 }
             }
             Some(reply)
@@ -520,8 +520,9 @@ impl<E: Engine> Rig<E> {
     fn read(&mut self, b: usize) {
         if !self.turn(b) { return; }
         self.reads[b] = self.engines[b].read(&mut self.boards[b]).map(|r| {
-            let own = r.content.has_own_pills();
-            (r.content, own)
+            let Reply::Content { content, .. } = r else { panic!("expected Reply::Content") };
+            let own = content.has_own_pills();
+            (content, own)
         });
     }
 

@@ -475,3 +475,28 @@ fn on_close_request_defaults_to_none_and_keeps_on_close_independent() {
     assert_eq!(resp, crate::CloseResponse::Close);
     assert_eq!(rt.state, 1);
 }
+
+#[test]
+fn on_quit_request_defaults_to_none_and_keeps_on_close_request_and_on_quit_independent() {
+    let default_app = App::new(spec());
+    assert!(default_app.on_quit_request.is_none());
+    assert!(default_app.on_quit.is_none());
+
+    let app = App::new(spec())
+        .on_close_request(|_, _| crate::CloseResponse::Defer)
+        .on_quit_request(|_, _| crate::QuitResponse::Defer)
+        .on_quit_request(|n, _| {
+            *n += 1;
+            crate::QuitResponse::Quit
+        })
+        .on_quit(|n, _| { *n += 10; });
+    assert!(app.on_close_request.is_some());
+    assert!(app.on_quit_request.is_some());
+    assert!(app.on_quit.is_some());
+    let mut rt = Runtime::new(0u32, |_: &u32, _: &mut Cx<u32>| el(), (100.0, 100.0), Env::default());
+    let mut resp = crate::QuitResponse::Defer;
+    let f = app.on_quit_request.unwrap();
+    rt.update(|s, tx| resp = f(s, tx));
+    assert_eq!(resp, crate::QuitResponse::Quit);
+    assert_eq!(rt.state, 1);
+}

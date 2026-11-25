@@ -165,9 +165,34 @@ pub(crate) enum LossAction {
     PauseForRestore,
     /// Show the fatal GPU-lost message and exit the loop.
     Fatal,
+    /// `GpuLossPolicy::Terminal`: keep the page and canvas alive in the DOM, drop the GPU side,
+    /// refuse CPU fallback and WebGL2 restore, publish `window_error`, and wake `poll` once.
+    TerminalLatch,
 }
 
-/// Decides how the web host responds when the GPU device or WebGL2 context is lost.
+/// Whether the `webglcontextlost` listener should call `event.preventDefault()` so the browser
+/// can later fire `webglcontextrestored`.
+pub(crate) const fn webgl_prevent_default(policy: crate::GpuLossPolicy) -> bool {
+    !matches!(policy, crate::GpuLossPolicy::Terminal)
+}
+
+/// Decides how the web host responds when the GPU device or WebGL2 context is lost under
+/// `policy`.
+pub(crate) fn loss_action_for_policy(
+    policy: crate::GpuLossPolicy,
+    is_webgl: bool,
+    gpu_first: bool,
+    embedded: bool,
+    document: bool,
+) -> LossAction {
+    if matches!(policy, crate::GpuLossPolicy::Terminal) {
+        return LossAction::TerminalLatch;
+    }
+    loss_action(is_webgl, gpu_first, embedded, document)
+}
+
+/// Decides how the web host responds when the GPU device or WebGL2 context is lost under the
+/// default `GpuLossPolicy::Recover` policy.
 ///
 /// WebGPU loss preserves the existing policy: permanent CPU fallback on CPU-first pages and
 /// fatal on GPU-first pages. WebGL2 context loss is recoverable when `webglcontextrestored`
@@ -195,6 +220,7 @@ pub(crate) enum WebDrawKind {
     HandingOver { waiting_for_gpu: bool },
     Gpu,
     ContextLost,
+    TerminalFailed,
     Moving,
 }
 
@@ -211,6 +237,7 @@ pub(crate) fn web_frame_gate(
             draw,
             WebDrawKind::HandingOver { waiting_for_gpu: true }
                 | WebDrawKind::ContextLost
+                | WebDrawKind::TerminalFailed
                 | WebDrawKind::Moving
         )
     {

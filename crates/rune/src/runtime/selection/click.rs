@@ -229,6 +229,7 @@ impl RuntimeCore {
             rtl: jn.flow == crate::el::Flow::Rtl,
             window: [x, y],
             screen: self.screen_at(x, y),
+            edge: None,
         };
         self.pointer.hold_press(
             capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), down_at, second, None).on_link(link),

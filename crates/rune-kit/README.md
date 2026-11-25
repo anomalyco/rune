@@ -119,7 +119,9 @@ and `TextField` forward `on_secondary_press` (replacing the default field contex
 chips, skipped when disabled), `on_input_selection` (running before view rebuild whenever runtime
 input moves the caret or selection, skipped when disabled), `on_input_copy` (intercepting
 keyboard and context-menu Copy/Cut, skipped when disabled), and `on_input_paste` (intercepting
-pastes before plain-text insertion, skipped when disabled), as well as `on_submit` and accessible
+pastes before plain-text insertion, skipped when disabled), `on_blur` (when the focused editor
+loses focus to another app, Tab, a click elsewhere or `Tx::focus`, so a form can commit a half-typed
+value; Return stays `on_submit`; skipped when disabled), as well as `on_submit` and accessible
 `description`. They also accept `.decorations(spans)` (or `.spans(spans)`), `.line_fill(fill)` / `.line_fills(fills)`,
 and `.rich_style(style)` for attributed `TextEdit` marks, paragraph blocks, full-width code/quote
 line decorations and per-frame syntax highlights, and `.pill_style(f)` / `.pill_image(f)` /
@@ -460,7 +462,7 @@ draws Markdown tables with the same font, padding and rules.
 Feature `markdown`: `Markdown::new(src).build(&kit)`, or without a kit
 `Markdown::new(src).render(&MarkdownStyle::neutral(dark))`.
 It renders CommonMark plus GFM tables, and is built for streaming: re-render with the longer
-source each time, and earlier blocks stay mounted. `Markdown::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)`
+source each time, and earlier blocks stay mounted. Real-URL links (`http:`, `https:`, `mailto:`) get Rune's default Open Link / Copy Link context menu on right-click and Menu / Shift+F10 (yielding to `Markdown::on_link_secondary` and ancestor `on_secondary_press`; opt out with `Markdown::link_menu(false)`). `Markdown::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)`
 reports the hovered link's destination and hit line box in window points (activating link hover
 tracking even without `on_link` or `on_link_secondary`, and leaving the old block before entering
 the new one across paragraphs; see `rune-markdown--link-hover` in `kit-gallery`).

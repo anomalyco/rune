@@ -25,8 +25,9 @@ pub(in crate::window) mod app;
 pub(in crate::window) mod create;
 pub(in crate::window) mod draw;
 pub(in crate::window) mod events;
+pub(in crate::window) mod gpu_loss;
 pub(in crate::window) mod lifecycle;
-mod render;
+pub(in crate::window) mod render;
 pub(in crate::window) mod shell_requests;
 pub(in crate::window) mod stepping;
 pub(in crate::window) mod window_script;
@@ -66,6 +67,11 @@ pub(in crate::window) struct Host {
     /// Per-window native color scheme (`App::color_scheme`, `Tx::set_color_scheme`,
     /// `WindowHandle::set_color_scheme`), retained across native window recreation.
     pub(in crate::window) color_scheme: crate::ColorScheme,
+    /// Requested whole-window system backdrop (`App::window_backdrop`, `Tx::set_window_backdrop`,
+    /// `WindowHandle::set_window_backdrop`), retained across native window recreation.
+    pub(in crate::window) window_backdrop: crate::WindowBackdrop,
+    /// Optional macOS swap-chain frame latency (`App::frame_latency`).
+    pub(in crate::window) frame_latency: Option<u32>,
     /// Last winit theme applied to the live `self.win`, avoiding redundant `set_theme` calls.
     pub(in crate::window) applied_theme: Option<winit::window::Theme>,
     pub(in crate::window) native_handle: WindowHandle,
@@ -98,6 +104,10 @@ pub(in crate::window) struct Host {
     pub(in crate::window) release_gpu: bool,
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(in crate::window) cpu_first: crate::CpuFirst,
+    #[cfg(target_os = "windows")]
+    pub(in crate::window) resize_sync: crate::ResizeSync,
+    /// Per-window terminal GPU-loss state (`App::gpu_loss_policy`).
+    pub(in crate::window) terminal_loss: gpu_loss::TerminalLoss,
     pub(in crate::window) prewarm_effects: crate::PrewarmEffects,
     pub(in crate::window) open_at_start: bool,
     /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
@@ -215,6 +225,8 @@ struct HostInit {
     windows_window: crate::WindowsWindowOptions,
     exclude_from_capture: Option<bool>,
     color_scheme: crate::ColorScheme,
+    window_backdrop: crate::WindowBackdrop,
+    frame_latency: Option<u32>,
     native_handle: WindowHandle,
     on_created: Option<Box<dyn FnOnce(WindowHandle)>>,
     on_window: Option<crate::app::OnWindow>,
@@ -230,6 +242,10 @@ struct HostInit {
     release_gpu: bool,
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     cpu_first: crate::CpuFirst,
+    #[cfg(target_os = "windows")]
+    resize_sync: crate::ResizeSync,
+    gpu_loss_policy: crate::GpuLossPolicy,
+    gpu_loss_latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>,
     prewarm_effects: crate::PrewarmEffects,
     open_at_start: bool,
     fit_height: bool,
@@ -275,14 +291,20 @@ impl Host {
         let windows_window = std::mem::take(&mut app.windows_window);
         let exclude_from_capture = app.exclude_from_capture;
         let color_scheme = app.color_scheme;
+        let window_backdrop = app.window_backdrop;
+        let frame_latency = app.frame_latency;
+        let gpu_loss_policy = app.gpu_loss_policy;
+        let gpu_loss_latch = app.gpu_loss_latch.take();
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let cpu_first = app.cpu_first;
+        #[cfg(target_os = "windows")]
+        let resize_sync = app.resize_sync;
         let (open, keep_running, release_gpu, prewarm_effects, fit_height, float_on_open) = (
             app.open, app.keep_running, app.release_gpu, app.prewarm_effects, app.fit_content_height, app.float_on_open,
         );
         let (open_inactive, open_as, chrome, titlebar) = (app.open_inactive, app.open_as, app.chrome, app.titlebar);
-        let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
-            app.on_close_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
+        let (on_close_request, on_quit_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
+            app.on_close_request, app.on_quit_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
         );
         let on_geometry = app.on_window_geometry;
         let comp = app.compositor.take();
@@ -302,7 +324,7 @@ impl Host {
         let shared_core = shared.core.clone();
         let geometry = SpecGeometry { title: spec.title, size: spec.size, min_size: spec.min_size };
         let typed = Box::new(TypedWindowApp {
-            rt, shared, comp, on_frame_drawn, on_close_request, on_close, on_rest, on_quit, on_reopen, on_geometry, turn_scope,
+            rt, shared, comp, on_frame_drawn, on_close_request, on_quit_request, on_close, on_rest, on_quit, on_reopen, on_geometry, turn_scope,
             keep_layout, kept_layout: layout_seed,
         });
         Self::from_app(typed, HostInit {
@@ -315,6 +337,8 @@ impl Host {
             windows_window,
             exclude_from_capture,
             color_scheme,
+            window_backdrop,
+            frame_latency,
             native_handle,
             on_created,
             on_window,
@@ -330,6 +354,10 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            #[cfg(target_os = "windows")]
+            resize_sync,
+            gpu_loss_policy,
+            gpu_loss_latch,
             prewarm_effects,
             open_at_start: open,
             fit_height,
@@ -363,6 +391,8 @@ impl Host {
             windows_window,
             exclude_from_capture,
             color_scheme,
+            window_backdrop,
+            frame_latency,
             native_handle,
             on_created,
             on_window,
@@ -378,6 +408,10 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            #[cfg(target_os = "windows")]
+            resize_sync,
+            gpu_loss_policy,
+            gpu_loss_latch,
             prewarm_effects,
             open_at_start,
             fit_height,
@@ -412,7 +446,7 @@ impl Host {
             geometry.min_size = options.fit_min_size(geometry.min_size);
             // Opens at the content's height; the first frame corrects any difference its
             // real scale makes.
-            app.rt_mut().host.fit_height = true;
+            app.rt_mut().host.set_fit_height(true);
             let (min, max) = options.size_limits(geometry.min_size);
             let fitted = crate::window::frame::clamp_size((size.0, app.content_height()), min, max);
             app.rt_mut().set_viewport(fitted, 1.0);
@@ -458,6 +492,8 @@ impl Host {
             rt.host.document_edited.seed(macos_window.document_edited);
         }
         app.set_live_visible(false);
+        let terminal_loss = gpu_loss::TerminalLoss::new(gpu_loss_policy, gpu_loss_latch);
+        terminal_loss.connect_wake(shared.clone(), waker.clone());
         let mut clipboard = crate::clipboard::Client::default();
         clipboard.connect(waker.clone());
         let popup = crate::popup_menu::Presenter::new(waker.clone());
@@ -477,6 +513,8 @@ impl Host {
             windows_window,
             exclude_from_capture,
             color_scheme,
+            window_backdrop,
+            frame_latency,
             applied_theme: None,
             native_handle,
             on_created,
@@ -501,6 +539,9 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            #[cfg(target_os = "windows")]
+            resize_sync,
+            terminal_loss,
             prewarm_effects,
             open_at_start,
             float_on_open,
@@ -573,7 +614,7 @@ impl Host {
         let Some(w) = self.shown_win() else { return };
         if self.wayland && !w.first_frame.notified() { return; }
         let allow_position = self.placement.is_none() && !self.wayland;
-        let track_size = !self.app.rt().host.fit_height;
+        let track_size = !self.app.rt().host.fit_height();
         self.reopen.record_live(
             w.live_state(self.wayland),
             super::state::reopen::use_physical_size(self.wayland),
@@ -587,6 +628,13 @@ impl Host {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(in crate::window) fn effective_cpu_first(&self) -> crate::CpuFirst {
         self.cpu_first.effective()
+    }
+
+    /// Effective Windows drag-resize sync policy for this window, with `RUNE_RESIZE_SYNC` taking
+    /// precedence over `App::resize_sync` / `WindowSpec::resize_sync`.
+    #[cfg(target_os = "windows")]
+    pub(in crate::window) fn resize_sync_enabled(&self) -> bool {
+        self.resize_sync.effective().is_enabled()
     }
 
     /// Publishes what `AppHandle::is_visible` reports.

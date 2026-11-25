@@ -38,6 +38,7 @@ pub(crate) struct A11yMirror {
     built: bool,
     root_dir: Option<&'static str>,
     root_lang: Option<parley::fontique::Language>,
+    focused_path: String,
     json: String,
     patch: patch::PatchState,
     patch_json: String,
@@ -115,6 +116,10 @@ pub(crate) struct A11yItem {
 pub(crate) struct MirrorAria {
     pub multiselectable: bool,
     pub required: bool,
+    pub multiline: bool,
+    pub read_only: bool,
+    pub invalid: bool,
+    pub placeholder: Option<String>,
     pub has_popup: Option<&'static str>,
     pub orientation: Option<&'static str>,
     pub auto_complete: Option<&'static str>,
@@ -337,7 +342,7 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
         if lb > la {
             let label = clean_slice(spec, la, lb);
             if !label.is_empty() {
-                if let Ok(href) = crate::open_url::check_href(&link.id) {
+                if let Ok(href) = crate::open_url::check_href(link.href.as_deref().unwrap_or(&link.id)) {
                     let description = link_description(link.help.as_deref(), &label);
                     out.push(A11yRun {
                         text: label,
@@ -554,7 +559,9 @@ impl RuntimeCore {
                 last_flow_parent = None;
                 continue;
             }
-            if n.is_secure() {
+            // Non-input secure text and secure containers stay completely out of the DOM mirror.
+            // Secure inputs (password fields) are handled below with an always-empty value.
+            if n.is_secure() && n.input.is_none() {
                 i = end;
                 last_flow_parent = None;
                 continue;
@@ -593,10 +600,11 @@ impl RuntimeCore {
 
             let in_control = i < control_end;
             if let Some(inp) = n.input.as_deref() {
+                let secure = n.is_secure();
                 // Mirror editable comboboxes (`text_input(...).role("combobox")`) alongside
                 // non-editable comboboxes so `aria-autocomplete`, `aria-expanded`, `aria-haspopup`,
                 // and `aria-controls` stay readable both closed and while a popup is open.
-                if !in_control && n.role == "combobox" && rect[2] > 0.0 && rect[3] > 0.0 {
+                if !in_control && !secure && n.role == "combobox" && rect[2] > 0.0 && rect[3] > 0.0 {
                     let label = self.mirror_name(i).unwrap_or_else(|| inp.placeholder.clone());
                     let value = self.mirror_value(i).map(str::to_owned).unwrap_or_else(|| inp.edit.text.clone());
                     if !label.is_empty() || !value.is_empty() {
@@ -606,12 +614,33 @@ impl RuntimeCore {
                         item.expanded = n.a11y.expanded;
                         item.text = label;
                         item.description = self.mirror_description(i);
-                        item.disabled = n.a11y.disabled;
+                        item.disabled = self.node_disabled(i);
                         item.busy = busy;
                         item.value = value;
                         item.aria = self.mirror_aria(i);
                         push(&mut out, item);
                     }
+                } else if !in_control && self.focused_index() != Some(i) && rect[2] > 0.0 && rect[3] > 0.0 {
+                    // Mirror unfocused text_input, text_area, and password fields so touch
+                    // exploration, screen-reader form navigation, and getByRole('textbox') find
+                    // them before focus. Omit while focused so the bridge's active <textarea> or
+                    // <input type="password"> is the sole textbox in the tree. Secure fields
+                    // never place their value into the DOM mirror.
+                    let label = self.mirror_name(i).unwrap_or_else(|| inp.placeholder.clone());
+                    let value = if secure {
+                        String::new()
+                    } else {
+                        self.mirror_value(i).map(str::to_owned).unwrap_or_else(|| inp.edit.text.clone())
+                    };
+                    let mut item = A11yItem::new("textbox", &n.path, rect);
+                    item.role = Some(if !secure && n.role == "searchbox" { "searchbox" } else { "textbox" });
+                    item.text = label;
+                    item.description = self.mirror_description(i);
+                    item.disabled = self.node_disabled(i);
+                    item.busy = busy;
+                    item.value = value;
+                    item.aria = self.mirror_aria(i);
+                    push(&mut out, item);
                 }
                 i = end;
                 last_flow_parent = None;
@@ -916,19 +945,34 @@ impl RuntimeCore {
 
     fn mirror_aria(&self, i: usize) -> MirrorAria {
         let n = &self.tree.nodes[i];
+        let secure = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent)
+            .any(|j| self.tree.nodes[j].is_secure());
         let mut aria = MirrorAria::default();
         if let Some(m) = n.a11y.more.as_deref() {
             aria.multiselectable = m.multiselectable;
             aria.required = m.required;
-            aria.has_popup = m.has_popup.map(crate::HasPopup::as_aria);
-            aria.orientation = m.orientation.map(crate::Orientation::as_aria);
-            aria.auto_complete = m.auto_complete.map(crate::AutoComplete::as_aria);
-            aria.controls = self.mirror_related_id(i, m.controls.as_deref());
-            aria.owns = self.mirror_related_id(i, m.owns.as_deref());
+            aria.read_only = m.read_only;
+            aria.invalid = m.invalid;
+            // Password inputs are exposed strictly as secure textboxes, never as comboboxes with
+            // popup/autocomplete/controls relations (matching HTML <input type="password">).
+            if !secure {
+                aria.has_popup = m.has_popup.map(crate::HasPopup::as_aria);
+                aria.orientation = m.orientation.map(crate::Orientation::as_aria);
+                aria.auto_complete = m.auto_complete.map(crate::AutoComplete::as_aria);
+                aria.controls = self.mirror_related_id(i, m.controls.as_deref());
+                aria.owns = self.mirror_related_id(i, m.owns.as_deref());
+            }
             aria.row_count = m.row_count;
             aria.column_count = m.column_count;
             aria.row_index = m.row_index;
             aria.column_index = m.column_index;
+        }
+        if let Some(inp) = n.input.as_deref() {
+            aria.multiline = !inp.single_line && !secure;
+            aria.read_only |= inp.access.is_none() || self.is_node_read_only(i);
+            if !inp.placeholder.is_empty() {
+                aria.placeholder = Some(inp.placeholder.clone());
+            }
         }
         aria
     }
@@ -959,6 +1003,7 @@ impl RuntimeCore {
         let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
         let root_dir = self.web_a11y_root_dir();
         let root_lang = self.web_a11y_root_lang();
+        let focused = self.kbd.focus.path().unwrap_or_default();
         mirror.commits != self.commit.commits
             || mirror.live_text_gen != self.frame.live_text_gen
             || mirror.viewport != vp
@@ -966,6 +1011,7 @@ impl RuntimeCore {
             || mirror.scroll_digest != sd
             || mirror.root_dir != Some(root_dir)
             || mirror.root_lang != root_lang
+            || mirror.focused_path != focused
             || follow
     }
 
@@ -1066,6 +1112,7 @@ impl RuntimeCore {
         let root_lang = self.web_a11y_root_lang();
         mirror.root_dir = Some(root_dir);
         mirror.root_lang = root_lang;
+        mirror.focused_path = self.kbd.focus.path().unwrap_or_default().to_owned();
         mirror.built = true;
         let items = self.web_a11y_items();
         let lang_str = root_lang.map(|l| l.to_string());
@@ -1083,7 +1130,8 @@ impl RuntimeCore {
         // Motion moves drawn boxes without a commit: follow it while it runs, and once more where it stops.
         let moving = self.animating;
         let follow = moving != mirror.moving || (moving && self.clock - mirror.built_at >= MOVING_EVERY);
-        if mirror.commits == self.commit.commits && mirror.live_text_gen == self.frame.live_text_gen && mirror.viewport == vp && mirror.zoom == zoom && mirror.scroll_digest == sd && !follow && !mirror.json.is_empty() {
+        let focused = self.kbd.focus.path().unwrap_or_default();
+        if mirror.commits == self.commit.commits && mirror.live_text_gen == self.frame.live_text_gen && mirror.viewport == vp && mirror.zoom == zoom && mirror.scroll_digest == sd && mirror.focused_path == focused && !follow && !mirror.json.is_empty() {
             return None;
         }
         mirror.moving = moving;
@@ -1094,6 +1142,7 @@ impl RuntimeCore {
         mirror.viewport = vp;
         mirror.zoom = zoom;
         mirror.scroll_digest = sd;
+        mirror.focused_path = focused.to_owned();
         mirror.built = true;
         let values: Vec<Value> = self.web_a11y_items().iter().map(A11yItem::to_json).collect();
         let next = serde_json::to_string(&values).unwrap_or_else(|_| "[]".into());
@@ -1135,18 +1184,24 @@ impl RuntimeCore {
         mirror.focus_at = at;
         // A field naming a highlighted row (`El::active_descendant`, the palette's): the row is
         // what a reader is told about, as the native trees hand it focus.
-        let next = self.focused_index().map(|i| match self.a11y_active_descendant(i) {
-            Some(row) => {
-                let mut item = self.web_focus_item(row);
-                if let Some(o) = item.as_object_mut() {
-                    o.insert("f".into(), json!(self.mirror_name(i).unwrap_or_default()));
-                    if let Some(ac) = self.mirror_aria(i).auto_complete {
-                        o.insert("fac".into(), json!(ac));
+        let next = self.focused_index().map(|i| {
+            // Secure inputs stay on the password focus proxy and never announce suggestion rows.
+            let in_secure = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent)
+                .any(|j| self.tree.nodes[j].is_secure());
+            let active = (!in_secure).then(|| self.a11y_active_descendant(i)).flatten();
+            match active {
+                Some(row) => {
+                    let mut item = self.web_focus_item(row);
+                    if let Some(o) = item.as_object_mut() {
+                        o.insert("f".into(), json!(self.mirror_name(i).unwrap_or_default()));
+                        if let Some(ac) = self.mirror_aria(i).auto_complete {
+                            o.insert("fac".into(), json!(ac));
+                        }
                     }
+                    item.to_string()
                 }
-                item.to_string()
+                None => self.web_focus_item(i).to_string(),
             }
-            None => self.web_focus_item(i).to_string(),
         }).unwrap_or_default();
         if mirror.focus_json == next { return None; }
         mirror.focus_json = next;
@@ -1179,7 +1234,9 @@ impl RuntimeCore {
         let focus_role = role.map_or("group", roles::focus_role);
         let mut o = serde_json::Map::new();
         o.insert("o".into(), json!(focus_role));
-        let name = self.mirror_name(i).unwrap_or_else(|| self.descendant_label(i, self.subtree_end(i)));
+        let name = self.mirror_name(i)
+            .or_else(|| n.input.as_deref().map(|inp| inp.placeholder.clone()).filter(|s| !s.is_empty()))
+            .unwrap_or_else(|| self.descendant_label(i, self.subtree_end(i)));
         o.insert("t".into(), json!(name));
         let description = self.mirror_description(i);
         if !description.is_empty() { o.insert("d".into(), json!(description)); }
@@ -1193,19 +1250,24 @@ impl RuntimeCore {
                 None => {}
             }
         }
+        let in_secure = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent)
+            .any(|j| self.tree.nodes[j].is_secure());
         if let Some(s) = selected { o.insert("s".into(), json!(s)); }
-        if let Some(open) = n.a11y.expanded { o.insert("x".into(), json!(open)); }
+        if !in_secure && let Some(open) = n.a11y.expanded { o.insert("x".into(), json!(open)); }
         if let Some((pos, size)) = n.a11y.more.as_ref().and_then(|m| m.set) { o.insert("n".into(), json!([pos, size])); }
         if let Some(level) = n.a11y.level { o.insert("l".into(), json!(level)); }
         if n.a11y.disabled || n.inert { o.insert("dis".into(), json!(true)); }
         if n.a11y.more.as_deref().is_some_and(|m| m.busy) { o.insert("b".into(), json!(true)); }
-        let in_secure = std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent)
-            .any(|j| self.tree.nodes[j].is_secure());
         if !in_secure && let Some(rg) = finite_range(n) { o.insert("rg".into(), json!(rg)); }
         if let Some(value) = self.mirror_value(i) { o.insert("v".into(), json!(value)); }
         let aria = self.mirror_aria(i);
         if aria.multiselectable { o.insert("ms".into(), json!(true)); }
         if aria.required { o.insert("rq".into(), json!(true)); }
+        if aria.multiline { o.insert("ml".into(), json!(true)); }
+        if aria.read_only { o.insert("ro".into(), json!(true)); }
+        if aria.invalid { o.insert("inv".into(), json!(true)); }
+        if let Some(ph) = aria.placeholder.as_deref() { o.insert("ph".into(), json!(ph)); }
+        if n.input.is_some() && in_secure { o.insert("sec".into(), json!(true)); }
         if let Some(hp) = aria.has_popup { o.insert("hp".into(), json!(hp)); }
         if let Some(or) = aria.orientation { o.insert("or".into(), json!(or)); }
         if let Some(ac) = aria.auto_complete { o.insert("ac".into(), json!(ac)); }
@@ -1240,7 +1302,7 @@ impl RuntimeCore {
         match event["kind"].as_str() {
             Some("a11y_press") => {
                 let Some(i) = self.live(path) else { return false };
-                if self.tree.nodes[i].a11y.disabled || !self.allowed(i) { return false; }
+                if self.node_disabled(i) || !self.allowed(i) { return false; }
                 if self.tree.nodes[i].handlers.on_press.is_some() {
                     self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false, None));
                     true

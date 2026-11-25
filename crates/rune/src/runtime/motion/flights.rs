@@ -370,8 +370,13 @@ impl tracks::MotionState {
                 let dxy = from_parent_inh.map_or([0.0, row], |h| [h.dx - h.cover[0], h.dy - h.cover[1] + row]);
                 let anc_off = super::super::paint::build::pose::ancestor_scene_offset(&tree.nodes, scene, tree.nodes[from_i].parent);
                 let row_h = built.get(&from).and_then(|&k| paint.row_h.get(k)).copied().unwrap_or(-1.0);
-                let p_rect = scene.presented(from).map_or(tree.nodes[from_i].local, |p| p.rect);
-                let delta = super::super::paint::build::pose::flight_rest_delta(scene, &tree.nodes[from_i], p_rect, 1.0, row_h, held, dxy, anc_off);
+                let from_node = &tree.nodes[from_i];
+                let from_p = scene.presented(from);
+                let p_rect = from_p.map_or(from_node.local, |p| p.rect);
+                let from_own_sc = from_p.map_or(1.0, |p| p.transform.scale.x)
+                    * if from_node.scale_track { scene.get(from, P_SCALE).unwrap_or(from_node.static_scale) } else { from_node.static_scale }
+                    * if from_node.handlers.get().is_some_and(|h| h.press_scale.is_some()) { scene.get(from, P_PRESS_SCALE).unwrap_or(1.0) } else { 1.0 };
+                let delta = super::super::paint::build::pose::flight_rest_delta(scene, from_node, p_rect, from_own_sc, row_h, held, dxy, anc_off);
                 let travel = scene.get(from, prop::TRAVEL).unwrap_or(rune_motion::Vec2::new(1.0, 1.0));
                 let travel_vel = scene.store().sample_velocity(from, prop::TRAVEL).unwrap_or(rune_motion::Vec2::ZERO);
                 let k_t = (0.5 * (travel.x + travel.y)).clamp(0.0, 1.0);

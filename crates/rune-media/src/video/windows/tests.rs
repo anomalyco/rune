@@ -705,3 +705,71 @@ fn step_pauses_seeks_to_neighbour_frame_and_clamps_without_seeking_on_windows() 
     assert!(ask.exact);
     assert!((ask.to - 298.0 * FRAME).abs() < 1e-6, "got {}, want {}", ask.to, 298.0 * FRAME);
 }
+#[test]
+fn step_after_exact_seek_in_second_half_moves_from_presented_frame_on_windows() {
+    let rig = rig();
+    let start = rune_core::time::now();
+    rig.stand(Phase::Paused { at: 0.0 }, Some(0.0));
+    rig.player.shared.ctl.lock().unwrap().presented = Some(0.0);
+    let tick = 1.0 / 60_000.0;
+    for (k, offset, delta) in [
+        (0i64, 0.0, 1i32),
+        (0, 0.25 * FRAME, 1),
+        (0, 0.50 * FRAME, 1),
+        (0, 0.75 * FRAME, 1),
+        (0, FRAME - tick, 1),
+        (5, 0.0, 1),
+        (5, 0.25 * FRAME, 1),
+        (5, 0.75 * FRAME, 1),
+        (5, FRAME - tick, 1),
+        (5, 0.0, -1),
+        (5, 0.25 * FRAME, -1),
+        (5, 0.75 * FRAME, -1),
+        (5, FRAME - tick, -1),
+        (299, 0.75 * FRAME, -1),
+        (299, FRAME - tick, -1),
+    ] {
+        let pts = k as f64 * FRAME;
+        let seek_t = pts + offset;
+        rig.player.seek(seek_t);
+        rig.reconcile();
+        rig.decodes(pts);
+        rig.show(start);
+        assert!(!rig.player.is_seeking());
+        assert!((rig.player.presented_time().unwrap() - pts).abs() < 1e-9);
+
+        rig.pipe.lock().seek = None;
+        rig.player.step(delta);
+        rig.reconcile();
+        let ask = rig.asked().0.expect("exact seek issued for step after seek");
+        assert!(ask.exact);
+        let want = (k + i64::from(delta)) as f64 * FRAME;
+        assert!(
+            (ask.to - want).abs() < 1e-9,
+            "frame {k} offset {offset} step({delta:+}): asked {}, want {want}",
+            ask.to
+        );
+    }
+
+    // First and last frame clamps after seeking into their second half.
+    rig.player.seek(0.75 * FRAME);
+    rig.reconcile();
+    rig.decodes(0.0);
+    rig.show(start);
+    rig.pipe.lock().seek = None;
+    rig.player.step(-1);
+    rig.reconcile();
+    assert_eq!(rig.asked().0, None);
+    assert!(!rig.player.is_seeking());
+
+    let last = 299.0 * FRAME;
+    rig.player.seek(last + 0.75 * FRAME);
+    rig.reconcile();
+    rig.decodes(last);
+    rig.show(start);
+    rig.pipe.lock().seek = None;
+    rig.player.step(1);
+    rig.reconcile();
+    assert_eq!(rig.asked().0, None);
+    assert!(!rig.player.is_seeking());
+}
