@@ -30,6 +30,8 @@ pub(in crate::runtime) struct TextSel {
     pub(in crate::runtime) goal_x: Option<f32>,
     /// Visual-line / bidi affinity of the caret-browsing focus byte.
     pub(in crate::runtime) affinity: parley::Affinity,
+    /// Explicit state machine for caret-browsing moves crossing into unmounted virtual rows.
+    pub(in crate::runtime) pending_move: super::caret_browse::pending::State,
 }
 
 impl Default for TextSel {
@@ -43,6 +45,7 @@ impl Default for TextSel {
             edge: Default::default(),
             goal_x: None,
             affinity: parley::Affinity::Downstream,
+            pending_move: super::caret_browse::pending::State::Idle,
         }
     }
 }
