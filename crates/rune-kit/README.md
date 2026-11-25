@@ -119,7 +119,9 @@ and `TextField` forward `on_secondary_press` (replacing the default field contex
 chips, skipped when disabled), `on_input_selection` (running before view rebuild whenever runtime
 input moves the caret or selection, skipped when disabled), `on_input_copy` (intercepting
 keyboard and context-menu Copy/Cut, skipped when disabled), and `on_input_paste` (intercepting
-pastes before plain-text insertion, skipped when disabled), as well as `on_submit` and accessible
+pastes before plain-text insertion, skipped when disabled), `on_blur` (when the focused editor
+loses focus to another app, Tab, a click elsewhere or `Tx::focus`, so a form can commit a half-typed
+value; Return stays `on_submit`; skipped when disabled), as well as `on_submit` and accessible
 `description`. They also accept `.decorations(spans)` (or `.spans(spans)`), `.line_fill(fill)` / `.line_fills(fills)`,
 and `.rich_style(style)` for attributed `TextEdit` marks, paragraph blocks, full-width code/quote
 line decorations and per-frame syntax highlights, and `.pill_style(f)` / `.pill_image(f)` /

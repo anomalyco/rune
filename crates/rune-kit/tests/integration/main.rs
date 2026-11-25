@@ -51,6 +51,7 @@ mod text_area_chrome;
 mod text_area_focus_caret;
 mod text_area_grow;
 mod text_area_keys;
+mod text_input_blur;
 mod text_input_hooks;
 mod text_input_press;
 mod text_input_read_only;

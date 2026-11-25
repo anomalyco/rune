@@ -368,3 +368,30 @@ fn ctrl_shift_direction_chord_requires_windows_rtl_layout_and_disarms_on_other_k
     modifier(&mut rt, Code::ControlLeft, false, ctrl);
     assert_eq!(rt.state.edit.forced_dir(), None, "focus move must disarm a pending chord");
 }
+
+#[test]
+fn on_focus_lost_observes_without_ending_held_modifiers_silently() {
+    #[derive(Default)]
+    struct S { app: Vec<KeyEvent>, lost: usize, physical: usize }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().size(300.0, 200.0)
+            .child(el().key("field").size(100.0, 40.0).focusable(true)
+                .on_physical_input(|s: &mut S, ev, _| { if matches!(ev, PhysicalInput::FocusLost) { s.physical += 1; } false })
+                .on_focus_lost(|s: &mut S, _| s.lost += 1))
+            .child(crate::text(format!("lost {}", s.lost)).key("count"))
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.set_modifier_keys(true);
+    rt.on_key = Some(|s, ev, _| { s.app.push(ev.clone()); true });
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.focus("field", false));
+    rt.frame(0.0);
+    rt.physical_with_fallback(PhysicalInput::Key { key: Code::AltLeft, mods: Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default() }, None);
+    rt.frame(0.0);
+    rt.window_focus(false);
+    rt.frame(0.0);
+    assert_eq!(rt.state.lost, 1);
+    assert_eq!(rt.state.physical, 1, "the physical handler still hears FocusLost");
+    assert_eq!(modifiers(&rt.state.app), [(Modifier::AltLeft, true), (Modifier::AltLeft, false)]);
+    assert!(rt.elements().iter().any(|e| e.text.as_deref() == Some("lost 1")), "the view builds again");
+}

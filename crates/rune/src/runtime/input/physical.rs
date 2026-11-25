@@ -175,8 +175,9 @@ impl RuntimeCore {
         // It changes the field, so the view builds again whatever else is live-only.
         if chord { live = Some(false); }
         let consumed = self.offer_physical(app, &event, tx, &mut live);
+        let observed = matches!(event, PhysicalInput::FocusLost) && self.observe_focus_lost(app, tx, &mut live);
         let modifier = self.modifier_dispatch(app, &event, consumed, tx, &mut live);
-        let ran = consumed || chord || modifier | match fallback {
+        let ran = consumed || observed || chord || modifier | match fallback {
             // A release's logical key, for `on_key_up`.
             Some(Fallback { key, base, .. }) if matches!(event, PhysicalInput::Key { pressed: false, .. }) => {
                 let mut one = Tx { physical_key: code, key_base: base, ..self.transaction(app) };
@@ -228,12 +229,23 @@ impl RuntimeCore {
         merge(tx, one);
         consumed
     }
+    /// The focused element's `on_focus_lost`; true if it ran. It never takes the event.
+    fn observe_focus_lost(&mut self, app: &mut dyn AppDriver, tx: &mut Tx, live: &mut Option<bool>) -> bool {
+        let Some(f) = self.kbd.focus.path().and_then(|p| self.node(p))
+            .and_then(|n| n.focus.focus_lost.clone()) else { return false };
+        let mut one = self.transaction(app);
+        f(app.states(), &mut one);
+        fold_live(live, true, &one);
+        merge(tx, one);
+        true
+    }
     /// Focus moving off an element inside the window: its handler hears `FocusLost`, and
     /// modifier keys stay held.
     pub(in crate::runtime) fn physical_focus_lost(&mut self, app: &mut dyn AppDriver) -> bool {
         self.kbd.disarm_direction_chord();
         let mut tx = Tx::default();
-        let changed = self.offer_physical(app, &PhysicalInput::FocusLost, &mut tx, &mut None);
+        let consumed = self.offer_physical(app, &PhysicalInput::FocusLost, &mut tx, &mut None);
+        let changed = self.observe_focus_lost(app, &mut tx, &mut None) || consumed;
         self.latch_requests(app, &mut tx);
         merge(&mut self.frame.pending, tx);
         changed

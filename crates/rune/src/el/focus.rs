@@ -9,6 +9,8 @@ use crate::states::downcast;
 #[derive(Clone)]
 pub(crate) struct FocusSpec {
     pub physical: Option<crate::input::physical_input::Handler>,
+    /// [`crate::El::on_focus_lost`]: observes `PhysicalInput::FocusLost` without taking it.
+    pub focus_lost: Option<crate::input::physical_input::FocusLostFn>,
     pub enabled: bool,
     /// `focusable(false)`: not a Tab stop even where [`crate::Cx::web_focus`] would make it one.
     pub opt_out: bool,
@@ -74,6 +76,7 @@ pub(crate) struct FocusSpec {
 impl crate::cold::Empty for FocusSpec {
     const EMPTY: &'static Self = &FocusSpec {
         physical: None,
+        focus_lost: None,
         enabled: false,
         opt_out: false,
         disabled: false,
