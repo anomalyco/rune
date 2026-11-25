@@ -117,6 +117,7 @@ atoms! {
     HelpOpen = "helpOpen",
     FadeOut = "fadeOut",
     Dir = "dir",
+    Cursor = "cursor",
     MaxLines = "maxLines",
     Matched = "matched",
     MatchedCrop = "matchedCrop",
@@ -607,8 +608,32 @@ impl Props {
                 };
                 with(e, |e| e.dir(dir));
             }
-            Atom::MaxLines => self.max_lines = Some(non_neg_int(name, v)?),
-            Atom::Matched => {
+            // CSS `cursor`, by its CSS name: the pointer's shape over the node and over what is
+            // inside it that sets none.
+            Atom::Cursor => {
+                let cursor = match string(v)? {
+                    "default" => rune::Cursor::Default,
+                    "pointer" => rune::Cursor::Pointer,
+                    "text" => rune::Cursor::Text,
+                    "grab" => rune::Cursor::Grab,
+                    "grabbing" => rune::Cursor::Grabbing,
+                    "not-allowed" => rune::Cursor::NotAllowed,
+                    "move" => rune::Cursor::Move,
+                    "col-resize" => rune::Cursor::ResizeColumn,
+                    "row-resize" => rune::Cursor::ResizeRow,
+                    "ew-resize" => rune::Cursor::ResizeEw,
+                    "ns-resize" => rune::Cursor::ResizeNs,
+                    "nwse-resize" => rune::Cursor::ResizeNwse,
+                    "nesw-resize" => rune::Cursor::ResizeNesw,
+                    "crosshair" => rune::Cursor::Crosshair,
+                    "cell" => rune::Cursor::Cell,
+                    "zoom-in" => rune::Cursor::ZoomIn,
+                    "zoom-out" => rune::Cursor::ZoomOut,
+                    s => return Err(format!("unknown cursor {s}")),
+                };
+                with(e, |e| e.cursor(cursor));
+            }
+            Atom::MaxLines => self.max_lines = Some(non_neg_int(name, v)?),            Atom::Matched => {
                 let s = string(v)?;
                 if s.is_empty() {
                     return Err("matched must be a non-empty string".into());

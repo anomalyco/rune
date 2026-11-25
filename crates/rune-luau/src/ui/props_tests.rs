@@ -380,3 +380,32 @@ fn new_props_validate_types_and_ranges() {
         assert!(errs.iter().any(|e| e.contains(expected)), "prop `{prop}` should error naming `{expected}`, got {errs:?}");
     }
 }
+
+#[test]
+fn cursor_names_the_pointers_shape_over_a_node_and_rejects_an_unknown_name() {
+    let src = r#"
+local ui = require("@rune/ui")
+return {
+    render = function()
+        return ui.col({ w = 200, h = 120 }, {
+            ui.row({ key = "field", w = 200, h = 40, cursor = "text", onPress = function() end }, { "Field" }),
+            ui.row({ key = "button", w = 200, h = 40, onPress = function() end }, { "Button" }),
+        })
+    end,
+}
+"#;
+    let (mut rt, logged) = render_runtime(src, (300.0, 200.0));
+    assert!(logged.borrow().iter().all(|(l, _)| *l != LogLevel::Error), "{:?}", logged.borrow());
+    let [x, y, w, h] = rect_of(&rt, "field");
+    rt.pointer_move(x + w / 2.0, y + h / 2.0);
+    assert_eq!(rt.cursor(), rune::Cursor::Text, "the node's own cursor");
+    let [x, y, w, h] = rect_of(&rt, "button");
+    rt.pointer_move(x + w / 2.0, y + h / 2.0);
+    assert_eq!(rt.cursor(), rune::Cursor::Default, "a node that names none");
+
+    let errors = render_errors(r#"
+local ui = require("@rune/ui")
+return { render = function() return ui.row({ cursor = "hand" }, { "x" }) end }
+"#);
+    assert!(errors.iter().any(|e| e.contains("unknown cursor hand")), "{errors:?}");
+}
