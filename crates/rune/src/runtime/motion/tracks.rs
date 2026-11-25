@@ -25,6 +25,8 @@ pub(crate) struct MotionState {
     pub(super) flights: Vec<TextFlight>,
     caught_up: f32,
     slack_dt: f32,
+    /// Opt-in wake-rate cap (Hz) when `El::reveal` word fades are the only active animation (`0.0` = display rate).
+    reveal_fps: f32,
     /// Why the last frame was animating, as [`AnimSource`] bits, for traces.
     pub(in crate::runtime) anim_sources: u16,
     loops_active: bool,
@@ -77,6 +79,7 @@ impl MotionState {
             flights: Vec::new(),
             caught_up: 0.0,
             slack_dt: 0.0,
+            reveal_fps: 0.0,
             anim_sources: 0,
             loops_active: false,
             time_scaled: false,
@@ -515,6 +518,26 @@ impl MotionState {
         // A flight that left the tree stays lifted and covered while it exits, so it doesn't pop.
         self.flying.retain(|(id, _)| node_index.contains_key(id));
         self.launches.keep(&self.flying);
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn reveal_fps(&self) -> f32 {
+        self.reveal_fps
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn set_reveal_fps(&mut self, fps: f32) {
+        self.reveal_fps = crate::app::RuntimeConfig::<()>::normalize_reveal_fps(fps);
+    }
+
+    /// Whether any reveal still has fading words on a running clock.
+    #[inline]
+    pub(in crate::runtime) fn has_fading_reveals(&self, scene: &Scene) -> bool {
+        if self.reveals.is_empty() {
+            return false;
+        }
+        let store = scene.store();
+        self.reveals.iter().any(|(id, st)| st.fading() && store.node_time_scale(*id) > 0.0)
     }
 
     /// Advances all reveal phases against `scene`'s node clocks; returns whether any are still fading.

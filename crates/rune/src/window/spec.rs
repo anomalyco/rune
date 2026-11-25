@@ -776,6 +776,18 @@ impl<S: 'static> WindowSpec<S> {
         /// (default [`crate::MAX_NATIVE_MATERIALS`], clamped to 64), like
         /// [`App::max_native_materials`].
         max_native_materials(max: usize);
+        /// Cap the wake rate (Hz) used when `El::reveal` word fades are the only active animation
+        /// in this window (`0.0`, default = full display rate; `30.0` divides 60 Hz and 120 Hz
+        /// displays cleanly), like [`App::reveal_fps`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("chat", AppSpec::new("Chat", (720.0, 540.0), || (), |_, _| el()))
+        ///     .reveal_fps(30.0);
+        /// let _ = spec;
+        /// ```
+        reveal_fps(fps: f32);
         /// Size this window's height to its content, like `App::fit_content_height`.
         fit_content_height();
         /// Ask a tiling window manager to float this window when it opens, like `App::float_on_open`.

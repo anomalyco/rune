@@ -449,6 +449,7 @@ impl RuntimeCore {
         else if self.live_pending() { Some("a live value") }
         else if !self.surfaces.is_empty() { Some("a native surface") }
         else if self.steps_frames() { Some("a poll that steps every frame") }
+        else if self.reveal_fps() > 0.0 && self.time_scale > 0.0 && self.motion.has_fading_reveals(&self.scene) { Some("a reveal") }
         else { None }
     }
 

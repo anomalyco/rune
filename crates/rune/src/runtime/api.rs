@@ -370,6 +370,38 @@ impl<S: 'static> Runtime<S> {
     /// Maximum number of native `El::system_material` views this runtime admits per frame.
     #[inline(always)]
     pub fn max_native_materials(&self) -> usize { self.core().max_native_materials() }
+    /// Cap the wake rate (Hz) used when `El::reveal` word fades are the only active animation
+    /// (`0.0`, default = full display rate; positive finite values clamp to at least `1.0` Hz,
+    /// non-positive or non-finite values normalize to `0.0`).
+    ///
+    /// `30.0` Hz is recommended because it divides both 60 Hz and 120 Hz displays cleanly without
+    /// beat judder (Apple WWDC21 Session 10147), though any positive rate (such as `40.0`) is
+    /// accepted. When any other animation is active alongside a word fade, the fade rides along at
+    /// that animation's full rate.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::default());
+    /// assert_eq!(rt.reveal_fps(), 0.0);
+    /// rt.set_reveal_fps(30.0);
+    /// assert_eq!(rt.reveal_fps(), 30.0);
+    /// rt.set_reveal_fps(0.0);
+    /// assert_eq!(rt.reveal_fps(), 0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_reveal_fps(&mut self, fps: f32) { self.core_mut().set_reveal_fps(fps); }
+    /// Wake-rate cap (Hz) used when `El::reveal` word fades are the only active animation, or
+    /// `0.0` when fades run at full display rate.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::default());
+    /// assert_eq!(rt.reveal_fps(), 0.0);
+    /// ```
+    #[inline(always)]
+    pub fn reveal_fps(&self) -> f32 { self.core().reveal_fps() }
     #[inline(always)]
     pub fn fade_stops(&self) -> [f32; 2] { self.core().fade_stops() }
     #[inline(always)]

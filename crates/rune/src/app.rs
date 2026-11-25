@@ -234,6 +234,29 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Cap the wake rate (Hz) used when `El::reveal` word fades are the only active animation
+    /// (`0.0`, default = full display rate; positive finite values clamp to at least `1.0` Hz,
+    /// non-positive or non-finite values normalize to `0.0`).
+    ///
+    /// `30.0` Hz is recommended because it divides both 60 Hz and 120 Hz displays cleanly without
+    /// beat judder (Apple WWDC21 Session 10147), though any positive rate (such as `40.0`) is
+    /// accepted. When another animation runs alongside a word fade, the fade rides along at that
+    /// animation's full rate; once the fade finishes, the runtime clears its wake and draws
+    /// nothing at rest. Applies across macOS, Windows, Linux, and web.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, text};
+    ///
+    /// let spec = AppSpec::new("Chat", (720.0, 540.0), String::new, |s, _| {
+    ///     text(s.as_str()).wrap().reveal(0.2)
+    /// });
+    /// App::new(spec).reveal_fps(30.0).run();
+    /// ```
+    pub fn reveal_fps(mut self, fps: f32) -> Self {
+        self.runtime.reveal_fps = RuntimeConfig::<S>::normalize_reveal_fps(fps);
+        self
+    }
+
     /// How this app's windows and overlays rasterise and place glyphs (see [`crate::FontSmoothing`]):
     /// `On` by default on macOS and in a Mac's browser, `WindfoilChromium` elsewhere.
     /// `ConfiguredOverlay::font_smoothing` overrides it per overlay, and

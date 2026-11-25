@@ -16,6 +16,7 @@ mod any_press;
 mod emoji_family_story;
 mod mount;
 mod pick;
+mod reveal_fps_story;
 mod scroll_anchor_story;
 mod text_indent_story;
 
@@ -618,9 +619,20 @@ fn focus_card_view(s: &FocusCard, cx: &mut Cx<FocusCard>) -> El {
         )
 }
 
+fn configured_reveal_fps() -> f32 {
+    let extra = rune::extra_args();
+    for pair in extra.windows(2) {
+        if pair[0] == "--reveal-fps" && let Ok(hz) = pair[1].parse::<f32>() {
+            return hz;
+        }
+    }
+    rune::env::var("RUNE_REVEAL_FPS").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0)
+}
+
 fn main() {
     let spec = AppSpec { scenes: SCENES, ..AppSpec::new("Preferences", (640.0, 420.0), init, view) };
     App::new(spec)
+        .reveal_fps(configured_reveal_fps())
         .playground(
             Playground::<Prefs>::new()
                 .page("Lists/Live devices", devices_page)
@@ -722,6 +734,7 @@ fn main() {
                 )
                 .story(text_indent_story::story())
                 .story(emoji_family_story::story())
+                .story(reveal_fps_story::story())
                 .story(
                     Story::new("Text/Runtime font", RuntimeFont::default, runtime_font_view)
                         .trigger('l', "Register font bytes", |s, play| {

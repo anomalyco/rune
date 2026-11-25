@@ -18,6 +18,21 @@ impl RuntimeCore {
             || self.tree.nodes.iter().enumerate().any(|(i, n)| n.looping.is_some() && self.paint.was_seen(i, false) && self.motion.loop_active(n.id, self.scene.store().node_time(n.id)))
     }
 
+    /// Cap the wake rate (Hz) used when `El::reveal` word fades are the only active animation
+    /// (`0.0`, default = full display rate; positive finite values clamp to at least `1.0` Hz,
+    /// non-positive or non-finite values normalize to `0.0`).
+    #[inline]
+    pub fn set_reveal_fps(&mut self, fps: f32) {
+        self.motion.set_reveal_fps(fps);
+    }
+
+    /// Wake-rate cap (Hz) used when `El::reveal` word fades are the only active animation, or
+    /// `0.0` for uncapped display rate.
+    #[inline]
+    pub fn reveal_fps(&self) -> f32 {
+        self.motion.reveal_fps()
+    }
+
     /// Wakes when a delayed start at animation time `at` comes due, on the loops' wake: the
     /// frame then runs at exactly that time, however long the host slept. A hidden window
     /// sleeps through it; showing it settles.
@@ -89,7 +104,10 @@ impl RuntimeCore {
         // A hold draws nothing while it waits: its wake asks for the one frame that ends it.
         let hold_wake = self.step_nudges();
         for stack in self.motion.stacks.values_mut() { stack.grown = 0.0; }
-        animating |= source(self.motion.reveals_active(&self.scene), AnimSource::REVEAL);
+        let reveals = self.motion.reveals_active(&self.scene);
+        if self.reveal_fps() <= 0.0 {
+            animating |= source(reveals, AnimSource::REVEAL);
+        }
         // Values set from `on_scroll_offset` show in the frame that scrolled.
         if self.tell_scroll_offsets(instant_scroll) {
             let took = self.take_live_wake();
@@ -139,6 +157,13 @@ impl RuntimeCore {
             self.check_resting_raster();
         }
         if let Some(at) = waits { self.wake_for_motion(at); }
+        if reveals && self.reveal_fps() > 0.0 {
+            if animating {
+                sources |= AnimSource::REVEAL;
+            } else {
+                self.wake_for_motion(self.t + (1.0 / f64::from(self.reveal_fps())) * f64::from(self.time_scale));
+            }
+        }
         if let Some(at) = self.paint.icon_anim_wake() { self.wake_for_icon_anim(at); }
         // An instant scroll's hold draws nothing until it ends: wake for the one frame that
         // resolves hover then, taken from the state each frame so a re-arm moves it on.
