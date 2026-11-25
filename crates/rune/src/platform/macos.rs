@@ -253,7 +253,7 @@ impl Panel {
         // SAFETY: `mtm` proves main-thread execution; `OverlayPanel` inherits from `NSPanel`, so
         // `initWithContentRect:styleMask:backing:defer:` and the upcast to `NSPanel` are valid.
         let panel = unsafe {
-            let panel: Retained<OverlayPanel> = msg_send![super(mtm.alloc().set_ivars(PanelFlags { keys: options.keys == KeyPolicy::OnDemand, presence: presence.clone(), constrain: ordinary })),
+            let panel: Retained<OverlayPanel> = msg_send![super(mtm.alloc().set_ivars(PanelFlags { keys: options.keys.takes_keys(), presence: presence.clone(), constrain: ordinary })),
                 initWithContentRect: rect,
                 styleMask: style | NSWindowStyleMask::NonactivatingPanel,
                 backing: NSBackingStoreType::Buffered,
@@ -401,7 +401,7 @@ impl Panel {
         if self.presence.get().requested() { OverlaySupport::Requested } else { OverlaySupport::Unknown }
     }
     pub fn request_keys(&self) {
-        if self.options.keys == KeyPolicy::OnDemand {
+        if self.options.keys.takes_keys() {
             self.panel.makeFirstResponder(Some(&self.view));
             self.panel.makeKeyWindow();
         }

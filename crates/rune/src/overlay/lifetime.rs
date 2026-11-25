@@ -300,7 +300,7 @@ impl OverlayCore {
     fn hide_window(&mut self, app: &mut dyn OverlayApp, fade: Duration) {
         // A hide need not report a blur, and a hidden overlay hears none: what it held is
         // released.
-        if self.options.keys == KeyPolicy::OnDemand { app.rt_mut().keys_lost(); }
+        if self.options.keys.takes_keys() { app.rt_mut().keys_lost(); }
         self.mods = Default::default();
         self.control_click = false;
         self.ime.clear();
@@ -311,7 +311,7 @@ impl OverlayCore {
         let Some(live) = self.surface.live() else { return };
         match &live.backing {
             Backing::Window(window) => {
-                if self.options.keys == KeyPolicy::OnDemand {
+                if self.options.keys.takes_keys() {
                     crate::platform::ime::cancel(window);
                     window.set_ime_allowed(false);
                 }

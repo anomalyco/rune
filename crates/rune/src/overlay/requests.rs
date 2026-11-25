@@ -10,6 +10,13 @@ use super::OverlayCore;
 
 pub(super) type Update<T> = Box<dyn FnOnce(&mut T, &mut Tx) -> bool + Send>;
 
+/// `OverlayHandle::request_keys` or `release_keys`; the latest of the two in a turn wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum KeyRequest {
+    Take,
+    Release,
+}
+
 /// A show or a hide, fading the window's alpha over its duration (zero: at once; see
 /// `OverlayHandle::fade_in` and `fade_out` for where windows fade).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,7 +31,8 @@ pub(super) struct Requests {
     pub follow_pointer: Option<bool>,
     pub placement: Option<Option<crate::OverlayPlacement>>,
     pub display: Option<crate::DisplayTarget>,
-    pub request_keys: bool,
+    /// `request_keys` or `release_keys`: the latest wins.
+    pub keys: Option<KeyRequest>,
     /// Move to the display under the pointer now (`OverlayHandle::refollow_pointer`).
     pub refollow: bool,
     /// The latest show or hide wins.

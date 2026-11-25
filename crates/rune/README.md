@@ -3055,6 +3055,13 @@ is one more host on the event loop
   its backend can: the macOS panel becomes key, a layer-shell (v4) surface asks for keyboard
   interactivity, an X11 window sets the input focus itself, and a Windows window is made without
   `WS_EX_NOACTIVATE` and takes the foreground when Windows lets the process. XWayland can't.
+  `KeyPolicy::Exclusive` is the same except on layer-shell (any version), where `request_keys`
+  asks for exclusive interactivity, so the overlay keeps the keys wherever the pointer goes
+  (Hyprland's `follow_mouse` moves on-demand focus away). `OverlayHandle::release_keys` sets a
+  layer's interactivity back to none and blurs the overlay without destroying it; on other
+  backends it does nothing yet. No safety net exists yet: an app whose event loop hangs while an
+  `Exclusive` layer holds the keys leaves the desktop without a keyboard until it exits or is
+  killed.
 - Checked under headless sway (layer shell, and Xwayland for X11) and on macOS (panel level,
   bounds, hide and reshow). Windows builds are checked with `cargo xwin clippy` only.
 - `El::window_drag()` (and `El::no_window_drag()`) moves window-backed overlays (Windows, macOS

@@ -213,6 +213,20 @@ fn overlay_drag_past_the_threshold_with_the_button_down_starts_an_os_drag() {
 }
 
 #[test]
+fn the_latest_of_request_keys_and_release_keys_wins() {
+    let shared = Arc::new(Shared::<u32>::default());
+    let handle = OverlayHandle { shared: shared.clone() };
+    handle.request_keys();
+    handle.release_keys();
+    let q = std::mem::take(&mut *shared.core.requests.lock().unwrap());
+    assert_eq!(q.keys, Some(KeyRequest::Release));
+    handle.release_keys();
+    handle.request_keys();
+    let q = std::mem::take(&mut *shared.core.requests.lock().unwrap());
+    assert_eq!(q.keys, Some(KeyRequest::Take));
+}
+
+#[test]
 fn handle_requests_collapse_and_updates_keep_their_order() {
     let shared = Arc::new(Shared::<u32>::default());
     let handle = OverlayHandle { shared: shared.clone() };
