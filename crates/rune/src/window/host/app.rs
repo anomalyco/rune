@@ -262,6 +262,7 @@ impl<S: 'static> TypedWindowApp<S> {
             comp: None,
             on_frame_drawn,
             on_close_request: None,
+            on_quit_request: None,
             on_close: None,
             on_rest: None,
             on_quit: None,

@@ -1140,15 +1140,7 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   host DirectComposition video layers (video falls back to UI-drawn playback), skips the seamless
   visual commit and NVIDIA G-SYNC premultiplied VRR guard on CPU-to-GPU handover, and Windows
   overlays (`App::overlay`) refuse cleanly because they require DirectComposition.
-  `RUNE_RESIZE_SYNC=1` (Windows, off by default) opts opaque app windows with a Rune-owned
-  DirectComposition `Handover` into a drag-only synchronized resize path between
-  `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` using public APIs only: drag frames render into a
-  D3D12 shared texture synchronized via shared fences into a D3D11 `DXGI_SWAP_EFFECT_DISCARD`
-  copy-model HWND swap chain presented inside `WM_PAINT`, paired with `WM_NCCALCSIZE`
-  `WVR_VALIDRECTS` and `WM_ERASEBKGND` suppression, with zero presents to the hidden D3D12
-  composition swap chain during the drag. Transparent windows, overlays, `DxgiFromHwnd`, and
-  CPU/handover/rebinding windows always keep the normal path; with `RUNE_RESIZE_SYNC` unset or
-  `0`, no D3D11 device, shared texture, or second swap chain is created. After editing
+  After editing
   `clip.wgsl` or `shader.wgsl`, run
   `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac;
   if the MSL, flags or library hash changed, run `scripts/precompile-metal-shaders.sh` (needs
@@ -1185,6 +1177,36 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored on macOS, iOS, headless
   runs, Windows transparent windows (which use WARP on GPU-less Windows), and inline/document web
   pages.
+- **Windows drag-only resize synchronization (`ResizeSync`, `App::resize_sync`,
+  `WindowSpec::resize_sync`).** Controls whether an eligible Windows app window uses Rune's
+  drag-only copy-model path between `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` to keep content in
+  step with left- and top-edge drags using public Microsoft-documented APIs only (drag frames
+  render into a capacited 2-slot D3D12 shared texture ring copied via `CopySubresourceRegion`
+  and shared fences into a D3D11 `DXGI_SWAP_EFFECT_DISCARD` HWND swap chain inside `WM_PAINT`,
+  with `IDCompositionTarget::SetRoot` detaching DirectComposition and `WM_NCCALCSIZE`
+  `WVR_VALIDRECTS` + `WM_ERASEBKGND` suppression, and zero presents to the hidden D3D12
+  composition swap chain during the drag). Defaults to `ResizeSync::Auto`, which resolves to off
+  today so existing apps stay on DirectComposition flip-model presentation with zero D3D11
+  devices, shared textures, or second swap chains created; `Auto` may turn on for eligible
+  Windows windows in a later release once more GPU and OS configurations have been verified.
+  `ResizeSync::On` opts a window in (try it via `cargo run --release -p settings -- --resize-sync`),
+  and `ResizeSync::Off` keeps normal flip-model presentation. `RUNE_RESIZE_SYNC` overrides every
+  window without a rebuild (`1`/`true`/`yes`/`on` => `On`, `0`/`false`/`no`/`off` => `Off` as an
+  unconditional kill switch over `ResizeSync::On`, `auto` => `Auto`; unset, empty, or
+  unrecognized values leave the builder in effect). Cost: zero at launch and on non-drag frames;
+  the capacited 2-slot shared texture ring and copy-model swap chain are freed immediately on
+  `WM_EXITSIZEMOVE`, while the lazily created D3D11 device (~15–40 MiB) stays cached on that
+  window for later drags until device loss or window destruction; per Microsoft Learn (*For best
+  performance, use DXGI flip model*), bitblt (`DXGI_SWAP_EFFECT_DISCARD`) presents can incur an
+  extra cross-adapter copy on hybrid GPU laptops. Limit: per Microsoft Learn (`DXGI_SWAP_EFFECT`,
+  `DXGI_SCALING`, `WM_NCCALCSIZE`, `IDCompositionTarget::SetRoot`), `DXGI_SWAP_EFFECT_DISCARD`
+  requires `DXGI_SCALING_STRETCH` (only flip-model supports `DXGI_SCALING_NONE`), so the HWND
+  swap chain resizes per step and an occasional step that straddles a refresh boundary (~5% on
+  fast 239 Hz drags) can still appear one step out of place; undocumented Windows resize-sync
+  interfaces are declined. Ignored on macOS, Linux, web, iOS, headless runs, overlays,
+  transparent windows (including `WindowBackdrop` and `El::system_material`),
+  `WGPU_DX12_PRESENTATION_SYSTEM=hwnd`, software/WARP adapters, non-8-bit (HDR) surface formats,
+  and CPU-first/handover/rebinding states.
 - **GPU memory policy (`GpuMemoryPolicy`).** By default Rune creates wgpu devices with
   `GpuMemoryPolicy::MemoryUsage` (smaller suballocation blocks than wgpu's `Performance` default).
   Apps can choose `MemoryUsage`, `Performance`, or `Manual { block_size }` at startup via

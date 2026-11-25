@@ -1,0 +1,1 @@
+- Windows: added the opt-in per-window `ResizeSync` (`Auto`, `On`, `Off`) builder on `App::resize_sync` and `WindowSpec::resize_sync` with `RUNE_RESIZE_SYNC` (`1`/`true`/`yes`/`on`, `0`/`false`/`no`/`off` kill switch, `auto`) overriding it per process; `ResizeSync::Auto` resolves to off by default, and `examples/settings` accepts `--resize-sync`.

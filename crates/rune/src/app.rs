@@ -119,6 +119,7 @@ pub struct App<S: 'static> {
     pub(crate) open: bool,
     pub(crate) release_gpu: bool,
     pub(crate) cpu_first: crate::CpuFirst,
+    pub(crate) resize_sync: crate::ResizeSync,
     pub(crate) prewarm_effects: crate::PrewarmEffects,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) accessory: bool,
@@ -202,6 +203,7 @@ impl<S: 'static> App<S> {
             open: true,
             release_gpu: false,
             cpu_first: crate::CpuFirst::Auto,
+            resize_sync: crate::ResizeSync::Auto,
             prewarm_effects: crate::PrewarmEffects::NONE,
             accessory: false,
             standard_menus: false,
@@ -772,6 +774,8 @@ impl<S: 'static> App<S> {
         self.cpu_first = mode;
         self
     }
+
+
 
     /// Names the optional effect GPU pipelines this app's windows and overlays compile in the
     /// background before their first use ([`PrewarmEffects`](crate::PrewarmEffects)): isolated

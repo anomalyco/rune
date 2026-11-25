@@ -62,6 +62,7 @@ mod keys;
 mod panic_trap;
 #[cfg(not(target_arch = "wasm32"))]
 mod pointer_lock;
+mod resize_sync;
 pub mod spec;
 mod state;
 mod surface;
@@ -87,6 +88,7 @@ pub use cpu_first::CpuFirst;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use cpu_first::WebStart;
 pub use handle::WindowHandle;
+pub use resize_sync::ResizeSync;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;
 #[cfg(test)]

@@ -103,6 +103,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) release_gpu: bool,
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(in crate::window) cpu_first: crate::CpuFirst,
+    #[cfg(target_os = "windows")]
+    pub(in crate::window) resize_sync: crate::ResizeSync,
     pub(in crate::window) prewarm_effects: crate::PrewarmEffects,
     pub(in crate::window) open_at_start: bool,
     /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
@@ -237,6 +239,8 @@ struct HostInit {
     release_gpu: bool,
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     cpu_first: crate::CpuFirst,
+    #[cfg(target_os = "windows")]
+    resize_sync: crate::ResizeSync,
     prewarm_effects: crate::PrewarmEffects,
     open_at_start: bool,
     fit_height: bool,
@@ -286,6 +290,8 @@ impl Host {
         let frame_latency = app.frame_latency;
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let cpu_first = app.cpu_first;
+        #[cfg(target_os = "windows")]
+        let resize_sync = app.resize_sync;
         let (open, keep_running, release_gpu, prewarm_effects, fit_height, float_on_open) = (
             app.open, app.keep_running, app.release_gpu, app.prewarm_effects, app.fit_content_height, app.float_on_open,
         );
@@ -341,6 +347,8 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            #[cfg(target_os = "windows")]
+            resize_sync,
             prewarm_effects,
             open_at_start: open,
             fit_height,
@@ -391,6 +399,8 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            #[cfg(target_os = "windows")]
+            resize_sync,
             prewarm_effects,
             open_at_start,
             fit_height,
@@ -516,6 +526,8 @@ impl Host {
             release_gpu,
             #[cfg(any(target_os = "windows", target_os = "linux"))]
             cpu_first,
+            #[cfg(target_os = "windows")]
+            resize_sync,
             prewarm_effects,
             open_at_start,
             float_on_open,
@@ -602,6 +614,13 @@ impl Host {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(in crate::window) fn effective_cpu_first(&self) -> crate::CpuFirst {
         self.cpu_first.effective()
+    }
+
+    /// Effective Windows drag-resize sync policy for this window, with `RUNE_RESIZE_SYNC` taking
+    /// precedence over `App::resize_sync` / `WindowSpec::resize_sync`.
+    #[cfg(target_os = "windows")]
+    pub(in crate::window) fn resize_sync_enabled(&self) -> bool {
+        self.resize_sync.effective().is_enabled()
     }
 
     /// Publishes what `AppHandle::is_visible` reports.
