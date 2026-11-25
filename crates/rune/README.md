@@ -4659,15 +4659,16 @@ Source edits here are relayed to the build Mac as before.
 ### Compatible edits and restart boundaries
 
 The launcher validates Rust syntax, then copies compatible edits into a private compiler
-mirror. It accepts function-body changes in Settings' `main.rs`. Use stable keys to preserve node identity.
+mirror. It accepts function-body changes in Settings' `main.rs`, in free functions and in
+methods of inherent impls (`impl S { ... }`). Use stable keys to preserve node identity.
 
 **Restart needed** is printed before publishing changes to state/type declarations,
-function signatures, imports, constants, const-fn bodies, impl methods, startup code, dependencies,
+function signatures, imports, constants, const-fn bodies, impl headers, trait impl methods, startup code, dependencies,
 assets or framework code. This catches same-size field/type changes too; `size_of`
 alone cannot. Syntax errors stay outside the mirror until fixed. Stop and rerun the
 command after an incompatible change (`--local` and `scripts/rune-hot` rebuild and relaunch
 on their own). State is not migrated across restarts.
-Function attributes other than `doc`, `inline`, `cold` and `allow` also keep the whole
+Function and impl attributes other than `doc`, `inline`, `cold` and `allow` also keep the whole
 body in the restart contract, since attribute macros can generate persistent types.
 
 Keep persistent state in `AppSpec::init`'s returned value. Tip-crate statics and thread
