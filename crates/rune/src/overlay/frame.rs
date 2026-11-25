@@ -307,8 +307,12 @@ pub(super) fn render_frame(app: &mut dyn OverlayApp, f: OverlayRenderArgs<'_>) -
 /// submission) is finished, submitted and presented on the overlay's present thread, so the
 /// event loop's thread spends none of wgpu's encode, submit and present on it. Prewarm frames
 /// present here, before the window is revealed.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu, rt: &RuntimeCore,
-    encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture, prewarm: bool) {
+    encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture, prewarm: bool,
+    on_materials: &mut Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>) {
+    // `ConfiguredOverlay::on_materials` hears the frame's material rects before it presents.
+    crate::system_material::announce(on_materials, rt);
     #[allow(irrefutable_let_patterns)]
     if let Backing::Window(w) = &live.backing {
         w.pre_present_notify();

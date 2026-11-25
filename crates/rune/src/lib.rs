@@ -395,6 +395,8 @@ pub use shortcuts::ShortcutError;
 pub use shortcuts::ShortcutId;
 pub use shortcuts::modifier_keycaps;
 pub use system_material::MAX_NATIVE_MATERIALS;
+pub use system_material::MaterialDraw;
+pub use system_material::MaterialFrame;
 pub use system_material::SystemMaterial;
 pub use taskbar::Taskbar;
 pub use taskbar::TaskbarProgress;
