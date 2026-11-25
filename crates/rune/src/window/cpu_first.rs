@@ -35,8 +35,12 @@
 ///   [`CpuFirst::Off`] are unchanged.
 /// - **Linux**: applies to visible opaque windows that do not already hold a GPU device. Under
 ///   [`CpuFirst::Only`], background GPU handover does not start on idle unless a frame requires a
-///   GPU-only feature; [`CpuFirst::Auto`] keeps background idle handover unchanged. Transparent
-///   windows always open on the GPU.
+///   GPU-only feature. Under [`CpuFirst::Auto`] with `WGPU_ADAPTER_NAME` unset, the background GPU
+///   still starts on idle, but when its adapter is a software one (`wgpu::DeviceType::Cpu`:
+///   lavapipe, llvmpipe) the window stays on `CpuPainter` instead of handing over to it; a frame
+///   that later needs a GPU-only feature hands over to it, keeping the previous frame until the
+///   GPU draws. Hardware GPUs, pinned `WGPU_ADAPTER_NAME` adapters and [`CpuFirst::Off`] are
+///   unchanged. Transparent windows always open on the GPU.
 /// - **Web (`wasm32`)**: applies to full-window apps (`App::web_document` and inline
 ///   `App::canvas_id` pages always start on the GPU). Under [`CpuFirst::Only`], the page stays on
 ///   the 2D CPU canvas and never requests WebGPU or WebGL2.
@@ -56,7 +60,8 @@ pub enum CpuFirst {
     /// the GPU in the background once the first frame is shown (and on full-window web pages, paint
     /// first frames on the 2D canvas until WebGPU/WebGL2 takes over).
     ///
-    /// On Windows machines whose only adapters are software ones (WARP) with `WGPU_ADAPTER_NAME`
+    /// On Windows machines whose only adapters are software ones (WARP), and on Linux when the GPU
+    /// made in the background is a software one (lavapipe, llvmpipe), with `WGPU_ADAPTER_NAME`
     /// unset, stays on `CpuPainter` at idle and hands over lazily on the first frame that needs the
     /// GPU. Opt out with `App::cpu_first(CpuFirst::Off)`, `RUNE_CPU_FIRST=0`, or
     /// `WGPU_ADAPTER_NAME`.

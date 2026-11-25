@@ -1050,7 +1050,10 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   native-surface slots blank, linear blending in sRGB) instead of freezing the window. Frames
   requiring `FontSmoothing::Slug`, Slug outline glyphs, unknown instance kinds, or a mismatched
   target hold the previous frame until the GPU takes over, and frame 1 stays cloaked until drawn.
-  Linux `CpuFirst::Auto` is unchanged. Apps can also choose `CpuFirst::Only` to stay on the CPU
+  On Linux under `CpuFirst::Auto` with `WGPU_ADAPTER_NAME` unset, a window whose background GPU
+  turns out to be a software one (lavapipe, llvmpipe) stays on `CpuPainter` instead of handing
+  over; a frame that later needs a GPU-only feature hands over to it, keeping the previous frame
+  until it does. Apps can also choose `CpuFirst::Only` to stay on the CPU
   renderer on hardware GPUs (until a GPU-only feature is drawn on desktop, or permanently on web) or
   `CpuFirst::Off` to open directly on the GPU (restoring immediate WARP handover on GPU-less
   Windows). `RUNE_CPU_FIRST` (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the
