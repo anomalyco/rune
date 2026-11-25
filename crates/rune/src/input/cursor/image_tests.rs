@@ -155,14 +155,18 @@ fn a_macos_image_cursor_is_sized_in_points() {
     assert_eq!((hot.x, hot.y), (2.0, 19.5), "the hot spot in points, clamped into the 20 pt height");
 }
 
-/// AppKit resolves all four bidirectional/diagonal resize cursors without modifying the live
-/// desktop cursor (never calls `-[NSCursor set]`).
+/// AppKit resolves all bidirectional, diagonal, one-way resize, alias, and copy cursors
+/// without modifying the live desktop cursor (never calls `-[NSCursor set]`).
 #[cfg(target_os = "macos")]
 #[test]
 #[allow(unsafe_code)]
 fn macos_resize_cursors_resolve_distinct_nscursors() {
     use objc2::msg_send;
-    let kinds = [Cursor::ResizeEw, Cursor::ResizeNs, Cursor::ResizeNwse, Cursor::ResizeNesw];
+    let kinds = [
+        Cursor::ResizeEw, Cursor::ResizeNs, Cursor::ResizeNwse, Cursor::ResizeNesw,
+        Cursor::ResizeN, Cursor::ResizeE, Cursor::ResizeS, Cursor::ResizeW,
+        Cursor::Alias, Cursor::Copy,
+    ];
     let resolved: Vec<_> = kinds
         .iter()
         .map(|&cursor| {
@@ -183,7 +187,11 @@ fn macos_resize_cursors_resolve_distinct_nscursors() {
 /// its own size, draws something, and keeps its hot spot; every other shape stays the system's.
 #[test]
 fn the_windows_pictures_decode_with_their_hot_spots() {
-    let pictures = [(Cursor::Cell, [7, 7]), (Cursor::Grab, [13, 13]), (Cursor::Grabbing, [13, 13]), (Cursor::ZoomIn, [6, 6]), (Cursor::ZoomOut, [6, 6])];
+    let pictures = [
+        (Cursor::Alias, [7, 4]), (Cursor::Copy, [7, 4]),
+        (Cursor::Cell, [7, 7]), (Cursor::Grab, [13, 13]), (Cursor::Grabbing, [13, 13]),
+        (Cursor::ZoomIn, [6, 6]), (Cursor::ZoomOut, [6, 6]),
+    ];
     for (cursor, hot) in pictures {
         let image = crate::cursor::windows_image(cursor).unwrap_or_else(|| panic!("{cursor:?} has a picture"));
         // At one pixel a point the doubled bitmap is Chromium's own 32 px one.
@@ -192,7 +200,11 @@ fn the_windows_pictures_decode_with_their_hot_spots() {
         assert!(d.rgba.chunks_exact(4).any(|p| p[3] == 255), "{cursor:?} draws something");
         assert!(d.rgba.chunks_exact(4).all(|p| p[3] == 0 || p[3] == 255), "{cursor:?} keeps its 1-bit edges");
     }
-    for cursor in [Cursor::Default, Cursor::Pointer, Cursor::Text, Cursor::ResizeColumn, Cursor::ResizeRow, Cursor::NotAllowed, Cursor::Move] {
+    for cursor in [
+        Cursor::Default, Cursor::Pointer, Cursor::Text, Cursor::ResizeColumn, Cursor::ResizeRow,
+        Cursor::ResizeN, Cursor::ResizeE, Cursor::ResizeS, Cursor::ResizeW,
+        Cursor::NotAllowed, Cursor::Move,
+    ] {
         assert!(crate::cursor::windows_image(cursor).is_none(), "{cursor:?} is the system's");
     }
 }

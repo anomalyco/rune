@@ -218,7 +218,8 @@ pixels are read, and a failed request or a cross-origin image without CORS heade
 `Image::error`.
 
 System `Cursor` variants map to their CSS `cursor` keywords (including `ew-resize`,
-`ns-resize`, `nwse-resize`, and `nesw-resize`). `Cursor::Image` sets the canvas's CSS
+`ns-resize`, `nwse-resize`, `nesw-resize`, `n-resize`, `e-resize`, `s-resize`,
+`w-resize`, `alias`, and `copy`). `Cursor::Image` sets the canvas's CSS
 `cursor` to the PNG at 2x (`image-set(url(blob:…) 2x)`), so the browser decodes it and draws
 it at its size in points on any display.
 

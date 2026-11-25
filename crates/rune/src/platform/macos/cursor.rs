@@ -140,6 +140,12 @@ pub(crate) fn resolve_ns_cursor(cursor: Cursor) -> Option<Retained<NSObject>> {
             M::ResizeNs => frame_resize(class, FRAME_RESIZE_TOP, &[objc2::sel!(resizeUpDownCursor)]),
             M::ResizeNwse => frame_resize(class, FRAME_RESIZE_TOP_LEFT, &[objc2::sel!(_windowResizeNorthWestSouthEastCursor)]),
             M::ResizeNesw => frame_resize(class, FRAME_RESIZE_TOP_RIGHT, &[objc2::sel!(_windowResizeNorthEastSouthWestCursor)]),
+            M::ResizeN => msg_send![class, resizeUpCursor],
+            M::ResizeE => msg_send![class, resizeRightCursor],
+            M::ResizeS => msg_send![class, resizeDownCursor],
+            M::ResizeW => msg_send![class, resizeLeftCursor],
+            M::Alias => msg_send![class, dragLinkCursor],
+            M::Copy => msg_send![class, dragCopyCursor],
             M::Crosshair => msg_send![class, crosshairCursor],
             // Public from macOS 15; before that only as the private selectors winit uses.
             M::ZoomIn => named(class, &[objc2::sel!(zoomInCursor), objc2::sel!(_zoomInCursor)]),

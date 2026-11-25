@@ -47,6 +47,16 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     ] {
         out = out.child(el().key(name).w(120.0).h(40.0).hit().cursor(cursor));
     }
+    for (name, cursor) in [
+        ("resize-n", Cursor::ResizeN),
+        ("resize-e", Cursor::ResizeE),
+        ("resize-s", Cursor::ResizeS),
+        ("resize-w", Cursor::ResizeW),
+        ("cursor-alias", Cursor::Alias),
+        ("cursor-copy", Cursor::Copy),
+    ] {
+        out = out.child(el().key(name).w(120.0).h(28.0).hit().cursor(cursor));
+    }
     out
 }
 
