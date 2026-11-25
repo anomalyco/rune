@@ -617,6 +617,11 @@ pub enum TitlebarAction {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameStats {
+    /// View commits run since the runtime started. In debug builds, one self-check commit runs a
+    /// quarter second after the last commit on the next event whose handler called
+    /// [`Tx::live_only`](crate::Tx::live_only) unless
+    /// [`Runtime::check_live_only`](crate::Runtime::check_live_only)`(false)` was called (release
+    /// builds never check), so a test counting commits turns the check off.
     pub commits: u64,
     pub layout_nodes: usize,
     pub glyphs: usize,

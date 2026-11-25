@@ -1321,7 +1321,10 @@ Fast apps page (`site/src/FastApps.tsx`); `scripts/app-audit <repo>` greps for t
   still pointer.
 - **Layout handlers that follow a scroll say `Tx::live_only`.** `on_layout` and `on_drawn_layout` report every
   frame of a scroll for an element inside it; their `_tx` forms can say `live_only` when the handler only moves
-  live values or bookkeeping.
+  live values or bookkeeping. In debug builds, one self-check commit still runs a quarter second after the last
+  commit on the next `Tx::live_only` event (such as a kit scroll bar's hover/pointer handlers) to catch stale-view
+  bugs; release builds never check, and a test counting `rt.stats.commits` turns it off with
+  `rt.check_live_only(false)`.
 - **Read `Cx::layout_size` or `Cx::layout`, not `Cx::window_layout`,** unless the view needs where the window
   shows the element; then read `window_layout_with` and only what it decides.
 - **Glide with `Tx::scroll_to_with(key, x, y, spring)`**, on Rune's clock, rather than an instant scroll stepped by a

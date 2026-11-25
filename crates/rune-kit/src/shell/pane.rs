@@ -229,13 +229,18 @@ impl PaneState {
         }
     }
     /// The pointer moved to `at`: a drag that never hears it lost its release, and the pane
-    /// stays where the drag left it.
-    pub(super) fn pointer_grip(&mut self, at: [f32; 2]) {
-        self.grip.pointer(at);
+    /// stays where the drag left it. Returns true when a held grip was released.
+    pub(super) fn pointer_grip(&mut self, at: [f32; 2]) -> bool {
+        self.grip.pointer(at).is_some()
     }
-    /// The window lost focus: a drag whose release didn't come ends where it is.
-    pub(super) fn lose_grip(&mut self) {
-        self.grip.lose();
+    /// The window lost focus: ends any held grip or active peek, returning true if either changed.
+    pub(super) fn blur_clear(&mut self) -> bool {
+        let mut changed = self.grip.lose().is_some();
+        if self.is_peeking() {
+            self.end_peek();
+            changed = true;
+        }
+        changed
     }
 
     fn clamp(&mut self) {
