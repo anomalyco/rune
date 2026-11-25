@@ -3482,11 +3482,25 @@ Rune draws the shadow, so make the window larger than the card and turn the syst
 with `MacWindowOptions::default().shadow(false)`, or the window gets a second, rectangular
 shadow. An outer shadow under a material leaves the material's interior clear.
 
+On Windows 11 Build 22000+, an off-by-default `windows-system-material` Cargo feature backs
+`El::system_material` on transparent DirectComposition hardware-GPU windows and overlays with
+documented `DWMWA_USE_HOSTBACKDROPBRUSH` and `Windows.UI.Composition`
+(`Compositor::CreateHostBackdropBrush`) clipped per frame under Rune's swap-chain visual. While
+the feature is off (the default), no `Windows.UI.Composition` types are compiled in; while on,
+windows without `El::system_material` allocate no compositor or dispatcher queue, and active
+`WindowBackdrop` (`DWMWA_SYSTEMBACKDROP_TYPE`), opaque windows, Windows 10, `DxgiFromHwnd`, CPU
+painter frames, software/WARP adapters, and `RUNE_SYSTEM_MATERIAL=off` draw the fallback fill.
+Diagnostic switches for hardware verification: `RUNE_WIN_MATERIAL_CLIP=geo`
+(`CompositionGeometricClip` instead of `RectangleClip`), `RUNE_WIN_MATERIAL_TINT=subtle`
+(light/dark neutral tint child visual), and `RUNE_WIN_OVERLAY_NO_LAYERED=1` (omit
+`WS_EX_LAYERED` on overlays).
+
 Opaque windows, other platforms and headless renders draw the element's fill instead, or a
 neutral tint when it has none; native views never appear in offscreen output, so goldens stay
 deterministic. `RUNE_SYSTEM_MATERIAL=legacy` forces the pre-26 view, `unsynced` moves the views
 outside the drawable's transaction (for comparison) and `off` draws the fallback.
-`examples/glass-card` flies a card over a test pattern; research note 26 has the measurements.
+`examples/glass-card` flies a card over a test pattern (pass `--overlay` for a springing pill
+inside a transparent non-activating overlay); research note 26 has the measurements.
 
 To match a native AppKit card on top of the material, three more opt-ins:
 

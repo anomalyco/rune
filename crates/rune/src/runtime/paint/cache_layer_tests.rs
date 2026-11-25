@@ -338,3 +338,33 @@ fn a_material_under_a_cache_stays_listed_while_something_else_animates() {
         assert_eq!(*first.get_or_insert_with(|| now.clone()), now);
     });
 }
+
+/// Proves that a resident `El::cache()` subtree without any `El::system_material` still elides
+/// its inner quads while a sibling animates, with zero `PaintKeep` mismatches.
+#[test]
+fn cached_subtree_without_material_elides_inner_quads_unchanged() {
+    fn view(x: &f32, _: &mut Cx<f32>) -> El {
+        crate::el().size(200.0, 120.0)
+            .child(
+                crate::el().key("plain-cache").size(160.0, 80.0).cache()
+                    .child(crate::el().absolute(4.0, 4.0).size(40.0, 30.0).fill(Color::WHITE))
+                    .child(crate::el().absolute(52.0, 4.0).size(40.0, 30.0).fill(Color::WHITE))
+                    .child(crate::el().absolute(100.0, 4.0).size(40.0, 30.0).fill(Color::WHITE)),
+            )
+            .child(crate::el().key("mover").absolute(*x, 90.0).size(10.0, 10.0).fill(Color::WHITE))
+    }
+    let mut rt = Runtime::new(0.0_f32, view, (200.0, 120.0), Env { scale: 1.0, system_dark: true });
+    rt.frame(0.0);
+    let cache_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("plain-cache")).unwrap().id;
+    let first_instances = rt.instances.len();
+    assert!(first_instances >= 5, "initial frame paints cached children + layer markers: {first_instances}");
+    let sig = rt.paint.node_caches.get(&cache_id).expect("plain subtree must cache").signature;
+    rt.text.atlas.resident_caches.insert(cache_id.0, sig);
+
+    rt.update(|x, tx| { *x = 120.0; tx.motion(crate::Spring::new(0.3, 0.0)); });
+    rt.frame(1.0 / 60.0);
+    assert!(rt.animating);
+    assert!(rt.system_materials().is_empty());
+    assert!(rt.instances.len() < first_instances, "resident plain cache must elide inner children ({} vs {})", rt.instances.len(), first_instances);
+    assert_eq!(rt.paint_keep_mismatches(), 0);
+}

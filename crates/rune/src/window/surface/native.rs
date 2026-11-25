@@ -107,6 +107,10 @@ pub(in crate::window) struct Native {
     pub(in crate::window) poll_pace: crate::window::win32::poll_pace::PollPace,
     /// What its last frames changed, so the next redraws only that (`damage`).
     pub(in crate::window) damage: crate::window::win32::damage::Damage,
+    /// Opt-in Windows 11 `El::system_material` visuals behind the swap chain. Declared before
+    /// `mode` so `DesktopWindowTarget` closes before `Handover` drops.
+    #[cfg(feature = "windows-system-material")]
+    pub(in crate::window) materials: crate::system_material::windows::Materials,
     /// Whether the CPU renderer or the GPU draws its frames (`cpu_frame`).
     pub(in crate::window) mode: crate::window::win32::handover::SurfaceMode,
     /// Whether its accessibility adapter waits for the first frame (`Host::a11y_after_frame`).

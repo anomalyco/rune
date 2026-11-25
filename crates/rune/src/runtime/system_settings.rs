@@ -242,6 +242,13 @@ impl RuntimeCore {
         if self.host.set_full_screen(full_screen) { self.commit.dirty = true; }
     }
 
+    /// What [`Cx::window_backdrop`] currently reports.
+    #[cfg_attr(not(all(target_os = "windows", feature = "windows-system-material")), allow(dead_code))]
+    #[inline]
+    pub(crate) fn window_backdrop(&self) -> crate::WindowBackdrop {
+        self.host.window_backdrop
+    }
+
     /// What [`Cx::window_backdrop`] reports. Native hosts set it only after the OS confirms the
     /// backdrop is active; a change re-runs the view and its memos.
     #[inline]

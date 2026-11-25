@@ -158,6 +158,16 @@ impl OverlayCore {
         });
         #[cfg(target_os = "macos")]
         let moved = self.panel.as_ref().map(|p| p.raw_handles());
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        let handover = match &backing {
+            Backing::Window(w) if matches!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual) => {
+                crate::platform::win32::hwnd(w)
+                    .and_then(|hwnd| crate::platform::win32::dcomp_handover::Handover::new(hwnd as isize).ok())
+            }
+            _ => None,
+        };
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        let dcomp_visual = handover.as_ref().map(|h| h.visual());
         let make = |instance: &wgpu::Instance| -> Option<wgpu::Surface<'static>> {
             match &backing {
                 Backing::Window(w) => {
@@ -170,6 +180,14 @@ impl OverlayCore {
                                 raw_display_handle: Some(display),
                                 raw_window_handle: window,
                             })
+                        }
+                        .ok();
+                    }
+                    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                    if let Some(visual) = dcomp_visual {
+                        // SAFETY: `handover` lives in `Live` and drops strictly after `surface`.
+                        return unsafe {
+                            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(visual))
                         }
                         .ok();
                     }
@@ -372,6 +390,10 @@ impl OverlayCore {
             }
             _ => None,
         };
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        if let Some(h) = &handover && let Err(error) = h.commit() {
+            eprintln!("rune: overlay {} DirectComposition commit failed: {error}", self.name);
+        }
         Some(Live {
             #[cfg(target_os = "macos")]
             pacing,
@@ -383,6 +405,10 @@ impl OverlayCore {
             media_keys,
             #[cfg(target_os = "macos")]
             present: None,
+            #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+            materials: crate::system_material::windows::Materials::new(),
+            #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+            handover,
             // A new swap chain holds none of ours, and its waitable object is its own.
             #[cfg(target_os = "windows")]
             slot: Slot::default(),
@@ -452,6 +478,8 @@ impl OverlayCore {
         self.drain_tokens_none();
         self.hide(app);
         self.release();
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        app.rt_mut().paint.set_native_materials(false);
         self.fail(app, reason);
     }
 
@@ -465,19 +493,29 @@ impl OverlayCore {
                 // The present worker joins, and the display link stops, before the surface goes.
                 #[cfg(target_os = "macos")]
                 { live.present.take(); live.pacing.take(); }
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                live.materials.teardown(live.handover.as_mut());
                 // The wait for the swap chain's room is unregistered before the surface drops.
                 #[cfg(target_os = "windows")]
                 live.slot.reset();
                 let Live {
                     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                     wayland_backdrop,
+                    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                    materials,
+                    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                    handover,
                     alpha, surface, backing, ..
                 } = live;
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                drop(materials);
                 // Destroy per-surface Wayland blur proxy strictly before `backing`'s `wl_surface`.
                 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                 drop(wayland_backdrop);
                 drop(alpha);
                 drop(surface);
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                drop(handover);
                 Some(backing)
             }
             Some(SurfaceEffect::Parked(backing)) => Some(backing),

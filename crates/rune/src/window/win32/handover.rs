@@ -230,6 +230,14 @@ impl SurfaceMode {
         }
     }
 
+    #[cfg(feature = "windows-system-material")]
+    pub(in crate::window) fn handover_mut(&mut self) -> Option<&mut Handover> {
+        match self {
+            SurfaceMode::Handed { handover } | SurfaceMode::Rebinding { handover } => Some(handover),
+            SurfaceMode::Gpu | SurfaceMode::Cpu { .. } | SurfaceMode::HandingOver { .. } => None,
+        }
+    }
+
     /// A new swap chain went on the handed-over window's visual (`Host::reattach`).
     pub(in crate::window) fn rebind(&mut self) {
         if let SurfaceMode::Handed { .. } = self {

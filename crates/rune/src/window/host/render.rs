@@ -387,8 +387,21 @@ pub(super) fn submit_and_present_window(
         let rects: Vec<_> = rects.iter().map(|&[left, top, right, bottom]| windows::Win32::Foundation::RECT { left, top, right, bottom }).collect();
         hal.set_present_rects(&rects);
     }
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    let materials_ok = {
+        let rt = host.app.rt();
+        let (draws, _) = crate::system_material::present_draws(rt);
+        let dark = rt.env.system_dark;
+        let native = &mut l.native;
+        native.materials.sync_before_present(draws, dark, native.mode.handover_mut())
+    };
     #[cfg(not(target_os = "macos"))]
     gpu.queue.present(prepared.frame);
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    if !materials_ok {
+        host.app.rt_mut().paint.set_native_materials(false);
+        l.request_redraw();
+    }
     // A window that opened on the CPU is the GPU's from this frame (`linux::handover`).
     #[cfg(target_os = "linux")]
     crate::window::linux::handover::handed(l, gpu, readback);

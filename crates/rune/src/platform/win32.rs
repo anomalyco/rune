@@ -499,6 +499,8 @@ impl OverlayWindow {
     #[allow(unsafe_code)]
     pub fn fade(&self, alpha: u8) {
         if !self.input.fading.replace(true) { self.observe_current(); }
+        #[cfg(feature = "windows-system-material")]
+        if crate::system_material::windows::overlay_no_layered() { return; }
         // SAFETY: a Win32 call on a live layered window owned by this thread.
         unsafe { SetLayeredWindowAttributes(self.input.hwnd, 0, alpha, LWA_ALPHA); }
     }
@@ -539,12 +541,17 @@ impl Drop for OverlayWindow {
 fn overlay_styles(hwnd: HWND, mode: OverlayInput, keys: crate::KeyPolicy) -> Result<(), String> {
     let through = if mode == OverlayInput::All { 0 } else { WS_EX_TRANSPARENT };
     let no_activate = if crate::overlay::keys::can_take_keys(keys) { 0 } else { WS_EX_NOACTIVATE };
+    #[cfg(feature = "windows-system-material")]
+    let skip_layered = crate::system_material::windows::overlay_no_layered();
+    #[cfg(not(feature = "windows-system-material"))]
+    let skip_layered = false;
     // SAFETY: style changes on a live window owned by this thread.
     unsafe {
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        let next = style | WS_EX_LAYERED | no_activate | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
+        let base = if skip_layered { style & !WS_EX_LAYERED } else { style | WS_EX_LAYERED };
+        let next = base | no_activate | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | through;
         if next != style { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next as isize); }
-        if SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) == 0 {
+        if !skip_layered && SetLayeredWindowAttributes(hwnd, 0, 255, LWA_ALPHA) == 0 {
             return Err(format!("SetLayeredWindowAttributes failed: {}", last_error()));
         }
     }
