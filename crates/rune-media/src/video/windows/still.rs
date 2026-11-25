@@ -5,11 +5,11 @@ use super::super::thumbnails::{DecodedFrame, ThumbnailPrecision};
 use super::super::{Kind, MediaSource, Meta, nv12};
 use super::mf::{self, Decode, Picture};
 use crate::native_surface::ByteFrame;
-use windows::Win32::Media::MediaFoundation::{IMFSourceReader, MF_SOURCE_READERF_ENDOFSTREAM};
+use windows::Win32::Media::MediaFoundation::MF_SOURCE_READERF_ENDOFSTREAM;
 use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize};
 
 pub(crate) struct Still {
-    reader: IMFSourceReader,
+    reader: mf::Reader,
     video: u32,
     picture: Picture,
     /// The last picture read at or before the time asked, and the one read after it: a later
@@ -25,7 +25,7 @@ pub(super) fn open(source: &MediaSource, kind: Kind) -> Result<(Option<Still>, M
     // SAFETY: COM on this thread for the reader; left initialised, as the thread may open more.
     unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().ok();
     let lib = mf::library()?;
-    let opened = mf::open(lib, &lib.resolve(&target)?, kind, Decode::Cpu, false)?;
+    let opened = mf::open(lib, lib.resolve(&target)?, kind, Decode::Cpu, false)?;
     let meta = Meta { duration: opened.duration, size: opened.picture.map(|p| p.natural), frame: opened.picture.and_then(|p| p.frame_duration), sound: opened.has_sound };
     let still = match (opened.video, opened.picture) {
         (Some(video), Some(picture)) => Some(Still { reader: opened.reader, video, picture, current: None, next: None }),
@@ -40,7 +40,7 @@ impl Still {
         let shows = |t: f64| t <= at + 1e-6;
         let reads_on = self.current.as_ref().is_some_and(|(t, _)| shows(*t) && at - t < 1.0);
         if !reads_on {
-            mf::seek(&self.reader, at)?;
+            mf::seek(&mut self.reader, at)?;
             (self.current, self.next) = (None, None);
         }
         if let Some((t, _)) = &self.next {
@@ -50,7 +50,7 @@ impl Still {
             self.current = self.next.take();
         }
         loop {
-            let read = mf::read(&self.reader, self.video)?;
+            let read = mf::read(&mut self.reader, self.video)?;
             if let Some(sample) = &read.sample {
                 let frame = mf::nv12_bytes(sample, &self.picture)?;
                 if !shows(read.time) && self.current.is_some() {
@@ -113,7 +113,7 @@ pub(in crate::video) fn open_thumbnails(
     let target = mf::Target::from_source(source)?;
     let com = ComGuard::enter();
     let lib = mf::library()?;
-    let opened = mf::open(lib, &lib.resolve(&target)?, Kind::Video, Decode::Cpu, false)?;
+    let opened = mf::open(lib, lib.resolve(&target)?, Kind::Video, Decode::Cpu, false)?;
     let (Some(video), Some(picture)) = (opened.video, opened.picture) else {
         return Err("no playable video track".into());
     };
@@ -161,11 +161,11 @@ impl ThumbnailDecoder {
     }
 
     fn seek_and_scan_last(&mut self, seek_to: f64, max_time: f64) -> Result<Option<(ByteFrame, f64)>, String> {
-        mf::seek(&self.still.reader, seek_to)?;
+        mf::seek(&mut self.still.reader, seek_to)?;
         (self.still.current, self.still.next) = (None, None);
         let shows = |t: f64| t <= max_time + 1e-6;
         loop {
-            let read = mf::read(&self.still.reader, self.still.video)?;
+            let read = mf::read(&mut self.still.reader, self.still.video)?;
             if let Some(sample) = &read.sample {
                 let frame = mf::nv12_bytes(sample, &self.still.picture)?;
                 if !shows(read.time) && self.still.current.is_some() {
@@ -207,9 +207,9 @@ impl ThumbnailDecoder {
     }
 
     fn read_first_after_seek(&mut self, seek_to: f64) -> Result<Option<(ByteFrame, f64)>, String> {
-        mf::seek(&self.still.reader, seek_to)?;
+        mf::seek(&mut self.still.reader, seek_to)?;
         loop {
-            let read = mf::read(&self.still.reader, self.still.video)?;
+            let read = mf::read(&mut self.still.reader, self.still.video)?;
             if let Some(sample) = &read.sample {
                 let frame = mf::nv12_bytes(sample, &self.still.picture)?;
                 return Ok(Some((frame, read.time)));

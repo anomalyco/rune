@@ -1,0 +1,1 @@
+- Video (Windows Media Foundation): disconnected `IMFSourceReader` from `IMFMediaSource` shutdown (`MF_SOURCE_READER_DISCONNECT_MEDIASOURCE_ON_SHUTDOWN`) and reset streaming software video readers on the same open media source before `SetCurrentPosition`, eliminating the remaining `msmpeg2vdec.dll` `ReadSample` deadlock across repeated/parallel seeks.
