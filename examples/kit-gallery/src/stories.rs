@@ -17,6 +17,7 @@ pub(crate) mod field_menu;
 pub(crate) use diff::{custom_diff, sample_diff, scroll_bars_diff};
 mod icons;
 pub(crate) mod images;
+mod index;
 mod inputs;
 mod link_hover;
 mod link_popover;
@@ -36,7 +37,7 @@ use markdown::{
 use field_menu::{menu_field_menu_fallback, menu_submenu_small_window};
 use overlays::{focus_keyboard, hover_card_basic, hover_card_placements, menu_appearances, menu_basic, menu_checkbox, menu_radio, menu_rich, menu_submenu, menu_submenu_options, overlays_tx_callbacks, popover_basic, popover_bounded, popover_controlled, popover_wheel_outside, popup_list_rich_inline, toast_all, tooltip_help_arrow, tooltip_keybind, tooltip_path, tooltip_simple, tooltip_title_description};
 
-type Story = fn(&G, &Kit, &mut Vec<El>) -> El;
+pub(super) type Story = fn(&G, &Kit, &mut Vec<El>) -> El;
 
 macro_rules! stories {
     ($($id:literal => $f:path,)*) => {
@@ -44,8 +45,12 @@ macro_rules! stories {
         pub const SCENES: &[(&str, fn(&mut G))] = &[$(($id, |s: &mut G| {
             s.story = $id;
             s.combo = ComboboxState::default();
+            s.combo_animated = ComboboxState::default();
+            s.combo_localized = ComboboxState::default();
             s.reorder = sidebar::ReorderDemo::default();
-            if $id.starts_with("rune-combobox--") { let _ = s.combo.step(ComboboxEvent::Toggle { current: None }); }
+            if $id == "rune-combobox--searchable" { let _ = s.combo.step(ComboboxEvent::Toggle { current: None }); }
+            if $id == "rune-combobox--animated-filter" { let _ = s.combo_animated.step(ComboboxEvent::Toggle { current: None }); }
+            if $id == "rune-combobox--localized" { let _ = s.combo_localized.step(ComboboxEvent::Toggle { current: None }); }
             if $id == "rune-popup-list--composer" {
                 s.edits[7] = TextEdit::new("/");
                 s.edits[7].focused = true;
@@ -144,38 +149,38 @@ macro_rules! stories {
 
 /// Stories whose web version opens an overlay (by default or through the harness's click):
 /// their scene starts with that overlay open.
-const OPENED: &[(&str, &str)] = &[
+pub(super) const OPENED: &[(&str, &str)] = &[
     ("ui-dialog--basic", "dialog"),
     ("rune-dialog--fit", "dialog-fit"),
     ("rune-dialog--close-disabled", "dialog-close-disabled"),
     ("rune-popup-list--composer", "popup-list"),
-    ("ui-menu--basic", "menu"),
-    ("ui-menu--rich", "menu"),
-    ("ui-menu--with-checkbox", "menu"),
-    ("ui-menu--with-radio", "menu"),
-    ("ui-menu--with-submenu", "menu"),
-    ("rune-menu--submenu-options", "menu"),
-    ("ui-menu--appearances", "both"),
-    ("ui-select--playground", "select"),
-    ("ui-select--grouped", "select"),
-    ("rune-select--states", "select"),
-    ("components-popover--basic", "popover"),
-    ("components-popover--controlled", "popover"),
+    ("ui-menu--basic", "menu-basic"),
+    ("ui-menu--rich", "menu-rich"),
+    ("ui-menu--with-checkbox", "menu-checkbox"),
+    ("ui-menu--with-radio", "menu-radio"),
+    ("ui-menu--with-submenu", "menu-submenu"),
+    ("rune-menu--submenu-options", "menu-submenu-options"),
+    ("ui-menu--appearances", "menu-appearances"),
+    ("ui-select--playground", "select-playground"),
+    ("ui-select--grouped", "select-grouped"),
+    ("rune-select--states", "select-states"),
+    ("components-popover--basic", "popover-basic"),
+    ("components-popover--controlled", "popover-controlled"),
     ("rune-popover--bounded", "popover-bounded"),
     ("rune-popover--wheel-outside", "popover-wheel-outside"),
     ("components-hover-card--basic", "card"),
     ("rune-hover-card--placements", "hc-right-end"),
     ("rune-overlays--tx-callbacks", "tx-popover"),
-    ("ui-tooltip--simple", "tip"),
-    ("ui-tooltip--with-keybind", "tip"),
-    ("ui-tooltip--path", "tip"),
-    ("ui-tooltip--title-description", "tip"),
+    ("ui-tooltip--simple", "tip-simple"),
+    ("ui-tooltip--with-keybind", "tip-keybind"),
+    ("ui-tooltip--path", "tip-path"),
+    ("ui-tooltip--title-description", "tip-title-description"),
     ("rune-tooltip--help-arrow", "help-arrow"),
     ("ui-toast--all-examples", "toast"),
 ];
 
 fn is_open(s: &G, key: &str) -> bool {
-    s.open.as_deref() == Some(key) || s.open.as_deref() == Some("both")
+    s.open.as_deref() == Some(key)
 }
 
 fn toggle(key: &'static str) -> impl Fn(&mut G) + Clone {
@@ -455,12 +460,12 @@ fn dialog_close_disabled(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 fn motion_focus_modal(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    Dialog::new("dialog", "Loading").open(is_open(s, "dialog")).on_close(close)
+    Dialog::new("motion-dialog", "Loading").open(is_open(s, "motion-dialog")).on_close(close)
         .child(row().gap(16.0).child(Spinner::new().build(k).key("spinner"))
             .child(Loader::new().build(k).key("loader")))
         .child(Button::new("Done").on_press(close).build(k).key("done")).build(k, layer);
     col().gap(16.0)
-        .child(Button::new("Open dialog").on_press(toggle("dialog")).build(k).key("opener"))
+        .child(Button::new("Open dialog").on_press(toggle("motion-dialog")).build(k).key("opener"))
         .child(Switch::new(s.is("switch")).label("Sync").on_toggle(|s: &mut G| s.flip("switch")).build(k).key("switch"))
         .child(Checkbox::new(s.is("check")).label("Remember").on_toggle(|s: &mut G| s.flip("check")).build(k).key("check"))
         .child(SegmentedControl::new(&["First", "Second"], Some(if s.is("second") { 1 } else { 0 }))
@@ -483,20 +488,11 @@ fn motion_stagger_list(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         .child(col().key("rows").gap(4.0).children(rows))
 }
 
-pub fn render(s: &G, k: &Kit, overlays: &mut Vec<El>) -> El {
+pub fn render(s: &G, k: &'static Kit, overlays: &mut Vec<El>) -> El {
     match STORIES.iter().find(|(id, _)| *id == s.story) {
         Some((_, f)) => f(s, k, overlays),
-        None => index(s, k, overlays),
+        None => index::index(s, k, overlays),
     }
-}
-
-/// Every story stacked, for browsing in a window.
-fn index(s: &G, k: &Kit, overlays: &mut Vec<El>) -> El {
-    let mut c = col().key("index").gap(24.0);
-    for (id, f) in STORIES {
-        c = c.child(col().key(*id).gap(8.0).child(caption(k, id)).child(f(s, k, overlays)));
-    }
-    c
 }
 
 /// The stories' `font-size: 12px; color: var(--text-weak)` labels (line height inherited).

@@ -18,14 +18,18 @@ pub(in crate::runtime) struct Reuse {
     pub(in crate::runtime) read_moved: bool,
     /// The blend mode the last commit built its view in; theme colours resolve per mode.
     pub(in crate::runtime) srgb: Option<bool>,
+    /// Authored unclamped styles of `anchored_fit` overlays clamped on the last commit, keyed by
+    /// node index; empty when no overlay was clamped.
+    pub(in crate::runtime) above_fit_styles: Vec<(usize, CompactStyle)>,
 }
 
 impl Reuse {
     /// Records what the commit just applied was built with.
-    pub(in crate::runtime) fn built(&mut self, scale: f32, srgb: bool) {
+    pub(in crate::runtime) fn built(&mut self, scale: f32, srgb: bool, above_fit_styles: Vec<(usize, CompactStyle)>) {
         self.scale = scale;
         self.srgb = Some(srgb);
         self.read_moved = false;
+        self.above_fit_styles = above_fit_styles;
     }
 }
 
@@ -66,8 +70,9 @@ impl RuntimeCore {
             && self.commit.layout.live_count() == self.tree.nodes.len();
         if !unchanged { return CommitKind::Rebuild; }
         if self.commit.relayout {
-            // The nodes it built are all there, in the layout tree's order.
-            return if self.tree.nodes.iter().all(reusable) { CommitKind::Relayout } else { CommitKind::Rebuild };
+            // `aspect_fit` elements and clamped `anchored_fit` overlays restore their authored
+            // styles before `solve`; only a picture whose decoded aspect changed needs a rebuild.
+            return if pixel_aspects_unchanged(&self.tree) { CommitKind::Relayout } else { CommitKind::Rebuild };
         }
         if self.commit.virtual_only(&self.tree, self.frame.has_hot(), self.checking_live_only()) { CommitKind::Remount } else { CommitKind::Rebuild }
     }
@@ -82,10 +87,11 @@ impl RuntimeCore {
             let reads = self.commit.layout_seen.reads.clone();
             let caret_read = self.edit.caret_watch;
             let selection = self.selection_by_path();
+            let prev_above_fit = self.commit.reuse.above_fit_styles.clone();
             let (mut m, text) = self.measurement(app, true);
             m.layout_reads = reads;
             m.caret_read = caret_read;
-            return match m.relayout(text) {
+            return match m.relayout(text, &prev_above_fit) {
                 Some(measured) => Measured { selection, ..measured },
                 None => {
                     self.refresh_layout_seen();
@@ -126,7 +132,7 @@ impl RuntimeCore {
 impl Measurement<'_> {
     /// Lays the last commit's nodes out again at the viewport, in its layout tree. None when a
     /// virtual list's window has to move, which only the view can build.
-    fn relayout(mut self, text: &mut TextSystem) -> Option<Measured> {
+    fn relayout(mut self, text: &mut TextSystem, prev_above_fit: &[(usize, CompactStyle)]) -> Option<Measured> {
         self.anchor_virtuals();
         let len = self.nodes.len();
         let mut taffy = std::mem::replace(self.layout, LayoutEngine::with_capacity(0));
@@ -164,6 +170,29 @@ impl Measurement<'_> {
         let mut style = taffy.style(root).clone();
         style.set_size(root_size(self.viewport, self.fit_height));
         taffy.set_style_and_mark_ancestors(root, style, std::iter::empty());
+        // Restore authored unclamped styles on fitted anchored overlays and room styles on
+        // `aspect_fit` elements so `solve` re-fits both against the new viewport.
+        for (i, orig) in prev_above_fit {
+            if let Some(n) = nodes.get(*i) {
+                taffy.set_style_and_mark_ancestors(
+                    n.taffy,
+                    orig.clone(),
+                    std::iter::successors(n.parent, |&p| nodes[p].parent).map(|p| nodes[p].taffy),
+                );
+            }
+        }
+        for i in 0..nodes.len() {
+            if let Some(fit) = nodes[i].cold.get().and_then(|c| c.aspect_fit.as_deref()) {
+                let parent_row = nodes[i].parent.is_some_and(|p| {
+                    matches!(taffy.style(nodes[p].taffy).flex_direction(), FlexDirection::Row | FlexDirection::RowReverse)
+                });
+                taffy.set_style_and_mark_ancestors(
+                    nodes[i].taffy,
+                    fit_room(&fit.1, parent_row),
+                    std::iter::successors(nodes[i].parent, |&p| nodes[p].parent).map(|p| nodes[p].taffy),
+                );
+            }
+        }
         // As flattening does: secure leaves don't keep a measurement.
         for n in nodes.iter().filter(|n| n.text.as_ref().is_some_and(|t| t.redacted)) {
             taffy.mark_dirty_and_ancestors(
@@ -171,7 +200,7 @@ impl Measurement<'_> {
                 std::iter::successors(n.parent, |&p| nodes[p].parent).map(|p| nodes[p].taffy),
             );
         }
-        let (layout, mut nodes) = self.solve(text, taffy, root, nodes, &reused);
+        let (layout, mut nodes, above_fit_styles) = self.solve(text, taffy, root, nodes, &reused);
         if self.measure_virtuals(&nodes, false) || self.windows_move() {
             memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &[]);
             reused.clear();
@@ -198,6 +227,7 @@ impl Measurement<'_> {
             memo_reused: reused,
             taken_paths: Vec::new(),
             selection: Vec::new(),
+            above_fit_styles,
         })
     }
 
@@ -238,7 +268,7 @@ impl Measurement<'_> {
     }
 
     /// Lays `nodes` out from `root_id` at the viewport, places them, and lays out their text.
-    pub(in crate::runtime) fn solve(&mut self, text: &mut TextSystem, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>, reused: &[memo_reuse::ReusedSpan]) -> (LayoutEngine, Vec<Node>) {
+    pub(in crate::runtime) fn solve(&mut self, text: &mut TextSystem, mut taffy: LayoutEngine, root_id: SlotId, mut nodes: Vec<Node>, reused: &[memo_reuse::ReusedSpan]) -> (LayoutEngine, Vec<Node>, Vec<(usize, CompactStyle)>) {
         let scale = self.env.scale;
         let room = Size {
             width: AvailableSpace::Definite(self.viewport.0),
@@ -268,7 +298,8 @@ impl Measurement<'_> {
         layout_diagnostics::collapsed_scrolls(&taffy, &nodes);
 
         self.place(&taffy, &mut nodes);
-        if self.fit_anchored(&mut taffy, &nodes) {
+        let mut above_fit_styles = Vec::new();
+        if self.fit_anchored(&mut taffy, &nodes, &mut above_fit_styles) {
             compute_layout(&mut taffy, root_id, room, &nodes, text, scale);
             self.place(&taffy, &mut nodes);
         }
@@ -313,8 +344,24 @@ impl Measurement<'_> {
             }
         }
 
-        (taffy, nodes)
+        (taffy, nodes, above_fit_styles)
     }
+}
+
+/// Whether every picture sizing a side from its pixels still has the ratio its Taffy style or
+/// measure key was built with, so a viewport resize can relayout without flattening again.
+fn pixel_aspects_unchanged(tree: &types::TreeState) -> bool {
+    if !tree.aspect_snap.is_empty() {
+        return false;
+    }
+    if !tree.has_pixel_aspect {
+        return true;
+    }
+    tree.nodes.iter().all(|n| {
+        n.cold.get().and_then(|c| c.pixel_aspect).is_none_or(|r| {
+            n.vis.pixels.as_ref().is_some_and(|p| flatten::pixel_ratio(p) == r)
+        })
+    })
 }
 
 /// Partitions the moved nodes of a `relayout` pass into disjoint subtree [`ReusedSpan`]s so

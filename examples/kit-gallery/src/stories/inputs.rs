@@ -548,23 +548,23 @@ fn fruit_select(s: &G, key: &'static str) -> Select {
 }
 
 pub(super) fn select_playground(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    row().child(fruit_select(s, "select").build(k, layer))
+    row().child(fruit_select(s, "select-playground").build(k, layer))
 }
 
 pub(super) fn select_grouped(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     let cities =
         [("North", "Boston"), ("South", "Miami"), ("South", "Atlanta"), ("West", "Seattle"), ("West", "Denver")];
-    let current = s.pick.get("select").cloned();
+    let current = s.pick.get("select-grouped").cloned();
     row().child(
-        Select::grouped("select", &cities)
+        Select::grouped("select-grouped", &cities)
             .label("City")
             .placeholder("Pick a fruit")
             .current(current.as_deref())
-            .open(is_open(s, "select"))
-            .on_toggle(toggle("select"))
+            .open(is_open(s, "select-grouped"))
+            .on_toggle(toggle("select-grouped"))
             .on_close(close)
             .on_choose(|s: &mut G, v: &str, _: &mut Tx| {
-                s.pick.insert("select".into(), v.to_owned());
+                s.pick.insert("select-grouped".into(), v.to_owned());
                 s.open = None;
             })
             .build(k, layer),
@@ -572,11 +572,11 @@ pub(super) fn select_grouped(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 pub(super) fn select_invalid(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    row().child(fruit_select(s, "select").invalid(true).build(k, layer))
+    row().child(fruit_select(s, "select-invalid").invalid(true).build(k, layer))
 }
 
 pub(super) fn select_disabled(_: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    row().child(Select::new("select", &FRUITS).current(Some("Cherry")).disabled(true).build(k, layer))
+    row().child(Select::new("select-disabled", &FRUITS).current(Some("Cherry")).disabled(true).build(k, layer))
 }
 
 /// Both triggers in every state, forced, and an open field with its listbox: the inline trigger's
@@ -596,7 +596,7 @@ pub(super) fn select_states(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         .child(line("Focus", field("f3", State::Focus).trigger(k)))
         .child(line("Invalid", field("f4", State::Rest).invalid(true).trigger(k)))
         .child(line("Disabled", field("f5", State::Rest).disabled(true).trigger(k)))
-        .child(line("Open", fruit_select(s, "select").appearance(SelectAppearance::Field).build(k, layer)))
+        .child(line("Open", fruit_select(s, "select-states").appearance(SelectAppearance::Field).build(k, layer)))
 }
 
 pub(super) fn select_with_field(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
@@ -606,7 +606,7 @@ pub(super) fn select_with_field(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
             .info()
             .prefix("Optional helper")
             .control(
-                fruit_select(s, "select")
+                fruit_select(s, "select-with-field")
                     .appearance(SelectAppearance::Field)
                     .fill()
                     .menu_width(280.0)

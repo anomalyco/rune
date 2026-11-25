@@ -6,12 +6,12 @@ use rune_kit::{Button, ButtonVariant, Combobox, ComboboxOption, ControlSize, Kit
 use crate::G;
 
 pub(super) fn searchable(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    models(s, false).build(k, layer)
+    models(s, "model", &s.combo, |s: &mut G| &mut s.combo, false).build(k, layer)
 }
 
 /// The same list, crossfading each keystroke's rows and springing the popover's height.
 pub(super) fn animated_filter(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    models(s, true).build(k, layer)
+    models(s, "model-animated", &s.combo_animated, |s: &mut G| &mut s.combo_animated, true).build(k, layer)
 }
 
 /// Localised labels: outer label, placeholder, search placeholder, search accessible name and empty message.
@@ -21,7 +21,7 @@ pub(super) fn localized(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         ComboboxOption::new("precis", "Précis"),
         ComboboxOption::new("equilibre", "Équilibré"),
     ];
-    Combobox::new("modele", &s.combo, &options, |s: &mut G| &mut s.combo)
+    Combobox::new("modele", &s.combo_localized, &options, |s: &mut G| &mut s.combo_localized)
         .label("Modèle")
         .placeholder("Choisir un modèle")
         .search_placeholder("Rechercher des modèles…")
@@ -157,10 +157,16 @@ pub(super) fn key_preview(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     col().padding(48.0).items_start().child(wrap)
 }
 
-fn models(s: &G, animate: bool) -> Combobox<G> {
+fn models(
+    s: &G,
+    key: &'static str,
+    state: &rune_kit::ComboboxState,
+    access: impl for<'a> Fn(&'a mut G) -> &'a mut rune_kit::ComboboxState + 'static,
+    animate: bool,
+) -> Combobox<G> {
     let options: Vec<_> = (0..200).map(|i| ComboboxOption::new(format!("model-{i}"), format!("Model {i:03}"))).collect();
-    Combobox::new("model", &s.combo, &options, |s: &mut G| &mut s.combo)
-        .label("Model").placeholder("Choose model").current(s.pick.get("model").map(String::as_str))
+    Combobox::new(key, state, &options, access)
+        .label("Model").placeholder("Choose model").current(s.pick.get(key).map(String::as_str))
         .animate_filtering(animate)
-        .on_choose(|s, id, _| { s.pick.insert("model".into(), id.into()); })
+        .on_choose(move |s, id, _| { s.pick.insert(key.into(), id.into()); })
 }
