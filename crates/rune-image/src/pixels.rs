@@ -459,6 +459,11 @@ struct Slot {
     generation: u64,
     /// The animation frame copied in.
     frame: usize,
+    /// The image's storage: once every `Pixels` handle is dropped it can't be drawn again.
+    pixels: std::sync::Weak<FrameInner>,
+    /// Drawn in the last completed frame, and in this frame so far.
+    shown: bool,
+    touched: bool,
 }
 
 /// One stable shelf page, or an exact-size standalone page for a large image.
@@ -606,9 +611,11 @@ impl ImageAtlas {
         }
         if !self.slots.contains_key(&key) {
             let (page, x, y) = self.allocate(w, h);
-            self.slots.insert(key, Slot { page, x, y, w, h, generation: 0, frame: 0 });
+            let pixels = Arc::downgrade(&pixels.inner);
+            self.slots.insert(key, Slot { page, x, y, w, h, generation: 0, frame: 0, pixels, shown: false, touched: false });
         }
         let slot = self.slots.get_mut(&key).unwrap();
+        slot.touched = true;
         self.pages[slot.page].touched = true;
         if slot.generation != generation || slot.frame != shown {
             slot.generation = generation;
@@ -637,13 +644,18 @@ impl ImageAtlas {
 
     /// Forgets images no element showed since the last call, except on pages that still show
     /// one and on the first page: shelves never reuse a slot's space until their page starts
-    /// over, so an image shown again there (a view come back to) needs no copy or upload. A
-    /// page left with nothing starts over so replaced sizes don't fill the atlas; a full atlas
-    /// starts over a page that showed nothing last frame or yet this one before it adds one.
+    /// over, so an image shown again there (a view come back to) needs no copy or upload. An
+    /// image whose every `Pixels` handle is gone is forgotten wherever it sits. A page left
+    /// with nothing starts over so replaced sizes don't fill the atlas, and frees its buffer
+    /// unless it's the first shelf page; a full atlas starts over a page that showed nothing
+    /// last frame or yet this one before it adds one.
     pub fn end_frame(&mut self) {
         let pages = &self.pages;
         let first_kept = pages.first().is_some_and(|p| p.width <= IMAGE_ATLAS_SIZE && p.height <= IMAGE_ATLAS_SIZE);
-        self.slots.retain(|_, s| pages[s.page].touched || (s.page == 0 && first_kept));
+        self.slots.retain(|_, s| {
+            s.shown = std::mem::take(&mut s.touched);
+            s.pixels.strong_count() > 0 && (pages[s.page].touched || (s.page == 0 && first_kept))
+        });
         if !self.starts.is_empty() {
             let slots = &self.slots;
             self.starts.retain(|id, _| slots.keys().any(|(slot, _)| slot == id));
@@ -653,7 +665,7 @@ impl ImageAtlas {
             if !self.slots.values().any(|slot| slot.page == i) {
                 (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
                 page.dirty = None;
-                if page.width > IMAGE_ATLAS_SIZE || page.height > IMAGE_ATLAS_SIZE {
+                if i > 0 || page.width > IMAGE_ATLAS_SIZE || page.height > IMAGE_ATLAS_SIZE {
                     page.data = Vec::new();
                 }
             }
@@ -663,11 +675,10 @@ impl ImageAtlas {
     }
 
     /// A window at rest (`window::rest`): forgets the images no element showed in the last
-    /// frame, the first page's included, and frees the CPU copy of every page left empty. An
-    /// image shown again after it is copied in again.
+    /// frame, the first page's included and those beside one that did, and frees the CPU copy
+    /// of every page left empty. An image shown again after it is copied in again.
     pub fn rest(&mut self) {
-        let pages = &self.pages;
-        self.slots.retain(|_, s| pages[s.page].shown);
+        self.slots.retain(|_, s| s.shown && s.pixels.strong_count() > 0);
         let slots = &self.slots;
         self.starts.retain(|id, _| slots.keys().any(|(slot, _)| slot == id));
         for (i, page) in self.pages.iter_mut().enumerate() {

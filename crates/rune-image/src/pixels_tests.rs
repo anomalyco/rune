@@ -741,3 +741,48 @@ fn place_at_filtered_nearest_requests_mip_zero_while_linear_uses_downsampled_mip
     assert!(atlas.has_slot(img.pixels(), 2), "Linear and Nearest slots coexist in the same atlas");
     assert!(lin.premultiplied && near.premultiplied);
 }
+
+fn square(side: u32, value: u8) -> Pixels {
+    let p = Pixels::new();
+    p.set(side, side, vec![value; (side * side * 4) as usize]);
+    p
+}
+
+#[test]
+fn an_empty_shelf_page_below_one_still_shown_frees_its_buffer() {
+    let mut atlas = ImageAtlas::default();
+    let first: Vec<Pixels> = (0..4).map(|i| square(512, i)).collect();
+    let passing: Vec<Pixels> = (0..4).map(|i| square(512, 10 + i)).collect();
+    let icon = square(64, 99);
+    for p in first.iter().chain(&passing) { atlas.place(p, [512.0; 2]); }
+    assert_eq!(atlas.place(&icon, [64.0; 2]).unwrap().page, 2);
+    atlas.end_frame();
+    atlas.place(&icon, [64.0; 2]);
+    atlas.end_frame();
+    assert_eq!(atlas.pages.len(), 3);
+    assert!(!atlas.pages[0].data.is_empty(), "the first page keeps its images");
+    assert!(atlas.pages[1].data.is_empty(), "the empty middle shelf page frees its buffer");
+    let next = atlas.place(&square(64, 7), [64.0; 2]).unwrap();
+    assert_eq!((next.page, next.rect), (1, [0, 0, 64, 64]), "the freed page takes new images again");
+}
+
+#[test]
+fn images_dropped_or_not_shown_beside_one_still_shown_are_forgotten() {
+    let mut atlas = ImageAtlas::default();
+    let icon = square(64, 99);
+    let kept = square(256, 1);
+    atlas.place(&icon, [64.0; 2]);
+    atlas.place(&kept, [256.0; 2]);
+    let dropped = square(256, 2);
+    atlas.place(&dropped, [256.0; 2]);
+    let dropped_id = dropped.id;
+    drop(dropped);
+    atlas.end_frame();
+    assert!(!atlas.slots.keys().any(|(id, _)| *id == dropped_id), "a dropped image is forgotten at once");
+    assert!(atlas.has_slot(&kept, 0), "an image not drawn this frame stays beside one that is");
+    atlas.place(&icon, [64.0; 2]);
+    atlas.end_frame();
+    atlas.rest();
+    assert!(atlas.has_slot(&icon, 0));
+    assert!(!atlas.has_slot(&kept, 0), "rest forgets an image the last frame didn't show");
+}
