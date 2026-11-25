@@ -428,14 +428,6 @@ pub(super) fn submit_and_present_window(
         let rects: Vec<_> = rects.iter().map(|&[left, top, right, bottom]| windows::Win32::Foundation::RECT { left, top, right, bottom }).collect();
         hal.set_present_rects(&rects);
     }
-    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
-    let materials_ok = {
-        let rt = host.app.rt();
-        let (draws, _) = crate::system_material::present_draws(rt);
-        let dark = rt.env.system_dark;
-        let native = &mut l.native;
-        native.materials.sync_before_present(draws, dark, native.mode.handover_mut())
-    };
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     if host.wayland && let Some(blur) = l.native.wayland_backdrop.as_mut() {
         let rt = host.app.rt();
@@ -450,7 +442,17 @@ pub(super) fn submit_and_present_window(
             false,
         );
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    let materials_ok = {
+        let rt = host.app.rt();
+        let (draws, _) = crate::system_material::present_draws(rt);
+        let dark = rt.env.system_dark;
+        let native = &mut l.native;
+        native.materials.present(draws, dark, native.mode.handover_mut(), || {
+            gpu.queue.present(prepared.frame);
+        })
+    };
+    #[cfg(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))))]
     gpu.queue.present(prepared.frame);
     #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
     if !materials_ok {
