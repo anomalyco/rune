@@ -41,7 +41,7 @@ pub(in crate::runtime) struct Titlebar {
 /// One entry in the committed bare `.window_drag()` hit-test region, in top-to-bottom paint
 /// order and window points `[x0, y0, x1, y1]`: the first rect containing a point decides whether
 /// Windows answers `HTCAPTION` (`drag == true`) or `HTCLIENT` (`drag == false`).
-#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct DragHit {
     pub rect: [f32; 4],
@@ -49,7 +49,7 @@ pub(crate) struct DragHit {
 }
 
 /// Whether window point `(x, y)` hits a bare `.window_drag()` region in `hits` (top-to-bottom).
-#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[cfg(target_os = "windows")]
 pub(crate) fn drag_hit_at(hits: &[DragHit], x: f32, y: f32) -> bool {
     for hit in hits {
         let r = hit.rect;
@@ -418,7 +418,7 @@ impl RuntimeCore {
     }
 
     /// Number of committed view/layout passes so far.
-    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     #[inline]
     pub(crate) fn commit_generation(&self) -> u64 {
         self.commit.commits
@@ -427,7 +427,7 @@ impl RuntimeCore {
     /// A `.window_drag()` element that Windows may answer `HTCAPTION` for directly: bare as
     /// [`Self::bare_drag_region`] defines it, with no secondary, middle, hover, pointer-move or
     /// gesture handler of its own that needs client messages over it.
-    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    #[cfg(target_os = "windows")]
     fn win32_bare_drag_region(&self, t: usize) -> bool {
         let n = &self.tree.nodes[t];
         self.bare_drag_region(t)
@@ -446,7 +446,7 @@ impl RuntimeCore {
     /// drag region upward), plus any non-drag tooltip regions above them, so Windows'
     /// `WM_NCHITTEST` stays bounded to controls over the titlebar and keeps interactive children,
     /// selectable text, `.no_window_drag()` elements, overlays and tooltips in `HTCLIENT`.
-    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    #[cfg(target_os = "windows")]
     pub(crate) fn window_drag_hits(&self) -> Vec<DragHit> {
         if self.active_modal().is_some() { return Vec::new(); }
         let hits = self.hit.hits();

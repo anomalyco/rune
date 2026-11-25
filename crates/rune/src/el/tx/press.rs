@@ -6,6 +6,35 @@ use std::time::Duration;
 use crate::Tx;
 
 impl Tx {
+    /// Whether any mouse button is held down anywhere in the window, matching
+    /// [`PointerEvent::pressing`](crate::PointerEvent::pressing). In
+    /// [`El::on_link_hover`](crate::El::on_link_hover) (and `rune_kit::Markdown::on_link_hover`),
+    /// reflects whether a button was held when the link hover transition occurred, so a hover
+    /// card can stay out of the way while the user drags or selects text.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Link, Runtime, col, text};
+    /// # #[derive(Default)] struct S { seen: Vec<(Option<String>, bool)> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// col().size(240.0, 80.0).child(
+    ///     text("Open the docs")
+    ///         .selectable(true)
+    ///         .link(Link::new(9..13, "docs"))
+    ///         .on_link_hover(|s: &mut S, id, _, tx| {
+    ///             s.seen.push((id.map(str::to_owned), tx.pressing()));
+    ///         }),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S::default(), view, (240.0, 80.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # let (x, y) = rt.find("docs").unwrap();
+    /// # rt.pointer_down(2.0, y);
+    /// # rt.pointer_move(x, y);
+    /// # rt.frame(0.0);
+    /// # assert_eq!(rt.state.seen, [(Some("docs".into()), true)]);
+    /// ```
+    pub fn pressing(&self) -> bool { self.pressing }
+
     /// Whether this `on_press` came from a touch tap. A mouse click, keyboard
     /// activation or accessibility action returns false, including on touch-capable hosts.
     pub fn touch_tap(&self) -> bool { self.touch_tap }
@@ -73,13 +102,17 @@ impl Tx {
     /// tells that move from the hand's. Ask again from the repeat, with the repeat interval, to
     /// keep going; releasing or cancelling the press ends it.
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::time::Duration;
+    /// # use rune::{Phase, el};
+    /// # let _ = el()
     /// .on_drag_any(|d, tx| {
     ///     if d.phase == Phase::Down || tx.drag_repeat() {
     ///         tx.scroll_page("list", 1);
     ///         tx.drag_repeat_after(Duration::from_millis(if tx.drag_repeat() { 60 } else { 300 }));
     ///     }
     /// })
+    /// # ;
     /// ```
     pub fn drag_repeat_after(&mut self, delay: Duration) { self.drag_repeat_after = Some(delay); }
 

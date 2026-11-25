@@ -25,7 +25,7 @@ impl Client {
 }
 
 static WORKER: OnceLock<Worker> = OnceLock::new();
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 pub(super) fn worker_started() -> bool { WORKER.get().is_some() }
 pub(super) struct Worker {
     pub(super) sender: mpsc::Sender<Request>,

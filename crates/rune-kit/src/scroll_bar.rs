@@ -359,7 +359,9 @@ impl ScrollBarStyle {
     /// Without [`Self::track_hover`], the same colour stays while hovered; by default no trough is
     /// drawn.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, ScrollBarStyle};
+    /// # let k = Kit::neutral(true);
     /// let style = ScrollBarStyle::native(k.c.border_base, k.c.border_strong)
     ///     .always_visible()
     ///     .track(k.c.layer_02);
@@ -373,7 +375,9 @@ impl ScrollBarStyle {
     /// `::-webkit-scrollbar-track:hover { background }`). Pair with [`Self::track`] for a rest and
     /// hover pair, or set alone to show a trough only on hover.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, ScrollBarStyle};
+    /// # let k = Kit::neutral(true);
     /// let style = ScrollBarStyle::native(k.c.border_base, k.c.border_strong)
     ///     .always_visible()
     ///     .track(k.c.layer_02)
@@ -388,7 +392,9 @@ impl ScrollBarStyle {
     /// ([`Self::native`], [`Self::scroll_view`], [`Self::menu_scroll`]) and the system "Show
     /// scroll bars" preference ([`rune::ScrollBars`]). The bar still hides when the content fits.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, ScrollBarStyle};
+    /// # let k = Kit::neutral(true);
     /// let style = ScrollBarStyle::native(k.c.border_muted, k.c.border_strong)
     ///     .inside()
     ///     .always_visible();
@@ -402,7 +408,9 @@ impl ScrollBarStyle {
     /// changing the strip width, thumb width or clear border (CSS
     /// `::-webkit-scrollbar-track { margin }`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Kit, ScrollBarStyle};
+    /// # let k = Kit::neutral(true);
     /// let style = ScrollBarStyle::from_kit(&k).track_inset(4.0).min_thumb(40.0);
     /// ```
     pub fn track_inset(mut self, inset: f32) -> Self {
@@ -987,10 +995,17 @@ pub trait ScrollBar {
     /// [`ScrollBarStyle::hover_target`] on the bar. Any hover handler the element has keeps
     /// running.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{col, el};
+    /// # use rune_kit::{Kit, ScrollBar, ScrollBarStyle};
+    /// # let k = Kit::neutral(true);
+    /// # let style = ScrollBarStyle::from_kit(&k);
+    /// # let (viewport, jump_button) = (el(), el());
+    /// # let _ =
     /// col().key("timeline").child(viewport.key("scroll").scroll_bar_styled(style.hover_target()))
     ///     .child(jump_button)
     ///     .scroll_bar_hover("scroll")
+    /// # ;
     /// ```
     fn scroll_bar_hover(self, viewport_key: &str) -> El;
 }

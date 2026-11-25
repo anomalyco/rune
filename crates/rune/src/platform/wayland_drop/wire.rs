@@ -286,7 +286,7 @@ struct ActiveReader {
 }
 
 impl ActiveReader {
-    fn cancel_and_join(mut self) {
+    fn cancel_and_join(self) {
         self.cancel.cancel();
         self.join();
     }

@@ -7,7 +7,14 @@
 //! while streaming is fine: an unclosed fence is a code block that keeps growing (a diagram
 //! fence draws as it grows; see Diagrams).
 //!
-//! ```ignore
+//! ```
+//! # use rune_kit::{Kit, Markdown, MarkdownStyle};
+//! # struct App;
+//! # impl App { fn open(&mut self, _: &str) {} }
+//! # struct Msg { text: String }
+//! # let message = Msg { text: "# Hello".into() };
+//! # let dark = true;
+//! # let kit = Kit::neutral(dark);
 //! let view = Markdown::new(&message.text).reveal(0.18).on_link(|s: &mut App, url| s.open(url)).build(&kit);
 //! // Without a Kit:
 //! let view = Markdown::new(&message.text).render(&MarkdownStyle::neutral(dark));
@@ -270,6 +277,7 @@ pub struct Markdown {
     streaming: bool,
     on_link: Option<LinkWire>,
     on_link_secondary: Option<LinkWire>,
+    on_link_hover: Option<LinkWire>,
     link_look: Option<LinkLook>,
     link_help: Option<LinkHelp>,
     on_task: Option<TaskWire>,
@@ -301,7 +309,7 @@ thread_local! {
 
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
-        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, link_look: None, link_help: None, link_ring: None, code_link: None,
+        Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, on_link_hover: None, link_look: None, link_help: None, link_ring: None, code_link: None,
             on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, wrap_anywhere: false, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
             diagram_frame: None, code_frame: None, diff_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
@@ -318,7 +326,10 @@ impl Markdown {
     /// [`Runtime::elements`](rune::Runtime::elements) reports a `mark` per rendered fragment.
     /// Empty/out-of-source ranges paint nothing; partial UTF-8 characters expand to boundaries.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Case, Kit, Markdown, markdown};
+    /// # let (src, query) = ("Hello **world**", "world");
+    /// # let kit = Kit::neutral(true);
     /// let view = Markdown::new(src).highlights(markdown::find(src, query, Case::Insensitive)).build(&kit);
     /// ```
     pub fn highlights(mut self, highlights: impl IntoIterator<Item = impl HighlightItem>) -> Self {
@@ -461,8 +472,14 @@ impl Markdown {
     /// controls on it (a button that opens it larger) or key it. Fences that draw as their
     /// source, or nothing yet while streaming, don't come here.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, col};
+    /// # use rune_kit::Markdown;
+    /// # fn open_button(_: &str) -> El { col() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).diagram_frame(|card, d| col().key(format!("diagram-{}", d.index)).child(card).child(open_button(d.source)))
+    /// # ;
     /// ```
     #[cfg(feature = "mermaid")]
     pub fn diagram_frame(mut self, f: impl Fn(El, &DiagramFrame<'_>) -> El + 'static) -> Self {
@@ -474,8 +491,14 @@ impl Markdown {
     /// controls on it (a Copy button). Diagrams that draw as their source and diff fences don't
     /// come here (see [`Self::diff_frame`]).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, col};
+    /// # use rune_kit::Markdown;
+    /// # fn copy_button(_: &str) -> El { col() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).code_frame(|card, c| col().key(format!("code-{}", c.index)).child(card).child(copy_button(c.source)))
+    /// # ;
     /// ```
     pub fn code_frame(mut self, f: impl Fn(El, &CodeFrame<'_>) -> El + 'static) -> Self {
         self.code_frame = Some(Rc::new(f));
@@ -521,8 +544,14 @@ impl Markdown {
     /// Draws `f(quote, frame)` in place of each block quote, so an app can put its own controls
     /// on it (a button that copies the whole quote). Quotes inside a quote come here too.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{El, col};
+    /// # use rune_kit::Markdown;
+    /// # fn copy_button(_: &str) -> El { col() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).quote_frame(|quote, q| col().child(quote).child(copy_button(q.text)))
+    /// # ;
     /// ```
     pub fn quote_frame(mut self, f: impl Fn(El, &QuoteFrame<'_>) -> El + 'static) -> Self {
         self.quote_frame = Some(Rc::new(f));
@@ -535,11 +564,16 @@ impl Markdown {
     /// [`SyntaxTheme`] colours, or a colour of its own. See [`Highlighter`] for caching, and
     /// [`syntax::builtin`](crate::syntax::builtin) to fall back on for other languages.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Markdown, syntax::Highlight};
+    /// # fn my_cobol(_: &str) -> Vec<Highlight> { Vec::new() }
+    /// # let src = "";
+    /// # let _ =
     /// Markdown::new(src).highlight(|lang, code| match lang {
     ///     Some("cobol") => my_cobol(code),
     ///     _ => rune_kit::syntax::builtin(lang, code),
     /// })
+    /// # ;
     /// ```
     pub fn highlight(self, f: impl Fn(Option<&str>, &str) -> Vec<crate::syntax::Highlight> + 'static) -> Self {
         self.highlighter(Highlighter::new(f))
@@ -565,6 +599,7 @@ impl Markdown {
         let can_cache = !self.streaming
             && self.on_link.is_none()
             && self.on_link_secondary.is_none()
+            && self.on_link_hover.is_none()
             && self.link_look.is_none()
             && self.link_help.is_none()
             && self.link_ring.is_none()
@@ -621,7 +656,7 @@ impl Markdown {
         let root_dir = dirs.of_slice(&blocks).or(self.tentative);
         let code_frame = (self.code_frame.is_some() || self.code_wrap.is_some() || self.wrap_code)
             .then(|| CodeWire { frame: self.code_frame, wrap: self.code_wrap, wrap_default: self.wrap_code });
-        let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
+        let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, on_link_hover: self.on_link_hover, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
             on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, wrap_anywhere: self.wrap_anywhere, tentative: self.tentative,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), next_diff: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),

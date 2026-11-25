@@ -17,6 +17,7 @@ mod a11y;
 mod anchor;
 mod backdrop;
 mod child_exit;
+pub(crate) mod data;
 mod direction;
 pub(crate) mod drop;
 pub(crate) mod effect;
@@ -78,7 +79,7 @@ pub use scroll::ScrollSpec;
 pub(crate) use scroll::{AtBottomFn, ScrollAxes, ScrollEdges, VisibleRowsFn};
 pub use selection_style::SelectionStyle;
 pub(crate) use sticky::{Sticky, StickyEdge};
-pub(crate) use text_spec::{Elide, TextDir, TextDirEvent, step_text_dir, wipe_links, wipe_string};
+pub(crate) use text_spec::{Elide, InlineAnchor, TextDir, TextDirEvent, step_text_dir, wipe_links, wipe_string};
 pub use text_spec::LineFill;
 pub use text_spec::TextSpec;
 pub(crate) use tx::{Commit, FocusAsk, FullScreenRequest, MotionSource, SelectRequest, TraceCalls};
@@ -137,6 +138,12 @@ impl std::fmt::Debug for LinkFn {
 pub(crate) struct LinkSecondaryFn(pub Rc<dyn Fn(crate::states::States<'_>, &str, PointerPress, &mut Tx)>);
 impl std::fmt::Debug for LinkSecondaryFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("LinkSecondaryFn") }
+}
+/// [`El::on_link_hover`]'s handler.
+#[derive(Clone)]
+pub(crate) struct LinkHoverFn(pub Rc<dyn Fn(crate::states::States<'_>, Option<&str>, Option<[f32; 4]>, &mut Tx)>);
+impl std::fmt::Debug for LinkHoverFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("LinkHoverFn") }
 }
 
 /// Default `truncate_fade` edge, in ems.
@@ -230,6 +237,8 @@ pub(crate) type InputCopyFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx
 pub(crate) type PickFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::Picked>, &mut Tx)>;
 pub(crate) type TextOffsetFn = Box<dyn FnOnce(crate::states::States<'_>, Option<usize>, &mut Tx)>;
 pub(crate) type ElementsReadFn = Box<dyn FnOnce(crate::states::States<'_>, &[crate::ElementInfo], &mut Tx)>;
+pub(crate) type LayoutReadFn = Box<dyn FnOnce(crate::states::States<'_>, Option<[f32; 4]>, &mut Tx)>;
+pub(crate) type PresentedReadFn = Box<dyn FnOnce(crate::states::States<'_>, Option<([f32; 4], f32)>, &mut Tx)>;
 
 #[derive(Clone)]
 pub(crate) enum PickRead {
@@ -249,6 +258,14 @@ pub(crate) enum PickRead {
     Elements {
         f: Rc<std::cell::Cell<Option<ElementsReadFn>>>,
     },
+    Layout {
+        key: String,
+        f: Rc<std::cell::Cell<Option<LayoutReadFn>>>,
+    },
+    Presented {
+        key: String,
+        f: Rc<std::cell::Cell<Option<PresentedReadFn>>>,
+    },
 }
 impl std::fmt::Debug for PickRead {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -256,6 +273,8 @@ impl std::fmt::Debug for PickRead {
             Self::Element { .. } => f.write_str("PickRead::Element"),
             Self::TextOffset { .. } => f.write_str("PickRead::TextOffset"),
             Self::Elements { .. } => f.write_str("PickRead::Elements"),
+            Self::Layout { .. } => f.write_str("PickRead::Layout"),
+            Self::Presented { .. } => f.write_str("PickRead::Presented"),
         }
     }
 }

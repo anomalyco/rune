@@ -1,0 +1,1 @@
+- Docs: converted all 39 ignored doc examples in `rune-kit` into compiled and executed doctests and fixed 5 stale examples (`Table::on_sort`, `Button::label_with`, `Preview::build`, `TreeItem::changes`, and `DiffLabel`).

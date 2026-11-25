@@ -101,6 +101,10 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     segment (`KIND_SEGMENT`); fills are triangles (`KIND_TRIANGLE`) antialiased only on true contour
     edges (never bridge edges or diagonals), so translucent fills have no seams. No atlas, so a shape can
     change every frame (`examples/shapes`). SVG export emits `fill-rule="evenodd"` for `FillRule::EvenOdd`.
+    `Area::new(&path, rule)` triangulates a path once (clones share the triangles) for
+    `Shape::fill_area`, so a map kept in state redraws without triangulating again, and
+    `Area::contains(point)` hit-tests under the same rule (a point in a hole misses).
+    `Path::polygon(points)` adds a closed subpath.
     Translucent strokes blend twice where segments overlap at a joint; fills do not overlap.
   - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`). Circular alpha cutouts (`El::cutout_circle` for one hole, `El::cutout_circles` for several intersected holes) isolate the element and its subtree into one layer per hole so backdrops show through without wrappers (`examples/shapes`).
   - Every path blends in sRGB-encoded space by default — `App` windows, overlays, standalone
@@ -728,6 +732,7 @@ top-left, which is what popups and context menus anchor to.
 | `Cx::window_layout`, `window_layout_with`, `memo::window_layout` | `[x, y, w, h]`, as laid out, after scrolling | window |
 | `Cx::anchor_placement`, `memo::anchor_placement` | resolved `(Side, Align)` of an anchored overlay after RTL mirroring and flipping; re-runs only when the resolved placement changes | physical side/align |
 | `on_link` (`Tx::link_rect`) | `[left, top, width, height]` of the activated link's first drawn line box (pointer, keyboard, or a11y) | window |
+| `on_link_hover` | `Option<[left, top, width, height]>` of the hovered link's hit line box on enter/switch, `None` on leave | window |
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
 `on_press_tx`, `on_background_press_tx`, `on_double_press_tx`, and `on_middle_press` expose
@@ -737,7 +742,7 @@ assistive-technology activation and outside press handlers). Inside `El::on_link
 `Markdown::on_link_tx`), `tx.link_rect() -> Option<[f32; 4]>` returns `[left, top, width, height]`
 in window points for the activated link's first drawn line box on pointer click, touch tap,
 keyboard Enter/Space, and assistive-technology activation (`None` in every other handler and when
-the link was not drawn this frame). Add `.hover_tracks_bounds()` to an
+the link was not drawn this frame). `El::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)` fires only on transitions between hovered links (and `(None, None)` when hover ends via pointer leave, scroll under a stationary pointer, overlying hit occlusion, unmount, rebuild, or turning disabled/inert; touch has no hover and windows without a handler pay no pointer-move work), reporting the hit line box in window points and sharing geometry with `Tx::link_rect()`. Read `tx.pressing() -> bool` inside `on_link_hover` or any other handler to tell whether any mouse button is currently held down (matching `PointerEvent::pressing`). Add `.hover_tracks_bounds()` to an
 element to make `on_hover_change` and hover/press paint tracks follow whether a held press is
 currently inside its clipped/`press_scale`-compensated hit bounds and inside the window (including
 on coordinate-less pointer-leave) without ending capture or changing ancestor defaults. `on_hover`,
@@ -1049,13 +1054,24 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   native-surface slots blank, linear blending in sRGB) instead of freezing the window. Frames
   requiring `FontSmoothing::Slug`, Slug outline glyphs, unknown instance kinds, or a mismatched
   target hold the previous frame until the GPU takes over, and frame 1 stays cloaked until drawn.
-  Linux `CpuFirst::Auto` is unchanged. Apps can also choose `CpuFirst::Only` to stay on the CPU
-  renderer on hardware GPUs (until a GPU-only feature is drawn on desktop, or permanently on web) or
-  `CpuFirst::Off` to open directly on the GPU (restoring immediate WARP handover on GPU-less
-  Windows). `RUNE_CPU_FIRST` (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the
-  builder without a rebuild (`0` or `off` for `Off`, `only` for `Only`, `auto` for `Auto`; unset,
-  empty, or unrecognized values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored
-  on macOS, iOS, headless runs, transparent windows, and inline/document web pages.
+  On Linux under `CpuFirst::Auto` with `WGPU_ADAPTER_NAME` unset, an opaque window whose background
+  GPU turns out to be a software one (lavapipe, llvmpipe) stays on `CpuPainter` instead of handing
+  over; a frame that later needs a GPU-only feature hands over to it, keeping the previous frame
+  until it does. Transparent Linux windows still open on the GPU whenever a GPU surface can be made;
+  under `CpuFirst::Auto` or `CpuFirst::Only` with `WGPU_ADAPTER_NAME` unset, if pre-swapchain GPU
+  startup fails (for example, no Vulkan driver is installed), a visible transparent window falls
+  back to `CpuPainter` with alpha buffers (`wl_shm` ARGB8888 on Wayland; 32-bit ARGB TrueColor on
+  X11, or a 24-bit opaque window with the theme background if X11 gives no 32-bit visual), marks
+  its GPU job failed so Vulkan is not retried, and paints degradable `NeedsGpu` features without
+  their GPU-only modifier. Apps can also choose `CpuFirst::Only` to stay on the CPU renderer on
+  hardware GPUs (until a GPU-only feature is drawn on desktop, or permanently on web) or
+  `CpuFirst::Off` to open directly on the GPU without CPU fallback (restoring immediate WARP
+  handover on GPU-less Windows and surfacing GPU errors directly on Linux). `RUNE_CPU_FIRST`
+  (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the builder without a rebuild
+  (`0` or `off` for `Off`, `only` for `Only`, `auto` for `Auto`; unset, empty, or unrecognized
+  values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored on macOS, iOS, headless
+  runs, Windows transparent windows (which use WARP on GPU-less Windows), and inline/document web
+  pages.
 - **GPU memory policy (`GpuMemoryPolicy`).** By default Rune creates wgpu devices with
   `GpuMemoryPolicy::MemoryUsage` (smaller suballocation blocks than wgpu's `Performance` default).
   Apps can choose `MemoryUsage`, `Performance`, or `Manual { block_size }` at startup via
@@ -1943,7 +1959,11 @@ Hooks also hear a pasted image (a screenshot, an image copied from a browser or 
 (`size()`), whatever form the clipboard held it in. Rune fetches it only for a target with a
 hook (`on_input_paste`, `on_paste_content`, `read_clipboard`), so pasting text into other fields
 never decodes one, and leaves out images over `clipboard::MAX_IMAGE_BYTES` (32 MiB as PNG).
-An image alone, with no text, reaches only hooks. Copies don't write images yet.
+An image alone, with no text, reaches only hooks. Copies don't write images yet. On the web,
+hooks also hear files pasted into or dropped on the field as `content.web_files()`: up to
+`clipboard::MAX_WEB_FILES` `WebFile` handles with a name, type and size, no path, and nothing
+read until `WebFile::read(max)` (see WEB.md). A dropped PNG or text file is also the image or
+text.
 
 ```rust
 text_input(&s.prompt, style).on_edit(|s: &mut S| &mut s.prompt).on_input_paste(|s: &mut S, content, _| {
@@ -2153,6 +2173,19 @@ double-presses) the nearest ancestor with a handler, hover and press paint reach
 and its `on_secondary_press` wins over the Copy menu. A drag that selects text doesn't press.
 Inside a draggable row (`on_drag` or `drag_out`), dragging drags the row and double- and
 triple-clicks still select words and lines. Text with its own handlers keeps them.
+
+`El::caret_browsing(true)` opts a selectable text or `selection_group(true)` container into
+keyboard caret browsing (off by default, leaving ordinary selectable text non-focusable): the
+element becomes focusable via click or Tab, draws a 1.5 pt caret when focused and collapsed
+(`El::caret` sets its colour, else the text's foreground), moves by character, word
+(`Ctrl`/`Option`+Left/Right), visual line (preserving a sticky horizontal column across shorter
+lines and sibling texts), page (`PageUp`/`PageDown`), and line or document `Home`/`End`, extends
+selections with `Shift` across mounted siblings and unmounted `virtual_rows` / `virtualize`
+rows (scrolling to mount destination rows, keeping offscreen anchors pinned for `Cmd/Ctrl+C`,
+and working with small `El::virtual_overscan`), collapses a non-empty selection on plain
+Left/Right (scrolling back to an offscreen anchor when needed), scrolls enclosing viewports to
+keep the caret visible, keeps `Cmd/Ctrl+C` and
+`Cmd/Ctrl+A`, and publishes the caret and selection to AccessKit and the web accessibility mirror.
 
 The selection lives in the runtime, so selecting never re-runs the view or re-lays out the text.
 `El::selection_color` sets the highlight for selectable text and text fields alike, and both draw
@@ -2448,8 +2481,15 @@ row().key("theme").child(text(theme_title(&s.theme)))
   your hook so you can render it in-window and run the chosen action with
   `tx.resolve_field_menu(Some(id))` (or `None` to cancel), while macOS and Windows keep their
   native menus unchanged. `cargo run -p rune --example popup_menu` shows both kinds.
-- **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`) while a
-  menu is open, and `--trace` notes `popup-menu:open`, `popup-menu:pick:{id}` and
+- **Web style**: on the web the menu is the page's own elements (`role="menu"`), light or dark
+  as the window draws. `PopupMenu::style(PopupMenuStyle::new().background(..).text(..))` draws
+  it from the app's palette instead: `background`, `text`, `muted`, `separator`, `highlight`,
+  `font_family`, `font_size`, `line_height`, `padding`, `corner_radius` and
+  `item_corner_radius`, each unset one keeping its default. Submenus use the top menu's style
+  (their own isn't used or shown in `--tree`); keyboard, pointer and screen-reader use don't
+  change, and native menus ignore it.
+- **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`, and
+  `style` when set) while a menu is open, and `--trace` notes `popup-menu:open`, `popup-menu:pick:{id}` and
   `popup-menu:cancel`. Scripts answer it with `{"type": "menu-pick", "id": "dark"}` or
   `{"type": "menu-cancel"}`. In Rust tests, `rt.popup_menu()` returns the open `PopupMenu`
   with read-only `entries()` (`&[PopupEntry]`), `selected_id()`, and `PopupItem` getters
@@ -3343,8 +3383,10 @@ installed at build time, including in CI:
 - Fedora: `dnf install libxkbcommon-devel wayland-devel`
 - Arch: `pacman -S libxkbcommon wayland`
 
-Windowed runs need the XKB X11 library, and GPU runs without a physical GPU
-need a software Vulkan driver. On stock Ubuntu 24.04 both are one install away:
+Windowed runs need the XKB X11 library; visible opaque and transparent windows
+fall back to `CpuPainter` when no Vulkan driver is installed (unless `CpuFirst::Off`
+or `WGPU_ADAPTER_NAME` is set), while GPU runs without a physical GPU need a software
+Vulkan driver. On stock Ubuntu 24.04 both are one install away:
 
 ```sh
 sudo apt-get install -y libxkbcommon-x11-0 mesa-vulkan-drivers
@@ -3589,9 +3631,12 @@ if let Some(menu) = rt.popup_menu() {
   `description`, `text`, `rect`, `inset`, `fill`, `border_color`, `text_color`,
   `text_style`, `text_size`, `wrap`, `truncate`, `text_cut`, `clips`, `scroll_axes`,
   `raised`, `focused`, `exiting`, ...), `Tx::read_elements` (deferred presented-frame element
-  reads from handlers and `poll`), `rt.element_at` / `element_at_with` / `Tx::element_at_with`
+  reads from handlers and `poll`), `Tx::read_layout` / `Tx::read_presented` (one keyed
+  element's laid-out or last drawn rect, the handler-side `Cx::window_layout` and
+  `rt.presented`), `rt.element_at` / `element_at_with` / `Tx::element_at_with`
   (`Pick::{transparent, interactive, drop_targets}` to skip passive layers or target drop zones,
-  and `Picked::{path, key, rect, local}` for drawn bounds and element-local coordinates),
+  `Picked::{path, key, rect, local}` for drawn bounds and element-local coordinates, and
+  `Picked::data::<T>()` for the nearest value attached with `El::data` on the hit path),
   `rt.accessibility_json()` / `rt.accessibility_tree()`, and `rt.popup_menu()`
   (`PopupMenu::entries()`, `selected_id()`, `find()`).
 

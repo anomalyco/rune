@@ -368,7 +368,13 @@ impl<S: 'static> Combobox<S> {
     /// localisation or a more specific prompt than the default `"Search"` / `"Search <label>"`.
     /// Accessibility-only (not drawn); blank values fall back to the default.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Combobox, ComboboxOption, ComboboxState, Kit};
+    /// # struct App { combo: ComboboxState }
+    /// # let s = App { combo: ComboboxState::default() };
+    /// # let options: [ComboboxOption; 0] = [];
+    /// # let kit = Kit::neutral(true);
+    /// # let mut layer = Vec::new();
     /// Combobox::new("models", &s.combo, &options, |s: &mut App| &mut s.combo)
     ///     .label("Modèle")
     ///     .search_placeholder("Rechercher des modèles…")

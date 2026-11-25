@@ -380,3 +380,128 @@ fn new_props_validate_types_and_ranges() {
         assert!(errs.iter().any(|e| e.contains(expected)), "prop `{prop}` should error naming `{expected}`, got {errs:?}");
     }
 }
+
+#[test]
+fn cursor_names_the_pointers_shape_over_a_node_and_rejects_an_unknown_name() {
+    let src = r#"
+local ui = require("@rune/ui")
+return {
+    render = function()
+        return ui.col({ w = 200, h = 120 }, {
+            ui.row({ key = "field", w = 200, h = 40, cursor = "text", onPress = function() end }, { "Field" }),
+            ui.row({ key = "button", w = 200, h = 40, onPress = function() end }, { "Button" }),
+        })
+    end,
+}
+"#;
+    let (mut rt, logged) = render_runtime(src, (300.0, 200.0));
+    assert!(logged.borrow().iter().all(|(l, _)| *l != LogLevel::Error), "{:?}", logged.borrow());
+    let [x, y, w, h] = rect_of(&rt, "field");
+    rt.pointer_move(x + w / 2.0, y + h / 2.0);
+    assert_eq!(rt.cursor(), rune::Cursor::Text, "the node's own cursor");
+    let [x, y, w, h] = rect_of(&rt, "button");
+    rt.pointer_move(x + w / 2.0, y + h / 2.0);
+    assert_eq!(rt.cursor(), rune::Cursor::Default, "a node that names none");
+
+    let errors = render_errors(r#"
+local ui = require("@rune/ui")
+return { render = function() return ui.row({ cursor = "hand" }, { "x" }) end }
+"#);
+    assert!(errors.iter().any(|e| e.contains("unknown cursor hand")), "{errors:?}");
+}
+
+#[test]
+fn enter_exit_and_layout_decode_and_bad_strings_are_errors() {
+    let src = r#"
+local ui = require("@rune/ui")
+local STYLE = table.freeze({ enter = "fade slide-up:24 spring:0.25:0.1", exit = "fade scale" })
+return {
+    render = function()
+        return ui.col({ layout = true }, {
+            ui.box({ key = "a", enter = "slide-left:12", exit = "none" }),
+            ui.box(STYLE, { key = "b" }),
+            ui.text("c", { enter = "fade spring:0.2" }),
+        })
+    end,
+}
+"#;
+    let (_rt, logged) = render_runtime(src, (300.0, 200.0));
+    assert!(logged.borrow().is_empty(), "unexpected logs: {:?}", logged.borrow());
+
+    for (props, wanted) in [("enter = \"wobble\"", "enter"), ("exit = \"spring:0\"", "exit"), ("enter = 3", "enter"), ("layout = 1", "layout")] {
+        let src = format!("local ui = require(\"@rune/ui\")\nreturn {{ render = function() return ui.box({{ {props} }}) end }}");
+        let errs = render_errors(&src);
+        assert!(errs.iter().any(|e| e.contains(wanted)), "expected {wanted} error for {props}, got {errs:?}");
+    }
+}
+
+#[test]
+fn enter_and_exit_play_and_reduced_motion_keeps_only_none() {
+    let src = r#"
+local ui = require("@rune/ui")
+local shown = false
+return {
+    render = function()
+        return ui.col({ w = 300, h = 200, gap = 8 }, {
+            ui.row({ key = "toggle", w = 80, h = 24, onPress = function() shown = not shown end }, { "Toggle" }),
+            ui.box({ key = "s_slot", w = 60, h = 40 }, {
+                shown and ui.box({ key = "s", w = 60, h = 40, fill = "indicator", enter = "slide-up:24 spring:0.4", exit = "slide-up:24 spring:0.4" }),
+            }),
+            ui.box({ key = "n_slot", w = 60, h = 40 }, {
+                shown and ui.box({ key = "n", w = 60, h = 40, fill = "indicator", enter = "none", exit = "none" }),
+            }),
+        })
+    end,
+}
+"#;
+    let (mut rt, logged) = render_runtime(src, (320.0, 220.0));
+    assert!(logged.borrow().is_empty(), "unexpected logs: {:?}", logged.borrow());
+    let rest = rect_of(&rt, "s_slot")[1];
+    let (bx, by) = rt.find("toggle").expect("toggle button");
+    let toggle = |rt: &mut Runtime<Script>| {
+        rt.pointer_down(bx, by);
+        rt.pointer_up(bx, by);
+        rt.frame(0.016);
+        rt.frame(0.05);
+    };
+    let settle = |rt: &mut Runtime<Script>| {
+        for _ in 0..200 {
+            if !rt.frame(0.016) {
+                break;
+            }
+        }
+    };
+    let shows = |rt: &Runtime<Script>, key: &str| rt.presented(key).is_some_and(|(_, opacity)| opacity > 0.0);
+
+    // An entrance sliding up starts below its place and rises; `none` shows whole at once.
+    toggle(&mut rt);
+    let y = rect_of(&rt, "s")[1];
+    assert!(y > rest + 1.0 && y <= rest + 24.0, "slide-up entrance should start below rest={rest}, got {y}");
+    assert_eq!(rt.presented("n").map(|(_, o)| o), Some(1.0), "enter = none shows at once");
+    settle(&mut rt);
+    assert!((rect_of(&rt, "s")[1] - rest).abs() < 0.5, "the entrance lands at rest");
+
+    // An exit sliding up rises out; `none` is gone at once.
+    toggle(&mut rt);
+    let y = rect_of(&rt, "s")[1];
+    assert!(y < rest - 1.0, "slide-up exit should rise above rest={rest}, got {y}");
+    assert!(!shows(&rt, "n"), "exit = none goes at once");
+    settle(&mut rt);
+
+    // Under Reduce Motion the slides are dropped, and `none` still holds.
+    rt.set_system_reduced_motion(true);
+    toggle(&mut rt);
+    let y = rect_of(&rt, "s")[1];
+    assert!((y - rest).abs() < 0.5, "reduced motion drops the slide-up entrance: rest={rest}, got {y}");
+    // Rune would reduce a kept slide to no motion at all; dropped, the node takes the default
+    // transition's reduced fade instead.
+    let opacity = rt.presented("s").map_or(0.0, |(_, o)| o);
+    assert!(opacity < 1.0, "the dropped entrance falls back to the default fade, got opacity {opacity}");
+    assert_eq!(rt.presented("n").map(|(_, o)| o), Some(1.0), "enter = none still shows at once");
+    settle(&mut rt);
+    toggle(&mut rt);
+    if let Some(([_, y, _, _], _)) = rt.presented("s") {
+        assert!((y - rest).abs() < 0.5, "reduced motion drops the slide-up exit: rest={rest}, got {y}");
+    }
+    assert!(!shows(&rt, "n"), "exit = none still goes at once");
+}

@@ -95,6 +95,12 @@ impl capture::PointerState {
         self.push_hover_gone(n.path.clone(), f);
         true
     }
+
+    /// Removes a pruned node from link-hover tracking; returns the hovered link if a leave must
+    /// still be queued.
+    pub(super) fn prune_link_hover(&mut self, n: &Node) -> Option<capture::HoveredLink> {
+        self.link_hover.take_if(|h| h.node_id == n.id).map(|h| *h)
+    }
 }
 
 impl RuntimeCore {
@@ -108,6 +114,7 @@ impl RuntimeCore {
         self.pointer.hover_hold.set_held(held);
         if let Some((inside, _)) = within { self.apply_within(inside, held); }
         self.apply_hovered(hovered, held);
+        self.refresh_link_hover(held);
         held
     }
 
@@ -221,11 +228,115 @@ impl RuntimeCore {
     /// Node `n` leaves the tree: if it heard the pointer enter, its `on_hover_change` still
     /// hears the leave, though the handler goes with the node before the action runs. A
     /// delayed element heard the enter only once shown; a pending one just stops waiting.
+    /// Updates `El::on_link_hover` state against the current hovered link and queues
+    /// `Action::LinkHover` only on transitions. Does nothing when no node in the tree sets
+    /// `on_link_hover` and no previously hovered link is owed a leave.
+    pub(in crate::runtime) fn refresh_link_hover(&mut self, held: bool) {
+        if !self.tree.has_link_hover && self.pointer.link_hover.is_none() {
+            return;
+        }
+        let pressing = self.pointer.any_button_down();
+        // Touch has no hover: an active finger never starts a link hover and ends any
+        // mouse-driven link hover that was open before the touch landed.
+        let next = if self.pointer.is_touch_input() || self.pointer.left() {
+            None
+        } else if held {
+            self.pointer.link_hover.as_deref().and_then(|cur| {
+                let i = self.hover_live(&cur.path)?;
+                if self.node_disabled(i) { return None; }
+                let n = &self.tree.nodes[i];
+                if n.id != cur.node_id { return None; }
+                let cold = n.text.as_deref()?.cold.get()?;
+                let handler = cold.on_link_hover.clone()?;
+                let link = cold.links.get(cur.link_index)?;
+                (link.id == cur.link_id).then_some((i, cur.link_index, link.id.clone(), handler, None))
+            })
+        } else {
+            self.pointer.pos.and_then(|(x, y)| {
+                let path = self.pointer.hovered.as_deref()?;
+                let i = self.live_index(path)?;
+                if !self.allowed(i) || self.node_disabled(i) { return None; }
+                let cold = self.tree.nodes[i].text.as_deref()?.cold.get()?;
+                let handler = cold.on_link_hover.clone()?;
+                if cold.links.is_empty() { return None; }
+                let k = self.link_at(i, x, y)?;
+                let id = self.tree.nodes[i].text.as_deref()?.cold.links.get(k)?.id.clone();
+                Some((i, k, id, handler, Some((x, y))))
+            })
+        };
+
+        let same = match (&self.pointer.link_hover, &next) {
+            (Some(cur), Some((i, k, id, _, _))) => {
+                cur.path == self.tree.nodes[*i].path
+                    && cur.node_id == self.tree.nodes[*i].id
+                    && cur.link_index == *k
+                    && cur.link_id == *id
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if same {
+            if let (Some(cur), Some((_, _, _, handler, _))) = (&mut self.pointer.link_hover, next) {
+                cur.handler = handler;
+            }
+            return;
+        }
+
+        let prev = self.pointer.link_hover.take();
+        match (prev, next) {
+            (Some(old), Some((i, k, id, handler, at))) => {
+                let new_path = self.tree.nodes[i].path.clone();
+                let new_node_id = self.tree.nodes[i].id;
+                let rect = self.link_drawn_rect(i, k, at);
+                if old.path != new_path {
+                    // Moving directly from a link on one text node to a link on another: leave
+                    // the old node first so shared handlers (e.g. Markdown) settle on the new one.
+                    self.pointer.push_link_hover_gone(old.path.clone(), old.handler);
+                    self.frame.queue.push(Action::LinkHover(old.path, None, None, pressing));
+                }
+                self.frame.queue.push(Action::LinkHover(new_path.clone(), Some(id.clone()), rect, pressing));
+                self.pointer.link_hover = Some(Box::new(capture::HoveredLink {
+                    path: new_path,
+                    node_id: new_node_id,
+                    link_index: k,
+                    link_id: id,
+                    handler,
+                }));
+            }
+            (Some(old), None) => {
+                self.pointer.push_link_hover_gone(old.path.clone(), old.handler);
+                self.frame.queue.push(Action::LinkHover(old.path, None, None, pressing));
+            }
+            (None, Some((i, k, id, handler, at))) => {
+                let new_path = self.tree.nodes[i].path.clone();
+                let new_node_id = self.tree.nodes[i].id;
+                let rect = self.link_drawn_rect(i, k, at);
+                self.frame.queue.push(Action::LinkHover(new_path.clone(), Some(id.clone()), rect, pressing));
+                self.pointer.link_hover = Some(Box::new(capture::HoveredLink {
+                    path: new_path,
+                    node_id: new_node_id,
+                    link_index: k,
+                    link_id: id,
+                    handler,
+                }));
+            }
+            (None, None) => unreachable!(),
+        }
+    }
+
     pub(in crate::runtime) fn hover_pruned(&mut self, n: &Node) {
-        if !self.pointer.prune_hover(n) { return; }
-        let queued = self.frame.queue.len();
-        self.frame.queue.push(Action::HoverChange(n.path.clone(), false));
-        self.frame.queue.observe_since(queued);
+        if self.pointer.prune_hover(n) {
+            let queued = self.frame.queue.len();
+            self.frame.queue.push(Action::HoverChange(n.path.clone(), false));
+            self.frame.queue.observe_since(queued);
+        }
+        if let Some(old) = self.pointer.prune_link_hover(n) {
+            let queued = self.frame.queue.len();
+            let pressing = self.pointer.any_button_down();
+            self.pointer.push_link_hover_gone(old.path.clone(), old.handler);
+            self.frame.queue.push(Action::LinkHover(old.path, None, None, pressing));
+            self.frame.queue.observe_since(queued);
+        }
     }
 
     /// The pointer moved or pressed, or a hand scrolled: hover follows the pointer through the

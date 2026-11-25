@@ -33,7 +33,36 @@ use pool::Pool;
 /// State outlives a closed window (see `App`), so an app that wants a close to stop
 /// its requests calls `cancel` from `App::on_close`.
 ///
-/// ```ignore
+/// ```no_run
+/// # mod rune {
+/// #     pub use rune_core::{Latest, tok::TextStyle};
+/// #     pub struct Cx<S>(std::marker::PhantomData<S>);
+/// #     pub struct Tx;
+/// #     impl Tx { pub fn instant(&mut self) {} }
+/// #     #[derive(Default)] pub struct TextEdit { pub text: String }
+/// #     pub struct El;
+/// #     impl El {
+/// #         pub fn on_edit<S>(self, _: impl Fn(&mut S) -> &mut TextEdit) -> Self { self }
+/// #         pub fn on_input_change<S>(self, _: impl Fn(&mut S, &mut Tx)) -> Self { self }
+/// #         pub fn child(self, _: El) -> Self { self }
+/// #         pub fn children(self, _: impl IntoIterator<Item = El>) -> Self { self }
+/// #     }
+/// #     pub fn col() -> El { El }
+/// #     pub fn text(_: impl Into<String>) -> El { El }
+/// #     pub fn text_input(_: &TextEdit, _: TextStyle) -> El { El }
+/// #     pub struct AppSpec<S> {
+/// #         pub setup: Option<fn(&mut S, rune_core::Waker)>,
+/// #         pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
+/// #         pub init: fn() -> S,
+/// #         pub view: fn(&S, &mut Cx<S>) -> El,
+/// #     }
+/// #     impl<S> AppSpec<S> {
+/// #         pub fn new(_: &str, _: (f32, f32), init: fn() -> S, view: fn(&S, &mut Cx<S>) -> El) -> Self {
+/// #             Self { setup: None, poll: None, init, view }
+/// #         }
+/// #     }
+/// #     pub fn run<S>(_: AppSpec<S>) {}
+/// # }
 /// use std::time::Duration;
 /// use rune::{AppSpec, Cx, El, Latest, TextEdit, TextStyle, Tx, col, text, text_input};
 ///
@@ -297,9 +326,17 @@ impl<T: Send + 'static> Latest<T> {
     /// again after one of them. It is kept when the work panics, returns nothing, or lands:
     /// an unchanged key is never asked twice.
     ///
-    /// ```ignore
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use rune_core::Latest;
+    /// # struct Query { text: String }
+    /// # struct Index;
+    /// # impl Index { fn search(&self, q: &str) -> Vec<String> { vec![q.to_owned()] } }
+    /// # struct State { query: Query, results: Latest<Vec<String>> }
+    /// # let s = State { query: Query { text: "hi".into() }, results: Latest::default() };
+    /// # let index = Arc::new(Index);
     /// // poll: runs every frame the query could have changed.
-    /// s.results.request_if_changed(&s.query.text, |q| index.search(&q));
+    /// s.results.request_if_changed(&s.query.text, move |q| index.search(&q));
     /// ```
     pub fn request_if_changed<K: Clone + PartialEq + Send + 'static>(
         &self,

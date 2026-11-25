@@ -421,17 +421,45 @@ impl RuntimeCore {
         }
     }
 
-    /// First drawn line box `[left, top, width, height]` in window points for link `k` of node `i`,
-    /// or `None` when node `i` was not drawn this frame or the link has no drawn line box.
-    pub(in crate::runtime) fn link_first_rect(&self, i: usize, k: usize) -> Option<[f32; 4]> {
+    /// Drawn line box `[left, top, width, height]` in window points for link `k` of node `i`:
+    /// when `at` is `Some((x, y))`, the line box containing `(x, y)` (falling back to the first
+    /// drawn line box); when `at` is `None`, the first drawn line box. Returns `None` when node
+    /// `i` was not drawn this frame or the link has no drawn line box.
+    pub(in crate::runtime) fn link_drawn_rect(&self, i: usize, k: usize, at: Option<(f32, f32)>) -> Option<[f32; 4]> {
         if self.paint.drawn.len() != self.tree.nodes.len() { return None; }
         let d = self.paint.drawn.get(i).copied().filter(|d| d[2] > 0.0 || d[3] > 0.0)?;
-        let (_, r) = self.link_boxes_for(i, k, [d[0], d[1], d[0] + d[2], d[1] + d[3]]).into_iter().next()?;
         let scroll_x = self.tree.nodes[i].input.as_deref().filter(|inp| inp.single_line).map_or(0.0, |_| {
             let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
             self.edit.input_scroll.get(&self.tree.nodes[i].path).copied().unwrap_or(0.0) * z
         });
-        Some([r[0] - scroll_x, r[1], (r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0)])
+        let (rect, hit_at) = match at {
+            Some((x, y)) if !self.paint.turn_scratch.is_empty() && self.turn_of(i).is_some() => {
+                let (b, ux, uy) = self.unturned_box_and_point(i, x, y);
+                (b, Some((ux, uy)))
+            }
+            Some((x, y)) => ([d[0], d[1], d[0] + d[2], d[1] + d[3]], Some((x, y))),
+            None => ([d[0], d[1], d[0] + d[2], d[1] + d[3]], None),
+        };
+        let mut boxes = self.link_boxes_for(i, k, rect).into_iter().map(|(_, r)| [r[0] - scroll_x, r[1], r[2] - scroll_x, r[3]]);
+        let first = boxes.next()?;
+        let r = match hit_at {
+            Some((ux, uy)) if contains(first, ux, uy) => first,
+            Some((ux, uy)) => boxes.find(|&b| contains(b, ux, uy)).unwrap_or(first),
+            None => first,
+        };
+        let r = if !self.paint.turn_scratch.is_empty() && let Some(t) = self.turn_of(i) {
+            let s = self.env.scale;
+            t.bbox(r.map(|v| v * s)).map(|v| v / s)
+        } else {
+            r
+        };
+        Some([r[0], r[1], (r[2] - r[0]).max(0.0), (r[3] - r[1]).max(0.0)])
+    }
+
+    /// First drawn line box `[left, top, width, height]` in window points for link `k` of node `i`,
+    /// or `None` when node `i` was not drawn this frame or the link has no drawn line box.
+    pub(in crate::runtime) fn link_first_rect(&self, i: usize, k: usize) -> Option<[f32; 4]> {
+        self.link_drawn_rect(i, k, None)
     }
 
     /// Runs the `on_link` handler of node `path` for link `k`.
@@ -462,6 +490,34 @@ impl RuntimeCore {
         }) else { return false };
         log_event!(self, "link secondary {path} {id}");
         (f.0)(app.states(), &id, point.window(), tx);
+        true
+    }
+
+    /// Runs the `on_link_hover` handler of node `path` with `(url, rect)`.
+    /// A leave (`url.is_none()`) still reaches a node that unmounted, is exiting, or dropped its
+    /// handler, via the saved handler from when it heard the enter.
+    pub(in crate::runtime) fn dispatch_link_hover(
+        &mut self,
+        app: &mut dyn AppDriver,
+        path: &str,
+        url: Option<&str>,
+        rect: Option<[f32; 4]>,
+        tx: &mut Tx,
+    ) -> bool {
+        let gone = if url.is_none() { self.pointer.take_link_hover_gone(path) } else { None };
+        let live = self.node_index(path).and_then(|i| {
+            if url.is_some() && (self.node_disabled(i) || !self.allowed(i)) { return None; }
+            self.tree.nodes[i].text.as_deref()?.cold.on_link_hover.clone()
+        });
+        let exiting = || {
+            url.is_none().then(|| {
+                self.tree.nodes.iter()
+                    .find(|n| n.path == path)
+                    .and_then(|n| n.text.as_deref()?.cold.on_link_hover.clone())
+            }).flatten()
+        };
+        let Some(f) = live.or(gone).or_else(exiting) else { return false };
+        (f.0)(app.states(), url, rect, tx);
         true
     }
 
@@ -762,3 +818,7 @@ mod pill_hit_tests;
 #[cfg(test)]
 #[path = "link_rect_tests.rs"]
 mod link_rect_tests;
+
+#[cfg(test)]
+#[path = "link_hover_tests.rs"]
+mod link_hover_tests;

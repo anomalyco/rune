@@ -95,8 +95,11 @@ impl El {
     /// while still deferring to a parent's cross-axis alignment (such as `col().items_center()`
     /// or `row().center_y()`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{row, text};
+    /// # let _ =
     /// row().w_fit().px(12.0).child(text("Badge"))
+    /// # ;
     /// ```
     #[inline]
     pub fn w_fit(mut self) -> Self {
@@ -105,7 +108,8 @@ impl El {
     }
     /// [`El::w_fit`] in place.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::row;
     /// let mut e = row();
     /// e.set_w_fit();
     /// ```
@@ -127,8 +131,11 @@ impl El {
     }
     /// Height as a fraction of the parent's (CSS `height: 40%` is `.h_frac(0.4)`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{col, el};
+    /// # let _ =
     /// col().h(200.0).child(el().h_frac(0.4))
+    /// # ;
     /// ```
     #[inline]
     pub fn h_frac(mut self, f: f32) -> Self {
@@ -137,7 +144,8 @@ impl El {
     }
     /// [`El::h_frac`] in place.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::el;
     /// let mut e = el();
     /// e.set_h_frac(0.4);
     /// ```
@@ -151,8 +159,11 @@ impl El {
     /// Keeps `align-self` at `auto`, so a child hugs its content height inside a stretching
     /// `row()` while still deferring to a parent's cross-axis alignment (such as `row().center_y()`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{col, text};
+    /// # let _ =
     /// col().h_fit().py(6.0).child(text("Badge"))
+    /// # ;
     /// ```
     #[inline]
     pub fn h_fit(mut self) -> Self {
@@ -161,7 +172,8 @@ impl El {
     }
     /// [`El::h_fit`] in place.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::col;
     /// let mut e = col();
     /// e.set_h_fit();
     /// ```
@@ -445,8 +457,12 @@ impl El {
     /// Reset this element's cross-axis alignment to defer to the parent's `align-items`
     /// (CSS `align-self: auto`).
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::el;
+    /// # let control = el();
+    /// # let _ =
     /// control.self_start().self_auto()
+    /// # ;
     /// ```
     #[inline]
     pub fn self_auto(mut self) -> Self {
@@ -455,7 +471,9 @@ impl El {
     }
     /// [`El::self_auto`] in place.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::el;
+    /// # let mut control = el();
     /// control.set_self_auto();
     /// ```
     #[inline]
@@ -549,10 +567,14 @@ impl El {
     /// scroll viewport inside it never gets to scroll. Put `.min_h(0.0)` on each flex column
     /// between the bounded ancestor and the viewport:
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{ScrollSpec, col, el};
+    /// # let (header, list) = (el(), el());
+    /// # let _ =
     /// col().h_full().child(header).child(
     ///     col().grow(1.0).min_h(0.0).child(col().scroll(ScrollSpec { stick_bottom: false }).grow(1.0).child(list)),
     /// )
+    /// # ;
     /// ```
     #[inline]
     pub fn min_h(mut self, h: f32) -> Self {
@@ -787,11 +809,15 @@ impl El {
     /// coordinates at any zoom, and a handler that only moves a [`Live`](crate::Live) value
     /// (a crosshair) says so with [`Tx::live_only`].
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Live, el};
+    /// # struct Canvas { crosshair: Live<[f32; 2]> }
+    /// # let _ = el()
     /// .on_pointer_move_local(|s: &mut Canvas, p, tx| {
     ///     s.crosshair.set([p.x, p.y]);
     ///     tx.live_only();
     /// })
+    /// # ;
     /// ```
     #[track_caller]
     pub fn on_pointer_move_local<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {

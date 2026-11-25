@@ -13,14 +13,23 @@
 //! stretch, which [`Clip::write_bundle`] turns into a folder (a motion-lint trace, a contact
 //! sheet and a summary).
 //!
-//! ```ignore
+//! ```
+//! # use rune::{Tx, el, rewind::{Rewind, Scrub, Sent}};
+//! # struct App { rewind: Rewind, scrub: Scrub }
+//! # impl App { fn handle_clip(&mut self, _: Sent) {} }
+//! # fn _record(s: &mut App, tx: &mut Tx) {
 //! // Start recording (a setting turned on):
 //! tx.record_rewind(Some(&s.rewind));
 //! // A shortcut freezes it:
 //! s.scrub.open(&s.rewind);
+//! # }
+//! # let s = App { rewind: Rewind::new(), scrub: Scrub::default() };
+//! # let app_view = el();
 //! // The view, always wrapped the same way so the app's elements keep their paths:
+//! # let _ =
 //! el().child(app_view.time_scale(if s.scrub.is_open() { 0.0 } else { 1.0 }))
-//!     .child(s.scrub.view(|s: &mut App| &mut s.scrub, |s, sent, tx| { ... }))
+//!     .child(s.scrub.view(|s: &mut App| &mut s.scrub, |s, sent, _tx| s.handle_clip(sent)))
+//! # ;
 //! ```
 
 mod bundle;

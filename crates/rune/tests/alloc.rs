@@ -152,10 +152,21 @@ fn scroll_edge_fades_allocate_nothing_per_frame() {
         rt.fling(100.0, 100.0, -1500.0);
         for _ in 0..4 { rt.frame(1.0 / 120.0); }
         let before = allocs();
-        for _ in 0..30 { assert!(rt.frame(1.0 / 120.0), "still gliding"); }
-        allocs() - before
+        let mut steady = 0usize;
+        for f in 0..30 {
+            let f0 = allocs();
+            assert!(rt.frame(1.0 / 120.0), "still gliding");
+            if f >= 2 { steady += allocs() - f0; }
+        }
+        (allocs() - before, steady)
     };
-    assert_eq!(gliding(true), gliding(false), "edge fades add no per-frame allocations while scrolling");
+    let (faded, faded_steady) = gliding(true);
+    let (plain, plain_steady) = gliding(false);
+    assert_eq!(faded, plain, "edge fades add no per-frame allocations while scrolling");
+    assert!(faded <= 2, "faded gliding scroll allocated {faded} times across 30 frames (at most one-time twin buffer growth)");
+    assert!(plain <= 2, "plain gliding scroll allocated {plain} times across 30 frames (at most one-time twin buffer growth)");
+    assert_eq!(faded_steady, 0, "faded gliding scroll allocates nothing per steady-state frame");
+    assert_eq!(plain_steady, 0, "plain gliding scroll allocates nothing per steady-state frame");
 }
 
 #[test]

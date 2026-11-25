@@ -150,3 +150,34 @@ pub(super) fn place_inline_children(
         }
     }
 }
+
+/// Re-places every inline child of live-updated text node `parent_idx`, refreshes nested text
+/// inside placed children, lands each child subtree's updated frame in `scene`, and bumps their
+/// paint epochs so `PaintKeep` repaints moved or newly shown/hidden inline children on this frame.
+pub(in crate::runtime) fn place_inline_children_live(
+    taffy: &mut LayoutEngine,
+    text: &mut TextSystem,
+    nodes: &mut [Node],
+    scene: &mut Scene,
+    parent_idx: usize,
+    scale: f32,
+) {
+    place_inline_children(taffy, text, nodes, parent_idx, scale);
+    let mut sub_end = parent_idx + 1;
+    while sub_end < nodes.len() && nodes[sub_end].parent.is_some_and(|p| p >= parent_idx) {
+        sub_end += 1;
+    }
+    for d in parent_idx + 1..sub_end {
+        if nodes[d].text.is_some() && (nodes[d].local.w > 0.0 || nodes[d].local.h > 0.0) {
+            let w = (taffy.box_layout(nodes[d].taffy).w - nodes[d].inset[0] - nodes[d].inset[2]).max(0.0);
+            super::relayout::lay_out_text(text, &mut nodes[d], w, scale);
+            if nodes[d].text.as_ref().is_some_and(|t| !t.cold.inline_boxes.is_empty()) {
+                place_inline_children(taffy, text, nodes, d, scale);
+            }
+        }
+        if scene.contains(nodes[d].id) {
+            scene.land_frame(nodes[d].id, nodes[d].local);
+        }
+        nodes[d].epoch = crate::runtime::paint_keep::next_epoch();
+    }
+}

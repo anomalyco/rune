@@ -284,9 +284,12 @@ impl Drop for FamiliesGuard {
 /// guard lives, whatever the rest of the process has chosen. It is for tests: ones that switch
 /// families run in parallel threads without seeing each other's.
 ///
-/// ```ignore
-/// let _families = rune::text::with_families("Inter", "IBM Plex Mono");
-/// let (w, _) = rune::text::measure("let x = 1;", &[], style.mono(), None);
+/// ```
+/// # use rune_core::tok::TextStyle;
+/// # let style = TextStyle::new(14.0, 400.0);
+/// let _families = rune_text::with_families("Inter", "IBM Plex Mono");
+/// let (w, _) = rune_text::measure("let x = 1;", &[], style.mono(), None);
+/// # assert!(w > 0.0);
 /// ```
 ///
 /// - The fonts are this thread's current ones (its active guard, else its own [`TextSystem`]'s
@@ -345,9 +348,14 @@ impl Drop for FontsGuard {
 /// that measure without building a [`TextSystem`], or that want a temporary font scope that
 /// restores on return or panic.
 ///
-/// ```ignore
-/// let _fonts = rune::text::with_fonts(&[MY_SANS, MY_MONO], ("My Sans", "My Mono"));
-/// let (w, _) = rune::text::measure("Hello", &[], style, None);
+/// ```
+/// # use rune_core::tok::TextStyle;
+/// # const MY_SANS: &[u8] = &[];
+/// # const MY_MONO: &[u8] = &[];
+/// # let style = TextStyle::new(14.0, 400.0);
+/// let _fonts = rune_text::with_fonts(&[MY_SANS, MY_MONO], ("My Sans", "My Mono"));
+/// let (w, _) = rune_text::measure("Hello", &[], style, None);
+/// # assert!(w >= 0.0);
 /// ```
 ///
 /// - Dropping the guard restores what was in force before it, so guards nest with each other and

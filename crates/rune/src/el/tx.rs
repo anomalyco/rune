@@ -10,6 +10,7 @@ mod elements;
 mod keys;
 mod pick;
 mod press;
+mod rects;
 mod scroll;
 
 #[cfg(test)]
@@ -116,6 +117,8 @@ pub struct Tx {
     pub(crate) window_frame: Option<crate::window::frame::FrameRequest>,
     /// The mouse button driving this press or drag (`Tx::button`).
     pub(crate) button: crate::PointerButton,
+    /// Whether any mouse button was held down anywhere in the window ([`Tx::pressing`]).
+    pub(crate) pressing: bool,
     pub(crate) touch_tap: bool,
     /// `Tx::press_point`.
     pub(crate) press_point: Option<PointerEvent>,
@@ -420,11 +423,15 @@ impl Tx {
     /// [`Cx::env`](crate::Cx::env)`.scale`, including any [`Cx::zoom`](crate::Cx::zoom)) as
     /// this handler or `poll` runs. `1.0` for a `Tx` no runtime made.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::el;
+    /// # struct Viewer { backing_px: [u32; 2] }
+    /// # let _ = el()
     /// .on_layout_tx(|s: &mut Viewer, [_, _, w, h], tx| {
     ///     let scale = tx.scale();
     ///     s.backing_px = [(w * scale).round() as u32, (h * scale).round() as u32];
     /// })
+    /// # ;
     /// ```
     pub fn scale(&self) -> f32 {
         if self.scale.is_finite() && self.scale > 0.0 { self.scale } else { 1.0 }
@@ -902,12 +909,18 @@ impl Tx {
     /// live-only only if each says so. It's the handler form of
     /// [`Runtime::update_if`](crate::Runtime::update_if) returning false.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::el;
+    /// # struct Camera;
+    /// # impl Camera { fn zoom_about(&mut self, _: f32, _: f32, _: f32) {} }
+    /// # struct Canvas { camera: Camera }
+    /// # let _ = el()
     /// .on_magnify(|s: &mut Canvas, e, tx| {
     ///     s.camera.zoom_about(e.x, e.y, 1.0 + e.delta); // sets Live values only
     ///     tx.live_only();
     ///     true
     /// })
+    /// # ;
     /// ```
     ///
     /// Changing state the view reads and calling this leaves the screen stale until the next

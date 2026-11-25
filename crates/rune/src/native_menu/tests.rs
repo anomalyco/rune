@@ -445,8 +445,7 @@ fn macos_native_submenus_build_fire_and_clear() {
     let mut native = macos::Native::new().unwrap();
     native.set(&descriptions, sink).unwrap();
 
-    // SAFETY: main-thread inspection of menus we own, without opening a window.
-    unsafe {
+    {
         let root = app.mainMenu().expect("main menu installed");
         let session_top = (0..root.numberOfItems())
             .filter_map(|i| root.itemAtIndex(i))

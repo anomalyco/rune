@@ -51,13 +51,11 @@ impl TextEdit {
     /// to its logical end. Across lines, the end the arrow steps toward in the focus's paragraph.
     fn collapse_to(&self, layout: Option<TextFlow<'_>>, right: bool) -> usize {
         let (a, b) = self.range();
-        let Some(l) = layout.filter(|_| !self.is_masked()) else { return if right { b } else { a } };
-        let (ca, cb) = (l.caret(self.display_index(a), parley::Affinity::Downstream, 0.0), l.caret(self.display_index(b), parley::Affinity::Upstream, 0.0));
-        if (ca.y0 - cb.y0).abs() < 1.0 {
-            return if (ca.x0 <= cb.x0) != right { a } else { b };
+        if self.is_masked() {
+            return if right { b } else { a };
         }
-        let forward = right == (l.piece_at(self.display_index(self.focus)).flow == Flow::Ltr);
-        if forward { b } else { a }
+        let d = super::caret_motion::collapse_edge(layout, self.display_index(a), self.display_index(b), self.display_index(self.focus), right);
+        self.model_index(d)
     }
 
     /// Applies one key. `layout` is the field's layout for the current text (device px).
@@ -398,7 +396,7 @@ impl TextEdit {
     /// `macos`: document start/end by default on macOS, or visual line start/end when
     /// `line_home_end` is enabled and neither Cmd nor Ctrl is held.
     pub(crate) fn home_end_target(&self, layout: Option<TextFlow<'_>>, end: bool, m: Mods, macos: bool) -> usize {
-        if m.ctrl || (macos && (m.cmd || !self.line_home_end)) {
+        if super::caret_motion::home_end_is_doc(m, macos, self.line_home_end) {
             if end { self.text.len() } else { 0 }
         } else {
             self.line_edge(layout, end)

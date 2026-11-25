@@ -1,5 +1,7 @@
 use super::*;
-use rune::accesskit::{Action, ActionData, Role};
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use rune::accesskit::{Action, ActionData};
+use rune::accesskit::Role;
 use std::sync::Arc;
 
 fn test_viewer(clip: Player) -> Viewer {
@@ -34,6 +36,8 @@ fn scrub_bar_exposes_slider_a11y_and_seeks_on_drag_and_a11y_action() {
     assert_eq!(slider.label(), Some("Playback position"));
     assert!(slider.numeric_value().is_some());
     let bounds = slider.bounds().expect("scrub slider bounds");
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let _ = bounds;
 
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     {

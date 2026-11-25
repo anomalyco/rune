@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use rune::color::{hex, srgb_decode, srgb_encode};
 use rune::compose::{Compositor, Frame};
-use rune::render::{EffectPhase, EffectSite, KIND_EFFECT};
+use rune::render::{EffectPhase, EffectSite, Gpu, KIND_EFFECT};
 use rune::{App, AppSpec, Cx, El, effect, el};
 use rune_fx::*;
 
@@ -82,7 +82,8 @@ fn snap_with(name: &'static str, view: fn(&(), &mut Cx<()>) -> El, srgb: bool, f
         .compositor(Dusk { fx: None, formats, effect: |_| EFFECT.get()() })
         .srgb_blend(srgb)
         .args(["--snap".to_string(), path.to_str().unwrap().to_string(), "--scale".to_string(), scale.to_string()])
-        .run();
+        .try_run()
+        .unwrap();
     let mut reader = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap())).read_info().unwrap();
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut buf).unwrap();
@@ -114,6 +115,7 @@ fn faded_rounded(_: &(), _: &mut Cx<()>) -> El {
 
 #[test]
 fn fill_in_a_faded_rounded_layer_matches_the_plain_fill_faded() {
+    if !Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         let (w, plain) = snap("plain", plain, srgb, Arc::default());
         let formats = Arc::default();
@@ -137,6 +139,7 @@ fn fill_in_a_faded_rounded_layer_matches_the_plain_fill_faded() {
 
 #[test]
 fn fills_match_across_blend_modes_when_opaque() {
+    if !Gpu::test_adapter_available() { return; }
     let (_, linear) = snap("lin", plain, false, Arc::default());
     let (_, gamma) = snap("gam", plain, true, Arc::default());
     let worst = linear.iter().zip(&gamma).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
@@ -152,6 +155,7 @@ fn glow_on_black(_: &(), _: &mut Cx<()>) -> El {
 /// full scale and all but black it out.
 #[test]
 fn faint_occlusion_keeps_the_glow_lit_in_gamma_blend() {
+    if !Gpu::test_adapter_available() { return; }
     let (w, clear) = snap_with("glow-clear", glow_on_black, true, Arc::default(), 1, || glow(0.0));
     let (_, faint) = snap_with("glow-faint", glow_on_black, true, Arc::default(), 1, || glow(0.002));
     let mut lit = 0;
@@ -171,6 +175,7 @@ fn grain_on_grey(_: &(), _: &mut Cx<()>) -> El {
 /// mean where it was, in either blend mode.
 #[test]
 fn grain_is_symmetric_in_both_blend_modes() {
+    if !Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         let (w, img) = snap_with("grain", grain_on_grey, srgb, Arc::default(), 1, || {
             Fx::grain(GrainParams { amount: 0.06, ..Default::default() })
@@ -217,6 +222,7 @@ fn unzoomed_double(_: &(), _: &mut Cx<()>) -> El {
 
 #[test]
 fn slot_scale_scales_effect_lengths_and_radii_without_bleed() {
+    if !Gpu::test_adapter_available() { return; }
     let ring6 = || Fx::fill(FillParams::from(MeshGradientParams::dusk()).border(6.0));
     let ring12 = || Fx::fill(FillParams::from(MeshGradientParams::dusk()).border(12.0));
     let (w, zoomed) = snap_with("zoomed-ring", zoomed_slot, false, Arc::default(), 1, ring6);
@@ -239,6 +245,7 @@ fn rounded_scroll(_: &(), _: &mut Cx<()>) -> El {
 
 #[test]
 fn fill_under_a_rounded_scroll_container_clips_without_a_layer() {
+    if !Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         let formats = Arc::default();
         let (w, plain_img) = snap("scroll-plain", plain, srgb, Arc::default());
@@ -270,7 +277,8 @@ fn snap_by_mark(name: &'static str, view: fn(&(), &mut Cx<()>) -> El, srgb: bool
         .compositor(Dusk { fx: None, formats, effect })
         .srgb_blend(srgb)
         .args(["--snap".to_string(), path.to_str().unwrap().to_string(), "--scale".to_string(), "1".to_string()])
-        .run();
+        .try_run()
+        .unwrap();
     let mut reader = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap())).read_info().unwrap();
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut buf).unwrap();
@@ -303,6 +311,7 @@ fn frosted_glass_fx(mark: u32) -> Fx {
 
 #[test]
 fn backdrop_slots_blur_background_and_stack_glass_over_glass_in_painter_order() {
+    if !Gpu::test_adapter_available() { return; }
     let (w, one) = snap_by_mark("one-glass", single_glass_scene, false, Arc::default(), frosted_glass_fx);
     // At (54, 48), just to the right of the x=48 cyan stripe, frosted glass 1 blurs cyan into the dark half.
     let p_one = px(&one, w, 54, 48);
@@ -340,6 +349,7 @@ fn moved_nested_scene(slot: bool) -> El {
 
 #[test]
 fn backdrop_origin_tracks_fractional_scale_scroll_live_offset_and_nested_layers() {
+    if !Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         let (w, base) = snap_with("moved-base", |_, _| moved_nested_scene(false), srgb, Arc::default(), 2,
             || Fx::distort(DistortParams::chroma_split([1e-6, 0.0])));
@@ -368,6 +378,7 @@ fn edge_scene(slot: bool) -> El {
 
 #[test]
 fn negative_layer_origins_copy_the_visible_region_at_all_window_edges() {
+    if !Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         let (w, base) = snap_with("edge-base", |_, _| edge_scene(false), srgb, Arc::default(), 2,
             || Fx::distort(DistortParams::chroma_split([1e-6, 0.0])));
@@ -386,6 +397,7 @@ fn negative_layer_origins_copy_the_visible_region_at_all_window_edges() {
 
 #[test]
 fn backdrop_slot_in_an_isolated_layer_reads_and_blurs_that_layers_target() {
+    if !Gpu::test_adapter_available() { return; }
     let formats = Arc::default();
     let (w, img) = snap_by_mark("layer-glass", layered_glass_scene, false, Arc::clone(&formats), frosted_glass_fx);
     let seen = formats.lock().unwrap().clone();
@@ -428,6 +440,7 @@ fn identity_glass_and_dither_fx(mark: u32) -> Fx {
 
 #[test]
 fn srgb_blend_decodes_backdrop_without_double_encoding_on_frame_and_layer_targets() {
+    if !Gpu::test_adapter_available() { return; }
     let (w, lin) = snap_by_mark("srgb-bd-lin", midtone_glass_scene, false, Arc::default(), identity_glass_and_dither_fx);
     let (_, gam) = snap_by_mark("srgb-bd-gam", midtone_glass_scene, true, Arc::default(), identity_glass_and_dither_fx);
     // At (24, 48), inside clear glass over #804020 (128, 64, 32), neither mode washes out to
@@ -480,6 +493,7 @@ fn plastic(roughness: f32) -> Fx {
 /// mode, and faded it blends like any other fill, at every roughness.
 #[test]
 fn plastic_matches_across_blend_modes() {
+    if !Gpu::test_adapter_available() { return; }
     let looks: [(f32, fn() -> Fx); 3] = [(0.05, || plastic(0.05)), (0.45, || plastic(0.45)), (1.0, || plastic(1.0))];
     for (roughness, look) in looks {
         let (w, linear) = snap_with("plastic-lin", plain, false, Arc::default(), 1, look);
@@ -506,9 +520,9 @@ fn plastic_matches_across_blend_modes() {
 
 #[test]
 fn fx_blend_modes_over_cream_paper_and_fallback_without_backdrop() {
-    use rune::render::{Gpu, Offscreen};
+    use rune::render::Offscreen;
 
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (w, h) = (96u32, 96u32);
     let warm_glow = || {
         Fx::glow(GlowParams {
@@ -677,6 +691,7 @@ fn veil_lens(veil: f32, presence: f32) -> Fx {
 
 #[test]
 fn lens_veil_mixes_tint_under_rim_light_and_scales_with_presence() {
+    if !Gpu::test_adapter_available() { return; }
     for srgb in [false, true] {
         let (w, base) = snap_with("veil-0", lens_veil_scene, srgb, Arc::default(), 1, || veil_lens(0.0, 1.0));
         let (_, mid) = snap_with("veil-60", lens_veil_scene, srgb, Arc::default(), 1, || veil_lens(0.6, 1.0));
@@ -739,6 +754,7 @@ fn sigma_lens(frost_sigma: f32) -> Fx {
 
 #[test]
 fn lens_frost_sigma_widens_blur_monotonically_above_18_pt() {
+    if !Gpu::test_adapter_available() { return; }
     // Render at 2x scale (192x192 device px) so 32 pt = 64 device px reaches the blur pyramid's top mip.
     let (w, s0) = snap_with("sigma-0", wide_step_lens_scene, false, Arc::default(), 2, || sigma_lens(0.0));
     let (_, s6) = snap_with("sigma-6", wide_step_lens_scene, false, Arc::default(), 2, || sigma_lens(6.0));

@@ -12,6 +12,8 @@ mod aria_proof;
 #[cfg(target_arch = "wasm32")]
 mod auto_complete_proof;
 #[cfg(target_arch = "wasm32")]
+mod caret_browsing_proof;
+#[cfg(target_arch = "wasm32")]
 mod image_proof;
 #[cfg(target_arch = "wasm32")]
 mod input_proof;
@@ -95,6 +97,8 @@ pub fn start() {
     if aria_proof::enabled() { aria_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if auto_complete_proof::enabled() { auto_complete_proof::run(); return; }
+    #[cfg(target_arch = "wasm32")]
+    if caret_browsing_proof::enabled() { caret_browsing_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if popup_modal_proof::enabled() { popup_modal_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]

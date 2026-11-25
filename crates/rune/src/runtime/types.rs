@@ -63,6 +63,8 @@ pub(crate) struct NodeCold {
     pub(super) help_side: Option<crate::Side>,
     /// `El::help_open`.
     pub(super) help_open: bool,
+    /// `El::data`.
+    pub(super) data: Vec<crate::el::data::ElData>,
     #[cfg(debug_assertions)]
     pub(super) scroll_source: Option<&'static std::panic::Location<'static>>,
 }
@@ -102,6 +104,7 @@ impl crate::cold::Empty for NodeCold {
         help_cut: false,
         help_side: None,
         help_open: false,
+        data: Vec::new(),
         #[cfg(debug_assertions)]
         scroll_source: None,
     };
@@ -636,6 +639,7 @@ pub(crate) struct TreeState {
     pub(in crate::runtime) has_mount: bool,
     pub(in crate::runtime) has_key_up: bool,
     pub(in crate::runtime) has_any_press: bool,
+    pub(in crate::runtime) has_link_hover: bool,
     pub(in crate::runtime) has_pointer_lock: bool,
     pub(in crate::runtime) node_index: NodeIndex,
     /// The node ids the last build indexed its scratch by.
@@ -677,6 +681,7 @@ impl TreeState {
             has_mount: false,
             has_key_up: false,
             has_any_press: false,
+            has_link_hover: false,
             has_pointer_lock: false,
             built: false,
             has_playground: false,

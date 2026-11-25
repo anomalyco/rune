@@ -29,6 +29,26 @@ mod secure;
 mod typing;
 
 #[doc(hidden)]
+pub use caret_motion::Arrow as CaretArrow;
+#[doc(hidden)]
+pub use caret_motion::CaretMove;
+#[doc(hidden)]
+pub use caret_motion::Landing as CaretLanding;
+#[doc(hidden)]
+pub use caret_motion::classify_caret_key;
+#[doc(hidden)]
+pub use caret_motion::collapse_edge;
+#[doc(hidden)]
+pub use caret_motion::home_end_is_doc;
+#[doc(hidden)]
+pub use caret_motion::next_word_in;
+#[doc(hidden)]
+pub use caret_motion::prev_word_in;
+#[doc(hidden)]
+pub use caret_motion::space_ahead;
+#[doc(hidden)]
+pub use caret_motion::visual_in;
+#[doc(hidden)]
 pub use direction_keys::DirChord;
 #[doc(hidden)]
 pub use direction_keys::step_dir_chord;
@@ -66,6 +86,10 @@ pub use model::MarkRange;
 pub use model::ParagraphInfo;
 pub use model::RichStyle;
 #[doc(hidden)]
+pub use replace::next_char;
+#[doc(hidden)]
+pub use replace::prev_char;
+#[doc(hidden)]
 pub use secure::MULTILINE_SECURE_MASK;
 #[doc(hidden)]
 pub use secure::Masking;
@@ -73,7 +97,7 @@ pub use secure::Masking;
 use caret_motion::Column;
 use direction_keys::FieldDir;
 use history::{EditKind, EditedTag, Group};
-use replace::{count_newlines, next_char, prev_backspace, prev_char};
+use replace::{count_newlines, prev_backspace};
 use secure::LineMode;
 use typing::Typing;
 
@@ -377,8 +401,11 @@ impl TextEdit {
     /// [`allow_color`](Self::allow_color) or by including `Mark::Color(String::new())` here), and
     /// [`Mark::Pill`] always is: pills are the app's own tokens, not formatting.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_edit::{Mark, TextEdit};
+    /// # let _ =
     /// TextEdit::new("").rich().allow_marks([Mark::Bold, Mark::Italic, Mark::Strike, Mark::Code, Mark::Link(String::new())])
+    /// # ;
     /// ```
     pub fn allow_marks(mut self, marks: impl IntoIterator<Item = Mark>) -> Self {
         let pill = 1 << Mark::Pill(String::new()).kind_order();
@@ -554,9 +581,12 @@ impl TextEdit {
     /// paragraph, list item or quote above it, as `Shift+Return` makes, so a draft rebuilt with
     /// [`from_parts`](Self::from_parts) keeps them. Line 0 and lines past the end are dropped.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_edit::{Block, TextEdit};
     /// // "one" then "two" on a new line of the same bullet.
+    /// # let _ =
     /// TextEdit::from_parts("one\ntwo", vec![], vec![Block::Bullet(0); 2]).with_soft_breaks(vec![1])
+    /// # ;
     /// ```
     pub fn with_soft_breaks(mut self, lines: Vec<u32>) -> Self {
         self.set_soft_breaks(lines);
@@ -755,16 +785,6 @@ impl TextEdit {
             (m.start < m.end && m.end <= t.len() && t.is_char_boundary(m.start) && t.is_char_boundary(m.end) && !t.as_bytes()[m.start..m.end].contains(&b'\n'))
                 .then(|| (m.range(), id))
         })
-    }
-
-    /// The start of the pill that ends at or contains `j`, when `j` is past its start.
-    fn pill_before(&self, j: usize) -> Option<usize> {
-        self.marks.iter().find(|m| m.mark.is_pill() && m.start < j && j <= m.end).map(|m| m.start)
-    }
-
-    /// The end of the pill that starts at or contains `j`, when `j` is before its end.
-    fn pill_after(&self, j: usize) -> Option<usize> {
-        self.marks.iter().find(|m| m.mark.is_pill() && m.start <= j && j < m.end).map(|m| m.end)
     }
 
     /// Replace the selection with `label` as one [`Mark::Pill`] carrying `id`, and put the

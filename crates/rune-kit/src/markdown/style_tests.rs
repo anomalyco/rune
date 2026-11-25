@@ -244,6 +244,7 @@ fn inline_code_text_colours_plain_code_spans_and_preserves_links_and_code_links(
         streaming: false,
         on_link: None,
         on_link_secondary: None,
+        on_link_hover: None,
         link_look: None,
         link_help: None,
         link_ring: None,

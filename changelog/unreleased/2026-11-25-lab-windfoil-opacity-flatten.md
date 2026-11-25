@@ -1,0 +1,1 @@
+- `examples/lab`: flattening `KIND_LAYER` opacity in `LabGfx::render` no longer multiplies `Instance::border` on non-colour kinds (such as Windfoil outline glyphs whose `border` holds the GPU outline record index), fixing a DX12 GPU hang (`DXGI_ERROR_DEVICE_HUNG`) during scene crossfades on Windows.

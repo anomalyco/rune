@@ -3,8 +3,12 @@
 //! `chooseIconName` does. The badges paint their own colours, so `rune::icon` draws them as they
 //! are in either appearance; draw them at 16 points (`file-icon.css`).
 //!
-//! ```ignore
+//! ```
+//! # use rune::{icon, row, text};
+//! # use rune_theme_opencode::file_icons;
+//! # let _ =
 //! row().gap(8.0).child(icon(file_icons::file("src/util/format.ts"), 16.0)).child(text("format.ts"))
+//! # ;
 //! ```
 
 mod catalog;

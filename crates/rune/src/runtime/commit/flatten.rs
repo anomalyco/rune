@@ -189,6 +189,7 @@ fn prepare_text(
             cold.overlines.clear();
             cold.span_boxes.clear();
             cold.inline_boxes.clear();
+            cold.inline_anchors.clear();
             cold.line_fills.clear();
             cold.text_indent = 0.0;
             cold.advance_in = None;
@@ -220,7 +221,6 @@ fn prepare_text(
             || !t.cold.strikes.is_empty()
             || !t.cold.overlines.is_empty()
             || !t.cold.span_boxes.is_empty()
-            || !t.cold.inline_boxes.is_empty()
             || !t.cold.highlights.is_empty()
             || !t.cold.line_fills.is_empty()
             || !t.cold.blocks.is_empty()
@@ -330,7 +330,7 @@ fn needs_node_cold(c: &crate::el::ElCold, meta: &ColdMeta) -> bool {
         || c.trace_name.is_some() || c.looping.is_some() || c.loop_times.is_some() || c.frame_motion.is_some() || c.opacity_motion.is_some()
         || c.transition_motion.is_some() || c.enter_in_instant || c.matched_motion.is_some()
         || c.lead.is_some() || c.glide.is_some() || c.material.is_some()
-        || c.help_cut || c.help_side.is_some() || c.help_open
+        || c.help_cut || c.help_side.is_some() || c.help_open || !c.data.is_empty()
         || c.scroll_axes != crate::el::ScrollAxes::Y
         || c.scroll_edges != crate::el::ScrollEdges::default()
         || c.a11y != crate::el::A11y::default();
@@ -347,7 +347,7 @@ fn node_cold_meta_only(meta: ColdMeta) -> NodeCold {
         transition: None, transition_motion: None, enter_in_instant: false, matched: None, matched_motion: None, above: None, above_boundary: None, resolved_anchor: None, scroll: None, scroll_axes: crate::el::ScrollAxes::Y,
         scroll_edges: crate::el::ScrollEdges::default(), wheel_scrolls: None, sticky: None, growth: None, glide: None,
         a11y: crate::el::A11y::EMPTY, pixel_aspect: meta.pixel_aspect, aspect_fit: meta.aspect_fit,
-        material: None, help: None, help_cut: false, help_side: None, help_open: false,
+        material: None, help: None, help_cut: false, help_side: None, help_open: false, data: Vec::new(),
         #[cfg(debug_assertions)]
         scroll_source: None,
     }
@@ -474,6 +474,7 @@ macro_rules! node_cold_from {
             glide: $c.glide, a11y: take_field!($mode, $c.a11y),
             pixel_aspect: $m.pixel_aspect, aspect_fit: $m.aspect_fit, material: $c.material,
             help: take_field!($mode, $c.help), help_cut: $c.help_cut, help_side, help_open: $c.help_open,
+            data: take_field!($mode, $c.data),
             #[cfg(debug_assertions)]
             scroll_source: $c.scroll_source,
         }
@@ -830,6 +831,13 @@ fn flatten_node<E: FlattenEl>(
         moved_stub: false,
         epoch: crate::runtime::paint_keep::next_epoch(),
     });
+    if nodes[me].focus.caret_browsing
+        && !nodes[me].focus.opt_out
+        && nodes[me].input.is_none()
+        && (nodes[me].selection_group || nodes[me].text.as_ref().is_some_and(|t| t.selectable && !t.redacted))
+    {
+        nodes[me].focus.enabled = true;
+    }
     let child_in_row = match in_row {
         RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },
         r => r,

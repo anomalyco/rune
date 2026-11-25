@@ -254,11 +254,13 @@ impl timer_wake::FrameState {
         self.live.subscribed(sampled);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::runtime) fn latch_live(
         &mut self,
         nodes: &mut [Node],
         scene: &mut Scene,
         text: &mut TextSystem,
+        taffy: &mut LayoutEngine,
         scale: f32,
         clock: f64,
         pending: bool,
@@ -266,43 +268,53 @@ impl timer_wake::FrameState {
         if !self.live.latch_begin(pending, !self.live_subscriptions.is_empty()) { return false; }
         let mut active = false;
         let mut text_changed = false;
-        for node in nodes {
+        for i in 0..nodes.len() {
             let mut layout_text_in_place = false;
             let mut node_text_changed = false;
-            if let Some(spec) = &mut node.text
-                && let Some(live) = &spec.cold.live
+            let mut has_inline_boxes = false;
             {
-                let cold = &mut *node.cold;
-                let seen = &mut cold.live_text_seen;
-                if let Some(live_text) = live.read(seen) && spec.source_text() != &*live_text {
-                    spec.replace_content(live_text.to_string());
-                    spec.apply_case();
-                    node_text_changed = true;
-                    if !spec.wrap && !spec.truncate && spec.max_lines == 0 {
-                        let tabular_ok = spec.cold.text_indent == 0.0
-                            && spec.dir != crate::text::TextDir::Fixed(crate::el::Flow::Rtl);
-                        if tabular_ok {
-                            let layout = text.layout_live_tabular_into(&spec.content, spec.style, scale, &mut cold.tabular_layout);
-                            node.text_layout = Some(TextLayout::Single(layout));
+                let node = &mut nodes[i];
+                if let Some(spec) = &mut node.text
+                    && let Some(live) = &spec.cold.live
+                {
+                    let cold = &mut *node.cold;
+                    let seen = &mut cold.live_text_seen;
+                    if let Some(live_text) = live.read(seen) && spec.source_text() != &*live_text {
+                        spec.replace_content(live_text.to_string());
+                        spec.remap_inline_boxes_for_live();
+                        spec.apply_case();
+                        node_text_changed = true;
+                        has_inline_boxes = !spec.cold.inline_boxes.is_empty();
+                        if !spec.wrap && !spec.truncate && spec.max_lines == 0 && !has_inline_boxes {
+                            let tabular_ok = spec.cold.text_indent == 0.0
+                                && spec.dir != crate::text::TextDir::Fixed(crate::el::Flow::Rtl);
+                            if tabular_ok {
+                                let layout = text.layout_live_tabular_into(&spec.content, spec.style, scale, &mut cold.tabular_layout);
+                                node.text_layout = Some(TextLayout::Single(layout));
+                            } else {
+                                cold.tabular_layout = None;
+                                node.text_layout = Some(TextLayout::Single(text.layout_live(&spec.content, spec.style, scale)));
+                            }
                         } else {
                             cold.tabular_layout = None;
-                            node.text_layout = Some(TextLayout::Single(text.layout_live(&spec.content, spec.style, scale)));
+                            layout_text_in_place = true;
                         }
-                    } else {
-                        cold.tabular_layout = None;
-                        layout_text_in_place = true;
                     }
                 }
-            }
-            if node_text_changed {
-                node.epoch = crate::runtime::paint_keep::next_epoch();
-                if !node.is_secure() && scene.contains(node.id) {
-                    text_changed = true;
+                if node_text_changed {
+                    node.epoch = crate::runtime::paint_keep::next_epoch();
+                    if !node.is_secure() && scene.contains(node.id) {
+                        text_changed = true;
+                    }
+                }
+                if layout_text_in_place {
+                    super::super::commit::relayout::lay_out_live_text_in_place(text, node, scale);
                 }
             }
-            if layout_text_in_place {
-                super::super::commit::relayout::lay_out_live_text_in_place(text, node, scale);
+            if node_text_changed && has_inline_boxes {
+                super::super::commit::inline::place_inline_children_live(taffy, text, nodes, scene, i, scale);
             }
+            let node = &mut nodes[i];
             let Some(cold) = node.cold.get_mut_if_some() else { continue };
             for bound in &mut cold.live {
                 let (op, active_now) = bound.read(&self.live_clock, clock);
@@ -478,7 +490,7 @@ impl RuntimeCore {
 
     #[inline]
     pub(in crate::runtime) fn latch_live(&mut self, pending: bool) -> bool {
-        self.frame.latch_live(&mut self.tree.nodes, &mut self.scene, &mut self.text, self.env.scale, self.clock, pending)
+        self.frame.latch_live(&mut self.tree.nodes, &mut self.scene, &mut self.text, &mut self.commit.layout, self.env.scale, self.clock, pending)
     }
 }
 

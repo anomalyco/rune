@@ -301,7 +301,7 @@ pub(super) fn with_renderer<R>(r: &Renderer, f: impl FnOnce() -> R) -> R {
 /// to compile here until it is either hashed in the base or guarded per block/link below.
 fn compute_base(r: &Renderer) -> (u64, u64) {
     let Renderer {
-        s, highlights, reveal, streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere, on_link, on_link_secondary,
+        s, highlights, reveal, streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere, on_link, on_link_secondary, on_link_hover,
         link_look: _, link_help: _, link_ring: _, link_favicon: _, code_link: _,
         highlighter: _, sources: _, next_source: _, next_diff: _, tasks: _, next_task: _, on_task: _,
         #[cfg(feature = "mermaid")]
@@ -311,7 +311,7 @@ fn compute_base(r: &Renderer) -> (u64, u64) {
     } = r;
     let mut h = PairHasher::new();
     (s, highlights, reveal.to_bits(), streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere,
-        on_link.as_ref().map(|w| w.1), on_link_secondary.as_ref().map(|w| w.1)).hash(&mut h);
+        on_link.as_ref().map(|w| w.1), on_link_secondary.as_ref().map(|w| w.1), on_link_hover.as_ref().map(|w| w.1)).hash(&mut h);
     h.finish128()
 }
 
@@ -394,7 +394,8 @@ impl Renderer {
     fn can_memo_links(&self, has_links: bool) -> bool {
         !has_links
             || (!self.on_link.as_ref().is_some_and(|w| w.1.is_none())
-                && !self.on_link_secondary.as_ref().is_some_and(|w| w.1.is_none()))
+                && !self.on_link_secondary.as_ref().is_some_and(|w| w.1.is_none())
+                && !self.on_link_hover.as_ref().is_some_and(|w| w.1.is_none()))
     }
 
     fn can_memo_flags(&self, flags: u8) -> bool {

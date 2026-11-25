@@ -1,7 +1,7 @@
 //! [`TextSpec`]: what a text element shows and how it lays out.
 use crate::cold::{Cold, Empty};
 use crate::color::Color;
-use crate::el::{Align, LinkFn, LinkSecondaryFn};
+use crate::el::{Align, LinkFn, LinkHoverFn, LinkSecondaryFn};
 use crate::text::{Link, Span};
 use crate::tok::TextStyle;
 
@@ -81,6 +81,15 @@ pub(crate) fn step_text_dir(state: TextDir, event: TextDirEvent) -> TextDir {
     }
 }
 
+/// Authored byte anchor for an `El::inline` box, preserved across `El::live_text` updates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InlineAnchor {
+    pub(crate) at: u32,
+    /// True when `at == placeholder.len()` on a non-empty placeholder so trailing chips stay at
+    /// the end as live text grows or shrinks.
+    pub(crate) trailing: bool,
+}
+
 /// What few texts set: written through `TextSpec::cold`, which allocates it on the first write.
 #[derive(Clone)]
 pub(crate) struct TextCold {
@@ -89,8 +98,13 @@ pub(crate) struct TextCold {
     pub(crate) links: Vec<Link>,
     pub(crate) on_link: Option<LinkFn>,
     pub(crate) on_link_secondary: Option<LinkSecondaryFn>,
+    pub(crate) on_link_hover: Option<LinkHoverFn>,
+    /// See [`El::link_cursor`](crate::El::link_cursor).
+    pub(crate) link_cursor: Option<crate::el::Cursor>,
     /// Measured as its slice at this byte of the run (see [`El::advance_in`](crate::El::advance_in)).
     pub(crate) advance_in: Option<(crate::text::Run, usize)>,
+    /// See [`El::caret`](crate::El::caret): caret colour for [`El::caret_browsing`](crate::El::caret_browsing) selectable text.
+    pub(crate) caret: Option<Color>,
     /// See [`El::selection_color`](crate::El::selection_color).
     pub(crate) selection: Color,
     /// See [`El::selection_style`](crate::El::selection_style): it takes over `selection`.
@@ -117,6 +131,9 @@ pub(crate) struct TextCold {
     pub(crate) span_boxes: Vec<crate::text::SpanBoxRun>,
     /// In-flow inline element slots over `content` (`El::inline`), keeping room for child elements.
     pub(crate) inline_boxes: Vec<crate::text::InlineBoxRun>,
+    /// Authored byte anchors for `inline_boxes`, kept in lockstep so `El::live_text` updates
+    /// remap offsets cleanly across length, UTF-8, and `El::text_case` changes.
+    pub(crate) inline_anchors: Vec<InlineAnchor>,
     /// Paint-only highlight byte ranges of `content`.
     pub(crate) highlights: Vec<crate::text::TextHighlight>,
     /// Display-only full-width line fills and left bars over `content` (see [`El::line_fills`](crate::El::line_fills)).
@@ -142,7 +159,10 @@ impl Empty for TextCold {
         links: Vec::new(),
         on_link: None,
         on_link_secondary: None,
+        on_link_hover: None,
+        link_cursor: None,
         advance_in: None,
+        caret: None,
         selection: crate::el::DEFAULT_SELECTION,
         selection_style: None,
         uncopied: Vec::new(),
@@ -156,6 +176,7 @@ impl Empty for TextCold {
         overlines: Vec::new(),
         span_boxes: Vec::new(),
         inline_boxes: Vec::new(),
+        inline_anchors: Vec::new(),
         highlights: Vec::new(),
         line_fills: Vec::new(),
         blocks: Vec::new(),
@@ -337,6 +358,30 @@ impl TextSpec {
         self.shape = None;
     }
 
+    /// Re-resolves each `El::inline` box offset from its authored anchor against the new live
+    /// `content`: a box placed at the end of a non-empty placeholder (`trailing`) stays at
+    /// `content.len()`; any other offset stays at its authored byte clamped down to the nearest
+    /// UTF-8 char boundary in `content`.
+    pub(crate) fn remap_inline_boxes_for_live(&mut self) {
+        if self.cold.inline_boxes.is_empty() {
+            return;
+        }
+        let len = self.content.len();
+        let cold = &mut *self.cold;
+        for (b, a) in cold.inline_boxes.iter_mut().zip(&cold.inline_anchors) {
+            let at = if a.trailing {
+                len
+            } else {
+                let mut p = (a.at as usize).min(len);
+                while p > 0 && !self.content.is_char_boundary(p) {
+                    p -= 1;
+                }
+                p
+            };
+            b.at = at as u32;
+        }
+    }
+
     /// The string as authored, before [`El::text_case`](crate::El::text_case).
     pub(crate) fn source_text(&self) -> &str {
         self.source.as_ref().map_or(&self.content, |s| &s.text)
@@ -394,6 +439,7 @@ impl TextSpec {
             cold.overlines.clear();
             cold.span_boxes.clear();
             cold.inline_boxes.clear();
+            cold.inline_anchors.clear();
             cold.line_fills.clear();
             cold.text_indent = 0.0;
             cold.blocks.clear();

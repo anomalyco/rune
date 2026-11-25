@@ -43,6 +43,7 @@ pub mod tooling;
 pub mod tray;
 
 pub(crate) use input::cursor;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use quit::relaunch;
 pub(crate) use rune_core::cold;
 pub(crate) use rune_gpu as gpu;
@@ -63,6 +64,7 @@ pub use clipboard::ClipboardImage;
 pub use clipboard::ClipboardWrite;
 pub use clipboard::SecretCopy;
 pub use clipboard::SecretState;
+pub use clipboard::WebFile;
 pub use color::Color;
 pub use color::oklch;
 pub use color::oklcha;
@@ -268,6 +270,7 @@ pub use popup_menu::PopupEntry;
 pub use popup_menu::PopupItem;
 pub use popup_menu::PopupMenu;
 pub use popup_menu::PopupMenuError;
+pub use popup_menu::PopupMenuStyle;
 pub use popup_menu::popup_menu_supported;
 #[cfg(not(target_arch = "wasm32"))]
 pub use quit::exit_deadline;
@@ -365,6 +368,7 @@ pub use runtime::commit_generation;
 pub use runtime::path_segment;
 #[doc(hidden)]
 pub use runtime::scroll_watch_state;
+pub use shape::Area;
 pub use shape::FillRule;
 pub use shape::LineCap;
 pub use shape::Path;

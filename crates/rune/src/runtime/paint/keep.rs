@@ -178,6 +178,29 @@ pub(in crate::runtime) fn inh_keys(p: &Inh) -> (u64, u64) {
     (full, base)
 }
 
+/// Inherited state keys for node `i`, folding the enclosing scroll viewport's sticky band
+/// when the tree has sticky elements so a resized viewport under a tighter clip cannot copy
+/// stale `sticky_frame` bounds.
+pub(super) fn inh_keys_for(nodes: &[Node], has_sticky: bool, sticky_frame: &[[f32; 8]], i: usize, p: &Inh) -> (u64, u64) {
+    let (inh, inh_base) = inh_keys(p);
+    if !has_sticky {
+        return (inh, inh_base);
+    }
+    let band = nodes[i].parent.map_or(
+        [f32::NEG_INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::INFINITY],
+        |pr| {
+            let sf = sticky_frame[pr];
+            [sf[0], sf[1], sf[4], sf[5]]
+        },
+    );
+    let mut h = rune_motion::Fx::default();
+    h.write_u64(inh_base);
+    bits(&mut h, &band);
+    let base = h.finish();
+    let full = shift::inh_key_from_base(base, [p.dx, p.dy, p.snap.rigid[0], p.snap.rigid[1]]);
+    (full, base)
+}
+
 /// The bits of what a node inherits.
 pub(in crate::runtime) fn inh_key(p: &Inh) -> u64 {
     inh_keys(p).0
@@ -373,7 +396,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn keep_or_paint(&mut self, i: usize, pinh: &Inh, glyph_count: &mut usize) -> Option<usize> {
         // Only a node that can be copied needs what it inherits.
         if !self.paint.keep.recording || !self.paint.keep.recs[i].keep { return None; }
-        let (inh, inh_base) = inh_keys(pinh);
+        let (inh, inh_base) = inh_keys_for(&self.tree.nodes, self.tree.has_sticky, &self.scroll.sticky_frame, i, pinh);
         self.paint.keep.recs[i].inh = inh;
         let sr = &mut self.paint.keep.shift[i];
         sr.inh_base = inh_base;
@@ -664,14 +687,16 @@ fn static_ok(n: &Node) -> bool {
 }
 
 /// What the runtime holds for a node besides it: selection, marks, reveals, loops, scales
-/// settling and folds.
+/// settling, sticky holds and folds.
 fn dynamic_ok(rt: &RuntimeCore, i: usize, sel: &[(usize, usize, usize)], marks: &[(usize, usize, usize)]) -> bool {
     let id = rt.tree.nodes[i].id;
     !sel.iter().any(|r| r.0 == i) && !marks.iter().any(|r| r.0 == i)
+        && rt.caret_browse_collapsed_on(i).is_none()
         && !rt.motion.reveal_fading(id)
         && !rt.motion.has_loop(id)
         && (rt.paint.static_scales.is_empty() || !rt.paint.static_scales.contains_key(&id))
         && rt.paint.row_mask[i] < 0.0
+        && rt.scroll.hold_of(&rt.tree.nodes[i].path).is_none()
 }
 
 #[cfg(test)]

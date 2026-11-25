@@ -10,10 +10,12 @@
 //! while it is between 0 and 1, a shape of more than one piece paints through a layer that takes
 //! it once.
 
+mod area;
 mod planar;
 mod svg_path;
 mod triangulate;
 
+pub use area::Area;
 #[doc(hidden)]
 pub use svg_path::{SvgPathSink, parse_svg_path};
 #[doc(hidden)]
@@ -73,12 +75,19 @@ pub enum Op {
         rule: FillRule,
         color: Color,
     },
+    FillArea {
+        area: Area,
+        color: Color,
+    },
 }
 
 /// A list of strokes and fills, painted in order over the element's fill and under its text.
 ///
-/// ```ignore
-/// use rune::{Color, Shape, canvas};
+/// ```
+/// use rune_core::{Color, shape::Shape};
+/// # struct El;
+/// # impl El { fn size(self, _: f32, _: f32) -> Self { self } }
+/// # fn canvas(_: Shape) -> El { El }
 /// let wave: Vec<[f32; 2]> = (0..64).map(|i| [i as f32 * 4.0, 20.0 + (i as f32 * 0.3).sin() * 16.0]).collect();
 /// let meter = Shape::new()
 ///     .fill(vec![[0.0, 40.0], [120.0, 40.0], [120.0, 36.0], [0.0, 36.0]], Color::WHITE)
@@ -185,6 +194,27 @@ impl Shape {
         self
     }
 
+    /// Fills `area`, triangulated when it was made, so drawing it again (a map kept in state,
+    /// panned and zoomed) costs no triangulation. Clones of one [`Area`] share its triangles.
+    ///
+    /// ```
+    /// use rune_core::Color;
+    /// use rune_core::shape::{Area, FillRule, Path, Shape};
+    ///
+    /// let ring = Path::new()
+    ///     .polygon([[0.0, 0.0], [40.0, 0.0], [40.0, 40.0], [0.0, 40.0]])
+    ///     .polygon([[10.0, 10.0], [30.0, 10.0], [30.0, 30.0], [10.0, 30.0]]);
+    /// let area = Area::new(&ring, FillRule::EvenOdd);
+    /// let shape = Shape::new().fill_area(&area, Color::WHITE);
+    /// assert!(!shape.is_empty());
+    /// ```
+    pub fn fill_area(mut self, area: &Area, color: Color) -> Shape {
+        if !area.is_empty() {
+            self.ops.push(Op::FillArea { area: area.clone(), color });
+        }
+        self
+    }
+
     /// Parses SVG 2 path data `d` with [`Path::from_svg`] and fills it under
     /// [`FillRule::NonZero`]. Equivalent to `self.fill_svg_with(d, FillRule::NonZero, color)`.
     ///
@@ -249,7 +279,7 @@ impl Shape {
     pub fn overlaps(&self) -> bool {
         let pieces = |op: &Op| match op {
             Op::Stroke { points, closed, .. } => if *closed { points.len() } else { points.len() - 1 },
-            Op::Fill { .. } | Op::FillCompound { .. } => 1,
+            Op::Fill { .. } | Op::FillCompound { .. } | Op::FillArea { .. } => 1,
         };
         self.ops.iter().map(pieces).sum::<usize>() > 1
     }
@@ -315,6 +345,12 @@ impl Shape {
                             rule: *rule,
                             color: Color { a: color.a * a, ..*color },
                         });
+                    }
+                }
+                Op::FillArea { area, color } => {
+                    let a = fill_fade(total, done, at, t);
+                    if a > 0.0 {
+                        ops.push(Op::FillArea { area: area.clone(), color: Color { a: color.a * a, ..*color } });
                     }
                 }
             }
@@ -453,6 +489,28 @@ impl Path {
                 b0 * a[1] + b1 * c1[1] + b2 * c2[1] + b3 * p[1],
             ]);
         }
+        self
+    }
+
+    /// Adds the closed polygon through `points` as its own subpath, after any before it: an
+    /// outline, then the holes or islands that go with it. Fewer than two points add nothing.
+    ///
+    /// ```
+    /// use rune_core::shape::Path;
+    ///
+    /// let triangle = Path::new().polygon([[0.0, 0.0], [10.0, 0.0], [5.0, 8.0]]);
+    /// assert_eq!(triangle, Path::new().move_to([0.0, 0.0]).line_to([10.0, 0.0]).line_to([5.0, 8.0]).close());
+    /// ```
+    pub fn polygon(mut self, points: impl Into<Vec<[f32; 2]>>) -> Path {
+        let points = points.into();
+        if points.len() < 2 {
+            return self;
+        }
+        // A trailing `move_to` with nothing after it is replaced, as another `move_to` would.
+        if self.subpaths.last().is_some_and(|s| s.points.len() == 1 && !s.closed) {
+            self.subpaths.pop();
+        }
+        self.subpaths.push(Subpath { points, closed: true });
         self
     }
 

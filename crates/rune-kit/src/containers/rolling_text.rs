@@ -85,10 +85,15 @@ thread_local! {
 
 /// A label that rolls only the characters that changed.
 ///
-/// ```ignore
+/// ```
+/// # use rune_kit::{Kit, RollingText};
+/// # let k = Kit::neutral(true);
+/// # let (copied, left) = (true, 12);
+/// # let _ =
 /// RollingText::new("copy-label", if copied { format!("Copied, clears in 0:{left:02}") } else { "Copy password".into() })
 ///     .font(k.ty.ui_medium)
 ///     .build(&k)
+/// # ;
 /// ```
 pub struct RollingText {
     key: String,

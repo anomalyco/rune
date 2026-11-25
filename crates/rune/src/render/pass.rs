@@ -51,6 +51,7 @@ impl<'a, 'p> ActivePass<'a, 'p> {
     }
 
     /// A caller's pass whose scissors all stay inside `bound` (`[x, y, width, height]`).
+    #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
     pub(super) fn borrowed_within(pass: &'a mut wgpu::RenderPass<'p>, bound: [u32; 4]) -> Self {
         ActivePass::Borrowed { pass, scissor: None, bound: Some(bound) }
     }

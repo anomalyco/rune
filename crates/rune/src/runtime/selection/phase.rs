@@ -12,7 +12,6 @@ use super::virtual_selection::VirtualEnd;
 /// The selectable-text side of the runtime: the selection's phase, the run of presses that makes
 /// double and triple clicks, Shift as the host last reported it, and where Select All goes with
 /// no selection.
-#[derive(Default)]
 pub(in crate::runtime) struct TextSel {
     pub(in crate::runtime) phase: Phase,
     /// The run of presses on selectable text.
@@ -26,6 +25,29 @@ pub(in crate::runtime) struct TextSel {
     pub(in crate::runtime) mounted_between: HashMap<String, u64>,
     /// The list scrolling while the held pointer stays at its edge.
     pub(in crate::runtime) edge: super::edge_scroll::EdgeScroll,
+    /// Sticky horizontal column (unscrolled layout points) kept across Up/Down/PageUp/PageDown
+    /// caret-browsing steps.
+    pub(in crate::runtime) goal_x: Option<f32>,
+    /// Visual-line / bidi affinity of the caret-browsing focus byte.
+    pub(in crate::runtime) affinity: parley::Affinity,
+    /// Explicit state machine for caret-browsing moves crossing into unmounted virtual rows.
+    pub(in crate::runtime) pending_move: super::caret_browse::pending::State,
+}
+
+impl Default for TextSel {
+    fn default() -> Self {
+        Self {
+            phase: Phase::default(),
+            presses: Default::default(),
+            shift: false,
+            pick: Default::default(),
+            mounted_between: HashMap::default(),
+            edge: Default::default(),
+            goal_x: None,
+            affinity: parley::Affinity::Downstream,
+            pending_move: super::caret_browse::pending::State::Idle,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -116,6 +138,9 @@ pub(in crate::runtime) enum Event<'a> {
     Drag { anchor: usize, focus: usize, reach: Reach<'a> },
     /// The press ended: released, cancelled, lost, or taken by a draggable row.
     Release,
+    /// Caret-browsing `Shift`+movement keeps the anchor and moves the focus to `focus` in `far`
+    /// (or the anchor's text), staying placed rather than dragging.
+    SetFocus { focus: usize, far: Option<Far> },
     /// A selection made at once: Select All, `Tx::select_text`, a secondary press's word.
     Select(Selection),
     /// The selection goes.
@@ -170,6 +195,17 @@ pub(in crate::runtime) fn step(phase: &mut Phase, event: Event<'_>) -> Effects<E
                 *phase = Phase::Placed(selection);
             }
             Effects::none()
+        }
+        Event::SetFocus { focus, far } => {
+            let (Phase::Placed(selection) | Phase::Dragging { selection, .. }) = std::mem::take(phase) else {
+                return Effects::none();
+            };
+            let mut selection = selection;
+            selection.origin = (selection.anchor, selection.anchor);
+            selection.focus = focus;
+            selection.far = far;
+            *phase = Phase::Placed(selection);
+            Effects::one(Effect::Seal)
         }
         Event::Select(selection) => {
             *phase = Phase::Placed(selection);

@@ -143,7 +143,7 @@ fn solid_texture(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::Textu
 
 #[test]
 fn light_gbuffer_field_and_cpu_match_rune_continuous_corners() {
-    let Ok(gpu) = Gpu::try_new(Gpu::instance(), None) else { return eprintln!("no adapter; skipped") };
+    let Some(gpu) = Gpu::test_headless() else { return };
     let rect = [8.0, 8.0, 80.0, 64.0];
     let cases = [
         ("uniform-continuous", [-20.0; 4]),
@@ -242,7 +242,7 @@ fn light_gbuffer_field_and_cpu_match_rune_continuous_corners() {
 
 #[test]
 fn glass_continuous_corners_match_rune_uber_shader() {
-    let Ok(gpu) = Gpu::try_new(Gpu::instance(), None) else { return eprintln!("no adapter; skipped") };
+    let Some(gpu) = Gpu::test_headless() else { return };
     let rect = [8.0, 8.0, 80.0, 64.0];
     let uber = render_uber_rect(&gpu, rect, [-20.0; 4]);
 

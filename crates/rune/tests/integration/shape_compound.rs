@@ -237,3 +237,25 @@ fn svg_path_compound_fill_and_stroke_render_through_runtime() {
         check(&gpu_buf, "gpu");
     }
 }
+
+#[test]
+fn area_fill_paints_the_same_pixels_as_a_path_fill() {
+    fn view(area: &bool, _: &mut Cx<bool>) -> El {
+        let path = frame_path(false);
+        let shape = if *area {
+            Shape::new().fill_area(&rune::Area::new(&path, FillRule::EvenOdd), RED)
+        } else {
+            Shape::new().fill_path_with(&path, FillRule::EvenOdd, RED)
+        };
+        el().size(200.0, 200.0).child(canvas(shape).size(200.0, 200.0))
+    }
+    let paint = |area: bool| {
+        let mut rt = Runtime::new(area, view, (200.0, 200.0), Env::default());
+        rt.frame(0.0);
+        render_cpu(&rt, 200, 200)
+    };
+    let (by_area, by_path) = (paint(true), paint(false));
+    assert_eq!(px(&by_area, 200, 100, 100)[3], 0, "the hole stays transparent");
+    assert!(px(&by_area, 200, 20, 20)[3] > 200, "the frame is filled");
+    assert!(by_area == by_path, "an Area paints exactly as fill_path_with under the same rule");
+}

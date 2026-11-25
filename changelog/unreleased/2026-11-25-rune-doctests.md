@@ -1,0 +1,1 @@
+- Docs: converted all 48 ignored doc examples in `rune` into compiled doctests (46 executed, 2 `no_run`) and fixed 6 stale examples (`El::effect`, `El::on_input_paste`, `El::on_scroll_offset`, `El::pill_icon`, `El::pill_style`, and `rewind`).

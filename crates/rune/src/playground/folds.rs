@@ -31,11 +31,15 @@ impl<S: 'static> Playground<S> {
     /// or with [`Playground::start_folded`] the unfolded ones, so a group added since starts
     /// as the rest do. With [`Prefs`](crate::prefs::Prefs):
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Playground, prefs::Prefs};
+    /// # const APP_ID: &str = "com.example.app";
+    /// # let _ = Playground::<()>::new()
     /// .folds(
     ///     || Prefs::open(APP_ID).get("playground_folds").unwrap_or_default(),
     ///     |groups| { Prefs::open(APP_ID).set("playground_folds", &groups).ok(); },
     /// )
+    /// # ;
     /// ```
     pub fn folds(mut self, load: impl Fn() -> Vec<String> + 'static, save: impl Fn(&[String]) + 'static) -> Self {
         self.folds = Folds { load: Some(Box::new(load)), save: Some(Box::new(save)), start: self.folds.start };

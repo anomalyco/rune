@@ -263,7 +263,7 @@ impl Native {
                             Event::SessionClosed { session }
                         }
                         Wake::Command(None) | Wake::Activated(None) | Wake::BindDone(None) => {
-                            session_closed = None;
+                            drop(session_closed.take());
                             let effects = wayland_session::step(&mut seq, &mut state, Event::Shutdown);
                             apply_effects(effects, &conn, &portal, &local, &done_tx, &mut in_flight, &sink).await;
                             break;

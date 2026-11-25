@@ -1,0 +1,1 @@
+- Docs: converted all 19 remaining ignored doc examples across `procwatch`, `rune-core`, `rune-edit`, `rune-knobs`, `rune-light`, `rune-luau`, `rune-media`, `rune-text`, and `rune-theme-opencode` into compiled doctests (16 executed, 3 `no_run`) and fixed 2 stale examples (`rune_knobs` and `rune_light::glass`).

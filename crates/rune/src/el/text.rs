@@ -327,8 +327,15 @@ impl El {
     /// The leading icon for each [`Mark::Pill`](crate::Mark::Pill) chip in a [`text_input`],
     /// by the pill's id (`None`: no icon). The icon takes the label's colour.
     ///
-    /// ```ignore
-    /// text_input(s.draft.clone(), body).pill_icon(|id| id.starts_with("file:").then_some(&FILE))
+    /// ```
+    /// # use rune::{Icon, TextEdit, TextStyle, text_input};
+    /// # const FILE: Icon = Icon { name: "file", view: 16.0, body: "" };
+    /// # struct App { draft: TextEdit }
+    /// # let s = App { draft: TextEdit::default() };
+    /// # let body = TextStyle::new(14.0, 400.0);
+    /// # let _ =
+    /// text_input(&s.draft, body).pill_icon(|id| id.starts_with("file:").then_some(&FILE))
+    /// # ;
     /// ```
     ///
     /// The closure may capture state; it runs each time the field is built, so a pill follows
@@ -374,11 +381,20 @@ impl El {
     /// The closure may capture app state; it runs each time the field is built, and what it
     /// returns is drawn, so a cached subtree restyles when that state changes.
     ///
-    /// ```ignore
-    /// text_input(s.draft.clone(), body).pill_style({
+    /// ```
+    /// # use std::collections::HashSet;
+    /// # use rune::{Color, Icon, PillStyle, TextEdit, TextStyle, text_input};
+    /// # const PURPLE: Color = Color::WHITE;
+    /// # const BOT: Icon = Icon { name: "bot", view: 16.0, body: "" };
+    /// # struct App { draft: TextEdit, agents: HashSet<String> }
+    /// # let s = App { draft: TextEdit::default(), agents: HashSet::new() };
+    /// # let body = TextStyle::new(14.0, 400.0);
+    /// # let _ =
+    /// text_input(&s.draft, body).pill_style({
     ///     let agents = s.agents.clone();
     ///     move |id| if agents.contains(id) { PillStyle::default().bg(PURPLE).icon(&BOT) } else { PillStyle::default() }
     /// })
+    /// # ;
     /// ```
     pub fn pill_style(mut self, style: impl Fn(&str) -> PillStyle + 'static) -> Self {
         if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
@@ -720,6 +736,17 @@ impl El {
         }
         self
     }
+    /// The pointer's shape over this text's links while the text is [`El::selectable`] (or sets no
+    /// cursor of its own): the hand unless this names another, such as [`Cursor::Default`] for a
+    /// link that reads as plain text. Selectable text keeps the I-beam for itself, so
+    /// [`El::cursor`] can't say this. Text that isn't selectable and sets a cursor shows that over
+    /// its links, and a text field's links keep the hand.
+    pub fn link_cursor(mut self, cursor: Cursor) -> Self {
+        if let Some(t) = &mut self.text {
+            t.cold.link_cursor = Some(cursor);
+        }
+        self
+    }
     /// Called with a [`Link`]'s id when it is clicked, or pressed with Enter or Space while
     /// focused. Read [`Tx::link_rect`] inside the handler for the activated link's first drawn
     /// line box `[left, top, width, height]` in window points (for anchoring a popover or preview
@@ -740,6 +767,50 @@ impl El {
     pub fn on_link_secondary<S: 'static>(mut self, f: impl Fn(&mut S, &str, PointerPress, &mut Tx) + 'static) -> Self {
         if let Some(t) = &mut self.text {
             t.cold.on_link_secondary = Some(LinkSecondaryFn(Rc::new(move |s, id, p, tx| f(downcast::<S>(s), id, p, tx))));
+        }
+        self
+    }
+    /// Called when the pointer enters, switches between, or leaves this text's [`Link`] spans:
+    /// `(Some(id), Some([left, top, width, height]))` in window points for the hovered link's
+    /// hit line box on enter or switch, and `(None, None)` when hover ends (pointer leaves the
+    /// link or window, link scrolls away under a stationary pointer, an overlying hit cover
+    /// occludes it, or the text unmounts, rebuilds, or becomes disabled/inert).
+    ///
+    /// Moving within the same link does not re-fire. Read [`Tx::pressing`] inside the handler
+    /// to tell whether a mouse button is held down (for example while drag-selecting text).
+    /// Disabled links and touch gestures never report hover. Windows without an `on_link_hover`
+    /// handler pay no pointer-move work.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Link, Runtime, col, text};
+    /// # #[derive(Default)] struct S { hovered: Option<(String, [f32; 4])> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// col().size(240.0, 80.0).child(
+    ///     text("Open the docs")
+    ///         .link(Link::new(9..13, "https://example.com/docs"))
+    ///         .on_link_hover(|s: &mut S, url, rect, _| {
+    ///             s.hovered = url.zip(rect).map(|(u, r)| (u.to_owned(), r));
+    ///         }),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S::default(), view, (240.0, 80.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # let (x, y) = rt.find("https://example.com/docs").unwrap();
+    /// # rt.pointer_move(x, y);
+    /// # rt.frame(0.0);
+    /// # assert_eq!(rt.state.hovered.as_ref().map(|(u, _)| u.as_str()), Some("https://example.com/docs"));
+    /// # rt.pointer_leave();
+    /// # rt.frame(0.0);
+    /// # assert!(rt.state.hovered.is_none());
+    /// ```
+    pub fn on_link_hover<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, Option<&str>, Option<[f32; 4]>, &mut Tx) + 'static,
+    ) -> Self {
+        if let Some(t) = &mut self.text {
+            t.cold.on_link_hover = Some(LinkHoverFn(Rc::new(move |s, id, rect, tx| {
+                f(downcast::<S>(s), id, rect, tx)
+            })));
         }
         self
     }
@@ -772,15 +843,20 @@ impl El {
         }
         self
     }
-    /// The field's insertion caret and selection highlight colours. Without it, the caret follows
-    /// the field's text colour ([`El::color`], else [`Cx::foreground`](crate::Cx::foreground), else
-    /// white), matching CSS `caret-color: auto`, and the selection uses that colour at 20%.
+    /// The insertion caret and selection highlight colours for a text field or
+    /// [`El::caret_browsing`] selectable text. Without it, the caret follows the text colour
+    /// ([`El::color`], else [`Cx::foreground`](crate::Cx::foreground), else white), matching CSS
+    /// `caret-color: auto`, and a text field's selection uses that colour at 20%.
     pub fn caret(mut self, caret: Color, selection: Color) -> Self {
         if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.caret = caret;
             i.selection = selection;
             i.caret_inked = true;
             i.selection_inked = true;
+        }
+        if let Some(t) = &mut self.text {
+            t.cold.caret = Some(caret);
+            t.cold.selection = selection;
         }
         self
     }
@@ -821,6 +897,32 @@ impl El {
         self.flags.set(ElFlags::SELECTION_GROUP, on);
         self
     }
+    /// Opts an [`El::selectable`] text element or [`El::selection_group`] container into keyboard
+    /// caret browsing, as in Chrome's caret browsing mode: the element becomes focusable via click
+    /// or Tab, draws a 1.5 pt caret when focused and collapsed (coloured by [`El::caret`], else
+    /// [`El::color`] / [`Cx::foreground`](crate::Cx::foreground)), moves by character, word, visual
+    /// line, page, and line or document `Home`/`End`, extends the selection with `Shift` across
+    /// mounted sibling texts and unmounted `virtual_rows` / `virtualize` rows in tree order (keeping
+    /// offscreen anchors pinned for copy), collapses a non-empty selection on plain `Left`/`Right`,
+    /// scrolls enclosing viewports to keep the caret in view, preserves `Cmd/Ctrl+C` and
+    /// `Cmd/Ctrl+A`, and publishes the caret and selection to accessibility. Off by default,
+    /// leaving ordinary [`El::selectable`] text non-focusable and untouched.
+    ///
+    /// ```
+    /// use rune::{El, col, text};
+    ///
+    /// let _doc: El = col()
+    ///     .selection_group(true)
+    ///     .caret_browsing(true)
+    ///     .child(text("First paragraph").selectable(true))
+    ///     .child(text("Second paragraph").selectable(true));
+    /// ```
+    pub fn caret_browsing(mut self, on: bool) -> Self {
+        if on || self.cold.get().is_some() {
+            self.cold_mut().focus.caret_browsing = on;
+        }
+        self
+    }
     /// What copying a text selection inside this element puts on the clipboard (Cmd+C and the
     /// Copy menu) instead of the selected text as drawn, so a document drawn from source can
     /// copy the source. `f` sees every [`El::selectable`] text inside this element that the
@@ -831,9 +933,13 @@ impl El {
     /// UTF-8 text and sets [`TextSelection::truncated`]. The nearest such element around both ends
     /// of the selection answers. Kit's `Markdown::copy_source` is one.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::col;
+    /// # let note = String::from("# Note");
+    /// # let _ =
     /// col().selection_group(true)
     ///     .selection_copy(move |sel| sel.texts().iter().all(|t| t.is_whole()).then(|| note.clone()))
+    /// # ;
     /// ```
     ///
     /// [`TextSelection::text`]: crate::TextSelection::text
@@ -852,10 +958,14 @@ impl El {
     /// press making it releases ([`dragging`](crate::SelectionChange::dragging)). A press leaving
     /// only a caret isn't heard. Call [`Tx::live_only`] when the view reads nothing that changed.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::col;
+    /// # struct Notes { whole_note_highlight: bool }
+    /// # let _ =
     /// col().selection_group(true).on_selection_change(|s: &mut Notes, change, _| {
     ///     if change.started() { s.whole_note_highlight = false; }
     /// })
+    /// # ;
     /// ```
     ///
     /// [`SelectionChange`]: crate::SelectionChange
@@ -888,8 +998,12 @@ impl El {
     /// one: the larger of the two texts' asks, one by default. Two leaves a blank line, as a web
     /// page's paragraphs copy. Texts side by side still take a tab.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::text;
+    /// # let para = "first para";
+    /// # let _ =
     /// text(para).selectable(true).copy_breaks(2, 2) // "first para\n\nsecond para"
+    /// # ;
     /// ```
     pub fn copy_breaks(mut self, before: u8, after: u8) -> Self {
         if let Some(t) = &mut self.text { t.cold.copy_breaks = [before, after]; }
@@ -953,10 +1067,13 @@ impl El {
     ///
     /// Plain single-line text (including [`El::truncate_fade`]) shapes one line directly.
     /// [`El::wrap`], [`El::truncate`] (and `truncate_middle` / `truncate_head`), and
-    /// [`El::max_lines`] re-wrap or re-elide inside the existing box width. Where plain string
-    /// replacement cannot apply (a text editor, non-text element, [`El::spans`], [`El::reveal`],
-    /// [`El::secure`], links, pills, or byte-indexed text decorations), the binding is ignored
-    /// and the element keeps its authored text without panicking.
+    /// [`El::max_lines`] re-wrap or re-elide inside the existing box width. [`El::inline`] boxes
+    /// stay in flow and reposition their child elements on every live update (a box placed at the
+    /// end of a non-empty placeholder stays anchored at the end as length changes; any earlier
+    /// offset stays at its authored byte clamped down to the nearest UTF-8 char boundary). Where
+    /// plain string replacement cannot apply (a text editor, non-text element, [`El::spans`],
+    /// [`El::reveal`], [`El::secure`], links, pills, or byte-indexed text decorations), the
+    /// binding is ignored and the element keeps its authored text without panicking.
     ///
     /// ```no_run
     /// # use rune::{LiveText, text};

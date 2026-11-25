@@ -15,6 +15,7 @@ use std::rc::Rc;
 use mlua::ffi;
 use rune::{Align, Color, El, ScrollSpec, TextStyle};
 
+use super::motion::{self, Presence};
 use super::values::{Size, finite, non_neg, non_neg_int, numbers, parse_size, pos_int, positive, role, xy_pair};
 pub(crate) use super::values::{Value, format_num, name, push_num, read};
 use super::{Attach, Callback, Env};
@@ -117,6 +118,7 @@ atoms! {
     HelpOpen = "helpOpen",
     FadeOut = "fadeOut",
     Dir = "dir",
+    Cursor = "cursor",
     MaxLines = "maxLines",
     Matched = "matched",
     MatchedCrop = "matchedCrop",
@@ -130,6 +132,9 @@ atoms! {
     Raise = "raise",
     Cols = "cols",
     Aspect = "aspect",
+    Enter = "enter",
+    Exit = "exit",
+    Layout = "layout",
 }
 
 /// Every prop name the built-in nodes read.
@@ -223,6 +228,10 @@ pub(crate) struct Props {
     clip: Clip,
     pub(crate) scroll: Option<(bool, bool)>,
     stick_bottom: bool,
+    /// `enter`, `exit` and `layout`, dropped under reduced motion except an `enter` or `exit` of `none`.
+    enter: Option<Presence>,
+    exit: Option<Presence>,
+    layout: bool,
     /// A prop whose effect depends on more than its value and the colours (`shadow`): the node
     /// can't be a template.
     pub(crate) uncacheable: bool,
@@ -260,6 +269,9 @@ impl Props {
             clip: Clip::None,
             scroll: None,
             stick_bottom: false,
+            enter: None,
+            exit: None,
+            layout: false,
             uncacheable: false,
         }
     }
@@ -359,6 +371,10 @@ impl Props {
         }
         if self.raise {
             with(e, El::raise);
+        }
+        with(e, |e| motion::apply(e, self.enter, self.exit, env.reduced_motion));
+        if self.layout && !env.reduced_motion {
+            with(e, El::animate_layout);
         }
         match self.clip {
             Clip::None => {}
@@ -607,6 +623,31 @@ impl Props {
                 };
                 with(e, |e| e.dir(dir));
             }
+            // CSS `cursor`, by its CSS name: the pointer's shape over the node and over what is
+            // inside it that sets none.
+            Atom::Cursor => {
+                let cursor = match string(v)? {
+                    "default" => rune::Cursor::Default,
+                    "pointer" => rune::Cursor::Pointer,
+                    "text" => rune::Cursor::Text,
+                    "grab" => rune::Cursor::Grab,
+                    "grabbing" => rune::Cursor::Grabbing,
+                    "not-allowed" => rune::Cursor::NotAllowed,
+                    "move" => rune::Cursor::Move,
+                    "col-resize" => rune::Cursor::ResizeColumn,
+                    "row-resize" => rune::Cursor::ResizeRow,
+                    "ew-resize" => rune::Cursor::ResizeEw,
+                    "ns-resize" => rune::Cursor::ResizeNs,
+                    "nwse-resize" => rune::Cursor::ResizeNwse,
+                    "nesw-resize" => rune::Cursor::ResizeNesw,
+                    "crosshair" => rune::Cursor::Crosshair,
+                    "cell" => rune::Cursor::Cell,
+                    "zoom-in" => rune::Cursor::ZoomIn,
+                    "zoom-out" => rune::Cursor::ZoomOut,
+                    s => return Err(format!("unknown cursor {s}")),
+                };
+                with(e, |e| e.cursor(cursor));
+            }
             Atom::MaxLines => self.max_lines = Some(non_neg_int(name, v)?),
             Atom::Matched => {
                 let s = string(v)?;
@@ -636,6 +677,18 @@ impl Props {
                 with(e, |e| e.equal_columns(n));
             }
             Atom::Aspect => _ = e.set_aspect_ratio(positive(name, v)?),
+            Atom::Enter | Atom::Exit => {
+                let side = match v {
+                    Value::Nil => None,
+                    v => Some(motion::parse(string(v)?, atom == Atom::Exit)?),
+                };
+                if atom == Atom::Exit {
+                    self.exit = side;
+                } else {
+                    self.enter = side;
+                }
+            }
+            Atom::Layout => self.layout = flag(v)?,
             // Tables, read off the stack by `decode_at`.
             Atom::Corners | Atom::Pin | Atom::Origin | Atom::Offset => return Err(format!("{name} must be a table, got {}", self::name(v))),
             Atom::LineHeight => self.text = self.text.lh(num(v)?),

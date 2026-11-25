@@ -78,3 +78,25 @@ fn on_key_runs_before_the_preview_keys_and_declined_keys_still_zoom() {
     assert!(!rt.state.open, "then closes");
     assert_eq!(rt.state.stepped, 1);
 }
+
+/// A zoomed image shows the open hand unless the app turns the pan cursors off: then the
+/// preview sets no cursor and the arrow shows, as over a fitted image.
+#[test]
+fn pan_cursors_off_leaves_a_zoomed_image_on_the_arrow() {
+    use rune::Cursor;
+    struct Plain { zoom: ImageZoom, hands: bool }
+    fn plain_view(s: &Plain, _: &mut Cx<Plain>) -> El {
+        let preview = Preview::new(|s: &mut Plain| &mut s.zoom, [800.0, 600.0], el().key("picture")).pan_cursors(s.hands);
+        el().w_full().h_full().child(preview.build(&s.zoom, &Kit::neutral(true), [1000.0, 700.0], true))
+    }
+    for (hands, shape) in [(true, Cursor::Grab), (false, Cursor::Default)] {
+        let mut rt = Runtime::new(Plain { zoom: ImageZoom::new(), hands }, plain_view, (1000.0, 700.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        rt.pointer_move(500.0, 300.0);
+        assert_eq!(rt.cursor(), Cursor::Default, "a fitted image, pan cursors {hands}");
+        rt.update(|s, tx| { tx.focus(image_zoom::KEY, false); s.zoom.zoom_in(tx) });
+        rt.frame(0.0);
+        rt.pointer_move(501.0, 300.0);
+        assert_eq!(rt.cursor(), shape, "a zoomed image, pan cursors {hands}");
+    }
+}

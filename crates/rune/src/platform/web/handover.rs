@@ -6,7 +6,7 @@ use winit::{event_loop::ActiveEventLoop, platform::web::WindowExtWebSys};
 use crate::time::Instant;
 use super::{
     Browser, Start, Wake, after, cpu_canvas, error,
-    gpu::{self, Draw, FINISH_LIMIT, Loss},
+    gpu::{self, Draw, Loss},
     health, pipelines, web_math, yield_turn,
 };
 
@@ -241,10 +241,16 @@ impl Browser {
                 // The browser compiles the renderer's pipelines in its GPU process, in order: a submit
                 // made after them is answered once they're built.
                 side.gpu.queue.submit([]);
-                let built = gpu::when_done(&side, &self.proxy);
+                let barrier = gpu::when_done(&side, &self.proxy, Wake::HandoverBuilt);
                 let Draw::Cpu { mut cpu, .. } = std::mem::replace(&mut r.draw, Draw::Moving) else { unreachable!("checked above") };
                 cpu.half = crate::render::cpu_boot::HalfRounding::of_vendor(side.gpu.adapter.get_info().vendor);
-                r.draw = Draw::HandingOver { cpu, side, built, done: None, since: Instant::now() };
+                r.draw = Draw::HandingOver {
+                    cpu,
+                    side,
+                    seq: crate::machine::Seq::default(),
+                    state: web_math::handover_machine::HandoverState::default(),
+                    barrier: Some(barrier),
+                };
                 if restoring { crate::marks::mark("web.gpu.restored"); }
                 crate::marks::mark("web.gpu.ready");
             }
@@ -253,18 +259,104 @@ impl Browser {
         if watch_webgl { self.ensure_webgl_watch(); }
     }
 
-    /// While handing over: once the GPU's frame is done, its canvas shows and the CPU's goes, in
-    /// one turn, so the next composition has the GPU's frame where the CPU's was. A frame that
-    /// doesn't finish in `FINISH_LIMIT` leaves the page on the CPU.
-    pub(super) fn hand_over_if_done(&mut self) {
+    /// An async browser error-scope check (`uber_check` or a lazy feature breaker) resolved.
+    /// Advances any answered feature breakers without encoding a GPU frame, then either advances
+    /// `Draw::HandingOver` or requests one redraw for `Draw::Gpu` once all checks have cleared.
+    pub(super) fn on_gpu_check(&mut self) {
+        use web_math::handover_machine::{HandoverEvent, should_redraw_after_gpu_check};
+        let (handover_effects, gpu_redraw) = {
+            let mut running = self.running.borrow_mut();
+            let Some(r) = &mut *running else { return };
+            match &mut r.draw {
+                Draw::HandingOver { side, seq, state, .. } => {
+                    let _ = side.renderer.poll_breaker_checks(&side.gpu.device);
+                    let effects = state.step(seq, HandoverEvent::ChecksSettled {
+                        still_checking: side.renderer.checking_gpu(),
+                    });
+                    (effects, false)
+                }
+                Draw::Gpu(side) => {
+                    let settled = side.renderer.poll_breaker_checks(&side.gpu.device);
+                    let redraw = should_redraw_after_gpu_check(
+                        side.renderer.checking_gpu(),
+                        settled,
+                        r.last_presented.is_some(),
+                    );
+                    (crate::machine::Effects::none(), redraw)
+                }
+                _ => (crate::machine::Effects::none(), false),
+            }
+        };
+        self.apply_handover_effects(handover_effects);
+        if gpu_redraw && let Some(window) = &self.window { window.request_redraw(); }
+    }
+
+    /// The empty-queue barrier submitted after `Renderer::try_new` resolved.
+    pub(super) fn on_handover_built(&mut self) {
+        use web_math::handover_machine::HandoverEvent;
+        let effects = {
+            let mut running = self.running.borrow_mut();
+            let Some(r) = &mut *running else { return };
+            let Draw::HandingOver { side, seq, state, barrier, .. } = &mut r.draw else { return };
+            *barrier = None;
+            let _ = side.renderer.poll_breaker_checks(&side.gpu.device);
+            state.step(seq, HandoverEvent::Built { checking_gpu: side.renderer.checking_gpu() })
+        };
+        self.apply_handover_effects(effects);
+    }
+
+    /// `onSubmittedWorkDone` resolved for the submitted hand-over GPU frame `attempt`.
+    pub(super) fn on_handover_done(&mut self, attempt: crate::machine::Attempt) {
+        self.step_handover(web_math::handover_machine::HandoverEvent::GpuDone { attempt });
+    }
+
+    /// The `FINISH_LIMIT` timeout timer fired for `attempt`.
+    pub(super) fn on_handover_timeout(&mut self, _attempt: crate::machine::Attempt) {
+        self.poll_handover_timeout();
+    }
+
+    /// Checks whether a hand-over frame in `WaitingDone` has passed `FINISH_LIMIT`.
+    pub(super) fn poll_handover_timeout(&mut self) {
+        self.step_handover(web_math::handover_machine::HandoverEvent::Tick { now: Instant::now() });
+    }
+
+    fn step_handover(&mut self, event: web_math::handover_machine::HandoverEvent) {
+        let effects = {
+            let mut running = self.running.borrow_mut();
+            let Some(r) = &mut *running else { return };
+            let Draw::HandingOver { seq, state, .. } = &mut r.draw else { return };
+            state.step(seq, event)
+        };
+        self.apply_handover_effects(effects);
+    }
+
+    fn apply_handover_effects(
+        &mut self,
+        effects: crate::machine::Effects<web_math::handover_machine::HandoverEffect>,
+    ) {
+        use web_math::handover_machine::HandoverEffect;
+        for effect in effects {
+            match effect {
+                HandoverEffect::RequestRedraw => {
+                    if let Some(window) = &self.window { window.request_redraw(); }
+                }
+                HandoverEffect::Complete => self.finish_handover(true),
+                HandoverEffect::FailTimeout => self.finish_handover(false),
+                HandoverEffect::PrecheckFeatures
+                | HandoverEffect::DrawGpuFrame
+                | HandoverEffect::ArmFinishWait { .. } => {}
+            }
+        }
+    }
+
+    /// Finishes `Draw::HandingOver`: reveals the GPU canvas and removes the CPU canvas when
+    /// `succeeded`, or destroys the GPU and falls back to the CPU canvas on timeout.
+    fn finish_handover(&mut self, succeeded: bool) {
         let mut running = self.running.borrow_mut();
         let Some(r) = &mut *running else { return };
-        let Draw::HandingOver { done: Some(done), since, .. } = &r.draw else { return };
-        let (finished, late) = (done.get(), since.elapsed() > FINISH_LIMIT);
-        if !finished && !late { return; }
-        let Draw::HandingOver { cpu, side, .. } = std::mem::replace(&mut r.draw, Draw::Moving) else { unreachable!("checked above") };
+        let Draw::HandingOver { cpu, side, .. } = std::mem::replace(&mut r.draw, Draw::Moving) else { return };
         let canvas = self.window.as_ref().and_then(|w| w.canvas());
-        if !finished {
+        if !succeeded {
             web_sys::console::warn_1(&"rune: the GPU didn't finish its first frame; the page draws on the CPU".into());
             crate::marks::mark("web.handover.failed");
             side.gpu.device.destroy();

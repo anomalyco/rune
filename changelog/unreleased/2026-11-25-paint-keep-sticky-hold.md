@@ -1,0 +1,1 @@
+- Paint reuse (`PaintKeep`): nodes temporarily held sticky by `Tx::keep_on_screen` after dropping `El::sticky_top` are now excluded from reuse in `dynamic_ok`, and sticky viewport bands are folded into inherited paint-keep keys when sticky elements exist, preventing release builds from copying stale header geometry, hits, and `sticky_frame` entries while a section folds shut.

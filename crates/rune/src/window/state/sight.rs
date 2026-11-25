@@ -6,9 +6,11 @@
 //! runs no motion: `poll`, due timers and queued input still run (`covered_step`), and
 //! `App::on_visibility` hears it go and come back, as a page's `visibilitychange` does.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::num::NonZeroU8;
 
 /// What says a shown window can't be seen.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Cover {
     /// The system's occlusion notification.
@@ -25,9 +27,11 @@ pub(crate) enum Cover {
 pub(crate) enum Sight {
     Seen,
     /// What covers it: a set of `Cover`s, never empty.
+    #[cfg(not(target_arch = "wasm32"))]
     Covered(NonZeroU8),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Sight {
     pub(crate) fn covered(self) -> bool { matches!(self, Sight::Covered(_)) }
 

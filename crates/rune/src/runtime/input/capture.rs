@@ -219,6 +219,16 @@ impl Secondary {
     }
 }
 
+/// Currently hovered link reported to a text node's [`crate::El::on_link_hover`] handler.
+#[derive(Clone)]
+pub(in crate::runtime) struct HoveredLink {
+    pub(in crate::runtime) path: String,
+    pub(in crate::runtime) node_id: crate::NodeId,
+    pub(in crate::runtime) link_index: usize,
+    pub(in crate::runtime) link_id: String,
+    pub(in crate::runtime) handler: crate::el::LinkHoverFn,
+}
+
 /// Pointer position, button capture, hover/tooltip tracking, touch, autoscroll, file drops and OS
 /// drag-out sessions owned by [`crate::runtime::RuntimeCore`]. Ordered hot-first under
 /// `#[repr(C)]` so pointer position, press capture and hover state sit together at offset 0.
@@ -248,6 +258,10 @@ pub(in crate::runtime) struct PointerState {
     pub(in crate::runtime) hover_delays: crate::runtime::hover_delay::HoverDelays,
     /// `on_hover_change` handlers of elements that left the tree, owed their queued leave.
     hover_gone: Vec<(String, crate::el::WindowFocusFn)>,
+    /// Currently hovered link reported to a text node's `on_link_hover` handler.
+    pub(in crate::runtime) link_hover: Option<Box<HoveredLink>>,
+    /// `on_link_hover` handlers of elements whose leave was queued when they left or switched.
+    link_hover_gone: Vec<(String, crate::el::LinkHoverFn)>,
     /// `on_drag` handlers of cancelled drags, kept so the queued cancelled `Up` still reaches them.
     drag_gone: Vec<(String, crate::el::DragFn)>,
     /// The presses counted into `Drag::clicks`.
@@ -292,6 +306,8 @@ impl PointerState {
             hovered: None,
             hover_within: Vec::new(),
             hover_gone: Vec::new(),
+            link_hover: None,
+            link_hover_gone: Vec::new(),
             drag_gone: Vec::new(),
             hover_delays: Default::default(),
             hover_paused: false,
@@ -459,6 +475,16 @@ impl PointerState {
     #[inline]
     pub(super) fn take_hover_gone(&mut self, path: &str) -> Option<crate::el::WindowFocusFn> {
         self.hover_gone.iter().position(|g| g.0 == path).map(|i| self.hover_gone.remove(i).1)
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn push_link_hover_gone(&mut self, path: String, f: crate::el::LinkHoverFn) {
+        self.link_hover_gone.push((path, f));
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_link_hover_gone(&mut self, path: &str) -> Option<crate::el::LinkHoverFn> {
+        self.link_hover_gone.iter().position(|g| g.0 == path).map(|i| self.link_hover_gone.remove(i).1)
     }
 
     #[inline]

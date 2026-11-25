@@ -249,6 +249,21 @@ impl RuntimeCore {
         Some(TextSelection { anchor: at(anchor)?, focus: at(focus)? })
     }
 
+    /// Active caret or selection for focused caret-browsing host `host`, referencing the
+    /// mounted `Role::TextRun` children of its anchor and focus text nodes.
+    pub(super) fn a11y_caret_selection(&self, host: usize) -> Option<TextSelection> {
+        let (h, ai, a_byte, fi, f_byte) = self.caret_browse_endpoints()?;
+        if h != host || !self.a11y_in_tree(ai) || !self.a11y_in_tree(fi) {
+            return None;
+        }
+        let pos_in = |ni: usize, byte: usize| -> Option<TextPosition> {
+            let (_, lines) = self.a11y_lines(ni)?;
+            let (k, c) = runs::position(&lines, byte)?;
+            Some(TextPosition { node: line_id(self.tree.nodes[ni].id, k), character_index: c })
+        };
+        Some(TextSelection { anchor: pos_in(ai, a_byte)?, focus: pos_in(fi, f_byte)? })
+    }
+
     /// The value and state a text field adds to its node.
     pub(super) fn a11y_input(&self, i: usize, input: &crate::el::InputSpec, node: &mut AkNode) {
         if !input.placeholder.is_empty() { node.set_placeholder(input.placeholder.as_str()); }

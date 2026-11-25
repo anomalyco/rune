@@ -1,5 +1,5 @@
 //! What `LightRenderer::render` and `GlassRenderer::render` allocate and record, on a real device. Skips when no
-//! adapter is found.
+//! adapter is found and `RUNE_ALLOW_NO_GPU=1` is set.
 
 use rune_light::{Gi, Light, LightRenderer, Prim, Scene, Settings};
 
@@ -18,7 +18,7 @@ struct Rig {
 
 fn rig() -> Option<Rig> {
     // Rune's GPU, so `RUNE_GPU_BACKEND` picks the backend these run on.
-    let rune::render::Gpu { device, queue, .. } = rune::render::Gpu::try_new(rune::render::Gpu::instance(), None).ok()?;
+    let rune::render::Gpu { device, queue, .. } = rune::render::Gpu::test_headless()?;
     let features = device.features() & wgpu::Features::TIMESTAMP_QUERY;
     let view = |format| {
         device
@@ -70,7 +70,7 @@ fn prims(n: usize) -> Vec<Prim> {
 
 #[test]
 fn growing_the_prim_buffer_keeps_the_render_targets() {
-    let Some(mut r) = rig() else { return eprintln!("no adapter; skipped") };
+    let Some(mut r) = rig() else { return };
     r.frame(&prims(8), None);
     let vis = r.light.visibility_texture().clone();
     r.frame(&prims(300), None);
@@ -79,7 +79,7 @@ fn growing_the_prim_buffer_keeps_the_render_targets() {
 
 #[test]
 fn without_gi_nothing_gi_is_allocated_or_recorded() {
-    let Some(mut r) = rig() else { return eprintln!("no adapter; skipped") };
+    let Some(mut r) = rig() else { return };
     r.frame(&prims(8), None);
     {
         let ins = r.light.inspect();
@@ -102,7 +102,7 @@ fn without_gi_nothing_gi_is_allocated_or_recorded() {
 #[test]
 fn a_steady_frame_makes_no_bind_groups() {
     use rune_light::{Glass, GlassRenderer, GlassSettings};
-    let Some(mut r) = rig() else { return eprintln!("no adapter; skipped") };
+    let Some(mut r) = rig() else { return };
     let mut glass = GlassRenderer::new(&r.device, W, H, wgpu::TextureFormat::Rgba8Unorm);
     let panes = [Glass::rounded(40.0, 30.0, 80.0, 60.0, 16.0)];
     let mut glass_frame = |r: &mut Rig, gi: Option<Gi>| {

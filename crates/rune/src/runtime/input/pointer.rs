@@ -393,8 +393,14 @@ impl RuntimeCore {
             .find(|&p| (self.tree.nodes[p].focus.key.is_some() || self.focuses_on_click(p)) && self.can_focus(p) && !self.tree.nodes[p].focus.keyboard_only)).flatten();
         let in_textbox = std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent).any(|p| self.textbox_input(p).is_some());
         let below = n.focus.below;
+        let caret_host = (!below && !on_link && !keeps && !preserve_focus)
+            .then(|| self.selectable_at(x, y).and_then(|s| self.caret_browsing_host_of(s)))
+            .flatten()
+            .filter(|&h| self.can_focus(h) && !self.tree.nodes[h].focus.keyboard_only);
         if !below && !on_link && !keeps && takes_focus && !self.is_selectable(ti) {
             self.frame.queue.push(Action::FocusControl(n.path.clone()));
+        } else if let Some(host) = caret_host {
+            self.frame.queue.push(Action::FocusControl(self.tree.nodes[host].path.clone()));
         } else if !below && !on_link && !keeps && let Some(p) = keyed {
             self.frame.queue.push(Action::FocusControl(self.tree.nodes[p].path.clone()));
         } else if !below && !on_link && !in_textbox && !preserve_focus {
@@ -574,10 +580,12 @@ impl RuntimeCore {
             self.pointer.pos = None;
             self.pointer.hovered = None;
             self.refresh_hover_within();
+            self.refresh_link_hover(false);
         } else {
             self.pointer.set_left(true);
             self.pointer.hovered = None;
             self.refresh_hover_within();
+            self.refresh_link_hover(false);
         }
     }
 
@@ -595,6 +603,26 @@ impl RuntimeCore {
     #[inline]
     pub fn hit_regions(&self) -> &[[f32; 4]] { self.hit.overlay_hits() }
 
+    /// The element the pointer's shape is read from: the pressed one while a gesture holds the
+    /// pointer (the text that holds the selection while a drag selects), else the one under
+    /// (`x`, `y`), or the held hover while moving layout holds it.
+    fn cursor_origin(&self, x: f32, y: f32) -> Option<usize> {
+        match self.pointer.press.path() {
+            Some(_) if self.edit.selectable.phase.dragging() => self.selection_holder(),
+            Some(p) => self.live_index(p).filter(|&i| self.allowed(i)),
+            // Moving layout holds hover: the cursor stays with what the pointer was over.
+            None => self.held_hover().flatten().or_else(|| self.cursor_target(x, y)),
+        }
+    }
+
+    /// The path of the element [`Self::cursor`] reads the shape from, for the tree dump. `None`
+    /// while the pointer is outside the window, over no element, or panning an autoscroll.
+    pub(crate) fn cursor_path(&self) -> Option<&str> {
+        let (x, y) = self.pointer.pos.filter(|&(x, y)| self.in_viewport(x, y))?;
+        if self.autoscroll_cursor().is_some() { return None; }
+        self.cursor_origin(x, y).map(|i| self.tree.nodes[i].path.as_str())
+    }
+
     /// The pointer shape the shell should show: the pressed element's while a gesture holds
     /// the pointer, else the one under it in the current frame (the held hover while moving
     /// layout holds it), from the nearest ancestor that sets one. The arrow while the pointer is outside the window.
@@ -604,13 +632,7 @@ impl RuntimeCore {
         // An element on its way out has no cursor: `Cursor::Hidden` ends when it's removed.
         // Selectable text and hoverable hit targets keep their own cursor inside a pressable or
         // draggable ancestor.
-        let target = match self.pointer.press.path() {
-            Some(_) if self.edit.selectable.phase.dragging() => self.selection_holder(),
-            Some(p) => self.live_index(p).filter(|&i| self.allowed(i)),
-            // Moving layout holds hover: the cursor stays with what the pointer was over.
-            None => self.held_hover().flatten().or_else(|| self.cursor_target(x, y)),
-        };
-        let Some(mut i) = target else {
+        let Some(mut i) = self.cursor_origin(x, y) else {
             return crate::el::Cursor::Default;
         };
         if self.tree.nodes[i].handlers.cursor.is_none()
@@ -623,7 +645,8 @@ impl RuntimeCore {
             && !self.edit.selectable.phase.dragging()
             && self.link_at(i, x, y).is_some()
         {
-            return crate::el::Cursor::Pointer;
+            // The hand, unless the text names another shape for its links (`El::link_cursor`).
+            return self.tree.nodes[i].text.as_ref().and_then(|t| t.cold.link_cursor).unwrap_or(crate::el::Cursor::Pointer);
         }
         if self.tree.nodes[i].handlers.cursor.is_none()
             && let Some(edge) = self.bare_resize_edge(i)

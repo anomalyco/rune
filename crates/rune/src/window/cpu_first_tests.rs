@@ -72,6 +72,75 @@ fn desktop_gpu_owed_decision_matrix() {
     assert!(CpuFirst::Off.gpu_owed(true));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn linux_transparent_gpu_fallback_decision_matrix() {
+    use crate::gpu::fallback::{Failure, Policy};
+    use crate::render::cpu_boot::NeedsGpu;
+
+    let pre_swapchain = [Failure::SurfaceCreate, Failure::DeviceCreate, Failure::SurfaceUnsupported];
+    let post_or_transient = [
+        Failure::SurfaceRefused,
+        Failure::ShaderRejected,
+        Failure::OutOfMemory,
+        Failure::DeviceLost,
+        Failure::RepeatedDeviceLost,
+    ];
+
+    // Transparent windows never open on CPU before trying the GPU (hardware, software, or none):
+    // machines that can create a GPU surface stay 100% untouched for first window, second window,
+    // and WindowOptions::overlay alike.
+    for mode in [CpuFirst::Auto, CpuFirst::Only, CpuFirst::Off] {
+        for live_pool_gpu in [false, true] {
+            assert!(!mode.opens_on_cpu(true, false, live_pool_gpu));
+            assert!(!mode.opens_on_cpu(true, true, live_pool_gpu));
+        }
+    }
+
+    // After pre-swapchain GPU startup fails on Linux:
+    // Auto and Only with Automatic policy fall back to CpuPainter for visible transparent windows
+    // (including a first transparent window, a second transparent window, or WindowOptions::overlay).
+    for mode in [CpuFirst::Auto, CpuFirst::Only] {
+        for failure in pre_swapchain {
+            assert!(mode.transparent_gpu_fallback(true, true, Policy::Automatic, failure), "{mode:?} {failure:?}");
+            // Opaque or hidden windows never take this branch.
+            assert!(!mode.transparent_gpu_fallback(true, false, Policy::Automatic, failure));
+            assert!(!mode.transparent_gpu_fallback(false, true, Policy::Automatic, failure));
+            // Pinned adapter (WGPU_ADAPTER_NAME) never silently falls back to CPU.
+            assert!(!mode.transparent_gpu_fallback(true, true, Policy::Pinned, failure));
+        }
+        // Post-swapchain or transient errors never fall back to CPU (protects Wayland explicit sync).
+        for failure in post_or_transient {
+            assert!(!mode.transparent_gpu_fallback(true, true, Policy::Automatic, failure), "{mode:?} {failure:?}");
+        }
+    }
+
+    // CpuFirst::Off explicitly requests GPU-only startup: never falls back to CPU.
+    for policy in [Policy::Automatic, Policy::Pinned] {
+        for failure in pre_swapchain.into_iter().chain(post_or_transient) {
+            assert!(!CpuFirst::Off.transparent_gpu_fallback(true, true, policy, failure), "Off {policy:?} {failure:?}");
+        }
+    }
+
+    // Degraded CPU paint on Linux applies only after the GPU job has permanently failed, and only
+    // for degradable NeedsGpu reasons.
+    for reason in [
+        NeedsGpu::LayerBlur,
+        NeedsGpu::TurnedLayer,
+        NeedsGpu::BackdropBlur,
+        NeedsGpu::Effect,
+        NeedsGpu::NativeSurface,
+        NeedsGpu::LinearBlend,
+    ] {
+        assert!(CpuFirst::linux_degraded_when_gpu_failed(true, reason));
+        assert!(!CpuFirst::linux_degraded_when_gpu_failed(false, reason));
+    }
+    for reason in [NeedsGpu::SlugText, NeedsGpu::OutlineGlyph, NeedsGpu::UnknownKind, NeedsGpu::Target] {
+        assert!(!CpuFirst::linux_degraded_when_gpu_failed(true, reason));
+        assert!(!CpuFirst::linux_degraded_when_gpu_failed(false, reason));
+    }
+}
+
 #[test]
 fn web_start_decision_matrix() {
     // Document and inline embedded pages always start on the GPU regardless of CpuFirst.

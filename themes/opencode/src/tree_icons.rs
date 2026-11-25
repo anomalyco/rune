@@ -3,9 +3,17 @@
 //! on the selected row, in the file type's colour (`file-tree.css`). Folders show only the
 //! [`CHEVRON`], turned a quarter clockwise while open.
 //!
-//! ```ignore
+//! ```
+//! # use rune::icon;
+//! # use rune_theme_opencode::{kit, tree_icons};
+//! # struct Node { path: String }
+//! # let node = Node { path: "src/main.rs".into() };
+//! # let (selected, dark) = (true, true);
+//! # let k = kit(dark);
 //! let t = tree_icons::file(&node.path);
+//! # let _ =
 //! icon(t.icon(), 16.0).color(if selected { t.color(dark) } else { k.c.icon_muted })
+//! # ;
 //! ```
 
 mod catalog;

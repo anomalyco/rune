@@ -4,7 +4,7 @@ use std::sync::Arc;
 use zeroize::Zeroizing;
 
 use crate::edit::Wiped;
-use super::sanitize_html;
+use super::{WebFile, sanitize_html};
 
 /// What a copy puts on the clipboard, or what a paste found there: plain text, and optionally
 /// HTML, RTF, an image and files. Debug output never includes its contents.
@@ -32,11 +32,13 @@ pub struct ClipboardContent {
     rtf: Option<Wiped>,
     image: Option<ClipboardImage>,
     files: Vec<PathBuf>,
+    web_files: Vec<WebFile>,
     pub(super) own_pills: bool,
 }
 impl PartialEq for ClipboardContent {
     fn eq(&self, other: &Self) -> bool {
         self.text == other.text && self.html == other.html && self.rtf == other.rtf && self.image == other.image && self.files == other.files
+            && self.web_files == other.web_files
     }
 }
 impl Eq for ClipboardContent {}
@@ -62,8 +64,20 @@ impl ClipboardContent {
     pub fn image(&self) -> Option<&ClipboardImage> { self.image.as_ref() }
     /// The files on the clipboard. Like the image, only pastes to a hook carry them.
     pub fn files(&self) -> &[PathBuf] { &self.files }
+    /// The browser files a paste or drop on the web offered the focused field, at most
+    /// [`MAX_WEB_FILES`](super::MAX_WEB_FILES), with no paths and no bytes read: call
+    /// `WebFile::read` (wasm32) for the ones the app takes. Like the image, only hooks hear them (a
+    /// field's `on_input_paste` or a root `on_paste_content`; never a password field). Some
+    /// files come twice: a pasted or dropped PNG is also the [`image`](Self::image), and the
+    /// contents of a dropped text file of at most 1 MiB are also the [`text`](Self::text).
+    /// Always empty on native platforms.
+    pub fn web_files(&self) -> &[WebFile] { &self.web_files }
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub(crate) fn with_web_files(mut self, files: Vec<WebFile>) -> Self { self.web_files.extend(files); self }
     /// HTML, RTF, an image or files beside the text.
-    pub fn is_rich(&self) -> bool { self.html.is_some() || self.rtf.is_some() || self.image.is_some() || !self.files.is_empty() }
+    pub fn is_rich(&self) -> bool {
+        self.html.is_some() || self.rtf.is_some() || self.image.is_some() || !self.files.is_empty() || !self.web_files.is_empty()
+    }
     /// No text and no other form.
     pub fn is_empty(&self) -> bool { self.text.is_empty() && !self.is_rich() }
     /// Content from another app: its HTML sanitised.
@@ -93,6 +107,7 @@ impl ClipboardContent {
         let had = !self.is_empty();
         self.image = None;
         self.files.clear();
+        self.web_files.clear();
         (!had || !self.is_empty()).then_some(self)
     }
     /// Plain consumers (a field without an `on_input_paste`, a text `on_paste`) take it: it
@@ -117,6 +132,7 @@ impl std::fmt::Debug for ClipboardContent {
             .field("rtf", &self.rtf.as_ref().map(|r| r.len()))
             .field("image", &self.image)
             .field("files", &self.files.len())
+            .field("web_files", &self.web_files.len())
             .finish()
     }
 }

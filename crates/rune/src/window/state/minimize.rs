@@ -3,6 +3,7 @@
 use crate::machine::Effects;
 #[cfg(test)]
 use crate::runtime::Runtime;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::runtime::RuntimeCore;
 
 /// A minimize the app asked for, and one a hidden poll holds for the show in the same turn.
@@ -16,6 +17,7 @@ pub(crate) enum Minimize {
     /// A hidden poll in a show turn took the ask out of the shell's hands for its own shell, and
     /// holds it for after. `field` is what is in the field meanwhile: an ask that arrived while
     /// that shell ran (a pop-up's callback, say), which the shell takes first.
+    #[cfg(not(target_arch = "wasm32"))]
     Held { field: bool },
 }
 
@@ -25,10 +27,13 @@ pub(crate) enum MinimizeEvent {
     /// `Tx::minimize`, `AppHandle::minimize`, or the standard minimize key.
     Asked,
     /// A poll of a hidden window, in a turn that shows it: it holds the ask for after its shell.
+    #[cfg(not(target_arch = "wasm32"))]
     HeldForShow,
     /// That poll's shell is done: the ask it held is due again.
+    #[cfg(not(target_arch = "wasm32"))]
     Returned,
     /// A shell took what waits.
+    #[cfg(not(target_arch = "wasm32"))]
     Taken,
     /// The window hid or closed: it takes what waits back out.
     Lost,
@@ -38,6 +43,7 @@ pub(crate) enum MinimizeEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MinimizeEffect {
     /// Minimize the window now (`Host::minimize`).
+    #[cfg(not(target_arch = "wasm32"))]
     Minimize,
 }
 
@@ -52,6 +58,7 @@ impl Minimize {
         match self {
             Minimize::None => false,
             Minimize::Asked => true,
+            #[cfg(not(target_arch = "wasm32"))]
             Minimize::Held { field } => field,
         }
     }
@@ -68,17 +75,27 @@ pub(crate) fn step(state: &mut Minimize, event: MinimizeEvent) -> Effects<Minimi
         (M::None, E::Asked) => { *state = M::Asked; Effects::none() }
         (M::None, _) => Effects::none(),
         (M::Asked, E::Asked) => Effects::none(),
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Asked, E::HeldForShow) => { *state = M::Held { field: false }; Effects::none() }
         // A second poll in the turn would take the field again, and hold what it finds.
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Held { field: true }, E::HeldForShow) => { *state = M::Held { field: false }; Effects::none() }
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Held { field: false }, E::HeldForShow) => { *state = M::None; Effects::none() }
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Held { .. }, E::Asked) => { *state = M::Held { field: true }; Effects::none() }
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Asked, E::Taken) => { *state = M::None; Effects::one(MinimizeEffect::Minimize) }
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Held { field: true }, E::Taken) => { *state = M::Held { field: false }; Effects::one(MinimizeEffect::Minimize) }
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Held { field: false }, E::Taken) => Effects::none(),
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Held { .. }, E::Returned) => { *state = M::Asked; Effects::none() }
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Asked, E::Returned) => Effects::none(),
         (M::Asked, E::Lost) => { *state = M::None; Effects::none() }
+        #[cfg(not(target_arch = "wasm32"))]
         (M::Held { .. }, E::Lost) => { *state = M::Held { field: false }; Effects::none() }
     }
 }
@@ -90,18 +107,23 @@ impl crate::runtime::RuntimeCore {
         let mut state = self.host.minimize;
         let effects = step(&mut state, event);
         self.host.minimize = state;
-        effects.into_iter().any(|effect| effect == MinimizeEffect::Minimize)
+        #[cfg(not(target_arch = "wasm32"))]
+        { effects.into_iter().any(|effect| effect == MinimizeEffect::Minimize) }
+        #[cfg(target_arch = "wasm32")]
+        { let _ = effects; false }
     }
 }
 
 /// A hidden poll's ask held across its own shell, without the window or event loop the shell
 /// runs in: `Host` steps it around the shell, and a test drives exactly the same steps.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct HiddenPoll {
     /// The poll runs in a turn that shows the window, so it holds the ask across its shell.
     shows: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl HiddenPoll {
     pub(crate) fn new(shows: bool) -> Self { Self { shows } }
 
@@ -133,6 +155,7 @@ pub(crate) fn shell_take<S: 'static>(rt: &mut Runtime<S>) -> bool {
     shell_take_core(rt.core_mut())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn shell_take_core(rt: &mut RuntimeCore) -> bool {
     rt.minimize_step(MinimizeEvent::Taken)
 }

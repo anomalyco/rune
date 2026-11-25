@@ -24,6 +24,9 @@ use crate::runtime::Waker;
 use crate::Runtime;
 use crate::{PointerPress, Shortcut, Tx};
 
+mod style;
+pub use style::PopupMenuStyle;
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -143,6 +146,7 @@ pub enum PopupEntry {
 pub struct PopupMenu {
     pub(crate) entries: Vec<PopupEntry>,
     pub(crate) selected: Option<String>,
+    pub(crate) style: Option<PopupMenuStyle>,
 }
 
 impl PopupMenu {
@@ -179,6 +183,13 @@ impl PopupMenu {
     /// value. Without one, a menu anchored to an element drops down below it. Over a point
     /// anchor, this item opens under the point instead of the menu's top-left corner.
     pub fn selected(mut self, id: impl Into<String>) -> Self { self.selected = Some(id.into()); self }
+    /// How the web draws this menu and its submenus, such as from the app's palette. Native
+    /// menus (macOS, Windows) ignore it. A submenu's own style is unused and left out of
+    /// `--tree`.
+    pub fn style(mut self, style: PopupMenuStyle) -> Self { self.style = Some(style); self }
+
+    /// The style set with [`PopupMenu::style`], if any.
+    pub fn menu_style(&self) -> Option<&PopupMenuStyle> { self.style.as_ref() }
 
     /// The menu's entries in order: items, separators, and nested submenus.
     ///
@@ -232,7 +243,15 @@ impl PopupMenu {
         Ok(())
     }
 
+    /// The menu as the web bridge and `--tree` read it. Only the top menu carries its `style`,
+    /// the one the page draws every level with.
     pub(crate) fn to_json(&self) -> Value {
+        let mut v = self.entries_json();
+        if let Some(style) = &self.style { v["style"] = style.to_json(); }
+        v
+    }
+
+    fn entries_json(&self) -> Value {
         let entries: Vec<Value> = self.entries.iter().map(|entry| match entry {
             PopupEntry::Item(item) => {
                 let mut v = json!({ "id": item.id, "title": item.title, "enabled": item.enabled, "checked": item.checked });
@@ -241,8 +260,8 @@ impl PopupMenu {
                 v
             }
             PopupEntry::Separator => json!({ "separator": true }),
-            PopupEntry::Submenu { title, menu, enabled: true } => json!({ "submenu": title, "menu": menu.to_json() }),
-            PopupEntry::Submenu { title, menu, enabled: false } => json!({ "submenu": title, "enabled": false, "menu": menu.to_json() }),
+            PopupEntry::Submenu { title, menu, enabled: true } => json!({ "submenu": title, "menu": menu.entries_json() }),
+            PopupEntry::Submenu { title, menu, enabled: false } => json!({ "submenu": title, "enabled": false, "menu": menu.entries_json() }),
         }).collect();
         let mut v = json!({ "items": entries });
         if let Some(selected) = &self.selected { v["selected"] = selected.clone().into(); }
@@ -365,13 +384,17 @@ impl Tx {
     /// dismissed or this platform has no native menu ([`popup_menu_supported`]). Exactly one
     /// call per request. A menu asked for while another is open opens after it closes.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{PopupMenu, Tx, el};
+    /// # struct Settings { theme: String }
+    /// # let _ = el()
     /// .on_press_tx(|_: &mut Settings, tx: &mut Tx| {
     ///     let menu = PopupMenu::picker([("system", "System"), ("light", "Light"), ("dark", "Dark")], "system");
     ///     tx.popup_menu(menu, "theme-button", |s: &mut Settings, picked, _| {
     ///         if let Some(id) = picked { s.theme = id.into(); }
     ///     });
     /// })
+    /// # ;
     /// ```
     pub fn popup_menu<S: 'static>(
         &mut self,

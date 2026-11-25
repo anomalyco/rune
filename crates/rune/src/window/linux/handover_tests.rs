@@ -1,6 +1,8 @@
 use std::sync::atomic::Ordering;
 
-use super::{GpuJob, SurfaceMode};
+use super::{GpuJob, Pick, PickEffect, PickEvent, PickState, SurfaceMode, defers_software, step_pick};
+use crate::gpu::fallback::Policy;
+use crate::window::CpuFirst;
 use crate::platform::cpu_frames::Put;
 use crate::window::linux::cpu_frame::Cpu;
 
@@ -55,7 +57,7 @@ fn orders() -> Vec<Vec<Event>> {
 
 fn building(explicit_sync: bool) -> (SurfaceMode, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     let (cpu, sent) = Cpu::fake(explicit_sync);
-    (SurfaceMode::Cpu { cpu, job: GpuJob::Building { tries: 1, latest: Default::default() } }, sent)
+    (SurfaceMode::Cpu { cpu, job: GpuJob::Building { tries: 1, latest: Default::default(), pick: Default::default() } }, sent)
 }
 
 #[test]
@@ -80,7 +82,7 @@ fn the_cpu_draws_every_event_until_the_switch_and_none_after_it() {
 
 #[test]
 fn a_window_switches_once_and_only_while_its_gpu_is_being_made() {
-    for job in [GpuJob::Waiting { tries: 0, retry_at: None }, GpuJob::Failed] {
+    for job in [GpuJob::Waiting { tries: 0, retry_at: None }, GpuJob::SoftwareDeferred, GpuJob::Failed] {
         let (cpu, sent) = Cpu::fake(false);
         let mut mode = SurfaceMode::Cpu { cpu, job };
         assert_eq!(mode.switch(), None);
@@ -128,4 +130,119 @@ fn only_a_window_that_switched_goes_back() {
     assert!(!mode.switch_back(GpuJob::Failed));
     assert!(matches!(mode, SurfaceMode::Cpu { job: GpuJob::Building { tries: 1, .. }, .. }));
     assert!(!SurfaceMode::Gpu.switch_back(GpuJob::Failed));
+}
+
+#[test]
+fn only_an_automatic_auto_hand_over_leaves_a_software_gpu_alone() {
+    assert!(defers_software(CpuFirst::Auto, Policy::Automatic));
+    assert!(!defers_software(CpuFirst::Auto, Policy::Pinned));
+    assert!(!defers_software(CpuFirst::Only, Policy::Automatic));
+    assert!(!defers_software(CpuFirst::Off, Policy::Automatic));
+}
+
+#[test]
+fn transparent_fallback_starts_with_failed_gpu_job_and_never_switches_or_retries() {
+    let (cpu, sent) = Cpu::fake(false);
+    let mut mode = SurfaceMode::Cpu { cpu, job: GpuJob::Failed };
+    assert!(mode.cpu_draws());
+    assert_eq!(mode.switch(), None, "GpuJob::Failed must never switch to GPU");
+    assert!(cpu_frame(&mut mode, Event::Redraw));
+    assert!(cpu_frame(&mut mode, Event::Resize(320, 200)));
+    assert_eq!(sent.load(Ordering::Relaxed), 2);
+    // GpuJob::Failed is not GpuJob::Waiting, so neither gpu_owed nor handover_deadline triggers.
+    assert!(matches!(mode, SurfaceMode::Cpu { job: GpuJob::Failed, .. }));
+}
+
+#[test]
+fn a_frame_that_needs_the_gpu_takes_the_software_one_a_thread_found() {
+    // Pure state machine checks:
+    // 1. Idle software adapter with no NeedsGpu -> SkipWarmFrame then DeferSoftware.
+    let mut s = PickState::Pending { defer_software: true };
+    assert_eq!(step_pick(&mut s, PickEvent::AdapterFound { software: true }).into_iter().collect::<Vec<_>>(), vec![PickEffect::SkipWarmFrame]);
+    assert_eq!(step_pick(&mut s, PickEvent::Ready).into_iter().collect::<Vec<_>>(), vec![PickEffect::DeferSoftware]);
+
+    // 2. NeedsGpu arrives BEFORE worker inspects the software adapter -> RunWarmFrame then SwitchToGpu.
+    let mut s = PickState::Pending { defer_software: true };
+    assert!(step_pick(&mut s, PickEvent::NeedsGpu).is_empty());
+    assert_eq!(step_pick(&mut s, PickEvent::AdapterFound { software: true }).into_iter().collect::<Vec<_>>(), vec![PickEffect::RunWarmFrame]);
+    assert_eq!(step_pick(&mut s, PickEvent::Ready).into_iter().collect::<Vec<_>>(), vec![PickEffect::SwitchToGpu]);
+
+    // 3. Hardware adapter under idle defer -> RunWarmFrame then SwitchToGpu.
+    let mut s = PickState::Pending { defer_software: true };
+    assert_eq!(step_pick(&mut s, PickEvent::AdapterFound { software: false }).into_iter().collect::<Vec<_>>(), vec![PickEffect::RunWarmFrame]);
+    assert_eq!(step_pick(&mut s, PickEvent::Ready).into_iter().collect::<Vec<_>>(), vec![PickEffect::SwitchToGpu]);
+}
+
+#[test]
+fn needs_gpu_after_skipped_warm_frame_must_not_switch_to_unwarmed_software_gpu() {
+    use std::sync::{Arc, Barrier};
+    use std::sync::atomic::AtomicUsize;
+
+    let pick = Arc::new(Pick::new(true));
+    let warm_runs = Arc::new(AtomicUsize::new(0));
+    let skipped = Arc::new(Barrier::new(2));
+    let after_needs_gpu = Arc::new(Barrier::new(2));
+
+    let (p_bg, w_bg, b1, b2) = (pick.clone(), warm_runs.clone(), skipped.clone(), after_needs_gpu.clone());
+    let worker = std::thread::spawn(move || {
+        // Worker finds software adapter while defer==true, skips warm_frame.
+        if p_bg.step(PickEvent::AdapterFound { software: true }).into_iter().any(|e| e == PickEffect::RunWarmFrame) {
+            w_bg.fetch_add(1, Ordering::Relaxed);
+        }
+        b1.wait();
+        b2.wait();
+    });
+
+    // UI thread waits until worker has skipped warm_frame, then NeedsGpu arrives before gpu_ready.
+    skipped.wait();
+    for _ in pick.step(PickEvent::NeedsGpu) {}
+    after_needs_gpu.wait();
+    worker.join().unwrap();
+
+    // gpu_ready MUST NOT switch to the unwarmed software GPU; it emits RestartForWarmFrame so
+    // the worker runs warm_frame off-thread before switching.
+    let ready_effects: Vec<_> = pick.step(PickEvent::Ready).into_iter().collect();
+    assert_eq!(ready_effects, vec![PickEffect::RestartForWarmFrame]);
+    assert_eq!(warm_runs.load(Ordering::Relaxed), 0);
+
+    // Follow-up restart (start_gpu(false)): runs warm_frame off-thread, then SwitchToGpu.
+    let restart = Pick::new(false);
+    if restart.step(PickEvent::AdapterFound { software: true }).into_iter().any(|e| e == PickEffect::RunWarmFrame) {
+        warm_runs.fetch_add(1, Ordering::Relaxed);
+    }
+    assert_eq!(restart.step(PickEvent::Ready).into_iter().collect::<Vec<_>>(), vec![PickEffect::SwitchToGpu]);
+    assert_eq!(warm_runs.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn opaque_second_window_ignores_pooled_software_gpu_under_auto_automatic() {
+    use super::super::cpu_frame::linux_opens_on_cpu;
+    use wgpu::DeviceType::{Cpu, DiscreteGpu, IntegratedGpu, VirtualGpu};
+
+    // Opaque second window when gpu_pool holds a software GPU (from a transparent window or
+    // earlier NeedsGpu window): stays on CpuPainter under Auto + Automatic.
+    assert!(linux_opens_on_cpu(CpuFirst::Auto, Policy::Automatic, false, false, Some(Cpu)));
+
+    // Pinned adapter (WGPU_ADAPTER_NAME): reuses pooled software GPU (bit-identical).
+    assert!(!linux_opens_on_cpu(CpuFirst::Auto, Policy::Pinned, false, false, Some(Cpu)));
+
+    // Hardware GPUs in gpu_pool: reuses pooled hardware GPU (bit-identical).
+    for hw in [IntegratedGpu, DiscreteGpu, VirtualGpu] {
+        assert!(!linux_opens_on_cpu(CpuFirst::Auto, Policy::Automatic, false, false, Some(hw)), "{hw:?}");
+        assert!(!linux_opens_on_cpu(CpuFirst::Auto, Policy::Pinned, false, false, Some(hw)), "{hw:?} pinned");
+    }
+
+    // Transparent windows, own GPU, CpuFirst::Off, and CpuFirst::Only remain unchanged.
+    for mode in [CpuFirst::Auto, CpuFirst::Only, CpuFirst::Off] {
+        for policy in [Policy::Automatic, Policy::Pinned] {
+            for pool in [None, Some(Cpu), Some(DiscreteGpu)] {
+                assert!(!linux_opens_on_cpu(mode, policy, true, false, pool), "transparent {mode:?} {policy:?} {pool:?}");
+                assert!(!linux_opens_on_cpu(mode, policy, false, true, pool), "has_gpu {mode:?} {policy:?} {pool:?}");
+            }
+        }
+    }
+    assert!(!linux_opens_on_cpu(CpuFirst::Off, Policy::Automatic, false, false, None));
+    assert!(!linux_opens_on_cpu(CpuFirst::Off, Policy::Automatic, false, false, Some(Cpu)));
+    assert!(linux_opens_on_cpu(CpuFirst::Only, Policy::Automatic, false, false, Some(DiscreteGpu)));
+    assert!(linux_opens_on_cpu(CpuFirst::Only, Policy::Automatic, false, false, Some(Cpu)));
 }

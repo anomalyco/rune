@@ -35,6 +35,7 @@ mod native;
 mod primary;
 #[cfg(target_arch = "wasm32")]
 mod web;
+pub(crate) mod web_file;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::tiff_to_png;
 pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
@@ -42,6 +43,7 @@ pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
 use content::valid_image_size;
 pub use html::sanitize_html;
 pub use secret::{SecretCopy, SecretState};
+pub use web_file::{MAX_WEB_FILES, WebFile};
 use secret::{Alarm, Hold, HoldEffect, HoldEvent, Slot, Unwritten, step_hold};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }

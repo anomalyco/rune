@@ -21,6 +21,8 @@ use std::ops::Range;
 /// Chromium on Windows and Linux doesn't.
 const SECONDARY_SELECTS_WORD: bool = cfg!(target_os = "macos");
 
+#[path = "caret_browse/mod.rs"]
+pub(crate) mod caret_browse;
 #[path = "copy_html.rs"]
 mod copy_html;
 #[path = "copy_join.rs"]
@@ -565,6 +567,9 @@ impl RuntimeCore {
     pub(in crate::runtime) fn select_step(&mut self, event: phase::Event<'_>) {
         // Only the held press's own drag keeps the list scrolling at its edge.
         if !matches!(event, phase::Event::Drag { .. }) { self.edit.stop_edge_scroll(); }
+        self.edit.selectable.goal_x = None;
+        self.edit.selectable.affinity = parley::Affinity::Downstream;
+        self.cancel_pending_caret();
         let effects = phase::step(&mut self.edit.selectable.phase, event);
         self.carry_select(effects);
     }

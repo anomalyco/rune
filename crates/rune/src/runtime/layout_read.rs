@@ -460,7 +460,7 @@ impl RuntimeCore {
         [t[0] - dx, t[1] - dy, nodes[i].local.w, nodes[i].local.h]
     }
 
-    fn layout_of(&self, nodes: &[Node], index: Option<&KeyIndex>, key: &str) -> Option<[f32; 4]> {
+    pub(super) fn layout_of(&self, nodes: &[Node], index: Option<&KeyIndex>, key: &str) -> Option<[f32; 4]> {
         if key == SELECTION || key.starts_with(ANCHOR) || field_selection_read_key(key).is_some() { return None; }
         let (key, scrolled) = key.strip_prefix(WINDOW).map_or((key, false), |key| (key, true));
         let first = match index {

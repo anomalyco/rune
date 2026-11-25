@@ -13,15 +13,18 @@ pub(super) type LabelsFn = Rc<dyn Fn(DiffLabel<'_>) -> Option<String>>;
 /// variant. Returning `None` (or an empty or whitespace-only string) keeps the default English
 /// text so controls never lose their accessible names.
 ///
-/// ```ignore
+/// ```
 /// use rune_kit::diff::DiffLabel;
 ///
-/// let name = |label: DiffLabel<'_>| match label {
-///     DiffLabel::ExpandFile => Some("Déplier le fichier".into()),
-///     DiffLabel::CollapseFile => Some("Replier le fichier".into()),
-///     DiffLabel::CommentLine => Some("Commenter cette ligne".into()),
-///     _ => None,
+/// let name = |label: DiffLabel<'_>| -> Option<String> {
+///     match label {
+///         DiffLabel::ExpandFile => Some("Déplier le fichier".into()),
+///         DiffLabel::CollapseFile => Some("Replier le fichier".into()),
+///         DiffLabel::CommentLine => Some("Commenter cette ligne".into()),
+///         _ => None,
+///     }
 /// };
+/// # assert_eq!(name(DiffLabel::ExpandFile).as_deref(), Some("Déplier le fichier"));
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]

@@ -1,10 +1,11 @@
 //! A counting global allocator: live and peak heap bytes, the largest single request, and the
 //! bytes held in big blocks, plus net bytes per thread tag. A few relaxed atomics per call.
 //!
-//! ```ignore
+//! ```
 //! #[cfg(debug_assertions)]
 //! #[global_allocator]
 //! static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
+//! # fn main() {}
 //! ```
 //!
 //! Tags attribute heap to threads: `procwatch::alloc::tag_thread("audio")` at a thread's start

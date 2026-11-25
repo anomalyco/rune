@@ -584,6 +584,14 @@ impl RuntimeCore {
         self.text_index_at(i, x, y)
     }
 
+    /// The current tree's laid-out rect of `key` (a key or key path) in window points, after its
+    /// viewports' scrolling, for [`Tx::read_layout`](crate::Tx::read_layout). It notes no layout
+    /// read, so nothing re-runs when the rect moves.
+    fn window_layout_now(&self, key: &str) -> Option<[f32; 4]> {
+        if key.is_empty() { return None; }
+        self.layout_of(&self.tree.nodes, None, &super::layout_read::window_key(key))
+    }
+
     pub(super) fn run_pick_reads(&mut self, app: &mut dyn AppDriver, tx: &mut Tx) {
         let mut elements: Option<Vec<ElementInfo>> = None;
         for read in std::mem::take(&mut tx.pick_reads) {
@@ -607,6 +615,20 @@ impl RuntimeCore {
                     if let Some(f) = f.take() {
                         let list = elements.get_or_insert_with(|| self.elements());
                         f(app.states(), list, tx);
+                        self.commit.dirty = true;
+                    }
+                }
+                crate::el::PickRead::Layout { key, f } => {
+                    if let Some(f) = f.take() {
+                        let rect = self.window_layout_now(&key);
+                        f(app.states(), rect, tx);
+                        self.commit.dirty = true;
+                    }
+                }
+                crate::el::PickRead::Presented { key, f } => {
+                    if let Some(f) = f.take() {
+                        let drawn = self.presented(&key);
+                        f(app.states(), drawn, tx);
                         self.commit.dirty = true;
                     }
                 }

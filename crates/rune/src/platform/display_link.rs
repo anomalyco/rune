@@ -237,7 +237,9 @@ impl DisplayLink {
                 LinkEffect::ResumeActive => {
                     self.callback.arm_active();
                 }
-                LinkEffect::ArmCoast { .. } | LinkEffect::WakeToStop | LinkEffect::StopLink => {}
+                LinkEffect::ArmCoast { .. } | LinkEffect::StopLink => {}
+                #[cfg(test)]
+                LinkEffect::WakeToStop => {}
             }
         }
         true

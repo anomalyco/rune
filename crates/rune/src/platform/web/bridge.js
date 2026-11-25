@@ -212,15 +212,19 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         a11y.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;forced-color-adjust:none;';
         document.body.append(a11y);
     }
-    const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
+    const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), a11yByPath: new Map(), mirrorSel: false, field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
-        touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null,
+        touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null, a11yTouchId: null,
+        hoverLink: null, hoverLinkLeave: null, hoverClientX: NaN, hoverClientY: NaN,
+        forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false };
-    const send = event => {
+    // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
+    const send = (event, after) => {
         const message = JSON.stringify(event);
-        if (h.syncing) queueMicrotask(() => { if (!h.disposed) callback(message); });
-        else if (!h.disposed) callback(message);
+        const go = () => { try { if (!h.disposed) callback(message); } finally { after?.(); } };
+        if (h.syncing) queueMicrotask(go);
+        else go();
     };
     h.send = send;
     const listen = (target, name, handler, options) => {
@@ -277,8 +281,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(window, 'keyup', event => {
         if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
     }, { passive: true });
-    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; });
-    listen(document, 'visibilitychange', () => { if (document.hidden) { h.modBits = 0; h.activeTouchId = null; } });
+    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); });
+    listen(document, 'visibilitychange', () => { if (document.hidden) { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); } });
     function changed(preedit = false) {
         const backward = textarea.selectionDirection === 'backward';
         const edit = replacement(h.domValue, textarea.value, preedit ? h.composition : '', textarea.selectionEnd);
@@ -322,8 +326,10 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             event.preventDefault();
             const data = event.clipboardData;
             h.image = field === textarea ? [...(data?.items ?? [])].find(i => i.kind === 'file' && i.type === 'image/png')?.getAsFile() ?? undefined : undefined;
+            // Files go only to the text field: a password field takes text alone.
+            const files = field === textarea ? offerFiles(data?.files) : [];
             try {
-                send({ kind: 'paste', text: data?.getData('text/plain') ?? '', html: field === textarea ? data?.getData('text/html') ?? '' : '', image: !!h.image });
+                send({ kind: 'paste', text: data?.getData('text/plain') ?? '', html: field === textarea ? data?.getData('text/html') ?? '' : '', image: !!h.image, files }, () => settleFiles(files));
             } finally {
                 if (h.syncing) queueMicrotask(() => { h.image = undefined; });
                 else h.image = undefined;
@@ -392,9 +398,11 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             event.clipboardData.setData('text/plain', h.copyText);
         }
     });
-    // A file dropped while a Rune field has the keyboard is pasted into it, as a page's field
-    // takes a drop: an image as a pasted image, text as text. Elsewhere a drop does nothing (the
-    // browser would open the file in place of the app).
+    // Files dropped while a Rune field has the keyboard are pasted into it, as a page's field
+    // takes a drop: the first file as a pasted image when it is a PNG, or as text when it is
+    // text, and every file (up to `MAX_WEB_FILES`) as a handle for `ClipboardContent::web_files`
+    // unless the field is a password field, which, as with a paste, takes no files.
+    // Elsewhere a drop does nothing (the browser would open the file in place of the app).
     listen(canvas, 'dragover', event => {
         if (!event.dataTransfer?.types.includes('Files')) return;
         event.preventDefault();
@@ -405,12 +413,20 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (!file) return;
         event.preventDefault();
         if (!h.key) return;
+        // The `FileList` empties once this handler yields, so take the handles before reading.
+        const files = h.field === h.password ? [] : offerFiles(event.dataTransfer.files);
         if (file.type === 'image/png') {
             h.image = file;
-            send({ kind: 'paste', text: '', html: '', image: true });
+            send({ kind: 'paste', text: '', html: '', image: true, files }, () => settleFiles(files));
             return;
         }
-        if (file.type.startsWith('text/') || file.size < 1048576 && !file.type) send({ kind: 'paste', text: await file.text(), html: '', image: false });
+        // Only a small text file is read as text; a bigger one arrives as a handle alone.
+        const text = file.size <= MAX_DROP_TEXT && (file.type.startsWith('text/') || !file.type);
+        let content = '';
+        try { if (text) content = await file.text(); } catch { content = ''; }
+        // Nothing to paste (a PDF dropped on a password field, say): leave the field as it is.
+        if (!content && !files.length) return;
+        send({ kind: 'paste', text: content, html: '', image: false, files }, () => settleFiles(files));
     });
     listen(canvas, 'pointerdown', event => event.preventDefault(), { capture: true });
     // WebKit on iOS 27 still fires a tap's compatibility mousedown to the canvas after a
@@ -426,7 +442,12 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (event.pointerType !== 'touch') send({ kind: 'pointer_cancel', lost_capture: true });
     }, { passive: true });
     listen(a11y, 'pointerleave', event => {
-        if (event.pointerType !== 'touch' && event.relatedTarget !== canvas) send({ kind: 'leave' });
+        if (event.pointerType !== 'touch' && event.relatedTarget !== canvas) {
+            h.hoverClientX = NaN;
+            h.hoverClientY = NaN;
+            disarmLink(h);
+            send({ kind: 'leave' });
+        }
     }, { passive: true });
     listen(canvas, 'keydown', event => {
         if (page && !h.focused && SCROLL_KEYS.includes(event.key) && !event.metaKey && !event.ctrlKey) return;
@@ -501,17 +522,113 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         // A web link takes the pointer while it's over it, as a page's would: the status bar
         // shows where it goes, and middle-click, Ctrl+click and its own menu open it.
         listen(canvas, 'pointermove', event => {
-            if (event.pointerType === 'touch' || event.buttons) return;
+            if (event.pointerType === 'touch') return;
+            h.hoverClientX = event.clientX;
+            h.hoverClientY = event.clientY;
+            if (event.buttons) return;
             const a = linkAt(h, event.clientX, event.clientY);
             if (a && a !== h.hoverLink) armLink(h, a);
         }, { passive: true });
-        // The pointer over a link (or anything else of the mirror's that took it) still hovers Rune.
+        // The pointer over a link (or anything else of the mirror's that took it) still hovers Rune,
+        // and an active touch forwarded from an armed link continues reaching the canvas.
         listen(a11y, 'pointermove', event => {
             if (event.pointerType !== 'touch') {
+                h.hoverClientX = event.clientX;
+                h.hoverClientY = event.clientY;
+                const r = canvas.getBoundingClientRect();
+                send({ kind: 'hover', x: event.clientX - r.left, y: event.clientY - r.top });
+            } else if (h.a11yTouchId === event.pointerId) {
+                forwardPointerToCanvas(h, 'pointermove', event);
+            }
+        }, { passive: true });
+        // Wheel events (scroll and Ctrl+wheel trackpad pinch) over an armed external link or block
+        // El::href forward to the canvas so scrolling never stalls under the pointer.
+        listen(a11y, 'wheel', event => {
+            if (h.forwarding) return;
+            if (Number.isFinite(event.clientX) && Number.isFinite(event.clientY)
+                && (event.clientX !== h.hoverClientX || event.clientY !== h.hoverClientY)) {
+                h.hoverClientX = event.clientX;
+                h.hoverClientY = event.clientY;
                 const r = canvas.getBoundingClientRect();
                 send({ kind: 'hover', x: event.clientX - r.left, y: event.clientY - r.top });
             }
-        }, { passive: true });
+            forwardWheelToCanvas(h, event);
+        }, { passive: false });
+        // Block native HTML link-drag ghosts so a primary drag starting on an armed link promotes
+        // into a Rune text-selection drag instead of cancelling pointer moves.
+        listen(a11y, 'dragstart', event => event.preventDefault());
+        listen(a11y, 'click', event => {
+            if (h.suppressLinkClickUntil > performance.now()) {
+                h.suppressLinkClickUntil = 0;
+                event.preventDefault();
+            }
+        });
+        if (!fitHeight) {
+            listen(a11y, 'touchstart', event => event.preventDefault(), { passive: false });
+        }
+        // Touch over an armed link forwards to the canvas (pan, tap, long-press); a plain primary
+        // mouse press stays with the anchor for clicks (<= 4 px) and promotes to canvas on drag
+        // (> 4 px) so text selection can start on a link without breaking browser link clicks.
+        listen(a11y, 'pointerdown', event => {
+            if (h.forwarding) return;
+            if (event.pointerType === 'touch') {
+                disarmLink(h);
+                h.a11yTouchId = event.pointerId;
+                if (!fitHeight) event.preventDefault();
+                forwardPointerToCanvas(h, 'pointerdown', event);
+                return;
+            }
+            if (event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+                h.suppressLinkClickUntil = 0;
+                h.pendingLinkDrag = {
+                    pointerId: event.pointerId,
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    down: snapshotPointer(event),
+                    active: false,
+                };
+            }
+        });
+        listen(a11y, 'pointerup', event => {
+            if (event.pointerType === 'touch' && h.a11yTouchId === event.pointerId) {
+                h.a11yTouchId = null;
+                forwardPointerToCanvas(h, 'pointerup', event);
+            }
+        });
+        listen(a11y, 'pointercancel', event => {
+            if (event.pointerType === 'touch' && h.a11yTouchId === event.pointerId) {
+                h.a11yTouchId = null;
+                forwardPointerToCanvas(h, 'pointercancel', event);
+            }
+        });
+        listen(window, 'pointermove', event => {
+            if (h.forwarding || !h.pendingLinkDrag || event.pointerId !== h.pendingLinkDrag.pointerId) return;
+            const drag = h.pendingLinkDrag;
+            if (!drag.active) {
+                if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) <= 4) return;
+                drag.active = true;
+                disarmLink(h);
+                h.suppressLinkClickUntil = performance.now() + 500;
+                forwardPointerToCanvas(h, 'pointerdown', drag.down);
+                if (event.target !== canvas) forwardPointerToCanvas(h, 'pointermove', event);
+            } else if (event.target !== canvas) {
+                forwardPointerToCanvas(h, 'pointermove', event);
+            }
+        }, { capture: true, passive: true });
+        const finishLinkDrag = (type, event) => {
+            if (h.forwarding) return;
+            if (event.pointerType === 'touch' && event.target === canvas && h.a11yTouchId === event.pointerId) {
+                h.a11yTouchId = null;
+            }
+            if (!h.pendingLinkDrag || event.pointerId !== h.pendingLinkDrag.pointerId) return;
+            const drag = h.pendingLinkDrag;
+            h.pendingLinkDrag = null;
+            if (!drag.active) return;
+            h.suppressLinkClickUntil = performance.now() + 500;
+            if (event.target !== canvas) forwardPointerToCanvas(h, type, event);
+        };
+        listen(window, 'pointerup', event => finishLinkDrag('pointerup', event), { capture: true, passive: true });
+        listen(window, 'pointercancel', event => finishLinkDrag('pointercancel', event), { capture: true, passive: true });
     }
     // Right-click (and Ctrl+click on macOS): Rune draws an element's own menu; anywhere else the
     // browser opens its own over what a page would have there (the selection, a link, text, a text
@@ -631,15 +748,20 @@ export function syncFamilies(h, sans, mono) {
 // A pop-up menu (`Tx::popup_menu`, a field's menu with its spelling suggestions, selected
 // text's Copy) as the page's own elements: `role="menu"` with keyboard, pointer and screen
 // reader use, top-left at window point (x, y) of the canvas, at least `minWidth` wide, light or
-// dark as the window draws. A pick or a dismissal is sent once: `{ kind: 'menu', id }`, `id`
-// null when dismissed.
+// dark as the window draws, with what the menu's `style` (`PopupMenuStyle`) sets in place of
+// those defaults. A pick or a dismissal is sent once: `{ kind: 'menu', id }`, `id` null when
+// dismissed.
 export function showMenu(h, json, x, y, minWidth, dark) {
     closeMenu(h, false);
     const spec = JSON.parse(json);
     const box = h.canvas.getBoundingClientRect();
-    const colors = dark
+    const style = spec.style || {};
+    const colors = Object.assign(dark
         ? { bg: '#2b2b2b', fg: '#f2f2f2', muted: '#8f8f8f', line: '#454545', hover: '#3d3d3d' }
-        : { bg: '#ffffff', fg: '#1a1a1a', muted: '#8c8c8c', line: '#e0e0e0', hover: '#ebebeb' };
+        : { bg: '#ffffff', fg: '#1a1a1a', muted: '#8c8c8c', line: '#e0e0e0', hover: '#ebebeb' },
+        Object.fromEntries(['bg', 'fg', 'muted', 'line', 'hover'].filter(k => /^#[0-9a-f]{8}$/i.test(style[k])).map(k => [k, style[k]])));
+    const len = (k, fallback) => Number.isFinite(style[k]) && style[k] >= 0 ? style[k] : fallback;
+    const pad = len('padding', 4), radius = len('radius', 8), itemRadius = len('itemRadius', 4);
     const menus = [];
     let answered = false;
     const answer = (id) => {
@@ -653,7 +775,13 @@ export function showMenu(h, json, x, y, minWidth, dark) {
         menu.setAttribute('data-rune-menu', '');
         menu.setAttribute('role', 'menu');
         menu.tabIndex = -1;
-        menu.style.cssText = `position:fixed;left:0;top:0;z-index:2147483647;box-sizing:border-box;min-width:${Math.max(min, 160)}px;max-height:calc(100vh - 8px);overflow-y:auto;padding:4px;margin:0;background:${colors.bg};color:${colors.fg};border:1px solid ${colors.line};border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.18);font:13px/18px system-ui,sans-serif;user-select:none;-webkit-user-select:none;outline:none`;
+        menu.style.cssText = `position:fixed;left:0;top:0;z-index:2147483647;box-sizing:border-box;min-width:${Math.max(min, 160)}px;max-height:calc(100vh - 8px);overflow-y:auto;padding:${pad}px;margin:0;background:${colors.bg};color:${colors.fg};border:1px solid ${colors.line};border-radius:${radius}px;box-shadow:0 4px 16px rgba(0,0,0,.18);font:13px/18px system-ui,sans-serif;user-select:none;-webkit-user-select:none;outline:none`;
+        // The style's font as properties of their own, set after the defaults: a family the
+        // browser can't parse (an unclosed quote) is rejected alone, keeping the default family,
+        // size and line height and every other declaration.
+        if (Number.isFinite(style.fontSize) && style.fontSize > 0) menu.style.fontSize = `${style.fontSize}px`;
+        if (Number.isFinite(style.lineHeight) && style.lineHeight > 0) menu.style.lineHeight = `${style.lineHeight}px`;
+        if (typeof style.fontFamily === 'string' && style.fontFamily) menu.style.fontFamily = style.fontFamily;
         const rows = [];
         for (const entry of spec.items) {
             if (entry.separator) {
@@ -671,7 +799,7 @@ export function showMenu(h, json, x, y, minWidth, dark) {
             if (!enabled) row.setAttribute('aria-disabled', 'true');
             if (sub) row.setAttribute('aria-haspopup', 'menu');
             row.tabIndex = -1;
-            row.style.cssText = `display:flex;align-items:center;gap:16px;padding:4px 10px 4px 26px;border-radius:4px;position:relative;cursor:default;white-space:nowrap;color:${enabled ? colors.fg : colors.muted};outline:none`;
+            row.style.cssText = `display:flex;align-items:center;gap:16px;padding:4px 10px 4px 26px;border-radius:${itemRadius}px;position:relative;cursor:default;white-space:nowrap;color:${enabled ? colors.fg : colors.muted};outline:none`;
             const title = document.createElement('span');
             title.style.flex = '1';
             title.textContent = sub ? entry.submenu : entry.title;
@@ -739,7 +867,7 @@ export function showMenu(h, json, x, y, minWidth, dark) {
         if (!parent || parent.child?.parentItem === item) return parent?.child;
         closeFrom(menus.indexOf(parent) + 1);
         const r = item.row.getBoundingClientRect();
-        const child = open(item.sub, r.right - 4, r.top - 5, 0, item);
+        const child = open(item.sub, r.right - 4, r.top - pad - 1, 0, item);
         parent.child = child;
         return child;
     };
@@ -832,26 +960,144 @@ function placeField(field, [x, y, w, height]) {
     Object.assign(field.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${height}px`, pointerEvents: 'none' });
 }
 
+function forwardWheelToCanvas(h, event) {
+    const init = {
+        deltaX: event.deltaX ?? 0,
+        deltaY: event.deltaY ?? 0,
+        deltaZ: event.deltaZ ?? 0,
+        deltaMode: event.deltaMode ?? 0,
+        clientX: event.clientX ?? 0,
+        clientY: event.clientY ?? 0,
+        screenX: event.screenX ?? 0,
+        screenY: event.screenY ?? 0,
+        shiftKey: !!event.shiftKey,
+        ctrlKey: !!event.ctrlKey,
+        altKey: !!event.altKey,
+        metaKey: !!event.metaKey,
+        bubbles: false,
+        cancelable: true,
+    };
+    const forwarded = typeof WheelEvent === 'function'
+        ? new WheelEvent('wheel', init)
+        : Object.assign({ type: 'wheel', defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, init);
+    h.forwarding = true;
+    let notCancelled;
+    try { notCancelled = h.canvas.dispatchEvent(forwarded); }
+    finally { h.forwarding = false; }
+    if (notCancelled === false || forwarded.defaultPrevented) event.preventDefault();
+}
+
+function snapshotPointer(event) {
+    return {
+        pointerId: event.pointerId ?? 1,
+        pointerType: event.pointerType ?? 'mouse',
+        isPrimary: event.isPrimary ?? true,
+        button: event.button ?? 0,
+        buttons: event.buttons ?? 0,
+        pressure: event.pressure ?? 0,
+        clientX: event.clientX ?? 0,
+        clientY: event.clientY ?? 0,
+        screenX: event.screenX ?? 0,
+        screenY: event.screenY ?? 0,
+        shiftKey: !!event.shiftKey,
+        ctrlKey: !!event.ctrlKey,
+        altKey: !!event.altKey,
+        metaKey: !!event.metaKey,
+        timeStamp: event.timeStamp,
+    };
+}
+
+function forwardPointerToCanvas(h, type, src) {
+    const r = h.canvas.getBoundingClientRect();
+    const init = {
+        pointerId: src.pointerId ?? 1,
+        pointerType: src.pointerType ?? 'mouse',
+        isPrimary: src.isPrimary ?? true,
+        button: src.button ?? (type === 'pointermove' ? -1 : 0),
+        buttons: src.buttons ?? 0,
+        pressure: src.pressure ?? 0,
+        clientX: src.clientX ?? 0,
+        clientY: src.clientY ?? 0,
+        screenX: src.screenX ?? 0,
+        screenY: src.screenY ?? 0,
+        shiftKey: !!src.shiftKey,
+        ctrlKey: !!src.ctrlKey,
+        altKey: !!src.altKey,
+        metaKey: !!src.metaKey,
+        bubbles: false,
+        cancelable: true,
+    };
+    const forwarded = typeof PointerEvent === 'function'
+        ? new PointerEvent(type, init)
+        : Object.assign({ type, timeStamp: src.timeStamp ?? performance.now(), defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }, init);
+    const ox = init.clientX - r.left;
+    const oy = init.clientY - r.top;
+    if (forwarded.offsetX !== ox || forwarded.offsetY !== oy) {
+        Object.defineProperty(forwarded, 'offsetX', { value: ox });
+        Object.defineProperty(forwarded, 'offsetY', { value: oy });
+    }
+    // Synthetic PointerEvents return [] from getCoalescedEvents() in Chromium, which causes
+    // winit's pointer_move_event() to drop forwarded moves unless we expose the event itself.
+    if (type === 'pointermove') {
+        Object.defineProperty(forwarded, 'getCoalescedEvents', { value: () => [forwarded] });
+    }
+    h.forwarding = true;
+    try { h.canvas.dispatchEvent(forwarded); }
+    finally { h.forwarding = false; }
+}
+
+function linkContains(h, a, x, y) {
+    if (!a || !h.a11y.contains(a)) return false;
+    let hit = false;
+    for (const r of a.getClientRects()) {
+        if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) { hit = true; break; }
+    }
+    if (!hit) return false;
+    for (let p = a.parentElement; p && p !== h.a11y; p = p.parentElement) {
+        if (p.style?.overflow === 'hidden' && typeof p.getBoundingClientRect === 'function') {
+            const c = p.getBoundingClientRect();
+            if (x < c.left || x >= c.right || y < c.top || y >= c.bottom) return false;
+        }
+    }
+    return true;
+}
+
 // The mirror's web link under (x, y), if any.
 function linkAt(h, x, y) {
     for (const a of h.a11y.querySelectorAll('a[target="_blank"]')) {
-        for (const r of a.getClientRects()) if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return a;
+        if (linkContains(h, a, x, y)) return a;
     }
     return null;
 }
 
 function armLink(h, a) {
+    if (h.hoverLink === a) return;
     disarmLink(h);
     h.hoverLink = a;
     a.style.pointerEvents = 'auto';
     a.style.cursor = 'pointer';
-    a.addEventListener('pointerleave', () => disarmLink(h), { once: true });
+    const onLeave = () => { if (h.hoverLink === a) disarmLink(h); };
+    h.hoverLinkLeave = onLeave;
+    a.addEventListener('pointerleave', onLeave, { once: true });
 }
 
 function disarmLink(h) {
     if (!h.hoverLink) return;
+    if (h.hoverLinkLeave) {
+        h.hoverLink.removeEventListener('pointerleave', h.hoverLinkLeave);
+        h.hoverLinkLeave = null;
+    }
     h.hoverLink.style.pointerEvents = 'none';
     h.hoverLink = null;
+}
+
+function syncHoverLink(h) {
+    if (h.page || !h.hoverLink) return;
+    if (Number.isFinite(h.hoverClientX) && Number.isFinite(h.hoverClientY)) {
+        if (!linkContains(h, h.hoverLink, h.hoverClientX, h.hoverClientY)) disarmLink(h);
+    } else if (!h.a11y.contains(h.hoverLink)) {
+        disarmLink(h);
+    }
 }
 
 // Readies the browser's own menu for a right-click at (x, y), unless Rune's takes it. True when
@@ -1027,7 +1273,9 @@ function itemStyle(h, item, origin) {
     // block scrolls the block at the compositor's rate while a vertical drag still scrolls the
     // page.
     if (item.k === 'scroll_x') return css + 'overflow-x:auto;overflow-y:hidden;pointer-events:auto;touch-action:pan-x pan-y pinch-zoom;scrollbar-width:none;';
-    if (item.k === 'link') return css + 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;';
+    if (item.k === 'link') return css + (item.dis
+        ? 'display:block;overflow:hidden;text-decoration:none;pointer-events:none;font:14px/1.25 sans-serif;'
+        : 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;');
     if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
     const fs = item.s || 14;
     if (!item.f) return css + `font:${fs}px/1.25 sans-serif;overflow:hidden;white-space:pre-wrap;pointer-events:none;`;
@@ -1084,6 +1332,8 @@ function ensureA11yNode(h, item, tag, key) {
         }
         h.a11yNodes.set(key, el);
     }
+    el._a11yPath = item.p;
+    h.a11yByPath.set(item.p, el);
     return el;
 }
 
@@ -1248,6 +1498,7 @@ function syncA11yPatch(h, patch) {
             const el = h.a11yNodes.get(key);
             if (!el) continue;
             if (el._path && h.scrollEls.get(el._path) === el) h.scrollEls.delete(el._path);
+            if (el._a11yPath && h.a11yByPath.get(el._a11yPath) === el) h.a11yByPath.delete(el._a11yPath);
             el.remove();
             h.a11yNodes.delete(key);
         }
@@ -1274,6 +1525,7 @@ function syncA11yPatch(h, patch) {
             }
         }
     }
+    syncHoverLink(h);
 }
 
 export function syncA11y(h, json) {
@@ -1308,10 +1560,12 @@ export function syncA11y(h, json) {
     for (const [key, el] of h.a11yNodes) {
         if (!seen.has(key)) {
             if (el._path && h.scrollEls.get(el._path) === el) h.scrollEls.delete(el._path);
+            if (el._a11yPath && h.a11yByPath.get(el._a11yPath) === el) h.a11yByPath.delete(el._a11yPath);
             el.remove();
             h.a11yNodes.delete(key);
         }
     }
+    syncHoverLink(h);
 }
 
 // An app's focus (`Runtime::web_a11y_focus`), for a reader: the browser's own focus stays on the
@@ -1320,6 +1574,63 @@ export function syncA11y(h, json) {
 // states. Two proxies, taking turns, so every move is a change of active descendant a reader
 // follows, even between two elements alike. A text field's name goes on the field the browser
 // edits.
+function textPointAt(root, offset) {
+    let rem = Math.max(0, offset | 0);
+    let last = null;
+    const walk = node => {
+        if (node.nodeType === 3) {
+            const len = (node.nodeValue ?? '').length;
+            last = { node, offset: len };
+            if (rem <= len) return { node, offset: rem };
+            rem -= len;
+            return null;
+        }
+        const kids = node.childNodes;
+        if (kids) {
+            for (let i = 0; i < kids.length; i++) {
+                const hit = walk(kids[i]);
+                if (hit) return hit;
+            }
+        }
+        return null;
+    };
+    return walk(root) ?? last ?? { node: root, offset: 0 };
+}
+
+function syncMirrorSelection(h, sel) {
+    if (h.key || typeof getSelection !== 'function') return;
+    const anchorEl = h.a11yByPath.get(sel.ap);
+    const focusEl = h.a11yByPath.get(sel.fp);
+    if (!anchorEl || !focusEl) return;
+    const selection = getSelection();
+    if (!selection) return;
+    const a = textPointAt(anchorEl, sel.a);
+    const f = textPointAt(focusEl, sel.f);
+    if (typeof selection.setBaseAndExtent === 'function') {
+        selection.setBaseAndExtent(a.node, a.offset, f.node, f.offset);
+        h.mirrorSel = true;
+    } else if (typeof document.createRange === 'function') {
+        const range = document.createRange();
+        range.setStart(a.node, a.offset);
+        range.setEnd(f.node, f.offset);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        h.mirrorSel = true;
+    }
+}
+
+function clearMirrorSelection(h) {
+    if (!h.mirrorSel || h.key || typeof getSelection !== 'function') {
+        h.mirrorSel = false;
+        return;
+    }
+    const selection = getSelection();
+    if (selection?.anchorNode && h.a11y.contains(selection.anchorNode)) {
+        selection.removeAllRanges();
+    }
+    h.mirrorSel = false;
+}
+
 export function focusA11y(h, json) {
     if (h.disposed || h.page) return;
     const f = json ? JSON.parse(json) : null;
@@ -1338,13 +1649,14 @@ export function focusA11y(h, json) {
     if (!f) {
         h.canvas.removeAttribute('aria-activedescendant');
         h.textarea.removeAttribute('aria-autocomplete');
+        clearMirrorSelection(h);
         return;
     }
     if (f.o === 'textbox') h.textarea.setAttribute('aria-label', f.t || 'Text input');
     if (f.f) h.textarea.setAttribute('aria-label', f.f);
     h.focusTurn ^= 1;
     const el = h.focusProxies[h.focusTurn];
-    for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-')) el.removeAttribute(a.name);
+    for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-') || a.name === 'data-rune-selection') el.removeAttribute(a.name);
     el.textContent = '';
     el.setAttribute('role', f.o);
     el.setAttribute('aria-label', f.t ?? '');
@@ -1364,6 +1676,13 @@ export function focusA11y(h, json) {
     if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
     if (f.ct) el.setAttribute('aria-controls', f.ct);
     if (f.ow) el.setAttribute('aria-owns', f.ow);
+    if (f.ro) el.setAttribute('aria-readonly', 'true');
+    if (f.sel) {
+        el.setAttribute('data-rune-selection', JSON.stringify(f.sel));
+        syncMirrorSelection(h, f.sel);
+    } else {
+        clearMirrorSelection(h);
+    }
     if (f.rg) {
         el.setAttribute('aria-valuemin', String(f.rg[0]));
         el.setAttribute('aria-valuemax', String(f.rg[1]));
@@ -1676,6 +1995,45 @@ export function activate(h) {
     if (h.key) reselect(h);
 }
 
+// Browser `File` handles a paste or drop offered the focused field, by id, for
+// `rune::clipboard::WebFile`: Rust holds only the id, name, type and size. Nothing is read
+// until the app asks. Rust claims each handle while it handles the event (`claimWebFile`) and
+// releases it when its last `WebFile` drops; `settleFiles` lets go of any handle the event
+// offered but Rust didn't claim (a paste Rust dropped), so no handle outlives both.
+const MAX_WEB_FILES = 32;
+// The largest dropped text file whose contents a drop pastes as text (1 MiB).
+const MAX_DROP_TEXT = 1048576;
+const webFiles = new Map();
+let nextWebFile = 1;
+function offerFiles(files) {
+    const out = [];
+    for (const file of [...(files ?? [])].slice(0, MAX_WEB_FILES)) {
+        const id = nextWebFile++;
+        webFiles.set(id, { file, claimed: false });
+        out.push({ id, name: file.name ?? '', type: file.type ?? '', size: file.size ?? 0 });
+    }
+    return out;
+}
+function settleFiles(offered) {
+    for (const { id } of offered) if (webFiles.get(id)?.claimed === false) webFiles.delete(id);
+}
+
+export function claimWebFile(id) {
+    const entry = webFiles.get(id);
+    if (!entry || entry.claimed) return false;
+    entry.claimed = true;
+    return true;
+}
+
+export function webFile(id) { return webFiles.get(id)?.file; }
+
+export function releaseWebFile(id) { webFiles.delete(id); }
+
+export async function readWebFile(id, max) {
+    const file = webFiles.get(id)?.file;
+    return file && file.size <= max ? new Uint8Array(await file.arrayBuffer()) : undefined;
+}
+
 export async function pastedImage(h, max) {
     const file = h.image;
     h.image = undefined;
@@ -1688,12 +2046,17 @@ export function destroy(h) {
     h.image = undefined;
     clearTimeout(h.staticTimer);
     cancelTouchHoldConfirm(h);
+    disarmLink(h);
+    h.pendingLinkDrag = null;
+    h.a11yTouchId = null;
     h.touchTimestamps.length = 0;
     h.activeTouchId = null;
     cancelA11y(h);
     for (const remove of h.listeners) remove();
     h.password.value = ''; h.textarea.value = ''; h.value = ''; h.domValue = ''; h.crlfs = null; h.copyText = ''; h.selection = null;
     h.a11yNodes.clear();
+    h.a11yByPath.clear();
+    h.mirrorSel = false;
     h.scrollEls.clear();
     h.a11y.remove();
     h.band?.remove();

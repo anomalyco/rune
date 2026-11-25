@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::el::Tx;
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::OverlayCore;
 
 pub(super) type Update<T> = Box<dyn FnOnce(&mut T, &mut Tx) -> bool + Send>;
@@ -36,6 +37,7 @@ pub(super) struct Requests {
     pub exclude_from_capture: Option<bool>,
     pub xwayland_input: Option<bool>,
     /// The `setup` waker fired.
+    #[cfg(not(target_arch = "wasm32"))]
     pub woken: bool,
 }
 
@@ -45,6 +47,7 @@ impl Requests {
     pub fn visible(&self) -> Option<bool> { self.visibility.map(|v| matches!(v, Visibility::Show(_))) }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl OverlayCore {
     /// Keeps the window out of screen recordings, or lets recorders see it again. A window
     /// made later (Wayland recreates on hide) starts from the same option.

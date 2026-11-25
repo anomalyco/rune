@@ -7,7 +7,12 @@
 //! (macOS, Windows, X11) and destroys it on Wayland, where a hidden toplevel doesn't exist;
 //! the GPU device and renderer stay either way.
 //!
-//! ```ignore
+//! ```no_run
+//! # use rune::{AppSpec, el};
+//! # struct State { snapshot: String }
+//! # enum Request { Activate(String), Snapshot(String), Quit }
+//! # fn requests() -> Vec<Request> { Vec::new() }
+//! # let spec = AppSpec::new("App", (640.0, 480.0), || State { snapshot: String::new() }, |_, _| el());
 //! let app = rune::App::new(spec).windowless().keep_running();
 //! let handle = app.handle();
 //! std::thread::spawn(move || {
@@ -123,7 +128,10 @@ pub struct App<S: 'static> {
     pub(crate) on_open_url: Option<crate::open_url::incoming::OnOpenUrl<S>>,
     pub(crate) on_open_files: Option<crate::open_url::incoming::OnOpenFiles<S>>,
     pub(crate) shared: Arc<Shared<S>>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) overlays: Vec<Box<dyn crate::overlay::PendingOverlay>>,
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) has_overlays: bool,
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) on_ready: Option<OnWindow>,
@@ -194,7 +202,10 @@ impl<S: 'static> App<S> {
             on_open_url: None,
             on_open_files: None,
             shared,
+            #[cfg(not(target_arch = "wasm32"))]
             overlays: Vec::new(),
+            #[cfg(target_arch = "wasm32")]
+            has_overlays: false,
             windows: Vec::new(),
             on_window: None,
             on_ready: None,
@@ -287,6 +298,7 @@ impl<S: 'static> App<S> {
     /// `Tx::set_font_smoothing` switches it while running.
     pub fn font_smoothing(mut self, mode: crate::FontSmoothing) -> Self {
         self.runtime.font_smoothing = mode;
+        #[cfg(not(target_arch = "wasm32"))]
         for overlay in &mut self.overlays {
             overlay.inherit_font_smoothing(mode);
         }
@@ -516,8 +528,14 @@ impl<S: 'static> App<S> {
     /// session's worktree and branch while Alt is down. Return nothing: it can't take the key
     /// from anyone, and [`Tx::live_only`] says the view reads nothing that changed.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{AppSpec, el};
+    /// # struct App { alt_held: bool }
+    /// # let spec = AppSpec::new("App", (640.0, 480.0), || App { alt_held: false }, |_, _| el());
+    /// # let app = rune::App::new(spec);
+    /// # let _ =
     /// app.on_modifiers(|s: &mut App, mods, _| s.alt_held = mods.alt)
+    /// # ;
     /// ```
     pub fn on_modifiers(mut self, f: fn(&mut S, crate::Mods, &mut Tx)) -> Self {
         self.runtime.on_mods = Some(f);
@@ -589,14 +607,23 @@ impl<S: 'static> App<S> {
     /// Uses this app's fonts and font smoothing (`ConfiguredOverlay::font_smoothing` overrides it).
     /// Headless runs don't draw overlays.
     pub fn overlay<T: 'static>(&mut self, spec: impl Into<crate::ConfiguredOverlay<T>>, state: T) -> crate::overlay::OverlayHandle<T> {
-        let mut configured = spec.into();
-        if configured.runtime.emoji_family.is_none() {
-            configured.runtime.emoji_family = self.runtime.emoji_family.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut configured = spec.into();
+            if configured.runtime.emoji_family.is_none() {
+                configured.runtime.emoji_family = self.runtime.emoji_family.clone();
+            }
+            let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
+            overlay.set_prewarm_effects(self.prewarm_effects);
+            self.overlays.push(Box::new(overlay));
+            handle
         }
-        let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
-        overlay.set_prewarm_effects(self.prewarm_effects);
-        self.overlays.push(Box::new(overlay));
-        handle
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (spec, state);
+            self.has_overlays = true;
+            crate::overlay::OverlayHandle::disconnected()
+        }
     }
 
     /// Adds an ordinary window with its own state type to this app's event loop, such as a
@@ -661,7 +688,11 @@ impl<S: 'static> App<S> {
     /// GPU handover on idle (on Windows and Linux, a frame that hits a GPU-only feature still
     /// triggers GPU handover so it can render; on web, stays on the 2D canvas without requesting
     /// WebGPU/WebGL2). [`crate::CpuFirst::Off`] skips CPU-first startup and opens directly on the
-    /// GPU. Ignored on macOS, iOS, headless runs, and inline/document web pages.
+    /// GPU without falling back to the CPU renderer. Transparent windows always open on the GPU
+    /// on Windows and whenever a GPU surface can be made on Linux; on Linux under `Auto` or `Only`
+    /// (with automatic adapter selection), a visible transparent window whose pre-swapchain GPU
+    /// startup fails falls back to `CpuPainter` with alpha buffers (or 24-bit opaque if X11 gives
+    /// no 32-bit visual). Ignored on macOS, iOS, headless runs, and inline/document web pages.
     ///
     /// `RUNE_CPU_FIRST` (or `globalThis.RUNE_CPU_FIRST` on web) overrides this setting without a
     /// rebuild (`0`/`off`, `only`, `auto`), matching `RUNE_GPU_BACKEND`.
@@ -701,6 +732,7 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn prewarm_effects(mut self, effects: impl Into<crate::PrewarmEffects>) -> Self {
         self.prewarm_effects = effects.into();
+        #[cfg(not(target_arch = "wasm32"))]
         for overlay in &mut self.overlays {
             overlay.set_prewarm_effects(self.prewarm_effects);
         }
@@ -1138,8 +1170,9 @@ impl<S: 'static> App<S> {
     /// Runs until the app quits. Agent-tooling arguments (`--snap`, `--tree`, ...) render
     /// headless instead: the window requests are ignored there, and updates apply each frame.
     /// Prints the error to stderr and exits 1 when the app can't start (no display, or the first
-    /// window can't be created) or loses its display connection (panics on wasm32); `try_run`
-    /// returns it. See `keep_running`.
+    /// window can't be created) or loses its display connection, or exits 2 when a headless
+    /// tooling run (`--snap`, `--tree`, ...) fails (panics on wasm32); use [`App::try_run`] to
+    /// receive the error instead of exiting. See `keep_running`.
     pub fn run(self) {
         #[cfg(target_arch = "wasm32")]
         crate::tooling::started(self.try_run());

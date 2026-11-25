@@ -3,6 +3,8 @@
 //! `platform/web.rs`, which only builds on `wasm32`, so the tests run headless.
 #![cfg_attr(not(test), allow(dead_code))]
 
+pub(crate) mod handover_machine;
+
 /// The canvas's size in device pixels. `css` is the canvas's CSS box and `reported` what winit
 /// reported for it. A canvas reports pixels, but an emulated device scale reports CSS pixels, so
 /// where a side disagrees with the canvas's own box the box wins. A window that fits its content
@@ -284,7 +286,9 @@ pub(crate) fn web_miss_action(missed: crate::window::Missed) -> WebMissAction {
     match missed {
         Missed::Unconfigured => WebMissAction::Fatal,
         Missed::Occluded => WebMissAction::CoveredOnly,
-        Missed::Timeout | Missed::Outdated => WebMissAction::RetryNextFrame,
+        Missed::Timeout => WebMissAction::RetryNextFrame,
+        #[cfg(not(target_arch = "wasm32"))]
+        Missed::Outdated => WebMissAction::RetryNextFrame,
     }
 }
 

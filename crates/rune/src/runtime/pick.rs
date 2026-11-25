@@ -5,13 +5,27 @@ use super::*;
 /// An element [`Runtime::element_at`] found.
 ///
 /// `PartialEq` and `Eq` compare element identity (`path` and `key`), ignoring the queried
-/// geometry (`rect` and `local`).
-#[derive(Clone, Debug)]
+/// geometry (`rect` and `local`) and attached data.
+#[derive(Clone)]
 pub struct Picked {
     path: String,
     key: Option<String>,
     rect: [f32; 4],
     local: [f32; 2],
+    /// [`El::data`] values from the picked element up to the root, nearest first.
+    data: Vec<crate::el::data::ElData>,
+}
+
+impl std::fmt::Debug for Picked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Picked")
+            .field("path", &self.path)
+            .field("key", &self.key)
+            .field("rect", &self.rect)
+            .field("local", &self.local)
+            .field("data", &self.data.len())
+            .finish()
+    }
 }
 
 impl PartialEq for Picked {
@@ -146,6 +160,33 @@ impl Picked {
     /// assert_eq!(hit.local(), [15.0, 10.0]);
     /// ```
     pub fn local(&self) -> [f32; 2] { self.local }
+
+    /// The nearest value of type `T` attached with [`El::data`] to this element or one of its
+    /// ancestors, as of the last frame. `None` when nothing on the hit path holds a `T`.
+    ///
+    /// ```
+    /// use rune::{Env, Pick, Runtime, col, el};
+    ///
+    /// struct Zone(&'static str);
+    ///
+    /// let mut rt = Runtime::new(
+    ///     (),
+    ///     |_: &(), _| col().size(200.0, 40.0).data(Zone("window"))
+    ///         .child(el().data(Zone("row")).size(200.0, 20.0).on_press(|_: &mut ()| {}))
+    ///         .child(el().key("layer").pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))),
+    ///     (200.0, 40.0),
+    ///     Env::new(true, 1.0),
+    /// );
+    /// rt.frame(0.0);
+    /// let row = rt.element_at_with(10.0, 10.0, Pick::new().interactive(true)).unwrap();
+    /// assert_eq!(row.data::<Zone>().map(|z| z.0), Some("row"));
+    /// let layer = rt.element_at(10.0, 30.0).unwrap();
+    /// assert_eq!(layer.data::<Zone>().map(|z| z.0), Some("window"));
+    /// assert!(layer.data::<u32>().is_none());
+    /// ```
+    pub fn data<T: std::any::Any>(&self) -> Option<&T> {
+        self.data.iter().find_map(|d| d.downcast_ref::<T>())
+    }
 }
 
 impl RuntimeCore {
@@ -263,6 +304,19 @@ impl RuntimeCore {
             key: self.tree.nodes[i].key.clone(),
             rect,
             local: self.to_local(i, x, y),
+            data: self.data_path(i),
         }
+    }
+
+    /// `El::data` values from node `i` up to the root, nearest first.
+    fn data_path(&self, i: usize) -> Vec<crate::el::data::ElData> {
+        let mut data = Vec::new();
+        let mut at = Some(i);
+        while let Some(j) = at {
+            let n = &self.tree.nodes[j];
+            if let Some(c) = n.cold.get() { data.extend(c.data.iter().cloned()); }
+            at = n.parent;
+        }
+        data
     }
 }

@@ -300,11 +300,17 @@ impl El {
     /// HTML and RTF when the source offered them). Return true when the app took it; false lets
     /// the editor paste the plain text as usual. Without it a field pastes plain text only.
     ///
-    /// ```ignore
-    /// text_input(&s.draft).on_input_paste(|s: &mut Chat, content, _| match content.html() {
+    /// ```
+    /// # use rune::{TextEdit, TextStyle, text_input};
+    /// # struct Chat { draft: TextEdit, draft_rich: TextEdit }
+    /// # let s = Chat { draft: TextEdit::default(), draft_rich: TextEdit::new("").rich() };
+    /// # let style = TextStyle::new(14.0, 400.0);
+    /// # let _ =
+    /// text_input(&s.draft, style).on_input_paste(|s: &mut Chat, content, _| match content.html() {
     ///     Some(html) => { s.draft_rich.paste_html(html, content.text()); true }
     ///     None => false,
     /// })
+    /// # ;
     /// ```
     pub fn on_input_paste<S: 'static>(mut self, f: impl Fn(&mut S, &crate::ClipboardContent, &mut Tx) -> bool + 'static) -> Self {
         if let Some(input) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {

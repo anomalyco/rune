@@ -427,6 +427,8 @@ fn render_normal_offscreen(
 #[test]
 fn offscreen_opt_in_off_creates_zero_drag_gpu_objects() {
     let Some(gpu) = Gpu::test_headless_wgpu() else { return };
+    #[cfg(not(feature = "test-gpu-counters"))]
+    let _ = &gpu;
     #[cfg(feature = "test-gpu-counters")]
     let base_textures = gpu.device.get_internal_counters().hal.textures.read();
 

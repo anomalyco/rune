@@ -692,6 +692,17 @@ impl VirtualList {
         (self.pad_top + self.prefix(self.keys.len()) + self.pad_bottom - self.viewport).max(0.0)
     }
 
+    /// The row index whose vertical span contains `y_in_list` (points from the list's top,
+    /// including `pad_top`), clamped to `0..keys.len()`. `None` when the list is empty.
+    pub fn row_at(&self, y_in_list: f32) -> Option<usize> {
+        if self.keys.is_empty() {
+            return None;
+        }
+        let sums = self.sums();
+        let idx = sums[1..].partition_point(|&s| self.pad_top + s <= y_in_list);
+        Some(idx.min(self.keys.len() - 1))
+    }
+
     /// The row index range intersecting the scroll viewport (`offset .. offset + viewport`).
     pub fn visible_range(&self, offset: f32, pinned: bool) -> Range<usize> {
         if self.keys.is_empty() {

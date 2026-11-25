@@ -358,10 +358,15 @@ impl Renderer {
         Ok(())
     }
 
-    /// Wakes the web host once an async browser WebGPU primary-shader check resolves.
+    /// Wakes the web host once any async browser WebGPU error-scope check (primary shader or
+    /// lazy feature breaker) resolves. Fires immediately if an answer already arrived.
     #[cfg(target_arch = "wasm32")]
     pub(crate) fn set_uber_check_wake(&self, wake: crate::Waker) {
-        *self.uber_check_wake.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake);
+        let already_answered = self.uber_check.has_answer() || self.breakers.has_answer();
+        *self.uber_check_wake.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake.clone());
+        if already_answered {
+            wake();
+        }
     }
 
     /// Advances the async primary-shader check and returns the rejection reason if the browser

@@ -213,7 +213,7 @@ pub(super) struct TypedWebApp<S: 'static> {
 
 impl<S: 'static> TypedWebApp<S> {
     pub(super) fn pending(mut app: App<S>) -> Result<PendingApp, String> {
-        PendingApp::check(!app.overlays.is_empty() || !app.windows.is_empty(), !app.open || app.on_window.is_some())?;
+        PendingApp::check(app.has_overlays || !app.windows.is_empty(), !app.open || app.on_window.is_some())?;
         let document = app.web_document;
         let embedded = app.web_inline() && !document;
         let title = app.spec.title;

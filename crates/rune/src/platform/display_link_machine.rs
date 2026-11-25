@@ -176,6 +176,7 @@ pub(crate) enum LinkEvent {
     /// A visible window settled idle after presenting.
     Coast { period: Duration },
     /// One display tick fired while coasting.
+    #[cfg(test)]
     CoastTick,
     /// The main thread received a wake after coasting expired and checks whether to stop.
     StopIfExpired,
@@ -197,6 +198,7 @@ pub(crate) enum LinkEffect {
     ArmCoast { ticks_left: u8 },
     /// Send one main-thread wake so the host calls `StopIfExpired` (`CVDisplayLinkStop`, zero
     /// redraws).
+    #[cfg(test)]
     WakeToStop,
     /// Call `CVDisplayLinkStop` and clear callback state.
     StopLink,
@@ -224,10 +226,12 @@ pub(crate) fn step(state: &mut LinkState, event: LinkEvent) -> Effects<LinkEffec
             Effects::one(LinkEffect::ArmCoast { ticks_left })
         }
         (LinkState::Stopped, LinkEvent::Coast { .. }) => Effects::none(),
+        #[cfg(test)]
         (LinkState::Coasting { ticks_left }, LinkEvent::CoastTick) if ticks_left > 1 => {
             *state = LinkState::Coasting { ticks_left: ticks_left - 1 };
             Effects::none()
         }
+        #[cfg(test)]
         (LinkState::Coasting { ticks_left: 1 }, LinkEvent::CoastTick) => {
             *state = LinkState::Coasting { ticks_left: 0 };
             Effects::one(LinkEffect::WakeToStop)
@@ -269,6 +273,7 @@ impl Opportunity {
 
 /// A fresh tick wins. Without one, a surface that has rested draws at once rather than wait
 /// for the link to start or tick, which after idle took one to two refreshes.
+#[cfg(test)]
 pub(crate) fn opportunity(
     tick: Option<Instant>,
     last: Option<Instant>,
@@ -285,6 +290,7 @@ pub(crate) fn opportunity(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn permits(
     last: Option<Instant>,
     last_target: Option<Instant>,

@@ -7,12 +7,22 @@
 //! the visible thirty do. A header click sets the sort and calls [`Table::on_sort`], where the
 //! app reorders its rows. Dragging a header's right edge resizes its column within its
 //! [`min`](TableColumn::min) and [`max`](TableColumn::max); a double click on the edge puts it
-//! back. The table is one focus stop: Up and Down move the selection, Home and End and Page Up
-//! and Page Down jump, Return opens, and with [`TableState::multi_select`] Shift extends,
-//! Cmd-click toggles and Cmd-A selects every row.
+//! back. With [`Table::on_reorder`], dragging a header sideways moves its column. The table is
+//! one focus stop: Up and Down move the selection, Home and End and Page Up and Page Down jump,
+//! Return opens, and with [`TableState::multi_select`] Shift extends, Cmd-click toggles and Cmd-A
+//! selects every row. An app that draws its own rows can put [`Table::header`] over them and lay
+//! out their cells from [`Table::visible_columns`].
 //!
-//! ```ignore
+//! ```
+//! # use rune::Align;
+//! # use rune_kit::{Cell, Kit, SortDir, Table, TableColumn, TableState};
+//! # struct File { id: String, name: String, size: u64 }
+//! # fn format_size(n: u64) -> String { format!("{n} B") }
 //! struct App { files: Vec<File>, table: TableState }
+//! # impl App { fn sort_files(&mut self, _: &str, _: SortDir) {} }
+//! # let s = &App { files: Vec::new(), table: TableState::new() };
+//! # let kit = Kit::neutral(true);
+//! # let _ =
 //! Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.files.len(), |s: &App, i| s.files[i].id.as_str().into())
 //!     .column(TableColumn::new("name", "Name").flex(2.0).min(160.0).sortable())
 //!     .column(TableColumn::new("size", "Size").width(90.0).align(Align::End).sortable())
@@ -20,8 +30,9 @@
 //!         "name" => Cell::text(&s.files[i].name),
 //!         _ => Cell::text(format_size(s.files[i].size)).mono(),
 //!     })
-//!     .on_sort(|s: &mut App, col, dir| s.sort_files(col, dir))
+//!     .on_sort(|s: &mut App, col, dir, _| s.sort_files(col, dir))
 //!     .build(s, &kit)
+//! # ;
 //! ```
 
 use std::borrow::Cow;
@@ -33,6 +44,7 @@ use crate::Kit;
 use crate::grip::Grip;
 use crate::list_nav::{NavAction, NavPolicy, page_size};
 
+mod order;
 mod view;
 
 pub use view::Table;
@@ -299,8 +311,8 @@ impl From<&str> for Cell {
     }
 }
 
-/// What the table adds to the app's rows, kept in the app's state: the sort, resized columns,
-/// the selection and the keyboard cursor. Rows are named by the ids [`Table::new`]'s `row_id`
+/// What the table adds to the app's rows, kept in the app's state: the sort, resized, hidden
+/// and reordered columns, the selection and the keyboard cursor. Rows are named by the ids [`Table::new`]'s `row_id`
 /// gives, so the selection follows a row through a re-sort.
 pub struct TableState {
     key: String,
@@ -308,6 +320,10 @@ pub struct TableState {
     sort: Option<(String, SortDir)>,
     widths: HashMap<String, f32>,
     hidden: HashSet<String>,
+    /// Column ids in the order the user dragged them into (empty: declared order).
+    order: Vec<String>,
+    /// A header pressed or dragged sideways to move its column.
+    reorder: Grip<order::ColumnLift>,
     /// Each column's laid-out width, for starting a drag.
     laid_out: HashMap<String, f32>,
     resize: Grip<ColumnDrag>,
@@ -336,6 +352,8 @@ impl TableState {
             sort: None,
             widths: HashMap::new(),
             hidden: HashSet::new(),
+            order: Vec::new(),
+            reorder: Grip::Idle,
             laid_out: HashMap::new(),
             resize: Grip::Idle,
             selected: HashSet::new(),

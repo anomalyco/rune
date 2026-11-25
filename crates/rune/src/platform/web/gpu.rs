@@ -51,12 +51,19 @@ pub(super) enum Draw {
     /// The CPU paints into its canvas under the GPU's, which stays see-through and takes the
     /// input. `failed`: the GPU won't come automatically (no WebGPU, or it was lost until restore).
     Cpu { cpu: cpu_canvas::CpuCanvas, failed: bool },
-    /// The GPU is made and its canvas configured, still see-through. `built` turns true once
-    /// the queue has answered a submit made after the renderer's pipelines, so the browser has
-    /// compiled them; the CPU paints on meanwhile. Then one frame is drawn by both from the same
-    /// instances, and nothing new until the GPU's is done (`done`): its canvas then shows over
-    /// the CPU's, which goes.
-    HandingOver { cpu: cpu_canvas::CpuCanvas, side: GpuSide, built: Rc<Cell<bool>>, done: Option<Rc<Cell<bool>>>, since: Instant },
+    /// The GPU is made and its canvas configured, still see-through. `state` drives the
+    /// hand-over explicitly (`web_math::handover_machine::HandoverState`): while `Building` or
+    /// `WaitingChecks`, the CPU canvas keeps painting and zero GPU frames are submitted; once
+    /// built and all async error-scope checks have answered, one frame is drawn by both and
+    /// nothing new draws until `WaitingDone` resolves (`onSubmittedWorkDone` or `FINISH_LIMIT`).
+    HandingOver {
+        cpu: cpu_canvas::CpuCanvas,
+        side: GpuSide,
+        seq: crate::machine::Seq,
+        state: super::web_math::handover_machine::HandoverState,
+        /// Keeps WebGL2's `Weak<Cell<bool>>` `poll_until_done` alive for the active barrier.
+        barrier: Option<Rc<Cell<bool>>>,
+    },
     Gpu(GpuSide),
     /// WebGL2 context lost on a GPU-first inline or document page that cannot overlay a CPU
     /// canvas; redraws pause until `webglcontextrestored` rebuilds `GpuSide`.
@@ -82,7 +89,7 @@ impl Draw {
 
     /// The GPU's hand-over frame is drawn and not finished: nothing new is drawn until it is.
     pub(super) fn waiting_for_gpu(&self) -> bool {
-        matches!(self, Draw::HandingOver { done: Some(done), .. } if !done.get())
+        matches!(self, Draw::HandingOver { state, .. } if state.waiting_for_gpu())
     }
 
     pub(super) fn kind(&self) -> super::web_math::WebDrawKind {
@@ -237,7 +244,7 @@ pub(super) fn gpu_side(
     renderer.attach_gpu(&gpu);
     let check_proxy = proxy.clone();
     renderer.set_uber_check_wake(std::sync::Arc::new(move || {
-        check_proxy.send_event(Wake::App).ok();
+        check_proxy.send_event(Wake::GpuCheck).ok();
     }));
     renderer.set_srgb_blend(!format.is_srgb());
     renderer.attach_text(&mut rt.text.atlas);
@@ -595,13 +602,13 @@ pub(super) fn drift_wanted() -> bool {
 /// A flag the GPU's queue sets once the work submitted so far is done, waking the loop.
 /// On WebGL2 (`wgpu-core`), schedules lightweight non-blocking `Device::poll` ticks until the
 /// callback fires or `FINISH_LIMIT` passes; on WebGPU the browser resolves it from its task queue.
-pub(super) fn when_done(side: &GpuSide, proxy: &EventLoopProxy<Wake>) -> Rc<Cell<bool>> {
+pub(super) fn when_done(side: &GpuSide, proxy: &EventLoopProxy<Wake>, event: Wake) -> Rc<Cell<bool>> {
     let flag = Rc::new(Cell::new(false));
     let set = PageOnly((flag.clone(), proxy.clone()));
     side.gpu.queue.on_submitted_work_done(move || {
         let PageOnly((flag, proxy)) = &set;
         flag.set(true);
-        proxy.send_event(Wake::App).ok();
+        proxy.send_event(event).ok();
     });
     if super::web_math::needs_device_poll(side.backend) {
         poll_until_done(side.gpu.device.clone(), &flag, Instant::now() + FINISH_LIMIT);
@@ -634,4 +641,4 @@ struct PageOnly<T>(T);
 unsafe impl<T> Send for PageOnly<T> {}
 
 /// How long the GPU's hand-over frame may take to finish before the page stays on the CPU.
-pub(super) const FINISH_LIMIT: Duration = Duration::from_secs(5);
+pub(super) const FINISH_LIMIT: Duration = super::web_math::handover_machine::FINISH_LIMIT;

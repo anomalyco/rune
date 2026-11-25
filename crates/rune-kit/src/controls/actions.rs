@@ -263,11 +263,17 @@ impl Button {
     /// in: a label with styled spans, a count, or any element. The text given to
     /// [`Button::new`] stays the accessible label.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{row, text};
+    /// # use rune_kit::{Badge, Button, Kit};
+    /// # let k = Kit::neutral(true);
+    /// let badge = Badge::new("3").build(&k);
+    /// # let _ =
     /// Button::new("Import 3 items")
-    ///     .label_with(|font, ink| row().gap(4.0).child(text("Import").font(font).color(ink))
-    ///         .child(Badge::new("3").build(&k)))
+    ///     .label_with(move |font, ink| row().gap(4.0).child(text("Import").font(font).color(ink))
+    ///         .child(badge))
     ///     .build(&k)
+    /// # ;
     /// ```
     pub fn label_with(mut self, f: impl FnOnce(TextStyle, Color) -> El + 'static) -> Self {
         self.look = Label::Custom(Box::new(f));
@@ -309,8 +315,12 @@ impl Button {
     /// non-empty shortcut is set. The inline text is hidden from assistive technology because
     /// the button already exposes the shortcut through its shortcut hint.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune_kit::{Button, Kit};
+    /// # let k = Kit::neutral(true);
+    /// # let _ =
     /// Button::new("Save").shortcut("cmd+s").show_shortcut().build(&k)
+    /// # ;
     /// ```
     pub fn show_shortcut(mut self) -> Self {
         self.show_shortcut = true;

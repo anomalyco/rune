@@ -7,6 +7,7 @@ use rune_theme_opencode::icons as ic;
 
 use crate::G;
 
+mod caret_browsing;
 mod combobox;
 mod controls;
 mod diff;
@@ -17,6 +18,7 @@ pub(crate) use diff::{custom_diff, sample_diff, scroll_bars_diff};
 mod icons;
 pub(crate) mod images;
 mod inputs;
+mod link_hover;
 mod link_popover;
 mod markdown;
 mod overlays;
@@ -128,6 +130,7 @@ macro_rules! stories {
             s.tree_action = None;
             s.menu_at = None;
             s.link_popover = None;
+            s.link_hover = None;
             s.open = OPENED.iter().find(|(id, _)| *id == $id).map(|(_, k)| (*k).to_owned());
         }),)*];
     };
@@ -219,6 +222,7 @@ stories! {
     "ui-text-input--states" => text_input_states,
     "rune-text-input--hooks" => text_input_hooks,
     "rune-text-input--read-only" => text_input_read_only,
+    "rune-text--caret-browsing" => caret_browsing::text_caret_browsing,
     "ui-textarea--playground" => textarea_playground,
     "ui-textarea--controlled" => textarea_controlled,
     "ui-textarea--with-field" => textarea_with_field,
@@ -308,6 +312,7 @@ stories! {
     "rune-scroll-view--thumb" => scroll_view_thumb,
     "rune-rolling-text--basic" => rolling_text_basic,
     "rune-markdown--basic" => markdown_basic,
+    "rune-markdown--link-hover" => link_hover::markdown_link_hover,
     "rune-markdown--link-popover" => link_popover::markdown_link_popover,
     "rune-markdown--streaming" => markdown_streaming,
     "rune-markdown--stream-tail" => markdown_stream_tail,

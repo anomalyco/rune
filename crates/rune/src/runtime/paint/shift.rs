@@ -525,7 +525,7 @@ pub(super) fn copy_shifted(rt: &mut RuntimeCore, i: usize, o: usize, end: usize,
             let row_dy = rt.paint.row_dy[idx];
             cpinh.dy += row_dy;
             cpinh.snap.grow(row_dy);
-            let (full, base) = inh_keys(&cpinh);
+            let (full, base) = inh_keys_for(&rt.tree.nodes, has_sticky, &rt.scroll.sticky_frame, idx, &cpinh);
             ps.inh_base = base;
             full
         };
@@ -565,11 +565,15 @@ pub(super) fn check_shifted(rt: &mut RuntimeCore, r: usize, o: usize, plan: Shif
         if now.help[0] != now.help[1] { differ.push("help hits"); }
         if now.drop[0] != now.drop[1] { differ.push("drop hits"); }
     } else {
-        let mut expected: Vec<Instance> = k.instances[range(was.inst)].to_vec();
-        for q in &mut expected {
-            shift_instance(q, &plan);
-        }
-        if bytes(&rt.instances[range(now.inst)]) != bytes(&expected) { differ.push("instances"); }
+        // Each instance against its shifted twin, one at a time: a list of them would be a heap
+        // allocation in every scroll frame of a debug build (`tests/alloc.rs`).
+        let (painted, kept) = (&rt.instances[range(now.inst)], &k.instances[range(was.inst)]);
+        let same = painted.len() == kept.len() && painted.iter().zip(kept).all(|(p, q)| {
+            let mut expected = *q;
+            shift_instance(&mut expected, &plan);
+            bytes(std::slice::from_ref(p)) == bytes(std::slice::from_ref(&expected))
+        });
+        if !same { differ.push("instances"); }
         let near_rect = |a: [f32; 4], b: [f32; 4]| {
             if pow2 { a == b } else { (0..4).all(|e| (a[e] - b[e]).abs() <= 1e-4) }
         };
