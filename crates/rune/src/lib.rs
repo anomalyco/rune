@@ -81,6 +81,7 @@ pub use edit::KeySide;
 pub use edit::MAX_LIST_LEVEL;
 pub use edit::Mark;
 pub use edit::MarkRange;
+pub use edit::MediaKey;
 pub use edit::Modifier;
 pub use edit::Mods;
 pub use edit::ParagraphInfo;

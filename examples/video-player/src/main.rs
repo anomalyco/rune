@@ -5,7 +5,7 @@
 //! four-frame test clip. `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless. Pass
 //! `--output-device <uid>` to route audio to a specific device UID on macOS.
 //!
-//! Keys: space plays or pauses, left and right step one frame while paused (or seek 5 s while
+//! Keys: space or hardware media keys (play/pause, play, pause, stop, next/fast-forward, previous/rewind) control playback, left and right step one frame while paused (or seek 5 s while
 //! playing), comma and period step one frame back or forward, m mutes, v turns the volume to 0
 //! and back, d toggles the chosen output device and system default, l loops, 0 goes to the start,
 //! h hides the clip (it stops drawing, as when scrolled away) and shows it again.
@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use rune::tok::{self, type_};
-use rune::{AppSpec, Cx, Drag, El, Key, KeyEvent, Phase, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, row, text};
+use rune::{App, AppSpec, Cx, Drag, El, Key, KeyEvent, MediaKey, Phase, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, row, text};
 use std::time::Duration;
 
 const WIDTH: f32 = 480.0;
@@ -100,6 +100,15 @@ fn on_key(s: &mut Viewer, event: &KeyEvent, _: &mut Tx) -> bool {
     let clip = &s.clip;
     match &event.key {
         Key::Text(t) if t == " " => toggle(s),
+        Key::Media(MediaKey::PlayPause) => toggle(s),
+        Key::Media(MediaKey::Play) => clip.play(),
+        Key::Media(MediaKey::Pause) => clip.pause(),
+        Key::Media(MediaKey::Stop) => {
+            clip.pause();
+            clip.seek(0.0);
+        }
+        Key::Media(MediaKey::Next | MediaKey::FastForward) => clip.seek(clip.time() + 5.0),
+        Key::Media(MediaKey::Previous | MediaKey::Rewind) => clip.seek((clip.time() - 5.0).max(0.0)),
         Key::Text(t) if t == "m" => clip.set_muted(!clip.muted()),
         Key::Text(t) if t == "v" => clip.set_volume(if clip.volume() > 0.0 { 0.0 } else { 1.0 }),
         Key::Text(t) if t == "d" => {
@@ -263,7 +272,8 @@ fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
 }
 
 fn main() {
-    rune::run(AppSpec { setup: Some(setup), poll: Some(poll), on_key: Some(on_key), ..AppSpec::new("Video player", (520.0, 360.0), state, view) });
+    let spec = AppSpec { setup: Some(setup), poll: Some(poll), on_key: Some(on_key), ..AppSpec::new("Video player", (520.0, 360.0), state, view) };
+    App::new(spec).media_keys().run();
 }
 
 #[cfg(test)]

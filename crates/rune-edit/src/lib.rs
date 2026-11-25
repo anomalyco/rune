@@ -46,6 +46,7 @@ pub use keys::Key;
 pub use keys::KeyEvent;
 pub use keys::KeyPlatform;
 pub use keys::KeySide;
+pub use keys::MediaKey;
 pub use keys::Modifier;
 pub use keys::Mods;
 #[doc(hidden)]

@@ -830,6 +830,16 @@ impl<S: 'static> WindowSpec<S> {
         color_scheme(scheme: crate::ColorScheme);
         /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
         modifier_keys();
+        /// Deliver hardware media transport keys ([`Key::Media`](crate::Key::Media)) to this window, like [`App::media_keys`](crate::App::media_keys).
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("player", AppSpec::new("Player", (480.0, 320.0), || (), |_, _| el()))
+        ///     .media_keys();
+        /// let _ = spec;
+        /// ```
+        media_keys();
         /// Tab visits every focusable control in this window, like `App::tab_visits_controls`.
         tab_visits_controls(on: bool);
         /// Release this window's GPU device and renderer when it closes, like `App::release_gpu_when_closed`.

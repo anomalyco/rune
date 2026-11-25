@@ -2167,6 +2167,49 @@ test('document contextmenu forwards touch_hold only while a canvas touch is acti
     }
 });
 
+test('keydown leaves media keys untouched until syncMediaKeys(true), then prevents and forwards them', () => {
+    const { canvas, events, h } = setup();
+    const mediaKeys = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaTrackNext', 'MediaTrackPrevious', 'MediaStop', 'MediaFastForward', 'MediaRewind'];
+    try {
+        // Off by default: neither canvas nor focused fields prevent default or forward media keys.
+        for (const name of mediaKeys) {
+            assert.equal(dispatchKeydown(canvas, { key: name, code: name }), false, `canvas opt-out ${name}`);
+        }
+        bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
+        bridge.activate(h);
+        for (const name of mediaKeys) {
+            assert.equal(dispatchKeydown(h.textarea, { key: name, code: name }), false, `textarea opt-out ${name}`);
+        }
+        assert.deepEqual(events, []);
+
+        // Opted in: canvas prevents default and focused textarea/password forward every media key.
+        bridge.syncMediaKeys(h, true);
+        for (const name of mediaKeys) {
+            events.length = 0;
+            assert.equal(dispatchKeydown(canvas, { key: name, code: name }), true, `canvas opt-in ${name}`);
+            assert.equal(dispatchKeydown(h.textarea, { key: name, code: name }), true, `textarea opt-in ${name}`);
+            assert.deepEqual(events, [{
+                kind: 'key',
+                key: name,
+                code: name,
+                shift: false,
+                ctrl: false,
+                alt: false,
+                meta: false,
+                repeat: false,
+            }]);
+        }
+        events.length = 0;
+        bridge.sync(h, 'secret', '', 0, 0, 0, true);
+        bridge.activate(h);
+        assert.equal(dispatchKeydown(h.password, { key: 'MediaPlayPause', code: 'MediaPlayPause' }), true);
+        assert.equal(events.length, 1);
+        assert.equal(events[0].key, 'MediaPlayPause');
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
 test('scheduleTouchHoldConfirm waits two animation frames before confirming so pointerup delivered after raf1 cancels the hold', () => {
     const { events, h } = setup();
     const origRAF = globalThis.requestAnimationFrame;

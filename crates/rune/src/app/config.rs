@@ -16,6 +16,7 @@ pub(crate) struct RuntimeConfig<S: 'static> {
     pub(crate) on_ime: Option<fn(&mut S, &crate::Ime, &mut Tx) -> bool>,
     pub(crate) on_field_menu: Option<fn(&mut S, crate::FieldMenuRequest, &mut Tx)>,
     pub(crate) modifier_keys: bool,
+    pub(crate) media_keys: bool,
     pub(crate) tab_visits_controls: bool,
     pub(crate) srgb_blend: bool,
     pub(crate) font_smoothing: crate::FontSmoothing,
@@ -33,6 +34,7 @@ impl<S: 'static> Clone for RuntimeConfig<S> {
             on_ime: self.on_ime,
             on_field_menu: self.on_field_menu,
             modifier_keys: self.modifier_keys,
+            media_keys: self.media_keys,
             tab_visits_controls: self.tab_visits_controls,
             srgb_blend: self.srgb_blend,
             font_smoothing: self.font_smoothing,
@@ -52,6 +54,7 @@ impl<S: 'static> Default for RuntimeConfig<S> {
             on_ime: None,
             on_field_menu: None,
             modifier_keys: false,
+            media_keys: false,
             tab_visits_controls: false,
             srgb_blend: true,
             font_smoothing: crate::FontSmoothing::default(),
@@ -62,19 +65,31 @@ impl<S: 'static> Default for RuntimeConfig<S> {
     }
 }
 
+pub(crate) struct CoreConfig {
+    pub(crate) modifier_keys: bool,
+    pub(crate) media_keys: bool,
+    pub(crate) tab_visits_controls: bool,
+    pub(crate) srgb_blend: bool,
+    pub(crate) font_smoothing: crate::FontSmoothing,
+    pub(crate) emoji_family: Option<String>,
+    pub(crate) max_native_materials: usize,
+    pub(crate) dev_stats: Option<fn() -> String>,
+}
+
 impl crate::runtime::RuntimeCore {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn configure_core(
-        &mut self,
-        modifier_keys: bool,
-        tab_visits_controls: bool,
-        srgb_blend: bool,
-        font_smoothing: crate::FontSmoothing,
-        emoji_family: Option<String>,
-        max_native_materials: usize,
-        dev_stats: Option<fn() -> String>,
-    ) {
+    pub(crate) fn configure_core(&mut self, core: CoreConfig) {
+        let CoreConfig {
+            modifier_keys,
+            media_keys,
+            tab_visits_controls,
+            srgb_blend,
+            font_smoothing,
+            emoji_family,
+            max_native_materials,
+            dev_stats,
+        } = core;
         self.set_modifier_keys(modifier_keys);
+        self.set_media_keys(media_keys);
         self.set_tab_visits_controls(tab_visits_controls);
         self.set_srgb_blend(srgb_blend);
         self.set_font_smoothing(font_smoothing);
@@ -96,6 +111,7 @@ impl<S: 'static> Runtime<S> {
             on_ime,
             on_field_menu,
             modifier_keys,
+            media_keys,
             tab_visits_controls,
             srgb_blend,
             font_smoothing,
@@ -108,7 +124,16 @@ impl<S: 'static> Runtime<S> {
         self.hooks.on_visibility = on_visibility;
         self.hooks.on_ime = on_ime;
         self.hooks.on_field_menu = on_field_menu;
-        self.core_mut().configure_core(modifier_keys, tab_visits_controls, srgb_blend, font_smoothing, emoji_family, max_native_materials, dev_stats);
+        self.core_mut().configure_core(CoreConfig {
+            modifier_keys,
+            media_keys,
+            tab_visits_controls,
+            srgb_blend,
+            font_smoothing,
+            emoji_family,
+            max_native_materials,
+            dev_stats,
+        });
     }
 }
 
@@ -137,6 +162,7 @@ mod tests {
             .on_ime(|s, _: &Ime, _| { s.ime += 1; true })
             .on_field_menu(|_, _, _| {})
             .modifier_keys()
+            .media_keys()
             .tab_visits_controls(true)
             .srgb_blend(false)
             .font_smoothing(FontSmoothing::Off)
@@ -154,6 +180,7 @@ mod tests {
         assert!(rt.hooks.on_ime.is_some());
         assert!(rt.hooks.on_field_menu.is_some());
         assert!(rt.modifier_keys());
+        assert!(rt.media_keys());
         assert!(!rt.srgb_blend());
         assert_eq!(rt.font_smoothing(), FontSmoothing::Off);
         assert_eq!(rt.emoji_family(), Some("Twemoji"));
@@ -184,7 +211,7 @@ mod tests {
     fn runtime_config_defaults_match_app_and_overlay() {
         let cfg = super::RuntimeConfig::<()>::default();
         assert!(cfg.srgb_blend);
-        assert!(!cfg.modifier_keys && !cfg.tab_visits_controls);
+        assert!(!cfg.modifier_keys && !cfg.media_keys && !cfg.tab_visits_controls);
         assert_eq!(cfg.font_smoothing, FontSmoothing::default());
         assert_eq!(cfg.emoji_family, None);
         assert_eq!(cfg.max_native_materials, crate::MAX_NATIVE_MATERIALS);

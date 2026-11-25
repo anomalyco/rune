@@ -657,7 +657,10 @@ impl Host {
         // Before the window can go: a hide need not report a blur. `about_to_wait` delivers it,
         // after any Fn change the monitor saw first.
         #[cfg(target_os = "macos")]
-        self.fn_key();
+        {
+            self.fn_key();
+            self.media_keys();
+        }
     }
 
     /// What a window stops doing when it hides: keys released, secure input and IME off, popups

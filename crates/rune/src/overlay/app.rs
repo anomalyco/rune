@@ -149,6 +149,11 @@ impl dyn OverlayApp + '_ {
     pub(super) fn physical_with_fallback(&mut self, event: crate::PhysicalInput, key: Option<crate::KeyEvent>) -> bool {
         self.driver(|rt, app| rt.physical_with_fallback(app, event, key))
     }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn media_key(&mut self, decoded: crate::input::media_keys::DecodedMediaKey, mods: crate::Mods) -> bool {
+        self.driver(|rt, app| crate::input::media_keys::deliver_decoded(rt, app, decoded, mods))
+    }
 }
 
 /// The only per-state-type structure owned by a live overlay host.

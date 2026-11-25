@@ -35,6 +35,8 @@ extern "C" {
     fn cancel_a11y(handle: &JsValue);
     #[wasm_bindgen(js_name = syncSecondary)]
     fn sync_secondary(handle: &JsValue, claim: &str);
+    #[wasm_bindgen(js_name = syncMediaKeys)]
+    fn sync_media_keys(handle: &JsValue, enabled: bool);
     #[wasm_bindgen(js_name = syncWheel)]
     fn sync_wheel(handle: &JsValue, used: bool);
     #[wasm_bindgen(js_name = syncCaret)]
@@ -99,6 +101,8 @@ pub(super) struct Bridge {
     a11y_schedule: crate::runtime::web_a11y::schedule::ScheduleState,
     /// The slot families the mirror's text was last set in.
     families: (String, String),
+    /// Whether `bridge.js` currently forwards and prevents default on media keys.
+    media_keys: bool,
 }
 
 /// Reads the pasted image bytes from the page's clipboard bridge.
@@ -127,7 +131,7 @@ impl Bridge {
         let handle = mount(canvas, callback.as_ref().unchecked_ref(), embedded, fit_height, document);
         Self { handle, _callback: callback, dispose_viewport, mods: ModifiersState::empty(), is_mac: is_mac(), control_click: false,
             mirror: Default::default(), a11y: Default::default(),
-            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, announced: 0, a11y_seq: Default::default(), a11y_schedule: Default::default(), families: Default::default() }
+            copy_cache: String::new(), fit_height, document, page: None, scroll_x: Vec::new(), caret: None, announced: 0, a11y_seq: Default::default(), a11y_schedule: Default::default(), families: Default::default(), media_keys: false }
     }
 
     /// The first frame is on screen: a page swaps its static export for the live mirror.
@@ -174,6 +178,11 @@ impl Running {
             sync_copy(&self.input.handle, &self.input.copy_cache);
         }
         let rt = self.app.rt();
+        let media_keys = rt.media_keys();
+        if self.input.media_keys != media_keys {
+            self.input.media_keys = media_keys;
+            sync_media_keys(&self.input.handle, media_keys);
+        }
         // The page's text field sits at the caret in window points, so an input method's
         // candidates open beside it at any zoom.
         if self.input.caret != caret {

@@ -256,3 +256,26 @@ fn key_in_read_only_navigates_selects_and_copies_while_blocking_all_mutations() 
     let _ = empty.key_in_read_only(&plain(Key::Text("a".into())), None);
     assert_eq!(empty.text, "");
 }
+
+#[test]
+fn media_keys_are_ignored_by_editable_and_read_only_text_edits() {
+    let all = [
+        MediaKey::PlayPause,
+        MediaKey::Play,
+        MediaKey::Pause,
+        MediaKey::Next,
+        MediaKey::Previous,
+        MediaKey::Stop,
+        MediaKey::FastForward,
+        MediaKey::Rewind,
+    ];
+    let mut e = TextEdit::new("hello world");
+    e.set_selection(2, 5);
+    let snap = e.clone();
+    for mk in all {
+        assert_eq!(e.key(&plain(Key::Media(mk)), None), EditOutcome::default());
+        assert_eq!(e.key_in(&plain(Key::Media(mk)), None), EditOutcome::default());
+        assert_eq!(e.key_in_read_only(&plain(Key::Media(mk)), None), EditOutcome::default());
+        assert_eq!(e, snap, "media key {mk:?} must leave TextEdit untouched");
+    }
+}

@@ -390,7 +390,10 @@ impl AnyHost for OverlayHost {
         let core = &mut self.core;
         let app = &mut *self.app;
         #[cfg(target_os = "macos")]
-        core.fn_key(app);
+        {
+            core.fn_key(app);
+            core.media_keys(app);
+        }
         // A window switched the font families (`Tx::set_font_families`).
         core.dirty |= app.rt_mut().follow_font_families();
         // A fading-out overlay takes no input; it only draws its exit.

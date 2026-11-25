@@ -389,6 +389,9 @@ struct Live {
     /// Fn presses, which winit doesn't send, while the overlay wants modifier keys.
     #[cfg(target_os = "macos")]
     fn_key: Option<crate::input::fn_key::FnKey>,
+    /// Hardware media keys (`NSEventTypeSystemDefined`), while the overlay opts into `media_keys`.
+    #[cfg(target_os = "macos")]
+    media_keys: Option<crate::input::media_keys::MediaKeys>,
     /// Whether the swap chain can take the next frame, and the wait when it can't
     /// (`window::slot`). Before the surface so an outstanding wait goes first.
     #[cfg(target_os = "windows")]

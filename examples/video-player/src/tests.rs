@@ -91,3 +91,36 @@ fn frame_step_buttons_keys_and_readout_work_and_stay_accessible() {
         assert!(clip.presented_time().unwrap().abs() < 1e-3, "{:?}", clip.presented_time());
     }
 }
+
+#[test]
+fn hardware_media_keys_toggle_playback_only_when_opted_in() {
+    let clip = Player::file(concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4"));
+    clip.set_muted(true);
+    let viewer = Viewer { clip: clip.clone(), hidden: false, preferred_output: None, scrub_target: None, last_time: 0.0, last_presented: None, last_seeking: false };
+    let mut rt = rune::Runtime::new(viewer, view, (520.0, 360.0), rune::Env::new(true, 1.0));
+    rt.on_key = Some(on_key);
+    rt.frame(0.0);
+    rt.frame(0.0);
+
+    // Off by default: media keys do not reach on_key.
+    assert!(!rt.media_keys());
+    assert!(!clip.is_playing());
+    rt.key(KeyEvent::from(Key::Media(MediaKey::PlayPause)));
+    rt.frame(0.0);
+    assert!(!clip.is_playing());
+
+    // Opted in (matching App::media_keys): PlayPause/Pause/Play/Stop control playback.
+    rt.set_media_keys(true);
+    rt.key(KeyEvent::from(Key::Media(MediaKey::PlayPause)));
+    rt.frame(0.0);
+    assert!(clip.is_playing());
+    rt.key(KeyEvent::from(Key::Media(MediaKey::Pause)));
+    rt.frame(0.0);
+    assert!(!clip.is_playing());
+    rt.key(KeyEvent::from(Key::Media(MediaKey::Play)));
+    rt.frame(0.0);
+    assert!(clip.is_playing());
+    rt.key(KeyEvent::from(Key::Media(MediaKey::Stop)));
+    rt.frame(0.0);
+    assert!(!clip.is_playing());
+}

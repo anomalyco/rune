@@ -167,6 +167,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
         .maximized(true)
         .full_screen(true)
         .modifier_keys()
+        .media_keys()
         .tab_visits_controls(true)
         .release_gpu_when_closed()
         .on_focus(|_, _, _| {})
@@ -194,7 +195,7 @@ fn forwarded_window_spec_builders_and_map_app_configure_the_inner_app() {
     assert!(!window.app.runtime.srgb_blend);
     assert_eq!(window.app.runtime.font_smoothing, crate::FontSmoothing::Off);
     assert_eq!(window.app.runtime.max_native_materials, 8);
-    assert!(window.app.runtime.modifier_keys && window.app.runtime.tab_visits_controls);
+    assert!(window.app.runtime.modifier_keys && window.app.runtime.media_keys && window.app.runtime.tab_visits_controls);
     assert!(window.app.runtime.on_focus.is_some() && window.app.runtime.on_mods.is_some());
     assert!(window.app.runtime.on_visibility.is_some() && window.app.runtime.on_ime.is_some() && window.app.runtime.on_field_menu.is_some());
     assert_eq!(window.app.runtime.dev_stats.map(|f| f()).as_deref(), Some("stats"));

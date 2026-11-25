@@ -109,6 +109,8 @@ function appWindow() {
 const SCROLL_KEYS = [' ', 'PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'];
 // Function keys Rune parses (`named_key_from_str`: F1–F24).
 const FUNCTION_KEY = /^F([1-9]|1\d|2[0-4])$/;
+// Hardware media transport keys Rune parses when opted in via `App::media_keys`.
+const MEDIA_KEYS = ['MediaPlayPause', 'MediaPlay', 'MediaPause', 'MediaTrackNext', 'MediaTrackPrevious', 'MediaStop', 'MediaFastForward', 'MediaRewind'];
 
 const graphemeSegmenter = typeof Intl?.Segmenter === 'function'
     ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
@@ -214,7 +216,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null,
-        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band };
+        lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false };
     const send = event => {
         const message = JSON.stringify(event);
         if (h.syncing) queueMicrotask(() => { if (!h.disposed) callback(message); });
@@ -364,7 +366,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             // Forward function keys other than what `browserShortcut` leaves to the browser so
             // focused fields receive them as canvas focus does.
             const functionKey = FUNCTION_KEY.test(event.key) && !browserShortcut(event);
-            if (!chord && !functionKey && !editing.includes(event.key)) return;
+            const mediaKey = h.mediaKeys && MEDIA_KEYS.includes(event.key);
+            if (!chord && !functionKey && !mediaKey && !editing.includes(event.key)) return;
             if (chord && event.key.toLowerCase() === 'v') return;
             event.preventDefault();
             key(event.key, event);
@@ -427,6 +430,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }, { passive: true });
     listen(canvas, 'keydown', event => {
         if (page && !h.focused && SCROLL_KEYS.includes(event.key) && !event.metaKey && !event.ctrlKey) return;
+        if (!h.mediaKeys && MEDIA_KEYS.includes(event.key)) return;
         if (!browserShortcut(event)) event.preventDefault();
     });
     if (page) {
@@ -610,6 +614,11 @@ export function syncCopy(h, text) {
 // 'field', 'text' or '' (`Runtime::secondary_claim`).
 export function syncSecondary(h, claim) {
     h.secondary = claim;
+}
+
+// Whether the app opted into hardware media transport keys (`App::media_keys`).
+export function syncMediaKeys(h, enabled) {
+    h.mediaKeys = !!enabled;
 }
 
 // The sans and mono slots' families (CSS lists): the mirror's text sets in them (`family`).

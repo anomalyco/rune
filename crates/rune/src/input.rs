@@ -9,6 +9,7 @@ pub(crate) mod host_events;
 pub(crate) mod key_diagnostics;
 pub(crate) mod key_table;
 pub(crate) mod keycaps;
+pub(crate) mod media_keys;
 pub(crate) mod physical_input;
 #[cfg(any(test, target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) mod pointer_observer;

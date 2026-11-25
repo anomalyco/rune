@@ -436,6 +436,13 @@ fn named_keysym(symbol: u32) -> Option<crate::Key> {
         0xff67 => crate::Key::ContextMenu,
         0xff63 | 0xff9e => crate::Key::Insert, 0xff61 | 0xff15 => crate::Key::PrintScreen,
         0xff14 => crate::Key::ScrollLock, 0xff13 | 0xff6b => crate::Key::Pause,
+        0x1008_ff14 => crate::Key::Media(crate::MediaKey::Play),
+        0x1008_ff31 => crate::Key::Media(crate::MediaKey::Pause),
+        0x1008_ff17 => crate::Key::Media(crate::MediaKey::Next),
+        0x1008_ff16 => crate::Key::Media(crate::MediaKey::Previous),
+        0x1008_ff15 => crate::Key::Media(crate::MediaKey::Stop),
+        0x1008_ff97 => crate::Key::Media(crate::MediaKey::FastForward),
+        0x1008_ff3e => crate::Key::Media(crate::MediaKey::Rewind),
         _ => return None,
     })
 }

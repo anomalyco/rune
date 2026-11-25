@@ -90,3 +90,30 @@ fn display_round_trips_for_every_chord_key() {
         }
     }
 }
+
+#[test]
+fn media_key_chords_parse_aliases_format_labels_and_keep_pause_distinct() {
+    use crate::{Key, KeyEvent, MediaKey};
+
+    assert_eq!(Chord::parse("pause").unwrap().key(), ChordKey::Pause);
+    assert_eq!(Chord::parse("mediapause").unwrap().key(), ChordKey::Media(MediaKey::Pause));
+    for (spec, expected, canonical, mac, pc) in [
+        ("playpause", MediaKey::PlayPause, "mediaplaypause", "⏯", "Play/Pause"),
+        ("MediaPlayPause", MediaKey::PlayPause, "mediaplaypause", "⏯", "Play/Pause"),
+        ("mediaplay", MediaKey::Play, "mediaplay", "▶", "Play"),
+        ("mediapause", MediaKey::Pause, "mediapause", "⏸", "Pause"),
+        ("medianext", MediaKey::Next, "mediatracknext", "⏭", "Next Track"),
+        ("mediaprev", MediaKey::Previous, "mediatrackprevious", "⏮", "Previous Track"),
+        ("mediaprevious", MediaKey::Previous, "mediatrackprevious", "⏮", "Previous Track"),
+        ("mediastop", MediaKey::Stop, "mediastop", "⏹", "Stop"),
+        ("fastforward", MediaKey::FastForward, "mediafastforward", "⏩", "Fast Forward"),
+        ("rewind", MediaKey::Rewind, "mediarewind", "⏪", "Rewind"),
+    ] {
+        let chord = Chord::parse(spec).unwrap();
+        assert_eq!(chord.key(), ChordKey::Media(expected), "{spec}");
+        assert_eq!(chord.to_string(), canonical, "{spec}");
+        assert_eq!(chord.label_on(KeyPlatform::Mac), mac, "{spec}");
+        assert_eq!(chord.label_on(KeyPlatform::Windows), pc, "{spec}");
+        assert!(chord.matches(&KeyEvent::from(Key::Media(expected))), "{spec}");
+    }
+}

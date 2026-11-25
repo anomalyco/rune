@@ -162,6 +162,47 @@ pub enum Key {
     /// release doesn't, unless the other Shift is still down. A held modifier never repeats.
     /// Text fields, selection, focus traversal and shortcuts ignore it.
     Modifier { modifier: Modifier, pressed: bool },
+    /// A hardware media transport key (`PlayPause`, `Next`, `Previous`, ...), sent only where
+    /// the app opts in with `App::media_keys` (or `WindowSpec::media_keys`,
+    /// `ConfiguredOverlay::media_keys`, `Runtime::set_media_keys`). Off by default so apps
+    /// written without it receive no new keys and never intercept system media keys on macOS.
+    /// Text fields ignore it; apps can bind it in `on_key`, `El::on_key`, `El::on_key_preview`,
+    /// `El::on_key_up`, and `Chord`.
+    Media(MediaKey),
+}
+
+/// A hardware media transport key carried by [`Key::Media`].
+///
+/// Mirrors the W3C UI Events `KeyboardEvent.key` media values (`MediaPlayPause`, `MediaPlay`,
+/// `MediaPause`, `MediaTrackNext`, `MediaTrackPrevious`, `MediaStop`, `MediaFastForward`,
+/// `MediaRewind`), winit's `NamedKey::Media*` variants, Linux XKB `XF86Audio*` keysyms, and
+/// macOS `NSEventTypeSystemDefined` `NX_KEYTYPE_*` events.
+///
+/// ```
+/// use rune_edit::{Key, KeyEvent, MediaKey};
+///
+/// let ev = KeyEvent::from(Key::Media(MediaKey::PlayPause));
+/// assert_eq!(ev.key, Key::Media(MediaKey::PlayPause));
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MediaKey {
+    /// Combined Play/Pause toggle (the ⏯ key on Mac, Windows, and web keyboards).
+    PlayPause,
+    /// Dedicated Play key (for example Linux XKB `XF86AudioPlay` or media remotes).
+    Play,
+    /// Dedicated Pause key (for example Linux XKB `XF86AudioPause` or media remotes).
+    Pause,
+    /// Next track (⏭).
+    Next,
+    /// Previous track (⏮).
+    Previous,
+    /// Stop playback (⏹).
+    Stop,
+    /// Fast forward (⏩).
+    FastForward,
+    /// Rewind (⏪).
+    Rewind,
 }
 
 /// A modifier key, by side. Alt is Option on macOS; Super is Command on macOS and the Windows

@@ -398,6 +398,13 @@ impl Host {
         #[cfg(target_os = "macos")]
         let fn_key = if self.app.rt().modifier_keys() { crate::input::fn_key::FnKey::new(&window) } else { None };
         #[cfg(target_os = "macos")]
+        let media_keys = if self.app.rt().media_keys() {
+            let handle = self.native_handle.clone();
+            crate::input::media_keys::MediaKeys::new(&window, Arc::new(move || handle.send(WakeEvent::App)))
+        } else {
+            None
+        };
+        #[cfg(target_os = "macos")]
         let full_screen = mac::FullScreenWatch::new(&window);
         #[cfg(target_os = "macos")]
         let prime = if visible && panel.is_none() { native::Prime::launching() } else { native::Prime::Steady };
@@ -414,6 +421,7 @@ impl Host {
             help: Default::default(),
             full_screen,
             fn_key,
+            media_keys,
             prime,
             launch_drawables,
             _spot: crate::platform::macos::traffic_lights::Spot::new(&window),

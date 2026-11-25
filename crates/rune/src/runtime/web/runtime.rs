@@ -168,6 +168,7 @@ impl RuntimeCore {
             .and_then(|c| c.parse::<crate::Shortcut>().ok())
             .map(|s| s.physical_key());
         let key = match crate::input::key_table::named_key_from_str(name) {
+            Some(crate::Key::Media(_)) if !self.kbd.media_keys => return false,
             Some(key) => key,
             None if name == " " => crate::Key::Text(" ".into()),
             None if mods.cmd => {

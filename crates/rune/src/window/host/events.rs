@@ -67,6 +67,17 @@ impl Host {
         if redraw { l.request_redraw(); }
     }
 
+    #[cfg(target_os = "macos")]
+    pub(in crate::window) fn media_keys(&mut self) {
+        let Some(l) = &self.win else { return };
+        let Some(events) = l.native.media_keys.as_ref().map(|m| m.take()) else { return };
+        let mut redraw = false;
+        for (decoded, mods) in events {
+            redraw |= self.app.media_key(decoded, mods);
+        }
+        if redraw { l.request_redraw(); }
+    }
+
     /// Hands the runtime the file drag winit reported since the last pass, in order: the files
     /// that entered, as one drag, and those dropped, as one drop, each at a fresh pointer
     /// sample; and, while the drag is over the window, a new sample, which redraws only when it
