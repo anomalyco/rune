@@ -524,3 +524,64 @@ fn playground_play_press_in_a_resting_timer_s_frame_sees_the_poll_s_clock() {
         "handlers triggered by Play::press on a resting wake must see the resting poll's clock",
     );
 }
+
+#[test]
+fn resting_wake_with_queued_input_refuses_to_rest_until_delivered() {
+    // Even when poll returns false, a key sent with Tx::send_key marks input waiting
+    // and keeps the runtime out of rest until a frame delivers it.
+    let mut rt = handler_clock_runtime();
+    rt.poll = Some(|s, now, tx| {
+        s.polls.push(now);
+        tx.wake_after(PERIOD);
+        if std::mem::take(&mut s.send_tab) {
+            tx.send_key(crate::KeyEvent { key: crate::Key::Tab, mods: crate::Mods::default() });
+        }
+        false
+    });
+    rt.state.send_tab = true;
+    reach_timer(&mut rt);
+    assert_eq!(rt.resting_wake(), Some(true), "a poll returning false that sends a key still asks for a frame");
+    rt.resting_wake_frame(true);
+    assert!(rt.has_input_waiting(), "queued Tab must report has_input_waiting");
+    assert!(rt.has_pending_input(), "queued Tab must report has_pending_input");
+    assert!(rt.stale(), "queued Tab must keep runtime stale");
+    assert!(!rt.rests(), "runtime must not rest while user input is queued");
+    assert_eq!(rt.resting_wake(), None, "a second wake while input is queued must draw, not poll alone");
+
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert_eq!(rt.state.focuses.len(), 1, "frame delivered the queued Tab");
+    assert!(!rt.has_input_waiting(), "input queue drains once delivered");
+    assert!(rt.rests(), "runtime rests again after input is delivered");
+
+    // Same invariant for Playground Play::press on a resting wake.
+    type Scene = (&'static str, fn(&mut HandlerClockApp));
+    static SCENES: &[Scene] = &[("Repro/Guard", |_| {})];
+    let mut spec = crate::AppSpec::new("play_guard", (800.0, 400.0), HandlerClockApp::default, handler_clock_view);
+    spec.scenes = SCENES;
+    let playground = crate::Playground::new()
+        .enabled(true)
+        .trigger("Repro/Guard", 'r', "Press Tab", |_, play| {
+            play.focus("one", true);
+            play.after(5.0, |_: &mut HandlerClockApp, play| {
+                play.press(crate::Key::Tab);
+            });
+        });
+    let mut pg = crate::App::new(spec)
+        .tab_visits_controls(true)
+        .playground(playground)
+        .headless_runtime((800.0, 400.0), Env::default());
+    pg.wall_start = Some(crate::time::now());
+    pg.frame(0.0);
+    pg.open_playground("Repro/Guard", None);
+    pg.frame(crate::frame::clock::RESUME_STEP);
+    assert!(pg.rests());
+
+    reach_timer(&mut pg);
+    assert_eq!(pg.resting_wake(), Some(true), "Play::press on a resting wake asks for a frame");
+    pg.resting_wake_frame(true);
+    assert!(pg.has_input_waiting(), "Play::press must report has_input_waiting");
+    assert!(!pg.rests(), "runtime must not rest while Play::press input is queued");
+    pg.frame(crate::frame::clock::RESUME_STEP);
+    assert!(!pg.has_input_waiting());
+    assert_eq!(pg.playground_state::<HandlerClockApp>().unwrap().focuses.last().map(|(k, _)| *k), Some("two"));
+}

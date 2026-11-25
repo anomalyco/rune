@@ -669,3 +669,69 @@ fn window_app_forwards_release_compositor_gpu() {
     app.release_compositor_gpu();
     assert_eq!(releases.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn turn_end_guard_requests_redraw_when_user_input_is_queued_at_rest() {
+    use crate::platform::display_link_machine::{DisplayLinkCore, LinkState};
+    use crate::window::host::any_host::queued_input_needs_redraw;
+    use crate::window::surface::{Redraw, RedrawEffect, RedrawEvent};
+
+    let now = crate::time::now();
+    // Pure state matrix: Idle and Satisfied request a redraw when input waits on an unpaced,
+    // drawable window; already-pending redraws, active pacing, non-drawable windows, and
+    // empty input queues do not.
+    assert!(queued_input_needs_redraw(true, true, false, Redraw::Idle));
+    assert!(queued_input_needs_redraw(true, true, false, Redraw::Satisfied));
+    assert!(!queued_input_needs_redraw(true, true, false, Redraw::Asked { at: now }));
+    assert!(!queued_input_needs_redraw(true, true, false, Redraw::Painting));
+    assert!(!queued_input_needs_redraw(true, true, false, Redraw::PaintingAgain));
+    assert!(!queued_input_needs_redraw(true, true, false, Redraw::Wants));
+    assert!(!queued_input_needs_redraw(true, true, true, Redraw::Idle));
+    assert!(!queued_input_needs_redraw(true, false, false, Redraw::Idle));
+    assert!(!queued_input_needs_redraw(false, true, false, Redraw::Idle));
+
+    // End-to-end invariant: a resting timer poll sends a key via Tx::send_key. Even if the
+    // window reaches turn end with Redraw::Idle or Redraw::Satisfied and the display link
+    // Stopped or Coasting, the turn-end guard requests a redraw until the frame delivers it.
+    let mut rt = Runtime::new(false, |_: &bool, _: &mut Cx<bool>| {
+        crate::col().child(crate::el().key("b").role("button").focusable(true).size(40.0, 20.0))
+    }, (200.0, 100.0), Env::default());
+    rt.set_tab_visits_controls(true);
+    rt.poll = Some(|sent, _, tx| {
+        if std::mem::take(sent) {
+            tx.send_key(crate::KeyEvent { key: crate::Key::Tab, mods: crate::Mods::default() });
+            true
+        } else {
+            false
+        }
+    });
+    rt.wall_start = Some(now);
+    rt.frame(0.0);
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert!(rt.rests());
+
+    rt.state = true;
+    assert_eq!(rt.resting_wake(), Some(true));
+    rt.resting_wake_frame(true);
+    assert!(rt.core().has_input_waiting());
+
+    let mut link = DisplayLinkCore::new(std::time::Duration::from_nanos(1_000_000_000 / 120));
+    assert_eq!(link.state(), LinkState::Stopped);
+    let mut redraw = Redraw::Satisfied;
+    assert!(queued_input_needs_redraw(rt.core().has_input_waiting(), true, link.paced(), redraw));
+    let (next, effect) = redraw.step(RedrawEvent::Ask(now));
+    redraw = next;
+    assert_eq!(effect, RedrawEffect::Request);
+    assert!(!queued_input_needs_redraw(rt.core().has_input_waiting(), true, link.paced(), redraw));
+
+    // Same while coasting (link not actively pacing).
+    let _ = link.start();
+    let _ = link.coast();
+    assert!(!link.paced());
+    assert!(queued_input_needs_redraw(rt.core().has_input_waiting(), true, link.paced(), Redraw::Idle));
+
+    // Once the frame runs and delivers the key, the guard lets the window rest.
+    rt.frame(crate::frame::clock::RESUME_STEP);
+    assert!(!rt.core().has_input_waiting());
+    assert!(!queued_input_needs_redraw(rt.core().has_input_waiting(), true, link.paced(), Redraw::Idle));
+}

@@ -102,6 +102,9 @@ impl<S: 'static> Runtime<S> {
     pub fn fling(&mut self, x: f32, y: f32, velocity: f32) { self.core_mut().fling(x, y, velocity); }
     #[inline(always)]
     pub fn has_pending_input(&self) -> bool { self.core().has_pending_input() }
+    #[cfg(test)]
+    #[inline(always)]
+    pub(crate) fn has_input_waiting(&self) -> bool { self.core().has_input_waiting() }
 
     #[inline(always)]
     pub fn secondary_down(&mut self, x: f32, y: f32) { self.core_mut().secondary_down(x, y); }

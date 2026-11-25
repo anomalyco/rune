@@ -415,6 +415,13 @@ impl RuntimeCore {
         self.schedule_wakes_from(polled, wakes);
     }
 
+    /// Whether user input is queued in the action queue (`ActionQueue::has_input`), as
+    /// distinguished from layout and state observers. Hosts check this before resting so
+    /// queued input never waits for a later timer.
+    pub(crate) fn has_input_waiting(&self) -> bool {
+        self.frame.queue.has_input()
+    }
+
     /// Nothing but a timer asks this runtime for a frame.
     pub(crate) fn rests(&self) -> bool {
         self.motion.loop_wake().is_none() && self.rests_except_loop()
