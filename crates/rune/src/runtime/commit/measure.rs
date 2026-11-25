@@ -72,6 +72,7 @@ impl RuntimeCore {
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
             window_backdrop: self.host.window_backdrop,
+            window_backdrop_supported: self.host.window_backdrop_supported,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
@@ -214,7 +215,8 @@ impl Measurement<'_> {
         let flags = u32::from(self.maximized)
             | (u32::from(self.full_screen) << 1)
             | (u32::from(self.pointer_locked) << 2)
-            | (u32::from(self.window_backdrop.to_u8()) << 3);
+            | (u32::from(self.window_backdrop.to_u8()) << 3)
+            | (u32::from(self.window_backdrop_supported) << 25);
         [self.titlebar_inset.to_bits(), leading, trailing, height, flags]
     }
 
@@ -527,6 +529,7 @@ impl Measurement<'_> {
             maximized: this.maximized,
             full_screen: this.full_screen,
             window_backdrop: this.window_backdrop,
+            window_backdrop_supported: this.window_backdrop_supported,
             caption_color: None,
             titlebar: Default::default(),
             system_accent: this.system_accent,

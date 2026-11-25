@@ -57,6 +57,7 @@ pub(crate) struct CxCore {
     pub(super) maximized: bool,
     pub(super) full_screen: bool,
     pub(super) window_backdrop: crate::WindowBackdrop,
+    pub(super) window_backdrop_supported: u8,
     /// `Cx::caption_color`, read once the view returns.
     pub(super) caption_color: Option<Color>,
     /// `Cx::foreground` and `Cx::focus_ring`, read once the view returns.
@@ -117,6 +118,7 @@ impl CxCore {
         self.maximized = false;
         self.full_screen = false;
         self.window_backdrop = crate::WindowBackdrop::None;
+        self.window_backdrop_supported = 0;
     }
 
     pub(crate) fn env(&self) -> Env { self.env }
@@ -126,6 +128,9 @@ impl CxCore {
     pub(crate) fn is_maximized(&self) -> bool { self.maximized }
     pub(crate) fn is_full_screen(&self) -> bool { self.full_screen }
     pub(crate) fn window_backdrop(&self) -> crate::WindowBackdrop { self.window_backdrop }
+    pub(crate) fn window_backdrop_supported(&self, backdrop: crate::WindowBackdrop) -> bool {
+        backdrop.is_supported_in(self.window_backdrop_supported)
+    }
     pub(crate) fn caption_color(&mut self, color: Color) { self.caption_color = Some(color); }
     pub(crate) fn foreground(&mut self, color: Color) { self.defaults.foreground = Some(color); }
     pub(crate) fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
@@ -365,26 +370,71 @@ impl<S> Cx<S> {
     /// The whole-window system backdrop material currently active behind this window or overlay,
     /// as confirmed by the operating system.
     ///
+    /// On Windows 11, this reports that `DWMWA_SYSTEMBACKDROP_TYPE` was accepted by DWM, not that
+    /// the dynamic material is visibly rendered in the current frame: by Microsoft design, Windows
+    /// draws Mica, Mica Alt, and Desktop Acrylic only while the window is the foreground window
+    /// and shows its own solid neutral fallback when unfocused. Consequently, a window or
+    /// non-activating overlay (`KeyPolicy::None`) that never takes focus never displays the live
+    /// material even while `cx.window_backdrop().is_active()` is `true`. Pair with
+    /// [`App::on_focus`](crate::App::on_focus),
+    /// [`ConfiguredOverlay::on_focus`](crate::ConfiguredOverlay::on_focus), or
+    /// [`El::on_window_focus`](crate::El::on_window_focus) if the view needs to tell "active and
+    /// focused" from "active". On Linux Wayland, [`WindowBackdrop::Blur`](crate::WindowBackdrop::Blur)
+    /// reports that a blur region is attached to the surface (`ext_background_effect_v1` with
+    /// `Capability::Blur` or `org_kde_kwin_blur_manager`); neither Wayland protocol ties blur to
+    /// focus, though visual appearance remains subject to compositor policy.
+    ///
     /// Returns [`WindowBackdrop::None`](crate::WindowBackdrop::None) whenever no backdrop was
     /// requested or the platform cannot activate one (Windows builds before 22621, opaque
     /// windows, plain HWND swap chains, the CPU painter, software/WARP adapters, DWM error,
-    /// macOS, Linux, web, staged playground subviews, and headless runs unless set via
-    /// [`Runtime::set_window_backdrop`]). The view and any `memo` closures rebuild automatically
-    /// when this changes.
+    /// X11/XWayland, unsupported Wayland compositors, macOS, web, staged playground subviews, and
+    /// headless runs unless set via [`Runtime::set_window_backdrop`]). The view and any `memo`
+    /// closures rebuild automatically when this changes.
     ///
     /// ```
-    /// # use rune::{Color, Cx, El, el};
-    /// fn root(_: &(), cx: &mut Cx<()>) -> El {
-    ///     let bg = if cx.window_backdrop().is_active() {
-    ///         Color::TRANSPARENT
-    ///     } else {
-    ///         rune::tok::theme(cx.system_dark()).bg
+    /// # use rune::{Color, Cx, El, WindowBackdrop, el};
+    /// struct State { focused: bool }
+    /// fn root(s: &State, cx: &mut Cx<State>) -> El {
+    ///     let base = rune::tok::theme(cx.system_dark()).bg;
+    ///     let bg = match cx.window_backdrop() {
+    ///         WindowBackdrop::Blur => base.alpha(0.75),
+    ///         b if b.is_active() && s.focused => Color::TRANSPARENT,
+    ///         _ => base,
     ///     };
     ///     el().w_full().h_full().fill(bg)
     /// }
     /// ```
     #[inline(always)]
     pub fn window_backdrop(&self) -> crate::WindowBackdrop { self.core.window_backdrop() }
+    /// Whether the active surface and OS/compositor can currently activate `backdrop`, even while
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None) is selected.
+    ///
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None) always returns `true`. On Linux
+    /// Wayland, [`WindowBackdrop::Blur`](crate::WindowBackdrop::Blur) returns `true` when the
+    /// surface is transparent on a GPU swap chain and the compositor advertises
+    /// `ext_background_effect_v1` with `Capability::Blur` or `org_kde_kwin_blur_manager`; on
+    /// Windows 11 Build 22621+, `Mica`, `MicaAlt`, and `Acrylic` return `true` on eligible
+    /// transparent DirectComposition hardware-GPU surfaces. Memo-tracked: views and `memo`
+    /// closures rebuild automatically when compositor capabilities change at runtime.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, WindowBackdrop, el, text};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     let label = if cx.window_backdrop_supported(WindowBackdrop::Blur) {
+    ///         "Blur available"
+    ///     } else {
+    ///         "Blur unavailable"
+    ///     };
+    ///     el().child(text(label))
+    /// }
+    /// let mut rt = Runtime::new((), view, (200.0, 80.0), Env::default());
+    /// rt.set_window_backdrop_supported(WindowBackdrop::Blur, true);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn window_backdrop_supported(&self, backdrop: crate::WindowBackdrop) -> bool {
+        self.core.window_backdrop_supported(backdrop)
+    }
     /// The colour of the Windows caption buttons' symbols (Electron's `titleBarOverlay`
     /// `symbolColor`), for a titlebar whose colours follow the app's theme rather than the
     /// system's light or dark setting: by default black in light mode, white in dark. Their

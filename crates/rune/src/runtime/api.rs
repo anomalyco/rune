@@ -277,6 +277,31 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn set_window_backdrop(&mut self, backdrop: crate::WindowBackdrop) { self.core_mut().set_window_backdrop(backdrop); }
+    /// Sets what [`Cx::window_backdrop_supported`] reports for `backdrop` in headless tests,
+    /// marking the view and its memos dirty when it changes.
+    ///
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None) is always reported supported and
+    /// ignores calls to this setter. Headless runs default to `false` for all non-`None`
+    /// variants.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, WindowBackdrop, el};
+    /// let mut rt = Runtime::new(
+    ///     (),
+    ///     |_: &(), cx: &mut Cx<()>| {
+    ///         let _ = cx.window_backdrop_supported(WindowBackdrop::Blur);
+    ///         el()
+    ///     },
+    ///     (200.0, 100.0),
+    ///     Env::default(),
+    /// );
+    /// rt.set_window_backdrop_supported(WindowBackdrop::Blur, true);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_window_backdrop_supported(&mut self, backdrop: crate::WindowBackdrop, supported: bool) {
+        self.core_mut().set_window_backdrop_supported(backdrop, supported);
+    }
     #[inline(always)]
     pub(crate) fn system_accent(&self) -> crate::SystemAccent { self.core().system_accent() }
     #[inline(always)]

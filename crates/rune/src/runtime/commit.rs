@@ -407,6 +407,7 @@ pub(super) struct Measurement<'a> {
     pub(super) maximized: bool,
     pub(super) full_screen: bool,
     pub(super) window_backdrop: crate::WindowBackdrop,
+    pub(super) window_backdrop_supported: u8,
     /// Caption buttons drawn over the view's root.
     pub(super) caption: Option<crate::titlebar::Caption>,
     pub(super) system_accent: crate::SystemAccent,

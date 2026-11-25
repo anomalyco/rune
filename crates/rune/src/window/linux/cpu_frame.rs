@@ -213,6 +213,7 @@ impl Host {
             presented: None,
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
+        self.sync_window_backdrop(false);
         self.apply_placement(event_loop);
         crate::marks::mark("window.created");
         if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }

@@ -15,7 +15,8 @@ impl El {
     /// native views (default [`MAX_NATIVE_MATERIALS`](crate::MAX_NATIVE_MATERIALS)); later visible
     /// elements draw their fallback and report [`ElementInfo::material_fallback`](crate::ElementInfo::material_fallback).
     ///
-    /// For a whole-window OS backdrop on Windows 11 (Mica, Mica Alt, or Desktop Acrylic), use
+    /// For a whole-window OS backdrop (Windows 11 Mica, Mica Alt, or Desktop Acrylic, or Linux
+    /// Wayland compositor blur via [`WindowBackdrop::Blur`](crate::WindowBackdrop::Blur)), use
     /// [`WindowBackdrop`](crate::WindowBackdrop) instead. For an in-window blur of Rune's own
     /// content on every platform, use [`El::backdrop_blur`](Self::backdrop_blur).
     pub fn system_material(mut self, material: crate::SystemMaterial) -> Self {
@@ -32,7 +33,7 @@ impl El {
     ///
     /// Unlike [`El::system_material`](Self::system_material) (per-element behind-window blur on
     /// macOS) and [`WindowBackdrop`](crate::WindowBackdrop) (whole-window OS backdrop on Windows
-    /// 11), this blurs Rune's own content and looks the same on every platform. The element's own opacity (including its
+    /// 11 and Linux Wayland), this blurs Rune's own content and looks the same on every platform. The element's own opacity (including its
     /// default enter and exit fade) fades the blur with it while still blurring what sits behind
     /// the element, and its outer shadows leave the blurred interior clear. Blurs drawn into a
     /// target that can't be copied (no `COPY_SRC`, or a caller's own `wgpu::RenderPass` via

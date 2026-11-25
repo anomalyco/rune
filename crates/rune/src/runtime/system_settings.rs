@@ -50,6 +50,25 @@ impl window_requests::HostState {
     }
 
     #[inline]
+    pub(super) fn set_window_backdrop_supported(&mut self, backdrop: crate::WindowBackdrop, supported: bool) -> bool {
+        let bit = backdrop.support_bit();
+        if bit == 0 {
+            return false;
+        }
+        let next = if supported { self.window_backdrop_supported | bit } else { self.window_backdrop_supported & !bit };
+        if next == self.window_backdrop_supported { return false; }
+        self.window_backdrop_supported = next;
+        true
+    }
+
+    #[inline]
+    pub(super) fn set_window_backdrop_supported_mask(&mut self, mask: u8) -> bool {
+        if mask == self.window_backdrop_supported { return false; }
+        self.window_backdrop_supported = mask;
+        true
+    }
+
+    #[inline]
     pub(super) fn set_backdrop_opaque_fallback(&mut self, fallback: bool) -> bool {
         if fallback == self.backdrop_opaque_fallback { return false; }
         self.backdrop_opaque_fallback = fallback;
@@ -230,7 +249,37 @@ impl RuntimeCore {
         if self.host.set_window_backdrop(backdrop) { self.commit.dirty = true; }
     }
 
-    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    /// Sets whether `backdrop` is reported supported by [`Cx::window_backdrop_supported`] for
+    /// headless tests or hosts; a change re-runs the view and its memos. `WindowBackdrop::None` is
+    /// always supported and ignores changes.
+    #[inline]
+    pub fn set_window_backdrop_supported(&mut self, backdrop: crate::WindowBackdrop, supported: bool) {
+        if self.host.set_window_backdrop_supported(backdrop, supported) { self.commit.dirty = true; }
+    }
+
+    /// Replaces the entire supported-backdrop bitmask atomically; a change re-runs the view and
+    /// its memos.
+    #[cfg_attr(
+        not(any(
+            target_os = "windows",
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")),
+            test
+        )),
+        allow(dead_code)
+    )]
+    #[inline]
+    pub(crate) fn set_window_backdrop_supported_mask(&mut self, mask: u8) {
+        if self.host.set_window_backdrop_supported_mask(mask) { self.commit.dirty = true; }
+    }
+
+    #[cfg_attr(
+        not(any(
+            target_os = "windows",
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")),
+            test
+        )),
+        allow(dead_code)
+    )]
     #[inline]
     pub(crate) fn set_backdrop_opaque_fallback(&mut self, fallback: bool) {
         if self.host.set_backdrop_opaque_fallback(fallback) { self.commit.dirty = true; }

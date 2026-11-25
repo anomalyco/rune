@@ -18,6 +18,7 @@ fn window_backdrop_default_and_is_active() {
     assert!(WindowBackdrop::Mica.is_active());
     assert!(WindowBackdrop::MicaAlt.is_active());
     assert!(WindowBackdrop::Acrylic.is_active());
+    assert!(WindowBackdrop::Blur.is_active());
 }
 
 #[test]
@@ -271,4 +272,168 @@ fn headless_default_render_keeps_opaque_clear_and_none_backdrop() {
     rt.frame(0.0);
     assert_eq!(seen.get(), WindowBackdrop::None);
     assert_eq!(rt.clear_color(), [0.1, 0.2, 0.3, 1.0]);
+}
+
+#[test]
+fn window_backdrop_supported_defaults_memo_invalidates_and_clear_chrome_resets() {
+    struct State {
+        view_runs: Rc<Cell<u32>>,
+        memo_runs: Rc<Cell<u32>>,
+        none_sup: Rc<Cell<bool>>,
+        blur_sup: Rc<Cell<bool>>,
+        mica_sup: Rc<Cell<bool>>,
+        cleared_none: Rc<Cell<bool>>,
+        cleared_blur: Rc<Cell<bool>>,
+    }
+
+    fn view(s: &State, cx: &mut Cx<State>) -> El {
+        s.view_runs.set(s.view_runs.get() + 1);
+        let none_sup = cx.window_backdrop_supported(WindowBackdrop::None);
+        let blur_sup = cx.window_backdrop_supported(WindowBackdrop::Blur);
+        let mica_sup = cx.window_backdrop_supported(WindowBackdrop::Mica);
+        s.none_sup.set(none_sup);
+        s.blur_sup.set(blur_sup);
+        s.mica_sup.set(mica_sup);
+        let mut sub: Cx<()> = cx.retype();
+        sub.clear_chrome();
+        s.cleared_none.set(sub.window_backdrop_supported(WindowBackdrop::None));
+        s.cleared_blur.set(sub.window_backdrop_supported(WindowBackdrop::Blur));
+        let memo_runs = s.memo_runs.clone();
+        memo("backdrop-supported-memo", 0u32, move || {
+            memo_runs.set(memo_runs.get() + 1);
+            el().size(if blur_sup { 140.0 } else { 70.0 }, 24.0)
+        })
+    }
+
+    let view_runs = Rc::new(Cell::new(0));
+    let memo_runs = Rc::new(Cell::new(0));
+    let none_sup = Rc::new(Cell::new(false));
+    let blur_sup = Rc::new(Cell::new(true));
+    let mica_sup = Rc::new(Cell::new(true));
+    let cleared_none = Rc::new(Cell::new(false));
+    let cleared_blur = Rc::new(Cell::new(true));
+    let mut rt = Runtime::new(
+        State {
+            view_runs: view_runs.clone(),
+            memo_runs: memo_runs.clone(),
+            none_sup: none_sup.clone(),
+            blur_sup: blur_sup.clone(),
+            mica_sup: mica_sup.clone(),
+            cleared_none: cleared_none.clone(),
+            cleared_blur: cleared_blur.clone(),
+        },
+        view,
+        (200.0, 100.0),
+        Env::default(),
+    );
+
+    rt.frame(0.0);
+    assert_eq!(view_runs.get(), 1);
+    assert_eq!(memo_runs.get(), 1);
+    assert!(none_sup.get(), "WindowBackdrop::None is always supported");
+    assert!(!blur_sup.get());
+    assert!(!mica_sup.get());
+
+    // Trying to mark None unsupported is a no-op.
+    rt.set_window_backdrop_supported(WindowBackdrop::None, false);
+    rt.frame(1.0);
+    assert_eq!(view_runs.get(), 1);
+    assert_eq!(memo_runs.get(), 1);
+    assert!(none_sup.get());
+
+    // Setting Blur supported rebuilds both view and memo even while WindowBackdrop::None is active.
+    rt.set_window_backdrop_supported(WindowBackdrop::Blur, true);
+    rt.frame(2.0);
+    assert_eq!(view_runs.get(), 2);
+    assert_eq!(memo_runs.get(), 2);
+    assert!(blur_sup.get());
+    assert!(!mica_sup.get());
+    assert!(cleared_none.get());
+    assert!(!cleared_blur.get(), "clear_chrome resets supported mask for staged subviews");
+
+    // Setting the same value is a no-op.
+    rt.set_window_backdrop_supported(WindowBackdrop::Blur, true);
+    rt.frame(3.0);
+    assert_eq!(view_runs.get(), 2);
+    assert_eq!(memo_runs.get(), 2);
+
+    // Revoking Blur support rebuilds view and memo again.
+    rt.set_window_backdrop_supported(WindowBackdrop::Blur, false);
+    rt.frame(4.0);
+    assert_eq!(view_runs.get(), 3);
+    assert_eq!(memo_runs.get(), 3);
+    assert!(!blur_sup.get());
+}
+
+#[test]
+fn translucent_blur_window_redraw_does_not_ghost_previous_text() {
+    // Wayland translucent GPU windows draw whole frames with `LoadOp::Clear([0, 0, 0, 0])`
+    // (Windows partial damage is not used on Wayland and now also requires `clear[3] == 1.0`).
+    // Verify off-screen that updating text over a translucent `WindowBackdrop::Blur` fill
+    // (`bg.alpha(0.75)`) leaves zero ghost pixels from the prior frame.
+    let Some(gpu) = crate::render::Gpu::test_headless() else { return };
+    let size = (240u32, 64u32);
+    let mut rt = Runtime::new(
+        "First frame text",
+        |label: &&'static str, cx| {
+            let bg = if cx.window_backdrop() == WindowBackdrop::Blur {
+                Color { r: 0.12, g: 0.14, b: 0.18, a: 0.75 }
+            } else {
+                Color { r: 0.12, g: 0.14, b: 0.18, a: 1.0 }
+            };
+            el().w_full()
+                .h_full()
+                .fill(bg)
+                .child(crate::text(*label).color(Color::WHITE))
+        },
+        (size.0 as f32, size.1 as f32),
+        Env::new(true, 1.0),
+    );
+    rt.core_mut().transparent = true;
+    rt.set_window_backdrop(WindowBackdrop::Blur);
+
+    let mut renderer = crate::render::Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);
+    let target = crate::render::Offscreen::new(&gpu.device, size.0, size.1);
+    let render_once = |rt: &mut Runtime<&'static str>, renderer: &mut crate::render::Renderer| {
+        rt.frame(0.0);
+        let clear = rt.clear_color();
+        assert_eq!(clear, [0.0; 4]);
+        let core = rt.core_mut();
+        renderer.prepare_ui(&gpu.device, &gpu.queue, &mut core.text.atlas, &core.instances, size);
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, clear);
+        target.copy(&mut enc);
+        gpu.queue.submit([enc.finish()]);
+        target.read(&gpu.device)
+    };
+
+    let frame1 = render_once(&mut rt, &mut renderer);
+    rt.update(|label, _| *label = "Second");
+    let frame2 = render_once(&mut rt, &mut renderer);
+
+    // Compare against a fresh single-frame render of "Second" so any ghosted pixels from
+    // "First frame text" in the un-overwritten tail immediately fail equality.
+    let mut fresh_rt = Runtime::new(
+        "Second",
+        |label: &&'static str, cx| {
+            let bg = if cx.window_backdrop() == WindowBackdrop::Blur {
+                Color { r: 0.12, g: 0.14, b: 0.18, a: 0.75 }
+            } else {
+                Color { r: 0.12, g: 0.14, b: 0.18, a: 1.0 }
+            };
+            el().w_full()
+                .h_full()
+                .fill(bg)
+                .child(crate::text(*label).color(Color::WHITE))
+        },
+        (size.0 as f32, size.1 as f32),
+        Env::new(true, 1.0),
+    );
+    fresh_rt.core_mut().transparent = true;
+    fresh_rt.set_window_backdrop(WindowBackdrop::Blur);
+    let mut fresh_renderer = crate::render::Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);
+    let expected = render_once(&mut fresh_rt, &mut fresh_renderer);
+
+    assert_ne!(frame1, frame2, "frame content should change");
+    assert_eq!(frame2, expected, "translucent blur redraw must not ghost prior frame pixels");
 }
