@@ -63,7 +63,7 @@ pub(super) fn round_width(n: usize, scale: f32) -> f32 {
 pub(crate) fn frame(root: El, caption: &Caption, symbol: Color, (scale, zoom): (f32, f32), fit_height: bool) -> El {
     let root = if fit_height { root.w_full() } else { root.w_full().h_full() };
     let shown = !caption.buttons().is_empty();
-    el().key(FRAME_KEY).child(root).children(caption.edges.then(|| edges(zoom))).children(shown.then(|| buttons(caption, symbol, scale, zoom)))
+    el().key(FRAME_KEY).child(root).children(caption.edges.any().then(|| edges(zoom, caption.edges))).children(shown.then(|| buttons(caption, symbol, scale, zoom)))
 }
 
 /// The frame `frame` puts around the view's root.
@@ -74,37 +74,39 @@ pub(crate) const BUTTONS_KEY: &str = "rune-caption";
 pub(crate) const EDGES_KEY: &str = "rune-frame-edges";
 
 /// The band inside the window's edges that resizes it: `linux::EDGE` window points deep along
-/// each side, and `linux::CORNER` along both sides of each corner for the diagonals. Each part
-/// is a `.window_resize()` element, so the pointer shows the resize cursor over it and a press
-/// there goes to the compositor, not to what the view drew under it.
-fn edges(zoom: f32) -> El {
+/// each of `sides`, and `linux::CORNER` along both sides of a corner for the diagonals, where
+/// both of them resize. Each part is a `.window_resize()` element, so the pointer shows the
+/// resize cursor over it and a press there goes to the compositor, not to what the view drew
+/// under it. A side the compositor tiled has no band, and the band beside it runs to that end.
+fn edges(zoom: f32, sides: linux::Sides) -> El {
     use ResizeEdge::{East, North, NorthEast, NorthWest, South, SouthEast, SouthWest, West};
     // Window points, drawn in the view's.
     let (e, c) = (linux::EDGE / zoom, linux::CORNER / zoom);
-    let (near, far, none) = (Some(0.0), Some(c), None);
+    let near = Some(0.0);
     let band = |key: &'static str, edge: ResizeEdge, [left, top, right, bottom]: [Option<f32>; 4], (w, h): (Option<f32>, Option<f32>)| {
         let part = el().key(key).pin(left, top, right, bottom).window_resize(edge).a11y_hidden();
         let part = if let Some(w) = w { part.w(w) } else { part };
         if let Some(h) = h { part.h(h) } else { part }
     };
     // A corner is two arms, one along each of its sides.
-    let parts = [
-        band("n", North, [far, near, far, none], (None, Some(e))),
-        band("s", South, [far, none, far, near], (None, Some(e))),
-        band("w", West, [near, far, none, far], (Some(e), None)),
-        band("e", East, [none, far, near, far], (Some(e), None)),
-        band("nw-x", NorthWest, [near, near, none, none], (Some(c), Some(e))),
-        band("nw-y", NorthWest, [near, near, none, none], (Some(e), Some(c))),
-        band("ne-x", NorthEast, [none, near, near, none], (Some(c), Some(e))),
-        band("ne-y", NorthEast, [none, near, near, none], (Some(e), Some(c))),
-        band("sw-x", SouthWest, [near, none, none, near], (Some(c), Some(e))),
-        band("sw-y", SouthWest, [near, none, none, near], (Some(e), Some(c))),
-        band("se-x", SouthEast, [none, none, near, near], (Some(c), Some(e))),
-        band("se-y", SouthEast, [none, none, near, near], (Some(e), Some(c))),
-    ];
+    let arms = |x: &'static str, y: &'static str, edge: ResizeEdge, at: [Option<f32>; 4]| {
+        [band(x, edge, at, (Some(c), Some(e))), band(y, edge, at, (Some(e), Some(c)))]
+    };
+    let (nw, ne) = (sides.top && sides.left, sides.top && sides.right);
+    let (sw, se) = (sides.bottom && sides.left, sides.bottom && sides.right);
+    // A side's band stops short of a corner that has arms.
+    let inset = |corner: bool| Some(if corner { c } else { 0.0 });
+    let mut parts = Vec::with_capacity(12);
+    if sides.top { parts.push(band("n", North, [inset(nw), near, inset(ne), None], (None, Some(e)))); }
+    if sides.bottom { parts.push(band("s", South, [inset(sw), None, inset(se), near], (None, Some(e)))); }
+    if sides.left { parts.push(band("w", West, [near, inset(nw), None, inset(sw)], (Some(e), None))); }
+    if sides.right { parts.push(band("e", East, [None, inset(ne), near, inset(se)], (Some(e), None))); }
+    if nw { parts.extend(arms("nw-x", "nw-y", NorthWest, [near, near, None, None])); }
+    if ne { parts.extend(arms("ne-x", "ne-y", NorthEast, [None, near, near, None])); }
+    if sw { parts.extend(arms("sw-x", "sw-y", SouthWest, [near, None, None, near])); }
+    if se { parts.extend(arms("se-x", "se-y", SouthEast, [None, None, near, near])); }
     el().key(EDGES_KEY).dir(crate::Direction::Ltr).pin(near, near, near, near).children(parts)
 }
-
 /// The buttons pinned to the frame's top-right corner (top-left mirrored), over everything the
 /// view drew.
 fn buttons(caption: &Caption, symbol: Color, scale: f32, zoom: f32) -> El {

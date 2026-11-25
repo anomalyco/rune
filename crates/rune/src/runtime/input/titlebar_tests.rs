@@ -907,11 +907,11 @@ fn deferred_window_drag_runtime_double_click_drag_leave_cancel_and_invariants() 
 mod linux_frame {
     use crate::el::el;
     use crate::runtime::Runtime;
-    use crate::titlebar::linux::{ButtonLayout, WindowState};
+    use crate::titlebar::linux::{ButtonLayout, Sides, WindowState};
     use crate::titlebar::{BUTTONS_KEY, Caption, EDGES_KEY};
     use crate::{Cursor, Cx, El, Env, ResizeEdge};
 
-    const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true };
+    const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true, minimizable: true, maximizable: true, tiled: Sides::NONE };
 
     #[derive(Default)]
     struct State {
@@ -1025,6 +1025,30 @@ mod linux_frame {
             assert!(drawn(&rt, EDGES_KEY).is_none(), "{window:?}");
             rt.pointer_down(200.0, 2.0);
             assert_eq!(rt.take_resize_action(), None, "{window:?}");
+        }
+    }
+
+    #[test]
+    fn a_window_tiled_to_the_left_half_resizes_from_its_free_side_only() {
+        use ResizeEdge::East;
+        // Tiled on its top, left and bottom: the right side is the one a neighbour shares.
+        let tiled = Sides { right: false, ..Sides::ALL };
+        let mut rt = rig(caption("appmenu:close", WindowState { tiled, ..FLOATING }));
+        // The free side's band runs the window's whole height: its corners have no arms.
+        for at in [(397.0, 150.0), (397.0, 2.0), (397.0, 297.0)] {
+            rt.pointer_move(at.0, at.1);
+            assert_eq!(rt.cursor(), Cursor::ResizeEw, "at {at:?}");
+            rt.pointer_down(at.0, at.1);
+            assert_eq!(rt.take_resize_action(), Some(East), "at {at:?}");
+            rt.pointer_up(at.0, at.1);
+        }
+        // The tiled sides are the view's again.
+        for (i, at) in [(200.0, 2.0), (2.0, 150.0), (200.0, 297.0), (2.0, 2.0)].into_iter().enumerate() {
+            rt.pointer_down(at.0, at.1);
+            assert_eq!(rt.take_resize_action(), None, "at {at:?}");
+            rt.pointer_up(at.0, at.1);
+            rt.frame(0.1 + i as f64 / 10.0);
+            assert_eq!(rt.state.presses, i + 1, "at {at:?}");
         }
     }
 

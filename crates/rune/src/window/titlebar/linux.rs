@@ -68,12 +68,36 @@ impl ButtonLayout {
     }
 }
 
+/// Sides of the window: the ones the compositor tiled, or the ones that resize it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Sides {
+    pub top: bool,
+    pub right: bool,
+    pub bottom: bool,
+    pub left: bool,
+}
+
+impl Sides {
+    pub(crate) const NONE: Sides = Sides { top: false, right: false, bottom: false, left: false };
+    pub(crate) const ALL: Sides = Sides { top: true, right: true, bottom: true, left: true };
+
+    pub(crate) fn any(self) -> bool {
+        self.top || self.right || self.bottom || self.left
+    }
+}
+
 /// What the frame's caption needs of its window (`Caption::own_frame`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WindowState {
     pub maximized: bool,
     pub full_screen: bool,
     pub resizable: bool,
+    /// The compositor lets the window minimize and maximize (`Cx::window_actions`); one that
+    /// doesn't say counts as yes.
+    pub minimizable: bool,
+    pub maximizable: bool,
+    /// The sides tiled against a screen edge or another window (`Cx::tiled_edges`).
+    pub tiled: Sides,
 }
 
 /// The desktop's button layout, once the settings portal answered with one.

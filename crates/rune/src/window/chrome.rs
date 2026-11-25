@@ -158,10 +158,17 @@ fn caption(w: &Win, titlebar: Option<crate::Titlebar>) -> Option<crate::titlebar
     // Rune's own frame: the desktop's buttons, and resize edges while the window floats.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     return titlebar.filter(|_| crate::titlebar::linux::chosen()).map(|t| {
+        // What the compositor allows and which sides it tiled, as `Cx::window_actions` and
+        // `Cx::tiled_edges` report them.
+        let wm = linux_wm_state::read_wayland(&w.window);
+        let tiled = wm.tiled_edges.unwrap_or_default();
         let window = crate::titlebar::linux::WindowState {
             maximized: w.is_maximized(),
             full_screen: w.is_full_screen(),
             resizable: w.window.is_resizable(),
+            minimizable: wm.actions.minimize != Some(false),
+            maximizable: wm.actions.maximize != Some(false),
+            tiled: crate::titlebar::linux::Sides { top: tiled.top, right: tiled.right, bottom: tiled.bottom, left: tiled.left },
         };
         let caption = crate::titlebar::Caption::own_frame(t.height(), crate::titlebar::linux::desktop_layout(), window);
         crate::titlebar::Caption { hidden: caption.hidden || !t.has_controls(), ..caption }

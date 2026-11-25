@@ -519,7 +519,7 @@ impl State {
             hidden: !framed(hwnd) || !self.controls.get(),
             mirrored: crate::labels::rtl(),
             layout: None,
-            edges: false,
+            edges: crate::titlebar::linux::Sides::NONE,
         }
     }
 }

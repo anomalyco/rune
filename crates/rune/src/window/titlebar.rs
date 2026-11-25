@@ -290,39 +290,50 @@ pub(crate) struct Caption {
     /// A Linux frame's buttons, as the desktop lays them out, in GNOME's look
     /// (`caption::round_buttons`); `None` is the Windows caption.
     pub layout: Option<linux::ButtonLayout>,
-    /// The frame resizes the window from a band inside its edges (`caption::edges`): a
-    /// Linux frame on a resizable window that is neither maximized nor full screen.
-    pub edges: bool,
+    /// The sides the frame resizes the window from, by a band inside them (`caption::edges`):
+    /// a Linux frame's, on a resizable window that is neither maximized nor full screen, less
+    /// the sides the compositor tiled.
+    pub edges: linux::Sides,
 }
 
 impl Caption {
     pub(crate) fn new(height: f32) -> Self {
-        Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: crate::labels::rtl(), layout: None, edges: false }
+        Self { height, state: CaptionState::Idle, maximized: false, minimizable: true, maximizable: true, hidden: false, mirrored: crate::labels::rtl(), layout: None, edges: linux::Sides::NONE }
     }
 
     /// The caption of Rune's own frame on Linux (`linux`) for a window in this state:
     /// `layout`'s buttons, at the left when the layout puts them there (the right, in an app
-    /// that reads right to left), and resize edges while the window floats.
+    /// that reads right to left), the ones the compositor allows, and resize edges along the
+    /// sides that are free while the window floats.
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
     pub(crate) fn own_frame(height: f32, layout: linux::ButtonLayout, window: linux::WindowState) -> Self {
+        let floats = window.resizable && !window.maximized && !window.full_screen;
+        let free = |tiled: bool| floats && !tiled;
         Self {
             maximized: window.maximized,
-            maximizable: window.resizable,
+            minimizable: window.minimizable,
+            maximizable: window.maximizable,
             hidden: window.full_screen,
             mirrored: layout.leading != crate::labels::rtl(),
             layout: Some(layout),
-            edges: window.resizable && !window.maximized && !window.full_screen,
+            edges: linux::Sides {
+                top: free(window.tiled.top),
+                right: free(window.tiled.right),
+                bottom: free(window.tiled.bottom),
+                left: free(window.tiled.left),
+            },
             ..Self::new(height)
         }
     }
 
     /// The buttons drawn, left to right (right to left when `mirrored`). A window that can
     /// neither minimize nor maximize shows only Close, as Windows draws its native caption. A
-    /// Linux frame shows the ones the desktop's layout names.
+    /// Linux frame shows the ones the desktop's layout names, less those the window can't do,
+    /// as GTK's window controls do.
     pub(crate) fn buttons(&self) -> Buttons {
         match (self.hidden, self.layout, self.minimizable || self.maximizable) {
             (true, ..) => Buttons::of([]),
-            (false, Some(layout), _) => Buttons::of(layout.buttons.into_iter().flatten()),
+            (false, Some(layout), _) => Buttons::of(layout.buttons.into_iter().flatten().filter(|&button| self.enabled(button))),
             (false, None, true) => Buttons::of(CaptionButton::ALL),
             (false, None, false) => Buttons::of([CaptionButton::Close]),
         }
