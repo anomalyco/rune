@@ -16,6 +16,7 @@ pub(crate) mod field_menu;
 pub(crate) mod popup_menu;
 
 pub(crate) use diff::{custom_diff, sample_diff, scroll_bars_diff};
+mod hard_breaks;
 mod icons;
 pub(crate) mod images;
 mod index;
@@ -350,6 +351,7 @@ stories! {
     "rune-markdown--code" => markdown_code,
     "rune-markdown--styled" => markdown_styled,
     "rune-markdown--wrap-and-frames" => markdown_wrap_and_frames,
+    "rune-markdown--hard-breaks" => hard_breaks::markdown_hard_breaks,
     "rune-text--selectable-help" => text_selectable_help,
     "rune-text--truncate-middle" => text_truncate_middle,
     "rune-text--max-lines-elide" => text_max_lines_elide,

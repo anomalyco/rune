@@ -2,11 +2,11 @@
 
 use super::super::*;
 use super::builder::MAX_TABLE_COLUMNS;
-use super::{BlockMap, SpanMap, parse_doc};
+use super::{BlockMap, SpanMap, parse_doc_with};
 
 /// The header (and partial delimiter row) of a table still streaming in, from the source of the
 /// document's last paragraph: `| a | b |` alone, or followed by a delimiter row in progress.
-pub(super) fn pending_table(src: &str, base_offset: usize, autolink: bool) -> Option<(Table, BlockMap)> {
+pub(super) fn pending_table(src: &str, base_offset: usize, autolink: bool, hard_breaks: bool) -> Option<(Table, BlockMap)> {
     let mut lines = src.trim_end().lines();
     let raw_head = lines.next()?;
     let lead_ws = raw_head.len() - raw_head.trim_start().len();
@@ -32,7 +32,7 @@ pub(super) fn pending_table(src: &str, base_offset: usize, autolink: bool) -> Op
     let mut head_inlines = Vec::with_capacity(cells.len());
     let mut head_maps = Vec::with_capacity(cells.len());
     for (cell_off, c) in &cells {
-        let (inl, map) = inline_of(c, *cell_off, autolink);
+        let (inl, map) = inline_of(c, *cell_off, autolink, hard_breaks);
         head_inlines.push(inl);
         head_maps.push(map);
     }
@@ -76,8 +76,8 @@ fn split_row(line: &str, base_offset: usize) -> Vec<(usize, String)> {
         .collect()
 }
 
-fn inline_of(src: &str, offset: usize, autolink: bool) -> (Inline, SpanMap) {
-    let (blocks, _, _, _, _, maps) = parse_doc(src, autolink);
+fn inline_of(src: &str, offset: usize, autolink: bool, hard_breaks: bool) -> (Inline, SpanMap) {
+    let (blocks, _, _, _, _, maps) = parse_doc_with(src, autolink, hard_breaks);
     match (blocks.into_iter().next(), maps.into_iter().next()) {
         (Some(Block::Para(i)), Some(BlockMap::Inline(mut m))) => {
             m.shift_src(offset);

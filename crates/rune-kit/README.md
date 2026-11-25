@@ -544,12 +544,16 @@ search still see the shortcode. The pictures are drawn only, with no hover or pr
   `Markdown::wrap_anywhere(true)` enables CSS `overflow-wrap: anywhere` on paragraphs, headings,
   lists, block quotes, table cells, diff lines, and non-`scroll_wide` code fences so long unbroken
   tokens wrap inside narrow columns instead of overflowing (`false` by default).
+  `Markdown::hard_breaks(true)` renders CommonMark soft line breaks (single newlines in paragraphs,
+  list items, block quotes, headings and table cells) as line breaks (`'\n'`) instead of spaces
+  for user-typed chat messages (`false` by default, following CommonMark), while leaving code spans,
+  code blocks, post-image line breaks, streaming incremental parsing and `copy_source(true)` intact.
 
 `Tooltip::label(..).render(&TooltipStyle::neutral(dark), &mut layer)` builds a tooltip without
 a kit. `TooltipStyle::max_width(w)` caps its width; `label`, `text` and a `.wrap()` text `child` wrap at it. The
 app owns `open`, so the hover delay is a `wake_after` in its hover handler; `El::help(text)` is
 the delayed, self-dismissing system tooltip when the look needn't match. The gallery's `rune-markdown--walkthrough`, `rune-markdown--diagrams`,
-`rune-markdown--mermaid-large`, `rune-markdown--table-styles`, `rune-markdown--code`, `rune-markdown--styled` and `rune-markdown--wrap-and-frames` scenes show every feature.
+`rune-markdown--mermaid-large`, `rune-markdown--table-styles`, `rune-markdown--code`, `rune-markdown--styled`, `rune-markdown--wrap-and-frames` and `rune-markdown--hard-breaks` scenes show every feature.
 
 ## Diff
 

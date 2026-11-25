@@ -32,6 +32,8 @@ pub(super) struct Renderer {
     pub(super) scroll_wide: bool,
     /// `Markdown::wrap_anywhere`.
     pub(super) wrap_anywhere: bool,
+    /// `Markdown::hard_breaks`.
+    pub(super) hard_breaks: bool,
     /// `Markdown::dir_tentative`.
     pub(super) tentative: Option<rune::Direction>,
     pub(super) highlighter: Highlighter,
