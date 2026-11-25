@@ -640,8 +640,10 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Intercepts a native window-close request (`WindowEvent::CloseRequested`) before the
-    /// window hides, changes lifecycle or first-frame state, or runs [`App::on_close`].
+    /// Intercepts a user-initiated window-close request (the native close button, Alt+F4, the
+    /// window menu's Close, macOS unhandled ⌘W / Window › Close, and assistive activation of the
+    /// custom close button) before the window hides, changes lifecycle or first-frame state, or
+    /// runs [`App::on_close`].
     ///
     /// Runs inside a normal update transaction so the callback may update state or issue [`Tx`]
     /// requests (for example showing an unsaved-changes confirmation dialog). Returning
@@ -653,7 +655,8 @@ impl<S: 'static> App<S> {
     /// Programmatic close (`Tx::close_window`, `AppHandle::close`, `WindowHandle::close`),
     /// application quit/relaunch, teardown, and an already-exiting event loop bypass this hook
     /// so an approved close completes without re-asking. Apps that do not register this hook
-    /// keep the existing close behaviour. Native windows only (ignored on headless and web).
+    /// keep the existing close behaviour. Headless scripts deliver it with
+    /// `{"close_request": true}`. Ignored on web.
     ///
     /// ```no_run
     /// use rune::{App, AppSpec, CloseResponse, el};

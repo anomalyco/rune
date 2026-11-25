@@ -88,6 +88,7 @@ impl RuntimeCore {
             self.resolve_field_menu_fallback(app, picked.as_deref(), tx);
         }
         self.shell_request = self.shell_request.max(tx.shell.take());
+        self.host.user_close_request |= std::mem::take(&mut tx.user_close_request);
         if tx.minimize_order.take().is_some() { self.minimize_step(crate::window::MinimizeEvent::Asked); }
         self.host.titlebar.toggle_maximized |= std::mem::take(&mut tx.toggle_maximized);
         if let Some(req) = tx.full_screen.take() { self.host.titlebar.full_screen = Some(req); }

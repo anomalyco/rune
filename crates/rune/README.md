@@ -769,13 +769,15 @@ app.run();
   its display connection, bypassing fast exit so `App::try_run`, `try_run_windows_with` and
   `try_run_windows_with_args` return that error instead. Normal quits keep fast exit.
 - `App::on_close_request(|s, tx| -> CloseResponse)` (also forwarded on `WindowSpec::on_close_request`)
-  intercepts a native `WindowEvent::CloseRequested` inside a normal update transaction before the
-  window hides, changes lifecycle or first-frame state, or calls `App::on_close`. Returning
-  `CloseResponse::Defer` keeps the window open, commits any state or `Tx` changes (such as showing
-  an unsaved-changes dialog), and requests a redraw; returning `CloseResponse::Close` proceeds to
-  close as usual. Programmatic close (`Tx::close_window`, `AppHandle::close`, `WindowHandle::close`),
-  quit/relaunch, teardown, and an already-exiting loop bypass `on_close_request`, and apps without
-  the hook behave as before.
+  intercepts user-initiated close requests (native close button, Alt+F4, window menu Close, macOS
+  unhandled ⌘W / Window › Close, and assistive activation of the custom caption close button) inside
+  a normal update transaction before the window hides, changes lifecycle or first-frame state, or
+  calls `App::on_close`. Returning `CloseResponse::Defer` keeps the window open, commits any state
+  or `Tx` changes (such as showing an unsaved-changes dialog), and requests a redraw; returning
+  `CloseResponse::Close` proceeds to close as usual. Programmatic close (`Tx::close_window`,
+  `AppHandle::close`, `WindowHandle::close`), quit/relaunch, teardown, and an already-exiting loop
+  bypass `on_close_request`, and apps without the hook behave as before. Headless scripts deliver
+  it with `{"close_request": true}`.
 - `App::on_window(|w: &WindowHandle| ..)` runs on the UI thread after every native creation, for
   icons, native styles, or display-bound protocol objects through `WindowHandle::with_raw_handle`
   and `WindowHandle::with_raw_display_handle`. Pair `with_raw_display_handle` with

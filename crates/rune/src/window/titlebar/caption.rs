@@ -86,7 +86,7 @@ fn caption_button(caption: &Caption, button: CaptionButton, symbol: Color, (w, h
         e.handlers.on_press = Some(Rc::new(move |_, tx: &mut crate::Tx| match button {
             CaptionButton::Minimize => tx.minimize(),
             CaptionButton::Maximize => tx.toggle_maximized(),
-            CaptionButton::Close => tx.close_window(),
+            CaptionButton::Close => tx.request_user_close(),
         }));
     }
     e

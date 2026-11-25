@@ -1,0 +1,1 @@
+- Window close: routed macOS unhandled `⌘W` / `Window › Close` and assistive activation of Windows' custom caption close button through `Host::close_requested` so `App::on_close_request` runs for every user-initiated close while programmatic `Tx::close_window` continues to bypass it, and added headless `{"close_request": true}` (`ScriptEvent::CloseRequest`) script delivery.

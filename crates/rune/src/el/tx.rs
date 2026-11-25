@@ -80,6 +80,10 @@ pub struct Tx {
     pub(crate) keep_on_screen: Vec<String>,
     pub(crate) wakes: Vec<std::time::Duration>,
     pub(crate) shell: Option<Shell>,
+    /// User-initiated close request (macOS unhandled ⌘W / Window › Close, assistive activation of
+    /// the custom caption close button): routes through `App::on_close_request` instead of
+    /// programmatic `Shell::Close`.
+    pub(crate) user_close_request: bool,
     pub(crate) minimize_order: Option<std::num::NonZeroU64>,
     /// `Tx::toggle_maximized`.
     pub(crate) toggle_maximized: bool,
@@ -430,9 +434,17 @@ impl Tx {
         self.wakes.push(std::time::Duration::from_secs_f64((due - self.clock).max(0.0)));
     }
 
-    /// Close the window after this handler, as the close button would (`App::on_close` runs).
+    /// Close the window after this handler (`App::on_close` runs; bypasses
+    /// `App::on_close_request` so an approved close completes without re-asking).
     pub fn close_window(&mut self) {
         self.shell = self.shell.max(Some(Shell::Close));
+    }
+
+    /// Requests closing the window on the user's behalf (macOS unhandled ⌘W / Window › Close,
+    /// assistive activation of the custom caption close button), routing through
+    /// `App::on_close_request` before closing. Programmatic app code calls `Self::close_window`.
+    pub(crate) fn request_user_close(&mut self) {
+        self.user_close_request = true;
     }
 
     /// Quit the app after this handler, whether or not it keeps running without a window. Every
