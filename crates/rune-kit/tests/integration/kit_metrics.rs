@@ -47,7 +47,12 @@ fn controls_take_their_metrics_from_the_kit() {
     let find = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}"));
     let under = |root: &str, key: &str| {
         let path = &find(root).path;
-        els.iter().find(|e| e.key.as_deref() == Some(key) && e.path.starts_with(path)).unwrap_or_else(|| panic!("{key} in {root}"))
+        els.iter()
+            .find(|e| {
+                e.key.as_deref() == Some(key)
+                    && e.path.strip_prefix(path.as_str()).is_some_and(|rest| rest.starts_with('/'))
+            })
+            .unwrap_or_else(|| panic!("{key} in {root}"))
     };
     assert_eq!(find("button-default").rect[3], 24.0);
     assert_eq!(find("button").rect[3], 32.0);
@@ -82,7 +87,12 @@ fn text_area_takes_its_type_and_padding_from_the_kit() {
     let find = |key: &str| els.iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key}"));
     let input = |root: &str| {
         let path = &find(root).path;
-        els.iter().find(|e| e.key.as_deref() == Some("input") && e.path.starts_with(path)).unwrap_or_else(|| panic!("input in {root}"))
+        els.iter()
+            .find(|e| {
+                e.key.as_deref() == Some("input")
+                    && e.path.strip_prefix(path.as_str()).is_some_and(|rest| rest.starts_with('/'))
+            })
+            .unwrap_or_else(|| panic!("input in {root}"))
     };
     let inset = |root: &str| (input(root).rect[0] - find(root).rect[0], input(root).rect[1] - find(root).rect[1]);
     assert_eq!(inset("area-default"), (8.0, 8.0));
