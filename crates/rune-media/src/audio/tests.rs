@@ -183,6 +183,7 @@ fn wait_until(what: &str, mut pred: impl FnMut() -> bool) {
 
 #[test]
 fn open_returns_unsupported_and_validates_spec_ranges() {
+    #[cfg(not(target_os = "linux"))]
     assert_eq!(
         AudioOutput::open(AudioOutputSpec::new(SampleFormat::I16, 48_000, 2)).unwrap_err(),
         AudioOutputError::Unsupported

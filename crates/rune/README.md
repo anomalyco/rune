@@ -3345,10 +3345,16 @@ for event in audio.take_events() { /* AudioEvent::Underrun | Ended | DeviceLost(
   device-lost outputs park their worker with zero wakeups. `flush()` clears queued and device
   audio, resets `heard_frames` to 0, preserves `Playing` without spurious underruns until
   new samples arrive, and returns `Draining` or `Ended` outputs to `Paused`.
-- **Backends**: `AudioOutput::open_silent` works on every platform (including `wasm32`,
-  driven lazily against `rune_core::time::now()` with no threads). `AudioOutput::open`
-  currently returns `AudioOutputError::Unsupported` until platform backends (starting with
-  runtime-`dlopen` PulseAudio/ALSA on Linux) are wired behind the internal `SinkDevice` seam.
+- **Backends**:
+  - **Linux**: `AudioOutput::open` loads `libpulse-simple.so.0` at run time via `dlopen`
+    (serving PulseAudio and PipeWire via `pipewire-pulse`, with ~60 ms `tlength` and ~10 ms
+    `minreq`) and falls back to `libasound.so.2` (ALSA `default`, 60 ms latency, `-EPIPE`
+    underrun recovery). Nothing is linked at build time; if neither library or daemon can open,
+    `open` returns `AudioOutputError::OpenFailed` naming both reasons.
+  - **Windows, macOS, and `wasm32`**: `AudioOutput::open` returns
+    `AudioOutputError::Unsupported` until native backends follow.
+  - **Silent fallback**: `AudioOutput::open_silent` works on every platform (including
+    `wasm32`, driven lazily against `rune_core::time::now()` with no threads).
 
 ### Edge overlays (`App::overlay`, `overlay.rs`, `platform/layer_shell.rs`)
 

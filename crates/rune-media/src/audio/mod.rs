@@ -6,8 +6,11 @@
 //! Callers normally reach these types through `rune`, which re-exports them.
 
 mod buffer;
+#[cfg(target_os = "linux")]
+mod linux;
 mod machine;
 mod silent;
+#[cfg(not(target_os = "linux"))]
 mod unsupported;
 mod worker;
 
@@ -19,6 +22,9 @@ use std::sync::{Arc, PoisonError};
 use std::time::Duration;
 use worker::{Shared, apply_event};
 
+#[cfg(target_os = "linux")]
+use linux as backend;
+#[cfg(not(target_os = "linux"))]
 use unsupported as backend;
 
 /// Minimum supported sample rate in Hz.
