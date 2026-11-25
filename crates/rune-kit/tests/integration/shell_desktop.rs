@@ -546,3 +546,40 @@ fn sidebar_peek_with_spring_none_adds_no_fade_under_reduced_motion() {
     assert!(ovr_open > 0 && ovr_close > 0, "explicit reduced_motion_fade override still fades (open={ovr_open}, close={ovr_close})");
     assert!(ovr_c < 1.0 && ovr_s < 1.0, "override starts fading on first frame (content={ovr_c}, surface={ovr_s})");
 }
+
+#[test]
+fn pointer_moves_while_sidebar_is_peeking_commit_zero_times() {
+    let mut rt = runtime(closed());
+    rt.check_live_only(false);
+    settle(&mut rt);
+
+    // Reveal the peeking sidebar and settle it on screen.
+    rt.update(|s, _| s.sidebar.peek());
+    settle(&mut rt);
+    assert!(rt.state.sidebar.is_peeking(), "sidebar should be peeking");
+    assert!(!rt.state.sidebar.is_resizing(), "no resize grip held");
+
+    // Sweep the pointer inside the peeking sidebar with no button held.
+    let before = rt.stats.commits;
+    for i in 0..10 {
+        rt.pointer_move(80.0 + i as f32 * 8.0, 120.0 + i as f32 * 16.0);
+        rt.frame(1.0 / 60.0);
+    }
+    assert!(rt.state.sidebar.is_peeking(), "sidebar stays peeking while pointer is over it");
+    assert_eq!(
+        rt.stats.commits - before,
+        0,
+        "pointer moves over a peeking sidebar with no grip held must not commit the view"
+    );
+
+    // Gaining window focus while peeking changes no state and must not commit; losing focus ends the peek.
+    let before_focus = rt.stats.commits;
+    rt.window_focus(true);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.sidebar.is_peeking());
+    assert_eq!(rt.stats.commits - before_focus, 0, "gaining focus while peeking changes no state");
+
+    rt.window_focus(false);
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.state.sidebar.is_peeking(), "losing window focus still ends a peek");
+}

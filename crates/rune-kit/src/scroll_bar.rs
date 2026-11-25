@@ -9,7 +9,9 @@
 //! there under the "Click in the scroll bar to" preference ([`rune::system_scroller_jumps`];
 //! Option-click does the other). A wheel over the bar scrolls the viewport it follows, as a
 //! browser's scrollbar belongs to its scroller. When the content grows or shrinks the thumb glides
-//! to its new length. All of it runs through live values, so scrolling never rebuilds the view.
+//! to its new length. All of it runs through live values, so scrolling and hovering never rebuild
+//! the view (in debug builds, Rune's periodic `Tx::live_only` self-check still commits once every
+//! quarter second unless `Runtime::check_live_only(false)` is set; release builds never check).
 //! [`ScrollBarStyle`] sets the thumb's colour and width, at rest and under the pointer.
 
 use std::cell::{Cell, RefCell};
@@ -925,7 +927,9 @@ impl Bar {
 ///
 /// The wrapper takes the viewport's outer sizing and placement so it drops straight into the
 /// parent layout, keeps the viewport's key and existing [`El::on_scroll_offset`] handler, and
-/// drives the indicator through live values with zero view commits per scroll frame. The thumb
+/// drives the indicator through live values with zero view commits per scroll or hover frame
+/// (disable Rune's debug-only self-check with `Runtime::check_live_only(false)` in tests that
+/// count commits; release builds never check). The thumb
 /// widens while the pointer is over the bar, and the pointer at the right edge brings up an
 /// overlay bar. A clip or fade set on what it returns (`clip_fade_linear`) reaches the viewport,
 /// and the bar draws whole above it.

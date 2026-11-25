@@ -106,3 +106,69 @@ fn no_story_produces_duplicate_sibling_keys() {
         assert!(dups.is_empty(), "story {id:?} produced duplicate sibling keys: {dups:?}");
     }
 }
+
+/// Stories whose hover handlers genuinely mutate app state (active menu/select/combobox/popup row,
+/// submenu open, HoverCard open/close, `focus_highlight` row focus, or DiffView selectable-side
+/// switch). Every other gallery story must commit zero times on a pure pointer sweep when the
+/// debug `Tx::live_only` self-check is off.
+const STATEFUL_HOVER_STORIES: &[&str] = &[
+    "rune-combobox--searchable",
+    "rune-combobox--animated-filter",
+    "rune-combobox--localized",
+    "ui-select--playground",
+    "ui-select--grouped",
+    "rune-select--states",
+    "ui-menu--with-radio",
+    "rune-menu--submenu-options",
+    "rune-menu--submenu-small-window",
+    "rune-menu--field-menu-fallback",
+    "rune-hover-card--placements",
+    "rune-focus--keyboard",
+    "rune-popup-list--composer",
+    "rune-popup-list--rich-inline",
+    "rune-diff--localized",
+    "rune-diff--custom",
+];
+
+/// Standing check: sweeping the pointer across any gallery story without pressing must not commit
+/// the view unless the story is in `STATEFUL_HOVER_STORIES`. Catches kit hover/pointer handlers
+/// that forget `Tx::live_only`.
+#[test]
+fn pure_hover_sweep_commits_only_on_stateful_hover_stories() {
+    for &allowed in STATEFUL_HOVER_STORIES {
+        assert!(
+            stories::SCENES.iter().any(|&(id, _)| id == allowed),
+            "STATEFUL_HOVER_STORIES entry {allowed:?} no longer exists in stories::SCENES"
+        );
+    }
+    let mut unexpected = Vec::new();
+    for &(id, setup) in stories::SCENES {
+        if STATEFUL_HOVER_STORIES.contains(&id) {
+            continue;
+        }
+        let mut g = init();
+        setup(&mut g);
+        let mut rt = rune::Runtime::new(g, view, (720.0, 480.0), rune::Env::new(true, 1.0));
+        rt.check_live_only(false);
+        for _ in 0..10 {
+            rt.frame(1.0 / 60.0);
+        }
+        let before = rt.stats.commits;
+        for row in 0..4 {
+            for col in 0..6 {
+                rt.pointer_move(40.0 + col as f32 * 120.0, 40.0 + row as f32 * 100.0);
+                rt.frame(1.0 / 60.0);
+            }
+        }
+        rt.pointer_move(1000.0, 1000.0);
+        rt.frame(1.0 / 60.0);
+        let commits = rt.stats.commits - before;
+        if commits > 0 {
+            unexpected.push((id, commits));
+        }
+    }
+    assert!(
+        unexpected.is_empty(),
+        "stories with no stateful hover committed on a pure pointer sweep: {unexpected:?}"
+    );
+}

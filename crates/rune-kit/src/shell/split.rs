@@ -588,15 +588,23 @@ fn pane<S: 'static>(state: PaneState, access: fn(&mut S) -> &mut PaneState, cont
         toggle.then(|| Box::new(move |e: El| e.on_press(move |s: &mut S| access(s).toggle())) as Apply);
     // A drag whose release is lost (the grip unmounted, a modal took the pointer) ends on blur
     // or once the pointer moves where the drag doesn't hear it. Blur also ends a peek.
-    let clear = (state.is_resizing() || state.is_peeking()).then(|| {
-        Box::new(move |e: El| {
-            e.on_window_focus(move |s: &mut S, focused, _| {
-                if !focused {
-                    access(s).lose_grip();
-                    access(s).end_peek();
+    let resizing = state.is_resizing();
+    let peeking = state.is_peeking();
+    let clear = (resizing || peeking).then(|| {
+        Box::new(move |mut e: El| {
+            e = e.on_window_focus(move |s: &mut S, focused, tx| {
+                if focused || !access(s).blur_clear() {
+                    tx.live_only();
                 }
-            })
-            .on_pointer_move(move |s: &mut S, p| access(s).pointer_grip([p.x, p.y]))
+            });
+            if resizing {
+                e = e.on_pointer_move_local(move |s: &mut S, p, tx| {
+                    if !access(s).pointer_grip([p.window_x, p.window_y]) {
+                        tx.live_only();
+                    }
+                });
+            }
+            e
         }) as Apply
     });
     let hover = (sign > 0.0).then(|| {

@@ -969,9 +969,11 @@ impl Tx {
     /// commit. Debug builds look for that: a live-only event a quarter second or more after
     /// the last commit still re-runs the view, and if the elements, layout, text or colours
     /// it builds differ from what's on screen, Rune prints the handler that said `live_only`.
-    /// This is a heuristic, not a state-mutation check: a view that reads a clock or other
-    /// external state can also differ. Use [`Runtime::check_live_only`](crate::Runtime::check_live_only)
-    /// to turn it off for such a view. It does no checking in release builds.
+    /// This self-check increments [`FrameStats::commits`](crate::runtime::FrameStats::commits) in debug
+    /// builds (release builds never check), so a test counting commits should turn it off with
+    /// [`Runtime::check_live_only`](crate::Runtime::check_live_only)`(false)`. It is a heuristic,
+    /// not a state-mutation check: a view that reads a clock or other external state can also
+    /// differ.
     pub fn live_only(&mut self) {
         self.live_only = true;
     }
