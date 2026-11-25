@@ -3301,3 +3301,114 @@ test('external hidden-input blur reports field_blur, ignores window/menu/sync bl
         bridge.destroy(h);
     }
 });
+
+test('next-frame focus reconciliation clears stale caret across transient window blur, delayed activeElement, visualViewport retract, and visibility return with zero idle rAFs', async () => {
+    const origRaf = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame');
+    const origCancel = Object.getOwnPropertyDescriptor(globalThis, 'cancelAnimationFrame');
+    const rafQueue = [];
+    let nextRafId = 1;
+    let rafScheduled = 0;
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+        configurable: true,
+        value: cb => {
+            rafScheduled += 1;
+            const id = nextRafId++;
+            rafQueue.push({ id, cb });
+            return id;
+        },
+    });
+    Object.defineProperty(globalThis, 'cancelAnimationFrame', {
+        configurable: true,
+        value: id => {
+            const idx = rafQueue.findIndex(item => item.id === id);
+            if (idx >= 0) rafQueue.splice(idx, 1);
+        },
+    });
+    const flushRaf = () => {
+        const batch = rafQueue.splice(0, rafQueue.length);
+        for (const item of batch) item.cb(0);
+    };
+
+    const { doc, body, win, events, h } = setup({ coarse: true });
+    let focusedDoc = true;
+    doc.hasFocus = () => focusedDoc;
+    try {
+        await Promise.resolve();
+
+        // 1. Transient window blur + field blur -> window focus with activeElement === body.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        focusedDoc = false;
+        doc.activeElement = body;
+        h.password.dispatchEvent({ type: 'blur' });
+        win.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        assert.deepEqual(events, [], 'window blur alone does not emit field_blur');
+        focusedDoc = true;
+        win.dispatchEvent({ type: 'focus' });
+        flushRaf();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 2. blur fires while document.activeElement briefly still reports h.password, then settles to body before rAF.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        h.password.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        assert.deepEqual(events, [], 'microtask defers when activeElement is still h.password');
+        doc.activeElement = body;
+        flushRaf();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 3. visualViewport retracts to 699 after a suppressed blur left activeElement === body.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        focusedDoc = false;
+        doc.activeElement = body;
+        h.password.dispatchEvent({ type: 'blur' });
+        win.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        focusedDoc = true;
+        bridge.syncVisualViewport(h, 0, 699, 699);
+        flushRaf();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 4. visibilitychange returning from hidden when DOM focus left h.password.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        doc.hidden = true;
+        doc.dispatchEvent({ type: 'visibilitychange' });
+        doc.activeElement = body;
+        h.password.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        assert.deepEqual(events, []);
+        doc.hidden = false;
+        doc.dispatchEvent({ type: 'visibilitychange' });
+        flushRaf();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 5. No blur (DOM input stays active across keyboard open/retract) keeps focus and schedules 0 rAFs.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        const rafBefore = rafScheduled;
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        bridge.syncVisualViewport(h, 0, 699, 699);
+        assert.equal(rafScheduled, rafBefore, 'focused input across visualViewport resize schedules zero rAFs');
+        assert.deepEqual(events, []);
+    } finally {
+        bridge.destroy(h);
+        if (origRaf) Object.defineProperty(globalThis, 'requestAnimationFrame', origRaf);
+        else delete globalThis.requestAnimationFrame;
+        if (origCancel) Object.defineProperty(globalThis, 'cancelAnimationFrame', origCancel);
+        else delete globalThis.cancelAnimationFrame;
+    }
+});

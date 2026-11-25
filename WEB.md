@@ -258,7 +258,10 @@ in a multiline field. A completed touch tap focuses the editor synchronously;
 a pan scrolls instead, with momentum and a damped edge return. On iOS Safari the hidden input
 stays transparent (`opacity: 0`) so WebKit suppresses its native selection handles, callout bar
 and zoom-to-focus (WebKit r238146); by design, long-pressing a field shows Rune's own
-Cut/Copy/Paste/Select All menu rather than the native iOS callout bar.
+Cut/Copy/Paste/Select All menu rather than the native iOS callout bar. If iOS hides the
+software keyboard while leaving the hidden input as `document.activeElement` (for example with a
+hardware keyboard or iPad's keyboard-hide key), the field remains focused and keeps drawing its
+caret like a native iOS text field, and tapping it again re-presents the keyboard.
 
 Secure fields use an `<input type="password">` with `autocomplete="current-password"` and
 autocorrect, autocapitalize and spellcheck disabled. It is emptied after every input; the
