@@ -498,7 +498,8 @@ impl Tx {
     /// its display, which hides a custom titlebar's caption buttons (`Cx::chrome_insets`).
     /// Does nothing for overlays, macOS non-activating panels, and headless runs. When both
     /// `toggle_full_screen` and [`Self::set_full_screen`] run in one turn, the last call wins.
-    /// Read the confirmed OS state with [`crate::Cx::is_full_screen`].
+    /// Read the current full-screen state with [`crate::Cx::is_full_screen`] (flips at transition
+    /// start on macOS and on OS confirmation on Windows and Linux).
     pub fn toggle_full_screen(&mut self) {
         self.full_screen = Some(FullScreenRequest::Toggle);
     }
@@ -508,8 +509,9 @@ impl Tx {
     /// its display, on macOS a native full-screen Space. Does nothing for overlays, macOS
     /// non-activating panels, and headless runs, and is a no-op when the window is already in
     /// the requested state. When multiple calls to `set_full_screen` or
-    /// [`Self::toggle_full_screen`] run in one turn, the last call wins. Read the confirmed OS
-    /// state with [`crate::Cx::is_full_screen`].
+    /// [`Self::toggle_full_screen`] run in one turn, the last call wins. Read the current
+    /// full-screen state with [`crate::Cx::is_full_screen`] (flips at transition start on macOS
+    /// and on OS confirmation on Windows and Linux).
     ///
     /// ```
     /// # use rune::{el, Tx};

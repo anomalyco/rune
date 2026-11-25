@@ -40,6 +40,8 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
     let band_height = HEIGHT * ZOOMS[s.zoom];
     cx.titlebar_height(band_height);
     let insets = cx.chrome_insets();
+    let full_screen = cx.is_full_screen();
+    let inset = cx.titlebar_inset();
     let button = |key: &'static str, label: &'static str| row().key(key).px(10.0).h(28.0).radius(6.0).center_y()
         .fill(faint.alpha(0.2)).hover(faint.alpha(0.3)).press(faint.alpha(0.45)).role("button").label(label)
         .child(text(label).color(ink));
@@ -47,6 +49,8 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .pl(insets.leading + 12.0).pr(insets.trailing + 12.0).gap(8.0)
         .child(text("Custom titlebar").color(ink))
         .child(el().grow(1.0))
+        .child(button("full-screen", if full_screen { "Exit full screen" } else { "Full screen" })
+            .on_press_tx(move |_: &mut State, tx| tx.set_full_screen(!full_screen)))
         .child(button("language", if s.dutch { "NL" } else { "EN" }).on_press(|s: &mut State| {
             s.dutch = !s.dutch;
             apply_labels(s.dutch);
@@ -69,7 +73,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> El {
         .child(col().padding(24.0).gap(8.0)
             .child(text("Drag the band to move the window; double-click it to maximize; right-click it for the window menu.").color(ink).wrap())
             .child(note)
-            .child(line(format!("chrome insets: leading {:.0}, trailing {:.0}, height {:.0}", insets.leading, insets.trailing, insets.height)))
+            .child(line(format!("chrome insets: leading {:.0}, trailing {:.0}, height {:.0} | full screen: {}, titlebar inset: {:.0}", insets.leading, insets.trailing, insets.height, full_screen, inset)))
             .child(line(format!("scale {:.2}, theme presses {}", cx.env().scale, s.presses)))
             .child(line(format!(
                 "caption labels: {} / {} ({}) / {}",
