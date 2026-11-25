@@ -525,7 +525,7 @@ pub(super) fn copy_shifted(rt: &mut RuntimeCore, i: usize, o: usize, end: usize,
             let row_dy = rt.paint.row_dy[idx];
             cpinh.dy += row_dy;
             cpinh.snap.grow(row_dy);
-            let (full, base) = inh_keys(&cpinh);
+            let (full, base) = inh_keys_for(&rt.tree.nodes, has_sticky, &rt.scroll.sticky_frame, idx, &cpinh);
             ps.inh_base = base;
             full
         };
