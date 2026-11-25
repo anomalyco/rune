@@ -139,6 +139,7 @@ pub struct App<S: 'static> {
     pub(crate) windows: Vec<crate::AnyWindowSpec>,
     pub(crate) on_window: Option<OnWindow>,
     pub(crate) on_ready: Option<OnWindow>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) on_window_geometry: Option<crate::window::geometry::OnWindowGeometry<S>>,
     pub(crate) on_display_close: Option<OnDisplayClose>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
@@ -215,6 +216,7 @@ impl<S: 'static> App<S> {
             windows: Vec::new(),
             on_window: None,
             on_ready: None,
+            #[cfg(not(target_arch = "wasm32"))]
             on_window_geometry: None,
             on_display_close: None,
             on_frame_encoded: None,
