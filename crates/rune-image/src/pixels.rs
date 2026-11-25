@@ -611,13 +611,26 @@ impl ImageAtlas {
         };
         if w > max_side() || h > max_side() { return None; }
         let key = (pixels.id, level);
-        if self.slots.get(&key).is_some_and(|s| s.w != w || s.h != h || (s.relocate && !s.touched))
+        if self.slots.get(&key).is_some_and(|s| s.w != w || s.h != h)
             && let Some(old) = self.slots.remove(&key)
         {
             if old.touched {
                 self.deferred_this_frame.push((old.page, old.x, old.y, old.w));
             } else {
                 self.pages[old.page].free_rect(old.x, old.y, old.w);
+            }
+        } else if self.slots.get(&key).is_some_and(|s| s.relocate && !s.touched) {
+            if let Some((page, x, y)) = self.try_allocate_within(w, h, IMAGE_ATLAS_MAX_PAGES, true) {
+                if let Some(old) = self.slots.remove(&key) {
+                    self.pages[old.page].free_rect(old.x, old.y, old.w);
+                }
+                self.slots.insert(key, Slot {
+                    page, x, y, w, h, generation: 0, frame: 0,
+                    live: Arc::downgrade(&pixels.inner),
+                    shown: false, touched: false, last_frame: self.frame, relocate: false,
+                });
+            } else if let Some(slot) = self.slots.get_mut(&key) {
+                slot.relocate = false;
             }
         }
         if !self.slots.contains_key(&key) {
@@ -697,7 +710,9 @@ impl ImageAtlas {
             .chain(self.deferred_this_frame.iter().map(|&(p, ..)| p + 1))
             .max().unwrap_or(0);
         self.pages.truncate(keep);
-        if self.pages.len() > IMAGE_ATLAS_MAX_PAGES {
+        if self.pages.len() > IMAGE_ATLAS_MAX_PAGES
+            && self.pages[..IMAGE_ATLAS_MAX_PAGES].iter().any(ImagePage::has_free_space)
+        {
             for slot in self.slots.values_mut() {
                 if slot.page >= IMAGE_ATLAS_MAX_PAGES { slot.relocate = true; }
             }
@@ -754,46 +769,64 @@ impl ImageAtlas {
         }
     }
 
-    fn allocate(&mut self, w: u32, h: u32) -> (usize, u32, u32) {
-        for (i, page) in self.pages.iter_mut().enumerate() {
+    fn try_allocate_within(&mut self, w: u32, h: u32, max_pages: usize, reclaim_stale: bool) -> Option<(usize, u32, u32)> {
+        let limit = max_pages.min(self.pages.len());
+        for (i, page) in self.pages[..limit].iter_mut().enumerate() {
             if page.data.is_empty() { *page = ImagePage::new(w, h); }
-            if let Some((x, y)) = page.allocate(w, h) { return (i, x, y); }
+            if let Some((x, y)) = page.allocate(w, h) { return Some((i, x, y)); }
         }
         let is_shelf_req = w <= IMAGE_ATLAS_SIZE && h <= IMAGE_ATLAS_SIZE;
         // Full: start over an idle shelf page before growing.
-        if is_shelf_req && let Some(i) = self.pages.iter().enumerate().position(|(i, p)| {
+        if is_shelf_req && let Some(i) = self.pages[..limit].iter().enumerate().position(|(i, p)| {
             !p.shown && !p.touched && p.is_shelf() && !p.shelves.is_empty() && !self.page_pinned(i)
         }) {
             self.slots.retain(|_, s| s.page != i);
             let page = &mut self.pages[i];
             page.shelves.reset();
             let (x, y) = page.allocate(w, h).unwrap();
-            return (i, x, y);
+            return Some((i, x, y));
         }
+        if !reclaim_stale { return None; }
         // At or past the atlas bound: reclaim idle pages or stale unshown slots on shelf pages.
-        let need_bytes = ImagePage::initial_bytes(w, h);
-        if self.pages.len() >= IMAGE_ATLAS_MAX_PAGES || self.total_bytes().saturating_add(need_bytes) > IMAGE_ATLAS_MAX_BYTES {
-            if let Some(i) = self.pages.iter().enumerate().position(|(i, p)| !p.shown && !p.touched && !self.page_pinned(i)) {
-                self.slots.retain(|_, s| s.page != i);
-                self.pages[i] = ImagePage::new(w, h);
-                let (x, y) = self.pages[i].allocate(w, h).unwrap();
-                return (i, x, y);
-            }
-            if is_shelf_req {
-                let mut evictable: Vec<((u64, usize), bool, u64)> = self.slots.iter()
-                    .filter(|(_, s)| !s.touched && !s.shown && self.pages[s.page].is_shelf())
-                    .map(|(&k, s)| (k, s.live.strong_count() > 0, s.last_frame))
-                    .collect();
-                evictable.sort_by_key(|&(_, alive, last)| (alive, last));
-                for (key, _, _) in evictable {
-                    if let Some(s) = self.slots.remove(&key) {
-                        self.pages[s.page].free_rect(s.x, s.y, s.w);
-                        if let Some((x, y)) = self.pages[s.page].allocate(w, h) {
-                            return (s.page, x, y);
-                        }
+        if let Some(i) = self.pages[..limit].iter().enumerate().position(|(i, p)| !p.shown && !p.touched && !self.page_pinned(i)) {
+            self.slots.retain(|_, s| s.page != i);
+            self.pages[i] = ImagePage::new(w, h);
+            let (x, y) = self.pages[i].allocate(w, h).unwrap();
+            return Some((i, x, y));
+        }
+        if is_shelf_req && self.slots.values().any(|s| s.page < limit && !s.touched && !s.shown && self.pages[s.page].is_shelf()) {
+            let need_area = u64::from(w) * u64::from(h);
+            let max_area = u64::from(IMAGE_ATLAS_SIZE) * u64::from(IMAGE_ATLAS_SIZE);
+            let mut evictable: Vec<((u64, usize), bool, u64)> = self.slots.iter()
+                .filter(|(_, s)| s.page < limit && !s.touched && !s.shown && self.pages[s.page].is_shelf())
+                .filter(|(_, s)| {
+                    let pinned: u64 = self.slots.values()
+                        .filter(|o| o.page == s.page && (o.touched || o.shown))
+                        .map(|o| u64::from(o.w) * u64::from(o.h))
+                        .sum();
+                    pinned.saturating_add(need_area) <= max_area
+                })
+                .map(|(&k, s)| (k, s.live.strong_count() > 0, s.last_frame))
+                .collect();
+            evictable.sort_by_key(|&(_, alive, last)| (alive, last));
+            for (key, _, _) in evictable {
+                if let Some(s) = self.slots.remove(&key) {
+                    self.pages[s.page].free_rect(s.x, s.y, s.w);
+                    if let Some((x, y)) = self.pages[s.page].allocate(w, h) {
+                        return Some((s.page, x, y));
                     }
                 }
             }
+        }
+        None
+    }
+
+    fn allocate(&mut self, w: u32, h: u32) -> (usize, u32, u32) {
+        let need_bytes = ImagePage::initial_bytes(w, h);
+        let reclaim = self.pages.len() >= IMAGE_ATLAS_MAX_PAGES
+            || self.total_bytes().saturating_add(need_bytes) > IMAGE_ATLAS_MAX_BYTES;
+        if let Some(placed) = self.try_allocate_within(w, h, self.pages.len(), reclaim) {
+            return placed;
         }
         let mut page = ImagePage::new(w, h);
         let (x, y) = page.allocate(w, h).unwrap();
