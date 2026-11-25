@@ -20,6 +20,7 @@ mod inline_box_story;
 mod mount;
 mod pick;
 mod pointer_lock;
+mod positioned_text_story;
 mod reveal_fps_story;
 mod scroll_anchor_story;
 mod text_indent_story;
@@ -747,6 +748,7 @@ fn main() {
                 )
                 .story(haptics_story::story())
                 .story(text_indent_story::story())
+                .story(positioned_text_story::story())
                 .story(inline_box_story::story())
                 .story(emoji_family_story::story())
                 .story(reveal_fps_story::story())

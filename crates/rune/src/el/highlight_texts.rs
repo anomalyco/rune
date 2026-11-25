@@ -41,8 +41,8 @@ impl El {
         // A memo placeholder stands for a shared, cached subtree: leave it as it was cached.
         let shown = self.memo.is_none() && self.cold.input.is_none();
         if let Some(t) = self.text.as_mut().filter(|t| shown && !t.redacted && t.cold.live.is_none()) {
-            let found = f(&t.content);
-            let content = &t.content;
+            let found = f(t.content_str());
+            let content = t.content_str();
             let fits = |h: &crate::text::TextHighlight| {
                 let (a, b) = (h.start as usize, h.end as usize);
                 a < b && b <= content.len() && content.is_char_boundary(a) && content.is_char_boundary(b)

@@ -500,6 +500,11 @@ pub(in crate::runtime) fn lay_out_text(text: &mut TextSystem, n: &mut Node, w: f
 fn lay_out_text_inner(text: &mut TextSystem, n: &mut Node, w: f32, scale: f32, live: bool) {
     n.clear_tabular_layout();
     let Some(spec) = &n.text else { return };
+    if spec.positioned().is_some() {
+        n.text_layout = None;
+        n.elided = None;
+        return;
+    }
     // A cell of a run draws from the run's layout (and keeps it cached) instead of its own.
     let run = spec.cold.advance_in.as_ref().map(|(run, at)| (text.run_layout(run, spec.style, scale), *at));
     if let Some((r, _)) = run.filter(|(r, at)| r.x(*at).is_some()) {

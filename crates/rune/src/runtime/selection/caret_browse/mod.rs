@@ -24,7 +24,7 @@ pub(super) fn horiz_dist(x0: f32, x1: f32, x: f32) -> f32 {
 /// Non-bare pill byte ranges on `spec` (including the FSI/LRI/RLI..PDI isolate marks
 /// `apply_isolates` wraps around each pill), matching `TextEdit`'s atomic pill chips.
 pub(super) fn pill_ranges(spec: &crate::el::TextSpec) -> Vec<(usize, usize)> {
-    let s = spec.content.as_str();
+    let s = spec.content_str();
     spec.cold
         .pills
         .iter()
@@ -223,7 +223,7 @@ impl RuntimeCore {
             }
             fi
         };
-        let content = nodes[focus_i].text.as_ref()?.content.as_str();
+        let content = nodes[focus_i].text.as_ref()?.content_str();
         let byte = content.floor_char_boundary(sel.focus.min(content.len()));
         Some((focus_i, byte, self.edit.selectable.affinity))
     }
@@ -289,11 +289,18 @@ impl RuntimeCore {
         affinity: parley::Affinity,
     ) -> Option<[f32; 4]> {
         let n = &nodes[i];
-        let (spec, laid) = (n.text.as_ref()?, n.text_layout.as_ref()?);
-        let flow = laid.view();
-        let s = self.env.scale;
+        let spec = n.text.as_ref()?;
         let t = sticky::anchored_target(nodes, &self.scroll.scrolls, i, self.viewport);
         let y = t[1] + self.stack_row_dy(nodes, i);
+        if let Some(pt) = spec.positioned() {
+            let rect = [t[0], y, t[2], y + (t[3] - t[1])];
+            let tf = super::super::positioned::PositionedTransform::from_window_box(n, pt, rect, 1.0);
+            let c = pt.caret(byte)?;
+            return Some([tf.ox + c[0] * tf.sx, tf.oy + c[1] * tf.sy, 1.5, (c[3] * tf.sy).max(1.0)]);
+        }
+        let laid = n.text_layout.as_ref()?;
+        let flow = laid.view();
+        let s = self.env.scale;
         let (x0, x1) = (t[0] + n.inset[0], t[2] - n.inset[2]);
         let (y0, y1) = (y + n.inset[1], y + (t[3] - t[1]) - n.inset[3]);
         let ox = text_x(spec, x0, x1, text_width(flow.full_width()) / s, flow.flow());
@@ -320,7 +327,14 @@ impl RuntimeCore {
     /// Unscrolled root-space `[caret_x, caret_mid_y, line_h]` in points for `(i, byte, affinity)`.
     pub(super) fn caret_unscrolled_pos(&self, i: usize, byte: usize, affinity: parley::Affinity) -> Option<[f32; 3]> {
         let n = &self.tree.nodes[i];
-        let (spec, laid) = (n.text.as_ref()?, n.text_layout.as_ref()?);
+        let spec = n.text.as_ref()?;
+        if let Some(pt) = spec.positioned() {
+            let tf = super::super::positioned::PositionedTransform::from_window_box(n, pt, n.target, 1.0);
+            let c = pt.caret(byte)?;
+            let h = (c[3] * tf.sy).max(1.0);
+            return Some([tf.ox + c[0] * tf.sx, tf.oy + (c[1] + c[3] * 0.5) * tf.sy, h]);
+        }
+        let laid = n.text_layout.as_ref()?;
         let [ox, oy] = self.text_unscrolled_origin(i)?;
         let s = self.env.scale;
         let drawn_byte = n.elided.map_or(byte, |e| e.range(byte, byte).0);
@@ -334,6 +348,11 @@ impl RuntimeCore {
     pub(super) fn hit_unscrolled(&self, i: usize, x: f32, y: f32) -> (usize, parley::Affinity) {
         let n = &self.tree.nodes[i];
         let Some(spec) = n.text.as_ref() else { return (0, parley::Affinity::Downstream) };
+        if let Some(pt) = spec.positioned() {
+            let tf = super::super::positioned::PositionedTransform::from_window_box(n, pt, n.target, 1.0);
+            let Some([sx, sy]) = tf.to_source(x, y) else { return (0, parley::Affinity::Downstream) };
+            return (pt.hit(sx, sy).0, parley::Affinity::Downstream);
+        }
         let Some(laid) = n.text_layout.as_ref() else { return (0, parley::Affinity::Downstream) };
         let Some([ox, oy]) = self.text_unscrolled_origin(i) else { return (0, parley::Affinity::Downstream) };
         let s = self.env.scale;
@@ -346,8 +365,13 @@ impl RuntimeCore {
     pub(super) fn edge_hit_unscrolled(&self, i: usize, x: f32, first: bool) -> (usize, parley::Affinity) {
         let n = &self.tree.nodes[i];
         let Some(spec) = n.text.as_ref() else { return (0, parley::Affinity::Downstream) };
+        if let Some(pt) = spec.positioned() {
+            let tf = super::super::positioned::PositionedTransform::from_window_box(n, pt, n.target, 1.0);
+            let sx = if tf.sx > 1e-6 { (x - tf.ox) / tf.sx } else { 0.0 };
+            return (pt.edge_line_hit(sx, first), parley::Affinity::Downstream);
+        }
         let Some(laid) = n.text_layout.as_ref() else {
-            return (if first { 0 } else { spec.content.len() }, parley::Affinity::Downstream);
+            return (if first { 0 } else { spec.content_str().len() }, parley::Affinity::Downstream);
         };
         let Some([ox, _]) = self.text_unscrolled_origin(i) else {
             return (if first { 0 } else { spec.content.len() }, parley::Affinity::Downstream);

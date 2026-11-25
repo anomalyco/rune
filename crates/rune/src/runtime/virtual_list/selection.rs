@@ -122,8 +122,10 @@ fn walk_row_el<'a>(
     let mut had_child_text = false;
     if !inert && !selection_off && el.cold.input.is_none() && let Some(t) = &el.text && t.selectable && !t.redacted {
         let mut spec = TextSpec::clone(t);
-        spec.apply_isolates();
-        spec.apply_case();
+        if spec.positioned().is_none() {
+            spec.apply_isolates();
+            spec.apply_case();
+        }
         texts.push(OffscreenText {
             list_path: list_path.to_owned(),
             row_key: row_key.to_owned(),
@@ -162,7 +164,8 @@ pub(super) fn offscreen_piece(t: &OffscreenText, range: Range<usize>, base: Opti
         Some(b) => t.path.strip_prefix(b).and_then(|p| p.strip_prefix('/')).unwrap_or(&t.path).to_owned(),
         None => t.path.clone(),
     };
-    let len = t.spec.content.len();
+    let raw = t.spec.content_str();
+    let len = raw.len();
     let (full_a, full_b) = if t.spec.cold.uncopied.is_empty() {
         (0, len)
     } else {
@@ -170,7 +173,7 @@ pub(super) fn offscreen_piece(t: &OffscreenText, range: Range<usize>, base: Opti
     };
     let whole = !range.is_empty() && len > 0 && range.start <= full_a && range.end >= full_b;
     let text = t.spec.copy_slice(range.start as u32, range.end as u32).unwrap_or_default();
-    let content = t.spec.content.get(range.clone()).unwrap_or_default().to_owned();
+    let content = raw.get(range.clone()).unwrap_or_default().to_owned();
     SelectedText { path, key: t.key.clone(), range, len, whole, text, content }
 }
 
@@ -194,7 +197,7 @@ impl RuntimeCore {
     pub(crate) fn end_content(&self, end: EndRef) -> &str {
         match end {
             EndRef::Mounted(i) => self.content_of(i),
-            EndRef::Offscreen(vi, ti) => &self.offscreen_text(vi, ti).spec.content,
+            EndRef::Offscreen(vi, ti) => self.offscreen_text(vi, ti).spec.content_str(),
         }
     }
 
@@ -454,7 +457,7 @@ impl RuntimeCore {
                 let (o0, o1) = (texts[ti0].order_in_row, texts[ti1].order_in_row);
                 for t in texts {
                     if &t.row_key == row_key && t.order_in_row > o0 && t.order_in_row < o1 && t.group_path.as_deref() == Some(g_path) {
-                        (&t.path, t.spec.content.as_str()).hash(&mut hasher);
+                        (&t.path, t.spec.content_str()).hash(&mut hasher);
                     }
                 }
             }

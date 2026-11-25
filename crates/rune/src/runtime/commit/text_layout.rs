@@ -450,6 +450,13 @@ pub(in crate::runtime) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId,
             let Some(spec) = nodes[i].text.as_ref() else {
                 return picture_size(known, avail, nodes[i].cold.get().and_then(|c| c.pixel_aspect).unwrap_or(0.0));
             };
+            if let Some(pt) = spec.positioned() {
+                let [iw, ih] = pt.view_box_size().unwrap_or_else(|| {
+                    let [bx, by, bw, bh] = pt.bounds();
+                    [(bx + bw).max(0.0), (by + bh).max(0.0)]
+                });
+                return Size { width: known.width.unwrap_or(iw), height: known.height.unwrap_or(ih) };
+            }
             // `known` is the border box; `avail` is already the content box (known or styled
             // size, clamped, less padding and border), which is what `lay_out_text` wraps at.
             let w = if spec.wrap {

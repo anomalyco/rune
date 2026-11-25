@@ -537,13 +537,20 @@ impl PositionedText {
     /// line (skipping empty rects), never bridging across line breaks or large column/tab gaps.
     #[doc(hidden)]
     pub fn range_boxes(&self, a: usize, b: usize) -> Vec<[f32; 4]> {
+        let mut out = Vec::new();
+        self.for_each_range_box(a, b, |r| out.push(r));
+        out
+    }
+
+    /// Allocation-free visitor for [`Self::range_boxes`], used on hot paint and hit paths.
+    #[doc(hidden)]
+    pub fn for_each_range_box(&self, a: usize, b: usize, mut f: impl FnMut([f32; 4])) {
         let len = self.inner.text.len();
         let a = self.inner.text.floor_char_boundary(a.min(len));
         let b = self.inner.text.ceil_char_boundary(b.min(len));
-        if a >= b || self.inner.lines.is_empty() { return Vec::new(); }
+        if a >= b || self.inner.lines.is_empty() { return; }
         let (lines, rects, char_bytes) = (&self.inner.lines, &self.inner.rects, &self.inner.char_bytes);
         let first_line = lines.partition_point(|l| (l.byte_end as usize) <= a);
-        let mut out = Vec::new();
 
         for line in &lines[first_line..] {
             if (line.byte_start as usize) >= b { break; }
@@ -566,17 +573,16 @@ impl PositionedText {
                         if v_overlap && h_gap <= max_h * 2.0 {
                             cur = Some([cx0.min(rx0), cy0.min(ry0), cx1.max(rx1), cy1.max(ry1)]);
                         } else {
-                            out.push([cx0, cy0, (cx1 - cx0).max(0.0), (cy1 - cy0).max(0.0)]);
+                            f([cx0, cy0, (cx1 - cx0).max(0.0), (cy1 - cy0).max(0.0)]);
                             cur = Some([rx0, ry0, rx1, ry1]);
                         }
                     }
                 }
             }
             if let Some([cx0, cy0, cx1, cy1]) = cur {
-                out.push([cx0, cy0, (cx1 - cx0).max(0.0), (cy1 - cy0).max(0.0)]);
+                f([cx0, cy0, (cx1 - cx0).max(0.0), (cy1 - cy0).max(0.0)]);
             }
         }
-        out
     }
 
     /// Caret vertical bar `[x, y, 0.0, h]` in source coordinates at UTF-8 byte offset `byte`,

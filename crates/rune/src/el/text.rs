@@ -897,6 +897,12 @@ impl El {
             if on && self.handlers.cursor.is_none() {
                 self.handlers.cursor = Some(Cursor::Text);
                 t.flags.set(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR, true);
+            } else if !on
+                && t.flags.has(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR)
+                && self.handlers.cursor == Some(Cursor::Text)
+            {
+                self.handlers.cursor = None;
+                t.flags.set(crate::el::text_spec::TextFlags::SELECTABLE_CURSOR, false);
             }
         }
         self

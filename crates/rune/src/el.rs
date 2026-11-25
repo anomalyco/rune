@@ -106,6 +106,36 @@ pub fn text(content: impl Into<String>) -> El {
     e
 }
 
+/// Transparent glyph-less text layer backed by app-placed character boxes
+/// ([`PositionedText`](crate::PositionedText)), for selectable and copyable text over an
+/// externally painted page bitmap (such as a PDF).
+///
+/// Defaults to [`El::selectable`](El::selectable)`(true)` with [`Cursor::Text`]; draws zero
+/// glyphs and paints only selection highlights, [`El::caret_browsing`] carets,
+/// [`El::text_highlight`] / [`El::highlight_texts`], and [`Cx::mark_texts`](crate::Cx::mark_texts).
+/// Participates in [`El::selection_group`], plain and HTML copy, [`Cx::selection_rects`](crate::Cx::selection_rects),
+/// [`Runtime::text_offset_at`](crate::Runtime::text_offset_at), and inline [`Link`](crate::Link) spans.
+///
+/// ```
+/// use rune::{PositionedText, col, el, positioned_text};
+///
+/// let page = PositionedText::new(
+///     "Hi\n",
+///     vec![[10.0, 20.0, 8.0, 12.0], [18.0, 20.0, 4.0, 12.0], [0.0; 4]],
+/// )
+/// .view_box(612.0, 792.0);
+/// let _view = col().selection_group(true).child(
+///     el().size(612.0, 792.0).child(positioned_text(&page).w_full().h_full()),
+/// );
+/// ```
+pub fn positioned_text(text: &crate::text::PositionedText) -> El {
+    let mut e = base(FlexDirection::Row);
+    e.role = RoleTag::TEXT;
+    e.text = Some(crate::cold::SharedBox::new(TextSpec::new_positioned(text.clone())));
+    e.handlers.cursor = Some(Cursor::Text);
+    e
+}
+
 pub(crate) type EditFn = Rc<dyn for<'a> Fn(crate::states::States<'a>) -> &'a mut TextEdit>;
 
 /// A growth stack (the session timeline): children are rows whose heights ease on `spring`

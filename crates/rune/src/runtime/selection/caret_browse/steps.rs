@@ -80,7 +80,7 @@ impl RuntimeCore {
         let Some(spec) = n.text.as_ref() else {
             return StepOut::Mounted(i, focus_byte, affinity);
         };
-        let content = spec.content.as_str();
+        let content = spec.content_str();
         let pills = pill_ranges(spec);
 
         if let Some(laid) = n.text_layout.as_ref() {
@@ -156,7 +156,7 @@ impl RuntimeCore {
                     && let Some(next_spec) = self.tree.nodes[next_node].text.as_ref()
                 {
                     let next_pills = pill_ranges(next_spec);
-                    crate::edit::next_word_in(&next_spec.content, 0, &next_pills)
+                    crate::edit::next_word_in(next_spec.content_str(), 0, &next_pills)
                 } else {
                     0
                 };
@@ -185,10 +185,10 @@ impl RuntimeCore {
             let Some(prev_spec) = self.tree.nodes[prev_node].text.as_ref() else {
                 return StepOut::Mounted(prev_node, 0, parley::Affinity::Downstream);
             };
-            let prev_len = prev_spec.content.len();
+            let prev_len = prev_spec.content_str().len();
             let prev_byte = if word {
                 let prev_pills = pill_ranges(prev_spec);
-                crate::edit::prev_word_in(&prev_spec.content, prev_len, &prev_pills)
+                crate::edit::prev_word_in(prev_spec.content_str(), prev_len, &prev_pills)
             } else {
                 prev_len
             };
@@ -201,6 +201,9 @@ impl RuntimeCore {
     pub(super) fn step_line_edge(&self, i: usize, byte: usize, affinity: parley::Affinity, end: bool) -> (usize, parley::Affinity) {
         let n = &self.tree.nodes[i];
         let content = self.content_of(i);
+        if let Some(pt) = n.text.as_deref().and_then(crate::el::TextSpec::positioned) {
+            return (pt.line_edge(byte, end), parley::Affinity::Downstream);
+        }
         if let Some(laid) = n.text_layout.as_ref() {
             let drawn = n.elided.map_or(byte, |e| e.range(byte, byte).0);
             let (edge, aff) = laid.view().line_edge_with_affinity(drawn, affinity, end);
@@ -265,6 +268,13 @@ impl RuntimeCore {
         let i = texts[focus_pos];
         let n = &self.tree.nodes[i];
         let content = self.content_of(i);
+        if let Some(pt) = n.text.as_deref().and_then(crate::el::TextSpec::positioned) {
+            let tf = super::super::positioned::PositionedTransform::from_window_box(n, pt, n.target, 1.0);
+            let gx = (tf.sx > 1e-6).then(|| (goal_x - tf.ox) / tf.sx);
+            if let Some((next_byte, _)) = pt.move_line_strict(focus_byte, down, gx) {
+                return StepOut::Mounted(i, next_byte, parley::Affinity::Downstream);
+            }
+        }
         if let (Some(laid), Some([ox, _])) = (n.text_layout.as_ref(), self.text_unscrolled_origin(i)) {
             let s = self.env.scale;
             let drawn = n.elided.map_or(focus_byte, |e| e.range(focus_byte, focus_byte).0);
