@@ -426,6 +426,18 @@ impl Tx {
         self.file_dialog(FileDialogKind::Save, options, on_answer);
     }
 
+    /// State-independent Save dialog for Rune's built-in image context menu.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn save_file_any(&mut self, options: FileDialogOptions, on_answer: impl FnOnce(FileDialogResult, &mut Tx) + 'static) {
+        let on_answer: AnswerFn = Box::new(move |_, result, tx| on_answer(result.map(DialogAnswer::into_single), tx));
+        self.file_dialogs.push(Call(Rc::new(RefCell::new(Some(Request {
+            kind: FileDialogKind::Save,
+            multiple: false,
+            options,
+            on_answer,
+        })))));
+    }
+
     /// [`Tx::open_file`] for a folder: an Open dialog that picks an existing folder, as an app
     /// opening a project or choosing where exports go. `options`' title and directory apply;
     /// its filters and file name don't. A script answers it as it does a file dialog.

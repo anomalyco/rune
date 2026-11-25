@@ -54,11 +54,15 @@ macos-background-cursor = []
 windows-system-material = [
     "windows/Foundation",
     "windows/Foundation_Numerics",
+    "windows/Graphics_Effects",
     "windows/System",
     "windows/UI_Composition",
     "windows/UI_Composition_Desktop",
     "windows/UI_ViewManagement",
+    "windows/Win32_Graphics_Direct2D",
+    "windows/Win32_Graphics_Direct2D_Common",
     "windows/Win32_System_WinRT_Composition",
+    "windows/Win32_System_WinRT_Graphics_Direct2D",
 ]
 # macOS: play Ogg (Vorbis, Opus) and WebM/Matroska audio, which AVFoundation can't read, by
 # decoding it in Rust (symphonia, opuscule) and handing AVPlayer the PCM. Off, those clips

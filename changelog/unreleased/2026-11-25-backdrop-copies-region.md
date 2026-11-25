@@ -1,0 +1,1 @@
+- Backdrop blur: the pooled copies of what is below a blurred element hold the frame's blurred regions instead of the whole window (one per target format; an effect that reads what is below it still gets a copy of the whole target). A frosted pill in a 2560x1440 window kept 43 MB of window-sized copies while it showed; it now keeps a copy of its own region.

@@ -4,6 +4,7 @@ use super::*;
 pub(super) mod caret;
 pub(super) mod click;
 pub(super) mod field_lines;
+pub(crate) mod image_menu;
 mod link_decos;
 pub(crate) mod link_menu;
 pub(super) mod links;

@@ -3,8 +3,8 @@
 
 use std::sync::Arc;
 
-use rune::{El, Image, ImageCache, SurfaceFit, Waker, col, el, row, text};
-use rune_kit::{Badge, BadgeVariant, Kit, SegmentedControl};
+use rune::{El, Image, ImageCache, ImageMenu, SurfaceFit, Waker, col, el, row, text};
+use rune_kit::{Badge, BadgeVariant, Kit, Markdown, SegmentedControl};
 
 use crate::G;
 
@@ -196,6 +196,34 @@ pub(super) fn decode(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
                 )),
         )
         .child(svg_row)
+        .child(
+            col()
+                .padding(12.0)
+                .gap(6.0)
+                .radius(k.radius.md)
+                .fill(c.surface_base)
+                .border(1.0, c.border_weak)
+                .child(text("Opt-in image context menu (Markdown::image_frame + El::image_menu)").font(k.ty.ui_medium).color(c.text_strong))
+                .child(
+                    text("Right-click the Markdown image below for Save Image As… (verbatim SVG), Copy Image, and Copy Image Address.")
+                        .font(k.ty.small)
+                        .color(c.text_weak),
+                )
+                .child({
+                    let badge_img = demo.svg_default.clone();
+                    let badge_bytes: Arc<[u8]> = Arc::from(BADGE_SVG);
+                    Markdown::new("![Demo SVG badge](https://rune.dev/assets/badge.svg)")
+                        .images(move |_| badge_img.clone())
+                        .image_frame(move |el, frame| {
+                            el.image_menu(
+                                ImageMenu::new(frame.image)
+                                    .save_bytes(badge_bytes.clone())
+                                    .address(frame.src),
+                            )
+                        })
+                        .build(k)
+                }),
+        )
 }
 
 fn image_card(

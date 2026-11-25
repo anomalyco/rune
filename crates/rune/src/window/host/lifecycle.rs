@@ -981,7 +981,7 @@ impl Host {
         }
         self.win = None;
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
-        self.app.rt_mut().paint.set_native_materials(false);
+        self.app.rt_mut().paint.set_windows_acrylic_materials(false);
         #[cfg(target_os = "macos")]
         self.frame_presented.reset();
         self.native_handle.native.ready.store(false, Ordering::Release);

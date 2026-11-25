@@ -39,7 +39,7 @@ pub(crate) mod web_file;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::tiff_to_png;
 pub use content::{ClipboardContent, ClipboardImage, CopyImageError, MAX_IMAGE_BYTES};
-use content::valid_image_size;
+pub(crate) use content::valid_image_size;
 pub use html::sanitize_html;
 pub use secret::{SecretCopy, SecretState};
 pub use web_file::{MAX_WEB_FILES, WebFile};
@@ -115,6 +115,32 @@ impl ClipboardWrite {
     }
     #[cfg(target_arch = "wasm32")]
     fn has_pending_image(&self) -> bool { self.image.is_some() }
+    /// Copies mip-0 or straight RGBA bytes directly into a `Uint8Array` for off-main-thread
+    /// un-premultiplication and PNG encoding in a Web Worker, avoiding per-pixel work on the UI thread.
+    #[cfg(target_arch = "wasm32")]
+    fn extract_web_pixels(&mut self) -> Result<(u32, u32, js_sys::Uint8Array, bool), CopyImageError> {
+        let Some(pending) = self.image.take() else {
+            return Err(CopyImageError::NotReady);
+        };
+        let pack = |cp: rune_image::CopyPixels<'_>| -> Result<(u32, u32, js_sys::Uint8Array, bool), CopyImageError> {
+            let (w, h, slice, premul) = match &cp {
+                rune_image::CopyPixels::Straight { width, height, bytes } => (*width, *height, bytes.as_ref(), false),
+                rune_image::CopyPixels::PremulMip0 { width, height, bytes } => (*width, *height, *bytes, true),
+            };
+            if !valid_image_size(w, h) { return Err(CopyImageError::TooLarge); }
+            Ok((w, h, js_sys::Uint8Array::from(slice), premul))
+        };
+        match pending {
+            PendingImage::Image(image) => {
+                if let Some(err) = image.error() { return Err(CopyImageError::DecodeFailed(err.clone())); }
+                if !image.is_ready() { return Err(CopyImageError::NotReady); }
+                image.with_copy_pixels(pack).unwrap_or(Err(CopyImageError::NotReady))
+            }
+            PendingImage::Pixels(pixels) => {
+                pixels.with_copy_pixels(pack).unwrap_or(Err(CopyImageError::NotReady))
+            }
+        }
+    }
     pub(crate) fn set_copy_image_id(&mut self, id: u64) { self.copy_image_id = Some(id); }
     pub(crate) fn take_copy_image_id(&mut self) -> Option<u64> { self.copy_image_id.take() }
     fn copy_image_id(&self) -> Option<u64> { self.copy_image_id }

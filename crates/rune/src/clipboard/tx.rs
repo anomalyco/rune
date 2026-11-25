@@ -59,8 +59,11 @@ impl Tx {
     }
 
     /// Copy an image an [`ImageCache`](crate::ImageCache) decoded as PNG, encoded off the event
-    /// thread on the clipboard worker (on the web, encoded off the input turn inside a
-    /// `ClipboardItem` `Promise<Blob>` created during the user gesture), with no second decode.
+    /// thread on the clipboard worker (on the web, encoded off the main thread in a Web Worker
+    /// over `CompressionStream("deflate")` inside a `ClipboardItem` `Promise<Blob>` created
+    /// during the user gesture—Chrome 80+, Firefox 113+, Safari 16.4+; time-sliced async
+    /// `CompressionStream` if CSP blocks `blob:` workers; synchronous Rust fallback on older
+    /// browsers without `CompressionStream`), with no second decode.
     ///
     /// Copies every format the cache draws: PNG, JPEG (EXIF-oriented, ICC converted to sRGB),
     /// WebP and GIF (animated images copy frame 0, not the currently displayed frame), AVIF
@@ -106,6 +109,17 @@ impl Tx {
         let f: CopyImageFn = Box::new(move |s, result, tx| {
             if let Some(s) = s.cast::<S>() { on_result(s, result, tx); }
         });
+        let cb = CopyImageCallback(Rc::new(std::cell::Cell::new(Some(f))));
+        self.set_copy(crate::ClipboardWrite::image(image.clone()), Some(cb));
+    }
+
+    /// State-independent `copy_image_then`, for Rune's built-in image context menu.
+    pub(crate) fn copy_image_any(
+        &mut self,
+        image: &crate::Image,
+        on_result: impl FnOnce(Result<(), crate::CopyImageError>, &mut Tx) + 'static,
+    ) {
+        let f: CopyImageFn = Box::new(move |_, result, tx| on_result(result, tx));
         let cb = CopyImageCallback(Rc::new(std::cell::Cell::new(Some(f))));
         self.set_copy(crate::ClipboardWrite::image(image.clone()), Some(cb));
     }

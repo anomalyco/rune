@@ -175,7 +175,7 @@ impl AnyHost for OverlayHost {
         if let Some(live) = self.core.surface.live_mut() {
             let redraw = live.materials.on_policy_changed(effects, live.handover.as_mut());
             let now_native = live.materials.native();
-            self.app.rt_mut().paint.set_native_materials(now_native);
+            self.app.rt_mut().paint.set_windows_acrylic_materials(now_native);
             if redraw || self.app.rt().stale() {
                 self.core.dirty = true;
                 if self.core.presence.shown()

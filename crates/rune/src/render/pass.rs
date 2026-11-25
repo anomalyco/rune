@@ -6,7 +6,14 @@ pub(super) struct Backdrop {
     pub(super) format: wgpu::TextureFormat,
     pub(super) texture: wgpu::Texture,
     pub(super) view: wgpu::TextureView,
+    /// Where its first texel sits in the window, in device pixels: `[0, 0]` for a copy of the
+    /// whole target, the corner of the frame's blurred regions for one that holds only those.
+    pub(super) origin: [u32; 2],
 }
+
+/// A backdrop that holds only blurred regions is sized in these steps, so a region that grows or
+/// moves by a few pixels makes no texture.
+pub(super) const BACKDROP_STEP: u32 = 64;
 
 /// The pass a frame records into. Only a pass the renderer opened itself can end mid-frame
 /// (`split`): the caller's own `draw_range` pass has no encoder to copy its target and re-open it.
@@ -191,14 +198,15 @@ impl<'a, 'p> ActivePass<'a, 'p> {
                 (src_x, src_y, dst_x, dst_y, copy_w, copy_h)
             }
             Some(r) => {
-                let span = |lo: f32, hi: f32, o: f32, src: u32, dst: u32| {
-                    let lo = lo.floor().max(o.ceil()).max(0.0);
-                    let hi = hi.ceil().min(o + src as f32).min(dst as f32);
+                // The backdrop covers the window from `at` for `dst` pixels.
+                let span = |lo: f32, hi: f32, o: f32, src: u32, at: u32, dst: u32| {
+                    let lo = lo.floor().max(o.ceil()).max(at as f32);
+                    let hi = hi.ceil().min(o + src as f32).min((at + dst) as f32);
                     (lo, (hi - lo).max(0.0) as u32)
                 };
-                let (x, w) = span(r[0], r[2], origin[0], size[0].min(src_tex.width()), vw);
-                let (y, h) = span(r[1], r[3], origin[1], size[1].min(src_tex.height()), vh);
-                ((x - origin[0].ceil()) as u32, (y - origin[1].ceil()) as u32, x as u32, y as u32, w, h)
+                let (x, w) = span(r[0], r[2], origin[0], size[0].min(src_tex.width()), bd.origin[0], vw);
+                let (y, h) = span(r[1], r[3], origin[1], size[1].min(src_tex.height()), bd.origin[1], vh);
+                ((x - origin[0].ceil()) as u32, (y - origin[1].ceil()) as u32, x as u32 - bd.origin[0], y as u32 - bd.origin[1], w, h)
             }
         };
         if copy_w > 0 && copy_h > 0 {
@@ -265,13 +273,16 @@ impl<'p> std::ops::DerefMut for ActivePass<'_, 'p> {
 }
 
 impl Renderer {
-    pub(super) fn ensure_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, (width, height): (u32, u32)) {
-        let (width, height) = (width.max(1), height.max(1));
-        if let Some(b) = self.backdrops.iter().find(|b| b.format == format)
-            && b.texture.width() == width && b.texture.height() == height
+    /// The pooled backdrop of `format` sits at `origin` in the window and is `size` device
+    /// pixels (`Renderer::backdrop_frame`): kept when it has that size, made again otherwise.
+    pub(super) fn ensure_backdrop(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat, origin: [u32; 2], size: [u32; 2]) {
+        if let Some(b) = self.backdrops.iter_mut().find(|b| b.format == format)
+            && [b.texture.width(), b.texture.height()] == size
         {
+            b.origin = origin;
             return;
         }
+        let (width, height) = (size[0].max(1), size[1].max(1));
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("effect backdrop"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -285,9 +296,9 @@ impl Renderer {
         let view = texture.create_view(&Default::default());
         if let Some(blur) = &mut self.backdrop_blur { blur.bind_backdrop(device, format, &view); }
         if let Some(b) = self.backdrops.iter_mut().find(|b| b.format == format) {
-            *b = Backdrop { format, texture, view };
+            *b = Backdrop { format, texture, view, origin };
         } else {
-            self.backdrops.push(Backdrop { format, texture, view });
+            self.backdrops.push(Backdrop { format, texture, view, origin });
         }
     }
 }

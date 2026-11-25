@@ -239,14 +239,8 @@ fn overlay_pill_view(s: &OverlayPill, cx: &mut Cx<OverlayPill>) -> El {
     let (w, h, r) = if s.expanded { (420.0, 96.0, 28.0) } else { (220.0, 48.0, 24.0) };
     let label = if s.expanded { "Expanded HUD pill (300 ms spring)" } else { "Dynamic pill" };
     let fg = if cx.system_dark() { Color::WHITE } else { Color { r: 0.08, g: 0.08, b: 0.1, a: 1.0 } };
-    let fallback = if cx.system_dark() {
-        Color { r: 0.12, g: 0.12, b: 0.14, a: 0.92 }
-    } else {
-        Color { r: 0.94, g: 0.94, b: 0.96, a: 0.92 }
-    };
     col().key("overlay-root").w_full().h_full().items_center().pt(24.0).child(
         row().key("overlay-pill").size(w, h).radius(r).px(20.0).center().clip_soft(0.0)
-            .fill(fallback)
             .border(1.0, fg.alpha(0.22))
             .shadow(10.0, 28.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.32 })
             .system_material(s.material)

@@ -216,8 +216,10 @@ impl Host {
         self.frame_presented.reset();
         self.gpu = None;
         self.app.release_compositor_gpu();
-        #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+        #[cfg(any(test, target_os = "macos"))]
         self.app.rt_mut().paint.set_native_materials(false);
+        #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+        self.app.rt_mut().paint.set_windows_acrylic_materials(false);
 
         // Cancel active input state (`wind_down` without hiding the window or changing `life`).
         self.app.rt_mut().keys_lost();

@@ -215,36 +215,32 @@ impl ClipKind {
     }
 }
 
-/// Optional subtle tint visual placed over `CreateHostBackdropBrush` (`RUNE_WIN_MATERIAL_TINT`).
+/// Windows 11 backdrop brush / tint mode (`RUNE_WIN_MATERIAL_TINT`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum TintMode {
-    /// Raw `CreateHostBackdropBrush()` with no extra tint layer.
+    /// Microsoft's Windows 11 Acrylic Luminosity + Color `CompositionEffectBrush` (default).
+    /// Degrades gracefully to [`Self::Flat`] if `CreateEffectFactory` fails at runtime.
     #[default]
-    None,
-    /// Subtle light/dark neutral tint child visual for readability comparison.
-    Subtle,
+    Acrylic,
+    /// WCAG >=4.5:1 flat-tint `CompositionColorBrush` child visual over `HostBackdropBrush`
+    /// (diagnostic comparison and graceful fallback when `CreateEffectFactory` fails).
+    Flat,
+    /// Raw `CreateHostBackdropBrush()` with no Acrylic effect or tint layer (diagnostics).
+    Raw,
 }
 
 impl TintMode {
     pub(crate) fn parse(value: Option<&str>) -> Self {
         match value.map(str::trim) {
-            Some("subtle") => Self::Subtle,
-            _ => Self::None,
+            Some("flat" | "subtle") => Self::Flat,
+            Some("raw" | "none") => Self::Raw,
+            _ => Self::Acrylic,
         }
     }
 
     #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
     pub(crate) fn from_env() -> Self {
         Self::parse(rune_core::env::var("RUNE_WIN_MATERIAL_TINT").as_deref())
-    }
-}
-
-/// ARGB tint color for `TintMode::Subtle`, or `None` for `TintMode::None`.
-pub(crate) const fn tint_color(mode: TintMode, dark: bool) -> Option<[u8; 4]> {
-    match (mode, dark) {
-        (TintMode::None, _) => None,
-        (TintMode::Subtle, true) => Some([0x38, 0x20, 0x20, 0x22]),
-        (TintMode::Subtle, false) => Some([0x48, 0xFC, 0xFC, 0xFC]),
     }
 }
 
@@ -274,13 +270,22 @@ pub(crate) struct VisualSpec {
     pub opacity: f32,
     /// Active clip implementation (`Rectangle` or `Geometric`).
     pub clip: ClipKind,
-    /// Optional `[a, r, g, b]` tint visual color.
-    pub tint: Option<[u8; 4]>,
+    /// Element's requested `SystemMaterial` (selects the Windows 11 Acrylic recipe).
+    pub material: SystemMaterial,
+    /// Active dark theme flag (selects dark vs light Acrylic / flat-tint recipe).
+    pub dark: bool,
+    /// Active brush/tint mode (`Acrylic`, `Flat`, or `Raw`).
+    pub tint_mode: TintMode,
 }
 
 impl VisualSpec {
     /// Converts one `MaterialDraw` (already in physical pixels) into a `VisualSpec`.
-    pub(crate) fn from_draw(draw: MaterialDraw, clip: ClipKind, tint: Option<[u8; 4]>) -> Self {
+    pub(crate) fn from_draw(
+        draw: MaterialDraw,
+        clip: ClipKind,
+        tint_mode: TintMode,
+        dark: bool,
+    ) -> Self {
         let w = draw.rect[2].max(0.0);
         let h = draw.rect[3].max(0.0);
         let max_r = w.min(h) * 0.5;
@@ -292,7 +297,9 @@ impl VisualSpec {
             radius,
             opacity,
             clip,
-            tint,
+            material: draw.material,
+            dark,
+            tint_mode,
         }
     }
 }
@@ -584,7 +591,6 @@ impl Controller {
         let assigned = assign(&views, &wanted);
         let mut taken = vec![false; self.slots.len()];
         let mut changed = false;
-        let tint = tint_color(self.tint, dark);
 
         for (draw, (at, &(material, id))) in draws.iter().zip(assigned.into_iter().zip(&wanted)) {
             let k = match at {
@@ -609,7 +615,7 @@ impl Controller {
             taken[k] = true;
             let slot = &mut self.slots[k];
             slot.owner = Some(id);
-            let spec = VisualSpec::from_draw(*draw, self.clip, tint);
+            let spec = VisualSpec::from_draw(*draw, self.clip, self.tint, dark);
             if slot.last_spec != Some(spec) {
                 if let Err(err) = seam.update_visual(slot.id, spec) {
                     self.rollback_and_latch(hwnd, &err, seam);
@@ -719,6 +725,7 @@ impl Controller {
     }
 }
 
+pub(crate) mod acrylic;
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 mod policy;
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
@@ -729,5 +736,7 @@ pub(crate) use policy::{current_policy, notify_wm_setting_change, set_policy_wak
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
 pub(crate) use real::Materials;
 
+#[cfg(test)]
+mod acrylic_tests;
 #[cfg(test)]
 mod tests;

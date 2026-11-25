@@ -199,9 +199,13 @@ impl FrameHost for OverlayFrame<'_> {
     fn step_quiet(&mut self) -> StepInfo {
         let now = crate::time::now();
         self.now = Some(now);
-        #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+        #[cfg(target_os = "macos")]
         if let Some(live) = self.core.surface.live() {
             self.app.rt_mut().paint.set_native_materials(live.materials.native());
+        }
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        if let Some(live) = self.core.surface.live() {
+            self.app.rt_mut().paint.set_windows_acrylic_materials(live.materials.native());
         }
         let (animating, dt) = self.app.clock_advance(&mut self.core.clock, now, false);
         StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: None }
@@ -275,9 +279,13 @@ impl FrameHost for OverlayFrame<'_> {
         let frame_time = now;
         #[cfg(target_os = "macos")]
         let frame_time = self.target.unwrap_or(now);
-        #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+        #[cfg(target_os = "macos")]
         if let Some(live) = self.core.surface.live() {
             self.app.rt_mut().paint.set_native_materials(live.materials.native());
+        }
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        if let Some(live) = self.core.surface.live() {
+            self.app.rt_mut().paint.set_windows_acrylic_materials(live.materials.native());
         }
         let (animating, dt) = if !self.prewarm && frame::rests(self.app, self.core.runtime_idle, self.core.dirty) {
             frame::rest(self.app, &mut self.core.clock, frame_time)
@@ -319,7 +327,7 @@ impl FrameHost for OverlayFrame<'_> {
             self.materials_checked = true;
             let device_type = self.core.gpu.as_ref().map(|gpu| gpu.adapter.get_info().device_type);
             let window_backdrop = self.app.rt().window_backdrop();
-            let found = !self.app.rt().paint.materials().is_empty();
+            let found = !self.app.rt().paint.windows_material_draws().is_empty();
             let high_contrast = self.app.rt().system_contrast().is_some();
             if let Some(live) = self.core.surface.live_mut()
                 && (found || live.materials.native())
@@ -359,11 +367,18 @@ impl FrameHost for OverlayFrame<'_> {
             #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
             ReacquireReason::NativeMaterials => {
                 // Rebuild with the updated native-materials state into a replacement drawable.
-                #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
-                let native = self.core.surface.live().is_some_and(|l| l.materials.native());
+                #[cfg(target_os = "macos")]
+                {
+                    let native = self.core.surface.live().is_some_and(|l| l.materials.native());
+                    self.app.rt_mut().paint.set_native_materials(native);
+                }
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                {
+                    let native = self.core.surface.live().is_some_and(|l| l.materials.native());
+                    self.app.rt_mut().paint.set_windows_acrylic_materials(native);
+                }
                 #[cfg(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))))]
-                let native = true;
-                self.app.rt_mut().paint.set_native_materials(native);
+                self.app.rt_mut().paint.set_native_materials(true);
                 let more = self.app.frame(0.0);
                 info.runtime_animating |= more;
                 info.animating |= more;
@@ -488,7 +503,7 @@ impl FrameHost for OverlayFrame<'_> {
         }
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
         if !materials_ok {
-            self.app.rt_mut().paint.set_native_materials(false);
+            self.app.rt_mut().paint.set_windows_acrylic_materials(false);
             self.core.dirty = true;
         }
         #[cfg(not(all(target_os = "windows", feature = "windows-system-material")))]

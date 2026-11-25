@@ -394,6 +394,7 @@ impl BackdropBlur {
         }
     }
 
+
     pub(super) fn ensure_composite(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         ensure_composite_in(device, &self.composite_layout, &mut self.composite, &mut self.composite_precompiled, &mut self.composites, format);
     }
@@ -522,7 +523,11 @@ impl Renderer {
         blur.ensure_composite(device, self.format);
         for (format, _) in &self.extra { blur.ensure_composite(device, *format); }
         if self.layers.targets.iter().any(Option::is_some) { blur.ensure_composite(device, layers::FORMAT); }
-        let viewport = [vw as f32, vh as f32];
+        // Where the pooled copies sit in the window, and their size (`Renderer::backdrop_frame`:
+        // the same for every format).
+        let (corner, held) = self.backdrops.iter().find(|b| b.format == self.format).map_or(([0.0; 2], [vw as f32, vh as f32]), |b| {
+            ([b.origin[0] as f32, b.origin[1] as f32], [b.texture.width() as f32, b.texture.height() as f32])
+        });
         let mut placed = Vec::new();
         let mut need = [STEP; 2];
         let records = self.effects.iter().filter(|(_, i)| i.kind() == Some(Kind::BackdropBlur));
@@ -546,10 +551,11 @@ impl Renderer {
                 (region[2] - origin[0]) / extent[0], (region[3] - origin[1]) / extent[1]];
             let place = [origin[0], origin[1], extent[0], extent[1]];
             for m in 0..SLOTS {
-                // The first down pass reads the window-sized backdrop; the rest read the pyramid.
+                // The first down pass reads the pooled backdrop, which holds the window from
+                // `corner` for `held` pixels; the rest read the pyramid.
                 let (region, map) = if m == MIPS as usize {
-                    ([region[0] / viewport[0], region[1] / viewport[1], region[2] / viewport[0], region[3] / viewport[1]],
-                        [extent[0] / viewport[0], extent[1] / viewport[1], origin[0] / viewport[0], origin[1] / viewport[1]])
+                    ([(region[0] - corner[0]) / held[0], (region[1] - corner[1]) / held[1], (region[2] - corner[0]) / held[0], (region[3] - corner[1]) / held[1]],
+                        [extent[0] / held[0], extent[1] / held[1], (origin[0] - corner[0]) / held[0], (origin[1] - corner[1]) / held[1]])
                 } else {
                     (inside, [1.0, 1.0, 0.0, 0.0])
                 };

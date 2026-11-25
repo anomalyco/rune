@@ -467,7 +467,7 @@ source each time, and earlier blocks stay mounted. Real-URL links (`http:`, `htt
 reports the hovered link's destination and hit line box in window points (activating link hover
 tracking even without `on_link` or `on_link_secondary`, and leaving the old block before entering
 the new one across paragraphs; see `rune-markdown--link-hover` in `kit-gallery`).
-`Markdown::emoji(|name| Option<Pixels>)` draws `:name:` shortcodes in prose (not in code, math or
+To give Markdown images a right-click context menu (Save Image As…, Copy Image, Copy Image Address), compose `El::image_menu` inside `Markdown::image_frame(|el, frame| el.image_menu(ImageMenu::new(frame.image).save_bytes(..).address(frame.src)))` (see `rune-image--decode` in `kit-gallery`). `Markdown::emoji(|name| Option<Pixels>)` draws `:name:` shortcodes in prose (not in code, math or
 a link showing its address) as the app's pictures, 1.2 em tall on the baseline; selection, copy and
 search still see the shortcode. The pictures are drawn only, with no hover or press of their own.
 

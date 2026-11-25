@@ -164,7 +164,7 @@ impl Host {
             let native = &mut l.native;
             let redraw = native.materials.on_policy_changed(effects, native.mode.handover_mut());
             let now_native = native.materials.native();
-            self.app.rt_mut().paint.set_native_materials(now_native);
+            self.app.rt_mut().paint.set_windows_acrylic_materials(now_native);
             if redraw || self.app.rt().stale() {
                 l.timer_frame.no_longer_quiet();
                 l.loop_frame.touched();

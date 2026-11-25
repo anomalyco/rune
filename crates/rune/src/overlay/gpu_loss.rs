@@ -124,8 +124,10 @@ impl OverlayCore {
             || self.shared.availability.load(Ordering::Acquire) != Self::availability_code(Availability::Unavailable)
             || self.shared.failure.lock().unwrap().is_none();
         self.terminal_gpu_entered = true;
-        #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+        #[cfg(any(test, target_os = "macos"))]
         app.rt_mut().paint.set_native_materials(false);
+        #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+        app.rt_mut().paint.set_windows_acrylic_materials(false);
         if needs_refuse {
             self.surface_refused(app, reason);
         }

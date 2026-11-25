@@ -398,8 +398,10 @@ impl FrameHost for WindowFrame<'_> {
             #[cfg(target_os = "macos")]
             l.set_live_resize(false);
             l.backoff_step(BackoffEvent::Lapsed);
-            #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+            #[cfg(target_os = "macos")]
             { self.host.app.rt_mut().paint.set_native_materials(l.native.materials.native()); }
+            #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+            { self.host.app.rt_mut().paint.set_windows_acrylic_materials(l.native.materials.native()); }
             if self.host.frame_reports.wanted() { self.host.frame_reports.set_refresh(display_hz(l)); }
             Gate::QuietTimer
         } else {
@@ -420,8 +422,10 @@ impl FrameHost for WindowFrame<'_> {
         l.set_live_resize(self.resizing && self.state.live_resize);
         // Acquire before latching live values so a drawable wait cannot age the input.
         l.backoff_step(BackoffEvent::Lapsed);
-        #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+        #[cfg(target_os = "macos")]
         { self.host.app.rt_mut().paint.set_native_materials(l.native.materials.native()); }
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        { self.host.app.rt_mut().paint.set_windows_acrylic_materials(l.native.materials.native()); }
         if self.host.frame_reports.wanted() { self.host.frame_reports.set_refresh(display_hz(l)); }
     }
 
@@ -596,7 +600,7 @@ impl FrameHost for WindowFrame<'_> {
             let device_type = self.host.gpu.as_ref().map(|(gpu, _)| gpu.adapter.get_info().device_type);
             let transparent = self.host.options.transparent;
             let window_backdrop = self.host.app.rt().window_backdrop();
-            let found = !self.host.app.rt().paint.materials().is_empty();
+            let found = !self.host.app.rt().paint.windows_material_draws().is_empty();
             let high_contrast = self.host.app.rt().system_contrast().is_some();
             if let Some(l) = self.host.win.as_mut()
                 && (found || l.native.materials.native())
@@ -640,11 +644,18 @@ impl FrameHost for WindowFrame<'_> {
             #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
             ReacquireReason::NativeMaterials => {
                 // Rebuild with the updated native-materials state before acquiring the replacement drawable.
-                #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
-                let native = self.host.win.as_ref().is_some_and(|l| l.native.materials.native());
+                #[cfg(target_os = "macos")]
+                {
+                    let native = self.host.win.as_ref().is_some_and(|l| l.native.materials.native());
+                    self.host.app.rt_mut().paint.set_native_materials(native);
+                }
+                #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+                {
+                    let native = self.host.win.as_ref().is_some_and(|l| l.native.materials.native());
+                    self.host.app.rt_mut().paint.set_windows_acrylic_materials(native);
+                }
                 #[cfg(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))))]
-                let native = true;
-                self.host.app.rt_mut().paint.set_native_materials(native);
+                self.host.app.rt_mut().paint.set_native_materials(true);
                 let more = self.host.app.frame(0.0);
                 info.runtime_animating |= more;
                 info.animating |= more;

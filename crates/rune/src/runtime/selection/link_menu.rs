@@ -31,21 +31,38 @@ pub(crate) fn link_address<'a>(spec: &'a TextSpec, l: &'a crate::Link) -> Option
     link_url(spec, l)
 }
 
-/// What sits under the secondary gesture for Rune's built-in text/link context menu.
+/// Opt-in image menu state under the secondary gesture ([`El::image_menu`](crate::El::image_menu)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ImageMenuTarget {
+    /// `Save Image As…` is offered (source bytes or path supplied, and not on `wasm32`).
+    pub has_save: bool,
+    /// The image finished decoding with no error (enables `Save Image As…`).
+    pub ready: bool,
+    /// `Copy Image` is enabled (`ready` and dimensions within 64 megapixels).
+    pub copy_enabled: bool,
+    /// `Copy Image Address` is offered (`address` supplied and passes `open_url::check`).
+    pub has_address: bool,
+}
+
+/// What sits under the secondary gesture for Rune's built-in link, image and selectable-text
+/// context menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ContextMenuTarget {
     /// A link with a resolved real address is under the gesture.
     pub has_link: bool,
-    /// That link's text node has an [`El::on_link`](crate::El::on_link) handler.
+    /// That link's element has an activation handler (`El::on_link` or `El::on_press`).
     pub has_on_link: bool,
-    /// The text node is selectable (so Copy is offered).
+    /// An opted-in image ([`El::image_menu`](crate::El::image_menu)) is under the gesture.
+    pub image: Option<ImageMenuTarget>,
+    /// The element has selectable text (so Copy is offered).
     pub selectable: bool,
     /// There is a non-empty text selection to copy.
     pub copy_enabled: bool,
 }
 
-/// Pure item-list builder for Rune's default link and selectable-text context menu.
-/// Returns `None` when nothing in `target` produces an item.
+/// Pure item-list builder for Rune's default link, opt-in image, and selectable-text context menu
+/// in browser order: link items, separator, image items (`Save Image As…`, `Copy Image`,
+/// `Copy Image Address`), separator, `Copy`. Returns `None` when nothing produces an item.
 pub(crate) fn build_context_menu(target: ContextMenuTarget) -> Option<crate::PopupMenu> {
     let mut menu = crate::PopupMenu::new();
     let mut any = false;
@@ -54,6 +71,28 @@ pub(crate) fn build_context_menu(target: ContextMenuTarget) -> Option<crate::Pop
             menu = menu.item(crate::PopupItem::new("open-link", crate::labels::label(crate::Label::OpenLink)));
         }
         menu = menu.item(crate::PopupItem::new("copy-link", crate::labels::label(crate::Label::CopyLink)));
+        any = true;
+    }
+    if let Some(img) = target.image {
+        if any {
+            menu = menu.separator();
+        }
+        if img.has_save {
+            menu = menu.item(
+                crate::PopupItem::new("save-image-as", crate::labels::label(crate::Label::SaveImageAs))
+                    .enabled(img.ready),
+            );
+        }
+        menu = menu.item(
+            crate::PopupItem::new("copy-image", crate::labels::label(crate::Label::CopyImage))
+                .enabled(img.copy_enabled),
+        );
+        if img.has_address {
+            menu = menu.item(crate::PopupItem::new(
+                "copy-image-address",
+                crate::labels::label(crate::Label::CopyImageAddress),
+            ));
+        }
         any = true;
     }
     if target.selectable {
@@ -133,6 +172,7 @@ impl RuntimeCore {
         let Some(menu) = build_context_menu(ContextMenuTarget {
             has_link: true,
             has_on_link: on_link.is_some(),
+            image: None,
             selectable,
             copy_enabled: text.is_some(),
         }) else { return false };

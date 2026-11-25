@@ -548,7 +548,7 @@ impl OverlayCore {
         self.hide(app);
         self.release();
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
-        app.rt_mut().paint.set_native_materials(false);
+        app.rt_mut().paint.set_windows_acrylic_materials(false);
         self.fail(app, reason);
     }
 

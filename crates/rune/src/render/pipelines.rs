@@ -290,8 +290,10 @@ impl Renderer {
         }
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
         let [vw, vh] = self.target_frame(None).1;
-        if !self.backdrops.is_empty() && vw > 0 && vh > 0 {
-            self.ensure_backdrop(device, format, (vw, vh));
+        // A format that joins while backdrops are pooled gets its copy before the next draw, at
+        // the place and size of the ones the last frame made.
+        if let Some((origin, size)) = self.backdrops.first().map(|b| (b.origin, [b.texture.width(), b.texture.height()])) && vw > 0 && vh > 0 {
+            self.ensure_backdrop(device, format, origin, size);
         }
         if let Some(s) = &mut self.surfaces { s.add_format(device, format); }
     }
@@ -344,8 +346,10 @@ impl Renderer {
         self.srgb_blend = default_srgb_blend(format);
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
         let [vw, vh] = self.target_frame(None).1;
-        if !self.backdrops.is_empty() && vw > 0 && vh > 0 {
-            self.ensure_backdrop(device, format, (vw, vh));
+        // A format that joins while backdrops are pooled gets its copy before the next draw, at
+        // the place and size of the ones the last frame made.
+        if let Some((origin, size)) = self.backdrops.first().map(|b| (b.origin, [b.texture.width(), b.texture.height()])) && vw > 0 && vh > 0 {
+            self.ensure_backdrop(device, format, origin, size);
         }
         if let Some(s) = &mut self.surfaces {
             s.set_srgb_blend(self.srgb_blend);
