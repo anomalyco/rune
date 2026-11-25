@@ -62,7 +62,7 @@ impl paint_state::PaintState {
             let Some(parent) = n.parent.filter(|&p| tree.nodes[p].vis_flags.blend() == crate::render::Blend::PlusLighter) else { continue };
             let Some(p) = scene.presented(n.id) else { continue };
             let mut opacity = p.opacity * n.vis.layer_opacity;
-            opacity *= group_factor(scene, focus_keyboard, focus_path, n, inherited_group);
+            opacity *= group_factor(scene, focus_keyboard, focus_path, n, group_lit(scene, n, inherited_group));
             if fades(n.looping.as_deref().copied()) && let Some(track) = motion.loop_track(n.id) {
                 opacity *= track.sample_at(scene.store().node_time(n.id), clock, reduced_motion);
             }

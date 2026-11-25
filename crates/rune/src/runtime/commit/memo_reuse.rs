@@ -164,7 +164,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         surface, surface_place, border_bottom, border_sides, border_layout, border_dash, border_dash_phase, shadows, blur_motion,
         clip, clip_radius, clip_corners, cutouts, icon, icon_inked, icon_one_color, gradient, radial, outline, shape,
         grid, pixels, pixels_fit, pixels_wrap, pixels_tint, image_filter, effect, backdrop_blur, hover_motion, hover_within, press_motion,
-        group_opacity, group_color, hover_alone, hover_share, icon_turn, cache_key, offset_motion, scale_motion,
+        group_opacity, group_color, hover_alone, hover_share, hover_pointer_only, group_focus, group_motion, icon_turn, cache_key, offset_motion, scale_motion,
         origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop, flight_in_place,
         hold_landing, row_face, press_color, hover_fill, press_fill, hover_border, press_border, paint_contain, motion_snaps, hairline, offset, paint_alpha, layer_opacity, blur, rotate, mark, mirror_rtl, paint_order,
     } = b;
@@ -203,6 +203,12 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
             _ => false,
         }
         && a.group_opacity == *group_opacity && a.group_color == *group_color && a.hover_alone == *hover_alone && a.hover_share == *hover_share
+        && a.hover_pointer_only == *hover_pointer_only && a.group_focus == *group_focus
+        && match (&a.group_motion, group_motion) {
+            (None, None) => true,
+            (Some(x), Some(y)) => Rc::ptr_eq(x, y) || **x == **y,
+            _ => false,
+        }
         && a.icon_turn == *icon_turn && a.cache_key == *cache_key
         && opt_box_eq(&a.offset_motion, offset_motion) && opt_box_eq(&a.scale_motion, scale_motion)
         && a.origin == *origin && opt_box_eq(&a.rotate_motion, rotate_motion)

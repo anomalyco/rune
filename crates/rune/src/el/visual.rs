@@ -86,6 +86,13 @@ pub struct VisualCold {
     pub hover_alone: bool,
     /// `El::hover_group_shared`: the key of the elements whose hover this group shares.
     pub(crate) hover_share: Option<Rc<str>>,
+    /// `El::hover_group_pointer`: only the pointer lights this group, not keyboard focus in it.
+    pub(crate) hover_pointer_only: bool,
+    /// `El::group_focus_within`: the key of the ancestor whose keyboard focus shows this
+    /// element's group styles as its group's hover does.
+    pub(crate) group_focus: Option<Rc<str>>,
+    /// `El::group_motion`: this element's own enter and exit curves for its group styles.
+    pub(crate) group_motion: Option<Rc<(Anim, Anim)>>,
     /// `El::icon_rotation`: the icon's turn in radians, clockwise.
     pub(crate) icon_turn: f32,
     /// Optional app-supplied key mixed into the cached subtree's signature (`El::cache_key`).
@@ -187,6 +194,9 @@ impl Empty for VisualCold {
         group_color: None,
         hover_alone: false,
         hover_share: None,
+        hover_pointer_only: false,
+        group_focus: None,
+        group_motion: None,
         icon_turn: 0.0,
         cache_key: None,
         offset_motion: None,
