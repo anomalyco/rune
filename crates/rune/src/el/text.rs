@@ -578,14 +578,17 @@ impl El {
     pub fn wraps(&self) -> bool {
         self.text.as_ref().is_some_and(|t| t.wrap)
     }
-    /// One line, cut with "…" when wider than the element; the element may shrink below its
-    /// text's width. A [`text_input`] ignores it and the other truncations.
+    /// One line, cut with "…" when wider than the element. Sets `flex-shrink: 1` and lowers an
+    /// automatic `min-width` to `0` while preserving any explicit [`El::min_w`] and leaving
+    /// `min-height` untouched (override an earlier explicit minimum with `.min_w(0.0)`). A
+    /// [`text_input`] ignores it and the other truncations.
     #[inline]
     pub fn truncate(mut self) -> Self {
         self.set_truncate();
         self
     }
-    /// [`El::truncate`] in place.
+    /// [`El::truncate`] in place. Sets `flex-shrink: 1` and lowers an automatic `min-width` to
+    /// `0` while preserving any explicit [`El::min_w`] and leaving `min-height` untouched.
     #[inline]
     pub fn set_truncate(&mut self) -> &mut Self {
         self.set_elide(Elide::End);
@@ -594,12 +597,13 @@ impl El {
     /// [`El::truncate`] keeping both ends: "…" replaces the middle, as AppKit's
     /// `NSLineBreakByTruncatingMiddle` does for paths and file names. Cuts fall between
     /// graphemes and refit when the element resizes; copying and the accessibility text keep
-    /// the whole string.
+    /// the whole string. Preserves any explicit [`El::min_w`] and leaves `min-height` untouched.
     pub fn truncate_middle(mut self) -> Self {
         self.set_elide(Elide::Middle);
         self
     }
-    /// [`El::truncate`] keeping the end: "…" replaces the start.
+    /// [`El::truncate`] keeping the end: "…" replaces the start. Preserves any explicit
+    /// [`El::min_w`] and leaves `min-height` untouched.
     pub fn truncate_head(mut self) -> Self {
         self.set_elide(Elide::Head);
         self
@@ -626,7 +630,9 @@ impl El {
             cut(t);
         }
         self.style.set_flex_shrink(1.0);
-        self.style.set_min_width(length(0.0));
+        if self.style.min_size().width.is_auto() {
+            self.style.set_min_width(length(0.0));
+        }
     }
     /// Wrapped text that stops after `lines` lines, "…" ending the last when more would follow,
     /// as CSS's `line-clamp`. Combine with [`El::elide_middle`] or [`El::elide_head`] in either
@@ -689,11 +695,14 @@ impl El {
         }
         self
     }
-    /// One line, clipped with a 1.5 em trailing fade only when it overflows. No ellipsis.
+    /// One line, clipped with a 1.5 em trailing fade only when it overflows. No ellipsis. Sets
+    /// `flex-shrink: 1` and lowers an automatic `min-width` to `0` while preserving any explicit
+    /// [`El::min_w`] and leaving `min-height` untouched.
     pub fn truncate_fade(self) -> Self {
         self.truncate_fade_width(TRUNCATE_FADE_EM)
     }
-    /// [`El::truncate_fade`] with a fade `em` ems wide.
+    /// [`El::truncate_fade`] with a fade `em` ems wide. Preserves any explicit [`El::min_w`] and
+    /// leaves `min-height` untouched.
     pub fn truncate_fade_width(self, em: f32) -> Self {
         self.one_line(|t| {
             t.truncate = false;

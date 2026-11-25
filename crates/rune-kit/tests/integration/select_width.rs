@@ -220,3 +220,34 @@ fn inline_select_ignores_fill_but_honours_menu_width() {
     assert!(trig[2] < 200.0, "Inline trigger stays fit-content: {trig:?}");
     assert_eq!(menu[2], 310.0, "Inline listbox still honours menu_width(): {menu:?}");
 }
+
+#[test]
+fn select_listbox_keeps_160_min_width_regardless_of_min_w_and_shrink_order() {
+    // Select with short options keeps its 160 pt listbox floor even on a narrow trigger.
+    let select_rt = run(Spec {
+        appearance: SelectAppearance::Inline,
+        width: Some(60.0),
+        container: Container::UnstretchedColumn(420.0),
+        ..Spec::default()
+    });
+    assert!(rect(&select_rt, "choice-content")[2] >= 160.0);
+
+    // Both builder orders on a listbox-shaped column produce the exact same 160 pt minimum width.
+    let mut rt = Runtime::new(
+        (),
+        |_: &(), _: &mut Cx<()>| {
+            col().size(400.0, 200.0)
+                .child(row().w(80.0).child(
+                    col().key("min_then_shrink").min_h(0.0).min_w(160.0).max_w(368.0).shrink().child(text("A")),
+                ))
+                .child(row().w(80.0).child(
+                    col().key("shrink_then_min").min_h(0.0).shrink().min_w(160.0).max_w(368.0).child(text("A")),
+                ))
+        },
+        (400.0, 200.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    assert_eq!(rt.presented("min_then_shrink").unwrap().0[2], 160.0);
+    assert_eq!(rt.presented("shrink_then_min").unwrap().0[2], 160.0);
+}

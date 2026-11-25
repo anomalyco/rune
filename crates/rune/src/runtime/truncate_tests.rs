@@ -306,3 +306,114 @@ fn narrow_truncated_text_clips_to_box_and_draws_nothing_at_zero_width() {
         assert!(g.clip[0] >= x0 - 0.5 && g.clip[2] <= x1 + 0.5, "single glyph clip {:?} overflows [{x0}, {x1}]", g.clip);
     }
 }
+
+#[test]
+fn shrink_preserves_explicit_min_w_in_either_order_and_leaves_min_h_alone() {
+    use crate::{el, row};
+
+    assert_eq!(std::mem::size_of::<rune_taffy::CompactStyle>(), 64, "CompactStyle keeps its 64-byte size");
+
+    fn row_widths(row_w: f32) -> [f32; 5] {
+        let mut rt = Runtime::new(
+            row_w,
+            |&w: &f32, _: &mut Cx<f32>| {
+                col().size(400.0, 400.0)
+                    .child(row().w(w).child(el().key("min_then_shrink").w(300.0).h(20.0).min_w(160.0).shrink()))
+                    .child(row().w(w).child(el().key("shrink_then_min").w(300.0).h(20.0).shrink().min_w(160.0)))
+                    .child(row().w(w).child(el().key("shrink_auto").h(20.0).shrink().child(el().w(300.0).h(20.0))))
+                    .child(row().w(w).child(el().key("override_zero").w(300.0).h(20.0).min_w(160.0).shrink().min_w(0.0)))
+                    .child(row().w(w).child({
+                        let mut e = el().key("in_place").w(300.0).h(20.0);
+                        e.set_min_w(160.0);
+                        e.set_shrink();
+                        e
+                    }))
+            },
+            (400.0, 400.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        let w_of = |k: &str| rt.presented(k).expect(k).0[2];
+        [
+            w_of("min_then_shrink"),
+            w_of("shrink_then_min"),
+            w_of("shrink_auto"),
+            w_of("override_zero"),
+            w_of("in_place"),
+        ]
+    }
+
+    // In a 100 pt row: both orders stop at 160 pt; auto min_w and explicit min_w(0.0) shrink to 100 pt.
+    let tight = row_widths(100.0);
+    assert_eq!(tight, [160.0, 160.0, 100.0, 100.0, 160.0], "100 pt row: {tight:?}");
+
+    // In a 200 pt row: 300 pt items with min_w(160) shrink to 200 pt in both orders.
+    let medium = row_widths(200.0);
+    assert_eq!(medium, [200.0, 200.0, 200.0, 200.0, 200.0], "200 pt row: {medium:?}");
+
+    // min_h is untouched by shrink: vertical columns still need explicit .min_h(0.0), and explicit min_h stays.
+    let mut rt_h = Runtime::new(
+        (),
+        |_: &(), _: &mut Cx<()>| {
+            row().size(400.0, 200.0)
+                .child(col().w(100.0).h(100.0).child(col().key("no_min_h").shrink().child(el().w(40.0).h(300.0))))
+                .child(col().w(100.0).h(100.0).child(col().key("zero_min_h").shrink().min_h(0.0).child(el().w(40.0).h(300.0))))
+                .child(col().w(100.0).h(100.0).child(col().key("kept_min_h").min_h(160.0).shrink().child(el().w(40.0).h(300.0))))
+        },
+        (400.0, 200.0),
+        Env::new(true, 1.0),
+    );
+    rt_h.frame(0.0);
+    assert_eq!(rt_h.presented("no_min_h").unwrap().0[3], 300.0, "shrink leaves auto min_h alone");
+    assert_eq!(rt_h.presented("zero_min_h").unwrap().0[3], 100.0, "explicit min_h(0.0) allows vertical shrink");
+    assert_eq!(rt_h.presented("kept_min_h").unwrap().0[3], 160.0, "explicit min_h is preserved");
+}
+
+#[test]
+fn single_line_truncation_preserves_explicit_min_w_in_either_order() {
+    use crate::row;
+
+    const LONG: &str = "A very long single-line label that exceeds three hundred points when laid out at fourteen points";
+
+    #[derive(Clone, Copy)]
+    enum Kind { End, SetEnd, Middle, Head, Fade, FadeWidth }
+
+    fn apply(t: El, kind: Kind) -> El {
+        match kind {
+            Kind::End => t.truncate(),
+            Kind::SetEnd => {
+                let mut t = t;
+                t.set_truncate();
+                t
+            }
+            Kind::Middle => t.truncate_middle(),
+            Kind::Head => t.truncate_head(),
+            Kind::Fade => t.truncate_fade(),
+            Kind::FadeWidth => t.truncate_fade_width(2.0),
+        }
+    }
+
+    for kind in [Kind::End, Kind::SetEnd, Kind::Middle, Kind::Head, Kind::Fade, Kind::FadeWidth] {
+        for (row_w, want_min) in [(100.0_f32, 160.0_f32), (200.0_f32, 200.0_f32)] {
+            let mut rt = Runtime::new(
+                (row_w, kind),
+                |&(w, k): &(f32, Kind), _: &mut Cx<(f32, Kind)>| {
+                    let mk = |key: &'static str| crate::text(LONG).key(key).font(style());
+                    col().size(500.0, 200.0)
+                        .child(row().w(w).child(apply(mk("min_first").min_w(160.0), k)))
+                        .child(row().w(w).child(apply(mk("trunc_first"), k).min_w(160.0)))
+                        .child(row().w(w).child(apply(mk("auto_min"), k)))
+                        .child(row().w(w).child(apply(mk("override_zero").min_w(160.0), k).min_w(0.0)))
+                },
+                (500.0, 200.0),
+                Env::new(true, 1.0),
+            );
+            rt.frame(0.0);
+            let w_of = |key: &str| rt.presented(key).expect(key).0[2];
+            assert_eq!(w_of("min_first"), want_min, "row_w={row_w}: min_w then truncate");
+            assert_eq!(w_of("trunc_first"), want_min, "row_w={row_w}: truncate then min_w");
+            assert_eq!(w_of("auto_min"), row_w, "row_w={row_w}: auto min_w still shrinks to row");
+            assert_eq!(w_of("override_zero"), row_w, "row_w={row_w}: trailing min_w(0.0) overrides earlier min_w");
+        }
+    }
+}
