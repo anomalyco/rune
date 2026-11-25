@@ -1606,7 +1606,12 @@ rune::App::new(spec).fit_content_height().run();
   change's spring. A width change jumps, and a window the user resizes goes back to its
   content's height. Unless the app sets a minimum, its minimum height is 0 rather than the
   default 400 pt.
-- Overlays ignore these; use `OverlayHandle::resize`.
+- Overlays ignore these (`Tx::resize_window` included); use `OverlayHandle::resize`, or
+  `ConfiguredOverlay::fit_content_height` for an overlay whose height follows its content (a
+  candidate list, a HUD). It is sized to its content before each show, so its first frame
+  draws at that height, and while shown a change of height resizes it at once (no spring) on
+  the next event-loop turn. Its width comes from `OverlaySpec::size` and
+  `OverlayHandle::resize`, whose height it ignores; give the root no fixed or `fill` height.
 
 ### Window chrome and shell controls (OpenCode Desktop fidelity)
 

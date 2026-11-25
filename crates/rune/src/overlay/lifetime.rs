@@ -4,6 +4,24 @@
 use super::*;
 
 impl OverlayCore {
+    /// An overlay that fits its content (`ConfiguredOverlay::fit_content_height`) about to
+    /// show: when its state, input or width changed since its last commit, or it has none,
+    /// measures its content at its width and takes that height, so the first frame shown
+    /// draws at it. It measures without committing: the first visible frame builds as any
+    /// show's does, so the show settles or, with `animate_reveal`, plays what the state
+    /// started, and that frame's commit keeps its own bookkeeping.
+    pub(super) fn fit_for_show(&mut self, app: &mut dyn OverlayApp) {
+        if !app.rt().host.fit_height { return; }
+        let size = self.canvas_size;
+        let rt = app.rt_mut();
+        if rt.window_viewport() != size {
+            let scale = rt.window_scale();
+            rt.set_viewport(size, scale);
+        }
+        // The show's `resolve_size` places it, and a live surface takes it as a resize.
+        if app.rt().stats.commits == 0 || app.rt().stale() { self.canvas_size.1 = app.content_height(); }
+    }
+
     pub(super) fn show_fading(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, fade: Duration) {
         if self.presence.shown() { return; }
         // Hidden, it missed the redraws a new accent or portal preference asks for.
@@ -16,6 +34,7 @@ impl OverlayCore {
         }
         self.accent_changed(app.rt_mut(), crate::system_accent());
         self.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
+        if !self.presence.fading() { self.fit_for_show(app); }
         #[cfg(target_os = "windows")]
         if self.uses_cpu_layered(app) && self.show_cpu(app, event_loop, fade) {
             return;
@@ -618,3 +637,7 @@ impl OverlayCore {
 #[cfg(test)]
 #[path = "lifetime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "fit_tests.rs"]
+mod fit_tests;

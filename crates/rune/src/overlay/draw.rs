@@ -356,7 +356,7 @@ impl FrameHost for OverlayFrame<'_> {
             self.core.window_backdrop = backdrop;
             self.core.sync_window_backdrop(self.app.rt_mut(), false);
         }
-        super::input::drop_window_requests(self.app.rt_mut());
+        self.core.take_window_requests(self.app.rt_mut());
         self.core.clipboard.flush_core(self.app.rt_mut());
         self.core.sync_ime(self.app);
         // Publish the geometry just rendered, never a layout cached from the preceding frame.
@@ -671,7 +671,7 @@ impl OverlayCore {
     pub(super) fn acquire_missed(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, prewarm: bool, built: bool) {
         if missed == crate::window::Missed::Unconfigured {
             if built {
-                super::input::drop_window_requests(app.rt_mut());
+                self.take_window_requests(app.rt_mut());
                 self.clipboard.flush_core(app.rt_mut());
             }
             crate::haptics::flush_live(app.rt_mut(), false);
@@ -687,7 +687,7 @@ impl OverlayCore {
 
     /// A timer frame that would draw what's on screen: what a drawn frame does besides drawing.
     fn unchanged_frame(&mut self, app: &mut dyn OverlayApp) -> bool {
-        super::input::drop_window_requests(app.rt_mut());
+        self.take_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
         crate::haptics::flush_live(app.rt_mut(), true);
         let ime_queued = self.sync_ime(app);
