@@ -623,3 +623,64 @@ fn clipboard_write_pixels_copies_raw_and_mip_backed_pixels_and_reports_empty_as_
     let copied2 = m.content().unwrap().image().cloned().unwrap();
     assert_eq!(crate::image::png_rgba8(copied2.png()).unwrap().into_raw(), mip_rgba);
 }
+
+/// `ClipboardImage::from_rgba` enforces zero sides, exact RGBA byte length, multiplication
+/// overflow (especially on 32-bit wasm32), and the 64 MP ceiling without panicking.
+#[test]
+fn clipboard_image_from_rgba_enforces_contract_without_panicking() {
+    assert!(ClipboardImage::from_rgba(0, 0, &[]).is_none());
+    assert!(ClipboardImage::from_rgba(0, 4, &[]).is_none());
+    assert!(ClipboardImage::from_rgba(4, 0, &[]).is_none());
+    assert!(ClipboardImage::from_rgba(2, 2, &[0; 4]).is_none());
+    assert!(ClipboardImage::from_rgba(2, 2, &[0; 20]).is_none());
+    assert!(ClipboardImage::from_rgba(u32::MAX, 2, &[]).is_none());
+    assert!(ClipboardImage::from_rgba(u32::MAX, u32::MAX, &[]).is_none());
+    // Over 64 megapixels (8193 * 8193 > 64_000_000) is rejected before touching the slice.
+    assert!(ClipboardImage::from_rgba(8193, 8193, &[]).is_none());
+    // `encode_png` itself also guards against multiplication overflow without panicking.
+    assert!(crate::drag_out::encode_png(u32::MAX, 2, &[]).is_none());
+    assert!(crate::drag_out::encode_png(0, 1, &[]).is_none());
+    // Straight-alpha sRGB round-trip is bit-exact for both opaque and partial alpha.
+    let rgba = [255, 0, 0, 255, 10, 200, 30, 77, 1, 2, 3, 0];
+    let img = ClipboardImage::from_rgba(3, 1, &rgba).expect("valid 3x1 RGBA");
+    assert_eq!(img.size(), (3, 1));
+    assert_eq!(crate::image::png_rgba8(img.png()).unwrap().into_raw(), rgba);
+}
+
+/// End-to-end `Tx::copy_image_then` round-trip through `MemoryClipboard` for PNG and SVG
+/// (when enabled), checking full decoded resolution and exact opaque pixel parity.
+#[test]
+fn copy_image_then_roundtrips_png_and_svg_through_memory_clipboard() {
+    use crate::{col, Cx, El, Env};
+    fn view(_: &Vec<Result<(), CopyImageError>>, _: &mut Cx<Vec<Result<(), CopyImageError>>>) -> El { col() }
+    let m = memory();
+    let mut rt = Runtime::new(Vec::<Result<(), CopyImageError>>::new(), view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+
+    let png_src = vec![250, 10, 20, 255, 30, 240, 40, 255, 50, 60, 230, 255, 0, 0, 0, 0];
+    let png_bytes = crate::drag_out::encode_png(2, 2, &png_src).unwrap();
+    let png_img = cache.load(png_bytes);
+    assert_eq!(png_img.wait(), Ok([2, 2]));
+    rt.update(|_, tx| tx.copy_image_then(&png_img, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r)));
+    rt.frame(0.0);
+    assert_eq!(rt.state.pop(), Some(Ok(())));
+    let copied = m.content().unwrap().image().cloned().unwrap();
+    assert_eq!(copied.size(), (2, 2));
+    assert_eq!(crate::image::png_rgba8(copied.png()).unwrap().into_raw(), png_src);
+
+    #[cfg(feature = "svg")]
+    {
+        const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="14" height="10"><rect width="14" height="10" fill="#208040"/></svg>"##;
+        let svg = cache.load(SVG);
+        assert_eq!(svg.wait(), Ok([28, 20]));
+        rt.update(|_, tx| tx.copy_image_then(&svg, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r)));
+        rt.frame(0.0);
+        assert_eq!(rt.state.pop(), Some(Ok(())));
+        let copied_svg = m.content().unwrap().image().cloned().unwrap();
+        assert_eq!(copied_svg.size(), (14, 10));
+        let px = crate::image::png_rgba8(copied_svg.png()).unwrap().into_raw();
+        assert_eq!(&px[..4], &[0x20, 0x80, 0x40, 255]);
+    }
+}
