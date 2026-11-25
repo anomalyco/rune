@@ -312,7 +312,7 @@ pub(super) fn render_frame(app: &mut dyn OverlayApp, f: OverlayRenderArgs<'_>) -
 pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu, rt: &RuntimeCore,
     window_backdrop: crate::WindowBackdrop,
     encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture, prewarm: bool,
-    on_materials: &mut Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>) -> bool {
+    on_materials: &mut Option<crate::system_material::OnMaterials>) -> bool {
     // `ConfiguredOverlay::on_materials` hears the frame's material rects before it presents.
     crate::system_material::announce(on_materials, rt);
     #[allow(irrefutable_let_patterns)]

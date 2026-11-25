@@ -294,10 +294,11 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     text, layout, hover/focus/selection, theme and scale) with an optional `.cache_key(u64)` hint.
   - **Live fallback:** while any node inside the subtree animates (springs, transitions, loops,
     growth, word reveals, flights) or hosts a live compositor `El::effect` slot, `NativeSurface`,
-    image pixels or focused text input, the subtree bypasses the cache and draws live, then re-caches
-    once settled. A subtree holding an `El::system_material` element always draws live, on every
-    platform and with or without a native material view, so its rect stays listed in
-    `Runtime::system_materials` every frame.
+    native or Wayland-blur `SystemMaterial`, image pixels or focused text input, the subtree
+    bypasses the cache and draws live, then re-caches once settled. A subtree holding a
+    fallback-only `El::system_material` (native and Wayland blur modes off) stays cached and replays
+    its recorded material rects—translated and scaled with the cached layer—into
+    `Runtime::system_materials` and `ConfiguredOverlay::on_materials` when reused.
   - **Scale and budget:** while an ancestor's live scale or scale spring is changing without view
     commits, the existing cached texture is composited with clamped bilinear filtering and
     re-rasterized at the new device-pixel resolution once the scale holds still for 0.1 s.

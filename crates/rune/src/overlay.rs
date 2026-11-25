@@ -621,7 +621,7 @@ pub(in crate::overlay) struct OverlayCore {
     /// `ConfiguredOverlay::frame_latency`, read when the surface is made.
     pub(in crate::overlay) frame_latency: Option<u32>,
     /// `ConfiguredOverlay::on_materials`, called before each present.
-    on_materials: Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>,
+    on_materials: Option<crate::system_material::OnMaterials>,
     /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,

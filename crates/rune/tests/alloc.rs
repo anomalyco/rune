@@ -259,3 +259,31 @@ fn small_overlay_text_atlas_stays_256_kib_and_steady_frames_allocate_nothing() {
     paint(&dscene, &mut Target::new(&mut dout, dsize.0, dsize.1), 1).expect("dense CPU paint");
     assert!(dout.chunks_exact(4).any(|p| p[0] > 0), "CPU painter drew text after atlas growth");
 }
+
+#[test]
+fn cached_fallback_material_steady_frames_allocate_nothing() {
+    use rune::{Color, Live, SystemMaterial, el};
+    fn view(offset: &Live<[f32; 2]>, _: &mut Cx<Live<[f32; 2]>>) -> El {
+        el().size(320.0, 160.0).child(
+            el().key("wrap").size(240.0, 80.0).live_offset(offset).child(
+                el().key("cached-pill").size(240.0, 80.0).cache()
+                    .child(el().absolute(10.0, 16.0).size(220.0, 48.0).radius(24.0).system_material(SystemMaterial::Glass))
+                    .child(el().absolute(10.0, 68.0).size(40.0, 8.0).fill(Color::WHITE)),
+            ),
+        )
+    }
+    let off = Live::new([0.0, 0.0]);
+    let mut rt = Runtime::new(off.clone(), view, (320.0, 160.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    off.set([1.0, 0.0]);
+    rt.frame(1.0 / 60.0);
+    let before = allocs();
+    for i in 1..=60 {
+        let dx = i as f32;
+        off.set([dx, 2.0]);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.system_materials().len(), 1);
+        assert_eq!(rt.system_materials()[0].rect, [10.0 + dx, 18.0, 220.0, 48.0]);
+    }
+    assert_eq!(allocs() - before, 0, "cached fallback material recording/replay must allocate nothing in steady frames");
+}
