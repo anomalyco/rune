@@ -634,6 +634,10 @@ impl OverlayCore {
 
     /// Applies requests from other threads: updates, edge, show and hide.
     pub(super) fn sync(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) {
+        if self.poll_terminal_gpu_loss(app) {
+            self.drain_tokens_none();
+            return;
+        }
         self.clipboard_due(app);
         if app.popup_answer(&mut self.popup) {
             self.dirty = true;

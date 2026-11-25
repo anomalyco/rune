@@ -407,7 +407,7 @@ impl Gpu {
     /// window (Hex #662). A machine without a hardware D3D12 adapter gets WARP, D3D12's software
     /// adapter, from the same instance.
     #[cfg(target_os = "windows")]
-    pub(super) fn wgpu_instance() -> wgpu::Instance {
+    pub(crate) fn wgpu_instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let instance = Self::wgpu_instance_on(wgpu::Backends::DX12, false);
         crate::marks::mark("gpu.instance");
@@ -416,7 +416,7 @@ impl Gpu {
 
     /// wgpu's own backends, whatever `RUNE_GPU_BACKEND` says.
     #[cfg(not(target_os = "windows"))]
-    pub(super) fn wgpu_instance() -> wgpu::Instance {
+    pub(crate) fn wgpu_instance() -> wgpu::Instance {
         let _serial = GPU_INIT.lock().unwrap_or_else(|e| e.into_inner());
         let unlimited = Self::direct_vulkan_bypassed();
         Self::wgpu_instance_on(wgpu::Backends::all(), unlimited)

@@ -110,6 +110,7 @@ impl Host {
     /// (`Backoff`), with its display link stopped so no tick redraws sooner. `stepped` when this
     /// frame already ran the runtime.
     pub(in crate::window) fn missed_frame(&mut self, missed: Missed, stepped: bool) {
+        if self.poll_device_for_terminal_loss() { return; }
         #[cfg(feature = "frame-profile")]
         crate::frame::live_log::missed(match missed { Missed::Occluded => 0, Missed::Timeout => 1, Missed::Outdated => 2, Missed::Unconfigured => 3 });
         let Some(l) = self.win.as_mut() else { return };
@@ -179,6 +180,7 @@ impl Host {
     /// Draws a frame. `resizing` draws one for a size the user just dragged the window to, at
     /// once: AppKit shows the new size when the event returns, with or without it.
     pub(in crate::window) fn draw(&mut self, resizing: bool) {
+        if self.poll_gpu_loss() { return; }
         // Windows: a window still on the CPU renderer draws there (`cpu_frame`).
         #[cfg(target_os = "windows")]
         {
@@ -243,6 +245,7 @@ impl FrameHost for WindowFrame<'_> {
     type Prepared = PreparedWindowFrame;
 
     fn gate(&mut self) -> Gate {
+        if self.host.poll_gpu_loss() { return Gate::Skip; }
         let launcher = self.host.launcher();
         let Some(l) = self.host.win.as_ref() else { return Gate::Skip };
         let hidden = launcher && !self.host.life.shown();
@@ -449,6 +452,7 @@ impl FrameHost for WindowFrame<'_> {
             }
         };
         self.state.profile.take_loop_check(self.host.app.rt_mut());
+        let _ = self.host.poll_gpu_loss();
         StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: self.state.target }
     }
 
@@ -495,6 +499,7 @@ impl FrameHost for WindowFrame<'_> {
     }
 
     fn acquire(&mut self) -> Acquire<wgpu::SurfaceTexture> {
+        if self.host.poll_gpu_loss() { return Acquire::Missed(Missed::Unconfigured); }
         self.state.profile.mark_start();
         let (Some(l), Some((gpu, _))) = (self.host.win.as_mut(), self.host.gpu.as_ref()) else {
             return Acquire::Missed(Missed::Unconfigured);
@@ -559,6 +564,7 @@ impl FrameHost for WindowFrame<'_> {
         };
         // `RUNE_LOOP_CHECK=1`: how the loop-only step this frame stood in for compares with it.
         self.state.profile.take_loop_check(self.host.app.rt_mut());
+        let _ = self.host.poll_gpu_loss();
         StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: self.state.target }
     }
 
@@ -704,6 +710,7 @@ impl FrameHost for WindowFrame<'_> {
     }
 
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
+        if self.host.poll_gpu_loss() { return; }
         let now = self.state.now.unwrap_or(submitted);
         if self.host.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost()) {
             #[cfg(target_os = "windows")]

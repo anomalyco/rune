@@ -304,6 +304,7 @@ pub use recorder::RecordFormat;
 pub use recorder::Recorder;
 pub use recorder::RecorderState;
 pub use recorder::Recording;
+pub use render::GpuLossPolicy;
 pub use render::MAX_BACKDROP_BLURS;
 pub use render::PrewarmEffects;
 pub use render::RendererKind;

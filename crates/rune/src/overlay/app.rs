@@ -321,6 +321,10 @@ impl OverlayHost {
     pub(crate) fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects) {
         self.core.prewarm_effects = effects;
     }
+
+    pub(crate) fn set_gpu_loss_latch(&mut self, latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>) {
+        self.core.gpu_loss_latch = latch;
+    }
 }
 
 /// Thin typed wrapper used only by unit tests so tests can inspect `rt.state`, `compositor`, and
@@ -458,6 +462,10 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn fail(&mut self, reason: String) { with_app!(self, |core, app| core.fail(&mut app, reason)) }
     pub(super) fn set_availability_notify(&mut self, a: super::Availability) -> bool { with_app!(self, |core, app| core.set_availability_notify(&mut app, a)) }
     pub(super) fn surface_refused(&mut self, reason: String) { with_app!(self, |core, app| core.surface_refused(&mut app, reason)) }
+    pub(super) fn poll_terminal_gpu_loss(&mut self) -> bool { with_app!(self, |core, app| core.poll_terminal_gpu_loss(&mut app)) }
+    pub(super) fn latch_terminal_loss_latch(&mut self, kind: crate::render::loss_latch::GpuFailureKind, reason: impl Into<String>) {
+        with_app!(self, |core, app| core.latch_terminal_loss_latch(&mut app, kind, reason))
+    }
     pub(super) fn layer_closed(&mut self, reason: Option<&str>) { with_app!(self, |core, app| core.layer_closed(&mut app, reason)) }
     pub(super) fn drop_hidden_images(&mut self) { with_app!(self, |core, app| core.drop_hidden_images(&mut app)) }
     pub(super) fn hide_fading(&mut self, fade: Duration) { with_app!(self, |core, app| core.hide_fading(&mut app, fade)) }

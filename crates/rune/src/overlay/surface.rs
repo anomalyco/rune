@@ -150,6 +150,7 @@ impl OverlayCore {
     /// Creates the wgpu surface (and the GPU device, if this is the first surface).
     #[allow(unsafe_code)]
     pub(super) fn attach(&mut self, app: &mut dyn OverlayApp, backing: Backing, scale: f32) -> Option<Live> {
+        if self.poll_terminal_gpu_loss(app) { return None; }
         // First, before the surface binds the view (macOS may observe it).
         let a11y = self.shared.wake.lock().unwrap().clone().and_then(|wake| match &backing {
             Backing::Window(window) => crate::a11y::Adapter::new(window, wake),
@@ -225,6 +226,10 @@ impl OverlayCore {
         // A device that died while the overlay was hidden (a driver reset, a resume from
         // Modern Standby) can configure nothing: the next surface gets a new one.
         if self.gpu.as_ref().is_some_and(|gpu| gpu.is_lost()) {
+            if self.is_terminal_gpu_policy() {
+                self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::DeviceLost, "its GPU device was lost");
+                return None;
+            }
             self.gpu = None;
             self.renderer = None;
             app.release_compositor_gpu();
@@ -284,6 +289,17 @@ impl OverlayCore {
                 match setup_surface(&gpu, &surface, own_renderer) {
                     Ok(configured) => { self.gpu = Some(gpu); (surface, configured, had_own) }
                     Err(err) => {
+                        if self.is_terminal_gpu_policy() {
+                            drop((surface, gpu));
+                            *self.gpu_pool.borrow_mut() = Weak::default();
+                            let kind = if err.kind == crate::gpu::fallback::Failure::DeviceLost {
+                                crate::render::loss_latch::GpuFailureKind::DeviceLost
+                            } else {
+                                crate::render::loss_latch::GpuFailureKind::SurfaceFailed
+                            };
+                            self.latch_terminal_loss_latch(app, kind, err.message);
+                            return None;
+                        }
                         if crate::gpu::fallback::decide(Gpu::env_fallback_policy(), err.kind)
                             != crate::gpu::fallback::Decision::MoveOn
                         {
@@ -337,7 +353,11 @@ impl OverlayCore {
                 let (gpu, surface, configured) = match made {
                     Ok(made) => made,
                     Err(err) => {
-                        self.fail(app, err.message);
+                        if self.is_terminal_gpu_policy() {
+                            self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::InitFailed, err.message);
+                        } else {
+                            self.fail(app, err.message);
+                        }
                         return None;
                     }
                 };
@@ -351,6 +371,7 @@ impl OverlayCore {
             }
         };
         let gpu = self.gpu.clone()?;
+        self.attach_terminal_gpu_latch(&gpu);
         let rt = app.rt_mut();
         if opaque_fallback {
             eprintln!("transparency unavailable for overlay {}; drawing it opaque", self.name);
@@ -433,7 +454,12 @@ impl OverlayCore {
         // DX12 `configure` calls `ResizeBuffers` on the same swap chain, preserving its waitable
         // semaphore and count; on failure `surface_refused` -> `release` resets the slot.
         if let Err(error) = crate::window::configure(&live.surface, gpu, &live.config) {
-            self.surface_refused(app, format!("could not resize its GPU surface: {error}"));
+            let msg = format!("could not resize its GPU surface: {error}");
+            if self.is_terminal_gpu_policy() {
+                self.latch_terminal_loss_latch(app, crate::render::loss_latch::GpuFailureKind::SurfaceFailed, msg);
+            } else {
+                self.surface_refused(app, msg);
+            }
             return;
         }
         #[cfg(target_os = "macos")]
@@ -458,6 +484,7 @@ pub(crate) fn overlay_rescale_size(size: (f32, f32), scale: f32, max_dim: u32) -
 
 impl Drop for OverlayCore {
     fn drop(&mut self) {
+        self.prepare_clean_gpu_drop();
         self.close_tokens();
         self.clear_screen_transform();
         self.drop_injected_pointers();

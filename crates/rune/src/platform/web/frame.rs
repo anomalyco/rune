@@ -251,7 +251,7 @@ impl FrameHost for WebFrameHost<'_> {
                 Err(missed) => Acquire::Missed(missed),
             },
             Draw::Cpu { .. } | Draw::HandingOver { .. } => Acquire::Ready(WebDrawable::Cpu),
-            Draw::ContextLost | Draw::Moving => Acquire::Missed(Missed::Unconfigured),
+            Draw::ContextLost | Draw::TerminalFailed | Draw::Moving => Acquire::Missed(Missed::Unconfigured),
         }
     }
 
@@ -538,6 +538,7 @@ impl Browser {
     pub(super) fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         self.resize_redraw.step(web_math::ResizeRedrawEvent::Drawing);
         if self.lost_device(event_loop) { return; }
+        if self.terminal_failed { return; }
         self.maybe_restore_webgl();
         self.poll_handover_timeout();
         let (fatal_error, should_end, try_gpu_came, first_presented_at, non_ambient_drawn_at, embedded, document) = {
@@ -574,6 +575,10 @@ impl Browser {
             )
         };
         if let Some(msg) = fatal_error {
+            if self.gpu_loss_policy == crate::GpuLossPolicy::Terminal {
+                self.enter_terminal_gpu_loss(msg);
+                return;
+            }
             error(&msg, self.window.as_ref().and_then(|w| w.canvas()).as_ref(), embedded, document);
             self.end(event_loop);
             return;
