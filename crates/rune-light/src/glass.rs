@@ -1,8 +1,21 @@
 //! Thick refracting glass over a lit frame (see `shaders/glass.wgsl` for the optics).
 //!
-//! ```ignore
+//! ```
+//! # use rune_light::{Glass, GlassLight, GlassRenderer, GlassSettings, LightRenderer};
+//! # fn _draw(
+//! #     glass: &mut GlassRenderer,
+//! #     gi: &LightRenderer,
+//! #     device: &wgpu::Device,
+//! #     queue: &wgpu::Queue,
+//! #     encoder: &mut wgpu::CommandEncoder,
+//! #     lights: &[GlassLight],
+//! #     lit: &wgpu::TextureView,
+//! #     target: &wgpu::TextureView,
+//! #     (x, y, w, h, s): (f32, f32, f32, f32, f32),
+//! # ) {
 //! let card = Glass::rounded(x, y, w, h, 40.0 * s).thickness(36.0 * s).bevel(28.0 * s).gap(10.0 * s);
-//! glass.render(&device, &queue, &mut encoder, &[card], &lights, GlassSettings::default(), &lit, lights.inspect().fluence, &target);
+//! glass.render(device, queue, encoder, &[card], lights, GlassSettings::default(), lit, gi.inspect().fluence, target);
+//! # }
 //! ```
 
 use bytemuck::{Pod, Zeroable};

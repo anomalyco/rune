@@ -64,7 +64,10 @@ pub struct Reload {
 /// A hosted Luau script: one VM. Keep it in the window's state and call [`Script::poll`] from
 /// `AppSpec::poll` and [`Script::view`] from the view.
 ///
-/// ```ignore
+/// ```
+/// # use rune::{Cx, El, Tx};
+/// # use rune_luau::Script;
+/// # struct State { script: Script }
 /// fn poll(s: &mut State, now: f64, tx: &mut Tx) -> bool { s.script.poll(now, tx) }
 /// fn view(s: &State, cx: &mut Cx<State>) -> El { s.script.view(cx) }
 /// ```

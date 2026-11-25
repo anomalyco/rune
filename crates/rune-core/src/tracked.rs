@@ -6,9 +6,19 @@
 //! The next build reuses the region, without calling its closure, while every cell it read keeps
 //! its version (and its layout and caret reads hold, as any memo's do).
 //!
-//! ```ignore
+//! ```
+//! # use rune_core::Tracked;
+//! # struct Tab;
+//! # struct TextEdit;
+//! # struct Cx<S>(std::marker::PhantomData<S>);
+//! # struct El;
+//! # impl El { fn child(self, _: El) -> Self { self } }
+//! # fn col() -> El { El }
+//! # fn region(_: &str, f: impl FnOnce() -> El) -> El { f() }
+//! # fn tab_strip(_: &[Tab]) -> El { El }
+//! # fn composer(_: &TextEdit) -> El { El }
 //! struct App { tabs: Tracked<Vec<Tab>>, draft: Tracked<TextEdit> }
-//! fn view(s: &App, cx: &mut Cx<App>) -> El {
+//! fn view(s: &App, _cx: &mut Cx<App>) -> El {
 //!     col().child(region("tabs", || tab_strip(&s.tabs))).child(region("composer", || composer(&s.draft)))
 //! }
 //! ```

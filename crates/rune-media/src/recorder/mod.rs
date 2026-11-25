@@ -99,7 +99,17 @@ pub struct Recording {
 /// Records the microphone to a file. Clones share one recorder; dropping the last clone while
 /// recording stops it and keeps the file.
 ///
-/// ```ignore
+/// ```no_run
+/// # mod rune {
+/// #     pub use rune_media::{Player, Recorder};
+/// #     pub struct El;
+/// #     impl El {
+/// #         pub fn w(self, _: f32) -> Self { self }
+/// #         pub fn h(self, _: f32) -> Self { self }
+/// #         pub fn live_scale(self, _: &rune_core::Live<f32>) -> Self { self }
+/// #     }
+/// #     pub fn el() -> El { El }
+/// # }
 /// let rec = rune::Recorder::to_file("note.m4a"); // AAC; "note.wav" records WAV
 /// rec.start();
 /// // In a view, a level bar that redraws without re-running the view:

@@ -13,12 +13,23 @@
 //! The panel is a dev tool: without the `panel` feature, `layer` draws nothing, `key` handles
 //! nothing and `get` returns each knob's default, so a shipped build runs on the constants.
 //!
-//! ```ignore
+//! ```
+//! # use rune::{Color, KeyEvent, el};
+//! # use rune_knobs::{Group, Knob, Knobs, Style};
+//! # struct State { knobs: Knobs }
+//! # let s = State { knobs: Knobs::default() };
+//! # let (panel, root) = (el(), el());
 //! const RIM: Knob = Knob::new("Rim width", 0.0, 3.0, 1.0);
 //! const GROUPS: &[Group] = &[Group::new("Panel", "panel", &[RIM])];
-//! panel.border(knobs.get(&RIM), ..);
-//! root.child(rune_knobs::layer(&s.knobs, GROUPS, Style::dark(), |s: &mut State| &mut s.knobs))
-//! // in on_key: if rune_knobs::key(&mut s.knobs, ev) { return true }
+//! let panel = panel.border(s.knobs.get(&RIM), Color::WHITE);
+//! let _root = root
+//!     .child(panel)
+//!     .child(rune_knobs::layer(&s.knobs, GROUPS, Style::dark(), |s: &mut State| &mut s.knobs));
+//! # fn _on_key(s: &mut State, ev: &KeyEvent) -> bool {
+//! // in on_key:
+//! if rune_knobs::key(&mut s.knobs, ev) { return true; }
+//! # false
+//! # }
 //! ```
 
 #![forbid(unsafe_code)]

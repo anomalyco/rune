@@ -77,8 +77,11 @@ pub enum Op {
 
 /// A list of strokes and fills, painted in order over the element's fill and under its text.
 ///
-/// ```ignore
-/// use rune::{Color, Shape, canvas};
+/// ```
+/// use rune_core::{Color, shape::Shape};
+/// # struct El;
+/// # impl El { fn size(self, _: f32, _: f32) -> Self { self } }
+/// # fn canvas(_: Shape) -> El { El }
 /// let wave: Vec<[f32; 2]> = (0..64).map(|i| [i as f32 * 4.0, 20.0 + (i as f32 * 0.3).sin() * 16.0]).collect();
 /// let meter = Shape::new()
 ///     .fill(vec![[0.0, 40.0], [120.0, 40.0], [120.0, 36.0], [0.0, 36.0]], Color::WHITE)
