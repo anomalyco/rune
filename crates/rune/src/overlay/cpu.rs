@@ -489,7 +489,7 @@ impl super::OverlayCore {
             rt.set_viewport(self.at.size, scale);
             rt.set_renderer_kind(RendererKind::Cpu);
             #[cfg(feature = "windows-system-material")]
-            rt.paint.set_native_materials(false);
+            rt.paint.set_windows_acrylic_materials(false);
         }
         *self.shared.surface.lock().unwrap() = Some(format_surface_description(None));
         self.place_window(app.rt_mut(), event_loop, &window);

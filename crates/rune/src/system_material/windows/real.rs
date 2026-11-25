@@ -11,20 +11,21 @@ use windows::System::{DispatcherQueue, DispatcherQueueController};
 use windows::UI::Color as WinColor;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::{
-    CompositionBackdropBrush, CompositionColorBrush, CompositionGeometricClip,
-    CompositionRoundedRectangleGeometry, Compositor, ContainerVisual, RectangleClip,
-    SpriteVisual,
+    CompositionBackdropBrush, CompositionColorBrush, CompositionEffectBrush,
+    CompositionGeometricClip, CompositionRoundedRectangleGeometry, Compositor, ContainerVisual,
+    RectangleClip, SpriteVisual,
 };
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::WinRT::Composition::ICompositorDesktopInterop;
 use windows::core::{HRESULT, Interface};
 
+use super::acrylic;
 use super::{
     ClipKind, Controller, EffectsPolicy, MaterialInputs, State, TintMode, VisualSpec,
     WindowsMaterialSeam,
 };
 use crate::platform::win32::dcomp_handover::Handover;
-use crate::system_material::{MaterialDraw, Mode};
+use crate::system_material::{MaterialDraw, Mode, SystemMaterial};
 
 /// `DispatcherQueueOptions` from `dispatcherqueue.h`.
 #[repr(C)]
@@ -151,6 +152,8 @@ struct RealSlot {
     visual: SpriteVisual,
     clip: RealClip,
     tint: Option<RealTint>,
+    /// Last applied `(tint_mode, material, dark, used_acrylic)` so springing frames skip `SetBrush`.
+    applied_brush: Option<(TintMode, SystemMaterial, bool, bool)>,
 }
 
 struct TargetState {
@@ -158,6 +161,11 @@ struct TargetState {
     target: DesktopWindowTarget,
     root: ContainerVisual,
     brush: CompositionBackdropBrush,
+    /// At most 6 lazily created Acrylic effect brushes keyed by `(SystemMaterial, dark)`.
+    acrylic_brushes: HashMap<(SystemMaterial, bool), CompositionEffectBrush>,
+    /// Latched true if `CreateEffectFactory` / `ExtendedError()` / `CreateBrush` failed once,
+    /// degrading gracefully to WCAG >=4.5:1 flat tint rather than raw blur or `State::Failed`.
+    acrylic_failed: bool,
     visuals: HashMap<usize, RealSlot>,
 }
 
@@ -172,11 +180,45 @@ impl TargetState {
             }
             slot.visual.Close().ok();
         }
+        for (_, brush) in self.acrylic_brushes {
+            brush.Close().ok();
+        }
         self.target.SetRoot(None).ok();
         self.target.Close().ok();
         self.root.Close().ok();
         self.brush.Close().ok();
         self.compositor.Close().ok();
+    }
+
+    fn ensure_acrylic_brush(
+        &mut self,
+        material: SystemMaterial,
+        dark: bool,
+    ) -> Option<&CompositionEffectBrush> {
+        if self.acrylic_failed {
+            return None;
+        }
+        let key = (material, dark);
+        if !self.acrylic_brushes.contains_key(&key) {
+            match acrylic::winrt_graph::create_acrylic_brush(
+                &self.compositor,
+                &self.brush,
+                material,
+                dark,
+            ) {
+                Ok(brush) => {
+                    self.acrylic_brushes.insert(key, brush);
+                }
+                Err(err) => {
+                    eprintln!(
+                        "rune: Windows Acrylic effect factory unavailable; falling back to flat tint: {err}"
+                    );
+                    self.acrylic_failed = true;
+                    return None;
+                }
+            }
+        }
+        self.acrylic_brushes.get(&key)
     }
 }
 
@@ -218,6 +260,8 @@ impl WindowsMaterialSeam for RealSeam<'_> {
             target,
             root,
             brush,
+            acrylic_brushes: HashMap::new(),
+            acrylic_failed: false,
             visuals: HashMap::new(),
         });
         Ok(())
@@ -245,7 +289,10 @@ impl WindowsMaterialSeam for RealSeam<'_> {
             .map_err(|e| format!("root.Children: {e}"))?
             .InsertAtTop(&visual)
             .map_err(|e| format!("InsertAtTop: {e}"))?;
-        ts.visuals.insert(slot_id, RealSlot { visual, clip: RealClip::None, tint: None });
+        ts.visuals.insert(
+            slot_id,
+            RealSlot { visual, clip: RealClip::None, tint: None, applied_brush: None },
+        );
         Ok(())
     }
 
@@ -253,9 +300,34 @@ impl WindowsMaterialSeam for RealSeam<'_> {
         let Some(ts) = self.target.as_mut() else {
             return Err("no active DesktopWindowTarget".into());
         };
+        // Resolve Acrylic brush before mutably borrowing `slot`.
+        let acrylic_brush = if spec.tint_mode == TintMode::Acrylic {
+            ts.ensure_acrylic_brush(spec.material, spec.dark).cloned()
+        } else {
+            None
+        };
+        let choice = acrylic::resolve_brush_choice(
+            spec.tint_mode,
+            spec.material,
+            spec.dark,
+            acrylic_brush.is_some(),
+        );
+        let flat_tint = match choice {
+            acrylic::BrushChoice::FlatTint { argb } => Some(argb),
+            acrylic::BrushChoice::Acrylic { .. } | acrylic::BrushChoice::RawHostBackdrop => None,
+        };
         let Some(slot) = ts.visuals.get_mut(&slot_id) else {
             return Err(format!("missing material slot {slot_id}"));
         };
+        let brush_key = (spec.tint_mode, spec.material, spec.dark, acrylic_brush.is_some());
+        if slot.applied_brush != Some(brush_key) {
+            if let Some(effect_brush) = acrylic_brush.as_ref() {
+                slot.visual.SetBrush(effect_brush).map_err(|e| format!("SetBrush(Acrylic): {e}"))?;
+            } else {
+                slot.visual.SetBrush(&ts.brush).map_err(|e| format!("SetBrush(HostBackdrop): {e}"))?;
+            }
+            slot.applied_brush = Some(brush_key);
+        }
         let mut offset = Plane::default().Normal;
         offset.X = spec.offset[0];
         offset.Y = spec.offset[1];
@@ -329,8 +401,8 @@ impl WindowsMaterialSeam for RealSeam<'_> {
             }
         }
 
-        // Optional diagnostic tint child visual (inherits parent offset, clip and opacity).
-        match spec.tint {
+        // Flat-tint child visual when `TintMode::Flat` is requested or Acrylic factory fell back.
+        match flat_tint {
             Some(argb) => {
                 let win_color = WinColor { A: argb[0], R: argb[1], G: argb[2], B: argb[3] };
                 if let Some(tint) = slot.tint.as_mut() {
@@ -500,6 +572,32 @@ impl Materials {
         let mut seam = RealSeam { target: &mut self.target, handover };
         self.controller.on_device_loss(&mut seam);
     }
+}
+
+#[cfg(test)]
+pub(super) fn smoke_test_real_acrylic_factory() -> Result<(), String> {
+    ensure_dispatcher_queue()?;
+    let compositor = Compositor::new().map_err(|e| format!("Compositor::new: {e}"))?;
+    let backdrop = compositor
+        .CreateHostBackdropBrush()
+        .map_err(|e| format!("CreateHostBackdropBrush: {e}"))?;
+    let mut brushes = Vec::new();
+    for material in [SystemMaterial::Glass, SystemMaterial::Popover, SystemMaterial::Sidebar] {
+        for dark in [false, true] {
+            brushes.push(acrylic::winrt_graph::create_acrylic_brush(
+                &compositor,
+                &backdrop,
+                material,
+                dark,
+            )?);
+        }
+    }
+    for b in brushes {
+        b.Close().ok();
+    }
+    backdrop.Close().ok();
+    compositor.Close().ok();
+    Ok(())
 }
 
 impl Drop for Materials {

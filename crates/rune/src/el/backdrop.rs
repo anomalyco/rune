@@ -7,15 +7,21 @@ impl El {
     /// window under the node's rect and corner radius (the largest of its corners), which follow
     /// layout and animation like any other paint.
     ///
-    /// - **macOS & Windows**: native on macOS in transparent windows (`NSGlassEffectView` /
-    ///   `NSVisualEffectView`), and on Windows 11 Build 22000+ transparent DirectComposition
-    ///   windows and overlays when the off-by-default `windows-system-material` Cargo feature is
-    ///   enabled and the system permits effects (Transparency effects enabled, Battery/Energy Saver
-    ///   off, composition effects supported/fast, High Contrast off, and not in a Remote Desktop
-    ///   session). Whenever the system will not draw the material, Rune tears down native visuals
-    ///   and draws the element's fallback fill instead. On Windows and macOS the native material
-    ///   sits behind the element, replaces its fill, ignores ancestor clips, and punches a hole
-    ///   inside the node's outer shadows.
+    /// - **macOS**: native in transparent windows (`NSGlassEffectView` / `NSVisualEffectView`).
+    ///   The native view sits behind the element, replaces its fill, ignores ancestor clips, and
+    ///   punches a hole inside the node's outer shadows.
+    /// - **Windows 11 Build 22000+**: opt-in behind the off-by-default `windows-system-material`
+    ///   Cargo feature on transparent DirectComposition hardware-GPU windows and overlays when the
+    ///   system permits effects (Transparency effects enabled, Battery/Energy Saver off,
+    ///   composition effects supported/fast, High Contrast off, and not in a Remote Desktop
+    ///   session). Uses Microsoft's Windows 11 Acrylic Luminosity + Color `CompositionEffectBrush`
+    ///   over `HostBackdropBrush` (`Popover` = Default Acrylic, `Sidebar` = Base Acrylic,
+    ///   `Glass` = clearer chromatic Acrylic), following light/dark theme switches and degrading to
+    ///   a WCAG >=4.5:1 flat tint if the effect factory fails. Follows Wayland's fill rules:
+    ///   opaque fills (`alpha >= 1.0`) stay opaque with no backdrop visual or shadow hole;
+    ///   translucent fills draw above Acrylic as an authored tint; unfilled elements paint
+    ///   transparent so Acrylic supplies the theme-aware tint. Whenever the system will not draw
+    ///   the material, Rune tears down visuals and draws the element's fallback fill instead.
     /// - **Linux Wayland**: active on transparent GPU windows and overlays (`zwlr_layer_shell_v1`
     ///   and toplevel fallbacks) when [`WindowBackdrop::None`](crate::WindowBackdrop::None) is
     ///   active and the compositor advertises `ext_background_effect_v1` (`Capability::Blur`) or

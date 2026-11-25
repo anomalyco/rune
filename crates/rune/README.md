@@ -3613,23 +3613,31 @@ shadow. An outer shadow under a material leaves the material's interior clear.
 
 On Windows 11 Build 22000+, an off-by-default `windows-system-material` Cargo feature backs
 `El::system_material` on transparent DirectComposition hardware-GPU windows and overlays with
-documented `DWMWA_USE_HOSTBACKDROPBRUSH` and `Windows.UI.Composition`
-(`Compositor::CreateHostBackdropBrush`) clipped per frame under Rune's swap-chain visual. While
-the feature is off (the default), no `Windows.UI.Composition` types are compiled in; while on,
-windows without `El::system_material` allocate no compositor or dispatcher queue, and active
-`WindowBackdrop` (`DWMWA_SYSTEMBACKDROP_TYPE`), opaque windows, Windows 10, `DxgiFromHwnd`, CPU
-painter frames, software/WARP adapters, and `RUNE_SYSTEM_MATERIAL=off` draw the fallback fill.
-Diagnostic switches for hardware verification: `RUNE_WIN_MATERIAL_CLIP=geo`
-(`CompositionGeometricClip` instead of `RectangleClip`), `RUNE_WIN_MATERIAL_TINT=subtle`
-(light/dark neutral tint child visual), and `RUNE_WIN_OVERLAY_NO_LAYERED=1` (omit
-`WS_EX_LAYERED` on overlays).
+documented `DWMWA_USE_HOSTBACKDROPBRUSH` and a Windows 11 Acrylic Luminosity + Color
+`CompositionEffectBrush` (built with `IGraphicsEffect` / `IGraphicsEffectD2D1Interop` over
+`Compositor::CreateHostBackdropBrush`, zero Win2D) clipped per frame under Rune's swap-chain
+visual. Each `(SystemMaterial, dark)` pair caches a single brush (`Popover` = Default Acrylic,
+`Sidebar` = Base Acrylic, `Glass` = clearer chromatic Acrylic; at most 6 cached brushes per
+window) and degrades gracefully to a WCAG >=4.5:1 flat tint if effect compilation fails. Windows
+follows the same fill rules as Wayland: opaque fills (`alpha >= 1.0`, such as `rune-kit::Toolbar`)
+stay opaque with no backdrop visual (keeping windows with only opaque materials idle with zero
+WinRT/DWM calls), translucent fills paint above Acrylic as an authored tint, and unfilled elements
+show self-tinted Acrylic. While the feature is off (the default), no `Windows.UI.Composition` or
+Direct2D types are compiled in; while on, Transparency effects off, Battery/Energy Saver on,
+unsupported/slow composition capabilities, High Contrast, Remote Desktop, active `WindowBackdrop`,
+opaque windows, Windows 10, `DxgiFromHwnd`, CPU painter frames, software/WARP adapters, and
+`RUNE_SYSTEM_MATERIAL=off` draw the fallback fill. Diagnostic switches for hardware verification:
+`RUNE_WIN_MATERIAL_CLIP=geo` (`CompositionGeometricClip` instead of `RectangleClip`),
+`RUNE_WIN_MATERIAL_TINT=acrylic|flat|raw` (default `acrylic`), and
+`RUNE_WIN_OVERLAY_NO_LAYERED=1` (omit `WS_EX_LAYERED` on overlays).
 
 On Linux Wayland, `El::system_material` drives per-element shaped compositor blur on transparent
 GPU windows and overlays (`zwlr_layer_shell_v1` and toplevel fallbacks) whenever
 `WindowBackdrop::None` is active and the compositor advertises `ext_background_effect_v1`
 (`Capability::Blur`) or `org_kde_kwin_blur_manager` (opt out with `RUNE_SYSTEM_MATERIAL=off`).
-Unlike macOS and Windows (where native material views sit behind the element and replace its
-fill), Wayland compositor blur has no tint of its own: translucent fills are kept as the tint,
+Unlike macOS (where native material views sit behind the element and replace its fill), Wayland
+compositor blur has no tint of its own (sharing the same opaque/translucent/empty fill rules as
+Windows): translucent fills are kept as the tint,
 unfilled elements draw transparent instead of the opaque fallback, outer-shadow interior holes
 are punched, opaque fills (`alpha >= 1.0`) stay opaque with no blur region, elements beyond
 `App::max_native_materials` (default `MAX_NATIVE_MATERIALS` = 4) draw their fallback fill,

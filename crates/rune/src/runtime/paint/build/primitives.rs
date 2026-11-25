@@ -60,7 +60,7 @@ impl RuntimeCore {
         // Subtree blur runs once after rasterization, never on each primitive as well.
         let blur = 0.0;
         let k_px = sc * s;
-        let (native_material, wayland_candidate) = match n.material {
+        let (native_material, wayland_candidate, material_draw) = match n.material {
             // A dimmed-out element takes no native view: its fallback draws nothing and does not
             // count as a cap fallback.
             Some(material) if effective_opacity * n.vis.paint_alpha > 0.001 => {
@@ -68,22 +68,25 @@ impl RuntimeCore {
                     let radius = crate::system_material::clamp_radius(radii, w, h);
                     let continuous = n.vis_flags.continuous_corners();
                     let material_opacity = effective_opacity * n.vis.paint_alpha;
-                    self.paint.materials.push(crate::system_material::MaterialDraw {
+                    let draw = crate::system_material::MaterialDraw {
                         id: n.id, material, rect: [r[0], r[1], w, h], radius, continuous,
                         opacity: material_opacity,
-                    });
+                    };
+                    self.paint.materials.push(draw);
                     let hole_r = if continuous { -radius } else { radius };
                     let native = self.paint.native_materials.then_some(hole_r);
                     let wayland = (!self.paint.native_materials && self.paint.wayland_blur_materials)
                         .then_some((radius, hole_r, material_opacity));
-                    (native, wayland)
+                    (native, wayland, Some((draw, hole_r)))
                 } else {
                     self.paint.material_fallbacks.push(n.id);
-                    (None, None)
+                    (None, None, None)
                 }
             }
-            _ => (None, None),
+            _ => (None, None, None),
         };
+        #[cfg(not(any(test, all(target_os = "windows", feature = "windows-system-material"))))]
+        let _ = material_draw;
         let stuck_k = if self.tree.has_sticky { (self.scroll.stuck[i].abs() / sticky::SHADOW_RAMP).min(1.0) } else { 0.0 };
         let stuck_shadows: (f32, &[crate::el::Shadow]) = match &n.sticky {
             Some(s) if stuck_k > 0.0 => (stuck_k, &s.shadows),
@@ -102,6 +105,15 @@ impl RuntimeCore {
             0.0
         };
         let mut wayland_blur_hole = None;
+        let mut windows_blur_hole = None;
+        #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+        let windows_candidate = (!self.paint.native_materials
+            && !self.paint.wayland_blur_materials
+            && self.paint.windows_acrylic_materials)
+            .then_some(material_draw)
+            .flatten();
+        #[cfg(not(any(test, all(target_os = "windows", feature = "windows-system-material"))))]
+        let windows_candidate: Option<(crate::system_material::MaterialDraw, f32)> = None;
         let (resolved_fill, fill_replace_w) = if native_material.is_some() {
             (Color::TRANSPARENT, 0.0)
         } else if let Some((radius, hole_r, material_opacity)) = wayland_candidate {
@@ -122,14 +134,43 @@ impl RuntimeCore {
                 }
             }
             (resolved, w_rep)
+        } else if let Some((draw, hole_r)) = windows_candidate {
+            #[cfg(not(any(test, all(target_os = "windows", feature = "windows-system-material"))))]
+            let _ = draw;
+            let rest_fill = self.color(n.id, P_FILL, n.vis.fill);
+            let (resolved, w_rep) = paint_tracks::replace_color(
+                rest_fill, if focus_flat { None } else { n.vis.hover_fill }, hov_v, n.vis.press_fill, prs_v,
+            );
+            if resolved.a * o < 1.0 {
+                // Wayland-aligned fill rules for Windows 11 Acrylic: opaque fills stay opaque and
+                // unblurred; translucent fills tint above Acrylic; empty fills paint transparent so
+                // the Acrylic brush supplies the theme-aware tint.
+                windows_blur_hole = Some(hole_r);
+                #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+                self.paint.windows_material_draws.push(draw);
+            }
+            (resolved, w_rep)
         } else {
+            #[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+            if let Some((draw, _)) = material_draw {
+                // Even before Windows Acrylic activates (Frame 1 or while effects are off), record
+                // non-opaque material elements so opaque-only windows stay Idle with zero DWM/WinRT
+                // calls while non-opaque materials can activate on Frame 1 or when effects return.
+                let authored = self.color(n.id, P_FILL, n.vis.fill);
+                let (authored_resolved, _) = paint_tracks::replace_color(
+                    authored, if focus_flat { None } else { n.vis.hover_fill }, hov_v, n.vis.press_fill, prs_v,
+                );
+                if authored_resolved.a * o < 1.0 {
+                    self.paint.windows_material_draws.push(draw);
+                }
+            }
             let rest_fill = match n.material {
                 Some(_) => self.color(n.id, P_FILL, crate::system_material::fallback_fill(n.vis.fill, self.env.system_dark)),
                 None => self.color(n.id, P_FILL, n.vis.fill),
             };
             paint_tracks::replace_color(rest_fill, if focus_flat { None } else { n.vis.hover_fill }, hov_v, n.vis.press_fill, prs_v)
         };
-        let casts = !n.vis.shadows.is_empty() && native_material.is_none() && wayland_blur_hole.is_none() && blur_hole.is_none() && n.material.is_none();
+        let casts = !n.vis.shadows.is_empty() && native_material.is_none() && wayland_blur_hole.is_none() && windows_blur_hole.is_none() && blur_hole.is_none() && n.material.is_none();
         let fill_a = if casts { resolved_fill.a } else { 0.0 };
         let solid = casts && fill_a >= 1.0;
         // A box that paints itself solid hides the middle of its shadows (bands.rs). Dimmed
@@ -141,7 +182,7 @@ impl RuntimeCore {
         let dim_hole = ((solid && o < 1.0) || see_through).then(|| crate::system_material::clamp_radius(radii, w, h) * if n.vis_flags.continuous_corners() { -1.0 } else { 1.0 });
         let cast = shadow_paint::Caster {
             rect: [r[0], r[1], w, h], radii, shape: if n.vis_flags.continuous_corners() { radii.map(|v| -v) } else { radii },
-            k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(wayland_blur_hole).or(blur_hole).or(dim_hole), opaque,
+            k_px, scale: s, opacity: o, srgb, clip, fade, hole: native_material.or(wayland_blur_hole).or(windows_blur_hole).or(blur_hole).or(dim_hole), opaque,
         };
         for (k, sh) in n.vis.shadows.iter().chain(stuck_shadows.1).enumerate() {
             let c = if k >= n.vis.shadows.len() { sh.color.alpha(sh.color.a * stuck_shadows.0) }
