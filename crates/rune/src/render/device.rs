@@ -24,6 +24,7 @@ static DIRECT_VULKAN_BYPASSED: AtomicBool = AtomicBool::new(false);
 /// The most views and buffers a device binds at once (`Limits::max_non_sampler_bindings`).
 /// D3D12 sizes its shader-visible heap from it and can't grow it: each layer target holds about
 /// five of these, so 4,096 ran out at 1,024 layers in one frame.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_VIEWS: u32 = 65_536;
 
 /// Vulkan loaders crash when two threads create instances or devices at once (seen with
@@ -168,6 +169,7 @@ impl Gpu {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn candidate_info(index: usize, adapter: &wgpu::Adapter, surface: Option<&wgpu::Surface<'_>>) -> crate::gpu::fallback::Candidate {
         let info = adapter.get_info();
         let supported = surface.is_none_or(|s| adapter.is_surface_supported(s));
@@ -175,11 +177,9 @@ impl Gpu {
         crate::gpu::fallback::Candidate::from_info(index, &info, supported, translucent)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn env_fallback_policy() -> crate::gpu::fallback::Policy {
-        #[cfg(not(target_arch = "wasm32"))]
-        { crate::gpu::pick::env_policy() }
-        #[cfg(target_arch = "wasm32")]
-        { crate::gpu::fallback::Policy::Pinned }
+        crate::gpu::pick::env_policy()
     }
 
     /// Active DX12 swap-chain presentation system on Windows: DirectComposition (`DxgiFromVisual`)
@@ -277,8 +277,6 @@ impl Gpu {
         Err("synchronous GPU initialization is unsupported on web; use App::run".into())
     }
 
-    #[cfg(target_arch = "wasm32")]
-    fn try_for(i: wgpu::Instance, s: Option<&wgpu::Surface<'_>>, w: wgpu::Features, _: bool) -> Result<Gpu, String> { Self::try_with_features(i, s, w) }
 
     pub fn headless() -> Gpu {
         Self::new(Self::instance(), None)
@@ -398,6 +396,7 @@ impl Gpu {
 
     /// `instance`, or wgpu's when the native Metal backend is only the default and lacks one of
     /// the features a compositor wants (`Compositor::features`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn instance_for(wanted: wgpu::Features) -> wgpu::Instance {
         if crate::gpu::backend::wgpu_for(wanted) { Self::wgpu_instance() } else { Self::instance() }
     }

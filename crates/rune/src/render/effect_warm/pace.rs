@@ -12,8 +12,11 @@ use super::PrewarmEffects;
 
 /// No frame prepared for this long: the window rests, and the worker may compile.
 pub(super) const QUIET: Duration = Duration::from_millis(300);
-/// A window that never rests is warmed after this long all the same.
-pub(super) const LIMIT: Duration = Duration::from_secs(5);
+/// A window that never rests (a reply that streams, a spinner) is warmed after this long all
+/// the same. Until then a frame that draws a named effect for the first time compiles it
+/// itself, so the wait is short: long enough to keep the worker out of the frames that open the
+/// window, and over before most first uses.
+pub(super) const LIMIT: Duration = Duration::from_secs(1);
 
 /// What one worker and the renderer's frames share.
 #[derive(Default)]

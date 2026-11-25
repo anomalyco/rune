@@ -190,7 +190,17 @@ impl Windows {
         for host in self.hosts.iter_mut().flatten() {
             handled |= host.reopen_hook(event_loop, has_visible);
         }
-        if handled || event_loop.exiting() { return; }
+        if handled || event_loop.exiting() {
+            // Linux: a window the hook opened takes the launch's token; then it goes.
+            #[cfg(target_os = "linux")]
+            {
+                if handled && !event_loop.exiting() {
+                    for host in self.hosts.iter_mut().flatten() { host.apply_pending(event_loop); }
+                }
+                crate::open_url::instance::reopen_done();
+            }
+            return;
+        }
         #[cfg(target_os = "macos")]
         if crate::platform::reopen::accessory() { return; }
         // The default sees what the hooks did, to other windows too.
@@ -198,13 +208,25 @@ impl Windows {
         if event_loop.exiting() { return; }
         #[cfg(target_os = "macos")]
         crate::platform::reopen::unhide();
-        if let Some(Some(host)) = crate::platform::reopen::target(&candidates(&self.hosts)).and_then(|i| self.hosts.get_mut(i)) {
+        let windows = candidates(&self.hosts);
+        if let Some(Some(host)) = crate::platform::reopen::target(&windows).and_then(|i| self.hosts.get_mut(i)) {
             host.reopen(event_loop);
+        } else {
+            // Linux: a launch that came with an activation token brings a window that already
+            // shows forward with it, as the activation that comes with a reopen does on macOS.
+            #[cfg(target_os = "linux")]
+            if crate::open_url::instance::token_waiting()
+                && let Some(Some(host)) = windows.iter().position(|w| w.reopenable && w.visible).and_then(|i| self.hosts.get_mut(i))
+            {
+                host.reopen(event_loop);
+            }
         }
         // Windows: a launch while the app runs brings its front window forward, restored, as
         // AppKit's activation does on macOS; the launch let this process take the foreground.
         #[cfg(target_os = "windows")]
         crate::open_url::instance::raise_front();
+        #[cfg(target_os = "linux")]
+        crate::open_url::instance::reopen_done();
     }
 }
 

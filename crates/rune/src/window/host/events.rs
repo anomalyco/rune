@@ -30,6 +30,7 @@ impl Host {
         // Updates queued before launch (the link that launched the app) show in the first frame.
         self.app.drain_startup(&self.shortcuts, &mut self.menus);
         self.apply_tx_color_scheme();
+        self.apply_tx_window_backdrop();
         if let Some(scheme) = self.shared.take_color_scheme() {
             self.set_app_color_scheme(scheme);
         }
@@ -185,6 +186,7 @@ impl Host {
             WakeEvent::Level(_, on) => self.set_always_on_top(event_loop, on),
             WakeEvent::ExcludeFromCapture(_, exclude) => self.set_exclude_from_capture(exclude),
             WakeEvent::ColorScheme(_, scheme) => self.set_color_scheme(scheme),
+            WakeEvent::WindowBackdrop(_, backdrop) => self.set_window_backdrop(backdrop),
             WakeEvent::Frame(_, mut request) => {
                 let rt = self.app.rt_mut();
                 request.spring = (request.animate && !rt.reduced_motion).then_some(crate::tok::motion::DEFAULT);
@@ -392,6 +394,13 @@ impl Host {
             WindowEvent::Resized(size) => {
                 sync_chrome_core(app.rt_mut(), l, chrome, titlebar);
                 record_reopen(&mut self.reopen, l, app.rt().host.fit_height);
+                #[cfg(target_os = "windows")]
+                let maximize_changed = {
+                    let maximized = l.is_maximized();
+                    let changed = maximized != l.native.last_maximized;
+                    l.native.last_maximized = maximized;
+                    changed
+                };
                 let was_live = app.rt().live_visible();
                 let now_live = self.life.uncovered() && size.width > 0 && size.height > 0 && !l.minimized();
                 app.set_live_visible(now_live);
@@ -410,6 +419,10 @@ impl Host {
                     return;
                 }
                 let origin_moved = sync_screen_origin_core(app.rt_mut(), &l.window);
+                #[cfg(target_os = "windows")]
+                if maximize_changed {
+                    self.sync_window_backdrop(true);
+                }
                 #[cfg(target_os = "windows")]
                 if self.try_handle_drag_resize(size, scale, event_loop) {
                     return;
@@ -496,6 +509,8 @@ impl Host {
                 if self.args.theme.is_none() {
                     app.rt_mut().set_system_dark(theme == Theme::Dark);
                     l.request_redraw();
+                    #[cfg(target_os = "windows")]
+                    self.sync_window_backdrop(true);
                 }
             }
             WindowEvent::ModifiersChanged(m) => {

@@ -171,6 +171,7 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
     let on_ready = app.on_ready.take();
     let on_frame_encoded = app.on_frame_encoded.take();
     let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
+    crate::credentials::note_headless_runtime();
     let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
     let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
     let menus = crate::native_menu::MenuGuard::attach(&shared, true);

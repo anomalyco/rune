@@ -208,6 +208,8 @@ pub(in crate::runtime) struct Touch {
     hold: HoldState,
     policy: TouchHoldPolicy,
     hold_command: Option<TouchHoldCommand>,
+    /// [`Drag::data`] kept across an `El::on_edge_drag` gesture's phases.
+    pub(in crate::runtime) edge_data: f32,
 }
 
 impl Touch {
@@ -233,8 +235,9 @@ struct Finger {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     /// Still within the slop: lifting it here is a tap. `scroll` is the vertical viewport
-    /// under the finger, held until the pan picks its axis.
-    Pending { scroll: Option<NodeId> },
+    /// under the finger, held until the pan picks its axis; `edge` the `El::on_edge_drag`
+    /// element whose zone it landed in, which a first move away from that edge hands it to.
+    Pending { scroll: Option<NodeId>, edge: Option<(NodeId, crate::SwipeEdge)> },
     /// Landed on a bare `.window_drag()` region and still within `TOUCH_SLOP`: holds the drag
     /// until the finger moves past the slop, so taps, double-taps and long presses still work.
     WindowDragPending,
@@ -243,6 +246,8 @@ enum Mode {
     WindowDragging,
     /// It drags the element it pressed.
     Drag,
+    /// An `El::on_edge_drag` element took it: the press under it was let go.
+    Edge { node: NodeId },
     /// It pans viewport `scroll` along one axis.
     Pan { scroll: NodeId, horizontal: bool },
     /// A long press opened the menu under it: it lifts on nothing.
@@ -253,9 +258,9 @@ impl Mode {
     /// The viewport the touch holds: the one it pans, or while pending the one under it.
     fn scroll(self) -> Option<NodeId> {
         match self {
-            Mode::Pending { scroll } => scroll,
+            Mode::Pending { scroll, .. } => scroll,
             Mode::Pan { scroll, .. } => Some(scroll),
-            Mode::WindowDragPending | Mode::WindowDragging | Mode::Drag | Mode::Menu => None,
+            Mode::WindowDragPending | Mode::WindowDragging | Mode::Drag | Mode::Edge { .. } | Mode::Menu => None,
         }
     }
 
@@ -361,6 +366,7 @@ impl RuntimeCore {
 
     fn touch_down_inner(&mut self, app: &mut dyn AppDriver, id: u64, x: f32, y: f32, time: f64) {
         if self.pointer.touch.finger.is_some() { return; }
+        let edge = self.edge_drag_candidate(x, y);
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(app, x, y);
         self.press_down(app, x, y, true);
@@ -393,17 +399,20 @@ impl RuntimeCore {
             }
             None => {}
         }
-        // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut it.
-        if self.press_drags_at_once() {
+        // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut it,
+        // unless an edge swipe may still take the touch.
+        if edge.is_none() && self.press_drags_at_once() {
             self.touch_scroll_end(scroll, 0.0);
             let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
             let _ = self.apply_hold_effects(effects);
             self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Drag });
             return;
         }
-        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Start { now, event_time: time, policy });
+        // An at-once drag in an edge zone waits for the slop, but still has no long press.
+        let hold = if edge.is_some() && self.press_drags_at_once() { HoldEvent::Cancel } else { HoldEvent::Start { now, event_time: time, policy } };
+        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, hold);
         let _ = self.apply_hold_effects(effects);
-        self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending { scroll } });
+        self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending { scroll, edge } });
     }
 
     fn touch_move(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64) {
@@ -415,7 +424,14 @@ impl RuntimeCore {
             self.host.titlebar.action = Some(TitlebarAction::Drag);
             self.pointer.touch.finger.as_mut().unwrap().mode = Mode::WindowDragging;
             left_hold_slop = true;
-        } else if let Mode::Pending { scroll } = f.mode && dx.hypot(dy) > TOUCH_SLOP {
+        } else if let Mode::Pending { scroll, edge: Some((node, edge)) } = f.mode && dx.hypot(dy) > TOUCH_SLOP && edge_drag::moves_away(edge, dx, dy) {
+            let origin = f.origin;
+            self.touch_scroll_end(scroll, 0.0);
+            if !self.cancel_drag() { self.drop_press(); }
+            self.pointer.touch.finger.as_mut().unwrap().mode = Mode::Edge { node };
+            self.queue_edge_drag(node, Phase::Down, origin, origin, false);
+            left_hold_slop = true;
+        } else if let Mode::Pending { scroll, .. } = f.mode && dx.hypot(dy) > TOUCH_SLOP {
             let origin = f.origin;
             let (scroll, horizontal) = if self.press_drags() { (None, false) } else { self.touch_scroll_pan(origin.0, origin.1, dx.abs() > dy.abs(), scroll) };
             self.pointer.touch.finger.as_mut().unwrap().mode = match scroll {
@@ -433,9 +449,11 @@ impl RuntimeCore {
         let dt = time - f.at;
         if dt > 0.0 { f.velocity = (along - f.last) / dt as f32; }
         (f.last, f.at) = (along, time);
+        let origin = f.origin;
         match f.mode {
             Mode::Pan { scroll, .. } => self.touch_scroll_move(scroll, along),
             Mode::Drag => self.pointer_move(app, x, y),
+            Mode::Edge { node } => self.queue_edge_drag(node, Phase::Move, origin, (x, y), false),
             Mode::Pending { .. } | Mode::WindowDragPending | Mode::WindowDragging | Mode::Menu => {}
         }
     }
@@ -453,11 +471,14 @@ impl RuntimeCore {
         let pan = matches!(f.mode, Mode::Pan { .. });
         let velocity = if pan && !cancelled && time - f.at < FLING_HOLD { f.velocity } else { 0.0 };
         self.touch_scroll_end(f.mode.scroll(), velocity);
+        if let Mode::Edge { node } = f.mode {
+            self.queue_edge_drag(node, Phase::Up, f.origin, (x, y), cancelled);
+        }
         if cancelled || f.mode == Mode::WindowDragging {
             self.cancel_pointer();
             return;
         }
-        if matches!(f.mode, Mode::Menu | Mode::WindowDragPending) {
+        if matches!(f.mode, Mode::Menu | Mode::WindowDragPending | Mode::Edge { .. }) {
             self.pointer.note_button_up(crate::PointerButton::Primary);
             self.pointer_leave();
             return;
@@ -506,7 +527,7 @@ impl RuntimeCore {
     /// fallback timer/confirmation, and ignores duplicate or post-lift events.
     #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
     pub(crate) fn host_touch_hold(&mut self, app: &dyn ViewDriver, id: u64) -> bool {
-        if !self.pointer.touch.finger.as_ref().is_some_and(|f| f.id == id && f.mode.hold_eligible()) {
+        if !self.pointer.touch.finger.as_ref().is_some_and(|f| f.id == id && f.mode.hold_eligible()) || self.press_drags_at_once() {
             return false;
         }
         let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::HostHold);

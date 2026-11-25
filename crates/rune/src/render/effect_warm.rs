@@ -860,7 +860,7 @@ impl Renderer {
     /// Defaults to none, so a renderer pays no background compilation CPU, driver memory, or
     /// worker thread for effects it never draws. On native targets, the named pipelines that
     /// are still unbuilt compile once on a low-priority worker thread after the first frame
-    /// completes and the window has drawn no frame for 300 ms (5 s at most; one-shot
+    /// completes and the window has drawn no frame for 300 ms (1 s at most; one-shot
     /// `render_runtime_to_offscreen` calls never start it). A frame that draws a named effect
     /// before the worker began it compiles it itself, once; a frame that meets the worker in the
     /// middle of it waits for the rest of that compile. Ignored on `wasm32`, which always

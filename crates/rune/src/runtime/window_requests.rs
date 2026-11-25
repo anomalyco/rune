@@ -12,6 +12,11 @@ pub(crate) struct HostState {
     pub(in crate::runtime) titlebar_inset: f32,
     pub(in crate::runtime) maximized: bool,
     pub(in crate::runtime) full_screen: bool,
+    /// Confirmed OS-active whole-window backdrop reported by [`Cx::window_backdrop`].
+    pub(in crate::runtime) window_backdrop: crate::WindowBackdrop,
+    /// When `true` on a transparent window, `clear_color()` clears to an opaque theme-matched
+    /// fallback so a requested backdrop that could not activate never opens a transparent hole.
+    pub(in crate::runtime) backdrop_opaque_fallback: bool,
     pub(in crate::runtime) system_reduced_motion: bool,
     pub(in crate::runtime) system_accent: crate::SystemAccent,
     /// What [`Cx::system_contrast`] reports.
@@ -41,6 +46,8 @@ pub(crate) struct HostState {
     pub(crate) window_title: Title,
     /// Per-window native color scheme requested via `Tx::set_color_scheme`, taken by the host.
     pub(crate) window_color_scheme: Option<crate::ColorScheme>,
+    /// Per-window system backdrop requested via `Tx::set_window_backdrop`, taken by the host.
+    pub(crate) window_backdrop_request: Option<crate::WindowBackdrop>,
     /// macOS document path (`MacWindowOptions::represented_file`, `Tx::set_represented_file`).
     pub(crate) represented_file: Latched<Option<std::path::PathBuf>>,
     /// macOS document edited dot (`MacWindowOptions::document_edited`, `Tx::set_document_edited`).
@@ -74,7 +81,7 @@ pub(crate) struct HostState {
     pub(in crate::runtime) deferred_field_menu_pick: Option<(u64, String)>,
     /// Test-only seam forcing `App::on_field_menu` even where `popup_menu_supported()` is true.
     #[cfg(test)]
-    pub(in crate::runtime) force_field_menu_fallback: bool,
+    pub(crate) force_field_menu_fallback: bool,
     /// The file dialog asked for (`Tx::open_file`, `Tx::save_file`) and not yet answered.
     pub(in crate::runtime) file_dialog: crate::file_dialog::DialogState,
     /// File dialog callbacks, by id, until their answer runs.
@@ -82,6 +89,8 @@ pub(crate) struct HostState {
     pub(in crate::runtime) next_file_dialog: u64,
     /// `Tx::announce`'s last words, for the accessibility tree's live region.
     pub(crate) announcement: crate::a11y::Announcement,
+    /// `Tx::haptic` requests waiting for `Runtime::take_haptics`.
+    pub(crate) haptics: crate::haptics::Haptics,
     /// The accessibility tree, while an assistive client listens (`a11y/tree.rs`).
     pub(in crate::runtime) a11y: Option<Box<crate::a11y::tree::A11yTree>>,
     /// The band of a taller document the window draws (`App::web_document`).
@@ -99,6 +108,8 @@ impl HostState {
             titlebar_inset: 0.0,
             maximized: false,
             full_screen: false,
+            window_backdrop: crate::WindowBackdrop::None,
+            backdrop_opaque_fallback: false,
             system_reduced_motion: false,
             system_accent: crate::SystemAccent::DEFAULT,
             system_contrast: None,
@@ -116,6 +127,7 @@ impl HostState {
             window_frame: None,
             window_title: Default::default(),
             window_color_scheme: None,
+            window_backdrop_request: None,
             represented_file: Default::default(),
             document_edited: Default::default(),
             fit_height: false,
@@ -136,6 +148,7 @@ impl HostState {
             file_dialog_answers: Vec::new(),
             next_file_dialog: 0,
             announcement: Default::default(),
+            haptics: Default::default(),
             a11y: None,
             page: None,
         }

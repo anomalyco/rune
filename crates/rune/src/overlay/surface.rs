@@ -471,7 +471,10 @@ impl OverlayCore {
         #[cfg(target_os = "macos")]
         self.panel.take();
         #[cfg(target_os = "windows")]
-        self.native.take();
+        {
+            self.native.take();
+            self.backdrop_tracker = Default::default();
+        }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.x11.take();
         drop(backing);

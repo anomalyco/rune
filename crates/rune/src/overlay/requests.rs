@@ -17,6 +17,10 @@ pub(super) enum KeyRequest {
     Release,
 }
 
+/// Takes the answer to `OverlayHandle::activation_token`.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) type TokenReply = Box<dyn FnOnce(Option<String>) + Send>;
+
 /// A show or a hide, fading the window's alpha over its duration (zero: at once; see
 /// `OverlayHandle::fade_in` and `fade_out` for where windows fade).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,8 +46,13 @@ pub(super) struct Requests {
     pub align: Option<(crate::Align, f32)>,
     pub size: Option<(f32, f32)>,
     pub macos_level: Option<isize>,
+    pub window_backdrop: Option<crate::WindowBackdrop>,
     pub exclude_from_capture: Option<bool>,
     pub xwayland_input: Option<bool>,
+    /// `OverlayHandle::activation_token` replies, answered before this turn's show or hide,
+    /// while the surface may still have the keys.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub tokens: Vec<TokenReply>,
     /// The `setup` waker fired.
     #[cfg(not(target_arch = "wasm32"))]
     pub woken: bool,
@@ -57,6 +66,15 @@ impl Requests {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl OverlayCore {
+    /// None off Wayland's layer shell, or while the overlay has no surface.
+    pub(super) fn activation_token(&self) -> Option<String> {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(super::Live { backing: super::Backing::Layer(layer), .. }) = self.surface.live() {
+            return layer.activation_token();
+        }
+        None
+    }
+
     /// Keeps the window out of screen recordings, or lets recorders see it again. A window
     /// made later (Wayland recreates on hide) starts from the same option.
     pub(super) fn set_capture_exclusion(&mut self, exclude: bool) {

@@ -171,6 +171,7 @@ impl FullScreenWatch {
     }
 
     /// Whether the window is entering or in full screen.
+    #[cfg(test)]
     pub fn is_full_screen(&self) -> bool {
         self.state.get().is_full_screen()
     }

@@ -102,6 +102,10 @@ impl RuntimeCore {
         if !focused { self.edit.clear_input_click(); self.wheel_lost(); }
     }
 
+    /// The last focus change the window reported was a gain.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn window_has_focus(&self) -> bool { self.host.window_focused == Some(true) }
+
     /// The window gets no more keys: it lost focus or hid, which may never report a blur. The
     /// focused physical handler hears `FocusLost` and held modifier keys are released, once
     /// until the window has focus again. A hidden host steps `hidden_timer_frame` while

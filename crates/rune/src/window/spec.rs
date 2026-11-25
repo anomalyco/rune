@@ -852,6 +852,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         color_scheme(scheme: crate::ColorScheme);
+        /// Opt-in whole-window system backdrop material, like [`App::window_backdrop`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowBackdrop, WindowOptions, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+        ///     .options(WindowOptions { transparent: true, ..Default::default() })
+        ///     .window_backdrop(WindowBackdrop::Mica);
+        /// let _ = spec;
+        /// ```
+        window_backdrop(backdrop: crate::WindowBackdrop);
         /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
         modifier_keys();
         /// Deliver hardware media transport keys ([`Key::Media`](crate::Key::Media)) to this window, like [`App::media_keys`](crate::App::media_keys).

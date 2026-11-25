@@ -100,6 +100,7 @@ pub struct Tx {
     pub(crate) drag_paths: Option<Rc<[std::path::PathBuf]>>,
     pub(crate) title: Option<String>,
     pub(crate) color_scheme: Option<crate::ColorScheme>,
+    pub(crate) window_backdrop: Option<crate::WindowBackdrop>,
     /// `Tx::set_represented_file`: `Some(Some(path))` sets, `Some(None)` clears.
     pub(crate) represented_file: Option<Option<std::path::PathBuf>>,
     /// `Tx::set_document_edited`.
@@ -107,6 +108,8 @@ pub struct Tx {
     /// `Tx::announce`: what a screen reader says after this handler.
     pub(crate) announce: Option<(String, crate::LiveRegion)>,
     pub(crate) open_urls: Vec<crate::open_url::Link>,
+    /// `Tx::haptic`, in order.
+    pub(crate) haptics: Vec<crate::Haptic>,
     pub(crate) open_paths: Vec<crate::open_path::PathRequest>,
     /// `AppHandle::register_url_scheme`: schemes to claim with the system.
     pub(crate) url_schemes: Vec<crate::open_url::scheme::Claim>,
@@ -559,6 +562,26 @@ impl Tx {
     /// ```
     pub fn set_color_scheme(&mut self, scheme: crate::ColorScheme) {
         self.color_scheme = Some(scheme);
+    }
+
+    /// Requests a whole-window system backdrop material ([`WindowBackdrop`](crate::WindowBackdrop))
+    /// after this handler, retained across native window recreation (last call in a turn wins).
+    ///
+    /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows and overlays, this
+    /// applies `DWMWA_SYSTEMBACKDROP_TYPE`. Never flips
+    /// [`Cx::window_backdrop`](crate::Cx::window_backdrop) optimistically: views observe the new
+    /// backdrop only once the OS confirms it. Ignored on web and headless.
+    ///
+    /// ```no_run
+    /// use rune::{El, WindowBackdrop, el};
+    ///
+    /// let button: El = el().on_press_tx(|_: &mut (), tx| {
+    ///     tx.set_window_backdrop(WindowBackdrop::Mica);
+    /// });
+    /// let _ = button;
+    /// ```
+    pub fn set_window_backdrop(&mut self, backdrop: crate::WindowBackdrop) {
+        self.window_backdrop = Some(backdrop);
     }
 
     /// Sets or clears this window's represented document path on macOS (`NSWindow.representedURL`),

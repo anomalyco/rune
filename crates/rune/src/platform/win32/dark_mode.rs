@@ -44,7 +44,7 @@ fn apply(mode: i32) {
 fn uxtheme() -> Option<&'static Uxtheme> {
     static UXTHEME: OnceLock<Option<Uxtheme>> = OnceLock::new();
     UXTHEME.get_or_init(|| {
-        if build()? < FIRST_BUILD { return None; }
+        if windows_build()? < FIRST_BUILD { return None; }
         // SAFETY: loads a system DLL from System32 and looks up two exports by ordinal (a
         // pointer value below 0x10000). The module stays loaded for the process.
         unsafe {
@@ -71,9 +71,14 @@ struct VersionInfo {
     service_pack: [u16; 128],
 }
 
-/// The Windows build number. `RtlGetVersion` reports it whatever the app's manifest says, which
-/// `GetVersionEx` doesn't.
-fn build() -> Option<u32> {
+/// The Windows build number, cached for the process. `RtlGetVersion` reports it whatever the
+/// app's manifest says, which `GetVersionEx` doesn't.
+pub(crate) fn windows_build() -> Option<u32> {
+    static BUILD: OnceLock<Option<u32>> = OnceLock::new();
+    *BUILD.get_or_init(query_build)
+}
+
+fn query_build() -> Option<u32> {
     // SAFETY: ntdll is loaded in every process; RtlGetVersion fills the struct whose size it is
     // given and returns an NTSTATUS.
     unsafe {

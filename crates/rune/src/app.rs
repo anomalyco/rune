@@ -158,6 +158,7 @@ pub struct App<S: 'static> {
     pub(crate) windows_window: crate::WindowsWindowOptions,
     pub(crate) exclude_from_capture: Option<bool>,
     pub(crate) color_scheme: crate::ColorScheme,
+    pub(crate) window_backdrop: crate::WindowBackdrop,
     pub(crate) compositor: Option<Box<dyn crate::compose::Compositor<S>>>,
     pub(crate) window_options: crate::WindowOptions,
     pub(crate) canvas_id: Option<String>,
@@ -230,6 +231,7 @@ impl<S: 'static> App<S> {
             windows_window: crate::WindowsWindowOptions::default(),
             exclude_from_capture: None,
             color_scheme: crate::ColorScheme::System,
+            window_backdrop: crate::WindowBackdrop::None,
             compositor: None,
             window_options: crate::WindowOptions::default(),
             canvas_id: None,
@@ -520,6 +522,39 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn color_scheme(mut self, scheme: crate::ColorScheme) -> Self {
         self.color_scheme = scheme;
+        self
+    }
+
+    /// Opt-in whole-window system backdrop material ([`WindowBackdrop`](crate::WindowBackdrop)),
+    /// applied on creation and retained across native window recreation. Defaults to
+    /// [`WindowBackdrop::None`](crate::WindowBackdrop::None).
+    ///
+    /// On Windows 11 Build 22621+ transparent DirectComposition GPU windows
+    /// (`WindowOptions { transparent: true, .. }`), this applies the documented
+    /// `DWMWA_SYSTEMBACKDROP_TYPE` attribute. Views read [`Cx::window_backdrop`](crate::Cx::window_backdrop)
+    /// to see what the OS actually activated. Update at runtime with
+    /// [`Tx::set_window_backdrop`](crate::Tx::set_window_backdrop) or
+    /// [`WindowHandle::set_window_backdrop`](crate::WindowHandle::set_window_backdrop).
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, Color, WindowBackdrop, WindowOptions, el};
+    ///
+    /// let opts = WindowOptions { transparent: true, ..Default::default() };
+    /// let spec = AppSpec::new("Notes", (800.0, 600.0), || (), |_, cx| {
+    ///     let bg = if cx.window_backdrop().is_active() {
+    ///         Color::TRANSPARENT
+    ///     } else {
+    ///         rune::tok::theme(cx.system_dark()).bg
+    ///     };
+    ///     el().w_full().h_full().fill(bg)
+    /// });
+    /// App::new(spec)
+    ///     .window_options(opts)
+    ///     .window_backdrop(WindowBackdrop::Mica)
+    ///     .run();
+    /// ```
+    pub fn window_backdrop(mut self, backdrop: crate::WindowBackdrop) -> Self {
+        self.window_backdrop = backdrop;
         self
     }
 
@@ -906,8 +941,9 @@ impl<S: 'static> App<S> {
     /// in an accessory app. With several windows, every window's hook runs, in window order,
     /// and any true skips the default. Windows: runs when the app is launched again without a
     /// link while it runs, once `rune::single_instance` made it the app's one process; the
-    /// default then also brings the front window forward, restored. Never called on other
-    /// platforms. Headless scripts deliver it with `{"reopen": true}`.
+    /// default then also brings the front window forward, restored. Linux: the same, and on
+    /// `org.freedesktop.Application.Activate`; the default uses the launch's activation token.
+    /// Never called on other platforms. Headless scripts deliver it with `{"reopen": true}`.
     pub fn on_reopen(mut self, f: fn(&mut S, bool, &mut Tx) -> bool) -> Self {
         self.on_reopen = Some(f);
         self
@@ -928,8 +964,9 @@ impl<S: 'static> App<S> {
     /// which that launch hands to this process instead of opening a window. The app registers its
     /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install), and
     /// names it with `rune::url_schemes` so only arguments on it are links: without that a flag's
-    /// URL value (`--server http://localhost:4096`) is one too. Never called on other platforms
-    /// (Linux passes links to a new process as arguments).
+    /// URL value (`--server http://localhost:4096`) is one too. Linux: the same (never a `file:`
+    /// URI), and `org.freedesktop.Application.Open`'s links; see the README. Never called on
+    /// other platforms.
     pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut Tx)) -> Self {
         self.on_open_url = Some(f);
         self
@@ -946,8 +983,10 @@ impl<S: 'static> App<S> {
     /// (`CFBundleDocumentTypes`, see the README). With several windows whose apps have the hook,
     /// the first still running receives files.
     ///
-    /// Never called on Windows or Linux, which pass opened files to a new process as launch
-    /// arguments. Headless scripts deliver it with `{"open_files": ["a.torrent"]}`.
+    /// Linux: the `file://` URIs among the launch arguments (`Exec=myapp %U`, not `%F`), with
+    /// `rune::single_instance` a later launch's too, and `org.freedesktop.Application.Open`'s;
+    /// see the README. Never called on Windows, which passes opened files to a new process as
+    /// launch arguments. Headless scripts deliver it with `{"open_files": ["a.torrent"]}`.
     ///
     /// ```no_run
     /// use std::path::PathBuf;
