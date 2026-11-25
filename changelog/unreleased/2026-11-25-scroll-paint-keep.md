@@ -1,0 +1,1 @@
+- Paint reuse (`PaintKeep`): clean subtrees whose inherited state changed only by a grid-aligned rigid scroll offset now copy their previous paint (shifting instances, hits, drawn rects, inherited scratch, and sticky frames for wholly offscreen and interior visible subtrees) instead of repainting every mounted row on scroll frames.

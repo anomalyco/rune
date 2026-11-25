@@ -227,6 +227,12 @@ impl Parent {
     pub(in crate::runtime) fn exact_off(&self, rigid: [f32; 2]) -> [f32; 2] {
         core::array::from_fn(|a| self.rest.exact[a] + rigid[a] - self.rest.at[a] - round(rigid[a]))
     }
+
+    /// Whether any edge of this parent is still gliding.
+    #[inline]
+    pub(in crate::runtime) fn left_moving(&self) -> bool {
+        self.left != [0.0; 4]
+    }
 }
 
 /// The glides of the nodes moving now and the scaled layers, owned by the runtime.
