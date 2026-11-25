@@ -1,4 +1,4 @@
-use rune::{Cx, El, Env, Runtime, TextEdit, TextStyle, col};
+use rune::{Color, Cx, El, Env, Runtime, TextEdit, TextStyle, col};
 use rune_kit::*;
 
 /// A shadcn/Tailwind-sized kit: 24/28/32/36/40 buttons, a 32 × 18 switch and 32 point fields.
@@ -141,4 +141,54 @@ fn field_focus_outline_follows_the_kit() {
     assert!(ring(rect("ring-default"), 1.0, 0.0), "the built-in ring sits just inside the box");
     assert!(ring(rect("ring"), 3.0, 3.0), "a 3 point halo outside the box");
     assert!(!ring(rect("ring"), 1.0, 0.0), "no built-in ring on the kit's field");
+}
+
+const RED: Color = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
+
+fn switch_view(flat: &bool, cx: &mut Cx<bool>) -> El {
+    let mut k = Kit::neutral(cx.system_dark());
+    k.elevation.switch_on.clear();
+    k.elevation.switch_off.clear();
+    k.elevation.elements.clear();
+    if *flat {
+        k.metrics.switch_look =
+            Some(SwitchLook { track_border: 1.0, track_border_off: RED, ..SwitchLook::flat(&k) });
+    }
+    col()
+        .child(Switch::new(false).build(&k).key("off"))
+        .child(Switch::new(true).build(&k).key("on"))
+        .child(Switch::new(true).web().build(&k).key("web"))
+}
+
+/// `SwitchLook::flat` drops the track's sheen and the knob's gradient and rim, and the track
+/// takes the kit's border.
+#[test]
+fn switch_look_turns_off_the_sheen_and_rim_and_borders_the_track() {
+    for flat in [false, true] {
+        let mut rt = Runtime::new(flat, switch_view, (200.0, 200.0), Env::new(false, 1.0));
+        rt.frame(0.0);
+        rt.settle_all();
+        rt.frame(0.0);
+        let gradients = rt.instances.iter().filter(|i| i.params[1] == rune::render::KIND_GRADIENT).count();
+        let els = rt.elements();
+        let under = |root: &str, key: &str| {
+            let path = &els.iter().find(|e| e.key.as_deref() == Some(root)).unwrap().path;
+            els.iter()
+                .find(|e| e.key.as_deref() == Some(key) && e.path.strip_prefix(path.as_str()).is_some_and(|r| r.starts_with('/')))
+                .unwrap_or_else(|| panic!("{key} in {root}"))
+                .clone()
+        };
+        let k = Kit::neutral(false);
+        if flat {
+            assert_eq!(gradients, 0, "a flat switch paints no gradients");
+            assert_eq!(under("off", "control").border_color, Some(RED));
+            assert_eq!(under("on", "control").border_color, Some(k.c.bg_accent));
+            assert_eq!(under("web", "control").border_color, Some(k.c.bg_accent));
+            assert_eq!(under("on", "thumb").border_color, None, "no knob rim");
+        } else {
+            assert!(gradients >= 6, "the built-in switch paints its sheen and knob depth: {gradients}");
+            assert_eq!(under("off", "control").border_color, None);
+            assert!(under("on", "thumb").border_color.is_some(), "the knob's rim");
+        }
+    }
 }

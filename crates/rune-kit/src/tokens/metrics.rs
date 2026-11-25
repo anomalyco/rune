@@ -83,6 +83,35 @@ impl SwitchMetrics {
     };
 }
 
+/// How a compact or web [`Switch`](crate::Switch) paints its track and knob over their fills.
+/// Shadows stay in `Kit::elevation` (`switch_on`, `switch_off`, `elements`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SwitchLook {
+    /// The track's sheen: a white gradient that brightens towards its bottom.
+    pub sheen: bool,
+    /// The knob's depth gradient and its 0.5 point rim, from `c.depth_top` and `c.depth_bottom`.
+    pub knob_depth: bool,
+    /// The track's border width; 0 draws none.
+    pub track_border: f32,
+    /// The track border's colour while off.
+    pub track_border_off: Color,
+    /// The track border's colour while on.
+    pub track_border_on: Color,
+}
+
+impl SwitchLook {
+    /// The built-in look: sheen and knob depth, no track border (`c.border_base` off and
+    /// `c.bg_accent` on once a width is set).
+    pub fn kit(k: &Kit) -> SwitchLook {
+        SwitchLook { sheen: true, knob_depth: true, track_border: 0.0, track_border_off: k.c.border_base, track_border_on: k.c.bg_accent }
+    }
+
+    /// Plain fills: no sheen, no knob gradient or rim, no track border.
+    pub fn flat(k: &Kit) -> SwitchLook {
+        SwitchLook { sheen: false, knob_depth: false, ..SwitchLook::kit(k) }
+    }
+}
+
 /// A boxed [`TextInput`](crate::TextInput)'s and [`TextArea`](crate::TextArea)'s box.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FieldMetrics {
@@ -182,6 +211,9 @@ pub struct Metrics {
     /// Compact [`Switch`](crate::Switch) sizes per [`ControlSize`]; else
     /// [`SwitchMetrics::NS_SWITCH`]. The web and standard appearances keep their own.
     pub switch: Option<BySize<SwitchMetrics>>,
+    /// Compact and web [`Switch`](crate::Switch) sheen, knob depth and track border; else
+    /// [`SwitchLook::kit`]. The standard appearance keeps its own.
+    pub switch_look: Option<SwitchLook>,
     /// Boxed text fields; else [`FieldMetrics::kit`].
     pub field: Option<FieldMetrics>,
     /// [`TextArea`](crate::TextArea); else [`TextAreaMetrics::kit`].
@@ -196,6 +228,9 @@ impl Kit {
     }
     pub(crate) fn switch_metrics(&self, size: ControlSize) -> SwitchMetrics {
         self.metrics.switch.unwrap_or(SwitchMetrics::NS_SWITCH).get(size)
+    }
+    pub(crate) fn switch_look(&self) -> SwitchLook {
+        self.metrics.switch_look.unwrap_or_else(|| SwitchLook::kit(self))
     }
     pub(crate) fn field_metrics(&self) -> FieldMetrics {
         self.metrics.field.unwrap_or_else(|| FieldMetrics::kit(self))
