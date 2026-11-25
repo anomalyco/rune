@@ -1513,6 +1513,9 @@ rune::App::new(spec).fit_content_height().run();
   `.window_drag()` and `.no_window_drag()` (calling `performWindowDragWithEvent:` on the macOS
   `NSPanel` and `drag_window()` on Windows and X11; Wayland layer-shell ignores it), ignore
   titlebar double-clicks, and keep the user's dragged position until an explicit placement request.
+  A right-click on a bare region, or Alt+Space no handler takes, opens the system's window menu:
+  on Windows, on Wayland through `xdg_toplevel.show_window_menu`, and on X11 through
+  `_GTK_SHOW_WINDOW_MENU` when the window manager lists it in `_NET_SUPPORTED`.
   With `Chrome::drag_regions` on macOS, only marked regions move a borderless or full-size-content
   window, so titlebar content stays clickable; Rune subclasses only that window's content-view
   instance, leaving ordinary titled windows and NSPanel overlays with their native behaviour.

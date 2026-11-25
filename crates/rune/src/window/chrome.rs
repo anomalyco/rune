@@ -188,16 +188,45 @@ pub(in crate::window) fn window_menu(window: &Window, menu: crate::runtime::Wind
         let at = at.zip(window.inner_position().ok()).map(|((x, y), o)| (o.x + (f64::from(x) * scale).round() as i32, o.y + (f64::from(y) * scale).round() as i32));
         crate::platform::win32::window_menu(window, menu, at);
     }
-    #[cfg(not(target_os = "windows"))]
+    // Wayland: `xdg_toplevel.show_window_menu`, at the click or the window's top-left corner.
+    // X11: `_GTK_SHOW_WINDOW_MENU` when the window manager advertises it, at the click, the
+    // pointer, or the window's top-left corner.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    {
+        use crate::platform::x11::window_menu::{At, show_window_menu};
+        use crate::runtime::WindowMenu;
+        if is_wayland_window(window) {
+            let (x, y) = match menu { WindowMenu::Keyboard => (0.0, 0.0), WindowMenu::Pointer => at.unwrap_or((0.0, 0.0)) };
+            window.show_window_menu(winit::dpi::LogicalPosition::new(f64::from(x.max(0.0)), f64::from(y.max(0.0))));
+            return;
+        }
+        let scale = window.scale_factor();
+        let at = match (menu, at) {
+            (WindowMenu::Keyboard, _) => At::Window(0, 0),
+            (WindowMenu::Pointer, Some((x, y))) => At::Window((f64::from(x) * scale).round() as i32, (f64::from(y) * scale).round() as i32),
+            (WindowMenu::Pointer, None) => At::Pointer,
+        };
+        show_window_menu(window, at);
+    }
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     let _ = (window, menu, at);
 }
 
-/// Whether Alt+Space opens this window's window menu when no handler takes it.
+/// Whether Alt+Space opens this window's window menu when no handler takes it: on Wayland every
+/// toplevel can ask; on X11, when the window manager advertises `_GTK_SHOW_WINDOW_MENU`.
 pub(in crate::window) fn has_window_menu(window: &Window) -> bool {
     #[cfg(target_os = "windows")]
     return crate::platform::win32::has_window_menu(window);
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    return is_wayland_window(window) || crate::platform::x11::window_menu::has_window_menu(window);
+    #[cfg(not(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
     { let _ = window; false }
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+fn is_wayland_window(window: &Window) -> bool {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    matches!(window.window_handle().map(|h| h.as_raw()), Ok(RawWindowHandle::Wayland(_)))
 }
 
 /// Sizes the window's content to `size` points. Returns the applied physical size when the
