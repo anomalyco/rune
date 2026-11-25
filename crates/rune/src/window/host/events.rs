@@ -515,7 +515,19 @@ impl Host {
                     app.rt_mut().set_system_dark(theme == Theme::Dark);
                     l.request_redraw();
                     #[cfg(target_os = "windows")]
-                    self.sync_window_backdrop(true);
+                    {
+                        // winit's `set_theme` does not update `preferred_theme`, so
+                        // `WM_SETTINGCHANGE` resets a runtime `ColorScheme::Light`/`Dark`
+                        // override to the OS theme; restore the explicit override if one is set.
+                        if let Some(explicit) = self
+                            .color_scheme
+                            .effective_for_window(crate::window::app_color_scheme())
+                            .winit_theme()
+                        {
+                            l.window.set_theme(Some(explicit));
+                        }
+                        self.sync_window_backdrop(true);
+                    }
                 }
             }
             WindowEvent::ModifiersChanged(m) => {

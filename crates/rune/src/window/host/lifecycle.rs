@@ -161,6 +161,10 @@ impl Host {
         let Some(w) = &self.win else { return };
         let color_scheme = self.color_scheme;
         let changed = crate::window::sync_window_theme(&mut self.applied_theme, target, |theme| {
+            #[cfg(target_os = "windows")]
+            if theme.is_none() {
+                crate::platform::win32::dark_mode::refresh_color_policy();
+            }
             w.window.set_theme(theme);
             #[cfg(target_os = "macos")]
             if let Some(panel) = &w.native.panel {
@@ -185,11 +189,10 @@ impl Host {
         #[cfg(target_os = "windows")]
         {
             let requested = self.window_backdrop;
-            let effective_dark = match self.color_scheme.effective_for_window(crate::window::app_color_scheme()) {
-                crate::ColorScheme::Dark => true,
-                crate::ColorScheme::Light => false,
-                crate::ColorScheme::System => self.app.rt().env.system_dark,
-            };
+            let effective_dark = self.color_scheme.effective_dark(
+                crate::window::app_color_scheme(),
+                self.app.rt().env.system_dark,
+            );
             let device_type = self.gpu.as_ref().map(|(gpu, _)| gpu.adapter.get_info().device_type);
             let transparent = self.options.transparent;
             let Some(w) = self.win.as_mut() else {
