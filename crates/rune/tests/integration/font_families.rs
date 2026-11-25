@@ -82,7 +82,13 @@ fn default_faces_keep_batch_c_pixels() {
                 q.uv.map(f32::to_bits).hash(&mut hash);
             }
         }
-        system.atlas.data.hash(&mut hash);
+        // The CPU atlas grows lazily from 2048×128 up to 2048×2048; zero-pad to the full page
+        // size before hashing so the historical golden hashes check every glyph pixel bit-for-bit
+        // independent of the backing buffer's current row capacity.
+        let full = (rune::text::ATLAS_SIZE * rune::text::ATLAS_SIZE) as usize;
+        let mut padded = system.atlas.data.clone();
+        padded.resize(full, 0);
+        padded.hash(&mut hash);
         // At 2× the inline Plex span grows the line, as Chromium's does (#983): each font's box
         // has its ascent and descent rounded to device px and its half-leading floored, and the
         // line is the largest reach above the baseline plus the largest below. Plex reaches a
