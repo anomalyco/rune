@@ -71,6 +71,12 @@ pub enum Cursor {
     ZoomIn,
     /// The magnifier with a minus (CSS `zoom-out`).
     ZoomOut,
+    /// The arrow with a question mark (CSS `help`): over something that explains itself when
+    /// the pointer rests on it.
+    Help,
+    /// The arrow with a busy mark (CSS `progress`): work is under way and the app still takes
+    /// input.
+    Progress,
     /// No OS cursor (CSS `none`), for views that draw their own. It shows again as soon as the
     /// pointer leaves the element or the window, the element goes away, or the host loses the
     /// pointer: a window losing focus, an overlay hiding.
@@ -195,6 +201,8 @@ pub(crate) enum MacCursor {
     Crosshair,
     ZoomIn,
     ZoomOut,
+    Help,
+    Progress,
     Transparent,
     MoveImage,
     CellImage,
@@ -219,6 +227,8 @@ pub(crate) fn mac_cursor(cursor: Cursor) -> MacCursor {
         Cursor::Crosshair => MacCursor::Crosshair,
         Cursor::ZoomIn => MacCursor::ZoomIn,
         Cursor::ZoomOut => MacCursor::ZoomOut,
+        Cursor::Help => MacCursor::Help,
+        Cursor::Progress => MacCursor::Progress,
         Cursor::Hidden => MacCursor::Transparent,
         Cursor::Move => MacCursor::MoveImage,
         Cursor::Cell => MacCursor::CellImage,

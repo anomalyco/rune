@@ -487,6 +487,8 @@ fn shape(c: crate::el::Cursor) -> Shape {
         Cursor::Cell => Shape::Cell,
         Cursor::ZoomIn => Shape::ZoomIn,
         Cursor::ZoomOut => Shape::ZoomOut,
+        Cursor::Help => Shape::Help,
+        Cursor::Progress => Shape::Progress,
     }
 }
 impl Dispatch<WlCallback, u64> for State {

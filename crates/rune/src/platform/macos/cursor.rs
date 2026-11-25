@@ -144,6 +144,9 @@ pub(crate) fn resolve_ns_cursor(cursor: Cursor) -> Option<Retained<NSObject>> {
             // Public from macOS 15; before that only as the private selectors winit uses.
             M::ZoomIn => named(class, &[objc2::sel!(zoomInCursor), objc2::sel!(_zoomInCursor)]),
             M::ZoomOut => named(class, &[objc2::sel!(zoomOutCursor), objc2::sel!(_zoomOutCursor)]),
+            // AppKit has neither in public: the private selectors winit uses, else the arrow.
+            M::Help => named(class, &[objc2::sel!(_helpCursor)]),
+            M::Progress => named(class, &[objc2::sel!(busyButClickableCursor)]),
             // No built-in NSCursor class method: loaded from the system/app image, falling back to
             // the arrow if unavailable.
             M::Transparent => TRANSPARENT.with(Clone::clone).or_else(|| arrow(class)),
