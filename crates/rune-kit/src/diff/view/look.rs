@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use rune::{Color, Icon, TextStyle};
 
+use super::DiffView;
 use crate::Kit;
 use crate::diff::model::LineKind;
 use crate::diff::state::{GAP_H, LINE_H};
@@ -45,6 +46,65 @@ pub(super) struct Look {
     pub(super) version: u64,
 }
 
+/// What an app overrides in a [`Look`] through [`DiffView`]'s builder.
+#[derive(Default)]
+pub(super) struct LookSpec {
+    syntax_theme: Option<SyntaxTheme>,
+    code_font: Option<TextStyle>,
+}
+
+/// A line height of 0 means 1.25 × size in [`TextStyle`]; rows need the number.
+fn resolve_line_height(font: TextStyle) -> TextStyle {
+    let line_height = if font.line_height > 0.0 { font.line_height } else { (font.size * 1.25).ceil() };
+    TextStyle { line_height, ..font }
+}
+
+impl<S: 'static> DiffView<S> {
+    /// Override the syntax highlighting palette (by default [`SyntaxTheme::from_kit`]).
+    ///
+    /// ```
+    /// # use rune_kit::{Kit, diff::{DiffState, DiffView}};
+    /// # struct App { diff: DiffState }
+    /// # let s = &App { diff: DiffState::default() };
+    /// # let k = Kit::neutral(true);
+    /// use rune::Color;
+    /// use rune_kit::syntax::{Syntax, SyntaxTheme};
+    ///
+    /// let theme = SyntaxTheme::from_kit(&k).with(Syntax::Keyword, Color { r: 0.9, g: 0.3, b: 0.6, a: 1.0 });
+    /// # let _ =
+    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+    ///     .syntax_theme(theme)
+    ///     .build(s, &k)
+    /// # ;
+    /// ```
+    pub fn syntax_theme(mut self, theme: SyntaxTheme) -> Self {
+        self.look.syntax_theme = Some(theme);
+        self
+    }
+
+    /// The face code and line numbers draw in (by default the kit's mono at 13 pt on 20 pt
+    /// lines). Each code line is the font's line height tall (1.25 × size when it is 0), and
+    /// a column is 0.6 × size wide, so pick a monospaced family.
+    ///
+    /// ```
+    /// # use rune_kit::{Kit, diff::{DiffState, DiffView}};
+    /// # struct App { diff: DiffState }
+    /// # let s = &App { diff: DiffState::default() };
+    /// # let k = Kit::neutral(true);
+    /// use rune::TextStyle;
+    ///
+    /// # let _ =
+    /// DiffView::new(|s: &App| &s.diff, |s: &mut App| &mut s.diff)
+    ///     .code_font(TextStyle { size: 12.0, line_height: 20.0, ..k.ty.mono })
+    ///     .build(s, &k)
+    /// # ;
+    /// ```
+    pub fn code_font(mut self, font: TextStyle) -> Self {
+        self.look.code_font = Some(font);
+        self
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct Tints {
     pub(super) line: Color,
@@ -56,7 +116,7 @@ pub(super) struct Tints {
 }
 
 impl Look {
-    pub(super) fn new(k: &Kit, syntax_theme: Option<SyntaxTheme>) -> Look {
+    pub(super) fn new(k: &Kit, spec: LookSpec) -> Look {
         let c = &k.c;
         let bg = c.bg_base;
         let dark = k.dark;
@@ -68,7 +128,7 @@ impl Look {
             bar: hue,
             count: fg,
         };
-        let font = TextStyle { size: 13.0, line_height: LINE_H, ..k.ty.mono };
+        let font = spec.code_font.map_or(TextStyle { size: 13.0, line_height: LINE_H, ..k.ty.mono }, resolve_line_height);
         let info = c.info.icon;
         let mut look = Look {
             font,
@@ -95,14 +155,14 @@ impl Look {
             on_accent: c.white,
             triangle_down: k.glyph.triangle_down,
             triangle_right: k.glyph.triangle_right,
-            syntax: syntax_theme.unwrap_or_else(|| SyntaxTheme::from_kit(k)),
+            syntax: spec.syntax_theme.unwrap_or_else(|| SyntaxTheme::from_kit(k)),
             version: 0,
         };
         let mut h = std::hash::DefaultHasher::new();
         for c in [look.bg, look.text, look.add.bar, look.del.bar, look.accent, look.header_bg] {
             [c.r, c.g, c.b, c.a].map(f32::to_bits).hash(&mut h);
         }
-        look.font.size.to_bits().hash(&mut h);
+        look.font.hash(&mut h);
         look.syntax.hash(&mut h);
         look.version = h.finish();
         look
@@ -123,6 +183,12 @@ impl Look {
             (false, None) => self.bg,
         }
     }
+
+    /// The height of a code line: the code font's line height.
+    pub(super) fn line_h(&self) -> f32 { self.font.line_height }
+
+    /// Where the 16 pt comment button sits in a line's gutter: centred on the first line.
+    pub(super) fn plus_y(&self) -> f32 { ((self.line_h() - 16.0) / 2.0).max(0.0) }
 
     /// One line-number column for numbers of `digits` digits.
     pub(super) fn number_w(&self, digits: u32) -> f32 {

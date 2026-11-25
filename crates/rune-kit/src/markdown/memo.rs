@@ -40,7 +40,7 @@ impl Hasher for PairHasher {
     }
 }
 
-struct HashFmt<'a, H>(&'a mut H);
+pub(super) struct HashFmt<'a, H>(pub(super) &'a mut H);
 
 impl<H: Hasher> std::fmt::Write for HashFmt<'_, H> {
     fn write_str(&mut self, s: &str) -> std::fmt::Result {
@@ -302,7 +302,7 @@ pub(super) fn with_renderer<R>(r: &Renderer, f: impl FnOnce() -> R) -> R {
 fn compute_base(r: &Renderer) -> (u64, u64) {
     let Renderer {
         s, highlights, reveal, streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere, on_link, on_link_secondary, on_link_hover,
-        link_look: _, link_help: _, link_ring: _, link_favicon: _, code_link: _,
+        link_look: _, link_help: _, link_ring: _, link_favicon: _, emoji: _, code_link: _,
         highlighter: _, sources: _, next_source: _, next_diff: _, tasks: _, next_task: _, on_task: _,
         #[cfg(feature = "mermaid")]
         diagram_frame: _,
@@ -443,6 +443,7 @@ impl Renderer {
         let resolved = self.with_code_links(inl);
         if !self.can_memo_links(!resolved.links.is_empty()) { return false; }
         (1u8, &*resolved).hash(h);
+        self.hash_emoji(inl, h);
         for (a, b, url) in &resolved.links {
             self.code_link_color(*a, *b, &resolved).hash(h);
             self.hash_link_url(url, h);
@@ -507,7 +508,7 @@ impl Renderer {
         if self.on_task.is_some() && !self.tasks_read_only && tasks.iter().any(Option::is_some) { return None; }
         let mut h = PairHasher::new();
         (1u8, self.base_hash(), key, top.to_bits(), dir, cap_prose).hash(&mut h);
-        match pre.filter(|p| self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0) {
+        match pre.filter(|p| self.emoji.is_none() && (self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0)) {
             Some(p) => {
                 if !self.can_memo_flags(p.flags) || !self.can_memo_links(!p.links.is_empty()) { return None; }
                 p.digest.hash(&mut h);
@@ -540,7 +541,7 @@ impl Renderer {
         if self.on_task.is_some() && !self.tasks_read_only && tasks.iter().any(Option::is_some) { return None; }
         let mut h = PairHasher::new();
         (2u8, self.base_hash()).hash(&mut h);
-        match pre.filter(|p| self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0) {
+        match pre.filter(|p| self.emoji.is_none() && (self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0)) {
             Some(p) => {
                 if !self.can_memo_flags(p.flags) || !self.can_memo_links(!p.links.is_empty()) { return None; }
                 p.digest.hash(&mut h);
@@ -606,7 +607,7 @@ impl Renderer {
     ) -> Option<(u64, u64)> {
         let mut h = PairHasher::new();
         (4u8, self.base_hash(), cell_role, key, extra, font, color, pad.map(f32::to_bits), table_dir).hash(&mut h);
-        match pre.filter(|p| self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0) {
+        match pre.filter(|p| self.emoji.is_none() && (self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0)) {
             Some(p) => {
                 if !self.can_memo_flags(p.flags) || !self.can_memo_links(!p.links.is_empty()) { return None; }
                 p.digest.hash(&mut h);
@@ -638,7 +639,7 @@ impl Renderer {
     ) -> (u64, u64) {
         let mut h = PairHasher::new();
         (n, fkey, inline_code_key, epoch, cells.len().min(n)).hash(&mut h);
-        match pre.filter(|p| cells.len() <= n && (self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0)) {
+        match pre.filter(|p| cells.len() <= n && self.emoji.is_none() && (self.code_link.is_none() || p.flags & HAS_INLINE_CODE == 0)) {
             Some(p) => {
                 p.digest.hash(&mut h);
                 if let Some(look) = &self.link_look {
@@ -651,6 +652,7 @@ impl Renderer {
                 for inl in cells.iter().take(n) {
                     let resolved = self.with_code_links(inl);
                     resolved.hash(&mut h);
+                    self.hash_emoji(inl, &mut h);
                     if let Some(look) = &self.link_look {
                         for (_, _, url) in &resolved.links {
                             look(url).map(|(sp, _)| (sp.weight.map(f32::to_bits), sp.size.map(f32::to_bits), sp.mono, sp.italic)).hash(&mut h);

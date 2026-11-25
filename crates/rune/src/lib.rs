@@ -217,6 +217,8 @@ pub use platform::preferences::{Appearance, last_appearance};
 pub use open_url::instance::release_instance;
 pub use open_url::instance::single_instance;
 pub use open_url::instance::url_schemes;
+pub use open_url::scheme::RegisterUrlScheme;
+pub use open_url::scheme::UrlSchemeError;
 pub use overlay::Availability;
 pub use overlay::OverlayHandle;
 pub use overlay::OverlaySpec;
@@ -239,6 +241,9 @@ pub use platform::accent::system_accent;
 pub use platform::app_icon::set_app_icon;
 #[cfg(target_os = "windows")]
 pub use platform::app_icon::set_app_icon_resource;
+pub use platform::desktop_settings::DesktopSetting;
+pub use platform::desktop_settings::DesktopSettingWatch;
+pub use platform::desktop_settings::desktop_setting;
 #[cfg(target_vendor = "apple")]
 pub use platform::embed;
 #[cfg(target_os = "macos")]
@@ -357,6 +362,7 @@ pub use runtime::ResolvedTextStyle;
 pub use runtime::Runtime;
 pub use runtime::SelectedText;
 pub use runtime::SelectionChange;
+pub use runtime::TextLine;
 pub use runtime::TextMark;
 pub use runtime::TextSelection;
 pub use runtime::TitlebarAction;
@@ -438,6 +444,7 @@ pub use video::Video;
 pub use window::ColorScheme;
 pub use window::CpuFirst;
 pub use window::WindowHandle;
+pub use window::geometry::WindowGeometry;
 pub use window::spec as windows;
 pub use windows::AnyWindowSpec;
 pub use windows::ConfiguredWindowOptions;

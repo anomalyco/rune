@@ -1,0 +1,1 @@
+- rune-luau: added `Script::try_render_fn(dark, f, args)`, which renders a script function once, outside any memo, and returns `Result<El, ScriptError>` instead of drawing the error card, so a host can keep its last good tree on screen or draw its own fallback when a render fails or the script isn't running (#420).

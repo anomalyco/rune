@@ -61,14 +61,59 @@ pub(in crate::render) struct Layer {
     pub additive: bool,
     /// The round hole its composite cuts (`El::cutout_circle`).
     pub hole: [f32; 4],
+    /// A quarter turn (`quarter`): its contents paint upright into a target of their own, and
+    /// its end composites that turned over `bounds`.
+    pub turn: Option<Turn>,
 }
 
-/// `Renderer::prepare_layers`' planning walk, for the layers this painter draws (no blur, no
-/// turn): each scope's bounds from what it holds, cut to its clip and its ancestors', and whether
-/// it draws at all, straight into its parent or into a target of its own.
+/// A layer turned a multiple of 90° (`Instance::turned`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(in crate::render) struct Turn {
+    /// The turn's cosine and sine, exactly 0 or ±1.
+    pub cs: [f32; 2],
+    pub pivot: [f32; 2],
+    /// The upright contents' pixels `[x0, y0, x1, y1)`, which may reach outside the window.
+    pub target: [i32; 4],
+}
+
+/// How far from a multiple of 90° a turn may be and still count as one.
+const QUARTER_EPS: f32 = 1e-4;
+
+/// The cosine, sine and pivot of layer record `i`'s turn, when this painter draws it: a multiple
+/// of 90° of a scope that is neither cached nor plus-lighter. Any other turn needs the GPU.
+pub(in crate::render) fn quarter(i: &Instance) -> Option<([f32; 2], [f32; 2])> {
+    let angle = i.border[1];
+    if angle == 0.0 || !angle.is_finite() || i.params[3] == 1.0 || i.params[0] == shader_consts::LAYER_ADDITIVE_PARAM { return None; }
+    let k = angle / std::f32::consts::FRAC_PI_2;
+    if (k - k.round()).abs() > QUARTER_EPS { return None; }
+    let cs = match (k.round() as i64).rem_euclid(4) { 0 => [1.0, 0.0], 1 => [0.0, 1.0], 2 => [-1.0, 0.0], _ => [0.0, -1.0] };
+    Some((cs, [i.border[2], i.border[3]]))
+}
+
+/// The upright bounds of `r` (`[x0, y0, x1, y1]`) turned by `cs` about `p`, clockwise as
+/// `base_vs` turns a layer's quad (`[c, -s]` turns it back).
+pub(in crate::render) fn turn_rect(r: [f32; 4], cs: [f32; 2], p: [f32; 2]) -> [f32; 4] {
+    let [c, s] = cs;
+    let mut out = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    for (x, y) in [(r[0], r[1]), (r[2], r[1]), (r[0], r[3]), (r[2], r[3])] {
+        let (dx, dy) = (x - p[0], y - p[1]);
+        let (qx, qy) = (p[0] + c * dx - s * dy, p[1] + s * dx + c * dy);
+        out = [out[0].min(qx), out[1].min(qy), out[2].max(qx), out[3].max(qy)];
+    }
+    out
+}
+
+/// `Renderer::prepare_layers`' planning walk, for the layers this painter draws (no blur, turns
+/// by multiples of 90° only): each scope's bounds from what it holds, cut to its clip and its
+/// ancestors', and whether it draws at all, straight into its parent or into a target of its
+/// own. A turned scope's contents are cut to the window and its clip turned back (the GPU's
+/// `frame`), and what it adds to its parent is its target turned.
 #[inline(never)]
 pub(in crate::render) fn plan_layers(instances: &[Instance], viewport: (u32, u32)) -> (Vec<Layer>, HashMap<u32, u32>) {
-    struct Open { at: usize, edges: [f32; 4], clip: [f32; 4], limit: [f32; 4], cache: bool }
+    // `free`: the scope is turned or inside one that is, so the window doesn't bound its
+    // contents (the turn may bring any of them into it); `frame` does: the window and the clips
+    // of it and its turned ancestors, turned back into its coordinates (the GPU's `frame`).
+    struct Open { at: usize, edges: [f32; 4], clip: [f32; 4], limit: [f32; 4], cache: bool, turn: Option<([f32; 2], [f32; 2])>, free: bool, frame: [f32; 4] }
     let mut plans: Vec<Layer> = Vec::new();
     let mut scope = HashMap::new();
     let mut open: Vec<Open> = Vec::new();
@@ -82,7 +127,12 @@ pub(in crate::render) fn plan_layers(instances: &[Instance], viewport: (u32, u32
     for (index, i) in instances.iter().enumerate() {
         if i.kind() == Some(Kind::Layer) {
             let parent = open.last().map(|o| o.at);
-            let limit = open.last().map_or(NO_CLIP, |p| [p.clip[0].max(p.limit[0]), p.clip[1].max(p.limit[1]), p.clip[2].min(p.limit[2]), p.clip[3].min(p.limit[3])]);
+            // Inside a turned scope, its frame bounds what a layer holds, not its ancestors' clips.
+            let parent_free = open.last().is_some_and(|p| p.free);
+            let limit = match open.last() {
+                Some(p) if !p.free => [p.clip[0].max(p.limit[0]), p.clip[1].max(p.limit[1]), p.clip[2].min(p.limit[2]), p.clip[3].min(p.limit[3])],
+                _ => NO_CLIP,
+            };
             let opacity = i.fill[3].clamp(0.0, 1.0);
             let hidden = opacity == 0.0 || parent.is_some_and(|p| plans[p].show == Show::Hidden);
             let cache = i.params[3] == 1.0;
@@ -91,16 +141,51 @@ pub(in crate::render) fn plan_layers(instances: &[Instance], viewport: (u32, u32
             let hole = if cache { [0.0; 4] } else { i.radii };
             let flat = !cache && opacity == 1.0 && !additive && !additive_parent && i.fade[3] == 0
                 && is_scissor_clip(i.clip, i.fade) && hole[3] == 0.0;
-            let show = if hidden { Show::Hidden } else if flat { Show::Flat } else { Show::Render };
+            let turn = if hidden { None } else { quarter(i) };
+            let free = turn.is_some() || parent_free;
+            let frame = if free {
+                let outer = match open.last() {
+                    Some(p) if parent_free => p.frame,
+                    _ => [0.0, 0.0, viewport.0 as f32, viewport.1 as f32],
+                };
+                let shown = [outer[0].max(i.clip[0]), outer[1].max(i.clip[1]), outer[2].min(i.clip[2]), outer[3].min(i.clip[3])];
+                match turn {
+                    _ if shown[2] <= shown[0] || shown[3] <= shown[1] => [0.0; 4],
+                    Some((cs, pivot)) => turn_rect(shown, [cs[0], -cs[1]], pivot),
+                    None => shown,
+                }
+            } else { NO_CLIP };
+            let show = if hidden { Show::Hidden } else if flat && turn.is_none() { Show::Flat } else { Show::Render };
             scope.insert(index as u32, plans.len() as u32);
-            open.push(Open { at: plans.len(), edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]], clip: i.clip, limit, cache });
-            plans.push(Layer { begin: index as u32, end: 0, show, bounds: [0; 4], additive, hole });
+            open.push(Open { at: plans.len(), edges: [i.rect[0], i.rect[1], i.rect[0] + i.rect[2], i.rect[1] + i.rect[3]], clip: i.clip, limit, cache, turn, free, frame });
+            plans.push(Layer { begin: index as u32, end: 0, show, bounds: [0; 4], additive, hole, turn: None });
         } else if i.kind() == Some(Kind::LayerEnd) {
             let Some(o) = open.pop() else { continue };
             scope.insert(index as u32, o.at as u32);
             let e = o.edges;
-            let vis = [(e[0]).max(o.clip[0].max(o.limit[0])).max(0.0).floor(), e[1].max(o.clip[1].max(o.limit[1])).max(0.0).floor(),
-                e[2].min(o.clip[2].min(o.limit[2])).min(viewport.0 as f32).ceil(), e[3].min(o.clip[3].min(o.limit[3])).min(viewport.1 as f32).ceil()];
+            if let Some((cs, pivot)) = o.turn {
+                let f = o.frame;
+                let t = [e[0].max(f[0]).floor(), e[1].max(f[1]).floor(), e[2].min(f[2]).ceil(), e[3].min(f[3]).ceil()];
+                let l = &mut plans[o.at];
+                l.end = index as u32;
+                if t[2] <= t[0] || t[3] <= t[1] { l.show = Show::Hidden; continue; }
+                let turned = turn_rect(t, cs, pivot);
+                let c = [o.clip[0].max(o.limit[0]), o.clip[1].max(o.limit[1]), o.clip[2].min(o.limit[2]), o.clip[3].min(o.limit[3])];
+                let shown = [turned[0].max(c[0]).max(0.0).floor(), turned[1].max(c[1]).max(0.0).floor(),
+                    turned[2].min(c[2]).min(viewport.0 as f32).ceil(), turned[3].min(c[3]).min(viewport.1 as f32).ceil()];
+                if shown[2] <= shown[0] || shown[3] <= shown[1] { l.show = Show::Hidden; }
+                l.bounds = [shown[0] as i32, shown[1] as i32, shown[2] as i32, shown[3] as i32];
+                l.turn = Some(Turn { cs, pivot, target: [t[0] as i32, t[1] as i32, t[2] as i32, t[3] as i32] });
+                if let Some(p) = open.last_mut().filter(|p| !p.cache) { union(&mut p.edges, turned[0], turned[1], turned[2], turned[3]); }
+                continue;
+            }
+            let vis = if o.free {
+                let f = o.frame;
+                [e[0].max(f[0]).floor(), e[1].max(f[1]).floor(), e[2].min(f[2]).ceil(), e[3].min(f[3]).ceil()]
+            } else {
+                [(e[0]).max(o.clip[0].max(o.limit[0])).max(0.0).floor(), e[1].max(o.clip[1].max(o.limit[1])).max(0.0).floor(),
+                    e[2].min(o.clip[2].min(o.limit[2])).min(viewport.0 as f32).ceil(), e[3].min(o.clip[3].min(o.limit[3])).min(viewport.1 as f32).ceil()]
+            };
             let edges = if o.cache { [e[0].floor(), e[1].floor(), e[2].ceil(), e[3].ceil()] } else { vis };
             let l = &mut plans[o.at];
             l.end = index as u32;
@@ -171,6 +256,16 @@ impl Bins {
                                 inside.map_or(s, |o| cut(s, o))
                             };
                             stack.push((scissor, within[n]));
+                        }
+                        // A turned scope's contents paint into a target of their own first
+                        // (`raster::turn`); here only its end draws, compositing that.
+                        Show::Render if l.turn.is_some() => {
+                            let end = l.end as usize;
+                            for b in &mut bounds[n..end] { *b = [0; 4]; }
+                            bounds[end] = inside.map_or(l.bounds, |o| cut(l.bounds, o));
+                            within[end] = within[n];
+                            n = end + 1;
+                            continue;
                         }
                         Show::Render => {
                             bounds[n] = inside.map_or(l.bounds, |o| cut(l.bounds, o));

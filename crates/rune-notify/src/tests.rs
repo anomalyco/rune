@@ -2,6 +2,8 @@
 
 use super::*;
 
+/// Not on Linux, where a desktop's notification server would take the post.
+#[cfg(not(target_os = "linux"))]
 #[test]
 fn a_bare_test_binary_cannot_post() {
     // Not a .app bundle, so it never reaches UNUserNotificationCenter (which would throw).

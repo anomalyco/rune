@@ -39,16 +39,20 @@ pub struct LayoutSeed {
 }
 
 /// Where a runtime's seed stands.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub(crate) enum Seeded {
     /// None was offered, or the one offered was for another viewport.
     #[default]
     No,
     /// Offered, for the first commit to take.
+    #[cfg(not(target_arch = "wasm32"))]
     Offered(LayoutSeed),
     /// The first view is given its rects; layout hasn't checked them yet.
+    #[cfg(not(target_arch = "wasm32"))]
     Given,
     /// The first commit's layout checked them.
+    #[cfg(not(target_arch = "wasm32"))]
     Checked,
 }
 
@@ -67,12 +71,14 @@ impl RuntimeCore {
     /// What the FIRST commit's view read, as its layout settled them: what a launch's first view
     /// reads again at the next launch, before a server or a plugin has answered. `None` before
     /// the first commit, and when that view read no rect.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn first_layout_seed(&self) -> Option<&LayoutSeed> {
         self.commit.layout_first.as_ref()
     }
 
     /// Before the first commit: `seed` is what its view's layout reads are given, when the
     /// viewport and scale are the seed's by then. After it, nothing.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn offer_layout_seed(&mut self, seed: LayoutSeed) {
         if self.commit.commits == 0 && matches!(self.commit.layout_seen.seeded, Seeded::No | Seeded::Offered(_)) {
             self.commit.layout_seen.seeded = Seeded::Offered(seed);
@@ -82,33 +88,46 @@ impl RuntimeCore {
     /// As the first commit measures: takes the offered seed. True while the first view's reads
     /// hold a seed's rects, which no layout stands behind yet.
     pub(super) fn seed_layout_reads(&mut self) -> bool {
-        if self.commit.commits > 0 { return false; }
-        let Seeded::Offered(_) = self.commit.layout_seen.seeded else {
-            return matches!(self.commit.layout_seen.seeded, Seeded::Given);
-        };
-        let Seeded::Offered(seed) = std::mem::take(&mut self.commit.layout_seen.seeded) else { return false };
+        #[cfg(target_arch = "wasm32")]
+        { false }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.commit.commits > 0 { return false; }
+            let Seeded::Offered(_) = self.commit.layout_seen.seeded else {
+                return matches!(self.commit.layout_seen.seeded, Seeded::Given);
+            };
+            let Seeded::Offered(seed) = std::mem::take(&mut self.commit.layout_seen.seeded) else { return false };
         // The zoom the view will ask for, so its first run is laid out at it.
         self.apply_zoom(seed.zoom);
         let fits = seed.scale == self.env.scale
             && (seed.viewport[0] - self.viewport.0).abs() < 0.01
             && (seed.viewport[1] - self.viewport.1).abs() < 0.01;
         if !fits || seed.rects.is_empty() { return false; }
-        self.commit.layout_seen.rects.extend(seed.rects);
-        self.commit.layout_seen.seeded = Seeded::Given;
-        true
+            self.commit.layout_seen.rects.extend(seed.rects);
+            self.commit.layout_seen.seeded = Seeded::Given;
+            true
+        }
     }
 
     /// The first commit's layout checked the seed's rects: `held` when every read agreed, so
     /// the view ran once. Marks which (`layout.seed.held`, `layout.seed.moved`).
     pub(super) fn seed_checked(&mut self, held: bool) {
-        if !matches!(self.commit.layout_seen.seeded, Seeded::Given) { return; }
-        self.commit.layout_seen.seeded = Seeded::Checked;
-        crate::marks::mark(if held { "layout.seed.held" } else { "layout.seed.moved" });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if !matches!(self.commit.layout_seen.seeded, Seeded::Given) { return; }
+            self.commit.layout_seen.seeded = Seeded::Checked;
+            crate::marks::mark(if held { "layout.seed.held" } else { "layout.seed.moved" });
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = held;
     }
 
     /// Whether the first commit's layout has yet to check a seed's rects.
     pub(super) fn seed_unchecked(&self) -> bool {
-        matches!(self.commit.layout_seen.seeded, Seeded::Given)
+        #[cfg(not(target_arch = "wasm32"))]
+        { matches!(self.commit.layout_seen.seeded, Seeded::Given) }
+        #[cfg(target_arch = "wasm32")]
+        { false }
     }
 }
 

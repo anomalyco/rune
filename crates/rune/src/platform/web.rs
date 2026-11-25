@@ -52,10 +52,16 @@ pub fn font_url_now(url: &str) {
 }
 
 /// Open an HTTP(S) or mail link in a new browser tab. Call from a user input handler;
-/// browser popup policy applies. The new page receives no opener or referrer.
+/// browser popup policy applies. The new page receives no opener or referrer. An error when
+/// no click or key press is active, as browsers block the tab then; a tab blocked otherwise
+/// can't be seen, since the browser never hands back a tab opened without an opener.
 pub fn open_url(url: &str) -> Result<(), String> {
     let url = crate::open_url::check(url).map_err(|e| e.to_string())?;
-    platform::open_link(&url).map_err(|e| format!("{e:?}"))
+    match platform::open_link(&url) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("the browser blocks new tabs outside a click or key press".into()),
+        Err(e) => Err(format!("{e:?}")),
+    }
 }
 
 /// Open a link in this tab, as `Tx::open_url_same_tab` does: a link on the page's origin goes
@@ -354,7 +360,7 @@ impl Browser {
         {
             let rt = app.rt_mut();
             rt.set_os_drag(false);
-            rt.set_pointer_lock_supported(false);
+            rt.set_pointer_lock_policy(crate::runtime::LockPolicy::Async);
             rt.wall_start = Some(now);
             rt.host.open_urls_natively = true;
             rt.frame.set_record_events(false);

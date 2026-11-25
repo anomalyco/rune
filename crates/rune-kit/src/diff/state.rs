@@ -194,6 +194,8 @@ pub struct DiffState {
     pub(crate) keys_rev: u64,
     visible_rows: std::ops::Range<usize>,
     view_w: std::cell::Cell<f32>,
+    /// The height the view draws a code line at (its code font's line height).
+    line_h: std::cell::Cell<f32>,
     visible: usize,
     /// The visible file last reported to the app.
     reported: Option<usize>,
@@ -239,6 +241,7 @@ impl DiffState {
             keys_rev: 0,
             visible_rows: 0..0,
             view_w: std::cell::Cell::new(0.0),
+            line_h: std::cell::Cell::new(LINE_H),
             visible: 0,
             reported: None,
             nav: None,

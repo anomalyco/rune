@@ -16,7 +16,7 @@ All workspace members live in the root [`Cargo.toml`](Cargo.toml). Apps depend o
 - `crates/procwatch`: process footprint, per-thread CPU, counting allocator, byte gauges, and loopback JSON (depends on `libc` only).
 - `crates/rune-highlights`: build-time-translated syntax highlighters (80 languages).
 - `crates/rune-i18n`: compile-time-checked message catalogs, CLDR plurals/numbers/lists, and system locale discovery (excluded from default workspace members).
-- `crates/rune-notify`: OS notifications (macOS `UNUserNotificationCenter`, Windows toast notifications; excluded from default workspace members).
+- `crates/rune-notify`: OS notifications (macOS `UNUserNotificationCenter`, Windows toast notifications, Linux `org.freedesktop.Notifications`; excluded from default workspace members).
 - `crates/rune-register`: self-registration macros built on `linkme`.
 
 ### Core stack beneath `rune`

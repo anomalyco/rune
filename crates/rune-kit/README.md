@@ -187,7 +187,7 @@ selectable text so a selected command line looks like a selected field:
 `text(cmd).selectable(true).selection_color(k.selection())`. `rune-text--selectable-help` in the
 gallery shows both, with an icon button explained by `.help`.
 
-Button (10 variants × 5 `ControlSize` sizes × 5 states), IconButton, Switch (compact, standard), Slider (5 `ControlSize` sizes, continuous or stepped, drag/keyboard/Escape cancel), Checkbox,
+Button (10 variants × 5 `ControlSize` sizes × 5 states), IconButton, Switch (compact, standard), Slider (5 `ControlSize` sizes, continuous or stepped, drag/keyboard/Escape cancel), ColorPicker (HSV square, hue strip, hex field, swatches, eyedropper toggle), Checkbox,
 RadioGroup/RadioItem, TextInput, TextArea, TextField (older), Field, Select (inline and field
 triggers, grouped), Dialog, Popover, Menu (compact and standard, checkbox/radio items, submenus,
 context menus via `.at(x, y)`), Tooltip (compact, standard, large), HoverCard, Toast and
@@ -243,7 +243,16 @@ surface; `MenuItem::key` assigns a stable key instead of positional `{menu_key}-
 inserting rows above keeps focus; `MenuItem::a11y_label` separates the accessible name (and
 typeahead / submenu name) from truncated drawn text; and `MenuItem::submenu_placement` (default
 `Placement::RightStart`) plus `MenuItem::submenu_min_width` (default `160.0`, `0.0` for
-content width) place and size submenus per item (see `rune-menu--submenu-options`). Side-placed
+content width) place and size submenus per item (see `rune-menu--submenu-options`).
+`MenuItem::on_submenu(|s, open| ..)` hands the menu the submenu's open flag: Right, Return and
+Space on the row open the submenu and move focus to its first item, and Left or Escape inside it
+closes only the submenu and returns focus to the row (the WAI-ARIA menu pattern; right to left,
+Left opens and Right closes, as the chevron points, and a submenu flipped for lack of room keeps
+the keys). Resting the pointer 200 ms on the row opens it, and resting on another row of the same
+menu closes it. `Menu::on_close` (Escape, a press outside) and picking an item other than a
+checkbox or radio also close the open submenus through it, so the menu reopens with them closed;
+an app that closes the menu some other way clears the flags itself. All `on_submenu` callbacks in
+one menu take the same state type. Side-placed
 menus and submenus clamp on both axes via `El::anchored_fit` when they would overflow a small
 window so long submenus shrink and scroll inside the viewport (see
 `rune-menu--submenu-small-window`, and `rune-menu--field-menu-fallback` for rendering
@@ -430,7 +439,15 @@ when they fit, with a sticky header over vertical scrolling; `TableState::hide_c
 `show_column`, `set_column_hidden`, and `is_column_hidden` toggle column visibility while
 preserving resized widths; `on_header_secondary_press` and `on_column_fit` hook header context
 menus and edge double-click fit-to-content; and `TableColumn` getters plus `TableColumn::size_el`
-expose column sizing for custom rows (`rune-table--wide` in the gallery shows these together). `virtual_overscan(overscan, edge)` forwards `El::virtual_overscan` to the table's internal `virtual_rows` list (default `2.0` viewports either side, `1.75` edge; `rune-table--overscan` in the gallery compares presets on 10,000 rows). The keys are the arrows, Page
+expose column sizing for custom rows (`rune-table--wide` in the gallery shows these together).
+`on_reorder(|s, from, to, tx| ..)` lets a header drag sideways move its column, kept in
+`TableState::column_order` (`set_column_order`, `move_column`, `reset_column_order`); a press
+that doesn't move still sorts. For rows the app draws itself, `Table::header(s, k)` builds only
+the header (sorting, resizing, reordering and header hooks included) and
+`Table::visible_columns(s)` gives the shown columns in order to size each cell with
+`TableColumn::size_el`; `TableState::laid_out_width` is a flex column's resolved width and
+`TableState::dragged_column` the header being dragged and how far.
+`Table::new` takes closures, so its accessors can capture (several tables over one state). `virtual_overscan(overscan, edge)` forwards `El::virtual_overscan` to the table's internal `virtual_rows` list (default `2.0` viewports either side, `1.75` edge; `rune-table--overscan` in the gallery compares presets on 10,000 rows). The keys are the arrows, Page
 Up and Down, Home, End, Return (`on_open`), and in a multi-select table Shift and Cmd-A. Roles
 are `grid`, `row`, `columnheader` and `gridcell`. 100,000 rows scroll at 0.4 ms a frame (p50)
 and 3.4 ms when rows mount (p95) (`--test integration table::`).
@@ -447,6 +464,9 @@ source each time, and earlier blocks stay mounted. `Markdown::on_link_hover(|s, 
 reports the hovered link's destination and hit line box in window points (activating link hover
 tracking even without `on_link` or `on_link_secondary`, and leaving the old block before entering
 the new one across paragraphs; see `rune-markdown--link-hover` in `kit-gallery`).
+`Markdown::emoji(|name| Option<Pixels>)` draws `:name:` shortcodes in prose (not in code, math or
+a link showing its address) as the app's pictures, 1.2 em tall on the baseline; selection, copy and
+search still see the shortcode. The pictures are drawn only, with no hover or press of their own.
 
 - **Tables** keep their header row, per-column alignment and inline formatting. Columns start
   at their content's width, so a table with room never wraps a cell, and shrink in proportion

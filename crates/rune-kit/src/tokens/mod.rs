@@ -3,5 +3,6 @@
 pub mod css;
 pub mod glyphs;
 pub mod kit;
+pub mod metrics;
 mod neutral;
 pub(crate) mod palette;

@@ -675,3 +675,43 @@ fn live_text_updates_a11y_tree_without_commit_and_only_announces_live_regions() 
     assert!(mirror.apply(update).is_empty());
     assert_eq!(mirror.by_key("cased").unwrap().1.value(), Some("ABC"));
 }
+
+#[test]
+fn live_range_value_updates_a11y_tree_without_commit_and_survives_a_commit() {
+    struct State { done: crate::Live<f32>, label: &'static str }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        col().size(400.0, 300.0).child(
+            row().key("bar").role("progressbar").label(s.label).size(200.0, 8.0)
+                .range_value(0.0, 0.0, 1.0).live_range_value(&s.done),
+        )
+    }
+
+    let done = crate::Live::new(0.0_f32);
+    let mut rt = Runtime::new(State { done: done.clone(), label: "Copying" }, view, (400.0, 300.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let mut link = AccessibilityLink::new();
+    link.activate();
+    let mut mirror = AdapterMirror::default();
+    mirror.init(link.service(&mut rt, "Window").expect("initial tree"));
+    let bar = |m: &AdapterMirror| m.by_key("bar").unwrap().1.numeric_value();
+    assert_eq!(bar(&mirror), Some(0.0));
+
+    let commits = rt.stats.commits;
+    done.set(0.25);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits, "Live::set must not commit");
+    mirror.apply(link.service(&mut rt, "Window").expect("a live range value refreshes the tree"));
+    assert_eq!(bar(&mirror), Some(0.25));
+    assert_eq!(mirror.by_key("bar").unwrap().1.max_numeric_value(), Some(1.0));
+
+    rt.frame(2.0 / 60.0);
+    assert!(link.service(&mut rt, "Window").is_none(), "an idle frame sends nothing");
+
+    // A commit that rebuilds the bar keeps the latched number, not the one the view built with.
+    rt.update(|s, _| s.label = "Moving");
+    rt.frame(3.0 / 60.0);
+    assert!(rt.stats.commits > commits);
+    mirror.apply(link.service(&mut rt, "Window").expect("the label changed"));
+    assert_eq!(mirror.by_key("bar").unwrap().1.label(), Some("Moving"));
+    assert_eq!(bar(&mirror), Some(0.25));
+}

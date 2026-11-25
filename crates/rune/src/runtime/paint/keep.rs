@@ -106,19 +106,70 @@ pub(in crate::runtime) struct PaintKeep {
     /// Tests: execute actual keep copies instead of the debug-only verify pass.
     #[cfg(test)]
     pub(in crate::runtime) force_copy: bool,
-    /// Tests: count of `check_shifted` mismatches observed.
-    #[cfg(test)]
-    pub(in crate::runtime) verify_mismatches: usize,
     /// Tests: nodes copied (or verified as copyable) in the last paint.
     #[cfg(test)]
     pub(in crate::runtime) last_kept: usize,
+    /// Tests: suppress strict-mode panic in `record_mismatch` when intentionally probing a mismatch.
+    #[cfg(test)]
+    pub(in crate::runtime) allow_check_mismatch: bool,
     /// Nodes copied this paint, and why the others weren't as they were (`RUNE_PAINT_KEEP_LOG`).
     kept: usize,
     why: [usize; 6],
     /// The next paint paints everything (the raster check's fresh paint).
     pub(in crate::runtime) off_once: bool,
-    #[cfg(test)]
+    /// Debug builds: count of unshifted `keep_check` mismatches observed.
+    #[cfg(debug_assertions)]
     pub(in crate::runtime) check_mismatches: usize,
+    /// Debug builds: count of scroll-shifted `check_shifted` mismatches observed.
+    #[cfg(debug_assertions)]
+    pub(in crate::runtime) verify_mismatches: usize,
+    /// Debug builds: panic on any self-check mismatch for this runtime (`Runtime::set_paint_keep_strict`).
+    #[cfg(debug_assertions)]
+    pub(in crate::runtime) strict_check: bool,
+}
+
+#[cfg(debug_assertions)]
+fn should_panic_on_mismatch(strict_check: bool, is_test: bool, env: Option<&str>) -> bool {
+    strict_check || env == Some("1") || (is_test && env != Some("0"))
+}
+
+impl PaintKeep {
+    /// Debug builds: records a self-check mismatch, writes the diagnostic to stderr, and panics
+    /// when strict mode is active. Cold path: healthy debug frames never call this, and release
+    /// builds compile it out.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn record_mismatch(&mut self, shifted: bool, path: &str, differ: &[&str]) {
+        #[cfg(debug_assertions)]
+        {
+            if shifted {
+                self.verify_mismatches += 1;
+            } else {
+                self.check_mismatches += 1;
+            }
+            let kind = if shifted { " (scroll)" } else { "" };
+            let joined = differ.join(", ");
+            eprintln!(
+                "rune: paint keep{kind}: {path} would have copied what differs: {joined} (set RUNE_PAINT_KEEP_STRICT=1 to panic)"
+            );
+            #[cfg(test)]
+            let allowed = self.allow_check_mismatch;
+            #[cfg(not(test))]
+            let allowed = false;
+            if !allowed {
+                let env = rune_core::env::var("RUNE_PAINT_KEEP_STRICT");
+                if should_panic_on_mismatch(self.strict_check, cfg!(test), env.as_deref()) {
+                    panic!(
+                        "rune: paint keep{kind}: {path} would have copied what differs: {joined} (set RUNE_PAINT_KEEP_STRICT=1 to panic)"
+                    );
+                }
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = (shifted, path, differ);
+        }
+    }
 }
 
 fn disabled() -> bool {
@@ -644,9 +695,8 @@ impl RuntimeCore {
         if now.glyphs[1] - now.glyphs[0] != was.glyphs[1] - was.glyphs[0] { differ.push("glyph count"); }
         if k.pages[range(now.pages)] != k.prev_pages[range(was.pages)] { differ.push("atlas pages"); }
         if !differ.is_empty() {
-            #[cfg(test)]
-            { self.paint.keep.check_mismatches += 1; }
-            eprintln!("rune: paint keep: {} would have copied what differs: {}", self.tree.nodes[r].path, differ.join(", "));
+            let path = self.tree.nodes[r].path.as_str();
+            self.paint.keep.record_mismatch(false, path, &differ);
         }
     }
 }

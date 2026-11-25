@@ -176,10 +176,32 @@ impl PaintState {
         self.native_materials
     }
 
-    #[cfg(test)]
+    /// Debug builds: total `PaintKeep` self-check mismatches observed (both unshifted and
+    /// scroll-shifted copies). Always `0` in release builds.
     #[inline]
     pub(in crate::runtime) fn keep_check_mismatches(&self) -> usize {
-        self.keep.check_mismatches
+        #[cfg(debug_assertions)]
+        {
+            self.keep.check_mismatches + self.keep.verify_mismatches
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            0
+        }
+    }
+
+    /// Debug builds: opt into panicking on any `PaintKeep` self-check mismatch for this runtime.
+    /// No-op in release builds.
+    #[inline]
+    pub(in crate::runtime) fn set_paint_keep_strict(&mut self, strict: bool) {
+        #[cfg(debug_assertions)]
+        {
+            self.keep.strict_check = strict;
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = strict;
+        }
     }
 
     #[cfg(any(test, target_os = "macos"))]

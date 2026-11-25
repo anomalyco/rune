@@ -132,6 +132,7 @@ impl Tape {
     /// A window at rest: forgets the elements nothing kept refers to now, not at the next
     /// `compact_at` (each session or terminal opened and closed adds its own, and frames past
     /// the window have gone into the base since), and gives back the space the ring grew to.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn rest(&mut self) {
         if self.paused { return; }
         self.compact();

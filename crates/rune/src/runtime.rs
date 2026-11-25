@@ -117,8 +117,9 @@ pub(crate) use input::field_menu;
 pub use input::help_look::HelpLook;
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_imports))]
 pub(crate) use input::physical::Unhandled;
-#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
 pub(crate) use input::pointer_lock::LockEffect;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use input::pointer_lock::LockPolicy;
 pub(crate) use input::titlebar::WindowMenu;
 #[cfg(target_os = "windows")]
 pub(crate) use input::titlebar::{DragHit, drag_hit_at};
@@ -178,6 +179,7 @@ pub(crate) use selection::links::count_span_box_queries;
 pub(crate) use selection::links::origin as text_origin;
 pub(crate) use selection::selectable;
 pub use selection::selectable::{SelectedText, SelectionChange, TextSelection};
+pub use selection::field_lines::TextLine;
 pub use selection::text_marks::TextMark;
 use selection::{caret, click as input_click, links, select_all, text_marks};
 

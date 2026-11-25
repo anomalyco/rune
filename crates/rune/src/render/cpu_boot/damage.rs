@@ -5,7 +5,7 @@
 //! colour, the atlas generation for glyphs and the image texels images sample.
 
 use super::Scene;
-use super::bin::{Bins, Solid, TILE_H, TILE_W, covers, interior};
+use super::bin::{Bins, Show, Solid, TILE_H, TILE_W, covers, interior};
 use super::shade::Clip;
 use crate::render::{INSTANCE_WORDS, Kind};
 
@@ -17,6 +17,12 @@ fn mix(h: u64, w: u64) -> u64 { (h.rotate_left(5) ^ w).wrapping_mul(0x517c_c1b7_
 pub(super) fn hashes(scene: &Scene<'_>, bins: &Bins, each: &mut Vec<u64>, out: &mut Vec<u64>) {
     each.clear();
     each.extend((0..scene.instances.len()).map(|n| instance(scene, bins, n)));
+    // A turned layer's contents draw only through its end (`raster::turn`): its end stands for
+    // all of them.
+    for l in bins.layers.iter().filter(|l| l.turn.is_some() && l.show == Show::Render) {
+        let end = l.end as usize;
+        each[end] = each[l.begin as usize..end].iter().fold(each[end], |h, &w| mix(h, w));
+    }
     let flat: Vec<(u32, Flat)> = (0..scene.instances.len()).filter_map(|n| flat(&scene.instances[n]).map(|f| (n as u32, f))).collect();
     out.clear();
     out.extend((0..bins.tile_count()).map(|t| tile(scene, bins, each, t, |n| flat.binary_search_by_key(&n, |f| f.0).ok().map(|k| &flat[k].1))));

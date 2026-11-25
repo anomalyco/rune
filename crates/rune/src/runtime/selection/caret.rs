@@ -215,7 +215,7 @@ impl RuntimeCore {
         dy
     }
 
-    /// Text origin `[x, y]` in window points for focused text field `i` at its laid-out place,
+    /// Text origin `[x, y]` in window points for text field `i` (focused or not) at its laid-out place,
     /// after scrolling, sticky shifts, growth stack deltas and single-line horizontal scroll.
     pub(in crate::runtime) fn field_text_origin(
         &self,

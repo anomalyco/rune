@@ -94,7 +94,9 @@ static SCHEMES: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(No
 /// and with `single_instance` a later launch with such a flag isn't a launch without links, so
 /// it doesn't reopen the app.
 ///
-/// Schemes compare without case. macOS and other platforms: does nothing.
+/// It registers nothing with the system: an installer does that, or
+/// AppHandle::register_url_scheme. Schemes compare without case. macOS and other platforms:
+/// does nothing.
 pub fn url_schemes<I, S>(schemes: I)
 where
     I: IntoIterator<Item = S>,

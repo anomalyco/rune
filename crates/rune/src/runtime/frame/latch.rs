@@ -97,6 +97,7 @@ impl RuntimeCore {
         for prefix in std::mem::take(&mut tx.evict_memos) { self.invalidate_memos_by_prefix(&prefix); }
         if !tx.open_urls.is_empty() { self.open_urls(std::mem::take(&mut tx.open_urls)); }
         if !tx.open_paths.is_empty() { self.open_paths(std::mem::take(&mut tx.open_paths)); }
+        if !tx.url_schemes.is_empty() { self.host.claim_url_schemes(std::mem::take(&mut tx.url_schemes)); }
         if std::mem::take(&mut tx.clear_secret) {
             if self.copy_request.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { self.copy_request = None; }
             self.edit.clear_secret_request = true;

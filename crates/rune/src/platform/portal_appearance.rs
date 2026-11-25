@@ -8,7 +8,8 @@
 //! answered before the first window asks, reads the settings once and follows `SettingChanged`,
 //! falling back once on that worker to `kdeglobals` or GSettings when the portal does not answer
 //! motion or double-click keys; any change asks every window to redraw, which rereads the cached
-//! atomics without touching disk or D-Bus on the UI thread.
+//! atomics without touching disk or D-Bus on the UI thread. The same worker reads and follows the
+//! keys an app asked for (`desktop_settings`).
 
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 
@@ -175,7 +176,7 @@ fn record_fallback_double_click(slot: &AtomicU32, ms: u32) -> bool {
 
 #[cfg(all(target_os = "linux", feature = "dbus"))]
 mod dbus {
-    use futures_lite::StreamExt;
+    use futures_lite::{FutureExt, StreamExt};
     use std::{sync::{Arc, Mutex, OnceLock, Weak, atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering}, mpsc}, time::{Duration, Instant}};
     use winit::window::Window;
     use zbus::{Connection, Proxy, zvariant::{OwnedValue, Value}};
@@ -399,7 +400,7 @@ mod dbus {
                 conn.close().await.ok();
                 return None;
             }
-            Some((conn, changes))
+            Some((conn, portal, changes))
         }).await.flatten();
         if !has_portal_motion(MOTION.load(Ordering::Relaxed)) {
             store_fallback_reduced_motion(crate::platform::preferences::read_reduced_motion_fallback());
@@ -411,23 +412,48 @@ mod dbus {
         }
         keep_now();
         ready.send(()).ok();
-        let Some((_conn, mut changes)) = setup else { return };
-        while let Some(message) = changes.next().await {
+        let Some((_conn, portal, mut changes)) = setup else { return };
+        // Keys an app follows (`rune::desktop_setting`) are read here, between signals, so a read
+        // never lands after a newer `SettingChanged`.
+        let reads = crate::platform::desktop_settings::reads();
+        loop {
+            let next = async { Next::Signal(changes.next().await) }
+                .or(async {
+                    match reads.recv().await {
+                        Ok(key) => Next::Read(key),
+                        Err(_) => std::future::pending().await,
+                    }
+                })
+                .await;
+            let message = match next {
+                Next::Signal(Some(message)) => message,
+                Next::Signal(None) => return,
+                Next::Read((namespace, key)) => {
+                    if let Some(Ok(value)) = portal::timeout(RPC_TIMEOUT, read_setting(&portal, &namespace, &key)).await {
+                        crate::platform::desktop_settings::changed(&namespace, &key, &value);
+                    }
+                    continue;
+                }
+            };
             let Ok((namespace, key, value)) = message.body().deserialize::<(String, String, OwnedValue)>() else {
                 continue;
             };
             match (namespace.as_str(), key.as_str()) {
-                (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => store_scheme(&value),
-                (APPEARANCE_NAMESPACE, REDUCED_MOTION_KEY) => store_reduced_motion(&value),
-                (GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY) => store_enable_animations(&value),
-                (MOUSE_NAMESPACE, DOUBLE_CLICK_KEY) => {
-                    store_double_click(&value);
-                    continue;
-                }
-                _ => continue,
+                (APPEARANCE_NAMESPACE, COLOR_SCHEME_KEY) => { store_scheme(&value); keep_now(); }
+                (APPEARANCE_NAMESPACE, REDUCED_MOTION_KEY) => { store_reduced_motion(&value); keep_now(); }
+                (GNOME_INTERFACE_NAMESPACE, ENABLE_ANIMATIONS_KEY) => { store_enable_animations(&value); keep_now(); }
+                (MOUSE_NAMESPACE, DOUBLE_CLICK_KEY) => store_double_click(&value),
+                _ => {}
             }
-            keep_now();
+            // Rune's own keys first; the app's callbacks run on their own thread.
+            crate::platform::desktop_settings::changed(&namespace, &key, &value);
         }
+    }
+
+    /// What the worker's loop woke for: a portal signal, or a key an app began to follow.
+    enum Next {
+        Signal(Option<zbus::Message>),
+        Read((String, String)),
     }
 }
 

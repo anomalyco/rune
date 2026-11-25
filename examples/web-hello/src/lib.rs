@@ -18,6 +18,8 @@ mod image_proof;
 #[cfg(target_arch = "wasm32")]
 mod input_proof;
 #[cfg(target_arch = "wasm32")]
+mod pointer_lock_proof;
+#[cfg(target_arch = "wasm32")]
 mod popup_modal_proof;
 #[cfg(target_arch = "wasm32")]
 mod rtl_proof;
@@ -99,6 +101,8 @@ pub fn start() {
     if auto_complete_proof::enabled() { auto_complete_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if caret_browsing_proof::enabled() { caret_browsing_proof::run(); return; }
+    #[cfg(target_arch = "wasm32")]
+    if pointer_lock_proof::enabled() { pointer_lock_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if popup_modal_proof::enabled() { popup_modal_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]

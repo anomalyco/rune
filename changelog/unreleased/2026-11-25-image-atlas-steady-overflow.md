@@ -1,0 +1,1 @@
+- Image atlas: steady scenes showing more than `IMAGE_ATLAS_MAX_PAGES` (16) pages of images now keep overflow pages resident across frames with zero per-frame CPU re-copies and zero GPU re-uploads, relocating overflow slots back onto pages `0..16` only when space actually opens there.

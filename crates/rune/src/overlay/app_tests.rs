@@ -190,3 +190,36 @@ fn overlay_compositor_exposes_instance_and_adapter_when_gpu_is_attached() {
         "overlay Frame::adapter info must match Frame::device.adapter_info()",
     );
 }
+#[test]
+fn overlay_macos_color_space_defaults_to_srgb_and_retains_unmanaged() {
+    fn view(_: &(), _: &mut Cx<()>) -> El { col().size(120.0, 80.0) }
+    let app = AppSpec::new("overlay-color-space", (120.0, 80.0), || (), view);
+
+    let default_cfg = OverlaySpec::new("default", app.size, view).options(Default::default());
+    assert_eq!(default_cfg.macos_color_space, crate::MacColorSpace::Srgb);
+    let (default_overlay, _) = Overlay::new(default_cfg, (), &app);
+    assert_eq!(default_overlay.core.macos_color_space, crate::MacColorSpace::Srgb);
+
+    let from_spec: crate::ConfiguredOverlay<()> = OverlaySpec::new("from-spec", app.size, view).into();
+    assert_eq!(from_spec.macos_color_space, crate::MacColorSpace::Srgb);
+
+    let unmanaged_cfg = OverlaySpec::new("unmanaged", app.size, view)
+        .options(Default::default())
+        .macos_color_space(crate::MacColorSpace::Unmanaged);
+    assert_eq!(unmanaged_cfg.macos_color_space, crate::MacColorSpace::Unmanaged);
+    let (unmanaged_overlay, _) = Overlay::new(unmanaged_cfg, (), &app);
+    assert_eq!(unmanaged_overlay.core.macos_color_space, crate::MacColorSpace::Unmanaged);
+
+    let host_cfg = OverlaySpec::new("host-unmanaged", app.size, view)
+        .options(Default::default())
+        .macos_color_space(crate::MacColorSpace::Unmanaged);
+    let (host, _) = OverlayHost::new(host_cfg, (), &app, FontSmoothing::default());
+    assert_eq!(host.core.macos_color_space, crate::MacColorSpace::Unmanaged);
+
+    let back_to_srgb = OverlaySpec::new("toggle", app.size, view)
+        .options(Default::default())
+        .macos_color_space(crate::MacColorSpace::Unmanaged)
+        .macos_color_space(crate::MacColorSpace::Srgb);
+    let (toggled, _) = Overlay::new(back_to_srgb, (), &app);
+    assert_eq!(toggled.core.macos_color_space, crate::MacColorSpace::Srgb);
+}

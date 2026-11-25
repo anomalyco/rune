@@ -341,6 +341,23 @@ impl El {
         self.cold_mut().a11y.more().range = Some(Range { value, min, max, step });
         self
     }
+    /// Bind a [`range_value`](Self::range_value)'s number to a live value, so a progress bar or
+    /// meter tells assistive technology where it is without a view commit. The bounds stay those
+    /// of `range_value` (0 to 1 without one). A smoothed binding reports the value it moves to,
+    /// not each step of its spring; a [`Tween`](crate::Tween) reports each frame's sample.
+    ///
+    /// ```no_run
+    /// # use rune::{Live, el};
+    /// let done = Live::new(0.0_f32);
+    /// let bar = el().role("progressbar").range_value(0.0, 0.0, 1.0).live_range_value(&done);
+    /// done.set(0.4);
+    /// ```
+    pub fn live_range_value(mut self, value: impl Into<crate::live::Binding<f32>>) -> Self {
+        let more = self.cold_mut().a11y.more();
+        more.range.get_or_insert(Range { value: 0.0, min: 0.0, max: 1.0, step: None });
+        self.bind_live(crate::live::Bound::new(value, crate::live::Property::RangeValue));
+        self
+    }
     /// The amount one step of [`El::on_step`] moves a [`range_value`](Self::range_value).
     /// [`El::on_set_value`] takes absolute numeric values with or without a step.
     pub fn range_step(mut self, step: f64) -> Self {

@@ -60,6 +60,8 @@ pub(crate) struct HostState {
     url_requests: Vec<String>,
     /// Local paths handlers asked to open or reveal that this runtime left unopened (`Runtime::take_path_requests`).
     path_requests: Vec<crate::open_path::PathRequest>,
+    /// Schemes `AppHandle::register_url_scheme` asked to claim that this runtime left alone (`Runtime::take_url_scheme_requests`).
+    url_scheme_requests: Vec<String>,
     /// True when attached to a live window, overlay or web canvas, not a headless or scripted run.
     pub(crate) open_urls_natively: bool,
     /// Pop-up menus asked for (`Tx::popup_menu`) and not yet answered, oldest first.
@@ -122,6 +124,7 @@ impl HostState {
             minimize: Default::default(),
             url_requests: Vec::new(),
             path_requests: Vec::new(),
+            url_scheme_requests: Vec::new(),
             open_urls_natively: false,
             popups: Default::default(),
             field_menu_fallback: None,
@@ -161,6 +164,18 @@ impl HostState {
     #[inline]
     pub(crate) fn push_url_request(&mut self, url: String) {
         self.url_requests.push(url);
+    }
+
+    /// Takes the schemes `AppHandle::register_url_scheme` asked to claim that this runtime
+    /// didn't claim: all of them in a headless run or test, none in a window.
+    #[inline]
+    pub(crate) fn take_url_scheme_requests(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.url_scheme_requests)
+    }
+
+    #[inline]
+    pub(crate) fn push_url_scheme_request(&mut self, scheme: String) {
+        self.url_scheme_requests.push(scheme);
     }
 
     /// Takes the local path requests handlers asked to open or reveal that this runtime didn't

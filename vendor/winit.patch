@@ -2120,3 +2120,254 @@ index 1fcf1f2b..85dfb5e3 100644
 +        }
 +    }
 +}
+diff --git a/src/platform_impl/linux/wayland/state.rs b/src/platform_impl/linux/wayland/state.rs
+--- a/src/platform_impl/linux/wayland/state.rs
++++ b/src/platform_impl/linux/wayland/state.rs
+@@ -33,6 +33,7 @@ use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
+ use crate::platform_impl::wayland::types::wp_fractional_scaling::FractionalScalingManager;
+ use crate::platform_impl::wayland::types::wp_viewporter::ViewporterState;
+ use crate::platform_impl::wayland::types::xdg_activation::XdgActivationState;
++use crate::platform_impl::wayland::types::xdg_toplevel_icon::XdgToplevelIconManagerState;
+ use crate::platform_impl::wayland::window::{WindowRequests, WindowState};
+ use crate::platform_impl::wayland::{WaylandError, WindowId};
+ use crate::platform_impl::OsError;
+@@ -94,6 +95,9 @@ pub struct WinitState {
+     /// Xdg activation.
+     pub xdg_activation: Option<XdgActivationState>,
+ 
++    /// Xdg toplevel icon manager, for window icons.
++    pub xdg_toplevel_icon_manager: Option<XdgToplevelIconManagerState>,
++
+     /// Relative pointer.
+     pub relative_pointer: Option<RelativePointerState>,
+ 
+@@ -187,6 +191,8 @@ impl WinitState {
+ 
+             xdg_shell: XdgShell::bind(globals, queue_handle).map_err(WaylandError::Bind)?,
+             xdg_activation: XdgActivationState::bind(globals, queue_handle).ok(),
++            xdg_toplevel_icon_manager: XdgToplevelIconManagerState::bind(globals, queue_handle)
++                .ok(),
+ 
+             windows: Default::default(),
+             window_requests: Default::default(),
+diff --git a/src/platform_impl/linux/wayland/types/mod.rs b/src/platform_impl/linux/wayland/types/mod.rs
+--- a/src/platform_impl/linux/wayland/types/mod.rs
++++ b/src/platform_impl/linux/wayland/types/mod.rs
+@@ -5,3 +5,4 @@ pub mod kwin_blur;
+ pub mod wp_fractional_scaling;
+ pub mod wp_viewporter;
+ pub mod xdg_activation;
++pub mod xdg_toplevel_icon;
+diff --git a/src/platform_impl/linux/wayland/types/xdg_toplevel_icon.rs b/src/platform_impl/linux/wayland/types/xdg_toplevel_icon.rs
+new file mode 100644
+--- /dev/null
++++ b/src/platform_impl/linux/wayland/types/xdg_toplevel_icon.rs
+@@ -0,0 +1,92 @@
++//! Handling of xdg toplevel icons, the window's own icon (backport of rust-windowing/winit#4288).
++
++use sctk::globals::GlobalData;
++use sctk::reexports::client::globals::{BindError, GlobalList};
++use sctk::reexports::client::protocol::wl_shm::Format;
++use sctk::reexports::client::{delegate_dispatch, Connection, Dispatch, Proxy, QueueHandle};
++use sctk::reexports::protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1;
++use sctk::reexports::protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_v1::XdgToplevelIconV1;
++use sctk::shm::slot::{Buffer, CreateBufferError, SlotPool};
++
++use crate::platform_impl::wayland::state::WinitState;
++use crate::platform_impl::PlatformIcon;
++
++#[derive(Debug)]
++pub struct XdgToplevelIconManagerState {
++    xdg_toplevel_icon_manager: XdgToplevelIconManagerV1,
++}
++
++impl XdgToplevelIconManagerState {
++    pub fn bind(
++        globals: &GlobalList,
++        queue_handle: &QueueHandle<WinitState>,
++    ) -> Result<Self, BindError> {
++        let xdg_toplevel_icon_manager = globals.bind(queue_handle, 1..=1, GlobalData)?;
++        Ok(Self { xdg_toplevel_icon_manager })
++    }
++
++    pub fn global(&self) -> &XdgToplevelIconManagerV1 {
++        &self.xdg_toplevel_icon_manager
++    }
++}
++
++/// The window's icon in an shm buffer, kept alive while the toplevel shows it.
++#[derive(Debug)]
++pub struct ToplevelIcon {
++    buffer: Buffer,
++}
++
++impl ToplevelIcon {
++    pub(crate) fn new(icon: &PlatformIcon, pool: &mut SlotPool) -> Result<Self, CreateBufferError> {
++        let (width, height) = (icon.width as i32, icon.height as i32);
++        let (buffer, canvas) = pool.create_buffer(width, height, 4 * width, Format::Argb8888)?;
++        argb_premultiplied(&icon.rgba, canvas);
++        Ok(Self { buffer })
++    }
++
++    pub fn add_buffer(&self, xdg_toplevel_icon: &XdgToplevelIconV1) {
++        xdg_toplevel_icon.add_buffer(self.buffer.wl_buffer(), 1);
++    }
++}
++
++/// Writes straight RGBA pixels as premultiplied little-endian ARGB8888.
++fn argb_premultiplied(rgba: &[u8], canvas: &mut [u8]) {
++    for (canvas_chunk, rgba) in canvas.chunks_exact_mut(4).zip(rgba.chunks_exact(4)) {
++        let alpha = rgba[3] as f32 / 255.;
++        let r = (rgba[0] as f32 * alpha) as u32;
++        let g = (rgba[1] as f32 * alpha) as u32;
++        let b = (rgba[2] as f32 * alpha) as u32;
++        let color = ((rgba[3] as u32) << 24) + (r << 16) + (g << 8) + b;
++        let array: &mut [u8; 4] = canvas_chunk.try_into().unwrap();
++        *array = color.to_le_bytes();
++    }
++}
++
++impl Dispatch<XdgToplevelIconManagerV1, GlobalData, WinitState> for XdgToplevelIconManagerState {
++    fn event(
++        _state: &mut WinitState,
++        _proxy: &XdgToplevelIconManagerV1,
++        _event: <XdgToplevelIconManagerV1 as Proxy>::Event,
++        _data: &GlobalData,
++        _conn: &Connection,
++        _qhandle: &QueueHandle<WinitState>,
++    ) {
++        // Preferred icon sizes: one buffer is enough, the compositor scales it.
++    }
++}
++
++impl Dispatch<XdgToplevelIconV1, GlobalData, WinitState> for XdgToplevelIconManagerState {
++    fn event(
++        _state: &mut WinitState,
++        _proxy: &XdgToplevelIconV1,
++        _event: <XdgToplevelIconV1 as Proxy>::Event,
++        _data: &GlobalData,
++        _conn: &Connection,
++        _qhandle: &QueueHandle<WinitState>,
++    ) {
++        // No events.
++    }
++}
++
++delegate_dispatch!(WinitState: [XdgToplevelIconManagerV1: GlobalData] => XdgToplevelIconManagerState);
++delegate_dispatch!(WinitState: [XdgToplevelIconV1: GlobalData] => XdgToplevelIconManagerState);
+diff --git a/src/platform_impl/linux/wayland/window/mod.rs b/src/platform_impl/linux/wayland/window/mod.rs
+--- a/src/platform_impl/linux/wayland/window/mod.rs
++++ b/src/platform_impl/linux/wayland/window/mod.rs
+@@ -132,6 +132,9 @@ impl Window {
+         // Set the window title.
+         window_state.set_title(attributes.title);
+ 
++        // Set the window icon before the first commit.
++        window_state.set_window_icon(attributes.window_icon.map(|icon| icon.inner));
++
+         // Set the min and max sizes. We must set the hints upon creating a window, so
+         // we use the default `1.` scaling...
+         let min_size = attributes.min_inner_size.map(|size| size.to_logical(1.));
+@@ -442,7 +445,9 @@ impl Window {
+     pub fn set_window_level(&self, _level: WindowLevel) {}
+ 
+     #[inline]
+-    pub(crate) fn set_window_icon(&self, _window_icon: Option<PlatformIcon>) {}
++    pub(crate) fn set_window_icon(&self, window_icon: Option<PlatformIcon>) {
++        self.window_state.lock().unwrap().set_window_icon(window_icon);
++    }
+ 
+     #[inline]
+     pub fn set_minimized(&self, minimized: bool) {
+diff --git a/src/platform_impl/linux/wayland/window/state.rs b/src/platform_impl/linux/wayland/window/state.rs
+--- a/src/platform_impl/linux/wayland/window/state.rs
++++ b/src/platform_impl/linux/wayland/window/state.rs
+@@ -19,8 +19,10 @@ use sctk::reexports::protocols::wp::fractional_scale::v1::client::wp_fractional_
+ use sctk::reexports::protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextInputV3;
+ use sctk::reexports::protocols::wp::viewporter::client::wp_viewport::WpViewport;
+ use sctk::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
++use sctk::reexports::protocols::xdg::toplevel_icon::v1::client::xdg_toplevel_icon_manager_v1::XdgToplevelIconManagerV1;
+ 
+ use sctk::compositor::{CompositorState, Region, SurfaceData, SurfaceDataExt};
++use sctk::globals::GlobalData;
+ use sctk::seat::pointer::{PointerDataExt, ThemedPointer};
+ use sctk::shell::xdg::window::{DecorationMode, Window, WindowConfigure};
+ use sctk::shell::xdg::XdgSurface;
+@@ -36,7 +38,8 @@ use crate::error::{ExternalError, NotSupportedError};
+ use crate::platform_impl::wayland::logical_to_physical_rounded;
+ use crate::platform_impl::wayland::types::cursor::{CustomCursor, SelectedCursor};
+ use crate::platform_impl::wayland::types::kwin_blur::KWinBlurManager;
+-use crate::platform_impl::{PlatformCustomCursor, WindowId};
++use crate::platform_impl::wayland::types::xdg_toplevel_icon::ToplevelIcon;
++use crate::platform_impl::{PlatformCustomCursor, PlatformIcon, WindowId};
+ use crate::window::{CursorGrabMode, CursorIcon, ImePurpose, ResizeDirection, Theme};
+ 
+ use crate::platform_impl::wayland::seat::{
+@@ -63,6 +66,12 @@ pub struct WindowState {
+     // A shared pool where to allocate custom cursors.
+     custom_cursor_pool: Arc<Mutex<SlotPool>>,
+ 
++    /// Xdg toplevel icon manager, to set the window's icon.
++    xdg_toplevel_icon_manager: Option<XdgToplevelIconManagerV1>,
++
++    /// The window's current icon, whose buffer the compositor may still read.
++    toplevel_icon: Option<ToplevelIcon>,
++
+     /// The last received configure.
+     pub last_configure: Option<WindowConfigure>,
+ 
+@@ -185,8 +194,12 @@ impl WindowState {
+             .fractional_scaling_manager
+             .as_ref()
+             .map(|fsm| fsm.fractional_scaling(window.wl_surface(), queue_handle));
++        let xdg_toplevel_icon_manager =
++            winit_state.xdg_toplevel_icon_manager.as_ref().map(|manager| manager.global().clone());
+ 
+         Self {
++            toplevel_icon: None,
++            xdg_toplevel_icon_manager,
+             blur: None,
+             blur_manager: winit_state.kwin_blur_manager.clone(),
+             compositor,
+@@ -1183,6 +1196,41 @@ impl WindowState {
+         self.title = title;
+     }
+ 
++    /// Set the window's icon through `xdg_toplevel_icon_v1`, when the compositor has it.
++    pub(crate) fn set_window_icon(&mut self, window_icon: Option<PlatformIcon>) {
++        let Some(manager) = self.xdg_toplevel_icon_manager.as_ref() else {
++            if window_icon.is_some() {
++                info!("`xdg_toplevel_icon_manager_v1` is not supported");
++            }
++            return;
++        };
++
++        let (toplevel_icon, xdg_toplevel_icon) = match window_icon {
++            Some(icon) => {
++                let mut pool = self.custom_cursor_pool.lock().unwrap();
++                let toplevel_icon = match ToplevelIcon::new(&icon, &mut pool) {
++                    Ok(toplevel_icon) => toplevel_icon,
++                    Err(error) => {
++                        warn!("Error setting window icon: {error}");
++                        return;
++                    },
++                };
++                let xdg_toplevel_icon = manager.create_icon(&self.queue_handle, GlobalData);
++                toplevel_icon.add_buffer(&xdg_toplevel_icon);
++                (Some(toplevel_icon), Some(xdg_toplevel_icon))
++            },
++            None => (None, None),
++        };
++
++        manager.set_icon(self.window.xdg_toplevel(), xdg_toplevel_icon.as_ref());
++        self.toplevel_icon = toplevel_icon;
++
++        // The icon object is immutable once set; the toplevel keeps what it showed.
++        if let Some(xdg_toplevel_icon) = xdg_toplevel_icon {
++            xdg_toplevel_icon.destroy();
++        }
++    }
++
+     /// Mark the window as transparent.
+     #[inline]
+     pub fn set_transparent(&mut self, transparent: bool) {

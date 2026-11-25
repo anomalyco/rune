@@ -568,15 +568,19 @@ policy changes are applied in the same mutation phase.
   tree order before that press's target actions (skipping inert, exiting, and behind-modal
   subtrees while including observers inside an active modal), and windows with no observer pay
   one cached boolean check per press. `.pointer_lock(|s, [dx, dy], tx| ..)` requests declarative
-  relative mouse-look capture on desktop windows (web, iOS, and overlays never capture): a primary
-  press whose primary target is that element captures (HUD buttons and covering elements do not),
-  hides the cursor while focused (`CursorGrabMode::Locked`, falling back to `Confined` on X11),
-  freezes the runtime pointer at the press point (ignoring `pointer_move`/`pointer_leave` so all
-  buttons and wheels land on the viewport), and delivers coalesced relative `[dx, dy]` deltas in
-  points (`tx.live_only()` supported; `DeviceEvent::MouseMotion` scaled by `1/scale_factor` on
-  Windows and X11). Escape releases and is consumed (after any drag cancel), and focus loss,
-  unmount, modal cover, disabled, or inert states release automatically; read `Cx::pointer_locked()`
-  in views (rebuilds views and memos on change), `Runtime::pointer_locked()` / `Runtime::pointer_motion(dx, dy)`
+  relative mouse-look capture on desktop windows and web browsers (iOS and native overlays never
+  capture): a primary press whose primary target is that element captures (HUD buttons and covering
+  elements do not), hides the cursor while focused (desktop `CursorGrabMode::Locked`, falling back
+  to `Confined` on X11; web `canvas.requestPointerLock({ unadjustedMovement: true })` with cached
+  `NotSupportedError` fallback to plain `requestPointerLock()` inside the user gesture), freezes the
+  runtime pointer at the press point (ignoring `pointer_move`/`pointer_leave` so all buttons and
+  wheels land on the viewport), and delivers coalesced relative `[dx, dy]` deltas in logical points
+  (`tx.live_only()` supported; `DeviceEvent::MouseMotion` scaled by `1/scale_factor` on Windows and
+  X11; `PointerEvent.movementX`/`movementY` CSS pixels on web). Escape releases and is consumed
+  (handled natively by the browser via `pointerlockchange` on web), and focus loss, unmount, modal
+  cover, disabled, inert states, or browser refusal (`pointerlockerror` / cooldown / unfocused
+  document) leave `Cx::pointer_locked()` false with no stuck state; read `Cx::pointer_locked()` in
+  views (rebuilds views and memos on change), `Runtime::pointer_locked()` / `Runtime::pointer_motion(dx, dy)`
   in tests, and `{"type": "pointer-motion", "dx": …, "dy": …}` (`ScriptEvent::PointerMotion`) in scripts.
   `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
   logical keys `on_key` sees: the press-time and current focus chains first (keeping shared
@@ -856,6 +860,13 @@ app.run();
   once on the UI thread immediately before the event loop drops windows and tears down the native
   display connection (after `on_close` and `on_quit`), so foreign proxies or queues bound on
   winit's display can be destroyed before the display closes.
+- `App::on_window_geometry(|s, g: WindowGeometry, tx| -> bool)` (also on `WindowSpec`) reports
+  the native window's applied content size in physical pixels (`physical_size`), its
+  `scale_factor`, and `has_output` (whether it's on a monitor). It runs at every native creation
+  before the first focus and frame, then at idle when a value changed, including a Wayland
+  window entering an output at scale 1 with no resize or scale event. Unchanged samples run
+  nothing and draw nothing. Opting in queries size, scale and output on every idle turn (on X11
+  the size query waits on the server); headless tooling and the web don't call it.
 - `AppSpec::min_size` sets the smallest window (None keeps 420×400).
 - `AppHandle::set_dock_icon(bool)` switches macOS between the regular and accessory activation
   policies at runtime.
@@ -986,6 +997,14 @@ app.run();
   `shell\open\command` set to `"C:\path\to\myapp.exe" "%1"`.
   `scripts/mac-app --scheme myapp` writes that entry and registers the bundle for you (see
   "Relaunching a Mac app" below).
+- Claiming a scheme at run time: declaring a scheme doesn't take it from an app that already
+  handles it (an app replacing another under the same scheme, say). `AppHandle::register_url_scheme("myapp")`
+  returns a future that asks the system to make this app the default handler: on macOS 12 and
+  later for the running `.app` bundle (`NSWorkspace`, which may ask the user to confirm), on
+  Windows by writing the per-user entry above for the running executable. Linux, web, iOS, a
+  binary not running from a bundle and older macOS answer `UrlSchemeError::Unsupported`.
+  Headless runs and tests change nothing: they record the scheme for
+  `Runtime::take_url_scheme_requests` and answer `Ok(())`.
 - Edge overlays (HUDs): see `App::overlay` below.
 
 ### Launching fast
@@ -1133,7 +1152,8 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   Mac app" below).
 - **Reuse a hidden window.** `keep_running()` / `windowless()` plus `AppHandle::hide()`, `show()` and `open()`
   (or `WindowOptions::launcher_panel()` for a retained panel that reveals cached pixels) make a re-summon cost a
-  show instead of a launch.
+  show instead of a launch. `WindowHandle::hide_now()` hides at once, for a screen grab in the same handler
+  (on Windows without DWM's fade, returning after `DwmFlush`).
 - **Windows: the first frame needs no GPU.** A window opens on the CPU renderer: its first frame is painted into
   a buffer, copied to the window with GDI while it is cloaked, and shown; a below-normal thread then makes the
   adapter, device, swap chain and pipelines and takes the frames over. What is left before that frame is the
@@ -1218,6 +1238,20 @@ what made the frame commit, at most once a second:
 rune: commit took 14.2 ms, over RUNE_COMMIT_BUDGET_MS=8: view 9.0, layout 3.0 (text 1.0), apply 1.5 ms; most in
 the view (63%); committed for poll
 ```
+
+Still text reuses its last emitted glyph quads per node piece in an LRU cache (`TextQuads`) bounded to 4,096
+entries and 8 MiB (with a 64-frame sweep of unused entries); past the cap, text draws through the normal glyph
+path with identical pixels.
+
+`PaintKeep` reuses the instances, hit targets, and glyph pages of unchanged subtrees across paints (both
+unshifted and scroll-shifted), and in debug builds its self-check also paints each reused subtree fresh and
+compares the two, logging any difference to stderr and falling back to the fresh paint (release builds compile
+the check out). Downstream debug builds do not panic on a mismatch by default (only this repository's own Cargo
+runs enable strict mode via `.cargo/config.toml`), so turning strict mode on in an app's own tests fails fast on
+any caching regression instead of only printing to stderr. Set `RUNE_PAINT_KEEP_STRICT=1` in the test
+environment, call `Runtime::set_paint_keep_strict(true)` on a headless `Runtime`, or assert
+`rt.paint_keep_mismatches() == 0` (which counts both unshifted and scroll-shifted mismatches and is always `0` in
+release builds).
 
 ### Requests off the main thread (`rune::Latest`)
 
@@ -1498,9 +1532,12 @@ rune::App::new(spec).fit_content_height().run();
   layouts. `Cx::chrome_insets()` says what the controls take (`leading`, `trailing`, `height`; zero
   where the native frame stays, as on Linux; memos rebuild when it changes), `Cx::caption_color(c)`
   colours the caption symbols for an app theme, `Cx::titlebar_height(h)` changes the band's height
-  as the app runs (a UI zoom), `Cx::is_maximized()` and `Cx::is_full_screen()` report confirmed OS
-  maximized and full-screen state (invalidating views and memos on change; testable headlessly via
-  `Runtime::set_maximized` and `Runtime::set_full_screen`), and `Tx::toggle_maximized()`,
+  as the app runs (a UI zoom), `Cx::is_maximized()` reports confirmed OS maximized state and
+  `Cx::is_full_screen()` reports full-screen state (flipping at the start of the macOS Space
+  transition on `NSWindowWillEnterFullScreenNotification` / `NSWindowWillExitFullScreenNotification`
+  and reconciling on `DidEnter` / `DidExit` or failure, on OS confirmation on Windows and Linux,
+  and `false` on web/headless/overlays/panels; invalidating views and memos on change and testable
+  headlessly via `Runtime::set_maximized` and `Runtime::set_full_screen`), and `Tx::toggle_maximized()`,
   `Tx::toggle_full_screen()`, and `Tx::set_full_screen(bool)` request state changes.
   `cargo run -p rune --example custom_titlebar` shows it.
 - **`AppSpec::new(title, size, init, view)`** fills every other field with its default; literals
@@ -1515,6 +1552,9 @@ rune::App::new(spec).fit_content_height().run();
   `.window_drag()` and `.no_window_drag()` (calling `performWindowDragWithEvent:` on the macOS
   `NSPanel` and `drag_window()` on Windows and X11; Wayland layer-shell ignores it), ignore
   titlebar double-clicks, and keep the user's dragged position until an explicit placement request.
+  A right-click on a bare region, or Alt+Space no handler takes, opens the system's window menu:
+  on Windows, on Wayland through `xdg_toplevel.show_window_menu`, and on X11 through
+  `_GTK_SHOW_WINDOW_MENU` when the window manager lists it in `_NET_SUPPORTED`.
   With `Chrome::drag_regions` on macOS, only marked regions move a borderless or full-size-content
   window, so titlebar content stays clickable; Rune subclasses only that window's content-view
   instance, leaving ordinary titled windows and NSPanel overlays with their native behaviour.
@@ -1798,7 +1838,9 @@ wake for each visible subscribed window. Equal values and hidden windows do not
 wake. Bind with `.live_opacity(&level)`, `.live_offset(&cursor)`,
 `.live_scale(&scale)`, `.live_rotation(&angle)`, `.live_fill(&color)` or `.live_rect(&rect)`, and colours with
 `.live_text_color`, `.live_border`, `.live_shadow` (the first shadow's colour) and
-`.live_gradient(&top, &bottom)`. A rebuild keeps what a colour binding last set.
+`.live_gradient(&top, &bottom)`. `.live_range_value(&done)` moves a
+`range_value`'s number (a progress bar's, a meter's) in the accessibility tree.
+A rebuild keeps what a colour or range binding last set.
 `cursor.smooth(Spring::new(0.16, 0.0))` opts a binding into rune-motion smoothing.
 Views and layout do not rerun. Rects are presentation `[x,y,w,h]` in parent points,
 so text does not rewrap and siblings do not reflow. See
@@ -2522,7 +2564,7 @@ recreation and ignored on other platforms:
   Metal backend and the wgpu backend (and overlay panels) show sRGB colours as sRGB on wide-gamut
   displays, matching AppKit and browsers. `MacColorSpace::Unmanaged` clears both to `nil` so
   framebuffer values reach the display unmodified, preserved across resizes and pixel-format
-  reconfigures.
+  reconfigures (`ConfiguredOverlay::macos_color_space` provides the same opt-out for overlays).
 - `.accepts_first_mouse(bool)` sets `NSView.acceptsFirstMouse(for:)` through winit's
   `with_accepts_first_mouse` on all macOS windows (bordered, full-size-content, borderless, and
   non-activating panels); pass `false` so clicking an inactive window only activates it without
@@ -2622,6 +2664,14 @@ buffer reuse (returns an empty `Vec` on the first frame, after replacing mips, o
 render copy or borrow holds it), and `Pixels::with_rgba(|w, h, bytes| ...)` to borrow the
 current straight-alpha frame without copying (the frame lock is released before the callback
 runs; returns `None` when empty or holding decoded mips).
+
+Across frames, `ImageAtlas` bounds retained unshown cache memory to `IMAGE_ATLAS_MAX_PAGES` (16
+pages), `IMAGE_ATLAS_MAX_BYTES` (64 MiB of decoded CPU pixels), and `IMAGE_ATLAS_MAX_SLOTS`
+(4,096 slots), evicting only least-recently-used unshown entries (which re-upload if drawn again).
+Every image drawn on the current frame stays resident without per-frame re-copy or GPU re-upload
+even when a scene exceeds those limits; once fewer images are shown and space opens on the first
+16 pages, overflow images relocate back into them on their next draw and the extra pages and GPU
+textures are freed.
 
 For static assets, construct an `ImageCache` once with the app's setup waker:
 
@@ -3230,7 +3280,9 @@ To match a native AppKit card on top of the material, three more opt-ins:
   `blur` to twice it.
 
 For panels, `ConfiguredOverlay::macos_level` and `OverlayHandle::set_macos_level` set the
-AppKit window level, and `OverlayHandle::fade_in` and `fade_out` fade the window's alpha.
+AppKit window level, `ConfiguredOverlay::macos_color_space` selects `MacColorSpace::Srgb`
+(default) or `MacColorSpace::Unmanaged` (matching `MacWindowOptions::color_space`), and
+`OverlayHandle::fade_in` and `fade_out` fade the window's alpha.
 `examples/glass-panel` puts it together: a card that flies across a large window, hands off
 to a card-sized window that moves 60 times a second, and fades out.
 

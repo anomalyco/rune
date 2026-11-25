@@ -55,41 +55,137 @@ unsafe fn scope_drag_regions(view: &AnyObject) {
     unsafe { AnyObject::set_class(view, class) };
 }
 
-/// Redraws the window once it has entered or left full screen, so the redraw can place the
-/// traffic lights and read the new `titlebar_inset`: winit sends no event for either, and
-/// resizes during the transition arrive while the style mask still says full screen.
+/// Whether AppKit's `NSWindowStyleMask::FullScreen` bit is set on `window`.
+pub fn style_mask_full_screen(window: &Window) -> bool {
+    ns_window(window).is_some_and(|w| w.styleMask().contains(NSWindowStyleMask::FullScreen))
+}
+
+/// Initial full-screen transition state for a freshly attached macOS window. Adopted panels stay
+/// `Windowed`.
+pub fn initial_full_screen_state(window: &Window) -> super::full_screen::State {
+    if is_panel(window) {
+        return super::full_screen::State::Windowed;
+    }
+    super::full_screen::State::from_os(window.fullscreen().is_some(), style_mask_full_screen(window))
+}
+
+/// Tracks a macOS window's native full-screen transition through AppKit's four public
+/// notifications (`WillEnter`, `DidEnter`, `WillExit`, `DidExit`) in an explicit state
+/// machine (`super::full_screen`), marking the watch changed and requesting a redraw on each
+/// transition so `Cx::is_full_screen()`, `Cx::titlebar_inset()`, and `Cx::chrome_insets()`
+/// update at the start of the Space animation and settle when it completes or fails.
 pub struct FullScreenWatch {
     observers: Vec<objc2::rc::Retained<objc2_foundation::NSObject>>,
+    state: std::rc::Rc<std::cell::Cell<super::full_screen::State>>,
     changed: std::rc::Rc<std::cell::Cell<bool>>,
 }
 
 impl FullScreenWatch {
     pub fn new(window: &Window) -> Self {
-        use objc2::rc::{Retained, Weak};
-        use objc2_foundation::NSObject;
-        let changed = std::rc::Rc::new(std::cell::Cell::new(false));
-        let none = || Self { observers: Vec::new(), changed: changed.clone() };
-        let (Some(win), Some(view)) = (ns_window(window), content_view(window)) else { return none() };
-        let Some(center) = AnyClass::get(c"NSNotificationCenter") else { return none() };
-        let weak = Weak::from_retained(&view);
-        let flag = changed.clone();
-        let block = block2::RcBlock::new(move |_: *mut AnyObject| {
-            flag.set(true);
-            if let Some(view) = weak.load() { view.setNeedsDisplay(true); }
-        });
-        let names = ["NSWindowDidEnterFullScreenNotification", "NSWindowDidExitFullScreenNotification"];
-        // SAFETY: main thread; the block outlives the observers, which `Drop` removes.
-        let observers = names.into_iter().filter_map(|name| unsafe {
-            let center: Retained<AnyObject> = msg_send![center, defaultCenter];
-            let name = NSString::from_str(name);
-            let token: Option<Retained<NSObject>> = msg_send![&*center, addObserverForName: &*name, object: &*win,
-                queue: std::ptr::null::<AnyObject>(), usingBlock: &*block];
-            token
-        }).collect();
-        Self { observers, changed }
+        let initial = initial_full_screen_state(window);
+        if is_panel(window) {
+            return Self::detached(initial);
+        }
+        let (Some(win), Some(view)) = (ns_window(window), content_view(window)) else {
+            return Self::detached(initial);
+        };
+        let weak = objc2::rc::Weak::from_retained(&view);
+        // SAFETY: `win` is a live `NSWindow` on the main thread; `Drop` removes all observers.
+        unsafe {
+            Self::observe_object(&win, initial, move || {
+                if let Some(view) = weak.load() {
+                    view.setNeedsDisplay(true);
+                }
+            })
+        }
     }
 
-    /// Whether full screen started or ended since the last call.
+    fn detached(initial: super::full_screen::State) -> Self {
+        Self {
+            observers: Vec::new(),
+            state: std::rc::Rc::new(std::cell::Cell::new(initial)),
+            changed: std::rc::Rc::new(std::cell::Cell::new(false)),
+        }
+    }
+
+    /// Registers observers for AppKit's four public full-screen notifications posted for `object`.
+    /// Separated from `NSWindow` lookup so off-screen tests can post real `NSNotificationCenter`
+    /// notifications against a plain `NSObject` without opening a window.
+    unsafe fn observe_object(
+        object: &AnyObject,
+        initial: super::full_screen::State,
+        on_redraw: impl Fn() + 'static,
+    ) -> Self {
+        use objc2::rc::Retained;
+        use objc2_foundation::NSObject;
+        use super::full_screen::{Effect, Event, step};
+
+        let state = std::rc::Rc::new(std::cell::Cell::new(initial));
+        let changed = std::rc::Rc::new(std::cell::Cell::new(false));
+        let Some(center_class) = AnyClass::get(c"NSNotificationCenter") else {
+            return Self { observers: Vec::new(), state, changed };
+        };
+        let on_redraw = std::rc::Rc::new(on_redraw);
+        let notifications = [
+            ("NSWindowWillEnterFullScreenNotification", Event::WillEnter),
+            ("NSWindowDidEnterFullScreenNotification", Event::DidEnter),
+            ("NSWindowWillExitFullScreenNotification", Event::WillExit),
+            ("NSWindowDidExitFullScreenNotification", Event::DidExit),
+        ];
+        // SAFETY: main thread; each block is retained by the notification center until `Drop`
+        // removes its observer token.
+        let observers = notifications.into_iter().filter_map(|(name, event)| unsafe {
+            let state = state.clone();
+            let changed = changed.clone();
+            let on_redraw = on_redraw.clone();
+            let block = block2::RcBlock::new(move |_: *mut AnyObject| {
+                let mut current = state.get();
+                let effects = step(&mut current, event);
+                state.set(current);
+                for effect in effects {
+                    match effect {
+                        Effect::Redraw => {
+                            changed.set(true);
+                            on_redraw();
+                        }
+                    }
+                }
+            });
+            let center: Retained<AnyObject> = msg_send![center_class, defaultCenter];
+            let name = NSString::from_str(name);
+            let token: Option<Retained<NSObject>> = msg_send![
+                &*center,
+                addObserverForName: &*name,
+                object: object,
+                queue: std::ptr::null::<AnyObject>(),
+                usingBlock: &*block
+            ];
+            token
+        }).collect();
+        Self { observers, state, changed }
+    }
+
+    /// Current full-screen transition phase.
+    pub fn state(&self) -> super::full_screen::State {
+        self.state.get()
+    }
+
+    /// Whether the window is entering or in full screen.
+    pub fn is_full_screen(&self) -> bool {
+        self.state.get().is_full_screen()
+    }
+
+    /// Reconciles the state machine against live winit and AppKit full-screen flags.
+    pub fn sync(&self, winit_full_screen: bool, style_mask_full_screen: bool) {
+        let mut current = self.state.get();
+        let _ = super::full_screen::step(
+            &mut current,
+            super::full_screen::Event::Sync { winit_full_screen, style_mask_full_screen },
+        );
+        self.state.set(current);
+    }
+
+    /// Whether a full-screen transition notification requested a redraw since the last call.
     pub fn take(&self) -> bool {
         self.changed.replace(false)
     }
@@ -113,22 +209,35 @@ impl Drop for FullScreenWatch {
 pub fn traffic_lights_right(window: &Window) -> bool {
     let Some(win) = ns_window(window) else { return false };
     let Some(close) = win.standardWindowButton(NSWindowButton::CloseButton) else { return false };
+    let in_window = close.window().is_some_and(|w| {
+        std::ptr::eq(objc2::rc::Retained::as_ptr(&w), objc2::rc::Retained::as_ptr(&win))
+    });
+    if !in_window { return false; }
     let r = close.convertRect_toView(close.bounds(), None);
     r.origin.x > win.frame().size.width * 0.5
 }
 
 /// How far in from their edge the traffic lights reach, in window points: the zoom button's
 /// trailing edge from the left, or its leading edge from the right where they sit at the right
-/// (`traffic_lights_right`); 0 when the buttons don't sit over the content: full screen, a
-/// standard titlebar, or hidden buttons.
-pub fn titlebar_inset(window: &Window) -> f32 {
+/// (`traffic_lights_right`); 0 when the buttons don't sit over the content: entering or in full
+/// screen, exiting while buttons are still detached from `window`, a standard titlebar, or
+/// hidden buttons.
+pub fn titlebar_inset(window: &Window, state: super::full_screen::State) -> f32 {
     let Some(win) = ns_window(window) else { return 0.0 };
     let mask = win.styleMask();
-    if mask.contains(NSWindowStyleMask::FullScreen) || !mask.contains(NSWindowStyleMask::FullSizeContentView) {
+    let Some(zoom) = win.standardWindowButton(NSWindowButton::ZoomButton) else { return 0.0 };
+    let button_in_window = zoom.window().is_some_and(|w| {
+        std::ptr::eq(objc2::rc::Retained::as_ptr(&w), objc2::rc::Retained::as_ptr(&win))
+    });
+    if !super::full_screen::can_read_titlebar_inset(
+        state,
+        mask.contains(NSWindowStyleMask::FullScreen),
+        mask.contains(NSWindowStyleMask::FullSizeContentView),
+        !zoom.isHiddenOrHasHiddenAncestor(),
+        button_in_window,
+    ) {
         return 0.0;
     }
-    let Some(zoom) = win.standardWindowButton(NSWindowButton::ZoomButton) else { return 0.0 };
-    if zoom.isHiddenOrHasHiddenAncestor() { return 0.0; }
     let r = zoom.convertRect_toView(zoom.bounds(), None);
     if traffic_lights_right(window) {
         return (win.frame().size.width - r.origin.x) as f32;

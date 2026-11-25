@@ -252,6 +252,19 @@ impl WindowHandle {
     }
     pub fn show(&self) { self.set_visible(true); }
     pub fn hide(&self) { self.set_visible(false); }
+    /// [`hide`](Self::hide), with the native window off the screen before this returns, so a
+    /// screen grab made next in the same handler doesn't see it. Call it on the UI thread.
+    ///
+    /// On Windows the window hides with DWM's fade turned off (`DWMWA_TRANSITIONS_FORCEDISABLED`
+    /// around `ShowWindow(SW_HIDE)`) and this returns after `DwmFlush`, once DWM has composed a
+    /// frame without it; it blocks for up to one refresh. Elsewhere it is [`hide`](Self::hide).
+    /// Either way the window's host still takes the hide on its next turn (keys released, frames
+    /// stopped), as with [`hide`](Self::hide).
+    pub fn hide_now(&self) {
+        #[cfg(target_os = "windows")]
+        if let Ok(window) = self.window() { crate::platform::win32::hide_now(&window); }
+        self.hide();
+    }
     /// Focus/activate an already-visible window, restoring it if minimized. Wayland requests attention.
     pub fn focus(&self) { self.send(WakeEvent::Focus); }
     /// Show, restore and activate, creating the window if needed (see `AppHandle::open`).
