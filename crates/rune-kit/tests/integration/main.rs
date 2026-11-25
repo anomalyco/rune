@@ -22,6 +22,7 @@ mod keybind;
 mod kit_metrics;
 mod list_keyboard;
 mod menu_description;
+mod menu_look;
 mod menu_open;
 mod menu_submenu_keys;
 mod menu_submenu_nav;
