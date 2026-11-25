@@ -12,6 +12,7 @@ mod event_markers;
 mod find_key;
 mod fold_glide;
 mod glyph_replay;
+mod group_member;
 mod group_opacity;
 mod hold_layout;
 mod id_pruning;

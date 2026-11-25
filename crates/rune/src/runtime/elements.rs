@@ -399,7 +399,7 @@ impl RuntimeCore {
                     fill: self.color(n.id, P_FILL, n.vis.fill),
                     border_color: (n.vis.border_width() > 0.0).then(|| self.color(n.id, P_BORDER, n.vis.border())),
                     text_color: paint_tracks::text_color(n)
-                        .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group))),
+                        .map(|c| paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), group_lit(&self.scene, n, self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group)))),
                     text_style: n.text.as_deref().map(|spec| {
                         let family = if secure {
                             self.text.resolved_family(spec.style.family)

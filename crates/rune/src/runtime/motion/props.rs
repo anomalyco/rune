@@ -67,6 +67,9 @@ pub(in crate::runtime) const P_ICON_TURN: Prop<f32> = Prop::custom(88, PropClass
 pub(in crate::runtime) const P_SCALE: Prop<f32> = Prop::custom(89, PropClass::Scale);
 /// `El::group_opacity`'s presented rest level, so a new rest fades in rather than cutting.
 pub(in crate::runtime) const P_GROUP_REST: Prop<f32> = Prop::custom(94, PropClass::Opacity);
+/// How lit (0 to 1) the group styles of an element with curves of its own are
+/// (`El::group_motion`): its own track, in place of its hover group's `P_HOVER`.
+pub(in crate::runtime) const P_GROUP_LIT: Prop<f32> = Prop::custom(98, PropClass::Opacity);
 /// `El::live_trim`'s presented span of a shape's strokes, start and end as 0…1 fractions.
 pub(in crate::runtime) const P_TRIM: Prop<rune_motion::Vec2> = Prop::custom(95, PropClass::Other);
 /// The first four shadows' geometry: x, y, blur and spread in a rect's lanes.
@@ -151,9 +154,41 @@ pub(in crate::runtime) fn group_factor(
     let rest = scene.get(n.id, P_GROUP_REST).unwrap_or(rest);
     // A control the keyboard reached shows as if hovered, as CSS reveals a hover-only button
     // on `:focus-visible` (or `:focus-within` around it): focus is never on something unseen.
-    let focused = focus_keyboard && focus_path.is_some_and(|f| {
-        f.strip_prefix(n.path.as_str()).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
-    });
+    // An element with curves of its own has the focus in its track already (`group_lit`).
+    let focused = n.vis.group_motion.is_none() && group_focused(focus_keyboard, focus_path, n);
     let group = if focused { 1.0 } else { group };
     rest + (hovered - rest) * group
+}
+
+/// How lit node `n`'s group styles are, 0 to 1: its own track when it has curves of its own
+/// (`El::group_motion`), else its hover group's `group`.
+#[inline]
+pub(in crate::runtime) fn group_lit(scene: &Scene, n: &Node, group: f32) -> f32 {
+    if n.vis.group_motion.is_some() { scene.get(n.id, P_GROUP_LIT).unwrap_or(0.0).clamp(0.0, 1.0) } else { group }
+}
+
+/// Whether keyboard focus shows node `n`'s group styles: focus on it or inside it, or on or
+/// inside the ancestor `El::group_focus_within` names.
+pub(in crate::runtime) fn group_focused(focus_keyboard: bool, focus_path: Option<&str>, n: &Node) -> bool {
+    let within = |f: &str, p: &str| f.strip_prefix(p).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+    focus_keyboard && focus_path.is_some_and(|f| within(f, n.path.as_str()) || group_focus_path(n).is_some_and(|p| within(f, p)))
+}
+
+/// The path of the ancestor `El::group_focus_within` names: `n`'s path up to its nearest
+/// ancestor's segment that is that key.
+fn group_focus_path(n: &Node) -> Option<&str> {
+    let key = n.vis.group_focus.as_deref()?;
+    let path = n.path.as_str();
+    // Its own segment is not an ancestor's.
+    let mut end = path.rfind('/')?;
+    loop {
+        let start = path[..end].rfind('/').map_or(0, |i| i + 1);
+        if &path[start..end] == key {
+            return Some(&path[..end]);
+        }
+        if start == 0 {
+            return None;
+        }
+        end = start - 1;
+    }
 }
