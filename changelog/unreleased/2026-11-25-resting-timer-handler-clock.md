@@ -1,0 +1,1 @@
+- **`Tx::clock()` in a resting timer's frame now matches the clock its `poll` received.** Handlers running in a frame that stands for a resting window's due timer poll read `polled_at()` instead of the frame's later wall clock, and an intervening `update` cancels the pending timer frame so handler clocks never move backwards.
