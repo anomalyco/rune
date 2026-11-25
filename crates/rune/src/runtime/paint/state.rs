@@ -2,6 +2,7 @@
 //! outputs owned by [`RuntimeCore`].
 use super::*;
 
+
 /// Retained paint-pass scratch, reuse record, drawn geometry, layer caches and per-frame paint
 /// outputs. Ordered hot-first under `#[repr(C)]` so per-node vectors (`inh_scratch`, `drawn`,
 /// `row_dy`, `row_h`, `row_mask`, `drawn_scale`, `seen`) and `pixel_snap` sit together and first
@@ -16,6 +17,9 @@ pub(crate) struct PaintState {
     /// The shell shows native views for the first `max_native_materials` of `materials`; their
     /// elements skip their fill and cut their shadows out of their interior.
     pub(super) native_materials: bool,
+    /// Wayland compositor behind-window blur backs `El::system_material` elements on this
+    /// transparent surface when `WindowBackdrop::None` is active.
+    pub(super) wayland_blur_materials: bool,
     /// A drawn video is playing or seeking: keep drawing frames.
     pub(super) videos_active: bool,
     /// A drawn animated SVG icon is advancing right now: keep drawing frames.
@@ -84,6 +88,9 @@ pub(crate) struct PaintState {
     pub(in crate::runtime) text_quads: quads::TextQuads,
     /// `El::system_material` elements built this frame, in paint order.
     pub(super) materials: Vec<crate::system_material::MaterialDraw>,
+    /// Wayland blur regions emitted by `El::system_material` elements this frame (empty unless
+    /// `wayland_blur_materials` is enabled).
+    pub(super) wayland_material_blurs: Vec<crate::system_material::WaylandMaterialBlur>,
     /// Per-window cap on native `El::system_material` views (default `MAX_NATIVE_MATERIALS`,
     /// clamped to `MAX_NATIVE_MATERIALS_CAP`).
     pub(super) max_native_materials: usize,
@@ -112,6 +119,7 @@ impl PaintState {
             drawn: Vec::new(),
             srgb_blend: true,
             native_materials: false,
+            wayland_blur_materials: false,
             videos_active: false,
             animated_icons: false,
             animated_icons_shown: false,
@@ -148,6 +156,7 @@ impl PaintState {
             text_rows: HashMap::default(),
             text_quads: quads::TextQuads::new(),
             materials: Vec::new(),
+            wayland_material_blurs: Vec::new(),
             max_native_materials: crate::MAX_NATIVE_MATERIALS,
             material_fallbacks: Vec::new(),
             material_fallback_warned: false,
@@ -208,6 +217,20 @@ impl PaintState {
     #[inline]
     pub(crate) fn set_native_materials(&mut self, native: bool) {
         self.native_materials = native;
+    }
+
+    #[inline]
+    pub(crate) fn set_wayland_blur_materials(&mut self, on: bool) -> bool {
+        if self.wayland_blur_materials == on {
+            return false;
+        }
+        self.wayland_blur_materials = on;
+        true
+    }
+
+    #[inline]
+    pub(crate) fn tracks_native_materials(&self) -> bool {
+        self.native_materials || self.wayland_blur_materials
     }
 
     #[inline]
@@ -500,8 +523,27 @@ impl PaintState {
     }
 
     #[inline]
+    pub(in crate::runtime) fn clear_materials(&mut self) {
+        self.materials.clear();
+        self.material_fallbacks.clear();
+        self.wayland_material_blurs.clear();
+    }
+
+    #[inline]
     pub(crate) fn materials(&self) -> &[crate::system_material::MaterialDraw] {
         &self.materials
+    }
+
+    #[cfg_attr(
+        not(any(
+            all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")),
+            test
+        )),
+        allow(dead_code)
+    )]
+    #[inline]
+    pub(crate) fn wayland_material_blurs(&self) -> &[crate::system_material::WaylandMaterialBlur] {
+        &self.wayland_material_blurs
     }
 
     #[inline]

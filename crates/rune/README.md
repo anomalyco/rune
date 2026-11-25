@@ -3499,10 +3499,27 @@ Diagnostic switches for hardware verification: `RUNE_WIN_MATERIAL_CLIP=geo`
 (light/dark neutral tint child visual), and `RUNE_WIN_OVERLAY_NO_LAYERED=1` (omit
 `WS_EX_LAYERED` on overlays).
 
-Opaque windows, other platforms and headless renders draw the element's fill instead, or a
-neutral tint when it has none; native views never appear in offscreen output, so goldens stay
-deterministic. `RUNE_SYSTEM_MATERIAL=legacy` forces the pre-26 view, `unsynced` moves the views
-outside the drawable's transaction (for comparison) and `off` draws the fallback.
+On Linux Wayland, `El::system_material` drives per-element shaped compositor blur on transparent
+GPU windows and overlays (`zwlr_layer_shell_v1` and toplevel fallbacks) whenever
+`WindowBackdrop::None` is active and the compositor advertises `ext_background_effect_v1`
+(`Capability::Blur`) or `org_kde_kwin_blur_manager` (opt out with `RUNE_SYSTEM_MATERIAL=off`).
+Unlike macOS and Windows (where native material views sit behind the element and replace its
+fill), Wayland compositor blur has no tint of its own: translucent fills are kept as the tint,
+unfilled elements draw transparent instead of the opaque fallback, outer-shadow interior holes
+are punched, opaque fills (`alpha >= 1.0`) stay opaque with no blur region, elements below
+`0.10` opacity leave the region, ancestor clips and all four rounded corners are decomposed
+conservatively inward into logical `wl_region` spans (bounded at 512 rects per surface), and
+updates flush right before present so region and pixels commit atomically. Use
+`Cx::window_backdrop_supported(WindowBackdrop::Blur)` to query capability for both
+`WindowBackdrop::Blur` (whole surface, taking precedence) and `El::system_material` (per
+element). Shaped per-element Wayland blur is unit-tested off-screen and awaiting live compositor
+confirmation on issue #1381.
+
+Opaque windows, X11/XWayland, unsupported compositors, web and headless renders draw the
+element's fill instead, or a neutral tint when it has none; native materials never appear in
+offscreen output, so goldens stay deterministic. `RUNE_SYSTEM_MATERIAL=legacy` forces the pre-26
+macOS view, `unsynced` moves macOS views outside the drawable's transaction (for comparison) and
+`off` disables native materials on macOS, Windows, and Wayland.
 `examples/glass-card` flies a card over a test pattern (pass `--overlay` for a springing pill
 inside a transparent non-activating overlay); research note 26 has the measurements.
 
@@ -3586,10 +3603,12 @@ default, `Mica`, `MicaAlt`, `Acrylic`, `Blur`), configured with `App::window_bac
   backdrop that could not activate, Rune clears its surface to an opaque theme-matched fallback so
   even a view that skips `cx.window_backdrop()` never opens a transparent hole.
 - **Live verification status**: Windows 11 Mica, Mica Alt, and Desktop Acrylic have been verified
-  on live Windows 11 hardware (#300). Wayland protocol seams, region geometry, and lifecycle
-  teardown are unit-tested off-screen; live visual composition on real Wayland compositors (#1381)
-  has not yet been watched by the team. Try it with `cargo run -p settings -- --backdrop mica`
-  (Windows) or `cargo run -p settings -- --backdrop blur` (Linux Wayland).
+  on live Windows 11 hardware (#300), and whole-surface Wayland `WindowBackdrop::Blur` on a
+  `zwlr_layer_shell_v1` overlay has been verified live on KDE Plasma / KWin 6.8.3. Toplevel
+  Wayland windows, other compositors, and per-element `El::system_material` shaped blur are
+  unit-tested off-screen and awaiting live reports on issue #1381. Try it with
+  `cargo run -p settings -- --backdrop mica` (Windows) or
+  `cargo run -p settings -- --backdrop blur` (Linux Wayland).
 
 ### Frosted panels
 
@@ -3598,8 +3617,9 @@ window or one element:
 
 - **The whole window over the desktop (Windows 11 22H2+ / Linux Wayland):** `WindowBackdrop` above
   (`Mica`, `MicaAlt`, `Acrylic` on Windows; `Blur` on Wayland), in a transparent window or overlay.
-- **One rounded element over the desktop (macOS):** `El::system_material` above, in a transparent
-  window. Only the platform can see behind the window.
+- **One or more rounded elements over the desktop (macOS / Linux Wayland / opt-in Windows 11):**
+  `El::system_material` above, in a transparent window or overlay. Only the platform can see behind
+  the window.
 - **The app's own content (every platform):** `El::backdrop_blur` below. (`El::blur(σ)` blurs the element's own
   subtree, not its backdrop.) For refraction, a saturation lift and grain on top of the blur,
   `rune-fx`'s `Fx::lens(LensParams { frost: 1.0, .. })` is Liquid Glass "regular": put

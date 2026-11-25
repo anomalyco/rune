@@ -562,7 +562,9 @@ impl FrameHost for WindowFrame<'_> {
         StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: self.state.target }
     }
 
-    fn post_step_check(&mut self, _info: &mut StepInfo) -> PostStepCheck {
+    fn post_step_check(&mut self, info: &mut StepInfo) -> PostStepCheck {
+        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        let _ = info;
         // frame-profile, `RUNE_MISS_LOOP_FRAMES=<n>`: every nth loop-only frame ends here as if its
         // drawable never came, after the step: what the next frame redraws (with
         // `RUNE_LOOP_CHECK=2`, whether its picture is right).
@@ -607,6 +609,12 @@ impl FrameHost for WindowFrame<'_> {
                     return PostStepCheck::Reacquire(ReacquireReason::NativeMaterials);
                 }
             }
+        }
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if self.host.prepare_wayland_material_blur() {
+            let more = self.host.app.frame(0.0);
+            info.runtime_animating |= more;
+            info.animating |= more;
         }
         if self.needs_reblend() {
             return PostStepCheck::Reacquire(ReacquireReason::Reblend);

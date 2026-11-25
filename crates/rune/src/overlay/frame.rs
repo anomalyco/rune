@@ -308,7 +308,9 @@ pub(super) fn render_frame(app: &mut dyn OverlayApp, f: OverlayRenderArgs<'_>) -
 /// event loop's thread spends none of wgpu's encode, submit and present on it. Prewarm frames
 /// present here, before the window is revealed.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu, rt: &RuntimeCore,
+    window_backdrop: crate::WindowBackdrop,
     encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture, prewarm: bool,
     on_materials: &mut Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>) -> bool {
     // `ConfiguredOverlay::on_materials` hears the frame's material rects before it presents.
@@ -339,13 +341,27 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = prewarm;
-        #[cfg(not(all(target_os = "windows", feature = "windows-system-material")))]
+        let _ = (prewarm, window_backdrop);
+        #[cfg(not(any(all(target_os = "windows", feature = "windows-system-material"), all(unix, not(target_os = "ios"), not(target_os = "android")))))]
         let _ = rt;
         renderer.submit(&gpu.queue, encoder);
         #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
-        if !gpu.is_lost() && let Backing::Layer(layer) = &mut live.backing {
-            layer.request_frame();
+        if !gpu.is_lost() {
+            if let Some(blur) = live.wayland_backdrop.as_mut() {
+                blur.sync_frame_materials(
+                    window_backdrop,
+                    true,
+                    Some(live.config.alpha_mode),
+                    false,
+                    (live.config.width, live.config.height),
+                    if live.scale > 0.0 { live.scale } else { rt.window_scale() },
+                    rt.paint.wayland_material_blurs(),
+                    true,
+                );
+            }
+            if let Backing::Layer(layer) = &mut live.backing {
+                layer.request_frame();
+            }
         }
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
         let materials_ok = {

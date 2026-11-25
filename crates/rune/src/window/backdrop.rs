@@ -24,7 +24,8 @@
 ///   `WindowBackdrop::Blur`).
 /// - **Per-element OS backdrop ([`El::system_material`](crate::El::system_material))**: blurs
 ///   what is behind the window under a single rounded element (macOS `NSGlassEffectView` /
-///   `NSVisualEffectView` today; draws its fallback fill elsewhere).
+///   `NSVisualEffectView`, Linux Wayland `wl_region` blur when `WindowBackdrop::None` is
+///   active, and opt-in Windows 11 `windows-system-material`; draws its fallback fill elsewhere).
 /// - **In-window blur ([`El::backdrop_blur`](crate::El::backdrop_blur) / `rune-fx`)**: blurs
 ///   Rune's own content already drawn behind an element inside the same window; works identically
 ///   on every platform including web and headless renders.
@@ -71,9 +72,10 @@
 ///   never opens a transparent hole even if the view skips checking `cx.window_backdrop()`.
 /// - **Live hardware verification**: Windows 11 Mica, Mica Alt, and Desktop Acrylic have been
 ///   verified on live Windows 11 hardware (standard, custom-titlebar, and borderless windows;
-///   issue #300). The Wayland protocol seam, region arithmetic, and lifecycle teardown are
-///   unit-tested off-screen; live visual composition on real Wayland compositors has not yet been
-///   watched by the team and will be confirmed on issue #1381.
+///   issue #300). Whole-surface Wayland `WindowBackdrop::Blur` on a `zwlr_layer_shell_v1`
+///   overlay has been confirmed live on KDE Plasma / KWin 6.8.3; toplevel windows, other
+///   compositors, and per-element `El::system_material` shaped blur are unit-tested off-screen
+///   and awaiting live confirmation on issue #1381.
 ///
 /// ```no_run
 /// use rune::{App, AppSpec, Color, WindowBackdrop, WindowOptions, el};
