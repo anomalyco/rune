@@ -1029,6 +1029,27 @@ mod linux_frame {
         }
     }
 
+    /// A finger on the band resizes the window as the pointer does. A touch down is a move and
+    /// a press at once, with no frame between them.
+    #[test]
+    fn a_finger_on_the_band_resizes_the_window() {
+        use crate::runtime::touch_input::TouchPhase;
+        use ResizeEdge::{East, SouthEast};
+        let mut rt = rig(caption("appmenu:close", FLOATING));
+        for (i, ((x, y), edge)) in [((397.0, 150.0), East), ((397.0, 297.0), SouthEast)].into_iter().enumerate() {
+            let at = i as f64;
+            rt.touch(1, TouchPhase::Started, x, y, at);
+            assert_eq!(rt.take_resize_action(), Some(edge), "a finger at {x}, {y}");
+            rt.touch(1, TouchPhase::Ended, x, y, at + 0.05);
+            rt.frame(0.1 + at);
+        }
+        assert_eq!(rt.state.presses, 0, "a finger on the band never reaches the view");
+        // Past the band, the touch is the view's.
+        rt.touch(1, TouchPhase::Started, 200.0, 150.0, 5.0);
+        assert_eq!(rt.take_resize_action(), None);
+        rt.touch(1, TouchPhase::Ended, 200.0, 150.0, 5.05);
+    }
+
     #[test]
     fn a_window_tiled_to_the_left_half_resizes_from_its_free_side_only() {
         use ResizeEdge::East;
