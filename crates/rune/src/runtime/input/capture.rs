@@ -578,6 +578,7 @@ impl PointerState {
         self.press_clicks.clear();
         self.pointer_lock.step(super::pointer_lock::LockEvent::Released);
         self.gesture_owners.clear();
+        self.touch.clear_edge_state();
     }
 
     /// Scrolling viewport `id` under a held press inside it cancels the press, as a UIScrollView

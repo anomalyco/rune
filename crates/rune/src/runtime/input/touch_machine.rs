@@ -38,9 +38,9 @@ pub(super) struct Contact {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Mode {
     /// Still within `TOUCH_SLOP`: lifting here is a tap. `scroll` is the vertical viewport
-    /// under the finger, held until the pan picks its axis; `edge` is the `El::on_edge_drag`
-    /// element whose zone it landed in, which a first move away from that edge hands it to.
-    Pending { scroll: Option<NodeId>, edge: Option<(NodeId, crate::SwipeEdge)> },
+    /// under the finger, held until the pan picks its axis; `edge` holds the innermost matching
+    /// `El::on_edge_drag` claimant for each physical edge whose zone the finger landed in.
+    Pending { scroll: Option<NodeId>, edge: super::edge_drag::EdgeCandidates },
     /// Landed on a bare `.window_drag()` region and still within `TOUCH_SLOP`: holds the drag
     /// until the finger moves past the slop, so taps, double-taps and long presses still work.
     WindowDragPending,
@@ -50,7 +50,10 @@ pub(super) enum Mode {
     /// It drags the element it pressed.
     Drag,
     /// An `El::on_edge_drag` element claimed it: the press under it was let go.
-    Edge { node: NodeId },
+    Edge { node: NodeId, edge: crate::SwipeEdge },
+    /// An active edge drag was cancelled mid-touch (Escape, unmount, focus loss, modal, or
+    /// `cancel_pointer`): moves emit nothing and release returns to `Idle` without clicking.
+    Cancelled,
     /// It pans viewport `scroll` along one axis.
     Pan { scroll: NodeId, horizontal: bool },
     /// A long press opened the menu under it: it lifts on nothing.
@@ -63,7 +66,7 @@ impl Mode {
         match self {
             Mode::Pending { scroll, .. } => scroll,
             Mode::Pan { scroll, .. } => Some(scroll),
-            Mode::WindowDragPending | Mode::WindowDragging | Mode::Drag | Mode::Edge { .. } | Mode::Menu => None,
+            Mode::WindowDragPending | Mode::WindowDragging | Mode::Drag | Mode::Edge { .. } | Mode::Cancelled | Mode::Menu => None,
         }
     }
 
@@ -76,10 +79,10 @@ impl Mode {
     }
 
     /// Whether a second finger landing may hand this touch off into a two-finger gesture.
-    /// Active edge swipes ignore a second finger so a stray contact cannot abort a back/drawer drag;
-    /// an unclaimed `Pending` edge candidate is discarded when two fingers pinch.
+    /// Active (or cancelled) edge swipes ignore a second finger so a stray contact cannot abort a
+    /// back/drawer drag; an unclaimed `Pending` edge candidate is discarded when two fingers pinch.
     pub(super) fn pinch_eligible(self) -> bool {
-        !matches!(self, Mode::WindowDragging | Mode::Edge { .. } | Mode::Menu)
+        !matches!(self, Mode::WindowDragging | Mode::Edge { .. } | Mode::Cancelled | Mode::Menu)
     }
 }
 
@@ -247,7 +250,7 @@ impl TouchState {
         if dx.hypot(dy) <= TOUCH_SLOP {
             return None;
         }
-        if edge.is_some_and(|(_, e)| super::edge_drag::moves_away(e, dx, dy)) {
+        if super::edge_drag::moves_away_edge(dx, dy).is_some_and(|e| edge[e.index()].is_some()) {
             return None;
         }
         Some((f.origin, dx.abs() > dy.abs(), scroll))
@@ -269,6 +272,7 @@ pub(super) enum TouchInput {
     Move { id: u64, pos: (f32, f32), time: f64, slop: Option<SlopResolution> },
     End { id: u64, pos: (f32, f32), time: f64, cancelled: bool },
     HoldFired,
+    CancelEdge,
 }
 
 /// Side effects requested by [`step_touch`] and executed by `touch.rs` in order.
@@ -285,8 +289,7 @@ pub(super) enum TouchEffect {
     PointerLeave,
     ReleaseWithoutClick,
     CancelPointer,
-    CancelChildForEdge,
-    EdgeDrag { node: NodeId, phase: crate::Phase, origin: (f32, f32), pos: (f32, f32), cancelled: bool },
+    EdgeDrag { node: NodeId, edge: crate::SwipeEdge, phase: crate::Phase, origin: (f32, f32), pos: (f32, f32), cancelled: bool },
     CommitHold { origin: (f32, f32) },
     EmitTouchWheel { dx: f32, dy: f32, mid: (f32, f32), hit: (f32, f32), phase: GesturePhase },
     EmitMagnify { delta: f32, mid: (f32, f32), hit: (f32, f32), phase: GesturePhase },
@@ -389,6 +392,11 @@ pub(super) fn step_touch(state: &mut TouchState, input: TouchInput) -> Effects<T
             effects.push(TouchEffect::CommitHold { origin });
             effects
         }
+        (TouchState::Single(mut f), TouchInput::CancelEdge) if matches!(f.mode, Mode::Edge { .. }) => {
+            f.mode = Mode::Cancelled;
+            *state = TouchState::Single(f);
+            Effects::none()
+        }
         _ => Effects::none(),
     }
 }
@@ -406,21 +414,23 @@ fn step_single_move(
         f.mode = Mode::WindowDragging;
         effects.push(TouchEffect::StartWindowDrag);
         effects.push(TouchEffect::CancelHold);
-    } else if let Mode::Pending { scroll, edge: Some((node, edge)) } = f.mode
+    } else if let Mode::Pending { scroll, edge } = f.mode
         && dx.hypot(dy) > TOUCH_SLOP
-        && super::edge_drag::moves_away(edge, dx, dy)
+        && let Some((node, swipe_edge)) = super::edge_drag::moves_away_edge(dx, dy)
+            .and_then(|e| edge[e.index()].map(|node| (node, e)))
     {
-        f.mode = Mode::Edge { node };
+        f.mode = Mode::Edge { node, edge: swipe_edge };
+        effects.push(TouchEffect::CancelHold);
         effects.push(TouchEffect::EndScroll { scroll, velocity: 0.0 });
-        effects.push(TouchEffect::CancelChildForEdge);
+        effects.push(TouchEffect::CancelPointer);
         effects.push(TouchEffect::EdgeDrag {
             node,
+            edge: swipe_edge,
             phase: crate::Phase::Down,
             origin: f.origin,
             pos: f.origin,
             cancelled: false,
         });
-        effects.push(TouchEffect::CancelHold);
     } else if let Mode::Pending { scroll, .. } = f.mode
         && dx.hypot(dy) > TOUCH_SLOP
     {
@@ -451,14 +461,15 @@ fn step_single_move(
     match f.mode {
         Mode::Pan { scroll, .. } => effects.push(TouchEffect::PanMove { scroll, along }),
         Mode::Drag => effects.push(TouchEffect::PointerMove(pos)),
-        Mode::Edge { node } => effects.push(TouchEffect::EdgeDrag {
+        Mode::Edge { node, edge } => effects.push(TouchEffect::EdgeDrag {
             node,
+            edge,
             phase: crate::Phase::Move,
             origin: f.origin,
             pos,
             cancelled: false,
         }),
-        Mode::Pending { .. } | Mode::WindowDragPending | Mode::WindowDragging | Mode::Menu => {}
+        Mode::Pending { .. } | Mode::WindowDragPending | Mode::WindowDragging | Mode::Cancelled | Mode::Menu => {}
     }
     effects
 }
@@ -474,9 +485,10 @@ fn step_single_end(
     let pan = matches!(f.mode, Mode::Pan { .. });
     let velocity = if pan && !cancelled && time - f.at < FLING_HOLD { f.velocity } else { 0.0 };
     effects.push(TouchEffect::EndScroll { scroll: f.mode.scroll(), velocity });
-    if let Mode::Edge { node } = f.mode {
+    if let Mode::Edge { node, edge } = f.mode {
         effects.push(TouchEffect::EdgeDrag {
             node,
+            edge,
             phase: crate::Phase::Up,
             origin: f.origin,
             pos,
@@ -487,7 +499,7 @@ fn step_single_end(
         effects.push(TouchEffect::CancelPointer);
         return effects;
     }
-    if matches!(f.mode, Mode::Menu | Mode::WindowDragPending | Mode::Edge { .. }) {
+    if matches!(f.mode, Mode::Menu | Mode::WindowDragPending | Mode::Edge { .. } | Mode::Cancelled) {
         effects.push(TouchEffect::ReleaseWithoutClick);
         return effects;
     }

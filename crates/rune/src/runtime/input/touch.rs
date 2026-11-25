@@ -211,6 +211,10 @@ pub(in crate::runtime) struct Touch {
     hold_command: Option<TouchHoldCommand>,
     /// [`Drag::data`] kept across an `El::on_edge_drag` gesture's phases.
     pub(in crate::runtime) edge_data: f32,
+    /// Active `El::on_edge_drag` target and fallback handler, kept in lockstep with `Mode::Edge`.
+    pub(in crate::runtime) active_edge: Option<edge_drag::ActiveEdge>,
+    /// Fallback handlers for cancelled `Action::EdgeDrag` `Phase::Up` events whose element left.
+    edge_gone: Vec<(String, crate::el::DragFn)>,
 }
 
 impl Touch {
@@ -218,6 +222,26 @@ impl Touch {
     #[inline]
     pub(in crate::runtime) fn hold_deadline(&self) -> Option<f64> {
         self.hold.deadline()
+    }
+
+    #[inline]
+    pub(super) fn state_mut(&mut self) -> &mut TouchState {
+        &mut self.state
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn push_edge_gone(&mut self, path: String, f: crate::el::DragFn) {
+        self.edge_gone.push((path, f));
+    }
+
+    #[inline]
+    pub(in crate::runtime) fn take_edge_gone(&mut self, path: &str) -> Option<crate::el::DragFn> {
+        self.edge_gone.iter().position(|g| g.0 == path).map(|i| self.edge_gone.remove(i).1)
+    }
+
+    pub(in crate::runtime) fn clear_edge_state(&mut self) {
+        self.active_edge = None;
+        self.edge_gone.clear();
     }
 
     #[cfg(test)]
@@ -371,11 +395,8 @@ impl RuntimeCore {
                     self.pointer_leave();
                 }
                 TouchEffect::CancelPointer => self.cancel_pointer(),
-                TouchEffect::CancelChildForEdge => {
-                    if !self.cancel_drag() { self.drop_press(); }
-                }
-                TouchEffect::EdgeDrag { node, phase, origin, pos, cancelled } => {
-                    self.queue_edge_drag(node, phase, origin, pos, cancelled);
+                TouchEffect::EdgeDrag { node, edge, phase, origin, pos, cancelled } => {
+                    self.queue_edge_drag(node, edge, phase, origin, pos, cancelled);
                 }
                 TouchEffect::CommitHold { origin: (x, y) } => {
                     if !self.cancel_drag() { self.drop_press(); }
@@ -416,7 +437,8 @@ impl RuntimeCore {
             }
             return;
         }
-        let edge = self.edge_drag_candidate(x, y);
+        let edge = self.edge_drag_candidates(x, y);
+        let has_edge = edge_drag::any_candidate(edge);
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(app, x, y);
         self.press_down(app, x, y, true);
@@ -440,12 +462,12 @@ impl RuntimeCore {
                 }
                 // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut
                 // it, unless an edge swipe may still take the touch.
-                None if edge.is_none() && self.press_drags_at_once() => {
+                None if !has_edge && self.press_drags_at_once() => {
                     self.touch_scroll_end(scroll, 0.0);
                     (Mode::Drag, false)
                 }
                 // An at-once drag in an edge zone waits for the slop, but still has no long press.
-                None => (Mode::Pending { scroll, edge }, !(edge.is_some() && self.press_drags_at_once())),
+                None => (Mode::Pending { scroll, edge }, !(has_edge && self.press_drags_at_once())),
             }
         };
         let hold_event = if start_hold {

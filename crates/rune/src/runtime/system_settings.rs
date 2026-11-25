@@ -110,6 +110,22 @@ impl window_requests::HostState {
     }
 
     #[inline]
+    pub(crate) fn safe_area(&self) -> [f32; 4] {
+        self.safe_area.unwrap_or_else(crate::runtime::cx::safe_area_insets)
+    }
+
+    pub(super) fn set_safe_area(&mut self, insets: [f32; 4]) -> bool {
+        let clean = insets.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+        let prev = self.safe_area();
+        self.safe_area = Some(clean);
+        if prev == clean {
+            return false;
+        }
+        self.languages_gen = self.languages_gen.wrapping_add(1);
+        true
+    }
+
+    #[inline]
     pub(crate) fn system_scroll_bars_state(&self) -> crate::platform::scroll_bars::SystemScrollBars {
         self.scroll_bars.state
     }
@@ -262,6 +278,20 @@ impl RuntimeCore {
     /// the view and its memos.
     pub fn set_languages(&mut self, languages: Vec<String>) {
         if self.host.set_languages(languages) { self.commit.dirty = true; }
+    }
+
+    /// Current safe-area insets `[top, right, bottom, left]` in logical points: the host override
+    /// set via [`Self::set_safe_area`], else browser insets on `wasm32`, else `[0.0; 4]`.
+    #[inline]
+    pub(crate) fn safe_area(&self) -> [f32; 4] {
+        self.host.safe_area()
+    }
+
+    /// Sets the safe-area insets `[top, right, bottom, left]` in logical points reported by
+    /// [`Cx::safe_area`] and used for [`El::on_edge_drag`] bands. Negative or non-finite values
+    /// clamp to `0.0`. A change re-runs the view and its memos.
+    pub fn set_safe_area(&mut self, insets: [f32; 4]) {
+        if self.host.set_safe_area(insets) { self.commit.dirty = true; }
     }
 
     #[inline]

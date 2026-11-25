@@ -609,7 +609,7 @@ impl RuntimeCore {
         let n = &self.tree.nodes[i];
         let r = n.target;
         let [lx, ly] = self.to_local(i, x, y);
-        let d = Drag { phase: Phase::Down, x: lx, y: ly, w: r[2] - r[0], h: r[3] - r[1], start_x: lx, start_y: ly, dx: 0.0, dy: 0.0, data: 0.0, clicks: 1, cancelled: false, rtl: n.flow == crate::el::Flow::Rtl, window: [x, y], screen: self.screen_at(x, y) };
+        let d = Drag { phase: Phase::Down, x: lx, y: ly, w: r[2] - r[0], h: r[3] - r[1], start_x: lx, start_y: ly, dx: 0.0, dy: 0.0, data: 0.0, clicks: 1, cancelled: false, rtl: n.flow == crate::el::Flow::Rtl, window: [x, y], screen: self.screen_at(x, y), edge: None };
         let path = n.path.clone();
         let drag_handler = self.drags_with(i, button).then(|| n.handlers.on_drag.clone()).flatten();
         if drag_handler.is_some() { self.frame.queue.push(Action::Drag(path.clone(), d, button)); }

@@ -511,7 +511,12 @@ impl RuntimeCore {
         // not on what lies beneath. Other boxes without a handler let the wheel through, as an
         // element with `pointer-events: none` does.
         let n = &self.tree.nodes[i];
-        if (self.hit.hits_len() > hits_before || n.scroll.is_some() || n.above.is_some() || n.vis_flags.raise() || n.sticky.is_some())
+        if (self.hit.hits_len() > hits_before
+            || n.scroll.is_some()
+            || n.above.is_some()
+            || n.vis_flags.raise()
+            || n.sticky.is_some()
+            || n.handlers.get().is_some_and(|h| h.edge_drags.is_some()))
             && !self.subtree_exiting(i) && self.allowed(i) && effective_opacity > 0.001 && visible
         {
             let c = if n.parent.is_some() { pinh_clip } else { self.paint.inh_scratch[0].clip };

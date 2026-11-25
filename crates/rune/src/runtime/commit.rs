@@ -403,6 +403,7 @@ pub(super) struct Measurement<'a> {
     pub(super) pointer_locked: bool,
     pub(super) titlebar_inset: f32,
     pub(super) chrome: crate::ChromeInsets,
+    pub(super) safe_area: [f32; 4],
     pub(super) maximized: bool,
     pub(super) full_screen: bool,
     pub(super) window_backdrop: crate::WindowBackdrop,

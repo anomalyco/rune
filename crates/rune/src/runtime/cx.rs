@@ -78,6 +78,7 @@ pub(crate) struct CxCore {
     pub(super) caret_read: std::cell::Cell<bool>,
     pub(super) wm_state: crate::WindowManagerState,
     pub(super) wm_state_read: std::cell::Cell<bool>,
+    pub(super) safe_area: [f32; 4],
     pub(super) layout: layout_read::LayoutRects,
     pub(super) layout_reads: std::cell::RefCell<layout_read::LayoutReads>,
 }
@@ -138,7 +139,7 @@ impl CxCore {
     pub(crate) fn set_titlebar(&mut self, titlebar: crate::Titlebar) { self.titlebar.titlebar = Some(titlebar); }
     pub(crate) fn accent(&self) -> Color { self.system_accent.accent(self.env.system_dark) }
     pub(crate) fn focus_color(&self) -> Color { self.system_accent.focus(self.env.system_dark) }
-    pub(crate) fn safe_area(&self) -> [f32; 4] { safe_area_insets() }
+    pub(crate) fn safe_area(&self) -> [f32; 4] { self.safe_area }
     pub(crate) fn hover_none(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
         { crate::platform::web::hover_none() }
@@ -478,8 +479,10 @@ impl<S> Cx<S> {
     /// their own draw their default focus ring in it.
     #[inline(always)]
     pub fn focus_color(&self) -> Color { self.core.focus_color() }
-    /// Browser safe-area insets in points, in top/right/bottom/left order. Zero on native.
-    /// Apply these inside a full-canvas root so backgrounds can extend to the screen edges.
+    /// Safe-area insets in logical points, in `[top, right, bottom, left]` order: the host
+    /// override from [`Runtime::set_safe_area`](crate::Runtime::set_safe_area), else browser
+    /// insets on the web, else `[0.0; 4]`. Apply these inside a full-canvas root so backgrounds
+    /// can extend to the screen edges.
     #[inline(always)]
     pub fn safe_area(&self) -> [f32; 4] { self.core.safe_area() }
     /// The primary pointer can't hover: a browser's `(hover: none)`, a phone's or tablet's touch

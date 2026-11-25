@@ -570,7 +570,17 @@ impl RuntimeCore {
                 true
             }
             Action::EdgeDrag(path, mut d) => {
-                let Some((.., f)) = self.node(&path).and_then(|n| n.handlers.edge_drag.clone()) else { return false };
+                let gone = (d.phase == Phase::Up && d.cancelled)
+                    .then(|| self.pointer.touch.take_edge_gone(&path))
+                    .flatten();
+                let Some(f) = gone.or_else(|| {
+                    let edge = d.edge?;
+                    self.node(&path).and_then(|n| {
+                        n.handlers.edge_drags.as_deref().and_then(|e| e.get(edge)).map(|(_, f)| f.clone())
+                    })
+                }) else {
+                    return false;
+                };
                 if d.phase == Phase::Move {
                     one.commit = one.commit.instant();
                 }
