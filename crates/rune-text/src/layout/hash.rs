@@ -3,7 +3,7 @@
 //! measuring and re-breaking a long paragraph doesn't rehash its bytes.
 use std::hash::{Hash, Hasher};
 
-use crate::{PillChip, Span, SpanBoxRun};
+use crate::{InlineBoxRun, PillChip, Span, SpanBoxRun};
 use rune_core::tok::{OpticalSize, TextStyle};
 
 /// A fast, non-cryptographic hasher: bytes go through `rustc_hash`'s string hash and each word
@@ -79,6 +79,28 @@ pub fn mix_span_boxes(key: u64, span_boxes: &[SpanBoxRun]) -> u64 {
         if b.style.has_padding() {
             (b.start, b.end, b.style.pad_left().to_bits(), b.style.pad_right().to_bits()).hash(&mut h);
         }
+    }
+    h.finish()
+}
+
+/// Mixes in-flow [`InlineBoxRun`] slots into a [`shape_key`]. Returns `key` unchanged when
+/// `inline_boxes` is empty, keeping plain text keys bit-identical.
+#[doc(hidden)]
+pub fn mix_inline_boxes(key: u64, inline_boxes: &[InlineBoxRun]) -> u64 {
+    if inline_boxes.is_empty() {
+        return key;
+    }
+    let mut h = KeyHasher::default();
+    (key, 0x696e_6c69_6e65_6278u64).hash(&mut h);
+    for b in inline_boxes {
+        (
+            b.at,
+            b.slot.width().to_bits(),
+            b.slot.height().to_bits(),
+            b.slot.alignment(),
+            b.slot.baseline_offset().map(f32::to_bits),
+        )
+            .hash(&mut h);
     }
     h.finish()
 }

@@ -763,10 +763,10 @@ impl TextSystem {
         }
         let forced = spec.paragraphs_flow();
         // One paragraph and no pills, as most drafts are: one layout in its own direction.
-        if !spec.by_line && spec.pills.is_empty() && spec.span_boxes.is_empty() && !spec.content.contains('\n') {
+        if !spec.by_line && spec.pills.is_empty() && spec.span_boxes.is_empty() && spec.inline_boxes.is_empty() && !spec.content.contains('\n') {
             let base = forced.or_else(|| flow_of(spec.content, &[])).unwrap_or(spec.plaintext_flow()).base();
             let shape = spec.shape_key.map(|k| hash::directed(k, base));
-            return TextLayout::Single(self.layout_keyed(shape, spec.content, spec.spans, spec.blocks, spec.text_indent, &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
+            return TextLayout::Single(self.layout_keyed(shape, spec.content, spec.spans, spec.blocks, spec.text_indent, &[], &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Cached, base));
         }
         self.follow_language();
         let whole = spec.shape_key.unwrap_or_else(|| spec.fresh_shape_key(scale));
@@ -821,7 +821,7 @@ impl TextSystem {
         // and after it keep their keys (`reuse_keys`), so a keystroke or recolour costs no full scan.
         let layout_spans: Vec<Span> = span::layout_spans(spec.spans).cloned().collect();
         let layout_disjoint = layout_spans.len() <= 1 || layout_spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
-        let no_pills_or_blocks = spec.pills.is_empty() && spec.span_boxes.is_empty() && spec.text_indent == 0.0 && spec.blocks.iter().all(|&b| b == Block::Paragraph);
+        let no_pills_or_blocks = spec.pills.is_empty() && spec.span_boxes.is_empty() && spec.inline_boxes.is_empty() && spec.text_indent == 0.0 && spec.blocks.iter().all(|&b| b == Block::Paragraph);
         let plain = layout_spans.is_empty() && no_pills_or_blocks;
         let disjoint_spans = spec.spans.len() <= 1 || spec.spans.windows(2).all(|w| w[0].start < w[0].end && w[0].end <= w[1].start);
         let forced = spec.paragraphs_flow();
@@ -930,7 +930,7 @@ impl TextSystem {
                     let spans: Vec<Span> = spans_in(&layout_spans, a, b, &isolates, layout_disjoint).collect();
                     let pills: Vec<PillChip> = pills_in(spec.pills, a, b, &isolates).collect();
                     let span_boxes: Vec<SpanBoxRun> = span_boxes_in(spec.span_boxes, a, b, &isolates).collect();
-                    self.layout_keyed(Some(key), &text, &spans, blocks, para_indent, &pills, &span_boxes, style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
+                    self.layout_keyed(Some(key), &text, &spans, blocks, para_indent, &pills, &span_boxes, &[], style, scale, max_width, align, spec.wrap_anywhere, pretty, Keep::Owned, flow.base())
                 }
             };
             // A paragraph kept as it was keeps its measures too: touching 2,000 layouts to read

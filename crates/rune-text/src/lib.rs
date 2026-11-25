@@ -126,6 +126,8 @@ pub use layout::hash::directed;
 #[doc(hidden)]
 pub use layout::hash::elide_key;
 #[doc(hidden)]
+pub use layout::hash::mix_inline_boxes;
+#[doc(hidden)]
 pub use layout::hash::mix_span_boxes;
 #[doc(hidden)]
 pub use layout::hash::shape_key;
@@ -156,7 +158,13 @@ pub use layout::run::Run;
 pub use layout::run::RunLayout;
 #[doc(hidden)]
 pub use layout::span::BareIcon;
+#[doc(hidden)]
+pub use layout::span::INLINE_BOX;
 pub use layout::span::Ink;
+pub use layout::span::InlineAlign;
+pub use layout::span::InlineBox;
+#[doc(hidden)]
+pub use layout::span::InlineBoxRun;
 pub use layout::span::Link;
 pub use layout::span::LinkPaint;
 #[doc(hidden)]
@@ -193,6 +201,8 @@ pub use measure::lend;
 #[doc(hidden)]
 pub use measure::line_starts;
 pub use measure::measure;
+pub use measure::measure_inline;
+pub use measure::measure_inline_with;
 pub use measure::measure_with;
 #[doc(hidden)]
 pub use measure::primary_extents;

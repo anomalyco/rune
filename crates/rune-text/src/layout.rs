@@ -7,6 +7,8 @@ pub(crate) mod cursor;
 pub(crate) mod decorations;
 pub(crate) mod hash;
 pub(crate) mod id;
+#[cfg(test)]
+mod inline_box_tests;
 pub(crate) mod inline_fit;
 pub(crate) mod line_break;
 pub(crate) mod line_metrics;

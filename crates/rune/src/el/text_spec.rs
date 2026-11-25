@@ -208,6 +208,7 @@ impl TextSpec {
             blocks: &self.cold.blocks,
             pills: &self.cold.pills,
             span_boxes: &self.cold.span_boxes,
+            inline_boxes: &[],
             text_indent: self.cold.text_indent,
             style: self.style,
             shape_key: self.shape_key(scale),

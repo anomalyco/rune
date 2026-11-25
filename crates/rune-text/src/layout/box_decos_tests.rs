@@ -24,6 +24,7 @@ fn layout_with_boxes(
         blocks: &[],
         pills: &[],
         span_boxes,
+        inline_boxes: &[],
         text_indent: 0.0,
         style,
         shape_key: None,

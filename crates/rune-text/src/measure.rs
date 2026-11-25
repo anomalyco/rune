@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::{RichLayoutOptions, Span, TextSystem};
+use super::{InlineBox, InlineBoxRun, RichLayoutOptions, Span, TextSystem};
 
 mod ink;
 pub use ink::{TextInk, ink};
@@ -400,6 +400,73 @@ pub fn measure_with(
     with_text(|t| {
         let l = t.layout_rich_with(text, spans, style, 1.0, max_width, options);
         // Spaces hanging past a wrapped line's end take no room, as the runtime measures them.
+        let w = if max_width.is_some() { l.width() } else { l.full_width() };
+        (crate::text_width(w), super::line_metrics::spec_height(&l, style, 1.0, true))
+    })
+}
+
+/// Like [`measure`], reserving fixed-size in-flow [`InlineBox`] slots at UTF-8 byte offsets
+/// `boxes`, matching `El::inline`.
+///
+/// ```
+/// use rune_core::tok::TextStyle;
+/// use rune_text::{InlineAlign, InlineBox, measure_inline};
+///
+/// let style = TextStyle::new(14.0, 400.0);
+/// let slot = InlineBox::new(40.0, 16.0).align(InlineAlign::TextCenter);
+/// let (w, h) = measure_inline("Open  and edit it.", &[], &[(5, slot)], style, Some(240.0));
+/// assert!(w > 40.0 && h >= 16.0);
+/// ```
+pub fn measure_inline(
+    text: &str,
+    spans: &[Span],
+    boxes: &[(usize, InlineBox)],
+    style: TextStyle,
+    max_width: Option<f32>,
+) -> (f32, f32) {
+    measure_inline_with(text, spans, boxes, style, max_width, RichLayoutOptions::default())
+}
+
+/// Like [`measure_inline`], laid out with [`RichLayoutOptions`] (alignment, `wrap_anywhere`,
+/// base direction).
+///
+/// ```
+/// use rune_core::tok::TextStyle;
+/// use rune_text::{InlineBox, RichLayoutOptions, measure_inline_with};
+///
+/// let style = TextStyle::new(14.0, 400.0);
+/// let slot = InlineBox::new(32.0, 16.0);
+/// let (w, h) = measure_inline_with(
+///     "Open  now",
+///     &[],
+///     &[(5, slot)],
+///     style,
+///     Some(120.0),
+///     RichLayoutOptions::new().wrap_anywhere(),
+/// );
+/// assert!(w > 0.0 && h >= 16.0);
+/// ```
+pub fn measure_inline_with(
+    text: &str,
+    spans: &[Span],
+    boxes: &[(usize, InlineBox)],
+    style: TextStyle,
+    max_width: Option<f32>,
+    options: RichLayoutOptions,
+) -> (f32, f32) {
+    if boxes.is_empty() {
+        return measure_with(text, spans, style, max_width, options);
+    }
+    let runs: Vec<InlineBoxRun> = boxes
+        .iter()
+        .map(|&(at, slot)| InlineBoxRun {
+            at: at.min(u32::MAX as usize) as u32,
+            slot,
+            child: 0,
+        })
+        .collect();
+    with_text(|t| {
+        let l = t.layout_inline_with(text, spans, &runs, style, 1.0, max_width, options);
         let w = if max_width.is_some() { l.width() } else { l.full_width() };
         (crate::text_width(w), super::line_metrics::spec_height(&l, style, 1.0, true))
     })

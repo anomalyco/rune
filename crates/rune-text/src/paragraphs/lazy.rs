@@ -156,8 +156,8 @@ impl TextSystem {
         };
         if let Some(m) = self.ascii.get(&key) { return m.clone(); }
         let sample: String = (0x21u8..0x7f).flat_map(|b| [b as char, ' ']).collect();
-        let l = self.layout_keyed(None, &sample, &[], &[], 0.0, &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
-        let empty = self.layout_keyed(None, "", &[], &[], 0.0, &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
+        let l = self.layout_keyed(None, &sample, &[], &[], 0.0, &[], &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
+        let empty = self.layout_keyed(None, "", &[], &[], 0.0, &[], &[], &[], style, scale, None, Alignment::Start, wrap_anywhere, false, Keep::Owned, Flow::Ltr.base());
         let measured = (|| {
             let line = l.lines().next().filter(|_| l.lines().count() == 1)?;
             let mut runs = line.runs();
@@ -215,7 +215,7 @@ impl TextSystem {
             let p = &mut paragraphs[k];
             let words = &lazy.content[p.start..p.end];
             let spans: Vec<Span> = spans_in(&lazy.spans, p.start, p.end, &[], lazy.disjoint_spans).collect();
-            let l = self.layout_keyed(Some(p.key), words, &spans, &[], 0.0, &[], &[], lazy.style, lazy.scale, laid.max_width, laid.align, lazy.wrap_anywhere, false, Keep::Owned, p.flow.base());
+            let l = self.layout_keyed(Some(p.key), words, &spans, &[], 0.0, &[], &[], &[], lazy.style, lazy.scale, laid.max_width, laid.align, lazy.wrap_anywhere, false, Keep::Owned, p.flow.base());
             moved |= l.height() != p.height;
             (p.height, p.widths, p.layout, p.shaped) = (l.height(), [l.width(), l.full_width()], l, true);
             shaped_any = true;

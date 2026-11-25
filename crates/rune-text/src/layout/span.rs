@@ -204,6 +204,121 @@ pub(crate) const PILL_BOX: u64 = 1 << 62;
 /// shifted left once, with the low bit set on the trailing spacer.
 pub(crate) const SPAN_BOX: u64 = 1 << 61;
 
+/// Tags in-flow element [`InlineBox`] slots: the lower bits carry the index into the slice of
+/// [`InlineBoxRun`]s passed to shaping.
+#[doc(hidden)]
+pub const INLINE_BOX: u64 = 1 << 60;
+
+/// Vertical alignment of an [`InlineBox`] within its text line.
+///
+/// Follows CSS Inline Layout Level 3 `vertical-align` for [`Baseline`](Self::Baseline),
+/// [`Middle`](Self::Middle), [`TextTop`](Self::TextTop), and [`TextBottom`](Self::TextBottom),
+/// with [`TextCenter`](Self::TextCenter) centring the box on the font's ascent/descent box so
+/// taller boxes grow line height symmetrically.
+///
+/// ```
+/// use rune_text::{InlineAlign, InlineBox};
+///
+/// let slot = InlineBox::new(72.0, 18.0).align(InlineAlign::TextCenter);
+/// assert_eq!(slot, InlineBox::new(72.0, 18.0).align(InlineAlign::TextCenter));
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum InlineAlign {
+    /// Aligns the box's baseline (its bottom edge, or [`InlineBox::baseline`] points below its
+    /// top) with the text line's baseline (CSS `vertical-align: baseline`).
+    #[default]
+    Baseline,
+    /// Centres the box vertically between the primary font's ascent and descent so boxes taller
+    /// than the line grow line height symmetrically above and below the text.
+    TextCenter,
+    /// Aligns the box's vertical midpoint with the baseline plus half the parent font's x-height
+    /// (CSS `vertical-align: middle`).
+    Middle,
+    /// Aligns the box's top edge with the parent font's ascent (CSS `vertical-align: text-top`).
+    TextTop,
+    /// Aligns the box's bottom edge with the parent font's descent (CSS `vertical-align: text-bottom`).
+    TextBottom,
+}
+
+/// Fixed-size room reserved inline in a text run (an atomic CSS `display: inline-block` slot).
+///
+/// Pass to `El::inline` to lay out a child element inside wrapped text lines, or to
+/// [`measure_inline`](crate::measure_inline) / [`measure_inline_with`](crate::measure_inline_with)
+/// to measure the resulting paragraph width and height ahead of layout.
+///
+/// ```
+/// use rune_text::{InlineAlign, InlineBox};
+///
+/// let badge = InlineBox::new(72.0, 18.0).align(InlineAlign::TextCenter);
+/// let math = InlineBox::new(24.0, 16.0).baseline(12.0);
+/// assert_ne!(badge, math);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InlineBox {
+    width: f32,
+    height: f32,
+    align: InlineAlign,
+    baseline: Option<f32>,
+}
+
+impl InlineBox {
+    /// Reserves a `width` by `height` box in points, aligned on the [`InlineAlign::Baseline`].
+    /// Negative or non-finite dimensions clamp to `0.0`.
+    pub const fn new(width: f32, height: f32) -> Self {
+        Self {
+            width: nonneg_pt(width),
+            height: nonneg_pt(height),
+            align: InlineAlign::Baseline,
+            baseline: None,
+        }
+    }
+
+    /// Sets how the box aligns vertically within its line ([`InlineAlign::Baseline`] by default).
+    pub const fn align(mut self, align: InlineAlign) -> Self {
+        self.align = align;
+        self
+    }
+
+    /// Places the box's baseline `points` below its top edge when aligned with
+    /// [`InlineAlign::Baseline`] (defaults to the box's bottom edge). Negative or non-finite
+    /// values clamp to `0.0`.
+    pub const fn baseline(mut self, points: f32) -> Self {
+        self.baseline = Some(nonneg_pt(points));
+        self
+    }
+
+    #[doc(hidden)]
+    pub const fn width(&self) -> f32 {
+        self.width
+    }
+
+    #[doc(hidden)]
+    pub const fn height(&self) -> f32 {
+        self.height
+    }
+
+    #[doc(hidden)]
+    pub const fn alignment(&self) -> InlineAlign {
+        self.align
+    }
+
+    #[doc(hidden)]
+    pub const fn baseline_offset(&self) -> Option<f32> {
+        self.baseline
+    }
+}
+
+/// An [`InlineBox`] attached before UTF-8 byte offset `at` of a text element, bound to child
+/// ordinal `child`.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InlineBoxRun {
+    pub at: u32,
+    pub slot: InlineBox,
+    pub child: u32,
+}
+
 const fn nonneg_pt(v: f32) -> f32 {
     if v.is_finite() && v > 0.0 { v } else { 0.0 }
 }
