@@ -427,7 +427,8 @@ impl<T: 'static> OverlayHandle<T> {
     #[inline(always)]
     pub fn set_align(&self, align: Align, inset: f32) { self.shared.core.set_align(align, inset); }
 
-    /// Resizes the overlay (points), keeping its edge and alignment.
+    /// Resizes the overlay (points), keeping its edge and alignment. An overlay that fits its
+    /// content (`ConfiguredOverlay::fit_content_height`) takes only the width.
     #[inline(always)]
     pub fn resize(&self, size: (f32, f32)) { self.shared.core.resize(size); }
 

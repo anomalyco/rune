@@ -78,16 +78,42 @@ impl PositionOwner {
     }
 }
 
-/// An overlay has no window to ask: whatever a step requested of one is dropped.
-pub(super) fn drop_window_requests(rt: &mut RuntimeCore) {
+/// An overlay has no window to ask: whatever a step requested of one is dropped. Returns the
+/// content's height a commit asked for, when the overlay fits its content
+/// (`ConfiguredOverlay::fit_content_height`).
+pub(super) fn drop_window_requests(rt: &mut RuntimeCore) -> Option<f32> {
     rt.shell_request = None;
     rt.host.user_close_request = false;
     rt.ignore_minimize("an overlay");
     // Overlays size through `OverlayHandle::resize`, not `Tx::resize_window`.
     rt.host.window_frame = None;
+    rt.host.overlay_fit.take()
 }
 
 impl OverlayCore {
+    /// The size this turn's requests (`size`, `fit_height`) give the overlay. One that fits
+    /// its content (`ConfiguredOverlay::fit_content_height`) takes only the width of an
+    /// `OverlayHandle::resize`: its height is the content's, which a commit asks for when it
+    /// changes and the show measures.
+    pub(super) fn requested_size(&self, rt: &RuntimeCore, size: Option<(f32, f32)>, fit_height: Option<f32>) -> Option<(f32, f32)> {
+        if !rt.host.fit_height { return size; }
+        if size.is_none() && fit_height.is_none() { return None; }
+        let width = size.map_or(self.canvas_size.0, |size| size.0);
+        Some((width, fit_height.unwrap_or(self.canvas_size.1)))
+    }
+
+    /// What a step asked of a window: dropped, except an overlay that fits its content takes
+    /// the content's new height. A hidden one keeps it for its next show to place; one on
+    /// screen resizes on the next turn, as `OverlayHandle::resize` does.
+    pub(super) fn take_window_requests(&mut self, rt: &mut RuntimeCore) {
+        let Some(height) = drop_window_requests(rt) else { return };
+        if matches!(self.presence, Presence::Hidden { .. }) {
+            self.canvas_size.1 = height;
+            return;
+        }
+        self.shared.request(|q| q.fit_height = Some(height));
+    }
+
     /// The runtime's cursor while the pointer is over a hit area of a shown overlay that takes
     /// input; the arrow once when it leaves, so `Cursor::Hidden` never outlives the overlay or
     /// the hover, and a click-through area leaves the cursor to the window under it. A Wayland
@@ -473,7 +499,7 @@ impl OverlayCore {
         if !polls_only { return self.commit_at(app, now); }
         app.poll_hidden();
         if app.rt().has_pending_input() { return self.commit_at(app, now); }
-        drop_window_requests(app.rt_mut());
+        self.take_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
         self.open_popup(app);
         if self.presence.drawing() {
@@ -493,7 +519,7 @@ impl OverlayCore {
         } else {
             app.frame(0.0);
         }
-        drop_window_requests(app.rt_mut());
+        self.take_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
         self.open_popup(app);
         let rt = app.rt();
@@ -547,7 +573,7 @@ impl OverlayCore {
         self.quiet.step(frame::QuietEvent::Forget);
         self.turn_frame.step(frame::TurnEvent::FrameMissed);
         if stepped {
-            drop_window_requests(app.rt_mut());
+            self.take_window_requests(app.rt_mut());
             self.clipboard.flush_core(app.rt_mut());
         } else {
             self.advance_at(app, now);
@@ -634,8 +660,9 @@ impl OverlayCore {
             (at.align, at.inset) = (align, inset);
         }
         let old_size = self.at.size;
-        if let Some(size) = requests.size { self.canvas_size = size; }
-        at.size = requests.size.unwrap_or(at.size);
+        let size = self.requested_size(app.rt(), requests.size, requests.fit_height);
+        if let Some(size) = size { self.canvas_size = size; }
+        at.size = size.unwrap_or(at.size);
         if at != self.at || options_changed || reset_position {
             self.at = at;
             self.resolve_size(event_loop);

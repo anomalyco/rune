@@ -71,6 +71,10 @@ impl dyn OverlayApp + '_ {
         self.driver(|rt, app| rt.poll_hidden(app))
     }
 
+    pub(super) fn content_height(&mut self) -> f32 {
+        self.driver(|rt, app| rt.content_height(app))
+    }
+
     pub(super) fn window_focus(&mut self, focused: bool) {
         self.driver(|rt, app| rt.window_focus(app, focused));
     }
@@ -255,6 +259,7 @@ fn build_parts<S, T: 'static>(
     let ConfiguredOverlay {
         spec, options, on_key, on_created, on_availability, poll, compositor, setup, mut runtime, font_smoothing,
         macos_level, macos_color_space, window_backdrop, frame_latency, on_materials, animate_reveal, release_after, renderer,
+        fit_height,
     } = configured;
     let inherits_font_smoothing = font_smoothing.is_none();
     runtime.font_smoothing = font_smoothing.unwrap_or(app_font_smoothing);
@@ -271,6 +276,7 @@ fn build_parts<S, T: 'static>(
         (&f as &dyn std::any::Any).downcast_ref::<fn(&mut T, f64, &mut Tx) -> bool>().copied()
     }));
     rt.set_live_visible(false);
+    rt.core_mut().host.fit_height = fit_height;
     let at = Placement { size: spec.size, edge: spec.edge, margin: spec.margin, align: spec.align, inset: spec.inset };
     let mut core = OverlayCore::new(
         rt.core_mut(),
@@ -462,6 +468,8 @@ impl<T: 'static> Overlay<T> {
     #[cfg(target_os = "macos")]
     pub(super) fn refresh_for_reveal_at(&mut self, now: Instant) { with_app!(self, |core, app| core.refresh_for_reveal_at(&mut app, now)) }
     pub(super) fn resume_live(&mut self) { with_app!(self, |core, app| core.resume_live(&mut app)) }
+    pub(super) fn fit_for_show(&mut self) { with_app!(self, |core, app| core.fit_for_show(&mut app)) }
+    pub(super) fn take_window_requests(&mut self) { self.core.take_window_requests(self.rt.core_mut()) }
     pub(super) fn settle_before_reveal(&mut self) { self.core.settle_before_reveal(self.rt.core_mut()) }
     pub(super) fn hidden_input(&mut self) { with_app!(self, |core, app| core.hidden_input(&mut app)) }
     pub(super) fn apply_input(&mut self) { self.core.apply_input(self.rt.core()) }

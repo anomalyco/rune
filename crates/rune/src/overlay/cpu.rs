@@ -669,7 +669,7 @@ impl super::OverlayCore {
             self.window_backdrop = backdrop;
             self.sync_window_backdrop(app.rt_mut(), false);
         }
-        super::input::drop_window_requests(app.rt_mut());
+        self.take_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
         if self.options.keys.takes_keys() && let Some(window) = self.cpu.as_ref().map(|c| c.window.clone()) {
             let focused = window.has_focus();
