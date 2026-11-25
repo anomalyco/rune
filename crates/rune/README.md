@@ -669,7 +669,8 @@ policy changes are applied in the same mutation phase.
   text or text field with `Tx::text_offset_at(key, x, y, f)` and
   `Runtime::text_offset_at(key, x, y)`.
 - **App hooks**: `AppSpec::setup` (once, with a `Waker` for background threads), `poll(state, clock,
-  tx)` before every frame, `on_key`, and `extra_args()` for the app's own flags, ready before
+  tx)` at the start of every frame (before that frame's handlers, so a handler that queues work
+  for it calls `tx.request_poll()` to have the next frame poll it), `on_key`, and `extra_args()` for the app's own flags, ready before
   `run` (to choose the file a window opens).
   `tx.wake_after(Duration::from_millis(250))` schedules a poll on the unscaled app clock,
   even when poll returns false. Equal deadlines coalesce; the shell sleeps until the earliest

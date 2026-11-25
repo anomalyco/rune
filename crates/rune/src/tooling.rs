@@ -31,8 +31,9 @@ pub struct AppSpec<S: 'static> {
     pub families: (&'static str, &'static str),
     /// Called once with a waker other threads use when new data arrives.
     pub setup: Option<fn(&mut S, Waker)>,
-    /// Called at the start of every frame with seconds since start (virtual when headless);
-    /// true when state changed.
+    /// Called at the start of every frame with seconds since start (virtual when headless),
+    /// before that frame's handlers; true when state changed. A handler that queues work for
+    /// it calls `Tx::request_poll` so the next frame polls it.
     pub poll: Option<fn(&mut S, f64, &mut Tx) -> bool>,
     /// Keys unhandled by the focused control, or every key while nothing has focus
     /// (`Tx::focused` tells which); true consumes the key. The rune README's "Key routing"
