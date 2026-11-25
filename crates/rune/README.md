@@ -532,7 +532,14 @@ policy changes are applied in the same mutation phase.
   `pointer_buttons`, middle-link, or `on_middle_press` target claimed them, without making the
   element a primary press target (primary clicks, empty-click blur, press cursors, and text
   selection stay unchanged); for `Middle`, platform autoscroll starts only if every handler
-  returns `false`. `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
+  returns `false`. `.on_any_press(|s, button: PointerButton, p: PointerEvent, tx| ..)` passively
+  observes any mouse button going down anywhere in the window (for example, to dismiss a
+  non-focus-taking popup or open an editable combobox's list) without consuming the press, taking
+  hits, or changing focus or hover: only a button-down starting a new gesture fires observers
+  (chorded presses while another button or capture is held are ignored), observers run in reverse
+  tree order before that press's target actions (skipping inert, exiting, and behind-modal
+  subtrees while including observers inside an active modal), and windows with no observer pay
+  one cached boolean check per press. `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
   logical keys `on_key` sees: the press-time and current focus chains first (keeping shared
   ancestors after both); when nothing is focused or focus rests on the open modal itself, every
   allowed `on_key_up` handler hears the release deepest-first (with the modal itself first if it
@@ -658,8 +665,9 @@ top-left, which is what popups and context menus anchor to.
 | `on_wheel` | `WheelEvent::x`, `y` (`dx`, `dy` are the scroll in points) | local |
 | `on_magnify`, `on_rotate` | `MagnifyEvent::x`, `y`, `RotateEvent::x`, `y` | local |
 | `on_smart_magnify` | `x`, `y` | local |
-| `on_pointer_move_local`, `on_secondary_press_local` | `PointerEvent::x`, `y` | local |
+| `on_pointer_move_local`, `on_secondary_press_local`, `on_any_press` | `PointerEvent::x`, `y` | local |
 | | `PointerEvent::window_x`, `window_y`, `window()` | window |
+| | `PointerEvent::pressing` (whether any mouse button is held down) | window-wide |
 | `on_pointer_move`, `on_secondary_press` | `PointerPress::x`, `y` | window |
 | `on_layout`, `on_layout_tx`, `on_layout_any` | `[x, y, w, h]`, as laid out, after scrolling (before live values) | window |
 | `on_drawn_layout`, `on_drawn_layout_tx` | `[x, y, w, h]`, as drawn | window |

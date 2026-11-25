@@ -101,7 +101,7 @@ impl RuntimeCore {
     /// frame inside that event. The rest (a move's hover, enter and leave, what a frame reports
     /// for the next: layout, visibility, rows shown, a selection's change) waits for the display.
     fn web_needs_event(action: &Action) -> bool {
-        matches!(action, Action::Press(..) | Action::DoublePress(..) | Action::MiddlePress(..) | Action::Link(..) | Action::LinkSecondary(..)
+        matches!(action, Action::Press(..) | Action::DoublePress(..) | Action::MiddlePress(..) | Action::AnyPress(..) | Action::Link(..) | Action::LinkSecondary(..)
             | Action::SecondaryPress(..) | Action::SecondaryRepost { .. } | Action::Drag(..) | Action::DragRepeat(..) | Action::DragStart(_) | Action::DragEnd(..) | Action::Dismiss(_)
             | Action::FieldMenu(..) | Action::Files(_) | Action::Paste(..) | Action::ClipboardRead(..) | Action::FileDialog(..) | Action::Key { .. }
             | Action::KeyUp(_) | Action::Physical(..) | Action::Focus(..) | Action::FocusControl(_) | Action::Blur)

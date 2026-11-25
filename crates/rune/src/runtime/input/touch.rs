@@ -437,6 +437,7 @@ impl RuntimeCore {
             return;
         }
         if matches!(f.mode, Mode::Menu | Mode::WindowDragPending) {
+            self.pointer.note_button_up(crate::PointerButton::Primary);
             self.pointer_leave();
             return;
         }

@@ -24,8 +24,8 @@ impl RuntimeCore {
     /// Recomputes node-derived presence flags in a single pass over `self.nodes`.
     /// Returns whether any node has a loop spec.
     pub(in crate::runtime) fn refresh_node_flags(&mut self) -> bool {
-        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut mount, mut key_up, mut sticky, mut raise, mut any_loop) =
-            (false, false, false, false, false, false, false, false, false);
+        let (mut dissolve, mut cache, mut pix, mut drawn_ly, mut mount, mut key_up, mut any_press, mut sticky, mut raise, mut any_loop) =
+            (false, false, false, false, false, false, false, false, false, false);
         let (mut ordered, mut above) = (false, false);
         let mut fade_stops: Option<[f32; 2]> = None;
         for n in &self.tree.nodes {
@@ -40,6 +40,7 @@ impl RuntimeCore {
             if let Some(h) = n.handlers.get() {
                 drawn_ly |= h.on_drawn_layout.is_some() || h.on_visible.is_some() || h.drawn_rect.is_some();
                 mount |= h.on_mount.is_some();
+                any_press |= h.on_any_press.is_some();
             }
             key_up |= n.focus.get().is_some_and(|f| f.key_up.is_some());
             raise |= n.vis_flags.raise();
@@ -58,6 +59,7 @@ impl RuntimeCore {
         self.tree.has_drawn_layout = drawn_ly;
         self.tree.has_mount = mount;
         self.tree.has_key_up = key_up;
+        self.tree.has_any_press = any_press;
         self.tree.has_sticky = self.holding() || sticky;
         self.tree.has_raise = raise;
         self.tree.has_paint_order = ordered;

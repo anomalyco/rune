@@ -138,6 +138,7 @@ impl RuntimeCore {
         self.drop_press();
         self.pointer.clear_secondary();
         self.pointer.clear_tint();
+        self.pointer.clear_buttons_down();
         self.pointer_leave();
         self.drag_files_leave();
     }
@@ -282,6 +283,8 @@ impl RuntimeCore {
     /// A primary press at (x, y); `touch`: a finger's, which never runs `on_press` on the way
     /// down (`El::press_on_down` is a mouse's).
     pub(in crate::runtime) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) {
+        let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
+        self.pointer.note_button_down(crate::PointerButton::Primary);
         // A press ends a middle-click autoscroll, and does nothing else.
         if self.pointer.autoscroll_press(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
         if self.pointer.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
@@ -292,6 +295,7 @@ impl RuntimeCore {
         // A host that didn't act on the last press's request mustn't get it with this one.
         self.host.titlebar.action = None;
         self.pointer.pos = Some((x, y));
+        if starts_gesture { self.queue_any_press(crate::PointerButton::Primary, x, y); }
         // A press is the hand's: hover follows the pointer through moving layout.
         self.release_hover_hold();
         self.kbd.focus.step(focus_machine::FocusEvent::Pointed);
@@ -426,6 +430,7 @@ impl RuntimeCore {
     }
 
     pub(crate) fn pointer_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+        self.pointer.note_button_up(crate::PointerButton::Primary);
         if self.pointer.autoscroll_release(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
         #[cfg(target_os = "linux")]
         self.primary_released();
@@ -440,6 +445,7 @@ impl RuntimeCore {
     /// cancelled at (x, y), and any other press is released there.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) fn pointer_release_lost(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+        self.pointer.note_button_up(crate::PointerButton::Primary);
         let held = self.pointer.press.held().filter(|h| h.button == crate::PointerButton::Primary)
             .map(|h| (h.left, h.moved || !press_run::within_slop(h.at, (x, y))));
         if let Some((left, moved)) = held && self.cancel_drag_at(Some((x, y))) {

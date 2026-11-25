@@ -248,11 +248,12 @@ pub struct PointerPress {
     pub y: f32,
 }
 
-/// Where the pointer is, for [`El::on_pointer_move_local`] and
-/// [`El::on_secondary_press_local`]: `x` and `y` in the element's own layout points, as
+/// Where the pointer is, for [`El::on_pointer_move_local`],
+/// [`El::on_secondary_press_local`], [`El::on_any_press`], [`El::on_drop_move`],
+/// [`Tx::press_point`] and [`Tx::drop_point`]: `x` and `y` in the element's own layout points, as
 /// [`Drag`] and [`crate::WheelEvent`] give them (from its top-left as drawn, divided by any
-/// scale it draws at, so they hold on a zoomed canvas), and the same point in window points
-/// for a context menu's anchor.
+/// scale it draws at, so they hold on a zoomed canvas), the same point in window points
+/// for a context menu's anchor, and whether any mouse button is currently held down.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PointerEvent {
@@ -260,6 +261,10 @@ pub struct PointerEvent {
     pub y: f32,
     pub window_x: f32,
     pub window_y: f32,
+    /// Whether any mouse button is currently held down anywhere in the window (cleared on
+    /// release and [`crate::Runtime::cancel_pointer`], including when the element under
+    /// button-down was removed before release).
+    pub pressing: bool,
 }
 
 impl PointerEvent {
@@ -271,6 +276,7 @@ impl PointerEvent {
 }
 
 pub(crate) type PointerFn = Rc<dyn Fn(crate::states::States<'_>, PointerEvent, &mut Tx)>;
+pub(crate) type AnyPressFn = Rc<dyn Fn(crate::states::States<'_>, crate::PointerButton, PointerEvent, &mut Tx)>;
 pub(crate) type DragFn = Rc<dyn Fn(crate::states::States<'_>, &mut Drag, &mut Tx)>;
 pub(crate) type DragOutFn = Rc<dyn Fn(crate::states::StatesRef<'_>) -> Option<crate::DragItem>>;
 pub(crate) type DragEndFn = Rc<dyn Fn(crate::states::States<'_>, crate::DragOutcome, &mut Tx)>;
@@ -325,6 +331,53 @@ impl El {
     /// ```
     pub fn on_secondary_press_local<S: 'static>(mut self, f: impl Fn(&mut S, PointerEvent, &mut Tx) + 'static) -> Self {
         self.handlers.on_secondary_press = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
+        self
+    }
+    /// Passively observes any mouse button going down anywhere in the window without consuming
+    /// the press, taking hits, or changing focus or hover (like DOM capture-phase `pointerdown`
+    /// or AppKit's `addLocalMonitorForEventsMatchingMask:`).
+    ///
+    /// Receives the [`crate::PointerButton`] and a [`PointerEvent`] with the press point in
+    /// both this element's own layout points (`x`, `y`) and window points (`window_x`,
+    /// `window_y`), with `pressing == true` and [`Tx::button`] set to the pressed button.
+    /// Inside or outside is the observer's choice: compare `(p.x, p.y)` against the element's
+    /// size or `(p.window_x, p.window_y)` against its layout rect.
+    ///
+    /// Only a button-down that starts a new gesture fires observers: a chorded button-down while
+    /// another button or pointer capture is held is ignored. Observers run before that press's
+    /// normal target actions in reverse tree order (topmost live, allowed, non-exiting observer
+    /// first), cannot cancel or redirect the press, and are skipped when inert, exiting, or
+    /// behind an open modal (observers inside an active modal still run). Windows with no
+    /// observer pay one cached boolean check per press.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, PointerButton, PointerEvent, Runtime, col, el};
+    /// # struct App { open: bool, clicks: u32 }
+    /// # fn view(s: &App, _: &mut Cx<App>) -> El {
+    /// #     col().size(200.0, 120.0)
+    /// #         .child(el().key("btn").size(80.0, 40.0).on_press(|s: &mut App| s.clicks += 1))
+    /// #         .children(s.open.then(|| {
+    /// #             el().key("popup").absolute(100.0, 10.0).size(80.0, 60.0)
+    /// #                 .on_any_press(|s: &mut App, _btn: PointerButton, p: PointerEvent, _| {
+    /// #                     if p.x < 0.0 || p.y < 0.0 || p.x > 80.0 || p.y > 60.0 {
+    /// #                         s.open = false;
+    /// #                     }
+    /// #                 })
+    /// #         }))
+    /// # }
+    /// let mut rt = Runtime::new(App { open: true, clicks: 0 }, view, (200.0, 120.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// rt.pointer_down(20.0, 20.0);
+    /// rt.pointer_up(20.0, 20.0);
+    /// rt.frame(0.0);
+    /// assert!(!rt.state.open);
+    /// assert_eq!(rt.state.clicks, 1);
+    /// ```
+    pub fn on_any_press<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, crate::PointerButton, PointerEvent, &mut Tx) + 'static,
+    ) -> Self {
+        self.handlers.on_any_press = Some(Rc::new(move |s, btn, p, tx| f(downcast::<S>(s), btn, p, tx)));
         self
     }
 }

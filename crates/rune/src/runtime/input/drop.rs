@@ -347,8 +347,7 @@ impl RuntimeCore {
     fn drop_point(&self, path: &str, at: Option<(f32, f32)>) -> Option<PointerEvent> {
         let (x, y) = at?;
         let i = self.live_index(path)?;
-        let [lx, ly] = self.to_local(i, x, y);
-        Some(PointerEvent { x: lx, y: ly, window_x: x, window_y: y })
+        Some(self.pointer_event(i, x, y))
     }
 
     /// A hover at `at`: moves the drop hover to the target there, updates passive ancestor

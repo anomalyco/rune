@@ -306,15 +306,37 @@ impl RuntimeCore {
         self.button_down_with_primary(app, x, y, button, cfg!(target_os = "linux"));
     }
 
+    /// Queues passive [`El::on_any_press`] observers for a button-down that starts a new
+    /// gesture, in reverse tree order (topmost live, allowed, non-exiting observer first), ahead
+    /// of that press's normal target actions. Windows without an observer pay one cached boolean
+    /// check.
+    pub(in crate::runtime) fn queue_any_press(&mut self, button: PointerButton, x: f32, y: f32) {
+        if !self.tree.has_any_press { return; }
+        for i in (0..self.tree.nodes.len()).rev() {
+            if self.tree.nodes[i].handlers.get().is_some_and(|h| h.on_any_press.is_some())
+                && self.allowed(i)
+                && !self.subtree_exiting(i)
+                && !self.subtree_unmounted(i)
+            {
+                let point = self.pointer_event(i, x, y);
+                let path = self.tree.nodes[i].path.clone();
+                self.frame.queue.push(Action::AnyPress(path, button, point));
+            }
+        }
+    }
+
     pub(super) fn button_down_with_primary(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, button: PointerButton, primary_paste: bool) {
         match button {
             PointerButton::Primary => return self.pointer_down(app, x, y),
             PointerButton::Secondary => return self.secondary_down(x, y),
             _ => {}
         }
+        let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
+        self.pointer.note_button_down(button);
         if self.pointer.autoscroll_press(button) { self.pointer.pos = Some((x, y)); return; }
         if self.pointer.press.is_held() { return; }
         self.pointer.pos = Some((x, y));
+        if starts_gesture { self.queue_any_press(button, x, y); }
         if button == PointerButton::Middle { self.tint_down(x, y, button); }
         // On Linux a middle click in a text field pastes the primary selection there.
         #[cfg(any(target_os = "linux", test))]
@@ -374,6 +396,7 @@ impl RuntimeCore {
 
     /// A mouse button came up at (x, y): the release of [`Self::button_down`].
     pub(crate) fn button_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32, button: PointerButton) {
+        self.pointer.note_button_up(button);
         self.pointer.release_tint(button);
         if button == PointerButton::Middle { self.frame.queue.note_middle_button_up(x, y); }
         if !matches!(button, PointerButton::Primary | PointerButton::Secondary) && self.pointer.autoscroll_release(button) { self.pointer.pos = Some((x, y)); return; }
