@@ -651,3 +651,68 @@ fn link_hover_alone_exposes_link_a11y_role_and_web_mirror_without_click_action()
         .expect("web mirror inline link run");
     assert_eq!(run.text, "Rune docs");
 }
+
+#[test]
+fn a_drag_inside_a_static_texts_link_does_not_open_it() {
+    #[derive(Default)]
+    struct S { clicks: Vec<String>, selectable: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().size(300.0, 80.0).padding(10.0).child(
+            text("see open the full report now")
+                .key("t")
+                .w(260.0)
+                .selectable(s.selectable)
+                .link(Link::new(4..24, "target"))
+                .on_link(|s: &mut S, id, _| s.clicks.push(id.to_owned())),
+        )
+    }
+    for selectable in [true, false] {
+        let mut rt = Runtime::new(S { selectable, ..S::default() }, view, (300.0, 80.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        settle(&mut rt);
+        let t = rt.tree.nodes.iter().position(|n| n.key.as_deref() == Some("t")).unwrap();
+        let r = box_xywh(rt.core().link_boxes_for(t, 0, rt.core().drawn_box(t))[0].1);
+        let y = r[1] + r[3] * 0.5;
+        let at = |f: f32| r[0] + r[2] * f;
+
+        // A drag that starts and ends inside the link is not a click.
+        rt.pointer_down(at(0.2), y);
+        for k in 1..=4 {
+            rt.pointer_move(at(0.2 + 0.125 * k as f32), y);
+            rt.frame(0.0);
+        }
+        rt.pointer_up(at(0.7), y);
+        rt.frame(0.0);
+        assert!(rt.state.clicks.is_empty(), "selectable={selectable}: drag opened the link");
+
+        // A plain click, and one that wobbles within the click slop, still open it.
+        rt.pointer_down(at(0.5), y);
+        rt.pointer_up(at(0.5), y);
+        rt.frame(0.0);
+        rt.pointer_down(at(0.5), y);
+        rt.pointer_move(at(0.5) + 2.0, y);
+        rt.pointer_up(at(0.5) + 2.0, y);
+        rt.frame(0.0);
+        assert_eq!(rt.state.clicks, ["target", "target"], "selectable={selectable}");
+
+        // A finger that moves 6 pt is still a tap (within `TOUCH_SLOP`, past `CLICK_SLOP`);
+        // one that drags well past it is not.
+        rt.state.clicks.clear();
+        rt.touch(1, TouchPhase::Started, at(0.4), y, 10.0);
+        rt.frame(0.0);
+        rt.touch(1, TouchPhase::Moved, at(0.4) + 6.0, y, 10.02);
+        rt.frame(0.0);
+        rt.touch(1, TouchPhase::Ended, at(0.4) + 6.0, y, 10.04);
+        rt.frame(0.0);
+        assert_eq!(rt.state.clicks, ["target"], "selectable={selectable}: touch tap");
+        rt.touch(2, TouchPhase::Started, at(0.2), y, 20.0);
+        rt.frame(0.0);
+        for k in 1..=4 {
+            rt.touch(2, TouchPhase::Moved, at(0.2 + 0.125 * k as f32), y, 20.0 + 0.02 * k as f64);
+            rt.frame(0.0);
+        }
+        rt.touch(2, TouchPhase::Ended, at(0.7), y, 20.2);
+        rt.frame(0.0);
+        assert_eq!(rt.state.clicks, ["target"], "selectable={selectable}: touch drag opened the link");
+    }
+}
