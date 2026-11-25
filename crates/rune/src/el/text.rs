@@ -1067,10 +1067,13 @@ impl El {
     ///
     /// Plain single-line text (including [`El::truncate_fade`]) shapes one line directly.
     /// [`El::wrap`], [`El::truncate`] (and `truncate_middle` / `truncate_head`), and
-    /// [`El::max_lines`] re-wrap or re-elide inside the existing box width. Where plain string
-    /// replacement cannot apply (a text editor, non-text element, [`El::spans`], [`El::reveal`],
-    /// [`El::secure`], links, pills, or byte-indexed text decorations), the binding is ignored
-    /// and the element keeps its authored text without panicking.
+    /// [`El::max_lines`] re-wrap or re-elide inside the existing box width. [`El::inline`] boxes
+    /// stay in flow and reposition their child elements on every live update (a box placed at the
+    /// end of a non-empty placeholder stays anchored at the end as length changes; any earlier
+    /// offset stays at its authored byte clamped down to the nearest UTF-8 char boundary). Where
+    /// plain string replacement cannot apply (a text editor, non-text element, [`El::spans`],
+    /// [`El::reveal`], [`El::secure`], links, pills, or byte-indexed text decorations), the
+    /// binding is ignored and the element keeps its authored text without panicking.
     ///
     /// ```no_run
     /// # use rune::{LiveText, text};

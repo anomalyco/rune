@@ -189,6 +189,7 @@ fn prepare_text(
             cold.overlines.clear();
             cold.span_boxes.clear();
             cold.inline_boxes.clear();
+            cold.inline_anchors.clear();
             cold.line_fills.clear();
             cold.text_indent = 0.0;
             cold.advance_in = None;
@@ -220,7 +221,6 @@ fn prepare_text(
             || !t.cold.strikes.is_empty()
             || !t.cold.overlines.is_empty()
             || !t.cold.span_boxes.is_empty()
-            || !t.cold.inline_boxes.is_empty()
             || !t.cold.highlights.is_empty()
             || !t.cold.line_fills.is_empty()
             || !t.cold.blocks.is_empty()

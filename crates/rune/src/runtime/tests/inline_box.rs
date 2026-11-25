@@ -475,3 +475,267 @@ fn paint_keep_text_quads_and_noop_edge_cases() {
     rt.frame(1.0 / 60.0);
     assert_eq!(rt.core().paint.keep_check_mismatches(), 0, "PaintKeep copied inline-box subtree with zero mismatches");
 }
+
+#[test]
+fn live_text_with_inline_box_preserves_room_and_places_child_across_tabular_and_full_updates() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct State {
+        tabular: crate::LiveText,
+        trailing: crate::LiveText,
+        leading: crate::LiveText,
+        trunc: crate::LiveText,
+        utf8: crate::LiveText,
+        views: AtomicUsize,
+        clicks: usize,
+    }
+
+    fn tnum_style() -> TextStyle {
+        TextStyle::new(14.0, 400.0).lh(20.0).features("'tnum' 1")
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        s.views.fetch_add(1, Ordering::Relaxed);
+        let slot = InlineBox::new(32.0, 16.0).align(InlineAlign::TextCenter);
+        let chip = |k: &'static str, lbl: &'static str| {
+            row()
+                .key(k)
+                .fill(CHIP_BG)
+                .center()
+                .role("button")
+                .label(lbl)
+                .focusable(true)
+                .on_press(|s: &mut State| s.clicks += 1)
+                .child(text(lbl).font(TextStyle::new(10.0, 500.0)))
+        };
+        col()
+            .size(360.0, 260.0)
+            .padding(12.0)
+            .gap(8.0)
+            .child(
+                text("000.00  bar")
+                    .key("tab-line")
+                    .size(220.0, 24.0)
+                    .font(tnum_style())
+                    .live_text(&s.tabular)
+                    .inline(7, slot, chip("tab-chip", "u")),
+            )
+            .child(memo("trail-line", 1u64, {
+                let trailing = s.trailing.clone();
+                move || {
+                    text("99% ")
+                        .size(220.0, 24.0)
+                        .font(body_style())
+                        .inline(4, slot, chip("trail-chip", "%"))
+                        .live_text(&trailing)
+                }
+            }))
+            .child(
+                text(" 00:00")
+                    .key("lead-line")
+                    .size(220.0, 24.0)
+                    .font(body_style())
+                    .inline(0, slot, chip("lead-chip", "t"))
+                    .live_text(&s.leading),
+            )
+            .child(
+                text("ok ")
+                    .key("trunc-line")
+                    .size(90.0, 24.0)
+                    .font(body_style())
+                    .truncate()
+                    .live_text(&s.trunc)
+                    .inline(3, slot, chip("trunc-chip", "Trunc Action")),
+            )
+            .child(
+                text("abcd")
+                    .key("utf8-line")
+                    .size(220.0, 24.0)
+                    .font(body_style())
+                    .live_text(&s.utf8)
+                    .inline(1, slot, chip("utf8-chip", "c")),
+            )
+    }
+
+    let state = State {
+        tabular: crate::LiveText::new("100.00  bar"),
+        trailing: crate::LiveText::new("99% "),
+        leading: crate::LiveText::new(" 00:00"),
+        trunc: crate::LiveText::new("ok "),
+        utf8: crate::LiveText::new("abcd"),
+        views: AtomicUsize::new(0),
+        clicks: 0,
+    };
+    let mut rt = Runtime::new(state, view, (360.0, 260.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let views0 = rt.state.views.load(Ordering::Relaxed);
+    let commits0 = rt.stats.commits;
+    let cached_before = rt.core().text.cached_layout_count();
+
+    let node_content = |rt: &Runtime<State>, k: &str| {
+        rt.core()
+            .tree
+            .nodes
+            .iter()
+            .find(|n| n.key.as_deref() == Some(k))
+            .unwrap()
+            .text
+            .as_deref()
+            .unwrap()
+            .content
+            .clone()
+    };
+    let layout_full_width = |rt: &Runtime<State>, k: &str| {
+        rt.core()
+            .tree
+            .nodes
+            .iter()
+            .find(|n| n.key.as_deref() == Some(k))
+            .unwrap()
+            .text_layout
+            .as_ref()
+            .and_then(crate::text::TextLayout::single)
+            .unwrap()
+            .full_width()
+    };
+
+    // Frame 0 latched initial LiveText value ("100.00  bar", not placeholder "000.00  bar").
+    assert_eq!(node_content(&rt, "tab-line"), "100.00  bar");
+    let trail_r0 = find_rect(&rt, "trail-chip").unwrap();
+    let lead_r0 = find_rect(&rt, "lead-chip").unwrap();
+    let tab_r0 = find_rect(&rt, "tab-chip").unwrap();
+    assert!((tab_r0[2] - 32.0).abs() < 0.1 && (trail_r0[2] - 32.0).abs() < 0.1);
+
+    // Tick 1: tabular-digit update + growing trailing text + longer leading text + truncating overflow + multi-byte UTF-8.
+    let slot = InlineBox::new(32.0, 16.0).align(InlineAlign::TextCenter);
+    rt.state.tabular.set("234.56  bar");
+    rt.state.trailing.set("1000% ");
+    rt.state.leading.set(" 1:23:45");
+    rt.state.trunc.set("a very long live string that overflows ninety points ");
+    rt.state.utf8.set("éa"); // 'é' is bytes 0..2, so authored byte 1 lands mid-char -> floors to 0
+    rt.frame(1.0 / 60.0);
+
+    assert_eq!(rt.stats.commits, commits0, "live updates with inline boxes must not rebuild or commit");
+    assert_eq!(rt.state.views.load(Ordering::Relaxed), views0, "no view rerun on live updates");
+    assert_eq!(
+        rt.core().text.cached_layout_count(),
+        cached_before,
+        "live updates with inline boxes must not grow shared layout cache",
+    );
+
+    // Tabular-digit live text updated its content, kept the inline box room, and agrees with measure_inline to the bit.
+    assert_eq!(node_content(&rt, "tab-line"), "234.56  bar");
+    let expected_tab_w = crate::text::measure_inline("234.56  bar", &[], &[(7, slot)], tnum_style(), None).0;
+    let actual_tab_w = crate::text::text_width(layout_full_width(&rt, "tab-line"));
+    assert_eq!(actual_tab_w.to_bits(), expected_tab_w.to_bits(), "tabular live_text + inline matches measure_inline to the bit");
+    let tab_r1 = find_rect(&rt, "tab-chip").unwrap();
+    assert!((tab_r1[2] - 32.0).abs() < 0.1 && tab_r1[0] > 12.0 + 30.0);
+
+    // Trailing chip moved right to stay at end of "1000% ", matching measure_inline to the bit, and is clickable there.
+    assert_eq!(node_content(&rt, "trail-line"), "1000% ");
+    let expected_trail_w = crate::text::measure_inline("1000% ", &[], &[(6, slot)], body_style(), None).0;
+    let actual_trail_w = crate::text::text_width(layout_full_width(&rt, "trail-line"));
+    assert_eq!(actual_trail_w.to_bits(), expected_trail_w.to_bits(), "trailing live_text + inline matches measure_inline to the bit");
+    let trail_r1 = find_rect(&rt, "trail-chip").unwrap();
+    assert!(trail_r1[0] > trail_r0[0] + 6.0, "trailing chip moved right as number grew: {trail_r0:?} -> {trail_r1:?}");
+    let (cx, cy) = (trail_r1[0] + trail_r1[2] * 0.5, trail_r1[1] + trail_r1[3] * 0.5);
+    rt.pointer_down(cx, cy);
+    rt.pointer_up(cx, cy);
+    rt.frame(2.0 / 60.0);
+    assert_eq!(rt.state.clicks, 1, "trailing chip is clickable at its updated live position");
+
+    // Leading chip stayed at x == line left while text after it grew.
+    assert_eq!(find_rect(&rt, "lead-chip").unwrap()[0], lead_r0[0]);
+
+    // Overflowing truncated live text hid its elided trailing inline child from paint/hit/a11y.
+    assert_eq!(find_rect(&rt, "trunc-chip").unwrap(), [0.0; 4]);
+    assert!(!rt.accessibility_json().to_string().contains("Trunc Action"));
+
+    // Mid-UTF-8 byte offset clamped down to byte 0 without dropping the chip.
+    let utf8_line_r = find_rect(&rt, "utf8-line").unwrap();
+    let utf8_chip_r = find_rect(&rt, "utf8-chip").unwrap();
+    assert!((utf8_chip_r[0] - utf8_line_r[0]).abs() < 1.0 && (utf8_chip_r[2] - 32.0).abs() < 0.1);
+
+    // Tick 2: shrink trailing text and un-truncate trunc-line -> children move left and reappear.
+    rt.state.trailing.set("5% ");
+    rt.state.trunc.set("ok ");
+    rt.frame(3.0 / 60.0);
+    let trail_r2 = find_rect(&rt, "trail-chip").unwrap();
+    assert!(trail_r2[0] < trail_r0[0] - 2.0, "trailing chip moved left as number shrank: {trail_r0:?} -> {trail_r2:?}");
+    let trunc_shown = find_rect(&rt, "trunc-chip").unwrap();
+    assert!((trunc_shown[2] - 32.0).abs() < 0.1, "un-truncated live inline child reappeared: {trunc_shown:?}");
+
+    // Commit reusing the memoised live text keeps the inline child placed at its live position.
+    rt.commit.dirty = true;
+    rt.frame(4.0 / 60.0);
+    assert_eq!(find_rect(&rt, "trail-chip").unwrap(), trail_r2, "memo reuse keeps live inline child placed");
+    rt.frame(5.0 / 60.0);
+    assert_eq!(rt.core().paint.keep_check_mismatches(), 0, "PaintKeep stays clean with live inline boxes");
+}
+
+#[test]
+fn caret_browsing_steps_across_inline_box_child() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        let slot = InlineBox::new(40.0, 18.0).align(InlineAlign::TextCenter);
+        let badge = el().key("cb-badge").fill(CHIP_BG).radius(4.0);
+        col().w_full().padding(12.0).child(
+            text("ab  cd")
+                .key("cb-text")
+                .w(240.0)
+                .font(body_style())
+                .selectable(true)
+                .caret_browsing(true)
+                .inline(3, slot, badge),
+        )
+    }
+
+    let mut rt = Runtime::new((), view, (300.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    let shift = Mods { shift: true, ..Mods::default() };
+    let caret_x = |rt: &Runtime<()>| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("cb-text"))
+            .and_then(|e| e.caret)
+            .map(|c| c[0])
+    };
+    let badge_r = find_rect(&rt, "cb-badge").expect("badge rect");
+
+    // Tab focuses the caret-browsing text at byte 0.
+    rt.key(key_ev(Key::Tab, Mods::default()));
+    rt.frame(0.0);
+    assert_eq!(rt.focused_key().as_deref(), Some("cb-text"));
+    assert_eq!(rt.text_selection().map(|(_, r)| r), Some(0..0));
+
+    // Step right: 0 -> 1 -> 2 -> 3 (just before box) -> 4 (past box + space) -> 5 -> 6.
+    for expected in 1..=6usize {
+        rt.key(key_ev(Key::Right, Mods::default()));
+        rt.frame(0.0);
+        assert_eq!(
+            rt.text_selection().map(|(_, r)| r),
+            Some(expected..expected),
+            "Right step reached byte {expected}",
+        );
+        let x = caret_x(&rt).expect("caret rect");
+        if expected == 3 {
+            assert!(x <= badge_r[0] + 1.5, "caret at byte 3 sits at or before box start: x={x} badge={badge_r:?}");
+        } else if expected == 4 {
+            assert!(x >= badge_r[0] + badge_r[2] - 1.5, "caret at byte 4 jumped past the inline box: x={x} badge={badge_r:?}");
+        }
+    }
+
+    // Step left back across the box to byte 2, then Shift+Right across the box: selects "  " (bytes 2..4), skipping the box.
+    for expected in (2..6).rev() {
+        rt.key(key_ev(Key::Left, Mods::default()));
+        rt.frame(0.0);
+        assert_eq!(rt.text_selection().map(|(_, r)| r), Some(expected..expected), "Left step reached byte {expected}");
+    }
+    rt.key(key_ev(Key::Right, shift));
+    rt.frame(0.0);
+    rt.key(key_ev(Key::Right, shift));
+    rt.frame(0.0);
+    assert_eq!(rt.text_selection().map(|(_, r)| r), Some(2..4));
+    assert_eq!(rt.selected_text().as_deref(), Some("  "), "caret selection across inline box skips the box");
+}
