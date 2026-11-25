@@ -26,7 +26,7 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextIn
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer, ZwlrLayerShellV1};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{configure_wait, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, text_input as text_input_machine, touch};
+use super::layer_shell_machine::{activation as activation_machine, configure_wait, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, text_input as text_input_machine, touch};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -95,9 +95,9 @@ struct State {
     text_input_manager: Option<ZwpTextInputManagerV3>,
     text_input: Option<ZwpTextInputV3>,
     text_input_state: text_input_machine::State,
-    /// The serial of the user's last key or button press on the surface, which an activation
-    /// token request presents as proof of interaction.
-    input_serial: Option<u32>,
+    /// The serial of the user's last key, pointer button, or touch press on the surface, which
+    /// an activation token request presents as proof of interaction.
+    input_serial: activation_machine::InputSerial,
 }
 
 impl Dispatch<WlOutput, ()> for State {
@@ -248,7 +248,7 @@ impl Dispatch<WlPointer, ()> for State {
             }
             wl_pointer::Event::Button { serial, button, state: wayland_client::WEnum::Value(button_state), .. } if state.over.inside() => {
                 let pressed = button_state == wl_pointer::ButtonState::Pressed;
-                if pressed { state.input_serial = Some(serial); }
+                state.input_serial.step(activation_machine::InputEvent::PointerButton { serial, inside: true, pressed });
                 match pointer::button_from_linux(button) {
                     crate::PointerButton::Primary => {
                         state.input.push(Input::Button(pressed));
@@ -287,7 +287,10 @@ impl Dispatch<WlTouch, ()> for State {
     fn event(state: &mut Self, _: &WlTouch, event: wl_touch::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         use touch::Event as Touch;
         let event = match event {
-            wl_touch::Event::Down { surface, id, x, y, .. } if state.surface.as_ref() == Some(&surface) => Touch::Down { id, x: x as f32, y: y as f32 },
+            wl_touch::Event::Down { serial, surface, id, x, y, .. } if state.surface.as_ref() == Some(&surface) => {
+                state.input_serial.step(activation_machine::InputEvent::TouchDown { serial, ours: true });
+                Touch::Down { id, x: x as f32, y: y as f32 }
+            }
             wl_touch::Event::Motion { id, x, y, .. } => Touch::Motion { id, x: x as f32, y: y as f32 },
             wl_touch::Event::Up { id, .. } => Touch::Up { id },
             wl_touch::Event::Cancel => Touch::Cancel,
@@ -353,7 +356,7 @@ impl Dispatch<WlKeyboard, ()> for State {
             wl_keyboard::Event::Key { serial, key, state: wayland_client::WEnum::Value(key_state), .. } if state.keyboard_focus.focused() => {
                 match key_state {
                     wl_keyboard::KeyState::Pressed => {
-                        state.input_serial = Some(serial);
+                        state.input_serial.step(activation_machine::InputEvent::Key { serial, focused: true, pressed: true });
                         state.emit_key(key, true, false);
                         let repeats = state.xkb.as_ref().is_some_and(|xkb| xkb.get_keymap().key_repeats(xkb::Keycode::new(key + 8)));
                         state.step_repeat(repeat::Event::Press { key, repeats, now: crate::time::now() });
@@ -949,8 +952,15 @@ impl LayerSurface {
 
     /// An XDG activation token for a program launched from the overlay; see `activation`.
     pub fn activation_token(&self) -> Option<String> {
+        if self.state.readiness.closed() { return None; }
         let globals = self.globals.as_ref()?;
-        activation::request(&self.conn, globals, &self.surface, self.seat.as_ref().zip(self.state.input_serial))
+        activation::request(
+            &self.conn,
+            globals,
+            &self.surface,
+            self.seat.as_ref().zip(self.state.input_serial.get()),
+            self.state.readiness.closed(),
+        )
     }
 
     pub fn supports_keys(&self) -> bool {
@@ -1132,6 +1142,7 @@ impl Drop for LayerSurface {
         self.state.want_pointer = false;
         self.state.want_keys = false;
         self.state.surface = None;
+        self.state.input_serial.step(activation_machine::InputEvent::Reset);
         self.state.reset_text_input_gone();
         // Drain pending events before destroying proxies so any queued `wl_keyboard.keymap` fd is
         // received and closed via `OwnedFd` rather than dropped open by libwayland.

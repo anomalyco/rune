@@ -593,7 +593,7 @@ impl OverlayCore {
         if app.rt().live_pending() { self.dirty = true; }
         self.drag_ends_due(app);
         let mut requests = std::mem::take(&mut *self.shared.requests.lock().unwrap());
-        for reply in std::mem::take(&mut requests.tokens) { reply(self.activation_token()); }
+        for reply in requests.tokens.take() { reply(self.activation_token()); }
         if let Some(input) = requests.input { self.pending_input = Some(input); }
         self.apply_input(app.rt());
         if let Some(exclude) = requests.exclude_from_capture { self.set_capture_exclusion(exclude); }

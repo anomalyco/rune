@@ -544,13 +544,127 @@ fn macos_window_drag_in_overlay_starts_drag_and_pointer_released_clears_native_c
     assert!(!pointer.captured(), "native panel capture clears once OS drag takes mouse-up");
 }
 
+type TokenLog = Arc<std::sync::Mutex<Vec<(&'static str, Option<String>)>>>;
+
 #[test]
-fn activation_token_waits_for_the_next_turn_and_keeps_every_reply() {
-    let req = requests_after(|h| {
-        h.activation_token(|_| {});
-        h.hide();
-        h.activation_token(|_| {});
-    });
+fn activation_token_answers_ahead_of_hide_and_returns_none_when_hidden_or_non_layer() {
+    use super::{Overlay, OverlayOptions, OverlaySpec, Presence};
+    use crate::tooling::AppSpec;
+    use crate::{Cx, El};
+
+    fn view(_: &(), _: &mut Cx<()>) -> El { crate::el().size(40.0, 20.0) }
+    let app = AppSpec::new("launcher", (40.0, 20.0), || (), view);
+    let spec = OverlaySpec::new("launcher", app.size, view).options(OverlayOptions::default());
+    let (mut overlay, handle) = Overlay::new(spec, (), &app);
+    overlay.rt.frame(0.0);
+
+    let log: TokenLog = Arc::default();
+    let push = |tag: &'static str| {
+        let log = log.clone();
+        move |tok: Option<String>| log.lock().unwrap().push((tag, tok))
+    };
+
+    // Queuing activation_token and hide in one turn keeps both token replies in FIFO order so
+    // sync() answers them before Visibility::Hide runs.
+    overlay.presence = Presence::Shown { occluded: false };
+    handle.activation_token(push("first"));
+    handle.hide();
+    handle.activation_token(push("second"));
+    let mut req = std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap());
     assert_eq!(req.tokens.len(), 2);
     assert_eq!(req.visible(), Some(false));
+    for reply in req.tokens.take() {
+        assert!(overlay.presence.shown(), "sync answers tokens while the overlay is still shown");
+        reply(overlay.activation_token());
+    }
+    overlay.hide();
+    assert!(!overlay.presence.shown());
+    assert_eq!(*log.lock().unwrap(), [("first", None), ("second", None)]);
+
+    // Hidden overlay answers None once; fading-out overlay answers None once too.
+    handle.activation_token(push("hidden"));
+    overlay.answer_tokens();
+    overlay.answer_tokens();
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.hide_fading(std::time::Duration::from_millis(150));
+    handle.activation_token(push("fading"));
+    overlay.answer_tokens();
+    assert_eq!(
+        *log.lock().unwrap(),
+        [("first", None), ("second", None), ("hidden", None), ("fading", None)]
+    );
+}
+
+#[test]
+fn activation_token_drains_with_none_on_hide_close_refusal_and_drop() {
+    use super::{KeyPolicy, Overlay, OverlayOptions, OverlaySpec, Presence};
+    use crate::tooling::AppSpec;
+    use crate::{Cx, El};
+
+    struct State {
+        handle: Option<OverlayHandle<State>>,
+        log: TokenLog,
+    }
+    fn view(_: &State, _: &mut Cx<State>) -> El { crate::el().size(40.0, 20.0) }
+    let log: TokenLog = Arc::default();
+    let app = AppSpec::new("launcher", (40.0, 20.0), || (), |_, _| crate::el());
+    let spec = OverlaySpec::new("launcher", app.size, view)
+        .options(OverlayOptions { keys: KeyPolicy::OnDemand, ..Default::default() })
+        .on_focus(|s: &mut State, focused, _| {
+            if !focused && let Some(h) = &s.handle {
+                let log = s.log.clone();
+                h.activation_token(move |tok| log.lock().unwrap().push(("from_blur", tok)));
+            }
+        });
+    let (mut overlay, handle) = Overlay::new(spec, State { handle: None, log: log.clone() }, &app);
+    overlay.rt.state.handle = Some(handle.clone());
+    overlay.rt.frame(0.0);
+
+    let push = |tag: &'static str| {
+        let log = log.clone();
+        move |tok: Option<String>| log.lock().unwrap().push((tag, tok))
+    };
+
+    // Synchronous hide (e.g. Shell::Close) drains queued tokens before hiding and drains any
+    // token requested inside on_focus(false) during hide_window, answering each exactly once.
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.window_focus(true);
+    handle.activation_token(push("before_hide"));
+    overlay.hide();
+    overlay.answer_tokens();
+    assert_eq!(*log.lock().unwrap(), [("before_hide", None), ("from_blur", None)]);
+    assert_eq!(overlay.shared.core.requests.lock().unwrap().tokens.len(), 0);
+
+    // Compositor layer close / surface refusal answers pending tokens with None once.
+    overlay.presence = Presence::Shown { occluded: false };
+    handle.activation_token(push("on_close"));
+    overlay.layer_closed(Some("compositor closed layer surface"));
+    overlay.answer_tokens();
+    assert_eq!(*log.lock().unwrap(), [("before_hide", None), ("from_blur", None), ("on_close", None)]);
+
+    // Dropping the overlay answers queued tokens with None (even when a reply re-entrantly asks
+    // for another token), and calls after drop answer None immediately without hanging.
+    let reentrant_handle = handle.clone();
+    let reentrant_log = log.clone();
+    handle.activation_token(move |tok| {
+        reentrant_log.lock().unwrap().push(("on_drop_1", tok));
+        let inner_log = reentrant_log.clone();
+        reentrant_handle.activation_token(move |tok2| inner_log.lock().unwrap().push(("reentrant", tok2)));
+    });
+    handle.activation_token(push("on_drop_2"));
+    drop(overlay);
+    handle.activation_token(push("after_drop"));
+
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            ("before_hide", None),
+            ("from_blur", None),
+            ("on_close", None),
+            ("on_drop_1", None),
+            ("reentrant", None),
+            ("on_drop_2", None),
+            ("after_drop", None),
+        ]
+    );
 }

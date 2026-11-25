@@ -206,8 +206,14 @@ impl SharedCore {
     fn request_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Take)); }
     fn release_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Release)); }
     #[cfg(not(target_arch = "wasm32"))]
-    #[cfg(not(target_arch = "wasm32"))]
-    fn activation_token(&self, reply: requests::TokenReply) { self.request(|q| q.tokens.push(reply)); }
+    fn activation_token(&self, reply: requests::TokenReply) {
+        let rejected = self.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.push(reply);
+        if let Some(reply) = rejected {
+            reply(None);
+        } else {
+            self.wake();
+        }
+    }
     fn window_number(&self) -> Option<u32> { self.native.lock().unwrap().0 }
     fn capture_exclusion(&self) -> OverlaySupport { self.capabilities().capture_exclusion }
     fn capabilities(&self) -> crate::OverlayCapabilities { self.native.lock().unwrap().1 }
@@ -304,8 +310,20 @@ impl<T: 'static> OverlayHandle<T> {
     /// Asks for an XDG activation token to hand a program launched from the overlay (as
     /// `XDG_ACTIVATION_TOKEN`), so the compositor lets its window come to the front. Call it
     /// before hiding the overlay: `reply` runs on the event loop's next turn, ahead of that
-    /// turn's show or hide, with None off Wayland's layer shell, while the overlay has no
-    /// surface, or when the compositor gives no token.
+    /// turn's show or hide, with `None` off Wayland's layer shell, while the overlay is not
+    /// shown or has no live surface, or when the compositor gives no token. Every request is
+    /// answered once, including with `None` if the overlay closes or drops first.
+    ///
+    /// ```no_run
+    /// # fn launch(handle: &rune::OverlayHandle<()>) {
+    /// handle.activation_token(|token| {
+    ///     let mut cmd = std::process::Command::new("firefox");
+    ///     if let Some(token) = token { cmd.env("XDG_ACTIVATION_TOKEN", token); }
+    ///     let _ = cmd.spawn();
+    /// });
+    /// handle.hide();
+    /// # }
+    /// ```
     pub fn activation_token(&self, reply: impl FnOnce(Option<String>) + Send + 'static) {
         #[cfg(target_arch = "wasm32")]
         reply(None);

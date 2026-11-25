@@ -3233,6 +3233,11 @@ is one more host on the event loop
   backends it does nothing yet. No safety net exists yet: an app whose event loop hangs while an
   `Exclusive` layer holds the keys leaves the desktop without a keyboard until it exits or is
   killed.
+- Activation tokens: `OverlayHandle::activation_token(reply)` asks a shown Wayland layer-shell
+  overlay's compositor for an `xdg_activation_v1` token using the latest pointer-button, key, or
+  touch-down serial on the surface, answering ahead of the same turn's `hide()` so a program
+  launched with `XDG_ACTIVATION_TOKEN` can come to the front under focus-stealing prevention.
+  Other platforms, hidden or closed overlays, and dropped handles answer `None`.
 - Checked under headless sway (layer shell, and Xwayland for X11) and on macOS (panel level,
   bounds, hide and reshow). Windows builds are checked with `cargo xwin clippy` only.
 - `El::window_drag()` (and `El::no_window_drag()`) moves window-backed overlays (Windows, macOS

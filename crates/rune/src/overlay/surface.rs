@@ -430,6 +430,7 @@ pub(crate) fn overlay_rescale_size(size: (f32, f32), scale: f32, max_dim: u32) -
 
 impl Drop for OverlayCore {
     fn drop(&mut self) {
+        self.close_tokens();
         *self.shared.native.lock().unwrap() = Default::default();
         self.set_availability(Availability::Unavailable);
         self.release();
@@ -448,6 +449,7 @@ impl OverlayCore {
     /// Its surface refused a new configuration: the overlay hides and drops it, so wgpu never
     /// panics on its next drawable. The next show tries a new one.
     pub(super) fn surface_refused(&mut self, app: &mut dyn OverlayApp, reason: String) {
+        self.drain_tokens_none();
         self.hide(app);
         self.release();
         self.fail(app, reason);
