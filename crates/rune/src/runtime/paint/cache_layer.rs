@@ -55,6 +55,21 @@ pub(in crate::runtime) enum RasterPass {
     Elide { glyphs: usize },
 }
 
+/// One `MaterialDraw` recorded relative to a cached layer's origin, `raster_scale`, and outer
+/// `effective_opacity`, replayed when the layer is reused (`RasterPass::Elide`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::runtime) struct CachedMaterial {
+    pub(in crate::runtime) id: NodeId,
+    pub(in crate::runtime) material: crate::SystemMaterial,
+    /// `[x - origin_x, y - origin_y, width, height]` at `raster_scale`.
+    pub(in crate::runtime) rel_rect: [f32; 4],
+    /// Clamped corner radius at `raster_scale`.
+    pub(in crate::runtime) radius: f32,
+    pub(in crate::runtime) continuous: bool,
+    /// Opacity relative to the cached layer's outer `effective_opacity`.
+    pub(in crate::runtime) rel_opacity: f32,
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::runtime) struct NodeCache {
     pub(in crate::runtime) signature: u64,
@@ -65,6 +80,11 @@ pub(in crate::runtime) struct NodeCache {
     pub(in crate::runtime) rel_bounds: [f32; 4],
     pub(in crate::runtime) glyphs: usize,
     pub(in crate::runtime) commit_gen: u64,
+    /// `El::system_material` draws recorded while painting this cached layer; empty (zero heap
+    /// allocation) for cached subtrees with no material elements.
+    pub(in crate::runtime) materials: Vec<CachedMaterial>,
+    /// Visible material nodes inside this cached layer that overflowed `max_native_materials`.
+    pub(in crate::runtime) material_fallbacks: Vec<NodeId>,
 }
 
 #[derive(Clone, Copy)]
@@ -77,6 +97,9 @@ pub(in crate::runtime) struct ActiveCache {
     pub(in crate::runtime) cur_scale: f32,
     pub(in crate::runtime) scale: ScaleSettle,
     pub(in crate::runtime) env_scale: f32,
+    pub(in crate::runtime) effective_opacity: f32,
+    pub(in crate::runtime) material_start: usize,
+    pub(in crate::runtime) fallback_start: usize,
     /// Everything outside commits that paints the subtree: hover, press, links, an outside
     /// hover group and the window-wide state in `build`'s paint hash.
     pub(in crate::runtime) paint_hash: u64,
@@ -212,9 +235,11 @@ impl RuntimeCore {
                     || n.vis.pixels.is_some()
                     || n.text.as_ref().is_some_and(|t| t.cold.pills.iter().any(crate::text::PillChip::has_image))
                     || n.vis.surface.is_some()
-                    // Material rects are listed only while painting, and apps read them
-                    // (`Runtime::system_materials`) with or without native views.
-                    || n.material.is_some()
+                    // Native material views (macOS, opt-in Windows) and Wayland compositor blur
+                    // regions alter fills, punch shadow holes, and read live ancestor clips, so
+                    // draw live while active; fallback-only materials stay cached and replay their
+                    // recorded rects on elision.
+                    || (n.material.is_some() && self.paint.tracks_native_materials())
                     // Never retain a raster of a secret, even when the field is unfocused.
                     || n.text.as_ref().is_some_and(|t| t.redacted)
                     || n.input.as_ref().is_some_and(|inp| inp.edit.focused || inp.edit.is_secure())
@@ -280,6 +305,35 @@ impl state::PaintState {
                 let b2 = (ac.origin[0] + entry.rel_bounds[2] * k).ceil();
                 let b3 = (ac.origin[1] + entry.rel_bounds[3] * k).ceil();
                 let sig = entry.signature;
+                // Replay recorded material draws translated to `ac.origin`, scaled by `k`, and
+                // scaled by outer opacity so `Runtime::system_materials()` and `on_materials` stay
+                // complete with zero heap allocations while reusing the cached raster.
+                for m in &entry.materials {
+                    let opacity = (m.rel_opacity * ac.effective_opacity).clamp(0.0, 1.0);
+                    if opacity <= 0.001 {
+                        continue;
+                    }
+                    if self.materials.len() < self.max_native_materials {
+                        self.materials.push(crate::system_material::MaterialDraw {
+                            id: m.id,
+                            material: m.material,
+                            rect: [
+                                ac.origin[0] + m.rel_rect[0] * k,
+                                ac.origin[1] + m.rel_rect[1] * k,
+                                m.rel_rect[2] * k,
+                                m.rel_rect[3] * k,
+                            ],
+                            radius: m.radius * k,
+                            continuous: m.continuous,
+                            opacity,
+                        });
+                    } else {
+                        self.material_fallbacks.push(m.id);
+                    }
+                }
+                for &id in &entry.material_fallbacks {
+                    self.material_fallbacks.push(id);
+                }
                 Self::seal_cache_marker(instances, marks, track_marks, start, [b0, b1, (b2 - b0).max(0.0), (b3 - b1).max(0.0)], ac.node_id, sig);
                 *glyph_count += glyphs;
                 return;
@@ -403,6 +457,32 @@ impl state::PaintState {
         let rel_bounds = [b0 - ac.origin[0], b1 - ac.origin[1], b2 - ac.origin[0], b3 - ac.origin[1]];
         let glyphs = *glyph_count - glyph_start;
         let is_resident = text.atlas.resident_caches.get(&ac.node_id.0) == Some(&sig);
+        let (mut cached_materials, mut cached_fallbacks) = match self.node_caches.get_mut(&ac.node_id) {
+            Some(prev) => (
+                std::mem::take(&mut prev.materials),
+                std::mem::take(&mut prev.material_fallbacks),
+            ),
+            None => (Vec::new(), Vec::new()),
+        };
+        cached_materials.clear();
+        cached_fallbacks.clear();
+        let inv_opacity = if ac.effective_opacity > 1e-6 { 1.0 / ac.effective_opacity } else { 0.0 };
+        for draw in &self.materials[ac.material_start..] {
+            cached_materials.push(CachedMaterial {
+                id: draw.id,
+                material: draw.material,
+                rel_rect: [
+                    draw.rect[0] - ac.origin[0],
+                    draw.rect[1] - ac.origin[1],
+                    draw.rect[2],
+                    draw.rect[3],
+                ],
+                radius: draw.radius,
+                continuous: draw.continuous,
+                rel_opacity: (draw.opacity * inv_opacity).clamp(0.0, 1.0),
+            });
+        }
+        cached_fallbacks.extend_from_slice(&self.material_fallbacks[ac.fallback_start..]);
         self.node_caches.insert(ac.node_id, NodeCache {
             signature: sig,
             raster_scale: ac.cur_scale,
@@ -412,6 +492,8 @@ impl state::PaintState {
             rel_bounds,
             glyphs,
             commit_gen,
+            materials: cached_materials,
+            material_fallbacks: cached_fallbacks,
         });
         if is_resident && surfaces.len() == surface_start {
             instances.truncate(start + 1);

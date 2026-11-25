@@ -180,7 +180,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) window_backdrop: crate::WindowBackdrop,
     pub(crate) frame_latency: Option<u32>,
-    pub(crate) on_materials: Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>,
+    pub(crate) on_materials: Option<crate::system_material::OnMaterials>,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
 }
