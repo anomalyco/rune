@@ -9,7 +9,7 @@
 //! HTML read from the clipboard passes through [`sanitize_html`] on the worker; on macOS an
 //! RTF-only clipboard (TextEdit, Notes, Pages) is converted to HTML there too.
 use std::hash::{BuildHasher, RandomState};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 #[cfg(any(test, not(target_arch = "wasm32")))]
 use std::sync::OnceLock;
@@ -48,6 +48,25 @@ use secret::{Alarm, Hold, HoldEffect, HoldEvent, Slot, Unwritten, step_hold};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
+/// Monotonic generation and OS clipboard revision captured when a write was queued, so a slow
+/// background encode never overwrites a newer in-app or external-app clipboard write.
+#[derive(Clone)]
+struct WriteStamp {
+    generation: u64,
+    latest: Arc<AtomicU64>,
+    revision_before: Option<u64>,
+}
+impl WriteStamp {
+    fn superseded_in_app(&self) -> bool {
+        self.latest.load(Ordering::Acquire) != self.generation
+    }
+    fn superseded(&self, current_rev: Option<u64>, last_own_rev: Option<u64>) -> bool {
+        if self.superseded_in_app() { return true; }
+        let (Some(before), Some(now)) = (self.revision_before, current_rev) else { return false };
+        now != before && last_own_rev != Some(now)
+    }
+}
+
 /// A pending clipboard write. Debug output never includes its contents.
 #[derive(Clone)]
 pub struct ClipboardWrite {
@@ -60,6 +79,7 @@ pub struct ClipboardWrite {
     /// Linux (`arboard`) write without decoding the PNG back to pixels.
     #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
     encoded_rgba: Option<(u32, u32, Arc<[u8]>)>,
+    stamp: Option<WriteStamp>,
 }
 impl ClipboardWrite {
     pub(crate) fn new(content: ClipboardContent) -> Self {
@@ -70,11 +90,16 @@ impl ClipboardWrite {
             image: None,
             #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
             encoded_rgba: None,
+            stamp: None,
         }
     }
     /// `Tx::copy_image`: the image alone, encoded off the event thread on native platforms.
     pub(crate) fn image(image: crate::Image) -> Self {
         Self { image: Some(image), ..Self::new(ClipboardContent::default()) }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stamp(&mut self, generation: u64, latest: Arc<AtomicU64>, revision_before: Option<u64>) {
+        self.stamp = Some(WriteStamp { generation, latest, revision_before });
     }
     /// Encodes the decoded image this write copies as PNG, into its content. False when it
     /// has one it can't give (still decoding, failed, or too large): the write then leaves the
@@ -98,6 +123,7 @@ impl ClipboardWrite {
             image: None,
             #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
             encoded_rgba: None,
+            stamp: None,
         };
         (write, SecretCopy(slot))
     }
@@ -411,10 +437,11 @@ struct OwnPills {
     pills: Vec<(std::ops::Range<usize>, String)>,
 }
 
-/// The outside moments of a secret's write, in the order it reaches them: its delay starts, then
-/// its text is hashed, which takes a while for a large secret. Tests slow each one down.
+/// The outside moments of a write, in the order it reaches them: encoding an image, starting a
+/// secret's delay, then hashing a secret's text. Tests slow each one down.
 trait WriteSteps {
     fn now(&self) -> Instant;
+    fn encoding(&self) {}
     fn hashing(&self) {}
 }
 struct RealTime;
@@ -424,7 +451,14 @@ impl WriteSteps for RealTime {
 
 /// The clipboard owner's bookkeeping, shared by the OS worker and the memory clipboard.
 #[derive(Default)]
-struct Core { keys: RandomState, seq: Seq, hold: Hold, alarm: Option<Alarm>, own_pills: Option<OwnPills> }
+struct Core {
+    keys: RandomState,
+    seq: Seq,
+    hold: Hold,
+    alarm: Option<Alarm>,
+    own_pills: Option<OwnPills>,
+    last_own_revision: Option<u64>,
+}
 impl Core {
     #[cfg(not(target_arch = "wasm32"))]
     fn next_check(&self) -> Option<Instant> {
@@ -465,7 +499,19 @@ impl Core {
     }
 
     fn write<B: Backend>(&mut self, cb: &mut B, mut copy: ClipboardWrite, notify: Option<Notify>, steps: &dyn WriteSteps) {
-        if !copy.encode_image() { return; }
+        if copy.stamp.as_ref().is_some_and(|s| s.superseded(cb.revision(), self.last_own_revision)) {
+            return;
+        }
+        let rev_before_encode = cb.revision();
+        let had_image = copy.image.is_some();
+        if had_image {
+            steps.encoding();
+            if !copy.encode_image() { return; }
+            let changed_during_encode = rev_before_encode.is_some_and(|before| cb.revision().is_some_and(|now| now != before));
+            if changed_during_encode || copy.stamp.as_ref().is_some_and(|s| s.superseded(cb.revision(), self.last_own_revision)) {
+                return;
+            }
+        }
         let slot = copy.slot().cloned();
         let notify = notify.filter(|_| slot.is_some());
         if slot.as_ref().is_some_and(|s| s.cancelled()) { return; } // `Unwritten` settles it as cleared.
@@ -476,6 +522,7 @@ impl Core {
         }
         self.apply(cb, HoldEvent::Lost);
         let rev = cb.revision();
+        self.last_own_revision = rev;
         self.own_pills = copy
             .clear_after
             .is_none()
@@ -508,6 +555,7 @@ impl Core {
             match effect {
                 HoldEffect::Wipe => {
                     let ok = cb.clear().is_ok();
+                    if ok { self.last_own_revision = cb.revision(); }
                     self.own_pills = None;
                     answer = Some(HoldEvent::Swept { ok });
                 }

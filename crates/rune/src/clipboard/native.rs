@@ -15,9 +15,9 @@ impl Client {
         // Nothing to clear before the first write.
         if std::mem::take(&mut rt.edit.clear_secret_request) && let Some(w) = WORKER.get() { w.sender.send(Request::Clear(None)).ok(); }
         if let Some(copy) = rt.copy_request.take() {
-            let worker = worker();
-            copy.bind(Route::System(worker.clone()));
-            worker.send(Request::Write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() }))).ok();
+            let worker = worker_handle();
+            copy.bind(Route::System(worker.sender.clone()));
+            worker.send_write(copy, Some(Notify { changed: self.changed.clone(), wake: self.wake.clone() }), revision());
         }
         if let Some(target) = rt.edit.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
         for id in std::mem::take(&mut rt.edit.read_requests) { self.read_for(Purpose::Read(id)); }
@@ -29,6 +29,7 @@ static WORKER: OnceLock<Worker> = OnceLock::new();
 pub(super) fn worker_started() -> bool { WORKER.get().is_some() }
 pub(super) struct Worker {
     pub(super) sender: mpsc::Sender<Request>,
+    latest_write: Arc<AtomicU64>,
     join: Mutex<Option<(std::thread::JoinHandle<()>, mpsc::Receiver<()>)>>,
 }
 impl Worker {
@@ -40,7 +41,12 @@ impl Worker {
             // Backend dropped (including Linux handoff) before acknowledging completion.
             done.send(()).ok();
         }).expect("clipboard worker");
-        Self { sender, join: Mutex::new(Some((handle, completed))) }
+        Self { sender, latest_write: Arc::new(AtomicU64::new(0)), join: Mutex::new(Some((handle, completed))) }
+    }
+    pub(super) fn send_write(&self, mut copy: ClipboardWrite, notify: Option<Notify>, revision_before: Option<u64>) {
+        let generation = self.latest_write.fetch_add(1, Ordering::AcqRel) + 1;
+        copy.stamp(generation, self.latest_write.clone(), revision_before);
+        self.sender.send(Request::Write(copy, notify)).ok();
     }
     pub(super) fn stop(&self) {
         let Some((handle, completed)) = self.join.lock().unwrap().take() else { return };
@@ -50,16 +56,20 @@ impl Worker {
     }
 }
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-fn worker() -> &'static mpsc::Sender<Request> {
+fn worker_handle() -> &'static Worker {
     if cfg!(test) {
         panic!("unit test reached the OS clipboard; install a test clipboard (`rt.use_clipboard` or `Client::use_memory`)");
     }
-    &WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok())).sender
+    WORKER.get_or_init(|| Worker::spawn(|| arboard::Clipboard::new().ok()))
 }
 
 #[cfg(any(target_os = "ios", target_os = "android"))]
+fn worker_handle() -> &'static Worker {
+    WORKER.get_or_init(|| Worker::spawn(|| None::<Board>))
+}
+
 fn worker() -> &'static mpsc::Sender<Request> {
-    &WORKER.get_or_init(|| Worker::spawn(|| None::<Board>)).sender
+    &worker_handle().sender
 }
 
 /// Called by the shared event-loop exit path, including overlay-only applications.
