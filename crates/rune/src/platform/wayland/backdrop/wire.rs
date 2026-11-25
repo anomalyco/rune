@@ -28,7 +28,7 @@ use super::policy::{
     BlurSync, CompositorProtocol, SurfaceBlurTracker, WaylandBackdropInputs, WaylandBlurSeam,
     choose_protocol, ext_capabilities_has_blur,
 };
-use super::region::{RegionRect, RegionSpec};
+use super::region::{BlurRegion, RegionRect, RegionSpec, build_elements_region};
 
 thread_local! {
     /// One shared Wayland backdrop controller per `wl_display` pointer, always touched on the UI
@@ -487,45 +487,48 @@ impl SurfaceBlur {
         })
     }
 
-    /// Synchronizes this surface's blur region and protocol state with the compositor.
+    /// Synchronizes this surface's blur region and protocol state with the compositor
+    /// (including any per-element `El::system_material` blur rects when `WindowBackdrop::None`).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn sync(
+    pub(crate) fn sync_with_materials(
         &mut self,
         requested: crate::WindowBackdrop,
         transparent: bool,
         alpha_mode: Option<wgpu::CompositeAlphaMode>,
         cpu_painter: bool,
         region_spec: RegionSpec,
+        materials: &[crate::system_material::WaylandMaterialBlur],
+        window_scale: f32,
         is_overlay: bool,
         force_reapply: bool,
     ) -> BlurSync {
+        let fallback_sync = || BlurSync {
+            active: crate::WindowBackdrop::None,
+            supported_mask: 0,
+            material_blur_enabled: false,
+            opaque_fallback: super::policy::needs_opaque_fallback(
+                is_overlay,
+                transparent,
+                requested,
+                crate::WindowBackdrop::None,
+            ),
+            needs_commit: false,
+        };
         let Some(surface) = self.surface.as_ref() else {
-            return BlurSync {
-                active: crate::WindowBackdrop::None,
-                supported_mask: 0,
-                opaque_fallback: super::policy::needs_opaque_fallback(
-                    is_overlay,
-                    transparent,
-                    requested,
-                    crate::WindowBackdrop::None,
-                ),
-                needs_commit: false,
-            };
+            return fallback_sync();
+        };
+        let env_mode = crate::system_material::Mode::from_env();
+        let material_region = if requested == crate::WindowBackdrop::None
+            && env_mode != crate::system_material::Mode::Off
+        {
+            build_elements_region(materials, window_scale, region_spec.logical_size)
+        } else {
+            BlurRegion::Empty
         };
         CONTROLLERS.with(|map| {
             let mut map = map.borrow_mut();
             let Some(controller) = map.get_mut(&self.display) else {
-                return BlurSync {
-                    active: crate::WindowBackdrop::None,
-                    supported_mask: 0,
-                    opaque_fallback: super::policy::needs_opaque_fallback(
-                        is_overlay,
-                        transparent,
-                        requested,
-                        crate::WindowBackdrop::None,
-                    ),
-                    needs_commit: false,
-                };
+                return fallback_sync();
             };
             controller.dispatch();
             self.last_capability_gen = controller.state.capability_gen;
@@ -544,12 +547,55 @@ impl SurfaceBlur {
                 ext_surface: &mut self.ext_surface,
                 kde_blur: &mut self.kde_blur,
             };
-            let outcome = self.tracker.sync(inputs, region_spec, is_overlay, force_reapply, &mut seam);
+            let outcome = self.tracker.sync_with_materials(
+                inputs,
+                region_spec,
+                material_region,
+                env_mode,
+                is_overlay,
+                force_reapply,
+                &mut seam,
+            );
             if outcome.needs_commit {
                 controller.flush();
             }
             outcome
         })
+    }
+
+    /// Pre-present per-frame sync for `El::system_material` blur regions when
+    /// `WindowBackdrop::None` is active. Zero allocations and zero Wayland calls when idle
+    /// with no active blur or when the quantized logical region is unchanged.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn sync_frame_materials(
+        &mut self,
+        requested: crate::WindowBackdrop,
+        transparent: bool,
+        alpha_mode: Option<wgpu::CompositeAlphaMode>,
+        cpu_painter: bool,
+        physical_size: (u32, u32),
+        window_scale: f32,
+        materials: &[crate::system_material::WaylandMaterialBlur],
+        is_overlay: bool,
+    ) {
+        if requested != crate::WindowBackdrop::None {
+            return;
+        }
+        if materials.is_empty() && !self.tracker.is_active() {
+            return;
+        }
+        let region_spec = RegionSpec::from_surface(physical_size, window_scale, 0.0);
+        let _ = self.sync_with_materials(
+            requested,
+            transparent,
+            alpha_mode,
+            cpu_painter,
+            region_spec,
+            materials,
+            window_scale,
+            is_overlay,
+            false,
+        );
     }
 
     /// Destroys any active per-surface blur object immediately and marks this surface closed so

@@ -109,25 +109,27 @@ export function viewport(canvas, callback, embedded) {
     const largest = document.createElement('div');
     largest.style.cssText = 'position:fixed;top:0;left:0;width:0;height:100lvh;visibility:hidden;pointer-events:none';
     document.body.append(largest);
+    // Full-window canvases keep their layout-viewport CSS box (`position:fixed;inset:0;width:100%;height:100%`)
+    // instead of shrinking to `window.visualViewport`: iOS Safari and Chrome on Android (since
+    // Chrome 108's default `interactive-widget=resizes-visual`) resize only the visual viewport
+    // when the virtual keyboard opens. Leaving the canvas at the layout viewport prevents squash
+    // distortion and spurious relayouts; instead report the unzoomed visual viewport's vertical
+    // band so Rune can scroll or shift only the focused field into view.
     const update = () => {
-        if (!embedded) {
-            const v = window.visualViewport;
-            const width = `${v?.width ?? innerWidth}px`;
-            const height = `${v?.height ?? innerHeight}px`;
-            const left = `${v?.offsetLeft ?? 0}px`;
-            const top = `${v?.offsetTop ?? 0}px`;
-            const sibling = canvas.previousElementSibling;
-            const targets = sibling?.hasAttribute?.('data-rune-cpu') ? [canvas, sibling] : [canvas];
-            for (const target of targets) {
-                target.style.width = width;
-                target.style.height = height;
-                target.style.left = left;
-                target.style.top = top;
-            }
-        }
         const s = getComputedStyle(probe);
+        const layoutH = Number.isFinite(innerHeight) && innerHeight > 0 ? innerHeight : 0;
+        const v = window.visualViewport;
+        const zoomed = v && typeof v.scale === 'number' && v.scale > 1.01;
+        let visual = null;
+        if (!embedded && v && !zoomed && layoutH > 0) {
+            const top = typeof v.offsetTop === 'number' && Number.isFinite(v.offsetTop) ? Math.max(0, v.offsetTop) : 0;
+            const vh = typeof v.height === 'number' && Number.isFinite(v.height) && v.height > 0 ? v.height : layoutH;
+            const bottom = Math.min(layoutH, top + vh);
+            if (bottom > top) visual = [top, bottom, layoutH];
+        }
         callback(JSON.stringify({ kind: 'viewport', h: largest.offsetHeight || innerHeight,
-            insets: embedded ? [0, 0, 0, 0] : [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat) }));
+            insets: embedded ? [0, 0, 0, 0] : [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft].map(parseFloat),
+            visual }));
     };
     const motion = matchMedia('(prefers-reduced-motion: reduce)');
     const reduced = () => callback(JSON.stringify({ kind: 'motion', reduced: motion.matches }));

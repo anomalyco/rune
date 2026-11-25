@@ -23,6 +23,7 @@ pub(crate) mod drop_target;
 mod frame;
 mod hide_now;
 pub(crate) mod jump_list;
+pub(crate) mod layered;
 pub(crate) mod occlusion;
 mod placement;
 pub(crate) mod press_point;
@@ -376,13 +377,23 @@ pub(crate) struct OverlayWindow {
     observing: bool,
     exclusion: OverlaySupport,
     keys: crate::KeyPolicy,
+    /// When true, the window presents via `UpdateLayeredWindowIndirect` (`ULW_ALPHA`) and
+    /// must never call `SetLayeredWindowAttributes`.
+    layered_cpu: bool,
 }
 impl OverlayWindow {
-    #[allow(unsafe_code)]
     pub fn new(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Result<Self, String> {
+        Self::new_with_mode(window, interactive, options, wake, false)
+    }
+    pub fn new_layered_cpu(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Result<Self, String> {
+        Self::new_with_mode(window, interactive, options, wake, true)
+    }
+    #[allow(unsafe_code)]
+    fn new_with_mode(window: &winit::window::Window, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>, layered_cpu: bool) -> Result<Self, String> {
         let hwnd = hwnd(window).ok_or("the overlay window has no Win32 handle")?;
         let mode = options.input.resolved(interactive);
-        overlay_styles(hwnd, mode, options.keys)?;
+        if layered_cpu { overlay_styles_layered_cpu(hwnd, mode, options.keys); }
+        else { overlay_styles(hwnd, mode, options.keys)?; }
         let exclusion = if options.exclude_from_capture {
             if set_hwnd_exclude_from_capture(hwnd, true) { OverlaySupport::Requested } else { OverlaySupport::Failed }
         } else { OverlaySupport::Unknown };
@@ -395,7 +406,7 @@ impl OverlayWindow {
             unsafe { drop(Rc::from_raw(data)); }
             return Err(format!("SetWindowSubclass failed: {}", last_error()));
         }
-        Ok(Self { input, observing: false, exclusion, watch: None, wake, keys: options.keys })
+        Ok(Self { input, observing: false, exclusion, watch: None, wake, keys: options.keys, layered_cpu })
     }
     pub fn capture_exclusion(&self) -> OverlaySupport { self.exclusion }
     pub fn set_capture_exclusion(&mut self, exclude: bool) -> OverlaySupport {
@@ -464,7 +475,8 @@ impl OverlayWindow {
         let hwnd = self.input.hwnd;
         // Opaque again, after any fade-out.
         self.input.fading.set(false);
-        overlay_styles(hwnd, self.input.input.get(), self.keys)?;
+        if self.layered_cpu { overlay_styles_layered_cpu(hwnd, self.input.input.get(), self.keys); }
+        else { overlay_styles(hwnd, self.input.input.get(), self.keys)?; }
         // SAFETY: Win32 calls on a live window owned by this thread.
         let visible = unsafe {
             ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -499,6 +511,7 @@ impl OverlayWindow {
     #[allow(unsafe_code)]
     pub fn fade(&self, alpha: u8) {
         if !self.input.fading.replace(true) { self.observe_current(); }
+        if self.layered_cpu { return; }
         #[cfg(feature = "windows-system-material")]
         if crate::system_material::windows::overlay_no_layered() { return; }
         // SAFETY: a Win32 call on a live layered window owned by this thread.
@@ -556,6 +569,19 @@ fn overlay_styles(hwnd: HWND, mode: OverlayInput, keys: crate::KeyPolicy) -> Res
         }
     }
     Ok(())
+}
+
+/// Style setup for a CPU layered overlay (`UpdateLayeredWindowIndirect` + `ULW_ALPHA`): sets
+/// `WS_EX_LAYERED` without `WS_EX_NOREDIRECTIONBITMAP` and never calls
+/// `SetLayeredWindowAttributes`.
+#[allow(unsafe_code)]
+fn overlay_styles_layered_cpu(hwnd: HWND, mode: OverlayInput, keys: crate::KeyPolicy) {
+    // SAFETY: style changes on a live window owned by this thread.
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let next = layered::overlay_layered_ex_style(style, mode, keys);
+        if next != style { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next as isize); }
+    }
 }
 
 #[allow(unsafe_code)]

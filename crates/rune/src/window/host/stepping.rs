@@ -189,6 +189,44 @@ impl Host {
         }
     }
 
+    /// Wayland: if `El::system_material` elements mounted on a transparent window with
+    /// `WindowBackdrop::None` before the shared blur controller bound (Frame 1), bind now so
+    /// `Cx::window_backdrop_supported(WindowBackdrop::Blur)` and `wayland_blur_materials` take
+    /// effect on Frame 1 before encoding/presenting. Returns `true` when the runtime became
+    /// stale and must rebuild before encoding.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(in crate::window) fn prepare_wayland_material_blur(&mut self) -> bool {
+        if !self.wayland
+            || !self.options.transparent
+            || self.window_backdrop != crate::WindowBackdrop::None
+            || self.app.rt().paint.materials().is_empty()
+        {
+            return false;
+        }
+        let needs_attach = self.win.as_ref().is_some_and(|w| {
+            #[cfg(target_os = "linux")]
+            let cpu = matches!(w.native.mode, crate::window::linux::handover::SurfaceMode::Cpu { .. });
+            #[cfg(not(target_os = "linux"))]
+            let cpu = false;
+            w.native.wayland_backdrop.is_none()
+                && !cpu
+                && w.surface.is_some()
+                && w.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque
+        });
+        if !needs_attach {
+            return false;
+        }
+        if let Some(w) = self.win.as_mut() {
+            w.native.wayland_backdrop =
+                crate::platform::wayland::backdrop::SurfaceBlur::for_window(&w.window);
+        }
+        if self.win.as_ref().is_some_and(|w| w.native.wayland_backdrop.is_some()) {
+            self.sync_window_backdrop(false);
+            return self.app.rt().stale();
+        }
+        false
+    }
+
     /// Wayland: dispatches queued runtime capability events on the shared display controller and
     /// re-syncs this window if `Capability::Blur` was revoked or re-granted.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]

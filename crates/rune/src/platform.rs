@@ -45,5 +45,8 @@ pub(crate) mod win32;
 #[cfg(all(test, not(target_os = "windows")))]
 #[path = "platform/win32/backdrop.rs"]
 pub(crate) mod win32_backdrop;
+#[cfg(all(test, not(target_os = "windows")))]
+#[path = "platform/win32/layered.rs"]
+pub(crate) mod win32_layered;
 #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
 pub(crate) mod x11;

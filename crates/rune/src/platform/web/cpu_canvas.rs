@@ -74,7 +74,7 @@ impl CpuCanvas {
     fn sync_bounds(&self) {
         let src = self.over.style();
         let dst = self.canvas.style();
-        for prop in ["width", "height", "left", "top"] {
+        for prop in ["width", "height", "left", "top", "transform"] {
             let value = src.get_property_value(prop).unwrap_or_default();
             if dst.get_property_value(prop).unwrap_or_default() != value {
                 if value.is_empty() {

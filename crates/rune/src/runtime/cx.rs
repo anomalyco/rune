@@ -58,6 +58,7 @@ pub(crate) struct CxCore {
     pub(super) full_screen: bool,
     pub(super) window_backdrop: crate::WindowBackdrop,
     pub(super) window_backdrop_supported: u8,
+    pub(super) renderer_kind: crate::RendererKind,
     /// `Cx::caption_color`, read once the view returns.
     pub(super) caption_color: Option<Color>,
     /// `Cx::foreground` and `Cx::focus_ring`, read once the view returns.
@@ -119,6 +120,7 @@ impl CxCore {
         self.full_screen = false;
         self.window_backdrop = crate::WindowBackdrop::None;
         self.window_backdrop_supported = 0;
+        self.renderer_kind = crate::RendererKind::Gpu;
     }
 
     pub(crate) fn env(&self) -> Env { self.env }
@@ -131,6 +133,7 @@ impl CxCore {
     pub(crate) fn window_backdrop_supported(&self, backdrop: crate::WindowBackdrop) -> bool {
         backdrop.is_supported_in(self.window_backdrop_supported)
     }
+    pub(crate) fn renderer_kind(&self) -> crate::RendererKind { self.renderer_kind }
     pub(crate) fn caption_color(&mut self, color: Color) { self.caption_color = Some(color); }
     pub(crate) fn foreground(&mut self, color: Color) { self.defaults.foreground = Some(color); }
     pub(crate) fn focus_ring(&mut self, width: f32, offset: f32, color: Color) {
@@ -458,6 +461,27 @@ impl<S> Cx<S> {
     pub fn window_backdrop_supported(&self, backdrop: crate::WindowBackdrop) -> bool {
         self.core.window_backdrop_supported(backdrop)
     }
+    /// Which rendering backend is actively presenting this window or overlay
+    /// ([`RendererKind::Gpu`] or [`RendererKind::Cpu`]).
+    ///
+    /// Reports [`RendererKind::Cpu`] for a Windows overlay running on the opt-in CPU layered path
+    /// ([`ConfiguredOverlay::renderer`](crate::ConfiguredOverlay::renderer)) and for ordinary
+    /// desktop windows while drawing on the CPU during [`CpuFirst`](crate::CpuFirst) startup.
+    /// Defaults to [`RendererKind::Gpu`] elsewhere and in headless runs unless set via
+    /// [`Runtime::set_renderer_kind`](crate::Runtime::set_renderer_kind). Changes invalidate the
+    /// view and any `memo` scope that reads it.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, RendererKind, Runtime, el};
+    /// fn view(_: &(), cx: &mut Cx<()>) -> El {
+    ///     if cx.renderer_kind().is_cpu() { el() } else { el().blur(8.0) }
+    /// }
+    /// let mut rt = Runtime::new((), view, (200.0, 100.0), Env::default());
+    /// rt.set_renderer_kind(RendererKind::Cpu);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn renderer_kind(&self) -> crate::RendererKind { self.core.renderer_kind() }
     /// The colour of the Windows caption buttons' symbols (Electron's `titleBarOverlay`
     /// `symbolColor`), for a titlebar whose colours follow the app's theme rather than the
     /// system's light or dark setting: by default black in light mode, white in dark. Their

@@ -16,6 +16,10 @@ impl OverlayCore {
         }
         self.accent_changed(app.rt_mut(), crate::system_accent());
         self.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
+        #[cfg(target_os = "windows")]
+        if self.uses_cpu_layered(app) && self.show_cpu(app, event_loop, fade) {
+            return;
+        }
         // Shown again mid fade-out: the window is still up with current pixels, and its motion
         // carries on rather than settling.
         let fading = self.presence.fading();
@@ -75,6 +79,11 @@ impl OverlayCore {
     /// only its window at startup and parks it; its surface, and the GPU device for the first,
     /// wait for the show.
     pub(super) fn prepare(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, showing: bool) {
+        #[cfg(target_os = "windows")]
+        if self.uses_cpu_layered(app) {
+            self.prepare_cpu(app, event_loop, showing);
+            return;
+        }
         if self.surface.live().is_some() { return; }
         let surface = showing || !self.defers_gpu();
         let wayland = crate::window::is_wayland(event_loop);
@@ -226,8 +235,10 @@ impl OverlayCore {
         let effects = self.presence.step(presence::Event::Due { now }, self.release);
         self.carry_out(app, effects);
         #[cfg(target_os = "windows")]
-        if let Presence::FadingOut { until, length, .. } = self.presence && let Some(native) = &self.native {
-            native.fade(fade_alpha(until, length, now));
+        if let Presence::FadingOut { until, length, .. } = self.presence {
+            let alpha = fade_alpha(until, length, now);
+            if let Some(native) = &self.native { native.fade(alpha); }
+            if self.has_cpu() { self.fade_cpu(alpha); }
         }
     }
 
@@ -330,6 +341,19 @@ impl OverlayCore {
         self.hidden_input(app);
         // Any token requested by `on_focus(false)` while already hiding cannot wait for a live surface.
         self.drain_tokens_none();
+        #[cfg(target_os = "windows")]
+        if let Some(window) = self.cpu.as_ref().map(|c| c.window.clone()) {
+            if self.options.keys.takes_keys() {
+                crate::platform::ime::cancel(&window);
+                window.set_ime_allowed(false);
+            }
+            let fading = self.presence.fading();
+            if let Some(native) = &mut self.native {
+                if fading { native.fade(255) } else { native.hide() }
+            }
+            if !fading { self.on_hide_cpu(); }
+            return;
+        }
         let Some(live) = self.surface.live() else { return };
         match &live.backing {
             Backing::Window(window) => {
@@ -361,6 +385,7 @@ impl OverlayCore {
                     let rt = app.rt_mut();
                     rt.set_window_backdrop(crate::WindowBackdrop::None);
                     rt.set_window_backdrop_supported_mask(0);
+                    rt.set_wayland_blur_materials(false);
                     self.drop_hidden_images(app);
                 }
             }
@@ -370,6 +395,7 @@ impl OverlayCore {
                 let rt = app.rt_mut();
                 rt.set_window_backdrop(crate::WindowBackdrop::None);
                 rt.set_window_backdrop_supported_mask(0);
+                rt.set_wayland_blur_materials(false);
                 self.drop_hidden_images(app);
             }
         }
@@ -544,6 +570,11 @@ impl OverlayCore {
     /// There the window goes too, and the next show makes a new one.
     pub(super) fn park(&mut self) {
         self.rest = crate::window::Rest::Rested;
+        #[cfg(target_os = "windows")]
+        if self.has_cpu() {
+            self.release();
+            return;
+        }
         if let Some(live) = self.surface.live() {
             if !matches!(live.backing, Backing::Window(_)) { return; }
             #[cfg(any(target_os = "windows", target_os = "macos"))]

@@ -76,6 +76,7 @@ impl RuntimeCore {
             full_screen: self.host.full_screen,
             window_backdrop: self.host.window_backdrop,
             window_backdrop_supported: self.host.window_backdrop_supported,
+            renderer_kind: self.host.renderer_kind,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
