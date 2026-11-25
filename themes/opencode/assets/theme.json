@@ -2416,15 +2416,15 @@
    "shadow-xs-border-hover": "#d1e1fd80 0px 0px 0px 1px, #1a1a1a0a 0px 1px 2px -1px, #1111110f 0px 1px 2px 0px, #0d0d0d14 0px 1px 3px 0px",
    "shadow-xs-border-select": "#d1e1fd80 0px 0px 0px 3px, #054dfdfc 0px 0px 0px 1px, #14101040 0px 1px 2px -1px, #0d0d0d14 0px 1px 2px 0px, #1010101f 0px 1px 3px 0px",
    "shadow-xxs-border": "#dbdbdbff 0px 0px 0px 0.5px",
-   "v2-elevation-button-contrast": "#00000033 0px 1px 1.5px 0px, #3a3a3aff 0px 0px 0px 0.5px, #ffffff24 0px 1px 2px 0px inset, #0000000f 0px -1px 2px 0px inset, #00000000 0px 0px 0px 0px",
-   "v2-elevation-button-neutral": "#0000001a 0px 1px 1.5px 0px, #00000024 0px 0px 0px 0.5px, #00000000 0px 0px 0px 0px",
+   "v2-elevation-button-contrast": "#00000000 0px 0px 0px 0px, #0000000f 0px -1px 2px 0px inset, #ffffff24 0px 1px 2px 0px inset, #3a3a3aff 0px 0px 0px 0.5px, #00000033 0px 1px 1.5px 0px",
+   "v2-elevation-button-neutral": "#00000000 0px 0px 0px 0px, #00000024 0px 0px 0px 0.5px, #0000001a 0px 1px 1.5px 0px",
    "v2-elevation-elements": "#00000066 0px 0.5px 0.5px 0px",
-   "v2-elevation-floating": "#0000000a 0px 8px 16px 0px, #00000014 0px 4px 8px 0px, #0000001f 0px 0px 0px 0.5px, #00000000 0px 0px 0px 0px",
-   "v2-elevation-input": "#0000001a 0px 1px 1.5px 0px, #00000024 0px 0px 0px 0.5px, #00000000 0px 0px 0px 0px",
-   "v2-elevation-overlay": "#0000000a 0px 16px 32px 0px, #00000014 0px 8px 16px 0px, #0000001f 0px 0px 0px 0.5px, #00000000 0px 0px 0px 0px",
-   "v2-elevation-raised": "#0000000a 0px 2px 4px 0px, #00000014 0px 1px 2px -1px, #0000001f 0px 0px 0px 0.5px, #00000000 0px 0px 0px 0px",
-   "v2-elevation-switch-off": "#00000014 0px 1px 1px 0px inset, #00000014 0px 0.5px 0.5px 0px inset, #0000001a 0px 0px 0px 0.5px inset",
-   "v2-elevation-switch-on": "#0000001a 0px 2px 2px 0px inset, #0000001a 0px 1px 1px 0px inset, #00000033 0px 0px 0px 0.5px inset"
+   "v2-elevation-floating": "#00000000 0px 0px 0px 0px, #0000001f 0px 0px 0px 0.5px, #00000014 0px 4px 8px 0px, #0000000a 0px 8px 16px 0px",
+   "v2-elevation-input": "#00000000 0px 0px 0px 0px, #00000024 0px 0px 0px 0.5px, #0000001a 0px 1px 1.5px 0px",
+   "v2-elevation-overlay": "#00000000 0px 0px 0px 0px, #0000001f 0px 0px 0px 0.5px, #00000014 0px 8px 16px 0px, #0000000a 0px 16px 32px 0px",
+   "v2-elevation-raised": "#00000000 0px 0px 0px 0px, #0000001f 0px 0px 0px 0.5px, #00000014 0px 1px 2px -1px, #0000000a 0px 2px 4px 0px",
+   "v2-elevation-switch-off": "#0000001a 0px 0px 0px 0.5px inset, #00000014 0px 0.5px 0.5px 0px inset, #00000014 0px 1px 1px 0px inset",
+   "v2-elevation-switch-on": "#00000033 0px 0px 0px 0.5px inset, #0000001a 0px 1px 1px 0px inset, #0000001a 0px 2px 2px 0px inset"
   },
   "dark": {
    "shadow-lg": "#00000026 0px 16px 48px -6px, #0000001a 0px 6px 12px -2px, #0000001a 0px 1px 2.5px 0px",
@@ -2439,15 +2439,15 @@
    "shadow-xs-border-hover": "#02175899 0px 0px 0px 1px, #1a1a1a0a 0px 1px 2px -1px, #1111110f 0px 1px 2px 0px, #0d0d0d14 0px 1px 3px 0px",
    "shadow-xs-border-select": "#02175899 0px 0px 0px 3px, #1456f7e6 0px 0px 0px 1px, #14101040 0px 1px 2px -1px, #0d0d0d14 0px 1px 2px 0px, #1010101f 0px 1px 3px 0px",
    "shadow-xxs-border": "#282828ff 0px 0px 0px 0.5px",
-   "v2-elevation-button-contrast": "#00000066 0px 1px 2px 0px, #ffffff66 0px 0px 0px 0.5px, #00000000 0px 0px 0px 0px inset, #00000000 0px 0px 0px 0px inset, #ffffff4d 0px -0.5px 0px 0px",
-   "v2-elevation-button-neutral": "#00000066 0px 1px 2px 0px, #ffffff33 0px 0px 0px 0.5px, #ffffff1a 0px -0.5px 0px 0px",
+   "v2-elevation-button-contrast": "#ffffff4d 0px -0.5px 0px 0px, #00000000 0px 0px 0px 0px inset, #00000000 0px 0px 0px 0px inset, #ffffff66 0px 0px 0px 0.5px, #00000066 0px 1px 2px 0px",
+   "v2-elevation-button-neutral": "#ffffff1a 0px -0.5px 0px 0px, #ffffff33 0px 0px 0px 0.5px, #00000066 0px 1px 2px 0px",
    "v2-elevation-elements": "#00000066 0px 0.5px 0.5px 0px",
-   "v2-elevation-floating": "#0000004d 0px 8px 16px 0px, #0000004d 0px 4px 8px 0px, #ffffff29 0px 0px 0px 0.5px, #ffffff0f 0px -0.5px 0px 0px",
-   "v2-elevation-input": "#00000000 0px 1px 2px 0px, #ffffff29 0px 0px 0px 0.5px, #ffffff0f 0px -0.5px 0px 0px",
-   "v2-elevation-overlay": "#0000004d 0px 16px 32px 0px, #0000004d 0px 8px 16px 0px, #ffffff29 0px 0px 0px 0.5px, #ffffff0f 0px -0.5px 0px 0px",
-   "v2-elevation-raised": "#0000004d 0px 2px 4px 0px, #0000004d 0px 1px 2px 0px, #ffffff29 0px 0px 0px 0.5px, #ffffff0f 0px -0.5px 0px 0px",
-   "v2-elevation-switch-off": "#ffffff1a 0px -0.5px 0px 0px inset, #00000000 0px 0px 0px 0px inset, #ffffff29 0px 0px 0px 0.5px inset",
-   "v2-elevation-switch-on": "#ffffff1a 0px -0.5px 0px 0px inset, #00000000 0px 0px 0px 0px inset, #ffffff29 0px 0px 0px 0.5px inset"
+   "v2-elevation-floating": "#ffffff0f 0px -0.5px 0px 0px, #ffffff29 0px 0px 0px 0.5px, #0000004d 0px 4px 8px 0px, #0000004d 0px 8px 16px 0px",
+   "v2-elevation-input": "#ffffff0f 0px -0.5px 0px 0px, #ffffff29 0px 0px 0px 0.5px, #00000000 0px 1px 2px 0px",
+   "v2-elevation-overlay": "#ffffff0f 0px -0.5px 0px 0px, #ffffff29 0px 0px 0px 0.5px, #0000004d 0px 8px 16px 0px, #0000004d 0px 16px 32px 0px",
+   "v2-elevation-raised": "#ffffff0f 0px -0.5px 0px 0px, #ffffff29 0px 0px 0px 0.5px, #0000004d 0px 1px 2px 0px, #0000004d 0px 2px 4px 0px",
+   "v2-elevation-switch-off": "#ffffff29 0px 0px 0px 0.5px inset, #00000000 0px 0px 0px 0px inset, #ffffff1a 0px -0.5px 0px 0px inset",
+   "v2-elevation-switch-on": "#ffffff29 0px 0px 0px 0.5px inset, #00000000 0px 0px 0px 0px inset, #ffffff1a 0px -0.5px 0px 0px inset"
   }
  },
  "numbers": {
