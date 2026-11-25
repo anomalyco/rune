@@ -219,14 +219,21 @@ pub(crate) struct Panel {
     view: objc2::rc::Retained<objc2_app_kit::NSView>,
 }
 
+pub(crate) fn overlay_panel_native_options(level: OverlayLevel, color_space: crate::MacColorSpace) -> crate::MacWindowOptions {
+    crate::MacWindowOptions::default()
+        .shadow(false)
+        .level(match level { OverlayLevel::Status => 25, OverlayLevel::AboveStatus => 26, OverlayLevel::AboveOverlays => 27 })
+        .color_space(color_space)
+}
+
 impl Panel {
-    pub fn adopt(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>) -> Option<Panel> {
-        Self::adopt_kind(window, at, interactive, options, wake, false)
+    pub fn adopt(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, color_space: crate::MacColorSpace, wake: Option<crate::Waker>) -> Option<Panel> {
+        Self::adopt_kind(window, at, interactive, options, color_space, wake, false)
     }
 
     pub fn adopt_window(window: &winit::window::Window, size: (f32, f32), native: &crate::MacWindowOptions) -> Option<Panel> {
         let options = OverlayOptions { input: OverlayInput::All, keys: KeyPolicy::OnDemand, prewarm: native.launcher, ..Default::default() };
-        let panel = Self::adopt_kind(window, crate::windows::PlaceRequest::at(size), true, &options, None, true)?;
+        let panel = Self::adopt_kind(window, crate::windows::PlaceRequest::at(size), true, &options, native.color_space, None, true)?;
         let mut native = native.clone();
         if let Some(exclude) = native.exclude_from_capture.take() { panel.set_capture_exclusion(exclude); }
         configure_native(&panel.panel, &native);
@@ -234,7 +241,7 @@ impl Panel {
     }
 
     #[allow(unsafe_code)]
-    fn adopt_kind(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, wake: Option<crate::Waker>, ordinary: bool) -> Option<Panel> {
+    fn adopt_kind(window: &winit::window::Window, at: crate::overlay::Placement, interactive: bool, options: &OverlayOptions, color_space: crate::MacColorSpace, wake: Option<crate::Waker>, ordinary: bool) -> Option<Panel> {
         use objc2_app_kit::{NSBackingStoreType, NSColor, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowStyleMask};
         let mtm = MainThreadMarker::new()?;
         crate::platform::macos::appearance::install();
@@ -269,8 +276,7 @@ impl Panel {
                     | NSWindowCollectionBehavior::CanJoinAllApplications,
             );
         }
-        let native = crate::MacWindowOptions::default().shadow(false)
-            .level(match options.level { OverlayLevel::Status => 25, OverlayLevel::AboveStatus => 26, OverlayLevel::AboveOverlays => 27 });
+        let native = overlay_panel_native_options(options.level, color_space);
         configure_native(&panel, &native);
         if ordinary {
             panel.setTitle(&ns_window.title());

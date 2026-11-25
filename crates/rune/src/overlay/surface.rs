@@ -338,7 +338,7 @@ impl OverlayCore {
         let info = gpu.adapter.get_info();
         *self.shared.surface.lock().unwrap() = Some(format!("{:?} on {} ({:?}), {:?}, {:?}", info.backend, info.name, info.device_type, config.alpha_mode, config.format));
         #[cfg(target_os = "macos")]
-        crate::platform::macos::pin_contents_top_left(&surface, crate::MacColorSpace::Srgb);
+        crate::platform::macos::pin_contents_top_left(&surface, self.macos_color_space);
         let target_format = if rt.srgb_blend() { config.format.remove_srgb_suffix() } else { config.format };
         crate::window::rebuild_renderer_core(&gpu.device, &mut renderer, target_format, rt);
         self.renderer = Some(renderer);

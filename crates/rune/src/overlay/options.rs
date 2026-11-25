@@ -164,6 +164,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) runtime: crate::app::RuntimeConfig<T>,
     pub(crate) font_smoothing: Option<crate::FontSmoothing>,
     pub(crate) macos_level: Option<isize>,
+    pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
 }
@@ -325,6 +326,27 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// `OverlayOptions::level`; `OverlayHandle::set_macos_level` changes it later. At any
     /// level a macOS overlay goes exactly where it's placed, over the menu bar too.
     pub fn macos_level(mut self, level: isize) -> Self { self.macos_level = Some(level); self }
+    /// Sets how macOS colour-manages this overlay panel (`NSWindow.colorSpace` and its
+    /// `CAMetalLayer.colorspace`), like [`MacWindowOptions::color_space`](crate::MacWindowOptions::color_space).
+    ///
+    /// Defaults to [`MacColorSpace::Srgb`](crate::MacColorSpace::Srgb) so both the native Metal
+    /// backend and the wgpu backend show sRGB colours as sRGB on wide-gamut displays. Pass
+    /// [`MacColorSpace::Unmanaged`](crate::MacColorSpace::Unmanaged) to leave
+    /// `NSWindow.colorSpace` unset (`nil`) and clear `CAMetalLayer.colorspace` so framebuffer
+    /// values reach the display unmodified. Retained across hide/recreate and ignored on other
+    /// platforms.
+    ///
+    /// ```no_run
+    /// use rune::{MacColorSpace, OverlayOptions, OverlaySpec, el};
+    ///
+    /// let _overlay = OverlaySpec::new("raw", (240.0, 80.0), |_: &(), _| el())
+    ///     .options(OverlayOptions::default())
+    ///     .macos_color_space(MacColorSpace::Unmanaged);
+    /// ```
+    pub fn macos_color_space(mut self, color_space: crate::MacColorSpace) -> Self {
+        self.macos_color_space = color_space;
+        self
+    }
 }
 
 impl<T: 'static> OverlaySpec<T> {
@@ -336,7 +358,7 @@ impl<T: 'static> OverlaySpec<T> {
         ConfiguredOverlay {
             spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
-            animate_reveal: false, release_after: None,
+            macos_color_space: crate::MacColorSpace::Srgb, animate_reveal: false, release_after: None,
         }
     }
 }

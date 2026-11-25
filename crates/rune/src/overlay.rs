@@ -466,6 +466,9 @@ pub(in crate::overlay) struct OverlayCore {
     /// `ConfiguredOverlay::macos_level` or the last `set_macos_level`.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     macos_level: Option<isize>,
+    /// `ConfiguredOverlay::macos_color_space`.
+    #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+    pub(in crate::overlay) macos_color_space: crate::MacColorSpace,
     shared: Arc<SharedCore>,
     clipboard: crate::clipboard::Client,
     popup: crate::popup_menu::Presenter,
@@ -542,6 +545,7 @@ impl OverlayCore {
         options: OverlayOptions,
         on_created: Option<Box<dyn FnMut(crate::OverlayCreated)>>,
         macos_level: Option<isize>,
+        macos_color_space: crate::MacColorSpace,
         animate_reveal: bool,
         release_after: Option<Duration>,
     ) -> Self {
@@ -570,6 +574,7 @@ impl OverlayCore {
             origin: None,
             interactive,
             macos_level,
+            macos_color_space,
             shared,
             clipboard: Default::default(),
             popup: Default::default(),
