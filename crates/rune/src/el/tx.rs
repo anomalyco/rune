@@ -108,6 +108,8 @@ pub struct Tx {
     pub(crate) announce: Option<(String, crate::LiveRegion)>,
     pub(crate) open_urls: Vec<crate::open_url::Link>,
     pub(crate) open_paths: Vec<crate::open_path::PathRequest>,
+    /// `AppHandle::register_url_scheme`: schemes to claim with the system.
+    pub(crate) url_schemes: Vec<crate::open_url::scheme::Claim>,
     pub(crate) trace: Option<TraceCalls>,
     pub(crate) popups: Vec<crate::popup_menu::Call>,
     /// `Tx::resolve_field_menu`: `Some(Some(id))` picks an item, `Some(None)` dismisses.

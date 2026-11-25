@@ -216,6 +216,8 @@ pub use open_url::OpenUrlError;
 pub use platform::preferences::{Appearance, last_appearance};
 pub use open_url::instance::release_instance;
 pub use open_url::instance::single_instance;
+pub use open_url::scheme::RegisterUrlScheme;
+pub use open_url::scheme::UrlSchemeError;
 pub use overlay::Availability;
 pub use overlay::OverlayHandle;
 pub use overlay::OverlaySpec;

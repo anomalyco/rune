@@ -991,6 +991,14 @@ app.run();
   `shell\open\command` set to `"C:\path\to\myapp.exe" "%1"`.
   `scripts/mac-app --scheme myapp` writes that entry and registers the bundle for you (see
   "Relaunching a Mac app" below).
+- Claiming a scheme at run time: declaring a scheme doesn't take it from an app that already
+  handles it (an app replacing another under the same scheme, say). `AppHandle::register_url_scheme("myapp")`
+  returns a future that asks the system to make this app the default handler: on macOS 12 and
+  later for the running `.app` bundle (`NSWorkspace`, which may ask the user to confirm), on
+  Windows by writing the per-user entry above for the running executable. Linux, web, iOS, a
+  binary not running from a bundle and older macOS answer `UrlSchemeError::Unsupported`.
+  Headless runs and tests change nothing: they record the scheme for
+  `Runtime::take_url_scheme_requests` and answer `Ok(())`.
 - Edge overlays (HUDs): see `App::overlay` below.
 
 ### Launching fast

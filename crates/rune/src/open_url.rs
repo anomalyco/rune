@@ -14,6 +14,7 @@
 
 pub(crate) mod incoming;
 pub(crate) mod instance;
+pub(crate) mod scheme;
 
 const MAX_LEN: usize = 8192;
 
