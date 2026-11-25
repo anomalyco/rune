@@ -18,6 +18,7 @@ mod emoji_family_story;
 mod inline_box_story;
 mod mount;
 mod pick;
+mod pointer_lock;
 mod reveal_fps_story;
 mod scroll_anchor_story;
 mod text_indent_story;
@@ -686,6 +687,12 @@ fn main() {
                         .trigger('o', "Toggle popup", |s, _| s.popup_open = !s.popup_open)
                         .variant("Open", |_| {})
                         .variant("Closed", |s| s.popup_open = false),
+                )
+                .story(
+                    Story::new("Controls/Pointer/Pointer lock", pointer_lock::PointerLockDemo::default, pointer_lock::view)
+                        .trigger('e', "Toggle pointer lock", |s, _| s.enabled = !s.enabled)
+                        .variant("Enabled", |_| {})
+                        .variant("Disabled", |s| s.enabled = false),
                 )
                 .story(
                     Story::new("Controls/Buttons/Press cursor & bounds", press_pointer::PressPointerDemo::default, press_pointer::view)

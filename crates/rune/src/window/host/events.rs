@@ -515,6 +515,7 @@ impl Host {
                     self.ime.clear();
                     // A minimized or occluded window skips redraw.
                     l.apply_cursor_core(rt, false);
+                    l.apply_pointer_lock_core(rt);
                 } else if rt.stale() {
                     rt.edit.ime_reset = true;
                 } else {

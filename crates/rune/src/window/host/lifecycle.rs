@@ -600,7 +600,7 @@ impl Host {
             self.files = FileDrop::default();
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             self.wayland_drop_closed();
-            if !ends && let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); w.hide(); }
+            if !ends && let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); w.apply_pointer_lock_core(self.app.rt_mut()); w.hide(); }
             crate::marks::mark("window.hidden");
             self.life.finish();
             return;
@@ -689,7 +689,7 @@ impl Host {
         self.app.file_dialog_cancel(&mut self.file_dialog);
         self.app.rt_mut().cancel_pointer();
         self.files = FileDrop::default();
-        if let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); }
+        if let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); w.apply_pointer_lock_core(self.app.rt_mut()); }
         self.mods = ModifiersState::empty();
         if let Some(w) = &self.win { w.hide(); }
     }

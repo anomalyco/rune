@@ -276,6 +276,7 @@ impl PointerEvent {
 }
 
 pub(crate) type PointerFn = Rc<dyn Fn(crate::states::States<'_>, PointerEvent, &mut Tx)>;
+pub(crate) type PointerMotionFn = Rc<dyn Fn(crate::states::States<'_>, [f32; 2], &mut Tx)>;
 pub(crate) type AnyPressFn = Rc<dyn Fn(crate::states::States<'_>, crate::PointerButton, PointerEvent, &mut Tx)>;
 pub(crate) type DragFn = Rc<dyn Fn(crate::states::States<'_>, &mut Drag, &mut Tx)>;
 pub(crate) type DragOutFn = Rc<dyn Fn(crate::states::StatesRef<'_>) -> Option<crate::DragItem>>;
@@ -378,6 +379,48 @@ impl El {
         f: impl Fn(&mut S, crate::PointerButton, PointerEvent, &mut Tx) + 'static,
     ) -> Self {
         self.handlers.on_any_press = Some(Rc::new(move |s, btn, p, tx| f(downcast::<S>(s), btn, p, tx)));
+        self
+    }
+    /// Requests declarative pointer lock on this element for relative mouse-look (games, 3D
+    /// viewports).
+    ///
+    /// A primary mouse press whose primary target is this element captures the pointer (a press
+    /// on a child control that handles primary input or on a covering element does not). While
+    /// captured, the OS cursor is hidden whenever the window has focus, `pointer_move` and
+    /// `pointer_leave` are ignored so the runtime pointer stays at the capturing press point,
+    /// and relative mouse motion arrives as coalesced `[dx, dy]` deltas in points (right and
+    /// down positive). Pressing Escape (consuming the key, after any drag cancel), losing window
+    /// focus, covering the element with a modal, disabling/marking it inert, or removing
+    /// `pointer_lock` releases the capture. Call [`Tx::live_only`] when updating only
+    /// [`Live`](crate::Live) camera values to skip view rebuilds.
+    ///
+    /// Desktop windows only: on web, iOS, and native overlays the element never captures.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Key, KeyEvent, Runtime, el};
+    /// # #[derive(Default)] struct Cam { yaw: f32, pitch: f32 }
+    /// # fn view(_: &Cam, _: &mut Cx<Cam>) -> El {
+    /// #     el().key("viewport").size(200.0, 200.0)
+    /// #         .pointer_lock(|s: &mut Cam, [dx, dy], _| { s.yaw += dx; s.pitch += dy; })
+    /// # }
+    /// let mut rt = Runtime::new(Cam::default(), view, (200.0, 200.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// rt.pointer_down(100.0, 100.0);
+    /// rt.pointer_motion(12.0, -3.0);
+    /// rt.frame(0.0);
+    /// assert!(rt.pointer_locked());
+    /// assert_eq!((rt.state.yaw, rt.state.pitch), (12.0, -3.0));
+    /// rt.key(KeyEvent::from(Key::Escape));
+    /// assert!(!rt.pointer_locked());
+    /// ```
+    #[track_caller]
+    pub fn pointer_lock<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, [f32; 2], &mut Tx) + 'static,
+    ) -> Self {
+        self.handlers.pointer_lock = Some(Rc::new(move |s, delta, tx| f(downcast::<S>(s), delta, tx)));
+        #[cfg(debug_assertions)]
+        { self.handlers.sites.pointer_lock = Some(std::panic::Location::caller()); }
         self
     }
 }

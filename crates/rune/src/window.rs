@@ -38,6 +38,7 @@ mod handle;
 mod host;
 mod keys;
 mod panic_trap;
+mod pointer_lock;
 pub mod spec;
 mod state;
 mod surface;
@@ -173,6 +174,8 @@ pub(crate) trait AnyHost {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent);
     fn owns(&self, id: WindowId) -> bool;
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent);
+    /// Raw relative mouse motion from the OS device while pointer lock may be active.
+    fn pointer_motion(&mut self, _dx: f64, _dy: f64) {}
     /// Draws what has no redraw event (a layer surface); true while it needs more frames.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool { false }
     /// Whether this host owns a live Wayland layer-shell surface sharing winit's `wl_display`.
@@ -555,6 +558,20 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 host.window_event(event_loop, id, event);
             }
             this.cleanup(event_loop);
+        });
+    }
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        let winit::event::DeviceEvent::MouseMotion { delta: (dx, dy) } = event else { return };
+        self.guard(event_loop, |this| {
+            let _handling = crate::quit::handling();
+            for host in this.hosts.iter_mut().flatten() {
+                host.pointer_motion(dx, dy);
+            }
         });
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {

@@ -117,6 +117,8 @@ pub(crate) use input::field_menu;
 pub use input::help_look::HelpLook;
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(unused_imports))]
 pub(crate) use input::physical::Unhandled;
+#[cfg_attr(target_arch = "wasm32", allow(unused_imports))]
+pub(crate) use input::pointer_lock::LockEffect;
 pub(crate) use input::titlebar::WindowMenu;
 #[cfg(target_os = "windows")]
 pub(crate) use input::titlebar::{DragHit, drag_hit_at};

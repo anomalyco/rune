@@ -528,8 +528,8 @@ impl RuntimeCore {
         self.dismiss_help();
         // A key ends a middle-click autoscroll, and does nothing else.
         if self.pointer.autoscroll_key() { return; }
-        // Escape during a drag cancels it and goes no further.
-        if ev.key == crate::Key::Escape && self.cancel_drag() { return; }
+        // Escape cancels a held drag first, or releases an active pointer lock, and goes no further.
+        if ev.key == crate::Key::Escape && (self.cancel_drag() || self.release_pointer_lock()) { return; }
         self.frame.queue.push(Action::Key { ev, repeat: false, stage });
     }
 

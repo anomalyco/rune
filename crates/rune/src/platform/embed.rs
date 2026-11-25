@@ -120,6 +120,7 @@ impl LayerHostCore {
     fn configure_runtime(&mut self, rt: &mut RuntimeCore, now: Instant) {
         rt.set_srgb_blend(true);
         rt.set_os_drag(false);
+        rt.set_pointer_lock_supported(false);
         rt.wall_start = Some(now);
         rt.frame.set_record_events(false);
         let target_format = if rt.srgb_blend() { self.config.format.remove_srgb_suffix() } else { self.config.format };

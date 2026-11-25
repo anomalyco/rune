@@ -108,6 +108,10 @@ impl AnyHost for Host {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         self.in_turn(|h| h.window_event_in_turn(event_loop, id, event))
     }
+    fn pointer_motion(&mut self, dx: f64, dy: f64) {
+        if !self.app.rt().pointer_locked() { return; }
+        self.in_turn(|h| h.pointer_motion_in_turn(dx, dy));
+    }
 }
 
 /// Whether a host's turn is inside its app's turn scope now.
@@ -118,6 +122,30 @@ pub(in crate::window) enum Turn {
 }
 
 impl Host {
+    /// Raw relative mouse motion while pointer lock is active and this window has focus.
+    fn pointer_motion_in_turn(&mut self, dx: f64, dy: f64) {
+        let Some(w) = self.shown_win() else { return };
+        if !self.app.rt().pointer_locked() || !w.window.has_focus() {
+            return;
+        }
+        let [mx, my] = crate::window::pointer_lock::scale_motion(
+            dx,
+            dy,
+            w.window.scale_factor(),
+            crate::window::pointer_lock::MotionPlatform::for_host(self.wayland),
+        );
+        if !mx.is_finite() || !my.is_finite() || (mx == 0.0 && my == 0.0) {
+            return;
+        }
+        let _input = crate::input::time::arrived_now();
+        self.app.rt_mut().pointer_motion(mx, my);
+        if let Some(w) = self.win.as_mut() {
+            w.timer_frame.no_longer_quiet();
+            w.loop_frame.touched();
+            w.request_redraw();
+        }
+    }
+
     /// The loop's turn ends: the frame the window wants next is asked for, and on Windows a
     /// window whose paint the system keeps putting off behind another's paints now (`Redraw`).
     fn turn_ends_in_turn(&mut self, event_loop: &ActiveEventLoop, now: Instant) {
