@@ -1,0 +1,1 @@
+- Paint reuse (`PaintKeep`): exiting subtrees (`subtree_exiting`) are now excluded in `dynamic_ok`, preventing a live parent painted in tree order from caching an exiting child's instances and replaying them as stale ghosts after the child unmounts.
