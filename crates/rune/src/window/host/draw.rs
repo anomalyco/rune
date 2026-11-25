@@ -822,7 +822,7 @@ fn loop_step(clock: &mut FrameClock, rt: &mut RuntimeCore, at: Instant) -> Resul
 }
 
 /// The window's display refresh: its display link's on macOS, else the monitor's.
-pub(super) fn display_hz(l: &Win) -> Option<f64> {
+pub(in crate::window) fn display_hz(l: &Win) -> Option<f64> {
     #[cfg(target_os = "macos")]
     if let Some(pacing) = &l.native.pacing { return Some(pacing.refresh_hz()); }
     l.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map(|hz| hz as f64 / 1000.0)
