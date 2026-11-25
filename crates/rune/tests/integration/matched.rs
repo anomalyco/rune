@@ -657,14 +657,15 @@ fn matched_own_live_scale_and_rotated_source_offset() {
     assert!(jump(first, src) < 1.5, "target live_scale+live_offset: src={src:?}, first={first:?}");
     assert_eq!(rest, [130.0, 120.0, 80.0, 80.0]);
 
-    // Rotated source with own offset: flight's upright box still starts at the offset position (30, 20), not (0, 0).
+    // Rotated source with own offset: flight starts at the rotated, offset presented rect.
     let mut rt = Runtime::new(
         OffsetState { src_off: Some([30.0, 20.0]), src_rot: Some(0.5), ..Default::default() },
         offset_view, (400.0, 300.0), Env::new(true, 1.0),
     );
     settle_offset(&mut rt);
+    let src = rt.presented("a").unwrap().0;
     rt.update(|s, _| s.step = 1);
     let (first, rest, _) = fly_offset(&mut rt, "b");
-    assert!(jump(first, [30.0, 20.0, 40.0, 40.0]) < 1.0, "rotated source keeps own offset origin: first={first:?}");
+    assert!(jump(first, src) < 1.0, "rotated source keeps own offset and rotation: src={src:?}, first={first:?}");
     assert_eq!(rest, [200.0, 100.0, 40.0, 40.0]);
 }

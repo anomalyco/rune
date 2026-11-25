@@ -83,11 +83,15 @@ impl Scene {
         let radius = self.current::<Corners>(a, prop::RADIUS).unwrap_or(self.nodes[a].radius);
         let radius = if (radius_scale - 1.0).abs() > 1e-5 { Corners(radius.0.map(|r| r * radius_scale)) } else { radius };
         let fill = self.current::<Color>(a, prop::FILL).unwrap_or(self.nodes[a].fill);
+        let from_rot = self.shown_rotation(a);
         let (to_radius, to_fill) = (self.nodes[b].radius, self.nodes[b].fill);
         // `to` is the one surface from now on: fully present, no presence effect.
         let acts = self.nodes[b].phase_step(&mut self.exiting, PhaseEvent::Appear);
         self.apply(b, acts);
         self.start_path(b, start, vel, anim);
+        if let Some(path) = &mut self.nodes[b].path {
+            path.start_rotation = Some(from_rot);
+        }
         self.track_set(b, prop::RADIUS, radius);
         self.track_animate(b, prop::RADIUS, to_radius, anim.x);
         self.track_set(b, prop::FILL, fill);
@@ -152,6 +156,16 @@ impl Scene {
         if (0..2).any(|k| (size(on, k) - size(laid, k)).abs() > q) {
             return None;
         }
+        if let Some(sr) = path.start_rotation {
+            let own_rot = self.values(i, prop::ROTATION.id).map_or(0.0, |v| v[0]);
+            let p = self.values(i, prop::TRAVEL.id).map_or([1.0, 1.0], |v| [v[0], v[1]]);
+            let cur_rot = blend_rotation(sr, own_rot, 0.5 * (p[0] + p[1]));
+            let rem = shortest_angle_delta(cur_rot, own_rot).abs();
+            let radius = 0.5 * (laid[2].x - laid[0].x).hypot(laid[3].x - laid[1].x);
+            if rem * radius.max(1.0) > q {
+                return None;
+            }
+        }
         Some([Vec2::new(on[0].x - laid[0].x, on[1].x - laid[1].x), Vec2::new(on[0].v - laid[0].v, on[1].v - laid[1].v)])
     }
 
@@ -187,7 +201,7 @@ impl Scene {
         // Project the current edge velocity onto each axis' path to keep it moving the same way.
         let px = axis_progress_velocity(start[0], start[2], end[0], end[2], vel[0], vel[2]);
         let py = axis_progress_velocity(start[1], start[3], end[1], end[3], vel[1], vel[3]);
-        self.nodes[i].path = Some(Path { start: Rect::from_edges(start[0], start[1], start[2], start[3]), end_local, origin: po });
+        self.nodes[i].path = Some(Path { start: Rect::from_edges(start[0], start[1], start[2], start[3]), end_local, origin: po, start_rotation: None });
         if !self.travelling.contains(&(i as u32)) {
             self.travelling.push(i as u32);
         }
@@ -207,6 +221,41 @@ impl Scene {
         self.store.remove(id, prop::TRAVEL);
         self.nodes[i].tracks[prop::TRAVEL.id.0 as usize] = None;
     }
+}
+
+impl Scene {
+    /// Node `i`'s presented rotation (radians) at `now()`, including any active matched-flight blend.
+    pub(super) fn shown_rotation(&self, i: usize) -> f32 {
+        let own = self.current::<f32>(i, prop::ROTATION).unwrap_or(0.0);
+        match self.nodes[i].path {
+            Some(Path { start_rotation: Some(sr), .. }) => {
+                let p = self.current::<Vec2>(i, prop::TRAVEL).unwrap_or(Vec2::new(1.0, 1.0));
+                blend_rotation(sr, own, 0.5 * (p.x + p.y))
+            }
+            _ => own,
+        }
+    }
+}
+
+/// Signed shortest angular difference `to - from` in `(-PI, PI]`.
+#[inline]
+pub(super) fn shortest_angle_delta(from: f32, to: f32) -> f32 {
+    let mut d = (to - from).rem_euclid(core::f32::consts::TAU);
+    if d > core::f32::consts::PI {
+        d -= core::f32::consts::TAU;
+    }
+    d
+}
+
+/// Interpolates from `from` to `to` along the shortest angular arc, returning `from` at `t = 0`
+/// and `to` at `t = 1`.
+#[inline]
+pub(super) fn blend_rotation(from: f32, to: f32, t: f32) -> f32 {
+    if from == to {
+        return to;
+    }
+    let delta = shortest_angle_delta(from, to);
+    (to - delta) + delta * t
 }
 
 /// The progress velocity that best continues edge velocities `(v0, v1)` along the path from
