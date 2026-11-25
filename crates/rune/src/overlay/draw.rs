@@ -417,6 +417,7 @@ impl FrameHost for OverlayFrame<'_> {
             self.more = false;
             return;
         }
+        crate::haptics::flush_live(self.app.rt_mut(), !self.prewarm);
         if !self.prewarm { self.core.meter.presented(); self.core.note_presented(submitted); }
         self.core.dirty = false;
         let Some(live) = self.core.surface.live_mut() else {
@@ -496,8 +497,7 @@ impl OverlayCore {
             };
             if let Some(reason) = closed { self.layer_closed(app, reason.as_deref()); }
         }
-        #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
-        let _ = app;
+        crate::haptics::flush_live(app.rt_mut(), false);
     }
 
     /// One input event a layer or XWayland surface read on its own connection.
@@ -637,6 +637,7 @@ impl OverlayCore {
                 super::input::drop_window_requests(app.rt_mut());
                 self.clipboard.flush_core(app.rt_mut());
             }
+            crate::haptics::flush_live(app.rt_mut(), false);
             self.surface_refused(app, "its GPU surface refused a new configuration".into());
             return;
         }
@@ -651,6 +652,7 @@ impl OverlayCore {
     fn unchanged_frame(&mut self, app: &mut dyn OverlayApp) -> bool {
         super::input::drop_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
+        crate::haptics::flush_live(app.rt_mut(), true);
         let ime_queued = self.sync_ime(app);
         // Hit regions paint nothing, so a frame can change only them (a full-screen drawing
         // surface turning on); no presentation follows to commit them.

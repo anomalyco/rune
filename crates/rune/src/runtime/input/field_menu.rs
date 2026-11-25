@@ -187,8 +187,7 @@ impl RuntimeCore {
         &mut self,
         app: &mut dyn AppDriver,
         tx: &mut Tx,
-        open_urls: Option<&mut Vec<crate::open_url::Link>>,
-        open_paths: Option<&mut Vec<crate::open_path::PathRequest>>,
+        end_of_frame: Option<&mut crate::runtime::frame::EndOfFrameRequests>,
     ) {
         let Some((token, id)) = self.host.deferred_field_menu_pick.take() else { return };
         let Some(pending) = self.host.field_menu_fallback.as_ref() else { return };
@@ -198,8 +197,7 @@ impl RuntimeCore {
         let mut post_tx = self.transaction(app);
         self.resolve_field_menu_fallback(app, Some(&id), &mut post_tx);
         let wanted_paste = post_tx.paste;
-        let mut urls = std::mem::take(&mut post_tx.open_urls);
-        let mut paths = std::mem::take(&mut post_tx.open_paths);
+        let mut deferred = crate::runtime::frame::EndOfFrameRequests::take_from(&mut post_tx);
         self.latch_requests(app, &mut post_tx);
         if wanted_paste && self.edit.clipboard().is_some() {
             for queued in std::mem::take(&mut self.frame.queue) {
@@ -211,19 +209,13 @@ impl RuntimeCore {
                     self.commit.dirty = true;
                 }
             }
-            urls.extend(std::mem::take(&mut post_tx.open_urls));
-            paths.extend(std::mem::take(&mut post_tx.open_paths));
+            deferred.extend_from(&mut post_tx);
             self.latch_requests(app, &mut post_tx);
         }
-        if let Some(dst) = open_urls {
-            dst.extend(urls);
+        if let Some(dst) = end_of_frame {
+            dst.extend(deferred);
         } else {
-            post_tx.open_urls.extend(urls);
-        }
-        if let Some(dst) = open_paths {
-            dst.extend(paths);
-        } else {
-            post_tx.open_paths.extend(paths);
+            deferred.restore_into(&mut post_tx);
         }
         self.schedule_wakes(post_tx.wakes.drain(..));
         if self.commit.dirty || self.commit.relayout || self.kbd.focus_request.is_some() {

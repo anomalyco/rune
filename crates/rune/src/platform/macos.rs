@@ -14,6 +14,7 @@ pub(crate) mod cursor;
 pub(crate) mod document;
 pub(crate) mod drop;
 mod geometry;
+pub(crate) mod haptics;
 mod hold;
 pub(crate) mod help;
 pub(crate) mod launch;

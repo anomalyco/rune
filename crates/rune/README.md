@@ -2590,6 +2590,42 @@ true
 
 Headless work never touches the person's store: once the process has a headless run (`--snap`, `--script`, `--tree`, `--html` and the like, through `run` or `App::args`), has built a runtime with `App::headless_runtime`, or runs with `RUNE_CREDENTIALS=memory`, `Credentials::system()` is one in-memory store shared by the process. Windows, overlays and an app's own `Runtime::new` (thumbnails, an export) keep the platform's store, so a test that drives `Runtime::new` itself, or makes no runtime at all, looks like the app: use `Credentials::memory()` there (a store of its own) or set `RUNE_CREDENTIALS=memory`. On Linux, Rune's items carry `xdg:schema` `dev.rune.Credential` beside `service` and `account`, so other apps' items for the same service name stay untouched. `Credential`'s `Debug` output redacts the secret, and the copy a `Credential` holds is zeroed on drop (copies the platform's API or D-Bus make are outside Rune's reach).
 
+### System haptic feedback (`Tx::haptic`)
+
+Handlers request semantic haptic feedback without knowing which platform they run on:
+
+```rust
+el().key("stop").on_press_tx(|s: &mut App, tx: &mut Tx| {
+    s.detent = next_detent(s.detent);
+    tx.haptic(Haptic::Selection);
+});
+```
+
+An embedding host drains queued requests right after each `LayerHost::frame()` call (on the main thread) and forwards them to the platform's native feedback generator:
+
+```rust
+let frame = host.frame();
+for haptic in host.take_haptics() { play_native(haptic); }
+```
+
+- **Types**: `Haptic::Selection`, `Haptic::Impact(ImpactStrength::{Light, Medium, Heavy, Soft, Rigid})` and `Haptic::Notify(HapticOutcome::{Success, Warning, Error})`. There is intentionally no `is_available()` query: like AppKit `NSHapticFeedbackManager`, UIKit `UIFeedbackGenerator`, SwiftUI `SensoryFeedback`, Flutter `HapticFeedback` and Android `HapticFeedbackConstants`, requests are fire-and-forget no-ops where unsupported or muted by system settings.
+- **Timing, cooldown and bounds**: requests made during a frame (including `on_mount` and deferred field menus) commit once at the end of the frame so feedback aligns with the presented pixels, and `Tx::haptic` marks `frame_work` without dirtying the view (compatible with `Tx::live_only()`). Identical `Haptic` variants within 30 ms on the runtime clock are coalesced while different variants fire immediately. Pending requests sit in a fixed inline 32-entry ring buffer (oldest dropped first, zero heap allocation).
+- **Platform mapping**:
+
+| Rune `Haptic` | iOS (embedding host after `LayerHost::frame()`) | Android (embedding host via `View.performHapticFeedback`) | macOS (Rune windows & overlays via `NSHapticFeedbackManager`) | Windows / Linux / Web |
+| --- | --- | --- | --- | --- |
+| `Selection` | `UISelectionFeedbackGenerator.selectionChanged()` | `SEGMENT_TICK` (API 34+, fallback `CLOCK_TICK`) | `LevelChange` (`PerformanceTime::Now`) | no-op |
+| `Impact(Light)` | `UIImpactFeedbackGenerator(style: .light, view:).impactOccurred()` | `VIRTUAL_KEY` | `Alignment` (`PerformanceTime::Now`) | no-op |
+| `Impact(Medium)` | `UIImpactFeedbackGenerator(style: .medium, view:).impactOccurred()` | `KEYBOARD_TAP` | `Generic` (`PerformanceTime::Now`) | no-op |
+| `Impact(Heavy)` | `UIImpactFeedbackGenerator(style: .heavy, view:).impactOccurred()` | `CONTEXT_CLICK` (API 23+, fallback `LONG_PRESS`) | `Generic` (`PerformanceTime::Now`) | no-op |
+| `Impact(Soft)` | `UIImpactFeedbackGenerator(style: .soft, view:).impactOccurred()` | `SEGMENT_FREQUENT_TICK` (API 34+, fallback `CLOCK_TICK`) | `Alignment` (`PerformanceTime::Now`) | no-op |
+| `Impact(Rigid)` | `UIImpactFeedbackGenerator(style: .rigid, view:).impactOccurred()` | `CONTEXT_CLICK` (API 23+, fallback `KEYBOARD_TAP`) | `Generic` (`PerformanceTime::Now`) | no-op |
+| `Notify(Success)` | `UINotificationFeedbackGenerator(view:).notificationOccurred(.success)` | `CONFIRM` (API 30+, compat fallback `VIRTUAL_KEY`) | no-op | no-op |
+| `Notify(Warning)` | `UINotificationFeedbackGenerator(view:).notificationOccurred(.warning)` | `KEYBOARD_TAP` | no-op | no-op |
+| `Notify(Error)` | `UINotificationFeedbackGenerator(view:).notificationOccurred(.error)` | `REJECT` (API 30+, compat fallback `LONG_PRESS`) | no-op | no-op |
+
+- **Platform notes**: on iOS, prefer iOS 17.5+ view-bound `UIFeedbackGenerator(view:)` initialisers and host-managed `prepare()`. On Android, use `HapticFeedbackConstants` / `HapticFeedbackConstantsCompat` on the host `View` (no `VIBRATE` permission required). On macOS, shown Rune windows and overlays drain and play haptics right after presentation (and on unchanged frames for boundary bumps), while hidden/covered/prewarm frames discard them; `Notify(_)` is silent because AppKit has no notification patterns (matching SwiftUI). Web never calls `Navigator.vibrate` (non-Baseline, Android-only millisecond buzzes unsupported on iOS Safari). `examples/playground` includes a `Controls/Haptics` story. Tactile output has not yet been tested on a physical iPhone, Android device, or Force Touch trackpad, so the 30 ms cooldown and macOS pattern mapping may be tuned after hardware feedback.
+
 ### Pop-up and context menus
 
 `tx.popup_menu(menu, anchor, on_pick)` opens a native menu once the handler's frame is done.

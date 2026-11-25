@@ -294,3 +294,31 @@ fn run_embed_frame_stops_animating_after_consecutive_lost_drawables_until_resize
     assert!(!resumed.drew && resumed.animating, "resize must re-arm lost-drawable retries");
 }
 
+#[test]
+fn frame_summary_is_copy_and_step_and_flush_preserves_haptics_for_host() {
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<FrameSummary>();
+
+    let start = crate::time::now();
+    let mut clock = FrameClock::new(start);
+    let mut rt = Runtime::new((), |_, _| el().size(40.0, 20.0), (40.0, 20.0), Env::default());
+    rt.wall_start = Some(start);
+    {
+        let (core, mut app) = rt.split_mut();
+        step_and_flush(&mut clock, core, &mut app, start, false);
+    }
+    rt.update(|_, tx| {
+        tx.haptic(crate::Haptic::Selection);
+        tx.haptic(crate::Haptic::Impact(crate::ImpactStrength::Light));
+    });
+    {
+        let (core, mut app) = rt.split_mut();
+        step_and_flush(&mut clock, core, &mut app, start + FRAME_60HZ, false);
+    }
+    assert_eq!(
+        rt.take_haptics(),
+        [crate::Haptic::Selection, crate::Haptic::Impact(crate::ImpactStrength::Light)],
+        "embed_frame::flush_requests must preserve haptics for LayerHost::take_haptics()",
+    );
+}
+
