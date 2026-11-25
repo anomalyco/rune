@@ -152,13 +152,24 @@ fn width_of(rt: &Runtime<()>, key: &str) -> f32 {
         .target[2]
 }
 
+fn register_emoji_test_fonts() {
+    static REGISTERED: std::sync::Once = std::sync::Once::new();
+    REGISTERED.call_once(|| {
+        let app_wide = make_emoji_font("App Wide Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{2764}'], 2400);
+        let app_narrow = make_emoji_font("App Narrow Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{2764}'], 400);
+        let tx_narrow = make_emoji_font("Tx Narrow Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{2764}'], 450);
+        let tx_wide = make_emoji_font("Tx Wide Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{2764}'], 2200);
+        assert_eq!(rune::text::add_font(app_wide), vec!["App Wide Emoji"]);
+        assert_eq!(rune::text::add_font(app_narrow), vec!["App Narrow Emoji"]);
+        assert_eq!(rune::text::add_font(tx_narrow), vec!["Tx Narrow Emoji"]);
+        assert_eq!(rune::text::add_font(tx_wide), vec!["Tx Wide Emoji"]);
+    });
+}
+
 #[test]
 fn app_emoji_family_normalizes_empty_and_configures_runtime() {
+    register_emoji_test_fonts();
     let _guard = rune::text::with_families("Inter", "ui-monospace");
-    let wide = make_emoji_font("App Wide Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{2764}'], 2400);
-    let narrow = make_emoji_font("App Narrow Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{2764}'], 400);
-    assert_eq!(rune::text::add_font(wide), vec!["App Wide Emoji"]);
-    assert_eq!(rune::text::add_font(narrow), vec!["App Narrow Emoji"]);
 
     // Empty / whitespace string normalizes to None.
     let spec_empty = AppSpec::new("empty", (400.0, 200.0), || (), view);
@@ -192,11 +203,8 @@ fn app_emoji_family_normalizes_empty_and_configures_runtime() {
 
 #[test]
 fn tx_and_runtime_set_emoji_family_rebuild_memos_sync_windows_and_update_measure() {
+    register_emoji_test_fonts();
     let _guard = rune::text::with_families("Inter", "ui-monospace");
-    let narrow = make_emoji_font("Tx Narrow Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{2764}'], 450);
-    let wide = make_emoji_font("Tx Wide Emoji", &['\u{1F680}', '\u{1F1E7}', '\u{1F1F7}', '\u{2764}'], 2200);
-    assert_eq!(rune::text::add_font(narrow), vec!["Tx Narrow Emoji"]);
-    assert_eq!(rune::text::add_font(wide), vec!["Tx Wide Emoji"]);
 
     let make_rt = || {
         let text = TextSystem::new(&[INTER, PLEX], ("Inter", "IBM Plex Mono"));

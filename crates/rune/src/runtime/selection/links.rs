@@ -334,6 +334,7 @@ impl RuntimeCore {
 
     /// The link of node `i` under window point (x, y).
     pub(in crate::runtime) fn link_at(&self, i: usize, x: f32, y: f32) -> Option<usize> {
+        if self.node_disabled(i) { return None; }
         let spec = self.tree.nodes[i].text.as_deref()?;
         if spec.cold.links.is_empty() { return None; }
         self.span_at(i, x, y, 0.0, spec.cold.links.iter().map(|l| (l.start, l.end)))
@@ -454,6 +455,7 @@ impl RuntimeCore {
 
     /// Runs the `on_link_secondary` handler of node `path` for link `k`.
     pub(in crate::runtime) fn secondary_press_link(&mut self, app: &mut dyn AppDriver, path: &str, k: usize, point: PointerEvent, tx: &mut Tx) -> bool {
+        if self.node_index(path).is_some_and(|i| self.node_disabled(i)) { return false; }
         let Some((f, id)) = self.node(path).and_then(|n| {
             let t = n.text.as_ref()?;
             Some((t.cold.on_link_secondary.clone()?, t.cold.links.get(k)?.id.clone()))
@@ -483,6 +485,7 @@ impl RuntimeCore {
     /// The Menu key on focused node `i`'s focused link: its `on_link_secondary`, at the
     /// bottom-left of its first line box.
     pub(in crate::runtime) fn focused_link_menu(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
+        if self.node_disabled(i) { return false; }
         let Some(k) = self.edit.link_focus().filter(|&k| k < link_count(&self.tree.nodes[i])) else { return false };
         if self.tree.nodes[i].text.as_ref().is_none_or(|t| t.cold.on_link_secondary.is_none()) { return false; }
         let Some((_, r)) = self.link_boxes_for(i, k, self.drawn_box(i)).into_iter().next() else { return false };
@@ -494,6 +497,7 @@ impl RuntimeCore {
     /// Enter or Space on a focused link presses it.
     pub(in crate::runtime) fn link_key(&mut self, app: &mut dyn AppDriver, i: usize, tx: &mut Tx) -> bool {
         let Some(k) = self.edit.link_focus().filter(|&k| k < link_count(&self.tree.nodes[i])) else { return false };
+        if self.node_disabled(i) { return true; }
         let path = self.tree.nodes[i].path.clone();
         self.press_link(app, &path, k, tx);
         true

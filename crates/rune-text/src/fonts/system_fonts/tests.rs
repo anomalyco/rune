@@ -311,6 +311,7 @@ fn installed_families_classify_platform_monospace_and_proportional_faces() {
 #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
 #[test]
 fn installed_families_round_trip_through_text_system_set_families() {
+    let _guard = crate::with_families("Inter", "ui-monospace");
     let families = installed_families();
     let mono = families.iter().find(|f| f.monospace());
     let prop = families.iter().find(|f| !f.monospace());

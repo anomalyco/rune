@@ -58,8 +58,8 @@ fn a_cache_hit_composites_with_its_layer_turn() {
 #[test]
 fn a_layer_inside_a_cache_that_misses_its_budget_still_draws() {
     let Some(gpu) = Gpu::test_headless() else { return };
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, 32, 16, OFFSCREEN_FORMAT_LINEAR);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let instances = cached_card([4.0, 2.0, 24.0, 12.0]);
     let at = (8 * 32 + 16) * 4;

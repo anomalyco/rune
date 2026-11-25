@@ -58,12 +58,15 @@ impl El {
                 Some(*last)
             })
             .collect();
-        let whole = t.redacted || t.cold.live.is_some() || t.cold.advance_in.is_some() || t.truncate || t.truncate_fade || t.max_lines > 0;
+        let whole = t.redacted || t.cold.live.is_some() || t.cold.advance_in.is_some() || !t.cold.inline_boxes.is_empty() || t.truncate || t.truncate_fade || t.max_lines > 0;
         if whole || dirs.iter().all(|&d| d == dirs[0]) {
             return self;
         }
         let Some(t) = self.text.take() else { return self };
         let cursor = self.handlers.cursor;
+        let a11y_disabled = self.cold.a11y.disabled;
+        let focus_disabled = self.cold.focus.disabled;
+        let focus_opt_out = self.cold.focus.opt_out;
         let last = paragraphs.len() - 1;
         let pieces: Vec<El> = paragraphs.iter().enumerate().map(|(k, &range)| {
             let mut e = text(String::new()).key(format!("p{k}"));
@@ -73,7 +76,14 @@ impl El {
             }
             let links = paragraph(&t, k, range, k == last, &mut e);
             if let Some(c) = cursor { e = e.cursor(c); }
-            if links { e.cold_mut().focus.enabled = true; }
+            if a11y_disabled { e.cold_mut().a11y.disabled = true; }
+            if focus_disabled || focus_opt_out {
+                let f = &mut *e.cold_mut().focus;
+                f.disabled = focus_disabled;
+                f.opt_out = true;
+            } else if links {
+                e.cold_mut().focus.enabled = true;
+            }
             e
         }).collect();
         // The links' Tab stops went with them.

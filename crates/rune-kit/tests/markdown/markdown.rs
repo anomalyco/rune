@@ -735,6 +735,7 @@ fn chips(s: &Chips, _: &mut Cx<Chips>) -> El {
 fn chip_rt(tx_mode: bool) -> Runtime<Chips> {
     let src = "Open [Title](session:abc) or [web](https://a.dev).".to_owned();
     let mut rt = Runtime::new(Chips { src, tx_mode, opened: Vec::new() }, chips, (480.0, 200.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt
 }
@@ -861,6 +862,7 @@ fn styled_links_keep_inner_styles_select_copy_and_stream_across_chunks() {
 
     // 1. Streaming a link split across chunks: once `)` arrives, the link gets its chip style.
     let mut rt = Runtime::new("Start [First **bold** `code`](ses".to_owned(), view, (160.0, 200.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     assert!(fill_rects(&rt, CHIP_BG).is_empty(), "unclosed link syntax is still plain text");
 
@@ -924,6 +926,7 @@ fn link_ring_frames_chosen_links_merges_inner_runs_and_stays_on_hover() {
     }
 
     let mut rt = Runtime::new((), view, (320.0, 100.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     let want_ring = rune::color::hex(CHIP_RING).unwrap().premul(1.0);
     let ringed: Vec<_> = rt

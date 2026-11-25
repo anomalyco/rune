@@ -562,6 +562,7 @@ mod tests {
 
     #[test]
     fn measures_text_and_wraps() {
+        let _guard = with_fonts(&[], ("Inter", "ui-monospace"));
         let style = TextStyle::new(14.0, 400.0);
         let (w, h) = measure("Hello world", &[], style, None);
         assert!(w > 50.0 && h >= 17.0, "{w} {h}");
@@ -574,6 +575,7 @@ mod tests {
 
     #[test]
     fn wrap_anywhere_measures_a_long_token_onto_more_lines() {
+        let _guard = with_fonts(&[], ("Inter", "ui-monospace"));
         let style = TextStyle::new(14.0, 400.0);
         let link = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
         let (plain_w, plain_h) = measure(link, &[], style, Some(120.0));
@@ -691,7 +693,10 @@ mod tests {
                 }
                 note_fonts(&with_plex, ("Inter", "IBM Plex Mono"));
                 let fg = with_global(|f| f.as_ref().map(|f| f.fonts_generation)).unwrap_or(0);
-                let ep = GLOBAL_EPOCH.load(Ordering::Acquire);
+                let ep = combine_face_epoch(
+                    GLOBAL_EPOCH.load(Ordering::Acquire),
+                    crate::fonts::full_faces::count() as u64,
+                );
                 writer_done.wait();
                 (fg, ep)
             });

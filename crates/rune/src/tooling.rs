@@ -405,6 +405,8 @@ pub(crate) enum Kind {
     /// A registered global shortcut, delivered only to its handler.
     Shortcut(crate::Shortcut),
     Move,
+    /// Relative mouse motion while pointer lock is held (`{"type": "pointer-motion", "dx": …, "dy": …}`).
+    PointerMotion(f32, f32),
     Down,
     Up,
     SecondaryDown,
@@ -459,6 +461,7 @@ pub(crate) fn script_input(
     match kind {
         Kind::Focus(focused) => core.window_focus(app, *focused),
         Kind::Move => core.pointer_move(app, x, y),
+        Kind::PointerMotion(dx, dy) => core.pointer_motion(*dx, *dy),
         Kind::Down => core.pointer_down(app, x, y),
         Kind::Up => core.pointer_up(app, x, y),
         Kind::SecondaryDown => core.secondary_down(x, y),
@@ -591,6 +594,7 @@ impl Ev {
             Kind::Physical(input) => ScriptEvent::Physical(*input),
             Kind::Shortcut(chord) => ScriptEvent::Shortcut(chord.clone()),
             Kind::Move => pointer(PointerAction::Move),
+            Kind::PointerMotion(dx, dy) => ScriptEvent::PointerMotion { dx: *dx, dy: *dy },
             Kind::Down => pointer(PointerAction::Down),
             Kind::Up => pointer(PointerAction::Up),
             Kind::SecondaryDown => pointer(PointerAction::SecondaryDown),

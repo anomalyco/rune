@@ -17,8 +17,10 @@ use std::time::Duration;
 use super::cpu_frame::{Cpu, Shown};
 use crate::platform::win32::dcomp_handover::Handover;
 use crate::platform::win32::dib::{Dib, free_later};
-use crate::render::cpu_boot::HalfRounding;
+use crate::gpu::fallback::Policy;
+use crate::render::cpu_boot::{HalfRounding, NeedsGpu};
 use crate::render::{Gpu, Renderer, SurfaceSetupError, format_window_setup_error, with_wine_hwnd_hint};
+use crate::window::CpuFirst;
 use crate::time::Instant;
 pub(super) use crate::window::warm_frame::{warm_frame, warm_instances};
 use crate::window::WakeEvent;
@@ -65,13 +67,114 @@ pub(in crate::window) enum GpuJob {
     /// Not started: the first frame isn't out yet, or a failed try (`tries` so far) waits for
     /// `retry_at`.
     Waiting { tries: u8, retry_at: Option<Instant> },
+    /// Automatic idle handover skipped because only software adapters (WARP) exist on this
+    /// machine. Never retries on idle; transitions to urgent `Building` when a frame hits
+    /// `NeedsGpu`.
+    SoftwareDeferred,
     /// Being made on `thread` since `since`; it reports through `slot`. `raised`: the thread runs
     /// at normal priority now (`RAISE_AFTER`). `latest`: the last CPU frame's instances, which the
     /// thread draws once before it reports (`warm_frame`). `animating`: the last CPU frame moved
     /// something. `ready`: since when the GPU has waited for a frame that doesn't (`gpu_ready`).
-    Building { slot: Arc<Mutex<Option<Result<Prepared, String>>>>, latest: Arc<Mutex<Vec<crate::render::Instance>>>, thread: std::thread::JoinHandle<()>, since: Instant, raised: bool, tries: u8, animating: bool, ready: Option<Instant> },
+    /// `urgent`: started or escalated by a `NeedsGpu` frame (bypasses `QUIET_WAIT` and allows
+    /// software adapters).
+    Building { slot: Arc<Mutex<Option<PrepareOutcome>>>, latest: Arc<Mutex<Vec<crate::render::Instance>>>, thread: std::thread::JoinHandle<()>, since: Instant, raised: bool, tries: u8, animating: bool, ready: Option<Instant>, urgent: bool },
     /// It failed `TRIES` times: the window stays on the CPU.
     Failed,
+}
+
+/// Outcome of the background GPU preparation thread (`prepare`).
+pub(in crate::window) enum PrepareOutcome {
+    Ready(Box<Prepared>),
+    /// Automatic idle handover fell through to a software GPU (`DeviceType::Cpu`): dropped before
+    /// configuring a swap chain or compiling shaders.
+    SoftwareDeferred,
+    Failed(String),
+}
+
+/// Pure idle-handover decision for a Windows CPU window whose `GpuJob` is `Waiting`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum IdleHandover {
+    /// Not due yet or suppressed (`CpuFirst::Only`).
+    Skip,
+    /// Only software adapters exist under `CpuFirst::Auto` + `Policy::Automatic`: transition to
+    /// `GpuJob::SoftwareDeferred` with zero device, swapchain, or shader work.
+    DeferSoftware,
+    /// Start background GPU handover; when `defer_software` is true, a fallback to
+    /// `DeviceType::Cpu` inside `prepare` drops cleanly into `GpuJob::SoftwareDeferred`.
+    Start { defer_software: bool },
+}
+
+/// Pure decision on how to respond when `CpuPainter` refuses a frame with `NeedsGpu`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NeedsGpuFrameAction {
+    /// First frame (`!first_frame.ready()`): keep the window cloaked until the GPU draws it.
+    WaitForGpu,
+    /// Mid-session degradable feature: paint live without the GPU-only modifier while the GPU
+    /// builds off the UI thread.
+    PaintDegraded,
+    /// Mid-session non-degradable feature (`SlugText`, `OutlineGlyph`, `UnknownKind`, `Target`):
+    /// keep the previous frame until the GPU takes over.
+    KeepPreviousFrame,
+}
+
+/// Pure idle-handover policy for Windows `CpuFirst` modes and adapter fallback policies.
+pub(super) fn idle_handover_action(
+    mode: CpuFirst,
+    policy: Policy,
+    ready_and_due: bool,
+    probe_hardware_dxgi: impl FnOnce() -> Option<bool>,
+) -> IdleHandover {
+    if !mode.gpu_owed(ready_and_due) {
+        return IdleHandover::Skip;
+    }
+    if mode == CpuFirst::Auto && policy == Policy::Automatic {
+        if probe_hardware_dxgi() == Some(false) {
+            return IdleHandover::DeferSoftware;
+        }
+        return IdleHandover::Start { defer_software: true };
+    }
+    IdleHandover::Start { defer_software: false }
+}
+
+/// Whether `prepare` should abort and defer when the picked adapter is a software GPU.
+pub(super) const fn should_defer_prepared_adapter(
+    defer_software: bool,
+    device_type: wgpu::DeviceType,
+) -> bool {
+    defer_software && matches!(device_type, wgpu::DeviceType::Cpu)
+}
+
+/// Whether `gpu_ready` should defer attaching an already-built GPU while the view animates.
+/// Handovers started or escalated by `NeedsGpu` (`urgent == true`) bypass `QUIET_WAIT` (0 ms).
+pub(super) fn should_defer_quiet_wait(
+    ready_ok: bool,
+    animating: bool,
+    urgent: bool,
+    now: Instant,
+    ready_since: Instant,
+) -> bool {
+    ready_ok && animating && !urgent && now < ready_since + QUIET_WAIT
+}
+
+/// Whether `hand_over_if_done` should run `count_drift` against the last CPU buffer.
+/// Skipped when the last painted CPU frame was a degraded fallback (different visual output by
+/// design) or when no CPU frame was copied to the window.
+pub(super) const fn should_count_drift(shown_copied: bool, degraded: bool) -> bool {
+    shown_copied && !degraded
+}
+
+/// How `prepare_render` handles a `NeedsGpu` error from `CpuPainter`.
+pub(super) const fn needs_gpu_frame_action(
+    first_frame_ready: bool,
+    reason: NeedsGpu,
+) -> NeedsGpuFrameAction {
+    if !first_frame_ready {
+        NeedsGpuFrameAction::WaitForGpu
+    } else if reason.is_degradable() {
+        NeedsGpuFrameAction::PaintDegraded
+    } else {
+        NeedsGpuFrameAction::KeepPreviousFrame
+    }
 }
 
 /// A GPU thread that hasn't made the GPU after this long runs at normal priority: below normal,
@@ -137,10 +240,29 @@ impl SurfaceMode {
 }
 
 impl Host {
-    /// The first idle turn after the window's first CPU frame: the GPU starts on its thread
-    /// (`CpuFirst::Only` or `RUNE_CPU_FIRST=only`: not until a frame needs it).
+    /// The first idle turn after the window's first CPU frame: starts background GPU handover
+    /// unless suppressed (`CpuFirst::Only`) or deferred on a software-only machine under
+    /// `CpuFirst::Auto` + `Policy::Automatic`.
     pub(in crate::window) fn cpu_idle(&mut self) {
-        if self.gpu_owed() { self.start_gpu(true); }
+        let now = crate::time::now();
+        let due = self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at, .. }, .. } if retry_at.is_none_or(|at| at <= now)) && w.first_frame.ready());
+        match idle_handover_action(
+            self.effective_cpu_first(),
+            crate::gpu::pick::env_policy(),
+            due,
+            crate::gpu::pick::dxgi_has_hardware_adapter,
+        ) {
+            IdleHandover::Skip => {}
+            IdleHandover::DeferSoftware => {
+                if let Some(w) = self.win.as_mut()
+                    && let SurfaceMode::Cpu { job, .. } = &mut w.native.mode
+                {
+                    *job = GpuJob::SoftwareDeferred;
+                    crate::marks::mark("gpu.window.software_deferred");
+                }
+            }
+            IdleHandover::Start { defer_software } => self.start_gpu_with(true, false, defer_software),
+        }
     }
 
     /// Whether the GPU is due to start now (`cpu_idle`).
@@ -150,9 +272,46 @@ impl Host {
         self.effective_cpu_first().gpu_owed(due)
     }
 
+    /// Starts or escalates GPU handover when a frame hits `NeedsGpu`: allows software adapters,
+    /// runs at normal priority, and bypasses `QUIET_WAIT` deferral.
+    pub(super) fn start_gpu_for_needs_gpu(&mut self) {
+        let mut wake_ready = false;
+        let should_start = {
+            let Some(w) = self.win.as_mut() else { return };
+            let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
+            match job {
+                GpuJob::Waiting { .. } => true,
+                GpuJob::SoftwareDeferred => {
+                    *job = GpuJob::Waiting { tries: 0, retry_at: None };
+                    true
+                }
+                GpuJob::Building { urgent, raised, thread, ready, .. } => {
+                    *urgent = true;
+                    if !*raised {
+                        *raised = true;
+                        raise_priority(thread);
+                        crate::marks::mark("gpu.window.raised");
+                    }
+                    if ready.is_some() {
+                        wake_ready = true;
+                    }
+                    false
+                }
+                GpuJob::Failed => false,
+            }
+        };
+        if wake_ready {
+            self.native_handle.send(WakeEvent::GpuReady);
+        }
+        if should_start {
+            self.start_gpu_with(false, true, false);
+        }
+    }
+
     /// Starts making the GPU for this window on a thread (`below`: at below-normal priority, as
-    /// after the first frame; a frame that needs the GPU makes it at normal priority).
-    pub(super) fn start_gpu(&mut self, below: bool) {
+    /// after the first frame; a frame that needs the GPU makes it at normal priority with
+    /// `urgent = true` and `defer_software = false`).
+    fn start_gpu_with(&mut self, below: bool, urgent: bool, defer_software: bool) {
         let Some(w) = self.win.as_mut() else { return };
         let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
         let GpuJob::Waiting { tries, retry_at } = *job else { return };
@@ -168,37 +327,58 @@ impl Host {
         let hwnd = hwnd as isize;
         let spawned = std::thread::Builder::new().name("rune-gpu-window".into()).spawn(move || {
             if below { lower_priority(); }
-            let made = prepare(hwnd, size, srgb, features, &instances);
+            let made = prepare(hwnd, size, srgb, features, &instances, defer_software);
             *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(made);
             handle.send(WakeEvent::GpuReady);
         });
         match spawned {
-            Ok(thread) => { crate::marks::mark("gpu.window.start"); *job = GpuJob::Building { slot, latest, thread, since: crate::time::now(), raised: !below, tries: tries + 1, animating: false, ready: None }; }
+            Ok(thread) => { crate::marks::mark("gpu.window.start"); *job = GpuJob::Building { slot, latest, thread, since: crate::time::now(), raised: !below, tries: tries + 1, animating: false, ready: None, urgent }; }
             Err(error) => self.fail_gpu(format!("its thread couldn't start: {error}"), tries + 1),
         }
     }
 
     /// The GPU thread finished: attach its device, renderer and surface and start handing over,
-    /// or stay on the CPU if it failed. While handing over: the GPU finished a frame.
+    /// or stay on the CPU if it failed or deferred a software GPU. While handing over: the GPU
+    /// finished a frame.
     pub(in crate::window) fn gpu_ready(&mut self) {
         if self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::HandingOver { .. })) { return self.hand_over_if_done(); }
         let Some(w) = self.win.as_mut() else { return };
-        let SurfaceMode::Cpu { job: GpuJob::Building { slot, tries, animating, ready, .. }, .. } = &mut w.native.mode else { return };
-        let tries = *tries;
+        let SurfaceMode::Cpu { job: GpuJob::Building { slot, tries, animating, ready, urgent, .. }, .. } = &mut w.native.mode else { return };
+        let (tries, urgent) = (*tries, *urgent);
         let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
-        // Ready while the CPU frames move something (a view fading in): the hand-over waits for a
-        // frame at rest, so the frame both renderers draw is one that costs what a frame at rest
-        // does, not the first of the GPU's frames to draw every layer of an entrance.
+        // Ready while the CPU frames move something (a view fading in): an idle hand-over waits
+        // for a frame at rest, so the frame both renderers draw costs what a frame at rest does.
+        // A hand-over triggered or escalated by `NeedsGpu` (`urgent`) skips `QUIET_WAIT` (0 ms).
         let now = crate::time::now();
-        if slot.as_ref().is_some_and(Result::is_ok) && *animating && now < *ready.get_or_insert(now) + QUIET_WAIT {
-            crate::marks::mark("gpu.window.deferred");
-            return;
+        let ready_ok = matches!(slot.as_ref(), Some(PrepareOutcome::Ready(_)));
+        if ready_ok && *animating && !urgent {
+            let ready_since = *ready.get_or_insert(now);
+            if should_defer_quiet_wait(true, true, false, now, ready_since) {
+                crate::marks::mark("gpu.window.deferred");
+                return;
+            }
         }
         let Some(made) = slot.take() else { return };
         drop(slot);
         let prepared = match made {
-            Ok(prepared) => prepared,
-            Err(error) => return self.fail_gpu(error, tries),
+            PrepareOutcome::Ready(prepared) => *prepared,
+            PrepareOutcome::SoftwareDeferred => {
+                if urgent {
+                    // A NeedsGpu frame escalated this idle handover while it was checking adapters:
+                    // restart immediately allowing software adapters.
+                    if let SurfaceMode::Cpu { job, .. } = &mut w.native.mode {
+                        *job = GpuJob::Waiting { tries: 0, retry_at: None };
+                    }
+                    self.start_gpu_for_needs_gpu();
+                    return;
+                }
+                crate::marks::mark("gpu.window.software_deferred");
+                if let SurfaceMode::Cpu { job, .. } = &mut w.native.mode {
+                    *job = GpuJob::SoftwareDeferred;
+                }
+                return;
+            }
+            PrepareOutcome::Failed(error) => return self.fail_gpu(error, tries),
         };
         crate::marks::mark("gpu.window.ready");
         let Prepared { gpu, mut renderer, surface, mut config, handover } = prepared;
@@ -365,7 +545,7 @@ impl Host {
                 // worker, after counting how many of its pixels the GPU's same frame drew otherwise.
                 // A frame only the GPU draws (Slug's text, a native surface) never showed a CPU
                 // frame: its buffer holds nothing to count against.
-                let shown = matches!(cpu.shown, Shown::Copied(_));
+                let shown = should_count_drift(matches!(cpu.shown, Shown::Copied(_)), cpu.degraded);
                 if let Some(dib) = cpu.into_dib() {
                     match readback {
                         Some(r) if shown => count_drift(gpu.clone(), r, dib),
@@ -380,6 +560,7 @@ impl Host {
                 w.presented = None;
                 // What was asked for while the GPU finished its frame draws now, on the GPU.
                 w.request_redraw();
+                self.on_resize_sync_event(super::resize_sync::Event::Handover);
             }
             SurfaceMode::HandingOver { done: None, .. } | SurfaceMode::Gpu | SurfaceMode::Cpu { .. } | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => {}
         }
@@ -436,9 +617,9 @@ impl Host {
                 self.fail_gpu(format!("the GPU didn't finish the hand-over frame in {} s", FINISH_LIMIT.as_secs()), tries);
             }
             SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at: Some(at), .. }, .. } => {
-                if now >= *at && w.first_frame.ready() { self.start_gpu(true); }
+                if now >= *at && w.first_frame.ready() { self.cpu_idle(); }
             }
-            SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at: None, .. } | GpuJob::Failed, .. }
+            SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at: None, .. } | GpuJob::SoftwareDeferred | GpuJob::Failed, .. }
             | SurfaceMode::Gpu | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => {}
         }
     }
@@ -448,13 +629,13 @@ impl Win {
     /// When the hand-over next has something to do (`Host::watch_handover`).
     pub(in crate::window) fn handover_deadline(&self, now: Instant) -> Option<Instant> {
         match &self.native.mode {
-            SurfaceMode::Cpu { job: GpuJob::Building { ready: Some(at), .. }, .. } => Some(*at + QUIET_WAIT),
+            SurfaceMode::Cpu { job: GpuJob::Building { ready: Some(at), urgent: false, .. }, .. } => Some(*at + QUIET_WAIT),
             SurfaceMode::Cpu { job: GpuJob::Building { since, raised: false, .. }, .. } => Some(*since + RAISE_AFTER),
             SurfaceMode::Cpu { job: GpuJob::Building { since, .. }, .. } => Some(*since + BUILD_SLOW).filter(|&at| at > now),
             SurfaceMode::HandingOver { done: None, since, nudged, .. } => Some(nudged.unwrap_or(*since) + NUDGE_EVERY),
             SurfaceMode::HandingOver { done: Some((_, at)), .. } => Some(*at + FINISH_LIMIT),
             SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at, .. }, .. } => retry_at.filter(|&at| at > now),
-            SurfaceMode::Cpu { job: GpuJob::Failed, .. } | SurfaceMode::Gpu | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => None,
+            SurfaceMode::Cpu { job: GpuJob::SoftwareDeferred | GpuJob::Failed, .. } | SurfaceMode::Gpu | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => None,
         }
     }
 }
@@ -494,13 +675,21 @@ fn create_hwnd_surface(instance: &wgpu::Instance, hwnd: isize) -> Result<wgpu::S
 /// On the GPU thread: the device (the one `warm_gpu` made, if it did), the renderer, the
 /// uncommitted DirectComposition visual (when DirectComposition is active) and a swap chain
 /// configured for `size`.
+enum SetupOutcome {
+    Ready(Box<(wgpu::SurfaceConfiguration, Renderer)>),
+    SoftwareDeferred,
+}
+
 #[allow(unsafe_code)]
-fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, latest: &Mutex<Vec<crate::render::Instance>>) -> Result<Prepared, String> {
+fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, latest: &Mutex<Vec<crate::render::Instance>>, defer_software: bool) -> PrepareOutcome {
     let handover = match Gpu::dx12_swapchain_kind() {
         wgpu::Dx12SwapchainKind::DxgiFromHwnd => None,
-        wgpu::Dx12SwapchainKind::DxgiFromVisual => Some(Handover::new(hwnd).map_err(with_wine_hwnd_hint)?),
+        wgpu::Dx12SwapchainKind::DxgiFromVisual => match Handover::new(hwnd).map_err(with_wine_hwnd_hint) {
+            Ok(h) => Some(h),
+            Err(error) => return PrepareOutcome::Failed(error),
+        },
     };
-    let (gpu, surface, (config, mut renderer)) = Gpu::for_surface_setup(
+    let setup = Gpu::for_surface_setup(
         features,
         false,
         |instance| match &handover {
@@ -513,6 +702,12 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
             None => create_hwnd_surface(instance, hwnd),
         },
         |gpu, surface, prewarmed| {
+            // Belt-and-suspenders: if an automatic idle handover on a non-D3D12 virtual adapter
+            // fell through to a software GPU (WARP), stop before configuring any swap chain or
+            // compiling shaders.
+            if should_defer_prepared_adapter(defer_software, gpu.adapter.get_info().device_type) {
+                return Ok(SetupOutcome::SoftwareDeferred);
+            }
             let size = drawable_size(None, size, max_surface_dim(Some(gpu)));
             let (config, _) = surface_config(surface, &gpu.adapter, size, srgb)
                 .ok_or_else(|| SurfaceSetupError::unsupported("the GPU can't present to this window"))?;
@@ -526,14 +721,25 @@ fn prepare(hwnd: isize, size: (u32, u32), srgb: bool, features: wgpu::Features, 
                 None => Renderer::try_new_classified(&gpu.device, target_format).map_err(SurfaceSetupError::from_shader)?,
             };
             renderer.attach_gpu(gpu);
-            Ok((config, renderer))
+            Ok(SetupOutcome::Ready(Box::new((config, renderer))))
         },
-    ).map_err(format_window_setup_error)?;
+    ).map_err(format_window_setup_error);
+    let (gpu, surface, outcome) = match setup {
+        Ok(res) => res,
+        Err(error) => return PrepareOutcome::Failed(error),
+    };
+    let (config, mut renderer) = match outcome {
+        SetupOutcome::Ready(ready) => *ready,
+        SetupOutcome::SoftwareDeferred => {
+            drop((surface, gpu, handover));
+            return PrepareOutcome::SoftwareDeferred;
+        }
+    };
     let target_format = if srgb { config.format.remove_srgb_suffix() } else { config.format };
     let instances = std::mem::take(&mut *latest.lock().unwrap_or_else(|e| e.into_inner()));
     warm_frame(&gpu, &mut renderer, target_format, srgb, (config.width, config.height), &instances);
     crate::marks::mark("gpu.window.warmed");
-    Ok(Prepared { gpu, renderer, surface, config, handover })
+    PrepareOutcome::Ready(Box::new(Prepared { gpu, renderer, surface, config, handover }))
 }
 
 /// On a worker: maps the GPU frame's copy, counts the pixels that differ from the CPU's buffer
@@ -562,8 +768,12 @@ pub(crate) fn warm_gpu_cache() -> Result<(), String> {
     if hwnd.is_null() { return Err("no window could be made to warm the GPU on".into()); }
     // What a window's hand-over makes: the device, the frame and fill pipelines for its swap
     // chain's format, then (started by the warm frame's prepare) the pinned ones.
-    let made = prepare(hwnd as isize, (1280, 800), true, wgpu::Features::empty(), &Mutex::new(Vec::new()));
-    let result = made.map(|mut prepared| prepared.renderer.wait_pinned());
+    let made = prepare(hwnd as isize, (1280, 800), true, wgpu::Features::empty(), &Mutex::new(Vec::new()), false);
+    let result = match made {
+        PrepareOutcome::Ready(mut prepared) => { prepared.renderer.wait_pinned(); Ok(()) }
+        PrepareOutcome::SoftwareDeferred => Ok(()),
+        PrepareOutcome::Failed(error) => Err(error),
+    };
     // SAFETY: the window made above, on this thread; the surface on it is gone with `prepared`.
     unsafe { DestroyWindow(hwnd) };
     result

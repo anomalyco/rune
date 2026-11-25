@@ -64,6 +64,7 @@ impl RuntimeCore {
             viewport: self.viewport,
             fit_height: self.host.fit_height,
             system_reduced_motion: self.host.system_reduced_motion,
+            pointer_locked: self.pointer_locked(),
             // The window's controls are in its points; the view's are over the zoom.
             titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
@@ -205,7 +206,9 @@ impl Measurement<'_> {
     /// rebuild when they change.
     pub(in crate::runtime) fn chrome_bits(&self) -> [u32; 5] {
         let [leading, trailing, height] = self.chrome.bits();
-        let flags = u32::from(self.maximized) | (u32::from(self.full_screen) << 1);
+        let flags = u32::from(self.maximized)
+            | (u32::from(self.full_screen) << 1)
+            | (u32::from(self.pointer_locked) << 2);
         [self.titlebar_inset.to_bits(), leading, trailing, height, flags]
     }
 
@@ -501,6 +504,7 @@ impl Measurement<'_> {
             system_scroll_bars: this.system_scroll_bars,
             system_languages: this.system_languages.clone(),
             system_reduced_motion: this.system_reduced_motion,
+            pointer_locked: this.pointer_locked,
             reduced_motion: this.system_reduced_motion,
             time_scale: this.time_scale,
             zoom: 1.0,

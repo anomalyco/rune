@@ -1,5 +1,5 @@
 use super::*;
-use crate::render::{Gpu, Instance, KIND_RECT, LayerSpec, NO_CLIP, OFFSCREEN_FORMAT, Offscreen};
+use crate::render::{Gpu, Instance, KIND_RECT, LayerSpec, NO_CLIP, OFFSCREEN_FORMAT_LINEAR, Offscreen};
 use bytemuck::Zeroable;
 
 fn step(health: &mut Health, seq: &mut Seq, event: Event) -> Vec<Effect> {
@@ -63,9 +63,9 @@ fn group(spec: LayerSpec) -> Vec<Instance> {
 /// frame set an invalid pipeline; the pixel at the group's centre.
 fn draw_refusing(feature: Feature, instances: &[Instance]) -> Option<(Renderer, [u8; 4])> {
     let gpu = Gpu::test_headless_wgpu()?;
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
     renderer.breakers.refuse = Some(feature);
-    let target = Offscreen::new(&gpu.device, 32, 16);
+    let target = Offscreen::with_format(&gpu.device, 32, 16, OFFSCREEN_FORMAT_LINEAR);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let mut out = Vec::new();
     for _ in 0..3 {

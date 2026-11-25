@@ -371,7 +371,7 @@ impl Win {
     /// The display link's next tick after `now`, while actively driving redraws.
     pub(in crate::window) fn next_tick(&self, now: Instant) -> Option<Instant> {
         #[cfg(target_os = "macos")]
-        return self.native.pacing.as_ref().filter(|p| p.paced()).map(|p| now + Duration::from_secs_f64(1.0 / p.refresh_hz()));
+        return self.native.pacing.as_ref().filter(|p| p.paced()).map(|p| p.tick_after(now));
         #[cfg(not(target_os = "macos"))]
         { let _ = now; None }
     }

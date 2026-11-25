@@ -60,9 +60,14 @@ impl AnyHost for Host {
         let covered_draw = win.and_then(|w| w.covered_draw.deadline());
         #[cfg(not(target_os = "windows"))]
         let covered_draw = None;
+        #[cfg(target_os = "windows")]
+        let resize_sync = win.and_then(|w| w.native.resize_sync.deadline());
+        #[cfg(not(target_os = "windows"))]
+        let resize_sync = None;
         runtime.into_iter()
             .chain(handover)
             .chain(covered_draw)
+            .chain(resize_sync)
             .chain(win.and_then(|w| w.first_frame.deadline().map(|(retry, _)| retry)))
             .chain(win.and_then(|w| w.first_frame.ready_deadline()))
             .chain(win.and_then(Win::cloak_deadline))
@@ -103,6 +108,10 @@ impl AnyHost for Host {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         self.in_turn(|h| h.window_event_in_turn(event_loop, id, event))
     }
+    fn pointer_motion(&mut self, dx: f64, dy: f64) {
+        if !self.app.rt().pointer_locked() { return; }
+        self.in_turn(|h| h.pointer_motion_in_turn(dx, dy));
+    }
 }
 
 /// Whether a host's turn is inside its app's turn scope now.
@@ -113,6 +122,30 @@ pub(in crate::window) enum Turn {
 }
 
 impl Host {
+    /// Raw relative mouse motion while pointer lock is active and this window has focus.
+    fn pointer_motion_in_turn(&mut self, dx: f64, dy: f64) {
+        let Some(w) = self.shown_win() else { return };
+        if !self.app.rt().pointer_locked() || !w.window.has_focus() {
+            return;
+        }
+        let [mx, my] = crate::window::pointer_lock::scale_motion(
+            dx,
+            dy,
+            w.window.scale_factor(),
+            crate::window::pointer_lock::MotionPlatform::for_host(self.wayland),
+        );
+        if !mx.is_finite() || !my.is_finite() || (mx == 0.0 && my == 0.0) {
+            return;
+        }
+        let _input = crate::input::time::arrived_now();
+        self.app.rt_mut().pointer_motion(mx, my);
+        if let Some(w) = self.win.as_mut() {
+            w.timer_frame.no_longer_quiet();
+            w.loop_frame.touched();
+            w.request_redraw();
+        }
+    }
+
     /// The loop's turn ends: the frame the window wants next is asked for, and on Windows a
     /// window whose paint the system keeps putting off behind another's paints now (`Redraw`).
     fn turn_ends_in_turn(&mut self, event_loop: &ActiveEventLoop, now: Instant) {
@@ -245,6 +278,8 @@ impl Host {
         if let Some(w) = &self.win { w.native.cloak.lift_if_due(&w.window, crate::time::now()); }
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         self.watch_handover(crate::time::now());
+        #[cfg(target_os = "windows")]
+        self.watch_resize_sync(crate::time::now());
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(attempt) = self.win.as_ref().and_then(|w| w.native.drop_binding.grace_attempt())
             && self.win.as_ref().and_then(|w| w.native.drop_binding.deadline()).is_some_and(|due| due <= crate::time::now())

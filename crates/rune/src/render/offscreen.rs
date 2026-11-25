@@ -1,6 +1,6 @@
 //! Offscreen render targets with CPU readback and PNG writing.
 
-/// An offscreen sRGB target with CPU readback.
+/// An offscreen render target with CPU readback.
 pub struct Offscreen {
     texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -9,13 +9,49 @@ pub struct Offscreen {
     pub height: u32,
 }
 
-pub const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// Default offscreen target format (`Rgba8Unorm`), matching Rune's default sRGB-encoded blending
+/// on `App` windows, standalone [`Runtime`](crate::Runtime), [`Renderer`](super::Renderer), and
+/// [`SurfaceRenderer`](crate::native_surface::SurfaceRenderer).
+///
+/// Use [`OFFSCREEN_FORMAT_LINEAR`] when opting into linear-light blending (`set_srgb_blend(false)`).
+///
+/// ```
+/// use rune::render::{OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR};
+///
+/// assert_eq!(OFFSCREEN_FORMAT, wgpu::TextureFormat::Rgba8Unorm);
+/// assert_eq!(OFFSCREEN_FORMAT_LINEAR, wgpu::TextureFormat::Rgba8UnormSrgb);
+/// ```
+pub const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Linear-light offscreen target format (`Rgba8UnormSrgb`), where the GPU encodes linear
+/// premultiplied fragments to sRGB on write.
+///
+/// Pair with [`Offscreen::with_format`], `Renderer::new(device, OFFSCREEN_FORMAT_LINEAR)`, and
+/// `rt.set_srgb_blend(false)` when you explicitly want linear-light blending off screen.
+///
+/// ```no_run
+/// use rune::render::{Gpu, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
+/// use rune::{Color, Env, Runtime, el};
+///
+/// let gpu = Gpu::headless();
+/// let mut rt = Runtime::new((), |_: &(), _| el().w_full().h_full().fill(Color::WHITE), (64.0, 64.0), Env::new(true, 1.0));
+/// rt.set_srgb_blend(false);
+/// let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+/// let target = Offscreen::with_format(&gpu.device, 64, 64, OFFSCREEN_FORMAT_LINEAR);
+/// rt.frame(0.0);
+/// renderer.render_runtime_to_offscreen(&gpu.device, &gpu.queue, &target, &mut rt);
+/// let _rgba = target.read(&gpu.device);
+/// ```
+pub const OFFSCREEN_FORMAT_LINEAR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 impl Offscreen {
+    /// Creates an offscreen target in [`OFFSCREEN_FORMAT`] (`Rgba8Unorm`) for sRGB-encoded blending.
     pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Offscreen {
         Self::with_format(device, width, height, OFFSCREEN_FORMAT)
     }
 
+    /// Creates an offscreen target in `format` (for example [`OFFSCREEN_FORMAT_LINEAR`] for
+    /// linear-light blending, or `wgpu::TextureFormat::Bgra8Unorm`).
     pub fn with_format(device: &wgpu::Device, width: u32, height: u32, format: wgpu::TextureFormat) -> Offscreen {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen"),
@@ -30,6 +66,19 @@ impl Offscreen {
         let view = texture.create_view(&Default::default());
         let readback = rune_staging::Readback::new(device, "readback", width, height, 4);
         Offscreen { texture, view, readback, width, height }
+    }
+
+    /// Texture format this offscreen target was created with.
+    ///
+    /// ```no_run
+    /// use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen};
+    ///
+    /// let gpu = Gpu::headless();
+    /// let target = Offscreen::new(&gpu.device, 64, 64);
+    /// assert_eq!(target.format(), OFFSCREEN_FORMAT);
+    /// ```
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.texture.format()
     }
 
     pub fn copy(&self, encoder: &mut wgpu::CommandEncoder) {
@@ -62,10 +111,10 @@ impl super::Renderer {
     ///
     /// Call [`Runtime::frame`](crate::Runtime::frame) before rendering and follow with
     /// [`Offscreen::read`] to read back tightly packed RGBA8 pixels. Create `self` and `target`
-    /// with the same texture format: [`OFFSCREEN_FORMAT`] for linear blending (the default on a
-    /// standalone [`Runtime`](crate::Runtime)), or `OFFSCREEN_FORMAT.remove_srgb_suffix()`
-    /// together with `rt.set_srgb_blend(true)` and `renderer.set_srgb_blend(true)` for
-    /// sRGB-encoded blending.
+    /// with the same texture format: [`OFFSCREEN_FORMAT`] (`Rgba8Unorm`) for Rune's default
+    /// sRGB-encoded blending (matching `App` windows), or [`OFFSCREEN_FORMAT_LINEAR`]
+    /// (`Rgba8UnormSrgb`) together with `rt.set_srgb_blend(false)` and
+    /// `renderer.set_srgb_blend(false)` for linear-light blending.
     ///
     /// # Example
     ///

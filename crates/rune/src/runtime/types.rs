@@ -22,6 +22,8 @@ pub(crate) struct NodeCold {
     pub(super) live: Vec<crate::live::Bound>,
     /// The run a cell measures and draws from (see `El::advance_in`).
     pub(super) run_layout: Option<Rc<crate::text::RunLayout>>,
+    /// Verified tabular-digit glyph substitution for a single-line `LiveText` node.
+    pub(super) tabular_layout: Option<Rc<crate::text::TabularGlyphs>>,
     pub(super) live_text_seen: Option<u128>,
     pub(super) looping: Option<Box<rune_motion::LoopSpec>>,
     pub(super) loop_times: Option<u32>,
@@ -72,6 +74,7 @@ impl crate::cold::Empty for NodeCold {
         label: None,
         live: Vec::new(),
         run_layout: None,
+        tabular_layout: None,
         live_text_seen: None,
         looping: None,
         loop_times: None,
@@ -196,6 +199,13 @@ impl Node {
     pub(super) fn clear_run_layout(&mut self) {
         if self.cold.get().is_some_and(|c| c.run_layout.is_some()) {
             self.cold_mut().run_layout = None;
+        }
+    }
+
+    #[inline]
+    pub(super) fn clear_tabular_layout(&mut self) {
+        if self.cold.get().is_some_and(|c| c.tabular_layout.is_some()) {
+            self.cold_mut().tabular_layout = None;
         }
     }
 
@@ -626,6 +636,7 @@ pub(crate) struct TreeState {
     pub(in crate::runtime) has_mount: bool,
     pub(in crate::runtime) has_key_up: bool,
     pub(in crate::runtime) has_any_press: bool,
+    pub(in crate::runtime) has_pointer_lock: bool,
     pub(in crate::runtime) node_index: NodeIndex,
     /// The node ids the last build indexed its scratch by.
     pub(in crate::runtime) built_ids: Vec<NodeId>,
@@ -666,6 +677,7 @@ impl TreeState {
             has_mount: false,
             has_key_up: false,
             has_any_press: false,
+            has_pointer_lock: false,
             built: false,
             has_playground: false,
             node_index: NodeIndex::default(),

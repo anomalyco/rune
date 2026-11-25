@@ -344,6 +344,7 @@ fn same_handlers(
         hover_delay,
         hover_tracks_bounds,
         on_pointer_move,
+        pointer_lock,
         gestures,
         on_drag,
         drag_out,
@@ -398,6 +399,7 @@ fn same_handlers(
         && a.hover_delay == *hover_delay
         && a.hover_tracks_bounds == *hover_tracks_bounds
         && opt_rc_eq(&a.on_pointer_move, on_pointer_move)
+        && opt_rc_eq(&a.pointer_lock, pointer_lock)
         && same_gestures(&a.gestures, gestures)
         && opt_rc_eq(&a.on_drag, on_drag)
         && opt_rc_eq(&a.drag_out, drag_out)
@@ -582,7 +584,7 @@ pub(in crate::runtime) fn try_reuse_memo(
             taffy.reuse_slot(slot.taffy, new_idx as u32);
             let stub = Node::moved_stub(slot);
             let mut n = std::mem::replace(slot, stub);
-            if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) { n.text_layout = None; n.elided = None; }
+            if !n.text.as_ref().is_some_and(|t| t.cold.live.is_some()) { n.text_layout = None; n.elided = None; n.clear_tabular_layout(); }
             n.clear_run_layout();
             n.scale_track = false;
             n.group_fade = false;
@@ -612,6 +614,7 @@ pub(in crate::runtime) fn try_reuse_memo(
                 ..old.clone()
             };
             n.clear_run_layout();
+            if !keep_live { n.clear_tabular_layout(); }
             nodes.push(n);
         }
     } else {
@@ -669,6 +672,7 @@ pub(in crate::runtime) fn try_reuse_memo(
                 ..old.clone()
             };
             n.clear_run_layout();
+            if !keep_live { n.clear_tabular_layout(); }
             nodes.push(n);
         }
     }
@@ -717,6 +721,7 @@ pub(in crate::runtime) fn restore_moved_nodes(
             n.text_layout = None;
             n.elided = None;
             n.clear_run_layout();
+            n.clear_tabular_layout();
             std::mem::swap(&mut old_nodes[span.old_start + k], n);
         }
     }

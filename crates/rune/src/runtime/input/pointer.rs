@@ -11,6 +11,7 @@ impl RuntimeCore {
     /// point the drag last saw has nothing new to report, and its instant transaction would
     /// cut short whatever the press started (a tapped slider's knob mid-spring).
     pub(in crate::runtime) fn move_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32, drag_move: bool) {
+        if self.pointer_locked() { return; }
         let was_left = self.pointer.left();
         let moved = self.pointer.pos != Some((x, y));
         if moved || was_left { self.pointer.hover_paused = false; self.release_hover_hold(); }
@@ -74,6 +75,7 @@ impl RuntimeCore {
     /// hover-group or press tracks, hovered links, tooltips, text selection drags, OS drag-out,
     /// or a newly armed autoscroll or edge-scroll step).
     pub(crate) fn observe_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32) -> bool {
+        if self.pointer_locked() { return false; }
         if self.pointer.pos == Some((x, y)) && !self.pointer.left() { return false; }
         let queued = self.frame.queue.len();
         let capture_inside = self.pointer.press_inside();
@@ -121,6 +123,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn has_pointer_activity(&self) -> bool {
         self.pointer.pos.is_some()
             || self.pointer_captured()
+            || self.pointer_locked()
             || self.pointer.drag_out_request.is_some()
             || self.pointer.autoscroll_armed()
             || self.pointer.touch_hold_deadline().is_some()
@@ -129,6 +132,7 @@ impl RuntimeCore {
 
     pub(crate) fn cancel_pointer(&mut self) {
         // differs from dev: a cancelled press cannot pair with a click after refocusing.
+        self.release_pointer_lock();
         self.cancel_touch_hold();
         self.host.titlebar.clear();
         self.pointer.autoscroll_cancel();
@@ -283,6 +287,8 @@ impl RuntimeCore {
     /// A primary press at (x, y); `touch`: a finger's, which never runs `on_press` on the way
     /// down (`El::press_on_down` is a mouse's).
     pub(in crate::runtime) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) {
+        self.sync_pointer_lock();
+        let (x, y) = self.locked_point(x, y);
         let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
         self.pointer.note_button_down(crate::PointerButton::Primary);
         // A press ends a middle-click autoscroll, and does nothing else.
@@ -356,6 +362,8 @@ impl RuntimeCore {
             self.input_down(ji, (x, y), now, second, link.filter(|_| ji == ti), ji == ti);
             return;
         }
+        self.try_capture_pointer_lock(ti, x, y, touch);
+        let n = &self.tree.nodes[ti];
         // Clicking a link leaves focus where it is (a composer keeps typing). Selectable text
         // off its links isn't a control: the press blurs, as a click on plain content does.
         // Inside a control that owns its keyboard (`El::on_key`), a click on any part of it
@@ -385,8 +393,14 @@ impl RuntimeCore {
             .find(|&p| (self.tree.nodes[p].focus.key.is_some() || self.focuses_on_click(p)) && self.can_focus(p) && !self.tree.nodes[p].focus.keyboard_only)).flatten();
         let in_textbox = std::iter::successors(n.parent, |&p| self.tree.nodes[p].parent).any(|p| self.textbox_input(p).is_some());
         let below = n.focus.below;
+        let caret_host = (!below && !on_link && !keeps && !preserve_focus)
+            .then(|| self.selectable_at(x, y).and_then(|s| self.caret_browsing_host_of(s)))
+            .flatten()
+            .filter(|&h| self.can_focus(h) && !self.tree.nodes[h].focus.keyboard_only);
         if !below && !on_link && !keeps && takes_focus && !self.is_selectable(ti) {
             self.frame.queue.push(Action::FocusControl(n.path.clone()));
+        } else if let Some(host) = caret_host {
+            self.frame.queue.push(Action::FocusControl(self.tree.nodes[host].path.clone()));
         } else if !below && !on_link && !keeps && let Some(p) = keyed {
             self.frame.queue.push(Action::FocusControl(self.tree.nodes[p].path.clone()));
         } else if !below && !on_link && !in_textbox && !preserve_focus {
@@ -430,6 +444,7 @@ impl RuntimeCore {
     }
 
     pub(crate) fn pointer_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+        let (x, y) = self.locked_point(x, y);
         self.pointer.note_button_up(crate::PointerButton::Primary);
         if self.pointer.autoscroll_release(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
         #[cfg(target_os = "linux")]
@@ -559,6 +574,7 @@ impl RuntimeCore {
     }
 
     pub fn pointer_leave(&mut self) {
+        if self.pointer_locked() { return; }
         self.wheel_lost();
         if !self.pointer.captured() {
             self.pointer.pos = None;
@@ -623,7 +639,10 @@ impl RuntimeCore {
         {
             return if self.input_pointer_cursor(i, x, y) { crate::el::Cursor::Pointer } else { crate::el::Cursor::Text };
         }
-        if self.is_selectable(i) && !self.edit.selectable.phase.dragging() && self.link_at(i, x, y).is_some() {
+        if (self.is_selectable(i) || self.tree.nodes[i].handlers.cursor.is_none())
+            && !self.edit.selectable.phase.dragging()
+            && self.link_at(i, x, y).is_some()
+        {
             // The hand, unless the text names another shape for its links (`El::link_cursor`).
             return self.tree.nodes[i].text.as_ref().and_then(|t| t.cold.link_cursor).unwrap_or(crate::el::Cursor::Pointer);
         }
@@ -752,6 +771,7 @@ impl RuntimeCore {
     /// negative deltaY). Applied 1:1: the platform supplies its own momentum phases. A run of
     /// deltas keeps to the viewport it began on (`WheelLock::vertical_run`), even at its end.
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) {
+        let (x, y) = self.locked_point(x, y);
         let phased = self.scroll.wheel_phased();
         let momentum = self.scroll.wheel_momentum();
         if dy != 0.0 {

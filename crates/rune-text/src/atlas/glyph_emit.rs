@@ -141,6 +141,44 @@ impl TextSystem {
         self.coords_scratch = coords;
     }
 
+    /// Glyph quads for a shaper-verified tabular-digit `LiveText` value, matching
+    /// [`Self::glyphs_in_band`] bit-for-bit without re-walking or reshaping Parley runs.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn glyphs_for_tabular(
+        &mut self,
+        tabular: &TabularGlyphs,
+        origin: [f32; 2],
+        k: f32,
+        bytes: bool,
+        band: std::ops::Range<f32>,
+        out: &mut Vec<GlyphQuad>,
+    ) {
+        let tpl = &tabular.template;
+        if (band.start > 0.0 && tpl.block_max < band.start) || tpl.block_min > band.end {
+            return;
+        }
+        let mut cursor = 0usize;
+        for slot in &tpl.slots {
+            let f = &tpl.faces[slot.face as usize];
+            let baseline = (origin[1] + f.face.baseline * k).round();
+            let ink = if self.ink_spans.is_empty() { 0 } else { self.ink_at(slot.byte, &mut cursor) };
+            let byte = if bytes { slot.byte } else { 0 };
+            let at = if k == 1.0 {
+                [origin[0] + slot.rel + slot.x, baseline + slot.y]
+            } else {
+                [origin[0] + (slot.rel + slot.x) * k, baseline + slot.y * k]
+            };
+            let id = if slot.digit_slot == u8::MAX {
+                slot.glyph_id
+            } else {
+                let ds = slot.digit_slot as usize;
+                tpl.digit_glyphs[ds][tabular.digits[ds] as usize]
+            };
+            self.push_glyph(&f.face, &f.coords, id, at, k, ink, byte, out);
+        }
+    }
+
     /// Glyph quads for the grapheme at byte `at` of a shaped run, with the run's top-left at
     /// `origin` (device px). Only that grapheme's glyphs are visited. `_scale` is unused (the
     /// run holds its scale); it stays for source compatibility.

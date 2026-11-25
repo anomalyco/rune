@@ -279,6 +279,11 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
             }
             "scroll" => eased_input::swipe(&mut out, &e, t, pos),
             "resize" => eased_input::resize(&mut out, &e, t),
+            "pointer-motion" => {
+                let dx = e["dx"].as_f64().unwrap_or(0.0) as f32;
+                let dy = e["dy"].as_f64().unwrap_or(0.0) as f32;
+                out.push(Ev { t, kind: Kind::PointerMotion(dx, dy), pos: Pos::Rel(0.0, 0.0) });
+            }
             "fling" => {
                 let v = |k: &str| e[k].as_f64().unwrap_or(0.0) as f32;
                 out.push(Ev { t, kind: Kind::Fling(v("vx"), v("v")), pos });

@@ -33,7 +33,7 @@ fn frame(gpu: &Gpu, fx: &mut FxRenderer, layers: &[FxLayer], backdrop: &wgpu::Te
 
 #[test]
 fn a_steady_frame_reuses_its_bind_groups() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let mut fx = FxRenderer::new(&gpu.device, FORMAT, FxOptions::default());
     let bd = backdrop(&gpu);
     let slot = backdrop(&gpu);

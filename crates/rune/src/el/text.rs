@@ -714,9 +714,8 @@ impl El {
     pub fn link(mut self, link: Link) -> Self {
         if let Some(t) = &mut self.text {
             t.cold.links.push(link);
-            self.cold_mut().focus.enabled = true;
-            if self.handlers.cursor.is_none() {
-                self.handlers.cursor = Some(Cursor::Pointer);
+            if !self.cold.focus.opt_out && !self.cold.focus.disabled {
+                self.cold_mut().focus.enabled = true;
             }
         }
         self
@@ -784,15 +783,20 @@ impl El {
         }
         self
     }
-    /// The field's insertion caret and selection highlight colours. Without it, the caret follows
-    /// the field's text colour ([`El::color`], else [`Cx::foreground`](crate::Cx::foreground), else
-    /// white), matching CSS `caret-color: auto`, and the selection uses that colour at 20%.
+    /// The insertion caret and selection highlight colours for a text field or
+    /// [`El::caret_browsing`] selectable text. Without it, the caret follows the text colour
+    /// ([`El::color`], else [`Cx::foreground`](crate::Cx::foreground), else white), matching CSS
+    /// `caret-color: auto`, and a text field's selection uses that colour at 20%.
     pub fn caret(mut self, caret: Color, selection: Color) -> Self {
         if let Some(i) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
             i.caret = caret;
             i.selection = selection;
             i.caret_inked = true;
             i.selection_inked = true;
+        }
+        if let Some(t) = &mut self.text {
+            t.cold.caret = Some(caret);
+            t.cold.selection = selection;
         }
         self
     }
@@ -817,7 +821,7 @@ impl El {
         if let Some(t) = &mut self.text {
             if self.cold.input.is_some() || t.redacted { return self; }
             t.selectable = on;
-            if on && (self.handlers.cursor.is_none() || (!t.cold.links.is_empty() && self.handlers.cursor == Some(Cursor::Pointer))) {
+            if on && self.handlers.cursor.is_none() {
                 self.handlers.cursor = Some(Cursor::Text);
             }
         }
@@ -831,6 +835,31 @@ impl El {
     /// isn't selectable (a list marker) is skipped. Outside a group each text is its own.
     pub fn selection_group(mut self, on: bool) -> Self {
         self.flags.set(ElFlags::SELECTION_GROUP, on);
+        self
+    }
+    /// Opts an [`El::selectable`] text element or [`El::selection_group`] container into keyboard
+    /// caret browsing, as in Chrome's caret browsing mode: the element becomes focusable via click
+    /// or Tab, draws a 1.5 pt caret when focused and collapsed (coloured by [`El::caret`], else
+    /// [`El::color`] / [`Cx::foreground`](crate::Cx::foreground)), moves by character, word, visual
+    /// line, page, and line or document `Home`/`End`, extends the selection with `Shift` across
+    /// mounted sibling texts in tree order, collapses a non-empty selection on plain `Left`/`Right`,
+    /// scrolls enclosing viewports to keep the caret in view, preserves `Cmd/Ctrl+C` and
+    /// `Cmd/Ctrl+A`, and publishes the caret and selection to accessibility. Off by default,
+    /// leaving ordinary [`El::selectable`] text non-focusable and untouched.
+    ///
+    /// ```
+    /// use rune::{El, col, text};
+    ///
+    /// let _doc: El = col()
+    ///     .selection_group(true)
+    ///     .caret_browsing(true)
+    ///     .child(text("First paragraph").selectable(true))
+    ///     .child(text("Second paragraph").selectable(true));
+    /// ```
+    pub fn caret_browsing(mut self, on: bool) -> Self {
+        if on || self.cold.get().is_some() {
+            self.cold_mut().focus.caret_browsing = on;
+        }
         self
     }
     /// What copying a text selection inside this element puts on the clipboard (Cmd+C and the

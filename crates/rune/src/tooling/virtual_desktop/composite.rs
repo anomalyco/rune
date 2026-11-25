@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::render::{Gpu, OFFSCREEN_FORMAT};
+use crate::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR};
 use crate::tooling::die;
 
 /// Shadows of the key window and of the others: blur sigma, downward offset (points), opacity.
@@ -198,7 +198,7 @@ impl Composite {
             label: Some("desktop shadow"), mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, ..Default::default()
         });
         let pixels = fit_backdrop(backdrop, size).unwrap_or_else(|e| die(&e));
-        let (texture, view) = new_texture(device, "desktop backdrop", size, OFFSCREEN_FORMAT, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
+        let (texture, view) = new_texture(device, "desktop backdrop", size, OFFSCREEN_FORMAT_LINEAR, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             &pixels,
@@ -208,9 +208,9 @@ impl Composite {
         let uniform = uniform_buffer(device);
         let backdrop = bind(device, &layout, &uniform, &view, &sampler);
         Composite {
-            full: pipeline("vs_full", "fs_backdrop", OFFSCREEN_FORMAT, None),
-            window: pipeline("vs_window", "fs_window", OFFSCREEN_FORMAT, over),
-            shadow: pipeline("vs_shadow", "fs_shadow", OFFSCREEN_FORMAT, over),
+            full: pipeline("vs_full", "fs_backdrop", OFFSCREEN_FORMAT_LINEAR, None),
+            window: pipeline("vs_window", "fs_window", OFFSCREEN_FORMAT_LINEAR, over),
+            shadow: pipeline("vs_shadow", "fs_shadow", OFFSCREEN_FORMAT_LINEAR, over),
             mask: pipeline("vs_full", "fs_mask", MASK_FORMAT, None),
             blur: [pipeline("vs_full", "fs_blur_x", MASK_FORMAT, None), pipeline("vs_full", "fs_blur_y", MASK_FORMAT, None)],
             layout, sampler, backdrop,
@@ -262,12 +262,12 @@ pub(crate) struct Slot {
 impl Slot {
     pub(super) fn new(device: &wgpu::Device, comp: &Composite, px: (u32, u32), scale: f32) -> Slot {
         let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
-        let non_srgb = OFFSCREEN_FORMAT.remove_srgb_suffix();
+        let non_srgb = OFFSCREEN_FORMAT;
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("desktop window"),
             size: wgpu::Extent3d { width: px.0.max(1), height: px.1.max(1), depth_or_array_layers: 1 },
             mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-            format: OFFSCREEN_FORMAT, usage, view_formats: &[non_srgb],
+            format: OFFSCREEN_FORMAT_LINEAR, usage, view_formats: &[non_srgb],
         });
         let view = texture.create_view(&Default::default());
         let srgb_blend_view = texture.create_view(&wgpu::TextureViewDescriptor {

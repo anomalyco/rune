@@ -515,6 +515,79 @@ impl<'a> TextFlow<'a> {
         p.content(line_edge(p.layout, p.shaped(at), end))
     }
 
+    /// Like [`Self::line_edge`], preserving affinity for soft-wrapped line ends.
+    #[doc(hidden)]
+    pub fn line_edge_with_affinity(self, at: usize, side: parley::layout::Affinity, end: bool) -> (usize, parley::layout::Affinity) {
+        let p = self.piece_at(at);
+        if p.is_blank() { return (p.start, parley::layout::Affinity::Downstream); }
+        let (byte, aff) = cursor::line_edge_with_affinity(p.layout, p.shaped(at), side, end);
+        (p.content(byte), aff)
+    }
+
+    /// Like [`Self::move_line`], preserving affinity and returning `None` at both the top and
+    /// bottom visual lines so multi-text navigation can cross to adjacent texts.
+    #[doc(hidden)]
+    pub fn move_line_strict(self, at: usize, side: parley::layout::Affinity, down: bool, goal: Option<f32>) -> Option<(usize, parley::layout::Affinity, f32)> {
+        let pl = match self {
+            TextFlow::Single(l) => return cursor::move_line_strict(l, at, side, down, goal),
+            TextFlow::Paragraphs(pl) => pl,
+        };
+        let p = self.piece_at(at);
+        let (x, line) = if p.is_blank() || p.layout.len() == 0 {
+            (self.blank_start(&p, 0.0), 0)
+        } else {
+            let c = parley::editing::Cursor::from_byte_index(p.layout, p.shaped(at), side);
+            let bb = cursor_geometry(&c, p.layout, 0.0);
+            let mid = ((bb.y0 + bb.y1) * 0.5) as f32;
+            let li = cursor::line_for_offset(p.layout, mid).map_or(p.layout.len() - 1, |(i, _)| i);
+            (bb.x0 as f32, li)
+        };
+        let x = goal.unwrap_or(x);
+        let lines = p.layout.len().max(1);
+        let (k, line) = match down {
+            true if line + 1 < lines => (p.index, line + 1),
+            true if p.index + 1 < pl.paragraphs.len() => (p.index + 1, 0),
+            true => return None,
+            false if line > 0 => (p.index, line - 1),
+            false if p.index > 0 => (p.index - 1, pl.paragraphs[p.index - 1].layout.len().max(1) - 1),
+            false => return None,
+        };
+        let t = Piece::of_paragraph(k, &pl.paragraphs[k], pl.disjoint_spans);
+        let Some(m) = t.layout.get(line).filter(|_| !t.is_blank()).map(|l| *l.metrics()) else {
+            return Some((t.start, parley::layout::Affinity::Downstream, x));
+        };
+        let hit = cursor_from_point(t.layout, x, (m.block_min_coord + m.block_max_coord) * 0.5);
+        Some((t.content(hit.index()), hit.affinity(), x))
+    }
+
+    /// Hit-tests layout x on this flow's first (`first`) or last (`!first`) visual line.
+    #[doc(hidden)]
+    pub fn edge_line_hit(self, x: f32, first: bool) -> (usize, parley::layout::Affinity) {
+        match self {
+            TextFlow::Single(l) => {
+                if l.len() == 0 { return (0, parley::layout::Affinity::Downstream); }
+                let idx = if first { 0 } else { l.len() - 1 };
+                let Some(line) = l.get(idx) else { return (0, parley::layout::Affinity::Downstream) };
+                let m = line.metrics();
+                let cur = cursor_from_point(l, x, (m.block_min_coord + m.block_max_coord) * 0.5);
+                (cur.index(), cur.affinity())
+            }
+            TextFlow::Paragraphs(pl) => {
+                if pl.paragraphs.is_empty() { return (0, parley::layout::Affinity::Downstream); }
+                let k = if first { 0 } else { pl.paragraphs.len() - 1 };
+                let t = Piece::of_paragraph(k, &pl.paragraphs[k], pl.disjoint_spans);
+                if t.is_blank() || t.layout.len() == 0 {
+                    return (t.start, parley::layout::Affinity::Downstream);
+                }
+                let li = if first { 0 } else { t.layout.len() - 1 };
+                let Some(line) = t.layout.get(li) else { return (t.start, parley::layout::Affinity::Downstream) };
+                let m = line.metrics();
+                let cur = cursor_from_point(t.layout, x, (m.block_min_coord + m.block_max_coord) * 0.5);
+                (t.content(cur.index()), cur.affinity())
+            }
+        }
+    }
+
     /// The byte on the visual line above (`!down`) or below (`down`) byte `at`'s, at `goal`'s x
     /// (the column a run of Up and Down keeps) else its own, and that x; the start on the first
     /// line, `None` on the last.

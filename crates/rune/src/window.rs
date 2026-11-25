@@ -38,6 +38,7 @@ mod handle;
 mod host;
 mod keys;
 mod panic_trap;
+mod pointer_lock;
 pub mod spec;
 mod state;
 mod surface;
@@ -92,6 +93,8 @@ pub(crate) use surface::{
 use surface::acquire;
 #[cfg(target_os = "windows")]
 pub(crate) use win32::poll_pace;
+#[cfg(target_os = "windows")]
+pub(crate) use win32::resize_sync::valid_rects as win32_valid_rects;
 #[cfg(target_os = "windows")]
 pub(crate) use win32::slot;
 
@@ -152,6 +155,9 @@ pub(crate) enum WakeEvent {
     /// Windows: the GPU a CPU-drawn window was waiting for is made, or failed (`cpu_frame`).
     #[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
     GpuReady(usize),
+    /// Windows: `WM_EXITSIZEMOVE` arrived on a window using `RUNE_RESIZE_SYNC` (`resize_sync`).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    ResizeSync(usize),
     /// Wayland: native `wl_data_device` drop events or pipe reads are ready for `Host::flush_files`.
     #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
     FileDrop,
@@ -168,6 +174,8 @@ pub(crate) trait AnyHost {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent);
     fn owns(&self, id: WindowId) -> bool;
     fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent);
+    /// Raw relative mouse motion from the OS device while pointer lock may be active.
+    fn pointer_motion(&mut self, _dx: f64, _dy: f64) {}
     /// Draws what has no redraw event (a layer surface); true while it needs more frames.
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool { false }
     /// Whether this host owns a live Wayland layer-shell surface sharing winit's `wl_display`.
@@ -503,7 +511,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let slot = match &event {
                 WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
                     | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
-                    | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) => *i,
+                    | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) | WakeEvent::ResizeSync(i) => *i,
                 WakeEvent::Reopen => {
                     this.reopen(event_loop);
                     this.cleanup(event_loop);
@@ -550,6 +558,20 @@ impl ApplicationHandler<WakeEvent> for Windows {
                 host.window_event(event_loop, id, event);
             }
             this.cleanup(event_loop);
+        });
+    }
+    fn device_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        let winit::event::DeviceEvent::MouseMotion { delta: (dx, dy) } = event else { return };
+        self.guard(event_loop, |this| {
+            let _handling = crate::quit::handling();
+            for host in this.hosts.iter_mut().flatten() {
+                host.pointer_motion(dx, dy);
+            }
         });
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {

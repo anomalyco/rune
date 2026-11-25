@@ -62,8 +62,12 @@ fn shimmer_view(s: &Shimmer, _: &mut Cx<Shimmer>) -> El {
 /// rest-size raster under a zoom that is still settling a larger one again, so sizes match
 /// loosely.
 fn lit_offsets(rt: &Runtime<Shimmer>) -> Vec<f32> {
-    let glyphs = |c: Color| rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH && (i.fill[0] - c.r).abs() < 0.02 && (i.fill[1] - c.g).abs() < 0.02)
-        .map(|i| i.rect).collect::<Vec<_>>();
+    let srgb = rt.srgb_blend();
+    let glyphs = |c: Color| {
+        let want = if srgb { c.premul_srgb(1.0) } else { c.premul(1.0) };
+        rt.instances.iter().filter(|i| i.params[1] == KIND_GLYPH && (i.fill[0] - want[0]).abs() < 0.02 && (i.fill[1] - want[1]).abs() < 0.02)
+            .map(|i| i.rect).collect::<Vec<_>>()
+    };
     let (dim, lit) = (glyphs(DIM), glyphs(LIT));
     lit.iter().map(|l| {
         dim.iter().filter(|d| (d[2] - l[2]).abs() < 3.0 && (d[3] - l[3]).abs() < 3.0)

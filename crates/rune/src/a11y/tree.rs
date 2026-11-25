@@ -44,6 +44,7 @@ struct Stamp {
     text_fills: u64,
     text_settled: u64,
     focus: u64,
+    caret_sel: u64,
     animating: bool,
     viewport: (u32, u32, u32),
     name: u64,
@@ -531,6 +532,9 @@ impl RuntimeCore {
             }
         }
         let focus = self.kbd.focus.path().map_or(0, hash_str) ^ self.link_focus().map_or(0, |k| k as u64 + 1) << 48;
+        let caret_sel = self.caret_browse_endpoints().map_or(0, |(h, ai, a, fi, f)| {
+            mix(mix(mix(mix(self.tree.nodes[h].id.0, self.tree.nodes[ai].id.0), a as u64), self.tree.nodes[fi].id.0), f as u64)
+        });
         Stamp {
             commits: self.commit.commits,
             live_texts: self.frame.live_text_gen,
@@ -538,6 +542,7 @@ impl RuntimeCore {
             text_fills,
             text_settled,
             focus,
+            caret_sel,
             animating: self.animating,
             viewport: (self.viewport.0.to_bits(), self.viewport.1.to_bits(), self.env.scale.to_bits()),
             name: self.host.window_title.current().map_or(0, hash_str),
@@ -617,7 +622,8 @@ impl RuntimeCore {
             }
             if !w.gone {
                 w.gone = n.is_moved_stub() || n.a11y.hidden || n.vis.opacity <= 0.01 || self.is_exiting(n.id)
-                    || !self.scene.contains(n.id);
+                    || !self.scene.contains(n.id)
+                    || crate::runtime::is_elided_inline_child(&self.tree.nodes, i);
             }
             if !w.gone && !w.modal_gone {
                 w.modal_gone = modal_mask.as_ref().is_some_and(|m| !m.visible(i));

@@ -311,18 +311,28 @@ fn emoji_family_parsing_digits_quotes_lists_and_missing_fallback() {
     assert!(missing.iter().any(|(f, id)| f == "Sys Emoji" && *id != 0), "missing fallback: {missing:?}");
 }
 
+fn sized_emoji_measure_fonts() -> &'static [&'static [u8]] {
+    static FONTS: std::sync::OnceLock<[&'static [u8]; 3]> = std::sync::OnceLock::new();
+    FONTS.get_or_init(|| {
+        const INTER: &[u8] = include_bytes!("../../../../rune/assets/Inter-Regular.ttf");
+        let narrow: &'static [u8] = Box::leak(
+            make_sized_test_font("Narrow Emoji Measure", &['\u{1F680}'], true, 500).into_boxed_slice(),
+        );
+        let wide: &'static [u8] = Box::leak(
+            make_sized_test_font("Wide Emoji Measure", &['\u{1F680}'], true, 2000).into_boxed_slice(),
+        );
+        [INTER, narrow, wide]
+    })
+}
+
 /// `TextSystem::set_emoji_family` updates `font_epoch()` and `measure::measure`, is a no-op when
-/// unchanged, and stays isolated inside `with_families`.
+/// unchanged, and stays isolated inside `with_fonts` without mutating process-wide `full_faces`.
 #[test]
 fn set_emoji_family_syncs_font_epoch_and_measure() {
-    let narrow = make_sized_test_font("Narrow Emoji Measure", &['\u{1F680}'], true, 500);
-    let wide = make_sized_test_font("Wide Emoji Measure", &['\u{1F680}'], true, 2000);
-    assert_eq!(crate::add_font(narrow), vec!["Narrow Emoji Measure"]);
-    assert_eq!(crate::add_font(wide), vec!["Wide Emoji Measure"]);
-
+    let fonts = sized_emoji_measure_fonts();
     let style = TextStyle::new(16.0, 400.0);
-    let _guard = crate::with_families("Inter", "ui-monospace");
-    let mut ts = TextSystem::new(&[], ("Inter", "ui-monospace"));
+    let _guard = crate::with_fonts(fonts, ("Inter", "ui-monospace"));
+    let mut ts = TextSystem::new(fonts, ("Inter", "ui-monospace"));
 
     let ep0 = crate::font_epoch();
     assert!(ts.set_emoji_family(Some("Narrow Emoji Measure")));
@@ -345,4 +355,49 @@ fn set_emoji_family_syncs_font_epoch_and_measure() {
     assert_eq!(ts.emoji_family(), None);
     let ep3 = crate::font_epoch();
     assert_ne!(ep2, ep3);
+}
+
+/// Two `TextSystem`s on separate threads calling `set_emoji_family` concurrently stay isolated:
+/// neither disturbs the other's `measure` widths or `font_epoch`.
+#[test]
+fn concurrent_text_systems_set_emoji_family_do_not_disturb_each_other() {
+    let fonts = sized_emoji_measure_fonts();
+    let style = TextStyle::new(16.0, 400.0);
+    let ready = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let done = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+    let r1 = ready.clone();
+    let d1 = done.clone();
+    let narrow_thread = std::thread::spawn(move || {
+        let _guard = crate::with_fonts(fonts, ("Inter", "ui-monospace"));
+        let mut ts = TextSystem::new(fonts, ("Inter", "ui-monospace"));
+        assert!(ts.set_emoji_family(Some("Narrow Emoji Measure")));
+        let before = crate::measure("🚀", &[], style, None).0;
+        let ep_before = crate::font_epoch();
+        r1.wait();
+        d1.wait();
+        let after = crate::measure("🚀", &[], style, None).0;
+        let ep_after = crate::font_epoch();
+        (before, after, ep_before, ep_after)
+    });
+
+    let wide_thread = std::thread::spawn(move || {
+        ready.wait();
+        let _guard = crate::with_fonts(fonts, ("Inter", "ui-monospace"));
+        let mut ts = TextSystem::new(fonts, ("Inter", "ui-monospace"));
+        assert!(ts.set_emoji_family(Some("Wide Emoji Measure")));
+        let wide_w = crate::measure("🚀", &[], style, None).0;
+        let ep_wide = crate::font_epoch();
+        assert!(ts.set_emoji_family(None));
+        let ep_cleared = crate::font_epoch();
+        done.wait();
+        (wide_w, ep_wide, ep_cleared)
+    });
+
+    let (before, after, ep_before, ep_after) = narrow_thread.join().unwrap();
+    let (wide_w, ep_wide, ep_cleared) = wide_thread.join().unwrap();
+    assert!(wide_w > before * 2.0, "wide emoji must measure wider than narrow: narrow={before}, wide={wide_w}");
+    assert_eq!(before, after, "another thread's set_emoji_family changed this thread's measure");
+    assert_eq!(ep_before, ep_after, "another thread's set_emoji_family changed this thread's font_epoch");
+    assert_ne!(ep_wide, ep_cleared, "clearing emoji_family advanced the writer thread's own font_epoch");
 }

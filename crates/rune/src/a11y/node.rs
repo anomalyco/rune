@@ -72,7 +72,7 @@ impl RuntimeCore {
         n.a11y.level.hash(&mut h);
         n.a11y.expanded.hash(&mut h);
         n.a11y.checked.hash(&mut h);
-        n.a11y.disabled.hash(&mut h);
+        self.node_disabled(i).hash(&mut h);
         n.a11y.live.hash(&mut h);
         if let Some(m) = n.a11y.more.as_deref() {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy,
@@ -135,7 +135,12 @@ impl RuntimeCore {
         let handlers = n.handlers.get();
         (handlers.is_some_and(|h| h.on_press.is_some()), handlers.is_some_and(|h| h.on_secondary_press.is_some()),
             handlers.is_some_and(|h| h.modal.is_some()), handlers.is_some_and(|h| h.has_primary())).hash(&mut h);
-        (n.focus.selected, n.focus.step.is_some(), n.focus.set_value.is_some(), n.focus.default, self.focus_group(i).is_some()).hash(&mut h);
+        (n.focus.selected, n.focus.step.is_some(), n.focus.set_value.is_some(), n.focus.default, n.focus.caret_browsing, self.focus_group(i).is_some()).hash(&mut h);
+        if n.input.is_none() && self.is_caret_browsing_node(n) {
+            self.a11y_caret_selection(i)
+                .map(|s| (s.anchor.node.0, s.anchor.character_index, s.focus.node.0, s.focus.character_index))
+                .hash(&mut h);
+        }
         (self.allowed(i), self.can_focus(i), n.inert, w.delegated_a11y && roles::composite_item(role)).hash(&mut h);
         if let Some(st) = self.scroll.scrolls.get(&n.id).filter(|_| n.scroll.is_some()) {
             [st.offset.to_bits(), st.max.to_bits(), st.x.offset.to_bits(), st.x.max.to_bits()].hash(&mut h);
@@ -212,7 +217,7 @@ impl RuntimeCore {
         let mut node = AkNode::new(role);
         // Disabled is what the app says (or an inert subtree); an element that only contains an
         // open modal isn't. Actions go only where input may.
-        let enabled = !n.a11y.disabled && !n.inert;
+        let enabled = !self.node_disabled(i) && !n.inert;
         let actionable = enabled && self.allowed(i);
         if let Some(key) = &n.key { node.set_author_id(key.as_str()); }
         let more = n.a11y.more.as_deref();
@@ -367,6 +372,8 @@ impl RuntimeCore {
                     node.add_action(Ak::ReplaceSelectedText);
                 }
                 if !secure { node.add_action(Ak::SetTextSelection); }
+            } else if self.is_caret_browsing_node(n) && !secure {
+                node.add_action(Ak::SetTextSelection);
             }
             if scroll.is_some() {
                 node.add_action(Ak::ScrollUp);
@@ -379,7 +386,14 @@ impl RuntimeCore {
             }
         }
         if w.scrolled && self.allowed(i) { node.add_action(Ak::ScrollIntoView); }
-        if let Some(input) = input { self.a11y_input(i, input, &mut node); }
+        if let Some(input) = input {
+            self.a11y_input(i, input, &mut node);
+        } else if self.is_caret_browsing_node(n) {
+            node.set_read_only();
+            if !secure && let Some(sel) = self.a11y_caret_selection(i) {
+                node.set_text_selection(sel);
+            }
+        }
         node
     }
 
@@ -476,7 +490,7 @@ impl RuntimeCore {
 
     /// Whether node `j` appears in the accessibility tree (not hidden, exiting, unmounted,
     /// transparent, inside a secure ancestor, occluded by a modal, or role-omitted).
-    fn a11y_in_tree(&self, j: usize) -> bool {
+    pub(super) fn a11y_in_tree(&self, j: usize) -> bool {
         let n = &self.tree.nodes[j];
         if n.is_moved_stub() || n.a11y.hidden || n.vis.opacity <= 0.01 || self.is_exiting(n.id) || !self.scene.contains(n.id) {
             return false;

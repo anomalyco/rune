@@ -38,7 +38,7 @@ fn collapse_container(
     virtuals: &HashMap<String, crate::el::virtual_list::VirtualList>,
 ) -> Option<FlexCollapse> {
     let parent = &nodes[parent_idx];
-    if parent.growth.is_some() {
+    if parent.growth.is_some() || parent.text.is_some() {
         return None;
     }
     let style = taffy.style(parent.taffy);

@@ -6,6 +6,7 @@ pub(super) mod apply;
 pub(super) mod apply_scratch;
 mod device;
 pub(super) mod flatten;
+pub(in crate::runtime) mod inline;
 #[cfg(debug_assertions)]
 pub(super) mod layout_diagnostics;
 pub(super) mod measure;
@@ -395,6 +396,7 @@ pub(super) struct Measurement<'a> {
     pub(super) viewport: (f32, f32),
     pub(super) fit_height: bool,
     pub(super) system_reduced_motion: bool,
+    pub(super) pointer_locked: bool,
     pub(super) titlebar_inset: f32,
     pub(super) chrome: crate::ChromeInsets,
     pub(super) maximized: bool,

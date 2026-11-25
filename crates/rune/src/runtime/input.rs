@@ -24,6 +24,7 @@ pub(super) mod modal_focus;
 pub(super) mod modifier_keys;
 pub(super) mod physical;
 pub(super) mod pointer;
+pub(super) mod pointer_lock;
 pub(super) mod popup;
 pub(super) mod press_repeat;
 pub(super) mod press_run;

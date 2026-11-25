@@ -554,6 +554,8 @@ impl Host {
         }
         self.secure_input.set(false);
         if !self.closes() { return; }
+        #[cfg(target_os = "windows")]
+        self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Destroy);
         crate::marks::mark("window.close");
         // The last window of an app that ends fast goes as a bare window's close does: its hook,
         // then the window destroyed at once, with no hide before it. The quit runs after it and
@@ -598,7 +600,7 @@ impl Host {
             self.files = FileDrop::default();
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             self.wayland_drop_closed();
-            if !ends && let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); w.hide(); }
+            if !ends && let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); w.apply_pointer_lock_core(self.app.rt_mut()); w.hide(); }
             crate::marks::mark("window.hidden");
             self.life.finish();
             return;
@@ -668,6 +670,8 @@ impl Host {
     /// cursor back to normal, and the native window hidden. No event loop is needed, so a window
     /// that loses its surface does the same from `draw` (`Host::replace_lost_surface`).
     pub(in crate::window) fn wind_down(&mut self) {
+        #[cfg(target_os = "windows")]
+        self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Hide);
         self.app.rt_mut().keys_lost();
         if let Some(w) = &mut self.win {
             w.first_frame.hide();
@@ -685,7 +689,7 @@ impl Host {
         self.app.file_dialog_cancel(&mut self.file_dialog);
         self.app.rt_mut().cancel_pointer();
         self.files = FileDrop::default();
-        if let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); }
+        if let Some(w) = &mut self.win { w.apply_cursor_core(self.app.rt(), false); w.apply_pointer_lock_core(self.app.rt_mut()); }
         self.mods = ModifiersState::empty();
         if let Some(w) = &self.win { w.hide(); }
     }
@@ -694,6 +698,8 @@ impl Host {
     /// that releases its GPU when closed. The next `open` makes a window, a device and a surface
     /// (an app that sees `AppHandle::window_error` and the window gone can ask for one).
     pub(in crate::window) fn release(&mut self) {
+        #[cfg(target_os = "windows")]
+        self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Destroy);
         self.win = None;
         #[cfg(target_os = "macos")]
         self.frame_presented.reset();
@@ -760,7 +766,10 @@ impl Host {
         sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar);
         // A window opened while the displays slept has no display link yet.
         #[cfg(target_os = "macos")]
-        if l.native.pacing.is_none() { l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.frame_wake.clone()); }
+        if l.native.pacing.is_none() {
+            l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.frame_wake.clone())
+                .map(|p| p.with_ambient_period(self.ambient_period));
+        }
         if was {
             self.app.rt_mut().settle_all();
             l.request_redraw();
@@ -793,7 +802,8 @@ impl Host {
             if !all && renderer.has_oversized_uploads_in_flight() {
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
             }
-            renderer.give_back(all, &mut self.app.rt_mut().text.atlas.resident_caches);
+            let rt = self.app.rt_mut();
+            renderer.give_back(all, &mut rt.text.atlas.resident_caches, &rt.images);
             // Out of sight, what the last frame used goes too, and the staging chunks: an empty
             // submission and a wait land those frees now.
             if all {

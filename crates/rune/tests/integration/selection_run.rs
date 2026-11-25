@@ -12,6 +12,7 @@ fn view(_: &(), _: &mut Cx<()>) -> El {
 #[test]
 fn a_run_of_words_is_one_rect() {
     let mut rt = Runtime::new((), view, (400.0, 100.0), Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt.key(KeyEvent { key: Key::Command('a'), mods: Mods { cmd: true, ..Mods::default() } });
     rt.frame(1.0 / 60.0);
@@ -34,6 +35,7 @@ fn chipped(_: &(), _: &mut Cx<()>) -> El {
 #[test]
 fn a_chip_does_not_break_the_run() {
     let mut rt = Runtime::new((), chipped, (400.0, 100.0), Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt.key(KeyEvent { key: Key::Command('a'), mods: Mods { cmd: true, ..Mods::default() } });
     rt.frame(1.0 / 60.0);

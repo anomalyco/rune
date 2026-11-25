@@ -9,6 +9,12 @@ use std::sync::{Arc, Mutex};
 use crate::place::{ImageFilter, SurfaceFit, SurfacePlace};
 
 pub const IMAGE_ATLAS_SIZE: u32 = 1024;
+/// Maximum retained atlas pages when evicting unshown slots across frames.
+pub const IMAGE_ATLAS_MAX_PAGES: usize = 16;
+/// Maximum retained decoded CPU pixel bytes across atlas pages (64 MiB: 16 full 1024×1024 pages).
+pub const IMAGE_ATLAS_MAX_BYTES: usize = 64 * 1024 * 1024;
+/// Maximum retained slot entries in the atlas.
+pub const IMAGE_ATLAS_MAX_SLOTS: usize = 4096;
 
 /// The largest texture side of any GPU that draws images in this process (`limit_side`).
 static LIMIT: AtomicU32 = AtomicU32::new(crate::MAX_SIDE);
@@ -24,7 +30,7 @@ pub fn max_side() -> u32 {
     LIMIT.load(Ordering::Relaxed)
 }
 /// Rows a shelf page starts with (`ImagePage::new`).
-const IMAGE_PAGE_START_ROWS: u32 = 128;
+pub(crate) const IMAGE_PAGE_START_ROWS: u32 = 128;
 
 /// Backing bytes for one frame. Shared through `Arc` so `ImageAtlas::place_at` copies outside
 /// the frame lock without blocking `Pixels::set`. Peak memory for a streaming `Pixels` is at
@@ -459,23 +465,21 @@ struct Slot {
     generation: u64,
     /// The animation frame copied in.
     frame: usize,
+    /// Weak reference to the `Pixels` backing storage; once dropped and not drawn this frame,
+    /// the slot can never be drawn again and is reclaimed immediately.
+    live: std::sync::Weak<FrameInner>,
+    /// Drawn in the last completed frame.
+    shown: bool,
+    /// Drawn in this frame so far.
+    touched: bool,
+    /// `ImageAtlas::frame` when this slot was last drawn, for LRU eviction under bound pressure.
+    last_frame: u64,
+    /// Set on slots left on overflow pages above `IMAGE_ATLAS_MAX_PAGES` so their next draw
+    /// relocates them onto an earlier page.
+    relocate: bool,
 }
 
-/// One stable shelf page, or an exact-size standalone page for a large image.
-pub struct ImagePage {
-    pub width: u32,
-    pub height: u32,
-    pub data: Vec<u8>,
-    /// Rows `[y0, y1)` changed since the last upload.
-    pub dirty: Option<(u32, u32)>,
-    shelf_x: u32,
-    shelf_y: u32,
-    shelf_h: u32,
-    /// Drawn from in the last completed frame.
-    shown: bool,
-    /// Drawn from in this frame so far; only ever set until the frame ends.
-    touched: bool,
-}
+pub use crate::shelf::ImagePage;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Placed {
@@ -492,6 +496,12 @@ pub struct ImageAtlas {
     /// When each animated image drawn here started playing, on the animation clock: its first
     /// draw, kept while the atlas holds it.
     starts: HashMap<u64, f64>,
+    /// Monotonic frame counter advanced by `end_frame`, used for LRU eviction.
+    frame: u64,
+    /// Rects of touched slots replaced by a mid-frame resize, held until the frame finishes drawing.
+    deferred_this_frame: Vec<(usize, u32, u32, u32)>,
+    /// Deferred rects from the previous frame, released on the next `end_frame` or `rest`.
+    deferred_prev_frame: Vec<(usize, u32, u32, u32)>,
     /// Frames copied in so far, so the idle meter sees new pixels in a slot it already drew.
     #[cfg(debug_assertions)]
     #[doc(hidden)]
@@ -601,14 +611,26 @@ impl ImageAtlas {
         };
         if w > max_side() || h > max_side() { return None; }
         let key = (pixels.id, level);
-        if self.slots.get(&key).is_some_and(|s| s.w != w || s.h != h) {
-            self.slots.remove(&key);
+        if self.slots.get(&key).is_some_and(|s| s.w != w || s.h != h || (s.relocate && !s.touched))
+            && let Some(old) = self.slots.remove(&key)
+        {
+            if old.touched {
+                self.deferred_this_frame.push((old.page, old.x, old.y, old.w));
+            } else {
+                self.pages[old.page].free_rect(old.x, old.y, old.w);
+            }
         }
         if !self.slots.contains_key(&key) {
             let (page, x, y) = self.allocate(w, h);
-            self.slots.insert(key, Slot { page, x, y, w, h, generation: 0, frame: 0 });
+            self.slots.insert(key, Slot {
+                page, x, y, w, h, generation: 0, frame: 0,
+                live: Arc::downgrade(&pixels.inner),
+                shown: false, touched: false, last_frame: self.frame, relocate: false,
+            });
         }
         let slot = self.slots.get_mut(&key).unwrap();
+        slot.touched = true;
+        slot.last_frame = self.frame;
         self.pages[slot.page].touched = true;
         if slot.generation != generation || slot.frame != shown {
             slot.generation = generation;
@@ -635,44 +657,76 @@ impl ImageAtlas {
         self.slots.contains_key(&(pixels.id, level))
     }
 
-    /// Forgets images no element showed since the last call, except on pages that still show
-    /// one and on the first page: shelves never reuse a slot's space until their page starts
-    /// over, so an image shown again there (a view come back to) needs no copy or upload. A
-    /// page left with nothing starts over so replaced sizes don't fill the atlas; a full atlas
-    /// starts over a page that showed nothing last frame or yet this one before it adds one.
+    /// Forgets dropped images everywhere, images on untouched pages above page 0, and oldest
+    /// unshown slots past `IMAGE_ATLAS_MAX_SLOTS` / `IMAGE_ATLAS_MAX_BYTES` / `IMAGE_ATLAS_MAX_PAGES`,
+    /// freeing their shelf spans and emptying pages left with zero slots.
     pub fn end_frame(&mut self) {
-        let pages = &self.pages;
-        let first_kept = pages.first().is_some_and(|p| p.width <= IMAGE_ATLAS_SIZE && p.height <= IMAGE_ATLAS_SIZE);
-        self.slots.retain(|_, s| pages[s.page].touched || (s.page == 0 && first_kept));
+        self.frame = self.frame.saturating_add(1);
+        if !self.deferred_prev_frame.is_empty() {
+            for (page, x, y, w) in self.deferred_prev_frame.drain(..) {
+                if let Some(p) = self.pages.get_mut(page) { p.free_rect(x, y, w); }
+            }
+        }
+        let first_kept = self.pages.first().is_some_and(ImagePage::is_shelf);
+        {
+            let Self { pages, slots, .. } = self;
+            slots.retain(|_, s| {
+                let keep = s.touched || (s.live.strong_count() > 0 && (pages[s.page].touched || (s.page == 0 && first_kept)));
+                if !keep { pages[s.page].free_rect(s.x, s.y, s.w); }
+                keep
+            });
+        }
+        self.enforce_bounds();
         if !self.starts.is_empty() {
             let slots = &self.slots;
             self.starts.retain(|id, _| slots.keys().any(|(slot, _)| slot == id));
         }
-        for (i, page) in self.pages.iter_mut().enumerate() {
+        for slot in self.slots.values_mut() {
+            slot.shown = std::mem::take(&mut slot.touched);
+        }
+        let Self { pages, slots, deferred_this_frame, .. } = self;
+        for (i, page) in pages.iter_mut().enumerate() {
             page.shown = std::mem::take(&mut page.touched);
-            if !self.slots.values().any(|slot| slot.page == i) {
-                (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
+            if !slots.values().any(|slot| slot.page == i) && !deferred_this_frame.iter().any(|&(p, ..)| p == i) {
+                page.shelves.reset();
                 page.dirty = None;
                 page.data = Vec::new();
             }
         }
-        let keep = self.slots.values().map(|s| s.page + 1).max().unwrap_or(0);
+        let keep = self.slots.values().map(|s| s.page + 1)
+            .chain(self.deferred_this_frame.iter().map(|&(p, ..)| p + 1))
+            .max().unwrap_or(0);
         self.pages.truncate(keep);
+        if self.pages.len() > IMAGE_ATLAS_MAX_PAGES {
+            for slot in self.slots.values_mut() {
+                if slot.page >= IMAGE_ATLAS_MAX_PAGES { slot.relocate = true; }
+            }
+        }
+        std::mem::swap(&mut self.deferred_prev_frame, &mut self.deferred_this_frame);
     }
 
     /// A window at rest (`window::rest`): forgets the images no element showed in the last
-    /// frame, the first page's included, and frees the CPU copy of every page left empty. An
-    /// image shown again after it is copied in again.
+    /// frame (or whose handles were dropped), the first page's included, shrinks shelf pages to
+    /// their remaining rows, and frees the CPU copy of every page left empty.
     pub fn rest(&mut self) {
-        let pages = &self.pages;
-        self.slots.retain(|_, s| pages[s.page].shown);
+        for (page, x, y, w) in self.deferred_prev_frame.drain(..).chain(self.deferred_this_frame.drain(..)) {
+            if let Some(p) = self.pages.get_mut(page) { p.free_rect(x, y, w); }
+        }
+        {
+            let Self { pages, slots, .. } = self;
+            slots.retain(|_, s| {
+                let keep = s.shown && s.live.strong_count() > 0;
+                if !keep { pages[s.page].free_rect(s.x, s.y, s.w); }
+                keep
+            });
+        }
         let slots = &self.slots;
         self.starts.retain(|id, _| slots.keys().any(|(slot, _)| slot == id));
         for (i, page) in self.pages.iter_mut().enumerate() {
             if !self.slots.values().any(|slot| slot.page == i) {
-                (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
-                page.dirty = None;
-                page.data = Vec::new();
+                page.empty();
+            } else {
+                page.shrink_to_fit_rows();
             }
         }
         let keep = self.slots.values().map(|s| s.page + 1).max().unwrap_or(0);
@@ -686,6 +740,8 @@ impl ImageAtlas {
         self.pages.clear();
         self.slots.clear();
         self.starts.clear();
+        self.deferred_this_frame.clear();
+        self.deferred_prev_frame.clear();
         had
     }
 
@@ -703,58 +759,92 @@ impl ImageAtlas {
             if page.data.is_empty() { *page = ImagePage::new(w, h); }
             if let Some((x, y)) = page.allocate(w, h) { return (i, x, y); }
         }
-        // Full: start over a shelf page that showed nothing last frame or yet this one. A page
-        // not drawn from yet this frame may still be, later in the tree.
-        let idle = |p: &ImagePage| !p.shown && !p.touched && p.width <= IMAGE_ATLAS_SIZE && p.height <= IMAGE_ATLAS_SIZE
-            && p.shelf_y + p.shelf_h > 0;
-        if w <= IMAGE_ATLAS_SIZE && h <= IMAGE_ATLAS_SIZE && let Some(i) = self.pages.iter().position(idle) {
+        let is_shelf_req = w <= IMAGE_ATLAS_SIZE && h <= IMAGE_ATLAS_SIZE;
+        // Full: start over an idle shelf page before growing.
+        if is_shelf_req && let Some(i) = self.pages.iter().enumerate().position(|(i, p)| {
+            !p.shown && !p.touched && p.is_shelf() && !p.shelves.is_empty() && !self.page_pinned(i)
+        }) {
             self.slots.retain(|_, s| s.page != i);
             let page = &mut self.pages[i];
-            (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
+            page.shelves.reset();
             let (x, y) = page.allocate(w, h).unwrap();
             return (i, x, y);
+        }
+        // At or past the atlas bound: reclaim idle pages or stale unshown slots on shelf pages.
+        let need_bytes = ImagePage::initial_bytes(w, h);
+        if self.pages.len() >= IMAGE_ATLAS_MAX_PAGES || self.total_bytes().saturating_add(need_bytes) > IMAGE_ATLAS_MAX_BYTES {
+            if let Some(i) = self.pages.iter().enumerate().position(|(i, p)| !p.shown && !p.touched && !self.page_pinned(i)) {
+                self.slots.retain(|_, s| s.page != i);
+                self.pages[i] = ImagePage::new(w, h);
+                let (x, y) = self.pages[i].allocate(w, h).unwrap();
+                return (i, x, y);
+            }
+            if is_shelf_req {
+                let mut evictable: Vec<((u64, usize), bool, u64)> = self.slots.iter()
+                    .filter(|(_, s)| !s.touched && !s.shown && self.pages[s.page].is_shelf())
+                    .map(|(&k, s)| (k, s.live.strong_count() > 0, s.last_frame))
+                    .collect();
+                evictable.sort_by_key(|&(_, alive, last)| (alive, last));
+                for (key, _, _) in evictable {
+                    if let Some(s) = self.slots.remove(&key) {
+                        self.pages[s.page].free_rect(s.x, s.y, s.w);
+                        if let Some((x, y)) = self.pages[s.page].allocate(w, h) {
+                            return (s.page, x, y);
+                        }
+                    }
+                }
+            }
         }
         let mut page = ImagePage::new(w, h);
         let (x, y) = page.allocate(w, h).unwrap();
         self.pages.push(page);
         (self.pages.len() - 1, x, y)
     }
-}
 
-impl ImagePage {
-    /// A shelf page starts with the rows its first image needs (at least
-    /// `IMAGE_PAGE_START_ROWS`) and grows as its shelves fill (`allocate`), up to
-    /// `IMAGE_ATLAS_SIZE`: a window that shows a few icons holds 512 KiB of it, not 4 MiB.
-    fn new(w: u32, h: u32) -> Self {
-        let (width, height) = if w > IMAGE_ATLAS_SIZE || h > IMAGE_ATLAS_SIZE { (w, h) }
-            else { (IMAGE_ATLAS_SIZE, h.next_power_of_two().max(IMAGE_PAGE_START_ROWS)) };
-        Self { width, height, data: vec![0; width as usize * height as usize * 4],
-            dirty: None, shelf_x: 0, shelf_y: 0, shelf_h: 0, shown: false, touched: false }
+    fn page_pinned(&self, page: usize) -> bool {
+        self.deferred_this_frame.iter().any(|&(p, ..)| p == page)
     }
 
-    fn allocate(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
-        let shelf = self.width == IMAGE_ATLAS_SIZE && self.height <= IMAGE_ATLAS_SIZE;
-        if w > self.width || h > if shelf { IMAGE_ATLAS_SIZE } else { self.height } { return None; }
-        if self.shelf_x + w > self.width {
-            self.shelf_y += self.shelf_h;
-            self.shelf_x = 0;
-            self.shelf_h = 0;
+    fn total_bytes(&self) -> usize {
+        self.pages.iter().map(|p| p.data.len()).sum()
+    }
+
+    fn active_pages(&self) -> usize {
+        self.pages.iter().filter(|p| !p.data.is_empty()).count()
+    }
+
+    fn enforce_bounds(&mut self) {
+        let over = |a: &Self| {
+            a.slots.len() > IMAGE_ATLAS_MAX_SLOTS
+                || a.total_bytes() > IMAGE_ATLAS_MAX_BYTES
+                || a.active_pages() > IMAGE_ATLAS_MAX_PAGES
+        };
+        if !over(self) { return; }
+        let mut evictable: Vec<((u64, usize), u64)> = self.slots.iter()
+            .filter(|(_, s)| !s.touched)
+            .map(|(&k, s)| (k, s.last_frame))
+            .collect();
+        evictable.sort_by_key(|&(_, last)| last);
+        for (key, _) in evictable {
+            if !over(self) { break; }
+            if let Some(s) = self.slots.remove(&key) {
+                self.pages[s.page].free_rect(s.x, s.y, s.w);
+                if !self.page_pinned(s.page) && !self.slots.values().any(|o| o.page == s.page) {
+                    self.pages[s.page].empty();
+                }
+            }
         }
-        if self.shelf_y + h > self.height {
-            if !shelf || self.shelf_y + h > IMAGE_ATLAS_SIZE { return None; }
-            // Rows already placed keep their texels; the renderer makes the page's texture again
-            // at its new size and uploads all of it.
-            self.height = (self.shelf_y + h).next_power_of_two().min(IMAGE_ATLAS_SIZE);
-            self.data.resize(self.width as usize * self.height as usize * 4, 0);
-            self.dirty = Some((0, self.height));
+        if self.total_bytes() > IMAGE_ATLAS_MAX_BYTES {
+            for page in &mut self.pages { page.shrink_to_fit_rows(); }
         }
-        let at = (self.shelf_x, self.shelf_y);
-        self.shelf_x += w;
-        self.shelf_h = self.shelf_h.max(h);
-        Some(at)
     }
 }
+
+
 
 #[cfg(test)]
 #[path = "pixels_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "atlas_tests.rs"]
+mod atlas_tests;

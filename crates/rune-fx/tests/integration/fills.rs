@@ -36,7 +36,7 @@ fn external_struct_update_and_emitted_rust_compile() {
 #[test]
 fn linear_backdrop_views_are_not_double_decoded_in_srgb_frames() {
     use rune::render::Offscreen;
-    let Gpu { device, queue, .. } = Gpu::headless();
+    let Some(Gpu { device, queue, .. }) = Gpu::test_headless() else { return };
     let mut fx = FxRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm, FxOptions::default());
     fx.set_srgb_blend(true);
     let layers = [Fx::distort(DistortParams::chroma_split([1e-6, 0.0]))
@@ -91,7 +91,7 @@ fn linear_backdrop_views_are_not_double_decoded_in_srgb_frames() {
 
 #[test]
 fn gpu_fills_are_finite_at_extremes_degenerate_params_and_large_time() {
-    let Gpu { device, queue, .. } = Gpu::headless();
+    let Some(Gpu { device, queue, .. }) = Gpu::test_headless() else { return };
     let fmt = wgpu::TextureFormat::Rgba16Float;
     let mut fx = FxRenderer::new(&device, fmt, FxOptions { dither: true });
     let (w, h) = (32u32, 32u32);
@@ -314,6 +314,7 @@ fn key() -> Shape {
 /// never adds light past it, at any roughness, intensity or blend mode.
 #[test]
 fn plastic_never_paints_past_its_coverage() {
+    if !Gpu::test_adapter_available() { return; }
     let (w, h, s) = KEY;
     for srgb in [false, true] {
         for roughness in [0.0, 0.05, 0.45, 1.0] {
@@ -348,6 +349,7 @@ fn layer_is_border(l: &FxLayer) -> bool {
 /// matte; the rim facing the light is lighter than the rim facing away.
 #[test]
 fn plastic_highlight_follows_roughness_and_light() {
+    if !Gpu::test_adapter_available() { return; }
     let (w, h, s) = KEY;
     let base = rgb(0x3d6fd6);
     let mut peaks = Vec::new();
@@ -377,6 +379,7 @@ fn plastic_highlight_follows_roughness_and_light() {
 /// pixel for pixel, at any time (including folded large times); window-anchored does not.
 #[test]
 fn element_anchored_metal_keys_are_identical() {
+    if !Gpu::test_adapter_available() { return; }
     let keys_at = |anchor: FillAnchor, t: f32, ox: f32, oy: f32| -> Vec<FxLayer> {
         (0..8).map(|k| Fx::fill(LiquidMetalParams::chrome().anchor(anchor)).on(Shape::rounded(ox + k as f32 * 28.0, oy, 24.0, 24.0, 5.0)).at(t)).collect()
     };

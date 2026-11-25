@@ -55,6 +55,7 @@ fn links_hit_by_their_glyphs_press_and_take_keyboard_focus() {
     let mut draft = TextEdit::new("");
     draft.focused = true;
     let mut rt = Runtime::new(S { draft, opened: Vec::new() }, view, (500.0, 300.0), Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
 
     // Tools see each link with its role and name, inside its text.
@@ -180,6 +181,7 @@ fn hovers(rt: &mut Runtime<S>, (x, y): (f32, f32)) -> bool {
 #[test]
 fn link_boxes_match_drawn_glyphs_beside_emoji_and_in_centred_lines() {
     let mut rt = Runtime::new(S { draft: TextEdit::new(""), opened: Vec::new() }, emoji_view, (500.0, 300.0), Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     let s = 2.0;
     let (_, initial_images) = drawn(&rt, link_ink());

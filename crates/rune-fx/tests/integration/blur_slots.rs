@@ -99,7 +99,7 @@ fn px(rgba: &[u8], width: u32, x: u32, y: u32) -> [u8; 3] {
 
 #[test]
 fn twelve_frosted_lenses_all_blur_their_backdrop() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (cols, rows, cell) = (4u32, 3u32, 64u32);
     // Keep a 1-cell (64 px > 3*sigma+8 = 62 px) striped margin around the grid so every lens
     // sees identical surroundings without viewport-edge clamping differences.
@@ -150,7 +150,7 @@ fn twelve_frosted_lenses_all_blur_their_backdrop() {
 
 #[test]
 fn twenty_four_mixed_sigma_lenses_and_fluted_glass_all_blur() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (cols, rows, cell) = (6u32, 4u32, 64u32);
     let (w, h) = (cols * cell, rows * cell);
     let (_tex, bd) = make_striped_backdrop(&gpu, w, h, cell);
@@ -202,7 +202,7 @@ fn twenty_four_mixed_sigma_lenses_and_fluted_glass_all_blur() {
 
 #[test]
 fn repeated_and_exact_mip_weights_exceed_256_lenses_without_fallback() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (w, h) = (128u32, 128u32);
     let (_tex, bd) = make_striped_backdrop(&gpu, w, h, 64);
     let mut fx = FxRenderer::new(&gpu.device, FORMAT, FxOptions::default());
@@ -229,7 +229,7 @@ fn repeated_and_exact_mip_weights_exceed_256_lenses_without_fallback() {
 
 #[test]
 fn distinct_weights_past_blur_slots_fall_back_gracefully_and_reset_next_frame() {
-    let gpu = Gpu::headless();
+    let Some(gpu) = Gpu::test_headless() else { return };
     let (w, h) = (128u32, 128u32);
     let (_tex, bd) = make_striped_backdrop(&gpu, w, h, 64);
     let mut fx = FxRenderer::new(&gpu.device, FORMAT, FxOptions::default());
@@ -270,6 +270,7 @@ fn distinct_weights_past_blur_slots_fall_back_gracefully_and_reset_next_frame() 
 
 #[test]
 fn twelve_frosted_lenses_through_draw_with_backdrop() {
+    if !Gpu::test_adapter_available() { return; }
     use std::sync::{Arc, Mutex};
     use rune::color::hex;
     use rune::compose::{Compositor, Frame};
@@ -363,7 +364,8 @@ fn twelve_frosted_lenses_through_draw_with_backdrop() {
     App::new(AppSpec::new("twelve-lenses", (W, H), || (), view))
         .compositor(TwelveLenses { fx: None, blurred: Arc::clone(&blurred) })
         .args(["--snap".to_string(), path.to_str().unwrap().to_string(), "--scale".to_string(), "1".to_string()])
-        .run();
+        .try_run()
+        .unwrap();
     let mut reader = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap())).read_info().unwrap();
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut buf).unwrap();

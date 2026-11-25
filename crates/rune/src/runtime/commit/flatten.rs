@@ -188,6 +188,7 @@ fn prepare_text(
             cold.rings.clear();
             cold.overlines.clear();
             cold.span_boxes.clear();
+            cold.inline_boxes.clear();
             cold.line_fills.clear();
             cold.text_indent = 0.0;
             cold.advance_in = None;
@@ -219,6 +220,7 @@ fn prepare_text(
             || !t.cold.strikes.is_empty()
             || !t.cold.overlines.is_empty()
             || !t.cold.span_boxes.is_empty()
+            || !t.cold.inline_boxes.is_empty()
             || !t.cold.highlights.is_empty()
             || !t.cold.line_fills.is_empty()
             || !t.cold.blocks.is_empty()
@@ -341,7 +343,7 @@ fn needs_node_cold(c: &crate::el::ElCold, meta: &ColdMeta) -> bool {
 fn node_cold_meta_only(meta: ColdMeta) -> NodeCold {
     NodeCold {
         trace_name: None, trace_namespace: meta.trace_namespace, label: None, live: Vec::new(),
-        run_layout: None, live_text_seen: None, looping: None, loop_times: None, frame_motion: None, opacity_motion: None, lead: None,
+        run_layout: None, tabular_layout: None, live_text_seen: None, looping: None, loop_times: None, frame_motion: None, opacity_motion: None, lead: None,
         transition: None, transition_motion: None, enter_in_instant: false, matched: None, matched_motion: None, above: None, above_boundary: None, resolved_anchor: None, scroll: None, scroll_axes: crate::el::ScrollAxes::Y,
         scroll_edges: crate::el::ScrollEdges::default(), wheel_scrolls: None, sticky: None, growth: None, glide: None,
         a11y: crate::el::A11y::EMPTY, pixel_aspect: meta.pixel_aspect, aspect_fit: meta.aspect_fit,
@@ -431,7 +433,7 @@ impl StyleBuf for Cow<'_, CompactStyle> {
 }
 
 #[derive(Clone, Copy)]
-struct ChildEnv { me: usize, motion: Spring, in_row: RowLayout, row: bool, sx: Option<ScrollXChild> }
+struct ChildEnv { me: usize, motion: Spring, in_row: RowLayout, row: bool, sx: Option<ScrollXChild>, attach_taffy: bool }
 
 struct RefScratch<'a> {
     style: Cow<'a, CompactStyle>,
@@ -460,7 +462,7 @@ macro_rules! node_cold_from {
         NodeCold {
             trace_name: $c.trace_name, trace_namespace: $m.trace_namespace,
             label: take_field!($mode, $c.label), live: take_field!($mode, $c.live),
-            run_layout: None, live_text_seen: None,
+            run_layout: None, tabular_layout: None, live_text_seen: None,
             looping: take_field!($mode, $c.looping), loop_times: $c.loop_times, frame_motion: take_field!($mode, $c.frame_motion),
             opacity_motion: take_field!($mode, $c.opacity_motion), lead: $c.lead,
             transition: take_field!($mode, $c.transition), transition_motion: take_field!($mode, $c.transition_motion),
@@ -569,13 +571,13 @@ impl FlattenEl for El {
         if let Some(built) = &memo {
             for (i, c) in built.children.children.iter().enumerate() {
                 let (kid, kid_dirty) = flatten_ref(c, Some(env.me), path_buf, i, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
-                taffy.push_child(kid);
+                if env.attach_taffy { taffy.push_child(kid); }
                 children_dirty |= kid_dirty;
             }
         }
         for (j, c) in children.into_iter().enumerate() {
             let (kid, kid_dirty) = flatten_owned(c, Some(env.me), path_buf, shared_len + j, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
-            taffy.push_child(kid);
+            if env.attach_taffy { taffy.push_child(kid); }
             children_dirty |= kid_dirty;
         }
         children_dirty
@@ -619,7 +621,7 @@ impl<'e> FlattenEl for &'e El {
         let mut children_dirty = false;
         for (i, c) in el.all_children().enumerate() {
             let (kid, kid_dirty) = flatten_ref(c, Some(env.me), path_buf, i, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
-            taffy.push_child(kid);
+            if env.attach_taffy { taffy.push_child(kid); }
             children_dirty |= kid_dirty;
         }
         children_dirty
@@ -776,7 +778,12 @@ fn flatten_node<E: FlattenEl>(
     let option_as_alt = el_r.cold.option_as_alt;
     let window_drag = el_r.window_drag_mode();
     let virtual_list = el_r.cold.virtual_estimate.is_some();
-    let focus = el_r.cold.focus.clone();
+    let mut focus = el_r.cold.focus.clone();
+    if (focus.disabled || focus.opt_out) && (focus.enabled || !focus.opt_out) {
+        let f = &mut *focus;
+        f.enabled = false;
+        f.opt_out = true;
+    }
     let on_path = el_r.cold.get().and_then(|c| c.on_path.clone());
     let child_count = if on_path.is_some() {
         el_r.memo.as_ref().map_or(0, |b| b.children.children.len()) + el_r.children.len()
@@ -823,17 +830,25 @@ fn flatten_node<E: FlattenEl>(
         moved_stub: false,
         epoch: crate::runtime::paint_keep::next_epoch(),
     });
+    if nodes[me].focus.caret_browsing
+        && !nodes[me].focus.opt_out
+        && nodes[me].input.is_none()
+        && (nodes[me].selection_group || nodes[me].text.as_ref().is_some_and(|t| t.selectable && !t.redacted))
+    {
+        nodes[me].focus.enabled = true;
+    }
     let child_in_row = match in_row {
         RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },
         r => r,
     };
     let row = matches!(style.as_ref().flex_direction(), FlexDirection::Row | FlexDirection::RowReverse);
+    let attach_taffy = nodes[me].text.as_ref().is_none_or(|t| t.cold.inline_boxes.is_empty());
     let child_mark = taffy.begin_children();
-    let env = ChildEnv { me, motion, in_row: child_in_row, row, sx: child_sx };
+    let env = ChildEnv { me, motion, in_row: child_in_row, row, sx: child_sx, attach_taffy };
     let mut children_dirty = E::flatten_children(children, env, path_buf, taffy, nodes, scale, memo_ctx);
     for (k, extra) in extra_children.into_iter().enumerate() {
         let (kid, kid_dirty) = flatten_owned(extra, Some(env.me), path_buf, child_count + k, env.motion, env.in_row, env.row, env.sx, taffy, nodes, scale, memo_ctx);
-        taffy.push_child(kid);
+        if attach_taffy { taffy.push_child(kid); }
         children_dirty |= kid_dirty;
     }
     path_buf.truncate(prev_len);

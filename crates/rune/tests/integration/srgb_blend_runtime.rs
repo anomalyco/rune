@@ -2,7 +2,7 @@
 //! with `Runtime::set_srgb_blend`, hover and press tints included, as an `App::srgb_blend`
 //! window does.
 use rune::color::over;
-use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use rune::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use rune::text::TextSystem;
 use rune::{Color, Cx, El, Env, Runtime, el};
 
@@ -29,7 +29,7 @@ fn tinted(rt: &Runtime<()>) -> [f32; 4] {
 }
 
 fn pixel(gpu: &Gpu, rt: &mut Runtime<()>) -> [u8; 4] {
-    let format = if rt.srgb_blend() { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+    let format = if rt.srgb_blend() { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR };
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(rt.srgb_blend());
     let target = Offscreen::with_format(&gpu.device, 40, 40, format);
@@ -132,8 +132,8 @@ fn a_headless_run_follows_a_live_switch() {
         "gamma-blended after the switch, got {px:?}"
     );
     let seen = SEEN.lock().unwrap();
-    assert_eq!(seen.first(), Some(&(false, OFFSCREEN_FORMAT)), "starts linear");
-    assert_eq!(seen.last(), Some(&(true, OFFSCREEN_FORMAT.remove_srgb_suffix())), "ends gamma-space");
+    assert_eq!(seen.first(), Some(&(false, OFFSCREEN_FORMAT_LINEAR)), "starts linear");
+    assert_eq!(seen.last(), Some(&(true, OFFSCREEN_FORMAT)), "ends gamma-space");
 }
 
 #[test]
@@ -145,18 +145,18 @@ fn switching_format_keeps_the_glyph_atlas_and_extra_pipelines() {
             .child(rune::text("hello"))
     };
     let mut rt = Runtime::with_text((), view, (80.0, 40.0), Env::new(true, 1.0), text);
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
     renderer.add_format(&gpu.device, wgpu::TextureFormat::Rgba16Float);
     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (80, 40));
     assert!(rt.text.atlas.dirty.is_none(), "initial prepare drained the atlas");
 
     rt.set_srgb_blend(true);
     rt.frame(1.0 / 60.0);
-    let non_srgb = OFFSCREEN_FORMAT.remove_srgb_suffix();
-    renderer.set_format(&gpu.device, non_srgb);
-    renderer.set_srgb_blend(true);
-    assert_eq!(renderer.format(), non_srgb);
+    renderer.set_format(&gpu.device, OFFSCREEN_FORMAT);
+    assert!(renderer.srgb_blend());
+    assert_eq!(renderer.format(), OFFSCREEN_FORMAT);
     assert!(rt.text.atlas.dirty.is_none(), "switching blend format keeps the uploaded glyph atlas");
 
     let layer = Offscreen::with_format(&gpu.device, 80, 40, wgpu::TextureFormat::Rgba16Float);

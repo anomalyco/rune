@@ -14,7 +14,7 @@ use crate::frame::host_step::{
     Acquire, FrameHost, Gate, PostStepCheck, ReacquireReason, RenderPrep, StepInfo,
     draw_ui, prepare_gpu_resources,
 };
-use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use crate::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use crate::runtime::RuntimeCore;
 use crate::time::Instant;
 use crate::tooling::{
@@ -90,7 +90,7 @@ impl HeadlessLoop<'_> {
     #[inline]
     fn reblend_offscreen(&mut self, rt: &mut RuntimeCore) {
         let rt_srgb = rt.srgb_blend();
-        self.target_format = if rt_srgb { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+        self.target_format = if rt_srgb { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR };
         crate::window::rebuild_renderer_core(&self.gpu.device, &mut self.renderer, self.target_format, rt);
         self.target = Offscreen::with_format(&self.gpu.device, self.wp, self.hp, self.target_format);
         if self.alpha.is_some() {

@@ -16,7 +16,7 @@ use windows::core::{GUID, HRESULT, Interface};
 
 pub(crate) struct Handover {
     device: IDCompositionDevice,
-    _target: IDCompositionTarget,
+    target: IDCompositionTarget,
     /// The target's root: no content of its own; the UI's visual and, under it, any clip's layer.
     root: IDCompositionVisual,
     /// The UI's visual, which the wgpu surface goes on.
@@ -39,7 +39,7 @@ impl Handover {
             let visual = device.CreateVisual().map_err(|e| format!("CreateVisual: {e}"))?;
             root.AddVisual(&visual, true, None).map_err(|e| format!("AddVisual: {e}"))?;
             target.SetRoot(&root).map_err(|e| format!("SetRoot: {e}"))?;
-            Ok(Handover { device, _target: target, root, visual })
+            Ok(Handover { device, target, root, visual })
         }
     }
 
@@ -81,6 +81,22 @@ impl Handover {
         unsafe { self.device.WaitForCommitCompletion() }.map_err(|e| format!("IDCompositionDevice::WaitForCommitCompletion: {e}"))
     }
 
+    /// Detaches the root visual from the window's DirectComposition target and waits for DWM to
+    /// take the commit, revealing the HWND's own redirection surface (used during opt-in
+    /// synchronized drag resize).
+    pub(crate) fn detach_root(&self) -> Result<(), String> {
+        // SAFETY: `SetRoot(None)` is documented to detach the visual tree from `target`.
+        unsafe { self.target.SetRoot(None) }.map_err(|e| format!("SetRoot(None): {e}"))?;
+        self.commit_and_wait()
+    }
+
+    /// Re-attaches the root visual to the window's DirectComposition target and waits for DWM to
+    /// take the commit, restoring normal flip-model DirectComposition presentation.
+    pub(crate) fn attach_root(&self) -> Result<(), String> {
+        // SAFETY: `self.root` is a live visual created on `self.device`.
+        unsafe { self.target.SetRoot(&self.root) }.map_err(|e| format!("SetRoot(root): {e}"))?;
+        self.commit_and_wait()
+    }
 }
 
 fn load_dll(name: &str) -> windows_sys::Win32::Foundation::HMODULE {

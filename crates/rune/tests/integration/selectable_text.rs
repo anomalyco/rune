@@ -32,6 +32,7 @@ fn view(s: &S, _: &mut Cx<S>) -> El {
 
 fn runtime() -> Runtime<S> {
     let mut rt = Runtime::new(S { field: TextEdit::new("field text"), presses: 0, opened: Vec::new() }, view, (500.0, 400.0), Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt
 }

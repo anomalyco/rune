@@ -34,10 +34,10 @@ fn node_visible(nodes: &[Node], i: usize) -> bool {
 }
 
 /// Whether any ancestor of node `i` in `nodes` is hard-disabled (`El::disabled`, which sets
-/// both `a11y.disabled` and `focus.opt_out`; `El::aria_disabled` leaves `focus.opt_out` false).
+/// `focus.disabled`; `El::aria_disabled` leaves `focus.disabled` false).
 pub(super) fn ancestor_disabled(nodes: &[Node], i: usize) -> bool {
     std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
-        .any(|p| nodes[p].a11y.disabled && nodes[p].focus.opt_out)
+        .any(|p| nodes[p].focus.disabled)
 }
 
 /// Whether node `i` in `nodes` has a non-zero laid-out box.
@@ -249,7 +249,8 @@ impl RuntimeCore {
     }
     /// `El::focusable`, or under `Cx::web_focus` a pressable control that didn't opt out.
     pub(crate) fn takes_focus(&self, n: &Node) -> bool {
-        n.focus.enabled || (self.commit.defaults.web_focus && !n.focus.opt_out && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
+        if n.focus.disabled || n.focus.opt_out { return false; }
+        n.focus.enabled || (self.commit.defaults.web_focus && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
     }
     /// Whether node `i` in `nodes` can take keyboard focus itself or is an editable text field
     /// that has not opted out (`El::disabled`, `El::focusable(false)`) and is not inside a
@@ -257,8 +258,8 @@ impl RuntimeCore {
     fn can_take_focus_in(&self, nodes: &[Node], i: usize) -> bool {
         if ancestor_disabled(nodes, i) { return false; }
         let n = &nodes[i];
-        self.takes_focus(n)
-            || (!n.focus.opt_out && n.input.as_ref().is_some_and(|s| s.access.is_some()))
+        if n.focus.disabled || n.focus.opt_out { return false; }
+        self.takes_focus(n) || n.input.as_ref().is_some_and(|s| s.access.is_some())
     }
     pub(crate) fn can_focus(&self, i: usize) -> bool {
         self.can_take_focus_in(&self.tree.nodes, i) && self.reachable(i)
@@ -507,7 +508,7 @@ impl RuntimeCore {
         // Tabbing away or into a field takes the selection's keyboard; a hovered row doesn't.
         if moved
             && let Some(p) = path.as_deref()
-            && self.text_selection().is_some_and(|(held, _)| held != p)
+            && self.text_selection().is_some_and(|(held, _)| !path_holds(p, held))
             && (keyboard || self.node(p).is_some_and(|n| n.input.is_some()) || self.commit.virtual_inputs.contains_key(p))
         {
             self.clear_text_selection();
@@ -564,6 +565,9 @@ impl RuntimeCore {
             self.kbd.focus.remember_scope(mark, at);
         }
         self.sync_side_focus(app);
+        if moved && let Some(fi) = self.focused_index() && self.is_caret_browsing_node(&self.tree.nodes[fi]) {
+            self.enter_caret_browsing_focus(fi);
+        }
         // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
         // Focus that stayed where it was, shown as it was (every commit's focus pass, most of
         // the time), moves no group: the frame's own interaction pass sees the rest.
@@ -920,6 +924,7 @@ impl RuntimeCore {
             if !self.kbd.tab_visits_all() {
                 // A control that owns its keyboard (`El::on_key`) is a list of its own.
                 order.retain(|&i| self.tree.nodes[i].input.is_some() || self.tree.nodes[i].focus.key.is_some()
+                    || self.is_caret_browsing_node(&self.tree.nodes[i])
                     || self.focus_group(i).is_some_and(|g| LIST_ROLES.contains(&self.tree.nodes[g].role)));
             }
             if order.is_empty() { return self.active_modal().is_some(); }
@@ -954,7 +959,7 @@ impl RuntimeCore {
         if ev.mods.shift && !matches!(&ev.key, Key::Text(t) if !t.trim().is_empty()) { return false; }
         // A slider's keys come before its group's arrows. On a text field (a spin button),
         // Left and Right stay with the caret.
-        if let Some(step) = self.tree.nodes[i].focus.step.clone() {
+        if !self.node_disabled(i) && let Some(step) = self.tree.nodes[i].focus.step.clone() {
             // A right-to-left slider runs from its right: Left raises it.
             let rtl = self.tree.nodes[i].flow == crate::el::Flow::Rtl;
             let field = self.tree.nodes[i].input.is_some();
@@ -976,6 +981,7 @@ impl RuntimeCore {
         // When a focusable `focus_group` container holds focus itself, navigation and typeahead
         // enter its items directly (WAI-ARIA Menu and Listbox container focus).
         if self.tree.nodes[i].input.is_none()
+            && !self.is_caret_browsing_node(&self.tree.nodes[i])
             && let Some(g) = self.focus_group(i).or_else(|| self.tree.nodes[i].focus.group.then_some(i))
         {
             let items: Vec<_> = (0..self.tree.nodes.len()).filter(|&j| self.can_focus(j) && self.focus_group(j) == Some(g)).collect();

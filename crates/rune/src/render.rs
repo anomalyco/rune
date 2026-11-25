@@ -139,6 +139,7 @@ pub use instance::unpack_clip_radii;
 pub use instance::unpack_fade;
 pub use layers::LayerStats;
 pub use offscreen::OFFSCREEN_FORMAT;
+pub use offscreen::OFFSCREEN_FORMAT_LINEAR;
 pub use offscreen::Offscreen;
 pub use offscreen::write_png;
 pub use rune_core::Blend;
@@ -383,12 +384,31 @@ impl Renderer {
 
     /// Creates a renderer for `device` drawing into `format`, panicking if the GPU rejects
     /// Rune's last-resort uber shader or pipeline. Windows and headless runs use [`Self::try_new`].
+    ///
+    /// Blending defaults to sRGB-encoded (`srgb_blend() == true`) for 8-bit non-sRGB targets
+    /// (`Rgba8Unorm` / [`OFFSCREEN_FORMAT`] and `Bgra8Unorm`), and to linear light
+    /// (`srgb_blend() == false`) for `*Srgb` (`Rgba8UnormSrgb` / [`OFFSCREEN_FORMAT_LINEAR`],
+    /// `Bgra8UnormSrgb`) and floating-point HDR (`Rgba16Float`) targets. Override with
+    /// [`Self::set_srgb_blend`].
+    ///
+    /// ```no_run
+    /// use rune::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Renderer};
+    ///
+    /// let gpu = Gpu::headless();
+    /// let srgb = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    /// assert!(srgb.srgb_blend());
+    /// let linear = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    /// assert!(!linear.srgb_blend());
+    /// ```
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Renderer {
         Self::try_new(device, format).unwrap_or_else(|error| panic!("{error}"))
     }
 
     /// Creates a renderer for `device` drawing into `format`, returning an error instead of
     /// leaving an invalid pipeline if the GPU rejects Rune's last-resort uber shader or pipeline.
+    ///
+    /// Blending follows the same format default as [`Self::new`]: sRGB-encoded for `Rgba8Unorm`
+    /// and `Bgra8Unorm`, linear light for `*Srgb` and floating-point targets.
     ///
     /// On native devices and WebGL2 the shader and pipeline are checked synchronously inside
     /// validation, out-of-memory and internal error scopes. On browser WebGPU, error scopes
@@ -401,6 +421,19 @@ impl Renderer {
         Self::try_create(device, format, None, cfg!(target_os = "macos"))
     }
 
+    /// Overrides whether colours are sRGB-encoded for blending (`true` by default for
+    /// [`OFFSCREEN_FORMAT`] / `Rgba8Unorm` and `Bgra8Unorm`; `false` by default for
+    /// [`OFFSCREEN_FORMAT_LINEAR`] / `*Srgb` and `Rgba16Float`). Also updates the renderer's
+    /// native surface pipeline when present.
+    ///
+    /// ```no_run
+    /// use rune::render::{Gpu, OFFSCREEN_FORMAT_LINEAR, Renderer};
+    ///
+    /// let gpu = Gpu::headless();
+    /// let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    /// renderer.set_srgb_blend(false);
+    /// assert!(!renderer.srgb_blend());
+    /// ```
     pub fn set_srgb_blend(&mut self, enabled: bool) {
         self.srgb_blend = enabled;
         if let Some(s) = &mut self.surfaces {

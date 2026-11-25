@@ -221,6 +221,42 @@ impl Elision {
         }).collect()
     }
 
+    /// `inline_boxes` kept and remapped onto the drawn string, dropping boxes inside the cut.
+    pub(in crate::runtime) fn inline_boxes(self, boxes: &[crate::text::InlineBoxRun], content_len: usize) -> Vec<crate::text::InlineBoxRun> {
+        let mut out = Vec::with_capacity(boxes.len());
+        self.inline_boxes_into(boxes, content_len, &mut out);
+        out
+    }
+
+    pub(in crate::runtime) fn inline_boxes_into(
+        self,
+        boxes: &[crate::text::InlineBoxRun],
+        content_len: usize,
+        out: &mut Vec<crate::text::InlineBoxRun>,
+    ) {
+        out.clear();
+        if boxes.is_empty() {
+            return;
+        }
+        for &b in boxes {
+            let at = b.at as usize;
+            let mapped = if self.head == self.tail {
+                Some(at)
+            } else if at < self.head {
+                Some(at)
+            } else if at > self.tail {
+                Some(self.after() + (at - self.tail))
+            } else if at == self.tail && self.tail < content_len {
+                Some(self.after())
+            } else {
+                None
+            };
+            if let Some(m) = mapped {
+                out.push(crate::text::InlineBoxRun { at: m as u32, ..b });
+            }
+        }
+    }
+
     /// `highlights` moved onto the drawn string.
     pub(in crate::runtime) fn highlights(self, highlights: &[crate::text::TextHighlight]) -> Vec<crate::text::TextHighlight> {
         highlights.iter().filter_map(|h| {
@@ -284,9 +320,11 @@ pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scal
     };
     let mut str_buf = if spec.redacted { String::new() } else { String::with_capacity(content.len() + Elision::ELLIPSIS.len()) };
     let mut span_buf = Vec::new();
+    let mut inline_buf = Vec::new();
     let input = spec.as_text_input(scale, false);
     let mut make = |text: &mut TextSystem, e: Elision| {
         e.spans_into(&spec.spans, &mut span_buf);
+        e.inline_boxes_into(&spec.cold.inline_boxes, content.len(), &mut inline_buf);
         if spec.redacted {
             let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS, &content[e.tail..]].concat());
             text.layout_cut(&input, &s, &span_buf, scale, None, parley::Alignment::Start, false)
@@ -298,7 +336,7 @@ pub(in crate::runtime) fn truncated(text: &mut TextSystem, spec: &TextSpec, scal
             if spec.cold.live.is_some() {
                 text.layout_cut_live(&input, &str_buf, &span_buf, scale, None, parley::Alignment::Start)
             } else {
-                text.layout_cut(&input, &str_buf, &span_buf, scale, None, parley::Alignment::Start, true)
+                text.layout_cut_inline(&input, &str_buf, &span_buf, &inline_buf, scale, None, parley::Alignment::Start, true)
             }
         }
     };
@@ -558,9 +596,11 @@ pub(in crate::runtime) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale:
     let content = spec.content.as_str();
     let mut str_buf = if spec.redacted { String::new() } else { String::with_capacity(content.len() + Elision::ELLIPSIS.len()) };
     let mut span_buf = Vec::new();
+    let mut inline_buf = Vec::new();
     let input = spec.as_text_input(scale, false);
     let mut make = |text: &mut TextSystem, e: Elision| {
         e.spans_into(&spec.spans, &mut span_buf);
+        e.inline_boxes_into(&spec.cold.inline_boxes, content.len(), &mut inline_buf);
         if spec.redacted {
             let s = zeroize::Zeroizing::new([&content[..e.head], Elision::ELLIPSIS, &content[e.tail..]].concat());
             text.layout_cut(&input, &s, &span_buf, scale, Some(max_w), align, false)
@@ -572,7 +612,7 @@ pub(in crate::runtime) fn clamped(text: &mut TextSystem, spec: &TextSpec, scale:
             if spec.cold.live.is_some() {
                 text.layout_cut_live(&input, &str_buf, &span_buf, scale, Some(max_w), align)
             } else {
-                text.layout_cut(&input, &str_buf, &span_buf, scale, Some(max_w), align, true)
+                text.layout_cut_inline(&input, &str_buf, &span_buf, &inline_buf, scale, Some(max_w), align, true)
             }
         }
     };

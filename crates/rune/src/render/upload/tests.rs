@@ -352,3 +352,206 @@ fn only_a_changed_params_or_length_batches_again() {
     assert_eq!(prepare(&mut renderer, &frame(5.0, 0.0, 2)).0, 1, "forgotten");
     assert_eq!(prepare(&mut renderer, &[]), (1, vec![], vec![]), "emptied");
 }
+
+/// Idle rest (`give_back(false)`) drops GPU textures (and layer image bind groups) for image
+/// pages `ImageAtlas::rest` emptied while keeping visible pages resident; hidden/covered rest
+/// (`give_back(true)`) drops every image GPU texture, and the first drawn frame on wake
+/// recreates and uploads them with pixel-exact output.
+#[test]
+fn give_back_drops_freed_image_pages_at_rest_and_all_pages_when_hidden_and_wakes_cleanly() {
+    use std::sync::Arc;
+    use crate::el::{El, el};
+    use crate::image::ImageCache;
+    use crate::pixels::Pixels;
+    use crate::runtime::{Cx, Env, Runtime};
+
+    struct State {
+        small: Pixels,
+        large: Pixels,
+        show_small: bool,
+        show_large: bool,
+    }
+    // Wrap in an opacity layer so layer targets also hold image bind groups referencing the
+    // atlas textures: pruning/clearing must drop those bind groups too so HAL textures free.
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut inner = el().size(16.0, 16.0);
+        if s.show_small {
+            inner = inner.child(el().size(8.0, 8.0).pixels(&s.small));
+        }
+        if s.show_large {
+            inner = inner.child(el().size(8.0, 8.0).pixels(&s.large));
+        }
+        el().size(16.0, 16.0).opacity(0.95).child(inner)
+    }
+
+    let cache = ImageCache::new(Arc::new(|| {}));
+    let small_img = cache.rgba(4, 4, [240, 30, 80, 255].repeat(16));
+    small_img.wait().unwrap();
+    let large = Pixels::new();
+    large.set(1025, 64, [20, 210, 90, 255].repeat(1025 * 64));
+
+    let mut rt = Runtime::new(
+        State { small: small_img.pixels().clone(), large, show_small: true, show_large: true },
+        view,
+        (16.0, 16.0),
+        Env::new(true, 1.0),
+    );
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 16, 16);
+
+    #[cfg(feature = "test-gpu-counters")]
+    let (base_tex, base_mem) = {
+        let c = gpu.device.get_internal_counters().hal;
+        (c.textures.read(), c.texture_memory.read())
+    };
+
+    let draw_read = |rt: &mut Runtime<State>, renderer: &mut Renderer| -> Vec<u8> {
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (16, 16));
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, [0.0, 0.0, 0.0, 1.0]);
+        target.copy(&mut enc);
+        renderer.submit(&gpu.queue, enc);
+        target.read(&gpu.device)
+    };
+
+    // Frame 1: small image on shelf page 0 (1024x128 = 524,288 B) + large standalone page 1 (1025x64 = 262,400 B).
+    let page0_bytes = 1024u64 * 128 * 4;
+    let page1_bytes = 1025u64 * 64 * 4;
+    rt.frame(0.0);
+    let _ = draw_read(&mut rt, &mut renderer);
+    assert_eq!(rt.images.pages.len(), 2);
+    assert_eq!(renderer.image_texture_count(), 2);
+    assert_eq!(renderer.image_texture_bytes(), page0_bytes + page1_bytes);
+
+    // Frame 2: remove small image while keeping large image; shelf page 0 stays warm until rest.
+    rt.state.show_small = false;
+    rt.invalidate();
+    rt.frame(0.0);
+    let before_hide = draw_read(&mut rt, &mut renderer);
+    assert_eq!(renderer.image_texture_count(), 2);
+    assert_eq!(renderer.image_texture_bytes(), page0_bytes + page1_bytes);
+    #[cfg(feature = "test-gpu-counters")]
+    let (tex_before_rest, mem_before_rest) = {
+        let c = gpu.device.get_internal_counters().hal;
+        (c.textures.read(), c.texture_memory.read())
+    };
+
+    // Idle rest (Host::give_back(false)): interior page 0 is emptied by rest() and pruned from GPU;
+    // visible page 1 stays resident.
+    rt.images.rest();
+    assert_eq!(rt.images.pages.len(), 2);
+    assert!(rt.images.pages[0].data.is_empty());
+    assert!(!rt.images.pages[1].data.is_empty());
+    renderer.give_back(false, &mut rt.text.atlas.resident_caches, &rt.images);
+    assert!(renderer.has_images(), "visible image page stays resident at idle rest");
+    assert_eq!(renderer.image_texture_count(), 1);
+    assert_eq!(renderer.image_texture_bytes(), page1_bytes);
+    #[cfg(feature = "test-gpu-counters")]
+    {
+        let c = gpu.device.get_internal_counters().hal;
+        assert_eq!(c.textures.read(), tex_before_rest - 1, "idle rest frees emptied page 0 HAL texture");
+        if mem_before_rest > base_mem {
+            assert!(c.texture_memory.read() < mem_before_rest, "idle rest reclaims page 0 HAL texture memory");
+        }
+    }
+
+    // Hidden / covered (Host::give_back(true)): every image texture (and scratch layer target) drops.
+    rt.images.rest();
+    renderer.give_back(true, &mut rt.text.atlas.resident_caches, &rt.images);
+    gpu.queue.submit(std::iter::empty());
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+    renderer.trim_uploads();
+    assert!(!renderer.has_images(), "give_back(true) drops all GPU image textures");
+    assert_eq!(renderer.image_texture_count(), 0);
+    assert_eq!(renderer.image_texture_bytes(), 0);
+    #[cfg(feature = "test-gpu-counters")]
+    {
+        let c = gpu.device.get_internal_counters().hal;
+        assert_eq!(c.textures.read(), base_tex, "give_back(true) restores baseline HAL texture count");
+        assert_eq!(c.texture_memory.read(), base_mem, "give_back(true) restores baseline HAL texture memory");
+    }
+
+    // Wake from give_back(true): first frame draws identically with no rt.frame or manual invalidate.
+    let after_wake = draw_read(&mut rt, &mut renderer);
+    assert_eq!(after_wake, before_hide, "waking from give_back(true) draws identically on first frame");
+    assert_eq!(renderer.image_texture_count(), 1);
+    assert_eq!(renderer.image_texture_bytes(), page1_bytes);
+    assert!(small_img.is_ready(), "content-addressed ImageCache entry remains untouched");
+}
+
+/// Idle rest (`give_back(false)`) truncates `Renderer::images` and frees the GPU texture when
+/// `ImageAtlas::rest` truncates trailing empty pages (such as a warm first shelf page).
+#[test]
+fn give_back_truncates_trailing_empty_image_pages_at_rest() {
+    use crate::el::{El, el};
+    use crate::pixels::Pixels;
+    use crate::runtime::{Cx, Env, Runtime};
+
+    struct State {
+        px: Pixels,
+        show: bool,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut root = el().size(8.0, 8.0);
+        if s.show {
+            root = root.child(el().size(4.0, 4.0).pixels(&s.px));
+        }
+        root
+    }
+
+    let px = Pixels::new();
+    px.set(4, 4, [180, 90, 220, 255].repeat(16));
+    let mut rt = Runtime::new(State { px, show: true }, view, (8.0, 8.0), Env::new(true, 1.0));
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let target = Offscreen::new(&gpu.device, 8, 8);
+
+    #[cfg(feature = "test-gpu-counters")]
+    let (base_tex, base_mem) = {
+        let c = gpu.device.get_internal_counters().hal;
+        (c.textures.read(), c.texture_memory.read())
+    };
+
+    let draw_once = |rt: &mut Runtime<State>, renderer: &mut Renderer| {
+        renderer.upload_images(&gpu.device, &gpu.queue, &mut rt.images);
+        renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (8, 8));
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        renderer.draw(&mut enc, &target.view, [0.0; 4]);
+        renderer.submit(&gpu.queue, enc);
+        gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+    };
+
+    // Frame 1: shelf page 0 uploaded (1024x128 = 524,288 B).
+    let page0_bytes = 1024u64 * 128 * 4;
+    rt.frame(0.0);
+    draw_once(&mut rt, &mut renderer);
+    assert_eq!(renderer.image_texture_count(), 1);
+    assert_eq!(renderer.image_texture_bytes(), page0_bytes);
+    #[cfg(feature = "test-gpu-counters")]
+    assert_eq!(gpu.device.get_internal_counters().hal.textures.read(), base_tex + 1);
+
+    // Frame 2: image removed and settled, first shelf page stays warm until rest.
+    rt.state.show = false;
+    rt.invalidate();
+    rt.settle_all();
+    rt.frame(0.0);
+    draw_once(&mut rt, &mut renderer);
+    assert_eq!(rt.images.pages.len(), 1);
+    assert_eq!(renderer.image_texture_count(), 1);
+
+    // Idle rest: rest() truncates rt.images.pages to 0, give_back(false) truncates and drops GPU page.
+    rt.images.rest();
+    assert!(rt.images.pages.is_empty());
+    renderer.give_back(false, &mut rt.text.atlas.resident_caches, &rt.images);
+    assert!(!renderer.has_images(), "give_back(false) drops truncated trailing page GPU texture");
+    assert_eq!(renderer.image_texture_count(), 0);
+    assert_eq!(renderer.image_texture_bytes(), 0);
+    #[cfg(feature = "test-gpu-counters")]
+    {
+        let c = gpu.device.get_internal_counters().hal;
+        assert_eq!(c.textures.read(), base_tex, "truncated page HAL texture freed at idle rest");
+        assert_eq!(c.texture_memory.read(), base_mem, "truncated page HAL texture memory reclaimed at idle rest");
+    }
+}

@@ -212,7 +212,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         a11y.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;forced-color-adjust:none;';
         document.body.append(a11y);
     }
-    const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
+    const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), a11yByPath: new Map(), mirrorSel: false, field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null,
@@ -989,8 +989,11 @@ function runs(h, el, item) {
         const a = document.createElement('a');
         a.textContent = run.t;
         if (run.d) a.setAttribute('aria-description', run.d);
-        a.style.cssText = `color:transparent;text-decoration:none;pointer-events:${h.page ? 'auto' : 'none'};`;
-        if (webLink(href)) {
+        a.style.cssText = `color:transparent;text-decoration:none;pointer-events:${h.page && !item.dis ? 'auto' : 'none'};`;
+        if (item.dis) {
+            a.setAttribute('role', 'link');
+            a.setAttribute('aria-disabled', 'true');
+        } else if (webLink(href)) {
             a.href = href;
             a.target = '_blank';
             a.rel = 'noopener noreferrer';
@@ -1081,6 +1084,8 @@ function ensureA11yNode(h, item, tag, key) {
         }
         h.a11yNodes.set(key, el);
     }
+    el._a11yPath = item.p;
+    h.a11yByPath.set(item.p, el);
     return el;
 }
 
@@ -1178,15 +1183,17 @@ function applyA11yItem(h, el, item, tag, origin) {
     } else if (item.k === 'button') {
         if (el.getAttribute('aria-label') !== null) el.removeAttribute('aria-label');
     } else if (item.k === 'link') {
-        const href = safeHref(item.h);
+        const href = item.dis ? null : safeHref(item.h);
         if (href) {
             el.href = href;
+            if (el.getAttribute('role') === 'link') el.removeAttribute('role');
             if (!h.page && webLink(href)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
             else { el.removeAttribute('target'); el.removeAttribute('rel'); }
         } else {
             el.removeAttribute('href');
             el.removeAttribute('target');
             el.removeAttribute('rel');
+            if (item.dis && el.getAttribute('role') !== 'link') el.setAttribute('role', 'link');
         }
     }
     if (item.k === 'scroll_x') {
@@ -1209,7 +1216,7 @@ function applyA11yItem(h, el, item, tag, origin) {
     const container = item.k === 'group' || item.k === 'scroll_x';
     const noContent = container || item.k === 'image' || item.k === 'progressbar';
     const content = combobox ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
-    const sig = noContent ? '' : item.u?.length ? JSON.stringify(item.u) : content;
+    const sig = noContent ? '' : item.u?.length ? `${item.dis ? '1' : '0'}:${JSON.stringify(item.u)}` : content;
     if (!noContent && el._sig !== sig) {
         el._sig = sig;
         if (item.u?.length) {
@@ -1243,6 +1250,7 @@ function syncA11yPatch(h, patch) {
             const el = h.a11yNodes.get(key);
             if (!el) continue;
             if (el._path && h.scrollEls.get(el._path) === el) h.scrollEls.delete(el._path);
+            if (el._a11yPath && h.a11yByPath.get(el._a11yPath) === el) h.a11yByPath.delete(el._a11yPath);
             el.remove();
             h.a11yNodes.delete(key);
         }
@@ -1303,6 +1311,7 @@ export function syncA11y(h, json) {
     for (const [key, el] of h.a11yNodes) {
         if (!seen.has(key)) {
             if (el._path && h.scrollEls.get(el._path) === el) h.scrollEls.delete(el._path);
+            if (el._a11yPath && h.a11yByPath.get(el._a11yPath) === el) h.a11yByPath.delete(el._a11yPath);
             el.remove();
             h.a11yNodes.delete(key);
         }
@@ -1315,6 +1324,63 @@ export function syncA11y(h, json) {
 // states. Two proxies, taking turns, so every move is a change of active descendant a reader
 // follows, even between two elements alike. A text field's name goes on the field the browser
 // edits.
+function textPointAt(root, offset) {
+    let rem = Math.max(0, offset | 0);
+    let last = null;
+    const walk = node => {
+        if (node.nodeType === 3) {
+            const len = (node.nodeValue ?? '').length;
+            last = { node, offset: len };
+            if (rem <= len) return { node, offset: rem };
+            rem -= len;
+            return null;
+        }
+        const kids = node.childNodes;
+        if (kids) {
+            for (let i = 0; i < kids.length; i++) {
+                const hit = walk(kids[i]);
+                if (hit) return hit;
+            }
+        }
+        return null;
+    };
+    return walk(root) ?? last ?? { node: root, offset: 0 };
+}
+
+function syncMirrorSelection(h, sel) {
+    if (h.key || typeof getSelection !== 'function') return;
+    const anchorEl = h.a11yByPath.get(sel.ap);
+    const focusEl = h.a11yByPath.get(sel.fp);
+    if (!anchorEl || !focusEl) return;
+    const selection = getSelection();
+    if (!selection) return;
+    const a = textPointAt(anchorEl, sel.a);
+    const f = textPointAt(focusEl, sel.f);
+    if (typeof selection.setBaseAndExtent === 'function') {
+        selection.setBaseAndExtent(a.node, a.offset, f.node, f.offset);
+        h.mirrorSel = true;
+    } else if (typeof document.createRange === 'function') {
+        const range = document.createRange();
+        range.setStart(a.node, a.offset);
+        range.setEnd(f.node, f.offset);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        h.mirrorSel = true;
+    }
+}
+
+function clearMirrorSelection(h) {
+    if (!h.mirrorSel || h.key || typeof getSelection !== 'function') {
+        h.mirrorSel = false;
+        return;
+    }
+    const selection = getSelection();
+    if (selection?.anchorNode && h.a11y.contains(selection.anchorNode)) {
+        selection.removeAllRanges();
+    }
+    h.mirrorSel = false;
+}
+
 export function focusA11y(h, json) {
     if (h.disposed || h.page) return;
     const f = json ? JSON.parse(json) : null;
@@ -1333,13 +1399,14 @@ export function focusA11y(h, json) {
     if (!f) {
         h.canvas.removeAttribute('aria-activedescendant');
         h.textarea.removeAttribute('aria-autocomplete');
+        clearMirrorSelection(h);
         return;
     }
     if (f.o === 'textbox') h.textarea.setAttribute('aria-label', f.t || 'Text input');
     if (f.f) h.textarea.setAttribute('aria-label', f.f);
     h.focusTurn ^= 1;
     const el = h.focusProxies[h.focusTurn];
-    for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-')) el.removeAttribute(a.name);
+    for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-') || a.name === 'data-rune-selection') el.removeAttribute(a.name);
     el.textContent = '';
     el.setAttribute('role', f.o);
     el.setAttribute('aria-label', f.t ?? '');
@@ -1359,6 +1426,13 @@ export function focusA11y(h, json) {
     if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
     if (f.ct) el.setAttribute('aria-controls', f.ct);
     if (f.ow) el.setAttribute('aria-owns', f.ow);
+    if (f.ro) el.setAttribute('aria-readonly', 'true');
+    if (f.sel) {
+        el.setAttribute('data-rune-selection', JSON.stringify(f.sel));
+        syncMirrorSelection(h, f.sel);
+    } else {
+        clearMirrorSelection(h);
+    }
     if (f.rg) {
         el.setAttribute('aria-valuemin', String(f.rg[0]));
         el.setAttribute('aria-valuemax', String(f.rg[1]));
@@ -1689,6 +1763,8 @@ export function destroy(h) {
     for (const remove of h.listeners) remove();
     h.password.value = ''; h.textarea.value = ''; h.value = ''; h.domValue = ''; h.crlfs = null; h.copyText = ''; h.selection = null;
     h.a11yNodes.clear();
+    h.a11yByPath.clear();
+    h.mirrorSel = false;
     h.scrollEls.clear();
     h.a11y.remove();
     h.band?.remove();

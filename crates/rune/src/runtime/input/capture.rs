@@ -270,6 +270,8 @@ pub(in crate::runtime) struct PointerState {
     pub(in crate::runtime) drags_open: usize,
     /// Currently held `PointerButton::Other(n)` ids (empty unless an extra button is held).
     other_buttons_down: Vec<u16>,
+    /// Declarative pointer-lock state machine (`runtime/input/pointer_lock.rs`).
+    pub(super) pointer_lock: super::pointer_lock::PointerLock,
 }
 
 impl PointerState {
@@ -302,6 +304,7 @@ impl PointerState {
             drag_ends: Default::default(),
             drags_open: 0,
             other_buttons_down: Vec::new(),
+            pointer_lock: super::pointer_lock::PointerLock::new(),
         }
     }
 
@@ -510,6 +513,7 @@ impl PointerState {
         self.hover_delays.clear();
         self.forget_drop_targets();
         self.press_clicks.clear();
+        self.pointer_lock.step(super::pointer_lock::LockEvent::Released);
     }
 
     /// Scrolling viewport `id` under a held press inside it cancels the press, as a UIScrollView

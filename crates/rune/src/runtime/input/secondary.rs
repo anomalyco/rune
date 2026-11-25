@@ -68,7 +68,7 @@ impl capture::PointerState {
 impl RuntimeCore {
     /// Whether node `i` or any of its ancestors is marked disabled (`El::disabled` or
     /// `El::aria_disabled`).
-    pub(in crate::runtime) fn node_disabled(&self, i: usize) -> bool {
+    pub(crate) fn node_disabled(&self, i: usize) -> bool {
         std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
             .any(|k| self.tree.nodes[k].a11y.disabled)
     }
@@ -164,6 +164,7 @@ impl RuntimeCore {
     }
 
     pub(super) fn secondary_down_for(&mut self, x: f32, y: f32, platform: SecondaryPlatform) {
+        let (x, y) = self.locked_point(x, y);
         let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
         self.pointer.note_button_down(crate::PointerButton::Secondary);
         self.pointer.pos = Some((x, y));
@@ -312,6 +313,7 @@ impl RuntimeCore {
     }
 
     pub(crate) fn secondary_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+        let (x, y) = self.locked_point(x, y);
         self.pointer.note_button_up(crate::PointerButton::Secondary);
         let mut drag_left = false;
         let dragged = if self.pointer.press.held().is_some_and(|h| h.button == crate::PointerButton::Secondary) {

@@ -11,6 +11,8 @@ pub(in crate::runtime) enum Action {
     HoverFocus(Option<String>),
     Dismiss(String),
     PointerMove(String, PointerEvent),
+    /// `El::pointer_lock`: coalesced relative mouse delta `[dx, dy]` in points.
+    PointerLockMotion(String, [f32; 2]),
     Hover(String),
     HoverChange(String, bool),
     /// `El::on_selection_change`.
@@ -117,6 +119,7 @@ impl ActionQueue {
     /// Puts `queued` ahead of everything queued.
     pub(in crate::runtime) fn prepend(&mut self, queued: Vec<Queued>) { self.0.splice(0..0, queued); }
     pub(in crate::runtime) fn iter(&self) -> impl Iterator<Item = &Action> { self.0.iter().map(|q| &q.action) }
+    pub(in crate::runtime) fn last_mut(&mut self) -> Option<&mut Action> { self.0.last_mut().map(|q| &mut q.action) }
     /// Whether any of them is the user's input, as the commit's `INPUT` cause counts it: a host
     /// (or headless `Runtime`) may dispatch input without an arrival timestamp.
     pub(in crate::runtime) fn has_input(&self) -> bool { self.0.iter().any(|q| q.input) }
@@ -169,6 +172,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
         Action::Visible(..) => "on_visible",
         Action::Layout(..) => "on_layout_tx",
         Action::PointerMove(..) => "on_pointer_move_local",
+        Action::PointerLockMotion(..) => "pointer_lock",
         Action::Hover(_) => "on_hover",
         Action::HoverChange(..) => "on_hover_change",
         Action::SelectionChange(..) => "on_selection_change",
@@ -197,7 +201,7 @@ pub(in crate::runtime) fn live_only_handler(action: &Action) -> Option<&'static 
 #[cfg(debug_assertions)]
 pub(in crate::runtime) fn action_path(action: &Action) -> Option<&str> {
     match action {
-        Action::PointerMove(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path, ..) | Action::MiddlePress(path, ..) | Action::AnyPress(path, ..)
+        Action::PointerMove(path, _) | Action::PointerLockMotion(path, _) | Action::DrawnLayout(path, ..) | Action::Layout(path, _) | Action::Hover(path) | Action::HoverChange(path, _) | Action::SelectionChange(path, _) | Action::Press(path, ..) | Action::DoublePress(path, ..) | Action::MiddlePress(path, ..) | Action::AnyPress(path, ..)
         | Action::Link(path, ..) | Action::LinkSecondary(path, ..) | Action::SecondaryPress(path, _) | Action::Drag(path, ..) | Action::DragRepeat(path, ..) | Action::DragStart(path)
         | Action::DragEnd(path, _) | Action::Visible(path, _) => Some(path),
         Action::Wheel { chain, .. } => chain.as_deref().and_then(|c| c.first()).map(String::as_str),
@@ -360,6 +364,7 @@ impl RuntimeCore {
             Action::Hover(p) => sites(p)?.hover,
             Action::HoverChange(p, _) => sites(p)?.hover_change,
             Action::PointerMove(p, _) => sites(p)?.pointer_move,
+            Action::PointerLockMotion(p, _) => sites(p)?.pointer_lock,
             Action::Layout(p, _) => sites(p)?.layout,
             Action::DrawnLayout(p, ..) => sites(p)?.drawn_layout,
             Action::VisibleRows(p, _) => sites(p)?.visible_rows,
@@ -421,6 +426,12 @@ impl RuntimeCore {
             Action::PointerMove(path, point) => {
                 let Some(f) = self.node(&path).and_then(|n| n.handlers.on_pointer_move.clone()) else { return false };
                 f(app.states(), point, &mut one);
+                true
+            }
+            Action::PointerLockMotion(path, delta) => {
+                let Some(i) = self.live_index(&path).filter(|&i| self.allowed(i) && !self.node_disabled(i)) else { return false };
+                let Some(f) = self.tree.nodes[i].handlers.pointer_lock.clone() else { return false };
+                f(app.states(), delta, &mut one);
                 true
             }
             Action::AtBottom(path, at) => {

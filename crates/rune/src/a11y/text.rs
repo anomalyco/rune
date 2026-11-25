@@ -96,10 +96,12 @@ impl RuntimeCore {
                 x0: round(r[0] + w.shift[0]), y0: round(r[1] + w.shift[1]),
                 x1: round(r[2] + w.shift[0]), y1: round(r[3] + w.shift[1]),
             });
+            let disabled = self.node_disabled(i) || n.inert;
+            if disabled { link.set_disabled(); }
             if self.allowed(i) {
-                if spec.cold.on_link.is_some() { link.add_action(Ak::Click); }
+                if !disabled && spec.cold.on_link.is_some() { link.add_action(Ak::Click); }
                 if self.can_focus(i) { link.add_action(Ak::Focus); }
-                if spec.cold.on_link_secondary.is_some() { link.add_action(Ak::ShowContextMenu); }
+                if !disabled && spec.cold.on_link_secondary.is_some() { link.add_action(Ak::ShowContextMenu); }
             }
             let id = link_id(n.id, k);
             out[me].1.push_child(id);
@@ -245,6 +247,21 @@ impl RuntimeCore {
         };
         let at = |byte: usize| runs::position(lines, byte).map(|(k, c)| TextPosition { node: line_id(n.id, k), character_index: c });
         Some(TextSelection { anchor: at(anchor)?, focus: at(focus)? })
+    }
+
+    /// Active caret or selection for focused caret-browsing host `host`, referencing the
+    /// mounted `Role::TextRun` children of its anchor and focus text nodes.
+    pub(super) fn a11y_caret_selection(&self, host: usize) -> Option<TextSelection> {
+        let (h, ai, a_byte, fi, f_byte) = self.caret_browse_endpoints()?;
+        if h != host || !self.a11y_in_tree(ai) || !self.a11y_in_tree(fi) {
+            return None;
+        }
+        let pos_in = |ni: usize, byte: usize| -> Option<TextPosition> {
+            let (_, lines) = self.a11y_lines(ni)?;
+            let (k, c) = runs::position(&lines, byte)?;
+            Some(TextPosition { node: line_id(self.tree.nodes[ni].id, k), character_index: c })
+        };
+        Some(TextSelection { anchor: pos_in(ai, a_byte)?, focus: pos_in(fi, f_byte)? })
     }
 
     /// The value and state a text field adds to its node.

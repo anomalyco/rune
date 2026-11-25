@@ -9,32 +9,17 @@
 use super::mf::{self, Picture};
 use crate::native_surface::windows::{DecodedPlanes, VideoFences, device_generation, presenting_device};
 use std::sync::{Arc, Mutex};
-use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HMODULE, LUID};
-use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_11_1};
+use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, LUID};
 use windows::Win32::Graphics::Direct3D11::*;
-use windows::Win32::Graphics::Direct3D12::{D3D12_FENCE_FLAG_NONE, D3D12_FENCE_FLAG_SHARED, ID3D12Device, ID3D12Fence, ID3D12Resource};
+use windows::Win32::Graphics::Direct3D12::{D3D12_FENCE_FLAG_NONE, ID3D12Device, ID3D12Fence, ID3D12Resource};
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
-use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIFactory4, IDXGIResource1};
+use windows::Win32::Graphics::Dxgi::IDXGIResource1;
 use windows::Win32::Media::MediaFoundation::IMFDXGIDeviceManager;
-use windows::core::{GUID, HRESULT, Interface};
+use windows::core::Interface;
 
 /// Pictures a player's ring holds: the few the decoder runs ahead, the one on screen, one the GPU
 /// may still be reading and a spare.
 pub(super) const RING: usize = 6;
-
-type CreateDevice = unsafe extern "system" fn(
-    *mut core::ffi::c_void,
-    D3D_DRIVER_TYPE,
-    HMODULE,
-    u32,
-    *const D3D_FEATURE_LEVEL,
-    u32,
-    u32,
-    *mut *mut core::ffi::c_void,
-    *mut D3D_FEATURE_LEVEL,
-    *mut *mut core::ffi::c_void,
-) -> HRESULT;
-type CreateFactory = unsafe extern "system" fn(*const GUID, *mut *mut core::ffi::c_void) -> HRESULT;
 
 /// The D3D11 device decoders share, on the adapter of Rune's D3D12 device.
 pub(super) struct Device {
@@ -95,33 +80,8 @@ pub(super) fn lost_since(generation: u64) -> bool {
 }
 
 fn make(d3d12: ID3D12Device, luid: LUID, generation: u64) -> Result<Device, String> {
-    let d3d11 = mf::system_library("d3d11.dll").ok_or("d3d11.dll is missing")?;
-    let dxgi = mf::system_library("dxgi.dll").ok_or("dxgi.dll is missing")?;
-    // SAFETY: documented entry points cast to their documented signatures; the out pointers are
-    // owned references on success.
-    unsafe {
-        let create: CreateDevice = mf::symbol(d3d11, c"D3D11CreateDevice").ok_or("no D3D11CreateDevice")?;
-        let factory: CreateFactory = mf::symbol(dxgi, c"CreateDXGIFactory1").ok_or("no CreateDXGIFactory1")?;
-        let mut raw = std::ptr::null_mut();
-        factory(&IDXGIFactory4::IID, &mut raw).ok().map_err(|e| format!("DXGI: {}", e.message()))?;
-        let factory = IDXGIFactory4::from_raw(raw);
-        let adapter: IDXGIAdapter = factory.EnumAdapterByLuid(luid).map_err(|e| format!("Rune's GPU: {}", e.message()))?;
-        let levels = [D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0];
-        let (mut device, mut context) = (std::ptr::null_mut(), std::ptr::null_mut());
-        let flags = (D3D11_CREATE_DEVICE_VIDEO_SUPPORT.0 | D3D11_CREATE_DEVICE_BGRA_SUPPORT.0) as u32;
-        create(adapter.as_raw(), D3D_DRIVER_TYPE_UNKNOWN, HMODULE::default(), flags, levels.as_ptr(), levels.len() as u32, D3D11_SDK_VERSION, &mut device, std::ptr::null_mut(), &mut context)
-            .ok()
-            .map_err(|e| format!("no D3D11 video device: {}", e.message()))?;
-        let device = ID3D11Device::from_raw(device);
-        let context = ID3D11DeviceContext::from_raw(context);
-        // Decoders and players' threads share the device.
-        if let Ok(mt) = device.cast::<ID3D11Multithread>() {
-            let _prev = mt.SetMultithreadProtected(true);
-        }
-        let device5 = device.cast::<ID3D11Device5>().map_err(|_| "D3D11 fences need Windows 10 1703")?;
-        let context = context.cast::<ID3D11DeviceContext4>().map_err(|_| "D3D11 fences need Windows 10 1703")?;
-        Ok(Device { device, context, device5, d3d12, luid, generation })
-    }
+    let d3d11 = rune_gpu::d3d11_interop::create_d3d11_device_for_luid(luid, true, true)?;
+    Ok(Device { device: d3d11.device, context: d3d11.context, device5: d3d11.device5, d3d12, luid, generation })
 }
 
 impl Device {
@@ -184,19 +144,12 @@ impl Ring {
     }
 
     pub(super) fn new(device: Arc<Device>, picture: &Picture) -> Result<Self, String> {
-        // SAFETY: fences made on Rune's device and opened on the D3D11 one through a shared
-        // handle, closed once both hold the object.
-        let (fences, ready) = unsafe {
-            let ready12: ID3D12Fence = device.d3d12.CreateFence(0, D3D12_FENCE_FLAG_SHARED).map_err(|e| format!("fence: {}", e.message()))?;
-            let release: ID3D12Fence = device.d3d12.CreateFence(0, D3D12_FENCE_FLAG_NONE).map_err(|e| format!("fence: {}", e.message()))?;
-            let handle = device.d3d12.CreateSharedHandle(&ready12, None, GENERIC_ALL.0, None).map_err(|e| format!("share fence: {}", e.message()))?;
-            let mut ready: Option<ID3D11Fence> = None;
-            let opened = device.device5.OpenSharedFence(handle, &mut ready);
-            CloseHandle(handle).ok();
-            opened.map_err(|e| format!("open fence: {}", e.message()))?;
-            (Arc::new(VideoFences { ready: ready12, release }), ready.ok_or("open fence")?)
-        };
-        Ok(Self { device, slots: Vec::with_capacity(RING), fences, ready, value: 0, crop: picture.crop })
+        let shared = rune_gpu::d3d11_interop::create_shared_fence(&device.d3d12, &device.device5)?;
+        // SAFETY: plain non-shared D3D12 fence on Rune's live device.
+        let release: ID3D12Fence = unsafe { device.d3d12.CreateFence(0, D3D12_FENCE_FLAG_NONE) }
+            .map_err(|e| format!("fence: {}", e.message()))?;
+        let fences = Arc::new(VideoFences { ready: shared.d3d12, release });
+        Ok(Self { device, slots: Vec::with_capacity(RING), fences, ready: shared.d3d11, value: 0, crop: picture.crop })
     }
 
     /// Whether a picture could be written now: a slot is free, or there's room for another.

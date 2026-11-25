@@ -93,6 +93,8 @@ pub(crate) struct TextCold {
     pub(crate) link_cursor: Option<crate::el::Cursor>,
     /// Measured as its slice at this byte of the run (see [`El::advance_in`](crate::El::advance_in)).
     pub(crate) advance_in: Option<(crate::text::Run, usize)>,
+    /// See [`El::caret`](crate::El::caret): caret colour for [`El::caret_browsing`](crate::El::caret_browsing) selectable text.
+    pub(crate) caret: Option<Color>,
     /// See [`El::selection_color`](crate::El::selection_color).
     pub(crate) selection: Color,
     /// See [`El::selection_style`](crate::El::selection_style): it takes over `selection`.
@@ -117,6 +119,8 @@ pub(crate) struct TextCold {
     pub(crate) overlines: Vec<(u32, u32, Option<Color>)>,
     /// Padded inline boxes over `content` (`El::span_box`), sorted and non-overlapping.
     pub(crate) span_boxes: Vec<crate::text::SpanBoxRun>,
+    /// In-flow inline element slots over `content` (`El::inline`), keeping room for child elements.
+    pub(crate) inline_boxes: Vec<crate::text::InlineBoxRun>,
     /// Paint-only highlight byte ranges of `content`.
     pub(crate) highlights: Vec<crate::text::TextHighlight>,
     /// Display-only full-width line fills and left bars over `content` (see [`El::line_fills`](crate::El::line_fills)).
@@ -144,6 +148,7 @@ impl Empty for TextCold {
         on_link_secondary: None,
         link_cursor: None,
         advance_in: None,
+        caret: None,
         selection: crate::el::DEFAULT_SELECTION,
         selection_style: None,
         uncopied: Vec::new(),
@@ -156,6 +161,7 @@ impl Empty for TextCold {
         strikes: Vec::new(),
         overlines: Vec::new(),
         span_boxes: Vec::new(),
+        inline_boxes: Vec::new(),
         highlights: Vec::new(),
         line_fills: Vec::new(),
         blocks: Vec::new(),
@@ -211,7 +217,7 @@ impl TextSpec {
             blocks: &self.cold.blocks,
             pills: &self.cold.pills,
             span_boxes: &self.cold.span_boxes,
-            inline_boxes: &[],
+            inline_boxes: &self.cold.inline_boxes,
             text_indent: self.cold.text_indent,
             style: self.style,
             shape_key: self.shape_key(scale),
@@ -301,6 +307,7 @@ impl TextSpec {
     pub(crate) fn fresh_shape_key(&self, scale: f32) -> u64 {
         let key = crate::text::shape_key(&self.content, &self.spans, self.style, scale, self.wrap_anywhere, &self.cold.pills);
         let key = crate::text::mix_span_boxes(key, &self.cold.span_boxes);
+        let key = crate::text::mix_inline_boxes(key, &self.cold.inline_boxes);
         crate::text::directed(key, self.base())
     }
 
@@ -325,6 +332,7 @@ impl TextSpec {
     pub(crate) fn by_paragraph(&self, input: bool) -> bool {
         (input || self.by_line) && self.wrap && !self.redacted && !self.truncate && !self.truncate_fade
             && self.max_lines == 0 && self.cold.live.is_none() && self.cold.advance_in.is_none()
+            && self.cold.inline_boxes.is_empty()
             && (self.by_line || matches!(self.dir, TextDir::Plaintext(_)) || self.content.contains('\n'))
     }
 
@@ -391,6 +399,7 @@ impl TextSpec {
             cold.strikes.clear();
             cold.overlines.clear();
             cold.span_boxes.clear();
+            cold.inline_boxes.clear();
             cold.line_fills.clear();
             cold.text_indent = 0.0;
             cold.blocks.clear();
@@ -449,6 +458,9 @@ impl TextSpec {
             }
             for b in &mut cold.span_boxes {
                 (b.start, b.end) = (source.shown(b.start, false), source.shown(b.end, true));
+            }
+            for b in &mut cold.inline_boxes {
+                b.at = source.shown(b.at, false);
             }
             for h in &mut cold.highlights {
                 (h.start, h.end) = (source.shown(h.start, false), source.shown(h.end, true));

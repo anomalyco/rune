@@ -103,20 +103,34 @@ Rune's core crate: views, layout, animation, rendering, text and the native shel
     change every frame (`examples/shapes`). SVG export emits `fill-rule="evenodd"` for `FillRule::EvenOdd`.
     Translucent strokes blend twice where segments overlap at a joint; fills do not overlap.
   - Every instance has a soft-edge clip (`clip_soft`, `clip_fade`). Circular alpha cutouts (`El::cutout_circle` for one hole, `El::cutout_circles` for several intersected holes) isolate the element and its subtree into one layer per hole so backdrops show through without wrappers (`examples/shapes`).
-  - Windows blend in sRGB-encoded space by default, as Core Animation, CoreText and CSS do.
+  - Every path blends in sRGB-encoded space by default — `App` windows, overlays, standalone
+    `Runtime::new` / `Runtime::with_text`, `Renderer::new` (for `Rgba8Unorm` / `Bgra8Unorm`
+    targets), `SurfaceRenderer::new`, and `OFFSCREEN_FORMAT` (`Rgba8Unorm`, used by
+    `Offscreen::new`) — as Core Animation, CoreText, Skia and CSS do. Floating-point HDR targets
+    (`Rgba16Float`) and `*Srgb` targets (`OFFSCREEN_FORMAT_LINEAR` / `Rgba8UnormSrgb`,
+    `Bgra8UnormSrgb`) stay in linear light by default.
     `.srgb_blend(false)` on `App`, `WindowSpec` or `ConfiguredOverlay` opts out into linear-light
-    blending (colour premultiplied in linear light, drawn into an sRGB target). sRGB blending
+    blending (colour premultiplied in linear light, drawn into an `*Srgb` target). sRGB blending
     encodes premultiplied colours in sRGB (`Color::premul_srgb`) and renders into a non-sRGB
-    target view (`format.remove_srgb_suffix()`). With a `Compositor`, `Frame::srgb_blend()` and `Frame::format` tell it which encoding and view its own passes must match.
-    A runtime the app draws itself (`Runtime::with_text`, a headless snapshot) opts in with
-    `Runtime::set_srgb_blend(true)`, then draws with `Renderer::set_srgb_blend(true)` into a
-    non-sRGB target cleared to `clear_color()`; hover and press tints follow the mode.
+    target view (`format.remove_srgb_suffix()`). With a `Compositor`, `Frame::srgb_blend()` and
+    `Frame::format` tell it which encoding and view its own passes must match.
     `Renderer::render_runtime_to_offscreen(device, queue, target, rt)` runs the full offscreen
     pass (`upload_images`, `prepare_surfaces`, fade stops, UI prepare, `draw`, `Offscreen::copy`,
-    and `submit`) for CPU readback through `Offscreen::read`.
+    and `submit`) for CPU readback through `Offscreen::read`; `Offscreen::format()` and
+    `SurfaceRenderer::srgb_blend()` report the active format and blend mode.
     A handler switches a running window with `Tx::set_srgb_blend(bool)`: the frame that switches
     reconfigures the surface and rebuilds the renderer once (the web canvas keeps its format and
     changes its view).
+    **Migrating linear offscreen callers:** apps that drive `App` windows or `App` headless
+    `--snap` see no pixel change. Apps that drive standalone `Runtime`, `Renderer`,
+    `SurfaceRenderer`, or `Offscreen::new` directly and expect linear-light pixels see darker
+    translucent blends (for example, black at 19% alpha over `#F7F8FA` shifts from `225, 226, 228`
+    to `200, 201, 203`, matching an `App` window) — and any branch written as
+    `if srgb { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT }` now picks
+    `Rgba8Unorm` on both sides and produces wrong pixels without a compile error. To restore
+    linear-light blending off screen, replace `OFFSCREEN_FORMAT` with `OFFSCREEN_FORMAT_LINEAR`
+    (`Rgba8UnormSrgb`) in linear branches and opt in explicitly:
+    `rt.set_srgb_blend(false); let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR); renderer.set_srgb_blend(false); let target = Offscreen::with_format(&gpu.device, w, h, OFFSCREEN_FORMAT_LINEAR);`.
   - The Retina scale is applied throughout.
 - **Text** (`text.rs`): Parley 0.12 lays out embedded Inter 4.1 (OFL, `assets/`). On macOS and in
   Mac browsers, swash 0.2 outlines are rasterised by default through a port of CoreGraphics' glyph
@@ -425,7 +439,10 @@ policy changes are applied in the same mutation phase.
   (`Span`), wrapping with absolute line height and letter spacing, `.truncate()` with an ellipsis,
   inline-code backgrounds that merge where they touch, padded inline boxes (`SpanBox`, `El::span_box`
   / `El::span_boxes`) with layout-affecting horizontal padding, per-corner radii `[tl, tr, br, bl]`
-  and inset borders for adjacent chips, byte-range overlines (`El::overline` / `El::overlines`)
+  and inset borders for adjacent chips, in-flow inline element boxes (`El::inline`, `InlineBox`,
+  `InlineAlign`, `rune::text::measure_inline` / `measure_inline_with`) that reserve atomic CSS
+  `inline-block` slots inside wrapped static text for interactive child `El`s with their own
+  painting, hit testing, keyboard focus, and accessibility nodes, byte-range overlines (`El::overline` / `El::overlines`)
   that split across wrapped lines and coexist with underline and strikethrough, and first-line /
   hanging indentation (`El::text_indent` / `El::set_text_indent`, following CSS `text-indent`,
   with negative values pulling line 0 into leading padding and mirroring in RTL). `.align(..)` and
@@ -546,7 +563,18 @@ policy changes are applied in the same mutation phase.
   (chorded presses while another button or capture is held are ignored), observers run in reverse
   tree order before that press's target actions (skipping inert, exiting, and behind-modal
   subtrees while including observers inside an active modal), and windows with no observer pay
-  one cached boolean check per press. `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
+  one cached boolean check per press. `.pointer_lock(|s, [dx, dy], tx| ..)` requests declarative
+  relative mouse-look capture on desktop windows (web, iOS, and overlays never capture): a primary
+  press whose primary target is that element captures (HUD buttons and covering elements do not),
+  hides the cursor while focused (`CursorGrabMode::Locked`, falling back to `Confined` on X11),
+  freezes the runtime pointer at the press point (ignoring `pointer_move`/`pointer_leave` so all
+  buttons and wheels land on the viewport), and delivers coalesced relative `[dx, dy]` deltas in
+  points (`tx.live_only()` supported; `DeviceEvent::MouseMotion` scaled by `1/scale_factor` on
+  Windows and X11). Escape releases and is consumed (after any drag cancel), and focus loss,
+  unmount, modal cover, disabled, or inert states release automatically; read `Cx::pointer_locked()`
+  in views (rebuilds views and memos on change), `Runtime::pointer_locked()` / `Runtime::pointer_motion(dx, dy)`
+  in tests, and `{"type": "pointer-motion", "dx": …, "dy": …}` (`ScriptEvent::PointerMotion`) in scripts.
+  `.on_key_up(|s, e: &KeyEvent, tx| -> bool)` hears releases with the same
   logical keys `on_key` sees: the press-time and current focus chains first (keeping shared
   ancestors after both); when nothing is focused or focus rests on the open modal itself, every
   allowed `on_key_up` handler hears the release deepest-first (with the modal itself first if it
@@ -644,6 +672,7 @@ That event then skips the view, the diff and layout. The frame still draws the n
 values, hit tests against where they put elements, and reports `on_drawn_layout`; whatever
 else the handler asked of its `Tx` (a scroll, a copy, `wake_after`) still happens. It works in
 `on_wheel`, `on_magnify`, `on_rotate`, `on_smart_magnify`, `on_drag`, `on_pointer_move_local`,
+`pointer_lock`,
 `on_key`, `on_key_up`, a field's key handler, `on_physical_input`, the press and hover handlers,
 `on_layout_tx` and `on_drawn_layout_tx`, so a toolbar that floats over the selection by its own live offset
 follows a pan with no view re-run either. A handler that declines its event (returns false)
@@ -992,7 +1021,16 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   chain cannot composite transparency (transparent windows degrade to opaque with a log), cannot
   host DirectComposition video layers (video falls back to UI-drawn playback), skips the seamless
   visual commit and NVIDIA G-SYNC premultiplied VRR guard on CPU-to-GPU handover, and Windows
-  overlays (`App::overlay`) refuse cleanly because they require DirectComposition. After editing
+  overlays (`App::overlay`) refuse cleanly because they require DirectComposition.
+  `RUNE_RESIZE_SYNC=1` (Windows, off by default) opts opaque app windows with a Rune-owned
+  DirectComposition `Handover` into a drag-only synchronized resize path between
+  `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` using public APIs only: drag frames render into a
+  D3D12 shared texture synchronized via shared fences into a D3D11 `DXGI_SWAP_EFFECT_DISCARD`
+  copy-model HWND swap chain presented inside `WM_PAINT`, paired with `WM_NCCALCSIZE`
+  `WVR_VALIDRECTS` and `WM_ERASEBKGND` suppression, with zero presents to the hidden D3D12
+  composition swap chain during the drag. Transparent windows, overlays, `DxgiFromHwnd`, and
+  CPU/handover/rebinding windows always keep the normal path; with `RUNE_RESIZE_SYNC` unset or
+  `0`, no D3D11 device, shared texture, or second swap chain is created. After editing
   `clip.wgsl` or `shader.wgsl`, run
   `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac;
   if the MSL, flags or library hash changed, run `scripts/precompile-metal-shaders.sh` (needs
@@ -1001,14 +1039,23 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
 - **Startup CPU-first policy (`CpuFirst`, `App::cpu_first`, `WindowSpec::cpu_first`).** On Windows,
   Linux, and full-window web pages, opaque windows open on Rune's live CPU renderer (`CpuPainter`
   on desktop, the 2D canvas on web) and hand over to the GPU in the background once the first frame
-  is shown (`CpuFirst::Auto`, the default). Apps can choose `CpuFirst::Only` to stay on the CPU
-  renderer (skipping background idle handover on Windows and Linux until a frame hits a GPU-only
-  feature, and staying on the 2D canvas without requesting WebGPU or WebGL2 on web) or
-  `CpuFirst::Off` to skip CPU-first startup and open directly on the GPU. `RUNE_CPU_FIRST`
-  (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the builder without a rebuild
-  (`0` or `off` for `Off`, `only` for `Only`, `auto` for `Auto`; unset, empty, or unrecognized
-  values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored on macOS, iOS, headless
-  runs, transparent windows, and inline/document web pages.
+  is shown (`CpuFirst::Auto`, the default). On Windows machines whose only GPU adapter is software
+  WARP (and `WGPU_ADAPTER_NAME` is unset), `CpuFirst::Auto` stays on `CpuPainter` at idle instead
+  of handing over to WARP, and an opaque second window ignores any WARP device held in the shared
+  pool by a transparent window or overlay; if a mid-session frame later needs a GPU-only feature,
+  WARP builds off the UI thread (~1.5 s on first effect shader compile) without waiting for idle
+  while degradable elements keep painting live without their GPU-only modifier (`El::blur`
+  unblurred, `El::rotate` unrotated, nested `El::backdrop_blur` unblurred, compositor effect and
+  native-surface slots blank, linear blending in sRGB) instead of freezing the window. Frames
+  requiring `FontSmoothing::Slug`, Slug outline glyphs, unknown instance kinds, or a mismatched
+  target hold the previous frame until the GPU takes over, and frame 1 stays cloaked until drawn.
+  Linux `CpuFirst::Auto` is unchanged. Apps can also choose `CpuFirst::Only` to stay on the CPU
+  renderer on hardware GPUs (until a GPU-only feature is drawn on desktop, or permanently on web) or
+  `CpuFirst::Off` to open directly on the GPU (restoring immediate WARP handover on GPU-less
+  Windows). `RUNE_CPU_FIRST` (Windows and Linux) and `globalThis.RUNE_CPU_FIRST` (web) override the
+  builder without a rebuild (`0` or `off` for `Off`, `only` for `Only`, `auto` for `Auto`; unset,
+  empty, or unrecognized values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored
+  on macOS, iOS, headless runs, transparent windows, and inline/document web pages.
 - **GPU memory policy (`GpuMemoryPolicy`).** By default Rune creates wgpu devices with
   `GpuMemoryPolicy::MemoryUsage` (smaller suballocation blocks than wgpu's `Performance` default).
   Apps can choose `MemoryUsage`, `Performance`, or `Manual { block_size }` at startup via
@@ -1309,6 +1356,16 @@ For an app's own perf log, with nothing changed about how its windows draw:
   (`rt.presented_focus_key()`), or inspect presented frames (`rt.elements()`, `rt.state`).
   **`rune::last_input()`** is when the thread last took an input event from the platform, stamped at dispatch: input
   later than the previous frame landed in this one.
+- **`App::ambient_fps(fps)`** (also on `WindowSpec::ambient_fps`) opts a window into capping frame pacing for
+  motion no recent user input is steering (`0.0`, default = uncapped display rate; positive finite values clamp to
+  at least `1.0` Hz, and non-positive or non-finite values clear the cap). Any live key, pointer, wheel, touch,
+  gesture, or file drag-and-drop event lifts the cap on the very next display refresh; motion stays steered at the
+  display's full rate for 600 ms after input and up to 2 s while an unbroken run of frames that started within
+  100 ms of input keeps presenting with gaps of at most 100 ms (drags, scrolls, typing, and springs following a
+  finger never cap). When multiple caps apply, the lower rate wins: Low Power Mode (60 Hz on built-in ProMotion
+  panels) bounds both steered and ambient frames, and combining `ambient_fps` with `App::reveal_fps` paces
+  reveal-only tails on the `reveal_fps` timer while concurrent unsteered motion paces at `ambient_fps`. Enforced
+  on macOS `DisplayLink` windows today; Windows, Linux, web, overlays, and headless runs ignore it.
 
 ### Compact tray-controlled windows
 
@@ -1576,7 +1633,9 @@ The placeholder determines layout even after a view rebuild. Only the changed
 run reshapes; overflow clips to that box. Equal strings do not shape or wake a
 host. Hidden hosts keep the latest value and sample it on return. Publication
 uses a short mutex and can allocate; it is not an audio-callback API. Plain
-single-line labels (including `.truncate_fade()`) shape one line directly;
+single-line labels (including `.truncate_fade()`) shape one line directly, and short
+ASCII readings whose digits are proven tabular by the shaper and OpenType tables (such
+as `'tnum' 1` or monospace faces) swap digit glyph IDs without full reshaping;
 `.wrap()`, `.truncate()` (and `truncate_middle` / `truncate_head`), and
 `.max_lines(n)` re-wrap or re-elide inside the existing box width without
 reflowing siblings. Incompatible combinations (rich spans, links, pills,
@@ -2094,6 +2153,16 @@ double-presses) the nearest ancestor with a handler, hover and press paint reach
 and its `on_secondary_press` wins over the Copy menu. A drag that selects text doesn't press.
 Inside a draggable row (`on_drag` or `drag_out`), dragging drags the row and double- and
 triple-clicks still select words and lines. Text with its own handlers keeps them.
+
+`El::caret_browsing(true)` opts a selectable text or `selection_group(true)` container into
+keyboard caret browsing (off by default, leaving ordinary selectable text non-focusable): the
+element becomes focusable via click or Tab, draws a 1.5 pt caret when focused and collapsed
+(`El::caret` sets its colour, else the text's foreground), moves by character, word
+(`Ctrl`/`Option`+Left/Right), visual line (preserving a sticky horizontal column across shorter
+lines and sibling texts), page (`PageUp`/`PageDown`), and line or document `Home`/`End`, extends
+selections with `Shift` across mounted siblings, collapses a non-empty selection on plain
+Left/Right, scrolls enclosing viewports to keep the caret visible, keeps `Cmd/Ctrl+C` and
+`Cmd/Ctrl+A`, and publishes the caret and selection to AccessKit and the web accessibility mirror.
 
 The selection lives in the runtime, so selecting never re-runs the view or re-lays out the text.
 `El::selection_color` sets the highlight for selectable text and text fields alike, and both draw

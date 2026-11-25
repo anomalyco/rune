@@ -23,7 +23,7 @@ fn backdrop_pool_is_lazy_reused_resized_and_follows_live_formats() {
     assert_eq!(renderer.backdrops[0].view, original);
 
     // Switching after prepare is legal: the next draw must already have the new format's pool.
-    let format = OFFSCREEN_FORMAT.remove_srgb_suffix();
+    let format = OFFSCREEN_FORMAT_LINEAR;
     renderer.set_format(device, format);
     assert!(renderer.backdrops.iter().any(|b| b.format == format));
     for (format, size) in [(format, (48, 24)), (OFFSCREEN_FORMAT, (24, 48)), (format, (32, 32))] {

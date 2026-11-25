@@ -19,3 +19,6 @@ pub(super) mod rewind;
 pub(super) mod timer_wake;
 pub(super) mod tracks;
 pub(super) mod unseen_presence;
+
+#[cfg(test)]
+mod tabular_live_text_tests;

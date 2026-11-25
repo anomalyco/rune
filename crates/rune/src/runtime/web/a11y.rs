@@ -41,8 +41,8 @@ pub(crate) struct A11yMirror {
     json: String,
     patch: patch::PatchState,
     patch_json: String,
-    /// The focus proxy last sent (`web_a11y_focus`), and the commit, live-text generation and focus it was read at.
-    focus_at: (u64, u64, String, Option<usize>),
+    /// The focus proxy last sent (`web_a11y_focus`), and the commit, live-text generation, focus and caret selection digest it was read at.
+    focus_at: (u64, u64, String, Option<usize>, u64),
     focus_json: String,
 }
 
@@ -542,6 +542,7 @@ impl RuntimeCore {
             }
             if n.inert || self.subtree_exiting(i) || n.vis.opacity <= 0.01 || n.a11y.hidden
                 || matches!(n.role, "none" | "presentation")
+                || crate::runtime::commit::inline::is_elided_inline_child(&self.tree.nodes, i)
             {
                 i = end;
                 last_flow_parent = None;
@@ -770,7 +771,8 @@ impl RuntimeCore {
                 let selectable = spec.selectable || selects.get(i).copied().unwrap_or(false);
                 if !runs.is_empty() || is_live_text {
                     let is_heading = n.role == "heading";
-                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy;
+                    let text_disabled = self.node_disabled(i);
+                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy && !text_disabled;
                     // Flowed word-by-word paragraphs (`pr_chips::flow`) put sibling words (or 1-word
                     // wrapper rows) inside one flex-wrap line row: merge consecutive inline text runs
                     // sharing that flow container so screen readers and Find-in-page see whole sentences.
@@ -800,7 +802,8 @@ impl RuntimeCore {
                         text_rect[1] = round1(ty);
                         text_rect[3] = round1(th.min(text_rect[3]).max(0.0));
                     }
-                    if plain_text && flow_group.is_none()
+                    let caret_browsable = self.caret_browsing_host_of(i).is_some();
+                    if plain_text && !caret_browsable && flow_group.is_none()
                         && let Some(prev) = inline.filter(|l| l.item + 1 == out.len() && l.parent == n.parent)
                         && let Some(gap) = prev.gap(n.target, spec.style, selectable, node_flow)
                         && let Some(item) = out.last_mut().filter(|it| it.kind == "text" && it.role.is_none() && it.live.is_none() && !it.busy)
@@ -822,6 +825,7 @@ impl RuntimeCore {
                     item.level = is_heading.then(|| n.a11y.level.unwrap_or(2).clamp(1, 6));
                     item.role = if is_heading { None } else { live_role.or(text_aria) };
                     item.live = live;
+                    item.disabled = text_disabled;
                     item.busy = busy;
                     item.text = plain;
                     item.runs = rich_runs;
@@ -843,7 +847,7 @@ impl RuntimeCore {
                     }
                     push(&mut out, item);
                     last_flow_parent = if plain_text { flow_group } else { None };
-                    inline = (plain_text && flow_group.is_none()).then(|| Inline {
+                    inline = (plain_text && !caret_browsable && flow_group.is_none()).then(|| Inline {
                         parent: n.parent,
                         item: out.len() - 1,
                         right: n.target[2],
@@ -1095,8 +1099,28 @@ impl RuntimeCore {
     /// reader heard nothing as Tab, arrows or a request moved Rune's focus. The focused
     /// element's ARIA role, name, description and states; empty when nothing has focus. `None`
     /// when unchanged since the last call.
+    fn web_caret_selection_digest(&self) -> u64 {
+        let Some((h, ai, a, fi, f)) = self.caret_browse_endpoints() else { return 0 };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (
+            self.tree.nodes[h].id.0,
+            self.tree.nodes[ai].path.as_str(),
+            a,
+            self.tree.nodes[fi].path.as_str(),
+            f,
+        )
+            .hash(&mut hasher);
+        hasher.finish().max(1)
+    }
+
     pub(crate) fn web_a11y_focus<'a>(&self, mirror: &'a mut A11yMirror) -> Option<&'a str> {
-        let at = (self.commit.commits, self.frame.live_text_gen, self.kbd.focus.path().unwrap_or_default().to_owned(), self.link_focus());
+        let at = (
+            self.commit.commits,
+            self.frame.live_text_gen,
+            self.kbd.focus.path().unwrap_or_default().to_owned(),
+            self.link_focus(),
+            self.web_caret_selection_digest(),
+        );
         if mirror.focus_at == at { return None; }
         mirror.focus_at = at;
         // A field naming a highlighted row (`El::active_descendant`, the palette's): the row is
@@ -1138,6 +1162,7 @@ impl RuntimeCore {
             if let Some(d) = link_description(link.help.as_deref(), &name) {
                 o.insert("d".into(), json!(d));
             }
+            if self.node_disabled(i) || n.inert { o.insert("dis".into(), json!(true)); }
             return Value::Object(o);
         }
         let role = self.a11y_role(i);
@@ -1176,6 +1201,22 @@ impl RuntimeCore {
         if let Some(ac) = aria.auto_complete { o.insert("ac".into(), json!(ac)); }
         if let Some(ct) = aria.controls.as_deref() { o.insert("ct".into(), json!(ct)); }
         if let Some(ow) = aria.owns.as_deref() { o.insert("ow".into(), json!(ow)); }
+        if n.input.is_none() && self.is_caret_browsing_node(n) {
+            o.insert("ro".into(), json!(true));
+            if let Some((h, ai, a_byte, fi, f_byte)) = self.caret_browse_endpoints()
+                && h == i
+                && let (Some(a_spec), Some(f_spec)) = (self.tree.nodes[ai].text.as_deref(), self.tree.nodes[fi].text.as_deref())
+            {
+                let a_u16 = clean_slice(a_spec, 0, a_byte).encode_utf16().count();
+                let f_u16 = clean_slice(f_spec, 0, f_byte).encode_utf16().count();
+                o.insert("sel".into(), json!({
+                    "ap": self.tree.nodes[ai].path,
+                    "a": a_u16,
+                    "fp": self.tree.nodes[fi].path,
+                    "f": f_u16,
+                }));
+            }
+        }
         Value::Object(o)
     }
 
@@ -1199,7 +1240,7 @@ impl RuntimeCore {
             Some("a11y_link") => {
                 let Some(k) = event["link"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return false };
                 let Some(i) = self.live(path) else { return false };
-                if self.tree.nodes[i].a11y.disabled || !self.allowed(i) || self.tree.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
+                if self.node_disabled(i) || !self.allowed(i) || self.tree.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
                 self.frame.queue.push(Action::Link(path.to_owned(), k, crate::PointerButton::Primary));
                 true
             }

@@ -484,6 +484,7 @@ fn code_block_radius_defaults_to_6_and_overrides_code_diff_and_deep_tail_cards()
             (500.0, viewport_h),
             Env::new(false, 1.0),
         );
+        rt.set_srgb_blend(false);
         rt.frame(0.0);
         let want = FILL.premul(1.0);
         rt.instances
@@ -526,6 +527,7 @@ fn code_block_radius_defaults_to_6_and_overrides_code_diff_and_deep_tail_cards()
             (500.0, 4000.0),
             Env::new(false, 1.0),
         );
+        rt.set_srgb_blend(false);
         rt.frame(0.0);
         let want = FILL.premul(1.0);
         rt.instances

@@ -272,7 +272,7 @@ fn metallib_and_wgsl_render_identical_pixels() {
     use super::super::dxbc::with_dxbc_enabled as with_precompiled;
     use super::super::{
         Blend, Gpu, Instance, KIND_GLYPH, KIND_GRADIENT, KIND_IMAGE, KIND_INSET, KIND_RECT,
-        KIND_SEGMENT, KIND_SHADOW, KIND_TRIANGLE, LayerSpec, NO_CLIP, OFFSCREEN_FORMAT,
+        KIND_SEGMENT, KIND_SHADOW, KIND_TRIANGLE, LayerSpec, NO_CLIP, OFFSCREEN_FORMAT_LINEAR,
         Offscreen, Renderer, pack_fade,
     };
     use crate::{
@@ -441,7 +441,7 @@ fn metallib_and_wgsl_render_identical_pixels() {
     };
 
     for (format, srgb_blend) in [
-        (OFFSCREEN_FORMAT, false),
+        (OFFSCREEN_FORMAT_LINEAR, false),
         (wgpu::TextureFormat::Bgra8UnormSrgb, false),
         (wgpu::TextureFormat::Rgba8Unorm, true),
     ] {

@@ -1,0 +1,1 @@
+- Text: added a shaper-verified tabular-digit template fast path for single-line ASCII `LiveText` updates (bounded at 256 masks / 2 MiB, cleared on font or language changes), swapping digit glyph IDs without full Parley reshaping once the font's shaper output and OpenType tables prove bit-exact invariance.

@@ -455,8 +455,12 @@ impl tracks::MotionState {
         text.set_glyph_inks(spec.color, &[]);
         // From outlines where text draws them, which a flight's zoom magnifies without blurring.
         text.set_emit(text.moving_emit());
-        for p in laid.view().pieces() {
-            text.glyphs_for_layout(p.layout, scale, [origin[0] * scale, origin[1] * scale + p.y], false, &mut paint.glyph_scratch);
+        if let Some(tab) = n.cold.get().and_then(|c| c.tabular_layout.as_deref()) {
+            text.glyphs_for_tabular(tab, [origin[0] * scale, origin[1] * scale], 1.0, false, f32::NEG_INFINITY..f32::INFINITY, &mut paint.glyph_scratch);
+        } else {
+            for p in laid.view().pieces() {
+                text.glyphs_for_layout(p.layout, scale, [origin[0] * scale, origin[1] * scale + p.y], false, &mut paint.glyph_scratch);
+            }
         }
         text.set_emit(crate::text::outline::Emit::Atlas);
         let color = spec.color;

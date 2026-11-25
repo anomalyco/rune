@@ -26,6 +26,9 @@ impl RuntimeCore {
     /// Where Cmd+A goes: the selection's group, else the last picked while it's mounted, else
     /// the only one in the window.
     fn select_all_target(&self) -> Option<usize> {
+        if let Some(host) = self.caret_browsing_focused_host() {
+            return Some(host);
+        }
         if let Some(h) = self.selection_holder_end() {
             return match h {
                 selectable::virtual_selection::EndRef::Mounted(i) => Some(self.select_unit(i)),

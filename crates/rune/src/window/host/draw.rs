@@ -183,6 +183,7 @@ impl Host {
             self.look();
             self.hand_over_if_done();
             if self.win.as_ref().is_some_and(|w| w.native.mode.cpu_draws()) { return self.draw_cpu(resizing); }
+            if self.try_draw_drag_resize() { return; }
         }
         // Linux: so does one there (`linux::cpu_frame`).
         #[cfg(target_os = "linux")]
@@ -509,7 +510,8 @@ impl FrameHost for WindowFrame<'_> {
                 self.host.app.rt_mut().settle_all();
                 #[cfg(target_os = "macos")]
                 if l.native.pacing.is_none() && !self.host.pacing_waits {
-                    l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.host.frame_wake.clone());
+                    l.native.pacing = crate::platform::display_link::DisplayLink::new(&l.window, self.host.frame_wake.clone())
+                        .map(|p| p.with_ambient_period(self.host.ambient_period));
                 }
             }
             let now = *self.state.now.get_or_insert_with(crate::time::now);
@@ -649,6 +651,8 @@ impl FrameHost for WindowFrame<'_> {
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
         let now = self.state.now.unwrap_or(submitted);
         if self.host.gpu.as_ref().is_none_or(|(gpu, _)| gpu.is_lost()) {
+            #[cfg(target_os = "windows")]
+            self.host.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
             let outcome = if let Some(l) = self.host.win.as_mut() {
                 #[cfg(target_os = "windows")]
                 l.native.slot.reset();
@@ -682,7 +686,8 @@ impl FrameHost for WindowFrame<'_> {
             if let Some(pacing) = &mut l.native.pacing { pacing.presented(submitted); }
             // A display link that couldn't be made while the displays slept: they're back.
             if !self.state.hidden && l.native.pacing.is_none() && !self.host.pacing_waits {
-                l.native.pacing = crate::platform::display_link::DisplayLink::retry(&l.window, self.host.frame_wake.clone());
+                l.native.pacing = crate::platform::display_link::DisplayLink::retry(&l.window, self.host.frame_wake.clone())
+                    .map(|p| p.with_ambient_period(self.host.ambient_period));
             }
         }
         let frame_seq = self.host.frame_reports.drawn(self.state.encoded, info.presents_at, now, info.update_ms);

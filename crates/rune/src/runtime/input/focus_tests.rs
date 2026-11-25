@@ -491,6 +491,7 @@ fn a_control_without_a_ring_draws_the_default_one_from_the_keyboard_only() {
             .child(menu)
     }
     let mut rt = Runtime::new(crate::TextEdit::new(""), view, (200.0, 300.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.set_tab_visits_controls(true);
     rt.frame(0.0);
     let rings = |rt: &Runtime<crate::TextEdit>| -> Vec<([f32; 4], [f32; 4], f32)> {

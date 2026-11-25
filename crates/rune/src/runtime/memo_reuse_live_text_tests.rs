@@ -81,21 +81,31 @@ fn memo_holding_live_text_reuses_nodes_copies_static_siblings_and_avoids_double_
     );
 
     // Commit with unrelated sibling change AND all N LiveText values updated in the same frame:
-    // each LiveText must be shaped once (in latch_live), never double-shaped, without growing commit caches.
+    // commit keeps the latched layouts (0 shapes in commit); latch_live observes the new mask
+    // ("000.00 bar") once, verifies it once (1 + 11 probes), and fast-paths the remaining cells
+    // with 0 shapes (13 total, never double-shaped by commit), without growing commit caches.
     for (i, c) in handles.iter().enumerate() {
         c.set(format!("{:6.2} bar", 200.0 + i as f64));
     }
     rt.update(|s, _| s.tick += 1);
     rt.frame(dt);
     assert_eq!(rt.stats.commits, commits0 + 2);
-    assert_eq!(rt.stats.shaped, N as u32, "changing N LiveText cells during a commit must shape exactly N times");
+    assert_eq!(rt.stats.shaped, 13, "new tabular mask verifies once in latch_live (never double-shaped in commit)");
+    // Next commit updating all N cells within the now-verified mask shapes 0 times.
+    for (i, c) in handles.iter().enumerate() {
+        c.set(format!("{:6.2} bar", 210.0 + i as f64));
+    }
+    rt.update(|s, _| s.tick += 1);
+    rt.frame(dt);
+    assert_eq!(rt.stats.commits, commits0 + 3);
+    assert_eq!(rt.stats.shaped, 0, "verified tabular LiveText cells shape 0 times during a commit");
     assert_eq!(rt.core().text.cached_layout_count(), layouts_before, "LiveText ticks during commit must not grow layout cache");
     assert_eq!(rt.core().text.cached_elision_count(), elisions_before, "LiveText ticks during commit must not grow elision cache");
     for (i, &expected_tag) in tag_epochs.iter().enumerate() {
         let tag = node_by_key(&rt, &format!("tag_{i}"));
         assert_eq!((tag.id, tag.epoch), expected_tag, "static tag_{i} must stay reused when LiveText ticks");
         let val = node_by_key(&rt, &format!("val_{i}"));
-        assert_eq!(val.text.as_ref().unwrap().content, format!("{:6.2} bar", 200.0 + i as f64));
+        assert_eq!(val.text.as_ref().unwrap().content, format!("{:6.2} bar", 210.0 + i as f64));
     }
     assert!(
         !rt.core().commit.memo.flattened.is_empty(),
@@ -109,7 +119,7 @@ fn memo_holding_live_text_reuses_nodes_copies_static_siblings_and_avoids_double_
         .iter()
         .find(|(_, n)| n.author_id() == Some("val_0"))
         .and_then(|(_, n)| n.value().or_else(|| n.label()));
-    assert_eq!(ak_val_0, Some("200.00 bar"));
+    assert_eq!(ak_val_0, Some("210.00 bar"));
 }
 
 #[test]

@@ -4,6 +4,7 @@ use crate::el::{col, el};
 
 mod app_ime;
 mod context_menu_key;
+mod disabled_builder_order;
 mod draw_on;
 mod edit;
 mod enter_in_instant;
@@ -14,6 +15,7 @@ mod glyph_replay;
 mod group_opacity;
 mod hold_layout;
 mod id_pruning;
+mod inline_box;
 mod input_clipboard;
 mod layout_hover;
 mod layout_reads;

@@ -56,15 +56,21 @@ impl Host {
 
     #[cfg(target_os = "macos")]
     pub(in crate::window) fn fn_key(&mut self) {
-        let Some(l) = &self.win else { return };
-        let Some(changes) = l.native.fn_key.as_ref().map(|f| f.take()) else { return };
+        let changes = {
+            let Some(l) = &self.win else { return };
+            let Some(changes) = l.native.fn_key.as_ref().map(|f| f.take()) else { return };
+            changes
+        };
+        if !changes.is_empty() {
+            self.note_input(crate::time::now());
+        }
         let mut redraw = false;
         for pressed in changes {
             redraw |= self.app.physical_with_fallback(crate::PhysicalInput::Key {
                 key: winit::keyboard::KeyCode::Fn, mods: map_mods(self.mods), pressed, repeat: false,
             }, None);
         }
-        if redraw { l.request_redraw(); }
+        if redraw && let Some(l) = &self.win { l.request_redraw(); }
     }
 
     #[cfg(target_os = "macos")]
@@ -132,7 +138,12 @@ impl Host {
             if queued { crate::input::time::record_last(now); }
         }
         if !queued { return; }
-        if !self.life.covered() && !l.minimized() { l.request_redraw(); } else {
+        let covered = self.life.covered() || l.minimized();
+        let _ = l;
+        self.note_input(crate::time::now());
+        if !covered {
+            if let Some(l) = &self.win { l.request_redraw(); }
+        } else {
             self.covered_frame();
             self.shell(event_loop);
         }
@@ -197,6 +208,10 @@ impl Host {
             WakeEvent::GpuReady(_) => self.gpu_ready(),
             #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             WakeEvent::GpuReady(_) => {}
+            #[cfg(target_os = "windows")]
+            WakeEvent::ResizeSync(_) => self.handle_resize_sync_wake(),
+            #[cfg(not(target_os = "windows"))]
+            WakeEvent::ResizeSync(_) => {}
             WakeEvent::Reopen | WakeEvent::Turn | WakeEvent::Quit(_) | WakeEvent::FileDrop | WakeEvent::LayerPending | WakeEvent::AppColorScheme => {}
         }
     }
@@ -243,6 +258,9 @@ impl Host {
         // A window replaying `--window-script` takes its pointer from the script alone.
         if super::window_script::drops(self.window_script.is_some(), &event) {
             return;
+        }
+        if crate::input::time::current().is_some() {
+            self.note_input(crate::time::now());
         }
         self.a11y_window_event(&event);
         // What says whether other windows cover it (`look`): the pointer reaching it shows some
@@ -386,9 +404,19 @@ impl Host {
                     l.stop_pacing();
                     l.presented = None;
                     app.rt_mut().cancel_timer_frame();
-                    self.idle = true; return;
+                    self.idle = true;
+                    #[cfg(target_os = "windows")]
+                    self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Hide);
+                    return;
                 }
                 let origin_moved = sync_screen_origin_core(app.rt_mut(), &l.window);
+                #[cfg(target_os = "windows")]
+                if self.try_handle_drag_resize(size, scale, event_loop) {
+                    return;
+                }
+                let Some(l) = self.win.as_mut() else { return };
+                let gpu = self.gpu.as_ref().map(|(gpu, _)| &**gpu);
+                let app = &mut *self.app;
                 // A frame Rune moved itself has its drawable and viewport already.
                 let resized = l.resize_surface(gpu, size);
                 #[cfg(target_os = "macos")]
@@ -487,6 +515,7 @@ impl Host {
                     self.ime.clear();
                     // A minimized or occluded window skips redraw.
                     l.apply_cursor_core(rt, false);
+                    l.apply_pointer_lock_core(rt);
                 } else if rt.stale() {
                     rt.edit.ime_reset = true;
                 } else {

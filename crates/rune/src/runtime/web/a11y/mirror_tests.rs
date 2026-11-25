@@ -368,7 +368,7 @@ fn slider_and_spinbutton_export_range_value_text_and_focus_proxy_states() {
                     .label("Volume")
                     .range_value(s.volume, 0.0, 100.0)
                     .a11y_value(format!("{}%", s.volume.round()))
-                    .disabled(s.locked)
+                    .aria_disabled(s.locked)
                     .busy(s.busy)
                     .focusable(true)
                     .size(180.0, 24.0),

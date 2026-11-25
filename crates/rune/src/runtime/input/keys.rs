@@ -105,6 +105,9 @@ impl RuntimeCore {
                 }
             }
         }
+        if self.focused_input().is_none() && self.caret_browse_key(app, ev, one) {
+            return true;
+        }
         one.physical_key = physical_key;
         if !app_first && !app.playground_typing() && app.has_on_key() && Tx::took(app.on_key(ev, one), one) {
             if self.has_secure_focus() { log_event!(self, "key [redacted]"); } else { log_event!(self, "key {:?}", ev.key); }
@@ -528,8 +531,8 @@ impl RuntimeCore {
         self.dismiss_help();
         // A key ends a middle-click autoscroll, and does nothing else.
         if self.pointer.autoscroll_key() { return; }
-        // Escape during a drag cancels it and goes no further.
-        if ev.key == crate::Key::Escape && self.cancel_drag() { return; }
+        // Escape cancels a held drag first, or releases an active pointer lock, and goes no further.
+        if ev.key == crate::Key::Escape && (self.cancel_drag() || self.release_pointer_lock()) { return; }
         self.frame.queue.push(Action::Key { ev, repeat: false, stage });
     }
 

@@ -283,7 +283,8 @@ impl OverlayCore {
             if !all && renderer.has_oversized_uploads_in_flight() {
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
             }
-            renderer.give_back(all, &mut app.rt_mut().text.atlas.resident_caches);
+            let rt = app.rt_mut();
+            renderer.give_back(all, &mut rt.text.atlas.resident_caches, &rt.images);
             if all {
                 // Non-blocking retirement on shared devices: poll once so completed submissions
                 // retire and hand back staging chunks before trimming, and schedule deferred
@@ -431,6 +432,8 @@ impl OverlayCore {
         crate::native_menu::adopt_standard_view();
         #[cfg(all(target_os = "linux", feature = "dbus"))]
         crate::platform::portal_appearance::follow(&window);
+        #[cfg(all(target_os = "linux", not(feature = "dbus")))]
+        crate::platform::preferences::follow_fallback(&window);
         self.dark = window.theme().map_or_else(|| crate::platform::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
         app.rt_mut().set_system_dark(self.dark);
         if self.cursor.is_none() { self.cursor = Some(crate::cursor::os::OsCursor::new()); }

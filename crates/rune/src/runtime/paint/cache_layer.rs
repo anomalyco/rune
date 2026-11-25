@@ -142,6 +142,9 @@ impl RuntimeCore {
             (self.paint.srgb_blend, self.text.smoothing, self.text.families(), crate::text::icon::swap_id()).hash(&mut h);
             h.write_u32(s.to_bits());
             sel_ranges.hash(&mut h);
+            self.caret_browse_focus_in(&self.tree.nodes)
+                .map(|(fi, b, aff)| (fi, b, matches!(aff, parley::Affinity::Upstream)))
+                .hash(&mut h);
             // A selection's colours follow the window's focus (`El::selection_style`).
             if !sel_ranges.is_empty() {
                 self.host.window_focused.hash(&mut h);

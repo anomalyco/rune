@@ -382,27 +382,37 @@ pub fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley::editin
 /// Start (`!end`) or end (`end`) byte of the visual line containing `byte`.
 #[doc(hidden)]
 pub fn line_edge(layout: &Layout<Ink>, byte: usize, end: bool) -> usize {
-    use parley::{BreakReason, editing::Cursor, layout::Affinity};
-    let cur = Cursor::from_byte_index(layout, byte, Affinity::Downstream);
-    let bb = cursor_geometry(&cur, layout, 0.0);
-    let y = ((bb.y0 + bb.y1) * 0.5) as f32;
-    let Some((_, line)) = line_for_offset(layout, y).or_else(|| {
-        let last = layout.len().checked_sub(1)?;
-        Some((last, layout.get(last)?))
-    }) else {
-        return byte;
+    line_edge_with_affinity(layout, byte, parley::layout::Affinity::Downstream, end).0
+}
+
+/// Start (`!end`) or end (`end`) byte and affinity of the visual line holding `(byte, side)`.
+/// Soft-wrapped line ends return `Affinity::Upstream` so the caret stays visually at the end of
+/// the wrapped line rather than jumping to the start of the following line.
+#[doc(hidden)]
+pub fn line_edge_with_affinity(
+    layout: &Layout<Ink>,
+    byte: usize,
+    side: parley::layout::Affinity,
+    end: bool,
+) -> (usize, parley::layout::Affinity) {
+    use parley::{BreakReason, layout::Affinity};
+    let Some((line_ix, line)) = line_for_cursor(layout, byte, side) else {
+        return (byte, Affinity::Downstream);
     };
     let r = line.text_range();
     if r.start > r.end {
-        return byte;
+        return (byte, Affinity::Downstream);
     }
     if !end {
-        return r.start;
+        return (r.start, Affinity::Downstream);
     }
     if line.break_reason() == BreakReason::Explicit && r.end > r.start {
-        parley::Cluster::from_byte_index(layout, r.end - 1).map_or(r.end - 1, |c| c.text_range().start)
+        let edge = parley::Cluster::from_byte_index(layout, r.end - 1).map_or(r.end - 1, |c| c.text_range().start);
+        (edge, Affinity::Downstream)
+    } else if line.break_reason() != BreakReason::Explicit && line_ix + 1 < layout.len() {
+        (r.end, Affinity::Upstream)
     } else {
-        r.end
+        (r.end, Affinity::Downstream)
     }
 }
 
@@ -430,6 +440,35 @@ pub fn move_line(layout: &Layout<Ink>, byte: usize, down: bool, goal: Option<f32
     let line = layout.get(if down { idx + 1 } else { idx - 1 })?;
     let m = line.metrics();
     Some((cursor_from_point(layout, x, (m.block_min_coord + m.block_max_coord) * 0.5).index(), x))
+}
+
+/// Like [`move_line`], but respects `side` affinity on wrapped lines and returns `None` at both
+/// the first line moving up and the last line moving down so multi-text callers can cross into
+/// adjacent sibling texts.
+#[doc(hidden)]
+pub fn move_line_strict(
+    layout: &Layout<Ink>,
+    byte: usize,
+    side: parley::layout::Affinity,
+    down: bool,
+    goal: Option<f32>,
+) -> Option<(usize, parley::layout::Affinity, f32)> {
+    use parley::editing::Cursor;
+    if layout.len() == 0 {
+        return None;
+    }
+    let cur = Cursor::from_byte_index(layout, byte, side);
+    let bb = cursor_geometry(&cur, layout, 0.0);
+    let x = goal.unwrap_or(bb.x0 as f32);
+    let (idx, _) = line_for_cursor(layout, byte, side)?;
+    if (!down && idx == 0) || (down && idx + 1 >= layout.len()) {
+        return None;
+    }
+    let target_idx = if down { idx + 1 } else { idx - 1 };
+    let line = layout.get(target_idx)?;
+    let m = line.metrics();
+    let hit = cursor_from_point(layout, x, (m.block_min_coord + m.block_max_coord) * 0.5);
+    Some((hit.index(), hit.affinity(), x))
 }
 
 /// Line boxes (`(BoundingBox, line_idx)`) covering bytes `a..b` of `layout`. When `pill_boxes`

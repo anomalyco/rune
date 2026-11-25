@@ -11,11 +11,14 @@
 
 #![forbid(unsafe_code)]
 
+mod ambient_fps_story;
 mod any_handlers;
 mod any_press;
 mod emoji_family_story;
+mod inline_box_story;
 mod mount;
 mod pick;
+mod pointer_lock;
 mod reveal_fps_story;
 mod scroll_anchor_story;
 mod text_indent_story;
@@ -686,6 +689,12 @@ fn main() {
                         .variant("Closed", |s| s.popup_open = false),
                 )
                 .story(
+                    Story::new("Controls/Pointer/Pointer lock", pointer_lock::PointerLockDemo::default, pointer_lock::view)
+                        .trigger('e', "Toggle pointer lock", |s, _| s.enabled = !s.enabled)
+                        .variant("Enabled", |_| {})
+                        .variant("Disabled", |s| s.enabled = false),
+                )
+                .story(
                     Story::new("Controls/Buttons/Press cursor & bounds", press_pointer::PressPointerDemo::default, press_pointer::view)
                         .trigger('c', "Toggle press_cursor", |s, _| s.pointer_default = !s.pointer_default)
                         .variant("Pointer cursor on", |_| {})
@@ -698,6 +707,7 @@ fn main() {
                         .variant("Active", |_| {})
                         .variant("Pulse paused", |s| s.pulsing = false),
                 )
+                .story(ambient_fps_story::story())
                 .story(
                     Story::new("Controls/Switches/Toggle", || Switch { on: true, dimmed: false, label: "Sync across devices" }, switch_story)
                         .trigger('t', "Flip", |s, _| s.on = !s.on)
@@ -733,6 +743,7 @@ fn main() {
                         .variant("65 / 35 · row center_y", |s| { s.align = 3; s.split = 0.65; }),
                 )
                 .story(text_indent_story::story())
+                .story(inline_box_story::story())
                 .story(emoji_family_story::story())
                 .story(reveal_fps_story::story())
                 .story(
@@ -784,7 +795,18 @@ fn main() {
                 .start_folded(true)
                 .sizes(&[("Compact", (420.0, 300.0)), ("Wide", (900.0, 560.0))]),
         )
+        .ambient_fps(configured_ambient_fps())
         .run();
+}
+
+fn configured_ambient_fps() -> f32 {
+    let extra = rune::extra_args();
+    for pair in extra.windows(2) {
+        if pair[0] == "--ambient-fps" && let Ok(hz) = pair[1].parse::<f32>() {
+            return hz;
+        }
+    }
+    rune::env::var("RUNE_AMBIENT_FPS").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0)
 }
 
 #[cfg(test)]

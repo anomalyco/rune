@@ -548,6 +548,7 @@ fn text_area_forwards_pill_image_and_line_fills() {
         (320.0, 160.0),
         Env::new(true, 1.0),
     );
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     assert!(rt.instances.iter().any(|q| q.params[1] == rune::render::KIND_IMAGE));
     assert!(rt.instances.iter().any(|q| q.params[1] == rune::render::KIND_RECT && q.params[0] > 0.5 && q.border[3] > 0.5));

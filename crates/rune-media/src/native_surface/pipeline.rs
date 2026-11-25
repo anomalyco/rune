@@ -159,6 +159,23 @@ impl SurfaceRenderer {
         None
     }
 
+    /// Creates a native surface renderer targeting `format`.
+    ///
+    /// Blending defaults to sRGB-encoded (`srgb_blend() == true`) for 8-bit non-sRGB targets
+    /// (`Rgba8Unorm` and `Bgra8Unorm`), and to linear light (`srgb_blend() == false`) for
+    /// `*Srgb` (`Rgba8UnormSrgb`, `Bgra8UnormSrgb`) and floating-point HDR (`Rgba16Float`)
+    /// targets. Override with [`Self::set_srgb_blend`].
+    ///
+    /// ```no_run
+    /// # fn demo(device: &wgpu::Device) {
+    /// use rune_media::native_surface::SurfaceRenderer;
+    ///
+    /// let srgb = SurfaceRenderer::new(device, wgpu::TextureFormat::Rgba8Unorm);
+    /// assert!(srgb.srgb_blend());
+    /// let linear = SurfaceRenderer::new(device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    /// assert!(!linear.srgb_blend());
+    /// # }
+    /// ```
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let layout = Self::bind_layout(device);
@@ -245,7 +262,7 @@ impl SurfaceRenderer {
             punched: Vec::new(),
             punch: None,
             punch_building: None,
-            srgb_blend: false,
+            srgb_blend: matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm),
             staging: None,
             #[cfg(target_os = "macos")]
             importer: None,
@@ -281,8 +298,27 @@ impl SurfaceRenderer {
         })
     }
 
+    /// Overrides whether video frames are output in sRGB-encoded space for blending (`true` by
+    /// default for `Rgba8Unorm` and `Bgra8Unorm`; `false` by default for `*Srgb` and
+    /// floating-point targets).
+    ///
+    /// ```no_run
+    /// # fn demo(device: &wgpu::Device) {
+    /// use rune_media::native_surface::SurfaceRenderer;
+    ///
+    /// let mut renderer = SurfaceRenderer::new(device, wgpu::TextureFormat::Rgba8UnormSrgb);
+    /// renderer.set_srgb_blend(false);
+    /// assert!(!renderer.srgb_blend());
+    /// # }
+    /// ```
     pub fn set_srgb_blend(&mut self, enabled: bool) {
         self.srgb_blend = enabled;
+    }
+
+    /// True when video frames are output in sRGB-encoded space for non-sRGB targets; false when
+    /// output in linear light for `*Srgb` or floating-point targets.
+    pub fn srgb_blend(&self) -> bool {
+        self.srgb_blend
     }
 
     #[doc(hidden)]

@@ -404,6 +404,15 @@ pub(super) fn submit_and_present_window(
             l.native.mode = handover::SurfaceMode::Handed { handover };
         }
     }
+    // Synchronized drag resize exit (`RUNE_RESIZE_SYNC=1`): once this normal flip-model frame
+    // finishes on the GPU, re-attach DirectComposition and free drag resources.
+    #[cfg(target_os = "windows")]
+    let drag_exit_completed = if l.native.resize_sync.is_leaving() {
+        let polled = rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely());
+        Some(should_commit_rebind(&polled, gpu.is_lost()))
+    } else {
+        None
+    };
     // The frame landed with this present; later ones needn't wait for a transaction.
     #[cfg(target_os = "macos")]
     if !FrameMove::moving(&host.frame_move) { l.present_with_transaction(false); }
@@ -450,6 +459,10 @@ pub(super) fn submit_and_present_window(
     );
     #[cfg(not(feature = "frame-profile"))]
     let _ = (looped, info);
+    #[cfg(target_os = "windows")]
+    if let Some(completed) = drag_exit_completed {
+        host.finish_resize_sync_exit_frame(completed);
+    }
     crate::time::now()
 }
 

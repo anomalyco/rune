@@ -465,6 +465,7 @@ fn highlights_map_source_bytes_across_formatting_blocks_and_syntax_without_resha
     }
     fn render_with(src: &str, hls: &[(std::ops::Range<usize>, Highlight)]) -> Runtime<HlState> {
         let mut rt = Runtime::new((src.to_owned(), hls.to_vec()), hl_view, (520.0, 900.0), Env::new(true, 1.0));
+        rt.set_srgb_blend(false);
         rt.frame(0.0);
         rt
     }

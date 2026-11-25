@@ -8,7 +8,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use crate::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use crate::runtime::{AppDriver, Env, RuntimeCore, Waker};
 use crate::tooling::{AppSpec, Args, runtime_for, tree_json_core};
 
@@ -243,7 +243,7 @@ fn headless_core(
 ) {
     if let Some(bars) = args.scroll_bars { core.set_system_scroll_bars(bars); }
     let srgb_blend = core.srgb_blend();
-    let target_format = if srgb_blend { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+    let target_format = if srgb_blend { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR };
     let (gpu, mut renderer) = Gpu::for_headless_setup(wgpu::Features::empty(), |gpu| {
         Renderer::try_new_classified(&gpu.device, target_format)
             .map_err(crate::render::SurfaceSetupError::from_shader)
@@ -292,7 +292,7 @@ fn headless_core(
         let generation = core.frame.hot().unwrap().seen;
         if first || requested || before != generation {
             if renderer.srgb_blend() != core.srgb_blend() {
-                let format = if core.srgb_blend() { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+                let format = if core.srgb_blend() { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR };
                 crate::window::rebuild_renderer_core(&gpu.device, &mut renderer, format, core);
                 target = Offscreen::with_format(&gpu.device, w, h, format);
             }

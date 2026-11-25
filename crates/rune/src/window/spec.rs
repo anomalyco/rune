@@ -955,6 +955,23 @@ impl<S: 'static> WindowSpec<S> {
         on_frame_presented(f: impl FnMut(&crate::FramePresented) + 'static);
         /// Runs on the UI thread after each drawn frame of this window with its runtime, like `App::on_frame_drawn`.
         on_frame_drawn(f: impl FnMut(&crate::Runtime<S>) + 'static);
+        /// Cap frame pacing (Hz) for motion no recent user input is steering in this window
+        /// (`0.0`, default = uncapped display rate), like [`App::ambient_fps`].
+        ///
+        /// Enforced on macOS `DisplayLink` windows today; ignored on Windows, Linux, web,
+        /// overlays, and headless runs.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, text};
+        ///
+        /// let spec = WindowSpec::new(
+        ///     "chat",
+        ///     AppSpec::new("Chat", (720.0, 540.0), String::new, |s, _| text(s.as_str()).wrap()),
+        /// )
+        /// .ambient_fps(60.0);
+        /// let _ = spec;
+        /// ```
+        ambient_fps(fps: f32);
         /// Keep this window's layout reads across launches, like `App::layout_seed`.
         layout_seed(seed: Option<crate::LayoutSeed>, keep: impl FnMut(crate::LayoutSeed) + 'static);
         /// Draw every frame of this window through `compositor`, like `App::compositor`.

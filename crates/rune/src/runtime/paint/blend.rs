@@ -6,11 +6,11 @@ use crate::text::FontSmoothing;
 
 impl RuntimeCore {
     /// Enable or disable gamma-space (sRGB) blending for translucent fills, shadows, blurs,
-    /// images and video, as `App::srgb_blend` does for a window. Every colour the next frame
-    /// builds, hover and press tints included, is premultiplied in sRGB encoding
-    /// (`Color::premul_srgb`). A runtime drawn by the app itself (`Runtime::with_text`, a
-    /// headless snapshot) then draws with `Renderer::set_srgb_blend(true)` into a non-sRGB
-    /// target (`format.remove_srgb_suffix()`), cleared to `clear_color()`.
+    /// images and video, as `App::srgb_blend` does for a window. On by default: every colour
+    /// built by the runtime, hover and press tints included, is premultiplied in sRGB encoding
+    /// (`Color::premul_srgb`) for a non-sRGB target (`OFFSCREEN_FORMAT`), cleared to
+    /// `clear_color()`. Pass `false` to blend in linear light into an `*Srgb` target
+    /// (`OFFSCREEN_FORMAT_LINEAR`) with `Renderer::set_srgb_blend(false)`.
     pub fn set_srgb_blend(&mut self, enabled: bool) {
         if self.paint.set_srgb_blend(enabled) {
             self.commit.dirty = true;
