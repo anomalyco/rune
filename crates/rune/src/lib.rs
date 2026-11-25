@@ -353,6 +353,7 @@ pub use runtime::ResolvedTextStyle;
 pub use runtime::Runtime;
 pub use runtime::SelectedText;
 pub use runtime::SelectionChange;
+pub use runtime::TextLine;
 pub use runtime::TextMark;
 pub use runtime::TextSelection;
 pub use runtime::TitlebarAction;

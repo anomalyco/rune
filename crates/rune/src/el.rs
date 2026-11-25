@@ -235,6 +235,7 @@ pub(crate) type InputPasteFn = Rc<dyn Fn(crate::states::States<'_>, &crate::Clip
 pub(crate) type InputCopyFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx) -> Option<crate::ClipboardContent>>;
 pub(crate) type PickFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::Picked>, &mut Tx)>;
 pub(crate) type TextOffsetFn = Box<dyn FnOnce(crate::states::States<'_>, Option<usize>, &mut Tx)>;
+pub(crate) type TextLineFn = Box<dyn FnOnce(crate::states::States<'_>, Option<crate::TextLine>, &mut Tx)>;
 pub(crate) type ElementsReadFn = Box<dyn FnOnce(crate::states::States<'_>, &[crate::ElementInfo], &mut Tx)>;
 
 #[derive(Clone)]
@@ -252,6 +253,11 @@ pub(crate) enum PickRead {
         y: f32,
         f: Rc<std::cell::Cell<Option<TextOffsetFn>>>,
     },
+    TextLine {
+        key: String,
+        byte: usize,
+        f: Rc<std::cell::Cell<Option<TextLineFn>>>,
+    },
     Elements {
         f: Rc<std::cell::Cell<Option<ElementsReadFn>>>,
     },
@@ -261,6 +267,7 @@ impl std::fmt::Debug for PickRead {
         match self {
             Self::Element { .. } => f.write_str("PickRead::Element"),
             Self::TextOffset { .. } => f.write_str("PickRead::TextOffset"),
+            Self::TextLine { .. } => f.write_str("PickRead::TextLine"),
             Self::Elements { .. } => f.write_str("PickRead::Elements"),
         }
     }

@@ -178,6 +178,7 @@ pub(crate) use selection::links::count_span_box_queries;
 pub(crate) use selection::links::origin as text_origin;
 pub(crate) use selection::selectable;
 pub use selection::selectable::{SelectedText, SelectionChange, TextSelection};
+pub use selection::field_lines::TextLine;
 pub use selection::text_marks::TextMark;
 use selection::{caret, click as input_click, links, select_all, text_marks};
 
