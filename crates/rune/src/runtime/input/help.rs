@@ -3,7 +3,8 @@
 //! shows its tooltip under the element; a press, scroll or key hides it until the pointer
 //! leaves the element, as does the pointer leaving. The tooltip draws over everything and
 //! follows its element while that moves under the pointer. A text's links can carry their own
-//! help (`Link::help`), hit-tested on their glyphs and shown under the link.
+//! help (`Link::help`), hit-tested on their glyphs and shown under the link, and so can its
+//! inline icons (`InlineIcon::help`), hit-tested on the icon's square and shown under it.
 //!
 //! A macOS window shows AppKit's own tooltips instead (`set_native_help`): the host registers
 //! [`Runtime::help_regions`] with its view and AppKit owns the delay, look and hiding, unless
@@ -33,12 +34,17 @@ pub(in crate::runtime) struct HelpState {
     regions: Vec<([f32; 4], String)>,
 }
 
-/// A help element, or one link of its text, by path.
+/// A help element, or one link or inline icon of its text, by path.
 #[derive(Clone, Debug, PartialEq)]
 struct Target {
     path: String,
+    /// A link's index, or from [`ICON_HELP`] on an inline icon's (its pill's index).
     link: Option<usize>,
 }
+
+/// A help hit's or target's `link` from here on names an inline icon of the text, by its
+/// pill's index, not one of its links.
+pub(in crate::runtime) const ICON_HELP: usize = 1 << 24;
 
 /// Where the tooltip is in its life. Times are clock seconds.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -304,9 +310,21 @@ impl RuntimeCore {
         }
     }
 
-    /// The help text of node `i`, or of its link `link`.
+    /// During `build`: the squares of node `i`'s inline icons that have help, for border box
+    /// `rect` and clipped to `clip` (points, x0 y0 x1 y1), after the first `seq` hits.
+    pub(in crate::runtime) fn push_icon_help_hits(&mut self, i: usize, rect: [f32; 4], clip: [f32; 4], seq: usize) {
+        let id = self.tree.nodes[i].id;
+        for (k, r) in self.inline_icon_boxes(i, rect) {
+            if self.help_text(i, Some(ICON_HELP + k)).is_none() { continue; }
+            let c = [r[0].max(clip[0]), r[1].max(clip[1]), r[2].min(clip[2]), r[3].min(clip[3])];
+            self.hit.push_help_hit(id, c, seq, Some(ICON_HELP + k));
+        }
+    }
+
+    /// The help text of node `i`, or of its link or inline icon `link`.
     fn help_text(&self, i: usize, link: Option<usize>) -> Option<&String> {
         match link {
+            Some(k) if k >= ICON_HELP => self.tree.nodes[i].text.as_ref()?.cold.pills.get(k - ICON_HELP)?.bare.as_deref()?.help.as_ref(),
             Some(k) => self.tree.nodes[i].text.as_ref()?.cold.links.get(k)?.help.as_ref(),
             None => self.tree.nodes[i].help.as_ref(),
         }
@@ -460,8 +478,14 @@ impl RuntimeCore {
             let node = under.or_else(|| self.hover_live(&target.path));
             if let Some(i) = node && let Some(text) = self.help_text(i, link).cloned() {
                 let e = self.drawn_box(i);
-                let anchor = link.and_then(|k| self.link_boxes_for(i, k, e).into_iter().map(|(_, r)| r)
-                    .reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])]));
+                let anchor = link.and_then(|k| {
+                    let boxes = if k >= ICON_HELP {
+                        self.inline_icon_boxes(i, e).into_iter().filter(|(j, _)| *j == k - ICON_HELP).collect()
+                    } else {
+                        self.link_boxes_for(i, k, e)
+                    };
+                    boxes.into_iter().map(|(_, r)| r).reduce(|u, r| [u[0].min(r[0]), u[1].min(r[1]), u[2].max(r[2]), u[3].max(r[3])])
+                });
                 let box_rect = anchor.unwrap_or(e);
                 if box_rect[2] <= box_rect[0] && box_rect[3] <= box_rect[1] {
                     let path = self.tree.nodes[i].path.clone();

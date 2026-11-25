@@ -19,9 +19,11 @@ pub(super) const ROOT: AkId = AkId(1);
 const TOOLTIP: AkId = AkId(2);
 /// `Tx::announce`'s live region.
 const ANNOUNCER: AkId = AkId(3);
-/// Bits under an element's id for the nodes it owns: its text's lines and links.
+/// Bits under an element's id for the nodes it owns: its text's lines, links and named inline
+/// icons.
 const SUB: u32 = 16;
 pub(super) const LINK_BASE: u64 = 0x8000;
+pub(super) const ICON_BASE: u64 = 0xF000;
 pub(super) const LINES_BOX_CLASS: &str = "\x1frune-lines";
 pub(super) const LINE_CLASS: &str = "\x1frune-line";
 
@@ -29,11 +31,13 @@ pub(super) fn element_id(id: NodeId) -> AkId { AkId(id.0 << SUB) }
 pub(super) fn line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
 pub(super) fn lines_box_id(id: NodeId) -> AkId { AkId((id.0 << SUB) | (LINK_BASE - 1)) }
 pub(super) fn drawn_line_id(id: NodeId, line: usize) -> AkId { AkId((id.0 << SUB) | (1 + line as u64).min(LINK_BASE - 2)) }
-pub(super) fn link_id(id: NodeId, k: usize) -> AkId { AkId((id.0 << SUB) | (LINK_BASE + k as u64).min((1 << SUB) - 1)) }
+pub(super) fn link_id(id: NodeId, k: usize) -> AkId { AkId((id.0 << SUB) | (LINK_BASE + k as u64).min(ICON_BASE - 1)) }
+/// A named inline icon (`InlineIcon::label`), by its pill's index.
+pub(super) fn icon_id(id: NodeId, k: usize) -> AkId { AkId((id.0 << SUB) | (ICON_BASE + k as u64).min((1 << SUB) - 1)) }
 /// The runtime node an AccessKit id names, and which of its own nodes: 0 the element, a line
-/// `1..LINK_BASE`, a link from `LINK_BASE`.
+/// `1..LINK_BASE`, a link `LINK_BASE..ICON_BASE`, a named inline icon from `ICON_BASE`.
 pub(super) fn split_id(id: AkId) -> (NodeId, u64) { (NodeId(id.0 >> SUB), id.0 & ((1 << SUB) - 1)) }
-pub(super) fn sub_link(sub: u64) -> Option<usize> { (sub >= LINK_BASE).then(|| (sub - LINK_BASE) as usize) }
+pub(super) fn sub_link(sub: u64) -> Option<usize> { (LINK_BASE..ICON_BASE).contains(&sub).then(|| (sub - LINK_BASE) as usize) }
 
 /// What a tree update read last time: when none of it moved, nothing it builds can have.
 #[derive(Clone, PartialEq, Default)]
@@ -564,7 +568,8 @@ impl RuntimeCore {
             Some(t) => {
                 let words = t.source_text();
                 let words = words.trim();
-                !words.is_empty() && t.cold.links.is_empty() && name.contains(words)
+                let named_icon = t.cold.pills.iter().any(|p| p.bare.as_deref().is_some_and(|b| b.label.is_some()));
+                !words.is_empty() && t.cold.links.is_empty() && !named_icon && name.contains(words)
             }
             None => n.label.as_deref().is_none_or(|l| l.trim().is_empty() || name.contains(l.trim())) && n.vis.grid.is_none(),
         }

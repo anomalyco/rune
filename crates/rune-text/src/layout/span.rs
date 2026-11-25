@@ -148,6 +148,10 @@ pub struct BareIcon {
     pub image: Option<rune_image::pixels::Pixels>,
     /// Set, the image takes the place of its pill's label instead of sitting before it.
     pub replace: Option<Replace>,
+    /// Its name for assistive technology (`InlineIcon::label`).
+    pub label: Option<String>,
+    /// Its tooltip (`InlineIcon::help`).
+    pub help: Option<String>,
 }
 
 /// An image set on the baseline in place of a pill's label (see `InlineImage`): `width`

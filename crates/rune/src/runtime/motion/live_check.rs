@@ -237,7 +237,7 @@ impl NodePrint {
                     p.ring.map(|(c, w)| (c, w.to_bits())),
                     p.radius.map(f32::to_bits),
                 ).hash(h);
-                p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits(), b.radius.to_bits(), b.image.as_ref().map(crate::pixels::Pixels::signature), b.replace.map(|r| bits(&[r.width, r.ascent, r.descent, r.bleed])))).hash(h);
+                p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits(), b.radius.to_bits(), b.image.as_ref().map(crate::pixels::Pixels::signature), b.replace.map(|r| bits(&[r.width, r.ascent, r.descent, r.bleed])), b.label.as_deref(), b.help.as_deref())).hash(h);
             }), None),
             ("rings", |t| key(|h| for &(a, b, c, w) in &t.cold.rings { (a, b, c, w.to_bits()).hash(h) }), None),
             ("strikes", |t| key(|h| t.cold.strikes.hash(h)), None),

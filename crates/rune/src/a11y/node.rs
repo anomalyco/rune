@@ -104,6 +104,9 @@ impl RuntimeCore {
             }
             (t.redacted, t.selectable, t.cold.on_link.is_some(), t.cold.on_link_secondary.is_some(), t.cold.links.len()).hash(&mut h);
             for l in &t.cold.links { (l.start, l.end, &l.id, l.role, &l.label).hash(&mut h); }
+            for p in &t.cold.pills {
+                if let Some(b) = p.bare.as_deref().filter(|b| b.label.is_some()) { (p.start, &b.label, &b.help).hash(&mut h); }
+            }
         }
         // A text's lines come from its layout and where it scrolled; a long field's drawn lines
         // live under `lines_box_id`, whose own fingerprint tracks its layout and scroll band.
