@@ -15,5 +15,5 @@ pub(crate) mod wire;
 pub(crate) use wire::{SurfaceBlur, shutdown};
 
 #[cfg(test)]
-#[path = "wayland_backdrop/tests.rs"]
+#[path = "backdrop/tests.rs"]
 mod tests;
