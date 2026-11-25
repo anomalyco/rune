@@ -3412,6 +3412,12 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
   without calling `Compositor::release_gpu`. Hard limits: commands already submitted to
   `queue.submit`/`present` cannot be recalled; on macOS, Rune's native Metal backend implements
   `set_device_lost_callback` while uncaptured errors require `App::gpu_backend(GpuBackend::Wgpu)`.
+  On Windows and Linux, `AppHandle::warm_gpu_with(features, prepare)` (no-op on macOS and
+  `wasm32`) is the app-attributed form of `rune::warm_gpu_with`: under `GpuLossPolicy::Terminal`,
+  it binds the initiating app's latch to warm-up creation, `prepare`, and the parked device,
+  refuses warm-up once latched, propagates creation/preparation/parked-device failures to the app
+  instead of creating a replacement device, and detaches cleanly on normal linger expiry or
+  shutdown.
 - `Renderer::prepare_lists` uploads several instance lists in one buffer (one glyph upload) and
   returns their ranges; `encode_layers` records isolated groups before the containing pass;
   `draw_range` draws complete scopes into that pass; `add_format` builds the uber

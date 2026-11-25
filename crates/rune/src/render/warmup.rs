@@ -363,6 +363,16 @@ pub fn warm_gpu_with(features: wgpu::Features, prepare: impl FnOnce(&wgpu::Devic
     let _ = (features, prepare);
 }
 
+/// App-attributed form of [`warm_gpu_with`] used by [`crate::AppHandle::warm_gpu_with`].
+#[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
+pub(crate) fn warm_gpu_with_owner(
+    features: wgpu::Features,
+    owner: Option<std::sync::Arc<super::loss_latch::GpuLossLatch>>,
+    prepare: Box<dyn FnOnce(&wgpu::Device) + Send>,
+) {
+    super::prewarm::warm_with_owner(features, owner, Some(prepare));
+}
+
 /// `warm_gpu` for a window that opened on the CPU: on a thread, once the device and renderer
 /// wait for the window's surface, `frame` draws with them, then `done` runs; with no device,
 /// only `done` (`window::linux::handover`).

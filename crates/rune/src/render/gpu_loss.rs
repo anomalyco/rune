@@ -352,13 +352,6 @@ impl Gpu {
         }
     }
 
-    /// Marks an upcoming drop of this healthy GPU as intentional so drop-triggered `Destroyed`
-    /// does not falsely trip a terminal latch.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
-    pub(crate) fn mark_clean_drop(&self) {
-        self.callbacks.mark_clean_drop();
-    }
-
     /// Captures the owning instance, adapter, and shared callback state for a [`Renderer`].
     pub(crate) fn host(&self) -> GpuHost {
         GpuHost {
