@@ -187,7 +187,7 @@ selectable text so a selected command line looks like a selected field:
 `text(cmd).selectable(true).selection_color(k.selection())`. `rune-text--selectable-help` in the
 gallery shows both, with an icon button explained by `.help`.
 
-Button (10 variants × 5 `ControlSize` sizes × 5 states), IconButton, Switch (compact, standard), Slider (5 `ControlSize` sizes, continuous or stepped, drag/keyboard/Escape cancel), Checkbox,
+Button (10 variants × 5 `ControlSize` sizes × 5 states), IconButton, Switch (compact, standard), Slider (5 `ControlSize` sizes, continuous or stepped, drag/keyboard/Escape cancel), ColorPicker (HSV square, hue strip, hex field, swatches, eyedropper toggle), Checkbox,
 RadioGroup/RadioItem, TextInput, TextArea, TextField (older), Field, Select (inline and field
 triggers, grouped), Dialog, Popover, Menu (compact and standard, checkbox/radio items, submenus,
 context menus via `.at(x, y)`), Tooltip (compact, standard, large), HoverCard, Toast and

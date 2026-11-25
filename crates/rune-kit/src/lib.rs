@@ -65,6 +65,8 @@ pub use controls::actions::ButtonVariant;
 pub use controls::actions::IconButton;
 pub use controls::actions::IconButtonVariant;
 pub use controls::checkbox::Checkbox;
+pub use controls::color_picker::ColorPicker;
+pub use controls::color_picker::Hsv;
 pub use controls::field::Field;
 pub use controls::radio::RadioGroup;
 pub use controls::radio::RadioItem;
