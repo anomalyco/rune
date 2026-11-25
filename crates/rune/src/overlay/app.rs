@@ -67,8 +67,15 @@ impl dyn OverlayApp + '_ {
         self.driver(|rt, app| clock.advance_core(rt, app, at, compositing))
     }
 
-    pub(super) fn poll_hidden(&mut self) -> bool {
-        self.driver(|rt, app| rt.poll_hidden(app))
+    pub(super) fn poll_hidden_for_wake(&mut self) -> bool {
+        self.driver(|rt, app| rt.poll_hidden_or_arm_follow_up(app).1)
+    }
+
+    pub(super) fn drain_hidden_input(&mut self) {
+        self.driver(|rt, app| {
+            let wake_clock = rt.polled_at();
+            rt.drain_hidden_input(app, wake_clock);
+        });
     }
 
     pub(super) fn measure_content(&mut self) -> (f32, f32) {

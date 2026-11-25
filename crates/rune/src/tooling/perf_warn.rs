@@ -387,6 +387,21 @@ pub(crate) fn handler_site(name: &str, path: &str) -> String {
     format!("{name} {}", path.chars().filter(|c| !c.is_ascii_digit()).collect::<String>())
 }
 
+/// Warns once in debug builds when a turn hits its follow-up round cap (`MAX_POLL_ROUNDS`)
+/// with work still waiting, deferring continuation instead of spinning.
+#[cfg(debug_assertions)]
+pub(crate) fn poll_round_cap(rounds: usize) {
+    warn_once("poll_round_cap".into(), || {
+        format!(
+            "turn hit MAX_POLL_ROUNDS ({rounds}) with queued work still waiting; deferring              continuation to the next wake"
+        )
+    });
+}
+
+#[cfg(not(debug_assertions))]
+#[inline(always)]
+pub(crate) fn poll_round_cap(_rounds: usize) {}
+
 #[cfg(all(test, debug_assertions))]
 mod commits_tests;
 #[cfg(all(test, debug_assertions))]

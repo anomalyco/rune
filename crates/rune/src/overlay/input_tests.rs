@@ -668,3 +668,80 @@ fn activation_token_drains_with_none_on_hide_close_refusal_and_drop() {
         ]
     );
 }
+
+#[test]
+fn occluded_and_hidden_overlay_wakes_deliver_poll_keys_once_with_poll_clock_and_injected_pointers() {
+    use super::{Overlay, OverlayOptions, OverlaySpec, Presence};
+    use crate::tooling::AppSpec;
+    use crate::{Cx, El, Key, KeyEvent, Mods, OverlayInput, PointerButton, PointerInput, Tx, col, el};
+
+    #[derive(Default)]
+    struct S {
+        polls: Vec<f64>,
+        focuses: Vec<(&'static str, f64)>,
+        clicks: u32,
+        send_tab: bool,
+    }
+    fn view(_: &S, _: &mut Cx<S>) -> El {
+        let btn = |key: &'static str| {
+            el().key(key)
+                .role("button")
+                .focusable(true)
+                .hit()
+                .size(80.0, 30.0)
+                .on_press(|s: &mut S| s.clicks += 1)
+                .on_focus_change(move |s: &mut S, focused, tx: &mut Tx| {
+                    if focused { s.focuses.push((key, tx.clock())); }
+                })
+        };
+        col().size(120.0, 80.0).children([btn("one"), btn("two")])
+    }
+    let app = AppSpec::new("ov-hidden-key", (120.0, 80.0), S::default, view);
+    let spec = OverlaySpec::new("ov-hidden-key", app.size, view)
+        .options(OverlayOptions { input: OverlayInput::All, ..Default::default() })
+        .poll(|s, now, tx| {
+            s.polls.push(now);
+            if std::mem::take(&mut s.send_tab) {
+                tx.send_key(KeyEvent { key: Key::Tab, mods: Mods::default() });
+            }
+            false
+        });
+    let (mut overlay, handle) = Overlay::new(spec, S::default(), &app);
+    overlay.rt.set_tab_visits_controls(true);
+    overlay.rt.wall_start = Some(crate::time::now());
+    overlay.rt.frame.set_test_clock(crate::ManualClock::new(10.0));
+    overlay.rt.frame(0.0);
+
+    // 1. Hidden overlay: poll sends Tab -> delivered in the same wake with poll's clock, 1 poll.
+    overlay.presence = Presence::default();
+    assert!(overlay.frameless());
+    let polls_before = overlay.rt.state.polls.len();
+    overlay.rt.state.send_tab = true;
+    overlay.advance();
+    assert_eq!(overlay.rt.state.polls.len(), polls_before + 1, "hidden overlay must not double-poll");
+    let poll_clock = *overlay.rt.state.polls.last().unwrap();
+    assert_eq!(overlay.rt.state.focuses, [("one", poll_clock)]);
+    assert!(!overlay.rt.has_input_waiting());
+
+    // 2. Shown but occluded overlay: poll sends Tab -> delivered in the same wake, 1 poll.
+    overlay.presence = Presence::Shown { occluded: true };
+    assert!(overlay.frameless());
+    overlay.rt.frame.test_clock_mut().unwrap().seek(10.5);
+    let polls_before = overlay.rt.state.polls.len();
+    overlay.rt.state.send_tab = true;
+    overlay.advance();
+    assert_eq!(overlay.rt.state.polls.len(), polls_before + 1, "occluded overlay must not double-poll");
+    let poll_clock = *overlay.rt.state.polls.last().unwrap();
+    assert_eq!(overlay.rt.state.focuses.last().copied(), Some(("two", poll_clock)));
+    assert!(!overlay.rt.has_input_waiting());
+
+    // 3. Shown but occluded overlay receiving injected pointer click delivers immediately.
+    handle.send_pointer(PointerInput::move_to(20.0, 15.0));
+    handle.send_pointer(PointerInput::down(20.0, 15.0, PointerButton::Primary));
+    handle.send_pointer(PointerInput::up(20.0, 15.0, PointerButton::Primary));
+    overlay.drain_injected_pointers();
+    assert!(overlay.rt.has_input_waiting());
+    overlay.advance();
+    assert_eq!(overlay.rt.state.clicks, 1);
+    assert!(!overlay.rt.has_input_waiting());
+}

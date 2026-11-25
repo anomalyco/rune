@@ -283,6 +283,21 @@ impl Browser {
         event_loop.exit();
     }
 
+    /// Runs `covered_wake` on a hidden tab or suspended canvas (where browsers pause rAF or
+    /// drawing skips), flushes requests and clipboard, and exits if a handler asked to quit.
+    fn covered_wake(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(window) = self.window.as_ref() else { return };
+        let should_end = if let Some(r) = &mut *self.running.borrow_mut() {
+            r.app.covered_wake();
+            r.apply_frame_requests(window);
+            r.clipboard.flush_core(r.app.rt_mut());
+            r.app.rt_mut().shell_request.take().is_some()
+        } else {
+            false
+        };
+        if should_end { self.end(event_loop); }
+    }
+
     /// Makes the running app once its fonts are in, and for a page that starts on the GPU its
     /// GPU too: the runtime, the input bridge and what draws its first frame.
     fn start_app(&mut self, event_loop: &ActiveEventLoop) {
@@ -578,6 +593,7 @@ impl ApplicationHandler<Wake> for Browser {
             }
         }
         let Some(window) = self.window.as_ref() else { return };
+        let mut should_end = false;
         if let Some(r) = &mut *self.running.borrow_mut() {
             r.full_redraw = true;
             r.shortcuts.drain();
@@ -590,8 +606,16 @@ impl ApplicationHandler<Wake> for Browser {
                 r.app.drain_updates()
             };
             if !had_updates { r.app.rt_mut().invalidate(); }
-            window.request_redraw();
+            if web_math::web_wake_covered(!self.shared.is_visible(), r.suspended) {
+                r.app.covered_wake();
+                r.apply_frame_requests(window);
+                r.clipboard.flush_core(r.app.rt_mut());
+                should_end = r.app.rt_mut().shell_request.take().is_some();
+            } else {
+                window.request_redraw();
+            }
         }
+        if should_end { self.end(event_loop); }
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -637,12 +661,16 @@ impl ApplicationHandler<Wake> for Browser {
         let Ok(running) = self.running.try_borrow() else { return };
         let Some(r) = &*running else { return };
         let rt = r.app.rt();
+        let covered = web_math::web_wake_covered(!self.shared.is_visible(), r.suspended);
         let (flow, waiting) = match rt.wake_deadline() {
-            Some(deadline) if deadline <= rt.wall_start.unwrap().elapsed().as_secs_f64() => {
+            Some(deadline) if !covered && deadline <= rt.wall_start.unwrap().elapsed().as_secs_f64() => {
                 if let Some(window) = &self.window { window.request_redraw(); }
                 (ControlFlow::Wait, None)
             }
-            Some(deadline) => (ControlFlow::WaitUntil(crate::time::for_winit(rt.wall_start.unwrap() + Duration::from_secs_f64(deadline.max(0.0)))), Some(deadline.to_bits())),
+            Some(deadline) => {
+                let target = if covered { web_math::web_hidden_timer_target(deadline, rt.polled_at()) } else { deadline };
+                (ControlFlow::WaitUntil(crate::time::for_winit(rt.wall_start.unwrap() + Duration::from_secs_f64(target.max(0.0)))), Some(target.to_bits()))
+            }
             None => (ControlFlow::Wait, None),
         };
         drop(running);
@@ -652,10 +680,17 @@ impl ApplicationHandler<Wake> for Browser {
         }
     }
 
-    fn new_events(&mut self, _: &ActiveEventLoop, cause: winit::event::StartCause) {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
         if self.terminal_failed { return; }
         if matches!(cause, winit::event::StartCause::ResumeTimeReached { .. }) {
-            if let Some(window) = &self.window { window.request_redraw(); }
+            let covered = self.running.borrow().as_ref().is_some_and(|r| {
+                web_math::web_wake_covered(!self.shared.is_visible(), r.suspended)
+            });
+            if covered {
+                self.covered_wake(event_loop);
+            } else if let Some(window) = &self.window {
+                window.request_redraw();
+            }
         }
     }
 

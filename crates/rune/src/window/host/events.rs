@@ -50,8 +50,8 @@ impl Host {
     pub(in crate::window) fn hidden_input(&mut self, event_loop: &ActiveEventLoop) {
         if self.poll_gpu_loss() { return; }
         if !self.started || self.life.finished() || self.win.as_ref().is_some_and(|_| self.life.shown() || self.launcher()) { return; }
-        if !self.app.rt().keys_queued() { return; }
-        self.app.hidden_timer_frame();
+        if !(self.app.rt().has_input_waiting() || self.app.rt().keys_queued() || self.app.rt().drag_ends_pending()) { return; }
+        self.app.hidden_wake();
         self.clipboard.flush_core(self.app.rt_mut());
         self.shell(event_loop);
     }

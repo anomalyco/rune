@@ -89,10 +89,6 @@ impl dyn WindowApp + '_ {
         self.driver(|rt, app| rt.hidden_wake(app))
     }
 
-    pub(in crate::window) fn hidden_timer_frame(&mut self) {
-        self.driver(|rt, app| rt.hidden_timer_frame(app));
-    }
-
     pub(in crate::window) fn build_for_show(&mut self) -> bool {
         self.driver(|rt, app| rt.build_for_show(app))
     }
