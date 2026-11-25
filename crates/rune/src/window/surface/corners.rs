@@ -5,9 +5,11 @@
 //! floats, and squares them when the window is maximized or tiled. The frame's own subsurfaces
 //! carry the headerbar above the content and the shadow and one-point border around it, so the
 //! content only has to leave the bottom two corners: outside the arc the frame's border covers,
-//! the surface must composite nothing rather than its background.
+//! the surface must composite nothing rather than its background. A window that draws its own
+//! title bar has that frame without the headerbar (`titlebar::linux`), and leaves all four.
 
 use super::Win;
+use crate::render::csd_corners::Rounding;
 use crate::window::host::Host;
 
 impl Host {
@@ -37,21 +39,26 @@ impl Host {
         self.wayland && !self.options.borderless
     }
 
-    /// The radius, in device pixels, the window's client-side frame leaves the content's bottom
-    /// corners at. Zero when it leaves them square (the window is maximized or tiled), when no
-    /// such frame draws it, and when its surface can't composite translucent pixels: the content
-    /// then paints as it always did, square to its edges.
+    /// The corners the window's client-side frame leaves the content round: the bottom two, at
+    /// the frame's radius in device pixels, and the top two as well under a frame without a
+    /// headerbar. Square when the frame leaves them so (the window is maximized or tiled), when
+    /// no such frame draws it, and when its surface can't composite translucent pixels: the
+    /// content then paints as it always did, square to its edges.
     #[cfg_attr(
         not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))),
         allow(unused_variables)
     )]
-    pub(in crate::window) fn corner_radius(&self, window: &Win) -> f32 {
+    pub(in crate::window) fn rounding(&self, window: &Win) -> Rounding {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if self.rounds_corners() && window.config.alpha_mode != wgpu::CompositeAlphaMode::Opaque {
             let radius = winit::platform::wayland::WindowExtWayland::content_corner_radius(&*window.window);
-            return radius_in_device_pixels(radius, self.app.rt());
+            if radius <= 0. { return Rounding::SQUARE; }
+            return Rounding {
+                radius: radius_in_device_pixels(radius, self.app.rt()),
+                top: winit::platform::wayland::WindowExtWayland::has_headerless_frame(&*window.window),
+            };
         }
-        0.
+        Rounding::SQUARE
     }
 }
 
@@ -65,7 +72,7 @@ pub(in crate::window) fn radius_in_device_pixels(radius_points: f32, rt: &crate:
     radius_points * rt.window_scale()
 }
 
-/// Prepares `pass` to clear `size` at `radius` device pixels, making it (or another for a surface
+/// Prepares `pass` to clear `size` outside `rounding`'s arcs, making it (or another for a surface
 /// that changed its format) when it must.
 pub(in crate::window) fn prepare(
     pass: &mut Option<crate::render::csd_corners::CsdCorners>,
@@ -73,25 +80,24 @@ pub(in crate::window) fn prepare(
     queue: &wgpu::Queue,
     size: (u32, u32),
     format: wgpu::TextureFormat,
-    radius: f32,
+    rounding: Rounding,
 ) {
     let stale = pass.as_ref().is_some_and(|pass| pass.format() != format);
     if stale {
         *pass = None;
     }
     let pass = pass.get_or_insert_with(|| crate::render::csd_corners::CsdCorners::new(device, format));
-    pass.prepare(queue, size, radius);
+    pass.prepare(queue, size, rounding);
 }
 
-/// Clears outside a window's rounded bottom corners, after everything else that drew into
-/// `target`.
+/// Clears outside a window's rounded corners, after everything else that drew into `target`.
 pub(in crate::window) fn draw(
     pass: Option<&crate::render::csd_corners::CsdCorners>,
     encoder: &mut wgpu::CommandEncoder,
     target: &wgpu::TextureView,
-    radius: f32,
+    rounding: Rounding,
 ) {
-    if radius <= 0. {
+    if !rounding.is_round() {
         return;
     }
     if let Some(pass) = pass {

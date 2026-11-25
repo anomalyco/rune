@@ -92,6 +92,11 @@ pub struct AdwaitaFrame<State> {
     title: Option<String>,
     title_text: Option<TitleText>,
     shadow: Shadow,
+
+    /// The header bar's height: `HEADER_SIZE`, or zero for a frame without one
+    /// (`FrameConfig::headerless`), which draws the shadow, the border and all four rounded
+    /// corners around a window that draws its own title bar.
+    header: u32,
 }
 
 impl<State> AdwaitaFrame<State>
@@ -110,10 +115,12 @@ where
 
         let pool = SlotPool::new(1, shm)?;
 
+        let header = if frame_config.header { HEADER_SIZE } else { 0 };
         let decorations = Some(DecorationParts::new(
             &base_surface,
             &subcompositor,
             &queue_handle,
+            header,
         ));
 
         let theme = frame_config.theme;
@@ -129,14 +136,17 @@ where
             scale_factor: 1,
             should_sync: true,
             title: None,
-            title_text: TitleText::new(theme.active.font_color),
+            // Nor a title: no font is looked up for a header that is never drawn.
+            title_text: if frame_config.header { TitleText::new(theme.active.font_color) } else { None },
             theme,
-            buttons: Buttons::new(get_button_layout_config()),
+            // A frame without a header draws no buttons: it doesn't ask the system for their layout.
+            buttons: Buttons::new(if frame_config.header { get_button_layout_config() } else { None }),
             mouse: Default::default(),
             state: WindowState::empty(),
             wm_capabilities: WindowManagerCapabilities::all(),
             resizable: true,
             shadow: Shadow::default(),
+            header,
         })
     }
 
@@ -152,6 +162,13 @@ where
     /// headerbar's top corners are).
     pub fn content_corner_radius(&self) -> f32 {
         content_radius(self.state)
+    }
+
+    /// Whether the frame has no header bar (`FrameConfig::headerless`): the window's content then
+    /// reaches its top edge, and leaves its top corners the arc of [`Self::content_corner_radius`]
+    /// too.
+    pub fn is_headerless(&self) -> bool {
+        self.header == 0
     }
 
     fn precise_location(
@@ -237,11 +254,15 @@ where
             true
         };
 
-        // Draw the borders.
-        for (idx, part) in decorations
-            .parts()
-            .filter(|(idx, _)| *idx == DecorationParts::HEADER || draw_borders)
-        {
+        // Draw the borders, and the header where the frame has one.
+        let header = self.header;
+        for (idx, part) in decorations.parts().filter(|(idx, _)| {
+            if *idx == DecorationParts::HEADER {
+                header > 0
+            } else {
+                draw_borders
+            }
+        }) {
             let scale = self.scale_factor;
 
             let mut rect = part.surface_rect;
@@ -278,10 +299,12 @@ where
             // The bottom and side parts draw their shadow along with their border: the bottom one
             // is the part that reaches over the window, so its corners are cut out of the shadow it
             // draws there, and a side part's border stops where the bottom corner's arc takes over.
+            // So does the top part of a frame without a header: it is the bottom part's mirror.
             if !matches!(
                 idx,
                 DecorationParts::BOTTOM | DecorationParts::LEFT | DecorationParts::RIGHT
-            ) && !self.state.intersects(WindowState::TILED)
+            ) && !(idx == DecorationParts::TOP && header == 0)
+                && !self.state.intersects(WindowState::TILED)
             {
                 self.shadow.draw(
                     &mut pixmap,
@@ -323,10 +346,20 @@ where
                     );
                 }
                 DecorationParts::LEFT => {
-                    draw_side(&mut pixmap, &mut self.shadow, colors, &self.state, scale, false);
+                    draw_side(&mut pixmap, &mut self.shadow, colors, &self.state, scale, false, header);
                 }
                 DecorationParts::RIGHT => {
-                    draw_side(&mut pixmap, &mut self.shadow, colors, &self.state, scale, true);
+                    draw_side(&mut pixmap, &mut self.shadow, colors, &self.state, scale, true, header);
+                }
+                DecorationParts::TOP if header == 0 => {
+                    draw_headerless_top(
+                        &mut pixmap,
+                        &mut self.shadow,
+                        colors,
+                        &self.state,
+                        scale,
+                        rect.width,
+                    );
                 }
                 _ => {}
             };
@@ -399,6 +432,7 @@ where
                 &self.base_surface,
                 &self.subcompositor,
                 &self.queue_handle,
+                self.header,
             ));
             self.dirty = true;
             self.should_sync = true;
@@ -437,7 +471,7 @@ where
         } else {
             (
                 Some(width),
-                NonZeroU32::new(height.get().saturating_sub(HEADER_SIZE)),
+                NonZeroU32::new(height.get().saturating_sub(self.header)),
             )
         }
     }
@@ -446,7 +480,7 @@ where
         if self.decorations.is_none() || self.state.contains(WindowState::FULLSCREEN) {
             (width, height)
         } else {
-            (width, height + HEADER_SIZE)
+            (width, height + self.header)
         }
     }
 
@@ -454,7 +488,7 @@ where
         if self.decorations.is_none() || self.state.contains(WindowState::FULLSCREEN) {
             (0, 0)
         } else {
-            (0, -(HEADER_SIZE as i32))
+            (0, -(self.header as i32))
         }
     }
 
@@ -537,12 +571,22 @@ where
 #[derive(Debug, Clone)]
 pub struct FrameConfig {
     pub theme: ColorTheme,
+    /// Whether the frame draws its header bar, with the title and the window buttons. Without it
+    /// the frame is the shadow, the border and the resize handles around a window that draws its
+    /// own title bar, and it rounds all four of the window's corners.
+    pub header: bool,
 }
 
 impl FrameConfig {
     /// Create the new configuration with the given `theme`.
     pub fn new(theme: ColorTheme) -> Self {
-        Self { theme }
+        Self { theme, header: true }
+    }
+
+    /// The same configuration for a frame without a header bar (see [`Self::header`]).
+    pub fn headerless(mut self) -> Self {
+        self.header = false;
+        self
     }
 
     /// This is equivalent of calling `FrameConfig::new(ColorTheme::auto())`.
@@ -551,6 +595,7 @@ impl FrameConfig {
     pub fn auto() -> Self {
         Self {
             theme: ColorTheme::auto(),
+            header: true,
         }
     }
 
@@ -560,6 +605,7 @@ impl FrameConfig {
     pub fn light() -> Self {
         Self {
             theme: ColorTheme::light(),
+            header: true,
         }
     }
 
@@ -569,6 +615,7 @@ impl FrameConfig {
     pub fn dark() -> Self {
         Self {
             theme: ColorTheme::dark(),
+            header: true,
         }
     }
 }
@@ -831,8 +878,32 @@ fn draw_bottom(
     }
 }
 
+/// Draws the top part of a frame without a header: the bottom part's mirror. It reaches a corner
+/// radius below the window's top edge, with the shadow above the window, the arcs cut out of it
+/// where the content's own rounded top corners show through, and the visible border around them.
+/// The shadow model is the same above and below a window, so the bottom part's picture, turned
+/// upside down, is this one's.
+fn draw_headerless_top(
+    pixmap: &mut PixmapMut,
+    shadow: &mut Shadow,
+    colors: &ColorMap,
+    state: &WindowState,
+    scale: u32,
+    width: u32,
+) {
+    draw_bottom(pixmap, shadow, colors, state, scale, width);
+    let stride = pixmap.width() as usize * 4;
+    let rows = pixmap.height() as usize;
+    let data = pixmap.data_mut();
+    for y in 0..rows / 2 {
+        let (above, below) = data.split_at_mut((rows - 1 - y) * stride);
+        above[y * stride..(y + 1) * stride].swap_with_slice(&mut below[..stride]);
+    }
+}
+
 /// Draws a side part (`LEFT` or `RIGHT`): the shadow down that side of the window, and the visible
-/// border along it, from under the headerbar to where the bottom corner's arc takes over.
+/// border along it, from under the headerbar to where the bottom corner's arc takes over. A frame
+/// without a header (`header` is zero) starts the border where the top corner's arc ends instead.
 fn draw_side(
     pixmap: &mut PixmapMut,
     shadow: &mut Shadow,
@@ -840,14 +911,17 @@ fn draw_side(
     state: &WindowState,
     scale: u32,
     right: bool,
+    header: u32,
 ) {
     let idx = if right { DecorationParts::RIGHT } else { DecorationParts::LEFT };
     if !state.intersects(WindowState::TILED) {
-        shadow.draw(pixmap, scale, state.contains(WindowState::ACTIVATED), idx, 0.);
+        // A side part that starts at the window's own top corner mirrors its bottom piece there.
+        let corners = if header == 0 { border_radius(*state) * scale as f32 } else { 0. };
+        shadow.draw(pixmap, scale, state.contains(WindowState::ACTIVATED), idx, corners);
     }
     let border = (VISIBLE_BORDER_SIZE * scale) as f32;
-    let top = (HEADER_SIZE * scale) as f32;
     let corner = (border_radius(*state) * scale as f32 - border).max(0.);
+    let top = if header == 0 { corner } else { (header * scale) as f32 };
     let height = (pixmap.height() as f32 - top - corner).max(0.);
     let x = if right { 0. } else { (BORDER_SIZE * scale) as f32 - border };
     if let Some(rect) = Rect::from_xywh(x, top, border, height) {

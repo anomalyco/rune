@@ -133,6 +133,10 @@ pub struct WindowState {
     /// Whether the CSD fail to create, so we don't try to create them on each iteration.
     csd_fails: bool,
 
+    /// Rune: a client-side frame made for this window has no header bar (see
+    /// `WindowAttributesExtWayland::with_headerless_frame`).
+    headerless: bool,
+
     /// Whether we should decorate the frame.
     decorate: bool,
 
@@ -205,6 +209,7 @@ impl WindowState {
             compositor,
             connection,
             csd_fails: false,
+            headerless: false,
             cursor_grab_mode: GrabState::new(),
             selected_cursor: Default::default(),
             cursor_visible: true,
@@ -319,6 +324,12 @@ impl WindowState {
                 && self.frame.is_none()
                 && !self.csd_fails
         }) {
+            // Rune: without its header bar where the window asked for that.
+            #[cfg(feature = "sctk-adwaita")]
+            let frame_config = match self.headerless {
+                true => into_sctk_adwaita_config(self.theme).headerless(),
+                false => into_sctk_adwaita_config(self.theme),
+            };
             match WinitFrame::new(
                 &self.window,
                 shm,
@@ -327,7 +338,7 @@ impl WindowState {
                 subcompositor.clone(),
                 self.queue_handle.clone(),
                 #[cfg(feature = "sctk-adwaita")]
-                into_sctk_adwaita_config(self.theme),
+                frame_config,
             ) {
                 Ok(mut frame) => {
                     frame.set_title(&self.title);
@@ -675,6 +686,20 @@ impl WindowState {
         Some((server, tiled, capabilities))
     }
 
+    /// Rune: see `WindowAttributesExtWayland::with_headerless_frame`. It holds for a frame made
+    /// after it: the frame is made in the window's first configure.
+    #[inline]
+    pub fn set_headerless_frame(&mut self, headerless: bool) {
+        self.headerless = headerless;
+    }
+
+    /// Rune: whether a client-side frame without a header bar draws around the window: its
+    /// content then leaves its top corners the arc of `content_corner_radius` too.
+    #[inline]
+    pub fn has_headerless_frame(&self) -> bool {
+        self.headerless && self.has_client_side_frame()
+    }
+
     /// Rune: the radius, in logical points, of the arc the window's content takes at its bottom
     /// corners, which the client-side frame leaves it (the frame's visible border lies just
     /// outside it). Zero when no client-side frame is drawn, and when the frame draws the window
@@ -767,6 +792,11 @@ impl WindowState {
         let (width, height) = (self.size.width as i32, self.size.height as i32);
         if radius <= 0 || width <= 2 * radius || height <= radius {
             region.add(0, 0, i32::MAX, i32::MAX);
+        } else if self.has_headerless_frame() && height > 2 * radius {
+            // A frame without a header rounds the top corners too: everything but the four
+            // squares its arcs cross.
+            region.add(radius, 0, width - 2 * radius, height);
+            region.add(0, radius, width, height - 2 * radius);
         } else {
             // Everything but the two squares the frame's arcs cross at the window's foot.
             region.add(0, 0, width, height - radius);
@@ -1096,7 +1126,10 @@ impl WindowState {
                 // To disable decorations we should request client and hide the frame.
                 self.window.request_decoration_mode(Some(DecorationMode::Client))
             },
-            _ if self.decorate => self.window.request_decoration_mode(Some(DecorationMode::Server)),
+            // Rune: a frame without a header bar stays the client's (see `Window::new`).
+            _ if self.decorate && !self.headerless => {
+                self.window.request_decoration_mode(Some(DecorationMode::Server))
+            },
             _ => (),
         }
 

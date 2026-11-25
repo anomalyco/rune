@@ -201,7 +201,7 @@ impl Host {
 struct FrameState {
     hidden: bool,
     live_resize: bool,
-    corners: f32,
+    corners: crate::render::csd_corners::Rounding,
     target: Option<Instant>,
     #[cfg(target_os = "macos")]
     prewarm: Option<crate::platform::macos::Prewarm>,
@@ -274,11 +274,11 @@ impl FrameHost for WindowFrame<'_> {
         // before this frame, or waits out a retry of its own (`SurfaceRetries`) and then gives
         // them up. Neither can give a drawable, and wgpu panics asking one for it.
         if !self.host.replace_lost_surface() { return Gate::Skip; }
-        // The radius a client-side frame rounds this window's bottom corners to, in device
-        // pixels: zero unless it draws one, now and with a surface that composites alpha
+        // The corners a client-side frame leaves this window round, and their radius in device
+        // pixels: square unless it draws one, now and with a surface that composites alpha
         // (`corners`). Asked every frame, so a maximize or a tile that arrives with a configure
         // squares the next one.
-        self.state.corners = self.host.win.as_ref().map_or(0., |l| self.host.corner_radius(l));
+        self.state.corners = self.host.win.as_ref().map_or(crate::render::csd_corners::Rounding::SQUARE, |l| self.host.rounding(l));
         // A clip's layer began or stopped showing: the UI's swap chain composites premultiplied
         // only while one does (`video_layer`), made again before this frame draws.
         #[cfg(target_os = "windows")]

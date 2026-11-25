@@ -911,7 +911,7 @@ mod linux_frame {
     use crate::titlebar::{BUTTONS_KEY, Caption, EDGES_KEY};
     use crate::{Cursor, Cx, El, Env, ResizeEdge};
 
-    const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true, minimizable: true, maximizable: true, tiled: Sides::NONE };
+    const FLOATING: WindowState = WindowState { maximized: false, full_screen: false, resizable: true, minimizable: true, maximizable: true, tiled: Sides::NONE, outer_frame: false };
 
     #[derive(Default)]
     struct State {
@@ -1019,13 +1019,35 @@ mod linux_frame {
             assert_eq!(rt.state.presses, i + 1, "at {at:?}");
         }
 
-        // A maximized window, and one that can't be resized, have no band.
-        for window in [WindowState { maximized: true, ..FLOATING }, WindowState { resizable: false, ..FLOATING }] {
+        // A maximized window, one that can't be resized, and one whose frame around it has the
+        // resize handles have no band.
+        for window in [WindowState { maximized: true, ..FLOATING }, WindowState { resizable: false, ..FLOATING }, WindowState { outer_frame: true, ..FLOATING }] {
             let mut rt = rig(caption("appmenu:close", window));
             assert!(drawn(&rt, EDGES_KEY).is_none(), "{window:?}");
             rt.pointer_down(200.0, 2.0);
             assert_eq!(rt.take_resize_action(), None, "{window:?}");
         }
+    }
+
+    /// A finger on the band resizes the window as the pointer does. A touch down is a move and
+    /// a press at once, with no frame between them.
+    #[test]
+    fn a_finger_on_the_band_resizes_the_window() {
+        use crate::runtime::touch_input::TouchPhase;
+        use ResizeEdge::{East, SouthEast};
+        let mut rt = rig(caption("appmenu:close", FLOATING));
+        for (i, ((x, y), edge)) in [((397.0, 150.0), East), ((397.0, 297.0), SouthEast)].into_iter().enumerate() {
+            let at = i as f64;
+            rt.touch(1, TouchPhase::Started, x, y, at);
+            assert_eq!(rt.take_resize_action(), Some(edge), "a finger at {x}, {y}");
+            rt.touch(1, TouchPhase::Ended, x, y, at + 0.05);
+            rt.frame(0.1 + at);
+        }
+        assert_eq!(rt.state.presses, 0, "a finger on the band never reaches the view");
+        // Past the band, the touch is the view's.
+        rt.touch(1, TouchPhase::Started, 200.0, 150.0, 5.0);
+        assert_eq!(rt.take_resize_action(), None);
+        rt.touch(1, TouchPhase::Ended, 200.0, 150.0, 5.05);
     }
 
     #[test]

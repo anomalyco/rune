@@ -6,7 +6,8 @@
 use crate::parts::{bottom_input_rect, DecorationParts};
 use crate::theme::{ColorTheme, BORDER_SIZE, CORNER_RADIUS, HEADER_SIZE, RESIZE_HANDLE_SIZE, VISIBLE_BORDER_SIZE};
 use crate::{
-    border_radius, bottom_border_shape, content_radius, draw_bottom, draw_side, CONTENT_CORNER_RADIUS,
+    border_radius, bottom_border_shape, content_radius, draw_bottom, draw_headerless_top, draw_side,
+    CONTENT_CORNER_RADIUS,
 };
 use smithay_client_toolkit::reexports::csd_frame::WindowState;
 use tiny_skia::{FillRule, Pixmap, PixmapPaint, Transform};
@@ -201,7 +202,7 @@ fn composite(width: u32, height: u32, state: WindowState) -> Pixmap {
         let mut pixmap = Pixmap::new(size.0, size.1).expect("a part");
         match part {
             DecorationParts::BOTTOM => draw_bottom(&mut pixmap.as_mut(), &mut shadow, &colors, &state, 1, size.0),
-            _ => draw_side(&mut pixmap.as_mut(), &mut shadow, &colors, &state, 1, right),
+            _ => draw_side(&mut pixmap.as_mut(), &mut shadow, &colors, &state, 1, right, HEADER_SIZE),
         }
         let (x, y) = (at.0 - (-(BORDER_SIZE as i32)), at.1 - (-(HEADER_SIZE as i32)));
         canvas
@@ -331,4 +332,81 @@ fn a_frame_waits_for_an_early_read_that_still_runs() {
     let slot = std::sync::Mutex::new(crate::config::start(slow));
     assert_eq!(crate::config::take(&slot), Some(1));
     assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// The top part of a frame without a header, as a window `width` points wide draws it.
+fn headerless_top_part(width: u32, state: WindowState) -> Pixmap {
+    let surface = (width + 2 * BORDER_SIZE, BORDER_SIZE + CORNER_RADIUS);
+    let mut pixmap = Pixmap::new(surface.0, surface.1).expect("a pixmap");
+    draw_headerless_top(
+        &mut pixmap.as_mut(),
+        &mut Default::default(),
+        &ColorTheme::light().active,
+        &state,
+        1,
+        surface.0,
+    );
+    pixmap
+}
+
+/// A frame without a header rounds the window's top corners as it rounds the bottom ones: its top
+/// part is the bottom part upside down, pixel for pixel, round or square.
+#[test]
+fn a_headerless_top_is_the_bottom_part_upside_down() {
+    for state in [WindowState::empty(), WindowState::ACTIVATED, WindowState::MAXIMIZED, WindowState::TILED] {
+        let (top, bottom) = (headerless_top_part(200, state), bottom_part(200, state));
+        assert_eq!((top.width(), top.height()), (bottom.width(), bottom.height()));
+        for y in 0..top.height() {
+            for x in 0..top.width() {
+                assert_eq!(
+                    top.pixel(x, y),
+                    bottom.pixel(x, bottom.height() - 1 - y),
+                    "{state:?}: ({x}, {y}) of the top part",
+                );
+            }
+        }
+    }
+    // The band sits in the part's row just above the window's top edge (the part starts a border's
+    // depth above the window, so that row is `BORDER_SIZE - 1`), and the shadow above it.
+    let top = headerless_top_part(200, WindowState::empty());
+    assert_border(&top, 100, BORDER_SIZE - VISIBLE_BORDER_SIZE, 250, "the top band between the arcs");
+    assert!(alpha(&top, 100, BORDER_SIZE - 3) > 0, "the shadow above the band");
+    assert_eq!(alpha(&top, 100, BORDER_SIZE + 2), 0, "nothing over the content between the corners");
+    // The content's own top corner is left alone: inside the arc nothing is drawn.
+    assert_eq!(alpha(&top, 50, BORDER_SIZE + CORNER_RADIUS - 1 - 5), 0, "inside the top arc is the content's");
+}
+
+/// A side part of a frame without a header starts its border where the top corner's arc ends, as
+/// it stops it where the bottom corner's begins, and draws its shadow from its first row.
+#[test]
+fn a_headerless_side_part_starts_below_the_top_arc() {
+    let height = 120;
+    let colors = ColorTheme::light().active;
+    let mut left = Pixmap::new(BORDER_SIZE, height).expect("a part");
+    draw_side(&mut left.as_mut(), &mut Default::default(), &colors, &WindowState::empty(), 1, false, 0);
+    let border_x = BORDER_SIZE - VISIBLE_BORDER_SIZE;
+    let arc = CORNER_RADIUS - VISIBLE_BORDER_SIZE;
+    // In the arc's rows the band is the top part's to draw; below them it is this part's.
+    assert_border(&left, border_x, arc, 250, "the band below the top arc");
+    assert_border(&left, border_x, height - arc - 1, 250, "the band above the bottom arc");
+    let above = left.pixel(border_x, 0).expect("inside").demultiply();
+    assert!(
+        [above.red(), above.green(), above.blue()] != [220, 220, 220] || above.alpha() < 250,
+        "the band does not run through the top arc's rows",
+    );
+    // The shadow starts at the part's first row, and the part's two ends mirror each other.
+    assert!(alpha(&left, 40, 0) > 0, "the shadow beside the window's top corner");
+    for x in 0..BORDER_SIZE {
+        for dy in 0..arc {
+            assert_eq!(
+                alpha(&left, x, dy),
+                alpha(&left, x, height - 1 - dy),
+                "({x}, {dy}): the top piece is the bottom piece's mirror",
+            );
+        }
+    }
+    // With a header the part is what it always was: the band starts under the header bar.
+    let mut with_header = Pixmap::new(BORDER_SIZE, height + HEADER_SIZE).expect("a part");
+    draw_side(&mut with_header.as_mut(), &mut Default::default(), &colors, &WindowState::empty(), 1, false, HEADER_SIZE);
+    assert_border(&with_header, border_x, HEADER_SIZE, 250, "the band under the header bar");
 }

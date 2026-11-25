@@ -3,7 +3,9 @@
 # <version>, plus vendor/sctk-adwaita.patch (the visible one-point border follows the window's
 # rounded bottom corners, as the headerbar above them already rounds the top ones, instead of
 # drawing a square L there; and `AdwaitaFrame::content_corner_radius` says what radius the content
-# leaves its own bottom corners to, for the app to clear outside it). Run it when sctk-adwaita is
+# leaves its own bottom corners to, for the app to clear outside it; and `FrameConfig::headerless`,
+# the frame without its header bar, which rounds all four corners around a window that draws its
+# own title bar). Run it when sctk-adwaita is
 # bumped, then build: a patch that no longer applies fails here, and the change goes back in by
 # hand. If upstream sctk-adwaita takes the change, delete vendor/sctk-adwaita and its
 # `[patch.crates-io]` entry instead.

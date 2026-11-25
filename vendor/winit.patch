@@ -2591,3 +2591,223 @@ index 7e15d5f24..3cdcecfd3 100644
      // Called by EventProcessor when a VisibilityNotify event is received
      pub(crate) fn visibility_notify(&self) {
          let mut shared_state = self.shared_state_lock();
+diff --git a/src/platform/wayland.rs b/src/platform/wayland.rs
+index fb28071..7be1df9 100644
+--- a/src/platform/wayland.rs
++++ b/src/platform/wayland.rs
+@@ -110,6 +110,15 @@ pub trait WindowExtWayland {
+     /// could be made, and on X11.
+     fn has_client_side_frame(&self) -> bool;
+ 
++    /// Rune: whether a client-side frame without a header bar draws around the window
++    /// (`WindowAttributesExtWayland::with_headerless_frame`), whatever state it is in: the
++    /// content then takes the arc of `content_corner_radius` at its top corners as well as its
++    /// bottom ones, and the frame's handles, outside the window's edges, resize it.
++    ///
++    /// False when the compositor draws the decorations all the same, when decorations are off,
++    /// when no frame could be made, and on X11.
++    fn has_headerless_frame(&self) -> bool;
++
+     /// Rune: confirmed Wayland `xdg_toplevel` / `xdg-decoration` state from the latest configure:
+     /// `(is_server_decoration, tiled_edges [top, right, bottom, left], wm_capabilities bits)`.
+     ///
+@@ -152,6 +161,18 @@ impl WindowExtWayland for Window {
+         }
+     }
+ 
++
++    #[inline]
++    fn has_headerless_frame(&self) -> bool {
++        #[allow(clippy::single_match)]
++        match &self.window {
++            #[cfg(x11_platform)]
++            crate::platform_impl::Window::X(_) => false,
++            #[cfg(wayland_platform)]
++            crate::platform_impl::Window::Wayland(window) => window.has_headerless_frame(),
++        }
++    }
++
+     #[inline]
+     fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
+         #[allow(clippy::single_match)]
+@@ -174,6 +195,15 @@ pub trait WindowAttributesExtWayland {
+     /// For details about application ID conventions, see the
+     /// [Desktop Entry Spec](https://specifications.freedesktop.org/desktop-entry-spec/desktop-entry-spec-latest.html#desktop-file-id)
+     fn with_name(self, general: impl Into<String>, instance: impl Into<String>) -> Self;
++
++    /// Rune: makes the client-side frame of a decorated window without its header bar: the
++    /// shadow, the one-point border and the resize handles around a window that draws its own
++    /// title bar and buttons, with all four corners rounded while it floats. The window asks the
++    /// compositor for client-side decorations, so a compositor that would draw a frame of its
++    /// own leaves it to the window; one that draws its frame all the same keeps it, and the
++    /// window then has none of its own (`WindowExtWayland::has_headerless_frame`). Nothing
++    /// changes on X11.
++    fn with_headerless_frame(self, headerless: bool) -> Self;
+ }
+ 
+ impl WindowAttributesExtWayland for WindowAttributes {
+@@ -183,6 +213,12 @@ impl WindowAttributesExtWayland for WindowAttributes {
+             Some(crate::platform_impl::ApplicationName::new(general.into(), instance.into()));
+         self
+     }
++
++    #[inline]
++    fn with_headerless_frame(mut self, headerless: bool) -> Self {
++        self.platform_specific.headerless_frame = headerless;
++        self
++    }
+ }
+ 
+ /// Additional methods on `MonitorHandle` that are specific to Wayland.
+diff --git a/src/platform_impl/linux/mod.rs b/src/platform_impl/linux/mod.rs
+index 0071dfe..1e1ec46 100644
+--- a/src/platform_impl/linux/mod.rs
++++ b/src/platform_impl/linux/mod.rs
+@@ -73,6 +73,8 @@ impl ApplicationName {
+ pub struct PlatformSpecificWindowAttributes {
+     pub name: Option<ApplicationName>,
+     pub activation_token: Option<ActivationToken>,
++    /// Rune: see `WindowAttributesExtWayland::with_headerless_frame`.
++    pub headerless_frame: bool,
+     #[cfg(x11_platform)]
+     pub x11: X11WindowAttributes,
+ }
+@@ -96,6 +98,7 @@ impl Default for PlatformSpecificWindowAttributes {
+         Self {
+             name: None,
+             activation_token: None,
++            headerless_frame: false,
+             #[cfg(x11_platform)]
+             x11: X11WindowAttributes {
+                 visual_id: None,
+diff --git a/src/platform_impl/linux/wayland/window/mod.rs b/src/platform_impl/linux/wayland/window/mod.rs
+index d37580a..b2b7e17 100644
+--- a/src/platform_impl/linux/wayland/window/mod.rs
++++ b/src/platform_impl/linux/wayland/window/mod.rs
+@@ -98,7 +98,11 @@ impl Window {
+ 
+         // We prefer server side decorations, however to not have decorations we ask for client
+         // side decorations instead.
+-        let default_decorations = if attributes.decorations {
++        //
++        // Rune: and for a frame without a header bar, which is the client's to draw: the
++        // compositor's frame would put a bar of its own above the window's.
++        let headerless = attributes.platform_specific.headerless_frame;
++        let default_decorations = if attributes.decorations && !headerless {
+             WindowDecorations::RequestServer
+         } else {
+             WindowDecorations::RequestClient
+@@ -121,6 +125,9 @@ impl Window {
+ 
+         window_state.set_blur(attributes.blur);
+ 
++        // Rune: before the first configure, which makes the frame.
++        window_state.set_headerless_frame(headerless);
++
+         // Set the decorations hint.
+         window_state.set_decorate(attributes.decorations);
+ 
+@@ -441,6 +448,13 @@ impl Window {
+         self.window_state.lock().unwrap().has_client_side_frame()
+     }
+ 
++
++    /// Rune: see `WindowExtWayland::has_headerless_frame`.
++    #[inline]
++    pub fn has_headerless_frame(&self) -> bool {
++        self.window_state.lock().unwrap().has_headerless_frame()
++    }
++
+     /// Rune: see `WindowExtWayland::wayland_wm_state`.
+     #[inline]
+     pub fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
+diff --git a/src/platform_impl/linux/wayland/window/state.rs b/src/platform_impl/linux/wayland/window/state.rs
+index 6714852..4bee985 100644
+--- a/src/platform_impl/linux/wayland/window/state.rs
++++ b/src/platform_impl/linux/wayland/window/state.rs
+@@ -133,6 +133,10 @@ pub struct WindowState {
+     /// Whether the CSD fail to create, so we don't try to create them on each iteration.
+     csd_fails: bool,
+ 
++    /// Rune: a client-side frame made for this window has no header bar (see
++    /// `WindowAttributesExtWayland::with_headerless_frame`).
++    headerless: bool,
++
+     /// Whether we should decorate the frame.
+     decorate: bool,
+ 
+@@ -205,6 +209,7 @@ impl WindowState {
+             compositor,
+             connection,
+             csd_fails: false,
++            headerless: false,
+             cursor_grab_mode: GrabState::new(),
+             selected_cursor: Default::default(),
+             cursor_visible: true,
+@@ -319,6 +324,12 @@ impl WindowState {
+                 && self.frame.is_none()
+                 && !self.csd_fails
+         }) {
++            // Rune: without its header bar where the window asked for that.
++            #[cfg(feature = "sctk-adwaita")]
++            let frame_config = match self.headerless {
++                true => into_sctk_adwaita_config(self.theme).headerless(),
++                false => into_sctk_adwaita_config(self.theme),
++            };
+             match WinitFrame::new(
+                 &self.window,
+                 shm,
+@@ -327,7 +338,7 @@ impl WindowState {
+                 subcompositor.clone(),
+                 self.queue_handle.clone(),
+                 #[cfg(feature = "sctk-adwaita")]
+-                into_sctk_adwaita_config(self.theme),
++                frame_config,
+             ) {
+                 Ok(mut frame) => {
+                     frame.set_title(&self.title);
+@@ -675,6 +686,20 @@ impl WindowState {
+         Some((server, tiled, capabilities))
+     }
+ 
++    /// Rune: see `WindowAttributesExtWayland::with_headerless_frame`. It holds for a frame made
++    /// after it: the frame is made in the window's first configure.
++    #[inline]
++    pub fn set_headerless_frame(&mut self, headerless: bool) {
++        self.headerless = headerless;
++    }
++
++    /// Rune: whether a client-side frame without a header bar draws around the window: its
++    /// content then leaves its top corners the arc of `content_corner_radius` too.
++    #[inline]
++    pub fn has_headerless_frame(&self) -> bool {
++        self.headerless && self.has_client_side_frame()
++    }
++
+     /// Rune: the radius, in logical points, of the arc the window's content takes at its bottom
+     /// corners, which the client-side frame leaves it (the frame's visible border lies just
+     /// outside it). Zero when no client-side frame is drawn, and when the frame draws the window
+@@ -767,6 +792,11 @@ impl WindowState {
+         let (width, height) = (self.size.width as i32, self.size.height as i32);
+         if radius <= 0 || width <= 2 * radius || height <= radius {
+             region.add(0, 0, i32::MAX, i32::MAX);
++        } else if self.has_headerless_frame() && height > 2 * radius {
++            // A frame without a header rounds the top corners too: everything but the four
++            // squares its arcs cross.
++            region.add(radius, 0, width - 2 * radius, height);
++            region.add(0, radius, width, height - 2 * radius);
+         } else {
+             // Everything but the two squares the frame's arcs cross at the window's foot.
+             region.add(0, 0, width, height - radius);
+@@ -1096,7 +1126,10 @@ impl WindowState {
+                 // To disable decorations we should request client and hide the frame.
+                 self.window.request_decoration_mode(Some(DecorationMode::Client))
+             },
+-            _ if self.decorate => self.window.request_decoration_mode(Some(DecorationMode::Server)),
++            // Rune: a frame without a header bar stays the client's (see `Window::new`).
++            _ if self.decorate && !self.headerless => {
++                self.window.request_decoration_mode(Some(DecorationMode::Server))
++            },
+             _ => (),
+         }
+ 

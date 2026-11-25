@@ -501,6 +501,32 @@ fn region_geometry_scales_csd_corners_and_degenerate_sizes() {
         prev_inset = rect.x;
     }
 
+    // A frame without a headerbar rounds the top corners too: the top band is the bottom band's
+    // mirror, row for row, and the full-width rect lies between them.
+    let all_four = rounded.with_top_corners(true);
+    assert_ne!(all_four, rounded, "another region: the surface's blur is set again");
+    let four = build_blur_rects(all_four);
+    assert_eq!(four.len(), 1 + 2 * r as usize);
+    assert_eq!(four[r as usize], RegionRect { x: 0, y: r, width: w, height: h - 2 * r });
+    for (idx, rect) in four[..r as usize].iter().enumerate() {
+        let mirror = four[four.len() - 1 - idx];
+        assert_eq!((rect.x, rect.y, rect.width, rect.height), (mirror.x, h - 1 - mirror.y, mirror.width, 1), "top row {idx}");
+        // The strip's upper corners lie inside the arc: `dy` from the arc's centre to its upper edge.
+        let (dx_corner, dy) = (f64::from(r - rect.x), f64::from(r - rect.y));
+        assert!(dx_corner * dx_corner + dy * dy <= f64::from(r * r) + 1e-6, "top row {idx} bleeds outside radius {r}");
+    }
+    assert_eq!(four[r as usize + 1..], rects[1..], "the bottom band is the one a headerbar's frame has");
+    // No rect reaches past the surface, and none overlaps the next.
+    for pair in four.windows(2) {
+        assert_eq!(pair[0].y + pair[0].height, pair[1].y);
+    }
+    // A square window has no arcs to round, with or without a headerbar; nor has a window too
+    // short for arcs at both ends, which keeps its top whole.
+    assert_eq!(sq.with_top_corners(true), sq);
+    assert_eq!(rounded.with_top_corners(false), rounded);
+    let short = RegionSpec::from_surface((800, 20), 1.0, 12.0).with_top_corners(true);
+    assert!(!short.top_corners);
+
     // Tiny surface with oversized radius still produces a non-empty clipped region.
     assert_eq!(normalize_bottom_corner_radius(40.0, (10, 6)), 5);
     let tiny = build_blur_rects(RegionSpec::from_surface((2, 1), 1.0, 8.0));

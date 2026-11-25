@@ -342,7 +342,8 @@ impl Host {
                 (w.config.width, w.config.height),
                 scale,
                 csd_radius,
-            );
+            )
+            .with_top_corners(winit::platform::wayland::WindowExtWayland::has_headerless_frame(&*w.window));
             let outcome = blur.sync_with_materials(
                 requested,
                 transparent,

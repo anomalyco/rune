@@ -127,7 +127,10 @@ naga = { path = "vendor/naga" }
 # `WindowExtWayland::content_corner_radius` tells an app the radius its content leaves its bottom
 # corners to while a client-side frame rounds the window (see `vendor/sctk-adwaita`); and on a Wayland
 # compositor without the decoration protocol the client-side frame's two system reads start with
-# the event loop (`sctk_adwaita::read_system_config_early`). Re-made by
+# the event loop (`sctk_adwaita::read_system_config_early`); and
+# `WindowAttributesExtWayland::with_headerless_frame` makes that frame without its header bar,
+# around a window that draws its own title bar (`WindowExtWayland::has_headerless_frame` says
+# whether it has one). Re-made by
 # `scripts/vendor-winit.sh <version>` when winit is bumped; apps that build Rune patch it too.
 winit = { path = "vendor/winit" }
 # sctk-adwaita as published plus `vendor/sctk-adwaita.patch`: the visible one-point border a
@@ -136,7 +139,10 @@ winit = { path = "vendor/winit" }
 # cut-out; and `AdwaitaFrame::content_corner_radius` says what radius the content's own bottom
 # corners take, for the app to clear outside (`window/surface/corners.rs`); and
 # `read_system_config_early` starts the first frame's two `dbus-send` reads (colour scheme, button
-# layout) on threads of their own instead of in the window's first configure. Re-made by
+# layout) on threads of their own instead of in the window's first configure; and
+# `FrameConfig::headerless` is the frame without its header bar: the shadow, the border and the
+# resize handles around a window that draws its own title bar, with all four corners rounded
+# (its top part is the bottom part's mirror). Re-made by
 # `scripts/vendor-sctk-adwaita.sh <version>` when sctk-adwaita is bumped; apps that build Rune
 # patch it too.
 sctk-adwaita = { path = "vendor/sctk-adwaita" }

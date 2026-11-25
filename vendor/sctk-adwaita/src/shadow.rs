@@ -195,21 +195,35 @@ impl RenderedShadow {
                 );
             }
             DecorationParts::LEFT => {
-                let top_edge_height = corner_radius;
                 let bottom_edge_height = corner_radius - visible_border_size;
+                // Without a header (`corners`) the part starts at the window's own rounded top
+                // corner: its top piece is the bottom piece's mirror.
+                let top_edge_height = if corners > 0. { bottom_edge_height } else { corner_radius };
                 let side_height = dst_height
                     .saturating_sub(top_edge_height)
                     .saturating_sub(bottom_edge_height);
 
-                self.edges_draw(
-                    0,
-                    shadow_size as isize,
-                    dst_pixmap,
-                    0,
-                    0,
-                    dst_width.saturating_sub(visible_border_size),
-                    top_edge_height,
-                );
+                if corners > 0. {
+                    self.edges_draw(
+                        0,
+                        edges_half as isize - top_edge_height as isize,
+                        dst_pixmap,
+                        0,
+                        0,
+                        dst_width,
+                        top_edge_height,
+                    );
+                } else {
+                    self.edges_draw(
+                        0,
+                        shadow_size as isize,
+                        dst_pixmap,
+                        0,
+                        0,
+                        dst_width.saturating_sub(visible_border_size),
+                        top_edge_height,
+                    );
+                }
 
                 self.side_draw(true, false, side_height, dst_pixmap, 0, top_edge_height);
 
@@ -227,21 +241,34 @@ impl RenderedShadow {
                 );
             }
             DecorationParts::RIGHT => {
-                let top_edge_height = corner_radius;
                 let bottom_edge_height = corner_radius - visible_border_size;
+                // As the left part: without a header the top piece mirrors the bottom one.
+                let top_edge_height = if corners > 0. { bottom_edge_height } else { corner_radius };
                 let side_height = dst_height
                     .saturating_sub(top_edge_height)
                     .saturating_sub(bottom_edge_height);
 
-                self.edges_draw(
-                    edges_half as isize + corner_radius as isize,
-                    shadow_size as isize,
-                    dst_pixmap,
-                    visible_border_size,
-                    0,
-                    dst_width.saturating_sub(visible_border_size),
-                    top_edge_height,
-                );
+                if corners > 0. {
+                    self.edges_draw(
+                        edges_half as isize + (corner_radius - visible_border_size) as isize,
+                        edges_half as isize - top_edge_height as isize,
+                        dst_pixmap,
+                        0,
+                        0,
+                        dst_width,
+                        top_edge_height,
+                    );
+                } else {
+                    self.edges_draw(
+                        edges_half as isize + corner_radius as isize,
+                        shadow_size as isize,
+                        dst_pixmap,
+                        visible_border_size,
+                        0,
+                        dst_width.saturating_sub(visible_border_size),
+                        top_edge_height,
+                    );
+                }
 
                 self.side_draw(
                     false,
@@ -406,6 +433,8 @@ impl Shadow {
     /// Draws part `part_idx`'s shadow. `corners` is the radius, in the part's pixels, of the round
     /// bottom corners it is drawn for (zero for square ones): the bottom part reaches that far
     /// above the window's bottom edge, so with round corners its shadow starts at the part's top.
+    /// For a side part, a `corners` above zero says the frame has no header: the part then starts
+    /// at the window's own rounded top corner, as it ends at its bottom one.
     pub fn draw(&mut self, pixmap: &mut PixmapMut, scale: u32, active: bool, part_idx: usize, corners: f32) {
         let cache = &mut self.part_cache[part_idx];
         let round = corners > 0.;

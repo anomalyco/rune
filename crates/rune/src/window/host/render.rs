@@ -233,7 +233,7 @@ impl FrameProfile {
 pub(super) fn prepare_window_render(
     host: &mut Host,
     drawable: wgpu::SurfaceTexture,
-    corners: f32,
+    corners: crate::render::csd_corners::Rounding,
     looped: Option<&Vec<u32>>,
     profile: &mut FrameProfile,
     info: &mut StepInfo,
@@ -247,9 +247,9 @@ pub(super) fn prepare_window_render(
         ..Default::default()
     });
     let size = (l.config.width, l.config.height);
-    // A client-side frame's rounded bottom corners: the content outside them is cleared off
-    // this drawable, right after everything else that draws there.
-    if corners > 0. {
+    // A client-side frame's rounded corners: the content outside them is cleared off this
+    // drawable, right after everything else that draws there.
+    if corners.is_round() {
         crate::window::surface::corners::prepare(&mut l.corners, &gpu.device, &gpu.queue, size, target_format, corners);
     }
     // An image's pixels changed where its instances didn't: the whole frame draws (`damage`).
@@ -334,7 +334,7 @@ pub(super) fn prepare_window_render(
 pub(super) fn render_window_frame(
     host: &mut Host,
     prepared: &mut PreparedWindowFrame,
-    corners: f32,
+    corners: crate::render::csd_corners::Rounding,
     profile: &mut FrameProfile,
     info: &StepInfo,
 ) -> bool {
@@ -366,7 +366,7 @@ pub(super) fn render_window_frame(
         (Err(why), Some(_)) => profile.set_whole_why(why),
         (Err(_), None) => {}
     }
-    // A client-side frame's rounded bottom corners: faded off the premultiplied composition,
+    // A client-side frame's rounded corners: faded off the premultiplied composition,
     // before a surface that takes straight alpha converts it.
     crate::window::surface::corners::draw(l.corners.as_ref(), &mut prepared.encoder, target, corners);
     if let Some(alpha) = &l.alpha { alpha.draw(&mut prepared.encoder, &prepared.view); }

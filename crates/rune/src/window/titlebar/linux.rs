@@ -1,11 +1,16 @@
 //! A Linux window's own frame for `App::titlebar`, where the Wayland compositor draws none.
 //!
 //! GNOME offers no server-side decorations (`xdg-decoration`), so winit would draw its own grey
-//! bar above the app's titlebar. Rune takes that bar away instead (the window opens without
-//! decorations), draws the caption buttons the desktop's button layout asks for
+//! bar above the app's titlebar. Rune takes that bar away instead: the window opens with winit's
+//! frame less its header bar (`WindowAttributesExtWayland::with_headerless_frame`), which keeps
+//! the window's shadow, its one-point border, its four rounded corners (the content clears
+//! outside them, `window::surface::corners`) and the resize handles outside its edges. Rune
+//! draws the caption buttons the desktop's button layout asks for
 //! (`org.gnome.desktop.wm.preferences` `button-layout`, through the settings portal) over the
-//! app's titlebar, and resizes the window from a band inside its edges (`caption::edges`). A
-//! compositor that draws the frame itself (KDE, Sway, Hyprland) keeps it, as X11 does.
+//! app's titlebar. Where that frame can't be made (no subsurfaces, a borderless window, or a
+//! compositor that insists on its own decorations), the window is square and resizes from a band
+//! inside its edges (`caption::edges`). A compositor that draws the frame itself (KDE, Sway,
+//! Hyprland) keeps it, as X11 does.
 //!
 //! The parts that decide nothing about a live window are plain data, built on every platform so
 //! the tests run on all of them.
@@ -99,6 +104,9 @@ pub(crate) struct WindowState {
     pub maximizable: bool,
     /// The sides tiled against a screen edge or another window (`Cx::tiled_edges`).
     pub tiled: Sides,
+    /// winit's frame, less its header bar, is around the window: its handles resize the window
+    /// from outside its edges, so no band inside them does.
+    pub outer_frame: bool,
 }
 
 /// The desktop's button layout, once the settings portal answered with one.

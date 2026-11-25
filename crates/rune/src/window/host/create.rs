@@ -79,11 +79,14 @@ impl Host {
                 attrs = winit::platform::startup_notify::WindowAttributesExtStartupNotify::with_activation_token(attrs, token);
             }
         }
-        // Where the Wayland compositor draws no frame, a titlebar's window opens without winit's
-        // own, so its grey bar never shows above the app's: Rune draws the caption buttons and
-        // the resize edges (`titlebar::linux`).
+        // Where the Wayland compositor draws no frame, a titlebar's window opens with winit's
+        // own less its header bar, so no grey bar shows above the app's: Rune draws the caption
+        // buttons, and the frame keeps the shadow, the rounded corners and the resize handles
+        // around the window (`titlebar::linux`).
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if self.titlebar.is_some() && crate::titlebar::linux::choose(event_loop) { attrs = attrs.with_decorations(false); }
+        if self.titlebar.is_some() && crate::titlebar::linux::choose(event_loop) {
+            attrs = winit::platform::wayland::WindowAttributesExtWayland::with_headerless_frame(attrs, true);
+        }
         let chrome = frame_chrome(self.chrome, self.titlebar, self.app.rt().titlebar_set());
         #[cfg(target_os = "macos")]
         let attrs = self.macos_window.apply_attributes(attrs, self.options.borderless, chrome.full_size_content);
