@@ -213,6 +213,56 @@ fn copy_image_writes_a_decoded_image_as_png_and_a_failed_one_leaves_the_clipboar
     assert_eq!((m.revision(), m.content().unwrap().image()), (revision, Some(&copied)), "nothing to copy, nothing written");
 }
 
+/// On Windows and Linux, a corrupt PNG in `ClipboardContent` must return an error without
+/// falling through to `set_text("")` and wiping the clipboard, and `Tx::copy_image` must reuse
+/// its pre-encoded RGBA buffer without decoding the freshly encoded PNG back to pixels.
+#[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+#[test]
+fn write_one_form_never_clobbers_clipboard_with_empty_text_on_bad_png_and_borrows_preencoded_rgba() {
+    // Valid 24-byte PNG signature + IHDR header (2x1), but no IDAT: `from_png` accepts header, decode fails.
+    let corrupt_png = [&b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..], &[0, 0, 0, 2, 0, 0, 0, 1]].concat();
+    let bad_img = ClipboardImage::from_png(corrupt_png).expect("header-valid PNG");
+    let copy = ClipboardWrite::new(ClipboardContent::default().with_image(bad_img));
+    let res = native::prepare_one_form(&copy);
+    assert!(res.is_err(), "corrupt PNG must return Err instead of falling through to Text");
+
+    // Pre-encoded RGBA from `ClipboardWrite::image` is borrowed directly (no PNG decode pass).
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let rgba = vec![10, 20, 30, 255, 40, 50, 60, 128];
+    let img = cache.rgba(2, 1, rgba.clone());
+    img.wait().unwrap();
+    let mut write = ClipboardWrite::image(img);
+    assert!(write.encode_image());
+    match native::prepare_one_form(&write).unwrap() {
+        native::OneForm::Image { png, width, height, rgba: bytes } => {
+            assert_eq!((width, height), (2, 1));
+            assert!(png.starts_with(b"\x89PNG"));
+            assert!(matches!(bytes, std::borrow::Cow::Borrowed(_)), "copy_image must reuse pre-encoded RGBA instead of decoding PNG back");
+            assert_eq!(&bytes[..4], &rgba[..4]);
+        }
+        _ => panic!("expected OneForm::Image"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_pack_dibv5_writes_bottom_up_bgra_with_v5_header() {
+    let rgba = vec![
+        255, 0, 0, 255, 0, 255, 0, 128,
+        0, 0, 255, 64, 255, 255, 255, 255,
+    ];
+    let dib = native::pack_dibv5(2, 2, &rgba).expect("valid 2x2 DIBV5");
+    assert_eq!(dib.len(), 124 + 16);
+    assert_eq!(u32::from_le_bytes(dib[0..4].try_into().unwrap()), 124);
+    assert_eq!(i32::from_le_bytes(dib[4..8].try_into().unwrap()), 2);
+    assert_eq!(i32::from_le_bytes(dib[8..12].try_into().unwrap()), 2);
+    assert_eq!(u32::from_le_bytes(dib[16..20].try_into().unwrap()), 3);
+    assert_eq!(&dib[124..132], &[255, 0, 0, 64, 255, 255, 255, 255]);
+    assert_eq!(&dib[132..140], &[0, 0, 255, 255, 0, 255, 0, 128]);
+    assert!(native::pack_dibv5(0, 2, &[]).is_none());
+    assert!(native::pack_dibv5(2, 2, &[0; 4]).is_none());
+}
+
 /// A plain paste leaves an empty clipboard alone; a read always answers.
 #[test]
 fn the_worker_answers_reads_with_sanitised_content() {
