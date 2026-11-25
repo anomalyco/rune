@@ -41,10 +41,11 @@ fn copying_takes_the_source_of_whole_blocks() {
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text("note/b1")), "Hello **world** and [link](https://x.dev/a).");
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text("note/b2")), "- alpha\n- [x] beta", "a whole list");
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text("note/b3")), "```rust\nfn main() {}\n```");
-    // Part of a paragraph or of a list: as drawn.
+    // Part of a paragraph or part of a list item: as drawn; a whole list item keeps its source marker.
     assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_text("note/b1", 6..11)), "world");
     let alpha = rt.elements().into_iter().find(|e| e.path.ends_with("note/b2/i0/#1/b0")).expect("alpha").path;
-    assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text(alpha)), "alpha");
+    assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_all_text(alpha.clone())), "- alpha");
+    assert_eq!(copy(&mut rt, &clipboard, |tx| tx.select_text(alpha, 0..3)), "alp");
 }
 
 #[test]

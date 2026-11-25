@@ -2,7 +2,7 @@
 //! cells), else as many newlines as the two texts' [`El::copy_breaks`](crate::El::copy_breaks)
 //! ask for (one by default, two for a blank line between paragraphs), and a text's
 //! [`El::copy_prefix`](crate::El::copy_prefix) when the copy takes it from its start along with
-//! other texts (a list item's `- `).
+//! other texts or covers the element's whole copied text (a list item's `- ` or `1. `).
 use std::ops::Range;
 
 use super::{floor_boundary, trim_uncopied};
@@ -15,8 +15,10 @@ pub(crate) struct CopyJoin {
     /// The newlines the last piece wants after it.
     after: u8,
     pieces: usize,
-    /// The first piece's prefix, in bytes: a copy of one text alone goes without it.
+    /// The first piece's prefix, in bytes: dropped when a single text is copied partially.
     first_prefix: usize,
+    /// Whether the first piece covers the entire copied content of its element.
+    first_whole: bool,
 }
 
 impl CopyJoin {
@@ -39,6 +41,7 @@ impl CopyJoin {
         let prefix = spec.cold.copy_prefix.as_deref().filter(|_| from_start(spec, &range)).unwrap_or("");
         if self.pieces == 0 {
             self.first_prefix = prefix.len();
+            self.first_whole = is_whole_copied(spec, &range);
         }
         lead.push_str(prefix);
         self.pieces += 1;
@@ -56,9 +59,10 @@ impl CopyJoin {
         true
     }
 
-    /// The copied text: a single text goes without its prefix.
+    /// The copied text: a partial copy of one text alone drops its prefix, while a copy
+    /// covering the whole copied text of that element keeps it.
     pub(crate) fn finish(mut self) -> String {
-        if self.pieces == 1 && self.first_prefix > 0 {
+        if self.pieces == 1 && self.first_prefix > 0 && !self.first_whole {
             self.out.drain(..self.first_prefix);
         }
         self.out
@@ -70,4 +74,18 @@ fn from_start(spec: &TextSpec, range: &Range<usize>) -> bool {
     let len = spec.content.len();
     let first = if spec.cold.uncopied.is_empty() { 0 } else { trim_uncopied(&spec.cold.uncopied, (0, len)).0 };
     !range.is_empty() && range.start <= first
+}
+
+/// `range` covers the entire copied content of `spec` (ignoring leading/trailing `El::uncopied`).
+pub(super) fn is_whole_copied(spec: &TextSpec, range: &Range<usize>) -> bool {
+    let len = spec.content.len();
+    if range.is_empty() || len == 0 {
+        return false;
+    }
+    let (first, last) = if spec.cold.uncopied.is_empty() {
+        (0, len)
+    } else {
+        trim_uncopied(&spec.cold.uncopied, (0, len))
+    };
+    range.start <= first && range.end >= last
 }

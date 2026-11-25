@@ -687,9 +687,13 @@ impl RuntimeCore {
     /// clickable row), so this follows the selection's own text.
     pub(in crate::runtime) fn selection_drag(&mut self, x: f32, y: f32) {
         use virtual_selection::EndRef;
-        let phase::Phase::Dragging { unit, selection } = &self.edit.selectable.phase else { return };
-        let (unit, origin) = (*unit, selection.origin);
-        let Some(h) = self.selection_holder_end() else { self.clear_text_selection(); return };
+        let Some((selection, unit, armed)) = self.edit.selectable.phase.drag_selection() else { return };
+        let (origin, armed_path) = (selection.origin, armed.then(|| selection.path.clone()));
+        let h = match armed_path {
+            Some(path) => self.live(&path).filter(|&i| self.is_selectable(i)).map(EndRef::Mounted),
+            None => self.selection_holder_end(),
+        };
+        let Some(h) = h else { self.clear_text_selection(); return };
         let g = self.end_group_path(h).and_then(|gp| self.live(gp));
         let Some((j, at)) = (match (g, h) {
             (Some(g), _) => self.group_point(g, h, x, y),

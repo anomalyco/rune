@@ -57,6 +57,10 @@ pub(in crate::runtime) enum Phase {
     Empty,
     /// A selection no press is making.
     Placed(Selection),
+    /// A primary press on a non-selectable list marker armed a drag anchored at byte 0 of its
+    /// item's first selectable text without placing a selection or moving any caret unless the
+    /// pointer drags out of byte 0. `prior` keeps a collapsed caret to restore on a bare click.
+    Armed { selection: Selection, prior: Option<Box<Selection>> },
     /// The held press is extending this selection by `unit`, keeping whole the unit it began on
     /// (`Selection::origin`).
     Dragging { selection: Selection, unit: Unit },
@@ -65,20 +69,34 @@ pub(in crate::runtime) enum Phase {
 impl Phase {
     pub(in crate::runtime) fn selection(&self) -> Option<&Selection> {
         match self {
-            Phase::Empty => None,
+            Phase::Empty | Phase::Armed { .. } => None,
             Phase::Placed(s) | Phase::Dragging { selection: s, .. } => Some(s),
         }
     }
 
     pub(in crate::runtime) fn selection_mut(&mut self) -> Option<&mut Selection> {
         match self {
-            Phase::Empty => None,
+            Phase::Empty | Phase::Armed { .. } => None,
             Phase::Placed(s) | Phase::Dragging { selection: s, .. } => Some(s),
         }
     }
 
     /// The held press is extending the selection.
     pub(in crate::runtime) fn dragging(&self) -> bool { matches!(self, Phase::Dragging { .. }) }
+
+    /// A held press is actively dragging or armed on a list marker waiting for drag motion.
+    pub(in crate::runtime) fn drag_active(&self) -> bool {
+        matches!(self, Phase::Dragging { .. } | Phase::Armed { .. })
+    }
+
+    /// Active drag selection and granularity (including an armed marker drag at `Unit::Char`).
+    pub(in crate::runtime) fn drag_selection(&self) -> Option<(&Selection, Unit, bool)> {
+        match self {
+            Phase::Dragging { selection, unit } => Some((selection, *unit, false)),
+            Phase::Armed { selection, .. } => Some((selection, Unit::Char, true)),
+            Phase::Empty | Phase::Placed(_) => None,
+        }
+    }
 }
 
 /// A selection: its anchor in one text and its focus in the same text or, in `far`, another text
@@ -131,6 +149,8 @@ pub(in crate::runtime) enum Reach<'a> {
 pub(in crate::runtime) enum Event<'a> {
     /// A primary press placed a new selection, `origin` in text `path`, to be extended by `unit`.
     Press { path: String, content: String, unit: Unit, origin: (usize, usize) },
+    /// A primary press on a non-selectable list marker armed a drag anchored at byte 0 of `path`.
+    Arm { path: String, content: String },
     /// A Shift-press keeps the anchor and moves the focus to `focus`, in `far` or the anchor's
     /// text; the drag that follows extends by character.
     Extend { focus: usize, far: Option<Far> },
@@ -162,6 +182,14 @@ pub(in crate::runtime) fn step(phase: &mut Phase, event: Event<'_>) -> Effects<E
             *phase = Phase::Dragging { selection: Selection::new(path, content, origin, origin), unit };
             Effects::one(Effect::Seal)
         }
+        Event::Arm { path, content } => {
+            let prior = match std::mem::take(phase) {
+                Phase::Placed(prev) if prev.anchor == prev.focus && prev.far.is_none() => Some(Box::new(prev)),
+                _ => None,
+            };
+            *phase = Phase::Armed { selection: Selection::new(path, content, (0, 0), (0, 0)), prior };
+            Effects::one(Effect::SyncPins)
+        }
         Event::Extend { focus, far } => {
             let (Phase::Placed(selection) | Phase::Dragging { selection, .. }) = std::mem::take(phase) else {
                 return Effects::none();
@@ -174,6 +202,20 @@ pub(in crate::runtime) fn step(phase: &mut Phase, event: Event<'_>) -> Effects<E
             Effects::one(Effect::Seal)
         }
         Event::Drag { anchor, focus, reach } => {
+            if let Phase::Armed { .. } = phase {
+                if anchor == focus && matches!(reach, Reach::Anchor) {
+                    return Effects::none();
+                }
+                if let Phase::Armed { mut selection, .. } = std::mem::take(phase) {
+                    (selection.anchor, selection.focus) = (anchor, focus);
+                    selection.far = match reach {
+                        Reach::Anchor => None,
+                        Reach::Far { path, content } => Some(Far::new(path.to_owned(), content.to_owned())),
+                    };
+                    *phase = Phase::Dragging { selection, unit: Unit::Char };
+                    return Effects::one(Effect::Seal);
+                }
+            }
             let Phase::Dragging { selection: sel, .. } = phase else { return Effects::none() };
             let same_far = match reach {
                 Reach::Anchor => sel.far.is_none(),
@@ -189,12 +231,20 @@ pub(in crate::runtime) fn step(phase: &mut Phase, event: Event<'_>) -> Effects<E
             Effects::one(if same_far { Effect::SyncPins } else { Effect::Seal })
         }
         Event::Release => {
-            if let Phase::Dragging { .. } = phase
-                && let Phase::Dragging { selection, .. } = std::mem::take(phase)
-            {
-                *phase = Phase::Placed(selection);
+            match std::mem::take(phase) {
+                Phase::Dragging { selection, .. } => {
+                    *phase = Phase::Placed(selection);
+                    Effects::none()
+                }
+                Phase::Armed { prior, .. } => {
+                    *phase = prior.map_or(Phase::Empty, |p| Phase::Placed(*p));
+                    Effects::one(Effect::SyncPins)
+                }
+                other => {
+                    *phase = other;
+                    Effects::none()
+                }
             }
-            Effects::none()
         }
         Event::SetFocus { focus, far } => {
             let (Phase::Placed(selection) | Phase::Dragging { selection, .. }) = std::mem::take(phase) else {

@@ -47,11 +47,96 @@ impl RuntimeCore {
         keeps.focus || keeps.selection
     }
 
+    /// First selectable text of the list item whose non-selectable marker covers `(x, y)`,
+    /// if no selectable text or overlying hit target sits above it. Works in both LTR and RTL
+    /// lists and nested lists because it checks the marker node's own drawn box.
+    pub(in crate::runtime) fn marker_anchor_at(&self, x: f32, y: f32) -> Option<usize> {
+        let top_hit = self.top_hit(x, y);
+        let nodes = &self.tree.nodes;
+        for li in (0..nodes.len()).rev() {
+            let n = &nodes[li];
+            let is_item = n.role == "listitem"
+                || (n.role == "checkbox"
+                    && !n.has_primary_handler()
+                    && n.parent.is_some_and(|p| nodes[p].role == "list"));
+            if !is_item || !self.allowed(li) || self.subtree_exiting(li) {
+                continue;
+            }
+            if let Some(th) = top_hit
+                && !self.node_holds(th, li)
+            {
+                continue;
+            }
+            let marker = li + 1;
+            if marker >= nodes.len() || nodes[marker].parent != Some(li) || !nodes[marker].a11y.hidden {
+                continue;
+            }
+            if !self.allowed(marker)
+                || self.subtree_exiting(marker)
+                || self.paint.drawn.get(marker).is_none_or(|d| d[2] <= 0.0 || d[3] <= 0.0)
+                || !self.node_contains(marker, x, y)
+            {
+                continue;
+            }
+            let first = (li + 1..nodes.len())
+                .take_while(|&j| self.node_holds(li, j))
+                .find(|&j| !self.node_holds(marker, j) && self.is_selectable(j) && self.allowed(j) && !self.subtree_exiting(j));
+            if first.is_some() {
+                return first;
+            }
+        }
+        None
+    }
+
+    /// Primary press on a list item's non-selectable marker: single click arms a drag anchored at
+    /// byte 0 of `i` without selecting or moving any caret; Shift+click extends to byte 0; double-
+    /// and triple-click select the first word or paragraph of `i` (never the marker itself).
+    fn selection_down_marker(&mut self, i: usize, x: f32, y: f32) {
+        use super::selectable::{Unit, phase, virtual_selection::EndRef, with_trailing_space};
+        let path = self.tree.nodes[i].path.clone();
+        let content = self.content_of(i).to_owned();
+        let now = self.now_clock();
+        let clicks = self.edit.selectable.presses.press(&path, now, (x, y), self.double_click_interval).min(3);
+        let i_end = EndRef::Mounted(i);
+        let holder = self.selection_holder_end().filter(|&h| h == i_end || self.end_same_group(h, i_end));
+        match holder {
+            Some(h) if clicks == 1 && self.edit.selectable.shift => {
+                self.select_step(phase::Event::Extend {
+                    focus: 0,
+                    far: (h != i_end).then(|| phase::Far::new(path, content)),
+                });
+            }
+            _ if clicks == 1 => {
+                self.select_step(phase::Event::Arm { path, content });
+            }
+            _ => {
+                let unit = if clicks == 2 { Unit::Word } else { Unit::Paragraph };
+                let origin = self.unit_in(i, 0, unit);
+                let origin = if unit == Unit::Word { with_trailing_space(&content, origin) } else { origin };
+                self.select_step(phase::Event::Press { path, content, unit, origin });
+            }
+        }
+    }
+
+    /// Whether an armed marker press sits inside the currently focused caret-browsing host, so a
+    /// bare click on its list marker neither blurs nor moves its caret.
+    pub(in crate::runtime) fn armed_marker_in_focused_caret_host(&self) -> bool {
+        let Some(host) = self.caret_browsing_focused_host() else { return false };
+        let Some((sel, _, armed)) = self.edit.selectable.phase.drag_selection() else { return false };
+        armed && self.live(&sel.path).is_some_and(|i| self.caret_browsing_host_of(i) == Some(host))
+    }
+
     /// The selection side of a primary press on `target` at (x, y): it starts or clears a
     /// selection, unless the press is on an [`El::keeps_text_selection`] element.
     pub(in crate::runtime) fn press_selection(&mut self, target: Option<usize>, x: f32, y: f32) {
         if target.is_some_and(|t| self.press_keeps_selection(t)) { return; }
-        self.selection_down(self.selectable_at(x, y), x, y);
+        if let Some(i) = self.selectable_at(x, y) {
+            self.selection_down(Some(i), x, y);
+        } else if let Some(i) = self.marker_anchor_at(x, y) {
+            self.selection_down_marker(i, x, y);
+        } else {
+            self.selection_down(None, x, y);
+        }
     }
 
     /// The selection's focus comes before its anchor.

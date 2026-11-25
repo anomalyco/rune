@@ -1024,8 +1024,9 @@ impl El {
         self
     }
     /// Text copying puts before this [`El::selectable`] text when a selection takes it from its
-    /// start along with other texts, without drawing it: a list item's `"- "` or `"1. "`, whose
-    /// drawn marker isn't selectable. A copy of this text alone leaves it out.
+    /// start along with other texts or covers its whole copied text, without drawing it: a list
+    /// item's `"- "` or `"1. "`, whose drawn marker isn't selectable. A partial copy of this text
+    /// alone leaves it out.
     pub fn copy_prefix(mut self, prefix: impl Into<std::rc::Rc<str>>) -> Self {
         if let Some(t) = &mut self.text { t.cold.copy_prefix = Some(prefix.into()); }
         self
