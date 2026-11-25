@@ -442,6 +442,7 @@ impl OverlayCore {
             alpha.resize(&gpu.device, (live.config.width, live.config.height));
         }
         app.rt_mut().set_viewport(self.at.size, scale);
+        self.publish_screen_transform(app.rt());
         self.dirty = true;
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.sync_window_backdrop(app.rt_mut(), false);
@@ -458,6 +459,8 @@ pub(crate) fn overlay_rescale_size(size: (f32, f32), scale: f32, max_dim: u32) -
 impl Drop for OverlayCore {
     fn drop(&mut self) {
         self.close_tokens();
+        self.clear_screen_transform();
+        self.drop_injected_pointers();
         *self.shared.native.lock().unwrap() = Default::default();
         self.set_availability(Availability::Unavailable);
         self.release();
@@ -533,7 +536,9 @@ impl OverlayCore {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.x11.take();
         drop(backing);
+        self.wayland_resize.step(super::sizing::WaylandResizeEvent::Reset);
         self.position_owner.step(input::PositionEvent::WindowReleased);
+        self.clear_screen_transform();
         self.shared.native.lock().unwrap().0 = None;
     }
 }

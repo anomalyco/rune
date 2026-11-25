@@ -887,6 +887,25 @@ app.run();
   `AppHandle::close`, `WindowHandle::close`), quit/relaunch, teardown, and an already-exiting loop
   bypass `on_close_request`, and apps without the hook behave as before. Headless scripts deliver
   it with `{"close_request": true}`.
+- `App::on_quit_request(|s, tx| -> QuitResponse)` (also forwarded on `WindowSpec::on_quit_request`)
+  intercepts application-level quit requests on macOS (the Dock's Quit, the default application
+  Quit menu item / unhandled ⌘Q, logout, restart, and shutdown) before `quitting()` becomes true
+  or `App::on_quit` runs. When registered on any live non-finished host (including hidden
+  `keep_running` and `windowless` hosts; overlays and finished hosts are skipped), Rune returns
+  `NSTerminateLater` from `applicationShouldTerminate:`, asks live hosts in registration order
+  inside normal update transactions until the first returns `QuitResponse::Defer` or all return
+  `QuitResponse::Quit`, and sends `replyToApplicationShouldTerminate:` once outside any winit
+  handler. `QuitResponse::Defer` replies `NO` so the app stays open, commits state/`Tx` updates,
+  and draws its confirmation UI (cancelling a macOS logout or shutdown with macOS's standard
+  notice); a later `Tx::quit` or `AppHandle::quit` exits without asking again. Programmatic
+  quit/relaunch, last-main-window exit (already gated by `on_close_request`), teardown, panics,
+  and Force Quit bypass `on_quit_request`. Apps without `on_quit_request` return
+  `NSTerminateNow` immediately, unchanged. Note that macOS `NSSupportsSuddenTermination` or
+  `NSSupportsAutomaticTermination` in `Info.plist` can let the OS terminate an idle app without
+  calling `applicationShouldTerminate:`. On Windows, Linux, and web, `on_quit_request` compiles
+  as an honest no-op (use `on_close_request` for window closes; Windows `WM_QUERYENDSESSION` /
+  `ShutdownBlockReasonCreate`, Linux `org.freedesktop.portal.Inhibit`, and web `beforeunload`
+  are not interactive quit-dialog hooks). Headless scripts deliver it with `{"quit_request": true}`.
 - `App::on_window(|w: &WindowHandle| ..)` runs on the UI thread after every native creation, for
   icons, native styles, or display-bound protocol objects through `WindowHandle::with_raw_handle`
   and `WindowHandle::with_raw_display_handle`. Pair `with_raw_display_handle` with
@@ -1121,15 +1140,7 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   host DirectComposition video layers (video falls back to UI-drawn playback), skips the seamless
   visual commit and NVIDIA G-SYNC premultiplied VRR guard on CPU-to-GPU handover, and Windows
   overlays (`App::overlay`) refuse cleanly because they require DirectComposition.
-  `RUNE_RESIZE_SYNC=1` (Windows, off by default) opts opaque app windows with a Rune-owned
-  DirectComposition `Handover` into a drag-only synchronized resize path between
-  `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` using public APIs only: drag frames render into a
-  D3D12 shared texture synchronized via shared fences into a D3D11 `DXGI_SWAP_EFFECT_DISCARD`
-  copy-model HWND swap chain presented inside `WM_PAINT`, paired with `WM_NCCALCSIZE`
-  `WVR_VALIDRECTS` and `WM_ERASEBKGND` suppression, with zero presents to the hidden D3D12
-  composition swap chain during the drag. Transparent windows, overlays, `DxgiFromHwnd`, and
-  CPU/handover/rebinding windows always keep the normal path; with `RUNE_RESIZE_SYNC` unset or
-  `0`, no D3D11 device, shared texture, or second swap chain is created. After editing
+  After editing
   `clip.wgsl` or `shader.wgsl`, run
   `cargo test -p rune --lib --features metal-backend precompiled_uber_metallib_is_fresh` on a Mac;
   if the MSL, flags or library hash changed, run `scripts/precompile-metal-shaders.sh` (needs
@@ -1166,6 +1177,36 @@ Staying fast afterwards is "Fast apps" (`site/src/FastApps.tsx`) and "Smooth scr
   values leave the builder in effect), matching `RUNE_GPU_BACKEND`. Ignored on macOS, iOS, headless
   runs, Windows transparent windows (which use WARP on GPU-less Windows), and inline/document web
   pages.
+- **Windows drag-only resize synchronization (`ResizeSync`, `App::resize_sync`,
+  `WindowSpec::resize_sync`).** Controls whether an eligible Windows app window uses Rune's
+  drag-only copy-model path between `WM_ENTERSIZEMOVE` and `WM_EXITSIZEMOVE` to keep content in
+  step with left- and top-edge drags using public Microsoft-documented APIs only (drag frames
+  render into a capacited 2-slot D3D12 shared texture ring copied via `CopySubresourceRegion`
+  and shared fences into a D3D11 `DXGI_SWAP_EFFECT_DISCARD` HWND swap chain inside `WM_PAINT`,
+  with `IDCompositionTarget::SetRoot` detaching DirectComposition and `WM_NCCALCSIZE`
+  `WVR_VALIDRECTS` + `WM_ERASEBKGND` suppression, and zero presents to the hidden D3D12
+  composition swap chain during the drag). Defaults to `ResizeSync::Auto`, which resolves to off
+  today so existing apps stay on DirectComposition flip-model presentation with zero D3D11
+  devices, shared textures, or second swap chains created; `Auto` may turn on for eligible
+  Windows windows in a later release once more GPU and OS configurations have been verified.
+  `ResizeSync::On` opts a window in (try it via `cargo run --release -p settings -- --resize-sync`),
+  and `ResizeSync::Off` keeps normal flip-model presentation. `RUNE_RESIZE_SYNC` overrides every
+  window without a rebuild (`1`/`true`/`yes`/`on` => `On`, `0`/`false`/`no`/`off` => `Off` as an
+  unconditional kill switch over `ResizeSync::On`, `auto` => `Auto`; unset, empty, or
+  unrecognized values leave the builder in effect). Cost: zero at launch and on non-drag frames;
+  the capacited 2-slot shared texture ring and copy-model swap chain are freed immediately on
+  `WM_EXITSIZEMOVE`, while the lazily created D3D11 device (~15–40 MiB) stays cached on that
+  window for later drags until device loss or window destruction; per Microsoft Learn (*For best
+  performance, use DXGI flip model*), bitblt (`DXGI_SWAP_EFFECT_DISCARD`) presents can incur an
+  extra cross-adapter copy on hybrid GPU laptops. Limit: per Microsoft Learn (`DXGI_SWAP_EFFECT`,
+  `DXGI_SCALING`, `WM_NCCALCSIZE`, `IDCompositionTarget::SetRoot`), `DXGI_SWAP_EFFECT_DISCARD`
+  requires `DXGI_SCALING_STRETCH` (only flip-model supports `DXGI_SCALING_NONE`), so the HWND
+  swap chain resizes per step and an occasional step that straddles a refresh boundary (~5% on
+  fast 239 Hz drags) can still appear one step out of place; undocumented Windows resize-sync
+  interfaces are declined. Ignored on macOS, Linux, web, iOS, headless runs, overlays,
+  transparent windows (including `WindowBackdrop` and `El::system_material`),
+  `WGPU_DX12_PRESENTATION_SYSTEM=hwnd`, software/WARP adapters, non-8-bit (HDR) surface formats,
+  and CPU-first/handover/rebinding states.
 - **GPU memory policy (`GpuMemoryPolicy`).** By default Rune creates wgpu devices with
   `GpuMemoryPolicy::MemoryUsage` (smaller suballocation blocks than wgpu's `Performance` default).
   Apps can choose `MemoryUsage`, `Performance`, or `Manual { block_size }` at startup via
@@ -1587,7 +1628,15 @@ rune::App::new(spec).fit_content_height().run();
   change's spring. A width change jumps, and a window the user resizes goes back to its
   content's height. Unless the app sets a minimum, its minimum height is 0 rather than the
   default 400 pt.
-- Overlays ignore these; use `OverlayHandle::resize`.
+- Overlays ignore these (`Tx::resize_window` included); use `OverlayHandle::resize`, or
+  `ConfiguredOverlay::fit_content_height` for an overlay whose height follows its content (a
+  candidate list, a HUD). It is sized to its content before each show and prewarm (at the
+  target monitor's scale and active `RendererKind`, clamped to the display's work area), so
+  its first frame draws at that height with no flash. While shown, a height change resizes
+  and re-places the overlay before painting in the same frame (no spring; on Wayland
+  layer-shell, holds the previous frame until the compositor confirms the new size). Its
+  width comes from `OverlaySpec::size` and `OverlayHandle::resize`, whose height it ignores;
+  give the root no fixed or `fill` height.
 
 ### Window chrome and shell controls (OpenCode Desktop fidelity)
 
@@ -2121,7 +2170,11 @@ Hooks also hear a pasted image (a screenshot, an image copied from a browser or 
 (`size()`), whatever form the clipboard held it in. Rune fetches it only for a target with a
 hook (`on_input_paste`, `on_paste_content`, `read_clipboard`), so pasting text into other fields
 never decodes one, and leaves out images over `clipboard::MAX_IMAGE_BYTES` (32 MiB as PNG).
-An image alone, with no text, reaches only hooks. Copies don't write images yet. On the web,
+An image alone, with no text, reaches only hooks. To copy an image, as a browser's Copy Image
+does, `tx.copy_image(&image)` takes an `Image` an `ImageCache` decoded (any format it draws; an
+animation's first frame, an SVG at its intrinsic size) and encodes it as PNG on the clipboard
+worker, so the app decodes nothing twice. `ClipboardImage::from_rgba(w, h, &rgba)` encodes
+pixels the app holds, for `ClipboardContent::with_image`. On the web,
 hooks also hear files pasted into or dropped on the field as `content.web_files()`: up to
 `clipboard::MAX_WEB_FILES` `WebFile` handles with a name, type and size, no path, and nothing
 read until `WebFile::read(max)` (see WEB.md). A dropped PNG or text file is also the image or
@@ -3290,6 +3343,17 @@ is one more host on the event loop
   `OverlayInput::Regions`. Titlebar double-clicks are ignored, and a user-dragged overlay keeps
   its position across shows, resizes, and `follow_pointer` until the app sends a new placement
   request. Wayland layer-shell overlays cannot be interactively dragged and ignore it.
+- Pointer injection: `OverlayHandle::send_pointer(PointerInput)` (paired with
+  `OverlayHandle::screen_to_local((x_px, y_px)) -> Option<(f32, f32)>`) forwards external
+  pointer streams (for example from a low-level hook or another thread) through the same
+  hit-testing, hover, press, drag, and wheel pipeline as native input, bypassing
+  `OverlayInput::None` and `OverlayInput::Regions` click-through gating across GPU, Windows
+  CPU layered, macOS panel, X11, and Wayland layer-shell overlays. Queued in a bounded
+  128-slot zero-allocation ring buffer (coalescing consecutive moves), dropped while hidden
+  or fading out, and arbitrated by an explicit ownership state machine (latest source wins
+  in idle/hover; active capture ignores the other source until release, cancel, or hide).
+  Injected events never move or set the OS cursor, never activate or focus the overlay, and
+  refuse native `window_drag` and OS `drag_out` sessions.
 - `Tx::copy` works in overlays (a meeting capsule's Copy button).
 - Unsupported: hover in a non-key macOS panel (mouse-moved events go to the key window).
 
@@ -3541,8 +3605,11 @@ GPU windows and overlays (`zwlr_layer_shell_v1` and toplevel fallbacks) whenever
 Unlike macOS and Windows (where native material views sit behind the element and replace its
 fill), Wayland compositor blur has no tint of its own: translucent fills are kept as the tint,
 unfilled elements draw transparent instead of the opaque fallback, outer-shadow interior holes
-are punched, opaque fills (`alpha >= 1.0`) stay opaque with no blur region, elements below
-`0.10` opacity leave the region, ancestor clips and all four rounded corners are decomposed
+are punched, opaque fills (`alpha >= 1.0`) stay opaque with no blur region, elements beyond
+`App::max_native_materials` (default `MAX_NATIVE_MATERIALS` = 4) draw their fallback fill,
+Wayland blur protocols have no opacity parameter so blur is all-or-nothing under a fading card
+(staying at full strength until opacity crosses `0.10`, then dropping cleanly), ancestor clips
+and all four rounded corners are decomposed
 conservatively inward into logical `wl_region` spans (bounded at 512 rects per surface), and
 updates flush right before present so region and pixels commit atomically. Use
 `Cx::window_backdrop_supported(WindowBackdrop::Blur)` to query capability for both

@@ -12,12 +12,12 @@ fn make_app(with_hook: bool) -> TypedHeadlessApp<Vec<Vec<PathBuf>>> {
     if with_hook {
         app = app.on_open_files(|seen, paths, _| seen.push(paths.to_vec()));
     }
-    let (on_close_request, on_close, on_reopen, on_open_url, on_open_files) = (
-        app.on_close_request, app.on_close, app.on_reopen, app.on_open_url, app.on_open_files,
+    let (on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files) = (
+        app.on_close_request, app.on_quit_request, app.on_close, app.on_quit, app.on_reopen, app.on_open_url, app.on_open_files,
     );
     let (spec, state, shared, _) = app.into_parts(None);
     let rt = Runtime::new(state, spec.view, spec.size, Env::default());
-    TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_close, on_reopen, on_open_url, on_open_files }
+    TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files }
 }
 
 #[test]
@@ -65,12 +65,12 @@ fn headless_run_close_request_defers_commits_dialog_and_closes_when_allowed() {
                 }
             });
         }
-        let (on_close_request, on_close, on_reopen, on_open_url, on_open_files) = (
-            app.on_close_request, app.on_close, app.on_reopen, app.on_open_url, app.on_open_files,
+        let (on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files) = (
+            app.on_close_request, app.on_quit_request, app.on_close, app.on_quit, app.on_reopen, app.on_open_url, app.on_open_files,
         );
         let (spec, state, shared, _) = app.into_parts(None);
         let rt = Runtime::new(state, spec.view, spec.size, Env::default());
-        TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_close, on_reopen, on_open_url, on_open_files }
+        TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files }
     };
 
     let mut deferred = make(true, true);
@@ -90,4 +90,50 @@ fn headless_run_close_request_defers_commits_dialog_and_closes_when_allowed() {
     plain.rt.frame(0.0);
     assert_eq!(plain.run_close_request(), crate::CloseResponse::Close);
     assert_eq!(plain.rt.state.closes, 1);
+}
+
+#[test]
+fn headless_run_quit_request_defers_commits_dialog_and_quits_when_allowed() {
+    #[derive(Default)]
+    struct Draft { dirty: bool, prompt: bool, quits: u32 }
+    let make = |dirty: bool, with_hook: bool| {
+        let spec = AppSpec::new("draft", (100.0, 100.0), Draft::default, |_: &Draft, _: &mut Cx<Draft>| el());
+        let mut app = App::new(spec)
+            .init(move || Draft { dirty, prompt: false, quits: 0 })
+            .on_quit(|d, _| d.quits += 1);
+        if with_hook {
+            app = app.on_quit_request(|d, _| {
+                if d.dirty {
+                    d.prompt = true;
+                    crate::QuitResponse::Defer
+                } else {
+                    crate::QuitResponse::Quit
+                }
+            });
+        }
+        let (on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files) = (
+            app.on_close_request, app.on_quit_request, app.on_close, app.on_quit, app.on_reopen, app.on_open_url, app.on_open_files,
+        );
+        let (spec, state, shared, _) = app.into_parts(None);
+        let rt = Runtime::new(state, spec.view, spec.size, Env::default());
+        TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files }
+    };
+
+    let mut deferred = make(true, true);
+    deferred.rt.frame(0.0);
+    assert_eq!(deferred.run_quit_request(), crate::QuitResponse::Defer);
+    assert!(deferred.rt.state.prompt);
+    assert_eq!(deferred.rt.state.quits, 0, "Defer must not invoke on_quit");
+    assert!(deferred.rt.needs_commit());
+
+    let mut allowed = make(false, true);
+    allowed.rt.frame(0.0);
+    assert_eq!(allowed.run_quit_request(), crate::QuitResponse::Quit);
+    assert!(!allowed.rt.state.prompt);
+    assert_eq!(allowed.rt.state.quits, 1);
+
+    let mut plain = make(true, false);
+    plain.rt.frame(0.0);
+    assert_eq!(plain.run_quit_request(), crate::QuitResponse::Quit);
+    assert_eq!(plain.rt.state.quits, 1);
 }

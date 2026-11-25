@@ -1,5 +1,10 @@
-//! Off-screen D3D12-to-D3D11 shared-texture and shared-fence plumbing for synchronized drag
+//! Off-screen D3D12-to-D3D11 shared-texture ring and shared-fence plumbing for synchronized drag
 //! resize, plus the narrow [`DragSeam`] trait isolating HWND-bound presentation and DComp calls.
+//!
+//! Non-compositor apps render into the top-left `(width, height)` sub-rectangle of a capacited,
+//! double-buffered shared texture ring (`RING_SLOTS = 2`, grown in 256 px steps) so ordinary
+//! resize steps allocate zero D3D12/D3D11 textures or NT handles and D3D12 does not stall on the
+//! immediately preceding frame's D3D11 copy.
 
 #![allow(unsafe_code)]
 
@@ -13,6 +18,52 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
 };
 use windows::core::Interface;
+
+/// Allocation granularity (in pixels) for capacited drag shared textures so drag steps inside the
+/// allocated bounds create zero textures or shared handles.
+pub(crate) const CAPACITY_STEP: u32 = 256;
+
+/// Number of shared render-target slots in [`DragTargetRing`]. Two slots let D3D12 render frame
+/// `N + 1` without waiting for D3D11 to finish copying frame `N`.
+pub(crate) const RING_SLOTS: usize = 2;
+
+/// Computes the shared texture capacity for `needed` under `max_dim`.
+///
+/// When `exact` is true (custom compositors that may assume `target.texture().size() == size`),
+/// returns `needed` unchanged. Otherwise reuses `current` whenever it already covers `needed`,
+/// and grows only the overflowing axis in [`CAPACITY_STEP`] increments with headroom, clamped to
+/// `max_dim`.
+pub(crate) fn grow_capacity(
+    current: Option<(u32, u32)>,
+    needed: (u32, u32),
+    max_dim: u32,
+    exact: bool,
+) -> (u32, u32) {
+    let max_dim = max_dim.max(1);
+    let need_w = needed.0.clamp(1, max_dim);
+    let need_h = needed.1.clamp(1, max_dim);
+    if exact {
+        return (need_w, need_h);
+    }
+    if let Some((cw, ch)) = current
+        && cw >= need_w
+        && ch >= need_h
+    {
+        return (cw, ch);
+    }
+    let grow_axis = |cur: u32, need: u32| -> u32 {
+        if cur >= need {
+            cur.min(max_dim)
+        } else {
+            need.saturating_add(CAPACITY_STEP)
+                .next_multiple_of(CAPACITY_STEP)
+                .min(max_dim)
+                .max(need)
+        }
+    };
+    let (cw, ch) = current.unwrap_or((0, 0));
+    (grow_axis(cw, need_w), grow_axis(ch, need_h))
+}
 
 /// Lazily created D3D11 device and cross-API fence pair bound to one Rune D3D12 device.
 pub(crate) struct DragDevice {
@@ -47,10 +98,10 @@ impl DragDevice {
         unsafe { d3d12.GetDeviceRemovedReason() }.is_ok()
     }
 
-    /// Orders subsequent D3D12 work on `queue` after the last D3D11 copy finished reading the
-    /// shared texture.
-    pub(crate) fn wait_before_d3d12(&self, queue: &wgpu::Queue) -> Result<(), String> {
-        if self.last_release == 0 {
+    /// Orders subsequent D3D12 work on `queue` after D3D11 finished reading the target slot
+    /// (`release_value == 0` when the slot has never been read yet).
+    pub(crate) fn wait_before_d3d12(&self, queue: &wgpu::Queue, release_value: u64) -> Result<(), String> {
+        if release_value == 0 {
             return Ok(());
         }
         // SAFETY: accesses only the raw D3D12 command queue to enqueue a GPU wait on our live
@@ -58,7 +109,7 @@ impl DragDevice {
         let hal = unsafe { queue.as_hal::<wgpu::hal::api::Dx12>() }
             .ok_or_else(|| "drag resize sync requires D3D12 queue".to_owned())?;
         // SAFETY: `self.release.d3d12` was created on this queue's device.
-        unsafe { hal.as_raw().Wait(&self.release.d3d12, self.last_release) }
+        unsafe { hal.as_raw().Wait(&self.release.d3d12, release_value) }
             .map_err(|e| format!("D3D12 queue wait on release fence: {e}"))
     }
 
@@ -84,22 +135,24 @@ impl DragDevice {
         self.last_release
     }
 
-    /// Waits for `ready_value` on D3D11, copies `target` into a CPU-readable D3D11 staging
-    /// texture, signals `release`, and returns tightly-packed pixel rows (4 bytes per pixel).
-    /// Used by off-screen tests to prove bit-exact D3D12 -> D3D11 transfer without an HWND.
+    /// Waits for `ready_value` on D3D11, copies the top-left `copy_size` sub-rectangle of `target`
+    /// into a CPU-readable D3D11 staging texture, signals `release`, and returns `(pixels,
+    /// release_value)` with tightly-packed 4-byte-per-pixel rows.
+    /// Used by off-screen tests to prove bit-exact sub-rect D3D12 -> D3D11 transfer without an HWND.
     #[cfg(test)]
     pub(super) fn readback_via_d3d11(
         &mut self,
         target: &SharedDragTarget,
+        copy_size: (u32, u32),
         ready_value: u64,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(Vec<u8>, u64), String> {
         use windows::Win32::Graphics::Direct3D11::{
-            D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
-            D3D11_USAGE_STAGING,
+            D3D11_BOX, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+            D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
         };
         use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
-        let (width, height) = target.size;
+        let (width, height) = copy_size;
         let staging_desc = D3D11_TEXTURE2D_DESC {
             Width: width,
             Height: height,
@@ -112,9 +165,10 @@ impl DragDevice {
             CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
             MiscFlags: 0,
         };
+        let src_box = D3D11_BOX { left: 0, top: 0, front: 0, right: width, bottom: height, back: 1 };
         let release_value = self.next_release_value();
-        // SAFETY: COM calls on our live D3D11 device and immediate context with matching texture
-        // size and format.
+        // SAFETY: COM calls on our live D3D11 device and immediate context; `src_box` lies inside
+        // `target.d3d11_texture` (`target.size >= copy_size`).
         unsafe {
             let mut staging = None;
             self.d3d11
@@ -126,7 +180,16 @@ impl DragDevice {
                 .context
                 .Wait(&self.ready.d3d11, ready_value)
                 .map_err(|e| format!("D3D11 wait: {e}"))?;
-            self.d3d11.context.CopyResource(&staging, &target.d3d11_texture);
+            self.d3d11.context.CopySubresourceRegion(
+                &staging,
+                0,
+                0,
+                0,
+                0,
+                &target.d3d11_texture,
+                0,
+                Some(&src_box),
+            );
             self.d3d11
                 .context
                 .Signal(&self.release.d3d11, release_value)
@@ -148,8 +211,83 @@ impl DragDevice {
                 out[y * row_bytes..(y + 1) * row_bytes].copy_from_slice(src);
             }
             self.d3d11.context.Unmap(&staging, 0);
-            Ok(out)
+            Ok((out, release_value))
         }
+    }
+
+    /// Creates a plain default-usage BGRA8 D3D11 texture for off-screen GPU-copy tests.
+    #[cfg(test)]
+    pub(super) fn create_test_dst_texture(&self, size: (u32, u32)) -> Result<ID3D11Texture2D, String> {
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_BIND_RENDER_TARGET, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: size.0,
+            Height: size.1,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        // SAFETY: plain default-usage D3D11 texture on our live test D3D11 device.
+        unsafe {
+            let mut raw = None;
+            self.d3d11
+                .device
+                .CreateTexture2D(&desc, None, Some(&mut raw))
+                .map_err(|e| format!("test dst texture: {e}"))?;
+            raw.ok_or_else(|| "test dst texture".to_owned())
+        }
+    }
+
+    /// GPU-only D3D11 copy without CPU map/readback, for measuring steady-state off-screen
+    /// D3D12 -> D3D11 shared-texture transfer latency.
+    #[cfg(test)]
+    pub(super) fn gpu_copy_only_via_d3d11(
+        &mut self,
+        target: &SharedDragTarget,
+        dst: &ID3D11Texture2D,
+        copy_size: (u32, u32),
+        ready_value: u64,
+    ) -> Result<u64, String> {
+        use windows::Win32::Graphics::Direct3D11::D3D11_BOX;
+        let src_box = D3D11_BOX {
+            left: 0,
+            top: 0,
+            front: 0,
+            right: copy_size.0,
+            bottom: copy_size.1,
+            back: 1,
+        };
+        let release_value = self.next_release_value();
+        // SAFETY: live D3D11 context and textures; `src_box` lies within both.
+        unsafe {
+            self.d3d11
+                .context
+                .Wait(&self.ready.d3d11, ready_value)
+                .map_err(|e| format!("D3D11 wait: {e}"))?;
+            self.d3d11.context.CopySubresourceRegion(
+                dst,
+                0,
+                0,
+                0,
+                0,
+                &target.d3d11_texture,
+                0,
+                Some(&src_box),
+            );
+            self.d3d11
+                .context
+                .Signal(&self.release.d3d11, release_value)
+                .map_err(|e| format!("D3D11 signal: {e}"))?;
+            self.d3d11.context.Flush();
+        }
+        Ok(release_value)
     }
 }
 
@@ -158,6 +296,8 @@ pub(crate) struct SharedDragTarget {
     pub(crate) wgpu_texture: wgpu::Texture,
     pub(crate) view: wgpu::TextureView,
     pub(crate) d3d11_texture: ID3D11Texture2D,
+    /// Allocated capacity `(width, height)` in pixels (`>= frame_size`).
+    #[cfg(test)]
     pub(crate) size: (u32, u32),
     pub(crate) format: wgpu::TextureFormat,
     #[cfg(test)]
@@ -214,6 +354,7 @@ impl SharedDragTarget {
             wgpu_texture,
             view,
             d3d11_texture,
+            #[cfg(test)]
             size,
             format,
             #[cfg(test)]
@@ -235,6 +376,103 @@ impl SharedDragTarget {
     }
 }
 
+/// One slot of [`DragTargetRing`], pairing a shared texture with its last D3D11 release fence.
+pub(crate) struct DragSlot {
+    pub(crate) target: SharedDragTarget,
+    pub(crate) last_release: u64,
+}
+
+/// Bounded 2-slot capacited ring of shared drag render targets.
+#[derive(Default)]
+pub(crate) struct DragTargetRing {
+    slots: [Option<DragSlot>; RING_SLOTS],
+    next_slot: usize,
+    capacity: Option<(u32, u32)>,
+    format: Option<wgpu::TextureFormat>,
+    exact: bool,
+    #[cfg(test)]
+    pub(super) allocations: u64,
+}
+
+impl DragTargetRing {
+    /// Acquires the next slot covering `size` and `format`. Reuses existing capacited textures
+    /// without allocation whenever `capacity >= size` and `format` matches.
+    pub(crate) fn acquire_slot(
+        &mut self,
+        device: &wgpu::Device,
+        drag: &DragDevice,
+        size: (u32, u32),
+        format: wgpu::TextureFormat,
+        exact: bool,
+    ) -> Result<(usize, &DragSlot), String> {
+        let max_dim = device.limits().max_texture_dimension_2d.max(1);
+        let compatible = self.format == Some(format)
+            && self.exact == exact
+            && match self.capacity {
+                Some(cap) if exact => cap == size,
+                Some(cap) => cap.0 >= size.0 && cap.1 >= size.1,
+                None => false,
+            };
+        if !compatible {
+            let prev_cap = if self.format == Some(format) && !exact && !self.exact {
+                self.capacity
+            } else {
+                None
+            };
+            let next_cap = grow_capacity(prev_cap, size, max_dim, exact);
+            self.slots = [None, None];
+            self.capacity = Some(next_cap);
+            self.format = Some(format);
+            self.exact = exact;
+            self.next_slot = 0;
+        }
+        let cap = self.capacity.ok_or("drag target ring capacity missing")?;
+        let idx = self.next_slot;
+        self.next_slot = (self.next_slot + 1) % RING_SLOTS;
+        if self.slots[idx].is_none() {
+            let target = SharedDragTarget::new(device, drag, cap, format)?;
+            #[cfg(test)]
+            { self.allocations += 1; }
+            self.slots[idx] = Some(DragSlot { target, last_release: 0 });
+        }
+        let slot = self.slots[idx].as_ref().ok_or("drag target slot missing")?;
+        Ok((idx, slot))
+    }
+
+    /// Borrows slot `idx` after it was acquired.
+    pub(crate) fn slot(&self, idx: usize) -> Option<&DragSlot> {
+        self.slots.get(idx)?.as_ref()
+    }
+
+    /// Records the D3D11 release-fence value for the copy that just read slot `idx`.
+    pub(crate) fn note_release(&mut self, idx: usize, release_value: u64) {
+        if let Some(slot) = self.slots.get_mut(idx).and_then(Option::as_mut) {
+            slot.last_release = release_value;
+        }
+    }
+
+    /// Releases every shared texture in the ring.
+    pub(crate) fn release(&mut self) {
+        self.slots = [None, None];
+        self.capacity = None;
+        self.format = None;
+        self.exact = false;
+        self.next_slot = 0;
+    }
+
+    /// Whether zero shared textures are currently allocated.
+    #[cfg(test)]
+    pub(super) fn is_empty(&self) -> bool {
+        self.slots.iter().all(Option::is_none)
+    }
+
+    /// Current allocated texture capacity, if any.
+    #[cfg(test)]
+    pub(super) fn capacity(&self) -> Option<(u32, u32)> {
+        self.capacity
+    }
+}
+
 /// Maps Rune's swap-chain target formats to their DXGI equivalents.
 pub(crate) fn dxgi_format_for(format: wgpu::TextureFormat) -> Result<DXGI_FORMAT, String> {
     match format {
@@ -247,14 +485,16 @@ pub(crate) fn dxgi_format_for(format: wgpu::TextureFormat) -> Result<DXGI_FORMAT
 }
 
 /// Narrow seam isolating the HWND-bound presentation and DirectComposition calls so the state
-/// machine, D3D12/D3D11 shared target, and lifecycle cleanup can be tested off screen with a fake.
+/// machine, D3D12/D3D11 shared target ring, frame telemetry, and lifecycle cleanup can be tested
+/// off screen with a fake.
 pub(super) trait DragSeam {
     fn present_shared(
         &mut self,
         drag: &mut DragDevice,
         target: &SharedDragTarget,
+        copy_size: (u32, u32),
         ready_value: u64,
-    ) -> Result<(), String>;
+    ) -> Result<u64, String>;
     fn detach_dcomp(&mut self) -> Result<(), String>;
     fn attach_dcomp(&mut self) -> Result<(), String>;
     fn set_valid_rects_active(&mut self, active: bool);

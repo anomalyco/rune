@@ -64,7 +64,7 @@ impl Client {
         #[cfg(test)]
         if let Some(m) = &self.memory { return flush_to_memory(rt, m); }
         rt.edit.clear_secret_request = false;
-        if let Some(copy) = rt.copy_request.take() {
+        if let Some(mut copy) = rt.copy_request.take() {
             if copy.is_secret() {
                 if let Some(slot) = copy.slot() {
                     slot.set(SecretState::Failed("secret clipboard writes are unsupported on web".into()));
@@ -72,15 +72,66 @@ impl Client {
                     (self.wake)();
                 }
             } else {
-                // The browser's Clipboard API takes plain text, HTML and PNG; RTF and files stay behind.
-                let content = copy.content();
-                let png = content.image().map_or(&[][..], ClipboardImage::png);
-                let promise = crate::platform::web::platform::write_clipboard(content.text(), content.html().unwrap_or(""), png);
-                wasm_bindgen_futures::spawn_local(async move {
-                    if wasm_bindgen_futures::JsFuture::from(promise).await.is_err() {
-                        web_sys::console::warn_1(&"Clipboard write denied by the browser.".into());
-                    }
-                });
+                let generation = self.latest_write.get().wrapping_add(1);
+                self.latest_write.set(generation);
+                if copy.has_pending_image() {
+                    let copy_reply = copy.copy_image_id().map(|id| CopyReply {
+                        id,
+                        sender: self.sender.clone(),
+                        wake: self.wake.clone(),
+                    });
+                    let latest = self.latest_write.clone();
+                    let encode_err: std::rc::Rc<std::cell::Cell<Option<CopyImageError>>> = std::rc::Rc::new(std::cell::Cell::new(None));
+                    let err_cell = encode_err.clone();
+                    let make_png = wasm_bindgen::closure::Closure::once(move || -> wasm_bindgen::JsValue {
+                        let obj = js_sys::Object::new();
+                        if latest.get() != generation {
+                            err_cell.set(Some(CopyImageError::Superseded));
+                            let _ = js_sys::Reflect::set(&obj, &"error".into(), &"copy superseded".into());
+                            return obj.into();
+                        }
+                        match copy.encode_image() {
+                            Ok(()) => {
+                                let png = copy.content().image().map_or(&[][..], ClipboardImage::png);
+                                let arr = js_sys::Uint8Array::from(png);
+                                let _ = js_sys::Reflect::set(&obj, &"png".into(), &arr);
+                            }
+                            Err(err) => {
+                                let msg = err.to_string();
+                                err_cell.set(Some(err));
+                                let _ = js_sys::Reflect::set(&obj, &"error".into(), &msg.into());
+                            }
+                        }
+                        obj.into()
+                    });
+                    use wasm_bindgen::JsCast;
+                    let promise = crate::platform::web::platform::write_clipboard_image(make_png.as_ref().unchecked_ref());
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let outcome = wasm_bindgen_futures::JsFuture::from(promise).await;
+                        drop(make_png);
+                        match outcome {
+                            Ok(_) => if let Some(r) = copy_reply { r.send(Ok(())); },
+                            Err(err) => {
+                                let typed = encode_err.take().unwrap_or_else(|| CopyImageError::Failed(js_error_message(&err)));
+                                if let Some(r) = copy_reply {
+                                    r.send(Err(typed));
+                                } else if matches!(typed, CopyImageError::Failed(_)) {
+                                    web_sys::console::warn_1(&"Clipboard write denied by the browser.".into());
+                                }
+                            }
+                        }
+                    });
+                } else {
+                    // The browser's Clipboard API takes plain text, HTML and PNG; RTF and files stay behind.
+                    let content = copy.content();
+                    let png = content.image().map_or(&[][..], ClipboardImage::png);
+                    let promise = crate::platform::web::platform::write_clipboard(content.text(), content.html().unwrap_or(""), png);
+                    wasm_bindgen_futures::spawn_local(async move {
+                        if wasm_bindgen_futures::JsFuture::from(promise).await.is_err() {
+                            web_sys::console::warn_1(&"Clipboard write denied by the browser.".into());
+                        }
+                    });
+                }
             }
         }
         if let Some(target) = rt.edit.paste_request.take() { self.read_for(Purpose::paste(rt, target)); }
@@ -94,5 +145,13 @@ fn web_png(value: Option<wasm_bindgen::JsValue>) -> Option<ClipboardImage> {
     let bytes = value?.dyn_into::<js_sys::Uint8Array>().ok()?;
     if bytes.length() as usize > MAX_IMAGE_BYTES { return None; }
     ClipboardImage::from_png(bytes.to_vec())
+}
+
+fn js_error_message(err: &wasm_bindgen::JsValue) -> String {
+    js_sys::Reflect::get(err, &"message".into())
+        .ok()
+        .and_then(|v| v.as_string())
+        .or_else(|| err.as_string())
+        .unwrap_or_else(|| "Clipboard write denied by the browser.".into())
 }
 

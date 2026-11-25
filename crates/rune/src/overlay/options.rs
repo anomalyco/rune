@@ -184,6 +184,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
     pub(crate) renderer: crate::RendererKind,
+    pub(crate) fit_height: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -351,6 +352,27 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// first visible frame, such as a notification stack's first card entering. By default
     /// an unretained overlay shows settled, at its target.
     pub fn animate_reveal(mut self) -> Self { self.animate_reveal = true; self }
+    /// Size the overlay's height to its content, as [`App::fit_content_height`](crate::App::fit_content_height)
+    /// does for a window: the root lays out at its natural height for the overlay's width.
+    /// Each show and prewarm measures what changed while hidden (at the target monitor's scale
+    /// and active [`RendererKind`](crate::RendererKind), clamped to the display's work area)
+    /// without committing, so the first frame presents at the content's height with no flash.
+    /// While shown, a height change resizes and re-places the overlay before painting in the
+    /// same frame (without a spring; on Wayland layer-shell, holds the previous frame until
+    /// the compositor confirms the new size). `OverlaySpec::size` and `OverlayHandle::resize`
+    /// set only the width; `Tx::resize_window` stays ignored. Give the root no fixed or `fill`
+    /// height.
+    ///
+    /// ```no_run
+    /// use rune::{OverlayOptions, OverlaySpec, col, text};
+    ///
+    /// let _candidates = OverlaySpec::new("candidates", (320.0, 0.0), |items: &Vec<String>, _| {
+    ///     col().gap(2.0).padding(8.0).children(items.iter().map(|s| text(s)))
+    /// })
+    /// .options(OverlayOptions::default())
+    /// .fit_content_height();
+    /// ```
+    pub fn fit_content_height(mut self) -> Self { self.fit_height = true; self }
     /// While hidden, the overlay holds no GPU surface, swapchain or renderer. Each show makes the
     /// surface, and each hide drops it. Away from macOS, the GPU device and renderer then wait
     /// five minutes for the next surface (a window's or overlay's) before they go, so an overlay
@@ -500,7 +522,7 @@ impl<T: 'static> OverlaySpec<T> {
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
             frame_latency: None, on_materials: None, animate_reveal: false, release_after: None,
-            renderer: crate::RendererKind::Gpu,
+            renderer: crate::RendererKind::Gpu, fit_height: false,
         }
     }
 }

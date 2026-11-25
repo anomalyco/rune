@@ -62,6 +62,9 @@ pub(crate) struct HostState {
     /// The height a window that fits its content last asked for, and the frame its move
     /// starts with. The host takes the hold as it starts the move.
     pub(crate) fit: FitWindow,
+    /// The content's height a native overlay that fits its content asked for, apart from
+    /// `window_frame` (`Tx::resize_window`, which overlays ignore). Its host takes it.
+    pub(crate) overlay_fit: Option<f32>,
     /// A user-initiated close request (`Tx::request_user_close`) waiting for the host's
     /// `close_requested` gate.
     pub(crate) user_close_request: bool,
@@ -149,6 +152,7 @@ impl HostState {
             document_edited: Default::default(),
             fit_height: false,
             fit: Default::default(),
+            overlay_fit: None,
             user_close_request: false,
             minimize: Default::default(),
             url_requests: Vec::new(),
@@ -273,6 +277,14 @@ impl HostState {
         tx: &Tx,
         first: bool,
     ) {
+        // An overlay resizes through its host in window points at `window_scale`, matching
+        // `content_height_from` and `OverlayCore::canvas_size` under `Cx::zoom`.
+        if self.native_overlay {
+            let window_h = self.content_height_from(height);
+            if !self.fit.ask(window_h, self.zoom.window.1) { return; }
+            self.overlay_fit = Some(window_h);
+            return;
+        }
         let height = height.ceil_to(scale).max(1.0);
         if !self.fit.ask(height, viewport.1) { return; }
         let jump = first || tx.commit.snaps() || tx.relayout || reduced_motion;

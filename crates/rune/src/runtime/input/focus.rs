@@ -675,7 +675,7 @@ impl RuntimeCore {
             .or_else(|| asked.as_ref().map(|(p, ..)| p.clone()))
             .or_else(|| restore.as_ref().map(|(p, _)| p.clone()))
             .or_else(|| (!blurred).then(|| self.kbd.focus.owned().filter(|p| (0..nodes.len()).any(|j| &nodes[j].path == p
-                && (shown(j) || (self.commit.relayout && !self.commit.dirty && node_visible(nodes, j) && nodes[j].input.is_some()))
+                && (shown(j) || (self.commit.relayout && node_visible(nodes, j) && nodes[j].input.is_some()))
                 && !ancestor_disabled(nodes, j)
                 && (self.takes_focus(&nodes[j]) || (!nodes[j].focus.opt_out && nodes[j].input.as_ref().is_some_and(|i| i.edit.focused))))
                 || self.commit.virtual_inputs.get(p).is_some_and(|i| i.edit.focused))).flatten())

@@ -1,0 +1,1 @@
+- Motion: `El::matched` flights now preserve and interpolate the element's own `El::rotate` / `El::live_rotation` along the shortest angular arc from the source's presented rotation to the target's instead of snapping upright during flight and snapping back on landing.

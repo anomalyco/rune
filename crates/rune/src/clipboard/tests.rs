@@ -189,6 +189,152 @@ fn rich_copies_carry_every_form_and_secrets_stay_plain() {
     assert_eq!(m.content(), None);
 }
 
+#[test]
+fn copy_image_writes_a_decoded_image_as_png_and_a_failed_one_leaves_the_clipboard_alone() {
+    use crate::{col, Cx, El, Env};
+    fn view(_: &u8, _: &mut Cx<u8>) -> El { col() }
+    let m = memory();
+    let mut rt = Runtime::new(0, view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let rgba: Vec<u8> = (0..12u8).flat_map(|i| [i * 20, 255 - i * 20, 7, 255]).collect();
+    let image = cache.rgba(4, 3, rgba.clone());
+    image.wait().unwrap();
+    rt.update(|_, tx| tx.copy_image(&image));
+    let copied = m.content().unwrap().image().cloned().unwrap();
+    assert_eq!(copied.size(), (4, 3));
+    assert_eq!(crate::image::png_rgba8(copied.png()).unwrap().into_raw(), rgba, "the PNG holds the decoded pixels");
+
+    let bad = cache.load(b"not an image".as_slice());
+    assert!(bad.wait().is_err());
+    let revision = m.revision();
+    rt.update(|_, tx| tx.copy_image(&bad));
+    assert_eq!((m.revision(), m.content().unwrap().image()), (revision, Some(&copied)), "nothing to copy, nothing written");
+}
+
+/// On Windows and Linux, a corrupt PNG in `ClipboardContent` must return an error without
+/// falling through to `set_text("")` and wiping the clipboard, and `Tx::copy_image` must reuse
+/// its pre-encoded RGBA buffer without decoding the freshly encoded PNG back to pixels.
+#[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+#[test]
+fn write_one_form_never_clobbers_clipboard_with_empty_text_on_bad_png_and_borrows_preencoded_rgba() {
+    // Valid 24-byte PNG signature + IHDR header (2x1), but no IDAT: `from_png` accepts header, decode fails.
+    let corrupt_png = [&b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..], &[0, 0, 0, 2, 0, 0, 0, 1]].concat();
+    let bad_img = ClipboardImage::from_png(corrupt_png).expect("header-valid PNG");
+    let copy = ClipboardWrite::new(ClipboardContent::default().with_image(bad_img));
+    let res = native::prepare_one_form(&copy);
+    assert!(res.is_err(), "corrupt PNG must return Err instead of falling through to Text");
+
+    // Pre-encoded RGBA from `ClipboardWrite::image` is borrowed directly (no PNG decode pass).
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let rgba = vec![10, 20, 30, 255, 40, 50, 60, 128];
+    let img = cache.rgba(2, 1, rgba.clone());
+    img.wait().unwrap();
+    let mut write = ClipboardWrite::image(img);
+    assert!(write.encode_image().is_ok());
+    match native::prepare_one_form(&write).unwrap() {
+        native::OneForm::Image { png, width, height, rgba: bytes } => {
+            assert_eq!((width, height), (2, 1));
+            assert!(png.starts_with(b"\x89PNG"));
+            assert!(matches!(bytes, std::borrow::Cow::Borrowed(_)), "copy_image must reuse pre-encoded RGBA instead of decoding PNG back");
+            assert_eq!(&bytes[..4], &rgba[..4]);
+        }
+        _ => panic!("expected OneForm::Image"),
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_pack_dibv5_writes_bottom_up_bgra_with_v5_header() {
+    let rgba = vec![
+        255, 0, 0, 255, 0, 255, 0, 128,
+        0, 0, 255, 64, 255, 255, 255, 255,
+    ];
+    let dib = native::pack_dibv5(2, 2, &rgba).expect("valid 2x2 DIBV5");
+    assert_eq!(dib.len(), 124 + 16);
+    assert_eq!(u32::from_le_bytes(dib[0..4].try_into().unwrap()), 124);
+    assert_eq!(i32::from_le_bytes(dib[4..8].try_into().unwrap()), 2);
+    assert_eq!(i32::from_le_bytes(dib[8..12].try_into().unwrap()), 2);
+    assert_eq!(u32::from_le_bytes(dib[16..20].try_into().unwrap()), 3);
+    assert_eq!(&dib[124..132], &[255, 0, 0, 64, 255, 255, 255, 255]);
+    assert_eq!(&dib[132..140], &[0, 0, 255, 255, 0, 255, 0, 128]);
+    assert!(native::pack_dibv5(0, 2, &[]).is_none());
+    assert!(native::pack_dibv5(2, 2, &[0; 4]).is_none());
+}
+
+/// A slow image encode must never overwrite newer clipboard content written either by another app
+/// (OS revision advanced during encode) or by a newer in-app write (generation superseded), while
+/// consecutive in-app writes that snapshotted the same initial revision still both land in order.
+#[test]
+fn late_image_encode_never_overwrites_newer_external_or_in_app_clipboard_write() {
+    #[derive(Clone, Default)]
+    struct SharedBoard(Arc<Mutex<Board>>);
+    impl Backend for SharedBoard {
+        fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { lock(&self.0).write(copy) }
+        fn text(&mut self) -> Option<Zeroizing<String>> { lock(&self.0).text() }
+        fn content(&mut self, all: bool) -> Option<ClipboardContent> { lock(&self.0).content(all) }
+        fn revision(&self) -> Option<u64> { lock(&self.0).revision() }
+        fn clear(&mut self) -> Result<(), String> { lock(&self.0).clear() }
+    }
+    struct Hook<F: Fn()>(F);
+    impl<F: Fn()> WriteSteps for Hook<F> {
+        fn now(&self) -> Instant { crate::time::now() }
+        fn encoding(&self) { (self.0)(); }
+    }
+
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let image = cache.rgba(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+    image.wait().unwrap();
+
+    // Case 1: External app writes while image is encoding -> OS revision advances -> image write aborted.
+    let mut board = SharedBoard::default();
+    let mut core = Core::default();
+    let latest = Arc::new(AtomicU64::new(1));
+    let mut img_write = ClipboardWrite::image(image.clone());
+    img_write.stamp(1, latest.clone(), board.revision());
+    let board_clone = board.clone();
+    let steps = Hook(move || {
+        let mut b = lock(&board_clone.0);
+        b.content = Some(ClipboardContent::new("copied from browser"));
+        b.revision += 1;
+    });
+    core.write(&mut board, img_write, None, &steps);
+    assert_eq!(board.text().as_deref().map(String::as_str), Some("copied from browser"), "external write preserved");
+    assert!(board.content(true).unwrap().image().is_none(), "late image must not overwrite external write");
+
+    // Case 2: Newer in-app write is queued while image is encoding -> generation superseded -> image aborted.
+    let mut board2 = SharedBoard::default();
+    let mut core2 = Core::default();
+    let latest2 = Arc::new(AtomicU64::new(1));
+    let mut img_write2 = ClipboardWrite::image(image.clone());
+    img_write2.stamp(1, latest2.clone(), board2.revision());
+    let latest2_bump = latest2.clone();
+    let steps2 = Hook(move || { latest2_bump.store(2, Ordering::Release); });
+    core2.write(&mut board2, img_write2, None, &steps2);
+    assert!(board2.content(true).is_none(), "superseded image must not write");
+    let mut newer_text = ClipboardWrite::new(ClipboardContent::new("newer in-app text"));
+    newer_text.stamp(2, latest2, Some(0));
+    core2.write(&mut board2, newer_text, None, &RealTime);
+    assert_eq!(board2.text().as_deref().map(String::as_str), Some("newer in-app text"));
+
+    // Case 3: Consecutive in-app writes that snapshotted the same initial OS revision still land.
+    let mut board3 = SharedBoard::default();
+    let mut core3 = Core::default();
+    let latest3 = Arc::new(AtomicU64::new(1));
+    let mut first = ClipboardWrite::new(ClipboardContent::new("first"));
+    first.stamp(1, latest3.clone(), Some(0));
+    core3.write(&mut board3, first, None, &RealTime);
+    assert_eq!(board3.revision(), Some(1));
+    // Second write was stamped before `first` finished (so revision_before == Some(0)), but its
+    // generation is current and rev 1 is `last_own_revision` (our own write, not another app's).
+    latest3.store(2, Ordering::Release);
+    let mut second = ClipboardWrite::new(ClipboardContent::new("second"));
+    second.stamp(2, latest3, Some(0));
+    core3.write(&mut board3, second, None, &RealTime);
+    assert_eq!(board3.text().as_deref().map(String::as_str), Some("second"));
+}
+
 /// A plain paste leaves an empty clipboard alone; a read always answers.
 #[test]
 fn the_worker_answers_reads_with_sanitised_content() {
@@ -198,16 +344,17 @@ fn the_worker_answers_reads_with_sanitised_content() {
     state.lock().unwrap().text = "<script>".into();
     let (reply, replies) = mpsc::channel();
     worker.sender.send(Request::Read { purpose: Purpose::Read(7), reply, wake: Arc::new(|| {}) }).unwrap();
-    let answer = replies.recv().unwrap();
-    assert_eq!((answer.purpose, answer.content.text()), (Purpose::Read(7), "<script>"), "plain text is never rewritten");
+    let Reply::Content { purpose, content } = replies.recv().unwrap() else { panic!("expected Reply::Content") };
+    assert_eq!((purpose, content.text()), (Purpose::Read(7), "<script>"), "plain text is never rewritten");
     worker.stop();
     assert!(Purpose::Paste(None, Forms::Rich).reply(None).is_none());
     let mut board = Board { content: Some(ClipboardContent::new("t").with_html("<b>t</b>")), ..Board::default() };
-    let plain = Purpose::Paste(None, Forms::Text).answer(&mut board).unwrap().content;
+    let Reply::Content { content: plain, .. } = Purpose::Paste(None, Forms::Text).answer(&mut board).unwrap() else { panic!("expected Reply::Content") };
     assert!(!plain.is_rich() && plain.text() == "t", "a plain target reads only the text, as before");
-    let read = Purpose::Read(1).reply(Some(ClipboardContent::new("").with_html("<p onclick=x>t</p>"))).unwrap();
-    assert_eq!(read.content.html(), Some("<p>t</p>"));
-    assert_eq!(Purpose::Read(2).reply(None).unwrap().content, ClipboardContent::default());
+    let Reply::Content { content: read, .. } = Purpose::Read(1).reply(Some(ClipboardContent::new("").with_html("<p onclick=x>t</p>"))).unwrap() else { panic!("expected Reply::Content") };
+    assert_eq!(read.html(), Some("<p>t</p>"));
+    let Reply::Content { content: empty, .. } = Purpose::Read(2).reply(None).unwrap() else { panic!("expected Reply::Content") };
+    assert_eq!(empty, ClipboardContent::default());
 }
 
 /// `on_close` runs through `update`, and a hidden window only polls: both must reach the
@@ -355,4 +502,87 @@ fn web_files_are_rich_and_text_forms_drop_them() {
     assert!(!format!("{content:?}").contains("a.zip"), "Debug never shows names");
     assert_eq!(content.web_files().len(), 1);
     assert!(content.text_forms().is_none(), "a rich field without a hook hears nothing of a files-only paste");
+}
+
+/// `Tx::copy_image_then` reports `Ok(())`, `DecodeFailed`, `Superseded`, and `Failed`, and
+/// `Worker::spawn` runs PNG encoding off the calling thread while reporting `Superseded` on
+/// late overwrites.
+#[test]
+fn copy_image_then_reports_outcomes_and_worker_encodes_off_calling_thread() {
+    use crate::{col, Cx, El, Env};
+    fn view(_: &Vec<Result<(), CopyImageError>>, _: &mut Cx<Vec<Result<(), CopyImageError>>>) -> El { col() }
+    let m = memory();
+    let mut rt = Runtime::new(Vec::<Result<(), CopyImageError>>::new(), view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let good = cache.rgba(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+    good.wait().unwrap();
+    rt.update(|_, tx| tx.copy_image_then(&good, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r)));
+    rt.frame(0.0);
+    assert_eq!(rt.state.pop(), Some(Ok(())));
+
+    let bad = cache.load(b"not an image".as_slice());
+    assert!(bad.wait().is_err());
+    rt.update(|_, tx| tx.copy_image_then(&bad, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r)));
+    rt.frame(0.0);
+    assert!(matches!(rt.state.pop(), Some(Err(CopyImageError::DecodeFailed(_)))));
+
+    // Same-handler supersession: copy_image_then followed by tx.copy reports Superseded.
+    rt.update(|_, tx| {
+        tx.copy_image_then(&good, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r));
+        tx.copy("text wins");
+    });
+    rt.frame(0.0);
+    assert_eq!(rt.state.pop(), Some(Err(CopyImageError::Superseded)));
+    assert_eq!(text(&m).as_deref(), Some("text wins"));
+
+    // Backend failure reports Failed.
+    m.fail_writes(Some("clipboard busy"));
+    rt.update(|_, tx| tx.copy_image_then(&good, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r)));
+    rt.frame(0.0);
+    assert_eq!(rt.state.pop(), Some(Err(CopyImageError::Failed("clipboard busy".into()))));
+    m.fail_writes(None);
+
+    // Worker thread identity: encoding + write run on the worker thread, not the caller's.
+    struct ThreadRecorder { caller: std::thread::ThreadId, ran_on: Arc<Mutex<Option<std::thread::ThreadId>>>, rev: u64 }
+    impl Backend for ThreadRecorder {
+        fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> {
+            assert!(copy.content().image().is_some(), "PNG was encoded before Backend::write");
+            *self.ran_on.lock().unwrap() = Some(std::thread::current().id());
+            assert_ne!(std::thread::current().id(), self.caller, "encode and write must run off the caller thread");
+            self.rev += 1;
+            Ok(())
+        }
+        fn text(&mut self) -> Option<Zeroizing<String>> { None }
+        fn revision(&self) -> Option<u64> { Some(self.rev) }
+        fn clear(&mut self) -> Result<(), String> { Ok(()) }
+    }
+    let caller = std::thread::current().id();
+    let ran_on = Arc::new(Mutex::new(None));
+    let ran_on_w = ran_on.clone();
+    let worker = Worker::spawn(move || Some(ThreadRecorder { caller, ran_on: ran_on_w.clone(), rev: 0 }));
+    let (tx_reply, rx_reply) = mpsc::channel();
+    let mut w = ClipboardWrite::image(good.clone());
+    w.attach_copy_reply(CopyReply { id: 9, sender: tx_reply, wake: Arc::new(|| {}) });
+    worker.send_write(w, None, Some(0));
+    match rx_reply.recv_timeout(Duration::from_secs(5)).unwrap() {
+        Reply::CopyImage { id: 9, result: Ok(()) } => {}
+        _ => panic!("expected Reply::CopyImage Ok"),
+    }
+    assert_ne!(ran_on.lock().unwrap().unwrap(), caller);
+    worker.stop();
+
+    // No-clipboard worker (e.g. iOS/Android or headless) reports CopyImageError::Failed.
+    let no_cb = Worker::spawn(|| None::<Board>);
+    let (tx_reply2, rx_reply2) = mpsc::channel();
+    let mut w2 = ClipboardWrite::image(good);
+    w2.attach_copy_reply(CopyReply { id: 10, sender: tx_reply2, wake: Arc::new(|| {}) });
+    no_cb.send_write(w2, None, None);
+    match rx_reply2.recv_timeout(Duration::from_secs(5)).unwrap() {
+        Reply::CopyImage { id: 10, result: Err(CopyImageError::Failed(_)) } => {}
+        _ => panic!("expected Failed when no clipboard"),
+    }
+    no_cb.stop();
 }

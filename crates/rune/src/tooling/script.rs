@@ -37,6 +37,10 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
             out.push(Ev { t, kind: Kind::CloseRequest, pos: Pos::Rel(0.0, 0.0) });
             continue;
         }
+        if e["quit_request"].as_bool() == Some(true) {
+            out.push(Ev { t, kind: Kind::QuitRequest, pos: Pos::Rel(0.0, 0.0) });
+            continue;
+        }
         if let Some(url) = e["open_url"].as_str() {
             out.push(Ev { t, kind: Kind::OpenUrl(url.into()), pos: Pos::Rel(0.0, 0.0) });
             continue;

@@ -678,7 +678,7 @@ impl RuntimeCore {
                     || (!self.reduced_motion && self.motion.loop_active(id, store.node_time(id)))
             });
         Some(Pose {
-            rotation: self.scene.get(n.id, prop::ROTATION).unwrap_or(n.vis.rotate),
+            rotation: self.scene.presented(n.id).map_or(n.vis.rotate, |p| p.transform.rotate),
             scale: self.paint.inh_scratch.get(i)?.scale,
             shadows,
             moving,

@@ -98,6 +98,9 @@ pub(super) struct Requests {
     pub margin: Option<f32>,
     pub align: Option<(crate::Align, f32)>,
     pub size: Option<(f32, f32)>,
+    /// The content's new height, for an overlay that fits its content and is on screen.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fit_height: Option<f32>,
     pub macos_level: Option<isize>,
     pub window_backdrop: Option<crate::WindowBackdrop>,
     pub exclude_from_capture: Option<bool>,

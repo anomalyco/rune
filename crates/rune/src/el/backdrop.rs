@@ -10,16 +10,24 @@ impl El {
     /// - **macOS & Windows**: native on macOS in transparent windows (`NSGlassEffectView` /
     ///   `NSVisualEffectView`), and on Windows 11 Build 22000+ transparent DirectComposition
     ///   windows and overlays when the off-by-default `windows-system-material` Cargo feature is
-    ///   enabled. On Windows and macOS the native material sits behind the element, replaces its
-    ///   fill, ignores ancestor clips, and punches a hole inside the node's outer shadows.
+    ///   enabled and the system permits effects (Transparency effects enabled, Battery/Energy Saver
+    ///   off, composition effects supported/fast, High Contrast off, and not in a Remote Desktop
+    ///   session). Whenever the system will not draw the material, Rune tears down native visuals
+    ///   and draws the element's fallback fill instead. On Windows and macOS the native material
+    ///   sits behind the element, replaces its fill, ignores ancestor clips, and punches a hole
+    ///   inside the node's outer shadows.
     /// - **Linux Wayland**: active on transparent GPU windows and overlays (`zwlr_layer_shell_v1`
     ///   and toplevel fallbacks) when [`WindowBackdrop::None`](crate::WindowBackdrop::None) is
     ///   active and the compositor advertises `ext_background_effect_v1` (`Capability::Blur`) or
     ///   `org_kde_kwin_blur_manager` (opt out with `RUNE_SYSTEM_MATERIAL=off`). Because Wayland
     ///   compositor blur has no tint of its own, Wayland mode keeps a translucent fill as the tint
     ///   (drawing transparent when no fill is set), punches the outer-shadow interior hole, clips
-    ///   the blur region to ancestor clips and rounded corners, drops elements below 0.10 opacity,
-    ///   and leaves opaque fills (`alpha >= 1.0`) unchanged without adding them to the blur region.
+    ///   the blur region to ancestor clips and rounded corners, and leaves opaque fills
+    ///   (`alpha >= 1.0`) unchanged without adding them to the blur region. Because Wayland blur
+    ///   protocols have no opacity parameter, compositor blur is all-or-nothing under a fading
+    ///   element: it stays at full strength until effective opacity drops below `0.10`, then turns
+    ///   off. Respects [`App::max_native_materials`](crate::App::max_native_materials) (default 4;
+    ///   elements beyond the limit draw their fallback fill).
     ///   Query [`Cx::window_backdrop_supported`](crate::Cx::window_backdrop_supported) with
     ///   [`WindowBackdrop::Blur`](crate::WindowBackdrop::Blur) to choose translucent vs opaque
     ///   fills with one check.

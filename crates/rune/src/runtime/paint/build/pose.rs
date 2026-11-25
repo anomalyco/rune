@@ -156,6 +156,18 @@ pub(super) fn flight_frame(
     ]
 }
 
+/// Device-pixel pivot for `El::rotate`: during a matched flight, pivot about the flying
+/// rect's own origin so the turned layer tracks `rect_pt` continuously from source to target.
+#[inline(always)]
+pub(super) fn turn_pivot(flight_dest: Option<FlightDest>, origin: Option<[f32; 2]>, rect_pt: [f32; 4], centre_to: [f32; 2], s: f32) -> [f32; 2] {
+    if flight_dest.is_some() {
+        let [ox, oy] = origin.unwrap_or([0.5, 0.5]);
+        [(rect_pt[0] + ox * (rect_pt[2] - rect_pt[0])) * s, (rect_pt[1] + oy * (rect_pt[3] - rect_pt[1])) * s]
+    } else {
+        [centre_to[0] * s, centre_to[1] * s]
+    }
+}
+
 #[inline(always)]
 pub(super) fn flight_cover(
     launches: &flights::Launches,

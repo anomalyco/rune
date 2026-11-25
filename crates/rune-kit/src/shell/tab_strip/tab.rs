@@ -40,6 +40,9 @@ pub(super) struct Place {
     /// A separator stands before it: neither it nor the tab before it is active. Either one's
     /// hover hides it, by Rune's hover groups, so a hover commits nothing.
     pub separator: bool,
+    /// Whether something stands before it and after it in the list, a tab or a break: a
+    /// vertical row reaches half the gap toward each.
+    pub reach: [bool; 2],
 }
 
 /// The hover group a tab shares with the separator after it (`Place::separator` of the next).
@@ -137,7 +140,7 @@ pub(super) fn build(item: TabItemCore<'_>, at: Place, prev: Option<&str>, st: &S
 
     // Vertical rows reach half the gap above and below, so no press between them misses.
     let (before, after) = match vertical {
-        true => (if at.index > 0 { st.gap / 2.0 } else { 0.0 }, if at.index + 1 < st.count { st.gap / 2.0 } else { 0.0 }),
+        true => (if at.reach[0] { st.gap / 2.0 } else { 0.0 }, if at.reach[1] { st.gap / 2.0 } else { 0.0 }),
         false => (0.0, 0.0),
     };
     let shift = st.drag.shift(at.index, vertical);

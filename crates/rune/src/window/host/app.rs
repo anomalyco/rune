@@ -37,6 +37,8 @@ pub(crate) trait WindowApp {
     fn enter_turn(&mut self) -> bool;
     fn leave_turn(&mut self);
     fn run_on_close_request(&mut self) -> Option<crate::CloseResponse>;
+    fn has_quit_request(&self) -> bool;
+    fn run_on_quit_request(&mut self) -> Option<crate::QuitResponse>;
     fn run_on_close(&mut self);
     fn run_on_quit(&mut self) -> bool;
     fn run_on_rest(&mut self);
@@ -203,12 +205,24 @@ pub(in crate::window) fn test_app_with_close_request<S: 'static>(
     on_close: Option<fn(&mut S, &mut Tx)>,
     on_quit: Option<fn(&mut S, &mut Tx)>,
 ) -> Box<dyn WindowApp> {
+    test_app_with_requests(rt, on_close_request, None, on_close, on_quit)
+}
+
+#[cfg(test)]
+pub(in crate::window) fn test_app_with_requests<S: 'static>(
+    rt: Runtime<S>,
+    on_close_request: Option<fn(&mut S, &mut Tx) -> crate::CloseResponse>,
+    on_quit_request: Option<fn(&mut S, &mut Tx) -> crate::QuitResponse>,
+    on_close: Option<fn(&mut S, &mut Tx)>,
+    on_quit: Option<fn(&mut S, &mut Tx)>,
+) -> Box<dyn WindowApp> {
     Box::new(TypedWindowApp {
         rt,
         shared: Arc::new(Shared::default()),
         comp: None,
         on_frame_drawn: None,
         on_close_request,
+        on_quit_request,
         on_close,
         on_rest: None,
         on_quit,
@@ -227,6 +241,7 @@ pub(crate) struct TypedWindowApp<S: 'static> {
     pub(super) comp: Option<Box<dyn Compositor<S>>>,
     pub(super) on_frame_drawn: Option<OnFrameDrawn<S>>,
     pub(super) on_close_request: Option<fn(&mut S, &mut Tx) -> crate::CloseResponse>,
+    pub(super) on_quit_request: Option<fn(&mut S, &mut Tx) -> crate::QuitResponse>,
     pub(super) on_close: Option<fn(&mut S, &mut Tx)>,
     pub(super) on_rest: Option<fn(&mut S, &mut Tx) -> bool>,
     pub(super) on_quit: Option<fn(&mut S, &mut Tx)>,
@@ -239,10 +254,30 @@ pub(crate) struct TypedWindowApp<S: 'static> {
 }
 
 impl<S: 'static> TypedWindowApp<S> {
+    #[cfg(all(test, target_os = "windows"))]
+    pub(in crate::window) fn for_test(rt: Runtime<S>, on_frame_drawn: Option<OnFrameDrawn<S>>) -> Self {
+        Self {
+            rt,
+            shared: Arc::new(Shared::default()),
+            comp: None,
+            on_frame_drawn,
+            on_close_request: None,
+            on_quit_request: None,
+            on_close: None,
+            on_rest: None,
+            on_quit: None,
+            on_reopen: None,
+            on_geometry: None,
+            turn_scope: None,
+            keep_layout: None,
+            kept_layout: None,
+        }
+    }
+
     #[cfg(all(test, feature = "hot"))]
     pub(crate) fn from_app(mut app: crate::App<S>, waker: crate::runtime::Waker) -> Self {
-        let (on_close_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
-            app.on_close_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
+        let (on_close_request, on_quit_request, on_close, on_rest, on_reopen, on_quit, turn_scope) = (
+            app.on_close_request, app.on_quit_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
         );
         let on_geometry = app.on_window_geometry;
         let comp = app.compositor.take();
@@ -251,7 +286,7 @@ impl<S: 'static> TypedWindowApp<S> {
         let mut rt = crate::tooling::runtime_for(&spec, state, spec.size, crate::runtime::Env::default(), waker);
         rt.configure(runtime);
         Self {
-            rt, shared, comp, on_frame_drawn: None, on_close_request, on_close, on_rest, on_quit, on_reopen, on_geometry, turn_scope,
+            rt, shared, comp, on_frame_drawn: None, on_close_request, on_quit_request, on_close, on_rest, on_quit, on_reopen, on_geometry, turn_scope,
             keep_layout, kept_layout: layout_seed,
         }
     }
@@ -301,6 +336,22 @@ impl<S: 'static> WindowApp for TypedWindowApp<S> {
         self.rt.update(|s, tx| {
             #[cfg(feature = "hot")]
             { response = crate::hot::patched_or_original!("on_close_request", f, s, tx); }
+            #[cfg(not(feature = "hot"))]
+            { response = f(s, tx); }
+        });
+        Some(response)
+    }
+
+    fn has_quit_request(&self) -> bool {
+        self.on_quit_request.is_some()
+    }
+
+    fn run_on_quit_request(&mut self) -> Option<crate::QuitResponse> {
+        let f = self.on_quit_request?;
+        let mut response = crate::QuitResponse::Quit;
+        self.rt.update(|s, tx| {
+            #[cfg(feature = "hot")]
+            { response = crate::hot::patched_or_original!("on_quit_request", f, s, tx); }
             #[cfg(not(feature = "hot"))]
             { response = f(s, tx); }
         });

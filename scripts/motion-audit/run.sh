@@ -7,6 +7,8 @@ set -e
 O=${1:-target/motion-audit}
 mkdir -p "$O"
 MOTION_GATE_OUT="$O/live-tail.gate.txt" sh scripts/motion-audit/scenarios/live-tail.sh
+MOTION_GATE_OUT="$O/matched-offset.gate.txt" sh scripts/motion-audit/scenarios/matched-offset.sh
+MOTION_GATE_OUT="$O/matched-rotation.gate.txt" sh scripts/motion-audit/scenarios/matched-rotation.sh
 cargo build --release -p todo -p settings -p kit-gallery -p odometer -p matched -p playground
 cargo build --release -p rune-kit --features rune/tooling --example shell --example tab_strip
 cargo build --release -p rune --features tooling --example growth_reorder --example keep_stuck --example sticky --example scroll_keys --example scroll_anchor --example text_glide --example one_snap --example matched_zoom --example hold_layout

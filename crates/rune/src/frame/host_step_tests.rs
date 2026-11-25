@@ -578,3 +578,16 @@ fn post_step_reacquire_is_capped_at_two_passes() {
     assert_eq!(effects, Effects::one(Effect::Sync));
 }
 
+#[test]
+fn post_step_hold_drops_drawable_and_skips_without_missing() {
+    let mut host = FakeHost::new(crate::time::now());
+    host.gate = Gate::Draw;
+    host.acquires = VecDeque::from([Ok(())]);
+    host.post_checks = VecDeque::from([PostStepCheck::Hold]);
+    assert_eq!(run(&mut host), Outcome::Skipped);
+    let log = host.log.borrow();
+    assert!(log.iter().any(|s| s == "drop_drawable:1"));
+    assert!(!log.iter().any(|s| s.starts_with("on_missed:")));
+    assert!(!log.iter().any(|s| s == "submit_and_present"));
+}
+

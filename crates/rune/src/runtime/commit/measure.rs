@@ -30,6 +30,15 @@ fn collect_virtual_inputs_in(el: &El, parent: &str, index: usize, inert: bool, r
     }
 }
 
+struct ViewMeasured {
+    layout: LayoutEngine,
+    nodes: Vec<Node>,
+    pending: Vec<memo_reuse::PendingFlat>,
+    reused: Vec<memo_reuse::ReusedSpan>,
+    taken: Vec<(u32, u32)>,
+    above_fit_styles: Vec<(usize, CompactStyle)>,
+}
+
 impl RuntimeCore {
     pub(in crate::runtime) fn measure(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
         self.measure_pass(app, tx, true)
@@ -236,7 +245,7 @@ impl Measurement<'_> {
     }
 
     pub(in crate::runtime) fn finish_from(mut self, text: &mut TextSystem, tx: &Tx, mut passes: usize) -> Measured {
-        let (layout, nodes, memo_pending, memo_reused, taken_paths) = loop {
+        let ViewMeasured { layout, nodes, pending: memo_pending, reused: memo_reused, taken: taken_paths, above_fit_styles } = loop {
             passes += 1;
             self.pass = Pass::of(passes);
             self.virtual_culled.clear();
@@ -245,17 +254,17 @@ impl Measurement<'_> {
             self.windowed.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
-            let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(text, tx, self.pass.forced());
-            if !self.measure_virtuals(&nodes, tx.commit.lands()) { break (layout, nodes, pending, reused, taken); }
-            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
-            nodes.clear();
-            *self.spare_nodes = nodes;
-            reused.clear();
-            taken.clear();
-            self.memo.pending_scratch = pending;
-            self.memo.reused_scratch = reused;
-            self.memo.taken_paths_scratch = taken;
-            *self.layout = layout;
+            let mut vm = self.measure_view(text, tx, self.pass.forced());
+            if !self.measure_virtuals(&vm.nodes, tx.commit.lands()) { break vm; }
+            memo_reuse::restore_moved_nodes(self.nodes, &mut vm.nodes, &vm.reused, &vm.taken);
+            vm.nodes.clear();
+            *self.spare_nodes = vm.nodes;
+            vm.reused.clear();
+            vm.taken.clear();
+            self.memo.pending_scratch = vm.pending;
+            self.memo.reused_scratch = vm.reused;
+            self.memo.taken_paths_scratch = vm.taken;
+            *self.layout = vm.layout;
         };
         // Exiting virtual subtrees still use their origin and measured extent while
         // fading. Runtime prunes this metadata with the retained scene nodes.
@@ -274,6 +283,7 @@ impl Measurement<'_> {
             memo_reused,
             taken_paths,
             selection: Vec::new(),
+            above_fit_styles,
         }
     }
 
@@ -522,7 +532,7 @@ impl Measurement<'_> {
         self.kept_lists.extend(quiet);
         true
     }
-    fn measure_view(&mut self, text: &mut TextSystem, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>, Vec<(u32, u32)>) {
+    fn measure_view(&mut self, text: &mut TextSystem, tx: &Tx, force_all: bool) -> ViewMeasured {
         let scale = self.env.scale;
         let fresh_cx = |this: &Self| cx::CxCore {
             env: this.env,
@@ -676,8 +686,8 @@ impl Measurement<'_> {
             }
             if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, text, &reused); }
             taffy.finish_flatten();
-            let (taffy, nodes) = self.solve(text, taffy, root_id, nodes, &reused);
-            break (taffy, nodes, pending, reused, taken_paths);
+            let (taffy, nodes, above_fit_styles) = self.solve(text, taffy, root_id, nodes, &reused);
+            break ViewMeasured { layout: taffy, nodes, pending, reused, taken: taken_paths, above_fit_styles };
         }
     }
 

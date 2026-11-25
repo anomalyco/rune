@@ -26,7 +26,7 @@ pub(super) struct PreparedWindowFrame {
 
 /// Optional `frame-profile` timestamps and diagnostics carried across one window frame.
 #[derive(Default)]
-pub(super) struct FrameProfile {
+pub(in crate::window) struct FrameProfile {
     #[cfg(feature = "frame-profile")]
     pub(super) loop_why: Option<&'static str>,
     #[cfg(feature = "frame-profile")]
@@ -55,13 +55,13 @@ pub(super) struct FrameProfile {
 
 impl FrameProfile {
     #[inline]
-    pub(super) fn mark_entry(&mut self) {
+    pub(in crate::window) fn mark_entry(&mut self) {
         #[cfg(feature = "frame-profile")]
         { self.entry = crate::frame::live_log::on().then(crate::frame::live_log::Stamp::now); }
     }
 
     #[inline]
-    pub(super) fn mark_start(&mut self) {
+    pub(in crate::window) fn mark_start(&mut self) {
         #[cfg(feature = "frame-profile")]
         if self.start.is_none() {
             self.start = crate::frame::live_log::on().then(crate::frame::live_log::Stamp::now);
@@ -69,7 +69,7 @@ impl FrameProfile {
     }
 
     #[inline]
-    pub(super) fn mark_acquired(&mut self) {
+    pub(in crate::window) fn mark_acquired(&mut self) {
         #[cfg(feature = "frame-profile")]
         if self.acquired.is_none() {
             self.acquired = self.start.map(|_| crate::frame::live_log::Stamp::now());
@@ -77,31 +77,31 @@ impl FrameProfile {
     }
 
     #[inline]
-    pub(super) fn mark_built(&mut self) {
+    pub(in crate::window) fn mark_built(&mut self) {
         #[cfg(feature = "frame-profile")]
         { self.built = self.start.map(|_| crate::frame::live_log::Stamp::now()); }
     }
 
     #[inline]
-    pub(super) fn mark_uploaded(&mut self) {
+    pub(in crate::window) fn mark_uploaded(&mut self) {
         #[cfg(feature = "frame-profile")]
         { self.uploaded = self.start.map(|_| crate::frame::live_log::Stamp::now()); }
     }
 
     #[inline]
-    pub(super) fn mark_encoded(&mut self) {
+    pub(in crate::window) fn mark_encoded(&mut self) {
         #[cfg(feature = "frame-profile")]
         { self.encoded = self.start.map(|_| crate::frame::live_log::Stamp::now()); }
     }
 
     #[inline]
-    pub(super) fn mark_submitted(&mut self) {
+    pub(in crate::window) fn mark_submitted(&mut self) {
         #[cfg(feature = "frame-profile")]
         { self.submitted = self.start.map(|_| crate::frame::live_log::Stamp::now()); }
     }
 
     #[inline]
-    pub(super) fn set_loop_why(&mut self, why: &'static str) {
+    pub(in crate::window) fn set_loop_why(&mut self, why: &'static str) {
         #[cfg(feature = "frame-profile")]
         { self.loop_why = Some(why); }
         #[cfg(not(feature = "frame-profile"))]
@@ -109,7 +109,7 @@ impl FrameProfile {
     }
 
     #[inline]
-    pub(super) fn set_loop_why_if_none(&mut self, why: &'static str) {
+    pub(in crate::window) fn set_loop_why_if_none(&mut self, why: &'static str) {
         #[cfg(feature = "frame-profile")]
         if self.loop_why.is_none() { self.loop_why = Some(why); }
         #[cfg(not(feature = "frame-profile"))]
@@ -118,7 +118,7 @@ impl FrameProfile {
 
     #[cfg(target_os = "windows")]
     #[inline]
-    pub(super) fn set_whole_why(&mut self, why: &'static str) {
+    pub(in crate::window) fn set_whole_why(&mut self, why: &'static str) {
         #[cfg(feature = "frame-profile")]
         { self.whole_why = Some(why); }
         #[cfg(not(feature = "frame-profile"))]
@@ -126,7 +126,7 @@ impl FrameProfile {
     }
 
     #[inline]
-    pub(super) fn take_loop_check(&mut self, rt: &mut crate::runtime::RuntimeCore) {
+    pub(in crate::window) fn take_loop_check(&mut self, rt: &mut crate::runtime::RuntimeCore) {
         #[cfg(feature = "frame-profile")]
         { self.loop_check = rt.loop_checked(); }
         #[cfg(not(feature = "frame-profile"))]
@@ -134,7 +134,7 @@ impl FrameProfile {
     }
 
     #[cfg(feature = "frame-profile")]
-    pub(super) fn build_frame(
+    pub(in crate::window) fn build_frame(
         &mut self,
         host: &mut Host,
         animating: bool,
@@ -142,9 +142,26 @@ impl FrameProfile {
         #[cfg(target_os = "windows")]
         damage: Option<Vec<[i32; 4]>>,
     ) {
+        #[cfg(target_os = "windows")]
+        let damage_seen = host.win.as_ref().and_then(|l| l.native.damage.seen);
+        #[cfg(not(target_os = "windows"))]
+        let damage_seen = None;
+        #[cfg(not(target_os = "windows"))]
+        let damage = None;
+        self.build_frame_core(host.app.rt_mut(), damage_seen, animating, looped, damage);
+    }
+
+    #[cfg(feature = "frame-profile")]
+    pub(in crate::window) fn build_frame_core(
+        &mut self,
+        rt: &mut crate::runtime::RuntimeCore,
+        damage_seen: Option<[u32; 4]>,
+        animating: bool,
+        looped: Option<&Vec<u32>>,
+        damage: Option<Vec<[i32; 4]>>,
+    ) {
         self.frame = match (self.start, self.acquired, self.built, self.uploaded, self.encoded, self.submitted) {
             (Some(start), Some(acquired), Some(built), Some(uploaded), Some(encoded), Some(submitted)) => {
-                let rt = host.app.rt_mut();
                 Some(crate::frame::live_log::Frame {
                     entry: self.entry.unwrap_or(start),
                     start, acquired, built, uploaded, encoded, submitted,
@@ -159,15 +176,9 @@ impl FrameProfile {
                     poll_due: None,
                     loop_due: None,
                     loops: Vec::new(),
-                    #[cfg(target_os = "windows")]
                     damage,
-                    #[cfg(not(target_os = "windows"))]
-                    damage: None,
                     whole: self.whole_why,
-                    #[cfg(target_os = "windows")]
-                    change: host.win.as_ref().and_then(|l| l.native.damage.seen),
-                    #[cfg(not(target_os = "windows"))]
-                    change: None,
+                    change: damage_seen,
                     looped: looped.map(Vec::len),
                     loop_why: self.loop_why,
                     loop_check: self.loop_check.take(),
@@ -178,13 +189,27 @@ impl FrameProfile {
     }
 
     #[inline]
-    pub(super) fn flush(&mut self, host: &Host, animating: bool, next_tick: Option<Instant>) {
+    pub(in crate::window) fn flush(&mut self, host: &Host, animating: bool, next_tick: Option<Instant>) {
+        #[cfg(feature = "frame-profile")]
+        self.flush_core(host.app.rt(), FrameMove::moving(&host.frame_move), animating, next_tick);
+        #[cfg(not(feature = "frame-profile"))]
+        let _ = (host, animating, next_tick);
+    }
+
+    #[cfg(any(target_os = "windows", feature = "frame-profile"))]
+    #[inline]
+    pub(in crate::window) fn flush_core(
+        &mut self,
+        rt: &crate::runtime::RuntimeCore,
+        frame_moving: bool,
+        animating: bool,
+        next_tick: Option<Instant>,
+    ) {
         #[cfg(feature = "frame-profile")]
         if let Some(mut f) = self.frame.take() {
-            let rt = host.app.rt();
             f.next = [
                 animating,
-                FrameMove::moving(&host.frame_move),
+                frame_moving,
                 rt.needs_commit(),
                 rt.stale() && !rt.needs_commit(),
                 rt.has_pending_input(),
@@ -201,7 +226,7 @@ impl FrameProfile {
             crate::frame::live_log::frame(f);
         }
         #[cfg(not(feature = "frame-profile"))]
-        let _ = (host, animating, next_tick);
+        let _ = (rt, frame_moving, animating, next_tick);
     }
 }
 
@@ -515,7 +540,7 @@ pub(super) fn finalize_present_retries(
     !lost
 }
 
-pub(super) fn open_trace_if_needed(host: &mut Host, now: Instant) {
+pub(in crate::window) fn open_trace_if_needed(host: &mut Host, now: Instant) {
     let Some(path) = &host.args.trace else { return };
     if host.trace.is_some() { return; }
     let Some(l) = host.win.as_ref() else { return };
@@ -532,7 +557,7 @@ pub(super) fn open_trace_if_needed(host: &mut Host, now: Instant) {
 }
 
 /// Records one traced frame; returns `true` when `--frames` finished the run.
-pub(super) fn record_trace_frame(
+pub(in crate::window) fn record_trace_frame(
     host: &mut Host,
     now: Instant,
     submitted: Instant,

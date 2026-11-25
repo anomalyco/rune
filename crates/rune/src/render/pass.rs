@@ -291,3 +291,21 @@ impl Renderer {
         }
     }
 }
+
+/// Restricts a root render pass to the top-left `viewport` sub-rectangle when rendering into a
+/// larger capacited target texture (such as the Windows drag-resize shared texture ring). No-op
+/// when the target texture matches `viewport`.
+pub(super) fn apply_subrect_viewport(
+    pass: &mut wgpu::RenderPass<'_>,
+    view: &wgpu::TextureView,
+    viewport: [u32; 2],
+) {
+    let [vw, vh] = viewport;
+    let tex = view.texture();
+    if vw > 0 && vh > 0 && (vw != tex.width() || vh != tex.height()) {
+        let vw = vw.min(tex.width());
+        let vh = vh.min(tex.height());
+        pass.set_viewport(0.0, 0.0, vw as f32, vh as f32, 0.0, 1.0);
+        pass.set_scissor_rect(0, 0, vw, vh);
+    }
+}

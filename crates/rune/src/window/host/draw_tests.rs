@@ -85,6 +85,7 @@ impl MockWindowFrame {
             comp: None,
             on_frame_drawn: None,
             on_close_request: None,
+            on_quit_request: None,
             on_close: None,
             on_rest: None,
             on_quit: None,
@@ -157,6 +158,8 @@ impl FrameHost for MockWindowFrame {
             ReacquireReason::Reblend => self.reblend(),
             #[cfg(any(test, target_os = "macos"))]
             ReacquireReason::NativeMaterials => true,
+            #[cfg(not(target_arch = "wasm32"))]
+            ReacquireReason::ContentResize => true,
         }
     }
 
@@ -298,6 +301,7 @@ fn cursor_moved_skips_redraw_within_same_hovered_row_and_keeps_quiet_timer_and_l
         comp: None,
         on_frame_drawn: None,
         on_close_request: None,
+        on_quit_request: None,
         on_close: None,
         on_rest: None,
         on_quit: None,
@@ -660,6 +664,7 @@ fn window_app_forwards_release_compositor_gpu() {
         comp: Some(Box::new(CountingComp(releases.clone()))),
         on_frame_drawn: None,
         on_close_request: None,
+        on_quit_request: None,
         on_close: None,
         on_rest: None,
         on_quit: None,
@@ -757,6 +762,7 @@ fn cursor_moved_core_wakes_and_produces_drag_when_deferred_titlebar_press_crosse
         comp: None,
         on_frame_drawn: None,
         on_close_request: None,
+        on_quit_request: None,
         on_close: None,
         on_rest: None,
         on_quit: None,

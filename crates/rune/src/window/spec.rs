@@ -893,6 +893,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         cpu_first(mode: crate::CpuFirst);
+        /// Configure the Windows drag-only synchronized resize path for this window, like
+        /// [`App::resize_sync`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, ResizeSync, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("settings", AppSpec::new("Settings", (620.0, 520.0), || (), |_, _| el()))
+        ///     .resize_sync(ResizeSync::On);
+        /// let _ = spec;
+        /// ```
+        resize_sync(mode: crate::ResizeSync);
         /// Name the effect pipelines this window compiles ahead of their first use, like [`App::prewarm_effects`].
         ///
         /// ```no_run
@@ -926,6 +937,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         on_close_request(f: fn(&mut S, &mut crate::Tx) -> crate::CloseResponse);
+        /// [`App::on_quit_request`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, QuitResponse, WindowSpec, el};
+        ///
+        /// let _window = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 320.0), || true, |_, _| el()))
+        ///     .on_quit_request(|dirty, _| {
+        ///         if *dirty { QuitResponse::Defer } else { QuitResponse::Quit }
+        ///     });
+        /// ```
+        on_quit_request(f: fn(&mut S, &mut crate::Tx) -> crate::QuitResponse);
         /// Runs whenever this window closes, like `App::on_close`.
         on_close(f: fn(&mut S, &mut crate::Tx));
         /// Runs in this window when the app starts to quit, like `App::on_quit`.

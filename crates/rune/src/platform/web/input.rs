@@ -523,6 +523,9 @@ impl Running {
                 if kind == "edit" && self.sync_live_edit() { return true; }
             }
             Some("sync") => self.input.mirror.invalidate(), // Composition's final sync was deferred by the DOM.
+            Some("field_blur") => {
+                if !self.app.rt_mut().web_field_blur(event["key"].as_str().unwrap_or_default()) { return false; }
+            }
             Some("paste") => {
                 let text = match event["text"].take() {
                     serde_json::Value::String(s) => s,

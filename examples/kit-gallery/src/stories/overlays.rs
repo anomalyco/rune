@@ -8,29 +8,29 @@ fn trigger_text(k: &Kit, s: &str) -> El {
 
 pub(super) fn popover_basic(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     row().child(
-        Popover::new("popover")
+        Popover::new("popover-basic")
             .trigger(trigger_text(k, "Open popover"))
             .title("Popover")
             .description("Optional description")
             .child(overlay_text(k, "Popover content"))
-            .open(is_open(s, "popover"))
+            .open(is_open(s, "popover-basic"))
             .on_close(close)
             .build(k, layer)
-            .on_press(toggle("popover")),
+            .on_press(toggle("popover-basic")),
     )
 }
 
 pub(super) fn popover_controlled(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     row().child(
-        Popover::new("popover")
+        Popover::new("popover-controlled")
             .trigger(trigger_text(k, "Toggle popover"))
             .title("Controlled")
             .description("Open state is controlled")
             .child(overlay_text(k, "Controlled content"))
-            .open(is_open(s, "popover"))
+            .open(is_open(s, "popover-controlled"))
             .on_close(close)
             .build(k, layer)
-            .on_press(toggle("popover")),
+            .on_press(toggle("popover-controlled")),
     )
 }
 
@@ -220,10 +220,10 @@ fn menu_button(k: &Kit, label: &str, key: &'static str, open: bool) -> El {
 }
 
 pub(super) fn menu_basic(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let open = is_open(s, "menu");
+    let open = is_open(s, "menu-basic");
     row().child(
-        Menu::new("menu")
-            .trigger(menu_button(k, "Open menu", "menu", open))
+        Menu::new("menu-basic")
+            .trigger(menu_button(k, "Open menu", "menu-basic", open))
             .item(MenuItem::new("New file").on_select(close))
             .item(MenuItem::new("Open file").on_select(close))
             .item(MenuItem::new("Save").on_select(close))
@@ -236,13 +236,13 @@ pub(super) fn menu_basic(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 pub(super) fn menu_appearances(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let open = is_open(s, "both");
+    let open = is_open(s, "menu-appearances");
     row()
         .gap(16.0)
         .child(
             Menu::new("standard")
                 .standard()
-                .trigger(menu_button(k, "Standard", "both", open))
+                .trigger(menu_button(k, "Standard", "menu-appearances", open))
                 .item(MenuItem::new("New file"))
                 .item(MenuItem::new("Open file"))
                 .open(open)
@@ -250,7 +250,7 @@ pub(super) fn menu_appearances(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         )
         .child(
             Menu::new("compact")
-                .trigger(menu_button(k, "Compact", "both", open))
+                .trigger(menu_button(k, "Compact", "menu-appearances", open))
                 .item(MenuItem::new("New file"))
                 .item(MenuItem::new("Open file"))
                 .open(open)
@@ -259,7 +259,7 @@ pub(super) fn menu_appearances(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 pub(super) fn menu_rich(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let open = is_open(s, "menu");
+    let open = is_open(s, "menu-rich");
     let avatar = row()
         .size(16.0, 16.0)
         .center()
@@ -267,8 +267,8 @@ pub(super) fn menu_rich(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         .fill(k.c.layer_03)
         .child(text("A").font(k.ty.small_medium).color(k.c.text_base));
     row().child(
-        Menu::new("menu")
-            .trigger(menu_button(k, "Open rich menu", "menu", open))
+        Menu::new("menu-rich")
+            .trigger(menu_button(k, "Open rich menu", "menu-rich", open))
             .min_width(240.0)
             .item(MenuItem::new("Text").lead(avatar).icon(&ic::PLUS).shortcut("⇧ D").badge("Label"))
             .item(MenuItem::new("New window").icon(&ic::PLUS).shortcut("⌘ N"))
@@ -282,10 +282,10 @@ pub(super) fn menu_rich(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 pub(super) fn menu_checkbox(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let open = is_open(s, "menu");
+    let open = is_open(s, "menu-checkbox");
     row().child(
-        Menu::new("menu")
-            .trigger(menu_button(k, "View", "menu", open))
+        Menu::new("menu-checkbox")
+            .trigger(menu_button(k, "View", "menu-checkbox", open))
             .min_width(200.0)
             .item(MenuItem::new("Word wrap").shortcut("⌥ Z").checked(!s.is("wrap")).on_select(flip("wrap")))
             .item(MenuItem::new("Minimap").checked(s.is("minimap")).on_select(flip("minimap")))
@@ -297,7 +297,7 @@ pub(super) fn menu_checkbox(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 pub(super) fn menu_radio(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let open = is_open(s, "menu");
+    let open = is_open(s, "menu-radio");
     let theme = s.picked("theme", "system").to_owned();
     let pick = |v: &'static str| {
         move |s: &mut G| {
@@ -305,8 +305,8 @@ pub(super) fn menu_radio(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         }
     };
     row().child(
-        Menu::new("menu")
-            .trigger(menu_button(k, "Theme", "menu", open))
+        Menu::new("menu-radio")
+            .trigger(menu_button(k, "Theme", "menu-radio", open))
             .min_width(200.0)
             .group_label("Appearance")
             .item(MenuItem::new("Light").checked(theme == "light").on_select(pick("light")))
@@ -319,7 +319,7 @@ pub(super) fn menu_radio(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 pub(super) fn menu_submenu(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let open = is_open(s, "menu");
+    let open = is_open(s, "menu-submenu");
     let recent = vec![
         MenuEntry::item(MenuItem::new("project-alpha.tsx")),
         MenuEntry::item(MenuItem::new("project-beta.tsx")),
@@ -328,8 +328,8 @@ pub(super) fn menu_submenu(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         MenuEntry::item(MenuItem::new("Clear recent")),
     ];
     row().child(
-        Menu::new("menu")
-            .trigger(menu_button(k, "File", "menu", open))
+        Menu::new("menu-submenu")
+            .trigger(menu_button(k, "File", "menu-submenu", open))
             .min_width(200.0)
             .item(MenuItem::new("New file").shortcut("⌘ N"))
             .item(MenuItem::new("Open file").shortcut("⌘ O"))
@@ -346,7 +346,7 @@ pub(super) fn menu_submenu(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 /// Menu with `Menu::label`, explicit `MenuItem::key`, distinct `MenuItem::a11y_label`, and a
 /// compact `Placement::LeftStart` submenu (`submenu_min_width(0.0)`) near the trailing edge.
 pub(super) fn menu_submenu_options(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let open = is_open(s, "menu");
+    let open = is_open(s, "menu-submenu-options");
     let http = s.picked("http-version", "HTTP/2").to_owned();
     let pick_http = |v: &'static str| {
         move |s: &mut G| {
@@ -358,9 +358,9 @@ pub(super) fn menu_submenu_options(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         MenuEntry::item(MenuItem::new("HTTP/2").key("http-2").checked(http == "HTTP/2").on_select(pick_http("HTTP/2"))),
         MenuEntry::item(MenuItem::new("HTTP/3").key("http-3").checked(http == "HTTP/3").on_select(pick_http("HTTP/3"))),
     ];
-    let mut menu = Menu::new("menu")
+    let mut menu = Menu::new("menu-submenu-options")
         .label("HTTP settings")
-        .trigger(menu_button(k, "HTTP settings", "menu", open))
+        .trigger(menu_button(k, "HTTP settings", "menu-submenu-options", open))
         .placement(Placement::BottomEnd)
         .open(open)
         .on_close(close);
@@ -454,17 +454,17 @@ fn tip_frame(e: El) -> El {
 }
 
 pub(super) fn tooltip_simple(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let t = Tooltip::new("tip").trigger(body_text(k, "Hover me")).open(is_open(s, "tip"));
+    let t = Tooltip::new("tip-simple").trigger(body_text(k, "Hover me")).open(is_open(s, "tip-simple"));
     tip_frame(t.text(k, "Tooltip Text").build(k, layer))
 }
 
 pub(super) fn tooltip_keybind(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let t = Tooltip::new("tip").trigger(body_text(k, "Hover me")).open(is_open(s, "tip"));
+    let t = Tooltip::new("tip-keybind").trigger(body_text(k, "Hover me")).open(is_open(s, "tip-keybind"));
     tip_frame(t.text(k, "Tooltip Text").child(Keybind::new(&["⌘", "⌘"]).build(k)).build(k, layer))
 }
 
 pub(super) fn tooltip_path(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let t = Tooltip::new("tip").trigger(body_text(k, "Hover me")).open(is_open(s, "tip"));
+    let t = Tooltip::new("tip-path").trigger(body_text(k, "Hover me")).open(is_open(s, "tip-path"));
     let font = t.font(k);
     let parts = row()
         .gap(3.0)
@@ -475,7 +475,7 @@ pub(super) fn tooltip_path(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
 }
 
 pub(super) fn tooltip_title_description(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
-    let t = Tooltip::new("tip").trigger(body_text(k, "Hover me")).open(is_open(s, "tip"));
+    let t = Tooltip::new("tip-title-description").trigger(body_text(k, "Hover me")).open(is_open(s, "tip-title-description"));
     let font = t.font(k);
     tip_frame(
         t.child(text("Title").font(font).color(k.c.text_base))

@@ -163,6 +163,7 @@ impl RuntimeCore {
             }
             PhysicalInput::FocusLost => {
                 self.kbd.key_releases_lost();
+                if self.kbd.keys_lost { self.kbd.focus_lost_sent = true; }
             }
             PhysicalInput::Modifiers(_) => {}
         }
@@ -240,12 +241,18 @@ impl RuntimeCore {
         true
     }
     /// Focus moving off an element inside the window: its handler hears `FocusLost`, and
-    /// modifier keys stay held.
+    /// modifier keys stay held. Skipped when window deactivation already delivered `FocusLost`.
     pub(in crate::runtime) fn physical_focus_lost(&mut self, app: &mut dyn AppDriver) -> bool {
         self.kbd.disarm_direction_chord();
+        if self.kbd.focus_lost_sent { return false; }
         let mut tx = Tx::default();
-        let consumed = self.offer_physical(app, &PhysicalInput::FocusLost, &mut tx, &mut None);
-        let changed = self.observe_focus_lost(app, &mut tx, &mut None) || consumed;
+        let mut live = None;
+        let consumed = self.offer_physical(app, &PhysicalInput::FocusLost, &mut tx, &mut live);
+        let observed = self.observe_focus_lost(app, &mut tx, &mut live);
+        let changed = observed || consumed;
+        if changed && live != Some(true) {
+            self.kbd.focus_lost_dirty = true;
+        }
         self.latch_requests(app, &mut tx);
         merge(&mut self.frame.pending, tx);
         changed

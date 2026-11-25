@@ -345,7 +345,8 @@ fn a_caret_read_the_resize_moves_runs_the_view() {
     assert_eq!(after, format!("{caret}"), "the view shows where the caret is now");
 }
 
-/// Layout fits an `aspect_fit` element by rewriting its style, which a resize has to undo.
+/// Layout fits an `aspect_fit` element by rewriting its style, which a resize restores before
+/// re-fitting so the view does not need to rebuild.
 #[test]
 fn a_resize_refits_aspect_fit_elements_as_a_full_commit_would() {
     fn view(_: &u32, _: &mut Cx<u32>) -> El {
@@ -356,12 +357,99 @@ fn a_resize_refits_aspect_fit_elements_as_a_full_commit_would() {
     let mut full = Runtime::new(0, view, (700.0, 600.0), Env::new(true, 2.0));
     rt.frame(0.0);
     full.frame(0.0);
-    for w in [600.0, 900.0, 300.0] {
-        resize(&mut rt, w, 2.0);
+    for w in [600.0, 900.0, 300.0, 800.0] {
+        assert_eq!(resize(&mut rt, w, 2.0), 0, "aspect_fit relayouts without running view at {w}");
         full.invalidate();
-        resize(&mut full, w, 2.0);
+        assert_eq!(resize(&mut full, w, 2.0), 1);
         assert_eq!(layout(&rt), layout(&full), "at {w}");
     }
+}
+
+/// Fitted anchored overlays (`El::anchored_fit`), including nested submenus, restore their
+/// authored unclamped styles on relayout so shrinking, growing back, and re-clamping match a
+/// full rebuild with zero view runs.
+#[test]
+fn a_resize_relayouts_clamped_anchored_fit_overlays_and_submenus_without_running_view() {
+    fn view(_: &u32, _: &mut Cx<u32>) -> El {
+        ran();
+        let trigger = el().key("trigger").size(120.0, 32.0);
+        let menu = col()
+            .key("menu")
+            .w(240.0)
+            .min_w(180.0)
+            .min_h(160.0)
+            .children((0..10).map(|i| el().key(format!("item{i}")).w_full().h(28.0)))
+            .anchored_fit("trigger", crate::Side::Bottom, crate::Align::Start, 4.0);
+        let submenu = col()
+            .key("submenu")
+            .w(220.0)
+            .min_w(160.0)
+            .children((0..8).map(|i| el().key(format!("sub{i}")).w_full().h(26.0)))
+            .anchored_fit("item1", crate::Side::Right, crate::Align::Start, 4.0);
+        col()
+            .w_full()
+            .h_full()
+            .padding(20.0)
+            .child(trigger)
+            .child(menu)
+            .child(submenu)
+    }
+    let mut rt = Runtime::new(0, view, (700.0, 600.0), Env::new(true, 1.0));
+    let mut full = Runtime::new(0, view, (700.0, 600.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    full.frame(0.0);
+    // Shrink to clamp both main and cross axes, grow back to unclamp, then clamp again.
+    for &(w, h) in &[(300.0, 220.0), (220.0, 180.0), (700.0, 600.0), (340.0, 240.0), (800.0, 640.0)] {
+        let ran_views = views(|| {
+            rt.set_viewport((w, h), 1.0);
+            rt.frame(1.0 / 120.0);
+        });
+        assert_eq!(ran_views, 0, "anchored_fit relayouts without running view at {w}x{h}");
+        full.invalidate();
+        assert_eq!(
+            views(|| {
+                full.set_viewport((w, h), 1.0);
+                full.frame(1.0 / 120.0);
+            }),
+            1,
+        );
+        assert_eq!(layout(&rt), layout(&full), "at {w}x{h}");
+    }
+}
+
+/// Pictures sizing a side from their pixels (`pixel_aspect`) keep the relayout fast path while
+/// their aspect ratio is unchanged, and still rebuild when new pixels change the aspect ratio.
+#[test]
+fn a_resize_relayouts_unchanged_pixel_aspect_and_rebuilds_on_aspect_change() {
+    fn view(px: &crate::Pixels, _: &mut Cx<crate::Pixels>) -> El {
+        ran();
+        col()
+            .w_full()
+            .h_full()
+            .child(el().key("pic").w_full().max_w(400.0).pixels(px))
+            .child(text("caption under picture").key("cap").w_full().wrap())
+    }
+    let px = crate::Pixels::new();
+    px.set(32, 16, vec![255u8; 32 * 16 * 4]);
+    let full_px = crate::Pixels::new();
+    full_px.set(32, 16, vec![255u8; 32 * 16 * 4]);
+    let mut rt = Runtime::new(px, view, (600.0, 400.0), Env::new(true, 1.0));
+    let mut full = Runtime::new(full_px, view, (600.0, 400.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    full.frame(0.0);
+    for w in [320.0, 200.0, 500.0] {
+        assert_eq!(resize(&mut rt, w, 1.0), 0, "unchanged pixel_aspect relayouts at {w}");
+        full.invalidate();
+        assert_eq!(resize(&mut full, w, 1.0), 1);
+        assert_eq!(layout(&rt), layout(&full), "at {w}");
+    }
+    // Changing the picture's aspect ratio must rebuild to re-apply the new ratio.
+    rt.state.set(16, 32, vec![255u8; 16 * 32 * 4]);
+    full.state.set(16, 32, vec![255u8; 16 * 32 * 4]);
+    assert!(resize(&mut rt, 400.0, 1.0) >= 1, "changed pixel_aspect triggers rebuild");
+    full.invalidate();
+    resize(&mut full, 400.0, 1.0);
+    assert_eq!(layout(&rt), layout(&full), "after aspect change");
 }
 
 /// Moving `Node`s on resize skips cloning paths/specs, keeps a fixed-width sidebar's scene rects

@@ -18,9 +18,12 @@ struct PreparedOverlayFrame {
 struct OverlayFrame<'a> {
     core: &'a mut OverlayCore,
     app: &'a mut dyn OverlayApp,
+    event_loop: Option<&'a ActiveEventLoop>,
     prewarm: bool,
     read_occlusion: bool,
     paced: bool,
+    content_resized: bool,
+    pending_content_size: Option<(f32, f32)>,
     #[cfg(target_os = "macos")]
     target: Option<Instant>,
     #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
@@ -64,10 +67,14 @@ impl FrameHost for OverlayFrame<'_> {
             }
             for input in changes.input { self.core.surface_input(self.app, input); }
             if let Some((w, h)) = changes.size {
-                let size = (if w == 0 { self.core.at.size.0 } else { w as f32 }, if h == 0 { self.core.at.size.1 } else { h as f32 });
-                if size != self.core.at.size {
-                    self.core.at.size = size;
-                    if let Some(live) = self.core.surface.live_mut() { live.scale = 0.0; }
+                for effect in self.core.wayland_resize.step(super::sizing::WaylandResizeEvent::Configured((w, h))) {
+                    let super::sizing::WaylandResizeEffect::ApplyConfigured((cw, ch)) = effect else { continue };
+                    let size = (if cw == 0 { self.core.at.size.0 } else { cw as f32 }, if ch == 0 { self.core.at.size.1 } else { ch as f32 });
+                    if size != self.core.at.size {
+                        self.core.at.size = size;
+                        if let Some(live) = self.core.surface.live_mut() { live.scale = 0.0; }
+                    }
+                    self.core.dirty = true;
                 }
             }
             if let Some(scale) = changes.scale {
@@ -106,7 +113,7 @@ impl FrameHost for OverlayFrame<'_> {
         let gate = frame::Gate {
             prewarm: self.prewarm,
             occluded: cfg!(target_os = "macos") && self.core.presence.occluded(),
-            awaiting_frame: self.core.awaiting_layer_frame(),
+            awaiting_frame: self.core.awaiting_layer_frame() || self.core.wayland_resize.is_pending(),
             dirty: self.core.dirty || self.app.rt().has_input_waiting(),
             idle: self.core.idle,
             retry: self.core.backoff.deadline(),
@@ -281,6 +288,15 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn post_step_check(&mut self, _info: &mut StepInfo) -> PostStepCheck {
+        if !self.content_resized && let Some(next) = self.core.take_live_fit_resize(self.app.rt_mut()) {
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            if self.core.wayland_request_content_resize(next) {
+                return PostStepCheck::Hold;
+            }
+            self.content_resized = true;
+            self.pending_content_size = Some(next);
+            return PostStepCheck::Reacquire(ReacquireReason::ContentResize);
+        }
         #[cfg(target_os = "macos")]
         if !self.materials_checked {
             self.materials_checked = true;
@@ -297,7 +313,12 @@ impl FrameHost for OverlayFrame<'_> {
             let device_type = self.core.gpu.as_ref().map(|gpu| gpu.adapter.get_info().device_type);
             let window_backdrop = self.app.rt().window_backdrop();
             let found = !self.app.rt().paint.materials().is_empty();
-            if let Some(live) = self.core.surface.live_mut() {
+            let high_contrast = self.app.rt().system_contrast().is_some();
+            if let Some(live) = self.core.surface.live_mut()
+                && (found || live.materials.native())
+            {
+                let mut effects = crate::system_material::windows::current_policy();
+                effects.high_contrast |= high_contrast;
                 let hwnd = live.backing.window().and_then(|w| crate::platform::win32::hwnd(w)).map(|h| h as isize);
                 let inputs = crate::system_material::windows::MaterialInputs {
                     transparent: true,
@@ -310,6 +331,7 @@ impl FrameHost for OverlayFrame<'_> {
                     window_backdrop,
                     mode: live.materials.mode(),
                     has_handover: live.handover.is_some(),
+                    effects,
                 };
                 if live.materials.update(hwnd, inputs, found, live.handover.as_mut()) {
                     return PostStepCheck::Reacquire(ReacquireReason::NativeMaterials);
@@ -341,6 +363,12 @@ impl FrameHost for OverlayFrame<'_> {
                 let _ = info;
                 self.reblend_surface()
             }
+            ReacquireReason::ContentResize => {
+                let _ = info;
+                self.pending_content_size
+                    .take()
+                    .is_none_or(|next| self.core.apply_content_resize_gpu(self.app, self.event_loop, next))
+            }
         }
     }
 
@@ -356,7 +384,7 @@ impl FrameHost for OverlayFrame<'_> {
             self.core.window_backdrop = backdrop;
             self.core.sync_window_backdrop(self.app.rt_mut(), false);
         }
-        super::input::drop_window_requests(self.app.rt_mut());
+        self.core.take_window_requests(self.app.rt_mut());
         self.core.clipboard.flush_core(self.app.rt_mut());
         self.core.sync_ime(self.app);
         // Publish the geometry just rendered, never a layout cached from the preceding frame.
@@ -511,13 +539,13 @@ impl FrameHost for OverlayFrame<'_> {
 
 impl OverlayCore {
     /// Draws a frame if one is due; true while it needs more (animating).
-    pub(super) fn draw(&mut self, app: &mut dyn OverlayApp) -> bool {
+    pub(super) fn draw(&mut self, app: &mut dyn OverlayApp, event_loop: Option<&ActiveEventLoop>) -> bool {
         self.presence_due(app, crate::time::now());
         if !self.presence.drawing() {
             self.drain_hidden(app);
             return false;
         }
-        let more = self.draw_frame(app, false);
+        let more = self.draw_frame(app, event_loop, false);
         self.open_popup(app);
         more
     }
@@ -549,22 +577,27 @@ impl OverlayCore {
             .then(crate::input::time::arrived_now);
         match input {
             Input::Move(x, y) => {
-                let zoom = app.rt().zoom();
-                self.dirty |= app.observe_pointer(x / zoom, y / zoom);
+                self.native_surface_move(app, x, y);
                 return;
             }
-            Input::Leave => app.rt_mut().pointer_leave(),
-            Input::Button(down) => if let Some((x, y)) = app.rt().pointer() {
-                if down { app.pointer_down(x, y); } else { app.pointer_up(x, y); }
-            },
-            Input::Secondary(down) => if let Some((x, y)) = app.rt().pointer() { if down { app.rt_mut().secondary_down(x, y) } else { app.secondary_up(x, y) } },
-            Input::ExtraButton(button, down) => if let Some((x, y)) = app.rt().pointer() {
-                if down { app.button_down(x, y, button); } else { app.button_up(x, y, button); }
-            },
+            Input::Leave => {
+                self.native_pointer_leave(app);
+                return;
+            }
+            Input::Button(down) => {
+                self.native_button(app, crate::PointerButton::Primary, down);
+                return;
+            }
+            Input::Secondary(down) => {
+                self.native_button(app, crate::PointerButton::Secondary, down);
+                return;
+            }
+            Input::ExtraButton(button, down) => {
+                self.native_button(app, button, down);
+                return;
+            }
             Input::Wheel(wheel) => {
-                if crate::input::host_events::wheel_core(app.rt_mut(), wheel) == crate::input::host_events::WheelOutcome::Ignored {
-                    return;
-                }
+                if !self.native_surface_wheel(app, wheel) { return; }
             }
             Input::Focus(focused) => {
                 app.window_focus(focused);
@@ -647,13 +680,16 @@ impl OverlayCore {
         }
     }
 
-    pub(super) fn draw_frame(&mut self, app: &mut dyn OverlayApp, prewarm: bool) -> bool {
+    pub(super) fn draw_frame(&mut self, app: &mut dyn OverlayApp, event_loop: Option<&ActiveEventLoop>, prewarm: bool) -> bool {
         let mut frame = OverlayFrame {
             core: self,
             app,
+            event_loop,
             prewarm,
             read_occlusion: false,
             paced: false,
+            content_resized: false,
+            pending_content_size: None,
             #[cfg(target_os = "macos")]
             target: None,
             #[cfg(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
@@ -671,7 +707,7 @@ impl OverlayCore {
     pub(super) fn acquire_missed(&mut self, app: &mut dyn OverlayApp, missed: crate::window::Missed, paced: bool, prewarm: bool, built: bool) {
         if missed == crate::window::Missed::Unconfigured {
             if built {
-                super::input::drop_window_requests(app.rt_mut());
+                self.take_window_requests(app.rt_mut());
                 self.clipboard.flush_core(app.rt_mut());
             }
             crate::haptics::flush_live(app.rt_mut(), false);
@@ -687,7 +723,7 @@ impl OverlayCore {
 
     /// A timer frame that would draw what's on screen: what a drawn frame does besides drawing.
     fn unchanged_frame(&mut self, app: &mut dyn OverlayApp) -> bool {
-        super::input::drop_window_requests(app.rt_mut());
+        self.take_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
         crate::haptics::flush_live(app.rt_mut(), true);
         let ime_queued = self.sync_ime(app);
@@ -779,7 +815,7 @@ impl OverlayCore {
         if let Some(panel) = &self.panel {
             let _prewarm = panel.prewarm();
             self.dirty = true;
-            self.draw_frame(app, true);
+            self.draw_frame(app, None, true);
             if let Some(gpu) = &self.gpu { rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).ok(); }
             return;
         }

@@ -52,10 +52,12 @@ macos-background-cursor = []
 # Windows 11 hardware checks confirm unfocused overlay blur and spring tracking; off, no
 # `Windows.UI.Composition` types or WinRT composition features are compiled in.
 windows-system-material = [
+    "windows/Foundation",
+    "windows/Foundation_Numerics",
     "windows/System",
     "windows/UI_Composition",
     "windows/UI_Composition_Desktop",
-    "windows/Foundation_Numerics",
+    "windows/UI_ViewManagement",
     "windows/Win32_System_WinRT_Composition",
 ]
 # macOS: play Ogg (Vorbis, Opus) and WebM/Matroska audio, which AVFoundation can't read, by
@@ -375,6 +377,10 @@ harness = false
 
 [[test]]
 name = "macos_callback_panic"
+harness = false
+
+[[test]]
+name = "macos_quit_request"
 harness = false
 
 [[test]]

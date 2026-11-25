@@ -697,3 +697,165 @@ fn reduced_motion_instant_match_geometry_and_zero_tween_transition_add_no_fade()
     assert_eq!(s.presented(to).unwrap().opacity, 1.0);
     assert_eq!(s.presented(to).unwrap().rect, Rect::new(120.0, 40.0, 100.0, 50.0));
 }
+
+#[test]
+fn match_geometry_accounts_for_own_offset_on_source_target_and_rematch() {
+    let close = |a: Rect, b: Rect, tol: f32| {
+        (a.x - b.x).abs() < tol && (a.y - b.y).abs() < tol && (a.w - b.w).abs() < tol && (a.h - b.h).abs() < tol
+    };
+
+    // 1. Source own offset + target own offset.
+    let mut s = Scene::new();
+    let (a, b, c) = (NodeId(1), NodeId(2), NodeId(3));
+    s.insert(a, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.set(a, prop::OFFSET, Vec2::new(30.0, 20.0));
+    s.frame_at(0.0);
+    assert_eq!(s.presented(a).unwrap().rect, Rect::new(30.0, 20.0, 40.0, 40.0));
+
+    s.insert(b, spec(200.0, 100.0, 40.0, 40.0), Mount::Initial);
+    s.set(b, prop::OFFSET, Vec2::new(-50.0, 40.0));
+    s.match_geometry(a, b, LayoutAnim::new(motion::REFLOW).screen());
+    s.frame_at(0.001);
+    let first = s.presented(b).unwrap().rect;
+    assert!(close(first, Rect::new(30.0, 20.0, 40.0, 40.0), 1.0), "first={first:?}");
+    assert!(s.sampling_error().1 < 0.05, "sampling_error={:?}", s.sampling_error());
+
+    // 2. Mid-flight re-match from b (which has own offset) to c (which also has own offset).
+    let mut t = 0.001;
+    for _ in 0..12 {
+        t += 1.0 / 120.0;
+        s.frame_at(t);
+        assert!(s.sampling_error().1 < 0.05, "mid-flight sampling_error={:?}", s.sampling_error());
+    }
+    let mid = s.presented(b).unwrap().rect;
+    s.insert(c, spec(100.0, 200.0, 40.0, 40.0), Mount::Initial);
+    s.set(c, prop::OFFSET, Vec2::new(15.0, -25.0));
+    let travel = s.get(b, prop::TRAVEL).unwrap();
+    let travel_vel = s.store().sample_velocity(b, prop::TRAVEL).unwrap_or(Vec2::ZERO);
+    s.match_geometry_from_flight(b, c, [0.0; 4], travel, travel_vel, 1.0, LayoutAnim::new(motion::REFLOW).screen());
+    t += 0.001;
+    s.frame_at(t);
+    let after = s.presented(c).unwrap().rect;
+    assert!(close(after, mid, 2.0), "mid={mid:?}, after={after:?}");
+
+    // 3. Lands cleanly at target's layout + own offset (applied once), with path_lead approaching zero.
+    for _ in 0..240 {
+        t += 1.0 / 120.0;
+        s.frame_at(t);
+    }
+    assert_eq!(s.presented(c).unwrap().rect, Rect::new(115.0, 175.0, 40.0, 40.0));
+    assert!(s.path_lead(c).is_none(), "path ended at rest");
+
+    // 4. Target offset set after match_geometry (the live_offset latch order) still applies only at destination.
+    let mut s = Scene::new();
+    let (from, to) = (NodeId(10), NodeId(11));
+    s.insert(from, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.frame_at(0.0);
+    s.insert(to, spec(200.0, 100.0, 40.0, 40.0), Mount::Initial);
+    s.match_geometry(from, to, LayoutAnim::new(motion::REFLOW).screen());
+    s.set(to, prop::OFFSET, Vec2::new(-50.0, 40.0));
+    s.frame_at(0.001);
+    let first = s.presented(to).unwrap().rect;
+    assert!(close(first, Rect::new(0.0, 0.0, 40.0, 40.0), 1.0), "late target offset applied early: {first:?}");
+    s.frame_at(2.0);
+    assert_eq!(s.presented(to).unwrap().rect, Rect::new(150.0, 140.0, 40.0, 40.0));
+}
+
+#[test]
+fn screen_travel_preserves_own_offset_on_entry_and_exit() {
+    let mut s = Scene::new();
+    let n = NodeId(1);
+    s.insert(n, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.set(n, prop::OFFSET, Vec2::new(30.0, 20.0));
+    s.frame_at(0.0);
+    assert_eq!(s.presented(n).unwrap().rect, Rect::new(30.0, 20.0, 40.0, 40.0));
+
+    s.set_frame(n, Rect::new(200.0, 100.0, 40.0, 40.0), LayoutAnim::new(motion::REFLOW).screen());
+    s.frame_at(0.001);
+    let r = s.presented(n).unwrap().rect;
+    assert!((r.x - 30.0).abs() < 1.0 && (r.y - 20.0).abs() < 1.0, "entry dropped own offset: {r:?}");
+    assert!(s.sampling_error().1 < 0.05);
+
+    // Leave screen travel mid-flight back to parent space without jumping.
+    s.frame_at(0.1);
+    let before = s.presented(n).unwrap().rect;
+    s.set_frame(n, Rect::new(100.0, 50.0, 40.0, 40.0), LayoutAnim::new(motion::REFLOW));
+    s.frame_at(0.101);
+    let after = s.presented(n).unwrap().rect;
+    assert!((after.x - before.x).abs() < 2.0 && (after.y - before.y).abs() < 2.0, "exit jumped: {before:?} -> {after:?}");
+    s.frame_at(3.0);
+    assert_eq!(s.presented(n).unwrap().rect, Rect::new(130.0, 70.0, 40.0, 40.0));
+}
+
+#[test]
+fn match_geometry_blends_own_rotation_along_shortest_arc_and_rematches() {
+    let angle_diff = |a: f32, b: f32| {
+        let mut d = (b - a).rem_euclid(core::f32::consts::TAU);
+        if d > core::f32::consts::PI {
+            d -= core::f32::consts::TAU;
+        }
+        d.abs()
+    };
+
+    // 1. Both rotated (0.3 -> 0.9) and mid-flight re-match to 1.2.
+    let mut s = Scene::new();
+    let (a, b, c) = (NodeId(1), NodeId(2), NodeId(3));
+    s.insert(a, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.set(a, prop::ROTATION, 0.3);
+    s.frame_at(0.0);
+    assert!((s.presented(a).unwrap().transform.rotate - 0.3).abs() < 1e-5);
+
+    s.insert(b, spec(200.0, 100.0, 40.0, 40.0), Mount::Initial);
+    s.set(b, prop::ROTATION, 0.9);
+    s.match_geometry(a, b, LayoutAnim::new(motion::REFLOW).screen());
+    s.frame_at(0.001);
+    assert!(angle_diff(s.presented(b).unwrap().transform.rotate, 0.3) < 0.02);
+
+    let mut t = 0.001;
+    for _ in 0..15 {
+        t += 1.0 / 120.0;
+        s.frame_at(t);
+    }
+    let mid_rot = s.presented(b).unwrap().transform.rotate;
+    assert!(mid_rot > 0.4 && mid_rot < 0.85, "mid_rot={mid_rot}");
+
+    s.insert(c, spec(100.0, 200.0, 40.0, 40.0), Mount::Initial);
+    s.set(c, prop::ROTATION, 1.2);
+    let travel = s.get(b, prop::TRAVEL).unwrap();
+    let travel_vel = s.store().sample_velocity(b, prop::TRAVEL).unwrap_or(Vec2::ZERO);
+    s.match_geometry_from_flight(b, c, [0.0; 4], travel, travel_vel, 1.0, LayoutAnim::new(motion::REFLOW).screen());
+    t += 0.001;
+    s.frame_at(t);
+    assert!(angle_diff(s.presented(c).unwrap().transform.rotate, mid_rot) < 0.03);
+    s.frame_at(t + 3.0);
+    assert!((s.presented(c).unwrap().transform.rotate - 1.2).abs() < 1e-4);
+
+    // 2. Shortest arc wrap-around across +/-PI (3.0 -> -3.0) never passes near 0.
+    let mut s = Scene::new();
+    let (a, b) = (NodeId(10), NodeId(11));
+    s.insert(a, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.set(a, prop::ROTATION, 3.0);
+    s.frame_at(0.0);
+    s.insert(b, spec(200.0, 100.0, 40.0, 40.0), Mount::Initial);
+    s.set(b, prop::ROTATION, -3.0);
+    s.match_geometry(a, b, LayoutAnim::new(motion::REFLOW).screen());
+    for k in 1..200 {
+        s.frame_at(k as f64 / 120.0);
+        let r = s.presented(b).unwrap().transform.rotate;
+        assert!(angle_diff(r, core::f32::consts::PI) < 0.35, "frame {k}: took long arc: {r}");
+    }
+
+    // 3. Late target rotation (live_rotation latch order) and same-rect path_lead hold.
+    let mut s = Scene::new();
+    let (a, b) = (NodeId(20), NodeId(21));
+    s.insert(a, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.frame_at(0.0);
+    s.insert(b, spec(0.0, 0.0, 40.0, 40.0), Mount::Initial);
+    s.match_geometry(a, b, LayoutAnim::new(motion::REFLOW).screen());
+    s.set(b, prop::ROTATION, 0.8);
+    s.frame_at(0.001);
+    assert!(s.presented(b).unwrap().transform.rotate < 0.05, "late target rotation applied early");
+    assert!(s.path_lead(b).is_none(), "path_lead must hold while rotation still differs");
+    s.frame_at(3.0);
+    assert!((s.presented(b).unwrap().transform.rotate - 0.8).abs() < 1e-4);
+}

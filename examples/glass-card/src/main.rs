@@ -218,6 +218,18 @@ fn card_spec() -> AppSpec<Card> {
     }
 }
 
+/// Background auto-toggle for the toplevel card: calls `tx.animated()` because toplevel
+/// windows snap unprompted (non-input) updates unless the update opts into motion.
+fn toggle_card_auto(s: &mut Card, tx: &mut Tx) {
+    s.docked = !s.docked;
+    tx.animated();
+}
+
+fn toggle_overlay_auto(s: &mut OverlayPill, tx: &mut Tx) {
+    s.expanded = !s.expanded;
+    tx.animated();
+}
+
 struct OverlayPill {
     expanded: bool,
     material: SystemMaterial,
@@ -278,7 +290,7 @@ fn run_overlay_probe() {
             let hud = hud.clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_millis(1600));
-                hud.update(|s, _| s.expanded = !s.expanded);
+                hud.update(toggle_overlay_auto);
             });
         }
         let handle = pattern.handle();
@@ -313,7 +325,7 @@ fn main() {
             let handle = handle.clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_millis(1600));
-                handle.update(|s, _| s.docked = !s.docked);
+                handle.update(toggle_card_auto);
             });
         }
         if !rune::is_headless() && let Ok(seconds) = rune::env::var("GLASS_CARD_SECONDS").unwrap_or_default().parse::<f64>() {
@@ -327,4 +339,27 @@ fn main() {
             WindowSpec::from_app("card", card).configured_options(over).into(),
         ] as Vec<rune::AnyWindowSpec>
     });
+}
+
+#[test]
+fn auto_toggle_springs_card_across_multiple_intermediate_frames() {
+    let mut rt = rune::Runtime::new(init(), card_view, SIZE, rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    let start_x = rt.system_materials()[0].rect[0];
+    assert!((start_x - 70.0).abs() < 1.0, "initial full card x: {start_x}");
+
+    rt.update(toggle_card_auto);
+    let mut frames = 0usize;
+    let mut saw_intermediate = false;
+    while rt.frame(1.0 / 120.0) && frames < 240 {
+        frames += 1;
+        let x = rt.system_materials()[0].rect[0];
+        if x > 90.0 && x < 450.0 {
+            saw_intermediate = true;
+        }
+    }
+    assert!(frames > 30, "expected spring animation across many frames, got {frames}");
+    assert!(saw_intermediate, "card must pass through intermediate x positions");
+    let end_x = rt.system_materials()[0].rect[0];
+    assert!((end_x - (SIZE.0 - 290.0)).abs() < 1.0, "final docked x: {end_x}");
 }

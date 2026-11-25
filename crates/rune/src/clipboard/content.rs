@@ -171,9 +171,19 @@ impl ClipboardImage {
         if !valid_image_size(size.0, size.1) { return None; }
         Some(Self { png, size })
     }
-    /// Encodes 8-bit RGBA pixels, row by row, as PNG.
-    #[cfg_attr(any(target_os = "macos", target_os = "ios", target_os = "android", target_arch = "wasm32"), allow(dead_code))]
-    pub(crate) fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Option<Self> {
+    /// Straight-alpha sRGB RGBA8 pixels (`width * height * 4` bytes, rows top first), encoded
+    /// as PNG on the calling thread. `None` when the length doesn't match, a side is zero, the
+    /// image passes 64 megapixels or its PNG passes [`MAX_IMAGE_BYTES`]. To copy an image an
+    /// [`ImageCache`](crate::ImageCache) decoded, [`Tx::copy_image`](crate::Tx::copy_image)
+    /// encodes it off the event thread instead.
+    ///
+    /// ```
+    /// # use rune::clipboard::ClipboardImage;
+    /// let image = ClipboardImage::from_rgba(2, 1, &[255, 0, 0, 255, 0, 0, 255, 128]).unwrap();
+    /// assert_eq!(image.size(), (2, 1));
+    /// assert!(ClipboardImage::from_rgba(2, 2, &[0; 4]).is_none());
+    /// ```
+    pub fn from_rgba(width: u32, height: u32, rgba: &[u8]) -> Option<Self> {
         if !valid_image_size(width, height) { return None; }
         Self::from_png(crate::drag_out::encode_png(width, height, rgba)?)
     }
@@ -190,5 +200,44 @@ impl ClipboardImage {
 impl std::fmt::Debug for ClipboardImage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClipboardImage").field("size", &self.size).field("bytes", &self.png.len()).finish()
+    }
+}
+
+/// Why [`Tx::copy_image`](crate::Tx::copy_image) or
+/// [`Tx::copy_image_then`](crate::Tx::copy_image_then) did not put the image on the clipboard.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CopyImageError {
+    /// The image has not finished decoding yet.
+    NotReady,
+    /// Decoding the image failed.
+    DecodeFailed(crate::ImageError),
+    /// The image exceeded 64 megapixels or its encoded PNG exceeded [`MAX_IMAGE_BYTES`].
+    TooLarge,
+    /// A newer clipboard write (from this app or another) superseded this copy before it
+    /// wrote to the clipboard.
+    Superseded,
+    /// The OS or browser clipboard rejected or could not perform the write.
+    Failed(String),
+}
+
+impl std::fmt::Display for CopyImageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotReady => f.write_str("image is still decoding"),
+            Self::DecodeFailed(err) => write!(f, "image failed to decode: {err}"),
+            Self::TooLarge => f.write_str("image exceeds clipboard size limits"),
+            Self::Superseded => f.write_str("copy superseded by a newer clipboard write"),
+            Self::Failed(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for CopyImageError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DecodeFailed(err) => Some(err),
+            _ => None,
+        }
     }
 }

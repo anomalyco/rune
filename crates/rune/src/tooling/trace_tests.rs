@@ -416,3 +416,96 @@ fn tree_json_reports_the_pointer_and_the_cursor_on_the_element_it_is_read_from()
     assert_eq!(cursor_of(&tree, "button"), "default");
     assert!(cursor_of(&tree, "handle").is_null());
 }
+
+/// A sink that holds every write until its gate opens, as a disk that stalls does, and says which
+/// thread wrote each piece.
+#[cfg(not(target_arch = "wasm32"))]
+struct GatedSink {
+    gate: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    written: std::sync::Arc<std::sync::Mutex<Vec<(std::thread::ThreadId, Vec<u8>)>>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::io::Write for GatedSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let (open, opened) = &*self.gate;
+        let mut open = open.lock().unwrap();
+        while !*open {
+            open = opened.wait(open).unwrap();
+        }
+        self.written.lock().unwrap().push((std::thread::current().id(), buf.to_vec()));
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn trace_lines_are_written_by_another_thread_and_a_stalled_disk_holds_no_frame() {
+    use std::io::Write;
+    let gate = std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let out = TraceOut::new(GatedSink { gate: gate.clone(), written: written.clone() });
+
+    // The frames' thread: three lines while the sink can write nothing. A writer that wrote on
+    // this thread would never answer; the test then opens the gate and fails instead of hanging.
+    let (wrote, frames_done) = std::sync::mpsc::channel();
+    let frames = std::thread::spawn(move || {
+        let mut out = out;
+        for k in 0..3 {
+            writeln!(out, r#"{{"t":{k},"n":{}}}"#, k + 1).unwrap();
+        }
+        wrote.send(std::thread::current().id()).unwrap();
+        out
+    });
+    let frames_thread = frames_done.recv_timeout(std::time::Duration::from_secs(10));
+    let stalled = written.lock().unwrap().len();
+    *gate.0.lock().unwrap() = true;
+    gate.1.notify_all();
+    let mut out = frames.join().unwrap();
+    let frames_thread = frames_thread.expect("three lines were handed over while the sink was stalled");
+    assert_eq!(stalled, 0, "nothing can have reached a stalled sink");
+
+    out.flush().unwrap();
+    let written = written.lock().unwrap();
+    let text: Vec<u8> = written.iter().flat_map(|(_, bytes)| bytes.clone()).collect();
+    assert_eq!(String::from_utf8(text).unwrap(), "{\"t\":0,\"n\":1}\n{\"t\":1,\"n\":2}\n{\"t\":2,\"n\":3}\n");
+    assert_eq!(written.len(), 3, "one write a line, whole lines");
+    assert!(written.iter().all(|(thread, _)| *thread != frames_thread && *thread != std::thread::current().id()), "the sink is written by the writer's own thread");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn trace_file_holds_every_line_after_a_flush_and_after_the_drop() {
+    use std::io::Write;
+    let tmp = TempFile(std::env::temp_dir().join(format!("rune-trace-out-{}.jsonl", std::process::id())));
+    let mut out = TraceOut::new(std::fs::File::create(&tmp.0).unwrap());
+    writeln!(out, "first").unwrap();
+    out.flush().unwrap();
+    assert_eq!(std::fs::read_to_string(&tmp.0).unwrap(), "first\n", "a flush waits for the file");
+    writeln!(out, "second").unwrap();
+    write!(out, "an unfinished line").unwrap();
+    drop(out);
+    assert_eq!(std::fs::read_to_string(&tmp.0).unwrap(), "first\nsecond\nan unfinished line", "the drop writes what is left and waits for it");
+}
+
+#[test]
+fn settled_trace_file_holds_every_frame_while_the_trace_is_still_open() {
+    // A `--frames` run ends by a fast exit that drops nothing: the settle is its last chance.
+    let view = |_: &bool, _: &mut Cx<bool>| crate::el().key("box").size(20.0, 20.0);
+    let mut rt = Runtime::new(false, view, (100.0, 100.0), Env { scale: 1.0, system_dark: true });
+    let tmp = TempFile(std::env::temp_dir().join(format!("rune-trace-settled-{}.jsonl", std::process::id())));
+    let mut trace = Trace::open(&tmp.0, rt.viewport, 60.0, 1.0);
+    for n in 0..40u32 {
+        rt.frame(1.0 / 60.0);
+        trace.frame(&mut rt, f64::from(n) * 1000.0 / 60.0, 0.0);
+    }
+    trace.settle_presents(std::time::Duration::ZERO);
+    let text = std::fs::read_to_string(&tmp.0).unwrap();
+    assert_eq!(text.lines().count(), 41, "the header and all forty frames, before the trace is dropped");
+    assert!(text.ends_with('\n'), "whole lines");
+    drop(trace);
+}

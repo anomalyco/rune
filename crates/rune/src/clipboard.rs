@@ -9,7 +9,7 @@
 //! HTML read from the clipboard passes through [`sanitize_html`] on the worker; on macOS an
 //! RTF-only clipboard (TextEdit, Notes, Pages) is converted to HTML there too.
 use std::hash::{BuildHasher, RandomState};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 #[cfg(any(test, not(target_arch = "wasm32")))]
 use std::sync::OnceLock;
@@ -38,8 +38,7 @@ mod web;
 pub(crate) mod web_file;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::tiff_to_png;
-pub use content::{ClipboardContent, ClipboardImage, MAX_IMAGE_BYTES};
-#[cfg(target_os = "macos")]
+pub use content::{ClipboardContent, ClipboardImage, CopyImageError, MAX_IMAGE_BYTES};
 use content::valid_image_size;
 pub use html::sanitize_html;
 pub use secret::{SecretCopy, SecretState};
@@ -48,24 +47,107 @@ use secret::{Alarm, Hold, HoldEffect, HoldEvent, Slot, Unwritten, step_hold};
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> { m.lock().unwrap_or_else(|e| e.into_inner()) }
 
+/// Monotonic generation and OS clipboard revision captured when a write was queued, so a slow
+/// background encode never overwrites a newer in-app or external-app clipboard write.
+#[derive(Clone)]
+struct WriteStamp {
+    generation: u64,
+    latest: Arc<AtomicU64>,
+    revision_before: Option<u64>,
+}
+impl WriteStamp {
+    fn superseded_in_app(&self) -> bool {
+        self.latest.load(Ordering::Acquire) != self.generation
+    }
+    fn superseded(&self, current_rev: Option<u64>, last_own_rev: Option<u64>) -> bool {
+        if self.superseded_in_app() { return true; }
+        let (Some(before), Some(now)) = (self.revision_before, current_rev) else { return false };
+        now != before && last_own_rev != Some(now)
+    }
+}
+
 /// A pending clipboard write. Debug output never includes its contents.
 #[derive(Clone)]
 pub struct ClipboardWrite {
     content: ClipboardContent,
     clear_after: Option<Duration>,
     secret: Option<Arc<Unwritten>>,
+    /// A decoded image to copy, encoded as PNG where the write is carried out.
+    image: Option<crate::Image>,
+    /// Straight-alpha sRGB RGBA8 retained beside the encoded PNG so Windows (`CF_DIBV5`) and
+    /// Linux (`arboard`) write without decoding the PNG back to pixels.
+    #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+    encoded_rgba: Option<(u32, u32, Arc<[u8]>)>,
+    stamp: Option<WriteStamp>,
+    copy_image_id: Option<u64>,
+    copy_reply: Option<CopyReply>,
 }
 impl ClipboardWrite {
     pub(crate) fn new(content: ClipboardContent) -> Self {
-        Self { content, clear_after: None, secret: None }
+        Self {
+            content,
+            clear_after: None,
+            secret: None,
+            image: None,
+            #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+            encoded_rgba: None,
+            stamp: None,
+            copy_image_id: None,
+            copy_reply: None,
+        }
+    }
+    /// `Tx::copy_image`: the image alone, encoded off the event thread on native platforms.
+    pub(crate) fn image(image: crate::Image) -> Self {
+        Self { image: Some(image), ..Self::new(ClipboardContent::default()) }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn has_pending_image(&self) -> bool { self.image.is_some() }
+    pub(crate) fn set_copy_image_id(&mut self, id: u64) { self.copy_image_id = Some(id); }
+    pub(crate) fn take_copy_image_id(&mut self) -> Option<u64> { self.copy_image_id.take() }
+    fn copy_image_id(&self) -> Option<u64> { self.copy_image_id }
+    fn attach_copy_reply(&mut self, reply: CopyReply) { self.copy_reply = Some(reply); }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn take_copy_reply(&mut self) -> Option<CopyReply> { self.copy_reply.take() }
+    #[cfg(not(target_arch = "wasm32"))]
+    fn stamp(&mut self, generation: u64, latest: Arc<AtomicU64>, revision_before: Option<u64>) {
+        self.stamp = Some(WriteStamp { generation, latest, revision_before });
+    }
+    /// Encodes the decoded image this write copies as PNG, into its content. Returns an error
+    /// when the image is still decoding, failed to decode, or exceeds clipboard size limits;
+    /// the write then leaves the clipboard as it was.
+    fn encode_image(&mut self) -> Result<(), CopyImageError> {
+        let Some(image) = self.image.take() else { return Ok(()) };
+        if let Some(err) = image.error() { return Err(CopyImageError::DecodeFailed(err.clone())); }
+        if !image.is_ready() { return Err(CopyImageError::NotReady); }
+        let Some((w, h, rgba)) = image.to_rgba() else { return Err(CopyImageError::NotReady); };
+        if !valid_image_size(w, h) { return Err(CopyImageError::TooLarge); }
+        let png_bytes = crate::drag_out::encode_png(w, h, &rgba)
+            .ok_or_else(|| CopyImageError::Failed("failed to encode PNG".into()))?;
+        if png_bytes.len() > MAX_IMAGE_BYTES { return Err(CopyImageError::TooLarge); }
+        let png = ClipboardImage::from_png(png_bytes).ok_or(CopyImageError::TooLarge)?;
+        #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+        { self.encoded_rgba = Some((w, h, Arc::from(rgba))); }
+        self.content = std::mem::take(&mut self.content).with_image(png);
+        Ok(())
     }
     /// Secrets are plain text only: no HTML or RTF copy of a password lingers.
     pub(crate) fn secret(text: String, clear_after: Duration) -> (Self, SecretCopy) {
         let slot = Arc::new(Slot::default());
-        let write = Self { content: ClipboardContent::new(text), clear_after: Some(clear_after), secret: Some(Arc::new(Unwritten(slot.clone()))) };
+        let write = Self {
+            content: ClipboardContent::new(text),
+            clear_after: Some(clear_after),
+            secret: Some(Arc::new(Unwritten(slot.clone()))),
+            image: None,
+            #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+            encoded_rgba: None,
+            stamp: None,
+            copy_image_id: None,
+            copy_reply: None,
+        };
         (write, SecretCopy(slot))
     }
-    /// Everything this write puts on the clipboard.
+    /// Everything this write puts on the clipboard. A `Tx::copy_image` write has no image here
+    /// until it is carried out, when its PNG is encoded.
     pub fn content(&self) -> &ClipboardContent { &self.content }
     pub(crate) fn is_secret(&self) -> bool { self.clear_after.is_some() }
     fn slot(&self) -> Option<&Arc<Slot>> { self.secret.as_ref().map(|u| &u.0) }
@@ -119,7 +201,17 @@ pub(crate) enum Forms {
     /// A hook (`on_input_paste`, `on_paste_content`): every form, images too.
     All,
 }
-struct Reply { purpose: Purpose, content: ClipboardContent }
+enum Reply {
+    Content { purpose: Purpose, content: ClipboardContent },
+    CopyImage { id: u64, result: Result<(), CopyImageError> },
+}
+#[derive(Clone)]
+struct CopyReply { id: u64, sender: mpsc::Sender<Reply>, wake: Waker }
+impl CopyReply {
+    fn send(self, result: Result<(), CopyImageError>) {
+        if self.sender.send(Reply::CopyImage { id: self.id, result }).is_ok() { (self.wake)(); }
+    }
+}
 #[derive(Clone)]
 struct Notify { changed: Arc<AtomicBool>, wake: Waker }
 impl Notify {
@@ -156,7 +248,7 @@ impl Purpose {
             Purpose::Paste(..) => content?,
             Purpose::Read(_) => content.unwrap_or_default(),
         };
-        Some(Reply { purpose: self, content: content.untrusted() })
+        Some(Reply::Content { purpose: self, content: content.untrusted() })
     }
 }
 
@@ -166,6 +258,9 @@ pub(crate) struct Client {
     wake: Waker,
     /// A secret copy's state changed on the worker: run a frame so the app's poll sees it.
     changed: Arc<AtomicBool>,
+    /// Monotonic web clipboard write generation for superseding pending async image encodes.
+    #[cfg(target_arch = "wasm32")]
+    latest_write: std::rc::Rc<std::cell::Cell<u64>>,
     #[cfg(test)]
     memory: Option<MemoryClipboard>,
 }
@@ -177,6 +272,8 @@ impl Default for Client {
             replies,
             wake: std::sync::Arc::new(|| {}),
             changed: Arc::default(),
+            #[cfg(target_arch = "wasm32")]
+            latest_write: std::rc::Rc::new(std::cell::Cell::new(0)),
             #[cfg(test)]
             memory: None,
         }
@@ -208,9 +305,10 @@ impl Client {
 }
 
 fn deliver(rt: &mut crate::runtime::RuntimeCore, reply: Reply) {
-    match reply.purpose {
-        Purpose::Paste(target, _) => rt.paste_result(target, reply.content),
-        Purpose::Read(id) => rt.read_result(id, reply.content),
+    match reply {
+        Reply::Content { purpose: Purpose::Paste(target, _), content } => rt.paste_result(target, content),
+        Reply::Content { purpose: Purpose::Read(id), content } => rt.read_result(id, content),
+        Reply::CopyImage { id, result } => rt.copy_image_result(id, result),
     }
 }
 
@@ -223,9 +321,17 @@ pub(crate) fn flush_memory(rt: &mut crate::runtime::RuntimeCore) {
 
 fn flush_to_memory(rt: &mut crate::runtime::RuntimeCore, m: &MemoryClipboard) {
     if std::mem::take(&mut rt.edit.clear_secret_request) { m.handle(Request::Clear(None)); }
-    if let Some(copy) = rt.copy_request.take() {
+    if let Some(mut copy) = rt.copy_request.take() {
         copy.bind(Route::Memory(m.clone()));
+        let copy_rx = copy.copy_image_id().map(|id| {
+            let (tx, rx) = mpsc::channel();
+            copy.attach_copy_reply(CopyReply { id, sender: tx, wake: Arc::new(|| {}) });
+            rx
+        });
         m.handle(Request::Write(copy, None));
+        if let Some(rx) = copy_rx {
+            for reply in rx.try_iter() { deliver(rt, reply); }
+        }
     }
     let paste = rt.edit.paste_request.take().map(|target| Purpose::paste(rt, target));
     let reads = paste.into_iter().chain(std::mem::take(&mut rt.edit.read_requests).into_iter().map(Purpose::Read));
@@ -374,10 +480,11 @@ struct OwnPills {
     pills: Vec<(std::ops::Range<usize>, String)>,
 }
 
-/// The outside moments of a secret's write, in the order it reaches them: its delay starts, then
-/// its text is hashed, which takes a while for a large secret. Tests slow each one down.
+/// The outside moments of a write, in the order it reaches them: encoding an image, starting a
+/// secret's delay, then hashing a secret's text. Tests slow each one down.
 trait WriteSteps {
     fn now(&self) -> Instant;
+    fn encoding(&self) {}
     fn hashing(&self) {}
 }
 struct RealTime;
@@ -387,7 +494,14 @@ impl WriteSteps for RealTime {
 
 /// The clipboard owner's bookkeeping, shared by the OS worker and the memory clipboard.
 #[derive(Default)]
-struct Core { keys: RandomState, seq: Seq, hold: Hold, alarm: Option<Alarm>, own_pills: Option<OwnPills> }
+struct Core {
+    keys: RandomState,
+    seq: Seq,
+    hold: Hold,
+    alarm: Option<Alarm>,
+    own_pills: Option<OwnPills>,
+    last_own_revision: Option<u64>,
+}
 impl Core {
     #[cfg(not(target_arch = "wasm32"))]
     fn next_check(&self) -> Option<Instant> {
@@ -409,35 +523,60 @@ impl Core {
 
     fn answer<B: Backend>(&mut self, cb: &mut B, purpose: Purpose) -> Option<Reply> {
         let mut reply = purpose.answer(cb)?;
-        if let Some(own) = &self.own_pills {
+        if let Reply::Content { content, .. } = &mut reply && let Some(own) = &self.own_pills {
             let rev_ok = match (own.revision, cb.revision()) {
                 (Some(a), Some(b)) => a == b,
                 (None, None) => true,
                 _ => false,
             };
-            let html_ok = reply.content.html().is_some_and(|h| {
+            let html_ok = content.html().is_some_and(|h| {
                 let frag = crate::TextEdit::from_html(h);
                 frag.pills().count() == own.pills.len()
                     && frag.pills().zip(&own.pills).all(|((r1, id1), (r2, id2))| r1 == *r2 && id1 == id2)
             });
-            if rev_ok && self.keys.hash_one(reply.content.text()) == own.text_print && html_ok {
-                reply.content.own_pills = true;
+            if rev_ok && self.keys.hash_one(content.text()) == own.text_print && html_ok {
+                content.own_pills = true;
             }
         }
         Some(reply)
     }
 
-    fn write<B: Backend>(&mut self, cb: &mut B, copy: ClipboardWrite, notify: Option<Notify>, steps: &dyn WriteSteps) {
+    fn write<B: Backend>(&mut self, cb: &mut B, mut copy: ClipboardWrite, notify: Option<Notify>, steps: &dyn WriteSteps) {
+        let copy_reply = copy.copy_reply.take();
+        if copy.stamp.as_ref().is_some_and(|s| s.superseded(cb.revision(), self.last_own_revision)) {
+            if let Some(r) = copy_reply { r.send(Err(CopyImageError::Superseded)); }
+            return;
+        }
+        let rev_before_encode = cb.revision();
+        let had_image = copy.image.is_some();
+        if had_image {
+            steps.encoding();
+            if let Err(err) = copy.encode_image() {
+                if let Some(r) = copy_reply { r.send(Err(err)); }
+                return;
+            }
+            let changed_during_encode = rev_before_encode.is_some_and(|before| cb.revision().is_some_and(|now| now != before));
+            if changed_during_encode || copy.stamp.as_ref().is_some_and(|s| s.superseded(cb.revision(), self.last_own_revision)) {
+                if let Some(r) = copy_reply { r.send(Err(CopyImageError::Superseded)); }
+                return;
+            }
+        }
         let slot = copy.slot().cloned();
         let notify = notify.filter(|_| slot.is_some());
-        if slot.as_ref().is_some_and(|s| s.cancelled()) { return; } // `Unwritten` settles it as cleared.
+        if slot.as_ref().is_some_and(|s| s.cancelled()) {
+            if let Some(r) = copy_reply { r.send(Err(CopyImageError::Superseded)); }
+            return; // `Unwritten` settles it as cleared.
+        }
         if let Err(error) = cb.write(&copy) {
+            if let Some(r) = copy_reply { r.send(Err(CopyImageError::Failed(error.clone()))); }
             if let Some(s) = &slot { s.set(SecretState::Failed(error)); }
             if let Some(n) = &notify { n.send(); }
             return;
         }
+        if let Some(r) = copy_reply { r.send(Ok(())); }
         self.apply(cb, HoldEvent::Lost);
         let rev = cb.revision();
+        self.last_own_revision = rev;
         self.own_pills = copy
             .clear_after
             .is_none()
@@ -470,6 +609,7 @@ impl Core {
             match effect {
                 HoldEffect::Wipe => {
                     let ok = cb.clear().is_ok();
+                    if ok { self.last_own_revision = cb.revision(); }
                     self.own_pills = None;
                     answer = Some(HoldEvent::Swept { ok });
                 }

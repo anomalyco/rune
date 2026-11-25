@@ -11,6 +11,40 @@ export async function writeClipboard(text, html, png) {
     return clipboard.write([new ClipboardItem(forms)]);
 }
 
+// Writes a PNG image inside the active user gesture by creating a `ClipboardItem` holding a
+// `Promise<Blob>` synchronously and invoking `makePng()` on a later turn (`setTimeout(0)`) so
+// PNG encoding never blocks the input handler. `makePng()` returns `{ png: Uint8Array }` on
+// success or `{ error: string }` to reject without writing.
+export function writeClipboardImage(makePng) {
+    const clipboard = navigator.clipboard;
+    if (!clipboard || typeof clipboard.write !== 'function') {
+        return Promise.reject(new Error('Clipboard image write requires HTTPS and Clipboard.write.'));
+    }
+    if (typeof ClipboardItem === 'undefined') {
+        return Promise.reject(new Error('ClipboardItem is unavailable in this browser.'));
+    }
+    const blobPromise = new Promise((resolve, reject) => {
+        setTimeout(() => {
+            try {
+                const out = makePng();
+                if (out && out.png && out.png.length) {
+                    resolve(new Blob([out.png], { type: 'image/png' }));
+                } else {
+                    reject(new Error((out && out.error) || 'Image copy aborted.'));
+                }
+            } catch (e) {
+                reject(e);
+            }
+        }, 0);
+    });
+    try {
+        return clipboard.write([new ClipboardItem({ 'image/png': blobPromise })]);
+    } catch (e) {
+        blobPromise.catch(() => {});
+        return Promise.reject(e);
+    }
+}
+
 // `{ text, html, png }`, each undefined when the clipboard lacks it; `html` only when `rich`,
 // and `png` (a Uint8Array of at most `maxImage` bytes) only when `image`. `read()` starts
 // before the first await, inside the input handler; where it fails, plain `readText()` is the

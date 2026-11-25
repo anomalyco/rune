@@ -163,6 +163,27 @@ impl AnyHost for OverlayHost {
         }
     }
 
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    fn on_material_policy_changed(&mut self) {
+        let contrast = crate::platform::preferences::contrast();
+        let mut effects = crate::system_material::windows::current_policy();
+        effects.high_contrast |= contrast.is_some();
+        self.app.rt_mut().set_system_contrast(contrast);
+        if let Some(live) = self.core.surface.live_mut() {
+            let redraw = live.materials.on_policy_changed(effects, live.handover.as_mut());
+            let now_native = live.materials.native();
+            self.app.rt_mut().paint.set_native_materials(now_native);
+            if redraw || self.app.rt().stale() {
+                self.core.dirty = true;
+                if self.core.presence.shown()
+                    && let Some(w) = live.backing.window()
+                {
+                    w.request_redraw();
+                }
+            }
+        }
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         self.core.meter.waited();
         #[cfg(target_os = "windows")]
@@ -177,7 +198,7 @@ impl AnyHost for OverlayHost {
         #[cfg(target_os = "macos")]
         if matches!(event, WakeEvent::DisplayTick(_)) {
             if self.core.surface.live().and_then(|l| l.pacing.as_ref()).is_some_and(|p| p.paced()) {
-                self.core.draw(&mut *self.app);
+                self.core.draw(&mut *self.app, Some(event_loop));
             } else if let Some(pacing) = self.core.surface.live_mut().and_then(|l| l.pacing.as_mut()) {
                 pacing.stop_expired();
             }
@@ -247,7 +268,9 @@ impl AnyHost for OverlayHost {
                 Some(shell @ (crate::el::Shell::Quit | crate::el::Shell::Relaunch)) => {
                     let after = shell.after().unwrap_or(crate::quit::After::Exit);
                     let _ = crate::quit::send(crate::quit::Event::Start { ending: false, after });
-                    event_loop.exit();
+                    if !crate::quit::programmatic_quit() {
+                        event_loop.exit();
+                    }
                 }
                 None => {}
             }
@@ -270,7 +293,9 @@ impl AnyHost for OverlayHost {
         // A click gives an overlay that may take keys the focus, as it does the macOS panel; the
         // window manager gives an override-redirect window none.
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. } = event && let Some(x11) = &core.x11 { x11.request_keys(); }
+        if let WindowEvent::MouseInput { state: winit::event::ElementState::Pressed, .. } = event
+            && !core.pointer_owner.captured_by_injected()
+            && let Some(x11) = &core.x11 { x11.request_keys(); }
         use crate::input::host_events;
         if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
             && (app.rt().touching() || host_events::touch_promoted()) { return; }
@@ -278,6 +303,10 @@ impl AnyHost for OverlayHost {
         match event {
             WindowEvent::Moved(_) => {
                 core.position_owner.step(input::PositionEvent::WindowMoved);
+                if core.fit_height {
+                    let (area, _) = core.target_metrics(event_loop);
+                    if area.is_some() { core.last_work_area = area; }
+                }
                 if let Some(live) = core.surface.live() && let Some(w) = live.backing.window() {
                     let scale = crate::window::backing_scale(w);
                     if (scale - live.scale).abs() > f32::EPSILON && let Some(gpu) = core.gpu.clone() {
@@ -292,6 +321,11 @@ impl AnyHost for OverlayHost {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                if core.fit_height {
+                    let (area, _) = core.target_metrics(event_loop);
+                    if area.is_some() { core.last_work_area = area; }
+                    core.dirty = true;
+                }
                 if let Some(gpu) = core.gpu.clone() {
                     core.rescale(app, &gpu, scale_factor as f32);
                 }
@@ -320,13 +354,10 @@ impl AnyHost for OverlayHost {
                 core.cursor_moved(app, x, y);
             }
             WindowEvent::CursorLeft { .. } if input_enabled => {
-                app.rt_mut().pointer_leave();
-                core.dirty = true;
+                core.native_pointer_leave(app);
             }
             WindowEvent::MouseWheel { delta, phase, .. } if input_enabled => {
-                let scale = core.live_scale().unwrap_or(1.0);
-                host_events::wheel(app.rt_mut(), delta, host_events::gesture_phase(phase), scale, core.mods);
-                core.dirty = true;
+                core.native_mouse_wheel(app, delta, phase);
             }
             WindowEvent::PinchGesture { delta, phase, .. } if input_enabled => {
                 core.dirty |= host_events::magnify(app.rt_mut(), delta, host_events::gesture_phase(phase));
@@ -375,9 +406,8 @@ impl AnyHost for OverlayHost {
                     core.control_click = cfg!(target_os = "macos") && core.mods.control_key();
                 }
                 if core.control_click {
-                    if input_enabled && let Some((x, y)) = app.rt().pointer() {
-                        if pressed { app.rt_mut().secondary_down(x, y); } else { app.secondary_up(x, y); }
-                        core.dirty = true;
+                    if input_enabled {
+                        core.native_button(app, crate::PointerButton::Secondary, pressed);
                     }
                     if !pressed { core.control_click = false; }
                     core.apply_input(app.rt());
@@ -402,18 +432,12 @@ impl AnyHost for OverlayHost {
                 core.apply_input(app.rt());
             }
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Right, .. } if input_enabled => {
-                if let Some((x, y)) = app.rt().pointer() {
-                    if state.is_pressed() { app.rt_mut().secondary_down(x, y); } else { app.secondary_up(x, y); }
-                    core.dirty = true;
-                }
+                core.native_button(app, crate::PointerButton::Secondary, state.is_pressed());
                 core.apply_input(app.rt());
             }
             WindowEvent::MouseInput { state, button, .. } if input_enabled => {
-                if let Some((x, y)) = app.rt().pointer() {
-                    let button = crate::window::pointer_button(button);
-                    if state.is_pressed() { app.button_down(x, y, button); } else { app.button_up(x, y, button); }
-                    core.dirty = true;
-                }
+                let button = crate::window::pointer_button(button);
+                core.native_button(app, button, state.is_pressed());
                 core.apply_input(app.rt());
             }
             _ => {}
@@ -434,9 +458,9 @@ impl AnyHost for OverlayHost {
         if !core.presence.shown() {
             core.hidden_input(app);
             #[cfg(target_os = "windows")]
-            let more = if core.has_cpu() { core.draw_cpu(app) } else { core.draw(app) };
+            let more = if core.has_cpu() { core.draw_cpu(app, Some(_event_loop)) } else { core.draw(app, Some(_event_loop)) };
             #[cfg(not(target_os = "windows"))]
-            let more = core.draw(app);
+            let more = core.draw(app, Some(_event_loop));
             return core.a11y_turn(app.rt_mut()) || more;
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
@@ -469,9 +493,9 @@ impl AnyHost for OverlayHost {
             }
         }
         #[cfg(target_os = "windows")]
-        let more = if core.has_cpu() { core.draw_cpu(app) } else { core.draw(app) };
+        let more = if core.has_cpu() { core.draw_cpu(app, Some(_event_loop)) } else { core.draw(app, Some(_event_loop)) };
         #[cfg(not(target_os = "windows"))]
-        let more = core.draw(app);
+        let more = core.draw(app, Some(_event_loop));
         core.apply_cursor(app.rt());
         core.a11y_turn(app.rt_mut()) || more
     }

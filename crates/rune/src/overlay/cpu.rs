@@ -8,18 +8,16 @@
 //! presents them through documented Win32 `UpdateLayeredWindowIndirect` (`ULW_ALPHA`) via
 //! `platform::win32::layered::LayeredPresenter`.
 
-use crate::render::cpu_boot::NeedsGpu;
-use crate::RendererKind;
-
 #[cfg(any(target_os = "windows", test))]
-use crate::render::cpu_boot::{CpuPainter, Scene, Target};
+use crate::render::cpu_boot::{CpuPainter, NeedsGpu, Scene, Target};
 #[cfg(any(target_os = "windows", test))]
 use crate::runtime::RuntimeCore;
+use crate::RendererKind;
 
 #[cfg(target_os = "windows")]
 use crate::platform::win32::layered::{self, LayeredPresenter, LayeredSeam, RealLayeredSeam};
 #[cfg(all(test, not(target_os = "windows")))]
-use crate::platform::win32_layered::{self as layered, LayeredPresenter, LayeredSeam};
+use crate::platform::win32_layered::{LayeredPresenter, LayeredSeam};
 
 /// Target OS classification for the pure overlay backend selection policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +64,6 @@ impl OverlayBackendChoice {
         matches!(self, Self::WindowsCpuLayered)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     #[inline]
     pub(crate) const fn renderer_kind(self) -> RendererKind {
         if self.is_cpu_layered() {
@@ -108,6 +105,7 @@ pub(crate) const fn select_overlay_backend(
 ///
 /// Unlike opaque-window `CpuFirst`, a CPU overlay never silently hands over to the GPU (which
 /// would discard its 42-129 MiB memory saving).
+#[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NeedsGpuAction {
     /// Paint live via `Scene::degraded(true)`, log once, and note the reason in `surface_description`.
@@ -118,6 +116,7 @@ pub(crate) enum NeedsGpuAction {
     UnavailableFrameOne(NeedsGpu),
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[inline]
 pub(crate) const fn classify_needs_gpu(reason: NeedsGpu, has_presented: bool) -> NeedsGpuAction {
     if reason.is_degradable() {
@@ -130,7 +129,7 @@ pub(crate) const fn classify_needs_gpu(reason: NeedsGpu, has_presented: bool) ->
 }
 
 /// Formats `OverlayHandle::surface_description()` for a Windows CPU layered overlay.
-#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn format_surface_description(degraded: Option<NeedsGpu>) -> String {
     match degraded {
         None => "CpuPainter (Win32 layered, ULW_ALPHA)".to_owned(),
@@ -232,6 +231,7 @@ impl<S: LayeredSeam> CpuPaintEngine<S> {
         self.active_degraded
     }
 
+    #[cfg(target_os = "windows")]
     pub(crate) fn invalidate_full(&mut self) {
         self.presenter.invalidate_full();
     }
@@ -414,6 +414,7 @@ impl super::OverlayCore {
         use winit::window::{Window, WindowLevel};
 
         if self.cpu.is_some() || (!showing && self.defers_gpu()) { return true; }
+        self.fit_for_show_in(app, Some(event_loop));
         self.resolve_size(event_loop);
         let flags = layered::window_attrs_for_cpu_layered();
         let mut attrs = Window::default_attributes()
@@ -567,9 +568,12 @@ impl super::OverlayCore {
         if let Some(cpu) = self.cpu.as_mut() { cpu.engine.invalidate_full(); }
         let now = crate::time::now();
         let (animating, _dt) = super::frame::step(app, &mut self.clock, now, false);
+        if let Some(next) = self.take_live_fit_resize(app.rt_mut()) {
+            self.apply_content_resize_cpu(app, Some(event_loop), next);
+        }
         self.sync_cpu_after_step(app);
         crate::system_material::announce(&mut self.on_materials, app.rt());
-        let origin = self.cpu_window_origin(&window);
+        let origin = self.origin.map_or_else(|| self.cpu_window_origin(&window), |p| (p.x, p.y));
         let Some(hwnd) = crate::platform::win32::hwnd(&window) else {
             self.fallback_from_cpu_layered(app, event_loop, true, "overlay window has no HWND".into());
             return false;
@@ -598,6 +602,7 @@ impl super::OverlayCore {
         super::frame::record_presented(false);
         let effects = self.presence.step(super::presence::Event::Show, self.release);
         self.carry_out(app, effects);
+        self.publish_screen_transform(app.rt());
         self.hidden_pace.reset();
         self.backoff_step(crate::window::BackoffEvent::Revealed);
         let submitted = crate::time::now();
@@ -639,6 +644,7 @@ impl super::OverlayCore {
         (cpu.scale, cpu.size) = (scale, next_size);
         cpu.engine.invalidate_full();
         app.rt_mut().set_viewport(self.at.size, scale);
+        self.publish_screen_transform(app.rt());
         self.dirty = true;
     }
 
@@ -654,6 +660,7 @@ impl super::OverlayCore {
     /// Releases the CPU overlay's DIB, a11y adapter, Win32 subclass, and window in safe order.
     pub(super) fn release_cpu(&mut self) {
         let cpu = self.cpu.take();
+        self.clear_screen_transform();
         if let Some(CpuOverlay { a11y, engine, window, .. }) = cpu {
             drop(a11y);
             drop(engine);
@@ -669,7 +676,7 @@ impl super::OverlayCore {
             self.window_backdrop = backdrop;
             self.sync_window_backdrop(app.rt_mut(), false);
         }
-        super::input::drop_window_requests(app.rt_mut());
+        self.take_window_requests(app.rt_mut());
         self.clipboard.flush_core(app.rt_mut());
         if self.options.keys.takes_keys() && let Some(window) = self.cpu.as_ref().map(|c| c.window.clone()) {
             let focused = window.has_focus();
@@ -704,7 +711,7 @@ impl super::OverlayCore {
     /// Draws one frame on the Windows CPU layered path and paces animating frames via
     /// `PollPace` + `vsync_grid` (stopping all wakes when idle). Always returns `false` so the
     /// event loop sleeps until the next vblank tick instead of spinning `ControlFlow::Poll`.
-    pub(super) fn draw_cpu(&mut self, app: &mut dyn super::OverlayApp) -> bool {
+    pub(super) fn draw_cpu(&mut self, app: &mut dyn super::OverlayApp, event_loop: Option<&winit::event_loop::ActiveEventLoop>) -> bool {
         let now = crate::time::now();
         self.presence_due(app, now);
         if !self.presence.drawing() {
@@ -727,6 +734,9 @@ impl super::OverlayCore {
         self.meter.redraw(true);
         let frame_now = crate::time::now();
         let (animating, _dt) = super::frame::step(app, &mut self.clock, frame_now, false);
+        if let Some(next) = self.take_live_fit_resize(app.rt_mut()) {
+            self.apply_content_resize_cpu(app, event_loop, next);
+        }
         self.sync_cpu_after_step(app);
         crate::system_material::announce(&mut self.on_materials, app.rt());
         let alpha = match self.presence {
@@ -736,7 +746,7 @@ impl super::OverlayCore {
             _ => 255,
         };
         let Some(window) = self.cpu.as_ref().map(|c| c.window.clone()) else { return false };
-        let origin = self.cpu_window_origin(&window);
+        let origin = self.origin.map_or_else(|| self.cpu_window_origin(&window), |p| (p.x, p.y));
         let Some(hwnd) = crate::platform::win32::hwnd(&window) else { return false };
         let prev_degraded = self.cpu.as_ref().and_then(|c| c.engine.active_degraded());
         let outcome = {

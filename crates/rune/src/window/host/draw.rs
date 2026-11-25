@@ -591,7 +591,12 @@ impl FrameHost for WindowFrame<'_> {
             let transparent = self.host.options.transparent;
             let window_backdrop = self.host.app.rt().window_backdrop();
             let found = !self.host.app.rt().paint.materials().is_empty();
-            if let Some(l) = self.host.win.as_mut() {
+            let high_contrast = self.host.app.rt().system_contrast().is_some();
+            if let Some(l) = self.host.win.as_mut()
+                && (found || l.native.materials.native())
+            {
+                let mut effects = crate::system_material::windows::current_policy();
+                effects.high_contrast |= high_contrast;
                 let hwnd = crate::platform::win32::hwnd(&l.window).map(|h| h as isize);
                 let inputs = crate::system_material::windows::MaterialInputs {
                     transparent,
@@ -604,6 +609,7 @@ impl FrameHost for WindowFrame<'_> {
                     window_backdrop,
                     mode: l.native.materials.mode(),
                     has_handover: l.native.mode.handover().is_some(),
+                    effects,
                 };
                 let native = &mut l.native;
                 if native.materials.update(hwnd, inputs, found, native.mode.handover_mut()) {
@@ -642,6 +648,8 @@ impl FrameHost for WindowFrame<'_> {
                 let _ = info;
                 self.reblend_surface()
             }
+            #[cfg(not(target_arch = "wasm32"))]
+            ReacquireReason::ContentResize => true,
         }
     }
 
@@ -822,7 +830,7 @@ fn loop_step(clock: &mut FrameClock, rt: &mut RuntimeCore, at: Instant) -> Resul
 }
 
 /// The window's display refresh: its display link's on macOS, else the monitor's.
-pub(super) fn display_hz(l: &Win) -> Option<f64> {
+pub(in crate::window) fn display_hz(l: &Win) -> Option<f64> {
     #[cfg(target_os = "macos")]
     if let Some(pacing) = &l.native.pacing { return Some(pacing.refresh_hz()); }
     l.window.current_monitor().and_then(|m| m.refresh_rate_millihertz()).map(|hz| hz as f64 / 1000.0)

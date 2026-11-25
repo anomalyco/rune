@@ -108,6 +108,10 @@ impl AnyHost for Host {
 
     // What reaches the app's state runs in its turn scope (`App::turn_scope`).
     fn terminate(&mut self) { self.in_turn(Self::terminate_in_turn) }
+    fn has_quit_request(&self) -> bool { !self.life.finished() && self.app.has_quit_request() }
+    fn quit_request_hook(&mut self, event_loop: &ActiveEventLoop) -> Option<crate::QuitResponse> {
+        self.in_turn(|h| h.quit_request_in_turn(event_loop))
+    }
     fn quit_hook(&mut self) { self.in_turn(Self::quit_hook_in_turn) }
     fn vanish(&mut self) {
         if let Some(w) = self.shown_win() { w.hide(); }
@@ -123,6 +127,8 @@ impl AnyHost for Host {
     fn apply_pending(&mut self, event_loop: &ActiveEventLoop) { self.in_turn(|h| h.apply_pending_in_turn(event_loop)) }
     fn reopen(&mut self, event_loop: &ActiveEventLoop) { self.in_turn(|h| h.reopen_in_turn(event_loop)) }
     fn apply_app_color_scheme(&mut self) { self.apply_window_color_scheme(); }
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    fn on_material_policy_changed(&mut self) { self.in_turn(Self::on_material_policy_changed_in_turn) }
     fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) { self.in_turn(|h| h.new_events_in_turn(event_loop, cause)) }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) -> bool { self.in_turn(|h| h.about_to_wait_in_turn(event_loop)) }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) { self.in_turn(|h| h.resumed_in_turn(event_loop)) }
@@ -144,6 +150,28 @@ pub(in crate::window) enum Turn {
 }
 
 impl Host {
+    /// Windows: reconciles `El::system_material` native vs fallback state after a system effects
+    /// policy notification (Transparency effects, Energy/Battery Saver, High Contrast, RDP, or
+    /// `CompositionCapabilities`).
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    fn on_material_policy_changed_in_turn(&mut self) {
+        let contrast = crate::platform::preferences::contrast();
+        let mut effects = crate::system_material::windows::current_policy();
+        effects.high_contrast |= contrast.is_some();
+        self.app.rt_mut().set_system_contrast(contrast);
+        if let Some(l) = self.win.as_mut() {
+            let native = &mut l.native;
+            let redraw = native.materials.on_policy_changed(effects, native.mode.handover_mut());
+            let now_native = native.materials.native();
+            self.app.rt_mut().paint.set_native_materials(now_native);
+            if redraw || self.app.rt().stale() {
+                l.timer_frame.no_longer_quiet();
+                l.loop_frame.touched();
+                l.request_redraw();
+            }
+        }
+    }
+
     /// Raw relative mouse motion while pointer lock is active and this window has focus.
     fn pointer_motion_in_turn(&mut self, dx: f64, dy: f64) {
         let Some(w) = self.shown_win() else { return };

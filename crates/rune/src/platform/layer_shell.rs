@@ -856,8 +856,8 @@ impl LayerSurface {
                 self.layer.set_margin(0, 0, 0, 0);
                 return;
             }
-            Some(OverlayPlacement::Rect { x, y, width, height }) => {
-                self.layer.set_size(width.ceil().max(1.0) as u32, height.ceil().max(1.0) as u32);
+            Some(OverlayPlacement::Rect { x, y, .. }) => {
+                self.layer.set_size(at.size.0.ceil().max(1.0) as u32, at.size.1.ceil().max(1.0) as u32);
                 self.layer.set_anchor(Anchor::Top | Anchor::Left);
                 self.layer.set_margin(y.round() as i32, 0, 0, x.round() as i32);
                 return;

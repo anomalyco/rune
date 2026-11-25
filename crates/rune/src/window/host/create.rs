@@ -228,7 +228,7 @@ impl Host {
         // one under a compositor that draws the decorations itself keeps the surface it always had.
         let client_frame = self.client_frame(&window);
         #[cfg(target_os = "windows")]
-        let dcomp_handover = if ((crate::window::win32::resize_sync::enabled() && !transparent && !launcher)
+        let dcomp_handover = if ((self.resize_sync_enabled() && !transparent && !launcher)
             || (cfg!(feature = "windows-system-material") && transparent))
             && matches!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual)
         {
