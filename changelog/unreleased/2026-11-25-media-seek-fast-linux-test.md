@@ -1,0 +1,1 @@
+- Tests (`rune-media` `video::tests`): drive `seek_fast_records_keyframe_seek_clamps_inputs_and_preserves_state` on a backend-neutral `quiet_video()` handle instead of `Video::file` so Linux's unsupported backend does not pre-fail it, add a Linux/unsupported-backend regression test for `seek_fast` and `step`, and clarify unsupported-platform behaviour in their rustdoc.
