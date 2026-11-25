@@ -811,6 +811,14 @@ impl Host {
         // press changes.
         #[cfg(target_os = "windows")]
         if let Some(l) = &self.win { sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar); }
+        // X11 `PropertyNotify` on EWMH/GTK WM-state atoms sets a per-window flag and asks for
+        // `RedrawRequested`; sync chrome only when that flag fired (zero IPC on ordinary redraws).
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if !self.wayland && let Some(l) = &self.win
+            && winit::platform::x11::WindowExtX11::take_wm_state_changed(&*l.window)
+        {
+            sync_chrome_core(self.app.rt_mut(), l, self.chrome, self.titlebar);
+        }
         self.redraw();
         self.shell(event_loop);
         // What asked for a frame while it painted waits for the turn's end.

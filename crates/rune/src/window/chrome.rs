@@ -14,6 +14,8 @@ use crate::window::surface::Win;
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 pub(in crate::window) mod float_on_open;
 pub(in crate::window) mod full_screen;
+#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+pub(in crate::window) mod linux_wm_state;
 #[cfg(target_os = "macos")]
 pub(in crate::window) mod mac;
 pub(in crate::window) mod platform_sync;
@@ -97,15 +99,16 @@ pub(in crate::window) fn sync_chrome_core(rt: &mut RuntimeCore, w: &Win, chrome:
 }
 
 /// Reads platform window-manager state (decoration mode, tiled edges, allowed actions) and updates
-/// `rt`, returning whether the view was dirtied. Only X11 queries properties today; Wayland,
-/// macOS, and Windows honestly leave the state at its default unknown values. On Linux this also
-/// updates the titlebar secondary-click window-menu trigger from the same `_NET_SUPPORTED` read.
+/// `rt`, returning whether the view was dirtied. Wayland reads `xdg_toplevel` / `xdg-decoration`
+/// configure state; X11 queries EWMH / `_GTK_EDGE_CONSTRAINTS` properties; macOS and Windows
+/// honestly leave the state at its default unknown values. On Linux this also updates the titlebar
+/// secondary-click window-menu trigger from the same state read.
 pub(in crate::window) fn sync_wm_state_core(rt: &mut RuntimeCore, w: &Win) -> bool {
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     {
         let wayland = is_wayland_window(&w.window);
         let state = if wayland {
-            crate::WindowManagerState::default()
+            linux_wm_state::read_wayland(&w.window)
         } else {
             crate::platform::x11::wm_state::read(&w.window)
         };
