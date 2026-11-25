@@ -443,12 +443,7 @@ impl Renderer {
                 cell_text = cell_text.wrap_anywhere();
             }
             let content = self
-                .with_reveal(self.with_math(
-                    cell_text,
-                    inl,
-                    font,
-                    color,
-                ))
+                .with_reveal(self.with_emoji(self.with_math(cell_text, inl, font, color), inl, font))
                 .w_full();
             let content = super::bidi::directed(super::bidi::isolated(content, inl), dir);
             // Full width: each column's share of the row is its share of the natural width, so
@@ -522,7 +517,7 @@ impl Renderer {
                 let spans = self.spans(inl, font);
                 // Unrounded, as a browser's table layout sums them; a hair over, so a cell at
                 // its column's natural width never wraps its last word.
-                let (min, max) = rune::text::content_widths(&inl.text, &spans, font);
+                let (min, max) = self.emoji_content_widths(inl, font, rune::text::content_widths(&inl.text, &spans, font));
                 // Closed code spans keep their non-hanging `CLOSE` padding in `inl.text`, so
                 // `content_widths` already counts it; only a streaming open code span whose
                 // closing pad was dropped by `stream::drop_closing_pad` still needs it added.

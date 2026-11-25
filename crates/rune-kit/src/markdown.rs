@@ -75,6 +75,7 @@ use crate::Kit;
 mod autolink;
 mod bidi;
 mod cache;
+mod emoji;
 mod find;
 mod highlight;
 mod image;
@@ -298,6 +299,7 @@ pub struct Markdown {
     code_wrap: Option<CodeWrapFn>,
     quote_frame: Option<QuoteWire>,
     link_favicon: Option<link_icon::FaviconWire>,
+    emoji: Option<emoji::EmojiWire>,
     images: Option<image::ImageWire>,
     on_image: Option<image::ImagePress>,
 }
@@ -312,7 +314,7 @@ impl Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, on_link_hover: None, link_look: None, link_help: None, link_ring: None, code_link: None,
             on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, wrap_anywhere: false, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
-            diagram_frame: None, code_frame: None, diff_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, images: None, on_image: None }
+            diagram_frame: None, code_frame: None, diff_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, emoji: None, images: None, on_image: None }
     }
     /// Highlight UTF-8 byte ranges of the Markdown source string (see [`find`]).
     ///
@@ -612,6 +614,7 @@ impl Markdown {
             && self.code_wrap.is_none()
             && self.quote_frame.is_none()
             && self.link_favicon.is_none()
+            && self.emoji.is_none()
             && self.images.is_none()
             && self.on_image.is_none()
             && !(cfg!(feature = "mermaid") && self.src.contains("mermaid"))
@@ -661,7 +664,7 @@ impl Markdown {
             highlighter: self.highlighter, sources, next_source: Cell::new(0), next_diff: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
             #[cfg(feature = "mermaid")]
-            diagram_frame: self.diagram_frame, code_frame, diff_frame: self.diff_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, images: self.images, on_image: self.on_image, flow: Cell::default() };
+            diagram_frame: self.diagram_frame, code_frame, diff_frame: self.diff_frame, quote_frame: self.quote_frame, link_favicon: self.link_favicon, emoji: self.emoji, images: self.images, on_image: self.on_image, flow: Cell::default() };
         // The document reads the way its first words do; until any arrive, the way it was asked.
         let root = memo::with_renderer(&r, || {
             bidi::directed(r.blocks_with_dirs(&blocks, Some(&meta), &maps, &keys, true, &dirs), root_dir).selection_group(self.selectable)

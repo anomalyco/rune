@@ -52,6 +52,8 @@ pub(super) struct Renderer {
     pub(super) quote_frame: Option<QuoteWire>,
     /// `Markdown::link_favicon`.
     pub(super) link_favicon: Option<link_icon::FaviconWire>,
+    /// `Markdown::emoji`.
+    pub(super) emoji: Option<emoji::EmojiWire>,
     /// `Markdown::images` and `Markdown::on_image`.
     pub(super) images: Option<image::ImageWire>,
     pub(super) on_image: Option<image::ImagePress>,
