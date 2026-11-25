@@ -343,7 +343,7 @@ impl Drop for Trace {
     }
 }
 
-#[cfg(any(test, feature = "hot"))]
+#[cfg(test)]
 #[inline(always)]
 pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
     tree_json_core(rt.core(), real_t)

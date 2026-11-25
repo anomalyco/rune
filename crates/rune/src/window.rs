@@ -22,6 +22,8 @@ use winit::window::Window;
 use winit::raw_window_handle::HasWindowHandle;
 
 use crate::app::WindowRequest;
+#[cfg(all(test, target_os = "linux", feature = "test-gpu-noop"))]
+use crate::frame::surface_stats::SurfaceMeter;
 use crate::frame::surface_stats::SurfaceStats;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::render::Gpu;
@@ -120,6 +122,8 @@ pub(crate) use surface::{
     HIDDEN_REFRESH, OCCLUDED_MAX, OCCLUDED_RETRY, TIMEOUT_RETRY, TIMER_FRAME_STALL, TimerFrame,
     timer_deadline, timer_wants_frame, wall_wake_deadline,
 };
+#[cfg(all(test, target_os = "linux", feature = "test-gpu-noop"))]
+use surface::acquire;
 #[cfg(target_os = "windows")]
 pub(crate) use win32::poll_pace;
 #[cfg(target_os = "windows")]
