@@ -583,3 +583,94 @@ fn pointer_moves_while_sidebar_is_peeking_commit_zero_times() {
     rt.frame(1.0 / 60.0);
     assert!(!rt.state.sidebar.is_peeking(), "losing window focus still ends a peek");
 }
+
+#[test]
+fn no_change_resize_drag_moves_commit_zero_times() {
+    let mut s = state();
+    let min_w = s.sidebar.min_width();
+    let max_w = s.sidebar.max_width();
+    s.sidebar.set_width(min_w);
+    let mut rt = runtime(s);
+    rt.check_live_only(false);
+    settle(&mut rt);
+
+    let (x0, y0) = rt.find("sidebar-grip").expect("sidebar-grip");
+    rt.pointer_move(x0, y0);
+    rt.frame(1.0 / 60.0);
+    rt.pointer_down(x0, y0);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.sidebar.is_resizing());
+
+    // 1. Clamped at minimum width (still above collapse threshold min * 0.5).
+    let before_min = rt.stats.commits;
+    for dx in [-5.0_f32, -12.0, -20.0, -35.0, -50.0] {
+        rt.pointer_move(x0 + dx, y0);
+        rt.frame(1.0 / 60.0);
+    }
+    let min_commits = rt.stats.commits - before_min;
+
+    // 2. Vertical travel only (dx == 0).
+    let before_vert = rt.stats.commits;
+    for i in 1..=5 {
+        rt.pointer_move(x0, y0 + i as f32 * 12.0);
+        rt.frame(1.0 / 60.0);
+    }
+    let vert_commits = rt.stats.commits - before_vert;
+
+    // 3. Sub-pixel horizontal travel (< 0.5 pt so rounding leaves width unchanged).
+    let before_sub = rt.stats.commits;
+    for dx in [0.1_f32, 0.2, 0.3, 0.4, -0.2, -0.4] {
+        rt.pointer_move(x0 + dx, y0);
+        rt.frame(1.0 / 60.0);
+    }
+    let sub_commits = rt.stats.commits - before_sub;
+
+    assert_eq!(min_commits, 0, "dragging past min while clamped must not commit");
+    assert_eq!(vert_commits, 0, "vertical-only drag moves must not commit");
+    assert_eq!(sub_commits, 0, "sub-0.5pt drag moves must not commit");
+
+    // Guard: crossing the 0.5 pt rounding boundary commits once and updates width.
+    let before_step = rt.stats.commits;
+    rt.pointer_move(x0 + 0.6, y0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits - before_step, 1, "a real width step must commit once");
+    assert_eq!(rt.state.sidebar.width(), min_w + 1.0);
+
+    // Guard: crossing the collapse threshold commits once; further moves past it do not.
+    let before_collapse = rt.stats.commits;
+    rt.pointer_move(x0 - min_w * 0.6, y0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits - before_collapse, 1, "crossing collapse threshold must commit");
+    assert!(!rt.state.sidebar.is_open());
+
+    let before_past_collapse = rt.stats.commits;
+    for dx in [-10.0_f32, -20.0, -30.0] {
+        rt.pointer_move(x0 - min_w * 0.6 + dx, y0);
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(rt.stats.commits - before_past_collapse, 0, "further drag while collapsed must not commit");
+
+    // Guard: dragging back above threshold reopens and reaches max width; moving past max does not commit.
+    let before_max = rt.stats.commits;
+    rt.pointer_move(x0 + (max_w - min_w), y0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits - before_max, 1, "reopening to max width must commit");
+    assert!(rt.state.sidebar.is_open());
+    assert_eq!(rt.state.sidebar.width(), max_w);
+
+    let before_past_max = rt.stats.commits;
+    for dx in [10.0_f32, 25.0, 40.0, 60.0] {
+        rt.pointer_move(x0 + (max_w - min_w) + dx, y0);
+        rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(rt.stats.commits - before_past_max, 0, "dragging past max while clamped must not commit");
+
+    // Release commits once to clear is_resizing and keeps final width and open state.
+    let before_up = rt.stats.commits;
+    rt.pointer_up(x0 + (max_w - min_w) + 60.0, y0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits - before_up, 1, "release must commit to end resizing");
+    assert!(!rt.state.sidebar.is_resizing());
+    assert!(rt.state.sidebar.is_open());
+    assert_eq!(rt.state.sidebar.width(), max_w);
+}

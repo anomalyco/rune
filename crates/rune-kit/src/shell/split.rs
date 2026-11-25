@@ -569,8 +569,11 @@ fn pane<S: 'static>(state: PaneState, access: fn(&mut S) -> &mut PaneState, cont
             match d.phase {
                 Phase::Down => p.press_grip(d.window_point()),
                 Phase::Move => {
-                    tx.instant();
-                    p.drag_grip(d.window_point(), sign * d.dx);
+                    if p.drag_grip(d.window_point(), sign * d.dx) {
+                        tx.instant();
+                    } else {
+                        tx.live_only();
+                    }
                 }
                 Phase::Up => p.release_grip(d.cancelled()),
             }
