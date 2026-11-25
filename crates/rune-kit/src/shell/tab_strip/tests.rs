@@ -401,11 +401,13 @@ fn arrow_keys_cross_a_break() {
         rt.frame(1.0 / 60.0);
         assert_eq!(rt.state.selected, ["tab1"], "vertical: {vertical}");
         rt.state.selected.clear();
-        // The arrow takes the focus to the third tab, past the break, and Space selects it there.
+        // The arrow takes the focus, and with it the selection, to the third tab, past the break.
         rt.key(rune::KeyEvent { key: if vertical { rune::Key::Down } else { rune::Key::Right }, mods: rune::Mods::default() });
         rt.frame(1.0 / 60.0);
-        rt.key(rune::KeyEvent { key: rune::Key::Text(" ".into()), mods: rune::Mods::default() });
-        rt.frame(1.0 / 60.0);
         assert_eq!(rt.state.selected, ["tab2"], "vertical: {vertical}: the arrow crosses the break");
+        // And back again.
+        rt.key(rune::KeyEvent { key: if vertical { rune::Key::Up } else { rune::Key::Left }, mods: rune::Mods::default() });
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.selected, ["tab2", "tab1"], "vertical: {vertical}: and crosses it back");
     }
 }
