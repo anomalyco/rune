@@ -493,6 +493,42 @@ fn app_and_window_spec_default_to_system_and_preserve_color_scheme() {
 }
 
 #[test]
+fn app_and_window_spec_cpu_first_default_auto_and_retain_builder_value() {
+    let spec = || AppSpec::new("plan", (640.0, 480.0), || (), |_, _| crate::el());
+    // Default is Auto on both App and WindowSpec.
+    assert_eq!(App::new(spec()).cpu_first, crate::CpuFirst::Auto);
+    assert_eq!(WindowSpec::new("plan", spec()).app.cpu_first, crate::CpuFirst::Auto);
+
+    // App::cpu_first stores Only/Off/Auto and survives WindowSpec::from_app.
+    let app_only = App::new(spec()).cpu_first(crate::CpuFirst::Only);
+    assert_eq!(app_only.cpu_first, crate::CpuFirst::Only);
+    let from_app = WindowSpec::from_app("plan", app_only);
+    assert_eq!(from_app.app.cpu_first, crate::CpuFirst::Only);
+
+    // WindowSpec::cpu_first forwards and overrides per window, and survives options() replacement.
+    let win_off = WindowSpec::new("gpu", spec()).cpu_first(crate::CpuFirst::Off);
+    assert_eq!(win_off.app.cpu_first, crate::CpuFirst::Off);
+    let reset = win_off.options(WindowOptions::default());
+    assert_eq!(reset.app.cpu_first, crate::CpuFirst::Off);
+    let back_to_auto = reset.cpu_first(crate::CpuFirst::Auto);
+    assert_eq!(back_to_auto.app.cpu_first, crate::CpuFirst::Auto);
+
+    // Literal construction of WindowOptions stays unchanged.
+    let _literal = WindowOptions {
+        min_size: None,
+        max_size: None,
+        resizable: true,
+        borderless: false,
+        transparent: false,
+        visible: true,
+        always_on_top: false,
+        click_through: false,
+        position: None,
+        physical_size: None,
+    };
+}
+
+#[test]
 fn mac_window_options_document_and_first_mouse_defaults_and_retention() {
     let default = MacWindowOptions::default();
     assert_eq!(default.accepts_first_mouse, None);

@@ -86,6 +86,7 @@ pub struct App<S: 'static> {
     argv: Option<Vec<String>>,
     pub(crate) open: bool,
     pub(crate) release_gpu: bool,
+    pub(crate) cpu_first: crate::CpuFirst,
     pub(crate) prewarm_effects: crate::PrewarmEffects,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) accessory: bool,
@@ -156,6 +157,7 @@ impl<S: 'static> App<S> {
             argv: None,
             open: true,
             release_gpu: false,
+            cpu_first: crate::CpuFirst::Auto,
             prewarm_effects: crate::PrewarmEffects::NONE,
             accessory: false,
             standard_menus: false,
@@ -601,6 +603,31 @@ impl<S: 'static> App<S> {
     /// recreates them, which costs a device creation.
     pub fn release_gpu_when_closed(mut self) -> Self {
         self.release_gpu = true;
+        self
+    }
+
+    /// Controls CPU-first startup and GPU handover for this app's window ([`crate::CpuFirst`]).
+    ///
+    /// Defaults to [`crate::CpuFirst::Auto`], which opens opaque Windows/Linux windows and
+    /// full-window web pages on `CpuPainter` before handing over to the GPU in the background.
+    /// [`crate::CpuFirst::Only`] keeps opaque windows on `CpuPainter` without starting background
+    /// GPU handover on idle (on Windows and Linux, a frame that hits a GPU-only feature still
+    /// triggers GPU handover so it can render; on web, stays on the 2D canvas without requesting
+    /// WebGPU/WebGL2). [`crate::CpuFirst::Off`] skips CPU-first startup and opens directly on the
+    /// GPU. Ignored on macOS, iOS, headless runs, and inline/document web pages.
+    ///
+    /// `RUNE_CPU_FIRST` (or `globalThis.RUNE_CPU_FIRST` on web) overrides this setting without a
+    /// rebuild (`0`/`off`, `only`, `auto`), matching `RUNE_GPU_BACKEND`.
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, CpuFirst, el};
+    ///
+    /// App::new(AppSpec::new("Plan", (960.0, 640.0), || (), |_, _| el()))
+    ///     .cpu_first(CpuFirst::Only)
+    ///     .run();
+    /// ```
+    pub fn cpu_first(mut self, mode: crate::CpuFirst) -> Self {
+        self.cpu_first = mode;
         self
     }
 

@@ -13,6 +13,8 @@
 //! launch finds the driver's compiled pipelines. `LAUNCH_FLOOR_MEMORY_POLICY` sets Rune's
 //! startup GPU suballocation policy (`memory-usage`, `performance`, `manual:<mib>`, or
 //! `manual:<min>-<max>` in MiB) via `App::gpu_memory_policy` / `rune::set_gpu_memory_policy`.
+//! `LAUNCH_FLOOR_CPU_FIRST` sets Rune's startup CPU-first policy (`auto`, `only`, or `off`) via
+//! `App::cpu_first` without touching `RUNE_CPU_FIRST`.
 //! `LAUNCH_FLOOR_LIVE=1` makes the shell's first
 //! sidebar row answer the pointer (it changes colour under it, and a press counts in the title), to
 //! see that a window takes input from its first frame on, whichever renderer draws it.
@@ -229,9 +231,14 @@ fn main() {
         return;
     }    let spec = AppSpec::new("Launch floor", (1280.0, 800.0), init, view);
     let shell = shell_scene();
+    let cpu_first = rune::env::var("LAUNCH_FLOOR_CPU_FIRST").as_deref().and_then(parse_cpu_first);
     let app = rune::App::new(spec);
     let app = match memory_policy {
         Some(policy) => app.gpu_memory_policy(policy),
+        None => app,
+    };
+    let app = match cpu_first {
+        Some(mode) => app.cpu_first(mode),
         None => app,
     };
     let handle = app.handle();
@@ -290,10 +297,20 @@ fn parse_memory_policy(raw: &str) -> Option<rune::GpuMemoryPolicy> {
     }
 }
 
+/// Parses `LAUNCH_FLOOR_CPU_FIRST`: `auto`, `only`, or `off` (`0`).
+fn parse_cpu_first(raw: &str) -> Option<rune::CpuFirst> {
+    match raw.trim() {
+        "auto" => Some(rune::CpuFirst::Auto),
+        "only" => Some(rune::CpuFirst::Only),
+        "off" | "0" => Some(rune::CpuFirst::Off),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_memory_policy;
-    use rune::GpuMemoryPolicy;
+    use super::{parse_cpu_first, parse_memory_policy};
+    use rune::{CpuFirst, GpuMemoryPolicy};
 
     #[test]
     fn parses_launch_floor_memory_policy_values() {
@@ -309,5 +326,14 @@ mod tests {
             Some(GpuMemoryPolicy::Manual { block_size: (4 * MIB)..(4 * MIB) }),
         );
         assert_eq!(parse_memory_policy("bogus"), None);
+    }
+
+    #[test]
+    fn parses_launch_floor_cpu_first_values() {
+        assert_eq!(parse_cpu_first("auto"), Some(CpuFirst::Auto));
+        assert_eq!(parse_cpu_first("only"), Some(CpuFirst::Only));
+        assert_eq!(parse_cpu_first("off"), Some(CpuFirst::Off));
+        assert_eq!(parse_cpu_first("0"), Some(CpuFirst::Off));
+        assert_eq!(parse_cpu_first("bogus"), None);
     }
 }

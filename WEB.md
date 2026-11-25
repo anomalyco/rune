@@ -360,6 +360,7 @@ extra windows, native menus, drag-out, native audio/video, built-in HTTP client 
 [HTTP requests (fetch)](#http-requests-fetch)) or hot patching.
 Native configuration types remain source-compatible, but their desktop host paths are not
 used on wasm. Unsupported window requests warn in the console; Show/Open are ignored.
+Full-window apps start on the CPU 2D canvas and hand over to WebGPU/WebGL2 by default (`CpuFirst::Auto`); `App::cpu_first(CpuFirst::Only)` keeps a full-window page on the CPU canvas without requesting WebGPU or WebGL2, `App::cpu_first(CpuFirst::Off)` starts directly on the GPU, and `globalThis.RUNE_CPU_FIRST` (`"0"`/`"off"`, `"only"`, `"auto"`) overrides `App::cpu_first` without a rebuild (`App::web_document` and inline `App::canvas_id` pages always start on the GPU).
 The document title follows `AppSpec::title`, hidden tabs report `is_visible() == false`,
 and `App::on_frame_drawn` runs on the browser's main thread after each drawn CPU or GPU frame
 (never on unchanged or skipped frames), matching desktop windows.

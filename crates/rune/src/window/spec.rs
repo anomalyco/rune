@@ -844,6 +844,16 @@ impl<S: 'static> WindowSpec<S> {
         tab_visits_controls(on: bool);
         /// Release this window's GPU device and renderer when it closes, like `App::release_gpu_when_closed`.
         release_gpu_when_closed();
+        /// Configure CPU-first startup and handover for this window, like [`App::cpu_first`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, CpuFirst, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("plan", AppSpec::new("Plan", (960.0, 640.0), || (), |_, _| el()))
+        ///     .cpu_first(CpuFirst::Only);
+        /// let _ = spec;
+        /// ```
+        cpu_first(mode: crate::CpuFirst);
         /// Name the effect pipelines this window compiles ahead of their first use, like [`App::prewarm_effects`].
         ///
         /// ```no_run

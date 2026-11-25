@@ -86,16 +86,12 @@ enum Wake {
     ResizeRedraw,
 }
 
-/// How a page's frames start: on the CPU until WebGPU takes over (a full-window app, the
-/// default, with or without a compositor), or on the GPU from the first frame (a page that is
-/// the document or is inline). `globalThis.RUNE_CPU_FIRST` set to `"off"` starts every app on the
-/// GPU; `"only"` keeps it on the CPU for good.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Start {
-    GpuFirst,
-    CpuFirst,
-    CpuOnly,
-}
+/// How a page's frames start (`crate::window::WebStart`): on the CPU until WebGPU/WebGL2 takes
+/// over (a full-window app under `CpuFirst::Auto`, the default), on the CPU only
+/// (`CpuFirst::Only`), or on the GPU from the first frame (`CpuFirst::Off`, or a document or
+/// inline canvas). `globalThis.RUNE_CPU_FIRST` (`"0"`/`"off"`, `"only"`, `"auto"`) overrides
+/// `App::cpu_first` without a rebuild.
+type Start = crate::window::WebStart;
 
 fn cpu_first_asked() -> Option<String> {
     js_sys::Reflect::get(&js_sys::global(), &"RUNE_CPU_FIRST".into()).ok().and_then(|v| v.as_string())
@@ -479,13 +475,7 @@ impl ApplicationHandler<Wake> for Browser {
         // (starting on the GPU would leave such a page with nothing at all). A page that is the
         // document or sits inline starts on the GPU.
         let asked = cpu_first_asked();
-        self.start = if self.document || self.embedded || asked.as_deref() == Some("off") {
-            Start::GpuFirst
-        } else if asked.as_deref() == Some("only") {
-            Start::CpuOnly
-        } else {
-            Start::CpuFirst
-        };
+        self.start = app.cpu_first.resolve(asked.as_deref()).web_start(self.document, self.embedded);
         if self.start != Start::GpuFirst { canvas.style().set_property("opacity", "0").ok(); }
         // The fonts download while the GPU starts; the CPU's first frame needs only them.
         let fonts: Vec<_> = app.font_urls.iter().map(|url| (url.clone(), platform::fetch_bytes(url))).collect();
