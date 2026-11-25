@@ -8,7 +8,7 @@ mod builtin;
 
 #[test]
 fn every_builtin_pipeline_is_precompiled() {
-    let gpu = rune::render::Gpu::headless();
+    let Some(gpu) = rune::render::Gpu::test_headless() else { return };
     builtin::build_every_pipeline(&gpu);
     if std::env::var_os("RUNE_METAL_CAPTURE").is_some() { return }
     let Some(misses) = rune::render::precompiled_misses(&gpu.device) else { return };

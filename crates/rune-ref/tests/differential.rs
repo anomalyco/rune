@@ -36,7 +36,7 @@ fn save(name: &str, scene: &Scene) {
 
 #[test]
 fn cpu_gpu_corpus() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let info = gpu.adapter_info();
     let composite_tol = gpu.composite_tolerance();
     let mut maxima = [0u8; 6];
@@ -78,7 +78,8 @@ fn cpu_gpu_corpus() {
 
 #[test]
 fn cpu_gpu_proptest() {
-    let gpu = RefCell::new(GpuRenderer::default());
+    let Some(gpu) = GpuRenderer::test_new() else { return };
+    let gpu = RefCell::new(gpu);
     let info = gpu.borrow().adapter_info();
     let composite_tol = gpu.borrow().composite_tolerance();
     let mut runner = TestRunner::new(Config {
@@ -110,7 +111,7 @@ fn cpu_gpu_proptest() {
 #[test]
 fn saved_regressions() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("regressions");
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     for entry in std::fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
@@ -129,7 +130,7 @@ fn saved_regressions() {
 #[test]
 fn rotated_glyphs() {
     use std::f32::consts::{FRAC_PI_2, PI};
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let clips = [
         (rune_ref::NO_CLIP, [0.0; 4]),
         ([24.5, 15.25, 40.0, 26.75], [3.0, 0.0, 0.0, 2.5]),
@@ -164,7 +165,7 @@ fn rotated_glyphs() {
 
 #[test]
 fn gpu_metamorphic() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let close = |a: &[u8], b: &[u8]| {
         assert_eq!(a.len(), b.len());
         assert!(
@@ -226,7 +227,7 @@ fn gpu_metamorphic() {
 
 #[test]
 fn cpu_gpu_dashed() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let info = gpu.adapter_info();
     let composite_tol = gpu.composite_tolerance();
     let mut max = 0;
@@ -256,7 +257,7 @@ fn cpu_gpu_dashed() {
 
 #[test]
 fn cpu_gpu_effect_slots() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let composite_tol = gpu.composite_tolerance();
     for seed in 0..16 {
         let mut scene = generate::seeded(seed, 8);
@@ -278,7 +279,7 @@ fn cpu_gpu_effect_slots() {
 
 #[test]
 fn cpu_gpu_radial() {
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let info = gpu.adapter_info();
     let composite_tol = gpu.composite_tolerance();
     let mut max = 0;
@@ -342,7 +343,7 @@ fn cpu_gpu_radial() {
 #[test]
 fn cpu_gpu_cached_subtrees() {
     use rune::{Color, Cx, El, Env, Runtime, col, el, text};
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let build_scene = |cached: bool| {
         fn view(cached: &bool, _: &mut Cx<bool>) -> El {
             let mut card = col()
@@ -466,7 +467,7 @@ fn cpu_gpu_cached_rounded_clip() {
         Primitive::from_instance(&Instance::end_layer(), 3, "end".into())];
     assert_eq!(f32::from_bits(Instance::from(&scene.primitives[0]).fade[3]), 8.0,
         "replay capture must preserve the rounded clip, not compare two square layers");
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     check(&mut gpu, &scene, 2).expect("rounded layer survives replay capture");
 
     let mut mixed = Instance::begin_layer([0.0, 0.0, 24.0, 24.0], [0.0, 0.0, 24.0, 24.0], LayerSpec::default());
@@ -480,7 +481,7 @@ fn cpu_gpu_cached_rounded_clip() {
 #[test]
 fn cpu_gpu_turned_layers() {
     use rune::{Color, Cx, El, Env, Runtime, col, el, text};
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     // A card with text, a border, a shadow and a child, turned; one nested in another, and
     // one under a clip, so the layer's clip applies after the turn.
     fn view(angle: &f32, _: &mut Cx<f32>) -> El {
@@ -535,7 +536,7 @@ fn cpu_gpu_turned_layers() {
 #[test]
 fn cpu_gpu_plus_lighter_layers() {
     use rune::render::{Blend, Instance, KIND_RECT, LayerSpec, NO_CLIP};
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let mut scene = generate::scene(&[]);
     scene.width = 48;
     scene.height = 48;
@@ -624,7 +625,7 @@ fn cpu_gpu_plus_lighter_layers() {
 #[test]
 fn cpu_gpu_continuous_corners() {
     use rune::render::{Instance, KIND_GRADIENT, KIND_INSET, KIND_RECT, NO_CLIP};
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let mut scene = generate::scene(&[]);
     scene.width = 64;
     scene.height = 64;
@@ -673,7 +674,7 @@ fn cpu_gpu_continuous_corners() {
 #[test]
 fn cpu_gpu_linear_fade_offset() {
     use rune::render::{Instance, KIND_RECT, pack_fade};
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let mut scene = generate::scene(&[]);
     scene.width = 64;
     scene.height = 64;
@@ -706,7 +707,7 @@ fn cpu_gpu_linear_fade_offset() {
 #[test]
 fn cpu_gpu_rounded_clip_on_primitive() {
     use rune::render::{Instance, KIND_RECT, pack_clip_radii};
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let mut scene = generate::scene(&[]);
     scene.width = 64;
     scene.height = 64;
@@ -750,7 +751,7 @@ fn cpu_gpu_rounded_clip_on_primitive() {
 #[test]
 fn cpu_gpu_turned_plus_lighter_saturates_before_interpolation() {
     use rune::render::{Blend, Instance, KIND_RECT, LayerSpec, NO_CLIP};
-    let mut gpu = GpuRenderer::default();
+    let Some(mut gpu) = GpuRenderer::test_new() else { return };
     let make = |children: &[Instance]| -> Scene {
         let mut scene = generate::scene(&[]);
         scene.width = 48;

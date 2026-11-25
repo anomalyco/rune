@@ -91,7 +91,7 @@ fn lab_gfx_rebuilds_resources_and_hdr_format_when_device_key_changes() {
     let mut gfx = LabGfx::default();
 
     // First frame on device 1 (lens-frost scene).
-    let gpu1 = Gpu::headless();
+    let Some(gpu1) = Gpu::test_headless() else { return };
     let mut ui1 = Renderer::new(&gpu1.device, OFFSCREEN_FORMAT);
     ui1.attach_text(&mut rt.text.atlas);
     let off1 = Offscreen::new(&gpu1.device, size.0, size.1);
@@ -101,7 +101,7 @@ fn lab_gfx_rebuilds_resources_and_hdr_format_when_device_key_changes() {
 
     // Replace the device and renderer at the same viewport size and target format,
     // then switch to the lit Lamp scene.
-    let gpu2 = Gpu::headless();
+    let Some(gpu2) = Gpu::test_headless() else { return };
     let mut ui2 = Renderer::new(&gpu2.device, OFFSCREEN_FORMAT);
     let key2 = ui2.device_key();
     assert_ne!(key1, key2);
@@ -131,7 +131,7 @@ fn lab_gfx_release_gpu_drops_resources_and_rebuilds_cleanly() {
     rt.track_marks = true;
 
     let mut gfx = LabGfx::default();
-    let gpu1 = Gpu::headless();
+    let Some(gpu1) = Gpu::test_headless() else { return };
     let mut ui1 = Renderer::new(&gpu1.device, OFFSCREEN_FORMAT);
     ui1.attach_text(&mut rt.text.atlas);
     let off1 = Offscreen::new(&gpu1.device, size.0, size.1);
@@ -142,7 +142,7 @@ fn lab_gfx_release_gpu_drops_resources_and_rebuilds_cleanly() {
     gfx.release_gpu();
     assert!(gfx.res.is_none(), "release_gpu must drop LabGfx::res before a replacement device is created");
 
-    let gpu2 = Gpu::headless();
+    let Some(gpu2) = Gpu::test_headless() else { return };
     let mut ui2 = Renderer::new(&gpu2.device, OFFSCREEN_FORMAT);
     rt.text.atlas.invalidate();
     rt.images.invalidate();

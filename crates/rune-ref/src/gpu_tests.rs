@@ -37,3 +37,11 @@ fn composite_tolerance_is_three_only_for_nvidia_dx12() {
         DEFAULT_TOLERANCE
     );
 }
+
+#[test]
+fn try_new_returns_error_without_panicking_when_no_gpu() {
+    match crate::gpu::GpuRenderer::try_new() {
+        Ok(gpu) => assert!(!gpu.adapter_info().name.is_empty()),
+        Err(err) => assert!(err.starts_with("no GPU adapter:"), "unexpected error: {err}"),
+    }
+}
