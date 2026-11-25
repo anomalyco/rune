@@ -538,8 +538,7 @@ mod noop_tests {
         {
             let (gpu, _surface) = noop_gpu();
             gpu.attach_terminal_latch(Arc::clone(&latch));
-            gpu.mark_clean_drop();
-            latch.detach();
+            gpu.prepare_clean_drop_for(&latch, true);
             drop(gpu);
         }
         assert!(!latch.is_failed());

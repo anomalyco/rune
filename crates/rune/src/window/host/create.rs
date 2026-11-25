@@ -388,8 +388,8 @@ impl Host {
                     }
                 } else {
                     #[cfg(target_os = "linux")]
-                    let (gpu, surface, configured) = match Gpu::for_surface_setup(
-                        features, transparent, make_surface, setup_surface,
+                    let (gpu, surface, configured) = match Gpu::for_surface_setup_with_latch(
+                        self.terminal_loss.latch(), features, transparent, make_surface, setup_surface,
                     ) {
                         Ok(ok) => ok,
                         Err(err) => {
@@ -408,8 +408,8 @@ impl Host {
                         }
                     };
                     #[cfg(not(target_os = "linux"))]
-                    let (gpu, surface, configured) = Gpu::for_surface_setup(
-                        features, transparent, make_surface, setup_surface,
+                    let (gpu, surface, configured) = Gpu::for_surface_setup_with_latch(
+                        self.terminal_loss.latch(), features, transparent, make_surface, setup_surface,
                     ).map_err(format_window_setup_error)?;
                     let gpu = Arc::new(gpu);
                     *self.gpu_pool.borrow_mut() = Arc::downgrade(&gpu);

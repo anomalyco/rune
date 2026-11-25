@@ -23,6 +23,11 @@ impl SurfaceSetupError {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn device_lost(message: impl Into<String>) -> Self {
+        Self { kind: rune_gpu::fallback::Failure::DeviceLost, message: message.into() }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn from_configure(prefix: &str, error: crate::window::ConfigureError) -> Self {
         let message = if prefix.is_empty() {
             error.message
@@ -103,7 +108,34 @@ impl Gpu {
         make_surface: impl FnMut(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>,
         setup: impl FnMut(&Gpu, &wgpu::Surface<'w>, Option<Renderer>) -> Result<T, SurfaceSetupError>,
     ) -> Result<(Gpu, wgpu::Surface<'w>, T), SurfaceSetupError> {
-        Self::for_surface_setup_from(prewarm::take(), wanted, translucent, make_surface, setup)
+        Self::for_surface_setup_with_latch(None, wanted, translucent, make_surface, setup)
+    }
+
+    /// Like [`Self::for_surface_setup`], but honors a `GpuLossPolicy::Terminal` latch: refuses
+    /// immediately if already failed, checks the latch again right after `prewarm::take()` (so a
+    /// parked warm device that died while waiting trips the owner's latch and never falls back to
+    /// creating a replacement device), and disables adapter fallback under `Terminal`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn for_surface_setup_with_latch<'w, T>(
+        latch: Option<&std::sync::Arc<super::loss_latch::GpuLossLatch>>,
+        wanted: wgpu::Features,
+        translucent: bool,
+        make_surface: impl FnMut(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>,
+        setup: impl FnMut(&Gpu, &wgpu::Surface<'w>, Option<Renderer>) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, wgpu::Surface<'w>, T), SurfaceSetupError> {
+        if let Some(latch) = latch && latch.is_failed() {
+            return Err(SurfaceSetupError::device_lost(
+                latch.reason().unwrap_or_else(|| "the GPU device was lost".into()),
+            ));
+        }
+        let early = prewarm::take();
+        if let Some(latch) = latch && latch.is_failed() {
+            drop(early);
+            return Err(SurfaceSetupError::device_lost(
+                latch.reason().unwrap_or_else(|| "the warmed GPU device was lost".into()),
+            ));
+        }
+        Self::for_surface_setup_from_policy(early, latch.is_none(), wanted, translucent, make_surface, setup)
     }
 
     /// Picks a headless GPU and runs `setup` (typically building a `Renderer`), walking remaining
@@ -220,9 +252,21 @@ impl Gpu {
         Ok((gpu, surface, value))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(test, target_os = "macos"))]
     pub(super) fn for_surface_setup_from<'w, T>(
         early: Option<(Gpu, Renderer)>,
+        wanted: wgpu::Features,
+        translucent: bool,
+        make_surface: impl FnMut(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>,
+        setup: impl FnMut(&Gpu, &wgpu::Surface<'w>, Option<Renderer>) -> Result<T, SurfaceSetupError>,
+    ) -> Result<(Gpu, wgpu::Surface<'w>, T), SurfaceSetupError> {
+        Self::for_surface_setup_from_policy(early, true, wanted, translucent, make_surface, setup)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn for_surface_setup_from_policy<'w, T>(
+        early: Option<(Gpu, Renderer)>,
+        allow_fallback: bool,
         wanted: wgpu::Features,
         translucent: bool,
         mut make_surface: impl FnMut(&wgpu::Instance) -> Result<wgpu::Surface<'w>, String>,
@@ -243,7 +287,7 @@ impl Gpu {
                             Self::log_surface_gpu(&early);
                             return Ok((early, surface, value));
                         }
-                        Err(err) => match fallback::decide(crate::gpu::pick::env_policy(), err.kind) {
+                        Err(err) => match if allow_fallback { fallback::decide(crate::gpu::pick::env_policy(), err.kind) } else { Decision::Stop } {
                             Decision::Stop => {
                                 drop((surface, early));
                                 return Err(err);
@@ -292,10 +336,11 @@ impl Gpu {
         };
         gpu_events::starting();
         let can_widen = Self::is_direct_driver_instance(&instance);
+        let policy_override = (!allow_fallback).then_some(crate::gpu::fallback::Policy::Pinned);
         let (gpu, surface, value) = Self::try_setup_on_with_widen(
             instance,
             initial_surface,
-            None,
+            policy_override,
             wanted,
             translucent,
             make_surface,
