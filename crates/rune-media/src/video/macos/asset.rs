@@ -7,8 +7,9 @@ use super::{Decoded, Native};
 use crate::native_surface::{ByteFrame, ColorInfo, Format, Orient};
 #[cfg(feature = "ogg-audio")]
 use crate::video::foreign;
-use crate::video::{Kind, MediaSource, Meta};
-use objc2::rc::Retained;
+use crate::video::thumbnails::{DecodedFrame, ThumbnailPrecision};
+use crate::video::{DEFAULT_FRAME, Kind, MediaSource, Meta};
+use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::AnyObject;
 use objc2_av_foundation::{
     AVAsset, AVAssetImageGenerator, AVAssetReferenceRestrictions, AVMediaTypeAudio, AVMediaTypeVideo, AVURLAsset,
@@ -373,4 +374,118 @@ pub(crate) fn test_frames(source: &MediaSource, at: f64) -> Result<(ByteFrame, B
     // SAFETY: `raw` is a newly created, uniquely owned `AVAssetImageGenerator` not yet decoding.
     unsafe { raw.setAppliesPreferredTrackTransform(false) };
     Ok((image(&generator(&asset, None), at)?.0, image(&raw, at)?.0, orient(&asset)))
+}
+
+
+/// AVFoundation still-frame generator for a single thumbnail batch.
+pub(in crate::video) struct ThumbnailDecoder {
+    generator: Retained<AVAssetImageGenerator>,
+    duration: f64,
+    frame_duration: Option<f64>,
+}
+
+/// Opens `source` once on the current worker thread for off-main-thread thumbnail extraction.
+pub(in crate::video) fn open_thumbnails(
+    source: &MediaSource,
+    headers: &[(String, String)],
+    max_size: u32,
+    precision: ThumbnailPrecision,
+) -> Result<ThumbnailDecoder, String> {
+    if let Some(err) = unsupported_format(source, Kind::Video) {
+        return Err(err);
+    }
+    autoreleasepool(|_| {
+        let av_asset = asset(source, headers)?;
+        let info = meta(&av_asset, Kind::Video)?;
+        // SAFETY: `av_asset` is a live `AVURLAsset` owned on this worker thread.
+        let generator = unsafe { AVAssetImageGenerator::assetImageGeneratorWithAsset(&av_asset) };
+        // SAFETY: `generator` is newly created, uniquely owned, and not yet decoding.
+        unsafe {
+            generator.setAppliesPreferredTrackTransform(true);
+            match precision {
+                ThumbnailPrecision::Exact => {
+                    generator.setRequestedTimeToleranceBefore(zero());
+                    generator.setRequestedTimeToleranceAfter(zero());
+                }
+                ThumbnailPrecision::NearestKeyframe => {
+                    generator.setRequestedTimeToleranceBefore(positive_infinity());
+                    generator.setRequestedTimeToleranceAfter(positive_infinity());
+                }
+            }
+            // Only cap maximumSize when natural dimensions exceed max_size so AVFoundation never upscales.
+            if let Some((nw, nh)) = info.size
+                && nw.max(nh) > max_size
+            {
+                let max = f64::from(max_size);
+                generator.setMaximumSize(CGSize::new(max, max));
+            }
+        }
+        Ok(ThumbnailDecoder { generator, duration: info.duration, frame_duration: info.frame })
+    })
+}
+
+impl ThumbnailDecoder {
+    #[allow(deprecated)] // copyCGImageAtTime is the synchronous form for worker threads.
+    pub(in crate::video) fn decode(&mut self, at: f64, max_size: u32, _: ThumbnailPrecision) -> Result<DecodedFrame, String> {
+        autoreleasepool(|_| {
+            let target = if self.duration > 0.0 { at.min(self.duration) } else { at }.max(0.0);
+            let (cg, actual_time) = match copy_cgimage(&self.generator, target) {
+                Ok(decoded) => decoded,
+                Err(first_err) if self.duration > 0.0 => {
+                    let fallback = (self.duration - self.frame_duration.unwrap_or(DEFAULT_FRAME)).max(0.0);
+                    if let Ok(decoded) = copy_cgimage(&self.generator, fallback) {
+                        decoded
+                    } else if fallback > 0.0
+                        && let Ok(decoded) = copy_cgimage(&self.generator, 0.0)
+                    {
+                        decoded
+                    } else {
+                        return Err(first_err);
+                    }
+                }
+                Err(err) => return Err(err),
+            };
+            let (w, h, bytes) = rgba(&cg)?;
+            let (width, height, rgba) = if w.max(h) > max_size {
+                let (tw, th) = rune_image::scaled_dimensions(w, h, max_size);
+                rune_image::downsample_rgba(w, h, bytes, tw, th).map_err(|e| e.to_string())?
+            } else {
+                (w, h, bytes)
+            };
+            Ok(DecodedFrame { width, height, rgba, actual_time })
+        })
+    }
+}
+
+#[allow(deprecated)] // copyCGImageAtTime is the synchronous form for worker threads.
+fn copy_cgimage(generator: &AVAssetImageGenerator, at: f64) -> Result<(Retained<CGImage>, f64), String> {
+    let mut actual = zero();
+    // SAFETY: `generator` is a live `AVAssetImageGenerator` and `&mut actual` is a writable `CMTime`.
+    let image = unsafe { generator.copyCGImageAtTime_actualTime_error(cm(at), &mut actual) }
+        .map_err(|e| e.localizedDescription().to_string())?;
+    // SAFETY: `CMTimeGetSeconds` accepts any `CMTime` and returns non-finite for invalid times.
+    let s = unsafe { actual.seconds() };
+    let pts = if s.is_finite() { s.max(0.0) } else { at.max(0.0) };
+    Ok((image, pts))
+}
+
+/// Draws a decoded `CGImage` directly into opaque sRGB RGBA8 bytes (`PremultipliedLast | Order32Big`).
+fn rgba(image: &CGImage) -> Result<(u32, u32, Vec<u8>), String> {
+    let (w, h) = (CGImage::width(Some(image)), CGImage::height(Some(image)));
+    if w == 0 || h == 0 {
+        return Err("decoded an empty frame".into());
+    }
+    let mut bytes = vec![0u8; w * h * 4];
+    // SAFETY: `kCGColorSpaceSRGB` is an immutable static CoreGraphics color space name constant.
+    let space = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB }));
+    let info = CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0;
+    // SAFETY: `bytes` has length `w * h * 4` matching 8 bpc RGBA with stride `w * 4`, and outlives `context`.
+    let context = unsafe { CGBitmapContextCreate(bytes.as_mut_ptr().cast(), w, h, 8, w * 4, space.as_deref(), info) }
+        .ok_or("CGBitmapContextCreate failed")?;
+    CGContext::draw_image(Some(&context), CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(w as f64, h as f64)), Some(image));
+    drop(context);
+    for px in bytes.as_chunks_mut::<4>().0 {
+        px[3] = 255;
+    }
+    Ok((w as u32, h as u32, bytes))
 }

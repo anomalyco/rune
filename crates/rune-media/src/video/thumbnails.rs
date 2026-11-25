@@ -8,7 +8,7 @@
 
 use super::{MediaSource, WakerSlot};
 use rune_image::Pixels;
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 #[cfg(not(target_arch = "wasm32"))]
@@ -20,18 +20,18 @@ const DEFAULT_MAX_SIZE: u32 = 320;
 /// Hard ceiling on thumbnail dimensions, matching `rune_image::MAX_SIDE`.
 const MAX_THUMBNAIL_SIDE: u32 = 8192;
 
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 const MAX_WORKERS: usize = 4;
 
 const PHASE_QUEUED: u8 = 0;
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 const PHASE_RUNNING: u8 = 1;
 const PHASE_DONE: u8 = 2;
 
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 const INVALID_TIMESTAMP: &str = "invalid timestamp";
 const CANCELLED: &str = "cancelled";
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(any(not(any(target_os = "macos", target_os = "windows")), test))]
 const UNSUPPORTED: &str = "video thumbnails aren't supported on this platform yet";
 
 /// How accurately a thumbnail timestamp is decoded.
@@ -166,17 +166,17 @@ impl ThumbnailRequest {
     /// thumbnail backend yet, every slot settles immediately with an error and any waker fires
     /// once without spawning threads.
     pub fn start(self) -> Thumbnails {
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             self.start_inner(None)
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             self.start_unsupported()
         }
     }
 
-    #[cfg(any(not(target_os = "windows"), test))]
+    #[cfg(any(not(any(target_os = "macos", target_os = "windows")), test))]
     fn start_unsupported(self) -> Thumbnails {
         let frames = make_frames(&self.times);
         let state = BatchState::new_settled(
@@ -195,7 +195,7 @@ impl ThumbnailRequest {
         Thumbnails(Arc::new(Handle { frames, state }))
     }
 
-    #[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+    #[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
     fn start_inner(
         self,
         #[cfg(test)] test_opener: Option<TestOpener>,
@@ -424,7 +424,7 @@ impl Drop for Handle {
 }
 
 /// Decoded RGBA8 still frame returned by a platform backend or test decoder.
-#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows", test)), allow(dead_code))]
 pub(crate) struct DecodedFrame {
     pub(crate) width: u32,
     pub(crate) height: u32,
@@ -444,13 +444,13 @@ pub(super) type TestOpener = Arc<
         + Sync,
 >;
 
-#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows", test)), allow(dead_code))]
 struct DecodeStep {
     at: f64,
     slots: Vec<usize>,
 }
 
-#[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows", test)), allow(dead_code))]
 struct BatchState {
     source: MediaSource,
     headers: Vec<(String, String)>,
@@ -472,7 +472,7 @@ struct BatchState {
 }
 
 impl BatchState {
-    #[cfg(any(not(target_os = "windows"), test))]
+    #[cfg(any(not(any(target_os = "macos", target_os = "windows")), test))]
     fn new_settled(
         source: MediaSource,
         headers: Vec<(String, String)>,
@@ -506,7 +506,7 @@ impl BatchState {
         state
     }
 
-    #[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+    #[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
     fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
     }
@@ -518,7 +518,7 @@ impl BatchState {
         }
     }
 
-    #[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+    #[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
     fn settle_ok(&self, slots: &[usize], frame: DecodedFrame) {
         let DecodedFrame { width, height, rgba, actual_time } = frame;
         let last = slots.len().saturating_sub(1);
@@ -579,7 +579,7 @@ impl BatchState {
         self.waker.tell(generation);
     }
 
-    #[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+    #[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
     fn drive_decoder<D>(&self, mut decoder: D, mut decode: impl FnMut(&mut D, f64, u32, ThumbnailPrecision) -> Result<DecodedFrame, String>) {
         for step in &self.plan {
             if self.is_cancelled() {
@@ -611,7 +611,7 @@ impl BatchState {
         self.finish_done();
     }
 
-    #[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+    #[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
     fn run(&self) {
         if self.phase.compare_exchange(PHASE_QUEUED, PHASE_RUNNING, Ordering::AcqRel, Ordering::Acquire).is_err() {
             return;
@@ -628,6 +628,13 @@ impl BatchState {
             }
             return;
         }
+        #[cfg(target_os = "macos")]
+        {
+            match super::macos::open_thumbnails(&self.source, &self.headers, self.max_size, self.precision) {
+                Ok(decoder) => self.drive_decoder(decoder, |d, at, max, prec| d.decode(at, max, prec)),
+                Err(err) => self.fail_remaining(&err),
+            }
+        }
         #[cfg(target_os = "windows")]
         {
             match super::windows::still::open_thumbnails(&self.source, &self.headers) {
@@ -635,7 +642,7 @@ impl BatchState {
                 Err(err) => self.fail_remaining(&err),
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             self.fail_remaining(UNSUPPORTED);
         }
@@ -655,7 +662,7 @@ fn make_frames(times: &[f64]) -> Vec<Thumbnail> {
 
 /// Groups finite timestamps (negative clamped to `0.0`) in ascending order, deduplicating equal
 /// clamped timestamps while recording every original slot index, and collects non-finite indices.
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 fn build_plan(times: &[f64]) -> (Vec<DecodeStep>, Vec<usize>) {
     let mut invalid = Vec::new();
     // All finite values >= 0.0 share the same total order under `to_bits()` once `-0.0` is
@@ -676,16 +683,16 @@ fn build_plan(times: &[f64]) -> (Vec<DecodeStep>, Vec<usize>) {
     (plan, invalid)
 }
 
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 struct Queue {
     jobs: VecDeque<Arc<BatchState>>,
     workers: usize,
 }
 
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 static QUEUE: Mutex<Queue> = Mutex::new(Queue { jobs: VecDeque::new(), workers: 0 });
 
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 fn enqueue(state: Arc<BatchState>) -> bool {
     let mut q = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
     q.jobs.push_back(state);
@@ -707,7 +714,7 @@ fn enqueue(state: Arc<BatchState>) -> bool {
     false
 }
 
-#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 fn worker_loop() {
     loop {
         let job = {

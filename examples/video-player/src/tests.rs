@@ -161,7 +161,6 @@ fn filmstrip_exposes_accessible_tiles_hover_preview_and_click_to_seek() {
         rt.frame(0.0);
         assert_eq!(strip.len(), FILMSTRIP_COUNT);
         assert!(strip.is_done());
-        #[cfg(target_os = "windows")]
         assert!(strip.frames().iter().all(|f| f.is_ready()));
 
         let tree = rt.accessibility_tree();

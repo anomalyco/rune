@@ -167,8 +167,15 @@ fn drop_to_cancel_mid_batch_frees_decoder_and_preserves_cloned_thumbnail() {
         }))
     });
 
+    let settled_wake = Arc::new((Mutex::new(0usize), Condvar::new()));
+    let sw = settled_wake.clone();
     let strip = Thumbnails::request("clip.mp4")
         .times([0.0, 1.0, 2.0, 3.0])
+        .waker(Arc::new(move || {
+            let mut n = sw.0.lock().unwrap();
+            *n += 1;
+            sw.1.notify_all();
+        }))
         .start_with_decoder(opener);
     let cloned_first = strip.frame(0).unwrap().clone();
     let cloned_third = strip.frame(2).unwrap().clone();
@@ -182,12 +189,17 @@ fn drop_to_cancel_mid_batch_frees_decoder_and_preserves_cloned_thumbnail() {
     // Let the in-flight frame 1 decode return so the worker sees cancellation.
     resume_second.wait();
 
-    // Decoder must drop promptly without decoding frames 2 or 3.
+    // Decoder must drop promptly without decoding frames 2 or 3, and finish_done wakes after drop.
     let mut dropped = decoder_dropped.0.lock().unwrap();
     while !*dropped {
         dropped = decoder_dropped.1.wait(dropped).unwrap();
     }
     drop(dropped);
+    let mut wakes = settled_wake.0.lock().unwrap();
+    while cloned_third.error().is_none() {
+        wakes = settled_wake.1.wait(wakes).unwrap();
+    }
+    drop(wakes);
     assert_eq!(*decoded_times.lock().unwrap(), vec![0.0, 1.0], "frames 2 and 3 never decoded");
 
     // Cloned Thumbnail for frame 0 stays readable after parent Thumbnails dropped.
@@ -527,7 +539,7 @@ fn nv12_applies_all_eight_orient_transforms() {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[test]
 fn unsupported_platform_settles_immediately_with_error_and_no_blank_image() {
     let wakes = Arc::new(AtomicUsize::new(0));
@@ -548,12 +560,12 @@ fn unsupported_platform_settles_immediately_with_error_and_no_blank_image() {
     strip.wait();
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn fixture_path(name: &str) -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../rune/tests/fixtures").join(name)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn real_mp4_rgbw_exact_downscale_keyframe_and_clamping() {
     let path = fixture_path("rgbw.mp4");
@@ -639,7 +651,7 @@ fn real_mp4_rgbw_exact_downscale_keyframe_and_clamping() {
     assert!(c1[0] > 200 && c1[1] > 200 && c1[2] > 200, "clamped 10.0 -> white: {c1:?}");
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn real_mp4_quadrants_rot90_decodes_upright_with_four_distinct_quadrants() {
     let path = fixture_path("quadrants-rot90.mp4");
@@ -670,7 +682,7 @@ fn real_mp4_quadrants_rot90_decodes_upright_with_four_distinct_quadrants() {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 #[test]
 fn real_audio_only_missing_and_headers_fail_cleanly_without_blank_images() {
     for name in ["silence.m4a", "silence.wav"] {
@@ -691,12 +703,15 @@ fn real_audio_only_missing_and_headers_fail_cleanly_without_blank_images() {
     assert!(!missing.frame(0).unwrap().is_ready());
     assert!(missing.frame(0).unwrap().error().is_some());
 
-    let headers = Player::request("https://example.com/clip.mp4")
-        .header("Authorization", "Bearer secret")
-        .thumbnails()
-        .at(0.0)
-        .start();
-    headers.wait();
-    assert!(!headers.frame(0).unwrap().is_ready());
-    assert!(headers.frame(0).unwrap().error().unwrap().contains("headers"));
+    #[cfg(target_os = "windows")]
+    {
+        let headers = Player::request("https://example.com/clip.mp4")
+            .header("Authorization", "Bearer secret")
+            .thumbnails()
+            .at(0.0)
+            .start();
+        headers.wait();
+        assert!(!headers.frame(0).unwrap().is_ready());
+        assert!(headers.frame(0).unwrap().error().unwrap().contains("headers"));
+    }
 }

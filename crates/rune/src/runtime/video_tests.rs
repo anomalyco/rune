@@ -132,12 +132,12 @@ fn thumbnails_reexport_paints_via_pixels_fit_and_keeps_idle_window_still() {
     assert!(strip.is_done());
     assert_eq!(strip.len(), 2);
 
-    #[cfg(target_os = "windows")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     for frame in strip.frames() {
         assert!(frame.is_ready(), "{:?}", frame.error());
         assert_eq!(frame.size(), Some((64, 36)));
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     for frame in strip.frames() {
         assert!(!frame.is_ready());
         assert!(frame.error().is_some());
