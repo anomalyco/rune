@@ -20,7 +20,7 @@ fn a_physical_chord_releases_its_modifiers_after_the_key() {
     let kinds: Vec<_> = parse_script(json!([{"physical": "alt+super+space"}, {"t": 0.1, "physical": "f5"}]))
         .into_iter().map(|e| match e.kind { Kind::Physical(event) => event, _ => panic!("physical parsed as another event") }).collect();
     let mods = "alt+super+space".parse::<crate::Shortcut>().unwrap().modifiers();
-    let key = |key, mods, pressed| PhysicalInput::Key { key, mods, pressed, repeat: false };
+    let key = |key, mods, pressed| PhysicalInput::Key { key, mods, pressed, repeat: false, text: None, consumed_mods: Default::default() };
     use crate::PhysicalKeyCode::{F5, Space};
     let expected = [key(Space, mods, true), key(Space, mods, false), PhysicalInput::Modifiers(Mods::default()),
         key(F5, Mods::default(), true), key(F5, Mods::default(), false)];
