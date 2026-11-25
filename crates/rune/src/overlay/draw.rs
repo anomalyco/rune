@@ -105,7 +105,7 @@ impl FrameHost for OverlayFrame<'_> {
             prewarm: self.prewarm,
             occluded: cfg!(target_os = "macos") && self.core.presence.occluded(),
             awaiting_frame: self.core.awaiting_layer_frame(),
-            dirty: self.core.dirty,
+            dirty: self.core.dirty || self.app.rt().has_input_waiting(),
             idle: self.core.idle,
             retry: self.core.backoff.deadline(),
             missed_this_turn: self.core.turn_frame.missed(),

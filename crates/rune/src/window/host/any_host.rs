@@ -11,7 +11,7 @@ use super::{Host, WindowApp};
 use crate::time::Instant;
 use crate::window::file_drop::DROP_SAMPLE;
 use crate::window::state::{Cover, Life, RestEvent, Reveal};
-use crate::window::surface::{BackoffEvent, RedrawEffect, RedrawEvent, Win, timer_deadline_core};
+use crate::window::surface::{BackoffEvent, Redraw, RedrawEffect, RedrawEvent, Win, timer_deadline_core};
 #[cfg(target_os = "windows")]
 use crate::window::win32::covered_draw::CoveredDrawEvent;
 use crate::window::{AnyHost, WakeEvent};
@@ -128,6 +128,18 @@ impl Host {
                 crate::platform::win32::drop_paint(&w.window);
                 self.paint(event_loop);
             }
+        }
+        // Guard: never let the event loop rest with user input still queued for a drawable
+        // window when neither a redraw nor an active display link is already on its way.
+        if let Some(w) = self.shown_win()
+            && queued_input_needs_redraw(
+                self.app.rt().has_input_waiting(),
+                self.life.uncovered() && !w.minimized() && !w.backing_off(now) && !w.waits_for_slot(),
+                w.paced(),
+                w.redraw.get(),
+            )
+        {
+            w.request_redraw();
         }
         #[cfg(target_os = "windows")]
         self.sync_poll_pace(now);
@@ -388,6 +400,18 @@ impl Host {
         #[cfg(feature = "frame-profile")]
         if let Some(start) = logged { crate::frame::live_log::input(start); }
     }
+}
+
+/// Whether a window whose turn is ending must request a redraw rather than rest: user input is
+/// still queued (`RuntimeCore::has_input_waiting`), the window can draw now, and neither a
+/// redraw nor an active display link is already on its way.
+pub(in crate::window) fn queued_input_needs_redraw(
+    has_input: bool,
+    can_draw: bool,
+    paced: bool,
+    redraw: Redraw,
+) -> bool {
+    has_input && can_draw && !paced && matches!(redraw, Redraw::Idle | Redraw::Satisfied)
 }
 
 /// Runs a window's `App::on_quit`, flushes clipboard requests made there, and reports whether

@@ -1,0 +1,1 @@
+- Window and overlay hosts now guard against resting with queued user input (`RuntimeCore::has_input_waiting()`), requesting a redraw at turn end when a shown, drawable, unpaced window still has undelivered input in its action queue.
