@@ -65,6 +65,7 @@ pub use app::QuitResponse;
 pub use clipboard::ClipboardContent;
 pub use clipboard::ClipboardImage;
 pub use clipboard::ClipboardWrite;
+pub use clipboard::CopyImageError;
 pub use clipboard::SecretCopy;
 pub use clipboard::SecretState;
 pub use clipboard::WebFile;

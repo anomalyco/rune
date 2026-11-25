@@ -601,6 +601,9 @@ impl RuntimeCore {
     pub(crate) fn read_result(&mut self, id: u64, content: crate::ClipboardContent) {
         self.frame.queue.push(Action::ClipboardRead(id, content));
     }
+    pub(crate) fn copy_image_result(&mut self, id: u64, result: Result<(), crate::CopyImageError>) {
+        self.frame.queue.push(Action::CopyImageDone(id, result));
+    }
     /// Queues a `Tx::open_url_then` callback with what came of its open.
     pub(crate) fn url_opened(&mut self, f: crate::open_url::OpenedFn, result: Result<(), crate::open_url::OpenUrlError>) {
         self.frame.queue.push(Action::UrlOpened(f, result));

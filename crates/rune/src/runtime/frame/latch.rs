@@ -103,7 +103,22 @@ impl RuntimeCore {
             self.edit.clear_secret_request = true;
             self.edit.pill_copy = None;
         }
-        if let Some(copy) = tx.copy.take() {
+        for superseded in tx.superseded_copy_images.drain(..).filter_map(|cb| cb.take()) {
+            self.edit.next_clipboard_read += 1;
+            let id = self.edit.next_clipboard_read;
+            self.edit.copy_image_callbacks.push((id, superseded));
+            self.copy_image_result(id, Err(crate::CopyImageError::Superseded));
+        }
+        if let Some(mut copy) = tx.copy.take() {
+            if let Some(prev_id) = self.copy_request.as_mut().and_then(crate::ClipboardWrite::take_copy_image_id) {
+                self.copy_image_result(prev_id, Err(crate::CopyImageError::Superseded));
+            }
+            if let Some(cb) = tx.copy_image_callback.take().and_then(|cb| cb.take()) {
+                self.edit.next_clipboard_read += 1;
+                let id = self.edit.next_clipboard_read;
+                self.edit.copy_image_callbacks.push((id, cb));
+                copy.set_copy_image_id(id);
+            }
             self.edit.pill_copy = (!copy.is_secret())
                 .then(|| copy.content().html())
                 .flatten()

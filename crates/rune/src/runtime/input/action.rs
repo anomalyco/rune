@@ -69,6 +69,8 @@ pub(in crate::runtime) enum Action {
     Paste(crate::ClipboardContent, Option<Option<String>>),
     /// A `Tx::read_clipboard` callback's id and what the clipboard held.
     ClipboardRead(u64, crate::ClipboardContent),
+    /// A `Tx::copy_image_then` callback's id and what came of the copy.
+    CopyImageDone(u64, Result<(), crate::CopyImageError>),
     /// A `Tx::open_file`, `Tx::open_files`, `Tx::save_file` or `Tx::open_folder` callback's id
     /// and the dialog's answer.
     FileDialog(u64, crate::file_dialog::DialogOutcome),
@@ -114,7 +116,7 @@ impl ActionQueue {
         let input = !matches!(action, Action::Layout(..) | Action::ScreenLayout(..) | Action::DrawnLayout(..)
             | Action::Visible(..) | Action::VisibleRows(..) | Action::AtBottom(..) | Action::FarFromBottom(..)
             | Action::WindowFocus(_) | Action::Physical(crate::PhysicalInput::FocusLost, _) | Action::FinishIme
-            | Action::ClipboardRead(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
+            | Action::ClipboardRead(..) | Action::CopyImageDone(..) | Action::UrlOpened(..) | Action::SelectionChange(..)) || at.is_some();
         self.0.push(Queued { action, at, input });
     }
     /// A stationary pointer was re-hit after layout; no pointer event asked for that hover.
@@ -236,6 +238,7 @@ fn handler_name(action: &Action) -> &'static str {
         Action::Ime(_) | Action::FinishIme => "a text input's edit",
         Action::Paste(..) => "on_paste",
         Action::ClipboardRead(..) => "a `read_clipboard` callback",
+        Action::CopyImageDone(..) => "a `copy_image_then` callback",
         Action::FileDialog(..) => "a file dialog callback",
         Action::UrlOpened(..) => "an `open_url_then` callback",
         _ => "a handler",
@@ -282,7 +285,12 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     if let Some(request) = one.window_frame { tx.window_frame = Some(tx.window_frame.unwrap_or_default().merge(request)); }
     if one.clear_secret && tx.copy.as_ref().is_some_and(crate::ClipboardWrite::is_secret) { tx.copy = None; }
     tx.clear_secret |= one.clear_secret;
-    if one.copy.is_some() { tx.copy = one.copy; }
+    tx.superseded_copy_images.extend(one.superseded_copy_images);
+    if one.copy.is_some() {
+        if let Some(old) = tx.copy_image_callback.take() { tx.superseded_copy_images.push(old); }
+        tx.copy = one.copy;
+        tx.copy_image_callback = one.copy_image_callback;
+    }
     tx.shell = tx.shell.max(one.shell);
     tx.user_close_request |= one.user_close_request;
     tx.minimize_order = tx.minimize_order.max(one.minimize_order);
@@ -656,6 +664,14 @@ impl RuntimeCore {
                 true
             }
             Action::FileDialog(id, result) => self.run_file_dialog(app, id, result, &mut one),
+            Action::CopyImageDone(id, result) => {
+                if let Some(f) = self.edit.take_copy_image_callback(id) {
+                    f(app.states(), result, &mut one);
+                    true
+                } else {
+                    false
+                }
+            }
             Action::UrlOpened(f, result) => {
                 f(app.states(), result, &mut one);
                 true

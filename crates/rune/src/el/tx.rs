@@ -60,6 +60,8 @@ pub struct Tx {
     /// The viewport moved only because the window's own resize animation stepped it.
     pub(crate) window_step: bool,
     pub(crate) copy: Option<crate::ClipboardWrite>,
+    pub(crate) copy_image_callback: Option<CopyImageCallback>,
+    pub(crate) superseded_copy_images: Vec<CopyImageCallback>,
     pub(crate) paste: bool,
     pub(crate) clipboard_reads: Vec<ClipboardRead>,
     pub(crate) pick_reads: Vec<PickRead>,

@@ -232,7 +232,7 @@ fn write_one_form_never_clobbers_clipboard_with_empty_text_on_bad_png_and_borrow
     let img = cache.rgba(2, 1, rgba.clone());
     img.wait().unwrap();
     let mut write = ClipboardWrite::image(img);
-    assert!(write.encode_image());
+    assert!(write.encode_image().is_ok());
     match native::prepare_one_form(&write).unwrap() {
         native::OneForm::Image { png, width, height, rgba: bytes } => {
             assert_eq!((width, height), (2, 1));
@@ -344,16 +344,17 @@ fn the_worker_answers_reads_with_sanitised_content() {
     state.lock().unwrap().text = "<script>".into();
     let (reply, replies) = mpsc::channel();
     worker.sender.send(Request::Read { purpose: Purpose::Read(7), reply, wake: Arc::new(|| {}) }).unwrap();
-    let answer = replies.recv().unwrap();
-    assert_eq!((answer.purpose, answer.content.text()), (Purpose::Read(7), "<script>"), "plain text is never rewritten");
+    let Reply::Content { purpose, content } = replies.recv().unwrap() else { panic!("expected Reply::Content") };
+    assert_eq!((purpose, content.text()), (Purpose::Read(7), "<script>"), "plain text is never rewritten");
     worker.stop();
     assert!(Purpose::Paste(None, Forms::Rich).reply(None).is_none());
     let mut board = Board { content: Some(ClipboardContent::new("t").with_html("<b>t</b>")), ..Board::default() };
-    let plain = Purpose::Paste(None, Forms::Text).answer(&mut board).unwrap().content;
+    let Reply::Content { content: plain, .. } = Purpose::Paste(None, Forms::Text).answer(&mut board).unwrap() else { panic!("expected Reply::Content") };
     assert!(!plain.is_rich() && plain.text() == "t", "a plain target reads only the text, as before");
-    let read = Purpose::Read(1).reply(Some(ClipboardContent::new("").with_html("<p onclick=x>t</p>"))).unwrap();
-    assert_eq!(read.content.html(), Some("<p>t</p>"));
-    assert_eq!(Purpose::Read(2).reply(None).unwrap().content, ClipboardContent::default());
+    let Reply::Content { content: read, .. } = Purpose::Read(1).reply(Some(ClipboardContent::new("").with_html("<p onclick=x>t</p>"))).unwrap() else { panic!("expected Reply::Content") };
+    assert_eq!(read.html(), Some("<p>t</p>"));
+    let Reply::Content { content: empty, .. } = Purpose::Read(2).reply(None).unwrap() else { panic!("expected Reply::Content") };
+    assert_eq!(empty, ClipboardContent::default());
 }
 
 /// `on_close` runs through `update`, and a hidden window only polls: both must reach the
@@ -501,4 +502,87 @@ fn web_files_are_rich_and_text_forms_drop_them() {
     assert!(!format!("{content:?}").contains("a.zip"), "Debug never shows names");
     assert_eq!(content.web_files().len(), 1);
     assert!(content.text_forms().is_none(), "a rich field without a hook hears nothing of a files-only paste");
+}
+
+/// `Tx::copy_image_then` reports `Ok(())`, `DecodeFailed`, `Superseded`, and `Failed`, and
+/// `Worker::spawn` runs PNG encoding off the calling thread while reporting `Superseded` on
+/// late overwrites.
+#[test]
+fn copy_image_then_reports_outcomes_and_worker_encodes_off_calling_thread() {
+    use crate::{col, Cx, El, Env};
+    fn view(_: &Vec<Result<(), CopyImageError>>, _: &mut Cx<Vec<Result<(), CopyImageError>>>) -> El { col() }
+    let m = memory();
+    let mut rt = Runtime::new(Vec::<Result<(), CopyImageError>>::new(), view, (100.0, 100.0), Env::new(true, 1.0));
+    rt.use_clipboard(&m);
+    rt.frame(0.0);
+
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let good = cache.rgba(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+    good.wait().unwrap();
+    rt.update(|_, tx| tx.copy_image_then(&good, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r)));
+    rt.frame(0.0);
+    assert_eq!(rt.state.pop(), Some(Ok(())));
+
+    let bad = cache.load(b"not an image".as_slice());
+    assert!(bad.wait().is_err());
+    rt.update(|_, tx| tx.copy_image_then(&bad, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r)));
+    rt.frame(0.0);
+    assert!(matches!(rt.state.pop(), Some(Err(CopyImageError::DecodeFailed(_)))));
+
+    // Same-handler supersession: copy_image_then followed by tx.copy reports Superseded.
+    rt.update(|_, tx| {
+        tx.copy_image_then(&good, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r));
+        tx.copy("text wins");
+    });
+    rt.frame(0.0);
+    assert_eq!(rt.state.pop(), Some(Err(CopyImageError::Superseded)));
+    assert_eq!(text(&m).as_deref(), Some("text wins"));
+
+    // Backend failure reports Failed.
+    m.fail_writes(Some("clipboard busy"));
+    rt.update(|_, tx| tx.copy_image_then(&good, |s: &mut Vec<Result<(), CopyImageError>>, r, _| s.push(r)));
+    rt.frame(0.0);
+    assert_eq!(rt.state.pop(), Some(Err(CopyImageError::Failed("clipboard busy".into()))));
+    m.fail_writes(None);
+
+    // Worker thread identity: encoding + write run on the worker thread, not the caller's.
+    struct ThreadRecorder { caller: std::thread::ThreadId, ran_on: Arc<Mutex<Option<std::thread::ThreadId>>>, rev: u64 }
+    impl Backend for ThreadRecorder {
+        fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> {
+            assert!(copy.content().image().is_some(), "PNG was encoded before Backend::write");
+            *self.ran_on.lock().unwrap() = Some(std::thread::current().id());
+            assert_ne!(std::thread::current().id(), self.caller, "encode and write must run off the caller thread");
+            self.rev += 1;
+            Ok(())
+        }
+        fn text(&mut self) -> Option<Zeroizing<String>> { None }
+        fn revision(&self) -> Option<u64> { Some(self.rev) }
+        fn clear(&mut self) -> Result<(), String> { Ok(()) }
+    }
+    let caller = std::thread::current().id();
+    let ran_on = Arc::new(Mutex::new(None));
+    let ran_on_w = ran_on.clone();
+    let worker = Worker::spawn(move || Some(ThreadRecorder { caller, ran_on: ran_on_w.clone(), rev: 0 }));
+    let (tx_reply, rx_reply) = mpsc::channel();
+    let mut w = ClipboardWrite::image(good.clone());
+    w.attach_copy_reply(CopyReply { id: 9, sender: tx_reply, wake: Arc::new(|| {}) });
+    worker.send_write(w, None, Some(0));
+    match rx_reply.recv_timeout(Duration::from_secs(5)).unwrap() {
+        Reply::CopyImage { id: 9, result: Ok(()) } => {}
+        _ => panic!("expected Reply::CopyImage Ok"),
+    }
+    assert_ne!(ran_on.lock().unwrap().unwrap(), caller);
+    worker.stop();
+
+    // No-clipboard worker (e.g. iOS/Android or headless) reports CopyImageError::Failed.
+    let no_cb = Worker::spawn(|| None::<Board>);
+    let (tx_reply2, rx_reply2) = mpsc::channel();
+    let mut w2 = ClipboardWrite::image(good);
+    w2.attach_copy_reply(CopyReply { id: 10, sender: tx_reply2, wake: Arc::new(|| {}) });
+    no_cb.send_write(w2, None, None);
+    match rx_reply2.recv_timeout(Duration::from_secs(5)).unwrap() {
+        Reply::CopyImage { id: 10, result: Err(CopyImageError::Failed(_)) } => {}
+        _ => panic!("expected Failed when no clipboard"),
+    }
+    no_cb.stop();
 }
