@@ -814,6 +814,7 @@ let app = rune::App::new(spec)
     .keep_running()                // closing the window keeps the process, state and loop
     .release_gpu_when_closed()     // optional: drop the GPU device while closed
     .gpu_memory_policy(GpuMemoryPolicy::MemoryUsage) // optional: wgpu suballocation policy
+    .gpu_loss_policy(GpuLossPolicy::Recover) // optional: Recover (default) or Terminal
     .cpu_first(CpuFirst::Auto)     // optional: Windows/Linux/web startup CPU-first policy
     .accessory()                   // macOS: menu-bar app, no Dock icon (h.set_dock_icon(true) shows it)
     .standard_menus()              // macOS: Edit, Minimize ⌘M and Close ⌘W (no Quit); regular apps get them anyway
@@ -1629,14 +1630,17 @@ rune::App::new(spec).fit_content_height().run();
   content's height. Unless the app sets a minimum, its minimum height is 0 rather than the
   default 400 pt.
 - Overlays ignore these (`Tx::resize_window` included); use `OverlayHandle::resize`, or
-  `ConfiguredOverlay::fit_content_height` for an overlay whose height follows its content (a
-  candidate list, a HUD). It is sized to its content before each show and prewarm (at the
-  target monitor's scale and active `RendererKind`, clamped to the display's work area), so
-  its first frame draws at that height with no flash. While shown, a height change resizes
-  and re-places the overlay before painting in the same frame (no spring; on Wayland
-  layer-shell, holds the previous frame until the compositor confirms the new size). Its
-  width comes from `OverlaySpec::size` and `OverlayHandle::resize`, whose height it ignores;
-  give the root no fixed or `fill` height.
+  `ConfiguredOverlay::sizing(ContentSizing)` (`Fixed`, `Fit`, `FitHeight`, `FitWidth`) with
+  optional `min_size((w, h))` / `max_size((w, h))` — or `ConfiguredOverlay::fit_content_height()`
+  as shorthand for `ContentSizing::FitHeight` — for an overlay whose size follows its content
+  (a candidate list, a horizontal IME bar, a HUD). Fitted axes are measured before each show
+  and prewarm (at the target monitor's scale and active `RendererKind`, clamped to `min_size`,
+  `max_size`, and the display's work area, with text wrapping at `max_size.0`), so its first
+  frame draws at the exact content size with no flash. While shown, a content size change
+  resizes and re-places the overlay before painting in the same frame (no spring; on Wayland
+  layer-shell, holds the previous frame until the compositor confirms the new size).
+  `OverlaySpec::size` and `OverlayHandle::resize` set only non-fitted axes; give fitted axes
+  no fixed or `fill` size on the root.
 
 ### Window chrome and shell controls (OpenCode Desktop fidelity)
 
@@ -2780,6 +2784,7 @@ row().key("theme").child(text(theme_title(&s.theme)))
   `item_corner_radius`, each unset one keeping its default. Submenus use the top menu's style
   (their own isn't used or shown in `--tree`); keyboard, pointer and screen-reader use don't
   change, and native menus ignore it.
+- **Default link context menu**: right-clicking (or pressing Menu / Shift+F10, or long-pressing on touch) an inline `Link` span with a real address—explicit `Link::href(url)`, or an `id` passing `http:`/`https:`/`mailto:`—shows **Open Link** (when `on_link` is set) and **Copy Link** (`Label::OpenLink`, `Label::CopyLink`), followed by a separator and **Copy** on selectable text, without selecting a word on macOS. Bare internal ids, `role("button")` chips, non-openable schemes, and redacted text never get the default menu; `El::on_link_secondary` and any element or ancestor `El::on_secondary_press` win when set. Pass `El::link_menu(false)` (or `Markdown::link_menu(false)`) to opt out. On the web, mouse right-click still hands off to the browser's `<a href>` menu; on Linux it flows through the same popup queue so an in-window fallback renders it.
 - **Headless**: `--tree` has a `popupMenu` object (items, anchor, `selected`, `queued`, and
   `style` when set) while a menu is open, and `--trace` notes `popup-menu:open`, `popup-menu:pick:{id}` and
   `popup-menu:cancel`. Scripts answer it with `{"type": "menu-pick", "id": "dark"}` or
@@ -3382,6 +3387,21 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
   logging. On macOS, engines that need depth/stencil, MSAA, render bundles, indirect draws, or
   other wgpu features beyond Rune's native Metal subset should opt into
   `App::gpu_backend(GpuBackend::Wgpu)` and `prewarm_gpu_on(GpuBackend::Wgpu)`.
+- **Terminal GPU loss policy (`GpuLossPolicy::Terminal`).** Apps embedding a renderer with
+  device-bound resources that cannot silently migrate to a replacement device can opt in via
+  `App::gpu_loss_policy(GpuLossPolicy::Terminal)` or `WindowSpec::gpu_loss_policy`. The first GPU
+  device loss (including `DeviceLostReason::Destroyed` outside clean shutdown or
+  `release_gpu_when_closed`), D3D12 device removal, uncaptured `wgpu::Error`, initialization failure,
+  or failed same-device surface configuration latches permanently and populates
+  `AppHandle::window_error()`. Open windows stay visible on their last presented frame with view
+  input and rendering stopped while close/quit paths and non-GPU shell actions (`Tx::set_title`)
+  keep working; `AppSpec::poll` wakes once without redrawing; owned `App::overlay` overlays share
+  the latch, drop their GPU resources, and report `Availability::Unavailable`; and Rune never
+  replaces the device or falls back to CPU (including on reopen and on `wasm32`, where the page and
+  canvas stay alive in the DOM). Same-device surface recreation on a healthy device stays allowed
+  without calling `Compositor::release_gpu`. Hard limits: commands already submitted to
+  `queue.submit`/`present` cannot be recalled; on macOS, Rune's native Metal backend implements
+  `set_device_lost_callback` while uncaptured errors require `App::gpu_backend(GpuBackend::Wgpu)`.
 - `Renderer::prepare_lists` uploads several instance lists in one buffer (one glyph upload) and
   returns their ranges; `encode_layers` records isolated groups before the containing pass;
   `draw_range` draws complete scopes into that pass; `add_format` builds the uber

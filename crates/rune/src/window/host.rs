@@ -25,6 +25,7 @@ pub(in crate::window) mod app;
 pub(in crate::window) mod create;
 pub(in crate::window) mod draw;
 pub(in crate::window) mod events;
+pub(in crate::window) mod gpu_loss;
 pub(in crate::window) mod lifecycle;
 pub(in crate::window) mod render;
 pub(in crate::window) mod shell_requests;
@@ -105,6 +106,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) cpu_first: crate::CpuFirst,
     #[cfg(target_os = "windows")]
     pub(in crate::window) resize_sync: crate::ResizeSync,
+    /// Per-window terminal GPU-loss state (`App::gpu_loss_policy`).
+    pub(in crate::window) terminal_loss: gpu_loss::TerminalLoss,
     pub(in crate::window) prewarm_effects: crate::PrewarmEffects,
     pub(in crate::window) open_at_start: bool,
     /// `App::float_on_open`: each window maps at a fixed size, then takes its own limits.
@@ -241,6 +244,8 @@ struct HostInit {
     cpu_first: crate::CpuFirst,
     #[cfg(target_os = "windows")]
     resize_sync: crate::ResizeSync,
+    gpu_loss_policy: crate::GpuLossPolicy,
+    gpu_loss_latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>,
     prewarm_effects: crate::PrewarmEffects,
     open_at_start: bool,
     fit_height: bool,
@@ -288,6 +293,8 @@ impl Host {
         let color_scheme = app.color_scheme;
         let window_backdrop = app.window_backdrop;
         let frame_latency = app.frame_latency;
+        let gpu_loss_policy = app.gpu_loss_policy;
+        let gpu_loss_latch = app.gpu_loss_latch.take();
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         let cpu_first = app.cpu_first;
         #[cfg(target_os = "windows")]
@@ -349,6 +356,8 @@ impl Host {
             cpu_first,
             #[cfg(target_os = "windows")]
             resize_sync,
+            gpu_loss_policy,
+            gpu_loss_latch,
             prewarm_effects,
             open_at_start: open,
             fit_height,
@@ -401,6 +410,8 @@ impl Host {
             cpu_first,
             #[cfg(target_os = "windows")]
             resize_sync,
+            gpu_loss_policy,
+            gpu_loss_latch,
             prewarm_effects,
             open_at_start,
             fit_height,
@@ -435,7 +446,7 @@ impl Host {
             geometry.min_size = options.fit_min_size(geometry.min_size);
             // Opens at the content's height; the first frame corrects any difference its
             // real scale makes.
-            app.rt_mut().host.fit_height = true;
+            app.rt_mut().host.set_fit_height(true);
             let (min, max) = options.size_limits(geometry.min_size);
             let fitted = crate::window::frame::clamp_size((size.0, app.content_height()), min, max);
             app.rt_mut().set_viewport(fitted, 1.0);
@@ -481,6 +492,8 @@ impl Host {
             rt.host.document_edited.seed(macos_window.document_edited);
         }
         app.set_live_visible(false);
+        let terminal_loss = gpu_loss::TerminalLoss::new(gpu_loss_policy, gpu_loss_latch);
+        terminal_loss.connect_wake(shared.clone(), waker.clone());
         let mut clipboard = crate::clipboard::Client::default();
         clipboard.connect(waker.clone());
         let popup = crate::popup_menu::Presenter::new(waker.clone());
@@ -528,6 +541,7 @@ impl Host {
             cpu_first,
             #[cfg(target_os = "windows")]
             resize_sync,
+            terminal_loss,
             prewarm_effects,
             open_at_start,
             float_on_open,
@@ -600,7 +614,7 @@ impl Host {
         let Some(w) = self.shown_win() else { return };
         if self.wayland && !w.first_frame.notified() { return; }
         let allow_position = self.placement.is_none() && !self.wayland;
-        let track_size = !self.app.rt().host.fit_height;
+        let track_size = !self.app.rt().host.fit_height();
         self.reopen.record_live(
             w.live_state(self.wayland),
             super::state::reopen::use_physical_size(self.wayland),

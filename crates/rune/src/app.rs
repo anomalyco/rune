@@ -120,6 +120,9 @@ pub struct App<S: 'static> {
     pub(crate) release_gpu: bool,
     pub(crate) cpu_first: crate::CpuFirst,
     pub(crate) resize_sync: crate::ResizeSync,
+    pub(crate) gpu_loss_policy: crate::GpuLossPolicy,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) gpu_loss_latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>,
     pub(crate) prewarm_effects: crate::PrewarmEffects,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) accessory: bool,
@@ -204,6 +207,9 @@ impl<S: 'static> App<S> {
             release_gpu: false,
             cpu_first: crate::CpuFirst::Auto,
             resize_sync: crate::ResizeSync::Auto,
+            gpu_loss_policy: crate::GpuLossPolicy::Recover,
+            #[cfg(not(target_arch = "wasm32"))]
+            gpu_loss_latch: None,
             prewarm_effects: crate::PrewarmEffects::NONE,
             accessory: false,
             standard_menus: false,
@@ -681,6 +687,9 @@ impl<S: 'static> App<S> {
             }
             let (mut overlay, handle) = crate::overlay::OverlayHost::new(configured, state, &self.spec, self.runtime.font_smoothing);
             overlay.set_prewarm_effects(self.prewarm_effects);
+            if let Some(latch) = &self.gpu_loss_latch {
+                overlay.set_gpu_loss_latch(Some(Arc::clone(latch)));
+            }
             self.overlays.push(Box::new(overlay));
             handle
         }

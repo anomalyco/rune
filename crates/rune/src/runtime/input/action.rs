@@ -543,7 +543,7 @@ impl RuntimeCore {
                 one.button = button;
                 self.press_link(app, &path, k, &mut one)
             }
-            Action::LinkSecondary(path, k, point) => self.secondary_press_link(app, &path, k, point, &mut one),
+            Action::LinkSecondary(path, k, point) => self.secondary_press_link_or_menu(app, &path, k, point, &mut one),
             Action::LinkHover(path, url, rect, pressing) => {
                 one.pressing = pressing;
                 self.dispatch_link_hover(app, &path, url.as_deref(), rect, &mut one)

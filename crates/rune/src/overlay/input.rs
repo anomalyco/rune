@@ -79,9 +79,8 @@ impl PositionOwner {
 }
 
 /// An overlay has no window to ask: whatever a step requested of one is dropped. Returns the
-/// content's height a commit asked for, when the overlay fits its content
-/// (`ConfiguredOverlay::fit_content_height`).
-pub(super) fn drop_window_requests(rt: &mut RuntimeCore) -> Option<f32> {
+/// content's size a commit asked for, when the overlay uses content sizing.
+pub(super) fn drop_window_requests(rt: &mut RuntimeCore) -> Option<(f32, f32)> {
     rt.shell_request = None;
     rt.host.user_close_request = false;
     rt.ignore_minimize("an overlay");
@@ -91,27 +90,47 @@ pub(super) fn drop_window_requests(rt: &mut RuntimeCore) -> Option<f32> {
 }
 
 impl OverlayCore {
-    /// The size this turn's requests (`size`, `fit_height`) give the overlay. One that fits
-    /// its content (`ConfiguredOverlay::fit_content_height`) takes only the width of an
-    /// `OverlayHandle::resize`: its height is the content's, which a commit asks for when it
-    /// changes and the show measures.
-    pub(super) fn requested_size(&self, rt: &RuntimeCore, size: Option<(f32, f32)>, fit_height: Option<f32>) -> Option<(f32, f32)> {
-        if !rt.host.fit_height { return size; }
-        if size.is_none() && fit_height.is_none() { return None; }
-        let width = size.map_or(self.canvas_size.0, |size| size.0);
-        Some((width, fit_height.unwrap_or(self.canvas_size.1)))
+    /// The size this turn's requests (`size`, `fit_size`) give the overlay. Fitted axes come
+    /// from content measurement (`fit_size` or the current `canvas_size`); fixed axes come
+    /// from `OverlayHandle::resize` (`size`).
+    pub(super) fn requested_size(&self, rt: &RuntimeCore, size: Option<(f32, f32)>, fit_size: Option<(f32, f32)>) -> Option<(f32, f32)> {
+        let mode = rt.host.content_sizing;
+        if mode.is_fixed() { return size; }
+        if size.is_none() && fit_size.is_none() { return None; }
+        let w = if mode.fits_width() {
+            fit_size.map_or(self.canvas_size.0, |s| s.0)
+        } else {
+            size.map_or(self.canvas_size.0, |s| s.0)
+        };
+        let h = if mode.fits_height() {
+            fit_size.map_or(self.canvas_size.1, |s| s.1)
+        } else {
+            size.map_or(self.canvas_size.1, |s| s.1)
+        };
+        Some((w, h))
     }
 
-    /// What a step asked of a window: dropped, except an overlay that fits its content takes
-    /// the content's new height. A hidden one keeps it for its next show to place; one on
-    /// screen resizes on the next turn, as `OverlayHandle::resize` does.
+    /// What a step asked of a window: dropped, except a content-sized overlay takes any
+    /// pending content size not already consumed in the same frame by `take_live_fit_resize`.
+    /// A hidden overlay records it for its next show; a shown one queues it.
     pub(super) fn take_window_requests(&mut self, rt: &mut RuntimeCore) {
-        let Some(height) = drop_window_requests(rt) else { return };
+        let Some(raw) = drop_window_requests(rt) else { return };
+        if !self.sizing_active() { return; }
+        let scale = self.live_scale().unwrap_or_else(|| rt.window_scale());
+        let resolved = super::sizing::resolve_content_size(
+            self.sizing,
+            self.options.placement,
+            self.canvas_size,
+            raw,
+            self.last_work_area,
+            scale,
+            self.max_phys_dim(),
+        );
         if matches!(self.presence, Presence::Hidden { .. }) {
-            self.canvas_size.1 = height;
+            self.canvas_size = resolved;
             return;
         }
-        self.shared.request(|q| q.fit_height = Some(height));
+        self.shared.request(|q| q.fit_size = Some(resolved));
     }
 
     /// The runtime's cursor while the pointer is over a hit area of a shown overlay that takes
@@ -615,6 +634,10 @@ impl OverlayCore {
 
     /// Applies requests from other threads: updates, edge, show and hide.
     pub(super) fn sync(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) {
+        if self.poll_terminal_gpu_loss(app) {
+            self.drain_tokens_none();
+            return;
+        }
         self.clipboard_due(app);
         if app.popup_answer(&mut self.popup) {
             self.dirty = true;
@@ -665,12 +688,12 @@ impl OverlayCore {
             (at.align, at.inset) = (align, inset);
         }
         let old_size = self.at.size;
-        let size = self.requested_size(app.rt(), requests.size, requests.fit_height);
+        let size = self.requested_size(app.rt(), requests.size, requests.fit_size);
         if let Some(size) = size { self.canvas_size = size; }
         at.size = size.unwrap_or(at.size);
         if at != self.at || options_changed || reset_position {
             self.at = at;
-            if self.fits_height_active(app.rt()) && (requests.size.is_some() || options_changed) {
+            if self.sizing_active() && (requests.size.is_some() || options_changed) {
                 self.fit_for_show_in(app, Some(event_loop));
                 self.dirty = true;
             }

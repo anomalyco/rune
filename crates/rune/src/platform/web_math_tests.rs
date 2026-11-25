@@ -160,6 +160,7 @@ fn webgl_context_loss_recovers_instead_of_terminating_the_app() {
     assert_eq!(loss_action(false, true, true, false), LossAction::Fatal);
 }
 
+
 #[test]
 fn web_gate_skips_suspended_waiting_context_lost_and_moving() {
     use crate::frame::host_step::Gate;
@@ -570,7 +571,7 @@ mod web_frame_host_tests {
                     self.log.push("acquire:cpu");
                     Acquire::Ready(MockDrawable::Cpu)
                 }
-                WebDrawKind::ContextLost | WebDrawKind::Moving => Acquire::Missed(Missed::Unconfigured),
+                WebDrawKind::ContextLost | WebDrawKind::TerminalFailed | WebDrawKind::Moving => Acquire::Missed(Missed::Unconfigured),
             }
         }
 

@@ -32,7 +32,7 @@ impl RuntimeCore {
     /// with [`Self::set_page_scroll`]. The viewport stays the band's size.
     pub(crate) fn page_mode(&mut self) {
         self.host.page.get_or_insert_default().view = self.viewport.1;
-        self.host.fit_height = true;
+        self.host.set_fit_height(true);
         self.commit.relayout = true;
     }
 

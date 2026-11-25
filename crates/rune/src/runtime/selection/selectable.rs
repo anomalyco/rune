@@ -757,12 +757,15 @@ impl RuntimeCore {
         }
         let text = self.copy_text(app);
         let html = text.as_ref().and_then(|_| self.copy_html());
-        let mut copy = crate::PopupItem::new("copy", crate::labels::label(crate::Label::Copy)).enabled(text.is_some());
-        // The primary modifier, as the copy key handler takes it: ⌘C on macOS, Ctrl+C elsewhere.
-        if let Ok(shortcut) = "mod+c".parse::<crate::Shortcut>() { copy = copy.key_equivalent(shortcut); }
+        let Some(menu) = link_menu::build_context_menu(link_menu::ContextMenuTarget {
+            has_link: false,
+            has_on_link: false,
+            selectable: true,
+            copy_enabled: text.is_some(),
+        }) else { return false };
         log_event!(self, "selection menu {path}");
         self.host.popups.push_back(crate::popup_menu::Request {
-            menu: crate::PopupMenu::new().item(copy),
+            menu,
             anchor: crate::PopupAnchor::Point(x, y),
             on_pick: Box::new(move |_, picked, tx| {
                 if picked == Some("copy") && let Some(text) = text {

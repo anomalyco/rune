@@ -34,9 +34,11 @@ impl RuntimeCore {
 
     /// Whether the change needs a layout.
     pub(in crate::runtime) fn change_viewport(&mut self, viewport: (f32, f32), scale: f32) -> bool {
-        // A window that fits its content lays out the same at any height: its own resize
-        // mustn't cut short the layout springs it is following.
-        if self.host.fit_height && viewport.0 == self.viewport.0 && scale == self.env.scale {
+        // A window or overlay that fits content on an axis lays out the same when only fitted
+        // axes change: its own resize must not loop relayout or cut short child springs.
+        let fixed_w_same = self.host.content_sizing.fits_width() || viewport.0 == self.viewport.0;
+        let fixed_h_same = self.host.content_sizing.fits_height() || viewport.1 == self.viewport.1;
+        if self.host.content_sizing.fits_any() && fixed_w_same && fixed_h_same && scale == self.env.scale {
             self.viewport = viewport;
             return false;
         }

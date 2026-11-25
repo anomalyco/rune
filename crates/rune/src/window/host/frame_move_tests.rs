@@ -216,7 +216,7 @@ fn immediate_resize_reconfigures_surface_steps_viewport_and_consumes_jump() {
 #[test]
 fn immediate_resize_for_fit_content_height_steps_without_fit_resized_relayout() {
     let mut rt = Runtime::new(200.0f32, |&h, _| col().w_full().child(el().size(100.0, h)), (400.0, 200.0), Env::default());
-    rt.core_mut().host.fit_height = true;
+    rt.core_mut().host.set_fit_height(true);
     rt.core_mut().host.window_resting = true;
     rt.frame(0.0);
     rt.core_mut().host.window_frame.take();
@@ -246,7 +246,7 @@ fn immediate_resize_for_fit_content_height_steps_without_fit_resized_relayout() 
 #[test]
 fn immediate_resize_handles_ignored_clamped_zero_and_oversized_results() {
     let mut rt = Runtime::new(200.0f32, |&h, _| col().w_full().child(el().size(100.0, h)), (400.0, 200.0), Env::default());
-    rt.core_mut().host.fit_height = true;
+    rt.core_mut().host.set_fit_height(true);
     rt.core_mut().host.window_resting = true;
     rt.frame(0.0);
     rt.core_mut().host.window_frame.take();

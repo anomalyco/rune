@@ -84,6 +84,36 @@ pub(super) fn markdown_link_popover(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
                 .build(k),
         )
         .child(text(status).key("link-popover-status").font(k.ty.small).color(k.c.text_weak))
+        .child(text("Default link menu (right-click or Shift+F10)").font(k.ty.ui_medium).color(k.c.text_strong))
+        .child(
+            Markdown::new("Right-click [Rune docs](https://rune.dev/docs) for Open Link / Copy Link, or try [email](mailto:hi@rune.dev).")
+                .selectable(true)
+                .on_link_tx(|s: &mut G, url, tx| {
+                    if let Some(rect) = tx.link_rect() {
+                        s.link_popover = Some((url.to_owned(), rect));
+                    }
+                })
+                .build(k),
+        )
+        .child(
+            text("Opaque key with Link::href vs link_menu(false)")
+                .font(k.ty.small)
+                .color(k.c.text_base)
+                .selectable(true)
+                .link(rune::Link::new(16..26, "doc-42").href("https://rune.dev/doc/42"))
+                .on_link(|s: &mut G, id, tx| {
+                    if let Some(rect) = tx.link_rect() {
+                        s.link_popover = Some((id.to_owned(), rect));
+                    }
+                }),
+        )
+        .child(
+            Markdown::new("Opted out: [plain copy only](https://rune.dev/plain).")
+                .selectable(true)
+                .link_menu(false)
+                .on_link(|_: &mut G, _| {})
+                .build(k),
+        )
 }
 
 #[cfg(test)]

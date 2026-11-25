@@ -201,7 +201,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let mut reports = crate::frame::encoded::FrameReports::new(on_frame_encoded, Some("main"));
     app.rt_mut().headless_chrome(chrome, titlebar, app_options.borderless);
     app.rt_mut().transparent = transparent;
-    app.rt_mut().host.fit_height = fit_height;
+    app.rt_mut().host.set_fit_height(fit_height);
     if let Some(bars) = args.scroll_bars { app.rt_mut().set_system_scroll_bars(bars); }
     // Only limits the app set: the canvas opens at any size, below the default minimum too.
     let limits = (app_options.min_size.or(min_size).unwrap_or((0.0, 0.0)), app_options.max_size);

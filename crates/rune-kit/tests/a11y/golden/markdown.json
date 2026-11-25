@@ -16,7 +16,8 @@
             {
               "actions": [
                 "click",
-                "focus"
+                "focus",
+                "context-menu"
               ],
               "key": "https://example.com/guide",
               "name": "the guide",

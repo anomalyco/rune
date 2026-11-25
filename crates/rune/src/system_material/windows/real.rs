@@ -462,19 +462,21 @@ impl Materials {
         self.controller.update(hwnd, inputs, found, &mut seam)
     }
 
-    /// Syncs pooled visuals to `draws` right before `gpu.queue.present(frame)`.
+    /// Presents the swap chain first, then syncs pooled visuals to `draws` and commits.
     /// Returns `false` if a COM/DWM error forced a rollback to fallback fills.
-    pub(crate) fn sync_before_present(
+    pub(crate) fn present(
         &mut self,
         draws: &[MaterialDraw],
         dark: bool,
         handover: Option<&mut Handover>,
+        present: impl FnOnce(),
     ) -> bool {
         if !self.controller.native() {
+            present();
             return true;
         }
         let mut seam = RealSeam { target: &mut self.target, handover };
-        self.controller.sync_before_present(draws, dark, &mut seam)
+        self.controller.present(draws, dark, &mut seam, present)
     }
 
     /// Handles an OS system-effects policy change event. Returns `true` if the host should redraw.

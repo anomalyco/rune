@@ -15,7 +15,7 @@ extern "C" {
     #[wasm_bindgen(js_name = gpuSummary)]
     fn gpu_summary(device: &JsValue) -> String;
     #[wasm_bindgen(js_name = watchGpu)]
-    fn watch_gpu(device: &JsValue, on_error: &js_sys::Function, on_lost: &js_sys::Function);
+    fn watch_gpu(device: &JsValue, on_error: &js_sys::Function, on_lost: &js_sys::Function, terminal: bool);
     #[wasm_bindgen(js_name = restoreGpu)]
     fn restore_gpu(device: &JsValue);
     #[wasm_bindgen(js_name = pushScopes)]
@@ -24,7 +24,7 @@ extern "C" {
     #[wasm_bindgen(js_name = popScopes)]
     fn pop_scopes(device: &JsValue) -> js_sys::Promise;
     #[wasm_bindgen(js_name = watchWebglContext)]
-    fn watch_webgl_context(canvas: &web_sys::HtmlCanvasElement, on_lost: &js_sys::Function, on_restored: &js_sys::Function) -> JsValue;
+    fn watch_webgl_context(canvas: &web_sys::HtmlCanvasElement, prevent_default: bool, on_lost: &js_sys::Function, on_restored: &js_sys::Function) -> JsValue;
     #[wasm_bindgen(js_name = webglWatchLost)]
     fn webgl_watch_lost(handle: &JsValue) -> bool;
     #[wasm_bindgen(js_name = disposeWebglWatch)]
@@ -94,6 +94,7 @@ enum WebRestoreKind {
         log: Arc<Mutex<ErrorLog>>,
         gpu_lost: Arc<AtomicBool>,
         on_lost: WebGlLostSlot,
+        terminal: bool,
     },
 }
 
@@ -101,8 +102,8 @@ impl WebRestore {
     pub(crate) fn restore(&self, device: &wgpu::Device) {
         match &self.0 {
             WebRestoreKind::WebGpu => restore_webgpu(device),
-            WebRestoreKind::WebGl2 { log, gpu_lost, on_lost } => {
-                install_webgl2_callbacks(device, Arc::clone(log), Arc::clone(gpu_lost), Arc::clone(on_lost));
+            WebRestoreKind::WebGl2 { log, gpu_lost, on_lost, terminal } => {
+                install_webgl2_callbacks(device, Arc::clone(log), Arc::clone(gpu_lost), Arc::clone(on_lost), *terminal);
             }
         }
     }
@@ -121,7 +122,10 @@ fn install_webgl2_callbacks(
     log: Arc<Mutex<ErrorLog>>,
     gpu_lost: Arc<AtomicBool>,
     on_lost: WebGlLostSlot,
+    terminal: bool,
 ) {
+    let on_lost_err = Arc::clone(&on_lost);
+    let gpu_lost_err = Arc::clone(&gpu_lost);
     device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
         let kind = match &error {
             wgpu::Error::Validation { .. } => "GPUValidationError",
@@ -130,10 +134,17 @@ fn install_webgl2_callbacks(
         };
         let message = error.to_string();
         log_error_line(&mut log.lock().unwrap_or_else(|e| e.into_inner()), "WebGL2", kind, &message);
+        if terminal {
+            gpu_lost_err.store(true, Ordering::Release);
+            let PageOnly(slot) = &*on_lost_err;
+            if let Some(lost) = slot.borrow_mut().take() {
+                lost(format!("uncaptured GPU error ({kind}): {message}, on WebGL2"));
+            }
+        }
     }));
     device.set_device_lost_callback(move |reason, message| {
         gpu_lost.store(true, Ordering::Release);
-        if reason == wgpu::DeviceLostReason::Destroyed { return; }
+        if !terminal && reason == wgpu::DeviceLostReason::Destroyed { return; }
         let PageOnly(slot) = &*on_lost;
         if let Some(lost) = slot.borrow_mut().take() {
             lost(format!("{reason:?}: {message}, on WebGL2"));
@@ -147,28 +158,41 @@ fn install_webgl2_callbacks(
 pub(super) fn watch(
     device: &wgpu::Device,
     gpu_lost: Arc<AtomicBool>,
+    terminal: bool,
     lost: impl FnOnce(String) + 'static,
 ) -> WebRestore {
     if let Some(js) = js_device(device) {
         let adapter = gpu_summary(js);
         let log = RefCell::new(ErrorLog::default());
+        let lost_slot: std::rc::Rc<RefCell<Option<Box<dyn FnOnce(String)>>>> = std::rc::Rc::new(RefCell::new(Some(Box::new(lost))));
         let on_error = {
             let adapter = adapter.clone();
+            let lost_slot = std::rc::Rc::clone(&lost_slot);
+            let gpu_lost = Arc::clone(&gpu_lost);
             Closure::<dyn FnMut(String, String)>::new(move |kind: String, message: String| {
                 log_error_line(&mut log.borrow_mut(), &adapter, &kind, &message);
+                if terminal {
+                    gpu_lost.store(true, Ordering::Release);
+                    if let Some(lost) = lost_slot.borrow_mut().take() {
+                        lost(format!("uncaptured GPU error ({kind}): {message}, on {adapter}"));
+                    }
+                }
             })
         };
         let on_lost = Closure::once_into_js(move |reason: String, message: String| {
-            lost(format!("{reason}: {message}, on {adapter}"));
+            gpu_lost.store(true, Ordering::Release);
+            if let Some(lost) = lost_slot.borrow_mut().take() {
+                lost(format!("{reason}: {message}, on {adapter}"));
+            }
         });
-        watch_gpu(js, on_error.as_ref().unchecked_ref(), on_lost.unchecked_ref());
+        watch_gpu(js, on_error.as_ref().unchecked_ref(), on_lost.unchecked_ref(), terminal);
         on_error.forget();
         return WebRestore(WebRestoreKind::WebGpu);
     }
     let log = Arc::new(Mutex::new(ErrorLog::default()));
     let on_lost: WebGlLostSlot = Arc::new(PageOnly(RefCell::new(Some(Box::new(lost)))));
-    install_webgl2_callbacks(device, Arc::clone(&log), Arc::clone(&gpu_lost), Arc::clone(&on_lost));
-    WebRestore(WebRestoreKind::WebGl2 { log, gpu_lost, on_lost })
+    install_webgl2_callbacks(device, Arc::clone(&log), Arc::clone(&gpu_lost), Arc::clone(&on_lost), terminal);
+    WebRestore(WebRestoreKind::WebGl2 { log, gpu_lost, on_lost, terminal })
 }
 
 /// Active `webglcontextlost` / `webglcontextrestored` DOM listeners on a canvas; removed on drop.
@@ -181,6 +205,7 @@ pub(super) struct WebglWatch {
 impl WebglWatch {
     pub(super) fn new(
         canvas: &web_sys::HtmlCanvasElement,
+        prevent_default: bool,
         on_lost: impl FnMut(String) + 'static,
         on_restored: impl FnMut() + 'static,
     ) -> Self {
@@ -188,6 +213,7 @@ impl WebglWatch {
         let on_restored = Closure::<dyn FnMut()>::new(on_restored);
         let handle = watch_webgl_context(
             canvas,
+            prevent_default,
             on_lost.as_ref().unchecked_ref(),
             on_restored.as_ref().unchecked_ref(),
         );

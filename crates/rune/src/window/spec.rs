@@ -883,6 +883,17 @@ impl<S: 'static> WindowSpec<S> {
         tab_visits_controls(on: bool);
         /// Release this window's GPU device and renderer when it closes, like `App::release_gpu_when_closed`.
         release_gpu_when_closed();
+        /// Sets how this window responds to GPU device loss or uncaptured errors, like
+        /// [`App::gpu_loss_policy`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, GpuLossPolicy, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("main", AppSpec::new("Main", (800.0, 600.0), || (), |_, _| el()))
+        ///     .gpu_loss_policy(GpuLossPolicy::Terminal);
+        /// let _ = spec;
+        /// ```
+        gpu_loss_policy(policy: crate::GpuLossPolicy);
         /// Configure CPU-first startup and handover for this window, like [`App::cpu_first`].
         ///
         /// ```no_run

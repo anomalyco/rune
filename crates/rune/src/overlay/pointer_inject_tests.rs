@@ -209,7 +209,7 @@ fn parity_view(s: &Trace, cx: &mut Cx<Trace>) -> El {
     let scroll_y = s.scroll_y.clone();
     let target = el()
         .key("target")
-        .size(120.0, 60.0)
+        .size(120.0, 220.0)
         .hit()
         .pointer_buttons([PointerButton::Secondary])
         .on_hover(|t: &mut Trace| t.events.push("hover".into()))
@@ -391,15 +391,14 @@ fn injected_input_bypasses_click_through_and_drops_when_hidden_or_fading() {
 #[test]
 fn injected_press_refuses_window_drag_and_drag_out_suppresses_cursor_and_keeps_haptics() {
     #[derive(Default)]
-    struct S { pressed: u32, dragged: u32 }
+    struct S { pressed: u32 }
     fn view(_: &S, _: &mut Cx<S>) -> El {
         col().size(120.0, 80.0)
             .child(el().key("bar").size(120.0, 30.0).hit().window_drag())
             .child(
                 el().key("card").size(120.0, 50.0).hit()
                     .drag_out(|_: &S| Some(crate::DragItem::new().text("item")))
-                    .on_press_tx(|s: &mut S, tx: &mut Tx| { s.pressed += 1; tx.haptic(Haptic::Selection); })
-                    .on_drag(|s: &mut S, _, _| s.dragged += 1),
+                    .on_press_tx(|s: &mut S, tx: &mut Tx| { s.pressed += 1; tx.haptic(Haptic::Selection); }),
             )
     }
     let app = AppSpec::new("refuse", (120.0, 80.0), S::default, view);

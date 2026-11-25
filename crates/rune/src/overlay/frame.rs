@@ -367,8 +367,11 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
         let materials_ok = {
             let (draws, _) = crate::system_material::present_draws(rt);
-            live.materials.sync_before_present(draws, rt.env.system_dark, live.handover.as_mut())
+            live.materials.present(draws, rt.env.system_dark, live.handover.as_mut(), || {
+                gpu.queue.present(frame);
+            })
         };
+        #[cfg(not(all(target_os = "windows", feature = "windows-system-material")))]
         gpu.queue.present(frame);
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
         { materials_ok }

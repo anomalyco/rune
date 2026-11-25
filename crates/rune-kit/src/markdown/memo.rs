@@ -301,7 +301,7 @@ pub(super) fn with_renderer<R>(r: &Renderer, f: impl FnOnce() -> R) -> R {
 /// to compile here until it is either hashed in the base or guarded per block/link below.
 fn compute_base(r: &Renderer) -> (u64, u64) {
     let Renderer {
-        s, highlights, reveal, streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere, on_link, on_link_secondary, on_link_hover,
+        s, highlights, reveal, streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere, on_link, on_link_secondary, on_link_hover, link_menu,
         link_look: _, link_help: _, link_ring: _, link_favicon: _, emoji: _, code_link: _,
         highlighter: _, sources: _, next_source: _, next_diff: _, tasks: _, next_task: _, on_task: _,
         #[cfg(feature = "mermaid")]
@@ -310,7 +310,7 @@ fn compute_base(r: &Renderer) -> (u64, u64) {
         tentative: _, current_block_key: _, flow: _,
     } = r;
     let mut h = PairHasher::new();
-    (s, highlights, reveal.to_bits(), streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere,
+    (s, highlights, reveal.to_bits(), streaming, tasks_read_only, selectable, scroll_wide, wrap_anywhere, link_menu,
         on_link.as_ref().map(|w| w.1), on_link_secondary.as_ref().map(|w| w.1), on_link_hover.as_ref().map(|w| w.1)).hash(&mut h);
     h.finish128()
 }

@@ -50,6 +50,7 @@ impl OverlayCore {
     }
 
     pub(super) fn wake_deadline(&self, rt: &RuntimeCore) -> Option<Instant> {
+        if self.gpu_loss_failed() { return None; }
         // A running display link consumes due runtime timers. Keep the independent
         // pointer deadline, but do not spin on an overdue animation timer. Without one (hidden,
         // covered, faded out or unpaced), a timer due sooner than a frame waits a frame.
@@ -111,6 +112,7 @@ impl OverlayCore {
         self.popup.connect(wake.clone());
         self.gpu_pool = gpu;
         *self.shared.wake.lock().unwrap() = Some(wake.clone());
+        self.connect_terminal_gpu_wake();
         let rerun = || -> Waker {
             let shared = self.shared.clone();
             Arc::new(move || {
@@ -131,6 +133,7 @@ impl OverlayCore {
 
 impl AnyHost for OverlayHost {
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if self.core.poll_terminal_gpu_loss(&mut *self.app) { return; }
         self.core.meter.turn(matches!(cause, StartCause::ResumeTimeReached { .. } | StartCause::Poll), crate::frame::surface_stats::slept(cause));
         self.core.turn_frame.step(frame::TurnEvent::NewEvents);
         #[cfg(target_os = "macos")]
@@ -303,7 +306,7 @@ impl AnyHost for OverlayHost {
         match event {
             WindowEvent::Moved(_) => {
                 core.position_owner.step(input::PositionEvent::WindowMoved);
-                if core.fit_height {
+                if core.sizing.mode.fits_any() {
                     let (area, _) = core.target_metrics(event_loop);
                     if area.is_some() { core.last_work_area = area; }
                 }
@@ -321,7 +324,7 @@ impl AnyHost for OverlayHost {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if core.fit_height {
+                if core.sizing.mode.fits_any() {
                     let (area, _) = core.target_metrics(event_loop);
                     if area.is_some() { core.last_work_area = area; }
                     core.dirty = true;
@@ -533,8 +536,15 @@ impl PendingOverlay for OverlayHost {
     fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects) {
         OverlayHost::set_prewarm_effects(self, effects);
     }
+    fn set_gpu_loss_latch(&mut self, latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>) {
+        OverlayHost::set_gpu_loss_latch(self, latch);
+    }
     #[cfg(test)]
     fn font_smoothing(&self) -> crate::FontSmoothing {
         self.app.rt().font_smoothing()
+    }
+    #[cfg(test)]
+    fn gpu_loss_latch(&self) -> Option<Arc<crate::render::loss_latch::GpuLossLatch>> {
+        self.core.gpu_loss_latch.clone()
     }
 }

@@ -67,6 +67,9 @@ impl TextFlags {
     /// [`El::selectable`](crate::El::selectable) gave the element its `Cursor::Text`, which an
     /// [`El::selection_enabled`](crate::El::selection_enabled)`(false)` subtree takes back.
     pub(crate) const SELECTABLE_CURSOR: u8 = 1 << 1;
+    /// [`El::link_menu`](crate::El::link_menu)`(false)`: suppress Rune's default Open Link / Copy Link
+    /// context menu on inline [`Link`] spans.
+    pub(crate) const NO_LINK_MENU: u8 = 1 << 2;
 
     #[inline(always)]
     pub(crate) const fn has(self, bit: u8) -> bool { self.0 & bit != 0 }
@@ -303,6 +306,9 @@ pub(crate) fn wipe_string(s: &mut String) {
 pub(crate) fn wipe_links(links: &mut Vec<Link>) {
     for link in links.iter_mut() {
         wipe_string(&mut link.id);
+        if let Some(href) = &mut link.href {
+            wipe_string(href);
+        }
         if let Some(label) = &mut link.label {
             wipe_string(label);
         }
@@ -613,4 +619,29 @@ pub(crate) enum Elide {
     Middle,
     /// [`El::truncate_head`](crate::El::truncate_head) and [`El::elide_head`](crate::El::elide_head): keeps the end.
     Head,
+}
+
+impl crate::El {
+    /// Whether right-clicking (or pressing the context-menu key on) an inline [`Link`] span with
+    /// a real address opens Rune's default Open Link / Copy Link context menu (`true` by default).
+    ///
+    /// The default menu appears only for non-redacted `role("link")` spans that carry an explicit
+    /// [`Link::href`] or an `id` passing [`crate::open_url::check`] (`http:`, `https:`,
+    /// `mailto:`), and yields to [`El::on_link_secondary`] and any element or ancestor
+    /// [`El::on_secondary_press`]. Pass `false` to opt out while keeping plain selectable-text
+    /// Copy.
+    ///
+    /// ```
+    /// use rune::{Link, text};
+    ///
+    /// let _plain = text("See https://example.com")
+    ///     .link(Link::new(4..23, "https://example.com"))
+    ///     .link_menu(false);
+    /// ```
+    pub fn link_menu(mut self, on: bool) -> Self {
+        if let Some(t) = &mut self.text {
+            t.flags.set(TextFlags::NO_LINK_MENU, !on);
+        }
+        self
+    }
 }

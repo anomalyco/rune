@@ -411,7 +411,7 @@ impl Host {
 
     /// Brings the window on screen (`Reveal`); a window closed for good stays closed.
     pub(in crate::window) fn reveal(&mut self, event_loop: &ActiveEventLoop, reveal: Reveal, mut token: Option<String>) {
-        if self.life.finished() { return; }
+        if self.life.finished() || self.poll_gpu_loss() { return; }
         let mut built = false;
         for effect in reveal.effects(self.found()) {
             match effect {
@@ -533,6 +533,10 @@ impl Host {
     /// Applies everything other threads asked for since the last wake-up. A `wake` polls a
     /// hidden window first, so a reveal in the same turn sees what `poll` changed.
     pub(in crate::window) fn drain(&mut self, event_loop: &ActiveEventLoop, wake: bool) {
+        if self.poll_gpu_loss() {
+            self.drain_terminal(event_loop, wake);
+            return;
+        }
         let shown = self.shown_win().is_some();
         let stale_before = self.app.rt().needs_commit();
         let clipboard = self.clipboard.receive_core(self.app.rt_mut());
@@ -654,7 +658,7 @@ impl Host {
         self.apply_tx_macos_document();
         self.show_title();
         self.apply_tx_color_scheme();
-        self.apply_tx_window_backdrop();
+        if !self.gpu_loss_failed() { self.apply_tx_window_backdrop(); }
         if self.app.rt_mut().take_toggle_maximized() && let Some(w) = self.shown_win() {
             w.toggle_maximized();
             #[cfg(target_os = "windows")]
@@ -676,7 +680,7 @@ impl Host {
         }
         // A new `Cx::set_titlebar` or `Cx::titlebar_height` resizes the caption buttons and the band
         // the frame hit-tests, and moves the traffic lights.
-        if self.app.rt_mut().take_titlebar_changed() && let Some(w) = &self.win {
+        if !self.gpu_loss_failed() && self.app.rt_mut().take_titlebar_changed() && let Some(w) = &self.win {
             sync_chrome_core(self.app.rt_mut(), w, self.chrome, self.titlebar);
             if self.app.rt().stale() { w.request_redraw(); }
         }
@@ -699,6 +703,15 @@ impl Host {
                 self.app.popup_cancel(&mut self.popup);
                 self.app.file_dialog_cancel(&mut self.file_dialog);
                 return;
+            }
+            if self.gpu_loss_failed() {
+                if self.app.rt().shell_request.is_none()
+                    && !self.app.rt().has_user_close_request()
+                    && !self.app.rt().host.minimize.field()
+                {
+                    return;
+                }
+                continue;
             }
             let paints = self.shown_win().is_some_and(|w| !self.life.covered() && !w.minimized());
             // A painting macOS window moves its frame over its next frames (`redraw`).
@@ -743,7 +756,7 @@ impl Host {
             CloseDecision::Close => self.close(event_loop),
             CloseDecision::Defer => {
                 self.shell(event_loop);
-                if self.life.finished() || event_loop.exiting() {
+                if self.life.finished() || event_loop.exiting() || self.gpu_loss_failed() {
                     return;
                 }
                 if let Some(w) = self.shown_win() {
@@ -973,6 +986,7 @@ impl Host {
         self.frame_presented.reset();
         self.native_handle.native.ready.store(false, Ordering::Release);
         self.native_handle.native.number.store(0, Ordering::Release);
+        self.terminal_loss.prepare_clean_gpu_drop(self.gpu.as_ref().map(|(g, _)| &**g));
         self.gpu = None;
         self.app.release_compositor_gpu();
         let rt = self.app.rt_mut();
@@ -997,15 +1011,20 @@ impl Host {
     /// open can retry.
     pub(in crate::window) fn create(&mut self, event_loop: &ActiveEventLoop, token: Option<String>, focus: bool) {
         let result = self.try_create(event_loop, token, focus);
+        if let Err(ref error) = result && self.is_terminal_gpu_policy() {
+            self.latch_loss_latch(crate::render::loss_latch::GpuFailureKind::InitFailed, error.clone());
+        }
         self.finish_create(result);
     }
 
     pub(crate) fn finish_create(&mut self, result: Result<(), String>) {
         match result {
-            Ok(()) => self.shared.set_window_error(None),
+            Ok(()) => if !self.gpu_loss_failed() { self.shared.set_window_error(None); },
             Err(error) => {
                 let key = self.native_handle.key();
-                self.shared.set_window_error(Some(error.clone()));
+                if !self.gpu_loss_failed() {
+                    self.shared.set_window_error(Some(error.clone()));
+                }
                 if self.life.fail_create(self.keep_running, self.shown) {
                     self.startup_error = Some(format!("could not create the window {key}: {error}"));
                 } else {
