@@ -24,6 +24,7 @@ struct Canvas {
     pan: [f32; 2],
     zoom: f32,
     angle_deg: f32,
+    drawer_x: f32,
     live_pan: Live<[f32; 2]>,
     live_zoom: Live<f32>,
     space: bool,
@@ -109,6 +110,10 @@ fn view(s: &Canvas, _: &mut Cx<Canvas>) -> El {
     let side = col().w(200.0).h_full().child(focus)
         .child(col().key("layers").w_full().h(CANVAS - ROW).scroll(ScrollSpec { stick_bottom: false }).child(rows));
     row().w_full().h_full()
+        .on_edge_drag(rune::SwipeEdge::Left, 20.0, |s: &mut Canvas, d: &mut Drag, tx| {
+            s.drawer_x = if d.phase == Phase::Up && d.cancelled() { 0.0 } else { d.dx.max(0.0) };
+            tx.live_only();
+        })
         .on_key_up(|s: &mut Canvas, e: &KeyEvent, _| {
             let space = e.key == Key::Text(" ".into());
             if space { s.space = false; }
@@ -130,7 +135,7 @@ fn settle(rt: &mut Runtime<Canvas>) {
 
 fn main() {
     let state = Canvas {
-        pan: [0.0, 0.0], zoom: 1.0, angle_deg: 0.0, live_pan: Live::new([0.0, 0.0]), live_zoom: Live::new(1.0),
+        pan: [0.0, 0.0], zoom: 1.0, angle_deg: 0.0, drawer_x: 0.0, live_pan: Live::new([0.0, 0.0]), live_zoom: Live::new(1.0),
         space: false, pan_at_press: [0.0, 0.0], selected: 7, toolbar: None,
     };
     let mut rt = Runtime::new(state, view, (600.0, CANVAS), Env::new(true, 1.0));
@@ -245,5 +250,13 @@ fn main() {
     settle(&mut rt);
     assert!(rt.state.angle_deg > 30.0 && !rt.touching(), "touch rotate turned: {}", rt.state.angle_deg);
     println!("touch rotate -> angle {:.1} deg", rt.state.angle_deg);
+
+    // Touchscreen left-edge swipe reaches the root's `on_edge_drag` ahead of the canvas.
+    rt.touch(7, rune::TouchPhase::Started, 6.0, 200.0, 0.30);
+    rt.touch(7, rune::TouchPhase::Moved, 96.0, 200.0, 0.32);
+    rt.touch(7, rune::TouchPhase::Ended, 96.0, 200.0, 0.34);
+    settle(&mut rt);
+    assert!(rt.state.drawer_x > 80.0 && !rt.touching(), "edge drag opened drawer: {}", rt.state.drawer_x);
+    println!("edge drag    -> drawer_x {:.1}", rt.state.drawer_x);
     println!("ok");
 }

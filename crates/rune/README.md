@@ -572,7 +572,13 @@ policy changes are applied in the same mutation phase.
   pinned) and counterclockwise turns through `.on_rotate` (8° angular slop subtracted on activation
   with at least 16 pt between the fingers, locked from `Began` to `Ended`; macOS trackpads also
   feed `on_rotate` with the same owner lock). Over plain scroll areas without `on_wheel`,
-  `on_magnify`, or `on_rotate`, a second finger stays ignored. `.on_smart_magnify` (a two-finger
+  `on_magnify`, or `on_rotate`, a second finger stays ignored. `.on_edge_drag(edge: SwipeEdge, width, |s, d: &mut Drag, tx| ..)`
+  lets an ancestor (app root drawer, detail-page back swipe) claim a touch swipe starting within
+  `[0, safe_inset + width]` of a window edge (using `Runtime::set_safe_area([top, right, bottom, left])`
+  or browser safe-area insets) when its first move past 8 pt slop goes mostly away from that edge,
+  cancelling any child press/drag/pan (with `Drag::edge() == Some(edge)`, multi-edge and corner
+  disambiguation, paint-order occlusion by raised overlays and modals, and cancelled `Phase::Up`
+  delivery on unmount, Escape, focus loss, modal open, or `cancel_pointer`). `.on_smart_magnify` (a two-finger
   double tap) is macOS only. `.pointer_buttons([PointerButton::Middle])` lets the middle, back, forward,
   or other buttons press and drag the element through its own `on_press` and `on_drag`, from
   anywhere inside it; `tx.button()` says which button. Including `PointerButton::Secondary` lets

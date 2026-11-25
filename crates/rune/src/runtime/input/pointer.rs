@@ -156,6 +156,7 @@ impl RuntimeCore {
     /// and the release that follows does nothing. A press selecting text lets go where the
     /// selection stands, without a click. False when no drag is held.
     pub(in crate::runtime) fn cancel_drag(&mut self) -> bool {
+        if self.cancel_edge_drag() { return true; }
         if self.cancel_drag_at(self.pointer.pos) { return true; }
         if !self.edit.selectable.phase.dragging() || !self.pointer.press.is_held() || self.edit.input_click.captured() { return false; }
         self.drop_press();
@@ -221,6 +222,7 @@ impl RuntimeCore {
     /// or stopped dragging ends with a cancelled `Phase::Up`; one that stayed live refreshes
     /// its fallback handler from the new view.
     pub(in crate::runtime) fn sync_held_drag(&mut self) {
+        self.sync_held_edge_drag();
         let Some((path, button)) = self.pointer.press.held()
             .filter(|h| h.drag_handler.is_some())
             .map(|h| (h.path.clone(), h.button))
@@ -434,6 +436,7 @@ impl RuntimeCore {
             rtl: n.flow == crate::el::Flow::Rtl,
             window: [x, y],
             screen: self.screen_at(x, y),
+            edge: None,
         };
         let path = n.path.clone();
         let drag_out = self.drags_out(n).then(|| n.handlers.drag_threshold.unwrap_or(crate::drag_out::DRAG_THRESHOLD));

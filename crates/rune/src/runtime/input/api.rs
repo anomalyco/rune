@@ -415,6 +415,20 @@ impl<S: 'static> Runtime<S> {
     pub fn set_chrome_insets(&mut self, insets: crate::ChromeInsets) { self.core_mut().set_chrome_insets(insets); }
     #[inline(always)]
     pub fn chrome_insets(&self) -> crate::ChromeInsets { self.core().chrome_insets() }
+    /// Sets the safe-area insets `[top, right, bottom, left]` in logical points reported by
+    /// [`Cx::safe_area`](crate::Cx::safe_area) and added to [`El::on_edge_drag`](crate::El::on_edge_drag)
+    /// bands (for example, forwarding `UIView.safeAreaInsets` from an embedded iOS `LayerHost`
+    /// or `WindowInsets` on Android). Negative and non-finite values clamp to `0.0`.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, el};
+    /// # fn view(_: &[f32; 4], cx: &mut Cx<[f32; 4]>) -> El { let _ = cx.safe_area(); el() }
+    /// let mut rt = Runtime::new([0.0; 4], view, (390.0, 844.0), Env::new(true, 1.0));
+    /// rt.set_safe_area([47.0, 0.0, 34.0, 0.0]);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_safe_area(&mut self, insets: [f32; 4]) { self.core_mut().set_safe_area(insets); }
     #[cfg(test)]
     #[inline(always)]
     pub(crate) fn set_caption(&mut self, caption: Option<crate::titlebar::Caption>) { self.core_mut().set_caption(caption); }

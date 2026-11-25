@@ -105,24 +105,31 @@ impl El {
         self.handlers.touch_at_once = true;
         self
     }
-    /// A finger that lands within `width` points of the window's `edge` (measured from the
-    /// safe area's edge where the host reports one) and first moves mostly away from it, past
-    /// the touch slop, drives this element's `f` as an [`El::on_drag`] would: Down where it
-    /// landed, then Move, then Up (check [`Drag::cancelled`]). It wins over everything under
-    /// the finger: a child's `on_drag` or [`El::touch_drags_at_once`], a scroll viewport's pan,
-    /// a tap. A child's drag that already heard Down hears a cancelled Up, and nothing is
-    /// pressed. A first move along the edge or back toward it leaves the touch to the content,
-    /// as iOS's `UIScreenEdgePanGestureRecognizer` does. So an [`El::touch_drags_at_once`]
-    /// element inside a zone waits for the touch slop before it drags (it still has no long
-    /// press). An `on_edge_drag` element that leaves the tree mid-gesture hears nothing more,
-    /// not even a final Up, unlike an `on_drag` whose element leaves.
+    /// A finger that lands within `width` points of the window's `edge` (measured across
+    /// `[0, safe_inset + width]` using [`Runtime::set_safe_area`](crate::Runtime::set_safe_area)
+    /// or browser safe-area insets) and first moves mostly away from it, past the 8 pt touch slop,
+    /// drives this element's `f` as an [`El::on_drag`] would: `Down` where it landed, then
+    /// `Move`, then `Up` (check [`Drag::cancelled`] and [`Drag::edge`]). It wins over
+    /// everything under the finger: a child's `on_drag` or [`El::touch_drags_at_once`], a
+    /// scroll viewport's pan, a tap. A child's drag that already heard `Down` hears a cancelled
+    /// `Up`, and nothing is pressed. A first move along the edge or back toward it leaves the
+    /// touch to the content, as iOS's `UIScreenEdgePanGestureRecognizer` does. So an
+    /// [`El::touch_drags_at_once`] element inside a zone waits for the touch slop before it drags
+    /// (it still has no long press). If the element unmounts, turns inert, loses its handler, or
+    /// the gesture is cancelled by Escape, focus loss, a modal, or `cancel_pointer`, `f` hears
+    /// a cancelled `Phase::Up` just as `on_drag` does.
     ///
-    /// Put it on an ancestor of what's at the edge: the app root for a drawer, an item page for
-    /// a back swipe. Where several on the finger's hit path take the same touch, the innermost
-    /// wins, so an open page's back swipe beats the root's drawer. A mouse never starts one.
+    /// One element may attach multiple edges independently (for example `Left` and `Right`),
+    /// and corners disambiguate by swipe direction. Put it on an ancestor of what's at the edge:
+    /// the app root for a drawer, an item page for a back swipe. Where several on the finger's
+    /// hit path take the same edge, the innermost wins; raised overlays and modals occlude
+    /// claimants beneath them. A mouse never starts an edge drag; once active, a second finger is
+    /// ignored while an unclaimed pending edge touch yields to a two-finger pinch/pan/rotate.
     ///
-    /// On iOS the system's own edge gestures can still take the touch first; a host that wants
-    /// the swipe defers them with `preferredScreenEdgesDeferringSystemGestures`.
+    /// On iOS a host defers system edge gestures with `preferredScreenEdgesDeferringSystemGestures`
+    /// (or SwiftUI `.defersSystemGestures(on:)`) and forwards `UIView.safeAreaInsets` through
+    /// [`Runtime::set_safe_area`](crate::Runtime::set_safe_area); on Android, use
+    /// `View.setSystemGestureExclusionRects` and `WindowInsets`.
     ///
     /// ```
     /// # use rune::{Drag, Phase, SwipeEdge, col};
@@ -132,7 +139,11 @@ impl El {
     /// });
     /// ```
     pub fn on_edge_drag<S: 'static>(mut self, edge: SwipeEdge, width: f32, f: impl Fn(&mut S, &mut Drag, &mut Tx) + 'static) -> Self {
-        self.handlers.edge_drag = Some((edge, width.max(0.0), Rc::new(move |s, d, tx| f(downcast::<S>(s), d, tx))));
+        let w = if width.is_finite() { width.max(0.0) } else { 0.0 };
+        self.handlers
+            .edge_drags
+            .get_or_insert_with(Default::default)
+            .set(edge, w, Rc::new(move |s, d, tx| f(downcast::<S>(s), d, tx)));
         self
     }
     /// A menu button: a mouse's primary button runs [`El::on_press`] as it goes down, and that
@@ -180,6 +191,20 @@ pub enum SwipeEdge {
     Bottom,
 }
 
+impl SwipeEdge {
+    pub(crate) const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Top, Self::Bottom];
+
+    #[inline]
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::Left => 0,
+            Self::Right => 1,
+            Self::Top => 2,
+            Self::Bottom => 3,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Down,
@@ -216,6 +241,8 @@ pub struct Drag {
     pub(crate) window: [f32; 2],
     /// The pointer in desktop pixels, when a native window hosts the view.
     pub(crate) screen: Option<(i32, i32)>,
+    /// The window edge an [`El::on_edge_drag`] swipe started from (`None` for [`El::on_drag`]).
+    pub(crate) edge: Option<SwipeEdge>,
 }
 
 impl Drag {
@@ -223,6 +250,28 @@ impl Drag {
     /// pointer was taken away). Put back whatever the drag moved.
     pub fn cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    /// Which window edge started this gesture inside [`El::on_edge_drag`], or `None` inside
+    /// [`El::on_drag`].
+    ///
+    /// ```
+    /// # use rune::{Cx, Drag, El, Env, Runtime, SwipeEdge, TouchPhase, col};
+    /// # fn view(_: &Option<SwipeEdge>, _: &mut Cx<Option<SwipeEdge>>) -> El {
+    /// #     col().size(200.0, 200.0).on_edge_drag(SwipeEdge::Left, 20.0, |s: &mut Option<SwipeEdge>, d: &mut Drag, _| {
+    /// #         *s = d.edge();
+    /// #     })
+    /// # }
+    /// let mut rt = Runtime::new(None, view, (200.0, 200.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// rt.touch(1, TouchPhase::Started, 5.0, 100.0, 0.0);
+    /// rt.touch(1, TouchPhase::Moved, 40.0, 100.0, 0.02);
+    /// rt.touch(1, TouchPhase::Ended, 40.0, 100.0, 0.04);
+    /// rt.frame(1.0 / 60.0);
+    /// assert_eq!(rt.state, Some(SwipeEdge::Left));
+    /// ```
+    pub fn edge(&self) -> Option<SwipeEdge> {
+        self.edge
     }
 
     /// The resolved layout direction of the dragged element (`Direction::Ltr` or

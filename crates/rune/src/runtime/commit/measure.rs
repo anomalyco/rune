@@ -68,6 +68,7 @@ impl RuntimeCore {
             // The window's controls are in its points; the view's are over the zoom.
             titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
+            safe_area: self.safe_area(),
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
             window_backdrop: self.host.window_backdrop,
@@ -543,6 +544,7 @@ impl Measurement<'_> {
             caret_read: std::cell::Cell::new(false),
             wm_state: this.wm_state,
             wm_state_read: std::cell::Cell::new(false),
+            safe_area: this.safe_area,
             layout: this.layout_seen.clone(),
             layout_reads: Default::default(),
         };

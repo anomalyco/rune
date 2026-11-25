@@ -98,6 +98,9 @@ pub(crate) struct HostState {
     pub(in crate::runtime) wm_state: crate::WindowManagerState,
     /// Whether the last committed view read `Cx::decoration_mode`, `Cx::tiled_edges`, or `Cx::window_actions`.
     pub(in crate::runtime) wm_state_read: bool,
+    /// Host-supplied safe-area insets `[top, right, bottom, left]` in logical points
+    /// (`Runtime::set_safe_area`); `None` falls back to browser insets on wasm32 or `[0.0; 4]`.
+    pub(in crate::runtime) safe_area: Option<[f32; 4]>,
 }
 
 impl HostState {
@@ -156,6 +159,7 @@ impl HostState {
             page: None,
             wm_state: crate::WindowManagerState::default(),
             wm_state_read: false,
+            safe_area: None,
         }
     }
 
