@@ -133,77 +133,6 @@ impl Glide {
     }
 }
 
-/// What a node hands its subtree for snapping.
-#[derive(Clone, Copy, Default)]
-pub(in crate::runtime) struct Inherit {
-    /// `El::pixel_snap(false)` above, or a turn: this subtree draws at its exact edges.
-    pub off: bool,
-    /// The translation in points from scrolls, sticky shifts and growth rows above, which
-    /// snaps as a whole.
-    pub rigid: [f32; 2],
-    /// `rigid` less the scrolls' offsets, the sticky shifts and the growth offsets (`row_dy`: rows'
-    /// and stacks' windows'): the paint containments' origins alone (overlays start it again at
-    /// zero). A text lays out from its exact place against this, so while rows glide or a list
-    /// scrolls it moves in whole pixels with its box, as one piece with the lines and borders
-    /// beside it, and at rest it sits against its box the same way wherever the list is.
-    pub steady: [f32; 2],
-    /// The origin in points of the paint containment above (`El::paint_contained`), which is
-    /// part of `rigid`: what draws from its own exact box rounds against it too.
-    pub contain: [f32; 2],
-    /// `El::motion_snaps` here or above: a moving box snaps where it is each frame.
-    pub steps: bool,
-    /// An `El::offset` here or above comes to rest away from zero: a translation, as a CSS
-    /// transform is, which moves a text with its box rather than laying it out again from its
-    /// exact place (`LeafBox::exact_off` is zero under it).
-    pub shifted: bool,
-    /// The nearest scaled layer above or here, as an index into this frame's layers plus one
-    /// (0: none).
-    pub layer: u32,
-    /// The parent's edges, for centring. None when it paints nothing to centre against, its
-    /// children don't share its rigid translation, or it doesn't snap on the plain grid.
-    pub parent: Option<Parent>,
-}
-
-impl Inherit {
-    /// A translation that moves the subtree as a scroll does, `by` points on `axis`: a scroll's
-    /// drawn offset, a sticky shift (which, while stuck, cancels the scroll's motion), or a page's
-    /// band. It moves the subtree's boxes, which round it with the rest of `rigid`, and not what
-    /// its text lays out against, so text moves in whole pixels with its box, as Chromium draws a
-    /// scroller's contents from its pixel-snapped offset.
-    pub(in crate::runtime) fn scroll(&mut self, axis: usize, by: f32) {
-        self.rigid[axis] += by;
-    }
-
-    /// A growth offset `dy`: a row's, which glides, or a stack's own, its virtual window's, which
-    /// moves as a scroll does. Either moves its boxes but not what its text lays out against.
-    pub(in crate::runtime) fn grow(&mut self, dy: f32) {
-        self.rigid[1] += dy;
-    }
-
-    /// `El::paint_contained` at `o` (points): its children snap against it, rounded on its own.
-    pub(in crate::runtime) fn contain_at(&mut self, o: [f32; 2]) {
-        let c = self.contain;
-        self.rigid = [self.rigid[0] - c[0] + o[0], self.rigid[1] - c[1] + o[1]];
-        self.steady = [self.steady[0] - c[0] + o[0], self.steady[1] - c[1] + o[1]];
-        self.contain = o;
-    }
-
-    /// Its bits, for `paint_keep`'s comparison of what a subtree inherits.
-    pub(in crate::runtime) fn hash_bits(&self, h: &mut impl std::hash::Hasher) {
-        h.write_u8(self.off as u8);
-        h.write_u8(self.shifted as u8);
-        for v in self.rigid.iter().chain(&self.steady).chain(&self.contain) { h.write_u32(v.to_bits()); }
-        h.write_u32(self.layer);
-        match &self.parent {
-            Some(p) => {
-                h.write_u8(1);
-                for v in p.rest.exact.iter().chain(&p.rest.at).chain(&p.now.exact).chain(&p.now.at).chain(&p.left) { h.write_u32(v.to_bits()); }
-            }
-            None => h.write_u8(0),
-        }
-    }
-}
-
 /// A box's edges (device px, less its rigid translation): `exact`, and `at` where it draws them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::runtime) struct Rest {
@@ -232,6 +161,13 @@ impl Parent {
     #[inline]
     pub(in crate::runtime) fn left_moving(&self) -> bool {
         self.left != [0.0; 4]
+    }
+
+    /// Its bits, for `paint_keep`'s comparison of inherited snapping geometry.
+    pub(in crate::runtime) fn hash_bits(&self, h: &mut impl std::hash::Hasher) {
+        for v in self.rest.exact.iter().chain(&self.rest.at).chain(&self.now.exact).chain(&self.now.at).chain(&self.left) {
+            h.write_u32(v.to_bits());
+        }
     }
 }
 

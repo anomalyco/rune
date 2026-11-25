@@ -10,6 +10,8 @@ use super::*;
 #[repr(C)]
 pub(crate) struct PaintState {
     pub(in crate::runtime) inh_scratch: Vec<Inh>,
+    /// Cold inherited paint fields indexed by `Inh::cold` (1-based; 0 = `InhCold::DEFAULT`).
+    pub(in crate::runtime) inh_cold: Vec<InhCold>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
     pub(crate) drawn: Vec<[f32; 4]>,
     /// Gamma-space (sRGB) blending for translucent fills, shadows and blurs (on by default).
@@ -127,6 +129,7 @@ impl PaintState {
     pub(in crate::runtime) fn new() -> Self {
         Self {
             inh_scratch: Vec::new(),
+            inh_cold: Vec::new(),
             drawn: Vec::new(),
             srgb_blend: true,
             native_materials: false,
@@ -194,6 +197,7 @@ impl PaintState {
         }
         let nf = (live_nodes.saturating_mul(2)).max(64);
         shrink_vec(&mut self.inh_scratch, nf);
+        shrink_vec(&mut self.inh_cold, 32);
         shrink_vec(&mut self.drawn, nf);
         shrink_vec(&mut self.row_dy, nf);
         shrink_vec(&mut self.row_h, nf);
@@ -243,6 +247,30 @@ impl PaintState {
     #[inline]
     pub(crate) fn native_materials(&self) -> bool {
         self.native_materials
+    }
+
+    /// Resolves `h.cold` to its `InhCold` entry, or `&InhCold::DEFAULT` when `0`.
+    #[inline(always)]
+    pub(in crate::runtime) fn inh_cold_of(&self, h: &Inh) -> &InhCold {
+        match h.cold.checked_sub(1).and_then(|k| self.inh_cold.get(k as usize)) {
+            Some(c) => c,
+            None => &InhCold::DEFAULT,
+        }
+    }
+
+    /// Stores `cold` in `self.inh_cold` (1-based), returning `0` when equal to `InhCold::DEFAULT`
+    /// and reusing `parent_cold` when unchanged from the parent.
+    #[inline]
+    pub(in crate::runtime) fn store_inh_cold(&mut self, parent_cold: u32, cold: InhCold) -> u32 {
+        if cold == InhCold::DEFAULT {
+            return 0;
+        }
+        if parent_cold != 0 && self.inh_cold.get(parent_cold as usize - 1) == Some(&cold) {
+            return parent_cold;
+        }
+        let idx = self.inh_cold.len() as u32 + 1;
+        self.inh_cold.push(cold);
+        idx
     }
 
     /// Debug builds: total `PaintKeep` self-check mismatches observed (both unshifted and

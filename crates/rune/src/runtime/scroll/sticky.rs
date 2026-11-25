@@ -194,7 +194,7 @@ impl RuntimeCore {
     /// parents already painted this frame and needs no scratch allocation.
     pub(in crate::runtime) fn sticky_fade(&self, i: usize, viewport: usize, slot: usize, paint: bool) -> (f32, f32) {
         if i == viewport {
-            let up = self.tree.nodes[i].parent.map_or(Inh::default(), |p| self.paint.inh_scratch[p]);
+            let up = self.tree.nodes[i].parent.map_or(&InhCold::DEFAULT, |p| self.paint.inh_cold_of(&self.paint.inh_scratch[p]));
             return if paint { (up.paint_fade[slot], up.paint_fade_origin[slot]) }
                 else { (up.fade[slot], up.fade_origin[slot]) };
         }
@@ -214,7 +214,7 @@ impl RuntimeCore {
         }
         // An isolation layer already consumed the parent's paint fade. Its descendants
         // must not apply that same fade a second time.
-        if paint && self.paint.inh_scratch[i].paint_fade[slot] == 0.0 { return (0.0, NO_CLIP[slot]); }
+        if paint && self.paint.inh_cold_of(&self.paint.inh_scratch[i]).paint_fade[slot] == 0.0 { return (0.0, NO_CLIP[slot]); }
         (widths[slot], origins[slot])
     }
 

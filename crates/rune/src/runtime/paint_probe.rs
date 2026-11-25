@@ -69,7 +69,7 @@ impl RuntimeCore {
             let mut sizes = [0.0; 5];
             sizes[S_RADIUS] = p.radius.0[0];
             sizes[S_BORDER] = v.border_width();
-            sizes[S_BLUR] = self.paint.inh_scratch.get(i).map_or(p.blur, |h| h.blur);
+            sizes[S_BLUR] = self.paint.inh_scratch.get(i).map_or(p.blur, |h| self.paint.inh_cold_of(h).blur);
             sizes[S_BACKDROP] = v.backdrop_blur;
             if let Some(sh) = v.shadows.iter().find(|s| !s.inset) {
                 let at = self.shadow_at(n.id, 0, sh);

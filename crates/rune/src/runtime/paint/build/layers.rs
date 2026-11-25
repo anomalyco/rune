@@ -148,19 +148,20 @@ impl paint_state::PaintState {
         surfaces_len: usize,
         node_parent: Option<usize>,
         pinh: &mut Inh,
+        pcold: &mut InhCold,
         layers: &mut Vec<(usize, usize, usize)>,
         s: f32,
     ) {
         // Out of its ancestors' layers: their opacity applies directly instead.
         pinh.paint_opacity = pinh.opacity;
         pinh.paint_clip = pinh.clip;
-        pinh.paint_fade = pinh.fade;
-        pinh.paint_fade_origin = pinh.fade_origin;
-        pinh.in_cache = false;
-        pinh.skip_paint = false;
+        pcold.paint_fade = pcold.fade;
+        pcold.paint_fade_origin = pcold.fade_origin;
+        pinh.set_in_cache(false);
+        pinh.set_skip_paint(false);
         // Rounded clips and turns consumed by an ancestor's layer must be reapplied
         // outside that layer too. Reopen only the masks and turns, not opacity or blur.
-        pinh.rounded = None;
+        pcold.rounded = None;
         let mut chain = Vec::new();
         let mut parent = node_parent;
         while let Some(p) = parent {
@@ -209,6 +210,7 @@ impl RuntimeCore {
         now: f64,
         p: &rune_motion::Presented,
         pinh: &Inh,
+        pcold: &InhCold,
         r: [f32; 4],
         r_exact: [f32; 4],
         radii: [f32; 4],
@@ -243,8 +245,8 @@ impl RuntimeCore {
                 entry.phase = RasterPhase::Live;
             }
         }
-        let mut skip_paint = pinh.skip_paint;
-        let mut in_cache = pinh.in_cache;
+        let mut skip_paint = pinh.skip_paint();
+        let mut in_cache = pinh.in_cache();
         let mut open_cache = false;
         // A scale changed by view commits may accompany arbitrary content edits. Draw
         // live until it rests instead of trusting a partial content hash or allocating a
@@ -326,7 +328,7 @@ impl RuntimeCore {
         });
         let mut hit_clip = intersect(pinh.clip, *clip);
         if let Some((rect, _)) = own_round { hit_clip = intersect(hit_clip, rect); }
-        let (mut hit_fade, mut hit_origin) = (pinh.fade, pinh.fade_origin);
+        let (mut hit_fade, mut hit_origin) = (pcold.fade, pcold.fade_origin);
         inherit_fade(&mut hit_fade, &mut hit_origin, *fade_origin, *fade);
         // A rectangle wholly in either central strip misses all four corner squares.
         // Its hard edges already exclude everything the rounded mask would remove.

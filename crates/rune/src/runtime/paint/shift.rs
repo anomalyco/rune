@@ -96,7 +96,7 @@ pub(super) fn is_pow2_scale(s: f32) -> bool {
 }
 
 #[inline(always)]
-pub(super) fn inh_key_from_base(base: u64, origin: [f32; 4]) -> u64 {
+pub(in crate::runtime) fn inh_key_from_base(base: u64, origin: [f32; 4]) -> u64 {
     let mut h = rune_motion::Fx::default();
     h.write_u64(base);
     bits(&mut h, &origin);
@@ -208,6 +208,7 @@ pub(super) fn plan(
     rt: &RuntimeCore,
     o: usize,
     pinh: &Inh,
+    pcold: &InhCold,
     inh_full: u64,
     inh_base: u64,
 ) -> Option<ShiftPlan> {
@@ -218,15 +219,15 @@ pub(super) fn plan(
         return None;
     }
     if pinh.scale != 1.0
-        || pinh.anchor != pinh.anchor_to
+        || pcold.anchor != pcold.anchor_to
         || pinh.turn != 0
-        || pinh.in_cache
-        || pinh.skip_paint
-        || pinh.anchor_hidden
-        || pinh.snap.layer != 0
-        || pinh.cover != [0.0; 2]
-        || pinh.press_off_by != [0.0; 2]
-        || pinh.snap.parent.is_some_and(|p| p.left_moving())
+        || pinh.in_cache()
+        || pinh.skip_paint()
+        || pinh.anchor_hidden()
+        || pcold.snap_layer != 0
+        || pcold.cover != [0.0; 2]
+        || pcold.press_off_by != [0.0; 2]
+        || pcold.snap_parent.is_some_and(|p| p.left_moving())
     {
         return None;
     }
@@ -238,7 +239,7 @@ pub(super) fn plan(
     if (ddx == 0.0 && ddy == 0.0) || !ddx.is_finite() || !ddy.is_finite() {
         return None;
     }
-    if (pinh.snap.rigid[0] - sr.origin[2]) != ddx || (pinh.snap.rigid[1] - sr.origin[3]) != ddy {
+    if (pinh.rigid[0] - sr.origin[2]) != ddx || (pinh.rigid[1] - sr.origin[3]) != ddy {
         return None;
     }
     let s = rt.env.scale;
@@ -259,8 +260,8 @@ pub(super) fn plan(
         return None;
     }
     let (ddx_px, ddy_px) = (ddx * s, ddy * s);
-    let shift_x = (pinh.snap.rigid[0] * s + 0.5).floor() - (sr.origin[2] * s + 0.5).floor();
-    let shift_y = (pinh.snap.rigid[1] * s + 0.5).floor() - (sr.origin[3] * s + 0.5).floor();
+    let shift_x = (pinh.rigid[0] * s + 0.5).floor() - (sr.origin[2] * s + 0.5).floor();
+    let shift_y = (pinh.rigid[1] * s + 0.5).floor() - (sr.origin[3] * s + 0.5).floor();
 
     // Avoid crossing 0 on a moving axis so `f32::round` half-quantum sign flips cannot occur.
     if ddy != 0.0 && !((sr.cull[1] > 0.0 && sr.cull[1] + ddy_px > 0.0) || (sr.cull[3] < 0.0 && sr.cull[3] + ddy_px < 0.0)) {
@@ -301,7 +302,7 @@ pub(super) fn plan(
             return None;
         }
         if (sr.flags & INNER_CLIP) != 0 {
-            if pinh.paint_fade != [0.0; 4] || pinh.fade != [0.0; 4] || pinh.rounded.is_some() {
+            if pcold.paint_fade != [0.0; 4] || pcold.fade != [0.0; 4] || pcold.rounded.is_some() {
                 return None;
             }
             if (sr.flags & CLIP_HIT) != 0 && (shift_x != ddx_px || shift_y != ddy_px) {
@@ -310,14 +311,14 @@ pub(super) fn plan(
         }
         let mut safe = intersect(intersect(pinh.clip, vis_clip), vp);
         // Keep clear of inherited soft-edge fades on both paint and hit channels.
-        for (fade, origin) in [(pinh.paint_fade, pinh.paint_fade_origin), (pinh.fade, pinh.fade_origin)] {
+        for (fade, origin) in [(pcold.paint_fade, pcold.paint_fade_origin), (pcold.fade, pcold.fade_origin)] {
             let w = fade.map(soft_edges::fade_extent);
             if w[0] > 0.0 { safe[0] = safe[0].max(origin[0] + w[0]); }
             if w[1] > 0.0 { safe[1] = safe[1].max(origin[1] + w[1]); }
             if w[2] > 0.0 { safe[2] = safe[2].min(origin[2] - w[2]); }
             if w[3] > 0.0 { safe[3] = safe[3].min(origin[3] - w[3]); }
         }
-        if let Some((mask, radii)) = pinh.rounded {
+        if let Some((mask, radii)) = pcold.rounded {
             let e = radii.map(crate::render::corner_extent);
             if ddx != 0.0 {
                 safe[0] = safe[0].max(mask[0] + e[0].max(e[3]));
@@ -362,7 +363,7 @@ pub(super) fn plan(
         shift_y,
         outer_clip: pinh.clip,
         outer_paint_clip: vis_clip,
-        outer_group_rect: pinh.group_rect,
+        outer_group_rect: pcold.group_rect,
         inh_base,
         inh_full,
         flags: sr.flags,
@@ -449,6 +450,7 @@ pub(super) fn copy_shifted(rt: &mut RuntimeCore, i: usize, o: usize, end: usize,
     let has_clip = (plan.flags & INNER_CLIP) != 0;
     let has_hover = (plan.flags & INNER_HOVER) != 0;
     let has_sticky = rt.tree.has_sticky;
+    let (mut last_old_cold, mut last_new_cold) = (0u32, 0u32);
     for d in 0..len {
         let idx = i + d;
         let old_idx = o + d;
@@ -458,17 +460,46 @@ pub(super) fn copy_shifted(rt: &mut RuntimeCore, i: usize, o: usize, end: usize,
         let mut h = k.inh[old_idx];
         h.dx += plan.ddx;
         h.dy += plan.ddy;
-        h.snap.rigid[0] += plan.ddx;
-        h.snap.rigid[1] += plan.ddy;
+        h.rigid[0] += plan.ddx;
+        h.rigid[1] += plan.ddy;
+        let old_cold = h.cold;
         if has_hover {
+            let mut cold = if old_cold == 0 { InhCold::DEFAULT } else { k.inh_cold[old_cold as usize - 1] };
             let n = &rt.tree.nodes[idx];
             if n.vis.tracks_hover_paint() || n.vis_flags.hover_group() {
-                h.group_rect = shift_hit(h.group_rect, &plan);
+                cold.group_rect = shift_hit(cold.group_rect, &plan);
             } else if d == 0 {
-                h.group_rect = plan.outer_group_rect;
+                cold.group_rect = plan.outer_group_rect;
             } else {
-                h.group_rect = rt.paint.inh_scratch[n.parent.unwrap()].group_rect;
+                let p_cold = rt.paint.inh_scratch[n.parent.unwrap()].cold;
+                cold.group_rect = if p_cold == 0 { inh::DEFAULT_GROUP_RECT } else { rt.paint.inh_cold[p_cold as usize - 1].group_rect };
             }
+            let parent_cold = if d == 0 { 0 } else { rt.paint.inh_scratch[n.parent.unwrap()].cold };
+            h.cold = if cold == InhCold::DEFAULT {
+                0
+            } else if parent_cold != 0 && rt.paint.inh_cold[parent_cold as usize - 1] == cold {
+                parent_cold
+            } else {
+                let next_idx = rt.paint.inh_cold.len() as u32 + 1;
+                rt.paint.inh_cold.push(cold);
+                next_idx
+            };
+        } else if old_cold != 0 {
+            h.cold = if old_cold == last_old_cold {
+                last_new_cold
+            } else if let Some(p) = rt.tree.nodes[idx].parent
+                && p >= i
+                && k.inh[o + (p - i)].cold == old_cold
+            {
+                rt.paint.inh_scratch[p].cold
+            } else {
+                let val = k.inh_cold[old_cold as usize - 1];
+                let next_idx = rt.paint.inh_cold.len() as u32 + 1;
+                rt.paint.inh_cold.push(val);
+                last_old_cold = old_cold;
+                last_new_cold = next_idx;
+                next_idx
+            };
         }
         if has_clip {
             if plan.mode == ShiftMode::Visible {
@@ -521,11 +552,13 @@ pub(super) fn copy_shifted(rt: &mut RuntimeCore, i: usize, o: usize, end: usize,
         } else {
             let parent_idx = rt.tree.nodes[idx].parent.unwrap();
             let mut cpinh = rt.paint.inh_scratch[parent_idx];
-            cpinh.first_fade = 1.0;
+            let mut cp_cold = if cpinh.cold == 0 { InhCold::DEFAULT } else { rt.paint.inh_cold[cpinh.cold as usize - 1] };
+            cp_cold.first_fade = 1.0;
+            let is_default_cold = cp_cold == InhCold::DEFAULT;
             let row_dy = rt.paint.row_dy[idx];
             cpinh.dy += row_dy;
-            cpinh.snap.grow(row_dy);
-            let (full, base) = inh_keys_for(&rt.tree.nodes, has_sticky, &rt.scroll.sticky_frame, idx, &cpinh);
+            cpinh.grow_rigid(row_dy);
+            let (full, base) = inh_keys_for(&rt.tree.nodes, has_sticky, &rt.scroll.sticky_frame, idx, &cpinh, &cp_cold, is_default_cold);
             ps.inh_base = base;
             full
         };

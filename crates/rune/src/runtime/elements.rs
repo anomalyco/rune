@@ -333,14 +333,15 @@ impl RuntimeCore {
                     let parent = self.tree.nodes[j].parent;
                     let fix = self.motion.launches().carried(&self.scene, id);
                     if fix != [0.0; 2] {
-                        let k = parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| h.still.0);
+                        let k = parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or(1.0, |h| self.paint.inh_cold_of(h).still.0);
                         scrolled = [scrolled[0] - fix[0] * k, scrolled[1] - fix[1] * k];
                     }
                     if lifted.is_none() && self.motion.flying.iter().any(|f| f.0 == id) {
                         let is_launch = self.motion.launches().launched(id);
                         let in_place = self.tree.nodes[j].vis.flight_in_place && !is_launch;
                         lifted = Some(parent.and_then(|p| self.paint.inh_scratch.get(p)).map_or((1.0, 0), |h| {
-                            (if is_launch { h.still.0 } else { h.held.0 }, if in_place { h.turn } else { 0 })
+                            let c = self.paint.inh_cold_of(h);
+                            (if is_launch { c.still.0 } else { c.held.0 }, if in_place { h.turn } else { 0 })
                         }));
                     }
                     steps += 1;
@@ -394,7 +395,7 @@ impl RuntimeCore {
                     target: [n.target[0], n.target[1], n.target[2] - n.target[0], n.target[3] - n.target[1]],
                     opacity: flight.map_or_else(|| self.paint.inh_scratch.get(i).map_or(p.opacity, |h| h.opacity), |f| f.target_alpha),
                     scale: if flight.is_some() { 1.0 } else { self.paint.inh_scratch.get(i).map_or(p.transform.scale.x, |h| h.scale) },
-                    blur: if flight.is_some() { 0.0 } else { self.paint.inh_scratch.get(i).map_or(p.blur, |h| h.blur) },
+                    blur: if flight.is_some() { 0.0 } else { self.paint.inh_scratch.get(i).map_or(p.blur, |h| self.paint.inh_cold_of(h).blur) },
                     radius: p.radius.0[0],
                     fill: self.color(n.id, P_FILL, n.vis.fill),
                     border_color: (n.vis.border_width() > 0.0).then(|| self.color(n.id, P_BORDER, n.vis.border())),

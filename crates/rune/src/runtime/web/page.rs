@@ -126,7 +126,7 @@ impl RuntimeCore {
         let mut inh = Inh::default();
         let dy = -self.page_offset();
         inh.dy = dy;
-        inh.snap.scroll(1, dy);
+        inh.scroll_rigid(1, dy);
         inh
     }
 
