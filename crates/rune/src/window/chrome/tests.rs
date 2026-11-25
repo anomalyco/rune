@@ -96,3 +96,21 @@ fn no_user_close_path_calls_programmatic_close_directly() {
     }
     assert!(saw_close_requested, "WindowEvent::CloseRequested must dispatch to Host::close_requested");
 }
+
+#[test]
+fn window_menu_trigger_matches_platform_protocol_requirements() {
+    use super::resolve_window_menu_trigger;
+    use crate::runtime::WindowMenuTrigger;
+
+    // Wayland opens on secondary press so winit still holds the button-press serial,
+    // unless the compositor explicitly reported window_menu == Some(false).
+    assert_eq!(resolve_window_menu_trigger(true, None, false), WindowMenuTrigger::OnPress);
+    assert_eq!(resolve_window_menu_trigger(true, Some(true), false), WindowMenuTrigger::OnPress);
+    assert_eq!(resolve_window_menu_trigger(true, Some(false), false), WindowMenuTrigger::None);
+    // X11 with _GTK_SHOW_WINDOW_MENU (Some(true)) and Windows custom frames open on release.
+    assert_eq!(resolve_window_menu_trigger(false, Some(true), false), WindowMenuTrigger::OnRelease);
+    assert_eq!(resolve_window_menu_trigger(false, None, true), WindowMenuTrigger::OnRelease);
+    // X11 without _GTK_SHOW_WINDOW_MENU (Some(false)/None), macOS, and Windows without caption open none.
+    assert_eq!(resolve_window_menu_trigger(false, Some(false), false), WindowMenuTrigger::None);
+    assert_eq!(resolve_window_menu_trigger(false, None, false), WindowMenuTrigger::None);
+}

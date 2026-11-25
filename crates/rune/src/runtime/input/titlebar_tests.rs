@@ -683,7 +683,7 @@ fn deferred_titlebar_press_machine_holds_until_threshold_and_arms_double_click()
     // 8. Clear, SecondaryDown, Resize, and OtherPress each cancel Holding.
     for cancel_event in [
         Event::Clear,
-        Event::SecondaryDown { region: false },
+        Event::SecondaryDown { trigger: super::WindowMenuTrigger::None },
         Event::OtherPress,
         Event::Empty { now: 7.05, point: origin, interval: 0.3, band: false },
     ] {
@@ -695,8 +695,16 @@ fn deferred_titlebar_press_machine_holds_until_threshold_and_arms_double_click()
     }
     state = TitlebarPress::Rest;
     assert!(collect(&mut state, Event::Region { now: 7.5, point: origin, interval: 0.3, defer: true }).is_empty());
-    assert!(collect(&mut state, Event::SecondaryDown { region: true }).is_empty());
+    assert!(collect(&mut state, Event::SecondaryDown { trigger: super::WindowMenuTrigger::OnRelease }).is_empty());
     assert_eq!(state, TitlebarPress::SecondaryOnRegion(None));
+    assert!(collect(&mut state, Event::Move { point: (origin.0 + 30.0, origin.1) }).is_empty());
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 7.75, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert_eq!(
+        collect(&mut state, Event::SecondaryDown { trigger: super::WindowMenuTrigger::OnPress }),
+        vec![Request::Menu],
+    );
+    assert_eq!(state, TitlebarPress::Rest);
     assert!(collect(&mut state, Event::Move { point: (origin.0 + 30.0, origin.1) }).is_empty());
     state = TitlebarPress::Rest;
     assert!(collect(&mut state, Event::Region { now: 8.0, point: origin, interval: 0.3, defer: true }).is_empty());
