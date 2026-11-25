@@ -19,7 +19,7 @@ mod tests;
 pub use drag::{TabDragMode, TabDragPhase, TabDragState, TearOutSpec};
 
 use drag::Release;
-use layout::{TabBind, TabBindCtx, TabItemCore, TabStripCore};
+use layout::{TabBind, TabBindCtx, TabBreakCore, TabItemCore, TabStripCore};
 
 /// Which way a [`TabStrip`] runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -175,6 +175,22 @@ pub struct TabWords {
 impl Default for TabWords {
     fn default() -> Self {
         TabWords { close: "Close tab", busy: "Working", attention: "Needs attention", unread: "Unread", failed: "Failed" }
+    }
+}
+
+/// Something that stands in a strip before one of its tabs and is not a tab ([`TabStrip::breaks`]):
+/// a group's header down a sidebar, a divider across a titlebar.
+pub struct TabBreak {
+    core: TabBreakCore,
+}
+
+impl TabBreak {
+    /// `el` before the tab at index `before` (the tab count: after the last tab), `length` long
+    /// along the strip: its height in a vertical strip, its width in a horizontal one, with any
+    /// margins of its own. `key` names it among the strip's breaks and stays with it while tabs
+    /// come and go, so it keeps its hover and focus.
+    pub fn new(key: impl Into<String>, before: usize, el: El, length: f32) -> Self {
+        TabBreak { core: TabBreakCore { key: key.into(), before, el, length: length.max(0.0) } }
     }
 }
 
@@ -364,6 +380,9 @@ impl<S: 'static> TabBind for TabHandlers<S> {
 /// press on a close button select nothing. Dragging 4 points along
 /// the strip reorders, Escape puts the tab back, and with [`Self::tear_out`] dragging it off
 /// the strip tears it out. A middle click closes a tab.
+///
+/// [`Self::breaks`] puts what is not a tab between the tabs (a group's header, a divider), and a
+/// drag stays between two of them.
 pub struct TabStrip<'a, S: 'static> {
     core: TabStripCore<'a>,
     handlers: TabHandlers<S>,
@@ -385,6 +404,15 @@ impl<'a, S: 'static> TabStrip<'a, S> {
     /// hundreds of tabs costs a frame what a screenful does. In place of [`Self::tabs`].
     pub fn lazy_tabs(mut self, slots: Vec<TabSlot<'a>>, mut build: impl FnMut(usize) -> TabItem<'a, S> + 'a) -> Self {
         self.core.lazy = Some((slots, Box::new(move |i| build(i).core)));
+        self
+    }
+    /// What stands between the tabs and is not one ([`TabBreak`]): each break before the tab it
+    /// names, several before one tab in the order given. A break has the strip's gap on each side
+    /// a tab or another break stands on, and takes no part in the tabs' keys or count. The tabs
+    /// between two breaks reorder only among themselves: a drag stops at a break. A horizontal
+    /// tab right after a break has no separator before it.
+    pub fn breaks(mut self, breaks: impl IntoIterator<Item = TabBreak>) -> Self {
+        self.core.breaks.extend(breaks.into_iter().map(|b| b.core));
         self
     }
     /// The selected tab, by id.
