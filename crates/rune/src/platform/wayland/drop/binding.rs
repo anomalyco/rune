@@ -16,12 +16,13 @@ use crate::time::Instant;
 /// stay unmounted.
 pub(crate) const TEARDOWN_GRACE: Duration = Duration::from_millis(500);
 
-/// Snapshot key gating `RuntimeCore::has_drop_targets()` scans: an unchanged `(commit_generation,
-/// active_modal)` means live allowed drop handlers have not changed.
+/// Snapshot key gating `RuntimeCore::has_drop_targets()` / `has_drag_out()` scans: an unchanged
+/// `(commit_generation, active_modal, active_drag)` means live drop/drag-out targets have not changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SyncKey {
     pub(crate) commit: u64,
     pub(crate) modal: Option<usize>,
+    pub(crate) active_drag: bool,
 }
 
 /// Per-window lazy binding mode for Wayland `wl_data_device`.

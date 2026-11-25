@@ -83,6 +83,8 @@ pub(in crate::window) struct Native {
     pub(in crate::window) drop_seq: crate::machine::Seq,
     /// Unregisters the window's Wayland drop target before the window's `wl_surface` drops.
     pub(in crate::window) drop_target: Option<crate::platform::wayland::drop::DropTarget>,
+    /// Unwatched Wayland press/touch serial listener guard kept while `drag_out` is mounted or active.
+    pub(in crate::window) drag_serial: Option<crate::platform::wayland::serial::wire::SerialGuard>,
     /// Per-surface Wayland behind-window blur controller, dropped strictly before `wl_surface`.
     pub(in crate::window) wayland_backdrop: Option<crate::platform::wayland::backdrop::SurfaceBlur>,
 }

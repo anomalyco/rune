@@ -25,4 +25,23 @@ impl RuntimeCore {
     pub(crate) fn set_os_drag(&mut self, supported: bool) { self.pointer.os_drag = supported; }
 
     pub(super) fn drags_out(&self, n: &Node) -> bool { self.pointer.os_drag && n.handlers.get().is_some_and(|h| h.drag_out.is_some()) }
+
+    /// Whether the live, allowed view tree currently mounts any `El::drag_out` element while the
+    /// host supports OS drags. Matches `has_drop_targets`: exiting subtrees and elements behind an
+    /// active modal do not count.
+    #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    pub(crate) fn has_drag_out(&self) -> bool {
+        self.pointer.os_drag
+            && (0..self.tree.nodes.len()).any(|i| {
+                !self.subtree_exiting(i)
+                    && self.allowed(i)
+                    && self.tree.nodes[i].handlers.get().is_some_and(|h| h.drag_out.is_some())
+            })
+    }
+
+    /// Whether an outgoing OS drag session started from this runtime is still awaiting `on_drag_end`.
+    #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    pub(crate) fn has_active_drag_out(&self) -> bool {
+        self.pointer.drags_open > 0
+    }
 }

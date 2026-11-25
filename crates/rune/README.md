@@ -2637,12 +2637,17 @@ deterministic `dyn.*` UTI for unregistered MIME types) and written onto the firs
 `NSPasteboardItem`. On Windows each MIME type is registered with `RegisterClipboardFormatW` and
 attached to the OLE `IDataObject` via `TYMED_HGLOBAL`, backed by a process-wide cache capped at
 256 distinct custom format names so callers cannot exhaust Windows' unreleasable 16k USER atom
-table.
+table. On Wayland each MIME type is offered on `wl_data_source` in insertion order (overriding
+any colliding built-in MIME type), payloads stream off the UI thread over non-blocking pipes
+(bounded to 8 concurrent writers and 5 s per write), the drag icon renders to a `wl_shm`
+`wl_surface` with `DragImage::hotspot` placement, and Copy/Move actions map to
+`wl_data_device_manager::dnd_action` (Wayland has no Link action).
 
-macOS and Windows run native OS drag sessions; on Linux `drag_out` is ignored for now and the
-element keeps its press and `on_drag` behaviour. Headless runs record `drag-out <path>` in
-`--trace` and mark the node `dragOut` in `--tree`. `examples/drag-out` drags a file, an app
-and some text.
+macOS, Windows, and Linux Wayland run native OS drag sessions; on Linux X11 `drag_out` is ignored
+and the element keeps its press and `on_drag` behaviour. Headless runs record `drag-out <path>` in
+`--trace` and mark the node `dragOut` in `--tree`. `examples/drag-out` drags a file, an app,
+text, and (under `--scene custom-mime`) a Copy/Move item with custom MIME payloads and a custom
+hotspot icon.
 
 ### Dropping files in from other apps (`on_drop_files`)
 
