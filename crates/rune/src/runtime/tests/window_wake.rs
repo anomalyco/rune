@@ -458,7 +458,7 @@ fn full_screen_transition_and_failed_revert_keep_inset_and_memo_in_sync() {
 }
 
 #[test]
-fn a_handler_that_requests_a_poll_has_its_queued_work_polled_next_frame() {
+fn a_handler_that_queues_work_or_requests_a_poll_has_its_work_polled_in_the_same_frame() {
     #[derive(Default)]
     struct App { queued: Vec<u32>, done: Vec<u32>, request: bool }
     fn view(_: &App, _: &mut Cx<App>) -> El {
@@ -479,14 +479,8 @@ fn a_handler_that_requests_a_poll_has_its_queued_work_polled_next_frame() {
         rt.pointer_down(20.0, 20.0);
         rt.pointer_up(20.0, 20.0);
         rt.frame(1.0 / 60.0);
-        assert_eq!(rt.state.queued, [1], "the press frame polled before its handler ran");
-        if !request {
-            assert_eq!(rt.wake_deadline(), None, "nothing asks for the poll");
-            continue;
-        }
-        assert!(rt.wake_deadline().is_some(), "the handler asked for the next frame's poll");
-        rt.frame(1.0 / 60.0);
-        assert_eq!(rt.state.done, [1]);
+        assert_eq!(rt.state.done, [1], "request={request}: work queued by a mutating press is polled in the same frame");
         assert!(rt.state.queued.is_empty());
+        assert_eq!(rt.wake_deadline(), None, "request={request}: no extra wake is left armed");
     }
 }

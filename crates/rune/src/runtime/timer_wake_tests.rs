@@ -443,7 +443,9 @@ fn handlers_in_a_resting_timer_s_frame_see_the_poll_s_clock() {
     // The frame arrives a fraction of a millisecond (4 ms here) after the resting poll.
     advance(&mut rt, 0.004);
     rt.frame(crate::frame::clock::RESUME_STEP);
-    assert_eq!(rt.state.polls.len(), polls_before + 1, "the resting timer's frame does not poll again");
+    // Zero initial re-poll before handlers, plus one same-frame follow-up poll at `polled`
+    // after the non-live_only focus handler ran.
+    assert_eq!(rt.state.polls[polls_before..], [polled, polled], "resting frame keeps the poll's clock on follow-up poll");
     assert!(rt.clock > polled, "the runtime clock advanced to the frame's wall time");
     assert_eq!(
         rt.state.focuses,
@@ -455,12 +457,13 @@ fn handlers_in_a_resting_timer_s_frame_see_the_poll_s_clock() {
     let next_due = rt.wake_deadline().expect("handler wake_at is armed");
     assert!(next_due >= expected_due, "scheduled deadline {next_due} must reach requested {expected_due}");
 
-    // On an ordinary frame, poll runs and handlers see that frame's poll clock.
+    // On an ordinary frame, initial poll + post-handler follow-up poll both use the frame's clock.
+    let polls_before_ordinary = rt.state.polls.len();
     rt.key(crate::KeyEvent { key: crate::Key::Tab, mods: crate::Mods::default() });
     advance(&mut rt, 0.01);
     rt.frame(crate::frame::clock::RESUME_STEP);
     let ordinary_poll = *rt.state.polls.last().unwrap();
-    assert_eq!(rt.state.polls.len(), polls_before + 2);
+    assert_eq!(rt.state.polls[polls_before_ordinary..], [ordinary_poll, ordinary_poll]);
     assert_eq!(
         rt.state.focuses.last().copied(),
         Some(("two", ordinary_poll)),
@@ -484,11 +487,12 @@ fn an_update_after_resting_wake_cancels_the_timer_frame_so_clock_never_goes_back
     let update_clock = rt.state.update_clock.unwrap();
     assert!(update_clock > polled);
 
-    // The frame must run a fresh poll instead of running handlers at the older `polled` clock.
+    // The frame must run a fresh poll instead of running handlers at the older `polled` clock
+    // (plus the post-handler follow-up poll at that same fresh clock).
     advance(&mut rt, 0.002);
     rt.frame(crate::frame::clock::RESUME_STEP);
-    assert_eq!(rt.state.polls.len(), polls_before + 2, "an intervening update requires a fresh poll");
     let frame_poll = *rt.state.polls.last().unwrap();
+    assert_eq!(rt.state.polls[polls_before..], [polled, frame_poll, frame_poll], "an intervening update requires a fresh poll");
     assert!(frame_poll >= update_clock, "frame poll clock {frame_poll} must not go backwards past {update_clock}");
     assert_eq!(rt.state.focuses, [("one", frame_poll)]);
     // The resting poll's own timer was scheduled from `polled` when the timer frame was cancelled.

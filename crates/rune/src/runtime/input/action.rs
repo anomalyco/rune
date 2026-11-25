@@ -271,6 +271,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.keep_on_screen.extend(one.keep_on_screen);
     tx.evict_memos.extend(one.evict_memos);
     tx.wakes.extend(one.wakes);
+    tx.request_poll |= one.request_poll;
     tx.text_flights.extend(one.text_flights);
     tx.launches.extend(one.launches);
     tx.unclipped_flights |= one.unclipped_flights;
