@@ -86,6 +86,7 @@ impl RuntimeCore {
             // Deliver the cancelled Up before FocusLost can commit a view that removes its
             // grip (or the focus callback clears the app's drag state).
             if !focused {
+                self.dismiss_popup_menu_fallback(app);
                 self.cancel_pointer();
                 self.kbd.held = physical_dispatch::Activation::Up;
             }

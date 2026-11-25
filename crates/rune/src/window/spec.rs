@@ -935,6 +935,16 @@ impl<S: 'static> WindowSpec<S> {
         on_ime(f: fn(&mut S, &crate::Ime, &mut crate::Tx) -> bool);
         /// Fallback handler for text-field menus when native pop-ups are unavailable, like `App::on_field_menu`.
         on_field_menu(f: fn(&mut S, crate::FieldMenuRequest, &mut crate::Tx));
+        /// Fallback handler for pop-up and context menus when native pop-ups are unavailable
+        /// (such as Linux), like [`App::on_popup_menu`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, PopupMenuRequest, Tx, WindowSpec, el};
+        ///
+        /// let _spec = WindowSpec::new("main", AppSpec::new("Main", (480.0, 320.0), || (), |_, _| el()))
+        ///     .on_popup_menu(|_: &mut (), _req: PopupMenuRequest, _tx: &mut Tx| {});
+        /// ```
+        on_popup_menu(f: fn(&mut S, crate::PopupMenuRequest, &mut crate::Tx));
         /// Intercepts a native close request before hiding or closing this window, like
         /// [`App::on_close_request`].
         ///

@@ -290,6 +290,7 @@ pub use popup_menu::PopupEntry;
 pub use popup_menu::PopupItem;
 pub use popup_menu::PopupMenu;
 pub use popup_menu::PopupMenuError;
+pub use popup_menu::PopupMenuRequest;
 pub use popup_menu::PopupMenuStyle;
 pub use popup_menu::popup_menu_supported;
 #[cfg(not(target_arch = "wasm32"))]

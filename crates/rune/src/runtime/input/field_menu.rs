@@ -21,6 +21,10 @@ pub(crate) struct FieldMenu {
     languages: Option<(Vec<String>, crate::el::LanguagesFn)>,
 }
 
+impl FieldMenu {
+    pub(in crate::runtime) fn path(&self) -> &str { &self.path }
+}
+
 /// A pending fallback field menu delivered to `App::on_field_menu`, awaiting
 /// `Tx::resolve_field_menu`.
 pub(crate) struct PendingFieldMenu {
