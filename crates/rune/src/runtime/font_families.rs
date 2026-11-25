@@ -30,15 +30,31 @@ impl RuntimeCore {
         families
     }
 
+    /// Sets or clears the opt-in preferred emoji font family across every runtime on this thread
+    /// (and windows opened later), as `Tx::set_emoji_family` does from a handler. Passing `None`
+    /// or an empty string restores default system emoji fallback. Asking for the value already
+    /// active costs nothing.
+    pub fn set_emoji_family(&mut self, family: Option<&str>) {
+        crate::text::choose_emoji_family(family);
+        self.follow_font_families();
+    }
+
     /// The sans and mono slots' families.
     pub fn font_families(&self) -> (&str, &str) {
         self.text.families()
     }
 
-    /// Whether `tx` switches the families or registers new runtime font faces.
+    /// The opt-in preferred emoji font family, or `None` when using default emoji fallback.
+    pub fn emoji_family(&self) -> Option<&str> {
+        self.text.emoji_family()
+    }
+
+    /// Whether `tx` switches the families, changes the preferred emoji family, or registers new
+    /// runtime font faces.
     pub(super) fn changes_families(&self, tx: &Tx) -> bool {
         tx.fonts_added
             || tx.font_families.as_ref().is_some_and(|(sans, mono)| self.text.families() != (sans.as_str(), mono.as_str()))
+            || tx.emoji_family.as_ref().is_some_and(|emoji| self.text.emoji_family() != emoji.as_deref())
     }
 
     /// Takes up runtime-added faces (including a web app's fetched faces) and families chosen

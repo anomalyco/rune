@@ -1530,6 +1530,22 @@ return their family names without re-registering or triggering a relayout. Every
 overlay, and `rune::text::measure` picks up newly added faces, and `rune::text::font_epoch()`
 advances so external measurement caches invalidate.
 
+`App::emoji_family(family)`, `tx.set_emoji_family(Option<&str>)`, `rt.set_emoji_family(Option<&str>)`
+(`rt.emoji_family()`), and `TextSystem::set_emoji_family(Option<&str>)` (`TextSystem::emoji_family()`)
+choose an opt-in preferred colour emoji font (or comma-separated CSS family list) for emoji
+graphemes (`Emoji_Presentation`, `U+FE0F`, ZWJ sequences, keycaps, skin tones, and
+regional-indicator flags) across every text slot (`Family::Sans`, `Family::Mono`,
+`Family::SystemMono`, `Family::Named`, and inline mono spans) without putting that font in the
+non-emoji text stack. When an app uses both an explicit `emoji_family` and a colour emoji font
+named in `AppSpec::families`, `tx.set_font_families`, or `Family::Named`, the explicit
+`emoji_family` wins first, followed by the colour font selected in the active family stack, then
+the lazily loaded system emoji font, then the active text stack. Plain text symbols without
+`U+FE0F` (such as `❤` or `☺\u{FE0E}`) keep their monochrome text faces, and the system emoji
+font is not loaded when every emoji in a string is already covered. Empty or whitespace-only
+strings normalize to `None` (restoring default fallback); changing the value invalidates shaped
+layouts and memoized subtrees, syncs across windows, overlays, and `rune::text::measure`, and
+advances `rune::text::font_epoch()`.
+
 Optical sizing defaults to each run's point size, including rich spans with a
 different size. An explicit `opsz` variation wins over the default; `.optical_size`
 wins over both. `.optical_sizing(OpticalSize::FontDefault)` restores Parley's old

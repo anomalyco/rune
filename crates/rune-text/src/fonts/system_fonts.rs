@@ -446,12 +446,36 @@ fn css_or_named(list: &str) -> Vec<FontFamilyName<'_>> {
     }
 }
 
-/// Loads the installed families the CSS family list `list` names that the collection lacks,
-/// each looked up once (`tried`). Generic CSS keywords (`ui-monospace`, `monospace`, ...) are
-/// skipped so they trigger no system font lookup at launch.
-pub(crate) fn load_installed(collection: &mut Collection, loaded: &mut LoadedFiles, tried: &mut std::collections::HashSet<String>, list: &str) -> bool {
+/// Parses an explicit emoji family setting: a CSS family list when it contains a comma or outer
+/// quotes, or a single literal family name otherwise (so names with spaces, digits, or leading
+/// dots such as `"Twemoji 17"` or `".Apple Color Emoji UI"` work without CSS quoting).
+pub(crate) fn emoji_family_list(list: &str) -> Vec<FontFamilyName<'_>> {
+    let trimmed = list.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    if trimmed.contains(',')
+        || (trimmed.len() >= 2
+            && ((trimmed.starts_with('"') && trimmed.ends_with('"'))
+                || (trimmed.starts_with('\'') && trimmed.ends_with('\''))))
+    {
+        css_or_named(trimmed)
+            .into_iter()
+            .filter(|f| matches!(f, FontFamilyName::Named(_)))
+            .collect()
+    } else {
+        vec![FontFamilyName::named(trimmed)]
+    }
+}
+
+fn load_installed_names<'a>(
+    collection: &mut Collection,
+    loaded: &mut LoadedFiles,
+    tried: &mut std::collections::HashSet<String>,
+    families: impl IntoIterator<Item = FontFamilyName<'a>>,
+) -> bool {
     let mut added = false;
-    for family in css_or_named(list) {
+    for family in families {
         let FontFamilyName::Named(name) = family else { continue };
         if collection.family_id(&name).is_some() || !tried.insert(name.to_lowercase()) {
             continue;
@@ -459,6 +483,19 @@ pub(crate) fn load_installed(collection: &mut Collection, loaded: &mut LoadedFil
         added |= !load_files(collection, loaded, installed_family_files(&name)).is_empty();
     }
     added
+}
+
+/// Loads the installed families the CSS family list `list` names that the collection lacks,
+/// each looked up once (`tried`). Generic CSS keywords (`ui-monospace`, `monospace`, ...) are
+/// skipped so they trigger no system font lookup at launch.
+pub(crate) fn load_installed(collection: &mut Collection, loaded: &mut LoadedFiles, tried: &mut std::collections::HashSet<String>, list: &str) -> bool {
+    load_installed_names(collection, loaded, tried, css_or_named(list))
+}
+
+/// Loads the installed families named by an explicit emoji family setting (`emoji_family_list`)
+/// that the collection lacks, each looked up once (`tried`).
+pub(crate) fn load_installed_emoji(collection: &mut Collection, loaded: &mut LoadedFiles, tried: &mut std::collections::HashSet<String>, list: &str) -> bool {
+    load_installed_names(collection, loaded, tried, emoji_family_list(list))
 }
 
 /// Whether the slot `list` names a family the collection has, or `ui-monospace`, whose
@@ -692,5 +729,7 @@ pub(crate) fn font_file_name(path: &std::path::Path) -> Option<String> {
     [".ttf", ".otf", ".ttc", ".otc"].iter().any(|ext| name.ends_with(ext)).then(|| name.replace([' ', '.'], ""))
 }
 
+#[cfg(test)]
+mod emoji_family_tests;
 #[cfg(test)]
 mod tests;

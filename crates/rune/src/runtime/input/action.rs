@@ -263,6 +263,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     tx.font_smoothing = one.font_smoothing.or(tx.font_smoothing);
     tx.fonts_added |= one.fonts_added;
     if one.font_families.is_some() { tx.font_families = one.font_families; }
+    if one.emoji_family.is_some() { tx.emoji_family = one.emoji_family; }
     if one.rewind.is_some() { tx.rewind = one.rewind; }
     tx.blur |= one.blur;
     tx.cancel_pointer |= one.cancel_pointer;

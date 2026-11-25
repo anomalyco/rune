@@ -295,6 +295,36 @@ impl<S: 'static> Runtime<S> {
     pub fn set_font_families(&mut self, sans: &str, mono: &str) { self.core_mut().set_font_families(sans, mono); }
     #[inline(always)]
     pub fn font_families(&self) -> (&str, &str) { self.core().font_families() }
+    /// Sets or clears the opt-in preferred emoji font family across every runtime on this thread
+    /// (and windows opened later), as [`Tx::set_emoji_family`](crate::Tx::set_emoji_family) does
+    /// from a handler.
+    ///
+    /// Precedence for emoji graphemes is: this explicit `emoji_family` first, then any colour
+    /// emoji font explicitly named in the active family stack, then the lazily loaded system emoji
+    /// font, then the active text stack. Pass `None` or an empty string to restore default emoji
+    /// fallback.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::default());
+    /// rt.set_emoji_family(Some("Twemoji"));
+    /// assert_eq!(rt.emoji_family(), Some("Twemoji"));
+    /// rt.set_emoji_family(None);
+    /// assert_eq!(rt.emoji_family(), None);
+    /// ```
+    #[inline(always)]
+    pub fn set_emoji_family(&mut self, family: Option<&str>) { self.core_mut().set_emoji_family(family); }
+    /// The opt-in preferred emoji font family, or `None` when using default emoji fallback.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::default());
+    /// assert_eq!(rt.emoji_family(), None);
+    /// ```
+    #[inline(always)]
+    pub fn emoji_family(&self) -> Option<&str> { self.core().emoji_family() }
     #[inline(always)]
     pub(crate) fn follow_font_families(&mut self) -> bool { self.core_mut().follow_font_families() }
 

@@ -70,7 +70,11 @@ pub use fonts::face_weights::FaceWeights;
 pub use fonts::face_weights::set_face_weights;
 pub use fonts::fallback::is_pictographic;
 #[doc(hidden)]
+pub use fonts::families::choose_emoji_family;
+#[doc(hidden)]
 pub use fonts::families::choose_families;
+#[doc(hidden)]
+pub use fonts::families::normalize_emoji_family;
 #[doc(hidden)]
 pub use fonts::families::resolved_family_of;
 #[doc(hidden)]
@@ -318,6 +322,9 @@ pub struct TextSystem {
     symbol_families: Vec<&'static str>,
     /// The colour emoji family among `symbol_families`.
     emoji: Option<&'static str>,
+    /// Opt-in app-preferred emoji family (`Self::set_emoji_family`), tried ahead of selected
+    /// active-stack colour fonts and the lazily loaded system `emoji` family on `Route::Emoji`.
+    preferred_emoji: Option<String>,
     /// The installed math families, once a text has needed them.
     math: Option<Vec<&'static str>>,
     /// The installed monospace families with Arabic and Hebrew (`fallback::MONO_SCRIPT_FAMILIES`),
@@ -480,6 +487,7 @@ impl TextSystem {
             mono: String::new(),
             symbol_families: Vec::new(),
             emoji: None,
+            preferred_emoji: None,
             math: None,
             mono_scripts: None,
             system_mono: None,
@@ -586,6 +594,12 @@ impl TextSystem {
     #[doc(hidden)]
     pub fn load_installed(&mut self, list: &str) {
         load_installed(&mut self.font_cx.collection, &mut self.font_files, &mut self.installed, list);
+    }
+
+    /// Loads any installed system font families named by `list` (as configured by
+    /// [`Self::set_emoji_family`]) that are not yet registered in this collection.
+    pub(crate) fn load_installed_emoji(&mut self, list: &str) {
+        system_fonts::load_installed_emoji(&mut self.font_cx.collection, &mut self.font_files, &mut self.installed, list);
     }
 
     /// The installed `Family::SystemMono` families, loading them the first time.

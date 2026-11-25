@@ -125,6 +125,7 @@ impl RuntimeCore {
         if let Some(mode) = tx.font_smoothing.take() { self.set_font_smoothing(mode); }
         if std::mem::take(&mut tx.fonts_added) { self.follow_font_families(); }
         if let Some((sans, mono)) = tx.font_families.take() { self.set_font_families(&sans, &mono); }
+        if let Some(emoji) = tx.emoji_family.take() { self.set_emoji_family(emoji.as_deref()); }
         if let Some(srgb) = tx.srgb_blend.take() { self.set_srgb_blend(srgb); }
         if let Some(rewind) = tx.rewind.take() { self.motion.set_rewind(rewind); }
         self.latch_focus(tx);
