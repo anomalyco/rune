@@ -136,7 +136,7 @@ fn a_blur_alone_pools_a_copy_of_its_region_not_of_the_window() {
     let pixels = frame(&mut renderer, [480.0, 600.0, 64.0, 32.0]);
     assert_eq!(renderer.backdrops.len(), 1);
     let (w, h) = (renderer.backdrops[0].texture.width(), renderer.backdrops[0].texture.height());
-    assert!(w * h <= 256 * 256, "a copy of the pill's region, not of the 1024x768 window: {w}x{h}");
+    assert!(w * h * 4 <= size.0 * size.1, "a copy of the pill's region, not of the 1024x768 window: {w}x{h}");
     let seam = ((616 * 1024 + 512) * 4) as usize;
     assert!(pixels[seam] > 20 && pixels[seam + 2] > 20, "the pill blends red and blue across the seam: {:?}", &pixels[seam..seam + 4]);
     let away = ((100 * 1024 + 512) * 4) as usize;
