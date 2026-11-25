@@ -110,7 +110,7 @@ fn backdrop_slot_degrades_when_the_target_cannot_be_copied() {
 }
 
 fn blur(rect: [f32; 4], sigma: f32) -> Instance {
-    Instance { rect, fill: [0.0; 4], clip: NO_CLIP, params: [sigma, KIND_BACKDROP_BLUR, 0.0, 1.0], ..bytemuck::Zeroable::zeroed() }
+    Instance { rect, fill: [0.0, 0.0, 0.0, 1.0], clip: NO_CLIP, params: [sigma, KIND_BACKDROP_BLUR, 0.0, 1.0], ..bytemuck::Zeroable::zeroed() }
 }
 
 /// A frosted pill in a large window: the pooled copy holds the pill's region, not the window,
