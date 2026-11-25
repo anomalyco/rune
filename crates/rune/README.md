@@ -3619,9 +3619,30 @@ clamped to 64). Visible material elements past the limit draw their fallback ins
 `ElementInfo::material_fallback = true`, emit `"materialFallback": true` in `--tree` JSON, and
 log a one-time notice to stderr when native materials are active.
 
-Off macOS Rune hosts no native material and the element draws its fallback, but the frame's
-material rects are still public, so an app can drive its own backdrop under them (on Windows, a
-companion window or composition visual). `Runtime::system_materials` lists the last built frame's
+**Fill rules (Windows 11 and Linux Wayland):** on Windows 11 (`windows-system-material`) and
+Wayland, an element's fill controls whether behind-window blur is requested (on macOS, native
+views still replace the fill while active):
+
+```rust,ignore
+// 1. No fill: the material alone (Windows 11 supplies WinUI 3 light/dark Acrylic tint).
+el().size(220.0, 48.0).radius(24.0)
+    .system_material(SystemMaterial::Popover)
+
+// 2. Translucent fill (alpha < 1.0): drawn as a tint over the live blur.
+el().size(320.0, 180.0).radius(12.0)
+    .fill(Color::BLACK.alpha(0.35))
+    .system_material(SystemMaterial::Glass)
+
+// 3. Opaque fill (alpha >= 1.0): the fill wins and no material is requested
+//    (used for surfaces like rune-kit::Toolbar that blur only when a theme is translucent).
+el().w_full().h(48.0)
+    .fill(Color::WHITE)
+    .system_material(SystemMaterial::Sidebar)
+```
+
+Where native or compositor materials are inactive, the element draws its fallback fill, and the
+frame's material rects remain public so an app can still drive its own backdrop under them (on
+Windows, a companion window or composition visual). `Runtime::system_materials` lists the last built frame's
 `MaterialDraw`s (element id, material, rect and corner radius in physical pixels, `points(scale)`
 for window points), readable from `App::on_frame_drawn`. `ConfiguredOverlay::on_materials` hears
 each overlay frame's (`MaterialFrame`: draws and window scale) just before it presents. Give the
@@ -3641,7 +3662,9 @@ documented `DWMWA_USE_HOSTBACKDROPBRUSH` and a Windows 11 Acrylic Luminosity + C
 `Compositor::CreateHostBackdropBrush`, zero Win2D) clipped per frame under Rune's swap-chain
 visual. Each `(SystemMaterial, dark)` pair caches a single brush (`Popover` = Default Acrylic,
 `Sidebar` = Base Acrylic, `Glass` = clearer chromatic Acrylic; at most 6 cached brushes per
-window) and degrades gracefully to a WCAG >=4.5:1 flat tint if effect compilation fails. Windows
+window) and degrades gracefully to a WCAG >=4.5:1 flat tint if effect compilation fails.
+Light-theme Acrylic uses Microsoft's WinUI 3 light recipes (`#FCFCFC` / `#F3F3F3`), which are
+designed for dark text chosen from the active theme (`cx.system_dark()`). Windows
 follows the same fill rules as Wayland: opaque fills (`alpha >= 1.0`, such as `rune-kit::Toolbar`)
 stay opaque with no backdrop visual (keeping windows with only opaque materials idle with zero
 WinRT/DWM calls), translucent fills paint above Acrylic as an authored tint, and unfilled elements

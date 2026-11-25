@@ -7,6 +7,19 @@ impl El {
     /// window under the node's rect and corner radius (the largest of its corners), which follow
     /// layout and animation like any other paint.
     ///
+    /// ### Fill rules (Windows 11 and Linux Wayland)
+    ///
+    /// On Windows 11 (`windows-system-material`) and Linux Wayland, the element's fill decides
+    /// whether behind-window blur is requested:
+    /// - **No fill**: the material draws alone (Windows 11 Acrylic supplies Microsoft's WinUI 3
+    ///   theme tint; Wayland draws transparent over compositor blur).
+    /// - **Translucent fill (`alpha < 1.0`)**: the fill draws as a tint over the live blur.
+    /// - **Opaque fill (`alpha >= 1.0`)**: the fill wins and **no material or blur is requested**
+    ///   (use this for a surface that is a material only when the theme makes it translucent, such
+    ///   as `rune-kit::Toolbar`). Drop `.fill(...)` or lower its alpha to restore blur.
+    ///
+    /// On macOS, native views sit behind the element and always replace its fill while active.
+    ///
     /// - **macOS**: native in transparent windows (`NSGlassEffectView` / `NSVisualEffectView`).
     ///   The native view sits behind the element, replaces its fill, ignores ancestor clips, and
     ///   punches a hole inside the node's outer shadows.
@@ -17,11 +30,11 @@ impl El {
     ///   session). Uses Microsoft's Windows 11 Acrylic Luminosity + Color `CompositionEffectBrush`
     ///   over `HostBackdropBrush` (`Popover` = Default Acrylic, `Sidebar` = Base Acrylic,
     ///   `Glass` = clearer chromatic Acrylic), following light/dark theme switches and degrading to
-    ///   a WCAG >=4.5:1 flat tint if the effect factory fails. Follows Wayland's fill rules:
-    ///   opaque fills (`alpha >= 1.0`) stay opaque with no backdrop visual or shadow hole;
-    ///   translucent fills draw above Acrylic as an authored tint; unfilled elements paint
-    ///   transparent so Acrylic supplies the theme-aware tint. Whenever the system will not draw
-    ///   the material, Rune tears down visuals and draws the element's fallback fill instead.
+    ///   a WCAG >=4.5:1 flat tint if the effect factory fails. Light-theme Acrylic matches
+    ///   Microsoft's WinUI 3 light brushes (`#FCFCFC` / `#F3F3F3`) and is intended for dark text
+    ///   chosen from `cx.system_dark()` (white text over light Acrylic will look washed out).
+    ///   Whenever the system will not draw the material, Rune tears down visuals and draws the
+    ///   element's fallback fill instead.
     /// - **Linux Wayland**: active on transparent GPU windows and overlays (`zwlr_layer_shell_v1`
     ///   and toplevel fallbacks) when [`WindowBackdrop::None`](crate::WindowBackdrop::None) is
     ///   active and the compositor advertises `ext_background_effect_v1` (`Capability::Blur`) or
@@ -57,22 +70,25 @@ impl El {
     /// content on every platform, use [`El::backdrop_blur`](Self::backdrop_blur).
     ///
     /// ```no_run
-    /// use rune::{Color, Cx, El, SystemMaterial, WindowBackdrop, el};
+    /// use rune::{Color, El, SystemMaterial, el};
     ///
-    /// fn launcher_card(_: &(), cx: &mut Cx<()>) -> El {
-    ///     let base = rune::tok::theme(cx.system_dark()).bg;
-    ///     let bg = if cx.window_backdrop_supported(WindowBackdrop::Blur) {
-    ///         base.alpha(0.75)
-    ///     } else {
-    ///         base
-    ///     };
-    ///     el().w_full().h_full().center().child(
-    ///         el().size(750.0, 474.0).radius(12.0)
-    ///             .shadow(16.0, 40.0, Color::BLACK.alpha(0.35))
-    ///             .fill(bg)
-    ///             .system_material(SystemMaterial::Popover),
-    ///     )
-    /// }
+    /// // 1. No fill: the platform material supplies its own tint (theme-aware Acrylic on Windows 11).
+    /// let _material_only: El = el()
+    ///     .size(220.0, 48.0).radius(24.0)
+    ///     .system_material(SystemMaterial::Popover);
+    ///
+    /// // 2. Translucent fill (alpha < 1.0): draws as an authored tint over the live blur.
+    /// let _tinted: El = el()
+    ///     .size(320.0, 180.0).radius(12.0)
+    ///     .fill(Color::BLACK.alpha(0.35))
+    ///     .system_material(SystemMaterial::Glass);
+    ///
+    /// // 3. Opaque fill (alpha >= 1.0): the fill wins and no material is requested on Windows/Wayland
+    /// //    (use when an opaque theme covers a surface that blurs only in a translucent theme).
+    /// let _opaque_themed: El = el()
+    ///     .w_full().h(48.0)
+    ///     .fill(Color::WHITE)
+    ///     .system_material(SystemMaterial::Sidebar);
     /// ```
     pub fn system_material(mut self, material: crate::SystemMaterial) -> Self {
         if material == crate::SystemMaterial::Glass { self.vis_flags.set(crate::el::VisualFlags::CONTINUOUS_CORNERS, true); }

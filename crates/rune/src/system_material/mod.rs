@@ -16,12 +16,31 @@ use rune_motion::NodeId;
 
 /// A backdrop material the system composites behind a window.
 ///
-/// ```no_run
-/// use rune::{El, SystemMaterial, el};
+/// On Windows 11 (`windows-system-material`) and Linux Wayland, the element's fill controls
+/// whether behind-window blur is requested:
+/// - **No fill**: the material draws alone (Windows 11 Acrylic supplies Microsoft's WinUI 3
+///   light/dark tint; Wayland draws transparent over compositor blur).
+/// - **Translucent fill (`alpha < 1.0`)**: draws as a tint over the live blur.
+/// - **Opaque fill (`alpha >= 1.0`)**: the fill wins and no material or blur is requested (use
+///   for surfaces that blur only when a theme makes them translucent). Drop `.fill(...)` or make
+///   it translucent to blur.
 ///
-/// fn sidebar(content: El) -> El {
-///     el().w(240.0).h_full().system_material(SystemMaterial::Sidebar).child(content)
-/// }
+/// On Windows 11, light-theme Acrylic uses Microsoft's WinUI 3 light recipes (`#FCFCFC` /
+/// `#F3F3F3`), which are designed for dark text chosen from the active theme.
+///
+/// ```no_run
+/// use rune::{Color, El, SystemMaterial, el};
+///
+/// // No fill: platform material alone (self-tinted Acrylic on Windows 11).
+/// let _pill: El = el().size(220.0, 48.0).radius(24.0).system_material(SystemMaterial::Popover);
+///
+/// // Translucent fill: tinted over the live blur.
+/// let _tinted: El = el().w(240.0).h_full()
+///     .fill(Color::BLACK.alpha(0.35))
+///     .system_material(SystemMaterial::Sidebar);
+///
+/// // Opaque fill: stays solid and unblurred on Windows/Wayland (no material requested).
+/// let _solid: El = el().w_full().h(48.0).fill(Color::WHITE).system_material(SystemMaterial::Sidebar);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
