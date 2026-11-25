@@ -468,7 +468,10 @@ impl RuntimeCore {
             .take_while(|&j| self.allowed(j) && !self.subtree_exiting(j))
             .filter_map(|j| self.tree.nodes[j].focus.key.clone())
             .collect();
-        handlers.into_iter().any(|f| Tx::took(f(app.states(), ev, tx), tx))
+        let rtl = std::mem::replace(&mut tx.key_rtl, self.tree.nodes[i].flow == crate::el::Flow::Rtl);
+        let took = handlers.into_iter().any(|f| Tx::took(f(app.states(), ev, tx), tx));
+        tx.key_rtl = rtl;
+        took
     }
 
     pub(in crate::runtime) fn focused_input(&self) -> Option<&InputSpec> {

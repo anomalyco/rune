@@ -10,6 +10,14 @@ impl Tx {
     /// want every repeat.
     pub fn key_repeat(&self) -> bool { self.key_repeat }
 
+    /// In an [`El::on_key`](crate::El::on_key) handler, the layout direction of the focused
+    /// element the key arrived at ([`El::dir`](crate::El::dir), inherited), so a handler maps
+    /// Left and Right to start and end as Rune's own focus navigation does: in `Rtl`, Right moves
+    /// back. `Ltr` outside element key handlers.
+    pub fn key_direction(&self) -> crate::Direction {
+        if self.key_rtl { crate::Direction::Rtl } else { crate::Direction::Ltr }
+    }
+
     /// In a key handler, the physical key behind the logical key it's seeing: where the key
     /// sits, whatever the keyboard layout and Shift make it type. `KeyEvent` carries the
     /// character, which moves between layouts once Shift is held (`⌘⇧7` arrives as

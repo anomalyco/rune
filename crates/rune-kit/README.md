@@ -243,7 +243,16 @@ surface; `MenuItem::key` assigns a stable key instead of positional `{menu_key}-
 inserting rows above keeps focus; `MenuItem::a11y_label` separates the accessible name (and
 typeahead / submenu name) from truncated drawn text; and `MenuItem::submenu_placement` (default
 `Placement::RightStart`) plus `MenuItem::submenu_min_width` (default `160.0`, `0.0` for
-content width) place and size submenus per item (see `rune-menu--submenu-options`). Side-placed
+content width) place and size submenus per item (see `rune-menu--submenu-options`).
+`MenuItem::on_submenu(|s, open| ..)` hands the menu the submenu's open flag: Right, Return and
+Space on the row open the submenu and move focus to its first item, and Left or Escape inside it
+closes only the submenu and returns focus to the row (the WAI-ARIA menu pattern; right to left,
+Left opens and Right closes, as the chevron points, and a submenu flipped for lack of room keeps
+the keys). Resting the pointer 200 ms on the row opens it, and resting on another row of the same
+menu closes it. `Menu::on_close` (Escape, a press outside) and picking an item other than a
+checkbox or radio also close the open submenus through it, so the menu reopens with them closed;
+an app that closes the menu some other way clears the flags itself. All `on_submenu` callbacks in
+one menu take the same state type. Side-placed
 menus and submenus clamp on both axes via `El::anchored_fit` when they would overflow a small
 window so long submenus shrink and scroll inside the viewport (see
 `rune-menu--submenu-small-window`, and `rune-menu--field-menu-fallback` for rendering

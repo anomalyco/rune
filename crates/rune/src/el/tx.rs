@@ -21,6 +21,8 @@ mod tests;
 pub struct Tx {
     pub(crate) shortcut_activation_token: Option<String>,
     pub(crate) key_repeat: bool,
+    /// `Tx::key_direction`.
+    pub(crate) key_rtl: bool,
     /// `Tx::drag_repeat`.
     pub(crate) drag_repeat: bool,
     /// `Tx::drag_repeat_after`.
