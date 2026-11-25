@@ -64,6 +64,7 @@ fn apply_missed_core(
     // come at the retry's pace, not the display's.
     if !stepped { state.app.covered_wake(); }
     state.clipboard.flush_core(state.app.rt_mut());
+    crate::haptics::flush_live(state.app.rt_mut(), false);
     state.reports.skipped();
     effects
 }
@@ -170,6 +171,7 @@ impl Host {
             self.clipboard.flush_core(self.app.rt_mut());
             self.frame_reports.skipped();
         }
+        crate::haptics::flush_live(self.app.rt_mut(), false);
     }
 
     pub(in crate::window) fn redraw(&mut self) { self.draw(false) }
@@ -463,6 +465,7 @@ impl FrameHost for WindowFrame<'_> {
     fn on_unchanged(&mut self, _info: &StepInfo) {
         let Some(l) = self.host.win.as_mut() else { return };
         sync_platform_core(l, self.host.app.rt_mut(), &mut self.host.secure_input, &mut self.host.ime, self.host.ime_waits, &self.host.clipboard);
+        crate::haptics::flush_live(self.host.app.rt_mut(), !self.state.hidden);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         self.host.sync_wayland_drop();
         let Some(l) = self.host.win.as_mut() else { return };
@@ -612,6 +615,7 @@ impl FrameHost for WindowFrame<'_> {
                     now: crate::time::now(),
                 });
             }
+            crate::haptics::flush_live(self.host.app.rt_mut(), false);
             self.host.frame_reports.skipped();
             return;
         }
@@ -674,11 +678,13 @@ impl FrameHost for WindowFrame<'_> {
                 self.host.frame_reports.skipped();
                 LostPresent::Retry
             };
+            crate::haptics::flush_live(self.host.app.rt_mut(), false);
             if outcome == LostPresent::GiveUp {
                 let _ = self.host.replace_lost_surface();
             }
             return;
         }
+        crate::haptics::flush_live(self.host.app.rt_mut(), !self.state.hidden);
         self.host.meter.presented();
         #[cfg(target_os = "macos")]
         if let Some(l) = self.host.win.as_mut() {

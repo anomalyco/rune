@@ -217,7 +217,8 @@ pub(crate) fn run_embed_frame<E: EmbedSurface>(surface: &mut E) -> FrameSummary 
 }
 
 /// Drains and discards host requests an embedded layer cannot serve (window close/minimize/frame,
-/// native pop-ups, native file dialogs) and flushes in-memory clipboard writes.
+/// native pop-ups, native file dialogs) and flushes in-memory clipboard writes. Leaves
+/// `rt.host.haptics` intact so the embedding host drains them via `LayerHost::take_haptics()`.
 pub(crate) fn flush_requests(rt: &mut RuntimeCore, app: &mut dyn AppDriver) {
     crate::clipboard::flush_memory(rt);
     if rt.popup_menu().is_some() {

@@ -553,6 +553,7 @@ impl OverlayCore {
         } else {
             self.advance_at(app, now);
         }
+        crate::haptics::flush_live(app.rt_mut(), false);
         self.backoff_step(crate::window::BackoffEvent::Missed { missed, paced, now });
         let pacing = self.pacing_state(missed != crate::window::Missed::Occluded);
         self.meter.set_pacing(pacing);
