@@ -644,7 +644,8 @@ impl El {
         self.style.set_pad_right(p);
         self
     }
-    /// Allow shrinking below content size along the parent's main axis.
+    /// Allow shrinking below content size along the parent's main axis. Drops an automatic
+    /// minimum width to 0; an explicit [`El::min_w`] stays, whether set before or after.
     #[inline]
     pub fn shrink(mut self) -> Self {
         self.set_shrink();
@@ -654,7 +655,9 @@ impl El {
     #[inline]
     pub fn set_shrink(&mut self) -> &mut Self {
         self.style.set_flex_shrink(1.0);
-        self.style.set_min_width(length(0.0));
+        if self.style.min_size().width.is_auto() {
+            self.style.set_min_width(length(0.0));
+        }
         self
     }
     /// Lay children out in `n` equal columns, each as wide as the widest child needs (CSS
