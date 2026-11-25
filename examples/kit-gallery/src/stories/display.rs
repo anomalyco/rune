@@ -570,9 +570,9 @@ pub(super) fn list_delegated_a11y(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
         )
 }
 /// Accessibility story exercising `El::aria_disabled` (focusable unavailable button vs truly
-/// disabled), a horizontal `tablist` with `El::orientation` and `El::controls`, and a popup
-/// trigger with `El::has_popup`, `El::controls`, `El::owns`, `El::multiselectable`, and
-/// `El::required`.
+/// disabled), a horizontal `tablist` with `El::orientation` and `El::controls`, an editable
+/// `combobox` with `El::auto_complete` (`List` / `Inline` / `Both`), and a popup trigger with
+/// `El::has_popup`, `El::controls`, `El::owns`, `El::multiselectable`, and `El::required`.
 pub(super) fn a11y_aria_properties(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
     const TABS: [(&str, &str, &str); 3] = [
         ("tab-overview", "Overview", "aria_disabled keeps a pending button in the Tab order while reading as disabled."),
@@ -588,6 +588,13 @@ pub(super) fn a11y_aria_properties(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
     let active_tab = s.picked("aria-tab", "tab-overview");
     let panel_copy = TABS.iter().find(|(id, _, _)| *id == active_tab).map_or(TABS[0].2, |(_, _, body)| *body);
     let popup_open = !s.is("aria-popup-closed");
+    let ac_mode = s.picked("aria-ac", "list");
+    let ac = match ac_mode {
+        "inline" => Some(rune::AutoComplete::Inline),
+        "both" => Some(rune::AutoComplete::Both),
+        "none" => None,
+        _ => Some(rune::AutoComplete::List),
+    };
 
     let mut pending_btn = row()
         .key("aria-pending-save")
@@ -624,6 +631,19 @@ pub(super) fn a11y_aria_properties(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
             .controls("aria-tabpanel")
             .on_press(move |s: &mut G| { s.pick.insert("aria-tab".into(), id.into()); })
             .child(text(label).font(k.ty.ui_compact).color(if selected { k.c.text_strong } else { k.c.text_weak }))
+    });
+
+    let mut combo = rune::text_input(&s.aria_combo_edit, k.ty.ui_compact)
+        .single_line().key("aria-combo").role("combobox").label("Fruit filter")
+        .placeholder("Filter fruit…", k.c.text_faint).color(k.c.text_base).caret(k.c.text_base, k.selection())
+        .grow(1.0).h(32.0).px(10.0).radius(k.radius.sm).fill(k.c.bg_base).border(1.0, k.c.border_weak)
+        .expanded(popup_open).has_popup(rune::HasPopup::Listbox).controls("aria-popup-list")
+        .on_edit(|s: &mut G| &mut s.aria_combo_edit);
+    if let Some(mode) = ac { combo = combo.auto_complete(mode); }
+    let mode_btns = ["list", "inline", "both", "none"].into_iter().map(|m| {
+        Button::new(m).variant(if ac_mode == m { ButtonVariant::Neutral } else { ButtonVariant::Ghost })
+            .on_press(move |s: &mut G| { s.pick.insert("aria-ac".into(), m.into()); })
+            .build(k).key(format!("aria-ac-{m}"))
     });
 
     let mut root = col()
@@ -678,6 +698,11 @@ pub(super) fn a11y_aria_properties(s: &G, k: &Kit, _: &mut Vec<El>) -> El {
                         .border(1.0, k.c.border_weak)
                         .child(text(panel_copy).font(k.ty.small).color(k.c.text_base).wrap()),
                 ),
+        )
+        .child(
+            col().gap(6.0)
+                .child(row().gap(6.0).center_y().child(combo))
+                .child(row().gap(4.0).center_y().children(mode_btns)),
         )
         .child(
             row()

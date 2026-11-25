@@ -2441,3 +2441,60 @@ test('syncA11y applies root dir/lang, per-item dir overrides, and logical text-a
 
     bridge.destroy(h);
 });
+
+test('syncA11y and focusA11y mirror, patch, and clear aria-autocomplete on mirror nodes, proxy, and textarea', () => {
+    const { h } = setup();
+
+    // Full snapshot sets aria-autocomplete on a mirrored combobox.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'button', p: '#0/fruit', r: [0, 0, 200, 28], t: 'Fruit', o: 'combobox', x: false, hp: 'listbox', ac: 'list', v: 'Ap' },
+    ]));
+    const combo = h.a11yNodes.get('button:#0/fruit');
+    assert.equal(combo.getAttribute('role'), 'combobox');
+    assert.equal(combo.getAttribute('aria-autocomplete'), 'list');
+    assert.equal(combo.getAttribute('aria-haspopup'), 'listbox');
+    assert.equal(combo.textContent, 'Ap');
+
+    // Incremental patch updates aria-autocomplete to both, then clears it when omitted.
+    bridge.syncA11y(h, JSON.stringify({
+        p: 1,
+        u: [
+            { k: 'button', p: '#0/fruit', r: [0, 0, 200, 28], t: 'Fruit', o: 'combobox', x: true, hp: 'listbox', ct: 'fruit-list', ac: 'both', v: 'Ap' },
+        ],
+    }));
+    assert.equal(combo.getAttribute('aria-autocomplete'), 'both');
+    assert.equal(combo.getAttribute('aria-expanded'), 'true');
+    assert.equal(combo.getAttribute('aria-controls'), 'fruit-list');
+
+    bridge.syncA11y(h, JSON.stringify({
+        p: 1,
+        u: [
+            { k: 'button', p: '#0/fruit', r: [0, 0, 200, 28], t: 'Fruit', o: 'combobox', x: false, hp: 'listbox', v: 'Ap' },
+        ],
+    }));
+    assert.equal(combo.getAttribute('aria-autocomplete'), null);
+
+    // focusA11y sets aria-autocomplete on both focus proxy and hidden textarea for combobox/textbox.
+    bridge.focusA11y(h, JSON.stringify({ o: 'combobox', t: 'Fruit', x: false, hp: 'listbox', ac: 'inline' }));
+    let proxy = h.focusProxies[h.focusTurn];
+    assert.equal(proxy.getAttribute('aria-autocomplete'), 'inline');
+    assert.equal(h.textarea.getAttribute('aria-autocomplete'), 'inline');
+
+    // Active descendant focus keeps the field's aria-autocomplete (f.fac) on textarea while option proxy omits it.
+    bridge.focusA11y(h, JSON.stringify({ o: 'option', t: 'Apple', f: 'Search fruit', fac: 'list' }));
+    proxy = h.focusProxies[h.focusTurn];
+    assert.equal(proxy.getAttribute('role'), 'option');
+    assert.equal(proxy.getAttribute('aria-autocomplete'), null);
+    assert.equal(h.textarea.getAttribute('aria-label'), 'Search fruit');
+    assert.equal(h.textarea.getAttribute('aria-autocomplete'), 'list');
+
+    // Focusing an unrelated button clears textarea aria-autocomplete; clearing focus also removes it.
+    bridge.focusA11y(h, JSON.stringify({ o: 'button', t: 'Save' }));
+    assert.equal(h.textarea.getAttribute('aria-autocomplete'), null);
+    bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'Filter', ac: 'both' }));
+    assert.equal(h.textarea.getAttribute('aria-autocomplete'), 'both');
+    bridge.focusA11y(h, '');
+    assert.equal(h.textarea.getAttribute('aria-autocomplete'), null);
+
+    bridge.destroy(h);
+});

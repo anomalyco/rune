@@ -3087,7 +3087,8 @@ feature (`crates/rune/src/a11y/`).
   without stripping keyboard focusability, still advertising `Action::Focus` while suppressing
   activation actions), `read_only`, `invalid`, `required`, `multiselectable`,
   `has_popup(HasPopup::Menu | Listbox | Tree | Grid | Dialog)`,
-  `orientation(Orientation::Horizontal | Vertical)`, `controls(key)`, `owns(key)`, `sorted`,
+  `orientation(Orientation::Horizontal | Vertical)`,
+  `auto_complete(AutoComplete::Inline | List | Both)`, `controls(key)`, `owns(key)`, `sorted`,
   `a11y_hidden`, `live_region(LiveRegion::Polite)`, `position_in_set`, `shortcut_hint` and
   `active_descendant` (the highlighted row of a tree, table or suggestion list whose container
   or field keeps focus). An icon-only button needs `.label("Close")`. An `El::help` tooltip

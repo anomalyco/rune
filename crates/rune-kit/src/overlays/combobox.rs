@@ -316,6 +316,7 @@ impl ComboboxCore {
             .unwrap_or_else(|| if name.is_empty() { "Search".to_owned() } else { format!("Search {name}") });
         let mut field = TextInput::new(&self.state.search).plain().leading_icon(k.glyph.search).height(36.0)
             .width(None).placeholder(self.search_placeholder).label(search_label)
+            .auto_complete(rune::AutoComplete::List)
             .active_descendant(active.map(|i| format!("{}-option-{}", self.key, self.options[i].id)));
         // Without it, an edit's commit is instant: the filtered rows and the height land with the text.
         if self.animate_filtering { field = field.animate_edit_layout(); }

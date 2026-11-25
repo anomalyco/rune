@@ -103,7 +103,7 @@ pub(crate) struct A11yItem {
     /// App-mode scroll viewport offset `[tx, ty]` in CSS pixels (`translate3d(-tx, -ty, 0)`).
     pub scroll: Option<[f32; 2]>,
     /// Extra WAI-ARIA states and relations (`aria-haspopup`, `aria-orientation`,
-    /// `aria-multiselectable`, `aria-required`, `aria-controls`, `aria-owns`).
+    /// `aria-autocomplete`, `aria-multiselectable`, `aria-required`, `aria-controls`, `aria-owns`).
     pub aria: MirrorAria,
     /// Explicit HTML `dir` (`"rtl"` or `"ltr"`) when this item's resolved `Flow` flips from its
     /// mirror parent's; `None` when inherited.
@@ -117,6 +117,7 @@ pub(crate) struct MirrorAria {
     pub required: bool,
     pub has_popup: Option<&'static str>,
     pub orientation: Option<&'static str>,
+    pub auto_complete: Option<&'static str>,
     pub controls: Option<String>,
     pub owns: Option<String>,
 }
@@ -546,7 +547,7 @@ impl RuntimeCore {
                 last_flow_parent = None;
                 continue;
             }
-            if n.input.is_some() || n.is_secure() {
+            if n.is_secure() {
                 i = end;
                 last_flow_parent = None;
                 continue;
@@ -584,6 +585,31 @@ impl RuntimeCore {
             };
 
             let in_control = i < control_end;
+            if let Some(inp) = n.input.as_deref() {
+                // Mirror editable comboboxes (`text_input(...).role("combobox")`) alongside
+                // non-editable comboboxes so `aria-autocomplete`, `aria-expanded`, `aria-haspopup`,
+                // and `aria-controls` stay readable both closed and while a popup is open.
+                if !in_control && n.role == "combobox" && rect[2] > 0.0 && rect[3] > 0.0 {
+                    let label = self.mirror_name(i).unwrap_or_else(|| inp.placeholder.clone());
+                    let value = self.mirror_value(i).map(str::to_owned).unwrap_or_else(|| inp.edit.text.clone());
+                    if !label.is_empty() || !value.is_empty() {
+                        let mut item = A11yItem::new("button", &n.path, rect);
+                        item.role = Some("combobox");
+                        item.level = n.a11y.level;
+                        item.expanded = n.a11y.expanded;
+                        item.text = label;
+                        item.description = self.mirror_description(i);
+                        item.disabled = n.a11y.disabled;
+                        item.busy = busy;
+                        item.value = value;
+                        item.aria = self.mirror_aria(i);
+                        push(&mut out, item);
+                    }
+                }
+                i = end;
+                last_flow_parent = None;
+                continue;
+            }
             let live = effective_live(n);
             let live_role = roles::default_live(n.role).and_then(|_| roles::container_aria(n.role));
             let text_aria = (n.text.is_some() && end == i + 1).then(|| roles::container_aria(n.role)).flatten();
@@ -886,6 +912,7 @@ impl RuntimeCore {
             aria.required = m.required;
             aria.has_popup = m.has_popup.map(crate::HasPopup::as_aria);
             aria.orientation = m.orientation.map(crate::Orientation::as_aria);
+            aria.auto_complete = m.auto_complete.map(crate::AutoComplete::as_aria);
             aria.controls = self.mirror_related_id(i, m.controls.as_deref());
             aria.owns = self.mirror_related_id(i, m.owns.as_deref());
         }
@@ -1077,7 +1104,12 @@ impl RuntimeCore {
         let next = self.focused_index().map(|i| match self.a11y_active_descendant(i) {
             Some(row) => {
                 let mut item = self.web_focus_item(row);
-                if let Some(o) = item.as_object_mut() { o.insert("f".into(), json!(self.mirror_name(i).unwrap_or_default())); }
+                if let Some(o) = item.as_object_mut() {
+                    o.insert("f".into(), json!(self.mirror_name(i).unwrap_or_default()));
+                    if let Some(ac) = self.mirror_aria(i).auto_complete {
+                        o.insert("fac".into(), json!(ac));
+                    }
+                }
                 item.to_string()
             }
             None => self.web_focus_item(i).to_string(),
@@ -1141,6 +1173,7 @@ impl RuntimeCore {
         if aria.required { o.insert("rq".into(), json!(true)); }
         if let Some(hp) = aria.has_popup { o.insert("hp".into(), json!(hp)); }
         if let Some(or) = aria.orientation { o.insert("or".into(), json!(or)); }
+        if let Some(ac) = aria.auto_complete { o.insert("ac".into(), json!(ac)); }
         if let Some(ct) = aria.controls.as_deref() { o.insert("ct".into(), json!(ct)); }
         if let Some(ow) = aria.owns.as_deref() { o.insert("ow".into(), json!(ow)); }
         Value::Object(o)
@@ -1155,6 +1188,9 @@ impl RuntimeCore {
                 if self.tree.nodes[i].a11y.disabled || !self.allowed(i) { return false; }
                 if self.tree.nodes[i].handlers.on_press.is_some() {
                     self.frame.queue.push(Action::Press(path.to_owned(), crate::PointerButton::Primary, false, None));
+                    true
+                } else if self.tree.nodes[i].input.is_some() {
+                    self.queue_a11y(path.to_owned(), crate::a11y::actions::A11yAct::Focus(None));
                     true
                 } else {
                     self.queue_a11y_delegate(i, accesskit::Action::Click)

@@ -1108,6 +1108,7 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-required', item.rq ? 'true' : undefined],
         ['aria-haspopup', item.hp],
         ['aria-orientation', item.or],
+        ['aria-autocomplete', item.ac],
         ['aria-controls', item.ct],
         ['aria-owns', item.ow],
     ];
@@ -1322,6 +1323,7 @@ export function focusA11y(h, json) {
     }
     if (!f) {
         h.canvas.removeAttribute('aria-activedescendant');
+        h.textarea.removeAttribute('aria-autocomplete');
         return;
     }
     if (f.o === 'textbox') h.textarea.setAttribute('aria-label', f.t || 'Text input');
@@ -1345,6 +1347,7 @@ export function focusA11y(h, json) {
     if (f.rq) el.setAttribute('aria-required', 'true');
     if (f.hp) el.setAttribute('aria-haspopup', f.hp);
     if (f.or) el.setAttribute('aria-orientation', f.or);
+    if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
     if (f.ct) el.setAttribute('aria-controls', f.ct);
     if (f.ow) el.setAttribute('aria-owns', f.ow);
     if (f.rg) {
@@ -1362,6 +1365,9 @@ export function focusA11y(h, json) {
     // Typing in a field whose highlighted row this is (the palette): the field says it too.
     if (f.o !== 'textbox') h.textarea.setAttribute('aria-activedescendant', el.id);
     else h.textarea.removeAttribute('aria-activedescendant');
+    const taAc = f.fac ?? ((f.o === 'textbox' || f.o === 'combobox') ? f.ac : undefined);
+    if (taAc) h.textarea.setAttribute('aria-autocomplete', taAc);
+    else h.textarea.removeAttribute('aria-autocomplete');
 }
 
 // `Tx::announce`: two live regions in the mirror, polite and assertive, made the first time

@@ -96,6 +96,13 @@ impl Tree<'_> {
                 accesskit::Orientation::Vertical => "vertical",
             }.into();
         }
+        if let Some(ac) = n.auto_complete() {
+            v["autoComplete"] = match ac {
+                accesskit::AutoComplete::Inline => "inline",
+                accesskit::AutoComplete::List => "list",
+                accesskit::AutoComplete::Both => "both",
+            }.into();
+        }
         match n.sort_direction() {
             Some(accesskit::SortDirection::Ascending) => v["sort"] = "ascending".into(),
             Some(accesskit::SortDirection::Descending) => v["sort"] = "descending".into(),

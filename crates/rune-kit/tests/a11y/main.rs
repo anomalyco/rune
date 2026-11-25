@@ -6,6 +6,7 @@
 //!
 //! Run: `cargo test -p rune-kit --features markdown --test a11y`.
 
+mod auto_complete;
 mod controls;
 mod data;
 mod disclosure;

@@ -10,6 +10,8 @@ mod a11y_proof;
 #[cfg(target_arch = "wasm32")]
 mod aria_proof;
 #[cfg(target_arch = "wasm32")]
+mod auto_complete_proof;
+#[cfg(target_arch = "wasm32")]
 mod image_proof;
 #[cfg(target_arch = "wasm32")]
 mod input_proof;
@@ -91,6 +93,8 @@ pub fn start() {
     if a11y_proof::enabled() { a11y_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if aria_proof::enabled() { aria_proof::run(); return; }
+    #[cfg(target_arch = "wasm32")]
+    if auto_complete_proof::enabled() { auto_complete_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
     if popup_modal_proof::enabled() { popup_modal_proof::run(); return; }
     #[cfg(target_arch = "wasm32")]
