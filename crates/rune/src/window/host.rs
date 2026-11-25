@@ -435,7 +435,7 @@ impl Host {
             geometry.min_size = options.fit_min_size(geometry.min_size);
             // Opens at the content's height; the first frame corrects any difference its
             // real scale makes.
-            app.rt_mut().host.fit_height = true;
+            app.rt_mut().host.set_fit_height(true);
             let (min, max) = options.size_limits(geometry.min_size);
             let fitted = crate::window::frame::clamp_size((size.0, app.content_height()), min, max);
             app.rt_mut().set_viewport(fitted, 1.0);
@@ -600,7 +600,7 @@ impl Host {
         let Some(w) = self.shown_win() else { return };
         if self.wayland && !w.first_frame.notified() { return; }
         let allow_position = self.placement.is_none() && !self.wayland;
-        let track_size = !self.app.rt().host.fit_height;
+        let track_size = !self.app.rt().host.fit_height();
         self.reopen.record_live(
             w.live_state(self.wayland),
             super::state::reopen::use_physical_size(self.wayland),

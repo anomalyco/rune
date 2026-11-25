@@ -433,7 +433,7 @@ fn a_first_showing_in_a_window_that_fits_its_content_estimates_from_max_h() {
         col().w_full().child(el().key("search").w_full().h(56.0)).children(results)
     }
     let mut rt = Runtime::new(false, view, (300.0, 500.0), Env::new(true, 1.0));
-    rt.host.fit_height = true;
+    rt.host.set_fit_height(true);
     let height = rt.content_height();
     rt.set_viewport((300.0, height), 1.0);
     rt.frame(0.0);

@@ -71,8 +71,8 @@ impl dyn OverlayApp + '_ {
         self.driver(|rt, app| rt.poll_hidden(app))
     }
 
-    pub(super) fn content_height(&mut self) -> f32 {
-        self.driver(|rt, app| rt.content_height(app))
+    pub(super) fn measure_content(&mut self) -> (f32, f32) {
+        self.driver(|rt, app| rt.measure_content(app))
     }
 
     pub(super) fn window_focus(&mut self, focused: bool) {
@@ -259,7 +259,7 @@ fn build_parts<S, T: 'static>(
     let ConfiguredOverlay {
         spec, options, on_key, on_created, on_availability, poll, compositor, setup, mut runtime, font_smoothing,
         macos_level, macos_color_space, window_backdrop, frame_latency, on_materials, animate_reveal, release_after, renderer,
-        fit_height,
+        sizing, min_size, max_size,
     } = configured;
     let inherits_font_smoothing = font_smoothing.is_none();
     runtime.font_smoothing = font_smoothing.unwrap_or(app_font_smoothing);
@@ -276,7 +276,8 @@ fn build_parts<S, T: 'static>(
         (&f as &dyn std::any::Any).downcast_ref::<fn(&mut T, f64, &mut Tx) -> bool>().copied()
     }));
     rt.set_live_visible(false);
-    rt.core_mut().host.fit_height = fit_height;
+    rt.core_mut().host.content_sizing = sizing;
+    rt.core_mut().host.content_limits = (min_size, max_size);
     let at = Placement { size: spec.size, edge: spec.edge, margin: spec.margin, align: spec.align, inset: spec.inset };
     let mut core = OverlayCore::new(
         rt.core_mut(),
@@ -295,7 +296,7 @@ fn build_parts<S, T: 'static>(
     core.frame_latency = frame_latency;
     core.on_materials = on_materials;
     core.requested_renderer = renderer;
-    core.fit_height = fit_height;
+    core.sizing = super::sizing::SizingConfig { mode: sizing, min_size, max_size };
     let typed = TypedOverlayApp { rt, compositor, setup, on_availability, shared: shared.clone() };
     (core, typed, OverlayHandle { shared }, inherits_font_smoothing)
 }

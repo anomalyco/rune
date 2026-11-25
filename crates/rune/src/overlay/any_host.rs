@@ -303,7 +303,7 @@ impl AnyHost for OverlayHost {
         match event {
             WindowEvent::Moved(_) => {
                 core.position_owner.step(input::PositionEvent::WindowMoved);
-                if core.fit_height {
+                if core.sizing.mode.fits_any() {
                     let (area, _) = core.target_metrics(event_loop);
                     if area.is_some() { core.last_work_area = area; }
                 }
@@ -321,7 +321,7 @@ impl AnyHost for OverlayHost {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if core.fit_height {
+                if core.sizing.mode.fits_any() {
                     let (area, _) = core.target_metrics(event_loop);
                     if area.is_some() { core.last_work_area = area; }
                     core.dirty = true;

@@ -31,9 +31,11 @@ fn set_rows(overlay: &mut Overlay<usize>, rows: usize) {
     overlay.rt.update(move |state, _| *state = rows);
 }
 
-fn queued(overlay: &Overlay<usize>) -> (Option<(f32, f32)>, Option<f32>) {
+type QueuedSizes = (Option<(f32, f32)>, Option<(f32, f32)>);
+
+fn queued(overlay: &Overlay<usize>) -> QueuedSizes {
     let requests = overlay.shared.core.requests.lock().unwrap();
-    (requests.size, requests.fit_height)
+    (requests.size, requests.fit_size)
 }
 
 #[test]
@@ -74,8 +76,8 @@ fn a_shown_overlay_asks_for_its_contents_new_height() {
     set_rows(&mut overlay, 3);
     overlay.rt.frame(0.0);
     overlay.take_window_requests();
-    assert_eq!(queued(&overlay), (None, Some(60.0)));
-    assert_eq!(overlay.requested_size(overlay.rt.core(), None, Some(60.0)), Some((200.0, 60.0)));
+    assert_eq!(queued(&overlay), (None, Some((200.0, 60.0))));
+    assert_eq!(overlay.requested_size(overlay.rt.core(), None, Some((200.0, 60.0))), Some((200.0, 60.0)));
 }
 
 /// An explicit resize gives a fitted overlay its width; its height stays the content's, even
@@ -157,8 +159,8 @@ fn fitting_before_an_animated_reveal_lets_the_new_card_enter() {
 
 #[test]
 fn same_frame_live_resize_presents_zero_frames_at_old_height_on_gpu_and_cpu_layered() {
-    use super::super::sizing::{clamp_fitted_height, local_rect_for_fit};
-    use crate::{OverlayPlacement, ScreenEdge};
+    use super::super::sizing::{SizingConfig, local_rect_for, resolve_content_size};
+    use crate::{ContentSizing, OverlayPlacement, ScreenEdge};
 
     // 1. Live height change while shown is consumed immediately by `take_live_fit_resize`
     //    (used in `OverlayFrame::post_step_check` and `draw_cpu` before paint/present),
@@ -179,20 +181,21 @@ fn same_frame_live_resize_presents_zero_frames_at_old_height_on_gpu_and_cpu_laye
     assert_eq!(queued(&overlay), (None, None), "must not defer resize to next event-loop turn");
 
     // 2. Clamp across fractional monitor scales (1.0, 1.25, 1.5, 2.0, 3.0), work area, and 0 height.
+    let cfg = SizingConfig { mode: ContentSizing::FitHeight, min_size: None, max_size: None };
     for scale in [1.0f32, 1.25, 1.5, 2.0, 3.0] {
-        let h = clamp_fitted_height(41.1, Some((1920.0, 1080.0)), scale, 8192);
+        let h = resolve_content_size(cfg, None, (200.0, 0.0), (200.0, 41.1), Some((1920.0, 1080.0)), scale, 8192).1;
         let px = h * scale;
         assert!((px - px.round()).abs() < 1e-4, "scale {scale}: {h} pt -> {px} px must be whole");
         assert!(h >= 41.1 - 1e-5);
     }
-    assert_eq!(clamp_fitted_height(0.0, Some((1920.0, 1080.0)), 1.5, 8192), 1.0, "zero height clamps to 1 pt floor");
-    assert_eq!(clamp_fitted_height(2000.0, Some((1920.0, 600.0)), 1.0, 8192), 600.0, "work area clamps height");
+    assert_eq!(resolve_content_size(cfg, None, (200.0, 0.0), (200.0, 0.0), Some((1920.0, 1080.0)), 1.5, 8192).1, 1.0, "zero height clamps to 1 pt floor");
+    assert_eq!(resolve_content_size(cfg, None, (200.0, 0.0), (200.0, 2000.0), Some((1920.0, 600.0)), 1.0, 8192).1, 600.0, "work area clamps height");
 
     // 3. OverlayPlacement::Rect preserves (x, y) and fixed width while taking fitted height.
     let at = super::super::Placement { size: (200.0, 88.0), edge: ScreenEdge::Top, margin: 0.0, align: crate::Align::Center, inset: 0.0 };
     let rect_p = Some(OverlayPlacement::Rect { x: 30.0, y: 50.0, width: 240.0, height: 10.0 });
-    assert_eq!(local_rect_for_fit(at, rect_p, (1920.0, 1080.0), true), [30.0, 50.0, 240.0, 88.0]);
-    assert_eq!(local_rect_for_fit(at, rect_p, (1920.0, 1080.0), false), [30.0, 50.0, 240.0, 10.0]);
+    assert_eq!(local_rect_for(at, rect_p, (1920.0, 1080.0), ContentSizing::FitHeight), [30.0, 50.0, 240.0, 88.0]);
+    assert_eq!(local_rect_for(at, rect_p, (1920.0, 1080.0), ContentSizing::Fixed), [30.0, 50.0, 240.0, 10.0]);
 }
 
 #[test]

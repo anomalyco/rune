@@ -346,7 +346,7 @@ impl Browser {
             let w = (size.width as f32 / scale).max(1.0);
             {
                 let rt = app.rt_mut();
-                rt.host.fit_height = true;
+                rt.host.set_fit_height(true);
                 rt.set_viewport((w, spec_size.1), scale);
             }
             let h = app.content_height();

@@ -71,7 +71,11 @@ impl RuntimeCore {
             app,
             env: self.env,
             viewport: self.viewport,
-            fit_height: self.host.fit_height,
+            content_sizing: self.host.content_sizing,
+            content_limits: (
+                self.host.content_limits.0.map(|(w, h)| (w / self.host.zoom.k, h / self.host.zoom.k)),
+                self.host.content_limits.1.map(|(w, h)| (w / self.host.zoom.k, h / self.host.zoom.k)),
+            ),
             system_reduced_motion: self.host.system_reduced_motion,
             pointer_locked: self.pointer_locked(),
             // The window's controls are in its points; the view's are over the zoom.
@@ -196,7 +200,7 @@ impl Measurement<'_> {
         }
         // Index-built rows build here, so memos inside them share the view's cache. A window that
         // fits its content lays its root out at its natural height, which nothing bounds.
-        let bound = if self.fit_height { f32::INFINITY } else { self.viewport.1 };
+        let bound = if self.content_sizing.fits_height() { f32::INFINITY } else { self.viewport.1 };
         self.window_tree(&mut root, "", 0, None, tx, force_all, bound, false, false, None, false, keep_windows);
         root
     }
@@ -214,7 +218,7 @@ impl Measurement<'_> {
         let height = cx.titlebar.height.or(cx.titlebar.titlebar.map(|t| t.height())).unwrap_or(caption.height);
         let hidden = caption.hidden || cx.titlebar.titlebar.is_some_and(|t| !t.has_controls());
         let caption = crate::titlebar::Caption { height, hidden, ..*caption };
-        (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.fit_height), cx)
+        (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.content_sizing.fits_height()), cx)
     }
 
     /// What a memo scope hashes of the window's controls and state (`Cx::titlebar_inset`,
@@ -623,7 +627,7 @@ impl Measurement<'_> {
             nodes.reserve(self.nodes.len().max(32));
             // Root constraints are part of the retained style, not a dirty write after flattening.
             // A window that fits its content lays the root out at its natural height.
-            root.style.set_size(relayout::root_size(self.viewport, self.fit_height));
+            relayout::apply_root_sizing(&mut root.style, self.viewport, self.content_sizing, self.content_limits);
             let (mut pending, mut reused, mut taken_paths, root_id, missed_virtual_memo) = {
                 let mut pending = std::mem::take(&mut self.memo.pending_scratch);
                 pending.clear();

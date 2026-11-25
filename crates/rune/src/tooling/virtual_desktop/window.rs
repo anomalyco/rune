@@ -342,7 +342,7 @@ impl Window {
             if let Some(bars) = scroll_bars { rt.set_system_scroll_bars(bars); }
             rt.headless_chrome(chrome, titlebar, options.borderless);
             rt.transparent = options.transparent;
-            rt.host.fit_height = fit_height;
+            rt.host.set_fit_height(fit_height);
             rt.track_marks = has_comp;
             if key_warnings { rt.commit.enable_key_warnings(); }
         }

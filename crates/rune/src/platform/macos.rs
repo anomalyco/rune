@@ -33,7 +33,7 @@ pub(crate) use presentation::Prewarm;
 #[cfg(test)]
 pub(crate) use surface::layer_occluded;
 pub(crate) use surface::{PresumeShown, flush_while_launching, launching, pin_contents_top_left, present_with_transaction, surface_occluded, sync_contents_scale, window_occluded};
-use geometry::{overlay_rect_on, overlay_rect_on_fit, screen_id};
+use geometry::{overlay_rect_on, overlay_rect_on_sized, screen_id};
 use pointer::MouseMonitors;
 use presence::Presence;
 use surface::{apply_window_color_space, occlusion_hidden};
@@ -318,11 +318,11 @@ impl Panel {
 
     /// On the primary screen (the one with the menu bar), in AppKit's bottom-left coordinates.
     pub fn place(&self, at: crate::overlay::Placement, options: &OverlayOptions) {
-        self.place_fit(at, options, false);
+        self.place_sized(at, options, crate::ContentSizing::Fixed);
     }
 
-    pub fn place_fit(&self, at: crate::overlay::Placement, options: &OverlayOptions, fit_height: bool) {
-        let Some(rect) = overlay_rect_on_fit(at, options, self.panel.screen().map(|s| screen_id(&s)), fit_height) else { return };
+    pub fn place_sized(&self, at: crate::overlay::Placement, options: &OverlayOptions, sizing: crate::ContentSizing) {
+        let Some(rect) = overlay_rect_on_sized(at, options, self.panel.screen().map(|s| screen_id(&s)), sizing) else { return };
         if self.panel.frame() != rect {
             self.window.setFrame_display(rect, false);
             self.panel.setFrame_display(rect, true);

@@ -160,7 +160,7 @@ impl RuntimeCore {
     /// is ordered in and its first drawable taken. Lands every track, as showing does.
     /// Returns whether it built; the first frame then has nothing left to build.
     pub(crate) fn build_for_show(&mut self, app: &mut dyn AppDriver) -> bool {
-        if !self.host.fit_height || self.commit.commits == 0 || !self.stale() { return false; }
+        if !self.host.content_sizing.fits_any() || self.commit.commits == 0 || !self.stale() { return false; }
         self.settle_all();
         self.hidden_timer_frame(app);
         true

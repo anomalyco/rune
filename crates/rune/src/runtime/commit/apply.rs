@@ -111,7 +111,7 @@ impl RuntimeCore {
         let keeps_flights = tx.commit.snaps() && !tx.commit.lands() && !first && !concealing;
         self.scene.keep_flights(keeps_flights);
         let now = self.t;
-        if self.host.fit_height && let Some(root) = nodes.first() { self.fit_window(root.local.h, tx, first); }
+        if self.host.content_sizing.fits_any() && let Some(root) = nodes.first() { self.fit_window((root.local.w, root.local.h), tx, first); }
         let mut held = std::mem::take(&mut scratch.held);
         let holds = self.motion.landing_holds(&nodes, &self.tree.nodes, self.paint.seen(), &self.scene, !instant && !tx.relayout && !tx.window_step, self.reduced_motion, &mut held);
 

@@ -246,6 +246,7 @@ pub use overlay::options::OverlayLevel;
 pub use overlay::options::OverlayOptions;
 pub use overlay::options::OverlayPlacement;
 pub use overlay::options::OverlaySupport;
+pub use overlay::sizing::ContentSizing;
 pub use pixels::Pixels;
 pub use platform::accent::SystemAccent;
 pub use platform::accent::system_accent;

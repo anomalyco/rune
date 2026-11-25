@@ -197,6 +197,12 @@ impl<S: 'static> Runtime<S> {
         core.content_height(&app)
     }
 
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn measure_content(&mut self) -> (f32, f32) {
+        let (core, app) = self.split_mut();
+        core.measure_content(&app)
+    }
+
     #[inline(always)]
     pub(crate) fn set_window_origin(&mut self, origin: (f32, f32)) -> bool {
         self.core_mut().set_window_origin(origin)
