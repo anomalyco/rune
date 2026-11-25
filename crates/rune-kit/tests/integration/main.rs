@@ -19,6 +19,7 @@ mod hover_within;
 mod image_zoom;
 mod interactive;
 mod keybind;
+mod kit_metrics;
 mod list_keyboard;
 mod menu_description;
 mod menu_open;

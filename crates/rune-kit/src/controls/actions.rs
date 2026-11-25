@@ -147,19 +147,6 @@ enum Size {
     Legacy(ButtonSize),
 }
 
-/// A push button's height, horizontal padding, corner radius and icon size, as macOS 27's
-/// `NSButton` push buttons measure. Large and ExtraLarge are capsules there; here they take
-/// the theme's larger radii.
-fn push_metrics(k: &Kit, size: ControlSize) -> (f32, f32, f32, f32) {
-    match size {
-        ControlSize::Mini => (16.0, 8.0, k.radius.sm, 12.0),
-        ControlSize::Small => (20.0, 10.0, k.radius.sm, 14.0),
-        ControlSize::Regular => (24.0, 12.0, k.radius.md, 16.0),
-        ControlSize::Large => (28.0, 14.0, k.radius.lg, 16.0),
-        ControlSize::ExtraLarge => (36.0, 18.0, k.radius.xl, 16.0),
-    }
-}
-
 /// What a [`Button`] draws for its label.
 enum Label {
     Text,
@@ -342,8 +329,8 @@ impl Button {
             Size::Legacy(ButtonSize::Normal) => (28.0, 11.0, k.radius.md, 16.0, 6.0, None),
             Size::Legacy(ButtonSize::Large) => (32.0, 15.0, k.radius.md, 16.0, 6.0, None),
             Size::Control(c) => {
-                let (h, px, radius, icon_size) = push_metrics(k, c);
-                (h, px, radius, icon_size, if c == ControlSize::Mini { 4.0 } else { 6.0 }, Some(c))
+                let m = k.button_metrics(c);
+                (m.height, m.padding_x, m.radius, m.icon, if c == ControlSize::Mini { 4.0 } else { 6.0 }, Some(c))
             }
         };
         let mut s = skin(k, self.variant);
