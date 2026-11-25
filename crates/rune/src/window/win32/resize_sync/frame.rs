@@ -7,7 +7,7 @@
 //! `Rest`, `frame_presented`, `gpu_events::presented`, `haptics::flush_live`, and
 //! `Renderer::warm_effects`) behind [`DragSeam`] so every consumer can be tested off screen.
 
-use super::ResizeSync;
+use super::DragResizeSync;
 use super::gpu::DragSeam;
 use super::present::Win32DragSeam;
 use crate::frame::clock::FrameClock;
@@ -58,7 +58,7 @@ pub(super) struct DragFrameOutcome {
 /// Runs one drag-sync frame against `seam` and feeds every presented-frame consumer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn run_drag_frame<S: DragSeam>(
-    sync: &mut ResizeSync,
+    sync: &mut DragResizeSync,
     gpu: &Gpu,
     renderer: &mut Renderer,
     consumers: &mut DragFrameConsumers<'_>,

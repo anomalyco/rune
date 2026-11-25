@@ -893,6 +893,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         cpu_first(mode: crate::CpuFirst);
+        /// Configure the Windows drag-only synchronized resize path for this window, like
+        /// [`App::resize_sync`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, ResizeSync, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("settings", AppSpec::new("Settings", (620.0, 520.0), || (), |_, _| el()))
+        ///     .resize_sync(ResizeSync::On);
+        /// let _ = spec;
+        /// ```
+        resize_sync(mode: crate::ResizeSync);
         /// Name the effect pipelines this window compiles ahead of their first use, like [`App::prewarm_effects`].
         ///
         /// ```no_run

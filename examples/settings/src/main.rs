@@ -6,7 +6,7 @@ use rune::tok::{self, Theme, motion, radius, space, type_};
 #[cfg(feature = "frame-profile")]
 #[global_allocator]
 static ALLOC: procwatch::alloc::Counting = procwatch::alloc::Counting::system();
-use rune::{Align, App, AppHandle, AppSpec, Color, ColorScheme, Cx, El, MacColorSpace, MacWindowOptions, MenuItem, ScrollSpec, Spring, Tx, WindowBackdrop, WindowOptions, col, el, row, text};
+use rune::{Align, App, AppHandle, AppSpec, Color, ColorScheme, Cx, El, MacColorSpace, MacWindowOptions, MenuItem, ResizeSync, ScrollSpec, Spring, Tx, WindowBackdrop, WindowOptions, col, el, row, text};
 
 const DEFAULT_FONT_ID: &str = "__default__";
 
@@ -878,6 +878,31 @@ fn parse_backdrop_arg(args: &[String]) -> Option<WindowBackdrop> {
     out
 }
 
+fn parse_resize_sync_arg(args: &[String]) -> ResizeSync {
+    let parse_val = |v: &str| match v.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(ResizeSync::On),
+        "0" | "false" | "no" | "off" => Some(ResizeSync::Off),
+        "auto" => Some(ResizeSync::Auto),
+        _ => None,
+    };
+    let mut out = ResizeSync::Auto;
+    let mut i = 0;
+    while i < args.len() {
+        if let Some(val) = args[i].strip_prefix("--resize-sync=") {
+            if let Some(mode) = parse_val(val) { out = mode; }
+        } else if args[i] == "--resize-sync" {
+            if let Some(next) = args.get(i + 1).and_then(|v| parse_val(v)) {
+                out = next;
+                i += 1;
+            } else {
+                out = ResizeSync::On;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
 fn parse_mac_color_space(value: Option<&str>) -> MacColorSpace {
     if value.is_some_and(|v| v.trim().eq_ignore_ascii_case("unmanaged")) { MacColorSpace::Unmanaged } else { MacColorSpace::Srgb }
 }
@@ -910,8 +935,10 @@ fn main() {
     };
     let color_space = parse_mac_color_space(rune::env::var("SETTINGS_MAC_COLOR_SPACE").as_deref());
     let cli_backdrop = parse_backdrop_arg(rune::extra_args());
+    let cli_resize_sync = parse_resize_sync_arg(rune::extra_args());
     let mut base = App::new(spec)
         .color_scheme(ColorScheme::System)
+        .resize_sync(cli_resize_sync)
         .macos_window(MacWindowOptions::default().color_space(color_space));
     if let Some(backdrop) = cli_backdrop {
         base = base
@@ -927,6 +954,18 @@ fn main() {
         ..Settings::default()
     })
     .run();
+}
+
+#[test]
+fn parse_resize_sync_cli_flag_handles_all_variants() {
+    assert_eq!(parse_resize_sync_arg(&[]), ResizeSync::Auto);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync".into()]), ResizeSync::On);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync=on".into()]), ResizeSync::On);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync=off".into()]), ResizeSync::Off);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync=auto".into()]), ResizeSync::Auto);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync".into(), "off".into()]), ResizeSync::Off);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync".into(), "--backdrop".into()]), ResizeSync::On);
+    assert_eq!(parse_resize_sync_arg(&["--resize-sync=unknown".into()]), ResizeSync::Auto);
 }
 
 #[test]

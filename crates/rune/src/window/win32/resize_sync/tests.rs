@@ -8,7 +8,7 @@ use super::gpu::{CAPACITY_STEP, DragDevice, DragSeam, SharedDragTarget, dxgi_for
 use super::machine::{
     Effect, Eligibility, Event, LEAVING_TIMEOUT, State, step, valid_rects,
 };
-use super::{ResizeSync, commit_or_rollback_config};
+use super::{DragResizeSync, commit_or_rollback_config};
 
 use crate::frame::clock::FrameClock;
 use crate::frame::encoded::FrameReports;
@@ -448,7 +448,7 @@ fn render_normal_offscreen(
 }
 
 fn render_into_ring_slot(
-    sync: &mut ResizeSync,
+    sync: &mut DragResizeSync,
     gpu: &Gpu,
     renderer: &mut Renderer,
     rt: &mut crate::runtime::RuntimeCore,
@@ -483,7 +483,7 @@ fn offscreen_opt_in_off_creates_zero_drag_gpu_objects() {
     #[cfg(feature = "test-gpu-counters")]
     let base_textures = gpu.device.get_internal_counters().hal.textures.read();
 
-    let mut sync = ResizeSync::default();
+    let mut sync = DragResizeSync::default();
     let seam = FakeSeam::default();
     let off = Eligibility { opt_in: false, ..eligible() };
     let now = crate::time::now();
@@ -526,7 +526,7 @@ fn offscreen_shared_texture_ring_subrect_bit_exact_and_zero_per_step_alloc() {
         #[cfg(feature = "test-gpu-counters")]
         let base_textures = gpu.device.get_internal_counters().hal.textures.read();
 
-        let mut sync = ResizeSync::default();
+        let mut sync = DragResizeSync::default();
         let mut seam = FakeSeam::default();
 
         // Step 1 (240x160): allocates slot 0 at capacited size (> 240x160).
@@ -640,12 +640,12 @@ fn drag_frame_feeds_every_presented_frame_consumer_behind_seam() {
     let mut trace = Some(crate::tooling::Trace::open_clock(&trace_path, (240.0, 160.0), 239.0, 1.0, "wall"));
     let mut trace_frames = 0usize;
     let mut idle = true;
-    let mut sync = ResizeSync::default();
+    let mut sync = DragResizeSync::default();
     let mut seam = FakeSeam::default();
     let mut pre_presents = 0usize;
 
     let mut run_steps = |
-        sync: &mut ResizeSync,
+        sync: &mut DragResizeSync,
         app: &mut TypedWindowApp<()>,
         clock: &mut FrameClock,
         meter: &mut SurfaceMeter,
@@ -803,7 +803,7 @@ fn offscreen_gpu_only_rapid_resize_ring_allocates_at_most_two_textures() {
     rt.core_mut().set_viewport((640.0, 480.0), 1.0);
     let _ = rt.frame(0.0);
 
-    let mut sync = ResizeSync::default();
+    let mut sync = DragResizeSync::default();
     let (drag, _, _) = sync.ensure_gpu_target(&gpu.device, (640, 480), format, false).expect("init");
     let dst = drag.create_test_dst_texture((1024, 768)).expect("dst texture");
 

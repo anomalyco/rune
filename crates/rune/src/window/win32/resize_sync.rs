@@ -14,8 +14,6 @@
 //! completed before re-attaching DirectComposition and releasing all drag textures and the D3D11
 //! swap chain.
 
-use std::sync::OnceLock;
-
 use winit::dpi::PhysicalSize;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
@@ -41,22 +39,12 @@ use crate::window::host::stepping::FrameMove;
 use crate::window::surface::{configure, drawable_size, max_surface_dim};
 use crate::window::win32::handover::SurfaceMode;
 
-/// Environment variable enabling the drag-only synchronized resize path on Windows (`1`, `true`,
-/// `TRUE`, or `yes`). Off by default.
-pub(crate) const ENV_VAR: &str = "RUNE_RESIZE_SYNC";
-
-/// Whether `RUNE_RESIZE_SYNC` is enabled for this process. Off by default.
-pub(crate) fn enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| rune_core::env::flag(ENV_VAR))
-}
-
 /// Per-window synchronized drag resize state and lazily created D3D11/shared-texture resources.
 ///
 /// Fields drop in declaration order: the copy-model swap chain and shared texture ring drop
 /// before the D3D11 device they were opened on.
 #[derive(Default)]
-pub(in crate::window) struct ResizeSync {
+pub(in crate::window) struct DragResizeSync {
     state: State,
     seq: Seq,
     swap_chain: Option<DxgiDragSwapChain>,
@@ -69,7 +57,7 @@ pub(in crate::window) struct ResizeSync {
     logged_error: bool,
 }
 
-impl ResizeSync {
+impl DragResizeSync {
     /// Whether the window is currently presenting drag frames through the D3D11 copy-model path.
     pub(in crate::window) fn is_dragging(&self) -> bool {
         self.state.is_dragging()
@@ -148,7 +136,7 @@ impl Host {
     /// Registers the `dpi_drag` size-move wake hook on `window` when `RUNE_RESIZE_SYNC` is on
     /// and the window is opaque.
     pub(in crate::window) fn register_resize_sync(&self, window: &Window) {
-        if !enabled() || self.options.transparent {
+        if !self.resize_sync_enabled() || self.options.transparent {
             return;
         }
         let handle = self.native_handle.clone();
@@ -159,7 +147,7 @@ impl Host {
 
     /// Computes the current [`Eligibility`] for this window.
     pub(in crate::window) fn resize_sync_eligibility(&self) -> Eligibility {
-        let opt_in = enabled();
+        let opt_in = self.resize_sync_enabled();
         let opaque = !self.options.transparent;
         let dxgi_from_visual =
             matches!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual);
@@ -194,7 +182,7 @@ impl Host {
     /// Pulls any queued `WM_ENTERSIZEMOVE` / `WM_EXITSIZEMOVE` / `WM_NCDESTROY` signal from
     /// `dpi_drag` and steps the drag state machine.
     pub(in crate::window) fn sync_resize_signals(&mut self) {
-        if !enabled() {
+        if !self.resize_sync_enabled() {
             return;
         }
         let Some(hwnd) = self.win.as_ref().and_then(|w| crate::platform::win32::hwnd(&w.window)) else {
@@ -221,7 +209,7 @@ impl Host {
 
     /// Checks the `Leaving` safety timer on each event-loop turn.
     pub(in crate::window) fn watch_resize_sync(&mut self, now: Instant) {
-        if !enabled() {
+        if !self.resize_sync_enabled() {
             return;
         }
         self.sync_resize_signals();
@@ -245,7 +233,7 @@ impl Host {
         scale: f32,
         event_loop: &ActiveEventLoop,
     ) -> bool {
-        if !enabled() {
+        if !self.resize_sync_enabled() {
             return false;
         }
         self.sync_resize_signals();
@@ -295,7 +283,7 @@ impl Host {
     /// texture ring and presents on the D3D11 copy-model swap chain with zero presents to the
     /// hidden D3D12 swap chain. Always returns `false` when `RUNE_RESIZE_SYNC` is off.
     pub(in crate::window) fn try_draw_drag_resize(&mut self) -> bool {
-        if !enabled() {
+        if !self.resize_sync_enabled() {
             return false;
         }
         self.sync_resize_signals();
@@ -322,7 +310,7 @@ impl Host {
     /// Called from `submit_and_present_window` once a post-drag normal D3D12 flip-model frame has
     /// been presented and waited on.
     pub(in crate::window) fn finish_resize_sync_exit_frame(&mut self, completed: bool) {
-        if !enabled() || !self.win.as_ref().is_some_and(|w| w.native.resize_sync.is_leaving()) {
+        if !self.resize_sync_enabled() || !self.win.as_ref().is_some_and(|w| w.native.resize_sync.is_leaving()) {
             return;
         }
         let event = if completed { Event::ExitFrameCompleted } else { Event::DeviceLost };
@@ -332,7 +320,7 @@ impl Host {
     /// Feeds a lifecycle event (`DeviceLost`, `Handover`, `Hide`, `Destroy`) into the drag state
     /// machine and executes its cleanup effects.
     pub(in crate::window) fn on_resize_sync_event(&mut self, event: Event) {
-        if !enabled() && self.win.as_ref().is_none_or(|w| w.native.resize_sync.state == State::Idle) {
+        if !self.resize_sync_enabled() && self.win.as_ref().is_none_or(|w| w.native.resize_sync.state == State::Idle) {
             return;
         }
         self.drive_resize_sync(event);

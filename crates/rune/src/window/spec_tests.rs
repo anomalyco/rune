@@ -587,6 +587,29 @@ fn app_and_window_spec_cpu_first_default_auto_and_retain_builder_value() {
 }
 
 #[test]
+fn app_and_window_spec_resize_sync_default_auto_and_retain_per_window_value() {
+    let spec = || AppSpec::new("settings", (620.0, 520.0), || (), |_, _| crate::el());
+    assert_eq!(App::new(spec()).resize_sync, crate::ResizeSync::Auto);
+    assert_eq!(WindowSpec::new("main", spec()).app.resize_sync, crate::ResizeSync::Auto);
+
+    // App::resize_sync stores On/Off/Auto and survives WindowSpec::from_app.
+    let app_on = App::new(spec()).resize_sync(crate::ResizeSync::On);
+    assert_eq!(app_on.resize_sync, crate::ResizeSync::On);
+    let from_app = WindowSpec::from_app("main", app_on);
+    assert_eq!(from_app.app.resize_sync, crate::ResizeSync::On);
+
+    // Two WindowSpecs in one process keep independent per-window modes and survive options().
+    let win_a = WindowSpec::new("a", spec()).resize_sync(crate::ResizeSync::On);
+    let win_b = WindowSpec::new("b", spec()).resize_sync(crate::ResizeSync::Off);
+    assert_eq!(win_a.app.resize_sync, crate::ResizeSync::On);
+    assert_eq!(win_b.app.resize_sync, crate::ResizeSync::Off);
+    let reset = win_a.options(WindowOptions::default());
+    assert_eq!(reset.app.resize_sync, crate::ResizeSync::On);
+    let back_to_auto = reset.resize_sync(crate::ResizeSync::Auto);
+    assert_eq!(back_to_auto.app.resize_sync, crate::ResizeSync::Auto);
+}
+
+#[test]
 fn mac_window_options_document_and_first_mouse_defaults_and_retention() {
     let default = MacWindowOptions::default();
     assert_eq!(default.accepts_first_mouse, None);
