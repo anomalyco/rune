@@ -1,6 +1,7 @@
 //! View-to-scene commit orchestration (`Runtime::commit`, `Measurement`, `Measured`).
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
 mod prepare;
 pub(super) mod apply;
 pub(super) mod apply_scratch;

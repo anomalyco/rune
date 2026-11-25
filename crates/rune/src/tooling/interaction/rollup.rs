@@ -12,6 +12,8 @@ const FIRST_MS: f64 = 0.1;
 const STEP: f64 = 1.15;
 
 /// One signature's counts since the last flush.
+// Fields are serialized by tooling::interaction::export on non-wasm32 targets.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct Roll {
     pub route: Name,
     pub control: Name,
@@ -24,6 +26,7 @@ pub(crate) struct Roll {
     buckets: [u32; BUCKETS],
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Roll {
     /// The value at quantile `q`, as its bucket's upper edge, never above the largest seen.
     pub(crate) fn quantile(&self, q: f64) -> f64 {
@@ -54,6 +57,7 @@ pub(crate) fn signature(route: &Name, control: &Name, action: &str) -> u64 {
     route.hash ^ control.hash.rotate_left(21) ^ fx(action).rotate_left(42)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn upper(i: usize) -> f64 { FIRST_MS * STEP.powi(i as i32) }
 
 #[derive(Default)]

@@ -79,6 +79,7 @@ impl Trace {
     }
 
     /// Prints the surface's frame counts, and the app's own, when the trace closes.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn record_surface(&mut self, stats: std::sync::Arc<std::sync::Mutex<crate::SurfaceStats>>, app: Option<fn() -> String>) {
         self.surface = Some((stats, app));
     }

@@ -71,6 +71,7 @@ pub(crate) fn loopback(setting: &str) -> Option<SocketAddr> {
 }
 
 /// The collector, once timing is on.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn collector() -> Option<SocketAddr> { ENDPOINT.get().copied().flatten() }
 
 #[cfg(test)]

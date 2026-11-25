@@ -64,6 +64,7 @@ const ROLLUP_EVERY: Duration = Duration::from_secs(60);
 const SLOW_PER_SECOND: u32 = 10;
 
 /// The `update` span's attribute for each [`Phase`].
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) const PHASE_NAMES: [&str; PHASES] = ["rune.view_ms", "rune.commit_ms", "rune.layout_ms", "rune.text_ms", "rune.paint_ms", "rune.apply_ms"];
 
 thread_local! {
@@ -116,6 +117,8 @@ pub(crate) struct Note {
 }
 
 /// A slow interaction, as sent.
+// Fields are serialized by tooling::interaction::export on non-wasm32 targets.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct Slow {
     pub route: Arc<str>,
     pub control: Arc<str>,
@@ -140,6 +143,8 @@ pub(crate) struct Slow {
 }
 
 /// A slow frame no input caused, as sent.
+// Fields are serialized by tooling::interaction::export on non-wasm32 targets.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) struct SlowFrame {
     pub start: Instant,
     pub built: Instant,

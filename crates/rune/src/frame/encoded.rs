@@ -110,6 +110,7 @@ impl FrameReports {
     }
 
     /// Whether `on_frame_encoded` reads the reports, so a host asks for what only it needs.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn wanted(&self) -> bool { self.0.as_ref().is_some_and(|r| r.hook.is_some()) }
 
     /// The display refresh the next reports carry, until it changes.
@@ -133,6 +134,7 @@ impl FrameReports {
         Some(seq)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn unchanged(&mut self, presents_at: Option<Instant>) {
         let Some(r) = self.0.as_mut() else { return };
         if r.hook.is_some() {
@@ -142,6 +144,7 @@ impl FrameReports {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn skipped(&mut self) {
         let Some(r) = self.0.as_mut() else { return };
         if r.hook.is_some() {
