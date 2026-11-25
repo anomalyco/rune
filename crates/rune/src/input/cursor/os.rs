@@ -60,9 +60,15 @@ impl OsCursor {
             Cursor::Hidden => clear::set(window),
             #[cfg(not(target_os = "macos"))]
             Cursor::Image(image) => images::set(window, image, scale),
-            #[cfg(windows)]
-            Cursor::Cell => images::set(window, crate::cursor::CELL, scale),
-            other => window.set_cursor(icon(other)),
+            other => {
+                // A shape Windows has no system cursor for draws Chromium's picture of it.
+                #[cfg(windows)]
+                if let Some(image) = os_image(other) {
+                    images::set(window, image, scale);
+                    return;
+                }
+                window.set_cursor(icon(other))
+            }
         }
     }
 
@@ -123,7 +129,8 @@ fn os_image(c: Cursor) -> Option<crate::cursor::CursorImage> {
     match c {
         Cursor::Image(image) => Some(image),
         #[cfg(windows)]
-        Cursor::Cell => Some(crate::cursor::CELL),
+        other => crate::cursor::windows_image(other),
+        #[cfg(not(windows))]
         _ => None,
     }
 }
