@@ -409,3 +409,165 @@ return { render = function() return ui.row({ cursor = "hand" }, { "x" }) end }
 "#);
     assert!(errors.iter().any(|e| e.contains("unknown cursor hand")), "{errors:?}");
 }
+
+#[test]
+fn press_offset_moves_the_node_while_held() {
+    let src = r#"
+local ui = require("@rune/ui")
+return {
+    render = function()
+        return ui.col({ w = 200, h = 100 }, {
+            ui.box({ key = "cap", w = 80, h = 32, fill = "indicator", pressOffset = { y = 3 }, onPress = function() end }),
+        })
+    end,
+}
+"#;
+    let (mut rt, logged) = render_runtime(src, (200.0, 100.0));
+    assert!(logged.borrow().is_empty(), "unexpected logs: {:?}", logged.borrow());
+    let rest = rect_of(&rt, "cap");
+    let (x, y) = rt.find("cap").expect("cap");
+    rt.pointer_move(x, y);
+    rt.pointer_down(x, y);
+    for i in 1..=30 {
+        rt.frame(f64::from(i) / 120.0);
+    }
+    let held = rect_of(&rt, "cap");
+    assert!((held[1] - rest[1] - 3.0).abs() < 0.5, "pressOffset should sink the node 3pt: {rest:?} -> {held:?}");
+    assert!((held[0] - rest[0]).abs() < 0.5, "pressOffset x defaults to 0: {rest:?} -> {held:?}");
+}
+
+fn info(rt: &Runtime<Script>, key: &str) -> rune::ElementInfo {
+    rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("missing element {key:?}"))
+}
+
+#[test]
+fn loop_spins_slides_and_blinks_on_the_frame_clock() {
+    let src = r#"
+local ui = require("@rune/ui")
+return {
+    render = function()
+        return ui.col({ w = 300, gap = 4 }, {
+            ui.box({ key = "spin", w = 40, h = 40, fill = "indicator", loop = "spin:2" }),
+            ui.box({ key = "slide", w = 40, h = 40, fill = "indicator", loop = "slide:2:0.5:0" }),
+            ui.box({ key = "blink", w = 40, h = 40, fill = "indicator", loop = "blink:2:0.2" }),
+            ui.box({ key = "still", w = 40, h = 40, fill = "indicator" }),
+        })
+    end,
+}
+"#;
+    let (mut rt, logged) = render_runtime(src, (300.0, 300.0));
+    assert!(logged.borrow().is_empty(), "unexpected logs: {:?}", logged.borrow());
+    assert!(info(&rt, "still").loop_phase.is_none(), "a node without loop has no loop track");
+    let spin0 = info(&rt, "spin").loop_phase.expect("spin loop track");
+    let slide0 = rect_of(&rt, "slide")[0];
+    let mut min_opacity = f32::MAX;
+    for i in 1..=60 {
+        rt.frame(f64::from(i) / 60.0);
+        min_opacity = min_opacity.min(info(&rt, "blink").opacity);
+    }
+    let spin1 = info(&rt, "spin").loop_phase.expect("spin loop track");
+    // The loop's turn is drawn by the renderer from its phase (`Pose::rotation` is the static
+    // `rotate`), so the phase advancing on a pose that never settles is the turn advancing.
+    assert!((spin1 - spin0).abs() > 0.05, "spin's phase should advance: {spin0} -> {spin1}");
+    assert!(rt.presented_pose("spin").expect("spin pose").moving(), "a spinning node keeps moving");
+    assert!(!rt.presented_pose("still").expect("still pose").moving(), "an unlooped node rests");
+    assert!(info(&rt, "blink").loop_phase.is_some(), "blink loop track");
+    assert!(min_opacity < 0.9, "blink:2:0.2 should dip opacity, lowest {min_opacity}");
+    assert!((info(&rt, "still").opacity - 1.0).abs() < 1e-3, "an unlooped node stays opaque");
+    assert!((rect_of(&rt, "slide")[0] - slide0).abs() > 1.0, "slide should move the node along x");
+}
+
+#[test]
+fn hover_transition_seconds_tween_and_zero_lands_at_once() {
+    let src = r#"
+local ui = require("@rune/ui")
+return {
+    render = function()
+        return ui.row({ w = 300, h = 60 }, {
+            ui.box({ key = "slow", w = 100, h = 60, hover = "control-off", hoverTransition = 0.5 }),
+            ui.box({ key = "instant", w = 100, h = 60, hover = "control-off", hoverTransition = 0 }),
+        })
+    end,
+}
+"#;
+    let (mut rt, logged) = render_runtime(src, (300.0, 60.0));
+    assert!(logged.borrow().is_empty(), "unexpected logs: {:?}", logged.borrow());
+    let hover_after = |rt: &mut Runtime<Script>, key: &str| {
+        let (x, y) = rt.find(key).expect(key);
+        rt.pointer_move(x, y);
+        rt.frame(1.0 / 60.0);
+        rt.frame(2.0 / 60.0);
+        info(rt, key).hover
+    };
+    let slow = hover_after(&mut rt, "slow");
+    assert!(slow > 0.0 && slow < 0.5, "hoverTransition = 0.5 should still be tweening after 2 frames, got {slow}");
+    let instant = hover_after(&mut rt, "instant");
+    assert!((instant - 1.0).abs() < 1e-3, "hoverTransition = 0 should land at once, got {instant}");
+}
+
+#[test]
+fn gradient_shape_props_combine_in_any_order_and_over_a_frozen_style() {
+    use super::effects::{APPLIED, Geometry};
+    let src = r##"
+local ui = require("@rune/ui")
+local RED, BLUE = ui.hex("#ff0000"), ui.hex("#0000ff")
+local STYLE = table.freeze({ w = 40, h = 40, gradient = { RED, BLUE } })
+local ANGLED = table.freeze({ w = 40, h = 40, angle = 45 })
+return {
+    render = function()
+        return ui.col({ w = 300, gap = 4 }, {
+            ui.box({ w = 40, h = 40, gradient = { RED, BLUE } }),
+            ui.box({ w = 40, h = 40, gradient = { RED, BLUE }, angle = 90 }),
+            ui.box({ w = 40, h = 40, angle = 270, gradient = { RED, BLUE } }),
+            ui.box({ w = 40, h = 40, cy = 0.75, radial = 30, gradient = { RED, ui.hex("#00ff00"), BLUE }, cx = 0.25, angle = 10 }),
+            ui.box(STYLE, { key = "over_style", angle = 30 }),
+            ui.box(ANGLED, { key = "over_angle", gradient = { BLUE, RED } }),
+            ui.box({ w = 40, h = 40, angle = 60, radial = 10, cx = 0.1 }),
+        })
+    end,
+}
+"##;
+    APPLIED.with(|a| a.borrow_mut().clear());
+    let (_rt, logged) = render_runtime(src, (300.0, 600.0));
+    assert!(logged.borrow().is_empty(), "unexpected logs: {:?}", logged.borrow());
+    let applied = APPLIED.with(|a| a.borrow().clone());
+    let red = rune::color::hex("#ff0000").unwrap();
+    let blue = rune::color::hex("#0000ff").unwrap();
+    let has = |g: Geometry, colors: &[rune::Color]| applied.iter().any(|(ag, ac)| *ag == g && ac.len() == colors.len() && ac.iter().zip(colors).all(|(a, b)| (a.r - b.r).abs() < 1e-3 && (a.b - b.b).abs() < 1e-3));
+    assert!(has(Geometry::Linear { angle: 180.0 }, &[red, blue]), "default angle is 180: {applied:?}");
+    assert!(has(Geometry::Linear { angle: 90.0 }, &[red, blue]), "angle after gradient: {applied:?}");
+    assert!(has(Geometry::Linear { angle: 270.0 }, &[red, blue]), "angle before gradient: {applied:?}");
+    assert!(
+        applied.iter().any(|(g, c)| *g == Geometry::Radial { center: [0.25, 0.75], radius: 30.0 } && c.len() == 3),
+        "radial with cx/cy in any order wins over angle: {applied:?}"
+    );
+    assert!(has(Geometry::Linear { angle: 30.0 }, &[red, blue]), "angle over a frozen gradient: {applied:?}");
+    assert!(has(Geometry::Linear { angle: 45.0 }, &[blue, red]), "gradient over a frozen angle: {applied:?}");
+    assert!(!applied.iter().any(|(g, _)| matches!(g, Geometry::Radial { radius, .. } if *radius == 10.0)), "shape props alone paint nothing: {applied:?}");
+}
+
+#[test]
+fn gradient_loop_bounce_and_hover_seconds_reject_bad_values() {
+    for (prop, expr) in [
+        ("gradient", "{ ui.hex(\"#ff0000\") }"),
+        ("gradient", "{ ui.hex(\"#ff0000\"), 3 }"),
+        ("gradient", "\"#ff0000\""),
+        ("radial", "0"),
+        ("angle", "math.huge"),
+        ("loop", "\"spin\""),
+        ("loop", "\"spin:0\""),
+        ("loop", "\"wobble:1\""),
+        ("loop", "\"slide:1:x:0\""),
+        ("loop", "\"blink:1:2\""),
+        ("loop", "3"),
+        ("bounce", "1"),
+        ("bounce", "-0.5"),
+        ("bounce", "\"yes\""),
+        ("hoverTransition", "-1"),
+        ("hoverTransition", "61"),
+    ] {
+        let src = format!("local ui = require(\"@rune/ui\")\nreturn {{ render = function() return ui.box({{ {prop} = {expr} }}) end }}");
+        let errs = render_errors(&src);
+        assert!(errs.iter().any(|e| e.contains(prop)), "expected {prop} error for {expr}, got {errs:?}");
+    }
+}

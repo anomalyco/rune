@@ -43,6 +43,7 @@ fn new_standard_props_are_listed_and_accepted_on_host_nodes() {
     for expected in [
         "maxLines", "matched", "matchedCrop", "pressScale", "scale", "rotate",
         "origin", "offset", "outline", "outlineWidth", "raise", "cols", "aspect", "onScroll",
+        "pressOffset", "bounce", "loop", "gradient", "angle", "radial", "cx", "cy",
     ] {
         assert!(names.contains(&expected), "prop_names() missing {expected}");
     }

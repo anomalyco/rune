@@ -15,6 +15,7 @@ use std::rc::Rc;
 use mlua::ffi;
 use rune::{Align, Color, El, ScrollSpec, TextStyle};
 
+use super::effects::{self, Gradient};
 use super::values::{Size, finite, non_neg, non_neg_int, numbers, parse_size, pos_int, positive, role, xy_pair};
 pub(crate) use super::values::{Value, format_num, name, push_num, read};
 use super::{Attach, Callback, Env};
@@ -131,6 +132,14 @@ atoms! {
     Raise = "raise",
     Cols = "cols",
     Aspect = "aspect",
+    PressOffset = "pressOffset",
+    Bounce = "bounce",
+    Loop = "loop",
+    Gradient = "gradient",
+    Angle = "angle",
+    Radial = "radial",
+    Cx = "cx",
+    Cy = "cy",
 }
 
 /// Every prop name the built-in nodes read.
@@ -222,6 +231,8 @@ pub(crate) struct Props {
     outline: (Option<f32>, Option<Color>),
     raise: bool,
     clip: Clip,
+    /// `gradient` with `angle`, `radial`, `cx` and `cy`, which may come in any order.
+    gradient: Option<Box<Gradient>>,
     pub(crate) scroll: Option<(bool, bool)>,
     stick_bottom: bool,
     /// A prop whose effect depends on more than its value and the colours (`shadow`): the node
@@ -259,6 +270,7 @@ impl Props {
             outline: (None, None),
             raise: false,
             clip: Clip::None,
+            gradient: None,
             scroll: None,
             stick_bottom: false,
             uncacheable: false,
@@ -360,6 +372,9 @@ impl Props {
         }
         if self.raise {
             with(e, El::raise);
+        }
+        if let Some(g) = self.gradient {
+            with(e, |e| g.apply(e));
         }
         match self.clip {
             Clip::None => {}
@@ -544,7 +559,11 @@ impl Props {
             Atom::HoverTransition => match v {
                 Value::Str("instant") => with(e, |e| e.hover_motion(rune::Anim::INSTANT, rune::Anim::INSTANT)),
                 Value::Str("default") | Value::Nil => {}
-                other => return Err(format!("hoverTransition must be default or instant, got {}", self::name(other))),
+                Value::Num(n) => {
+                    let anim = effects::hover_seconds(n)?;
+                    with(e, |e| e.hover_motion(anim, anim));
+                }
+                other => return Err(format!("hoverTransition must be default, instant or seconds, got {}", self::name(other))),
             },
             Atom::HoverGroup => {
                 if flag(v)? {
@@ -633,7 +652,8 @@ impl Props {
                 };
                 with(e, |e| e.cursor(cursor));
             }
-            Atom::MaxLines => self.max_lines = Some(non_neg_int(name, v)?),            Atom::Matched => {
+            Atom::MaxLines => self.max_lines = Some(non_neg_int(name, v)?),
+            Atom::Matched => {
                 let s = string(v)?;
                 if s.is_empty() {
                     return Err("matched must be a non-empty string".into());
@@ -661,8 +681,25 @@ impl Props {
                 with(e, |e| e.equal_columns(n));
             }
             Atom::Aspect => _ = e.set_aspect_ratio(positive(name, v)?),
+            Atom::Bounce => {
+                if let Some(spring) = effects::bounce(v)? {
+                    with(e, |e| e.scale_motion(spring));
+                }
+            }
+            Atom::Loop => match v {
+                Value::Str(s) => {
+                    let spec = effects::parse_loop(s)?;
+                    with(e, |e| e.looping(spec));
+                }
+                Value::Nil => {}
+                other => return Err(format!("loop must be a string, got {}", self::name(other))),
+            },
+            Atom::Angle => self.gradient.get_or_insert_default().set_angle(finite(name, v)?),
+            Atom::Radial => self.gradient.get_or_insert_default().set_radial(positive(name, v)?),
+            Atom::Cx => self.gradient.get_or_insert_default().set_cx(finite(name, v)?),
+            Atom::Cy => self.gradient.get_or_insert_default().set_cy(finite(name, v)?),
             // Tables, read off the stack by `decode_at`.
-            Atom::Corners | Atom::Pin | Atom::Origin | Atom::Offset => return Err(format!("{name} must be a table, got {}", self::name(v))),
+            Atom::Corners | Atom::Pin | Atom::Origin | Atom::Offset | Atom::PressOffset | Atom::Gradient => return Err(format!("{name} must be a table, got {}", self::name(v))),
             Atom::LineHeight => self.text = self.text.lh(num(v)?),
             Atom::Tracking => self.text = self.text.tracking(num(v)?),
             Atom::Mono => {
@@ -700,12 +737,12 @@ impl Props {
     }
 
     /// Decodes the prop whose value is at stack slot `idx` onto `e`, reading the table-valued
-    /// ones (`corners`, `pin`, `origin`, `offset`) off the stack.
+    /// ones (`corners`, `pin`, `origin`, `offset`, `pressOffset`, `gradient`) off the stack.
     pub(crate) unsafe fn decode_at(&mut self, e: &mut El, state: *mut ffi::lua_State, atom: Atom, idx: c_int, env: &Env, is_text: bool) -> Result<(), String> {
         // SAFETY: the caller passes a valid slot.
         let v = unsafe { read(state, idx) };
         match (atom, v) {
-            (Atom::Corners | Atom::Pin | Atom::Origin | Atom::Offset, Value::Nil) => Ok(()),
+            (Atom::Corners | Atom::Pin | Atom::Origin | Atom::Offset | Atom::PressOffset | Atom::Gradient, Value::Nil) => Ok(()),
             (Atom::Corners, Value::Other("table")) => {
                 // SAFETY: slot `idx` holds a table.
                 let r = unsafe { numbers::<4>(state, idx, &[]) };
@@ -729,6 +766,16 @@ impl Props {
                 let [x, y] = unsafe { xy_pair(state, idx, "offset", [0.0, 0.0]) }?;
                 with(e, |e| e.offset(x, y));
                 Ok(())
+            }
+            (Atom::PressOffset, Value::Other("table")) => {
+                // SAFETY: slot `idx` holds a table.
+                let [x, y] = unsafe { xy_pair(state, idx, "pressOffset", [0.0, 0.0]) }?;
+                with(e, |e| e.press_offset(x, y));
+                Ok(())
+            }
+            (Atom::Gradient, Value::Other("table")) => {
+                // SAFETY: slot `idx` holds a table.
+                unsafe { self.gradient.get_or_insert_default().read_colors(state, idx, env) }
             }
             _ => self.decode(e, atom, v, env, is_text),
         }
