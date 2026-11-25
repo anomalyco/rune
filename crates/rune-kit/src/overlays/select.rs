@@ -49,6 +49,8 @@ pub struct Select {
     options: Vec<(Option<String>, String)>,
     details: Vec<Option<String>>,
     width: f32,
+    fill: bool,
+    menu_width: Option<f32>,
     current: Option<String>,
     placeholder: String,
     name: Option<String>,
@@ -72,6 +74,8 @@ impl Select {
             options: options.iter().map(|o| (None, o.as_ref().to_owned())).collect(),
             details: Vec::new(),
             width: 280.0,
+            fill: false,
+            menu_width: None,
             current: None,
             placeholder: String::new(),
             name: None,
@@ -102,6 +106,18 @@ impl Select {
     /// The field trigger's width in points (default 280).
     pub fn width(mut self, w: f32) -> Self {
         self.width = w;
+        self
+    }
+    /// The field trigger takes its parent's width instead of [`Self::width`], to line up with
+    /// the other fields in a form column.
+    pub fn fill(mut self) -> Self {
+        self.fill = true;
+        self
+    }
+    /// The open listbox's width in points, such as the trigger's measured width. Without it the
+    /// listbox sizes itself to its labels, between 160 and 368 points.
+    pub fn menu_width(mut self, w: f32) -> Self {
+        self.menu_width = Some(w);
         self
     }
     pub fn current(mut self, c: Option<&str>) -> Self {
@@ -311,15 +327,18 @@ impl Select {
             after_item = true;
         }
         let name = self.name.clone().unwrap_or_else(|| self.placeholder.clone());
+        let listbox = col()
+            .key(content_key(&self.key))
+            .role("listbox")
+            .label(name)
+            .focus_group()
+            .focus_return(&anchor_key);
+        let listbox = match self.menu_width {
+            Some(w) => listbox.w(w),
+            None => listbox.min_w(160.0).max_w(368.0),
+        };
         let content = k.elevate(
-            col()
-                .key(content_key(&self.key))
-                .role("listbox")
-                .label(name)
-                .focus_group()
-                .focus_return(&anchor_key)
-                .min_w(160.0)
-                .max_w(368.0)
+            listbox
                 .max_h(LISTBOX_MAX_HEIGHT)
                 .min_h(0.0)
                 .shrink()
@@ -371,8 +390,8 @@ impl Select {
                 k.overlay_state(t, self.state, hover, !disabled)
             }
             SelectAppearance::Field => {
-                let mut t = trigger
-                    .w(self.width)
+                let t = if self.fill { trigger.w_full() } else { trigger.w(self.width) };
+                let mut t = t
                     .h(28.0)
                     .pr(6.0)
                     .gap(8.0)

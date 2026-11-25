@@ -384,6 +384,13 @@ impl RuntimeCore {
         if self.host.set_system_scroller_jumps(jumps) { self.commit.dirty = true; }
     }
 
+    /// The last stored [`crate::WindowManagerState`].
+    #[cfg_attr(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))), allow(dead_code))]
+    #[inline]
+    pub(crate) fn window_manager_state(&self) -> crate::WindowManagerState {
+        self.host.wm_state
+    }
+
     /// What [`Cx::decoration_mode`], [`Cx::tiled_edges`], and [`Cx::window_actions`] report.
     /// Updates the stored state and marks the runtime dirty when it changed and the last
     /// committed view read any of those accessors. Returns whether the runtime was dirtied.

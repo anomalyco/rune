@@ -36,6 +36,7 @@ mod rolling_text_retry;
 mod scroll_bar_fade;
 mod segmented;
 mod select_keyboard;
+mod select_width;
 mod shell;
 mod shell_desktop;
 mod shell_split;

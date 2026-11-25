@@ -1,0 +1,1 @@
+- Kit: `Select::fill()` makes a `SelectAppearance::Field` trigger take its parent's width instead of `width` (280 points by default), and `Select::menu_width(w)` sets the open listbox's width instead of sizing it to its labels between 160 and 368 points.

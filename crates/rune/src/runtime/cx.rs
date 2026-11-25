@@ -258,12 +258,13 @@ impl<S> Cx<S> {
     ///   (`Unknown` before the initial configure, `Server` or `Client` afterwards; never inferred
     ///   from capabilities). Layer-shell overlays are not toplevels and stay `Unknown`.
     /// - **Linux X11**: read from `_NET_FRAME_EXTENTS` (any non-zero extent ->
-    ///   [`DecorationMode::Server`], all zeroes -> [`DecorationMode::Client`]). When absent,
-    ///   reports [`DecorationMode::Client`] only if the app requested no native frame
-    ///   (`WindowOptions { borderless: true, .. }`), an EWMH WM is managing the window, and the WM
-    ///   did not reparent it into a frame (Mutter omits `_NET_FRAME_EXTENTS` on frameless windows);
-    ///   otherwise [`DecorationMode::Unknown`]. Never infers `Server` from `is_decorated()` or
-    ///   missing actions.
+    ///   [`DecorationMode::Server`], all zeroes -> [`DecorationMode::Client`]), preserving the
+    ///   non-fullscreen mode during full screen and across the asynchronous frame-restore
+    ///   transition after leaving full screen. When absent, reports [`DecorationMode::Client`] only
+    ///   if the app requested no native frame (`WindowOptions { borderless: true, .. }`), an EWMH
+    ///   WM is managing the window, and the WM did not reparent it into a frame (Mutter omits
+    ///   `_NET_FRAME_EXTENTS` on frameless windows); otherwise [`DecorationMode::Unknown`]. Never
+    ///   infers `Server` from `is_decorated()` or missing actions.
     /// - **macOS, Windows, web, overlays, adopted macOS panels, staged playground subviews, and
     ///   headless runs**: [`DecorationMode::Unknown`] unless set in headless runs with
     ///   [`Runtime::set_window_manager_state`].
@@ -287,13 +288,14 @@ impl<S> Cx<S> {
     ///
     /// Returns `None` when unknown and `Some(TiledEdges::NONE)` when known untiled.
     ///
-    /// - **Linux Wayland**: read from `xdg_toplevel` `TILED_*` configure states when
-    ///   `xdg_toplevel.version() >= 2`, and `None` before initial configure, on v1 compositors, or
-    ///   for layer-shell overlays.
-    /// - **Linux X11**: read from `_GTK_EDGE_CONSTRAINTS` on the client window or (for
-    ///   server-decorated windows reparented by Mutter) its parent frame window (bits 0=top,
-    ///   2=right, 4=bottom, 6=left), refined with `_NET_WM_STATE_MAXIMIZED_VERT`/`HORZ` against
-    ///   `_NET_WORKAREA` when a half-tiled window sits flush with a work-area edge. Returns
+    /// - **Linux Wayland**: reports the exact `xdg_toplevel` `TILED_*` states sent by the
+    ///   compositor when `xdg_toplevel.version() >= 2` (a desktop extension that half-tiles via
+    ///   vertical maximize without horizontal constraints reports only top and bottom), and `None`
+    ///   before initial configure, on v1 compositors, or for layer-shell overlays.
+    /// - **Linux X11**: read from `_GTK_EDGE_CONSTRAINTS` (preferring the reparented parent frame
+    ///   for server-decorated windows under Mutter; bits 0=top, 2=right, 4=bottom, 6=left), with
+    ///   maximized windows reporting `Some(TiledEdges::ALL)` (matching GTK4 and Wayland) and
+    ///   `_NET_WM_STATE_MAXIMIZED_VERT`/`HORZ` half-tiles refined against `_NET_WORKAREA`. Returns
     ///   `Some(TiledEdges::NONE)` when absent while advertised in `_NET_SUPPORTED`, and `None`
     ///   otherwise.
     /// - **macOS, Windows, web, overlays, adopted macOS panels, staged playground subviews, and
@@ -315,11 +317,16 @@ impl<S> Cx<S> {
     /// Window actions the window manager allows for this window, with `None` for any action the
     /// platform or window manager did not report.
     ///
-    /// - **Linux Wayland**: `window_menu`, `maximize`, `minimize`, and `fullscreen` from
-    ///   `xdg_toplevel::wm_capabilities` when `xdg_toplevel.version() >= 5` (`None` below v5, before
-    ///   initial configure, or for layer-shell overlays); `close` is always `None`.
+    /// - **Linux Wayland**: `window_menu`, `minimize`, and `fullscreen` from
+    ///   `xdg_toplevel::wm_capabilities` when `xdg_toplevel.version() >= 5` (`None` below v5 or
+    ///   before initial configure); `maximize` combines `wm_capabilities` with window resizability
+    ///   (reporting `Some(false)` for non-resizable windows, matching GTK4, while `fullscreen`
+    ///   remains `Some(true)` where the compositor allows it); `close` reports `Some(true)` once
+    ///   configured when the close button is enabled (matching GTK4's `deletable` property). All
+    ///   `None` before initial configure or for layer-shell overlays.
     /// - **Linux X11**: `minimize`, `maximize` (`_NET_WM_ACTION_MAXIMIZE_HORZ` and
-    ///   `_NET_WM_ACTION_MAXIMIZE_VERT`), `fullscreen`, and `close` from per-window
+    ///   `_NET_WM_ACTION_MAXIMIZE_VERT`, including `Some(false)` in full screen or on non-resizable
+    ///   windows when Mutter omits them), `fullscreen`, and `close` from per-window
     ///   `_NET_WM_ALLOWED_ACTIONS`; `window_menu` from `_GTK_SHOW_WINDOW_MENU` in root
     ///   `_NET_SUPPORTED`.
     /// - **macOS, Windows, web, overlays, adopted macOS panels, staged playground subviews, and

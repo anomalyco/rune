@@ -110,7 +110,7 @@ pub(in crate::window) fn sync_wm_state_core(rt: &mut RuntimeCore, w: &Win) -> bo
         let state = if wayland {
             linux_wm_state::read_wayland(&w.window)
         } else {
-            crate::platform::x11::wm_state::read(&w.window)
+            crate::platform::x11::wm_state::read(&w.window, rt.window_manager_state().decoration_mode)
         };
         rt.set_window_menu_trigger(resolve_window_menu_trigger(wayland, state.actions.window_menu, false));
         rt.sync_window_manager_state(state)
