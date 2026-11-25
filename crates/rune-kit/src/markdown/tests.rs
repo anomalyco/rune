@@ -20,7 +20,7 @@ fn spans_with(src: &str, style: &MarkdownStyle, highlighter: Highlighter) -> Vec
     }
     let (blocks, sources, tasks, _, _) = doc_cached(src);
     let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, on_link_hover: None, link_menu: true, link_look: None, link_help: None, link_ring: None, code_link: None, on_task: None,
-        tasks_read_only: false, selectable: false, scroll_wide: false, wrap_anywhere: false, tentative: None, highlighter, sources: sources.clone(),
+        tasks_read_only: false, selectable: false, scroll_wide: false, wrap_anywhere: false, hard_breaks: false, tentative: None, highlighter, sources: sources.clone(),
         next_source: Cell::new(0), next_diff: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()),
         #[cfg(feature = "mermaid")] diagram_frame: None, code_frame: None, diff_frame: None, quote_frame: None, link_favicon: None, emoji: None, images: None, on_image: None, flow: Cell::default() };
     let mut found = Vec::new();
@@ -213,7 +213,7 @@ fn a_stream_reparses_from_its_last_block_and_matches_a_whole_parse() {
             assert_eq!(&*tasks, &want_tasks[..], "tasks of {src:?}");
             assert_eq!(&*starts, &want_starts[..], "block starts of {src:?}");
             assert_eq!(&*maps, &want_maps[..], "maps of {src:?}");
-            let cuts = CACHE.with_borrow(|c| c.docs.peek(src).unwrap().cuts.clone());
+            let cuts = CACHE.with_borrow(|c| c.peek(src, false).unwrap().cuts.clone());
             assert_eq!(&*cuts, &want_cuts[..], "cuts of {src:?}");
         }
         let (whole, tail) = (parses().0 - before.0, parses().1 - before.1);
@@ -245,11 +245,11 @@ fn a_stream_drops_the_strings_it_grew_from() {
         doc_cached(&stream[..end]);
     }
     CACHE.with_borrow(|c| {
-        let last = c.docs.peek(stream.as_str()).expect("the whole stream is cached");
+        let last = c.peek(stream.as_str(), false).expect("the whole stream is cached");
         let bytes = 2 * stream.len() + 64 * last.cuts.len() + 128;
         assert_eq!(c.docs.bytes(), held + bytes, "only the newest string of the stream is held");
         for doc in &docs {
-            assert!(c.docs.peek(doc.as_str()).is_some(), "{doc:?} was evicted");
+            assert!(c.peek(doc.as_str(), false).is_some(), "{doc:?} was evicted");
         }
     });
 }
@@ -273,7 +273,7 @@ fn link_spans_come_before_inner_inline_styles_so_bold_em_and_code_keep_theirs() 
     let (blocks, sources, tasks, _, _) = doc_cached("[**bold** *em* `code` plain](session:1)");
     let Block::Para(inl) = &blocks[0] else { panic!() };
     let r = Renderer { s: style.clone(), highlights: Vec::new(), reveal: 0.0, streaming: false, on_link: None, on_link_secondary: None, on_link_hover: None, link_menu: true, link_look: Some(look), link_help: None, link_ring: None, code_link: None, on_task: None,
-        tasks_read_only: false, selectable: false, scroll_wide: false, wrap_anywhere: false, tentative: None, highlighter: Highlighter::builtin(), sources,
+        tasks_read_only: false, selectable: false, scroll_wide: false, wrap_anywhere: false, hard_breaks: false, tentative: None, highlighter: Highlighter::builtin(), sources,
         next_source: Cell::new(0), next_diff: Cell::new(0), tasks, next_task: Cell::new(0), current_block_key: RefCell::new("b0".into()),
         #[cfg(feature = "mermaid")] diagram_frame: None, code_frame: None, diff_frame: None, quote_frame: None, link_favicon: None, emoji: None, images: None, on_image: None, flow: Cell::default() };
     let spans = r.spans(inl, style.body);

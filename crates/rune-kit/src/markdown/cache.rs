@@ -20,15 +20,68 @@ pub(super) struct Parsed {
     pub(super) eof_deep_tail: Option<(usize, usize)>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct CacheKey {
+    pub(super) src: Rc<str>,
+    pub(super) hard_breaks: bool,
+}
+
+impl Hash for CacheKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_key().hash(state);
+    }
+}
+
+pub(super) trait CacheLookup {
+    fn as_key(&self) -> (&str, bool);
+}
+
+impl PartialEq for dyn CacheLookup + '_ {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_key() == other.as_key()
+    }
+}
+
+impl Eq for dyn CacheLookup + '_ {}
+
+impl Hash for dyn CacheLookup + '_ {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_key().hash(state);
+    }
+}
+
+impl CacheLookup for CacheKey {
+    fn as_key(&self) -> (&str, bool) {
+        (&self.src, self.hard_breaks)
+    }
+}
+
+impl CacheLookup for (&str, bool) {
+    fn as_key(&self) -> (&str, bool) {
+        *self
+    }
+}
+
+impl<'a> std::borrow::Borrow<dyn CacheLookup + 'a> for CacheKey {
+    fn borrow(&self) -> &(dyn CacheLookup + 'a) {
+        self
+    }
+}
+
 pub(super) struct Cache {
-    pub(super) docs: Budget<Rc<str>, Parsed>,
+    pub(super) docs: Budget<CacheKey, Parsed>,
     /// The source parsed last, which a stream's next string extends.
-    pub(super) last: Option<Rc<str>>,
+    pub(super) last: Option<CacheKey>,
 }
 
 impl Cache {
     fn new(bytes: usize) -> Self {
         Cache { docs: Budget::new(bytes), last: None }
+    }
+
+    #[cfg(test)]
+    pub(super) fn peek(&self, src: &str, hard_breaks: bool) -> Option<&Parsed> {
+        self.docs.peek(&(src, hard_breaks) as &dyn CacheLookup)
     }
 }
 
@@ -43,6 +96,8 @@ thread_local! {
 thread_local! {
     /// (whole documents parsed, streams parsed from their last block).
     pub(super) static PARSES: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    /// Top-level blocks parsed across whole and incremental parses (for stream-cost tests).
+    pub(super) static REPARSED_BLOCKS: Cell<usize> = const { Cell::new(0) };
 }
 
 fn detect_eof_deep_tail(src: &str, blocks: &[Block], maps: &[BlockMap]) -> Option<(usize, usize)> {
@@ -214,51 +269,68 @@ pub fn parse_cached(src: &str) -> Rc<Vec<Block>> {
 }
 
 pub(super) fn doc_cached(src: &str) -> Doc {
-    doc_cached_with_meta(src).0
+    doc_cached_with_meta(src, false).0
 }
 
-pub(super) fn doc_cached_with_meta(src: &str) -> (Doc, Meta) {
-    CACHE.with_borrow_mut(|c| cached(c, src, parse_doc, false))
+pub(super) fn doc_cached_with_meta(src: &str, hard_breaks: bool) -> (Doc, Meta) {
+    CACHE.with_borrow_mut(|c| cached(c, src, parse_doc_with, false, hard_breaks))
 }
 
 /// [`doc_cached`] for a source still arriving.
 #[allow(dead_code)]
 pub(super) fn stream_cached(src: &str) -> Doc {
-    stream_cached_with_meta(src).0
+    stream_cached_with_meta(src, false).0
 }
 
-pub(super) fn stream_cached_with_meta(src: &str) -> (Doc, Meta) {
-    STREAMS.with_borrow_mut(|c| cached(c, src, parse_streaming, true))
+pub(super) fn stream_cached_with_meta(src: &str, hard_breaks: bool) -> (Doc, Meta) {
+    STREAMS.with_borrow_mut(|c| cached(c, src, parse_streaming_with, true, hard_breaks))
 }
 
-fn try_extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> ParsedDoc, streaming: bool) -> Option<Parsed> {
+fn try_extend(
+    base: &Parsed,
+    base_len: usize,
+    src: &str,
+    parse: fn(&str, bool, bool) -> ParsedDoc,
+    streaming: bool,
+    hard_breaks: bool,
+) -> Option<Parsed> {
     if streaming && let Some(extended) = extend_eof_deep_tail(base, base_len, src) {
+        #[cfg(test)]
+        REPARSED_BLOCKS.with(|n| n.set(n.get() + 1));
         return Some(extended);
     }
-    extend(base, base_len, src, parse)
+    extend(base, base_len, src, parse, hard_breaks)
 }
 
-fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc, streaming: bool) -> (Doc, Meta) {
-    if let Some(hit) = c.docs.get(src) {
+fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool, bool) -> ParsedDoc, streaming: bool, hard_breaks: bool) -> (Doc, Meta) {
+    if let Some(hit) = c.docs.get(&(src, hard_breaks) as &dyn CacheLookup) {
         return (hit.doc.clone(), hit.meta.clone());
     }
-    let grown = c.last.clone().filter(|last| src.len() > last.len() && src.starts_with(&**last));
-    let parsed = grown.as_ref().and_then(|last| try_extend(c.docs.peek(&**last)?, last.len(), src, parse, streaming)).unwrap_or_else(|| {
-        #[cfg(test)]
-        PARSES.with(|p| p.set((p.get().0 + 1, p.get().1)));
-        let (blocks, sources, tasks, cuts, starts, maps) = parse(src, true);
-        let meta: Meta = blocks.iter().enumerate().map(|(i, b)| super::memo::precompute_block(b, maps.get(i))).collect();
-        let eof_deep_tail = detect_eof_deep_tail(src, &blocks, &maps);
-        Parsed { doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()), cuts: cuts.into(), meta, eof_deep_tail }
-    });
+    let grown = c
+        .last
+        .clone()
+        .filter(|last| last.hard_breaks == hard_breaks && src.len() > last.src.len() && src.starts_with(&*last.src));
+    let parsed = grown
+        .as_ref()
+        .and_then(|last| try_extend(c.docs.peek(last)?, last.src.len(), src, parse, streaming, hard_breaks))
+        .unwrap_or_else(|| {
+            #[cfg(test)]
+            PARSES.with(|p| p.set((p.get().0 + 1, p.get().1)));
+            let (blocks, sources, tasks, cuts, starts, maps) = parse(src, true, hard_breaks);
+            #[cfg(test)]
+            REPARSED_BLOCKS.with(|n| n.set(n.get() + blocks.len()));
+            let meta: Meta = blocks.iter().enumerate().map(|(i, b)| super::memo::precompute_block(b, maps.get(i))).collect();
+            let eof_deep_tail = detect_eof_deep_tail(src, &blocks, &maps);
+            Parsed { doc: (Rc::new(blocks), sources.into(), tasks.into(), starts.into(), maps.into()), cuts: cuts.into(), meta, eof_deep_tail }
+        });
     // A stream's earlier string is dead once it grows, unless something drew it this
     // commit; left in, a long stream would fill the budget with its prefixes.
     if let Some(last) = grown
-        && !c.docs.used_now(&*last)
+        && !c.docs.used_now(&last)
     {
-        c.docs.remove(&*last);
+        c.docs.remove(&last);
     }
-    let key: Rc<str> = src.into();
+    let key = CacheKey { src: src.into(), hard_breaks };
     // Parsed text is about as long as its source, plus each block's bookkeeping and nested digests.
     let meta_bytes: usize = parsed.meta.iter().map(|p| p.heap_bytes()).sum();
     let bytes = 2 * src.len() + 64 * parsed.cuts.len() + meta_bytes + 128;
@@ -274,7 +346,7 @@ fn cached(c: &mut Cache, src: &str, parse: fn(&str, bool) -> ParsedDoc, streamin
 /// starts on a finished line. A reference definition (`[x]: url`) can change links anywhere,
 /// so a source that may hold one parses whole. A stream's parse may have left its last lines
 /// out, so a cut is only ever at or before `base_len`.
-fn extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> ParsedDoc) -> Option<Parsed> {
+fn extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool, bool) -> ParsedDoc, hard_breaks: bool) -> Option<Parsed> {
     let i = base.cuts.iter().rposition(|c| c.at <= base_len && src[c.at..base_len].contains('\n'))?;
     let cut = base.cuts[i];
     if cut.at == 0 || cut.blocks >= base.doc.0.len() || src.contains("]:") {
@@ -283,7 +355,9 @@ fn extend(base: &Parsed, base_len: usize, src: &str, parse: fn(&str, bool) -> Pa
     #[cfg(test)]
     PARSES.with(|p| p.set((p.get().0, p.get().1 + 1)));
     let tail_src = &src[cut.at..];
-    let (tail, sources, tasks, cuts, starts, maps) = parse(tail_src, true);
+    let (tail, sources, tasks, cuts, starts, maps) = parse(tail_src, true, hard_breaks);
+    #[cfg(test)]
+    REPARSED_BLOCKS.with(|n| n.set(n.get() + tail.len()));
     let shifted_maps: Vec<BlockMap> = maps.into_iter().map(|m| m.shift_src(cut.at)).collect();
     let tail_meta: Vec<Rc<super::memo::PreBlock>> = tail.iter().enumerate().map(|(k, b)| super::memo::precompute_block(b, shifted_maps.get(k))).collect();
     let mut blocks = base.doc.0[..cut.blocks].to_vec();

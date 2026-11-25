@@ -20,20 +20,26 @@ use super::*;
 use super::parser::{ParsedDoc, Scope, Tail, parse_doc_tail};
 
 /// [`parse_doc`] of `src` as a stream's current text.
+#[cfg(test)]
 pub(super) fn parse_streaming(src: &str, autolink: bool) -> ParsedDoc {
-    let (raw, tail) = parse_doc_tail(src, autolink);
+    parse_streaming_with(src, autolink, false)
+}
+
+/// [`parse_doc_with`] of `src` as a stream's current text.
+pub(super) fn parse_streaming_with(src: &str, autolink: bool, hard_breaks: bool) -> ParsedDoc {
+    let (raw, tail) = parse_doc_tail(src, autolink, hard_breaks);
     let end = held_table(src, tail, raw.0.last()).unwrap_or(src.len());
     let patch = match tail {
         Tail::Inline(start, scope) if start < end => close_tail(&src[start..end], start, scope),
         _ => None,
     };
     let Some(Patch { cut, closers, markers, code }) = patch else {
-        return if end == src.len() { raw } else { parse_doc(&src[..end], autolink) };
+        return if end == src.len() { raw } else { parse_doc_with(&src[..end], autolink, hard_breaks) };
     };
     if !closers.is_empty() {
         let kept = src[..cut].trim_end();
         let view = format!("{kept}{closers}");
-        let mut doc = parse_doc(&view, autolink);
+        let mut doc = parse_doc_with(&view, autolink, hard_breaks);
         let added = kept.len()..view.len();
         if !markers.iter().chain([&added]).any(|r| doc.5.iter().any(|m| shows(m, r))) {
             if code {
@@ -42,13 +48,13 @@ pub(super) fn parse_streaming(src: &str, autolink: bool) -> ParsedDoc {
             return doc;
         }
     }
-    let doc = parse_doc(&src[..cut], autolink);
+    let doc = parse_doc_with(&src[..cut], autolink, hard_breaks);
     if columns(&doc) >= columns(&raw) {
         return doc;
     }
     // Leaving markers out of a header's last cell (`| a | *`) left that cell out too: keep it,
     // empty, so the table keeps its columns.
-    let doc = parse_doc(&format!("{}|", &src[..cut]), autolink);
+    let doc = parse_doc_with(&format!("{}|", &src[..cut]), autolink, hard_breaks);
     if columns(&doc) >= columns(&raw) { doc } else { raw }
 }
 

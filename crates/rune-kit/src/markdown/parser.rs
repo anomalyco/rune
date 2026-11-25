@@ -90,7 +90,11 @@ pub fn parse(src: &str) -> Vec<Block> {
 }
 
 pub(super) fn parse_doc(src: &str, autolink: bool) -> ParsedDoc {
-    parse_doc_tail(src, autolink).0
+    parse_doc_with(src, autolink, false)
+}
+
+pub(super) fn parse_doc_with(src: &str, autolink: bool, hard_breaks: bool) -> ParsedDoc {
+    parse_doc_tail(src, autolink, hard_breaks).0
 }
 
 enum SkipMode {
@@ -98,8 +102,8 @@ enum SkipMode {
     ExtraQuotes { start: usize, open: usize },
 }
 
-/// [`parse_doc`], and what the source ends inside.
-pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
+/// [`parse_doc_with`], and what the source ends inside.
+pub(super) fn parse_doc_tail(src: &str, autolink: bool, hard_breaks: bool) -> (ParsedDoc, Tail) {
     let mut b = Builder::new(autolink);
     let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES | Options::ENABLE_TASKLISTS;
     let mut events = super::interrupt::list_interrupts(src, Parser::new_ext(src, opts).into_offset_iter());
@@ -414,7 +418,7 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 inl.1.spans.push((end, inl.1.text.len(), Style::CodePad));
                 map_code_span(src, code_src, &t, start, &mut inl.3);
             }
-            Event::SoftBreak => {
+            Event::SoftBreak if !hard_breaks => {
                 let inl = b.inline();
                 // The line after an image starts the paragraph that follows it.
                 if inl.1.text.is_empty() {
@@ -424,8 +428,12 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
                 inl.1.text.push(' ');
                 inl.3.push(range, start..inl.1.text.len());
             }
-            Event::HardBreak => {
+            Event::HardBreak | Event::SoftBreak => {
                 let inl = b.inline();
+                // The line after an image starts the paragraph that follows it.
+                if matches!(ev, Event::SoftBreak) && inl.1.text.is_empty() {
+                    continue;
+                }
                 let start = inl.1.text.len();
                 inl.1.text.push('\n');
                 inl.3.push(range, start..inl.1.text.len());
@@ -456,7 +464,7 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool) -> (ParsedDoc, Tail) {
     let last_para = b.last_root_para.take();
     let (_, mut blocks, mut maps) = b.stack.pop().unwrap();
     if let (Some(Block::Para(_)), Some(range)) = (blocks.last(), last_para)
-        && let Some((t, map)) = pending_table(&src[range.start..], range.start, autolink)
+        && let Some((t, map)) = pending_table(&src[range.start..], range.start, autolink, hard_breaks)
     {
         *blocks.last_mut().unwrap() = Block::Table(t);
         *maps.last_mut().unwrap() = map;

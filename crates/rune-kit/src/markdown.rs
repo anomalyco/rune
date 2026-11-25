@@ -110,10 +110,12 @@ use autolink::autolink_inline;
 #[allow(unused_imports)]
 use cache::{doc_cached, doc_cached_with_meta, stream_cached, stream_cached_with_meta};
 #[cfg(test)]
-use cache::{CACHE, PARSES};
-use parser::{BlockMap, CLOSE, Cut, LINK_CLOSE, PAD, ParsedDoc, Source, SpanMap, parse_doc, unpadded};
+use cache::{CACHE, PARSES, REPARSED_BLOCKS, STREAMS};
+use parser::{BlockMap, CLOSE, Cut, LINK_CLOSE, PAD, ParsedDoc, Source, SpanMap, parse_doc_with, unpadded};
+#[cfg(test)]
+use parser::parse_doc;
 use render::{Renderer, hash_of, rendered_keys, source_copy};
-use stream::parse_streaming;
+use stream::parse_streaming_with;
 
 /// An inline style run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -292,6 +294,7 @@ pub struct Markdown {
     scroll_wide: bool,
     wrap_code: bool,
     wrap_anywhere: bool,
+    hard_breaks: bool,
     tentative: Option<rune::Direction>,
     highlighter: Highlighter,
     #[cfg(feature = "mermaid")]
@@ -314,7 +317,7 @@ thread_local! {
 impl Markdown {
     pub fn new(src: impl Into<String>) -> Markdown {
         Markdown { src: src.into(), style: None, block_keys: Vec::new(), highlights: Vec::new(), autolink: true, reveal: -1.0, streaming: false, on_link: None, on_link_secondary: None, on_link_hover: None, link_menu: true, link_look: None, link_help: None, link_ring: None, code_link: None,
-            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, wrap_anywhere: false, tentative: None, highlighter: Highlighter::builtin(),
+            on_task: None, tasks_read_only: false, selectable: false, copy_source: false, scroll_wide: false, wrap_code: false, wrap_anywhere: false, hard_breaks: false, tentative: None, highlighter: Highlighter::builtin(),
             #[cfg(feature = "mermaid")]
             diagram_frame: None, code_frame: None, diff_frame: None, code_wrap: None, quote_frame: None, link_favicon: None, emoji: None, images: None, on_image: None }
     }
@@ -469,6 +472,27 @@ impl Markdown {
     /// ```
     pub fn wrap_anywhere(mut self, on: bool) -> Self {
         self.wrap_anywhere = on;
+        self
+    }
+
+    /// Renders CommonMark soft line breaks (single newlines inside paragraphs, list items,
+    /// block quotes, headings and table cells) as line breaks (`'\n'`) instead of spaces
+    /// (`false` by default, following CommonMark).
+    ///
+    /// Useful for user-typed chat messages where Shift+Return inserts a single newline. Inline
+    /// code spans and code blocks are unaffected, a line break immediately after a lifted block
+    /// image is still skipped, and [`Self::copy_source`]`(true)` keeps copying the original
+    /// source unmodified.
+    ///
+    /// ```
+    /// # use rune_kit::{Kit, Markdown};
+    /// # let kit = Kit::neutral(true);
+    /// let view = Markdown::new("First line\nSecond line")
+    ///     .hard_breaks(true)
+    ///     .build(&kit);
+    /// ```
+    pub fn hard_breaks(mut self, on: bool) -> Self {
+        self.hard_breaks = on;
         self
     }
 
@@ -636,6 +660,7 @@ impl Markdown {
                     self.scroll_wide,
                     self.wrap_code,
                     self.wrap_anywhere,
+                    self.hard_breaks,
                 ],
                 self.tentative,
             ));
@@ -648,10 +673,14 @@ impl Markdown {
         #[cfg(test)]
         RENDERS.with(|n| n.set(n.get() + 1));
         let ((blocks, sources, tasks, starts, maps), meta) = match (self.autolink, self.streaming) {
-            (true, false) => doc_cached_with_meta(&self.src),
-            (true, true) => stream_cached_with_meta(&self.src),
+            (true, false) => doc_cached_with_meta(&self.src, self.hard_breaks),
+            (true, true) => stream_cached_with_meta(&self.src, self.hard_breaks),
             (false, streaming) => {
-                let (b, s, t, _, st, m) = if streaming { parse_streaming(&self.src, false) } else { parse_doc(&self.src, false) };
+                let (b, s, t, _, st, m) = if streaming {
+                    parse_streaming_with(&self.src, false, self.hard_breaks)
+                } else {
+                    parse_doc_with(&self.src, false, self.hard_breaks)
+                };
                 let meta: Rc<[Rc<memo::PreBlock>]> = b.iter().enumerate().map(|(i, blk)| memo::precompute_block(blk, m.get(i))).collect();
                 ((Rc::new(b), s.into(), t.into(), st.into(), m.into()), meta)
             }
@@ -665,7 +694,7 @@ impl Markdown {
         let code_frame = (self.code_frame.is_some() || self.code_wrap.is_some() || self.wrap_code)
             .then(|| CodeWire { frame: self.code_frame, wrap: self.code_wrap, wrap_default: self.wrap_code });
         let r = Renderer { s: style.clone(), highlights: self.highlights, reveal: self.reveal, streaming: self.streaming, on_link: self.on_link, on_link_secondary: self.on_link_secondary, on_link_hover: self.on_link_hover, link_menu: self.link_menu, link_look: self.link_look, link_help: self.link_help, link_ring: self.link_ring, code_link: self.code_link,
-            on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, wrap_anywhere: self.wrap_anywhere, tentative: self.tentative,
+            on_task: self.on_task, tasks_read_only: self.tasks_read_only, selectable: self.selectable, scroll_wide: self.scroll_wide, wrap_anywhere: self.wrap_anywhere, hard_breaks: self.hard_breaks, tentative: self.tentative,
             highlighter: self.highlighter, sources, next_source: Cell::new(0), next_diff: Cell::new(0), tasks, next_task: Cell::new(0),
             current_block_key: RefCell::new("b0".into()),
             #[cfg(feature = "mermaid")]
@@ -681,6 +710,8 @@ impl Markdown {
     }
 }
 
+#[cfg(test)]
+mod hard_breaks_tests;
 #[cfg(test)]
 mod style_tests;
 #[cfg(test)]
