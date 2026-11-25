@@ -63,7 +63,11 @@ impl List {
         self.search = Some((edit.clone(), placeholder.into()));
         self
     }
-    pub fn on_search_edit<S: 'static>(mut self, f: fn(&mut S) -> &mut TextEdit) -> Self {
+    /// Where the search field's `TextEdit` lives in the app's state; `f` may capture (a panel id).
+    pub fn on_search_edit<S: 'static>(
+        mut self,
+        f: impl for<'a> Fn(&'a mut S) -> &'a mut TextEdit + 'static,
+    ) -> Self {
         self.edit = Some(Box::new(move |e: El| e.on_edit(f)));
         self
     }
@@ -230,3 +234,7 @@ impl Default for List {
         Self::new()
     }
 }
+
+#[cfg(test)]
+#[path = "list_tests.rs"]
+mod tests;
