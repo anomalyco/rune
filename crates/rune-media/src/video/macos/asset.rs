@@ -216,6 +216,10 @@ pub(super) fn positive_infinity() -> CMTime {
     // SAFETY: `kCMTimePositiveInfinity` is an immutable static CoreMedia `CMTime` constant.
     unsafe { kCMTimePositiveInfinity }
 }
+pub(super) fn same_cm(a: CMTime, b: CMTime) -> bool {
+    // SAFETY: `CMTimeCompare` accepts any two `CMTime` values.
+    unsafe { a.compare(b) == 0 }
+}
 
 /// Blocks until the asset's tracks load (a network fetch for URLs).
 #[allow(deprecated)] // The synchronous loaders are what a worker or headless run wants.
