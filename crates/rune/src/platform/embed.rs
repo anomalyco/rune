@@ -101,6 +101,7 @@ impl LayerHostCore {
         crate::window::configure(&surface, &gpu, &config)?;
         let target_format = config.format.remove_srgb_suffix();
         let mut renderer = Renderer::try_new(&gpu.device, target_format)?;
+        renderer.attach_gpu(&gpu);
         renderer.set_srgb_blend(true);
         let size = (px_w as f32 / scale, px_h as f32 / scale);
         let now = crate::time::now();
@@ -365,5 +366,55 @@ mod tests {
         let out = host.frame();
         assert!(out.drew);
         assert_eq!(seen.load(Ordering::Relaxed), 42);
+    }
+
+    #[test]
+    fn layer_host_compositor_receives_instance_and_adapter() {
+        use std::sync::Mutex;
+        #[derive(Default)]
+        struct Seen {
+            has_instance: bool,
+            adapter_info: Option<wgpu::AdapterInfo>,
+            device_info: Option<wgpu::AdapterInfo>,
+        }
+        struct HostProbe(Arc<Mutex<Seen>>);
+        impl Compositor<()> for HostProbe {
+            fn render(&mut self, f: &mut Frame<'_, ()>) {
+                let mut seen = self.0.lock().unwrap();
+                seen.has_instance = f.instance().is_some();
+                seen.adapter_info = f.adapter().map(wgpu::Adapter::get_info);
+                seen.device_info = Some(f.device.adapter_info());
+                f.restore_device_callbacks();
+                f.draw_ui();
+            }
+        }
+        // SAFETY: `CAMetalLayer` is a QuartzCore class whose `+new` returns a retained instance.
+        let layer: Retained<AnyObject> = unsafe { msg_send![AnyClass::get(c"CAMetalLayer").expect("QuartzCore"), new] };
+        let seen = Arc::new(Mutex::new(Seen::default()));
+        let view = |_: &(), _: &mut Cx<()>| -> El { col().size(120.0, 80.0) };
+        let spec = AppSpec::new("embed-host-probe", (120.0, 80.0), || (), view);
+        // SAFETY: `layer` is a valid retained `CAMetalLayer` owned by this test and outlives `host`.
+        let host = unsafe {
+            LayerHost::from_core_animation_layer(
+                Retained::as_ptr(&layer) as *mut std::ffi::c_void,
+                &spec,
+                (),
+                (120.0, 80.0),
+                2.0,
+                true,
+                Arc::new(|| {}),
+            )
+        };
+        let Ok(mut host) = host else { return };
+        host = host.with_compositor(HostProbe(Arc::clone(&seen)));
+        let out = host.frame();
+        assert!(out.drew);
+        let seen = seen.lock().unwrap();
+        assert!(seen.has_instance, "LayerHost Frame::instance must be Some");
+        assert_eq!(
+            seen.adapter_info,
+            seen.device_info,
+            "LayerHost Frame::adapter info must match Frame::device.adapter_info()",
+        );
     }
 }

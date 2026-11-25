@@ -710,7 +710,9 @@ impl FrameHost for DesktopFrame<'_> {
     fn reblend(&mut self) -> bool {
         let format = self.target_format();
         let renderer = self.window.renderer.get_or_insert_with(|| {
-            Renderer::try_new(&self.gpu.device, format).unwrap_or_else(|e| crate::tooling::args::die(&e))
+            let mut renderer = Renderer::try_new(&self.gpu.device, format).unwrap_or_else(|e| crate::tooling::args::die(&e));
+            renderer.attach_gpu(self.gpu);
+            renderer
         });
         crate::window::rebuild_renderer_core(&self.gpu.device, renderer, format, self.window.app.rt_mut());
         true

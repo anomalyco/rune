@@ -223,6 +223,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         Renderer::try_new_classified(&gpu.device, target_format).map_err(crate::render::SurfaceSetupError::from_shader)
     })
     .map_err(|e| e.message)?;
+    renderer.attach_gpu(&gpu);
     renderer.set_srgb_blend(srgb_blend);
     renderer.attach_text(&mut app.rt_mut().text.atlas);
     let (wp, hp) = ((size.0 * scale).round() as u32, (size.1 * scale).round() as u32);

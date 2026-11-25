@@ -1,13 +1,17 @@
 //! Uncaptured GPU error policy tests across direct, prewarmed, adopted, and headless devices.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
-use super::super::Gpu;
+use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+use super::super::{Gpu, OFFSCREEN_FORMAT, Renderer};
 
 fn trigger_validation_error(device: &wgpu::Device) -> std::thread::Result<()> {
+    trigger_validation_error_labeled(device, "uncaptured-error-policy-probe")
+}
+
+fn trigger_validation_error_labeled(device: &wgpu::Device, label: &str) -> std::thread::Result<()> {
     catch_unwind(AssertUnwindSafe(|| {
         drop(device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("uncaptured-error-policy-probe"),
+            label: Some(label),
             size: 4,
             usage: wgpu::BufferUsages::empty(),
             mapped_at_creation: false,
@@ -131,6 +135,123 @@ fn surface_error_policy_matches_across_direct_prewarm_adopted_and_headless_devic
     );
 }
 
+#[test]
+#[ignore]
+fn restore_device_callbacks_surface_and_headless_child() {
+    super::enable_uncaptured_logging_for_test();
+
+    // 1. Surface device: restore re-installs both device-lost and bounded deduplicated
+    //    uncaptured-error logging, preserving Printed deduplication across the restore.
+    let surface = Gpu::try_for_display(Gpu::wgpu_instance(), wgpu::Features::empty())
+        .expect("display wgpu device");
+    let mut surface_renderer = Renderer::new(&surface.device, OFFSCREEN_FORMAT);
+    surface_renderer.attach_gpu(&surface);
+    assert!(surface.has_surface_error_policy());
+
+    // Log probe-a once before foreign code overwrites the callbacks.
+    assert!(trigger_validation_error_labeled(&surface.device, "restore-dedup-probe-a").is_ok());
+
+    let foreign_lost = Arc::new(AtomicBool::new(false));
+    let foreign_lost_cb = Arc::clone(&foreign_lost);
+    surface.device.set_device_lost_callback(move |_, _| {
+        foreign_lost_cb.store(true, Ordering::SeqCst);
+    });
+    let foreign_errors = Arc::new(AtomicUsize::new(0));
+    let foreign_errors_cb = Arc::clone(&foreign_errors);
+    surface.device.on_uncaptured_error(Arc::new(move |_| {
+        foreign_errors_cb.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    // Confirm the foreign error handler took over the single slot before restoration.
+    assert!(trigger_validation_error_labeled(&surface.device, "restore-foreign-only").is_ok());
+    assert_eq!(foreign_errors.load(Ordering::SeqCst), 1);
+
+    // Restore Rune's callbacks through Renderer (the path Frame::restore_device_callbacks uses).
+    surface_renderer.restore_device_callbacks(&surface.device);
+
+    // Re-triggering probe-a must not panic, must not hit the foreign callback, and must be
+    // deduplicated by the shared Printed log (parent asserts count == 1).
+    assert!(trigger_validation_error_labeled(&surface.device, "restore-dedup-probe-a").is_ok());
+    // A distinct error probe-b must be logged once by the restored Rune handler without panicking.
+    assert!(trigger_validation_error_labeled(&surface.device, "restore-dedup-probe-b").is_ok());
+    assert_eq!(
+        foreign_errors.load(Ordering::SeqCst),
+        1,
+        "foreign uncaptured-error callback must not run after restore_device_callbacks",
+    );
+
+    surface.device.destroy();
+    rune_gpu::health::poll(&surface.device, wgpu::PollType::Poll).ok();
+    assert!(surface.is_lost(), "surface Gpu::is_lost must flip after restore + destroy");
+    assert!(
+        !foreign_lost.load(Ordering::SeqCst),
+        "foreign device-lost callback must not run after restore_device_callbacks",
+    );
+
+    // 2. Headless device (draws_surfaces == false): restore re-installs device-lost but keeps
+    //    wgpu's default validation panic intact.
+    let headless = Gpu::try_new(Gpu::wgpu_instance(), None).expect("headless wgpu device");
+    let mut headless_renderer = Renderer::new(&headless.device, OFFSCREEN_FORMAT);
+    headless_renderer.attach_gpu(&headless);
+    assert!(!headless.has_surface_error_policy());
+
+    let headless_foreign_lost = Arc::new(AtomicBool::new(false));
+    let headless_foreign_lost_cb = Arc::clone(&headless_foreign_lost);
+    headless.device.set_device_lost_callback(move |_, _| {
+        headless_foreign_lost_cb.store(true, Ordering::SeqCst);
+    });
+    headless_renderer.restore_device_callbacks(&headless.device);
+    assert!(
+        trigger_validation_error_labeled(&headless.device, "restore-headless-panic").is_err(),
+        "headless device must keep wgpu's validation panic after restore_device_callbacks",
+    );
+    headless.device.destroy();
+    rune_gpu::health::poll(&headless.device, wgpu::PollType::Poll).ok();
+    assert!(headless.is_lost(), "headless Gpu::is_lost must flip after restore + destroy");
+    assert!(!headless_foreign_lost.load(Ordering::SeqCst));
+}
+
+#[test]
+fn restore_device_callbacks_restores_loss_and_deduplicated_error_logging() {
+    if !Gpu::test_adapter_available() { return; }
+    let exe = std::env::current_exe().expect("test binary path");
+    let output = std::process::Command::new(&exe)
+        .args([
+            "--exact",
+            "render::gpu_loss::tests::restore_device_callbacks_surface_and_headless_child",
+            "--ignored",
+            "--nocapture",
+        ])
+        .output()
+        .expect("spawn child test");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "child test failed: status={:?}\nstdout={}\nstderr={stderr}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+    );
+    assert_eq!(
+        stderr.matches("rune: a GPU error went uncaptured").count(),
+        2,
+        "expected exactly two uncaptured error headers (probe-a once, probe-b once), got:\n{stderr}",
+    );
+    assert_eq!(
+        stderr.matches("restore-dedup-probe-a").count(),
+        1,
+        "expected restore-dedup-probe-a logged exactly once (deduplicated across restore), got:\n{stderr}",
+    );
+    assert_eq!(
+        stderr.matches("restore-dedup-probe-b").count(),
+        1,
+        "expected restore-dedup-probe-b logged once by restored handler, got:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("restore-foreign-only"),
+        "foreign error while overwritten must not be logged by Rune, got:\n{stderr}",
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod macos {
@@ -249,6 +370,40 @@ mod macos {
         assert!(
             stderr.contains("rune: a GPU error went uncaptured"),
             "expected uncaptured error log in stderr, got:\n{stderr}",
+        );
+    }
+
+    #[cfg(feature = "metal-backend")]
+    #[test]
+    fn macos_native_metal_restore_device_lost_callback() {
+        let gpu = Gpu::try_new(crate::gpu::metal::instance(), None).expect("native Metal device");
+        assert!(
+            crate::gpu::metal::raw_device(&gpu.device).is_some(),
+            "expected Rune's native Metal backend device",
+        );
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        renderer.attach_gpu(&gpu);
+        assert!(renderer.gpu_instance().is_some());
+        assert_eq!(
+            renderer.gpu_adapter().map(wgpu::Adapter::get_info),
+            Some(gpu.device.adapter_info()),
+        );
+
+        let foreign_lost = Arc::new(AtomicBool::new(false));
+        let foreign_lost_cb = Arc::clone(&foreign_lost);
+        gpu.device.set_device_lost_callback(move |_, _| {
+            foreign_lost_cb.store(true, Ordering::SeqCst);
+        });
+        renderer.restore_device_callbacks(&gpu.device);
+        assert!(!gpu.is_lost());
+        gpu.device.destroy();
+        assert!(
+            gpu.is_lost(),
+            "native Metal Gpu::is_lost must flip to true on device.destroy() after restore_device_callbacks",
+        );
+        assert!(
+            !foreign_lost.load(Ordering::SeqCst),
+            "foreign device-lost callback must not run after restore_device_callbacks",
         );
     }
 }

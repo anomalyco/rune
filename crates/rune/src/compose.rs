@@ -120,6 +120,114 @@ impl<S: 'static> Frame<'_, S> {
         self.ui.device_key()
     }
 
+    /// The `wgpu::Instance` that created this frame's device, when the renderer belongs to a Rune
+    /// host.
+    ///
+    /// Returns `Some` across all Rune-managed hosts: Windows (DX12 wgpu), Linux (Vulkan wgpu),
+    /// macOS wgpu (`GpuBackend::Wgpu`), macOS and iOS native Metal (`GpuBackend::Metal`, wrapped
+    /// through wgpu's custom backend), and browser WebGPU and WebGL2 (`wasm32`). Returns `None`
+    /// when `Frame::ui` is a standalone [`Renderer::new`] or [`Renderer::try_new`] with no
+    /// attached GPU.
+    ///
+    /// On macOS, Rune's default native Metal backend implements the wgpu subset Rune uses; an
+    /// embedded renderer that needs depth/stencil, MSAA, render bundles, indirect draws, or other
+    /// wgpu features should opt into `App::gpu_backend(GpuBackend::Wgpu)` and
+    /// `prewarm_gpu_on(GpuBackend::Wgpu)`.
+    ///
+    /// ```no_run
+    /// # use rune::compose::{Compositor, DeviceKey, Frame};
+    /// # struct Engine;
+    /// # impl Engine {
+    /// #     fn new(_: wgpu::Instance, _: wgpu::Adapter, _: wgpu::Device, _: wgpu::Queue) -> Self { Self }
+    /// # }
+    /// struct Embedded {
+    ///     key: Option<DeviceKey>,
+    ///     engine: Option<Engine>,
+    /// }
+    ///
+    /// impl Compositor<()> for Embedded {
+    ///     fn render(&mut self, f: &mut Frame<'_, ()>) {
+    ///         if self.key != Some(f.device_key())
+    ///             && let (Some(inst), Some(adap)) = (f.instance(), f.adapter())
+    ///         {
+    ///             self.engine = Some(Engine::new(
+    ///                 inst.clone(),
+    ///                 adap.clone(),
+    ///                 f.device.clone(),
+    ///                 f.queue.clone(),
+    ///             ));
+    ///             f.restore_device_callbacks();
+    ///             self.key = Some(f.device_key());
+    ///         }
+    ///         f.draw_ui();
+    ///     }
+    ///
+    ///     fn release_gpu(&mut self) {
+    ///         self.engine = None;
+    ///         self.key = None;
+    ///     }
+    /// }
+    /// ```
+    pub fn instance(&self) -> Option<&wgpu::Instance> {
+        self.ui.gpu_instance()
+    }
+
+    /// The `wgpu::Adapter` that created this frame's device, when the renderer belongs to a Rune
+    /// host.
+    ///
+    /// Returns `Some` across Windows (DX12 wgpu), Linux (Vulkan wgpu), macOS wgpu
+    /// (`GpuBackend::Wgpu`), macOS and iOS native Metal (`GpuBackend::Metal`, wrapped through
+    /// wgpu's custom backend), and browser WebGPU and WebGL2 (`wasm32`). Returns `None` when
+    /// `Frame::ui` is a standalone [`Renderer::new`] or [`Renderer::try_new`] with no attached
+    /// GPU.
+    ///
+    /// On macOS, embedded engines needing depth/stencil, MSAA, render bundles, or indirect draws
+    /// should opt into `App::gpu_backend(GpuBackend::Wgpu)` and
+    /// `prewarm_gpu_on(GpuBackend::Wgpu)`.
+    ///
+    /// ```no_run
+    /// # use rune::compose::Frame;
+    /// # fn inspect<S: 'static>(f: &Frame<'_, S>) -> Option<wgpu::AdapterInfo> {
+    /// f.adapter().map(wgpu::Adapter::get_info)
+    /// # }
+    /// ```
+    pub fn adapter(&self) -> Option<&wgpu::Adapter> {
+        self.ui.gpu_adapter()
+    }
+
+    /// Re-installs Rune's device-lost and uncaptured-error callbacks on `self.device`.
+    ///
+    /// Call this right after initializing an embedded renderer that overwrites wgpu's single-slot
+    /// `Device::set_device_lost_callback` or `Device::on_uncaptured_error` handlers so Rune keeps
+    /// owning window recovery and bounded error logging:
+    ///
+    /// - On native wgpu (Windows DX12, Linux Vulkan, macOS `GpuBackend::Wgpu`): re-registers
+    ///   Rune's device-lost callback against the same `Gpu::is_lost` flag, and re-registers
+    ///   Rune's bounded uncaptured-error logger with the same deduplication state on surface
+    ///   devices (headless devices keep wgpu's validation panic).
+    /// - On macOS/iOS native Metal (`GpuBackend::Metal`): re-registers Rune's device-lost
+    ///   callback against the same `Gpu::is_lost` flag (`on_uncaptured_error` is a no-op on the
+    ///   native Metal backend).
+    /// - On browser WebGPU (`wasm32`): clears any foreign JS `device.onuncapturederror` handler
+    ///   while leaving Rune's `addEventListener('uncapturederror', ...)` and `device.lost.then`
+    ///   watchers intact without adding duplicates.
+    /// - On browser WebGL2 (`wasm32`): re-registers Rune's `console.error` uncaptured-error
+    ///   logger (keeping the same deduplication log) and device-lost callback.
+    /// - On a standalone [`Renderer`] with no attached GPU: no-op.
+    ///
+    /// ```no_run
+    /// # use rune::compose::Frame;
+    /// # fn attach_external<S: 'static>(f: &mut Frame<'_, S>, init_engine: impl FnOnce(&wgpu::Instance, &wgpu::Adapter, &wgpu::Device, &wgpu::Queue)) {
+    /// if let (Some(inst), Some(adap)) = (f.instance(), f.adapter()) {
+    ///     init_engine(inst, adap, f.device, f.queue);
+    ///     f.restore_device_callbacks();
+    /// }
+    /// # }
+    /// ```
+    pub fn restore_device_callbacks(&self) {
+        self.ui.restore_device_callbacks(self.device);
+    }
+
     /// True when the frame is sRGB-blended (`App::srgb_blend`): `target` is a non-sRGB view and
     /// premultiplied colours, in `ui` passes and in layers, are sRGB-encoded. False: linear
     /// premultiplied values, encoded by the `*Srgb` target on write. Build effect pipelines and
@@ -153,3 +261,7 @@ impl<S: 'static> Frame<'_, S> {
 pub fn is_glyph(i: &Instance) -> bool {
     i.kind() == Some(Kind::Glyph)
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "compose_tests.rs"]
+mod tests;

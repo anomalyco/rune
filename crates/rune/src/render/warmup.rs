@@ -170,6 +170,7 @@ impl Renderer {
             uploads,
             fills,
             device_key,
+            gpu_host: None,
             max_texture_dim,
             #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad,
@@ -250,6 +251,7 @@ impl Renderer {
             uploads,
             fills,
             device_key,
+            gpu_host: _,
             max_texture_dim,
             #[cfg(any(target_os = "windows", target_arch = "wasm32"))]
             clear_quad,

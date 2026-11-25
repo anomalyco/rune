@@ -1,6 +1,6 @@
 //! GPU instance, adapter and device creation, prewarming, and allocation reporting.
 
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(all(test, target_os = "macos"))]
 use super::{Renderer, gpu_events};
@@ -11,14 +11,10 @@ pub struct Gpu {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    /// Set by the device's lost callback: a device that went away (a driver reset, a GPU removed,
-    /// Windows' Modern Standby) can't configure a surface, and wgpu drops that error, so nothing
-    /// else would report it. See `is_lost`.
-    pub(super) lost: Arc<AtomicBool>,
+    /// Shared device-lost and uncaptured-error callback state (`gpu_loss`).
+    pub(super) callbacks: super::gpu_loss::GpuCallbacks,
     /// D3D12 removes a device before wgpu hears of it (`Gpu::is_lost`).
     pub(super) removal: rune_gpu::health::Removal,
-    /// Whether Rune's surface uncaptured-error policy has been installed on this device.
-    pub(super) uncaptured_logged: AtomicBool,
 }
 
 /// Latched process-wide once a Linux direct-driver Vulkan instance fails to serve a device or
