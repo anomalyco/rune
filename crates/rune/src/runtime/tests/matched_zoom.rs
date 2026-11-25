@@ -330,3 +330,80 @@ fn unzoomed_matched_flight_matches_baseline_frames() {
         );
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+enum OffsetGateCase {
+    Source,
+    Target,
+    Both,
+    Live,
+    Rematch,
+}
+
+fn record_matched_offset(case: OffsetGateCase) -> crate::motion_gate::Recording {
+    struct App {
+        step: u8,
+        case: OffsetGateCase,
+        src_live: Live<[f32; 2]>,
+        dst_live: Live<[f32; 2]>,
+    }
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let mut root = el().key("root").size(400.0, 300.0);
+        match s.step {
+            0 => {
+                let mut a = el().key("a").matched("t").size(40.0, 40.0).radius(6.0).fill(Color::WHITE);
+                match s.case {
+                    OffsetGateCase::Source | OffsetGateCase::Both | OffsetGateCase::Rematch => a = a.offset(30.0, 20.0),
+                    OffsetGateCase::Live => a = a.live_offset(&s.src_live),
+                    OffsetGateCase::Target => {}
+                }
+                root = root.child(a);
+            }
+            1 => {
+                let mut b = el().key("b").matched("t").size(40.0, 40.0).absolute(200.0, 100.0).radius(6.0).fill(Color::WHITE);
+                match s.case {
+                    OffsetGateCase::Target | OffsetGateCase::Both | OffsetGateCase::Rematch => b = b.offset(-50.0, 40.0),
+                    OffsetGateCase::Live => b = b.live_offset(&s.dst_live),
+                    OffsetGateCase::Source => {}
+                }
+                root = root.child(b);
+            }
+            _ => {
+                let c = el().key("c").matched("t").size(40.0, 40.0).absolute(240.0, 200.0).offset(15.0, -25.0).radius(6.0).fill(Color::WHITE);
+                root = root.child(c);
+            }
+        }
+        root
+    }
+    let state = App {
+        step: 0,
+        case,
+        src_live: Live::new([30.0, 20.0]),
+        dst_live: Live::new([-50.0, 40.0]),
+    };
+    let mut run = crate::motion_gate::Run::new(
+        Runtime::new(state, view, (400.0, 300.0), Env::new(true, 1.0)),
+        120.0,
+    );
+    run.idle(0.3);
+    run.step();
+    run.act("switch", |rt| rt.update(|s, _| s.step = 1));
+    if matches!(case, OffsetGateCase::Rematch) {
+        run.play(0.12);
+        run.act("rematch", |rt| rt.update(|s, _| s.step = 2));
+    }
+    run.play(1.2);
+    run.rec
+}
+
+#[test]
+fn matched_offset_motion_gate() {
+    use OffsetGateCase::*;
+    let cases = [Source, Target, Both, Live, Rematch];
+    crate::motion_gate::gate_rows(
+        cases.into_iter().map(|case| {
+            (format!("matched-offset/{case:?}"), Box::new(move || record_matched_offset(case)) as crate::motion_gate::Job)
+        }).collect(),
+        &[],
+    );
+}

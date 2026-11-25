@@ -71,7 +71,13 @@ impl Scene {
                     let e = self.path_dual(i, path, path.origin);
                     (e.map(|d| d.x), e.map(|d| d.v))
                 }
-                None => self.exact_world(i),
+                None => {
+                    let e = self.laid_dual(i);
+                    let mut off = [D::c(0.0); 2];
+                    self.lanes_dual(i, prop::OFFSET.id, &mut off);
+                    let s: [D; 4] = core::array::from_fn(|k| e[k].add(off[k % 2]));
+                    (s.map(|d| d.x), s.map(|d| d.v))
+                }
             };
             for k in 0..4 {
                 let [offset, speed] = drawn.map(|v| if k % 2 == 0 { v.x } else { v.y });
@@ -89,6 +95,12 @@ impl Scene {
             let trail = self.trail_dual(i);
             po.x += trail.x;
             pv.x += trail.v;
+            let mut off = [D::c(0.0); 2];
+            self.lanes_dual(i, prop::OFFSET.id, &mut off);
+            po.x += off[0].x;
+            po.y += off[1].x;
+            pv.x += off[0].v;
+            pv.y += off[1].v;
             let local = Rect::from_edges(w[0] - po.x, w[1] - po.y, w[2] - po.x, w[3] - po.y);
             let lv = [wv[0] - pv.x, wv[1] - pv.y, wv[2] - pv.x, wv[3] - pv.y];
             self.end_path(i);
@@ -143,6 +155,15 @@ impl Scene {
         (e.map(|d| d.x), e.map(|d| d.v))
     }
 
+    /// Root-space presented edges of node `i` at `now()`, including its own offset and presence
+    /// shift, with velocities, sampled exactly.
+    pub(super) fn exact_shown(&self, i: usize) -> ([f32; 4], [f32; 4]) {
+        let w = self.world_dual(i);
+        let o = self.origin_dual(i);
+        let e = [o[0], o[1], o[0].add(w[2].sub(w[0])), o[1].add(w[3].sub(w[1]))];
+        (e.map(|d| d.x), e.map(|d| d.v))
+    }
+
     /// Trace-only check of presented scene edges against unsnapped analytic tracks at `now`.
     /// Returns (edge samples, maximum device-pixel error). Renderer-owned growth/scroll and
     /// post-layout scale transforms are outside this metric.
@@ -189,20 +210,29 @@ impl Scene {
         self.laid_dual(i)
     }
 
-    /// Where node `i` is on its screen path, ending at its layout under parent origin `origin`.
+    /// Where node `i` is on its screen path, ending at its layout plus own offset under parent
+    /// origin `origin`.
     pub(super) fn path_dual(&self, i: usize, path: Path, origin: Vec2) -> [D; 4] {
         let mut p = [D::c(1.0); 2];
         self.lanes_dual(i, prop::TRAVEL.id, &mut p);
+        let mut off = [D::c(0.0); 2];
+        self.lanes_dual(i, prop::OFFSET.id, &mut off);
         let s = path.start.edges();
         let end = path.end_local.translated(origin).edges();
-        core::array::from_fn(|k| D::c(s[k]).add(D::c(end[k] - s[k]).mul(p[k % 2])))
+        core::array::from_fn(|k| {
+            let e = D::c(end[k]).add(off[k % 2]);
+            D::c(s[k]).add(e.sub(D::c(s[k])).mul(p[k % 2]))
+        })
     }
 
     /// The origin children of `i` ride: layout origin plus offsets (own and presence).
+    /// When `i` is on a screen path, `world_dual` already blends its own offset by travel.
     pub(super) fn origin_dual(&self, i: usize) -> [D; 2] {
         let w = self.world_dual(i);
         let mut off = [D::c(0.0); 2];
-        self.lanes_dual(i, prop::OFFSET.id, &mut off);
+        if self.nodes[i].path.is_none() {
+            self.lanes_dual(i, prop::OFFSET.id, &mut off);
+        }
         let mut p = [D::c(1.0)];
         self.lanes_dual(i, prop::PRESENCE.id, &mut p);
         let n = &self.nodes[i];
