@@ -380,6 +380,8 @@ pub use taskbar::Taskbar;
 pub use taskbar::TaskbarProgress;
 pub use text::FontSmoothing;
 pub use text::Icon;
+pub use text::InlineAlign;
+pub use text::InlineBox;
 pub use text::Link;
 pub use text::LinkPaint;
 pub use text::SmoothingSupport;

@@ -33,6 +33,9 @@ fn line_for_cursor(
     }
     for (li, line) in layout.lines().enumerate() {
         let lr = line.text_range();
+        if lr.start > lr.end {
+            continue;
+        }
         if at < lr.end {
             if at == lr.start
                 && li > 0
@@ -279,14 +282,46 @@ pub fn cursor_from_point(layout: &Layout<Ink>, x: f32, y: f32) -> parley::editin
     let r = line.text_range();
     for item in line.items() {
         if let PositionedLayoutItem::InlineBox(b) = item
-            && b.id & (PILL_BOX | SPAN_BOX) != 0
             && x >= b.x
             && x <= b.x + b.width
             && let Some(ib) = layout.inline_boxes().find(|ib| ib.id == b.id)
         {
-            let aff = if b.id & 1 == 0 { Affinity::Downstream } else { Affinity::Upstream };
-            return Cursor::from_byte_index(layout, ib.index, aff);
+            if b.id & (PILL_BOX | SPAN_BOX) != 0 {
+                let aff = if b.id & 1 == 0 { Affinity::Downstream } else { Affinity::Upstream };
+                return Cursor::from_byte_index(layout, ib.index, aff);
+            }
+            if b.id & INLINE_BOX != 0 {
+                let aff = if r.start <= r.end
+                    && ib.index == r.end
+                    && line.break_reason() != BreakReason::Explicit
+                    && line_ix + 1 < layout.len()
+                {
+                    Affinity::Upstream
+                } else {
+                    Affinity::Downstream
+                };
+                return Cursor::from_byte_index(layout, ib.index, aff);
+            }
         }
+    }
+    // A line holding only inline boxes (no glyph runs) reports `usize::MAX..0`; snap to the
+    // nearest inline box's byte offset so clicks left or right of it stay in bounds.
+    if r.start > r.end {
+        let edge_box = if x <= m.inline_min_coord + m.offset {
+            line.items().find_map(|it| match it {
+                PositionedLayoutItem::InlineBox(b) => Some(b.id),
+                _ => None,
+            })
+        } else {
+            line.items().filter_map(|it| match it {
+                PositionedLayoutItem::InlineBox(b) => Some(b.id),
+                _ => None,
+            }).last()
+        };
+        let idx = edge_box
+            .and_then(|id| layout.inline_boxes().find(|ib| ib.id == id))
+            .map_or(0, |ib| ib.index);
+        return Cursor::from_byte_index(layout, idx, Affinity::Downstream);
     }
     if line_has_mixed_dir(&line, rtl) {
         let clusters = line_clusters(&line);
@@ -358,6 +393,9 @@ pub fn line_edge(layout: &Layout<Ink>, byte: usize, end: bool) -> usize {
         return byte;
     };
     let r = line.text_range();
+    if r.start > r.end {
+        return byte;
+    }
     if !end {
         return r.start;
     }

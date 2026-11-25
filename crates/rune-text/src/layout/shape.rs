@@ -11,8 +11,8 @@ use crate::fonts::fallback::{self, Route};
 use crate::fonts::{language, system_weight};
 use crate::raster::synthetic_bold;
 use crate::{
-    Entry, HIDDEN_SIZE, Ink, Keep, PILL_BOX, PillChip, PillMetrics, SPAN_BOX, Span, SpanBoxRun, TextSystem, Trak, family_list, font_trak, mono_tab_stops,
-    named_list, shape_key,
+    Entry, HIDDEN_SIZE, INLINE_BOX, InlineAlign, InlineBoxRun, Ink, Keep, PILL_BOX, PillChip, PillMetrics, SPAN_BOX, Span, SpanBoxRun, TextSystem, Trak,
+    family_list, font_trak, mono_tab_stops, named_list, shape_key,
 };
 use rune_core::tok::{Family, OpticalSize, TextStyle};
 
@@ -57,6 +57,7 @@ impl TextSystem {
         text_indent: f32,
         pills: &[PillChip],
         span_boxes: &[SpanBoxRun],
+        inline_boxes: &[InlineBoxRun],
         style: TextStyle,
         scale: f32,
         max_width: Option<f32>,
@@ -73,7 +74,12 @@ impl TextSystem {
         // Shaping depends on the text, spans, style, scale, overflow-wrap and pills; line
         // breaking adds the width, alignment, block indents and first-line text_indent. A layout
         // cached at one width or indent is re-broken at another rather than shaped again.
-        let shape_key = shape.unwrap_or_else(|| hash::directed(hash::mix_span_boxes(shape_key(text, spans, style, scale, wrap_anywhere, pills), span_boxes), base));
+        let shape_key = shape.unwrap_or_else(|| {
+            let k = shape_key(text, spans, style, scale, wrap_anywhere, pills);
+            let k = hash::mix_span_boxes(k, span_boxes);
+            let k = hash::mix_inline_boxes(k, inline_boxes);
+            hash::directed(k, base)
+        });
         // Pretty wrapping breaks only wrapped proportional text again.
         let pretty = pretty && max_width.is_some() && !matches!(style.family, Family::Mono | Family::SystemMono);
         let key = hash::break_key(shape_key, max_width, align, has_indented_blocks.then_some(blocks), text_indent) ^ if pretty { 0x7072_6574_7479_0001 } else { 0 };
@@ -212,6 +218,48 @@ impl TextSystem {
         let base_axes = self.primary_axes(style.family, style.weight, style.italic);
         // The strut inline code keeps inside (`inline_fit`).
         let strut = if mono_style || !has_mono_span { None } else { self.primary_extents(style.family, style.weight, style.italic) };
+        let has_text_center = inline_boxes.iter().any(|b| b.slot.alignment() == InlineAlign::TextCenter);
+        let center_extents = if has_text_center {
+            strut
+                .or_else(|| self.primary_extents(style.family, style.weight, style.italic))
+                .unwrap_or((0.95, 0.25))
+        } else {
+            (0.95, 0.25)
+        };
+        let scale_dim = |v: f32| {
+            let p = v * scale;
+            if p.is_finite() { p.clamp(0.0, 1e7) } else { 1e7 }
+        };
+        let placed_boxes: Vec<(usize, usize, f32, f32, parley::VerticalAlign, Option<f32>)> = inline_boxes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, ib)| {
+                let at = ib.at as usize;
+                if at > text.len() || !text.is_char_boundary(at) {
+                    return None;
+                }
+                let w_px = scale_dim(ib.slot.width());
+                let h_px = scale_dim(ib.slot.height());
+                let (vertical_align, baseline) = match ib.slot.alignment() {
+                    InlineAlign::Baseline => (
+                        parley::VerticalAlign::BASELINE,
+                        ib.slot.baseline_offset().map(scale_dim),
+                    ),
+                    InlineAlign::TextCenter => {
+                        let (asc, desc) = center_extents;
+                        let font_px = style.size * scale;
+                        (
+                            parley::VerticalAlign::BASELINE,
+                            Some(((h_px + (asc - desc) * font_px) * 0.5).round()),
+                        )
+                    }
+                    InlineAlign::Middle => (parley::VerticalAlign::MIDDLE, None),
+                    InlineAlign::TextTop => (parley::VerticalAlign::TEXT_TOP, None),
+                    InlineAlign::TextBottom => (parley::VerticalAlign::TEXT_BOTTOM, None),
+                };
+                Some((i, at, w_px, h_px, vertical_align, baseline))
+            })
+            .collect();
         let span_axes: Vec<Rc<[parley::FontVariation]>> = spans
             .iter()
             .map(|s| {
@@ -470,6 +518,18 @@ impl TextSystem {
                         vertical_align: parley::VerticalAlign::BASELINE,
                     });
                 }
+            }
+            // In-flow atomic inline boxes reserve fixed room for child elements (CSS `inline-block`).
+            for &(i, index, width, height, vertical_align, baseline) in &placed_boxes {
+                b.push_inline_box(parley::InlineBox {
+                    id: INLINE_BOX | (i as u64),
+                    kind: parley::InlineBoxKind::InFlow,
+                    index,
+                    width,
+                    height,
+                    baseline,
+                    vertical_align,
+                });
             }
             let mut layout: Layout<Ink> = b.build(text);
             break_lines(&mut layout);

@@ -18,6 +18,7 @@ fn spec<'a>(content: &'a str, text_indent: f32, dir: TextDir, pretty: bool, by_p
         blocks: &[],
         pills: &[],
         span_boxes: &[],
+        inline_boxes: &[],
         text_indent,
         style: body(),
         shape_key: None,

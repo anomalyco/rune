@@ -12,6 +12,7 @@ pub struct TextInput<'a> {
     pub blocks: &'a [Block],
     pub pills: &'a [PillChip],
     pub span_boxes: &'a [SpanBoxRun],
+    pub inline_boxes: &'a [InlineBoxRun],
     pub text_indent: f32,
     pub style: TextStyle,
     pub shape_key: Option<u64>,
@@ -60,6 +61,7 @@ impl TextInput<'_> {
     pub(crate) fn fresh_shape_key(&self, scale: f32) -> u64 {
         let key = crate::shape_key(self.content, self.spans, self.style, scale, self.wrap_anywhere, self.pills);
         let key = crate::mix_span_boxes(key, self.span_boxes);
+        let key = crate::mix_inline_boxes(key, self.inline_boxes);
         crate::directed(key, self.base())
     }
 }
@@ -157,7 +159,22 @@ impl TextSystem {
         max_width: Option<f32>,
         options: RichLayoutOptions,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, &[], 0.0, &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, false, Keep::Cached, options.direction)
+        self.layout_keyed(None, text, spans, &[], 0.0, &[], &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, false, Keep::Cached, options.direction)
+    }
+
+    /// [`layout_rich_with`](Self::layout_rich_with) reserving in-flow [`InlineBoxRun`] slots.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn layout_inline_with(
+        &mut self,
+        text: &str,
+        spans: &[Span],
+        inline_boxes: &[InlineBoxRun],
+        style: TextStyle,
+        scale: f32,
+        max_width: Option<f32>,
+        options: RichLayoutOptions,
+    ) -> Rc<Layout<Ink>> {
+        self.layout_keyed(None, text, spans, &[], 0.0, &[], &[], inline_boxes, style, scale, max_width, options.align, options.wrap_anywhere, false, Keep::Cached, options.direction)
     }
 
     /// [`layout_aligned`](Self::layout_aligned) with per-paragraph [`Block`](crate::Block)
@@ -196,7 +213,7 @@ impl TextSystem {
         wrap_anywhere: bool,
         cache: bool,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, blocks, 0.0, pills, &[], style, scale, max_width, align, wrap_anywhere, false, if cache { Keep::Cached } else { Keep::Secret }, parley::BaseDirection::Auto)
+        self.layout_keyed(None, text, spans, blocks, 0.0, pills, &[], &[], style, scale, max_width, align, wrap_anywhere, false, if cache { Keep::Cached } else { Keep::Secret }, parley::BaseDirection::Auto)
     }
 
     /// Secure display runs must not enter the shared layout cache or leave character
@@ -210,7 +227,7 @@ impl TextSystem {
         max_width: Option<f32>,
         align: Alignment,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(spec.shape_key, spec.content, spec.spans, spec.blocks, spec.text_indent, spec.pills, spec.span_boxes, spec.style, scale, max_width, align, spec.wrap_anywhere, spec.pretty, if spec.redacted { Keep::Secret } else { Keep::Cached }, spec.base())
+        self.layout_keyed(spec.shape_key, spec.content, spec.spans, spec.blocks, spec.text_indent, spec.pills, spec.span_boxes, spec.inline_boxes, spec.style, scale, max_width, align, spec.wrap_anywhere, spec.pretty, if spec.redacted { Keep::Secret } else { Keep::Cached }, spec.base())
     }
 
     /// Like [`Self::layout_for_spec`], keeping the layout only on the caller so live text
@@ -223,7 +240,7 @@ impl TextSystem {
         max_width: Option<f32>,
         align: Alignment,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, spec.content, spec.spans, spec.blocks, spec.text_indent, spec.pills, spec.span_boxes, spec.style, scale, max_width, align, spec.wrap_anywhere, spec.pretty, Keep::Owned, spec.base())
+        self.layout_keyed(None, spec.content, spec.spans, spec.blocks, spec.text_indent, spec.pills, spec.span_boxes, spec.inline_boxes, spec.style, scale, max_width, align, spec.wrap_anywhere, spec.pretty, Keep::Owned, spec.base())
     }
 
     /// [`Self::layout_blocks_inner`] of a cut of `spec`'s content, in its direction.
@@ -239,7 +256,24 @@ impl TextSystem {
         align: Alignment,
         cache: bool,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, spec.blocks, spec.text_indent, &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, if cache { Keep::Cached } else { Keep::Secret }, spec.base())
+        self.layout_cut_inline(spec, text, spans, &[], scale, max_width, align, cache)
+    }
+
+    /// [`Self::layout_cut`] carrying kept [`InlineBoxRun`]s across truncation or line clamping.
+    #[allow(clippy::too_many_arguments)]
+    #[doc(hidden)]
+    pub fn layout_cut_inline(
+        &mut self,
+        spec: &TextInput<'_>,
+        text: &str,
+        spans: &[Span],
+        inline_boxes: &[InlineBoxRun],
+        scale: f32,
+        max_width: Option<f32>,
+        align: Alignment,
+        cache: bool,
+    ) -> Rc<Layout<Ink>> {
+        self.layout_keyed(None, text, spans, spec.blocks, spec.text_indent, &[], &[], inline_boxes, spec.style, scale, max_width, align, spec.wrap_anywhere, false, if cache { Keep::Cached } else { Keep::Secret }, spec.base())
     }
 
     /// Like [`Self::layout_cut`] for live text: reuses the shaping context without inserting
@@ -255,7 +289,7 @@ impl TextSystem {
         max_width: Option<f32>,
         align: Alignment,
     ) -> Rc<Layout<Ink>> {
-        self.layout_keyed(None, text, spans, spec.blocks, spec.text_indent, &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Owned, spec.base())
+        self.layout_keyed(None, text, spans, spec.blocks, spec.text_indent, &[], &[], &[], spec.style, scale, max_width, align, spec.wrap_anywhere, false, Keep::Owned, spec.base())
     }
 }
 
