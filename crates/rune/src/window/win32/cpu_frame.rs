@@ -249,9 +249,7 @@ impl Host {
             redraw: std::cell::Cell::new(Redraw::Idle),
         });
         self.apply_placement(event_loop);
-        crate::marks::mark("window.created");
-        if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
-        if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
+        if !self.announce_created(false) { return Ok(()); }
         if let Some(w) = self.win.as_mut() {
             let size = w.window.inner_size();
             let scale = w.window.scale_factor() as f32;
@@ -263,6 +261,9 @@ impl Host {
             sync_chrome_core(rt, w, self.chrome, self.titlebar);
             sync_screen_origin_core(rt, &w.window);
         }
+        // If `on_window` or `on_window_geometry` already asked to close/quit/minimize at creation,
+        // skip the synchronous first CPU frame so closing from creation draws zero frames.
+        if self.closing_at_creation() { return Ok(()); }
         // The first frame, into the hidden window, then the window with it.
         crate::marks::mark("frame.first.begin");
         self.draw_cpu(false);

@@ -659,7 +659,13 @@ impl Window {
     #[inline]
     pub fn current_monitor(&self) -> Option<MonitorHandle> {
         let data = self.window.wl_surface().data::<SurfaceData>()?;
-        data.outputs().next().map(MonitorHandle::new)
+        // Rune: compositors like Sway may destroy a `wl_output` global without sending
+        // `wl_surface.leave`, leaving a dead output at index 0 of `SurfaceData::outputs`.
+        // Skip removed outputs so `current_monitor` returns `None` or the next live output.
+        let monitors = self.monitors.lock().unwrap();
+        data.outputs()
+            .find(|output| monitors.iter().any(|m| m.proxy == *output))
+            .map(MonitorHandle::new)
     }
 
     #[inline]

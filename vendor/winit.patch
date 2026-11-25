@@ -2591,3 +2591,62 @@ index 7e15d5f24..3cdcecfd3 100644
      // Called by EventProcessor when a VisibilityNotify event is received
      pub(crate) fn visibility_notify(&self) {
          let mut shared_state = self.shared_state_lock();
+diff --git a/src/platform_impl/linux/wayland/state.rs b/src/platform_impl/linux/wayland/state.rs
+index 8b1ccc364..942b78512 100644
+--- a/src/platform_impl/linux/wayland/state.rs
++++ b/src/platform_impl/linux/wayland/state.rs
+@@ -338,6 +338,8 @@ impl OutputHandler for WinitState {
+ 
+     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: WlOutput) {
+         self.monitors.lock().unwrap().push(MonitorHandle::new(output));
++        // Rune: wake `AboutToWait` in case `wl_surface.enter` arrived before `wl_output.done`.
++        self.dispatched_events = true;
+     }
+ 
+     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, updated: WlOutput) {
+@@ -355,6 +357,8 @@ impl OutputHandler for WinitState {
+         let removed = MonitorHandle::new(removed);
+         if let Some(pos) = monitors.iter().position(|output| output == &removed) {
+             monitors.remove(pos);
++            // Rune: wake `AboutToWait` even when the compositor sent no `wl_surface.leave`.
++            self.dispatched_events = true;
+         }
+     }
+ }
+@@ -377,6 +381,8 @@ impl CompositorHandler for WinitState {
+         _: &WlSurface,
+         _: &WlOutput,
+     ) {
++        // Rune: wake `AboutToWait` so output-presence hooks see entry at scale 1 without resize.
++        self.dispatched_events = true;
+     }
+ 
+     fn surface_leave(
+@@ -386,6 +392,8 @@ impl CompositorHandler for WinitState {
+         _: &WlSurface,
+         _: &WlOutput,
+     ) {
++        // Rune: wake `AboutToWait` so output-presence hooks see leave without resize.
++        self.dispatched_events = true;
+     }
+ 
+     fn scale_factor_changed(
+diff --git a/src/platform_impl/linux/wayland/window/mod.rs b/src/platform_impl/linux/wayland/window/mod.rs
+index d37580a1d..91583669e 100644
+--- a/src/platform_impl/linux/wayland/window/mod.rs
++++ b/src/platform_impl/linux/wayland/window/mod.rs
+@@ -659,7 +659,13 @@ impl Window {
+     #[inline]
+     pub fn current_monitor(&self) -> Option<MonitorHandle> {
+         let data = self.window.wl_surface().data::<SurfaceData>()?;
+-        data.outputs().next().map(MonitorHandle::new)
++        // Rune: compositors like Sway may destroy a `wl_output` global without sending
++        // `wl_surface.leave`, leaving a dead output at index 0 of `SurfaceData::outputs`.
++        // Skip removed outputs so `current_monitor` returns `None` or the next live output.
++        let monitors = self.monitors.lock().unwrap();
++        data.outputs()
++            .find(|output| monitors.iter().any(|m| m.proxy == *output))
++            .map(MonitorHandle::new)
+     }
+ 
+     #[inline]

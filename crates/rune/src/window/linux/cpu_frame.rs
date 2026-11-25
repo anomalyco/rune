@@ -216,9 +216,7 @@ impl Host {
         });
         self.sync_window_backdrop(false);
         self.apply_placement(event_loop);
-        crate::marks::mark("window.created");
-        if let Some(created) = self.on_created.take() { created(self.native_handle.clone()); }
-        if let Some(on_window) = self.on_window.as_mut() { on_window(&self.native_handle); }
+        if !self.announce_created(false) { return Ok(()); }
         if let Some(w) = self.win.as_mut() {
             let size = w.window.inner_size();
             let scale = w.window.scale_factor() as f32;
