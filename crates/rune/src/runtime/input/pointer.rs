@@ -42,12 +42,17 @@ impl RuntimeCore {
             }
             return;
         };
-        let (path, d, at, button, is_drag) = (held.path.clone(), held.drag, held.at, held.button, held.drag_handler.is_some());
+        let (path, d, at, button, is_drag, is_touch) = (held.path.clone(), held.drag, held.at, held.button, held.drag_handler.is_some(), held.touch);
         if held.drag_out.is_some_and(|threshold| crate::drag_out::past_threshold(at, (x, y), threshold)) && self.start_drag_out(app, path.clone()) {
             return;
         }
+        let past_slop = if is_touch {
+            (x - at.0).hypot(y - at.1) > touch_machine::TOUCH_SLOP
+        } else {
+            !press_run::within_slop(at, (x, y))
+        };
         if let Some(held) = self.pointer.press.held_mut() {
-            held.moved |= !press_run::within_slop(at, (x, y));
+            held.moved |= past_slop;
         }
         self.selection_drag(x, y);
         self.edge_scroll_moved(y);
@@ -89,6 +94,7 @@ impl RuntimeCore {
         let queued = self.frame.queue.len();
         let capture_inside = self.pointer.press_inside();
         let prev_link = self.hovered_link();
+        let prev_link_pressed = self.pointer.press_held().is_some_and(|h| h.link.is_some() && !h.moved && h.inside());
         let prev_sel = self.selection_drag_snapshot();
         let prev_edge = self.edit.selectable.edge.running();
         let prev_autoscroll = self.pointer.autoscroll_armed();
@@ -98,6 +104,7 @@ impl RuntimeCore {
             || self.pointer.drag_out_request.is_some()
             || self.host.titlebar.action.is_some()
             || self.hovered_link() != prev_link
+            || self.pointer.press_held().is_some_and(|h| h.link.is_some() && !h.moved && h.inside()) != prev_link_pressed
             || self.selection_drag_snapshot() != prev_sel
             || (!prev_edge && self.edit.selectable.edge.running())
             || (!prev_autoscroll && self.pointer.autoscroll_armed())
@@ -351,7 +358,7 @@ impl RuntimeCore {
             }
             return;
         };
-        let link = self.link_at(ti, x, y);
+        let link = self.link_at(ti, x, y).filter(|_| !self.edit.selectable.phase.dragging());
         let on_link = link.is_some();
         // Any press breaks a pending pair unless it's the second press of it.
         let pending = self.pointer.press.take_first();
@@ -376,7 +383,7 @@ impl RuntimeCore {
             first.path == n.path && press_run::follows(first.at, first.point, now, (x, y), self.double_click_interval)
         });
         if let Some(ji) = self.textbox_input(ti) {
-            self.input_down(ji, (x, y), now, second, link.filter(|_| ji == ti), ji == ti);
+            self.input_down(ji, (x, y), now, second, link.filter(|_| ji == ti), ji == ti, touch);
             return;
         }
         self.try_capture_pointer_lock(ti, x, y, touch);
@@ -550,7 +557,7 @@ impl RuntimeCore {
                 && inside
                 && !moved
                 && let Some(k) = link
-                && self.live_index(&path).is_some_and(|i| !self.input_drag_selects(i, at, (x, y)))
+                && (held.touch || self.live_index(&path).is_some_and(|i| !self.input_drag_selects(i, at, (x, y))))
             {
                 self.link_up(&path, k, x, y, button);
             }
@@ -574,10 +581,9 @@ impl RuntimeCore {
             let [lx, ly] = self.to_local(i, x, y);
             self.frame.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, button));
         }
-        // A press that travelled past `CLICK_SLOP` is a drag, not a click on the link. A finger
-        // is still tapping within `TOUCH_SLOP`, as the touch machine counts it.
-        let tap = !moved || (held.touch && (x - at.0).hypot(y - at.1) <= super::touch_machine::TOUCH_SLOP);
-        if let Some(k) = link.filter(|_| inside && tap) { self.link_up(&path, k, x, y, button); }
+        // A press that travelled past `CLICK_SLOP` (mouse) or `TOUCH_SLOP` (touch) latched
+        // `moved = true` in `move_pointer`: even if it returns before release, it is a drag.
+        if let Some(k) = link.filter(|_| inside && !moved) { self.link_up(&path, k, x, y, button); }
         let press = has_press && inside && !selected && !pressed_on_down && !(has_drag && moved);
         let middle = middle_press && inside;
         let click = !moved && now - down_at <= interval;
