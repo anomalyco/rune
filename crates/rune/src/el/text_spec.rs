@@ -25,8 +25,6 @@ pub struct TextSpec {
     /// Streaming word reveal: words that arrive after mount fade in over this many seconds
     /// (negative: no reveal tracking).
     pub reveal: f32,
-    /// The `truncate_fade` edge's width in ems (see [`El::truncate_fade_width`](crate::El::truncate_fade_width)).
-    pub(crate) fade_em: f32,
     pub align: Align,
     /// `color` came from [`El::color`](crate::El::color); without it the text takes the
     /// window's foreground ([`Cx::foreground`](crate::Cx::foreground)) when the view sets one.
@@ -126,6 +124,8 @@ pub(crate) struct TextCold {
     pub(crate) text_indent: f32,
     /// Vertical alignment of laid-out text inside a taller content box; see [`El::align_y`](crate::El::align_y).
     pub(crate) align_y: Align,
+    /// The `truncate_fade` edge's width in ems (see [`El::truncate_fade_width`](crate::El::truncate_fade_width)).
+    pub(crate) fade_em: f32,
     /// Strikethrough byte ranges `(start, end, color)` of `content`.
     pub(crate) strikes: Vec<(u32, u32, Option<Color>)>,
     /// Overline byte ranges `(start, end, color)` of `content`.
@@ -175,6 +175,7 @@ impl Empty for TextCold {
         span_radius: crate::text::SPAN_RADIUS,
         text_indent: 0.0,
         align_y: Align::Start,
+        fade_em: crate::el::TRUNCATE_FADE_EM,
         strikes: Vec::new(),
         overlines: Vec::new(),
         span_boxes: Vec::new(),
@@ -192,6 +193,7 @@ impl Empty for TextCold {
     };
 }
 
+// Every text carries one of these: a field few texts set goes in `TextCold`, not here.
 #[cfg(target_pointer_width = "64")]
 const _: () = assert!(std::mem::size_of::<TextSpec>() == 224);
 
@@ -208,7 +210,6 @@ impl TextSpec {
             source: None,
             cold: Cold::NONE,
             reveal: -1.0,
-            fade_em: crate::el::TRUNCATE_FADE_EM,
             align: Align::Start,
             inked: false,
             wrap: false,

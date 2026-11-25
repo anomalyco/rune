@@ -698,7 +698,11 @@ impl El {
         self.one_line(|t| {
             t.truncate = false;
             t.truncate_fade = true;
-            t.fade_em = em.max(0.0);
+            // The usual width is the cold block's own: only another one writes (and allocates) it.
+            let em = em.max(0.0);
+            if t.cold.fade_em != em {
+                t.cold.fade_em = em;
+            }
         })
     }
     /// Streaming word reveal (see [`TextSpec::reveal`]).
