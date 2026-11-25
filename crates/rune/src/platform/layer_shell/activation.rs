@@ -40,6 +40,6 @@ pub(super) fn request(conn: &Connection, globals: &GlobalList, surface: &WlSurfa
     }
     token.destroy();
     activation.destroy();
-    let _ = queue.flush();
+    queue.flush().ok();
     answer.0
 }

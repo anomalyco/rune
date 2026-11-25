@@ -2,6 +2,7 @@
 //! presents on it, for an app that guards its launches against a GPU driver that crashes.
 
 use std::sync::OnceLock;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// What `on_gpu`'s hook hears.
@@ -19,6 +20,7 @@ type Hook = Box<dyn Fn(GpuEvent) + Send + Sync>;
 
 static HOOK: OnceLock<Hook> = OnceLock::new();
 /// A device was made and nothing has presented on it yet.
+#[cfg(not(target_arch = "wasm32"))]
 static WAITING: AtomicBool = AtomicBool::new(false);
 
 /// Calls `f` on the thread that makes a GPU device (`GpuEvent::Starting`) and on the thread that
@@ -30,12 +32,14 @@ pub fn on_gpu(f: impl Fn(GpuEvent) + Send + Sync + 'static) {
     HOOK.set(Box::new(f)).ok();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn starting() {
     WAITING.store(true, Ordering::Release);
     if let Some(hook) = HOOK.get() { hook(GpuEvent::Starting); }
 }
 
 /// After every present; reports only the first after a `starting`.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn presented() {
     if WAITING.load(Ordering::Relaxed) && WAITING.swap(false, Ordering::AcqRel) && let Some(hook) = HOOK.get() {
         hook(GpuEvent::Drew);

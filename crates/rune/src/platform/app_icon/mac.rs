@@ -99,7 +99,7 @@ fn observer() -> Option<*mut AnyObject> {
 /// can be `NSNull` while AppKit rebuilds.
 extern "C" fn changed(_: &AnyObject, _: Sel, _key: *mut AnyObject, _object: *mut AnyObject, _change: *mut AnyObject, _context: *mut c_void) {
     // A panic must not unwind into AppKit.
-    let _ = std::panic::catch_unwind(|| {
+    drop(std::panic::catch_unwind(|| {
         if MainThreadMarker::new().is_some() { apply() } else { crate::platform::main_queue::on_main(apply) }
-    });
+    }));
 }

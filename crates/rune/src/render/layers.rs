@@ -114,6 +114,7 @@ impl Layers {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn clear_images(&mut self) {
         for t in self.targets.iter_mut().flatten().chain(&mut self.retained).chain(&mut self.spare) {
             t.images.clear();
@@ -299,6 +300,7 @@ impl Renderer {
     /// textures of caches on screen, which the last frame's instances name instead of their
     /// contents, and takes the ones it drops out of `resident`, so their next frame paints them.
     /// What no submission still uses is freed here; the rest when the device next polls.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn give_back(&mut self, all: bool, resident: &mut std::collections::HashMap<u64, u64>, images: &ImageAtlas) {
         for t in self.layers.retained.drain(..) {
             if let Some((node, _)) = t.cache { resident.remove(&node); }
@@ -328,11 +330,13 @@ impl Renderer {
 
     /// Frees the staging chunks kept for reuse (`window::rest`, out of sight only: the next
     /// frame's uploads would make new ones).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn trim_uploads(&self) {
         self.uploads.trim();
     }
 
     /// Whether any recyclable oversized (> 4 MiB) upload chunks are in flight on the GPU.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn has_oversized_uploads_in_flight(&self) -> bool {
         self.uploads.has_oversized_in_flight()
     }

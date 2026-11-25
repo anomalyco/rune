@@ -206,6 +206,7 @@ impl SharedCore {
     fn request_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Take)); }
     fn release_keys(&self) { self.request(|q| q.keys = Some(KeyRequest::Release)); }
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(target_arch = "wasm32"))]
     fn activation_token(&self, reply: requests::TokenReply) { self.request(|q| q.tokens.push(reply)); }
     fn window_number(&self) -> Option<u32> { self.native.lock().unwrap().0 }
     fn capture_exclusion(&self) -> OverlaySupport { self.capabilities().capture_exclusion }
