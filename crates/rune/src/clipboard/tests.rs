@@ -586,3 +586,40 @@ fn copy_image_then_reports_outcomes_and_worker_encodes_off_calling_thread() {
     }
     no_cb.stop();
 }
+
+/// Internal `ClipboardWrite::pixels` copies both raw `Pixels::set` frames and mip-backed
+/// `Image::pixels()` handles off the event thread, and reports `NotReady` for empty `Pixels`.
+#[test]
+fn clipboard_write_pixels_copies_raw_and_mip_backed_pixels_and_reports_empty_as_not_ready() {
+    let m = memory();
+    let px = crate::Pixels::new();
+    let (tx0, rx0) = mpsc::channel();
+    let mut empty_w = ClipboardWrite::pixels(px.clone());
+    empty_w.attach_copy_reply(CopyReply { id: 1, sender: tx0, wake: Arc::new(|| {}) });
+    m.handle(Request::Write(empty_w, None));
+    assert!(matches!(rx0.try_recv().unwrap(), Reply::CopyImage { id: 1, result: Err(CopyImageError::NotReady) }));
+    assert_eq!(m.revision(), 0, "empty Pixels must not touch clipboard");
+
+    let raw = vec![12, 34, 56, 255, 78, 90, 12, 128];
+    px.set(2, 1, raw.clone());
+    let (tx1, rx1) = mpsc::channel();
+    let mut raw_w = ClipboardWrite::pixels(px);
+    raw_w.attach_copy_reply(CopyReply { id: 2, sender: tx1, wake: Arc::new(|| {}) });
+    m.handle(Request::Write(raw_w, None));
+    assert!(matches!(rx1.try_recv().unwrap(), Reply::CopyImage { id: 2, result: Ok(()) }));
+    let copied = m.content().unwrap().image().cloned().unwrap();
+    assert_eq!(copied.size(), (2, 1));
+    assert_eq!(crate::image::png_rgba8(copied.png()).unwrap().into_raw(), raw);
+
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let mip_rgba = vec![200, 100, 50, 255, 10, 20, 30, 255];
+    let img = cache.rgba(2, 1, mip_rgba.clone());
+    img.wait().unwrap();
+    let mut mip_w = ClipboardWrite::pixels(img.pixels().clone());
+    let (tx2, rx2) = mpsc::channel();
+    mip_w.attach_copy_reply(CopyReply { id: 3, sender: tx2, wake: Arc::new(|| {}) });
+    m.handle(Request::Write(mip_w, None));
+    assert!(matches!(rx2.try_recv().unwrap(), Reply::CopyImage { id: 3, result: Ok(()) }));
+    let copied2 = m.content().unwrap().image().cloned().unwrap();
+    assert_eq!(crate::image::png_rgba8(copied2.png()).unwrap().into_raw(), mip_rgba);
+}
