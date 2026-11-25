@@ -941,3 +941,22 @@ third para";
     }
 }
 
+
+#[test]
+fn a_selectable_texts_link_shows_the_hand_unless_link_cursor_names_another_shape() {
+    use crate::Cursor;
+    fn view(plain: &bool, _: &mut Cx<bool>) -> El {
+        let t = text("read the docs before you start").key("words").selectable(true).link(Link::new(9..13, "docs"));
+        col().size(300.0, 100.0).child(if *plain { t.link_cursor(Cursor::Default) } else { t })
+    }
+    for (plain, over_link) in [(false, Cursor::Pointer), (true, Cursor::Default)] {
+        let mut rt = Runtime::new(plain, view, (300.0, 100.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let (x, y) = rt.find("docs").expect("the link is laid out");
+        rt.pointer_move(x, y);
+        assert_eq!(rt.cursor(), over_link, "over the link, link_cursor set: {plain}");
+        // Beside the link (inside "read", before it) the text is still selectable text.
+        rt.pointer_move(x - 40.0, y);
+        assert_eq!(rt.cursor(), Cursor::Text, "beside the link, link_cursor set: {plain}");
+    }
+}

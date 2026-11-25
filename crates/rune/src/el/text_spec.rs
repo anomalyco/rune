@@ -89,6 +89,8 @@ pub(crate) struct TextCold {
     pub(crate) links: Vec<Link>,
     pub(crate) on_link: Option<LinkFn>,
     pub(crate) on_link_secondary: Option<LinkSecondaryFn>,
+    /// See [`El::link_cursor`](crate::El::link_cursor).
+    pub(crate) link_cursor: Option<crate::el::Cursor>,
     /// Measured as its slice at this byte of the run (see [`El::advance_in`](crate::El::advance_in)).
     pub(crate) advance_in: Option<(crate::text::Run, usize)>,
     /// See [`El::selection_color`](crate::El::selection_color).
@@ -140,6 +142,7 @@ impl Empty for TextCold {
         links: Vec::new(),
         on_link: None,
         on_link_secondary: None,
+        link_cursor: None,
         advance_in: None,
         selection: crate::el::DEFAULT_SELECTION,
         selection_style: None,

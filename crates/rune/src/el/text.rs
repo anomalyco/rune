@@ -721,6 +721,17 @@ impl El {
         }
         self
     }
+    /// The pointer's shape over this text's links while the text is [`El::selectable`]: the hand
+    /// unless this names another, such as [`Cursor::Default`] for a link that reads as plain text.
+    /// Selectable text keeps the I-beam for itself, so [`El::cursor`] can't say this. Text that
+    /// isn't selectable shows its own [`El::cursor`] over its links ([`El::link`] makes that the
+    /// hand when it has none), and a text field's links keep the hand.
+    pub fn link_cursor(mut self, cursor: Cursor) -> Self {
+        if let Some(t) = &mut self.text {
+            t.cold.link_cursor = Some(cursor);
+        }
+        self
+    }
     /// Called with a [`Link`]'s id when it is clicked, or pressed with Enter or Space while
     /// focused. Read [`Tx::link_rect`] inside the handler for the activated link's first drawn
     /// line box `[left, top, width, height]` in window points (for anchoring a popover or preview

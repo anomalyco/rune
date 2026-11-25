@@ -624,7 +624,8 @@ impl RuntimeCore {
             return if self.input_pointer_cursor(i, x, y) { crate::el::Cursor::Pointer } else { crate::el::Cursor::Text };
         }
         if self.is_selectable(i) && !self.edit.selectable.phase.dragging() && self.link_at(i, x, y).is_some() {
-            return crate::el::Cursor::Pointer;
+            // The hand, unless the text names another shape for its links (`El::link_cursor`).
+            return self.tree.nodes[i].text.as_ref().and_then(|t| t.cold.link_cursor).unwrap_or(crate::el::Cursor::Pointer);
         }
         if self.tree.nodes[i].handlers.cursor.is_none()
             && let Some(edge) = self.bare_resize_edge(i)
