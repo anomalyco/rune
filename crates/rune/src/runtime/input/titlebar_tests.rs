@@ -570,3 +570,326 @@ fn full_screen_requests_latch_and_last_call_wins() {
     crate::runtime::input::action::merge(&mut merged, override_tx);
     assert_eq!(merged.full_screen, Some(FullScreenRequest::Toggle));
 }
+
+#[test]
+fn deferred_titlebar_press_machine_holds_until_threshold_and_arms_double_click() {
+    use super::{DRAG_THRESHOLD, Event, Pair, Request, TitlebarPress, step};
+    use crate::runtime::TitlebarAction;
+
+    let collect = |state: &mut TitlebarPress, event: Event| -> Vec<Request> {
+        step(state, event).into_iter().collect()
+    };
+
+    // 1. Press in deferred mode enters Holding with no action; motion inside threshold stays Holding.
+    let mut state = TitlebarPress::Rest;
+    let origin = (100.0, 20.0);
+    assert!(collect(&mut state, Event::Region { now: 1.0, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert_eq!(state, TitlebarPress::Holding(Pair { at: 1.0, point: origin }));
+    for delta in [(0.0, 0.0), (7.9, 0.0), (-7.9, 7.9), (0.0, -7.9)] {
+        let point = (origin.0 + delta.0, origin.1 + delta.1);
+        assert!(collect(&mut state, Event::Move { point }).is_empty(), "inside threshold: {delta:?}");
+        assert_eq!(state, TitlebarPress::Holding(Pair { at: 1.0, point: origin }));
+    }
+
+    // 2. Motion reaching DRAG_THRESHOLD (8 pt) on any axis emits Drag once and keeps Pair armed
+    //    (Chromium's WindowEventFilterLinux rule: double-click is judged by press time & distance).
+    for delta in [(DRAG_THRESHOLD, 0.0), (-DRAG_THRESHOLD, 0.0), (0.0, DRAG_THRESHOLD), (0.0, -DRAG_THRESHOLD)] {
+        let mut s = TitlebarPress::Rest;
+        assert!(collect(&mut s, Event::Region { now: 1.0, point: origin, interval: 0.3, defer: true }).is_empty());
+        let moved = (origin.0 + delta.0, origin.1 + delta.1);
+        assert_eq!(collect(&mut s, Event::Move { point: moved }), vec![Request::Action(TitlebarAction::Drag)], "at threshold: {delta:?}");
+        assert_eq!(s, TitlebarPress::Armed(Pair { at: 1.0, point: origin }));
+        // Further motion and release emit nothing.
+        assert!(collect(&mut s, Event::Move { point: (moved.0 + 20.0, moved.1) }).is_empty());
+        assert!(collect(&mut s, Event::Release).is_empty());
+        // A second press after double_click_interval (a real drag) starts a new Holding.
+        assert!(collect(&mut s, Event::Region { now: 1.5, point: origin, interval: 0.3, defer: true }).is_empty());
+        assert_eq!(s, TitlebarPress::Holding(Pair { at: 1.5, point: origin }));
+    }
+    // Slow-hand double-click: first press crosses threshold (Drag), second press within interval
+    // and CLICK_SLOP still emits DoubleClick.
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 1.0, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert_eq!(
+        collect(&mut state, Event::Move { point: (origin.0 + DRAG_THRESHOLD, origin.1) }),
+        vec![Request::Action(TitlebarAction::Drag)],
+    );
+    assert!(collect(&mut state, Event::Leave).is_empty());
+    assert_eq!(
+        collect(&mut state, Event::Region { now: 1.15, point: origin, interval: 0.3, defer: true }),
+        vec![Request::Action(TitlebarAction::DoubleClick)],
+    );
+    assert_eq!(state, TitlebarPress::Rest);
+
+    // 3. Press -> release -> press (no motion): zero Drag, DoubleClick on second press.
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 1.8, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert!(collect(&mut state, Event::Release).is_empty());
+    assert_eq!(state, TitlebarPress::Armed(Pair { at: 1.8, point: origin }));
+    assert_eq!(
+        collect(&mut state, Event::Region { now: 1.9, point: origin, interval: 0.3, defer: true }),
+        vec![Request::Action(TitlebarAction::DoubleClick)],
+    );
+    assert_eq!(state, TitlebarPress::Rest);
+
+    // 4. Press -> small motion inside threshold -> release -> press: zero Drag, DoubleClick.
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 2.0, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert!(collect(&mut state, Event::Move { point: (origin.0 + 2.0, origin.1 - 1.0) }).is_empty());
+    assert!(collect(&mut state, Event::Release).is_empty());
+    assert_eq!(state, TitlebarPress::Armed(Pair { at: 2.0, point: origin }));
+    assert_eq!(
+        collect(&mut state, Event::Region { now: 2.2, point: (origin.0 + 3.0, origin.1), interval: 0.3, defer: true }),
+        vec![Request::Action(TitlebarAction::DoubleClick)],
+    );
+    assert_eq!(state, TitlebarPress::Rest);
+    // Motion after DoubleClick does not start a drag.
+    assert!(collect(&mut state, Event::Move { point: (origin.0 + 40.0, origin.1) }).is_empty());
+
+    // 5. Second press outside double-click interval starts a new Holding instead of DoubleClick.
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 3.0, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert!(collect(&mut state, Event::Release).is_empty());
+    assert!(collect(&mut state, Event::Region { now: 3.4, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert_eq!(state, TitlebarPress::Holding(Pair { at: 3.4, point: origin }));
+
+    // 6. Second press outside CLICK_SLOP (4 pt) starts a new Holding instead of DoubleClick.
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 4.0, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert!(collect(&mut state, Event::Release).is_empty());
+    let far = (origin.0 + 5.0, origin.1);
+    assert!(collect(&mut state, Event::Region { now: 4.1, point: far, interval: 0.3, defer: true }).is_empty());
+    assert_eq!(state, TitlebarPress::Holding(Pair { at: 4.1, point: far }));
+
+    // 7. Press -> leave -> enter (move) -> press with NO release in between:
+    //    leave ends the held drag wait (so motion after re-enter never fires Drag) while keeping
+    //    the pair armed so the second press within interval and slop emits DoubleClick.
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 6.0, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert!(collect(&mut state, Event::Leave).is_empty());
+    assert_eq!(state, TitlebarPress::Armed(Pair { at: 6.0, point: origin }));
+    assert!(collect(&mut state, Event::Move { point: (origin.0 + 30.0, origin.1) }).is_empty(), "leave ended drag wait");
+    assert_eq!(
+        collect(&mut state, Event::Region { now: 6.15, point: origin, interval: 0.3, defer: true }),
+        vec![Request::Action(TitlebarAction::DoubleClick)],
+    );
+    assert_eq!(state, TitlebarPress::Rest);
+    // Leave while already Armed preserves the armed pair too.
+    assert!(collect(&mut state, Event::Region { now: 6.5, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert!(collect(&mut state, Event::Release).is_empty());
+    assert!(collect(&mut state, Event::Leave).is_empty());
+    assert_eq!(state, TitlebarPress::Armed(Pair { at: 6.5, point: origin }));
+
+    // 8. Clear, SecondaryDown, Resize, and OtherPress each cancel Holding.
+    for cancel_event in [
+        Event::Clear,
+        Event::SecondaryDown { region: false },
+        Event::OtherPress,
+        Event::Empty { now: 7.05, point: origin, interval: 0.3, band: false },
+    ] {
+        let mut s = TitlebarPress::Rest;
+        assert!(collect(&mut s, Event::Region { now: 7.0, point: origin, interval: 0.3, defer: true }).is_empty());
+        assert!(collect(&mut s, cancel_event).is_empty());
+        assert_eq!(s, TitlebarPress::Rest);
+        assert!(collect(&mut s, Event::Move { point: (origin.0 + 30.0, origin.1) }).is_empty());
+    }
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 7.5, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert!(collect(&mut state, Event::SecondaryDown { region: true }).is_empty());
+    assert_eq!(state, TitlebarPress::SecondaryOnRegion(None));
+    assert!(collect(&mut state, Event::Move { point: (origin.0 + 30.0, origin.1) }).is_empty());
+    state = TitlebarPress::Rest;
+    assert!(collect(&mut state, Event::Region { now: 8.0, point: origin, interval: 0.3, defer: true }).is_empty());
+    assert_eq!(
+        collect(&mut state, Event::Resize { edge: crate::ResizeEdge::North }),
+        vec![Request::Resize(crate::ResizeEdge::North)],
+    );
+    assert_eq!(state, TitlebarPress::Rest);
+
+    // 9. Immediate mode (macOS / Windows) still emits Drag on press and DoubleClick on second press.
+    state = TitlebarPress::Rest;
+    assert_eq!(
+        collect(&mut state, Event::Region { now: 9.0, point: origin, interval: 0.3, defer: false }),
+        vec![Request::Action(TitlebarAction::Drag)],
+    );
+    assert_eq!(state, TitlebarPress::Armed(Pair { at: 9.0, point: origin }));
+    assert_eq!(
+        collect(&mut state, Event::Region { now: 9.1, point: origin, interval: 0.3, defer: false }),
+        vec![Request::Action(TitlebarAction::DoubleClick)],
+    );
+    assert_eq!(state, TitlebarPress::Rest);
+}
+
+#[test]
+fn deferred_window_drag_runtime_double_click_drag_leave_cancel_and_invariants() {
+    use crate::el::{col, el, row};
+    use crate::runtime::{Runtime, TitlebarAction};
+    use crate::{Cx, El, Env};
+
+    #[derive(Default)]
+    struct State {
+        button_clicks: u32,
+        custom_doubles: u32,
+    }
+
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        col().size(400.0, 200.0).child(
+            row().key("bar").size(400.0, 40.0).window_drag()
+                .child(el().key("btn").size(40.0, 40.0).on_press(|s: &mut State| s.button_clicks += 1))
+                .child(
+                    el().key("custom").size(80.0, 40.0).window_drag()
+                        .on_double_press(|s: &mut State| s.custom_doubles += 1),
+                ),
+        )
+    }
+
+    // Platform default check: Linux/desktop Unix defers mouse drag; macOS and Windows stay immediate.
+    let expected_default = cfg!(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")));
+    assert_eq!(super::DEFER_MOUSE_DRAG, expected_default);
+
+    // 1. Deferred mode (Linux): stationary double-click on bare .window_drag() emits DoubleClick with zero Drag.
+    let mut rt = Runtime::new(State::default(), view, (400.0, 200.0), Env::new(true, 1.0));
+    rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+    rt.double_click_interval = 0.3;
+    rt.host.titlebar.defer_drag_override = Some(true);
+    rt.frame(0.0);
+
+    rt.pointer_move(250.0, 20.0);
+    rt.pointer_down(250.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None, "deferred press must not start move at once");
+    rt.pointer_move(253.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None, "drift inside 8 pt threshold stays a click");
+    rt.pointer_up(253.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+
+    rt.frame.test_clock_mut().unwrap().seek(0.15);
+    rt.pointer_down(252.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick));
+    rt.pointer_move(280.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None, "moving after DoubleClick must not also emit Drag");
+    rt.pointer_up(280.0, 20.0);
+
+    // 2. Deferred mode drag: crossing 8 pt emits Drag once and observe_pointer reports a redraw.
+    rt.frame.test_clock_mut().unwrap().seek(1.0);
+    rt.pointer_move(250.0, 20.0);
+    rt.pointer_down(250.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert!(!rt.observe_pointer(257.0, 20.0), "still inside 8 pt threshold");
+    assert_eq!(rt.take_titlebar_action(), None);
+    assert!(rt.observe_pointer(258.0, 20.0), "crossing 8 pt threshold must wake host to take Drag");
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    rt.pointer_move(280.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None, "Drag is emitted once");
+    rt.pointer_up(280.0, 20.0);
+
+    // 3. Press -> leave -> enter -> press with NO release in between (compositor grab trace):
+    //    leave ends the drag wait (so re-entering and moving does not drag), while keeping the
+    //    armed pair so a second press within double-click time and slop emits DoubleClick.
+    rt.frame.test_clock_mut().unwrap().seek(2.0);
+    rt.pointer_move(250.0, 20.0);
+    rt.pointer_down(250.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.pointer_leave();
+    rt.pointer_move(280.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None, "leave while holding cancels pending drag");
+    rt.frame.test_clock_mut().unwrap().seek(2.15);
+    rt.pointer_move(250.0, 20.0);
+    rt.pointer_down(250.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick), "press -> leave -> enter -> press double-clicks");
+    rt.pointer_up(250.0, 20.0);
+
+    // 3b. Press -> release -> press (zero motion) emits zero Drag and DoubleClick on second press.
+    rt.frame.test_clock_mut().unwrap().seek(2.5);
+    rt.pointer_move(250.0, 20.0);
+    rt.pointer_down(250.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.pointer_up(250.0, 20.0);
+    rt.frame.test_clock_mut().unwrap().seek(2.6);
+    rt.pointer_down(250.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick));
+    rt.pointer_up(250.0, 20.0);
+
+    // 3c. Slow-hand drag past 8 pt followed quickly by a second press at the same local point
+    //     still double-clicks (Chromium's WindowEventFilterLinux rule); a later press after the
+    //     double-click interval does not.
+    rt.frame.test_clock_mut().unwrap().seek(4.0);
+    rt.pointer_move(250.0, 20.0);
+    rt.pointer_down(250.0, 20.0);
+    rt.pointer_move(258.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    rt.pointer_leave();
+    rt.frame.test_clock_mut().unwrap().seek(4.15);
+    rt.pointer_move(250.0, 20.0);
+    rt.pointer_down(250.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick));
+    rt.pointer_up(250.0, 20.0);
+
+    // 4. Cancel (focus loss) between clicks cancels armed double-click.
+    rt.frame.test_clock_mut().unwrap().seek(5.0);
+    rt.pointer_move(250.0, 20.0);
+    rt.pointer_down(250.0, 20.0);
+    rt.pointer_up(250.0, 20.0);
+    rt.cancel_pointer();
+    rt.frame.test_clock_mut().unwrap().seek(5.1);
+    rt.pointer_down(250.0, 20.0);
+    assert_eq!(rt.take_titlebar_action(), None, "cancel clears armed double-click");
+    rt.pointer_up(250.0, 20.0);
+
+    // 5. Titlebar buttons and .window_drag() regions with their own on_double_press stay unchanged
+    //    in both deferred (Linux) and immediate (macOS/Windows) modes.
+    for defer in [true, false] {
+        let mut rt = Runtime::new(State::default(), view, (400.0, 200.0), Env::new(true, 1.0));
+        rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+        rt.double_click_interval = 0.3;
+        rt.host.titlebar.defer_drag_override = Some(defer);
+        rt.frame(0.0);
+
+        // Button inside titlebar.
+        rt.pointer_move(20.0, 20.0);
+        rt.pointer_down(20.0, 20.0);
+        assert_eq!(rt.take_titlebar_action(), None);
+        rt.pointer_up(20.0, 20.0);
+        rt.frame(0.016);
+        assert_eq!(rt.state.button_clicks, 1, "defer={defer}: titlebar button clicks");
+
+        // .window_drag() region with its own on_double_press handler.
+        rt.pointer_move(80.0, 20.0);
+        rt.pointer_down(80.0, 20.0);
+        assert_eq!(rt.take_titlebar_action(), None);
+        rt.pointer_up(80.0, 20.0);
+        rt.frame.test_clock_mut().unwrap().seek(0.1);
+        rt.pointer_down(80.0, 20.0);
+        assert_eq!(rt.take_titlebar_action(), None);
+        rt.pointer_up(80.0, 20.0);
+        rt.frame(0.116);
+        assert_eq!(rt.state.custom_doubles, 1, "defer={defer}: custom on_double_press fires");
+
+        // Touch on bare .window_drag() keeps its own WindowDragPending / TOUCH_SLOP / long-press path.
+        use crate::runtime::TouchPhase;
+        rt.frame.test_clock_mut().unwrap().seek(1.0);
+        rt.touch(1, TouchPhase::Started, 250.0, 20.0, 1.0);
+        assert_eq!(rt.take_titlebar_action(), None);
+        rt.touch(1, TouchPhase::Ended, 250.0, 20.0, 1.05);
+        rt.frame.test_clock_mut().unwrap().seek(1.15);
+        rt.touch(2, TouchPhase::Started, 250.0, 20.0, 1.15);
+        assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick), "defer={defer}: touch double-tap");
+        rt.touch(2, TouchPhase::Ended, 250.0, 20.0, 1.2);
+
+        rt.frame.test_clock_mut().unwrap().seek(2.0);
+        rt.touch(3, TouchPhase::Started, 250.0, 20.0, 2.0);
+        rt.touch(3, TouchPhase::Moved, 260.0, 20.0, 2.02);
+        assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag), "defer={defer}: touch drag");
+        rt.touch(3, TouchPhase::Ended, 260.0, 20.0, 2.05);
+    }
+
+    // 6. Windows caption hit-test remains HTCAPTION for bare drag regions and HTCLIENT for buttons.
+    #[cfg(target_os = "windows")]
+    {
+        let mut rt = Runtime::new(State::default(), view, (400.0, 200.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let hits = rt.core().window_drag_hits();
+        assert!(super::drag_hit_at(&hits, 250.0, 20.0), "bare drag region stays HTCAPTION on Windows");
+        assert!(!super::drag_hit_at(&hits, 20.0, 20.0), "titlebar button stays HTCLIENT on Windows");
+        assert!(!super::drag_hit_at(&hits, 80.0, 20.0), "custom on_double_press region stays HTCLIENT on Windows");
+    }
+}
