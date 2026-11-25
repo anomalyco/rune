@@ -1,5 +1,6 @@
 use super::*;
 use crate::{Key, KeyEvent, Mods};
+use rune_motion::{Curve, Easing};
 
 const DT: f64 = 1.0 / 120.0;
 
