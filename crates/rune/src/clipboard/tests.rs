@@ -263,6 +263,78 @@ fn windows_pack_dibv5_writes_bottom_up_bgra_with_v5_header() {
     assert!(native::pack_dibv5(2, 2, &[0; 4]).is_none());
 }
 
+/// A slow image encode must never overwrite newer clipboard content written either by another app
+/// (OS revision advanced during encode) or by a newer in-app write (generation superseded), while
+/// consecutive in-app writes that snapshotted the same initial revision still both land in order.
+#[test]
+fn late_image_encode_never_overwrites_newer_external_or_in_app_clipboard_write() {
+    #[derive(Clone, Default)]
+    struct SharedBoard(Arc<Mutex<Board>>);
+    impl Backend for SharedBoard {
+        fn write(&mut self, copy: &ClipboardWrite) -> Result<(), String> { lock(&self.0).write(copy) }
+        fn text(&mut self) -> Option<Zeroizing<String>> { lock(&self.0).text() }
+        fn content(&mut self, all: bool) -> Option<ClipboardContent> { lock(&self.0).content(all) }
+        fn revision(&self) -> Option<u64> { lock(&self.0).revision() }
+        fn clear(&mut self) -> Result<(), String> { lock(&self.0).clear() }
+    }
+    struct Hook<F: Fn()>(F);
+    impl<F: Fn()> WriteSteps for Hook<F> {
+        fn now(&self) -> Instant { crate::time::now() }
+        fn encoding(&self) { (self.0)(); }
+    }
+
+    let cache = crate::ImageCache::new(Arc::new(|| {}));
+    let image = cache.rgba(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]);
+    image.wait().unwrap();
+
+    // Case 1: External app writes while image is encoding -> OS revision advances -> image write aborted.
+    let mut board = SharedBoard::default();
+    let mut core = Core::default();
+    let latest = Arc::new(AtomicU64::new(1));
+    let mut img_write = ClipboardWrite::image(image.clone());
+    img_write.stamp(1, latest.clone(), board.revision());
+    let board_clone = board.clone();
+    let steps = Hook(move || {
+        let mut b = lock(&board_clone.0);
+        b.content = Some(ClipboardContent::new("copied from browser"));
+        b.revision += 1;
+    });
+    core.write(&mut board, img_write, None, &steps);
+    assert_eq!(board.text().as_deref().map(String::as_str), Some("copied from browser"), "external write preserved");
+    assert!(board.content(true).unwrap().image().is_none(), "late image must not overwrite external write");
+
+    // Case 2: Newer in-app write is queued while image is encoding -> generation superseded -> image aborted.
+    let mut board2 = SharedBoard::default();
+    let mut core2 = Core::default();
+    let latest2 = Arc::new(AtomicU64::new(1));
+    let mut img_write2 = ClipboardWrite::image(image.clone());
+    img_write2.stamp(1, latest2.clone(), board2.revision());
+    let latest2_bump = latest2.clone();
+    let steps2 = Hook(move || { latest2_bump.store(2, Ordering::Release); });
+    core2.write(&mut board2, img_write2, None, &steps2);
+    assert!(board2.content(true).is_none(), "superseded image must not write");
+    let mut newer_text = ClipboardWrite::new(ClipboardContent::new("newer in-app text"));
+    newer_text.stamp(2, latest2, Some(0));
+    core2.write(&mut board2, newer_text, None, &RealTime);
+    assert_eq!(board2.text().as_deref().map(String::as_str), Some("newer in-app text"));
+
+    // Case 3: Consecutive in-app writes that snapshotted the same initial OS revision still land.
+    let mut board3 = SharedBoard::default();
+    let mut core3 = Core::default();
+    let latest3 = Arc::new(AtomicU64::new(1));
+    let mut first = ClipboardWrite::new(ClipboardContent::new("first"));
+    first.stamp(1, latest3.clone(), Some(0));
+    core3.write(&mut board3, first, None, &RealTime);
+    assert_eq!(board3.revision(), Some(1));
+    // Second write was stamped before `first` finished (so revision_before == Some(0)), but its
+    // generation is current and rev 1 is `last_own_revision` (our own write, not another app's).
+    latest3.store(2, Ordering::Release);
+    let mut second = ClipboardWrite::new(ClipboardContent::new("second"));
+    second.stamp(2, latest3, Some(0));
+    core3.write(&mut board3, second, None, &RealTime);
+    assert_eq!(board3.text().as_deref().map(String::as_str), Some("second"));
+}
+
 /// A plain paste leaves an empty clipboard alone; a read always answers.
 #[test]
 fn the_worker_answers_reads_with_sanitised_content() {
