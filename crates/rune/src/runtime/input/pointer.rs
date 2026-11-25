@@ -574,7 +574,10 @@ impl RuntimeCore {
             let [lx, ly] = self.to_local(i, x, y);
             self.frame.queue.push(Action::Drag(path.clone(), Drag { phase: Phase::Up, x: lx, y: ly, dx, dy, window: [x, y], screen: self.screen_at(x, y), ..d }, button));
         }
-        if let Some(k) = link.filter(|_| inside) { self.link_up(&path, k, x, y, button); }
+        // A press that travelled past `CLICK_SLOP` is a drag, not a click on the link. A finger
+        // is still tapping within `TOUCH_SLOP`, as the touch machine counts it.
+        let tap = !moved || (held.touch && (x - at.0).hypot(y - at.1) <= super::touch_machine::TOUCH_SLOP);
+        if let Some(k) = link.filter(|_| inside && tap) { self.link_up(&path, k, x, y, button); }
         let press = has_press && inside && !selected && !pressed_on_down && !(has_drag && moved);
         let middle = middle_press && inside;
         let click = !moved && now - down_at <= interval;
