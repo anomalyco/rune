@@ -87,7 +87,7 @@ mod paint_probe;
 mod pick;
 mod playground;
 mod scroll;
-mod selection;
+pub(crate) mod selection;
 mod system_settings;
 mod text_fill;
 mod turn;
