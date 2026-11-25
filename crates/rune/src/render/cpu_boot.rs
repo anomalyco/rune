@@ -191,6 +191,7 @@ impl<'a> Scene<'a> {
     /// assert_eq!(scene.needs_gpu(), Some(NeedsGpu::LayerBlur));
     /// assert!(painter.paint(&scene.degraded(true), &mut Target::new(&mut buf, 32, 32)).is_ok());
     /// ```
+    #[doc(hidden)]
     pub fn degraded(mut self, allow: bool) -> Self {
         self.degraded = allow;
         self
@@ -303,6 +304,7 @@ impl NeedsGpu {
     /// assert!(NeedsGpu::TurnedLayer.is_degradable());
     /// assert!(!NeedsGpu::SlugText.is_degradable());
     /// ```
+    #[doc(hidden)]
     pub const fn is_degradable(self) -> bool {
         matches!(
             self,

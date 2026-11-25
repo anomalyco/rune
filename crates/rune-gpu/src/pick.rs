@@ -415,8 +415,10 @@ fn by_display(displays: &[(u32, u32)], adapters: &[(wgpu::AdapterInfo, bool)]) -
 }
 
 /// PCI vendor ID of Microsoft's WARP software rasterizer (`Microsoft Basic Render Driver`).
+#[doc(hidden)]
 pub const WARP_VENDOR_ID: u32 = 0x1414;
 /// PCI device ID of Microsoft's WARP software rasterizer (`Microsoft Basic Render Driver`).
+#[doc(hidden)]
 pub const WARP_DEVICE_ID: u32 = 0x008C;
 
 /// Whether a DXGI adapter description (`vendor_id`, `device_id`, `software_flag`) represents a
@@ -424,12 +426,13 @@ pub const WARP_DEVICE_ID: u32 = 0x008C;
 ///
 /// Excludes both adapters marked with `DXGI_ADAPTER_FLAG_SOFTWARE` and headless non-software
 /// WARP entries (`0x1414:0x008C`) that Windows exposes on headless / RDP sessions.
-pub const fn is_hardware_dxgi_adapter(vendor_id: u32, device_id: u32, software_flag: bool) -> bool {
+pub(crate) const fn is_hardware_dxgi_adapter(vendor_id: u32, device_id: u32, software_flag: bool) -> bool {
     !software_flag && !(vendor_id == WARP_VENDOR_ID && device_id == WARP_DEVICE_ID)
 }
 
 /// Whether a slice of DXGI adapter descriptors `(vendor_id, device_id, software_flag)` contains
 /// at least one hardware adapter.
+#[doc(hidden)]
 pub fn has_hardware_dxgi_in(adapters: &[(u32, u32, bool)]) -> bool {
     adapters
         .iter()
@@ -443,6 +446,7 @@ pub fn has_hardware_dxgi_in(adapters: &[(u32, u32, bool)]) -> bool {
 /// `0x1414:0x008C`), `Some(false)` if only software adapters exist, or `None` if DXGI factory
 /// creation fails. Makes no D3D12 device and loads no driver.
 #[cfg(target_os = "windows")]
+#[doc(hidden)]
 pub fn dxgi_has_hardware_adapter() -> Option<bool> {
     dxgi::has_hardware_adapter()
 }
