@@ -1,0 +1,1 @@
+- **`rune-dev` runs on Python 3.11 and 3.12.** It matched `--patch` globs and workspace members with `PurePosixPath.full_match`, which needs Python 3.13, so it crashed with `AttributeError` on the first edit; it now falls back to an equivalent glob regex.
