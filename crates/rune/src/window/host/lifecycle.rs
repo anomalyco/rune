@@ -1106,5 +1106,6 @@ impl Host {
                 renderer.trim_uploads();
             }
         }
+        crate::window::rest::maybe_trim_heap();
     }
 }

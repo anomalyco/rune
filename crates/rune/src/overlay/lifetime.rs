@@ -325,6 +325,7 @@ impl OverlayCore {
                 renderer.trim_uploads();
             }
         }
+        crate::window::rest::maybe_trim_heap();
     }
 
     /// Input stops, and the native window hides over `fade`. A fading window stays up while

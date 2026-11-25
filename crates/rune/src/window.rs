@@ -104,6 +104,9 @@ pub(crate) use keys::{consumed_mods, key_base, map_key_event, map_mods, platform
 pub(crate) use keys::web_key_base_str;
 pub(crate) use state::frame;
 #[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub use state::heap_trim::test_support as heap_trim_test;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use state::rest;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use state::{Rest, RestEffect, RestEvent};

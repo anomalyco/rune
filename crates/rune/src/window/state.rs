@@ -4,6 +4,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub(in crate::window) mod first_frame;
 pub(crate) mod frame;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod heap_trim;
 pub(in crate::window) mod life;
 pub(in crate::window) mod minimize;
 #[cfg(not(target_arch = "wasm32"))]
@@ -35,6 +37,9 @@ pub(in crate::window) use wake::{WakeFacts, WakeWork};
 #[cfg(test)]
 #[path = "state/covered_tests.rs"]
 mod covered_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "state/heap_trim_tests.rs"]
+mod heap_trim_tests;
 #[cfg(test)]
 #[path = "state/wake_tests.rs"]
 mod wake_tests;

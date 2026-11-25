@@ -185,6 +185,40 @@ impl<S: 'static> crate::App<S> {
         self.runtime.on_popup_menu = Some(f);
         self
     }
+
+    /// Controls whether Rune calls glibc's `malloc_trim(0)` once off the UI thread after a
+    /// window or overlay finishes resting on Linux (`target_env = "gnu"`).
+    ///
+    /// Enabled by default (`true`). At rest, Rune releases unused text layouts, glyph runs,
+    /// images, dormant scene slots, and GPU caches; on Linux with glibc, fragmented free arena
+    /// chunks remain resident in `VmRSS` until `malloc_trim(0)` runs. Rune runs it once per
+    /// rest on its shared task pool, coalesced across windows and overlays with a 30 s cooldown,
+    /// never on a periodic idle timer.
+    ///
+    /// While `malloc_trim(0)` runs off the UI thread after rest, glibc locks each arena in turn
+    /// while trimming it: on very large freed heaps (~387 MiB), another thread allocating in that
+    /// same arena can wait ~14 ms (longer than one 120 Hz frame at 8.3 ms). Apps with allocating
+    /// real-time threads can opt out with `.trim_heap_at_rest(false)` or `RUNE_MALLOC_TRIM=0`.
+    /// (Rune's own `AudioOutput` worker thread allocates nothing while playing.)
+    ///
+    /// At runtime Rune probes once whether Rust's global allocator is backed by glibc `malloc`;
+    /// binaries using a custom `#[global_allocator]` (such as mimalloc or jemalloc) or an
+    /// `LD_PRELOAD` allocator skip the trim automatically. Ignored on macOS, Windows, musl,
+    /// Android, iOS, and `wasm32`.
+    ///
+    /// ```
+    /// use rune::{App, AppSpec, el};
+    ///
+    /// let _app = App::new(AppSpec::new("Audio", (640.0, 480.0), || (), |_, _| el()))
+    ///     .trim_heap_at_rest(false);
+    /// ```
+    pub fn trim_heap_at_rest(self, enabled: bool) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::window::rest::set_heap_trim_enabled(enabled);
+        #[cfg(target_arch = "wasm32")]
+        let _ = enabled;
+        self
+    }
 }
 
 #[cfg(test)]

@@ -294,6 +294,12 @@ name = "add_font"
 name = "emoji_family"
 
 [[test]]
+name = "heap_trim_custom_alloc"
+
+[[test]]
+name = "heap_trim_guards"
+
+[[test]]
 name = "installed_families"
 
 [[test]]

@@ -484,6 +484,9 @@ pub use window::display_queue::DisplayQueueWatch;
 pub use window::display_queue::watch_display_queue;
 pub use window::displays::displays;
 pub use window::geometry::WindowGeometry;
+#[cfg(not(target_arch = "wasm32"))]
+#[doc(hidden)]
+pub use window::heap_trim_test as __heap_trim;
 pub use window::spec as windows;
 pub use window::wm_state::DecorationMode;
 pub use window::wm_state::TiledEdges;
