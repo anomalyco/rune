@@ -368,6 +368,7 @@ fn rtl_blocks_and_pills_preserve_existing_deferral_limits() {
 
 #[test]
 fn layout_text_and_fill_paragraphs_ignore_prev_from_older_shaped_epoch() {
+    let _guard = crate::with_families("Inter", "IBM Plex Mono");
     let style = TextStyle::new(14.0, 400.0);
     let scale = 2.0;
     let max_w = Some(600.0 * scale);

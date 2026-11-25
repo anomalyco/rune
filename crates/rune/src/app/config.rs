@@ -193,6 +193,7 @@ mod tests {
 
     #[test]
     fn headless_runtime_applies_every_runtime_config_field() {
+        let _guard = crate::text::with_families("Inter", "ui-monospace");
         let mut rt = configured_app().headless_runtime((200.0, 120.0), Env::default());
         assert!(rt.hooks.on_focus.is_some());
         assert!(rt.hooks.on_mods.is_some());
