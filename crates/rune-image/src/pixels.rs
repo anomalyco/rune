@@ -653,9 +653,7 @@ impl ImageAtlas {
             if !self.slots.values().any(|slot| slot.page == i) {
                 (page.shelf_x, page.shelf_y, page.shelf_h) = (0, 0, 0);
                 page.dirty = None;
-                if page.width > IMAGE_ATLAS_SIZE || page.height > IMAGE_ATLAS_SIZE {
-                    page.data = Vec::new();
-                }
+                page.data = Vec::new();
             }
         }
         let keep = self.slots.values().map(|s| s.page + 1).max().unwrap_or(0);
@@ -693,7 +691,11 @@ impl ImageAtlas {
 
     /// Marks every row for upload (a new texture).
     pub fn invalidate(&mut self) {
-        for page in &mut self.pages { page.dirty = Some((0, page.height)); }
+        for page in &mut self.pages {
+            if !page.data.is_empty() {
+                page.dirty = Some((0, page.height));
+            }
+        }
     }
 
     fn allocate(&mut self, w: u32, h: u32) -> (usize, u32, u32) {

@@ -293,6 +293,89 @@ fn clear_for_park_drops_image_textures_and_reuploads_cleanly() {
 }
 
 #[test]
+fn gpu_empty_middle_shelf_page_drops_texture_on_upload() {
+    use crate::pixels::ImageAtlas;
+    use crate::render::{Gpu, Instance, KIND_IMAGE, NO_CLIP, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    use crate::text::Atlas;
+
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut images = ImageAtlas::default();
+
+    let p0: Vec<Pixels> = (0..4)
+        .map(|_| {
+            let p = Pixels::new();
+            p.set(512, 512, [10, 20, 30, 255].repeat(512 * 512));
+            p
+        })
+        .collect();
+    let p1: Vec<Pixels> = (0..4)
+        .map(|_| {
+            let p = Pixels::new();
+            p.set(512, 512, [40, 50, 60, 255].repeat(512 * 512));
+            p
+        })
+        .collect();
+    let p2 = Pixels::new();
+    p2.set(64, 64, [200, 100, 50, 255].repeat(64 * 64));
+
+    for p in &p0 {
+        images.place(p, [512.0; 2]).unwrap();
+    }
+    for p in &p1 {
+        assert_eq!(images.place(p, [512.0; 2]).unwrap().page, 1);
+    }
+    let p2_placed = images.place(&p2, [64.0; 2]).unwrap();
+    assert_eq!(p2_placed.page, 2);
+    images.end_frame();
+
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    assert_eq!(renderer.images.len(), 3);
+    assert!(renderer.images.iter().all(Option::is_some), "all three pages have GPU textures");
+
+    // Next frame draws only page 2: page 1 frees its CPU buffer and upload_images drops its GPU texture.
+    assert_eq!(images.place(&p2, [64.0; 2]), Some(p2_placed));
+    images.end_frame();
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    assert_eq!(renderer.images.len(), 3);
+    assert!(renderer.images[0].is_some(), "page 0 texture stays cached");
+    assert!(renderer.images[1].is_none(), "empty middle shelf page must drop its GPU texture");
+    assert!(renderer.images[2].is_some(), "active page 2 texture stays live");
+
+    // Reusing page 1 recreates a smaller GPU texture and draws cleanly.
+    let reused = Pixels::new();
+    reused.set(16, 16, [255, 0, 128, 255].repeat(16 * 16));
+    let reused_placed = images.place(&reused, [16.0; 2]).unwrap();
+    assert_eq!(reused_placed.page, 1);
+    images.end_frame();
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    let (tex, _) = renderer.images[1].as_ref().expect("reused page 1 recreated GPU texture");
+    assert_eq!((tex.width(), tex.height()), (1024, 128));
+
+    let inst = Instance {
+        rect: [0.0, 0.0, 4.0, 4.0],
+        radii: [0.0; 4],
+        fill: [0.0, 0.0, 0.0, 1.0],
+        border: [0.0; 4],
+        params: [reused_placed.page as f32, KIND_IMAGE, 0.0, 1.0],
+        uv: reused_placed.rect.map(|v| v as f32),
+        clip: NO_CLIP,
+        fade: [0; 4],
+    };
+    let mut atlas = Atlas::new();
+    renderer.prepare(&gpu.device, &gpu.queue, &mut atlas, std::slice::from_ref(&inst), (4, 4));
+    let target = Offscreen::new(&gpu.device, 4, 4);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, [0.0; 4]);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let out = target.read(&gpu.device);
+    for (got, want) in out[..4].iter().zip([255u8, 0, 128, 255]) {
+        assert!(got.abs_diff(want) <= 1, "reused page pixel {got} != {want}");
+    }
+}
+
+#[test]
 fn gpu_sub_texel_image_crop_samples_own_texel_not_atlas_neighbour() {
     use crate::pixels::ImageAtlas;
     use crate::render::{
