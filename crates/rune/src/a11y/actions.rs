@@ -62,7 +62,7 @@ impl RuntimeCore {
         let path = n.path.clone();
         let link = sub_link(sub);
         let handlers = n.handlers.get();
-        let enabled = !n.a11y.disabled;
+        let enabled = !self.node_disabled(i);
         let pressable = enabled && handlers.is_some_and(|h| h.on_press.is_some());
         let secondary = enabled && handlers.is_some_and(|h| h.on_secondary_press.is_some());
         let read_only = self.is_node_read_only(i);

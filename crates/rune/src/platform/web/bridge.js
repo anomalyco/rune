@@ -989,8 +989,11 @@ function runs(h, el, item) {
         const a = document.createElement('a');
         a.textContent = run.t;
         if (run.d) a.setAttribute('aria-description', run.d);
-        a.style.cssText = `color:transparent;text-decoration:none;pointer-events:${h.page ? 'auto' : 'none'};`;
-        if (webLink(href)) {
+        a.style.cssText = `color:transparent;text-decoration:none;pointer-events:${h.page && !item.dis ? 'auto' : 'none'};`;
+        if (item.dis) {
+            a.setAttribute('role', 'link');
+            a.setAttribute('aria-disabled', 'true');
+        } else if (webLink(href)) {
             a.href = href;
             a.target = '_blank';
             a.rel = 'noopener noreferrer';
@@ -1178,15 +1181,17 @@ function applyA11yItem(h, el, item, tag, origin) {
     } else if (item.k === 'button') {
         if (el.getAttribute('aria-label') !== null) el.removeAttribute('aria-label');
     } else if (item.k === 'link') {
-        const href = safeHref(item.h);
+        const href = item.dis ? null : safeHref(item.h);
         if (href) {
             el.href = href;
+            if (el.getAttribute('role') === 'link') el.removeAttribute('role');
             if (!h.page && webLink(href)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
             else { el.removeAttribute('target'); el.removeAttribute('rel'); }
         } else {
             el.removeAttribute('href');
             el.removeAttribute('target');
             el.removeAttribute('rel');
+            if (item.dis && el.getAttribute('role') !== 'link') el.setAttribute('role', 'link');
         }
     }
     if (item.k === 'scroll_x') {
@@ -1209,7 +1214,7 @@ function applyA11yItem(h, el, item, tag, origin) {
     const container = item.k === 'group' || item.k === 'scroll_x';
     const noContent = container || item.k === 'image' || item.k === 'progressbar';
     const content = combobox ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
-    const sig = noContent ? '' : item.u?.length ? JSON.stringify(item.u) : content;
+    const sig = noContent ? '' : item.u?.length ? `${item.dis ? '1' : '0'}:${JSON.stringify(item.u)}` : content;
     if (!noContent && el._sig !== sig) {
         el._sig = sig;
         if (item.u?.length) {

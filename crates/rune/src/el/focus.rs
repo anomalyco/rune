@@ -12,6 +12,9 @@ pub(crate) struct FocusSpec {
     pub enabled: bool,
     /// `focusable(false)`: not a Tab stop even where [`crate::Cx::web_focus`] would make it one.
     pub opt_out: bool,
+    /// `El::disabled(true)`: hard-disabled for focus regardless of builder order (unlike
+    /// `El::aria_disabled`, which leaves focusability untouched).
+    pub disabled: bool,
     /// [`crate::El::keyboard_focus_only`]: Tab, modals and assistive tech can focus it, not pointer clicks.
     pub keyboard_only: bool,
     /// [`crate::El::autofocus`].
@@ -70,6 +73,7 @@ impl crate::cold::Empty for FocusSpec {
         physical: None,
         enabled: false,
         opt_out: false,
+        disabled: false,
         keyboard_only: false,
         autofocus: false,
         order: 0,
@@ -181,8 +185,8 @@ impl El {
         // Recorded even on a bare element: under `Cx::web_focus` it keeps a pressable control
         // out of the Tab order.
         let focus = &mut self.cold_mut().focus;
-        focus.enabled = enabled;
-        focus.opt_out = !enabled;
+        focus.enabled = enabled && !focus.disabled;
+        focus.opt_out = !enabled || focus.disabled;
         self
     }
     /// Reachable via Tab, modal initial focus, [`Tx::focus`](crate::Tx::focus) and assistive
@@ -418,8 +422,11 @@ impl El {
     /// The element becomes focusable, and its role `slider` unless it has another. Home and End
     /// go to the ends with [`El::on_step_limit`].
     pub fn on_step<S: 'static>(mut self, f: impl Fn(&mut S, i32, &mut Tx) + 'static) -> Self {
-        self.cold_mut().focus.step = Some(Rc::new(move |s, delta, tx| f(downcast::<S>(s), delta, tx)));
-        self.cold_mut().focus.enabled = true;
+        let focus = &mut self.cold_mut().focus;
+        focus.step = Some(Rc::new(move |s, delta, tx| f(downcast::<S>(s), delta, tx)));
+        if !focus.opt_out && !focus.disabled {
+            focus.enabled = true;
+        }
         if self.role == RoleTag::GROUP {
             self.role = RoleTag::SLIDER;
         }

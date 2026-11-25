@@ -714,9 +714,8 @@ impl El {
     pub fn link(mut self, link: Link) -> Self {
         if let Some(t) = &mut self.text {
             t.cold.links.push(link);
-            self.cold_mut().focus.enabled = true;
-            if self.handlers.cursor.is_none() {
-                self.handlers.cursor = Some(Cursor::Pointer);
+            if !self.cold.focus.opt_out && !self.cold.focus.disabled {
+                self.cold_mut().focus.enabled = true;
             }
         }
         self
@@ -806,7 +805,7 @@ impl El {
         if let Some(t) = &mut self.text {
             if self.cold.input.is_some() || t.redacted { return self; }
             t.selectable = on;
-            if on && (self.handlers.cursor.is_none() || (!t.cold.links.is_empty() && self.handlers.cursor == Some(Cursor::Pointer))) {
+            if on && self.handlers.cursor.is_none() {
                 self.handlers.cursor = Some(Cursor::Text);
             }
         }

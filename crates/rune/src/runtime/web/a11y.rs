@@ -771,7 +771,8 @@ impl RuntimeCore {
                 let selectable = spec.selectable || selects.get(i).copied().unwrap_or(false);
                 if !runs.is_empty() || is_live_text {
                     let is_heading = n.role == "heading";
-                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy;
+                    let text_disabled = self.node_disabled(i);
+                    let plain_text = !is_heading && !is_live_text && text_aria.is_none() && !busy && !text_disabled;
                     // Flowed word-by-word paragraphs (`pr_chips::flow`) put sibling words (or 1-word
                     // wrapper rows) inside one flex-wrap line row: merge consecutive inline text runs
                     // sharing that flow container so screen readers and Find-in-page see whole sentences.
@@ -823,6 +824,7 @@ impl RuntimeCore {
                     item.level = is_heading.then(|| n.a11y.level.unwrap_or(2).clamp(1, 6));
                     item.role = if is_heading { None } else { live_role.or(text_aria) };
                     item.live = live;
+                    item.disabled = text_disabled;
                     item.busy = busy;
                     item.text = plain;
                     item.runs = rich_runs;
@@ -1139,6 +1141,7 @@ impl RuntimeCore {
             if let Some(d) = link_description(link.help.as_deref(), &name) {
                 o.insert("d".into(), json!(d));
             }
+            if self.node_disabled(i) || n.inert { o.insert("dis".into(), json!(true)); }
             return Value::Object(o);
         }
         let role = self.a11y_role(i);
@@ -1200,7 +1203,7 @@ impl RuntimeCore {
             Some("a11y_link") => {
                 let Some(k) = event["link"].as_u64().and_then(|n| usize::try_from(n).ok()) else { return false };
                 let Some(i) = self.live(path) else { return false };
-                if self.tree.nodes[i].a11y.disabled || !self.allowed(i) || self.tree.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
+                if self.node_disabled(i) || !self.allowed(i) || self.tree.nodes[i].text.as_ref().is_none_or(|t| k >= t.cold.links.len()) { return false; }
                 self.frame.queue.push(Action::Link(path.to_owned(), k, crate::PointerButton::Primary));
                 true
             }

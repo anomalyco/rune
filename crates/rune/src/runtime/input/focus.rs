@@ -34,10 +34,10 @@ fn node_visible(nodes: &[Node], i: usize) -> bool {
 }
 
 /// Whether any ancestor of node `i` in `nodes` is hard-disabled (`El::disabled`, which sets
-/// both `a11y.disabled` and `focus.opt_out`; `El::aria_disabled` leaves `focus.opt_out` false).
+/// `focus.disabled`; `El::aria_disabled` leaves `focus.disabled` false).
 pub(super) fn ancestor_disabled(nodes: &[Node], i: usize) -> bool {
     std::iter::successors(nodes[i].parent, |&p| nodes[p].parent)
-        .any(|p| nodes[p].a11y.disabled && nodes[p].focus.opt_out)
+        .any(|p| nodes[p].focus.disabled)
 }
 
 /// Whether node `i` in `nodes` has a non-zero laid-out box.
@@ -249,7 +249,8 @@ impl RuntimeCore {
     }
     /// `El::focusable`, or under `Cx::web_focus` a pressable control that didn't opt out.
     pub(crate) fn takes_focus(&self, n: &Node) -> bool {
-        n.focus.enabled || (self.commit.defaults.web_focus && !n.focus.opt_out && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
+        if n.focus.disabled || n.focus.opt_out { return false; }
+        n.focus.enabled || (self.commit.defaults.web_focus && n.handlers.on_press.is_some() && PRESSABLE_ROLES.contains(&n.role))
     }
     /// Whether node `i` in `nodes` can take keyboard focus itself or is an editable text field
     /// that has not opted out (`El::disabled`, `El::focusable(false)`) and is not inside a
@@ -257,8 +258,8 @@ impl RuntimeCore {
     fn can_take_focus_in(&self, nodes: &[Node], i: usize) -> bool {
         if ancestor_disabled(nodes, i) { return false; }
         let n = &nodes[i];
-        self.takes_focus(n)
-            || (!n.focus.opt_out && n.input.as_ref().is_some_and(|s| s.access.is_some()))
+        if n.focus.disabled || n.focus.opt_out { return false; }
+        self.takes_focus(n) || n.input.as_ref().is_some_and(|s| s.access.is_some())
     }
     pub(crate) fn can_focus(&self, i: usize) -> bool {
         self.can_take_focus_in(&self.tree.nodes, i) && self.reachable(i)
@@ -954,7 +955,7 @@ impl RuntimeCore {
         if ev.mods.shift && !matches!(&ev.key, Key::Text(t) if !t.trim().is_empty()) { return false; }
         // A slider's keys come before its group's arrows. On a text field (a spin button),
         // Left and Right stay with the caret.
-        if let Some(step) = self.tree.nodes[i].focus.step.clone() {
+        if !self.node_disabled(i) && let Some(step) = self.tree.nodes[i].focus.step.clone() {
             // A right-to-left slider runs from its right: Left raises it.
             let rtl = self.tree.nodes[i].flow == crate::el::Flow::Rtl;
             let field = self.tree.nodes[i].input.is_some();

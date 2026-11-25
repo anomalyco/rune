@@ -72,7 +72,7 @@ impl RuntimeCore {
         n.a11y.level.hash(&mut h);
         n.a11y.expanded.hash(&mut h);
         n.a11y.checked.hash(&mut h);
-        n.a11y.disabled.hash(&mut h);
+        self.node_disabled(i).hash(&mut h);
         n.a11y.live.hash(&mut h);
         if let Some(m) = n.a11y.more.as_deref() {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy,
@@ -212,7 +212,7 @@ impl RuntimeCore {
         let mut node = AkNode::new(role);
         // Disabled is what the app says (or an inert subtree); an element that only contains an
         // open modal isn't. Actions go only where input may.
-        let enabled = !n.a11y.disabled && !n.inert;
+        let enabled = !self.node_disabled(i) && !n.inert;
         let actionable = enabled && self.allowed(i);
         if let Some(key) = &n.key { node.set_author_id(key.as_str()); }
         let more = n.a11y.more.as_deref();
