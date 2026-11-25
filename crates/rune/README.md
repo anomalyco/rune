@@ -557,9 +557,13 @@ policy changes are applied in the same mutation phase.
   and the element then hears the rest of that gesture, its momentum included, wherever the
   pointer goes, until it declines (passing the delta to outer handlers and then scrolling) or a
   modifier change starts a new unphased gesture. `.on_magnify(|s, e: MagnifyEvent, tx| -> bool)` hears trackpad
-  pinches (scale by `1 + delta`) at the pointer: macOS reports them, and Ctrl + wheel also
-  goes to `on_magnify` (`1.2^ticks - 1` per line-delta notch, or `dy / 200` per pixel-precise
-  point, with `MagnifyEvent::wheel == true`) when one is under the pointer. `.on_rotate` and `.on_smart_magnify` (a two-finger double tap)
+  and touchscreen two-finger pinches (scale by `1 + delta`) at the pointer or fingers' midpoint:
+  macOS trackpads and touchscreens (`Runtime::touch`, after a 16 pt span slop subtracted on activation,
+  cancelling the first finger's pending press, hold, drag or pan with no click or fling, keeping the
+  surviving finger quiescent on lift with re-pinch ratcheting, and ignoring 3rd+ fingers) report phased
+  `Began`/`Moved`/`Ended` pinches (`wheel: false`) locked to the accepting `Began` handler until `Ended`,
+  and Ctrl + wheel also goes to `on_magnify` (`1.2^ticks - 1` per line-delta notch, or `dy / 200` per
+  pixel-precise point, with `MagnifyEvent::wheel == true`) when one is under the pointer. `.on_rotate` and `.on_smart_magnify` (a two-finger double tap)
   are macOS only. `.pointer_buttons([PointerButton::Middle])` lets the middle, back, forward,
   or other buttons press and drag the element through its own `on_press` and `on_drag`, from
   anywhere inside it; `tx.button()` says which button. Including `PointerButton::Secondary` lets

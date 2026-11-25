@@ -219,6 +219,22 @@ impl Secondary {
     }
 }
 
+/// Ownership of an active phased pinch gesture (`!MagnifyEvent::wheel`), locked from
+/// `GesturePhase::Began` until `GesturePhase::Ended` (or pointer cancel / stage clear).
+/// Unphased `Moved` events (including `Ctrl + wheel` with `wheel: true`) bypass this lock.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum MagnifyOwner {
+    /// No phased pinch gesture is active.
+    #[default]
+    Idle,
+    /// Handler at `path` accepted `Began` and receives `Moved` and `Ended` in its own local
+    /// coordinates even if the midpoint or cursor leaves its bounds.
+    Owned(String),
+    /// `Began` had no accepting handler (or the owning handler disappeared or declined); later
+    /// `Moved` and `Ended` of this gesture are ignored until `Ended` returns to `Idle`.
+    Declined,
+}
+
 /// Currently hovered link reported to a text node's [`crate::El::on_link_hover`] handler.
 #[derive(Clone)]
 pub(in crate::runtime) struct HoveredLink {
@@ -286,6 +302,8 @@ pub(in crate::runtime) struct PointerState {
     other_buttons_down: Vec<u16>,
     /// Declarative pointer-lock state machine (`runtime/input/pointer_lock.rs`).
     pub(super) pointer_lock: super::pointer_lock::PointerLock,
+    /// Locked owner for phased pinch gestures (`runtime/input/gesture.rs`).
+    pub(super) magnify_owner: MagnifyOwner,
 }
 
 impl PointerState {
@@ -321,6 +339,7 @@ impl PointerState {
             drags_open: 0,
             other_buttons_down: Vec::new(),
             pointer_lock: super::pointer_lock::PointerLock::new(),
+            magnify_owner: MagnifyOwner::Idle,
         }
     }
 
@@ -540,6 +559,7 @@ impl PointerState {
         self.forget_drop_targets();
         self.press_clicks.clear();
         self.pointer_lock.step(super::pointer_lock::LockEvent::Released);
+        self.magnify_owner = MagnifyOwner::Idle;
     }
 
     /// Scrolling viewport `id` under a held press inside it cancels the press, as a UIScrollView

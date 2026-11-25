@@ -2,7 +2,7 @@
 //! `live_offset` and `live_scale` (the camera), so a pan or zoom moves it without a relayout.
 //!
 //! - The wheel and a two-finger trackpad scroll pan (`on_wheel`).
-//! - A pinch zooms about the pointer (`on_magnify`; Ctrl + wheel off macOS).
+//! - A pinch zooms about the pointer or fingers' midpoint (`on_magnify`; trackpad, touchscreen two-finger pinch, or Ctrl + wheel).
 //! - Space held with a drag pans; the release ends it (`on_key_up`).
 //! - The middle button drags to pan (`pointer_buttons`, `Tx::button`).
 //! - "Focus" centres the selected node and glides its row in the layers list into view
@@ -205,5 +205,16 @@ fn main() {
     assert!(gliding > row[1] && near(row[1], ROW), "the row glided to the top of the list: {gliding} then {row:?}");
     assert_eq!(rt.state.toolbar, Some(focused));
     println!("focus        -> node13 at {focused:?}, layer13 row at y {}", row[1]);
+
+    // Touchscreen two-finger pinch on the canvas reaches `on_magnify` after the 16 pt span slop.
+    let zoom_before = rt.state.zoom;
+    rt.touch(1, rune::TouchPhase::Started, 150.0, 200.0, 0.0);
+    rt.touch(2, rune::TouchPhase::Started, 250.0, 200.0, 0.01);
+    rt.touch(2, rune::TouchPhase::Moved, 310.0, 200.0, 0.02);
+    rt.touch(2, rune::TouchPhase::Ended, 310.0, 200.0, 0.03);
+    rt.touch(1, rune::TouchPhase::Ended, 150.0, 200.0, 0.04);
+    settle(&mut rt);
+    assert!(rt.state.zoom > zoom_before && !rt.touching(), "touch pinch zoomed: {} -> {}", zoom_before, rt.state.zoom);
+    println!("touch pinch  -> zoom {:.2} -> {:.2}", zoom_before, rt.state.zoom);
     println!("ok");
 }

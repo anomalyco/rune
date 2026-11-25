@@ -4,15 +4,16 @@
 //! under the finger (`runtime/scroll/touch.rs`), flinging it on with momentum, and cancels
 //! the press. A finger held still for [`LONG_PRESS`] is a secondary click there, as Chromium's
 //! long press sends `contextmenu`: the press it began lets go without a click and the menu opens
-//! under the finger, which then lifts on nothing. Further fingers are ignored while one is down.
+//! under the finger, which then lifts on nothing. When a second finger lands with an
+//! `El::on_magnify` handler under the fingers' midpoint, the first finger's pending press,
+//! hold, drag or pan cancels cleanly without a click or fling, and two-finger pinches route to
+//! `on_magnify` through [`touch_machine::step_touch`]; otherwise further fingers are ignored.
 use crate::machine::{Attempt, Effects, Seq};
 
+use super::touch_machine::{
+    Finger, Mode, SlopResolution, TouchEffect, TouchInput, TouchState, TwoFingerTargets, step_touch,
+};
 use super::*;
-
-/// How far (points) a finger travels before its touch is a drag or a pan, not a tap.
-const TOUCH_SLOP: f32 = 8.0;
-/// A finger held this long (seconds) before lifting throws nothing.
-const FLING_HOLD: f64 = 0.1;
 /// A finger held still this long (seconds) opens the menu under it (Chromium's
 /// `long_press_time_in_ms`).
 const LONG_PRESS: f64 = 0.5;
@@ -195,12 +196,12 @@ pub(in crate::runtime) fn step_hold(seq: &mut Seq, state: &mut HoldState, event:
     }
 }
 
-/// What touches are doing: the finger that is down, its hold state machine, and the viewport a
-/// touch holds or flung.
+/// What touches are doing: the touch contact state machine, its hold timer sub-machine, and
+/// the viewport a touch holds or flung.
 #[derive(Default)]
 pub(in crate::runtime) struct Touch {
     pub(in crate::runtime) scroll: Option<scroll_touch::TouchScroll>,
-    finger: Option<Finger>,
+    state: TouchState,
     /// True while inside `touch_down` or `touch_up`, so synthetic pointer moves/leaves emitted
     /// by touch handling never start a mouse link hover.
     in_touch: bool,
@@ -218,70 +219,31 @@ impl Touch {
     pub(in crate::runtime) fn hold_deadline(&self) -> Option<f64> {
         self.hold.deadline()
     }
-}
 
-struct Finger {
-    id: u64,
-    origin: (f32, f32),
-    /// Travel along the pan's axis (vertical until a pan picks horizontal) at the last event,
-    /// and that event's time.
-    last: f32,
-    at: f64,
-    /// Points per second along the pan's axis.
-    velocity: f32,
-    mode: Mode,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Mode {
-    /// Still within the slop: lifting it here is a tap. `scroll` is the vertical viewport
-    /// under the finger, held until the pan picks its axis; `edge` the `El::on_edge_drag`
-    /// element whose zone it landed in, which a first move away from that edge hands it to.
-    Pending { scroll: Option<NodeId>, edge: Option<(NodeId, crate::SwipeEdge)> },
-    /// Landed on a bare `.window_drag()` region and still within `TOUCH_SLOP`: holds the drag
-    /// until the finger moves past the slop, so taps, double-taps and long presses still work.
-    WindowDragPending,
-    /// Crossed `TOUCH_SLOP` on a bare `.window_drag()` region and emitted `TitlebarAction::Drag`
-    /// (or immediately triggered `TitlebarAction::DoubleClick`): moves and release do nothing.
-    WindowDragging,
-    /// It drags the element it pressed.
-    Drag,
-    /// An `El::on_edge_drag` element took it: the press under it was let go.
-    Edge { node: NodeId },
-    /// It pans viewport `scroll` along one axis.
-    Pan { scroll: NodeId, horizontal: bool },
-    /// A long press opened the menu under it: it lifts on nothing.
-    Menu,
-}
-
-impl Mode {
-    /// The viewport the touch holds: the one it pans, or while pending the one under it.
-    fn scroll(self) -> Option<NodeId> {
-        match self {
-            Mode::Pending { scroll, .. } => scroll,
-            Mode::Pan { scroll, .. } => Some(scroll),
-            Mode::WindowDragPending | Mode::WindowDragging | Mode::Drag | Mode::Edge { .. } | Mode::Menu => None,
-        }
+    #[cfg(test)]
+    #[inline]
+    pub(super) fn single(&self) -> Option<&Finger> {
+        self.state.single()
     }
 
-    fn horizontal(self) -> bool { matches!(self, Mode::Pan { horizontal: true, .. }) }
-
-    fn hold_eligible(self) -> bool {
-        matches!(self, Mode::Pending { .. } | Mode::WindowDragPending)
+    #[cfg(test)]
+    #[inline]
+    pub(super) fn state(&self) -> TouchState {
+        self.state
     }
 }
 
 impl capture::PointerState {
-    /// Whether a finger is down: a host ignores the mouse events its system makes up from it.
+    /// Whether any tracked finger is down: a host ignores the mouse events its system makes up from it.
     #[inline]
     pub(in crate::runtime) fn touching(&self) -> bool {
-        self.touch.finger.is_some()
+        self.touch.state.is_active()
     }
 
     /// Whether a touch finger is active or a touch down/up event is being processed now.
     #[inline]
     pub(in crate::runtime) fn is_touch_input(&self) -> bool {
-        self.touch.finger.is_some() || self.touch.in_touch
+        self.touch.state.is_active() || self.touch.in_touch
     }
 
     /// Next wake deadline on the runtime clock for an armed touch hold, or `None` when idle.
@@ -329,7 +291,7 @@ impl RuntimeCore {
     #[inline]
     #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
     pub(crate) fn touch_in_menu(&self) -> bool {
-        self.pointer.touch.finger.as_ref().is_some_and(|f| f.mode == Mode::Menu)
+        self.pointer.touch.state.in_menu()
     }
 
     fn apply_hold_effects(&mut self, effects: Effects<HoldEffect>) -> bool {
@@ -364,98 +326,122 @@ impl RuntimeCore {
         self.pointer.touch.in_touch = false;
     }
 
+    /// Queries which two-finger gesture channels have a live, allowed handler under window point
+    /// `mid`. Step 1 checks `on_magnify` only; two-finger pan (`on_wheel`) and rotation
+    /// (`on_rotate`) extend this single lookup.
+    fn two_finger_targets(&self, mid: (f32, f32)) -> TwoFingerTargets {
+        let magnify = !self.gesture_chain(mid.0, mid.1, |g| g.magnify.is_some()).is_empty();
+        TwoFingerTargets { magnify }
+    }
+
+    fn apply_touch_effects(&mut self, app: &dyn ViewDriver, effects: Effects<TouchEffect>) {
+        for effect in effects {
+            match effect {
+                TouchEffect::CancelHold => self.cancel_touch_hold(),
+                TouchEffect::StartWindowDrag => {
+                    self.host.titlebar.clear();
+                    self.host.titlebar.action = Some(TitlebarAction::Drag);
+                }
+                TouchEffect::ClearTitlebar => self.host.titlebar.clear(),
+                TouchEffect::BeginPan { origin, horizontal, vertical } => {
+                    let _ = self.touch_scroll_pan(origin.0, origin.1, horizontal, vertical);
+                }
+                TouchEffect::PanMove { scroll, along } => self.touch_scroll_move(scroll, along),
+                TouchEffect::EndScroll { scroll, velocity } => self.touch_scroll_end(scroll, velocity),
+                TouchEffect::PointerMove((x, y)) => self.pointer_move(app, x, y),
+                TouchEffect::PointerUp((x, y)) => self.pointer_up(app, x, y),
+                TouchEffect::PointerLeave => self.pointer_leave(),
+                TouchEffect::ReleaseWithoutClick => {
+                    self.pointer.note_button_up(crate::PointerButton::Primary);
+                    self.pointer_leave();
+                }
+                TouchEffect::CancelPointer => self.cancel_pointer(),
+                TouchEffect::CancelChildForEdge => {
+                    if !self.cancel_drag() { self.drop_press(); }
+                }
+                TouchEffect::EdgeDrag { node, phase, origin, pos, cancelled } => {
+                    self.queue_edge_drag(node, phase, origin, pos, cancelled);
+                }
+                TouchEffect::CommitHold { origin: (x, y) } => {
+                    if !self.cancel_drag() { self.drop_press(); }
+                    self.secondary_down(x, y);
+                    self.secondary_up(app, x, y);
+                }
+                TouchEffect::EmitMagnify { delta, mid, hit, phase } => {
+                    self.magnify_event_at(
+                        crate::MagnifyEvent::new(delta).at(mid.0, mid.1).phase(phase),
+                        hit,
+                    );
+                }
+            }
+        }
+    }
+
     fn touch_down_inner(&mut self, app: &mut dyn AppDriver, id: u64, x: f32, y: f32, time: f64) {
-        if self.pointer.touch.finger.is_some() { return; }
+        if self.pointer.touch.state.is_active() {
+            if let Some(mid) = self.pointer.touch.state.second_down_midpoint(id, (x, y)) {
+                let targets = self.two_finger_targets(mid);
+                let effects = step_touch(
+                    &mut self.pointer.touch.state,
+                    TouchInput::SecondDown { id, pos: (x, y), targets },
+                );
+                self.apply_touch_effects(app, effects);
+            }
+            return;
+        }
         let edge = self.edge_drag_candidate(x, y);
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(app, x, y);
         self.press_down(app, x, y, true);
         let now = self.now_clock();
         let policy = self.pointer.touch.policy;
-        if self.host.titlebar.resize.is_some() {
+        let (mode, start_hold) = if self.host.titlebar.resize.is_some() {
             self.touch_scroll_end(scroll, 0.0);
-            let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
-            let _ = self.apply_hold_effects(effects);
-            self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragging });
-            return;
-        }
-        match self.host.titlebar.action {
-            Some(TitlebarAction::Drag) => {
-                // Hold the drag until the finger crosses `TOUCH_SLOP`, so taps, double-taps and
-                // long-press window menus on bare `.window_drag()` regions still work.
-                self.host.titlebar.action = None;
-                self.touch_scroll_end(scroll, 0.0);
-                let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Start { now, event_time: time, policy });
-                let _ = self.apply_hold_effects(effects);
-                self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragPending });
-                return;
+            (Mode::WindowDragging, false)
+        } else {
+            match self.host.titlebar.action {
+                Some(TitlebarAction::Drag) => {
+                    // Hold the drag until the finger crosses `TOUCH_SLOP`, so taps, double-taps
+                    // and long-press window menus on bare `.window_drag()` regions still work.
+                    self.host.titlebar.action = None;
+                    self.touch_scroll_end(scroll, 0.0);
+                    (Mode::WindowDragPending, true)
+                }
+                Some(TitlebarAction::DoubleClick) => {
+                    self.touch_scroll_end(scroll, 0.0);
+                    (Mode::WindowDragging, false)
+                }
+                // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut
+                // it, unless an edge swipe may still take the touch.
+                None if edge.is_none() && self.press_drags_at_once() => {
+                    self.touch_scroll_end(scroll, 0.0);
+                    (Mode::Drag, false)
+                }
+                // An at-once drag in an edge zone waits for the slop, but still has no long press.
+                None => (Mode::Pending { scroll, edge }, !(edge.is_some() && self.press_drags_at_once())),
             }
-            Some(TitlebarAction::DoubleClick) => {
-                self.touch_scroll_end(scroll, 0.0);
-                let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
-                let _ = self.apply_hold_effects(effects);
-                self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::WindowDragging });
-                return;
-            }
-            None => {}
-        }
-        // `El::touch_drags_at_once`: a drag from the first move, and no long press to cut it,
-        // unless an edge swipe may still take the touch.
-        if edge.is_none() && self.press_drags_at_once() {
-            self.touch_scroll_end(scroll, 0.0);
-            let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
-            let _ = self.apply_hold_effects(effects);
-            self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Drag });
-            return;
-        }
-        // An at-once drag in an edge zone waits for the slop, but still has no long press.
-        let hold = if edge.is_some() && self.press_drags_at_once() { HoldEvent::Cancel } else { HoldEvent::Start { now, event_time: time, policy } };
-        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, hold);
-        let _ = self.apply_hold_effects(effects);
-        self.pointer.touch.finger = Some(Finger { id, origin: (x, y), last: 0.0, at: time, velocity: 0.0, mode: Mode::Pending { scroll, edge } });
+        };
+        let hold_event = if start_hold {
+            HoldEvent::Start { now, event_time: time, policy }
+        } else {
+            HoldEvent::Cancel
+        };
+        let hold_effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, hold_event);
+        let _ = self.apply_hold_effects(hold_effects);
+        let finger = Finger { id, origin: (x, y), pos: (x, y), last: 0.0, at: time, velocity: 0.0, mode };
+        let effects = step_touch(&mut self.pointer.touch.state, TouchInput::StartSingle(finger));
+        self.apply_touch_effects(app, effects);
     }
 
     fn touch_move(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64) {
-        let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| f.id == id) else { return };
-        let (dx, dy) = (x - f.origin.0, y - f.origin.1);
-        let mut left_hold_slop = false;
-        if f.mode == Mode::WindowDragPending && dx.hypot(dy) > TOUCH_SLOP {
-            self.host.titlebar.clear();
-            self.host.titlebar.action = Some(TitlebarAction::Drag);
-            self.pointer.touch.finger.as_mut().unwrap().mode = Mode::WindowDragging;
-            left_hold_slop = true;
-        } else if let Mode::Pending { scroll, edge: Some((node, edge)) } = f.mode && dx.hypot(dy) > TOUCH_SLOP && edge_drag::moves_away(edge, dx, dy) {
-            let origin = f.origin;
-            self.touch_scroll_end(scroll, 0.0);
-            if !self.cancel_drag() { self.drop_press(); }
-            self.pointer.touch.finger.as_mut().unwrap().mode = Mode::Edge { node };
-            self.queue_edge_drag(node, Phase::Down, origin, origin, false);
-            left_hold_slop = true;
-        } else if let Mode::Pending { scroll, .. } = f.mode && dx.hypot(dy) > TOUCH_SLOP {
-            let origin = f.origin;
-            let (scroll, horizontal) = if self.press_drags() { (None, false) } else { self.touch_scroll_pan(origin.0, origin.1, dx.abs() > dy.abs(), scroll) };
-            self.pointer.touch.finger.as_mut().unwrap().mode = match scroll {
-                Some(scroll) => Mode::Pan { scroll, horizontal },
-                None => Mode::Drag,
-            };
-            left_hold_slop = true;
-        }
-        if left_hold_slop {
-            let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
-            let _ = self.apply_hold_effects(effects);
-        }
-        let f = self.pointer.touch.finger.as_mut().unwrap();
-        let along = if f.mode.horizontal() { dx } else { dy };
-        let dt = time - f.at;
-        if dt > 0.0 { f.velocity = (along - f.last) / dt as f32; }
-        (f.last, f.at) = (along, time);
-        let origin = f.origin;
-        match f.mode {
-            Mode::Pan { scroll, .. } => self.touch_scroll_move(scroll, along),
-            Mode::Drag => self.pointer_move(app, x, y),
-            Mode::Edge { node } => self.queue_edge_drag(node, Phase::Move, origin, (x, y), false),
-            Mode::Pending { .. } | Mode::WindowDragPending | Mode::WindowDragging | Mode::Menu => {}
-        }
+        let slop = self.pointer.touch.state.single_slop_query(id, (x, y)).map(|(origin, horizontal_bias, _)| {
+            SlopResolution {
+                press_drags: self.press_drags(),
+                across: horizontal_bias.then(|| self.scroll_at_axis(origin.0, origin.1, true)).flatten(),
+            }
+        });
+        let effects = step_touch(&mut self.pointer.touch.state, TouchInput::Move { id, pos: (x, y), time, slop });
+        self.apply_touch_effects(app, effects);
     }
 
     fn touch_up(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64, cancelled: bool) {
@@ -465,37 +451,15 @@ impl RuntimeCore {
     }
 
     fn touch_up_inner(&mut self, app: &dyn ViewDriver, id: u64, x: f32, y: f32, time: f64, cancelled: bool) {
-        let Some(f) = self.pointer.touch.finger.take_if(|f| f.id == id) else { return };
-        let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
-        let _ = self.apply_hold_effects(effects);
-        let pan = matches!(f.mode, Mode::Pan { .. });
-        let velocity = if pan && !cancelled && time - f.at < FLING_HOLD { f.velocity } else { 0.0 };
-        self.touch_scroll_end(f.mode.scroll(), velocity);
-        if let Mode::Edge { node } = f.mode {
-            self.queue_edge_drag(node, Phase::Up, f.origin, (x, y), cancelled);
-        }
-        if cancelled || f.mode == Mode::WindowDragging {
-            self.cancel_pointer();
-            return;
-        }
-        if matches!(f.mode, Mode::Menu | Mode::WindowDragPending | Mode::Edge { .. }) {
-            self.pointer.note_button_up(crate::PointerButton::Primary);
-            self.pointer_leave();
-            return;
-        }
-        // A pan cancelled the press, so its release clicks nothing.
-        let (x, y) = if pan { f.origin } else { (x, y) };
-        if f.mode == Mode::Drag { self.pointer_move(app, x, y); }
-        self.pointer_up(app, x, y);
-        // No hover is left under a lifted finger.
-        self.pointer_leave();
+        let effects = step_touch(&mut self.pointer.touch.state, TouchInput::End { id, pos: (x, y), time, cancelled });
+        self.apply_touch_effects(app, effects);
     }
 
     /// A finger still within the slop when its long press is due: under `DirectTimer` it fires
     /// now; under `ConfirmingTimer` it enters `Confirming` and asks the host to confirm once
     /// waiting input has drained.
     pub(in crate::runtime) fn fire_touch_hold(&mut self, app: &dyn ViewDriver) {
-        if !self.pointer.touch.finger.as_ref().is_some_and(|f| f.mode.hold_eligible()) {
+        if !self.pointer.touch.state.hold_eligible() {
             return;
         }
         let policy = self.pointer.touch.policy;
@@ -509,7 +473,7 @@ impl RuntimeCore {
     /// cancelled attempts do nothing and return `false`.
     #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
     pub(crate) fn confirm_touch_hold(&mut self, app: &dyn ViewDriver, attempt: Attempt) -> bool {
-        if !self.pointer.touch.finger.as_ref().is_some_and(|f| f.mode.hold_eligible()) {
+        if !self.pointer.touch.state.hold_eligible() {
             let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::Cancel);
             let _ = self.apply_hold_effects(effects);
             return false;
@@ -527,7 +491,7 @@ impl RuntimeCore {
     /// fallback timer/confirmation, and ignores duplicate or post-lift events.
     #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
     pub(crate) fn host_touch_hold(&mut self, app: &dyn ViewDriver, id: u64) -> bool {
-        if !self.pointer.touch.finger.as_ref().is_some_and(|f| f.id == id && f.mode.hold_eligible()) || self.press_drags_at_once() {
+        if !self.pointer.touch.state.single().is_some_and(|f| f.id == id && f.mode.hold_eligible()) || self.press_drags_at_once() {
             return false;
         }
         let effects = step_hold(&mut self.pointer.touch.hold_seq, &mut self.pointer.touch.hold, HoldEvent::HostHold);
@@ -542,14 +506,8 @@ impl RuntimeCore {
     /// without a click (a drag it started hears a cancelled `Phase::Up`), and a secondary click
     /// lands where it went down.
     fn commit_touch_hold(&mut self, app: &dyn ViewDriver) {
-        let Some(f) = self.pointer.touch.finger.as_ref().filter(|f| f.mode.hold_eligible()) else { return };
-        let ((x, y), scroll, was_window_drag) = (f.origin, f.mode.scroll(), f.mode == Mode::WindowDragPending);
-        self.touch_scroll_end(scroll, 0.0);
-        if was_window_drag { self.host.titlebar.clear(); }
-        if !self.cancel_drag() { self.drop_press(); }
-        self.secondary_down(x, y);
-        self.secondary_up(app, x, y);
-        if let Some(f) = self.pointer.touch.finger.as_mut() { f.mode = Mode::Menu; }
+        let effects = step_touch(&mut self.pointer.touch.state, TouchInput::HoldFired);
+        self.apply_touch_effects(app, effects);
     }
 
     /// Whether the held press is on an `El::touch_drags_at_once` element.
@@ -568,3 +526,7 @@ impl RuntimeCore {
 #[cfg(test)]
 #[path = "touch_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "touch_pinch_tests.rs"]
+mod pinch_tests;
