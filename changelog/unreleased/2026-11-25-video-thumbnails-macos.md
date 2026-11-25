@@ -1,0 +1,1 @@
+- **macOS `Thumbnails` backend (`AVAssetImageGenerator`):** `Thumbnails` now decodes video still frames on macOS off the UI thread with preferred track transforms, `maximumSize` downscaling without upscaling, `Exact` (`zero()`) and `NearestKeyframe` (`kCMTimePositiveInfinity`) tolerances, HTTP request headers on URLs, and direct sRGB RGBA8 output.

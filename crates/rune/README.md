@@ -2781,12 +2781,15 @@ let row = rune::row().children(strip.frames().iter().map(|t| {
   once; valid times decode in ascending order and map back to original slot order; negative times
   clamp to `0.0`, times past duration clamp to the last picture, and non-finite times fail
   individually with `"invalid timestamp"`.
-- **Platforms**: decoded off-screen on Windows via Media Foundation CPU `IMFSourceReader`
-  (BT.601/BT.709 NV12 to sRGB RGBA8, track rotation, linear-light downsampling; request headers
-  are not supported on Windows). Platforms without a thumbnail backend settle every slot
-  immediately in `start()` with `Err("video thumbnails aren't supported on this platform yet")`
-  without spawning threads or producing blank images. See `examples/video-player` for a filmstrip
-  under the scrub bar with a thumbnail preview on hover.
+- **Platforms**: decoded off-screen on macOS via `AVAssetImageGenerator` (with preferred track
+  transform, `maximumSize` without upscaling, zero or infinite tolerances for `Exact` vs
+  `NearestKeyframe`, HTTP request headers on URLs, and direct sRGB RGBA8 draw) and on Windows via
+  Media Foundation CPU `IMFSourceReader` (BT.601/BT.709 NV12 to sRGB RGBA8, track rotation,
+  linear-light downsampling; request headers are not supported on Windows). Linux and the web
+  (where `Player` has no video decoder yet) settle every slot immediately in `start()` with
+  `Err("video thumbnails aren't supported on this platform yet")` without spawning threads or
+  producing blank images. See `examples/video-player` for a filmstrip under the scrub bar with a
+  thumbnail preview on hover.
 
 ### Recording audio (`Recorder`, `crates/rune-media/src/recorder/`)
 

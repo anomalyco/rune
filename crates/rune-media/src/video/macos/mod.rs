@@ -9,7 +9,7 @@ mod port;
 pub(super) use asset::extension;
 #[cfg(test)]
 pub(crate) use asset::test_frames;
-pub(super) use asset::{decode, probe};
+pub(super) use asset::{decode, open_thumbnails, probe};
 #[cfg(test)]
 pub(super) use park::{held_capacity, on_kept, parked_free, parked_with};
 
