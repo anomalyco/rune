@@ -1,0 +1,1 @@
+- `rune-kit`: `MarkdownStyle::list_margin`, `quote_margin` and `rule_margin` set the space above and below lists (8, 12), block quotes (16, 16) and rules (32, 32), collapsed with neighbours like `paragraph_margin`; the defaults keep today's spacing.

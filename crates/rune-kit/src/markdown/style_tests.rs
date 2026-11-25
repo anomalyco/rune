@@ -624,3 +624,34 @@ fn diagram_max_items_defaults_to_400_clamps_hashes_and_renders_large_mermaid() {
         assert_eq!(fig.label.as_deref(), Some("Flowchart"));
     }
 }
+
+#[test]
+fn list_quote_and_rule_margins_preserve_defaults_and_apply_overrides() {
+    let base = MarkdownStyle::neutral(false);
+    assert_eq!(base.block_margin, [[8.0, 12.0], [16.0, 16.0], [32.0, 32.0]]);
+    let san = base.clone().list_margin(-1.0, f32::NAN).quote_margin(f32::INFINITY, -2.0).rule_margin(-3.0, 4.0);
+    assert_eq!(san.block_margin, [[0.0, 0.0], [0.0, 0.0], [0.0, 4.0]]);
+    assert_ne!(hash_of(&base), hash_of(&base.clone().list_margin(0.0, 6.0)));
+    assert_ne!(hash_of(&base), hash_of(&base.clone().quote_margin(6.0, 6.0)));
+    assert_ne!(hash_of(&base), hash_of(&base.clone().rule_margin(6.0, 6.0)));
+
+    // Para, Para, List, Para, Quote, Para, Rule, Para: every gap is 6 once all margins say so.
+    const DOC: &str = "One.\n\nTwo.\n\n- item\n\nThree.\n\n> quote\n\nFour.\n\n---\n\nFive.";
+    let gaps = |style: MarkdownStyle| -> Vec<f32> {
+        let mut rt = Runtime::new(
+            style,
+            |st: &MarkdownStyle, _: &mut Cx<MarkdownStyle>| col().w(600.0).child(Markdown::new(DOC).render(st).key("md")),
+            (600.0, 1200.0),
+            Env::new(false, 1.0),
+        );
+        rt.frame(0.0);
+        let r: Vec<[f32; 4]> = (0..8).map(|i| rect_of(&rt, &format!("b{i}"))).collect();
+        r.windows(2).map(|w| w[1][1] - (w[0][1] + w[0][3])).collect()
+    };
+    let def = gaps(base.clone().paragraph_margin(0.0, 6.0));
+    for (got, want) in def.iter().zip([6.0, 8.0, 12.0, 16.0, 16.0, 32.0, 32.0]) {
+        assert!((got - want).abs() < 0.5, "default gaps {def:?}");
+    }
+    let even = gaps(base.paragraph_margin(0.0, 6.0).list_margin(0.0, 6.0).quote_margin(0.0, 6.0).rule_margin(0.0, 6.0));
+    assert!(even.iter().all(|g| (g - 6.0).abs() < 0.5), "even gaps {even:?}");
+}

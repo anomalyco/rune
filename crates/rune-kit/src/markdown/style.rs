@@ -71,6 +71,8 @@ pub struct MarkdownStyle {
     pub(super) table_margin: [f32; 2],
     /// Space above and below a code block, a diff and a diagram (collapsed like `table_margin`).
     pub(super) code_margin: [f32; 2],
+    /// Space above and below a list, a quote and a rule, in that order (see `margin.rs`).
+    pub(super) block_margin: [[f32; 2]; 3],
     /// A wide table's scroll bar thumb, at rest and under the pointer (`None`: no bar).
     pub(super) table_bar: Option<[Color; 2]>,
     /// The text column's width, when the app knows it (see [`MarkdownStyle::text_width`]).
@@ -234,6 +236,7 @@ impl MarkdownStyle {
             image_margin: [24.0, 24.0],
             table_margin: [12.0, 16.0],
             code_margin: [12.0, 24.0],
+            block_margin: [[8.0, 12.0], [16.0, 16.0], [32.0, 32.0]],
             table_bar: None,
             text_width: None,
             prose_width: None,
@@ -734,6 +737,7 @@ impl std::hash::Hash for MarkdownStyle {
             image_margin,
             table_margin,
             code_margin,
+            block_margin,
             table_bar,
             text_width,
             prose_width,
@@ -765,7 +769,7 @@ impl std::hash::Hash for MarkdownStyle {
             .map(f32_bits)
             .hash(state);
         (table_outline, table_rule, table_head_fill, table_head_text, table_head_rule, table_head_weight.map(f32_bits), table_tabular, table_font).hash(state);
-        ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, paragraph_margin.map(f32_bits), heading_margin.map(|m| m.map(f32_bits)), image_margin.map(f32_bits), table_margin.map(f32_bits), code_margin.map(f32_bits)).hash(state);
+        ([f32_bits(table_pad[0]), f32_bits(table_pad[1])], table_flush_left, table_head_pad.map(|p| p.map(f32_bits)), table_full_width, paragraph_margin.map(f32_bits), heading_margin.map(|m| m.map(f32_bits)), image_margin.map(f32_bits), table_margin.map(f32_bits), code_margin.map(f32_bits), block_margin.map(|m| m.map(f32_bits))).hash(state);
         table_frame.map(|TableFrame { fill, ring, pad }| (fill, ring, f32_bits(pad))).hash(state);
         (table_bar, text_width.map(f32_bits), prose_width.map(f32_bits), f32_bits(wide_fade), f32_bits(math_scale), link_icon.map(|l| l.map(f32_bits))).hash(state);
         match table_body {

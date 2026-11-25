@@ -82,6 +82,7 @@ mod image;
 mod interrupt;
 mod link_icon;
 mod links;
+mod margin;
 mod memo;
 mod parser;
 mod plain;
