@@ -223,10 +223,11 @@ macro_rules! field_hook_forwarders {
         /// # use rune::TextEdit;
         /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
         /// # struct App { edit: TextEdit, saved: String }
+        /// # impl App { fn commit(&mut self) { self.saved = self.edit.text.clone(); } }
         /// # let s = App { edit: TextEdit::default(), saved: String::new() };
         /// # let k = Kit::neutral(true);
         /// # let _ =
-        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_blur(|s: &mut App, _| s.saved = s.edit.text.clone()).build(&k)")]
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_submit(|s: &mut App, _| s.commit()).on_blur(|s: &mut App, _| s.commit()).build(&k)")]
         /// # ;
         /// ```
         pub fn on_blur<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
