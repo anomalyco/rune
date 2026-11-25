@@ -1,5 +1,40 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::time::Duration;
+
+struct Gate {
+    state: Mutex<(bool, bool)>,
+    cv: Condvar,
+}
+
+impl Gate {
+    fn new() -> Arc<Self> {
+        Arc::new(Self { state: Mutex::new((false, false)), cv: Condvar::new() })
+    }
+
+    fn enter_and_wait(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.0 = true;
+        self.cv.notify_all();
+        while !s.1 {
+            s = self.cv.wait(s).unwrap();
+        }
+    }
+
+    fn wait_entered(&self) {
+        let mut s = self.state.lock().unwrap();
+        while !s.0 {
+            s = self.cv.wait(s).unwrap();
+        }
+    }
+
+    fn release(&self) {
+        let mut s = self.state.lock().unwrap();
+        s.1 = true;
+        self.cv.notify_all();
+    }
+}
 
 #[test]
 fn parses_kdeglobals_animation_duration_factor() {
@@ -24,6 +59,11 @@ fn cached_fallback_reads_once_off_the_calling_thread() {
         WORKER_THREAD.set(std::thread::current().id()).ok();
         true
     }
+
+    // Trigger the one-shot worker and wait for it to finish via the cache's condvar so a
+    // load-delayed thread start cannot race the 100 ms launch wait.
+    let _ = CACHE.get_or_init(read_once);
+    CACHE.wait_ready();
 
     // Repeated calls (simulating focus changes) reuse the cached value without re-reading.
     for _ in 0..8 {
@@ -109,6 +149,9 @@ fn cached_double_click_fallback_reads_once_off_the_calling_thread() {
         Some(1200)
     }
 
+    let _ = CACHE.get_or_init(read_once);
+    CACHE.wait_ready();
+
     for _ in 0..8 {
         assert_eq!(CACHE.get_or_init(read_once), 1.2);
     }
@@ -121,6 +164,135 @@ fn cached_double_click_fallback_defaults_to_half_second_when_unknown() {
     static NONE_CACHE: CachedDoubleClick = CachedDoubleClick::new();
     static ZERO_CACHE: CachedDoubleClick = CachedDoubleClick::new();
 
+    let _ = NONE_CACHE.get_or_init(|| None);
+    NONE_CACHE.wait_ready();
+    let _ = ZERO_CACHE.get_or_init(|| Some(0));
+    ZERO_CACHE.wait_ready();
+
     assert_eq!(NONE_CACHE.get_or_init(|| None), DEFAULT_DOUBLE_CLICK_SECS);
     assert_eq!(ZERO_CACHE.get_or_init(|| Some(0)), DEFAULT_DOUBLE_CLICK_SECS);
+}
+
+#[test]
+fn slow_reduced_motion_fallback_returns_default_then_publishes_and_notifies_on_late_answer() {
+    static CHANGED: CachedReducedMotion = CachedReducedMotion::new();
+    let gate = Gate::new();
+    let gate_worker = Arc::clone(&gate);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_worker = Arc::clone(&calls);
+    let notified = Arc::new(AtomicUsize::new(0));
+    let notified_worker = Arc::clone(&notified);
+    let (late_tx, late_rx) = mpsc::channel();
+
+    // Zero wait forces the timeout path deterministically without sleeping.
+    let initial = CHANGED.get_or_init_with(
+        Duration::ZERO,
+        move || {
+            calls_worker.fetch_add(1, Ordering::SeqCst);
+            gate_worker.enter_and_wait();
+            true
+        },
+        move || {
+            notified_worker.fetch_add(1, Ordering::SeqCst);
+            late_tx.send(()).ok();
+        },
+    );
+    assert!(!initial, "timed-out launch falls back to default false");
+    gate.wait_entered();
+    assert!(!CHANGED.get_or_init(|| panic!("must not respawn while pending")));
+    assert_eq!(notified.load(Ordering::SeqCst), 0);
+
+    gate.release();
+    late_rx.recv().expect("late non-default reduced-motion answer must notify windows");
+    CHANGED.wait_ready();
+    assert!(CHANGED.late_changed());
+    assert!(CHANGED.get_or_init(|| false), "subsequent reads must see the worker's real value");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(notified.load(Ordering::SeqCst), 1);
+
+    // A slow read that matches the default (false) must not request a needless redraw.
+    static SAME: CachedReducedMotion = CachedReducedMotion::new();
+    let gate2 = Gate::new();
+    let gate2_worker = Arc::clone(&gate2);
+    let notified2 = Arc::new(AtomicUsize::new(0));
+    let notified2_worker = Arc::clone(&notified2);
+    assert!(!SAME.get_or_init_with(
+        Duration::ZERO,
+        move || {
+            gate2_worker.enter_and_wait();
+            false
+        },
+        move || {
+            notified2_worker.fetch_add(1, Ordering::SeqCst);
+        },
+    ));
+    gate2.wait_entered();
+    gate2.release();
+    SAME.wait_ready();
+    assert!(!SAME.late_changed());
+    assert!(!SAME.get_or_init(|| true));
+    assert_eq!(notified2.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn slow_double_click_fallback_returns_default_then_publishes_and_notifies_on_late_answer() {
+    static CHANGED: CachedDoubleClick = CachedDoubleClick::new();
+    let gate = Gate::new();
+    let gate_worker = Arc::clone(&gate);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let calls_worker = Arc::clone(&calls);
+    let notified = Arc::new(AtomicUsize::new(0));
+    let notified_worker = Arc::clone(&notified);
+    let (late_tx, late_rx) = mpsc::channel();
+
+    let initial = CHANGED.get_or_init_with(
+        Duration::ZERO,
+        move || {
+            calls_worker.fetch_add(1, Ordering::SeqCst);
+            gate_worker.enter_and_wait();
+            Some(1200)
+        },
+        move || {
+            notified_worker.fetch_add(1, Ordering::SeqCst);
+            late_tx.send(()).ok();
+        },
+    );
+    assert_eq!(initial, DEFAULT_DOUBLE_CLICK_SECS, "timed-out launch falls back to 0.5 s");
+    gate.wait_entered();
+    assert_eq!(CHANGED.get_or_init(|| panic!("must not respawn while pending")), DEFAULT_DOUBLE_CLICK_SECS);
+    assert_eq!(notified.load(Ordering::SeqCst), 0);
+
+    gate.release();
+    late_rx.recv().expect("late non-default double-click answer must notify windows");
+    CHANGED.wait_ready();
+    assert!(CHANGED.late_changed());
+    assert_eq!(CHANGED.get_or_init(|| Some(300)), 1.2, "subsequent reads must see the worker's real value");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(notified.load(Ordering::SeqCst), 1);
+
+    // A slow read that resolves to the default 500 ms (or None) must not request a redraw.
+    static SAME: CachedDoubleClick = CachedDoubleClick::new();
+    let gate2 = Gate::new();
+    let gate2_worker = Arc::clone(&gate2);
+    let notified2 = Arc::new(AtomicUsize::new(0));
+    let notified2_worker = Arc::clone(&notified2);
+    assert_eq!(
+        SAME.get_or_init_with(
+            Duration::ZERO,
+            move || {
+                gate2_worker.enter_and_wait();
+                Some(DEFAULT_DOUBLE_CLICK_MS)
+            },
+            move || {
+                notified2_worker.fetch_add(1, Ordering::SeqCst);
+            },
+        ),
+        DEFAULT_DOUBLE_CLICK_SECS,
+    );
+    gate2.wait_entered();
+    gate2.release();
+    SAME.wait_ready();
+    assert!(!SAME.late_changed());
+    assert_eq!(SAME.get_or_init(|| Some(900)), DEFAULT_DOUBLE_CLICK_SECS);
+    assert_eq!(notified2.load(Ordering::SeqCst), 0);
 }

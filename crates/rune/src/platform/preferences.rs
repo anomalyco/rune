@@ -30,9 +30,43 @@ pub(crate) fn reduced_motion() -> bool {
 }
 
 #[cfg(all(target_os = "linux", not(feature = "dbus")))]
+static CACHED_REDUCED_MOTION: CachedReducedMotion = CachedReducedMotion::new();
+
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
+static CACHED_DOUBLE_CLICK: CachedDoubleClick = CachedDoubleClick::new();
+
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
+static FALLBACK_WINDOWS: std::sync::Mutex<Vec<std::sync::Weak<winit::window::Window>>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Registers `window` to redraw if a slow Linux fallback preference read finishes with a
+/// non-default value after launch already fell back to the default.
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
+pub(crate) fn follow_fallback(window: &std::sync::Arc<winit::window::Window>) {
+    let mut windows = FALLBACK_WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+    windows.retain(|w| w.strong_count() > 0);
+    windows.push(std::sync::Arc::downgrade(window));
+    drop(windows);
+    if CACHED_REDUCED_MOTION.late_changed() || CACHED_DOUBLE_CLICK.late_changed() {
+        window.request_redraw();
+    }
+}
+
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
+fn redraw_fallback_windows() {
+    let live: Vec<_> = {
+        let mut windows = FALLBACK_WINDOWS.lock().unwrap_or_else(|e| e.into_inner());
+        windows.retain(|w| w.strong_count() > 0);
+        windows.iter().filter_map(std::sync::Weak::upgrade).collect()
+    };
+    for window in live {
+        window.request_redraw();
+    }
+}
+
+#[cfg(all(target_os = "linux", not(feature = "dbus")))]
 pub(crate) fn reduced_motion() -> bool {
-    static CACHED: CachedReducedMotion = CachedReducedMotion::new();
-    CACHED.get_or_init(read_reduced_motion_fallback)
+    CACHED_REDUCED_MOTION.get_or_init_notifying(read_reduced_motion_fallback, redraw_fallback_windows)
 }
 
 /// Default double-click interval (milliseconds) when the Linux desktop reports none.
@@ -64,40 +98,147 @@ pub(crate) fn double_click_interval() -> f64 {
 
 #[cfg(all(target_os = "linux", not(feature = "dbus")))]
 pub(crate) fn double_click_interval() -> f64 {
-    static CACHED: CachedDoubleClick = CachedDoubleClick::new();
-    CACHED.get_or_init(read_double_click_fallback)
+    CACHED_DOUBLE_CLICK.get_or_init_notifying(read_double_click_fallback, redraw_fallback_windows)
+}
+
+#[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CacheState<T> {
+    /// No worker started yet.
+    Unstarted,
+    /// Worker is reading the platform setting; `timed_out` records that at least one caller
+    /// returned `default` before the worker finished.
+    Pending { timed_out: bool },
+    /// Worker finished and stored the resolved setting; `late_changed` is true when a caller
+    /// already returned `default` and the resolved setting differs from it.
+    Ready { value: T, late_changed: bool },
+}
+
+/// One-shot off-UI-thread cache for Linux fallback preference reads when `dbus` is disabled:
+/// spawns one short-lived worker thread per process, waits at most `FIRST_ANSWER` so launch does
+/// not stall, and notifies open windows if a non-default answer arrives after that wait expires.
+#[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
+struct CachedPref<T: Copy + Eq + Send + Sync + 'static> {
+    default: T,
+    state: std::sync::Mutex<CacheState<T>>,
+    ready: std::sync::Condvar,
+}
+
+#[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
+impl<T: Copy + Eq + Send + Sync + 'static> CachedPref<T> {
+    const FIRST_ANSWER: std::time::Duration = std::time::Duration::from_millis(100);
+
+    const fn new(default: T) -> Self {
+        Self {
+            default,
+            state: std::sync::Mutex::new(CacheState::Unstarted),
+            ready: std::sync::Condvar::new(),
+        }
+    }
+
+    fn get_or_init_with(
+        &'static self,
+        name: &'static str,
+        wait: std::time::Duration,
+        read: impl FnOnce() -> T + Send + 'static,
+        on_late: impl FnOnce() + Send + 'static,
+    ) -> T {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        match *state {
+            CacheState::Ready { value, .. } => return value,
+            CacheState::Pending { ref mut timed_out } => {
+                *timed_out = true;
+                return self.default;
+            }
+            CacheState::Unstarted => *state = CacheState::Pending { timed_out: false },
+        }
+        let spawned = std::thread::Builder::new().name(name.into()).spawn(move || {
+            let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or(self.default);
+            let notify_late = {
+                let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let was_timed_out = matches!(*state, CacheState::Pending { timed_out: true });
+                let late_changed = was_timed_out && value != self.default;
+                *state = CacheState::Ready { value, late_changed };
+                self.ready.notify_all();
+                late_changed
+            };
+            if notify_late {
+                on_late();
+            }
+        });
+        if spawned.is_err() {
+            *state = CacheState::Ready { value: self.default, late_changed: false };
+            self.ready.notify_all();
+            return self.default;
+        }
+        let (mut state, _) = self
+            .ready
+            .wait_timeout_while(state, wait, |s| matches!(*s, CacheState::Pending { .. }))
+            .unwrap_or_else(|e| e.into_inner());
+        match *state {
+            CacheState::Ready { value, .. } => value,
+            CacheState::Pending { ref mut timed_out } => {
+                *timed_out = true;
+                self.default
+            }
+            CacheState::Unstarted => self.default,
+        }
+    }
+
+    fn late_changed(&self) -> bool {
+        matches!(
+            *self.state.lock().unwrap_or_else(|e| e.into_inner()),
+            CacheState::Ready { late_changed: true, .. }
+        )
+    }
+
+    #[cfg(test)]
+    fn wait_ready(&self) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        while !matches!(*state, CacheState::Ready { .. }) {
+            state = self.ready.wait(state).unwrap_or_else(|e| e.into_inner());
+        }
+    }
 }
 
 /// One-shot off-UI-thread cache for the Linux fallback reduced-motion read when the `dbus`
 /// feature is disabled: spawns one short-lived worker thread per process so focus changes never
 /// touch the filesystem or `dlopen` libgio on the UI thread.
 #[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
-struct CachedReducedMotion {
-    started: std::sync::OnceLock<()>,
-    value: std::sync::atomic::AtomicBool,
-}
+struct CachedReducedMotion(CachedPref<bool>);
 
 #[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
 impl CachedReducedMotion {
-    const FIRST_ANSWER: std::time::Duration = std::time::Duration::from_millis(100);
-
     const fn new() -> Self {
-        Self {
-            started: std::sync::OnceLock::new(),
-            value: std::sync::atomic::AtomicBool::new(false),
-        }
+        Self(CachedPref::new(false))
     }
 
+    fn get_or_init_notifying(&'static self, read: fn() -> bool, on_late: fn()) -> bool {
+        self.0.get_or_init_with("rune-reduced-motion", CachedPref::<bool>::FIRST_ANSWER, read, on_late)
+    }
+
+    fn late_changed(&self) -> bool {
+        self.0.late_changed()
+    }
+
+    #[cfg(test)]
     fn get_or_init(&'static self, read: fn() -> bool) -> bool {
-        self.started.get_or_init(|| {
-            let (ready, first) = std::sync::mpsc::sync_channel(1);
-            let worker = std::thread::Builder::new().name("rune-reduced-motion".into()).spawn(move || {
-                self.value.store(read(), std::sync::atomic::Ordering::Relaxed);
-                ready.send(()).ok();
-            });
-            if worker.is_ok() { first.recv_timeout(Self::FIRST_ANSWER).ok(); }
-        });
-        self.value.load(std::sync::atomic::Ordering::Relaxed)
+        self.get_or_init_notifying(read, || {})
+    }
+
+    #[cfg(test)]
+    fn get_or_init_with(
+        &'static self,
+        wait: std::time::Duration,
+        read: impl FnOnce() -> bool + Send + 'static,
+        on_late: impl FnOnce() + Send + 'static,
+    ) -> bool {
+        self.0.get_or_init_with("rune-reduced-motion", wait, read, on_late)
+    }
+
+    #[cfg(test)]
+    fn wait_ready(&self) {
+        self.0.wait_ready();
     }
 }
 
@@ -105,35 +246,52 @@ impl CachedReducedMotion {
 /// feature is disabled: spawns one short-lived worker thread per process so window creation or
 /// redraws never touch the filesystem or `dlopen` libgio on the UI thread.
 #[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
-struct CachedDoubleClick {
-    started: std::sync::OnceLock<()>,
-    ms: std::sync::atomic::AtomicU32,
-}
+struct CachedDoubleClick(CachedPref<u32>);
 
 #[cfg(any(test, all(target_os = "linux", not(feature = "dbus"))))]
 impl CachedDoubleClick {
-    const FIRST_ANSWER: std::time::Duration = std::time::Duration::from_millis(100);
-
     const fn new() -> Self {
-        Self {
-            started: std::sync::OnceLock::new(),
-            ms: std::sync::atomic::AtomicU32::new(0),
-        }
+        Self(CachedPref::new(DEFAULT_DOUBLE_CLICK_MS))
     }
 
+    fn get_or_init_notifying(&'static self, read: fn() -> Option<u32>, on_late: fn()) -> f64 {
+        let ms = self.0.get_or_init_with(
+            "rune-double-click",
+            CachedPref::<u32>::FIRST_ANSWER,
+            move || read().and_then(clamp_double_click_ms).unwrap_or(DEFAULT_DOUBLE_CLICK_MS),
+            on_late,
+        );
+        f64::from(ms) / 1000.0
+    }
+
+    fn late_changed(&self) -> bool {
+        self.0.late_changed()
+    }
+
+    #[cfg(test)]
     fn get_or_init(&'static self, read: fn() -> Option<u32>) -> f64 {
-        self.started.get_or_init(|| {
-            let (ready, first) = std::sync::mpsc::sync_channel(1);
-            let worker = std::thread::Builder::new().name("rune-double-click".into()).spawn(move || {
-                if let Some(ms) = read().and_then(clamp_double_click_ms) {
-                    self.ms.store(ms, std::sync::atomic::Ordering::Relaxed);
-                }
-                ready.send(()).ok();
-            });
-            if worker.is_ok() { first.recv_timeout(Self::FIRST_ANSWER).ok(); }
-        });
-        let ms = self.ms.load(std::sync::atomic::Ordering::Relaxed);
-        if ms > 0 { f64::from(ms) / 1000.0 } else { DEFAULT_DOUBLE_CLICK_SECS }
+        self.get_or_init_notifying(read, || {})
+    }
+
+    #[cfg(test)]
+    fn get_or_init_with(
+        &'static self,
+        wait: std::time::Duration,
+        read: impl FnOnce() -> Option<u32> + Send + 'static,
+        on_late: impl FnOnce() + Send + 'static,
+    ) -> f64 {
+        let ms = self.0.get_or_init_with(
+            "rune-double-click",
+            wait,
+            move || read().and_then(clamp_double_click_ms).unwrap_or(DEFAULT_DOUBLE_CLICK_MS),
+            on_late,
+        );
+        f64::from(ms) / 1000.0
+    }
+
+    #[cfg(test)]
+    fn wait_ready(&self) {
+        self.0.wait_ready();
     }
 }
 
@@ -417,6 +575,8 @@ pub(crate) fn desktop_dark(window: &winit::window::Window) -> Option<bool> {
 pub(crate) fn window_dark(window: &std::sync::Arc<winit::window::Window>, theme: Option<&str>) -> bool {
     #[cfg(all(target_os = "linux", feature = "dbus"))]
     crate::platform::portal_appearance::follow(window);
+    #[cfg(all(target_os = "linux", not(feature = "dbus")))]
+    follow_fallback(window);
     match theme {
         Some("light") => false,
         Some("dark") => true,
