@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fast, opt-in local developer checks for Rune (pure POSIX bash/awk/grep; no Python required).
-# Usage: scripts/check-local.sh [--wasm] [--hot] [--all] [--tests] [--help]
+# Usage: scripts/check-local.sh [--wasm] [--hot] [--features] [--all] [--tests] [--help]
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -19,7 +19,8 @@ Default steps:
 Options:
   --wasm        Also run cargo check-wasm and cargo check-webgl
   --hot         Also run cargo check-hot (rune with --features hot)
-  --all         Check and lint --workspace --all-targets instead of default members (includes --hot)
+  --features    Also check optional/no-default feature sets (gpu counters, Linux noop, rune optional features, rune-kit --all-features)
+  --all         Check and lint --workspace --all-targets instead of default members (includes --hot and --features)
   --tests       Also run cargo test-fast
   -h, --help    Show this help message and exit
 EOF
@@ -27,6 +28,7 @@ EOF
 
 run_wasm=0
 run_hot=0
+run_features=0
 run_all=0
 run_tests=0
 
@@ -34,6 +36,7 @@ for arg in "$@"; do
   case "$arg" in
     --wasm) run_wasm=1 ;;
     --hot) run_hot=1 ;;
+    --features) run_features=1 ;;
     --all) run_all=1 ;;
     --tests) run_tests=1 ;;
     -h|--help) usage; exit 0 ;;
@@ -135,6 +138,16 @@ fi
 
 if [ "$run_hot" -eq 1 ] || [ "$run_all" -eq 1 ]; then
   run_step "cargo check-hot" cargo check-hot
+fi
+
+if [ "$run_features" -eq 1 ] || [ "$run_all" -eq 1 ]; then
+  run_step "cargo check-gpu-tests" cargo check-gpu-tests
+  if [ "$(uname -s)" = "Linux" ]; then
+    run_step "cargo check-linux-noop" cargo check-linux-noop
+  fi
+  run_step "rune optional features" cargo check -p rune --features tooling,keys-overlay,frame-profile,native-file-dialog,baseline-taffy --tests
+  run_step "rune-kit --all-features" cargo check -p rune-kit --all-features --tests
+  run_step "no-default-features tests" cargo check --no-default-features -p rune -p rune-gpu -p rune-image -p rune-media -p rune-text -p rune-spell -p rune-kit --tests
 fi
 
 if [ "$run_tests" -eq 1 ]; then
