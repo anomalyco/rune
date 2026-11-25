@@ -208,6 +208,7 @@ pub(super) fn item_json_fields(
     if aria.required { obj.insert("rq".into(), json!(true)); }
     if let Some(hp) = aria.has_popup { obj.insert("hp".into(), json!(hp)); }
     if let Some(or) = aria.orientation { obj.insert("or".into(), json!(or)); }
+    if let Some(ac) = aria.auto_complete { obj.insert("ac".into(), json!(ac)); }
     if let Some(ct) = aria.controls.as_deref() { obj.insert("ct".into(), json!(ct)); }
     if let Some(ow) = aria.owns.as_deref() { obj.insert("ow".into(), json!(ow)); }
     if let Some(dir) = dir {

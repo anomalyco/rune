@@ -77,7 +77,7 @@ impl RuntimeCore {
         if let Some(m) = n.a11y.more.as_deref() {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy,
                 m.row_count, m.column_count, m.row_index, m.column_index).hash(&mut h);
-            (m.multiselectable, m.required, m.has_popup, m.orientation).hash(&mut h);
+            (m.multiselectable, m.required, m.has_popup, m.orientation, m.auto_complete).hash(&mut h);
             [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j))).hash(&mut h);
             if let Some(r) = m.range { [r.value, r.min, r.max, r.step.unwrap_or(f64::NAN)].map(f64::to_bits).hash(&mut h); }
             self.a11y_active_descendant(i).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
@@ -270,6 +270,13 @@ impl RuntimeCore {
                 node.set_orientation(match o {
                     crate::Orientation::Horizontal => accesskit::Orientation::Horizontal,
                     crate::Orientation::Vertical => accesskit::Orientation::Vertical,
+                });
+            }
+            if let Some(ac) = m.auto_complete {
+                node.set_auto_complete(match ac {
+                    crate::AutoComplete::Inline => accesskit::AutoComplete::Inline,
+                    crate::AutoComplete::List => accesskit::AutoComplete::List,
+                    crate::AutoComplete::Both => accesskit::AutoComplete::Both,
                 });
             }
             if let Some(j) = m.controls.as_deref().and_then(|k| self.a11y_related_target(i, k)) {

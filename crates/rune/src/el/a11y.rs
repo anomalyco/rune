@@ -78,6 +78,40 @@ impl Orientation {
     }
 }
 
+/// How typing in a text field or editable combobox suggests or completes values
+/// ([`El::auto_complete`]), as ARIA's `aria-autocomplete`.
+///
+/// Leave unset for ARIA's implicit `none` default (no completion).
+///
+/// ```
+/// # use rune::{AutoComplete, TextEdit, TextStyle, text_input};
+/// # let edit = TextEdit::default();
+/// let field = text_input(&edit, TextStyle::new(14.0, 400.0))
+///     .single_line()
+///     .role("combobox")
+///     .label("Fruit")
+///     .auto_complete(AutoComplete::List);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AutoComplete {
+    /// Inserts an inline suggestion after the caret (`aria-autocomplete="inline"`).
+    Inline,
+    /// Filters or presents a popup list of suggestions (`aria-autocomplete="list"`).
+    List,
+    /// Completes inline and presents a popup list of suggestions (`aria-autocomplete="both"`).
+    Both,
+}
+
+impl AutoComplete {
+    pub(crate) fn as_aria(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::List => "list",
+            Self::Both => "both",
+        }
+    }
+}
+
 /// A checkbox's, switch's or toggle button's state for accessibility ([`El::checked`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Checked {
@@ -150,6 +184,8 @@ pub(crate) struct A11yMore {
     pub has_popup: Option<HasPopup>,
     /// Layout axis of a composite widget, toolbar, scrollbar or separator (`El::orientation`).
     pub orientation: Option<Orientation>,
+    /// How typing suggests or completes values (`El::auto_complete`).
+    pub auto_complete: Option<AutoComplete>,
     /// `El::controls`'s key (ARIA `aria-controls`).
     pub controls: Option<String>,
     /// `El::owns`'s key (ARIA `aria-owns`).
@@ -412,6 +448,25 @@ impl El {
     /// ```
     pub fn orientation(mut self, orientation: Orientation) -> Self {
         self.cold_mut().a11y.more().orientation = Some(orientation);
+        self
+    }
+    /// How typing in this control suggests or completes values (ARIA `aria-autocomplete`), on
+    /// an editable `combobox`, `textbox`, or `searchbox`. Leave unset for ARIA's implicit
+    /// `none` default.
+    ///
+    /// ```
+    /// # use rune::{AutoComplete, HasPopup, TextEdit, TextStyle, text_input};
+    /// # let edit = TextEdit::default();
+    /// let field = text_input(&edit, TextStyle::new(14.0, 400.0))
+    ///     .single_line()
+    ///     .key("fruit")
+    ///     .role("combobox")
+    ///     .label("Fruit")
+    ///     .has_popup(HasPopup::Listbox)
+    ///     .auto_complete(AutoComplete::List);
+    /// ```
+    pub fn auto_complete(mut self, mode: AutoComplete) -> Self {
+        self.cold_mut().a11y.more().auto_complete = Some(mode);
         self
     }
     /// The element whose contents or presence this element controls (ARIA `aria-controls`),

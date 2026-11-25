@@ -96,7 +96,8 @@ it into an overlay layer so an app can embed it inside its own popover or panel 
 `rune-popup-list--rich-inline` in the gallery). The contract follows OpenCode's
 `components/list` and `use-filtered-list`; Rune's fuzzy ranking
 is its own, not bit-identical to fuzzysort. `.search_label(..)` sets the internal search
-input's accessible name independently of the outer label. `rune-combobox--searchable` is its
+input's accessible name independently of the outer label, and the open search input reports
+`AutoComplete::List` (`aria-autocomplete="list"`). `rune-combobox--searchable` is its
 200-row gallery scene, `rune-combobox--animated-filter` the same with the crossfade, and
 `rune-combobox--localized` shows localised labels; there is no matching combobox Storybook story
 to diff.
@@ -111,7 +112,8 @@ the accessory independently focusable), and `.scroll_bar(bool)` / `.scroll_bar_s
 `rune-textarea--composer` in `kit-gallery`), `.line_home_end(bool)` (opting into visual line-based Home/End and Shift+Home/End on macOS for code editors while keeping Cmd+Home/End and Cmd+Up/Down on document ends; see `rune-textarea--code-keys` in `kit-gallery`), and `.reveal_caret_on_focus(bool)` (also on `TextInput`, off by default, forwarding `El::reveal_caret_on_focus` so focusing a scrolled field brings its caret into view; see `rune-textarea--focus-caret` in `kit-gallery`). `TextInput` and `TextArea` also accept `.read_only(bool)` (forwarding `El::read_only` to the
 inner editor so focus, caret, keyboard/pointer selection, and Copy stay active while mutating
 edits, Cut, Paste, Undo/Redo, IME, and spellcheck are blocked; see `rune-text-input--read-only`
-in `kit-gallery`). `TextInput`, `TextArea`
+in `kit-gallery`), and `TextInput::auto_complete(rune::AutoComplete)` forwards
+`El::auto_complete` (`aria-autocomplete`) to the inner editor. `TextInput`, `TextArea`
 and `TextField` forward `on_secondary_press` (replacing the default field context menu),
 `on_pill_press` and `on_pill_secondary` (intercepting primary and secondary clicks on `Mark::Pill`
 chips, skipped when disabled), `on_input_selection` (running before view rebuild whenever runtime

@@ -308,6 +308,7 @@ pub struct TextInput {
     clear: bool,
     invalid: bool,
     read_only: bool,
+    auto_complete: Option<rune::AutoComplete>,
     active: Option<String>,
     state: State,
     edits: EditActs,
@@ -380,6 +381,7 @@ impl TextInput {
             clear: false,
             invalid: false,
             read_only: false,
+            auto_complete: None,
             active: None,
             state: State::Rest,
             edits: EditActs::default(),
@@ -479,6 +481,24 @@ impl TextInput {
         self.read_only = read_only;
         self
     }
+    /// How typing in this field suggests or completes values
+    /// ([`El::auto_complete`](rune::El::auto_complete), ARIA `aria-autocomplete`). Leave unset
+    /// for ARIA's implicit `none` default.
+    ///
+    /// ```
+    /// # use rune::{AutoComplete, TextEdit};
+    /// # use rune_kit::{Kit, TextInput};
+    /// # let edit = TextEdit::default();
+    /// # let k = Kit::neutral(true);
+    /// let _ = TextInput::new(&edit)
+    ///     .placeholder("Filter…")
+    ///     .auto_complete(AutoComplete::List)
+    ///     .build(&k);
+    /// ```
+    pub fn auto_complete(mut self, mode: rune::AutoComplete) -> Self {
+        self.auto_complete = Some(mode);
+        self
+    }
     /// The suggestion this field's arrow keys highlight, by its key (`aria-activedescendant`):
     /// focus stays in the field and a screen reader reads the highlighted row.
     pub fn active_descendant(mut self, key: Option<impl Into<String>>) -> Self {
@@ -533,6 +553,9 @@ impl TextInput {
         let mut field = name_field(field, self.label.as_deref(), &self.placeholder, self.description.as_deref(), disabled)
             .invalid(self.invalid)
             .read_only(self.read_only);
+        if let Some(mode) = self.auto_complete {
+            field = field.auto_complete(mode);
+        }
         if let Some(key) = self.active.clone() {
             field = field.active_descendant(key);
         }

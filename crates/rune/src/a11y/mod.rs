@@ -16,6 +16,8 @@ pub(crate) mod actions;
 mod actions_tests;
 #[cfg(test)]
 mod aria_tests;
+#[cfg(test)]
+mod auto_complete_tests;
 pub(crate) mod dump;
 #[cfg(test)]
 mod dump_tests;

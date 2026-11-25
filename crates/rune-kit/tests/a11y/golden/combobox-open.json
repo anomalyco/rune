@@ -41,6 +41,7 @@
                                 "set-text-selection"
                               ],
                               "activeDescendant": "model-option-fast",
+                              "autoComplete": "list",
                               "key": "input",
                               "name": "Search Model",
                               "placeholder": "Search",
