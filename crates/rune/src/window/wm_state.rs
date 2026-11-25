@@ -118,17 +118,26 @@ impl TiledEdges {
 #[non_exhaustive]
 pub struct WindowActions {
     /// Whether the window manager can open a window menu (`_GTK_SHOW_WINDOW_MENU` in root
-    /// `_NET_SUPPORTED` on X11).
+    /// `_NET_SUPPORTED` on X11; `xdg_toplevel::wm_capabilities` on Wayland v5+). `None` when
+    /// unknown (absent `_NET_SUPPORTED`, pre-configure or `< v5` on Wayland, non-Linux, overlays).
     pub window_menu: Option<bool>,
-    /// Whether the window manager allows maximizing this window (`_NET_WM_ACTION_MAXIMIZE_HORZ`
-    /// and `_NET_WM_ACTION_MAXIMIZE_VERT` in per-window `_NET_WM_ALLOWED_ACTIONS` on X11).
+    /// Whether maximizing this window is allowed (`_NET_WM_ACTION_MAXIMIZE_HORZ` and
+    /// `_NET_WM_ACTION_MAXIMIZE_VERT` on X11; `xdg_toplevel::wm_capabilities` combined with window
+    /// resizability on Wayland, matching GTK4). `None` when unknown (absent
+    /// `_NET_WM_ALLOWED_ACTIONS`, resizable window on Wayland `< v5` or pre-configure, non-Linux).
     pub maximize: Option<bool>,
-    /// Whether the window manager allows minimizing this window (`_NET_WM_ACTION_MINIMIZE` on X11).
+    /// Whether minimizing this window is allowed (`_NET_WM_ACTION_MINIMIZE` on X11;
+    /// `xdg_toplevel::wm_capabilities` on Wayland v5+). `None` when unknown.
     pub minimize: Option<bool>,
-    /// Whether the window manager allows making this window full screen
-    /// (`_NET_WM_ACTION_FULLSCREEN` on X11).
+    /// Whether making this window full screen is allowed (`_NET_WM_ACTION_FULLSCREEN` on X11;
+    /// `xdg_toplevel::wm_capabilities` on Wayland v5+). On non-resizable windows, X11/Mutter
+    /// reports `Some(false)` while Wayland/Mutter allows full screen and reports `Some(true)`.
+    /// `None` when unknown.
     pub fullscreen: Option<bool>,
-    /// Whether the window manager allows closing this window (`_NET_WM_ACTION_CLOSE` on X11).
+    /// Whether closing this window is allowed (`_NET_WM_ACTION_CLOSE` on X11; window closeability
+    /// on Wayland once configured, matching GTK4's `deletable` property since `xdg-shell` always
+    /// lets a client close its own toplevel). `None` when unknown (absent `_NET_WM_ALLOWED_ACTIONS`
+    /// on X11, pre-configure on Wayland, non-Linux, overlays).
     pub close: Option<bool>,
 }
 

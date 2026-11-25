@@ -10,6 +10,7 @@ fn sample_atoms() -> ActionAtoms {
         close: 205,
         state_maximized_horz: 301,
         state_maximized_vert: 302,
+        state_fullscreen: 303,
     }
 }
 
@@ -25,33 +26,43 @@ const MUTTER_TILE_RIGHT: u32 = 0x95; // TOP|RIGHT|BOTTOM TILED, LEFT RESIZABLE
 const MUTTER_VERT_MAX_ONLY: u32 = 0x99; // TOP|BOTTOM TILED, LEFT|RIGHT RESIZABLE (Ubuntu Tiling Assistant)
 
 #[test]
-fn frame_extents_decodes_server_client_borderless_absent_and_malformed() {
-    // Malformed lengths always stay Unknown.
-    assert_eq!(decode_frame_extents(Some(&[]), false, true, false), DecorationMode::Unknown);
-    assert_eq!(decode_frame_extents(Some(&[0, 0, 0]), false, true, false), DecorationMode::Unknown);
-    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0, 0]), false, true, false), DecorationMode::Unknown);
-    assert_eq!(decode_frame_extents(Some(&[1, 1, 24, 1, 9]), true, true, true), DecorationMode::Unknown);
+fn frame_extents_decodes_server_client_borderless_fullscreen_absent_and_malformed() {
+    let unk = DecorationMode::Unknown;
+    let srv = DecorationMode::Server;
+    let cli = DecorationMode::Client;
 
-    // Explicit four zeroes -> Client regardless of requested_decorations.
-    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0]), true, true, false), DecorationMode::Client);
-    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0]), false, true, false), DecorationMode::Client);
+    // Malformed lengths always stay Unknown (outside fullscreen).
+    assert_eq!(decode_frame_extents(Some(&[]), false, true, false, false, unk), unk);
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0]), false, true, false, false, unk), unk);
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0, 0]), false, true, false, false, unk), unk);
+    assert_eq!(decode_frame_extents(Some(&[1, 1, 24, 1, 9]), true, true, true, false, unk), unk);
+
+    // Explicit four zeroes -> Client unless preserving a framed titled window's Server mode.
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0]), true, true, false, false, unk), cli);
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0]), false, true, false, false, unk), cli);
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0]), false, true, false, false, srv), cli);
 
     // Any non-zero extent -> Server even if borderless was requested.
-    assert_eq!(decode_frame_extents(Some(&[1, 0, 0, 0]), false, true, true), DecorationMode::Server);
-    assert_eq!(decode_frame_extents(Some(&[0, 1, 0, 0]), true, true, true), DecorationMode::Server);
-    assert_eq!(decode_frame_extents(Some(&[0, 0, 37, 0]), true, true, true), DecorationMode::Server);
-    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 1]), true, true, true), DecorationMode::Server);
+    assert_eq!(decode_frame_extents(Some(&[1, 0, 0, 0]), false, true, true, false, unk), srv);
+    assert_eq!(decode_frame_extents(Some(&[0, 1, 0, 0]), true, true, true, false, unk), srv);
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 37, 0]), true, true, true, false, unk), srv);
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 1]), true, true, true, false, unk), srv);
 
     // Absent _NET_FRAME_EXTENTS:
-    // - Titled window (requested_decorations=true) stays Unknown (never inferred from is_decorated()).
-    assert_eq!(decode_frame_extents(None, true, true, true), DecorationMode::Unknown);
-    assert_eq!(decode_frame_extents(None, true, true, false), DecorationMode::Unknown);
-    // - Borderless window managed without a WM frame (Mutter leaves _NET_FRAME_EXTENTS unset) -> Client.
-    assert_eq!(decode_frame_extents(None, false, true, false), DecorationMode::Client);
-    // - Borderless window not yet managed by a WM -> Unknown.
-    assert_eq!(decode_frame_extents(None, false, false, false), DecorationMode::Unknown);
-    // - Borderless window reparented into a WM frame without extents -> Unknown.
-    assert_eq!(decode_frame_extents(None, false, true, true), DecorationMode::Unknown);
+    assert_eq!(decode_frame_extents(None, true, true, true, false, unk), unk);
+    assert_eq!(decode_frame_extents(None, true, true, false, false, unk), unk);
+    assert_eq!(decode_frame_extents(None, false, true, false, false, unk), cli);
+    assert_eq!(decode_frame_extents(None, false, false, false, false, unk), unk);
+    assert_eq!(decode_frame_extents(None, false, true, true, false, unk), unk);
+
+    // Full screen: preserves prior confirmed mode when Mutter collapses frame borders to [0, 0, 0, 0].
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0]), true, true, true, true, srv), srv);
+    assert_eq!(decode_frame_extents(None, false, true, false, true, cli), cli);
+    // Framed titled window launching directly into fullscreen stays Unknown rather than Client.
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0]), true, true, true, true, unk), unk);
+    // 1-frame window right after leaving fullscreen while mutter-x11-frames still reports [0, 0, 0, 0]:
+    // still framed & titled with previous_mode == Server -> stays Server (no stale Client frame).
+    assert_eq!(decode_frame_extents(Some(&[0, 0, 0, 0]), true, true, true, false, srv), srv);
 }
 
 #[test]
@@ -66,13 +77,11 @@ fn edge_constraints_decodes_each_tiled_bit_ignores_resizable_bits_and_handles_ab
     assert_eq!(decode_edge_constraints(Some(&[MUTTER_TILE_LEFT]), true), Some(TiledEdges::new(true, false, true, true)));
     assert_eq!(decode_edge_constraints(Some(&[MUTTER_TILE_RIGHT]), true), Some(TiledEdges::new(true, true, true, false)));
 
-    // Individual tiled bits.
     assert_eq!(decode_edge_constraints(Some(&[GTK_EDGE_TOP_TILED]), false), Some(TiledEdges::new(true, false, false, false)));
     assert_eq!(decode_edge_constraints(Some(&[GTK_EDGE_RIGHT_TILED]), false), Some(TiledEdges::new(false, true, false, false)));
     assert_eq!(decode_edge_constraints(Some(&[GTK_EDGE_BOTTOM_TILED]), false), Some(TiledEdges::new(false, false, true, false)));
     assert_eq!(decode_edge_constraints(Some(&[GTK_EDGE_LEFT_TILED]), false), Some(TiledEdges::new(false, false, false, true)));
 
-    // Resizable bits (1, 3, 5, 7) and higher bits do not count as tiled.
     let resizable_only = (1 << 1) | (1 << 3) | (1 << 5) | (1 << 7) | 0xFFFF_FF00;
     assert_eq!(decode_edge_constraints(Some(&[resizable_only]), true), Some(TiledEdges::NONE));
 }
@@ -83,7 +92,6 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
     let edge_atom = 401;
     let supported = [atoms.gtk_show_window_menu, edge_atom];
     let normal_actions = [atoms.minimize, atoms.maximize_horz, atoms.maximize_vert, atoms.fullscreen, atoms.close];
-    // Ubuntu 26.04 monitor (1920x1080) with top bar (32px) and left dock (68px).
     let monitor = PixelRect::new(0, 0, 1920, 1080);
     let net_workarea = [68u32, 32, 1852, 1048];
     let work_area = resolve_work_area(Some(&net_workarea), Some(0), Some(monitor));
@@ -93,11 +101,10 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
     let right_half = Some(PixelRect::new(68 + 926, 32, 926, 1048));
     let centered_vert_max = Some(PixelRect::new(400, 32, 926, 1048));
 
-    // 1. Titled window (Mutter reparents into priv->frame->xwindow and writes _GTK_EDGE_CONSTRAINTS
-    //    on the frame window, not the client window; _NET_FRAME_EXTENTS is written on client window).
+    // 1. Titled window tiled left (stock Mutter writes 0x59 on frame, even if client holds stale 0xAA).
     let titled_tile_left_stock = decode_wm_state(RawX11WmState {
         frame_extents: Some(&[0, 0, 37, 0]),
-        client_edge_constraints: None,
+        client_edge_constraints: Some(&[MUTTER_UNTILED]),
         frame_edge_constraints: Some(&[MUTTER_TILE_LEFT]),
         wm_state: Some(&[atoms.state_maximized_vert]),
         allowed_actions: Some(&normal_actions),
@@ -108,6 +115,7 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
         has_wm_frame: true,
         outer_rect: left_half,
         work_area,
+        ..Default::default()
     });
     assert_eq!(titled_tile_left_stock.decoration_mode, DecorationMode::Server);
     assert_eq!(titled_tile_left_stock.tiled_edges, Some(TiledEdges::new(true, false, true, true)));
@@ -126,14 +134,33 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
         has_wm_frame: true,
         outer_rect: right_half,
         work_area,
+        ..Default::default()
     });
     assert_eq!(titled_tile_right_ubuntu.decoration_mode, DecorationMode::Server);
     assert_eq!(titled_tile_right_ubuntu.tiled_edges, Some(TiledEdges::new(true, true, true, false)));
 
-    // Titled window maximized (Mutter writes 0x55 on frame) and restored (0xAA on frame).
-    let titled_max = decode_wm_state(RawX11WmState {
+    // Titled window maximized: agrees with borderless X11 and Wayland (TiledEdges::ALL) even when
+    // client holds a stale pre-frame 0xAA or frame _GTK_EDGE_CONSTRAINTS has not updated yet.
+    let titled_max_stale_client = decode_wm_state(RawX11WmState {
         frame_extents: Some(&[0, 0, 37, 0]),
-        client_edge_constraints: None,
+        client_edge_constraints: Some(&[MUTTER_UNTILED]),
+        frame_edge_constraints: None,
+        wm_state: Some(&[atoms.state_maximized_vert, atoms.state_maximized_horz]),
+        allowed_actions: Some(&normal_actions),
+        net_supported: Some(&supported),
+        gtk_edge_constraints_atom: edge_atom,
+        action_atoms: atoms,
+        requested_decorations: true,
+        has_wm_frame: true,
+        outer_rect: work_area,
+        work_area,
+        ..Default::default()
+    });
+    assert_eq!(titled_max_stale_client.tiled_edges, Some(TiledEdges::ALL));
+
+    let titled_max_frame = decode_wm_state(RawX11WmState {
+        frame_extents: Some(&[0, 0, 37, 0]),
+        client_edge_constraints: Some(&[MUTTER_UNTILED]),
         frame_edge_constraints: Some(&[MUTTER_MAXIMIZED]),
         wm_state: Some(&[atoms.state_maximized_vert, atoms.state_maximized_horz]),
         allowed_actions: Some(&normal_actions),
@@ -144,8 +171,9 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
         has_wm_frame: true,
         outer_rect: work_area,
         work_area,
+        ..Default::default()
     });
-    assert_eq!(titled_max.tiled_edges, Some(TiledEdges::ALL));
+    assert_eq!(titled_max_frame.tiled_edges, Some(TiledEdges::ALL));
 
     let titled_restored = decode_wm_state(RawX11WmState {
         frame_extents: Some(&[0, 0, 37, 0]),
@@ -160,11 +188,11 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
         has_wm_frame: true,
         outer_rect: Some(PixelRect::new(200, 150, 720, 420)),
         work_area,
+        ..Default::default()
     });
     assert_eq!(titled_restored.tiled_edges, Some(TiledEdges::NONE));
 
-    // 2. Borderless window (Mutter omits _NET_FRAME_EXTENTS when priv->frame == NULL, and writes
-    //    _GTK_EDGE_CONSTRAINTS on the client window; Ubuntu Tiling Assistant writes 0x99 + MAXIMIZED_VERT).
+    // 2. Borderless window tiled left/right on Ubuntu 26.04.
     let borderless_tile_left = decode_wm_state(RawX11WmState {
         frame_extents: None,
         client_edge_constraints: Some(&[MUTTER_VERT_MAX_ONLY]),
@@ -178,6 +206,7 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
         has_wm_frame: false,
         outer_rect: left_half,
         work_area,
+        ..Default::default()
     });
     assert_eq!(borderless_tile_left.decoration_mode, DecorationMode::Client);
     assert_eq!(borderless_tile_left.tiled_edges, Some(TiledEdges::new(true, false, true, true)));
@@ -195,12 +224,12 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
         has_wm_frame: false,
         outer_rect: right_half,
         work_area,
+        ..Default::default()
     });
     assert_eq!(borderless_tile_right.decoration_mode, DecorationMode::Client);
     assert_eq!(borderless_tile_right.tiled_edges, Some(TiledEdges::new(true, true, true, false)));
 
-    // Vertically maximized in the center of the monitor (touching neither left nor right edge)
-    // must NOT fabricate left or right tiled edges.
+    // Floating vertically-maximized window touching neither side must not set left/right.
     let floating_vert_max = decode_wm_state(RawX11WmState {
         frame_extents: None,
         client_edge_constraints: Some(&[MUTTER_VERT_MAX_ONLY]),
@@ -214,8 +243,86 @@ fn mutter_gnome_table_titled_and_borderless_cells() {
         has_wm_frame: false,
         outer_rect: centered_vert_max,
         work_area,
+        ..Default::default()
     });
     assert_eq!(floating_vert_max.tiled_edges, Some(TiledEdges::new(true, false, true, false)));
+}
+
+#[test]
+fn titled_x11_window_keeps_server_decoration_mode_through_fullscreen_and_exit() {
+    let atoms = sample_atoms();
+    let edge_atom = 401;
+    let supported = [atoms.gtk_show_window_menu, edge_atom];
+    let normal_actions = [atoms.minimize, atoms.maximize_horz, atoms.maximize_vert, atoms.fullscreen, atoms.close];
+    let fullscreen_actions = [atoms.minimize, atoms.fullscreen, atoms.close];
+
+    // Before fullscreen: titled window has Server decorations.
+    let normal = decode_wm_state(RawX11WmState {
+        frame_extents: Some(&[0, 0, 37, 0]),
+        frame_edge_constraints: Some(&[MUTTER_UNTILED]),
+        wm_state: Some(&[]),
+        allowed_actions: Some(&normal_actions),
+        net_supported: Some(&supported),
+        gtk_edge_constraints_atom: edge_atom,
+        action_atoms: atoms,
+        requested_decorations: true,
+        has_wm_frame: true,
+        ..Default::default()
+    });
+    assert_eq!(normal.decoration_mode, DecorationMode::Server);
+    assert_eq!(normal.actions.maximize, Some(true));
+
+    // In fullscreen: Mutter collapses _NET_FRAME_EXTENTS to [0, 0, 0, 0] and drops maximize action.
+    // DecorationMode must stay Server while actions.maximize honestly reports Some(false).
+    let in_fullscreen = decode_wm_state(RawX11WmState {
+        frame_extents: Some(&[0, 0, 0, 0]),
+        frame_edge_constraints: Some(&[MUTTER_UNTILED]),
+        wm_state: Some(&[atoms.state_fullscreen]),
+        allowed_actions: Some(&fullscreen_actions),
+        net_supported: Some(&supported),
+        gtk_edge_constraints_atom: edge_atom,
+        action_atoms: atoms,
+        requested_decorations: true,
+        has_wm_frame: true,
+        previous_decoration_mode: normal.decoration_mode,
+        ..Default::default()
+    });
+    assert_eq!(in_fullscreen.decoration_mode, DecorationMode::Server);
+    assert_eq!(in_fullscreen.actions.maximize, Some(false));
+
+    // Frame 1 right after leaving fullscreen: _NET_WM_STATE_FULLSCREEN cleared before
+    // mutter-x11-frames restores [0, 0, 37, 0] (extents still [0, 0, 0, 0]). Must NOT flash Client.
+    let exit_frame_1 = decode_wm_state(RawX11WmState {
+        frame_extents: Some(&[0, 0, 0, 0]),
+        frame_edge_constraints: Some(&[MUTTER_UNTILED]),
+        wm_state: Some(&[]),
+        allowed_actions: Some(&normal_actions),
+        net_supported: Some(&supported),
+        gtk_edge_constraints_atom: edge_atom,
+        action_atoms: atoms,
+        requested_decorations: true,
+        has_wm_frame: true,
+        previous_decoration_mode: in_fullscreen.decoration_mode,
+        ..Default::default()
+    });
+    assert_eq!(exit_frame_1.decoration_mode, DecorationMode::Server);
+    assert_eq!(exit_frame_1.actions.maximize, Some(true));
+
+    // Frame 2 after leaving fullscreen: _NET_FRAME_EXTENTS restored to [0, 0, 37, 0].
+    let exit_frame_2 = decode_wm_state(RawX11WmState {
+        frame_extents: Some(&[0, 0, 37, 0]),
+        frame_edge_constraints: Some(&[MUTTER_UNTILED]),
+        wm_state: Some(&[]),
+        allowed_actions: Some(&normal_actions),
+        net_supported: Some(&supported),
+        gtk_edge_constraints_atom: edge_atom,
+        action_atoms: atoms,
+        requested_decorations: true,
+        has_wm_frame: true,
+        previous_decoration_mode: exit_frame_1.decoration_mode,
+        ..Default::default()
+    });
+    assert_eq!(exit_frame_2.decoration_mode, DecorationMode::Server);
 }
 
 #[test]
@@ -282,7 +389,6 @@ fn decode_wm_state_never_infers_server_decoration_mode_from_actions_or_supported
     let atoms = sample_atoms();
     let edge_atom = 401;
 
-    // Titled window with missing _NET_FRAME_EXTENTS stays Unknown even when managed and actions exist.
     let state = decode_wm_state(RawX11WmState {
         frame_extents: None,
         client_edge_constraints: None,
@@ -294,8 +400,7 @@ fn decode_wm_state_never_infers_server_decoration_mode_from_actions_or_supported
         action_atoms: atoms,
         requested_decorations: true,
         has_wm_frame: true,
-        outer_rect: None,
-        work_area: None,
+        ..Default::default()
     });
     assert_eq!(state.decoration_mode, DecorationMode::Unknown);
     assert_eq!(state.tiled_edges, Some(TiledEdges::NONE));
@@ -343,12 +448,10 @@ fn x11_property_notify_reread_wakes_headless_runtime_from_pre_map_to_framed_and_
         Env::new(true, 1.0),
     );
 
-    // Frame 1 before Mutter maps and sets _NET_FRAME_EXTENTS: decoration_mode stays Unknown.
     rt.frame(0.0);
     assert_eq!(rt.presented("x11-bar").unwrap().0[2], 10.0);
     assert_eq!((builds.get(), memo_builds.get()), (1, 1));
 
-    // PropertyNotify arrives after Mutter reparents and writes _NET_FRAME_EXTENTS + _NET_WM_STATE.
     let framed = decode_wm_state(RawX11WmState {
         frame_extents: Some(&[0, 0, 37, 0]),
         client_edge_constraints: None,
@@ -362,6 +465,7 @@ fn x11_property_notify_reread_wakes_headless_runtime_from_pre_map_to_framed_and_
         has_wm_frame: true,
         outer_rect: Some(PixelRect::new(200, 150, 720, 420)),
         work_area,
+        ..Default::default()
     });
     rt.set_window_manager_state(framed);
     assert!(rt.core().stale());
@@ -370,7 +474,6 @@ fn x11_property_notify_reread_wakes_headless_runtime_from_pre_map_to_framed_and_
     assert_eq!(rt.presented("x11-bar").unwrap().0[2], 20.0);
     assert_eq!((builds.get(), memo_builds.get()), (2, 2));
 
-    // PropertyNotify arrives on Super+Left: _NET_WM_STATE gets MAXIMIZED_VERT and frame gets 0x99.
     let tiled_left = decode_wm_state(RawX11WmState {
         frame_extents: Some(&[0, 0, 37, 0]),
         client_edge_constraints: None,
@@ -382,8 +485,10 @@ fn x11_property_notify_reread_wakes_headless_runtime_from_pre_map_to_framed_and_
         action_atoms: atoms,
         requested_decorations: true,
         has_wm_frame: true,
+        previous_decoration_mode: framed.decoration_mode,
         outer_rect: Some(PixelRect::new(68, 32, 926, 1048)),
         work_area,
+        ..Default::default()
     });
     rt.set_window_manager_state(tiled_left);
     assert!(rt.core().stale());

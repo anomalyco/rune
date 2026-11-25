@@ -1624,12 +1624,16 @@ rune::App::new(spec).fit_content_height().run();
   wherever the platform or window manager does not report a fact. Reading views and their `memo`
   closures rebuild automatically on change, while views that never read them do no extra work.
   On Linux Wayland, Rune reads `xdg-decoration` and `xdg_toplevel` configure state gated by
-  protocol version (`>= 2` for tiled edges, `>= 5` for `wm_capabilities`, `close: None`) and
-  wakes on decoration-mode or capability changes without a resize; on Linux X11, Rune reads
-  `_NET_FRAME_EXTENTS`, `_GTK_EDGE_CONSTRAINTS` (on the client window or Mutter's reparented
-  frame parent), `_NET_WM_STATE` / `_NET_WORKAREA` for half-tiles, per-window
-  `_NET_WM_ALLOWED_ACTIONS`, and root `_NET_SUPPORTED` in pipelined queries on chrome sync, window
-  move, and `PropertyNotify` (zero X11 round trips on ordinary redraws). Layer-shell overlays, macOS, Windows, web, adopted macOS
+  protocol version (`>= 2` for tiled edges — reporting the exact `TILED_*` states the compositor
+  sends, so extensions tiling via vertical maximize report only top and bottom — `>= 5` for
+  `wm_capabilities` combined with window resizability for `maximize`, and `close: Some(true)` once
+  configured, matching GTK4) and wakes on decoration-mode or capability changes without a resize;
+  on Linux X11, Rune reads `_NET_FRAME_EXTENTS` (preserving the non-fullscreen mode during and
+  right after full screen), `_GTK_EDGE_CONSTRAINTS` (preferring Mutter's reparented frame parent),
+  `_NET_WM_STATE` / `_NET_WORKAREA` (reporting `TiledEdges::ALL` while maximized consistently with
+  Wayland and resolving flush half-tile side edges), per-window `_NET_WM_ALLOWED_ACTIONS`, and
+  root `_NET_SUPPORTED` in pipelined queries on chrome sync, window move, and `PropertyNotify`
+  (zero X11 round trips on ordinary redraws). Layer-shell overlays, macOS, Windows, web, adopted macOS
   panels, and staged playground subviews report unknown values. Testable headlessly via
   `Runtime::set_window_manager_state`;
   `cargo run -p rune --example custom_titlebar` displays the live values.

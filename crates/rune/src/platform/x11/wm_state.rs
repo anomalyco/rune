@@ -72,29 +72,49 @@ pub(crate) struct ActionAtoms {
     pub(crate) close: u32,
     pub(crate) state_maximized_horz: u32,
     pub(crate) state_maximized_vert: u32,
+    pub(crate) state_fullscreen: u32,
 }
 
 /// Decodes EWMH `_NET_FRAME_EXTENTS` (`CARDINAL[4]`: left, right, top, bottom) into
 /// [`DecorationMode`].
 ///
+/// - While full screen, preserves `previous_mode` if already known (Mutter's `mutter-x11-frames`
+///   collapses server frame borders to `[0, 0, 0, 0]` in full screen, and Wayland's
+///   `xdg-decoration` mode does not change in full screen). A framed titled window that launches
+///   straight into full screen with no prior mode stays `Unknown`.
 /// - Present with 4 cardinals and any `> 0` -> [`DecorationMode::Server`].
-/// - Present with 4 zeroes `[0, 0, 0, 0]` -> [`DecorationMode::Client`].
+/// - Present with 4 zeroes `[0, 0, 0, 0]`:
+///   - If `requested_decorations && has_wm_frame && previous_mode == Server`, preserves
+///     [`DecorationMode::Server`] across the asynchronous 1-frame window after leaving full screen
+///     while `mutter-x11-frames` restores non-zero `_NET_FRAME_EXTENTS`.
+///   - Otherwise -> [`DecorationMode::Client`].
 /// - Present with malformed length (`!= 4`) -> [`DecorationMode::Unknown`].
 /// - Absent -> [`DecorationMode::Client`] only when the app explicitly asked for no native frame
 ///   (`!requested_decorations`, e.g. `WindowOptions { borderless: true, .. }`), the window manager
 ///   is managing the window (`wm_managed`), and the window was not reparented into a WM frame
-///   (`!has_wm_frame`), matching Mutter's `update_net_frame_extents` which omits
-///   `_NET_FRAME_EXTENTS` on frameless managed windows. Never infers `Server` from
-///   `requested_decorations` alone or from missing actions.
+///   (`!has_wm_frame`). Never infers `Server` from `requested_decorations` alone or from missing
+///   actions.
 pub(crate) fn decode_frame_extents(
     extents: Option<&[u32]>,
     requested_decorations: bool,
     wm_managed: bool,
     has_wm_frame: bool,
+    is_fullscreen: bool,
+    previous_mode: DecorationMode,
 ) -> DecorationMode {
+    if is_fullscreen {
+        if previous_mode != DecorationMode::Unknown {
+            return previous_mode;
+        }
+        if requested_decorations && has_wm_frame {
+            return DecorationMode::Unknown;
+        }
+    }
     match extents {
         Some([left, right, top, bottom]) => {
             if (*left | *right | *top | *bottom) != 0 {
+                DecorationMode::Server
+            } else if requested_decorations && has_wm_frame && previous_mode == DecorationMode::Server {
                 DecorationMode::Server
             } else {
                 DecorationMode::Client
@@ -161,20 +181,25 @@ pub(crate) fn resolve_work_area(
     }
 }
 
-/// Refines decoded `_GTK_EDGE_CONSTRAINTS` with `_NET_WM_STATE` vertical/horizontal maximization
-/// plus work-area edge contact.
+/// Refines decoded `_GTK_EDGE_CONSTRAINTS` with `_NET_WM_STATE` maximization and work-area edge
+/// contact.
 ///
-/// On Ubuntu GNOME (where `ubuntu-tiling-assistant` intercepts Super+Left/Right and calls
-/// `window.set_maximize_flags(VERTICAL)` on a half-width frame instead of `meta_window_tile`),
-/// Mutter writes only `TOP_TILED | BOTTOM_TILED` (`0x99`) into `_GTK_EDGE_CONSTRAINTS` even
-/// though the window is tiled flush against the left or right edge of the work area. Checking
-/// `_NET_WM_STATE_MAXIMIZED_VERT && !_NET_WM_STATE_MAXIMIZED_HORZ` (and the horizontal twin)
-/// against the monitor work area recovers the flush side edge without guessing on floating
-/// vertically-maximized windows that touch neither side.
+/// - When Mutter reparents a server-decorated window into `priv->frame->xwindow`, Mutter writes
+///   `_GTK_EDGE_CONSTRAINTS` exclusively on the frame window (`src/x11/window-x11.c`), so when
+///   `has_wm_frame` is true the frame window's property takes precedence over any stale pre-frame
+///   property left on the client window.
+/// - When `_NET_WM_STATE` has both `MAXIMIZED_HORZ` and `MAXIMIZED_VERT`, reports
+///   `Some(TiledEdges::ALL)`, matching GTK4, Mutter's `update_edge_constraints`, Chromium's
+///   `X11Window::GetTiledState`, borderless X11, and Wayland.
+/// - When `_NET_WM_STATE` has `MAXIMIZED_VERT` without `MAXIMIZED_HORZ` (and the horizontal
+///   twin), checks flush contact against `work_area` so Ubuntu's `ubuntu-tiling-assistant`
+///   half-tiles report the side edge without affecting floating vertically-maximized windows.
 pub(crate) fn decode_tiled_edges(raw: RawX11WmState<'_>, edges_advertised: bool) -> Option<TiledEdges> {
-    // Mutter writes `_GTK_EDGE_CONSTRAINTS` on `priv->frame->xwindow` for server-decorated
-    // windows and on `window->xwindow` for frameless windows (`src/x11/window-x11.c`).
-    let raw_constraints = raw.client_edge_constraints.or(raw.frame_edge_constraints);
+    let raw_constraints = if raw.has_wm_frame {
+        raw.frame_edge_constraints.or(raw.client_edge_constraints)
+    } else {
+        raw.client_edge_constraints.or(raw.frame_edge_constraints)
+    };
     let mut edges = decode_edge_constraints(raw_constraints, edges_advertised);
 
     let has_vert = raw.wm_state.is_some_and(|list| {
@@ -183,6 +208,10 @@ pub(crate) fn decode_tiled_edges(raw: RawX11WmState<'_>, edges_advertised: bool)
     let has_horz = raw.wm_state.is_some_and(|list| {
         super::window_menu::advertised(list, raw.action_atoms.state_maximized_horz)
     });
+
+    if has_vert && has_horz {
+        return Some(TiledEdges::ALL);
+    }
 
     if let (Some(outer), Some(wa)) = (raw.outer_rect, raw.work_area) {
         let tol = WORK_AREA_EDGE_TOLERANCE;
@@ -262,6 +291,8 @@ pub(crate) struct RawX11WmState<'a> {
     pub(crate) action_atoms: ActionAtoms,
     pub(crate) requested_decorations: bool,
     pub(crate) has_wm_frame: bool,
+    pub(crate) is_fullscreen: bool,
+    pub(crate) previous_decoration_mode: DecorationMode,
     pub(crate) outer_rect: Option<PixelRect>,
     pub(crate) work_area: Option<PixelRect>,
 }
@@ -272,12 +303,18 @@ pub(crate) fn decode_wm_state(raw: RawX11WmState<'_>) -> WindowManagerState {
         .net_supported
         .is_some_and(|list| super::window_menu::advertised(list, raw.gtk_edge_constraints_atom));
     let wm_managed = raw.wm_state.is_some() || raw.allowed_actions.is_some();
+    let is_fullscreen = raw.is_fullscreen
+        || raw.wm_state.is_some_and(|list| {
+            super::window_menu::advertised(list, raw.action_atoms.state_fullscreen)
+        });
     WindowManagerState {
         decoration_mode: decode_frame_extents(
             raw.frame_extents,
             raw.requested_decorations,
             wm_managed,
             raw.has_wm_frame,
+            is_fullscreen,
+            raw.previous_decoration_mode,
         ),
         tiled_edges: decode_tiled_edges(raw, edges_advertised),
         actions: decode_allowed_actions(raw.allowed_actions, raw.net_supported, raw.action_atoms),
@@ -287,7 +324,7 @@ pub(crate) fn decode_wm_state(raw: RawX11WmState<'_>) -> WindowManagerState {
 #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
 mod native {
     use super::{ActionAtoms, PixelRect, RawX11WmState, decode_wm_state, resolve_work_area};
-    use crate::window::wm_state::WindowManagerState;
+    use crate::window::wm_state::{DecorationMode, WindowManagerState};
     use x11rb::errors::ReplyError;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, GetPropertyReply};
 
@@ -322,6 +359,8 @@ mod native {
         root: u32,
         xwindow: u32,
         requested_decorations: bool,
+        is_fullscreen: bool,
+        previous_decoration_mode: DecorationMode,
         monitor: Option<PixelRect>,
     ) -> Result<Option<WindowManagerState>, ReplyError> {
         // Pipeline all atom lookups in one round trip; `only_if_exists = true` avoids interning
@@ -339,6 +378,7 @@ mod native {
         let c_wm_state = conn.intern_atom(true, b"_NET_WM_STATE")?;
         let c_state_max_h = conn.intern_atom(true, b"_NET_WM_STATE_MAXIMIZED_HORZ")?;
         let c_state_max_v = conn.intern_atom(true, b"_NET_WM_STATE_MAXIMIZED_VERT")?;
+        let c_state_fullscreen = conn.intern_atom(true, b"_NET_WM_STATE_FULLSCREEN")?;
         let c_workarea = conn.intern_atom(true, b"_NET_WORKAREA")?;
         let c_desktop = conn.intern_atom(true, b"_NET_CURRENT_DESKTOP")?;
 
@@ -359,6 +399,7 @@ mod native {
             close: c_close.reply()?.atom,
             state_maximized_horz: c_state_max_h.reply()?.atom,
             state_maximized_vert: c_state_max_v.reply()?.atom,
+            state_fullscreen: c_state_fullscreen.reply()?.atom,
         };
 
         // Pipeline all property reads, parent tree query, and geometry lookup in one round trip.
@@ -421,9 +462,10 @@ mod native {
         let geom = q_geom.reply()?;
         let pos = q_pos.reply()?;
 
-        // Mutter writes `_GTK_EDGE_CONSTRAINTS` on `priv->frame->xwindow` (the reparented frame
-        // parent) rather than the client window for server-decorated windows.
-        let frame_edge_constraints = if client_edge_constraints.is_none() && has_wm_frame && a_edges != 0 {
+        // Mutter writes `_GTK_EDGE_CONSTRAINTS` exclusively on `priv->frame->xwindow` once
+        // reparented, so always read the parent frame's property when `has_wm_frame` is true
+        // rather than letting a stale pre-frame property on `xwindow` shadow it.
+        let frame_edge_constraints = if has_wm_frame && a_edges != 0 {
             let reply = conn.get_property(false, parent, a_edges, AtomEnum::CARDINAL, 0, 4)?.reply()?;
             property_u32s(&reply, AtomEnum::CARDINAL, true)
         } else {
@@ -453,6 +495,8 @@ mod native {
             action_atoms,
             requested_decorations,
             has_wm_frame,
+            is_fullscreen,
+            previous_decoration_mode,
             outer_rect,
             work_area,
         })))
@@ -460,11 +504,12 @@ mod native {
 
     /// Reads X11 window-manager state for `window` on the shared X11 connection.
     /// Returns `WindowManagerState::default()` off X11 or when the X server cannot be queried.
-    pub(crate) fn read(window: &winit::window::Window) -> WindowManagerState {
+    pub(crate) fn read(window: &winit::window::Window, previous_decoration_mode: DecorationMode) -> WindowManagerState {
         let Some((xwindow, screen)) = handle(window) else {
             return WindowManagerState::default();
         };
         let requested_decorations = window.is_decorated();
+        let is_fullscreen = window.fullscreen().is_some();
         let monitor = window.current_monitor().map(|m| {
             let p = m.position();
             let s = m.size();
@@ -479,6 +524,8 @@ mod native {
                 root,
                 xwindow,
                 requested_decorations,
+                is_fullscreen,
+                previous_decoration_mode,
                 monitor,
             ))
         })
