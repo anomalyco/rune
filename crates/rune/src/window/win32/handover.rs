@@ -138,16 +138,16 @@ impl SurfaceMode {
 
 impl Host {
     /// The first idle turn after the window's first CPU frame: the GPU starts on its thread
-    /// (`RUNE_CPU_FIRST=only`: not until a frame needs it, for checking the CPU window alone).
+    /// (`CpuFirst::Only` or `RUNE_CPU_FIRST=only`: not until a frame needs it).
     pub(in crate::window) fn cpu_idle(&mut self) {
         if self.gpu_owed() { self.start_gpu(true); }
     }
 
     /// Whether the GPU is due to start now (`cpu_idle`).
     pub(in crate::window) fn gpu_owed(&self) -> bool {
-        if std::env::var_os("RUNE_CPU_FIRST").is_some_and(|v| v == "only") { return false; }
         let now = crate::time::now();
-        self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at, .. }, .. } if retry_at.is_none_or(|at| at <= now)) && w.first_frame.ready())
+        let due = self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at, .. }, .. } if retry_at.is_none_or(|at| at <= now)) && w.first_frame.ready());
+        self.effective_cpu_first().gpu_owed(due)
     }
 
     /// Starts making the GPU for this window on a thread (`below`: at below-normal priority, as

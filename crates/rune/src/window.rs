@@ -29,6 +29,7 @@ use crate::tooling::Chrome;
 mod app_events;
 mod chrome;
 mod color_scheme;
+mod cpu_first;
 mod event_loop;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) use event_loop::{ExitAction, exit_action};
@@ -54,6 +55,9 @@ pub(crate) fn warm_gpu_cache() -> Result<(), String> { win32::handover::warm_gpu
 
 pub use color_scheme::ColorScheme;
 pub(crate) use color_scheme::{app_color_scheme, set_app_color_scheme_state, sync_window_theme, window_theme_for_platform};
+pub use cpu_first::CpuFirst;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use cpu_first::WebStart;
 pub use handle::WindowHandle;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;

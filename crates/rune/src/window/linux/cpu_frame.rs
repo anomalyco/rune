@@ -92,13 +92,12 @@ fn painter_threads() -> usize {
     std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 6)
 }
 
-/// Whether a window opens on the CPU: an opaque window while no window has a GPU yet (with one,
-/// a new window's swap chain is ready in a few milliseconds), unless turned off
-/// (`RUNE_CPU_FIRST=0`).
+/// Whether a window opens on the CPU: an opaque window without its own GPU, following
+/// [`Host::effective_cpu_first`] (`RUNE_CPU_FIRST` overrides `App::cpu_first` /
+/// `WindowSpec::cpu_first`).
 pub(in crate::window) fn opens_on_cpu(host: &Host) -> bool {
-    !host.options.transparent && host.gpu.is_none()
-        && host.gpu_pool.borrow().upgrade().is_none_or(|gpu| gpu.is_lost())
-        && std::env::var_os("RUNE_CPU_FIRST").is_none_or(|v| v != "0")
+    let live_pool_gpu = host.gpu_pool.borrow().upgrade().is_some_and(|gpu| !gpu.is_lost());
+    host.effective_cpu_first().opens_on_cpu(host.options.transparent, host.gpu.is_some(), live_pool_gpu)
 }
 
 impl Host {
