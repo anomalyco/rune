@@ -531,6 +531,18 @@ pub struct Menu {
     /// A context menu: its trigger is the area it opens over, not a button that opens it.
     context: bool,
     dismiss: Option<Dismiss>,
+    /// Overrides of the appearance's padding, separator spacing and inner border.
+    look: Look,
+    /// Keys given to separators, by entry index; the rest are keyed `sep{index}`.
+    sep_keys: Vec<(usize, String)>,
+}
+
+/// A menu's own padding, separator spacing and inner border; `None` keeps the appearance's.
+#[derive(Clone, Copy, Default)]
+struct Look {
+    padding: Option<f32>,
+    separator_spacing: Option<(f32, f32)>,
+    border: Option<f32>,
 }
 
 impl Menu {
@@ -550,6 +562,8 @@ impl Menu {
             focus_return: None,
             context: false,
             dismiss: None,
+            look: Look::default(),
+            sep_keys: Vec::new(),
         }
     }
     /// Accessible name for the open menu (`role="menu"`, ARIA `aria-label`), matching
@@ -575,6 +589,37 @@ impl Menu {
     }
     pub fn separator(mut self) -> Self {
         self.entries.push(MenuEntry::Separator);
+        self
+    }
+    /// A separator with its own key, which stays put when entries are added above it
+    /// (a plain [`Self::separator`] is keyed by its position, `sep{index}`).
+    ///
+    /// ```
+    /// use rune_kit::{Menu, MenuItem};
+    ///
+    /// let _menu = Menu::new("m").item(MenuItem::new("Add").key("add")).separator_keyed("edit-sep");
+    /// ```
+    pub fn separator_keyed(mut self, key: impl Into<String>) -> Self {
+        self.sep_keys.push((self.entries.len(), key.into()));
+        self.entries.push(MenuEntry::Separator);
+        self
+    }
+    /// The padding around the rows, in points: 4 for [`Self::standard`] menus and 2 otherwise
+    /// by default. Submenus keep their appearance's.
+    pub fn padding(mut self, p: f32) -> Self {
+        self.look.padding = Some(p.max(0.0));
+        self
+    }
+    /// The space above and below each separator, in points: the padding by default. The
+    /// separator line still runs out to the padding's edges.
+    pub fn separator_spacing(mut self, above: f32, below: f32) -> Self {
+        self.look.separator_spacing = Some((above.max(0.0), below.max(0.0)));
+        self
+    }
+    /// The width of a [`Self::standard`] menu's inner border, in points (1 by default; 0
+    /// draws none). Other menus have no border unless this sets one.
+    pub fn inner_border(mut self, width: f32) -> Self {
+        self.look.border = Some(width.max(0.0));
         self
     }
     pub fn group_label(mut self, l: impl Into<String>) -> Self {
@@ -653,12 +698,14 @@ impl Menu {
         if let Some(label) = self.label {
             frame = frame.label(label);
         }
-        let frame = if standard {
-            k.elevate(frame.radius(k.radius.md).fill(c.surface_raised).border(1.0, k.alpha(c.std_border, 0.5)), &k.elevation.md)
-        } else {
-            k.elevate(frame.radius(6.0).fill(c.layer_01), &k.elevation.floating)
-        };
-        let mut list = col().key("rows").items_stretch().padding(if standard { 4.0 } else { 2.0 });
+        let look = self.look;
+        let border = look.border.unwrap_or(if standard { 1.0 } else { 0.0 });
+        let frame = if standard { frame.radius(k.radius.md).fill(c.surface_raised) } else { frame.radius(6.0).fill(c.layer_01) };
+        let frame = if border > 0.0 { frame.border(border, k.alpha(c.std_border, 0.5)) } else { frame };
+        let frame = k.elevate(frame, if standard { &k.elevation.md } else { &k.elevation.floating });
+        let pad = look.padding.unwrap_or(if standard { 4.0 } else { 2.0 });
+        let (sep_above, sep_below) = look.separator_spacing.unwrap_or((pad, pad));
+        let mut list = col().key("rows").items_stretch().padding(pad);
         // Rows hear a resting pointer only when some row here has a submenu the menu controls:
         // that row opens on it, and every other row closes the open one.
         let toggles: Vec<(usize, SubToggle, bool)> = self
@@ -683,8 +730,12 @@ impl Menu {
                     item.build(k, standard, format!("{}-item{i}", self.key), hover, tree, layer)
                 }
                 MenuEntry::Separator => {
-                    let (m, color) = if standard { (4.0, c.border_weak) } else { (2.0, c.border_muted) };
-                    el().key(format!("sep{i}")).h(1.0).mt(m).mb(m).ml(-m).mr(-m).fill(color).a11y_hidden()
+                    let color = if standard { c.border_weak } else { c.border_muted };
+                    let key = match self.sep_keys.iter().find(|(at, _)| *at == i) {
+                        Some((_, key)) => key.clone(),
+                        None => format!("sep{i}"),
+                    };
+                    el().key(key).h(1.0).mt(sep_above).mb(sep_below).ml(-pad).mr(-pad).fill(color).a11y_hidden()
                 }
                 MenuEntry::Label(l) => {
                     let e = row().key(format!("label{i}")).center_y();
