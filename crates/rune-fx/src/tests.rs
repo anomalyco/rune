@@ -437,3 +437,19 @@ fn blur_weight_pool_shares_constant_and_repeated_weights_and_bounds_at_256() {
     weights.clear();
     assert_eq!(alloc_blur_weight(&mut weights, 0.123456), Some((1, true)));
 }
+
+#[test]
+fn support_needs_vertex_and_fragment_storage_and_two_buffers() {
+    let full = wgpu::DownlevelCapabilities::default();
+    assert_eq!(fx_support(&full, &wgpu::Limits::default()), Ok(()));
+    assert_eq!(fx_support(&full, &wgpu::Limits::downlevel_defaults()), Ok(()));
+    // WebGL2: no storage buffers in any stage.
+    let webgl2 = wgpu::DownlevelCapabilities::lower_bound();
+    assert_eq!(fx_support(&webgl2, &wgpu::Limits::downlevel_webgl2_defaults()), Err(FxUnsupported::VertexStorage));
+    let fragment_only = wgpu::DownlevelCapabilities { flags: wgpu::DownlevelFlags::all() - wgpu::DownlevelFlags::VERTEX_STORAGE, ..full.clone() };
+    assert_eq!(fx_support(&fragment_only, &wgpu::Limits::default()), Err(FxUnsupported::VertexStorage));
+    let vertex_only = wgpu::DownlevelCapabilities { flags: wgpu::DownlevelFlags::all() - wgpu::DownlevelFlags::FRAGMENT_STORAGE, ..full.clone() };
+    assert_eq!(fx_support(&vertex_only, &wgpu::Limits::default()), Err(FxUnsupported::FragmentStorage));
+    let one = wgpu::Limits { max_storage_buffers_per_shader_stage: 1, ..wgpu::Limits::default() };
+    assert_eq!(fx_support(&full, &one), Err(FxUnsupported::StorageBuffers { needed: 2, allowed: 1 }));
+}
