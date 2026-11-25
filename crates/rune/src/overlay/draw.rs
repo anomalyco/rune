@@ -498,10 +498,10 @@ impl OverlayCore {
 
     /// One input event a layer or XWayland surface read on its own connection.
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-    fn surface_input(&mut self, app: &mut dyn OverlayApp, input: crate::platform::layer_shell::Input) {
+    pub(super) fn surface_input(&mut self, app: &mut dyn OverlayApp, input: crate::platform::layer_shell::Input) {
         use crate::platform::layer_shell::Input;
         let _input = (!matches!(input, Input::Focus(_))
-            && !(matches!(input, Input::Ime(_)) && self.options.keys != KeyPolicy::OnDemand))
+            && !(matches!(input, Input::Ime(_)) && !self.options.keys.takes_keys()))
             .then(crate::input::time::arrived_now);
         match input {
             Input::Move(x, y) => {
@@ -524,7 +524,7 @@ impl OverlayCore {
             }
             Input::Focus(focused) => {
                 app.window_focus(focused);
-                if !focused && self.options.keys == KeyPolicy::OnDemand {
+                if !focused && self.options.keys.takes_keys() {
                     self.ime.clear();
                     if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut()
                         && let Some(ime) = layer.sync_ime(crate::input::host_events::ImeStep {
@@ -563,7 +563,7 @@ impl OverlayCore {
                 );
                 return;
             }
-            Input::Ime(ime) if self.options.keys == KeyPolicy::OnDemand => {
+            Input::Ime(ime) if self.options.keys.takes_keys() => {
                 deliver_layer_ime(app.rt_mut(), &mut self.ime, ime);
             }
             Input::Ime(_) => return,
@@ -585,7 +585,7 @@ impl OverlayCore {
     /// Syncs OS IME allowance and cursor area for overlays that accept on-demand keyboard focus.
     /// Returns true when the sync queued an immediate IME state event for the runtime.
     fn sync_ime(&mut self, app: &mut dyn OverlayApp) -> bool {
-        if self.options.keys != KeyPolicy::OnDemand { return false; }
+        if !self.options.keys.takes_keys() { return false; }
         let Some(live) = self.surface.live_mut() else { return false };
         match &mut live.backing {
             Backing::Window(window) => {

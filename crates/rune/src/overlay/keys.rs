@@ -10,7 +10,7 @@ use crate::{KeyPolicy, OverlaySupport};
 /// without `WS_EX_NOACTIVATE`; X11 gives it the focus on `request_keys` and on a click.
 #[cfg_attr(not(any(target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
 pub(crate) fn can_take_keys(policy: KeyPolicy) -> bool {
-    policy == KeyPolicy::OnDemand
+    policy.takes_keys()
 }
 
 /// What an overlay with `policy` reports as `OverlayCapabilities::nonactivating_keys`.

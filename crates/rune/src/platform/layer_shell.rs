@@ -739,7 +739,7 @@ impl LayerSurface {
     #[allow(unsafe_code)]
     pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
-        let want_keys = options.keys == crate::KeyPolicy::OnDemand;
+        let want_keys = options.keys.takes_keys();
         if want_keys { compose::warm(); }
         // SAFETY: winit owns this `wl_display` for the life of the event loop, which outlives
         // every overlay; a foreign backend never closes it.
@@ -898,12 +898,34 @@ impl LayerSurface {
         if let Some(seat) = &self.seat { self.state.update_seat(seat, &self.queue.handle()); }
     }
 
-    pub fn request_keys(&self) -> bool {
+    /// Asks for keyboard interactivity: exclusive for `KeyPolicy::Exclusive`, else on demand.
+    /// True when an earlier `release_keys` left the compositor's focus on our surface (no
+    /// `wl_keyboard.leave` came), so the overlay is focused again at once, for the caller to
+    /// deliver; otherwise focus follows the compositor's `enter`.
+    pub fn request_keys(&mut self) -> bool {
         if !keyboard::can_request_keys(self.options.keys, self.layer.version()) { return false; }
-        self.layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        let mode = if self.options.keys == crate::KeyPolicy::Exclusive { KeyboardInteractivity::Exclusive } else { KeyboardInteractivity::OnDemand };
+        self.layer.set_keyboard_interactivity(mode);
         self.surface.commit();
         self.queue.flush().ok();
-        true
+        let effects = keyboard::step(&mut self.state.keyboard_focus, keyboard::FocusEvent::Requested);
+        effects.into_iter().any(|keyboard::FocusEffect::Focus(focused)| focused)
+    }
+
+    /// Sets keyboard interactivity back to none on the mapped layer, for `release_keys`. Some
+    /// compositors send no `wl_keyboard.leave` for it, so the surface stops repeat and drops its
+    /// focus itself (`FocusState::Released`); a leave that does arrive later changes nothing,
+    /// and a later `request_keys` refocuses if none came. True when it held the keys, for the
+    /// caller to deliver the blur at once.
+    pub fn release_keys(&mut self) -> bool {
+        if !self.options.keys.takes_keys() { return false; }
+        self.layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        self.surface.commit();
+        self.queue.flush().ok();
+        self.state.step_repeat(repeat::Event::Stop);
+        self.state.reset_compose();
+        let effects = keyboard::step(&mut self.state.keyboard_focus, keyboard::FocusEvent::Released);
+        effects.into_iter().any(|keyboard::FocusEffect::Focus(focused)| !focused)
     }
 
     pub fn supports_keys(&self) -> bool {
