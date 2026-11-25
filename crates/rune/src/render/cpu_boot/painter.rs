@@ -248,6 +248,8 @@ impl CpuPainter {
                 && !(new.kind() == Some(Kind::Image) && image_written(scene, new) && damage::instance(scene, &prev.bins, n) != self.each[n]);
             if same { continue; }
             if self.changed.len() == RECOLOURED_MAX || !recolour(new, old) { return None; }
+            // Inside a turned layer it draws through the layer's end, which bins don't say.
+            if prev.bins.layers.iter().any(|l| l.turn.is_some() && l.begin < n as u32 && (n as u32) < l.end) { return None; }
             self.changed.push(n as u32);
         }
         let bins = &prev.bins;
