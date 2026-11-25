@@ -3282,6 +3282,56 @@ let clip = rune::Player::audio(note.path);
 - **Other platforms** (Linux, Windows, the web): `start` ends in `Failed("recording isn't
   supported on this platform")`.
 
+### Streaming PCM audio output (`AudioOutput`, `crates/rune-media/src/audio/`)
+
+`AudioOutput` is a cheap-to-clone, thread-safe PCM sink for apps that decode their own audio
+(for example from a sandboxed helper) and need a monotonic heard-frame clock to pace video or
+index a spectrum. Every post-open method is non-blocking.
+
+```rust
+let spec = rune::AudioOutputSpec::new(rune::SampleFormat::I16, 48_000, 2)
+    .buffer_duration(std::time::Duration::from_millis(2_400))
+    .app_name("Preview")
+    .stream_name("Media audio")
+    .volume(0.8);
+let audio = rune::AudioOutput::open(spec.clone())
+    .or_else(|_| rune::AudioOutput::open_silent(spec))?;
+audio.set_waker(waker);
+
+// Producer loop: push while capacity holds, pace video on `position()`, drain with `finish()`.
+while audio.has_capacity(960) {
+    match audio.push_bytes(&pcm_s16le_chunk) {
+        Ok(_accepted_bytes) => break,
+        Err(rune::AudioPushError::Full) => break,
+        Err(err) => return Err(err.into()),
+    }
+}
+audio.play();
+let pos = audio.position(); // pos.duration() for video pacing, pos.heard_frames() for spectrum
+for event in audio.take_events() { /* AudioEvent::Underrun | Ended | DeviceLost(_) */ }
+```
+
+- **Formats and bounds**: supports `SampleFormat::I16` (interleaved signed 16-bit LE) and
+  `SampleFormat::F32` (interleaved 32-bit float LE), 8–192 kHz, 1–8 channels. The pre-gain
+  ring buffer defaults to 2.5 s, clamps to 100 ms..=10 s, and is hard-capped at 16 MiB; the
+  rolling written-tail and rewound front buffers used for pause rewind are capped at ~500 ms
+  (2 MiB each), and the event queue is capped at 64 entries. Steady-state `push_*`,
+  `position`, and `free_frames` allocate nothing.
+- **Post-buffer volume and pause rewind**: linear `set_volume` (`0.0..=1.0`) and
+  `set_muted` apply in ~10 ms write quanta right before each device write, so slider changes
+  take effect immediately even with seconds queued. `pause()` flushes the device immediately,
+  snaps `heard_frames` monotonically, and rewinds unheard frames from the tail buffer ahead
+  of the unread ring so `play()` resumes seamlessly with the current volume and mute.
+- **Events and idle cost**: `set_waker` fires once per discrete `AudioEvent::Underrun`,
+  `Ended`, or `DeviceLost` transition (read via `take_events()`). Paused, ended, and
+  device-lost outputs park their worker with zero wakeups. `flush()` clears queued and device
+  audio, resets `heard_frames` to 0, preserves `Playing` without spurious underruns until
+  new samples arrive, and returns `Draining` or `Ended` outputs to `Paused`.
+- **Backends**: `AudioOutput::open_silent` works on every platform (including `wasm32`,
+  driven lazily against `rune_core::time::now()` with no threads). `AudioOutput::open`
+  currently returns `AudioOutputError::Unsupported` until platform backends (starting with
+  runtime-`dlopen` PulseAudio/ALSA on Linux) are wired behind the internal `SinkDevice` seam.
+
 ### Edge overlays (`App::overlay`, `overlay.rs`, `platform/layer_shell.rs`)
 
 `app.overlay(OverlaySpec { name, size, edge, margin, align, inset, interactive, view }, state)
