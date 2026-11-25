@@ -292,6 +292,7 @@ pub(crate) fn merge(tx: &mut Tx, one: Tx) {
     if one.announce.is_some() { tx.announce = one.announce; }
     tx.playground.extend(one.playground);
     tx.open_urls.extend(one.open_urls);
+    tx.haptics.extend(one.haptics);
     tx.open_paths.extend(one.open_paths);
     tx.url_schemes.extend(one.url_schemes);
     tx.srgb_blend = one.srgb_blend.or(tx.srgb_blend);
