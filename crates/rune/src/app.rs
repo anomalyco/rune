@@ -913,8 +913,10 @@ impl<S: 'static> App<S> {
     /// Windows: the links among the launch arguments (`scheme://…`), as Windows passes a link to
     /// the process it starts, and with `rune::single_instance` the links of every later launch,
     /// which that launch hands to this process instead of opening a window. The app registers its
-    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install). Never
-    /// called on other platforms (Linux passes links to a new process as arguments).
+    /// scheme itself (`HKEY_CURRENT_USER\Software\Classes\<scheme>`, usually at install), and
+    /// names it with `rune::url_schemes` so only arguments on it are links: without that a flag's
+    /// URL value (`--server http://localhost:4096`) is one too. Never called on other platforms
+    /// (Linux passes links to a new process as arguments).
     pub fn on_open_url(mut self, f: fn(&mut S, &str, &mut Tx)) -> Self {
         self.on_open_url = Some(f);
         self

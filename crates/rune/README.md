@@ -979,7 +979,9 @@ app.run();
   process over a per-user named pipe and lets it take the foreground, and `single_instance`
   returns false so `main` returns without opening a window. Its links reach the hook; a launch
   without links reopens the app (`App::on_reopen`, then the default, which also brings the front
-  window forward, restored). Register the scheme for the user, usually at install:
+  window forward, restored). Call `rune::url_schemes(["myapp"])` before it to name the app's own
+  schemes: then only arguments on them are links, and a flag's URL value
+  (`--server http://localhost:4096`) isn't one. Register the scheme for the user, usually at install:
   `HKEY_CURRENT_USER\Software\Classes\myapp` with an empty `URL Protocol` value and
   `shell\open\command` set to `"C:\path\to\myapp.exe" "%1"`.
   `scripts/mac-app --scheme myapp` writes that entry and registers the bundle for you (see

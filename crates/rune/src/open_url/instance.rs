@@ -20,6 +20,11 @@
 //! The links of the launch that started the first process come from its arguments
 //! ([`launch_links`]), so `App::on_open_url` gets those too.
 //!
+//! Which arguments are links: every `scheme://…` one, until the app names the schemes it
+//! registered ([`url_schemes`](crate::url_schemes)); from then on only an argument on one of
+//! them. Without that a flag's value (`--server http://localhost:4096`) is taken for a link, and
+//! a later launch that carries one doesn't reopen the app.
+//!
 //! macOS keeps one process per app itself and hands links to it, so there this only says yes.
 
 /// Makes this process the app's only running one, before it opens a window (Windows, Linux).
@@ -76,11 +81,51 @@ pub(crate) fn is_link(arg: &str) -> bool {
         && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
+/// The schemes the app named as its own (`url_schemes`), lowercased; none while it hasn't.
+static SCHEMES: std::sync::Mutex<Option<Vec<String>>> = std::sync::Mutex::new(None);
+
+/// Names the URL schemes the app registered for itself (Windows, Linux): from now on only a
+/// launch argument on one of them is a link for `App::on_open_url`, as macOS hands the app only
+/// links on the schemes its bundle declares. Call it first thing in `main`, before
+/// `single_instance`.
+///
+/// Until it is called every `scheme://…` argument is a link. An app with flags that take a URL
+/// (`myapp --server http://localhost:4096`) then gets the flag's value in `App::on_open_url`,
+/// and with `single_instance` a later launch with such a flag isn't a launch without links, so
+/// it doesn't reopen the app.
+///
+/// Schemes compare without case. macOS and other platforms: does nothing.
+pub fn url_schemes<I, S>(schemes: I)
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let schemes = schemes.into_iter().map(|s| s.as_ref().to_ascii_lowercase()).collect();
+    *SCHEMES.lock().unwrap_or_else(|e| e.into_inner()) = Some(schemes);
+}
+
+/// Whether `arg` is a link the app opens: a link ([`is_link`]) and, when the app named its
+/// schemes, on one of them.
+pub(crate) fn opens(arg: &str, schemes: Option<&[String]>) -> bool {
+    if !is_link(arg) {
+        return false;
+    }
+    let Some(schemes) = schemes else { return true };
+    arg.split_once("://").is_some_and(|(scheme, _)| schemes.iter().any(|s| s.eq_ignore_ascii_case(scheme)))
+}
+
+/// The links among a launch's arguments, in order.
+#[cfg_attr(not(any(target_os = "windows", target_os = "linux")), allow(dead_code))]
+pub(crate) fn links_among(args: &[String]) -> Vec<String> {
+    let schemes = SCHEMES.lock().unwrap_or_else(|e| e.into_inner());
+    args.iter().filter(|a| opens(a, schemes.as_deref())).cloned().collect()
+}
+
 /// The links among this process's launch arguments (Windows passes a link to the process it
 /// starts for it as an argument).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn launch_links() -> Vec<String> {
-    std::env::args().skip(1).filter(|a| is_link(a)).collect()
+    links_among(&std::env::args().skip(1).collect::<Vec<_>>())
 }
 
 /// The loop's side of a later launch without links (`on_relaunch`), and the window it brings
@@ -229,7 +274,7 @@ mod handoff {
             crate::relaunch::spawn_with(args);
             return true;
         }
-        let links: Vec<String> = args.iter().filter(|a| super::is_link(a)).cloned().collect();
+        let links = super::links_among(&args);
         {
             let mut waiting = WAITING.lock().unwrap_or_else(|e| e.into_inner());
             if waiting.exited {
@@ -259,3 +304,6 @@ mod windows;
 
 #[cfg(target_os = "linux")]
 mod linux;
+
+#[cfg(test)]
+mod tests;
