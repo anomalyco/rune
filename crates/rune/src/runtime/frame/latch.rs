@@ -103,7 +103,22 @@ impl RuntimeCore {
             self.edit.clear_secret_request = true;
             self.edit.pill_copy = None;
         }
-        if let Some(copy) = tx.copy.take() {
+        for superseded in tx.superseded_copy_images.drain(..).filter_map(|cb| cb.take()) {
+            self.edit.next_clipboard_read += 1;
+            let id = self.edit.next_clipboard_read;
+            self.edit.copy_image_callbacks.push((id, superseded));
+            self.copy_image_result(id, Err(crate::CopyImageError::Superseded));
+        }
+        if let Some(mut copy) = tx.copy.take() {
+            if let Some(prev_id) = self.copy_request.as_mut().and_then(crate::ClipboardWrite::take_copy_image_id) {
+                self.copy_image_result(prev_id, Err(crate::CopyImageError::Superseded));
+            }
+            if let Some(cb) = tx.copy_image_callback.take().and_then(|cb| cb.take()) {
+                self.edit.next_clipboard_read += 1;
+                let id = self.edit.next_clipboard_read;
+                self.edit.copy_image_callbacks.push((id, cb));
+                copy.set_copy_image_id(id);
+            }
             self.edit.pill_copy = (!copy.is_secret())
                 .then(|| copy.content().html())
                 .flatten()
@@ -138,9 +153,14 @@ impl RuntimeCore {
         if std::mem::take(&mut tx.cancel_pointer) { self.cancel_pointer(); }
         if let Some(title) = tx.title.take() { self.host.window_title.set(title); }
         if let Some(scheme) = tx.color_scheme.take() { self.host.window_color_scheme = Some(scheme); }
+        if let Some(backdrop) = tx.window_backdrop.take() { self.host.window_backdrop_request = Some(backdrop); }
         if let Some(path) = tx.represented_file.take() { self.host.represented_file.set(crate::window::spec::normalize_represented_file(path)); }
         if let Some(edited) = tx.document_edited.take() { self.host.document_edited.set(edited); }
         if let Some((text, how)) = tx.announce.take() { self.host.announcement.say(text, how); }
+        if !tx.haptics.is_empty() {
+            let now = self.now_clock();
+            self.host.haptics.push_at(tx.haptics.drain(..), now);
+        }
         if let Some(mut request) = tx.window_frame.take() {
             request.spring = (request.animate && !tx.commit.snaps() && !self.reduced_motion).then(|| tx.motion.map_or(crate::tok::motion::DEFAULT, MotionSource::spring));
             self.host.window_frame = Some(self.host.window_frame.unwrap_or_default().merge(request));

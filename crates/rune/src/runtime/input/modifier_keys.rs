@@ -191,7 +191,7 @@ impl focus_machine::KeyboardState {
                 }
                 None
             }
-            PhysicalInput::Key { key, mods, pressed, repeat } => {
+            PhysicalInput::Key { key, mods, pressed, repeat, .. } => {
                 let Some(m) = modifier(key) else {
                     if pressed {
                         self.disarm_direction_chord();

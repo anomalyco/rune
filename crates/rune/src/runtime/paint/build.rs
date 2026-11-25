@@ -28,8 +28,7 @@ impl RuntimeCore {
         self.marks.clear();
         self.paint.icon_aprons.clear();
         self.surfaces.clear();
-        self.paint.materials.clear();
-        self.paint.material_fallbacks.clear();
+        self.paint.clear_materials();
         self.hit.hits.clear();
         self.hit.wheel_hits.clear();
         self.clear_help_hits();
@@ -189,7 +188,7 @@ impl RuntimeCore {
             let mark = if n.vis.mark != 0 { n.vis.mark } else { pinh.mark };
             let mut own = p.opacity;
             let mut hit_own = own * group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, 1.0);
-            own *= group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, pinh.group);
+            own *= group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, group_lit(&self.scene, n, pinh.group));
             let base_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
             let hover_owner = n.vis.tracks_hover_paint() || n.vis_flags.hover_group();
             let group = if hover_owner {
@@ -408,8 +407,8 @@ impl RuntimeCore {
             // `El::rotate`: this subtree draws into a layer turned about its origin.
             // The layer takes the clips from above; the node's own clips apply inside, upright.
             let own_turn = p.transform.rotate;
-            let own_turn = (own_turn != 0.0 && own_turn.is_finite() && own_turn.abs() > 1e-6 && !is_flight).then_some(own_turn);
-            let turn_pivot = [centre_to[0] * s, centre_to[1] * s];
+            let own_turn = (own_turn != 0.0 && own_turn.is_finite() && own_turn.abs() > 1e-6).then_some(own_turn);
+            let turn_pivot = pose::turn_pivot(flight_dest, n.vis.origin, rect_pt, centre_to, s);
             let (node_turn, turn_index) = if pinh.turn == 0 && own_turn.is_none() {
                 (None, 0)
             } else {
@@ -757,7 +756,7 @@ impl RuntimeCore {
         }
         self.keep_close(None, &mut layers, &mut active_cache, &mut glyph_count);
         self.keep_end();
-        if self.paint.native_materials
+        if self.paint.tracks_native_materials()
             && !self.paint.material_fallbacks.is_empty()
             && !self.paint.material_fallback_warned
         {

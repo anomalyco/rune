@@ -35,6 +35,7 @@ fn prepare_export(spec_size: (f32, f32), args: &Args) -> Result<ExportPlan, Stri
 pub(crate) fn export<S: 'static>(app: crate::app::App<S>, args: &Args) -> Result<(), String> {
     let plan = prepare_export(app.spec.size, args)?;
     let (fit_height, document) = (app.fit_content_height, app.web_document);
+    crate::credentials::note_headless_runtime();
     let (spec, state, _shared, runtime) = app.into_parts(args.scene.as_deref());
     let mut rt = runtime_for(&spec, state, (plan.widths[0], plan.height), Env::new(plan.dark, plan.scale), std::sync::Arc::new(|| {}));
     rt.configure(runtime);
@@ -49,7 +50,7 @@ fn export_core(
     document: bool,
     plan: ExportPlan,
 ) -> Result<(), String> {
-    core.host.fit_height = fit_height;
+    core.host.set_fit_height(fit_height);
     if document { core.page_mode(); }
     let mut taken: Vec<(f32, Vec<ExportNode>)> = Vec::with_capacity(plan.widths.len());
     for &w in &plan.widths {

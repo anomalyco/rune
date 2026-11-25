@@ -269,6 +269,40 @@ impl RuntimeCore {
         self.span_boxes(n, rect, z, spec.cold.links.iter().map(|l| (l.start, l.end)))
     }
 
+    /// Each inline icon of node `i` that has a name or a tooltip (`InlineIcon::label`,
+    /// `InlineIcon::help`): its pill's index and the icon's own square in window points
+    /// (x0, y0, x1, y1), for border box `rect`.
+    pub(crate) fn inline_icon_boxes(&self, i: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
+        let n = &self.tree.nodes[i];
+        let (Some(spec), Some(laid)) = (n.text.as_deref(), n.text_layout.as_ref()) else { return Vec::new() };
+        let said = |p: &crate::text::PillChip| p.bare.as_deref().is_some_and(|b| b.label.is_some() || b.help.is_some());
+        if !spec.cold.pills.iter().any(said) { return Vec::new(); }
+        let flow = laid.view();
+        let s = self.env.scale;
+        let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+        let [ox, oy] = origin(n, spec, flow, rect, s, z);
+        let px = s / z.max(1e-4);
+        let (mut out, mut found) = (Vec::new(), Vec::new());
+        for piece in flow.pieces() {
+            let pills = piece.pills(&spec.cold.pills);
+            found.clear();
+            crate::text::bare_icons(piece.layout, &pills, s, [0.0, piece.y], &mut found);
+            for &(k, at, size) in &found {
+                if !said(&pills[k]) { continue; }
+                // A paragraph's pills are its own: the text's is the one whose word starts there.
+                let k = if piece.is_whole() {
+                    k
+                } else {
+                    let start = piece.content(pills[k].start as usize) as u32;
+                    let Some(k) = spec.cold.pills.iter().position(|p| p.start == start && said(p)) else { continue };
+                    k
+                };
+                out.push((k, [ox + at[0] / px, oy + at[1] / px, ox + (at[0] + size[0]) / px, oy + (at[1] + size[1]) / px]));
+            }
+        }
+        out
+    }
+
     /// Like [`Self::link_boxes`], laying out only link `k` of node `i`.
     pub(crate) fn link_boxes_for(&self, i: usize, k: usize, rect: [f32; 4]) -> Vec<(usize, [f32; 4])> {
         let n = &self.tree.nodes[i];

@@ -219,6 +219,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         hoverLink: null, hoverLinkLeave: null, hoverClientX: NaN, hoverClientY: NaN,
         forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false,
+        visualViewport: null, keyboardShiftY: 0, pendingFieldBlur: false, domFocused: false, reconcileRaf: 0, pressedPointers: new Set(),
         pointerLocked: false, pointerLockPending: false, pointerLockSeq: 0, pointerLockHasPromise: false, pointerLockCalling: false, pointerLockSyncError: false, pointerLockUnadjustedFailed: false };
     // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
     const send = (event, after) => {
@@ -262,18 +263,85 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         }
     };
     listen(window, 'pointerdown', event => {
+        if (ownsTarget(event.target) && typeof event.pointerId === 'number') {
+            h.pressedPointers.add(event.pointerId);
+        }
         if (event.target === canvas && event.pointerType === 'touch' && h.activeTouchId === null) {
             h.activeTouchId = event.pointerId;
         }
         recordTouchTimestamp(false, event);
     }, { capture: true, passive: true });
     listen(window, 'pointermove', event => recordTouchTimestamp(true, event), { capture: true, passive: true });
-    const clearActiveTouch = event => {
-        if (event.pointerType === 'touch' && event.pointerId === h.activeTouchId) h.activeTouchId = null;
+    const cancelReconcile = () => {
+        if (!h.reconcileRaf) return;
+        if (typeof globalThis.cancelAnimationFrame === 'function') globalThis.cancelAnimationFrame(h.reconcileRaf);
+        else clearTimeout(h.reconcileRaf);
+        h.reconcileRaf = 0;
+    };
+    const reconcileFocus = (clearPending = false) => {
+        if (h.disposed || h.syncing) return false;
+        if (h.activeTouchId !== null || h.pressedPointers.size > 0) return false;
+        if (clearPending) h.pendingFieldBlur = false;
+        if (!h.key || !h.domFocused || typeof h.menu?.done === 'function') return false;
+        if (document.activeElement === h.field) return false;
+        if (typeof document.hasFocus === 'function' && !document.hasFocus()) return false;
+        if (document.hidden) return false;
+        h.pendingFieldBlur = false;
+        h.domFocused = false;
+        cancelReconcile();
+        send({ kind: 'field_blur', key: h.key });
+        return true;
+    };
+    // Single-shot next-frame reconciliation after blur, focusout, window focus, visibility return,
+    // or visualViewport resize so event-order races (delayed activeElement update, transient window
+    // blur during keyboard hide, or visualViewport retraction after a suppressed blur) still clear
+    // a stale caret without adding any idle timer or frame loop.
+    const scheduleReconcile = () => {
+        if (h.disposed || !h.key || !h.domFocused || h.reconcileRaf) return;
+        const run = () => {
+            h.reconcileRaf = 0;
+            reconcileFocus(true);
+        };
+        if (typeof globalThis.requestAnimationFrame === 'function') {
+            h.reconcileRaf = globalThis.requestAnimationFrame(run);
+        } else {
+            h.reconcileRaf = setTimeout(run, 0);
+        }
+    };
+    h.cancelReconcile = cancelReconcile;
+    h.scheduleReconcile = scheduleReconcile;
+    const checkFieldBlur = () => {
+        if (!h.pendingFieldBlur) return;
+        if (!reconcileFocus(false)) scheduleReconcile();
+    };
+    const finishPointer = pid => {
+        if (!h.pressedPointers.delete(pid) || h.disposed) return;
+        if (h.pressedPointers.size === 0) applyKeyboardShift(h);
+        if (h.pendingFieldBlur) queueMicrotask(checkFieldBlur);
+    };
+    const capturePointerEnd = event => {
+        const pid = event.pointerId;
+        if (event.pointerType === 'touch' && pid === h.activeTouchId) {
+            h.activeTouchId = null;
+        }
+        // Fallback if a page listener stops propagation before window bubble phase runs.
+        if (typeof pid === 'number' && h.pressedPointers.has(pid)) {
+            setTimeout(() => finishPointer(pid), 0);
+        } else if (h.pendingFieldBlur) {
+            queueMicrotask(checkFieldBlur);
+        }
         recordTouchTimestamp(false, event);
     };
-    listen(window, 'pointerup', clearActiveTouch, { capture: true, passive: true });
-    listen(window, 'pointercancel', clearActiveTouch, { capture: true, passive: true });
+    // Release pressedPointers in window bubble phase — AFTER winit's target-phase listener on
+    // canvas has already read offsetX/offsetY and completed the press. (A microtask queued from
+    // capture phase runs at the per-listener microtask checkpoint BEFORE canvas's listener.)
+    const bubblePointerEnd = event => {
+        if (typeof event.pointerId === 'number') finishPointer(event.pointerId);
+    };
+    listen(window, 'pointerup', capturePointerEnd, { capture: true, passive: true });
+    listen(window, 'pointercancel', capturePointerEnd, { capture: true, passive: true });
+    listen(window, 'pointerup', bubblePointerEnd, { passive: true });
+    listen(window, 'pointercancel', bubblePointerEnd, { passive: true });
     listen(window, 'keyup', event => {
         if (ownsTarget(event.target) && !(event.target === canvas && MOD_KEYS.includes(event.key))) syncMods(event);
     }, { capture: true, passive: true });
@@ -282,13 +350,25 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(window, 'keyup', event => {
         if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
     }, { passive: true });
-    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); });
-    listen(document, 'visibilitychange', () => { if (document.hidden) { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; disarmLink(h); } });
+    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); });
+    listen(window, 'focus', () => { if (h.key && h.domFocused && document.activeElement !== h.field) scheduleReconcile(); });
+    listen(document, 'visibilitychange', () => {
+        if (document.hidden) {
+            h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h);
+        } else if (h.key && h.domFocused && document.activeElement !== h.field) {
+            scheduleReconcile();
+        }
+    });
     listen(document, 'pointerlockchange', () => {
         if (h.disposed) return;
         const locked = document.pointerLockElement === canvas;
         if (locked) {
-            if (!h.pointerLockPending && !h.pointerLocked) {
+            if (h.pointerLocked) {
+                // Second pointerlockchange from an in-place option upgrade (W3C Pointer Lock 2.0
+                // step 6.3.2): already locked, no duplicate event to Rust.
+                return;
+            }
+            if (!h.pointerLockPending) {
                 // Lock arrived after Rune cancelled or unmounted: exit immediately.
                 if (typeof document.exitPointerLock === 'function') {
                     try { document.exitPointerLock(); } catch {}
@@ -298,7 +378,9 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             h.pointerLocked = true;
             h.pointerLockPending = false;
             h.pointerLockHasPromise = false;
+            const seq = h.pointerLockSeq;
             send({ kind: 'pointer_lock', locked: true });
+            upgradeUnadjustedMovement(h, seq);
         } else if (h.pointerLocked) {
             h.pointerLocked = false;
             h.pointerLockPending = false;
@@ -416,7 +498,20 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             key(event.key, event);
         });
         listen(field, 'keyup', event => { h.shift = event.shiftKey; });
-        listen(field, 'blur', () => { h.shift = false; });
+        listen(field, 'focus', () => {
+            if (!h.disposed && h.key && field === h.field) {
+                h.domFocused = true;
+                h.pendingFieldBlur = false;
+                cancelReconcile();
+            }
+        });
+        const onFieldLostFocus = () => {
+            if (h.disposed || h.syncing || !h.key || field !== h.field) return;
+            h.pendingFieldBlur = true;
+            queueMicrotask(checkFieldBlur);
+        };
+        listen(field, 'blur', () => { h.shift = false; onFieldLostFocus(); });
+        listen(field, 'focusout', onFieldLostFocus);
     }
     listen(textarea, 'select', () => {
         if (h.syncing || h.composing || document.activeElement !== textarea) return;
@@ -698,8 +793,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }
     queueMicrotask(() => {
         if (!h.disposed && !embedded && !page && document.activeElement === document.body) {
-            (h.key ? h.field : canvas).focus({ preventScroll: true });
-            if (h.key) reselect(h);
+            if (h.key) focusInput(h);
+            else canvas.focus({ preventScroll: true });
         }
     });
     return h;
@@ -718,6 +813,25 @@ function reselect(h) {
     }
 }
 
+// Prepares and focuses the active hidden input (`h.textarea` or `h.password`) when `h.key` is set.
+// Sets `inert = false` and `inputMode = 'text'` BEFORE calling `focus()` so iOS Safari evaluates
+// `shouldShowAutomaticKeyboardUI` with an editable `inputMode` at the moment of focus (while
+// keeping `opacity: 0` so WebKit suppresses native selection UI and zoom-to-focus per r238146).
+// When `force` is true (called from `activate()` inside a user gesture), `focus()` runs even when
+// `field` is already `document.activeElement` so WebKit's `Element::focus` invokes
+// `elementDidRefocus` (r188405/r290646) to re-present the keyboard if dismissed while staying a
+// zero-flicker no-op when the keyboard is already showing (r242833).
+function focusInput(h, force = false) {
+    const field = h.field;
+    h.pendingFieldBlur = false;
+    h.cancelReconcile?.();
+    field.inert = false;
+    field.inputMode = 'text';
+    if (force || document.activeElement !== field) field.focus({ preventScroll: true });
+    if (document.activeElement === field) h.domFocused = true;
+    reselect(h);
+}
+
 export function sync(h, key, text, base, anchor, focus, secure) {
     if (h.composing && key === h.key) return;
     h.composing = false;
@@ -729,6 +843,9 @@ export function sync(h, key, text, base, anchor, focus, secure) {
     h.password.value = '';
     h.field = secure ? h.password : h.textarea;
     if (!key) {
+        h.pendingFieldBlur = false;
+        h.domFocused = false;
+        h.cancelReconcile?.();
         h.selection = null;
         h.textarea.value = '';
         if (editing) h.canvas.focus({ preventScroll: true });
@@ -747,11 +864,16 @@ export function sync(h, key, text, base, anchor, focus, secure) {
             h.selection = [start, end, direction];
         }
         if (editing && active !== h.field) activate(h);
-        else if (active === h.canvas) h.field.focus({ preventScroll: true });
-        reselect(h);
+        else if (active === h.canvas && !h.pendingFieldBlur) focusInput(h);
+        else {
+            h.field.inputMode = 'text';
+            if (active === h.field) h.domFocused = true;
+            reselect(h);
+        }
         (secure ? h.textarea : h.password).inert = true;
     }
     h.syncing = false;
+    applyKeyboardShift(h);
 }
 
 // Drops browser composition tracking after Rune finished/cancelled composition (e.g. on blur or hide).
@@ -775,11 +897,40 @@ export function syncMediaKeys(h, enabled) {
     h.mediaKeys = !!enabled;
 }
 
-// Requests pointer lock on the canvas inside a user gesture. Tries `{ unadjustedMovement: true }`
-// first for raw unaccelerated deltas where supported, caching and falling back to plain
-// `requestPointerLock()` on `NotSupportedError` or synchronous `TypeError`. Any refusal
-// (`SecurityError`, missing API, or failed fallback) reports `{ kind: 'pointer_lock', locked: false }`
-// so Rune's state machine returns cleanly to Ready without getting stuck.
+// Upgrades an already-active plain pointer lock to `{ unadjustedMovement: true }` in place
+// (W3C Pointer Lock 2.0 step 6.3). If unsupported, the original plain lock remains intact and
+// the fallback is cached so later locks skip the upgrade.
+function upgradeUnadjustedMovement(h, seq) {
+    if (h.disposed || h.pointerLockUnadjustedFailed || !h.pointerLocked || h.pointerLockSeq !== seq) return;
+    const canvas = h.canvas;
+    if (document.pointerLockElement !== canvas || typeof canvas.requestPointerLock !== 'function') return;
+    try {
+        const res = canvas.requestPointerLock({ unadjustedMovement: true });
+        if (res && typeof res.then === 'function') {
+            res.then(
+                () => {},
+                err => {
+                    if (err && err.name === 'NotSupportedError') {
+                        h.pointerLockUnadjustedFailed = true;
+                    }
+                },
+            );
+        } else {
+            h.pointerLockUnadjustedFailed = true;
+        }
+    } catch (err) {
+        if (err && (err.name === 'NotSupportedError' || err.name === 'TypeError')) {
+            h.pointerLockUnadjustedFailed = true;
+        }
+    }
+}
+
+// Requests plain pointer lock synchronously inside the user gesture so the first click never
+// depends on an asynchronous retry (which can lose transient activation or race a stale
+// `pointerlockerror` when a platform rejects `unadjustedMovement`). Once `pointerlockchange`
+// confirms the lock, `upgradeUnadjustedMovement` upgrades it in place where supported. Any
+// refusal (`SecurityError`, missing API, or `pointerlockerror`) reports
+// `{ kind: 'pointer_lock', locked: false, refused: true }` so Rune returns cleanly to Ready.
 export function requestPointerLock(h) {
     if (h.disposed) return;
     const canvas = h.canvas;
@@ -798,70 +949,28 @@ export function requestPointerLock(h) {
         h.pointerLockHasPromise = false;
         h.send({ kind: 'pointer_lock', locked: false, refused: true });
     };
-    const invoke = opts => {
+    h.syncing = true;
+    try {
         h.pointerLockCalling = true;
         h.pointerLockSyncError = false;
+        let res;
         try {
-            return opts === undefined ? canvas.requestPointerLock() : canvas.requestPointerLock(opts);
+            res = canvas.requestPointerLock();
         } finally {
             h.pointerLockCalling = false;
         }
-    };
-    const tryPlain = () => {
-        if (h.disposed || h.pointerLockSeq !== seq) return;
-        try {
-            const res = invoke(undefined);
-            if (res && typeof res.then === 'function') {
-                h.pointerLockHasPromise = true;
-                h.pointerLockSyncError = false;
-                res.then(
-                    () => { if (h.pointerLockSeq === seq) h.pointerLockHasPromise = false; },
-                    fail,
-                );
-            } else if (h.pointerLockSyncError) {
-                h.pointerLockSyncError = false;
-                fail();
-            }
-        } catch {
+        if (res && typeof res.then === 'function') {
+            // Keep `pointerLockHasPromise` true until `pointerlockchange` or `fail`, never
+            // clearing it in a fulfillment microtask before `pointerlockchange` fires.
+            h.pointerLockHasPromise = true;
+            h.pointerLockSyncError = false;
+            res.then(() => {}, fail);
+        } else if (h.pointerLockSyncError) {
+            h.pointerLockSyncError = false;
             fail();
         }
-    };
-    h.syncing = true;
-    try {
-        if (h.pointerLockUnadjustedFailed) {
-            tryPlain();
-            return;
-        }
-        try {
-            const res = invoke({ unadjustedMovement: true });
-            if (res && typeof res.then === 'function') {
-                h.pointerLockHasPromise = true;
-                h.pointerLockSyncError = false;
-                res.then(
-                    () => { if (h.pointerLockSeq === seq) h.pointerLockHasPromise = false; },
-                    err => {
-                        if (h.disposed || h.pointerLockSeq !== seq) return;
-                        h.pointerLockHasPromise = false;
-                        if (err && err.name === 'NotSupportedError') {
-                            h.pointerLockUnadjustedFailed = true;
-                            tryPlain();
-                            return;
-                        }
-                        fail();
-                    },
-                );
-            } else if (h.pointerLockSyncError) {
-                h.pointerLockSyncError = false;
-                fail();
-            }
-        } catch (err) {
-            if (err && (err.name === 'NotSupportedError' || err.name === 'TypeError')) {
-                h.pointerLockUnadjustedFailed = true;
-                tryPlain();
-            } else {
-                fail();
-            }
-        }
+    } catch {
+        fail();
     } finally {
         h.syncing = false;
     }
@@ -1089,16 +1198,58 @@ export function syncWheel(h, used) {
     h.wheelUsed = used;
 }
 
+// Vertical CSS shift (px, >= 0) to lift a focused field into the visible part of `visualViewport`
+// when the on-screen keyboard shrinks only the visual viewport (iOS Safari, Android Chrome default
+// `resizes-visual`) and no enclosing Rune scroll container could bring the caret above it.
+function keyboardShift(h) {
+    if (h.embedded || h.page || !h.key || !h.caret || !h.visualViewport) return 0;
+    const { top: visTop, bottom: visBottom, layoutH } = h.visualViewport;
+    const coveredBottom = Math.max(0, layoutH - visBottom);
+    if (coveredBottom <= 1) return 0;
+    const pad = 16;
+    const caretTop = h.caret[1];
+    const caretBottom = caretTop + h.caret[3];
+    const need = caretBottom + pad - visBottom;
+    if (need <= 0) return 0;
+    const maxKeepTop = Math.max(0, caretTop - (visTop + pad));
+    return Math.min(need, maxKeepTop, coveredBottom);
+}
+
+function applyKeyboardShift(h) {
+    if (h.pressedPointers.size > 0) return;
+    const shift = keyboardShift(h);
+    const prev = h.keyboardShiftY || 0;
+    if (Math.abs(shift - prev) < 0.5) return;
+    h.keyboardShiftY = shift;
+    const value = shift > 0 ? `translate3d(0, ${-shift}px, 0)` : '';
+    const sibling = h.canvas.previousElementSibling;
+    const targets = sibling?.hasAttribute?.('data-rune-cpu') ? [h.canvas, sibling, h.a11y] : [h.canvas, h.a11y];
+    for (const target of targets) target.style.transform = value;
+    if (h.caret && !h.fieldArmed) {
+        for (const field of [h.textarea, h.password]) placeField(field, h.caret, shift);
+    }
+}
+
+// Updates the unzoomed visual viewport vertical band `[top, bottom]` within `layoutH` (CSS px)
+// so a focused field covered by the on-screen keyboard is shifted into view without resizing the
+// canvas. Passing `layoutH <= 0` or `bottom <= top` clears any active shift.
+export function syncVisualViewport(h, top, bottom, layoutH) {
+    h.visualViewport = layoutH > 0 && bottom > top ? { top, bottom, layoutH } : null;
+    applyKeyboardShift(h);
+    if (h.key && h.domFocused && document.activeElement !== h.field) h.scheduleReconcile?.();
+}
+
 // The focused field's IME area in window points: the page's own text field sits there, so an
 // input method's candidate window opens beside the caret, not in the page's corner.
 export function syncCaret(h, x, y, w, height) {
     h.caret = [x, y, Math.max(1, w), Math.max(1, height)];
+    applyKeyboardShift(h);
     if (h.fieldArmed) return;
-    for (const field of [h.textarea, h.password]) placeField(field, h.caret);
+    for (const field of [h.textarea, h.password]) placeField(field, h.caret, h.keyboardShiftY || 0);
 }
 
-function placeField(field, [x, y, w, height]) {
-    Object.assign(field.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${height}px`, pointerEvents: 'none' });
+function placeField(field, [x, y, w, height], shiftY = 0) {
+    Object.assign(field.style, { left: `${x}px`, top: `${y - shiftY}px`, width: `${w}px`, height: `${height}px`, pointerEvents: 'none' });
 }
 
 function forwardWheelToCanvas(h, event) {
@@ -1309,7 +1460,7 @@ function disarmMenu(h) {
     }
     if (h.fieldArmed) {
         h.fieldArmed = false;
-        if (h.caret) placeField(h.field, h.caret);
+        if (h.caret) placeField(h.field, h.caret, h.keyboardShiftY || 0);
         else Object.assign(h.field.style, { left: '0px', top: '0px', width: '1px', height: '1px', pointerEvents: 'none' });
     }
     if (h.menu === 'browser') h.menu = '';
@@ -1352,7 +1503,7 @@ function safeHref(url) {
     return null;
 }
 
-const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div' };
+const TAGS = { heading: null, button: 'button', link: 'a', image: 'div', progressbar: 'div', text: 'p', scroll_x: 'div', textbox: 'div' };
 const RANGE_ROLES = new Set(['slider', 'spinbutton', 'progressbar', 'meter', 'scrollbar']);
 
 function family(name) {
@@ -1417,7 +1568,7 @@ function itemStyle(h, item, origin) {
     if (item.k === 'link') return css + (item.dis
         ? 'display:block;overflow:hidden;text-decoration:none;pointer-events:none;font:14px/1.25 sans-serif;'
         : 'display:block;overflow:hidden;text-decoration:none;cursor:pointer;pointer-events:auto;font:14px/1.25 sans-serif;');
-    if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
+    if (item.k === 'image' || item.k === 'button' || item.k === 'progressbar' || item.k === 'textbox') return css + 'overflow:hidden;pointer-events:none;font:14px/1.25 sans-serif;';
     const fs = item.s || 14;
     if (!item.f) return css + `font:${fs}px/1.25 sans-serif;overflow:hidden;white-space:pre-wrap;pointer-events:none;`;
     const [fam, weight, lh, tracking, italic, align] = item.f;
@@ -1468,10 +1619,25 @@ function ensureA11yNode(h, item, tag, key) {
             el.addEventListener('click', ev => {
                 ev.preventDefault();
                 if (el.getAttribute('aria-disabled') === 'true') return;
-                h.send({ kind: 'a11y_press', path: item.p });
+                h.send({ kind: 'a11y_press', path: el._a11yPath });
             });
         }
         h.a11yNodes.set(key, el);
+    }
+    if (item.k === 'textbox' && !el._textboxBound) {
+        el._textboxBound = true;
+        el.tabIndex = h.page ? 0 : -1;
+        const focusField = () => {
+            if (el.getAttribute('aria-disabled') === 'true' || h.disposed || h.syncing) return;
+            h.send({ kind: 'a11y_press', path: el._a11yPath });
+        };
+        el.addEventListener('click', ev => {
+            ev.preventDefault();
+            focusField();
+        });
+        el.addEventListener('focus', () => {
+            focusField();
+        });
     }
     el._a11yPath = item.p;
     h.a11yByPath.set(item.p, el);
@@ -1509,11 +1675,19 @@ function applyA11yItem(h, el, item, tag, origin) {
         ['aria-valuetext', item.vt],
         ['aria-multiselectable', item.ms ? 'true' : undefined],
         ['aria-required', item.rq ? 'true' : undefined],
+        ['aria-multiline', item.ml ? 'true' : undefined],
+        ['aria-readonly', item.ro ? 'true' : undefined],
+        ['aria-invalid', item.inv ? 'true' : undefined],
+        ['aria-placeholder', item.ph],
         ['aria-haspopup', item.hp],
         ['aria-orientation', item.or],
         ['aria-autocomplete', item.ac],
         ['aria-controls', item.ct],
         ['aria-owns', item.ow],
+        ['aria-rowcount', item.rc !== undefined ? String(item.rc) : undefined],
+        ['aria-colcount', item.cc !== undefined ? String(item.cc) : undefined],
+        ['aria-rowindex', item.ri !== undefined ? String(item.ri) : undefined],
+        ['aria-colindex', item.ci !== undefined ? String(item.ci) : undefined],
     ];
     for (const [name, value] of rangeAttrs) {
         if (value === undefined) {
@@ -1562,8 +1736,9 @@ function applyA11yItem(h, el, item, tag, origin) {
         }
     }
     const combobox = item.k === 'button' && item.o === 'combobox';
+    const textbox = item.k === 'textbox';
     const rangeControl = item.k === 'button' && (item.o === 'slider' || item.o === 'spinbutton');
-    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox || rangeControl) {
+    if (item.k === 'group' || item.k === 'image' || item.k === 'progressbar' || combobox || textbox || rangeControl) {
         if (item.t) {
             if (el.getAttribute('aria-label') !== item.t) el.setAttribute('aria-label', item.t);
         } else if (el.getAttribute('aria-label') !== null) {
@@ -1604,7 +1779,7 @@ function applyA11yItem(h, el, item, tag, origin) {
     syncScrollContent(el, item.k === 'group' ? item.sc : null);
     const container = item.k === 'group' || item.k === 'scroll_x';
     const noContent = container || item.k === 'image' || item.k === 'progressbar';
-    const content = combobox ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
+    const content = (combobox || textbox) ? (item.v ?? '') : rangeControl ? '' : (item.t ?? '');
     const sig = noContent ? '' : item.u?.length ? `${item.dis ? '1' : '0'}:${JSON.stringify(item.u)}` : content;
     if (!noContent && el._sig !== sig) {
         el._sig = sig;
@@ -1772,6 +1947,33 @@ function clearMirrorSelection(h) {
     h.mirrorSel = false;
 }
 
+function clearFocusProxy(el) {
+    for (const a of [...el.attributes]) {
+        if (a.name === 'role' || a.name.startsWith('aria-') || a.name === 'data-rune-selection') {
+            el.removeAttribute(a.name);
+        }
+    }
+    el.textContent = '';
+}
+
+function syncFieldA11y(field, f, defaultLabel) {
+    field.setAttribute('aria-label', (f && f.t) || defaultLabel);
+    const attrs = [
+        ['aria-description', f?.d || undefined],
+        ['aria-disabled', f?.dis ? 'true' : undefined],
+        ['aria-readonly', f?.ro ? 'true' : undefined],
+        ['aria-invalid', f?.inv ? 'true' : undefined],
+        ['aria-required', f?.rq ? 'true' : undefined],
+        ['aria-placeholder', f?.ph || undefined],
+        ['aria-autocomplete', f?.ac || undefined],
+        ['aria-multiline', field.tagName === 'TEXTAREA' && f ? (f.ml ? 'true' : 'false') : undefined],
+    ];
+    for (const [name, value] of attrs) {
+        if (value === undefined) field.removeAttribute(name);
+        else field.setAttribute(name, value);
+    }
+}
+
 export function focusA11y(h, json) {
     if (h.disposed || h.page) return;
     const f = json ? JSON.parse(json) : null;
@@ -1789,16 +1991,35 @@ export function focusA11y(h, json) {
     }
     if (!f) {
         h.canvas.removeAttribute('aria-activedescendant');
-        h.textarea.removeAttribute('aria-autocomplete');
+        h.textarea.removeAttribute('aria-activedescendant');
+        for (const p of h.focusProxies) clearFocusProxy(p);
+        syncFieldA11y(h.textarea, null, 'Text input');
+        syncFieldA11y(h.password, null, 'Password input');
         clearMirrorSelection(h);
         return;
     }
-    if (f.o === 'textbox') h.textarea.setAttribute('aria-label', f.t || 'Text input');
+    if (f.o === 'textbox' && !f.f) {
+        // The bridge's real <textarea> or <input type="password"> is the sole active control:
+        // clear the canvas focus proxies so no duplicate textbox node appears in the tree.
+        h.canvas.removeAttribute('aria-activedescendant');
+        h.textarea.removeAttribute('aria-activedescendant');
+        for (const p of h.focusProxies) clearFocusProxy(p);
+        if (f.sec) {
+            syncFieldA11y(h.password, f, 'Password input');
+            syncFieldA11y(h.textarea, null, 'Text input');
+        } else {
+            syncFieldA11y(h.textarea, f, 'Text input');
+            syncFieldA11y(h.password, null, 'Password input');
+        }
+        clearMirrorSelection(h);
+        return;
+    }
+    syncFieldA11y(h.password, null, 'Password input');
     if (f.f) h.textarea.setAttribute('aria-label', f.f);
+    clearFocusProxy(h.focusProxies[h.focusTurn]);
     h.focusTurn ^= 1;
     const el = h.focusProxies[h.focusTurn];
-    for (const a of [...el.attributes]) if (a.name === 'role' || a.name.startsWith('aria-') || a.name === 'data-rune-selection') el.removeAttribute(a.name);
-    el.textContent = '';
+    clearFocusProxy(el);
     el.setAttribute('role', f.o);
     el.setAttribute('aria-label', f.t ?? '');
     if (f.d) el.setAttribute('aria-description', f.d);
@@ -1812,11 +2033,18 @@ export function focusA11y(h, json) {
     if (f.b) el.setAttribute('aria-busy', 'true');
     if (f.ms) el.setAttribute('aria-multiselectable', 'true');
     if (f.rq) el.setAttribute('aria-required', 'true');
+    if (f.ml) el.setAttribute('aria-multiline', 'true');
+    if (f.inv) el.setAttribute('aria-invalid', 'true');
+    if (f.ph) el.setAttribute('aria-placeholder', f.ph);
     if (f.hp) el.setAttribute('aria-haspopup', f.hp);
     if (f.or) el.setAttribute('aria-orientation', f.or);
     if (f.ac) el.setAttribute('aria-autocomplete', f.ac);
     if (f.ct) el.setAttribute('aria-controls', f.ct);
     if (f.ow) el.setAttribute('aria-owns', f.ow);
+    if (f.rc !== undefined) el.setAttribute('aria-rowcount', String(f.rc));
+    if (f.cc !== undefined) el.setAttribute('aria-colcount', String(f.cc));
+    if (f.ri !== undefined) el.setAttribute('aria-rowindex', String(f.ri));
+    if (f.ci !== undefined) el.setAttribute('aria-colindex', String(f.ci));
     if (f.ro) el.setAttribute('aria-readonly', 'true');
     if (f.sel) {
         el.setAttribute('data-rune-selection', JSON.stringify(f.sel));
@@ -1837,9 +2065,8 @@ export function focusA11y(h, json) {
     }
     h.canvas.setAttribute('aria-activedescendant', el.id);
     // Typing in a field whose highlighted row this is (the palette): the field says it too.
-    if (f.o !== 'textbox') h.textarea.setAttribute('aria-activedescendant', el.id);
-    else h.textarea.removeAttribute('aria-activedescendant');
-    const taAc = f.fac ?? ((f.o === 'textbox' || f.o === 'combobox') ? f.ac : undefined);
+    h.textarea.setAttribute('aria-activedescendant', el.id);
+    const taAc = f.fac ?? (f.o === 'combobox' ? f.ac : undefined);
     if (taAc) h.textarea.setAttribute('aria-autocomplete', taAc);
     else h.textarea.removeAttribute('aria-autocomplete');
 }
@@ -2130,10 +2357,8 @@ export function activate(h) {
     // A page's canvas is `tabindex="-1"`: focusing it on a tap would only drop the reader's text
     // selection or a link's focus. An input that took the keyboard still gets it.
     if (h.page && !h.key) return;
-    const field = h.key ? h.field : h.canvas;
-    if (h.key) field.inputMode = 'text';
-    if (document.activeElement !== field) field.focus({ preventScroll: true });
-    if (h.key) reselect(h);
+    if (h.key) focusInput(h, true);
+    else if (document.activeElement !== h.canvas) h.canvas.focus({ preventScroll: true });
 }
 
 // Browser `File` handles a paste or drop offered the focused field, by id, for
@@ -2187,6 +2412,7 @@ export function destroy(h) {
     h.disposed = true;
     h.image = undefined;
     clearTimeout(h.staticTimer);
+    h.cancelReconcile?.();
     cancelTouchHoldConfirm(h);
     disarmLink(h);
     h.pendingLinkDrag = null;
@@ -2200,6 +2426,12 @@ export function destroy(h) {
     h.a11yByPath.clear();
     h.mirrorSel = false;
     h.scrollEls.clear();
+    if (h.keyboardShiftY) {
+        h.keyboardShiftY = 0;
+        const sibling = h.canvas.previousElementSibling;
+        if (sibling?.hasAttribute?.('data-rune-cpu')) sibling.style.transform = '';
+        h.canvas.style.transform = '';
+    }
     h.a11y.remove();
     h.band?.remove();
     h.password.remove(); h.textarea.remove();

@@ -25,17 +25,18 @@ const CLAIM_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 /// is quitting either way.
 pub(crate) fn spawn() {
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = start(crate::tooling::without_relaunch_drops(std::env::args_os().skip(1).collect()), AFTER) {
+    if let Err(e) = start(crate::tooling::without_relaunch_drops(std::env::args_os().skip(1).collect()), AFTER, None) {
         eprintln!("rune: couldn't start the app again: {e}");
     }
 }
 
 /// Starts this app with another launch's arguments: a launch that reached this process while it
 /// quits (`single_instance`). The new process claims the instance as soon as this one lets go of
-/// it (`release_instance`), and starts meanwhile.
+/// it (`release_instance`), and starts meanwhile. The launch's activation token (Linux) goes to
+/// it as `XDG_ACTIVATION_TOKEN`, so its first window takes the focus the launch asked for.
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-pub(crate) fn spawn_with(args: Vec<String>) {
-    if let Err(e) = start(args.into_iter().map(Into::into).collect(), HANDED) {
+pub(crate) fn spawn_with(args: Vec<String>, token: Option<String>) {
+    if let Err(e) = start(args.into_iter().map(Into::into).collect(), HANDED, token.as_deref()) {
         eprintln!("rune: couldn't start the app for a launch that came while it quit: {e}");
     }
 }
@@ -47,7 +48,7 @@ pub(crate) fn handed_from() -> Option<u32> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn start(args: Vec<std::ffi::OsString>, wait_var: &str) -> std::io::Result<()> {
+fn start(args: Vec<std::ffi::OsString>, wait_var: &str, token: Option<&str>) -> std::io::Result<()> {
     use std::process::{Command, Stdio};
     let exe = std::env::current_exe()?;
     let pid = std::process::id().to_string();
@@ -62,6 +63,7 @@ fn start(args: Vec<std::ffi::OsString>, wait_var: &str) -> std::io::Result<()> {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     cmd.env_remove(HANDED);
     cmd.env(wait_var, &pid).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    if let Some(token) = token { cmd.env("XDG_ACTIVATION_TOKEN", token).env_remove("DESKTOP_STARTUP_ID"); }
     if let Ok(dir) = std::env::current_dir() { cmd.current_dir(dir); }
     #[cfg(target_os = "windows")]
     {

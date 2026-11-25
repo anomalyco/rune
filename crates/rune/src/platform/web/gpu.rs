@@ -68,6 +68,8 @@ pub(super) enum Draw {
     /// WebGL2 context lost on a GPU-first inline or document page that cannot overlay a CPU
     /// canvas; redraws pause until `webglcontextrestored` rebuilds `GpuSide`.
     ContextLost,
+    /// `GpuLossPolicy::Terminal` latched: page/canvas stay alive in DOM with no GPU or CPU fallback.
+    TerminalFailed,
     /// Only while one state is taken apart for the next: no frame sees it.
     Moving,
 }
@@ -76,14 +78,14 @@ impl Draw {
     pub(super) fn gpu(&self) -> Option<&GpuSide> {
         match self {
             Draw::HandingOver { side, .. } | Draw::Gpu(side) => Some(side),
-            Draw::Cpu { .. } | Draw::ContextLost | Draw::Moving => None,
+            Draw::Cpu { .. } | Draw::ContextLost | Draw::TerminalFailed | Draw::Moving => None,
         }
     }
 
     pub(super) fn gpu_mut(&mut self) -> Option<&mut GpuSide> {
         match self {
             Draw::HandingOver { side, .. } | Draw::Gpu(side) => Some(side),
-            Draw::Cpu { .. } | Draw::ContextLost | Draw::Moving => None,
+            Draw::Cpu { .. } | Draw::ContextLost | Draw::TerminalFailed | Draw::Moving => None,
         }
     }
 
@@ -99,6 +101,7 @@ impl Draw {
             Draw::HandingOver { .. } => WebDrawKind::HandingOver { waiting_for_gpu: self.waiting_for_gpu() },
             Draw::Gpu(_) => WebDrawKind::Gpu,
             Draw::ContextLost => WebDrawKind::ContextLost,
+            Draw::TerminalFailed => WebDrawKind::TerminalFailed,
             Draw::Moving => WebDrawKind::Moving,
         }
     }
@@ -215,6 +218,7 @@ pub(super) fn gpu_side(
     ready: ReadyGpu,
     size: (u32, u32),
     rt: &mut RuntimeCore,
+    policy: crate::GpuLossPolicy,
     lost: Rc<RefCell<Option<Loss>>>,
     proxy: EventLoopProxy<Wake>,
 ) -> Result<GpuSide, String> {
@@ -227,7 +231,7 @@ pub(super) fn gpu_side(
     let backend = gpu.adapter.get_info().backend;
     let is_gl = backend == wgpu::Backend::Gl;
     let watch_proxy = proxy.clone();
-    let restore = health::watch(&gpu.device, gpu.lost_flag(), move |why| {
+    let restore = health::watch(&gpu.device, gpu.lost_flag(), policy == crate::GpuLossPolicy::Terminal, move |why| {
         *lost.borrow_mut() = Some(if is_gl { Loss::WebGl(why) } else { Loss::WebGpu(why) });
         watch_proxy.send_event(Wake::App).ok();
     });

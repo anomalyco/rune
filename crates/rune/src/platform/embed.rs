@@ -50,6 +50,11 @@ pub struct EmbedFrame {
     pub cpu_us: u64,
 }
 
+const _: fn() = || {
+    fn assert_copy<T: Copy>() {}
+    assert_copy::<EmbedFrame>();
+};
+
 impl From<FrameSummary> for EmbedFrame {
     fn from(s: FrameSummary) -> Self {
         Self {
@@ -247,6 +252,16 @@ impl<S: 'static> LayerHost<S> {
 
     pub fn runtime_mut(&mut self) -> &mut Runtime<S> {
         &mut self.rt
+    }
+
+    /// Takes the haptics handlers asked for (`Tx::haptic`), oldest first, for the host to play:
+    /// Rune does not link UIKit or call platform feedback generators from `LayerHost` because
+    /// iOS 17.5+ `UIFeedbackGenerator(view:)` and Android `View.performHapticFeedback` require
+    /// the host's native view on the main thread. Drain after each [`Self::frame`] (and after
+    /// out-of-frame `Runtime::update` calls if desired). Identical haptics within 30 ms on the
+    /// runtime clock are coalesced and at most 32 are retained (oldest dropped first).
+    pub fn take_haptics(&mut self) -> Vec<crate::Haptic> {
+        self.rt.take_haptics()
     }
 
     /// Updates the viewport in points and display scale, reconfiguring the Metal swapchain only

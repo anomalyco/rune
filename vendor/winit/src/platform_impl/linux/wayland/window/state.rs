@@ -419,6 +419,9 @@ impl WindowState {
 
         let new_state = configure.state;
         let old_state = self.last_configure.as_ref().map(|configure| configure.state);
+        let old_decoration_mode =
+            self.last_configure.as_ref().map(|configure| configure.decoration_mode);
+        let old_capabilities = self.last_configure.as_ref().map(|configure| configure.capabilities);
 
         let state_change_requires_resize = old_state
             .map(|old_state| {
@@ -426,6 +429,8 @@ impl WindowState {
                     .symmetric_difference(new_state)
                     .difference(XdgWindowState::ACTIVATED | XdgWindowState::SUSPENDED)
                     .is_empty()
+                    || old_decoration_mode != Some(configure.decoration_mode)
+                    || old_capabilities != Some(configure.capabilities)
             })
             // NOTE: `None` is present for the initial configure, thus we must always resize.
             .unwrap_or(true);
@@ -648,6 +653,26 @@ impl WindowState {
                 .as_ref()
                 .is_some_and(|configure| configure.decoration_mode == DecorationMode::Client)
             && self.frame.is_some()
+    }
+
+    /// Rune: confirmed Wayland `xdg_toplevel` / `xdg-decoration` state from `last_configure`,
+    /// gated by `xdg_toplevel` protocol version (`>= 2` for tiled edges, `>= 5` for
+    /// `wm_capabilities`).
+    #[inline]
+    pub fn wayland_wm_state(&self) -> Option<(bool, Option<[bool; 4]>, Option<u16>)> {
+        let configure = self.last_configure.as_ref()?;
+        let server = matches!(configure.decoration_mode, DecorationMode::Server);
+        let version = self.window.xdg_toplevel().version();
+        let tiled = (version >= 2).then(|| {
+            [
+                configure.is_tiled_top(),
+                configure.is_tiled_right(),
+                configure.is_tiled_bottom(),
+                configure.is_tiled_left(),
+            ]
+        });
+        let capabilities = (version >= 5).then(|| configure.capabilities.bits());
+        Some((server, tiled, capabilities))
     }
 
     /// Rune: the radius, in logical points, of the arc the window's content takes at its bottom

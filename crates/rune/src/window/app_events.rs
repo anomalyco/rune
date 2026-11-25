@@ -2,6 +2,42 @@
 
 use super::*;
 
+/// Syncs whether any live non-finished host currently has `App::on_quit_request` registered.
+pub(super) fn sync_quit_request_hooks(hosts: &[Option<Box<dyn AnyHost>>]) {
+    let any = hosts.iter().flatten().any(|h| !h.finished() && h.has_quit_request());
+    crate::quit::set_has_quit_request_hooks(any);
+}
+
+/// Syncs quit-request hooks and installs the platform quit listeners into the event loop proxy.
+pub(super) fn install_quit(hosts: &[Option<Box<dyn AnyHost>>], proxy: &EventLoopProxy<WakeEvent>) {
+    sync_quit_request_hooks(hosts);
+    let quit_proxy = proxy.clone();
+    let req_proxy = proxy.clone();
+    crate::quit::install(
+        move |ending| quit_proxy.send_event(WakeEvent::Quit(ending)).is_ok(),
+        move || req_proxy.send_event(WakeEvent::QuitRequest).is_ok(),
+    );
+}
+
+/// Asks live non-finished hosts in registration order until the first host returns
+/// `QuitResponse::Defer` (short-circuiting so multiple windows never stack competing prompts)
+/// or all return `QuitResponse::Quit`. Returns `true` to allow the quit and `false` to defer.
+pub(super) fn quit_request_hosts<H: ?Sized>(
+    hosts: &mut [Option<Box<H>>],
+    mut ask: impl FnMut(&mut H) -> Option<crate::QuitResponse>,
+    mut is_finished: impl FnMut(&H) -> bool,
+) -> bool {
+    for host in hosts.iter_mut().flatten() {
+        if is_finished(&**host) {
+            continue;
+        }
+        if ask(&mut **host) == Some(crate::QuitResponse::Defer) {
+            return false;
+        }
+    }
+    true
+}
+
 pub(super) fn quit_hosts(
     hosts: &mut [Option<Box<dyn AnyHost>>],
     ending: bool,
@@ -80,6 +116,7 @@ pub(super) fn cleanup_hosts(
             if !ending { *host = None; }
         }
     }
+    sync_quit_request_hooks(hosts);
     no_main
 }
 
@@ -125,6 +162,7 @@ pub(super) fn exiting_hosts(
     flags: ExitFlags,
     mut send: impl FnMut(crate::quit::Event) -> Vec<crate::quit::Effect>,
 ) -> ExitStep {
+    crate::quit::set_has_quit_request_hooks(false);
     let error_exit = is_error_exit(flags.has_startup_error, flags.has_display_error, flags.loop_exiting, flags.quitting);
     if !error_exit {
         // Every quit ends here, so the windows still open run `App::on_quit` first, unless the
@@ -179,6 +217,20 @@ impl Windows {
         }
     }
 
+    /// Handles a pending macOS `NSTerminateLater` quit request: asks live non-finished hosts in
+    /// registration order until one defers or all allow, then schedules the single native reply.
+    pub(super) fn quit_request(&mut self, event_loop: &ActiveEventLoop) {
+        if !crate::quit::quit_request_asking() {
+            return;
+        }
+        let allow = quit_request_hosts(
+            &mut self.hosts,
+            |h| h.quit_request_hook(event_loop),
+            |h| h.finished(),
+        );
+        crate::quit::finish_quit_request(allow);
+    }
+
     /// The app was reopened: every `on_reopen` hook runs, then, unless one handled it or the
     /// app is an accessory, the default brings back a window when none shows (`reopen::target`).
     pub(super) fn reopen(&mut self, event_loop: &ActiveEventLoop) {
@@ -190,7 +242,17 @@ impl Windows {
         for host in self.hosts.iter_mut().flatten() {
             handled |= host.reopen_hook(event_loop, has_visible);
         }
-        if handled || event_loop.exiting() { return; }
+        if handled || event_loop.exiting() {
+            // Linux: a window the hook opened takes the launch's token; then it goes.
+            #[cfg(target_os = "linux")]
+            {
+                if handled && !event_loop.exiting() {
+                    for host in self.hosts.iter_mut().flatten() { host.apply_pending(event_loop); }
+                }
+                crate::open_url::instance::reopen_done();
+            }
+            return;
+        }
         #[cfg(target_os = "macos")]
         if crate::platform::reopen::accessory() { return; }
         // The default sees what the hooks did, to other windows too.
@@ -198,16 +260,32 @@ impl Windows {
         if event_loop.exiting() { return; }
         #[cfg(target_os = "macos")]
         crate::platform::reopen::unhide();
-        if let Some(Some(host)) = crate::platform::reopen::target(&candidates(&self.hosts)).and_then(|i| self.hosts.get_mut(i)) {
+        let windows = candidates(&self.hosts);
+        if let Some(Some(host)) = crate::platform::reopen::target(&windows).and_then(|i| self.hosts.get_mut(i)) {
             host.reopen(event_loop);
+        } else {
+            // Linux: a launch that came with an activation token brings a window that already
+            // shows forward with it, as the activation that comes with a reopen does on macOS.
+            #[cfg(target_os = "linux")]
+            if crate::open_url::instance::token_waiting()
+                && let Some(Some(host)) = windows.iter().position(|w| w.reopenable && w.visible).and_then(|i| self.hosts.get_mut(i))
+            {
+                host.reopen(event_loop);
+            }
         }
         // Windows: a launch while the app runs brings its front window forward, restored, as
         // AppKit's activation does on macOS; the launch let this process take the foreground.
         #[cfg(target_os = "windows")]
         crate::open_url::instance::raise_front();
+        #[cfg(target_os = "linux")]
+        crate::open_url::instance::reopen_done();
     }
 }
 
 #[cfg(test)]
 #[path = "app_events_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "quit_request_tests.rs"]
+mod quit_request_tests;

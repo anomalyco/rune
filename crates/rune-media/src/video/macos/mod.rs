@@ -20,6 +20,7 @@ use crate::native_surface::{ByteFrame, NativeSurface, Orient};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_av_foundation::{AVAssetImageGenerator, AVPlayer, AVPlayerItem, AVPlayerItemVideoOutput};
+use objc2_core_media::CMTime;
 use port::Av;
 use rune_core::machine::{Attempt, Effects};
 use rune_core::main_queue::on_main;
@@ -67,6 +68,12 @@ pub(super) struct Player {
     pub(super) objects: Option<Objects>,
     /// Video: how its buffers turn upright (they ignore the track's `preferredTransform`).
     pub(super) orient: Orient,
+    /// Exact `CMTime` of the last picture delivered by `AVPlayerItemVideoOutput`, preserved
+    /// without an `f64` round-trip so snapping to the frame start cannot round into a neighbour.
+    pub(super) shown_cm: Option<CMTime>,
+    /// Set during a snap-before-step so any duplicate pixel buffer AVFoundation re-emits for the
+    /// already-shown frame is discarded rather than flashing or ending `Settle::Seeking` early.
+    pub(super) suppress_cm: Option<CMTime>,
 }
 pub(super) struct Objects {
     pub(super) player: Retained<AVPlayer>,
@@ -77,7 +84,7 @@ pub(super) struct Objects {
 
 impl Player {
     pub(super) fn new(objects: Objects) -> Self {
-        Self { objects: Some(objects), orient: Orient::UP }
+        Self { objects: Some(objects), orient: Orient::UP, shown_cm: None, suppress_cm: None }
     }
 }
 
@@ -257,6 +264,26 @@ pub(super) fn apply(shared: &Arc<Shared>) {
     if playing {
         park::unpark(shared);
     }
+}
+
+/// Main thread: carries out the native step once a snap-before-step seek finishes.
+pub(super) fn snap_done(shared: &Arc<Shared>, attempt: Attempt, finished: bool) {
+    if !playback_enabled() {
+        return;
+    }
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let mut native = shared.native.lock().unwrap();
+    if native.player.is_none() {
+        return;
+    }
+    {
+        let mut c = shared.ctl.lock().unwrap();
+        turn::snap_done(&mut c, &mut Av::new(shared, &mut native, Some(mtm), None), attempt, finished);
+    }
+    drop(native);
+    shared.wake_windows();
 }
 
 pub(super) fn is_seeking(shared: &Shared) -> bool {

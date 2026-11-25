@@ -1,11 +1,12 @@
 //! Text inside the accessibility tree: a text field's lines as text runs with each
 //! character's place, so a reader moves by character, word and line and a magnifier follows
-//! the caret; a selectable text's lines likewise; and a text's inline links as link nodes.
+//! the caret; a selectable text's lines likewise; a text's inline links as link nodes; and its
+//! named inline icons as images.
 
 use accesskit::{Action as Ak, Node as AkNode, NodeId as AkId, Rect as AkRect, Role, TextDirection, TextPosition, TextSelection};
 use std::borrow::Cow;
 
-use super::tree::{LINK_BASE, Walk, element_id, line_id, lines_box_id, link_id, round};
+use super::tree::{LINK_BASE, Walk, element_id, icon_id, line_id, lines_box_id, link_id, round};
 use crate::el::TextSpec;
 use crate::runtime::{RuntimeCore, caret_index, text_origin};
 use crate::text::TextFlow;
@@ -27,7 +28,7 @@ const FIELD_SELECTION: bool = cfg!(any(target_os = "windows", target_os = "macos
 
 impl RuntimeCore {
     /// Node `i`'s text as AccessKit sees it: the lines of a field or selectable text, and the
-    /// links of any text, pushed after it as its children.
+    /// links and named inline icons of any text, pushed after it as its children.
     pub(super) fn a11y_text_nodes(&self, i: usize, w: &Walk, out: &mut Vec<(AkId, AkNode)>) {
         let n = &self.tree.nodes[i];
         if n.is_secure() { return; }
@@ -77,7 +78,7 @@ impl RuntimeCore {
             let at = |character_index| TextPosition { node: element_id(n.id), character_index };
             out[me].1.set_text_selection(TextSelection { anchor: at(input.edit.anchor), focus: at(input.edit.focus) });
         }
-        if spec.cold.links.is_empty() || spec.redacted { return; }
+        if spec.redacted { return; }
         let boxes = self.link_boxes(i, self.drawn_box(i));
         for (k, l) in spec.cold.links.iter().enumerate() {
             let Some(r) = boxes.iter().filter(|(j, _)| *j == k).fold(None, |u: Option<[f32; 4]>, (_, r)| {
@@ -91,7 +92,13 @@ impl RuntimeCore {
             let words = spec.source_slice(l.start, l.end).unwrap_or("");
             link.set_label(l.label.as_deref().unwrap_or(words));
             link.set_author_id(l.id.as_str());
-            if role == Role::Link && l.id.contains("://") { link.set_url(l.id.as_str()); }
+            if role == Role::Link {
+                if let Some(url) = crate::runtime::selection::link_menu::link_url(spec, l) {
+                    link.set_url(url);
+                } else if l.id.contains("://") {
+                    link.set_url(l.id.as_str());
+                }
+            }
             link.set_bounds(AkRect {
                 x0: round(r[0] + w.shift[0]), y0: round(r[1] + w.shift[1]),
                 x1: round(r[2] + w.shift[0]), y1: round(r[3] + w.shift[1]),
@@ -101,11 +108,33 @@ impl RuntimeCore {
             if self.allowed(i) {
                 if !disabled && spec.cold.on_link.is_some() { link.add_action(Ak::Click); }
                 if self.can_focus(i) { link.add_action(Ak::Focus); }
-                if !disabled && spec.cold.on_link_secondary.is_some() { link.add_action(Ak::ShowContextMenu); }
+                if !disabled
+                    && (spec.cold.on_link_secondary.is_some()
+                        || (!self.ancestor_has_secondary_press(i)
+                            && crate::runtime::selection::link_menu::link_address(spec, l).is_some()))
+                {
+                    link.add_action(Ak::ShowContextMenu);
+                }
             }
             let id = link_id(n.id, k);
             out[me].1.push_child(id);
             out.push((id, link));
+        }
+        // An inline icon with a name (`InlineIcon::label`): an image where it draws, as
+        // `<span role="img" aria-label>` is on a web page.
+        for (k, r) in self.inline_icon_boxes(i, self.drawn_box(i)) {
+            let Some(b) = spec.cold.pills.get(k).and_then(|p| p.bare.as_deref()) else { continue };
+            let Some(label) = b.label.as_deref() else { continue };
+            let mut icon = AkNode::new(Role::Image);
+            icon.set_label(label);
+            if let Some(help) = b.help.as_deref().filter(|h| *h != label) { icon.set_description(help); }
+            icon.set_bounds(AkRect {
+                x0: round(r[0] + w.shift[0]), y0: round(r[1] + w.shift[1]),
+                x1: round(r[2] + w.shift[0]), y1: round(r[3] + w.shift[1]),
+            });
+            let id = icon_id(n.id, k);
+            out[me].1.push_child(id);
+            out.push((id, icon));
         }
     }
 

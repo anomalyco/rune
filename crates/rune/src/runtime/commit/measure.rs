@@ -30,6 +30,15 @@ fn collect_virtual_inputs_in(el: &El, parent: &str, index: usize, inert: bool, r
     }
 }
 
+struct ViewMeasured {
+    layout: LayoutEngine,
+    nodes: Vec<Node>,
+    pending: Vec<memo_reuse::PendingFlat>,
+    reused: Vec<memo_reuse::ReusedSpan>,
+    taken: Vec<(u32, u32)>,
+    above_fit_styles: Vec<(usize, CompactStyle)>,
+}
+
 impl RuntimeCore {
     pub(in crate::runtime) fn measure(&mut self, app: &dyn ViewDriver, tx: &Tx) -> Measured {
         self.measure_pass(app, tx, true)
@@ -62,14 +71,22 @@ impl RuntimeCore {
             app,
             env: self.env,
             viewport: self.viewport,
-            fit_height: self.host.fit_height,
+            content_sizing: self.host.content_sizing,
+            content_limits: (
+                self.host.content_limits.0.map(|(w, h)| (w / self.host.zoom.k, h / self.host.zoom.k)),
+                self.host.content_limits.1.map(|(w, h)| (w / self.host.zoom.k, h / self.host.zoom.k)),
+            ),
             system_reduced_motion: self.host.system_reduced_motion,
             pointer_locked: self.pointer_locked(),
             // The window's controls are in its points; the view's are over the zoom.
             titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
+            safe_area: self.safe_area(),
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
+            window_backdrop: self.host.window_backdrop,
+            window_backdrop_supported: self.host.window_backdrop_supported,
+            renderer_kind: self.host.renderer_kind,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
@@ -84,6 +101,8 @@ impl RuntimeCore {
             titlebar: self.titlebar_set(),
             caret: self.edit.caret.clone(),
             caret_read: false,
+            wm_state: self.host.wm_state,
+            wm_state_read: false,
             layout_seen: self.commit.layout_seen.rects.clone(),
             layout_reads: Vec::new(),
             commits: self.commit.commits,
@@ -98,6 +117,7 @@ impl RuntimeCore {
             scrolls: &mut self.scroll.scrolls,
             scroll_requests: &self.scroll.requests,
             virtuals: &mut self.commit.virtuals,
+            virtual_items: &mut self.commit.virtual_items,
             virtual_culled: &mut self.commit.virtual_culled,
             virtual_inputs: &mut self.commit.virtual_inputs,
             stats: &mut self.stats,
@@ -180,7 +200,7 @@ impl Measurement<'_> {
         }
         // Index-built rows build here, so memos inside them share the view's cache. A window that
         // fits its content lays its root out at its natural height, which nothing bounds.
-        let bound = if self.fit_height { f32::INFINITY } else { self.viewport.1 };
+        let bound = if self.content_sizing.fits_height() { f32::INFINITY } else { self.viewport.1 };
         self.window_tree(&mut root, "", 0, None, tx, force_all, bound, false, false, None, false, keep_windows);
         root
     }
@@ -198,18 +218,30 @@ impl Measurement<'_> {
         let height = cx.titlebar.height.or(cx.titlebar.titlebar.map(|t| t.height())).unwrap_or(caption.height);
         let hidden = caption.hidden || cx.titlebar.titlebar.is_some_and(|t| !t.has_controls());
         let caption = crate::titlebar::Caption { height, hidden, ..*caption };
-        (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.fit_height), cx)
+        (crate::titlebar::frame(root, &caption, symbol, (self.env.scale, self.zoom), self.content_sizing.fits_height()), cx)
     }
 
     /// What a memo scope hashes of the window's controls and state (`Cx::titlebar_inset`,
-    /// `Cx::chrome_insets`, `Cx::is_maximized`, `Cx::is_full_screen`), so memos that read them
-    /// rebuild when they change.
+    /// `Cx::chrome_insets`, `Cx::is_maximized`, `Cx::is_full_screen`, `Cx::window_backdrop`), so
+    /// memos that read them rebuild when they change.
     pub(in crate::runtime) fn chrome_bits(&self) -> [u32; 5] {
         let [leading, trailing, height] = self.chrome.bits();
         let flags = u32::from(self.maximized)
             | (u32::from(self.full_screen) << 1)
-            | (u32::from(self.pointer_locked) << 2);
+            | (u32::from(self.pointer_locked) << 2)
+            | (u32::from(self.window_backdrop.to_u8()) << 3)
+            | (u32::from(self.renderer_kind.to_u8()) << 6)
+            | (u32::from(self.window_backdrop_supported) << 25);
         [self.titlebar_inset.to_bits(), leading, trailing, height, flags]
+    }
+
+    /// Combines [`Self::chrome_bits`] with the 17-bit [`crate::WindowManagerState`] encoding
+    /// in bits `8..=24` of word 4 so `memo` closures rebuild on decoration mode, tiled edges,
+    /// or window action changes without overlapping backdrop flags or growing the key.
+    pub(in crate::runtime) fn memo_chrome_bits(&self) -> [u32; 5] {
+        let mut bits = self.chrome_bits();
+        bits[4] |= self.wm_state.bits() << 8;
+        bits
     }
 
     pub(in crate::runtime) fn finish(self, text: &mut TextSystem, tx: &Tx) -> Measured {
@@ -217,25 +249,26 @@ impl Measurement<'_> {
     }
 
     pub(in crate::runtime) fn finish_from(mut self, text: &mut TextSystem, tx: &Tx, mut passes: usize) -> Measured {
-        let (layout, nodes, memo_pending, memo_reused, taken_paths) = loop {
+        let ViewMeasured { layout, nodes, pending: memo_pending, reused: memo_reused, taken: taken_paths, above_fit_styles } = loop {
             passes += 1;
             self.pass = Pass::of(passes);
             self.virtual_culled.clear();
             self.virtual_inputs.clear();
+            self.virtual_items.clear_staged();
             self.windowed.clear();
             // Degenerate zero-height runs fall back to a full measurement instead of
             // an unbounded retry loop. Normal transcripts need one pass.
-            let (layout, mut nodes, pending, mut reused, mut taken) = self.measure_view(text, tx, self.pass.forced());
-            if !self.measure_virtuals(&nodes, tx.commit.lands()) { break (layout, nodes, pending, reused, taken); }
-            memo_reuse::restore_moved_nodes(self.nodes, &mut nodes, &reused, &taken);
-            nodes.clear();
-            *self.spare_nodes = nodes;
-            reused.clear();
-            taken.clear();
-            self.memo.pending_scratch = pending;
-            self.memo.reused_scratch = reused;
-            self.memo.taken_paths_scratch = taken;
-            *self.layout = layout;
+            let mut vm = self.measure_view(text, tx, self.pass.forced());
+            if !self.measure_virtuals(&vm.nodes, tx.commit.lands()) { break vm; }
+            memo_reuse::restore_moved_nodes(self.nodes, &mut vm.nodes, &vm.reused, &vm.taken);
+            vm.nodes.clear();
+            *self.spare_nodes = vm.nodes;
+            vm.reused.clear();
+            vm.taken.clear();
+            self.memo.pending_scratch = vm.pending;
+            self.memo.reused_scratch = vm.reused;
+            self.memo.taken_paths_scratch = vm.taken;
+            *self.layout = vm.layout;
         };
         // Exiting virtual subtrees still use their origin and measured extent while
         // fading. Runtime prunes this metadata with the retained scene nodes.
@@ -248,11 +281,13 @@ impl Measurement<'_> {
             defaults: self.defaults.clone(),
             titlebar: self.titlebar,
             caret_read: self.caret_read,
+            wm_state_read: Some(self.wm_state_read),
             layout_reads: self.layout_reads,
             memo_flattened: Some(memo_pending),
             memo_reused,
             taken_paths,
             selection: Vec::new(),
+            above_fit_styles,
         }
     }
 
@@ -283,7 +318,9 @@ impl Measurement<'_> {
         let selection_off = crate::el::selection_off(el.cold.selection_enabled, selection_off);
         let bound = crate::el::virtual_list::height_bound(&el.style, bound);
         let is_virtual = el.cold.virtual_estimate.is_some();
+        let is_virtual_items = el.cold.virtual_items.is_some();
         if let Some(estimate) = el.cold.virtual_estimate {
+            assert!(!is_virtual_items, "element at {path:?} cannot combine `.virtual_items(..)` with `.virtualize(..)` / `.virtual_rows(..)`");
             let w = match self.windowed.remove(&path) {
                 Some(w) => w,
                 None => self.window(el, &path, estimate, scroll, tx, force_all),
@@ -295,6 +332,16 @@ impl Measurement<'_> {
             el.style.set_pad_top(w.pad_top);
             el.style.set_pad_bottom(w.pad_bottom);
             self.populate_virtual_children(el, &path, source, inert, selection_off, group);
+        } else if let Some(source) = el.cold.virtual_items.clone() {
+            assert!(el.children.is_empty(), "`.virtual_items(..)` at {path:?} builds its own items; it takes no children");
+            el.children = self.virtual_items.populate_rebuild(
+                &path,
+                source,
+                force_all,
+                self.focused,
+                self.key_warnings,
+                self.virtual_culled,
+            );
         }
         let bounds = crate::el::virtual_list::child_bounds(&el.style, el.cold.scroll.is_some(), bound, &el.children);
         // A virtual stack windows against the nearest scroll viewport around it, its rows' lists
@@ -489,7 +536,7 @@ impl Measurement<'_> {
         self.kept_lists.extend(quiet);
         true
     }
-    fn measure_view(&mut self, text: &mut TextSystem, tx: &Tx, force_all: bool) -> (LayoutEngine, Vec<Node>, Vec<memo_reuse::PendingFlat>, Vec<memo_reuse::ReusedSpan>, Vec<(u32, u32)>) {
+    fn measure_view(&mut self, text: &mut TextSystem, tx: &Tx, force_all: bool) -> ViewMeasured {
         let scale = self.env.scale;
         let fresh_cx = |this: &Self| cx::CxCore {
             env: this.env,
@@ -497,6 +544,9 @@ impl Measurement<'_> {
             chrome: this.chrome,
             maximized: this.maximized,
             full_screen: this.full_screen,
+            window_backdrop: this.window_backdrop,
+            window_backdrop_supported: this.window_backdrop_supported,
+            renderer_kind: this.renderer_kind,
             caption_color: None,
             titlebar: Default::default(),
             system_accent: this.system_accent,
@@ -512,6 +562,9 @@ impl Measurement<'_> {
             defaults: Default::default(),
             caret: this.caret.clone(),
             caret_read: std::cell::Cell::new(false),
+            wm_state: this.wm_state,
+            wm_state_read: std::cell::Cell::new(false),
+            safe_area: this.safe_area,
             layout: this.layout_seen.clone(),
             layout_reads: Default::default(),
         };
@@ -520,7 +573,7 @@ impl Measurement<'_> {
             let cx = fresh_cx(self);
             #[cfg(feature = "hot")]
             let emptied = self.memo.emptied();
-            let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, self.languages_gen, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
+            let memo = crate::memo::enter(std::mem::take(self.memo), self.env, self.system_accent, self.system_reduced_motion, self.languages_gen, crate::theme::blends_srgb(), self.memo_chrome_bits(), cx.caret.clone(), cx.layout.clone());
             let view_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::View);
             // The view and the rows it builds measure text with the window's own text system.
             #[cfg(not(feature = "hot"))]
@@ -546,7 +599,7 @@ impl Measurement<'_> {
                         self.virtual_culled.clear();
                         self.virtual_inputs.clear();
                         let cx = fresh_cx(self);
-                        let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, self.languages_gen, crate::theme::blends_srgb(), self.chrome_bits(), cx.caret.clone(), cx.layout.clone());
+                        let memo = crate::memo::enter(emptied, self.env, self.system_accent, self.system_reduced_motion, self.languages_gen, crate::theme::blends_srgb(), self.memo_chrome_bits(), cx.caret.clone(), cx.layout.clone());
                         let (root, cx) = crate::hot::original_only(|| self.root_view(cx));
                         (crate::hot::original_only(|| self.build_tree(root, tx, force_all, keep_windows)), cx, memo)
                     }
@@ -563,6 +616,7 @@ impl Measurement<'_> {
             self.titlebar = cx.titlebar;
             // Reads made by memos this build reused count as made again.
             self.caret_read = cx.caret_read.get() || replayed.caret;
+            self.wm_state_read = cx.wm_state_read.get();
             self.layout_reads = cx.layout_reads.take();
             for read in replayed.layout { layout_read::note_read_at(&mut self.layout_reads, &read.key, read.same, read.at); }
 
@@ -573,7 +627,7 @@ impl Measurement<'_> {
             nodes.reserve(self.nodes.len().max(32));
             // Root constraints are part of the retained style, not a dirty write after flattening.
             // A window that fits its content lays the root out at its natural height.
-            root.style.set_size(relayout::root_size(self.viewport, self.fit_height));
+            relayout::apply_root_sizing(&mut root.style, self.viewport, self.content_sizing, self.content_limits);
             let (mut pending, mut reused, mut taken_paths, root_id, missed_virtual_memo) = {
                 let mut pending = std::mem::take(&mut self.memo.pending_scratch);
                 pending.clear();
@@ -636,8 +690,8 @@ impl Measurement<'_> {
             }
             if self.committing { release_kept_layouts(self.nodes, &mut nodes, &taffy, text, &reused); }
             taffy.finish_flatten();
-            let (taffy, nodes) = self.solve(text, taffy, root_id, nodes, &reused);
-            break (taffy, nodes, pending, reused, taken_paths);
+            let (taffy, nodes, above_fit_styles) = self.solve(text, taffy, root_id, nodes, &reused);
+            break ViewMeasured { layout: taffy, nodes, pending, reused, taken: taken_paths, above_fit_styles };
         }
     }
 
@@ -768,6 +822,7 @@ impl RuntimeCore {
     /// Records which row of each virtual list holds focus, by key, so the row is still built
     /// after it scrolls out. Walks the node tree, since a key may itself contain `/`.
     pub(in crate::runtime) fn track_focused_rows(&mut self) {
+        self.commit.virtual_items.track_focused(&self.tree.nodes, self.kbd.focus.path());
         if self.commit.virtuals.is_empty() { return; }
         let focused = self.kbd.focus.path().and_then(|f| self.tree.nodes.iter().position(|n| n.path == f));
         for (path, v) in self.commit.virtuals.iter_mut() {
@@ -834,6 +889,9 @@ fn windowed_lists<'e>(el: &'e El, path: &str, scroll: Option<ScrollCtx<'_>>, bou
         None => &el.children,
     };
     let bound = crate::el::virtual_list::height_bound(&el.style, bound);
+    if el.cold.virtual_items.is_some() {
+        return false;
+    }
     let is_virtual = el.cold.virtual_estimate.is_some();
     if is_virtual {
         if el.cold.virtual_rows.is_none() {

@@ -119,7 +119,9 @@ and `TextField` forward `on_secondary_press` (replacing the default field contex
 chips, skipped when disabled), `on_input_selection` (running before view rebuild whenever runtime
 input moves the caret or selection, skipped when disabled), `on_input_copy` (intercepting
 keyboard and context-menu Copy/Cut, skipped when disabled), and `on_input_paste` (intercepting
-pastes before plain-text insertion, skipped when disabled), as well as `on_submit` and accessible
+pastes before plain-text insertion, skipped when disabled), `on_blur` (when the focused editor
+loses focus to another app, Tab, a click elsewhere or `Tx::focus`, so a form can commit a half-typed
+value; Return stays `on_submit`; skipped when disabled), as well as `on_submit` and accessible
 `description`. They also accept `.decorations(spans)` (or `.spans(spans)`), `.line_fill(fill)` / `.line_fills(fills)`,
 and `.rich_style(style)` for attributed `TextEdit` marks, paragraph blocks, full-width code/quote
 line decorations and per-frame syntax highlights, and `.pill_style(f)` / `.pill_image(f)` /
@@ -447,7 +449,7 @@ the header (sorting, resizing, reordering and header hooks included) and
 `Table::visible_columns(s)` gives the shown columns in order to size each cell with
 `TableColumn::size_el`; `TableState::laid_out_width` is a flex column's resolved width and
 `TableState::dragged_column` the header being dragged and how far.
-`Table::new` takes closures, so its accessors can capture (several tables over one state). `virtual_overscan(overscan, edge)` forwards `El::virtual_overscan` to the table's internal `virtual_rows` list (default `2.0` viewports either side, `1.75` edge; `rune-table--overscan` in the gallery compares presets on 10,000 rows). The keys are the arrows, Page
+`Table::new` takes closures, so its accessors can capture (several tables over one state). `virtual_overscan(overscan, edge)` forwards `El::virtual_overscan` to the table's internal `virtual_rows` list (default `2.0` viewports either side, `1.75` edge; `rune-table--overscan` in the gallery compares presets on 10,000 rows). Inside `scroll_wide(true)`, opt-in `virtual_columns(true)` windows non-frozen columns to the horizontal viewport plus overscan (keeping resized, reordered, and focused or caret-browsed columns mounted) and `frozen_columns(count)` pins the leading `count` visible columns to the left edge with opaque fills under the sticky header; both report true ARIA grid counts and 1-based row/column indices (`rune-table--virtual-columns` in the gallery demonstrates a 10,000 × 200 sheet). The keys are the arrows, Page
 Up and Down, Home, End, Return (`on_open`), and in a multi-select table Shift and Cmd-A. Roles
 are `grid`, `row`, `columnheader` and `gridcell`. 100,000 rows scroll at 0.4 ms a frame (p50)
 and 3.4 ms when rows mount (p95) (`--test integration table::`).
@@ -460,7 +462,7 @@ draws Markdown tables with the same font, padding and rules.
 Feature `markdown`: `Markdown::new(src).build(&kit)`, or without a kit
 `Markdown::new(src).render(&MarkdownStyle::neutral(dark))`.
 It renders CommonMark plus GFM tables, and is built for streaming: re-render with the longer
-source each time, and earlier blocks stay mounted. `Markdown::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)`
+source each time, and earlier blocks stay mounted. Real-URL links (`http:`, `https:`, `mailto:`) get Rune's default Open Link / Copy Link context menu on right-click and Menu / Shift+F10 (yielding to `Markdown::on_link_secondary` and ancestor `on_secondary_press`; opt out with `Markdown::link_menu(false)`). `Markdown::on_link_hover(|s, url: Option<&str>, rect: Option<[f32; 4]>, tx| ..)`
 reports the hovered link's destination and hit line box in window points (activating link hover
 tracking even without `on_link` or `on_link_secondary`, and leaving the old block before entering
 the new one across paragraphs; see `rune-markdown--link-hover` in `kit-gallery`).

@@ -39,8 +39,8 @@ fn reduced_motion_holds_one_pose() {
     for (s, p) in every_preset() {
         let l = Fx::fill(p.fill()).on(card()).seed(3).reduced(true);
         assert!(!l.is_animating(), "{} {}", s.id, p.id);
-        let (a, da) = packed(&l.at(0.5)).unwrap();
-        let (b, db) = packed(&l.at(7.25)).unwrap();
+        let (a, da) = packed(&l.clone().at(0.5)).unwrap();
+        let (b, db) = packed(&l.clone().at(7.25)).unwrap();
         assert_eq!(bits(&a), bits(&b), "{} {}: same instance at any time", s.id, p.id);
         assert_eq!(da, db, "{} {}: same tables at any time", s.id, p.id);
     }
@@ -61,8 +61,8 @@ fn moving_fills_animate_and_are_deterministic() {
     for (s, p) in every_preset() {
         let l = Fx::fill(p.fill()).on(card()).seed(11);
         assert_eq!(l.is_animating(), p.fill().animates(), "{} {}", s.id, p.id);
-        let (a, da) = packed(&l.at(1.5)).unwrap();
-        let (b, db) = packed(&l.at(1.5)).unwrap();
+        let (a, da) = packed(&l.clone().at(1.5)).unwrap();
+        let (b, db) = packed(&l.clone().at(1.5)).unwrap();
         assert_eq!(bits(&a), bits(&b));
         assert_eq!(da, db);
         assert!(da.iter().flatten().all(|v| v.is_finite()), "{} {}", s.id, p.id);
@@ -88,8 +88,8 @@ fn large_times_fold_without_precision_loss_or_jump() {
     }
     for (s, p) in every_preset() {
         let l = Fx::fill(p.fill()).on(card()).seed(7);
-        let (i0, d0) = packed(&l.at(1e5)).unwrap();
-        let (i1, d1) = packed(&l.at(1e5 + 0.25)).unwrap();
+        let (i0, d0) = packed(&l.clone().at(1e5)).unwrap();
+        let (i1, d1) = packed(&l.clone().at(1e5 + 0.25)).unwrap();
         assert!(i0.t[0] >= 0.0 && i0.t[0] <= 512.0, "{} {}", s.id, p.id);
         assert!(d0.iter().flatten().all(|v| v.is_finite()), "{} {}", s.id, p.id);
         if p.fill().animates() {

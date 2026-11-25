@@ -163,13 +163,24 @@ impl Press {
     pub(crate) fn hold(&mut self, held: Held) { *self = Self::Held(Box::new(held)); }
 }
 
+/// Which kind of link a secondary press began on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SecondaryLink {
+    /// Explicit `El::on_link_secondary` handler: wins over ancestors and claims `"app"` on web.
+    Explicit(usize),
+    /// Default Open Link / Copy Link menu: yields to ancestors and leaves web mouse right-clicks
+    /// to the browser's `<a href>` menu.
+    Default(usize),
+}
+
 /// The secondary button's hold: the element whose menu it opens on release, the link of its
-/// text it began on (`on_link_secondary`), and whether the pointer left the window meanwhile.
+/// text it began on (`on_link_secondary` or default link menu), and whether the pointer left
+/// the window meanwhile.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum Secondary {
     #[default]
     Up,
-    Held { path: String, link: Option<usize>, left: bool },
+    Held { path: String, link: Option<SecondaryLink>, left: bool },
     /// An outside secondary press dismissed (or was swallowed by) an active modal; release does
     /// nothing, and on web `secondary_claim()` returns `"app"` so the browser's own context menu
     /// stays closed.
@@ -216,6 +227,40 @@ impl Secondary {
 
     pub(crate) fn is_captured(&self) -> bool {
         matches!(self, Self::Held { .. } | Self::DismissRepost { .. })
+    }
+}
+
+/// Ownership of an active phased gesture (`!MagnifyEvent::wheel`, `RotateEvent`, or
+/// handler-only touchscreen `WheelEvent`), locked from `GesturePhase::Began` until
+/// `GesturePhase::Ended` (or pointer cancel / stage clear). Unphased `Moved` events (including
+/// `Ctrl + wheel` with `wheel: true`) bypass this lock.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum GestureOwner {
+    /// No phased gesture is active on this channel.
+    #[default]
+    Idle,
+    /// Handler at `path` accepted `Began` and receives `Moved` and `Ended` in its own local
+    /// coordinates even if the midpoint or cursor leaves its bounds.
+    Owned(String),
+    /// `Began` had no accepting handler (or the owning handler disappeared or declined); later
+    /// `Moved` and `Ended` of this gesture are ignored until `Ended` returns to `Idle`.
+    Declined,
+}
+
+/// Independent per-channel gesture owner locks stored on [`PointerState`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct GestureOwners {
+    pub(crate) magnify: GestureOwner,
+    pub(crate) rotate: GestureOwner,
+    pub(crate) touch_wheel: GestureOwner,
+}
+
+impl GestureOwners {
+    #[inline]
+    pub(crate) fn clear(&mut self) {
+        self.magnify = GestureOwner::Idle;
+        self.rotate = GestureOwner::Idle;
+        self.touch_wheel = GestureOwner::Idle;
     }
 }
 
@@ -286,6 +331,8 @@ pub(in crate::runtime) struct PointerState {
     other_buttons_down: Vec<u16>,
     /// Declarative pointer-lock state machine (`runtime/input/pointer_lock.rs`).
     pub(super) pointer_lock: super::pointer_lock::PointerLock,
+    /// Locked owners for phased magnify, rotate, and touch-wheel gestures (`runtime/input/gesture.rs`).
+    pub(super) gesture_owners: GestureOwners,
 }
 
 impl PointerState {
@@ -321,6 +368,7 @@ impl PointerState {
             drags_open: 0,
             other_buttons_down: Vec::new(),
             pointer_lock: super::pointer_lock::PointerLock::new(),
+            gesture_owners: GestureOwners::default(),
         }
     }
 
@@ -540,6 +588,8 @@ impl PointerState {
         self.forget_drop_targets();
         self.press_clicks.clear();
         self.pointer_lock.step(super::pointer_lock::LockEvent::Released);
+        self.gesture_owners.clear();
+        self.touch.clear_edge_state();
     }
 
     /// Scrolling viewport `id` under a held press inside it cancels the press, as a UIScrollView

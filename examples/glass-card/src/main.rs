@@ -13,6 +13,7 @@
 //! GLASS_CARD_MAX_MATERIALS=6 cargo run -p glass-card -- --window card --scene overflow --tree target/glass-card.json
 //! cargo run -p glass-card -- --window card --scene sidebar --tree target/glass-card.json
 //! cargo run -p glass-card -- --window card --scene overflow --tree target/glass-card.json
+//! cargo run -p glass-card --release --features rune/windows-system-material -- --overlay
 //! ```
 //!
 //! Space or the button flies and docks the card; `m` cycles `Glass` / `Popover` / `Sidebar`;
@@ -27,7 +28,8 @@
 use std::time::Duration;
 
 use rune::{
-    App, AppSpec, Color, Cx, El, Key, KeyEvent, LoopSpec, MacWindowOptions, Spring, SystemMaterial, TextStyle, Tx,
+    App, AppSpec, Color, Cx, DisplayTarget, El, Key, KeyEvent, KeyPolicy, LoopSpec, MacWindowOptions,
+    OverlayInput, OverlayOptions, OverlayPlacement, OverlaySpec, Spring, SystemMaterial, TextStyle, Tx,
     WindowOptions, WindowSpec, col, el, oklch, row, text,
 };
 
@@ -216,7 +218,95 @@ fn card_spec() -> AppSpec<Card> {
     }
 }
 
+/// Background auto-toggle for the toplevel card: calls `tx.animated()` because toplevel
+/// windows snap unprompted (non-input) updates unless the update opts into motion.
+fn toggle_card_auto(s: &mut Card, tx: &mut Tx) {
+    s.docked = !s.docked;
+    tx.animated();
+}
+
+fn toggle_overlay_auto(s: &mut OverlayPill, tx: &mut Tx) {
+    s.expanded = !s.expanded;
+    tx.animated();
+}
+
+struct OverlayPill {
+    expanded: bool,
+    material: SystemMaterial,
+}
+
+fn overlay_pill_view(s: &OverlayPill, cx: &mut Cx<OverlayPill>) -> El {
+    let (w, h, r) = if s.expanded { (420.0, 96.0, 28.0) } else { (220.0, 48.0, 24.0) };
+    let label = if s.expanded { "Expanded HUD pill (300 ms spring)" } else { "Dynamic pill" };
+    let fg = if cx.system_dark() { Color::WHITE } else { Color { r: 0.08, g: 0.08, b: 0.1, a: 1.0 } };
+    let fallback = if cx.system_dark() {
+        Color { r: 0.12, g: 0.12, b: 0.14, a: 0.92 }
+    } else {
+        Color { r: 0.94, g: 0.94, b: 0.96, a: 0.92 }
+    };
+    col().key("overlay-root").w_full().h_full().items_center().pt(24.0).child(
+        row().key("overlay-pill").size(w, h).radius(r).px(20.0).center().clip_soft(0.0)
+            .fill(fallback)
+            .border(1.0, fg.alpha(0.22))
+            .shadow(10.0, 28.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.32 })
+            .system_material(s.material)
+            .motion(Spring::new(0.3, 0.0))
+            .child(text(label).font(TextStyle::new(14.0, 600.0)).color(fg)),
+    )
+}
+
+fn run_overlay_probe() {
+    let material = if std::env::var_os("GLASS_CARD_SIDEBAR").is_some() {
+        SystemMaterial::Sidebar
+    } else if std::env::var_os("GLASS_CARD_GLASS").is_some() {
+        SystemMaterial::Glass
+    } else {
+        SystemMaterial::Popover
+    };
+    let place = rune::env::var("GLASS_CARD_AT")
+        .and_then(|v| v.split_once(',').and_then(|(x, y)| Some((x.parse::<f32>().ok()?, y.parse::<f32>().ok()?))));
+    let (x, y) = place.unwrap_or((80.0, 80.0));
+    rune::run_windows(move |displays| {
+        let display = displays.iter().find(|d| d.primary).or_else(|| displays.first());
+        let origin = display.map_or((0, 0), |d| {
+            (d.position.0 + (f64::from(x) * d.scale) as i32, d.position.1 + (f64::from(y) * d.scale) as i32)
+        });
+        let mut pattern = App::new(AppSpec { min_size: Some(SIZE), ..AppSpec::new("Glass card pattern", SIZE, || (), pattern_view) }).args(vec![]);
+        let overlay_size = (720.0, 200.0);
+        let opts = OverlayOptions {
+            display: DisplayTarget::Primary,
+            placement: Some(OverlayPlacement::Rect { x: x + 20.0, y: y + 40.0, width: overlay_size.0, height: overlay_size.1 }),
+            input: OverlayInput::None,
+            keys: KeyPolicy::None,
+            prewarm: true,
+            ..Default::default()
+        };
+        let hud = pattern.overlay(
+            OverlaySpec::new("glass-card-overlay", overlay_size, overlay_pill_view).options(opts),
+            OverlayPill { expanded: false, material },
+        );
+        hud.show();
+        if !rune::is_headless() && std::env::var_os("GLASS_CARD_MANUAL").is_none() {
+            let hud = hud.clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(Duration::from_millis(1600));
+                hud.update(toggle_overlay_auto);
+            });
+        }
+        let handle = pattern.handle();
+        if !rune::is_headless() && let Ok(seconds) = rune::env::var("GLASS_CARD_SECONDS").unwrap_or_default().parse::<f64>() {
+            std::thread::spawn(move || { std::thread::sleep(Duration::from_secs_f64(seconds)); handle.quit(); });
+        }
+        let at = WindowOptions { borderless: true, position: Some(origin), resizable: false, ..Default::default() };
+        vec![WindowSpec::from_app("pattern", pattern).options(at).into()] as Vec<rune::AnyWindowSpec>
+    });
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--overlay") {
+        run_overlay_probe();
+        return;
+    }
     rune::run_windows(|displays| {
         let display = displays.iter().find(|d| d.primary).or_else(|| displays.first());
         let place = rune::env::var("GLASS_CARD_AT").and_then(|v| v.split_once(',').and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?))));
@@ -235,7 +325,7 @@ fn main() {
             let handle = handle.clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_millis(1600));
-                handle.update(|s, _| s.docked = !s.docked);
+                handle.update(toggle_card_auto);
             });
         }
         if !rune::is_headless() && let Ok(seconds) = rune::env::var("GLASS_CARD_SECONDS").unwrap_or_default().parse::<f64>() {
@@ -249,4 +339,65 @@ fn main() {
             WindowSpec::from_app("card", card).configured_options(over).into(),
         ] as Vec<rune::AnyWindowSpec>
     });
+}
+
+#[test]
+fn auto_toggle_springs_card_across_multiple_intermediate_frames() {
+    let mut rt = rune::Runtime::new(init(), card_view, SIZE, rune::Env::new(true, 1.0));
+    rt.frame(0.0);
+    let start_x = rt.system_materials()[0].rect[0];
+    assert!((start_x - 70.0).abs() < 1.0, "initial full card x: {start_x}");
+
+    rt.update(toggle_card_auto);
+    let mut frames = 0usize;
+    let mut saw_intermediate = false;
+    while rt.frame(1.0 / 120.0) && frames < 240 {
+        frames += 1;
+        let x = rt.system_materials()[0].rect[0];
+        if x > 90.0 && x < 450.0 {
+            saw_intermediate = true;
+        }
+    }
+    assert!(frames > 30, "expected spring animation across many frames, got {frames}");
+    assert!(saw_intermediate, "card must pass through intermediate x positions");
+    let end_x = rt.system_materials()[0].rect[0];
+    assert!((end_x - (SIZE.0 - 290.0)).abs() < 1.0, "final docked x: {end_x}");
+}
+
+#[test]
+fn overlay_pill_expansion_clips_label_and_tracks_material_at_125_percent() {
+    let scale = 1.25f32;
+    let mut rt = rune::Runtime::new(
+        OverlayPill { expanded: false, material: SystemMaterial::Popover },
+        overlay_pill_view,
+        (720.0, 200.0),
+        rune::Env::new(true, scale),
+    );
+    rt.frame(0.0);
+
+    rt.update(toggle_overlay_auto);
+    for frame in 0..30usize {
+        let dt = if frame == 0 { 0.0 } else { 1.0 / 144.0 };
+        let _ = rt.frame(dt);
+        let m = rt.system_materials()[0];
+        let pill_right = m.rect[0] + m.rect[2];
+        let pres = rt.presented("overlay-pill").expect("overlay-pill presented").0;
+        let pres_left = pres[0] * scale;
+        let pres_right = (pres[0] + pres[2]) * scale;
+        assert!((m.rect[0] - pres_left).abs() <= 1.0, "frame {frame}: left mismatch");
+        assert!((pill_right - pres_right).abs() <= 1.0, "frame {frame}: right mismatch");
+        let elements = rt.elements();
+        let pill = elements.iter().find(|el| el.key.as_deref() == Some("overlay-pill")).expect("overlay-pill element");
+        assert!(pill.clips, "frame {frame}: overlay-pill must clip its expanding label");
+        // Verify the label's visible bounds never spill past the springing pill's right rim.
+        for el in &elements {
+            if el.text.is_some() {
+                let visible_right = (el.visible[0] + el.visible[2]) * scale;
+                assert!(
+                    visible_right <= pill_right + 1.0,
+                    "frame {frame}: label spills past pill right rim (visible_right={visible_right:.1} > pill_right={pill_right:.1})",
+                );
+            }
+        }
+    }
 }

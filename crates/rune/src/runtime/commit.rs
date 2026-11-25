@@ -58,6 +58,7 @@ pub(crate) struct CommitState {
     /// Opt-in tooling checks. None keeps release commits free of key traversal/allocation.
     key_warnings: Option<Vec<String>>,
     pub(crate) virtuals: HashMap<String, crate::el::virtual_list::VirtualList>,
+    pub(crate) virtual_items: virtual_items::VirtualItemsState,
     virtual_culled: HashSet<String>,
     /// Fresh view accessors for focused text fields omitted by virtualization.
     pub(in crate::runtime) virtual_inputs: HashMap<String, Box<InputSpec>>,
@@ -107,6 +108,7 @@ impl CommitState {
             key_warnings: None,
             defaults: Default::default(),
             virtuals: HashMap::default(),
+            virtual_items: virtual_items::VirtualItemsState::default(),
             virtual_culled: HashSet::default(),
             virtual_inputs: HashMap::default(),
             virtual_fill: virtual_fill::Fill::default(),
@@ -343,6 +345,7 @@ impl CommitState {
         self.memo.reused_scratch = measured.memo_reused;
         measured.taken_paths.clear();
         self.memo.taken_paths_scratch = measured.taken_paths;
+        self.virtual_items.clear_staged();
         self.layout = measured.layout;
     }
 }
@@ -395,13 +398,18 @@ pub(super) struct Measurement<'a> {
     pub(super) app: &'a dyn ViewDriver,
     pub(super) env: Env,
     pub(super) viewport: (f32, f32),
-    pub(super) fit_height: bool,
+    pub(super) content_sizing: crate::ContentSizing,
+    pub(super) content_limits: crate::overlay::sizing::SizeLimits,
     pub(super) system_reduced_motion: bool,
     pub(super) pointer_locked: bool,
     pub(super) titlebar_inset: f32,
     pub(super) chrome: crate::ChromeInsets,
+    pub(super) safe_area: [f32; 4],
     pub(super) maximized: bool,
     pub(super) full_screen: bool,
+    pub(super) window_backdrop: crate::WindowBackdrop,
+    pub(super) window_backdrop_supported: u8,
+    pub(super) renderer_kind: crate::RendererKind,
     /// Caption buttons drawn over the view's root.
     pub(super) caption: Option<crate::titlebar::Caption>,
     pub(super) system_accent: crate::SystemAccent,
@@ -431,6 +439,7 @@ pub(super) struct Measurement<'a> {
     pub(super) scrolls: &'a mut HashMap<NodeId, ScrollState>,
     pub(super) scroll_requests: &'a scroll::requests::Requests,
     pub(super) virtuals: &'a mut HashMap<String, crate::el::virtual_list::VirtualList>,
+    pub(super) virtual_items: &'a mut virtual_items::VirtualItemsState,
     pub(super) virtual_culled: &'a mut HashSet<String>,
     pub(super) virtual_inputs: &'a mut HashMap<String, Box<InputSpec>>,
     pub(super) stats: &'a mut FrameStats,
@@ -450,6 +459,8 @@ pub(super) struct Measurement<'a> {
     pub(super) kept_lists: Vec<(String, Vec<bool>)>,
     pub(super) caret: Option<(String, [f32; 4])>,
     pub(super) caret_read: bool,
+    pub(super) wm_state: crate::WindowManagerState,
+    pub(super) wm_state_read: bool,
     pub(super) layout_seen: layout_read::LayoutRects,
     pub(super) layout_reads: layout_read::LayoutReads,
 }
@@ -465,6 +476,7 @@ pub(super) struct Measured {
     pub(super) defaults: cx::ViewDefaults,
     pub(super) titlebar: crate::titlebar::TitlebarSet,
     pub(super) caret_read: bool,
+    pub(super) wm_state_read: Option<bool>,
     pub(super) layout_reads: layout_read::LayoutReads,
     pub(super) memo_flattened: Option<Vec<memo_reuse::PendingFlat>>,
     pub(super) memo_reused: Vec<memo_reuse::ReusedSpan>,
@@ -472,6 +484,9 @@ pub(super) struct Measured {
     /// The selection as the measure began, before reused `memo` subtrees left the last
     /// commit's nodes.
     pub(super) selection: Vec<layout_read::SelectedRange>,
+    /// Authored styles of `anchored_fit` overlays whose max-size `fit_anchored` clamped in this
+    /// pass, so a later `Relayout` restores them before re-fitting at the new viewport.
+    pub(super) above_fit_styles: Vec<(usize, CompactStyle)>,
 }
 
 impl RuntimeCore {

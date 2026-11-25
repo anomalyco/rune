@@ -66,18 +66,21 @@ impl Uploads {
     }
 
     /// Frees the staging chunks kept for reuse (`Renderer::give_back`).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn trim(&self) {
         if let Some(staging) = &self.staging { staging.trim(); }
         if let Some(frame_writes) = &self.frame_writes { frame_writes.trim(); }
     }
 
     /// Frees only oversized (> 4 MiB) staging chunks at idle rest, keeping <= 4 MiB chunks.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn trim_oversized(&self) {
         if let Some(staging) = &self.staging { staging.trim_oversized(); }
         if let Some(frame_writes) = &self.frame_writes { frame_writes.trim_oversized(); }
     }
 
     /// Whether any recyclable oversized staging chunks are in flight on the GPU.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn has_oversized_in_flight(&self) -> bool {
         self.staging.as_ref().is_some_and(Staging::has_oversized_in_flight)
             || self.frame_writes.as_ref().is_some_and(Staging::has_oversized_in_flight)
@@ -146,6 +149,9 @@ impl Renderer {
     fn write_rows(staging: &Staging, texture: &wgpu::Texture, data: &[u8], (y0, y1): (u32, u32)) {
         if y1 <= y0 { return; }
         let row = texture.width() * texture.format().block_copy_size(None).unwrap();
+        let max_y = (data.len() / row as usize) as u32;
+        let y1 = y1.min(max_y);
+        if y1 <= y0 { return; }
         staging.write_texture_rows(texture, y0, &data[(y0 * row) as usize..(y1 * row) as usize]);
     }
 
@@ -183,6 +189,7 @@ impl Renderer {
     /// Drops every uploaded image page's GPU texture and any layer bind groups referencing them.
     /// Returns whether any texture was held. The next `upload_images` recreates textures for pages
     /// still present in `ImageAtlas`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn clear_images(&mut self) -> bool {
         let had = self.images.iter().any(Option::is_some);
         if self.images.is_empty() && !had { return false; }
@@ -198,6 +205,7 @@ impl Renderer {
     /// dimensions no longer match), keeping live pages resident. Drops layer image bind groups
     /// when anything changes so no layer target retains a reference to a freed texture. Returns
     /// whether any GPU image texture was dropped.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn prune_images(&mut self, images: &ImageAtlas) -> bool {
         let mut dropped = false;
         let mut changed = self.images.len() > images.pages.len();
@@ -584,7 +592,7 @@ impl Renderer {
     }
 
     /// The instances the buffer holds, when they are paint `paint`'s and `len` of them.
-    #[cfg_attr(not(any(target_os = "windows", target_arch = "wasm32")), allow(dead_code))]
+    #[cfg(target_os = "windows")]
     pub(super) fn held_instances(&self, paint: u64, len: usize) -> Option<&[Instance]> {
         (self.uploads.held_paint == Some(paint) && self.uploads.instances.len() == len).then_some(&self.uploads.instances[..])
     }

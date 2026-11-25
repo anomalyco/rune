@@ -22,6 +22,7 @@ impl SurfaceSetupError {
         Self { kind: rune_gpu::fallback::Failure::SurfaceUnsupported, message: message.into() }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn from_configure(prefix: &str, error: crate::window::ConfigureError) -> Self {
         let message = if prefix.is_empty() {
             error.message

@@ -45,8 +45,14 @@ class FakeNode {
     setAttribute(name, value) { this._attrs.set(name, String(value)); }
     removeAttribute(name) { this._attrs.delete(name); }
     getAttribute(name) { return this._attrs.get(name) ?? null; }
+    hasAttribute(name) { return this._attrs.has(name); }
 
     get firstElementChild() { return this.children[0] ?? null; }
+    get previousElementSibling() {
+        if (!this.parentElement) return null;
+        const i = this.parentElement.children.indexOf(this);
+        return i > 0 ? this.parentElement.children[i - 1] : null;
+    }
     get nextElementSibling() {
         if (!this.parentElement) return null;
         const i = this.parentElement.children.indexOf(this);
@@ -316,7 +322,7 @@ test('activate restores backward non-collapsed selection without echoing a selec
     bridge.destroy(h);
 });
 
-test('sync keeps inputMode none on coarse pointers when reclaiming focus from canvas', async () => {
+test('sync sets inputMode text before reclaiming focus from canvas on coarse pointers', async () => {
     const { doc, canvas, h } = setup({ coarse: true });
     await Promise.resolve();
     assert.equal(doc.activeElement, canvas);
@@ -324,10 +330,9 @@ test('sync keeps inputMode none on coarse pointers when reclaiming focus from ca
 
     bridge.sync(h, 'field', 'hello', 0, 5, 5, false);
     assert.equal(doc.activeElement, h.textarea);
-    assert.equal(h.textarea.inputMode, 'none');
+    assert.equal(h.textarea.inputMode, 'text');
     assert.equal(h.textarea.selectionStart, 5);
 
-    // An explicit tap activates the soft keyboard.
     bridge.activate(h);
     assert.equal(h.textarea.inputMode, 'text');
     bridge.destroy(h);
@@ -1559,7 +1564,7 @@ test('page mode mouse release focusing a field via sync + activate focuses texta
     bridge.destroy(h);
 });
 
-test('coarse pointer release focusing a field via sync + activate restores inputMode text', async () => {
+test('coarse pointer release focusing a field via sync + activate has inputMode text at focus time', async () => {
     const { doc, canvas, h } = setup({ coarse: true });
     await Promise.resolve();
     assert.equal(doc.activeElement, canvas);
@@ -1568,10 +1573,10 @@ test('coarse pointer release focusing a field via sync + activate restores input
     bridge.sync(h, '', '', 0, 0, 0, false);
     assert.equal(h.textarea.inputMode, 'none');
 
-    // sync() alone reclaims focus from canvas but keeps inputMode none; activate() sets text.
+    // sync() sets inputMode text before focusing so iOS Safari opens the virtual keyboard at focus time.
     bridge.sync(h, 'editor', 'Recalled text', 0, 13, 13, false);
     assert.equal(doc.activeElement, h.textarea);
-    assert.equal(h.textarea.inputMode, 'none');
+    assert.equal(h.textarea.inputMode, 'text');
 
     bridge.activate(h);
     assert.equal(doc.activeElement, h.textarea);
@@ -2826,7 +2831,7 @@ test('armed external link keeps clicks/middle/modified/right-click with browser,
     }
 });
 
-test('requestPointerLock handles unadjustedMovement fallback, motion delivery, Escape exit, and refusal', async () => {
+test('requestPointerLock requests plain lock synchronously, upgrades unadjustedMovement in place, and handles exit and refusal', async () => {
     const { events, doc, canvas, h } = setup();
     const flushMicrotasks = () => new Promise(r => queueMicrotask(r));
     const calls = [];
@@ -2840,12 +2845,12 @@ test('requestPointerLock handles unadjustedMovement fallback, motion delivery, E
         }
     };
     try {
-        // 1. NotSupportedError on { unadjustedMovement: true } ignores intermediate pointerlockerror
-        // and retries plain requestPointerLock(), caching the fallback for later locks.
+        // 1. Plain requestPointerLock() runs synchronously on the first click; once locked,
+        // in-place { unadjustedMovement: true } upgrade rejecting with NotSupportedError
+        // (even alongside pointerlockerror) keeps the plain lock intact and caches fallback.
         canvas.requestPointerLock = opts => {
             calls.push(opts);
             if (opts && opts.unadjustedMovement) {
-                // Reproduce Chromium firing pointerlockerror alongside NotSupportedError rejection.
                 doc.dispatchEvent({ type: 'pointerlockerror' });
                 const err = new Error('not supported');
                 err.name = 'NotSupportedError';
@@ -2853,14 +2858,20 @@ test('requestPointerLock handles unadjustedMovement fallback, motion delivery, E
             }
             return Promise.resolve().then(() => {
                 doc.pointerLockElement = canvas;
+                // Even a stray pointerlockerror arriving between promise resolution and
+                // pointerlockchange must not abort the pending lock.
+                doc.dispatchEvent({ type: 'pointerlockerror' });
                 doc.dispatchEvent({ type: 'pointerlockchange' });
             });
         };
         bridge.requestPointerLock(h);
+        assert.deepEqual(calls, [undefined], 'first call is synchronous plain requestPointerLock()');
         await flushMicrotasks();
         await flushMicrotasks();
         await flushMicrotasks();
-        assert.deepEqual(calls, [{ unadjustedMovement: true }, undefined]);
+        assert.deepEqual(calls, [undefined, { unadjustedMovement: true }]);
+        assert.equal(doc.pointerLockElement, canvas, 'plain lock stays intact after NotSupportedError upgrade');
+        assert.equal(exitCalls, 0);
         assert.deepEqual(events, [{ kind: 'pointer_lock', locked: true }]);
 
         // 2. While locked, mouse pointermove sends movementX/movementY; touch and zero deltas are ignored.
@@ -2878,7 +2889,7 @@ test('requestPointerLock handles unadjustedMovement fallback, motion delivery, E
         doc.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', movementX: 25, movementY: 5 });
         assert.deepEqual(events, [{ kind: 'pointer_lock', locked: false }]);
 
-        // 4. Subsequent request skips unadjustedMovement (cached), and SecurityError refusal
+        // 4. Subsequent grant skips unadjustedMovement upgrade (cached), and SecurityError refusal
         // (e.g. Chrome cooldown or unfocused document) reports locked: false without retrying.
         calls.length = 0;
         events.length = 0;
@@ -2894,14 +2905,35 @@ test('requestPointerLock handles unadjustedMovement fallback, motion delivery, E
         assert.deepEqual(calls, [undefined]);
         assert.deepEqual(events, [{ kind: 'pointer_lock', locked: false, refused: true }]);
 
-        // 5. Legacy non-Promise browser: pointerlockerror reports refusal.
+        // 5. On a browser that DOES support unadjustedMovement, the in-place upgrade succeeds
+        // and its second pointerlockchange does not emit a duplicate locked: true event.
+        h.pointerLockUnadjustedFailed = false;
+        calls.length = 0;
+        events.length = 0;
+        canvas.requestPointerLock = opts => {
+            calls.push(opts);
+            return Promise.resolve().then(() => {
+                doc.pointerLockElement = canvas;
+                doc.dispatchEvent({ type: 'pointerlockchange' });
+            });
+        };
+        bridge.requestPointerLock(h);
+        await flushMicrotasks();
+        await flushMicrotasks();
+        await flushMicrotasks();
+        assert.deepEqual(calls, [undefined, { unadjustedMovement: true }]);
+        assert.deepEqual(events, [{ kind: 'pointer_lock', locked: true }]);
+        doc.pointerLockElement = null;
+        doc.dispatchEvent({ type: 'pointerlockchange' });
+
+        // 6. Legacy non-Promise browser: pointerlockerror reports refusal.
         events.length = 0;
         canvas.requestPointerLock = () => undefined;
         bridge.requestPointerLock(h);
         doc.dispatchEvent({ type: 'pointerlockerror' });
         assert.deepEqual(events, [{ kind: 'pointer_lock', locked: false, refused: true }]);
 
-        // 6. exitPointerLock cancels a pending request so a stale late grant exits immediately,
+        // 7. exitPointerLock cancels a pending request so a stale late grant exits immediately,
         // and destroy() exits an active lock.
         events.length = 0;
         canvas.requestPointerLock = () => new Promise(() => {});
@@ -2919,4 +2951,464 @@ test('requestPointerLock handles unadjustedMovement fallback, motion delivery, E
         bridge.destroy(h);
     }
     assert.equal(doc.pointerLockElement, null);
+});
+
+test('coarse-pointer focus sites set inputMode=text and inert=false before focus() on plain and password inputs, and reset when unfocused', async () => {
+    const captureFocus = (h, log) => {
+        const opacityOf = el => el.style.cssText.match(/opacity:([^;]+)/)?.[1] ?? '';
+        for (const [name, el] of [['textarea', h.textarea], ['password', h.password]]) {
+            const orig = el.focus.bind(el);
+            el.focus = opts => {
+                log.push({
+                    field: name,
+                    inputMode: el.inputMode,
+                    inert: el.inert,
+                    opacity: opacityOf(el),
+                });
+                return orig(opts);
+            };
+        }
+    };
+
+    // Site 1: mount startup microtask with an initially focused plain field, then password field.
+    for (const [secure, expectedField] of [[false, 'textarea'], [true, 'password']]) {
+        const { doc, h } = setup({ coarse: true });
+        const log = [];
+        try {
+            captureFocus(h, log);
+            assert.equal(h.textarea.inputMode, 'none');
+            assert.equal(h.password.inputMode, 'none');
+            assert.equal(h.textarea.inert, true);
+            assert.equal(h.password.inert, true);
+            // Simulate an autofocused field synced before mount's microtask runs (activeElement is still body).
+            bridge.sync(h, 'auto', secure ? '' : 'hi', 0, secure ? 0 : 2, secure ? 0 : 2, secure);
+            assert.equal(log.length, 0, 'body activeElement waits for mount microtask');
+            await Promise.resolve();
+            assert.deepEqual(log, [{ field: expectedField, inputMode: 'text', inert: false, opacity: '0' }]);
+            assert.equal(doc.activeElement, secure ? h.password : h.textarea);
+        } finally {
+            bridge.destroy(h);
+        }
+    }
+
+    // Site 2: sync() when activeElement === canvas (tap path on iOS Safari), for plain & password fields,
+    // plus Site 3: activate(), and reset when no editable field is focused (!key).
+    const { doc, canvas, h } = setup({ coarse: true });
+    const log = [];
+    try {
+        captureFocus(h, log);
+        await Promise.resolve();
+        assert.equal(doc.activeElement, canvas);
+
+        // Plain field via sync() while canvas is active.
+        bridge.sync(h, 'plain', 'hello', 0, 5, 5, false);
+        assert.deepEqual(log, [{ field: 'textarea', inputMode: 'text', inert: false, opacity: '0' }]);
+        assert.equal(doc.activeElement, h.textarea);
+        assert.equal(h.password.inert, true);
+
+        // Blur / non-editable focus resets both hidden inputs back to inputMode='none' and inert=true.
+        log.length = 0;
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        assert.equal(doc.activeElement, canvas);
+        assert.equal(h.textarea.inputMode, 'none');
+        assert.equal(h.password.inputMode, 'none');
+        assert.equal(h.textarea.inert, true);
+        assert.equal(h.password.inert, true);
+
+        // Password field via sync() while canvas is active.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        assert.deepEqual(log, [{ field: 'password', inputMode: 'text', inert: false, opacity: '0' }]);
+        assert.equal(doc.activeElement, h.password);
+        assert.equal(h.password.value, '', 'password input value stays empty');
+        assert.equal(h.textarea.inert, true);
+
+        // Switching directly from password field to plain field via sync() -> activate().
+        log.length = 0;
+        bridge.sync(h, 'plain', 'abc', 0, 3, 3, false);
+        assert.deepEqual(log, [{ field: 'textarea', inputMode: 'text', inert: false, opacity: '0' }]);
+        assert.equal(doc.activeElement, h.textarea);
+
+        // Site 3: direct activate() from an unfocused body element.
+        log.length = 0;
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        doc.activeElement = doc.body;
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        assert.equal(log.length, 0);
+        bridge.activate(h);
+        assert.deepEqual(log, [{ field: 'password', inputMode: 'text', inert: false, opacity: '0' }]);
+        assert.equal(doc.activeElement, h.password);
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('syncA11y mirrors unfocused textboxes, forwards click/focus to a11y_press, and focusA11y syncs textarea/password with zero duplicate proxies', () => {
+    const { events, h } = setup();
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'textbox', p: '#0/name', r: [16, 16, 240, 32], o: 'textbox', t: 'Name', v: 'Ada', rq: true, ph: 'Your name' },
+            { k: 'textbox', p: '#0/reason', r: [16, 56, 240, 72], o: 'textbox', t: 'Reason', v: 'Line 1\nLine 2', ml: true, ph: 'Explain why' },
+            { k: 'textbox', p: '#0/pw', r: [16, 136, 240, 32], o: 'textbox', t: 'Password', rq: true, ph: 'Enter password' },
+            { k: 'textbox', p: '#0/ro', r: [16, 176, 240, 32], o: 'textbox', t: 'Token', v: 'fixed', ro: true },
+            { k: 'textbox', p: '#0/dis', r: [16, 216, 240, 32], o: 'textbox', t: 'Locked', v: 'nope', dis: true },
+            { k: 'textbox', p: '#0/bad', r: [16, 256, 240, 32], o: 'textbox', t: 'Email', v: 'bad@', inv: true },
+        ]));
+
+        const name = h.a11yNodes.get('div:#0/name');
+        assert.equal(name.getAttribute('role'), 'textbox');
+        assert.equal(name.getAttribute('aria-label'), 'Name');
+        assert.equal(name.getAttribute('aria-required'), 'true');
+        assert.equal(name.getAttribute('aria-placeholder'), 'Your name');
+        assert.equal(name.getAttribute('aria-multiline'), null);
+        assert.equal(name.textContent, 'Ada');
+
+        const reason = h.a11yNodes.get('div:#0/reason');
+        assert.equal(reason.getAttribute('aria-multiline'), 'true');
+        assert.equal(reason.textContent, 'Line 1\nLine 2');
+
+        const pw = h.a11yNodes.get('div:#0/pw');
+        assert.equal(pw.getAttribute('role'), 'textbox');
+        assert.equal(pw.getAttribute('aria-label'), 'Password');
+        assert.equal(pw.textContent, '', 'password mirror node carries no secret value');
+
+        assert.equal(h.a11yNodes.get('div:#0/ro').getAttribute('aria-readonly'), 'true');
+        assert.equal(h.a11yNodes.get('div:#0/dis').getAttribute('aria-disabled'), 'true');
+        assert.equal(h.a11yNodes.get('div:#0/bad').getAttribute('aria-invalid'), 'true');
+
+        // Click and focus on an enabled mirror textbox send a11y_press; disabled ignores both.
+        name.dispatchEvent({ type: 'click', preventDefault() {} });
+        reason.dispatchEvent({ type: 'focus' });
+        const dis = h.a11yNodes.get('div:#0/dis');
+        dis.dispatchEvent({ type: 'click', preventDefault() {} });
+        dis.dispatchEvent({ type: 'focus' });
+        assert.deepEqual(events, [
+            { kind: 'a11y_press', path: '#0/name' },
+            { kind: 'a11y_press', path: '#0/reason' },
+        ]);
+
+        // Focusing multiline Reason syncs aria-label + aria-multiline onto h.textarea and clears both focus proxies.
+        bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'Reason', ml: true, ph: 'Explain why', inv: true }));
+        assert.equal(h.textarea.getAttribute('aria-label'), 'Reason');
+        assert.equal(h.textarea.getAttribute('aria-multiline'), 'true');
+        assert.equal(h.textarea.getAttribute('aria-placeholder'), 'Explain why');
+        assert.equal(h.textarea.getAttribute('aria-invalid'), 'true');
+        assert.equal(h.canvas.getAttribute('aria-activedescendant'), null);
+        for (const p of h.focusProxies) {
+            assert.equal(p.getAttribute('role'), null, 'canvas focus proxies hold no duplicate textbox role');
+            assert.equal(p.getAttribute('aria-label'), null);
+        }
+
+        // Focusing password field syncs aria-label + states onto h.password and resets h.textarea.
+        bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'Password', sec: true, rq: true, ph: 'Enter password' }));
+        assert.equal(h.password.getAttribute('aria-label'), 'Password');
+        assert.equal(h.password.getAttribute('aria-required'), 'true');
+        assert.equal(h.password.getAttribute('aria-placeholder'), 'Enter password');
+        assert.equal(h.password.value, '');
+        assert.equal(h.textarea.getAttribute('aria-label'), 'Text input');
+        assert.equal(h.textarea.getAttribute('aria-multiline'), null);
+        for (const p of h.focusProxies) {
+            assert.equal(p.getAttribute('role'), null);
+        }
+
+        // Clearing focus resets both hidden fields cleanly.
+        bridge.focusA11y(h, '');
+        assert.equal(h.password.getAttribute('aria-label'), 'Password input');
+        assert.equal(h.password.getAttribute('aria-required'), null);
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('syncVisualViewport shifts covered focused fields above the keyboard without blurring or resizing, and clears on retract or blur', () => {
+    const { doc, body, canvas, h } = setup({ coarsePointer: true });
+    const cpu = doc.createElement('canvas');
+    cpu.setAttribute('data-rune-cpu', '');
+    body.insertBefore(cpu, canvas);
+    try {
+        // Focus password field at mid-screen (y=260..284), already visible above h=362.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        bridge.syncCaret(h, 24, 260, 2, 24);
+        assert.equal(doc.activeElement, h.password);
+        assert.equal(h.password.inert, false);
+        assert.equal(h.password.inputMode, 'text');
+
+        bridge.syncVisualViewport(h, 0, 389, 699);
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        assert.equal(doc.activeElement, h.password, 'visualViewport shrink must not blur focused password input');
+        assert.equal(h.password.inert, false);
+        assert.equal(h.password.inputMode, 'text');
+        assert.equal(canvas.style.transform || '', '', 'already-visible field needs no canvas shift');
+        assert.equal(cpu.style.transform || '', '');
+        assert.equal(h.a11y.style.transform || '', '');
+
+        // Move focus to a lower plain field (y=520..544) covered by the keyboard (visBottom=362).
+        bridge.sync(h, 'bottom', 'hi', 0, 2, 2, false);
+        bridge.syncCaret(h, 24, 520, 2, 24);
+        assert.equal(doc.activeElement, h.textarea);
+        // shift = min(544 + 16 - 362, 520 - 16, 699 - 362) = 198
+        assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)');
+        assert.equal(cpu.style.transform, 'translate3d(0, -198px, 0)');
+        assert.equal(h.a11y.style.transform, 'translate3d(0, -198px, 0)');
+        assert.equal(h.textarea.style.top, '322px', 'hidden input tracks visual shifted caret position');
+
+        // Keyboard retracts back to full layout height: transform clears cleanly while keeping focus.
+        bridge.syncVisualViewport(h, 0, 699, 699);
+        assert.equal(canvas.style.transform, '');
+        assert.equal(cpu.style.transform, '');
+        assert.equal(h.a11y.style.transform, '');
+        assert.equal(h.textarea.style.top, '520px');
+        assert.equal(doc.activeElement, h.textarea);
+
+        // Re-open keyboard and blur: clearing focus resets transform immediately.
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)');
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        assert.equal(canvas.style.transform, '');
+        assert.equal(cpu.style.transform, '');
+        assert.equal(h.a11y.style.transform, '');
+        assert.equal(h.textarea.inert, true);
+        assert.equal(h.password.inert, true);
+    } finally {
+        bridge.destroy(h);
+        cpu.remove();
+    }
+
+    // Embedded and document (page) modes must never overwrite canvas transform.
+    for (const opts of [{ embedded: true }, { page: true }]) {
+        const ctx = setup(opts);
+        try {
+            bridge.sync(ctx.h, 'f', 'abc', 0, 3, 3, false);
+            bridge.syncCaret(ctx.h, 24, 520, 2, 24);
+            bridge.syncVisualViewport(ctx.h, 0, 362, 699);
+            assert.equal(ctx.canvas.style.transform || '', '');
+        } finally {
+            bridge.destroy(ctx.h);
+        }
+    }
+});
+
+test('external hidden-input blur reports field_blur, ignores window/menu/sync blurs, and activate refocuses already-focused input', async () => {
+    const { doc, body, canvas, win, events, h } = setup({ coarse: true });
+    let focusedDoc = true;
+    doc.hasFocus = () => focusedDoc;
+    const focusCalls = [];
+    for (const [name, el] of [['textarea', h.textarea], ['password', h.password]]) {
+        const orig = el.focus.bind(el);
+        el.focus = opts => {
+            focusCalls.push({ name, wasActive: doc.activeElement === el, inputMode: el.inputMode, inert: el.inert });
+            return orig(opts);
+        };
+    }
+    try {
+        await Promise.resolve();
+        // 1. Focus password field, then blur externally to body (iOS keyboard dismissal with no pointer event).
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        assert.equal(doc.activeElement, h.password);
+        events.length = 0;
+
+        doc.activeElement = body;
+        h.password.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+
+        // Rust answers with sync(h, '', ...) -> clears key and sets inert without stealing focus to canvas.
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        assert.equal(doc.activeElement, body);
+        assert.equal(h.password.inert, true);
+        assert.equal(h.password.inputMode, 'none');
+
+        // 2. External blur to canvas (Lyzev trace: focusout next=BODY, focusin <CANVAS>) emits field_blur,
+        // and a non-gesture sync() before the microtask must not silently reclaim focus from canvas.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        focusCalls.length = 0;
+
+        canvas.focus();
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        assert.equal(doc.activeElement, canvas, 'sync must not reclaim focus while an external blur is pending');
+        assert.equal(focusCalls.length, 0);
+        await Promise.resolve();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 3. Re-tapping an already-focused field still invokes focus() inside activate() so WebKit runs elementDidRefocus.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        assert.equal(doc.activeElement, h.password);
+        focusCalls.length = 0;
+        bridge.activate(h);
+        assert.deepEqual(focusCalls, [{ name: 'password', wasActive: true, inputMode: 'text', inert: false }]);
+
+        // 4. Window blur (!document.hasFocus()) does NOT emit field_blur (handled by window_focus).
+        events.length = 0;
+        focusedDoc = false;
+        doc.activeElement = body;
+        h.password.dispatchEvent({ type: 'blur' });
+        win.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        assert.deepEqual(events, []);
+        focusedDoc = true;
+
+        // 5. Internal sync() clearing focus or switching fields does NOT emit field_blur.
+        bridge.activate(h);
+        events.length = 0;
+        bridge.sync(h, 'plain', 'hi', 0, 2, 2, false);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        await Promise.resolve();
+        assert.deepEqual(events, []);
+
+        // 6. Blur during an active touch defers until pointerup: activate() suppresses it, otherwise it emits field_blur.
+        bridge.sync(h, 'plain', 'hi', 0, 2, 2, false);
+        bridge.activate(h);
+        events.length = 0;
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'touch', pointerId: 7, timeStamp: 10 });
+        canvas.focus();
+        await Promise.resolve();
+        assert.deepEqual(events, [], 'blur held while touch is down');
+        win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType: 'touch', pointerId: 7, timeStamp: 20 });
+        bridge.activate(h);
+        await Promise.resolve();
+        assert.deepEqual(events, [], 'activate() inside pointerup cancels deferred field_blur');
+
+        // Touch cancelled without activate() flushes the deferred field_blur.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'touch', pointerId: 8, timeStamp: 30 });
+        canvas.focus();
+        win.dispatchEvent({ type: 'pointercancel', target: canvas, pointerType: 'touch', pointerId: 8, timeStamp: 40 });
+        await Promise.resolve();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'plain' }]);
+
+        // 7. Holding keyboard shift across pointerdown -> pointerup for mouse, pen, and touch.
+        for (const [pointerType, pid] of [['mouse', 11], ['pen', 12], ['touch', 13]]) {
+            bridge.sync(h, 'bottom', 'hi', 0, 2, 2, false);
+            bridge.activate(h);
+            bridge.syncCaret(h, 24, 520, 2, 24);
+            bridge.syncVisualViewport(h, 0, 362, 699);
+            assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)');
+
+            // pointerdown blurs the field in Rune -> sync(h, '', ...) runs while pointer is held.
+            win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType, pointerId: pid, timeStamp: 50 });
+            bridge.sync(h, '', '', 0, 0, 0, false);
+            assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)', `${pointerType}: transform stays held until pointerup`);
+
+            // Window bubble pointerup clears transform after target-phase canvas pointerup has finished.
+            win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType, pointerId: pid, timeStamp: 60 });
+            assert.equal(canvas.style.transform, '', `${pointerType}: transform clears after pointerup`);
+        }
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('next-frame focus reconciliation clears stale caret across transient window blur, delayed activeElement, visualViewport retract, and visibility return with zero idle rAFs', async () => {
+    const origRaf = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame');
+    const origCancel = Object.getOwnPropertyDescriptor(globalThis, 'cancelAnimationFrame');
+    const rafQueue = [];
+    let nextRafId = 1;
+    let rafScheduled = 0;
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+        configurable: true,
+        value: cb => {
+            rafScheduled += 1;
+            const id = nextRafId++;
+            rafQueue.push({ id, cb });
+            return id;
+        },
+    });
+    Object.defineProperty(globalThis, 'cancelAnimationFrame', {
+        configurable: true,
+        value: id => {
+            const idx = rafQueue.findIndex(item => item.id === id);
+            if (idx >= 0) rafQueue.splice(idx, 1);
+        },
+    });
+    const flushRaf = () => {
+        const batch = rafQueue.splice(0, rafQueue.length);
+        for (const item of batch) item.cb(0);
+    };
+
+    const { doc, body, win, events, h } = setup({ coarse: true });
+    let focusedDoc = true;
+    doc.hasFocus = () => focusedDoc;
+    try {
+        await Promise.resolve();
+
+        // 1. Transient window blur + field blur -> window focus with activeElement === body.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        focusedDoc = false;
+        doc.activeElement = body;
+        h.password.dispatchEvent({ type: 'blur' });
+        win.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        assert.deepEqual(events, [], 'window blur alone does not emit field_blur');
+        focusedDoc = true;
+        win.dispatchEvent({ type: 'focus' });
+        flushRaf();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 2. blur fires while document.activeElement briefly still reports h.password, then settles to body before rAF.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        h.password.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        assert.deepEqual(events, [], 'microtask defers when activeElement is still h.password');
+        doc.activeElement = body;
+        flushRaf();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 3. visualViewport retracts to 699 after a suppressed blur left activeElement === body.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        focusedDoc = false;
+        doc.activeElement = body;
+        h.password.dispatchEvent({ type: 'blur' });
+        win.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        focusedDoc = true;
+        bridge.syncVisualViewport(h, 0, 699, 699);
+        flushRaf();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 4. visibilitychange returning from hidden when DOM focus left h.password.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        doc.hidden = true;
+        doc.dispatchEvent({ type: 'visibilitychange' });
+        doc.activeElement = body;
+        h.password.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        assert.deepEqual(events, []);
+        doc.hidden = false;
+        doc.dispatchEvent({ type: 'visibilitychange' });
+        flushRaf();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 5. No blur (DOM input stays active across keyboard open/retract) keeps focus and schedules 0 rAFs.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        const rafBefore = rafScheduled;
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        bridge.syncVisualViewport(h, 0, 699, 699);
+        assert.equal(rafScheduled, rafBefore, 'focused input across visualViewport resize schedules zero rAFs');
+        assert.deepEqual(events, []);
+    } finally {
+        bridge.destroy(h);
+        if (origRaf) Object.defineProperty(globalThis, 'requestAnimationFrame', origRaf);
+        else delete globalThis.requestAnimationFrame;
+        if (origCancel) Object.defineProperty(globalThis, 'cancelAnimationFrame', origCancel);
+        else delete globalThis.cancelAnimationFrame;
+    }
 });

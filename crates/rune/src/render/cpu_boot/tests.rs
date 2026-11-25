@@ -847,3 +847,116 @@ fn transparent_cpu_painter_clears_to_zero_alpha_and_premultiplies_translucent_pi
     assert_eq!(corner[3], 255, "opaque fallback must paint solid background alpha");
     assert!(corner[0] > 140 && corner[1] > 90 && corner[2] > 40, "expected theme bg BGRA, got {corner:?}");
 }
+
+#[test]
+fn transparent_cpu_painter_matches_gpu_corpus_and_premultiplied_bgra_invariant() {
+    use crate::{Env, Pixels as ImagePixels, Runtime, col, el, row, text};
+
+    let (w, h) = (256u32, 160u32);
+    let mut img_bytes = vec![0u8; 16 * 16 * 4];
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            let i = ((y * 16 + x) * 4) as usize;
+            img_bytes[i] = (x * 16) as u8;
+            img_bytes[i + 1] = (y * 16) as u8;
+            img_bytes[i + 2] = 200;
+            img_bytes[i + 3] = 220;
+        }
+    }
+    let img = ImagePixels::new();
+    img.set(16, 16, img_bytes);
+
+    fn corpus(img: &ImagePixels, _: &mut crate::Cx<ImagePixels>) -> crate::El {
+        col()
+            .w_full()
+            .h_full()
+            .padding(12.0)
+            .gap(8.0)
+            .child(
+                row()
+                    .gap(8.0)
+                    .child(
+                        el().size(64.0, 40.0)
+                            .radius(10.0)
+                            .fill(Color { r: 0.12, g: 0.16, b: 0.24, a: 0.85 })
+                            .border(2.0, Color { r: 0.35, g: 0.7, b: 1.0, a: 0.9 })
+                            .shadow(4.0, 8.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.45 }),
+                    )
+                    .child(
+                        el().size(64.0, 40.0)
+                            .radius(8.0)
+                            .linear_gradient(45.0, [(0.0, Color { r: 0.9, g: 0.2, b: 0.4, a: 0.8 }), (1.0, Color { r: 0.2, g: 0.5, b: 0.95, a: 0.7 })]),
+                    )
+                    .child(
+                        el().size(40.0, 40.0)
+                            .radius(6.0)
+                            .opacity(0.65)
+                            .fill(Color { r: 0.2, g: 0.8, b: 0.4, a: 0.9 })
+                            .child(el().size(16.0, 16.0).pixels(img)),
+                    ),
+            )
+            .child(
+                el().padding(8.0)
+                    .radius(8.0)
+                    .fill(Color { r: 0.08, g: 0.09, b: 0.12, a: 0.9 })
+                    .child(text("CPU Overlay 123").color(Color { r: 0.95, g: 0.97, b: 1.0, a: 1.0 })),
+            )
+    }
+
+    let mut rt = Runtime::new(img, corpus, (w as f32, h as f32), Env::new(true, 1.0));
+    rt.core_mut().transparent = true;
+    super::attach_text(&mut rt.core_mut().text.atlas);
+    rt.frame(0.0);
+
+    let mut painter = CpuPainter::new(1);
+    painter.fill_masks(&mut rt.core_mut().text.atlas);
+    let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (w, h), [0.0; 4])
+        .lcd(false)
+        .srgb_blend(true);
+    let mut cpu_px = vec![0x55u8; (w * h * 4) as usize];
+    painter
+        .paint(&scene, &mut Target::new(&mut cpu_px, w, h))
+        .expect("transparent corpus paints on CPU");
+
+    // 1. Untouched corner must be clear zero-alpha BGRA [0, 0, 0, 0].
+    assert_eq!(&cpu_px[0..4], &[0, 0, 0, 0], "untouched overlay pixel must clear to zero alpha");
+    // 2. Every pixel must satisfy the premultiplied BGRA invariant required by ULW_ALPHA.
+    let mut non_zero = 0usize;
+    for px in cpu_px.chunks_exact(4) {
+        assert!(px[0] <= px[3] && px[1] <= px[3] && px[2] <= px[3], "premultiplied BGRA violated: {px:?}");
+        if px[3] > 0 { non_zero += 1; }
+    }
+    assert!(non_zero > 500, "corpus should draw visible translucent content");
+
+    // 3. Compare against Rune's GPU renderer on the exact same instances/atlas/images.
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
+    let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (w, h), [0.0; 4])
+        .lcd(false)
+        .srgb_blend(true)
+        .half_rounding(half);
+    painter.forget();
+    painter.paint(&scene, &mut Target::new(&mut cpu_px, w, h)).expect("re-paint with vendor half rounding");
+
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    renderer.set_srgb_blend(true);
+    let rt_core = rt.core_mut();
+    let prev_lcd = rt_core.text.atlas.lcd;
+    rt_core.text.atlas.lcd = false;
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut rt_core.images);
+    renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt_core.text.atlas, &rt_core.instances, (w, h));
+    rt_core.text.atlas.lcd = prev_lcd;
+    let target = Offscreen::with_format(&gpu.device, w, h, format);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, [0.0; 4]);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let gpu_px = target.read(&gpu.device);
+
+    let d = drift(
+        Pixels::bgra(&cpu_px, w, h, w as usize * 4),
+        Pixels::bgra(&gpu_px, w, h, w as usize * 4),
+    );
+    assert!(d.max <= 1, "transparent CPU overlay corpus drifted > 1/255 from GPU: {d:?}");
+}

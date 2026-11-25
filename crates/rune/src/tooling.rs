@@ -178,6 +178,8 @@ mod crop;
 #[path = "tooling/eased_input.rs"]
 mod eased_input;
 pub(crate) use eased_input::step_resize;
+#[path = "tooling/flags.rs"]
+mod flags;
 #[path = "tooling/headless.rs"]
 mod headless;
 #[path = "tooling/loop_check.rs"]
@@ -195,6 +197,7 @@ mod trace;
 
 pub use args::{Args, is_headless};
 pub use args::{RELAUNCH_DROPS, without_relaunch_drops};
+pub use flags::{FlagSpec, FlagValue, flags};
 pub(crate) use args::*;
 pub use headless::headless;
 #[cfg(not(target_arch = "wasm32"))]
@@ -392,6 +395,8 @@ pub(crate) enum Kind {
     Reopen,
     /// A user-initiated close request (`App::on_close_request`).
     CloseRequest,
+    /// An OS-initiated application quit request (`App::on_quit_request`).
+    QuitRequest,
     /// A link the system opened with the app (`App::on_open_url`).
     OpenUrl(String),
     /// Files the system opened with the app (`App::on_open_files`).
@@ -470,7 +475,7 @@ pub(crate) fn script_input(
         Kind::SecondaryUp => core.secondary_up(app, x, y),
         Kind::Key(k, false) => core.key(k.clone()),
         Kind::Key(k, true) => core.repeat_key(k.clone()),
-        Kind::Physical(event) => core.physical_input(*event),
+        Kind::Physical(event) => core.physical_input(event.clone()),
         Kind::Paste(content) => core.paste_content(content.clone()),
         Kind::Ime(ime) => core.ime(ime.clone()),
         Kind::Wheel(dx, dy) => { let z = core.zoom(); wheel(core, (x, y), *dx / z, *dy / z); }
@@ -489,8 +494,8 @@ pub(crate) fn script_input(
         Kind::ButtonDown(b) => core.button_down(app, x, y, *b),
         Kind::ButtonUp(b) => core.button_up(app, x, y, *b),
         Kind::KeyUp(k) => { core.key_up(app, k.clone()); }
-        Kind::PhysicalKey(event, k, base) => core.physical_key_input(app, *event, k.clone(), *base),
-        Kind::Mark(_) | Kind::Reopen | Kind::CloseRequest | Kind::OpenUrl(_) | Kind::OpenFiles(_) | Kind::Menu(_) | Kind::PopupMenu(_)
+        Kind::PhysicalKey(event, k, base) => core.physical_key_input(app, event.clone(), k.clone(), *base),
+        Kind::Mark(_) | Kind::Reopen | Kind::CloseRequest | Kind::QuitRequest | Kind::OpenUrl(_) | Kind::OpenFiles(_) | Kind::Menu(_) | Kind::PopupMenu(_)
         | Kind::FileDialog(_) | Kind::FileDialogFiles(_) | Kind::Shortcut(_) | Kind::Resize(..) => return false,
     }
     true
@@ -587,13 +592,14 @@ impl Ev {
             Kind::Focus(focused) => ScriptEvent::Focus(*focused),
             Kind::Reopen => ScriptEvent::Reopen,
             Kind::CloseRequest => ScriptEvent::CloseRequest,
+            Kind::QuitRequest => ScriptEvent::QuitRequest,
             Kind::OpenUrl(url) => ScriptEvent::OpenUrl(url.clone()),
             Kind::OpenFiles(paths) => ScriptEvent::OpenFiles(paths.clone()),
             Kind::Menu(item) => ScriptEvent::Menu(item.clone()),
             Kind::PopupMenu(picked) => ScriptEvent::PopupMenu(picked.clone()),
             Kind::FileDialog(path) => ScriptEvent::FileDialog(path.clone()),
             Kind::FileDialogFiles(paths) => ScriptEvent::FileDialogFiles(paths.clone()),
-            Kind::Physical(input) => ScriptEvent::Physical(*input),
+            Kind::Physical(input) => ScriptEvent::Physical(input.clone()),
             Kind::Shortcut(chord) => ScriptEvent::Shortcut(chord.clone()),
             Kind::Move => pointer(PointerAction::Move),
             Kind::PointerMotion(dx, dy) => ScriptEvent::PointerMotion { dx: *dx, dy: *dy },

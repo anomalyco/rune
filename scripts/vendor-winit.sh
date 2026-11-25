@@ -16,7 +16,9 @@
 # screen coordinates by value into `WM_NCLBUTTONDOWN`'s `LPARAM`, skips the dummy `WM_MOUSEMOVE(0, 0)`
 # during programmatic drags, and clears `state.dragging` if `DefWindowProcW` exits without
 # `WM_EXITSIZEMOVE`; and Wayland `set_window_icon` sets the window's icon through `xdg-toplevel-icon-v1`,
-# backported from rust-windowing/winit#4288). Run it when winit is bumped, then build: a patch
+# backported from rust-windowing/winit#4288; and `WindowExtWayland::wayland_wm_state` + configure
+# wake on decoration/capability changes and `WindowExtX11::take_wm_state_changed` on `PropertyNotify`).
+# Run it when winit is bumped, then build: a patch
 # that no longer applies fails here, and the change goes back in by hand. If upstream winit takes
 # the change, delete vendor/winit and its `[patch.crates-io]` entry instead.
 # Usage: scripts/vendor-winit.sh <version>     e.g. scripts/vendor-winit.sh 0.30.13

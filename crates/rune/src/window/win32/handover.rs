@@ -230,6 +230,14 @@ impl SurfaceMode {
         }
     }
 
+    #[cfg(feature = "windows-system-material")]
+    pub(in crate::window) fn handover_mut(&mut self) -> Option<&mut Handover> {
+        match self {
+            SurfaceMode::Handed { handover } | SurfaceMode::Rebinding { handover } => Some(handover),
+            SurfaceMode::Gpu | SurfaceMode::Cpu { .. } | SurfaceMode::HandingOver { .. } => None,
+        }
+    }
+
     /// A new swap chain went on the handed-over window's visual (`Host::reattach`).
     pub(in crate::window) fn rebind(&mut self) {
         if let SurfaceMode::Handed { .. } = self {
@@ -413,6 +421,7 @@ impl Host {
                     crate::marks::mark("window.shown");
                 }
                 w.presented = None;
+                self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
                 crate::marks::mark("gpu.window.handed");
             }
         }
@@ -560,6 +569,8 @@ impl Host {
                 w.presented = None;
                 // What was asked for while the GPU finished its frame draws now, on the GPU.
                 w.request_redraw();
+                self.app.rt_mut().set_renderer_kind(crate::RendererKind::Gpu);
+                self.sync_window_backdrop(false);
                 self.on_resize_sync_event(super::resize_sync::Event::Handover);
             }
             SurfaceMode::HandingOver { done: None, .. } | SurfaceMode::Gpu | SurfaceMode::Cpu { .. } | SurfaceMode::Handed { .. } | SurfaceMode::Rebinding { .. } => {}
@@ -582,6 +593,7 @@ impl Host {
         w.surface = None;
         self.gpu = None;
         self.app.release_compositor_gpu();
+        self.app.rt_mut().set_renderer_kind(crate::RendererKind::Cpu);
         w.request_redraw();
     }
 

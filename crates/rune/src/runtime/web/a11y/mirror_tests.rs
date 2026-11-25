@@ -747,3 +747,213 @@ fn inline_text_runs_do_not_merge_across_direction_flips() {
     assert_eq!(a.get("dir"), None);
     assert_eq!(b["dir"], "rtl");
 }
+
+#[test]
+fn unfocused_text_inputs_areas_and_passwords_mirror_states_omit_secrets_and_hide_while_focused() {
+    use crate::{Color, TextEdit, text_input};
+
+    struct Form {
+        name: TextEdit,
+        reason: TextEdit,
+        pw: TextEdit,
+        placeholder_only: TextEdit,
+        ro: TextEdit,
+        dis: TextEdit,
+        bad: TextEdit,
+    }
+
+    fn view(s: &Form, _: &mut Cx<Form>) -> El {
+        let ph = Color::WHITE;
+        col().role("main").size(400.0, 500.0)
+            .child(
+                text_input(&s.name, crate::tok::type_::BODY).key("name").single_line()
+                    .label("Name").placeholder("Your name", ph).required(true).size(240.0, 32.0)
+                    .on_edit(|s: &mut Form| &mut s.name),
+            )
+            .child(
+                text_input(&s.reason, crate::tok::type_::BODY).key("reason")
+                    .label("Reason").placeholder("Explain why", ph).size(240.0, 72.0)
+                    .on_edit(|s: &mut Form| &mut s.reason),
+            )
+            .child(
+                text_input(&s.pw, crate::tok::type_::BODY).key("pw").single_line()
+                    .label("Password").placeholder("Enter password", ph).required(true).size(240.0, 32.0)
+                    .on_edit(|s: &mut Form| &mut s.pw),
+            )
+            .child(
+                text_input(&s.placeholder_only, crate::tok::type_::BODY).key("phonly").single_line()
+                    .placeholder("Search query", ph).size(240.0, 32.0)
+                    .on_edit(|s: &mut Form| &mut s.placeholder_only),
+            )
+            .child(
+                text_input(&s.ro, crate::tok::type_::BODY).key("ro").single_line()
+                    .label("Token").read_only(true).size(240.0, 32.0)
+                    .on_edit(|s: &mut Form| &mut s.ro),
+            )
+            .child(
+                text_input(&s.dis, crate::tok::type_::BODY).key("dis").single_line()
+                    .label("Locked").disabled(true).size(240.0, 32.0)
+                    .on_edit(|s: &mut Form| &mut s.dis),
+            )
+            .child(
+                text_input(&s.bad, crate::tok::type_::BODY).key("bad").single_line()
+                    .label("Email").invalid(true).size(240.0, 32.0)
+                    .on_edit(|s: &mut Form| &mut s.bad),
+            )
+    }
+
+    let form = Form {
+        name: TextEdit::new("Ada"),
+        reason: TextEdit::new("Line 1\nLine 2"),
+        pw: TextEdit::new("hunter2secret").secure(),
+        placeholder_only: TextEdit::new(""),
+        ro: TextEdit::new("fixed"),
+        dis: TextEdit::new("nope"),
+        bad: TextEdit::new("bad@"),
+    };
+    let mut rt = Runtime::new(form, view, (400.0, 500.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+
+    let raw = rt.a11y_json();
+    assert!(!raw.contains("hunter2secret"), "password value must never enter DOM mirror: {raw}");
+    assert!(!raw.contains('•'), "password bullets must never enter DOM mirror: {raw}");
+
+    let items = items_json(&rt);
+    let name = find_key(&items, "name");
+    assert_eq!((&name["k"], &name["o"], &name["t"], &name["v"], name.get("ml"), name.get("rq"), name.get("ph")),
+        (&json!("textbox"), &json!("textbox"), &json!("Name"), &json!("Ada"), None, Some(&json!(true)), Some(&json!("Your name"))));
+
+    let reason = find_key(&items, "reason");
+    assert_eq!((&reason["k"], &reason["o"], &reason["t"], &reason["v"], reason.get("ml"), reason.get("ph")),
+        (&json!("textbox"), &json!("textbox"), &json!("Reason"), &json!("Line 1\nLine 2"), Some(&json!(true)), Some(&json!("Explain why"))));
+
+    let pw = find_key(&items, "pw");
+    assert_eq!((&pw["k"], &pw["o"], &pw["t"], pw.get("v"), pw.get("ml"), pw.get("rq"), pw.get("ph")),
+        (&json!("textbox"), &json!("textbox"), &json!("Password"), None, None, Some(&json!(true)), Some(&json!("Enter password"))));
+
+    let phonly = find_key(&items, "phonly");
+    assert_eq!((&phonly["k"], &phonly["o"], &phonly["t"], phonly.get("ph")),
+        (&json!("textbox"), &json!("textbox"), &json!("Search query"), Some(&json!("Search query"))));
+
+    let ro = find_key(&items, "ro");
+    assert_eq!((ro.get("ro"), ro.get("v")), (Some(&json!(true)), Some(&json!("fixed"))));
+
+    let dis = find_key(&items, "dis");
+    assert_eq!(dis.get("dis"), Some(&json!(true)));
+
+    let bad = find_key(&items, "bad");
+    assert_eq!(bad.get("inv"), Some(&json!(true)));
+
+    // Activating the unfocused mirror textbox via a11y_press focuses the real field and removes
+    // it from the mirror (zero duplicate textbox), while disabled fields ignore a11y_press.
+    let mut mirror = A11yMirror::default();
+    let _ = rt.core().web_a11y_patch(&mut mirror);
+    assert!(!rt.core_mut().web_a11y_action(&json!({ "kind": "a11y_press", "path": dis["p"] })));
+
+    assert!(rt.core_mut().web_a11y_action(&json!({ "kind": "a11y_press", "path": reason["p"] })));
+    rt.frame(0.0);
+    assert!(rt.state.reason.focused, "a11y_press on mirrored textbox focuses the field");
+    let patch: Value = serde_json::from_str(rt.core().web_a11y_patch(&mut mirror).expect("focus hides mirror textbox")).unwrap();
+    assert!(patch["d"].as_array().is_some_and(|d| d.iter().any(|k| k == &json!(format!("div:{}", reason["p"].as_str().unwrap())))),
+        "focused textbox is deleted from [data-rune-a11y] patch: {patch}");
+    let after_focus = items_json(&rt);
+    assert!(after_focus.iter().all(|v| v["p"] != reason["p"]), "focused field omitted from mirror");
+    let focus_item: Value = serde_json::from_str(rt.core().web_a11y_focus(&mut mirror).expect("focus proxy")).unwrap();
+    assert_eq!((&focus_item["o"], &focus_item["t"], focus_item.get("ml"), focus_item.get("ph")),
+        (&json!("textbox"), &json!("Reason"), Some(&json!(true)), Some(&json!("Explain why"))));
+
+    // Focusing password field emits sec:true with zero secret leakage and restores Reason to mirror.
+    assert!(rt.core_mut().web_a11y_action(&json!({ "kind": "a11y_press", "path": pw["p"] })));
+    rt.frame(0.0);
+    assert!(rt.state.pw.focused);
+    let pw_focus_str = rt.core().web_a11y_focus(&mut mirror).expect("password focus item").to_owned();
+    assert!(!pw_focus_str.contains("hunter2secret") && !pw_focus_str.contains('•'));
+    let pw_focus: Value = serde_json::from_str(&pw_focus_str).unwrap();
+    assert_eq!((&pw_focus["o"], &pw_focus["t"], pw_focus.get("sec"), pw_focus.get("v"), pw_focus.get("rq")),
+        (&json!("textbox"), &json!("Password"), Some(&json!(true)), None, Some(&json!(true))));
+    let after_pw = items_json(&rt);
+    assert!(after_pw.iter().all(|v| v["p"] != pw["p"]), "focused password omitted from mirror");
+    assert!(after_pw.iter().any(|v| v["p"] == reason["p"]), "previously focused Reason returns to mirror");
+}
+
+#[test]
+fn secure_editable_combobox_strips_combobox_metadata_suggestions_and_focus_delegation() {
+    use crate::{AutoComplete, Color, HasPopup, TextEdit, text_input};
+
+    struct Scene {
+        secret: TextEdit,
+    }
+    fn view(s: &Scene, _: &mut Cx<Scene>) -> El {
+        col().role("main").size(400.0, 240.0)
+            .child(
+                text_input(&s.secret, crate::tok::type_::BODY)
+                    .single_line()
+                    .key("sec")
+                    .role("combobox")
+                    .label("Secret")
+                    .placeholder("Enter secret", Color::WHITE)
+                    .required(true)
+                    .auto_complete(AutoComplete::Both)
+                    .has_popup(HasPopup::Listbox)
+                    .controls("sec-list")
+                    .owns("sec-list")
+                    .expanded(true)
+                    .active_descendant("sec-opt")
+                    .size(240.0, 32.0)
+                    .on_edit(|s: &mut Scene| &mut s.secret),
+            )
+            .child(
+                col().key("sec-list").role("listbox").label("Secret suggestions").secure()
+                    .child(el().key("sec-opt").role("option").label("hunter2-completion").size(200.0, 24.0)
+                        .child(crate::text("hunter2-completion"))),
+            )
+    }
+
+    let mut rt = Runtime::new(
+        Scene { secret: TextEdit::new("hunter2").secure() },
+        view,
+        (400.0, 240.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    // 1. Unfocused: mirrored as a plain secure textbox (name + states + placeholder), never as a
+    //    combobox and never leaking value, bullet mask, suggestions, or autocomplete/popup links.
+    let raw = rt.a11y_json();
+    assert!(!raw.contains("hunter2"), "secret and suggestion text must not leak: {raw}");
+    assert!(!raw.contains('•'), "bullet mask must not leak: {raw}");
+    let items = items_json(&rt);
+    let sec = find_key(&items, "sec");
+    assert_eq!(
+        (&sec["k"], &sec["o"], &sec["t"], sec.get("rq"), sec.get("ph")),
+        (&json!("textbox"), &json!("textbox"), &json!("Secret"), Some(&json!(true)), Some(&json!("Enter secret"))),
+    );
+    for forbidden in ["v", "ac", "hp", "ct", "ow", "x"] {
+        assert_eq!(sec.get(forbidden), None, "unfocused secure combobox must not expose {forbidden}: {sec}");
+    }
+
+    // 2. Focused: omitted from [data-rune-a11y] (zero duplicate textbox), and focus proxy targets
+    //    <input type="password"> (o: textbox, sec: true) without delegating to active_descendant
+    //    suggestion options or leaking value, mask, expanded, or autocomplete/popup attributes.
+    let mut mirror = A11yMirror::default();
+    let _ = rt.core().web_a11y_patch(&mut mirror);
+    assert!(rt.core_mut().web_a11y_action(&json!({ "kind": "a11y_press", "path": sec["p"] })));
+    rt.frame(0.0);
+    assert!(rt.state.secret.focused);
+
+    let after = rt.a11y_json();
+    assert!(!after.contains("hunter2") && !after.contains('•'), "focused mirror must not leak: {after}");
+    let after_items: Vec<Value> = serde_json::from_str(&after).unwrap();
+    assert!(after_items.iter().all(|v| v["p"] != sec["p"]), "focused secure combobox omitted from mirror");
+
+    let focus_str = rt.core().web_a11y_focus(&mut mirror).expect("password focus proxy").to_owned();
+    assert!(!focus_str.contains("hunter2") && !focus_str.contains('•'), "focus proxy must not leak: {focus_str}");
+    let focus: Value = serde_json::from_str(&focus_str).unwrap();
+    assert_eq!(
+        (&focus["o"], &focus["t"], focus.get("sec"), focus.get("rq"), focus.get("ph")),
+        (&json!("textbox"), &json!("Secret"), Some(&json!(true)), Some(&json!(true)), Some(&json!("Enter secret"))),
+    );
+    for forbidden in ["v", "ac", "fac", "f", "hp", "ct", "ow", "x"] {
+        assert_eq!(focus.get(forbidden), None, "focused secure combobox must not expose {forbidden}: {focus}");
+    }
+}

@@ -59,19 +59,25 @@ impl RuntimeCore {
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (NodeIndex::default(), HashMap::default(), crate::memo::MemoCache::default());
         let (mut next_id, mut scrolls, mut virtuals) = (0u64, HashMap::default(), HashMap::default());
+        let mut virtual_items = virtual_items::VirtualItemsState::default();
         let scroll_requests = scroll::requests::Requests::default();
         let (mut virtual_culled, mut virtual_inputs, mut stats, mut key_warnings) = (HashSet::default(), HashMap::default(), FrameStats::default(), None);
         let m = Measurement {
             app,
             env: self.env,
             viewport: size,
-            fit_height: false,
+            content_sizing: crate::ContentSizing::Fixed,
+            content_limits: (None, None),
             system_reduced_motion: self.host.system_reduced_motion,
             pointer_locked: self.pointer_locked(),
             titlebar_inset: self.host.titlebar_inset / self.host.zoom.k,
             chrome: self.host.titlebar.insets.zoomed(self.host.zoom.k),
+            safe_area: self.safe_area(),
             maximized: self.host.maximized,
             full_screen: self.host.full_screen,
+            window_backdrop: self.host.window_backdrop,
+            window_backdrop_supported: self.host.window_backdrop_supported,
+            renderer_kind: self.host.renderer_kind,
             caption: self.host.titlebar.caption,
             system_accent: self.host.system_accent,
             system_contrast: self.host.system_contrast,
@@ -86,6 +92,8 @@ impl RuntimeCore {
             titlebar: self.titlebar_set(),
             caret: None,
             caret_read: false,
+            wm_state: self.host.wm_state,
+            wm_state_read: false,
             // The rects the window last laid out, as its next frame reads them, so a view that
             // measures against them (a header fitting its title) measures here too.
             layout_seen: self.commit.layout_seen.rects.clone(),
@@ -102,6 +110,7 @@ impl RuntimeCore {
             scrolls: &mut scrolls,
             scroll_requests: &scroll_requests,
             virtuals: &mut virtuals,
+            virtual_items: &mut virtual_items,
             virtual_culled: &mut virtual_culled,
             virtual_inputs: &mut virtual_inputs,
             stats: &mut stats,

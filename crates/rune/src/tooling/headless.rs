@@ -165,12 +165,13 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
     let (chrome, titlebar, fit_height) = (app.chrome, app.titlebar, app.fit_content_height);
     let app_options = app.window_options.clone();
     let comp = app.compositor.take();
-    let (on_close_request, on_close, on_reopen, on_open_url, on_open_files) = (
-        app.on_close_request, app.on_close, app.on_reopen, app.on_open_url, app.on_open_files,
+    let (on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files) = (
+        app.on_close_request, app.on_quit_request, app.on_close, app.on_quit, app.on_reopen, app.on_open_url, app.on_open_files,
     );
     let on_ready = app.on_ready.take();
     let on_frame_encoded = app.on_frame_encoded.take();
     let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
+    crate::credentials::note_headless_runtime();
     let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
     let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
     let menus = crate::native_menu::MenuGuard::attach(&shared, true);
@@ -185,7 +186,7 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
         min_size: spec.min_size, on_ready, on_frame_encoded,
         shared_core: shared.core.clone(), shortcuts_core: shared.shortcuts.core.clone(), shortcuts, menus,
     };
-    let mut typed = TypedHeadlessApp { rt, shared, comp, on_close_request, on_close, on_reopen, on_open_url, on_open_files };
+    let mut typed = TypedHeadlessApp { rt, shared, comp, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files };
     run_headless(prep, config, &mut typed)
 }
 
@@ -200,7 +201,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let mut reports = crate::frame::encoded::FrameReports::new(on_frame_encoded, Some("main"));
     app.rt_mut().headless_chrome(chrome, titlebar, app_options.borderless);
     app.rt_mut().transparent = transparent;
-    app.rt_mut().host.fit_height = fit_height;
+    app.rt_mut().host.set_fit_height(fit_height);
     if let Some(bars) = args.scroll_bars { app.rt_mut().set_system_scroll_bars(bars); }
     // Only limits the app set: the canvas opens at any size, below the default minimum too.
     let limits = (app_options.min_size.or(min_size).unwrap_or((0.0, 0.0)), app_options.max_size);
@@ -385,6 +386,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
                 // The one window always shows here.
                 Kind::Reopen => app.run_reopen(),
                 Kind::CloseRequest => { let _ = app.run_close_request(); }
+                Kind::QuitRequest => { let _ = app.run_quit_request(); }
                 Kind::OpenUrl(url) => app.run_open_url(url),
                 Kind::OpenFiles(paths) => app.run_open_files(paths),
                 Kind::Shortcut(shortcut) => shortcuts_core.fire(shortcut).unwrap_or_else(|e| die(&format!("script shortcut: {e}"))),

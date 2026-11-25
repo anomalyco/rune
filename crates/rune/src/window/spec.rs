@@ -852,6 +852,21 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         color_scheme(scheme: crate::ColorScheme);
+        /// Opt-in whole-window system backdrop material, like [`App::window_backdrop`].
+        /// On Windows 11, DWM draws the material only while the window is the foreground window
+        /// and shows its own flat fallback while unfocused (so a non-activating window never shows
+        /// the live material even while [`Cx::window_backdrop`](crate::Cx::window_backdrop) is
+        /// active); pair with [`Self::on_focus`] if the view needs to distinguish focused state.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowBackdrop, WindowOptions, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 360.0), || (), |_, _| el()))
+        ///     .options(WindowOptions { transparent: true, ..Default::default() })
+        ///     .window_backdrop(WindowBackdrop::Mica);
+        /// let _ = spec;
+        /// ```
+        window_backdrop(backdrop: crate::WindowBackdrop);
         /// Send `Key::Modifier` presses and releases to this window, like `App::modifier_keys`.
         modifier_keys();
         /// Deliver hardware media transport keys ([`Key::Media`](crate::Key::Media)) to this window, like [`App::media_keys`](crate::App::media_keys).
@@ -868,6 +883,17 @@ impl<S: 'static> WindowSpec<S> {
         tab_visits_controls(on: bool);
         /// Release this window's GPU device and renderer when it closes, like `App::release_gpu_when_closed`.
         release_gpu_when_closed();
+        /// Sets how this window responds to GPU device loss or uncaptured errors, like
+        /// [`App::gpu_loss_policy`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, GpuLossPolicy, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("main", AppSpec::new("Main", (800.0, 600.0), || (), |_, _| el()))
+        ///     .gpu_loss_policy(GpuLossPolicy::Terminal);
+        /// let _ = spec;
+        /// ```
+        gpu_loss_policy(policy: crate::GpuLossPolicy);
         /// Configure CPU-first startup and handover for this window, like [`App::cpu_first`].
         ///
         /// ```no_run
@@ -878,6 +904,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         cpu_first(mode: crate::CpuFirst);
+        /// Configure the Windows drag-only synchronized resize path for this window, like
+        /// [`App::resize_sync`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, ResizeSync, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("settings", AppSpec::new("Settings", (620.0, 520.0), || (), |_, _| el()))
+        ///     .resize_sync(ResizeSync::On);
+        /// let _ = spec;
+        /// ```
+        resize_sync(mode: crate::ResizeSync);
         /// Name the effect pipelines this window compiles ahead of their first use, like [`App::prewarm_effects`].
         ///
         /// ```no_run
@@ -911,6 +948,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         on_close_request(f: fn(&mut S, &mut crate::Tx) -> crate::CloseResponse);
+        /// [`App::on_quit_request`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, QuitResponse, WindowSpec, el};
+        ///
+        /// let _window = WindowSpec::new("notes", AppSpec::new("Notes", (480.0, 320.0), || true, |_, _| el()))
+        ///     .on_quit_request(|dirty, _| {
+        ///         if *dirty { QuitResponse::Defer } else { QuitResponse::Quit }
+        ///     });
+        /// ```
+        on_quit_request(f: fn(&mut S, &mut crate::Tx) -> crate::QuitResponse);
         /// Runs whenever this window closes, like `App::on_close`.
         on_close(f: fn(&mut S, &mut crate::Tx));
         /// Runs in this window when the app starts to quit, like `App::on_quit`.
@@ -987,6 +1035,24 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         ambient_fps(fps: f32);
+        /// Cap the swap chain's frame latency on macOS (`1` = 2 drawables, `2` = 3 drawables;
+        /// clamped to `1..=2`, default `2`), like [`App::frame_latency`]. Ignored on Windows,
+        /// Linux, and the web.
+        ///
+        /// With two drawables a frame that runs late waits instead of overlapping the next; at
+        /// 120 Hz that can show as a dropped frame during fast animation, whereas for a rarely
+        /// animating window it is the right trade. Applied at surface creation rather than live.
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, WindowSpec, el};
+        ///
+        /// let _spec = WindowSpec::new(
+        ///     "panel",
+        ///     AppSpec::new("Panel", (488.0, 873.0), || (), |_, _| el()),
+        /// )
+        /// .frame_latency(1);
+        /// ```
+        frame_latency(frames: u32);
         /// Keep this window's layout reads across launches, like `App::layout_seed`.
         layout_seed(seed: Option<crate::LayoutSeed>, keep: impl FnMut(crate::LayoutSeed) + 'static);
         /// Draw every frame of this window through `compositor`, like `App::compositor`.

@@ -552,3 +552,115 @@ fn fallback_notice_formats_single_and_multiple_overflows() {
     let many = fallback_notice(2, 6, 4);
     assert!(many.contains("2 of 6") && many.contains("5..=6") && many.contains("limit 4"), "{many}");
 }
+
+#[test]
+fn apps_read_the_frames_material_rects_without_native_views() {
+    let rt = runtime(one_card, false);
+    assert_eq!(rt.system_materials(), rt.paint.materials());
+    let (draws, scale) = present_draws(rt.core());
+    let frame = MaterialFrame::new(draws, scale);
+    assert_eq!(frame.scale(), 2.0);
+    assert_eq!(frame.draws().len(), 1);
+    assert_eq!(frame.draws()[0].points(frame.scale()), ([30.0, 20.0, 120.0, 60.0], 18.0));
+}
+
+/// Contract for an overlay driving an external backdrop from `ConfiguredOverlay::on_materials`:
+/// - called on every animating frame (both plain and under `El::cache()`);
+/// - never called once the overlay rests (no frames drawn at rest);
+/// - always lists exactly one entry while the pill is visible;
+/// - rect matches the element's exact box (including spring overshoot);
+/// - remains listed every frame under `El::cache()` even while elided as a resident cache;
+/// - `announce` is a zero-work no-op when no hook is set.
+#[test]
+fn on_materials_contract_animating_rest_exact_box_and_under_cache() {
+    use std::{cell::RefCell, rc::Rc};
+
+    fn pill_view(s: &(bool, bool, f32), _: &mut Cx<(bool, bool, f32)>) -> El {
+        let (expanded, cached, dot_x) = *s;
+        let (w, h) = if expanded { (388.0, 120.0) } else { (270.0, 40.0) };
+        let pill = el()
+            .key("pill")
+            .absolute(16.0, 12.0)
+            .size(w, h)
+            .radius(20.0)
+            .system_material(SystemMaterial::Glass)
+            .motion(crate::Spring::new(0.30, 0.28));
+        let host = if cached {
+            el().key("cache-wrap").size(440.0, 160.0).cache().child(pill)
+        } else {
+            el().key("plain-wrap").size(440.0, 160.0).child(pill)
+        };
+        el().size(480.0, 200.0)
+            .child(host)
+            .child(el().key("dot").absolute(dot_x, 170.0).size(8.0, 8.0).fill(Color::WHITE))
+    }
+
+    // No hook set: announce does nothing.
+    let mut no_hook: Option<OnMaterials> = None;
+    let plain = runtime(one_card, false);
+    announce(&mut no_hook, plain.core());
+
+    for cached in [false, true] {
+        let mut rt = Runtime::new((false, cached, 0.0_f32), pill_view, (480.0, 200.0), Env { scale: 1.0, system_dark: true });
+        let calls: Rc<RefCell<Vec<Vec<[f32; 4]>>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = calls.clone();
+        let mut hook: Option<OnMaterials> = Some(Box::new(move |frame: MaterialFrame<'_>| {
+            log.borrow_mut().push(frame.draws().iter().map(|d| d.rect).collect());
+        }));
+
+        // Initial settled frame: exact compact box 270x40.
+        rt.frame(0.0);
+        announce(&mut hook, rt.core());
+        assert_eq!(calls.borrow().last().unwrap().as_slice(), &[[16.0, 12.0, 270.0, 40.0]]);
+
+        // Expand pill on Spring(0.30, 0.28): called on every animating frame, always 1 entry,
+        // matches element box exactly (with visible overshoot past 388x120), settles at 388x120.
+        rt.update(|s, _| s.0 = true);
+        let mut anim_frames = 0usize;
+        let mut saw_overshoot = false;
+        for _ in 0..240 {
+            rt.frame(1.0 / 120.0);
+            announce(&mut hook, rt.core());
+            let last = calls.borrow().last().unwrap().clone();
+            assert_eq!(last.len(), 1, "cached={cached}: always exactly 1 entry while visible");
+            let pill_info = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("pill")).unwrap();
+            let painted_pill = rt.instances.iter().find(|q| q.params[1] == KIND_RECT && q.rect[0] == 16.0 && q.rect[1] == 12.0).unwrap();
+            assert_eq!(last[0], painted_pill.rect, "cached={cached}: material rect must match painted pill quad exactly");
+            for k in 0..4 {
+                assert!((last[0][k] - pill_info.rect[k]).abs() <= 1.0, "cached={cached}: rect[{k}] {:?} vs {:?}", last[0], pill_info.rect);
+            }
+            if last[0][2] > 388.0 {
+                saw_overshoot = true;
+            }
+            if rt.animating {
+                anim_frames += 1;
+            } else {
+                break;
+            }
+        }
+        assert!(anim_frames >= 10, "cached={cached}: spring ran across multiple frames ({anim_frames})");
+        assert!(saw_overshoot, "cached={cached}: underdamped Spring(0.30, 0.28) shows overshoot");
+        assert_eq!(calls.borrow().last().unwrap().as_slice(), &[[16.0, 12.0, 388.0, 120.0]]);
+
+        // At rest: runtime asks for no more frames, so overlay loop does not present or invoke hook.
+        let calls_at_rest = calls.borrow().len();
+        assert!(!rt.animating && !rt.stale() && !rt.live_pending());
+        assert_eq!(calls.borrow().len(), calls_at_rest);
+
+        // Under El::cache(): once settled and resident, animating an unrelated sibling outside the
+        // cache reuses the cached raster AND still delivers the exact 388x120 pill rect every frame.
+        if cached {
+            if let Some(gpu) = Gpu::test_headless() {
+                let mut renderer = Renderer::new(&gpu.device, crate::render::OFFSCREEN_FORMAT);
+                renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (480, 200));
+            }
+            rt.update(|s, tx| { s.2 = 200.0; tx.motion(crate::Spring::new(0.2, 0.0)); });
+            for _ in 0..3 {
+                rt.frame(1.0 / 60.0);
+                assert!(rt.animating);
+                announce(&mut hook, rt.core());
+                assert_eq!(calls.borrow().last().unwrap().as_slice(), &[[16.0, 12.0, 388.0, 120.0]]);
+            }
+        }
+    }
+}

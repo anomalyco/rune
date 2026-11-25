@@ -311,7 +311,10 @@ pub(crate) struct DragOutStart {
 pub(crate) type DragEnds = std::rc::Rc<std::cell::RefCell<Vec<(String, DragOutcome)>>>;
 
 pub(crate) fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
-    if width == 0 || height == 0 || rgba.len() != (width as usize) * (height as usize) * 4 { return None; }
+    let expected = usize::try_from(width)
+        .ok()
+        .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)?.checked_mul(4)))?;
+    if width == 0 || height == 0 || rgba.len() != expected { return None; }
     let mut out = Vec::new();
     let mut enc = png::Encoder::new(&mut out, width, height);
     enc.set_color(png::ColorType::Rgba);

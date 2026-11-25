@@ -265,3 +265,149 @@ fn closing_tab_collapses_its_slot_without_overlapping_neighbours() {
     run.step_n(4);
     rune::motion_gate::gate_rows(vec![("tab-strip/close".to_owned(), Box::new(move || run.rec) as rune::motion_gate::Job)], &[]);
 }
+
+/// Four tabs with a break before the first and one before the third.
+#[derive(Default)]
+struct Broken {
+    orientation: TabOrientation,
+    drag: TabDragState,
+    moves: Vec<(usize, usize)>,
+}
+
+/// A vertical break is 20 points high, a horizontal one a point wide.
+fn broken_view(s: &Broken, _: &mut rune::Cx<Broken>) -> El {
+    let k = Kit::neutral(true);
+    let vertical = s.orientation == TabOrientation::Vertical;
+    let mark = |key: &'static str| if vertical { rune::el().key(key).w_full().h(20.0) } else { rune::el().key(key).size(1.0, 16.0) };
+    let length = if vertical { 20.0 } else { 1.0 };
+    let tabs = (0..4).map(|i| TabItem::new(format!("tab{i}"), format!("Tab {i}")));
+    let strip = TabStrip::new("strip", s.orientation)
+        .tabs(tabs)
+        .viewport_width(Some(600.0))
+        .breaks([TabBreak::new("head", 0, mark("head"), length), TabBreak::new("mid", 2, mark("mid"), length)])
+        .drag_state(&s.drag, |s: &mut Broken| &mut s.drag)
+        .on_reorder(|s: &mut Broken, r, _| s.moves.push((r.from, r.to)))
+        .build(&k);
+    col().size(600.0, 400.0).child(strip)
+}
+
+fn broken(orientation: TabOrientation) -> rune::Runtime<Broken> {
+    let mut rt = rune::Runtime::new(Broken { orientation, ..Broken::default() }, broken_view, (600.0, 400.0), rune::Env::new(true, 1.0));
+    for _ in 0..40 {
+        rt.frame(1.0 / 60.0);
+    }
+    rt
+}
+
+/// Where the element keyed `key` is laid out.
+fn rect_of(rt: &rune::Runtime<Broken>, key: &str) -> [f32; 4] {
+    rt.elements().into_iter().find(|e| e.key.as_deref() == Some(key)).unwrap_or_else(|| panic!("{key} is in the strip")).rect
+}
+
+#[test]
+fn a_break_stands_before_its_tab_with_the_strips_gap_on_each_side() {
+    // Across a titlebar: the gap, the break, the gap.
+    let rt = broken(TabOrientation::Horizontal);
+    let at = |key: &str| rect_of(&rt, key);
+    let (head, mid) = (at("head"), at("mid"));
+    let tabs: Vec<[f32; 4]> = (0..4).map(|i| at(&format!("t-tab{i}"))).collect();
+    let near = |a: f32, b: f32, what: &str| assert!((a - b).abs() < 0.5, "{what}: {a} against {b}");
+    near(tabs[0][0], head[0] + 1.0 + 6.0, "the first tab stands a gap after the leading break");
+    near(tabs[1][0], tabs[0][0] + tabs[0][2] + 6.0, "tabs with no break between them keep the gap");
+    near(mid[0], tabs[1][0] + tabs[1][2] + 6.0, "the break stands a gap after the tab before it");
+    near(tabs[2][0], mid[0] + 1.0 + 6.0, "and a gap before the tab after it");
+    near(tabs[3][0] + tabs[3][2], 600.0, "the tabs share what the breaks leave of the strip");
+
+    // Down a sidebar a row reaches half the gap toward whatever stands beside it, and the break
+    // pads the other half: a 28 point row a gap from the break on either side.
+    let rt = broken(TabOrientation::Vertical);
+    let at = |key: &str| rect_of(&rt, key);
+    let (head, mid) = (at("head"), at("mid"));
+    let rows: Vec<[f32; 4]> = (0..4).map(|i| at(&format!("t-tab{i}"))).collect();
+    near(rows[0][1], head[1] + 20.0 + 1.5, "the first row reaches up to half a gap under the leading break");
+    near(rows[0][3], 1.5 + 28.0 + 1.5, "and is a row with half a gap either side");
+    near(rows[1][1], rows[0][1] + rows[0][3], "rows with no break between them touch, as before");
+    near(mid[1], rows[1][1] + rows[1][3] + 1.5, "the break stands half a gap under the reach of the row above it");
+    near(rows[2][1], mid[1] + 20.0 + 1.5, "and half a gap over the reach of the row under it");
+    near(rows[3][3], 1.5 + 28.0, "the last row reaches no further down, as before");
+}
+
+#[test]
+fn a_drag_stops_at_a_break() {
+    for orientation in [TabOrientation::Horizontal, TabOrientation::Vertical] {
+        let mut rt = broken(orientation);
+        let axis = usize::from(orientation == TabOrientation::Vertical);
+        // Drags tab `index` 300 points along the strip, either way, and lets go.
+        let drag = |rt: &mut rune::Runtime<Broken>, index: usize, way: f32| {
+            let r = rect_of(rt, &format!("t-tab{index}"));
+            let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+            rt.pointer_move(x, y);
+            rt.pointer_down(x, y);
+            let mut to = (x, y);
+            for step in [10.0, 100.0, 300.0] {
+                to = if axis == 0 { (x + way * step, y) } else { (x, y + way * step) };
+                rt.pointer_move(to.0, to.1);
+                rt.frame(1.0 / 60.0);
+            }
+            rt.pointer_up(to.0, to.1);
+            for _ in 0..40 {
+                rt.frame(1.0 / 60.0);
+            }
+        };
+        drag(&mut rt, 0, 1.0);
+        assert_eq!(rt.state.moves, [(0, 1)], "{orientation:?}: the first tab goes no further than the break before the third");
+        drag(&mut rt, 2, -1.0);
+        assert_eq!(rt.state.moves, [(0, 1)], "{orientation:?}: the third tab stays behind the break before it");
+        drag(&mut rt, 3, -1.0);
+        assert_eq!(rt.state.moves, [(0, 1), (3, 2)], "{orientation:?}: the last tab goes as far as the break before the third");
+    }
+}
+
+#[test]
+fn arrow_keys_cross_a_break() {
+    #[derive(Default)]
+    struct S {
+        vertical: bool,
+        drag: TabDragState,
+        selected: Vec<String>,
+    }
+    fn view(s: &S, _: &mut rune::Cx<S>) -> El {
+        let k = Kit::neutral(true);
+        let tabs = (0..4).map(|i| TabItem::new(format!("tab{i}"), format!("Tab {i}")));
+        let (orientation, mark, length) = match s.vertical {
+            true => (TabOrientation::Vertical, rune::el().key("mid").w_full().h(20.0), 20.0),
+            false => (TabOrientation::Horizontal, rune::el().key("mid").size(1.0, 16.0), 1.0),
+        };
+        let strip = TabStrip::new("strip", orientation)
+            .tabs(tabs)
+            .viewport_width(Some(600.0))
+            .breaks([TabBreak::new("mid", 2, mark, length)])
+            .drag_state(&s.drag, |s: &mut S| &mut s.drag)
+            .on_select(|s: &mut S, id, _| s.selected.push(id.to_owned()))
+            .build(&k);
+        col().size(600.0, 400.0).child(strip)
+    }
+    for vertical in [false, true] {
+        let mut rt = rune::Runtime::new(S { vertical, ..S::default() }, view, (600.0, 400.0), rune::Env::new(true, 1.0));
+        for _ in 0..40 {
+            rt.frame(1.0 / 60.0);
+        }
+        // A press on the second tab, the last before the break, selects and focuses it.
+        let r = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("t-tab1")).expect("tab1").rect;
+        let (x, y) = (r[0] + r[2] / 2.0, r[1] + r[3] / 2.0);
+        rt.pointer_move(x, y);
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.selected, ["tab1"], "vertical: {vertical}");
+        rt.state.selected.clear();
+        // The arrow takes the focus, and with it the selection, to the third tab, past the break.
+        rt.key(rune::KeyEvent { key: if vertical { rune::Key::Down } else { rune::Key::Right }, mods: rune::Mods::default() });
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.selected, ["tab2"], "vertical: {vertical}: the arrow crosses the break");
+        // And back again.
+        rt.key(rune::KeyEvent { key: if vertical { rune::Key::Up } else { rune::Key::Left }, mods: rune::Mods::default() });
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.state.selected, ["tab2", "tab1"], "vertical: {vertical}: and crosses it back");
+    }
+}

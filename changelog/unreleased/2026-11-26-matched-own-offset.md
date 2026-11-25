@@ -1,0 +1,1 @@
+- Motion: `El::matched` flights now include the source element's own `El::offset` / `El::live_offset` in the flight origin and blend the target element's own offset over travel instead of applying it at `t = 0`, including mid-flight re-matches (which also preserve the source flight's own scale).

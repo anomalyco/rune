@@ -158,7 +158,7 @@ fn release_stops_it_and_leaves_no_wake() {
 fn escape_stops_it_and_keeps_the_selection() {
     let escapes: [fn(&mut Runtime<List>); 2] = [
         |rt| rt.key(KeyEvent { key: Key::Escape, mods: Mods::default() }),
-        |rt| rt.physical_input(PhysicalInput::Key { key: crate::PhysicalKeyCode::Escape, mods: Mods::default(), pressed: true, repeat: false }),
+        |rt| rt.physical_input(PhysicalInput::Key { key: crate::PhysicalKeyCode::Escape, mods: Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default() }),
     ];
     for (list, ticks) in [(PLAIN, 3), (VIRTUAL, 3), (VIRTUAL, 30)] {
         for escape in escapes {

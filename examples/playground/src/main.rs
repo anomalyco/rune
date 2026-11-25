@@ -15,6 +15,7 @@ mod ambient_fps_story;
 mod any_handlers;
 mod any_press;
 mod emoji_family_story;
+mod haptics_story;
 mod inline_box_story;
 mod mount;
 mod pick;
@@ -22,6 +23,7 @@ mod pointer_lock;
 mod reveal_fps_story;
 mod scroll_anchor_story;
 mod text_indent_story;
+mod virtual_items_story;
 
 use std::time::Duration;
 
@@ -649,6 +651,7 @@ fn main() {
                 })
                 .story(Story::new("Lists/Every device", every_device, devices).stage(Stage::Scroll))
                 .story(scroll_anchor_story::anchor_story())
+                .story(virtual_items_story::story())
                 .story(
                     Story::new("Layout/Display scale", scale_readout_init, scale_readout_view)
                         .trigger('z', "Cycle zoom", |s, _| {
@@ -742,6 +745,7 @@ fn main() {
                         .variant("25 / 75 · centred col", |s| { s.align = 1; s.split = 0.25; })
                         .variant("65 / 35 · row center_y", |s| { s.align = 3; s.split = 0.65; }),
                 )
+                .story(haptics_story::story())
                 .story(text_indent_story::story())
                 .story(inline_box_story::story())
                 .story(emoji_family_story::story())

@@ -289,6 +289,8 @@ fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating()
             pressed: true,
             repeat: true,
             unhandled: None,
+            text: None,
+            consumed_mods: Default::default(),
         })
     };
     assert!(redraw);
@@ -306,6 +308,8 @@ fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating()
             pressed: false,
             repeat: false,
             unhandled: None,
+            text: None,
+            consumed_mods: Default::default(),
         })
     };
     assert!(!redraw);
@@ -321,6 +325,8 @@ fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating()
             pressed: true,
             repeat: false,
             unhandled: None,
+            text: None,
+            consumed_mods: Default::default(),
         })
     };
     assert!(redraw);
@@ -345,6 +351,8 @@ fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating()
             pressed: true,
             repeat: false,
             unhandled: None,
+            text: None,
+            consumed_mods: Default::default(),
         })
     };
     assert!(redraw);
@@ -365,6 +373,8 @@ fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating()
             pressed: true,
             repeat: false,
             unhandled: None,
+            text: None,
+            consumed_mods: Default::default(),
         })
     };
     assert!(redraw);
@@ -387,6 +397,8 @@ fn keyboard_core_handles_unidentified_repeat_paste_fallback_and_release_gating()
             pressed: false,
             repeat: false,
             unhandled: None,
+            text: None,
+            consumed_mods: Default::default(),
         })
     };
     assert!(redraw);

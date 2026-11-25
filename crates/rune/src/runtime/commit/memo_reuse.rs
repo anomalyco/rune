@@ -164,7 +164,7 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
         surface, surface_place, border_bottom, border_sides, border_layout, border_dash, border_dash_phase, shadows, blur_motion,
         clip, clip_radius, clip_corners, cutouts, icon, icon_inked, icon_one_color, gradient, radial, outline, shape,
         grid, pixels, pixels_fit, pixels_wrap, pixels_tint, image_filter, effect, backdrop_blur, hover_motion, hover_within, press_motion,
-        group_opacity, group_color, hover_alone, hover_share, icon_turn, cache_key, offset_motion, scale_motion,
+        group_opacity, group_color, hover_alone, hover_share, hover_pointer_only, group_focus, group_motion, icon_turn, cache_key, offset_motion, scale_motion,
         origin, rotate_motion, child_exit, enter_delay, motion_intent, instant_motion, clip_to_content, flight_crop, flight_in_place,
         hold_landing, row_face, press_color, hover_fill, press_fill, hover_border, press_border, paint_contain, motion_snaps, hairline, offset, paint_alpha, layer_opacity, blur, rotate, mark, mirror_rtl, paint_order,
     } = b;
@@ -203,6 +203,12 @@ fn same_visual_cold(a: &crate::el::VisualCold, b: &crate::el::VisualCold) -> boo
             _ => false,
         }
         && a.group_opacity == *group_opacity && a.group_color == *group_color && a.hover_alone == *hover_alone && a.hover_share == *hover_share
+        && a.hover_pointer_only == *hover_pointer_only && a.group_focus == *group_focus
+        && match (&a.group_motion, group_motion) {
+            (None, None) => true,
+            (Some(x), Some(y)) => Rc::ptr_eq(x, y) || **x == **y,
+            _ => false,
+        }
         && a.icon_turn == *icon_turn && a.cache_key == *cache_key
         && opt_box_eq(&a.offset_motion, offset_motion) && opt_box_eq(&a.scale_motion, scale_motion)
         && a.origin == *origin && opt_box_eq(&a.rotate_motion, rotate_motion)
@@ -229,7 +235,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
     let crate::el::ElCold {
         focus, looping, loop_times, trace_name, trace_namespace, role, label, live, above, above_boundary, motion, frame_motion, opacity_motion, lead,
         animated_changes, option_as_alt, window_resize, transition, transition_motion, enter_in_instant, matched, matched_motion, scroll, scroll_axes, sticky, scroll_edges, growth, virtual_estimate, virtual_rows,
-        virtual_rows_version, virtual_rows_append_only, virtual_overscan, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, selection_enabled, wheel_scrolls, on_path, data,
+        virtual_rows_version, virtual_rows_append_only, virtual_overscan, virtual_items, glide, input, time_scale, help, help_cut, help_side, help_open, material, aspect_fit, list_disc, a11y, selection_enabled, wheel_scrolls, on_path, data,
         expanded_memo: _,
         #[cfg(debug_assertions)]
         scroll_source: _,
@@ -237,6 +243,8 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         virtual_source: _,
         #[cfg(debug_assertions)]
         virtual_append_source: _,
+        #[cfg(debug_assertions)]
+        virtual_items_source: _,
     } = b;
     crate::cold::Cold::ptr_eq(&a.focus, focus)
         && opt_box_eq(&a.looping, looping)
@@ -271,6 +279,7 @@ fn same_el_cold(a: &crate::el::ElCold, b: &crate::el::ElCold) -> bool {
         && a.virtual_rows_version == *virtual_rows_version
         && a.virtual_rows_append_only == *virtual_rows_append_only
         && a.virtual_overscan == *virtual_overscan
+        && opt_rc_eq(&a.virtual_items, virtual_items)
         && a.glide == *glide
         && a.input.is_none()
         && input.is_none()
@@ -355,6 +364,7 @@ fn same_handlers(
         drag_out,
         drag_threshold,
         touch_at_once,
+        edge_drags,
         press_on_down,
         on_drag_start,
         on_drag_end,
@@ -410,6 +420,11 @@ fn same_handlers(
         && opt_rc_eq(&a.drag_out, drag_out)
         && a.drag_threshold == *drag_threshold
         && a.touch_at_once == *touch_at_once
+        && match (&a.edge_drags, edge_drags) {
+            (None, None) => true,
+            (Some(ea), Some(eb)) => ea.same(eb),
+            _ => false,
+        }
         && a.press_on_down == *press_on_down
         && opt_rc_eq(&a.on_drag_start, on_drag_start)
         && opt_rc_eq(&a.on_drag_end, on_drag_end)

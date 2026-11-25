@@ -184,37 +184,38 @@ impl Scene {
     fn rest_of(&self, i: usize, reduced: bool) -> Rect {
         let n = &self.nodes[i];
         let parent = n.parent;
+        let own = self.targets::<2>(i, prop::OFFSET.id).map_or(Vec2::ZERO, |v| Vec2::read_lanes(&v));
         let world = match n.path {
             Some(path) => {
                 let p = self.targets::<2>(i, prop::TRAVEL.id).unwrap_or([1.0, 1.0]);
                 let s = path.start.edges();
-                let e = path.end_local.translated(self.parent_target_origin(i)).edges();
+                let e = path.end_local.translated(self.parent_target_origin(i)).translated(own).edges();
                 let ed: [f32; 4] = core::array::from_fn(|k| s[k] + (e[k] - s[k]) * p[k % 2]);
                 Rect::from_edges(ed[0], ed[1], ed[2], ed[3])
             }
             None => {
                 let origin = if parent == NONE { Vec2::ZERO } else { self.rests[parent as usize].origin };
                 let local = self.targets::<4>(i, prop::FRAME.id).map_or(n.frame, |v| Rect::read_lanes(&v));
-                local.translated(origin)
+                local.translated(origin).translated(own)
             }
         };
         let p = self.targets::<1>(i, prop::PRESENCE.id).map_or(1.0, |v| v[0]);
         let (at0, at1) = n.presence.pair();
         let s = lerp_fx(at0, at1, p);
         let s = if reduced { [s[0], 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0] } else { s };
-        let own = self.targets::<2>(i, prop::OFFSET.id).map_or(Vec2::ZERO, |v| Vec2::read_lanes(&v));
-        world.translated(Vec2::new(own.x + s[2] + s[4] * world.w, own.y + s[3] + s[5] * world.h))
+        world.translated(Vec2::new(s[2] + s[4] * world.w, s[3] + s[5] * world.h))
     }
 
     fn compute(&mut self, i: usize, scale: f32, reduced: bool, own_dirty: bool, parent_dirty: bool) -> Presented {
         let parent = self.nodes[i].parent;
         let parent_origin = if parent == NONE { Vec2::ZERO } else { self.nodes[parent as usize].origin };
         let n = &self.nodes[i];
+        let own_offset = self.values(i, prop::OFFSET.id).map_or(Vec2::ZERO, Vec2::read_lanes);
         let world = match n.path {
             Some(path) => {
                 let p = self.values(i, prop::TRAVEL.id).map_or([1.0, 1.0], |v| [v[0], v[1]]);
                 let s = path.start.edges();
-                let e = path.end_local.translated(self.parent_target_origin(i)).edges();
+                let e = path.end_local.translated(self.parent_target_origin(i)).translated(own_offset).edges();
                 let ed: [f32; 4] = core::array::from_fn(|k| s[k] + (e[k] - s[k]) * p[k % 2]);
                 Rect::from_edges(ed[0], ed[1], ed[2], ed[3])
             }
@@ -234,16 +235,23 @@ impl Scene {
         let s = if reduced { [s[0], 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0] } else { s };
         let own_opacity = self.values(i, prop::OPACITY.id).map_or(n.opacity, |v| v[0]);
         let own_scale = self.values(i, prop::SCALE.id).map_or(1.0, |v| v[0]);
-        let own_offset = self.values(i, prop::OFFSET.id).map_or(Vec2::ZERO, Vec2::read_lanes);
-        let rotation = self.values(i, prop::ROTATION.id).map_or(0.0, |v| v[0]);
+        let own_rotation = self.values(i, prop::ROTATION.id).map_or(0.0, |v| v[0]);
+        let rotation = match n.path {
+            Some(Path { start_rotation: Some(sr), .. }) => {
+                let p = self.values(i, prop::TRAVEL.id).map_or([1.0, 1.0], |v| [v[0], v[1]]);
+                travel::blend_rotation(sr, own_rotation, 0.5 * (p[0] + p[1]))
+            }
+            _ => own_rotation,
+        };
         let own_blur = self.values(i, prop::BLUR.id).map_or(0.0, |v| v[0]);
         let radius = self.values(i, prop::RADIUS.id).map_or(n.radius, Corners::read_lanes);
         let fill = self.values(i, prop::FILL.id).map_or(n.fill, Color::read_lanes);
         let own_mask = self.values(i, prop::MASK.id).map_or(Sides::ZERO, Sides::read_lanes);
 
+        let applied_own = if n.path.is_some() { Vec2::ZERO } else { own_offset };
         let offset = Vec2::new(
-            own_offset.x + s[2] + s[4] * world.w,
-            own_offset.y + s[3] + s[5] * world.h,
+            applied_own.x + s[2] + s[4] * world.w,
+            applied_own.y + s[3] + s[5] * world.h,
         );
         let shown = world.translated(offset);
         let sc = (own_scale * s[1]).max(0.0);

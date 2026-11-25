@@ -20,7 +20,7 @@ pub(super) fn rgba(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
 
 /// Validates decoded dimensions and checked RGBA8 byte size against [`crate::MAX_SIDE`] and
 /// [`crate::MAX_ALLOC`] before allocating a conversion buffer.
-#[cfg_attr(not(any(test, all(feature = "avif", not(target_arch = "wasm32")))), allow(dead_code))]
+#[cfg(test)]
 pub(super) fn checked_rgba_bytes(w: usize, h: usize) -> Result<(u32, u32, usize), ImageError> {
     checked_rgba_bytes_with(w, h, limits::MAX_DIM, crate::MAX_ALLOC)
 }

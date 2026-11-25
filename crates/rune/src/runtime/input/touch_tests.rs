@@ -93,13 +93,13 @@ fn a_finger_past_the_slop_picks_one_mode_with_only_its_own_data() {
     let mut rt = rig();
     let list = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
     rt.touch(1, TouchPhase::Started, 100.0, 200.0, 0.0);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pending { scroll: Some(list) }), "pending, it holds the viewport under it");
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Pending { scroll: Some(list), edge: [None; 4] }), "pending, it holds the viewport under it");
     rt.touch(1, TouchPhase::Moved, 100.0, 150.0, 0.01);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pan { scroll: list, horizontal: false }));
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Pan { scroll: list, horizontal: false }));
     rt.touch(1, TouchPhase::Ended, 100.0, 150.0, 0.02);
     rt.touch(2, TouchPhase::Started, 20.0, 20.0, 1.0);
     rt.touch(2, TouchPhase::Moved, 60.0, 20.0, 1.01);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Drag), "on an element that drags it holds no viewport");
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Drag), "on an element that drags it holds no viewport");
 }
 
 #[derive(Default)]
@@ -159,10 +159,10 @@ fn a_touch_drag_past_slop_on_a_window_drag_region_emits_drag_once_and_resets_cle
     let mut rt = bar_rig();
     rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
     assert_eq!(rt.take_titlebar_action(), None);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::WindowDragPending));
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::WindowDragPending));
     // 10 pt move crosses TOUCH_SLOP (8 pt) and emits Drag once.
     rt.touch(1, TouchPhase::Moved, 260.0, 20.0, 0.02);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::WindowDragging));
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::WindowDragging));
     assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
     // Further moves emit nothing.
     rt.touch(1, TouchPhase::Moved, 280.0, 30.0, 0.04);
@@ -207,14 +207,14 @@ fn a_long_press_on_a_window_drag_region_opens_the_window_menu_and_never_drags() 
     rt.frame(0.0);
     rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
     let target = rt.core().primary_target(250.0, 20.0).map(|i| rt.tree.nodes[i].path.clone());
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::WindowDragPending), "target={target:?}");
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::WindowDragPending), "target={target:?}");
     assert_eq!(rt.pointer.touch.hold_deadline(), Some(LONG_PRESS));
     assert_eq!(rt.take_titlebar_action(), None);
     assert_eq!(rt.take_window_menu(), None);
     // Advance past LONG_PRESS (0.5 s) using the injected clock.
     rt.frame.test_clock_mut().unwrap().seek(0.55);
     rt.frame(0.55);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Menu), "clock={}", rt.core().clock);
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Menu), "clock={}", rt.core().clock);
     assert_eq!(rt.take_window_menu(), Some(WindowMenu::Pointer));
     // Moving after the menu opened must not emit Drag.
     rt.touch(1, TouchPhase::Moved, 280.0, 20.0, 0.6);
@@ -257,7 +257,7 @@ fn an_active_modal_blocks_touch_window_drag() {
     rt.update(|s, _| s.modal_open = true);
     rt.frame(1.0 / 60.0);
     rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
-    assert_eq!(rt.pointer.touch.finger.as_ref().map(|f| f.mode), Some(Mode::Pending { scroll: None }));
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Pending { scroll: None, edge: [None; 4] }));
     rt.touch(1, TouchPhase::Moved, 270.0, 20.0, 0.02);
     assert_eq!(rt.take_titlebar_action(), None);
     rt.touch(1, TouchPhase::Ended, 270.0, 20.0, 0.04);

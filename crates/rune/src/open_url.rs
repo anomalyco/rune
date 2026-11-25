@@ -85,12 +85,16 @@ impl crate::Tx {
     /// asked for outside a click or key press, which browsers block, and reports `Ok(())` for
     /// the rest. Headless runs and tests record the link and report `Ok(())`.
     ///
-    /// ```ignore
+    /// ```
+    /// # use rune::{Tx, el};
+    /// # struct App { link_error: Option<String> }
+    /// # let _ = el()
     /// .on_press_tx(|_: &mut App, tx: &mut Tx| {
     ///     let _ = tx.open_url_then("https://example.com/", |s: &mut App, result, _| {
     ///         s.link_error = result.err().map(|e| e.to_string());
     ///     });
     /// })
+    /// # ;
     /// ```
     pub fn open_url_then<S: 'static>(&mut self, url: &str, on_result: impl FnOnce(&mut S, Result<(), OpenUrlError>, &mut crate::Tx) + 'static) -> Result<(), OpenUrlError> {
         let url = check(url)?;

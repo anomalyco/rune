@@ -105,6 +105,47 @@ impl El {
         self.handlers.touch_at_once = true;
         self
     }
+    /// A finger that lands within `width` points of the window's `edge` (measured across
+    /// `[0, safe_inset + width]` using [`Runtime::set_safe_area`](crate::Runtime::set_safe_area)
+    /// or browser safe-area insets) and first moves mostly away from it, past the 8 pt touch slop,
+    /// drives this element's `f` as an [`El::on_drag`] would: `Down` where it landed, then
+    /// `Move`, then `Up` (check [`Drag::cancelled`] and [`Drag::edge`]). It wins over
+    /// everything under the finger: a child's `on_drag` or [`El::touch_drags_at_once`], a
+    /// scroll viewport's pan, a tap. A child's drag that already heard `Down` hears a cancelled
+    /// `Up`, and nothing is pressed. A first move along the edge or back toward it leaves the
+    /// touch to the content, as iOS's `UIScreenEdgePanGestureRecognizer` does. So an
+    /// [`El::touch_drags_at_once`] element inside a zone waits for the touch slop before it drags
+    /// (it still has no long press). If the element unmounts, turns inert, loses its handler, or
+    /// the gesture is cancelled by Escape, focus loss, a modal, or `cancel_pointer`, `f` hears
+    /// a cancelled `Phase::Up` just as `on_drag` does.
+    ///
+    /// One element may attach multiple edges independently (for example `Left` and `Right`),
+    /// and corners disambiguate by swipe direction. Put it on an ancestor of what's at the edge:
+    /// the app root for a drawer, an item page for a back swipe. Where several on the finger's
+    /// hit path take the same edge, the innermost wins; raised overlays and modals occlude
+    /// claimants beneath them. A mouse never starts an edge drag; once active, a second finger is
+    /// ignored while an unclaimed pending edge touch yields to a two-finger pinch/pan/rotate.
+    ///
+    /// On iOS a host defers system edge gestures with `preferredScreenEdgesDeferringSystemGestures`
+    /// (or SwiftUI `.defersSystemGestures(on:)`) and forwards `UIView.safeAreaInsets` through
+    /// [`Runtime::set_safe_area`](crate::Runtime::set_safe_area); on Android, use
+    /// `View.setSystemGestureExclusionRects` and `WindowInsets`.
+    ///
+    /// ```
+    /// # use rune::{Drag, Phase, SwipeEdge, col};
+    /// # struct App { drawer: f32 }
+    /// col().on_edge_drag(SwipeEdge::Left, 20.0, |s: &mut App, d: &mut Drag, _| {
+    ///     s.drawer = if d.phase == Phase::Up && d.cancelled() { 0.0 } else { d.dx.max(0.0) };
+    /// });
+    /// ```
+    pub fn on_edge_drag<S: 'static>(mut self, edge: SwipeEdge, width: f32, f: impl Fn(&mut S, &mut Drag, &mut Tx) + 'static) -> Self {
+        let w = if width.is_finite() { width.max(0.0) } else { 0.0 };
+        self.handlers
+            .edge_drags
+            .get_or_insert_with(Default::default)
+            .set(edge, w, Rc::new(move |s, d, tx| f(downcast::<S>(s), d, tx)));
+        self
+    }
     /// A menu button: a mouse's primary button runs [`El::on_press`] as it goes down, and that
     /// press's release runs nothing (the web's Kobalte `Menu.Trigger` opens on `pointerdown`).
     /// A press that's then cancelled or released elsewhere has already run it. A key, a screen
@@ -138,6 +179,29 @@ impl El {
     pub fn on_drag_end<S: 'static>(mut self, f: impl Fn(&mut S, crate::DragOutcome, &mut Tx) + 'static) -> Self {
         self.handlers.on_drag_end = Some(Rc::new(move |s, outcome, tx| f(downcast::<S>(s), outcome, tx)));
         self
+    }
+}
+
+/// The window edge an [`El::on_edge_drag`] swipe starts from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SwipeEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl SwipeEdge {
+    pub(crate) const ALL: [Self; 4] = [Self::Left, Self::Right, Self::Top, Self::Bottom];
+
+    #[inline]
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::Left => 0,
+            Self::Right => 1,
+            Self::Top => 2,
+            Self::Bottom => 3,
+        }
     }
 }
 
@@ -177,6 +241,8 @@ pub struct Drag {
     pub(crate) window: [f32; 2],
     /// The pointer in desktop pixels, when a native window hosts the view.
     pub(crate) screen: Option<(i32, i32)>,
+    /// The window edge an [`El::on_edge_drag`] swipe started from (`None` for [`El::on_drag`]).
+    pub(crate) edge: Option<SwipeEdge>,
 }
 
 impl Drag {
@@ -184,6 +250,28 @@ impl Drag {
     /// pointer was taken away). Put back whatever the drag moved.
     pub fn cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    /// Which window edge started this gesture inside [`El::on_edge_drag`], or `None` inside
+    /// [`El::on_drag`].
+    ///
+    /// ```
+    /// # use rune::{Cx, Drag, El, Env, Runtime, SwipeEdge, TouchPhase, col};
+    /// # fn view(_: &Option<SwipeEdge>, _: &mut Cx<Option<SwipeEdge>>) -> El {
+    /// #     col().size(200.0, 200.0).on_edge_drag(SwipeEdge::Left, 20.0, |s: &mut Option<SwipeEdge>, d: &mut Drag, _| {
+    /// #         *s = d.edge();
+    /// #     })
+    /// # }
+    /// let mut rt = Runtime::new(None, view, (200.0, 200.0), Env::new(true, 1.0));
+    /// rt.frame(0.0);
+    /// rt.touch(1, TouchPhase::Started, 5.0, 100.0, 0.0);
+    /// rt.touch(1, TouchPhase::Moved, 40.0, 100.0, 0.02);
+    /// rt.touch(1, TouchPhase::Ended, 40.0, 100.0, 0.04);
+    /// rt.frame(1.0 / 60.0);
+    /// assert_eq!(rt.state, Some(SwipeEdge::Left));
+    /// ```
+    pub fn edge(&self) -> Option<SwipeEdge> {
+        self.edge
     }
 
     /// The resolved layout direction of the dragged element (`Direction::Ltr` or
@@ -409,9 +497,11 @@ impl El {
     ///   back to `Confined`; `zwp_relative_pointer_v1` deltas are already in logical surface units.
     /// - **X11**: `Locked` is unsupported so it falls back to `CursorGrabMode::Confined`
     ///   (`xcb_grab_pointer`); XInput2 `RawMotion` counts are divided by `scale_factor()`.
-    /// - **Web**: inside the primary press user gesture, calls
-    ///   `canvas.requestPointerLock({ unadjustedMovement: true })` and caches a fallback to plain
-    ///   `canvas.requestPointerLock()` if the browser rejects with `NotSupportedError`.
+    /// - **Web**: inside the primary press user gesture, calls plain `canvas.requestPointerLock()`
+    ///   synchronously so the first click never depends on an asynchronous retry; once
+    ///   `pointerlockchange` confirms the lock, upgrades in place to `{ unadjustedMovement: true }`
+    ///   where supported (caching `NotSupportedError` so the plain lock stays intact and later
+    ///   locks skip the upgrade).
     ///   [`Cx::pointer_locked`](crate::Cx::pointer_locked) stays `false` until the browser grants
     ///   lock (`pointerlockchange`), relative deltas come from `PointerEvent.movementX`/`movementY`
     ///   in CSS pixels (logical points, independent of `Cx::zoom`), and browser-driven exits

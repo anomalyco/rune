@@ -92,12 +92,14 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     var fl = 0u;
     var rim = 0.0;
     var emissive = false;
+    var unlit = false;
     if (id > 0u) {
         let pr = prims[id - 1u];
         fl = flags_of(pr);
         gloss = pr.mat.x;
         rough = pr.mat.y;
         emissive = (fl & F_EMIT) != 0u;
+        unlit = (fl & F_UNLIT) != 0u;
         if ((fl & F_RAISED) != 0u) {
             let bw = max(pr.z.z, 0.5);
             let x = clamp(-sd / bw, 0.0, 1.0);
@@ -195,9 +197,13 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     if (emissive) {
         col = base.rgb * max(lightf, vec3<f32>(1.0)) + spec * 0.25;
     }
+    if (unlit) {
+        col = base.rgb;
+        spec = vec3<f32>(0.0);
+    }
 
     // Text: lit like the surface under it, but clamped so shadows never crush it and highlights never wash it.
-    let tf = mix(vec3<f32>(1.0), clamp(lightf, vec3<f32>(F.text.x), vec3<f32>(F.text.y)), F.text.z);
+    let tf = select(mix(vec3<f32>(1.0), clamp(lightf, vec3<f32>(F.text.x), vec3<f32>(F.text.y)), F.text.z), vec3<f32>(1.0), unlit);
     col = col * (1.0 - text.a) + text.rgb * tf + spec * text.a * F.text.w;
     col = col + airc * (1.0 - 0.6 * text.a);
 

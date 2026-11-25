@@ -1,0 +1,1 @@
+- rune-light: `Prim::unlit` (`FLAG_UNLIT`) draws a surface at its designed colour, with no ambient, direct light, GI or specular on its own pixels or the text on it. Paired with `Prim::emissive`, a glowing element still lights its neighbours but keeps its hue under a nearby lamp instead of washing toward white.

@@ -93,6 +93,7 @@ impl RuntimeCore {
         }
         self.fill_visible_by_line(i, r, exact_off, sc, cover, scale_motion, rest, gliding, shown);
         let n = &self.tree.nodes[i];
+        let group = group_lit(&self.scene, n, group);
         let text_tint = |c: Color| paint_tracks::press_tint(paint_tracks::group_tint(n, c, group), press_to, pressed);
         if let Some(shape) = &n.vis.shape {
             // At rest a shape draws from its exact box's origin rounded to the device grid, at its
@@ -1047,7 +1048,7 @@ impl RuntimeCore {
             let mut widths = fade;
             let mut origins = fade_origin;
             if spec.truncate_fade && overflows {
-                let width = (spec.style.size * spec.fade_em * sc * s).min((bounds[2] - bounds[0]).max(0.0)).clamp(0.0, 65504.0);
+                let width = (spec.style.size * spec.cold.fade_em * sc * s).min((bounds[2] - bounds[0]).max(0.0)).clamp(0.0, 65504.0);
                 // The fade is where the text is cut: the end of its own paragraph, which runs out
                 // past the box on that side. An Arabic title in a left-to-right row fades on the
                 // left and keeps its first words whole; a Latin one in a right-to-left row on the

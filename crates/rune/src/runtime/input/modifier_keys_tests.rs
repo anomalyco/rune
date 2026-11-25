@@ -18,7 +18,7 @@ fn view(s: &Keys, _: &mut Cx<Keys>) -> El {
         .child(el().key("recorder").size(100.0, 40.0).focusable(true)
             .on_physical_input(|s: &mut Keys, ev, _| {
                 if matches!(ev, PhysicalInput::FocusLost) { s.focus_lost += 1; }
-                if s.recording { s.recorded.push(*ev); }
+                if s.recording { s.recorded.push(ev.clone()); }
                 s.recording
             }))
 }
@@ -39,7 +39,7 @@ fn click(rt: &mut Runtime<Keys>, key: &str) {
 }
 /// A physical modifier key, as hosts send it: `mods` from before the change, like macOS.
 fn modifier(rt: &mut Runtime<Keys>, code: Code, pressed: bool, mods: Mods) -> bool {
-    let redraw = rt.physical_with_fallback(PhysicalInput::Key { key: code, mods, pressed, repeat: false }, None);
+    let redraw = rt.physical_with_fallback(PhysicalInput::Key { key: code, mods, pressed, repeat: false, text: None, consumed_mods: Default::default() }, None);
     rt.frame(0.0);
     redraw
 }
@@ -89,7 +89,7 @@ fn a_held_modifier_then_a_letter_is_the_usual_chord() {
     modifier(&mut rt, code, true, Mods::default());
     assert_eq!(rt.state.app[0].mods.cmd, true);
     assert_eq!(rt.state.chords, 0, "the modifier alone is no chord");
-    rt.physical_with_fallback(PhysicalInput::Key { key: Code::KeyK, mods: cmd, pressed: true, repeat: false },
+    rt.physical_with_fallback(PhysicalInput::Key { key: Code::KeyK, mods: cmd, pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
         Some(KeyEvent { key: Key::Command('k'), mods: cmd }));
     rt.frame(0.0);
     assert_eq!(rt.state.app[1], KeyEvent { key: Key::Command('k'), mods: cmd });
@@ -97,7 +97,7 @@ fn a_held_modifier_then_a_letter_is_the_usual_chord() {
     // Shift held types capitals in a field as before.
     click(&mut rt, "field");
     modifier(&mut rt, Code::ShiftRight, true, Mods::default());
-    rt.physical_with_fallback(PhysicalInput::Key { key: Code::KeyA, mods: SHIFT, pressed: true, repeat: false },
+    rt.physical_with_fallback(PhysicalInput::Key { key: Code::KeyA, mods: SHIFT, pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
         Some(KeyEvent { key: Key::Text("A".into()), mods: SHIFT }));
     rt.frame(0.0);
     assert_eq!(rt.state.edit.text, "A");
@@ -110,7 +110,7 @@ fn modifier_keys_never_fire_chords_insert_text_or_repeat() {
     rt.state.app.clear();
     for code in [Code::SuperLeft, Code::ControlLeft, Code::AltLeft, Code::ShiftLeft, Code::Fn] {
         modifier(&mut rt, code, true, Mods::default());
-        rt.physical_with_fallback(PhysicalInput::Key { key: code, mods: Mods::default(), pressed: true, repeat: true }, None);
+        rt.physical_with_fallback(PhysicalInput::Key { key: code, mods: Mods::default(), pressed: true, repeat: true, text: None, consumed_mods: Default::default() }, None);
         rt.frame(0.0);
         modifier(&mut rt, code, false, Mods::default());
     }
@@ -191,7 +191,7 @@ fn a_recorder_takes_modifiers_first_and_on_key_never_hears_half_of_what_it_took(
     // Recording ⌥K: the recorder takes every key, and on_key hears none of it.
     modifier(&mut rt, Code::AltLeft, true, Mods::default());
     flags(&mut rt, ALT);
-    rt.physical_with_fallback(PhysicalInput::Key { key: Code::KeyK, mods: ALT, pressed: true, repeat: false },
+    rt.physical_with_fallback(PhysicalInput::Key { key: Code::KeyK, mods: ALT, pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
         Some(KeyEvent { key: Key::Text("k".into()), mods: ALT }));
     rt.frame(0.0);
     rt.state.recording = false;
@@ -257,7 +257,7 @@ fn a_focus_move_inside_the_window_keeps_modifiers_held() {
 
 #[test]
 fn windows_altgr_clearing_control_and_alt_is_no_release() {
-    let key = |key, pressed, mods| PhysicalInput::Key { key, mods, pressed, repeat: false };
+    let key = |key, pressed, mods| PhysicalInput::Key { key, mods, pressed, repeat: false, text: None, consumed_mods: Default::default() };
     let ctrl = Mods { ctrl: true, ..Mods::default() };
     let sent = |out: Vec<KeyEvent>| modifiers(&out);
     for altgr_clears in [true, false] {
@@ -300,7 +300,7 @@ fn ctrl_shift_direction_chord_requires_windows_rtl_layout_and_disarms_on_other_k
     modifier(&mut rt, Code::ControlLeft, true, Mods::default());
     modifier(&mut rt, Code::ShiftRight, true, ctrl);
     // Repeat on held Shift does not disarm the chord.
-    rt.physical_with_fallback(PhysicalInput::Key { key: Code::ShiftRight, mods: ctrl_shift, pressed: true, repeat: true }, None);
+    rt.physical_with_fallback(PhysicalInput::Key { key: Code::ShiftRight, mods: ctrl_shift, pressed: true, repeat: true, text: None, consumed_mods: Default::default() }, None);
     rt.frame(0.0);
     let redraw = modifier(&mut rt, Code::ShiftRight, false, ctrl_shift);
     modifier(&mut rt, Code::ControlLeft, false, ctrl);
@@ -342,7 +342,7 @@ fn ctrl_shift_direction_chord_requires_windows_rtl_layout_and_disarms_on_other_k
     modifier(&mut rt, Code::ControlLeft, true, Mods::default());
     modifier(&mut rt, Code::ShiftRight, true, ctrl);
     rt.physical_with_fallback(
-        PhysicalInput::Key { key: Code::KeyP, mods: ctrl_shift, pressed: true, repeat: false },
+        PhysicalInput::Key { key: Code::KeyP, mods: ctrl_shift, pressed: true, repeat: false, text: None, consumed_mods: Default::default() },
         Some(KeyEvent { key: Key::Command('p'), mods: ctrl_shift }),
     );
     rt.frame(0.0);
@@ -367,4 +367,81 @@ fn ctrl_shift_direction_chord_requires_windows_rtl_layout_and_disarms_on_other_k
     modifier(&mut rt, Code::ShiftRight, false, ctrl_shift);
     modifier(&mut rt, Code::ControlLeft, false, ctrl);
     assert_eq!(rt.state.edit.forced_dir(), None, "focus move must disarm a pending chord");
+}
+
+#[test]
+fn on_focus_lost_observes_without_ending_held_modifiers_silently() {
+    #[derive(Default)]
+    struct S { app: Vec<KeyEvent>, lost: usize, physical: usize }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        col().size(300.0, 200.0)
+            .child(el().key("field").size(100.0, 40.0).focusable(true)
+                .on_physical_input(|s: &mut S, ev, _| { if matches!(ev, PhysicalInput::FocusLost) { s.physical += 1; } false })
+                .on_focus_lost(|s: &mut S, _| s.lost += 1))
+            .child(crate::text(format!("lost {}", s.lost)).key("count"))
+    }
+    let mut rt = Runtime::new(S::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.set_modifier_keys(true);
+    rt.on_key = Some(|s, ev, _| { s.app.push(ev.clone()); true });
+    rt.frame(0.0);
+    rt.update(|_, tx| tx.focus("field", false));
+    rt.frame(0.0);
+    rt.physical_with_fallback(PhysicalInput::Key { key: Code::AltLeft, mods: Mods::default(), pressed: true, repeat: false, text: None, consumed_mods: Default::default() }, None);
+    rt.frame(0.0);
+    rt.window_focus(false);
+    rt.frame(0.0);
+    assert_eq!(rt.state.lost, 1);
+    assert_eq!(rt.state.physical, 1, "the physical handler still hears FocusLost");
+    assert_eq!(modifiers(&rt.state.app), [(Modifier::AltLeft, true), (Modifier::AltLeft, false)]);
+    assert!(rt.elements().iter().any(|e| e.text.as_deref() == Some("lost 1")), "the view builds again");
+}
+
+#[test]
+fn on_focus_lost_order_with_physical_and_focus_change_and_no_unused_cost() {
+    #[derive(Default)]
+    struct S { log: Vec<&'static str>, take_physical: bool }
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let take = s.take_physical;
+        col().size(300.0, 200.0)
+            .child(
+                el().key("a").size(100.0, 40.0).focusable(true)
+                    .on_physical_input(move |s: &mut S, ev, _| {
+                        if matches!(ev, PhysicalInput::FocusLost) {
+                            s.log.push("physical");
+                            return take;
+                        }
+                        false
+                    })
+                    .on_focus_lost(|s: &mut S, _| s.log.push("focus_lost"))
+                    .on_focus_change(|s: &mut S, focused, _| {
+                        s.log.push(if focused { "focus_in" } else { "focus_out" });
+                    }),
+            )
+            .child(el().key("b").size(100.0, 40.0).focusable(true))
+    }
+    let mut rt = Runtime::new(S { log: Vec::new(), take_physical: true }, view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    // Unused FocusSpec::EMPTY keeps focus_lost None without allocating.
+    assert!(<crate::el::FocusSpec as crate::cold::Empty>::EMPTY.focus_lost.is_none());
+
+    rt.update(|_, tx| tx.focus("a", false));
+    rt.frame(0.0);
+    assert_eq!(rt.state.log, ["focus_in"]);
+    rt.state.log.clear();
+
+    // Window deactivation: physical -> focus_lost (even when physical returned true); no focus_change.
+    rt.window_focus(false);
+    rt.frame(0.0);
+    assert_eq!(rt.state.log, ["physical", "focus_lost"]);
+    rt.state.log.clear();
+
+    // Window returns: no blur; focus is still on "a".
+    rt.window_focus(true);
+    rt.frame(0.0);
+    assert!(rt.state.log.is_empty());
+
+    // Moving focus inside the window: physical -> focus_lost -> focus_out.
+    rt.update(|_, tx| tx.focus("b", false));
+    rt.frame(0.0);
+    assert_eq!(rt.state.log, ["physical", "focus_lost", "focus_out"]);
 }

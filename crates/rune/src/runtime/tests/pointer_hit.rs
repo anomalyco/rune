@@ -347,6 +347,10 @@ fn presses_on_a_window_drag_region_move_the_window_but_not_its_buttons() {
     for (x, y, drags) in [(100.0, 20.0, true), (20.0, 20.0, false), (100.0, 60.0, false)] {
         rt.pointer_move(x, y);
         rt.pointer_down(x, y);
+        if titlebar::DEFER_MOUSE_DRAG {
+            assert!(rt.take_titlebar_action().is_none(), "deferred on press at {x}, {y}");
+            rt.pointer_move(x + titlebar::DRAG_THRESHOLD, y);
+        }
         assert_eq!(rt.take_titlebar_action() == Some(TitlebarAction::Drag), drags, "at {x}, {y}");
         assert!(rt.take_titlebar_action().is_none(), "a drag request is taken once");
         rt.pointer_up(x, y);
@@ -943,15 +947,16 @@ fn window_resize_emits_action_sets_default_cursor_and_yields_to_controls() {
     rt.pointer_up(40.0, 100.0);
 
     // Pressing a resize strip clears any armed titlebar drag double-click pair.
+    let first_press = (!titlebar::DEFER_MOUSE_DRAG).then_some(TitlebarAction::Drag);
     rt.pointer_down(40.0, 140.0);
-    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    assert_eq!(rt.take_titlebar_action(), first_press);
     rt.pointer_up(40.0, 140.0);
     rt.pointer_down(20.0, 20.0);
     assert_eq!(rt.take_resize_action(), Some(ResizeEdge::North));
     assert_eq!(rt.take_titlebar_action(), None);
     rt.pointer_up(20.0, 20.0);
     rt.pointer_down(40.0, 140.0);
-    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag), "resize broke the drag pair");
+    assert_eq!(rt.take_titlebar_action(), first_press, "resize broke the drag pair");
     rt.pointer_up(40.0, 140.0);
 
     // Resize strips are chrome geometry: plain group role with no click action or focusable state,

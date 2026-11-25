@@ -50,13 +50,64 @@ pub use fill::{FillReport, attach_text, fill_masks};
 pub(crate) use painter::UploadPlan;
 pub use painter::{CpuPainter, Painted};
 
+/// Inline storage for up to `N` atlas pages so steady-frame `Scene::new` performs zero heap
+/// allocations in the common case (0..=4 pages), spilling to `Vec` only when a scene exceeds `N`.
+#[derive(Clone)]
+enum SmallPages<T: Copy + Default, const N: usize> {
+    Inline { items: [T; N], len: usize },
+    Heap(Vec<T>),
+}
+
+impl<T: Copy + Default, const N: usize> std::ops::Deref for SmallPages<T, N> {
+    type Target = [T];
+    #[inline]
+    fn deref(&self) -> &[T] {
+        match self {
+            Self::Inline { items, len } => &items[..*len],
+            Self::Heap(v) => v.as_slice(),
+        }
+    }
+}
+
+impl<'b, T: Copy + Default, const N: usize> IntoIterator for &'b SmallPages<T, N> {
+    type Item = &'b T;
+    type IntoIter = std::slice::Iter<'b, T>;
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<T: Copy + Default, const N: usize> FromIterator<T> for SmallPages<T, N> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut items = [T::default(); N];
+        let mut len = 0usize;
+        let mut iter = iter.into_iter();
+        while len < N {
+            let Some(item) = iter.next() else {
+                return Self::Inline { items, len };
+            };
+            items[len] = item;
+            len += 1;
+        }
+        let Some(extra) = iter.next() else {
+            return Self::Inline { items, len };
+        };
+        let mut v = Vec::with_capacity(N + 1 + iter.size_hint().0);
+        v.extend_from_slice(&items);
+        v.push(extra);
+        v.extend(iter);
+        Self::Heap(v)
+    }
+}
+
 /// One frame's draw data, borrowed from the runtime that built it.
 pub struct Scene<'a> {
     instances: &'a [Instance],
-    glyph_pages: Vec<&'a [u8]>,
+    glyph_pages: SmallPages<&'a [u8], 4>,
     /// The outline store, for glyphs drawn from their outlines (text whose scale moves).
     outlines: Option<&'a crate::text::outline::OutlineStore>,
-    images: Vec<Image<'a>>,
+    images: SmallPages<Image<'a>, 4>,
     size: (u32, u32),
     clear: [f32; 4],
     /// The frame's text draws subpixel masks blended by channel (`Atlas::lcd`).
@@ -120,7 +171,7 @@ struct Flags {
 }
 
 /// An image atlas page: RGBA8 texels, `width * 4` bytes a row.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct Image<'a> {
     width: u32,
     data: &'a [u8],

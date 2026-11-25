@@ -275,6 +275,8 @@ fn host_keyboard_core_gates_media_keys_on_opt_in_and_delivers_physical_code() {
             pressed: true,
             repeat: false,
             unhandled: None,
+            text: None,
+            consumed_mods: Default::default(),
         })
     };
     assert!(!redraw);
@@ -292,6 +294,8 @@ fn host_keyboard_core_gates_media_keys_on_opt_in_and_delivers_physical_code() {
             pressed: true,
             repeat: false,
             unhandled: None,
+            text: None,
+            consumed_mods: Default::default(),
         })
     };
     assert!(redraw);

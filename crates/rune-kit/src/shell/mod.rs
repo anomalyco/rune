@@ -19,7 +19,7 @@ pub use pane::{PaneMotion, PaneState, SidebarPeek, is_sidebar_toggle};
 pub use reorder::{Reorder, ReorderLanding};
 pub use sidebar::{INDENT, ROW_HEIGHT, RowStatus, Sidebar, SidebarHeader, SidebarRow, SidebarSection};
 pub use split::{Page, SidebarToggle, SplitView};
-pub use tab_strip::{BAND_PAST, TabDensity, TabDragMode, TabDragPhase, TabDragState, TabItem, TabItemStatus, TabOrientation, TabOverflow, TabReorder, TabSlot, TabStrip, TabTearMove, TabTearOut, TabWords, TearOutSpec};
+pub use tab_strip::{BAND_PAST, TabBreak, TabDensity, TabDragMode, TabDragPhase, TabDragState, TabItem, TabItemStatus, TabOrientation, TabOverflow, TabReorder, TabSlot, TabStrip, TabTearMove, TabTearOut, TabWords, TearOutSpec};
 pub use titlebar::WindowTitlebar;
 pub use toolbar::{TOOLBAR_HEIGHT, Toolbar};
 

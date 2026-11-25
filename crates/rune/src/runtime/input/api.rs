@@ -310,7 +310,7 @@ impl<S: 'static> Runtime<S> {
     /// ```
     #[inline(always)]
     pub fn key_with(&mut self, event: KeyEvent, physical: crate::PhysicalKeyCode, base: Option<char>) {
-        let input = PhysicalInput::Key { key: physical, mods: event.mods, pressed: true, repeat: false };
+        let input = PhysicalInput::Key { key: physical, mods: event.mods, pressed: true, repeat: false, text: None, consumed_mods: Default::default() };
         self.physical_key_input(input, event, base);
     }
 
@@ -331,7 +331,7 @@ impl<S: 'static> Runtime<S> {
     /// rt.frame(0.0);
     /// let mods = Mods::default();
     /// rt.physical_key_input(
-    ///     PhysicalInput::Key { key: PhysicalKeyCode::KeyJ, mods, pressed: true, repeat: true },
+    ///     PhysicalInput::Key { key: PhysicalKeyCode::KeyJ, mods, pressed: true, repeat: true, text: None, consumed_mods: Default::default() },
     ///     KeyEvent { key: Key::Text("j".into()), mods },
     ///     Some('j'),
     /// );
@@ -415,9 +415,26 @@ impl<S: 'static> Runtime<S> {
     pub fn set_chrome_insets(&mut self, insets: crate::ChromeInsets) { self.core_mut().set_chrome_insets(insets); }
     #[inline(always)]
     pub fn chrome_insets(&self) -> crate::ChromeInsets { self.core().chrome_insets() }
+    /// Sets the safe-area insets `[top, right, bottom, left]` in logical points reported by
+    /// [`Cx::safe_area`](crate::Cx::safe_area) and added to [`El::on_edge_drag`](crate::El::on_edge_drag)
+    /// bands (for example, forwarding `UIView.safeAreaInsets` from an embedded iOS `LayerHost`
+    /// or `WindowInsets` on Android). Negative and non-finite values clamp to `0.0`.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, el};
+    /// # fn view(_: &[f32; 4], cx: &mut Cx<[f32; 4]>) -> El { let _ = cx.safe_area(); el() }
+    /// let mut rt = Runtime::new([0.0; 4], view, (390.0, 844.0), Env::new(true, 1.0));
+    /// rt.set_safe_area([47.0, 0.0, 34.0, 0.0]);
+    /// rt.frame(0.0);
+    /// ```
+    #[inline(always)]
+    pub fn set_safe_area(&mut self, insets: [f32; 4]) { self.core_mut().set_safe_area(insets); }
     #[cfg(test)]
     #[inline(always)]
     pub(crate) fn set_caption(&mut self, caption: Option<crate::titlebar::Caption>) { self.core_mut().set_caption(caption); }
+    #[cfg(test)]
+    #[inline(always)]
+    pub(crate) fn set_window_menu_trigger(&mut self, trigger: WindowMenuTrigger) { self.core_mut().set_window_menu_trigger(trigger); }
     #[inline(always)]
     pub(crate) fn headless_chrome(&mut self, chrome: crate::Chrome, titlebar: Option<crate::Titlebar>, borderless: bool) -> crate::Chrome {
         self.core_mut().headless_chrome(chrome, titlebar, borderless)

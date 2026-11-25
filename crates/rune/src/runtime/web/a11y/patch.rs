@@ -23,7 +23,7 @@ pub(crate) fn item_tag(item: &A11yItem) -> String {
         "heading" => format!("h{}", item.level.unwrap_or(2)),
         "button" => "button".to_owned(),
         "link" => "a".to_owned(),
-        "image" | "progressbar" | "scroll_x" => "div".to_owned(),
+        "image" | "progressbar" | "scroll_x" | "textbox" => "div".to_owned(),
         _ => "p".to_owned(),
     }
 }
@@ -206,11 +206,19 @@ pub(super) fn item_json_fields(
     }
     if aria.multiselectable { obj.insert("ms".into(), json!(true)); }
     if aria.required { obj.insert("rq".into(), json!(true)); }
+    if aria.multiline { obj.insert("ml".into(), json!(true)); }
+    if aria.read_only { obj.insert("ro".into(), json!(true)); }
+    if aria.invalid { obj.insert("inv".into(), json!(true)); }
+    if let Some(ph) = aria.placeholder.as_deref() { obj.insert("ph".into(), json!(ph)); }
     if let Some(hp) = aria.has_popup { obj.insert("hp".into(), json!(hp)); }
     if let Some(or) = aria.orientation { obj.insert("or".into(), json!(or)); }
     if let Some(ac) = aria.auto_complete { obj.insert("ac".into(), json!(ac)); }
     if let Some(ct) = aria.controls.as_deref() { obj.insert("ct".into(), json!(ct)); }
     if let Some(ow) = aria.owns.as_deref() { obj.insert("ow".into(), json!(ow)); }
+    if let Some(rc) = aria.row_count { obj.insert("rc".into(), json!(rc)); }
+    if let Some(cc) = aria.column_count { obj.insert("cc".into(), json!(cc)); }
+    if let Some(ri) = aria.row_index { obj.insert("ri".into(), json!(ri)); }
+    if let Some(ci) = aria.column_index { obj.insert("ci".into(), json!(ci)); }
     if let Some(dir) = dir {
         obj.insert("dir".into(), json!(dir));
     }

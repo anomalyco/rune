@@ -687,7 +687,7 @@ pub(crate) mod repeat {
     }
 }
 
-/// Wayland reader watch loop (used by `wayland_drop`), kept cross-platform so its
+/// Wayland reader watch loop (used by `wayland::drop`), kept cross-platform so its
 /// queue-draining, read-guard cancellation, wake gating and hangup/stop paths run tests on every
 /// host without a compositor.
 pub(crate) mod watch_loop {
@@ -763,6 +763,7 @@ pub(crate) mod watch_loop {
     }
 }
 
+pub(crate) mod activation;
 pub(crate) mod compose_cache;
 pub(crate) mod frame_callback;
 pub(crate) mod pointer;

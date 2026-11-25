@@ -38,7 +38,7 @@ fn measuring_content_height_keeps_the_drawn_layouts() {
     let mut rt = Runtime::new(true, resize_view, (700.0, 900.0), Env::new(true, 2.0));
     rt.frame(0.0);
     let l = layout_of(&rt, "t0").clone();
-    rt.host.fit_height = true;
+    rt.host.set_fit_height(true);
     rt.content_height();
     assert!(Rc::ptr_eq(layout_of(&rt, "t0"), &l));
 }

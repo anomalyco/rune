@@ -62,7 +62,7 @@ impl RuntimeCore {
                 colors[C_BORDER] = bc.alpha_times(k);
             }
             // As it paints: a hovered group's `El::group_color` mixes in.
-            let group = self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group);
+            let group = group_lit(&self.scene, n, self.paint.inh_scratch.get(i).map_or(0.0, |h| h.group));
             if let Some(c) = paint_tracks::text_color(n) { colors[C_TEXT] = paint_tracks::group_tint(n, self.color(n.id, P_TEXT, c), group).alpha_times(k); }
             // A group's hover lands its colour as the pointer moves, as a hover fill does.
             if v.group_color.is_some() { pointer[0] = pointer[0].max(group); }

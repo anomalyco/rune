@@ -71,6 +71,10 @@ impl dyn OverlayApp + '_ {
         self.driver(|rt, app| rt.poll_hidden(app))
     }
 
+    pub(super) fn measure_content(&mut self) -> (f32, f32) {
+        self.driver(|rt, app| rt.measure_content(app))
+    }
+
     pub(super) fn window_focus(&mut self, focused: bool) {
         self.driver(|rt, app| rt.window_focus(app, focused));
     }
@@ -254,7 +258,8 @@ fn build_parts<S, T: 'static>(
 ) -> (OverlayCore, TypedOverlayApp<T>, OverlayHandle<T>, bool) {
     let ConfiguredOverlay {
         spec, options, on_key, on_created, on_availability, poll, compositor, setup, mut runtime, font_smoothing,
-        macos_level, macos_color_space, animate_reveal, release_after,
+        macos_level, macos_color_space, window_backdrop, frame_latency, on_materials, animate_reveal, release_after, renderer,
+        sizing, min_size, max_size,
     } = configured;
     let inherits_font_smoothing = font_smoothing.is_none();
     runtime.font_smoothing = font_smoothing.unwrap_or(app_font_smoothing);
@@ -271,8 +276,10 @@ fn build_parts<S, T: 'static>(
         (&f as &dyn std::any::Any).downcast_ref::<fn(&mut T, f64, &mut Tx) -> bool>().copied()
     }));
     rt.set_live_visible(false);
+    rt.core_mut().host.content_sizing = sizing;
+    rt.core_mut().host.content_limits = (min_size, max_size);
     let at = Placement { size: spec.size, edge: spec.edge, margin: spec.margin, align: spec.align, inset: spec.inset };
-    let core = OverlayCore::new(
+    let mut core = OverlayCore::new(
         rt.core_mut(),
         shared_core,
         spec.name,
@@ -282,9 +289,14 @@ fn build_parts<S, T: 'static>(
         on_created,
         macos_level,
         macos_color_space,
+        window_backdrop,
         animate_reveal,
         release_after,
     );
+    core.frame_latency = frame_latency;
+    core.on_materials = on_materials;
+    core.requested_renderer = renderer;
+    core.sizing = super::sizing::SizingConfig { mode: sizing, min_size, max_size };
     let typed = TypedOverlayApp { rt, compositor, setup, on_availability, shared: shared.clone() };
     (core, typed, OverlayHandle { shared }, inherits_font_smoothing)
 }
@@ -308,6 +320,10 @@ impl OverlayHost {
 
     pub(crate) fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects) {
         self.core.prewarm_effects = effects;
+    }
+
+    pub(crate) fn set_gpu_loss_latch(&mut self, latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>) {
+        self.core.gpu_loss_latch = latch;
     }
 }
 
@@ -432,7 +448,7 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<crate::render::Gpu>>>) {
         with_app!(self, |core, app| core.connect(&mut app, wake, frame_wake, slot_wake, gpu))
     }
-    pub(super) fn draw(&mut self) -> bool { with_app!(self, |core, app| core.draw(&mut app)) }
+    pub(super) fn draw(&mut self) -> bool { with_app!(self, |core, app| core.draw(&mut app, None)) }
     #[cfg(target_os = "macos")]
     pub(super) fn warm(&mut self) { with_app!(self, |core, app| core.warm(&mut app)) }
     pub(super) fn warm_offscreen(&mut self, size: (u32, u32)) { with_app!(self, |core, app| core.warm_offscreen(&mut app, size)) }
@@ -446,6 +462,10 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn fail(&mut self, reason: String) { with_app!(self, |core, app| core.fail(&mut app, reason)) }
     pub(super) fn set_availability_notify(&mut self, a: super::Availability) -> bool { with_app!(self, |core, app| core.set_availability_notify(&mut app, a)) }
     pub(super) fn surface_refused(&mut self, reason: String) { with_app!(self, |core, app| core.surface_refused(&mut app, reason)) }
+    pub(super) fn poll_terminal_gpu_loss(&mut self) -> bool { with_app!(self, |core, app| core.poll_terminal_gpu_loss(&mut app)) }
+    pub(super) fn latch_terminal_loss_latch(&mut self, kind: crate::render::loss_latch::GpuFailureKind, reason: impl Into<String>) {
+        with_app!(self, |core, app| core.latch_terminal_loss_latch(&mut app, kind, reason))
+    }
     pub(super) fn layer_closed(&mut self, reason: Option<&str>) { with_app!(self, |core, app| core.layer_closed(&mut app, reason)) }
     pub(super) fn drop_hidden_images(&mut self) { with_app!(self, |core, app| core.drop_hidden_images(&mut app)) }
     pub(super) fn hide_fading(&mut self, fade: Duration) { with_app!(self, |core, app| core.hide_fading(&mut app, fade)) }
@@ -458,10 +478,21 @@ impl<T: 'static> Overlay<T> {
     #[cfg(target_os = "macos")]
     pub(super) fn refresh_for_reveal_at(&mut self, now: Instant) { with_app!(self, |core, app| core.refresh_for_reveal_at(&mut app, now)) }
     pub(super) fn resume_live(&mut self) { with_app!(self, |core, app| core.resume_live(&mut app)) }
+    pub(super) fn fit_for_show(&mut self) { with_app!(self, |core, app| core.fit_for_show(&mut app)) }
+    pub(super) fn take_window_requests(&mut self) { self.core.take_window_requests(self.rt.core_mut()) }
     pub(super) fn settle_before_reveal(&mut self) { self.core.settle_before_reveal(self.rt.core_mut()) }
     pub(super) fn hidden_input(&mut self) { with_app!(self, |core, app| core.hidden_input(&mut app)) }
     pub(super) fn apply_input(&mut self) { self.core.apply_input(self.rt.core()) }
     pub(super) fn left_button(&mut self, pressed: bool, point: Option<(f32, f32)>) { with_app!(self, |core, app| core.left_button(&mut app, pressed, point)) }
+    #[cfg(test)]
+    pub(super) fn cursor_moved(&mut self, x: f32, y: f32) { with_app!(self, |core, app| core.cursor_moved(&mut app, x, y)) }
+    #[cfg(test)]
+    pub(super) fn drain_injected_pointers(&mut self) { with_app!(self, |core, app| core.drain_injected_pointers(&mut app)) }
+    #[cfg(test)]
+    pub(super) fn dispatch_pointer(&mut self, source: super::pointer_inject::InputSource, event: crate::PointerInput) {
+        with_app!(self, |core, app| core.dispatch_pointer(&mut app, source, event))
+    }
+
     pub(super) fn touch_event(&mut self, touch: &winit::event::Touch) {
         with_app!(self, |core, app| {
             let app: &mut dyn OverlayApp = &mut app;

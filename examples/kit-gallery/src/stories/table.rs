@@ -6,6 +6,8 @@
 //!   `TableColumn` getters.
 //! - `rune-table--overscan`: `Table::virtual_overscan` presets on a 10,000-row fixed-height
 //!   telemetry table (default `2.0 / 1.75`, tight `0.5 / 0.25`, viewport-only `0.0 / 0.0`).
+//! - `rune-table--virtual-columns`: `Table::virtual_columns` and `Table::frozen_columns` on a
+//!   10,000-row × 200-column wide sheet with resizable, reorderable columns.
 
 use std::borrow::Cow;
 
@@ -61,7 +63,7 @@ pub(super) fn options(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
             if !s.table.is_selected(&id) {
                 s.table.select(id.clone());
             }
-            s.table_menu = Some((id.clone(), p));
+            s.table_menu = Some(("options", id.clone(), p));
         });
         if !cursor_outline && selected {
             r = r.child(
@@ -81,10 +83,11 @@ pub(super) fn options(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     .grow(1.0)
     .min_h(0.0);
 
-    let target = s.table_menu.as_ref().map(|(id, _)| id.clone()).unwrap_or_default();
+    let menu = s.table_menu.as_ref().filter(|(which, _, _)| *which == "options");
+    let target = menu.map(|(_, id, _)| id.clone()).unwrap_or_default();
     let copy_id = target.clone();
     let solo_id = target.clone();
-    let table_with_menu = context_menu("table-row-menu", table, s.table_menu.as_ref().map(|(_, p)| *p))
+    let table_with_menu = context_menu("table-row-menu", table, menu.map(|(_, _, p)| *p))
         .item(
             MenuItem::new(format!("Copy {target}")).on_select_tx(move |s: &mut G, tx: &mut Tx| {
                 tx.copy(&copy_id);
@@ -217,7 +220,7 @@ pub(super) fn wide(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
             _ => Cell::text(format!("tr_{:08x}{:08x}", i * 2654435761, i + 97)).mono().muted(),
         })
         .on_header_secondary_press(|s: &mut G, col, press, _| {
-            s.table_menu = Some((col.to_owned(), press));
+            s.table_menu = Some(("wide", col.to_owned(), press));
         })
         .on_column_fit(|s: &mut G, col, _| {
             let w = fit_width_for(col);
@@ -228,7 +231,8 @@ pub(super) fn wide(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
         .grow(1.0)
         .min_h(0.0);
 
-    let target_id = s.table_menu.as_ref().map(|(id, _)| id.clone()).unwrap_or_default();
+    let menu_state = s.table_menu.as_ref().filter(|(which, _, _)| *which == "wide");
+    let target_id = menu_state.map(|(_, id, _)| id.clone()).unwrap_or_default();
     let target_title = cols
         .iter()
         .find(|col| col.id() == target_id)
@@ -237,7 +241,7 @@ pub(super) fn wide(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
     let fit_id = target_id.clone();
     let reset_id = target_id.clone();
     let hide_id = target_id.clone();
-    let mut menu = context_menu("table-header-menu", table, s.table_menu.as_ref().map(|(_, p)| *p))
+    let mut menu = context_menu("table-header-menu", table, menu_state.map(|(_, _, p)| *p))
         .item(MenuItem::new(format!("Fit {target_title} to content")).on_select(move |s: &mut G| {
             let w = fit_width_for(&fit_id);
             s.table.set_column_width(fit_id.clone(), w);
@@ -402,6 +406,100 @@ pub(super) fn overscan(s: &G, k: &Kit, _layer: &mut Vec<El>) -> El {
         .child(
             col()
                 .key("overscan-frame")
+                .w_full()
+                .h(260.0)
+                .radius(k.radius.md)
+                .fill(c.bg_base)
+                .border(1.0, c.border_weak)
+                .clip_rounded(k.radius.md)
+                .child(table),
+        )
+        .child(text(summary).font(k.ty.small).color(c.text_muted))
+}
+
+pub(super) fn virtual_columns(s: &G, k: &Kit, _layer: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let virtual_cols = !s.is("vc-off");
+    let frozen: usize = s.pick.get("table-frozen").and_then(|v| v.parse().ok()).unwrap_or(2);
+
+    let mut t = Table::new(
+        |s: &G| &s.table,
+        |s: &mut G| &mut s.table,
+        |_: &G| 10_000,
+        |_: &G, i| Cow::Owned(format!("row-{i}")),
+    )
+    .name("Wide sheet (10,000 rows × 200 columns)")
+    .scroll_wide(true)
+    .virtual_columns(virtual_cols)
+    .frozen_columns(frozen)
+    .virtual_overscan(0.5, 0.25)
+    .zebra(true)
+    .on_reorder(|s: &mut G, from, to, _| {
+        s.pick.insert("vc-last".into(), format!("Moved column {from} -> {to}"));
+    });
+    t = t
+        .column(TableColumn::new("id", "Row").width(76.0).align(Align::End))
+        .column(TableColumn::new("label", "Series").width(116.0));
+    for col in 2..200 {
+        t = t.column(TableColumn::new(format!("m{col}"), format!("Metric {col}")).width(96.0).align(Align::End));
+    }
+    let table = t
+        .cell(|_: &G, i, col| match col {
+            "id" => Cell::text(format!("{:05}", i + 1)).mono().muted(),
+            "label" => Cell::text(format!("series_{:03}", i % 256)).mono(),
+            other => {
+                let n: usize = other.strip_prefix('m').and_then(|s| s.parse().ok()).unwrap_or(0);
+                Cell::text(format!("{:.2}", ((i * 31 + n * 17) % 10_000) as f32 / 100.0)).mono()
+            }
+        })
+        .build(s, k)
+        .grow(1.0)
+        .min_h(0.0);
+
+    let freeze_btn = |count: usize, label: &'static str| {
+        let variant = if frozen == count { ButtonVariant::Contrast } else { ButtonVariant::Neutral };
+        Button::new(label)
+            .variant(variant)
+            .on_press(move |s: &mut G| {
+                s.pick.insert("table-frozen".into(), count.to_string());
+            })
+            .build(k)
+            .key(format!("freeze-{count}"))
+    };
+
+    let last = s.pick.get("vc-last").map(String::as_str);
+    let summary = match last {
+        Some(msg) => format!(
+            "10,000 rows × 200 columns · virtual_columns({virtual_cols}) · frozen_columns({frozen}) · {msg}"
+        ),
+        None => format!(
+            "10,000 rows × 200 columns · virtual_columns({virtual_cols}) · frozen_columns({frozen}) · scroll sideways or drag headers"
+        ),
+    };
+
+    col()
+        .key("table-virtual-columns")
+        .w(680.0)
+        .gap(10.0)
+        .child(
+            row()
+                .key("vc-controls")
+                .gap(10.0)
+                .center_y()
+                .child(
+                    Switch::new(virtual_cols)
+                        .label("Virtual columns")
+                        .on_toggle(|s: &mut G| s.flip("vc-off"))
+                        .build(k)
+                        .key("toggle-virtual-columns"),
+                )
+                .child(freeze_btn(0, "0 frozen"))
+                .child(freeze_btn(1, "1 frozen"))
+                .child(freeze_btn(2, "2 frozen")),
+        )
+        .child(
+            col()
+                .key("vc-frame")
                 .w_full()
                 .h(260.0)
                 .radius(k.radius.md)

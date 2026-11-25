@@ -419,6 +419,67 @@ fn cache_follows_an_outside_hover_group_fading_its_descendants() {
 }
 
 #[test]
+fn cache_with_fallback_material_skips_rerasterize_and_replays_translated_material_rect() {
+    type State = (bool, Live<[f32; 2]>);
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut card = crate::col()
+            .size(44.0, 32.0)
+            .padding(4.0)
+            .gap(2.0)
+            .child(
+                el().size(36.0, 16.0)
+                    .radius(8.0)
+                    .fill(Color { r: 0.2, g: 0.35, b: 0.6, a: 0.9 })
+                    .system_material(crate::SystemMaterial::Glass),
+            )
+            .child(el().size(24.0, 6.0).fill(Color::WHITE));
+        if s.0 {
+            card = card.cache();
+        }
+        el().size(64.0, 48.0).padding(6.0).live_offset(&s.1).child(card)
+    }
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let target = Offscreen::new(&gpu.device, 64, 48);
+
+    let off_u = Live::new([0.0, 0.0]);
+    let mut rt_u = Runtime::new((false, off_u.clone()), view, (64.0, 48.0), Env { scale: 1.0, system_dark: true });
+    let mut ren_u = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    rt_u.frame(0.0);
+    ren_u.prepare(&gpu.device, &gpu.queue, &mut rt_u.text.atlas, &rt_u.instances, (64, 48));
+
+    let off_c = Live::new([0.0, 0.0]);
+    let mut rt_c = Runtime::new((true, off_c.clone()), view, (64.0, 48.0), Env { scale: 1.0, system_dark: true });
+    let mut ren_c = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    rt_c.frame(0.0);
+    ren_c.prepare(&gpu.device, &gpu.queue, &mut rt_c.text.atlas, &rt_c.instances, (64, 48));
+    assert_eq!(ren_c.layer_stats().targets, 1);
+    assert_eq!(ren_c.layer_stats().extra_passes, 1, "first frame rasterizes the cached fallback material");
+    let _ = pixels(&gpu, &ren_c, &target);
+    assert_eq!(rt_c.system_materials().len(), 1);
+    assert_eq!(rt_c.system_materials()[0].rect, rt_u.system_materials()[0].rect);
+
+    for delta in [[4.0, 2.0], [10.0, 6.0], [0.0, 0.0]] {
+        off_u.set(delta);
+        rt_u.frame(1.0 / 60.0);
+        ren_u.prepare(&gpu.device, &gpu.queue, &mut rt_u.text.atlas, &rt_u.instances, (64, 48));
+        let want = pixels(&gpu, &ren_u, &target);
+
+        off_c.set(delta);
+        rt_c.frame(1.0 / 60.0);
+        assert_eq!(rt_c.instances.len(), 2, "cached fallback-material subtree elides to [KIND_LAYER, KIND_LAYER_END]");
+        assert_eq!(rt_c.system_materials().len(), 1);
+        assert_eq!(rt_c.system_materials()[0].rect, rt_u.system_materials()[0].rect, "replayed rect matches uncached at {delta:?}");
+        assert_eq!(rt_c.system_materials()[0].radius, rt_u.system_materials()[0].radius);
+        ren_c.prepare(&gpu.device, &gpu.queue, &mut rt_c.text.atlas, &rt_c.instances, (64, 48));
+        assert_eq!(ren_c.layer_stats().extra_passes, 0, "cached fallback-material subtree must not re-rasterize at {delta:?}");
+        assert_eq!(ren_c.layer_stats().allocations, 1);
+        let got = pixels(&gpu, &ren_c, &target);
+        let max_diff = got.iter().zip(&want).map(|(a, b)| a.abs_diff(*b)).max().unwrap_or(0);
+        assert!(max_diff <= 1, "cached fallback-material pixels match uncached at {delta:?} (max_diff={max_diff})");
+    }
+}
+
+#[test]
 fn cache_redraws_a_same_length_text_change() {
     fn view(s: &(bool, bool), _: &mut Cx<(bool, bool)>) -> El {
         let mut card = el().size(60.0, 24.0).child(crate::text(if s.1 { "BBBB" } else { "AAAA" }).color(Color::WHITE));

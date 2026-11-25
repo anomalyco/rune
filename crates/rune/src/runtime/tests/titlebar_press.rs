@@ -138,7 +138,7 @@ impl Dev {
 fn state_of(press: titlebar::TitlebarPress) -> (Option<(f64, (f32, f32))>, bool) {
     match press {
         titlebar::TitlebarPress::Rest => (None, false),
-        titlebar::TitlebarPress::Armed(pair) => (Some((pair.at, pair.point)), false),
+        titlebar::TitlebarPress::Holding(pair) | titlebar::TitlebarPress::Armed(pair) => (Some((pair.at, pair.point)), false),
         titlebar::TitlebarPress::SecondaryOnRegion(pair) => (pair.map(|pair| (pair.at, pair.point)), true),
     }
 }
@@ -167,6 +167,7 @@ impl Walk {
         let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
         rt.double_click_interval = INTERVAL;
         rt.set_native_titlebar_band(BAND);
+        rt.host.titlebar.defer_drag_override = Some(false);
         if caption { rt.set_caption(Some(crate::titlebar::Caption::new(BAND))); }
         rt.frame(0.0);
         Self { rt, dev: Dev::new(BAND), now: 0.0, caption }
@@ -264,6 +265,24 @@ fn focus_loss_cancels_titlebar_press() {
     assert_eq!(rt.take_window_menu(), None);
     rt.pointer_down(x, y);
     assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::Drag));
+    rt.pointer_down(x, y);
+    assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick));
+}
+
+#[test]
+fn focus_loss_cancels_deferred_titlebar_press() {
+    let mut rt = Walk::new(true).rt;
+    rt.host.titlebar.defer_drag_override = Some(true);
+    let (x, y) = REGION;
+    rt.pointer_down(x, y);
+    assert_eq!(rt.take_titlebar_action(), None);
+    rt.window_focus(false);
+    rt.window_focus(true);
+    rt.pointer_move(x + 20.0, y);
+    assert_eq!(rt.take_titlebar_action(), None, "focus loss cancels deferred hold");
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    assert_eq!(rt.take_titlebar_action(), None);
     rt.pointer_down(x, y);
     assert_eq!(rt.take_titlebar_action(), Some(TitlebarAction::DoubleClick));
 }

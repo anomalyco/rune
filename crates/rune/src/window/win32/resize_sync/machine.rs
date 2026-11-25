@@ -30,6 +30,10 @@ pub(crate) struct Eligibility {
     pub handed_over: bool,
     /// Live D3D12 device is attached.
     pub d3d12_live: bool,
+    /// Hardware adapter (excludes software/WARP `wgpu::DeviceType::Cpu`).
+    pub hardware_adapter: bool,
+    /// Supported 8-bit swap-chain format (excludes 10-bit/16-bit HDR formats).
+    pub supported_format: bool,
 }
 
 impl Eligibility {
@@ -41,6 +45,8 @@ impl Eligibility {
             && self.dxgi_from_visual
             && self.handed_over
             && self.d3d12_live
+            && self.hardware_adapter
+            && self.supported_format
     }
 }
 
@@ -201,7 +207,7 @@ pub(crate) fn step(seq: &mut Seq, state: &mut State, event: Event) -> Effects<Ef
             *state = State::Leaving { attempt, deadline };
             Effects::two(Effect::RequestExitFrame, Effect::WakeAt(deadline))
         }
-        (State::Dragging { .. }, Event::Handover | Event::Hide) => {
+        (State::Dragging { .. }, Event::DragFailed | Event::Handover | Event::Hide) => {
             *state = State::Idle;
             Effects::two(Effect::AttachDcomp, Effect::ReleaseDragResources)
         }

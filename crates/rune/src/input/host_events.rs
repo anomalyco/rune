@@ -13,7 +13,7 @@ use winit::window::Window;
 
 use crate::edit::Ime;
 use crate::runtime::{AppDriver, RuntimeCore, Unhandled};
-use crate::window::{key_base, map_key_event, map_mods};
+use crate::window::{consumed_mods, key_base, map_key_event, map_mods, platform_text};
 
 /// Host-neutral key input over plain Rune types.
 pub(crate) struct KeyInput {
@@ -24,6 +24,10 @@ pub(crate) struct KeyInput {
     pub pressed: bool,
     pub repeat: bool,
     pub unhandled: Option<Unhandled>,
+    /// The platform text for the key (`PhysicalInput::Key::text`).
+    pub text: Option<String>,
+    /// The modifiers the platform spent producing `text`.
+    pub consumed_mods: crate::Mods,
 }
 
 /// Host-neutral wheel input in window points (before dividing by `rt.zoom()`).
@@ -297,7 +301,14 @@ pub(crate) fn keyboard_core(
     if let Some(key) = input.physical {
         rt.physical_then(
             app,
-            crate::PhysicalInput::Key { key, mods: input.mods, pressed: input.pressed, repeat: input.repeat },
+            crate::PhysicalInput::Key {
+                key,
+                mods: input.mods,
+                pressed: input.pressed,
+                repeat: input.repeat,
+                text: input.text,
+                consumed_mods: input.consumed_mods,
+            },
             logical,
             input.base,
             input.unhandled,
@@ -338,6 +349,8 @@ pub(crate) fn keyboard(
         PhysicalKey::Code(key) => Some(key),
         PhysicalKey::Unidentified(_) => None,
     };
+    let text = platform_text(event);
+    let consumed_mods = consumed_mods(event, text.as_deref(), map_mods(mods));
     keyboard_core(
         rt,
         app,
@@ -349,6 +362,8 @@ pub(crate) fn keyboard(
             pressed,
             repeat: event.repeat,
             unhandled,
+            text,
+            consumed_mods,
         },
     )
 }
@@ -449,17 +464,17 @@ fn line_delta_is_notch(delta: MouseScrollDelta, is_macos: bool, is_win_or_linux:
     }
 }
 
-/// Translates a winit `MouseWheel` event into runtime pinch-wheel, `WheelEvent`, or
-/// pointer-less phase begin/end notifications, scaled into view points.
+/// Translates a `MouseScrollDelta` with host-neutral `Mods` into runtime pinch-wheel,
+/// `WheelEvent`, or pointer-less phase begin/end notifications, scaled into view points.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn wheel(
+pub(crate) fn wheel_from_delta(
     rt: &mut RuntimeCore,
     delta: MouseScrollDelta,
     phase: crate::GesturePhase,
     scale: f32,
-    mods: ModifiersState,
-) {
-    let shift = crate::runtime::SHIFT_TURNS_WHEEL && mods.shift_key() && !mods.control_key();
+    mods: crate::Mods,
+) -> WheelOutcome {
+    let shift = crate::runtime::SHIFT_TURNS_WHEEL && mods.shift && !mods.ctrl;
     // In window points: a wheel turns as far on screen at any zoom, as Chromium's does,
     // and a pinch is the same gesture whatever the zoom.
     #[cfg(target_os = "windows")]
@@ -477,13 +492,13 @@ pub(crate) fn wheel(
         cfg!(target_os = "macos"),
         cfg!(any(target_os = "windows", target_os = "linux")),
     );
-    let _ = wheel_core(
+    wheel_core(
         rt,
         WheelInput {
             dx,
             dy,
             ticks,
-            mods: map_mods(mods),
+            mods,
             phase,
             precise,
             notch,
@@ -492,7 +507,20 @@ pub(crate) fn wheel(
             // apart); a real pinch still arrives as its own gesture.
             pinch: true,
         },
-    );
+    )
+}
+
+/// Translates a winit `MouseWheel` event into runtime pinch-wheel, `WheelEvent`, or
+/// pointer-less phase begin/end notifications, scaled into view points.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn wheel(
+    rt: &mut RuntimeCore,
+    delta: MouseScrollDelta,
+    phase: crate::GesturePhase,
+    scale: f32,
+    mods: ModifiersState,
+) {
+    let _ = wheel_from_delta(rt, delta, phase, scale, map_mods(mods));
 }
 
 /// Translates a winit `PinchGesture` at the current pointer; returns true when delivered.

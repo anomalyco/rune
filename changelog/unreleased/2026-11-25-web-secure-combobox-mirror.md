@@ -1,0 +1,1 @@
+- Web accessibility mirror: secure inputs (including secure editable comboboxes) strip `aria-autocomplete`, `aria-haspopup`, `aria-controls`, `aria-owns`, `aria-expanded`, and `aria-activedescendant` suggestion delegation in `[data-rune-a11y]` and focus announcements, exposing only a secure textbox with its name and states and never its value, mask, or suggestion text.

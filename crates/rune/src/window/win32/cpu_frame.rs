@@ -214,6 +214,7 @@ impl Host {
             let rt = self.app.rt_mut();
             rt.set_system_dark(crate::platform::preferences::window_dark(&window, self.args.theme.as_deref()));
             rt.set_viewport((size.0 as f32 / scale, size.1 as f32 / scale), scale);
+            rt.set_renderer_kind(crate::RendererKind::Cpu);
             // Reopening paints the settled state in the first frame (guarantee 8).
             if self.shown && !built { rt.settle_all(); }
         }
@@ -536,6 +537,7 @@ impl FrameHost for CpuWindowFrame<'_> {
     fn settle(&mut self, submitted: Instant, info: &StepInfo) {
         let now = self.now.unwrap_or(submitted);
         self.host.meter.presented();
+        crate::haptics::flush_live(self.host.app.rt_mut(), false);
         self.host.frame_reports.drawn(self.encoded, None, now, info.update_ms);
         self.host.app.inspect_frame();
         let Some(l) = self.host.win.as_mut() else { return };

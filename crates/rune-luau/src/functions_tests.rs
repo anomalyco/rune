@@ -34,7 +34,7 @@ fn try_render_fn_returns_element_or_error() {
     assert!(script.try_render_fn::<()>(false, &good, "hello").is_ok());
 
     let bad = export(&script, "bad");
-    let err = script.try_render_fn::<()>(false, &bad, ()).expect_err("render threw");
+    let err = script.try_render_fn::<()>(false, &bad, ()).err().expect("render threw");
     assert!(err.message.contains("boom"), "message: {}", err.message);
     assert!(script.log().iter().any(|l| l.message.contains("boom")), "logged");
 }
@@ -48,7 +48,7 @@ fn try_render_fn_returns_stored_failure() {
 
     let failed = Script::new("try_render_failed", Sources::single(r#"error("start failed")"#));
     let stored = failed.error().expect("start failed");
-    let err = failed.try_render_fn::<()>(false, &f, "hello").expect_err("not running");
+    let err = failed.try_render_fn::<()>(false, &f, "hello").err().expect("not running");
     assert_eq!(err, stored);
     assert_eq!(failed.metrics().renders, 0, "no render ran");
 }

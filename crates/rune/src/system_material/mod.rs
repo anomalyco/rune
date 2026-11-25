@@ -6,6 +6,8 @@
 
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+#[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+pub(crate) mod windows;
 #[cfg(test)]
 mod tests;
 
@@ -46,6 +48,22 @@ pub const MAX_NATIVE_MATERIALS: usize = 4;
 /// exhaust AppKit backdrop surfaces.
 pub(crate) const MAX_NATIVE_MATERIALS_CAP: usize = 64;
 
+/// Minimum effective element opacity required to remain in a Wayland compositor blur region.
+/// Wayland blur protocols (`ext_background_effect_v1`, `org_kde_kwin_blur`) have no opacity
+/// parameter, so dropping an element below 0.10 prevents a full-strength blur ghost during
+/// exit fades.
+pub(crate) const WAYLAND_BLUR_MIN_OPACITY: f32 = 0.10;
+
+/// Per-frame physical-pixel geometry and ancestor clip for one `El::system_material` element
+/// participating in Wayland compositor blur (`platform::wayland::backdrop`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WaylandMaterialBlur {
+    pub rect: [f32; 4],
+    pub radius: f32,
+    pub clip: [f32; 4],
+    pub opacity: f32,
+}
+
 /// Clamp a configured per-window native material cap to the internal ceiling.
 pub(crate) fn clamp_max_native_materials(max: usize) -> usize {
     max.min(MAX_NATIVE_MATERIALS_CAP)
@@ -78,14 +96,29 @@ pub(crate) fn fallback_notice(fallen: usize, total: usize, limit: usize) -> Stri
     }
 }
 
-/// One material element as built this frame, in physical pixels like the instances.
+/// One visible [`El::system_material`](crate::El::system_material) element as built this frame,
+/// in paint order and in the window's physical pixels (divide by the window scale for points).
+///
+/// On macOS Rune hosts a native material view for each of these. Elsewhere Rune draws the
+/// element's fallback fill and nothing more, but the rects are still collected, so an app can
+/// drive its own backdrop (a companion window or composition visual) under them with
+/// [`ConfiguredOverlay::on_materials`](crate::ConfiguredOverlay::on_materials) or
+/// [`Runtime::system_materials`](crate::Runtime::system_materials). Only elements within the
+/// window's native material limit ([`App::max_native_materials`](crate::App::max_native_materials))
+/// are listed. Read-only: Rune builds these, apps don't.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct MaterialDraw {
+#[non_exhaustive]
+pub struct MaterialDraw {
+    /// The element's identity, stable across frames while it stays mounted.
     pub id: NodeId,
+    /// The element's [`SystemMaterial`].
     pub material: SystemMaterial,
-    /// x, y, width, height.
+    /// x, y, width, height from the window's top left, in physical pixels. The element's whole
+    /// rect: clipping by a scroll view or a clipping ancestor is not applied, so a backdrop
+    /// that must stop at a clip edge has to clip itself.
     pub rect: [f32; 4],
-    /// Corner radius, already clamped to half the shorter side.
+    /// Corner radius in physical pixels (the largest corner), already clamped to half the
+    /// shorter side.
     pub radius: f32,
     /// Continuous corners (`El::continuous_corners`).
     pub continuous: bool,
@@ -94,26 +127,77 @@ pub(crate) struct MaterialDraw {
 }
 
 impl MaterialDraw {
-    /// The native view's frame (x, y, width, height from the top left) and corner radius, in points.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    pub(crate) fn points(&self, scale: f32) -> ([f64; 4], f64) {
+    /// The element's frame (x, y, width, height from the window's top left) and corner radius
+    /// in window points, given the window scale ([`MaterialFrame::scale`]).
+    pub fn points(&self, scale: f32) -> ([f64; 4], f64) {
         let s = f64::from(scale.max(1e-3));
         (self.rect.map(|v| f64::from(v) / s), f64::from(self.radius) / s)
     }
 }
 
+/// One presented frame's [`MaterialDraw`]s and the window scale they are measured at, as
+/// [`ConfiguredOverlay::on_materials`](crate::ConfiguredOverlay::on_materials) hears it.
+#[derive(Clone, Copy, Debug)]
+pub struct MaterialFrame<'a> {
+    draws: &'a [MaterialDraw],
+    scale: f32,
+}
+
+impl<'a> MaterialFrame<'a> {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn new(draws: &'a [MaterialDraw], scale: f32) -> Self { Self { draws, scale } }
+
+    /// The frame's material elements in paint order, in physical pixels; empty when none are
+    /// visible.
+    pub fn draws(&self) -> &'a [MaterialDraw] { self.draws }
+
+    /// Physical pixels per window point (the window's scale, before the view's zoom).
+    pub fn scale(&self) -> f32 { self.scale }
+}
+
+impl<S: 'static> crate::Runtime<S> {
+    /// The visible [`El::system_material`](crate::El::system_material) elements of the last
+    /// built frame, in paint order and physical pixels ([`MaterialDraw`]), for an app that
+    /// drives its own backdrop under them where Rune hosts no native material. A window can
+    /// read them from `App::on_frame_drawn`; an overlay hears each frame's just before it
+    /// presents through [`ConfiguredOverlay::on_materials`](crate::ConfiguredOverlay::on_materials).
+    ///
+    /// ```
+    /// # use rune::{Env, Runtime, SystemMaterial, el};
+    /// let view = |_: &(), _: &mut rune::Cx<()>| el().size(100.0, 40.0).radius(20.0).system_material(SystemMaterial::Glass);
+    /// let mut rt = Runtime::new((), view, (100.0, 40.0), Env::default());
+    /// rt.frame(0.0);
+    /// let draw = rt.system_materials()[0];
+    /// assert_eq!(draw.points(rt.window_scale()), ([0.0, 0.0, 100.0, 40.0], 20.0));
+    /// ```
+    pub fn system_materials(&self) -> &[MaterialDraw] { self.core().paint.materials() }
+}
+
 /// The native material draws and window backing scale to hand to the platform material host.
 /// `MaterialDraw` rects and radii are in physical device pixels, while native material views
 /// sit in window points, so this uses `window_scale()` rather than `env.scale` (`window_scale * zoom`).
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn present_draws(rt: &crate::runtime::RuntimeCore) -> (&[MaterialDraw], f32) {
     (rt.paint.materials(), rt.window_scale())
+}
+
+/// Callback registered by [`ConfiguredOverlay::on_materials`](crate::ConfiguredOverlay::on_materials).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) type OnMaterials = Box<dyn FnMut(MaterialFrame<'_>)>;
+
+/// Hands a frame about to present to `ConfiguredOverlay::on_materials`, when one is set.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn announce(hook: &mut Option<OnMaterials>, rt: &crate::runtime::RuntimeCore) {
+    if let Some(hook) = hook {
+        let (draws, scale) = present_draws(rt);
+        hook(MaterialFrame::new(draws, scale));
+    }
 }
 
 /// Which existing view each draw takes: the view that showed the same element, else a free view
 /// of the same material, else none (the caller makes one). `views` holds each view's material
 /// and the element it showed last; `draws` each draw's material and element.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))), allow(dead_code))]
 pub(crate) fn assign(views: &[(SystemMaterial, Option<NodeId>)], draws: &[(SystemMaterial, NodeId)]) -> Vec<Option<usize>> {
     let mut taken = vec![false; views.len()];
     let mut out = vec![None; draws.len()];
@@ -210,7 +294,7 @@ impl Mode {
         }
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"), all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(crate) fn from_env() -> Mode {
         Mode::parse(rune_core::env::var("RUNE_SYSTEM_MATERIAL").as_deref())
     }

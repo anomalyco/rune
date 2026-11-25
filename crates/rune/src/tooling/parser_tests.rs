@@ -20,7 +20,7 @@ fn a_physical_chord_releases_its_modifiers_after_the_key() {
     let kinds: Vec<_> = parse_script(json!([{"physical": "alt+super+space"}, {"t": 0.1, "physical": "f5"}]))
         .into_iter().map(|e| match e.kind { Kind::Physical(event) => event, _ => panic!("physical parsed as another event") }).collect();
     let mods = "alt+super+space".parse::<crate::Shortcut>().unwrap().modifiers();
-    let key = |key, mods, pressed| PhysicalInput::Key { key, mods, pressed, repeat: false };
+    let key = |key, mods, pressed| PhysicalInput::Key { key, mods, pressed, repeat: false, text: None, consumed_mods: Default::default() };
     use crate::PhysicalKeyCode::{F5, Space};
     let expected = [key(Space, mods, true), key(Space, mods, false), PhysicalInput::Modifiers(Mods::default()),
         key(F5, Mods::default(), true), key(F5, Mods::default(), false)];
@@ -91,6 +91,21 @@ fn script_events_close_request_reaches_headless_host() {
     let mut rt = Runtime::new((), |_: &(), _: &mut crate::Cx<()>| crate::el(), (100.0, 100.0), Env::default());
     let (core, mut app) = rt.split_mut();
     assert!(!script_input(core, &mut app, &script[0].kind, (0.0, 0.0)), "close_request is handled at the headless host, not script_input");
+}
+
+#[test]
+fn script_events_quit_request_reaches_headless_host() {
+    let script = parse_script(json!([
+        {"t": 0.25, "quit_request": true},
+    ]));
+    assert_eq!(script.len(), 1);
+    assert_eq!(script[0].t, 0.25);
+    assert!(matches!(script[0].public().event, ScriptEvent::QuitRequest));
+    assert!(matches!(script[0].kind, Kind::QuitRequest));
+
+    let mut rt = Runtime::new((), |_: &(), _: &mut crate::Cx<()>| crate::el(), (100.0, 100.0), Env::default());
+    let (core, mut app) = rt.split_mut();
+    assert!(!script_input(core, &mut app, &script[0].kind, (0.0, 0.0)), "quit_request is handled at the headless host, not script_input");
 }
 
 #[test]
