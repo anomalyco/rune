@@ -65,6 +65,8 @@ mod image_tests;
 #[path = "render/native_surface_tests.rs"]
 mod native_surface;
 #[cfg(test)]
+mod opacity_tests;
+#[cfg(test)]
 mod prewarm_tests;
 #[cfg(test)]
 #[path = "render/warm_tests.rs"]
