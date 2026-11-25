@@ -442,3 +442,70 @@ fn a_commit_picks_its_kind_once_from_what_changed() {
     plain.commit.set_state_unchanged(true);
     assert_eq!(plain.commit_kind(&tx), CommitKind::Rebuild, "no virtual rows to remount");
 }
+
+/// Vertical `virtual_rows` nested inside a fixed-width content wrapper under `scroll_xy`
+/// remounts with zero `view` runs, while a direct `scroll_xy` child still falls back to rebuild.
+#[test]
+fn scroll_xy_remounts_nested_virtual_rows_without_running_view() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use crate::runtime::relayout::CommitKind;
+
+    struct Wide {
+        nested: bool,
+        views: Rc<Cell<usize>>,
+    }
+
+    fn view(s: &Wide, _: &mut Cx<Wide>) -> El {
+        s.views.set(s.views.get() + 1);
+        let rows = col()
+            .key("rows")
+            .w_full()
+            .growth(GrowthSpec::default())
+            .virtual_rows(
+                500,
+                28.0,
+                |_: &Wide, i| std::borrow::Cow::Owned(format!("r{i}")),
+                |_: &Wide, i| row().w_full().h(28.0).child(text(format!("Row {i}"))),
+            );
+        let inner = if s.nested {
+            col().key("content").w(1600.0).child(rows)
+        } else {
+            rows
+        };
+        col().size(400.0, 240.0).child(
+            col().key("viewport").w_full().h(240.0).scroll_xy().child(inner),
+        )
+    }
+
+    let nested_views = Rc::new(Cell::new(0));
+    let mut nested = Runtime::new(
+        Wide { nested: true, views: Rc::clone(&nested_views) },
+        view,
+        (400.0, 240.0),
+        Env::new(true, 1.0),
+    );
+    nested.frame(0.0);
+    nested.frame(1.0 / 60.0);
+    nested.commit.set_state_unchanged(true);
+    assert_eq!(nested.commit_kind(&Tx::default()), CommitKind::Remount);
+
+    let views_before = nested_views.get();
+    nested.wheel_xy(200.0, 120.0, 0.0, -900.0);
+    for _ in 0..90 {
+        nested.frame(1.0 / 60.0);
+    }
+    assert_eq!(nested_views.get(), views_before, "vertical scroll inside scroll_xy wrapper must remount with zero view runs");
+
+    // Direct child of scroll_xy still takes Rebuild because ScrollXChild mutates its style.
+    let mut direct = Runtime::new(
+        Wide { nested: false, views: Rc::new(Cell::new(0)) },
+        view,
+        (400.0, 240.0),
+        Env::new(true, 1.0),
+    );
+    direct.frame(0.0);
+    direct.frame(1.0 / 60.0);
+    direct.commit.set_state_unchanged(true);
+    assert_eq!(direct.commit_kind(&Tx::default()), CommitKind::Rebuild);
+}
