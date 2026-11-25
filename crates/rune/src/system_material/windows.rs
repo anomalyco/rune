@@ -439,7 +439,7 @@ pub(crate) trait WindowsMaterialSeam {
     /// Removes and closes a spare pooled visual from the root visual.
     fn remove_visual(&mut self, slot_id: usize);
 
-    /// Initiates a composition commit (`Compositor::RequestCommitAsync`) right before
+    /// Initiates a composition commit (`Compositor::RequestCommitAsync`) right after
     /// `gpu.queue.present(frame)`.
     fn commit(&mut self) -> Result<(), String>;
 }
@@ -553,17 +553,24 @@ impl Controller {
         redraw
     }
 
-    /// Syncs pooled visuals to `draws` (physical pixels) right before `gpu.queue.present(frame)`.
+    /// Presents the swap chain first, then syncs pooled visuals to `draws` (physical pixels) and
+    /// requests a composition commit (`Compositor::RequestCommitAsync`).
+    ///
+    /// Queuing `IDXGISwapChain::Present` before updating `SpriteVisual`s and calling
+    /// `RequestCommitAsync` prevents DWM from committing frame N's backdrop ahead of frame N's
+    /// swap-chain flip (which caused the blur to lean ~1 frame ahead during fast springs).
     ///
     /// Returns `true` if native materials remain active (or were already idle), or `false` if a
     /// COM/DWM error forced a rollback to fallback fills (caller should clear `native_materials`
     /// and schedule a redraw).
-    pub(crate) fn sync_before_present(
+    pub(crate) fn present(
         &mut self,
         draws: &[MaterialDraw],
         dark: bool,
         seam: &mut impl WindowsMaterialSeam,
+        present: impl FnOnce(),
     ) -> bool {
+        present();
         let State::Active { hwnd } = self.state else {
             return true;
         };

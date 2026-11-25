@@ -24,6 +24,7 @@ fn draw(id: u64, material: SystemMaterial, rect: [f32; 4], radius: f32, opacity:
 
 #[derive(Clone, Debug, PartialEq)]
 enum Call {
+    Present,
     SetHandoverTopmost(isize, bool),
     SetHostBackdropBrush(isize, bool),
     CreateTarget(isize),
@@ -48,7 +49,7 @@ enum FailAt {
 
 #[derive(Default)]
 struct FakeSeam {
-    calls: Vec<Call>,
+    log: std::rc::Rc<std::cell::RefCell<Vec<Call>>>,
     fail: Option<FailAt>,
     handover_topmost: bool,
     target_open: bool,
@@ -58,11 +59,24 @@ impl FakeSeam {
     fn failing(at: FailAt) -> Self {
         Self { fail: Some(at), ..Default::default() }
     }
+
+    fn calls(&self) -> Vec<Call> {
+        self.log.borrow().clone()
+    }
+
+    fn clear(&self) {
+        self.log.borrow_mut().clear();
+    }
+
+    fn push(&self, call: Call) {
+        self.log.borrow_mut().push(call);
+    }
+
 }
 
 impl WindowsMaterialSeam for FakeSeam {
     fn set_handover_topmost(&mut self, hwnd: isize, topmost: bool) -> Result<(), String> {
-        self.calls.push(Call::SetHandoverTopmost(hwnd, topmost));
+        self.push(Call::SetHandoverTopmost(hwnd, topmost));
         if topmost && self.fail == Some(FailAt::HandoverTopmostTrue) {
             return Err("topmost failed".into());
         }
@@ -75,7 +89,7 @@ impl WindowsMaterialSeam for FakeSeam {
     }
 
     fn set_host_backdrop_brush(&mut self, hwnd: isize, enabled: bool) -> Result<(), String> {
-        self.calls.push(Call::SetHostBackdropBrush(hwnd, enabled));
+        self.push(Call::SetHostBackdropBrush(hwnd, enabled));
         if enabled && self.fail == Some(FailAt::SetHostBackdropTrue) {
             return Err("DWMWA_USE_HOSTBACKDROPBRUSH failed".into());
         }
@@ -85,7 +99,7 @@ impl WindowsMaterialSeam for FakeSeam {
     fn create_target(&mut self, hwnd: isize) -> Result<(), String> {
         // DirectComposition non-topmost slot must be freed before CreateDesktopWindowTarget(false).
         assert!(self.handover_topmost, "Handover must be topmost=true before CreateDesktopWindowTarget(false)");
-        self.calls.push(Call::CreateTarget(hwnd));
+        self.push(Call::CreateTarget(hwnd));
         if self.fail == Some(FailAt::CreateTarget) {
             return Err("CreateDesktopWindowTarget failed".into());
         }
@@ -94,12 +108,12 @@ impl WindowsMaterialSeam for FakeSeam {
     }
 
     fn destroy_target(&mut self) {
-        self.calls.push(Call::DestroyTarget);
+        self.push(Call::DestroyTarget);
         self.target_open = false;
     }
 
     fn create_visual(&mut self, slot_id: usize) -> Result<(), String> {
-        self.calls.push(Call::CreateVisual(slot_id));
+        self.push(Call::CreateVisual(slot_id));
         if self.fail == Some(FailAt::CreateVisual) {
             return Err("CreateSpriteVisual failed".into());
         }
@@ -107,7 +121,7 @@ impl WindowsMaterialSeam for FakeSeam {
     }
 
     fn update_visual(&mut self, slot_id: usize, spec: VisualSpec) -> Result<(), String> {
-        self.calls.push(Call::UpdateVisual(slot_id, spec));
+        self.push(Call::UpdateVisual(slot_id, spec));
         if self.fail == Some(FailAt::UpdateVisual) {
             return Err("update_visual failed".into());
         }
@@ -115,7 +129,7 @@ impl WindowsMaterialSeam for FakeSeam {
     }
 
     fn hide_visual(&mut self, slot_id: usize) -> Result<(), String> {
-        self.calls.push(Call::HideVisual(slot_id));
+        self.push(Call::HideVisual(slot_id));
         if self.fail == Some(FailAt::HideVisual) {
             return Err("hide_visual failed".into());
         }
@@ -123,16 +137,21 @@ impl WindowsMaterialSeam for FakeSeam {
     }
 
     fn remove_visual(&mut self, slot_id: usize) {
-        self.calls.push(Call::RemoveVisual(slot_id));
+        self.push(Call::RemoveVisual(slot_id));
     }
 
     fn commit(&mut self) -> Result<(), String> {
-        self.calls.push(Call::Commit);
+        self.push(Call::Commit);
         if self.fail == Some(FailAt::Commit) {
             return Err("RequestCommitAsync failed".into());
         }
         Ok(())
     }
+}
+
+fn present_frame(ctrl: &mut Controller, draws: &[MaterialDraw], dark: bool, seam: &mut FakeSeam) -> bool {
+    let log = seam.log.clone();
+    ctrl.present(draws, dark, seam, move || log.borrow_mut().push(Call::Present))
 }
 
 #[test]
@@ -222,14 +241,15 @@ fn zero_seam_calls_when_no_material_is_asked_for() {
 
     // Eligible window, but no El::system_material in frame.
     assert!(!ctrl.update(Some(42), base_inputs(), false, &mut seam));
-    assert!(ctrl.sync_before_present(&[], true, &mut seam));
+    assert!(present_frame(&mut ctrl, &[], true, &mut seam));
     assert!(!ctrl.native());
     assert_eq!(ctrl.state(), State::Idle);
-    assert!(seam.calls.is_empty(), "idle window with no materials must make zero seam calls: {:?}", seam.calls);
+    assert_eq!(seam.calls(), vec![Call::Present], "idle window with no materials only presents");
+    seam.clear();
 
     // Teardown on close while Idle also makes zero seam calls.
     ctrl.teardown(&mut seam);
-    assert!(seam.calls.is_empty());
+    assert!(seam.calls().is_empty());
 }
 
 #[test]
@@ -243,43 +263,46 @@ fn activation_sequence_visual_updates_dedup_and_teardown_on_empty() {
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert!(ctrl.native());
     assert_eq!(ctrl.state(), State::Active { hwnd });
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::SetHandoverTopmost(hwnd, true),
         Call::CreateTarget(hwnd),
         Call::SetHostBackdropBrush(hwnd, true),
     ]);
-    seam.calls.clear();
+    seam.clear();
 
-    // Sync builds a SpriteVisual with physical-pixel rect, radius, opacity and RectangleClip, then commits.
+    // Present runs BEFORE CreateVisual / UpdateVisual / Commit so DWM never commits ahead of Present.
     let pill = draw(10, SystemMaterial::Popover, [250.0, 16.0, 220.0, 48.0], 24.0, 0.95);
-    assert!(ctrl.sync_before_present(&[pill], true, &mut seam));
+    assert!(present_frame(&mut ctrl, &[pill], true, &mut seam));
     let expected_spec = VisualSpec::from_draw(pill, ClipKind::Rectangle, None);
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
+        Call::Present,
         Call::CreateVisual(0),
         Call::UpdateVisual(0, expected_spec),
         Call::Commit,
     ]);
-    seam.calls.clear();
+    seam.clear();
 
-    // Steady-state next frame with identical rect makes zero update or commit calls.
+    // Steady-state next frame with identical rect presents with zero visual update or commit calls.
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
-    assert!(ctrl.sync_before_present(&[pill], true, &mut seam));
-    assert!(seam.calls.is_empty(), "unchanged material frame must not touch visuals: {:?}", seam.calls);
+    assert!(present_frame(&mut ctrl, &[pill], true, &mut seam));
+    assert_eq!(seam.calls(), vec![Call::Present], "unchanged material frame must not touch visuals");
+    seam.clear();
 
-    // Springing next frame updates only the changed slot and commits.
+    // Springing next frame presents first, then updates only the changed slot and commits.
     let moved = draw(10, SystemMaterial::Popover, [210.0, 16.0, 300.0, 64.0], 28.0, 1.0);
-    assert!(ctrl.sync_before_present(&[moved], true, &mut seam));
-    assert_eq!(seam.calls, vec![
+    assert!(present_frame(&mut ctrl, &[moved], true, &mut seam));
+    assert_eq!(seam.calls(), vec![
+        Call::Present,
         Call::UpdateVisual(0, VisualSpec::from_draw(moved, ClipKind::Rectangle, None)),
         Call::Commit,
     ]);
-    seam.calls.clear();
+    seam.clear();
 
     // Last material unmounts: exact teardown order frees DesktopWindowTarget before returning Handover.
     assert!(!ctrl.update(Some(hwnd), base_inputs(), false, &mut seam));
     assert!(!ctrl.native());
     assert_eq!(ctrl.state(), State::Idle);
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::DestroyTarget,
         Call::SetHostBackdropBrush(hwnd, false),
         Call::SetHandoverTopmost(hwnd, false),
@@ -295,13 +318,14 @@ fn slot_reuse_hiding_pruning_cap_and_diagnostic_clip_tint() {
     let hwnd = 0x2002;
 
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
-    seam.calls.clear();
+    seam.clear();
 
     let a = draw(1, SystemMaterial::Popover, [0.0, 0.0, 100.0, 40.0], 20.0, 1.0);
     let b = draw(2, SystemMaterial::Popover, [120.0, 0.0, 100.0, 40.0], 20.0, 1.0);
     let c = draw(3, SystemMaterial::Popover, [240.0, 0.0, 100.0, 40.0], 20.0, 1.0);
-    assert!(ctrl.sync_before_present(&[a, b, c], true, &mut seam));
-    assert_eq!(seam.calls, vec![
+    assert!(present_frame(&mut ctrl, &[a, b, c], true, &mut seam));
+    assert_eq!(seam.calls(), vec![
+        Call::Present,
         Call::CreateVisual(0),
         Call::UpdateVisual(0, VisualSpec::from_draw(a, ClipKind::Geometric, tint_color(TintMode::Subtle, true))),
         Call::CreateVisual(1),
@@ -310,11 +334,12 @@ fn slot_reuse_hiding_pruning_cap_and_diagnostic_clip_tint() {
         Call::UpdateVisual(2, VisualSpec::from_draw(c, ClipKind::Geometric, tint_color(TintMode::Subtle, true))),
         Call::Commit,
     ]);
-    seam.calls.clear();
+    seam.clear();
 
     // Drop two of three Popover elements: both hide, and one excess spare is pruned (at most 1 spare kept).
-    assert!(ctrl.sync_before_present(&[b], false, &mut seam));
-    assert_eq!(seam.calls, vec![
+    assert!(present_frame(&mut ctrl, &[b], false, &mut seam));
+    assert_eq!(seam.calls(), vec![
+        Call::Present,
         // b kept its own slot 1; dark->light changed its subtle tint color.
         Call::UpdateVisual(1, VisualSpec::from_draw(b, ClipKind::Geometric, tint_color(TintMode::Subtle, false))),
         Call::HideVisual(0),
@@ -322,23 +347,24 @@ fn slot_reuse_hiding_pruning_cap_and_diagnostic_clip_tint() {
         Call::RemoveVisual(2),
         Call::Commit,
     ]);
-    seam.calls.clear();
+    seam.clear();
 
     // Adding a new Popover reuses the kept spare slot 0 without creating a new visual.
     let d = draw(4, SystemMaterial::Popover, [10.0, 10.0, 80.0, 40.0], 16.0, 0.8);
-    assert!(ctrl.sync_before_present(&[b, d], false, &mut seam));
-    assert_eq!(seam.calls, vec![
+    assert!(present_frame(&mut ctrl, &[b, d], false, &mut seam));
+    assert_eq!(seam.calls(), vec![
+        Call::Present,
         Call::UpdateVisual(0, VisualSpec::from_draw(d, ClipKind::Geometric, tint_color(TintMode::Subtle, false))),
         Call::Commit,
     ]);
-    seam.calls.clear();
+    seam.clear();
 
     // Cap enforcement: more than MAX_NATIVE_MATERIALS_CAP draws never creates more than CAP visuals.
     let many: Vec<_> = (0..(MAX_NATIVE_MATERIALS_CAP + 5))
         .map(|i| draw(100 + i as u64, SystemMaterial::Glass, [i as f32, 0.0, 20.0, 20.0], 4.0, 1.0))
         .collect();
-    assert!(ctrl.sync_before_present(&many, true, &mut seam));
-    let created = seam.calls.iter().filter(|c| matches!(c, Call::CreateVisual(_))).count();
+    assert!(present_frame(&mut ctrl, &many, true, &mut seam));
+    let created = seam.calls().iter().filter(|c| matches!(c, Call::CreateVisual(_))).count();
     assert_eq!(created, MAX_NATIVE_MATERIALS_CAP);
 }
 
@@ -349,7 +375,7 @@ fn ineligibility_while_mounted_tears_down_and_requests_fallback_rebuild() {
     let hwnd = 0x3003;
 
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
-    seam.calls.clear();
+    seam.clear();
 
     // Enabling whole-window Mica while a material element is mounted tears down and returns true
     // so the host rebuilds this frame with native_materials = false (fallback fill).
@@ -357,7 +383,7 @@ fn ineligibility_while_mounted_tears_down_and_requests_fallback_rebuild() {
     assert!(ctrl.update(Some(hwnd), mica, true, &mut seam));
     assert!(!ctrl.native());
     assert_eq!(ctrl.state(), State::Idle);
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::DestroyTarget,
         Call::SetHostBackdropBrush(hwnd, false),
         Call::SetHandoverTopmost(hwnd, false),
@@ -371,35 +397,35 @@ fn teardown_on_window_close_and_device_loss_recovery() {
     let hwnd = 0x4004;
 
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
-    assert!(ctrl.sync_before_present(&[draw(1, SystemMaterial::Glass, [0.0, 0.0, 50.0, 50.0], 10.0, 1.0)], true, &mut seam));
-    seam.calls.clear();
+    assert!(present_frame(&mut ctrl, &[draw(1, SystemMaterial::Glass, [0.0, 0.0, 50.0, 50.0], 10.0, 1.0)], true, &mut seam));
+    seam.clear();
 
     // Device loss tears down cleanly and returns Handover to topmost = false.
     ctrl.on_device_loss(&mut seam);
     assert!(!ctrl.native());
     assert_eq!(ctrl.state(), State::Idle);
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::DestroyTarget,
         Call::SetHostBackdropBrush(hwnd, false),
         Call::SetHandoverTopmost(hwnd, false),
     ]);
-    seam.calls.clear();
+    seam.clear();
 
     // If replacement GPU is WARP software, stays inactive with zero calls.
     let warp = MaterialInputs { device_type: Some(wgpu::DeviceType::Cpu), ..base_inputs() };
     assert!(!ctrl.update(Some(hwnd), warp, true, &mut seam));
     assert!(!ctrl.native());
-    assert!(seam.calls.is_empty());
+    assert!(seam.calls().is_empty());
 
     // If replacement GPU is hardware, re-activates cleanly and tears down on window close.
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert!(ctrl.native());
-    seam.calls.clear();
+    seam.clear();
 
     ctrl.teardown(&mut seam);
     assert!(!ctrl.native());
     assert_eq!(ctrl.state(), State::Idle);
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::DestroyTarget,
         Call::SetHostBackdropBrush(hwnd, false),
         Call::SetHandoverTopmost(hwnd, false),
@@ -416,18 +442,18 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert!(!ctrl.native());
     assert_eq!(ctrl.state(), State::Failed { hwnd });
-    assert_eq!(seam.calls, vec![Call::SetHandoverTopmost(hwnd, true)]);
-    seam.calls.clear();
+    assert_eq!(seam.calls(), vec![Call::SetHandoverTopmost(hwnd, true)]);
+    seam.clear();
     // Subsequent frame on same HWND makes zero calls (latched).
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
-    assert!(seam.calls.is_empty());
+    assert!(seam.calls().is_empty());
 
     // 2. Failure on CreateTarget rolls back Handover to topmost = false.
     let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
     let mut seam = FakeSeam::failing(FailAt::CreateTarget);
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert_eq!(ctrl.state(), State::Failed { hwnd });
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::SetHandoverTopmost(hwnd, true),
         Call::CreateTarget(hwnd),
         Call::DestroyTarget,
@@ -440,7 +466,7 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
     let mut seam = FakeSeam::failing(FailAt::SetHostBackdropTrue);
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert_eq!(ctrl.state(), State::Failed { hwnd });
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::SetHandoverTopmost(hwnd, true),
         Call::CreateTarget(hwnd),
         Call::SetHostBackdropBrush(hwnd, true),
@@ -456,29 +482,32 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
         let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
         let mut seam = FakeSeam::failing(fail_at);
         assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
-        seam.calls.clear();
-        let ok = ctrl.sync_before_present(
+        seam.clear();
+        let ok = present_frame(
+            &mut ctrl,
             &[draw(1, SystemMaterial::Popover, [10.0, 20.0, 100.0, 40.0], 20.0, 1.0)],
             true,
             &mut seam,
         );
-        assert!(!ok, "sync_before_present must report rollback for {fail_at:?}");
+        assert!(!ok, "present must report rollback for {fail_at:?}");
         assert!(!ctrl.native());
         assert_eq!(ctrl.state(), State::Failed { hwnd });
         assert!(!seam.handover_topmost);
         assert!(!seam.target_open);
-        // Tail of calls is always the full rollback triple.
-        let n = seam.calls.len();
-        assert!(n >= 3);
-        assert_eq!(&seam.calls[n - 3..], &[
+        // Present ran first, and tail of calls is always the full rollback triple.
+        let calls = seam.calls();
+        assert_eq!(calls.first(), Some(&Call::Present));
+        let n = calls.len();
+        assert!(n >= 4);
+        assert_eq!(&calls[n - 3..], &[
             Call::DestroyTarget,
             Call::SetHostBackdropBrush(hwnd, false),
             Call::SetHandoverTopmost(hwnd, false),
         ]);
         // Latched for this HWND on subsequent frames.
-        seam.calls.clear();
+        seam.clear();
         assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
-        assert!(seam.calls.is_empty());
+        assert!(seam.calls().is_empty());
     }
 
     // 5. Recreated window with a new HWND clears the old HWND latch.
@@ -487,7 +516,7 @@ fn activation_and_present_failures_roll_back_and_latch_per_hwnd() {
     assert!(!ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert_eq!(ctrl.state(), State::Failed { hwnd });
     seam.fail = None;
-    seam.calls.clear();
+    seam.clear();
     let next_hwnd = 0x6006;
     assert!(ctrl.update(Some(next_hwnd), base_inputs(), true, &mut seam));
     assert_eq!(ctrl.state(), State::Active { hwnd: next_hwnd });
@@ -501,10 +530,10 @@ fn hide_visual_failure_rolls_back_and_latches() {
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     let a = draw(1, SystemMaterial::Popover, [0.0, 0.0, 100.0, 40.0], 20.0, 1.0);
     let b = draw(2, SystemMaterial::Popover, [120.0, 0.0, 100.0, 40.0], 20.0, 1.0);
-    assert!(ctrl.sync_before_present(&[a, b], true, &mut seam));
-    seam.calls.clear();
+    assert!(present_frame(&mut ctrl, &[a, b], true, &mut seam));
+    seam.clear();
 
-    assert!(!ctrl.sync_before_present(&[a], true, &mut seam));
+    assert!(!present_frame(&mut ctrl, &[a], true, &mut seam));
     assert_eq!(ctrl.state(), State::Failed { hwnd });
     assert!(!seam.handover_topmost);
     assert!(!seam.target_open);
@@ -519,7 +548,7 @@ fn cpu_renderer_overlay_refuses_windows_system_material_and_stays_idle() {
     assert!(!ctrl.update(Some(0x8008), cpu_overlay, true, &mut seam));
     assert_eq!(ctrl.state(), State::Idle);
     assert!(!ctrl.native());
-    assert!(seam.calls.is_empty(), "CPU overlay must make zero DWM/Composition calls");
+    assert!(seam.calls().is_empty(), "CPU overlay must make zero DWM/Composition calls");
 }
 
 #[test]
@@ -559,7 +588,7 @@ fn effects_off_at_start_never_activates_and_draws_fallback_fill() {
         assert!(!ctrl.update(Some(hwnd), inputs, found, &mut seam));
         assert!(!ctrl.native(), "must stay non-native when effects policy is {off_policy:?}");
         assert_eq!(ctrl.state(), State::Idle);
-        assert!(seam.calls.is_empty(), "zero DWM/Composition calls when effects are off at start");
+        assert!(seam.calls().is_empty(), "zero DWM/Composition calls when effects are off at start");
         assert!(
             rt.instances.iter().any(|inst| inst.fill[3] > 0.5),
             "Frame 1 must paint the fallback fill (never a black/empty frame) for {off_policy:?}",
@@ -567,11 +596,11 @@ fn effects_off_at_start_never_activates_and_draws_fallback_fill() {
 
         // When system effects return, PolicyChanged requests a redraw and the next frame activates.
         assert!(ctrl.on_policy_changed(EffectsPolicy::ENABLED, &mut seam));
-        assert!(seam.calls.is_empty(), "Idle -> PolicyChanged(enabled) only asks for redraw");
+        assert!(seam.calls().is_empty(), "Idle -> PolicyChanged(enabled) only asks for redraw");
         assert!(ctrl.update(Some(hwnd), base_inputs(), found, &mut seam));
         assert!(ctrl.native());
         assert_eq!(ctrl.state(), State::Active { hwnd });
-        assert_eq!(seam.calls, vec![
+        assert_eq!(seam.calls(), vec![
             Call::SetHandoverTopmost(hwnd, true),
             Call::CreateTarget(hwnd),
             Call::SetHostBackdropBrush(hwnd, true),
@@ -608,9 +637,9 @@ fn effects_disabled_while_mounted_tears_down_and_repaints_fallback_then_reactiva
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     rt.paint.set_native_materials(ctrl.native());
     rt.frame(0.0);
-    assert!(ctrl.sync_before_present(rt.system_materials(), true, &mut seam));
+    assert!(present_frame(&mut ctrl, rt.system_materials(), true, &mut seam));
     assert!(rt.instances.iter().all(|inst| inst.fill[3] == 0.0));
-    seam.calls.clear();
+    seam.clear();
 
     // Path A: Transparency effects turned off via PolicyChanged event while Active ->
     // tears down immediately in strict order and requests a redraw with fallback fill.
@@ -618,14 +647,14 @@ fn effects_disabled_while_mounted_tears_down_and_repaints_fallback_then_reactiva
     assert!(ctrl.on_policy_changed(transparency_off, &mut seam));
     assert!(!ctrl.native());
     assert_eq!(ctrl.state(), State::Idle);
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::DestroyTarget,
         Call::SetHostBackdropBrush(hwnd, false),
         Call::SetHandoverTopmost(hwnd, false),
     ]);
     assert!(!seam.handover_topmost);
     assert!(!seam.target_open);
-    seam.calls.clear();
+    seam.clear();
 
     // Redraw paints fallback fill and makes zero seam calls while still off.
     rt.paint.set_native_materials(ctrl.native());
@@ -633,14 +662,14 @@ fn effects_disabled_while_mounted_tears_down_and_repaints_fallback_then_reactiva
     assert!(rt.instances.iter().any(|inst| inst.fill[3] > 0.5), "fallback fill must draw");
     let off_inputs = MaterialInputs { effects: transparency_off, ..base_inputs() };
     assert!(!ctrl.update(Some(hwnd), off_inputs, true, &mut seam));
-    assert!(seam.calls.is_empty());
+    assert!(seam.calls().is_empty());
 
     // Transparency effects come back -> PolicyChanged asks for redraw, next frame re-activates.
     assert!(ctrl.on_policy_changed(EffectsPolicy::ENABLED, &mut seam));
     assert!(ctrl.update(Some(hwnd), base_inputs(), true, &mut seam));
     assert!(ctrl.native());
     assert_eq!(ctrl.state(), State::Active { hwnd });
-    seam.calls.clear();
+    seam.clear();
 
     // Path B: Battery/Energy Saver turns on right before a frame's eligibility check (in-frame) ->
     // update() tears down and returns true so the host rebuilds fallback fill in the same frame.
@@ -651,7 +680,7 @@ fn effects_disabled_while_mounted_tears_down_and_repaints_fallback_then_reactiva
     assert!(ctrl.update(Some(hwnd), energy_saver_on, true, &mut seam));
     assert!(!ctrl.native());
     assert_eq!(ctrl.state(), State::Idle);
-    assert_eq!(seam.calls, vec![
+    assert_eq!(seam.calls(), vec![
         Call::DestroyTarget,
         Call::SetHostBackdropBrush(hwnd, false),
         Call::SetHandoverTopmost(hwnd, false),
@@ -670,17 +699,17 @@ fn policy_changed_is_noop_without_mounted_materials_or_when_failed() {
     assert!(!ctrl.update(Some(0xB001), base_inputs(), false, &mut seam));
     assert!(!ctrl.on_policy_changed(EffectsPolicy { energy_saver: true, ..EffectsPolicy::ENABLED }, &mut seam));
     assert!(!ctrl.on_policy_changed(EffectsPolicy::ENABLED, &mut seam));
-    assert!(seam.calls.is_empty());
+    assert!(seam.calls().is_empty());
 
     // Failed latch stays latched across policy changes on the same HWND.
     let mut seam_fail = FakeSeam::failing(FailAt::CreateTarget);
     assert!(!ctrl.update(Some(0xB002), base_inputs(), true, &mut seam_fail));
     assert_eq!(ctrl.state(), State::Failed { hwnd: 0xB002 });
-    seam_fail.calls.clear();
+    seam_fail.clear();
     assert!(!ctrl.on_policy_changed(EffectsPolicy { advanced_effects: false, ..EffectsPolicy::ENABLED }, &mut seam_fail));
     assert!(!ctrl.on_policy_changed(EffectsPolicy::ENABLED, &mut seam_fail));
     assert_eq!(ctrl.state(), State::Failed { hwnd: 0xB002 });
-    assert!(seam_fail.calls.is_empty());
+    assert!(seam_fail.calls().is_empty());
 }
 
 #[test]
@@ -749,6 +778,126 @@ fn pure_step_state_machine_covers_policy_and_lifecycle_events() {
         EffectsPolicy::ENABLED.bits(),
         EffectsPolicy { energy_saver: true, ..EffectsPolicy::ENABLED }.bits(),
     );
+}
+
+#[test]
+fn present_runs_before_visual_update_and_commit_across_fractional_scales() {
+    use crate::{Color, Cx, El, Env, Runtime, Spring, TextStyle, col, row, text};
+
+    struct Probe {
+        expanded: bool,
+        small_dims: (f32, f32, f32),
+        large_dims: (f32, f32, f32),
+    }
+
+    fn view(s: &Probe, cx: &mut Cx<Probe>) -> El {
+        let (w, h, r) = if s.expanded { s.large_dims } else { s.small_dims };
+        let label = if s.expanded { "Expanded HUD pill (300 ms spring)" } else { "Dynamic pill" };
+        let fg = if cx.system_dark() { Color::WHITE } else { Color { r: 0.08, g: 0.08, b: 0.1, a: 1.0 } };
+        let fallback = if cx.system_dark() {
+            Color { r: 0.12, g: 0.12, b: 0.14, a: 0.92 }
+        } else {
+            Color { r: 0.94, g: 0.94, b: 0.96, a: 0.92 }
+        };
+        col().key("overlay-root").w_full().h_full().items_center().pt(24.0).child(
+            row().key("overlay-pill").size(w, h).radius(r).px(20.0).center().clip_soft(0.0)
+                .fill(fallback)
+                .border(1.0, fg.alpha(0.22))
+                .shadow(10.0, 28.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.32 })
+                .system_material(SystemMaterial::Popover)
+                .motion(Spring::new(0.3, 0.0))
+                .child(text(label).font(TextStyle::new(14.0, 600.0)).color(fg)),
+        )
+    }
+
+    let geometries = [
+        ((220.0, 48.0, 24.0), (420.0, 96.0, 28.0)),
+        ((270.0, 40.0, 20.0), (388.0, 120.0, 24.0)),
+    ];
+
+    for (small_dims, large_dims) in geometries {
+        for scale in [1.0f32, 1.25, 1.5, 2.0] {
+            let mut rt = Runtime::new(
+                Probe { expanded: false, small_dims, large_dims },
+                view,
+                (720.0, 200.0),
+                Env::new(true, scale),
+            );
+            let mut ctrl = Controller::new(Mode::Synced, ClipKind::Rectangle, TintMode::None);
+            let mut seam = FakeSeam::default();
+            rt.frame(0.0);
+            assert!(ctrl.update(Some(0xD001), base_inputs(), true, &mut seam));
+            rt.paint.set_native_materials(true);
+            rt.frame(0.0);
+            assert!(present_frame(&mut ctrl, rt.system_materials(), true, &mut seam));
+            seam.clear();
+
+            for cycle in 0..2usize {
+                for target_expanded in [true, false] {
+                    rt.update(|s, tx| {
+                        s.expanded = target_expanded;
+                        tx.animated();
+                    });
+                    let mut frame = 0usize;
+                    loop {
+                        let dt = if frame == 0 { 0.0 } else { 1.0 / 144.0 };
+                        let more = rt.frame(dt);
+                        seam.clear();
+                        let draws = rt.system_materials();
+                        assert_eq!(draws.len(), 1);
+                        let m = draws[0];
+                        assert!(present_frame(&mut ctrl, draws, true, &mut seam));
+                        let calls = seam.calls();
+                        assert_eq!(
+                            calls.first(),
+                            Some(&Call::Present),
+                            "scale={scale} cycle={cycle} exp={target_expanded} frame={frame}: Present must run before visual updates and Commit",
+                        );
+                        let pres = rt.presented("overlay-pill").unwrap().0;
+                        let pres_px = [pres[0] * scale, pres[1] * scale, pres[2] * scale, pres[3] * scale];
+                        let border_rects: Vec<[f32; 4]> = rt.instances.iter()
+                            .filter(|inst| inst.params[0] > 0.0 && inst.params[1] == 0.0)
+                            .map(|inst| inst.rect)
+                            .collect();
+                        assert!(!border_rects.is_empty());
+                        if let Some(spec) = calls.iter().find_map(|c| match c {
+                            Call::UpdateVisual(_, spec) => Some(*spec),
+                            _ => None,
+                        }) {
+                            assert_eq!(spec.offset, [m.rect[0], m.rect[1]]);
+                            assert_eq!(spec.size, [m.rect[2], m.rect[3]]);
+                            assert_eq!(calls.last(), Some(&Call::Commit));
+                        }
+                        // Edge-by-edge agreement with presented rect and painted rim at every scale.
+                        let mat_edges = [m.rect[0], m.rect[1], m.rect[0] + m.rect[2], m.rect[1] + m.rect[3]];
+                        let pres_edges = [pres_px[0], pres_px[1], pres_px[0] + pres_px[2], pres_px[1] + pres_px[3]];
+                        for edge in 0..4 {
+                            assert!(
+                                (mat_edges[edge] - pres_edges[edge]).abs() <= 1.0,
+                                "scale={scale} cycle={cycle} exp={target_expanded} frame={frame} edge={edge}: mat={mat_edges:?} vs pres={pres_edges:?}",
+                            );
+                        }
+                        for br in &border_rects {
+                            assert_eq!(*br, m.rect, "scale={scale} cycle={cycle} exp={target_expanded} frame={frame}: border rect != mat rect");
+                        }
+                        // Every glyph instance must be clipped inside the springing pill's right edge.
+                        for inst in rt.instances.iter().filter(|inst| inst.params[1] == 2.0) {
+                            assert!(
+                                inst.clip[2] <= m.rect[0] + m.rect[2] + 0.5,
+                                "scale={scale} cycle={cycle} exp={target_expanded} frame={frame}: glyph clip right ({}) exceeds pill right ({})",
+                                inst.clip[2],
+                                m.rect[0] + m.rect[2],
+                            );
+                        }
+                        frame += 1;
+                        if !more || frame >= 240 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(all(target_os = "windows", feature = "windows-system-material"))]

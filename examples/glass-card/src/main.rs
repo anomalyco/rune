@@ -245,7 +245,7 @@ fn overlay_pill_view(s: &OverlayPill, cx: &mut Cx<OverlayPill>) -> El {
         Color { r: 0.94, g: 0.94, b: 0.96, a: 0.92 }
     };
     col().key("overlay-root").w_full().h_full().items_center().pt(24.0).child(
-        row().key("overlay-pill").size(w, h).radius(r).px(20.0).center()
+        row().key("overlay-pill").size(w, h).radius(r).px(20.0).center().clip_soft(0.0)
             .fill(fallback)
             .border(1.0, fg.alpha(0.22))
             .shadow(10.0, 28.0, Color { r: 0.0, g: 0.0, b: 0.0, a: 0.32 })
@@ -362,4 +362,42 @@ fn auto_toggle_springs_card_across_multiple_intermediate_frames() {
     assert!(saw_intermediate, "card must pass through intermediate x positions");
     let end_x = rt.system_materials()[0].rect[0];
     assert!((end_x - (SIZE.0 - 290.0)).abs() < 1.0, "final docked x: {end_x}");
+}
+
+#[test]
+fn overlay_pill_expansion_clips_label_and_tracks_material_at_125_percent() {
+    let scale = 1.25f32;
+    let mut rt = rune::Runtime::new(
+        OverlayPill { expanded: false, material: SystemMaterial::Popover },
+        overlay_pill_view,
+        (720.0, 200.0),
+        rune::Env::new(true, scale),
+    );
+    rt.frame(0.0);
+
+    rt.update(toggle_overlay_auto);
+    for frame in 0..30usize {
+        let dt = if frame == 0 { 0.0 } else { 1.0 / 144.0 };
+        let _ = rt.frame(dt);
+        let m = rt.system_materials()[0];
+        let pill_right = m.rect[0] + m.rect[2];
+        let pres = rt.presented("overlay-pill").expect("overlay-pill presented").0;
+        let pres_left = pres[0] * scale;
+        let pres_right = (pres[0] + pres[2]) * scale;
+        assert!((m.rect[0] - pres_left).abs() <= 1.0, "frame {frame}: left mismatch");
+        assert!((pill_right - pres_right).abs() <= 1.0, "frame {frame}: right mismatch");
+        let elements = rt.elements();
+        let pill = elements.iter().find(|el| el.key.as_deref() == Some("overlay-pill")).expect("overlay-pill element");
+        assert!(pill.clips, "frame {frame}: overlay-pill must clip its expanding label");
+        // Verify the label's visible bounds never spill past the springing pill's right rim.
+        for el in &elements {
+            if el.text.is_some() {
+                let visible_right = (el.visible[0] + el.visible[2]) * scale;
+                assert!(
+                    visible_right <= pill_right + 1.0,
+                    "frame {frame}: label spills past pill right rim (visible_right={visible_right:.1} > pill_right={pill_right:.1})",
+                );
+            }
+        }
+    }
 }
