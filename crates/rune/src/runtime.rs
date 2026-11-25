@@ -425,10 +425,28 @@ const _: () = {
 };
 
 impl<S: 'static> Runtime<S> {
+    /// Creates a standalone runtime using Rune's default embedded fonts.
+    ///
+    /// Blends in sRGB-encoded space by default (`srgb_blend() == true`), matching `App` windows
+    /// and [`crate::render::OFFSCREEN_FORMAT`]. Call [`Self::set_srgb_blend`] with `false` to
+    /// blend in linear light.
+    ///
+    /// ```
+    /// use rune::{Env, Runtime, el};
+    ///
+    /// let mut rt = Runtime::new((), |_: &(), _| el(), (200.0, 120.0), Env::new(true, 1.0));
+    /// assert!(rt.srgb_blend());
+    /// rt.frame(0.0);
+    /// ```
     pub fn new(state: S, view: fn(&S, &mut Cx<S>) -> El, viewport: (f32, f32), env: Env) -> Self {
         Self::with_text(state, view, viewport, env, TextSystem::default())
     }
 
+    /// Creates a standalone runtime with a caller-supplied [`TextSystem`].
+    ///
+    /// Blends in sRGB-encoded space by default (`srgb_blend() == true`), matching `App` windows
+    /// and [`crate::render::OFFSCREEN_FORMAT`]. Call [`Self::set_srgb_blend`] with `false` to
+    /// blend in linear light.
     pub fn with_text(state: S, view: fn(&S, &mut Cx<S>) -> El, viewport: (f32, f32), env: Env, text: TextSystem) -> Self {
         Self::from_core(RuntimeCore::new(viewport, env, text), state, view)
     }

@@ -129,6 +129,7 @@ fn focused_field_paints_caret_in_its_text_color_by_default() {
     let mut draft = TextEdit::new("hello");
     draft.focused = true;
     let mut rt = Runtime::new(Form { draft, fg: None, explicit_caret: None }, view, (300.0, 120.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
 
     let has_fill = |rt: &Runtime<Form>, color: Color| {

@@ -31,10 +31,10 @@ pub(crate) struct AlphaSurface {
 mod tests {
     #[test]
     fn gpu_straight_alpha_matches_cpu_reference() {
-        use crate::render::{Gpu, Offscreen, OFFSCREEN_FORMAT};
+        use crate::render::{Gpu, OFFSCREEN_FORMAT_LINEAR, Offscreen};
         let Some(gpu) = Gpu::test_headless() else { return };
-        let alpha = super::AlphaSurface::new(&gpu.device, OFFSCREEN_FORMAT, (4, 4));
-        let target = Offscreen::new(&gpu.device, 4, 4);
+        let alpha = super::AlphaSurface::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR, (4, 4));
+        let target = Offscreen::with_format(&gpu.device, 4, 4, OFFSCREEN_FORMAT_LINEAR);
         for color in [[0.125_f32, 0.25, 0.375, 0.5], [0.0; 4], [0.4, 0.6, 0.1, 1.0]] {
             let mut enc = gpu.device.create_command_encoder(&Default::default());
             {

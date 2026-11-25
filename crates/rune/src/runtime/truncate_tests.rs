@@ -28,6 +28,7 @@ fn cut_at(content: &'static str, elide: Elide, marked: Option<(usize, usize)>, w
         col().w_full().child(match s.1 { Elide::End => t.truncate(), Elide::Middle => t.truncate_middle(), Elide::Head => t.truncate_head() })
     }
     let mut rt = Runtime::new((content, elide, marked), view, (width, 40.0), Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt
 }

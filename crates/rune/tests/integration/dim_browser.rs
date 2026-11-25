@@ -2,7 +2,7 @@
 //! with its outer shadows outside it and its fill and gradient fading as one, and an outer
 //! shadow paints at its authored alpha over a transparent window or an opaque page.
 use rune::color::{srgb_decode, srgb_encode};
-use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use rune::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use rune::{Color, Cx, El, Env, Runtime, Shadow, el};
 
 const W: u32 = 120;
@@ -13,7 +13,7 @@ fn render(gpu: &Gpu, view: fn(&(), &mut Cx<()>) -> El, srgb: bool, transparent: 
     rt.set_srgb_blend(srgb);
     rt.transparent = transparent;
     rt.frame(0.0);
-    let format = if srgb { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+    let format = if srgb { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR };
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(srgb);
     let target = Offscreen::with_format(&gpu.device, W, H, format);

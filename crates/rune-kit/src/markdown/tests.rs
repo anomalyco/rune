@@ -747,6 +747,7 @@ fn inline_code_at_block_end_keeps_its_closing_pad_in_width_wrap_and_alignment() 
     };
     let run = |src: &'static str, pad: f32, max_w: f32, fixed_w: Option<f32>| -> Runtime<Case> {
         let mut rt = Runtime::new(Case { src, pad, max_w, fixed_w }, view, (600.0, 400.0), Env::new(true, 1.0));
+        rt.set_srgb_blend(false);
         rt.frame(0.0);
         rt
     };

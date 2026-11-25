@@ -1,6 +1,6 @@
 //! Public offscreen rendering helper: `Renderer::render_runtime_to_offscreen`.
 use rune::native_surface::{ByteFrame, ColorInfo, Format};
-use rune::render::{Gpu, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use rune::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use rune::text::TextSystem;
 use rune::{
     Color, Cx, El, Env, NativeSurface, Pixels, Runtime, ScrollFade, ScrollSpec, SurfaceFit,
@@ -124,7 +124,7 @@ fn supports_srgb_blend_and_transparent_clear() {
     };
 
     for (srgb, want) in [(true, [255, 128, 128, 255]), (false, [255, 188, 188, 255])] {
-        let format = if srgb { OFFSCREEN_FORMAT.remove_srgb_suffix() } else { OFFSCREEN_FORMAT };
+        let format = if srgb { OFFSCREEN_FORMAT } else { OFFSCREEN_FORMAT_LINEAR };
         let text = TextSystem::new(&[], ("Inter", "Inter"));
         let mut rt = Runtime::with_text((), blend_view, (w as f32, h as f32), Env::new(true, 1.0), text);
         rt.set_srgb_blend(srgb);

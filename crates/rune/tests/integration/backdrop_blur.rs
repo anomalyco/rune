@@ -1,14 +1,14 @@
 //! `El::backdrop_blur`: an element blurs what is drawn behind it in the same window, inside its
 //! rounded rect and clip, under its fill.
-use rune::render::{Gpu, KIND_BACKDROP_BLUR, KIND_LAYER, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use rune::render::{Gpu, KIND_BACKDROP_BLUR, KIND_LAYER, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use rune::{Color, Cx, El, Env, Runtime, ScrollSpec, col, el, row};
 
 const RED: Color = Color { r: 1.0, g: 0.0, b: 0.0, a: 1.0 };
 const BLUE: Color = Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 };
 
 fn pixels<S: 'static>(gpu: &Gpu, rt: &mut Runtime<S>, size: (u32, u32)) -> Vec<u8> {
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, size.0, size.1);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, size.0, size.1, OFFSCREEN_FORMAT_LINEAR);
     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     renderer.draw(&mut encoder, &target.view, [0.0, 0.0, 0.0, 1.0]);
@@ -59,6 +59,7 @@ fn stripes(s: &Scene, _: &mut Cx<Scene>) -> El {
 fn render(scene: Scene, scale: f32) -> Option<(Runtime<Scene>, Vec<u8>)> {
     let gpu = Gpu::test_headless()?;
     let mut rt = Runtime::new(scene, stripes, (200.0, 120.0), Env::new(false, scale));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     let size = ((200.0 * scale) as u32, (120.0 * scale) as u32);
     let px = pixels(&gpu, &mut rt, size);

@@ -18,9 +18,10 @@ fn raised_children_of_cached_clipped_groups_stay_visible_and_clipped() {
             .child(el().size(24.0, 24.0).raise().fill(Color::WHITE)))
     }
     let Some(gpu) = Gpu::test_headless() else { return };
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, 32, 32);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, 32, 32, OFFSCREEN_FORMAT_LINEAR);
     let mut rt = Runtime::new((), view, (32.0, 32.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     for _ in 0..3 {
         rt.frame(0.0);
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (32, 32));
@@ -54,8 +55,8 @@ pub(super) fn near(got: &[u8], want: [u8; 4]) {
 #[test]
 fn isolated_layers_match_scalar_overlap_crossfade_and_nesting() {
     let Some(gpu) = Gpu::test_headless() else { return };
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, 32, 16, OFFSCREEN_FORMAT_LINEAR);
     let mut atlas = crate::text::TextSystem::default().atlas;
     let bounds = [4.0, 4.0, 24.0, 8.0];
     let mut instances = group(bounds, 0.5, [1.0; 4]);
@@ -122,9 +123,10 @@ fn leaf_dimming_keeps_container_opacity_isolated() {
             .dim(0.5)
     }
     let Some(gpu) = Gpu::test_headless() else { return };
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, 32, 16);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, 32, 16, OFFSCREEN_FORMAT_LINEAR);
     let mut rt = Runtime::new(Live::new(0.5), view, (32.0, 16.0), Env { scale: 1.0, system_dark: true });
+    rt.set_srgb_blend(false);
     for (alpha, targets) in [(0.5, 1), (1.0, 0)] {
         rt.state.set(alpha); rt.frame(0.0);
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (32, 16));
@@ -260,9 +262,10 @@ fn scale_and_fade_reuse_bucket_for_sixty_growing_frames() {
             .child(el().size(90.0, 90.0).fill(Color::WHITE)))
     }
     let Some(gpu) = Gpu::test_headless() else { return };
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, 256, 256);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, 256, 256, OFFSCREEN_FORMAT_LINEAR);
     let mut rt = Runtime::new((Live::new(0.9), Live::new(0.1)), view, (256.0, 256.0), Env { scale: 1.0, system_dark: true });
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (256, 256));
     let allocations = renderer.layer_stats().allocations;
@@ -328,6 +331,7 @@ fn isolated_exit_descendants_stay_inside_their_fading_parent() {
             .child(el().key("sibling").size(8.0, 16.0).pin(Some(24.0), Some(0.0), None, None).fill(Color { r: 0.0, g: 0.0, b: 1.0, a: 1.0 }))
     }
     let mut rt = Runtime::new(true, view, (32.0, 16.0), Env { scale: 1.0, system_dark: true });
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt.state = false; rt.invalidate(); rt.frame(0.0);
     let start = rt.instances.iter().position(|i| i.params[1] == KIND_LAYER).unwrap();

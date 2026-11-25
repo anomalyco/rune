@@ -73,14 +73,11 @@ fn a_disabled_contrast_button_fades_as_the_browser_does() {
     let Some(gpu) = Gpu::test_headless() else { return };
     for dark in [false, true] {
         let mut rt = Runtime::new((), view, (w as f32, h as f32), Env { system_dark: dark, scale: 1.0 });
-        rt.set_srgb_blend(true);
         rt.frame(0.0);
         rt.settle_all();
         rt.frame(0.0);
-        let format = OFFSCREEN_FORMAT.remove_srgb_suffix();
-        let mut renderer = Renderer::new(&gpu.device, format);
-        renderer.set_srgb_blend(true);
-        let target = Offscreen::with_format(&gpu.device, w, h, format);
+        let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        let target = Offscreen::new(&gpu.device, w, h);
         renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, (w, h));
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         renderer.draw(&mut encoder, &target.view, rt.clear_color());

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use rune::color::{hex, srgb_encode};
 use rune::compose::{Compositor, Frame};
 use rune::native_surface::{ByteFrame, ColorInfo, Format};
-use rune::render::{Gpu, KIND_RADIAL, OFFSCREEN_FORMAT, Offscreen, Renderer};
+use rune::render::{Gpu, KIND_RADIAL, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use rune::{
     App, AppSpec, Color, Cx, El, Env, Image, ImageCache,
     NativeSurface, Pixels, Runtime, SurfaceFit, el,
@@ -12,9 +12,9 @@ use rune::{
 
 fn render_rt<S: 'static>(gpu: &Gpu, rt: &mut Runtime<S>, size: (u32, u32)) -> Vec<u8> {
     let format = if rt.srgb_blend() {
-        OFFSCREEN_FORMAT.remove_srgb_suffix()
-    } else {
         OFFSCREEN_FORMAT
+    } else {
+        OFFSCREEN_FORMAT_LINEAR
     };
     let mut renderer = Renderer::new(&gpu.device, format);
     renderer.set_srgb_blend(rt.srgb_blend());
@@ -69,6 +69,7 @@ fn radial_gradient_centre_edge_and_monotonic_falloff() {
     }
 
     let mut rt = Runtime::new((), view, (120.0, 120.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     assert_eq!(rt.instances.len(), 1);
     let inst = rt.instances[0];
@@ -486,7 +487,7 @@ fn srgb_blend_images_surfaces_keycaps_and_compositor() {
     );
     assert_eq!(
         COMP_STATE.get().copied(),
-        Some((true, OFFSCREEN_FORMAT.remove_srgb_suffix())),
+        Some((true, OFFSCREEN_FORMAT)),
         "a compositor must see srgb_blend and the non-sRGB target format"
     );
 }

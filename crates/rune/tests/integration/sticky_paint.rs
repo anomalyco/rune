@@ -336,7 +336,7 @@ fn sticky_fade_exemption_is_continuous_on_each_axis_and_preserves_explicit_clips
                     rt.frame(0.0);
                     let header = find(&rt, "header");
                     if fade > 0.0 && !explicit {
-                        let fill = rt.instances.iter().find(|p| p.fill[0] == 1.0 && p.fill[1] == 0.0).unwrap();
+                        let fill = rt.instances.iter().find(|p| p.fill[0] > 0.99 && p.fill[1] == 0.0).unwrap();
                         let widths = rune::render::unpack_fade(fill.fade).0;
                         let (sticking, opposite) = match edge { 0 => (1, 3), 1 => (3, 1), _ => (0, 2) };
                         assert_eq!(widths[sticking], 0.0);
@@ -369,6 +369,7 @@ fn sticky_scroll_fade_preserves_an_intervening_explicit_clip() {
                 .child(el().w_full().h(600.0)))
     }
     let mut rt = Runtime::new((), view, (200.0, 200.0), Env::default());
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 100.0));
     rt.frame(0.0);
@@ -390,6 +391,7 @@ fn sticky_header_taller_than_a_new_growth_row_keeps_its_natural_size() {
             .child(stack.child(el().key("tail").w_full().h(400.0)))
     }
     let mut rt = Runtime::new(false, view, (200.0, 200.0), Env::default());
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     rt.update(|s, tx| { *s = true; tx.scroll_to_instant("scroll", 0.0, 200.0); });
     rt.frame(1.0 / 120.0);

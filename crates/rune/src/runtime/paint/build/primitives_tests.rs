@@ -289,6 +289,7 @@ fn focus_border_replaces_border_colour_only_while_focus_visible() {
             col().padding(20.0).items_start().child(target)
         }
         let mut rt = Runtime::new(case, view, (200.0, 120.0), Env::new(true, 1.0));
+        rt.set_srgb_blend(false);
         rt.frame(0.0);
         rt
     };
@@ -522,6 +523,7 @@ fn hover_and_press_fill_suppress_gradients_and_border_gradient() {
     }
 
     let mut rt = Runtime::new((), view, (300.0, 120.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     let at = |rt: &Runtime<()>, x: f32, kind: f32| {
         rt.instances.iter().filter(|i| (i.rect[0] - x).abs() < 1.0 && i.params[1] == kind).copied().collect::<Vec<_>>()
@@ -612,6 +614,7 @@ fn hover_and_press_replacements_compose_with_overlays_live_colors_focus_ring_and
 
     let state = S { fill: Live::new(rest), border: Live::new(rest) };
     let mut rt = Runtime::new(state, view, (300.0, 120.0), Env::new(true, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
 
     // Focus combo by keyboard so focus_ring shows.

@@ -11,7 +11,7 @@ pub(crate) struct PaintState {
     pub(in crate::runtime) inh_scratch: Vec<Inh>,
     /// Drawn rect per node (points, root space), for tools and hit tests.
     pub(crate) drawn: Vec<[f32; 4]>,
-    /// Opt-in gamma-space (sRGB) blending for translucent fills, shadows and blurs.
+    /// Gamma-space (sRGB) blending for translucent fills, shadows and blurs (on by default).
     pub(in crate::runtime) srgb_blend: bool,
     /// The shell shows native views for the first `max_native_materials` of `materials`; their
     /// elements skip their fill and cut their shadows out of their interior.
@@ -110,7 +110,7 @@ impl PaintState {
         Self {
             inh_scratch: Vec::new(),
             drawn: Vec::new(),
-            srgb_blend: false,
+            srgb_blend: true,
             native_materials: false,
             videos_active: false,
             animated_icons: false,

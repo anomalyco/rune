@@ -104,11 +104,12 @@ fn seg_view(s: &SegApp, _: &mut Cx<SegApp>) -> El {
 }
 
 fn approx_color(inst: &crate::render::Instance, c: Color) -> bool {
-    // Compare straight RGB channels (handles both isolated and unisolated opacity).
+    // Compare straight sRGB channels (handles both isolated and unisolated opacity).
+    let want = c.premul_srgb(1.0);
     let a = inst.fill[3].max(1e-4);
-    (inst.fill[0] / a - c.r).abs() < 0.05
-        && (inst.fill[1] / a - c.g).abs() < 0.05
-        && (inst.fill[2] / a - c.b).abs() < 0.05
+    (inst.fill[0] / a - want[0]).abs() < 0.05
+        && (inst.fill[1] / a - want[1]).abs() < 0.05
+        && (inst.fill[2] / a - want[2]).abs() < 0.05
 }
 
 #[test]

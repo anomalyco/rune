@@ -47,6 +47,7 @@ fn view(s: &App, _: &mut Cx<App>) -> El {
 
 fn mount(app: App, size: (f32, f32)) -> Runtime<App> {
     let mut rt = Runtime::new(app, view, size, Env::new(true, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     settle(&mut rt);
     rt

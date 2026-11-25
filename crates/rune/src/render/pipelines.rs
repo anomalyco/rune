@@ -8,6 +8,14 @@ use super::{
     warmup::WarmRenderer,
 };
 
+/// Default blend mode for a target format: sRGB-encoded blending for 8-bit non-sRGB targets
+/// (`Rgba8Unorm` / `OFFSCREEN_FORMAT` and `Bgra8Unorm`), and linear light for `*Srgb` targets
+/// (`OFFSCREEN_FORMAT_LINEAR`, `Bgra8UnormSrgb`) and floating-point HDR targets (`Rgba16Float`).
+#[inline]
+pub(super) fn default_srgb_blend(format: wgpu::TextureFormat) -> bool {
+    matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm)
+}
+
 impl Renderer {
     #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(super) fn new_warm(device: &wgpu::Device, format: wgpu::TextureFormat) -> WarmRenderer {
@@ -152,7 +160,7 @@ impl Renderer {
             springs,
             spring_instances,
             layers: Default::default(),
-            srgb_blend: false,
+            srgb_blend: default_srgb_blend(format),
             effects: Vec::new(),
             backdrops: Vec::new(),
             backdrop_used: false,
@@ -288,8 +296,9 @@ impl Renderer {
         if let Some(s) = &mut self.surfaces { s.add_format(device, format); }
     }
 
-    /// Switches the frame pass's target format (`!format.is_srgb()` turns `srgb_blend` on),
-    /// keeping the glyph and image atlases, offscreen layer targets and `extra` pipelines.
+    /// Switches the frame pass's target format (setting `srgb_blend` from `format`: `true` for
+    /// `Rgba8Unorm` / `Bgra8Unorm`, `false` for `*Srgb` and floating-point targets), keeping the
+    /// glyph and image atlases, offscreen layer targets and `extra` pipelines.
     pub fn set_format(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
         self.try_set_format(device, format).unwrap_or_else(|error| panic!("{error}"));
     }
@@ -332,7 +341,7 @@ impl Renderer {
             Some(i) => self.pinned = Some(self.pinned_extra.swap_remove(i).1),
             None => self.start_pinned(device),
         }
-        self.srgb_blend = !format.is_srgb();
+        self.srgb_blend = default_srgb_blend(format);
         if self.layer_stats().targets > 0 { self.add_layer_format(device, format); }
         let [vw, vh] = self.target_frame(None).1;
         if !self.backdrops.is_empty() && vw > 0 && vh > 0 {

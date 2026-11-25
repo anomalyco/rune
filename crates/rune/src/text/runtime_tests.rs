@@ -136,6 +136,7 @@ fn span_ring_subranges_case_elision_and_cache_changes() {
             .on_link(|_: &mut Color, _, _| {}))
     }
     let mut rt = Runtime::new(Color::BLACK, view, (300.0, 80.0), Env::new(false, 1.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     let ring = *rt.instances.iter().find(|i| i.params[1] == KIND_RECT && i.params[0] == 1.0).unwrap();
     let rects: Vec<_> = rt.instances.iter().filter(|i| i.params[1] == KIND_RECT).collect();
@@ -206,7 +207,7 @@ fn span_ring_without_background_is_empty_and_reveal_fades_the_chip() {
 
 #[test]
 fn span_ring_draws_inset_border_on_light_page_merges_runs_wraps_and_stays_on_hover() {
-    use crate::render::{Gpu, KIND_RECT, OFFSCREEN_FORMAT, Offscreen, Renderer};
+    use crate::render::{Gpu, KIND_RECT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
     use crate::{Cx, El, Env, Link, LinkPaint, Runtime, col, rich};
 
     const PAGE: Color = Color { r: 0.96, g: 0.96, b: 0.97, a: 1.0 };
@@ -240,6 +241,7 @@ fn span_ring_draws_inset_border_on_light_page_merges_runs_wraps_and_stays_on_hov
     }
 
     let mut rt = Runtime::new(1.0f32, view, (200.0, 44.0), Env::new(false, 2.0));
+    rt.set_srgb_blend(false);
     rt.frame(0.0);
     let chips: Vec<_> = rt.instances.iter().filter(|i| i.params[1] == KIND_RECT && i.params[0] > 0.0).copied().collect();
     assert_eq!(chips.len(), 1, "plain, bold and mono runs merge into one ringed chip: {chips:?}");
@@ -251,8 +253,8 @@ fn span_ring_draws_inset_border_on_light_page_merges_runs_wraps_and_stays_on_hov
     // at the inset edge while the interior shows the fill.
     let Some(gpu) = Gpu::test_headless() else { return };
     let size = (400u32, 88u32);
-    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
-    let target = Offscreen::new(&gpu.device, size.0, size.1);
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT_LINEAR);
+    let target = Offscreen::with_format(&gpu.device, size.0, size.1, OFFSCREEN_FORMAT_LINEAR);
     renderer.prepare(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     renderer.draw(&mut encoder, &target.view, [0.0; 4]);
@@ -330,6 +332,7 @@ fn span_ring_draws_inset_border_on_light_page_merges_runs_wraps_and_stays_on_hov
         )
     }
     let mut wrap_rt = Runtime::new((), wrapped, (90.0, 120.0), Env::new(false, 1.5));
+    wrap_rt.set_srgb_blend(false);
     wrap_rt.frame(0.0);
     let lines: Vec<_> = wrap_rt.instances.iter().filter(|i| i.params[1] == KIND_RECT && i.params[0] > 0.0).collect();
     assert!(lines.len() >= 2, "wrapped span splits into one ringed rect per line: {lines:?}");
