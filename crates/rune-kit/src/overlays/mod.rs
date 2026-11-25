@@ -7,5 +7,6 @@ pub(crate) mod menu;
 pub(crate) mod overlay;
 pub mod popover;
 pub(crate) mod popup_list;
+mod popup_menu;
 pub(crate) mod select;
 pub(crate) mod toast;

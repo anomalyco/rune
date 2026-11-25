@@ -540,6 +540,14 @@ fn focused_input_survives_viewport_resize_that_squeezes_height_to_zero() {
     assert!(rt.state.focused && rt.has_focus(), "viewport resize must keep focused text field active");
     assert!(!rt.web_context(&mut mirror) && !mirror.key.is_empty(), "web editing key must remain active");
 
+    // A subsequent invalidation or edit while the window stays squeezed (relayout == false,
+    // such as window.resize's LARGE_VIEWPORT invalidate or typing into the squeezed field) must
+    // also keep focus without firing a spurious blur.
+    rt.invalidate();
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.focused && rt.has_focus(), "invalidation at squeezed height must not drop focus");
+    assert!(!rt.web_context(&mut mirror) && !mirror.key.is_empty(), "web editing key must remain active across invalidation");
+
     // Restoring full height leaves the field focused and editable.
     rt.set_viewport((390.0, 699.0), 1.0);
     rt.frame(1.0 / 60.0);

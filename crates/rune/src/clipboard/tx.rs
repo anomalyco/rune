@@ -58,15 +58,20 @@ impl Tx {
         self.set_copy(crate::ClipboardWrite::new(content), None);
     }
 
-    /// Copy an image an [`ImageCache`](crate::ImageCache) decoded, as a browser's Copy Image
-    /// does: the pixels it holds, at full resolution, as PNG. Every format the cache draws
-    /// copies, with no second decode: PNG, JPEG, WebP, GIF and AVIF (an animation's first
-    /// frame) and SVG at its intrinsic size (see [`Image::to_rgba`](crate::Image::to_rgba)). The
-    /// PNG is encoded on the clipboard worker, off the event thread (on the web, asynchronously
-    /// inside a `ClipboardItem` `Promise<Blob>` created during the user gesture). An image still
-    /// decoding, one that failed, or one whose PNG passes
-    /// [`MAX_IMAGE_BYTES`](crate::clipboard::MAX_IMAGE_BYTES) copies nothing and leaves the
-    /// clipboard as it was. Use [`Tx::copy_image_then`] to hear the outcome.
+    /// Copy an image an [`ImageCache`](crate::ImageCache) decoded as PNG, encoded off the event
+    /// thread on the clipboard worker (on the web, encoded off the input turn inside a
+    /// `ClipboardItem` `Promise<Blob>` created during the user gesture), with no second decode.
+    ///
+    /// Copies every format the cache draws: PNG, JPEG (EXIF-oriented, ICC converted to sRGB),
+    /// WebP and GIF (animated images copy frame 0, not the currently displayed frame), AVIF
+    /// stills natively (first frame on web), and SVG loaded via `ImageCache::load` at its
+    /// rounded intrinsic size up to 4096 px/side (`ImageCache::svg` rasterized smaller copies
+    /// at its rasterized size). Opaque 8-bit sRGB pixels round-trip bit-exactly; translucent
+    /// pixels round-trip through premultiplied 8-bit sRGB mip 0 (see
+    /// [`Image::to_rgba`](crate::Image::to_rgba)) and `alpha == 0` zeroes RGB. An image still
+    /// decoding, failed, over 64 megapixels / [`MAX_IMAGE_BYTES`](crate::clipboard::MAX_IMAGE_BYTES),
+    /// or superseded by a newer clipboard write leaves the clipboard untouched. Use
+    /// [`Tx::copy_image_then`] to hear the outcome.
     ///
     /// ```
     /// # use rune::{Image, Tx};

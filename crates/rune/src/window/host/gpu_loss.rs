@@ -85,12 +85,14 @@ impl TerminalLoss {
     }
 
     /// Detaches before an intentional clean GPU drop (`release_gpu_when_closed` or normal quit)
-    /// so wgpu's drop-triggered `DeviceLostReason::Destroyed` never falsely latches.
-    pub(in crate::window) fn prepare_clean_gpu_drop(&self, gpu: Option<&Gpu>) {
-        if let Some(latch) = &self.latch && !latch.is_failed() {
-            if let Some(gpu) = gpu {
-                gpu.mark_clean_drop();
-            }
+    /// so wgpu's drop-triggered `DeviceLostReason::Destroyed` never falsely latches, while
+    /// preserving `Destroyed` detection on sibling `Terminal` windows still sharing the `Gpu`.
+    pub(in crate::window) fn prepare_clean_gpu_drop(&self, gpu: Option<&Arc<Gpu>>) {
+        let Some(latch) = &self.latch else { return };
+        if let Some(gpu) = gpu {
+            let is_last = Arc::strong_count(gpu) == 1;
+            gpu.prepare_clean_drop_for(latch, is_last);
+        } else if !latch.is_failed() {
             latch.detach();
         }
     }
@@ -143,13 +145,17 @@ impl Host {
         self.poll_gpu_loss()
     }
 
-    /// Latches a terminal GPU failure (preserving any earlier first reason), marks the active GPU
-    /// lost so shared overlays/siblings stop using it, and runs terminal teardown immediately.
+    /// Latches a terminal GPU failure (preserving any earlier first reason) and runs terminal
+    /// teardown immediately. Only real `DeviceLost`/`DeviceRemoved` marks the shared `Gpu` lost;
+    /// window-local `SurfaceFailed`/`InitFailed`/`UncapturedError` leave a healthy shared `Gpu`
+    /// usable by sibling `Recover` windows.
     pub(in crate::window) fn latch_loss_latch(&mut self, kind: GpuFailureKind, reason: impl Into<String>) {
         if !self.terminal_loss.is_terminal() {
             return;
         }
-        if let Some((gpu, _)) = self.gpu.as_ref() {
+        if matches!(kind, GpuFailureKind::DeviceLost | GpuFailureKind::DeviceRemoved)
+            && let Some((gpu, _)) = self.gpu.as_ref()
+        {
             gpu.mark_lost();
         }
         if let Some(latch) = self.terminal_loss.latch().cloned() {
@@ -172,9 +178,10 @@ impl Host {
         }
         self.terminal_loss.entered = true;
         if let Some((gpu, _)) = self.gpu.as_ref() {
-            gpu.mark_lost();
-            let clear_pool = self.gpu_pool.borrow().upgrade().is_some_and(|p| Arc::ptr_eq(&p, gpu));
-            if clear_pool {
+            if let Some(latch) = self.terminal_loss.latch() {
+                gpu.detach_terminal_latch(latch);
+            }
+            if gpu.is_lost() && self.gpu_pool.borrow().upgrade().is_some_and(|p| Arc::ptr_eq(&p, gpu)) {
                 *self.gpu_pool.borrow_mut() = Weak::default();
             }
         } else if self.gpu_pool.borrow().upgrade().is_some_and(|p| p.is_lost()) {
@@ -209,7 +216,7 @@ impl Host {
         self.frame_presented.reset();
         self.gpu = None;
         self.app.release_compositor_gpu();
-        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
         self.app.rt_mut().paint.set_native_materials(false);
 
         // Cancel active input state (`wind_down` without hiding the window or changing `life`).
@@ -495,9 +502,29 @@ pub(in crate::window) fn classify_latched_wake_event(event: &crate::window::Wake
     }
 }
 
+/// Pure policy decision for a Windows/Linux CPU-first background GPU handover failure.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::window) enum HandoverFailureAction {
+    /// `GpuLossPolicy::Recover`: retry up to `max_tries` times on CPU, then stay on CPU.
+    RetryOrStayOnCpu { retry: bool },
+    /// `GpuLossPolicy::Terminal`: latch `InitFailed` immediately (no retries, no CPU fallback).
+    LatchTerminal,
+}
+
+pub(in crate::window) const fn decide_handover_failure(
+    policy: GpuLossPolicy,
+    tries: u8,
+    max_tries: u8,
+) -> HandoverFailureAction {
+    match policy {
+        GpuLossPolicy::Terminal => HandoverFailureAction::LatchTerminal,
+        GpuLossPolicy::Recover => HandoverFailureAction::RetryOrStayOnCpu { retry: tries < max_tries },
+    }
+}
+
 impl Drop for Host {
     fn drop(&mut self) {
-        self.terminal_loss.prepare_clean_gpu_drop(self.gpu.as_ref().map(|(g, _)| &**g));
+        self.terminal_loss.prepare_clean_gpu_drop(self.gpu.as_ref().map(|(g, _)| g));
     }
 }
 

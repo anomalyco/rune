@@ -539,6 +539,42 @@ fn panicking_on_field_menu_patch_falls_back_with_owned_request() {
 }
 
 #[test]
+fn panicking_on_popup_menu_patch_falls_back_with_owned_request() {
+    #[derive(Default)]
+    struct State {
+        requests: Vec<crate::PopupMenuRequest>,
+        picks: Vec<Option<String>>,
+    }
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        col().size(300.0, 200.0).child(el().key("btn").size(120.0, 32.0).on_press_tx(|_: &mut State, tx: &mut crate::Tx| {
+            let menu = crate::PopupMenu::new().item(crate::PopupItem::new("ok", "OK"));
+            tx.popup_menu(menu, "btn", |s: &mut State, picked, _| s.picks.push(picked.map(str::to_owned)));
+        }))
+    }
+
+    CALLS.set(0);
+    let mut rt = crate::App::new(AppSpec::new("hot-popup-menu", (300.0, 200.0), State::default, view))
+        .on_popup_menu(|s: &mut State, req: crate::PopupMenuRequest, _| {
+            panics_once();
+            s.requests.push(req);
+        })
+        .headless_runtime((300.0, 200.0), Env::new(true, 1.0));
+    rt.core_mut().host.force_popup_menu_fallback = true;
+    rt.frame(0.0);
+
+    let (x, y) = rt.find("btn").unwrap();
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    rt.frame(0.0);
+    assert_eq!(CALLS.get(), 2, "startup on_popup_menu runs once after the patched one panics");
+    assert_eq!(rt.state.requests.len(), 1);
+    assert_eq!(rt.state.requests[0].menu().entries().len(), 1);
+    rt.update(|_, tx| tx.resolve_popup_menu(Some("ok")));
+    rt.frame(0.0);
+    assert_eq!(rt.state.picks, [Some("ok".to_owned())]);
+}
+
+#[test]
 fn patched_or_original_evaluates_and_reuses_non_copy_args() {
     fn record(out: &mut Vec<String>, payload: String) {
         panics_once();

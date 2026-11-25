@@ -73,6 +73,16 @@ impl RuntimeCore {
     /// dismissed it with `None`. Its callback runs now and the next frame commits it, as for
     /// [`Runtime::update`]. For tests and headless drivers; native menus answer themselves.
     pub(crate) fn resolve_popup(&mut self, app: &mut dyn AppDriver, picked: Option<&str>) -> Result<(), PopupMenuError> {
+        let mut one = self.transaction(app);
+        self.resolve_popup_into(app, picked, &mut one)?;
+        self.latch_requests(app, &mut one);
+        merge(&mut self.frame.pending, one);
+        Ok(())
+    }
+
+    /// Like [`Self::resolve_popup`], latching the pick callback's effects into `out_tx` so an
+    /// in-frame caller (such as the in-window fallback hook) keeps them in the current commit.
+    pub(in crate::runtime) fn resolve_popup_into(&mut self, app: &mut dyn AppDriver, picked: Option<&str>, out_tx: &mut Tx) -> Result<(), PopupMenuError> {
         let request = self.host.popups.front().ok_or(PopupMenuError::NotOpen)?;
         if let Some(id) = picked {
             let item = request.menu.find(id).ok_or_else(|| PopupMenuError::UnknownItem(id.into()))?;
@@ -83,13 +93,10 @@ impl RuntimeCore {
             Some(id) => self.trace_event(format_args!("popup-menu:pick:{id}")),
             None => self.trace_event("popup-menu:cancel"),
         }
-        let mut one = self.transaction(app);
         if let (Some(field), Some(id)) = (request.field, picked) {
-            self.field_menu_pick(app, *field, id, &mut one);
+            self.field_menu_pick(app, *field, id, out_tx);
         }
-        (request.on_pick)(app.states(), picked, &mut one);
-        self.latch_requests(app, &mut one);
-        merge(&mut self.frame.pending, one);
+        (request.on_pick)(app.states(), picked, out_tx);
         self.commit.dirty = true;
         Ok(())
     }
@@ -141,6 +148,7 @@ impl RuntimeCore {
     /// Answers every waiting menu with `None`, as its window goes away. A callback that asks
     /// for another menu is answered too, up to a bound against one that always asks again.
     pub(crate) fn cancel_popups(&mut self, app: &mut dyn AppDriver) {
+        self.host.popup_fallback = popup_fallback::PopupFallbackState::Idle;
         for _ in 0..64 {
             if self.resolve_popup(app, None).is_err() { return; }
         }
@@ -157,7 +165,7 @@ impl RuntimeCore {
     }
 
     /// Drawn rect of the element a menu anchors to, matched as [`Runtime::find`] matches.
-    fn anchor_rect(&self, key: &str) -> Option<[f32; 4]> {
+    pub(in crate::runtime) fn anchor_rect(&self, key: &str) -> Option<[f32; 4]> {
         let i = self.live_named(None, key)?;
         self.paint.drawn.get(i).copied().filter(|r| r[2] > 0.0 || r[3] > 0.0)
     }

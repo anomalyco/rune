@@ -134,7 +134,7 @@ use input::primary_selection;
 use input::{
     app_ime, autoscroll, capture, drop as drop_dispatch, focus, focus_machine,
     gesture as gesture_dispatch, help, hit, hover, hover_delay, key_releases, modal_focus,
-    modifier_keys, physical as physical_dispatch, popup as popup_dispatch, press_repeat, press_run,
+    modifier_keys, physical as physical_dispatch, popup as popup_dispatch, popup_fallback, press_repeat, press_run,
     titlebar, touch as touch_input,
 };
 use input::action::*;

@@ -2174,11 +2174,17 @@ Hooks also hear a pasted image (a screenshot, an image copied from a browser or 
 (`size()`), whatever form the clipboard held it in. Rune fetches it only for a target with a
 hook (`on_input_paste`, `on_paste_content`, `read_clipboard`), so pasting text into other fields
 never decodes one, and leaves out images over `clipboard::MAX_IMAGE_BYTES` (32 MiB as PNG).
-An image alone, with no text, reaches only hooks. To copy an image, as a browser's Copy Image
-does, `tx.copy_image(&image)` takes an `Image` an `ImageCache` decoded (any format it draws; an
-animation's first frame, an SVG at its intrinsic size) and encodes it as PNG on the clipboard
-worker, so the app decodes nothing twice. `ClipboardImage::from_rgba(w, h, &rgba)` encodes
-pixels the app holds, for `ClipboardContent::with_image`. On the web,
+An image alone, with no text, reaches only hooks. To copy an image an `ImageCache` decoded,
+`tx.copy_image(&image)` (or `tx.copy_image_then(&image, on_result)` returning
+`Result<(), CopyImageError>`) encodes it as PNG off the event thread on the clipboard worker
+(on the web, off the input turn via a `ClipboardItem` `Promise<Blob>` created inside the user
+gesture), with no second decode and without overwriting newer clipboard writes if a slow
+encode finishes late. Opaque 8-bit sRGB pixels round-trip bit-exactly; translucent pixels
+round-trip through premultiplied 8-bit sRGB mip 0 (`Image::to_rgba` / `Pixels::to_rgba`),
+animated GIF/WebP/APNG copy frame 0, native `avif` copies stills, and `ImageCache::load` SVGs
+copy at rounded intrinsic size (up to 4096 px/side; `ImageCache::svg` rasterized smaller copies
+at its raster size). `ClipboardImage::from_rgba(w, h, &rgba)` encodes straight-alpha sRGB
+RGBA8 synchronously on the calling thread for `ClipboardContent::with_image`. On the web,
 hooks also hear files pasted into or dropped on the field as `content.web_files()`: up to
 `clipboard::MAX_WEB_FILES` `WebFile` handles with a name, type and size, no path, and nothing
 read until `WebFile::read(max)` (see WEB.md). A dropped PNG or text file is also the image or
@@ -2776,7 +2782,16 @@ row().key("theme").child(text(theme_title(&s.theme)))
   `FieldMenuRequest` (`field_key`, `field_path`, `point`, `menu` / `PopupMenu::entries`) to
   your hook so you can render it in-window and run the chosen action with
   `tx.resolve_field_menu(Some(id))` (or `None` to cancel), while macOS and Windows keep their
-  native menus unchanged. `cargo run -p rune --example popup_menu` shows both kinds.
+  native menus unchanged. For a general Linux in-window fallback covering every Rune pop-up menu
+  (`Tx::popup_menu`, selectable-text Copy, default link/image menus, and text-field menus when
+  `on_field_menu` is unset), opt in with `App::on_popup_menu(|s, req, tx| ...)` (also on
+  `WindowSpec` and `ConfiguredOverlay`): when `!popup_menu_supported() && !cfg!(target_arch = "wasm32")`,
+  Rune hands a `PopupMenuRequest` (`menu`, `into_menu`, `anchor`, `point`, `anchor_rect`,
+  `min_width`, `positioned`) to your hook and you answer with `tx.resolve_popup_menu(Some(id))`
+  or `None` (in `rune-kit`, `Menu::from_popup_menu` renders it in one call). `popup_menu_supported()`
+  continues reporting platform-native support (`false` on Linux, `true` on macOS/Windows), and
+  macOS, Windows, and web keep their existing menu presenters untouched. `cargo run -p rune --example popup_menu`
+  and `cargo run -p kit-gallery -- --scene rune-menu--popup-menu-fallback` show them.
 - **Web style**: on the web the menu is the page's own elements (`role="menu"`), light or dark
   as the window draws. `PopupMenu::style(PopupMenuStyle::new().background(..).text(..))` draws
   it from the app's palette instead: `background`, `text`, `muted`, `separator`, `highlight`,

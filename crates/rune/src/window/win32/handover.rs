@@ -252,6 +252,7 @@ impl Host {
     /// unless suppressed (`CpuFirst::Only`) or deferred on a software-only machine under
     /// `CpuFirst::Auto` + `Policy::Automatic`.
     pub(in crate::window) fn cpu_idle(&mut self) {
+        if self.poll_gpu_loss() { return; }
         let now = crate::time::now();
         let due = self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::Cpu { job: GpuJob::Waiting { retry_at, .. }, .. } if retry_at.is_none_or(|at| at <= now)) && w.first_frame.ready());
         match idle_handover_action(
@@ -283,6 +284,7 @@ impl Host {
     /// Starts or escalates GPU handover when a frame hits `NeedsGpu`: allows software adapters,
     /// runs at normal priority, and bypasses `QUIET_WAIT` deferral.
     pub(super) fn start_gpu_for_needs_gpu(&mut self) {
+        if self.poll_gpu_loss() { return; }
         let mut wake_ready = false;
         let should_start = {
             let Some(w) = self.win.as_mut() else { return };
@@ -320,6 +322,7 @@ impl Host {
     /// after the first frame; a frame that needs the GPU makes it at normal priority with
     /// `urgent = true` and `defer_software = false`).
     fn start_gpu_with(&mut self, below: bool, urgent: bool, defer_software: bool) {
+        if self.poll_gpu_loss() { return; }
         let Some(w) = self.win.as_mut() else { return };
         let SurfaceMode::Cpu { job, .. } = &mut w.native.mode else { return };
         let GpuJob::Waiting { tries, retry_at } = *job else { return };
@@ -349,6 +352,7 @@ impl Host {
     /// or stay on the CPU if it failed or deferred a software GPU. While handing over: the GPU
     /// finished a frame.
     pub(in crate::window) fn gpu_ready(&mut self) {
+        if self.poll_gpu_loss() { return; }
         if self.win.as_ref().is_some_and(|w| matches!(w.native.mode, SurfaceMode::HandingOver { .. })) { return self.hand_over_if_done(); }
         let Some(w) = self.win.as_mut() else { return };
         let SurfaceMode::Cpu { job: GpuJob::Building { slot, tries, animating, ready, urgent, .. }, .. } = &mut w.native.mode else { return };
@@ -391,6 +395,14 @@ impl Host {
         crate::marks::mark("gpu.window.ready");
         let Prepared { gpu, mut renderer, surface, mut config, handover } = prepared;
         let gpu = Arc::new(gpu);
+        if self.terminal_loss.is_terminal() {
+            if gpu.is_lost() || gpu.sample_removal() {
+                drop((surface, renderer, gpu));
+                self.latch_loss_latch(crate::render::loss_latch::GpuFailureKind::InitFailed, "the GPU device was lost before handover");
+                return;
+            }
+            self.terminal_loss.attach_gpu(&gpu);
+        }
         if renderer.srgb_blend() != self.app.rt().srgb_blend() {
             if !reblend_core(&surface, &gpu, &mut config, &mut renderer, &mut w.alpha, self.app.rt_mut()) {
                 return self.fail_gpu("couldn't reconfigure the surface for the window's blend mode".into(), tries);
@@ -450,6 +462,7 @@ impl Host {
     /// While handing over: the GPU draws the instances the CPU just painted, into its swap chain
     /// on the uncommitted visual.
     pub(super) fn gpu_draws_same_frame(&mut self) {
+        if self.poll_gpu_loss() { return; }
         let (Some(l), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
         if !matches!(l.native.mode, SurfaceMode::HandingOver { paused: false, .. }) { return; }
         if renderer.srgb_blend() != self.app.rt().srgb_blend() {
@@ -506,6 +519,14 @@ impl Host {
                 wgpu::Extent3d { width, height, depth_or_array_layers: 1 });
             Readback { buffer, row, size: (width, height) }
         });
+        if self.terminal_loss.is_terminal() {
+            rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+            if gpu.sample_removal() || gpu.is_lost() || self.terminal_loss.is_failed() {
+                drop((enc, frame));
+                let _ = self.poll_gpu_loss();
+                return;
+            }
+        }
         renderer.submit(&gpu.queue, enc);
         gpu.queue.present(frame);
         l.native.slot.presented();
@@ -529,6 +550,7 @@ impl Host {
     /// visual (DWM shows the GPU from its next composition) and leave the CPU behind; the CPU's
     /// buffer goes on a worker after counting the frame's drift.
     pub(in crate::window) fn hand_over_if_done(&mut self) {
+        if self.poll_gpu_loss() { return; }
         let (Some(w), Some((gpu, renderer))) = (self.win.as_mut(), self.gpu.as_mut()) else { return };
         match &mut w.native.mode {
             SurfaceMode::HandingOver { done: Some((done, _)), tries, .. } => {
@@ -580,6 +602,14 @@ impl Host {
     /// The GPU couldn't take over (`why`), on its `tries`th try: the window goes on, or back, to
     /// the CPU renderer, and tries again after `RETRY_AFTER`, or stays there after `TRIES` tries.
     fn fail_gpu(&mut self, why: String, tries: u8) {
+        let policy = if self.is_terminal_gpu_policy() { crate::GpuLossPolicy::Terminal } else { crate::GpuLossPolicy::Recover };
+        if matches!(crate::window::host::gpu_loss::decide_handover_failure(policy, tries, TRIES), crate::window::host::gpu_loss::HandoverFailureAction::LatchTerminal) {
+            if let Some(w) = self.win.as_mut() && let SurfaceMode::Cpu { job, .. } = &mut w.native.mode {
+                *job = GpuJob::Failed;
+            }
+            self.latch_loss_latch(crate::render::loss_latch::GpuFailureKind::InitFailed, why);
+            return;
+        }
         eprintln!("rune: the window stays on the CPU renderer for now (try {tries} of {TRIES}): {why}");
         crate::marks::mark("gpu.window.failed");
         if !crate::marks::noted("gpu.window.why") { crate::marks::note("gpu.window.why", Box::leak(why.into_boxed_str())); }
@@ -602,6 +632,7 @@ impl Host {
     /// slow; a frame both renderers draw is asked for until one is, in sight or not; a GPU that
     /// doesn't finish that frame fails; a failed try is made again.
     pub(in crate::window) fn watch_handover(&mut self, now: Instant) {
+        if self.poll_gpu_loss() { return; }
         let Some(w) = self.win.as_mut() else { return };
         match &mut w.native.mode {
             SurfaceMode::Cpu { job: GpuJob::Building { thread, since, raised, ready, .. }, .. } => {

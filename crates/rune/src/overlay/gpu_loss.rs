@@ -57,15 +57,32 @@ impl OverlayCore {
         false
     }
 
+    /// Polls `self.gpu` once under `Terminal` so any synchronous validation or device-lost
+    /// callback produced by encoding, `Compositor::features()`, or submission runs before the
+    /// next GPU boundary.
+    pub(super) fn poll_device_for_terminal_loss(&mut self, app: &mut dyn OverlayApp) -> bool {
+        if !self.is_terminal_gpu_policy() {
+            return false;
+        }
+        if let Some(gpu) = self.gpu.as_ref() {
+            rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+        }
+        self.poll_terminal_gpu_loss(app)
+    }
+
     /// Trips the app's shared terminal latch from an overlay GPU failure (preserving any earlier
-    /// first reason) and tears down this overlay immediately.
+    /// first reason) and tears down this overlay immediately. Only real `DeviceLost`/`DeviceRemoved`
+    /// marks the shared `Gpu` lost; overlay-local `SurfaceFailed`/`InitFailed` leave a healthy
+    /// shared `Gpu` usable by sibling `Recover` windows.
     pub(super) fn latch_terminal_loss_latch(
         &mut self,
         app: &mut dyn OverlayApp,
         kind: GpuFailureKind,
         reason: impl Into<String>,
     ) {
-        if let Some(gpu) = self.gpu.as_ref() {
+        if matches!(kind, GpuFailureKind::DeviceLost | GpuFailureKind::DeviceRemoved)
+            && let Some(gpu) = self.gpu.as_ref()
+        {
             gpu.mark_lost();
         }
         if let Some(latch) = self.gpu_loss_latch.clone() {
@@ -86,9 +103,10 @@ impl OverlayCore {
             .unwrap_or_else(|| "the GPU device was lost".into());
         let had_gpu = self.gpu.is_some() || self.renderer.is_some();
         if let Some(gpu) = self.gpu.take() {
-            gpu.mark_lost();
-            let clear_pool = self.gpu_pool.borrow().upgrade().is_some_and(|p| Arc::ptr_eq(&p, &gpu));
-            if clear_pool {
+            if let Some(latch) = &self.gpu_loss_latch {
+                gpu.detach_terminal_latch(latch);
+            }
+            if gpu.is_lost() && self.gpu_pool.borrow().upgrade().is_some_and(|p| Arc::ptr_eq(&p, &gpu)) {
                 *self.gpu_pool.borrow_mut() = Weak::default();
             }
         } else if self.gpu_pool.borrow().upgrade().is_some_and(|p| p.is_lost()) {
@@ -106,6 +124,8 @@ impl OverlayCore {
             || self.shared.availability.load(Ordering::Acquire) != Self::availability_code(Availability::Unavailable)
             || self.shared.failure.lock().unwrap().is_none();
         self.terminal_gpu_entered = true;
+        #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
+        app.rt_mut().paint.set_native_materials(false);
         if needs_refuse {
             self.surface_refused(app, reason);
         }
@@ -117,12 +137,9 @@ impl OverlayCore {
     /// drop-triggered `DeviceLostReason::Destroyed` does not falsely trip the terminal latch.
     pub(super) fn prepare_clean_gpu_drop(&self) {
         if let Some(latch) = &self.gpu_loss_latch
-            && !latch.is_failed()
             && let Some(gpu) = self.gpu.as_ref()
-            && Arc::strong_count(gpu) == 1
         {
-            gpu.mark_clean_drop();
-            latch.detach();
+            gpu.prepare_clean_drop_for(latch, Arc::strong_count(gpu) == 1);
         }
     }
 }

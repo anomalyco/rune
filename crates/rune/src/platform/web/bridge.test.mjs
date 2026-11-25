@@ -3412,3 +3412,124 @@ test('next-frame focus reconciliation clears stale caret across transient window
         else delete globalThis.cancelAnimationFrame;
     }
 });
+
+test('rapid mouse clicks reusing pointerId=1 cancel stale pointer-end fallback timer so second press keeps keyboard shift', () => {
+    const origSetTimeout = globalThis.setTimeout;
+    const origClearTimeout = globalThis.clearTimeout;
+    const timers = new Map();
+    let nextTimer = 1;
+    Object.defineProperty(globalThis, 'setTimeout', {
+        configurable: true,
+        value: (fn, _ms) => {
+            const id = nextTimer++;
+            timers.set(id, fn);
+            return id;
+        },
+    });
+    Object.defineProperty(globalThis, 'clearTimeout', {
+        configurable: true,
+        value: id => { timers.delete(id); },
+    });
+    const flushTimers = () => {
+        const batch = [...timers.entries()];
+        timers.clear();
+        for (const [, fn] of batch) fn();
+    };
+
+    const { canvas, win, h } = setup({ coarse: true });
+    try {
+        // Press 1 (mouse pointerId=1): focus bottom field, shift up, click and release.
+        bridge.sync(h, 'bottom', 'hi', 0, 2, 2, false);
+        bridge.activate(h);
+        bridge.syncCaret(h, 24, 520, 2, 24);
+        bridge.syncVisualViewport(h, 0, 362, 699);
+        assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)');
+
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'mouse', pointerId: 1, timeStamp: 10 });
+        win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType: 'mouse', pointerId: 1, timeStamp: 20 });
+
+        // Press 2 (same mouse pointerId=1) starts BEFORE Press 1's fallback setTimeout(0) has fired.
+        // Press 2 blurs the bottom field on pointerdown -> sync('', ...) runs while pointer is held.
+        win.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'mouse', pointerId: 1, timeStamp: 25 });
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)');
+
+        // Stale timer from Press 1 fires mid-Press 2: must NOT delete Press 2's pid=1 or drop shift!
+        flushTimers();
+        assert.equal(canvas.style.transform, 'translate3d(0, -198px, 0)', 'stale timer from first press must not drop keyboard shift during second press');
+
+        // Press 2 releases: transform now clears cleanly.
+        win.dispatchEvent({ type: 'pointerup', target: canvas, pointerType: 'mouse', pointerId: 1, timeStamp: 35 });
+        assert.equal(canvas.style.transform, '');
+    } finally {
+        bridge.destroy(h);
+        Object.defineProperty(globalThis, 'setTimeout', { configurable: true, value: origSetTimeout });
+        Object.defineProperty(globalThis, 'clearTimeout', { configurable: true, value: origClearTimeout });
+    }
+});
+
+test('blur/focusout with activeElement lagging past first rAF still reconciles on trailing check, and a new focus cancels it', async () => {
+    const origRaf = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame');
+    const origCancel = Object.getOwnPropertyDescriptor(globalThis, 'cancelAnimationFrame');
+    const origSetTimeout = globalThis.setTimeout;
+    const origClearTimeout = globalThis.clearTimeout;
+    const rafQueue = [];
+    const timers = new Map();
+    let nextId = 1;
+    Object.defineProperty(globalThis, 'requestAnimationFrame', {
+        configurable: true,
+        value: cb => { const id = nextId++; rafQueue.push({ id, cb }); return id; },
+    });
+    Object.defineProperty(globalThis, 'cancelAnimationFrame', {
+        configurable: true,
+        value: id => { const i = rafQueue.findIndex(x => x.id === id); if (i >= 0) rafQueue.splice(i, 1); },
+    });
+    Object.defineProperty(globalThis, 'setTimeout', {
+        configurable: true,
+        value: (fn, _ms) => { const id = nextId++; timers.set(id, fn); return id; },
+    });
+    Object.defineProperty(globalThis, 'clearTimeout', {
+        configurable: true,
+        value: id => { timers.delete(id); },
+    });
+    const flushRaf = () => { for (const x of rafQueue.splice(0)) x.cb(0); };
+    const flushTimers = () => { const batch = [...timers.entries()]; timers.clear(); for (const [, fn] of batch) fn(); };
+
+    const { doc, body, events, h } = setup({ coarse: true });
+    doc.hasFocus = () => true;
+    try {
+        await Promise.resolve();
+        // 1. blur/focusout fires while activeElement lags past the first rAF, then settles to body.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        h.password.dispatchEvent({ type: 'blur' });
+        h.password.dispatchEvent({ type: 'focusout' });
+        await Promise.resolve();
+        flushRaf(); // rAF1 fires while activeElement is still h.password (e.g. 16.6ms < 20ms lag)
+        assert.deepEqual(events, []);
+        doc.activeElement = body; // activeElement settles after rAF1
+        flushTimers();
+        assert.deepEqual(events, [{ kind: 'field_blur', key: 'pw' }]);
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // 2. If a new focus/activate arrives before the trailing check fires, the stale check is cancelled.
+        bridge.sync(h, 'pw', '', 0, 0, 0, true);
+        bridge.activate(h);
+        events.length = 0;
+        h.password.dispatchEvent({ type: 'blur' });
+        await Promise.resolve();
+        flushRaf();
+        bridge.activate(h);
+        flushTimers();
+        assert.deepEqual(events, []);
+    } finally {
+        bridge.destroy(h);
+        if (origRaf) Object.defineProperty(globalThis, 'requestAnimationFrame', origRaf);
+        else delete globalThis.requestAnimationFrame;
+        if (origCancel) Object.defineProperty(globalThis, 'cancelAnimationFrame', origCancel);
+        else delete globalThis.cancelAnimationFrame;
+        Object.defineProperty(globalThis, 'setTimeout', { configurable: true, value: origSetTimeout });
+        Object.defineProperty(globalThis, 'clearTimeout', { configurable: true, value: origClearTimeout });
+    }
+});
