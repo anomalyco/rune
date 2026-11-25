@@ -289,19 +289,21 @@ fn run_parity_sequence(injected: bool, zoom: f32) -> (Vec<String>, f32, f32, boo
         send(PointerInput::down(pt.0, pt.1, btn));
         send(PointerInput::up(pt.0, pt.1, btn));
     }
-    // 6. Wheel lines, wheel points, Shift+wheel, Ctrl+wheel magnify.
+    // 6. Ctrl+wheel magnify, wheel lines, wheel points, Shift+wheel. The Ctrl+wheel goes first,
+    // while nothing has scrolled: a pinch needs the `on_magnify` target under the pointer, and
+    // how far the wheels after it move the target differs by platform (line height, notch ease).
+    send(PointerInput::Wheel {
+        x: pt.0, y: pt.1,
+        delta: WheelDelta::Lines { dx: 0.0, dy: 1.0 },
+        mods: Mods { ctrl: true, cmd: !cfg!(target_os = "macos"), ..Default::default() },
+        phase: GesturePhase::Moved,
+    });
     send(PointerInput::wheel_lines(pt.0, pt.1, 0.0, -1.0));
     send(PointerInput::wheel_points(pt.0, pt.1, 0.0, -24.0));
     send(PointerInput::Wheel {
         x: pt.0, y: pt.1,
         delta: WheelDelta::Lines { dx: 0.0, dy: -1.0 },
         mods: Mods { shift: true, ..Default::default() },
-        phase: GesturePhase::Moved,
-    });
-    send(PointerInput::Wheel {
-        x: pt.0, y: pt.1,
-        delta: WheelDelta::Lines { dx: 0.0, dy: 1.0 },
-        mods: Mods { ctrl: true, cmd: !cfg!(target_os = "macos"), ..Default::default() },
         phase: GesturePhase::Moved,
     });
     // 7. Drag cancelled via Cancel, then Leave.

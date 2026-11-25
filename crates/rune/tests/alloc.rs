@@ -345,6 +345,9 @@ fn overlay_send_pointer_steady_moves_allocate_nothing() {
     let mut app = App::new(AppSpec::new("inject-alloc", (120.0, 40.0), || (), view));
     let handle = app.overlay(OverlaySpec::new("inject-alloc", (120.0, 40.0), view), ());
     handle.send_pointer(PointerInput::move_to(10.0, 10.0));
+    // Warm `screen_to_local` too: its first call takes the first lock of the screen-transform
+    // mutex, and on macOS std's mutex allocates its pthread mutex on first lock (once).
+    let _ = handle.screen_to_local((0, 0));
     let before = allocs();
     for i in 0..500 {
         handle.send_pointer(PointerInput::move_to((i % 100) as f32, 20.0));
