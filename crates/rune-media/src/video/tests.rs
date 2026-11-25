@@ -130,6 +130,27 @@ fn quiet_audio() -> Player {
     Player { surface: NativeSurface::with_video(shared.clone()), shared }
 }
 
+/// A video clip no backend has seen, so platform constructors (such as the unsupported backend's
+/// immediate failure) don't pre-fail it before a test drives `Control`.
+fn bare_video() -> Arc<Shared> {
+    Arc::new(Shared {
+        source: MediaSource::from("missing.mp4"),
+        headers: Vec::new(),
+        kind: Kind::Video,
+        ctl: Mutex::new(Control { muted: true, kind: Kind::Video, ..Control::default() }),
+        wakes: Mutex::new(Vec::new()),
+        waker: WakerSlot::default(),
+        notified: AtomicU64::new(0),
+        native: Mutex::new(backend::Native::default()),
+        backend: &BACKEND,
+    })
+}
+
+fn quiet_video() -> Player {
+    let shared = bare_video();
+    Player { surface: NativeSurface::with_video(shared.clone()), shared }
+}
+
 #[test]
 fn the_waker_hears_each_state_change_once() {
     let a = quiet_audio();
@@ -178,7 +199,7 @@ fn a_seek_before_the_clip_opens_is_clamped_when_it_does() {
 
 #[test]
 fn seek_fast_records_keyframe_seek_clamps_inputs_and_preserves_state() {
-    let v = Video::file("missing.mp4");
+    let v = quiet_video();
     let other = v.clone();
     // Before opening: records exact=false, clamps negative/non-finite to 0.
     v.seek_fast(-5.0);
@@ -220,6 +241,29 @@ fn seek_fast_records_keyframe_seek_clamps_inputs_and_preserves_state() {
     v.shared.ctl.lock().unwrap().fail("boom".into());
     v.seek_fast(0.5);
     assert!(!v.is_seeking());
+}
+
+/// On platforms without a video backend, `seek_fast`, `seek`, and `step` do not panic, keep
+/// the clip in `PlayerState::Failed`, and never report a pending seek or presented frame.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[test]
+fn unsupported_backend_handles_seek_fast_and_step_without_panicking() {
+    let v = Video::file("missing.mp4");
+    assert!(matches!(v.state(), PlayerState::Failed(_)));
+    assert!(!v.is_seeking());
+    assert_eq!(v.frame_duration(), None);
+    assert_eq!(v.presented_time(), None);
+
+    v.seek_fast(1.5);
+    v.seek(0.5);
+    v.step(1);
+    v.step(-1);
+    v.step(0);
+
+    assert!(matches!(v.state(), PlayerState::Failed(_)));
+    assert!(!v.is_seeking());
+    assert_eq!(v.frame_duration(), None);
+    assert_eq!(v.presented_time(), None);
 }
 
 #[test]

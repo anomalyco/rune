@@ -389,7 +389,9 @@ impl Player {
     /// On Windows (Media Foundation) this keeps the first keyframe returned by the source reader
     /// and reports that keyframe's timestamp through [`time`](Self::time) once it lands; on macOS
     /// (`AVPlayer`) it seeks with infinite tolerances (`kCMTimePositiveInfinity`). Headless runs
-    /// and other backends treat it as [`seek`](Self::seek). Keeps playing if it was playing.
+    /// treat it as [`seek`](Self::seek); on platforms without playback support, clips remain in
+    /// [`PlayerState::Failed`] with [`is_seeking`](Self::is_seeking) returning `false`. Keeps
+    /// playing if it was playing.
     ///
     /// ```no_run
     /// let clip = rune_media::Player::file("capture.mp4");
@@ -403,7 +405,8 @@ impl Player {
     /// backward), clamped to the clip's first and last frames.
     ///
     /// Stepping by `0` pauses without seeking. Stepping past either end keeps the current boundary
-    /// frame without starting a seek. No-op for [`Player::audio`] and failed clips.
+    /// frame without starting a seek. No-op for [`Player::audio`], failed clips, and platforms
+    /// without playback support (where clips start in [`PlayerState::Failed`]).
     ///
     /// While the target picture is being decoded, [`is_seeking`](Self::is_seeking) returns `true`
     /// and [`presented_time`](Self::presented_time) continues to report the picture still on screen
