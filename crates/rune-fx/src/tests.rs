@@ -443,9 +443,21 @@ fn support_needs_vertex_and_fragment_storage_and_two_buffers() {
     let full = wgpu::DownlevelCapabilities::default();
     assert_eq!(fx_support(&full, &wgpu::Limits::default()), Ok(()));
     assert_eq!(fx_support(&full, &wgpu::Limits::downlevel_defaults()), Ok(()));
-    // WebGL2: no storage buffers in any stage.
-    let webgl2 = wgpu::DownlevelCapabilities::lower_bound();
+    // WebGL2 (matches wgpu-hal's GLES 3.0 adapter flags): no storage buffers in any stage.
+    let webgl2 = wgpu::DownlevelCapabilities {
+        flags: wgpu::DownlevelFlags::NON_POWER_OF_TWO_MIPMAPPED_TEXTURES
+            | wgpu::DownlevelFlags::COMPARISON_SAMPLERS
+            | wgpu::DownlevelFlags::SHADER_F16_IN_F32
+            | wgpu::DownlevelFlags::MSL2_1,
+        ..wgpu::DownlevelCapabilities::default()
+    };
     assert_eq!(fx_support(&webgl2, &wgpu::Limits::downlevel_webgl2_defaults()), Err(FxUnsupported::VertexStorage));
+    let empty = wgpu::DownlevelCapabilities { flags: wgpu::DownlevelFlags::empty(), ..full.clone() };
+    assert_eq!(fx_support(&empty, &wgpu::Limits::downlevel_webgl2_defaults()), Err(FxUnsupported::VertexStorage));
+    assert_eq!(
+        fx_support(&full, &wgpu::Limits::downlevel_webgl2_defaults()),
+        Err(FxUnsupported::StorageBuffers { needed: 2, allowed: 0 })
+    );
     let fragment_only = wgpu::DownlevelCapabilities { flags: wgpu::DownlevelFlags::all() - wgpu::DownlevelFlags::VERTEX_STORAGE, ..full.clone() };
     assert_eq!(fx_support(&fragment_only, &wgpu::Limits::default()), Err(FxUnsupported::VertexStorage));
     let vertex_only = wgpu::DownlevelCapabilities { flags: wgpu::DownlevelFlags::all() - wgpu::DownlevelFlags::FRAGMENT_STORAGE, ..full.clone() };
