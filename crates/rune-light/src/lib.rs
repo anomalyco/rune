@@ -39,6 +39,8 @@ pub const FLAG_EMISSIVE: u32 = 2;
 pub const FLAG_RAISED: u32 = 4;
 /// Seen only by the GI tracer's distance field: marks where [`Scene::emission`] may glow. Never a surface.
 pub const FLAG_GI_HINT: u32 = 8;
+/// Its own pixels skip lighting and show the designed colour; it still casts, occludes and glows into the GI.
+pub const FLAG_UNLIT: u32 = 16;
 
 /// One lit primitive, in device pixels. Mirrors Rune's `Instance` rect/radii plus lighting fields.
 #[repr(C)]
@@ -129,6 +131,13 @@ impl Prim {
         self.emit = [rgb[0], rgb[1], rgb[2], 0.0];
         let on = rgb.iter().any(|c| *c > 0.0);
         self.set(FLAG_EMISSIVE, on)
+    }
+
+    /// Draw this surface at its designed colour: no ambient, direct light, GI or specular on its own pixels (text
+    /// on it too); exposure and the air in front (shafts, bulbs) still apply. With `emissive`, a glowing element
+    /// that lights its neighbours but keeps its hue under a lamp.
+    pub fn unlit(self) -> Prim {
+        self.set(FLAG_UNLIT, true)
     }
 
     /// Turn this rect into a GI hint: the region where the extra emission texture may glow (around an electric
