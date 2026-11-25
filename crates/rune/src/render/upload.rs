@@ -183,7 +183,6 @@ impl Renderer {
     /// Drops every uploaded image page's GPU texture and any layer bind groups referencing them.
     /// Returns whether any texture was held. The next `upload_images` recreates textures for pages
     /// still present in `ImageAtlas`.
-    #[cfg_attr(not(any(test, not(any(target_os = "macos", target_arch = "wasm32")))), allow(dead_code))]
     pub(crate) fn clear_images(&mut self) -> bool {
         let had = self.images.iter().any(Option::is_some);
         if self.images.is_empty() && !had { return false; }
@@ -195,9 +194,51 @@ impl Renderer {
         had
     }
 
+    /// Drops GPU textures for image pages `ImageAtlas::rest` truncated or emptied (or whose
+    /// dimensions no longer match), keeping live pages resident. Drops layer image bind groups
+    /// when anything changes so no layer target retains a reference to a freed texture. Returns
+    /// whether any GPU image texture was dropped.
+    pub(crate) fn prune_images(&mut self, images: &ImageAtlas) -> bool {
+        let mut dropped = false;
+        let mut changed = self.images.len() > images.pages.len();
+        if changed {
+            dropped = self.images[images.pages.len()..].iter().any(Option::is_some);
+            self.images.truncate(images.pages.len());
+        }
+        for (slot, page) in self.images.iter_mut().zip(&images.pages) {
+            if (page.data.is_empty()
+                || slot.as_ref().is_some_and(|(t, _)| t.width() != page.width || t.height() != page.height))
+                && slot.take().is_some()
+            {
+                dropped = true;
+                changed = true;
+            }
+        }
+        if changed {
+            self.layers.clear_images();
+            self.images_changed();
+            #[cfg(all(feature = "alloc-sites", not(target_arch = "wasm32")))]
+            self.report_pools();
+        }
+        dropped
+    }
+
     #[cfg(test)]
     pub(crate) fn has_images(&self) -> bool {
         self.images.iter().any(Option::is_some)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn image_texture_count(&self) -> usize {
+        self.images.iter().flatten().count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn image_texture_bytes(&self) -> u64 {
+        self.images.iter().flatten().map(|(t, _)| {
+            u64::from(t.width()) * u64::from(t.height())
+                * u64::from(t.format().block_copy_size(None).unwrap_or(4))
+        }).sum()
     }
 
     /// Uploads several instance lists back to back (one buffer, one glyph upload) and returns

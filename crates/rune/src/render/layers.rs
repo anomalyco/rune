@@ -114,7 +114,6 @@ impl Layers {
         }
     }
 
-    #[cfg_attr(not(any(test, not(any(target_os = "macos", target_arch = "wasm32")))), allow(dead_code))]
     pub(super) fn clear_images(&mut self) {
         for t in self.targets.iter_mut().flatten().chain(&mut self.retained).chain(&mut self.spare) {
             t.images.clear();
@@ -292,13 +291,15 @@ impl Renderer {
 
     /// What a window at rest gives back (`window::rest`): every spare target (the first menu,
     /// hover or session after it makes its own again, within a frame's run-to-run spread on an
-    /// Iris Xe), cache textures no layer drew last frame, and the backdrop copies and blur pyramid
-    /// when the last frame read none. With `all`, also the scratch targets of this screen's
-    /// layers and its backdrop copies, which its next frame makes again (a few ms on an integrated GPU). It keeps the
+    /// Iris Xe), cache textures no layer drew last frame, GPU textures of image atlas pages that
+    /// `ImageAtlas::rest` already freed, and the backdrop copies and blur pyramid when the last
+    /// frame read none. With `all`, also the scratch targets of this screen's layers, every image
+    /// atlas texture (recreated from `ImageAtlas` on the next `upload_images`), and its backdrop
+    /// copies, which its next frame makes again (a few ms on an integrated GPU). It keeps the
     /// textures of caches on screen, which the last frame's instances name instead of their
     /// contents, and takes the ones it drops out of `resident`, so their next frame paints them.
     /// What no submission still uses is freed here; the rest when the device next polls.
-    pub(crate) fn give_back(&mut self, all: bool, resident: &mut std::collections::HashMap<u64, u64>) {
+    pub(crate) fn give_back(&mut self, all: bool, resident: &mut std::collections::HashMap<u64, u64>, images: &ImageAtlas) {
         for t in self.layers.retained.drain(..) {
             if let Some((node, _)) = t.cache { resident.remove(&node); }
         }
@@ -307,6 +308,9 @@ impl Renderer {
             for slot in &mut self.layers.targets {
                 if slot.as_ref().is_some_and(|t| t.cache.is_none()) { *slot = None; }
             }
+            self.clear_images();
+        } else {
+            self.prune_images(images);
         }
         // The backdrop copies (one full-window texture per target format) and the blur pyramid:
         // out of sight, or when the last frame read none (a session's jump button had blurred

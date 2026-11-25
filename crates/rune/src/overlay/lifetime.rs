@@ -283,7 +283,8 @@ impl OverlayCore {
             if !all && renderer.has_oversized_uploads_in_flight() {
                 rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
             }
-            renderer.give_back(all, &mut app.rt_mut().text.atlas.resident_caches);
+            let rt = app.rt_mut();
+            renderer.give_back(all, &mut rt.text.atlas.resident_caches, &rt.images);
             if all {
                 // Non-blocking retirement on shared devices: poll once so completed submissions
                 // retire and hand back staging chunks before trimming, and schedule deferred

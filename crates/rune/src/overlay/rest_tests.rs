@@ -290,3 +290,126 @@ fn hidden_overlay_keeping_renderer_gives_back_scratch_layers_on_unseen() {
         "Unseen frees both scratch layer HAL textures"
     );
 }
+
+#[test]
+fn overlay_give_back_drops_freed_image_textures_at_rest_and_all_on_hide_then_wakes() {
+    use crate::pixels::Pixels;
+    struct ImageState {
+        small: Pixels,
+        large: Pixels,
+        show_small: bool,
+        show_large: bool,
+    }
+    fn img_view(s: &ImageState, _: &mut Cx<ImageState>) -> El {
+        let mut root = el().size(16.0, 16.0);
+        if s.show_small {
+            root = root.child(el().size(8.0, 8.0).pixels(&s.small));
+        }
+        if s.show_large {
+            root = root.child(el().size(8.0, 8.0).pixels(&s.large));
+        }
+        root
+    }
+
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let gpu = Arc::new(gpu);
+    let small = Pixels::new();
+    small.set(4, 4, [255, 0, 0, 255].repeat(16));
+    let large = Pixels::new();
+    large.set(1025, 64, [0, 200, 40, 255].repeat(1025 * 64));
+
+    fn init_state() -> ImageState {
+        ImageState { small: Pixels::new(), large: Pixels::new(), show_small: true, show_large: true }
+    }
+    let app = AppSpec::new("overlay-image-rest", (16.0, 16.0), init_state, img_view);
+    let (mut overlay, _) = Overlay::new(
+        OverlaySpec::new("overlay-image-rest", app.size, img_view).options(Default::default()),
+        ImageState { small, large, show_small: true, show_large: true },
+        &app,
+    );
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.core.gpu = Some(gpu.clone());
+    overlay.core.renderer = Some(Renderer::new(&gpu.device, OFFSCREEN_FORMAT));
+    let target = Offscreen::new(&gpu.device, 16, 16);
+
+    #[cfg(feature = "test-gpu-counters")]
+    let (base_textures, base_mem) = {
+        let c = gpu.device.get_internal_counters().hal;
+        (c.textures.read(), c.texture_memory.read())
+    };
+
+    let render_read = |overlay: &mut Overlay<ImageState>| -> Vec<u8> {
+        let mut enc = gpu.device.create_command_encoder(&Default::default());
+        overlay.render_offscreen(&gpu, &mut enc, &target.view, OFFSCREEN_FORMAT, (16, 16), 0.0);
+        target.copy(&mut enc);
+        overlay.core.renderer.as_mut().unwrap().submit(&gpu.queue, enc);
+        target.read(&gpu.device)
+    };
+
+    // Frame 1: both small (shelf page 0: 1024x128) and large (standalone page 1: 1025x64) shown.
+    let page0_bytes = 1024u64 * 128 * 4;
+    let page1_bytes = 1025u64 * 64 * 4;
+    overlay.rt.frame(0.0);
+    let _ = render_read(&mut overlay);
+    assert_eq!(overlay.rt.images.pages.len(), 2);
+    assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_count(), 2);
+    assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_bytes(), page0_bytes + page1_bytes);
+    #[cfg(feature = "test-gpu-counters")]
+    let tracks_mem = {
+        let c = gpu.device.get_internal_counters().hal;
+        assert_eq!(c.textures.read(), base_textures + 2, "two image page textures uploaded");
+        c.texture_memory.read() > base_mem
+    };
+
+    // Frame 2: small removed, large stays. Shelf page 0 stays warm until rest.
+    overlay.rt.state.show_small = false;
+    overlay.rt.invalidate();
+    overlay.rt.frame(0.0);
+    let before_hide = render_read(&mut overlay);
+    #[cfg(feature = "test-gpu-counters")]
+    let (tex_before_rest, mem_before_rest) = {
+        let c = gpu.device.get_internal_counters().hal;
+        (c.textures.read(), c.texture_memory.read())
+    };
+    #[cfg(feature = "test-gpu-counters")]
+    assert_eq!(tex_before_rest, base_textures + 2);
+
+    // Idle rest (GiveBackUnused): page 0's CPU buffer is emptied and its GPU texture drops;
+    // page 1 is still on screen and keeps its GPU texture.
+    let t0 = crate::time::now();
+    overlay.note_presented_with(t0, false);
+    overlay.wake_due(t0 + REST_AFTER);
+    assert_eq!(overlay.rest, Rest::Idle);
+    assert!(overlay.rt.images.pages[0].data.is_empty());
+    assert!(!overlay.rt.images.pages[1].data.is_empty());
+    assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_count(), 1, "visible page stays resident at rest");
+    assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_bytes(), page1_bytes);
+    #[cfg(feature = "test-gpu-counters")]
+    {
+        let c = gpu.device.get_internal_counters().hal;
+        assert_eq!(c.textures.read(), base_textures + 1, "rest frees emptied page 0 GPU texture");
+        if tracks_mem {
+            assert!(c.texture_memory.read() < mem_before_rest, "rest reclaims page 0 HAL texture memory");
+        }
+    }
+
+    // Hidden (GiveBackAll): every image GPU texture drops.
+    overlay.hide();
+    assert_eq!(overlay.rest, Rest::Rested);
+    assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_count(), 0, "hide drops all GPU image textures");
+    assert_eq!(overlay.core.renderer.as_ref().unwrap().image_texture_bytes(), 0);
+    #[cfg(feature = "test-gpu-counters")]
+    {
+        let c = gpu.device.get_internal_counters().hal;
+        assert_eq!(c.textures.read(), base_textures, "hide frees all image HAL textures");
+        assert_eq!(c.texture_memory.read(), base_mem, "hide reclaims all image HAL texture memory");
+    }
+
+    // Wake: first drawn frame re-uploads and renders identically with no blank or stale frame.
+    overlay.presence = Presence::Shown { occluded: false };
+    let after_wake = render_read(&mut overlay);
+    assert_eq!(after_wake, before_hide, "waking from hide draws the image identically on its first frame");
+    assert!(overlay.core.renderer.as_ref().unwrap().has_images());
+    #[cfg(feature = "test-gpu-counters")]
+    assert_eq!(gpu.device.get_internal_counters().hal.textures.read(), base_textures + 1);
+}
