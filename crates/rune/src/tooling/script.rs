@@ -312,7 +312,7 @@ pub(crate) fn parse_script(list: Value) -> Vec<Ev> {
     out
 }
 
-/// `{"drag_files": {"paths": […], "at": [x, y]}}` (or `"key": …` for an element's centre) moves a
+/// `{"drag_files": {"paths": […], "at": [x, y]}}` (or `"key": …` for the centre of an element's shown part) moves a
 /// file drag from another app over the window; `{"drag_files": "leave"}` takes it away.
 /// `{"drop_files": {…, "hover": s}}` drags the files there for `s` seconds (default 0), then
 /// drops them. Whether `e` was one.
