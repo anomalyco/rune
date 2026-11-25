@@ -7,11 +7,24 @@ pub mod fill_bench;
 pub(crate) mod glyph_cache;
 pub(crate) mod glyph_emit;
 pub mod mask_cache;
+#[cfg(test)]
+mod tests;
 
 use super::*;
 use fill::Residency;
 
 pub const ATLAS_SIZE: u32 = 2048;
+/// Initial CPU backing rows allocated on a glyph atlas page's first mask (2048 × 128 = 256 KiB);
+/// grows in power-of-two row steps up to [`ATLAS_SIZE`] (4 MiB) as shelves fill.
+pub(crate) const ATLAS_CPU_START_ROWS: u32 = 128;
+
+fn ensure_rows(data: &mut Vec<u8>, need_rows: u32) {
+    let rows = need_rows.clamp(ATLAS_CPU_START_ROWS, ATLAS_SIZE).next_power_of_two().min(ATLAS_SIZE);
+    let bytes = rows as usize * ATLAS_SIZE as usize;
+    if data.len() < bytes {
+        data.resize(bytes, 0);
+    }
+}
 
 /// Looked up for every glyph of every frame, so hashed with Fx rather than SipHash.
 pub(super) type GlyphMap<V> = HashMap<GlyphKey, V, std::hash::BuildHasherDefault<rune_motion::Fx>>;
@@ -141,7 +154,8 @@ pub struct AtlasPage {
 impl AtlasPage {
     pub(super) fn new(age: u64, epoch: u64) -> Self {
         AtlasPage {
-            data: vec![0; (ATLAS_SIZE * ATLAS_SIZE) as usize],
+            // Grown lazily in power-of-two row steps from `ATLAS_CPU_START_ROWS` in `Atlas::alloc`.
+            data: Vec::new(),
             dirty: None,
             shelf: Shelf::new(age),
             epoch,
@@ -209,7 +223,8 @@ impl ColorGlyph {
 }
 
 pub struct Atlas {
-    /// The first page's CPU copy: empty until its first mask (`alloc`), then 2048x2048.
+    /// The first page's CPU copy: empty until its first mask (`alloc`), then grows in
+    /// power-of-two row steps from 2048×128 (256 KiB) up to 2048×2048 (4 MiB).
     pub data: Vec<u8>,
     /// Rows `[y0, y1)` changed since the last upload.
     pub dirty: Option<(u32, u32)>,
@@ -418,15 +433,16 @@ impl Atlas {
         }
     }
 
-    /// Room for a `w`x`h` mask: its page and place. The first page's CPU copy is made here, at its
-    /// first mask, so a text system that only measures (`measure`'s, on each thread that calls it)
-    /// never holds its 4 MiB.
+    /// Room for a `w`x`h` mask: its page and place. Each page's CPU copy starts at
+    /// `ATLAS_CPU_START_ROWS` (256 KiB) on its first mask and doubles in row steps up to
+    /// `ATLAS_SIZE` (4 MiB) as shelves fill, so a small overlay or a measure-only text system
+    /// never allocates 4 MiB eagerly.
     pub(super) fn alloc(&mut self, w: u32, h: u32) -> Option<(usize, u32, u32)> {
-        let placed = self.place(w, h);
-        if placed.is_some_and(|(page, ..)| page == 0) && self.data.is_empty() {
-            self.data = vec![0; (ATLAS_SIZE * ATLAS_SIZE) as usize];
-        }
-        placed
+        let (page, ax, ay) = self.place(w, h)?;
+        let need_rows = (ay + h + 1).min(ATLAS_SIZE);
+        let data = if page == 0 { &mut self.data } else { &mut self.pages[page - 1].data };
+        ensure_rows(data, need_rows);
+        Some((page, ax, ay))
     }
 
     fn place(&mut self, w: u32, h: u32) -> Option<(usize, u32, u32)> {

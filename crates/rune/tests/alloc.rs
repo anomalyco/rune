@@ -195,3 +195,67 @@ fn text_lend_allocates_nothing() {
     }
     assert_eq!(allocs() - before, 0, "lend must not heap-allocate when swapping placeholder");
 }
+
+#[test]
+fn small_overlay_text_atlas_stays_256_kib_and_steady_frames_allocate_nothing() {
+    use rune::Color;
+    use rune::render::cpu_boot::{Scene, Target, paint, record};
+
+    fn bar(_: &(), _: &mut Cx<()>) -> El {
+        col().size(200.0, 28.0).fill(Color::BLACK)
+            .child(text("12:34 PM  82%").font(rune::TextStyle::new(13.0, 400.0)).color(Color::WHITE))
+    }
+
+    let mut rt = Runtime::new((), bar, (200.0, 28.0), Env::new(true, 2.0));
+    rt.frame(0.0);
+    assert_eq!(
+        rt.text.atlas.data.len(),
+        256 * 1024,
+        "small overlay CPU glyph atlas must stay at 256 KiB instead of 4 MiB",
+    );
+    assert!(rt.text.atlas.pages.is_empty());
+
+    // CPU-first painter and RCB1 recording round-trip must both handle the shorter 256 KiB page safely
+    // and render identical non-blank pixels.
+    let size = (400, 56);
+    let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, size, [0.0, 0.0, 0.0, 1.0]);
+    let mut direct = vec![0u8; size.0 as usize * size.1 as usize * 4];
+    paint(&scene, &mut Target::new(&mut direct, size.0, size.1), 1).expect("direct CPU paint");
+    assert!(direct.chunks_exact(4).any(|p| p[0] > 0), "CPU painter drew text from 256 KiB atlas");
+
+    let encoded = record::encode(&scene);
+    let decoded = record::Recording::decode(&encoded).expect("RCB1 recording decodes shorter atlas page");
+    let mut replayed = vec![0u8; size.0 as usize * size.1 as usize * 4];
+    paint(&decoded.scene(), &mut Target::new(&mut replayed, size.0, size.1), 1).expect("replayed CPU paint");
+    assert_eq!(direct, replayed, "RCB1 replay matches direct CPU paint byte for byte");
+
+    // Steady frames drawing known glyphs allocate nothing.
+    rt.settle_all();
+    rt.frame(0.0);
+    let before = allocs();
+    for _ in 0..30 {
+        let _ = rt.frame(1.0 / 60.0);
+    }
+    assert_eq!(allocs() - before, 0, "steady frames with cached glyphs must allocate nothing");
+
+    // Growing past 128 rows in a denser text scene doubles atlas.data cleanly and paints intact text.
+    fn dense(_: &(), _: &mut Cx<()>) -> El {
+        let mut root = col().size(400.0, 400.0).fill(Color::BLACK);
+        for sz in [12.0, 16.0, 22.0, 30.0, 42.0, 56.0] {
+            root = root.child(
+                text("AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789")
+                    .font(rune::TextStyle::new(sz, 400.0))
+                    .color(Color::WHITE),
+            );
+        }
+        root
+    }
+    let mut dense_rt = Runtime::new((), dense, (400.0, 400.0), Env::new(true, 2.0));
+    dense_rt.frame(0.0);
+    assert!(dense_rt.text.atlas.data.len() >= 512 * 1024, "dense multi-size text grew atlas past 256 KiB");
+    let dsize = (800, 800);
+    let dscene = Scene::new(&dense_rt.instances, &dense_rt.text.atlas, &dense_rt.images, dsize, [0.0, 0.0, 0.0, 1.0]);
+    let mut dout = vec![0u8; dsize.0 as usize * dsize.1 as usize * 4];
+    paint(&dscene, &mut Target::new(&mut dout, dsize.0, dsize.1), 1).expect("dense CPU paint");
+    assert!(dout.chunks_exact(4).any(|p| p[0] > 0), "CPU painter drew text after atlas growth");
+}

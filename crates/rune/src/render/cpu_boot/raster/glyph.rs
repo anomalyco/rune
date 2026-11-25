@@ -37,7 +37,8 @@ impl Painter<'_, '_> {
         if i.radii[3] > 0.0 { return self.outline(i, r, clip); }
         let Some(&mask) = self.scene.glyph_pages.get(i.params[2] as usize) else { return };
         let side = crate::text::ATLAS_SIZE as i32;
-        let load = |x: i32, y: i32| -> u8 { if x < 0 || y < 0 || x >= side || y >= side { 0 } else { mask[(y * side + x) as usize] } };
+        let rows = (mask.len() / crate::text::ATLAS_SIZE as usize) as i32;
+        let load = |x: i32, y: i32| -> u8 { if x < 0 || y < 0 || x >= side || y >= rows { 0 } else { mask[(y * side + x) as usize] } };
         let e = i.params[3];
         let turn = i.params[0];
         let rotated = turn != 0.0;
@@ -59,7 +60,7 @@ impl Painter<'_, '_> {
             let ty = i.uv[1] as i32 + (py - i.rect[1]).floor() as i32;
             if !lcd && !filtered {
                 // A mask at rest: one texel a pixel, a row of them per row.
-                if ty < 0 || ty >= side { continue; }
+                if ty < 0 || ty >= rows { continue; }
                 let row = &mask[(ty * side) as usize..((ty + 1) * side) as usize];
                 let t0 = i.uv[0] as i32 + (r[0] as f32 + 0.5 - i.rect[0]).floor() as i32 - r[0] as i32;
                 for x in vis.iter().flat_map(|(a, b)| a..b) {
