@@ -4,11 +4,13 @@
 //! - `rune-table--wide`: `Table::scroll_wide`, column visibility (`TableState::hide_column` /
 //!   `show_column`), `Table::on_header_secondary_press`, `Table::on_column_fit`, and
 //!   `TableColumn` getters.
+//! - `rune-table--overscan`: `Table::virtual_overscan` presets on a 10,000-row fixed-height
+//!   telemetry table (default `2.0 / 1.75`, tight `0.5 / 0.25`, viewport-only `0.0 / 0.0`).
 
 use std::borrow::Cow;
 
 use rune::{Align, El, Tx, col, el, row, text};
-use rune_kit::{Button, Cell, Kit, MenuItem, Switch, Table, TableColumn, context_menu};
+use rune_kit::{Button, ButtonVariant, Cell, Kit, MenuItem, Switch, Table, TableColumn, context_menu};
 
 use crate::G;
 
@@ -329,4 +331,84 @@ pub(super) fn wide(s: &G, k: &Kit, layer: &mut Vec<El>) -> El {
                 .child(table_with_menu),
         )
         .child(text(status).font(k.ty.small).color(c.text_muted))
+}
+
+pub(super) fn overscan(s: &G, k: &Kit, _layer: &mut Vec<El>) -> El {
+    let c = &k.c;
+    let mode = s.pick.get("table-overscan").map(String::as_str).unwrap_or("tight");
+    let ok = c.success.fg;
+    let warn = c.warning.fg;
+
+    let mut t = Table::new(
+        |s: &G| &s.table,
+        |s: &mut G| &mut s.table,
+        |_: &G| 10_000,
+        |_: &G, i| Cow::Owned(format!("sig-{i}")),
+    )
+    .name("Telemetry signals (10,000 rows)")
+    .column(TableColumn::new("id", "Signal").width(92.0).resizable(false))
+    .column(TableColumn::new("value", "Value").width(96.0).align(Align::End))
+    .column(TableColumn::new("state", "State").width(76.0).resizable(false))
+    .column(TableColumn::new("bus", "Bus").flex(1.0).min(160.0))
+    .cell(move |_: &G, i, col| match col {
+        "id" => Cell::text(format!("sig-{i:05}")).mono().muted(),
+        "value" => Cell::text(format!("{:.3}", (i as f64 * 0.731).sin() * 100.0)).mono(),
+        "state" => match i % 4 {
+            2 => Cell::text("FAULT").mono().color(warn),
+            1 => Cell::text("RUN").mono().color(ok),
+            0 => Cell::text("IDLE").mono().muted(),
+            _ => Cell::text("HOLD").mono().muted(),
+        },
+        _ => Cell::text(format!("can{}.node_{:02}.ch_{}", i % 4, (i / 4) % 32, i % 8)).mono(),
+    })
+    .zebra(true);
+    match mode {
+        "tight" => t = t.virtual_overscan(0.5, 0.25),
+        "zero" => t = t.virtual_overscan(0.0, 0.0),
+        _ => {}
+    }
+    let table = t.build(s, k).grow(1.0).min_h(0.0);
+
+    let preset = |id: &'static str, label: &'static str| {
+        let variant = if mode == id { ButtonVariant::Contrast } else { ButtonVariant::Neutral };
+        Button::new(label)
+            .variant(variant)
+            .on_press(move |s: &mut G| {
+                s.pick.insert("table-overscan".into(), id.into());
+            })
+            .build(k)
+            .key(format!("overscan-{id}"))
+    };
+
+    let summary = match mode {
+        "tight" => "10,000 rows · virtual_overscan(0.5, 0.25) · ~2 viewports mounted, more frequent window moves",
+        "zero" => "10,000 rows · virtual_overscan(0.0, 0.0) · viewport rows only, commits at every row edge",
+        _ => "10,000 rows · default (2.0, 1.75) · ~5 viewports mounted, fewer window moves while scrolling",
+    };
+
+    col()
+        .key("table-overscan")
+        .w(640.0)
+        .gap(10.0)
+        .child(
+            row()
+                .key("overscan-controls")
+                .gap(8.0)
+                .center_y()
+                .child(preset("default", "Default (2.0 / 1.75)"))
+                .child(preset("tight", "Tight (0.5 / 0.25)"))
+                .child(preset("zero", "Viewport (0.0 / 0.0)")),
+        )
+        .child(
+            col()
+                .key("overscan-frame")
+                .w_full()
+                .h(260.0)
+                .radius(k.radius.md)
+                .fill(c.bg_base)
+                .border(1.0, c.border_weak)
+                .clip_rounded(k.radius.md)
+                .child(table),
+        )
+        .child(text(summary).font(k.ty.small).color(c.text_muted))
 }

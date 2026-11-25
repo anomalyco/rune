@@ -168,6 +168,7 @@ struct TableCore {
     stick_bottom: bool,
     cursor_outline: bool,
     scroll_wide: bool,
+    virtual_overscan: Option<(f32, f32)>,
     style: Option<TableStyle>,
     name: Option<String>,
 }
@@ -186,7 +187,7 @@ fn min_content_width(columns: &[TableColumn], sizes: &[Width]) -> f32 {
 
 impl TableCore {
     fn build(self, state: &TableState, count: usize, k: &Kit, bind: &dyn TableBind) -> El {
-        let TableCore { columns, zebra, stick_bottom, cursor_outline, scroll_wide, style, name } = self;
+        let TableCore { columns, zebra, stick_bottom, cursor_outline, scroll_wide, virtual_overscan, style, name } = self;
         let style = style.unwrap_or_else(|| TableStyle::from_kit(k));
         let columns: Rc<Vec<TableColumn>> = Rc::new(
             columns.into_iter().filter(|c| !state.is_column_hidden(&c.id)).collect(),
@@ -196,11 +197,14 @@ impl TableCore {
         );
         let min_total = if scroll_wide { min_content_width(&columns, &sizes) } else { 0.0 };
         let header = header_row(k, state, &columns, &sizes, &style, bind);
-        let rows = bind.bind_virtual_rows(
+        let mut rows = bind.bind_virtual_rows(
             col().key("rows").w_full().growth(GrowthSpec::default()),
             count,
             RowSpec { cols: columns, sizes, style, zebra, cursor_outline, focus: k.c.border_focus },
         );
+        if let Some((overscan, edge)) = virtual_overscan {
+            rows = rows.virtual_overscan(overscan, edge);
+        }
         let mut root = col()
             .key(state.key.clone())
             .role("grid")
@@ -263,7 +267,7 @@ impl<S: 'static> Table<S> {
     /// row `i` (in the app's current order) with an id unique among them.
     pub fn new(get: fn(&S) -> &TableState, get_mut: fn(&mut S) -> &mut TableState, len: fn(&S) -> usize, row_id: RowIdFn<S>) -> Self {
         Table {
-            core: TableCore { columns: Vec::new(), zebra: false, stick_bottom: false, cursor_outline: true, scroll_wide: false, style: None, name: None },
+            core: TableCore { columns: Vec::new(), zebra: false, stick_bottom: false, cursor_outline: true, scroll_wide: false, virtual_overscan: None, style: None, name: None },
             handlers: TableHandlers {
                 get,
                 get_mut,
@@ -427,6 +431,35 @@ impl<S: 'static> Table<S> {
     ///     .build(&app, &k);
     /// ```
     pub fn scroll_wide(mut self, on: bool) -> Self { self.core.scroll_wide = on; self }
+    /// Forwards [`El::virtual_overscan`] to the table's internal `virtual_rows` list, setting
+    /// how many viewports of rows stay mounted on each side (`overscan`, default `2.0`) and how
+    /// close the viewport may come to the mounted edge before a commit moves the window (`edge`,
+    /// default `1.75`).
+    ///
+    /// Smaller values mount fewer offscreen rows and reduce per-frame scroll work at the cost of
+    /// more frequent window-move commits while scrolling; larger values commit less often while
+    /// keeping more offscreen nodes mounted. Clamping and non-finite handling follow
+    /// [`El::virtual_overscan`].
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    /// use rune_kit::{Cell, Kit, Table, TableColumn, TableState};
+    ///
+    /// struct App { rows: Vec<String>, table: TableState }
+    /// let app = App { rows: vec!["r0".into()], table: TableState::new() };
+    /// let k = Kit::neutral(true);
+    /// let _el = Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.rows.len(), |s: &App, i| Cow::Borrowed(s.rows[i].as_str()))
+    ///     .column(TableColumn::new("name", "Name"))
+    ///     .cell(|s: &App, i, _| Cell::text(&s.rows[i]))
+    ///     .virtual_overscan(0.5, 0.25)
+    ///     .build(&app, &k);
+    /// ```
+    pub fn virtual_overscan(mut self, overscan: f32, edge: f32) -> Self {
+        if overscan.is_finite() && edge.is_finite() {
+            self.core.virtual_overscan = Some((overscan, edge));
+        }
+        self
+    }
     pub fn style(mut self, s: TableStyle) -> Self { self.core.style = Some(s); self }
     /// The table's accessibility label.
     pub fn name(mut self, n: impl Into<String>) -> Self { self.core.name = Some(n.into()); self }

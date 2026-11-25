@@ -128,6 +128,47 @@ impl El {
         self
     }
 
+    /// Sets how far a virtual list ([`El::virtual_rows`] or [`El::virtualize`]) keeps rows
+    /// mounted beyond its scroll viewport, in multiples of the viewport height.
+    ///
+    /// - `overscan`: viewports of rows mounted on each side of the viewport (default `2.0`, so
+    ///   about 5 viewports total in the middle of a long list).
+    /// - `edge`: how close the viewport may come to either end of the mounted window before a
+    ///   commit moves the window (default `1.75` for [`El::virtual_rows`], `0.5` for
+    ///   [`El::virtualize`]).
+    ///
+    /// Smaller values mount fewer offscreen rows and reduce per-frame scroll work, at the cost of
+    /// more frequent window-move commits while scrolling (good for long fixed-height tables).
+    /// Larger values commit less often while keeping more offscreen nodes mounted.
+    ///
+    /// `overscan` is clamped to `0.0..=8.0`. When `overscan == 0.0`, `edge` is clamped to `0.0`
+    /// (viewport rows only); otherwise `edge` is clamped to `0.0..=(overscan - 0.05).min(overscan * 0.95).max(0.0)`
+    /// so consecutive frames never oscillate. Non-finite inputs (`NaN`, `±∞`) are ignored.
+    ///
+    /// ```
+    /// # use rune::{GrowthSpec, ScrollSpec, col, text};
+    /// # struct App { rows: Vec<String> }
+    /// # let s = App { rows: vec!["row-0".into()] };
+    /// # let _ =
+    /// col().scroll(ScrollSpec { stick_bottom: false }).grow(1.0).child(
+    ///     col().key("rows").growth(GrowthSpec::default())
+    ///         .virtual_rows(
+    ///             s.rows.len(),
+    ///             22.0,
+    ///             |s: &App, i| s.rows[i].as_str().into(),
+    ///             |s: &App, i| text(&s.rows[i]),
+    ///         )
+    ///         .virtual_overscan(0.5, 0.25),
+    /// )
+    /// # ;
+    /// ```
+    pub fn virtual_overscan(mut self, overscan: f32, edge: f32) -> Self {
+        if let Some(pair) = crate::el::virtual_list::clamp_virtual_overscan(overscan, edge) {
+            self.cold_mut().virtual_overscan = Some(pair);
+        }
+        self
+    }
+
     /// On a virtual list ([`El::virtualize`] or [`El::virtual_rows`]), called with the index
     /// range `start..end` of rows currently visible in its scroll viewport: on its first layout,
     /// and whenever that range or the rows change. Changes from commits, rekeys, wheel scrolls
@@ -187,3 +228,7 @@ mod tests;
 #[cfg(test)]
 #[path = "virtual_rows_append_tests.rs"]
 mod append_tests;
+
+#[cfg(test)]
+#[path = "virtual_rows_overscan_tests.rs"]
+mod overscan_tests;
