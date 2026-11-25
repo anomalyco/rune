@@ -2168,8 +2168,11 @@ never decodes one, and leaves out images over `clipboard::MAX_IMAGE_BYTES` (32 M
 An image alone, with no text, reaches only hooks. To copy an image an `ImageCache` decoded,
 `tx.copy_image(&image)` (or `tx.copy_image_then(&image, on_result)` returning
 `Result<(), CopyImageError>`) encodes it as PNG off the event thread on the clipboard worker
-(on the web, off the input turn via a `ClipboardItem` `Promise<Blob>` created inside the user
-gesture), with no second decode and without overwriting newer clipboard writes if a slow
+(on the web, off the main thread in a Web Worker via `CompressionStream("deflate")` inside a
+`ClipboardItem` `Promise<Blob>` created during the user gesture on Chrome 80+, Firefox 113+,
+and Safari 16.4+, with a time-sliced `CompressionStream` fallback under strict `blob:` CSP
+and a legacy fallback on older browsers without `CompressionStream`), with no second decode
+and without overwriting newer clipboard writes if a slow
 encode finishes late. Opaque 8-bit sRGB pixels round-trip bit-exactly; translucent pixels
 round-trip through premultiplied 8-bit sRGB mip 0 (`Image::to_rgba` / `Pixels::to_rgba`),
 animated GIF/WebP/APNG copy frame 0, native `avif` copies stills, and `ImageCache::load` SVGs

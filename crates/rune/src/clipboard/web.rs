@@ -64,7 +64,7 @@ impl Client {
         #[cfg(test)]
         if let Some(m) = &self.memory { return flush_to_memory(rt, m); }
         rt.edit.clear_secret_request = false;
-        if let Some(mut copy) = rt.copy_request.take() {
+        if let Some(copy) = rt.copy_request.take() {
             if copy.is_secret() {
                 if let Some(slot) = copy.slot() {
                     slot.set(SecretState::Failed("secret clipboard writes are unsupported on web".into()));
@@ -81,9 +81,14 @@ impl Client {
                         wake: self.wake.clone(),
                     });
                     let latest = self.latest_write.clone();
+                    let latest_check = self.latest_write.clone();
                     let encode_err: std::rc::Rc<std::cell::Cell<Option<CopyImageError>>> = std::rc::Rc::new(std::cell::Cell::new(None));
                     let err_cell = encode_err.clone();
-                    let make_png = wasm_bindgen::closure::Closure::once(move || -> wasm_bindgen::JsValue {
+                    let err_check = encode_err.clone();
+                    // Kept in an `Option` inside `Closure::wrap` so a first-message CSP worker
+                    // fallback can re-extract from the same `ClipboardWrite` if needed.
+                    let mut copy_slot = Some(copy);
+                    let extract = wasm_bindgen::closure::Closure::wrap(Box::new(move |want_raw: bool| -> wasm_bindgen::JsValue {
                         let obj = js_sys::Object::new();
                         if latest.get() != generation {
                             err_cell.set(Some(CopyImageError::Superseded));
@@ -92,30 +97,78 @@ impl Client {
                             }
                             return obj.into();
                         }
-                        match copy.encode_image() {
-                            Ok(()) => {
-                                let png = copy.content().image().map_or(&[][..], ClipboardImage::png);
-                                let arr = js_sys::Uint8Array::from(png);
-                                if js_sys::Reflect::set(&obj, &"png".into(), &arr).is_err() {
-                                    err_cell.set(Some(CopyImageError::Failed("failed to build clipboard PNG payload".into())));
-                                    return wasm_bindgen::JsValue::NULL;
+                        let Some(mut cur) = copy_slot.as_ref().cloned() else {
+                            err_cell.set(Some(CopyImageError::Failed("clipboard image already consumed".into())));
+                            return wasm_bindgen::JsValue::NULL;
+                        };
+                        if want_raw {
+                            match cur.extract_web_pixels() {
+                                Ok((w, h, bytes, premul)) => {
+                                    let ok = js_sys::Reflect::set(&obj, &"width".into(), &wasm_bindgen::JsValue::from(w)).is_ok()
+                                        && js_sys::Reflect::set(&obj, &"height".into(), &wasm_bindgen::JsValue::from(h)).is_ok()
+                                        && js_sys::Reflect::set(&obj, &"bytes".into(), &bytes).is_ok()
+                                        && js_sys::Reflect::set(&obj, &"premul".into(), &wasm_bindgen::JsValue::from(premul)).is_ok();
+                                    if !ok {
+                                        err_cell.set(Some(CopyImageError::Failed("failed to build clipboard pixel payload".into())));
+                                        return wasm_bindgen::JsValue::NULL;
+                                    }
+                                }
+                                Err(err) => {
+                                    copy_slot = None;
+                                    let msg = err.to_string();
+                                    err_cell.set(Some(err));
+                                    if js_sys::Reflect::set(&obj, &"error".into(), &msg.into()).is_err() {
+                                        return wasm_bindgen::JsValue::NULL;
+                                    }
                                 }
                             }
-                            Err(err) => {
-                                let msg = err.to_string();
-                                err_cell.set(Some(err));
-                                if js_sys::Reflect::set(&obj, &"error".into(), &msg.into()).is_err() {
-                                    return wasm_bindgen::JsValue::NULL;
+                        } else {
+                            copy_slot = None;
+                            match cur.encode_image() {
+                                Ok(()) => {
+                                    let png = cur.content().image().map_or(&[][..], ClipboardImage::png);
+                                    let arr = js_sys::Uint8Array::from(png);
+                                    if js_sys::Reflect::set(&obj, &"png".into(), &arr).is_err() {
+                                        err_cell.set(Some(CopyImageError::Failed("failed to build clipboard PNG payload".into())));
+                                        return wasm_bindgen::JsValue::NULL;
+                                    }
+                                }
+                                Err(err) => {
+                                    let msg = err.to_string();
+                                    err_cell.set(Some(err));
+                                    if js_sys::Reflect::set(&obj, &"error".into(), &msg.into()).is_err() {
+                                        return wasm_bindgen::JsValue::NULL;
+                                    }
                                 }
                             }
                         }
                         obj.into()
-                    });
+                    }) as Box<dyn FnMut(bool) -> wasm_bindgen::JsValue>);
+                    let check_outcome = wasm_bindgen::closure::Closure::wrap(Box::new(move |code: String| -> bool {
+                        if code == "too_large" {
+                            err_check.set(Some(CopyImageError::TooLarge));
+                            return false;
+                        }
+                        if !code.is_empty() {
+                            err_check.set(Some(CopyImageError::Failed(code)));
+                            return false;
+                        }
+                        if latest_check.get() != generation {
+                            err_check.set(Some(CopyImageError::Superseded));
+                            return false;
+                        }
+                        true
+                    }) as Box<dyn FnMut(String) -> bool>);
                     use wasm_bindgen::JsCast;
-                    let promise = crate::platform::web::platform::write_clipboard_image(make_png.as_ref().unchecked_ref());
+                    let promise = crate::platform::web::platform::write_clipboard_image(
+                        extract.as_ref().unchecked_ref(),
+                        check_outcome.as_ref().unchecked_ref(),
+                        MAX_IMAGE_BYTES as u32,
+                    );
                     wasm_bindgen_futures::spawn_local(async move {
                         let outcome = wasm_bindgen_futures::JsFuture::from(promise).await;
-                        drop(make_png);
+                        drop(extract);
+                        drop(check_outcome);
                         match outcome {
                             Ok(_) => if let Some(r) = copy_reply { r.send(Ok(())); },
                             Err(err) => {
