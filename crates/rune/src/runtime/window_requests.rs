@@ -104,6 +104,10 @@ pub(crate) struct HostState {
     /// Host-supplied safe-area insets `[top, right, bottom, left]` in logical points
     /// (`Runtime::set_safe_area`); `None` falls back to browser insets on wasm32 or `[0.0; 4]`.
     pub(in crate::runtime) safe_area: Option<[f32; 4]>,
+    /// Visible vertical band `(top, bottom)` of the host's visual viewport in window points when
+    /// smaller than the layout viewport (e.g. an on-screen keyboard under `resizes-visual`), or
+    /// `None` when the full layout viewport is visible.
+    pub(in crate::runtime) visual_viewport_y: Option<(f32, f32)>,
 }
 
 impl HostState {
@@ -164,6 +168,7 @@ impl HostState {
             wm_state: crate::WindowManagerState::default(),
             wm_state_read: false,
             safe_area: None,
+            visual_viewport_y: None,
         }
     }
 

@@ -219,6 +219,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         hoverLink: null, hoverLinkLeave: null, hoverClientX: NaN, hoverClientY: NaN,
         forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false,
+        visualViewport: null, keyboardShiftY: 0,
         pointerLocked: false, pointerLockPending: false, pointerLockSeq: 0, pointerLockHasPromise: false, pointerLockCalling: false, pointerLockSyncError: false, pointerLockUnadjustedFailed: false };
     // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
     const send = (event, after) => {
@@ -774,6 +775,7 @@ export function sync(h, key, text, base, anchor, focus, secure) {
         (secure ? h.textarea : h.password).inert = true;
     }
     h.syncing = false;
+    applyKeyboardShift(h);
 }
 
 // Drops browser composition tracking after Rune finished/cancelled composition (e.g. on blur or hide).
@@ -1098,16 +1100,56 @@ export function syncWheel(h, used) {
     h.wheelUsed = used;
 }
 
+// Vertical CSS shift (px, >= 0) to lift a focused field into the visible part of `visualViewport`
+// when the on-screen keyboard shrinks only the visual viewport (iOS Safari, Android Chrome default
+// `resizes-visual`) and no enclosing Rune scroll container could bring the caret above it.
+function keyboardShift(h) {
+    if (h.embedded || h.page || !h.key || !h.caret || !h.visualViewport) return 0;
+    const { top: visTop, bottom: visBottom, layoutH } = h.visualViewport;
+    const coveredBottom = Math.max(0, layoutH - visBottom);
+    if (coveredBottom <= 1) return 0;
+    const pad = 16;
+    const caretTop = h.caret[1];
+    const caretBottom = caretTop + h.caret[3];
+    const need = caretBottom + pad - visBottom;
+    if (need <= 0) return 0;
+    const maxKeepTop = Math.max(0, caretTop - (visTop + pad));
+    return Math.min(need, maxKeepTop, coveredBottom);
+}
+
+function applyKeyboardShift(h) {
+    const shift = keyboardShift(h);
+    const prev = h.keyboardShiftY || 0;
+    if (Math.abs(shift - prev) < 0.5) return;
+    h.keyboardShiftY = shift;
+    const value = shift > 0 ? `translate3d(0, ${-shift}px, 0)` : '';
+    const sibling = h.canvas.previousElementSibling;
+    const targets = sibling?.hasAttribute?.('data-rune-cpu') ? [h.canvas, sibling, h.a11y] : [h.canvas, h.a11y];
+    for (const target of targets) target.style.transform = value;
+    if (h.caret && !h.fieldArmed) {
+        for (const field of [h.textarea, h.password]) placeField(field, h.caret, shift);
+    }
+}
+
+// Updates the unzoomed visual viewport vertical band `[top, bottom]` within `layoutH` (CSS px)
+// so a focused field covered by the on-screen keyboard is shifted into view without resizing the
+// canvas. Passing `layoutH <= 0` or `bottom <= top` clears any active shift.
+export function syncVisualViewport(h, top, bottom, layoutH) {
+    h.visualViewport = layoutH > 0 && bottom > top ? { top, bottom, layoutH } : null;
+    applyKeyboardShift(h);
+}
+
 // The focused field's IME area in window points: the page's own text field sits there, so an
 // input method's candidate window opens beside the caret, not in the page's corner.
 export function syncCaret(h, x, y, w, height) {
     h.caret = [x, y, Math.max(1, w), Math.max(1, height)];
+    applyKeyboardShift(h);
     if (h.fieldArmed) return;
-    for (const field of [h.textarea, h.password]) placeField(field, h.caret);
+    for (const field of [h.textarea, h.password]) placeField(field, h.caret, h.keyboardShiftY || 0);
 }
 
-function placeField(field, [x, y, w, height]) {
-    Object.assign(field.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${height}px`, pointerEvents: 'none' });
+function placeField(field, [x, y, w, height], shiftY = 0) {
+    Object.assign(field.style, { left: `${x}px`, top: `${y - shiftY}px`, width: `${w}px`, height: `${height}px`, pointerEvents: 'none' });
 }
 
 function forwardWheelToCanvas(h, event) {
@@ -1318,7 +1360,7 @@ function disarmMenu(h) {
     }
     if (h.fieldArmed) {
         h.fieldArmed = false;
-        if (h.caret) placeField(h.field, h.caret);
+        if (h.caret) placeField(h.field, h.caret, h.keyboardShiftY || 0);
         else Object.assign(h.field.style, { left: '0px', top: '0px', width: '1px', height: '1px', pointerEvents: 'none' });
     }
     if (h.menu === 'browser') h.menu = '';
@@ -2283,6 +2325,12 @@ export function destroy(h) {
     h.a11yByPath.clear();
     h.mirrorSel = false;
     h.scrollEls.clear();
+    if (h.keyboardShiftY) {
+        h.keyboardShiftY = 0;
+        const sibling = h.canvas.previousElementSibling;
+        if (sibling?.hasAttribute?.('data-rune-cpu')) sibling.style.transform = '';
+        h.canvas.style.transform = '';
+    }
     h.a11y.remove();
     h.band?.remove();
     h.password.remove(); h.textarea.remove();
