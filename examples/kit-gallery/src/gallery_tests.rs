@@ -174,7 +174,8 @@ fn pure_hover_sweep_commits_only_on_stateful_hover_stories() {
 }
 
 
-const PINNED_CONTROL_STORIES: &[&str] = &[
+const PINNED_STORIES: &[&str] = &[
+    // Controls and containers (31 stories).
     "ui-segmented-control--basic",
     "ui-segmented-control--controlled",
     "rune-segmented-control--rich",
@@ -206,6 +207,20 @@ const PINNED_CONTROL_STORIES: &[&str] = &[
     "ui-switch--hidden-label",
     "rune-switch--sizes",
     "rune-switch--web",
+    // Overlays (13 stories: open menus with separators & submenus, select lists, popup list, dialogs, popover).
+    "ui-menu--basic",
+    "ui-menu--appearances",
+    "ui-menu--rich",
+    "ui-menu--with-submenu",
+    "rune-menu--submenu-options",
+    "ui-menu--with-radio",
+    "ui-select--playground",
+    "ui-select--grouped",
+    "rune-select--states",
+    "rune-popup-list--composer",
+    "ui-dialog--basic",
+    "rune-dialog--fit",
+    "components-popover--basic",
 ];
 
 fn fnv_bytes(h: &mut u64, bytes: &[u8]) {
@@ -215,18 +230,34 @@ fn fnv_bytes(h: &mut u64, bytes: &[u8]) {
     }
 }
 
-fn fnv_f32(h: &mut u64, v: f32) {
-    let bits = if v == 0.0 { 0u32 } else { v.to_bits() };
-    fnv_bytes(h, &bits.to_le_bytes());
+/// Quantise a point measurement to 0.01 pt (canonicalising -0.0 and non-finite values).
+fn fnv_pt(h: &mut u64, v: f32) {
+    let q = if v.is_finite() { (f64::from(v) * 100.0).round() as i64 } else { i64::MIN };
+    fnv_bytes(h, &q.to_le_bytes());
+}
+
+/// Quantise a colour channel to 1e-4 precision.
+fn fnv_ch(h: &mut u64, v: f32) {
+    let q = if v.is_finite() { (f64::from(v) * 10_000.0).round() as i64 } else { i64::MIN };
+    fnv_bytes(h, &q.to_le_bytes());
 }
 
 fn fnv_color(h: &mut u64, c: rune::Color) {
     for ch in [c.r, c.g, c.b, c.a] {
-        fnv_f32(h, ch);
+        fnv_ch(h, ch);
     }
 }
 
-fn hash_story_frame(rt: &rune::Runtime<G>) -> (u64, u64, usize, usize) {
+/// Cross-platform layout & chrome paint hash for one settled story frame.
+///
+/// Bundled Inter / IBM Plex Mono fonts are loaded so Latin shaping agrees across OSes, while
+/// platform-dependent glyph rasterisation (`KIND_GLYPH`) and texture-atlas `uv` coordinates
+/// are excluded. Every metric-driven geometry property (vertical position & height, corner
+/// radius, padding/border insets, fills, borders, text styles, chrome paint rects/radii/borders/
+/// shadows/gradients and icon box sizes) is rounded to 0.01 pt (colours to 1e-4) before hashing.
+fn hash_story_frame(rt: &rune::Runtime<G>, include_x_width: bool) -> (u64, u64, usize, usize) {
+    use rune::render::{KIND_GLYPH, KIND_IMAGE};
+
     let mut layout_h: u64 = 0xcbf2_9ce4_8422_2325;
     let els = rt.elements();
     for e in &els {
@@ -237,10 +268,16 @@ fn hash_story_frame(rt: &rune::Runtime<G>) -> (u64, u64, usize, usize) {
         }
         fnv_bytes(&mut layout_h, &[0]);
         fnv_bytes(&mut layout_h, e.role.as_bytes());
-        for v in e.rect {
-            fnv_f32(&mut layout_h, v);
+        // Vertical layout (y, h), corners, insets (padding + border), fill, border and type style.
+        fnv_pt(&mut layout_h, e.rect[1]);
+        fnv_pt(&mut layout_h, e.rect[3]);
+        // Non-text boxes whose width is fixed or metric-driven (switches, dividers, icons,
+        // dialogs, popovers, selects, text areas, fixed segmented controls).
+        if include_x_width && e.role != "text" {
+            fnv_pt(&mut layout_h, e.rect[0]);
+            fnv_pt(&mut layout_h, e.rect[2]);
         }
-        fnv_f32(&mut layout_h, e.radius);
+        fnv_pt(&mut layout_h, e.radius);
         fnv_color(&mut layout_h, e.fill);
         match e.border_color {
             Some(c) => {
@@ -250,27 +287,79 @@ fn hash_story_frame(rt: &rune::Runtime<G>) -> (u64, u64, usize, usize) {
             None => fnv_bytes(&mut layout_h, &[0]),
         }
         for v in e.inset {
-            fnv_f32(&mut layout_h, v);
+            fnv_pt(&mut layout_h, v);
+        }
+        if let Some(ts) = &e.text_style {
+            fnv_bytes(&mut layout_h, &[1]);
+            fnv_pt(&mut layout_h, ts.size);
+            fnv_pt(&mut layout_h, ts.weight);
+            fnv_pt(&mut layout_h, ts.line_height);
+            fnv_pt(&mut layout_h, ts.tracking);
+            fnv_bytes(&mut layout_h, &[u8::from(ts.italic)]);
+        } else {
+            fnv_bytes(&mut layout_h, &[0]);
         }
     }
+
     let mut paint_h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut chrome_count = 0usize;
     for inst in &rt.instances {
-        for v in inst.rect { fnv_f32(&mut paint_h, v); }
-        for v in inst.radii { fnv_f32(&mut paint_h, v); }
-        for v in inst.fill { fnv_f32(&mut paint_h, v); }
-        for v in inst.border { fnv_f32(&mut paint_h, v); }
-        for v in inst.params { fnv_f32(&mut paint_h, v); }
-        for v in inst.uv { fnv_f32(&mut paint_h, v); }
-        for v in inst.clip { fnv_f32(&mut paint_h, v); }
-        for v in inst.fade { fnv_bytes(&mut paint_h, &v.to_le_bytes()); }
+        if inst.params[1] == KIND_GLYPH {
+            continue;
+        }
+        chrome_count += 1;
+        fnv_pt(&mut paint_h, inst.params[1]); // kind
+        fnv_pt(&mut paint_h, inst.params[0]); // border width
+        fnv_pt(&mut paint_h, inst.params[2]); // shadow sigma
+        if inst.params[1] == KIND_IMAGE {
+            // Icon/image dimensions and tint (omit atlas UV and text-shifted x).
+            fnv_pt(&mut paint_h, inst.rect[1]);
+            fnv_pt(&mut paint_h, inst.rect[2]);
+            fnv_pt(&mut paint_h, inst.rect[3]);
+        } else if include_x_width {
+            for v in inst.rect {
+                fnv_pt(&mut paint_h, v);
+            }
+        } else {
+            fnv_pt(&mut paint_h, inst.rect[1]);
+            fnv_pt(&mut paint_h, inst.rect[3]);
+        }
+        for v in inst.radii {
+            fnv_pt(&mut paint_h, v);
+        }
+        for v in inst.fill {
+            fnv_ch(&mut paint_h, v);
+        }
+        for v in inst.border {
+            fnv_ch(&mut paint_h, v);
+        }
     }
-    (layout_h, paint_h, els.len(), rt.instances.len())
+    (layout_h, paint_h, els.len(), chrome_count)
+}
+
+/// Standing guard: pins the default look of every control, container and overlay story across
+/// `rune_theme_opencode` and `Kit::neutral` (light and dark) against the committed baseline
+/// `golden/default-look.txt`. Runs in an ordinary `cargo test -p kit-gallery` with no window.
+///
+/// To accept an intentional default-look change, run:
+/// `RUNE_BLESS=1 cargo test -p kit-gallery pinned_default_look_baseline`
+/// and review the changed lines in `examples/kit-gallery/golden/default-look.txt`.
+fn ensure_gallery_fonts(rt: &mut rune::Runtime<G>) {
+    static LOAD_FONTS: std::sync::Once = std::sync::Once::new();
+    LOAD_FONTS.call_once(|| {
+        for &bytes in rune_theme_opencode::FONTS {
+            let _ = rt.add_font(bytes);
+        }
+    });
 }
 
 #[test]
-fn pinned_control_stories_snapshot() {
-    let mut lines = Vec::new();
-    for &id in PINNED_CONTROL_STORIES {
+fn pinned_default_look_baseline() {
+    let baseline_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("golden/default-look.txt");
+
+    let mut saved_families: Option<(String, String)> = None;
+    let mut lines = Vec::with_capacity(PINNED_STORIES.len() * 4);
+    for &id in PINNED_STORIES {
         let &(_, setup) = stories::SCENES
             .iter()
             .find(|&&(s, _)| s == id)
@@ -281,35 +370,91 @@ fn pinned_control_stories_snapshot() {
                 g.neutral = neutral;
                 g.palette = false;
                 setup(&mut g);
+                if id == "ui-menu--with-submenu" {
+                    g.on.insert("recent".into());
+                }
                 let mut rt = rune::Runtime::new(g, view, (720.0, 480.0), rune::Env::new(dark, 1.0));
+                if saved_families.is_none() {
+                    let (sans, mono) = rt.font_families();
+                    saved_families = Some((sans.to_owned(), mono.to_owned()));
+                }
+                ensure_gallery_fonts(&mut rt);
+                let (sans, mono) = rune_theme_opencode::FAMILIES;
+                rt.set_font_families(sans, mono);
                 rt.frame(0.0);
                 rt.settle_all();
                 rt.frame(0.0);
-                let (lh, ph, ne, ni) = hash_story_frame(&rt);
-                lines.push(format!("{id}|{theme_name}|dark={dark}|els={ne}|insts={ni}|layout={lh:016x}|paint={ph:016x}"));
+                // `rune-keybind--symbols` exercises OS fallback symbol glyphs (⌫/⎋/⌥/⌃/⏎)
+                // absent from bundled Inter / IBM Plex Mono, whose horizontal advance widths vary
+                // by platform font; vertical geometry, radii, padding insets, colours and chrome
+                // counts remain pinned identically across Windows, macOS and Linux.
+                let include_x_width = id != "rune-keybind--symbols";
+                let (lh, ph, ne, nc) = hash_story_frame(&rt, include_x_width);
+                lines.push(format!("{id}|{theme_name}|dark={dark}|els={ne}|chrome={nc}|layout={lh:016x}|paint={ph:016x}"));
             }
         }
     }
-    let dump = lines.join("\n");
-    if let Some(path) = rune::env::var("RUNE_PIN_DUMP_OUT") {
-        std::fs::write(&path, &dump).expect("write pin dump");
+    if let Some((sans, mono)) = saved_families {
+        let mut restore = rune::Runtime::new(init(), view, (16.0, 16.0), rune::Env::new(true, 1.0));
+        restore.set_font_families(&sans, &mono);
     }
-    if let Some(path) = rune::env::var("RUNE_PIN_DUMP_CHECK") {
-        let expected = std::fs::read_to_string(&path).expect("read pin baseline");
-        let exp_lines: Vec<&str> = expected.lines().collect();
-        let got_lines: Vec<&str> = dump.lines().collect();
-        assert_eq!(exp_lines.len(), got_lines.len(), "story count changed");
-        let diffs: Vec<_> = exp_lines.iter().zip(&got_lines).filter(|(a, b)| a != b).collect();
-        assert!(diffs.is_empty(), "default look drifted for {} story/theme combos:\n{diffs:#?}", diffs.len());
+
+    let fresh = format!("{}\n", lines.join("\n"));
+    if rune::env::var("RUNE_BLESS").is_some_and(|v| v != "0") {
+        if let Some(parent) = baseline_path.parent() {
+            std::fs::create_dir_all(parent).expect("create golden dir");
+        }
+        std::fs::write(&baseline_path, &fresh).expect("write default-look baseline");
+        return;
     }
+
+    let want = std::fs::read_to_string(&baseline_path).unwrap_or_else(|_| {
+        panic!("missing {}; run with RUNE_BLESS=1 to generate", baseline_path.display())
+    });
+    let want_lines: Vec<&str> = want.lines().collect();
+    let got_lines: Vec<&str> = fresh.lines().collect();
+    assert_eq!(
+        want_lines.len(),
+        got_lines.len(),
+        "default-look baseline line count changed ({} vs {}); accept intended changes with RUNE_BLESS=1",
+        want_lines.len(),
+        got_lines.len(),
+    );
+    let diffs: Vec<String> = want_lines
+        .iter()
+        .zip(&got_lines)
+        .filter(|(a, b)| a != b)
+        .map(|(a, b)| format!("  expected: {a}\n  actual:   {b}"))
+        .collect();
+    assert!(
+        diffs.is_empty(),
+        "default kit look drifted for {} story/theme combination(s) (accept intentional changes with RUNE_BLESS=1):\n{}",
+        diffs.len(),
+        diffs.join("\n"),
+    );
 }
 
 /// Standing check: every overlay story under `Kit::neutral` and `rune_theme_opencode::kit`
 /// produces bit-identical element geometry and GPU paint instances whether `Kit::metrics` is
-/// left at `Metrics::default()` or explicitly populated with each overlay metric's `::kit(&k)`.
+/// left at `Metrics::default()` or explicitly populated with the literal default values from
+/// #2362 and #2364. Also asserts each `::kit(&k)` returns those exact literal defaults.
 #[test]
 fn overlay_default_metrics_match_explicit_kit_defaults() {
     use rune_kit::{DialogMetrics, MenuMetrics, PopoverMetrics, PopupRowMetrics, SelectMetrics};
+
+    const LITERAL_DIALOG: DialogMetrics = DialogMetrics { radius: 6.0, padding: 16.0, title: None };
+    const LITERAL_POPUP_ROW: PopupRowMetrics = PopupRowMetrics { height: 28.0, radius: 4.0 };
+    const LITERAL_SELECT: SelectMetrics = SelectMetrics { chevron: 16.0, chevron_box: 20.0 };
+    const LITERAL_POPOVER: PopoverMetrics = PopoverMetrics { min_width: 200.0, max_width: 320.0 };
+    const LITERAL_MENU: MenuMetrics = MenuMetrics {
+        padding: 2.0,
+        standard_padding: 4.0,
+        separator_above: 2.0,
+        separator_below: 2.0,
+        standard_separator_above: 4.0,
+        standard_separator_below: 4.0,
+        standard_inner_border: 1.0,
+    };
 
     const OVERLAY_STORIES: &[&str] = &[
         "ui-menu--basic",
@@ -334,11 +479,11 @@ fn overlay_default_metrics_match_explicit_kit_defaults() {
         let base = kit(s, cx.system_dark());
         let mut owned = base.clone();
         if EXPLICIT.get() {
-            owned.metrics.dialog = Some(DialogMetrics::kit(base));
-            owned.metrics.popup_row = Some(PopupRowMetrics::kit(base));
-            owned.metrics.select = Some(SelectMetrics::kit(base));
-            owned.metrics.popover = Some(PopoverMetrics::kit(base));
-            owned.metrics.menu = Some(MenuMetrics::kit(base));
+            owned.metrics.dialog = Some(LITERAL_DIALOG);
+            owned.metrics.popup_row = Some(LITERAL_POPUP_ROW);
+            owned.metrics.select = Some(LITERAL_SELECT);
+            owned.metrics.popover = Some(LITERAL_POPOVER);
+            owned.metrics.menu = Some(LITERAL_MENU);
         }
         let mut overlays = Vec::new();
         let (_, f) = stories::STORIES
@@ -361,6 +506,9 @@ fn overlay_default_metrics_match_explicit_kit_defaults() {
             g.on.insert("recent".into());
         }
         let mut rt = rune::Runtime::new(g, pin_view, (720.0, 480.0), rune::Env::new(dark, 1.0));
+        ensure_gallery_fonts(&mut rt);
+        let (sans, mono) = rune_theme_opencode::FAMILIES;
+        rt.set_font_families(sans, mono);
         rt.frame(0.0);
         rt.settle_all();
         rt.frame(0.0);
@@ -406,6 +554,13 @@ fn overlay_default_metrics_match_explicit_kit_defaults() {
         ("opencode-dark", false, true),
         ("opencode-light", false, false),
     ] {
+        let base = if neutral { Kit::neutral(dark) } else { rune_theme_opencode::kit(dark).clone() };
+        assert_eq!(DialogMetrics::kit(&base), LITERAL_DIALOG, "{theme}: DialogMetrics::kit default");
+        assert_eq!(PopupRowMetrics::kit(&base), LITERAL_POPUP_ROW, "{theme}: PopupRowMetrics::kit default");
+        assert_eq!(SelectMetrics::kit(&base), LITERAL_SELECT, "{theme}: SelectMetrics::kit default");
+        assert_eq!(PopoverMetrics::kit(&base), LITERAL_POPOVER, "{theme}: PopoverMetrics::kit default");
+        assert_eq!(MenuMetrics::kit(&base), LITERAL_MENU, "{theme}: MenuMetrics::kit default");
+
         for &id in OVERLAY_STORIES {
             let def = snapshot(neutral, dark, id, false);
             let exp = snapshot(neutral, dark, id, true);

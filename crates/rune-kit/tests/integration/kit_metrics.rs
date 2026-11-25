@@ -247,14 +247,20 @@ fn frame_signature<S: 'static>(rt: &Runtime<S>) -> (u64, u64, usize, usize) {
 
 fn explicit_default_kit(base: &Kit) -> Kit {
     let mut k = base.clone();
-    k.metrics.segmented = Some(SegmentedMetrics::kit(base));
+    k.metrics.segmented = Some(SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0 });
     k.metrics.disclosure_header_height = Some(32.0);
-    k.metrics.progress = Some(ProgressMetrics::kit(base));
+    k.metrics.progress = Some(ProgressMetrics { height: 8.0, border_width: 1.0 });
     k.metrics.divider_thickness = Some(1.0);
-    k.metrics.keybind = Some(KeybindMetrics::kit(base));
+    k.metrics.keybind = Some(KeybindMetrics { height: 14.0, padding_x: 4.0, radius: 2.0 });
     k.metrics.text_area_min_height = Some(80.0);
-    k.metrics.standard_switch = Some(StandardSwitchMetrics::kit(base));
-    k.metrics.switch_look = Some(SwitchLook::kit(base));
+    k.metrics.standard_switch = Some(StandardSwitchMetrics { track_width: 28.0, track_height: 16.0, thumb: 14.0, inset: 1.0 });
+    k.metrics.switch_look = Some(SwitchLook {
+        sheen: true,
+        knob_depth: true,
+        track_border: 0.0,
+        track_border_off: base.c.border_base,
+        track_border_on: base.c.bg_accent,
+    });
     k
 }
 
@@ -306,9 +312,9 @@ fn default_metrics_match_explicit_kit_defaults_bit_for_bit() {
         ("opencode-light", rune_theme_opencode::kit(false).clone()),
         ("opencode-dark", rune_theme_opencode::kit(true).clone()),
     ] {
-        assert_eq!(SegmentedMetrics::kit(&base), SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: base.radius.md });
+        assert_eq!(SegmentedMetrics::kit(&base), SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0 });
         assert_eq!(ProgressMetrics::kit(&base), ProgressMetrics { height: 8.0, border_width: 1.0 });
-        assert_eq!(KeybindMetrics::kit(&base), KeybindMetrics { height: 14.0, padding_x: 4.0, radius: base.radius.xs });
+        assert_eq!(KeybindMetrics::kit(&base), KeybindMetrics { height: 14.0, padding_x: 4.0, radius: 2.0 });
         assert_eq!(StandardSwitchMetrics::kit(&base), StandardSwitchMetrics { track_width: 28.0, track_height: 16.0, thumb: 14.0, inset: 1.0 });
         assert_eq!(
             SwitchLook::kit(&base),
@@ -320,12 +326,33 @@ fn default_metrics_match_explicit_kit_defaults_bit_for_bit() {
         rt_def.settle_all();
         rt_def.frame(0.0);
 
+        // Pin literal rendered dimensions on the default scene so changing X::kit(&k) cannot
+        // silently move both sides together.
+        let els = rt_def.elements();
+        let find = |suffix: &str| els.iter().find(|e| e.path.ends_with(suffix)).unwrap_or_else(|| panic!("{name}: no {suffix}"));
+        assert_eq!((find("/seg-fixed").rect[3], find("/seg-fixed").radius), (28.0, 6.0), "{name}: SegmentedControl");
+        assert_eq!(find("/seg-fixed/segment0").inset, [12.0, 0.0, 12.0, 0.0], "{name}: SegmentedControl padding_x");
+        assert_eq!((find("/col-open/trigger").rect[3], find("/col-open/trigger").radius), (32.0, 4.0), "{name}: Collapsible");
+        assert_eq!(find("/acc/item0/trigger").rect[3], 32.0, "{name}: Accordion");
+        assert_eq!(find("/prog/track").rect[3], 8.0, "{name}: Progress height");
+        assert!(find("/prog/track").border_color.is_some(), "{name}: Progress 1pt rim");
+        assert_eq!(find("/div-h").rect[3], 1.0, "{name}: horizontal Divider");
+        assert_eq!(find("/div-v").rect[2], 1.0, "{name}: vertical Divider");
+        assert_eq!((find("/kb/key0").rect[3], find("/kb/key0").radius), (14.0, 2.0), "{name}: Keybind");
+        assert_eq!(find("/kb/key0").inset, [4.0, 0.0, 4.0, 0.0], "{name}: Keybind padding_x");
+        assert_eq!(find("/area-plain").rect[3], 80.0, "{name}: TextArea min height");
+        assert_eq!((find("/sw-std-on/control").rect[2], find("/sw-std-on/control").rect[3]), (28.0, 16.0), "{name}: standard Switch track");
+        let std_track = find("/sw-std-on/control").rect;
+        let std_thumb = find("/sw-std-on/control/thumb").rect;
+        assert_eq!((std_thumb[2], std_thumb[3]), (14.0, 14.0), "{name}: standard Switch thumb");
+        assert_eq!((std_thumb[0] - std_track[0], std_thumb[1] - std_track[1]), (13.0, 1.0), "{name}: standard Switch inset");
+
         let mut rt_exp = Runtime::new(StateKit { kit: explicit_default_kit(&base), edit: TextEdit::new("") }, view, (420.0, 900.0), Env::new(base.dark, 1.0));
         rt_exp.frame(0.0);
         rt_exp.settle_all();
         rt_exp.frame(0.0);
 
-        assert_eq!(frame_signature(&rt_def), frame_signature(&rt_exp), "{name}: default vs explicit ::kit(&k) drifted");
+        assert_eq!(frame_signature(&rt_def), frame_signature(&rt_exp), "{name}: default vs literal metrics drifted");
     }
 }
 
