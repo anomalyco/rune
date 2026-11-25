@@ -9,7 +9,7 @@ use crate::G;
 
 use super::{
     STORIES, Story, caption, combobox, dialog_basic, dialog_close_disabled, dialog_fit, field_menu, icons,
-    inputs, link_hover, link_popover, motion_focus_modal, overlays, popup_list_composer, table,
+    inputs, link_hover, link_popover, motion_focus_modal, overlay_metrics, overlays, popup_list_composer, table,
 };
 
 /// Every story stacked in a scrollable virtualized list, for browsing in a window.
@@ -95,6 +95,7 @@ fn collect_open_overlays(s: &G, k: &Kit, layer: &mut Vec<El>) {
             "tip-title-description" => Some(overlays::tooltip_title_description),
             "card" => Some(overlays::hover_card_basic),
             "hc-left-start" | "hc-left-end" | "hc-right-end" => Some(overlays::hover_card_placements),
+            "om-menu" | "om-select" | "om-popover" | "om-dialog" => Some(overlay_metrics::overlays_metrics),
             "tx-popover" | "tx-select" => Some(overlays::overlays_tx_callbacks),
             "toast" => Some(overlays::toast_all),
             _ => None,

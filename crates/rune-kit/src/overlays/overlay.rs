@@ -338,9 +338,10 @@ impl Popover {
         let mut content = col().key(content_key(&self.key)).role("dialog")
             .description(self.description.clone().unwrap_or_default())
             .focus_return(&anchor_key);
+        let pm = k.popover_metrics();
         content = match self.width {
             Some(w) => content.w(w),
-            None => content.min_w(200.0).max_w(320.0),
+            None => content.min_w(pm.min_width).max_w(pm.max_width),
         };
         if let Some(l) = &self.label {
             content = content.label(l.clone());

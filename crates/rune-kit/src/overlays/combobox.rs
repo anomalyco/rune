@@ -308,7 +308,7 @@ impl ComboboxCore {
         if !self.state.is_open() || self.disabled { return popover.build(k, layer); }
         let choices = filtered(&self.options, &self.state.search.text);
         let active = self.state.active_index(&self.options, &choices);
-        let page = page_size(self.max_height, 28.0);
+        let page = page_size(self.max_height, k.popup_row_metrics().height);
         // The search field sits borderless over a divider: the open popover is its frame, and the
         // caret shows its focus.
         let search_label = self.search_label

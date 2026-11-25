@@ -188,3 +188,41 @@ fn from_popup_menu_handles_submenus_keyboard_escape_outside_click_a11y_and_tiny_
     let rect2 = tiny.presented("pm-menu").expect("re-clamped menu rect").0;
     assert!(rect2[1] + rect2[3] <= 160.0, "re-clamped to new 160pt height: {rect2:?}");
 }
+
+#[test]
+fn from_popup_menu_clamps_under_roomy_menu_metrics() {
+    if rune::popup_menu_supported() {
+        return;
+    }
+    fn roomy_view(s: &Demo, cx: &mut Cx<Demo>) -> El {
+        let mut k = Kit::neutral(cx.system_dark());
+        k.metrics.menu = Some(crate::MenuMetrics { padding: 12.0, separator_above: 8.0, separator_below: 8.0, ..crate::MenuMetrics::kit(&k) });
+        k.metrics.popup_row = Some(crate::PopupRowMetrics { height: 34.0, ..crate::PopupRowMetrics::kit(&k) });
+        let mut layer = Vec::new();
+        let body = el().key("body").w_full().h_full();
+        if let Some(req) = &s.popup {
+            let _ = Menu::from_popup_menu("pm", req, |s: &mut Demo, picked, tx: &mut Tx| {
+                s.popup = None;
+                tx.resolve_popup_menu(picked);
+            })
+            .build(&k, &mut layer);
+        }
+        root(body, layer)
+    }
+    let mut rt = App::new(AppSpec::new("kit-popup-roomy", (260.0, 200.0), Demo::default, roomy_view))
+        .on_popup_menu(|s: &mut Demo, req: PopupMenuRequest, _| s.popup = Some(req))
+        .headless_runtime((260.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.update(|_, tx| {
+        let mut m = PopupMenu::new();
+        for i in 0..10 {
+            if i == 4 { m = m.separator(); }
+            m = m.item(PopupItem::new(format!("i{i}"), format!("Item {i}")));
+        }
+        tx.popup_menu(m, (220.0, 170.0), |_: &mut Demo, _, _| {});
+    });
+    rt.frame(0.0);
+    assert!(rt.state.popup.is_some());
+    let rect = rt.presented("pm-menu").expect("roomy clamped menu").0;
+    assert!(rect[0] >= 0.0 && rect[1] >= 0.0 && rect[0] + rect[2] <= 260.5 && rect[1] + rect[3] <= 200.5, "clamped: {rect:?}");
+}
