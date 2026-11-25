@@ -242,16 +242,22 @@ impl RuntimeCore {
     }
 
     /// Node `i`'s caret line `[x, y, w, h]` in window points at its laid-out place, after
-    /// scrolling and sticky shifts, if it is a focused text field.
+    /// scrolling and sticky shifts, if it is a focused text field or holds the caret of a focused
+    /// `El::caret_browsing(true)` selectable text or selection group.
     pub(in crate::runtime) fn caret_rect(&self, nodes: &[Node], i: usize) -> Option<[f32; 4]> {
         let n = &nodes[i];
-        let (inp, spec, laid) = (n.input.as_ref()?, n.text.as_ref()?, n.text_layout.as_ref()?);
-        if !inp.edit.focused { return None; }
-        let [x, y] = self.field_text_origin(nodes, i, inp, spec, laid);
-        let s = self.env.scale;
-        let bb = laid.view().caret(caret_index(&inp.edit, &spec.content), inp.edit.affinity, 1.5 * s);
-        let h = if bb.y1 > bb.y0 { (bb.y1 - bb.y0) as f32 / s } else { spec.style.line_px() };
-        Some([x + bb.x0 as f32 / s, y + bb.y0 as f32 / s, 1.5, h])
+        if let Some(inp) = n.input.as_ref() {
+            if !inp.edit.focused { return None; }
+            let (spec, laid) = (n.text.as_ref()?, n.text_layout.as_ref()?);
+            let [x, y] = self.field_text_origin(nodes, i, inp, spec, laid);
+            let s = self.env.scale;
+            let bb = laid.view().caret(caret_index(&inp.edit, &spec.content), inp.edit.affinity, 1.5 * s);
+            let h = if bb.y1 > bb.y0 { (bb.y1 - bb.y0) as f32 / s } else { spec.style.line_px() };
+            return Some([x + bb.x0 as f32 / s, y + bb.y0 as f32 / s, 1.5, h]);
+        }
+        let (fi, byte, affinity) = self.caret_browse_focus_in(nodes)?;
+        if fi != i { return None; }
+        self.caret_browse_node_rect(nodes, i, byte, affinity)
     }
 
     /// After an edit (or focus gain with `El::reveal_caret_on_focus(true)`), scrolls the focused
@@ -265,7 +271,7 @@ impl RuntimeCore {
             self.reveal_row(app, &ScrollReveal::into_view(None, path), true);
             self.step_scroll(0.0);
         }
-        let Some(i) = self.focused_index() else { return };
+        let Some(i) = self.caret_browse_focus_in(&self.tree.nodes).map(|(fi, _, _)| fi).or_else(|| self.focused_index()) else { return };
         if self.caret_rect(&self.tree.nodes, i).is_none() { return; }
         let mut scrolled = false;
         for horizontal in [false, true] {
@@ -325,6 +331,7 @@ impl RuntimeCore {
     pub(in crate::runtime) fn caret_moved(&mut self, nodes: Option<&[Node]>) -> bool {
         let nodes = nodes.unwrap_or(&self.tree.nodes);
         let next = nodes.iter().position(|n| n.input.as_ref().is_some_and(|inp| inp.edit.focused))
+            .or_else(|| self.caret_browse_focus_in(nodes).map(|(fi, _, _)| fi))
             .and_then(|i| Some((i, self.caret_rect(nodes, i)?)));
         let next = next.map(|(i, r)| (nodes[i].path.as_str(), r));
         self.edit.set_caret_if_moved(next)

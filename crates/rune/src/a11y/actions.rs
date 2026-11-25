@@ -20,6 +20,8 @@ pub(crate) enum A11yAct {
     Replace(zeroize::Zeroizing<String>),
     /// Anchor and focus, in the field's display bytes.
     Select(usize, usize),
+    /// Caret-browsing selection across one or two mounted selectable texts.
+    SelectText { anchor_path: String, anchor: usize, focus_path: String, focus: usize },
     ScrollIntoView,
     /// Pages (or, with `false`, lines) down and right.
     Scroll { x: i32, y: i32, pages: bool },
@@ -37,6 +39,7 @@ impl std::fmt::Debug for A11yAct {
             Self::SetValue(_) => f.debug_tuple("SetValue").field(&"[redacted]").finish(),
             Self::Replace(_) => f.debug_tuple("Replace").field(&"[redacted]").finish(),
             Self::Select(a, b) => f.debug_tuple("Select").field(a).field(b).finish(),
+            Self::SelectText { anchor_path, anchor, focus_path, focus } => f.debug_struct("SelectText").field("anchor_path", anchor_path).field("anchor", anchor).field("focus_path", focus_path).field("focus", focus).finish(),
             Self::ScrollIntoView => f.write_str("ScrollIntoView"),
             Self::Scroll { x, y, pages } => f.debug_struct("Scroll").field("x", x).field("y", y).field("pages", pages).finish(),
             Self::ScrollTo(x, y) => f.debug_tuple("ScrollTo").field(x).field(y).finish(),
@@ -158,6 +161,20 @@ impl RuntimeCore {
                 let (Some(a), Some(b)) = (byte(sel.anchor), byte(sel.focus)) else { return false };
                 self.queue_a11y(path, A11yAct::Select(a, b));
             }
+            (Ak::SetTextSelection, None) if enabled && !n.is_secure() && self.is_caret_browsing_node(n) => {
+                let Some(ActionData::SetTextSelection(sel)) = &request.data else { return false };
+                let resolve = |p: accesskit::TextPosition| -> Option<(String, usize)> {
+                    let (pid, line) = split_id(p.node);
+                    if line == 0 || line >= super::tree::LINK_BASE { return None; }
+                    let ti = self.tree.nodes.iter().position(|m| m.id == pid)?;
+                    if !self.caret_browsing_contains(i, ti) { return None; }
+                    let (_, lines) = self.a11y_lines(ti)?;
+                    let byte = text::byte_at(&lines, line as usize - 1, p.character_index)?;
+                    Some((self.tree.nodes[ti].path.clone(), byte))
+                };
+                let (Some((anchor_path, anchor)), Some((focus_path, focus))) = (resolve(sel.anchor), resolve(sel.focus)) else { return false };
+                self.queue_a11y(path, A11yAct::SelectText { anchor_path, anchor, focus_path, focus });
+            }
             (Ak::ScrollIntoView, _) => self.queue_a11y(path, A11yAct::ScrollIntoView),
             (Ak::ScrollUp | Ak::ScrollDown | Ak::ScrollLeft | Ak::ScrollRight, None) if scrolls => {
                 let pages = !matches!(request.data, Some(ActionData::ScrollUnit(ScrollUnit::Item)));
@@ -252,6 +269,9 @@ impl RuntimeCore {
                 e.set_selection(a, b);
                 crate::edit::EditOutcome::default()
             }),
+            A11yAct::SelectText { anchor_path, anchor, focus_path, focus } => {
+                self.set_caret_browse_selection(app, &path, anchor_path, anchor, focus_path, focus)
+            }
             A11yAct::ScrollIntoView => {
                 tx.scroll_into_view(path);
                 true

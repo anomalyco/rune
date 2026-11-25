@@ -7,6 +7,7 @@ use rune_theme_opencode::icons as ic;
 
 use crate::G;
 
+mod caret_browsing;
 mod combobox;
 mod controls;
 mod diff;
@@ -219,6 +220,7 @@ stories! {
     "ui-text-input--states" => text_input_states,
     "rune-text-input--hooks" => text_input_hooks,
     "rune-text-input--read-only" => text_input_read_only,
+    "rune-text--caret-browsing" => caret_browsing::text_caret_browsing,
     "ui-textarea--playground" => textarea_playground,
     "ui-textarea--controlled" => textarea_controlled,
     "ui-textarea--with-field" => textarea_with_field,

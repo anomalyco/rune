@@ -830,6 +830,13 @@ fn flatten_node<E: FlattenEl>(
         moved_stub: false,
         epoch: crate::runtime::paint_keep::next_epoch(),
     });
+    if nodes[me].focus.caret_browsing
+        && !nodes[me].focus.opt_out
+        && nodes[me].input.is_none()
+        && (nodes[me].selection_group || nodes[me].text.as_ref().is_some_and(|t| t.selectable && !t.redacted))
+    {
+        nodes[me].focus.enabled = true;
+    }
     let child_in_row = match in_row {
         RowLayout::Free if parent_is_stack => if animate_layout { RowLayout::Horizontal } else { RowLayout::Snaps },
         r => r,

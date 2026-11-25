@@ -2541,3 +2541,52 @@ test('syncA11y and focusA11y mirror, patch, and clear aria-autocomplete on mirro
 
     bridge.destroy(h);
 });
+
+test('focusA11y mirrors read-only caret-browsing selection onto proxy attributes and DOM Selection', () => {
+    const { h } = setup();
+    let baseAndExtent = null;
+    let cleared = 0;
+    const prevGetSelection = globalThis.getSelection;
+    globalThis.getSelection = () => ({
+        anchorNode: baseAndExtent ? baseAndExtent[0] : null,
+        setBaseAndExtent(an, ao, fn, fo) { baseAndExtent = [an, ao, fn, fo]; },
+        removeAllRanges() { cleared++; baseAndExtent = null; },
+    });
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'text', p: '#0/doc/p1', r: [0, 0, 200, 20], t: 'Hello world' },
+            { k: 'text', p: '#0/doc/p2', r: [0, 24, 200, 20], t: 'Second line' },
+        ]));
+        const p1 = h.a11yByPath.get('#0/doc/p1');
+        const p2 = h.a11yByPath.get('#0/doc/p2');
+        p1.childNodes = [{ nodeType: 3, nodeValue: 'Hello world' }];
+        p2.childNodes = [{ nodeType: 3, nodeValue: 'Second line' }];
+
+        bridge.focusA11y(h, JSON.stringify({
+            o: 'group', t: 'Document', ro: true,
+            sel: { ap: '#0/doc/p1', a: 5, fp: '#0/doc/p1', f: 5 },
+        }));
+        let proxy = h.focusProxies[h.focusTurn];
+        assert.equal(proxy.getAttribute('aria-readonly'), 'true');
+        assert.deepEqual(JSON.parse(proxy.getAttribute('data-rune-selection')), {
+            ap: '#0/doc/p1', a: 5, fp: '#0/doc/p1', f: 5,
+        });
+        assert.deepEqual(baseAndExtent, [p1.childNodes[0], 5, p1.childNodes[0], 5]);
+
+        bridge.focusA11y(h, JSON.stringify({
+            o: 'group', t: 'Document', ro: true,
+            sel: { ap: '#0/doc/p1', a: 5, fp: '#0/doc/p2', f: 6 },
+        }));
+        proxy = h.focusProxies[h.focusTurn];
+        assert.deepEqual(baseAndExtent, [p1.childNodes[0], 5, p2.childNodes[0], 6]);
+
+        const origContains = h.a11y.contains;
+        h.a11y.contains = node => node === p1.childNodes[0] || origContains.call(h.a11y, node);
+        bridge.focusA11y(h, '');
+        assert.equal(cleared, 1);
+        assert.equal(baseAndExtent, null);
+    } finally {
+        globalThis.getSelection = prevGetSelection;
+        bridge.destroy(h);
+    }
+});

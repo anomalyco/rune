@@ -66,6 +66,9 @@ pub(crate) struct FocusSpec {
     pub key: Option<InputKeyFn>,
     /// `El::on_key_preview`: key-down preview while this element or one inside it has focus, outermost first.
     pub key_preview: Option<InputKeyFn>,
+    /// [`crate::El::caret_browsing`]: opt-in keyboard caret browsing on selectable text or a
+    /// `selection_group(true)` container.
+    pub caret_browsing: bool,
 }
 
 impl crate::cold::Empty for FocusSpec {
@@ -103,6 +106,7 @@ impl crate::cold::Empty for FocusSpec {
         key_up: None,
         key: None,
         key_preview: None,
+        caret_browsing: false,
     };
 }
 

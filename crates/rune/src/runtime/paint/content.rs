@@ -767,6 +767,20 @@ impl RuntimeCore {
                     if let Some(c) = ink {
                         selected_ink = Some((a, b, premul(c, o, srgb)));
                     }
+                } else if sel_ranges.is_empty()
+                    && let Some((byte, affinity)) = self.caret_browse_collapsed_on(i)
+                {
+                    let drawn_byte = n.elided.map_or(byte, |e| e.range(byte, byte).0);
+                    let bb = flow.caret(drawn_byte, affinity, 1.5 * s);
+                    let (cx, cy) = (base_origin[0] + bb.x0 as f32 * tk, base_origin[1] + bb.y0 as f32 * tk);
+                    let ch = (if bb.y1 > bb.y0 { (bb.y1 - bb.y0) as f32 } else { spec.style.line_px() * s }) * tk;
+                    let (caret_x, caret_w) = if (tk - 1.0).abs() <= 1e-5 {
+                        let gx = if gliding { pixel_snap::text_glide(r[0]) } else { 0.0 };
+                        ((cx - gx).round() + gx, (1.5 * s).round().max(1.0))
+                    } else {
+                        (cx, (1.5 * s * tk).max(1.0))
+                    };
+                    caret = Some([caret_x, cy + ch * 0.1, caret_w, ch * 0.8]);
                 }
             }
             for piece in flow.pieces_in(rows.start, rows.end) {
@@ -939,8 +953,12 @@ impl RuntimeCore {
                     self.paint.text_quads.insert(node, piece_index, layout_id, d);
                 }
             }
-            if let (Some(c), Some(inp)) = (caret, &n.input) {
-                self.instances.push(rect_inst(c, premul(if inp.caret_inked { inp.caret } else { color }, o, srgb), 0.0, clip, fade));
+            if let Some(c) = caret {
+                let caret_color = match &n.input {
+                    Some(inp) => if inp.caret_inked { inp.caret } else { color },
+                    None => spec.cold.caret.unwrap_or(color),
+                };
+                self.instances.push(rect_inst(c, premul(caret_color, o, srgb), 0.0, clip, fade));
             }
             if let Some(at) = inline_image_wake {
                 arm_image_wake(&mut self.paint, &mut self.motion, self.frame.live.visible(), self.clock, self.time_scale, now, at);
