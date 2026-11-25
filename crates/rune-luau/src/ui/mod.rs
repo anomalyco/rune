@@ -6,6 +6,7 @@
 //! `El::virtual_rows`. A node whose props table is frozen (`table.freeze`) is decoded once and
 //! copied after that ([`Templates`]).
 
+pub(crate) mod effects;
 pub(crate) mod host;
 pub(crate) mod nodes;
 pub(crate) mod props;
