@@ -39,7 +39,7 @@ pub(crate) mod web_file;
 #[cfg(target_os = "macos")]
 pub(crate) use macos::tiff_to_png;
 pub use content::{ClipboardContent, ClipboardImage, CopyImageError, MAX_IMAGE_BYTES};
-use content::valid_image_size;
+pub(crate) use content::valid_image_size;
 pub use html::sanitize_html;
 pub use secret::{SecretCopy, SecretState};
 pub use web_file::{MAX_WEB_FILES, WebFile};

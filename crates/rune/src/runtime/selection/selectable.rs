@@ -760,6 +760,7 @@ impl RuntimeCore {
         let Some(menu) = link_menu::build_context_menu(link_menu::ContextMenuTarget {
             has_link: false,
             has_on_link: false,
+            image: None,
             selectable: true,
             copy_enabled: text.is_some(),
         }) else { return false };

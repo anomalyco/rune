@@ -73,6 +73,7 @@ impl RuntimeCore {
         n.a11y.expanded.hash(&mut h);
         n.a11y.checked.hash(&mut h);
         self.node_disabled(i).hash(&mut h);
+        self.has_image_menu(i).hash(&mut h);
         n.a11y.live.hash(&mut h);
         if let Some(m) = n.a11y.more.as_deref() {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy,
@@ -365,7 +366,7 @@ impl RuntimeCore {
         // What a pointer or keyboard user can do to it, routed to the same handlers.
         if actionable {
             if handlers.is_some_and(|h| h.on_press.is_some()) || input.is_some() || (w.delegated_a11y && roles::composite_item(role)) { node.add_action(Ak::Click); }
-            if handlers.is_some_and(|h| h.on_secondary_press.is_some()) { node.add_action(Ak::ShowContextMenu); }
+            if handlers.is_some_and(|h| h.on_secondary_press.is_some()) || self.has_image_menu(i) { node.add_action(Ak::ShowContextMenu); }
             if n.a11y.expanded.is_some() && handlers.is_some_and(|h| h.on_press.is_some()) {
                 node.add_action(if n.a11y.expanded == Some(true) { Ak::Collapse } else { Ak::Expand });
             }
