@@ -350,6 +350,9 @@ pub(crate) fn tree_json<S>(rt: &Runtime<S>, real_t: f64) -> Value {
 
 pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> Value {
     let videos = rt.tree.videos();
+    // The pointer's shape (`Runtime::cursor`) and the element it is read from.
+    let cursor = rt.cursor().css_name();
+    let cursor_path = rt.cursor_path();
     let els: Vec<Value> = rt
         .elements()
         .iter()
@@ -447,6 +450,11 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
             if let Some(video) = videos.get(&e.path) {
                 v["video"] = video_json(video);
             }
+            // On the one element the pointer's shape is read from: its own cursor, else the
+            // nearest ancestor's, else `"default`".
+            if cursor_path == Some(e.path.as_str()) {
+                v["cursor"] = cursor.into();
+            }
             v
         })
         .collect();
@@ -472,6 +480,9 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
     }
     if let Some(title) = rt.host.window_title.current() { tree["title"] = title.into(); }
     if let Some((text, rect)) = rt.help_tooltip() { tree["tooltip"] = json!({ "text": text, "rect": rect.map(r2) }); }
+    // Where the pointer is and the shape the shell shows for it: `"default`" over an element
+    // that sets none (and inherits none) and outside the window.
+    if let Some((x, y)) = rt.pointer() { tree["pointer"] = json!({ "at": [r2(x), r2(y)], "cursor": cursor }); }
     tree["accessibility"] = crate::a11y::dump::json(&rt.accessibility_tree(), false);
     tree
 }

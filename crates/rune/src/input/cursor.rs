@@ -88,6 +88,36 @@ pub enum Cursor {
     Image(CursorImage),
 }
 
+impl Cursor {
+    /// The CSS name of this shape (`default`, `pointer`, `col-resize`, ...), which the tree dump
+    /// (`--tree`) writes: `none` for [`Cursor::Hidden`] and `image` for an app's own picture.
+    pub(crate) fn css_name(self) -> &'static str {
+        match self {
+            Cursor::Default => "default",
+            Cursor::Pointer => "pointer",
+            Cursor::Text => "text",
+            Cursor::Grab => "grab",
+            Cursor::Grabbing => "grabbing",
+            Cursor::NotAllowed => "not-allowed",
+            Cursor::Move => "move",
+            Cursor::ResizeColumn => "col-resize",
+            Cursor::ResizeRow => "row-resize",
+            Cursor::ResizeEw => "ew-resize",
+            Cursor::ResizeNs => "ns-resize",
+            Cursor::ResizeNwse => "nwse-resize",
+            Cursor::ResizeNesw => "nesw-resize",
+            Cursor::Crosshair => "crosshair",
+            Cursor::Cell => "cell",
+            Cursor::ZoomIn => "zoom-in",
+            Cursor::ZoomOut => "zoom-out",
+            Cursor::Help => "help",
+            Cursor::Progress => "progress",
+            Cursor::Hidden => "none",
+            Cursor::Image(_) => "image",
+        }
+    }
+}
+
 /// The picture for [`Cursor::Image`]: a PNG drawn at 2x, so a 64×64 px PNG makes a
 /// 32×32 pt cursor, and its hot spot (the point that clicks) in points from the top-left,
 /// clamped into the image.

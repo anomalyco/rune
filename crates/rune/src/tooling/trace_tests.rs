@@ -383,3 +383,36 @@ fn tree_json_emits_description_and_border_color_when_present() {
     assert!(find_json("empty-desc").get("description").is_none(), "empty description must omit JSON field");
     assert_eq!(find_json("bordered")["borderColor"], serde_json::json!(ACCENT.hex()));
 }
+
+#[test]
+fn tree_json_reports_the_pointer_and_the_cursor_on_the_element_it_is_read_from() {
+    use crate::Cursor;
+    let view = |_: &(), _: &mut Cx<()>| {
+        crate::col().key("root").size(200.0, 200.0).children([
+            crate::el().key("handle").size(200.0, 40.0).hit().cursor(Cursor::ResizeColumn),
+            crate::el().key("button").size(200.0, 40.0).on_press(|_: &mut ()| {}),
+        ])
+    };
+    let mut rt = Runtime::new((), view, (200.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let cursor_of = |tree: &serde_json::Value, key: &str| {
+        tree["elements"].as_array().unwrap().iter().find(|e| e["key"].as_str() == Some(key)).unwrap()["cursor"].clone()
+    };
+    // Before the pointer has been anywhere there is nothing to say.
+    let tree = tree_json(&rt, 0.0);
+    assert!(tree.get("pointer").is_none(), "{}", tree["pointer"]);
+
+    rt.pointer_move(100.0, 20.0);
+    let tree = tree_json(&rt, 0.0);
+    assert_eq!(tree["pointer"]["cursor"], "col-resize");
+    assert_eq!(tree["pointer"]["at"], serde_json::json!([100.0, 20.0]));
+    assert_eq!(cursor_of(&tree, "handle"), "col-resize");
+    assert!(cursor_of(&tree, "button").is_null(), "only the element under the pointer carries it");
+
+    // An element with no cursor of its own, under no ancestor that sets one, reports the arrow.
+    rt.pointer_move(100.0, 60.0);
+    let tree = tree_json(&rt, 0.0);
+    assert_eq!(tree["pointer"]["cursor"], "default");
+    assert_eq!(cursor_of(&tree, "button"), "default");
+    assert!(cursor_of(&tree, "handle").is_null());
+}
