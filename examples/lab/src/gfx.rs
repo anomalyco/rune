@@ -14,7 +14,7 @@ mod tests;
 use std::collections::HashMap;
 
 use rune::compose::{Compositor, Frame, is_glyph};
-use rune::render::{Instance, KIND_GRADIENT, KIND_LAYER, KIND_LAYER_END, KIND_RECT};
+use rune::render::{Instance, KIND_LAYER, KIND_LAYER_END, KIND_RECT, Kind};
 use rune_fx::{BlurMode, Fx, FxFrame, FxLayer, MotionBlurParams, MotionSamples, Pose, Rect, Shape};
 use rune_light::{Light, LightRenderer, Prim, Scene as LightScene, Settings};
 use rune_motion::Vec2;
@@ -92,6 +92,36 @@ impl Cv<'_> {
     fn swatch(&self) -> u32 {
         FX_COLORS[(self.k("color") as usize).min(FX_COLORS.len() - 1)]
     }
+}
+
+/// Applies flattened `KIND_LAYER` opacity to `ins` without corrupting non-colour `border` payloads
+/// (Windfoil outline glyphs store their GPU outline record metadata in `border`, wrapped images
+/// store their placed rect in `border`, and layer headers store rotation/pivot in `border`).
+pub(self) fn apply_opacity(ins: &Instance, opacity: f32) -> Instance {
+    let mut out = *ins;
+    if opacity == 1.0 {
+        return out;
+    }
+    out.fill = out.fill.map(|v| v * opacity);
+    match out.kind() {
+        Some(Kind::Rect) => {
+            out.border = out.border.map(|v| v * opacity);
+            out.params[3] *= opacity;
+        }
+        Some(Kind::Gradient) => {
+            out.border = out.border.map(|v| v * opacity);
+            out.uv = out.uv.map(|v| v * opacity);
+            out.params[3] *= opacity;
+        }
+        Some(Kind::Dashed | Kind::Radial) => {
+            out.border = out.border.map(|v| v * opacity);
+        }
+        Some(
+            Kind::Glyph | Kind::Shadow | Kind::Inset | Kind::Segment | Kind::Triangle
+            | Kind::Image | Kind::Layer | Kind::LayerEnd | Kind::Effect | Kind::BackdropBlur,
+        ) | None => {}
+    }
+    out
 }
 
 #[derive(Default)]
@@ -257,10 +287,7 @@ impl Compositor<Lab> for LabGfx {
                 opacity = opacity_stack.pop().expect("balanced Rune layer scopes");
                 continue;
             }
-            let mut flattened = *ins;
-            flattened.fill = flattened.fill.map(|v| v * opacity);
-            flattened.border = flattened.border.map(|v| v * opacity);
-            if flattened.params[1] == KIND_GRADIENT { flattened.uv = flattened.uv.map(|v| v * opacity); }
+            let flattened = apply_opacity(ins, opacity);
             let ins = &flattened;
             let m = marks.get(i).copied().unwrap_or(0);
             if m == stage::STAGE_MARK && ins.params[1] == KIND_RECT {
