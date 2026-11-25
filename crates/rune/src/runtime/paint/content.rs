@@ -122,25 +122,40 @@ impl RuntimeCore {
             }
         }
         if w > 0.0 && h > 0.0 && let Some(pixels) = &n.vis.pixels {
-            let snap_u = if cover.is_none() { (1.0 - (sc - 1.0).abs() * 32.0).clamp(0.0, 1.0) } else { 0.0 };
-            let (rect, crop) = crate::pixels::fit_in(n.vis.pixels_fit, n.vis.surface_place, [r[0], r[1], w, h], pixels.size(), snap_u);
-            let span = [crop[2] - crop[0], crop[3] - crop[1]];
-            if rect[2] > 0.0 && rect[3] > 0.0 && span[0] > 0.0 && span[1] > 0.0 {
+            let (rect, crop, border, wrap_param, mip_size, fit_radii) = if let Some(([rx, ry, rw, rh], wrap)) = n.vis.pixels_wrap {
+                let (bx, by, bw, bh) = (r[0] + rx * k_px, r[1] + ry * k_px, rw * k_px, rh * k_px);
+                let ok = bw > 0.0 && bh > 0.0 && bx.is_finite() && by.is_finite() && bw.is_finite() && bh.is_finite();
+                let mode = match wrap {
+                    crate::PixelsWrap::Extend => crate::render::shader_consts::IMAGE_WRAP_EXTEND as f32,
+                    crate::PixelsWrap::Repeat => crate::render::shader_consts::IMAGE_WRAP_REPEAT as f32,
+                    crate::PixelsWrap::Mirror => crate::render::shader_consts::IMAGE_WRAP_MIRROR as f32,
+                };
+                let span = if ok { [0.0, 0.0, 1.0, 1.0] } else { [0.0; 4] };
+                ([r[0], r[1], w, h], span, [bx, by, bw, bh], mode, [bw, bh], false)
+            } else {
+                let snap_u = if cover.is_none() { (1.0 - (sc - 1.0).abs() * 32.0).clamp(0.0, 1.0) } else { 0.0 };
+                let (rect, crop) = crate::pixels::fit_in(n.vis.pixels_fit, n.vis.surface_place, [r[0], r[1], w, h], pixels.size(), snap_u);
+                let span = [crop[2] - crop[0], crop[3] - crop[1]];
                 // The mip covers the whole image's drawn size, not just its visible window.
-                if let Some((image, next)) = self.images.place_at_filtered(
+                let mip = if span[0] > 0.0 && span[1] > 0.0 { [rect[2] / span[0], rect[3] / span[1]] } else { [0.0; 2] };
+                (rect, crop, [0.0; 4], 1.0, mip, n.vis.pixels_fit.is_some())
+            };
+            let span = [crop[2] - crop[0], crop[3] - crop[1]];
+            if rect[2] > 0.0 && rect[3] > 0.0 && span[0] > 0.0 && span[1] > 0.0
+                && let Some((image, next)) = self.images.place_at_filtered(
                     pixels,
-                    [rect[2] / span[0], rect[3] / span[1]],
+                    mip_size,
                     Some(now),
                     n.vis.image_filter,
-                ) {
+                )
+            {
                     if let Some(at) = next {
                         arm_image_wake(&mut self.paint, &mut self.motion, self.frame.live.visible(), self.clock, self.time_scale, now, at);
                     }
                     let [x, y, iw, ih] = image.rect.map(|v| v as f32);
                     // A letterboxed image rounds its own, smaller corners.
                     let half = rect[2].min(rect[3]) * 0.5;
-                    let sc = &crate::render::shader_consts::IMAGE_FLAG_PREMULTIPLIED;
-                    let mut flags = if image.premultiplied { *sc } else { 0 };
+                    let mut flags = if image.premultiplied { crate::render::shader_consts::IMAGE_FLAG_PREMULTIPLIED } else { 0 };
                     if n.vis.image_filter == crate::ImageFilter::Nearest {
                         flags |= crate::render::shader_consts::IMAGE_FLAG_NEAREST;
                     }
@@ -153,16 +168,15 @@ impl RuntimeCore {
                     };
                     self.instances.push(Instance {
                         rect,
-                        radii: if n.vis.pixels_fit.is_some() { radii.map(|v| v.min(half)) } else { radii },
+                        radii: if fit_radii { radii.map(|v| v.min(half)) } else { radii },
                         fill,
-                        border: [0.0; 4],
-                        params: [image.page as f32, KIND_IMAGE, flags as f32, 1.0],
+                        border,
+                        params: [image.page as f32, KIND_IMAGE, flags as f32, wrap_param],
                         // The shader samples from a whole-texel origin; the span may be fractional.
                         uv: [x + (crop[0] * iw).round(), y + (crop[1] * ih).round(), span[0] * iw, span[1] * ih],
                         clip,
                         fade: crate::render::pack_fade(fade, clip, clip),
                     });
-                }
             }
         }
         if let Some((ic, _)) = n.vis.icon {

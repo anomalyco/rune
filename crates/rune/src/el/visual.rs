@@ -59,6 +59,9 @@ pub struct VisualCold {
     pub pixels: Option<crate::pixels::Pixels>,
     /// How `pixels` keeps its aspect ratio; `None` stretches it to the rect.
     pub pixels_fit: Option<crate::SurfaceFit>,
+    /// Placed rect `[x, y, w, h]` in element-local points and wrap mode (`El::pixels_wrap`,
+    /// `El::pixels_tile`); `None` uses `El::pixels` or `El::pixels_fit`.
+    pub(crate) pixels_wrap: Option<([f32; 4], crate::PixelsWrap)>,
     /// Colour whose RGB and alpha tint `pixels`'s alpha mask (`El::pixels_tint`); `None` draws
     /// the image's own colours.
     pub(crate) pixels_tint: Option<Color>,
@@ -172,6 +175,7 @@ impl Empty for VisualCold {
         grid: None,
         pixels: None,
         pixels_fit: None,
+        pixels_wrap: None,
         pixels_tint: None,
         image_filter: crate::ImageFilter::Linear,
         effect: None,

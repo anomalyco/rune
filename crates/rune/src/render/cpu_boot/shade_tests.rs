@@ -608,3 +608,176 @@ fn pixels_tint_and_nearest_filter_match_gpu_byte_for_byte() {
     assert_eq!(d.over_two, 0, "tinted/nearest CPU/GPU drift: {d:?}");
     assert!(d.max <= 1, "tinted/nearest CPU/GPU max diff > 1: {d:?}");
 }
+
+#[test]
+fn pixels_wrap_extend_repeat_mirror_match_gpu_byte_for_byte() {
+    use crate::color::Color;
+    use crate::render::instance::shader_consts as sc;
+    use crate::render::KIND_IMAGE;
+
+    let (w, h) = (176u32, 112u32);
+    let clear = [0.05, 0.07, 0.11, 1.0];
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let half = HalfRounding::of_vendor(gpu.adapter.get_info().vendor);
+
+    let mut images = ImageAtlas::default();
+    // 4x4 asymmetric tile: every (x, y) has a unique (R, G) signature so any wrong wrap,
+    // reflection, or atlas bleed is caught immediately.
+    let tile = crate::pixels::Pixels::new();
+    let mut tile_rgba = Vec::with_capacity(4 * 4 * 4);
+    for y in 0..4u8 {
+        for x in 0..4u8 {
+            tile_rgba.extend_from_slice(&[x * 75 + 20, y * 75 + 20, 40, 255]);
+        }
+    }
+    tile.set(4, 4, tile_rgba);
+    // Bright magenta neighbour beside the tile in the same atlas page to catch any atlas bleed.
+    let guard = crate::pixels::Pixels::new();
+    guard.set(4, 4, [255, 0, 255, 255].repeat(16));
+    let one = crate::pixels::Pixels::new();
+    one.set(1, 1, vec![30, 180, 220, 255]);
+    let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+    let mut mask_rgba = Vec::with_capacity(4 * 4 * 4);
+    for y in 0..4u8 {
+        for x in 0..4u8 {
+            let a = if x < 2 && y < 2 { 255 } else { 0 };
+            mask_rgba.extend_from_slice(&[0x2e, 0x34, 0x36, a]);
+        }
+    }
+    let premul_mask = cache.rgba(4, 4, mask_rgba);
+    premul_mask.wait().expect("decodes premul mask");
+
+    let p_tile = images.place(&tile, [4.0, 4.0]).expect("places tile");
+    let _p_guard = images.place(&guard, [4.0, 4.0]).expect("places guard");
+    let p_one = images.place(&one, [1.0, 1.0]).expect("places 1x1");
+    let p_mask = images.place(premul_mask.pixels(), [4.0, 4.0]).expect("places mask");
+    assert!(p_mask.premultiplied);
+
+    // Degenerate wrap borders return transparent without panicking.
+    let page = crate::render::cpu_boot::Image { width: images.pages[p_tile.page].width, data: &images.pages[p_tile.page].data, dirty: None };
+    for bad_border in [[0.0, 0.0, 0.0, 16.0], [0.0, 0.0, -8.0, 16.0], [f32::NAN, 0.0, 16.0, 16.0]] {
+        let bad = Instance {
+            rect: [0.0, 0.0, 16.0, 16.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: bad_border,
+            params: [p_tile.page as f32, KIND_IMAGE, 0.0, sc::IMAGE_WRAP_REPEAT as f32],
+            uv: p_tile.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        };
+        assert_eq!(image(&bad, &page, [4.5, 4.5]), [0.0; 4], "bad border {bad_border:?}");
+    }
+
+    let tint = Color { r: 0.9, g: 0.3, b: 0.1, a: 0.8 }.premul_srgb(1.0);
+    let instances = [
+        // Top row: Nearest sampling with inset placed rect (exercises negative & positive offsets).
+        Instance {
+            rect: [4.0, 4.0, 48.0, 48.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [12.0, 12.0, 16.0, 16.0],
+            params: [p_tile.page as f32, KIND_IMAGE, sc::IMAGE_FLAG_NEAREST as f32, sc::IMAGE_WRAP_REPEAT as f32],
+            uv: p_tile.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        Instance {
+            rect: [58.0, 4.0, 48.0, 48.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [66.0, 12.0, 16.0, 16.0],
+            params: [p_tile.page as f32, KIND_IMAGE, sc::IMAGE_FLAG_NEAREST as f32, sc::IMAGE_WRAP_MIRROR as f32],
+            uv: p_tile.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        Instance {
+            rect: [112.0, 4.0, 48.0, 48.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [120.0, 12.0, 16.0, 16.0],
+            params: [p_tile.page as f32, KIND_IMAGE, sc::IMAGE_FLAG_NEAREST as f32, sc::IMAGE_WRAP_EXTEND as f32],
+            uv: p_tile.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        // Bottom row: bilinear Repeat (placed rect larger than element + rounded corners),
+        // bilinear Mirror, premultiplied tinted Repeat, and 1x1 Mirror.
+        Instance {
+            rect: [4.0, 58.0, 48.0, 48.0],
+            radii: [6.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [-4.0, 50.0, 64.0, 64.0],
+            params: [p_tile.page as f32, KIND_IMAGE, 0.0, sc::IMAGE_WRAP_REPEAT as f32],
+            uv: p_tile.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        Instance {
+            rect: [58.0, 58.0, 48.0, 48.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [70.0, 70.0, 16.0, 16.0],
+            params: [p_tile.page as f32, KIND_IMAGE, 0.0, sc::IMAGE_WRAP_MIRROR as f32],
+            uv: p_tile.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        Instance {
+            rect: [112.0, 58.0, 32.0, 48.0],
+            radii: [0.0; 4],
+            fill: tint,
+            border: [112.0, 58.0, 16.0, 16.0],
+            params: [
+                p_mask.page as f32,
+                KIND_IMAGE,
+                (sc::IMAGE_FLAG_PREMULTIPLIED | sc::IMAGE_FLAG_TINT | sc::IMAGE_FLAG_NEAREST) as f32,
+                sc::IMAGE_WRAP_REPEAT as f32,
+            ],
+            uv: p_mask.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+        Instance {
+            rect: [150.0, 58.0, 20.0, 48.0],
+            radii: [0.0; 4],
+            fill: [0.0, 0.0, 0.0, 1.0],
+            border: [154.0, 62.0, 8.0, 8.0],
+            params: [p_one.page as f32, KIND_IMAGE, 0.0, sc::IMAGE_WRAP_MIRROR as f32],
+            uv: p_one.rect.map(|v| v as f32),
+            clip: NO_CLIP,
+            fade: [0; 4],
+        },
+    ];
+
+    let mut atlas = Atlas::new();
+    let scene = Scene::new(&instances, &atlas, &images, (w, h), clear).srgb_blend(true).half_rounding(half);
+    let mut cpu_px = vec![0u8; (w * h * 4) as usize];
+    paint(&scene, &mut Target::new(&mut cpu_px, w, h), 1).expect("CPU paints wrapped images");
+
+    // Verify no magenta atlas neighbour leaked anywhere in the output.
+    for y in 0..h {
+        for x in 0..w {
+            let at = ((y * w + x) * 4) as usize;
+            let (b, g, r) = (cpu_px[at], cpu_px[at + 1], cpu_px[at + 2]);
+            assert!(!(r > 200 && g < 30 && b > 200), "magenta atlas bleed at ({x},{y}): rgb=({r},{g},{b})");
+        }
+    }
+
+    let format = wgpu::TextureFormat::Bgra8Unorm;
+    let mut renderer = Renderer::new(&gpu.device, format);
+    renderer.set_srgb_blend(true);
+    renderer.upload_images(&gpu.device, &gpu.queue, &mut images);
+    renderer.prepare_ui(&gpu.device, &gpu.queue, &mut atlas, &instances, (w, h));
+    let target = Offscreen::with_format(&gpu.device, w, h, format);
+    let mut enc = gpu.device.create_command_encoder(&Default::default());
+    renderer.draw(&mut enc, &target.view, clear);
+    target.copy(&mut enc);
+    renderer.submit(&gpu.queue, enc);
+    let gpu_px = target.read(&gpu.device);
+
+    let d = drift(Pixels::bgra(&cpu_px, w, h, w as usize * 4), Pixels::bgra(&gpu_px, w, h, w as usize * 4));
+    assert_eq!(d.over_two, 0, "wrapped image CPU/GPU drift: {d:?}");
+    assert!(d.max <= 1, "wrapped image CPU/GPU max diff > 1: {d:?}");
+}

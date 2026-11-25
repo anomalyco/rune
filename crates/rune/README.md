@@ -2536,6 +2536,16 @@ sampling from the default bilinear filtering (`ImageFilter::Linear`) to nearest-
 sampling from mip level 0 (matching CSS `image-rendering: pixelated` and `wgpu::FilterMode::Nearest`),
 keeping hard pixel edges for pixel art, sprites, and zoomed bitmaps.
 
+`El::pixels_wrap(&pixels, [x, y, w, h], wrap)` places `pixels` at an element-local rectangle
+(in points from the element's top-left, allowed to reach outside the element) and fills the rest
+of the element according to `PixelsWrap`: `Repeat` tiles copies side by side, `Mirror` reflects
+alternating tiles across each edge, and `Extend` stretches the outermost edge rows, columns, and
+corners (matching Skia `SkTileMode` and wgpu `AddressMode`). `El::pixels_tile(&pixels, [w, h])`
+is shorthand for `pixels_wrap(&pixels, [0.0, 0.0, w, h], PixelsWrap::Repeat)`, repeating from the
+top-left like CSS `background-repeat: repeat`. Both clip cleanly to the element's bounds and
+corner radius, combine with `El::pixels_tint` and `El::image_filter`, draw in a single GPU
+instance without atlas bleeding, and do not supply an intrinsic aspect ratio during layout.
+
 A picture that sets only one side takes the other from its image, so
 `el().w(240.0).pixels(icon.pixels())` is as tall as the image's shape makes it, and
 `el().w_full()` fills its parent's width. The height is 0 while the image decodes and settles

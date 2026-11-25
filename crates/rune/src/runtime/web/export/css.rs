@@ -140,13 +140,37 @@ pub(super) fn layout(s: &Style, root: bool) -> Decls {
 /// Fill, gradients, border, corners, shadows, opacity, blurs and soft clips, for an element
 /// `size` points big.
 pub(super) fn paint(v: &Visual, size: (f32, f32), d: &mut Decls) {
-    // Rune paints the fill, then the vertical gradient, then the radial or angled one: CSS lists
+    // Rune paints the fill, then gradients, then a wrapped/tiled image on top: CSS lists
     // background layers top first, with the colour last.
     let mut layers: Vec<String> = Vec::new();
+    let mut wrapped_bg = false;
+    if let Some(([rx, ry, rw, rh], wrap)) = v.cold.pixels_wrap
+        && rw > 0.0 && rh > 0.0 && rx.is_finite() && ry.is_finite() && rw.is_finite() && rh.is_finite()
+        && let Some(url) = v.cold.pixels.as_ref().and_then(|p| p.source_url())
+    {
+        let repeat = match wrap {
+            crate::PixelsWrap::Repeat => "repeat",
+            crate::PixelsWrap::Mirror | crate::PixelsWrap::Extend => "no-repeat",
+        };
+        let mut safe_url = String::with_capacity(url.len());
+        for c in url.chars() {
+            match c {
+                '\\' => safe_url.push_str("\\\\"),
+                '"' => safe_url.push_str("\\\""),
+                '\n' | '\r' => {}
+                c => safe_url.push(c),
+            }
+        }
+        layers.push(format!("url(\"{safe_url}\") {} {} / {} {} {repeat}", px(rx), px(ry), px(rw), px(rh)));
+        wrapped_bg = true;
+    }
     if let Some(r) = v.cold.radial.as_deref() { layers.push(gradient(r, size)); }
     if let Some(g) = v.cold.gradient.as_deref() { layers.push(format!("linear-gradient({},{})", color(g[0]), color(g[1]))); }
     if v.fill.a > 0.0 { layers.push(color(v.fill)); }
     if !layers.is_empty() { d.push(("background", layers.join(","))); }
+    if wrapped_bg && v.cold.image_filter == crate::ImageFilter::Nearest {
+        d.push(("image-rendering", "pixelated".into()));
+    }
     if let Some(clip) = v.cold.clip { mask(clip, d); }
     let r = v.radii();
     if r.iter().any(|&c| c > 0.0) {

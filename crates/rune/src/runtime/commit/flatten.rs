@@ -733,9 +733,11 @@ fn flatten_node<E: FlattenEl>(
     let hover_within = inherit_hover_within(el.vis(&s), el.as_el().cold.above.as_ref(), parent, nodes);
     let pixel_aspect = el.vis(&s).pixels.as_ref()
         .filter(|_| {
-            let st = el.style(&s);
-            let sz = st.size();
-            st.aspect_ratio().is_none() && sz.width.is_auto() != sz.height.is_auto()
+            el.vis(&s).pixels_wrap.is_none() && {
+                let st = el.style(&s);
+                let sz = st.size();
+                st.aspect_ratio().is_none() && sz.width.is_auto() != sz.height.is_auto()
+            }
         })
         .map(pixel_ratio);
     let picture = pixel_aspect.filter(|&r| r > 0.0).map(|ratio| (ratio, picture_side(el.style_mut(&mut s))));

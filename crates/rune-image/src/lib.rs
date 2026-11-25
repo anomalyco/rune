@@ -42,6 +42,7 @@ pub use from_url::font_file;
 pub use pixels::Pixels;
 pub use place::Align;
 pub use place::ImageFilter;
+pub use place::PixelsWrap;
 pub use place::SurfaceFit;
 #[doc(hidden)]
 pub use svg::svg_rgba;

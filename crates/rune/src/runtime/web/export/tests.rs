@@ -319,3 +319,38 @@ fn html_export_emits_pixelated_image_rendering_for_nearest_filter() {
     assert!(!lin.decls.iter().any(|d| d.0 == "image-rendering"), "{:?}", lin.decls);
     assert!(near.decls.contains(&("image-rendering", "pixelated".into())), "{:?}", near.decls);
 }
+
+#[test]
+fn html_export_emits_background_for_pixels_tile_and_wrap() {
+    let cache = crate::ImageCache::new(std::sync::Arc::new(|| {}));
+    let tile_img = cache.url("tile.png", 24.0, 1.0);
+    let photo_img = cache.url("photo.png", 64.0, 1.0);
+    let plain_img = cache.url("plain.png", 32.0, 1.0);
+
+    let mut rt = Runtime::new(
+        (tile_img, photo_img, plain_img),
+        |(t, p, pl), _| {
+            crate::col().key("root").w_full().role("main")
+                .child(crate::el().key("tiled").size(120.0, 80.0).pixels_tile(t.pixels(), [24.0, 32.0]).image_filter(crate::ImageFilter::Nearest))
+                .child(crate::el().key("mirrored").size(120.0, 80.0).pixels_wrap(p.pixels(), [20.0, 10.0, 64.0, 60.0], crate::PixelsWrap::Mirror))
+                .child(crate::el().key("plain").size(32.0, 32.0).pixels(pl.pixels()))
+        },
+        (400.0, 300.0),
+        Env::default(),
+    );
+    rt.page_mode();
+    rt.set_viewport((400.0, 300.0), 2.0);
+    rt.frame(0.0);
+    rt.frame(0.0);
+    let nodes = rt.export_nodes();
+    let tiled = nodes.iter().find(|n| n.path.ends_with("tiled")).expect("tiled");
+    let mirrored = nodes.iter().find(|n| n.path.ends_with("mirrored")).expect("mirrored");
+    let plain = nodes.iter().find(|n| n.path.ends_with("plain")).expect("plain");
+    assert_eq!(tiled.tag, "div");
+    assert!(tiled.decls.contains(&("background", "url(\"tile.png\") 0 0 / 24px 32px repeat".into())), "{:?}", tiled.decls);
+    assert!(tiled.decls.contains(&("image-rendering", "pixelated".into())), "{:?}", tiled.decls);
+    assert_eq!(mirrored.tag, "div");
+    assert!(mirrored.decls.contains(&("background", "url(\"photo.png\") 20px 10px / 64px 60px no-repeat".into())), "{:?}", mirrored.decls);
+    assert!(!mirrored.decls.iter().any(|d| d.0 == "image-rendering"), "{:?}", mirrored.decls);
+    assert_eq!(plain.tag, "img");
+}

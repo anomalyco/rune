@@ -38,6 +38,31 @@ pub enum ImageFilter {
     Nearest,
 }
 
+/// How an image fills the area of an element outside its placed rectangle
+/// (`El::pixels_wrap`, `El::pixels_tile`).
+///
+/// Matches Skia `SkTileMode::{kRepeat, kMirror, kClamp}`, wgpu
+/// `AddressMode::{Repeat, MirrorRepeat, ClampToEdge}`, and Metal `MTLSamplerAddressMode`.
+///
+/// ```
+/// use rune_image::PixelsWrap;
+///
+/// assert_ne!(PixelsWrap::Repeat, PixelsWrap::Mirror);
+/// assert_ne!(PixelsWrap::Mirror, PixelsWrap::Extend);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PixelsWrap {
+    /// Tile copies of the image side by side along both axes (CSS `background-repeat: repeat`,
+    /// Skia `kRepeat`, `wgpu::AddressMode::Repeat`).
+    Repeat,
+    /// Reflect alternating tiles across every edge so adjacent copies meet seamlessly
+    /// (Skia `kMirror`, `wgpu::AddressMode::MirrorRepeat`).
+    Mirror,
+    /// Extend the image's outermost edge rows, edge columns, and corner texels to the element's
+    /// bounds (Skia `kClamp`, `wgpu::AddressMode::ClampToEdge`).
+    Extend,
+}
+
 /// `El::surface_anchor` and `El::surface_unscaled`. The default centres and scales by `SurfaceFit`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SurfacePlace {
