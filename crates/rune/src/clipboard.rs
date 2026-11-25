@@ -56,10 +56,21 @@ pub struct ClipboardWrite {
     secret: Option<Arc<Unwritten>>,
     /// A decoded image to copy, encoded as PNG where the write is carried out.
     image: Option<crate::Image>,
+    /// Straight-alpha sRGB RGBA8 retained beside the encoded PNG so Windows (`CF_DIBV5`) and
+    /// Linux (`arboard`) write without decoding the PNG back to pixels.
+    #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+    encoded_rgba: Option<(u32, u32, Arc<[u8]>)>,
 }
 impl ClipboardWrite {
     pub(crate) fn new(content: ClipboardContent) -> Self {
-        Self { content, clear_after: None, secret: None, image: None }
+        Self {
+            content,
+            clear_after: None,
+            secret: None,
+            image: None,
+            #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+            encoded_rgba: None,
+        }
     }
     /// `Tx::copy_image`: the image alone, encoded off the event thread on native platforms.
     pub(crate) fn image(image: crate::Image) -> Self {
@@ -70,14 +81,24 @@ impl ClipboardWrite {
     /// clipboard as it was.
     fn encode_image(&mut self) -> bool {
         let Some(image) = self.image.take() else { return true };
-        let Some(png) = image.to_rgba().and_then(|(w, h, rgba)| ClipboardImage::from_rgba(w, h, &rgba)) else { return false };
+        let Some((w, h, rgba)) = image.to_rgba() else { return false };
+        let Some(png) = ClipboardImage::from_rgba(w, h, &rgba) else { return false };
+        #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+        { self.encoded_rgba = Some((w, h, Arc::from(rgba))); }
         self.content = std::mem::take(&mut self.content).with_image(png);
         true
     }
     /// Secrets are plain text only: no HTML or RTF copy of a password lingers.
     pub(crate) fn secret(text: String, clear_after: Duration) -> (Self, SecretCopy) {
         let slot = Arc::new(Slot::default());
-        let write = Self { content: ClipboardContent::new(text), clear_after: Some(clear_after), secret: Some(Arc::new(Unwritten(slot.clone()))), image: None };
+        let write = Self {
+            content: ClipboardContent::new(text),
+            clear_after: Some(clear_after),
+            secret: Some(Arc::new(Unwritten(slot.clone()))),
+            image: None,
+            #[cfg(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+            encoded_rgba: None,
+        };
         (write, SecretCopy(slot))
     }
     /// Everything this write puts on the clipboard. A `Tx::copy_image` write has no image here
