@@ -18,4 +18,8 @@ pub use video::MediaRequest;
 pub use video::MediaSource;
 pub use video::Player;
 pub use video::PlayerState;
+pub use video::Thumbnail;
+pub use video::ThumbnailPrecision;
+pub use video::ThumbnailRequest;
+pub use video::Thumbnails;
 pub use video::Video;

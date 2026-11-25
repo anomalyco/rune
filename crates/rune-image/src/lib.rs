@@ -39,6 +39,10 @@ pub use freedesktop::themed_icon_rgba;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub use from_url::font_file;
+#[doc(hidden)]
+pub use mips::downsample_rgba_to as downsample_rgba;
+#[doc(hidden)]
+pub use mips::scaled_dimensions;
 pub use pixels::Pixels;
 pub use place::Align;
 pub use place::ImageFilter;

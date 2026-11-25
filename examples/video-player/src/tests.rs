@@ -1,11 +1,30 @@
 use super::*;
 use rune::accesskit::{Action, ActionData, Role};
+use std::sync::Arc;
+
+fn test_viewer(clip: Player) -> Viewer {
+    let source = clip.source().clone();
+    Viewer {
+        source,
+        clip,
+        waker: None,
+        filmstrip: None,
+        hover_thumb: None,
+        hidden: false,
+        preferred_output: None,
+        scrub_target: None,
+        last_time: 0.0,
+        last_presented: None,
+        last_seeking: false,
+        last_thumbs_done: 0,
+    }
+}
 
 #[test]
 fn scrub_bar_exposes_slider_a11y_and_seeks_on_drag_and_a11y_action() {
     let clip = Player::file(concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4"));
-    let viewer = Viewer { clip: clip.clone(), hidden: false, preferred_output: None, scrub_target: None, last_time: 0.0, last_presented: None, last_seeking: false };
-    let mut rt = rune::Runtime::new(viewer, view, (520.0, 360.0), rune::Env::new(true, 1.0));
+    let viewer = test_viewer(clip.clone());
+    let mut rt = rune::Runtime::new(viewer, view, (520.0, 440.0), rune::Env::new(true, 1.0));
     rt.frame(0.0);
     // Run one more frame so the clip's duration from opening reflects in the slider's range.
     rt.frame(0.0);
@@ -42,8 +61,8 @@ fn scrub_bar_exposes_slider_a11y_and_seeks_on_drag_and_a11y_action() {
 #[test]
 fn frame_step_buttons_keys_and_readout_work_and_stay_accessible() {
     let clip = Player::file(concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4"));
-    let viewer = Viewer { clip: clip.clone(), hidden: false, preferred_output: None, scrub_target: None, last_time: 0.0, last_presented: None, last_seeking: false };
-    let mut rt = rune::Runtime::new(viewer, view, (520.0, 360.0), rune::Env::new(true, 1.0));
+    let viewer = test_viewer(clip.clone());
+    let mut rt = rune::Runtime::new(viewer, view, (520.0, 440.0), rune::Env::new(true, 1.0));
     rt.poll = Some(poll);
     rt.frame(0.0);
     rt.frame(0.0);
@@ -96,8 +115,8 @@ fn frame_step_buttons_keys_and_readout_work_and_stay_accessible() {
 fn hardware_media_keys_toggle_playback_only_when_opted_in() {
     let clip = Player::file(concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4"));
     clip.set_muted(true);
-    let viewer = Viewer { clip: clip.clone(), hidden: false, preferred_output: None, scrub_target: None, last_time: 0.0, last_presented: None, last_seeking: false };
-    let mut rt = rune::Runtime::new(viewer, view, (520.0, 360.0), rune::Env::new(true, 1.0));
+    let viewer = test_viewer(clip.clone());
+    let mut rt = rune::Runtime::new(viewer, view, (520.0, 440.0), rune::Env::new(true, 1.0));
     rt.on_key = Some(on_key);
     rt.frame(0.0);
     rt.frame(0.0);
@@ -123,4 +142,53 @@ fn hardware_media_keys_toggle_playback_only_when_opted_in() {
     rt.key(KeyEvent::from(Key::Media(MediaKey::Stop)));
     rt.frame(0.0);
     assert!(!clip.is_playing());
+}
+
+#[test]
+fn filmstrip_exposes_accessible_tiles_hover_preview_and_click_to_seek() {
+    let clip = Player::file(concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4"));
+    let mut viewer = test_viewer(clip.clone());
+    viewer.waker = Some(Arc::new(|| {}));
+    let mut rt = rune::Runtime::new(viewer, view, (520.0, 440.0), rune::Env::new(true, 1.0));
+    rt.poll = Some(poll);
+    rt.frame(0.0);
+    rt.frame(0.0);
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        let strip = rt.state.filmstrip.clone().expect("filmstrip started once duration loaded");
+        strip.wait();
+        rt.frame(0.0);
+        assert_eq!(strip.len(), FILMSTRIP_COUNT);
+        assert!(strip.is_done());
+        #[cfg(target_os = "windows")]
+        assert!(strip.frames().iter().all(|f| f.is_ready()));
+
+        let tree = rt.accessibility_tree();
+        let has_group = tree.nodes.iter().any(|(_, n)| n.role() == Role::Group && n.label() == Some("Video filmstrip"));
+        assert!(has_group, "filmstrip group present in accessibility tree");
+        let seek_buttons = tree.nodes.iter().filter(|(_, n)| {
+            n.role() == Role::Button && n.label().is_some_and(|l| l.starts_with("Seek to "))
+        }).count();
+        assert_eq!(seek_buttons, FILMSTRIP_COUNT);
+
+        // Hovering the scrub bar shows the thumbnail preview.
+        let slider = tree.nodes.iter().find(|(_, n)| n.role() == Role::Slider).map(|(_, n)| n).unwrap();
+        let b = slider.bounds().unwrap();
+        rt.pointer_move(((b.x0 + b.x1) * 0.5) as f32, ((b.y0 + b.y1) * 0.5) as f32);
+        rt.frame(0.0);
+        assert!(rt.state.hover_thumb.is_some());
+        let tree = rt.accessibility_tree();
+        let has_preview = tree.nodes.iter().any(|(_, n)| n.role() == Role::Group && n.label() == Some("Thumbnail preview"));
+        assert!(has_preview, "hover thumbnail preview appears in accessibility tree");
+
+        // Clicking a filmstrip tile seeks the clip.
+        assert!(rt.accessibility_action("thumb-4", Action::Click, None));
+        rt.frame(0.0);
+        assert!((clip.time() - strip.frame(4).unwrap().requested_time()).abs() < 1e-6);
+
+        // Settled filmstrip + paused clip requests no idle frames.
+        rt.frame(1.0);
+        assert!(!rt.frame(1.1), "settled filmstrip stays idle");
+    }
 }

@@ -2729,6 +2729,45 @@ tap.play();
 - **Other platforms**: every clip reports `Failed("video playback isn't supported on this
   platform yet")` (or the audio equivalent), and video draws a neutral grey placeholder.
 
+### Video thumbnails and filmstrips (`Thumbnails`, `crates/rune-media/src/video/thumbnails.rs`)
+
+Extract still frames from a video at chosen timestamps off the UI thread, writing straight into
+`Pixels` handles that auto-wake any window drawing them.
+
+```rust
+let strip = rune::Thumbnails::request("clip.mp4")
+    .times([0.0, 2.0, 4.0, 6.0])
+    .max_size(320)
+    .precision(rune::ThumbnailPrecision::NearestKeyframe)
+    .start();
+let row = rune::row().children(strip.frames().iter().map(|t| {
+    rune::el().w(80.0).h(45.0).pixels_fit(t.pixels(), rune::SurfaceFit::Fill)
+}));
+```
+
+- **Builder & headers**: build with `Thumbnails::request(source)`, `ThumbnailRequest::new(source)`,
+  or `Player::request(url).header(...).thumbnails()`. Set timestamps with `.at(secs)` /
+  `.times(iter)`, longest-side cap with `.max_size(px)` (clamped to `1..=8192`, default `320`,
+  never upscaling), precision with `.precision(ThumbnailPrecision::Exact | NearestKeyframe)`,
+  and an optional progress `Waker` with `.waker(w)` (or `Thumbnails::set_waker`). Header values
+  are redacted from `Debug` output.
+- **Batch & slot handles**: `Thumbnails` exposes `frames()`, `frame(i)`, `len()`, `is_empty()`,
+  `completed()`, `is_done()`, `cancel()`, and `wait()`. Each `Thumbnail` exposes `pixels()`,
+  `requested_time()`, `actual_time()`, `size()`, `is_ready()`, and `error()`. Dropping the last
+  `Thumbnails` clone cancels unreached frames and frees the decoder while cloned `Thumbnail`
+  handles keep their decoded `Pixels` readable.
+- **Scheduling & memory**: batches run on a shared process-wide FIFO queue capped at 4 concurrent
+  decoders with zero idle threads and no hidden global pixel cache. Duplicate timestamps decode
+  once; valid times decode in ascending order and map back to original slot order; negative times
+  clamp to `0.0`, times past duration clamp to the last picture, and non-finite times fail
+  individually with `"invalid timestamp"`.
+- **Platforms**: decoded off-screen on Windows via Media Foundation CPU `IMFSourceReader`
+  (BT.601/BT.709 NV12 to sRGB RGBA8, track rotation, linear-light downsampling; request headers
+  are not supported on Windows). Platforms without a thumbnail backend settle every slot
+  immediately in `start()` with `Err("video thumbnails aren't supported on this platform yet")`
+  without spawning threads or producing blank images. See `examples/video-player` for a filmstrip
+  under the scrub bar with a thumbnail preview on hover.
+
 ### Recording audio (`Recorder`, `crates/rune-media/src/recorder/`)
 
 `Recorder` is a cheap-to-clone handle that records the microphone to a file, with elapsed time

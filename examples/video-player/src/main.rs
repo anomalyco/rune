@@ -1,9 +1,11 @@
 //! Play a movie or audio file, or a URL. `cargo run -p video-player -- clip.mov` opens a video
 //! looping and muted; tap to pause or resume. Drag the scrub bar to preview keyframes with
-//! `Player::seek_fast` and land on the exact frame with `Player::seek` on release. An audio file
-//! (mp3, m4a, wav) waits for a tap, since audio is audible. With no argument it plays the
-//! four-frame test clip. `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless. Pass
-//! `--output-device <uid>` to route audio to a specific device UID on macOS.
+//! `Player::seek_fast` and land on the exact frame with `Player::seek` on release. A filmstrip
+//! of thumbnails decoded off the UI thread (`Thumbnails`) sits under the scrub bar; hover the
+//! scrub bar or a tile for a preview, and click a tile to seek. An audio file (mp3, m4a, wav)
+//! waits for a tap, since audio is audible. With no argument it plays the four-frame test clip.
+//! `-- --snap out.png --at 0.6` renders the frame at 0.6 s headless. Pass `--output-device <uid>`
+//! to route audio to a specific device UID on macOS.
 //!
 //! Keys: space or hardware media keys (play/pause, play, pause, stop, next/fast-forward, previous/rewind) control playback, left and right step one frame while paused (or seek 5 s while
 //! playing), comma and period step one frame back or forward, m mutes, v turns the volume to 0
@@ -13,23 +15,35 @@
 #![forbid(unsafe_code)]
 
 use rune::tok::{self, type_};
-use rune::{App, AppSpec, Cx, Drag, El, Key, KeyEvent, MediaKey, Phase, Player, PlayerState, SurfaceFit, Tx, Waker, col, el, row, text};
+use rune::{
+    App, AppSpec, Cx, Drag, El, Key, KeyEvent, MediaKey, MediaSource, Phase, Player, PlayerState,
+    PointerEvent, SurfaceFit, ThumbnailPrecision, Thumbnails, Tx, Waker, col, el, row, text,
+};
 use std::time::Duration;
 
 const WIDTH: f32 = 480.0;
 const SCRUB_H: f32 = 20.0;
 const KNOB: f32 = 12.0;
 const TRACK_H: f32 = 4.0;
+const FILMSTRIP_COUNT: usize = 8;
+const FILMSTRIP_H: f32 = 36.0;
+const PREVIEW_W: f32 = 128.0;
+const PREVIEW_H: f32 = 72.0;
 const AUDIO: &[&str] = &["mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "ogg"];
 
 struct Viewer {
+    source: MediaSource,
     clip: Player,
+    waker: Option<Waker>,
+    filmstrip: Option<Thumbnails>,
+    hover_thumb: Option<usize>,
     hidden: bool,
     preferred_output: Option<String>,
     scrub_target: Option<f64>,
     last_time: f64,
     last_presented: Option<f64>,
     last_seeking: bool,
+    last_thumbs_done: usize,
 }
 
 fn parse_args(args: &[String]) -> (Option<String>, Option<String>) {
@@ -53,13 +67,14 @@ fn parse_args(args: &[String]) -> (Option<String>, Option<String>) {
 
 fn state() -> Viewer {
     let (source, preferred_output) = parse_args(rune::extra_args());
-    let source = source
+    let source_str = source
         .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/../../crates/rune/tests/fixtures/rgbw.mp4").into());
-    let ext = source.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default();
+    let ext = source_str.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).unwrap_or_default();
+    let source: MediaSource = source_str.into();
     let clip = if AUDIO.contains(&ext.as_str()) {
-        Player::audio(source)
+        Player::audio(source.clone())
     } else {
-        let clip = Player::new(source.into());
+        let clip = Player::new(source.clone());
         clip.set_looping(true);
         clip.play();
         clip
@@ -67,17 +82,50 @@ fn state() -> Viewer {
     if let Some(uid) = preferred_output.as_deref() {
         clip.set_output_device(Some(uid));
     }
-    Viewer { clip, hidden: false, preferred_output, scrub_target: None, last_time: 0.0, last_presented: None, last_seeking: false }
+    Viewer {
+        source,
+        clip,
+        waker: None,
+        filmstrip: None,
+        hover_thumb: None,
+        hidden: false,
+        preferred_output,
+        scrub_target: None,
+        last_time: 0.0,
+        last_presented: None,
+        last_seeking: false,
+        last_thumbs_done: 0,
+    }
 }
 
-/// The clip calls the waker when it loads, ends or fails, so the label follows.
+/// Starts the filmstrip thumbnail batch once the clip's duration is known, off the UI thread.
+fn ensure_filmstrip(s: &mut Viewer) -> bool {
+    if s.clip.is_audio() || s.filmstrip.is_some() {
+        return false;
+    }
+    let Some(dur) = s.clip.duration().filter(|d| *d > 0.0) else { return false };
+    let times = (0..FILMSTRIP_COUNT).map(|i| (i as f64 + 0.5) * dur / FILMSTRIP_COUNT as f64);
+    let mut req = Thumbnails::request(s.source.clone())
+        .times(times)
+        .max_size(160)
+        .precision(ThumbnailPrecision::NearestKeyframe);
+    if let Some(waker) = s.waker.clone() {
+        req = req.waker(waker);
+    }
+    s.filmstrip = Some(req.start());
+    true
+}
+
+/// The clip calls the waker when it loads, ends or fails, so the label and filmstrip follow.
 fn setup(s: &mut Viewer, waker: Waker) {
+    s.waker = Some(waker.clone());
     s.clip.set_waker(waker);
 }
 
-/// Scrub bar and seeking status: poll about 30 times a second while playing or waiting on a seek,
-/// and stop asking for frames once idle.
+/// Scrub bar, filmstrip and seeking status: poll about 30 times a second while playing or
+/// waiting on a seek, and stop asking for frames once idle (thumbnails wake via `Waker`).
 fn poll(s: &mut Viewer, _: f64, tx: &mut Tx) -> bool {
+    let started_strip = s.waker.is_some() && ensure_filmstrip(s);
     let playing = s.clip.is_playing();
     let seeking = s.clip.is_seeking();
     if playing || seeking {
@@ -85,10 +133,16 @@ fn poll(s: &mut Viewer, _: f64, tx: &mut Tx) -> bool {
     }
     let time = s.clip.time();
     let presented = s.clip.presented_time();
-    let changed = (time - s.last_time).abs() > 1e-3 || presented != s.last_presented || seeking != s.last_seeking;
+    let thumbs_done = s.filmstrip.as_ref().map_or(0, Thumbnails::completed);
+    let changed = started_strip
+        || (time - s.last_time).abs() > 1e-3
+        || presented != s.last_presented
+        || seeking != s.last_seeking
+        || thumbs_done != s.last_thumbs_done;
     s.last_time = time;
     s.last_presented = presented;
     s.last_seeking = seeking;
+    s.last_thumbs_done = thumbs_done;
     changed
 }
 
@@ -156,6 +210,19 @@ fn scrub_bar(s: &Viewer, t: &tok::Theme) -> El {
         })
         .on_set_value(|s: &mut Viewer, value, _| s.clip.seek(value))
         .size(WIDTH, SCRUB_H)
+        .on_pointer_move_local(|s: &mut Viewer, p: PointerEvent, _| {
+            if let Some(strip) = &s.filmstrip
+                && !strip.is_empty()
+            {
+                let idx = ((p.x / WIDTH).clamp(0.0, 0.9999) * strip.len() as f32) as usize;
+                s.hover_thumb = Some(idx.min(strip.len() - 1));
+            }
+        })
+        .on_hover_change(|s: &mut Viewer, inside, _| {
+            if !inside {
+                s.hover_thumb = None;
+            }
+        })
         .on_drag(move |s: &mut Viewer, d: &mut Drag, tx| {
             let Some(dur) = s.clip.duration().filter(|d| *d > 0.0) else { return };
             let target = to_time(d.x, dur);
@@ -203,6 +270,85 @@ fn scrub_bar(s: &Viewer, t: &tok::Theme) -> El {
         )
 }
 
+fn filmstrip_row(s: &Viewer, strip: &Thumbnails, t: &tok::Theme) -> El {
+    let count = strip.len().max(1);
+    let tile_w = WIDTH / count as f32;
+    let all_failed = strip.is_done() && !strip.is_empty() && strip.frames().iter().all(|f| f.error().is_some());
+    let mut box_col = col().w(WIDTH).gap(4.0);
+    let strip_row = row()
+        .key("filmstrip")
+        .role("group")
+        .label("Video filmstrip")
+        .size(WIDTH, FILMSTRIP_H)
+        .clip_rounded(6.0)
+        .children(strip.frames().iter().enumerate().map(|(i, thumb)| {
+            let seek_t = thumb.requested_time();
+            let tile = el()
+                .key(format!("thumb-{i}"))
+                .role("button")
+                .label(format!("Seek to {seek_t:.2} s"))
+                .size(tile_w, FILMSTRIP_H)
+                .on_press(move |s: &mut Viewer| s.clip.seek(seek_t))
+                .on_hover_change(move |s: &mut Viewer, inside, _| {
+                    if inside {
+                        s.hover_thumb = Some(i);
+                    } else if s.hover_thumb == Some(i) {
+                        s.hover_thumb = None;
+                    }
+                });
+            if thumb.is_ready() {
+                tile.pixels_fit(thumb.pixels(), SurfaceFit::Fill)
+            } else {
+                tile.fill(t.control_track)
+            }
+        }));
+    box_col = box_col.child(strip_row);
+    if all_failed
+        && let Some(err) = strip.frame(0).and_then(|f| f.error())
+    {
+        box_col = box_col.child(text(err).font(type_::LABEL).color(t.text_secondary));
+    }
+    if let Some(idx) = s.hover_thumb
+        && let Some(thumb) = strip.frame(idx)
+    {
+        let shown_t = thumb.actual_time().unwrap_or(thumb.requested_time());
+        let caption = match thumb.error() {
+            Some(err) => format!("{shown_t:.2} s · {err}"),
+            None => format!("{shown_t:.2} s"),
+        };
+        let preview_box = if thumb.is_ready() {
+            el().key("hover-thumb-image")
+                .size(PREVIEW_W, PREVIEW_H)
+                .radius(6.0)
+                .pixels_fit(thumb.pixels(), SurfaceFit::Fit)
+        } else {
+            el().key("hover-thumb-image")
+                .size(PREVIEW_W, PREVIEW_H)
+                .radius(6.0)
+                .fill(t.control_track)
+        };
+        let center_x = (idx as f32 + 0.5) * tile_w;
+        let card_w = PREVIEW_W + 8.0;
+        let card_x = (center_x - card_w * 0.5).clamp(0.0, (WIDTH - card_w).max(0.0));
+        box_col = box_col.child(
+            col()
+                .key("hover-thumb-preview")
+                .role("group")
+                .label("Thumbnail preview")
+                .absolute(card_x, -(PREVIEW_H + SCRUB_H + 34.0))
+                .px(4.0)
+                .py(4.0)
+                .gap(2.0)
+                .items_center()
+                .radius(8.0)
+                .fill(t.bg)
+                .child(preview_box)
+                .child(text(caption).font(type_::LABEL).color(t.text_secondary)),
+        );
+    }
+    box_col
+}
+
 fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
     let t = tok::theme(true);
     let base_label = match s.clip.state() {
@@ -221,16 +367,18 @@ fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
     } else {
         base_label
     };
-    let mut root = col().w_full().h_full().center().gap(12.0).fill(t.bg);
+    let mut root = col().w_full().h_full().center().gap(10.0).fill(t.bg);
     if !s.clip.is_audio() {
         let (w, h) = s.clip.natural_size().unwrap_or((16, 9));
         let frame = el().key("video").w(WIDTH).h(WIDTH * h as f32 / w as f32).radius(10.0).on_press(toggle);
         let media = if s.hidden { frame } else { frame.video(&s.clip, SurfaceFit::Fit) };
         root = root.child(media);
     }
-    root = root
-        .child(scrub_bar(s, &t))
-        .child(text(label).font(type_::BODY).color(t.text_secondary).on_press(toggle));
+    root = root.child(scrub_bar(s, &t));
+    if let Some(strip) = &s.filmstrip {
+        root = root.child(filmstrip_row(s, strip, &t));
+    }
+    root = root.child(text(label).font(type_::BODY).color(t.text_secondary).on_press(toggle));
     if !s.clip.is_audio() {
         let mut readout = Vec::new();
         if let Some(pts) = s.clip.presented_time() {
@@ -272,7 +420,7 @@ fn view(s: &Viewer, _: &mut Cx<Viewer>) -> El {
 }
 
 fn main() {
-    let spec = AppSpec { setup: Some(setup), poll: Some(poll), on_key: Some(on_key), ..AppSpec::new("Video player", (520.0, 360.0), state, view) };
+    let spec = AppSpec { setup: Some(setup), poll: Some(poll), on_key: Some(on_key), ..AppSpec::new("Video player", (520.0, 440.0), state, view) };
     App::new(spec).media_keys().run();
 }
 

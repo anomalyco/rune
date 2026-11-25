@@ -120,6 +120,54 @@ fn frame_duration_presented_time_and_step_work_through_rune_reexport() {
     }
 }
 
+#[test]
+fn thumbnails_reexport_paints_via_pixels_fit_and_keeps_idle_window_still() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/rgbw.mp4");
+    let strip = crate::Thumbnails::request(path)
+        .times([0.0, 0.5])
+        .max_size(64)
+        .precision(crate::ThumbnailPrecision::NearestKeyframe)
+        .start();
+    strip.wait();
+    assert!(strip.is_done());
+    assert_eq!(strip.len(), 2);
+
+    #[cfg(target_os = "windows")]
+    for frame in strip.frames() {
+        assert!(frame.is_ready(), "{:?}", frame.error());
+        assert_eq!(frame.size(), Some((64, 36)));
+    }
+    #[cfg(not(target_os = "windows"))]
+    for frame in strip.frames() {
+        assert!(!frame.is_ready());
+        assert!(frame.error().is_some());
+    }
+
+    let mut rt = crate::Runtime::new(
+        strip.clone(),
+        |s: &crate::Thumbnails, _| {
+            crate::row().children(s.frames().iter().enumerate().map(|(i, t)| {
+                crate::el()
+                    .key(format!("thumb-{i}"))
+                    .w(32.0)
+                    .h(18.0)
+                    .pixels_fit(t.pixels(), crate::SurfaceFit::Fill)
+            }))
+        },
+        (80.0, 24.0),
+        crate::Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    assert!(!rt.frame(0.5), "a settled thumbnail batch requests no idle frames");
+
+    // MediaRequest::thumbnails is re-exported cleanly through rune::Player::request.
+    let req = crate::Player::request("https://example.com/clip.mp4")
+        .header("Authorization", "Bearer top-secret")
+        .thumbnails();
+    let dbg = format!("{req:?}");
+    assert!(!dbg.contains("top-secret"), "{dbg}");
+}
+
 #[cfg(target_os = "macos")]
 mod headless {
     use super::*;
