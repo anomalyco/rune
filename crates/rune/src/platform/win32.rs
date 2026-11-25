@@ -359,6 +359,9 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
             input.clicks.borrow_mut().push_back((down, point));
         }
         WM_CAPTURECHANGED => input.captured.set(false),
+        WM_SETTINGCHANGE if dark_mode::should_refresh_color_policy(lparam) => {
+            dark_mode::refresh_color_policy();
+        }
         _ => {}
     }
     // SAFETY: forwards the unhandled message to the next procedure in this window's subclass chain.

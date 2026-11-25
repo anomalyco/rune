@@ -145,3 +145,68 @@ fn fake_macos_app_appearance_sink_maps_all_schemes_in_order() {
     assert_eq!(fake.current, None);
     assert_eq!(fake.history, vec![Some("NSAppearanceNameAqua"), Some("NSAppearanceNameDarkAqua"), None]);
 }
+
+#[test]
+fn system_theme_change_updates_cx_system_dark_invalidates_memos_and_resolves_backdrop_dark() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    // Effective dark follows system_dark when ColorScheme::System, and stays pinned under
+    // explicit Light/Dark overrides (matching both titlebar and WindowBackdrop DWM dark sync).
+    assert!(ColorScheme::System.effective_dark(ColorScheme::System, true));
+    assert!(!ColorScheme::System.effective_dark(ColorScheme::System, false));
+    assert!(ColorScheme::System.effective_dark(ColorScheme::Dark, false));
+    assert!(!ColorScheme::System.effective_dark(ColorScheme::Light, true));
+    assert!(ColorScheme::Dark.effective_dark(ColorScheme::Light, false));
+    assert!(!ColorScheme::Light.effective_dark(ColorScheme::Dark, true));
+
+    // Feeding winit's WindowEvent::ThemeChanged payload into Runtime::set_system_dark updates
+    // Cx::system_dark(), marks the view dirty, and invalidates memos.
+    struct State {
+        seen_dark: Rc<Cell<bool>>,
+        view_runs: Rc<Cell<u32>>,
+        memo_runs: Rc<Cell<u32>>,
+    }
+    let seen_dark = Rc::new(Cell::new(true));
+    let view_runs = Rc::new(Cell::new(0));
+    let memo_runs = Rc::new(Cell::new(0));
+    let mut rt = crate::Runtime::new(
+        State {
+            seen_dark: seen_dark.clone(),
+            view_runs: view_runs.clone(),
+            memo_runs: memo_runs.clone(),
+        },
+        |s: &State, cx: &mut crate::Cx<State>| {
+            s.view_runs.set(s.view_runs.get() + 1);
+            let dark = cx.system_dark();
+            s.seen_dark.set(dark);
+            let memo_runs = s.memo_runs.clone();
+            crate::memo("theme-memo", 0u32, move || {
+                memo_runs.set(memo_runs.get() + 1);
+                crate::el().size(if dark { 80.0 } else { 40.0 }, 20.0)
+            })
+        },
+        (160.0, 80.0),
+        crate::Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    assert!(seen_dark.get());
+    assert_eq!((view_runs.get(), memo_runs.get()), (1, 1));
+
+    // Simulates WindowEvent::ThemeChanged(Theme::Light) -> rt.set_system_dark(false).
+    rt.set_system_dark(Theme::Light == Theme::Dark);
+    rt.frame(1.0);
+    assert!(!seen_dark.get(), "Cx::system_dark() must follow ThemeChanged(Light)");
+    assert_eq!((view_runs.get(), memo_runs.get()), (2, 2));
+
+    // Duplicate ThemeChanged(Light) is a no-op (zero view/memo rebuilds).
+    rt.set_system_dark(Theme::Light == Theme::Dark);
+    rt.frame(2.0);
+    assert_eq!((view_runs.get(), memo_runs.get()), (2, 2));
+
+    // Simulates WindowEvent::ThemeChanged(Theme::Dark) -> rt.set_system_dark(true).
+    rt.set_system_dark(Theme::Dark == Theme::Dark);
+    rt.frame(3.0);
+    assert!(seen_dark.get(), "Cx::system_dark() must follow ThemeChanged(Dark)");
+    assert_eq!((view_runs.get(), memo_runs.get()), (3, 3));
+}

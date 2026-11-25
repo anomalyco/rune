@@ -99,6 +99,8 @@ impl Host {
         self.register_resize_sync(&window);
         #[cfg(target_os = "windows")]
         crate::platform::win32::press_point::install(&window);
+        #[cfg(target_os = "windows")]
+        crate::platform::win32::dark_mode::install_theme_refresh(&window);
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]
         let frame = self.titlebar.map(|t| self.app.rt().titlebar_set().over(t))
