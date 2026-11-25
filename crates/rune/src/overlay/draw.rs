@@ -267,7 +267,10 @@ impl FrameHost for OverlayFrame<'_> {
             &mut self.core.meter,
             !self.read_occlusion,
         ) {
-            Ok(frame) => Acquire::Ready(frame),
+            Ok(frame) => {
+                self.core.note_frame_texture_acquired();
+                Acquire::Ready(frame)
+            }
             Err(missed) => Acquire::Missed(missed),
         }
     }
@@ -405,6 +408,10 @@ impl FrameHost for OverlayFrame<'_> {
         }
     }
 
+    fn on_drawable_dropped(&mut self) {
+        self.core.note_frame_texture_released(self.app);
+    }
+
     fn on_missed(&mut self, missed: crate::window::Missed, stepped: bool) {
         self.core.acquire_missed(self.app, missed, self.paced, self.prewarm, stepped);
         self.more = false;
@@ -478,28 +485,76 @@ impl FrameHost for OverlayFrame<'_> {
     }
 
     fn submit_and_present(&mut self, prepared: PreparedOverlayFrame, _info: &StepInfo) -> Instant {
-        if self.core.poll_device_for_terminal_loss(self.app) {
+        let PreparedOverlayFrame { frame, view, encoder, .. } = prepared;
+        if self.core.poll_device_for_terminal_loss(self.app)
+            || self.core.gpu.as_ref().is_none_or(|gpu| gpu.is_lost())
+        {
+            drop((encoder, view, frame));
+            self.core.note_frame_texture_released(self.app);
             return crate::time::now();
         }
         let terminal = self.core.is_terminal_gpu_policy();
+        drop(view);
+        // Submit synchronously first so any submit-time device loss is detected BEFORE
+        // `pre_present_notify()`, `layer.request_frame()`, or `queue.present()`, and so `frame`
+        // is dropped strictly before any surface teardown.
+        let submitted_on_worker = {
+            let (Some(live), Some(renderer), Some(gpu)) = (
+                self.core.surface.live_mut(),
+                self.core.renderer.as_mut(),
+                self.core.gpu.as_ref(),
+            ) else {
+                drop((encoder, frame));
+                self.core.note_frame_texture_released(self.app);
+                return crate::time::now();
+            };
+            frame::try_submit_on_macos_worker(live, renderer, gpu, self.app.rt(), encoder, frame, self.prewarm, terminal, &mut self.core.on_materials)
+        };
+        let (encoder, frame) = match submitted_on_worker {
+            Ok(()) => {
+                self.core.note_frame_texture_released(self.app);
+                frame::record_presented(self.prewarm);
+                crate::render::gpu_events::presented();
+                return crate::time::now();
+            }
+            Err(back) => back,
+        };
+        {
+            let (Some(renderer), Some(gpu)) = (self.core.renderer.as_mut(), self.core.gpu.as_ref()) else {
+                drop((encoder, frame));
+                self.core.note_frame_texture_released(self.app);
+                return crate::time::now();
+            };
+            renderer.submit(&gpu.queue, encoder);
+        }
+        let terminal_lost = self.core.poll_device_for_terminal_loss(self.app);
+        let gpu_lost = self.core.gpu.as_ref().is_none_or(|gpu| gpu.is_lost());
+        if !crate::render::loss_latch::should_present_after_submit(gpu_lost, terminal_lost) {
+            drop(frame);
+            self.core.note_frame_texture_released(self.app);
+            return crate::time::now();
+        }
         let (Some(live), Some(renderer), Some(gpu)) = (
             self.core.surface.live_mut(),
             self.core.renderer.as_mut(),
             self.core.gpu.as_ref(),
         ) else {
+            drop(frame);
+            self.core.note_frame_texture_released(self.app);
             return crate::time::now();
         };
-        let materials_ok = frame::submit_and_present(live, renderer, gpu, self.app.rt(), self.core.window_backdrop, prepared.encoder, prepared.frame, self.prewarm, &mut self.core.on_materials);
-        // The next frame waits for the room this one took (`slot`).
+        let materials_ok = frame::present_submitted(live, gpu, self.app.rt(), self.core.window_backdrop, frame, self.prewarm, &mut self.core.on_materials);
         #[cfg(target_os = "windows")]
         live.slot.presented();
         frame::record_presented(self.prewarm);
         crate::render::gpu_events::presented();
-        if terminal {
-            rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
-        }
         if !self.prewarm && !gpu.is_lost() {
             renderer.warm_effects(&gpu.device);
+        }
+        // `frame` was consumed by `queue.present`: release texture tracking before post-present poll.
+        self.core.note_frame_texture_released(self.app);
+        if terminal {
+            let _ = self.core.poll_device_for_terminal_loss(self.app);
         }
         #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
         if !materials_ok {

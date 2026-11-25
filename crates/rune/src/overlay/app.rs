@@ -471,6 +471,7 @@ impl<T: 'static> Overlay<T> {
     pub(super) fn surface_refused(&mut self, reason: String) { with_app!(self, |core, app| core.surface_refused(&mut app, reason)) }
     pub(super) fn poll_terminal_gpu_loss(&mut self) -> bool { with_app!(self, |core, app| core.poll_terminal_gpu_loss(&mut app)) }
     pub(super) fn poll_device_for_terminal_loss(&mut self) -> bool { with_app!(self, |core, app| core.poll_device_for_terminal_loss(&mut app)) }
+    pub(super) fn note_frame_texture_released(&mut self) { with_app!(self, |core, app| core.note_frame_texture_released(&mut app)) }
     pub(super) fn latch_terminal_loss_latch(&mut self, kind: crate::render::loss_latch::GpuFailureKind, reason: impl Into<String>) {
         with_app!(self, |core, app| core.latch_terminal_loss_latch(&mut app, kind, reason))
     }

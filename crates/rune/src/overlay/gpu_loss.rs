@@ -4,7 +4,9 @@
 use std::sync::{Arc, Weak, atomic::Ordering};
 
 use super::{Availability, OverlayApp, OverlayCore};
-use crate::render::loss_latch::GpuFailureKind;
+use crate::render::loss_latch::{
+    FrameTeardownEffect, FrameTeardownEvent, GpuFailureKind,
+};
 
 impl OverlayCore {
     #[inline]
@@ -39,6 +41,39 @@ impl OverlayCore {
     /// shared latch has tripped. Returns `true` when permanently latched.
     ///
     /// Fast path for `GpuLossPolicy::Recover`: single branch, zero atomics, returns `false`.
+    /// Marks that an overlay frame acquired a live `wgpu::SurfaceTexture`.
+    #[inline]
+    pub(super) fn note_frame_texture_acquired(&mut self) {
+        let _ = self.frame_teardown.step(FrameTeardownEvent::TextureAcquired);
+    }
+
+    /// Marks that the overlay frame's `wgpu::SurfaceTexture` was presented or dropped, running
+    /// any deferred terminal GPU teardown now that no texture is outstanding.
+    #[inline]
+    pub(super) fn note_frame_texture_released(&mut self, app: &mut dyn OverlayApp) {
+        let effects = self.frame_teardown.step(FrameTeardownEvent::TextureReleased);
+        if effects.into_iter().any(|e| e == FrameTeardownEffect::TeardownNow) {
+            self.enter_terminal_gpu_loss(app);
+        }
+    }
+
+    /// Debug self-check at every overlay surface teardown or reconfiguration point: no
+    /// `SurfaceTexture` acquired from this overlay's surface may still be alive.
+    #[inline]
+    pub(super) fn assert_no_live_frame_texture(&self) {
+        debug_assert!(
+            std::thread::panicking() || !self.frame_teardown.has_live_texture(),
+            "overlay surface teardown or reconfiguration while a SurfaceTexture is still alive",
+        );
+    }
+
+    fn request_terminal_teardown(&mut self, app: &mut dyn OverlayApp) {
+        let effects = self.frame_teardown.step(FrameTeardownEvent::LossNoticed);
+        if effects.into_iter().any(|e| e == FrameTeardownEffect::TeardownNow) {
+            self.enter_terminal_gpu_loss(app);
+        }
+    }
+
     pub(super) fn poll_terminal_gpu_loss(&mut self, app: &mut dyn OverlayApp) -> bool {
         let Some(latch) = self.gpu_loss_latch.clone() else {
             return false;
@@ -51,7 +86,7 @@ impl OverlayCore {
             }
         }
         if latch.is_failed() {
-            self.enter_terminal_gpu_loss(app);
+            self.request_terminal_teardown(app);
             return true;
         }
         false
@@ -59,13 +94,18 @@ impl OverlayCore {
 
     /// Polls `self.gpu` once under `Terminal` so any synchronous validation or device-lost
     /// callback produced by encoding, `Compositor::features()`, or submission runs before the
-    /// next GPU boundary.
+    /// next GPU boundary. Treats `PollFailed::Lost` as real device loss rather than ignoring it.
     pub(super) fn poll_device_for_terminal_loss(&mut self, app: &mut dyn OverlayApp) -> bool {
         if !self.is_terminal_gpu_policy() {
             return false;
         }
         if let Some(gpu) = self.gpu.as_ref() {
-            rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+            if matches!(rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll), Err(rune_gpu::health::PollFailed::Lost)) {
+                gpu.mark_lost();
+                if let Some(latch) = self.gpu_loss_latch.clone() && !latch.is_failed() {
+                    let _ = latch.record_device_lost(false, "its GPU device was lost");
+                }
+            }
         }
         self.poll_terminal_gpu_loss(app)
     }
@@ -88,7 +128,7 @@ impl OverlayCore {
         if let Some(latch) = self.gpu_loss_latch.clone() {
             let _ = latch.record_failure(kind, reason);
         }
-        self.enter_terminal_gpu_loss(app);
+        self.request_terminal_teardown(app);
     }
 
     /// Tears down an owned overlay once its shared terminal latch has failed: drops GPU and
@@ -96,6 +136,7 @@ impl OverlayCore {
     /// failed GPU, hides and releases the native surface, records `failure()`, and marks
     /// `Availability::Unavailable` (notifying `on_availability` once).
     pub(super) fn enter_terminal_gpu_loss(&mut self, app: &mut dyn OverlayApp) {
+        self.assert_no_live_frame_texture();
         let reason = self
             .gpu_loss_latch
             .as_ref()

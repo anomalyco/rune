@@ -197,3 +197,45 @@ fn web_terminal_policy_keeps_page_alive_without_cpu_fallback_or_webgl_restore() 
     assert!(matches!(web_frame_gate(false, WebDrawKind::TerminalFailed, false), Gate::Skip));
     assert!(matches!(web_frame_gate(false, WebDrawKind::TerminalFailed, true), Gate::Skip));
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn frame_teardown_state_defers_teardown_until_surface_texture_is_released() {
+    let mut state = FrameTeardownState::default();
+    assert_eq!(state, FrameTeardownState::Idle);
+    assert!(!state.has_live_texture());
+
+    // Off-frame loss (Idle) tears down immediately.
+    let fx = state.step(FrameTeardownEvent::LossNoticed);
+    assert_eq!(fx.into_iter().collect::<Vec<_>>(), vec![FrameTeardownEffect::TeardownNow]);
+    assert_eq!(state, FrameTeardownState::Idle);
+
+    // Healthy frame: TextureAcquired -> TextureAlive -> TextureReleased -> Idle (no teardown).
+    assert!(state.step(FrameTeardownEvent::TextureAcquired).is_empty());
+    assert_eq!(state, FrameTeardownState::TextureAlive);
+    assert!(state.has_live_texture());
+    assert!(state.step(FrameTeardownEvent::TextureReleased).is_empty());
+    assert_eq!(state, FrameTeardownState::Idle);
+    assert!(!state.has_live_texture());
+
+    // In-frame loss (render destroy, validation error, or submit loss): teardown MUST wait until
+    // the SurfaceTexture is dropped (TextureReleased).
+    assert!(state.step(FrameTeardownEvent::TextureAcquired).is_empty());
+    assert!(state.step(FrameTeardownEvent::LossNoticed).is_empty(), "must not tear down while texture is alive");
+    assert_eq!(state, FrameTeardownState::TextureAlivePendingTeardown);
+    assert!(state.has_live_texture());
+    // Repeated loss notices while texture is alive stay idempotent and never tear down early.
+    assert!(state.step(FrameTeardownEvent::LossNoticed).is_empty());
+    // Dropping the texture emits TeardownNow and returns to Idle.
+    let fx = state.step(FrameTeardownEvent::TextureReleased);
+    assert_eq!(fx.into_iter().collect::<Vec<_>>(), vec![FrameTeardownEffect::TeardownNow]);
+    assert_eq!(state, FrameTeardownState::Idle);
+    assert!(!state.has_live_texture());
+
+    // Neither Terminal nor Recover presents a SurfaceTexture once the device is lost.
+    assert!(should_present_after_submit(false, false));
+    assert!(!should_present_after_submit(true, false), "Recover must not present after submit-time loss");
+    assert!(!should_present_after_submit(false, true), "Terminal must not present after validation latch");
+    assert!(!should_present_after_submit(true, true));
+}
+

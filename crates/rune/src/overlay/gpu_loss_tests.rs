@@ -275,3 +275,41 @@ fn overlay_compositor_features_destroying_retained_device_latches_and_clears_nat
     assert_eq!(handle.availability(), Availability::Unavailable);
     assert_eq!(releases.load(Ordering::SeqCst), 1);
 }
+
+#[test]
+fn overlay_in_frame_loss_defers_teardown_until_surface_texture_is_released() {
+    let latch = GpuLossLatch::new();
+    let releases = Arc::new(AtomicUsize::new(0));
+    let (mut overlay, handle) = make_overlay(Arc::clone(&latch), Arc::clone(&releases));
+    overlay.ready(true);
+    overlay.presence = Presence::Shown { occluded: false };
+
+    // Simulate an overlay frame holding a live SurfaceTexture (post-acquire, pre-present).
+    overlay.core.note_frame_texture_acquired();
+    assert!(latch.record_device_lost(false, "submit-time loss on shared device"));
+
+    // Polling during render/submit MUST notice the latch WITHOUT tearing down while the
+    // SurfaceTexture is still alive.
+    assert!(overlay.poll_terminal_gpu_loss());
+    assert!(overlay.presence.shown(), "overlay must not tear down surface while SurfaceTexture is alive");
+    assert_eq!(releases.load(Ordering::SeqCst), 0, "release_compositor_gpu must wait until texture drops");
+    assert_eq!(handle.availability(), Availability::Available);
+
+    // Dropping the SurfaceTexture and signaling TextureReleased runs teardown immediately.
+    overlay.note_frame_texture_released();
+    assert!(!overlay.presence.shown(), "overlay must tear down once SurfaceTexture is dropped");
+    assert_eq!(releases.load(Ordering::SeqCst), 1);
+    assert_eq!(handle.availability(), Availability::Unavailable);
+    assert_eq!(handle.failure().as_deref(), Some("submit-time loss on shared device"));
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "SurfaceTexture is still alive")]
+fn overlay_teardown_debug_asserts_while_frame_texture_is_alive() {
+    let latch = GpuLossLatch::new();
+    let releases = Arc::new(AtomicUsize::new(0));
+    let (mut overlay, _handle) = make_overlay(latch, releases);
+    overlay.core.note_frame_texture_acquired();
+    overlay.core.assert_no_live_frame_texture();
+}

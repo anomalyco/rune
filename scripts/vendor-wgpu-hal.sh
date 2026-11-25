@@ -4,7 +4,7 @@
 # adapter it picked through DXGI; FXC loaded on first use; `Surface::set_present_rects`, partial presents;
 # Windows system DLLs loaded with `LOAD_LIBRARY_SEARCH_SYSTEM32`; a removed device's work stays pending,
 # never finished; GPU-written drain markers on software adapters so releasing a removed WARP device waits for queued command lists;
-# a Metal device lost when a command buffer fails, with the fence of gfx-rs/wgpu#10570 and #10875; Linux `vulkan::Instance::with_direct_drivers` for exclusive `VK_LUNARG_direct_driver_loading`; GLES lazy shader compile-status checks and opt-in `KHR_parallel_shader_compile` deferred program links). Run it when wgpu is bumped, then build: a patch
+# a Metal device lost when a command buffer fails, with the fence of gfx-rs/wgpu#10570 and #10875; Linux `vulkan::Instance::with_direct_drivers` for exclusive `VK_LUNARG_direct_driver_loading`; GLES lazy shader compile-status checks and opt-in `KHR_parallel_shader_compile` deferred program links; Vulkan swapchain semaphore Drop-owned destruction after submit-time Device::Lost). Run it when wgpu is bumped, then build: a patch
 # that no longer applies fails here, and the function goes back in by hand. If upstream wgpu takes
 # the function, delete vendor/ and the `[patch.crates-io]` entries instead.
 # Usage: scripts/vendor-wgpu-hal.sh <version>     e.g. scripts/vendor-wgpu-hal.sh 30.0.1

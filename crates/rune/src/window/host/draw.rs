@@ -510,7 +510,10 @@ impl FrameHost for WindowFrame<'_> {
         };
         let Some(surface) = l.surface.as_ref() else { return Acquire::Missed(Missed::Unconfigured) };
         let frame = match acquire(surface, gpu, &l.config, l.surface_ok, 1, &mut self.host.meter) {
-            Ok(frame) => frame,
+            Ok(frame) => {
+                self.host.terminal_loss.note_frame_texture_acquired_direct();
+                frame
+            }
             Err(missed) => return Acquire::Missed(missed),
         };
         self.state.profile.mark_acquired();
@@ -668,6 +671,10 @@ impl FrameHost for WindowFrame<'_> {
             #[cfg(not(target_arch = "wasm32"))]
             ReacquireReason::ContentResize => true,
         }
+    }
+
+    fn on_drawable_dropped(&mut self) {
+        self.host.note_frame_texture_released();
     }
 
     fn on_missed(&mut self, missed: Missed, stepped: bool) {

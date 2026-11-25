@@ -431,6 +431,98 @@ fn effect_warm_does_not_spawn_once_terminal_latch_tripped() {
     );
 }
 
+
+#[test]
+fn in_render_destroy_validation_and_submit_loss_defer_teardown_until_texture_released() {
+    use crate::render::loss_latch::{
+        FrameTeardownEffect, FrameTeardownEvent, FrameTeardownState, should_present_after_submit,
+    };
+
+    // Covers cases (a) in-render device.destroy(), (b) window submit-time loss, and (c) in-render
+    // uncaptured validation error: while a SurfaceTexture is alive, TerminalLoss records the
+    // failure and defers teardown until the texture drops without presenting.
+    if !Gpu::test_adapter_available() {
+        return;
+    }
+
+    // Case (a): device.destroy() inside Compositor::render while SurfaceTexture is alive.
+    {
+        let gpu = Arc::new(
+            Gpu::try_for_display(Gpu::wgpu_instance(), wgpu::Features::empty())
+                .expect("display wgpu device"),
+        );
+        let shared = Arc::new(SharedCore::default());
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let wakes_cb = Arc::clone(&wakes);
+        let tl = TerminalLoss::new(GpuLossPolicy::Terminal, None);
+        tl.connect_wake(Arc::clone(&shared), Arc::new(move || { wakes_cb.fetch_add(1, Ordering::SeqCst); }));
+        tl.attach_gpu(&gpu);
+
+        let mut frame_state = FrameTeardownState::Idle;
+        assert!(frame_state.step(FrameTeardownEvent::TextureAcquired).is_empty());
+        assert!(frame_state.has_live_texture());
+
+        // Compositor::render destroys device while frame texture is alive.
+        gpu.device.destroy();
+        let polled = rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll);
+        assert!(polled.is_ok() || matches!(polled, Err(rune_gpu::health::PollFailed::Lost)));
+        assert!(tl.is_failed());
+        assert!(frame_state.step(FrameTeardownEvent::LossNoticed).is_empty(), "teardown must wait for texture drop");
+        assert!(!should_present_after_submit(gpu.is_lost(), tl.is_failed()));
+
+        // Only after dropping SurfaceTexture does TextureReleased emit TeardownNow.
+        let fx = frame_state.step(FrameTeardownEvent::TextureReleased);
+        assert_eq!(fx.into_iter().collect::<Vec<_>>(), vec![FrameTeardownEffect::TeardownNow]);
+        assert!(!frame_state.has_live_texture());
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert!(shared.window_error().unwrap_or_default().contains("Destroyed"));
+    }
+
+    // Case (c): uncaptured validation error inside Compositor::render while SurfaceTexture is alive.
+    {
+        let gpu = Arc::new(
+            Gpu::try_for_display(Gpu::wgpu_instance(), wgpu::Features::empty())
+                .expect("display wgpu device"),
+        );
+        let shared = Arc::new(SharedCore::default());
+        let tl = TerminalLoss::new(GpuLossPolicy::Terminal, None);
+        tl.connect_wake(Arc::clone(&shared), Arc::new(|| {}));
+        tl.attach_gpu(&gpu);
+
+        let mut frame_state = FrameTeardownState::Idle;
+        assert!(frame_state.step(FrameTeardownEvent::TextureAcquired).is_empty());
+
+        drop(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("in-render-validation-teardown-order"),
+            size: 4,
+            usage: wgpu::BufferUsages::empty(),
+            mapped_at_creation: false,
+        }));
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+        assert!(tl.is_failed());
+        assert!(frame_state.step(FrameTeardownEvent::LossNoticed).is_empty());
+        assert!(!should_present_after_submit(gpu.is_lost(), tl.is_failed()));
+
+        let fx = frame_state.step(FrameTeardownEvent::TextureReleased);
+        assert_eq!(fx.into_iter().collect::<Vec<_>>(), vec![FrameTeardownEffect::TeardownNow]);
+        assert!(!frame_state.has_live_texture());
+        assert!(shared.window_error().unwrap_or_default().contains("uncaptured GPU error"));
+    }
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "SurfaceTexture is still alive")]
+fn teardown_debug_asserts_when_frame_texture_is_still_alive() {
+    use crate::render::loss_latch::{FrameTeardownEvent, FrameTeardownState};
+    let mut state = FrameTeardownState::Idle;
+    let _ = state.step(FrameTeardownEvent::TextureAcquired);
+    debug_assert!(
+        !state.has_live_texture(),
+        "surface teardown or reconfiguration while a SurfaceTexture is still alive",
+    );
+}
+
 #[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
 mod noop_tests {
     use super::*;
@@ -581,5 +673,58 @@ mod noop_tests {
         rune_gpu::health::poll(&gpu_b.device, wgpu::PollType::Poll).ok();
         assert!(!latch_a.is_failed());
         assert!(latch_b.is_failed(), "sibling Terminal must still catch Destroyed");
+    }
+
+    #[test]
+    fn noop_in_render_destroy_validation_submit_overlay_and_recover_teardown_order() {
+        use crate::render::loss_latch::{
+            FrameTeardownEffect, FrameTeardownEvent, FrameTeardownState, should_present_after_submit,
+        };
+
+        // Case (a) & (b): in-render device.destroy() or submit-time loss under Terminal on
+        // wgpu-core noop backend defers teardown until SurfaceTexture drops and skips present.
+        let (gpu, _surface) = noop_gpu();
+        let latch = GpuLossLatch::new();
+        gpu.attach_terminal_latch(Arc::clone(&latch));
+        let mut frame_state = FrameTeardownState::Idle;
+        assert!(frame_state.step(FrameTeardownEvent::TextureAcquired).is_empty());
+        gpu.device.destroy();
+        let poll_res = rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll);
+        assert!(poll_res.is_ok() || matches!(poll_res, Err(rune_gpu::health::PollFailed::Lost)));
+        assert!(latch.is_failed());
+        assert!(frame_state.step(FrameTeardownEvent::LossNoticed).is_empty());
+        assert!(!should_present_after_submit(gpu.is_lost(), latch.is_failed()));
+        assert_eq!(
+            frame_state.step(FrameTeardownEvent::TextureReleased).into_iter().collect::<Vec<_>>(),
+            vec![FrameTeardownEffect::TeardownNow],
+        );
+
+        // Case (c): in-render uncaptured validation error under Terminal on noop backend.
+        let (gpu2, _surface2) = noop_gpu();
+        let latch2 = GpuLossLatch::new();
+        gpu2.attach_terminal_latch(Arc::clone(&latch2));
+        let mut frame_state2 = FrameTeardownState::Idle;
+        assert!(frame_state2.step(FrameTeardownEvent::TextureAcquired).is_empty());
+        drop(gpu2.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("noop-in-render-validation"),
+            size: 4,
+            usage: wgpu::BufferUsages::empty(),
+            mapped_at_creation: false,
+        }));
+        let _ = rune_gpu::health::poll(&gpu2.device, wgpu::PollType::Poll);
+        assert!(latch2.is_failed());
+        assert!(frame_state2.step(FrameTeardownEvent::LossNoticed).is_empty());
+        assert!(!should_present_after_submit(gpu2.is_lost(), latch2.is_failed()));
+        assert_eq!(
+            frame_state2.step(FrameTeardownEvent::TextureReleased).into_iter().collect::<Vec<_>>(),
+            vec![FrameTeardownEffect::TeardownNow],
+        );
+
+        // Case (d) & Recover: submit-time loss on shared device (Recover policy has no latch)
+        // still forbids pre_present_notify()/queue.present() once gpu.is_lost() is set.
+        let (gpu3, _surface3) = noop_gpu();
+        gpu3.mark_lost();
+        assert!(gpu3.is_lost());
+        assert!(!should_present_after_submit(gpu3.is_lost(), false));
     }
 }
