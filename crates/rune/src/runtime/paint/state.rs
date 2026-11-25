@@ -204,7 +204,7 @@ impl PaintState {
         }
     }
 
-    #[cfg(any(test, target_os = "macos"))]
+    #[cfg(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material")))]
     #[inline]
     pub(crate) fn set_native_materials(&mut self, native: bool) {
         self.native_materials = native;

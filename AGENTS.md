@@ -22,7 +22,7 @@ A Rust GPU UI framework (wgpu, winit) for apps that feel like SwiftUI on iOS at 
 - `cargo test -p rune -p rune-mermaid -p rune-kit --features rune-kit/markdown,rune-kit/mermaid`
 - `cargo check --workspace --all-targets`
 - `bash scripts/check-local.sh` runs opt-in local checks (file sizes, folder shape, public-repo hygiene, `cargo check`, `cargo clippy --lib --bins`; supports `--wasm`, `--hot`, `--features`, `--all`, `--tests`).
-- Cargo aliases in `.cargo/config.toml`: `cargo lint`, `cargo lint-all`, `cargo check-wasm`, `cargo check-webgl`, `cargo check-hot`, `cargo check-gpu-tests`, `cargo check-linux-noop`, and `cargo test-fast`.
+- Cargo aliases in `.cargo/config.toml`: `cargo lint`, `cargo lint-all`, `cargo check-wasm`, `cargo check-webgl`, `cargo check-hot`, `cargo check-gpu-tests`, `cargo check-win-material`, `cargo check-linux-noop`, and `cargo test-fast`.
 - Workspace-wide commands (`cargo check --workspace --all-targets`, `cargo test --workspace`, `cargo lint-all`, `scripts/check-local.sh --all`) build `crates/rune-luau` and `examples/luau-panel`, which compile Luau's C++ sources via `mlua` (`mlua-sys`/`luau0-src`/`cc`) and require a host C++ compiler (`c++`/`g++`/`clang++`, or Visual Studio C++ build tools on Windows); default-member commands (`cargo check`, `cargo test`, `cargo lint`, `scripts/check-local.sh`) and per-package commands (`-p rune ...`, `cargo test-fast`) skip `rune-luau` and need no C++ compiler.
 - Web checks: `cargo check-wasm` and `cargo check-webgl` (or `scripts/check-local.sh --wasm`) treat warnings as warnings for everyday development.
 - Strict web checks: `cargo lint-wasm` and `cargo lint-webgl` (or `scripts/check-local.sh --strict`) deny warnings in `rune`.

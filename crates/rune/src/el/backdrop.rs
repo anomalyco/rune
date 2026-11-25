@@ -5,9 +5,11 @@ use crate::El;
 impl El {
     /// Back this node with a system backdrop material: the platform blurs what is behind the
     /// window under the node's rect and corner radius (the largest of its corners), which follow
-    /// layout and animation like any other paint. Native on macOS in transparent windows, where
-    /// it replaces the fill and the node's shadows skip its interior; elsewhere, in opaque
-    /// windows and in headless renders, the fill (or a neutral tint without one) draws instead.
+    /// layout and animation like any other paint. Native on macOS in transparent windows, and on
+    /// Windows 11 Build 22000+ transparent DirectComposition windows and overlays when the
+    /// off-by-default `windows-system-material` Cargo feature is enabled, where it replaces the
+    /// fill and the node's shadows skip its interior; elsewhere, in opaque windows and in headless
+    /// renders, the fill (or a neutral tint without one) draws instead.
     /// Native materials sit under everything the window draws and ignore ancestor clips.
     /// `Glass` also turns on `continuous_corners`, the only curve `NSGlassEffectView` draws, so
     /// the fill, clip and shadow hole match the glass; `Popover` and `Sidebar` follow

@@ -6,6 +6,8 @@
 
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+#[cfg(any(test, all(target_os = "windows", feature = "windows-system-material")))]
+pub(crate) mod windows;
 #[cfg(test)]
 mod tests;
 
@@ -175,7 +177,7 @@ pub(crate) fn announce(hook: &mut Option<Box<dyn FnMut(MaterialFrame<'_>)>>, rt:
 /// Which existing view each draw takes: the view that showed the same element, else a free view
 /// of the same material, else none (the caller makes one). `views` holds each view's material
 /// and the element it showed last; `draws` each draw's material and element.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg_attr(not(any(test, target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))), allow(dead_code))]
 pub(crate) fn assign(views: &[(SystemMaterial, Option<NodeId>)], draws: &[(SystemMaterial, NodeId)]) -> Vec<Option<usize>> {
     let mut taken = vec![false; views.len()];
     let mut out = vec![None; draws.len()];
@@ -272,7 +274,7 @@ impl Mode {
         }
     }
 
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))), allow(dead_code))]
     pub(crate) fn from_env() -> Mode {
         Mode::parse(rune_core::env::var("RUNE_SYSTEM_MATERIAL").as_deref())
     }

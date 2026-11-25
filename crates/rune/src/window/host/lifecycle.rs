@@ -761,6 +761,11 @@ impl Host {
         crate::marks::mark("window.close.hooked");
         #[cfg(target_os = "windows")]
         if ends && let Some(w) = &mut self.win {
+            #[cfg(feature = "windows-system-material")]
+            {
+                let native = &mut w.native;
+                native.materials.teardown(native.mode.handover_mut());
+            }
             w.native.drop_target = None;
             crate::platform::win32::destroy_window_now(&w.window);
             crate::marks::mark("window.destroyed");
@@ -895,7 +900,14 @@ impl Host {
     pub(in crate::window) fn release(&mut self) {
         #[cfg(target_os = "windows")]
         self.on_resize_sync_event(crate::window::win32::resize_sync::Event::Destroy);
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        if let Some(w) = self.win.as_mut() {
+            let native = &mut w.native;
+            native.materials.teardown(native.mode.handover_mut());
+        }
         self.win = None;
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        self.app.rt_mut().paint.set_native_materials(false);
         #[cfg(target_os = "macos")]
         self.frame_presented.reset();
         self.native_handle.native.ready.store(false, Ordering::Release);

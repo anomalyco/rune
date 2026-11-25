@@ -148,6 +148,7 @@ fi
 
 if [ "$run_features" -eq 1 ] || [ "$run_all" -eq 1 ]; then
   run_step "cargo check-gpu-tests" cargo check-gpu-tests
+  run_step "cargo check-win-material" cargo check-win-material
   if [ "$(uname -s)" = "Linux" ]; then
     run_step "cargo check-linux-noop" cargo check-linux-noop
   fi

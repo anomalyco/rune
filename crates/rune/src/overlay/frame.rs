@@ -310,7 +310,7 @@ pub(super) fn render_frame(app: &mut dyn OverlayApp, f: OverlayRenderArgs<'_>) -
 #[allow(clippy::too_many_arguments)]
 pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu, rt: &RuntimeCore,
     encoder: wgpu::CommandEncoder, frame: wgpu::SurfaceTexture, prewarm: bool,
-    on_materials: &mut Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>) {
+    on_materials: &mut Option<Box<dyn FnMut(crate::MaterialFrame<'_>)>>) -> bool {
     // `ConfiguredOverlay::on_materials` hears the frame's material rects before it presents.
     crate::system_material::announce(on_materials, rt);
     #[allow(irrefutable_let_patterns)]
@@ -325,25 +325,38 @@ pub(super) fn submit_and_present(live: &mut Live, renderer: &Renderer, gpu: &Gpu
                 let mut encoder = encoder;
                 renderer.before_submit(&mut encoder);
                 let queue = gpu.queue.clone();
-                return worker.run(move || {
+                worker.run(move || {
                     queue.submit([encoder.finish()]);
                     queue.present(frame);
                 });
+                return true;
             }
         }
         renderer.submit(&gpu.queue, encoder);
         let (draws, scale) = crate::system_material::present_draws(rt);
         live.materials.present(draws, scale, || gpu.queue.present(frame));
+        true
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (rt, prewarm);
+        let _ = prewarm;
+        #[cfg(not(all(target_os = "windows", feature = "windows-system-material")))]
+        let _ = rt;
         renderer.submit(&gpu.queue, encoder);
         #[cfg(all(unix, not(target_os = "ios"), not(target_os = "android")))]
         if !gpu.is_lost() && let Backing::Layer(layer) = &mut live.backing {
             layer.request_frame();
         }
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        let materials_ok = {
+            let (draws, _) = crate::system_material::present_draws(rt);
+            live.materials.sync_before_present(draws, rt.env.system_dark, live.handover.as_mut())
+        };
         gpu.queue.present(frame);
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        { materials_ok }
+        #[cfg(not(all(target_os = "windows", feature = "windows-system-material")))]
+        { true }
     }
 }
 

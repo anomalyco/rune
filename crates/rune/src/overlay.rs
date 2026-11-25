@@ -517,6 +517,13 @@ struct Live {
     /// Hardware media keys (`NSEventTypeSystemDefined`), while the overlay opts into `media_keys`.
     #[cfg(target_os = "macos")]
     media_keys: Option<crate::input::media_keys::MediaKeys>,
+    /// Opt-in Windows 11 `El::system_material` visuals behind the swap chain.
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    materials: crate::system_material::windows::Materials,
+    /// Rune-owned DirectComposition visual hosting the overlay's DX12 swap chain when
+    /// `windows-system-material` is enabled.
+    #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+    handover: Option<crate::platform::win32::dcomp_handover::Handover>,
     /// Whether the swap chain can take the next frame, and the wait when it can't
     /// (`window::slot`). Before the surface so an outstanding wait goes first.
     #[cfg(target_os = "windows")]

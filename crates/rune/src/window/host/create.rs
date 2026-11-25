@@ -223,9 +223,8 @@ impl Host {
         // one under a compositor that draws the decorations itself keeps the surface it always had.
         let client_frame = self.client_frame(&window);
         #[cfg(target_os = "windows")]
-        let dcomp_handover = if crate::window::win32::resize_sync::enabled()
-            && !transparent
-            && !launcher
+        let dcomp_handover = if ((crate::window::win32::resize_sync::enabled() && !transparent && !launcher)
+            || (cfg!(feature = "windows-system-material") && transparent))
             && matches!(Gpu::dx12_swapchain_kind(), wgpu::Dx12SwapchainKind::DxgiFromVisual)
         {
             crate::platform::win32::hwnd(&window)
@@ -659,10 +658,17 @@ impl Host {
         // Unregister any swap-chain wait before dropping the surface, even if replacement fails.
         #[cfg(target_os = "windows")]
         {
+            #[cfg(feature = "windows-system-material")]
+            {
+                let native = &mut w.native;
+                native.materials.on_device_loss(native.mode.handover_mut());
+            }
             w.native.slot.reset();
             w.native.damage.reset();
             self.on_resize_sync_event(crate::window::win32::resize_sync::Event::DeviceLost);
         }
+        #[cfg(all(target_os = "windows", feature = "windows-system-material"))]
+        self.app.rt_mut().paint.set_native_materials(false);
         let Some(w) = self.win.as_mut() else { return Err(ReattachError::other("there is no window to draw into")) };
         drop(w.surface.take());
         #[cfg(target_os = "macos")]
