@@ -1,14 +1,18 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use rune::{Align, Color, Cursor, El, GrowthSpec, KeyEvent, PointerPress, ScrollSpec, Tx, col, el, icon, row, text};
+use rune::{Align, Color, Cursor, Drag, El, GrowthSpec, KeyEvent, PointerEvent, PointerPress, ScrollSpec, Tx, col, el, icon, row, text};
 
 use super::{Cell, CellContent, KeyOutcome, SortDir, TableColumn, TableState, TableStyle, Width};
 use crate::Kit;
 
 type CellFn<S> = Rc<dyn Fn(&S, usize, &str) -> Cell>;
 type RowFn<S> = Rc<dyn Fn(&S, usize, El) -> El>;
-type RowIdFn<S> = for<'a> fn(&'a S, usize) -> Cow<'a, str>;
+type GetFn<S> = Rc<dyn Fn(&S) -> &TableState>;
+type GetMutFn<S> = Rc<dyn Fn(&mut S) -> &mut TableState>;
+type LenFn<S> = Rc<dyn Fn(&S) -> usize>;
+type RowIdFn<S> = Rc<dyn for<'a> Fn(&'a S, usize) -> Cow<'a, str>>;
+type ReorderFn<S> = Rc<dyn Fn(&mut S, usize, usize, &mut Tx)>;
 
 struct RowSpec {
     cols: Rc<Vec<TableColumn>>,
@@ -23,6 +27,7 @@ trait TableBind {
     fn bind_header_layout(&self, cell: El, id: String) -> El;
     fn bind_header_sort(&self, cell: El, id: String) -> El;
     fn bind_header_secondary_press(&self, cell: El, id: String) -> El;
+    fn bind_header_reorder(&self, cell: El, index: usize, columns: Rc<Vec<TableColumn>>, held: bool) -> El;
     fn bind_resize(&self, handle: El, c: TableColumn) -> El;
     fn bind_virtual_rows(&self, rows: El, count: usize, spec: RowSpec) -> El;
     fn bind_viewport_layout(&self, viewport: El, header_inset: f32, row_height: f32) -> El;
@@ -30,9 +35,9 @@ trait TableBind {
 }
 
 struct TableHandlers<S> {
-    get: fn(&S) -> &TableState,
-    get_mut: fn(&mut S) -> &mut TableState,
-    len: fn(&S) -> usize,
+    get: GetFn<S>,
+    get_mut: GetMutFn<S>,
+    len: LenFn<S>,
     row_id: RowIdFn<S>,
     cell: Option<CellFn<S>>,
     row: Option<RowFn<S>>,
@@ -41,16 +46,17 @@ struct TableHandlers<S> {
     on_open: Option<Rc<dyn Fn(&mut S, &str, &mut Tx)>>,
     on_header_secondary_press: Option<Rc<dyn Fn(&mut S, &str, PointerPress, &mut Tx)>>,
     on_column_fit: Option<Rc<dyn Fn(&mut S, &str, &mut Tx)>>,
+    on_reorder: Option<ReorderFn<S>>,
 }
 
 impl<S: 'static> TableBind for TableHandlers<S> {
     fn bind_header_layout(&self, cell: El, id: String) -> El {
-        let get_mut = self.get_mut;
+        let get_mut = self.get_mut.clone();
         cell.on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| get_mut(s).report_column_width(&id, r[2], tx))
     }
 
     fn bind_header_sort(&self, cell: El, id: String) -> El {
-        let (get_mut, on_sort) = (self.get_mut, self.on_sort.clone());
+        let (get_mut, on_sort) = (self.get_mut.clone(), self.on_sort.clone());
         cell.on_press_tx(move |s: &mut S, tx: &mut Tx| {
             let dir = get_mut(s).sort_click(&id);
             if let Some(f) = &on_sort {
@@ -66,12 +72,37 @@ impl<S: 'static> TableBind for TableHandlers<S> {
         cell.on_secondary_press(move |s: &mut S, press, tx| f(s, &id, press, tx))
     }
 
+    fn bind_header_reorder(&self, mut cell: El, index: usize, columns: Rc<Vec<TableColumn>>, held: bool) -> El {
+        let Some(f) = self.on_reorder.clone() else {
+            return cell;
+        };
+        // While a header is held, every header hears where the pointer goes: a move its drag
+        // never hears means the release was lost (the header unmounted, or a modal took it).
+        if held {
+            let get_mut = self.get_mut.clone();
+            cell = cell.on_pointer_move_local(move |s: &mut S, p: PointerEvent, tx: &mut Tx| {
+                if !get_mut(s).column_pointer([p.window_x, p.window_y]) {
+                    tx.live_only();
+                }
+            });
+        }
+        let get_mut = self.get_mut.clone();
+        cell.on_drag(move |s: &mut S, d: &mut Drag, tx: &mut Tx| {
+            if let Some((from, to)) = get_mut(s).reorder_drag(&columns, index, d) {
+                f(s, from, to, tx);
+            }
+        })
+    }
+
     fn bind_resize(&self, handle: El, c: TableColumn) -> El {
-        let get_mut = self.get_mut;
+        let get_mut = self.get_mut.clone();
         let id = c.id.clone();
         let on_fit = self.on_column_fit.clone();
         handle
-            .on_drag(move |s: &mut S, d, _tx| get_mut(s).resize_drag(&c, d))
+            .on_drag({
+                let get_mut = get_mut.clone();
+                move |s: &mut S, d, _tx| get_mut(s).resize_drag(&c, d)
+            })
             .on_double_press_tx(move |s: &mut S, tx: &mut Tx| {
                 if let Some(f) = &on_fit {
                     f(s, &id, tx);
@@ -82,7 +113,7 @@ impl<S: 'static> TableBind for TableHandlers<S> {
     }
 
     fn bind_virtual_rows(&self, rows: El, count: usize, spec: RowSpec) -> El {
-        let (get, get_mut, len, row_id) = (self.get, self.get_mut, self.len, self.row_id);
+        let (get, get_mut, len, row_id) = (self.get.clone(), self.get_mut.clone(), self.len.clone(), self.row_id.clone());
         let (cell, row_hook, sel, open) = (self.cell.clone(), self.row.clone(), self.on_select.clone(), self.on_open.clone());
         let row_height = spec.style.row_height;
         let build_row = move |s: &S, i: usize| -> El {
@@ -92,7 +123,9 @@ impl<S: 'static> TableBind for TableHandlers<S> {
                 cell.as_ref().map_or_else(|| Cell::text(""), |f| f(s, i, col))
             });
             let sel = sel.clone();
+            let (get_mut, len_at, id_at) = (get_mut.clone(), len.clone(), row_id.clone());
             r = r.on_press_tx(move |s: &mut S, tx: &mut Tx| {
+                let (len, row_id) = (&len_at, &id_at);
                 let n = len(s);
                 if i >= n {
                     return;
@@ -108,6 +141,7 @@ impl<S: 'static> TableBind for TableHandlers<S> {
                 }
             });
             if let Some(f) = open.clone() {
+                let (len, row_id) = (len.clone(), row_id.clone());
                 r = r.on_double_press_tx(move |s: &mut S, tx: &mut Tx| {
                     if i < len(s) {
                         let id = row_id(s, i).into_owned();
@@ -120,11 +154,12 @@ impl<S: 'static> TableBind for TableHandlers<S> {
             }
             r
         };
-        rows.virtual_rows(count, row_height, move |s: &S, i| row_id(s, i), build_row)
+        let key = self.row_id.clone();
+        rows.virtual_rows(count, row_height, move |s: &S, i| key(s, i), build_row)
     }
 
     fn bind_viewport_layout(&self, viewport: El, header_inset: f32, row_height: f32) -> El {
-        let get_mut = self.get_mut;
+        let get_mut = self.get_mut.clone();
         // Inside a scrolling page this reports every frame of the scroll; only a new height
         // changes what the view reads.
         viewport.on_layout_tx(move |s: &mut S, r: [f32; 4], tx: &mut Tx| {
@@ -133,7 +168,7 @@ impl<S: 'static> TableBind for TableHandlers<S> {
     }
 
     fn bind_root_key(&self, root: El) -> El {
-        let (get_mut, len, row_id) = (self.get_mut, self.len, self.row_id);
+        let (get_mut, len, row_id) = (self.get_mut.clone(), self.len.clone(), self.row_id.clone());
         let (on_select, on_open) = (self.on_select.clone(), self.on_open.clone());
         root.on_key(move |s: &mut S, ev: &KeyEvent, tx: &mut Tx| {
             let n = len(s);
@@ -185,18 +220,35 @@ fn min_content_width(columns: &[TableColumn], sizes: &[Width]) -> f32 {
         .sum()
 }
 
+/// The columns a table shows, in order, with their widths, and every declared column (which a
+/// header drag needs to work out the new order).
+struct Layout {
+    declared: Rc<Vec<TableColumn>>,
+    columns: Rc<Vec<TableColumn>>,
+    sizes: Rc<Vec<Width>>,
+}
+
+impl Layout {
+    fn new(declared: Vec<TableColumn>, state: &TableState) -> Layout {
+        let columns = state.visible_columns(&declared);
+        let sizes = columns.iter().map(|c| c.resolved_width(state.column_width(&c.id))).collect();
+        Layout { declared: Rc::new(declared), columns: Rc::new(columns), sizes: Rc::new(sizes) }
+    }
+}
+
 impl TableCore {
+    fn header(self, state: &TableState, k: &Kit, bind: &dyn TableBind) -> El {
+        let style = self.style.unwrap_or_else(|| TableStyle::from_kit(k));
+        header_row(k, state, &Layout::new(self.columns, state), &style, bind)
+    }
+
     fn build(self, state: &TableState, count: usize, k: &Kit, bind: &dyn TableBind) -> El {
         let TableCore { columns, zebra, stick_bottom, cursor_outline, scroll_wide, virtual_overscan, style, name } = self;
         let style = style.unwrap_or_else(|| TableStyle::from_kit(k));
-        let columns: Rc<Vec<TableColumn>> = Rc::new(
-            columns.into_iter().filter(|c| !state.is_column_hidden(&c.id)).collect(),
-        );
-        let sizes: Rc<Vec<Width>> = Rc::new(
-            columns.iter().map(|c| c.resolved_width(state.column_width(&c.id))).collect(),
-        );
-        let min_total = if scroll_wide { min_content_width(&columns, &sizes) } else { 0.0 };
-        let header = header_row(k, state, &columns, &sizes, &style, bind);
+        let layout = Layout::new(columns, state);
+        let min_total = if scroll_wide { min_content_width(&layout.columns, &layout.sizes) } else { 0.0 };
+        let header = header_row(k, state, &layout, &style, bind);
+        let Layout { columns, sizes, .. } = layout;
         let mut rows = bind.bind_virtual_rows(
             col().key("rows").w_full().growth(GrowthSpec::default()),
             count,
@@ -265,14 +317,21 @@ pub struct Table<S> {
 impl<S: 'static> Table<S> {
     /// `get` and `get_mut` find the [`TableState`]; `len` counts the rows and `row_id` names
     /// row `i` (in the app's current order) with an id unique among them.
-    pub fn new(get: fn(&S) -> &TableState, get_mut: fn(&mut S) -> &mut TableState, len: fn(&S) -> usize, row_id: RowIdFn<S>) -> Self {
+    ///
+    /// Each is any closure, so one app can keep several tables over its own state.
+    pub fn new(
+        get: impl Fn(&S) -> &TableState + 'static,
+        get_mut: impl Fn(&mut S) -> &mut TableState + 'static,
+        len: impl Fn(&S) -> usize + 'static,
+        row_id: impl for<'a> Fn(&'a S, usize) -> Cow<'a, str> + 'static,
+    ) -> Self {
         Table {
             core: TableCore { columns: Vec::new(), zebra: false, stick_bottom: false, cursor_outline: true, scroll_wide: false, virtual_overscan: None, style: None, name: None },
             handlers: TableHandlers {
-                get,
-                get_mut,
-                len,
-                row_id,
+                get: Rc::new(get),
+                get_mut: Rc::new(get_mut),
+                len: Rc::new(len),
+                row_id: Rc::new(row_id),
                 cell: None,
                 row: None,
                 on_sort: None,
@@ -280,6 +339,7 @@ impl<S: 'static> Table<S> {
                 on_open: None,
                 on_header_secondary_press: None,
                 on_column_fit: None,
+                on_reorder: None,
             },
         }
     }
@@ -464,6 +524,70 @@ impl<S: 'static> Table<S> {
     /// The table's accessibility label.
     pub fn name(mut self, n: impl Into<String>) -> Self { self.core.name = Some(n.into()); self }
 
+    /// Dragging a header sideways moves its column: the table has already moved it in
+    /// [`TableState::column_order`] when `f` hears the column's place before the move and after
+    /// it, both among the visible columns. A press that doesn't move still sorts.
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    /// use rune_kit::{Cell, Kit, Table, TableColumn, TableState};
+    ///
+    /// struct App { rows: Vec<String>, table: TableState, saved_order: Vec<String> }
+    /// let app = App { rows: vec!["alpha".into()], table: TableState::new(), saved_order: Vec::new() };
+    /// let k = Kit::neutral(true);
+    /// let _el = Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.rows.len(), |s: &App, i| Cow::Borrowed(s.rows[i].as_str()))
+    ///     .column(TableColumn::new("name", "Name"))
+    ///     .column(TableColumn::new("kind", "Kind"))
+    ///     .cell(|s: &App, i, _| Cell::text(&s.rows[i]))
+    ///     .on_reorder(|s: &mut App, _from, _to, _| s.saved_order = s.table.column_order().to_vec())
+    ///     .build(&app, &k);
+    /// ```
+    pub fn on_reorder(mut self, f: impl Fn(&mut S, usize, usize, &mut Tx) + 'static) -> Self {
+        self.handlers.on_reorder = Some(Rc::new(f));
+        self
+    }
+
+    /// The columns the table shows, in order, without hidden ones
+    /// ([`TableState::visible_columns`] over the declared columns). Rows an app draws itself
+    /// under [`Self::header`] size each cell with [`TableColumn::size_el`] and
+    /// [`TableState::column_width`], so they line up with the header's columns.
+    pub fn visible_columns(&self, s: &S) -> Vec<TableColumn> {
+        (self.handlers.get)(s).visible_columns(&self.core.columns)
+    }
+
+    /// Only the header row, with its sorting, resizing, reordering and header hooks, to put over
+    /// rows the app draws itself (its own selection, presses and drags). Lay the rows' cells out
+    /// from [`Self::visible_columns`] in a full-width row so they line up with the header; a
+    /// flex column's resolved width is [`TableState::laid_out_width`].
+    ///
+    /// ```
+    /// use std::borrow::Cow;
+    /// use rune::{col, row, text};
+    /// use rune_kit::{Kit, Table, TableColumn, TableState};
+    ///
+    /// struct App { rows: Vec<String>, table: TableState }
+    /// let app = App { rows: vec!["alpha".into()], table: TableState::new() };
+    /// let k = Kit::neutral(true);
+    /// let table = || {
+    ///     Table::new(|s: &App| &s.table, |s: &mut App| &mut s.table, |s: &App| s.rows.len(), |s: &App, i| Cow::Borrowed(s.rows[i].as_str()))
+    ///         .column(TableColumn::new("name", "Name").flex(1.0))
+    ///         .column(TableColumn::new("size", "Size").width(80.0))
+    /// };
+    /// let columns = table().visible_columns(&app);
+    /// let mut list = col().child(table().header(&app, &k));
+    /// for name in &app.rows {
+    ///     let mut r = row().w_full();
+    ///     for c in &columns {
+    ///         r = r.child(c.size_el(row().child(text(name.clone())), app.table.column_width(c.id())));
+    ///     }
+    ///     list = list.child(r);
+    /// }
+    /// ```
+    pub fn header(self, s: &S, k: &Kit) -> El {
+        let state = (self.handlers.get)(s);
+        self.core.header(state, k, &self.handlers)
+    }
+
     /// The table, filling the height its parent gives it.
     pub fn build(self, s: &S, k: &Kit) -> El {
         let state = (self.handlers.get)(s);
@@ -535,7 +659,9 @@ fn cell_el(c: &TableColumn, w: Width, cell: Cell, style: &TableStyle) -> El {
     justify(sized(row().role("gridcell").h_full().px(style.cell_pad).center_y().clip_soft(0.0), c, w), c.align).child(inner)
 }
 
-fn header_row(k: &Kit, state: &TableState, columns: &[TableColumn], sizes: &[Width], style: &TableStyle, bind: &dyn TableBind) -> El {
+fn header_row(k: &Kit, state: &TableState, layout: &Layout, style: &TableStyle, bind: &dyn TableBind) -> El {
+    let (columns, sizes) = (&layout.columns, &layout.sizes);
+    let (dragged, held) = (state.dragged_column(), state.holding_column());
     let mut h = row()
         .key("header")
         .role("row")
@@ -566,6 +692,11 @@ fn header_row(k: &Kit, state: &TableState, columns: &[TableColumn], sizes: &[Wid
             cell = bind.bind_header_sort(cell.cursor(Cursor::Pointer).hover(k.c.hover), c.id.clone());
         }
         cell = bind.bind_header_secondary_press(cell, c.id.clone());
+        cell = bind.bind_header_reorder(cell, j, layout.declared.clone(), held);
+        if let Some((_, dx)) = dragged.filter(|&(from, _)| from == j) {
+            // The dragged header follows the pointer over its neighbours.
+            cell = cell.offset(dx, 0.0).raise().fill(k.c.bg_base).layer_opacity(0.9);
+        }
         if c.resizable {
             cell = cell.child(resize_handle(c.clone(), style.rule, j == last, bind));
         } else if j != last {
