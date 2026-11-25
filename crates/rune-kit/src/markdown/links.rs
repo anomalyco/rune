@@ -52,6 +52,50 @@ impl Markdown {
         ));
         self
     }
+    /// Called when the pointer enters, switches between, or leaves any rendered link (mirroring
+    /// [`El::on_link_hover`]): `(Some(url), Some([left, top, width, height]))` in window points
+    /// for the hit line box on enter or switch, and `(None, None)` when hover ends. Links show a
+    /// hand, hover underline, and Tab stops with this alone, even without [`Self::on_link`] or
+    /// [`Self::on_link_secondary`]. When moving directly between links in different blocks, the
+    /// old block's leave runs before the new block's enter so a single state slot settles on the
+    /// newly hovered link.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Runtime, col};
+    /// # use rune_kit::{Kit, Markdown};
+    /// # #[derive(Default)] struct S { hovered: Option<(String, [f32; 4])> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// # let k = Kit::neutral(true);
+    /// col().size(280.0, 80.0).child(
+    ///     Markdown::new("Read the [docs](https://example.com/docs).")
+    ///         .on_link_hover(|s: &mut S, url, rect, _| {
+    ///             s.hovered = url.zip(rect).map(|(u, r)| (u.to_owned(), r));
+    ///         })
+    ///         .build(&k),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S::default(), view, (280.0, 80.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # let (x, y) = rt.find("https://example.com/docs").unwrap();
+    /// # rt.pointer_move(x, y);
+    /// # rt.frame(0.0);
+    /// # assert_eq!(rt.state.hovered.as_ref().map(|(u, _)| u.as_str()), Some("https://example.com/docs"));
+    /// ```
+    pub fn on_link_hover<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, Option<&str>, Option<[f32; 4]>, &mut Tx) + 'static,
+    ) -> Self {
+        let tag = fn_tag(&f);
+        let f = Rc::new(f);
+        self.on_link_hover = Some((
+            Rc::new(move |e: El| {
+                let f = f.clone();
+                e.on_link_hover(move |s: &mut S, url, rect, tx| f(s, url, rect, tx))
+            }),
+            tag,
+        ));
+        self
+    }
     /// A look for some links by destination. `f` returns `None` for the default look
     /// ([`MarkdownStyle::link`] with its underline, and an accent underline on hover), or
     /// `Some((resting, hover))`: the [`Span`] drawn over the link's text (colour, weight,
@@ -72,7 +116,7 @@ impl Markdown {
     }
     /// A tooltip for links by destination (`None`: none), shown after the hover delay while
     /// the pointer rests on the link ([`Link::help`]): where it goes, say. Links take it only
-    /// with a handler ([`Self::on_link`] or [`Self::on_link_secondary`]).
+    /// with a handler ([`Self::on_link`], [`Self::on_link_secondary`], or [`Self::on_link_hover`]).
     pub fn link_help(mut self, f: impl Fn(&str) -> Option<String> + 'static) -> Self {
         self.link_help = Some(Rc::new(f));
         self
@@ -142,7 +186,11 @@ impl Renderer {
                 }
             }
         }
-        if inl.links.is_empty() || (self.on_link.is_none() && self.on_link_secondary.is_none()) { return e; }
+        if inl.links.is_empty()
+            || (self.on_link.is_none() && self.on_link_secondary.is_none() && self.on_link_hover.is_none())
+        {
+            return e;
+        }
         let default = match self.s.link_hover {
             Some(c) => LinkPaint::new().color(c).underline(c),
             None => LinkPaint::new().underline(self.s.accent),
@@ -155,6 +203,7 @@ impl Renderer {
         };
         let e = inl.links.iter().fold(e, |e, (a, b, url)| e.link(Link::new(*a..*b, url.clone()).hover(hover_at(*a, *b, url)).help(help(url))));
         let e = match &self.on_link { Some((f, _)) => f(e), None => e };
-        match &self.on_link_secondary { Some((f, _)) => f(e), None => e }
+        let e = match &self.on_link_secondary { Some((f, _)) => f(e), None => e };
+        match &self.on_link_hover { Some((f, _)) => f(e), None => e }
     }
 }

@@ -37,6 +37,8 @@ pub struct G {
     pub menu_at: Option<rune::PointerPress>,
     /// Link popover state (`url`, `[left, top, width, height]`) from `Tx::link_rect`.
     pub link_popover: Option<(String, [f32; 4])>,
+    /// Link hover preview state (`url`, `[left, top, width, height]`) from `Markdown::on_link_hover`.
+    pub link_hover: Option<(String, [f32; 4])>,
     pub edits: [TextEdit; 12],
     pub read_only_edits: [TextEdit; 2],
     pub nowrap_code: TextEdit,
@@ -113,6 +115,7 @@ fn init() -> G {
         open: None,
         menu_at: None,
         link_popover: None,
+        link_hover: None,
         edits: Default::default(),
         read_only_edits: [
             TextEdit::new("https://api.example.com/v1/workspaces/rune"),

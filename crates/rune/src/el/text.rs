@@ -754,6 +754,50 @@ impl El {
         }
         self
     }
+    /// Called when the pointer enters, switches between, or leaves this text's [`Link`] spans:
+    /// `(Some(id), Some([left, top, width, height]))` in window points for the hovered link's
+    /// hit line box on enter or switch, and `(None, None)` when hover ends (pointer leaves the
+    /// link or window, link scrolls away under a stationary pointer, an overlying hit cover
+    /// occludes it, or the text unmounts, rebuilds, or becomes disabled/inert).
+    ///
+    /// Moving within the same link does not re-fire. Read [`Tx::pressing`] inside the handler
+    /// to tell whether a mouse button is held down (for example while drag-selecting text).
+    /// Disabled links and touch gestures never report hover. Windows without an `on_link_hover`
+    /// handler pay no pointer-move work.
+    ///
+    /// ```
+    /// # use rune::{Cx, El, Env, Link, Runtime, col, text};
+    /// # #[derive(Default)] struct S { hovered: Option<(String, [f32; 4])> }
+    /// # fn view(_: &S, _: &mut Cx<S>) -> El {
+    /// col().size(240.0, 80.0).child(
+    ///     text("Open the docs")
+    ///         .link(Link::new(9..13, "https://example.com/docs"))
+    ///         .on_link_hover(|s: &mut S, url, rect, _| {
+    ///             s.hovered = url.zip(rect).map(|(u, r)| (u.to_owned(), r));
+    ///         }),
+    /// )
+    /// # }
+    /// # let mut rt = Runtime::new(S::default(), view, (240.0, 80.0), Env::new(true, 1.0));
+    /// # rt.frame(0.0);
+    /// # let (x, y) = rt.find("https://example.com/docs").unwrap();
+    /// # rt.pointer_move(x, y);
+    /// # rt.frame(0.0);
+    /// # assert_eq!(rt.state.hovered.as_ref().map(|(u, _)| u.as_str()), Some("https://example.com/docs"));
+    /// # rt.pointer_leave();
+    /// # rt.frame(0.0);
+    /// # assert!(rt.state.hovered.is_none());
+    /// ```
+    pub fn on_link_hover<S: 'static>(
+        mut self,
+        f: impl Fn(&mut S, Option<&str>, Option<[f32; 4]>, &mut Tx) + 'static,
+    ) -> Self {
+        if let Some(t) = &mut self.text {
+            t.cold.on_link_hover = Some(LinkHoverFn(Rc::new(move |s, id, rect, tx| {
+                f(downcast::<S>(s), id, rect, tx)
+            })));
+        }
+        self
+    }
     /// Mark this text field's misspelled words, as a browser's `spellcheck` does: the platform's
     /// checker (Windows' spell checking API, AppKit's `NSSpellChecker` on macOS, installed system
     /// Hunspell dictionaries on Linux when the default-on `hunspell` feature is enabled, or fetched

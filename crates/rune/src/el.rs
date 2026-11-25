@@ -138,6 +138,12 @@ pub(crate) struct LinkSecondaryFn(pub Rc<dyn Fn(crate::states::States<'_>, &str,
 impl std::fmt::Debug for LinkSecondaryFn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("LinkSecondaryFn") }
 }
+/// [`El::on_link_hover`]'s handler.
+#[derive(Clone)]
+pub(crate) struct LinkHoverFn(pub Rc<dyn Fn(crate::states::States<'_>, Option<&str>, Option<[f32; 4]>, &mut Tx)>);
+impl std::fmt::Debug for LinkHoverFn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("LinkHoverFn") }
+}
 
 /// Default `truncate_fade` edge, in ems.
 pub(crate) const TRUNCATE_FADE_EM: f32 = 1.5;
