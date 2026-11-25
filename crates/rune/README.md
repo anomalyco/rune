@@ -2367,6 +2367,13 @@ On macOS, `MacWindowOptions` (via `App::macos_window`, `WindowSpec::macos_window
 without adding fields to `WindowOptions` or `Chrome` literals, all retained across native
 recreation and ignored on other platforms:
 
+- `.color_space(MacColorSpace)` chooses how macOS colour-manages the window (`NSWindow.colorSpace`
+  and `CAMetalLayer.colorspace`). The default `MacColorSpace::Srgb` sets
+  `NSColorSpace.sRGBColorSpace` and tags the Metal layer `kCGColorSpaceSRGB` so both the native
+  Metal backend and the wgpu backend (and overlay panels) show sRGB colours as sRGB on wide-gamut
+  displays, matching AppKit and browsers. `MacColorSpace::Unmanaged` clears both to `nil` so
+  framebuffer values reach the display unmodified, preserved across resizes and pixel-format
+  reconfigures.
 - `.accepts_first_mouse(bool)` sets `NSView.acceptsFirstMouse(for:)` through winit's
   `with_accepts_first_mouse` on all macOS windows (bordered, full-size-content, borderless, and
   non-activating panels); pass `false` so clicking an inactive window only activates it without

@@ -35,7 +35,7 @@ pub(crate) use surface::{PresumeShown, flush_while_launching, launching, pin_con
 use geometry::{overlay_rect_on, screen_id};
 use pointer::MouseMonitors;
 use presence::Presence;
-use surface::occlusion_hidden;
+use surface::{apply_window_color_space, occlusion_hidden};
 
 #[allow(unsafe_code)]
 mod overlay_panel {
@@ -160,6 +160,7 @@ pub(crate) fn configure_window(window: &winit::window::Window, options: &crate::
 fn configure_native(window: &NSWindow, options: &crate::MacWindowOptions) {
     if let Some(shadow) = options.shadow { window.setHasShadow(shadow); }
     if let Some(level) = options.level { window.setLevel(level); }
+    apply_window_color_space(window, options.color_space);
     // SAFETY: every caller runs on the AppKit main thread.
     unsafe {
         // AppKit saves nothing of a window it could not restore (`launch::ignore_saved_windows`).

@@ -662,3 +662,57 @@ fn destroying_a_device_loses_it_with_destroyed_reason_once_and_fails_mappings() 
     buf.slice(..).map_async(wgpu::MapMode::Read, move |r| *out.lock().unwrap() = Some(r.is_ok()));
     assert_eq!(*mapped.lock().unwrap(), Some(false), "mappings on a destroyed device must fail");
 }
+
+/// Reconfiguring a `MetalSurface` (resize or pixel-format change) must preserve the layer's
+/// existing `colorspace` across `setPixelFormat`, keeping both a tagged sRGB layer and an
+/// untagged (`None` / unmanaged) layer intact.
+#[allow(unsafe_code)]
+#[test]
+fn metal_surface_configure_preserves_layer_colorspace() {
+    use objc2_metal::MTLPixelFormat;
+    use objc2_quartz_core::CAMetalLayer;
+    let layer = CAMetalLayer::new();
+    // Seed the layer with the 8-bit default colorspace (`setPixelFormat` sets it on macOS).
+    layer.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+    let tagged = layer.colorspace();
+    let instance = super::instance();
+    let target = wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(Retained::as_ptr(&layer) as *mut std::ffi::c_void);
+    // SAFETY: `layer` outlives `surface`.
+    let surface = unsafe { instance.create_surface_unsafe(target) }.expect("MetalSurface");
+    let adapter = pollster::block_on(instance.request_adapter(&Default::default())).expect("MetalAdapter");
+    let (device, _queue) = pollster::block_on(adapter.request_device(&Default::default())).expect("MetalDevice");
+    let mut config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        width: 64,
+        height: 32,
+        present_mode: wgpu::PresentMode::Fifo,
+        desired_maximum_frame_latency: 2,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        view_formats: vec![],
+        color_space: wgpu::SurfaceColorSpace::Auto,
+    };
+
+    // Tagged layer keeps its colorspace across size and format changes.
+    layer.setColorspace(tagged.as_deref());
+    surface.configure(&device, &config);
+    assert_eq!(layer.colorspace().is_some(), tagged.is_some());
+    config.width = 128;
+    config.height = 64;
+    config.format = wgpu::TextureFormat::Bgra8UnormSrgb;
+    surface.configure(&device, &config);
+    assert_eq!(layer.colorspace().is_some(), tagged.is_some());
+
+    // Untagged (Unmanaged) layer stays `None` across size and pixel-format changes.
+    layer.setColorspace(None);
+    assert!(layer.colorspace().is_none());
+    config.width = 96;
+    config.height = 48;
+    config.format = wgpu::TextureFormat::Bgra8Unorm;
+    surface.configure(&device, &config);
+    assert!(layer.colorspace().is_none(), "configure must not re-tag an unmanaged layer");
+    config.format = wgpu::TextureFormat::Bgra8UnormSrgb;
+    surface.configure(&device, &config);
+    assert!(layer.colorspace().is_none(), "sRGB format configure must not re-tag an unmanaged layer");
+    drop(surface);
+}

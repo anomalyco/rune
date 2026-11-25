@@ -63,8 +63,42 @@ fn top_left_gravity(contents_flipped: bool) -> &'static objc2::runtime::AnyObjec
     unsafe { if contents_flipped { kCAGravityBottomLeft } else { kCAGravityTopLeft } }
 }
 
+/// Small seam over `NSWindow` so unit tests verify `NSWindow.colorSpace` wiring without
+/// opening a native window.
+pub(super) trait ColorSpaceTarget {
+    fn set_color_space(&self, color_space: Option<&objc2_app_kit::NSColorSpace>);
+}
+
+impl ColorSpaceTarget for NSWindow {
+    fn set_color_space(&self, color_space: Option<&objc2_app_kit::NSColorSpace>) {
+        self.setColorSpace(color_space);
+    }
+}
+
+pub(super) fn apply_window_color_space_to(
+    target: &impl ColorSpaceTarget,
+    color_space: crate::MacColorSpace,
+) {
+    match color_space {
+        crate::MacColorSpace::Srgb => {
+            target.set_color_space(Some(&objc2_app_kit::NSColorSpace::sRGBColorSpace()));
+        }
+        crate::MacColorSpace::Unmanaged => {
+            target.set_color_space(None);
+        }
+    }
+}
+
+/// Applies `color_space` to an `NSWindow` or adopted `NSPanel`: `Srgb` sets
+/// `NSColorSpace.sRGBColorSpace` (which colour-manages an untagged `CAMetalLayer`, covering
+/// wgpu-backed windows and overlay panels), and `Unmanaged` clears it to `nil`.
+pub(crate) fn apply_window_color_space(window: &NSWindow, color_space: crate::MacColorSpace) {
+    apply_window_color_space_to(window, color_space);
+}
+
 /// Pins the Metal layer's contents to the window's top left at their own size, disables Core
-/// Animation's implicit animations on its scale and geometry, and tags the contents sRGB.
+/// Animation's implicit animations on its scale and geometry, and sets `CAMetalLayer.colorspace`
+/// for `color_space`.
 ///
 /// A drawable that doesn't match the layer yet (a frame that isn't drawn in time for a resize)
 /// is clipped or leaves a strip, rather than stretched to the new size and snapped back a frame
@@ -72,10 +106,12 @@ fn top_left_gravity(contents_flipped: bool) -> &'static objc2::runtime::AnyObjec
 /// `contentsScale` and `bounds`/`position` on the sublayer from running Core Animation's 0.25 s
 /// ease when a window crosses between displays of different scales, without touching `delegate`
 /// (which `layer_occluded` and wgpu's occlusion check walk to find the hosting `NSView`). Tagging
-/// sRGB matches AppKit's own drawing so wide-gamut displays don't oversaturate the contents;
-/// Rune's native Metal backend keeps the sRGB colorspace across reconfigures, whereas wgpu-hal's
-/// Metal configure resets colorspace to `nil` for `SurfaceColorSpace::Srgb`.
-pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface) {
+/// `kCGColorSpaceSRGB` for `MacColorSpace::Srgb` matches AppKit's own drawing so wide-gamut
+/// displays don't oversaturate the contents, while `MacColorSpace::Unmanaged` clears the layer tag
+/// to `nil`. Rune's native Metal backend preserves the layer's colorspace across reconfigures;
+/// wgpu-hal resets it to `nil`, where `NSWindow.colorSpace` (`apply_window_color_space`) keeps
+/// sRGB windows managed and unmanaged windows raw.
+pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface, color_space: crate::MacColorSpace) {
     use objc2::runtime::{AnyClass, AnyObject, Bool};
     use objc2_core_graphics::{CGColorSpace, kCGColorSpaceSRGB};
     use objc2_foundation::{NSDictionary, NSString, ns_string};
@@ -98,8 +134,17 @@ pub(crate) fn pin_contents_top_left(surface: &wgpu::Surface) {
                 let _: () = msg_send![layer, setActions: &*actions];
             }
         }
-        let Some(srgb) = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)) else { return };
-        let _: () = msg_send![layer, setColorspace: &*srgb];
+        match color_space {
+            crate::MacColorSpace::Srgb => {
+                if let Some(srgb) = CGColorSpace::with_name(Some(kCGColorSpaceSRGB)) {
+                    let _: () = msg_send![layer, setColorspace: &*srgb];
+                }
+            }
+            crate::MacColorSpace::Unmanaged => {
+                let nil: *const CGColorSpace = std::ptr::null();
+                let _: () = msg_send![layer, setColorspace: nil];
+            }
+        }
     });
 }
 
