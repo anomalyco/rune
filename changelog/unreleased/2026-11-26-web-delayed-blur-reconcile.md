@@ -1,0 +1,1 @@
+- Web: extended hidden-input blur reconciliation in `bridge.js` from a single 40 ms check to a bounded exponential back-off (next frame, +40, +120, +400, +1200, +1200 ms) plus zero-idle-cost `document` `focusin` and user-input checks so delayed `document.activeElement` settlement at 60 ms, 500 ms, 2 s, or later clears stale carets without adding any idle timer.

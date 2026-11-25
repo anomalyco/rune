@@ -219,7 +219,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         hoverLink: null, hoverLinkLeave: null, hoverClientX: NaN, hoverClientY: NaN,
         forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false,
-        visualViewport: null, keyboardShiftY: 0, pendingFieldBlur: false, domFocused: false, focusGen: 0, reconcileRaf: 0, reconcileTimer: 0,
+        visualViewport: null, keyboardShiftY: 0, pendingFieldBlur: false, domFocused: false, focusGen: 0, reconcileRaf: 0, reconcileTimer: 0, reconcileFollowUp: false,
         pressedPointers: new Map(), pointerEndTimers: new Map(), pointerGen: 0,
         pointerLocked: false, pointerLockPending: false, pointerLockSeq: 0, pointerLockHasPromise: false, pointerLockCalling: false, pointerLockSyncError: false, pointerLockUnadjustedFailed: false };
     // `after` runs once the event has reached Rust (or was dropped), even when it is deferred.
@@ -285,7 +285,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         }
         recordTouchTimestamp(false, event);
     }, { capture: true, passive: true });
-    listen(window, 'pointermove', event => recordTouchTimestamp(true, event), { capture: true, passive: true });
+    const RECONCILE_BACKOFF_MS = [40, 120, 400, 1200, 1200];
     const cancelReconcile = () => {
         if (h.reconcileRaf) {
             if (typeof globalThis.cancelAnimationFrame === 'function') globalThis.cancelAnimationFrame(h.reconcileRaf);
@@ -296,6 +296,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             clearTimeout(h.reconcileTimer);
             h.reconcileTimer = 0;
         }
+        h.reconcileFollowUp = false;
     };
     const reconcileFocus = (clearPending = false) => {
         if (h.disposed || h.syncing) return false;
@@ -311,27 +312,57 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         send({ kind: 'field_blur', key: h.key });
         return true;
     };
-    // Bounded reconciliation after blur, focusout, window focus, visibility return, or
-    // visualViewport resize so event-order races (delayed activeElement update, transient window
-    // blur during keyboard hide, or visualViewport retraction after a suppressed blur) clear a
-    // stale caret without adding any idle timer or frame loop. Tagged with focusGen so a newer
-    // focus cancels any stale check. When followUp is true (blur/focusout fired while
-    // activeElement was still h.field), one bounded trailing check catches lag past the first rAF.
+    // Bounded reconciliation after blur, focusout, focusin, window focus, visibility return, or
+    // visualViewport resize so event-order races (delayed activeElement settlement, transient
+    // window blur during keyboard hide, or visualViewport retraction after a suppressed blur)
+    // clear a stale caret without adding any idle timer or frame loop. Tagged with focusGen so a
+    // newer focus cancels any stale check. When followUp is true (blur/focusout fired while
+    // activeElement was still h.field), a short bounded back-off checks at next rAF, +40, +120,
+    // +400, +1200, and +1200 ms (~3 s total) and then stops; document focusin and subsequent user
+    // input (keydown/wheel/pointermove/pointerup) catch arbitrarily late settles at zero idle cost.
     const scheduleReconcile = (followUp = false) => {
         if (h.disposed || !h.key || !h.domFocused) return;
-        if (h.reconcileRaf || h.reconcileTimer) return;
+        if (followUp) h.reconcileFollowUp = true;
+        if (h.reconcileRaf) return;
+        if (h.reconcileTimer) {
+            if (document.activeElement === h.field) return;
+            clearTimeout(h.reconcileTimer);
+            h.reconcileTimer = 0;
+        }
         const gen = h.focusGen;
+        const scheduleBackoff = idx => {
+            if (idx >= RECONCILE_BACKOFF_MS.length || h.disposed || gen !== h.focusGen) {
+                h.pendingFieldBlur = false;
+                h.reconcileFollowUp = false;
+                return;
+            }
+            if (!h.key || !h.domFocused || document.activeElement !== h.field) {
+                reconcileFocus(true);
+                return;
+            }
+            h.reconcileTimer = setTimeout(() => {
+                h.reconcileTimer = 0;
+                if (h.disposed || gen !== h.focusGen) return;
+                const last = idx + 1 >= RECONCILE_BACKOFF_MS.length;
+                if (reconcileFocus(last)) return;
+                if (!last && h.reconcileFollowUp && h.key && h.domFocused && document.activeElement === h.field) {
+                    scheduleBackoff(idx + 1);
+                } else {
+                    h.pendingFieldBlur = false;
+                    h.reconcileFollowUp = false;
+                }
+            }, RECONCILE_BACKOFF_MS[idx]);
+        };
         const run = () => {
             h.reconcileRaf = 0;
             if (h.disposed || gen !== h.focusGen) return;
-            if (reconcileFocus(!followUp)) return;
-            if (followUp && !h.disposed && gen === h.focusGen && h.key && h.domFocused && document.activeElement === h.field) {
-                h.reconcileTimer = setTimeout(() => {
-                    h.reconcileTimer = 0;
-                    if (!h.disposed && gen === h.focusGen) reconcileFocus(true);
-                }, 40);
+            const more = h.reconcileFollowUp;
+            if (reconcileFocus(!more)) return;
+            if (more && !h.disposed && gen === h.focusGen && h.key && h.domFocused && document.activeElement === h.field) {
+                scheduleBackoff(0);
             } else {
                 h.pendingFieldBlur = false;
+                h.reconcileFollowUp = false;
             }
         };
         if (typeof globalThis.requestAnimationFrame === 'function') {
@@ -346,6 +377,23 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (!h.pendingFieldBlur) return;
         if (!reconcileFocus(false)) scheduleReconcile(true);
     };
+    const reconcileOnActivity = () => {
+        if (h.disposed || h.syncing || !h.key || !h.domFocused || typeof h.menu?.done === 'function') return;
+        if (document.activeElement === h.field) return;
+        reconcileFocus(false);
+    };
+    listen(document, 'focusin', event => {
+        if (h.disposed || h.syncing || !h.key || !h.domFocused || typeof h.menu?.done === 'function') return;
+        if (event.target === h.field) return;
+        h.pendingFieldBlur = true;
+        queueMicrotask(checkFieldBlur);
+    });
+    listen(window, 'keydown', reconcileOnActivity, { capture: true, passive: true });
+    listen(window, 'wheel', reconcileOnActivity, { capture: true, passive: true });
+    listen(window, 'pointermove', event => {
+        recordTouchTimestamp(true, event);
+        reconcileOnActivity();
+    }, { capture: true, passive: true });
     const finishPointer = (pid, gen) => {
         if (gen === undefined || h.pressedPointers.get(pid) !== gen) return;
         clearPointerEndTimer(pid);
@@ -353,6 +401,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (h.disposed) return;
         if (h.pressedPointers.size === 0) applyKeyboardShift(h);
         if (h.pendingFieldBlur) queueMicrotask(checkFieldBlur);
+        else if (h.key && h.domFocused && document.activeElement !== h.field) queueMicrotask(reconcileOnActivity);
     };
     const capturePointerEnd = event => {
         const pid = event.pointerId;
