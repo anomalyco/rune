@@ -67,7 +67,7 @@ impl capture::PointerState {
 impl RuntimeCore {
     /// Whether node `i` or any of its ancestors is marked disabled (`El::disabled` or
     /// `El::aria_disabled`).
-    pub(super) fn node_disabled(&self, i: usize) -> bool {
+    pub(in crate::runtime) fn node_disabled(&self, i: usize) -> bool {
         std::iter::successors(Some(i), |&p| self.tree.nodes[p].parent)
             .any(|k| self.tree.nodes[k].a11y.disabled)
     }

@@ -205,3 +205,122 @@ fn shift_insert_pastes_into_kit_text_area_and_text_input_off_macos() {
         assert_eq!(rt.state.intercepted, ["🎉"]);
     }
 }
+
+#[test]
+fn disabled_kit_text_fields_refuse_focus_edits_and_text_cursor() {
+    use rune::{Cursor, col};
+    use rune_kit::TextField;
+
+    struct App {
+        enabled: TextEdit,
+        ti: TextEdit,
+        ta: TextEdit,
+        tf: TextEdit,
+        anc_ti: TextEdit,
+        anc_ta: TextEdit,
+        anc_tf: TextEdit,
+    }
+
+    fn view(s: &App, _: &mut Cx<App>) -> El {
+        let k = Kit::neutral(true);
+        col()
+            .w_full()
+            .h_full()
+            .padding(8.0)
+            .gap(8.0)
+            .child(TextInput::new(&s.enabled).label("Enabled").on_edit(|s: &mut App| &mut s.enabled).build(&k).key("enabled"))
+            .child(TextInput::new(&s.ti).label("TI").disabled(true).on_edit(|s: &mut App| &mut s.ti).build(&k).key("ti"))
+            .child(TextArea::new(&s.ta).label("TA").disabled(true).on_edit(|s: &mut App| &mut s.ta).build(&k).key("ta"))
+            .child(TextField::new("TF", &s.tf).disabled(true).on_edit(|s: &mut App| &mut s.tf).build(&k).key("tf"))
+            .child(
+                col()
+                    .disabled(true)
+                    .gap(8.0)
+                    .child(TextInput::new(&s.anc_ti).label("Anc TI").on_edit(|s: &mut App| &mut s.anc_ti).build(&k).key("anc-ti"))
+                    .child(TextArea::new(&s.anc_ta).label("Anc TA").on_edit(|s: &mut App| &mut s.anc_ta).build(&k).key("anc-ta"))
+                    .child(TextField::new("Anc TF", &s.anc_tf).on_edit(|s: &mut App| &mut s.anc_tf).build(&k).key("anc-tf")),
+            )
+    }
+
+    let mut rt = Runtime::new(
+        App {
+            enabled: TextEdit::new("ok"),
+            ti: TextEdit::new("ti"),
+            ta: TextEdit::new("ta"),
+            tf: TextEdit::new("tf"),
+            anc_ti: TextEdit::new("ati"),
+            anc_ta: TextEdit::new("ata"),
+            anc_tf: TextEdit::new("atf"),
+        },
+        view,
+        (320.0, 560.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+
+    let rect_of = |rt: &Runtime<App>, suffix: &str| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.path.ends_with(suffix))
+            .unwrap_or_else(|| panic!("missing {suffix}"))
+            .rect
+    };
+
+    // Enabled TextInput keeps text cursor.
+    let er = rect_of(&rt, "enabled/value/input");
+    rt.pointer_move(er[0] + er[2] * 0.5, er[1] + er[3] * 0.5);
+    assert_eq!(rt.cursor(), Cursor::Text);
+
+    // Disabled and ancestor-disabled kit fields show Default cursor (both inner input and wrapper padding)
+    // and refuse primary clicks, Tab, Tx::focus, typing, paste, and delete.
+    for (box_key, inner_suffix) in [
+        ("ti", "ti/value/input"),
+        ("ta", "ta/input"),
+        ("tf", "tf/wrapper/input"),
+        ("anc-ti", "anc-ti/value/input"),
+        ("anc-ta", "anc-ta/input"),
+        ("anc-tf", "anc-tf/wrapper/input"),
+    ] {
+        let ir = rect_of(&rt, inner_suffix);
+        let (ix, iy) = (ir[0] + ir[2] * 0.5, ir[1] + ir[3] * 0.5);
+        rt.pointer_move(ix, iy);
+        assert_eq!(rt.cursor(), Cursor::Default, "{inner_suffix} must show default cursor");
+
+        let br = rect_of(&rt, box_key);
+        let (bx, by) = (br[0] + br[2] - 3.0, br[1] + br[3] - 3.0);
+        rt.pointer_move(bx, by);
+        assert_eq!(rt.cursor(), Cursor::Default, "{box_key} wrapper padding must show default cursor");
+
+        rt.pointer_down(ix, iy);
+        rt.pointer_up(ix, iy);
+        rt.frame(0.0);
+        rt.key(KeyEvent::from(Key::Text("X".into())));
+        rt.key(KeyEvent::from(Key::Backspace));
+        rt.paste("NO");
+        rt.frame(0.0);
+
+        rt.update(move |_, tx| tx.focus(box_key, true));
+        rt.frame(0.0);
+        rt.key(KeyEvent::from(Key::Text("Y".into())));
+        rt.frame(0.0);
+    }
+
+    // Tab only visits the single enabled field.
+    rt.update(|_, tx| tx.blur());
+    rt.frame(0.0);
+    rt.key(KeyEvent::from(Key::Tab));
+    rt.frame(0.0);
+    assert!(rt.state.enabled.focused);
+    rt.key(KeyEvent::from(Key::Tab));
+    rt.frame(0.0);
+    assert!(rt.state.enabled.focused, "Tab must skip all disabled and ancestor-disabled kit fields");
+
+    assert!(!rt.state.ti.focused && !rt.state.ta.focused && !rt.state.tf.focused);
+    assert!(!rt.state.anc_ti.focused && !rt.state.anc_ta.focused && !rt.state.anc_tf.focused);
+    assert_eq!(rt.state.ti.text, "ti");
+    assert_eq!(rt.state.ta.text, "ta");
+    assert_eq!(rt.state.tf.text, "tf");
+    assert_eq!(rt.state.anc_ti.text, "ati");
+    assert_eq!(rt.state.anc_ta.text, "ata");
+    assert_eq!(rt.state.anc_tf.text, "atf");
+}
