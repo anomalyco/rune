@@ -197,6 +197,31 @@ impl<'a> Scene<'a> {
         self
     }
 
+    /// The same frame's `instances` in a `size` target cleared to nothing, with no subpixel text
+    /// (it blends by channel only over the window): a turned layer's contents (`raster::turn`).
+    fn part<'b>(&self, instances: &'b [Instance], size: (u32, u32)) -> Scene<'b>
+    where
+        'a: 'b,
+    {
+        Scene {
+            instances,
+            glyph_pages: self.glyph_pages.clone(),
+            outlines: self.outlines,
+            images: self.images.clone(),
+            size,
+            clear: [0.0; 4],
+            lcd: false,
+            srgb_blend: self.srgb_blend,
+            native_surfaces: false,
+            compositor: self.compositor,
+            smoothing: self.smoothing,
+            atlas_resets: self.atlas_resets,
+            half: self.half,
+            fade_stops: self.fade_stops,
+            degraded: self.degraded,
+        }
+    }
+
     /// The scene-wide switches, which a frame that only recolours keeps.
     fn flags(&self) -> Flags {
         Flags { srgb_blend: self.srgb_blend, native_surfaces: self.native_surfaces, compositor: self.compositor, lcd: self.lcd, smoothing: self.smoothing, half: self.half, fade_stops: [self.fade_stops[0].to_bits(), self.fade_stops[1].to_bits()], degraded: self.degraded }
@@ -223,7 +248,8 @@ impl<'a> Scene<'a> {
         let mut depth = 0u32;
         self.instances.iter().find_map(|i| match i.kind() {
             Some(Kind::Layer) if i.params[2] != 0.0 => Some(NeedsGpu::LayerBlur),
-            Some(Kind::Layer) if i.border[1] != 0.0 => Some(NeedsGpu::TurnedLayer),
+            // A quarter turn paints (`bin::quarter`); any other needs the GPU's resampling.
+            Some(Kind::Layer) if i.border[1] != 0.0 && bin::quarter(i).is_none() => Some(NeedsGpu::TurnedLayer),
             Some(Kind::Layer) => { depth += 1; None }
             Some(Kind::LayerEnd) => { depth = depth.saturating_sub(1); None }
             Some(Kind::BackdropBlur) if depth > 0 => Some(NeedsGpu::BackdropBlur),
@@ -274,7 +300,8 @@ pub enum NeedsGpu {
     SlugText,
     /// A layer blurred as a whole (`El::blur`).
     LayerBlur,
-    /// A layer turned as a whole (`Instance::turned`).
+    /// A layer turned as a whole (`Instance::turned`) by anything but a multiple of 90°, or a
+    /// turned layer that is cached or plus-lighter.
     TurnedLayer,
     /// A backdrop blur inside a layer (it blurs that layer's target).
     BackdropBlur,
