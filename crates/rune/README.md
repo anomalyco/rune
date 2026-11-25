@@ -2160,8 +2160,11 @@ element becomes focusable via click or Tab, draws a 1.5 pt caret when focused an
 (`El::caret` sets its colour, else the text's foreground), moves by character, word
 (`Ctrl`/`Option`+Left/Right), visual line (preserving a sticky horizontal column across shorter
 lines and sibling texts), page (`PageUp`/`PageDown`), and line or document `Home`/`End`, extends
-selections with `Shift` across mounted siblings, collapses a non-empty selection on plain
-Left/Right, scrolls enclosing viewports to keep the caret visible, keeps `Cmd/Ctrl+C` and
+selections with `Shift` across mounted siblings and unmounted `virtual_rows` / `virtualize`
+rows (scrolling to mount destination rows, keeping offscreen anchors pinned for `Cmd/Ctrl+C`,
+and working with small `El::virtual_overscan`), collapses a non-empty selection on plain
+Left/Right (scrolling back to an offscreen anchor when needed), scrolls enclosing viewports to
+keep the caret visible, keeps `Cmd/Ctrl+C` and
 `Cmd/Ctrl+A`, and publishes the caret and selection to AccessKit and the web accessibility mirror.
 
 The selection lives in the runtime, so selecting never re-runs the view or re-lays out the text.

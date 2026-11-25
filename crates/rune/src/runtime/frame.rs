@@ -516,6 +516,9 @@ impl RuntimeCore {
         let follow = std::mem::take(&mut self.edit.caret_follow);
         let commits_before_scroll = self.commit.commits;
         self.finish_scroll_requests(app, &mut tx, follow);
+        if self.edit.selectable.pending_move.is_seeking() {
+            self.drive_pending_caret(app);
+        }
         if defer_shift && self.commit.commits == commits_before_scroll && self.virtual_window_changed() {
             self.commit_virtual_scroll(app, &Tx::default());
         }

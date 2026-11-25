@@ -565,8 +565,11 @@ impl RuntimeCore {
             self.kbd.focus.remember_scope(mark, at);
         }
         self.sync_side_focus(app);
-        if moved && let Some(fi) = self.focused_index() && self.is_caret_browsing_node(&self.tree.nodes[fi]) {
-            self.enter_caret_browsing_focus(fi);
+        if moved {
+            self.cancel_pending_caret();
+            if let Some(fi) = self.focused_index() && self.is_caret_browsing_node(&self.tree.nodes[fi]) {
+                self.enter_caret_browsing_focus(fi);
+            }
         }
         // A hover group keyboard focus enters or leaves hovers or rests now (`El::hover_group`).
         // Focus that stayed where it was, shown as it was (every commit's focus pass, most of

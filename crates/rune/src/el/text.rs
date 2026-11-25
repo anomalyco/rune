@@ -842,7 +842,8 @@ impl El {
     /// or Tab, draws a 1.5 pt caret when focused and collapsed (coloured by [`El::caret`], else
     /// [`El::color`] / [`Cx::foreground`](crate::Cx::foreground)), moves by character, word, visual
     /// line, page, and line or document `Home`/`End`, extends the selection with `Shift` across
-    /// mounted sibling texts in tree order, collapses a non-empty selection on plain `Left`/`Right`,
+    /// mounted sibling texts and unmounted `virtual_rows` / `virtualize` rows in tree order (keeping
+    /// offscreen anchors pinned for copy), collapses a non-empty selection on plain `Left`/`Right`,
     /// scrolls enclosing viewports to keep the caret in view, preserves `Cmd/Ctrl+C` and
     /// `Cmd/Ctrl+A`, and publishes the caret and selection to accessibility. Off by default,
     /// leaving ordinary [`El::selectable`] text non-focusable and untouched.
