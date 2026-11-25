@@ -199,7 +199,7 @@ impl crate::runtime::RuntimeCore {
 /// Encodes an absolute Unix path's raw bytes as an RFC 8089 `file://` URI for
 /// `org.freedesktop.FileManager1.ShowItems`. Returns `None` if `bytes` is empty, does not
 /// start with `/`, or contains an interior NUL byte.
-#[cfg(any(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))), test))]
+#[cfg(any(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")), feature = "dbus"), test))]
 fn file_uri_from_bytes(bytes: &[u8]) -> Option<String> {
     if !bytes.starts_with(b"/") || bytes.contains(&0) {
         return None;

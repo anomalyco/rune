@@ -14,11 +14,28 @@
 
 #![allow(unsafe_code)]
 
-use std::cell::{Cell, UnsafeCell};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
-
 /// One sample per this many bytes asked for.
 pub const INTERVAL: usize = 32 << 10;
+
+#[cfg(not(windows))]
+pub fn contribute(_name: &'static str, _report: impl Fn() -> String + Send + 'static) {}
+
+#[cfg(not(windows))]
+pub(super) fn allocated(_ptr: *mut u8, _size: usize) {}
+
+#[cfg(not(windows))]
+pub(super) fn freed(_ptr: *mut u8) {}
+
+#[cfg(windows)]
+pub use win::contribute;
+#[cfg(windows)]
+pub(super) use win::{allocated, freed};
+
+#[cfg(windows)]
+mod win {
+use super::INTERVAL;
+use std::cell::{Cell, UnsafeCell};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::{Acquire, Relaxed, Release}};
 const FRAMES: usize = 28;
 const SITES: usize = 1 << 13;
 const LIVE: usize = 1 << 16;
@@ -95,7 +112,7 @@ fn filter_bit(ptr: usize) -> (usize, u64) {
 }
 
 /// The block at `ptr` of `size` bytes was just made.
-pub(super) fn allocated(ptr: *mut u8, size: usize) {
+pub fn allocated(ptr: *mut u8, size: usize) {
     let weight = if size >= INTERVAL {
         size
     } else {
@@ -128,7 +145,7 @@ pub(super) fn allocated(ptr: *mut u8, size: usize) {
 }
 
 /// The block at `ptr` is going.
-pub(super) fn freed(ptr: *mut u8) {
+pub fn freed(ptr: *mut u8) {
     let (word, bit) = filter_bit(ptr as usize);
     if FILTER[word].load(Relaxed) & bit == 0 || INSIDE.try_with(Cell::get).unwrap_or(true) {
         return;
@@ -224,7 +241,7 @@ fn report() -> String {
     let mut out = String::new();
     writeln!(out, "interval {INTERVAL}").ok();
     writeln!(out, "dropped {}", DROPPED.load(Relaxed)).ok();
-    writeln!(out, "heap {} {}", super::LIVE.load(Relaxed), super::PEAK.load(Relaxed)).ok();
+    writeln!(out, "heap {} {}", super::super::LIVE.load(Relaxed), super::super::PEAK.load(Relaxed)).ok();
     for (base, size, path) in os::modules() {
         writeln!(out, "module {base:x} {size:x} {path}").ok();
     }
@@ -402,20 +419,4 @@ mod os {
     }
 }
 
-#[cfg(not(windows))]
-mod os {
-    pub(super) fn capture(_frames: &mut [usize; super::FRAMES]) -> usize {
-        0
-    }
-    pub(super) fn zeroed(_size: usize) -> *mut u8 {
-        std::ptr::null_mut()
-    }
-    pub(super) fn modules() -> Vec<(usize, usize, String)> {
-        Vec::new()
-    }
-    pub(super) fn start_dumper() {}
-    #[allow(clippy::type_complexity)]
-    pub(super) fn nt_heaps() -> Vec<(usize, Vec<(usize, u32, u32)>, u64, u64, Vec<(usize, usize)>)> {
-        Vec::new()
-    }
 }
