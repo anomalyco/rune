@@ -118,7 +118,7 @@ pub(super) const fn uber_abi_hash() -> u64 {
 }
 
 /// [`uber_abi_hash`] for another set of uber bindings (the Windfoil variant's).
-#[cfg(any(test, target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(super) const fn abi_hash_of(entries: &[wgpu::BindGroupLayoutEntry]) -> u64 {
     layout_hash(entries, &uber_vertex_layout(), uber_primitive())
 }

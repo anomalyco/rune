@@ -116,6 +116,7 @@ impl FrameProfile {
         let _ = why;
     }
 
+    #[cfg(target_os = "windows")]
     #[inline]
     pub(super) fn set_whole_why(&mut self, why: &'static str) {
         #[cfg(feature = "frame-profile")]

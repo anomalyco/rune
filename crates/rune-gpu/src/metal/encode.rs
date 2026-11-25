@@ -378,11 +378,8 @@ pub(super) fn clear_subresource(cb: &ProtocolObject<dyn MTLCommandBuffer>, textu
     // SAFETY: color attachment 0 always exists on a newly created render pass descriptor.
     let color = unsafe { d.colorAttachments().objectAtIndexedSubscript(0) };
     color.setTexture(Some(&texture.raw));
-    // SAFETY: `mip` and `layer` are within `texture`'s subresource bounds.
-    unsafe {
-        color.setLevel(mip as usize);
-        color.setSlice(layer as usize);
-    }
+    color.setLevel(mip as usize);
+    color.setSlice(layer as usize);
     color.setLoadAction(MTLLoadAction::Clear);
     color.setClearColor(MTLClearColor { red: 0.0, green: 0.0, blue: 0.0, alpha: 0.0 });
     color.setStoreAction(MTLStoreAction::Store);

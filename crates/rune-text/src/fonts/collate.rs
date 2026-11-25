@@ -86,6 +86,7 @@ fn collate(a: &str, b: &str) -> Ordering {
 }
 
 /// Characters case-folded, and each run of ASCII digits by its value (leading zeros aside).
+#[cfg(not(target_os = "macos"))]
 fn natural(a: &str, b: &str) -> Ordering {
     let (mut x, mut y) = (a.chars().peekable(), b.chars().peekable());
     loop {

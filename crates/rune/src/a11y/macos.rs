@@ -8,7 +8,10 @@ use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::{Actions, Activation};
 
-pub(super) struct Adapter(accesskit_macos::SubclassingAdapter, DisplayOptions);
+pub(super) struct Adapter {
+    adapter: accesskit_macos::SubclassingAdapter,
+    _display_options: DisplayOptions,
+}
 
 impl Adapter {
     pub(super) fn new(window: &winit::window::Window, activation: Activation, actions: Actions) -> Option<Self> {
@@ -25,18 +28,19 @@ impl Adapter {
             eprintln!("rune: accessibility unavailable for a window: its view is already observed ({})", actual.name().to_string_lossy());
             return None;
         }
-        let options = DisplayOptions::watch(activation.0.clone());
+        let _display_options = DisplayOptions::watch(activation.0.clone());
         // SAFETY: `view` is a valid NSView that outlives the adapter (the window owns it, and
         // hosts drop the adapter before the window).
-        Some(Adapter(unsafe { accesskit_macos::SubclassingAdapter::new(view, activation, actions) }, options))
+        let adapter = unsafe { accesskit_macos::SubclassingAdapter::new(view, activation, actions) };
+        Some(Adapter { adapter, _display_options })
     }
 
     pub(super) fn update(&mut self, update: accesskit::TreeUpdate) {
-        if let Some(events) = self.0.update_if_active(|| update) { events.raise(); }
+        if let Some(events) = self.adapter.update_if_active(|| update) { events.raise(); }
     }
 
     pub(super) fn focus(&mut self, focused: bool) {
-        if let Some(events) = self.0.update_view_focus_state(focused) { events.raise(); }
+        if let Some(events) = self.adapter.update_view_focus_state(focused) { events.raise(); }
     }
 }
 

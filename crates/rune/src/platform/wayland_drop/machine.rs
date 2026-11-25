@@ -61,6 +61,7 @@ pub(crate) enum ReadOutcome {
 }
 
 /// Bit values of `wl_data_device_manager.dnd_action` from the Wayland core protocol.
+#[cfg(test)]
 pub(crate) const DND_ACTION_NONE: u32 = 0;
 pub(crate) const DND_ACTION_COPY: u32 = 1;
 pub(crate) const DND_ACTION_MOVE: u32 = 2;

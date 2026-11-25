@@ -519,7 +519,7 @@ fn overlay_occluded_runs_due_timers_without_frames() {
 fn uncovering_an_overlay_keeps_its_outstanding_retry() {
     use crate::window::{Missed, OCCLUDED_RETRY};
     #[derive(Default)]
-    struct State { polls: usize }
+    struct State;
     fn view(_: &State, _: &mut Cx<State>) -> El { crate::el() }
     fn poll(_: &mut State, _: f64, _: &mut Tx) -> bool { false }
     let app = AppSpec { poll: Some(poll), ..AppSpec::new("uncovered", (30.0, 20.0), State::default, view) };
