@@ -72,7 +72,30 @@ struct BlurPyramid {
 }
 
 const BLUR_MIPS: u32 = 6;
-const BLUR_SLOTS: usize = 64;
+/// Bounded per-frame uniform pool for backdrop blur crossfade weights: slot `0` holds constant
+/// `1.0f32` permanently, and slots `1..BLUR_SLOTS` hold up to 255 distinct fractional weights
+/// (64 KiB total at 256 B dynamic uniform alignment).
+pub(crate) const BLUR_SLOTS: usize = 256;
+
+/// Resolve the dynamic uniform slot for a blur pyramid's crossfade weight `frac`.
+/// Slot `0` permanently holds `1.0f32`; slots `1..BLUR_SLOTS` hold distinct fractional weights
+/// for the current frame. Returns `Some((slot, needs_upload))`, or `None` once the bounded pool
+/// is full.
+pub(crate) fn alloc_blur_weight(weights: &mut Vec<u32>, frac: f32) -> Option<(usize, bool)> {
+    let bits = if frac == 0.0 { 0.0f32.to_bits() } else { frac.to_bits() };
+    if bits == 1.0f32.to_bits() {
+        return Some((0, false));
+    }
+    if let Some(at) = weights.iter().position(|&b| b == bits) {
+        return Some((at + 1, false));
+    }
+    let slot = weights.len() + 1;
+    if slot >= BLUR_SLOTS {
+        return None;
+    }
+    weights.push(bits);
+    Some((slot, true))
+}
 
 /// Group 1's resources: backdrop, source and blurred backdrop views, and the backdrop encoding.
 pub(crate) type Fx1Key = ([wgpu::TextureView; 3], usize);
@@ -176,7 +199,8 @@ pub struct FxRenderer {
     blur_passes: Passes<2>,
     blur_bgl: wgpu::BindGroupLayout,
     blur_uniforms: wgpu::Buffer,
-    blur_slot: usize,
+    /// Fractional crossfade weights uploaded to slots `1..=len` this frame (bounded by `BLUR_SLOTS - 1`).
+    blur_weights: Vec<u32>,
     viewport: [u32; 2],
     opts: FxOptions,
     sims: Option<crate::sim::Sims>,
@@ -319,8 +343,13 @@ impl FxRenderer {
             label: Some("fx blur params"),
             size: (BLUR_SLOTS * 256) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+            mapped_at_creation: true,
         });
+        // Slot 0 permanently holds 1.0f32 for every pass that does not crossfade levels.
+        if let Ok(mut range) = blur_uniforms.slice(..16).get_mapped_range_mut() {
+            range.copy_from_slice(bytemuck::cast_slice(&[1.0f32, 0.0, 0.0, 0.0]));
+        }
+        blur_uniforms.unmap();
 
         let storage_usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         FxRenderer {
@@ -347,7 +376,7 @@ impl FxRenderer {
             blur_passes,
             blur_bgl,
             blur_uniforms,
-            blur_slot: 0,
+            blur_weights: Vec::new(),
             viewport: [0, 0],
             opts,
             sims: None,
@@ -488,32 +517,32 @@ impl FxRenderer {
     /// Call it after copying the backdrop for layer `layer` (for instance from the `EffectPhase::Backdrop`
     /// callback of `Renderer::draw_with_backdrop` / `Renderer::encode_layers_with_backdrop` with
     /// `EffectSite::backdrop`) and before drawing that layer, outside any render pass. Returns
-    /// false (after still binding `backdrop` when the layer reads it) for non-frosted layers; a
-    /// frosted lens drawn without it falls back to a small in-shader blur.
+    /// false (after still binding `backdrop` when the layer reads it) for non-frosted layers,
+    /// viewports too small to form a pyramid, or once a frame exceeds 255 distinct fractional blur
+    /// weights (same-weight and exact-mip layers share slots); a frosted lens drawn without it
+    /// falls back to a small in-shader blur.
     pub fn blur_backdrop(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, backdrop: &wgpu::TextureView, layer: usize) -> bool {
         let staging = self.staging(device, queue);
         self.set_layer_backdrop(device, backdrop, layer);
         let Some(Some(p)) = self.prepared.get(layer) else { return false };
         let (Some(pyr), true) = (self.blur.as_ref(), p.blur_px > 0.0) else { return false };
         let mips = pyr.down.len();
-        if mips < 2 || self.blur_slot + mips > BLUR_SLOTS {
+        if mips < 2 {
             return false;
         }
         // Pyramid level (half-res mip) whose blur matches the sigma; the fraction crossfades levels.
         let level = (p.blur_px / 2.0).max(1.0).log2().clamp(0.0, (mips - 1) as f32);
         let n = (level.ceil() as usize).clamp(1, mips - 1);
         let frac = (level - (n - 1) as f32).clamp(0.0, 1.0);
+        let Some((frac_slot, upload)) = alloc_blur_weight(&mut self.blur_weights, frac) else {
+            return false;
+        };
+        if upload {
+            staging.write_buffer(&self.blur_uniforms, (frac_slot * 256) as u64, bytemuck::cast_slice(&[frac, 0.0f32, 0.0, 0.0]));
+        }
         let margin = p.blur_px * 3.0 + 8.0;
         let [vw, vh] = self.viewport;
         let region = [(p.bounds[0] - margin).max(0.0), (p.bounds[1] - margin).max(0.0), (p.bounds[2] + margin).min(vw as f32), (p.bounds[3] + margin).min(vh as f32)];
-        let base = self.blur_slot;
-        self.blur_slot += mips;
-        let mut params = [0u8; BLUR_MIPS as usize * 256];
-        for k in 0..mips {
-            let w: f32 = if k + 1 == n { frac } else { 1.0 };
-            params[k * 256..k * 256 + 4].copy_from_slice(&w.to_le_bytes());
-        }
-        staging.write_buffer(&self.blur_uniforms, (base * 256) as u64, &params[..mips * 256]);
         // Tell the lens shader the pyramid is ready (xf.x), and how much of it to use (xf.y).
         let xf = [1.0f32, (p.blur_px / 3.0).min(1.0), 0.0, 0.0];
         let off = p.instance as usize * INST_SIZE + std::mem::offset_of!(InstRaw, xf);
@@ -556,12 +585,13 @@ impl FxRenderer {
         let [blur_down, blur_up] = self.blur_passes.get();
         for m in 0..=n {
             let bg = if m == 0 { first } else { &pyr.down_binds[m - 1] };
-            run(blur_down, &pyr.down[m], bg, base + m, m);
+            run(blur_down, &pyr.down[m], bg, 0, m);
         }
         for m in (0..n).rev() {
             let (from_down, from_up) = &pyr.up_binds[m];
             let bg = if m + 1 == n { from_down } else { from_up.as_ref().unwrap() };
-            run(blur_up, &pyr.up[m], bg, base + m, m);
+            let slot = if m + 1 == n { frac_slot } else { 0 };
+            run(blur_up, &pyr.up[m], bg, slot, m);
         }
         true
     }

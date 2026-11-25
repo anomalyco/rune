@@ -24,7 +24,7 @@ impl FxRenderer {
         let vw = frame.viewport[0] as f32;
         let vh = frame.viewport[1] as f32;
         self.viewport = frame.viewport;
-        self.blur_slot = 0;
+        self.blur_weights.clear();
         let wants_blur = |l: &FxLayer| match l.fx {
             Fx::Distort(DistortParams::Lens(p)) => p.frost > 0.0,
             Fx::Fill(FillParams { style: FillStyle::FlutedGlass(p), .. }) => p.frost > 0.0,

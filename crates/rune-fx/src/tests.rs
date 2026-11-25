@@ -328,3 +328,38 @@ fn wgsl_uniform_and_storage_layouts_match_rust() {
         &[("P", std::mem::size_of::<SimUniform>(), sim_fields)],
     );
 }
+
+#[test]
+fn blur_weight_pool_shares_constant_and_repeated_weights_and_bounds_at_256() {
+    use crate::renderer::{BLUR_SLOTS, alloc_blur_weight};
+
+    let mut weights = Vec::new();
+    // Exact 1.0 always maps to permanent slot 0 without uploading or consuming capacity.
+    assert_eq!(alloc_blur_weight(&mut weights, 1.0), Some((0, false)));
+    assert!(weights.is_empty());
+
+    // Signed zero normalizes to positive zero and deduplicates.
+    assert_eq!(alloc_blur_weight(&mut weights, 0.0), Some((1, true)));
+    assert_eq!(alloc_blur_weight(&mut weights, -0.0), Some((1, false)));
+
+    // Repeated fractional weights reuse their slot without re-uploading.
+    assert_eq!(alloc_blur_weight(&mut weights, 0.5), Some((2, true)));
+    assert_eq!(alloc_blur_weight(&mut weights, 0.5), Some((2, false)));
+
+    // Fill the remaining slots up to BLUR_SLOTS - 1 = 255 distinct fractional weights.
+    for i in 3..BLUR_SLOTS {
+        let frac = i as f32 / (BLUR_SLOTS as f32 + 1.0);
+        assert_eq!(alloc_blur_weight(&mut weights, frac), Some((i, true)));
+    }
+    assert_eq!(weights.len(), BLUR_SLOTS - 1);
+
+    // Existing weights and 1.0 still succeed when full; a brand-new weight falls back cleanly.
+    assert_eq!(alloc_blur_weight(&mut weights, 1.0), Some((0, false)));
+    assert_eq!(alloc_blur_weight(&mut weights, 0.5), Some((2, false)));
+    assert_eq!(alloc_blur_weight(&mut weights, 0.123456), None);
+    assert_eq!(weights.len(), BLUR_SLOTS - 1);
+
+    // Clearing for the next frame restores capacity.
+    weights.clear();
+    assert_eq!(alloc_blur_weight(&mut weights, 0.123456), Some((1, true)));
+}

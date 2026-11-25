@@ -335,8 +335,10 @@ reserved machine is needed for gating.
 - **Fire** is the heaviest per pixel (8 noise evaluations). Half-resolution evaluation with a
   bilateral upsample would cut it about 3×. Not done.
 - Electricity forks grow and cool but don't sub-branch.
-- The frost pyramid needs one `blur_backdrop` call per frosted layer (about 10 per frame fit the
-  uniform slots). The clear lens's rim blur is still an 8-tap spiral.
+- The frost pyramid needs one `blur_backdrop` call per frosted layer (up to 255 distinct fractional
+  blur weights fit the bounded 64 KB uniform pool per frame; layers sharing a weight or exact mip
+  level reuse a slot, and layers past the bound fall back to the 8-tap in-shader blur). The clear
+  lens's rim blur is still an 8-tap spiral.
 - Bind groups are rebuilt every `prepare`. They should be cached per (backdrop, source) pair.
 - Fills have no inspector UI of their own: the catalog (`fill_styles()`) is the data a tool needs
   to build one. Image input for dither and halftone needs the caller to bind the image as a source.
