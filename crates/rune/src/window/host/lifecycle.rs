@@ -986,7 +986,7 @@ impl Host {
         self.frame_presented.reset();
         self.native_handle.native.ready.store(false, Ordering::Release);
         self.native_handle.native.number.store(0, Ordering::Release);
-        self.terminal_loss.prepare_clean_gpu_drop(self.gpu.as_ref().map(|(g, _)| &**g));
+        self.terminal_loss.prepare_clean_gpu_drop(self.gpu.as_ref().map(|(g, _)| g));
         self.gpu = None;
         self.app.release_compositor_gpu();
         let rt = self.app.rt_mut();

@@ -271,7 +271,7 @@ fn terminal_callbacks_survive_restore_device_callbacks_and_latch_validation_and_
     rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
 
     assert!(tl.is_failed(), "uncaptured validation error must latch Terminal");
-    assert!(gpu.is_lost(), "uncaptured error under Terminal marks GPU lost");
+    assert!(!gpu.is_lost(), "uncaptured error under Terminal must not mark a healthy shared GPU lost for Recover siblings");
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
     assert_eq!(foreign_err.load(Ordering::SeqCst), 0);
     let first = shared.window_error().expect("first error recorded");
@@ -303,8 +303,10 @@ fn clean_gpu_drop_detaches_terminal_latch_while_unexpected_destroy_trips_it() {
     // 1. Clean release_gpu_when_closed: prepare_clean_gpu_drop detaches before drop so
     //    wgpu's drop-triggered Destroyed does not falsely latch.
     {
-        let gpu = Gpu::try_for_display(Gpu::wgpu_instance(), wgpu::Features::empty())
-            .expect("display wgpu device");
+        let gpu = Arc::new(
+            Gpu::try_for_display(Gpu::wgpu_instance(), wgpu::Features::empty())
+                .expect("display wgpu device"),
+        );
         tl.attach_gpu(&gpu);
         tl.prepare_clean_gpu_drop(Some(&gpu));
         drop(gpu);
@@ -320,6 +322,113 @@ fn clean_gpu_drop_detaches_terminal_latch_while_unexpected_destroy_trips_it() {
     rune_gpu::health::poll(&gpu2.device, wgpu::PollType::Poll).ok();
     assert!(tl.is_failed(), "unexpected device.destroy() after reopen must latch");
     assert_eq!(wakes.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn mixed_terminal_and_recover_shared_gpu_isolates_uncaptured_error_and_propagates_real_loss() {
+    if !Gpu::test_adapter_available() {
+        return;
+    }
+    let gpu = Arc::new(
+        Gpu::try_for_display(Gpu::wgpu_instance(), wgpu::Features::empty())
+            .expect("display wgpu device"),
+    );
+    let shared = Arc::new(SharedCore::default());
+    let tl = TerminalLoss::new(GpuLossPolicy::Terminal, None);
+    tl.connect_wake(Arc::clone(&shared), Arc::new(|| {}));
+    tl.attach_gpu(&gpu);
+
+    // Uncaptured validation error latches Terminal, but must NOT mark the shared healthy Gpu
+    // lost so a sibling Recover window on the same Gpu continues uninterrupted.
+    drop(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("mixed-pool-validation-probe"),
+        size: 4,
+        usage: wgpu::BufferUsages::empty(),
+        mapped_at_creation: false,
+    }));
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+
+    assert!(tl.is_failed(), "Terminal must latch on uncaptured validation error");
+    assert!(
+        !gpu.is_lost(),
+        "uncaptured error must not force a sibling Recover window off a healthy shared Gpu",
+    );
+
+    // Real device loss still marks gpu.is_lost() so Recover sees it and recreates cleanly.
+    gpu.device.destroy();
+    rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+    assert!(gpu.is_lost(), "real device.destroy() must mark gpu.is_lost() for Recover");
+}
+
+#[test]
+fn clean_drop_of_one_terminal_window_preserves_destroyed_detection_on_sibling_terminal() {
+    if !Gpu::test_adapter_available() {
+        return;
+    }
+    let gpu_b = Arc::new(
+        Gpu::try_for_display(Gpu::wgpu_instance(), wgpu::Features::empty())
+            .expect("display wgpu device"),
+    );
+    let gpu_a = Arc::clone(&gpu_b);
+
+    let tl_a = TerminalLoss::new(GpuLossPolicy::Terminal, None);
+    let tl_b = TerminalLoss::new(GpuLossPolicy::Terminal, None);
+    tl_a.attach_gpu(&gpu_a);
+    tl_b.attach_gpu(&gpu_b);
+
+    // Window A closes cleanly (release_gpu_when_closed) while Window B still shares the Gpu.
+    tl_a.prepare_clean_gpu_drop(Some(&gpu_a));
+    drop(gpu_a);
+    assert!(!tl_a.is_failed());
+    assert!(!tl_b.is_failed());
+
+    // Later unexpected destroy on the shared Gpu MUST still trip Window B's Terminal latch.
+    gpu_b.device.destroy();
+    rune_gpu::health::poll(&gpu_b.device, wgpu::PollType::Poll).ok();
+    assert!(!tl_a.is_failed(), "detached Window A must stay unlatched");
+    assert!(
+        tl_b.is_failed(),
+        "clean close of Window A must NOT suppress Destroyed detection on sibling Terminal Window B",
+    );
+}
+
+#[test]
+fn handover_failure_policy_latches_terminal_without_retry_or_cpu_fallback() {
+    use super::{HandoverFailureAction, decide_handover_failure};
+
+    assert_eq!(decide_handover_failure(GpuLossPolicy::Terminal, 1, 3), HandoverFailureAction::LatchTerminal);
+    assert_eq!(decide_handover_failure(GpuLossPolicy::Terminal, 3, 3), HandoverFailureAction::LatchTerminal);
+    assert_eq!(
+        decide_handover_failure(GpuLossPolicy::Recover, 1, 3),
+        HandoverFailureAction::RetryOrStayOnCpu { retry: true },
+    );
+    assert_eq!(
+        decide_handover_failure(GpuLossPolicy::Recover, 3, 3),
+        HandoverFailureAction::RetryOrStayOnCpu { retry: false },
+    );
+}
+
+#[test]
+fn effect_warm_does_not_spawn_once_terminal_latch_tripped() {
+    if !Gpu::test_adapter_available() {
+        return;
+    }
+    let gpu = Arc::new(
+        Gpu::try_for_display(Gpu::wgpu_instance(), wgpu::Features::empty())
+            .expect("display wgpu device"),
+    );
+    let latch = crate::render::loss_latch::GpuLossLatch::new();
+    gpu.attach_terminal_latch(Arc::clone(&latch));
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    renderer.attach_gpu(&gpu);
+    renderer.set_prewarm_effects(crate::PrewarmEffects::ALL);
+
+    assert!(latch.record_failure(GpuFailureKind::SurfaceFailed, "local surface failed"));
+    renderer.warm_effects(&gpu.device);
+    assert!(
+        !renderer.has_active_effect_warm_worker(),
+        "Renderer::warm_effects must not spawn once a Terminal latch on the GPU has tripped",
+    );
 }
 
 #[cfg(all(target_os = "linux", feature = "test-gpu-noop"))]
@@ -434,5 +543,44 @@ mod noop_tests {
             drop(gpu);
         }
         assert!(!latch.is_failed());
+    }
+
+    #[test]
+    fn noop_mixed_terminal_and_recover_isolation_and_sibling_clean_drop() {
+        // 1. Uncaptured validation error latches Terminal without marking shared healthy Gpu lost.
+        let (gpu, _surface) = noop_gpu();
+        let latch = GpuLossLatch::new();
+        gpu.attach_terminal_latch(Arc::clone(&latch));
+        drop(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("noop-mixed-validation"),
+            size: 4,
+            usage: wgpu::BufferUsages::empty(),
+            mapped_at_creation: false,
+        }));
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+        assert!(latch.is_failed());
+        assert!(!gpu.is_lost(), "healthy shared Gpu stays usable by Recover siblings");
+
+        // Real destroy marks gpu.is_lost() so Recover sees it.
+        gpu.device.destroy();
+        rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll).ok();
+        assert!(gpu.is_lost());
+
+        // 2. Sibling clean drop with strong_count > 1 preserves Destroyed detection on sibling.
+        let (gpu_raw, _s2) = noop_gpu();
+        let gpu_b = Arc::new(gpu_raw);
+        let gpu_a = Arc::clone(&gpu_b);
+        let latch_a = GpuLossLatch::new();
+        let latch_b = GpuLossLatch::new();
+        gpu_a.attach_terminal_latch(Arc::clone(&latch_a));
+        gpu_b.attach_terminal_latch(Arc::clone(&latch_b));
+        gpu_a.prepare_clean_drop_for(&latch_a, Arc::strong_count(&gpu_a) == 1);
+        drop(gpu_a);
+        assert!(!latch_a.is_failed());
+        assert!(!latch_b.is_failed());
+        gpu_b.device.destroy();
+        rune_gpu::health::poll(&gpu_b.device, wgpu::PollType::Poll).ok();
+        assert!(!latch_a.is_failed());
+        assert!(latch_b.is_failed(), "sibling Terminal must still catch Destroyed");
     }
 }

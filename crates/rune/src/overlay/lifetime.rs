@@ -611,21 +611,39 @@ impl OverlayCore {
         // The device goes to the next surface rather than with this one; one another
         // surface still draws with stays there, polled without waiting so finished frames
         // retire now and anything still in flight retires on a later turn.
+        let latch = self.gpu_loss_latch.clone();
         match (self.gpu.take(), self.renderer.take()) {
             (Some(gpu), Some(renderer)) => match Arc::try_unwrap(gpu) {
                 Ok(gpu) => {
                     self.retire.clear();
-                    crate::render::park_gpu(gpu, renderer);
+                    if let Some(latch) = &latch {
+                        // Never park a Terminal-latch-bound (or failed) GPU into the global warm
+                        // slot: 5-minute expiry would falsely trip the latch or hand it to another
+                        // owner. Detach cleanly and drop it instead.
+                        gpu.prepare_clean_drop_for(latch, true);
+                        drop((renderer, gpu));
+                    } else {
+                        crate::render::park_gpu(gpu, renderer);
+                    }
                 }
                 Err(gpu) => {
+                    if let Some(latch) = &latch {
+                        gpu.detach_terminal_latch(latch);
+                    }
                     drop(renderer);
                     self.retire.retire_now(&gpu, crate::time::now());
                 }
             },
             (Some(gpu), None) => {
                 if Arc::strong_count(&gpu) > 1 {
+                    if let Some(latch) = &latch {
+                        gpu.detach_terminal_latch(latch);
+                    }
                     self.retire.retire_now(&gpu, crate::time::now());
                 } else {
+                    if let Some(latch) = &latch {
+                        gpu.prepare_clean_drop_for(latch, true);
+                    }
                     self.retire.clear();
                 }
             }

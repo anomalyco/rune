@@ -48,6 +48,13 @@ pub(crate) struct GpuHost {
     callbacks: GpuCallbacks,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl GpuHost {
+    pub(crate) fn is_lost_or_terminal_failed(&self) -> bool {
+        self.callbacks.is_lost() || self.callbacks.any_terminal_failed()
+    }
+}
+
 impl GpuCallbacks {
     pub(crate) fn new(device: &wgpu::Device, draws_surfaces: bool) -> Self {
         let lost = Arc::new(AtomicBool::new(false));
@@ -79,6 +86,9 @@ impl GpuCallbacks {
 
     /// Attaches a `GpuLossPolicy::Terminal` latch to this shared callback state and installs both
     /// device-lost and uncaptured-error callbacks (even under `cfg(test)`) onto the same latch.
+    /// Uses multiset registration so multiple owners sharing one `Arc<GpuLossLatch>` (for example
+    /// an app's main window and owned overlay on a pooled `Gpu`) each detach their own hold
+    /// independently.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn attach_terminal_latch(
         &self,
@@ -87,18 +97,36 @@ impl GpuCallbacks {
     ) {
         {
             let mut list = self.terminal.lock().unwrap_or_else(|e| e.into_inner());
-            if !list.iter().any(|existing| Arc::ptr_eq(existing, &latch)) {
-                list.push(latch);
-            }
+            list.push(latch);
         }
         self.uncaptured_logged.store(true, Ordering::Release);
         install_lost_callback(device, &self.lost, Arc::clone(&self.terminal), Arc::clone(&self.clean_drop));
         install_uncaptured_terminal(
             device,
             Arc::clone(&self.printed),
-            Arc::clone(&self.lost),
             Arc::clone(&self.terminal),
         );
+    }
+
+    /// Removes one registration of `latch` from this GPU's terminal-latch list so a clean release
+    /// or park of one window/overlay never suppresses `DeviceLostReason::Destroyed` on sibling
+    /// `Terminal` owners still sharing the same `Gpu`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn detach_terminal_latch(&self, latch: &Arc<super::loss_latch::GpuLossLatch>) {
+        let mut list = self.terminal.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(pos) = list.iter().position(|existing| Arc::ptr_eq(existing, latch)) {
+            list.swap_remove(pos);
+        }
+    }
+
+    /// True if any `Terminal` latch still attached to this device has tripped.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn any_terminal_failed(&self) -> bool {
+        self.terminal
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .any(|l| l.is_failed())
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -167,7 +195,6 @@ impl GpuCallbacks {
                 install_uncaptured_terminal(
                     device,
                     Arc::clone(&self.printed),
-                    Arc::clone(&self.lost),
                     Arc::clone(&self.terminal),
                 );
             } else if self.uncaptured_logged.load(Ordering::Acquire) && should_log_uncaptured() {
@@ -302,9 +329,32 @@ impl Gpu {
         self.callbacks.mark_lost();
     }
 
+    /// Removes one registration of `latch` from this GPU's shared callbacks.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn detach_terminal_latch(&self, latch: &Arc<super::loss_latch::GpuLossLatch>) {
+        self.callbacks.detach_terminal_latch(latch);
+    }
+
+    /// Marks an upcoming drop of this healthy GPU as intentional ONLY when the caller holds the
+    /// final `Arc` (`is_last_arc == true`), after detaching `latch` from this GPU's callbacks.
+    /// When other owners still share this `Gpu`, removes only `latch` without setting the
+    /// device-wide `clean_drop` flag so sibling `Terminal` windows still catch `Destroyed`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn prepare_clean_drop_for(
+        &self,
+        latch: &Arc<super::loss_latch::GpuLossLatch>,
+        is_last_arc: bool,
+    ) {
+        self.callbacks.detach_terminal_latch(latch);
+        if is_last_arc && !latch.is_failed() {
+            self.callbacks.mark_clean_drop();
+            latch.detach();
+        }
+    }
+
     /// Marks an upcoming drop of this healthy GPU as intentional so drop-triggered `Destroyed`
     /// does not falsely trip a terminal latch.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(test, not(target_arch = "wasm32")))]
     pub(crate) fn mark_clean_drop(&self) {
         self.callbacks.mark_clean_drop();
     }
@@ -367,13 +417,17 @@ struct Printed {
 fn install_uncaptured_terminal(
     device: &wgpu::Device,
     printed: Arc<Mutex<Printed>>,
-    lost: Arc<AtomicBool>,
     terminal: TerminalLatches,
 ) {
     device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
         let message = error.to_string();
-        lost.store(true, Ordering::Release);
-        let latches = terminal.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        // Only real DeviceLost/DeviceRemoved sets `callbacks.lost = true`. On an uncaptured
+        // error, trip and detach only the attached `Terminal` latches so a sibling `Recover`
+        // window sharing a healthy `Gpu` keeps drawing uninterrupted.
+        let latches = {
+            let mut list = terminal.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut *list)
+        };
         for latch in latches {
             let _ = latch.record_failure(
                 super::loss_latch::GpuFailureKind::UncapturedError,

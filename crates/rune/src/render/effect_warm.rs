@@ -664,8 +664,16 @@ impl Renderer {
     ///
     /// Called only after the first frame finishes so startup latency is untouched; subsequent
     /// calls are an O(1) no-op until a `Classic -> Windfoil` shader swap resets the state machine.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn has_active_effect_warm_worker(&self) -> bool {
+        matches!(self.effect_warm.state, State::Warming { .. })
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn warm_effects(&mut self, device: &wgpu::Device) {
+        if self.gpu_host.as_ref().is_some_and(super::gpu_loss::GpuHost::is_lost_or_terminal_failed) {
+            return;
+        }
         let wanted = self.effect_warm.wanted;
         if wanted.is_empty() {
             return;
