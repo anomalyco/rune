@@ -11,6 +11,7 @@ impl RuntimeCore {
         s: f32,
         now: f64,
         pinh: &Inh,
+        pcold: &InhCold,
         r: [f32; 4],
         r_exact: [f32; 4],
         raw_edges: [f32; 4],
@@ -500,13 +501,13 @@ impl RuntimeCore {
                 // Under an offset (`El::offset`, a translation as CSS transforms are) it moves
                 // with its box, as it did before this: a glide toward a moving offset keeps
                 // the text on its card, and lands as a card that never moved draws.
-                exact_off: if pinh.snap.shifted || n.vis.offset != [0.0; 2] { [0.0; 2] } else {
-                    let o = snap_rest.map_or([0.0; 2], |p| p.exact_off(pinh.snap.steady.map(|v| v * s)));
-                    let c = pinh.snap.contain.map(|v| v * s);
+                exact_off: if pinh.snap_shifted() || n.vis.offset != [0.0; 2] { [0.0; 2] } else {
+                    let o = snap_rest.map_or([0.0; 2], |p| p.exact_off(pcold.snap_steady.map(|v| v * s)));
+                    let c = pcold.snap_contain.map(|v| v * s);
                     [o[0] + (c[0] + 0.5).floor() - c[0], o[1] + (c[1] + 0.5).floor() - c[1]]
                 },
                 raw_size: [raw_edges[2] - raw_edges[0], raw_edges[3] - raw_edges[1]],
-                contain: pinh.snap.contain.map(|v| v * s),
+                contain: pcold.snap_contain.map(|v| v * s),
                 radii,
                 sc,
                 o,
@@ -519,11 +520,11 @@ impl RuntimeCore {
                 loop_value,
                 cover,
                 scale_motion,
-                rest: pinh.still.0,
+                rest: pcold.still.0,
                 gliding,
                 caret,
-                shown: if !turned && !pinh.in_cache { [content_clip[1].max(vp[1] - m), content_clip[3].min(vp[3] + m)] } else { [content_clip[1], content_clip[3]] },
-                shown_x: if !turned && !pinh.in_cache { [content_clip[0].max(vp[0] - m), content_clip[2].min(vp[2] + m)] } else { [content_clip[0], content_clip[2]] },
+                shown: if !turned && !pinh.in_cache() { [content_clip[1].max(vp[1] - m), content_clip[3].min(vp[3] + m)] } else { [content_clip[1], content_clip[3]] },
+                shown_x: if !turned && !pinh.in_cache() { [content_clip[0].max(vp[0] - m), content_clip[2].min(vp[2] + m)] } else { [content_clip[0], content_clip[2]] },
             },
             sel_ranges,
             mark_ranges,

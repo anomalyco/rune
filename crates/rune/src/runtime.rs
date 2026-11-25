@@ -208,7 +208,8 @@ pub(crate) use turn::intersect;
 use turn::{Turn, compose_turn, open_turned_layer, screen_clip_of};
 pub(crate) use types::{AnimSource, Node};
 pub use types::{FrameStats, TitlebarAction};
-use types::{AxisScroll, GlideTo, Inh, NodeCold, RowLayout, ScaleMotion, ScrollState, Stack, WidthHold, XMotion};
+use paint::inh::{Inh, InhCold, ScaleMotion};
+use types::{AxisScroll, GlideTo, NodeCold, RowLayout, ScrollState, Stack, WidthHold, XMotion};
 pub(crate) use window_requests::HostState;
 
 #[cfg(test)]

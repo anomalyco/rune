@@ -42,6 +42,12 @@ impl LayoutIds {
         self.stamp(address_of(layout))
     }
 
+    /// Removes `layout`'s address stamp when a scratch layout is discarded immediately after
+    /// measurement so throwaway allocations never churn `by_address`.
+    pub(crate) fn forget(&mut self, layout: &Layout<Ink>) {
+        self.by_address.remove(&address_of(layout));
+    }
+
     /// The id stamped for the layout at `layout`'s address, if the table still keeps it.
     ///
     /// A lookup never stamps: a layout whose stamp went misses its copy until it is built or

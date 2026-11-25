@@ -468,3 +468,86 @@ fn exiting_child_in_tree_order_never_leaks_ghost_instances_after_unmount() {
         assert_eq!(a, b, "frame {f}: release-mode PaintKeep copied stale exiting child instances");
     }
 }
+
+#[test]
+fn inh_stays_compact_and_cold_handles_stay_consistent_across_keep_and_scroll() {
+    use crate::runtime::paint::inh::Inh;
+    assert!(
+        std::mem::size_of::<Inh>() <= 96,
+        "Inh must stay compact (<= 96 bytes, >4x smaller than pre-split ~440 B), got {}",
+        std::mem::size_of::<Inh>()
+    );
+
+    let view = |tick: &u32, _: &mut Cx<u32>| {
+        col().size(320.0, 200.0).child(
+            col().key("scroll").w_full().h(160.0).scroll(ScrollSpec { stick_bottom: false }).children(
+                (0..24).map(|i| {
+                    let card = col()
+                        .key(format!("card-{i}"))
+                        .w_full()
+                        .h(48.0)
+                        .clip_rounded(6.0)
+                        .hover_group()
+                        .hover(Color::WHITE.alpha(0.06))
+                        .child(text(format!("Item {i}")).key("label"));
+                    if i == 0 {
+                        card.child(text(format!("tick {tick}")).key("tick"))
+                    } else {
+                        card
+                    }
+                }),
+            ),
+        )
+    };
+
+    // Plain tree with no rounded clips/hover groups should push zero InhCold entries.
+    let mut plain = Runtime::new(
+        (),
+        |_: &(), _| col().size(200.0, 100.0).children((0..20).map(|i| el().key(format!("p{i}")).size(20.0, 20.0))),
+        (200.0, 100.0),
+        Env::new(true, 1.0),
+    );
+    plain.frame(0.0);
+    assert_eq!(plain.core().paint.inh_cold.len(), 0, "plain unstyled nodes should not allocate InhCold entries");
+
+    // 1. Strict PaintKeep verification across steady frames, sibling commits, and scroll shifts.
+    let mut rt = Runtime::new(0u32, view, (320.0, 200.0), Env::new(true, 1.0));
+    rt.set_paint_keep_strict(true);
+    rt.frame(0.0);
+    for step in 1..=6 {
+        rt.update(|t, _| *t = step);
+        rt.frame(1.0 / 60.0);
+        rt.wheel(160.0, 80.0, -40.0);
+        rt.frame(1.0 / 60.0);
+        assert_eq!(rt.paint_keep_mismatches(), 0, "step {step}: PaintKeep mismatch with InhCold");
+    }
+
+    // 2. Release-mode keep copy + scroll shift must match fresh paint byte-for-byte.
+    let mut rt_copy = Runtime::new(0u32, view, (320.0, 200.0), Env::new(true, 1.0));
+    let mut rt_fresh = Runtime::new(0u32, view, (320.0, 200.0), Env::new(true, 1.0));
+    rt_copy.core_mut().paint.keep.force_copy = true;
+    rt_copy.frame(0.0);
+    rt_fresh.frame(0.0);
+    for step in 1..=6 {
+        rt_copy.update(|t, _| *t = step);
+        rt_fresh.update(|t, _| *t = step);
+        rt_copy.frame(1.0 / 60.0);
+        rt_fresh.core_mut().paint.keep.off_once = true;
+        rt_fresh.frame(1.0 / 60.0);
+        assert_eq!(
+            bytemuck::cast_slice::<Instance, u8>(&rt_copy.core().instances),
+            bytemuck::cast_slice::<Instance, u8>(&rt_fresh.core().instances),
+            "step {step} commit: force_copy instances differ from fresh paint"
+        );
+        rt_copy.wheel(160.0, 80.0, -40.0);
+        rt_fresh.wheel(160.0, 80.0, -40.0);
+        rt_copy.frame(1.0 / 60.0);
+        rt_fresh.core_mut().paint.keep.off_once = true;
+        rt_fresh.frame(1.0 / 60.0);
+        assert_eq!(
+            bytemuck::cast_slice::<Instance, u8>(&rt_copy.core().instances),
+            bytemuck::cast_slice::<Instance, u8>(&rt_fresh.core().instances),
+            "step {step} scroll: shifted instances differ from fresh paint"
+        );
+    }
+}

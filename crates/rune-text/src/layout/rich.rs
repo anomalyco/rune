@@ -162,6 +162,37 @@ impl TextSystem {
         self.layout_keyed(None, text, spans, &[], 0.0, &[], &[], &[], style, scale, max_width, options.align, options.wrap_anywhere, false, Keep::Cached, options.direction)
     }
 
+    /// CSS min-content and max-content widths of `text` (with `spans`) in `style` at scale 1.0,
+    /// shaped once into an uncached `Keep::Owned` layout and broken at `Some(0.0)` and `None` so
+    /// zero throwaway layouts enter `self.layouts`.
+    pub(crate) fn content_widths(&mut self, text: &str, spans: &[Span], style: TextStyle) -> (f32, f32) {
+        let mut l = self.layout_keyed(
+            None,
+            text,
+            spans,
+            &[],
+            0.0,
+            &[],
+            &[],
+            &[],
+            style,
+            1.0,
+            Some(0.0),
+            Alignment::Start,
+            false,
+            false,
+            Keep::Owned,
+            parley::BaseDirection::Auto,
+        );
+        let min = l.width();
+        let layout = Rc::make_mut(&mut l);
+        layout.break_all_lines(None);
+        layout.align(Alignment::Start, parley::AlignmentOptions::default());
+        let max = layout.width();
+        self.layout_ids.forget(&l);
+        (min, max)
+    }
+
     /// [`layout_rich_with`](Self::layout_rich_with) reserving in-flow [`InlineBoxRun`] slots.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_inline_with(

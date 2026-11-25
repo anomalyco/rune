@@ -96,23 +96,26 @@ impl RuntimeCore {
         let k = inh.scale * s;
         let (w, o) = edge_ramp(edges.fade_style, edges.fade * k, f64::from(hidden), k);
         if w == 0.0 { return; }
-        let raw_top = inh.anchor_to[1] + (top + shift - inh.anchor[1]) * inh.scale;
-        let raw_bottom = inh.anchor_to[1] + (top + shift + height - inh.anchor[1]) * inh.scale;
-        let bottom = if !inh.snap.off && !n.vis_flags.no_pixel_snap() && inh.turn == 0 && p.transform.rotate == 0.0 && (inh.scale - 1.0).abs() <= 1e-5 {
+        let mut cold = *self.paint.inh_cold_of(&inh);
+        let raw_top = cold.anchor_to[1] + (top + shift - cold.anchor[1]) * inh.scale;
+        let raw_bottom = cold.anchor_to[1] + (top + shift + height - cold.anchor[1]) * inh.scale;
+        let bottom = if !inh.snap_off() && !n.vis_flags.no_pixel_snap() && inh.turn == 0 && p.transform.rotate == 0.0 && (inh.scale - 1.0).abs() <= 1e-5 {
             // Snap to the same device-pixel edge the stuck header box itself draws at (`pixel_snap::snap`),
             // applying the header's sticky shift so `rigid[1]` cancels the viewport scroll offset.
-            let mut snap = inh.snap;
-            snap.scroll(1, shift);
+            let mut rigid = inh.rigid;
+            rigid[1] += shift;
             let exact = [0.0, grid(raw_top, s) * s, 0.0, grid(raw_bottom, s) * s];
-            paint::pixel_snap::snap(exact, [0.0; 4], snap.rigid.map(|v| v * s), None, |_, c| c).0[3]
+            paint::pixel_snap::snap(exact, [0.0; 4], rigid.map(|v| v * s), None, |_, c| c).0[3]
         } else {
             raw_bottom * s
         };
+        cold.paint_fade[1] = w;
+        cold.paint_fade_origin[1] = bottom - o * paint::soft_edges::fade_extent(w);
+        let new_cold = self.paint.store_inh_cold(inh.cold, cold);
         let inh = &mut self.paint.inh_scratch[section];
         self.scroll.sticky_bands.push((section, inh.paint_clip[1]));
         inh.paint_clip[1] = inh.paint_clip[1].max(bottom);
-        inh.paint_fade[1] = w;
-        inh.paint_fade_origin[1] = bottom - o * paint::soft_edges::fade_extent(w);
+        inh.cold = new_cold;
     }
 }
 

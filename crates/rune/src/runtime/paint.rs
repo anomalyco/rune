@@ -11,6 +11,7 @@ pub(super) mod content;
 pub(super) mod exit_mask;
 pub(super) mod grid;
 pub(super) mod helpers;
+pub(super) mod inh;
 pub(super) mod keep;
 pub(super) mod pixel_snap;
 pub(super) mod quads;

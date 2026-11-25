@@ -198,14 +198,12 @@ impl RuntimeCore {
         node_parent: Option<usize>,
         p: &rune_motion::Presented,
         pinh: &mut Inh,
+        pcold_buf: &mut Option<InhCold>,
     ) -> f32 {
         // `El::stuck_fade`: how much of a stuck header's title shows.
         let mut kids_fade = 1.0f32;
         if let Some((edge, inset, tail)) = self.sticky_of(i) {
             let n = &self.tree.nodes[i];
-            // Worked out from this frame's offsets, which the viewport above already applied.
-            // Exclude this node's own `prop::OFFSET` (`live_offset`) so it translates from the
-            // stuck place rather than being clamped away by the sticky edge.
             let (frame, viewport) = self.sticky_frame_of(i, edge);
             let own_off = self.scene.get(n.id, prop::OFFSET).unwrap_or(rune_motion::Vec2::ZERO);
             let (top, left) = (p.rect.y - own_off.y + pinh.dy, p.rect.x - own_off.x + pinh.dx);
@@ -213,26 +211,24 @@ impl RuntimeCore {
             let shift = sticky::shift(edge, if tail { inset - h } else { inset }, [top, top + h, left, left + p.rect.w], frame);
             self.scroll.stuck[i] = shift;
             if edge == crate::el::StickyEdge::Top { kids_fade = self.stuck_fade(i, top + shift, pinh.dy); }
-            // A header whose section's rows fade under it keeps the clip they lost.
             if let Some(&(_, top)) = self.scroll.sticky_bands.iter().find(|b| Some(b.0) == node_parent) {
                 pinh.paint_clip[1] = top;
             }
             if edge == crate::el::StickyEdge::Left { pinh.dx += shift } else { pinh.dy += shift }
-            pinh.snap.scroll((edge != crate::el::StickyEdge::Left) as usize, shift);
-            // A sticky element stays crisp against the viewport edge it sticks to while rows
-            // scrolling under its fill fade out.
+            pinh.scroll_rigid((edge != crate::el::StickyEdge::Left) as usize, shift);
             let slot = match edge {
                 crate::el::StickyEdge::Left => 0,
                 crate::el::StickyEdge::Top => 1,
                 crate::el::StickyEdge::Bottom => 3,
             };
             if let Some(viewport) = viewport.filter(|&v| self.tree.nodes[v].scroll_edges.fade > 0.0) {
-                let (width, origin) = self.sticky_fade(n.parent.unwrap(), viewport, slot, false);
-                pinh.fade[slot] = width;
-                pinh.fade_origin[slot] = origin;
-                let (width, origin) = self.sticky_fade(n.parent.unwrap(), viewport, slot, true);
-                pinh.paint_fade[slot] = width;
-                pinh.paint_fade_origin[slot] = origin;
+                let (w0, o0) = self.sticky_fade(n.parent.unwrap(), viewport, slot, false);
+                let (w1, o1) = self.sticky_fade(n.parent.unwrap(), viewport, slot, true);
+                let pcold = pcold_buf.get_or_insert_with(|| *self.paint.inh_cold_of(pinh));
+                pcold.fade[slot] = w0;
+                pcold.fade_origin[slot] = o0;
+                pcold.paint_fade[slot] = w1;
+                pcold.paint_fade_origin[slot] = o1;
             }
         }
         kids_fade
@@ -252,59 +248,105 @@ impl crate::runtime::tracks::MotionState {
         node_parent: Option<usize>,
         lifted: bool,
         pinh: &mut Inh,
+        pcold: &mut InhCold,
     ) -> Option<FlightDest> {
-        let dxy = [pinh.dx - pinh.cover[0], pinh.dy - pinh.cover[1]];
+        let dxy = [pinh.dx - pcold.cover[0], pinh.dy - pcold.cover[1]];
         if lifted && self.launches().launched(node_id) {
             let [clip, fade, fade_origin] = if self.launches().flying(node_id) {
-                // A launch leaves where its clips don't reach.
-                [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
+                [crate::render::NO_CLIP, [0.0; 4], pcold.fade_origin]
             } else {
-                pinh.outer.unwrap_or_else(|| {
+                pcold.outer.unwrap_or_else(|| {
                     let clip = if pinh.turn != 0 { screen_clip_of(node_parent, &paint.inh_scratch, &paint.turn_scratch) } else { pinh.clip };
-                    [clip, pinh.fade, pinh.fade_origin]
+                    [clip, pcold.fade, pcold.fade_origin]
                 })
             };
-            // Launches map their start through the still zoom at take-off and keep it throughout.
-            let (scale, anchor, anchor_to) = pinh.still;
-            *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
-                paint_fade_origin: fade_origin, rounded: None, scale, anchor, anchor_to, blur: 0.0,
-                dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
-                scale_motion: ScaleMotion::Still, scale_target: scale, scale_tracked: false, in_cache: false, skip_paint: false, turn: 0, press_off_by: [0.0; 2], snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+            let (scale, anchor, anchor_to) = pcold.still;
+            pinh.opacity = 1.0;
+            pinh.paint_opacity = 1.0;
+            pinh.hit_opacity = 1.0;
+            pinh.clip = clip;
+            pinh.paint_clip = clip;
+            pinh.scale = scale;
+            pinh.dx = dxy[0];
+            pinh.dy = dxy[1];
+            pinh.scale_motion = ScaleMotion::Still;
+            pinh.set_scale_tracked(false);
+            pinh.set_in_cache(false);
+            pinh.set_skip_paint(false);
+            pinh.turn = 0;
+            pcold.fade = fade;
+            pcold.fade_origin = fade_origin;
+            pcold.paint_fade = fade;
+            pcold.paint_fade_origin = fade_origin;
+            pcold.rounded = None;
+            pcold.anchor = anchor;
+            pcold.anchor_to = anchor_to;
+            pcold.blur = 0.0;
+            pcold.cover = [0.0; 2];
+            pcold.outer = None;
+            pcold.scale_target = scale;
+            pcold.press_off_by = [0.0; 2];
+            pcold.snap_layer = 0;
+            pcold.snap_parent = None;
             let fix = self.launches_mut().offset_fix(scene, node_id, [pinh.dx, pinh.dy], commit_gen);
             (pinh.dx, pinh.dy) = (pinh.dx + fix[0], pinh.dy + fix[1]);
             return None;
         }
-        // Matched flights leave from the source's drawn screen rect (scale 1, no destination
-        // offsets) and blend straight into the destination's held zoom and live/scroll offsets.
-        let held = pinh.held;
+        let held = pcold.held;
         let travel = scene.get(node_id, prop::TRAVEL).map_or([1.0, 1.0], |v| [v.x, v.y]);
         let k_t = (0.5 * (travel[0] + travel[1])).clamp(0.0, 1.0);
         let scale = 1.0 + (held.0 - 1.0) * k_t;
         let anc_off = ancestor_scene_offset(nodes, scene, node_parent);
         if lifted {
-            // Keep the destination's clips (consumed ones included) and offsets. Drop its
-            // ancestors' opacity, scale and blur: an entering parent's fade or scale would
-            // otherwise hide the flight or jump it off the rect it was seen at. Inside another
-            // flight, also drop that flight's cover offset and clip.
             let [clip, fade, fade_origin] = if self.launches().flying(node_id) {
-                [crate::render::NO_CLIP, [0.0; 4], pinh.fade_origin]
+                [crate::render::NO_CLIP, [0.0; 4], pcold.fade_origin]
             } else {
-                pinh.outer.unwrap_or_else(|| {
+                pcold.outer.unwrap_or_else(|| {
                     let clip = if pinh.turn != 0 { screen_clip_of(node_parent, &paint.inh_scratch, &paint.turn_scratch) } else { pinh.clip };
-                    [clip, pinh.fade, pinh.fade_origin]
+                    [clip, pcold.fade, pcold.fade_origin]
                 })
             };
-            *pinh = Inh { opacity: 1.0, paint_opacity: 1.0, hit_opacity: 1.0, clip, fade, fade_origin, paint_clip: clip, paint_fade: fade,
-                paint_fade_origin: fade_origin, rounded: None, scale, anchor: [0.0; 2], anchor_to: [0.0; 2], blur: 0.0,
-                dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
-                scale_motion: ScaleMotion::Still, scale_target: scale, scale_tracked: false, in_cache: false, skip_paint: false, turn: 0, press_off_by: [0.0; 2], snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+            pinh.opacity = 1.0;
+            pinh.paint_opacity = 1.0;
+            pinh.hit_opacity = 1.0;
+            pinh.clip = clip;
+            pinh.paint_clip = clip;
+            pinh.scale = scale;
+            pinh.dx = dxy[0];
+            pinh.dy = dxy[1];
+            pinh.scale_motion = ScaleMotion::Still;
+            pinh.set_scale_tracked(false);
+            pinh.set_in_cache(false);
+            pinh.set_skip_paint(false);
+            pinh.turn = 0;
+            pcold.fade = fade;
+            pcold.fade_origin = fade_origin;
+            pcold.paint_fade = fade;
+            pcold.paint_fade_origin = fade_origin;
+            pcold.rounded = None;
+            pcold.anchor = [0.0; 2];
+            pcold.anchor_to = [0.0; 2];
+            pcold.blur = 0.0;
+            pcold.cover = [0.0; 2];
+            pcold.outer = None;
+            pcold.scale_target = scale;
+            pcold.press_off_by = [0.0; 2];
+            pcold.snap_layer = 0;
+            pcold.snap_parent = None;
         } else {
-            // In-place flight: stays inside its destination's open compositing layers, clips,
-            // rounded masks, opacity, blur and turns while blending from take-off to destination.
-            *pinh = Inh { scale, anchor: [0.0; 2], anchor_to: [0.0; 2],
-                dx: dxy[0], dy: dxy[1], cover: [0.0; 2], outer: None,
-                scale_motion: ScaleMotion::Still, scale_target: scale, scale_tracked: false,
-                press_off_by: [0.0; 2], snap: pixel_snap::Inherit { layer: 0, parent: None, ..pinh.snap }, ..*pinh };
+            pinh.scale = scale;
+            pinh.dx = dxy[0];
+            pinh.dy = dxy[1];
+            pinh.scale_motion = ScaleMotion::Still;
+            pinh.set_scale_tracked(false);
+            pcold.anchor = [0.0; 2];
+            pcold.anchor_to = [0.0; 2];
+            pcold.cover = [0.0; 2];
+            pcold.outer = None;
+            pcold.scale_target = scale;
+            pcold.press_off_by = [0.0; 2];
+            pcold.snap_layer = 0;
+            pcold.snap_parent = None;
         }
         Some(FlightDest { held, dxy, anc_off, travel })
     }

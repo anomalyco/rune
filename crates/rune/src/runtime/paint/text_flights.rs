@@ -55,7 +55,7 @@ impl state::PaintState {
             f.clip = if reduced { actual_clip } else { clip };
             f.source_alpha = source_alpha;
             f.target_alpha = target_alpha;
-            let final_fade = n.parent.and_then(|p| self.inh_scratch.get(p)).map_or([0.0; 4], |h| h.fade.map(|v| v / s));
+            let final_fade = n.parent.and_then(|p| self.inh_scratch.get(p)).map_or([0.0; 4], |h| self.inh_cold_of(h).fade.map(|v| v / s));
             let fade = [0.0; 4];
             if source_alpha > 0.0 {
                 let source_rect = if reduced { f.source } else { current };

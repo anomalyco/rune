@@ -606,7 +606,7 @@ impl RuntimeCore {
     /// still apply on top; its ancestors' positions and scales don't. Returns
     /// `(target, zoom, bounds)` so an exiting overlay can hold its last valid position if its
     /// anchor unmounts.
-    pub(super) fn anchored_inh(&self, i: usize, j: usize, a: &Anchor, p: &rune_motion::Presented, pinh: &mut Inh) -> ([f32; 4], f32, [f32; 4]) {
+    pub(super) fn anchored_inh(&self, i: usize, j: usize, a: &Anchor, p: &rune_motion::Presented, pinh: &mut Inh, pcold: &mut InhCold) -> ([f32; 4], f32, [f32; 4]) {
         let tracked = |m: &Node| if m.scale_track { self.scene.get(m.id, P_SCALE).unwrap_or(m.static_scale) } else { m.static_scale };
         let k = inherited_zoom(&self.tree.nodes, i, &tracked).max(MIN_ZOOM);
         let d = self.paint.drawn[j];
@@ -616,44 +616,39 @@ impl RuntimeCore {
         };
         let bounds = self.anchored_bounds_drawn(i);
         let motion = self.tree.nodes[j].parent.and_then(|jp| self.paint.inh_scratch.get(jp)).map_or(ScaleMotion::Still, |h| h.scale_motion);
-        self.anchored_inh_at(i, a, target, k, bounds, motion, p, pinh);
+        self.anchored_inh_at(i, a, target, k, bounds, motion, p, pinh, pcold);
         (target, k, bounds)
     }
 
     /// Places anchored overlay `i` against a resolved `(target, k, bounds)` rect, zoom and bounds.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn anchored_inh_at(&self, i: usize, a: &Anchor, target: [f32; 4], k: f32, bounds: [f32; 4], motion: ScaleMotion, p: &rune_motion::Presented, pinh: &mut Inh) {
+    pub(super) fn anchored_inh_at(&self, i: usize, a: &Anchor, target: [f32; 4], k: f32, bounds: [f32; 4], motion: ScaleMotion, p: &rune_motion::Presented, pinh: &mut Inh, pcold: &mut InhCold) {
         let zoomed;
         let a = if k == 1.0 { a } else { zoomed = zoomed_gap(a, k); &zoomed };
         let (w, h) = (p.rect.w * k, p.rect.h * k);
         let (ax, ay, _, _) = anchor_position(a, target, (w, h), bounds);
         let pivot = attach_point(a, target, [ax, ay, ax + w, ay + h]);
-        // Placed from the presented size and anchor, so drop the scene's own layout position
-        // (this node's `prop::FRAME` x/y and its ancestors' origins) while keeping this node's
-        // own `prop::OFFSET` and transition offset: with the frame position spring left in, an
-        // End-aligned box growing in width would start from its old x and its end edge would
-        // swing out and back. Zoomed about `pivot`, the box's top-left lands on (ax, ay).
         let world = self.scene.world(self.tree.nodes[i].id).unwrap_or(p.rect);
-        (pinh.snap.rigid, pinh.snap.steady, pinh.snap.layer) = ([0.0; 2], [0.0; 2], 0);
+        (pinh.rigid, pcold.snap_steady, pcold.snap_layer) = ([0.0; 2], [0.0; 2], 0);
         if k == 1.0 {
             (pinh.dx, pinh.dy) = (ax - world.x, ay - world.y);
-            (pinh.scale, pinh.anchor, pinh.anchor_to) = (1.0, [0.0; 2], [0.0; 2]);
-            pinh.still = (1.0, [0.0; 2], [0.0; 2]);
-            pinh.held = (1.0, [0.0; 2], [0.0; 2]);
-            pinh.held_moving = false;
-            pinh.scale_target = 1.0;
-            pinh.scale_tracked = false;
+            (pinh.scale, pcold.anchor, pcold.anchor_to) = (1.0, [0.0; 2], [0.0; 2]);
+            pcold.still = (1.0, [0.0; 2], [0.0; 2]);
+            pcold.held = (1.0, [0.0; 2], [0.0; 2]);
+            pinh.set_held_moving(false);
+            pcold.scale_target = 1.0;
+            pinh.set_scale_tracked(false);
             return;
         }
         pinh.dx = pivot[0] + (ax - pivot[0]) / k - world.x;
         pinh.dy = pivot[1] + (ay - pivot[1]) / k - world.y;
-        (pinh.scale, pinh.anchor, pinh.anchor_to) = (k, pivot, pivot);
+        (pinh.scale, pcold.anchor, pcold.anchor_to) = (k, pivot, pivot);
         // Text rasterizes as the anchor's does: crisp at the zoom once it rests.
         pinh.scale_motion = pinh.scale_motion.max(motion);
-        pinh.still = if pinh.scale_motion == ScaleMotion::Still { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
-        pinh.held = if pinh.scale_motion != ScaleMotion::Moving { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
-        pinh.held_moving = pinh.scale_motion == ScaleMotion::Moving;
-        pinh.scale_target = k;
-        pinh.scale_tracked = false;
+        pcold.still = if pinh.scale_motion == ScaleMotion::Still { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
+        pcold.held = if pinh.scale_motion != ScaleMotion::Moving { (k, pivot, pivot) } else { (1.0, [0.0; 2], [0.0; 2]) };
+        pinh.set_held_moving(pinh.scale_motion == ScaleMotion::Moving);
+        pcold.scale_target = k;
+        pinh.set_scale_tracked(false);
     }
 }
