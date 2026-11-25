@@ -78,7 +78,7 @@ impl RuntimeCore {
         if let Some(m) = n.a11y.more.as_deref() {
             (&m.description, &m.value, &m.set, &m.shortcut, m.invalid, m.read_only, m.sorted, m.busy,
                 m.row_count, m.column_count, m.row_index, m.column_index).hash(&mut h);
-            (m.multiselectable, m.required, m.has_popup, m.orientation, m.auto_complete).hash(&mut h);
+            (m.multiselectable, m.required, m.has_popup, m.orientation, m.auto_complete, m.list_start).hash(&mut h);
             [m.labelled_by.as_deref(), m.described_by.as_deref()].map(|k| k.and_then(|k| self.a11y_keyed(i, k)).map(|j| self.a11y_words(j))).hash(&mut h);
             if let Some(r) = m.range { [r.value, r.min, r.max, r.step.unwrap_or(f64::NAN)].map(f64::to_bits).hash(&mut h); }
             self.a11y_active_descendant(i).map(|j| self.tree.nodes[j].id.0).hash(&mut h);
@@ -207,7 +207,7 @@ impl RuntimeCore {
         let mut sub = vec![0u64; self.tree.nodes.len()];
         for j in (0..self.tree.nodes.len()).rev() {
             let n = &self.tree.nodes[j];
-            let own = if n.a11y.hidden || n.vis.opacity <= 0.01 || n.is_secure() { 0 }
+            let own = if n.a11y.hidden || n.role == "list-marker" || n.vis.opacity <= 0.01 || n.is_secure() { 0 }
                 else if let Some(l) = n.label.as_deref() { hash_str(l) }
                 else { n.text.as_deref().filter(|_| n.input.is_none()).map_or(0, |t| hash_str(t.source_text())) };
             sub[j] = mix(sub[j], own);
@@ -592,7 +592,7 @@ impl RuntimeCore {
             let n = &self.tree.nodes[j];
             if skip.is_some_and(|s| inside.contains(&s)) { j += 1; continue; }
             skip = None;
-            if n.a11y.hidden || n.vis.opacity <= 0.01 || n.is_secure() {
+            if n.a11y.hidden || n.role == "list-marker" || n.vis.opacity <= 0.01 || n.is_secure() {
                 skip = Some(j);
             } else if let Some(l) = n.label.as_deref().filter(|l| !l.trim().is_empty()) {
                 push_words(&mut out, l);

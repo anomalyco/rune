@@ -1,0 +1,1 @@
+- Accessibility: added `El::list_start(start)` and the `"list-marker"` role (`accesskit::Role::ListMarker`) so Markdown ordered lists mirror as `<ol>` (with `start` when `start != 1`) in the web accessibility mirror and HTML export, and expose `accesskit::ListStyle::Numeric` plus numbered `ListMarker` children natively.

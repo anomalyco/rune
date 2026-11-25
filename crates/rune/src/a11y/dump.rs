@@ -58,6 +58,16 @@ impl Tree<'_> {
         if let Some(l) = n.level() { v["level"] = (l + 1).into(); }
         if let Some(p) = n.position_in_set() { v["position"] = (p + 1).into(); }
         if let Some(s) = n.size_of_set() { v["setSize"] = s.into(); }
+        if let Some(ls) = n.list_style() {
+            v["listStyle"] = match ls {
+                accesskit::ListStyle::Circle => "circle",
+                accesskit::ListStyle::Disc => "disc",
+                accesskit::ListStyle::Image => "image",
+                accesskit::ListStyle::Numeric => "numeric",
+                accesskit::ListStyle::Square => "square",
+                accesskit::ListStyle::Other => "other",
+            }.into();
+        }
         if let Some(r) = n.row_count() { v["rowCount"] = r.into(); }
         if let Some(c) = n.column_count() { v["columnCount"] = c.into(); }
         if let Some(r) = n.row_index() { v["rowIndex"] = (r + 1).into(); }

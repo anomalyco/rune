@@ -135,6 +135,7 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("listbox", Role::ListBox).aria_container(),
     RoleSpec::role("dialog", Role::Dialog).aria_container(),
     RoleSpec::role("listitem", Role::ListItem).container("li"),
+    RoleSpec::role("list-marker", Role::ListMarker),
     RoleSpec::role("heading", Role::Heading),
     RoleSpec::role("tab", Role::Tab).warn_nameless().web_control().pointer(),
     RoleSpec::role("region", Role::Region).container("section"),

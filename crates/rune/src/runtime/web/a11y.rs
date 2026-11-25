@@ -129,6 +129,8 @@ pub(crate) struct MirrorAria {
     pub column_count: Option<usize>,
     pub row_index: Option<usize>,
     pub column_index: Option<usize>,
+    /// Starting ordinal for an ordered `<ol>` when `start != 1` (HTML `start` attribute).
+    pub list_start: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -552,7 +554,7 @@ impl RuntimeCore {
                 continue;
             }
             if n.inert || self.subtree_exiting(i) || n.vis.opacity <= 0.01 || n.a11y.hidden
-                || matches!(n.role, "none" | "presentation")
+                || matches!(n.role, "none" | "presentation" | "list-marker")
                 || crate::runtime::commit::inline::is_elided_inline_child(&self.tree.nodes, i)
             {
                 i = end;
@@ -656,8 +658,9 @@ impl RuntimeCore {
             let labelled_group = n.role == "group" && self.mirror_name(i).is_some();
             let live_group = n.role == "group" && n.text.is_none() && n.handlers.on_press.is_none()
                 && raw_href.is_none() && live.is_some();
+            let ordered_list = n.role == "list" && n.a11y.more.as_deref().is_some_and(|m| m.list_start.is_some());
             let container_tag = (n.text.is_none() || (live_role.is_none() && text_aria.is_none()))
-                .then(|| roles::container_tag(n.role))
+                .then(|| if ordered_list { Some("ol") } else { roles::container_tag(n.role) })
                 .flatten()
                 .or((labelled_group || live_group).then_some("div"));
             let app_scroll = self.host.page.is_none() && n.scroll.is_some();
@@ -966,6 +969,9 @@ impl RuntimeCore {
             aria.column_count = m.column_count;
             aria.row_index = m.row_index;
             aria.column_index = m.column_index;
+            if n.role == "list" {
+                aria.list_start = m.list_start.filter(|&s| s != 1);
+            }
         }
         if let Some(inp) = n.input.as_deref() {
             aria.multiline = !inp.single_line && !secure;

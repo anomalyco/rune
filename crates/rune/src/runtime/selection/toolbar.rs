@@ -68,7 +68,10 @@ impl RuntimeCore {
                 continue;
             }
             let marker = li + 1;
-            if marker >= nodes.len() || nodes[marker].parent != Some(li) || !nodes[marker].a11y.hidden {
+            if marker >= nodes.len()
+                || nodes[marker].parent != Some(li)
+                || !(nodes[marker].a11y.hidden || nodes[marker].role == "list-marker")
+            {
                 continue;
             }
             if !self.allowed(marker)

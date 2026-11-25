@@ -37,7 +37,11 @@ impl RuntimeCore {
             let Some(spec) = self.tree.nodes[i].text.as_ref() else { continue };
             let mut block = self.block_of(i);
             // A list's markers are the list's own: `<ol>` and `<ul>` draw them.
-            if self.tree.nodes[i].a11y.hidden && matches!(block, Block::Item { .. }) { continue; }
+            if (self.tree.nodes[i].a11y.hidden || self.tree.nodes[i].role == "list-marker")
+                && matches!(block, Block::Item { .. })
+            {
+                continue;
+            }
             // A partial slice inside one list item copies as a plain fragment rather than a
             // list item, keeping HTML in agreement with plain text and `Markdown::copy_source`.
             if ranges.len() == 1
@@ -101,8 +105,9 @@ impl RuntimeCore {
                 "heading" => return Block::Heading(j, self.tree.nodes[j].a11y.level.unwrap_or(2).clamp(1, 6) as u8),
                 "listitem" => {
                     let list = std::iter::successors(self.tree.nodes[j].parent, |&p| self.tree.nodes[p].parent).find(|&p| role(p) == "list").unwrap_or(j);
-                    // A list whose first item's marker is a number is ordered.
-                    let ordered = self.tree.nodes.get(j + 1).and_then(|n| n.text.as_ref()).is_some_and(|t| t.content.trim_end_matches('.').chars().all(|c| c.is_ascii_digit()) && !t.content.is_empty());
+                    // Ordered when the list sets `list_start`, or its first item's marker is a number.
+                    let ordered = self.tree.nodes[list].a11y.more.as_deref().is_some_and(|m| m.list_start.is_some())
+                        || self.tree.nodes.get(j + 1).and_then(|n| n.text.as_ref()).is_some_and(|t| t.content.trim_end_matches('.').chars().all(|c| c.is_ascii_digit()) && !t.content.is_empty());
                     return Block::Item { list, item: j, ordered };
                 }
                 "cell" | "columnheader" | "rowheader" => {
