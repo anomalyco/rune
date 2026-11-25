@@ -128,3 +128,35 @@ fn native_blur_after_hide_does_not_double_report_focus_loss() {
     assert_eq!(overlay.rt.state.callback, [true, false, true]);
     assert_eq!(overlay.rt.state.element, [true, false, true]);
 }
+
+#[test]
+fn a_focused_field_in_a_hiding_overlay_fires_on_focus_lost_once() {
+    #[derive(Default)]
+    struct S { edit: crate::TextEdit, saved: Vec<String> }
+    fn field_view(s: &S, _: &mut Cx<S>) -> El {
+        crate::col().size(200.0, 60.0).child(
+            crate::text_input(&s.edit, crate::TextStyle::new(14.0, 400.0))
+                .key("field")
+                .size(180.0, 28.0)
+                .on_edit(|s: &mut S| &mut s.edit)
+                .on_focus_lost(|s: &mut S, _| s.saved.push(s.edit.text.clone())),
+        )
+    }
+    let app = AppSpec::new("palette", (200.0, 60.0), S::default, field_view);
+    let spec = OverlaySpec::new("palette", app.size, field_view)
+        .options(OverlayOptions { keys: KeyPolicy::OnDemand, ..Default::default() });
+    let (mut overlay, _) = Overlay::new(spec, S::default(), &app);
+    overlay.rt.frame(0.0);
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.window_focus(true);
+    overlay.rt.update(|s, _| s.edit.focused = true);
+    overlay.rt.frame(0.0);
+    overlay.rt.key(crate::KeyEvent { key: crate::Key::Text("query".into()), mods: crate::Mods::default() });
+    overlay.rt.frame(0.0);
+
+    overlay.hide();
+    // Native blur arriving after hide must not fire a second blur.
+    overlay.rt.window_focus(false);
+    overlay.hidden_input();
+    assert_eq!(overlay.rt.state.saved, ["query"]);
+}

@@ -59,7 +59,7 @@ impl RuntimeCore {
     /// Losing focus is also `keys_lost`.
     pub(crate) fn window_focus(&mut self, app: &mut dyn AppDriver, focused: bool) {
         // Every focus gain, even one a hide without blur left unreported.
-        if focused { self.kbd.keys_lost = false; }
+        if focused { self.kbd.keys_lost = false; self.kbd.focus_lost_sent = false; }
         if self.host.window_focused != Some(focused) {
             // Refocused, the pointer where it was hovers again; blurred, it waits for a move.
             if focused && self.host.window_focused == Some(false) { self.pointer.hover_paused = false; }
