@@ -990,7 +990,7 @@ impl TextSystem {
                 (_, Some(o)) => {
                     fresh += b - a;
                     let mut l = o.layout.clone();
-                    line_break::rebreak(Rc::make_mut(&mut l), blocks, para_indent, style.size, scale, max_width, align);
+                    line_break::rebreak(Rc::make_mut(&mut l), blocks, para_indent, style.size, scale, max_width, spec.wrap_anywhere, align);
                     // Re-broken, in place or as a copy: the lines it draws now are new.
                     self.layout_ids.build(&l);
                     l
@@ -1015,7 +1015,7 @@ impl TextSystem {
             let want_frac = if layout.len() > 1 { (y - y.floor()) as f32 } else { 0.0 };
             let have_frac = match (kept, again) { (Some(o), None) => o.y_frac, _ => 0.0 };
             if (want_frac - have_frac).abs() > 1e-5 {
-                line_break::rebreak_at_y(Rc::make_mut(&mut layout), blocks, para_indent, style.size, scale, max_width, align, f64::from(want_frac));
+                line_break::rebreak_at_y(Rc::make_mut(&mut layout), blocks, para_indent, style.size, scale, max_width, spec.wrap_anywhere, align, f64::from(want_frac));
                 self.layout_ids.build(&layout);
                 (height, widths) = (if a == b { layout.height().max(line) } else { layout.height() }, [layout.width(), layout.full_width()]);
             }
