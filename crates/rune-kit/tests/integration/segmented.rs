@@ -256,3 +256,41 @@ fn segmented_control_handles_empty_out_of_bounds_disabled_and_huge_labels() {
     assert_eq!(rt.state.disabled_hits, 0);
     assert_eq!(rt.state.picked, 0);
 }
+
+fn grooved(selected: &usize, _: &mut Cx<usize>) -> El {
+    let mut k = Kit::neutral(true);
+    k.metrics.segmented = Some(rune_kit::SegmentedMetrics { height: 24.0, inset: 2.0, gap: 2.0, ..rune_kit::SegmentedMetrics::kit(&k) });
+    let labels = ["Edit", "Color", "Export"];
+    rune::col()
+        .child(rune::row().child(SegmentedControl::new(&labels, Some(*selected)).fit().build(&k).key("fit")))
+        .child(rune::row().child(SegmentedControl::new(&labels, Some(*selected)).width(Some(300.0)).build(&k).key("points")))
+}
+
+#[test]
+fn an_inset_leaves_a_groove_around_the_pill_and_a_gap_between_segments() {
+    let mut rt = Runtime::new(0usize, grooved, (600.0, 200.0), Env::new(true, 1.0));
+    let by_path = |rt: &Runtime<usize>, suffix: &str| {
+        let e = rt.elements().into_iter().find(|e| e.path.ends_with(suffix)).unwrap_or_else(|| panic!("no {suffix}"));
+        (e.rect, e.radius)
+    };
+    for sel in [0usize, 2] {
+        rt.state = sel;
+        rt.invalidate();
+        for _ in 0..120 { rt.frame(1.0 / 60.0); }
+        for ctl in ["fit", "points"] {
+            let (root, _) = by_path(&rt, &format!("/{ctl}"));
+            let (pill, pill_r) = by_path(&rt, &format!("/{ctl}/indicator"));
+            let (s0, _) = by_path(&rt, &format!("/{ctl}/segment0"));
+            let (s1, _) = by_path(&rt, &format!("/{ctl}/segment1"));
+            let (s2, _) = by_path(&rt, &format!("/{ctl}/segment2"));
+            let target = [s0, s1, s2][sel];
+            assert_eq!(root[3], 24.0, "{ctl}");
+            assert_eq!((pill[3], pill_r), (20.0, 4.0), "{ctl}: 20pt pill with radius.md - inset corners");
+            assert!((pill[1] - root[1] - 2.0).abs() < 0.01, "{ctl}: 2pt groove above the pill");
+            assert!((s0[0] - root[0] - 2.0).abs() < 0.01, "{ctl}: 2pt groove before the first segment");
+            assert!((root[0] + root[2] - s2[0] - s2[2] - 2.0).abs() < 0.01, "{ctl}: 2pt groove after the last");
+            assert!((s1[0] - s0[0] - s0[2] - 2.0).abs() < 0.01, "{ctl}: 2pt gap between segments");
+            assert!((0..4).all(|i| (pill[i] - target[i]).abs() < 0.01), "{ctl}: pill {pill:?} sits on segment {target:?}");
+        }
+    }
+}

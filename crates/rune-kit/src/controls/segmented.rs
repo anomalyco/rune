@@ -281,6 +281,9 @@ impl SegmentedControl {
         let c = &k.c;
         let m = k.segmented_metrics();
         let (height, radius, padding_x) = (m.height, m.radius, m.padding_x);
+        // Segments and the pill sit inside the groove `m.inset` leaves around them.
+        let (inset, gap) = (m.inset, m.gap);
+        let (inner_h, inner_r) = (height - 2.0 * inset, (radius - inset).max(0.0));
         let n = self.labels.len().max(1);
         let font = TextStyle { line_height: 13.0, ..k.ty.ui };
         let mut root = row()
@@ -290,6 +293,8 @@ impl SegmentedControl {
             .center_y()
             .radius(radius)
             .fill(c.layer_01)
+            .padding(inset)
+            .gap(gap)
             .box_shadow(rune::Shadow {
                 spread: 0.5,
                 color: c.border_base,
@@ -308,8 +313,8 @@ impl SegmentedControl {
         };
         let indicator = || {
             el().key("indicator")
-                .h(height)
-                .radius(radius)
+                .h(inner_h)
+                .radius(inner_r)
                 .fill(c.bg_base)
                 .box_shadow(rune::Shadow { spread: 0.5, color: c.border_strong, ..Default::default() })
                 .token_motion(k.motion.control)
@@ -317,8 +322,9 @@ impl SegmentedControl {
         };
         match (self.selected, self.width) {
             (Some(sel), Width::Points(w)) => {
-                let seg = w / n as f32;
-                root = root.child(indicator().w(seg).absolute(seg * sel as f32, 0.0));
+                let seg = ((w - 2.0 * inset - gap * (n - 1) as f32) / n as f32).max(0.0);
+                let x = inset + (seg + gap) * sel as f32;
+                root = root.child(indicator().w(seg).absolute(x, inset));
             }
             // The indicator shares the selected segment's cell and slides between cells.
             (Some(sel), Width::Fit) => root = root.child(indicator().grid_cell(sel)),
@@ -350,11 +356,11 @@ impl SegmentedControl {
                 .position_in_set(i + 1, n)
                 .grow(1.0)
                 .shrink()
-                .h(height)
+                .h(inner_h)
                 .px(padding_x)
                 .gap(6.0)
                 .center()
-                .radius(radius);
+                .radius(inner_r);
             if let Some(name) = a11y_name {
                 seg = seg.label(name);
             }

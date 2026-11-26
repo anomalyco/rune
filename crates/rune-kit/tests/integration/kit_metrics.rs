@@ -247,7 +247,7 @@ fn frame_signature<S: 'static>(rt: &Runtime<S>) -> (u64, u64, usize, usize) {
 
 fn explicit_default_kit(base: &Kit) -> Kit {
     let mut k = base.clone();
-    k.metrics.segmented = Some(SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0 });
+    k.metrics.segmented = Some(SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0, inset: 0.0, gap: 0.0 });
     k.metrics.disclosure_header_height = Some(32.0);
     k.metrics.progress = Some(ProgressMetrics { height: 8.0, border_width: 1.0 });
     k.metrics.divider_thickness = Some(1.0);
@@ -312,7 +312,7 @@ fn default_metrics_match_explicit_kit_defaults_bit_for_bit() {
         ("opencode-light", rune_theme_opencode::kit(false).clone()),
         ("opencode-dark", rune_theme_opencode::kit(true).clone()),
     ] {
-        assert_eq!(SegmentedMetrics::kit(&base), SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0 });
+        assert_eq!(SegmentedMetrics::kit(&base), SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0, inset: 0.0, gap: 0.0 });
         assert_eq!(ProgressMetrics::kit(&base), ProgressMetrics { height: 8.0, border_width: 1.0 });
         assert_eq!(KeybindMetrics::kit(&base), KeybindMetrics { height: 14.0, padding_x: 4.0, radius: 2.0 });
         assert_eq!(StandardSwitchMetrics::kit(&base), StandardSwitchMetrics { track_width: 28.0, track_height: 16.0, thumb: 14.0, inset: 1.0 });
@@ -411,7 +411,7 @@ fn dense_and_roomy_metrics_drive_geometry_hit_areas_focus_rings_and_centering() 
     fn kit_for(roomy: bool) -> Kit {
         let mut k = Kit::neutral(true);
         if roomy {
-            k.metrics.segmented = Some(SegmentedMetrics { height: 44.0, padding_x: 20.0, radius: 12.0 });
+            k.metrics.segmented = Some(SegmentedMetrics { height: 44.0, padding_x: 20.0, radius: 12.0, inset: 0.0, gap: 0.0 });
             k.metrics.disclosure_header_height = Some(44.0);
             let mut p = ProgressMetrics::kit(&k);
             p.height = 14.0;
@@ -422,7 +422,7 @@ fn dense_and_roomy_metrics_drive_geometry_hit_areas_focus_rings_and_centering() 
             k.metrics.text_area_min_height = Some(120.0);
             k.metrics.standard_switch = Some(StandardSwitchMetrics { track_width: 36.0, track_height: 20.0, thumb: 16.0, inset: 2.0 });
         } else {
-            k.metrics.segmented = Some(SegmentedMetrics { height: 22.0, padding_x: 6.0, radius: 3.0 });
+            k.metrics.segmented = Some(SegmentedMetrics { height: 22.0, padding_x: 6.0, radius: 3.0, inset: 0.0, gap: 0.0 });
             k.metrics.disclosure_header_height = Some(24.0);
             let mut p = ProgressMetrics::kit(&k);
             p.height = 4.0;
@@ -829,7 +829,7 @@ fn negative_and_non_finite_metrics_clamp_to_zero_without_panicking() {
     fn view(s: &Bad, _: &mut Cx<Bad>) -> El {
         let v = s.val;
         let mut k = Kit::neutral(true);
-        k.metrics.segmented = Some(SegmentedMetrics { height: v, padding_x: v, radius: v });
+        k.metrics.segmented = Some(SegmentedMetrics { height: v, padding_x: v, radius: v, inset: v, gap: v });
         k.metrics.disclosure_header_height = Some(v);
         k.metrics.progress = Some(ProgressMetrics { height: v, border_width: v });
         k.metrics.divider_thickness = Some(v);

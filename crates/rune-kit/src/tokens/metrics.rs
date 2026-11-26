@@ -189,14 +189,18 @@ impl CheckboxColors {
     }
 }
 
-/// A [`SegmentedControl`](crate::SegmentedControl)'s height, horizontal segment padding and
-/// corner radius.
+/// A [`SegmentedControl`](crate::SegmentedControl)'s height, horizontal segment padding, corner
+/// radius, and the groove left around the selected pill and between segments.
 ///
 /// ```
 /// # use rune_kit::{Kit, SegmentedControl, SegmentedMetrics};
 /// let mut k = Kit::neutral(true);
 /// k.metrics.segmented = Some(SegmentedMetrics { height: 24.0, padding_x: 8.0, ..SegmentedMetrics::kit(&k) });
 /// let _ = SegmentedControl::new(&["List", "Grid"], Some(0)).build(&k);
+///
+/// // A 20-point pill with 2 points of groove around it and between segments.
+/// k.metrics.segmented = Some(SegmentedMetrics { inset: 2.0, gap: 2.0, ..SegmentedMetrics::kit(&k) });
+/// let _ = SegmentedControl::new(&["Edit", "Color", "Export"], Some(0)).build(&k);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SegmentedMetrics {
@@ -204,12 +208,18 @@ pub struct SegmentedMetrics {
     /// Padding left and right of each segment's content.
     pub padding_x: f32,
     pub radius: f32,
+    /// Groove between the control's edge and its segments, so the selected pill sits inside it
+    /// (`height - 2 * inset` tall, with `radius - inset` corners). At most half the height.
+    pub inset: f32,
+    /// Space between neighbouring segments.
+    pub gap: f32,
 }
 
 impl SegmentedMetrics {
-    /// The built-in box: 28 points tall, 12 points of side padding and `k.radius.md` corners.
+    /// The built-in box: 28 points tall, 12 points of side padding, `k.radius.md` corners, and a
+    /// pill that fills its segment (no inset, no gap).
     pub fn kit(k: &Kit) -> SegmentedMetrics {
-        SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: k.radius.md }
+        SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: k.radius.md, inset: 0.0, gap: 0.0 }
     }
 }
 
@@ -542,7 +552,14 @@ impl Kit {
 
     pub(crate) fn segmented_metrics(&self) -> SegmentedMetrics {
         let m = self.metrics.segmented.unwrap_or_else(|| SegmentedMetrics::kit(self));
-        SegmentedMetrics { height: non_neg(m.height), padding_x: non_neg(m.padding_x), radius: non_neg(m.radius) }
+        let height = non_neg(m.height);
+        SegmentedMetrics {
+            height,
+            padding_x: non_neg(m.padding_x),
+            radius: non_neg(m.radius),
+            inset: non_neg(m.inset).min(height / 2.0),
+            gap: non_neg(m.gap),
+        }
     }
     pub(crate) fn disclosure_header_height(&self) -> f32 {
         non_neg(self.metrics.disclosure_header_height.unwrap_or(32.0))
