@@ -95,8 +95,8 @@ struct State {
     text_input_manager: Option<ZwpTextInputManagerV3>,
     text_input: Option<ZwpTextInputV3>,
     text_input_state: text_input_machine::State,
-    /// The serial of the user's last key, pointer button, or touch press on the surface, which
-    /// an activation token request presents as proof of interaction.
+    /// The serial of the user's last key, pointer button, touch press, or keyboard focus enter on
+    /// the surface, which an activation token request presents as proof of interaction.
     input_serial: activation_machine::InputSerial,
 }
 
@@ -310,10 +310,12 @@ impl Dispatch<WlKeyboard, ()> for State {
     fn event(state: &mut Self, _: &WlKeyboard, event: wl_keyboard::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         use xkbcommon::xkb;
         match event {
-            wl_keyboard::Event::Enter { surface, .. } => {
+            wl_keyboard::Event::Enter { serial, surface, .. } => {
                 state.step_repeat(repeat::Event::Stop);
                 state.reset_compose();
-                let focus_event = if state.surface.as_ref() == Some(&surface) {
+                let ours = state.surface.as_ref() == Some(&surface);
+                state.input_serial.step(activation_machine::InputEvent::KeyboardEnter { serial, ours });
+                let focus_event = if ours {
                     keyboard::FocusEvent::EnterOurs
                 } else {
                     keyboard::FocusEvent::EnterOther

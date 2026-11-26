@@ -1,9 +1,10 @@
 //! Wayland `xdg_activation_v1` serial tracking and request sequencing for layer-shell
 //! overlays, kept cross-platform so its transitions and protocol order tests run on every host.
 
-/// An input event on a layer surface that may supply the `xdg_activation_token_v1.set_serial`
-/// serial. Per `xdg-activation-v1`, compositors validate tokens against the seat and serial of
-/// the triggering pointer button, key press, or touch down on the requesting surface.
+/// An input or focus event on a layer surface that may supply the
+/// `xdg_activation_token_v1.set_serial` serial. Per `xdg-activation-v1`, compositors validate
+/// tokens against the seat and serial of the triggering pointer button, key press, touch down, or
+/// keyboard focus enter on the requesting surface.
 #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InputEvent {
@@ -11,6 +12,8 @@ pub(crate) enum InputEvent {
     PointerButton { serial: u32, inside: bool, pressed: bool },
     /// `wl_keyboard.key` (`focused`: our surface holds keyboard focus; `pressed`: press, not release).
     Key { serial: u32, focused: bool, pressed: bool },
+    /// `wl_keyboard.enter` (`ours`: keyboard focus entered our surface).
+    KeyboardEnter { serial: u32, ours: bool },
     /// `wl_touch.down` (`ours`: the touch landed on our surface).
     TouchDown { serial: u32, ours: bool },
     /// The surface closed or tore down: discard any earlier serial.
@@ -32,10 +35,12 @@ impl InputSerial {
         match event {
             InputEvent::PointerButton { serial, inside: true, pressed: true }
             | InputEvent::Key { serial, focused: true, pressed: true }
+            | InputEvent::KeyboardEnter { serial, ours: true }
             | InputEvent::TouchDown { serial, ours: true } => *self = Self::Recorded(serial),
             InputEvent::Reset => *self = Self::None,
             InputEvent::PointerButton { .. }
             | InputEvent::Key { .. }
+            | InputEvent::KeyboardEnter { .. }
             | InputEvent::TouchDown { .. } => {}
         }
     }
