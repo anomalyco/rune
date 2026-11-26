@@ -8,7 +8,8 @@
 //! and answers while the app's window is closed. On macOS [`Tray::new`] must run on the main
 //! thread (and works while every window is hidden, including in an accessory app), while
 //! [`Tray::set_menu`], [`Tray::set_tooltip`], [`Tray::set_icon`], [`Tray::set_icon_name`],
-//! [`Tray::set_title`], [`Tray::rect`] and dropping [`Tray`] may happen from any thread.
+//! [`Tray::set_title`], [`Tray::set_highlighted`], [`Tray::rect`] and dropping [`Tray`] may
+//! happen from any thread.
 //!
 //! Linux shows the icon only where a tray host runs (KDE, waybar, most bars; GNOME needs an
 //! extension). Without one, [`Tray::new`] still succeeds and the icon appears once a host
@@ -275,6 +276,32 @@ impl Tray {
         self.native.set_title(title.into());
         #[cfg(not(any(all(target_os = "linux", feature = "dbus"), target_os = "macos", target_os = "windows")))]
         let _ = title;
+    }
+
+    /// Holds the tray item's pressed highlight, for apps that open their own popover window
+    /// from [`TrayEvent::Activate`] and want the item to look active until it closes.
+    ///
+    /// - macOS: calls `NSStatusBarButton::highlight` on the main thread (dispatching to the main
+    ///   queue off it) and sets it again after [`Tray::set_icon`], [`Tray::set_title`] and the
+    ///   context menu, which would otherwise clear it. Called on the main thread, it also applies
+    ///   the latest value once more on the next main-queue turn, so a call from the
+    ///   [`TrayEvent::Activate`] callback outlasts the button's own unhighlight when its click
+    ///   tracking ends.
+    /// - Windows, Linux and other platforms: no-op.
+    ///
+    /// ```no_run
+    /// use rune::{Tray, TrayIcon, TraySpec};
+    ///
+    /// let icon = TrayIcon::rgba(32, 32, vec![255; 32 * 32 * 4]).template(true);
+    /// let tray = Tray::new(TraySpec::new("dev.rune.app", "App", icon), |_| {}).unwrap();
+    /// tray.set_highlighted(true); // popover opened
+    /// tray.set_highlighted(false); // popover closed
+    /// ```
+    pub fn set_highlighted(&self, highlighted: bool) {
+        #[cfg(target_os = "macos")]
+        self.native.set_highlighted(highlighted);
+        #[cfg(not(target_os = "macos"))]
+        let _ = highlighted;
     }
 
     /// Returns the tray icon's screen bounding rectangle as `[x, y, width, height]` in physical

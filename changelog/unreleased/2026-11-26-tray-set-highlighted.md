@@ -1,0 +1,1 @@
+- `Tray::set_highlighted(bool)` holds the macOS status item's pressed highlight while an app's own popover window is open, and keeps it across `set_icon`, `set_title` and the context menu; no-op on other platforms.
