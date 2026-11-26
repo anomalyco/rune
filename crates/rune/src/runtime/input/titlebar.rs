@@ -659,7 +659,7 @@ impl RuntimeCore {
     }
 
     /// Number of committed view/layout passes so far.
-    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    #[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
     #[inline]
     pub(crate) fn commit_generation(&self) -> u64 {
         self.commit.commits
