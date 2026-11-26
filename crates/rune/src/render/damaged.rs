@@ -16,8 +16,21 @@ use super::*;
 /// Rectangles a frame redraws at most.
 pub(crate) const MAX_RECTS: usize = 4;
 
+/// How `draw_armed` updated the kept frame.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeptDraw {
+    /// The kept frame was already current, so only the armed rectangles were redrawn and the
+    /// swap chain may present only those rectangles (`Present1` dirty rects).
+    Partial,
+    /// The kept frame was behind (first frame, or the previous frame drew whole — e.g. with a
+    /// native surface, blur, effect or turned layer): the whole frame was drawn into the kept
+    /// frame to bring it current, so the swap chain must present the whole window on this frame.
+    Whole,
+}
+
 /// What the armed rectangles came to.
-pub(super) type Drawn = Result<(), &'static str>;
+pub(crate) type Drawn = Result<KeptDraw, &'static str>;
 
 /// The window's last frame, and whether it's current.
 pub(super) struct Retained {
@@ -192,7 +205,7 @@ impl Renderer {
     /// Whether this frame can redraw only part of its target: nothing draws there but its own
     /// instances (no turned or blurred layer, effect slot, backdrop blur, native surface or GPU
     /// spring moves pixels the instances don't say).
-    pub(super) fn redraws_in_place(&self) -> Drawn {
+    pub(super) fn redraws_in_place(&self) -> Result<(), &'static str> {
         if !self.effects.is_empty() { return Err("effect"); }
         if self.has_backdrop_blur() { return Err("backdrop blur"); }
         if self.springs.is_some() { return Err("springs"); }
@@ -232,7 +245,6 @@ impl Renderer {
             d.drawn = Some(Err("size"));
             return false;
         }
-        #[cfg(target_os = "windows")]
         let partial = kept.current;
         if kept.current {
             // No layer reaches the rectangles: their targets aren't drawn from, nor made again.
@@ -286,7 +298,7 @@ impl Renderer {
         if looped && partial && let Some(c) = d.pixel.as_mut() { self.pixel_check_encode(encoder, c, &kept.texture, clear, &rects); }
         let whole = wgpu::Extent3d { width: dst.width(), height: dst.height(), depth_or_array_layers: 1 };
         encoder.copy_texture_to_texture(kept.texture.as_image_copy(), dst.as_image_copy(), whole);
-        d.drawn = Some(Ok(()));
+        d.drawn = Some(Ok(if partial { KeptDraw::Partial } else { KeptDraw::Whole }));
         true
     }
 }

@@ -96,17 +96,87 @@ fn transparent_window_with_active_backdrop_does_not_ghost_previous_text_under_da
     assert_eq!(opaque_rt.clear_color()[3], 1.0);
     let mut opaque_renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let (_, op1) = render_with_damage(&gpu, &mut opaque_renderer, &mut opaque_rt, size, true);
-    assert!(op1.is_ok(), "opaque clear must keep partial damage");
+    assert_eq!(op1, Ok(KeptDraw::Whole), "first kept frame draws whole and must present whole");
     opaque_rt.update(|s, tx| {
         *s = "Mica".to_owned();
         tx.instant();
     });
     opaque_rt.frame(0.0);
     let (opaque_frame2, op2) = render_with_damage(&gpu, &mut opaque_renderer, &mut opaque_rt, size, true);
-    assert!(op2.is_ok(), "opaque partial damage must succeed on frame 2");
+    assert_eq!(op2, Ok(KeptDraw::Partial), "opaque partial damage must succeed on frame 2");
     let mut opaque_fresh_rt = Runtime::new("Mica".to_owned(), view, (size.0 as f32, size.1 as f32), Env::new(true, 1.0));
     opaque_fresh_rt.frame(0.0);
     let mut opaque_fresh_renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let (opaque_fresh, _) = render_with_damage(&gpu, &mut opaque_fresh_renderer, &mut opaque_fresh_rt, size, false);
     assert_eq!(opaque_frame2, opaque_fresh, "opaque partial damage must match fresh render");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn surface_to_empty_surface_catchup_requests_whole_present() {
+    use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface, SurfaceFit};
+
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let size = (120u32, 80u32);
+    fn view(surface: &NativeSurface, _: &mut Cx<NativeSurface>) -> El {
+        el().w_full()
+            .h_full()
+            .fill(Color { r: 0.1, g: 0.1, b: 0.1, a: 1.0 })
+            .child(el().w_full().h_full().native_surface(surface, SurfaceFit::Fill))
+    }
+
+    let loaded = NativeSurface::new();
+    let mut bgra = Vec::with_capacity((size.0 * size.1 * 4) as usize);
+    for _ in 0..(size.0 * size.1) {
+        bgra.extend_from_slice(&[0, 0, 255, 255]); // opaque red in BGRA
+    }
+    loaded
+        .push_bytes(ByteFrame { width: size.0, height: size.1, format: Format::Bgra, color: ColorInfo::default(), planes: [bgra, vec![]] }, 1)
+        .unwrap();
+    let empty = NativeSurface::new();
+
+    let mut rt = Runtime::new(loaded, view, (size.0 as f32, size.1 as f32), Env::new(true, 1.0));
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+
+    let mut step = |rt: &mut Runtime<NativeSurface>, rect: [u32; 4]| -> Drawn {
+        rt.frame(0.0);
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("damaged-surface-test-target"),
+            size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: OFFSCREEN_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let clear = rt.clear_color();
+        renderer.set_fade_stops(rt.fade_stops());
+        renderer.prepare_ui(&gpu.device, &gpu.queue, &mut rt.text.atlas, &rt.instances, size);
+        renderer.prepare_surfaces(&gpu.device, &gpu.queue, &rt.surfaces, size);
+        renderer.arm_damage(&gpu.device, &gpu.queue, &[rect], clear, size, OFFSCREEN_FORMAT);
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        if !(renderer.armed() && renderer.draw_armed(&mut encoder, &texture)) {
+            renderer.draw_timed(&mut encoder, &view, clear, None);
+        }
+        let drawn = renderer.damage_drawn();
+        renderer.submit(&gpu.queue, encoder);
+        drawn
+    };
+
+    // Frame 1: active NativeSurface draws whole and leaves the kept frame behind.
+    assert_eq!(step(&mut rt, [0, 0, 16, 16]), Err("surface"));
+
+    // Frame 2: switching to a new tab whose NativeSurface has no frame yet catches up the kept
+    // frame by drawing whole; Windows must present the whole window, not just the 16x16 rect.
+    rt.update(|s, tx| {
+        *s = empty;
+        tx.instant();
+    });
+    assert_eq!(step(&mut rt, [0, 0, 16, 16]), Ok(KeptDraw::Whole));
+
+    // Frame 3: kept frame is now current and synced with the last whole present, so partial
+    // redraw and partial present resume.
+    assert_eq!(step(&mut rt, [0, 0, 16, 16]), Ok(KeptDraw::Partial));
 }

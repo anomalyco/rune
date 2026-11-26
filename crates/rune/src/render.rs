@@ -81,7 +81,7 @@ mod webgl_shader_tests;
 use pass::{ActivePass, Backdrop};
 
 #[cfg(target_os = "windows")]
-pub(crate) use damaged::MAX_RECTS;
+pub(crate) use damaged::{KeptDraw, MAX_RECTS};
 pub(crate) use shader_check::ShaderError;
 pub(crate) use surface_setup::SurfaceSetupError;
 #[cfg(not(target_arch = "wasm32"))]
