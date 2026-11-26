@@ -37,6 +37,22 @@ use crate::{
 // this has to match Naga's HLSL backend, and also needs to be null-terminated
 const NAGA_LOCATION_SEMANTIC: &[u8] = c"LOC".to_bytes();
 
+// Serialize raw D3D12 Create*PipelineState FFI calls process-wide.
+//
+// Microsoft's dxilconv.dll (observed in 101.9.2602.1360, commit a9caaf7fb) converts DXBC
+// bytecode to DXIL inside D3D12Core.dll during pipeline creation when the driver cache is
+// cold. Its process-wide ManagedStatic<llvm::PassRegistry> has no lock around PassInfoMap
+// (an LLVM DenseMap) in PassRegistry::getPassInfo (+0xB28B4) or PassRegistry::registerPass
+// (+0xB292C), and its five initialize*Pass functions use bare InterlockedCompareExchange
+// guards that return immediately without waiting for the winning thread to finish
+// registerPass. When two threads enter CreatePipelineState with DXBC concurrently (for
+// example Rune's beside, start_pinned, effect_warm, start_lcd, or rune-video-pipeline),
+// Thread A's DenseMap::find can observe an empty map (it == nullptr) while Thread B
+// allocates PassInfoMap.Buckets before Thread A computes end(), causing a null+0x8 read
+// (0xC0000005 at dxilconv.dll+0xB28E5). Guarding only the raw FFI calls covers every
+// caller while keeping non-FFI pipeline setup parallel.
+static DX12_PIPELINE_STATE_LOCK: Mutex<()> = Mutex::new(());
+
 impl super::Device {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -2224,7 +2240,11 @@ impl crate::Device for super::Device {
                 let mut stream = stream_desc.to_stream();
                 unsafe {
                     profiling::scope!("ID3D12Device2::CreatePipelineState");
-                    stream.create_pipeline_state(&device).map_err(|err| {
+                    let result = {
+                        let _guard = DX12_PIPELINE_STATE_LOCK.lock();
+                        stream.create_pipeline_state(&device)
+                    };
+                    result.map_err(|err| {
                         crate::PipelineError::Linkage(shader_stages, err.to_string())
                     })?
                 }
@@ -2232,7 +2252,11 @@ impl crate::Device for super::Device {
                 unsafe {
                     // Safety: `stream_desc` entirely outlives the `desc`.
                     let desc = stream_desc.to_graphics_pipeline_descriptor();
-                    self.raw.CreateGraphicsPipelineState(&desc).map_err(|err| {
+                    let result = {
+                        let _guard = DX12_PIPELINE_STATE_LOCK.lock();
+                        self.raw.CreateGraphicsPipelineState(&desc)
+                    };
+                    result.map_err(|err| {
                         crate::PipelineError::Linkage(shader_stages, err.to_string())
                     })?
                 }
@@ -2269,6 +2293,7 @@ impl crate::Device for super::Device {
 
         let pair = {
             profiling::scope!("ID3D12Device::CreateComputePipelineState");
+            let _guard = DX12_PIPELINE_STATE_LOCK.lock();
             unsafe {
                 self.raw.CreateComputePipelineState(
                     &Direct3D12::D3D12_COMPUTE_PIPELINE_STATE_DESC {
