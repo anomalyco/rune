@@ -317,7 +317,7 @@ fn an_idle_window_with_no_drag_draws_nothing() {
     assert_eq!(offset(&rt), 0.0);
 }
 
-fn edge(speed: f32, room: f64, offset: f64) -> Option<Edge> { Some(Edge { scroll: NodeId(7), speed, room, offset, max: 1000.0 }) }
+fn edge(speed: f32, room: f64, offset: f64) -> Option<Edge> { Some(Edge { scroll: View::y(NodeId(7)), speed, room, offset, max: 1000.0 }) }
 
 #[test]
 fn a_stale_step_does_nothing() {
@@ -337,7 +337,7 @@ fn a_stale_step_does_nothing() {
     assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 1.15, edge: e }), Effects::none(), "a frame before it's due");
     assert_eq!(state, held);
     let effects = step(&mut seq, &mut state, Event::Due { attempt, now: 1.25, edge: e });
-    assert_eq!(effects, Effects::two(Effect::Scroll { scroll: NodeId(7), by: 30.0 }, Effect::WakeAt(1.25)), "600 points a second for 50 ms");
+    assert_eq!(effects, Effects::two(Effect::Scroll { scroll: View::y(NodeId(7)), by: 30.0 }, Effect::WakeAt(1.25)), "600 points a second for 50 ms");
     assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 1.25, edge: e }), Effects::none(), "a step is taken once");
     assert_eq!(step(&mut seq, &mut state, Event::Laid), Effects::one(Effect::Extend), "laid out, the selection follows");
     assert_eq!(step(&mut seq, &mut state, Event::Laid), Effects::none());
@@ -350,15 +350,15 @@ fn a_step_stops_at_the_room_left_and_a_late_frame_doesnt_jump() {
     let _ = step(&mut seq, &mut state, Event::Moved { now: 0.0, edge: up(100.0, 100.0) });
     let State::Running { attempt, .. } = state else { panic!() };
     let effects = step(&mut seq, &mut state, Event::Due { attempt, now: 1.0, edge: up(100.0, 100.0) });
-    assert_eq!(effects, Effects::two(Effect::Scroll { scroll: NodeId(7), by: -30.0 }, Effect::WakeAt(1.0)), "a second late steps 50 ms");
+    assert_eq!(effects, Effects::two(Effect::Scroll { scroll: View::y(NodeId(7)), by: -30.0 }, Effect::WakeAt(1.0)), "a second late steps 50 ms");
     let _ = step(&mut seq, &mut state, Event::Laid);
     let State::Running { attempt, .. } = state else { panic!() };
     let effects = step(&mut seq, &mut state, Event::Due { attempt, now: 1.05, edge: up(10.0, 10.0) });
-    assert_eq!(effects, Effects::one(Effect::Scroll { scroll: NodeId(7), by: -10.0 }), "the last step asks for no other");
+    assert_eq!(effects, Effects::one(Effect::Scroll { scroll: View::y(NodeId(7)), by: -10.0 }), "the last step asks for no other");
     assert_eq!(step(&mut seq, &mut state, Event::Laid), Effects::one(Effect::Extend), "the selection follows it in the same frame");
-    assert_eq!(state, State::AtEnd { scroll: NodeId(7), max: 1000.0 }, "at the end, waiting on the extent");
+    assert_eq!(state, State::AtEnd { scroll: View::y(NodeId(7)), max: 1000.0 }, "at the end, waiting on the extent");
     let _ = step(&mut seq, &mut state, Event::Moved { now: 2.0, edge: up(0.0, 0.0) });
-    assert_eq!(state, State::AtEnd { scroll: NodeId(7), max: 1000.0 }, "nothing left to scroll");
+    assert_eq!(state, State::AtEnd { scroll: View::y(NodeId(7)), max: 1000.0 }, "nothing left to scroll");
     assert!(step(&mut seq, &mut state, Event::Laid).is_empty());
 }
 
@@ -377,7 +377,7 @@ fn a_step_that_moved_nothing_ends_it() {
     let _ = step(&mut seq, &mut state, Event::Laid);
     let State::Running { attempt, .. } = state else { panic!() };
     assert_eq!(step(&mut seq, &mut state, Event::Due { attempt, now: 0.02, edge: up(500.0) }), Effects::none(), "pulled back");
-    assert_eq!(state, State::AtEnd { scroll: NodeId(7), max: 1000.0 }, "until the content changes");
+    assert_eq!(state, State::AtEnd { scroll: View::y(NodeId(7)), max: 1000.0 }, "until the content changes");
 }
 
 /// Frames until the edge scroll stops stepping.
@@ -502,7 +502,7 @@ enum Letter { Moved(At), Due(At), Stale, Laid, Extent(At), Stop }
 enum At { Inside, Room, Near, End, Grown, Shrunk, Other }
 
 fn at(at: At) -> Option<Edge> {
-    let e = |scroll, room, offset, max| Some(Edge { scroll: NodeId(scroll), speed: 600.0, room, offset, max });
+    let e = |scroll, room, offset, max| Some(Edge { scroll: View::y(NodeId(scroll)), speed: 600.0, room, offset, max });
     match at {
         At::Inside => None,
         At::Room => e(7, 100.0, 0.0, 100.0),
@@ -519,12 +519,12 @@ fn at(at: At) -> Option<Edge> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Dev {
     Idle,
-    Running { attempt: u32, scroll: NodeId, last: f64, from: Option<f64>, due: f64 },
-    Laying { next: Option<u32>, scroll: NodeId, last: f64, from: Option<f64>,
+    Running { attempt: u32, scroll: View, last: f64, from: Option<f64>, due: f64 },
+    Laying { next: Option<u32>, scroll: View, last: f64, from: Option<f64>,
         /// differs from dev: the extent the step saw.
         max: f64 },
     /// differs from dev: dev went idle wherever this rests.
-    AtEnd { scroll: NodeId, max: f64 },
+    AtEnd { scroll: View, max: f64 },
 }
 
 struct Reference { seq: u32, state: Dev }
@@ -535,7 +535,7 @@ impl Reference {
     fn moves(e: &Edge) -> bool { e.speed != 0.0 && e.room > 0.0 }
 
     /// differs from dev: dev went idle; at an edge of `scroll` (any, when `None`) it rests.
-    fn rest(edge: Option<Edge>, scroll: Option<NodeId>) -> Dev {
+    fn rest(edge: Option<Edge>, scroll: Option<View>) -> Dev {
         match edge {
             Some(e) if e.speed != 0.0 && (scroll.is_none() || scroll == Some(e.scroll)) => Dev::AtEnd { scroll: e.scroll, max: e.max },
             _ => Dev::Idle,

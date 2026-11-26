@@ -11,7 +11,10 @@
 //! waits without a wake for the list's extent to change (rows arriving at its end): the frame that
 //! lays that out looks at the edge again, and goes on if there's room. Each step lets go of a
 //! list stuck to its bottom before `step_scroll` can pull it back, so it leaves the bottom however small its steps are; once it
-//! stops within half a point of the bottom, the list sticks there again.
+//! stops within half a point of the bottom, the list sticks there again. A viewport that scrolls
+//! sideways (an unwrapped code block's `scroll_x`) steps the same way while the pointer is at or
+//! past its left or right edge; a pointer past both a vertical and a horizontal edge steps the
+//! vertical one.
 use crate::machine::{Attempt, Effects, Seq};
 
 use super::*;
@@ -30,6 +33,19 @@ const AT: f32 = 1.0;
 /// The longest a step covers, so a late frame doesn't jump.
 const MAX_STEP: f64 = 0.05;
 
+/// A viewport and the axis a step scrolls it on: a code block's `scroll_x` steps sideways inside a
+/// list that steps down.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::runtime) struct View {
+    pub(in crate::runtime) id: NodeId,
+    pub(in crate::runtime) horizontal: bool,
+}
+
+impl View {
+    #[cfg(test)]
+    pub(in crate::runtime) const fn y(id: NodeId) -> Self { Self { id, horizontal: false } }
+}
+
 /// The edge scroll: stepping one viewport or not, and the attempts its steps carry.
 #[derive(Debug, Default)]
 pub(in crate::runtime) struct EdgeScroll {
@@ -43,22 +59,23 @@ pub(in crate::runtime) enum State {
     Idle,
     /// Scrolling viewport `scroll`: it last stepped at `last` (clock seconds), from offset `from`
     /// when that step moved it, and steps again at `due` as attempt `attempt`.
-    Running { attempt: Attempt, scroll: NodeId, last: f64, from: Option<f64>, due: f64 },
+    Running { attempt: Attempt, scroll: View, last: f64, from: Option<f64>, due: f64 },
     /// This frame stepped `scroll` at `last`, whose extent was `max`; once it's laid out the
     /// selection follows, and the next step is attempt `next`, or none when this one reached the
     /// end.
-    Laying { next: Option<Attempt>, scroll: NodeId, last: f64, from: Option<f64>, max: f64 },
+    Laying { next: Option<Attempt>, scroll: View, last: f64, from: Option<f64>, max: f64 },
     /// Held at an edge of `scroll` with nothing left to scroll that way, or whose last step
     /// moved nothing, when its extent was `max`: it asks for no frame, and a layout that changes
     /// that extent looks at the edge again.
-    AtEnd { scroll: NodeId, max: f64 },
+    AtEnd { scroll: View, max: f64 },
 }
 
 /// The held pointer at or past an edge of the viewport the selection is in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::runtime) struct Edge {
-    pub(in crate::runtime) scroll: NodeId,
-    /// Points a second, positive scrolling down.
+    pub(in crate::runtime) scroll: View,
+    /// Points a second, positive raising the offset (down, or deeper into a horizontal
+    /// viewport's content).
     pub(in crate::runtime) speed: f32,
     /// How much further it can scroll that way, in points.
     pub(in crate::runtime) room: f64,
@@ -74,7 +91,7 @@ impl Edge {
 
 /// Where a pointer at `edge` rests when it doesn't scroll `scroll` (any viewport when `None`):
 /// at its end, waiting on its extent, or idle when it isn't at that viewport's edge.
-fn rest(edge: Option<Edge>, scroll: Option<NodeId>) -> State {
+fn rest(edge: Option<Edge>, scroll: Option<View>) -> State {
     match edge {
         Some(e) if e.speed != 0.0 && scroll.is_none_or(|s| s == e.scroll) => State::AtEnd { scroll: e.scroll, max: e.max },
         _ => State::Idle,
@@ -99,7 +116,7 @@ pub(in crate::runtime) enum Event {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::runtime) enum Effect {
     /// Scroll `scroll` by `by` points.
-    Scroll { scroll: NodeId, by: f64 },
+    Scroll { scroll: View, by: f64 },
     /// Extend the selection to the pointer.
     Extend,
     /// Wake at this clock time, when the next step is due.
@@ -264,11 +281,11 @@ impl RuntimeCore {
         self.live(path).filter(|&i| self.tree.nodes[i].input.as_ref().is_some_and(|inp| !inp.single_line))
     }
 
-    /// The held pointer moved to height `y`: step while it's at or past an edge the selection's
+    /// The held pointer moved to (`x`, `y`): step while it's at or past an edge the selection's
     /// viewport can still scroll past, and stop when it isn't.
-    pub(in crate::runtime) fn edge_scroll_moved(&mut self, y: f32) {
+    pub(in crate::runtime) fn edge_scroll_moved(&mut self, x: f32, y: f32) {
         if !self.dragging_selection() && self.edit.selectable.edge.state == State::Idle { return; }
-        let edge = self.edge_at(y);
+        let edge = self.edge_at(x, y);
         let now = self.now_clock();
         let effects = self.edit.selectable.edge.step(Event::Moved { now, edge });
         self.carry_edge_scroll(effects);
@@ -277,7 +294,7 @@ impl RuntimeCore {
     /// Takes the step due by this frame.
     pub(in crate::runtime) fn fire_edge_scroll(&mut self) {
         let Some(attempt) = self.edit.selectable.edge.attempt() else { return };
-        let edge = self.pointer.pos.and_then(|(_, y)| self.edge_at(y));
+        let edge = self.pointer.pos.and_then(|(x, y)| self.edge_at(x, y));
         let effects = self.edit.selectable.edge.step(Event::Due { attempt, now: self.clock, edge });
         self.carry_edge_scroll(effects);
     }
@@ -297,8 +314,10 @@ impl RuntimeCore {
     /// selection follows the pointer over what came in.
     fn edge_scroll_extent(&mut self, app: &dyn ViewDriver) -> EdgeLaid {
         let State::AtEnd { scroll, max } = self.edit.selectable.edge.state else { return EdgeLaid::default() };
-        if self.scroll.scrolls.get(&scroll).is_some_and(|st| st.max == max) { return EdgeLaid::default(); }
-        let edge = self.pointer.pos.and_then(|(_, y)| self.edge_at(y));
+        if self.scroll.scrolls.get(&scroll.id).is_some_and(|st| if scroll.horizontal { st.x.max } else { st.max } == max) {
+            return EdgeLaid::default();
+        }
+        let edge = self.pointer.pos.and_then(|(x, y)| self.edge_at(x, y));
         self.edge_step_heard(app, Event::Extent { now: self.clock, edge })
     }
 
@@ -339,44 +358,76 @@ impl RuntimeCore {
         queued
     }
 
-    /// Scrolls viewport `id` by `by` points, as the wheel does, except that a list stuck to its
-    /// bottom lets go of it even when the step leaves it within the half point the wheel pins in.
-    fn edge_scroll_by(&mut self, id: NodeId, by: f64) {
+    /// Scrolls `view` by `by` points, as the wheel does, except that a list stuck to its bottom
+    /// lets go of it even when the step leaves it within the half point the wheel pins in.
+    fn edge_scroll_by(&mut self, view: View, by: f64) {
+        let id = view.id;
         let Some(st) = self.scroll.scrolls.get_mut(&id) else { return };
-        let before = st.offset;
-        st.offset = (st.offset + by).clamp(0.0, st.max);
-        st.moved();
-        st.land(false);
-        if st.offset != before {
+        let moved = if view.horizontal {
+            let before = st.x.offset;
+            st.x.offset = (st.x.offset + by).clamp(0.0, st.x.max);
+            st.x.motion = XMotion::Rest;
+            st.moved();
+            st.x.offset != before
+        } else {
+            let before = st.offset;
+            st.offset = (st.offset + by).clamp(0.0, st.max);
+            st.moved();
+            st.land(false);
+            st.offset != before
+        };
+        if moved {
             st.note_source(crate::ScrollSource::Direct);
             self.pointer.scroll_cancels_press(&self.tree.nodes, id);
         }
     }
 
-    /// Where height `y` is against the edges of the vertical viewport around the selection a
-    /// held press is extending: at or past its top or bottom (as drawn, inside its clips and the
-    /// window), how fast that scrolls, and how far it still can.
-    fn edge_at(&self, y: f32) -> Option<Edge> {
+    /// Where (`x`, `y`) is against the edges of the viewports around the selection a held press
+    /// is extending: the innermost vertical one's top or bottom first, then the innermost
+    /// horizontal one's left or right (as drawn, inside its clips and the window), how fast that
+    /// scrolls, and how far it still can.
+    fn edge_at(&self, x: f32, y: f32) -> Option<Edge> {
         if !self.dragging_selection() || !self.pointer.pressing() { return None; }
         let holder = self.drag_holder()?;
-        let i = std::iter::successors(Some(holder), |&p| self.tree.nodes[p].parent)
-            .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.has(false))?;
+        let innermost = |horizontal: bool| {
+            std::iter::successors(Some(holder), |&p| self.tree.nodes[p].parent)
+                .find(|&p| self.tree.nodes[p].scroll.is_some() && self.tree.nodes[p].scroll_axes.has(horizontal))
+        };
+        innermost(false).and_then(|i| self.edge_of(i, false, y)).or_else(|| innermost(true).and_then(|i| self.edge_of(i, true, x)))
+    }
+
+    /// Where `at` (a height, or across when `horizontal`) is against viewport `i`'s two edges on
+    /// that axis, or `None` inside them.
+    fn edge_of(&self, i: usize, horizontal: bool, at: f32) -> Option<Edge> {
         let id = self.tree.nodes[i].id;
         let st = self.scroll.scrolls.get(&id)?;
         let clip = self.screen_clip_of_parent(self.tree.nodes[i].parent).map(|v| v / self.env.scale);
-        let [_, top, _, bottom] = intersect(intersect(self.drawn_edges(i), clip), [0.0, 0.0, self.viewport.0, self.viewport.1]);
-        if bottom - top <= 2.0 * AT { return None; }
-        let (speed, room) = if y >= bottom - AT {
-            (speed(y - (bottom - AT)), st.max - st.offset)
-        } else if y <= top + AT {
-            (-speed(top + AT - y), st.offset)
+        let [left, top, right, bottom] = intersect(intersect(self.drawn_edges(i), clip), [0.0, 0.0, self.viewport.0, self.viewport.1]);
+        let (lo, hi) = if horizontal { (left, right) } else { (top, bottom) };
+        if hi - lo <= 2.0 * AT { return None; }
+        // Positive past the bottom or right edge.
+        let toward = if at >= hi - AT {
+            speed(at - (hi - AT))
+        } else if at <= lo + AT {
+            -speed(lo + AT - at)
         } else {
             return None;
         };
-        Some(Edge { scroll: id, speed, room, offset: st.offset, max: st.max })
+        // Past the right edge the content moves left: the offset grows, unless it flows right to left.
+        let (speed, offset, max) = if horizontal {
+            (st.x.toward(-f64::from(toward)) as f32, st.x.offset, st.x.max)
+        } else {
+            (toward, st.offset, st.max)
+        };
+        let room = if speed > 0.0 { max - offset } else { offset };
+        Some(Edge { scroll: View { id, horizontal }, speed, room, offset, max })
     }
 }
 
 #[cfg(test)]
 #[path = "edge_scroll_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "edge_scroll_x_tests.rs"]
+mod x_tests;
