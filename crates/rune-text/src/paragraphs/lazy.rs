@@ -224,7 +224,7 @@ impl TextSystem {
         for p in &mut paragraphs {
             let want_frac = if p.shaped && p.layout.len() > 1 { (y - y.floor()) as f32 } else { 0.0 };
             if p.shaped && (want_frac - p.y_frac).abs() > 1e-5 {
-                line_break::rebreak_at_y(Rc::make_mut(&mut p.layout), &[], 0.0, lazy.style.size, lazy.scale, laid.max_width, laid.align, f64::from(want_frac));
+                line_break::rebreak_at_y(Rc::make_mut(&mut p.layout), &[], 0.0, lazy.style.size, lazy.scale, laid.max_width, lazy.wrap_anywhere, laid.align, f64::from(want_frac));
                 self.layout_ids.build(&p.layout);
                 (p.height, p.widths) = (p.layout.height(), [p.layout.width(), p.layout.full_width()]);
             }

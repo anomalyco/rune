@@ -11,7 +11,7 @@ use crate::fonts::fallback::{self, Route};
 use crate::fonts::{language, system_weight};
 use crate::raster::synthetic_bold;
 use crate::{
-    Entry, HIDDEN_SIZE, INLINE_BOX, InlineAlign, InlineBoxRun, Ink, Keep, PILL_BOX, PillChip, PillMetrics, SPAN_BOX, Span, SpanBoxRun, TextSystem, Trak,
+    Entry, HIDDEN_SIZE, INLINE_BOX, InlineAlign, InlineBoxRun, Ink, Keep, PILL_BARE, PILL_BOX, PillChip, PillMetrics, SPAN_BOX, Span, SpanBoxRun, TextSystem, Trak,
     family_list, font_trak, mono_tab_stops, named_list, shape_key,
 };
 use rune_core::tok::{Family, OpticalSize, TextStyle};
@@ -94,22 +94,34 @@ impl TextSystem {
         // the pill's index in their id, so ranges that fail the checks keep no chip.
         let pm = PillMetrics::new(style.size);
         // A replaced label's box also stands on the baseline: its height and baseline in px.
-        let pills: Vec<(usize, std::ops::Range<usize>, u32, u32, Option<(f32, f32)>)> = pills
+        struct ShapedPill {
+            idx: usize,
+            range: std::ops::Range<usize>,
+            lead: u32,
+            trail: u32,
+            stands: Option<(f32, f32)>,
+            bare_icon: bool,
+        }
+        let pills: Vec<ShapedPill> = pills
             .iter()
             .enumerate()
-            .map(|(i, p)| {
-                let r = (p.start as usize).min(text.len())..(p.end as usize).min(text.len());
+            .map(|(idx, p)| {
+                let range = (p.start as usize).min(text.len())..(p.end as usize).min(text.len());
                 let replace = p.bare.as_ref().and_then(|b| b.replace);
+                let bare_icon = p.bare.is_some() && replace.is_none();
                 let (lead, trail) = match (&p.bare, replace) {
                     (_, Some(r)) => (r.width, 0.0),
                     (Some(b), None) => (b.size + b.gap, 0.0),
                     (None, None) => (pm.lead(p.has_lead_visual()), pm.trail()),
                 };
                 let stands = replace.map(|r| (((r.ascent + r.descent) * scale).round(), (r.ascent * scale).round()));
-                (i, r, (lead * scale).round() as u32, (trail * scale).round() as u32, stands)
+                ShapedPill { idx, range, lead: (lead * scale).round() as u32, trail: (trail * scale).round() as u32, stands, bare_icon }
             })
-            .filter(|(_, r, ..)| {
-                !r.is_empty() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end) && !text.as_bytes()[r.clone()].contains(&b'\n')
+            .filter(|p| {
+                !p.range.is_empty()
+                    && text.is_char_boundary(p.range.start)
+                    && text.is_char_boundary(p.range.end)
+                    && !text.as_bytes()[p.range.clone()].contains(&b'\n')
             })
             .collect();
         let padded_boxes: Vec<(usize, std::ops::Range<usize>, u32, u32)> = span_boxes
@@ -127,7 +139,7 @@ impl TextSystem {
             })
             .collect();
         let indented = has_indented_blocks || !pills.is_empty() || !padded_boxes.is_empty();
-        let break_lines = |layout: &mut Layout<Ink>| line_break::break_new(layout, text, blocks, text_indent, indented, style.size, scale, max_width, pretty);
+        let break_lines = |layout: &mut Layout<Ink>| line_break::break_new(layout, text, blocks, text_indent, indented, style.size, scale, max_width, wrap_anywhere, pretty);
         if cache
             && let Some(prev) = self.shapes.get(&shape_key).copied()
             && let Some(Entry { value: shaped, used, .. }) = self.layouts.get(&prev)
@@ -481,17 +493,18 @@ impl TextSystem {
             // and lets it wrap only when it is wider than a line, as a browser wraps a span.
             // A replaced label shapes so small it takes no room and draws nothing (`glyph_emit`
             // skips it), and its box before it stands as tall as its image.
-            for (i, r, lead, trail, stands) in &pills {
-                if stands.is_some() {
-                    b.push(StyleProperty::FontSize(HIDDEN_SIZE / scale), r.clone());
-                    b.push(LineHeight::Absolute(0.0), r.clone());
-                    b.push(StyleProperty::LetterSpacing(0.0), r.clone());
-                    b.push(StyleProperty::WordSpacing(0.0), r.clone());
+            for p in &pills {
+                if p.stands.is_some() {
+                    b.push(StyleProperty::FontSize(HIDDEN_SIZE / scale), p.range.clone());
+                    b.push(LineHeight::Absolute(0.0), p.range.clone());
+                    b.push(StyleProperty::LetterSpacing(0.0), p.range.clone());
+                    b.push(StyleProperty::WordSpacing(0.0), p.range.clone());
                 }
-                for (side, index, width) in [(0, r.start, *lead), (1, r.end, *trail)] {
-                    let (height, baseline) = stands.filter(|_| side == 0).map_or((0.0, None), |(h, a)| (h, Some(a)));
+                let bare_bit = if p.bare_icon { PILL_BARE } else { 0 };
+                for (side, index, width) in [(0, p.range.start, p.lead), (1, p.range.end, p.trail)] {
+                    let (height, baseline) = p.stands.filter(|_| side == 0).map_or((0.0, None), |(h, a)| (h, Some(a)));
                     b.push_inline_box(parley::InlineBox {
-                        id: PILL_BOX | (*i as u64) << 1 | side,
+                        id: PILL_BOX | bare_bit | (p.idx as u64) << 1 | side,
                         kind: parley::InlineBoxKind::InFlow,
                         index,
                         width: width as f32,

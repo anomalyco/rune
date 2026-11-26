@@ -16,7 +16,7 @@ pub fn bare_icons(layout: &Layout<Ink>, pills: &[PillChip], scale: f32, origin: 
             if b.id & PILL_BOX == 0 || b.id & 1 == 1 {
                 continue;
             }
-            let i = ((b.id & !PILL_BOX) >> 1) as usize;
+            let i = pill_index(b.id);
             let Some((pill, bare)) = pills.get(i).and_then(|p| Some((p, p.bare.as_deref()?))) else { continue };
             if bare.replace.is_some() {
                 out.push((i, [(origin[0] + b.x).round(), (origin[1] + b.y).round()], [b.width, b.height]));
@@ -108,7 +108,7 @@ fn pill_chips_into(
             .collect();
         // Pills whose chip starts on this line, then those whose label wrapped onto it.
         let mut starts: Vec<(usize, Option<&parley::PositionedInlineBox>)> =
-            boxes.iter().filter(|b| b.id & 1 == 0).map(|b| (((b.id & !PILL_BOX) >> 1) as usize, Some(b))).collect();
+            boxes.iter().filter(|b| b.id & 1 == 0).map(|b| (pill_index(b.id), Some(b))).collect();
         let text = line.text_range();
         for (i, p) in pills.iter().enumerate() {
             let inside = (p.start as usize) < text.start && text.start < p.end as usize;

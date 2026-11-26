@@ -200,9 +200,18 @@ impl PillMetrics {
     }
 }
 
-/// Tags the inline boxes around pill labels: the rest of the id is the pill's index shifted
+/// Tags the inline boxes around pill labels: the lower bits carry the pill's index shifted
 /// left once, with the low bit set on the box after the label.
 pub(crate) const PILL_BOX: u64 = 1 << 62;
+
+/// Set alongside [`PILL_BOX`] for a bare inline icon (no chip box, not a replaced image), whose
+/// leading box only needs to stay on the line of its label's first characters.
+pub(crate) const PILL_BARE: u64 = 1 << 59;
+
+/// Pill slice index stored in a [`PILL_BOX`] inline box id.
+pub(crate) const fn pill_index(id: u64) -> usize {
+    ((id & !(PILL_BOX | PILL_BARE)) >> 1) as usize
+}
 
 /// Tags the inline boxes around padded [`SpanBox`] ranges: the rest of the id is the box's index
 /// shifted left once, with the low bit set on the trailing spacer.
