@@ -1,0 +1,1 @@
+- A held selection drag past the left or right edge of a viewport that scrolls sideways (`El::scroll_x`, such as an unwrapped markdown code block) now scrolls it and keeps extending the selection, as a drag past a list's top or bottom already did. A pointer past both a vertical and a horizontal edge scrolls the vertical viewport.

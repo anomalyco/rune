@@ -38,7 +38,7 @@ impl RuntimeCore {
         let Some(held) = self.pointer.press.held() else {
             if self.edit.selectable.phase.drag_active() {
                 self.selection_drag(x, y);
-                self.edge_scroll_moved(y);
+                self.edge_scroll_moved(x, y);
             }
             return;
         };
@@ -55,7 +55,7 @@ impl RuntimeCore {
             held.moved |= past_slop;
         }
         self.selection_drag(x, y);
-        self.edge_scroll_moved(y);
+        self.edge_scroll_moved(x, y);
         if self.edit.input_click.captured() {
             self.input_drag(x, y, drag_move);
             return;
