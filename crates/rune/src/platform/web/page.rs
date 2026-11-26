@@ -66,7 +66,7 @@ pub(super) struct Borrowed {
 }
 
 /// The attributes Rune and winit set on a canvas.
-const CANVAS_ATTRIBUTES: [&str; 4] = ["tabindex", "alt", "width", "height"];
+const CANVAS_ATTRIBUTES: [&str; 5] = ["tabindex", "alt", "width", "height", "data-rune-canvas"];
 
 impl Borrowed {
     /// Remembers a canvas the page owns, before Rune styles it.
