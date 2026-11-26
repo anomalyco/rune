@@ -1,0 +1,1 @@
+- Overlays: `OverlayHandle::activation_token` now also records the `wl_keyboard.enter` serial on Wayland layer surfaces, so a focused overlay requesting a token before any key, pointer, or touch press still sends a valid serial to the compositor.

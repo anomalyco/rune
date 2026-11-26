@@ -146,3 +146,30 @@ fn input_serial_captures_pointer_key_and_touch_presses_and_keeps_newest() {
     serial.step(InputEvent::Reset);
     assert_eq!(serial.get(), None);
 }
+
+#[test]
+fn input_serial_captures_keyboard_enter_for_our_surface_only() {
+    let mut serial = InputSerial::default();
+    assert_eq!(serial.get(), None);
+
+    // Keyboard focus entering another surface must not record a serial.
+    serial.step(InputEvent::KeyboardEnter { serial: 40, ours: false });
+    assert_eq!(serial.get(), None);
+
+    // Keyboard focus entering our surface records its serial before any press happens.
+    serial.step(InputEvent::KeyboardEnter { serial: 41, ours: true });
+    assert_eq!(serial.get(), Some(41));
+
+    // A later enter on another surface must not overwrite ours.
+    serial.step(InputEvent::KeyboardEnter { serial: 42, ours: false });
+    assert_eq!(serial.get(), Some(41));
+
+    // A newer press overwrites the focus serial, and a later enter on our surface updates it.
+    serial.step(InputEvent::Key { serial: 43, focused: true, pressed: true });
+    assert_eq!(serial.get(), Some(43));
+    serial.step(InputEvent::KeyboardEnter { serial: 44, ours: true });
+    assert_eq!(serial.get(), Some(44));
+
+    serial.step(InputEvent::Reset);
+    assert_eq!(serial.get(), None);
+}
