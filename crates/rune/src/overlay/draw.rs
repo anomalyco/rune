@@ -4,7 +4,7 @@
 use super::*;
 use crate::frame::host_step::{
     self, Acquire, FrameHost, Gate, PostStepCheck, ReacquireReason, RenderPrep, StepInfo,
-    draw_ui, prepare_gpu_resources,
+    create_frame_encoder, draw_ui, prepare_gpu_resources,
 };
 
 struct PreparedOverlayFrame {
@@ -446,7 +446,7 @@ impl FrameHost for OverlayFrame<'_> {
         });
         let size = (live.config.width, live.config.height);
         prepare_gpu_resources(renderer, gpu, self.app.rt_mut(), size, true);
-        let encoder = gpu.device.create_command_encoder(&Default::default());
+        let encoder = create_frame_encoder(gpu);
         RenderPrep::Ready(PreparedOverlayFrame { frame: drawable, view, encoder, target_format, size })
     }
 

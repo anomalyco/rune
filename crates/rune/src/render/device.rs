@@ -11,6 +11,9 @@ pub struct Gpu {
     pub adapter: wgpu::Adapter,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// Cached adapter backend so per-frame checks avoid `adapter.get_info()` heap allocations.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) backend: wgpu::Backend,
     /// Shared device-lost and uncaptured-error callback state (`gpu_loss`).
     pub(super) callbacks: super::gpu_loss::GpuCallbacks,
     /// D3D12 removes a device before wgpu hears of it (`Gpu::is_lost`).
