@@ -288,13 +288,22 @@ impl WindowHandle {
         if let Ok(window) = self.window() { crate::platform::win32::hide_now(&window); }
         self.hide();
     }
-    /// Focus/activate an already-visible window, restoring it if minimized. Wayland requests attention.
+    /// Focus/activate an already-visible window, restoring it if minimized.
+    /// On Wayland this requests attention; use [`activate`](Self::activate) for compositor-authorized focus.
     pub fn focus(&self) { self.send(WakeEvent::Focus); }
     /// Show, restore and activate, creating the window if needed (see `AppHandle::open`).
     /// A default close destroys its host; use App::keep_running to reopen.
     /// Windows added with `App::window` always reopen. Requests made before the loop runs
     /// apply once the window's host starts.
     pub fn open(&self) { self.send(|slot| WakeEvent::Window(slot, WindowRequest::Open(None))); }
+    /// Show, restore and focus the window with an activation token another process forwarded
+    /// (`XDG_ACTIVATION_TOKEN` on Wayland, `DESKTOP_STARTUP_ID` on X11), so the compositor
+    /// lets it take focus (see [`AppHandle::activate`](crate::AppHandle::activate)).
+    /// An empty token or a platform without activation tokens behaves like [`open`](Self::open).
+    pub fn activate(&self, token: impl Into<String>) {
+        let token = Some(token.into()).filter(|t| !t.is_empty());
+        self.send(move |slot| WakeEvent::Window(slot, WindowRequest::Open(token)));
+    }
     pub fn close(&self) { self.send(|slot| WakeEvent::Window(slot, WindowRequest::Close)); }
     /// Borrow a raw native handle while alive. Platform thread restrictions still apply;
     /// do not retain an extracted pointer beyond the callback.

@@ -70,3 +70,18 @@ fn with_raw_handle_and_with_raw_display_handle_return_closed_when_unbound() {
     assert_eq!(window_err, Err("window is closed".into()));
     assert_eq!(display_err, Err("window is closed".into()));
 }
+
+#[test]
+fn activate_queues_open_with_token_and_drops_empty_tokens() {
+    let handle = WindowHandle::new("notify");
+    handle.open();
+    handle.activate("xdg-token-1");
+    handle.activate("");
+    handle.activate(String::from("xdg-token-2"));
+    let taken = handle.take_headless();
+    assert_eq!(taken.len(), 4);
+    assert!(matches!(&taken[0], WakeEvent::Window(0, WindowRequest::Open(None))));
+    assert!(matches!(&taken[1], WakeEvent::Window(0, WindowRequest::Open(Some(t))) if t == "xdg-token-1"));
+    assert!(matches!(&taken[2], WakeEvent::Window(0, WindowRequest::Open(None))));
+    assert!(matches!(&taken[3], WakeEvent::Window(0, WindowRequest::Open(Some(t))) if t == "xdg-token-2"));
+}

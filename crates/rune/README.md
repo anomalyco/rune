@@ -872,9 +872,10 @@ app.run();
 - Closing hides the window on macOS, Windows and X11, and destroys it on Wayland (no hidden
   toplevel exists there); `open` recreates it with the same app id (`set_app_id`).
 - Activation: the first window takes the launcher's `XDG_ACTIVATION_TOKEN`/`DESKTOP_STARTUP_ID`
-  and clears them from the environment. A new window gets a forwarded token through winit's
-  `with_activation_token`. An open Wayland window is activated with `xdg_activation_v1` bound on
-  winit's own display (`platform/activation.rs`), since winit 0.30 can't. Without a token Wayland can only
+  and clears them from the environment. A new window gets a forwarded token (via
+  `AppHandle::activate` or `WindowHandle::activate`) through winit's `with_activation_token`. An
+  open Wayland window is activated with `xdg_activation_v1` bound on winit's own display
+  (`platform/activation.rs`), since winit 0.30 can't. Without a token Wayland can only
   request attention (most compositors mark it urgent); X11, macOS and Windows use `focus_window`.
 - Headless tooling runs ignore window requests and apply updates before each frame.
 - `AppHandle::is_visible()` reports whether the window is on screen; `AppHandle::window_error()`
