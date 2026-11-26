@@ -1,0 +1,1 @@
+- Web: the app's canvas carries `data-rune-canvas` (removed again from a passed-in canvas on quit), so tests can select it beside the CPU-first canvas (`data-rune-cpu`); WEB.md documents both canvases and when the CPU one goes.

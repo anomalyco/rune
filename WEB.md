@@ -1,6 +1,8 @@
 # Run a Rune app in the browser
 
-Rune's experimental web target renders one canvas through WebGPU. It uses the same Rust
+Rune's experimental web target renders the app through WebGPU (or WebGL2) on one canvas,
+marked `data-rune-canvas`; a full-window page shows a CPU canvas first (see
+[Two canvases while starting](#two-canvases-while-starting)). It uses the same Rust
 views, layout, glyph atlas and shaders as native. GPU initialization is asynchronous; the
 runtime stays on the browser's main thread and requests frames only while work is pending.
 
@@ -135,6 +137,28 @@ quitting mounts once that one has gone, so a route can swap apps in the same tic
 ```rust,ignore
 let handle = app.handle();           // keep it with the route
 App::new(spec).canvas_id("route-canvas").full_viewport().try_run()?; // after handle.quit()
+```
+
+## Two canvases while starting
+
+While a full-window page is on the CPU renderer it holds two `<canvas>` elements: the app's,
+marked `data-rune-canvas`, which takes input and stays see-through until the GPU draws, and a 2D
+canvas inserted just before it, marked `data-rune-cpu` and `aria-hidden="true"`, which shows
+the CPU frames and takes no input. The CPU canvas is removed once the GPU's frames are on
+screen. It stays for the life of the page with `CpuFirst::Only`, or when WebGPU and WebGL2
+both fail to start. A full-window page puts one back if its WebGL2 context is lost, or if it
+started on the CPU and later loses its WebGPU device or has its shader rejected; a
+`CpuFirst::Off` page that loses its WebGPU device shows an error and ends instead.
+`CpuFirst::Off`, `GpuLossPolicy::Terminal` (which never falls back to the CPU),
+`App::web_document` and inline `App::canvas_id` pages start without one.
+Both attributes are a stable hook: select the app's canvas with `canvas[data-rune-canvas]`
+(or `canvas:not([data-rune-cpu])`), which matches exactly one element at every stage of start-up.
+A canvas passed in with `App::canvas_id` gets `data-rune-canvas` while the app runs and loses it
+after `AppHandle::quit`.
+
+```js
+const canvas = page.locator('canvas[data-rune-canvas]'); // not `canvas`: strict mode sees two
+await canvas.click();
 ```
 
 ## A whole web page
@@ -397,7 +421,7 @@ extra windows, native menus, drag-out, native audio/video, built-in HTTP client 
 [HTTP requests (fetch)](#http-requests-fetch)) or hot patching.
 Native configuration types remain source-compatible, but their desktop host paths are not
 used on wasm. Unsupported window requests warn in the console; Show/Open are ignored.
-Full-window apps start on the CPU 2D canvas and hand over to WebGPU/WebGL2 by default (`CpuFirst::Auto`); `App::cpu_first(CpuFirst::Only)` keeps a full-window page on the CPU canvas without requesting WebGPU or WebGL2, `App::cpu_first(CpuFirst::Off)` starts directly on the GPU, and `globalThis.RUNE_CPU_FIRST` (`"0"`/`"off"`, `"only"`, `"auto"`) overrides `App::cpu_first` without a rebuild (`App::web_document` and inline `App::canvas_id` pages always start on the GPU).
+Full-window apps start on the CPU 2D canvas and hand over to WebGPU/WebGL2 by default (`CpuFirst::Auto`); `App::cpu_first(CpuFirst::Only)` keeps a full-window page on the CPU canvas without requesting WebGPU or WebGL2, `App::cpu_first(CpuFirst::Off)` starts directly on the GPU, and `globalThis.RUNE_CPU_FIRST` (`"0"`/`"off"`, `"only"`, `"auto"`) overrides `App::cpu_first` without a rebuild (`App::web_document` and inline `App::canvas_id` pages always start on the GPU; see [Two canvases while starting](#two-canvases-while-starting) for the page's DOM meanwhile).
 The document title follows `AppSpec::title`, hidden tabs report `is_visible() == false`,
 and `App::on_frame_drawn` runs on the browser's main thread after each drawn CPU or GPU frame
 (never on unchanged or skipped frames), matching desktop windows.
@@ -408,6 +432,8 @@ The functional proof uses headless Chromium and Playwright:
 node scripts/web-smoke.mjs target/web target/web-proof
 ```
 
+Tests of your own should locate the app with `canvas[data-rune-canvas]` (see
+[Two canvases while starting](#two-canvases-while-starting)).
 Install Playwright with its Chromium browser first. `PLAYWRIGHT_MODULE` and `CHROMIUM_PATH`
 can select an existing installation. `WEB_ENGINE=webkit` tries an installed Playwright WebKit
 and reports whether it has a WebGPU adapter. The proof checks GPU errors, idle rAF requests
