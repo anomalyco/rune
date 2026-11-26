@@ -4,7 +4,9 @@
 #[cfg(any(target_os = "macos", feature = "frame-profile"))]
 use super::stepping::FrameMove;
 use super::{CompositorFrame, Host};
-use crate::frame::host_step::{RenderPrep, StepInfo, draw_ui, prepare_gpu_resources_with};
+use crate::frame::host_step::{
+    RenderPrep, StepInfo, create_frame_encoder, draw_ui, prepare_gpu_resources_with,
+};
 use crate::time::Instant;
 #[cfg(target_os = "windows")]
 use crate::window::win32::{damage, handover};
@@ -281,7 +283,7 @@ pub(super) fn prepare_window_render(
         renderer.next_instances(rt.paint_count(), looped.cloned());
     }
     profile.mark_uploaded();
-    let encoder = gpu.device.create_command_encoder(&Default::default());
+    let encoder = create_frame_encoder(gpu);
     // Only what changed is redrawn and presented (`damage`): the renderer's `draw` takes the
     // armed rectangles when nothing but the instances draws there, a compositor's
     // `Frame::draw_ui` included. A loop-only frame knows what changed.

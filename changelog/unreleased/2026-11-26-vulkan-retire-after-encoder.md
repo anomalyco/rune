@@ -1,0 +1,1 @@
+- Vulkan: overlays and windows now run one non-blocking `Device::poll(Poll)` right after `create_command_encoder` and before frame recording (skipping lost devices), so finished submissions release their command buffers before back-to-back draws on a shared Vulkan device record new ones.

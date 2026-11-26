@@ -591,3 +591,115 @@ fn post_step_hold_drops_drawable_and_skips_without_missing() {
     assert!(!log.iter().any(|s| s == "submit_and_present"));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn should_poll_after_encoder_only_on_live_vulkan() {
+    assert!(should_poll_after_encoder(wgpu::Backend::Vulkan, false));
+    assert!(!should_poll_after_encoder(wgpu::Backend::Vulkan, true));
+    for backend in [
+        wgpu::Backend::Dx12,
+        wgpu::Backend::Metal,
+        wgpu::Backend::Gl,
+        wgpu::Backend::BrowserWebGpu,
+        wgpu::Backend::Noop,
+    ] {
+        assert!(!should_poll_after_encoder(backend, false), "{backend:?} must skip post-encoder poll");
+        assert!(!should_poll_after_encoder(backend, true), "lost {backend:?} must skip post-encoder poll");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn create_frame_encoder_polls_after_encoder_on_live_vulkan_and_skips_lost_or_other_backends() {
+    let events = RefCell::new(Vec::new());
+    let encoder = create_frame_encoder_with(
+        wgpu::Backend::Vulkan,
+        false,
+        || {
+            events.borrow_mut().push("create");
+            7u32
+        },
+        || {
+            events.borrow_mut().push("poll");
+            Ok(wgpu::PollStatus::QueueEmpty)
+        },
+        || events.borrow_mut().push("mark_lost"),
+    );
+    assert_eq!(encoder, 7);
+    assert_eq!(*events.borrow(), vec!["create", "poll"], "poll must run strictly after encoder creation");
+
+    events.borrow_mut().clear();
+    create_frame_encoder_with(
+        wgpu::Backend::Vulkan,
+        false,
+        || events.borrow_mut().push("create"),
+        || {
+            events.borrow_mut().push("poll");
+            Err(rune_gpu::health::PollFailed::Lost)
+        },
+        || events.borrow_mut().push("mark_lost"),
+    );
+    assert_eq!(*events.borrow(), vec!["create", "poll", "mark_lost"]);
+
+    events.borrow_mut().clear();
+    create_frame_encoder_with(
+        wgpu::Backend::Vulkan,
+        true,
+        || events.borrow_mut().push("create"),
+        || {
+            events.borrow_mut().push("poll");
+            Ok(wgpu::PollStatus::QueueEmpty)
+        },
+        || events.borrow_mut().push("mark_lost"),
+    );
+    assert_eq!(*events.borrow(), vec!["create"], "lost Vulkan device must skip poll");
+
+    for backend in [wgpu::Backend::Dx12, wgpu::Backend::Metal, wgpu::Backend::Gl, wgpu::Backend::Noop] {
+        events.borrow_mut().clear();
+        create_frame_encoder_with(
+            backend,
+            false,
+            || events.borrow_mut().push("create"),
+            || {
+                events.borrow_mut().push("poll");
+                Ok(wgpu::PollStatus::QueueEmpty)
+            },
+            || events.borrow_mut().push("mark_lost"),
+        );
+        assert_eq!(*events.borrow(), vec!["create"], "{backend:?} must skip poll");
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn create_frame_encoder_caches_backend_and_retires_finished_vulkan_work() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+    assert_eq!(gpu.backend(), gpu.adapter.get_info().backend);
+
+    let enc = create_frame_encoder(&gpu);
+    gpu.queue.submit([enc.finish()]);
+
+    if gpu.backend() == wgpu::Backend::Vulkan {
+        let done = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&done);
+        gpu.queue.on_submitted_work_done(move || flag.store(true, Ordering::Release));
+        let deadline = crate::time::now() + Duration::from_secs(2);
+        while !done.load(Ordering::Acquire) && crate::time::now() < deadline {
+            let _enc = create_frame_encoder(&gpu);
+            if !done.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+        assert!(done.load(Ordering::Acquire), "create_frame_encoder must retire finished Vulkan work via PollType::Poll");
+    }
+
+    gpu.mark_lost();
+    let _lost_enc = create_frame_encoder(&gpu);
+    assert!(gpu.is_lost());
+}
+

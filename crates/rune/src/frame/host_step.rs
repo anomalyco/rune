@@ -642,6 +642,59 @@ pub(crate) fn prepare_gpu_resources(
     prepare_gpu_resources_with(renderer, gpu, rt, size, async_surfaces, |_, _| {});
 }
 
+/// Whether a frame on `backend` should run one non-blocking `Device::poll(Poll)` right after
+/// `create_command_encoder` and before recording passes, retiring completed submissions from
+/// earlier frames or sibling surfaces sharing the device.
+///
+/// Only live Vulkan devices poll here: wgpu 30 retires finished command buffers only inside
+/// `Device::maintain`, and the draw path otherwise runs `maintain(Poll)` only at the end of
+/// `Queue::submit` (after the next frame is already recorded), so back-to-back draws on a shared
+/// Vulkan device keep extra command buffers live (growing Mesa ANV's non-shrinking binding-table
+/// pool). D3D12 skips this to avoid Intel Iris Xe's post-poll cost, Metal uses Rune's native
+/// backend, and lost devices skip it so `poll` is never entered on a known-dead device.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub(crate) const fn should_poll_after_encoder(backend: wgpu::Backend, lost: bool) -> bool {
+    matches!(backend, wgpu::Backend::Vulkan) && !lost
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+fn create_frame_encoder_with<E>(
+    backend: wgpu::Backend,
+    lost: bool,
+    create: impl FnOnce() -> E,
+    poll: impl FnOnce() -> Result<wgpu::PollStatus, rune_gpu::health::PollFailed>,
+    mark_lost: impl FnOnce(),
+) -> E {
+    let encoder = create();
+    if should_poll_after_encoder(backend, lost)
+        && matches!(poll(), Err(rune_gpu::health::PollFailed::Lost))
+    {
+        mark_lost();
+    }
+    encoder
+}
+
+/// Creates a frame command encoder and, on live Vulkan devices, runs one non-blocking
+/// `Device::poll(Poll)` immediately afterward (before any passes are recorded) so completed
+/// submissions release their command buffers back to wgpu's pool.
+///
+/// Taking the encoder before polling matters on NVIDIA Vulkan, where the preceding frame is often
+/// still in flight when `prepare_render` starts and polling before `create_command_encoder`
+/// causes per-submission command-buffer allocation churn.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub(crate) fn create_frame_encoder(gpu: &Gpu) -> wgpu::CommandEncoder {
+    create_frame_encoder_with(
+        gpu.backend(),
+        gpu.is_lost(),
+        || gpu.device.create_command_encoder(&Default::default()),
+        || rune_gpu::health::poll(&gpu.device, wgpu::PollType::Poll),
+        || gpu.mark_lost(),
+    )
+}
+
 /// Default UI render pass when a host has no custom [`crate::Compositor`]: uploads glyph atlas
 /// and instance buffers, then draws into `target` with `clear`.
 #[inline]

@@ -272,6 +272,8 @@ impl Gpu {
     /// under `cfg(test)` nothing logs so Rune's own tests see wgpu's panic.
     pub(crate) fn made(instance: wgpu::Instance, adapter: wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue,
         draws_surfaces: bool) -> Gpu {
+        #[cfg(not(target_arch = "wasm32"))]
+        let backend = adapter.get_info().backend;
         let callbacks = GpuCallbacks::new(&device, draws_surfaces);
         let removal = rune_gpu::health::Removal::watch(&device);
         Gpu {
@@ -279,9 +281,18 @@ impl Gpu {
             adapter,
             device,
             queue,
+            #[cfg(not(target_arch = "wasm32"))]
+            backend,
             callbacks,
             removal,
         }
+    }
+
+    /// Cached wgpu backend for this device (avoids per-frame `adapter.get_info()` allocations).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[inline]
+    pub(crate) fn backend(&self) -> wgpu::Backend {
+        self.backend
     }
 
     /// Installs Rune's uncaptured-error logger on a device that draws surfaces, at most once.
