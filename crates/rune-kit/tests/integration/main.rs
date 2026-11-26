@@ -1,5 +1,6 @@
 mod button_label;
 mod closure_builders;
+mod collapsible;
 mod combobox;
 mod context_menu;
 #[allow(deprecated)]
