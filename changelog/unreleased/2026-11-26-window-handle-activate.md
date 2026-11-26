@@ -1,0 +1,1 @@
+- Windows: added `WindowHandle::activate(token)` to show, restore, and focus a specific window with a forwarded activation token (`XDG_ACTIVATION_TOKEN` on Wayland, `DESKTOP_STARTUP_ID` on X11), mirroring `AppHandle::activate(token)` and falling back to `open` when the token is empty or on platforms without activation tokens (#2445).

@@ -104,6 +104,10 @@ fn latched_window_and_wake_events_drop_view_input_and_redraws_while_keeping_clos
         classify_latched_wake_event(&WakeEvent::Window(0, WindowRequest::Open(None))),
         LatchedWakeAction::Drop,
     );
+    assert_eq!(
+        classify_latched_wake_event(&WakeEvent::Window(0, WindowRequest::Open(Some("tok".into())))),
+        LatchedWakeAction::Drop,
+    );
     assert_eq!(classify_latched_wake_event(&WakeEvent::Live(0)), LatchedWakeAction::Drop);
     assert_eq!(classify_latched_wake_event(&WakeEvent::Focus(0)), LatchedWakeAction::NonGpuShell);
     assert_eq!(
