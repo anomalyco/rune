@@ -108,6 +108,8 @@ pub use markdown::MarkdownStyle;
 #[cfg(feature = "markdown")]
 pub use markdown::QuoteFrame;
 #[cfg(feature = "markdown")]
+pub use markdown::TableShrink;
+#[cfg(feature = "markdown")]
 pub use notes::Note;
 pub use overlays::combobox::Combobox;
 pub use overlays::combobox::ComboboxEffect;

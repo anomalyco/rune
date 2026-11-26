@@ -29,11 +29,81 @@ struct RowWidths {
     fit: Box<[f32]>,
 }
 
+/// How a Markdown table narrows its columns when they do not all fit on one line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TableShrink {
+    /// Every column narrows in proportion to its content (the default), as a browser's
+    /// automatic table layout does.
+    #[default]
+    Proportional,
+    /// Every column takes an equal share of the width; a column whose content needs less keeps
+    /// its natural width and leaves the rest to the wider columns, so short columns stay on one
+    /// line while prose columns wrap first.
+    WidestFirst,
+}
+
+/// Flex growth on cells under [`TableShrink::WidestFirst`] with `table_full_width`: a power of
+/// two (`2^20`, exact in `bf16`) that swamps the `1.0` total growth of the trailing gaps while
+/// any cell can still grow, so gaps receive space only after every cell reaches its natural width.
+const WIDEST_FIRST_CELL_GROW: f32 = 1_048_576.0;
+
+/// Water-filling widths for [`TableShrink::WidestFirst`]: finds the common cap `t` so each column
+/// gets `t.clamp(lo, hi)` summing to `avail` (CSS Flexbox §9.7 freeze loop).
+pub(super) fn widest_first_widths(natural: &[f32], fit: &[f32], avail: f32) -> Vec<f32> {
+    let n = natural.len();
+    let mut out = vec![0.0; n];
+    let mut frozen = vec![false; n];
+    let mut rem_avail = avail;
+    let mut rem_count = n;
+    while rem_count > 0 {
+        let share = rem_avail / rem_count as f32;
+        let (mut min_excess, mut max_excess) = (0.0f32, 0.0f32);
+        for j in 0..n {
+            if frozen[j] { continue; }
+            let (lo, hi) = (fit[j].min(natural[j]), natural[j]);
+            if share < lo {
+                min_excess += lo - share;
+            } else if share > hi {
+                max_excess += share - hi;
+            }
+        }
+        let net = min_excess - max_excess;
+        let mut changed = false;
+        for j in 0..n {
+            if frozen[j] { continue; }
+            let (lo, hi) = (fit[j].min(natural[j]), natural[j]);
+            let freeze = if net > 0.0 {
+                (share < lo).then_some(lo)
+            } else if net < 0.0 {
+                (share > hi).then_some(hi)
+            } else {
+                (share <= lo || share >= hi).then(|| share.clamp(lo, hi))
+            };
+            if let Some(w) = freeze {
+                out[j] = w;
+                frozen[j] = true;
+                rem_avail -= w;
+                rem_count -= 1;
+                changed = true;
+            }
+        }
+        if !changed {
+            for j in 0..n {
+                if !frozen[j] {
+                    out[j] = share.clamp(fit[j].min(natural[j]), natural[j]);
+                }
+            }
+            break;
+        }
+    }
+    out
+}
+
 /// A browser's automatic table layout (`table-layout: auto`) in `avail` points: columns in
 /// proportion to their widest content when it all fits (`full`, a `width: 100%` table) or at
-/// it (an auto-width one); between their narrowest and widest, by how much each can give, when
-/// only the narrowest fits; and at their narrowest otherwise, overflowing.
-fn auto_layout(natural: &[f32], fit: &[f32], avail: f32, full: bool) -> Vec<f32> {
+/// it (an auto-width one); between their narrowest and widest, by `shrink`, when only the
+/// narrowest fits; and at their narrowest otherwise, overflowing.
+pub(super) fn auto_layout(natural: &[f32], fit: &[f32], avail: f32, full: bool, shrink: TableShrink) -> Vec<f32> {
     let (widest, narrowest): (f32, f32) = (natural.iter().sum(), fit.iter().sum());
     if widest <= avail {
         let k = if full && widest > 0.0 { avail / widest } else { 1.0 };
@@ -42,8 +112,13 @@ fn auto_layout(natural: &[f32], fit: &[f32], avail: f32, full: bool) -> Vec<f32>
     if narrowest >= avail || widest <= narrowest {
         return fit.to_vec();
     }
-    let k = (avail - narrowest) / (widest - narrowest);
-    natural.iter().zip(fit).map(|(w, f)| f + (w - f).max(0.0) * k).collect()
+    match shrink {
+        TableShrink::Proportional => {
+            let k = (avail - narrowest) / (widest - narrowest);
+            natural.iter().zip(fit).map(|(w, f)| f + (w - f).max(0.0) * k).collect()
+        }
+        TableShrink::WidestFirst => widest_first_widths(natural, fit, avail),
+    }
 }
 
 fn rest_table_caches() {
@@ -108,6 +183,25 @@ impl MarkdownStyle {
     /// The hairline under the header and between rows.
     pub fn table_rules(mut self, c: Color) -> Self {
         self.table_rule = c;
+        self
+    }
+    /// A vertical hairline at the leading edge of every column after the first, the full height of
+    /// the row (`None` by default). Takes no layout room, so column widths do not change; in a
+    /// right-to-left table it stands on each column's right edge.
+    pub fn table_column_rules(mut self, c: Option<Color>) -> Self {
+        self.table_col_rule = c;
+        self
+    }
+    /// An overlay drawn over a body row while the pointer is over it (`None` by default), as
+    /// CSS's `tbody tr:hover`. The header row never takes it.
+    pub fn table_row_hover(mut self, c: Option<Color>) -> Self {
+        self.table_row_hover = c;
+        self
+    }
+    /// How columns narrow when a table is wider than its text column
+    /// ([`TableShrink::Proportional`] by default).
+    pub fn table_shrink(mut self, rule: TableShrink) -> Self {
+        self.table_shrink = rule;
         self
     }
     /// The header row's text colour (the body text colour by default).
@@ -294,7 +388,7 @@ impl Renderer {
         // inside it scrolls.
         let fixed = s.text_width.filter(|_| self.scroll_wide).map(|w| {
             let avail = (w - self.flow.get().inset - 2.0 * inset).max(0.0);
-            let widths = auto_layout(&cols.natural, &cols.fit, avail, s.table_full_width);
+            let widths = auto_layout(&cols.natural, &cols.fit, avail, s.table_full_width, s.table_shrink);
             let over = widths.iter().sum::<f32>() > avail + 0.5;
             (widths, over)
         });
@@ -318,7 +412,11 @@ impl Renderer {
         let rule = |key: String| el().key(key).w_full().h(0.5).fill(s.table_rule).a11y_hidden();
         let row_at = |i: usize, cells: &[Inline]| {
             let rmap = row_maps.get(i).map_or(&[][..], Vec::as_slice);
-            self.table_row(cells, rmap, t, &cols, widths, body_font, s.text, s.table_pad, "cell").key(format!("r{i}"))
+            let r = self.table_row(cells, rmap, t, &cols, widths, body_font, s.text, s.table_pad, "cell").key(format!("r{i}"));
+            match s.table_row_hover {
+                Some(c) => r.hover(c),
+                None => r,
+            }
         };
         if let Some(body) = &s.table_body {
             // The frame doesn't clip, so the card's shadow shows past it; the header row and
@@ -397,12 +495,15 @@ impl Renderer {
                 let rmap = row_maps.get(i).map_or(&[][..], Vec::as_slice);
                 let rpre = pre.and_then(|p| p.rows.get(i));
                 let rkey = format!("r{i}");
-                let row = match settled.then(|| self.settled_table_row_digest(cells, rpre, rmap, &t.align, table_dir, &cols.natural, &cols.min, widths, body_font, s.text, s.table_pad, "cell", &rkey, 4)).flatten() {
+                let round_bottom = ring.is_some() && s.table_row_hover.is_some() && i + 1 == t.rows.len();
+                let extra = if round_bottom { hash_of((4u8, true, r.to_bits())) } else { 4 };
+                let style_row = |row: El| if round_bottom { row.clip_corners([0.0, 0.0, r, r]) } else { row };
+                let row = match settled.then(|| self.settled_table_row_digest(cells, rpre, rmap, &t.align, table_dir, &cols.natural, &cols.min, widths, body_font, s.text, s.table_pad, "cell", &rkey, extra)).flatten() {
                     Some(digest) => rune::memo::cached(digest, || {
                         super::memo::note_block_build();
-                        row_at(i, cells)
+                        style_row(row_at(i, cells))
                     }),
-                    None => row_at(i, cells),
+                    None => style_row(row_at(i, cells)),
                 };
                 frame = frame.child(sep).child(row);
             }
@@ -442,13 +543,19 @@ impl Renderer {
         let total: f32 = cols.natural.iter().sum();
         let mut r = row().role("row").w_full();
         let table_dir = super::bidi::table_dir(t);
+        let widest_first = widths.is_none() && !self.scroll_wide && self.s.table_shrink == TableShrink::WidestFirst;
+        let full = self.s.table_full_width && total > 0.0;
+        let with_col_rule = |e: El, c: Option<Color>| match c {
+            Some(c) => e.child(el().key("rule").pin(Some(0.0), Some(0.0), None, Some(0.0)).w(0.5).fill(c).a11y_hidden()),
+            None => e,
+        };
         for (j, (natural, min)) in cols.natural.iter().zip(&cols.min).enumerate() {
             let inl = cells.get(j).unwrap_or(&empty);
-            let align = if self.s.table_align { t.align.get(j).copied().unwrap_or_default() } else { Align::Start };
+            let col_align = if self.s.table_align { t.align.get(j).copied().unwrap_or_default() } else { Align::Start };
             // A cell's words read their own way, and its column keeps the table's alignment: a
             // path in an Arabic table still starts at the column's right.
             let dir = super::bidi::inline_dir(inl);
-            let align = match align {
+            let align = match col_align {
                 Align::Start if dir.is_some() && dir != table_dir => Align::End,
                 Align::End if dir.is_some() && dir != table_dir => Align::Start,
                 a => a,
@@ -464,18 +571,38 @@ impl Renderer {
             // Full width: each column's share of the row is its share of the natural width, so
             // a wider row widens columns in proportion and a narrower one shrinks them as
             // without it. A table that scrolls never shrinks a column below its content.
+            // Under WidestFirst, every cell grows from zero at one rate up to its natural width so
+            // flex freezing gives short columns their content's width first; in a full-width table,
+            // hidden gaps with proportional growth hand out any width left after every cell stops.
             let cell = col().key(format!("c{j}")).role(cell_role);
-            let cell = match (widths.and_then(|w| w.get(j)), self.s.table_full_width && total > 0.0, self.scroll_wide) {
+            let cell = match (widths.and_then(|w| w.get(j)), full, self.scroll_wide, widest_first) {
                 (Some(w), ..) => cell.w(*w),
-                (None, false, _) => cell.w(*natural).shrink().min_w(*min),
-                (None, true, false) => cell.w_frac(natural / total).shrink().min_w(*min),
-                (None, true, true) => cell.w_frac(natural / total).shrink().min_w(*natural),
+                (None, false, _, true) => cell.grow(1.0).min_w(*min).max_w(natural.max(*min)),
+                (None, true, false, true) => cell.grow(WIDEST_FIRST_CELL_GROW).min_w(*min).max_w(natural.max(*min)),
+                (None, false, _, false) => cell.w(*natural).shrink().min_w(*min),
+                (None, true, false, false) => cell.w_frac(natural / total).shrink().min_w(*min),
+                (None, true, true, _) => cell.w_frac(natural / total).shrink().min_w(*natural),
             };
-            r = r.child(
-                // Clipped: a word wider than a shrunk column (or a row still streaming in) must
-                // not run into the next column.
-                cell.pl(self.pad_left(j, pad_x)).pr(pad_x).py(pad_y).clip_soft(0.0).child(self.select_inline(content, inl, maps.get(j))),
-            );
+            // Clipped: a word wider than a shrunk column (or a row still streaming in) must
+            // not run into the next column.
+            let cell = cell.pl(self.pad_left(j, pad_x)).pr(pad_x).py(pad_y).clip_soft(0.0).child(self.select_inline(content, inl, maps.get(j)));
+            let col_rule = self.s.table_col_rule.filter(|_| j > 0);
+            if widest_first && full {
+                let share = natural / total;
+                let gap = |key: String, g: f32| el().key(key).grow(g).a11y_hidden();
+                match col_align {
+                    Align::Start => r = r.child(with_col_rule(cell, col_rule)).child(gap(format!("g{j}"), share)),
+                    Align::End => r = r.child(with_col_rule(gap(format!("g{j}"), share), col_rule)).child(cell),
+                    Align::Center => {
+                        r = r
+                            .child(with_col_rule(gap(format!("g{j}l"), share * 0.5), col_rule))
+                            .child(cell)
+                            .child(gap(format!("g{j}r"), share * 0.5));
+                    }
+                }
+            } else {
+                r = r.child(with_col_rule(cell, col_rule));
+            }
         }
         r
     }

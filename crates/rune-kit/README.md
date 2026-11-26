@@ -503,6 +503,10 @@ search still see the shortcode. The pictures are drawn only, with no hover or pr
   that off with `table_tabular_figures(false)`. `table(border, header_fill)` sets the outline,
   row rules and header fill; `table_outline(None)`, `table_rules` and `table_header_text` give
   the look of a web table (no outline, a rule under every row, a dimmer header).
+  `table_column_rules(Some(color))` draws a zero-width hairline at the leading edge of every column
+  after the first, `table_row_hover(Some(color))` adds a hover overlay on body rows only, and
+  `table_shrink(TableShrink::WidestFirst)` narrows the widest columns first so short columns stay
+  on one line beside prose (all three off / `TableShrink::Proportional` by default).
 - **Code fences are syntax-coloured** in Rust, JavaScript/JSX, TypeScript/TSX, JSON, Python,
   Go, Swift, shell, SQL, HTML/XML, CSS and YAML (common aliases such as `ts`, `rs`, `py`,
   `golang`, `sh`, `yml` work). Other languages, and fences with none, stay plain. Colour is all

@@ -94,6 +94,7 @@ mod table;
 pub use find::{Case, Rendered, find};
 pub use image::ImageFrame;
 pub use style::MarkdownStyle;
+pub use table::TableShrink;
 #[cfg(feature = "mermaid")] pub(crate) use style::DiagramPaint;
 
 use crate::budget::Budget;
@@ -714,6 +715,8 @@ impl Markdown {
 mod hard_breaks_tests;
 #[cfg(test)]
 mod style_tests;
+#[cfg(test)]
+mod table_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
