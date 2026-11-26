@@ -96,10 +96,10 @@ impl RuntimeCore {
         }
         let [x, y] = self.field_text_origin(&self.tree.nodes, i, inp, spec, laid);
         let line_px = spec.style.line_px();
-        let top = flow.caret(start, parley::Affinity::Downstream, 1.0);
-        let bottom = flow.caret(last, parley::Affinity::Downstream, 1.0);
-        let y0 = top.y0 as f32 / s;
-        let y1 = if bottom.y1 > bottom.y0 { bottom.y1 as f32 / s } else { bottom.y0 as f32 / s + line_px };
+        let (top_y0, _) = flow.line_bounds(start, parley::Affinity::Downstream);
+        let (bot_y0, bot_y1) = flow.line_bounds(last, parley::Affinity::Downstream);
+        let y0 = top_y0 / s;
+        let y1 = if bot_y1 > bot_y0 { bot_y1 / s } else { bot_y0 / s + line_px };
         Some(TextLine {
             rect: [x, y + y0, text_width(flow.full_width()) / s, (y1 - y0).max(0.0)],
             start: to_model(e, start),

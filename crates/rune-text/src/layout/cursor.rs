@@ -167,6 +167,17 @@ fn line_stops(
     stops
 }
 
+/// Vertical line-box extent `(block_min_coord, block_max_coord)` in layout device px of the visual
+/// line holding `cursor`, matching `TextFlow::line_span` and `TextFlow::block_lines`.
+pub(crate) fn line_block_bounds(
+    cursor: &parley::editing::Cursor,
+    layout: &Layout<Ink>,
+) -> Option<(f32, f32)> {
+    let (_, line) = line_for_cursor(layout, cursor.index(), cursor.affinity())?;
+    let m = line.metrics();
+    Some((m.block_min_coord, m.block_max_coord))
+}
+
 /// Caret rectangle in layout device px, resolving the line by byte range and affinity and placing
 /// bidi boundaries at their primary (enclosing-direction) visual edge. Also adds
 /// `line.metrics().inline_min_coord` for indented blocks and moves carets outside pill chips.
