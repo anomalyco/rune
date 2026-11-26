@@ -360,9 +360,15 @@ pub(super) fn render_window_frame(
         false
     };
     // Every frame, so a frame drawn whole leaves the renderer's kept frame behind.
+    // A catch-up frame (`KeptDraw::Whole`) drew whole to bring the kept frame current after a
+    // frame that bypassed it (e.g. a native surface whose pixels `Damage::plan` does not track),
+    // so it must present the whole window instead of stamping partial dirty rects over the old
+    // front buffer.
     #[cfg(target_os = "windows")]
     match (renderer.damage_drawn(), prepared.part.take()) {
-        (Ok(()), part) => prepared.present_rect = part,
+        (Ok(crate::render::KeptDraw::Partial), part) => prepared.present_rect = part,
+        (Ok(crate::render::KeptDraw::Whole), Some(_)) => profile.set_whole_why("kept behind"),
+        (Ok(crate::render::KeptDraw::Whole), None) => {}
         (Err(why), Some(_)) => profile.set_whole_why(why),
         (Err(_), None) => {}
     }
