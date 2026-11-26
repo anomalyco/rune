@@ -1,0 +1,1 @@
+- FreeBSD / Unix builds: gate `RuntimeCore::commit_generation` to match its `Host::sync_wayland_drop` caller (`windows` plus `unix` excluding `macos`, `ios`, `android`), restoring `rune` compilation on FreeBSD and other BSD targets.
