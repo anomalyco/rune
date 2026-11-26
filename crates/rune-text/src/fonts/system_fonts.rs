@@ -5,7 +5,8 @@
 //! app's own fonts lack (`TextSystem::load_fallbacks`). The platform's own fallback names the
 //! font and its files, as browsers ask it: DirectWrite on Windows (`direct_write`), CoreText on
 //! Apple platforms (`core_text`), fontconfig in process elsewhere (`fontconfig`). No font
-//! folder is walked and no process is started.
+//! folder is walked and no process is started. `RUNE_SYSTEM_FONTS=off` or
+//! `set_system_fonts(false)` loads none at all (`switch`).
 
 use crate::*;
 
@@ -17,6 +18,7 @@ mod direct_write;
 #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod fontconfig;
 mod installed;
+mod switch;
 #[cfg(target_vendor = "apple")]
 use core_text as platform;
 #[cfg(windows)]
@@ -32,6 +34,7 @@ mod platform {
 }
 
 pub use installed::{InstalledFamily, installed_families};
+pub use switch::{set_system_fonts, system_fonts_enabled};
 
 // Common-script symbols can inherit the script of adjacent letters. Put these families at
 // the end of the requested family list, rather than registering only a Zyyy fallback.
@@ -98,6 +101,9 @@ const SYSTEM_MONO_FILES: &[&str] = &["dejavusansmono", "liberationmono", "notosa
 /// The installed `Family::SystemMono` families, most preferred first, loading their files.
 pub(crate) fn load_system_mono(collection: &mut Collection, loaded: &mut LoadedFiles) -> Vec<String> {
     let mut names: Vec<String> = Vec::new();
+    if !system_fonts_enabled() {
+        return names;
+    }
     // fontconfig's own `monospace`, asked in process.
     #[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
     if let Some((family, files)) = fontconfig::monospace() {
@@ -140,6 +146,9 @@ pub(crate) fn family_list<'a>(list: &'a str, system_mono: &'a [String], sans: &'
 
 /// The installed families among `names`, loading the system font files matching `files`.
 pub(crate) fn load_families(collection: &mut Collection, files: &[&str], names: &[&'static str]) -> Vec<&'static str> {
+    if !system_fonts_enabled() {
+        return Vec::new();
+    }
     collection.load_fonts_from_paths(installed_files(names, files));
     present_families(collection, names)
 }
@@ -363,6 +372,9 @@ impl TextSystem {
     /// its text falls back to, once, so a missing family draws in the system's font, not
     /// nothing (`load_fallbacks` loads nothing for Latin text). Run where the slots are set.
     pub(crate) fn load_slot_fallbacks(&mut self) {
+        if !system_fonts_enabled() {
+            return;
+        }
         let collection = &mut self.font_cx.collection;
         if slot_resolves(collection, &self.sans) && slot_resolves(collection, &self.mono) {
             return;
@@ -475,6 +487,9 @@ fn load_installed_names<'a>(
     families: impl IntoIterator<Item = FontFamilyName<'a>>,
 ) -> bool {
     let mut added = false;
+    if !system_fonts_enabled() {
+        return added;
+    }
     for family in families {
         let FontFamilyName::Named(name) = family else { continue };
         if collection.family_id(&name).is_some() || !tried.insert(name.to_lowercase()) {
@@ -517,9 +532,13 @@ pub(crate) fn named_list(list: &str) -> Vec<FontFamilyName<'_>> {
 /// The families each system font file added to the collection, so a file is loaded once.
 pub(crate) type LoadedFiles = HashMap<std::path::PathBuf, Vec<FamilyId>>;
 
-/// The families of `paths`, in order, loading each file the first time.
+/// The families of `paths`, in order, loading each file the first time. Nothing while system
+/// fonts are off (`set_system_fonts`).
 fn load_files(collection: &mut Collection, loaded: &mut LoadedFiles, paths: impl IntoIterator<Item = std::path::PathBuf>) -> Vec<FamilyId> {
     let mut families: Vec<FamilyId> = Vec::new();
+    if !system_fonts_enabled() {
+        return families;
+    }
     for path in paths {
         let ids = loaded.entry(path).or_insert_with_key(|path| {
             let before: Vec<FamilyId> = collection.family_ids().collect();

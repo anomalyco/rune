@@ -846,3 +846,14 @@ fn monochrome_selected_font_cannot_steal_emoji() {
 
 
 
+
+/// `RUNE_SYSTEM_FONTS` turns system fonts off only for an explicit off value.
+#[test]
+fn system_fonts_env_values() {
+    for v in ["off", "OFF", "0", "false", "no", " off "] {
+        assert!(switch::from_env(Some(v)), "{v}");
+    }
+    for v in [None, Some("on"), Some("1"), Some(""), Some("yes")] {
+        assert!(!switch::from_env(v), "{v:?}");
+    }
+}

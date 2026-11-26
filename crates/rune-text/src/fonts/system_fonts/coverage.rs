@@ -293,7 +293,7 @@ impl TextSystem {
         routes: &[(std::ops::Range<usize>, fallback::Route)],
         language: Option<parley::fontique::Language>,
     ) {
-        if text.is_ascii() {
+        if text.is_ascii() || !super::system_fonts_enabled() {
             return;
         }
         let locale = language.as_ref().map(|l| l.to_string());
