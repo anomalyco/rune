@@ -4164,6 +4164,18 @@ $L --desktop examples/launcher/backdrop.png --script examples/launcher/scripts/d
    --video desktop.mp4 --keys --pointer
 ```
 
+- **Fonts across operating systems**: text uses system fonts for what the registered fonts
+  lack, and the system's lookup (CoreText, DirectWrite, fontconfig) differs per host, so
+  `--tree` metrics and `--snap` text can differ between macOS, Windows and Linux. Set
+  `RUNE_SYSTEM_FONTS=off` (or call `rune::text::set_system_fonts(false)` before the first text
+  lays out; it covers `--snap`, `--tree`, scripts and `App::headless_runtime`) to load no
+  system font at all: text shapes with only the bundled faces, `AppSpec::fonts` and `add_font`,
+  `ui-monospace` and `Family::SystemMono` fall back to the sans slot, a `families` slot or
+  `Family::Named` that names an installed font falls back to sans, and a character none of the
+  registered fonts has draws as the font's missing glyph. Bundle every face the app shows
+  (both `families` slots, plus any script, symbol or emoji font) for its text to look the same.
+  Text metrics then match across hosts; glyph pixels still rasterize with each platform's own
+  smoothing.
 - **Settling layout callbacks** (`--settle`, valid with `--snap` or `--tree`): runs up to 3
   zero-dt passes at the capture frame while layout callbacks (`on_layout`, `on_layout_tx`,
   `on_screen_layout`, `on_drawn_layout`, `drawn_rect_into`, `on_visible`, `on_visible_rows`,

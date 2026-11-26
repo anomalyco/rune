@@ -84,6 +84,8 @@ pub use fonts::full_faces::add_font;
 pub use fonts::language::set_language;
 pub use fonts::system_fonts::InstalledFamily;
 pub use fonts::system_fonts::installed_families;
+pub use fonts::system_fonts::set_system_fonts;
+pub use fonts::system_fonts::system_fonts_enabled;
 #[doc(hidden)]
 pub use icon::Facing;
 pub use icon::Icon;
