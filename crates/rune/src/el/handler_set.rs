@@ -7,9 +7,21 @@ use crate::el::{
     VisibleRowsFn, WindowFocusFn,
 };
 
+/// One custom accessibility action registered via [`crate::El::a11y_action`].
+#[derive(Clone)]
+pub(crate) struct CustomA11yAction {
+    pub id: String,
+    pub label: String,
+    pub handler: PressFn,
+}
+
 #[derive(Clone)]
 pub(crate) struct Handlers {
     pub on_a11y_action: Option<A11yActionFn>,
+    /// `El::a11y_action`: custom accessibility actions (VoiceOver's Actions rotor, AT-SPI
+    /// Action interface, web mirror action buttons), boxed so elements without them pay one
+    /// pointer inside `Cold<Handlers>`.
+    pub custom_a11y_actions: Option<Box<Vec<CustomA11yAction>>>,
     pub on_paste: Option<PasteFn>,
     pub on_window_focus: Option<WindowFocusFn>,
     /// `El::on_spellcheck`: the app's spell checking setting and what flips it.
@@ -146,6 +158,7 @@ impl Handlers {
 impl Empty for Handlers {
     const EMPTY: &'static Self = &Handlers {
         on_a11y_action: None,
+        custom_a11y_actions: None,
         on_paste: None,
         on_window_focus: None,
         on_spellcheck: None,

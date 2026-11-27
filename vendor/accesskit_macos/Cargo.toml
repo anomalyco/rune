@@ -58,6 +58,7 @@ version = "0.2.0"
 features = [
     "NSAccessibility",
     "NSAccessibilityConstants",
+    "NSAccessibilityCustomAction",
     "NSAccessibilityElement",
     "NSAccessibilityProtocols",
     "NSColor",

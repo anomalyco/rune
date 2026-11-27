@@ -757,6 +757,55 @@ impl El {
         }));
         self
     }
+
+    /// Add a named custom accessibility action on this element (VoiceOver's Actions rotor on
+    /// macOS, AT-SPI's `Action` interface on Linux, and visually hidden action buttons in the
+    /// web accessibility mirror).
+    ///
+    /// Use this on composite rows or cards whose secondary actions (such as "Open", "Pin", or
+    /// "More") appear only on hover or focus, so screen reader users can discover and invoke
+    /// them directly from the element without mounting extra Tab stops on every row.
+    ///
+    /// Repeatable: call once per action. Calling again with the same `id` updates that action's
+    /// label and handler in place. An empty `id` or blank `label` is ignored. Custom actions are
+    /// advertised only while the element is enabled, non-inert, and not occluded by a modal; they
+    /// do not alter the element's role, focusability, or pointer hit testing.
+    ///
+    /// ```
+    /// # use rune::{el, text};
+    /// # struct State { opened: bool, more: bool }
+    /// let _row = el()
+    ///     .key("row-1")
+    ///     .role("article")
+    ///     .label("Row one")
+    ///     .focusable(true)
+    ///     .a11y_action("open", "Open", |s: &mut State, _| s.opened = true)
+    ///     .a11y_action("more", "More", |s: &mut State, _| s.more = true)
+    ///     .child(text("Row one"));
+    /// ```
+    pub fn a11y_action<S: 'static>(
+        mut self,
+        id: impl Into<String>,
+        label: impl Into<String>,
+        f: impl Fn(&mut S, &mut crate::el::Tx) + 'static,
+    ) -> Self {
+        let id = id.into();
+        let label = label.into();
+        if id.is_empty() || label.trim().is_empty() {
+            return self;
+        }
+        let handler: crate::el::PressFn = std::rc::Rc::new(move |s, tx| {
+            f(crate::states::downcast::<S>(s), tx)
+        });
+        let actions = self.handlers.custom_a11y_actions.get_or_insert_with(Default::default);
+        if let Some(existing) = actions.iter_mut().find(|a| a.id == id) {
+            existing.label = label;
+            existing.handler = handler;
+        } else {
+            actions.push(crate::el::CustomA11yAction { id, label, handler });
+        }
+        self
+    }
 }
 
 impl El {

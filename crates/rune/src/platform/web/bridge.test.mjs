@@ -4439,3 +4439,44 @@ test('syncA11y and focusA11y mirror, patch, and clear aria-current on mirror nod
         bridge.destroy(h);
     }
 });
+
+test('syncA11y renders custom accessibility actions as non-tabbable buttons that dispatch a11y_custom', () => {
+    const { h, events: sent } = setup({ page: true });
+    try {
+        const items = [
+            { k: 'group', g: 'article', p: '0/row-1', r: [0, 0, 240, 40], t: 'Row one' },
+            { k: 'button', p: '0/row-1', r: [0, 0, 1, 1], t: 'Open', a: 0, ca: 'open' },
+            { k: 'button', p: '0/row-1', r: [0, 0, 1, 1], t: 'More', a: 0, ca: 'more' },
+        ];
+        bridge.syncA11y(h, JSON.stringify(items));
+
+        const article = h.a11yByPath.get('0/row-1');
+        assert.ok(article, 'row article stays registered in a11yByPath');
+        assert.equal(article.tagName, 'ARTICLE');
+        const buttons = article.children.filter(c => c.tagName === 'BUTTON');
+        assert.equal(buttons.length, 2);
+        assert.equal(buttons[0].textContent, 'Open');
+        assert.equal(buttons[0].tabIndex, -1, 'custom actions must never become Tab stops even in document mode');
+        assert.equal(buttons[0].getAttribute('data-rune-a11y-action'), 'open');
+        assert.equal(buttons[1].textContent, 'More');
+        assert.equal(buttons[1].tabIndex, -1);
+        assert.equal(buttons[1].getAttribute('data-rune-a11y-action'), 'more');
+
+        sent.length = 0;
+        let prevented = false;
+        buttons[1].dispatchEvent({ type: 'click', preventDefault() { prevented = true; } });
+        assert.ok(prevented);
+        assert.deepEqual(sent, [{ kind: 'a11y_custom', path: '0/row-1', id: 'more' }]);
+
+        // Incremental patch removes one action without touching the other.
+        bridge.syncA11y(h, JSON.stringify({
+            p: 1,
+            d: ['button:0/row-1\x1fmore'],
+            o: { 'article:0/row-1': ['button:0/row-1\x1fopen'] },
+        }));
+        assert.equal(article.children.filter(c => c.tagName === 'BUTTON').length, 1);
+        assert.equal(h.a11yByPath.get('0/row-1'), article);
+    } finally {
+        bridge.destroy(h);
+    }
+});

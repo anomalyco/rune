@@ -146,7 +146,8 @@ impl RuntimeCore {
         matches!(action, Action::Press(..) | Action::DoublePress(..) | Action::MiddlePress(..) | Action::AnyPress(..) | Action::Link(..) | Action::LinkSecondary(..)
             | Action::SecondaryPress(..) | Action::SecondaryRepost { .. } | Action::Drag(..) | Action::DragRepeat(..) | Action::DragStart(_) | Action::DragEnd(..) | Action::EdgeDrag(..) | Action::Dismiss(_)
             | Action::FieldMenu(..) | Action::Files(_) | Action::Paste(..) | Action::ClipboardRead(..) | Action::FileDialog(..) | Action::Key { .. }
-            | Action::KeyUp(_) | Action::Physical(..) | Action::Focus(..) | Action::FocusControl(_) | Action::Blur)
+            | Action::KeyUp(_) | Action::Physical(..) | Action::Focus(..) | Action::FocusControl(_) | Action::Blur
+            | Action::A11y(_, crate::a11y::actions::A11yAct::CustomAction(_)))
     }
 
     /// Whether a release (or an edit) left a handler that has to run inside the input's event.

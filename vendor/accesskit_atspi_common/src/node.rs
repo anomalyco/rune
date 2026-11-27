@@ -464,8 +464,16 @@ impl NodeWrapper<'_> {
         self.0.is_root()
     }
 
+    fn custom_actions(&self) -> &[accesskit::CustomAction] {
+        if self.0.supports_action(Action::CustomAction, &filter) {
+            self.0.data().custom_actions()
+        } else {
+            &[]
+        }
+    }
+
     fn supports_action(&self) -> bool {
-        self.0.is_clickable(&filter)
+        self.0.is_clickable(&filter) || !self.custom_actions().is_empty()
     }
 
     fn supports_component(&self) -> bool {
@@ -545,18 +553,23 @@ impl NodeWrapper<'_> {
     }
 
     fn n_actions(&self) -> i32 {
-        if self.0.is_clickable(&filter) { 1 } else { 0 }
+        let base = if self.0.is_clickable(&filter) { 1 } else { 0 };
+        base + self.custom_actions().len() as i32
     }
 
     fn get_action_name(&self, index: i32) -> String {
-        if index != 0 {
+        if index < 0 {
             return String::new();
         }
-        String::from(if self.0.is_clickable(&filter) {
-            "click"
-        } else {
-            ""
-        })
+        let clickable = self.0.is_clickable(&filter);
+        if clickable && index == 0 {
+            return String::from("click");
+        }
+        let custom_idx = (index - if clickable { 1 } else { 0 }) as usize;
+        self.custom_actions()
+            .get(custom_idx)
+            .map(|a| a.description.clone())
+            .unwrap_or_default()
     }
 
     fn raw_bounds_and_transform(&self) -> (Option<Rect>, Affine) {
@@ -1140,15 +1153,42 @@ impl PlatformNode {
     }
 
     pub fn do_action(&self, index: i32) -> Result<bool> {
-        if index != 0 {
+        if index < 0 {
             return Ok(false);
         }
-        self.do_action_internal(self.id, |_, _, target_node, target_tree| ActionRequest {
-            action: Action::Click,
-            target_tree,
-            target_node,
-            data: None,
-        })?;
+        let context = self.upgrade_context()?;
+        let tree = context.read_tree();
+        let Some(node) = tree.state().node_by_id(self.id) else {
+            return Err(Error::Defunct);
+        };
+        let clickable = node.is_clickable(&filter);
+        let request = if clickable && index == 0 {
+            let (target_node, target_tree) =
+                tree.state().locate_node(self.id).ok_or(Error::Defunct)?;
+            ActionRequest {
+                action: Action::Click,
+                target_tree,
+                target_node,
+                data: None,
+            }
+        } else if node.supports_action(Action::CustomAction, &filter) {
+            let custom_idx = (index - if clickable { 1 } else { 0 }) as usize;
+            let Some(ca) = node.data().custom_actions().get(custom_idx) else {
+                return Ok(false);
+            };
+            let (target_node, target_tree) =
+                tree.state().locate_node(self.id).ok_or(Error::Defunct)?;
+            ActionRequest {
+                action: Action::CustomAction,
+                target_tree,
+                target_node,
+                data: Some(ActionData::CustomAction(ca.id)),
+            }
+        } else {
+            return Ok(false);
+        };
+        drop(tree);
+        context.do_action(request);
         Ok(true)
     }
 
@@ -2211,5 +2251,56 @@ mod tests {
             let attrs = NodeWrapper(&node).attributes();
             assert_eq!(attrs.get("current").map(String::as_str), expected, "current attribute mismatch for {key}");
         }
+    }
+
+    #[test]
+    fn custom_actions_exposed_on_atspi_action_interface() {
+        let mut root = Node::new(Role::Window);
+        root.set_children(vec![NodeId(1), NodeId(2)]);
+
+        let mut row = Node::new(Role::Article);
+        row.set_author_id("row");
+        row.add_action(Action::CustomAction);
+        row.set_custom_actions(vec![
+            accesskit::CustomAction { id: 10, description: "Open".into() },
+            accesskit::CustomAction { id: 20, description: "More".into() },
+        ]);
+
+        let mut btn = Node::new(Role::Button);
+        btn.set_author_id("btn");
+        btn.add_action(Action::Click);
+        btn.add_action(Action::CustomAction);
+        btn.set_custom_actions(vec![
+            accesskit::CustomAction { id: 30, description: "Pin".into() },
+        ]);
+
+        let update = TreeUpdate {
+            nodes: vec![(NodeId(0), root), (NodeId(1), row), (NodeId(2), btn)],
+            tree: Some(TreeInfo::new(NodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        };
+        let t = Tree::new(update, false);
+        fn find<'a>(node: NodeRef<'a>, key: &str) -> Option<NodeRef<'a>> {
+            if node.author_id() == Some(key) {
+                return Some(node);
+            }
+            node.children().find_map(|c| find(c, key))
+        }
+        let row_node = find(t.state().root(), "row").unwrap();
+        let row_wrap = NodeWrapper(&row_node);
+        assert!(row_wrap.supports_action());
+        assert_eq!(row_wrap.n_actions(), 2);
+        assert_eq!(row_wrap.get_action_name(0), "Open");
+        assert_eq!(row_wrap.get_action_name(1), "More");
+        assert_eq!(row_wrap.get_action_name(2), "");
+
+        let btn_node = find(t.state().root(), "btn").unwrap();
+        let btn_wrap = NodeWrapper(&btn_node);
+        assert!(btn_wrap.supports_action());
+        assert_eq!(btn_wrap.n_actions(), 2);
+        assert_eq!(btn_wrap.get_action_name(0), "click");
+        assert_eq!(btn_wrap.get_action_name(1), "Pin");
+        assert_eq!(btn_wrap.get_action_name(-1), "");
     }
 }

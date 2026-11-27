@@ -64,7 +64,7 @@ pub(crate) use direction::{DirEffect, DirEvent, Flow, Pin, mirror_anchor, mirror
 pub(crate) use drop::{DropHoverFn, DropSpec};
 pub(crate) use focus::FocusSpec;
 pub(crate) use focus::ModalSpec;
-pub(crate) use handler_set::Handlers;
+pub(crate) use handler_set::{CustomA11yAction, Handlers};
 pub use grid::{GridRow, grid};
 pub use handlers::{Drag, Phase, PointerEvent, PointerPress, SwipeEdge};
 pub(crate) use handlers::{A11yActionFn, AnyPressFn, DragEndFn, DragFn, DragOutFn, InputKeyFn, PointerFn, PointerMotionFn, PressFn, SetValueFn, StepFn, StepLimitFn, WindowDrag};
