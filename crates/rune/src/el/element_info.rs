@@ -22,6 +22,7 @@ impl Default for ElementInfo {
             rect: [0.0; 4],
             target: [0.0; 4],
             opacity: 1.0,
+            layer_opacity: 1.0,
             scale: 1.0,
             blur: 0.0,
             radius: 0.0,

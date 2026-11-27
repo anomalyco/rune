@@ -385,6 +385,37 @@ fn tree_json_emits_description_and_border_color_when_present() {
 }
 
 #[test]
+fn tree_json_emits_layer_opacity_matching_element_info() {
+    let view = |_: &(), _: &mut Cx<()>| {
+        crate::col().key("root").size(240.0, 160.0)
+            .child(crate::el().key("plain").size(40.0, 20.0))
+            .child(
+                crate::col().key("box").size(100.0, 40.0).layer_opacity(0.65)
+                    .child(crate::text("Hi").key("label"))
+                    .child(crate::el().key("nested").size(40.0, 20.0).layer_opacity(0.5)),
+            )
+            .child(crate::el().key("both").size(40.0, 20.0).opacity(0.8).layer_opacity(0.65))
+            .child(crate::el().key("zero").size(40.0, 20.0).layer_opacity(0.0))
+    };
+    let mut rt = Runtime::new((), view, (240.0, 160.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let tree = tree_json(&rt, 0.0);
+    let tree_els = tree["elements"].as_array().unwrap();
+    let find_json = |key: &str| tree_els.iter().find(|e| e["key"].as_str() == Some(key)).unwrap();
+
+    assert_eq!(find_json("plain")["opacity"], serde_json::json!(1.0));
+    assert_eq!(find_json("plain")["layerOpacity"], serde_json::json!(1.0));
+    assert_eq!(find_json("box")["opacity"], serde_json::json!(1.0));
+    assert_eq!(find_json("box")["layerOpacity"], serde_json::json!(0.65));
+    assert_eq!(find_json("label")["opacity"], serde_json::json!(1.0));
+    assert_eq!(find_json("label")["layerOpacity"], serde_json::json!(0.65));
+    assert_eq!(find_json("nested")["layerOpacity"], serde_json::json!(0.325));
+    assert_eq!(find_json("both")["layerOpacity"], serde_json::json!(0.65));
+    assert_eq!(find_json("zero")["opacity"], serde_json::json!(1.0));
+    assert_eq!(find_json("zero")["layerOpacity"], serde_json::json!(0.0));
+}
+
+#[test]
 fn tree_json_reports_the_pointer_and_the_cursor_on_the_element_it_is_read_from() {
     use crate::Cursor;
     let view = |_: &(), _: &mut Cx<()>| {

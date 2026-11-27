@@ -62,8 +62,8 @@ fn assert_same_state<S: 'static>(memo_rt: &Runtime<S>, fresh_rt: &Runtime<S>, st
             "{step}: ElementInfo[{i}] identity/state",
         );
         assert_eq!(
-            (a.rect, a.target, a.visible, a.opacity.to_bits(), a.scale.to_bits(), a.hover.to_bits(), a.press.to_bits(), a.moving),
-            (b.rect, b.target, b.visible, b.opacity.to_bits(), b.scale.to_bits(), b.hover.to_bits(), b.press.to_bits(), b.moving),
+            (a.rect, a.target, a.visible, a.opacity.to_bits(), a.layer_opacity.to_bits(), a.scale.to_bits(), a.hover.to_bits(), a.press.to_bits(), a.moving),
+            (b.rect, b.target, b.visible, b.opacity.to_bits(), b.layer_opacity.to_bits(), b.scale.to_bits(), b.hover.to_bits(), b.press.to_bits(), b.moving),
             "{step}: ElementInfo[{i}] ({}) geometry/motion",
             a.path,
         );

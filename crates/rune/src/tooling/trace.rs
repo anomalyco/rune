@@ -130,6 +130,10 @@ pub(super) fn r2(v: f32) -> f64 {
     r2_f64(f64::from(v))
 }
 
+fn r3(v: f32) -> f64 {
+    (f64::from(v) * 1000.0).round() / 1000.0
+}
+
 fn r2_f64(v: f64) -> f64 {
     (v * 100.0).round() / 100.0
 }
@@ -451,6 +455,7 @@ pub(crate) fn tree_json_core(rt: &crate::runtime::RuntimeCore, real_t: f64) -> V
                 "role": e.role,
                 "rect": e.rect.map(r2),
                 "opacity": (e.opacity * 1000.0).round() / 1000.0,
+                "layerOpacity": r3(e.layer_opacity),
                 "scale": (e.scale * 10000.0).round() / 10000.0,
                 "blur": r2(e.blur),
                 "radius": r2(e.radius),

@@ -45,8 +45,7 @@ impl RuntimeCore {
             let fill = unpremul(over(overlay.premul(1.0), base.premul(1.0)));
             // Static fades, as they show: its own `dim` and the layer opacity of it and every
             // element it sits in.
-            let k = v.paint_alpha
-                * std::iter::successors(Some(i), |&j| self.tree.nodes[j].parent).map(|j| self.tree.nodes[j].vis.layer_opacity).product::<f32>();
+            let k = v.paint_alpha * self.tree.effective_layer_opacity(i);
             let mut colors = [Color::TRANSPARENT; 6];
             colors[C_FILL] = fill.alpha(fill.a * k);
             if v.border_width() > 0.0 {

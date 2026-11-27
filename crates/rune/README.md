@@ -4175,7 +4175,7 @@ $S --script examples/settings/scripts/keycaps.json --video keys.mov --keys --key
 $S --script examples/settings/scripts/demo.json --start 0.12 --frames 24 --every 3 --cols 4 \
    --strip strip.png --crop 370,74,214,36 --crop 530,305,60,30     # crops stacked per frame
 $S --tree tree.json [--at T] [--settle]  # key, path, role, label, description, text, presented rect, target,
-                                 # opacity, radius, fill/borderColor/text colour, textStyle (resolved
+                                 # opacity, layerOpacity, radius, fill/borderColor/text colour, textStyle (resolved
                                  # family, size, weight, lineHeight, tracking, italic), hover/press, moving
 $S --trace run.jsonl             # motion-trace JSONL (the app trace format); keyed elements only
 $S --native --trace run.jsonl --frames 240  # native submission timestamps, then close the traced window
@@ -4418,7 +4418,7 @@ if let Some(menu) = rt.popup_menu() {
   while `Tx::input_time()` stays `None`.
 - Inspect `rt.state`, `rt.presented_focus_key()` (zero-allocation focus key query matching
   `rt.elements()`), `rt.elements()` (`ElementInfo`: `key`, `path`, `role`, `label`,
-  `description`, `text`, `rect`, `inset`, `fill`, `border_color`, `text_color`,
+  `description`, `text`, `rect`, `opacity`, `layer_opacity`, `inset`, `fill`, `border_color`, `text_color`,
   `text_style`, `text_size`, `wrap`, `truncate`, `text_cut`, `clips`, `scroll_axes`,
   `raised`, `focused`, `exiting`, ...), `Tx::read_elements` (deferred presented-frame element
   reads from handlers and `poll`), `Tx::read_layout` / `Tx::read_presented` (one keyed
