@@ -136,8 +136,9 @@ impl Host {
                 key: winit::keyboard::KeyCode::Fn, mods: map_mods(self.mods), pressed, repeat: false, text: None, consumed_mods: Default::default(),
             }, None);
         }
-        let dispatched = event_loop.is_some_and(|el| self.dispatch_immediate_keyboard(el));
-        if redraw && !dispatched && let Some(l) = &self.win {
+        if crate::window::should_redraw_after_polled_keys(redraw, event_loop, |el| self.dispatch_immediate_keyboard(el))
+            && let Some(l) = &self.win
+        {
             l.request_redraw();
         }
     }
@@ -154,8 +155,9 @@ impl Host {
         for (decoded, mods) in events {
             redraw |= self.app.media_key(decoded, mods);
         }
-        let dispatched = event_loop.is_some_and(|el| self.dispatch_immediate_keyboard(el));
-        if redraw && !dispatched && let Some(l) = &self.win {
+        if crate::window::should_redraw_after_polled_keys(redraw, event_loop, |el| self.dispatch_immediate_keyboard(el))
+            && let Some(l) = &self.win
+        {
             l.request_redraw();
         }
     }
