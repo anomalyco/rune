@@ -421,6 +421,9 @@ pub(crate) enum Pos {
 pub(crate) enum Kind {
     /// A named time with no input effect.
     Mark(String),
+    /// Waits in headless `--script` up to `wait_s` seconds until an element with `key` exists,
+    /// pumping zero-dt frames with the clock stopped.
+    AwaitKey { key: String, wait_s: f64 },
     Focus(bool),
     /// The app reopened (macOS: its Dock icon clicked).
     Reopen,
@@ -526,7 +529,7 @@ pub(crate) fn script_input(
         Kind::ButtonUp(b) => core.button_up(app, x, y, *b),
         Kind::KeyUp(k) => { core.key_up(app, k.clone()); }
         Kind::PhysicalKey(event, k, base) => core.physical_key_input(app, event.clone(), k.clone(), *base),
-        Kind::Mark(_) | Kind::Reopen | Kind::CloseRequest | Kind::QuitRequest | Kind::OpenUrl(_) | Kind::OpenFiles(_) | Kind::Menu(_) | Kind::PopupMenu(_)
+        Kind::Mark(_) | Kind::AwaitKey { .. } | Kind::Reopen | Kind::CloseRequest | Kind::QuitRequest | Kind::OpenUrl(_) | Kind::OpenFiles(_) | Kind::Menu(_) | Kind::PopupMenu(_)
         | Kind::FileDialog(_) | Kind::FileDialogFiles(_) | Kind::Shortcut(_) | Kind::Resize(..) => return false,
     }
     true
@@ -620,6 +623,7 @@ impl Ev {
         let pointer = |action| ScriptEvent::Pointer { action, at: at() };
         let event = match &self.kind {
             Kind::Mark(name) => ScriptEvent::Mark(name.clone()),
+            Kind::AwaitKey { key, wait_s } => ScriptEvent::AwaitKey { key: key.clone(), wait_s: *wait_s },
             Kind::Focus(focused) => ScriptEvent::Focus(*focused),
             Kind::Reopen => ScriptEvent::Reopen,
             Kind::CloseRequest => ScriptEvent::CloseRequest,

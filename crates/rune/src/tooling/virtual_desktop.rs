@@ -449,7 +449,7 @@ pub(crate) fn run(windows: Vec<AnyWindowSpec>, selected: usize, args: Args, acce
             };
             let (x, y) = at();
             match &e.kind {
-                Kind::Mark(_) => {}
+                Kind::Mark(_) | Kind::AwaitKey { .. } => {}
                 Kind::Focus(focused) => desk.set_active(*focused),
                 Kind::Reopen => desk.reopen(accessory, &desktop, real_t),
                 Kind::CloseRequest => {

@@ -105,6 +105,9 @@ impl WindowScript {
                 turn.lines.push(format!("rune-mark {name} {} {elapsed:.3}", e.t));
                 continue;
             }
+            if matches!(e.kind, Kind::AwaitKey { .. }) {
+                continue;
+            }
             match step(&e, self.last_down) {
                 Ok((at, true)) => {
                     if e.kind.is_down() { self.last_down = at; }
@@ -446,5 +449,21 @@ mod tests {
         for other in [WindowEvent::Focused(true), WindowEvent::Resized(PhysicalSize::new(10, 10)), WindowEvent::RedrawRequested, WindowEvent::CloseRequested] {
             assert!(!is_system_pointer(&other), "{other:?}");
         }
+    }
+    #[test]
+    fn window_script_ignores_await_key_and_replays_following_event() {
+        let t0 = crate::time::now();
+        let mut s = WindowScript::new(load_script(&serde_json::json!([
+            {"t": 0.1, "type": "move", "key": "btn", "wait_s": 5.0}
+        ])), t0);
+        s.start(t0);
+        let mut seen = Vec::new();
+        let turn = s.replay(t0 + Duration::from_millis(150), |e, _| {
+            seen.push(format!("{:?}", e.kind));
+            Ok(((10.0, 20.0), true))
+        });
+        assert!(turn.ran);
+        assert_eq!(seen, ["Move"]);
+        assert!(turn.lines.iter().all(|l| !l.contains("rune-script-error")), "{:?}", turn.lines);
     }
 }

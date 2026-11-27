@@ -203,6 +203,9 @@ pub enum ScriptEvent {
     DropFiles { paths: Vec<std::path::PathBuf>, at: ScriptPoint },
     /// `{"drag_files": "leave"}`: the file drag left the window.
     DragFilesLeave,
+    /// `{"key": …, "wait_s": …}`: wait in headless `--script` up to `wait_s` seconds for an
+    /// element with `key` to exist before playing the keyed event that follows.
+    AwaitKey { key: String, wait_s: f64 },
 }
 
 #[non_exhaustive]
