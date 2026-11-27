@@ -330,8 +330,9 @@ fn metal_layer_maximum_drawable_count_follows_frame_latency_and_launch_drawables
 /// Driving a standalone detached `CAMetalLayer` (never attached to any `NSWindow` or `NSView`)
 /// and `Renderer` through 24 live-resize (`presentsWithTransaction`) size changes followed by
 /// macOS idle rest (`poll(Poll)` + `give_back(false)`) empties the Metal retire queue (releasing
-/// held `CAMetalDrawable` and command-buffer references) and returns live HAL texture, buffer,
-/// and bind-group counts to the single-size baseline.
+/// held `CAMetalDrawable` and command-buffer references), returns live HAL texture and bind-group
+/// counts to the single-size baseline, keeps HAL buffers within Metal `Store`'s 3x ring bound,
+/// and frees every resource on teardown.
 #[cfg(feature = "metal-backend")]
 #[test]
 fn detached_metal_layer_retires_presented_drawables_on_idle_poll_and_bounds_resize_textures() {
@@ -433,9 +434,32 @@ fn detached_metal_layer_retires_presented_drawables_on_idle_poll_and_bounds_resi
         #[cfg(feature = "test-gpu-counters")]
         {
             let c = device.get_internal_counters().hal;
-            assert_eq!((c.textures.read(), c.buffers.read(), c.bind_groups.read()), base, "HAL counters return to single-size baseline after 24 resizes + idle rest");
+            assert_eq!(
+                (c.textures.read(), c.bind_groups.read()),
+                (base.0, base.2),
+                "HAL texture and bind-group counters return to single-size baseline after 24 resizes + idle rest"
+            );
+            // Rapid back-to-back submits overlap with in-flight GPU work, so Metal's
+            // `Store` keeps up to `SPARES` (2) warm ring buffers per live written buffer.
+            let buffers = c.buffers.read();
+            assert!(
+                (base.1..=base.1 * 3).contains(&buffers),
+                "HAL buffer counter stays bounded by Metal Store ring depth (1..=3x baseline {}): got {}",
+                base.1,
+                buffers
+            );
         }
         drop(renderer);
         drop(surface);
+        device.poll(wgpu::PollType::wait_indefinitely()).expect("teardown poll");
+        #[cfg(feature = "test-gpu-counters")]
+        {
+            let c = device.get_internal_counters().hal;
+            assert_eq!(
+                (c.textures.read(), c.buffers.read(), c.bind_groups.read()),
+                (0, 0, 0),
+                "dropping renderer and surface frees every Metal resource including Store spares"
+            );
+        }
     });
 }
