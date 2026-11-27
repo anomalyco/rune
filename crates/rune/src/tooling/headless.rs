@@ -411,14 +411,34 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
             let ahead = real_t - wall.elapsed().as_secs_f64();
             if ahead > 0.0 { std::thread::sleep(std::time::Duration::from_secs_f64(ahead)); }
         }
-        let frame_start = crate::time::now();
+        let mut frame_start = crate::time::now();
         let script_before = next_ev;
         #[cfg(feature = "frame-profile")]
         let events0 = next_ev;
         while next_ev < script.len() && script[next_ev].t <= real_t + 1e-9 {
             let e = &script[next_ev];
             next_ev += 1;
-            if let Some(g) = state.gate.as_mut() && !matches!(e.kind, Kind::Mark(_)) { g.input("script"); }
+            if let Some(g) = state.gate.as_mut() && !matches!(e.kind, Kind::Mark(_) | Kind::AwaitKey { .. }) { g.input("script"); }
+            if let Kind::AwaitKey { key, wait_s } = &e.kind {
+                let waited = await_key(
+                    app,
+                    &state.wake,
+                    |app| {
+                        if let Some(place) = take_requests(app, &mut menus) {
+                            state.early_place = Some(place);
+                        }
+                        app.frame(0.0);
+                        app.open_popup_headless();
+                    },
+                    key,
+                    *wait_s,
+                )
+                .map_err(|msg| format!("script: {msg}"))?;
+                if waited {
+                    frame_start = crate::time::now();
+                }
+                continue;
+            }
             let (x, y) = crate::tooling::script_point(app.rt(), e, last_down).unwrap_or_else(|msg| die(&format!("script: {msg}")));
             match &e.kind {
                 Kind::Mark(name) if args.realtime => {
@@ -692,6 +712,38 @@ pub(super) fn traffic_light_overlaps(rt: &RuntimeCore, lights: &[[f32; 4]; 3]) -
     }).collect()
 }
 
+/// Maximum sleep interval between element checks while a keyed script event waits (`wait_s`).
+const AWAIT_KEY_POLL_STEP: std::time::Duration = std::time::Duration::from_millis(20);
+
+/// Waits up to `wait_s` wall seconds for an element with `key` to exist, pumping zero-dt frames
+/// with the clock stopped so queued updates and `poll` land deterministically. Checks `find`
+/// rather than `find_shown` so an element that exists but is clipped or scrolled out of view
+/// still reports its own visibility error in `script_point`. Returns `Ok(true)` if it waited,
+/// `Ok(false)` if the element was already present.
+fn await_key(
+    app: &mut dyn HeadlessApp,
+    wake: &HeadlessWake,
+    mut pump: impl FnMut(&mut dyn HeadlessApp),
+    key: &str,
+    wait_s: f64,
+) -> Result<bool, String> {
+    if app.rt().find(key).is_some() {
+        return Ok(false);
+    }
+    let deadline = crate::time::now() + std::time::Duration::from_secs_f64(wait_s.max(0.0));
+    loop {
+        pump(app);
+        if app.rt().find(key).is_some() {
+            return Ok(true);
+        }
+        let remaining = deadline.saturating_duration_since(crate::time::now());
+        if remaining.is_zero() {
+            return Err(format!("no element with key {key:?} after {wait_s} s"));
+        }
+        wake.wait_timeout(remaining.min(AWAIT_KEY_POLL_STEP));
+    }
+}
+
 /// Lists visible text, icons and controls whose drawn rect comes within 4 pt of a traffic light.
 fn report_traffic_light_overlaps(rt: &RuntimeCore, lights: &[[f32; 4]; 3]) {
     let overlaps = traffic_light_overlaps(rt, lights);
@@ -700,3 +752,7 @@ fn report_traffic_light_overlaps(rt: &RuntimeCore, lights: &[[f32; 4]; 3]) {
     }
     eprintln!("rune: chrome: traffic lights at {:?}, {} overlapping elements", lights[0].map(r2), overlaps.len());
 }
+
+#[cfg(test)]
+#[path = "headless/await_key_tests.rs"]
+mod await_key_tests;

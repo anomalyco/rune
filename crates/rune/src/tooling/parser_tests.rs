@@ -264,3 +264,46 @@ fn scripts_drive_wheels_pinches_other_buttons_and_key_releases() {
     assert!(matches!(last.public().event, ScriptEvent::KeyUp(_)));
     assert!(matches!(script[1].public().event, ScriptEvent::Pointer { action: PointerAction::Wheel(_), .. }));
 }
+
+#[test]
+fn keyed_events_with_wait_s_emit_await_key_before_the_event() {
+    let script = parse_script(json!([
+        {"t": 0.2, "type": "tap", "key": "submit", "wait_s": 3.5},
+        {"t": 0.5, "type": "wheel", "key": "list", "dy": -40, "wait_s": 1},
+        {"t": 0.8, "wait_s": 2, "drop_files": {"paths": ["a.png"], "key": "zone"}},
+        {"t": 1.0, "type": "tap", "key": "no-wait"},
+        {"t": 1.2, "type": "tap", "key": "zero-wait", "wait_s": 0},
+        {"t": 1.4, "type": "tap", "x": 10, "y": 20, "wait_s": 5},
+    ]));
+
+    // t = 0.2: AwaitKey precedes Move, Down (and Up at 0.28).
+    assert_eq!(script[0].t, 0.2);
+    assert!(matches!(&script[0].kind, Kind::AwaitKey { key, wait_s } if key == "submit" && *wait_s == 3.5));
+    assert!(matches!(script[0].pos, Pos::Rel(0.0, 0.0)));
+    assert!(matches!(&script[0].public().event, ScriptEvent::AwaitKey { key, wait_s } if key == "submit" && *wait_s == 3.5));
+    assert!(matches!(script[1].kind, Kind::Move) && matches!(&script[1].pos, Pos::Key(k) if k == "submit"));
+    assert!(matches!(script[2].kind, Kind::Down) && matches!(&script[2].pos, Pos::Key(k) if k == "submit"));
+
+    // t = 0.5: AwaitKey precedes wheel's Move and WheelEvent.
+    let wheel_wait = script.iter().position(|e| matches!(&e.kind, Kind::AwaitKey { key, wait_s } if key == "list" && *wait_s == 1.0)).expect("wheel await");
+    assert_eq!(script[wheel_wait].t, 0.5);
+    assert!(matches!(script[wheel_wait + 1].kind, Kind::Move));
+    assert!(matches!(script[wheel_wait + 2].kind, Kind::WheelEvent(_)));
+
+    // t = 0.8: AwaitKey precedes drop_files Hover + Drop.
+    let drop_wait = script.iter().position(|e| matches!(&e.kind, Kind::AwaitKey { key, wait_s } if key == "zone" && *wait_s == 2.0)).expect("drop_files await");
+    assert_eq!(script[drop_wait].t, 0.8);
+    assert!(matches!(script[drop_wait + 1].kind, Kind::Files(FileStep::Hover(_))));
+
+    // Events without wait_s, with wait_s: 0, or without key emit no AwaitKey.
+    let awaits: Vec<&str> = script.iter().filter_map(|e| match &e.kind {
+        Kind::AwaitKey { key, .. } => Some(key.as_str()),
+        _ => None,
+    }).collect();
+    assert_eq!(awaits, ["submit", "list", "zone"]);
+
+    // script_input does not handle AwaitKey directly.
+    let mut rt = Runtime::new((), |_: &(), _: &mut crate::Cx<()>| crate::el(), (100.0, 100.0), Env::default());
+    let (core, mut app) = rt.split_mut();
+    assert!(!script_input(core, &mut app, &script[0].kind, (0.0, 0.0)));
+}
