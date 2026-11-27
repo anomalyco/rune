@@ -77,17 +77,21 @@ impl HeadlessWake {
         })
     }
 
-    pub(super) fn wait_timeout(&self, dur: std::time::Duration) {
-        if dur.is_zero() {
-            return;
-        }
+    /// Waits up to `dur` for a wake notification, returning `true` when woken by a
+    /// notification (including one already pending) and `false` on timeout or a zero wait
+    /// with no pending notification.
+    pub(super) fn wait_timeout(&self, dur: std::time::Duration) -> bool {
         let (lock, cvar) = &*self.0;
-        let Ok(mut notified) = lock.lock() else { return };
-        if !*notified {
-            let Ok((guard, _)) = cvar.wait_timeout(notified, dur) else { return };
-            notified = guard;
+        let Ok(mut notified) = lock.lock() else { return false };
+        if *notified {
+            *notified = false;
+            return true;
         }
-        *notified = false;
+        if dur.is_zero() {
+            return false;
+        }
+        let Ok((mut guard, _)) = cvar.wait_timeout(notified, dur) else { return false };
+        std::mem::replace(&mut *guard, false)
     }
 }
 
@@ -408,8 +412,12 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         let real_t = k as f64 * dt;
         #[cfg(not(target_arch = "wasm32"))]
         if args.realtime {
-            let ahead = real_t - wall.elapsed().as_secs_f64();
-            if ahead > 0.0 { std::thread::sleep(std::time::Duration::from_secs_f64(ahead)); }
+            let deadline = wall + std::time::Duration::from_secs_f64(real_t);
+            wait_realtime_tick(&state.wake, deadline, || {
+                if let Some(place) = take_requests(app, &mut menus) {
+                    state.early_place = Some(place);
+                }
+            });
         }
         let mut frame_start = crate::time::now();
         let script_before = next_ev;
@@ -753,6 +761,29 @@ fn report_traffic_light_overlaps(rt: &RuntimeCore, lights: &[[f32; 4]; 3]) {
     eprintln!("rune: chrome: traffic lights at {:?}, {} overlapping elements", lights[0].map(r2), overlaps.len());
 }
 
+/// Waits until `deadline` on the wall clock for a `--realtime` frame tick, waking early on
+/// `wake` notifications to run `on_wake` (draining queued updates and requests) before waiting
+/// out whatever time remains until `deadline`.
+#[cfg(not(target_arch = "wasm32"))]
+fn wait_realtime_tick(
+    wake: &HeadlessWake,
+    deadline: Instant,
+    mut on_wake: impl FnMut(),
+) {
+    loop {
+        let remaining = deadline.saturating_duration_since(crate::time::now());
+        if remaining.is_zero() {
+            break;
+        }
+        if wake.wait_timeout(remaining) {
+            on_wake();
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "headless/await_key_tests.rs"]
 mod await_key_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/realtime_tests.rs"]
+mod realtime_tests;
