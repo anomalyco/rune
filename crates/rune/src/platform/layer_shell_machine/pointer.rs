@@ -12,6 +12,22 @@ pub(crate) const WHEEL_LINE_POINTS: f32 = 120.0;
 /// (matches `vendor/winit/src/platform_impl/linux/wayland/seat/pointer/mod.rs`).
 pub(crate) const FINGER_POINTS_PER_AXIS_UNIT: f64 = 120.0 / 10.0;
 
+/// Rescales a non-precise layer-shell [`WheelInput`] (`axis_value120` / `axis_discrete`) from
+/// [`WHEEL_LINE_POINTS`] to `wheel_line`, leaving touchpad / continuous (`precise == true`)
+/// deltas untouched.
+#[cfg_attr(not(any(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")), test)), allow(dead_code))]
+pub(crate) fn apply_wheel_line(mut wheel: WheelInput, wheel_line: Option<f32>) -> WheelInput {
+    if !wheel.precise && let Some(line) = wheel_line {
+        if wheel.dx != 0.0 {
+            wheel.dx = (wheel.dx / WHEEL_LINE_POINTS) * line;
+        }
+        if wheel.dy != 0.0 {
+            wheel.dy = (wheel.dy / WHEEL_LINE_POINTS) * line;
+        }
+    }
+    wheel
+}
+
 /// Maps a Linux `input-event-codes.h` pointer button code to Rune's [`crate::PointerButton`],
 /// matching winit's `wayland_button_to_winit` and `window::pointer_button`.
 pub(crate) fn button_from_linux(code: u32) -> crate::PointerButton {

@@ -123,7 +123,7 @@ mod toplevel;
 pub(crate) mod xwayland;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use app::OverlayHost;
+pub(crate) use app::{AppOverlayDefaults, OverlayHost};
 #[cfg(not(target_arch = "wasm32"))]
 use app::OverlayApp;
 #[cfg(test)]
@@ -591,10 +591,16 @@ impl<T: 'static> OverlayHandle<T> {
 pub(crate) trait PendingOverlay: AnyHost {
     fn connect(&mut self, wake: Waker, frame_wake: Waker, slot_wake: Waker, gpu: Rc<RefCell<Weak<Gpu>>>);
     fn inherit_font_smoothing(&mut self, mode: crate::FontSmoothing);
+    fn inherit_wheel_glide(&mut self, on: bool);
+    fn inherit_wheel_line(&mut self, points: Option<f32>);
     fn set_prewarm_effects(&mut self, effects: crate::PrewarmEffects);
     fn set_gpu_loss_latch(&mut self, latch: Option<Arc<crate::render::loss_latch::GpuLossLatch>>);
     #[cfg(test)]
     fn font_smoothing(&self) -> crate::FontSmoothing;
+    #[cfg(test)]
+    fn wheel_glide(&self) -> bool;
+    #[cfg(test)]
+    fn wheel_line(&self) -> Option<f32>;
     #[cfg(test)]
     fn gpu_loss_latch(&self) -> Option<Arc<crate::render::loss_latch::GpuLossLatch>>;
 }

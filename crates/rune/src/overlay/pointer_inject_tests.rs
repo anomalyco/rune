@@ -472,3 +472,61 @@ fn steady_state_send_pointer_moves_allocate_zero_heap_memory() {
     overlay.drain_injected_pointers();
     assert_eq!(crate::tooling::test_alloc::allocs() - before, 0, "steady-state send_pointer moves must not allocate");
 }
+
+#[test]
+fn overlay_wheel_line_and_glide_apply_to_notches_while_touchpad_points_stay_exact() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        col().size(200.0, 200.0).child(
+            col().key("list").size(200.0, 200.0).scroll(ScrollSpec::default()).child(el().size(200.0, 2000.0)),
+        )
+    }
+    let offset = |overlay: &Overlay<()>| {
+        let id = overlay.rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
+        overlay.rt.scroll.scrolls[&id].offset
+    };
+    let app = AppSpec::new("ov-wheel", (200.0, 200.0), || (), view);
+
+    // 1. Overlay configured with wheel_line(60.0) and wheel_glide(false) jumps 60 pt immediately.
+    let spec = OverlaySpec::new("launcher", app.size, view)
+        .options(OverlayOptions { input: OverlayInput::All, ..Default::default() })
+        .wheel_line(60.0)
+        .wheel_glide(false);
+    let (mut overlay, handle) = Overlay::new(spec, (), &app);
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.set_viewport(app.size, 1.0);
+    overlay.rt.frame(0.0);
+
+    handle.send_pointer(PointerInput::wheel_lines(100.0, 100.0, 0.0, -1.0));
+    overlay.drain_injected_pointers();
+    assert!(!overlay.rt.frame(1.0 / 60.0), "overlay with wheel_glide(false) must not start ease frames");
+    assert_eq!(offset(&overlay), 60.0);
+
+    // Touchpad / point-precise deltas stay 1:1.
+    handle.send_pointer(PointerInput::wheel_points(100.0, 100.0, 0.0, -24.0));
+    overlay.drain_injected_pointers();
+    assert!(!overlay.rt.frame(1.0 / 60.0));
+    assert_eq!(offset(&overlay), 84.0);
+
+    // 2. Overlay configured with wheel_line(90.0) and wheel_glide(true) eases and settles at 90 pt.
+    let spec_glide = OverlaySpec::new("smooth", app.size, view)
+        .options(OverlayOptions { input: OverlayInput::All, ..Default::default() })
+        .wheel_line(90.0)
+        .wheel_glide(true);
+    let (mut glide_overlay, glide_handle) = Overlay::new(spec_glide, (), &app);
+    glide_overlay.presence = Presence::Shown { occluded: false };
+    glide_overlay.rt.set_viewport(app.size, 1.0);
+    glide_overlay.rt.frame(0.0);
+
+    glide_handle.send_pointer(PointerInput::wheel_lines(100.0, 100.0, 0.0, -1.0));
+    glide_overlay.drain_injected_pointers();
+    assert!(glide_overlay.rt.frame(1.0 / 60.0), "overlay with wheel_glide(true) must ease whole notch");
+    let mut settled = false;
+    for _ in 0..30 {
+        if !glide_overlay.rt.frame(1.0 / 60.0) {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled);
+    assert!((offset(&glide_overlay) - 90.0).abs() < 1e-3);
+}

@@ -872,6 +872,18 @@ impl RuntimeCore {
     #[inline]
     pub(in crate::runtime) fn wheel_glides(&self) -> bool { self.scroll.wheel_glides(self.reduced_motion, self.settled) }
 
+    #[inline]
+    pub(crate) fn wheel_glide(&self) -> bool { self.scroll.wheel_glide() }
+
+    #[inline]
+    pub(crate) fn set_wheel_glide(&mut self, on: bool) { self.scroll.set_wheel_glide(on); }
+
+    #[inline]
+    pub(crate) fn wheel_line(&self) -> Option<f32> { self.scroll.wheel_line() }
+
+    #[inline]
+    pub(crate) fn set_wheel_line(&mut self, points: Option<f32>) { self.scroll.set_wheel_line(points); }
+
     /// Whole notches of a mouse wheel, `dy` points (positive moves content down): the offset
     /// eases to where they send it as Chromium's does (`runtime/scroll/wheel.rs`), a notch that
     /// comes while it moves sending it on from where it is. A run of notches keeps to the viewport

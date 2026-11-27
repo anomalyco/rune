@@ -787,6 +787,10 @@ impl<S: 'static> WindowSpec<S> {
         srgb_blend(enabled: bool);
         /// This window's font smoothing (`App::font_smoothing`).
         font_smoothing(mode: crate::FontSmoothing);
+        /// Whether whole mouse-wheel notches glide rather than jump (`App::wheel_glide`).
+        wheel_glide(on: bool);
+        /// Window points scrolled per mouse-wheel line/notch (`App::wheel_line`).
+        wheel_line(points: f32);
         /// Maximum number of native `El::system_material` views this window may host at once
         /// (default [`crate::MAX_NATIVE_MATERIALS`], clamped to 64), like
         /// [`App::max_native_materials`].

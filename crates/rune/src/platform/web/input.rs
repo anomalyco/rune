@@ -719,7 +719,7 @@ impl Running {
                 // rely on wheel_delta to swap vertical into horizontal (it never double-swaps
                 // when dx != 0).
                 let shift = !self.input.is_mac && self.input.mods.shift_key() && !self.input.mods.control_key();
-                let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, shift, crate::runtime::LINE_POINTS);
+                let (dx, dy) = crate::runtime::wheel_delta(*delta, scale, shift, self.app.rt().wheel_line().unwrap_or(crate::runtime::LINE_POINTS));
                 let precise = matches!(delta, winit::event::MouseScrollDelta::PixelDelta(_));
                 let notch = crate::input::host_events::line_delta_is_notch(*delta, self.input.is_mac, !self.input.is_mac);
                 // Browsers give WheelEvent no gesture phase (always Moved), matching unphased
