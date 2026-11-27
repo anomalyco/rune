@@ -565,7 +565,8 @@ fn activation_token_answers_ahead_of_hide_and_returns_none_when_hidden_or_non_la
     };
 
     // Queuing activation_token and hide in one turn keeps both token replies in FIFO order so
-    // sync() answers them before Visibility::Hide runs.
+    // sync() starts them before Visibility::Hide runs.
+    let now = crate::time::now();
     overlay.presence = Presence::Shown { occluded: false };
     handle.activation_token(push("first"));
     handle.hide();
@@ -573,22 +574,20 @@ fn activation_token_answers_ahead_of_hide_and_returns_none_when_hidden_or_non_la
     let mut req = std::mem::take(&mut *overlay.shared.core.requests.lock().unwrap());
     assert_eq!(req.tokens.len(), 2);
     assert_eq!(req.visible(), Some(false));
-    for reply in req.tokens.take() {
-        assert!(overlay.presence.shown(), "sync answers tokens while the overlay is still shown");
-        reply(overlay.activation_token());
-    }
+    assert!(overlay.presence.shown(), "sync starts tokens while the overlay is still shown");
+    overlay.start_tokens(req.tokens.take(), now);
     overlay.hide();
     assert!(!overlay.presence.shown());
     assert_eq!(*log.lock().unwrap(), [("first", None), ("second", None)]);
 
     // Hidden overlay answers None once; fading-out overlay answers None once too.
     handle.activation_token(push("hidden"));
-    overlay.answer_tokens();
-    overlay.answer_tokens();
+    overlay.start_queued_tokens(now);
+    overlay.start_queued_tokens(now);
     overlay.presence = Presence::Shown { occluded: false };
     overlay.hide_fading(std::time::Duration::from_millis(150));
     handle.activation_token(push("fading"));
-    overlay.answer_tokens();
+    overlay.start_queued_tokens(now);
     assert_eq!(
         *log.lock().unwrap(),
         [("first", None), ("second", None), ("hidden", None), ("fading", None)]
@@ -624,14 +623,15 @@ fn activation_token_drains_with_none_on_hide_close_refusal_and_drop() {
         let log = log.clone();
         move |tok: Option<String>| log.lock().unwrap().push((tag, tok))
     };
+    let now = crate::time::now();
 
-    // Synchronous hide (e.g. Shell::Close) drains queued tokens before hiding and drains any
+    // Synchronous hide (e.g. Shell::Close) starts queued tokens before hiding and drains any
     // token requested inside on_focus(false) during hide_window, answering each exactly once.
     overlay.presence = Presence::Shown { occluded: false };
     overlay.rt.window_focus(true);
     handle.activation_token(push("before_hide"));
     overlay.hide();
-    overlay.answer_tokens();
+    overlay.start_queued_tokens(now);
     assert_eq!(*log.lock().unwrap(), [("before_hide", None), ("from_blur", None)]);
     assert_eq!(overlay.shared.core.requests.lock().unwrap().tokens.len(), 0);
 
@@ -639,7 +639,7 @@ fn activation_token_drains_with_none_on_hide_close_refusal_and_drop() {
     overlay.presence = Presence::Shown { occluded: false };
     handle.activation_token(push("on_close"));
     overlay.layer_closed(Some("compositor closed layer surface"));
-    overlay.answer_tokens();
+    overlay.start_queued_tokens(now);
     assert_eq!(*log.lock().unwrap(), [("before_hide", None), ("from_blur", None), ("on_close", None)]);
 
     // Dropping the overlay answers queued tokens with None (even when a reply re-entrantly asks
@@ -665,6 +665,111 @@ fn activation_token_drains_with_none_on_hide_close_refusal_and_drop() {
             ("reentrant", None),
             ("on_drop_2", None),
             ("after_drop", None),
+        ]
+    );
+}
+
+#[test]
+fn activation_token_completes_async_after_same_turn_hide_times_out_and_cancels_on_drop() {
+    use std::time::Duration;
+    use super::{KeyPolicy, Overlay, OverlayOptions, OverlaySpec, Presence};
+    use super::requests::TokenSource;
+    use crate::platform::layer_shell_machine::activation::{TIMEOUT, TokenPoll};
+    use crate::tooling::AppSpec;
+    use crate::{Cx, El};
+
+    struct State {
+        handle: Option<OverlayHandle<State>>,
+        log: TokenLog,
+    }
+    fn view(_: &State, _: &mut Cx<State>) -> El { crate::el().size(40.0, 20.0) }
+    let log: TokenLog = Arc::default();
+    let app = AppSpec::new("launcher", (40.0, 20.0), || (), |_, _| crate::el());
+    let spec = OverlaySpec::new("launcher", app.size, view)
+        .options(OverlayOptions { keys: KeyPolicy::Exclusive, ..Default::default() })
+        .on_focus(|s: &mut State, focused, _| {
+            if !focused && let Some(h) = &s.handle {
+                let log = s.log.clone();
+                h.activation_token(move |tok| log.lock().unwrap().push(("from_blur", tok)));
+            }
+        });
+    let (mut overlay, handle) = Overlay::new(spec, State { handle: None, log: log.clone() }, &app);
+    overlay.rt.state.handle = Some(handle.clone());
+    overlay.rt.frame(0.0);
+
+    let slots: Arc<std::sync::Mutex<Vec<Arc<std::sync::Mutex<TokenPoll>>>>> = Arc::default();
+    let slots_factory = slots.clone();
+    overlay.core.test_activation_source = Some(Box::new(move || {
+        let slot = Arc::new(std::sync::Mutex::new(TokenPoll::Pending));
+        slots_factory.lock().unwrap().push(slot.clone());
+        Some(TokenSource::Mock(Box::new(move || slot.lock().unwrap().clone())))
+    }));
+
+    let push = |tag: &'static str| {
+        let log = log.clone();
+        move |tok: Option<String>| log.lock().unwrap().push((tag, tok))
+    };
+    let t0 = crate::time::now();
+
+    // 1. Launcher asks for a token and hides in one turn: token starts without blocking,
+    //    hide runs immediately, on_focus(false) request drains None, and the pre-hide token
+    //    delivers its answer after the overlay is already hidden.
+    overlay.presence = Presence::Shown { occluded: false };
+    overlay.rt.window_focus(true);
+    handle.activation_token(push("before_hide"));
+    overlay.start_queued_tokens(t0);
+    assert_eq!(overlay.activation_tokens.in_flight_len(), 1);
+    assert_eq!(overlay.core.wake_deadline(overlay.rt.core()), Some(t0 + TIMEOUT));
+    overlay.hide();
+    assert!(!overlay.presence.shown(), "hide must not wait for the activation token");
+    assert_eq!(*log.lock().unwrap(), [("from_blur", None)]);
+    assert_eq!(overlay.activation_tokens.in_flight_len(), 1);
+
+    // Polling before the compositor answers keeps the request in flight.
+    overlay.poll_activation_tokens(t0 + Duration::from_millis(5));
+    assert_eq!(overlay.activation_tokens.in_flight_len(), 1);
+
+    // Once the compositor delivers done, polling runs the callback after hide.
+    *slots.lock().unwrap()[0].lock().unwrap() = TokenPoll::Done(Some("niri-token".into()));
+    overlay.poll_activation_tokens(t0 + Duration::from_millis(10));
+    assert_eq!(overlay.activation_tokens.in_flight_len(), 0);
+    assert_eq!(overlay.core.wake_deadline(overlay.rt.core()), None);
+    assert_eq!(*log.lock().unwrap(), [("from_blur", None), ("before_hide", Some("niri-token".into()))]);
+
+    // 2. A silent compositor times out at the fallback deadline and answers None once.
+    overlay.presence = Presence::Shown { occluded: false };
+    handle.activation_token(push("timed_out"));
+    overlay.start_queued_tokens(t0);
+    assert_eq!(overlay.core.wake_deadline(overlay.rt.core()), Some(t0 + TIMEOUT));
+    overlay.poll_activation_tokens(t0 + TIMEOUT - Duration::from_millis(1));
+    assert_eq!(overlay.activation_tokens.in_flight_len(), 1);
+    overlay.poll_activation_tokens(t0 + TIMEOUT);
+    assert_eq!(overlay.activation_tokens.in_flight_len(), 0);
+    assert_eq!(
+        *log.lock().unwrap(),
+        [("from_blur", None), ("before_hide", Some("niri-token".into())), ("timed_out", None)]
+    );
+
+    // 3. Drop cancels in-flight tokens before queued ones and answers re-entrant calls None.
+    let reentrant_handle = handle.clone();
+    let reentrant_log = log.clone();
+    handle.activation_token(move |tok| {
+        reentrant_log.lock().unwrap().push(("in_flight_drop", tok));
+        let inner = reentrant_log.clone();
+        reentrant_handle.activation_token(move |tok2| inner.lock().unwrap().push(("reentrant", tok2)));
+    });
+    overlay.start_queued_tokens(t0);
+    handle.activation_token(push("queued_drop"));
+    drop(overlay);
+    assert_eq!(
+        *log.lock().unwrap(),
+        [
+            ("from_blur", None),
+            ("before_hide", Some("niri-token".into())),
+            ("timed_out", None),
+            ("in_flight_drop", None),
+            ("reentrant", None),
+            ("queued_drop", None),
         ]
     );
 }

@@ -4,6 +4,8 @@
 use std::time::Duration;
 
 use crate::el::Tx;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::OverlayCore;
@@ -68,8 +70,8 @@ pub(super) enum KeyRequest {
 pub(super) type TokenReply = Box<dyn FnOnce(Option<String>) + Send>;
 
 /// Pending `OverlayHandle::activation_token` replies, plus whether the overlay is still alive
-/// to answer them. Once `Closed` (when `OverlayCore` drops), late callers answer `None`
-/// immediately instead of hanging forever.
+/// to answer them. Once `Closed` (when `OverlayCore` drops, terminates, or enters terminal GPU
+/// loss), late callers answer `None` immediately instead of hanging forever.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) enum TokenQueue {
     Open(Vec<TokenReply>),
@@ -120,6 +122,150 @@ impl TokenQueue {
     }
 }
 
+/// Source polled without blocking for one committed `OverlayHandle::activation_token` request.
+#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+pub(in crate::overlay) enum TokenSource {
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    Wayland(crate::platform::layer_shell::PendingActivationToken),
+    #[cfg(test)]
+    Mock(Box<dyn FnMut() -> crate::platform::layer_shell_machine::activation::TokenPoll>),
+}
+
+#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+impl TokenSource {
+    fn dispatch(&mut self) -> crate::platform::layer_shell_machine::activation::TokenPoll {
+        match self {
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            Self::Wayland(token) => token.dispatch(),
+            #[cfg(test)]
+            Self::Mock(poll) => poll(),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn is_live(&self) -> bool {
+        match self {
+            Self::Wayland(token) => token.is_live(),
+            #[cfg(test)]
+            Self::Mock(_) => true,
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn has_pending_events(&self) -> bool {
+        match self {
+            Self::Wayland(token) => token.has_pending_events(),
+            #[cfg(test)]
+            Self::Mock(_) => false,
+        }
+    }
+}
+
+#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+struct InFlightToken {
+    source: TokenSource,
+    state: crate::platform::layer_shell_machine::activation::State,
+    reply: Option<TokenReply>,
+}
+
+/// Owned subsystem state for in-flight non-blocking `OverlayHandle::activation_token` requests
+/// inside [`OverlayCore`]. Independent of `LayerSurface` so hiding the overlay or releasing
+/// exclusive keyboard focus in the same turn never blocks or cancels committed token replies.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+pub(in crate::overlay) struct ActivationTokens {
+    #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    in_flight: Vec<InFlightToken>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ActivationTokens {
+    #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+    fn push(&mut self, source: TokenSource, reply: TokenReply, now: Instant) {
+        use crate::platform::layer_shell_machine::activation::{State, TIMEOUT};
+        self.in_flight.push(InFlightToken {
+            source,
+            state: State::Pending { deadline: now + TIMEOUT },
+            reply: Some(reply),
+        });
+    }
+
+    pub(super) fn deadline(&self) -> Option<Instant> {
+        #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        return self.in_flight.iter().filter_map(|token| token.state.deadline()).min();
+        #[cfg(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+        None
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn has_live_wayland(&self) -> bool {
+        self.in_flight.iter().any(|token| token.state.is_pending() && token.source.is_live())
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    fn has_pending_wayland_events(&self) -> bool {
+        self.in_flight.iter().any(|token| token.state.is_pending() && token.source.has_pending_events())
+    }
+
+    #[cfg(test)]
+    pub(super) fn in_flight_len(&self) -> usize {
+        self.in_flight.len()
+    }
+
+    fn poll(&mut self, now: Instant) -> Vec<(TokenReply, Option<String>)> {
+        #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        {
+            use crate::platform::layer_shell_machine::activation::{Effect, Event, TokenPoll, step};
+            if self.in_flight.is_empty() {
+                return Vec::new();
+            }
+            let mut completed = Vec::new();
+            let mut remaining = Vec::with_capacity(self.in_flight.len());
+            for mut entry in std::mem::take(&mut self.in_flight) {
+                let event = match entry.source.dispatch() {
+                    TokenPoll::Done(Some(token)) => Event::Done(token),
+                    TokenPoll::Done(None) => Event::Failed,
+                    TokenPoll::Pending => Event::Tick { now },
+                };
+                for effect in step(&mut entry.state, event) {
+                    let Effect::Complete(answer) = effect;
+                    if let Some(reply) = entry.reply.take() {
+                        completed.push((reply, answer));
+                    }
+                }
+                if entry.state.is_pending() {
+                    remaining.push(entry);
+                }
+            }
+            self.in_flight = remaining;
+            return completed;
+        }
+        #[cfg(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+        {
+            let _ = now;
+            Vec::new()
+        }
+    }
+
+    fn cancel_all(&mut self) -> Vec<TokenReply> {
+        #[cfg(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
+        {
+            use crate::platform::layer_shell_machine::activation::{Effect, Event, step};
+            let mut cancelled = Vec::with_capacity(self.in_flight.len());
+            for mut entry in std::mem::take(&mut self.in_flight) {
+                for Effect::Complete(_) in step(&mut entry.state, Event::Cancel) {
+                    if let Some(reply) = entry.reply.take() {
+                        cancelled.push(reply);
+                    }
+                }
+            }
+            return cancelled;
+        }
+        #[cfg(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+        Vec::new()
+    }
+}
+
 /// A show or a hide, fading the window's alpha over its duration (zero: at once; see
 /// `OverlayHandle::fade_in` and `fade_out` for where windows fade).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,8 +297,8 @@ pub(super) struct Requests {
     pub window_backdrop: Option<crate::WindowBackdrop>,
     pub exclude_from_capture: Option<bool>,
     pub xwayland_input: Option<bool>,
-    /// `OverlayHandle::activation_token` replies, answered before this turn's show or hide,
-    /// while the surface may still have the keys.
+    /// `OverlayHandle::activation_token` replies, started before this turn's show, hide, or
+    /// `release_keys`, while the surface may still have the keys.
     #[cfg(not(target_arch = "wasm32"))]
     pub tokens: TokenQueue,
     /// The `setup` waker fired.
@@ -168,35 +314,80 @@ impl Requests {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl OverlayCore {
-    /// None off Wayland's layer shell, while the overlay is not shown, or while it has no surface.
-    pub(super) fn activation_token(&self) -> Option<String> {
-        if !self.presence.shown() { return None; }
-        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(super::Live { backing: super::Backing::Layer(layer), .. }) = self.surface.live() {
-            return layer.activation_token();
+    /// Starts every activation-token request in `pending` on the live surface while shown
+    /// (non-blocking on Wayland layer-shell) or answers it immediately with `None` otherwise.
+    pub(super) fn start_tokens(&mut self, pending: Vec<TokenReply>, now: Instant) {
+        if pending.is_empty() { return; }
+        let mut immediate = Vec::new();
+        for reply in pending {
+            if !self.presence.shown() {
+                immediate.push(reply);
+                continue;
+            }
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            if let Some(super::Live { backing: super::Backing::Layer(layer), .. }) = self.surface.live()
+                && let Some(token) = layer.start_activation_token()
+            {
+                self.activation_tokens.push(TokenSource::Wayland(token), reply, now);
+                continue;
+            }
+            #[cfg(test)]
+            if let Some(factory) = &mut self.test_activation_source
+                && let Some(source) = factory()
+            {
+                self.activation_tokens.push(source, reply, now);
+                continue;
+            }
+            immediate.push(reply);
         }
-        None
+        #[cfg(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))))]
+        let _ = now;
+        for reply in immediate { reply(None); }
     }
 
-    /// Answers every queued `OverlayHandle::activation_token` reply once using the live surface
-    /// while shown (or `None` otherwise), outside the requests mutex.
-    pub(super) fn answer_tokens(&self) {
+    /// Takes every queued `OverlayHandle::activation_token` reply and starts it while the
+    /// surface is still shown and live (or answers `None` otherwise), outside the requests mutex.
+    pub(super) fn start_queued_tokens(&mut self, now: Instant) {
         let pending = self.shared.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.take();
-        for reply in pending { reply(self.activation_token()); }
+        self.start_tokens(pending, now);
+    }
+
+    /// Dispatches in-flight non-blocking activation-token replies without reading the Wayland
+    /// socket and expires any request past its fallback deadline, running finished callbacks
+    /// outside all locks.
+    pub(super) fn poll_activation_tokens(&mut self, now: Instant) {
+        let completed = self.activation_tokens.poll(now);
+        for (reply, token) in completed {
+            reply(token);
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(super) fn has_live_wayland_activation_tokens(&self) -> bool {
+        self.activation_tokens.has_live_wayland()
+    }
+
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    pub(super) fn has_pending_wayland_activation_token_events(&self) -> bool {
+        self.activation_tokens.has_pending_wayland_events()
     }
 
     /// Answers every queued `OverlayHandle::activation_token` reply once with `None`, outside
     /// the requests mutex (used when tearing down a closed/refused surface or finishing a hide).
+    /// Already-committed in-flight Wayland token requests keep waiting for their `done` reply.
     pub(super) fn drain_tokens_none(&self) {
         let pending = self.shared.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.take();
         for reply in pending { reply(None); }
     }
 
-    /// Marks the overlay dropped and answers every queued `OverlayHandle::activation_token`
-    /// reply once with `None`; later calls on any surviving handle answer `None` immediately.
-    pub(super) fn close_tokens(&self) {
-        let pending = self.shared.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.close();
-        for reply in pending { reply(None); }
+    /// Marks the overlay closed for token requests, cancels every in-flight Wayland token
+    /// request, and answers all in-flight and queued replies once with `None`; later calls on
+    /// any surviving handle answer `None` immediately.
+    pub(super) fn close_tokens(&mut self) {
+        let queued = self.shared.requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner).tokens.close();
+        let in_flight = self.activation_tokens.cancel_all();
+        for reply in in_flight { reply(None); }
+        for reply in queued { reply(None); }
     }
 
     /// Keeps the window out of screen recordings, or lets recorders see it again. A window

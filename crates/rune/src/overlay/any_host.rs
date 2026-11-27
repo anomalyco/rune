@@ -75,6 +75,7 @@ impl OverlayCore {
         }).flatten()).min();
         deadline.into_iter().chain(self.backoff.deadline().filter(|_| self.presence.drawing())).chain(self.presence.deadline())
             .chain(self.hidden_pace.deadline().filter(|_| !self.presence.drawing()))
+            .chain(self.activation_tokens.deadline())
             .chain(self.rest.deadline())
             .chain(self.retire.deadline()).min()
     }
@@ -164,6 +165,7 @@ impl AnyHost for OverlayHost {
     }
 
     fn terminate(&mut self) {
+        self.core.close_tokens();
         self.core.close_after_hidden(&mut *self.app);
     }
 
@@ -205,7 +207,7 @@ impl AnyHost for OverlayHost {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         if self.core.poll_terminal_gpu_loss(&mut *self.app) {
-            self.core.drain_tokens_none();
+            self.core.close_tokens();
             self.core.close_after_hidden(&mut *self.app);
             return;
         }
@@ -483,7 +485,10 @@ impl AnyHost for OverlayHost {
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) -> bool {
         let core = &mut self.core;
         let app = &mut *self.app;
-        if core.poll_terminal_gpu_loss(app) { return false; }
+        if core.poll_terminal_gpu_loss(app) {
+            core.close_tokens();
+            return false;
+        }
         #[cfg(target_os = "macos")]
         {
             core.fn_key(app);
@@ -498,6 +503,7 @@ impl AnyHost for OverlayHost {
             let more = if core.has_cpu() { core.draw_cpu(app, Some(_event_loop)) } else { core.draw(app, Some(_event_loop)) };
             #[cfg(not(target_os = "windows"))]
             let more = core.draw(app, Some(_event_loop));
+            core.poll_activation_tokens(crate::time::now());
             core.poll_after_hidden(app);
             return core.a11y_turn(app.rt_mut()) || more;
         }
@@ -534,6 +540,7 @@ impl AnyHost for OverlayHost {
         let more = if core.has_cpu() { core.draw_cpu(app, Some(_event_loop)) } else { core.draw(app, Some(_event_loop)) };
         #[cfg(not(target_os = "windows"))]
         let more = core.draw(app, Some(_event_loop));
+        core.poll_activation_tokens(crate::time::now());
         core.apply_cursor(app.rt());
         core.a11y_turn(app.rt_mut()) || more
     }
@@ -542,7 +549,8 @@ impl AnyHost for OverlayHost {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         return matches!(self.core.surface.live().map(|l| &l.backing), Some(Backing::Layer(layer)) if layer.is_live())
             || self.core.has_live_wayland_backdrop_watch()
-            || self.core.has_live_wayland_hide_sync();
+            || self.core.has_live_wayland_hide_sync()
+            || self.core.has_live_wayland_activation_tokens();
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         false
     }
@@ -551,7 +559,8 @@ impl AnyHost for OverlayHost {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         return matches!(self.core.surface.live().map(|l| &l.backing), Some(Backing::Layer(layer)) if layer.has_pending_events())
             || self.core.has_pending_wayland_backdrop_events()
-            || self.core.has_pending_wayland_hide_sync_events();
+            || self.core.has_pending_wayland_hide_sync_events()
+            || self.core.has_pending_wayland_activation_token_events();
         #[cfg(not(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android"))))]
         false
     }

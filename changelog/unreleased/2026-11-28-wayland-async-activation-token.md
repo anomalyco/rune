@@ -1,0 +1,1 @@
+- Wayland `OverlayHandle::activation_token` now commits `xdg_activation_token_v1` requests without blocking the event thread in `EventQueue::roundtrip`, allowing same-turn `hide()` and `release_keys()` to drop `KeyPolicy::Exclusive` immediately while delivering `done` asynchronously on a private queue.
