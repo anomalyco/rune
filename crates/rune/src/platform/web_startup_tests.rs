@@ -635,3 +635,74 @@ fn start_web_runtime_lends_window_text_system_during_setup() {
     .join()
     .unwrap();
 }
+
+#[test]
+fn gpu_startup_needs_gpu_starts_immediately_from_idle_and_bypasses_quiet_wait() {
+    let t0 = crate::time::now();
+
+    // 1. Non-degradable NeedsGpu on frame 1 (Idle): probes WebGPU on the next turn (0 ms) and
+    // skips quiet wait if WebGPU fails over to WebGL2.
+    let mut seq = crate::machine::Seq::default();
+    let mut state = GpuStartup::default();
+    let Some(GpuStartupEffect::ScheduleCheck { attempt: a1, delay }) = step_one(
+        &mut state,
+        &mut seq,
+        GpuStartupEvent::NeedsGpu { at: t0, has_navigator_gpu: true, webgl_enabled: true },
+    ) else {
+        panic!("expected immediate ScheduleCheck");
+    };
+    assert_eq!(delay, Duration::ZERO);
+    assert_eq!(
+        step_one(&mut state, &mut seq, GpuStartupEvent::CheckDue { attempt: a1, now: t0 + Duration::from_millis(1) }),
+        Some(GpuStartupEffect::AskWebGpu),
+    );
+    let Some(GpuStartupEffect::ScheduleCheck { attempt: a2, delay: gl_delay }) = step_one(
+        &mut state,
+        &mut seq,
+        GpuStartupEvent::WebGpuFailed { now: t0 + Duration::from_millis(5) },
+    ) else {
+        panic!("expected immediate macrotask WebGL2 escalation");
+    };
+    assert_eq!(gl_delay, Duration::ZERO);
+    assert_eq!(
+        step_one(&mut state, &mut seq, GpuStartupEvent::CheckDue { attempt: a2, now: t0 + Duration::from_millis(6) }),
+        Some(GpuStartupEffect::AskWebGl2),
+    );
+    assert_eq!(state, GpuStartup::Done);
+
+    // 2. Non-degradable NeedsGpu arriving while waiting in WaitQuietForWebGl2 cancels the quiet
+    // timer and fires AskWebGl2 on the next turn.
+    let mut seq = crate::machine::Seq::default();
+    let mut state = GpuStartup::default();
+    let Some(GpuStartupEffect::ScheduleCheck { attempt: quiet_attempt, delay }) = step_one(
+        &mut state,
+        &mut seq,
+        GpuStartupEvent::FirstPresented {
+            at: t0,
+            has_navigator_gpu: false,
+            compiles_async: false,
+            webgl_enabled: true,
+        },
+    ) else {
+        panic!("expected quiet ScheduleCheck");
+    };
+    assert_eq!(delay, GPU_START_QUIET);
+    let Some(GpuStartupEffect::ScheduleCheck { attempt: urgent_attempt, delay: urgent_delay }) = step_one(
+        &mut state,
+        &mut seq,
+        GpuStartupEvent::NeedsGpu { at: t0 + Duration::from_millis(20), has_navigator_gpu: false, webgl_enabled: true },
+    ) else {
+        panic!("expected urgent escalation");
+    };
+    assert_eq!(urgent_delay, Duration::ZERO);
+    // Stale quiet timer is ignored.
+    assert_eq!(
+        step_one(&mut state, &mut seq, GpuStartupEvent::CheckDue { attempt: quiet_attempt, now: t0 + Duration::from_millis(300) }),
+        None,
+    );
+    assert_eq!(
+        step_one(&mut state, &mut seq, GpuStartupEvent::CheckDue { attempt: urgent_attempt, now: t0 + Duration::from_millis(21) }),
+        Some(GpuStartupEffect::AskWebGl2),
+    );
+    assert_eq!(state, GpuStartup::Done);
+}

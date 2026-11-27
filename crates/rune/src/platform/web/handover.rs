@@ -298,9 +298,13 @@ impl Browser {
         let watch_webgl = {
             let mut running = self.running.borrow_mut();
             let Some(r) = &mut *running else { return };
-            let can_take = r.presented && (
-                (self.start == Start::CpuFirst && matches!(r.draw, Draw::Cpu { failed: false, .. }))
-                || (self.webgl_restoring && matches!(r.draw, Draw::Cpu { .. } | Draw::ContextLost))
+            let can_take = web_math::cpu_canvas::can_take_pending_gpu(
+                r.presented,
+                r.cpu_blocked_on_gpu,
+                self.start == Start::CpuFirst,
+                matches!(r.draw, Draw::Cpu { failed: false, .. }),
+                self.webgl_restoring,
+                matches!(r.draw, Draw::Cpu { .. } | Draw::ContextLost),
             );
             if !can_take { return; }
             let Some(made) = self.pending.borrow_mut().take() else { return };
@@ -551,6 +555,20 @@ impl Browser {
     pub(super) fn on_cpu_frame_drawn(&mut self, at: Instant) {
         let (seq, startup) = &mut self.gpu_startup;
         let _ = startup.step(seq, web_math::GpuStartupEvent::FrameDrawn { at });
+    }
+
+    /// A frame hit a non-degradable `NeedsGpu` error on the CPU canvas: start or escalate GPU
+    /// acquisition immediately on the next macrotask instead of waiting for frame 1 or quiet.
+    pub(super) fn on_cpu_needs_gpu(&mut self, at: Instant) {
+        let effects = {
+            let (seq, startup) = &mut self.gpu_startup;
+            startup.step(seq, web_math::GpuStartupEvent::NeedsGpu {
+                at,
+                has_navigator_gpu: health::has_navigator_gpu(),
+                webgl_enabled: cfg!(feature = "webgl"),
+            })
+        };
+        self.run_gpu_startup_effects(effects);
     }
 
     /// A scheduled CPU-first GPU startup timer fired.

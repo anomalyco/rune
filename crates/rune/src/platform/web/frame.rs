@@ -188,6 +188,7 @@ struct WebFrameHost<'a> {
     drawn: bool,
     handover_completed: bool,
     retry_handover: bool,
+    cpu_needs_gpu_at: Option<Instant>,
     fatal_error: Option<String>,
     should_end: bool,
     try_gpu_came: bool,
@@ -427,9 +428,21 @@ impl FrameHost for WebFrameHost<'_> {
         let _encode = StageGuard::enter(FrameStage::Encode);
         let size = self.r.size;
         match (&mut self.r.draw, prepared) {
-            // A frame only the GPU draws (`Scene::needs_gpu`) leaves the last one up.
+            // Degradable GPU-only features paint live via `Scene::degraded(true)` inside
+            // `CpuCanvas::paint`; non-degradable `NeedsGpu` leaves the last frame up and escalates
+            // GPU startup so frame 1 cannot deadlock blank.
             (Draw::Cpu { cpu, .. }, PreparedWeb::Cpu) => {
-                self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
+                match cpu.paint(self.r.app.rt_mut(), size) {
+                    Ok(_) => {
+                        self.drawn = true;
+                        self.r.cpu_blocked_on_gpu = false;
+                    }
+                    Err(_) => {
+                        self.drawn = false;
+                        self.r.cpu_blocked_on_gpu = true;
+                        self.cpu_needs_gpu_at = Some(self.now.unwrap_or_else(Instant::now));
+                    }
+                }
                 false
             }
             (Draw::HandingOver { cpu, side, .. }, PreparedWeb::HandingOver { gpu, flipping }) => {
@@ -438,6 +451,9 @@ impl FrameHost for WebFrameHost<'_> {
                 // redundant CPU paint unless GPU acquisition missed or encoding triggers a new check.
                 if !*flipping || gpu.is_none() {
                     self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
+                    if self.drawn {
+                        self.r.cpu_blocked_on_gpu = false;
+                    }
                 }
                 let comp = match gpu.as_mut() {
                     Some(prepared_gpu) => {
@@ -447,6 +463,9 @@ impl FrameHost for WebFrameHost<'_> {
                 };
                 if *flipping && gpu.is_some() && side.renderer.checking_gpu() {
                     self.drawn = cpu.paint(self.r.app.rt_mut(), size).is_ok();
+                    if self.drawn {
+                        self.r.cpu_blocked_on_gpu = false;
+                    }
                 }
                 comp
             }
@@ -482,7 +501,11 @@ impl FrameHost for WebFrameHost<'_> {
                     for effect in effects {
                         match effect {
                             HandoverEffect::ArmFinishWait { attempt, delay } => {
-                                if let Some(copy) = copy.take() { copy.count(cpu.pixels().to_vec()); }
+                                if web_math::cpu_canvas::should_count_handover_drift(self.drawn, cpu.last_degraded())
+                                    && let Some(copy) = copy.take()
+                                {
+                                    copy.count(cpu.pixels().to_vec());
+                                }
                                 *barrier = Some(gpu::when_done(side, self.proxy, Wake::HandoverDone(attempt)));
                                 let proxy = self.proxy.clone();
                                 after(delay, move || { proxy.send_event(Wake::HandoverTimeout(attempt)).ok(); });
@@ -509,6 +532,7 @@ impl FrameHost for WebFrameHost<'_> {
             if let Some(c) = self.window.canvas() { c.style().remove_property("opacity").ok(); }
             cpu.remove();
             self.r.draw = Draw::Gpu(side);
+            self.r.cpu_blocked_on_gpu = false;
             self.r.last_presented = None;
             self.drawn = true;
             self.handover_completed = true;
@@ -583,7 +607,7 @@ impl FrameHost for WebFrameHost<'_> {
         if wants_frame || self.retry_handover {
             self.window.request_redraw();
         }
-        self.try_gpu_came = self.r.presented && !handing;
+        self.try_gpu_came = (self.r.presented || self.r.cpu_blocked_on_gpu) && !handing;
     }
 }
 
@@ -596,7 +620,7 @@ impl Browser {
         if self.terminal_failed { return; }
         self.maybe_restore_webgl();
         self.poll_handover_timeout();
-        let (fatal_error, should_end, try_gpu_came, handover_completed, first_presented_at, non_ambient_drawn_at, embedded, document) = {
+        let (fatal_error, should_end, try_gpu_came, handover_completed, first_presented_at, non_ambient_drawn_at, cpu_needs_gpu_at, embedded, document) = {
             let mut running = self.running.borrow_mut();
             let (Some(window), Some(r)) = (&self.window, &mut *running) else { return };
             if r.draw.gpu().is_some_and(|side| gpu::drain_configure_retry(side, r.suspended)) {
@@ -619,6 +643,7 @@ impl Browser {
                 drawn: false,
                 handover_completed: false,
                 retry_handover: false,
+                cpu_needs_gpu_at: None,
                 fatal_error: None,
                 should_end: false,
                 try_gpu_came: false,
@@ -634,6 +659,7 @@ impl Browser {
                 host.handover_completed,
                 host.first_presented_at,
                 host.non_ambient_drawn_at,
+                host.cpu_needs_gpu_at,
                 host.r.embedded,
                 host.r.document,
             )
@@ -655,7 +681,9 @@ impl Browser {
             self.arm_lose_gpu_harness();
         }
         if self.start == Start::CpuFirst {
-            if let Some(at) = first_presented_at {
+            if let Some(at) = cpu_needs_gpu_at {
+                self.on_cpu_needs_gpu(at);
+            } else if let Some(at) = first_presented_at {
                 self.on_first_cpu_frame(at);
             } else if let Some(at) = non_ambient_drawn_at {
                 self.on_cpu_frame_drawn(at);
