@@ -198,10 +198,13 @@ impl SurfaceRenderer {
     fn import(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, surface: usize, frame: Arc<Frame>) -> Result<Imported, String> {
         #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         let _ = surface;
-        let (textures, reusable) = match &frame.source {
+        let (textures, reusable, lease) = match &frame.source {
             // Checks the size itself, so every failure reaches the producer.
             #[cfg(target_os = "linux")]
-            Source::Dmabuf(d) => linux::import(&mut self.dmabuf, device, queue, surface, d)?,
+            Source::Dmabuf(d) => {
+                let (textures, reusable) = linux::import(&mut self.dmabuf, device, queue, surface, d)?;
+                (textures, reusable, None)
+            }
             _ if frame.size.iter().any(|v| *v > device.limits().max_texture_dimension_2d) => {
                 return Err("video dimensions exceed this GPU device's texture limit".into());
             }
@@ -223,7 +226,7 @@ impl SurfaceRenderer {
                 } else {
                     upload(device, queue, b.width / 2, b.height / 2, wgpu::TextureFormat::Rg8Unorm, &b.planes[1])
                 };
-                ([a, b], false)
+                ([a, b], false, None)
             }
             #[cfg(target_os = "macos")]
             Source::PixelBuffer(b) => {
@@ -233,24 +236,26 @@ impl SurfaceRenderer {
                 let textures = objc2::rc::autoreleasepool(|_| {
                     self.importer.as_ref().unwrap().import(b, frame.format, frame.size)
                 })?;
-                (textures, false)
+                (textures, false, None)
             }
             #[cfg(target_os = "windows")]
             Source::Shared(t) => {
                 if self.shared.is_none() {
                     self.shared = Some(windows::Importer::new(device)?);
                 }
-                (self.shared.as_mut().unwrap().import(queue, surface, t)?, true)
+                let (textures, lease) = self.shared.as_mut().unwrap().import(queue, surface, t)?;
+                let reusable = lease.is_some();
+                (textures, reusable, lease)
             }
             #[cfg(target_os = "windows")]
             Source::Decoded(planes, value) => {
                 if self.shared.is_none() {
                     self.shared = Some(windows::Importer::new(device)?);
                 }
-                (self.shared.as_mut().unwrap().import_decoded(queue, planes, *value)?, true)
+                (self.shared.as_mut().unwrap().import_decoded(queue, planes, *value)?, true, None)
             }
         };
-        Ok(Imported { frame, textures, reusable })
+        Ok(Imported { frame, textures, reusable, _lease: lease })
     }
 
     pub fn len(&self) -> usize {

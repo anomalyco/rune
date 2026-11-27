@@ -103,12 +103,14 @@ enum Release {
 /// let frame = Dmabuf::new(buffer).on_read(|read| eprintln!("frame 42 read: {read:?}"));
 /// rune_media::NativeSurface::new().push_dmabuf(frame, 42).unwrap();
 /// ```
+type CopyEntry = (wgpu::Device, wgpu::Texture, Option<Arc<()>>);
+
 pub struct Dmabuf {
     buffer: Arc<DmabufBuffer>,
     release: Mutex<Release>,
     /// Rune's copy on each device that has drawn the frame, plus an optional pool lease that
     /// keeps a pooled copy target from being overwritten while this frame is alive.
-    copies: Mutex<Vec<(wgpu::Device, wgpu::Texture, Option<Arc<()>>)>>,
+    copies: Mutex<Vec<CopyEntry>>,
 }
 
 impl Dmabuf {
@@ -230,6 +232,12 @@ struct CopyPool {
     slots: Vec<CopySlot>,
 }
 
+struct CopiedDmabuf {
+    texture: wgpu::Texture,
+    lease: Option<Arc<()>>,
+    submission: wgpu::SubmissionIndex,
+}
+
 pub(crate) struct Importer {
     /// The thread that waits for each copy and tells its producer; dropped before `device`.
     reads: ReadWorker<(wgpu::SubmissionIndex, OnRead)>,
@@ -264,6 +272,9 @@ impl Importer {
     /// GPU has finished it. Returns the textures and whether they belong to this importer's pool.
     fn import(&mut self, queue: &wgpu::Queue, surface: usize, frame: &Dmabuf) -> Result<([wgpu::Texture; 2], bool), String> {
         if let Some((_, copy, lease)) = frame.copies.lock().unwrap().iter().find(|(d, _, _)| *d == self.device) {
+            // Another window on the same device may have copied this frame into its own pool;
+            // only mark it reusable when it belongs to this importer's pool so we never pin
+            // another window's pooled texture inside this renderer's `Prepared::binds`.
             let reusable = lease.is_some()
                 && self.copies.iter().any(|p| p.surface == surface && p.slots.iter().any(|s| s.texture == *copy));
             return Ok(([copy.clone(), copy.clone()], reusable));
@@ -271,9 +282,11 @@ impl Importer {
         if frame.told() {
             return Err("the producer may be writing this dmabuf again; another GPU device read it first".into());
         }
-        let (copy, lease, submission) = self.copy(queue, surface, &frame.buffer)?;
-        let reusable = lease.is_some();
-        frame.copies.lock().unwrap().push((self.device.clone(), copy.clone(), lease));
+        let copied = self.copy(queue, surface, &frame.buffer)?;
+        let reusable = copied.lease.is_some();
+        let copy = copied.texture;
+        let submission = copied.submission;
+        frame.copies.lock().unwrap().push((self.device.clone(), copy.clone(), copied.lease));
         if let Some(f) = frame.tell()
             && let Err((_, f)) = self.reads.send((submission, f))
         {
@@ -332,13 +345,13 @@ impl Importer {
         queue: &wgpu::Queue,
         surface: usize,
         buffer: &Arc<DmabufBuffer>,
-    ) -> Result<(wgpu::Texture, Option<Arc<()>>, wgpu::SubmissionIndex), String> {
+    ) -> Result<CopiedDmabuf, String> {
         let source = self.source(buffer)?;
-        let (owned, lease) = self.acquire_copy(surface, buffer.size);
+        let (texture, lease) = self.acquire_copy(surface, buffer.size);
         let size = wgpu::Extent3d { width: buffer.size[0], height: buffer.size[1], depth_or_array_layers: 1 };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("dmabuf copy") });
-        encoder.copy_texture_to_texture(source.as_image_copy(), owned.as_image_copy(), size);
-        Ok((owned, lease, queue.submit([encoder.finish()])))
+        encoder.copy_texture_to_texture(source.as_image_copy(), texture.as_image_copy(), size);
+        Ok(CopiedDmabuf { texture, lease, submission: queue.submit([encoder.finish()]) })
     }
 
     /// `buffer` as a texture on this device, imported the first time it's drawn.

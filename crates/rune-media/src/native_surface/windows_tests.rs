@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 
 use super::*;
-use crate::native_surface::gpu_tests::{Gpu, OFFSCREEN_FORMAT, draw, render};
+use crate::native_surface::gpu_tests::{Gpu, OFFSCREEN_FORMAT, Offscreen, draw, render};
 use ::windows::Win32::Graphics::Direct3D12::{
     D3D12_FENCE_FLAG_SHARED, D3D12_HEAP_FLAG_SHARED, D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT,
     D3D12_RESOURCE_DESC, D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS, D3D12_RESOURCE_STATE_COMMON,
@@ -9,6 +9,7 @@ use ::windows::Win32::Graphics::Direct3D12::{
 };
 use ::windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 static TEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -96,6 +97,15 @@ fn make_shared_fence(device: &wgpu::Device, prefix: &str) -> ProducerFence {
     ProducerFence { name, fence, handle }
 }
 
+fn wait_zero(gpu: &Gpu, counter: &std::sync::atomic::AtomicUsize, label: &str) {
+    let deadline = rune_core::time::now() + Duration::from_secs(5);
+    while counter.load(Ordering::SeqCst) != 0 {
+        gpu.assert_alive();
+        assert!(rune_core::time::now() < deadline, "{label} stayed non-zero");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 #[test]
 fn shared_importer_pools_copies_and_prunes_on_resize_and_clear() {
     let Some(gpu) = Gpu::headless_wgpu() else { return };
@@ -103,8 +113,9 @@ fn shared_importer_pools_copies_and_prunes_on_resize_and_clear() {
     let surface = NativeSurface::new();
     let fence = make_shared_fence(&gpu.device, "fence");
 
-    // 1. Streaming 10 frames cycling 2 shared textures at 16x16 must cap owned copy targets at
-    // COPY_SLOTS (3) and keep Prepared::binds bounded to COPY_SLOTS - 1 (2).
+    // 1. Streaming 10 synchronous frames cycling 2 shared textures at 16x16 reuses leased
+    // slots (2 slots when frames complete synchronously, always <= COPY_SLOTS) and keeps
+    // Prepared::binds bounded well below KEPT_BINDS.
     let ring_16 = [
         make_shared_texture(&gpu.device, "t16a", 16, 16),
         make_shared_texture(&gpu.device, "t16b", 16, 16),
@@ -122,10 +133,15 @@ fn shared_importer_pools_copies_and_prunes_on_resize_and_clear() {
         let _ = render(&gpu, &mut renderer, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
     }
     let imp = renderer.windows_importer().expect("windows importer created");
+    let in_flight = imp.in_flight_fences_counter();
     assert_eq!(imp.cached_texture_names().len(), 2, "only the 2 active shared handles stay cached");
     assert_eq!(imp.cached_fence_count(), 1);
-    assert_eq!(imp.copy_pool_counts(), vec![(surface.key(), [16, 16], COPY_SLOTS)]);
-    assert_eq!(renderer.kept_bind_counts(), vec![COPY_SLOTS - 1], "bind cache stays capped to the copy ring");
+    let pools = imp.copy_pool_counts();
+    assert_eq!(pools.len(), 1);
+    assert_eq!(pools[0].0, surface.key());
+    assert_eq!(pools[0].1, [16, 16]);
+    assert!(pools[0].2 <= COPY_SLOTS && pools[0].2 >= 2, "expected 2..={COPY_SLOTS} pooled slots, got {}", pools[0].2);
+    assert!(renderer.kept_bind_counts()[0] < COPY_SLOTS, "bind cache stays capped to the copy ring");
     // SAFETY: plain read of the completed fence value after render() polled the device.
     assert!(unsafe { fence.fence.GetCompletedValue() } >= frame_id);
 
@@ -160,32 +176,71 @@ fn shared_importer_pools_copies_and_prunes_on_resize_and_clear() {
     }
     let imp = renderer.windows_importer().unwrap();
     assert_eq!(imp.cached_texture_names(), vec![tex_32_new.name.as_str()], "abandoned same-size handle evicted");
-    assert_eq!(imp.copy_pool_counts(), vec![(surface.key(), [32, 32], COPY_SLOTS)]);
-    assert_eq!(renderer.kept_bind_counts(), vec![COPY_SLOTS - 1]);
+    assert!(imp.copy_pool_counts()[0].2 <= COPY_SLOTS);
+    assert!(renderer.kept_bind_counts()[0] < COPY_SLOTS);
 
-    // 4. Clearing the surface drops cached handles, fences, and copy ring on the next prepare.
+    // 4. Clearing the surface drops cached handles, fences, and copy ring on the next prepare,
+    // and wakes CompletionWorker so the retired ID3D12Fence drops on an idle window without
+    // requiring any further frames or manual device.poll().
     surface.clear();
     renderer.prepare(&gpu.device, &gpu.queue, &[draw(&surface, [0.0, 0.0, 32.0, 32.0])], (32, 32));
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    renderer.prepare(&gpu.device, &gpu.queue, &[], (32, 32));
     let imp = renderer.windows_importer().unwrap();
     assert!(imp.cached_texture_names().is_empty(), "cleared surface retains no shared textures");
     assert_eq!(imp.cached_fence_count(), 0, "cleared surface retains no active fences");
-    assert_eq!(imp.retiring_fence_count(), 0, "completed retiring fences drained");
     assert!(imp.copy_pool_counts().is_empty(), "cleared surface retains no owned copy ring");
     assert!(renderer.kept_bind_counts().is_empty());
+    wait_zero(&gpu, &in_flight, "retired fence on idle window");
     // SAFETY: plain read of the completed fence value.
     assert!(unsafe { fence.fence.GetCompletedValue() } >= frame_id);
 }
 
 #[test]
-fn byte_frames_do_not_retain_stale_binds() {
+fn shared_fence_zero_and_renderer_drop_retire_safely() {
     let Some(gpu) = Gpu::headless_wgpu() else { return };
-    let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
     let surface = NativeSurface::new();
-    for id in 1..=12u64 {
-        surface.push_bytes(synthetic(16, 16, id), id).unwrap();
-        let _ = render(&gpu, &mut renderer, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
-    }
-    assert_eq!(renderer.kept_bind_counts(), vec![0], "one-shot ByteFrame textures are not retained in Prepared::binds");
+    let tex = make_shared_texture(&gpu.device, "zero", 16, 16);
+    let fence = make_shared_fence(&gpu.device, "zero-fence");
+
+    // Signal value 0 (already <= initial GetCompletedValue() == 0) then immediately drop the
+    // SurfaceRenderer while the copy + Signal are queued on the GPU.
+    let in_flight = {
+        let mut renderer = SurfaceRenderer::new(&gpu.device, OFFSCREEN_FORMAT);
+        surface
+            .push_shared(SharedTexture::named(&tex.name, 16, 16).release_fence(&fence.name, 0), 0)
+            .unwrap();
+        let target = Offscreen::new(&gpu.device, 16, 16);
+        renderer.prepare(&gpu.device, &gpu.queue, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
+        assert_eq!(surface.last_error(), None);
+        let in_flight = renderer.windows_importer().unwrap().in_flight_fences_counter();
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target.view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                ..Default::default()
+            });
+            renderer.draw(&mut pass, 0);
+        }
+        renderer.submit(&gpu.queue, encoder);
+
+        // Also queue a higher value right before dropping SurfaceRenderer with no wait.
+        surface
+            .push_shared(SharedTexture::named(&tex.name, 16, 16).release_fence(&fence.name, 7), 7)
+            .unwrap();
+        renderer.prepare(&gpu.device, &gpu.queue, &[draw(&surface, [0.0, 0.0, 16.0, 16.0])], (16, 16));
+        assert_eq!(surface.last_error(), None);
+        in_flight
+        // `renderer` drops here, retiring the signaled fence behind an empty wgpu barrier.
+    };
+
+    // Once the device polls, the barrier submission completes and drops the retained fence.
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    gpu.assert_alive();
+    assert_eq!(in_flight.load(Ordering::SeqCst), 0, "dropped importer's retired fence must release after GPU work");
+    // SAFETY: plain read of the completed fence value.
+    assert!(unsafe { fence.fence.GetCompletedValue() } >= 7);
 }

@@ -43,6 +43,9 @@ pub(crate) struct Imported {
     /// so caching their bind group in `Prepared::binds` avoids per-frame reallocation without
     /// retaining one-shot textures.
     reusable: bool,
+    /// Keeps a pooled copy target reserved while this `Imported` is live (in `cache`,
+    /// `Prepared`, or an in-flight `SurfaceRenderer::submit` callback).
+    _lease: Option<Arc<()>>,
 }
 struct Prepared {
     drawn: std::sync::atomic::AtomicBool,
