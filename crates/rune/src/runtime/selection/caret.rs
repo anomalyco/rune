@@ -280,8 +280,19 @@ impl RuntimeCore {
             self.reveal_row(app, &ScrollReveal::into_view(None, path), true);
             self.step_scroll(0.0);
         }
-        let Some(i) = self.caret_browse_focus_in(&self.tree.nodes).map(|(fi, _, _)| fi).or_else(|| self.focused_index()) else { return };
-        if self.caret_rect(&self.tree.nodes, i).is_none() { return; }
+        let follow_target = |rt: &Self| -> Option<(usize, [f32; 4])> {
+            if let Some((fi, byte, affinity)) = rt.caret_browse_focus_in(&rt.tree.nodes) {
+                return rt.caret_browse_node_rect(&rt.tree.nodes, fi, byte, affinity).map(|r| (fi, r));
+            }
+            if let Some(i) = rt.focused_index()
+                && let Some(r) = rt.caret_rect(&rt.tree.nodes, i)
+            {
+                return Some((i, r));
+            }
+            let (fi, byte, affinity) = rt.selectable_focus_mounted()?;
+            rt.caret_browse_node_rect(&rt.tree.nodes, fi, byte, affinity).map(|r| (fi, r))
+        };
+        let Some((i, _)) = follow_target(self) else { return };
         let mut scrolled = false;
         for horizontal in [false, true] {
             let mut cur = Some(i);
@@ -290,7 +301,7 @@ impl RuntimeCore {
                 if !(self.tree.nodes[v].scroll.is_some() && self.tree.nodes[v].scroll_axes.has(horizontal)) {
                     continue;
                 }
-                let Some(r) = self.caret_rect(&self.tree.nodes, i) else { return };
+                let Some((_, r)) = follow_target(self) else { return };
                 let a = usize::from(!horizontal);
                 let mut start = scroll_offsets(&self.scroll.scrolls, &self.tree.nodes, v).fold(self.tree.nodes[v].target[a], |p, o| p - o[a]);
                 let mut end = start + (self.tree.nodes[v].target[a + 2] - self.tree.nodes[v].target[a]);

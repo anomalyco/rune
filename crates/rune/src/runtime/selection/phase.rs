@@ -57,6 +57,9 @@ pub(in crate::runtime) enum Phase {
     Empty,
     /// A selection no press is making.
     Placed(Selection),
+    /// A selection last stepped by keyboard `Shift`+navigation, kept extendable even while
+    /// transiently crossing `anchor == focus` until cleared or replaced.
+    Keyboard(Selection),
     /// A primary press on a non-selectable list marker or an inline link armed a drag anchored
     /// at `selection.origin` without placing a selection or moving any caret unless the pointer
     /// drags (past drag slop when `wait_slop` is true). `prior` keeps a collapsed caret to restore
@@ -71,15 +74,20 @@ impl Phase {
     pub(in crate::runtime) fn selection(&self) -> Option<&Selection> {
         match self {
             Phase::Empty | Phase::Armed { .. } => None,
-            Phase::Placed(s) | Phase::Dragging { selection: s, .. } => Some(s),
+            Phase::Placed(s) | Phase::Keyboard(s) | Phase::Dragging { selection: s, .. } => Some(s),
         }
     }
 
     pub(in crate::runtime) fn selection_mut(&mut self) -> Option<&mut Selection> {
         match self {
             Phase::Empty | Phase::Armed { .. } => None,
-            Phase::Placed(s) | Phase::Dragging { selection: s, .. } => Some(s),
+            Phase::Placed(s) | Phase::Keyboard(s) | Phase::Dragging { selection: s, .. } => Some(s),
         }
+    }
+
+    /// Whether the current selection was last stepped with keyboard `Shift`+navigation.
+    pub(in crate::runtime) fn keyboard_extended(&self) -> bool {
+        matches!(self, Phase::Keyboard(_))
     }
 
     /// The held press is extending the selection.
@@ -96,7 +104,7 @@ impl Phase {
         match self {
             Phase::Dragging { selection, unit } => Some((selection, *unit, None)),
             Phase::Armed { selection, wait_slop, .. } => Some((selection, Unit::Char, Some(*wait_slop))),
-            Phase::Empty | Phase::Placed(_) => None,
+            Phase::Empty | Phase::Placed(_) | Phase::Keyboard(_) => None,
         }
     }
 }
@@ -187,14 +195,14 @@ pub(in crate::runtime) fn step(phase: &mut Phase, event: Event<'_>) -> Effects<E
         }
         Event::Arm { path, content, at, wait_slop } => {
             let prior = match std::mem::take(phase) {
-                Phase::Placed(prev) if prev.anchor == prev.focus && prev.far.is_none() => Some(Box::new(prev)),
+                Phase::Placed(prev) | Phase::Keyboard(prev) if prev.anchor == prev.focus && prev.far.is_none() => Some(Box::new(prev)),
                 _ => None,
             };
             *phase = Phase::Armed { selection: Selection::new(path, content, (at, at), (at, at)), prior, wait_slop };
             Effects::one(Effect::SyncPins)
         }
         Event::Extend { focus, far } => {
-            let (Phase::Placed(selection) | Phase::Dragging { selection, .. }) = std::mem::take(phase) else {
+            let (Phase::Placed(selection) | Phase::Keyboard(selection) | Phase::Dragging { selection, .. }) = std::mem::take(phase) else {
                 return Effects::none();
             };
             let mut selection = selection;
@@ -250,14 +258,14 @@ pub(in crate::runtime) fn step(phase: &mut Phase, event: Event<'_>) -> Effects<E
             }
         }
         Event::SetFocus { focus, far } => {
-            let (Phase::Placed(selection) | Phase::Dragging { selection, .. }) = std::mem::take(phase) else {
+            let (Phase::Placed(selection) | Phase::Keyboard(selection) | Phase::Dragging { selection, .. }) = std::mem::take(phase) else {
                 return Effects::none();
             };
             let mut selection = selection;
             selection.origin = (selection.anchor, selection.anchor);
             selection.focus = focus;
             selection.far = far;
-            *phase = Phase::Placed(selection);
+            *phase = Phase::Keyboard(selection);
             Effects::one(Effect::Seal)
         }
         Event::Select(selection) => {

@@ -628,7 +628,7 @@ impl Walk {
         if ours.shift != dev.shift { return Err(format!("after {letter:?}: shift {}, dev {}", ours.shift, dev.shift)); }
         match (&ours.phase, &dev.path) {
             (Phase::Empty, None) if !dev.dragging => {}
-            (Phase::Placed(sel) | Phase::Dragging { selection: sel, .. }, Some(path)) => {
+            (Phase::Placed(sel) | Phase::Keyboard(sel) | Phase::Dragging { selection: sel, .. }, Some(path)) => {
                 let unit = match &ours.phase {
                     Phase::Dragging { unit, .. } => Some(match unit { Unit::Char => U::Char, Unit::Word => U::Word, Unit::Paragraph => U::Paragraph }),
                     _ => None,
@@ -642,7 +642,7 @@ impl Walk {
                 }
             }
             (phase, _) => {
-                let phase = match phase { Phase::Empty => "empty", Phase::Placed(_) => "placed", Phase::Armed { .. } => "armed", Phase::Dragging { .. } => "dragging" };
+                let phase = match phase { Phase::Empty => "empty", Phase::Placed(_) => "placed", Phase::Keyboard(_) => "keyboard", Phase::Armed { .. } => "armed", Phase::Dragging { .. } => "dragging" };
                 return Err(format!("after {letter:?}: {phase}, dev path {:?} dragging {}", dev.path, dev.dragging));
             }
         }

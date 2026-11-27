@@ -34,9 +34,20 @@ pub(crate) enum Landing {
     ExactOffset { offset: usize },
 }
 
+/// Which selection owner a pending virtual-row move belongs to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Scope {
+    /// An opt-in `El::caret_browsing(true)` host that currently holds keyboard focus.
+    #[default]
+    FocusedCaretHost,
+    /// An active selection on plain `El::selectable(true)` text or a `selection_group`.
+    ActiveSelection,
+}
+
 /// Destination of a pending virtual-row caret move.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Target {
+    pub scope: Scope,
     pub host_path: String,
     pub list_path: String,
     pub row_index: usize,
@@ -189,6 +200,7 @@ mod tests {
 
     fn target(row_index: usize, key: &str, scan_dir: i8) -> Target {
         Target {
+            scope: Scope::FocusedCaretHost,
             host_path: "#0/doc".into(),
             list_path: "#0/doc/list".into(),
             row_index,
