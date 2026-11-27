@@ -53,12 +53,40 @@ fn retire_state_machine_clears_on_finished() {
     assert!(matches!(retire, Retire::Idle));
 }
 
+/// Whether a software adapter probe showed a genuine asynchronous busy window: work remained
+/// in flight after an immediate non-blocking poll, at least half of `planned` stayed pending
+/// after `queue.submit` returned, and `queue.submit` itself did not consume more time than the
+/// remaining in-flight work.
+fn has_async_window(
+    in_flight: bool,
+    submit_elapsed: Duration,
+    remaining: Duration,
+    planned: Duration,
+) -> bool {
+    in_flight && remaining >= planned / 2 && submit_elapsed < remaining
+}
+
+#[test]
+fn has_async_window_separates_async_software_queues_from_inline_cpu_vulkan() {
+    let planned = Duration::from_millis(100);
+    // Async software queue (e.g. DX12 WARP): submit returns quickly, ~100 ms remains in flight.
+    assert!(has_async_window(true, Duration::from_millis(3), Duration::from_millis(95), planned));
+    // Synchronous CPU Vulkan (e.g. llvmpipe): submit ran inline and Poll saw work done.
+    assert!(!has_async_window(false, Duration::from_millis(120), Duration::from_millis(1), planned));
+    // Shallow CPU queue (e.g. llvmpipe draining chunks during submit): submit took ~120 ms and
+    // only one chunk (~15 ms) remained.
+    assert!(!has_async_window(true, Duration::from_millis(120), Duration::from_millis(15), planned));
+    // Slow CPU VM where submit blocked for half the work: submit_elapsed >= remaining.
+    assert!(!has_async_window(true, Duration::from_millis(60), Duration::from_millis(60), planned));
+}
+
 struct BusyGpu {
     gpu: Arc<Gpu>,
     compute: wgpu::ComputePipeline,
     chunk: wgpu::BindGroup,
     per_chunk: Duration,
     chunks_most: u32,
+    async_window: bool,
 }
 
 impl BusyGpu {
@@ -143,7 +171,45 @@ impl BusyGpu {
         let (index, chunk_alone) = step;
         let per_chunk = if index == 0 { chunk_alone } else { chunk_alone.saturating_sub(floor).max(chunk_alone / 64) };
         let chunks_most = ((Self::QUEUED_MOST.as_secs_f64() / chunk_alone.as_secs_f64().max(1e-6)) as u32).clamp(1, Self::CHUNKS_MOST);
-        Some(BusyGpu { gpu, compute, chunk: binds.into_iter().nth(index).unwrap(), per_chunk, chunks_most })
+        let mut busy = BusyGpu {
+            gpu,
+            compute,
+            chunk: binds.into_iter().nth(index).unwrap(),
+            per_chunk,
+            chunks_most,
+            async_window: true,
+        };
+        if software {
+            busy.async_window = busy.probe_async_window();
+        }
+        Some(busy)
+    }
+
+    /// Probes a software adapter (`DeviceType::Cpu`) to see whether `submit_busy` leaves a
+    /// controlled in-flight window past an immediate non-blocking `PollType::Poll` (true on
+    /// async software queues such as DX12 WARP; false on synchronous or shallow-queue CPU
+    /// Vulkan drivers such as Mesa llvmpipe).
+    fn probe_async_window(&self) -> bool {
+        let submit_start = crate::time::now();
+        let (_, done) = self.submit_busy(Self::PLANNED_MOST);
+        let submit_elapsed = submit_start.elapsed();
+        let after_submit = crate::time::now();
+        rune_gpu::health::poll(&self.gpu.device, wgpu::PollType::Poll).ok();
+        let in_flight = !done.load(Ordering::Acquire);
+        self.drain();
+        let remaining = after_submit.elapsed();
+        has_async_window(in_flight, submit_elapsed, remaining, Self::PLANNED_MOST)
+    }
+
+    fn attempts(&self) -> &'static [Duration] {
+        const RETRIES: [Duration; 5] = [
+            Duration::from_millis(25),
+            Duration::from_millis(50),
+            Duration::from_millis(100),
+            Duration::from_millis(100),
+            Duration::from_millis(100),
+        ];
+        if self.async_window { &RETRIES } else { &RETRIES[..1] }
     }
 
     fn submit_busy(&self, planned: Duration) -> (u32, Arc<AtomicBool>) {
@@ -197,7 +263,7 @@ fn drop_overlay_core_polls_shared_device_without_blocking() {
 
     // Busy shared device: Drop returns without waiting for in-flight work.
     let mut overlapped = false;
-    for planned in [25, 50, 100, 100, 100].map(Duration::from_millis) {
+    for &planned in busy.attempts() {
         let mut overlay = make();
         overlay.core.gpu = Some(busy.gpu.clone());
         overlay.core.renderer = Some(Renderer::new(&busy.gpu.device, OFFSCREEN_FORMAT));
@@ -212,7 +278,14 @@ fn drop_overlay_core_polls_shared_device_without_blocking() {
         }
         busy.per_chunk = busy.per_chunk.min(started.elapsed() / chunks.max(1));
     }
-    assert!(overlapped, "Drop for OverlayCore must not wait for in-flight work on a shared GPU");
+    if !overlapped {
+        busy.drain();
+        assert!(!busy.async_window, "Drop for OverlayCore must not wait for in-flight work on a shared GPU");
+        eprintln!(
+            "note: software adapter ({}) could not keep queued work in flight; skipping busy-overlap assertion",
+            busy.gpu.adapter.get_info().name,
+        );
+    }
 }
 
 #[test]
@@ -227,7 +300,7 @@ fn drop_hidden_images_and_park_do_not_block_on_busy_shared_gpu_and_retire_on_lat
 
     // 1. drop_hidden_images on a busy shared device returns immediately and retires on later wake_due.
     let mut overlapped = false;
-    for planned in [25, 50, 100, 100, 100].map(Duration::from_millis) {
+    for &planned in busy.attempts() {
         let px = Pixels::new();
         px.set(4, 4, [200, 40, 20, 255].repeat(16));
         let weak_px = Arc::downgrade(&px.source);
@@ -273,15 +346,31 @@ fn drop_hidden_images_and_park_do_not_block_on_busy_shared_gpu_and_retire_on_lat
             overlapped = true;
             break;
         }
+        if !busy.async_window {
+            busy.drain();
+            assert!(overlay.wake_deadline().is_none(), "drained queue leaves no pending retirement");
+            assert!(frame_done.load(Ordering::Acquire), "overlay frame submission retired");
+            assert!(sibling_done.load(Ordering::Acquire), "shared queue retired");
+            #[cfg(feature = "test-gpu-counters")]
+            assert_eq!(busy.gpu.device.get_internal_counters().hal.textures.read(), base_textures,
+                "GPU image texture freed once work completes");
+            break;
+        }
         busy.per_chunk = busy.per_chunk.min(started.elapsed() / chunks.max(1));
     }
-    assert!(overlapped, "drop_hidden_images must not wait for in-flight work on a shared GPU");
+    if !overlapped {
+        assert!(!busy.async_window, "drop_hidden_images must not wait for in-flight work on a shared GPU");
+        eprintln!(
+            "note: software adapter ({}) could not keep queued work in flight; skipping drop_hidden_images overlap assertion",
+            busy.gpu.adapter.get_info().name,
+        );
+    }
 
     // 2. park (with renderer, and without renderer) on a busy shared device returns immediately
     //    without pinning the shared Arc<Gpu>, and retires on later wake_due.
     for with_renderer in [true, false] {
         let mut overlapped = false;
-        for planned in [25, 50, 100, 100, 100].map(Duration::from_millis) {
+        for &planned in busy.attempts() {
             busy.drain();
             #[cfg(feature = "test-gpu-counters")]
             let base_textures = busy.gpu.device.get_internal_counters().hal.textures.read();
@@ -313,8 +402,23 @@ fn drop_hidden_images_and_park_do_not_block_on_busy_shared_gpu_and_retire_on_lat
                 overlapped = true;
                 break;
             }
+            if !busy.async_window {
+                busy.drain();
+                assert!(overlay.wake_deadline().is_none(), "drained park leaves no pending retirement");
+                assert!(sibling_done.load(Ordering::Acquire), "shared queue retired");
+                #[cfg(feature = "test-gpu-counters")]
+                assert_eq!(busy.gpu.device.get_internal_counters().hal.textures.read(), base_textures,
+                    "parked renderer textures freed once work completes");
+                break;
+            }
             busy.per_chunk = busy.per_chunk.min(started.elapsed() / chunks.max(1));
         }
-        assert!(overlapped, "park (with_renderer={with_renderer}) must not wait for in-flight work on a shared GPU");
+        if !overlapped {
+            assert!(!busy.async_window, "park (with_renderer={with_renderer}) must not wait for in-flight work on a shared GPU");
+            eprintln!(
+                "note: software adapter ({}) could not keep queued work in flight; skipping park overlap assertion (with_renderer={with_renderer})",
+                busy.gpu.adapter.get_info().name,
+            );
+        }
     }
 }
