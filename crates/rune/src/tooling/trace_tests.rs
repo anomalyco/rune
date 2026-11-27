@@ -416,6 +416,98 @@ fn tree_json_emits_layer_opacity_matching_element_info() {
 }
 
 #[test]
+fn tree_json_emits_backdrop_blur_stuck_and_shadows_matching_presented_state() {
+    const DROP: crate::Shadow = crate::Shadow {
+        x: 0.0,
+        y: 4.0,
+        blur: 12.0,
+        spread: 0.0,
+        color: crate::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.4 },
+        inset: false,
+    };
+    const RING: crate::Shadow = crate::Shadow {
+        x: 0.0,
+        y: 1.0,
+        blur: 0.0,
+        spread: 0.5,
+        color: crate::Color { r: 1.0, g: 0.0, b: 0.0, a: 0.5 },
+        inset: true,
+    };
+    let view = |_: &(), _: &mut Cx<()>| {
+        let bar = crate::row().key("bar").w_full().h(54.0).fill(crate::Color::WHITE)
+            .backdrop_blur(24.0)
+            .sticky_top(0.0)
+            .stuck_shadow(DROP);
+        crate::col().key("scroll").size(300.0, 200.0).scroll(crate::ScrollSpec::default())
+            .child(
+                crate::col().w_full()
+                    .child(bar)
+                    .child(crate::el().key("plain").w_full().h(40.0))
+                    .child(crate::el().key("ringed").w_full().h(40.0).box_shadow(RING))
+                    .child(crate::el().key("body").w_full().h(800.0)),
+            )
+    };
+    let mut rt = Runtime::new((), view, (300.0, 200.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+
+    let find_in = |tree: &Value, key: &str| {
+        tree["elements"].as_array().unwrap().iter().find(|e| e["key"].as_str() == Some(key)).unwrap().clone()
+    };
+
+    // At rest: plain has backdropBlur 0 and omits stuck/shadows; bar has backdropBlur 24 and omits stuck/shadows.
+    let tree = tree_json(&rt, 0.0);
+    let plain = find_in(&tree, "plain");
+    assert_eq!(plain["blur"], serde_json::json!(0.0));
+    assert_eq!(plain["backdropBlur"], serde_json::json!(0.0));
+    assert!(plain.get("stuck").is_none());
+    assert!(plain.get("shadows").is_none());
+
+    let bar_rest = find_in(&tree, "bar");
+    assert_eq!(bar_rest["blur"], serde_json::json!(0.0));
+    assert_eq!(bar_rest["backdropBlur"], serde_json::json!(24.0));
+    assert!(bar_rest.get("stuck").is_none());
+    assert!(bar_rest.get("shadows").is_none());
+
+    let ringed = find_in(&tree, "ringed");
+    assert_eq!(ringed["shadows"], serde_json::json!([{
+        "x": 0.0, "y": 1.0, "blur": 0.0, "spread": 0.5, "color": RING.color.hex(), "inset": true,
+    }]));
+
+    // Halfway through the 8pt sticky shadow ramp: stuck is 4 and shadow alpha is halved.
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 4.0));
+    rt.frame(1.0 / 120.0);
+    let tree_half = tree_json(&rt, 0.01);
+    let bar_half = find_in(&tree_half, "bar");
+    assert_eq!(bar_half["stuck"], serde_json::json!(4.0));
+    assert_eq!(bar_half["backdropBlur"], serde_json::json!(24.0));
+    assert_eq!(bar_half["shadows"], serde_json::json!([{
+        "x": 0.0, "y": 4.0, "blur": 12.0, "spread": 0.0,
+        "color": DROP.color.alpha(DROP.color.a * 0.5).hex(), "inset": false,
+    }]));
+
+    // Fully stuck at 60pt: stuck is 60 and shadow is at full alpha.
+    rt.update(|_, tx| tx.scroll_to_instant("scroll", 0.0, 60.0));
+    for _ in 0..4 { rt.frame(1.0 / 120.0); }
+    let tree_full = tree_json(&rt, 0.05);
+    let bar_full = find_in(&tree_full, "bar");
+    assert_eq!(bar_full["stuck"], serde_json::json!(60.0));
+    assert_eq!(bar_full["backdropBlur"], serde_json::json!(24.0));
+    assert_eq!(bar_full["shadows"], serde_json::json!([{
+        "x": 0.0, "y": 4.0, "blur": 12.0, "spread": 0.0,
+        "color": DROP.color.hex(), "inset": false,
+    }]));
+
+    // Under Reduce Transparency, backdropBlur reports 0.0 while stuck and shadows stay intact.
+    rt.set_system_reduced_transparency(true);
+    rt.frame(0.0);
+    let tree_rt = tree_json(&rt, 0.06);
+    let bar_rt = find_in(&tree_rt, "bar");
+    assert_eq!(bar_rt["backdropBlur"], serde_json::json!(0.0));
+    assert_eq!(bar_rt["stuck"], serde_json::json!(60.0));
+    assert_eq!(bar_rt["shadows"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn tree_json_reports_the_pointer_and_the_cursor_on_the_element_it_is_read_from() {
     use crate::Cursor;
     let view = |_: &(), _: &mut Cx<()>| {

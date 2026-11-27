@@ -51,6 +51,9 @@ pub struct ElementInfo {
     /// Additive blur culling margin in logical points, including scaled ancestor sigmas.
     /// Three times this value bounds filter support; it is not the equivalent Gaussian sigma.
     pub blur: f32,
+    /// Presented backdrop blur standard deviation in logical points ([`El::backdrop_blur`]);
+    /// `0.0` when unset or disabled by [`Cx::system_reduced_transparency`](crate::Cx::system_reduced_transparency).
+    pub backdrop_blur: f32,
     pub radius: f32,
     pub fill: Color,
     /// Presented border colour, when this element has a non-zero border width.
@@ -160,7 +163,8 @@ impl Pose {
     pub fn rotation(&self) -> f32 { self.rotation }
     /// Effective uniform scale, ancestors included (as [`ElementInfo::scale`]).
     pub fn scale(&self) -> f32 { self.scale }
-    /// The element's shadows (`El::box_shadow`) at their current sprung geometry and colour.
+    /// The element's presented shadows: `El::box_shadow` at their current sprung geometry and
+    /// colour, followed by any active [`El::stuck_shadow`]s scaled by their current sticky fade.
     pub fn shadows(&self) -> &[crate::el::Shadow] { &self.shadows }
     /// A spring or decorative loop still moves its rect, scale, rotation, icon turn or shadows,
     /// or an ancestor's. An active repeating loop does not settle.
@@ -412,6 +416,7 @@ impl RuntimeCore {
                     layer_opacity: if flight.is_some() { 1.0 } else { self.tree.effective_layer_opacity(i) },
                     scale: if flight.is_some() { 1.0 } else { self.paint.inh_scratch.get(i).map_or(p.transform.scale.x, |h| h.scale) },
                     blur: if flight.is_some() { 0.0 } else { self.paint.inh_scratch.get(i).map_or(p.blur, |h| self.paint.inh_cold_of(h).blur) },
+                    backdrop_blur: if flight.is_some() || self.host.system_reduced_transparency { 0.0 } else { n.vis.backdrop_blur },
                     radius: p.radius.0[0],
                     fill: self.color(n.id, P_FILL, n.vis.fill),
                     border_color: (n.vis.border_width() > 0.0).then(|| self.color(n.id, P_BORDER, n.vis.border())),
@@ -485,7 +490,7 @@ impl RuntimeCore {
                 focusable: false, focused: false, focus_visible: false, inert: true, exiting: false,
                 key: Some(path.clone()), path, role: "text", label: None, text: None,
                 rect: [r.x, r.y, r.w, r.h], target: [t.x, t.y, t.w, t.h],
-                opacity: f.source_alpha, layer_opacity: 1.0, scale: 1.0, blur: 0.0, radius: 0.0, fill: Color::TRANSPARENT, border_color: None, text_color: None, text_style: None,
+                opacity: f.source_alpha, layer_opacity: 1.0, scale: 1.0, blur: 0.0, backdrop_blur: 0.0, radius: 0.0, fill: Color::TRANSPARENT, border_color: None, text_color: None, text_style: None,
                 inset: [0.0; 4], text_size: None, wrap: false, truncate: false, text_cut: false, clips: false, scroll_axes: [false, false], raised: false,
                 hover: 0.0, press: 0.0, moving: true, parent: None,
                 visible: [r.x.max(c[0]), r.y.max(c[1]), (r.edges()[2].min(c[2]) - r.x.max(c[0])).max(0.0),
@@ -677,17 +682,50 @@ impl RuntimeCore {
     /// of the last frame, and whether any spring still moves them. It reads the springs on
     /// demand: nothing runs per frame for it. This is a driver/headless read: running view
     /// functions and handlers do not hold a `Runtime`.
-    pub fn presented_pose(&self, key: &str) -> Option<Pose> {
-        let i = self.presented_index(key)?;
+    /// Fade factor in `0.0..=1.0` for node `i`'s [`El::stuck_shadow`]s (`0.0` when not stuck,
+    /// ramping linearly over [`sticky::SHADOW_RAMP`] points of sticky shift).
+    pub(in crate::runtime) fn stuck_shadow_alpha(&self, i: usize) -> f32 {
+        if !self.tree.has_sticky { return 0.0; }
+        let stuck = self.scroll.stuck.get(i).copied().unwrap_or(0.0);
+        (stuck.abs() / sticky::SHADOW_RAMP).min(1.0)
+    }
+
+    /// Presented shadows for node `i`: sprung `El::box_shadow`s followed by active
+    /// `El::stuck_shadow`s scaled by their current sticky fade, matching paint order.
+    pub(crate) fn presented_shadows_at(&self, i: usize) -> Vec<crate::el::Shadow> {
         let n = &self.tree.nodes[i];
-        let store = self.scene.store();
-        let shadows = n.vis.shadows.iter().enumerate().map(|(k, sh)| {
+        let mut shadows: Vec<_> = n.vis.shadows.iter().enumerate().map(|(k, sh)| {
             let sh = self.shadow_at(n.id, k, sh);
             match P_SHADOWS.get(k) {
                 Some(&p) => crate::el::Shadow { color: self.color(n.id, p, sh.color), ..sh },
                 None => sh,
             }
         }).collect();
+        let stuck_k = self.stuck_shadow_alpha(i);
+        if stuck_k > 0.0 && let Some(sticky) = &n.sticky {
+            shadows.extend(sticky.shadows.iter().map(|&sh| crate::el::Shadow {
+                color: sh.color.alpha(sh.color.a * stuck_k),
+                ..sh
+            }));
+        }
+        shadows
+    }
+
+    /// Presented shadows for every presented node that has at least one, keyed by element path,
+    /// for `--tree` JSON.
+    pub(crate) fn presented_shadows_by_path(&self) -> HashMap<String, Vec<crate::el::Shadow>> {
+        self.tree.nodes.iter().enumerate().filter_map(|(i, n)| {
+            self.scene.presented(n.id)?;
+            let shadows = self.presented_shadows_at(i);
+            (!shadows.is_empty()).then(|| (n.path.clone(), shadows))
+        }).collect()
+    }
+
+    pub fn presented_pose(&self, key: &str) -> Option<Pose> {
+        let i = self.presented_index(key)?;
+        let n = &self.tree.nodes[i];
+        let store = self.scene.store();
+        let shadows = self.presented_shadows_at(i);
         let moving = self.rect_springing(i)
             || anchor_ancestors(&self.tree.nodes, i).any(|p| {
                 let id = self.tree.nodes[p].id;

@@ -88,7 +88,7 @@ impl RuntimeCore {
         };
         #[cfg(not(any(test, all(target_os = "windows", feature = "windows-system-material"))))]
         let _ = material_draw;
-        let stuck_k = if self.tree.has_sticky { (self.scroll.stuck[i].abs() / sticky::SHADOW_RAMP).min(1.0) } else { 0.0 };
+        let stuck_k = self.stuck_shadow_alpha(i);
         let stuck_shadows: (f32, &[crate::el::Shadow]) = match &n.sticky {
             Some(s) if stuck_k > 0.0 => (stuck_k, &s.shadows),
             _ => (0.0, &[]),
