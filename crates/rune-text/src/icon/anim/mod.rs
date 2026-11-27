@@ -652,9 +652,8 @@ impl CompiledAnim {
             }
         }
 
-        let s = size / self.view;
         let root_paint = ResolvedPaint::default();
-        let root_ctm = Transform::scale(s, s);
+        let root_ctm = super::view_box::transform(self.view_box, size);
 
         for op in &self.ops {
             match op {
