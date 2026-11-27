@@ -4599,6 +4599,8 @@ grouped list, and a knobs column) maps onto `App::playground` like this:
 
 ## Live Rust editing (desktop development)
 
+For a cross-platform CLI without Bash or Python (`rune new`, `rune dev`, `rune check`, `rune doctor`), see [`crates/rune-cli`](../rune-cli/README.md). `scripts/rune-dev` below remains available for the maintainers' remote build-worker and desk-Mac relay workflow.
+
 ```sh
 scripts/rune-dev settings -- --snap-on-patch perf/live-edit/settings.png --hot-control perf/live-edit/control.json
 ```

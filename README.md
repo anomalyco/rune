@@ -71,7 +71,20 @@ On Windows, the MSVC toolchain (`x86_64-pc-windows-msvc`, rustup's default) need
 
 Pinning a `dev` git revision above remains the supported way to use Rune. Maintainers stage, verify, and publish `0.0.0-dev.N` development snapshots under `rune-ui` (with `[lib] name = "rune"` and twelve `rune-ui-*` internal crates) using `scripts/publish-crates.sh --version <ver> --rev <rev>` (dry run by default; `--publish --wait` uploads in dependency order without modifying committed manifests). Consumers of `rune-ui` still add the same workspace `[patch.crates-io]` block pinned to that snapshot's commit.
 
-[Docs](crates/rune/README.md) · [Components](crates/rune-kit/README.md) · [Examples](examples) · [Changelog](CHANGELOG.md)
+### CLI (`rune`)
+
+Install the cross-platform CLI (`crates/rune-cli`) to scaffold new projects, verify Rune pins, and run the guarded hot-reload / watch-and-restart dev loop without Bash or Python:
+
+```sh
+cargo install --git https://github.com/anomalyco/rune --rev <dev rev> rune-cli
+rune new my-app
+cd my-app
+rune dev
+```
+
+See [`crates/rune-cli/README.md`](crates/rune-cli/README.md) for `rune new`, `rune dev`, `rune check`, `rune doctor`, and `rune.toml` / `[package.metadata.rune.dev]` options.
+
+[Docs](crates/rune/README.md) · [CLI](crates/rune-cli/README.md) · [Components](crates/rune-kit/README.md) · [Examples](examples) · [Changelog](CHANGELOG.md)
 
 ## Contributing
 
