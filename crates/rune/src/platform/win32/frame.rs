@@ -353,9 +353,16 @@ unsafe extern "system" fn subclass(hwnd: HWND, message: u32, wparam: WPARAM, lpa
     };
     let state: &State = &state;
     if !framed(hwnd) {
-        // Full screen: no frame to adjust.
-        // SAFETY: forwards to the next window procedure.
-        return unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+        // Full screen: no frame to adjust, but keep suppressing GDI background erases and
+        // non-client repaints so the classic frame cannot flash across transitions.
+        // SAFETY: forwards to the next window procedure as documented for each message.
+        return unsafe {
+            match unframed_action(message) {
+                UnframedAction::EraseHandled => 1,
+                UnframedAction::SuppressNcActivate => DefSubclassProc(hwnd, message, wparam, -1),
+                UnframedAction::Forward => DefSubclassProc(hwnd, message, wparam, lparam),
+            }
+        };
     }
     // SAFETY: each arm reads the message's own parameters as Windows documents them, on a
     // live window this thread owns.
@@ -535,6 +542,25 @@ fn framed(hwnd: HWND) -> bool {
     // SAFETY: reads the style of a live window.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
     style & WS_CAPTION == WS_CAPTION
+}
+
+/// How `CustomFrame::subclass` handles messages while `WS_CAPTION` is stripped (full screen).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UnframedAction {
+    /// Suppress `WM_ERASEBKGND` so GDI never fills the redirection bitmap with the class brush.
+    EraseHandled,
+    /// Forward `WM_NCACTIVATE` with `lparam = -1` so `DefWindowProc` never repaints a classic frame.
+    SuppressNcActivate,
+    /// Forward unchanged (`WM_NCCALCSIZE`, `WM_NCHITTEST`, input, etc.).
+    Forward,
+}
+
+fn unframed_action(message: u32) -> UnframedAction {
+    match message {
+        WM_ERASEBKGND => UnframedAction::EraseHandled,
+        WM_NCACTIVATE => UnframedAction::SuppressNcActivate,
+        _ => UnframedAction::Forward,
+    }
 }
 
 fn caption_button(hit: WPARAM) -> Option<CaptionButton> {

@@ -569,10 +569,16 @@ pub(super) fn submit_and_present_window(
         #[cfg(target_os = "windows")]
         crate::platform::win32::unidle_d3d_threads_soon();
     }
-    // The window shows once the GPU has finished the frame it presents.
+    // The window shows once the GPU has finished a frame matching its current size.
     #[cfg(target_os = "windows")]
-    if l.native.cloak.held()
-        && rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).is_ok()
+    if l.native.cloak.held() && {
+        let inner = l.window.inner_size();
+        crate::platform::win32::Cloak::size_matches(
+            (l.config.width, l.config.height),
+            (inner.width, inner.height),
+            crate::window::surface::max_surface_dim(Some(gpu)),
+        )
+    } && rune_gpu::health::poll(&gpu.device, wgpu::PollType::wait_indefinitely()).is_ok()
         && !gpu.is_lost()
     {
         l.native.cloak.lift(&l.window);

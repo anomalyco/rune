@@ -641,7 +641,19 @@ impl Win {
     /// panels ignore it.
     pub(in crate::window) fn set_full_screen(&self, full_screen: bool) {
         if self.is_panel() { return; }
+        #[cfg(target_os = "windows")]
+        let changing = full_screen != self.is_full_screen();
+        #[cfg(target_os = "windows")]
+        if changing {
+            // Cloak with DWM transitions disabled until the resized frame lands so DWM never
+            // composes the classic frame, a transition ghost, or a stale-size swap chain.
+            self.native.cloak.hold_transition(&self.window, crate::time::now() + READY_FALLBACK);
+        }
         crate::window::chrome::set_full_screen(&self.window, full_screen);
+        #[cfg(target_os = "windows")]
+        if changing {
+            self.request_redraw();
+        }
     }
 
     /// Takes this window full screen or brings it back. Adopted macOS panels ignore it.
