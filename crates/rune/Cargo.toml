@@ -315,6 +315,9 @@ name = "installed_families"
 name = "measure_scope"
 
 [[test]]
+name = "setup_measure"
+
+[[test]]
 name = "pixels_streaming"
 
 [[test]]

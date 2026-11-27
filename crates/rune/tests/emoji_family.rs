@@ -284,3 +284,67 @@ fn tx_and_runtime_set_emoji_family_rebuild_memos_sync_windows_and_update_measure
     a.frame(6.0 / 60.0);
     assert_eq!(a.emoji_family(), None);
 }
+
+#[test]
+fn app_setup_measures_see_configured_emoji_family_and_keep_cache_warm() {
+    register_emoji_test_fonts();
+
+    // Run on a dedicated thread without a `with_families` override so `LENT` is active.
+    std::thread::spawn(|| {
+        const SAMPLE: &str = "Launch 🚀 🇧🇷";
+
+        #[derive(Default)]
+        struct SetupEmoji {
+            setup_width: f32,
+            view_width: Cell<f32>,
+        }
+
+        fn emoji_view(s: &SetupEmoji, _: &mut rune::Cx<SetupEmoji>) -> El {
+            s.view_width.set(rune::text::measure(SAMPLE, &[], STYLE, None).0);
+            col().child(row().child(text(SAMPLE).key("emoji-label").font(STYLE)))
+        }
+
+        let run_with = |family: &str| {
+            let mut spec = AppSpec::new("setup-emoji", (400.0, 200.0), SetupEmoji::default, emoji_view);
+            spec.setup = Some(|s, _| {
+                s.setup_width = rune::text::measure(SAMPLE, &[], STYLE, None).0;
+            });
+            let mut rt = App::new(spec)
+                .emoji_family(family)
+                .headless_runtime((400.0, 200.0), Env::new(true, 1.0));
+            assert_eq!(rt.emoji_family(), Some(family));
+            let shaped_after_setup = rt.text.shaped;
+            assert!(shaped_after_setup >= 1, "setup must shape directly on the window's TextSystem");
+            assert!(
+                rt.text.cached_layout_count() >= 1,
+                "setup's cached layout must survive App configuration into the first frame",
+            );
+
+            rt.frame(0.0);
+            assert_eq!(
+                rt.text.shaped, shaped_after_setup,
+                "first frame must reuse the emoji layout shaped during setup without re-shaping",
+            );
+            assert_eq!(rt.state.setup_width, rt.state.view_width.get());
+            let el_w = rt
+                .elements()
+                .iter()
+                .find(|e| e.key.as_deref() == Some("emoji-label"))
+                .unwrap()
+                .target[2];
+            assert!((rt.state.setup_width - el_w).abs() < 0.6, "setup={} vs el={el_w}", rt.state.setup_width);
+            let width = rt.state.setup_width;
+            rt.set_emoji_family(None);
+            width
+        };
+
+        let narrow = run_with("App Narrow Emoji");
+        let wide = run_with("App Wide Emoji");
+        assert!(
+            wide > narrow + 20.0,
+            "AppSpec::setup must measure with App::emoji_family already active: narrow={narrow}, wide={wide}",
+        );
+    })
+    .join()
+    .unwrap();
+}

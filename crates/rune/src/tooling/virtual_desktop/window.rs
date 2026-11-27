@@ -299,11 +299,10 @@ impl Window {
         let size = own.size.unwrap_or(spec.size);
         let min_size = spec.min_size;
         let dark = own.theme.as_deref() != Some("light");
-        let mut rt = crate::tooling::runtime_for(&spec, state, size, Env::new(dark, scale), Arc::new(|| {}));
+        let mut rt = crate::tooling::runtime_for_configured(&spec, state, size, Env::new(dark, scale), Arc::new(|| {}), Some(runtime));
         if let Some(attach) = attach_playground {
             attach(&mut rt, playground, &spec, own.playground.clone(), own.variant.clone(), false);
         }
-        rt.configure(runtime);
         let (shared_core, shortcuts_core) = (shared.core.clone(), shared.shortcuts.core.clone());
         let typed = Box::new(TypedDesktopApp { rt, shared, comp, on_close_request, on_quit_request, on_close, on_reopen });
         Self::from_app(typed, WindowInit {

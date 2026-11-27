@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::render::{Gpu, OFFSCREEN_FORMAT, OFFSCREEN_FORMAT_LINEAR, Offscreen, Renderer};
 use crate::runtime::{AppDriver, Env, RuntimeCore, Waker};
-use crate::tooling::{AppSpec, Args, runtime_for, tree_json_core};
+use crate::tooling::{AppSpec, Args, runtime_for_configured, tree_json_core};
 
 thread_local! {
     static ORIGINAL_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -303,8 +303,7 @@ fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, runtime: crate:
     let size = args.size.unwrap_or(spec.size);
     let scale = args.scale.unwrap_or(2.0);
     let (wake, sleep) = std::sync::mpsc::channel();
-    let mut rt = runtime_for(spec, state, size, Env { system_dark: args.theme.as_deref() != Some("light"), scale }, Arc::new(move || { wake.send(()).ok(); }));
-    rt.configure(runtime);
+    let mut rt = runtime_for_configured(spec, state, size, Env { system_dark: args.theme.as_deref() != Some("light"), scale }, Arc::new(move || { wake.send(()).ok(); }), Some(runtime));
     let state_addr = format!("{:p}", crate::runtime::handler_state_ref(&rt.state) as *const dyn Any as *const ());
     let (core, mut app) = rt.split_mut();
     headless_core(core, &mut app, state_addr, size, scale, args, sleep);

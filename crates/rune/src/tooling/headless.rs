@@ -206,20 +206,19 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
     let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
     crate::credentials::note_headless_runtime();
     let wake = HeadlessWake::default();
-    let (spec, mut rt, shared, runtime, shortcuts, menus, state_ms) = {
+    let (spec, mut rt, shared, shortcuts, menus, state_ms) = {
         let _startup = observability.scope_stages(None);
         let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
         shared.core.connect(wake.waker());
         let shortcuts = crate::shortcuts::Guard::attach(&shared, wake.waker(), true, false);
         let menus = crate::native_menu::MenuGuard::attach(&shared, true);
         let state_ms = launched.elapsed().as_secs_f64() * 1000.0;
-        let rt = runtime_for(&spec, state, prep.size, Env::new(prep.dark, prep.scale), wake.waker());
-        (spec, rt, shared, runtime, shortcuts, menus, state_ms)
+        let rt = runtime_for_configured(&spec, state, prep.size, Env::new(prep.dark, prep.scale), wake.waker(), Some(runtime));
+        (spec, rt, shared, shortcuts, menus, state_ms)
     };
     if let Some(attach) = attach_playground {
         attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), false);
     }
-    rt.configure(runtime);
     let config = HeadlessConfig {
         launched, state_ms, args, transparent, chrome, titlebar, fit_height, app_options,
         min_size: spec.min_size, on_ready, on_frame_encoded, observability,

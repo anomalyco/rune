@@ -287,8 +287,7 @@ impl<S: 'static> TypedWindowApp<S> {
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (spec, state, shared, runtime) = app.into_parts(None);
-        let mut rt = crate::tooling::runtime_for(&spec, state, spec.size, crate::runtime::Env::default(), waker);
-        rt.configure(runtime);
+        let rt = crate::tooling::runtime_for_configured(&spec, state, spec.size, crate::runtime::Env::default(), waker, Some(runtime));
         Self {
             rt, shared, comp, on_frame_drawn: None, on_close_request, on_quit_request, on_close, on_rest, on_quit, on_reopen, on_geometry, on_placement, turn_scope,
             keep_layout, kept_layout: layout_seed,

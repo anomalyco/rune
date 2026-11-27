@@ -37,8 +37,7 @@ pub(crate) fn export<S: 'static>(app: crate::app::App<S>, args: &Args) -> Result
     let (fit_height, document) = (app.fit_content_height, app.web_document);
     crate::credentials::note_headless_runtime();
     let (spec, state, _shared, runtime) = app.into_parts(args.scene.as_deref());
-    let mut rt = runtime_for(&spec, state, (plan.widths[0], plan.height), Env::new(plan.dark, plan.scale), std::sync::Arc::new(|| {}));
-    rt.configure(runtime);
+    let mut rt = runtime_for_configured(&spec, state, (plan.widths[0], plan.height), Env::new(plan.dark, plan.scale), std::sync::Arc::new(|| {}), Some(runtime));
     let (core, mut driver) = rt.split_mut();
     export_core(core, &mut driver, fit_height, document, plan)
 }

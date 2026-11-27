@@ -435,14 +435,13 @@ pub(crate) fn start_web_runtime<S: 'static>(
     let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
     let spec_fonts = app.spec.fonts;
     let (spec, state, shared, runtime) = app.into_parts(None);
-    let mut rt = crate::tooling::runtime_for(&spec, state, viewport, env, wake);
+    let mut rt = crate::tooling::runtime_for_configured(&spec, state, viewport, env, wake, Some(runtime));
     // Live values wake on their own lane so a value already drawn in the frame that published
     // it does not trigger Wake::App's invalidate and redundant redraw.
     rt.set_live_waker(live_wake);
     if let Some(attach) = attach_playground {
         attach(&mut rt, playground, &spec, None, None, true);
     }
-    rt.configure(runtime);
     rt.core_mut().set_touch_hold_policy(crate::runtime::TouchHoldPolicy::ConfirmingTimer);
     rt.track_marks = compositor.is_some();
     (rt, shared, compositor, on_frame_drawn, spec_fonts)

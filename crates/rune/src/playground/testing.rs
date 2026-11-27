@@ -15,12 +15,11 @@ impl<S: 'static> App<S> {
         let (chrome, titlebar, borderless) = (self.chrome, self.titlebar, self.window_options.borderless);
         crate::credentials::note_headless_runtime();
         let (spec, state, _, runtime) = self.into_parts(None);
-        let mut rt = crate::tooling::runtime_for(&spec, state, size, env, std::sync::Arc::new(|| {}));
+        let mut rt = crate::tooling::runtime_for_configured(&spec, state, size, env, std::sync::Arc::new(|| {}), Some(runtime));
         if let Some(playground) = playground.filter(Playground::is_enabled) {
             rt.attach_playground(Live::new(playground, &spec, false));
         }
         rt.headless_chrome(chrome, titlebar, borderless);
-        rt.configure(runtime);
         rt
     }
 }

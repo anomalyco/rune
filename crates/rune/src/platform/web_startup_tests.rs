@@ -582,3 +582,51 @@ fn web_frame_host_invokes_on_frame_drawn_only_on_drawn_frames() {
     assert_eq!(host_step::run(&mut host), Outcome::Presented);
     assert_eq!(seen.borrow().len(), 3);
 }
+
+#[test]
+fn start_web_runtime_lends_window_text_system_during_setup() {
+    use std::cell::Cell;
+    use std::sync::Arc;
+
+    const LABEL: &str = "Web setup warm text";
+    const STYLE: crate::TextStyle = crate::TextStyle::new(14.0, 400.0);
+
+    #[derive(Default)]
+    struct WebSetupState {
+        setup_width: f32,
+        view_width: Cell<f32>,
+    }
+
+    fn web_view(s: &WebSetupState, _: &mut crate::Cx<WebSetupState>) -> crate::El {
+        s.view_width.set(crate::text::measure(LABEL, &[], STYLE, None).0);
+        crate::col().size(320.0, 120.0).child(crate::text(LABEL).font(STYLE))
+    }
+
+    // Run on a clean thread so no ambient `with_families` override bypasses `lend`.
+    std::thread::spawn(|| {
+        let mut spec = crate::AppSpec::new("web-setup", (320.0, 120.0), WebSetupState::default, web_view);
+        spec.setup = Some(|s, _| {
+            s.setup_width = crate::text::measure(LABEL, &[], STYLE, None).0;
+        });
+        let app = crate::App::new(spec).font_smoothing(crate::FontSmoothing::Off);
+        let (mut rt, _, _, _, _) = crate::platform::web_math::start_web_runtime(
+            app,
+            (320.0, 120.0),
+            crate::Env::new(true, 1.0),
+            Arc::new(|| {}),
+            Arc::new(|| {}),
+        );
+        assert_eq!(rt.font_smoothing(), crate::FontSmoothing::Off);
+        let shaped_after_setup = rt.text.shaped;
+        assert!(shaped_after_setup >= 1, "web setup must shape directly on the window's TextSystem");
+        assert!(rt.text.cached_layout_count() >= 1);
+        rt.frame(0.0);
+        assert_eq!(
+            rt.text.shaped, shaped_after_setup,
+            "first web frame must reuse the layout shaped during setup",
+        );
+        assert_eq!(rt.state.setup_width, rt.state.view_width.get());
+    })
+    .join()
+    .unwrap();
+}

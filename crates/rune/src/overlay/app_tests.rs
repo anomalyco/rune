@@ -261,3 +261,65 @@ fn overlay_frame_latency_defaults_to_none_clamps_and_retains() {
         assert_eq!(host.core.frame_latency, Some(expected), "OverlayHost input {input}");
     }
 }
+
+#[test]
+fn overlay_setup_measures_use_overlay_text_system_and_stay_warm_for_first_frame() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    const LABEL: &str = "Overlay setup measurement";
+    const STYLE: crate::TextStyle = crate::TextStyle::new(14.0, 400.0);
+
+    #[derive(Default)]
+    struct State {
+        setup_width: f32,
+        view_width: Cell<f32>,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        s.view_width.set(crate::text::measure(LABEL, &[], STYLE, None).0);
+        col().size(240.0, 80.0).child(crate::text(LABEL).font(STYLE))
+    }
+
+    // Run on a clean thread so no ambient `with_families` override bypasses `lend`.
+    std::thread::spawn(|| {
+        let app = AppSpec::new("overlay-setup-measure", (240.0, 80.0), State::default, view);
+        let cfg = OverlaySpec::new("overlay-setup-measure", app.size, view)
+            .options(Default::default())
+            .setup(|s, _| {
+                s.setup_width = crate::text::measure(LABEL, &[], STYLE, None).0;
+            });
+
+        // Test wrapper path (`BorrowOverlayApp::run_setup`).
+        let (mut overlay, _) = Overlay::new(cfg, State::default(), &app);
+        assert_eq!(overlay.rt.text.shaped, 0);
+        overlay.connect(Arc::new(|| {}), Arc::new(|| {}), Arc::new(|| {}), Rc::default());
+        let shaped_after_setup = overlay.rt.text.shaped;
+        assert!(shaped_after_setup >= 1, "overlay setup must shape into the overlay's TextSystem");
+        assert!(overlay.rt.text.cached_layout_count() >= 1);
+        overlay.rt.frame(0.0);
+        assert_eq!(
+            overlay.rt.text.shaped, shaped_after_setup,
+            "overlay's first frame must reuse the layout shaped during setup",
+        );
+        assert_eq!(overlay.rt.state.setup_width, overlay.rt.state.view_width.get());
+
+        // Live host path (`TypedOverlayApp::run_setup`).
+        let host_cfg = OverlaySpec::new("overlay-host-setup-measure", app.size, view)
+            .options(Default::default())
+            .setup(|s, _| {
+                s.setup_width = crate::text::measure(LABEL, &[], STYLE, None).0;
+            });
+        let (mut host, _) = OverlayHost::new(host_cfg, State::default(), &app, FontSmoothing::default());
+        assert_eq!(host.app.rt().text.shaped, 0);
+        host.app.run_setup(Arc::new(|| {}));
+        let host_shaped = host.app.rt().text.shaped;
+        assert!(host_shaped >= 1, "TypedOverlayApp::run_setup must lend the overlay's TextSystem");
+        assert!(host.app.rt().text.cached_layout_count() >= 1);
+        host.app.frame(0.0);
+        assert_eq!(host.app.rt().text.shaped, host_shaped);
+    })
+    .join()
+    .unwrap();
+}

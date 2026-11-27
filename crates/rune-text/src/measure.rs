@@ -1,5 +1,6 @@
-//! Measuring text from a view, for views that place things themselves (table columns, diagram
-//! nodes). While a window's view runs, its measures use the window's own text system (`lend`).
+//! Measuring text from a view or setup callback, for code that places things itself (table
+//! columns, diagram nodes). While a window's or overlay's `setup` or view runs, its measures use
+//! the window's own text system (`lend`).
 //! Elsewhere each thread keeps one of its own, resolved in order: an active [`with_families`] or
 //! [`with_fonts`] guard on this thread, else the fonts and families this thread's own most recent
 //! [`TextSystem`] was given, else the process-wide ones from the latest unguarded [`TextSystem`]
@@ -74,16 +75,10 @@ thread_local! {
     static OVERRIDE: RefCell<Option<Fonts>> = const { RefCell::new(None) };
     /// The fonts and families this thread's own [`TextSystem`]s were built or updated with.
     static THREAD_FONTS: RefCell<Option<Fonts>> = const { RefCell::new(None) };
-    /// The text system of the window whose view is running on this thread (`lend`), if any.
+    /// The text system of the window or overlay whose setup or view is running on this thread (`lend`), if any.
     static LENT: RefCell<Option<TextSystem>> = const { RefCell::new(None) };
 }
 
-/// Runs `f` (a window's view) with [`measure`] and the rest using `text`, the window's own text
-/// system, rather than this thread's copy. The copy loads every font and fallback again (a title
-/// with one Arabic or emoji character costs 6-30 ms its first time), and its shapes aren't the ones
-/// the window lays out. Moves `text` into thread-local storage for the duration of `f` and restores
-/// it on return or unwind.
-#[doc(hidden)]
 /// Trims this thread's fallback measurement `TextSystem` (when one was created) at rest.
 pub(crate) fn rest() {
     MEASURER.try_with(|cell| {
@@ -95,6 +90,12 @@ pub(crate) fn rest() {
     }).ok();
 }
 
+/// Runs `f` (a window's or overlay's `setup` or view) with [`measure`] and the rest using
+/// `text`, the runtime's own text system, rather than this thread's copy. The copy loads every
+/// font and fallback again (a title with one Arabic or emoji character costs 6-30 ms its first
+/// time), and its shapes aren't the ones the window lays out. Moves `text` into thread-local
+/// storage for the duration of `f` and restores it on return or unwind.
+#[doc(hidden)]
 pub fn lend<R>(text: &mut TextSystem, f: impl FnOnce() -> R) -> R {
     struct Restore<'a> {
         dest: &'a mut TextSystem,

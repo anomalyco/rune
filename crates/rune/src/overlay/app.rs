@@ -263,7 +263,7 @@ impl<T: 'static> OverlayApp for TypedOverlayApp<T> {
 
     fn run_setup(&mut self, waker: Waker) {
         if let Some(setup) = self.setup.take() {
-            setup(&mut self.rt.state, waker);
+            crate::text::lend(&mut self.rt.text, || setup(&mut self.rt.state, waker));
         }
     }
 
@@ -464,7 +464,9 @@ impl<T: 'static> OverlayApp for BorrowOverlayApp<'_, T> {
     }
     fn has_poll(&self) -> bool { self.rt.poll.is_some() }
     fn run_setup(&mut self, waker: Waker) {
-        if let Some(setup) = self.setup.take() { setup(&mut self.rt.state, waker); }
+        if let Some(setup) = self.setup.take() {
+            crate::text::lend(&mut self.rt.text, || setup(&mut self.rt.state, waker));
+        }
     }
     fn notify_availability(&mut self, availability: super::Availability) -> bool {
         let Some(f) = self.on_availability else { return false };

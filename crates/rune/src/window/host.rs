@@ -17,7 +17,7 @@ use crate::frame::surface_stats::SurfaceMeter;
 use crate::render::{Gpu, Renderer};
 use crate::runtime::{Env, Waker};
 use crate::time::Instant;
-use crate::tooling::{Args, Chrome, runtime_for};
+use crate::tooling::{Args, Chrome, runtime_for_configured};
 use crate::windows::{WindowOptions, WindowSpec};
 
 pub(in crate::window) mod any_host;
@@ -324,17 +324,16 @@ impl Host {
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
-        let (spec, mut rt, shared, runtime) = {
+        let (spec, mut rt, shared) = {
             let _startup_stages = observability.scope_stages(None);
             let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
             let size = args.size.unwrap_or(spec.size);
             // The window reports the system appearance and scale when it opens.
             let env = Env::new(args.theme.as_deref() != Some("light"), 1.0);
-            let rt = runtime_for(&spec, state, size, env, setup_waker(&shared.core));
-            (spec, rt, shared, runtime)
+            let rt = runtime_for_configured(&spec, state, size, env, setup_waker(&shared.core), Some(runtime));
+            (spec, rt, shared)
         };
         if let Some(attach) = attach_playground { attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), true); }
-        rt.configure(runtime);
         if let Some(seed) = layout_seed.clone() { rt.core_mut().offer_layout_seed(seed); }
         shared.core.connect(prepared.waker.clone());
         let shortcuts = crate::shortcuts::Guard::attach(&shared, prepared.waker.clone(), false, wayland);
