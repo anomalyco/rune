@@ -111,7 +111,7 @@ impl TreeItem {
         }
         said.extend(self.badge.clone());
         e = e.description(said.join(", "));
-        e = if r.selected { e.fill(style.selected) } else { e.hover(style.hover) };
+        e = if r.selected { e.fill(style.selected) } else { k.apply_hover_motion(e.hover(style.hover)) };
         if r.cursor && r.multi {
             e = e.outline(1.0, -1.0, c.border_focus);
         }
@@ -456,7 +456,7 @@ impl TreeCore {
             root = root.label(n);
         }
         if style.guides_hover.is_some() {
-            root = root.hover_group();
+            root = k.apply_hover_motion(root.hover_group());
         }
         // Focus stays on the tree; the row under the cursor is what a screen reader follows.
         if let Some(id) = cursor {

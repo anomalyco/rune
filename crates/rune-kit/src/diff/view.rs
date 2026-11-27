@@ -654,17 +654,19 @@ impl View {
         if !st.wraps() {
             gutter = gutter.sticky_left(0.0);
         }
-        row()
-            .w_full()
-            .min_h(l.line_h())
-            .items_start()
-            .fill(fill)
-            .hover(l.hover)
-            .hover_group()
-            .role("listitem")
-            .label(self.cell_label(&c))
-            .child(gutter)
-            .child(self.code(st, f, &c, copy, hover_side, &st.keys[i]).key("code"))
+        l.apply_hover_motion(
+            row()
+                .w_full()
+                .min_h(l.line_h())
+                .items_start()
+                .fill(fill)
+                .hover(l.hover)
+                .hover_group()
+                .role("listitem")
+                .label(self.cell_label(&c))
+                .child(gutter)
+                .child(self.code(st, f, &c, copy, hover_side, &st.keys[i]).key("code")),
+        )
     }
 
     fn split<'a>(&self, st: &'a DiffState, i: usize, f: usize, old: Option<Cell<'a>>, new: Option<Cell<'a>>) -> El {
@@ -690,10 +692,7 @@ impl View {
             }
             let copy = st.copy_side() == side;
             let number = n.unwrap_or_else(|| cell.source().1);
-            h = h
-                .fill(fill)
-                .hover(l.hover)
-                .hover_group()
+            h = l.apply_hover_motion(h.fill(fill).hover(l.hover).hover_group())
                 .role("listitem")
                 .label(self.label(DiffLabel::Line { kind: cell.kind, number, text: cell.text }))
                 .child(self.bar(kind))

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::rc::Rc;
 
-use rune::{Color, Drag, El, GrowthSpec, KeyEvent, PointerEvent, PointerPress, ScrollSpec, Tx, col};
+use rune::{Anim, Color, Drag, El, GrowthSpec, KeyEvent, PointerEvent, PointerPress, ScrollSpec, Tx, col};
 
 use super::render::{build_row_el, header_row};
 use super::window::{self, BandParams, ColumnPlan};
@@ -25,6 +25,7 @@ pub(super) struct RowSpec {
     pub(super) zebra: bool,
     pub(super) cursor_outline: bool,
     pub(super) focus: Color,
+    pub(super) hover_motion: Option<(Anim, Anim)>,
 }
 
 pub(super) trait TableBind {
@@ -308,6 +309,7 @@ impl TableCore {
                 zebra,
                 cursor_outline,
                 focus: k.c.border_focus,
+                hover_motion: k.motion.hover,
             },
         );
         if let Some((overscan, edge)) = virtual_overscan {

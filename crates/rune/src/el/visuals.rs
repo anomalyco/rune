@@ -725,8 +725,25 @@ impl El {
     /// Curves for this element's hover track: `enter` when the pointer arrives, `exit` when it
     /// leaves (e.g. a delayed reveal).
     pub fn hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
-        self.vis.cold_mut().hover_motion = Some(Rc::new((enter.into(), exit.into())));
+        let c = self.vis.cold_mut();
+        c.hover_motion = Some(Rc::new((enter.into(), exit.into())));
+        c.hover_motion_default = false;
         self
+    }
+    /// [`Self::hover_motion`] with curves a theme or token chose rather than this element: an
+    /// explicit [`Self::hover_motion`] on this element (before or after) or an enclosing
+    /// [`Self::hover_motion_within`] overrides it.
+    pub fn token_hover_motion(mut self, enter: impl Into<Anim>, exit: impl Into<Anim>) -> Self {
+        if self.vis.hover_motion.is_none() || self.vis.hover_motion_default {
+            let c = self.vis.cold_mut();
+            c.hover_motion = Some(Rc::new((enter.into(), exit.into())));
+            c.hover_motion_default = true;
+        }
+        self
+    }
+    /// The pair set by [`Self::hover_motion`] or [`Self::token_hover_motion`].
+    pub fn hover_motion_curves(&self) -> Option<(Anim, Anim)> {
+        self.vis.hover_motion.as_deref().copied()
     }
     /// Curves for this element's press tracks ([`Self::press`], [`Self::press_fill`],
     /// [`Self::press_border`], [`Self::press_color`], [`Self::press_scale`] and
@@ -753,6 +770,18 @@ impl El {
     pub fn press_motion(mut self, down: impl Into<Anim>, up: impl Into<Anim>) -> Self {
         self.vis.cold_mut().press_motion = Some(Rc::new((down.into(), up.into())));
         self
+    }
+    /// [`Self::press_motion`] with curves a theme or token chose rather than this element: an
+    /// explicit [`Self::press_motion`] on this element (before or after) overrides it.
+    pub fn token_press_motion(mut self, down: impl Into<Anim>, up: impl Into<Anim>) -> Self {
+        if self.vis.press_motion.is_none() {
+            self.vis.cold_mut().press_motion = Some(Rc::new((down.into(), up.into())));
+        }
+        self
+    }
+    /// The pair set by [`Self::press_motion`] or [`Self::token_press_motion`].
+    pub fn press_motion_curves(&self) -> Option<(Anim, Anim)> {
+        self.vis.press_motion.as_deref().copied()
     }
     /// Default hover curves for this element and everything below it: any hover track (an
     /// element with [`Self::hover`] or [`Self::hover_group`]) without its own

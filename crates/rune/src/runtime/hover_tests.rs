@@ -719,3 +719,79 @@ fn hover_and_press_replacements_drive_tracks_groups_motion_and_memo_without_comm
     assert_eq!(rt.scene.store().target(id, P_HOVER).unwrap_or(0.0), 0.0);
     assert_eq!(rt.scene.store().target(id, P_PRESS).unwrap_or(0.0), 0.0);
 }
+
+#[test]
+fn token_hover_and_press_motion_respect_explicit_within_and_memo_reuse() {
+    let slow: Anim = rune_motion::Curve::linear(0.4).into();
+    let fast = Anim::INSTANT;
+
+    // 1. Accessors and before/after call order on El.
+    let pre_h = el().hover_motion(fast, fast).token_hover_motion(slow, slow);
+    assert_eq!(pre_h.hover_motion_curves(), Some((fast, fast)));
+    let post_h = el().token_hover_motion(slow, slow).hover_motion(fast, fast);
+    assert_eq!(post_h.hover_motion_curves(), Some((fast, fast)));
+    let pre_p = el().press_motion(fast, fast).token_press_motion(slow, slow);
+    assert_eq!(pre_p.press_motion_curves(), Some((fast, fast)));
+    let post_p = el().token_press_motion(slow, slow).press_motion(fast, fast);
+    assert_eq!(post_p.press_motion_curves(), Some((fast, fast)));
+
+    // 2. Runtime precedence: explicit hover_motion > hover_motion_within > token_hover_motion,
+    // and toggling token vs explicit on a memo root invalidates reuse.
+    #[derive(Clone, Copy)]
+    struct S {
+        explicit_on_within: bool,
+    }
+    let view = |s: &S, _: &mut Cx<S>| {
+        let slow = rune_motion::Curve::linear(0.4);
+        let tok_only = el()
+            .key("tok-only")
+            .size(60.0, 24.0)
+            .hover(Color::WHITE.alpha(0.2))
+            .token_hover_motion(slow, slow);
+        let base = crate::memo("within-btn", 0u32, || {
+            el().size(60.0, 24.0).hover(Color::WHITE.alpha(0.2))
+        });
+        let child = if s.explicit_on_within {
+            base.hover_motion(slow, slow)
+        } else {
+            base.token_hover_motion(slow, slow)
+        };
+        let in_within = el()
+            .hover_motion_within(Anim::INSTANT, Anim::INSTANT)
+            .child(child);
+        crate::col().w(200.0).h(120.0).child(tok_only).child(in_within)
+    };
+
+    let mut rt = Runtime::new(S { explicit_on_within: false }, view, (200.0, 120.0), Env::new(true, 1.0));
+    rt.frame(1.0 / 60.0);
+
+    // Without hover_motion_within, token_hover_motion drives the 0.4 s linear enter.
+    let (x, y) = rt.find("tok-only").unwrap();
+    rt.pointer_move(x, y);
+    rt.frame(0.2);
+    let tok_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("tok-only")).unwrap().id;
+    let mid = rt.scene.get(tok_id, P_HOVER).unwrap_or(0.0);
+    assert!((mid - 0.5).abs() < 0.08, "token_hover_motion drives 0.4 s linear enter: got {mid}");
+
+    // Inside hover_motion_within(INSTANT), token_hover_motion yields to hover_motion_within.
+    let (wx, wy) = rt.find("within-btn").unwrap();
+    rt.pointer_move(wx, wy);
+    rt.frame(1.0 / 120.0);
+    let wid = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("within-btn")).unwrap().id;
+    assert_eq!(rt.scene.get(wid, P_HOVER).unwrap_or(0.0), 1.0, "hover_motion_within beats token_hover_motion");
+
+    // Flipping the memoized child from token_hover_motion(slow) to explicit hover_motion(slow)
+    // invalidates memo reuse so explicit hover_motion now beats hover_motion_within(INSTANT).
+    rt.pointer_move(190.0, 110.0);
+    rt.frame(1.0 / 120.0);
+    assert_eq!(rt.scene.get(wid, P_HOVER).unwrap_or(0.0), 0.0);
+    rt.update(|s, _| s.explicit_on_within = true);
+    rt.frame(0.0);
+    rt.pointer_move(wx, wy);
+    rt.frame(0.2);
+    let mid_explicit = rt.scene.get(wid, P_HOVER).unwrap_or(0.0);
+    assert!(
+        (mid_explicit - 0.5).abs() < 0.08,
+        "explicit hover_motion beats hover_motion_within after memo update: got {mid_explicit}"
+    );
+}

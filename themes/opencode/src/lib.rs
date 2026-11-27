@@ -240,6 +240,7 @@ fn build(dark: bool) -> Kit {
             control: rune::Spring::new(0.2, 0.0),
             overlay: rune::Spring::new(0.24, 0.0),
             disclosure: rune::Spring::new(0.3, 0.0),
+            ..Motion::default()
         },
         blend_over: Some(blend),
         ring: None,

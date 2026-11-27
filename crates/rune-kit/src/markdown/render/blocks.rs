@@ -419,6 +419,9 @@ impl Renderer {
             .a11y_hidden();
         if interactive {
             control = control.hover(t.hover);
+            if let Some((enter, exit)) = t.hover_motion {
+                control = control.token_hover_motion(enter, exit);
+            }
         }
         let mut r = row()
             .key(format!("i{k}"))

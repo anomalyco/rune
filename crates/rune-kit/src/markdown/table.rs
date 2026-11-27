@@ -414,7 +414,13 @@ impl Renderer {
             let rmap = row_maps.get(i).map_or(&[][..], Vec::as_slice);
             let r = self.table_row(cells, rmap, t, &cols, widths, body_font, s.text, s.table_pad, "cell").key(format!("r{i}"));
             match s.table_row_hover {
-                Some(c) => r.hover(c),
+                Some(c) => {
+                    let r = r.hover(c);
+                    match s.hover_motion {
+                        Some((enter, exit)) => r.token_hover_motion(enter, exit),
+                        None => r,
+                    }
+                }
                 None => r,
             }
         };

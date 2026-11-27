@@ -32,9 +32,15 @@ pub(super) fn build_row_el(
         window::opaque_over(spec.bg, style.selected)
     } else if spec.zebra && i % 2 == 1 {
         r = r.fill(style.stripe).hover(style.stripe.mix(style.selected, 0.5));
+        if let Some((enter, exit)) = spec.hover_motion {
+            r = r.token_hover_motion(enter, exit);
+        }
         window::opaque_over(spec.bg, style.stripe)
     } else {
         r = r.hover(style.stripe.mix(style.selected, 0.5));
+        if let Some((enter, exit)) = spec.hover_motion {
+            r = r.token_hover_motion(enter, exit);
+        }
         Color { a: 1.0, ..spec.bg }
     };
     if spec.cursor_outline && st.multi && st.cursor.as_deref() == Some(id) {
@@ -164,7 +170,7 @@ pub(super) fn header_row(
         }
         if c.sortable {
             let hover = if sticky_left.is_some() { window::opaque_over(header_bg, k.c.hover) } else { k.c.hover };
-            cell = bind.bind_header_sort(cell.cursor(Cursor::Pointer).hover(hover), c.id.clone());
+            cell = bind.bind_header_sort(k.apply_hover_motion(cell.cursor(Cursor::Pointer).hover(hover)), c.id.clone());
         }
         cell = bind.bind_header_secondary_press(cell, c.id.clone());
         cell = bind.bind_header_reorder(cell, j, layout.declared.clone(), held);

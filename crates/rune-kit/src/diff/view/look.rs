@@ -2,7 +2,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use rune::{Color, Icon, TextStyle};
+use rune::{Anim, Color, El, Icon, TextStyle};
 
 use super::DiffView;
 use crate::Kit;
@@ -30,6 +30,7 @@ pub(super) struct Look {
     pub(super) border: Color,
     pub(super) header_bg: Color,
     pub(super) hover: Color,
+    pub(super) hover_motion: Option<(Anim, Anim)>,
     pub(super) add: Tints,
     pub(super) del: Tints,
     pub(super) gap_bg: Color,
@@ -144,6 +145,7 @@ impl Look {
             border: c.border_weak,
             header_bg: c.layer_01,
             hover: k.alpha(c.text_base, if dark { 0.06 } else { 0.035 }),
+            hover_motion: k.motion.hover,
             add: tints(c.success.icon, c.success.fg),
             del: tints(c.danger.icon, c.danger.fg),
             gap_bg: tint(bg, info, if dark { 0.1 } else { 0.06 }),
@@ -164,8 +166,16 @@ impl Look {
         }
         look.font.hash(&mut h);
         look.syntax.hash(&mut h);
+        crate::tokens::kit::hash_anim_pair(look.hover_motion, &mut h);
         look.version = h.finish();
         look
+    }
+
+    pub(super) fn apply_hover_motion(&self, e: El) -> El {
+        match self.hover_motion {
+            Some((enter, exit)) => e.token_hover_motion(enter, exit),
+            None => e,
+        }
     }
 
     pub(super) fn tints(&self, kind: LineKind) -> Option<&Tints> {
