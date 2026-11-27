@@ -467,3 +467,165 @@ fn diff_frame_never_skipped_by_memo_while_inner_card_and_siblings_memoize_and_hi
     assert_eq!(calls.get(), 3);
     assert!(block_builds() > 0, "toggling wrap_anywhere must invalidate cached blocks and diff card");
 }
+
+#[test]
+fn cjk_inline_code_chains_wrap_between_spans_and_keep_find_copy_and_streaming_clean() {
+    use rune::render::KIND_RECT;
+
+    const CODE_BG: Color = Color { r: 0.2, g: 0.4, b: 0.8, a: 1.0 };
+    const CHAIN: &str = "主要源码入口：`src/net.rs`、`src/updater.rs`、`src/transcription/definitions.rs`、`src/desktop/opencode_service.rs`、`crates/router/src/routing/jev.rs`、`src/personal_commands/fetch.rs`。本轮是静态源码审计，没有对用户机器抓包或读取实际配置。";
+
+    struct State {
+        src: String,
+        col_w: f32,
+        wrap_anywhere: bool,
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let style = MarkdownStyle::neutral(true).inline_code_bg(CODE_BG);
+        col().w_full().child(
+            col().w(s.col_w).child(
+                Markdown::new(s.src.clone())
+                    .selectable(true)
+                    .wrap_anywhere(s.wrap_anywhere)
+                    .render(&style)
+                    .key("md"),
+            ),
+        )
+    }
+
+    let chip_rects = |rt: &Runtime<State>| -> Vec<[f32; 4]> {
+        let want = CODE_BG.premul(1.0);
+        rt.instances
+            .iter()
+            .filter(|i| {
+                i.params[1] == KIND_RECT
+                    && i.fill.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-3)
+            })
+            .map(|i| i.rect)
+            .collect()
+    };
+
+    // 1. Both wrap_anywhere(false) and wrap_anywhere(true) wrap the chain between inline code
+    // spans without overflowing or splitting any individual code span across lines.
+    let col_w = 420.0;
+    for wrap_anywhere in [false, true] {
+        let mut rt = Runtime::new(
+            State { src: CHAIN.into(), col_w, wrap_anywhere },
+            view,
+            (800.0, 600.0),
+            Env::new(true, 1.0),
+        );
+        rt.set_srgb_blend(false);
+        rt.frame(0.0);
+        let (count, min_x, max_x) = glyph_bounds_in_y(&rt, 1.0, 0.0, 600.0);
+        assert!(count > 100, "expected painted glyphs, got {count}");
+        assert!(min_x >= -1.5, "glyphs must stay inside left edge: min_x={min_x}");
+        assert!(
+            max_x <= col_w + 2.0,
+            "wrap_anywhere={wrap_anywhere}: CJK inline code chain must stay within {col_w} pt, got max_x={max_x}"
+        );
+        let chips = chip_rects(&rt);
+        assert_eq!(
+            chips.len(),
+            6,
+            "wrap_anywhere={wrap_anywhere}: all 6 inline code spans must stay intact (1 chip each), got {chips:?}"
+        );
+        for chip in &chips {
+            assert!(
+                chip[0] + chip[2] <= col_w + 2.0,
+                "wrap_anywhere={wrap_anywhere}: chip {chip:?} overflows {col_w} pt"
+            );
+        }
+        // Multiple lines must be used and the first chip should sit on line 1 beside `主要源码入口：`.
+        let distinct_rows: Vec<i32> = {
+            let mut ys: Vec<i32> = chips.iter().map(|r| (r[1] / 10.0).round() as i32).collect();
+            ys.dedup();
+            ys
+        };
+        assert!(
+            distinct_rows.len() >= 3,
+            "wrap_anywhere={wrap_anywhere}: expected chips across >= 3 lines, got {chips:?}"
+        );
+        assert!(
+            chips[0][1] < 16.0 && chips[0][0] > 70.0,
+            "wrap_anywhere={wrap_anywhere}: first chip should start on line 1 after `主要源码入口：`, got {:?}",
+            chips[0]
+        );
+
+        // Selecting all and copying omits U+200B, U+202F and bidi isolates completely.
+        rt.update(|_, tx| tx.select_all_text("md"));
+        rt.frame(1.0 / 60.0);
+        let copied = rt.selected_text().unwrap_or_default();
+        assert_eq!(
+            copied,
+            "主要源码入口：src/net.rs、src/updater.rs、src/transcription/definitions.rs、src/desktop/opencode_service.rs、crates/router/src/routing/jev.rs、src/personal_commands/fetch.rs。本轮是静态源码审计，没有对用户机器抓包或读取实际配置。",
+            "copied text must strip code padding, isolates, and break opportunities"
+        );
+    }
+
+    // 2. Directly flanked CJK text (`查看`a`和`b`文件` and ``a`（说明）`) wraps cleanly too.
+    let flanked = "查看`src/net.rs`和`src/updater.rs`以及`crates/router/src/routing/jev.rs`（说明）文件";
+    let mut rt = Runtime::new(
+        State { src: flanked.into(), col_w: 280.0, wrap_anywhere: false },
+        view,
+        (600.0, 400.0),
+        Env::new(true, 1.0),
+    );
+    rt.set_srgb_blend(false);
+    rt.frame(0.0);
+    let (_, _, max_x) = glyph_bounds_in_y(&rt, 1.0, 0.0, 400.0);
+    assert!(max_x <= 282.0, "CJK-flanked code chain must stay within 280 pt, got max_x={max_x}");
+    assert_eq!(chip_rects(&rt).len(), 3, "all 3 CJK-flanked code spans stay intact");
+
+    // 3. Opening and closing punctuation stay attached to inline code (no U+200B inserted there).
+    let brackets = "See (`alpha`), `beta`. 中文（`gamma`）「`delta`」。";
+    let parsed = parse(brackets);
+    let Block::Para(p) = &parsed[0] else { panic!("expected para") };
+    assert!(!p.text.contains("(\u{200b}"), "opening '(' must stay attached to code: {:?}", p.text);
+    assert!(!p.text.contains("（\u{200b}"), "opening '（' must stay attached to code: {:?}", p.text);
+    assert!(!p.text.contains("「\u{200b}"), "opening '「' must stay attached to code: {:?}", p.text);
+    assert!(!p.text.contains("\u{200b})"), "closing ')' must stay attached to code: {:?}", p.text);
+    assert!(!p.text.contains("\u{200b}）"), "closing '）' must stay attached to code: {:?}", p.text);
+    assert!(!p.text.contains("\u{200b}」"), "closing '」' must stay attached to code: {:?}", p.text);
+    assert!(!p.text.contains("\u{200b}."), "period must stay attached to code: {:?}", p.text);
+    assert!(!p.text.contains("\u{200b}。"), "CJK period must stay attached to code: {:?}", p.text);
+    assert_eq!(unpadded(&p.text), "See (alpha), beta. 中文（gamma）「delta」。");
+
+    // 4. Find across CJK punctuation + inline code merges highlight ranges cleanly through BREAK_OPEN.
+    let matches = Markdown::find(CHAIN, "入口：src/net.rs、src/updater.rs", Case::Sensitive);
+    assert_eq!(matches.len(), 1, "find must match across CJK punctuation and inline code");
+    let (blocks, _, _, _, maps) = doc_cached(CHAIN);
+    let (Block::Para(p), BlockMap::Inline(map)) = (&blocks[0], &maps[0]) else { panic!("expected para") };
+    let mapped = map.map_ranges(&matches[0], &p.text);
+    assert_eq!(mapped.len(), 1, "highlight across BREAK_OPEN/CLOSE must merge into one range: {mapped:?}");
+
+    // 5. Link immediately following inline code does not absorb the closing U+200B into its range.
+    let with_link = "`src/net.rs`[文档](https://example.com)";
+    let link_blocks = parse(with_link);
+    let Block::Para(lp) = &link_blocks[0] else { panic!("expected para") };
+    assert_eq!(lp.links.len(), 1);
+    let (la, lb, ref url) = lp.links[0];
+    assert_eq!(url, "https://example.com");
+    assert_eq!(&lp.text[la..lb], "文档", "link text must not include closing U+200B");
+
+    // 6. Streaming prefix stability: growing character by character never alters earlier bytes.
+    let sample = "入口：`src/net.rs`、`src/updater.rs`和`a.rs`。";
+    let mut prev_text = String::new();
+    for (idx, ch) in sample.char_indices() {
+        let prefix = &sample[..idx + ch.len_utf8()];
+        let blocks = stream::parse_streaming(prefix, true).0;
+        if let Some(Block::Para(inl)) = blocks.first() {
+            if !prev_text.is_empty() && !inl.text.starts_with(&prev_text) {
+                // Only backticks closing a code span can drop backtick text; once parsed as code,
+                // growing text should keep earlier code spans intact.
+                assert!(
+                    prefix.ends_with('`') || prev_text.ends_with('`'),
+                    "unexpected non-monotonic stream change at {prefix:?}: {prev_text:?} -> {:?}",
+                    inl.text
+                );
+            }
+            prev_text = inl.text.clone();
+        }
+    }
+}

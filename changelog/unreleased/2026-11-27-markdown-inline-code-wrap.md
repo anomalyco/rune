@@ -1,0 +1,1 @@
+- `rune-kit` `Markdown`: padded inline code spans now insert zero-width break opportunities at outer boundaries beside CJK text and punctuation (inside `Style::CodePad`, excluded from copy and Find), so chains such as ``主要源码入口：`a`、`b` `` wrap cleanly between spans instead of gluing into an unbreakable run.

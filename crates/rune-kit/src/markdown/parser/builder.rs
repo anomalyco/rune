@@ -38,7 +38,7 @@ pub(super) enum Fence {
 
 /// An emphasis, strong, strike or link run that has started and not yet ended.
 pub(super) struct Open {
-    start: usize,
+    pub(super) start: usize,
     style: Style,
     url: Option<String>,
 }
