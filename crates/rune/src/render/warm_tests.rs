@@ -54,6 +54,11 @@ mod warm_renderer {
             };
             renderer.prepare_surfaces(&gpu.device, &gpu.queue, &[draw], (16, 16));
             assert!(renderer.into_warm().is_none(), "renderer with native surfaces must not convert to WarmRenderer");
+
+            let mut direct = Renderer::new(&gpu.device, wgpu::TextureFormat::Bgra8Unorm);
+            let surface = crate::native_surface::NativeSurface::new();
+            assert!(direct.surface_texture(&gpu.device, &gpu.queue, &surface).unwrap().is_none());
+            assert!(direct.into_warm().is_none(), "renderer with surface_importer must not convert to WarmRenderer");
         }
     }
 }

@@ -128,6 +128,7 @@ impl Renderer {
             effect_warm,
             first_frame_submitted,
             surfaces: None,
+            surface_importer: None,
             fade_stops: [0.0; 2],
             surfaces_building,
             pipeline,
@@ -202,13 +203,14 @@ impl Renderer {
     /// the calling thread and returns `None` otherwise.
     #[cfg(not(any(target_os = "macos", target_arch = "wasm32")))]
     pub(super) fn into_warm(self) -> Option<WarmRenderer> {
-        if self.surfaces.is_some() {
+        if self.surfaces.is_some() || self.surface_importer.is_some() {
             return None;
         }
         let Renderer {
             effect_warm,
             first_frame_submitted,
             surfaces: _,
+            surface_importer: _,
             fade_stops: _,
             surfaces_building,
             pipeline,

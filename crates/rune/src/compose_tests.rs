@@ -417,3 +417,180 @@ fn frame_effect_slots_before_prepare_match_draw_with_sites() {
     assert!(!draw_sites[0].5, "plain slot draws on frame target");
     assert!(draw_sites[1].5, "faded slot draws inside isolated layer");
 }
+
+#[test]
+fn compositor_samples_native_surface_in_effect_slot_and_reuses_cache_across_adopt() {
+    use crate::native_surface::{ByteFrame, ColorInfo, Format, NativeSurface, SurfaceDraw, SurfaceFit};
+    use crate::render::NO_CLIP;
+
+    let Some(gpu) = Gpu::test_headless() else { return };
+    let surface = NativeSurface::new();
+    // BGRA: B=20, G=180, R=240, A=255.
+    let pixels: Vec<u8> = [20u8, 180, 240, 255].into_iter().cycle().take(8 * 8 * 4).collect();
+    surface
+        .push_bytes(
+            ByteFrame { width: 8, height: 8, format: Format::Bgra, color: ColorInfo::default(), planes: [pixels, Vec::new()] },
+            42,
+        )
+        .unwrap();
+
+    struct SurfaceEffect {
+        surface: NativeSurface,
+        device_key: Option<DeviceKey>,
+        revision: Option<u64>,
+        pipeline: Option<wgpu::RenderPipeline>,
+        sampler: Option<wgpu::Sampler>,
+        bind: Option<wgpu::BindGroup>,
+        seen_revs: Vec<u64>,
+        last_tex: Option<wgpu::Texture>,
+    }
+
+    impl Compositor<()> for SurfaceEffect {
+        fn render(&mut self, f: &mut Frame<'_, ()>) {
+            let imported = f.surface_texture(&self.surface).expect("import surface").expect("frame present");
+            assert_eq!(imported.frame_id(), 42);
+            assert_eq!(imported.format(), Format::Bgra);
+            assert_eq!(imported.planes().len(), 1);
+            self.seen_revs.push(imported.revision());
+            if self.device_key != Some(f.device_key()) {
+                let shader = f.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("comp-surface-test"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        r#"
+@group(0) @binding(0) var tex: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
+    var pos = array<vec2<f32>, 3>(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    return vec4(pos[i], 0.0, 1.0);
+}
+@fragment fn fs() -> @location(0) vec4<f32> {
+    return textureSample(tex, samp, vec2(0.5, 0.5));
+}
+"#
+                        .into(),
+                    ),
+                });
+                self.pipeline = Some(f.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("comp-surface-test"),
+                    layout: None,
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: f.format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    multiview_mask: None,
+                    cache: None,
+                }));
+                self.sampler = Some(f.device.create_sampler(&Default::default()));
+                self.device_key = Some(f.device_key());
+                self.revision = None;
+            }
+            if self.revision != Some(imported.revision()) {
+                let view = imported.texture().create_view(&Default::default());
+                let layout = self.pipeline.as_ref().unwrap().get_bind_group_layout(0);
+                self.bind = Some(f.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("comp-surface-test"),
+                    layout: &layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(self.sampler.as_ref().unwrap()) },
+                    ],
+                }));
+                self.revision = Some(imported.revision());
+                self.last_tex = Some(imported.texture().clone());
+            }
+            let clear = f.rt.clear_color();
+            f.ui.prepare_ui(f.device, f.queue, &mut f.rt.text.atlas, &f.rt.instances, f.size);
+            let pipeline = self.pipeline.as_ref().unwrap();
+            let bind = self.bind.as_ref().unwrap();
+            f.ui.draw_with(f.encoder, f.target, clear, &mut |pass, _site| {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, bind, &[]);
+                pass.draw(0..3, 0..1);
+            });
+        }
+    }
+
+    let mut comp = SurfaceEffect {
+        surface: surface.clone(),
+        device_key: None,
+        revision: None,
+        pipeline: None,
+        sampler: None,
+        bind: None,
+        seen_revs: Vec::new(),
+        last_tex: None,
+    };
+
+    let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
+    let mut rt = Runtime::new(
+        (),
+        |_, _| crate::effect(1).size(32.0, 32.0),
+        (32.0, 32.0),
+        Env::new(true, 1.0),
+    );
+    rt.frame(0.0);
+    let target = Offscreen::new(&gpu.device, 32, 32);
+
+    // Frame 1: compositor samples `surface` without any `El::native_surface` in the tree.
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut frame = Frame {
+            device: &gpu.device,
+            queue: &gpu.queue,
+            encoder: &mut encoder,
+            target: &target.view,
+            format: OFFSCREEN_FORMAT,
+            size: (32, 32),
+            dt: 0.0,
+            update_ms: 0.0,
+            rt: &mut rt,
+            ui: &mut renderer,
+        };
+        comp.render(&mut frame);
+    }
+    target.copy(&mut encoder);
+    renderer.submit(&gpu.queue, encoder);
+    let px = target.read(&gpu.device);
+    let center = ((16 * 32 + 16) * 4) as usize;
+    let [r, g, b, a] = [px[center], px[center + 1], px[center + 2], px[center + 3]];
+    assert!(r > g && g > b && a == 255, "effect slot must display sampled BGRA surface, got [{r}, {g}, {b}, {a}]");
+    let tex_before_adopt = comp.last_tex.clone().expect("texture cached");
+
+    // Frame 2: introducing an `El::native_surface` draw adopts the existing SurfaceImporter
+    // and keeps the exact same cached wgpu::Texture for `surface`.
+    let draw = SurfaceDraw {
+        surface: surface.clone(),
+        fit: SurfaceFit::Fit,
+        before_instance: 0,
+        rect: [0.0, 0.0, 32.0, 32.0],
+        radii: [0.0; 4],
+        clip: NO_CLIP,
+        fade: [0; 4],
+        opacity: 1.0,
+    };
+    renderer.prepare_surfaces(&gpu.device, &gpu.queue, &[draw], (32, 32));
+    let after_adopt = renderer
+        .surface_texture(&gpu.device, &gpu.queue, &surface)
+        .expect("import after adopt")
+        .expect("frame present");
+    assert_eq!(
+        after_adopt.texture(),
+        &tex_before_adopt,
+        "adopting SurfaceImporter into SurfaceRenderer must preserve cached textures",
+    );
+}
