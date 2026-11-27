@@ -5,6 +5,7 @@ use wasm_bindgen::JsCast;
 use winit::{event_loop::{ActiveEventLoop, EventLoopProxy}, platform::web::WindowExtWebSys, window::Window};
 use crate::frame::clock::FrameClock;
 use crate::frame::host_step::{self, Acquire, FrameHost, Gate, PostStepCheck, ReacquireReason, RenderPrep, StepInfo};
+use crate::frame::stage::{FrameStage, StageGuard};
 use crate::runtime::RuntimeCore;
 use crate::time::Instant;
 use crate::window::Missed;
@@ -245,6 +246,7 @@ impl FrameHost for WebFrameHost<'_> {
     }
 
     fn acquire(&mut self) -> Acquire<WebDrawable> {
+        let _acquire = StageGuard::enter(FrameStage::Acquire);
         match &mut self.r.draw {
             Draw::Gpu(side) => match gpu::acquire_texture(side) {
                 Ok(frame) => Acquire::Ready(WebDrawable::Gpu(frame)),
@@ -256,6 +258,7 @@ impl FrameHost for WebFrameHost<'_> {
     }
 
     fn step_runtime(&mut self) -> StepInfo {
+        let _runtime = StageGuard::enter(FrameStage::Runtime);
         let now = Instant::now();
         self.now = Some(now);
         let (commits, had_input) = {
@@ -352,6 +355,7 @@ impl FrameHost for WebFrameHost<'_> {
     }
 
     fn prepare_render(&mut self, drawable: WebDrawable, _info: &mut StepInfo) -> RenderPrep<PreparedWeb> {
+        let _upload = StageGuard::enter(FrameStage::Upload);
         if self.fatal_error.is_some() {
             return RenderPrep::Abort;
         }
@@ -401,6 +405,7 @@ impl FrameHost for WebFrameHost<'_> {
     }
 
     fn render(&mut self, prepared: &mut PreparedWeb, info: &StepInfo) -> bool {
+        let _encode = StageGuard::enter(FrameStage::Encode);
         let size = self.r.size;
         match (&mut self.r.draw, prepared) {
             // A frame only the GPU draws (`Scene::needs_gpu`) leaves the last one up.
@@ -427,6 +432,7 @@ impl FrameHost for WebFrameHost<'_> {
     }
 
     fn submit_and_present(&mut self, prepared: PreparedWeb, _info: &StepInfo) -> Instant {
+        let _submit = StageGuard::enter(FrameStage::Submit);
         match (&mut self.r.draw, prepared) {
             (Draw::Cpu { .. }, PreparedWeb::Cpu) => {}
             (Draw::HandingOver { cpu, side, seq, state, barrier }, PreparedWeb::HandingOver { gpu }) => {
@@ -547,6 +553,9 @@ impl Browser {
             if r.draw.gpu().is_some_and(|side| gpu::drain_configure_retry(side, r.suspended)) {
                 r.last_presented = None;
             }
+            let seq = r.frame_seq;
+            let _stage_scope = r.observability.scope_stages(Some(seq));
+            let _redraw = StageGuard::enter(FrameStage::Redraw);
             let mut host = WebFrameHost {
                 r,
                 window,
@@ -563,7 +572,10 @@ impl Browser {
                 should_end: false,
                 try_gpu_came: false,
             };
-            host_step::run(&mut host);
+            let outcome = host_step::run(&mut host);
+            if !matches!(outcome, host_step::Outcome::Skipped) {
+                host.r.frame_seq += 1;
+            }
             (
                 host.fatal_error,
                 host.should_end,

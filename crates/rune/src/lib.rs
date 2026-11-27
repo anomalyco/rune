@@ -181,6 +181,11 @@ pub use frame::profile::take_frame_phases;
 #[doc(hidden)]
 pub use frame::profile::thread_cpu_ms;
 pub use frame::profile::{ThreadCpuMark, thread_cpu_mark, thread_cpu_ns, thread_cpu_since};
+pub use frame::stage::FrameStage;
+pub use frame::stage::FrameStageEvent;
+pub use frame::stage::StageBoundary;
+pub use frame::stage::WindowFocusEvent;
+pub use frame::stage::WindowKeyEvent;
 pub use frame::surface_stats::Pacing;
 pub use frame::surface_stats::SurfaceCounts;
 pub use frame::surface_stats::SurfaceStats;

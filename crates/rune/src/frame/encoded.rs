@@ -113,6 +113,10 @@ impl FrameReports {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn wanted(&self) -> bool { self.0.as_ref().is_some_and(|r| r.hook.is_some()) }
 
+    /// The sequence number the next reported frame will carry, when sequence tracking is active
+    /// (`on_frame_encoded`, `on_frame_presented`, or `on_frame_stage`).
+    pub(crate) fn next_seq(&self) -> Option<u64> { self.0.as_ref().map(|r| r.seq) }
+
     /// The display refresh the next reports carry, until it changes.
     pub(crate) fn set_refresh(&mut self, hz: Option<f64>) {
         if let Some(r) = &mut self.0 { r.refresh_hz = hz.filter(|hz| hz.is_finite() && *hz > 0.0); }

@@ -116,6 +116,7 @@ pub(super) struct HeadlessFrame<'a, 'b, F> {
     pub(super) want_pixels: bool,
     pub(super) first_pixels: bool,
     pub(super) encoded_stamp: Option<Instant>,
+    pub(super) redraw_stage: crate::frame::stage::StageGuard,
     #[cfg(feature = "frame-profile")]
     pub(super) fp_alloc0: u64,
     #[cfg(feature = "frame-profile")]
@@ -163,6 +164,7 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
 
     #[inline]
     fn step_runtime(&mut self) -> StepInfo {
+        let _runtime = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Runtime);
         let s = &mut *self.state;
         let step = if self.k == 0 { 0.0 } else { s.dt };
         // `RUNE_LOOP_CHECK=1`: every frame asks for a loop-only step first, and the step is
@@ -240,6 +242,7 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
 
     #[inline]
     fn prepare_render(&mut self, _drawable: (), _info: &mut StepInfo) -> RenderPrep<PreparedHeadlessFrame> {
+        let _upload = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Upload);
         let s = &mut *self.state;
         prepare_gpu_resources(&mut s.renderer, s.gpu, self.app.rt_mut(), (s.wp, s.hp), false);
         let encoder = s.gpu.device.create_command_encoder(&Default::default());
@@ -260,6 +263,7 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
 
     #[inline]
     fn render(&mut self, prepared: &mut PreparedHeadlessFrame, info: &StepInfo) -> bool {
+        let _encode = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Encode);
         let s = &mut *self.state;
         let view = s.alpha.as_ref().map_or(&s.target.view, |a| &a.view);
         let comp_animating = if s.has_comp {
@@ -304,7 +308,10 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
     #[inline]
     fn submit_and_present(&mut self, prepared: PreparedHeadlessFrame, _info: &StepInfo) -> Instant {
         let s = &mut *self.state;
-        let submission = s.renderer.submit(&s.gpu.queue, prepared.encoder);
+        let submission = {
+            let _submit = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Submit);
+            s.renderer.submit(&s.gpu.queue, prepared.encoder)
+        };
         s.in_flight.push(submission);
         self.encoded_stamp = s.reports.stamp();
         if self.want_pixels { s.readback.submitted(); }
@@ -319,6 +326,7 @@ impl<F: FnMut(FrameShot, Vec<u8>)> FrameHost for HeadlessFrame<'_, '_, F> {
     #[inline]
     fn settle(&mut self, _submitted: Instant, info: &StepInfo) {
         let s = &mut *self.state;
+        self.redraw_stage.end();
         s.reports.drawn(self.encoded_stamp, None, self.frame_start, info.update_ms);
         let ms = self.frame_start.elapsed().as_secs_f64() * 1000.0;
         #[cfg(feature = "frame-profile")]

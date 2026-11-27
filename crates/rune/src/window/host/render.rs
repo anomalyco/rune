@@ -7,6 +7,7 @@ use super::{CompositorFrame, Host};
 use crate::frame::host_step::{
     RenderPrep, StepInfo, create_frame_encoder, draw_ui, prepare_gpu_resources_with,
 };
+use crate::frame::stage::{FrameStage, StageGuard};
 use crate::time::Instant;
 #[cfg(target_os = "windows")]
 use crate::window::win32::{damage, handover};
@@ -240,6 +241,7 @@ pub(super) fn prepare_window_render(
     profile: &mut FrameProfile,
     info: &mut StepInfo,
 ) -> RenderPrep<PreparedWindowFrame> {
+    let _upload = StageGuard::enter(FrameStage::Upload);
     let (Some(l), Some((gpu, renderer))) = (host.win.as_mut(), host.gpu.as_mut()) else {
         unreachable!("window and gpu live across frame");
     };
@@ -340,6 +342,7 @@ pub(super) fn render_window_frame(
     profile: &mut FrameProfile,
     info: &StepInfo,
 ) -> bool {
+    let _encode = StageGuard::enter(FrameStage::Encode);
     if host.poll_gpu_loss() { return false; }
     let (Some(l), Some((gpu, renderer))) = (host.win.as_mut(), host.gpu.as_mut()) else { return false };
     let target = l.alpha.as_ref().map_or(&prepared.view, |a| &a.view);
@@ -430,7 +433,10 @@ pub(super) fn submit_and_present_window(
         host.note_frame_texture_released();
         return crate::time::now();
     };
-    renderer.submit(&gpu.queue, encoder);
+    {
+        let _submit = StageGuard::enter(FrameStage::Submit);
+        renderer.submit(&gpu.queue, encoder);
+    }
     // Drop the view before checking/presenting; never call `pre_present_notify()` (which arms an
     // unfulfillable Wayland frame callback) or `queue.present()` on a lost/latched device under
     // either `Terminal` or `Recover`.
@@ -450,6 +456,7 @@ pub(super) fn submit_and_present_window(
     profile.mark_submitted();
     crate::marks::mark_once(&FIRST_ENCODED, "frame.first.encoded");
     *encoded = host.frame_reports.stamp();
+    let mut present_stage = StageGuard::enter(FrameStage::Present);
     l.window.pre_present_notify();
     #[cfg(target_os = "macos")]
     {
@@ -489,6 +496,7 @@ pub(super) fn submit_and_present_window(
     };
     #[cfg(not(any(target_os = "macos", all(target_os = "windows", feature = "windows-system-material"))))]
     gpu.queue.present(frame);
+    present_stage.end();
     // `frame` has been consumed by `queue.present`: mark released before any post-present polls.
     host.note_frame_texture_released();
     let (Some(l), Some((gpu, renderer))) = (host.win.as_mut(), host.gpu.as_mut()) else {

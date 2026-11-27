@@ -247,6 +247,7 @@ impl TextSystem {
                 mask
             }
             None => {
+                let _glyph_atlas = crate::profile::TextStageScope::enter(crate::profile::TextStage::GlyphAtlas);
                 // Colour glyphs sit on whole pixels and ignore emboldening and obliques.
                 let color_key = GlyphKey { subpx: 0, subpy: 0, dilation: 0, apple: 0, skew: 0, bold: false, ..key };
                 if let Some(c) = self.color_glyphs.get_mut(&color_key) {

@@ -9,4 +9,5 @@ pub(crate) mod presented;
 #[cfg(target_os = "macos")]
 pub(crate) mod present_worker;
 pub(crate) mod profile;
+pub(crate) mod stage;
 pub(crate) mod surface_stats;

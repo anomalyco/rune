@@ -52,7 +52,7 @@ impl Host {
             }
             Chores::Done if self.gpu_owed() => self.cpu_idle(),
             Chores::Done if self.a11y_owed() => self.a11y_after_frame(),
-            Chores::Done => { self.app.text_idle_turn(); }
+            Chores::Done => { let _stages = self.observability.scope_stages(None); self.app.text_idle_turn(); }
         }
         self.post_frame_owed()
     }

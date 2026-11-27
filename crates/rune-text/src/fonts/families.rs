@@ -168,6 +168,7 @@ impl TextSystem {
         if self.families.0 == sans && self.families.1 == mono {
             return;
         }
+        let _warm = crate::profile::TextStageScope::enter(crate::profile::TextStage::Warm);
         self.load_installed(sans);
         self.load_installed(mono);
         self.families = (sans.to_owned(), mono.to_owned());
