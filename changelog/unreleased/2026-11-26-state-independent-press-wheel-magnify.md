@@ -1,0 +1,1 @@
+- Handlers: added state-independent `El::on_press_tx_any`, `El::on_wheel_any`, and `El::on_magnify_any` builders (extending #2017's `on_*_any` pattern) so reusable components can handle presses, wheel events, and pinch gestures with `&mut Tx` without naming the app state type.

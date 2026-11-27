@@ -218,6 +218,34 @@ impl El {
         self
     }
 
+    /// [`El::on_wheel`] for a component that doesn't read the app's state, so it works in any
+    /// app.
+    ///
+    /// Receives the [`WheelEvent`] in this element's own layout points and a [`Tx`]. Return `true`
+    /// to consume the delta (and own the rest of a phased gesture, including momentum), or `false`
+    /// to let outer handlers and native scroll views handle it. Also receives two-finger
+    /// touchscreen midpoint pan deltas (`WheelEvent::touch == true`).
+    ///
+    /// ```
+    /// use rune::{El, Live, Tx, WheelEvent, el};
+    ///
+    /// let paused = Live::new(0.0_f32);
+    /// let p = paused.clone();
+    /// let _strip: El = el()
+    ///     .size(200.0, 60.0)
+    ///     .on_wheel_any(move |ev: WheelEvent, tx: &mut Tx| {
+    ///         if ev.dx != 0.0 {
+    ///             p.set(1.0);
+    ///             tx.live_only();
+    ///         }
+    ///         false
+    ///     });
+    /// ```
+    pub fn on_wheel_any(mut self, f: impl Fn(WheelEvent, &mut Tx) -> bool + 'static) -> Self {
+        self.canvas_input().wheel = Some(Rc::new(move |_, e, tx| f(e, tx)));
+        self
+    }
+
     /// Trackpad and touchscreen two-finger pinches over this element: return `true` to take one.
     /// The innermost handler under the pointer (or fingers' midpoint) hears it first. Phased
     /// non-wheel pinches (`Began` / `Moved` / `Ended` from macOS trackpads and touchscreens, with
@@ -247,6 +275,32 @@ impl El {
     /// ```
     pub fn on_magnify<S: 'static>(mut self, f: impl Fn(&mut S, MagnifyEvent, &mut Tx) -> bool + 'static) -> Self {
         self.canvas_input().magnify = Some(Rc::new(move |s, e, tx| f(state::<S>(s), e, tx)));
+        self
+    }
+
+    /// [`El::on_magnify`] for a component that doesn't read the app's state, so it works in any
+    /// app.
+    ///
+    /// Receives the [`MagnifyEvent`] in this element's own layout points and a [`Tx`]. Return
+    /// `true` to consume the pinch (locking a phased trackpad or touchscreen pinch until `Ended`),
+    /// or `false` to pass it to outer handlers. Also receives Ctrl + wheel zooms
+    /// (`MagnifyEvent::wheel == true`).
+    ///
+    /// ```
+    /// use rune::{El, Live, MagnifyEvent, Tx, el};
+    ///
+    /// let zoom = Live::new(1.0_f32);
+    /// let z = zoom.clone();
+    /// let _canvas: El = el()
+    ///     .size(200.0, 200.0)
+    ///     .on_magnify_any(move |ev: MagnifyEvent, tx: &mut Tx| {
+    ///         z.set((z.get() * (1.0 + ev.delta)).clamp(0.25, 4.0));
+    ///         tx.live_only();
+    ///         true
+    ///     });
+    /// ```
+    pub fn on_magnify_any(mut self, f: impl Fn(MagnifyEvent, &mut Tx) -> bool + 'static) -> Self {
+        self.canvas_input().magnify = Some(Rc::new(move |_, e, tx| f(e, tx)));
         self
     }
 

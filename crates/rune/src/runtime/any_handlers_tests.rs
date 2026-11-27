@@ -1,15 +1,17 @@
-//! State-independent `El::on_layout_any`, `El::on_visible_any`, and `El::on_key_any` handlers:
+//! State-independent `El::on_layout_any`, `El::on_visible_any`, `El::on_key_any`,
+//! `El::on_press_tx_any`, `El::on_wheel_any`, and `El::on_magnify_any` handlers:
 //! mounting one non-generic component function across distinct app state types, plus layout/scale,
-//! visibility, key propagation, `Tx::took`, click-to-focus, inert/disabled/modal guards, and
-//! debug caller-site tracking.
+//! visibility, key propagation, button/keyboard/touch press activation, wheel pass-through/bubbling
+//! and momentum, pinch/Ctrl+wheel/touch magnify, `Tx::took`, `Tx::live_only`, inert/disabled/modal
+//! guards, and debug caller-site tracking.
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
 use super::*;
 use crate::{
-    Cx, El, Env, Key, KeyEvent, Live, Mods, ScrollSpec, TextEdit, TextStyle, col, el, text,
-    text_input,
+    Cx, El, Env, GesturePhase, Key, KeyEvent, Live, MagnifyEvent, Mods, PointerButton, ScrollSpec,
+    TextEdit, TextStyle, TouchPhase, WheelEvent, col, el, row, text, text_input,
 };
 
 #[derive(Default)]
@@ -523,4 +525,435 @@ fn on_key_any_preserves_nesting_click_focus_tx_took_text_field_and_modal_inert_g
     assert_ne!(focused_key(&rt).as_deref(), Some("control"));
     send_key(&mut rt, Key::Right);
     assert!(log.borrow().is_empty(), "inert control receives no on_key_any");
+}
+
+#[derive(Default)]
+struct SurfaceLog {
+    presses: RefCell<Vec<(PointerButton, bool)>>,
+    wheels: RefCell<Vec<(f32, f32, f32, f32, bool)>>,
+    magnifies: RefCell<Vec<(f32, f32, f32, GesturePhase, bool)>>,
+}
+
+/// One state-agnostic reusable component (no `<S>` parameter) exercising all three handlers:
+/// `on_press_tx_any`, `on_wheel_any`, and `on_magnify_any`.
+fn reusable_surface(log: &Rc<SurfaceLog>, zoom: &Live<f32>) -> El {
+    let (l_press, l_wheel, l_mag, z_live) = (log.clone(), log.clone(), log.clone(), zoom.clone());
+    col()
+        .key("surface")
+        .size(200.0, 140.0)
+        .on_wheel_any(move |ev, tx| {
+            l_wheel.wheels.borrow_mut().push((ev.dx, ev.dy, ev.x, ev.y, ev.touch));
+            tx.live_only();
+            false
+        })
+        .on_magnify_any(move |ev, tx| {
+            l_mag.magnifies.borrow_mut().push((ev.delta, ev.x, ev.y, ev.phase, ev.wheel));
+            z_live.set(z_live.get() * (1.0 + ev.delta));
+            tx.live_only();
+            true
+        })
+        .child(
+            el().key("close-btn").size(60.0, 32.0).label("Dismiss").on_press_tx_any(move |tx| {
+                l_press.presses.borrow_mut().push((tx.button(), tx.press_point().is_some()));
+                tx.live_only();
+            }),
+        )
+}
+
+#[test]
+fn single_component_with_press_wheel_magnify_any_mounts_under_distinct_hosts() {
+    struct HostA { log: Rc<SurfaceLog>, zoom: Live<f32> }
+    struct HostB { log: Rc<SurfaceLog>, zoom: Live<f32>, _extra: String }
+
+    fn exercise<S: 'static>(rt: &mut Runtime<S>, log: &Rc<SurfaceLog>, zoom: &Live<f32>) {
+        rt.frame(0.0);
+        let btn = center_of(rt, "close-btn");
+        click(rt, btn);
+        assert_eq!(log.presses.borrow().as_slice(), &[(PointerButton::Primary, true)]);
+
+        let surface = center_of(rt, "surface");
+        rt.wheel_event(WheelEvent::new(-18.0, 0.0).at(surface.0, surface.1).precise(true));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(log.wheels.borrow().len(), 1);
+        assert_eq!(log.wheels.borrow()[0].0, -18.0);
+
+        rt.magnify_event(MagnifyEvent::new(0.25).at(surface.0, surface.1).phase(GesturePhase::Began));
+        rt.magnify_event(MagnifyEvent::new(0.0).at(surface.0, surface.1).phase(GesturePhase::Ended));
+        rt.frame(1.0 / 60.0);
+        assert_eq!(log.magnifies.borrow().len(), 2);
+        assert!((zoom.get() - 1.25).abs() < 1e-4, "zoom updated via Live: {}", zoom.get());
+    }
+
+    let (log_a, zoom_a) = (Rc::new(SurfaceLog::default()), Live::new(1.0_f32));
+    let mut rt_a = Runtime::new(
+        HostA { log: log_a.clone(), zoom: zoom_a.clone() },
+        |s, _| el().size(240.0, 180.0).child(reusable_surface(&s.log, &s.zoom)),
+        (240.0, 180.0),
+        Env::new(true, 1.0),
+    );
+    exercise(&mut rt_a, &log_a, &zoom_a);
+
+    let (log_b, zoom_b) = (Rc::new(SurfaceLog::default()), Live::new(1.0_f32));
+    let mut rt_b = Runtime::new(
+        HostB { log: log_b.clone(), zoom: zoom_b.clone(), _extra: "other-host".into() },
+        |s, _| el().size(240.0, 180.0).child(reusable_surface(&s.log, &s.zoom)),
+        (240.0, 180.0),
+        Env::new(true, 1.0),
+    );
+    exercise(&mut rt_b, &log_b, &zoom_b);
+}
+
+#[test]
+fn on_press_tx_any_preserves_button_role_keyboard_touch_live_only_and_guards() {
+    struct App {
+        modal_open: bool,
+        disabled_btn: bool,
+        inert_btn: bool,
+        live_only: bool,
+        log: Rc<RefCell<Vec<(&'static str, bool)>>>,
+    }
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut rt = Runtime::new(
+        App { modal_open: false, disabled_btn: false, inert_btn: false, live_only: true, log: log.clone() },
+        |s, _| {
+            let (l1, l2, live_only) = (s.log.clone(), s.log.clone(), s.live_only);
+            let mut btn = el()
+                .key("dismiss")
+                .size(80.0, 32.0)
+                .label("Dismiss")
+                .focusable(!s.disabled_btn)
+                .press_on_return()
+                .disabled(s.disabled_btn)
+                .on_press_tx_any(move |tx| {
+                    l1.borrow_mut().push(("dismiss", tx.press_point().is_some()));
+                    if live_only { tx.live_only(); }
+                });
+            if s.inert_btn { btn = btn.inert(); }
+            col()
+                .size(240.0, 160.0)
+                .child(btn)
+                .child(
+                    el().key("custom-role").size(80.0, 32.0).role("tab").label("Tab").on_press_tx_any(move |tx| {
+                        l2.borrow_mut().push(("tab", tx.press_point().is_some()));
+                        tx.live_only();
+                    }),
+                )
+                .children(s.modal_open.then(|| {
+                    el().key("modal").absolute(0.0, 0.0).size(240.0, 160.0).modal(false, |_: &mut App| {})
+                }))
+        },
+        (240.0, 160.0),
+        Env::new(true, 1.0),
+    );
+    rt.check_live_only(false);
+    rt.frame(0.0);
+
+    // Default role promotes from "group" to "button"; explicit "tab" role stays intact.
+    let dismiss_info = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("dismiss")).unwrap();
+    let tab_info = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("custom-role")).unwrap();
+    assert_eq!(dismiss_info.role, "button", "on_press_tx_any promotes default role to button");
+    assert_eq!(tab_info.role, "tab", "on_press_tx_any preserves explicit role");
+
+    // Pointer click delivers press_point; a live_only on_press_tx_any skips commits when focus doesn't change.
+    let tab_pt = center_of(&rt, "custom-role");
+    let commits_before = rt.stats.commits;
+    click(&mut rt, tab_pt);
+    assert_eq!(rt.stats.commits, commits_before, "live_only on_press_tx_any skips commit");
+    assert_eq!(*log.borrow(), vec![("tab", true)]);
+    log.borrow_mut().clear();
+
+    let pt = center_of(&rt, "dismiss");
+    click(&mut rt, pt);
+    assert_eq!(*log.borrow(), vec![("dismiss", true)]);
+
+    // Touch tap activates on_press_tx_any with press_point.
+    rt.touch(1, TouchPhase::Started, pt.0, pt.1, 0.0);
+    rt.touch(1, TouchPhase::Ended, pt.0, pt.1, 0.02);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(log.borrow().last(), Some(&("dismiss", true)));
+
+    // Keyboard activation (Tab to focus, then Space and Return) activates with no press_point,
+    // skipping commit when live_only and committing otherwise.
+    log.borrow_mut().clear();
+    send_key(&mut rt, Key::Tab);
+    assert_eq!(focused_key(&rt).as_deref(), Some("dismiss"));
+    let commits_before_live_key = rt.stats.commits;
+    send_key(&mut rt, Key::Text(" ".into()));
+    assert_eq!(rt.stats.commits, commits_before_live_key, "live_only keyboard on_press_tx_any skips commit");
+    assert_eq!(*log.borrow(), vec![("dismiss", false)]);
+
+    rt.update(|s, _| s.live_only = false);
+    rt.frame(1.0 / 60.0);
+    log.borrow_mut().clear();
+    let commits_before_enter = rt.stats.commits;
+    send_key(&mut rt, Key::Enter);
+    assert_eq!(rt.stats.commits, commits_before_enter + 1, "non-live_only on_press_tx_any commits");
+    assert_eq!(*log.borrow(), vec![("dismiss", false)]);
+    log.borrow_mut().clear();
+
+    // Active modal, disabled, and inert guards block on_press_tx_any.
+    rt.update(|s, _| s.modal_open = true);
+    rt.frame(1.0 / 60.0);
+    click(&mut rt, pt);
+    assert!(log.borrow().is_empty(), "modal blocks on_press_tx_any behind it");
+
+    // Disabled blocks keyboard focus/activation; inert blocks pointer activation too.
+    rt.update(|s, _| { s.modal_open = false; s.disabled_btn = true; });
+    rt.frame(1.0 / 60.0);
+    send_key(&mut rt, Key::Tab);
+    assert_ne!(focused_key(&rt).as_deref(), Some("dismiss"));
+    send_key(&mut rt, Key::Text(" ".into()));
+    send_key(&mut rt, Key::Enter);
+    assert!(log.borrow().is_empty(), "disabled on_press_tx_any does not take focus or keyboard activation");
+
+    rt.update(|s, _| { s.disabled_btn = false; s.inert_btn = true; });
+    rt.frame(1.0 / 60.0);
+    click(&mut rt, pt);
+    assert!(log.borrow().is_empty(), "inert on_press_tx_any does not fire");
+}
+
+#[test]
+fn on_wheel_any_declines_to_native_scroll_and_momentum_or_consumes_and_bubbles() {
+    struct App {
+        consume: bool,
+        outer_consume: bool,
+        modal_open: bool,
+        inert_strip: bool,
+        outer_wheels: Vec<(f32, f32)>,
+        inner_log: Rc<RefCell<Vec<(f32, f32, f32, f32, bool, bool)>>>,
+    }
+
+    let inner_log = Rc::new(RefCell::new(Vec::new()));
+    let mut rt = Runtime::new(
+        App {
+            consume: false,
+            outer_consume: false,
+            modal_open: false,
+            inert_strip: false,
+            outer_wheels: Vec::new(),
+            inner_log: inner_log.clone(),
+        },
+        |s, _| {
+            let (log, consume) = (s.inner_log.clone(), s.consume);
+            let mut strip = row()
+                .key("strip")
+                .size(200.0, 80.0)
+                .scroll(ScrollSpec::default())
+                .scroll_x()
+                .on_wheel_any(move |ev, tx| {
+                    log.borrow_mut().push((ev.dx, ev.dy, ev.x, ev.y, ev.momentum, ev.touch));
+                    tx.live_only();
+                    consume
+                })
+                .child(el().key("wide").size(800.0, 80.0));
+            if s.inert_strip { strip = strip.inert(); }
+            el().key("outer")
+                .size(300.0, 120.0)
+                .on_wheel(|s: &mut App, ev, _| { s.outer_wheels.push((ev.dx, ev.dy)); s.outer_consume })
+                .child(strip)
+                .children(s.modal_open.then(|| {
+                    el().key("modal").absolute(0.0, 0.0).size(300.0, 120.0).modal(false, |_: &mut App| {})
+                }))
+        },
+        (300.0, 120.0),
+        Env::new(true, 1.0),
+    );
+    rt.check_live_only(false);
+    rt.frame(0.0);
+
+    // 1. Declining on_wheel_any observes horizontal wheel, bubbles to outer on_wheel, and lets
+    //    native horizontal scrolling + momentum run when outer also declines.
+    let strip_id = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("strip")).unwrap().id;
+    rt.wheel_event(WheelEvent::new(-30.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Began).precise(true));
+    rt.frame(1.0 / 60.0);
+    rt.wheel_event(WheelEvent::new(-25.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Moved).precise(true));
+    rt.frame(1.0 / 60.0);
+    rt.wheel_event(WheelEvent::new(0.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Ended).precise(true));
+    rt.frame(1.0 / 60.0);
+    rt.wheel_event(WheelEvent {
+        momentum: true,
+        ..WheelEvent::new(-20.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Began).precise(true)
+    });
+    rt.wheel_event(WheelEvent {
+        momentum: true,
+        ..WheelEvent::new(0.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Ended).precise(true)
+    });
+    rt.frame(1.0 / 60.0);
+
+    assert_eq!(inner_log.borrow().len(), 1, "once scroll owns the phased gesture, native scroll + momentum run");
+    assert_eq!(rt.state.outer_wheels.len(), 1, "declined delta bubbled to outer on_wheel");
+    assert!(
+        rt.scroll.scrolls[&strip_id].x.offset >= 70.0,
+        "declining on_wheel_any preserves native horizontal scroll + momentum: {}",
+        rt.scroll.scrolls[&strip_id].x.offset,
+    );
+
+    // 1b. When inner declines after calling live_only and outer consumes, Tx::took clears live_only
+    //     so outer commits. Advance past the momentum window first so this starts a fresh gesture.
+    rt.update(|s, _| { s.outer_consume = true; s.outer_wheels.clear(); });
+    rt.frame(0.5);
+    let commits_before = rt.stats.commits;
+    rt.wheel_event(WheelEvent::new(-10.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Began).precise(true));
+    rt.wheel_event(WheelEvent::new(0.0, 0.0).at(50.0, 40.0).phase(GesturePhase::Ended).precise(true));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits_before + 1, "declining inner live_only lets consuming outer commit");
+    assert_eq!(rt.state.outer_wheels.len(), 2);
+
+    // 2. Consuming on_wheel_any stops bubbling, skips native scroll, respects live_only, and locks
+    //    the phased gesture owner even when the pointer drifts outside.
+    rt.update(|s, _| { s.consume = true; s.outer_wheels.clear(); });
+    rt.frame(0.5);
+    inner_log.borrow_mut().clear();
+
+    let scroll_before = rt.scroll.scrolls[&strip_id].x.offset;
+    let commits_before = rt.stats.commits;
+    rt.wheel_event(WheelEvent::new(-15.0, 0.0).at(60.0, 40.0).phase(GesturePhase::Began).precise(true));
+    rt.wheel_event(WheelEvent::new(-10.0, 0.0).at(260.0, 100.0).phase(GesturePhase::Moved).precise(true));
+    rt.wheel_event(WheelEvent::new(0.0, 0.0).at(260.0, 100.0).phase(GesturePhase::Ended).precise(true));
+    rt.frame(1.0 / 60.0);
+
+    assert_eq!(rt.stats.commits, commits_before, "live_only consuming on_wheel_any skips commit");
+    assert_eq!(inner_log.borrow().len(), 3, "locked phased owner hears Began/Moved/Ended outside bounds");
+    assert!(rt.state.outer_wheels.is_empty(), "consumed wheel does not bubble to outer handler");
+    assert_eq!(rt.scroll.scrolls[&strip_id].x.offset, scroll_before, "consumed wheel does not scroll");
+
+    // 3. Two-finger touchscreen pan reaches on_wheel_any with WheelEvent::touch == true.
+    inner_log.borrow_mut().clear();
+    rt.touch(1, TouchPhase::Started, 60.0, 40.0, 0.0);
+    rt.touch(2, TouchPhase::Started, 120.0, 40.0, 0.01);
+    rt.touch(1, TouchPhase::Moved, 80.0, 40.0, 0.02);
+    rt.touch(2, TouchPhase::Moved, 140.0, 40.0, 0.02);
+    rt.touch(2, TouchPhase::Ended, 140.0, 40.0, 0.03);
+    rt.touch(1, TouchPhase::Ended, 80.0, 40.0, 0.04);
+    rt.frame(1.0 / 60.0);
+    assert!(
+        inner_log.borrow().iter().any(|e| e.5 && e.0.abs() > 0.0),
+        "two-finger touch pan reaches on_wheel_any with touch == true: {:?}",
+        *inner_log.borrow(),
+    );
+
+    // 4. Modal and inert guards block on_wheel_any.
+    inner_log.borrow_mut().clear();
+    rt.update(|s, _| s.modal_open = true);
+    rt.frame(1.0 / 60.0);
+    rt.wheel_event(WheelEvent::new(-12.0, 0.0).at(50.0, 40.0));
+    rt.frame(1.0 / 60.0);
+    assert!(inner_log.borrow().is_empty(), "modal blocks on_wheel_any behind it");
+
+    rt.update(|s, _| { s.modal_open = false; s.inert_strip = true; });
+    rt.frame(1.0 / 60.0);
+    rt.wheel_event(WheelEvent::new(-12.0, 0.0).at(50.0, 40.0));
+    rt.frame(1.0 / 60.0);
+    assert!(inner_log.borrow().is_empty(), "inert element receives no on_wheel_any");
+}
+
+#[test]
+fn on_magnify_any_consumes_pinch_ctrl_wheel_and_touch_pinch_or_bubbles() {
+    struct App {
+        consume: bool,
+        modal_open: bool,
+        inert_canvas: bool,
+        outer_magnifies: Vec<(f32, bool)>,
+        inner_log: Rc<RefCell<Vec<(f32, f32, f32, GesturePhase, bool)>>>,
+        zoom: Live<f32>,
+    }
+
+    let (inner_log, zoom) = (Rc::new(RefCell::new(Vec::new())), Live::new(1.0_f32));
+    let mut rt = Runtime::new(
+        App {
+            consume: true,
+            modal_open: false,
+            inert_canvas: false,
+            outer_magnifies: Vec::new(),
+            inner_log: inner_log.clone(),
+            zoom: zoom.clone(),
+        },
+        |s, _| {
+            let (log, z, consume) = (s.inner_log.clone(), s.zoom.clone(), s.consume);
+            let mut canvas = el()
+                .key("canvas")
+                .absolute(40.0, 20.0)
+                .size(160.0, 140.0)
+                .on_magnify_any(move |ev, tx| {
+                    log.borrow_mut().push((ev.delta, ev.x, ev.y, ev.phase, ev.wheel));
+                    z.set(z.get() * (1.0 + ev.delta));
+                    tx.live_only();
+                    consume
+                });
+            if s.inert_canvas { canvas = canvas.inert(); }
+            el().key("outer")
+                .size(300.0, 200.0)
+                .on_magnify(|s: &mut App, ev, _| { s.outer_magnifies.push((ev.delta, ev.wheel)); true })
+                .child(canvas)
+                .children(s.modal_open.then(|| {
+                    el().key("modal").absolute(0.0, 0.0).size(300.0, 200.0).modal(false, |_: &mut App| {})
+                }))
+        },
+        (300.0, 200.0),
+        Env::new(true, 1.0),
+    );
+    rt.check_live_only(false);
+    rt.frame(0.0);
+
+    // 1. Phased trackpad pinch delivers local coordinates, consumes via live_only, and locks owner
+    //    even after the pointer drifts outside the canvas.
+    let commits_before = rt.stats.commits;
+    rt.magnify_event(MagnifyEvent::new(0.2).at(100.0, 70.0).phase(GesturePhase::Began));
+    rt.magnify_event(MagnifyEvent::new(0.1).at(260.0, 180.0).phase(GesturePhase::Moved));
+    rt.magnify_event(MagnifyEvent::new(0.0).at(260.0, 180.0).phase(GesturePhase::Ended));
+    rt.frame(1.0 / 60.0);
+
+    assert_eq!(rt.stats.commits, commits_before, "live_only consuming on_magnify_any skips commit");
+    assert_eq!(inner_log.borrow().len(), 3, "phased pinch stays locked to on_magnify_any owner");
+    assert_eq!((inner_log.borrow()[0].1, inner_log.borrow()[0].2), (60.0, 50.0), "local canvas coords");
+    assert!((zoom.get() - 1.32).abs() < 1e-4, "camera zoom updated: {}", zoom.get());
+    assert!(rt.state.outer_magnifies.is_empty(), "consumed pinch does not bubble to outer handler");
+
+    // 2. Ctrl + wheel reaches on_magnify_any with MagnifyEvent::wheel == true.
+    inner_log.borrow_mut().clear();
+    assert!(rt.pinch_wheel(100.0, 70.0, 40.0, None));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(inner_log.borrow().len(), 1);
+    assert!(inner_log.borrow()[0].4, "Ctrl+wheel arrives with wheel == true");
+    assert!(inner_log.borrow()[0].0 > 0.0);
+
+    // 3. Touchscreen two-finger pinch reaches on_magnify_any with wheel == false.
+    inner_log.borrow_mut().clear();
+    rt.touch(1, TouchPhase::Started, 80.0, 90.0, 0.0);
+    rt.touch(2, TouchPhase::Started, 140.0, 90.0, 0.01);
+    rt.touch(2, TouchPhase::Moved, 180.0, 90.0, 0.02);
+    rt.touch(2, TouchPhase::Ended, 180.0, 90.0, 0.03);
+    rt.touch(1, TouchPhase::Ended, 80.0, 90.0, 0.04);
+    rt.frame(1.0 / 60.0);
+    assert!(
+        inner_log.borrow().iter().any(|e| !e.4 && e.0 > 0.0),
+        "touchscreen two-finger pinch reaches on_magnify_any: {:?}",
+        *inner_log.borrow(),
+    );
+
+    // 4. Declining on_magnify_any bubbles to outer typed on_magnify and commits (Tx::took clears live_only).
+    rt.update(|s, _| s.consume = false);
+    rt.frame(1.0 / 60.0);
+    inner_log.borrow_mut().clear();
+    let commits_before = rt.stats.commits;
+    rt.magnify_event(MagnifyEvent::new(0.15).at(100.0, 70.0).phase(GesturePhase::Began));
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.stats.commits, commits_before + 1, "declining inner live_only lets outer commit");
+    assert_eq!(inner_log.borrow().len(), 1);
+    assert_eq!(rt.state.outer_magnifies, vec![(0.15, false)]);
+
+    // 5. Modal and inert guards block on_magnify_any.
+    rt.update(|s, _| { s.consume = true; s.modal_open = true; });
+    rt.frame(1.0 / 60.0);
+    inner_log.borrow_mut().clear();
+    rt.magnify_event(MagnifyEvent::new(0.2).at(100.0, 70.0).phase(GesturePhase::Began));
+    rt.frame(1.0 / 60.0);
+    assert!(inner_log.borrow().is_empty(), "modal blocks on_magnify_any behind it");
+
+    rt.update(|s, _| { s.modal_open = false; s.inert_canvas = true; });
+    rt.frame(1.0 / 60.0);
+    rt.magnify_event(MagnifyEvent::new(0.2).at(100.0, 70.0).phase(GesturePhase::Began));
+    rt.frame(1.0 / 60.0);
+    assert!(inner_log.borrow().is_empty(), "inert canvas receives no on_magnify_any");
 }

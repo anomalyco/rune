@@ -19,6 +19,34 @@ impl El {
         }
         self
     }
+    /// [`El::on_press_tx`] for a component that doesn't read the app's state, so it works in any
+    /// app.
+    ///
+    /// Preserves [`El::on_press_tx`] activation semantics: promotes a default `"group"` role to
+    /// `"button"`, supports pointer, touch, keyboard (Space / Return), and assistive-technology
+    /// activation, and exposes [`Tx::press_point`] and [`Tx::button`].
+    ///
+    /// ```
+    /// use rune::{El, Live, Tx, el};
+    ///
+    /// let dismissed = Live::new(0.0_f32);
+    /// let d = dismissed.clone();
+    /// let _close: El = el()
+    ///     .key("dismiss")
+    ///     .size(24.0, 24.0)
+    ///     .on_press_tx_any(move |tx: &mut Tx| {
+    ///         d.set(1.0);
+    ///         tx.live_only();
+    ///     });
+    /// ```
+    #[inline]
+    pub fn on_press_tx_any(mut self, f: impl Fn(&mut Tx) + 'static) -> Self {
+        self.handlers.on_press = Some(Rc::new(move |_, tx| f(tx)));
+        if self.role == RoleTag::GROUP {
+            self.role = RoleTag::BUTTON;
+        }
+        self
+    }
     /// A press on a surface that isn't a control: a pane that clears a selection or takes
     /// keyboard routing when clicked, a scrim that closes what it covers. It runs as
     /// [`El::on_press`] does under the pointer, but the element stays what its role says (it
