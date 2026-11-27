@@ -612,6 +612,7 @@ impl OverlayCore {
 
     pub(super) fn wake_due(&mut self, app: &mut dyn OverlayApp, now: Instant) {
         self.presence_due(app, now);
+        self.poll_activation_tokens(now);
         self.rest_step(app, crate::window::RestEvent::Woke { now }, now);
         self.retire.poll_due(now);
         // Paced to a frame interval: a hidden or covered overlay's poll that keeps asking for
@@ -689,11 +690,12 @@ impl OverlayCore {
     /// Applies requests from other threads: updates, edge, show and hide.
     pub(super) fn sync(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop) {
         if self.poll_terminal_gpu_loss(app) {
-            self.drain_tokens_none();
+            self.close_tokens();
             self.close_after_hidden(app);
             return;
         }
         self.record_wayland_display(event_loop);
+        self.poll_activation_tokens(crate::time::now());
         self.clipboard_due(app);
         if app.popup_answer(&mut self.popup) {
             self.dirty = true;
@@ -703,7 +705,7 @@ impl OverlayCore {
         self.drag_ends_due(app);
         let mut requests = std::mem::take(&mut *self.shared.requests.lock().unwrap());
         let new_after_hidden = app.take_after_hidden();
-        for reply in requests.tokens.take() { reply(self.activation_token()); }
+        self.start_tokens(requests.tokens.take(), crate::time::now());
         if let Some(input) = requests.input { self.pending_input = Some(input); }
         self.apply_input(app.rt());
         if let Some(exclude) = requests.exclude_from_capture { self.set_capture_exclusion(exclude); }

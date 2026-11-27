@@ -345,10 +345,13 @@ impl<T: 'static> OverlayHandle<T> {
 
     /// Asks for an XDG activation token to hand a program launched from the overlay (as
     /// `XDG_ACTIVATION_TOKEN`), so the compositor lets its window come to the front. Call it
-    /// before hiding the overlay: `reply` runs on the event loop's next turn, ahead of that
-    /// turn's show or hide, with `None` off Wayland's layer shell, while the overlay is not
-    /// shown or has no live surface, or when the compositor gives no token. Every request is
-    /// answered once, including with `None` if the overlay closes or drops first.
+    /// before hiding the overlay or releasing keyboard focus: the token request is committed on
+    /// the event loop's next turn ahead of that turn's show, hide, or `release_keys` without
+    /// blocking the event thread in a compositor roundtrip. On Wayland's layer shell, `reply`
+    /// runs on the event thread once the compositor sends `done` (even after a same-turn hide or
+    /// `release_keys`); elsewhere, while the overlay is not shown or has no live surface, or
+    /// when the compositor gives no token, `reply` runs with `None`. Every request is answered
+    /// once, including with `None` if the request times out or the overlay closes or drops first.
     ///
     /// ```no_run
     /// # fn launch(handle: &rune::OverlayHandle<()>) {
@@ -780,13 +783,17 @@ pub(in crate::overlay) struct OverlayCore {
     pub(in crate::overlay) sizing: sizing::SizingConfig,
     /// One-shot `OverlayHandle::after_hidden` coordination and Wayland hide sync.
     pub(in crate::overlay) after_hidden: after_hidden::AfterHiddenState,
-    /// Test hooks for Wayland frame callbacks and headless window-backed drag assertions.
+    /// In-flight non-blocking `OverlayHandle::activation_token` requests.
+    pub(in crate::overlay) activation_tokens: requests::ActivationTokens,
+    /// Test hooks for Wayland frame callbacks, activation tokens, and headless window-backed drag assertions.
     #[cfg(test)]
     layer_frame_pending: bool,
     #[cfg(test)]
     test_window_backing: bool,
     #[cfg(test)]
     test_window_drags: u32,
+    #[cfg(test)]
+    pub(in crate::overlay) test_activation_source: Option<Box<dyn FnMut() -> Option<requests::TokenSource>>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -891,12 +898,15 @@ impl OverlayCore {
             wayland_resize: sizing::WaylandResize::Ready,
             sizing: sizing::SizingConfig::default(),
             after_hidden: after_hidden::AfterHiddenState::default(),
+            activation_tokens: requests::ActivationTokens::default(),
             #[cfg(test)]
             layer_frame_pending: false,
             #[cfg(test)]
             test_window_backing: false,
             #[cfg(test)]
             test_window_drags: 0,
+            #[cfg(test)]
+            test_activation_source: None,
         }
     }
 

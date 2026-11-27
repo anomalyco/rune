@@ -190,6 +190,7 @@ impl OverlayCore {
         }
         let reason = reason.unwrap_or("compositor closed layer surface").to_owned();
         self.surface_refused(app, reason);
+        self.poll_activation_tokens(crate::time::now());
     }
 
     /// The window exists, with its surface or parked: the overlay can show. A prewarmed one
@@ -240,9 +241,9 @@ impl OverlayCore {
         // then releases what it held.
         #[cfg(target_os = "macos")]
         { self.fn_key(app); self.media_keys(app); self.prime.stop(); }
-        // Answer any activation-token requests queued before a synchronous hide (such as
+        // Commit any activation-token requests queued before a synchronous hide (such as
         // `Shell::Close` from an input handler) while the surface is still shown and live.
-        self.answer_tokens();
+        self.start_queued_tokens(crate::time::now());
         // Only macOS and Windows fade the window; elsewhere it goes at once, and so does drawing.
         let fade = if cfg!(any(target_os = "macos", target_os = "windows")) { fade } else { Duration::ZERO };
         let effects = self.presence.step(presence::Event::Hide { fade, now: crate::time::now() }, self.release);

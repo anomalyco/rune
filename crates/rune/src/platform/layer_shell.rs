@@ -37,6 +37,7 @@ mod compose;
 mod dead;
 mod sync;
 mod text_input;
+pub(crate) use activation::PendingActivationToken;
 pub(crate) use dead::display_error;
 use dead::{classify_turn_error, format_wayland_error};
 pub(crate) use sync::{HideSync, SyncPoll};
@@ -960,11 +961,12 @@ impl LayerSurface {
         effects.into_iter().any(|keyboard::FocusEffect::Focus(focused)| !focused)
     }
 
-    /// An XDG activation token for a program launched from the overlay; see `activation`.
-    pub fn activation_token(&self) -> Option<String> {
+    /// Starts a non-blocking XDG activation token request for a program launched from the overlay
+    /// and returns immediately without waiting in a compositor roundtrip; see `activation`.
+    pub fn start_activation_token(&self) -> Option<PendingActivationToken> {
         if self.state.readiness.closed() { return None; }
         let globals = self.globals.as_ref()?;
-        activation::request(
+        PendingActivationToken::start(
             &self.conn,
             globals,
             &self.surface,

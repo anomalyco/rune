@@ -1,6 +1,7 @@
-use std::collections::VecDeque;
+use std::time::Duration;
 
-use super::{InputEvent, InputSerial, Wire, run_request};
+use super::{Effect, Event, InputEvent, InputSerial, StartFlush, State, TIMEOUT, Wire, begin_request, finish_request, step};
+use crate::time::Instant;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Op {
@@ -8,7 +9,7 @@ enum Op {
     SetSerial(u32),
     SetSurface,
     Commit,
-    Roundtrip,
+    FlushStart,
     DestroyToken,
     DestroyActivation,
     DrainPending,
@@ -17,12 +18,12 @@ enum Op {
 
 struct MockWire {
     ops: Vec<Op>,
-    replies: VecDeque<Result<Option<String>, ()>>,
+    flush_result: StartFlush,
 }
 
 impl MockWire {
-    fn new(replies: impl IntoIterator<Item = Result<Option<String>, ()>>) -> Self {
-        Self { ops: Vec::new(), replies: replies.into_iter().collect() }
+    fn new(flush_result: StartFlush) -> Self {
+        Self { ops: Vec::new(), flush_result }
     }
 }
 
@@ -31,9 +32,9 @@ impl Wire for MockWire {
     fn set_serial(&mut self, serial: u32) { self.ops.push(Op::SetSerial(serial)); }
     fn set_surface(&mut self) { self.ops.push(Op::SetSurface); }
     fn commit(&mut self) { self.ops.push(Op::Commit); }
-    fn roundtrip(&mut self) -> Result<Option<String>, ()> {
-        self.ops.push(Op::Roundtrip);
-        self.replies.pop_front().unwrap_or(Ok(None))
+    fn flush_start(&mut self) -> StartFlush {
+        self.ops.push(Op::FlushStart);
+        self.flush_result
     }
     fn destroy_token(&mut self) { self.ops.push(Op::DestroyToken); }
     fn destroy_activation(&mut self) { self.ops.push(Op::DestroyActivation); }
@@ -42,10 +43,9 @@ impl Wire for MockWire {
 }
 
 #[test]
-fn request_order_sets_serial_and_surface_before_commit_then_destroys_and_drains() {
-    let mut wire = MockWire::new([Ok(Some("kwin-token-1".into()))]);
-    let token = run_request(&mut wire, Some(42), false);
-    assert_eq!(token.as_deref(), Some("kwin-token-1"));
+fn begin_request_sets_serial_and_surface_before_commit_and_flushes_without_roundtrip() {
+    let mut wire = MockWire::new(StartFlush::Sent);
+    assert!(begin_request(&mut wire, Some(42), false));
     assert_eq!(
         wire.ops,
         [
@@ -53,7 +53,15 @@ fn request_order_sets_serial_and_surface_before_commit_then_destroys_and_drains(
             Op::SetSerial(42),
             Op::SetSurface,
             Op::Commit,
-            Op::Roundtrip,
+            Op::FlushStart,
+        ]
+    );
+
+    finish_request(&mut wire);
+    assert_eq!(
+        wire.ops[5..],
+        [
+            Op::DrainPending,
             Op::DestroyToken,
             Op::DestroyActivation,
             Op::DrainPending,
@@ -63,38 +71,28 @@ fn request_order_sets_serial_and_surface_before_commit_then_destroys_and_drains(
 }
 
 #[test]
-fn request_without_serial_omits_set_serial_and_late_done_uses_second_roundtrip() {
-    let mut wire = MockWire::new([Ok(None), Ok(Some("late-token".into()))]);
-    let token = run_request(&mut wire, None, false);
-    assert_eq!(token.as_deref(), Some("late-token"));
+fn begin_request_without_serial_omits_set_serial() {
+    let mut wire = MockWire::new(StartFlush::Sent);
+    assert!(begin_request(&mut wire, None, false));
     assert_eq!(
         wire.ops,
         [
             Op::GetToken,
             Op::SetSurface,
             Op::Commit,
-            Op::Roundtrip,
-            Op::Roundtrip,
-            Op::DestroyToken,
-            Op::DestroyActivation,
-            Op::DrainPending,
-            Op::Flush,
+            Op::FlushStart,
         ]
     );
 }
 
 #[test]
-fn closed_surface_skips_wire_and_empty_or_error_answers_return_none_with_cleanup() {
-    let mut closed = MockWire::new([Ok(Some("should-not-run".into()))]);
-    assert_eq!(run_request(&mut closed, Some(7), true), None);
-    assert!(closed.ops.is_empty(), "a closed surface must not issue wire requests or roundtrips");
+fn closed_surface_skips_wire_and_fatal_flush_cleans_up_immediately() {
+    let mut closed = MockWire::new(StartFlush::Sent);
+    assert!(!begin_request(&mut closed, Some(7), true));
+    assert!(closed.ops.is_empty(), "a closed surface must not issue wire requests");
 
-    let mut empty = MockWire::new([Ok(Some(String::new()))]);
-    assert_eq!(run_request(&mut empty, Some(9), false), None);
-    assert!(empty.ops.ends_with(&[Op::DestroyToken, Op::DestroyActivation, Op::DrainPending, Op::Flush]));
-
-    let mut failed = MockWire::new([Err(()), Ok(Some("unreachable".into()))]);
-    assert_eq!(run_request(&mut failed, Some(11), false), None);
+    let mut failed = MockWire::new(StartFlush::Fatal);
+    assert!(!begin_request(&mut failed, Some(11), false));
     assert_eq!(
         failed.ops,
         [
@@ -102,13 +100,63 @@ fn closed_surface_skips_wire_and_empty_or_error_answers_return_none_with_cleanup
             Op::SetSerial(11),
             Op::SetSurface,
             Op::Commit,
-            Op::Roundtrip,
+            Op::FlushStart,
+            Op::DrainPending,
             Op::DestroyToken,
             Op::DestroyActivation,
             Op::DrainPending,
             Op::Flush,
         ]
     );
+}
+
+#[test]
+fn state_machine_completes_on_done_and_maps_empty_token_to_none() {
+    let t0 = Instant::now();
+    let deadline = t0 + TIMEOUT;
+
+    let mut state = State::Pending { deadline };
+    assert!(state.is_pending());
+    assert_eq!(state.deadline(), Some(deadline));
+    assert!(step(&mut state, Event::Tick { now: t0 + Duration::from_millis(10) }).is_empty());
+    assert!(state.is_pending());
+
+    let effects: Vec<_> = step(&mut state, Event::Done("niri-token-1".into())).into_iter().collect();
+    assert_eq!(effects, [Effect::Complete(Some("niri-token-1".into()))]);
+    assert_eq!(state, State::Finished);
+    assert_eq!(state.deadline(), None);
+    // Subsequent events after completion produce no duplicate callback.
+    assert!(step(&mut state, Event::Done("dup".into())).is_empty());
+    assert!(step(&mut state, Event::Tick { now: deadline + Duration::from_secs(1) }).is_empty());
+    assert!(step(&mut state, Event::Cancel).is_empty());
+
+    let mut empty = State::Pending { deadline };
+    let effects: Vec<_> = step(&mut empty, Event::Done(String::new())).into_iter().collect();
+    assert_eq!(effects, [Effect::Complete(None)]);
+    assert_eq!(empty, State::Finished);
+}
+
+#[test]
+fn state_machine_times_out_at_deadline_and_handles_failed_and_cancel_once() {
+    let t0 = Instant::now();
+    let deadline = t0 + TIMEOUT;
+
+    let mut timed = State::Pending { deadline };
+    assert!(step(&mut timed, Event::Tick { now: deadline - Duration::from_millis(1) }).is_empty());
+    let effects: Vec<_> = step(&mut timed, Event::Tick { now: deadline }).into_iter().collect();
+    assert_eq!(effects, [Effect::Complete(None)]);
+    assert_eq!(timed, State::Finished);
+    assert!(step(&mut timed, Event::Done("too-late".into())).is_empty());
+
+    let mut failed = State::Pending { deadline };
+    let effects: Vec<_> = step(&mut failed, Event::Failed).into_iter().collect();
+    assert_eq!(effects, [Effect::Complete(None)]);
+    assert_eq!(failed, State::Finished);
+
+    let mut cancelled = State::Pending { deadline };
+    let effects: Vec<_> = step(&mut cancelled, Event::Cancel).into_iter().collect();
+    assert_eq!(effects, [Effect::Complete(None)]);
+    assert_eq!(cancelled, State::Finished);
 }
 
 #[test]

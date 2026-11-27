@@ -844,8 +844,18 @@ fn activation_token_names_keyboard_enter_and_touch_down_serials_on_our_surface()
     let other_surface = layer.compositor.create_surface(&layer.queue.handle(), ());
     let other_surface_id = other_surface.id().protocol_id();
 
+    fn finish_token(host: &Connection, pending: &mut super::PendingActivationToken) -> Option<String> {
+        loop {
+            match pending.dispatch() {
+                crate::platform::layer_shell_machine::activation::TokenPoll::Done(token) => return token,
+                crate::platform::layer_shell_machine::activation::TokenPoll::Pending => host_read_once(host),
+            }
+        }
+    }
+
     // 1. Before any focus or input event, no set_serial is sent.
-    assert_eq!(layer.activation_token().as_deref(), Some("mock-token"));
+    let mut t1 = layer.start_activation_token().expect("started");
+    assert_eq!(finish_token(&host, &mut t1).as_deref(), Some("mock-token"));
 
     // 2. wl_keyboard.enter on our surface before any press supplies its serial.
     let mut enter_ours = Vec::new();
@@ -855,7 +865,8 @@ fn activation_token_names_keyboard_enter_and_touch_down_serials_on_our_surface()
     mock_send_msg(&mut server_tx, keyboard_id, 1, &enter_ours)?;
     host_read_once(&host);
     let _ = layer.dispatch();
-    assert_eq!(layer.activation_token().as_deref(), Some("mock-token"));
+    let mut t2 = layer.start_activation_token().expect("started");
+    assert_eq!(finish_token(&host, &mut t2).as_deref(), Some("mock-token"));
 
     // 3. wl_keyboard.enter on another surface must not overwrite ours.
     let mut enter_other = Vec::new();
@@ -865,7 +876,8 @@ fn activation_token_names_keyboard_enter_and_touch_down_serials_on_our_surface()
     mock_send_msg(&mut server_tx, keyboard_id, 1, &enter_other)?;
     host_read_once(&host);
     let _ = layer.dispatch();
-    assert_eq!(layer.activation_token().as_deref(), Some("mock-token"));
+    let mut t3 = layer.start_activation_token().expect("started");
+    assert_eq!(finish_token(&host, &mut t3).as_deref(), Some("mock-token"));
 
     // 4. wl_touch.down on our surface updates the activation serial.
     let mut touch_down = Vec::new();
@@ -878,7 +890,8 @@ fn activation_token_names_keyboard_enter_and_touch_down_serials_on_our_surface()
     mock_send_msg(&mut server_tx, touch_id, 0, &touch_down)?;
     host_read_once(&host);
     let _ = layer.dispatch();
-    assert_eq!(layer.activation_token().as_deref(), Some("mock-token"));
+    let mut t4 = layer.start_activation_token().expect("started");
+    assert_eq!(finish_token(&host, &mut t4).as_deref(), Some("mock-token"));
 
     assert_eq!(
         *recorded_serials.lock().unwrap(),
