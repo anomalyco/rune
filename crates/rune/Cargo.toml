@@ -7,7 +7,7 @@ description = "GPU-rendered Rust UI framework (wgpu, winit) with keyed element t
 autotests = false
 
 [features]
-default = ["accessibility", "dbus", "embedded-fonts", "hunspell", "metal-backend", "ogg-audio", "svg", "rune-gpu/default", "rune-image/default", "rune-media/default", "rune-text/default"]
+default = ["accessibility", "dbus", "embedded-fonts", "hunspell", "metal-backend", "ogg-audio", "svg", "wayland-csd-title", "rune-gpu/default", "rune-image/default", "rune-media/default", "rune-text/default"]
 # Bundle Inter (Regular, Medium, SemiBold; on web also IBM Plex Mono) as the fonts text falls back
 # to when the app registers none. Disable when AppSpec::fonts supplies the app's own fonts to omit
 # the bytes (about 1.25 MB native).
@@ -82,6 +82,14 @@ avif = ["rune-image/avif"]
 # Linux and `El::spellcheck` falls back to a no-op there. No effect on Windows (`ISpellChecker`),
 # macOS (`NSSpellChecker`), or web (which always enables `rune-spell/hunspell`).
 hunspell = ["rune-spell/hunspell"]
+# Linux/Wayland: render window titles in `sctk-adwaita`'s client-side headerbar on compositors
+# without server-side decorations (such as GNOME), via `winit/wayland-csd-adwaita` (`ab_glyph`,
+# `ttf-parser`, and a 31 KB fallback Cantarell font). On by default so plain system-decorated
+# windows show their `AppSpec` / `Window::set_title` title out of the box. Disable with
+# `default-features = false` (keeping `wayland-csd-adwaita-notitle` frames and buttons without
+# `ab_glyph` or the fallback font) for custom-titlebar or size-minimal Linux builds. No effect on
+# other platforms or compositors that draw server-side decorations.
+wayland-csd-title = ["winit/wayland-csd-adwaita"]
 # Linux desktop services over D-Bus (zbus over async-io): the desktop's light or dark preference
 # (the Settings portal), the system tray (`Tray`), global shortcuts on Wayland (the
 # GlobalShortcuts portal), the Secret Service (`rune::credentials`) and, with `native-file-dialog`,
@@ -128,7 +136,8 @@ rune-taffy = { workspace = true }
 rune-text = { workspace = true }
 # Allow backend patch fixes; headless pixel equivalence guards the precompiled Metal path.
 wgpu = { workspace = true, features = ["std", "parking_lot", "wgsl"] }
-# Keep Wayland client-side frames/buttons without the title font's ab_glyph/ttf-parser.
+# Keep Wayland client-side frames/buttons even with `default-features = false`; the default
+# `wayland-csd-title` feature adds `winit/wayland-csd-adwaita` for headerbar title rendering.
 winit = { workspace = true, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-notitle"] }
 taffy = { workspace = true, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "content_size"] }
 parley = { workspace = true, features = ["std"] }

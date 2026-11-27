@@ -1,8 +1,8 @@
 diff --git a/src/config.rs b/src/config.rs
-index 3299790..4d17374 100644
+index 3299790..38975da 100644
 --- a/src/config.rs
 +++ b/src/config.rs
-@@ -1,8 +1,64 @@
+@@ -1,8 +1,78 @@
  //! System configuration.
  use std::process::Command;
 +use std::sync::mpsc::{channel, Receiver};
@@ -10,24 +10,29 @@ index 3299790..4d17374 100644
 +
 +type ButtonLayout = Option<(String, String)>;
 +
-+/// The two reads started before a window exists, each on a thread of its own. The first frame
++/// The system reads started before a window exists, each on a thread of its own. The first frame
 +/// takes their answers; a later frame reads again, as it always did.
 +struct Early {
 +    dark: Mutex<Option<Receiver<bool>>>,
 +    button_layout: Mutex<Option<Receiver<ButtonLayout>>>,
++    #[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
++    title_font: Mutex<Option<Receiver<crate::title::TitleFont>>>,
 +}
 +
 +static EARLY: OnceLock<Early> = OnceLock::new();
 +
 +/// Starts the reads a frame's first drawing needs (the colour scheme and the button layout: a
-+/// `dbus-send` process each, with 100 ms for the portal's reply) on threads of their own, once per
++/// `dbus-send` process each, with 100 ms for the portal's reply; plus the `ab_glyph` titlebar
++/// font's `gsettings` and `fc-match` lookups when compiled in) on threads of their own, once per
 +/// process. Call it when a client-side frame is certain and before the window's first configure:
-+/// the frame is made in that configure, on the event loop's thread, which otherwise starts both
++/// the frame is made in that configure, on the event loop's thread, which otherwise starts those
 +/// processes one after the other and waits for each.
 +pub fn read_system_config_early() {
 +    EARLY.get_or_init(|| Early {
 +        dark: Mutex::new(start(read_prefer_dark)),
 +        button_layout: Mutex::new(start(read_button_layout_config)),
++        #[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
++        title_font: Mutex::new(start(crate::title::read_title_font)),
 +    });
 +}
 +
@@ -63,11 +68,20 @@ index 3299790..4d17374 100644
 +        .unwrap_or_else(read_button_layout_config)
 +}
 +
++/// Query the titlebar font preference and mapped system font file, reusing the early read once.
++#[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
++pub(crate) fn get_title_font() -> crate::title::TitleFont {
++    EARLY
++        .get()
++        .and_then(|early| take(&early.title_font))
++        .unwrap_or_else(crate::title::read_title_font)
++}
++
 +fn read_prefer_dark() -> bool {
      // outputs something like: `variant       variant          uint32 1`
      let stdout = Command::new("dbus-send")
          .arg("--reply-timeout=100")
-@@ -23,10 +79,9 @@ pub(crate) fn prefer_dark() -> bool {
+@@ -23,10 +93,9 @@ pub(crate) fn prefer_dark() -> bool {
      matches!(stdout, Some(s) if s.trim().ends_with("uint32 1"))
  }
  
@@ -692,10 +706,10 @@ index efa9133..669736b 100644
  
 diff --git a/src/tests.rs b/src/tests.rs
 new file mode 100644
-index 0000000..3b93a85
+index 0000000..5163a94
 --- /dev/null
 +++ b/src/tests.rs
-@@ -0,0 +1,334 @@
+@@ -0,0 +1,368 @@
 +//! The frame's rounded bottom corners: the radius each state gets, the border along the arcs, the
 +//! shadow the arcs cut out of the part that reaches over the window, and the bottom part's input
 +//! zone. Everything here draws into a `Pixmap` the way `redraw_inner` does, so it needs no
@@ -1030,4 +1044,95 @@ index 0000000..3b93a85
 +    assert_eq!(crate::config::take(&slot), Some(1));
 +    assert_eq!(READS.load(std::sync::atomic::Ordering::SeqCst), 1);
 +}
-\ No newline at end of file
++
++/// With the `ab_glyph` title renderer enabled, `TitleText::new` returns a renderer that draws
++/// visible pixels for a non-empty window title (falling back to the bundled Cantarell font when no
++/// system font is resolved).
++#[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
++#[test]
++fn ab_glyph_title_text_renders_non_empty_pixmap() {
++    let mut title = crate::title::TitleText::new(tiny_skia::Color::WHITE)
++        .expect("ab_glyph feature must construct TitleText");
++    title.update_title("Rune");
++    let pixmap = title.pixmap().expect("non-empty title must render a pixmap");
++    assert!(pixmap.width() > 0 && pixmap.height() > 0);
++    assert!(
++        pixmap.pixels().iter().any(|px| px.alpha() > 0),
++        "rendered title pixmap must contain visible glyph pixels",
++    );
++}
++
++/// The `ab_glyph` titlebar font read runs on a background thread and its result is consumed once.
++#[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
++#[test]
++fn early_title_font_read_is_off_thread_and_taken_once() {
++    fn fallback_font() -> crate::title::TitleFont {
++        crate::title::TitleFont {
++            font: None,
++            pt_size: 11.0,
++        }
++    }
++    let slot = std::sync::Mutex::new(crate::config::start(fallback_font));
++    let first = crate::config::take(&slot).expect("the early title font read");
++    assert_eq!(first.pt_size, 11.0);
++    assert!(first.font.is_none());
++    assert!(crate::config::take(&slot).is_none(), "the early title font must be taken once");
++}
+diff --git a/src/title/ab_glyph_renderer.rs b/src/title/ab_glyph_renderer.rs
+index d8f817f..badf1d7 100644
+--- a/src/title/ab_glyph_renderer.rs
++++ b/src/title/ab_glyph_renderer.rs
+@@ -11,6 +11,23 @@ use tiny_skia::{Color, Pixmap, PremultipliedColorU8};
+ 
+ const CANTARELL: &[u8] = include_bytes!("Cantarell-Regular.ttf");
+ 
++/// The resolved titlebar font preference and its memory-mapped font file, if found.
++pub(crate) struct TitleFont {
++    pub(crate) font: Option<(memmap2::Mmap, FontPreference)>,
++    pub(crate) pt_size: f32,
++}
++
++/// Reads the GNOME titlebar font preference (`gsettings`) and maps its matching font file
++/// (`fc-match`). Safe to run on a background thread before the first frame is created.
++pub(crate) fn read_title_font() -> TitleFont {
++    let font_pref = config::titlebar_font().unwrap_or_default();
++    let pt_size = font_pref.pt_size;
++    let font = font_file_matching(&font_pref)
++        .and_then(|f| mmap(&f))
++        .map(|mmap| (mmap, font_pref));
++    TitleFont { font, pt_size }
++}
++
+ #[derive(Debug)]
+ pub struct AbGlyphTitleText {
+     title: String,
+@@ -23,11 +40,10 @@ pub struct AbGlyphTitleText {
+ 
+ impl AbGlyphTitleText {
+     pub fn new(color: Color) -> Self {
+-        let font_pref = config::titlebar_font().unwrap_or_default();
+-        let font_pref_pt_size = font_pref.pt_size;
+-        let font = font_file_matching(&font_pref)
+-            .and_then(|f| mmap(&f))
+-            .map(|mmap| (mmap, font_pref));
++        let TitleFont {
++            font,
++            pt_size: font_pref_pt_size,
++        } = crate::config::get_title_font();
+ 
+         let size = parse_font(&font)
+             .pt_to_px_scale(font_pref_pt_size)
+diff --git a/src/title.rs b/src/title.rs
+index 1067f65..a7f999d 100644
+--- a/src/title.rs
++++ b/src/title.rs
+@@ -11,6 +11,9 @@ mod crossfont_renderer;
+ #[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
+ mod ab_glyph_renderer;
+ 
++#[cfg(all(not(feature = "crossfont"), feature = "ab_glyph"))]
++pub(crate) use ab_glyph_renderer::{read_title_font, TitleFont};
++
+ #[cfg(all(not(feature = "crossfont"), not(feature = "ab_glyph")))]
+ mod dumb;
+ 
