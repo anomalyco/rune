@@ -238,6 +238,7 @@ impl<S: 'static> LayerHost<S> {
         let mut rt = runtime_for(spec, state, size, Env::new(dark, scale), wake);
         #[cfg(target_os = "ios")]
         {
+            rt.set_touch_controls(true);
             rt.set_system_text_scale(crate::platform::text_scale::current());
             crate::platform::text_scale::follow_waker(text_scale_wake);
         }

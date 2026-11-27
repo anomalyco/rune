@@ -388,6 +388,13 @@ impl<S: 'static> Runtime<S> {
     pub fn system_scroller_jumps(&self) -> bool { self.core().host.system_scroller_jumps() }
     #[inline(always)]
     pub fn overlay_scroll_bars(&self) -> bool { self.core().host.overlay_scroll_bars() }
+    /// Whether [`Cx::touch_controls`] currently reports native coarse touch controls.
+    #[inline(always)]
+    pub fn touch_controls(&self) -> bool { self.core().touch_controls() }
+    /// Sets whether [`Cx::touch_controls`] (and [`Cx::hover_none`]) report coarse touch controls
+    /// natively. A change re-runs the view and its memos.
+    #[inline(always)]
+    pub fn set_touch_controls(&mut self, touch: bool) { self.core_mut().set_touch_controls(touch); }
 
     /// Registers font bytes (TTF, OTF, TTC, or variable font) into the process-wide font
     /// collection at runtime, returning the registered family names in registration order.

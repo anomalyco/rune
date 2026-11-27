@@ -63,6 +63,9 @@ impl RuntimeCore {
             self.touch_wheel_event_at(ev, (x, y));
             return;
         }
+        if !self.pointer.is_touch_input() {
+            self.sync_primary_pointer(cx::PrimaryPointer::Hover);
+        }
         if ev.phase == GesturePhase::Began { self.wheel_began(); }
         let moved = ev.dx != 0.0 || ev.dy != 0.0;
         if moved {
@@ -590,6 +593,9 @@ impl RuntimeCore {
             PointerButton::Primary => return self.pointer_down(app, x, y),
             PointerButton::Secondary => return self.secondary_down(x, y),
             _ => {}
+        }
+        if !self.pointer.is_touch_input() {
+            self.sync_primary_pointer(cx::PrimaryPointer::Hover);
         }
         let (x, y) = self.locked_point(x, y);
         let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();

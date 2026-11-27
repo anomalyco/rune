@@ -297,6 +297,24 @@ impl RuntimeCore {
     /// Web, mapped onto the runtime clock from `PointerEvent.timeStamp`). A host with touches
     /// calls this for every one; `id` tells fingers apart.
     pub(crate) fn touch(&mut self, app: &mut dyn AppDriver, id: u64, phase: TouchPhase, x: f32, y: f32, time: f64) {
+        self.touch_with_pointer(app, id, phase, x, y, time, cx::PrimaryPointer::Touch);
+    }
+
+    /// Like [`Self::touch`], tagging the native pointer class (`Touch` for fingers, `Hover` for
+    /// Windows `WM_POINTER*` pens that winit also forwards as `WindowEvent::Touch`).
+    pub(crate) fn touch_with_pointer(
+        &mut self,
+        app: &mut dyn AppDriver,
+        id: u64,
+        phase: TouchPhase,
+        x: f32,
+        y: f32,
+        time: f64,
+        pointer: cx::PrimaryPointer,
+    ) {
+        if phase != TouchPhase::Cancelled {
+            self.sync_primary_pointer(pointer);
+        }
         match phase {
             TouchPhase::Started => self.touch_down(app, id, x, y, time),
             TouchPhase::Moved => self.touch_move(app, id, x, y, time),
@@ -638,3 +656,7 @@ mod pinch_tests;
 #[cfg(test)]
 #[path = "touch_multi_tests.rs"]
 mod multi_tests;
+
+#[cfg(test)]
+#[path = "touch_controls_tests.rs"]
+mod controls_tests;

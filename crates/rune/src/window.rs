@@ -932,7 +932,11 @@ pub(crate) fn touch_core_at(rt: &mut RuntimeCore, app: &mut dyn AppDriver, touch
         TouchPhase::Ended => crate::TouchPhase::Ended,
         TouchPhase::Cancelled => crate::TouchPhase::Cancelled,
     };
-    rt.touch(app, touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time);
+    #[cfg(target_os = "windows")]
+    let pointer = crate::platform::win32::touch_input::current_primary_pointer();
+    #[cfg(not(target_os = "windows"))]
+    let pointer = crate::runtime::PrimaryPointer::Touch;
+    rt.touch_with_pointer(app, touch.id, phase, touch.location.x as f32 / scale, touch.location.y as f32 / scale, time, pointer);
 }
 
 /// Hands a winit touch to the runtime, timed on a clock that starts with the first touch.

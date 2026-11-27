@@ -32,6 +32,7 @@ mod pointer;
 pub(crate) use rune_text::segmenter;
 pub(crate) mod session_lock;
 pub(crate) mod taskbar;
+pub(crate) mod touch_input;
 mod window_options;
 
 pub(crate) use cloak::Cloak;
@@ -420,6 +421,7 @@ impl OverlayWindow {
             unsafe { drop(Rc::from_raw(data)); }
             return Err(format!("SetWindowSubclass failed: {}", last_error()));
         }
+        touch_input::install_hwnd(hwnd);
         Ok(Self { input, observing: false, exclusion, watch: None, wake, keys: options.keys, layered_cpu })
     }
     pub fn capture_exclusion(&self) -> OverlaySupport { self.exclusion }

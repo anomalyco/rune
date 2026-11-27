@@ -123,6 +123,16 @@ pub(crate) struct HostState {
     pub(in crate::runtime) wm_state: crate::WindowManagerState,
     /// Whether the last committed view read `Cx::decoration_mode`, `Cx::tiled_edges`, or `Cx::window_actions`.
     pub(in crate::runtime) wm_state_read: bool,
+    /// Per-window native primary pointer mode (`Cx::touch_controls`, `Cx::hover_none`).
+    pub(in crate::runtime) primary_pointer: cx::PrimaryPointer,
+    /// Whether the last committed view read `Cx::touch_controls` or `Cx::hover_none`.
+    pub(in crate::runtime) primary_pointer_read: bool,
+    /// Last sampled OS tablet/slate-mode posture, so focus changes on hybrid touchscreen laptops
+    /// preserve live touch vs. mouse mode unless the system posture itself transitioned.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    pub(in crate::runtime) system_tablet_mode: Option<bool>,
+    #[cfg(target_os = "windows")]
+    pub(in crate::runtime) tablet_setting_gen: u64,
     /// Host-supplied safe-area insets `[top, right, bottom, left]` in logical points
     /// (`Runtime::set_safe_area`); `None` falls back to browser insets on wasm32 or `[0.0; 4]`.
     pub(in crate::runtime) safe_area: Option<[f32; 4]>,
@@ -199,6 +209,11 @@ impl HostState {
             page: None,
             wm_state: crate::WindowManagerState::default(),
             wm_state_read: false,
+            primary_pointer: cx::PrimaryPointer::Hover,
+            primary_pointer_read: false,
+            system_tablet_mode: None,
+            #[cfg(target_os = "windows")]
+            tablet_setting_gen: 0,
             safe_area: None,
             visual_viewport_y: None,
         }

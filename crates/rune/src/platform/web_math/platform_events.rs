@@ -7,13 +7,7 @@
 use crate::app::SharedCore;
 use crate::runtime::{AppDriver, RuntimeCore};
 
-/// The page's primary pointer capability (`(hover: none)` and `(pointer: coarse)`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PrimaryPointer {
-    Hover,
-    NoHover,
-    Touch,
-}
+pub(crate) use crate::runtime::PrimaryPointer;
 
 pub(crate) fn parse_primary_pointer(event: &serde_json::Value) -> PrimaryPointer {
     match (event["hover"].as_bool(), event["coarse"].as_bool()) {

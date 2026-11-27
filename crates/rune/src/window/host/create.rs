@@ -117,6 +117,8 @@ impl Host {
         #[cfg(target_os = "windows")]
         crate::platform::win32::press_point::install(&window);
         #[cfg(target_os = "windows")]
+        crate::platform::win32::touch_input::install(&window);
+        #[cfg(target_os = "windows")]
         crate::platform::win32::dark_mode::install_theme_refresh(&window);
         // Before it shows, so the title bar never appears.
         #[cfg(target_os = "windows")]

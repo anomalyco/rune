@@ -105,6 +105,8 @@ impl RuntimeCore {
             caret_read: false,
             wm_state: self.host.wm_state,
             wm_state_read: false,
+            primary_pointer: self.host.primary_pointer,
+            primary_pointer_read: false,
             layout_seen: self.commit.layout_seen.rects.clone(),
             layout_reads: Vec::new(),
             commits: self.commit.commits,
@@ -284,6 +286,7 @@ impl Measurement<'_> {
             titlebar: self.titlebar,
             caret_read: self.caret_read,
             wm_state_read: Some(self.wm_state_read),
+            primary_pointer_read: Some(self.primary_pointer_read),
             layout_reads: self.layout_reads,
             memo_flattened: Some(memo_pending),
             memo_reused,
@@ -568,6 +571,8 @@ impl Measurement<'_> {
             caret_read: std::cell::Cell::new(false),
             wm_state: this.wm_state,
             wm_state_read: std::cell::Cell::new(false),
+            primary_pointer: this.primary_pointer,
+            primary_pointer_read: std::cell::Cell::new(false),
             safe_area: this.safe_area,
             layout: this.layout_seen.clone(),
             layout_reads: Default::default(),
@@ -621,6 +626,7 @@ impl Measurement<'_> {
             // Reads made by memos this build reused count as made again.
             self.caret_read = cx.caret_read.get() || replayed.caret;
             self.wm_state_read = cx.wm_state_read.get();
+            self.primary_pointer_read = cx.primary_pointer_read.get();
             self.layout_reads = cx.layout_reads.take();
             for read in replayed.layout { layout_read::note_read_at(&mut self.layout_reads, &read.key, read.same, read.at); }
 
