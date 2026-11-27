@@ -74,7 +74,7 @@ pub(crate) fn icd_prefixes(kernel_driver: &str) -> Option<&'static [&'static str
         "panfrost" | "panthor" => Some(&["panfrost_icd"]),
         "v3d" => Some(&["broadcom_icd"]),
         "asahi" => Some(&["asahi_icd"]),
-        "powervr" => Some(&["powervr_icd"]),
+        "powervr" => Some(&["powervr_mesa_icd", "powervr_icd"]),
         "virtio_gpu" => Some(&["virtio_icd"]),
         _ => None,
     }

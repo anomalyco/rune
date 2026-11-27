@@ -221,7 +221,7 @@ fn kernel_driver_table_maps_known_drivers_and_rejects_unknown() {
     assert_eq!(icd_prefixes("panthor"), Some(&["panfrost_icd"][..]));
     assert_eq!(icd_prefixes("v3d"), Some(&["broadcom_icd"][..]));
     assert_eq!(icd_prefixes("asahi"), Some(&["asahi_icd"][..]));
-    assert_eq!(icd_prefixes("powervr"), Some(&["powervr_icd"][..]));
+    assert_eq!(icd_prefixes("powervr"), Some(&["powervr_mesa_icd", "powervr_icd"][..]));
     assert_eq!(icd_prefixes("virtio_gpu"), Some(&["virtio_icd"][..]));
     assert_eq!(icd_prefixes("simpledrm"), None);
     assert_eq!(icd_prefixes("radeon"), None);
@@ -388,6 +388,36 @@ fn scan_discovers_priority_ordered_libraries_and_ignores_other_vendors() {
     );
     assert_eq!(stats.dirs_checked, 3);
     assert_eq!(stats.manifests_read, 4, "only matching intel_* manifests are opened");
+}
+
+#[test]
+fn scan_discovers_powervr_mesa_and_generic_icd_manifests() {
+    let root = TempDirGuard(temp_dir("powervr"));
+    let icd_dir = root.0.join("icd.d");
+    std::fs::create_dir_all(&icd_dir).unwrap();
+
+    std::fs::write(
+        icd_dir.join("powervr_mesa_icd.x86_64.json"),
+        r#"{"ICD":{"library_path":"/usr/lib64/libvulkan_powervr_mesa.so","library_arch":"64"}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        icd_dir.join("powervr_icd.aarch64.json"),
+        r#"{"ICD":{"library_path":"/usr/lib/libvulkan_powervr.so","library_arch":"64"}}"#,
+    )
+    .unwrap();
+    std::fs::write(icd_dir.join("nvidia_icd.json"), b"UNRELATED VENDOR").unwrap();
+
+    let (libs, stats) = scan_candidate_libraries("powervr", &[icd_dir], "64")
+        .expect("powervr scan succeeds");
+    assert_eq!(
+        libs,
+        vec![
+            PathBuf::from("/usr/lib/libvulkan_powervr.so"),
+            PathBuf::from("/usr/lib64/libvulkan_powervr_mesa.so"),
+        ]
+    );
+    assert_eq!(stats.manifests_read, 2, "only matching powervr manifests are opened");
 }
 
 #[test]

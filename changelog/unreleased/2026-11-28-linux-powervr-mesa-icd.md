@@ -1,0 +1,1 @@
+- Linux/Wayland: Vulkan direct-driver ICD discovery now matches Mesa's `powervr_mesa_icd` manifest prefix alongside `powervr_icd` when the compositor uses the `powervr` kernel driver.
