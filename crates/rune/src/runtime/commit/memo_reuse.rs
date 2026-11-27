@@ -323,10 +323,14 @@ fn same_drop(
         (Some(x), Some(y)) => {
             opt_rc_eq(&x.on_drop, &y.on_drop)
                 && opt_rc_eq(&x.accepts, &y.accepts)
+                && opt_rc_eq(&x.accepts_drag, &y.accepts_drag)
+                && opt_rc_eq(&x.feedback, &y.feedback)
                 && opt_rc_eq(&x.on_hover, &y.on_hover)
                 && opt_rc_eq(&x.on_reject, &y.on_reject)
                 && opt_rc_eq(&x.on_reject_hover, &y.on_reject_hover)
                 && opt_rc_eq(&x.on_move, &y.on_move)
+                && opt_rc_eq(&x.on_hover_within, &y.on_hover_within)
+                && opt_rc_eq(&x.on_move_within, &y.on_move_within)
         }
         _ => false,
     }

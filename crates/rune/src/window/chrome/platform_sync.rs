@@ -22,6 +22,7 @@ pub(in crate::window) fn sync_platform_core(l: &mut Win, rt: &mut RuntimeCore, s
     #[cfg(target_os = "windows")]
     {
         if focused { crate::platform::win32::dark_mode::menus(rt.backdrop_dark().unwrap_or(rt.env.system_dark)); }
+        crate::platform::win32::drop_target::set_feedback(&l.window, rt.drop_feedback());
         let fullscreen = l.window.fullscreen().is_some();
         if l.native.drag_sync.needs_update(rt.commit_generation(), rt.zoom(), fullscreen, rt.animating) {
             let hits = if fullscreen { Vec::new() } else { rt.window_drag_hits() };

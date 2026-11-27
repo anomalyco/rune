@@ -26,8 +26,8 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, DVASPE
 use windows::Win32::System::Ole::{CF_HDROP, CF_UNICODETEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE, DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize};
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
-use windows::Win32::UI::Shell::{CLSID_DragDropHelper, IDragSourceHelper, ILClone, ILCreateFromPathW, ILFindLastID, ILFree, ILIsParent, ILRemoveLastID, SHCreateDataObject, SHDRAGIMAGE};
-use windows::core::{BOOL, HRESULT, PCWSTR, implement};
+use windows::Win32::UI::Shell::{CLSID_DragDropHelper, DSH_ALLOWDROPDESCRIPTIONTEXT, IDragSourceHelper, IDragSourceHelper2, ILClone, ILCreateFromPathW, ILFindLastID, ILFree, ILIsParent, ILRemoveLastID, SHCreateDataObject, SHDRAGIMAGE};
+use windows::core::{BOOL, HRESULT, Interface, PCWSTR, implement};
 
 use super::{DragImage, DragItem, DragOperation, DragOutStart, DragOutcome, path_text};
 
@@ -148,6 +148,11 @@ fn session(p: &Pending) -> Option<DragOutcome> {
         OleInitialize(None).ok();
         let data = populate_data_object(item)?;
         if let Ok(helper) = CoCreateInstance::<_, IDragSourceHelper>(&CLSID_DragDropHelper, None, CLSCTX_INPROC_SERVER) {
+            // Allow drop targets' CFSTR_DROPDESCRIPTION labels ("Copy to …", "Move to …") to
+            // render beneath the drag image, including when initialized from a custom bitmap.
+            if let Ok(helper2) = helper.cast::<IDragSourceHelper2>() {
+                helper2.SetFlags(DSH_ALLOWDROPDESCRIPTIONTEXT.0 as u32).ok();
+            }
             let picture = p.picture.as_ref().and_then(|pic| drag_image(pic, &p.start, p.scale));
             match picture {
                 Some(shdi) => if helper.InitializeFromBitmap(&shdi, &data).is_err() { windows_sys::Win32::Graphics::Gdi::DeleteObject(shdi.hbmpDragImage.0); },

@@ -1,21 +1,196 @@
 //! Files dropped on an element from another app: `El::on_drop_files`, acceptance hooks,
-//! hover/move/reject callbacks, passive ancestor observers, `Tx::drop_point` and `Tx::drag_paths`.
-//! `runtime/input/drop.rs` routes the drag.
+//! hover/move/reject callbacks, passive ancestor observers, drop operations and native drop
+//! descriptions, `Tx::drop_point` and `Tx::drag_paths`. `runtime/input/drop.rs` routes the drag.
 use std::rc::Rc;
 
+use crate::drag_out::{DragOperation, DragOperations};
 use crate::el::{El, PointerEvent, Tx};
 use crate::states::{StatesRef, downcast};
 
+/// The icon shown beside a native drop description label (Windows `DROPIMAGETYPE`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DropDescriptionKind {
+    /// "Cannot drop" icon (`DROPIMAGE_NONE`).
+    None,
+    /// Copy badge (`DROPIMAGE_COPY`).
+    Copy,
+    /// Move badge (`DROPIMAGE_MOVE`).
+    Move,
+    /// Link / shortcut badge (`DROPIMAGE_LINK`).
+    Link,
+    /// Plain text label without an action badge (`DROPIMAGE_LABEL`).
+    Label,
+    /// Warning icon (`DROPIMAGE_WARNING`).
+    Warning,
+}
+
+/// The label the shell draws beneath the drag image while hovering a drop target on Windows
+/// (`CFSTR_DROPDESCRIPTION` / `DROPDESCRIPTION`).
+///
+/// `message` may include `%1`, which Windows replaces with `insert` in emphasis (for example
+/// `"Copy to %1"` with insert `"Documents"`). Platforms without native drop descriptions ignore it.
+///
+/// ```
+/// # use rune::{DropDescription, DropDescriptionKind};
+/// let desc = DropDescription::copy_to("Documents");
+/// assert_eq!(desc.kind(), DropDescriptionKind::Copy);
+/// assert_eq!(desc.message(), "Copy to %1");
+/// assert_eq!(desc.insert_text(), "Documents");
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DropDescription {
+    kind: DropDescriptionKind,
+    message: String,
+    insert: String,
+}
+
+impl DropDescription {
+    /// A drop description with `kind` and `message` (no `%1` insert).
+    pub fn new(kind: DropDescriptionKind, message: impl Into<String>) -> Self {
+        Self { kind, message: message.into(), insert: String::new() }
+    }
+
+    /// Sets the `%1` insert text highlighted by the shell inside `message`.
+    pub fn insert(mut self, insert: impl Into<String>) -> Self {
+        self.insert = insert.into();
+        self
+    }
+
+    /// `"Copy to %1"` with `target` as the highlighted insert and a copy badge.
+    pub fn copy_to(target: impl Into<String>) -> Self {
+        Self::new(DropDescriptionKind::Copy, "Copy to %1").insert(target)
+    }
+
+    /// `"Move to %1"` with `target` as the highlighted insert and a move badge.
+    pub fn move_to(target: impl Into<String>) -> Self {
+        Self::new(DropDescriptionKind::Move, "Move to %1").insert(target)
+    }
+
+    /// `"Create link in %1"` with `target` as the highlighted insert and a link badge.
+    pub fn link_in(target: impl Into<String>) -> Self {
+        Self::new(DropDescriptionKind::Link, "Create link in %1").insert(target)
+    }
+
+    /// A "cannot drop" description (`DropDescriptionKind::None`).
+    pub fn none(message: impl Into<String>) -> Self {
+        Self::new(DropDescriptionKind::None, message)
+    }
+
+    /// A plain text label without an action badge (`DropDescriptionKind::Label`).
+    pub fn label(message: impl Into<String>) -> Self {
+        Self::new(DropDescriptionKind::Label, message)
+    }
+
+    /// A warning description (`DropDescriptionKind::Warning`).
+    pub fn warning(message: impl Into<String>) -> Self {
+        Self::new(DropDescriptionKind::Warning, message)
+    }
+
+    pub fn kind(&self) -> DropDescriptionKind { self.kind }
+    pub fn message(&self) -> &str { &self.message }
+    pub fn insert_text(&self) -> &str { &self.insert }
+}
+
+/// How a drop target answers a hovering file drag: the chosen [`DragOperation`] (or `None` to
+/// refuse the drop) and an optional native [`DropDescription`] drawn under Windows' drag image.
+///
+/// ```
+/// # use rune::{DragOperation, DropDescription, DropFeedback};
+/// let fb = DropFeedback::from(DragOperation::Move)
+///     .description(DropDescription::move_to("Archive"));
+/// assert_eq!(fb.operation(), Some(DragOperation::Move));
+/// assert_eq!(fb.drop_description().map(DropDescription::insert_text), Some("Archive"));
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DropFeedback {
+    operation: Option<DragOperation>,
+    description: Option<DropDescription>,
+}
+
+impl DropFeedback {
+    /// Feedback with an explicit `operation` (or `None` to refuse the drop) and no description.
+    pub fn new(operation: Option<DragOperation>) -> Self {
+        Self { operation, description: None }
+    }
+
+    /// Refuse the drop (`DROPEFFECT_NONE`).
+    pub fn none() -> Self { Self::new(None) }
+    /// Accept the drop as a copy (`DROPEFFECT_COPY`).
+    pub fn copy() -> Self { Self::new(Some(DragOperation::Copy)) }
+    /// Accept the drop as a move (`DROPEFFECT_MOVE`).
+    pub fn move_files() -> Self { Self::new(Some(DragOperation::Move)) }
+    /// Accept the drop as a link (`DROPEFFECT_LINK`).
+    pub fn link() -> Self { Self::new(Some(DragOperation::Link)) }
+
+    /// Sets or clears the chosen operation.
+    pub fn with_operation(mut self, operation: Option<DragOperation>) -> Self {
+        self.operation = operation;
+        self
+    }
+
+    /// Attaches a native [`DropDescription`] drawn under the drag image on Windows.
+    pub fn description(mut self, description: DropDescription) -> Self {
+        self.description = Some(description);
+        self
+    }
+
+    /// Attaches or clears the native [`DropDescription`].
+    pub fn with_description(mut self, description: Option<DropDescription>) -> Self {
+        self.description = description;
+        self
+    }
+
+    pub fn operation(&self) -> Option<DragOperation> { self.operation }
+    pub fn drop_description(&self) -> Option<&DropDescription> { self.description.as_ref() }
+    pub(crate) fn constrain(mut self, allowed: DragOperations) -> Self {
+        self.operation = self.operation.filter(|&op| allowed.contains(op));
+        self
+    }
+}
+
+impl From<DragOperation> for DropFeedback {
+    fn from(op: DragOperation) -> Self { Self::new(Some(op)) }
+}
+
+impl From<Option<DragOperation>> for DropFeedback {
+    fn from(op: Option<DragOperation>) -> Self { Self::new(op) }
+}
+
+/// Active file-drag details passed to [`El::drop_feedback`].
+#[derive(Clone, Copy, Debug)]
+pub struct DropInfo<'a> {
+    pub(crate) paths: &'a [std::path::PathBuf],
+    pub(crate) point: Option<PointerEvent>,
+    pub(crate) mods: crate::Mods,
+    pub(crate) allowed: DragOperations,
+}
+
+impl<'a> DropInfo<'a> {
+    /// All paths carried by the active file drag.
+    pub fn paths(&self) -> &'a [std::path::PathBuf] { self.paths }
+    /// Where the drag is on this element, in its own points and window points.
+    pub fn point(&self) -> Option<PointerEvent> { self.point }
+    /// Modifier keys currently held by the user during the drag (e.g. Shift to move, Ctrl to copy).
+    pub fn mods(&self) -> crate::Mods { self.mods }
+    /// Operations the drag source allows (`Copy`, `Move`, `Link`).
+    pub fn allowed(&self) -> DragOperations { self.allowed }
+    /// Standard modifier-based choice among [`Self::allowed`] (`Shift` -> Move, `Ctrl` -> Copy,
+    /// `Ctrl+Shift`/`Alt` -> Link, otherwise Copy/Move/Link).
+    pub fn default_operation(&self) -> Option<DragOperation> { self.allowed.resolve(self.mods) }
+}
+
 pub(crate) type DropFilesFn = Rc<dyn Fn(crate::states::States<'_>, &[std::path::PathBuf], &mut Tx)>;
 
-/// [`El::on_drop_files`], [`El::accepts_files`], [`El::accepts_drag`], [`El::on_drop_hover`],
-/// [`El::on_drop_move`], [`El::on_drop_rejected`], [`El::on_drop_rejected_hover`],
-/// [`El::on_drop_hover_within`] and [`El::on_drop_move_within`].
+/// [`El::on_drop_files`], [`El::accepts_files`], [`El::accepts_drag`], [`El::drop_feedback`],
+/// [`El::on_drop_hover`], [`El::on_drop_move`], [`El::on_drop_rejected`],
+/// [`El::on_drop_rejected_hover`], [`El::on_drop_hover_within`] and [`El::on_drop_move_within`].
 #[derive(Clone, Default)]
 pub(crate) struct DropSpec {
     pub on_drop: Option<DropFilesFn>,
     pub accepts: Option<AcceptsFn>,
     pub accepts_drag: Option<AcceptsDragFn>,
+    pub feedback: Option<DropFeedbackFn>,
     pub on_hover: Option<DropHoverFn>,
     pub on_reject: Option<DropFilesFn>,
     pub on_reject_hover: Option<DropHoverFn>,
@@ -25,6 +200,7 @@ pub(crate) struct DropSpec {
 }
 pub(crate) type AcceptsFn = Rc<dyn Fn(&std::path::Path) -> bool>;
 pub(crate) type AcceptsDragFn = Rc<dyn Fn(StatesRef<'_>, &[std::path::PathBuf]) -> bool>;
+pub(crate) type DropFeedbackFn = Rc<dyn Fn(StatesRef<'_>, &DropInfo<'_>) -> DropFeedback>;
 pub(crate) type DropHoverFn = Rc<dyn Fn(crate::states::States<'_>, bool, &mut Tx)>;
 pub(crate) type DropMoveFn = Rc<dyn Fn(crate::states::States<'_>, PointerEvent, &mut Tx)>;
 
@@ -200,6 +376,40 @@ impl El {
         self.handlers.drop.get_or_insert_default().on_move_within = Some(Rc::new(move |s, p, tx| f(downcast::<S>(s), p, tx)));
         self
     }
+    /// Choose the drop operation (`Copy`, `Move`, `Link`, or `None` to refuse) and optional
+    /// native [`DropDescription`] while a file drag hovers this element, with read access to app
+    /// state `&S` and [`DropInfo`] (dragged paths, local pointer position, modifier keys, and
+    /// source-allowed operations).
+    ///
+    /// Re-runs whenever the drag moves over this element, modifier keys change, or the view
+    /// commits. The chosen operation is constrained to [`DropInfo::allowed`] and reported in
+    /// [`Tx::drop_operation`] during hover, move, and [`El::on_drop_files`]. Without this (and
+    /// without calling [`Tx::set_drop_operation`] from hover/move handlers), accepting targets
+    /// default to [`DragOperation::Copy`] when the source allows it.
+    ///
+    /// ```
+    /// # use rune::{DragOperation, DropDescription, DropFeedback, el};
+    /// # struct App { folder: String }
+    /// el().on_drop_files(|_: &mut App, _, _| {})
+    ///     .drop_feedback(|s: &App, info| {
+    ///         let Some(op) = info.default_operation() else { return DropFeedback::none() };
+    ///         let desc = match op {
+    ///             DragOperation::Move => DropDescription::move_to(&s.folder),
+    ///             DragOperation::Link => DropDescription::link_in(&s.folder),
+    ///             _ => DropDescription::copy_to(&s.folder),
+    ///         };
+    ///         DropFeedback::from(op).description(desc)
+    ///     });
+    /// ```
+    pub fn drop_feedback<S: 'static>(
+        mut self,
+        feedback: impl Fn(&S, &DropInfo<'_>) -> DropFeedback + 'static,
+    ) -> Self {
+        self.handlers.drop.get_or_insert_default().feedback = Some(Rc::new(move |s, info| {
+            feedback(s.cast::<S>().expect("handler registered for a different state type than the app's"), info)
+        }));
+        self
+    }
 }
 
 impl Tx {
@@ -223,4 +433,35 @@ impl Tx {
     /// });
     /// ```
     pub fn drag_paths(&self) -> Option<&[std::path::PathBuf]> { self.drag_paths.as_deref() }
+
+    /// In file-drop callbacks (`on_drop_files`, `on_drop_rejected`, `on_drop_move`,
+    /// `on_drop_move_within`, and `true` calls of `on_drop_hover` / `on_drop_rejected_hover` /
+    /// `on_drop_hover_within`): the modifier keys held during the OS drag (such as `Shift` to
+    /// move or `Ctrl` to copy on Windows). Defaults to empty elsewhere.
+    pub fn drag_mods(&self) -> crate::Mods { self.drag_mods }
+
+    /// In file-drop callbacks: the set of [`DragOperation`]s allowed by the drag source
+    /// (`Copy`, `Move`, `Link`). Defaults to empty outside file-drop callbacks.
+    pub fn drag_operations(&self) -> DragOperations { self.drag_operations }
+
+    /// In file-drop callbacks: the chosen [`DragOperation`] for the active drag or completed drop
+    /// (for example `Some(DragOperation::Move)` when Shift-dropping onto a target that accepts
+    /// moves). `None` when no operation is selected or outside file-drop callbacks.
+    pub fn drop_operation(&self) -> Option<DragOperation> { self.drop_operation }
+
+    /// In [`El::on_drop_hover`] (`true`), [`El::on_drop_move`], or
+    /// [`El::on_drop_rejected_hover`] (`true`): set the [`DragOperation`] this target offers
+    /// to the OS (`Copy`, `Move`, `Link`, or `None` to refuse the drop). Constrained to
+    /// [`Tx::drag_operations`] and cleared when the drag leaves this target.
+    pub fn set_drop_operation(&mut self, operation: Option<DragOperation>) {
+        self.drop_op_set = Some(operation);
+    }
+
+    /// In [`El::on_drop_hover`] (`true`), [`El::on_drop_move`], or
+    /// [`El::on_drop_rejected_hover`] (`true`): set or clear the native [`DropDescription`]
+    /// shown beneath the drag image on Windows (for example `"Copy to Documents"`). Cleared
+    /// automatically when the drag leaves this target.
+    pub fn set_drop_description(&mut self, description: Option<DropDescription>) {
+        self.drop_desc_set = Some(description);
+    }
 }
