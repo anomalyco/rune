@@ -32,6 +32,9 @@ fn make() -> Option<DirectWrite> {
     }
 }
 
+/// DirectWrite reads from Windows' system font cache service and needs no eager build.
+pub(super) fn prewarm() {}
+
 /// The files of the installed families `names` (any of their names, case aside), in order, each
 /// file once. Nothing is opened: the paths come from the font cache.
 pub(super) fn family_files(names: &[&str]) -> Vec<PathBuf> {

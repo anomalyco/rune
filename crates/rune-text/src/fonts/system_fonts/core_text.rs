@@ -102,6 +102,9 @@ pub(super) fn installed_families() -> Vec<super::installed::RawFamily> {
     out
 }
 
+/// CoreText's font registry is process-wide and needs no eager collection build.
+pub(super) fn prewarm() {}
+
 /// The files of the installed families `names`, in order, each file once.
 pub(super) fn family_files(names: &[&str]) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
