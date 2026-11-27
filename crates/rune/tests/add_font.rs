@@ -189,4 +189,47 @@ fn tx_and_runtime_add_font_register_invalidate_deduplicate_and_propagate() {
     reader.frame(1.0 / 60.0);
     assert!(reader.state.trunc_size.is_some(), "Tx::read_elements must see presented text_size when a runtime font arrives");
     assert!(reader.state.trunc_cut, "Tx::read_elements must see presented text_cut when a runtime font arrives");
+
+    // 6) A runtime font registered inside `AppSpec::setup` is immediately visible to
+    //    `rune::text::measure` on the lent window `TextSystem` and stays warm into frame 0.
+    std::thread::spawn(|| {
+        const SAMPLE: &str = "iiiiiiiiii setup geist";
+        const NAMED_STYLE: TextStyle = TextStyle::new(14.0, 400.0).family(Family::Named("Geist Mono"));
+
+        #[derive(Default)]
+        struct SetupFontState {
+            setup_w: f32,
+            view_w: Cell<f32>,
+        }
+
+        fn setup_font_view(s: &SetupFontState, _: &mut rune::Cx<SetupFontState>) -> El {
+            s.view_w.set(measure(SAMPLE, &[], NAMED_STYLE, None).0);
+            col().child(row().child(text(SAMPLE).key("setup-named").font(NAMED_STYLE)))
+        }
+
+        let mut setup_spec = AppSpec::new("setup-add-font", (600.0, 200.0), SetupFontState::default, setup_font_view);
+        setup_spec.fonts = ONLY_INTER;
+        setup_spec.families = ("Inter", "Inter");
+        setup_spec.setup = Some(|s, _| {
+            assert!(!rune::text::add_font(GEIST_MONO).is_empty());
+            s.setup_w = measure(SAMPLE, &[], NAMED_STYLE, None).0;
+        });
+
+        let mut rt = App::new(setup_spec).headless_runtime((600.0, 200.0), Env::new(true, 1.0));
+        let shaped_after_setup = rt.text.shaped;
+        assert!(shaped_after_setup >= 1, "setup must shape directly on the window's TextSystem");
+        assert!(rt.text.cached_layout_count() >= 1);
+        rt.frame(0.0);
+        assert_eq!(rt.text.shaped, shaped_after_setup, "first frame must reuse layout shaped in setup");
+        assert_eq!(rt.state.setup_w, rt.state.view_w.get());
+        let el_w = rt
+            .elements()
+            .iter()
+            .find(|e| e.key.as_deref() == Some("setup-named"))
+            .unwrap()
+            .target[2];
+        assert!((rt.state.setup_w - el_w).abs() < 0.6, "setup={} vs el={el_w}", rt.state.setup_w);
+    })
+    .join()
+    .unwrap();
 }

@@ -152,7 +152,19 @@ pub fn extra_args() -> &'static [String] {
     EXTRA.get().map_or(&[], |v| v.as_slice())
 }
 
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios", test)), allow(dead_code))]
 pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f32), env: Env, waker: Waker) -> Runtime<S> {
+    runtime_for_configured(spec, state, size, env, waker, None)
+}
+
+pub(crate) fn runtime_for_configured<S: 'static>(
+    spec: &AppSpec<S>,
+    state: S,
+    size: (f32, f32),
+    env: Env,
+    waker: Waker,
+    config: Option<crate::app::RuntimeConfig<S>>,
+) -> Runtime<S> {
     crate::marks::mark("text.begin");
     let text = TextSystem::for_window(spec.fonts, spec.families);
     crate::marks::mark("text.fonts");
@@ -176,9 +188,15 @@ pub(crate) fn runtime_for<S: 'static>(spec: &AppSpec<S>, state: S, size: (f32, f
     if crate::hot::enabled() {
         rt.frame.set_hot(crate::hot::Session::connect(waker.clone()));
     }
+    // Apply App-level runtime settings (including `emoji_family` and `font_smoothing`) before
+    // `setup` runs so measurements in `setup` use the window's configured `TextSystem` and keep
+    // their shaped layouts warm into the first frame.
+    if let Some(config) = config {
+        rt.configure(config);
+    }
     if let Some(f) = spec.setup {
         crate::marks::mark("app.setup");
-        f(&mut rt.state, waker);
+        crate::text::lend(&mut rt.text, || f(&mut rt.state, waker));
         crate::marks::mark("app.setup.done");
     }
     rt
