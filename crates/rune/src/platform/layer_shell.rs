@@ -3,14 +3,13 @@
 //! input regions and the rendered buffer share a commit. Global pointer observation and
 //! capture exclusion are unavailable. wgpu draws through the raw `wl_surface`.
 
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{OwnedFd, RawFd};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use winit::raw_window_handle::{RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle};
-use wayland_backend::client::{ReadEventsGuard, WaylandError};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
@@ -22,7 +21,7 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextIn
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{activation as activation_machine, configure_wait, connection, exclusive_zone, frame_callback, globals_pool::DrainTracker, keyboard, pointer, readiness, repeat, text_input as text_input_machine, touch};
+use super::layer_shell_machine::{activation as activation_machine, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, text_input as text_input_machine, touch};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -36,7 +35,7 @@ mod sync;
 mod text_input;
 pub(crate) use activation::PendingActivationToken;
 pub(crate) use dead::display_error;
-use dead::{classify_turn_error, format_wayland_error};
+use dead::classify_turn_error;
 pub(crate) use globals::SharedGlobalsHandle;
 pub(crate) use sync::{HideSync, SyncPoll};
 
@@ -109,6 +108,14 @@ impl Dispatch<WlSeat, ()> for State {
     }
 }
 impl State {
+    fn close_surface(&mut self, conn: &Connection) {
+        readiness::step(&mut self.readiness, readiness::Event::Closed);
+        frame_callback::step(&mut self.frame, frame_callback::Event::Reset);
+        if let Some((_, cb)) = self.frame_callback.take() {
+            conn.backend().destroy_object(&cb.id()).ok();
+        }
+    }
+
     fn step_keyboard_focus(&mut self, event: keyboard::FocusEvent) {
         for effect in keyboard::step(&mut self.keyboard_focus, event) {
             let keyboard::FocusEffect::Focus(focused) = effect;
@@ -531,11 +538,7 @@ impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
                 readiness::step(&mut state.readiness, readiness::Event::Configure { width, height });
             }
             zwlr_layer_surface_v1::Event::Closed => {
-                readiness::step(&mut state.readiness, readiness::Event::Closed);
-                frame_callback::step(&mut state.frame, frame_callback::Event::Reset);
-                if let Some((_, cb)) = state.frame_callback.take() {
-                    conn.backend().destroy_object(&cb.id()).ok();
-                }
+                state.close_surface(conn);
             }
             _ => {}
         }
@@ -656,89 +659,15 @@ pub(crate) struct LayerSurface {
     surface: WlSurface,
     display: NonNull<std::ffi::c_void>,
     seen_drain_gen: u64,
+    /// Registry global name of the `wl_output` this layer surface was bound to, if targeted.
+    /// Removing that global ends the surface cleanly even if the compositor sends no `closed`
+    /// before the initial `configure`.
+    output_name: Option<u32>,
     /// Why the surface closed when a fatal display error ended it; `None` for compositor `closed`.
     close_reason: Option<String>,
     /// Shared per-display registry and singleton globals; declared last so per-surface fields drop
     /// before releasing our reference to the shared connection.
     globals: Arc<globals::SharedGlobals>,
-}
-
-struct ConfigureDriver<'a> {
-    conn: &'a Connection,
-    drain_tracker: Option<&'a DrainTracker>,
-    queue: &'a mut EventQueue<State>,
-    state: &'a mut State,
-}
-
-impl configure_wait::Driver for ConfigureDriver<'_> {
-    type Guard = ReadEventsGuard;
-
-    fn done(&self) -> bool { self.state.readiness.configured() }
-
-    fn now(&mut self) -> crate::time::Instant { crate::time::now() }
-
-    fn dispatch_pending(&mut self) -> bool {
-        if let Some(tracker) = self.drain_tracker
-            && let Ok(moved) = self.conn.backend().dispatch_inner_queue()
-        {
-            tracker.note_inner_drain(moved);
-        }
-        self.queue.dispatch_pending(self.state).is_ok()
-            && self.conn.backend().last_error().is_none()
-    }
-
-    fn flush(&mut self) -> configure_wait::Flush {
-        match self.queue.flush() {
-            Ok(()) => configure_wait::Flush::Ok,
-            Err(WaylandError::Io(err)) if err.kind() == std::io::ErrorKind::WouldBlock => configure_wait::Flush::WouldBlock,
-            Err(_) => configure_wait::Flush::Error,
-        }
-    }
-
-    fn prepare_read(&mut self) -> Option<ReadEventsGuard> { self.queue.prepare_read() }
-
-    #[allow(unsafe_code)]
-    fn poll(&mut self, guard: &ReadEventsGuard, timeout_ms: i32, want_write: bool) -> configure_wait::Poll {
-        let events = if want_write { libc::POLLIN | libc::POLLOUT } else { libc::POLLIN };
-        let mut pfd = libc::pollfd { fd: guard.connection_fd().as_raw_fd(), events, revents: 0 };
-        // SAFETY: one pollfd for the live Wayland display socket borrowed by `guard`.
-        let ret = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
-        if ret < 0 {
-            return if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-                configure_wait::Poll::Interrupted
-            } else {
-                configure_wait::Poll::Error
-            };
-        }
-        if ret == 0 { return configure_wait::Poll::TimedOut; }
-        if pfd.revents & libc::POLLNVAL != 0 { return configure_wait::Poll::Error; }
-        if pfd.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP) != 0 { return configure_wait::Poll::Readable; }
-        if want_write && pfd.revents & libc::POLLOUT != 0 { return configure_wait::Poll::WritableOnly; }
-        configure_wait::Poll::Error
-    }
-
-    fn read(&mut self, guard: ReadEventsGuard) -> configure_wait::Read {
-        match guard.read() {
-            Ok(_) => configure_wait::Read::Ok,
-            Err(WaylandError::Io(err)) if err.kind() == std::io::ErrorKind::WouldBlock => configure_wait::Read::WouldBlock,
-            Err(_) => configure_wait::Read::Error,
-        }
-    }
-}
-
-fn wait_for_configure_with(
-    conn: &Connection,
-    drain_tracker: Option<&DrainTracker>,
-    queue: &mut EventQueue<State>,
-    state: &mut State,
-    timeout: Duration,
-) -> configure_wait::Outcome {
-    configure_wait::wait(&mut ConfigureDriver { conn, drain_tracker, queue, state }, timeout)
-}
-
-#[cfg(test)]
-fn wait_for_configure(conn: &Connection, queue: &mut EventQueue<State>, state: &mut State, timeout: Duration) -> configure_wait::Outcome {
-    wait_for_configure_with(conn, None, queue, state, timeout)
 }
 
 fn destroy_proxy<P: Proxy>(proxy: &P) {
@@ -766,11 +695,14 @@ fn wayland_interactivity(mode: keyboard::Interactivity) -> KeyboardInteractivity
 }
 
 impl LayerSurface {
-    /// None when the display isn't Wayland, the compositor lacks layer-shell, or it never
-    /// configures the surface within `configure_wait::TIMEOUT`.
-    /// When `hold_keys` is true and `options.keys` is supported by the bound `zwlr_layer_shell_v1`
-    /// version, the surface requests keyboard interactivity in its initial commit so a recreated
-    /// surface never maps without the keyboard.
+    /// Creates and commits a Wayland layer-shell surface without waiting for the compositor's
+    /// initial `configure`. The caller holds it without a GPU surface until `dispatch()`
+    /// delivers the first `configure` (`is_configured()`), a compositor `closed` / output
+    /// removal, or a fatal display error. When `hold_keys` is true and `options.keys` is supported
+    /// by the bound `zwlr_layer_shell_v1` version, the surface requests keyboard interactivity in
+    /// its initial commit so a recreated surface never maps without the keyboard. Returns `None`
+    /// when the display isn't Wayland, the compositor lacks layer-shell, or the display connection
+    /// fails.
     pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>, hold_keys: bool) -> Option<LayerSurface> {
         let RawDisplayHandle::Wayland(display) = display else { return None };
         let want_keys = options.keys.takes_keys();
@@ -779,6 +711,7 @@ impl LayerSurface {
         let queue = globals.conn().new_event_queue::<State>();
         let qh = queue.handle();
         let output = output_id.and_then(|id| globals.output(id));
+        let output_name = output.as_ref().and(output_id);
         let want_pointer = options.input.resolved(interactive) != OverlayInput::None;
         let seat = if want_pointer || want_keys { globals.bind_seat(&qh) } else { None };
         let surface = globals.compositor().create_surface(&qh, ());
@@ -815,32 +748,13 @@ impl LayerSurface {
             surface,
             display: display.display,
             seen_drain_gen,
+            output_name,
             close_reason: None,
             globals,
         };
         this.place(at);
         this.surface.commit();
-        let outcome = wait_for_configure_with(
-            this.globals.conn(),
-            Some(this.globals.drain_tracker()),
-            &mut this.queue,
-            &mut this.state,
-            configure_wait::TIMEOUT,
-        );
-        this.seen_drain_gen = this.globals.inner_drain_gen();
-        match outcome {
-            configure_wait::Outcome::Done => {}
-            configure_wait::Outcome::TimedOut => {
-                eprintln!("rune: Wayland layer surface '{namespace}' timed out waiting for initial configure");
-                return None;
-            }
-            configure_wait::Outcome::Error => {
-                if let Some(reason) = this.globals.conn().backend().last_error().and_then(|e| format_wayland_error(&e)) {
-                    eprintln!("rune: Wayland layer surface '{namespace}' failed: the display connection failed: {reason}");
-                }
-                return None;
-            }
-        }
+        this.flush_checked();
         if this.state.readiness.closed() { return None; }
         Some(this)
     }
@@ -891,7 +805,8 @@ impl LayerSurface {
         self.layer.set_margin(top, right, bottom, left);
     }
 
-    pub fn configured_size(&self) -> Option<(u32, u32)> { self.state.readiness.size() }
+    /// True once the compositor has sent the initial `configure` and the surface is still open.
+    pub fn is_configured(&self) -> bool { self.state.readiness.is_ready() }
 
     /// Sets the surface's pending input region; true when it changed, so it waits for a commit.
     pub fn input_regions(&self, regions: &[[f32; 4]], interactive: bool) -> bool {
@@ -1101,6 +1016,12 @@ impl LayerSurface {
         let inner_err = self.globals.dispatch_inner_queue().err().map(DispatchError::Backend);
         let dispatch_err = self.queue.dispatch_pending(&mut self.state).err().or(inner_err);
         self.seen_drain_gen = self.globals.inner_drain_gen();
+        if !self.state.readiness.closed()
+            && let Some(id) = self.output_name
+            && !self.globals.has_output(id)
+        {
+            self.state.close_surface(self.globals.conn());
+        }
         let flush_err = self.queue.flush().err();
         let last_err = self.globals.conn().backend().last_error();
         let (kind, reason) = classify_turn_error(dispatch_err, flush_err, last_err);
@@ -1189,6 +1110,10 @@ impl Drop for LayerSurface {
         self.queue.flush().ok();
     }
 }
+
+#[cfg(test)]
+#[path = "layer_shell/configure_tests.rs"]
+mod configure_tests;
 
 #[cfg(test)]
 #[path = "layer_shell_tests.rs"]

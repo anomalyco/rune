@@ -324,9 +324,10 @@ impl OverlayCore {
                 continue;
             }
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-            if let Some(super::Live { backing: super::Backing::Layer(layer), .. }) = self.surface.live()
-                && let Some(token) = layer.start_activation_token()
-            {
+            if let Some(token) = match self.surface.live() {
+                Some(super::Live { backing: super::Backing::Layer(layer), .. }) => layer.start_activation_token(),
+                _ => self.pending_layer.layer().and_then(|layer| layer.start_activation_token()),
+            } {
                 self.activation_tokens.push(TokenSource::Wayland(token), reply, now);
                 continue;
             }

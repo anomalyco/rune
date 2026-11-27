@@ -1,0 +1,1 @@
+- Wayland: `LayerSurface::new` commits and flushes without blocking the event thread for the compositor's initial `configure`, holding the surface with no GPU surface until `configure`, `closed`, bound-output removal, or a display error arrives via normal `wake_on_wayland_read` turns.

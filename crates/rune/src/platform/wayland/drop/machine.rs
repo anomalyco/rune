@@ -659,8 +659,19 @@ pub(crate) mod pipe_read {
     use std::time::Duration;
 
     use super::ReadOutcome;
-    use crate::platform::layer_shell_machine::configure_wait::timeout_ms;
     use crate::time::Instant;
+
+    /// Converts a non-zero remaining duration into a positive millisecond timeout for `poll(2)`,
+    /// rounding sub-millisecond remainders up to 1 ms and clamping to `i32::MAX`.
+    pub(crate) fn timeout_ms(remaining: Duration) -> i32 {
+        let millis = remaining.as_millis();
+        let rounded = if remaining.subsec_nanos() % 1_000_000 != 0 {
+            millis.saturating_add(1)
+        } else {
+            millis
+        };
+        rounded.clamp(1, i32::MAX as u128) as i32
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum Poll {

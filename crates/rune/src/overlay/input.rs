@@ -415,7 +415,13 @@ impl OverlayCore {
                     let caps = super::toplevel::toplevel_capabilities(resolved);
                     self.shared.native.lock().unwrap().1 = caps;
                 }
-                _ => {}
+                _ => {
+                    if let Some(layer) = self.pending_layer.layer_mut() {
+                        layer.set_input(resolved);
+                        layer.input_regions(rt.hit_regions(), self.interactive);
+                        layer.commit();
+                    }
+                }
             }
         }
         self.publish_regions(rt);
@@ -543,6 +549,9 @@ impl OverlayCore {
     /// outstanding and the GPU device is still live, so the overlay must not acquire or present
     /// again until the compositor answers.
     pub(super) fn awaiting_layer_frame(&self) -> bool {
+        if self.has_pending_layer() {
+            return true;
+        }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let surface_ready = match self.surface.live().map(|l| &l.backing) {
             Some(Backing::Layer(layer)) => layer.frame_ready(),
@@ -731,7 +740,7 @@ impl OverlayCore {
         let recreate_layer = should_recreate_layer(
             &self.options.display,
             &requests,
-            matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Layer(_))),
+            matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Layer(_))) || self.has_pending_layer(),
         );
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         let layer_was_visible = was_shown;
@@ -741,6 +750,8 @@ impl OverlayCore {
             self.options.placement = placement;
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() {
+                layer.set_placement(placement);
+            } else if let Some(layer) = self.pending_layer.layer_mut() {
                 layer.set_placement(placement);
             }
         }
@@ -780,6 +791,9 @@ impl OverlayCore {
                     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
                     Some(Backing::Xwayland(surface)) => surface.place(self.at, &self.options),
                     None => {
+                        if self.has_pending_layer() {
+                            self.resize_pending_layer();
+                        }
                         #[cfg(target_os = "windows")]
                         if let Some(w) = self.cpu.as_ref().map(|c| c.window.clone()) {
                             self.place_window(app.rt_mut(), event_loop, &w);
@@ -804,7 +818,7 @@ impl OverlayCore {
             self.sync_window_backdrop(app.rt_mut(), false);
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        let had_live_layer = matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Layer(_)));
+        let had_live_layer = matches!(self.surface.live().map(|l| &l.backing), Some(Backing::Layer(_))) || self.has_pending_layer();
         let will_show = keys::will_be_shown(was_shown, requests.visibility);
         self.key_hold = keys::next_key_hold(was_holding_keys, will_show, self.options.keys, requests.keys);
         match requests.visibility {
@@ -813,7 +827,7 @@ impl OverlayCore {
             None => {}
         }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if recreate_layer && self.surface.live().is_none() {
+        if recreate_layer && self.surface.live().is_none() && !self.has_pending_layer() {
             if layer_was_visible && !matches!(requests.visibility, Some(Visibility::Hide(_))) { self.show_fading(app, event_loop, Duration::ZERO); }
             else if self.options.prewarm { self.prepare(app, event_loop, false); }
         }
@@ -842,14 +856,14 @@ impl OverlayCore {
             && let Some(panel) = &self.panel { panel.request_keys(); }
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(req) = keys::should_apply_layer_key_request(had_live_layer, requests.keys, self.presence.shown(), self.options.keys) {
-            let focus = if let Some(Live { backing: Backing::Layer(layer), .. }) = self.surface.live_mut() {
-                match req {
-                    KeyRequest::Take => layer.request_keys().then_some(true),
-                    KeyRequest::Release => layer.release_keys().then_some(false),
-                }
-            } else {
-                None
+            let layer = match self.surface.live_mut() {
+                Some(Live { backing: Backing::Layer(layer), .. }) => Some(layer),
+                _ => self.pending_layer.layer_mut(),
             };
+            let focus = layer.and_then(|layer| match req {
+                KeyRequest::Take => layer.request_keys().then_some(true),
+                KeyRequest::Release => layer.release_keys().then_some(false),
+            });
             if let Some(focused) = focus {
                 self.surface_input(app, crate::platform::layer_shell::Input::Focus(focused));
             }

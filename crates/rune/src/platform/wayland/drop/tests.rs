@@ -724,6 +724,16 @@ impl pipe_read::Driver for MockPipe {
 }
 
 #[test]
+fn pipe_read_timeout_ms_rounds_up_submillisecond_and_clamps() {
+    assert_eq!(pipe_read::timeout_ms(Duration::from_nanos(1)), 1);
+    assert_eq!(pipe_read::timeout_ms(Duration::from_nanos(999_999)), 1);
+    assert_eq!(pipe_read::timeout_ms(Duration::from_millis(1)), 1);
+    assert_eq!(pipe_read::timeout_ms(Duration::from_nanos(1_000_001)), 2);
+    assert_eq!(pipe_read::timeout_ms(Duration::from_secs(2)), 2_000);
+    assert_eq!(pipe_read::timeout_ms(Duration::MAX), i32::MAX);
+}
+
+#[test]
 fn pipe_read_chunked_with_eintr_and_wouldblock() {
     let mut driver = MockPipe {
         now: crate::time::now(),

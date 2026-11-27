@@ -88,6 +88,9 @@ mod input;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod keys;
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "overlay/layer_configure.rs"]
+mod layer_configure;
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "overlay/lifetime.rs"]
 mod lifetime;
 pub(crate) mod options;
@@ -860,6 +863,8 @@ pub(in crate::overlay) struct OverlayCore {
     cpu: Option<cpu::CpuOverlay>,
     /// Last resolved logical work area `(w, h)` of the overlay's target display.
     pub(in crate::overlay) last_work_area: Option<(f32, f32)>,
+    /// Wayland layer-shell non-blocking initial-configure state machine and pending surface.
+    pub(in crate::overlay) pending_layer: layer_configure::PendingLayer,
     /// Wayland layer-shell async resize configure state machine.
     #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(in crate::overlay) wayland_resize: sizing::WaylandResize,
@@ -986,6 +991,7 @@ impl OverlayCore {
             #[cfg(target_os = "windows")]
             cpu: None,
             last_work_area: None,
+            pending_layer: layer_configure::PendingLayer::default(),
             wayland_resize: sizing::WaylandResize::Ready,
             sizing: sizing::SizingConfig::default(),
             key_hold: keys::KeyHold::default(),
@@ -1325,6 +1331,12 @@ impl OverlayCore {
         #[cfg(target_os = "windows")]
         if self.cpu.is_some() {
             self.resized_cpu(app, event_loop);
+            return;
+        }
+        // A Wayland layer surface waiting for its initial configure updates placement and
+        // commits without a GPU surface; its GPU surface is created once configured.
+        if self.has_pending_layer() {
+            self.resize_pending_layer();
             return;
         }
         // A parked window takes the size now; its surface is made at it.

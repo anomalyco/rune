@@ -166,6 +166,7 @@ fn every_readiness_sequence_reports_the_same_size_and_scale() {
             }
             assert_eq!(state.closed(), old.closed, "closed after {seq:?}");
             assert_eq!(state.configured(), old.ever || old.closed, "configured after {seq:?}");
+            assert_eq!(state.is_ready(), old.ever && !old.closed, "is_ready after {seq:?}");
         }
     });
 }

@@ -332,6 +332,12 @@ fn peer_surface_reports_pending_events_after_sibling_drains_shared_connection() 
         .expect("peer a");
     let mut b = super::super::LayerSurface::new(display, "peer-b", placement, false, &options, None, false)
         .expect("peer b");
+    while (!a.is_configured() || !b.is_configured()) && a.is_live() && b.is_live() {
+        host_read_once(&host);
+        let _ = a.dispatch();
+        let _ = b.dispatch();
+    }
+    assert!(a.is_configured() && b.is_configured());
     assert!(!a.has_pending_events());
     assert!(!b.has_pending_events());
 

@@ -58,6 +58,7 @@ impl FrameHost for OverlayFrame<'_> {
     fn gate(&mut self) -> Gate {
         if self.core.poll_terminal_gpu_loss(self.app) { return Gate::Skip; }
         let timer = !self.core.quiet.step(frame::QuietEvent::FrameStarts).is_empty();
+        self.core.poll_pending_layer(self.app);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.core.surface.live_mut() {
             let changes = layer.dispatch();
@@ -658,6 +659,7 @@ impl OverlayCore {
     /// A layer or XWayland surface kept while hidden (prewarmed, not shown yet) still drains its
     /// connection so nothing queues for the first show.
     fn drain_hidden(&mut self, app: &mut dyn OverlayApp) {
+        self.poll_pending_layer(app);
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         {
             let closed = match self.surface.live_mut().map(|l| &mut l.backing) {

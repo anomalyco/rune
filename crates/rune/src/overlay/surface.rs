@@ -557,6 +557,7 @@ impl OverlayCore {
     /// Drops the surface and every native owner of its window; the next show makes new ones.
     pub(super) fn release(&mut self) {
         self.assert_no_live_frame_texture();
+        self.cancel_pending_layer();
         // The surface must disappear before returning the adopted view or removing subclasses.
         // Keep winit's Window alive until after those native owners have unwound, too.
         let backing = match self.surface.release() {
