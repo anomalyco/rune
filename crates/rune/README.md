@@ -1622,7 +1622,8 @@ while every window is hidden, including in an accessory app), sizes the icon in 
 AppKit tints the glyph for light and dark menu bars; primary click sends
 `TrayEvent::Activate`, and secondary click or Control-click opens the menu. `set_menu`,
 `set_tooltip`, `set_icon`, `set_icon_name` (Linux SNI `IconName`), `set_title` (macOS
-monospaced-digit menu-bar title beside the icon; Linux SNI `Title`), `rect` (physical
+monospaced-digit menu-bar title beside the icon; Linux SNI `Title`), `set_highlighted`
+(holds the macOS status item's pressed highlight; no-op elsewhere), `rect` (physical
 desktop `[x, y, width, height]` on macOS and Windows; `None` on Linux SNI), and dropping
 `Tray` may run from any thread. `TrayItem::Check` (`TrayItem::check` / `TrayItem::checked`)
 adds toggleable checkmarked menu items across macOS, Windows, and Linux.

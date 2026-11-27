@@ -1,0 +1,1 @@
+- Tray (macOS): `Tray::set_highlighted(true)` now preserves an active status item highlight across empty-menu right-clicks / Control-clicks and `TrayEvent::Activate` clicks, in addition to non-empty context menus and icon/title updates.
