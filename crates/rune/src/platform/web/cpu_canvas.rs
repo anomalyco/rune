@@ -1,15 +1,36 @@
 //! A page's frames painted on the CPU (`render::cpu_boot`), from the module's first frame until
 //! WebGPU takes over, and for good where it never does. The painter keeps a BGRA buffer of the
 //! frame it painted last and says which rectangles changed; those go to a 2D canvas under the
-//! GPU's, turned into RGBA on the way. The GPU's canvas lies over it, see-through until the
-//! GPU's first frame is done (`web.rs`), and takes the page's input all along.
+//! GPU's, swizzled to RGBA into a reusable JS-heap `ImageData` and uploaded in one
+//! `putImageData(imageData, 0, 0, dx, dy, dw, dh)` call per dirty rectangle (`cpu_canvas.js`).
+//! The GPU's canvas lies over it, see-through until the GPU's first frame is done (`web.rs`),
+//! and takes the page's input all along.
 
 use std::cell::Cell;
 
-use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen::{JsCast, JsValue, prelude::*};
 
+use super::web_math::cpu_canvas::{
+    NeedsGpuLogMask, WebCpuNeedsGpuAction, classify_cpu_needs_gpu, dirty_rect_row_slice,
+};
 use crate::render::cpu_boot::{CpuPainter, HalfRounding, NeedsGpu, Scene, Target};
 use crate::runtime::RuntimeCore;
+
+#[wasm_bindgen(module = "/src/platform/web/cpu_canvas.js")]
+extern "C" {
+    #[wasm_bindgen(catch, js_name = putCpuRect)]
+    fn put_cpu_rect(
+        ctx: &web_sys::CanvasRenderingContext2d,
+        image: &web_sys::ImageData,
+        bgra_rows: &[u8],
+        canvas_width: u32,
+        x0: u32,
+        y0: u32,
+        rw: u32,
+        rh: u32,
+        measure: bool,
+    ) -> Result<f64, JsValue>;
+}
 
 pub(super) struct CpuCanvas {
     over: web_sys::HtmlCanvasElement,
@@ -19,12 +40,17 @@ pub(super) struct CpuCanvas {
     /// The frame painted last, `size.0 * 4` bytes a row, B, G, R, A.
     buffer: Vec<u8>,
     size: (u32, u32),
-    /// One row of a rectangle in RGBA, on its way to `staged`.
-    rows: Vec<u8>,
-    /// The rectangle's rows in the page's own memory: an image made over the module's memory takes the
-    /// browser tens of milliseconds to put (all of it, for a full frame), one over this a few
-    /// hundred microseconds.
-    staged: js_sys::Uint8ClampedArray,
+    /// Reusable full-canvas `ImageData` in the page's own memory: an `ImageData` backed directly
+    /// by WASM linear memory takes Chromium tens of milliseconds to put, whereas uploading dirty
+    /// rectangles through a JS-heap `ImageData` with `putImageData(image, 0, 0, x0, y0, rw, rh)`
+    /// avoids per-scanline WASM<->JS crossings and keeps WASM linear memory free of a duplicate
+    /// RGBA framebuffer.
+    image: Option<web_sys::ImageData>,
+    /// Whether the last painted frame used `Scene::degraded(true)` fallback mode (so hand-over
+    /// drift counting skips comparing deliberately degraded CPU pixels against the GPU frame).
+    last_degraded: bool,
+    /// Once-per-reason console warning mask for `NeedsGpu` degradation or hold events.
+    logged_needs_gpu: NeedsGpuLogMask,
     /// How the GPU that takes over rounds half floats: once it exists, its own.
     pub(super) half: HalfRounding,
 }
@@ -66,7 +92,18 @@ impl CpuCanvas {
         js_sys::Reflect::set(&options, &"alpha".into(), &JsValue::FALSE).ok();
         let ctx: web_sys::CanvasRenderingContext2d = canvas.get_context_with_context_options("2d", &options).ok()??.dyn_into().ok()?;
         ctx.set_image_smoothing_enabled(false);
-        Some(CpuCanvas { over: over.clone(), canvas, ctx, painter: CpuPainter::new(1), buffer: Vec::new(), size: (0, 0), rows: Vec::new(), staged: js_sys::Uint8ClampedArray::new_with_length(0), half: HalfRounding::default() })
+        Some(CpuCanvas {
+            over: over.clone(),
+            canvas,
+            ctx,
+            painter: CpuPainter::new(1),
+            buffer: Vec::new(),
+            size: (0, 0),
+            image: None,
+            last_degraded: false,
+            logged_needs_gpu: NeedsGpuLogMask::default(),
+            half: HalfRounding::default(),
+        })
     }
 
     /// Keeps the CPU canvas's CSS bounds aligned with `over` if its inline box changed outside
@@ -87,7 +124,10 @@ impl CpuCanvas {
     }
 
     /// Paints the runtime's last frame at `size` physical pixels and puts what changed on the
-    /// canvas. A frame only the GPU can draw (`Scene::needs_gpu`) leaves the last one up.
+    /// canvas. Degradable GPU-only features (`LayerBlur`, `TurnedLayer`, nested `BackdropBlur`,
+    /// `Effect`, `NativeSurface`, `LinearBlend`) paint live via `Scene::degraded(true)` instead
+    /// of freezing frames; non-degradable reasons (`SlugText`, `OutlineGlyph`, `UnknownKind`,
+    /// `Target`) log once, leave the last frame up, and return `Err(reason)`.
     pub(super) fn paint(&mut self, rt: &mut RuntimeCore, size: (u32, u32)) -> Result<Cost, NeedsGpu> {
         let (w, h) = (size.0.max(1), size.1.max(1));
         if self.size != (w, h) {
@@ -99,8 +139,11 @@ impl CpuCanvas {
             self.ctx.set_image_smoothing_enabled(false);
             self.buffer.clear();
             self.buffer.resize(w as usize * h as usize * 4, 0);
+            self.image = self.ctx.create_image_data_with_sw_and_sh(f64::from(w), f64::from(h)).ok();
             self.painter.forget();
             self.size = (w, h);
+        } else if self.image.is_none() {
+            self.image = self.ctx.create_image_data_with_sw_and_sh(f64::from(w), f64::from(h)).ok();
         }
         let start = crate::time::Instant::now();
         self.painter.fill_masks(&mut rt.text.atlas);
@@ -111,7 +154,55 @@ impl CpuCanvas {
             .native_surfaces(!rt.surfaces.is_empty())
             .half_rounding(self.half)
             .font_smoothing(rt.font_smoothing());
-        let painted = self.painter.paint(&scene, &mut Target::new(&mut self.buffer, w, h))?;
+        let (painted, degraded) = match self.painter.paint(&scene, &mut Target::new(&mut self.buffer, w, h)) {
+            Ok(painted) => (painted, false),
+            Err(reason) => match classify_cpu_needs_gpu(reason) {
+                WebCpuNeedsGpuAction::PaintDegraded(why) => {
+                    if self.logged_needs_gpu.note(why) {
+                        web_sys::console::warn_1(
+                            &format!(
+                                "rune: web CPU canvas degraded GPU-only feature {why:?} so frames stay live until GPU hand-over"
+                            )
+                            .into(),
+                        );
+                    }
+                    let degraded_scene = scene.degraded(true);
+                    match self.painter.paint(&degraded_scene, &mut Target::new(&mut self.buffer, w, h)) {
+                        Ok(painted) => {
+                            crate::marks::mark("cpu_first.degraded_paint");
+                            (painted, true)
+                        }
+                        Err(non_degradable) => {
+                            self.last_degraded = false;
+                            if self.logged_needs_gpu.note(non_degradable) {
+                                web_sys::console::warn_1(
+                                    &format!(
+                                        "rune: web CPU canvas cannot paint {non_degradable:?}; holding previous frame for GPU"
+                                    )
+                                    .into(),
+                                );
+                            }
+                            crate::marks::mark("cpu_first.needs_gpu");
+                            return Err(non_degradable);
+                        }
+                    }
+                }
+                WebCpuNeedsGpuAction::HoldPreviousFrame(why) => {
+                    self.last_degraded = false;
+                    if self.logged_needs_gpu.note(why) {
+                        web_sys::console::warn_1(
+                            &format!(
+                                "rune: web CPU canvas cannot paint {why:?}; holding previous frame for GPU"
+                            )
+                            .into(),
+                        );
+                    }
+                    crate::marks::mark("cpu_first.needs_gpu");
+                    return Err(why);
+                }
+            },
+        };
+        self.last_degraded = degraded;
         let put = crate::time::Instant::now();
         let plan = self.painter.upload_plan(&painted, (w, h));
         // When the frame scrolled cleanly, shift the moved region inside the opaque 2D canvas
@@ -135,38 +226,46 @@ impl CpuCanvas {
                     .is_ok() => plan.uploads,
             _ => &painted.rects,
         };
+        let measure = stats_wanted();
         let mut px = 0u64;
-        let mut swizzle = std::time::Duration::ZERO;
-        for &[x0, y0, x1, y1] in rects {
-            let (rw, rh) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
-            if rw == 0 || rh == 0 { continue; }
-            let began = crate::time::Instant::now();
-            let line = rw as usize * 4;
-            let len = line * rh as usize;
-            if (self.staged.length() as usize) < len {
-                self.staged = js_sys::Uint8ClampedArray::new_with_length((w as usize * h as usize * 4).max(len) as u32);
+        let mut swizzle_ms = 0.0f64;
+        if let Some(image) = &self.image {
+            for &rect in rects {
+                let Some(upload) = dirty_rect_row_slice(w, h, rect) else { continue };
+                if let Ok(ms) = put_cpu_rect(
+                    &self.ctx,
+                    image,
+                    &self.buffer[upload.byte_start..upload.byte_end],
+                    w,
+                    upload.x0,
+                    upload.y0,
+                    upload.rw,
+                    upload.rh,
+                    measure,
+                ) {
+                    swizzle_ms += ms;
+                }
+                px += u64::from(upload.rw) * u64::from(upload.rh);
             }
-            // A row at a time through one row's buffer: a whole frame's RGBA copy in the module's
-            // memory (4 MB at 1280x800) would stay in its high-water mark for good.
-            self.rows.resize(line, 0);
-            for (i, y) in (y0..y1).enumerate() {
-                let at = (y as usize * w as usize + x0 as usize) * 4;
-                rgba(&self.buffer[at..at + line], &mut self.rows);
-                self.staged.subarray((i * line) as u32, ((i + 1) * line) as u32).copy_from(&self.rows);
-            }
-            swizzle += began.elapsed();
-            let staged = self.staged.subarray(0, len as u32);
-            if let Ok(image) = web_sys::ImageData::new_with_js_u8_clamped_array_and_sh(&staged, rw, rh) {
-                self.ctx.put_image_data(&image, f64::from(x0), f64::from(y0)).ok();
-            }
-            px += u64::from(rw) * u64::from(rh);
         }
         let end = crate::time::Instant::now();
         let us = |d: std::time::Duration| d.as_secs_f64() * 1e6;
-        let cost = Cost { fill_us: us(filled - start), paint_us: us(put - filled), raster_us: painted.report.raster_ns as f64 / 1e3, put_us: us(end - put), swizzle_us: us(swizzle), put_px: px };
-        report(&cost);
+        let cost = Cost {
+            fill_us: us(filled - start),
+            paint_us: us(put - filled),
+            raster_us: painted.report.raster_ns as f64 / 1e3,
+            put_us: us(end - put),
+            swizzle_us: swizzle_ms * 1e3,
+            put_px: px,
+        };
+        if measure {
+            report(&cost);
+        }
         Ok(cost)
     }
+
+    /// Whether the most recently painted CPU frame used degraded fallback mode.
+    pub(super) fn last_degraded(&self) -> bool { self.last_degraded }
 
     /// The frame painted last: B, G, R, A, `size.0 * 4` bytes a row.
     pub(super) fn pixels(&self) -> &[u8] { &self.buffer }
@@ -180,46 +279,23 @@ impl CpuCanvas {
     }
 }
 
-/// `bgra`'s pixels as R, G, B, A, into `out` (as long).
-#[allow(unsafe_code)]
-fn rgba(bgra: &[u8], out: &mut [u8]) {
-    let swap = |v: u32| (v & 0xff00_ff00) | ((v >> 16) & 0xff) | ((v & 0xff) << 16);
-    // Whole pixels as words where both sides line up (they do: rows start on whole pixels of
-    // buffers the allocator aligns).
-    let (Ok(dm), Ok(sm)) = (bytemuck::try_cast_slice_mut::<u8, u32>(out), bytemuck::try_cast_slice::<u8, u32>(bgra)) else {
-        for (d, s) in out.chunks_exact_mut(4).zip(bgra.chunks_exact(4)) {
-            d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
-        }
-        return;
-    };
-    #[cfg(target_feature = "simd128")]
-    {
-        use core::arch::wasm32::{i8x16, u8x16_swizzle, v128, v128_load, v128_store};
-        // Four pixels at a time: B, G, R, A to R, G, B, A.
-        const ORDER: v128 = i8x16(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
-        let whole = dm.len() / 4 * 4;
-        let (dq, dr) = dm.split_at_mut(whole);
-        let (sq, sr) = sm.split_at(whole);
-        for (d, s) in dq.chunks_exact_mut(4).zip(sq.chunks_exact(4)) {
-            // SAFETY: each chunk is four u32s, 16 bytes; v128 loads and stores need no alignment.
-            unsafe { v128_store(d.as_mut_ptr().cast(), u8x16_swizzle(v128_load(s.as_ptr().cast()), ORDER)) }
-        }
-        for (d, s) in dr.iter_mut().zip(sr) { *d = swap(*s); }
-    }
-    #[cfg(not(target_feature = "simd128"))]
-    for (d, s) in dm.iter_mut().zip(sm) { *d = swap(*s); }
-}
-/// Appends a frame's cost to `globalThis.__runeCpuFrames`, when the page made that array.
-fn report(cost: &Cost) {
-    let wanted = STATS.get().unwrap_or_else(|| {
-        let on = js_sys::Reflect::get(&js_sys::global(), &"__runeCpuFrames".into()).is_ok_and(|v| js_sys::Array::is_array(&v));
+/// Whether the page attached `globalThis.__runeCpuFrames` to collect per-frame CPU timings.
+fn stats_wanted() -> bool {
+    STATS.get().unwrap_or_else(|| {
+        let on = js_sys::Reflect::get(&js_sys::global(), &"__runeCpuFrames".into())
+            .is_ok_and(|v| js_sys::Array::is_array(&v));
         STATS.set(Some(on));
         on
-    });
-    if !wanted { return; }
+    })
+}
+
+/// Appends a frame's cost to `globalThis.__runeCpuFrames`, when the page made that array.
+fn report(cost: &Cost) {
     let Ok(list) = js_sys::Reflect::get(&js_sys::global(), &"__runeCpuFrames".into()) else { return };
     let list: js_sys::Array = list.unchecked_into();
     let row = js_sys::Array::new();
-    for v in [cost.fill_us, cost.paint_us, cost.raster_us, cost.put_us, cost.swizzle_us, cost.put_px as f64] { row.push(&v.into()); }
+    for v in [cost.fill_us, cost.paint_us, cost.raster_us, cost.put_us, cost.swizzle_us, cost.put_px as f64] {
+        row.push(&v.into());
+    }
     list.push(&row);
 }

@@ -3,6 +3,7 @@
 //! `platform/web.rs`, which only builds on `wasm32`, so the tests run headless.
 #![cfg_attr(not(test), allow(dead_code))]
 
+pub(crate) mod cpu_canvas;
 pub(crate) mod gpu_recovery;
 pub(crate) mod handover_machine;
 pub(crate) mod platform_events;
@@ -664,6 +665,8 @@ pub(crate) enum GpuStartPhase {
     /// Synchronous WebGL2 (no `navigator.gpu`, or WebGPU probe failed): wait for quiet before
     /// starting WebGL2 setup.
     WaitQuietForWebGl2,
+    /// Start WebGL2 on the next browser macrotask without waiting for quiet (non-degradable `NeedsGpu`).
+    StartWebGl2Now,
     /// Neither WebGPU nor WebGL2 is available: report no GPU on the next turn.
     NoBackend,
 }
@@ -679,11 +682,13 @@ pub(crate) enum GpuStartup {
         drawn_at: crate::time::Instant,
         phase: GpuStartPhase,
         webgl_enabled: bool,
+        urgent: bool,
     },
     ProbingWebGpu {
         first_at: crate::time::Instant,
         drawn_at: crate::time::Instant,
         webgl_enabled: bool,
+        urgent: bool,
     },
     Done,
 }
@@ -694,6 +699,14 @@ pub(crate) enum GpuStartupEvent {
         at: crate::time::Instant,
         has_navigator_gpu: bool,
         compiles_async: bool,
+        webgl_enabled: bool,
+    },
+    /// A frame hit a non-degradable `NeedsGpu` error that the CPU canvas cannot paint, so GPU
+    /// acquisition must start immediately on the next macrotask instead of waiting for frame 1 or
+    /// the quiet window.
+    NeedsGpu {
+        at: crate::time::Instant,
+        has_navigator_gpu: bool,
         webgl_enabled: bool,
     },
     FrameDrawn { at: crate::time::Instant },
@@ -751,46 +764,81 @@ impl GpuStartup {
                     (GpuStartPhase::NoBackend, Duration::ZERO)
                 };
                 let attempt = seq.next();
-                *self = Self::Scheduled { attempt, first_at: at, drawn_at: at, phase, webgl_enabled };
+                *self = Self::Scheduled { attempt, first_at: at, drawn_at: at, phase, webgl_enabled, urgent: false };
                 Effects::one(GpuStartupEffect::ScheduleCheck { attempt, delay })
             }
             (
-                Self::Scheduled { attempt, first_at, drawn_at, phase, webgl_enabled },
-                GpuStartupEvent::FrameDrawn { at },
+                Self::Idle,
+                GpuStartupEvent::NeedsGpu { at, has_navigator_gpu, webgl_enabled },
             ) => {
-                *self = Self::Scheduled { attempt, first_at, drawn_at: drawn_at.max(at), phase, webgl_enabled };
+                let phase = if has_navigator_gpu {
+                    GpuStartPhase::ProbeWebGpu
+                } else if webgl_enabled {
+                    GpuStartPhase::StartWebGl2Now
+                } else {
+                    GpuStartPhase::NoBackend
+                };
+                let attempt = seq.next();
+                *self = Self::Scheduled { attempt, first_at: at, drawn_at: at, phase, webgl_enabled, urgent: true };
+                Effects::one(GpuStartupEffect::ScheduleCheck { attempt, delay: Duration::ZERO })
+            }
+            (
+                Self::Scheduled { first_at, drawn_at, phase, webgl_enabled, urgent: false, .. },
+                GpuStartupEvent::NeedsGpu { .. },
+            ) => {
+                let next_phase = match phase {
+                    GpuStartPhase::WaitQuietForWebGpu => GpuStartPhase::ProbeWebGpu,
+                    GpuStartPhase::WaitQuietForWebGl2 => GpuStartPhase::StartWebGl2Now,
+                    other => other,
+                };
+                let attempt = seq.next();
+                *self = Self::Scheduled { attempt, first_at, drawn_at, phase: next_phase, webgl_enabled, urgent: true };
+                Effects::one(GpuStartupEffect::ScheduleCheck { attempt, delay: Duration::ZERO })
+            }
+            (
+                Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled, urgent: false },
+                GpuStartupEvent::NeedsGpu { .. },
+            ) => {
+                *self = Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled, urgent: true };
                 Effects::none()
             }
             (
-                Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled },
+                Self::Scheduled { attempt, first_at, drawn_at, phase, webgl_enabled, urgent },
                 GpuStartupEvent::FrameDrawn { at },
             ) => {
-                *self = Self::ProbingWebGpu { first_at, drawn_at: drawn_at.max(at), webgl_enabled };
+                *self = Self::Scheduled { attempt, first_at, drawn_at: drawn_at.max(at), phase, webgl_enabled, urgent };
                 Effects::none()
             }
             (
-                Self::Scheduled { attempt: expected, first_at, drawn_at, phase, webgl_enabled },
+                Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled, urgent },
+                GpuStartupEvent::FrameDrawn { at },
+            ) => {
+                *self = Self::ProbingWebGpu { first_at, drawn_at: drawn_at.max(at), webgl_enabled, urgent };
+                Effects::none()
+            }
+            (
+                Self::Scheduled { attempt: expected, first_at, drawn_at, phase, webgl_enabled, urgent },
                 GpuStartupEvent::CheckDue { attempt, now },
             ) if attempt == expected => match phase {
                 GpuStartPhase::ProbeWebGpu => {
-                    *self = Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled };
+                    *self = Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled, urgent };
                     Effects::one(GpuStartupEffect::AskWebGpu)
                 }
                 GpuStartPhase::WaitQuietForWebGpu => match quiet_remaining(first_at, drawn_at, now) {
                     Some(delay) => {
                         let next = seq.next();
-                        *self = Self::Scheduled { attempt: next, first_at, drawn_at, phase, webgl_enabled };
+                        *self = Self::Scheduled { attempt: next, first_at, drawn_at, phase, webgl_enabled, urgent };
                         Effects::one(GpuStartupEffect::ScheduleCheck { attempt: next, delay })
                     }
                     None => {
-                        *self = Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled };
+                        *self = Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled, urgent };
                         Effects::one(GpuStartupEffect::AskWebGpu)
                     }
                 },
                 GpuStartPhase::WaitQuietForWebGl2 => match quiet_remaining(first_at, drawn_at, now) {
                     Some(delay) => {
                         let next = seq.next();
-                        *self = Self::Scheduled { attempt: next, first_at, drawn_at, phase, webgl_enabled };
+                        *self = Self::Scheduled { attempt: next, first_at, drawn_at, phase, webgl_enabled, urgent };
                         Effects::one(GpuStartupEffect::ScheduleCheck { attempt: next, delay })
                     }
                     None => {
@@ -798,6 +846,10 @@ impl GpuStartup {
                         Effects::one(GpuStartupEffect::AskWebGl2)
                     }
                 },
+                GpuStartPhase::StartWebGl2Now => {
+                    *self = Self::Done;
+                    Effects::one(GpuStartupEffect::AskWebGl2)
+                }
                 GpuStartPhase::NoBackend => {
                     *self = Self::Done;
                     Effects::one(GpuStartupEffect::FailNoBackend)
@@ -808,7 +860,7 @@ impl GpuStartup {
                 Effects::none()
             }
             (
-                Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled },
+                Self::ProbingWebGpu { first_at, drawn_at, webgl_enabled, urgent },
                 GpuStartupEvent::WebGpuFailed { now },
             ) => {
                 if !webgl_enabled {
@@ -816,16 +868,21 @@ impl GpuStartup {
                     return Effects::one(GpuStartupEffect::FailNoBackend);
                 }
                 // Always schedule via a macrotask (remaining quiet time, or Duration::ZERO if
-                // already quiet) so synchronous WebGL2 setup never runs inside requestAdapter's
-                // Promise microtask or before the page has had a quiet window after drawing.
-                let delay = quiet_remaining(first_at, drawn_at, now).unwrap_or(Duration::ZERO);
+                // already quiet or urgent due to non-degradable NeedsGpu) so synchronous WebGL2
+                // setup never runs inside requestAdapter's Promise microtask.
+                let (phase, delay) = if urgent {
+                    (GpuStartPhase::StartWebGl2Now, Duration::ZERO)
+                } else {
+                    (GpuStartPhase::WaitQuietForWebGl2, quiet_remaining(first_at, drawn_at, now).unwrap_or(Duration::ZERO))
+                };
                 let attempt = seq.next();
                 *self = Self::Scheduled {
                     attempt,
                     first_at,
                     drawn_at,
-                    phase: GpuStartPhase::WaitQuietForWebGl2,
+                    phase,
                     webgl_enabled: true,
+                    urgent,
                 };
                 Effects::one(GpuStartupEffect::ScheduleCheck { attempt, delay })
             }

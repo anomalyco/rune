@@ -235,6 +235,9 @@ struct Running {
     document: bool,
     /// The first frame is on screen.
     presented: bool,
+    /// A non-degradable `NeedsGpu` frame blocked CPU painting, so GPU takeover must not wait for
+    /// `presented`.
+    cpu_blocked_on_gpu: bool,
     /// What the GPU canvas currently shows, while nothing has invalidated it. A requested frame
     /// that would draw these same pixels skips acquiring a canvas texture and presenting.
     last_presented: Option<crate::window::Presented>,
@@ -454,7 +457,7 @@ impl Browser {
             input::Mode { embedded: self.embedded, fit_height, document });
         *self.running.borrow_mut() = Some(Running { draw, app, shared: self.shared.clone(), input, clipboard,
             clock: crate::frame::clock::FrameClock::new(now), suspended: false, full_redraw: true, embedded: self.embedded,
-            document, presented: false, last_presented: None, band: None, size: physical, on_ready, observability, frame_seq: 0,
+            document, presented: false, cpu_blocked_on_gpu: false, last_presented: None, band: None, size: physical, on_ready, observability, frame_seq: 0,
             late_fonts, fonts: page_fonts, cursor, _menus: menus, shortcuts });
         crate::marks::mark("web.started");
         if let Some(reason) = terminal_init_error {
