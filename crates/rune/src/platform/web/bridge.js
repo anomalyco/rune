@@ -162,27 +162,110 @@ const PAGE_CSS = `[data-rune-a11y] :focus-visible{outline:2px solid var(--rune-f
 [data-rune-a11y] a,[data-rune-a11y] button{color:transparent;-webkit-tap-highlight-color:transparent}
 [data-rune-a11y] [data-rune-scroll-x]::-webkit-scrollbar{display:none}`;
 
+const MAX_IMAGE_PIXELS = 64 * 1024 * 1024;
+const NO_AUTOCORRECT_MODES = new Set(['email', 'url', 'numeric', 'decimal', 'tel', 'none']);
+const NO_AUTOCORRECT_AUTOFILL = new Set(['username', 'email', 'one-time-code', 'url', 'tel']);
+const WORDS_AUTOCAP_AUTOFILL = new Set(['name', 'given-name', 'family-name', 'organization']);
+
+function isRasterImageType(type) {
+    if (typeof type !== 'string') return false;
+    const t = type.toLowerCase();
+    return t.startsWith('image/') && t !== 'image/svg+xml';
+}
+
+function findClipboardImageFile(items, files) {
+    const list = [...(items ?? [])];
+    const pngItem = list.find(i => i.kind === 'file' && String(i.type ?? '').toLowerCase() === 'image/png');
+    if (pngItem) return pngItem.getAsFile?.() ?? undefined;
+    const otherItem = list.find(i => i.kind === 'file' && isRasterImageType(i.type));
+    if (otherItem) return otherItem.getAsFile?.() ?? undefined;
+    if (!list.length && files?.length) {
+        const fl = [...files];
+        return fl.find(f => String(f.type ?? '').toLowerCase() === 'image/png') ?? fl.find(f => isRasterImageType(f.type));
+    }
+    return undefined;
+}
+
+// Configures HTML input semantics (`type`, `inputMode`, `autocapitalize`, `autocorrect`,
+// `spellcheck`, `enterKeyHint`, `autocomplete`, `name`) on the active hidden field.
+// Note: active single-line email/numeric inputs stay `type="text"` (with `inputMode="email|numeric|decimal"`
+// and `autocomplete`) because WHATWG HTML disallows `selectionStart`/`setSelectionRange` on
+// `type="email"` and `type="number"`, while `search`, `url`, `tel`, and `password` support them.
+function applyInputSemantics(field, inputMode, autofill, secure) {
+    const mode = inputMode || 'text';
+    const af = autofill || '';
+    field.inputMode = mode;
+    if (secure) {
+        field.autocomplete = af || 'current-password';
+        field.setAttribute('autocomplete', field.autocomplete);
+        field.name = af === 'new-password' ? 'new-password' : 'password';
+        field.setAttribute('autocorrect', 'off');
+        field.setAttribute('autocapitalize', 'off');
+        field.spellcheck = false;
+        field.removeAttribute('enterkeyhint');
+        return;
+    }
+    if (field.tagName === 'INPUT') {
+        const nextType = mode === 'search' ? 'search'
+            : (mode === 'url' || af === 'url') ? 'url'
+            : (mode === 'tel' || af === 'tel') ? 'tel'
+            : 'text';
+        if (field.type !== nextType) field.type = nextType;
+        const name = af && af !== 'off' ? af : (mode !== 'text' && mode !== 'none' ? mode : '');
+        if (name) { field.name = name; field.setAttribute('name', name); }
+        else { field.name = ''; field.removeAttribute('name'); }
+    }
+    const noCorrect = NO_AUTOCORRECT_MODES.has(mode) || NO_AUTOCORRECT_AUTOFILL.has(af);
+    const autoCap = noCorrect || mode === 'search'
+        ? 'none'
+        : WORDS_AUTOCAP_AUTOFILL.has(af)
+        ? 'words'
+        : 'sentences';
+    field.setAttribute('autocapitalize', autoCap);
+    field.setAttribute('autocorrect', noCorrect ? 'off' : 'on');
+    field.spellcheck = !noCorrect;
+    if (mode === 'search') field.setAttribute('enterkeyhint', 'search');
+    else field.removeAttribute('enterkeyhint');
+    if (af) {
+        field.autocomplete = af;
+        field.setAttribute('autocomplete', af);
+    } else {
+        field.autocomplete = '';
+        field.removeAttribute('autocomplete');
+    }
+}
+
 export function mount(canvas, callback, embedded, fitHeight, page) {
+    const form = document.createElement('form');
+    form.setAttribute('novalidate', '');
+    form.setAttribute('autocomplete', 'on');
+    form.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;margin:0;padding:0;border:0;overflow:visible;pointer-events:none;';
     const textarea = document.createElement('textarea');
     textarea.setAttribute('aria-label', 'Text input');
     textarea.setAttribute('autocapitalize', 'sentences');
     // It is 1 px wide: wrapped, its every character would be a line to a screen reader reading by
     // line. Unwrapped, a line is what a line break ends.
     textarea.wrap = 'off';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.setAttribute('aria-label', 'Text input');
+    input.setAttribute('autocapitalize', 'sentences');
     const password = document.createElement('input');
     password.type = 'password';
     password.setAttribute('aria-label', 'Password input');
     password.autocomplete = 'current-password';
+    password.setAttribute('autocomplete', 'current-password');
     password.setAttribute('autocorrect', 'off');
     password.setAttribute('autocapitalize', 'off');
     password.spellcheck = false;
-    for (const field of [textarea, password]) {
+    for (const field of [textarea, input, password]) {
         field.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;padding:0;border:0;opacity:0;font-size:16px;resize:none;pointer-events:none;';
         field.tabIndex = -1;
         field.inputMode = coarse() ? 'none' : 'text';
         field.inert = true;
-        document.body.append(field);
     }
+    form.append(input, password);
+    document.body.append(textarea, form);
     // The mirror's text is transparent over the canvas. `forced-color-adjust:none` keeps it so in
     // Windows' contrast themes, which would otherwise paint it, on backplates, over what Rune drew.
     const a11y = document.createElement('div');
@@ -211,7 +294,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         a11y.style.cssText = 'position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:1;color:transparent;forced-color-adjust:none;';
         document.body.append(a11y);
     }
-    const h = { canvas, textarea, password, a11y, a11yNodes: new Map(), a11yByPath: new Map(), mirrorSel: false, field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
+    const h = { canvas, form, textarea, input, password, a11y, a11yNodes: new Map(), a11yByPath: new Map(), mirrorSel: false, field: textarea, key: '', base: 0, value: '', domValue: '', crlfs: null,
+        inputMode: 'text', autofill: '', peerKey: '', peerSecure: false,
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null, a11yTouchId: null,
@@ -234,7 +318,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         h.listeners.push(() => target.removeEventListener(name, handler, options));
     };
     const MOD_KEYS = ['Shift', 'Control', 'Alt', 'Meta', 'AltGraph'];
-    const ownsTarget = target => target === canvas || target === textarea || target === password || (target instanceof Node && a11y.contains(target));
+    listen(form, 'submit', event => event.preventDefault());
+    const ownsTarget = target => target === canvas || target === textarea || target === input || target === password || target === form || (target instanceof Node && a11y.contains(target));
     const syncMods = event => {
         const bits = (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
         if (bits === h.modBits) return;
@@ -492,9 +577,12 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (dx === 0 && dy === 0) return;
         send({ kind: 'pointer_motion', dx, dy });
     }, { capture: true, passive: true });
-    function changed(preedit = false) {
-        const backward = textarea.selectionDirection === 'backward';
-        const edit = replacement(h.domValue, textarea.value, preedit ? h.composition : '', textarea.selectionEnd);
+    function changed(field, preedit = false) {
+        const val = field.value;
+        const rawStart = typeof field.selectionStart === 'number' ? field.selectionStart : val.length;
+        const rawEnd = typeof field.selectionEnd === 'number' ? field.selectionEnd : val.length;
+        const backward = field.selectionDirection === 'backward';
+        const edit = replacement(h.domValue, val, preedit ? h.composition : '', rawEnd);
         const start = domToRaw(edit.start, h.crlfs);
         const end = domToRaw(edit.end, h.crlfs);
         const mapNext = pos => {
@@ -503,8 +591,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             if (pos <= insertedEnd) return start + (pos - edit.start);
             return start + edit.text.length + (domToRaw(edit.end + (pos - insertedEnd), h.crlfs) - end);
         };
-        const selStart = mapNext(textarea.selectionStart);
-        const selEnd = mapNext(textarea.selectionEnd);
+        const selStart = mapNext(rawStart);
+        const selEnd = mapNext(rawEnd);
         send({ kind: preedit ? 'preedit' : 'edit', key: h.key, base: h.base, expected: h.value,
             start, end, text: edit.text,
             anchor: backward ? selEnd : selStart,
@@ -512,48 +600,80 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     }
     const key = (name, event = {}) => send({ kind: 'key', key: name, code: event.code ?? '', shift: !!event.shiftKey,
         ctrl: !!event.ctrlKey, alt: !!event.altKey, meta: !!event.metaKey, repeat: !!event.repeat });
-    listen(textarea, 'input', event => {
-        // No Rune field has the keyboard: nothing to edit, so the field stays empty.
-        if (!h.key) { textarea.value = ''; return; }
-        changed(h.composing || event.isComposing);
+    for (const textField of [textarea, input]) {
+        listen(textField, 'input', event => {
+            if (textField === input && h.field !== input) {
+                const text = input.value;
+                input.value = '';
+                if (h.peerKey && !h.peerSecure) send({ kind: 'autofill', key: h.peerKey, text, secure: false });
+                return;
+            }
+            // No Rune field has the keyboard: nothing to edit, so the field stays empty.
+            if (!h.key || h.field !== textField) { textField.value = ''; return; }
+            changed(textField, h.composing || event.isComposing);
+        });
+        listen(textField, 'compositionstart', () => {
+            if (h.field === textField) { h.composing = true; h.composition = ''; }
+        });
+        listen(textField, 'compositionupdate', event => {
+            if (h.field !== textField) return;
+            h.composition = event.data ?? '';
+            queueMicrotask(() => { if (!h.disposed && h.composing && h.field === textField) changed(textField, true); });
+        });
+        listen(textField, 'compositionend', () => {
+            if (h.field !== textField) return;
+            changed(textField);
+            h.composing = false; h.composition = '';
+            send({ kind: 'sync' });
+        });
+        listen(textField, 'select', () => {
+            if (h.syncing || h.composing || h.field !== textField || document.activeElement !== textField) return;
+            if (typeof textField.selectionStart !== 'number' || typeof textField.selectionEnd !== 'number') return;
+            const backward = textField.selectionDirection === 'backward';
+            const selStart = domToRaw(textField.selectionStart, h.crlfs);
+            const selEnd = domToRaw(textField.selectionEnd, h.crlfs);
+            send({ kind: 'selection', key: h.key, base: h.base, expected: h.value,
+                anchor: backward ? selEnd : selStart,
+                focus: backward ? selStart : selEnd });
+        });
+    }
+    listen(password, 'input', event => {
+        if (h.field !== password) {
+            const text = password.value;
+            password.value = '';
+            if (h.peerKey && h.peerSecure) send({ kind: 'autofill', key: h.peerKey, text, secure: true });
+            return;
+        }
+        passwordInput(event, password, h.key, send);
     });
-    listen(textarea, 'compositionstart', () => { h.composing = true; h.composition = ''; });
-    listen(textarea, 'compositionupdate', event => {
-        h.composition = event.data ?? '';
-        queueMicrotask(() => { if (!h.disposed && h.composing) changed(true); });
-    });
-    listen(textarea, 'compositionend', () => {
-        changed();
-        h.composing = false; h.composition = '';
-        send({ kind: 'sync' });
-    });
-    listen(password, 'input', event => passwordInput(event, password, h.key, send));
-    for (const field of [textarea, password]) {
+    for (const field of [textarea, input, password]) {
+        const isSecure = field === password;
         listen(field, 'paste', event => {
             // Only a paste into a Rune field is Rune's; the browser keeps the rest.
-            if (!h.key) return;
+            if (!h.key || field !== h.field) return;
             event.preventDefault();
             const data = event.clipboardData;
-            h.image = field === textarea ? [...(data?.items ?? [])].find(i => i.kind === 'file' && i.type === 'image/png')?.getAsFile() ?? undefined : undefined;
-            // Files go only to the text field: a password field takes text alone.
-            const files = field === textarea ? offerFiles(data?.files) : [];
+            h.image = !isSecure ? findClipboardImageFile(data?.items, data?.files) : undefined;
+            // Files go only to non-secure text fields: a password field takes text alone.
+            const files = !isSecure ? offerFiles(data?.files) : [];
             try {
-                send({ kind: 'paste', text: data?.getData('text/plain') ?? '', html: field === textarea ? data?.getData('text/html') ?? '' : '', image: !!h.image, files }, () => settleFiles(files));
+                send({ kind: 'paste', text: data?.getData('text/plain') ?? '', html: !isSecure ? data?.getData('text/html') ?? '' : '', image: !!h.image, files }, () => settleFiles(files));
             } finally {
                 if (h.syncing) queueMicrotask(() => { h.image = undefined; });
                 else h.image = undefined;
             }
         });
         listen(field, 'beforeinput', event => {
+            if (field !== h.field) return;
             if (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph') {
                 event.preventDefault();
                 if (!h.composing && !event.isComposing) key('Enter', { shiftKey: h.shift, code: 'Enter' });
-            } else if (field === password && event.inputType.startsWith('delete')) {
+            } else if (isSecure && event.inputType.startsWith('delete')) {
                 event.preventDefault();
                 const forward = event.inputType.endsWith('Forward');
                 key(forward ? 'Delete' : 'Backspace',
                     { altKey: event.inputType.includes('Word'), code: forward ? 'Delete' : 'Backspace' });
-            } else if (field === textarea && !h.composing && !event.isComposing && event.inputType.startsWith('delete')) {
+            } else if (!isSecure && !h.composing && !event.isComposing && event.inputType.startsWith('delete')) {
                 if (field.selectionStart === 0 && field.selectionEnd === 0 && event.inputType.endsWith('Backward')) {
                     event.preventDefault();
                     key('Backspace', { altKey: event.inputType.includes('Word'), code: 'Backspace' });
@@ -565,12 +685,13 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             }
         });
         listen(field, 'keydown', event => {
+            if (field !== h.field) return;
             h.shift = event.shiftKey;
             if (event.isComposing || h.composing || event.keyCode === 229) return;
             // On Windows European layouts AltGr sets both ctrlKey and altKey; let those characters type.
             const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
             const editing = ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
-            if (field === password) editing.push('Backspace', 'Delete');
+            if (isSecure) editing.push('Backspace', 'Delete');
             else {
                 // At either boundary with nothing selected, the browser deletes nothing and fires
                 // no `input` event, so forward Backspace or Delete as a key as native platforms
@@ -604,15 +725,6 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         listen(field, 'blur', () => { h.shift = false; onFieldLostFocus(); });
         listen(field, 'focusout', onFieldLostFocus);
     }
-    listen(textarea, 'select', () => {
-        if (h.syncing || h.composing || document.activeElement !== textarea) return;
-        const backward = textarea.selectionDirection === 'backward';
-        const selStart = domToRaw(textarea.selectionStart, h.crlfs);
-        const selEnd = domToRaw(textarea.selectionEnd, h.crlfs);
-        send({ kind: 'selection', key: h.key, base: h.base, expected: h.value,
-            anchor: backward ? selEnd : selStart,
-            focus: backward ? selStart : selEnd });
-    });
     // Synchronous copy support for read-only `El::selectable` selections (`Edit › Copy` / ⌘C).
     listen(document, 'copy', event => {
         const active = document.activeElement;
@@ -622,8 +734,8 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         }
     });
     // Files dropped while a Rune field has the keyboard are pasted into it, as a page's field
-    // takes a drop: the first file as a pasted image when it is a PNG, or as text when it is
-    // text, and every file (up to `MAX_WEB_FILES`) as a handle for `ClipboardContent::web_files`
+    // takes a drop: the first file as a pasted image when it is a raster image, or as text when
+    // it is text, and every file (up to `MAX_WEB_FILES`) as a handle for `ClipboardContent::web_files`
     // unless the field is a password field, which, as with a paste, takes no files.
     // Elsewhere a drop does nothing (the browser would open the file in place of the app).
     listen(canvas, 'dragover', event => {
@@ -638,9 +750,14 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (!h.key) return;
         // The `FileList` empties once this handler yields, so take the handles before reading.
         const files = h.field === h.password ? [] : offerFiles(event.dataTransfer.files);
-        if (file.type === 'image/png') {
+        if (h.field !== h.password && isRasterImageType(file.type)) {
             h.image = file;
-            send({ kind: 'paste', text: '', html: '', image: true, files }, () => settleFiles(files));
+            try {
+                send({ kind: 'paste', text: '', html: '', image: true, files }, () => settleFiles(files));
+            } finally {
+                if (h.syncing) queueMicrotask(() => { h.image = undefined; });
+                else h.image = undefined;
+            }
             return;
         }
         // Only a small text file is read as text; a bigger one arrives as a handle alone.
@@ -677,8 +794,15 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         if (!h.mediaKeys && MEDIA_KEYS.includes(event.key)) return;
         if (!browserShortcut(event)) event.preventDefault();
     });
+    if (embedded && !page) {
+        listen(window, 'scroll', () => { if (!h.disposed && h.key && h.caret && !h.fieldArmed) placeCaretFields(h); }, { passive: true });
+    }
     if (page) {
-        const scrolled = () => { h.lastScrollAt = performance.now(); send({ kind: 'scroll', y: window.scrollY }); };
+        const scrolled = () => {
+            h.lastScrollAt = performance.now();
+            if (h.key && h.caret && !h.fieldArmed) placeCaretFields(h);
+            send({ kind: 'scroll', y: window.scrollY });
+        };
         listen(window, 'scroll', scrolled, { passive: true });
         // A finger down or a page still coasting moves the export's layout under the reader; the
         // swap to the live mirror waits for it (see `dropStatic`).
@@ -890,49 +1014,62 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     return h;
 }
 
-// Reapplies the synced non-secure selection after focus moves to the hidden textarea (browsers
-// collapse an unfocused textarea's selection to 0), without disturbing an active composition.
+// Reapplies the synced non-secure selection after focus moves to the hidden text field (browsers
+// collapse an unfocused field's selection to 0), without disturbing an active composition.
 function reselect(h) {
-    if (!h.selection || h.field !== h.textarea || h.composing) return;
+    if (!h.selection || h.field === h.password || h.composing) return;
+    const field = h.field;
     const [start, end, direction] = h.selection;
-    if (h.textarea.selectionStart !== start || h.textarea.selectionEnd !== end || h.textarea.selectionDirection !== direction) {
+    if (field.selectionStart !== start || field.selectionEnd !== end || field.selectionDirection !== direction) {
         const syncing = h.syncing;
         h.syncing = true;
-        try { h.textarea.setSelectionRange(start, end, direction); }
+        try { field.setSelectionRange(start, end, direction); }
+        catch {}
         finally { h.syncing = syncing; }
     }
 }
 
-// Prepares and focuses the active hidden input (`h.textarea` or `h.password`) when `h.key` is set.
-// Sets `inert = false` and `inputMode = 'text'` BEFORE calling `focus()` so iOS Safari evaluates
-// `shouldShowAutomaticKeyboardUI` with an editable `inputMode` at the moment of focus (while
-// keeping `opacity: 0` so WebKit suppresses native selection UI and zoom-to-focus per r238146).
-// When `force` is true (called from `activate()` inside a user gesture), `focus()` runs even when
-// `field` is already `document.activeElement` so WebKit's `Element::focus` invokes
-// `elementDidRefocus` (r188405/r290646) to re-present the keyboard if dismissed while staying a
-// zero-flicker no-op when the keyboard is already showing (r242833).
+// Prepares and focuses the active hidden input (`h.textarea`, `h.input`, or `h.password`) when
+// `h.key` is set. Sets `inert = false` and the field's `inputMode` BEFORE calling `focus()` so
+// iOS Safari evaluates `shouldShowAutomaticKeyboardUI` with the semantic keyboard mode at the
+// moment of focus (while keeping `opacity: 0` so WebKit suppresses native selection UI and
+// zoom-to-focus per r238146). When `force` is true (called from `activate()` inside a user
+// gesture), `focus()` runs even when `field` is already `document.activeElement` so WebKit's
+// `Element::focus` invokes `elementDidRefocus` (r188405/r290646) to re-present the keyboard if
+// dismissed while staying a zero-flicker no-op when the keyboard is already showing (r242833).
 function focusInput(h, force = false) {
     const field = h.field;
     h.focusGen += 1;
     h.pendingFieldBlur = false;
     h.cancelReconcile?.();
     field.inert = false;
-    field.inputMode = 'text';
+    field.removeAttribute('aria-hidden');
+    field.inputMode = h.inputMode || 'text';
     if (force || document.activeElement !== field) field.focus({ preventScroll: true });
     if (document.activeElement === field) h.domFocused = true;
     reselect(h);
 }
 
-export function sync(h, key, text, base, anchor, focus, secure) {
+export function sync(
+    h, key, text, base, anchor, focus, secure,
+    singleLine = false, inputMode = 'text', autofill = '',
+    peerKey = '', peerSecure = false, peerAutofill = '', peerType = '',
+) {
     if (h.composing && key === h.key) return;
     h.composing = false;
     h.syncing = true;
     const active = document.activeElement;
-    const editing = active === h.textarea || active === h.password;
+    const editing = active === h.textarea || active === h.input || active === h.password;
     const { dom, crlfs } = key && !secure ? normalizeTextarea(text) : { dom: '', crlfs: null };
+    const mode = inputMode || 'text';
+    const af = autofill || '';
+    const useInput = !secure && !!singleLine && (mode !== 'text' || af !== '');
     h.key = key; h.base = base; h.value = text; h.domValue = dom; h.crlfs = crlfs;
+    h.inputMode = mode; h.autofill = af;
+    h.peerKey = key ? (peerKey || '') : '';
+    h.peerSecure = key ? !!peerSecure : false;
     h.password.value = '';
-    h.field = secure ? h.password : h.textarea;
+    h.field = secure ? h.password : (useInput ? h.input : h.textarea);
     if (!key) {
         h.focusGen += 1;
         h.pendingFieldBlur = false;
@@ -940,13 +1077,27 @@ export function sync(h, key, text, base, anchor, focus, secure) {
         h.cancelReconcile?.();
         h.selection = null;
         h.textarea.value = '';
+        h.input.value = '';
         if (editing) h.canvas.focus({ preventScroll: true });
-        h.textarea.inert = true;
-        h.password.inert = true;
-        h.textarea.inputMode = h.password.inputMode = coarse() ? 'none' : 'text';
+        for (const f of [h.textarea, h.input, h.password]) {
+            f.inert = true;
+            f.removeAttribute('aria-hidden');
+            f.inputMode = coarse() ? 'none' : 'text';
+        }
     } else {
         h.field.inert = false;
-        if (h.textarea.value !== dom) h.textarea.value = dom;
+        h.field.removeAttribute('aria-hidden');
+        applyInputSemantics(h.field, mode, af, secure);
+        if (h.field === h.textarea) {
+            if (h.textarea.value !== dom) h.textarea.value = dom;
+            h.input.value = '';
+        } else if (h.field === h.input) {
+            if (h.input.value !== dom) h.input.value = dom;
+            h.textarea.value = '';
+        } else {
+            h.textarea.value = '';
+            h.input.value = '';
+        }
         if (secure) {
             h.selection = null;
         } else {
@@ -958,11 +1109,40 @@ export function sync(h, key, text, base, anchor, focus, secure) {
         if (editing && active !== h.field) activate(h);
         else if (active === h.canvas && !h.pendingFieldBlur) focusInput(h);
         else {
-            h.field.inputMode = 'text';
+            h.field.inputMode = mode;
             if (active === h.field) h.domFocused = true;
             reselect(h);
         }
-        (secure ? h.textarea : h.password).inert = true;
+        // Pair the sibling credential input inside `h.form` when present so password managers
+        // detect the login form and can fill both fields simultaneously; mark all other inactive
+        // fields inert so they stay out of focus and assistive trees.
+        const peerField = h.peerKey ? (h.peerSecure ? h.password : h.input) : null;
+        for (const f of [h.textarea, h.input, h.password]) {
+            if (f === h.field) continue;
+            if (f === peerField) {
+                f.inert = false;
+                f.setAttribute('aria-hidden', 'true');
+                if (h.peerSecure) {
+                    const pAf = peerAutofill || 'current-password';
+                    f.autocomplete = pAf;
+                    f.setAttribute('autocomplete', pAf);
+                    f.name = pAf === 'new-password' ? 'new-password' : 'password';
+                    f.setAttribute('name', f.name);
+                } else {
+                    const pType = peerType === 'email' ? 'email' : 'text';
+                    if (f.type !== pType) f.type = pType;
+                    const pAf = peerAutofill || 'username';
+                    f.autocomplete = pAf;
+                    f.setAttribute('autocomplete', pAf);
+                    f.name = pAf === 'email' ? 'email' : 'username';
+                    f.setAttribute('name', f.name);
+                }
+                f.value = '';
+            } else {
+                f.inert = true;
+                f.removeAttribute('aria-hidden');
+            }
+        }
     }
     h.syncing = false;
     applyKeyboardShift(h);
@@ -1113,11 +1293,13 @@ export function showMenu(h, json, x, y, minWidth, dark) {
         h.send({ kind: 'menu', id });
     };
     const open = (spec, left, top, min, parentItem) => {
+        const vp = visualViewportBox();
+        const maxH = Math.max(40, Math.floor(vp.height - 8));
         const menu = document.createElement('div');
         menu.setAttribute('data-rune-menu', '');
         menu.setAttribute('role', 'menu');
         menu.tabIndex = -1;
-        menu.style.cssText = `position:fixed;left:0;top:0;z-index:2147483647;box-sizing:border-box;min-width:${Math.max(min, 160)}px;max-height:calc(100vh - 8px);overflow-y:auto;padding:${pad}px;margin:0;background:${colors.bg};color:${colors.fg};border:1px solid ${colors.line};border-radius:${radius}px;box-shadow:0 4px 16px rgba(0,0,0,.18);font:13px/18px system-ui,sans-serif;user-select:none;-webkit-user-select:none;outline:none`;
+        menu.style.cssText = `position:fixed;left:0;top:0;z-index:2147483647;box-sizing:border-box;min-width:${Math.max(min, 160)}px;max-height:${maxH}px;overflow-y:auto;padding:${pad}px;margin:0;background:${colors.bg};color:${colors.fg};border:1px solid ${colors.line};border-radius:${radius}px;box-shadow:0 4px 16px rgba(0,0,0,.18);font:13px/18px system-ui,sans-serif;user-select:none;-webkit-user-select:none;outline:none`;
         // The style's font as properties of their own, set after the defaults: a family the
         // browser can't parse (an unclosed quote) is rejected alone, keeping the default family,
         // size and line height and every other declaration.
@@ -1172,15 +1354,19 @@ export function showMenu(h, json, x, y, minWidth, dark) {
             menu.append(row);
         }
         document.body.append(menu);
-        // Inside the viewport: flipped left of the parent item, or up, where it would overflow.
+        // Inside the visible viewport (`window.visualViewport` when present, so menus stay clear
+        // of mobile soft keyboards and pinch-zoomed edges): flipped left of the parent item, or
+        // up, where it would overflow.
         const r = menu.getBoundingClientRect();
+        const minL = vp.left + 4, maxR = vp.right - 4;
+        const minT = vp.top + 4, maxB = vp.bottom - 4;
         let l = left, t = top;
-        if (l + r.width > innerWidth - 4) l = parentItem ? parentItem.row.getBoundingClientRect().left - r.width + 4 : innerWidth - 4 - r.width;
+        if (l + r.width > maxR) l = parentItem ? parentItem.row.getBoundingClientRect().left - r.width + 4 : maxR - r.width;
         // A menu at a point opens upward from it where it would run off the bottom, as a context
         // menu does; a submenu moves up.
-        if (t + r.height > innerHeight - 4) t = Math.max(4, parentItem || top - r.height < 4 ? innerHeight - 4 - r.height : top - r.height);
-        menu.style.left = `${Math.max(4, l)}px`;
-        menu.style.top = `${Math.max(4, t)}px`;
+        if (t + r.height > maxB) t = Math.max(minT, parentItem || top - r.height < minT ? maxB - r.height : top - r.height);
+        menu.style.left = `${Math.max(minL, l)}px`;
+        menu.style.top = `${Math.max(minT, t)}px`;
         const level = { menu, rows, active: null, child: null, parentItem };
         menus.push(level);
         const focusRow = (item, fromPointer) => {
@@ -1215,10 +1401,15 @@ export function showMenu(h, json, x, y, minWidth, dark) {
     };
     const top = open(spec, box.left + x, box.top + y, minWidth, null);
     const selected = spec.selected && top.rows.find(r => r.id === spec.selected);
-    // A positioned menu puts its selected item over the point, as a pop-up button opens.
+    // A positioned menu puts its selected item over the point, as a pop-up button opens,
+    // clamped inside the visible viewport.
     if (selected) {
-        const dy = selected.row.getBoundingClientRect().top - top.menu.getBoundingClientRect().top;
-        top.menu.style.top = `${Math.max(4, box.top + y - dy)}px`;
+        const vp = visualViewportBox();
+        const topRect = top.menu.getBoundingClientRect();
+        const dy = selected.row.getBoundingClientRect().top - topRect.top;
+        const minT = vp.top + 4;
+        const maxT = Math.max(minT, vp.bottom - 4 - topRect.height);
+        top.menu.style.top = `${Math.min(maxT, Math.max(minT, box.top + y - dy))}px`;
     }
     top.menu.focus({ preventScroll: true });
     if (selected) top.focusRow(selected, false);
@@ -1317,9 +1508,26 @@ function applyKeyboardShift(h) {
     const sibling = h.canvas.previousElementSibling;
     const targets = sibling?.hasAttribute?.('data-rune-cpu') ? [h.canvas, sibling, h.a11y] : [h.canvas, h.a11y];
     for (const target of targets) target.style.transform = value;
-    if (h.caret && !h.fieldArmed) {
-        for (const field of [h.textarea, h.password]) placeField(field, h.caret, shift);
+    placeCaretFields(h);
+}
+
+// Visible viewport box in `position: fixed` (layout-viewport) CSS coordinates, preferring
+// `window.visualViewport` when available so popup menus stay clear of mobile software keyboards
+// and pinch-zoomed viewport edges.
+function visualViewportBox() {
+    const layoutW = Number.isFinite(globalThis.innerWidth) && globalThis.innerWidth > 0 ? globalThis.innerWidth : 0;
+    const layoutH = Number.isFinite(globalThis.innerHeight) && globalThis.innerHeight > 0 ? globalThis.innerHeight : 0;
+    const v = globalThis.window?.visualViewport;
+    if (v && Number.isFinite(v.width) && v.width > 0 && Number.isFinite(v.height) && v.height > 0) {
+        const left = Number.isFinite(v.offsetLeft) ? Math.max(0, v.offsetLeft) : 0;
+        const top = Number.isFinite(v.offsetTop) ? Math.max(0, v.offsetTop) : 0;
+        const right = layoutW > 0 ? Math.min(layoutW, left + v.width) : left + v.width;
+        const bottom = layoutH > 0 ? Math.min(layoutH, top + v.height) : top + v.height;
+        if (right > left && bottom > top) {
+            return { left, top, right, bottom, width: right - left, height: bottom - top };
+        }
     }
+    return { left: 0, top: 0, right: layoutW, bottom: layoutH, width: layoutW, height: layoutH };
 }
 
 // Updates the unzoomed visual viewport vertical band `[top, bottom]` within `layoutH` (CSS px)
@@ -1331,13 +1539,31 @@ export function syncVisualViewport(h, top, bottom, layoutH) {
     if (h.key && h.domFocused && document.activeElement !== h.field) h.scheduleReconcile?.();
 }
 
+// Canvas origin in layout-viewport (`position: fixed`) CSS coordinates: embedded and page
+// canvases use `getBoundingClientRect()` while full-window fixed canvases apply `keyboardShiftY`.
+// `position: fixed` shares layout-viewport coordinates with the canvas under pinch-zoom, so
+// `visualViewport.offsetLeft/offsetTop` is intentionally not added here.
+function caretOrigin(h) {
+    if (h.embedded || h.page) {
+        const box = h.canvas.getBoundingClientRect();
+        return [Number.isFinite(box.left) ? box.left : 0, Number.isFinite(box.top) ? box.top : 0];
+    }
+    return [0, -(h.keyboardShiftY || 0)];
+}
+
+function placeCaretFields(h) {
+    if (!h.caret || h.fieldArmed) return;
+    const [ox, oy] = caretOrigin(h);
+    const rect = [h.caret[0] + ox, h.caret[1] + oy, h.caret[2], h.caret[3]];
+    for (const field of [h.textarea, h.input, h.password]) placeField(field, rect);
+}
+
 // The focused field's IME area in window points: the page's own text field sits there, so an
 // input method's candidate window opens beside the caret, not in the page's corner.
 export function syncCaret(h, x, y, w, height) {
     h.caret = [x, y, Math.max(1, w), Math.max(1, height)];
     applyKeyboardShift(h);
-    if (h.fieldArmed) return;
-    for (const field of [h.textarea, h.password]) placeField(field, h.caret, h.keyboardShiftY || 0);
+    placeCaretFields(h);
 }
 
 function placeField(field, [x, y, w, height], shiftY = 0) {
@@ -1575,7 +1801,7 @@ function disarmMenu(h) {
     }
     if (h.fieldArmed) {
         h.fieldArmed = false;
-        if (h.caret) placeField(h.field, h.caret, h.keyboardShiftY || 0);
+        if (h.caret) placeCaretFields(h);
         else Object.assign(h.field.style, { left: '0px', top: '0px', width: '1px', height: '1px', pointerEvents: 'none' });
     }
     if (h.menu === 'browser') h.menu = '';
@@ -2138,33 +2364,40 @@ export function focusA11y(h, json) {
         h.canvas.setAttribute('role', 'application');
         if (document.title) h.canvas.setAttribute('aria-label', document.title);
     }
+    const activeText = h.field === h.input ? h.input : h.textarea;
     if (!f) {
         h.canvas.removeAttribute('aria-activedescendant');
         h.textarea.removeAttribute('aria-activedescendant');
+        h.input.removeAttribute('aria-activedescendant');
         for (const p of h.focusProxies) clearFocusProxy(p);
         syncFieldA11y(h.textarea, null, 'Text input');
+        syncFieldA11y(h.input, null, 'Text input');
         syncFieldA11y(h.password, null, 'Password input');
         clearMirrorSelection(h);
         return;
     }
     if (f.o === 'textbox' && !f.f) {
-        // The bridge's real <textarea> or <input type="password"> is the sole active control:
+        // The bridge's real <textarea>, <input>, or <input type="password"> is the sole active control:
         // clear the canvas focus proxies so no duplicate textbox node appears in the tree.
         h.canvas.removeAttribute('aria-activedescendant');
         h.textarea.removeAttribute('aria-activedescendant');
+        h.input.removeAttribute('aria-activedescendant');
         for (const p of h.focusProxies) clearFocusProxy(p);
         if (f.sec) {
             syncFieldA11y(h.password, f, 'Password input');
             syncFieldA11y(h.textarea, null, 'Text input');
+            syncFieldA11y(h.input, null, 'Text input');
         } else {
-            syncFieldA11y(h.textarea, f, 'Text input');
+            syncFieldA11y(activeText, f, 'Text input');
+            syncFieldA11y(activeText === h.input ? h.textarea : h.input, null, 'Text input');
             syncFieldA11y(h.password, null, 'Password input');
         }
         clearMirrorSelection(h);
         return;
     }
     syncFieldA11y(h.password, null, 'Password input');
-    if (f.f) h.textarea.setAttribute('aria-label', f.f);
+    syncFieldA11y(activeText === h.input ? h.textarea : h.input, null, 'Text input');
+    if (f.f) activeText.setAttribute('aria-label', f.f);
     clearFocusProxy(h.focusProxies[h.focusTurn]);
     h.focusTurn ^= 1;
     const el = h.focusProxies[h.focusTurn];
@@ -2214,10 +2447,13 @@ export function focusA11y(h, json) {
     }
     h.canvas.setAttribute('aria-activedescendant', el.id);
     // Typing in a field whose highlighted row this is (the palette): the field says it too.
-    h.textarea.setAttribute('aria-activedescendant', el.id);
+    const inactiveText = activeText === h.input ? h.textarea : h.input;
+    inactiveText.removeAttribute('aria-activedescendant');
+    inactiveText.removeAttribute('aria-autocomplete');
+    activeText.setAttribute('aria-activedescendant', el.id);
     const taAc = f.fac ?? (f.o === 'combobox' ? f.ac : undefined);
-    if (taAc) h.textarea.setAttribute('aria-autocomplete', taAc);
-    else h.textarea.removeAttribute('aria-autocomplete');
+    if (taAc) activeText.setAttribute('aria-autocomplete', taAc);
+    else activeText.removeAttribute('aria-autocomplete');
 }
 
 // `Tx::announce`: two live regions in the mirror, polite and assertive, made the first time
@@ -2557,10 +2793,53 @@ export async function readWebFile(id, max) {
     return file && file.size <= max ? new Uint8Array(await file.arrayBuffer()) : undefined;
 }
 
+async function transcodePastedImage(file, max) {
+    if (typeof globalThis.createImageBitmap !== 'function') return undefined;
+    let bitmap;
+    try {
+        bitmap = await globalThis.createImageBitmap(file);
+    } catch {
+        return undefined;
+    }
+    try {
+        const w = bitmap.width | 0, bh = bitmap.height | 0;
+        if (w <= 0 || bh <= 0 || w * bh > MAX_IMAGE_PIXELS) return undefined;
+        let canvas, ctx;
+        if (typeof globalThis.OffscreenCanvas === 'function') {
+            canvas = new globalThis.OffscreenCanvas(w, bh);
+            ctx = canvas.getContext('2d');
+        } else if (typeof globalThis.document?.createElement === 'function') {
+            canvas = globalThis.document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = bh;
+            ctx = canvas.getContext('2d');
+        }
+        if (!ctx) return undefined;
+        ctx.drawImage(bitmap, 0, 0);
+        let out = null;
+        if (typeof canvas.convertToBlob === 'function') {
+            out = await canvas.convertToBlob({ type: 'image/png' });
+        } else if (typeof canvas.toBlob === 'function') {
+            out = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+        }
+        return out && out.size > 0 && out.size <= max ? new Uint8Array(await out.arrayBuffer()) : undefined;
+    } catch {
+        return undefined;
+    } finally {
+        bitmap.close?.();
+    }
+}
+
 export async function pastedImage(h, max) {
     const file = h.image;
     h.image = undefined;
-    return file && file.size <= max ? new Uint8Array(await file.arrayBuffer()) : undefined;
+    if (!file) return undefined;
+    const type = String(file.type ?? '').toLowerCase();
+    if (!type || type === 'image/png') {
+        return file.size <= max ? new Uint8Array(await file.arrayBuffer()) : undefined;
+    }
+    if (isRasterImageType(type)) return transcodePastedImage(file, max);
+    return undefined;
 }
 
 export function destroy(h) {
@@ -2581,7 +2860,7 @@ export function destroy(h) {
     h.activeTouchId = null;
     cancelA11y(h);
     for (const remove of h.listeners) remove();
-    h.password.value = ''; h.textarea.value = ''; h.value = ''; h.domValue = ''; h.crlfs = null; h.copyText = ''; h.selection = null;
+    h.password.value = ''; h.input.value = ''; h.textarea.value = ''; h.value = ''; h.domValue = ''; h.crlfs = null; h.copyText = ''; h.selection = null; h.peerKey = ''; h.peerSecure = false;
     h.a11yNodes.clear();
     h.a11yByPath.clear();
     h.mirrorSel = false;
@@ -2594,5 +2873,5 @@ export function destroy(h) {
     }
     h.a11y.remove();
     h.band?.remove();
-    h.password.remove(); h.textarea.remove();
+    h.password.remove(); h.input.remove(); h.form.remove(); h.textarea.remove();
 }

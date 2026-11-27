@@ -68,7 +68,7 @@ impl ClipboardContent {
     /// [`MAX_WEB_FILES`](super::MAX_WEB_FILES), with no paths and no bytes read: call
     /// `WebFile::read` (wasm32) for the ones the app takes. Like the image, only hooks hear them (a
     /// field's `on_input_paste` or a root `on_paste_content`; never a password field). Some
-    /// files come twice: a pasted or dropped PNG is also the [`image`](Self::image), and the
+    /// files come twice: a pasted or dropped raster image is also the [`image`](Self::image), and the
     /// contents of a dropped text file of at most 1 MiB are also the [`text`](Self::text).
     /// Always empty on native platforms.
     pub fn web_files(&self) -> &[WebFile] { &self.web_files }

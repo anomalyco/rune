@@ -678,3 +678,89 @@ test('styleInlineCanvas sets AppSpec height when page gave none and preserves pa
         }
     }
 });
+
+test('readClipboard and pngBytes transcode non-PNG raster images via createImageBitmap and prefer PNG when present', async () => {
+    const origNav = globalThis.navigator;
+    const origCreateBitmap = globalThis.createImageBitmap;
+    const origOffscreen = globalThis.OffscreenCanvas;
+    try {
+        let bitmapCalls = 0;
+        let closedCount = 0;
+        let nextDim = [2, 1];
+        const rgba = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255]);
+        Object.defineProperty(globalThis, 'createImageBitmap', {
+            value: async () => {
+                bitmapCalls++;
+                return { width: nextDim[0], height: nextDim[1], close() { closedCount++; } };
+            },
+            configurable: true,
+        });
+        Object.defineProperty(globalThis, 'OffscreenCanvas', {
+            value: class FakeOffscreenCanvas {
+                constructor(w, h) { this.width = w; this.height = h; }
+                getContext() {
+                    return {
+                        drawImage() {},
+                        getImageData: () => ({ data: rgba }),
+                    };
+                }
+            },
+            configurable: true,
+        });
+
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                clipboard: {
+                    async read() {
+                        return [{
+                            types: ['image/webp'],
+                            async getType(t) {
+                                assert.equal(t, 'image/webp');
+                                return new Blob([new Uint8Array([1, 2, 3])], { type: 'image/webp' });
+                            },
+                        }];
+                    },
+                },
+            },
+            configurable: true,
+        });
+        const webpRes = await platform.readClipboard(true, true, 1024 * 1024);
+        assert.ok(webpRes.png instanceof Uint8Array);
+        const dec = await decodeTestPng(webpRes.png);
+        assert.equal(dec.width, 2);
+        assert.equal(dec.height, 1);
+        assert.deepEqual(dec.rgba, rgba);
+        assert.equal(bitmapCalls, 1);
+        assert.equal(closedCount, 1);
+
+        const rawPng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 7, 8, 9]);
+        Object.defineProperty(globalThis, 'navigator', {
+            value: {
+                clipboard: {
+                    async read() {
+                        return [{
+                            types: ['image/jpeg', 'image/png'],
+                            async getType(t) {
+                                assert.equal(t, 'image/png');
+                                return new Blob([rawPng], { type: 'image/png' });
+                            },
+                        }];
+                    },
+                },
+            },
+            configurable: true,
+        });
+        const pngRes = await platform.readClipboard(true, true, 1024 * 1024);
+        assert.deepEqual(pngRes.png, rawPng);
+        assert.equal(bitmapCalls, 1, 'PNG fast path must not invoke createImageBitmap');
+
+        assert.equal(await platform.pngBytes(new Blob(['<svg/>'], { type: 'image/svg+xml' }), 1024), undefined);
+        nextDim = [9000, 9000];
+        assert.equal(await platform.pngBytes(new Blob([new Uint8Array([0xff, 0xd8])], { type: 'image/jpeg' }), 1024 * 1024), undefined);
+        assert.equal(closedCount, 2);
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        Object.defineProperty(globalThis, 'createImageBitmap', { value: origCreateBitmap, configurable: true });
+        Object.defineProperty(globalThis, 'OffscreenCanvas', { value: origOffscreen, configurable: true });
+    }
+});

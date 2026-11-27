@@ -98,6 +98,16 @@ macro_rules! rich_forwarders {
             self.edits.visual(move |e| e.pill_copy_text(f));
             self
         }
+        /// Virtual keyboard layout and input mode hint ([`El::input_mode`](rune::El::input_mode)).
+        pub fn input_mode(mut self, mode: rune::InputMode) -> Self {
+            self.edits.visual(move |e| e.input_mode(mode));
+            self
+        }
+        /// Browser and OS autofill hint ([`El::autofill`](rune::El::autofill), HTML `autocomplete`).
+        pub fn autofill(mut self, hint: rune::Autofill) -> Self {
+            self.edits.visual(move |e| e.autofill(hint));
+            self
+        }
     };
 }
 

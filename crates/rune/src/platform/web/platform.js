@@ -330,6 +330,61 @@ export function writeClipboardImage(extract, checkOutcome, maxBytes) {
     }
 }
 
+const MAX_IMAGE_PIXELS = 64 * 1024 * 1024;
+
+function isRasterImageType(type) {
+    if (typeof type !== 'string') return false;
+    const t = type.toLowerCase();
+    return t.startsWith('image/') && t !== 'image/svg+xml';
+}
+
+// Decodes a non-PNG raster image blob (JPEG, WebP, GIF, AVIF, BMP, etc.) via `createImageBitmap`
+// and re-encodes it as PNG bytes within `MAX_IMAGE_PIXELS` and `max` bytes.
+async function transcodeImageToPng(blob, max) {
+    if (typeof globalThis.createImageBitmap !== 'function') return undefined;
+    let bitmap;
+    try {
+        bitmap = await globalThis.createImageBitmap(blob);
+    } catch {
+        return undefined;
+    }
+    try {
+        const w = bitmap.width | 0, h = bitmap.height | 0;
+        if (w <= 0 || h <= 0 || w * h > MAX_IMAGE_PIXELS) return undefined;
+        let canvas, ctx;
+        if (typeof globalThis.OffscreenCanvas === 'function') {
+            canvas = new globalThis.OffscreenCanvas(w, h);
+            ctx = canvas.getContext('2d');
+        } else if (typeof globalThis.document?.createElement === 'function') {
+            canvas = globalThis.document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            ctx = canvas.getContext('2d');
+        }
+        if (!ctx) return undefined;
+        ctx.drawImage(bitmap, 0, 0);
+        if (typeof canvas.convertToBlob === 'function') {
+            const out = await canvas.convertToBlob({ type: 'image/png' });
+            return out && out.size > 0 && out.size <= max ? new Uint8Array(await out.arrayBuffer()) : undefined;
+        }
+        if (typeof canvas.toBlob === 'function') {
+            const out = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+            return out && out.size > 0 && out.size <= max ? new Uint8Array(await out.arrayBuffer()) : undefined;
+        }
+        if (typeof ctx.getImageData === 'function') {
+            const data = ctx.getImageData(0, 0, w, h)?.data;
+            if (!data) return undefined;
+            const res = await encodePngAsync(w, h, new Uint8Array(data.buffer, data.byteOffset, data.byteLength), false, max);
+            return res?.png;
+        }
+        return undefined;
+    } catch {
+        return undefined;
+    } finally {
+        bitmap.close?.();
+    }
+}
+
 // `{ text, html, png }`, each undefined when the clipboard lacks it; `html` only when `rich`,
 // and `png` (a Uint8Array of at most `maxImage` bytes) only when `image`. `read()` starts
 // before the first await, inside the input handler; where it fails, plain `readText()` is the
@@ -343,7 +398,10 @@ export async function readClipboard(rich, image, maxImage) {
             for (const item of await clipboard.read()) {
                 if (text === undefined && item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
                 if (html === undefined && item.types.includes('text/html')) html = await (await item.getType('text/html')).text();
-                if (image && png === undefined && item.types.includes('image/png')) png = await pngBytes(await item.getType('image/png'), maxImage);
+                if (image && png === undefined) {
+                    const imgType = item.types.includes('image/png') ? 'image/png' : item.types.find(isRasterImageType);
+                    if (imgType) png = await pngBytes(await item.getType(imgType), maxImage);
+                }
             }
             return { text, html, png };
         } catch {}
@@ -351,9 +409,15 @@ export async function readClipboard(rich, image, maxImage) {
     return { text: await clipboard.readText() };
 }
 
-// A PNG blob's bytes, or undefined when it's larger than `max`.
+// A PNG or raster image blob's PNG bytes, or undefined when unsupported or larger than `max`.
 export async function pngBytes(blob, max) {
-    return blob && blob.size <= max ? new Uint8Array(await blob.arrayBuffer()) : undefined;
+    if (!blob) return undefined;
+    const type = String(blob.type ?? '').toLowerCase();
+    if (!type || type === 'image/png') {
+        return blob.size <= max ? new Uint8Array(await blob.arrayBuffer()) : undefined;
+    }
+    if (isRasterImageType(type)) return transcodeImageToPng(blob, max);
+    return undefined;
 }
 
 // Opens `url` in a new tab with no opener or referrer. False when no click or key press was

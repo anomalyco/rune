@@ -8,7 +8,7 @@ extern "C" {
     #[wasm_bindgen(js_name = isMac)]
     fn is_mac() -> bool;
     fn mount(canvas: &web_sys::HtmlCanvasElement, callback: &js_sys::Function, embedded: bool, fit_height: bool, document: bool) -> JsValue;
-    fn sync(handle: &JsValue, key: &str, text: &str, base: usize, anchor: u32, focus: u32, secure: bool);
+    fn sync(handle: &JsValue, key: &str, text: &str, base: usize, anchor: u32, focus: u32, secure: bool, single_line: bool, input_mode: &str, autofill: &str, peer_key: &str, peer_secure: bool, peer_autofill: &str, peer_type: &str);
     #[wasm_bindgen(js_name = syncCopy)]
     fn sync_copy(handle: &JsValue, text: &str);
     #[wasm_bindgen(js_name = syncA11y)]
@@ -150,6 +150,12 @@ impl Bridge {
     pub(super) fn show_menu(&self, show: &crate::popup_menu::Show, dark: bool) {
         show_menu(&self.handle, &show.menu.to_json().to_string(), show.at.0, show.at.1, show.min_width, dark);
     }
+
+    fn sync_mirror(&self) {
+        let m = &self.mirror;
+        let (pk, ps, pa, pt) = m.peer.as_ref().map_or(("", false, "", ""), |p| (p.key.as_str(), p.secure, p.autofill, p.html_type));
+        sync(&self.handle, &m.key, &m.text, m.base, m.anchor, m.focus, m.secure, m.single_line, m.input_mode.as_html(), m.autofill.map_or("", crate::Autofill::as_html), pk, ps, pa, pt);
+    }
 }
 impl Drop for Bridge {
     fn drop(&mut self) {
@@ -190,8 +196,7 @@ impl Running {
         // input prematurely from a mid-tap `requestAnimationFrame` outside any user gesture.
         let defer_touch_sync = !focus && self.app.rt().touching();
         if !defer_touch_sync && (self.app.rt().web_context(&mut self.input.mirror) || reset) {
-            let m = &self.input.mirror;
-            sync(&self.input.handle, &m.key, &m.text, m.base, m.anchor, m.focus, m.secure);
+            self.input.sync_mirror();
         }
         let next_copy = self.app.copy_text().unwrap_or_default();
         if self.input.copy_cache != next_copy {
@@ -292,10 +297,7 @@ impl Running {
     /// false when a whole frame has to run inside this event instead.
     fn sync_live_edit(&mut self) -> bool {
         let Some(changed) = self.app.web_edit_context(&mut self.input.mirror) else { return false };
-        if changed {
-            let m = &self.input.mirror;
-            sync(&self.input.handle, &m.key, &m.text, m.base, m.anchor, m.focus, m.secure);
-        }
+        if changed { self.input.sync_mirror(); }
         true
     }
 
@@ -538,6 +540,11 @@ impl Running {
             Some("secure_replace") => {
                 if let serde_json::Value::String(text) = event["text"].take() {
                     self.app.web_secure_replace(event["key"].as_str().unwrap_or_default(), text);
+                }
+            }
+            Some("autofill") => {
+                if let serde_json::Value::String(text) = event["text"].take() {
+                    self.app.web_autofill(event["key"].as_str().unwrap_or_default(), text, event["secure"].as_bool() == Some(true));
                 }
             }
             Some("key") => activate = self.app.web_key(event),

@@ -69,7 +69,7 @@ pub use grid::{GridRow, grid};
 pub use handlers::{Drag, Phase, PointerEvent, PointerPress, SwipeEdge};
 pub(crate) use handlers::{A11yActionFn, AnyPressFn, DragEndFn, DragFn, DragOutFn, InputKeyFn, PointerFn, PointerMotionFn, PressFn, SetValueFn, StepFn, StepLimitFn, WindowDrag};
 pub(crate) use help::{HELP_KEY, HELP_ROW, help_words};
-pub use input::{InputSpec, auto_grow, edit_access, text_input};
+pub use input::{Autofill, InputMode, InputSpec, auto_grow, edit_access, text_input};
 pub use items::VirtualItems;
 #[doc(hidden)]
 pub use layout::PathBind;

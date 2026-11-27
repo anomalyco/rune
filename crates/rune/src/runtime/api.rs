@@ -896,6 +896,12 @@ impl<S: 'static> Runtime<S> {
     }
     #[cfg(any(test, target_arch = "wasm32"))]
     #[inline(always)]
+    pub(crate) fn web_autofill(&mut self, key: &str, text: String, secure: bool) {
+        let (core, mut app) = self.split_mut();
+        core.web_autofill(&mut app, key, text, secure);
+    }
+    #[cfg(any(test, target_arch = "wasm32"))]
+    #[inline(always)]
     pub(crate) fn web_edit(&mut self, event: &serde_json::Value, mirror: &mut web_runtime::Mirror) {
         let (core, mut app) = self.split_mut();
         core.web_edit(&mut app, event, mirror);
