@@ -35,11 +35,16 @@ pub enum ContentSizing {
     #[default]
     Fixed,
     /// Fit both width and height to the root element's natural layout size, clamped to
-    /// `min_size`, `max_size`, and the target display's work area.
+    /// `min_size`, `max_size`, and the target display's sizing bounds (on Windows,
+    /// [`Display::work_area`](crate::Display::work_area) for edge placements and full display
+    /// bounds for [`OverlayPlacement::Rect`](crate::OverlayPlacement::Rect); full display bounds
+    /// on other platforms).
     Fit,
-    /// Keep width fixed and fit height to the root element's natural layout height.
+    /// Keep width fixed and fit height to the root element's natural layout height, clamped to
+    /// `min_size`, `max_size`, and the target display's sizing bounds (see [`Self::Fit`]).
     FitHeight,
-    /// Fit width to the root element's natural layout width and keep height fixed.
+    /// Fit width to the root element's natural layout width and keep height fixed, clamped to
+    /// `min_size`, `max_size`, and the target display's sizing bounds (see [`Self::Fit`]).
     FitWidth,
 }
 
@@ -266,9 +271,33 @@ impl WaylandResize {
     }
 }
 
+/// Selects the physical pixel bounds `(width, height)` that cap fitted axes on a display.
+///
+/// Mirrors `overlay::placement::position_in`: edge placements (`None` and
+/// `OverlayPlacement::Edge`) use `work_area_size` when available (Windows `rcWork`), while
+/// `OverlayPlacement::Rect` and `OverlayPlacement::FullScreen` stay in full `display_size`
+/// coordinates.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+pub(crate) fn target_area_px(
+    placement: Option<OverlayPlacement>,
+    display_size: (u32, u32),
+    work_area_size: Option<(u32, u32)>,
+) -> (u32, u32) {
+    match placement {
+        Some(OverlayPlacement::FullScreen | OverlayPlacement::Rect { .. }) => display_size,
+        Some(OverlayPlacement::Edge { .. }) | None => work_area_size.unwrap_or(display_size),
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl super::OverlayCore {
-    /// Resolves `(work_area_points, backing_scale)` for the overlay's target display.
+    /// Resolves `(display_bounds_points, backing_scale)` for the overlay's target display.
+    ///
+    /// On Windows, edge placements (`None` and `OverlayPlacement::Edge`) use `rcWork`
+    /// (`Display::work_area`), whereas `OverlayPlacement::Rect` and `OverlayPlacement::FullScreen`
+    /// use full display bounds to match `overlay::placement::position_in`. Other platforms use
+    /// full display bounds for all placements.
     pub(super) fn target_metrics(
         &self,
         event_loop: &winit::event_loop::ActiveEventLoop,
@@ -310,15 +339,11 @@ impl super::OverlayCore {
             let area = monitor.map(|m| {
                 let s = m.scale_factor() as f32;
                 #[cfg(target_os = "windows")]
-                let px = if matches!(
+                let px = target_area_px(
                     self.options.placement,
-                    Some(OverlayPlacement::FullScreen | OverlayPlacement::Rect { .. })
-                ) {
-                    (m.size().width, m.size().height)
-                } else {
-                    crate::platform::win32::work_area(&m)
-                        .map_or((m.size().width, m.size().height), |(_, size)| size)
-                };
+                    (m.size().width, m.size().height),
+                    crate::platform::win32::work_area(&m).map(|(_, size)| size),
+                );
                 #[cfg(not(target_os = "windows"))]
                 let px = (m.size().width, m.size().height);
                 (px.0 as f32 / s, px.1 as f32 / s)
