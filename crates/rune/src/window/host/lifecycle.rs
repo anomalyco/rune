@@ -984,8 +984,8 @@ impl Host {
         // after any Fn change the monitor saw first.
         #[cfg(target_os = "macos")]
         {
-            self.fn_key();
-            self.media_keys();
+            self.fn_key(None);
+            self.media_keys(None);
         }
     }
 
