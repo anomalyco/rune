@@ -274,20 +274,20 @@ impl RuntimeCore {
         // paints in one run unless it holds a node lifted out to paint last.
         let lifted = !self.motion.flying.is_empty() || self.tree.has_raise || self.paint.has_lifted_anchors();
         let shareable = !lifted && self.motion.flights().is_empty() && self.paint.paint_rank.is_none()
-            && self.kbd.modal_scope.is_none() && !self.commit.defaults.force_focus_rings && !disabled();
+            && !self.commit.defaults.force_focus_rings && !disabled();
         let key = shareable.then(|| {
             let mut h = rune_motion::Fx::default();
             bits(&mut h, &[self.env.scale]);
             bits(&mut h, &vp);
             (self.paint.srgb_blend, self.track_marks, self.reduced_motion, self.host.system_reduced_transparency, self.env.system_dark, self.text.emit_key(), self.tree.has_sticky, tree_order).hash(&mut h);
-            (self.kbd.focus.path(), self.kbd.focus.keyboard(), self.kbd.focus.shown()).hash(&mut h);
+            (self.kbd.focus.path(), self.kbd.focus.keyboard(), self.kbd.focus.shown(), self.kbd.focus.entered_by_keys()).hash(&mut h);
             default_ring.map(|i| self.tree.nodes[i].id).hash(&mut h);
             let ring = self.default_focus_ring();
             bits(&mut h, &[ring.width, ring.offset, ring.color.r, ring.color.g, ring.color.b, ring.color.a]);
             h.finish()
         });
         if logging() && !shareable {
-            eprintln!("rune: paint keep off: raise {}, text flights {}, flying {}, rank {}, modal {}", self.tree.has_raise, self.motion.flights().len(), self.motion.flying.len(), self.paint.paint_rank.is_some(), self.kbd.modal_scope.is_some());
+            eprintln!("rune: paint keep off: raise {}, text flights {}, flying {}, rank {}", self.tree.has_raise, self.motion.flights().len(), self.motion.flying.len(), self.paint.paint_rank.is_some());
         }
         let k = &mut self.paint.keep;
         k.recording = !lifted;
@@ -752,11 +752,13 @@ fn twin<T>(now: &mut Vec<T>, was: &Vec<T>) {
     }
 }
 
-/// The per-node rows paint reads besides the node.
+/// The per-node rows and modal membership paint reads besides the node.
 fn own_key(rt: &RuntimeCore, i: usize) -> u64 {
     let mut h = rune_motion::Fx::default();
     bits(&mut h, &[rt.paint.row_dy[i], rt.paint.row_h[i], rt.paint.row_mask[i]]);
-    h.write_u8((rt.tree.has_dissolve && rt.paint.dissolve_scratch.get(i).copied().unwrap_or(false)) as u8);
+    let flags = ((rt.tree.has_dissolve && rt.paint.dissolve_scratch.get(i).copied().unwrap_or(false)) as u8)
+        | ((rt.modal_member(i) as u8) << 1);
+    h.write_u8(flags);
     h.finish()
 }
 
@@ -767,6 +769,7 @@ fn static_ok(n: &Node) -> bool {
         && n.vis.surface.is_none() && n.material.is_none() && !n.vis_flags.cache() && !n.vis_flags.raise()
         && n.vis.backdrop_blur <= 0.0 && n.vis.effect.is_none() && n.vis.pixels.is_none() && n.vis.web_image.is_none()
         && n.sticky.is_none() && n.above.is_none() && n.matched.is_none()
+        && !n.cold.get().is_some_and(|c| c.help_open)
         && n.static_scale == 1.0 && !n.scale_track && n.vis.mark == 0
         && n.text.as_ref().is_none_or(|t| t.cold.links.is_empty() && t.cold.advance_in.is_none()
             && !t.cold.pills.iter().any(crate::text::PillChip::has_image))

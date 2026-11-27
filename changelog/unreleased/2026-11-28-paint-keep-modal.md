@@ -1,0 +1,1 @@
+- Paint reuse (`PaintKeep`): keep copying unchanged background and modal subtrees while a modal is open instead of disabling paint keep window-wide, keying per-node modal membership into `own_key` so hit registrations drop behind an active modal and restore on close.
