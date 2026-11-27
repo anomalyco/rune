@@ -781,7 +781,15 @@ impl RuntimeCore {
             next_cold.scale_target = if cover.is_some() { scale } else { scale_target };
             next_cold.press_off_by = if cover.is_some() { [0.0; 2] } else { press_off_by };
             next_cold.snap_layer = if cover.is_some() { 0 } else { snap_layer };
-            next_cold.snap_parent = snap_rest.filter(|_| cover.is_none() && next_rigid == pinh.rigid && pixel_snap::frames(&n.vis));
+            next_cold.snap_parent = snap_rest.filter(|_| {
+                cover.is_none()
+                    && next_rigid == pinh.rigid
+                    && pixel_snap::frames(&n.vis)
+                    && (self.tree.nodes.get(i + 1).is_some_and(|c| c.parent == Some(i))
+                        || self.scene.exiting().iter().any(|&eid| {
+                            self.tree.node_index.get(&eid).is_some_and(|&ci| self.tree.nodes[ci].parent == Some(i))
+                        }))
+            });
             let cold_idx = self.paint.store_inh_cold(parent_cold, next_cold);
             self.paint.inh_scratch[i] = Inh {
                 opacity: effective_opacity,
