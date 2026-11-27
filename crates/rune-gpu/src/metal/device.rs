@@ -15,7 +15,8 @@ use objc2_metal::{MTLCommandQueue, MTLDevice, MTLLanguageVersion, MTLLibrary, MT
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
-use super::encode::{Inert, MetalEncoder, Zeros, zero_shared_texture, zero_texture};
+use super::cache::PipelineCache;
+use super::encode::{MetalEncoder, Zeros, zero_shared_texture, zero_texture};
 use super::layout::{BindGroup, BindGroupLayout, PipelineLayout};
 use super::resource::{Live, MetalBuffer, MetalSampler, MetalTexture};
 use super::shader::ShaderModule;
@@ -214,7 +215,9 @@ impl DeviceInterface for MetalDevice {
     fn create_compute_pipeline(&self, desc: &wgpu::ComputePipelineDescriptor<'_>) -> DispatchComputePipeline {
         DispatchComputePipeline::custom(super::compute::create(&self.shared, desc))
     }
-    unsafe fn create_pipeline_cache(&self, _: &wgpu::PipelineCacheDescriptor<'_>) -> DispatchPipelineCache { DispatchPipelineCache::custom(Inert) }
+    unsafe fn create_pipeline_cache(&self, desc: &wgpu::PipelineCacheDescriptor<'_>) -> DispatchPipelineCache {
+        DispatchPipelineCache::custom(PipelineCache::new(&self.shared.device, desc))
+    }
     fn create_buffer(&self, desc: &wgpu::BufferDescriptor<'_>) -> DispatchBuffer {
         DispatchBuffer::custom(MetalBuffer::new(&self.shared, desc.size, desc.label))
     }

@@ -89,10 +89,6 @@ pub(super) struct Recorded {
     pub(super) shared: Arc<Shared>,
 }
 
-/// Pipeline caches: accepted and ignored.
-#[derive(Debug)]
-pub(crate) struct Inert;
-
 send_sync!(Rec, Recorded);
 
 impl Rec {
@@ -565,7 +561,3 @@ impl CommandEncoderInterface for MetalEncoder {
 }
 
 impl CommandBufferInterface for MetalCommandBuffer {}
-
-impl PipelineCacheInterface for Inert {
-    fn get_data(&self) -> Option<Vec<u8>> { None }
-}

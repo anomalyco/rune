@@ -152,6 +152,11 @@ impl Lease {
 ///   compositor's next frame has a new key and a new handle to build on.
 /// - **Matching frames.** What a handle made draws in frames whose `device_key` is its
 ///   [`GpuHandle::key`].
+/// - **Pipelines.** Build them on a worker too, while Rune draws the first frames. Pass a
+///   `wgpu::PipelineCache` when `device.features()` has `PIPELINE_CACHE` (Rune's native Metal
+///   device does; wgpu's Metal backend doesn't): save its `get_data` and pass it back on the next
+///   launch, and pipelines it holds are made without compiling. Stale data (another GPU, OS or
+///   Rune build) just compiles again.
 /// - **Ordering.** `Queue::write_buffer` and `write_texture` calls land ahead of the queue's next
 ///   submission, so a resource handed to the compositor after `with` returns has its bytes in the
 ///   frame that draws it. Command buffers a worker submits run in submission order with Rune's

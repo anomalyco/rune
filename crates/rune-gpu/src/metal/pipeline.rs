@@ -8,13 +8,14 @@ use std::sync::Arc;
 #[cfg(debug_assertions)]
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlendFactor, MTLBlendOperation, MTLColorWriteMask, MTLCullMode, MTLDevice, MTLPixelFormat, MTLPrimitiveTopologyClass,
+    MTLBinaryArchive, MTLBlendFactor, MTLBlendOperation, MTLColorWriteMask, MTLCullMode, MTLDevice, MTLPipelineOption, MTLPixelFormat, MTLPrimitiveTopologyClass,
     MTLPrimitiveType, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLTriangleFillMode, MTLVertexDescriptor, MTLVertexFormat,
     MTLVertexStepFunction, MTLWinding,
 };
 use wgpu::custom::*;
 use wgpu::naga;
 
+use super::cache::PipelineCache;
 use super::derive::{self, Use};
 use super::layout::{LayoutRaw, PipelineLayout};
 use super::resource::{Live, pixel_format};
@@ -215,8 +216,11 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
         unsafe { d.setInputPrimitiveTopology(class) };
         d.setRasterSampleCount(desc.multisample.count as usize);
         d.setAlphaToCoverageEnabled(desc.multisample.alpha_to_coverage_enabled);
-        let state = shared.device.newRenderPipelineStateWithDescriptor_error(&d)
-            .map_err(|e| e.localizedDescription().to_string())?;
+        let make = |options| shared.device.newRenderPipelineStateWithDescriptor_options_reflection_error(&d, options, None);
+        let state = match PipelineCache::of(desc.cache) {
+            Some(cache) => cache.make(|archives| d.setBinaryArchives(Some(archives)), |archive| archive.addRenderPipelineFunctionsWithDescriptor_error(&d).is_ok(), make),
+            None => make(MTLPipelineOption::empty()),
+        }.map_err(|e| e.localizedDescription().to_string())?;
         Ok((state, sized))
     })();
     let (state, sized) = match built {

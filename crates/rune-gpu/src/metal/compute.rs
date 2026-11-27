@@ -11,13 +11,14 @@ use std::sync::atomic::Ordering;
 
 #[cfg(debug_assertions)]
 use objc2_foundation::NSString;
-use objc2_metal::{MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineDescriptor, MTLComputePipelineState, MTLDevice, MTLPipelineOption, MTLSize};
+use objc2_metal::{MTLBinaryArchive, MTLCommandBuffer, MTLCommandEncoder, MTLComputeCommandEncoder, MTLComputePassDescriptor, MTLComputePipelineDescriptor, MTLComputePipelineState, MTLDevice, MTLPipelineOption, MTLSize};
 use objc2::rc::autoreleasepool;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 use wgpu::naga;
 
 use crate::lazy_init::Event;
+use super::cache::PipelineCache;
 use super::derive::{self, Use};
 use super::encode::Rec;
 use super::layout::{COMPUTE, GroupRaw, LayoutRaw, PipelineLayout};
@@ -58,9 +59,11 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::ComputePipelineDescriptor<'_>
     d.setComputeFunction(Some(&cs.function));
     #[cfg(debug_assertions)]
     if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
-    let state = shared.device
-        .newComputePipelineStateWithDescriptor_options_reflection_error(&d, MTLPipelineOption::empty(), None)
-        .unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()));
+    let make = |options| shared.device.newComputePipelineStateWithDescriptor_options_reflection_error(&d, options, None);
+    let state = match PipelineCache::of(desc.cache) {
+        Some(cache) => cache.make(|archives| d.setBinaryArchives(Some(archives)), |archive| archive.addComputePipelineFunctionsWithDescriptor_error(&d).is_ok(), make),
+        None => make(MTLPipelineOption::empty()),
+    }.unwrap_or_else(|e| panic!("{label}: {}", e.localizedDescription()));
     let [x, y, z] = cs.workgroup.map(|n| n as usize);
     let workgroup_memory = cs.workgroup_memory.into_iter().map(|size| size.next_multiple_of(16)).collect();
     ComputePipeline {

@@ -3536,6 +3536,13 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
   handle holds the device weakly, so it never keeps a lost device alive; drop what was made on it
   when it's lost, and take a new handle when `Frame::device_key()` changes (`handle.key()` is the
   key of the frames it draws in).
+- **Pipeline caches.** Rune's native Metal device has `Features::PIPELINE_CACHE`:
+  `device.create_pipeline_cache` with the bytes an earlier `PipelineCache::get_data` returned, passed
+  as a pipeline descriptor's `cache`, makes the pipelines it holds without compiling them for the
+  GPU (vello's: about 7 ms instead of 0.3 to 2 s cold). Data from another GPU, macOS build or format
+  starts an empty cache and compiles as usual; it never fails. Loading and `get_data` go through a
+  temporary file, so make and save caches off the frame (a `GpuHandle` worker). wgpu's Metal
+  backend has no pipeline cache: check the feature and pass `None` there.
 - **Terminal GPU loss policy (`GpuLossPolicy::Terminal`).** Apps embedding a renderer with
   device-bound resources that cannot silently migrate to a replacement device can opt in via
   `App::gpu_loss_policy(GpuLossPolicy::Terminal)` or `WindowSpec::gpu_loss_policy`. The first GPU

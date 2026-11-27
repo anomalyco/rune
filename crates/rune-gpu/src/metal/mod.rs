@@ -24,7 +24,8 @@
 //! (`texture_from_raw`) whose owner the bind groups and command buffers using them keep.
 //! Compute passes (indirect dispatches included), timestamps at pass boundaries
 //! (`TIMESTAMP_QUERY`), and immediates (`IMMEDIATES`, set as inline vertex and fragment bytes, up
-//! to Metal's 4 KB) are as wgpu-hal's.
+//! to Metal's 4 KB) are as wgpu-hal's. Pipeline caches (`PIPELINE_CACHE`) keep pipelines' GPU code
+//! in an `MTLBinaryArchive` (`cache`).
 //! New textures read as zero, as wgpu promises. A pipeline without a layout derives one from
 //! its shaders, as wgpu-core does (`derive`). Other queries, render bundles, indirect draws,
 //! depth and multisampling are not implemented: they panic naming the way back to wgpu
@@ -33,6 +34,9 @@
 #[doc(hidden)]
 pub mod bench;
 mod builtin;
+mod cache;
+#[cfg(test)]
+mod cache_tests;
 mod compute;
 #[cfg(test)]
 mod compute_tests;
@@ -125,7 +129,7 @@ pub fn builtin_misses() -> usize { builtin::misses() }
 
 /// The wgpu features this backend can offer: a compositor that wants others draws with wgpu
 /// unless the app or `RUNE_GPU_BACKEND` asked for this backend (`backend::wgpu_for`).
-pub(crate) const FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::IMMEDIATES);
+pub(crate) const FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::IMMEDIATES).union(wgpu::Features::PIPELINE_CACHE);
 
 /// The most immediate data a pipeline takes: what `setVertexBytes` and `setFragmentBytes` copy.
 const MAX_IMMEDIATE_SIZE: u32 = 4096;

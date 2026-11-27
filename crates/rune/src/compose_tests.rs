@@ -203,9 +203,10 @@ const DOUBLE: &str = r#"
 fn main(@builtin(global_invocation_id) id: vec3<u32>) { v[id.x] = v[id.x] * 2u + 1u; }
 "#;
 
-/// A worker uploads, compiles a compute pipeline and submits on `gpu` through its handle while
-/// this thread submits on the same queue; returns what the worker's dispatch wrote.
-fn worker_builds_on(gpu: Gpu) -> Vec<u32> {
+/// A worker uploads, compiles a compute pipeline (through a pipeline cache when the device has
+/// them) and submits on `gpu` through its handle while this thread submits on the same queue;
+/// returns what the worker's dispatch wrote and whether the cache had data to save.
+fn worker_builds_on(gpu: Gpu) -> (Vec<u32>, bool) {
     use wgpu::BufferUsages as B;
     let mut renderer = Renderer::new(&gpu.device, OFFSCREEN_FORMAT);
     renderer.attach_gpu(&gpu);
@@ -216,8 +217,13 @@ fn worker_builds_on(gpu: Gpu) -> Vec<u32> {
         let finished = Arc::clone(&finished);
         move || handle.with(|device, queue| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("double"), source: wgpu::ShaderSource::Wgsl(DOUBLE.into()) });
+            // SAFETY: no data, so nothing for the backend to trust.
+            #[allow(unsafe_code)]
+            let cache = device.features().contains(wgpu::Features::PIPELINE_CACHE).then(|| unsafe {
+                device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor { label: None, data: None, fallback: true })
+            });
             let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("double"), layout: None, module: &module, entry_point: Some("main"), compilation_options: Default::default(), cache: None,
+                label: Some("double"), layout: None, module: &module, entry_point: Some("main"), compilation_options: Default::default(), cache: cache.as_ref(),
             });
             let values = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: B::STORAGE | B::COPY_DST | B::COPY_SRC, mapped_at_creation: false });
             queue.write_buffer(&values, 0, bytemuck::cast_slice(&[1u32, 2, 3, 4]));
@@ -236,7 +242,7 @@ fn worker_builds_on(gpu: Gpu) -> Vec<u32> {
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
             assert!(done.load(Ordering::Acquire), "the worker waits for its own work off the frame");
             finished.store(true, Ordering::Release);
-            values
+            (values, cache.and_then(|cache| cache.get_data()).is_some())
         })
     });
     let busy = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 256, usage: wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -246,21 +252,27 @@ fn worker_builds_on(gpu: Gpu) -> Vec<u32> {
         gpu.queue.submit([encoder.finish()]);
         gpu.device.poll(wgpu::PollType::Poll).ok();
     }
-    let values = worker.join().unwrap().expect("the device is live");
+    let (values, cached) = worker.join().unwrap().expect("the device is live");
     let out = gpu.device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 16, usage: B::COPY_DST | B::MAP_READ, mapped_at_creation: false });
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     encoder.copy_buffer_to_buffer(&values, 0, &out, 0, 16);
     gpu.queue.submit([encoder.finish()]);
     out.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    bytemuck::cast_slice(&out.slice(..).get_mapped_range().unwrap()).to_vec()
+    (bytemuck::cast_slice(&out.slice(..).get_mapped_range().unwrap()).to_vec(), cached)
 }
 
 #[test]
 fn gpu_handle_builds_and_uploads_from_a_worker_thread() {
     for gpu in [Gpu::test_headless(), Gpu::test_headless_wgpu()].into_iter().flatten() {
         let backend = gpu.device.adapter_info().driver;
-        assert_eq!(worker_builds_on(gpu), [3, 5, 7, 9], "on {backend:?}");
+        #[cfg(all(target_vendor = "apple", feature = "metal-backend"))]
+        let native = crate::gpu::metal::raw_device(&gpu.device).is_some();
+        #[cfg(not(all(target_vendor = "apple", feature = "metal-backend")))]
+        let native = false;
+        let (values, cached) = worker_builds_on(gpu);
+        assert_eq!(values, [3, 5, 7, 9], "on {backend:?}");
+        assert!(cached || !native, "Rune's native Metal device has pipeline caches, saved from the worker");
     }
 }
 
