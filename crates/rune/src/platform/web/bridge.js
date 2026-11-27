@@ -1,7 +1,6 @@
 // Browser text services and semantic DOM accessibility mirror.
-const MAC = /Mac|iP/.test(navigator.platform);
 const coarse = () => matchMedia('(pointer: coarse)').matches;
-export function isMac() { return MAC; }
+export function isMac() { return /Mac|iP/.test(globalThis.navigator?.platform ?? ''); }
 
 // Detects platforms whose browser dispatches touch `contextmenu` while the finger is still down
 // (Android, ChromeOS, Linux). Excludes Windows (Chrome defers touch contextmenu until finger lift
@@ -216,7 +215,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         selection: null, copyText: '', composing: false, composition: '', shift: false, modBits: 0, listeners: [], syncing: false, disposed: false,
         embedded, fitHeight, page, focused: false, presented: false, swapped: false, touchDown: false,
         touchTimestamps: [], touchHoldConfirm: null, activeTouchId: null, a11yTouchId: null,
-        hoverLink: null, hoverLinkLeave: null, hoverClientX: NaN, hoverClientY: NaN,
+        hoverLink: null, hoverLinkLeave: null, hoverLinkBefore: null, hoverClientX: NaN, hoverClientY: NaN,
         forwarding: false, pendingLinkDrag: null, suppressLinkClickUntil: 0,
         lastScrollAt: 0, staticTimer: 0, scrollEls: new Map(), band, mediaKeys: false,
         visualViewport: null, keyboardShiftY: 0, pendingFieldBlur: false, domFocused: false, focusGen: 0, reconcileRaf: 0, reconcileTimer: 0, reconcileFollowUp: false,
@@ -441,11 +440,11 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     listen(window, 'keyup', event => {
         if (event.target === canvas && MOD_KEYS.includes(event.key)) syncMods(event);
     }, { passive: true });
-    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); });
+    listen(window, 'blur', () => { h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); disarmMenu(h); });
     listen(window, 'focus', () => { if (h.key && h.domFocused && document.activeElement !== h.field) scheduleReconcile(false); });
     listen(document, 'visibilitychange', () => {
         if (document.hidden) {
-            h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h);
+            h.modBits = 0; h.activeTouchId = null; h.a11yTouchId = null; h.pendingLinkDrag = null; h.pendingFieldBlur = false; clearAllPointerEndTimers(); h.pressedPointers.clear(); applyKeyboardShift(h); disarmLink(h); disarmMenu(h);
         } else if (h.key && h.domFocused && document.activeElement !== h.field) {
             scheduleReconcile(false);
         }
@@ -781,12 +780,7 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
         // Block native HTML link-drag ghosts so a primary drag starting on an armed link promotes
         // into a Rune text-selection drag instead of cancelling pointer moves.
         listen(a11y, 'dragstart', event => event.preventDefault());
-        listen(a11y, 'click', event => {
-            if (h.suppressLinkClickUntil > performance.now()) {
-                h.suppressLinkClickUntil = 0;
-                event.preventDefault();
-            }
-        });
+        listen(a11y, 'click', event => { consumeSuppressedClick(h, event); }, { capture: true });
         if (!fitHeight) {
             listen(a11y, 'touchstart', event => event.preventDefault(), { passive: false });
         }
@@ -859,12 +853,13 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
     // field), never the canvas's image menu; Shift+right-click always opens the browser's. Armed
     // before the menu's event, which on Windows and Linux follows the release; macOS's follows the
     // press, which Rune has just heard (`syncSecondary`).
-    const isSecondaryPress = event => event.button === 2 || (MAC && event.button === 0 && event.ctrlKey);
+    const mac = isMac();
+    const isSecondaryPress = event => event.button === 2 || (mac && event.button === 0 && event.ctrlKey);
     const armAt = event => {
         if (!isSecondaryPress(event) || event.pointerType === 'touch' || event.target !== canvas) return;
         if (armMenu(h, event.clientX, event.clientY, event.shiftKey)) send({ kind: 'secondary_browser' });
     };
-    if (MAC) listen(canvas, 'pointerdown', armAt);
+    if (mac) listen(canvas, 'pointerdown', armAt);
     else listen(window, 'pointerup', armAt, { capture: true });
     listen(document, 'contextmenu', event => {
         const touchOrigin = event.target === canvas
@@ -877,7 +872,10 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             send({ kind: 'touch_hold', id });
             return;
         }
-        if (h.menu === 'rune' || event.target === canvas) event.preventDefault();
+        // When armMenu armed the browser's menu (h.menu === 'browser') and already abandoned Rune's
+        // menu via secondary_browser, never suppress contextmenu even if Safari/Firefox on macOS
+        // still resolved contextmenu's target to canvas.
+        if (h.menu === 'rune' || (h.menu !== 'browser' && event.target === canvas)) event.preventDefault();
         if (h.menu === 'rune') h.menu = '';
     }, { capture: true });
     for (const name of ['pointerdown', 'keydown', 'wheel']) {
@@ -1448,18 +1446,37 @@ function linkContains(h, a, x, y) {
     return true;
 }
 
-// The mirror's web link under (x, y), if any.
+function consumeSuppressedClick(h, ev) {
+    if (h.suppressLinkClickUntil > performance.now()) {
+        h.suppressLinkClickUntil = 0;
+        ev.preventDefault();
+        return true;
+    }
+    return false;
+}
+
+// Forces a synchronous style/layout commit so engines that re-hit-test for contextmenu right after
+// pointerdown see the updated pointer-events box immediately.
+function flushLayout(el) {
+    if (typeof el?.getBoundingClientRect === 'function') el.getBoundingClientRect();
+    else void el?.offsetWidth;
+}
+
+// The mirror's navigable link under (x, y), if any (both external and same-origin links, skipping
+// disabled anchors and opaque non-URL action links).
 function linkAt(h, x, y) {
-    for (const a of h.a11y.querySelectorAll('a[target="_blank"]')) {
+    for (const a of h.a11y.querySelectorAll('a[href]')) {
+        if (a._opaqueLink || a.getAttribute('aria-disabled') === 'true') continue;
         if (linkContains(h, a, x, y)) return a;
     }
     return null;
 }
 
 function armLink(h, a) {
-    if (h.hoverLink === a) return;
+    if (!a || h.hoverLink === a || a._blockLink) return;
     disarmLink(h);
     h.hoverLink = a;
+    h.hoverLinkBefore = a.style.pointerEvents;
     a.style.pointerEvents = 'auto';
     a.style.cursor = 'pointer';
     const onLeave = () => { if (h.hoverLink === a) disarmLink(h); };
@@ -1473,7 +1490,8 @@ function disarmLink(h) {
         h.hoverLink.removeEventListener('pointerleave', h.hoverLinkLeave);
         h.hoverLinkLeave = null;
     }
-    h.hoverLink.style.pointerEvents = 'none';
+    h.hoverLink.style.pointerEvents = h.hoverLinkBefore || 'none';
+    h.hoverLinkBefore = null;
     h.hoverLink = null;
 }
 
@@ -1500,6 +1518,7 @@ function armMenu(h, x, y, browser) {
         h.fieldArmed = true;
         placeField(h.field, [x - 2, y - 2, 4, 4]);
         h.field.style.pointerEvents = 'auto';
+        flushLayout(h.field);
         return true;
     }
     if (h.copyText) {
@@ -1520,6 +1539,7 @@ function armMenu(h, x, y, browser) {
         const selection = getSelection();
         selection.removeAllRanges();
         selection.addRange(range);
+        flushLayout(h.pick);
         return true;
     }
     // Flush any deferred mirror update synchronously before hit-testing links/text for the menu.
@@ -1528,6 +1548,7 @@ function armMenu(h, x, y, browser) {
     const el = linkAt(h, x, y) ?? textAt(h, x, y) ?? h.a11y;
     h.armed = [el, el.style.pointerEvents];
     el.style.pointerEvents = 'auto';
+    flushLayout(el);
     return true;
 }
 
@@ -1617,7 +1638,9 @@ function firstItem(el) {
 function runs(h, el, item) {
     for (const run of item.u) {
         const href = run.h ? safeHref(run.h) : null;
-        if (!href) { el.append(document.createTextNode(run.t)); continue; }
+        if (run.h && !href) { el.append(document.createTextNode(run.t)); continue; }
+        const hasAction = run.p !== undefined && run.i !== undefined;
+        if (!href && !hasAction) { el.append(document.createTextNode(run.t)); continue; }
         const a = document.createElement('a');
         a.textContent = run.t;
         if (run.d) a.setAttribute('aria-description', run.d);
@@ -1625,13 +1648,23 @@ function runs(h, el, item) {
         if (item.dis) {
             a.setAttribute('role', 'link');
             a.setAttribute('aria-disabled', 'true');
-        } else if (webLink(href)) {
+        } else if (href && webLink(href)) {
             a.href = href;
             a.target = '_blank';
             a.rel = 'noopener noreferrer';
+        } else if (href && href !== '#') {
+            a.href = href;
+            a.addEventListener('click', ev => {
+                if (consumeSuppressedClick(h, ev)) return;
+                if (ev.defaultPrevented || (ev.button ?? 0) !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+                ev.preventDefault();
+                h.send({ kind: 'a11y_link', path: run.p, link: run.i });
+            });
         } else {
             a.href = '#';
+            a._opaqueLink = true;
             a.addEventListener('click', ev => {
+                if (consumeSuppressedClick(h, ev)) return;
                 ev.preventDefault();
                 h.send({ kind: 'a11y_link', path: run.p, link: run.i });
             });
@@ -1717,6 +1750,16 @@ function ensureA11yNode(h, item, tag, key) {
             el.addEventListener('click', ev => {
                 ev.preventDefault();
                 if (el.getAttribute('aria-disabled') === 'true') return;
+                h.send({ kind: 'a11y_press', path: el._a11yPath });
+            });
+        } else if (tag === 'a') {
+            el._blockLink = true;
+            el.addEventListener('click', ev => {
+                if (consumeSuppressedClick(h, ev)) return;
+                if (el.getAttribute('aria-disabled') === 'true') { ev.preventDefault(); return; }
+                if (ev.defaultPrevented || (ev.button ?? 0) !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+                if (el.target === '_blank' || !el._sameTabLink) return;
+                ev.preventDefault();
                 h.send({ kind: 'a11y_press', path: el._a11yPath });
             });
         }
@@ -1854,10 +1897,12 @@ function applyA11yItem(h, el, item, tag, origin) {
         const href = item.dis ? null : safeHref(item.h);
         if (href) {
             el.href = href;
+            el._sameTabLink = !webLink(href) && (!h.page || !href.startsWith('#'));
             if (el.getAttribute('role') === 'link') el.removeAttribute('role');
             if (!h.page && webLink(href)) { el.target = '_blank'; el.rel = 'noopener noreferrer'; }
             else { el.removeAttribute('target'); el.removeAttribute('rel'); }
         } else {
+            el._sameTabLink = false;
             el.removeAttribute('href');
             el.removeAttribute('target');
             el.removeAttribute('rel');
@@ -2529,6 +2574,7 @@ export function destroy(h) {
     h.cancelReconcile?.();
     cancelTouchHoldConfirm(h);
     disarmLink(h);
+    disarmMenu(h);
     h.pendingLinkDrag = null;
     h.a11yTouchId = null;
     h.touchTimestamps.length = 0;

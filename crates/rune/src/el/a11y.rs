@@ -223,17 +223,20 @@ impl A11y {
 
 impl El {
     /// Make this element a link to `url`, as an HTML `<a href>` is: its role is `"link"`, a
-    /// press opens `url` with [`Tx::open_url`](crate::Tx::open_url), and on web the semantic
-    /// mirror puts a real `<a href>` over it, so middle-click, ⌘-click, "Copy Link", the
-    /// keyboard and crawlers treat it as one. A static page export (`--html`) writes it as one
-    /// too. `url` may be relative to the page (`/docs`) or a fragment (`#install`); natively
-    /// those don't open. Its label is its text unless [`El::label`] sets one.
+    /// press opens absolute URLs with [`Tx::open_url`](crate::Tx::open_url) and relative URLs
+    /// (`/docs`, `#install`) with [`Tx::open_url_same_tab`](crate::Tx::open_url_same_tab) (so
+    /// [`App::same_tab_router`](crate::App::same_tab_router) can route them on web; natively
+    /// relative URLs don't open). On web the semantic mirror puts a real `<a href>` over it, so
+    /// middle-click, ⌘-click, "Copy Link", the keyboard and crawlers treat it as one. A static
+    /// page export (`--html`) writes it as one too. Its label is its text unless [`El::label`]
+    /// sets one.
     pub fn href(mut self, url: impl Into<String>) -> Self {
         let url = url.into();
         self.cold_mut().a11y.more().href = Some(url.clone());
         self.set_role_name("link");
         self.handlers.on_press = Some(std::rc::Rc::new(move |_, tx: &mut crate::Tx| {
-            if url.contains(':') { tx.open_url(&url).ok(); }
+            if crate::open_url::has_scheme(&url) { tx.open_url(&url).ok(); }
+            else { tx.open_url_same_tab(&url).ok(); }
         }));
         self
     }
