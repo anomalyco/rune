@@ -1,13 +1,17 @@
 use windows_sys::Win32::Foundation::{POINT, RECT, WPARAM};
-use windows_sys::Win32::UI::WindowsAndMessaging::{HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HTTOP, HTTOPLEFT, HTTOPRIGHT};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    HTCAPTION, HTCLIENT, HTCLOSE, HTMAXBUTTON, HTMINBUTTON, HTTOP, HTTOPLEFT, HTTOPRIGHT,
+    WM_ERASEBKGND, WM_NCACTIVATE, WM_NCCALCSIZE, WM_NCHITTEST,
+};
 
 use crate::titlebar::{Caption, CaptionButton, CaptionState};
 
 use crate::runtime::DragHit;
 
 use super::{
-    DragHitSync, HitWindow, adjust_track_height, client_hit, custom_borders,
+    DragHitSync, HitWindow, UnframedAction, adjust_track_height, client_hit, custom_borders,
     dpi_scaled_outer_size, drag_hit_code, nccalcsize_restored, outer_size, owned_button,
+    unframed_action,
 };
 
 fn caption() -> Caption {
@@ -289,4 +293,12 @@ fn hidden_caption_keeps_top_resize_edge_and_releases_button_area_to_client_or_dr
     let zoomed = HitWindow { zoomed: true, ..at(hidden, 775, 2) };
     assert_eq!(client_hit(&zoomed, &hits), HTCLIENT, "maximized app-drawn close button at y=2");
     assert_eq!(owned(&zoomed, HTCLOSE), None, "maximized hidden caption owns no Close button");
+}
+
+#[test]
+fn unframed_fullscreen_subclass_still_suppresses_erase_and_ncactivate_while_forwarding_geometry() {
+    assert_eq!(unframed_action(WM_ERASEBKGND), UnframedAction::EraseHandled);
+    assert_eq!(unframed_action(WM_NCACTIVATE), UnframedAction::SuppressNcActivate);
+    assert_eq!(unframed_action(WM_NCCALCSIZE), UnframedAction::Forward);
+    assert_eq!(unframed_action(WM_NCHITTEST), UnframedAction::Forward);
 }

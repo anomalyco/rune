@@ -2650,3 +2650,418 @@ index d37580a1d..91583669e 100644
      }
  
      #[inline]
+diff --git a/src/platform_impl/windows/event_loop.rs b/src/platform_impl/windows/event_loop.rs
+index a8181f950..0a1c7c179 100644
+--- a/src/platform_impl/windows/event_loop.rs
++++ b/src/platform_impl/windows/event_loop.rs
+@@ -1186,6 +1186,13 @@ unsafe fn public_window_callback_inner(
+                 result = ProcResult::DefWindowProc(wparam);
+                 return;
+             }
++            if window_flags.intersects(
++                WindowFlags::MARKER_BORDERLESS_FULLSCREEN
++                    | WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN,
++            ) {
++                result = ProcResult::Value(0);
++                return;
++            }
+ 
+             let params = unsafe { &mut *(lparam as *mut NCCALCSIZE_PARAMS) };
+ 
+diff --git a/src/platform_impl/windows/window.rs b/src/platform_impl/windows/window.rs
+index 85dfb5e32..7f9020934 100644
+--- a/src/platform_impl/windows/window.rs
++++ b/src/platform_impl/windows/window.rs
+@@ -32,10 +32,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+ use windows_sys::Win32::UI::Input::Touch::{RegisterTouchWindow, TWF_WANTPALM};
+ use windows_sys::Win32::UI::WindowsAndMessaging::{
+     CreateWindowExW, EnableMenuItem, FlashWindowEx, GetClientRect, GetCursorPos,
+-    GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement, GetWindowTextLengthW,
+-    GetWindowTextW, IsWindowVisible, LoadCursorW, PeekMessageW, PostMessageW, RegisterClassExW,
+-    SetCursor, SetCursorPos, SetForegroundWindow, SetMenuDefaultItem, SetWindowDisplayAffinity,
+-    SetWindowPlacement, SetWindowPos, SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
++    GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement, GetWindowRect,
++    GetWindowTextLengthW, GetWindowTextW, IsWindowVisible, LoadCursorW, PeekMessageW, PostMessageW,
++    RegisterClassExW, SetCursor, SetCursorPos, SetForegroundWindow, SetMenuDefaultItem,
++    SetWindowDisplayAffinity, SetWindowPos, SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
++    WINDOWPLACEMENT,
+     CW_USEDEFAULT, FLASHWINFO, FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG, FLASHW_TRAY,
+     GWLP_HINSTANCE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP,
+     HTTOPLEFT, HTTOPRIGHT, MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY,
+@@ -65,7 +66,7 @@ use crate::platform_impl::platform::ime::ImeContext;
+ use crate::platform_impl::platform::keyboard::KeyEventBuilder;
+ use crate::platform_impl::platform::monitor::{self, MonitorHandle};
+ use crate::platform_impl::platform::window_state::{
+-    CursorFlags, SavedWindow, WindowFlags, WindowState,
++    CursorFlags, FullscreenBounds, SavedWindow, WindowFlags, WindowState,
+ };
+ use crate::platform_impl::platform::{util, Fullscreen, SelectedCursor, WindowId};
+ use crate::window::{
+@@ -776,8 +777,49 @@ impl Window {
+                 PeekMessageW(&mut msg, 0, 0, 0, PM_NOREMOVE);
+             }
+ 
+-            // Update window style
+-            WindowState::set_window_flags(window_state.lock().unwrap(), window, |f| {
++            // Save window bounds before touching styles so restored geometry matches the framed
++            // window and switching between fullscreen modes keeps the original windowed bounds.
++            let bounds = match &fullscreen {
++                Some(fullscreen) => {
++                    if old_fullscreen.is_none() {
++                        let (placement, rect) = unsafe {
++                            let mut placement: WINDOWPLACEMENT = mem::zeroed();
++                            placement.length = mem::size_of::<WINDOWPLACEMENT>() as u32;
++                            GetWindowPlacement(window, &mut placement);
++                            let mut rect: RECT = mem::zeroed();
++                            GetWindowRect(window, &mut rect);
++                            (placement, rect)
++                        };
++                        window_state.lock().unwrap().saved_window =
++                            Some(SavedWindow { placement, rect });
++                    }
++
++                    let monitor = match &fullscreen {
++                        Fullscreen::Exclusive(video_mode) => video_mode.monitor(),
++                        Fullscreen::Borderless(Some(monitor)) => monitor.clone(),
++                        Fullscreen::Borderless(None) => monitor::current_monitor(window),
++                    };
++
++                    let position: (i32, i32) = monitor.position().into();
++                    let size: (u32, u32) = monitor.size().into();
++                    FullscreenBounds::Rect(RECT {
++                        left: position.0,
++                        top: position.1,
++                        right: position.0 + size.0 as i32,
++                        bottom: position.1 + size.1 as i32,
++                    })
++                },
++                None => window_state
++                    .lock()
++                    .unwrap()
++                    .saved_window
++                    .take()
++                    .map_or(FullscreenBounds::FrameOnly, FullscreenBounds::Restore),
++            };
++
++            // Update styles and bounds atomically so DWM never composes a frame between the
++            // style change and the move/resize.
++            WindowState::set_fullscreen_flags(window_state.lock().unwrap(), window, bounds, |f| {
+                 f.set(
+                     WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN,
+                     matches!(fullscreen, Some(Fullscreen::Exclusive(_))),
+@@ -788,59 +830,11 @@ impl Window {
+                 );
+             });
+ 
+-            // Mark as fullscreen window wrt to z-order
+-            //
+-            // this needs to be called before the below fullscreen SetWindowPos as this itself
+-            // will generate WM_SIZE messages of the old window size that can race with what we set
+-            // below
++            // Mark as fullscreen window wrt to z-order after styles and bounds are already final,
++            // matching Chromium's FullscreenHandler::ProcessFullscreen.
+             unsafe {
+                 taskbar_mark_fullscreen(window, fullscreen.is_some());
+-            }
+-
+-            // Update window bounds
+-            match &fullscreen {
+-                Some(fullscreen) => {
+-                    // Save window bounds before entering fullscreen
+-                    let placement = unsafe {
+-                        let mut placement = mem::zeroed();
+-                        GetWindowPlacement(window, &mut placement);
+-                        placement
+-                    };
+-
+-                    window_state.lock().unwrap().saved_window = Some(SavedWindow { placement });
+-
+-                    let monitor = match &fullscreen {
+-                        Fullscreen::Exclusive(video_mode) => video_mode.monitor(),
+-                        Fullscreen::Borderless(Some(monitor)) => monitor.clone(),
+-                        Fullscreen::Borderless(None) => monitor::current_monitor(window),
+-                    };
+-
+-                    let position: (i32, i32) = monitor.position().into();
+-                    let size: (u32, u32) = monitor.size().into();
+-
+-                    unsafe {
+-                        SetWindowPos(
+-                            window,
+-                            0,
+-                            position.0,
+-                            position.1,
+-                            size.0 as i32,
+-                            size.1 as i32,
+-                            SWP_ASYNCWINDOWPOS | SWP_NOZORDER,
+-                        );
+-                        InvalidateRgn(window, 0, false.into());
+-                    }
+-                },
+-                None => {
+-                    let mut window_state_lock = window_state.lock().unwrap();
+-                    if let Some(SavedWindow { placement }) = window_state_lock.saved_window.take() {
+-                        drop(window_state_lock);
+-                        unsafe {
+-                            SetWindowPlacement(window, &placement);
+-                            InvalidateRgn(window, 0, false.into());
+-                        }
+-                    }
+-                },
++                InvalidateRgn(window, 0, false.into());
+             }
+         });
+     }
+diff --git a/src/platform_impl/windows/window_state.rs b/src/platform_impl/windows/window_state.rs
+index bfe251b1c..e717562c5 100644
+--- a/src/platform_impl/windows/window_state.rs
++++ b/src/platform_impl/windows/window_state.rs
+@@ -7,17 +7,19 @@ use bitflags::bitflags;
+ use std::io;
+ use std::sync::MutexGuard;
+ use windows_sys::Win32::Foundation::{HWND, RECT};
+-use windows_sys::Win32::Graphics::Gdi::InvalidateRgn;
++use windows_sys::Win32::Graphics::Gdi::{InvalidateRgn, MonitorFromRect, MONITOR_DEFAULTTONULL};
+ use windows_sys::Win32::UI::WindowsAndMessaging::{
+     AdjustWindowRectEx, EnableMenuItem, GetMenu, GetSystemMenu, GetWindowLongW, SendMessageW,
+-    SetWindowLongW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM, HWND_NOTOPMOST,
+-    HWND_TOPMOST, MF_BYCOMMAND, MF_DISABLED, MF_ENABLED, SC_CLOSE, SWP_ASYNCWINDOWPOS,
+-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREPOSITION, SWP_NOSIZE, SWP_NOZORDER,
+-    SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, WINDOWPLACEMENT,
+-    WINDOW_EX_STYLE, WINDOW_STYLE, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
+-    WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP,
+-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE,
+-    WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_SYSMENU, WS_VISIBLE,
++    SetWindowLongW, SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
++    HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, MF_BYCOMMAND, MF_DISABLED, MF_ENABLED, SC_CLOSE,
++    SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREPOSITION, SWP_NOSIZE,
++    SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED,
++    SW_SHOWMINIMIZED, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WS_BORDER,
++    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW,
++    WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP,
++    WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_MAXIMIZE,
++    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX,
++    WS_SYSMENU, WS_VISIBLE,
+ };
+ 
+ /// Contains information about states and the window that the callback is going to use.
+@@ -61,6 +63,16 @@ pub(crate) struct WindowState {
+ #[derive(Clone)]
+ pub struct SavedWindow {
+     pub placement: WINDOWPLACEMENT,
++    pub rect: RECT,
++}
++
++/// Bounds applied atomically with a fullscreen style change so Windows never composes an
++/// intermediate frame with fullscreen styles at windowed bounds or windowed styles at
++/// fullscreen bounds.
++pub(crate) enum FullscreenBounds {
++    Rect(RECT),
++    Restore(SavedWindow),
++    FrameOnly,
+ }
+ 
+ #[derive(Clone)]
+@@ -196,6 +208,22 @@ impl WindowState {
+         old_flags.apply_diff(window, new_flags);
+     }
+ 
++    pub fn set_fullscreen_flags<F>(
++        mut this: MutexGuard<'_, Self>,
++        window: HWND,
++        bounds: FullscreenBounds,
++        f: F,
++    ) where
++        F: FnOnce(&mut WindowFlags),
++    {
++        let old_flags = this.window_flags;
++        f(&mut this.window_flags);
++        let new_flags = this.window_flags;
++
++        drop(this);
++        old_flags.apply_fullscreen_diff(window, new_flags, bounds);
++    }
++
+     pub fn set_window_flags_in_place<F>(&mut self, f: F)
+     where
+         F: FnOnce(&mut WindowFlags),
+@@ -308,6 +336,8 @@ impl WindowFlags {
+             WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN | WindowFlags::MARKER_BORDERLESS_FULLSCREEN,
+         ) {
+             style &= !WS_OVERLAPPEDWINDOW;
++            style_ex &=
++                !(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE);
+         }
+ 
+         (style, style_ex)
+@@ -433,6 +463,107 @@ impl WindowFlags {
+         }
+     }
+ 
++    /// Applies fullscreen style and bounds changes together so the frame is recalculated once at
++    /// the target rectangle instead of once at the old rectangle before moving.
++    fn apply_fullscreen_diff(
++        mut self,
++        window: HWND,
++        mut new: WindowFlags,
++        bounds: FullscreenBounds,
++    ) {
++        self = self.mask();
++        new = new.mask();
++
++        let z_order_changed =
++            (self ^ new).intersects(WindowFlags::ALWAYS_ON_TOP | WindowFlags::ALWAYS_ON_BOTTOM);
++        let (insert_after, z_flag) = if z_order_changed {
++            let hwnd_after = match (
++                new.contains(WindowFlags::ALWAYS_ON_TOP),
++                new.contains(WindowFlags::ALWAYS_ON_BOTTOM),
++            ) {
++                (true, false) => HWND_TOPMOST,
++                (false, false) => HWND_NOTOPMOST,
++                (false, true) => HWND_BOTTOM,
++                (true, true) => unreachable!(),
++            };
++            (hwnd_after, 0)
++        } else {
++            (0, SWP_NOZORDER)
++        };
++
++        let (style, style_ex) = new.to_window_styles();
++        let entering = new.intersects(
++            WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN | WindowFlags::MARKER_BORDERLESS_FULLSCREEN,
++        );
++        let activate_flag = if entering { 0 } else { SWP_NOACTIVATE };
++
++        unsafe {
++            SendMessageW(window, event_loop::SET_RETAIN_STATE_ON_SIZE_MSG_ID.get(), 1, 0);
++
++            if !new.contains(WindowFlags::MINIMIZED) {
++                SetWindowLongW(window, GWL_STYLE, style as i32);
++                SetWindowLongW(window, GWL_EXSTYLE, style_ex as i32);
++            }
++
++            match bounds {
++                FullscreenBounds::Rect(r) => {
++                    SetWindowPos(
++                        window,
++                        insert_after,
++                        r.left,
++                        r.top,
++                        r.right - r.left,
++                        r.bottom - r.top,
++                        z_flag | activate_flag | SWP_FRAMECHANGED,
++                    );
++                },
++                FullscreenBounds::Restore(saved) => {
++                    let monitor_exists =
++                        MonitorFromRect(&saved.rect, MONITOR_DEFAULTTONULL) != 0;
++                    if can_restore_rect_directly(
++                        saved.placement.showCmd,
++                        saved.rect,
++                        monitor_exists,
++                    ) {
++                        SetWindowPos(
++                            window,
++                            insert_after,
++                            saved.rect.left,
++                            saved.rect.top,
++                            saved.rect.right - saved.rect.left,
++                            saved.rect.bottom - saved.rect.top,
++                            z_flag | SWP_NOACTIVATE | SWP_FRAMECHANGED,
++                        );
++                    } else {
++                        SetWindowPlacement(window, &saved.placement);
++                        SetWindowPos(
++                            window,
++                            insert_after,
++                            0,
++                            0,
++                            0,
++                            0,
++                            z_flag | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
++                        );
++                    }
++                },
++                FullscreenBounds::FrameOnly => {
++                    SetWindowPos(
++                        window,
++                        insert_after,
++                        0,
++                        0,
++                        0,
++                        0,
++                        z_flag | SWP_NOMOVE | SWP_NOSIZE | activate_flag | SWP_FRAMECHANGED,
++                    );
++                },
++            }
++
++            SendMessageW(window, event_loop::SET_RETAIN_STATE_ON_SIZE_MSG_ID.get(), 0, 0);
++        }
++    }
++
+     pub fn adjust_rect(self, hwnd: HWND, mut rect: RECT) -> Result<RECT, io::Error> {
+         unsafe {
+             let mut style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+@@ -551,3 +682,62 @@ impl CursorFlags {
+         Ok(())
+     }
+ }
++
++/// Whether leaving fullscreen can restore the saved outer rect in one atomic `SetWindowPos`
++/// (normal window on a still-attached monitor), or must delegate to `SetWindowPlacement`
++/// (maximized/minimized state or a disconnected monitor).
++fn can_restore_rect_directly(show_cmd: u32, rect: RECT, monitor_exists: bool) -> bool {
++    show_cmd != SW_SHOWMAXIMIZED as u32
++        && show_cmd != SW_SHOWMINIMIZED as u32
++        && rect.right > rect.left
++        && rect.bottom > rect.top
++        && monitor_exists
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn fullscreen_styles_strip_frame_and_edge_bits_and_restore_on_exit() {
++        let base = WindowFlags::RESIZABLE
++            | WindowFlags::MINIMIZABLE
++            | WindowFlags::MAXIMIZABLE
++            | WindowFlags::CLOSABLE
++            | WindowFlags::VISIBLE
++            | WindowFlags::MARKER_DECORATIONS;
++
++        let (win_style, win_ex) = base.to_window_styles();
++        assert_eq!(win_style & WS_CAPTION, WS_CAPTION);
++        assert_eq!(win_style & WS_SIZEBOX, WS_SIZEBOX);
++        assert_eq!(win_ex & WS_EX_WINDOWEDGE, WS_EX_WINDOWEDGE);
++
++        for marker in [
++            WindowFlags::MARKER_BORDERLESS_FULLSCREEN,
++            WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN,
++        ] {
++            let (fs_style, fs_ex) = (base | marker).to_window_styles();
++            assert_eq!(fs_style & WS_OVERLAPPEDWINDOW, 0);
++            assert_eq!(
++                fs_ex & (WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE),
++                0
++            );
++        }
++
++        // Clearing the fullscreen marker restores every windowed style and extended-style edge bit.
++        let restored = (base | WindowFlags::MARKER_BORDERLESS_FULLSCREEN)
++            - WindowFlags::MARKER_BORDERLESS_FULLSCREEN;
++        assert_eq!(restored.to_window_styles(), (win_style, win_ex));
++    }
++
++    #[test]
++    fn direct_restore_requires_normal_valid_rect_on_live_monitor() {
++        let valid = RECT { left: 100, top: 80, right: 720, bottom: 720 };
++        assert!(can_restore_rect_directly(SW_RESTORE as u32, valid, true));
++        assert!(!can_restore_rect_directly(SW_SHOWMAXIMIZED as u32, valid, true));
++        assert!(!can_restore_rect_directly(SW_SHOWMINIMIZED as u32, valid, true));
++        assert!(!can_restore_rect_directly(SW_RESTORE as u32, valid, false));
++        let empty = RECT { left: 100, top: 80, right: 100, bottom: 720 };
++        assert!(!can_restore_rect_directly(SW_RESTORE as u32, empty, true));
++    }
++}

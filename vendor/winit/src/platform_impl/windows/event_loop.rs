@@ -1186,6 +1186,13 @@ unsafe fn public_window_callback_inner(
                 result = ProcResult::DefWindowProc(wparam);
                 return;
             }
+            if window_flags.intersects(
+                WindowFlags::MARKER_BORDERLESS_FULLSCREEN
+                    | WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN,
+            ) {
+                result = ProcResult::Value(0);
+                return;
+            }
 
             let params = unsafe { &mut *(lparam as *mut NCCALCSIZE_PARAMS) };
 

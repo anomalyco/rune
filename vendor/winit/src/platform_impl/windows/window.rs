@@ -32,10 +32,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::Input::Touch::{RegisterTouchWindow, TWF_WANTPALM};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, EnableMenuItem, FlashWindowEx, GetClientRect, GetCursorPos,
-    GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement, GetWindowTextLengthW,
-    GetWindowTextW, IsWindowVisible, LoadCursorW, PeekMessageW, PostMessageW, RegisterClassExW,
-    SetCursor, SetCursorPos, SetForegroundWindow, SetMenuDefaultItem, SetWindowDisplayAffinity,
-    SetWindowPlacement, SetWindowPos, SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
+    GetForegroundWindow, GetSystemMenu, GetSystemMetrics, GetWindowPlacement, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, IsWindowVisible, LoadCursorW, PeekMessageW, PostMessageW,
+    RegisterClassExW, SetCursor, SetCursorPos, SetForegroundWindow, SetMenuDefaultItem,
+    SetWindowDisplayAffinity, SetWindowPos, SetWindowTextW, TrackPopupMenu, CS_HREDRAW, CS_VREDRAW,
+    WINDOWPLACEMENT,
     CW_USEDEFAULT, FLASHWINFO, FLASHW_ALL, FLASHW_STOP, FLASHW_TIMERNOFG, FLASHW_TRAY,
     GWLP_HINSTANCE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP,
     HTTOPLEFT, HTTOPRIGHT, MENU_ITEM_STATE, MFS_DISABLED, MFS_ENABLED, MF_BYCOMMAND, NID_READY,
@@ -65,7 +66,7 @@ use crate::platform_impl::platform::ime::ImeContext;
 use crate::platform_impl::platform::keyboard::KeyEventBuilder;
 use crate::platform_impl::platform::monitor::{self, MonitorHandle};
 use crate::platform_impl::platform::window_state::{
-    CursorFlags, SavedWindow, WindowFlags, WindowState,
+    CursorFlags, FullscreenBounds, SavedWindow, WindowFlags, WindowState,
 };
 use crate::platform_impl::platform::{util, Fullscreen, SelectedCursor, WindowId};
 use crate::window::{
@@ -776,8 +777,49 @@ impl Window {
                 PeekMessageW(&mut msg, 0, 0, 0, PM_NOREMOVE);
             }
 
-            // Update window style
-            WindowState::set_window_flags(window_state.lock().unwrap(), window, |f| {
+            // Save window bounds before touching styles so restored geometry matches the framed
+            // window and switching between fullscreen modes keeps the original windowed bounds.
+            let bounds = match &fullscreen {
+                Some(fullscreen) => {
+                    if old_fullscreen.is_none() {
+                        let (placement, rect) = unsafe {
+                            let mut placement: WINDOWPLACEMENT = mem::zeroed();
+                            placement.length = mem::size_of::<WINDOWPLACEMENT>() as u32;
+                            GetWindowPlacement(window, &mut placement);
+                            let mut rect: RECT = mem::zeroed();
+                            GetWindowRect(window, &mut rect);
+                            (placement, rect)
+                        };
+                        window_state.lock().unwrap().saved_window =
+                            Some(SavedWindow { placement, rect });
+                    }
+
+                    let monitor = match &fullscreen {
+                        Fullscreen::Exclusive(video_mode) => video_mode.monitor(),
+                        Fullscreen::Borderless(Some(monitor)) => monitor.clone(),
+                        Fullscreen::Borderless(None) => monitor::current_monitor(window),
+                    };
+
+                    let position: (i32, i32) = monitor.position().into();
+                    let size: (u32, u32) = monitor.size().into();
+                    FullscreenBounds::Rect(RECT {
+                        left: position.0,
+                        top: position.1,
+                        right: position.0 + size.0 as i32,
+                        bottom: position.1 + size.1 as i32,
+                    })
+                },
+                None => window_state
+                    .lock()
+                    .unwrap()
+                    .saved_window
+                    .take()
+                    .map_or(FullscreenBounds::FrameOnly, FullscreenBounds::Restore),
+            };
+
+            // Update styles and bounds atomically so DWM never composes a frame between the
+            // style change and the move/resize.
+            WindowState::set_fullscreen_flags(window_state.lock().unwrap(), window, bounds, |f| {
                 f.set(
                     WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN,
                     matches!(fullscreen, Some(Fullscreen::Exclusive(_))),
@@ -788,59 +830,11 @@ impl Window {
                 );
             });
 
-            // Mark as fullscreen window wrt to z-order
-            //
-            // this needs to be called before the below fullscreen SetWindowPos as this itself
-            // will generate WM_SIZE messages of the old window size that can race with what we set
-            // below
+            // Mark as fullscreen window wrt to z-order after styles and bounds are already final,
+            // matching Chromium's FullscreenHandler::ProcessFullscreen.
             unsafe {
                 taskbar_mark_fullscreen(window, fullscreen.is_some());
-            }
-
-            // Update window bounds
-            match &fullscreen {
-                Some(fullscreen) => {
-                    // Save window bounds before entering fullscreen
-                    let placement = unsafe {
-                        let mut placement = mem::zeroed();
-                        GetWindowPlacement(window, &mut placement);
-                        placement
-                    };
-
-                    window_state.lock().unwrap().saved_window = Some(SavedWindow { placement });
-
-                    let monitor = match &fullscreen {
-                        Fullscreen::Exclusive(video_mode) => video_mode.monitor(),
-                        Fullscreen::Borderless(Some(monitor)) => monitor.clone(),
-                        Fullscreen::Borderless(None) => monitor::current_monitor(window),
-                    };
-
-                    let position: (i32, i32) = monitor.position().into();
-                    let size: (u32, u32) = monitor.size().into();
-
-                    unsafe {
-                        SetWindowPos(
-                            window,
-                            0,
-                            position.0,
-                            position.1,
-                            size.0 as i32,
-                            size.1 as i32,
-                            SWP_ASYNCWINDOWPOS | SWP_NOZORDER,
-                        );
-                        InvalidateRgn(window, 0, false.into());
-                    }
-                },
-                None => {
-                    let mut window_state_lock = window_state.lock().unwrap();
-                    if let Some(SavedWindow { placement }) = window_state_lock.saved_window.take() {
-                        drop(window_state_lock);
-                        unsafe {
-                            SetWindowPlacement(window, &placement);
-                            InvalidateRgn(window, 0, false.into());
-                        }
-                    }
-                },
+                InvalidateRgn(window, 0, false.into());
             }
         });
     }

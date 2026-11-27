@@ -187,7 +187,8 @@ impl Host {
         frame: Option<crate::platform::win32::CustomFrame>, cloak: crate::platform::win32::Cloak, focus: bool, open_as: crate::windows::OpenAs, built: bool) -> Result<(), String> {
         // Maximizing (or full screen) shows a window: cloaked, so it shows only with its frame.
         if open_as != crate::windows::OpenAs::Normal {
-            cloak.hold(&window, crate::time::now() + win::READY_FALLBACK, focus);
+            let until = crate::time::now() + win::READY_FALLBACK;
+            if open_as.full_screens() { cloak.hold_without_transitions(&window, until, focus); } else { cloak.hold(&window, until, focus); }
             window.set_visible(true);
             chrome::open_as(&window, open_as);
             crate::platform::win32::apply_window_styles(&window, &self.windows_window);
@@ -525,6 +526,12 @@ impl FrameHost for CpuWindowFrame<'_> {
         } else if l.window.is_visible() == Some(true) {
             // A frame after the show that came before the first copy.
             copy_first(cpu, &l.window, (width, height));
+            if l.native.cloak.held() {
+                let inner = l.window.inner_size();
+                if crate::platform::win32::Cloak::size_matches((width, height), (inner.width, inner.height), crate::window::surface::max_surface_dim(None)) {
+                    l.native.cloak.lift(&l.window);
+                }
+            }
         }
         false
     }

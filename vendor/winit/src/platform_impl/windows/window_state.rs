@@ -7,17 +7,19 @@ use bitflags::bitflags;
 use std::io;
 use std::sync::MutexGuard;
 use windows_sys::Win32::Foundation::{HWND, RECT};
-use windows_sys::Win32::Graphics::Gdi::InvalidateRgn;
+use windows_sys::Win32::Graphics::Gdi::{InvalidateRgn, MonitorFromRect, MONITOR_DEFAULTTONULL};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, EnableMenuItem, GetMenu, GetSystemMenu, GetWindowLongW, SendMessageW,
-    SetWindowLongW, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE, HWND_BOTTOM, HWND_NOTOPMOST,
-    HWND_TOPMOST, MF_BYCOMMAND, MF_DISABLED, MF_ENABLED, SC_CLOSE, SWP_ASYNCWINDOWPOS,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREPOSITION, SWP_NOSIZE, SWP_NOZORDER,
-    SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWNOACTIVATE, WINDOWPLACEMENT,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WS_BORDER, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN,
-    WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_MAXIMIZE, WS_MAXIMIZEBOX, WS_MINIMIZE,
-    WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX, WS_SYSMENU, WS_VISIBLE,
+    SetWindowLongW, SetWindowPlacement, SetWindowPos, ShowWindow, GWL_EXSTYLE, GWL_STYLE,
+    HWND_BOTTOM, HWND_NOTOPMOST, HWND_TOPMOST, MF_BYCOMMAND, MF_DISABLED, MF_ENABLED, SC_CLOSE,
+    SWP_ASYNCWINDOWPOS, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOREPOSITION, SWP_NOSIZE,
+    SWP_NOZORDER, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW, SW_SHOWMAXIMIZED,
+    SW_SHOWMINIMIZED, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINDOW_STYLE, WS_BORDER,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_ACCEPTFILES, WS_EX_APPWINDOW,
+    WS_EX_CLIENTEDGE, WS_EX_DLGMODALFRAME, WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP,
+    WS_EX_STATICEDGE, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_EX_WINDOWEDGE, WS_MAXIMIZE,
+    WS_MAXIMIZEBOX, WS_MINIMIZE, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_SIZEBOX,
+    WS_SYSMENU, WS_VISIBLE,
 };
 
 /// Contains information about states and the window that the callback is going to use.
@@ -61,6 +63,16 @@ pub(crate) struct WindowState {
 #[derive(Clone)]
 pub struct SavedWindow {
     pub placement: WINDOWPLACEMENT,
+    pub rect: RECT,
+}
+
+/// Bounds applied atomically with a fullscreen style change so Windows never composes an
+/// intermediate frame with fullscreen styles at windowed bounds or windowed styles at
+/// fullscreen bounds.
+pub(crate) enum FullscreenBounds {
+    Rect(RECT),
+    Restore(SavedWindow),
+    FrameOnly,
 }
 
 #[derive(Clone)]
@@ -196,6 +208,22 @@ impl WindowState {
         old_flags.apply_diff(window, new_flags);
     }
 
+    pub fn set_fullscreen_flags<F>(
+        mut this: MutexGuard<'_, Self>,
+        window: HWND,
+        bounds: FullscreenBounds,
+        f: F,
+    ) where
+        F: FnOnce(&mut WindowFlags),
+    {
+        let old_flags = this.window_flags;
+        f(&mut this.window_flags);
+        let new_flags = this.window_flags;
+
+        drop(this);
+        old_flags.apply_fullscreen_diff(window, new_flags, bounds);
+    }
+
     pub fn set_window_flags_in_place<F>(&mut self, f: F)
     where
         F: FnOnce(&mut WindowFlags),
@@ -308,6 +336,8 @@ impl WindowFlags {
             WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN | WindowFlags::MARKER_BORDERLESS_FULLSCREEN,
         ) {
             style &= !WS_OVERLAPPEDWINDOW;
+            style_ex &=
+                !(WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE);
         }
 
         (style, style_ex)
@@ -433,6 +463,107 @@ impl WindowFlags {
         }
     }
 
+    /// Applies fullscreen style and bounds changes together so the frame is recalculated once at
+    /// the target rectangle instead of once at the old rectangle before moving.
+    fn apply_fullscreen_diff(
+        mut self,
+        window: HWND,
+        mut new: WindowFlags,
+        bounds: FullscreenBounds,
+    ) {
+        self = self.mask();
+        new = new.mask();
+
+        let z_order_changed =
+            (self ^ new).intersects(WindowFlags::ALWAYS_ON_TOP | WindowFlags::ALWAYS_ON_BOTTOM);
+        let (insert_after, z_flag) = if z_order_changed {
+            let hwnd_after = match (
+                new.contains(WindowFlags::ALWAYS_ON_TOP),
+                new.contains(WindowFlags::ALWAYS_ON_BOTTOM),
+            ) {
+                (true, false) => HWND_TOPMOST,
+                (false, false) => HWND_NOTOPMOST,
+                (false, true) => HWND_BOTTOM,
+                (true, true) => unreachable!(),
+            };
+            (hwnd_after, 0)
+        } else {
+            (0, SWP_NOZORDER)
+        };
+
+        let (style, style_ex) = new.to_window_styles();
+        let entering = new.intersects(
+            WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN | WindowFlags::MARKER_BORDERLESS_FULLSCREEN,
+        );
+        let activate_flag = if entering { 0 } else { SWP_NOACTIVATE };
+
+        unsafe {
+            SendMessageW(window, event_loop::SET_RETAIN_STATE_ON_SIZE_MSG_ID.get(), 1, 0);
+
+            if !new.contains(WindowFlags::MINIMIZED) {
+                SetWindowLongW(window, GWL_STYLE, style as i32);
+                SetWindowLongW(window, GWL_EXSTYLE, style_ex as i32);
+            }
+
+            match bounds {
+                FullscreenBounds::Rect(r) => {
+                    SetWindowPos(
+                        window,
+                        insert_after,
+                        r.left,
+                        r.top,
+                        r.right - r.left,
+                        r.bottom - r.top,
+                        z_flag | activate_flag | SWP_FRAMECHANGED,
+                    );
+                },
+                FullscreenBounds::Restore(saved) => {
+                    let monitor_exists =
+                        MonitorFromRect(&saved.rect, MONITOR_DEFAULTTONULL) != 0;
+                    if can_restore_rect_directly(
+                        saved.placement.showCmd,
+                        saved.rect,
+                        monitor_exists,
+                    ) {
+                        SetWindowPos(
+                            window,
+                            insert_after,
+                            saved.rect.left,
+                            saved.rect.top,
+                            saved.rect.right - saved.rect.left,
+                            saved.rect.bottom - saved.rect.top,
+                            z_flag | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                        );
+                    } else {
+                        SetWindowPlacement(window, &saved.placement);
+                        SetWindowPos(
+                            window,
+                            insert_after,
+                            0,
+                            0,
+                            0,
+                            0,
+                            z_flag | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                        );
+                    }
+                },
+                FullscreenBounds::FrameOnly => {
+                    SetWindowPos(
+                        window,
+                        insert_after,
+                        0,
+                        0,
+                        0,
+                        0,
+                        z_flag | SWP_NOMOVE | SWP_NOSIZE | activate_flag | SWP_FRAMECHANGED,
+                    );
+                },
+            }
+
+            SendMessageW(window, event_loop::SET_RETAIN_STATE_ON_SIZE_MSG_ID.get(), 0, 0);
+        }
+    }
+
     pub fn adjust_rect(self, hwnd: HWND, mut rect: RECT) -> Result<RECT, io::Error> {
         unsafe {
             let mut style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
@@ -549,5 +680,64 @@ impl CursorFlags {
         }
 
         Ok(())
+    }
+}
+
+/// Whether leaving fullscreen can restore the saved outer rect in one atomic `SetWindowPos`
+/// (normal window on a still-attached monitor), or must delegate to `SetWindowPlacement`
+/// (maximized/minimized state or a disconnected monitor).
+fn can_restore_rect_directly(show_cmd: u32, rect: RECT, monitor_exists: bool) -> bool {
+    show_cmd != SW_SHOWMAXIMIZED as u32
+        && show_cmd != SW_SHOWMINIMIZED as u32
+        && rect.right > rect.left
+        && rect.bottom > rect.top
+        && monitor_exists
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fullscreen_styles_strip_frame_and_edge_bits_and_restore_on_exit() {
+        let base = WindowFlags::RESIZABLE
+            | WindowFlags::MINIMIZABLE
+            | WindowFlags::MAXIMIZABLE
+            | WindowFlags::CLOSABLE
+            | WindowFlags::VISIBLE
+            | WindowFlags::MARKER_DECORATIONS;
+
+        let (win_style, win_ex) = base.to_window_styles();
+        assert_eq!(win_style & WS_CAPTION, WS_CAPTION);
+        assert_eq!(win_style & WS_SIZEBOX, WS_SIZEBOX);
+        assert_eq!(win_ex & WS_EX_WINDOWEDGE, WS_EX_WINDOWEDGE);
+
+        for marker in [
+            WindowFlags::MARKER_BORDERLESS_FULLSCREEN,
+            WindowFlags::MARKER_EXCLUSIVE_FULLSCREEN,
+        ] {
+            let (fs_style, fs_ex) = (base | marker).to_window_styles();
+            assert_eq!(fs_style & WS_OVERLAPPEDWINDOW, 0);
+            assert_eq!(
+                fs_ex & (WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_STATICEDGE),
+                0
+            );
+        }
+
+        // Clearing the fullscreen marker restores every windowed style and extended-style edge bit.
+        let restored = (base | WindowFlags::MARKER_BORDERLESS_FULLSCREEN)
+            - WindowFlags::MARKER_BORDERLESS_FULLSCREEN;
+        assert_eq!(restored.to_window_styles(), (win_style, win_ex));
+    }
+
+    #[test]
+    fn direct_restore_requires_normal_valid_rect_on_live_monitor() {
+        let valid = RECT { left: 100, top: 80, right: 720, bottom: 720 };
+        assert!(can_restore_rect_directly(SW_RESTORE as u32, valid, true));
+        assert!(!can_restore_rect_directly(SW_SHOWMAXIMIZED as u32, valid, true));
+        assert!(!can_restore_rect_directly(SW_SHOWMINIMIZED as u32, valid, true));
+        assert!(!can_restore_rect_directly(SW_RESTORE as u32, valid, false));
+        let empty = RECT { left: 100, top: 80, right: 100, bottom: 720 };
+        assert!(!can_restore_rect_directly(SW_RESTORE as u32, empty, true));
     }
 }

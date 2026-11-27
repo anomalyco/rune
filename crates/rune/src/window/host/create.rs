@@ -131,7 +131,8 @@ impl Host {
         #[cfg(target_os = "windows")]
         if visible && !cpu_first {
             // Unfocused (`App::open_inactive` or `WindowsWindowOptions::no_activate`), it never activates.
-            cloak.hold(&window, crate::time::now() + win::READY_FALLBACK, focus);
+            let until = crate::time::now() + win::READY_FALLBACK;
+            if open_as.full_screens() { cloak.hold_without_transitions(&window, until, focus); } else { cloak.hold(&window, until, focus); }
             window.set_visible(true);
             chrome::open_as(&window, open_as);
             if open_as != crate::windows::OpenAs::Normal {
