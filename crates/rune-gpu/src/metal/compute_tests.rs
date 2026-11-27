@@ -497,3 +497,67 @@ fn precompiled_field_pipeline_binds_workgroup_memory() {
         assert_eq!(&got[row.clone()], &want[row], "field row {y} differs from wgpu");
     }
 }
+const INDIRECT: &str = r#"
+@group(0) @binding(0) var<storage, read_write> args: array<u32>;
+@group(0) @binding(1) var<storage, read_write> hits: array<atomic<u32>>;
+
+@compute @workgroup_size(1)
+fn size() {
+    // Workgroup counts at word 4, past a header a renderer would keep: 3 x 2 x 1.
+    args[4] = 3u; args[5] = 2u; args[6] = 1u;
+}
+
+@compute @workgroup_size(4)
+fn count(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) li: u32) {
+    atomicAdd(&hits[wid.y * 3u + wid.x], li + 1u);
+}
+"#;
+
+/// One dispatch writes the workgroup counts, the next reads them at an offset, as a compute
+/// renderer sizing its work on the GPU (vello) does every frame. Returns what each group hit.
+fn run_indirect(device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
+    use wgpu::BufferUsages as B;
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("indirect"), source: wgpu::ShaderSource::Wgsl(INDIRECT.into()) });
+    let entry = |binding| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::COMPUTE, count: None,
+        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: false }, has_dynamic_offset: false, min_binding_size: None } };
+    let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[entry(0), entry(1)] });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&bgl)], immediate_size: 0 });
+    let pipeline = |entry| device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(entry), layout: Some(&layout), module: &module, entry_point: Some(entry), compilation_options: Default::default(), cache: None,
+    });
+    let (size, count) = (pipeline("size"), pipeline("count"));
+    let args = buffer(device, 32, B::STORAGE | B::INDIRECT);
+    let hits = buffer(device, 32, B::STORAGE | B::COPY_SRC);
+    // The dispatch reading the counts can't also bind them as storage: it binds a scratch buffer.
+    let scratch = buffer(device, 32, B::STORAGE);
+    let group = |first: &wgpu::Buffer| device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &bgl, entries: &[
+        wgpu::BindGroupEntry { binding: 0, resource: first.as_entire_binding() },
+        wgpu::BindGroupEntry { binding: 1, resource: hits.as_entire_binding() },
+    ] });
+    let (writes, reads) = (group(&args), group(&scratch));
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&size);
+        pass.set_bind_group(0, &writes, &[]);
+        pass.dispatch_workgroups(1, 1, 1);
+        pass.set_pipeline(&count);
+        pass.set_bind_group(0, &reads, &[]);
+        pass.dispatch_workgroups_indirect(&args, 16);
+    }
+    let out = buffer(device, 32, B::COPY_DST | B::MAP_READ);
+    encoder.copy_buffer_to_buffer(&hits, 0, &out, 0, 32);
+    queue.submit([encoder.finish()]);
+    read(device, &out)
+}
+
+#[test]
+fn indirect_dispatch_reads_counts_an_earlier_dispatch_wrote() {
+    let (device, queue) = gpu();
+    let ours = run_indirect(&device, &queue);
+    let hits: Vec<u32> = bytemuck::pod_collect_to_vec(&ours);
+    assert_eq!(hits, [10, 10, 10, 10, 10, 10, 0, 0], "six groups of four invocations each, 1 + 2 + 3 + 4");
+    let (wgpu_device, wgpu_queue) = wgpu_metal();
+    assert_eq!(ours, run_indirect(&wgpu_device, &wgpu_queue), "differs from wgpu's");
+}
+

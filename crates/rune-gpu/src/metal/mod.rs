@@ -22,10 +22,11 @@
 //! Rune's layer tweaks (materials, present timing, transactions, occlusion) reach this backend's
 //! CAMetalLayer through `gpu::with_layer`. Video planes from CoreVideo wrap as textures
 //! (`texture_from_raw`) whose owner the bind groups and command buffers using them keep.
-//! Compute passes, timestamps at pass boundaries (`TIMESTAMP_QUERY`), and immediates
-//! (`IMMEDIATES`, set as inline vertex and fragment bytes, up to Metal's 4 KB) are as wgpu-hal's.
+//! Compute passes (indirect dispatches included), timestamps at pass boundaries
+//! (`TIMESTAMP_QUERY`), and immediates (`IMMEDIATES`, set as inline vertex and fragment bytes, up
+//! to Metal's 4 KB) are as wgpu-hal's.
 //! New textures read as zero, as wgpu promises. A pipeline without a layout derives one from
-//! its shaders, as wgpu-core does (`derive`). Other queries, render bundles, indirect commands,
+//! its shaders, as wgpu-core does (`derive`). Other queries, render bundles, indirect draws,
 //! depth and multisampling are not implemented: they panic naming the way back to wgpu
 //! (`unsupported!`).
 

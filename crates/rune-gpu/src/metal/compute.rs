@@ -1,6 +1,7 @@
 //! Compute pipelines and passes. As in render passes, bind groups apply at the next dispatch
 //! against the pipeline bound then, and the sizes buffer and immediates travel as inline bytes.
-//! A pass's timestamp writes sample at its start and end.
+//! A pass's timestamp writes sample at its start and end. An indirect dispatch reads its three
+//! workgroup counts from the buffer when the GPU runs it, so an earlier dispatch can write them.
 
 #![allow(unsafe_code)]
 
@@ -248,8 +249,16 @@ impl ComputePassInterface for MetalComputePass {
         let groups = MTLSize { width: x as usize, height: y as usize, depth: z as usize };
         self.raw.dispatchThreadgroups_threadsPerThreadgroup(groups, pipeline.workgroup);
     }
-    fn dispatch_workgroups_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress) {
-        super::unsupported!("indirect dispatches")
+    fn dispatch_workgroups_indirect(&mut self, buffer: &DispatchBuffer, offset: wgpu::BufferAddress) {
+        self.flush();
+        let Some(pipeline) = &self.pipeline else { return };
+        let buffer = buffer.as_custom::<super::resource::MetalBuffer>().expect("a Metal buffer").store.current();
+        // SAFETY: wgpu validated that three `u32` workgroup counts fit at `offset`; the buffer
+        // stays alive in the pass's keep list, and Metal reads the counts when the GPU runs the dispatch.
+        unsafe {
+            self.raw.dispatchThreadgroupsWithIndirectBuffer_indirectBufferOffset_threadsPerThreadgroup(&buffer.raw, offset as usize, pipeline.workgroup);
+        }
+        self.keep.push(buffer);
     }
     fn transition_resources<'a>(&mut self, _: &mut dyn Iterator<Item = wgpu::wgt::BufferTransition<&'a DispatchBuffer>>,
         _: &mut dyn Iterator<Item = wgpu::wgt::TextureTransition<&'a DispatchTextureView>>) {}
