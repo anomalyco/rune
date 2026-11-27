@@ -142,7 +142,7 @@ pub(crate) fn resolve_color_scheme_fallback(
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
-unsafe fn gnome_interface_string(key: &CStr) -> Option<String> {
+fn gnome_interface_string(key: &CStr) -> Option<String> {
     use std::ffi::{c_char, c_void};
     // SAFETY: `g_settings_get_string` and `g_free` match GIO/GLib's C ABI; `g_free` is resolved
     // before allocation so every non-null returned pointer is freed after copying into Rust.
@@ -192,10 +192,8 @@ pub(crate) fn read_color_scheme_fallback() -> Option<bool> {
         crate::platform::preferences::is_kde_desktop(),
         || crate::platform::preferences::read_kdeglobals().as_deref().and_then(parse_kdeglobals_dark),
         || {
-            // SAFETY: `gnome_interface_string` resolves GIO/GLib symbols dynamically, checks
-            // every pointer for null, and frees every returned GLib string before returning.
-            let scheme = unsafe { gnome_interface_string(c"color-scheme") };
-            let gtk_theme = unsafe { gnome_interface_string(c"gtk-theme") };
+            let scheme = gnome_interface_string(c"color-scheme");
+            let gtk_theme = gnome_interface_string(c"gtk-theme");
             resolve_gsettings_dark(scheme.as_deref(), gtk_theme.as_deref())
         },
         read_gtk_settings_ini_dark,
