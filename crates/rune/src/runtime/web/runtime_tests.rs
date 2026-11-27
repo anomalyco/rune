@@ -780,6 +780,13 @@ fn web_key_reports_consumed_for_editing_and_app_handled_chords_but_not_unhandled
     rt.set_focus(Some(input_path), true);
     rt.frame(0.0);
 
+    // Match the host platform's primary shortcut modifier (Cmd/meta on macOS, Ctrl elsewhere)
+    // because `KeyEvent::edit_command` evaluates against `KeyPlatform::current()`.
+    let mac = cfg!(target_os = "macos");
+    let primary = |key: &str, code: &str, shift: bool, alt: bool| {
+        json!({"kind":"key", "key":key, "code":code, "ctrl":!mac, "meta":mac, "shift":shift, "alt":alt})
+    };
+
     // Unhandled browser shortcuts while a text input is focused must report consumed = false
     // (even when on_modifiers runs), letting bridge.js leave them to the browser.
     for (key, code, shift, alt) in [
@@ -799,7 +806,7 @@ fn web_key_reports_consumed_for_editing_and_app_handled_chords_but_not_unhandled
         ("Dead", "KeyI", false, true),
     ] {
         rt.core_mut().take_key_consumed();
-        rt.web_key(&json!({"kind":"key", "key":key, "code":code, "ctrl":true, "shift":shift, "alt":alt}));
+        rt.web_key(&primary(key, code, shift, alt));
         rt.frame(0.0);
         assert!(
             !rt.core_mut().take_key_consumed(),
@@ -810,26 +817,26 @@ fn web_key_reports_consumed_for_editing_and_app_handled_chords_but_not_unhandled
 
     // Standard editing shortcuts in the focused text input are consumed by Rune.
     rt.core_mut().take_key_consumed();
-    rt.web_key(&json!({"kind":"key", "key":"a", "code":"KeyA", "ctrl":true}));
+    rt.web_key(&primary("a", "KeyA", false, false));
     rt.frame(0.0);
-    assert!(rt.core_mut().take_key_consumed(), "Ctrl+A select-all must report consumed");
+    assert!(rt.core_mut().take_key_consumed(), "Cmd/Ctrl+A select-all must report consumed");
     assert!(!rt.core_mut().take_key_consumed(), "take_key_consumed must clear after reading");
 
     rt.core_mut().take_key_consumed();
-    rt.web_key(&json!({"kind":"key", "key":"c", "code":"KeyC", "ctrl":true}));
+    rt.web_key(&primary("c", "KeyC", false, false));
     rt.frame(0.0);
-    assert!(rt.core_mut().take_key_consumed(), "Ctrl+C with selection must report consumed");
+    assert!(rt.core_mut().take_key_consumed(), "Cmd/Ctrl+C with selection must report consumed");
 
     // When the app explicitly consumes Cmd/Ctrl+F, consumed becomes true so bridge.js calls preventDefault.
     rt.state.consume_find = true;
     rt.core_mut().take_key_consumed();
-    rt.web_key(&json!({"kind":"key", "key":"f", "code":"KeyF", "ctrl":true}));
+    rt.web_key(&primary("f", "KeyF", false, false));
     rt.frame(0.0);
-    assert!(rt.core_mut().take_key_consumed(), "app-consumed Ctrl+F must report consumed");
+    assert!(rt.core_mut().take_key_consumed(), "app-consumed Cmd/Ctrl+F must report consumed");
 
     // Other browser shortcuts remain unconsumed alongside it.
     rt.core_mut().take_key_consumed();
-    rt.web_key(&json!({"kind":"key", "key":"r", "code":"KeyR", "ctrl":true}));
+    rt.web_key(&primary("r", "KeyR", false, false));
     rt.frame(0.0);
-    assert!(!rt.core_mut().take_key_consumed(), "declined Ctrl+R must remain unconsumed");
+    assert!(!rt.core_mut().take_key_consumed(), "declined Cmd/Ctrl+R must remain unconsumed");
 }

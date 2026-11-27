@@ -184,20 +184,21 @@ fn inside_wheel_scrolls_modal_and_anchored_popover_without_dismissing() {
     let mut rt = Runtime::new(S { open: false, dismisses: 0 }, view, (400.0, 260.0), Env::new(true, 1.0));
     rt.frame(0.0);
 
-    // Frame 0 of entrance fade (dt = 0.0): inside wheel does not dismiss.
+    // Frame 0 of entrance fade (dt = 0.0): inside wheel scrolls modal-list without dismissing.
     rt.update(|s, _| s.open = true);
     rt.frame(0.0);
     rt.wheel_event(WheelEvent::new(0.0, -25.0).at(260.0, 70.0));
     rt.frame(0.016);
     assert!(rt.state.open && rt.state.dismisses == 0, "inside wheel on frame 0 must not dismiss");
+    assert_eq!(scroll_offset(&rt, "modal-list").0, 25.0);
     assert_eq!(scroll_offset(&rt, "bg-list").0, 0.0);
 
-    // Once visible, wheel inside the modal scrolls modal-list without dismissing.
+    // Once visible, wheel inside the modal scrolls modal-list further without dismissing.
     rt.frame(0.2);
     rt.wheel_event(WheelEvent::new(0.0, -25.0).at(260.0, 70.0));
     rt.frame(0.016);
     assert!(rt.state.open && rt.state.dismisses == 0, "inside wheel scrolls modal without dismissing");
-    assert_eq!(scroll_offset(&rt, "modal-list").0, 25.0);
+    assert_eq!(scroll_offset(&rt, "modal-list").0, 50.0);
     assert_eq!(scroll_offset(&rt, "bg-list").0, 0.0);
 
     // Wheel inside a popover anchored inside the modal stays inside ModalScope and does not dismiss.

@@ -77,6 +77,7 @@ fn scene(s: &AllActions, _: &mut Cx<AllActions>) -> El {
             row().key("btn").role("button").focusable(true)
                 .on_press(|_: &mut AllActions| {})
                 .on_secondary_press(|_: &mut AllActions, _, _| {})
+                .a11y_action("pin", "Pin", |_: &mut AllActions, _| {})
                 .child(text("Action")),
         )
         .child(
