@@ -49,6 +49,10 @@ pub(crate) trait WindowApp {
     fn run_on_geometry(&mut self, geometry: crate::WindowGeometry);
     /// Queues `App::on_window_geometry` as an update for the next drain.
     fn queue_on_geometry(&mut self, geometry: crate::WindowGeometry);
+    /// Whether the app set `App::on_placement`.
+    fn watches_placement(&self) -> bool;
+    /// Queues `App::on_placement` as an update for the next drain.
+    fn queue_on_placement(&mut self, placement: crate::WindowPlacement);
     fn drain_startup(&mut self, shortcuts: &crate::shortcuts::Guard, menus: &mut crate::native_menu::MenuGuard);
     fn drain_window(&mut self, shortcuts: &crate::shortcuts::Guard, menus: &mut crate::native_menu::MenuGuard) -> (WindowRequests, bool, bool);
     fn has_updates(&self) -> bool;
@@ -224,6 +228,7 @@ pub(in crate::window) fn test_app_with_requests<S: 'static>(
         on_quit,
         on_reopen: None,
         on_geometry: None,
+        on_placement: None,
         turn_scope: None,
         keep_layout: None,
         kept_layout: None,
@@ -243,6 +248,7 @@ pub(crate) struct TypedWindowApp<S: 'static> {
     pub(super) on_quit: Option<fn(&mut S, &mut Tx)>,
     pub(super) on_reopen: Option<fn(&mut S, bool, &mut Tx) -> bool>,
     pub(super) on_geometry: Option<crate::window::geometry::OnWindowGeometry<S>>,
+    pub(super) on_placement: Option<crate::window::placement::OnPlacement<S>>,
     pub(super) turn_scope: Option<TurnScope<S>>,
     /// `App::layout_seed`'s keeper, and the seed it was last given (or the launch's own).
     pub(super) keep_layout: Option<Box<dyn FnMut(crate::LayoutSeed)>>,
@@ -264,6 +270,7 @@ impl<S: 'static> TypedWindowApp<S> {
             on_quit: None,
             on_reopen: None,
             on_geometry: None,
+            on_placement: None,
             turn_scope: None,
             keep_layout: None,
             kept_layout: None,
@@ -276,13 +283,14 @@ impl<S: 'static> TypedWindowApp<S> {
             app.on_close_request, app.on_quit_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
         );
         let on_geometry = app.on_window_geometry;
+        let on_placement = app.placement.on_placement;
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (spec, state, shared, runtime) = app.into_parts(None);
         let mut rt = crate::tooling::runtime_for(&spec, state, spec.size, crate::runtime::Env::default(), waker);
         rt.configure(runtime);
         Self {
-            rt, shared, comp, on_frame_drawn: None, on_close_request, on_quit_request, on_close, on_rest, on_quit, on_reopen, on_geometry, turn_scope,
+            rt, shared, comp, on_frame_drawn: None, on_close_request, on_quit_request, on_close, on_rest, on_quit, on_reopen, on_geometry, on_placement, turn_scope,
             keep_layout, kept_layout: layout_seed,
         }
     }
@@ -416,6 +424,18 @@ impl<S: 'static> WindowApp for TypedWindowApp<S> {
             return crate::hot::patched_or_original!("on_window_geometry", f, s, geometry, tx);
             #[cfg(not(feature = "hot"))]
             f(s, geometry, tx)
+        }));
+    }
+
+    fn watches_placement(&self) -> bool { self.on_placement.is_some() }
+
+    fn queue_on_placement(&mut self, placement: crate::WindowPlacement) {
+        let Some(f) = self.on_placement else { return };
+        self.shared.queue_update(Box::new(move |s, tx| {
+            #[cfg(feature = "hot")]
+            return crate::hot::patched_or_original!("on_placement", f, s, placement, tx);
+            #[cfg(not(feature = "hot"))]
+            f(s, placement, tx)
         }));
     }
 

@@ -53,6 +53,7 @@ impl Host {
         #[cfg(target_os = "macos")]
         { w.native.prime.stop(); }
         w.window.set_minimized(true);
+        self.placement_watch.mark_dirty();
     }
 
     /// `Tx::set_title`: shows a title set since the window last showed one, hidden or covered

@@ -123,12 +123,44 @@ impl Host {
 
     pub(in crate::window) fn set_position(&mut self, event_loop: &ActiveEventLoop, position: (i32, i32)) {
         self.placement = None;
+        self.logical_position = None;
         self.options.position = Some(position);
         self.reopen.clear_position();
         if !is_wayland(event_loop) && let Some(w) = &self.win {
+            #[cfg(target_os = "macos")]
+            {
+                let (screens, main_scale) = crate::platform::macos::screen_bounds();
+                let current = w.window.scale_factor();
+                let fallback = if current > 0.0 && current.is_finite() { current } else { main_scale };
+                let resolved = crate::window::placement::resolve_mac_physical_position(
+                    position,
+                    None,
+                    &screens,
+                    fallback,
+                );
+                w.window.set_outer_position(winit::dpi::Position::Logical(
+                    winit::dpi::LogicalPosition::new(resolved.logical_position.0, resolved.logical_position.1),
+                ));
+            }
+            #[cfg(not(target_os = "macos"))]
             w.window.set_outer_position(PhysicalPosition::new(position.0, position.1));
         }
         self.sync_origin();
+        self.placement_watch.mark_dirty();
+    }
+
+    pub(in crate::window) fn set_logical_position(&mut self, event_loop: &ActiveEventLoop, position: (f64, f64)) {
+        self.placement = None;
+        self.options.position = None;
+        self.logical_position = Some(position);
+        self.reopen.clear_position();
+        if !is_wayland(event_loop) && let Some(w) = &self.win {
+            w.window.set_outer_position(winit::dpi::Position::Logical(
+                winit::dpi::LogicalPosition::new(position.0, position.1),
+            ));
+        }
+        self.sync_origin();
+        self.placement_watch.mark_dirty();
     }
 
     /// Whether this window must never take foreground activation on reveal.
@@ -450,6 +482,7 @@ impl Host {
                 RevealEffect::Shown { live } => {
                     self.life.show();
                     self.app.set_live_visible(live);
+                    self.placement_watch.mark_dirty();
                 }
                 RevealEffect::CancelTimerFrame => self.app.rt_mut().cancel_timer_frame(),
                 RevealEffect::Number => if let Some(w) = &self.win {
@@ -568,6 +601,7 @@ impl Host {
         let shows = matches!(requests.window, Some(WindowRequest::Show | WindowRequest::Open(_)));
         let polled = wake && !quiet && self.poll_hidden(event_loop, shows);
         if let Some(position) = requests.position { self.set_position(event_loop, position); }
+        if let Some(position) = requests.logical_position { self.set_logical_position(event_loop, position); }
         if let Some(place) = requests.place { self.place(event_loop, place); }
         if let Some(request) = requests.window { self.window_request(event_loop, request); }
         if requests.activation == Some(Activation::Focus) { self.focus(event_loop); }
@@ -659,6 +693,7 @@ impl Host {
             w.toggle_maximized();
             #[cfg(target_os = "windows")]
             crate::platform::win32::apply_window_styles(&w.window, &self.windows_window);
+            self.placement_watch.mark_dirty();
         }
         if let Some(req) = self.app.rt_mut().take_full_screen_request() && let Some(w) = self.shown_win() {
             match req {
@@ -667,6 +702,7 @@ impl Host {
             }
             #[cfg(target_os = "windows")]
             crate::platform::win32::apply_window_styles(&w.window, &self.windows_window);
+            self.placement_watch.mark_dirty();
         }
         if let Some(menu) = self.app.rt_mut().take_window_menu() && let Some(w) = self.shown_win() {
             let rt = self.app.rt();

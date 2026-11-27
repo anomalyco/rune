@@ -143,6 +143,20 @@ impl ReopenState {
         self.restored_position = None;
     }
 
+    /// Seeds initial restored bounds before first creation (from `App::window_placement`).
+    pub(in crate::window) fn seed_initial(
+        &mut self,
+        position: Option<Position>,
+        size: Option<RestoredSize>,
+    ) {
+        if let Some(pos) = position {
+            self.restored_position = Some(pos);
+        }
+        if let Some(sz) = size {
+            self.restored_size = Some(sz);
+        }
+    }
+
     pub(in crate::window) fn create_plan(&self, resizable: bool, panel: bool) -> CreatePlan {
         let open_as = if resizable && !panel {
             self.open_as

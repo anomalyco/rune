@@ -61,6 +61,19 @@ impl Host {
         ).with_active(focus);
         #[cfg(target_os = "macos")]
         if self.macos_window.nonactivating_panel { attrs = attrs.with_visible(false).with_active(false); }
+        #[cfg(target_os = "macos")]
+        let mac_screens = (self.logical_position.is_none() && self.options.position.is_some())
+            .then(crate::platform::macos::screen_bounds);
+        #[cfg(target_os = "macos")]
+        let mac_screens_ref = mac_screens.as_ref().map(|(s, f)| (s.as_slice(), *f));
+        #[cfg(not(target_os = "macos"))]
+        let mac_screens_ref = None;
+        attrs = crate::window::placement::apply_initial_position_attrs(
+            attrs,
+            self.logical_position,
+            &self.options,
+            mac_screens_ref,
+        );
         let panel = cfg!(target_os = "macos") && self.macos_window.nonactivating_panel;
         let plan = self.reopen.create_plan(self.options.resizable, panel);
         #[cfg(target_os = "windows")]

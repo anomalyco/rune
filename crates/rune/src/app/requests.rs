@@ -43,6 +43,7 @@ pub(crate) struct WindowRequests {
     /// `AppHandle::focus` or `AppHandle::minimize`; last-wins (`cancel_minimize`).
     pub activation: Option<Activation>,
     pub position: Option<(i32, i32)>,
+    pub logical_position: Option<(f64, f64)>,
     pub place: Option<crate::windows::PlaceRequest>,
     /// `AppHandle::quit` or `AppHandle::relaunch`, and what follows the exit.
     pub quit: Option<crate::quit::After>,
@@ -54,7 +55,11 @@ impl WindowRequests {
     /// Asks something of the window itself: show, hide or close it, focus or minimize it, or
     /// move it. A request added here reaches both `only_updates` and `Shared::window_pending`.
     fn asks_window(&self) -> bool {
-        self.window.is_some() || self.activation.is_some() || self.position.is_some() || self.place.is_some()
+        self.window.is_some()
+            || self.activation.is_some()
+            || self.position.is_some()
+            || self.logical_position.is_some()
+            || self.place.is_some()
     }
 
     /// A later open, hide, close or focus takes a minimize back out; a show leaves it, so a
@@ -149,12 +154,16 @@ impl SharedCore {
     }
 
     pub(crate) fn set_position(&self, position: (i32, i32)) {
-        self.request(|q| { q.position = Some(position); q.place = None; });
+        self.request(|q| { q.position = Some(position); q.logical_position = None; q.place = None; });
+    }
+
+    pub(crate) fn set_logical_position(&self, position: (f64, f64)) {
+        self.request(|q| { q.logical_position = Some(position); q.position = None; q.place = None; });
     }
 
     pub(crate) fn place(&self, display: crate::DisplayTarget, placement: crate::OverlayPlacement) {
         let place = crate::windows::PlaceRequest::new(display, placement);
-        self.request(|q| { q.place = Some(place); q.position = None; });
+        self.request(|q| { q.place = Some(place); q.position = None; q.logical_position = None; });
     }
 
     pub(crate) fn activate(&self, token: String) {

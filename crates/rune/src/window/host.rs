@@ -57,6 +57,8 @@ pub(in crate::window) struct Host {
     /// `App::titlebar`, unless the window is borderless.
     pub(in crate::window) titlebar: Option<crate::Titlebar>,
     pub(in crate::window) options: WindowOptions,
+    /// Explicit logical outer position (`App::logical_position`, `WindowHandle::set_logical_position`).
+    pub(in crate::window) logical_position: Option<(f64, f64)>,
     pub(in crate::window) placement: Option<crate::windows::PlaceRequest>,
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(in crate::window) macos_window: crate::MacWindowOptions,
@@ -90,6 +92,8 @@ pub(in crate::window) struct Host {
     pub(in crate::window) geometry: SpecGeometry,
     /// The last sample `App::on_window_geometry` heard.
     pub(in crate::window) geometry_watch: super::geometry::GeometryWatch,
+    /// Coalesced dirty watcher for `App::on_placement`.
+    pub(in crate::window) placement_watch: super::placement::PlacementWatch,
     pub(in crate::window) args: Args,
     pub(in crate::window) keep_running: bool,
     /// What the window still owes after its first frame (`post_frame`).
@@ -221,6 +225,8 @@ struct HostInit {
     chrome: Chrome,
     titlebar: Option<crate::Titlebar>,
     options: WindowOptions,
+    logical_position: Option<(f64, f64)>,
+    initial_placement: Option<crate::WindowPlacement>,
     macos_window: crate::MacWindowOptions,
     windows_window: crate::WindowsWindowOptions,
     exclude_from_capture: Option<bool>,
@@ -310,6 +316,11 @@ impl Host {
             app.on_close_request, app.on_quit_request, app.on_close, app.on_rest, app.on_reopen, app.on_quit, app.turn_scope,
         );
         let on_geometry = app.on_window_geometry;
+        let crate::window::placement::AppPlacement {
+            on_placement,
+            logical_position,
+            initial_placement,
+        } = std::mem::take(&mut app.placement);
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
@@ -331,7 +342,7 @@ impl Host {
         let shared_core = shared.core.clone();
         let geometry = SpecGeometry { title: spec.title, size: spec.size, min_size: spec.min_size };
         let typed = Box::new(TypedWindowApp {
-            rt, shared, comp, on_frame_drawn, on_close_request, on_quit_request, on_close, on_rest, on_quit, on_reopen, on_geometry, turn_scope,
+            rt, shared, comp, on_frame_drawn, on_close_request, on_quit_request, on_close, on_rest, on_quit, on_reopen, on_geometry, on_placement, turn_scope,
             keep_layout, kept_layout: layout_seed,
         });
         Self::from_app(typed, HostInit {
@@ -340,6 +351,8 @@ impl Host {
             chrome,
             titlebar,
             options,
+            logical_position,
+            initial_placement,
             macos_window,
             windows_window,
             exclude_from_capture,
@@ -394,6 +407,8 @@ impl Host {
             chrome,
             titlebar,
             options,
+            logical_position,
+            initial_placement,
             macos_window,
             windows_window,
             exclude_from_capture,
@@ -504,11 +519,24 @@ impl Host {
             native_handle.native.no_activate.store(windows_window.no_activate, Ordering::Release);
             native_handle.native.tool_window.store(windows_window.tool_window, Ordering::Release);
         }
+        let mut reopen = ReopenState::new(open_as);
+        if let Some(saved) = initial_placement {
+            let (pos, size) = super::placement::placement_to_reopen_state(
+                saved,
+                cfg!(target_os = "macos"),
+                wayland,
+            );
+            reopen.seed_initial(
+                pos.filter(|_| options.position.is_none() && logical_position.is_none()),
+                size.filter(|_| options.physical_size.is_none() && args.size.is_none() && !fit_height),
+            );
+        }
         Host {
             app_woken,
             chrome,
             titlebar,
             options,
+            logical_position,
             placement: None,
             macos_window,
             windows_window,
@@ -530,6 +558,7 @@ impl Host {
             keeps_loop,
             geometry,
             geometry_watch: Default::default(),
+            placement_watch: Default::default(),
             args,
             keep_running,
             #[cfg(target_os = "windows")]
@@ -547,7 +576,7 @@ impl Host {
             open_at_start,
             float_on_open,
             open_inactive,
-            reopen: ReopenState::new(open_as),
+            reopen,
             shared,
             shortcuts,
             menus,

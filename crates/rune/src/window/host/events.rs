@@ -171,6 +171,7 @@ impl Host {
                 super::gpu_loss::LatchedWakeAction::NonGpuShell => match event {
                     WakeEvent::Focus(_) => self.focus(event_loop),
                     WakeEvent::Position(_, position) => self.set_position(event_loop, position),
+                    WakeEvent::LogicalPosition(_, position) => self.set_logical_position(event_loop, position),
                     WakeEvent::Place(_, place) => self.place(event_loop, place),
                     WakeEvent::Level(_, on) => self.set_always_on_top(event_loop, on),
                     WakeEvent::ExcludeFromCapture(_, exclude) => self.set_exclude_from_capture(exclude),
@@ -211,6 +212,7 @@ impl Host {
             }
             WakeEvent::Focus(_) => self.focus(event_loop),
             WakeEvent::Position(_, position) => self.set_position(event_loop, position),
+            WakeEvent::LogicalPosition(_, position) => self.set_logical_position(event_loop, position),
             WakeEvent::Place(_, place) => self.place(event_loop, place),
             WakeEvent::Level(_, on) => self.set_always_on_top(event_loop, on),
             WakeEvent::ExcludeFromCapture(_, exclude) => self.set_exclude_from_capture(exclude),
@@ -380,11 +382,15 @@ impl Host {
         // Minimised on Windows, where no occlusion event need say so.
         if matches!(event, WindowEvent::Resized(size) if size.width == 0 || size.height == 0) { self.rest_step(RestEvent::Unseen); }
         if let WindowEvent::Occluded(occluded) = event {
+            self.placement_watch.mark_dirty();
             crate::marks::mark(if occluded { "window.covered" } else { "window.uncovered" });
             // Alpha-zero launcher panels remain renderable on explicit invalidation.
             // Their native occlusion transitions must not settle or redraw a reveal.
             if !(self.macos_window.launcher && cfg!(target_os = "macos")) { self.set_cover(Cover::System, occluded); }
             return;
+        }
+        if matches!(event, WindowEvent::Moved(_) | WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. }) {
+            self.placement_watch.mark_dirty();
         }
         if matches!(event, WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. }) { self.sync_origin(); }
         // A window the CPU renderer draws has no GPU yet; its input goes on all the same.

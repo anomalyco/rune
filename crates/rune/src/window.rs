@@ -61,6 +61,7 @@ mod host;
 mod keys;
 #[cfg(not(target_arch = "wasm32"))]
 mod panic_trap;
+pub(crate) mod placement;
 #[cfg(not(target_arch = "wasm32"))]
 mod pointer_lock;
 mod resize_sync;
@@ -177,6 +178,7 @@ pub(crate) enum WakeEvent {
     Window(usize, WindowRequest),
     Focus(usize),
     Position(usize, (i32, i32)),
+    LogicalPosition(usize, (f64, f64)),
     #[cfg(not(target_arch = "wasm32"))]
     Level(usize, bool),
     #[cfg(not(target_arch = "wasm32"))]
@@ -572,7 +574,7 @@ impl ApplicationHandler<WakeEvent> for Windows {
             let _handling = crate::quit::handling();
             let slot = match &event {
                 WakeEvent::DisplayTick(i) | WakeEvent::App(i) | WakeEvent::Live(i) | WakeEvent::Window(i, _) | WakeEvent::Focus(i)
-                    | WakeEvent::Position(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::WindowBackdrop(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
+                    | WakeEvent::Position(i, _) | WakeEvent::LogicalPosition(i, _) | WakeEvent::Level(i, _) | WakeEvent::ExcludeFromCapture(i, _) | WakeEvent::ColorScheme(i, _) | WakeEvent::WindowBackdrop(i, _) | WakeEvent::Place(i, _) | WakeEvent::Frame(i, _)
                     | WakeEvent::A11y(i) | WakeEvent::FrameSlot(i) | WakeEvent::GpuReady(i) | WakeEvent::ResizeSync(i) => *i,
                 WakeEvent::Reopen => {
                     this.reopen(event_loop);

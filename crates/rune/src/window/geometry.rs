@@ -136,6 +136,7 @@ impl Host {
         if check_gpu_loss && self.poll_gpu_loss() { return false; }
         // After `on_window`, which may resize it, and before its first focus and frame.
         self.creation_geometry();
+        self.placement_watch.mark_dirty();
         true
     }
 

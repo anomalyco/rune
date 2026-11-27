@@ -372,6 +372,7 @@ impl Host {
 
     pub(in crate::window) fn place(&mut self, event_loop: &ActiveEventLoop, request: crate::windows::PlaceRequest) {
         self.options.position = None;
+        self.logical_position = None;
         self.placement = Some(request);
         self.reopen.clear_position();
         self.apply_placement(event_loop);
@@ -398,6 +399,7 @@ impl Host {
             if let Some(size) = applied { self.apply_immediate_resize(size, true); }
         }
         self.sync_origin();
+        self.placement_watch.mark_dirty();
     }
 
     /// Applies a size that `Window::request_inner_size` committed immediately (Wayland):
@@ -481,6 +483,7 @@ impl Host {
                 self.frame_move = None;
                 crate::platform::macos::set_window_frame(&w.window, to);
                 self.sync_origin();
+                self.placement_watch.mark_dirty();
                 self.sync_surface_size()
             }
         }
@@ -514,6 +517,7 @@ impl Host {
             if [x, y] != [current[0], current[1]] {
                 window.set_outer_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
                 self.sync_origin();
+                self.placement_watch.mark_dirty();
             }
             false
         }

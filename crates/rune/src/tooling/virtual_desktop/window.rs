@@ -517,6 +517,7 @@ impl Member for Window {
         let _receiving = self.shortcuts.receiving();
         let requests = self.app.drain_updates(&mut self.menus);
         if let Some(p) = requests.position { self.move_to(desktop.to_points(p)); }
+        if let Some((x, y)) = requests.logical_position { self.move_to((x as f32, y as f32)); }
         if let Some(place) = &requests.place { self.place(desktop, place, t); }
         if let Some(request) = requests.window { self.request(request, &mut changes); }
         if requests.activation == Some(crate::app::Activation::Focus) && self.life.shown() { changes.front = true; changes.keys = true; }
@@ -527,6 +528,7 @@ impl Member for Window {
                 WakeEvent::Window(_, request) => self.request(request, &mut changes),
                 WakeEvent::Place(_, place) => self.place(desktop, &place, t),
                 WakeEvent::Position(_, p) => self.move_to(desktop.to_points(p)),
+                WakeEvent::LogicalPosition(_, (x, y)) => self.move_to((x as f32, y as f32)),
                 WakeEvent::Focus(_) if self.life.shown() => { changes.front = true; changes.keys = true; }
                 WakeEvent::Frame(_, mut request) => {
                     let rt = self.app.rt_mut();

@@ -331,6 +331,7 @@ impl Host {
             self.clipboard.flush_core(self.app.rt_mut());
         }
         if let Some(position) = requests.position { self.set_position(event_loop, position); }
+        if let Some(position) = requests.logical_position { self.set_logical_position(event_loop, position); }
         if let Some(place) = requests.place { self.place(event_loop, place); }
         if let Some(request) = requests.window {
             match request {
@@ -559,6 +560,7 @@ pub(in crate::window) fn classify_latched_wake_event(event: &crate::window::Wake
         WakeEvent::Window(_, WindowRequest::Close | WindowRequest::Hide) => LatchedWakeAction::CloseOrHide,
         WakeEvent::Focus(_)
         | WakeEvent::Position(_, _)
+        | WakeEvent::LogicalPosition(_, _)
         | WakeEvent::Place(_, _)
         | WakeEvent::Level(_, _)
         | WakeEvent::ExcludeFromCapture(_, _)
