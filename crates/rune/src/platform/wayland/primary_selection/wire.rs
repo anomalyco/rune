@@ -640,23 +640,29 @@ pub(crate) fn try_write(text: &str) -> WriteDispatch {
 /// Reads the Wayland primary selection via `zwp_primary_selection_v1`, or returns `Fallback`.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) fn try_read(target: String, wake: Waker, deliver: DeliverFn) -> ReadDispatch {
+    let mut target = Some(target);
+    let mut deliver = Some(deliver);
+    let mut wake = Some(wake);
     CONTROLLERS.try_with(|map| {
         let mut map = map.borrow_mut();
         let Some(DisplaySlot::Live(controller)) = map.values_mut().next() else {
-            return ReadDispatch::Fallback(target);
+            return ReadDispatch::Fallback(target.take().unwrap());
         };
         controller.dispatch_pending();
         if controller.state.machine.availability() == Availability::Dead { return ReadDispatch::Handled; }
         let preferred_seat = latest_input(controller.display_ptr).map(|c| c.seat);
         let qh = controller.queue.handle();
-        let effects = machine::step(&mut controller.state.machine, Event::RequestRead { target, preferred_seat });
-        controller.state.apply_effects(effects, &qh, Some(deliver), Some(wake), true);
+        let effects = machine::step(&mut controller.state.machine, Event::RequestRead {
+            target: target.take().unwrap(),
+            preferred_seat,
+        });
+        controller.state.apply_effects(effects, &qh, deliver.take(), wake.take(), true);
         if controller.state.needs_flush {
             controller.state.needs_flush = false;
             let _ = controller.queue.flush();
         }
         ReadDispatch::Handled
-    }).unwrap_or(ReadDispatch::Fallback(target))
+    }).unwrap_or_else(|_| ReadDispatch::Fallback(target.take().unwrap()))
 }
 
 /// Drains completed off-thread pipe reads into `Client` reply channels on the UI thread.
