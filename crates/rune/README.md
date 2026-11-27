@@ -765,8 +765,8 @@ top-left, which is what popups and context menus anchor to.
 | --- | --- | --- |
 | `on_drag` | `Drag::x`, `y`; `start_x`, `start_y`, `w`, `h` captured at press | local |
 | `on_drag` | `Drag::dx`, `dy` (travel since the press) | window |
-| `on_wheel` | `WheelEvent::x`, `y` (`dx`, `dy` are the scroll in points) | local |
-| `on_magnify`, `on_rotate` | `MagnifyEvent::x`, `y`, `RotateEvent::x`, `y` | local |
+| `on_wheel`, `on_wheel_any` | `WheelEvent::x`, `y` (`dx`, `dy` are the scroll in points) | local |
+| `on_magnify`, `on_magnify_any`, `on_rotate` | `MagnifyEvent::x`, `y`, `RotateEvent::x`, `y` | local |
 | `on_smart_magnify` | `x`, `y` | local |
 | `on_pointer_move_local`, `on_secondary_press_local`, `on_any_press` | `PointerEvent::x`, `y` | local |
 | | `PointerEvent::window_x`, `window_y`, `window()` | window |
@@ -782,7 +782,7 @@ top-left, which is what popups and context menus anchor to.
 | `on_link_hover` | `Option<[left, top, width, height]>` of the hovered link's hit line box on enter/switch, `None` on leave | window |
 | `context_menu`, `PopupAnchor::from(PointerPress)` | the anchor they take | window |
 
-`on_press_tx`, `on_background_press_tx`, `on_double_press_tx`, and `on_middle_press` expose
+`on_press_tx`, `on_press_tx_any`, `on_background_press_tx`, `on_double_press_tx`, and `on_middle_press` expose
 the pointer activation position through `tx.press_point() -> Option<PointerEvent>` (element-local
 `x`/`y` and window `window_x`/`window_y` on mouse or touch activation, `None` on keyboard or
 assistive-technology activation and outside press handlers). Inside `El::on_link` (and
@@ -806,9 +806,10 @@ remounting fires it again; call `Tx::live_only` to skip the follow-up commit whe
 `on_drawn_layout_tx` also re-fire once when the display scale changes (even when the logical
 point rect is unchanged), and `Tx::scale()` reports the current display scale (device pixels per
 view point, including `Cx::zoom`) in any handler or `poll`. State-independent `_any` builders
-(`on_drag_any`, `on_pointer_move_any`, `on_hover_change_any`, `on_focus_change_any`,
-`on_focus_within_change_any`, `on_layout_any`, `on_visible_any`, and `on_key_any`) omit the
-app state type parameter so reusable components can mount under any host state.
+(`on_press_tx_any`, `on_drag_any`, `on_pointer_move_any`, `on_hover_change_any`,
+`on_focus_change_any`, `on_focus_within_change_any`, `on_layout_any`, `on_visible_any`,
+`on_key_any`, `on_wheel_any`, and `on_magnify_any`) omit the app state type parameter so reusable
+components can mount under any host state.
 
 ### App lifetime (`app.rs`, for apps that outlive their window)
 
