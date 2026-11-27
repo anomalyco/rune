@@ -58,6 +58,9 @@ trait StatusItemHost: 'static {
     fn set_highlighted(&self, highlighted: bool);
     fn screen_rect(&self, mtm: MainThreadMarker) -> Option<[i32; 4]>;
     fn pop_up_menu(&self, menu: &NSMenu);
+    fn on_main(&self, work: Box<dyn FnOnce() + Send>) {
+        crate::platform::main_queue::on_main(work);
+    }
     fn remove(&self);
 }
 
@@ -256,24 +259,26 @@ impl ButtonTarget {
             }
             MacClickAction::ShowMenu => {
                 let items = ivars.model.lock().unwrap_or_else(|e| e.into_inner()).menu.clone();
-                if items.is_empty() {
-                    return;
+                if !items.is_empty()
+                    && let Some((host, _)) = live_entry(ivars.id)
+                {
+                    let (menu, menu_target) = build_menu(mtm, &items, ivars.on_event.clone());
+                    let previous = ivars.last_menu.borrow_mut().replace((menu.clone(), menu_target));
+                    if let Some((old_menu, _)) = previous {
+                        clear_menu_targets(&old_menu);
+                    }
+                    ivars.showing_menu.set(true);
+                    let _guard = ShowingMenuGuard(&ivars.showing_menu);
+                    host.pop_up_menu(&menu);
                 }
-                let (menu, menu_target) = build_menu(mtm, &items, ivars.on_event.clone());
-                let previous = ivars.last_menu.borrow_mut().replace((menu.clone(), menu_target));
-                if let Some((old_menu, _)) = previous {
-                    clear_menu_targets(&old_menu);
-                }
-                let host = ITEMS.with(|map| map.borrow().get(&ivars.id).map(|live| live.host.clone()));
-                let Some(host) = host else { return };
-                ivars.showing_menu.set(true);
-                let _guard = ShowingMenuGuard(&ivars.showing_menu);
-                host.pop_up_menu(&menu);
-                // Menu tracking clears the button's highlight, and the button unhighlights again
-                // when this click's tracking ends, so restore an app-held one after that.
-                let id = ivars.id;
-                crate::platform::main_queue::on_main(move || reapply_highlight(id));
             }
+        }
+        // Button click and menu tracking clear the button's highlight when tracking ends, so
+        // restore an app-held highlight on the next main-queue turn for every click action.
+        let highlighted = ivars.model.lock().unwrap_or_else(|e| e.into_inner()).highlighted;
+        if highlighted && let Some((host, _)) = live_entry(ivars.id) {
+            let id = ivars.id;
+            host.on_main(Box::new(move || reapply_highlight(id)));
         }
     }
 }
@@ -509,8 +514,8 @@ fn apply_highlighted(id: u64) {
     host.set_highlighted(highlighted);
 }
 
-/// Image and title changes redraw the button and can drop its highlight, so a highlight the
-/// app still holds is set again after them.
+/// Image, title and click tracking can clear the button's highlight, so a highlight the app
+/// still holds is set again after them.
 fn reapply_highlight(id: u64) {
     let Some((host, model)) = live_entry(id) else { return };
     if model.lock().unwrap_or_else(|e| e.into_inner()).highlighted {
@@ -649,13 +654,17 @@ impl Native {
     pub(super) fn set_highlighted(&self, highlighted: bool) {
         self.model.lock().unwrap_or_else(|e| e.into_inner()).highlighted = highlighted;
         let id = self.id;
-        if MainThreadMarker::new().is_some() {
-            apply_highlighted(id);
-        }
         // From a tray callback this runs inside the button's click tracking, which unhighlights
         // the button when it ends; applying the model's latest value on the next main-queue turn
         // lands after that.
-        crate::platform::main_queue::on_main(move || apply_highlighted(id));
+        if MainThreadMarker::new().is_some() {
+            apply_highlighted(id);
+            if let Some((host, _)) = live_entry(id) {
+                host.on_main(Box::new(move || apply_highlighted(id)));
+            }
+        } else {
+            crate::platform::main_queue::on_main(move || apply_highlighted(id));
+        }
     }
 
     pub(super) fn rect(&self) -> Option<[i32; 4]> {

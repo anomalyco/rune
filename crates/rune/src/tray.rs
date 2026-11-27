@@ -282,8 +282,9 @@ impl Tray {
     /// from [`TrayEvent::Activate`] and want the item to look active until it closes.
     ///
     /// - macOS: calls `NSStatusBarButton::highlight` on the main thread (dispatching to the main
-    ///   queue off it) and sets it again after [`Tray::set_icon`], [`Tray::set_title`] and the
-    ///   context menu, which would otherwise clear it. Called on the main thread, it also applies
+    ///   queue off it) and sets it again after [`Tray::set_icon`], [`Tray::set_title`] and clicks
+    ///   (primary clicks, context menus, and empty-menu right-clicks), which would otherwise clear
+    ///   it. Called on the main thread, it also applies
     ///   the latest value once more on the next main-queue turn, so a call from the
     ///   [`TrayEvent::Activate`] callback outlasts the button's own unhighlight when its click
     ///   tracking ends.
