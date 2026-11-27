@@ -6,23 +6,23 @@
 //! destroyed layer surface and wakes winit's event loop through `wake_on_wayland_read` when `done`
 //! arrives.
 
-use wayland_client::globals::GlobalList;
+use std::sync::Arc;
+
 use wayland_client::protocol::wl_seat::WlSeat;
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
+use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle};
+#[cfg(test)]
+use wayland_client::Proxy;
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{self, XdgActivationTokenV1};
 use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 
 use super::super::layer_shell_machine::activation::{StartFlush, TokenPoll, Wire, begin_request};
 use super::super::layer_shell_machine::connection;
 use super::dead::classify_turn_error;
+use super::globals::SharedGlobals;
 
 #[derive(Default)]
 struct Answer(Option<String>);
-
-impl Dispatch<XdgActivationV1, ()> for Answer {
-    fn event(_: &mut Self, _: &XdgActivationV1, _: <XdgActivationV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
-}
 
 impl Dispatch<XdgActivationTokenV1, ()> for Answer {
     fn event(answer: &mut Self, _: &XdgActivationTokenV1, event: xdg_activation_token_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
@@ -33,7 +33,7 @@ impl Dispatch<XdgActivationTokenV1, ()> for Answer {
 }
 
 struct StartWire<'a> {
-    conn: &'a Connection,
+    globals: &'a SharedGlobals,
     queue: EventQueue<Answer>,
     activation: Option<XdgActivationV1>,
     token: Option<XdgActivationTokenV1>,
@@ -69,7 +69,7 @@ impl Wire for StartWire<'_> {
 
     fn flush_start(&mut self) -> StartFlush {
         let flush_err = self.queue.flush().err();
-        let (kind, _) = classify_turn_error(None, flush_err, self.conn.backend().last_error());
+        let (kind, _) = classify_turn_error(None, flush_err, self.globals.conn().backend().last_error());
         if kind.is_some_and(connection::is_fatal) {
             StartFlush::Fatal
         } else {
@@ -84,12 +84,12 @@ impl Wire for StartWire<'_> {
     }
 
     fn destroy_activation(&mut self) {
-        if let Some(activation) = self.activation.take() {
-            activation.destroy();
-        }
+        // `XdgActivationV1` is owned by `SharedGlobals` and destroyed once the last holder drops.
+        self.activation = None;
     }
 
     fn drain_pending(&mut self) {
+        let _ = self.globals.dispatch_inner_queue();
         while matches!(self.queue.dispatch_pending(&mut self.state), Ok(n) if n > 0) {}
     }
 
@@ -102,12 +102,12 @@ impl Wire for StartWire<'_> {
 /// Independent of `LayerSurface` so hiding the overlay or releasing keyboard focus immediately
 /// after committing the request does not block the event thread or cancel the compositor's reply.
 pub(crate) struct PendingActivationToken {
-    conn: Connection,
     queue: EventQueue<Answer>,
     state: Answer,
-    activation: Option<XdgActivationV1>,
     token: Option<XdgActivationTokenV1>,
+    seen_drain_gen: u64,
     done: bool,
+    globals: Option<Arc<SharedGlobals>>,
 }
 
 impl PendingActivationToken {
@@ -115,25 +115,24 @@ impl PendingActivationToken {
     /// roundtrip. Returns `None` when the surface is closed, the compositor lacks
     /// `xdg_activation_v1`, or the display connection has failed.
     pub(super) fn start(
-        conn: &Connection,
-        globals: &GlobalList,
+        globals: &Arc<SharedGlobals>,
         surface: &WlSurface,
         seat: Option<(&WlSeat, u32)>,
         closed: bool,
     ) -> Option<Self> {
         if closed { return None; }
-        let (kind, _) = classify_turn_error(None, None, conn.backend().last_error());
+        let (kind, _) = classify_turn_error(None, None, globals.conn().backend().last_error());
         if kind.is_some_and(connection::is_fatal) {
             return None;
         }
-        let queue = conn.new_event_queue::<Answer>();
-        let activation = globals.bind::<XdgActivationV1, _, _>(&queue.handle(), 1..=1, ()).ok()?;
+        let activation = globals.activation()?;
+        let queue = globals.conn().new_event_queue::<Answer>();
         let (seat, serial) = match seat {
             Some((seat, serial)) => (Some(seat), Some(serial)),
             None => (None, None),
         };
         let mut wire = StartWire {
-            conn,
+            globals,
             queue,
             activation: Some(activation),
             token: None,
@@ -145,12 +144,12 @@ impl PendingActivationToken {
             return None;
         }
         Some(Self {
-            conn: conn.clone(),
             queue: wire.queue,
             state: wire.state,
-            activation: wire.activation,
             token: wire.token,
+            seen_drain_gen: globals.inner_drain_gen(),
             done: false,
+            globals: Some(globals.clone()),
         })
     }
 
@@ -160,9 +159,12 @@ impl PendingActivationToken {
     }
 
     /// True when this token's private queue already holds unread events in libwayland memory
-    /// (syscall-free check via `prepare_read`).
+    /// (syscall-free check via `prepare_read`) or a sibling queue drained the shared inner queue.
     pub(crate) fn has_pending_events(&self) -> bool {
-        self.is_live() && self.queue.prepare_read().is_none()
+        self.is_live()
+            && self.globals.as_ref().is_some_and(|g| {
+                g.has_pending_events(self.seen_drain_gen, self.queue.prepare_read().is_none())
+            })
     }
 
     /// Dispatches any queued events without reading the socket (winit reads the socket) and
@@ -171,14 +173,20 @@ impl PendingActivationToken {
         if self.done {
             return TokenPoll::Done(None);
         }
-        let dispatch_err = self.queue.dispatch_pending(&mut self.state).err();
+        let Some(globals) = self.globals.clone() else {
+            self.done = true;
+            return TokenPoll::Done(None);
+        };
+        let inner_err = globals.dispatch_inner_queue().err().map(wayland_client::DispatchError::Backend);
+        let dispatch_err = self.queue.dispatch_pending(&mut self.state).err().or(inner_err);
+        self.seen_drain_gen = globals.inner_drain_gen();
         if let Some(raw) = self.state.0.take() {
             self.teardown();
             self.done = true;
             return TokenPoll::Done((!raw.is_empty()).then_some(raw));
         }
         let flush_err = self.queue.flush().err();
-        let (kind, _) = classify_turn_error(dispatch_err, flush_err, self.conn.backend().last_error());
+        let (kind, _) = classify_turn_error(dispatch_err, flush_err, globals.conn().backend().last_error());
         if kind.is_some_and(connection::is_fatal) {
             self.teardown();
             self.done = true;
@@ -195,15 +203,19 @@ impl PendingActivationToken {
     fn teardown(&mut self) {
         // Drain before and after destroying every proxy so `EventQueueInner` retains no queued
         // events (each holds a `QueueHandle` cycle) when this queue drops, then flush best-effort.
+        if let Some(globals) = &self.globals {
+            let _ = globals.dispatch_inner_queue();
+        }
         while matches!(self.queue.dispatch_pending(&mut self.state), Ok(n) if n > 0) {}
         if let Some(token) = self.token.take() {
             token.destroy();
         }
-        if let Some(activation) = self.activation.take() {
-            activation.destroy();
+        if let Some(globals) = &self.globals {
+            let _ = globals.dispatch_inner_queue();
         }
         while matches!(self.queue.dispatch_pending(&mut self.state), Ok(n) if n > 0) {}
         self.queue.flush().ok();
+        self.globals = None;
     }
 }
 

@@ -185,8 +185,13 @@ impl OverlayCore {
     )]
     pub(super) fn layer_closed(&mut self, app: &mut dyn OverlayApp, reason: Option<&str>) {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
-        if let Some(blur) = self.surface.live_mut().and_then(|l| l.wayland_backdrop.as_mut()) {
-            blur.mark_closed();
+        {
+            if let Some(blur) = self.surface.live_mut().and_then(|l| l.wayland_backdrop.as_mut()) {
+                blur.mark_closed();
+            }
+            if reason.is_some() {
+                self.wayland_globals = None;
+            }
         }
         let reason = reason.unwrap_or("compositor closed layer surface").to_owned();
         self.surface_refused(app, reason);
@@ -469,6 +474,7 @@ impl OverlayCore {
         };
         let hold_keys = showing && self.key_hold.is_held();
         let mut layer = crate::platform::layer_shell::LayerSurface::new(display, self.name, self.at, self.interactive, &self.options, output, hold_keys)?;
+        self.wayland_globals = Some(layer.globals_handle());
         layer.set_buffer_scale(scale);
         if let Some((w, h)) = layer.configured_size() {
             if w > 0 { self.at.size.0 = w as f32; }

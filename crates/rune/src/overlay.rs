@@ -783,6 +783,11 @@ pub(in crate::overlay) struct OverlayCore {
     native: Option<crate::platform::win32::OverlayWindow>,
     #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     x11: Option<crate::platform::x11::overlay::InputWindow>,
+    /// Keeps this display's shared Wayland layer-shell globals alive across overlay hide/show
+    /// cycles so hiding the last visible overlay does not re-create a `wl_registry` or re-bind
+    /// `wl_compositor` on the next show.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    wayland_globals: Option<crate::platform::layer_shell::SharedGlobalsHandle>,
     surface: surface::Surface,
     /// `ConfiguredOverlay::release_gpu_when_hidden` or `release_gpu_after`.
     release: Release,
@@ -936,6 +941,8 @@ impl OverlayCore {
             native: None,
             #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
             x11: None,
+            #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+            wayland_globals: None,
             mods: Default::default(),
             control_click: false,
             ime: Default::default(),
