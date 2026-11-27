@@ -470,6 +470,75 @@ test('setCursor applies CSS cursor keywords for one-way resize, alias, and copy 
     assert.equal(canvas.style.cursor, '');
 });
 
+test('setCursor prefers image-set, falls back to -webkit-image-set on Safari and plain url() on Firefox', () => {
+    const makeCanvas = (accept) => {
+        let cur = '';
+        return {
+            style: {
+                get cursor() { return cur; },
+                set cursor(v) { if (accept(v)) cur = v; },
+                removeProperty(name) { if (name === 'cursor') cur = ''; },
+            },
+        };
+    };
+    const imgCss = 'image-set(url("blob:https://example.com/cur(1)") 2x) 4 8, auto';
+
+    // Chrome: accepts unprefixed image-set() directly.
+    const chrome = makeCanvas(v => v.startsWith('image-set(') || v === 'pointer');
+    chrome.style.cursor = 'pointer';
+    platform.setCursor(chrome, imgCss);
+    assert.equal(chrome.style.cursor, imgCss);
+
+    // Safari: rejects unprefixed image-set(), accepts -webkit-image-set(), even after a prior cursor.
+    const safari = makeCanvas(v => v.startsWith('-webkit-image-set(') || v === 'pointer');
+    safari.style.cursor = 'pointer';
+    platform.setCursor(safari, imgCss);
+    assert.equal(safari.style.cursor, `-webkit-${imgCss}`);
+
+    // Firefox: rejects both image-set() and -webkit-image-set(), accepts plain url() fallback.
+    const firefox = makeCanvas(v => v.startsWith('url(') || v === 'pointer');
+    firefox.style.cursor = 'pointer';
+    platform.setCursor(firefox, imgCss);
+    assert.equal(firefox.style.cursor, 'url("blob:https://example.com/cur(1)") 4 8, auto');
+});
+
+test('viewport watchDpr falls back to -webkit-device-pixel-ratio when resolution dppx does not match', async () => {
+    const { doc, win, body } = installDom({ width: 390, height: 844 });
+    win.devicePixelRatio = 2;
+    const queries = new Map();
+    Object.defineProperty(globalThis, 'matchMedia', {
+        value: (query) => {
+            const target = Object.assign(new FakeEventTarget(), {
+                matches: query === `(-webkit-device-pixel-ratio: ${win.devicePixelRatio})`,
+            });
+            queries.set(query, target);
+            return target;
+        },
+        configurable: true,
+    });
+    const canvas = doc.createElement('canvas');
+    body.append(canvas);
+    const events = [];
+    const dispose = platform.viewport(canvas, msg => events.push(JSON.parse(msg)), false);
+    await Promise.resolve();
+    events.length = 0;
+
+    const first = queries.get('(-webkit-device-pixel-ratio: 2)');
+    assert.ok(first, 'must query -webkit-device-pixel-ratio fallback when resolution dppx is unsupported');
+    assert.equal(first.listeners.get('change')?.length ?? 0, 1);
+
+    win.devicePixelRatio = 1;
+    first.matches = false;
+    first.dispatchEvent({ type: 'change' });
+    assert.deepEqual(events, [{ kind: 'dpr', scale: 1 }]);
+    assert.equal(first.listeners.get('change')?.length ?? 0, 0, 'old fallback listener detached');
+    const second = queries.get('(-webkit-device-pixel-ratio: 1)');
+    assert.ok(second && (second.listeners.get('change')?.length ?? 0) === 1, 're-armed on new DPR');
+
+    dispose();
+    assert.equal(second.listeners.get('change')?.length ?? 0, 0, 'dispose detaches DPR fallback listener');
+});
+
 test('viewport startup microtask emits one combined init snapshot, respects dispose, and keeps live events separate', async () => {
     const { doc, win, body } = installDom({ width: 390, height: 844 });
     const queries = new Map();

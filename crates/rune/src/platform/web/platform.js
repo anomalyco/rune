@@ -570,12 +570,18 @@ export function revokeUrl(url) {
     URL.revokeObjectURL(url);
 }
 
-// Sets `canvas`'s CSS cursor, or clears it when `css` is empty. Safari reads `image-set()` in a
-// cursor only with its `-webkit-` prefix.
+// Sets `canvas`'s CSS cursor, or clears it when `css` is empty. Clears first so a rejected
+// value never leaves a prior cursor behind: Safari reads `image-set()` in a cursor only with
+// its `-webkit-` prefix, and Firefox ignores `image-set()` in `cursor` and falls back to `url()`.
 export function setCursor(canvas, css) {
-    if (!css) return void canvas.style.removeProperty('cursor');
+    canvas.style.removeProperty('cursor');
+    if (!css) return;
     canvas.style.cursor = css;
     if (!canvas.style.cursor) canvas.style.cursor = `-webkit-${css}`;
+    if (!canvas.style.cursor && css.startsWith('image-set(')) {
+        const fallback = css.replace(/^image-set\(\s*(url\((?:"[^"]*"|'[^']*'|[^)]*)\))\s+[^)]*\)/, '$1');
+        if (fallback !== css) canvas.style.cursor = fallback;
+    }
 }
 
 // Resolves in the page's next idle time, or after `timeout` ms at the latest.
@@ -689,7 +695,13 @@ export function viewport(canvas, callback, embedded) {
     let dprMedia = null;
     const watchDpr = () => {
         dprMedia?.removeEventListener('change', onDpr);
-        dprMedia = matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        const dpr = window.devicePixelRatio || 1;
+        let media = matchMedia(`(resolution: ${dpr}dppx)`);
+        if (!media.matches) {
+            const webkit = matchMedia(`(-webkit-device-pixel-ratio: ${dpr})`);
+            if (webkit.matches) media = webkit;
+        }
+        dprMedia = media;
         dprMedia.addEventListener('change', onDpr);
     };
     function onDpr() {
