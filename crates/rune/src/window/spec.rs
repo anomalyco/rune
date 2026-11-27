@@ -1282,7 +1282,9 @@ trait ErasedWindow {
 
 struct Erased<S: 'static> {
     spec: WindowSpec<S>,
+    #[cfg_attr(all(target_arch = "wasm32", not(any(feature = "tooling", debug_assertions))), allow(dead_code))]
     handle: Option<crate::WindowHandle>,
+    #[cfg_attr(all(target_arch = "wasm32", not(any(feature = "tooling", debug_assertions))), allow(dead_code))]
     secondary: bool,
 }
 
