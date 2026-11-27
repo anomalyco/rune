@@ -12,6 +12,21 @@ pub(super) enum RowLayout {
     Horizontal,
 }
 
+/// Authored placeholder preserved once `LiveText` overwrites `TextSpec::content`, so layout
+/// re-measures (window resize, memo reuse, virtual remount) keep the reserved placeholder box
+/// instead of measuring the current live string.
+#[derive(Clone)]
+pub(in crate::runtime) struct LivePlaceholder {
+    /// Cased authored placeholder string (matching `TextSpec::content` before latching).
+    pub(in crate::runtime) content: String,
+    /// Placeholder `TextSpec::shape` key at the flattened scale.
+    pub(in crate::runtime) shape: Option<(u32, u64)>,
+    /// Authored placeholder `inline_boxes` (empty when the text has no `El::inline` children).
+    pub(in crate::runtime) inline_boxes: Vec<crate::text::InlineBoxRun>,
+    /// Cached unwrapped `(scale_bits, width, height)` in logical points for `!spec.wrap`.
+    pub(in crate::runtime) single_line_size: Option<(u32, f32, f32)>,
+}
+
 /// Rarely set per-node metadata, motion overrides, accessibility, live bindings and container
 /// specs, kept behind `Cold<NodeCold>` so common nodes stay under four hundred bytes.
 #[derive(Clone)]
@@ -25,6 +40,9 @@ pub(crate) struct NodeCold {
     /// Verified tabular-digit glyph substitution for a single-line `LiveText` node.
     pub(super) tabular_layout: Option<Rc<crate::text::TabularGlyphs>>,
     pub(super) live_text_seen: Option<u128>,
+    /// Authored placeholder preserved once `LiveText` overwrites `TextSpec::content`, so layout
+    /// re-measures keep the reserved placeholder size.
+    pub(super) live_placeholder: Option<Box<LivePlaceholder>>,
     pub(super) looping: Option<Box<rune_motion::LoopSpec>>,
     pub(super) loop_times: Option<u32>,
     pub(super) frame_motion: Option<Box<rune_motion::Anim>>,
@@ -78,6 +96,7 @@ impl crate::cold::Empty for NodeCold {
         run_layout: None,
         tabular_layout: None,
         live_text_seen: None,
+        live_placeholder: None,
         looping: None,
         loop_times: None,
         frame_motion: None,

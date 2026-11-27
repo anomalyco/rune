@@ -211,3 +211,200 @@ fn memo_holding_wrapped_truncated_clamped_live_text_reuses_and_relayouts_on_widt
     rt.frame(dt);
     assert_eq!(find(&rt, "trunc").text.as_ref().unwrap().content, "updated after rebase");
 }
+
+#[test]
+fn memo_live_text_keeps_reserved_width_across_window_resize_and_memo_reuse() {
+    struct State {
+        value: LiveText,
+        zoom: LiveText,
+        elapsed: LiveText,
+        status: LiveText,
+        wrapped_auto: LiveText,
+        cased: LiveText,
+        box_w: f32,
+        prefix: bool,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let mut box_col = col().w(s.box_w).gap(4.0);
+        if s.prefix {
+            box_col = box_col.child(el().key("prefix").size(8.0, 8.0));
+        }
+        box_col = box_col.child(memo("toolbar", (), || {
+            row()
+                .key("toolbar")
+                .gap(4.0)
+                .child(el().size(12.0, 12.0))
+                .child(text("400%").key("zoom").live_text(&s.zoom))
+                .child(el().key("after_zoom").size(12.0, 12.0))
+        }));
+        col()
+            .w_full()
+            .h_full()
+            .gap(4.0)
+            .child(memo("label", (), || text("x").self_start().live_text(&s.value)))
+            .child(text("0:00:00.0").key("elapsed").self_start().live_text(&s.elapsed))
+            .child(memo("status", (), || {
+                text("Compiling…").truncate().self_start().live_text(&s.status)
+            }))
+            .child(memo("wrapped_auto", (), || {
+                text("Two line placeholder").w_full().wrap().live_text(&s.wrapped_auto)
+            }))
+            .child(memo("cased", (), || {
+                text("abc").self_start().text_case(crate::TextCase::Uppercase).live_text(&s.cased)
+            }))
+            .child(box_col)
+    }
+
+    let make_state = |value: &str, zoom: &str, elapsed: &str, status: &str, wrapped_auto: &str, cased: &str| State {
+        value: LiveText::new(value),
+        zoom: LiveText::new(zoom),
+        elapsed: LiveText::new(elapsed),
+        status: LiveText::new(status),
+        wrapped_auto: LiveText::new(wrapped_auto),
+        cased: LiveText::new(cased),
+        box_w: 300.0,
+        prefix: false,
+    };
+    fn find<'a>(rt: &'a Runtime<State>, k: &str) -> &'a crate::runtime::types::Node {
+        rt.core().tree.nodes.iter().find(|n| n.key.as_deref() == Some(k)).unwrap()
+    }
+
+    let mut rt = Runtime::new(
+        make_state("x", "75%", "0:00:00.0", "Compiling…", "Two line placeholder", "abc"),
+        view,
+        (600.0, 400.0),
+        Env::new(true, 1.0),
+    );
+    let dt = 1.0 / 60.0;
+    rt.frame(0.0);
+
+    let label_w0 = find(&rt, "label").local.w;
+    let zoom_w0 = find(&rt, "zoom").local.w;
+    let after_zoom_x0 = find(&rt, "after_zoom").local.x;
+    let elapsed_w0 = find(&rt, "elapsed").local.w;
+    let status_w0 = find(&rt, "status").local.w;
+    let cased_w0 = find(&rt, "cased").local.w;
+
+    // Update all LiveText handles to much longer or shorter strings.
+    rt.state.value.set("A much longer live label");
+    rt.state.elapsed.set("9:58.2");
+    rt.state.status.set("Compiling shader_cache.rs");
+    rt.state.wrapped_auto.set("Line one line two line three line four line five line six line seven line eight line nine");
+    rt.state.cased.set("a much longer cased string");
+    rt.frame(dt);
+
+    assert_eq!(find(&rt, "label").local.w, label_w0, "live update must keep reserved label width");
+    assert_eq!(find(&rt, "label").text.as_ref().unwrap().content, "A much longer live label");
+    assert_eq!(find(&rt, "elapsed").local.w, elapsed_w0, "live update must keep reserved elapsed width");
+    assert_eq!(find(&rt, "status").local.w, status_w0, "live update must keep reserved status width");
+    assert!(find(&rt, "status").elided.is_some(), "longer live status must elide inside reserved width");
+
+    // Invalidate so Rune runs a Rebuild commit that reuses the memos.
+    let layouts_before = rt.core().text.cached_layout_count();
+    rt.invalidate();
+    rt.frame(dt);
+    assert_eq!(find(&rt, "label").local.w, label_w0, "memo reuse must keep reserved label width");
+
+    // Resize the viewport (CommitKind::Relayout): every LiveText must keep its authored placeholder size.
+    rt.set_viewport((530.0, 400.0), 1.0);
+    rt.frame(dt);
+    assert_eq!(find(&rt, "label").local.w, label_w0, "viewport resize must keep memoized LiveText reserved width");
+    assert_eq!(find(&rt, "label").text.as_ref().unwrap().content, "A much longer live label");
+    assert_eq!(find(&rt, "zoom").local.w, zoom_w0, "viewport resize must not shrink LiveText to shorter live value");
+    assert_eq!(find(&rt, "after_zoom").local.x, after_zoom_x0, "siblings after LiveText must not shift on resize");
+    assert_eq!(find(&rt, "elapsed").local.w, elapsed_w0, "viewport resize must keep non-memoized LiveText reserved width");
+    assert_eq!(find(&rt, "status").local.w, status_w0, "viewport resize must keep truncated LiveText reserved width");
+    assert!(find(&rt, "status").elided.is_some(), "truncated LiveText must stay elided after resize");
+    assert_eq!(find(&rt, "cased").local.w, cased_w0, "viewport resize must keep cased LiveText reserved width");
+    assert_eq!(find(&rt, "cased").text.as_ref().unwrap().content, "A MUCH LONGER CASED STRING");
+    assert_eq!(rt.core().text.cached_layout_count(), layouts_before, "resize with LiveText must not grow shared layout cache");
+
+    // Narrow viewport below reserved truncated width, then widen back: status must clamp while narrow
+    // and return to the placeholder's reserved width (not the longer live string's width) when widened.
+    rt.set_viewport((30.0, 400.0), 1.0);
+    rt.frame(dt);
+    assert!(find(&rt, "status").local.w <= 30.0 + 0.01, "truncated LiveText clamps to narrow viewport");
+    assert!(find(&rt, "status").elided.is_some());
+
+    // Compare wrapped_auto height at narrow width against a fresh runtime with the same placeholder.
+    let mut fresh_narrow = Runtime::new(
+        make_state("A much longer live label", "75%", "9:58.2", "Compiling shader_cache.rs", "Line one line two line three line four line five line six line seven line eight line nine", "a much longer cased string"),
+        view,
+        (30.0, 400.0),
+        Env::new(true, 1.0),
+    );
+    fresh_narrow.frame(0.0);
+    assert_eq!(
+        find(&rt, "wrapped_auto").local.h,
+        find(&fresh_narrow, "wrapped_auto").local.h,
+        "wrapped LiveText height after resize must match placeholder height, not live value height",
+    );
+
+    rt.set_viewport((530.0, 400.0), 1.0);
+    rt.frame(dt);
+    assert_eq!(find(&rt, "status").local.w, status_w0, "widening viewport must restore placeholder reserved width");
+    assert_eq!(find(&rt, "label").local.w, label_w0);
+
+    // Rebuild commit changing an outer container width + rebasing memo path (!same_path):
+    // reused memo must still measure the placeholder width of zoom ("400%"), not "75%".
+    rt.update(|s, _| {
+        s.box_w = 220.0;
+        s.prefix = true;
+    });
+    rt.frame(dt);
+    assert_eq!(find(&rt, "zoom").local.w, zoom_w0, "rebased memo reuse with container resize must keep reserved width");
+    assert_eq!(find(&rt, "after_zoom").local.x, after_zoom_x0);
+
+    // Scale change rebuilds and re-measures placeholder at the new scale while preserving live content.
+    rt.set_viewport((530.0, 400.0), 2.0);
+    rt.frame(dt);
+    let mut fresh_2x = Runtime::new(
+        make_state("A much longer live label", "75%", "9:58.2", "Compiling shader_cache.rs", "Line one", "a much longer cased string"),
+        view,
+        (530.0, 400.0),
+        Env::new(true, 2.0),
+    );
+    fresh_2x.frame(0.0);
+    assert_eq!(find(&rt, "label").local.w, find(&fresh_2x, "label").local.w, "scale change must keep placeholder width at 2x");
+    assert_eq!(find(&rt, "label").text.as_ref().unwrap().content, "A much longer live label");
+}
+
+#[test]
+fn memo_single_line_live_text_resize_keeps_reserved_width_with_zero_reshapes() {
+    fn view(value: &LiveText, _: &mut Cx<LiveText>) -> El {
+        col()
+            .w_full()
+            .h_full()
+            .child(memo("label", (), || text("x").self_start().live_text(value)))
+    }
+    let width = |rt: &Runtime<LiveText>| {
+        rt.core()
+            .tree
+            .nodes
+            .iter()
+            .find(|n| n.key.as_deref() == Some("label"))
+            .unwrap()
+            .local
+            .w
+    };
+    let mut rt = Runtime::new(LiveText::new("x"), view, (600.0, 400.0), Env::new(true, 1.0));
+    let dt = 1.0 / 60.0;
+    rt.frame(0.0);
+    let w0 = width(&rt);
+
+    rt.state.set("A much longer live label");
+    rt.frame(dt);
+    assert_eq!(width(&rt), w0);
+
+    let layouts_before = rt.core().text.cached_layout_count();
+    rt.invalidate();
+    rt.frame(dt);
+    assert_eq!(width(&rt), w0);
+    assert_eq!(rt.stats.shaped, 0, "memo reuse must shape 0 times");
+
+    rt.set_viewport((530.0, 400.0), 1.0);
+    rt.frame(dt);
+    assert_eq!(width(&rt), w0, "window resize must preserve reserved width of placeholder");
+    assert_eq!(rt.stats.shaped, 0, "window resize of single-line LiveText must shape 0 times");
+    assert_eq!(rt.core().text.cached_layout_count(), layouts_before);
+}

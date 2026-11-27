@@ -280,6 +280,24 @@ impl timer_wake::FrameState {
                     let cold = &mut *node.cold;
                     let seen = &mut cold.live_text_seen;
                     if let Some(live_text) = live.read(seen) && spec.source_text() != &*live_text {
+                        if cold.live_placeholder.is_none() {
+                            let single_line_size = (!spec.wrap && node.elided.is_none())
+                                .then(|| {
+                                    let TextLayout::Single(l) = node.text_layout.as_ref()? else { return None };
+                                    Some((
+                                        scale.to_bits(),
+                                        super::super::commit::text_layout::text_width(l.full_width()) / scale,
+                                        super::super::commit::text_layout::clamped_height(l, spec, scale) / scale,
+                                    ))
+                                })
+                                .flatten();
+                            cold.live_placeholder = Some(Box::new(crate::runtime::types::LivePlaceholder {
+                                content: spec.content.clone(),
+                                shape: spec.shape,
+                                inline_boxes: spec.cold.inline_boxes.clone(),
+                                single_line_size,
+                            }));
+                        }
                         spec.replace_content(live_text.to_string());
                         spec.remap_inline_boxes_for_live();
                         spec.apply_case();

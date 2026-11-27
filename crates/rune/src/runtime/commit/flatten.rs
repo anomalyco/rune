@@ -351,7 +351,7 @@ fn needs_node_cold(c: &crate::el::ElCold, meta: &ColdMeta) -> bool {
 fn node_cold_meta_only(meta: ColdMeta) -> NodeCold {
     NodeCold {
         trace_name: None, trace_namespace: meta.trace_namespace, label: None, live: Vec::new(),
-        run_layout: None, tabular_layout: None, live_text_seen: None, looping: None, loop_times: None, frame_motion: None, opacity_motion: None, lead: None,
+        run_layout: None, tabular_layout: None, live_text_seen: None, live_placeholder: None, looping: None, loop_times: None, frame_motion: None, opacity_motion: None, lead: None,
         transition: None, transition_motion: None, enter_in_instant: false, matched: None, matched_motion: None, above: None, above_boundary: None, resolved_anchor: None, scroll: None, scroll_axes: crate::el::ScrollAxes::Y,
         scroll_edges: crate::el::ScrollEdges::default(), wheel_scrolls: None, sticky: None, growth: None, glide: None,
         a11y: crate::el::A11y::EMPTY, pixel_aspect: meta.pixel_aspect, aspect_fit: meta.aspect_fit,
@@ -470,7 +470,7 @@ macro_rules! node_cold_from {
         NodeCold {
             trace_name: $c.trace_name, trace_namespace: $m.trace_namespace,
             label: take_field!($mode, $c.label), live: take_field!($mode, $c.live),
-            run_layout: None, tabular_layout: None, live_text_seen: None,
+            run_layout: None, tabular_layout: None, live_text_seen: None, live_placeholder: None,
             looping: take_field!($mode, $c.looping), loop_times: $c.loop_times, frame_motion: take_field!($mode, $c.frame_motion),
             opacity_motion: take_field!($mode, $c.opacity_motion), lead: $c.lead,
             transition: take_field!($mode, $c.transition), transition_motion: take_field!($mode, $c.transition_motion),
