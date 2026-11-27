@@ -161,7 +161,10 @@ impl WinitState {
         };
 
         let output_state = OutputState::new(globals, queue_handle);
-        let monitors = output_state.outputs().map(MonitorHandle::new).collect();
+        let mut monitors = Vec::new();
+        for output in output_state.outputs() {
+            upsert_monitor(&mut monitors, MonitorHandle::new(output), same_monitor);
+        }
 
         let seat_state = SeatState::new(globals, queue_handle);
 
@@ -337,7 +340,12 @@ impl OutputHandler for WinitState {
     }
 
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: WlOutput) {
-        self.monitors.lock().unwrap().push(MonitorHandle::new(output));
+        let mut monitors = self.monitors.lock().unwrap();
+        let output = MonitorHandle::new(output);
+        // Rune: `WinitState::new` seeds `monitors` from `output_state.outputs()`, and sctk's
+        // initial `wl_output.done` invokes `new_output` for that same output. Deduplicate so
+        // `monitors` never holds duplicate entries for one `wl_output`.
+        upsert_monitor(&mut monitors, output, same_monitor);
         // Rune: wake `AboutToWait` in case `wl_surface.enter` arrived before `wl_output.done`.
         self.dispatched_events = true;
     }
@@ -345,19 +353,15 @@ impl OutputHandler for WinitState {
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, updated: WlOutput) {
         let mut monitors = self.monitors.lock().unwrap();
         let updated = MonitorHandle::new(updated);
-        if let Some(pos) = monitors.iter().position(|output| output == &updated) {
-            monitors[pos] = updated
-        } else {
-            monitors.push(updated)
-        }
+        upsert_monitor(&mut monitors, updated, same_monitor);
     }
 
     fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, removed: WlOutput) {
         let mut monitors = self.monitors.lock().unwrap();
         let removed = MonitorHandle::new(removed);
-        if let Some(pos) = monitors.iter().position(|output| output == &removed) {
-            monitors.remove(pos);
-            // Rune: wake `AboutToWait` even when the compositor sent no `wl_surface.leave`.
+        // Rune: remove every matching entry with `retain` so a duplicate can never leave a stale
+        // monitor behind, and wake `AboutToWait` even without `wl_surface.leave`.
+        if remove_monitor(&mut monitors, &removed, same_monitor) {
             self.dispatched_events = true;
         }
     }
@@ -466,3 +470,77 @@ sctk::delegate_registry!(WinitState);
 sctk::delegate_shm!(WinitState);
 sctk::delegate_xdg_shell!(WinitState);
 sctk::delegate_xdg_window!(WinitState);
+
+/// Rune: compares two Wayland monitor handles by proxy identity first and global `wl_output`
+/// identifier second, so duplicate entries for one output always match.
+fn same_monitor(a: &MonitorHandle, b: &MonitorHandle) -> bool {
+    a.proxy == b.proxy || a == b
+}
+
+/// Rune: inserts `item` into `monitors` or replaces its first match in place, removing any extra
+/// duplicates so `WinitState.monitors` never holds duplicate entries for one `wl_output`.
+fn upsert_monitor<T>(monitors: &mut Vec<T>, item: T, mut same: impl FnMut(&T, &T) -> bool) {
+    if let Some(pos) = monitors.iter().position(|existing| same(existing, &item)) {
+        monitors[pos] = item;
+        let mut idx = pos + 1;
+        while idx < monitors.len() {
+            if same(&monitors[idx], &monitors[pos]) {
+                monitors.remove(idx);
+            } else {
+                idx += 1;
+            }
+        }
+    } else {
+        monitors.push(item);
+    }
+}
+
+/// Rune: removes every entry in `monitors` matching `removed`, returning whether any entry was
+/// removed.
+fn remove_monitor<T>(
+    monitors: &mut Vec<T>,
+    removed: &T,
+    mut same: impl FnMut(&T, &T) -> bool,
+) -> bool {
+    let before = monitors.len();
+    monitors.retain(|existing| !same(existing, removed));
+    monitors.len() != before
+}
+
+#[cfg(test)]
+mod rune_monitor_tests {
+    use super::{remove_monitor, upsert_monitor};
+
+    #[test]
+    fn new_output_deduplicates_seeded_monitor_and_destroy_empties_list() {
+        // Mirrors startup on Sway 1.12: WinitState::new seeds [58], then sctk calls new_output(58).
+        let mut monitors = vec![58u32];
+        upsert_monitor(&mut monitors, 58, |a, b| a == b);
+        assert_eq!(monitors, vec![58]);
+
+        assert!(remove_monitor(&mut monitors, &58, |a, b| a == b));
+        assert!(monitors.is_empty());
+        assert!(!remove_monitor(&mut monitors, &58, |a, b| a == b));
+    }
+
+    #[test]
+    fn destroy_retains_only_other_monitors_even_with_duplicates() {
+        let mut monitors = vec![58u32, 59, 58];
+        assert!(remove_monitor(&mut monitors, &58, |a, b| a == b));
+        assert_eq!(monitors, vec![59]);
+
+        let mut dup_only = vec![58u32, 58];
+        assert!(remove_monitor(&mut dup_only, &58, |a, b| a == b));
+        assert!(dup_only.is_empty());
+    }
+
+    #[test]
+    fn upsert_strips_any_extra_duplicates_in_place() {
+        let mut monitors = vec![58u32, 59, 58];
+        upsert_monitor(&mut monitors, 58, |a, b| a == b);
+        assert_eq!(monitors, vec![58, 59]);
+
+        upsert_monitor(&mut monitors, 60, |a, b| a == b);
+        assert_eq!(monitors, vec![58, 59, 60]);
+    }
+}

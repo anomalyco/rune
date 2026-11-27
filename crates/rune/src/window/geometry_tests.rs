@@ -176,3 +176,101 @@ fn every_window_open_path_announces_creation_and_samples_geometry() {
         bypasses.join("\n"),
     );
 }
+
+#[test]
+fn wayland_duplicate_monitor_insertion_and_destruction() {
+    fn upsert(monitors: &mut Vec<u32>, output: u32) {
+        if let Some(pos) = monitors.iter().position(|&m| m == output) {
+            monitors[pos] = output;
+            let mut idx = pos + 1;
+            while idx < monitors.len() {
+                if monitors[idx] == output { monitors.remove(idx); } else { idx += 1; }
+            }
+        } else {
+            monitors.push(output);
+        }
+    }
+    fn remove_all(monitors: &mut Vec<u32>, output: u32) -> bool {
+        let before = monitors.len();
+        monitors.retain(|&m| m != output);
+        monitors.len() != before
+    }
+
+    let mut watch = GeometryWatch::default();
+    let mk = |entered: &[u32], live: &[u32]| {
+        sample((640, 420), 1.0, select_live_output(entered, live).is_some())
+    };
+
+    // Sway 1.12 startup: WinitState::new seeds [58], then sctk invokes new_output(58).
+    // Deduplicating in new_output keeps a single entry instead of [58, 58].
+    let mut live = vec![58u32];
+    upsert(&mut live, 58);
+    assert_eq!(live, vec![58]);
+
+    assert_eq!(watch.observe(mk(&[], &live), true), Some(sample((640, 420), 1.0, false)));
+    assert_eq!(watch.observe(mk(&[58], &live), false), Some(sample((640, 420), 1.0, true)));
+
+    // output HEADLESS-1 disable: global_remove(58) with no wl_surface.leave.
+    assert!(remove_all(&mut live, 58));
+    assert!(live.is_empty());
+    assert_eq!(select_live_output(&[58], &live), None);
+    assert_eq!(watch.observe(mk(&[58], &live), false), Some(sample((640, 420), 1.0, false)));
+
+    // output HEADLESS-1 enable: global(59) + wl_surface.enter(59) with stale 58 still at index 0.
+    upsert(&mut live, 59);
+    assert_eq!(live, vec![59]);
+    assert_eq!(select_live_output(&[58, 59], &live), Some(59));
+    assert_eq!(watch.observe(mk(&[58, 59], &live), false), Some(sample((640, 420), 1.0, true)));
+
+    // Defense in depth: even if duplicates pre-existed, retain removes every matching entry.
+    let mut dup_live = vec![58u32, 58];
+    assert!(remove_all(&mut dup_live, 58));
+    assert!(dup_live.is_empty());
+    assert_eq!(select_live_output(&[58], &dup_live), None);
+
+    let mut mixed_dup = vec![58u32, 59, 58];
+    assert!(remove_all(&mut mixed_dup, 58));
+    assert_eq!(mixed_dup, vec![59]);
+    assert_eq!(select_live_output(&[58], &mixed_dup), None);
+    assert_eq!(select_live_output(&[58, 59], &mixed_dup), Some(59));
+}
+
+/// Structural seam guard: vendored winit's Wayland `WinitState` must deduplicate `monitors` on
+/// `new_output` and remove every matching entry with `retain` on `output_destroyed`, so an output
+/// seeded in `WinitState::new` and re-announced by `new_output` can never leave a stale duplicate
+/// behind when Sway destroys the global without `wl_surface.leave`.
+#[test]
+fn vendored_winit_wayland_monitors_dedup_and_retain_on_destroy() {
+    let state_rs = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../vendor/winit/src/platform_impl/linux/wayland/state.rs"
+    ))
+    .expect("read vendor/winit Wayland state.rs");
+
+    let output_handler = state_rs
+        .split("impl OutputHandler for WinitState")
+        .nth(1)
+        .and_then(|s| s.split("impl CompositorHandler for WinitState").next())
+        .expect("OutputHandler impl in vendor/winit Wayland state.rs");
+
+    assert!(
+        !output_handler.contains(".push(MonitorHandle::new(output))"),
+        "WinitState::new_output must deduplicate instead of unconditionally pushing MonitorHandle",
+    );
+    assert!(
+        output_handler.contains("upsert_monitor(&mut monitors, output, same_monitor)"),
+        "WinitState::new_output must route through upsert_monitor",
+    );
+    assert!(
+        output_handler.contains("remove_monitor(&mut monitors, &removed, same_monitor)"),
+        "WinitState::output_destroyed must route through remove_monitor",
+    );
+    assert!(
+        !output_handler.contains("monitors.remove(pos)"),
+        "WinitState::output_destroyed must not remove only the first matching monitor entry",
+    );
+    assert!(
+        state_rs.contains("monitors.retain(|existing| !same(existing, removed))"),
+        "remove_monitor must use Vec::retain so duplicate entries can never survive destruction",
+    );
+}

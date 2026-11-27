@@ -18,7 +18,7 @@
 # `WM_EXITSIZEMOVE`; and Wayland `set_window_icon` sets the window's icon through `xdg-toplevel-icon-v1`,
 # backported from rust-windowing/winit#4288; and `WindowExtWayland::wayland_wm_state` + configure
 # wake on decoration/capability changes, `WindowExtX11::take_wm_state_changed` on `PropertyNotify`,
-# and Wayland `current_monitor` skipping destroyed outputs + waking `AboutToWait` on output changes; and Windows `set_fullscreen` updates styles (clearing `WS_EX_*EDGE` flags) and bounds atomically in one synchronous `SetWindowPos(..., SWP_FRAMECHANGED)` before `ITaskbarList2::MarkFullscreenWindow`, while borderless `WM_NCCALCSIZE` leaves fullscreen rects uninset).
+# and Wayland `current_monitor` skipping destroyed outputs + deduplicating `WinitState.monitors` (`new_output` upsert / `output_destroyed` `retain`) + waking `AboutToWait` on output changes; and Windows `set_fullscreen` updates styles (clearing `WS_EX_*EDGE` flags) and bounds atomically in one synchronous `SetWindowPos(..., SWP_FRAMECHANGED)` before `ITaskbarList2::MarkFullscreenWindow`, while borderless `WM_NCCALCSIZE` leaves fullscreen rects uninset).
 # Run it when winit is bumped, then build: a patch
 # that no longer applies fails here, and the change goes back in by hand. If upstream winit takes
 # the change, delete vendor/winit and its `[patch.crates-io]` entry instead.
