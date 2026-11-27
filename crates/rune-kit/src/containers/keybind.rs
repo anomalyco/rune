@@ -2,7 +2,7 @@
 //! upper-cased ("k" draws K) unless [`Keybind::keep_case`] is set; names such as
 //! `Shortcut::keycaps`'s "Space" draw as given.
 
-use rune::{El, TextStyle, row, text};
+use rune::{El, row, text};
 
 use crate::Kit;
 
@@ -57,22 +57,30 @@ impl Keybind {
         };
         let m = k.keybind_metrics();
         let (height, radius, padding_x) = (m.height, m.radius, m.padding_x);
-        let font = TextStyle { line_height: 11.0, ..k.ty.small_medium };
+        let border = match self.variant {
+            KeybindVariant::Neutral if m.border_width > 0.0 && m.border_color.a > 0.0 => {
+                Some((m.border_width, m.border_color))
+            }
+            _ => None,
+        };
+        let font = m.label;
         let label = self.keys.join(" ");
         let keep_case = self.keep_case;
         row().role("group").label(label).gap(2.0).center_y().children(self.keys.into_iter().enumerate().map(
             |(i, key)| {
                 let cap = if keep_case { key } else { keycap(key) };
-                row()
+                let mut cap_el = row()
                     .key(format!("key{i}"))
                     .min_w(height)
                     .h(height)
                     .px(padding_x)
                     .center()
                     .radius(radius)
-                    .fill(fill)
-                    .child(text(cap).font(font).color(ink))
-                    .a11y_hidden()
+                    .fill(fill);
+                if let Some((w, color)) = border {
+                    cap_el = cap_el.border(w, color);
+                }
+                cap_el.child(text(cap).font(font).color(ink)).a11y_hidden()
             },
         ))
     }

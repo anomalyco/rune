@@ -252,7 +252,14 @@ fn explicit_default_kit(base: &Kit) -> Kit {
     k.metrics.disclosure_header_height = Some(32.0);
     k.metrics.progress = Some(ProgressMetrics { height: 8.0, border_width: 1.0 });
     k.metrics.divider_thickness = Some(1.0);
-    k.metrics.keybind = Some(KeybindMetrics { height: 14.0, padding_x: 4.0, radius: 2.0 });
+    k.metrics.keybind = Some(KeybindMetrics {
+        height: 14.0,
+        padding_x: 4.0,
+        radius: 2.0,
+        border_width: 0.0,
+        border_color: base.c.border_base,
+        label: TextStyle { line_height: 11.0, ..base.ty.small_medium },
+    });
     k.metrics.text_area_min_height = Some(80.0);
     k.metrics.standard_switch = Some(StandardSwitchMetrics { track_width: 28.0, track_height: 16.0, thumb: 14.0, inset: 1.0 });
     k.metrics.switch_look = Some(SwitchLook {
@@ -315,7 +322,17 @@ fn default_metrics_match_explicit_kit_defaults_bit_for_bit() {
     ] {
         assert_eq!(SegmentedMetrics::kit(&base), SegmentedMetrics { height: 28.0, padding_x: 12.0, radius: 6.0, inset: 0.0, gap: 0.0 });
         assert_eq!(ProgressMetrics::kit(&base), ProgressMetrics { height: 8.0, border_width: 1.0 });
-        assert_eq!(KeybindMetrics::kit(&base), KeybindMetrics { height: 14.0, padding_x: 4.0, radius: 2.0 });
+        assert_eq!(
+            KeybindMetrics::kit(&base),
+            KeybindMetrics {
+                height: 14.0,
+                padding_x: 4.0,
+                radius: 2.0,
+                border_width: 0.0,
+                border_color: base.c.border_base,
+                label: TextStyle { line_height: 11.0, ..base.ty.small_medium },
+            }
+        );
         assert_eq!(StandardSwitchMetrics::kit(&base), StandardSwitchMetrics { track_width: 28.0, track_height: 16.0, thumb: 14.0, inset: 1.0 });
         assert_eq!(
             SwitchLook::kit(&base),
@@ -341,6 +358,7 @@ fn default_metrics_match_explicit_kit_defaults_bit_for_bit() {
         assert_eq!(find("/div-v").rect[2], 1.0, "{name}: vertical Divider");
         assert_eq!((find("/kb/key0").rect[3], find("/kb/key0").radius), (14.0, 2.0), "{name}: Keybind");
         assert_eq!(find("/kb/key0").inset, [4.0, 0.0, 4.0, 0.0], "{name}: Keybind padding_x");
+        assert_eq!(find("/kb/key0").border_color, None, "{name}: Keybind default unbordered");
         assert_eq!(find("/area-plain").rect[3], 80.0, "{name}: TextArea min height");
         assert_eq!((find("/sw-std-on/control").rect[2], find("/sw-std-on/control").rect[3]), (28.0, 16.0), "{name}: standard Switch track");
         let std_track = find("/sw-std-on/control").rect;
@@ -419,7 +437,7 @@ fn dense_and_roomy_metrics_drive_geometry_hit_areas_focus_rings_and_centering() 
             p.border_width = 2.0;
             k.metrics.progress = Some(p);
             k.metrics.divider_thickness = Some(3.0);
-            k.metrics.keybind = Some(KeybindMetrics { height: 22.0, padding_x: 8.0, radius: 6.0 });
+            k.metrics.keybind = Some(KeybindMetrics { height: 22.0, padding_x: 8.0, radius: 6.0, ..KeybindMetrics::kit(&k) });
             k.metrics.text_area_min_height = Some(120.0);
             k.metrics.standard_switch = Some(StandardSwitchMetrics { track_width: 36.0, track_height: 20.0, thumb: 16.0, inset: 2.0 });
         } else {
@@ -430,7 +448,7 @@ fn dense_and_roomy_metrics_drive_geometry_hit_areas_focus_rings_and_centering() 
             p.border_width = 0.0;
             k.metrics.progress = Some(p);
             k.metrics.divider_thickness = Some(0.5);
-            k.metrics.keybind = Some(KeybindMetrics { height: 12.0, padding_x: 2.0, radius: 1.0 });
+            k.metrics.keybind = Some(KeybindMetrics { height: 12.0, padding_x: 2.0, radius: 1.0, ..KeybindMetrics::kit(&k) });
             k.metrics.text_area_min_height = Some(40.0);
             k.metrics.standard_switch = Some(StandardSwitchMetrics { track_width: 18.0, track_height: 16.0, thumb: 14.0, inset: 1.0 });
         }
@@ -834,7 +852,7 @@ fn negative_and_non_finite_metrics_clamp_to_zero_without_panicking() {
         k.metrics.disclosure_header_height = Some(v);
         k.metrics.progress = Some(ProgressMetrics { height: v, border_width: v });
         k.metrics.divider_thickness = Some(v);
-        k.metrics.keybind = Some(KeybindMetrics { height: v, padding_x: v, radius: v });
+        k.metrics.keybind = Some(KeybindMetrics { height: v, padding_x: v, radius: v, border_width: v, ..KeybindMetrics::kit(&k) });
         k.metrics.text_area_min_height = Some(v);
         k.metrics.standard_switch = Some(StandardSwitchMetrics { track_width: v, track_height: v, thumb: v, inset: v });
         k.metrics.switch_look = Some(SwitchLook { track_border: v, ..SwitchLook::flat(&k) });
@@ -860,6 +878,8 @@ fn negative_and_non_finite_metrics_clamp_to_zero_without_panicking() {
         assert_eq!(prog_track.border_color, None, "bad={bad}: Progress border omitted");
         let sw_ctrl = rt.elements().into_iter().find(|e| e.path.ends_with("/sw-off/control")).unwrap();
         assert_eq!(sw_ctrl.border_color, None, "bad={bad}: SwitchLook border omitted");
+        let kb_key = rt.elements().into_iter().find(|e| e.path.ends_with("/kb/key0")).unwrap();
+        assert_eq!(kb_key.border_color, None, "bad={bad}: Keybind border omitted");
     }
 }
 
