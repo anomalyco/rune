@@ -4315,3 +4315,83 @@ test('syncA11y and focusA11y expose role="feed" and aria-posinset/aria-setsize o
         bridge.destroy(h);
     }
 });
+
+test('legacy writeClipboard fallback does not emit spurious field_blur or hijack copyText while a Rune field is focused', async () => {
+    const platformMod = await import('./platform.js');
+    const origNav = globalThis.navigator;
+    const { doc, events, h } = setup();
+    try {
+        // Focus a Rune text field with a backward selection and Shift held.
+        bridge.sync(h, 'notes', 'hello world', 1, 8, 2, false, false);
+        bridge.activate(h);
+        h.textarea.dispatchEvent({ type: 'focus' });
+        h.shift = true;
+        events.length = 0;
+
+        // Wire browser-like relatedTarget + focusin/focusout/select + execCommand on the test DOM.
+        const origFocus = h.textarea.focus.bind(h.textarea);
+        const origCreate = doc.createElement;
+        let copiedText = null;
+        doc.createElement = (tag) => {
+            const el = origCreate(tag);
+            el.select = () => {
+                el.selectionStart = 0;
+                el.selectionEnd = el.value.length;
+            };
+            el.focus = () => {
+                const prev = doc.activeElement;
+                if (prev === el) return;
+                doc.activeElement = el;
+                if (prev) {
+                    prev.dispatchEvent({ type: 'blur', relatedTarget: el });
+                    prev.dispatchEvent({ type: 'focusout', relatedTarget: el });
+                }
+                doc.dispatchEvent({ type: 'focusin', target: el });
+                if (el.onFocus) el.onFocus();
+            };
+            return el;
+        };
+        h.textarea.focus = () => {
+            const prev = doc.activeElement;
+            origFocus();
+            if (prev !== h.textarea) h.textarea.dispatchEvent({ type: 'focus' });
+        };
+        doc.execCommand = (cmd) => {
+            assert.equal(cmd, 'copy');
+            const active = doc.activeElement;
+            const copyEvent = {
+                type: 'copy',
+                target: active,
+                defaultPrevented: false,
+                preventDefault() { this.defaultPrevented = true; },
+                clipboardData: { setData(_, val) { copiedText = val; } },
+            };
+            doc.dispatchEvent(copyEvent);
+            if (!copyEvent.defaultPrevented) copiedText = active.value;
+            return true;
+        };
+
+        Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true });
+        await platformMod.writeClipboard('copied value', '', new Uint8Array());
+        await Promise.resolve();
+
+        assert.equal(copiedText, 'copied value');
+        assert.equal(doc.activeElement, h.textarea);
+        assert.equal(h.textarea.selectionStart, 2);
+        assert.equal(h.textarea.selectionEnd, 8);
+        assert.equal(h.textarea.selectionDirection, 'backward');
+        assert.equal(h.shift, true, 'transient clipboard focus hop must not drop held Shift');
+        assert.equal(events.some(e => e.kind === 'field_blur'), false, 'must not emit spurious field_blur');
+
+        // Also verify document copy listener with h.copyText does not hijack fallback copy when unfocused.
+        bridge.sync(h, '', '', 0, 0, 0, false, false);
+        bridge.syncCopy(h, 'stale selectable text');
+        doc.activeElement = doc.body;
+        copiedText = null;
+        await platformMod.writeClipboard('button copy', '', new Uint8Array());
+        assert.equal(copiedText, 'button copy');
+    } finally {
+        Object.defineProperty(globalThis, 'navigator', { value: origNav, configurable: true });
+        bridge.destroy(h);
+    }
+});

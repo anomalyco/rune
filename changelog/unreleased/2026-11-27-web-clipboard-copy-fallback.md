@@ -1,0 +1,1 @@
+- Fall back to a temporary off-screen `<textarea>` and `document.execCommand('copy')` for web plain-text clipboard writes (and rich writes degraded to plain text) when `navigator.clipboard` is unavailable or rejects, restoring DOM focus and selection.
