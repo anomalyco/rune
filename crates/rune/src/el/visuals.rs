@@ -375,7 +375,9 @@ impl El {
     /// show through each other. Static, as [`Self::dim`] is: a change lands at once, and
     /// animation and hit-test opacity still belong to `opacity` / `live_opacity`. Only an
     /// element below 1 whose paint overlaps (children, or more than one paint of its own) draws
-    /// offscreen; anything else just takes the alpha. Repeated calls multiply.
+    /// offscreen; anything else just takes the alpha. Repeated calls multiply. Inspection tools
+    /// read the composed product via [`ElementInfo::layer_opacity`](crate::ElementInfo::layer_opacity)
+    /// (and `layerOpacity` in `--tree` JSON).
     pub fn layer_opacity(mut self, alpha: f32) -> Self {
         let alpha = alpha.clamp(0.0, 1.0);
         if alpha < 1.0 || !self.vis.cold.is_empty() {

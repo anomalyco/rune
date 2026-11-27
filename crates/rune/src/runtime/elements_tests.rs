@@ -532,4 +532,70 @@ fn element_info_reports_laid_out_text_truncation_inset_clips_scroll_axes_and_rai
     assert_eq!(stub.text_size, None);
     assert!(!stub.wrap && !stub.truncate && !stub.text_cut && !stub.clips && !stub.raised);
     assert_eq!(stub.scroll_axes, [false, false]);
+    assert_eq!(stub.layer_opacity, 1.0);
+}
+
+#[test]
+fn element_info_reports_composed_layer_opacity_separately_from_opacity() {
+    let view = |dimmed: &bool, _: &mut Cx<bool>| {
+        let mut group = col().key("box").size(100.0, 40.0);
+        if *dimmed {
+            group = group.layer_opacity(0.65);
+        }
+        col().key("root").size(300.0, 240.0)
+            .child(el().key("plain").size(40.0, 20.0))
+            .child(
+                group
+                    .child(text("Hi").key("label"))
+                    .child(
+                        col().key("nested").size(80.0, 20.0).layer_opacity(0.5)
+                            .child(el().key("grandchild").size(20.0, 10.0)),
+                    )
+                    .child(
+                        text("Go docs mark")
+                            .key("para")
+                            .link(Link::new(3..7, "docs"))
+                            .text_highlight(TextHighlight::new(8..12, HL_YELLOW).key("mk")),
+                    ),
+            )
+            .child(el().key("repeated").size(40.0, 20.0).layer_opacity(0.5).layer_opacity(0.4))
+            .child(el().key("both").size(40.0, 20.0).opacity(0.8).layer_opacity(0.65))
+            .child(el().key("zero").size(40.0, 20.0).layer_opacity(0.0))
+    };
+    let mut rt = Runtime::new(true, view, (300.0, 240.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    let els = rt.elements();
+
+    let approx = |got: f32, want: f32, label: &str| {
+        assert!((got - want).abs() < 1e-5, "{label}: got {got}, want {want}");
+    };
+
+    approx(info(&els, "plain").opacity, 1.0, "plain opacity");
+    approx(info(&els, "plain").layer_opacity, 1.0, "plain layer_opacity");
+
+    approx(info(&els, "box").opacity, 1.0, "box opacity stays 1.0");
+    approx(info(&els, "box").layer_opacity, 0.65, "box layer_opacity");
+    approx(info(&els, "label").opacity, 1.0, "label opacity stays 1.0");
+    approx(info(&els, "label").layer_opacity, 0.65, "label inherits parent layer_opacity");
+
+    approx(info(&els, "nested").layer_opacity, 0.325, "nested multiplies parent and own layer_opacity");
+    approx(info(&els, "grandchild").layer_opacity, 0.325, "grandchild inherits composed layer_opacity");
+
+    approx(info(&els, "docs").layer_opacity, 0.65, "inline link inherits parent layer_opacity");
+    approx(info(&els, "mk").layer_opacity, 0.65, "inline mark inherits parent layer_opacity");
+
+    approx(info(&els, "repeated").layer_opacity, 0.2, "repeated calls multiply");
+    approx(info(&els, "both").opacity, 0.8, "opacity stays independent of layer_opacity");
+    approx(info(&els, "both").layer_opacity, 0.65, "layer_opacity stays independent of opacity");
+    approx(info(&els, "zero").opacity, 1.0, "zero layer_opacity keeps opacity 1.0");
+    approx(info(&els, "zero").layer_opacity, 0.0, "zero layer_opacity reports 0.0");
+
+    // Clearing layer_opacity lands immediately on the next frame.
+    rt.update(|dimmed, _| *dimmed = false);
+    rt.frame(0.0);
+    let els = rt.elements();
+    approx(info(&els, "box").layer_opacity, 1.0, "un-dimmed box returns to 1.0");
+    approx(info(&els, "label").layer_opacity, 1.0, "un-dimmed label returns to 1.0");
+    approx(info(&els, "nested").layer_opacity, 0.5, "nested keeps its own 0.5");
+    assert_eq!(ElementInfo::stub("stub").layer_opacity, 1.0);
 }

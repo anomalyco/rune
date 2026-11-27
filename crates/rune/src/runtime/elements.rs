@@ -39,7 +39,13 @@ pub struct ElementInfo {
     pub text: Option<String>,
     pub rect: [f32; 4],
     pub target: [f32; 4],
+    /// Effective opacity from [`El::opacity`], [`El::live_opacity`], [`El::group_opacity`],
+    /// presence transitions and fade loops, ancestors included. Does not include
+    /// [`El::layer_opacity`] (see [`Self::layer_opacity`]).
     pub opacity: f32,
+    /// Effective static layer opacity ([`El::layer_opacity`]), this element's value multiplied
+    /// by its ancestors'. Static paint-only fade; `1.0` when unfaded.
+    pub layer_opacity: f32,
     /// Effective uniform scale, including ancestors and the presence transition.
     pub scale: f32,
     /// Additive blur culling margin in logical points, including scaled ancestor sigmas.
@@ -197,6 +203,15 @@ impl types::TreeState {
     /// Unknown paths (including synthetic flight/link paths) return false.
     pub(crate) fn element_is_secure(&self, path: &str) -> bool {
         self.nodes.iter().find(|n| n.path == path).is_some_and(Node::is_secure)
+    }
+
+    /// Effective static layer opacity ([`El::layer_opacity`]) for node `i`: its own value
+    /// multiplied by every ancestor's, clamped to `0.0..=1.0`.
+    pub(crate) fn effective_layer_opacity(&self, i: usize) -> f32 {
+        std::iter::successors(Some(i), |&j| self.nodes[j].parent)
+            .map(|j| self.nodes[j].vis.layer_opacity)
+            .product::<f32>()
+            .clamp(0.0, 1.0)
     }
 }
 
@@ -394,6 +409,7 @@ impl RuntimeCore {
                     rect,
                     target: [n.target[0], n.target[1], n.target[2] - n.target[0], n.target[3] - n.target[1]],
                     opacity: flight.map_or_else(|| self.paint.inh_scratch.get(i).map_or(p.opacity, |h| h.opacity), |f| f.target_alpha),
+                    layer_opacity: if flight.is_some() { 1.0 } else { self.tree.effective_layer_opacity(i) },
                     scale: if flight.is_some() { 1.0 } else { self.paint.inh_scratch.get(i).map_or(p.transform.scale.x, |h| h.scale) },
                     blur: if flight.is_some() { 0.0 } else { self.paint.inh_scratch.get(i).map_or(p.blur, |h| self.paint.inh_cold_of(h).blur) },
                     radius: p.radius.0[0],
@@ -469,7 +485,7 @@ impl RuntimeCore {
                 focusable: false, focused: false, focus_visible: false, inert: true, exiting: false,
                 key: Some(path.clone()), path, role: "text", label: None, text: None,
                 rect: [r.x, r.y, r.w, r.h], target: [t.x, t.y, t.w, t.h],
-                opacity: f.source_alpha, scale: 1.0, blur: 0.0, radius: 0.0, fill: Color::TRANSPARENT, border_color: None, text_color: None, text_style: None,
+                opacity: f.source_alpha, layer_opacity: 1.0, scale: 1.0, blur: 0.0, radius: 0.0, fill: Color::TRANSPARENT, border_color: None, text_color: None, text_style: None,
                 inset: [0.0; 4], text_size: None, wrap: false, truncate: false, text_cut: false, clips: false, scroll_axes: [false, false], raised: false,
                 hover: 0.0, press: 0.0, moving: true, parent: None,
                 visible: [r.x.max(c[0]), r.y.max(c[1]), (r.edges()[2].min(c[2]) - r.x.max(c[0])).max(0.0),

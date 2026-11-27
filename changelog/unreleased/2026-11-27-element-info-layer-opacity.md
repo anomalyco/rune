@@ -1,0 +1,1 @@
+- Element inspection: added `ElementInfo::layer_opacity` (reporting the composed static `El::layer_opacity` product across an element and its ancestors, keeping `ElementInfo::opacity` unchanged) and emitted `layerOpacity` in `--tree` JSON.

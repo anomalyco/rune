@@ -253,8 +253,8 @@ impl RuntimeCore {
             let next = if tree_order { self.paint.layer_paint_order.get(paint_index + 1).copied() } else { (i + 1 < n_nodes).then_some(i + 1) };
             let dissolve = self.tree.has_dissolve && self.paint.dissolve_scratch[i];
             let additive_parent = self.tree.has_dissolve && n.parent.is_some_and(|p| self.paint.dissolve_scratch[p]);
-            // `El::layer_opacity` fades paint only; hit testing and what elements report keep
-            // `own`.
+            // `El::layer_opacity` fades paint only; hit testing and `ElementInfo::opacity` keep
+            // `own` (`ElementInfo::layer_opacity` reports the composed static fade separately).
             let paint_own = own * n.vis.layer_opacity;
             // A fading node with children, or a shape whose pieces overlap, takes its opacity
             // once as a layer rather than each primitive taking it over the ones beneath. So
