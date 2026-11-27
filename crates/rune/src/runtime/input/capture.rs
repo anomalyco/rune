@@ -449,6 +449,7 @@ impl PointerState {
 
     #[inline]
     pub(in crate::runtime) fn hold_press(&mut self, held: Held) { self.press.hold(held); }
+    pub(in crate::runtime) fn clear_press_link(&mut self) { if let Some(h) = self.press.held_mut() { h.link = None; } }
 
     /// Whether the pointer left the window while a press holds capture.
     #[inline]

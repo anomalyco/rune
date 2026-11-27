@@ -218,7 +218,9 @@ pub(crate) fn web_touch_end_activate(rt: &RuntimeCore, document: bool, ended_in_
     if !document || rt.has_focus() {
         WebActivate::Always
     } else {
-        WebActivate::Never
+        // Focus now lands on tap-up rather than touch-down, so in document mode check after the
+        // tap's frame commits whether it focused an editable field.
+        WebActivate::IfFieldFocused
     }
 }
 
