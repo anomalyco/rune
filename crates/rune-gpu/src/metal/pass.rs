@@ -228,7 +228,8 @@ impl RenderPassInterface for MetalPass {
     fn set_pipeline(&mut self, pipeline: &DispatchRenderPipeline) {
         let next = &pipeline.as_custom::<RenderPipeline>().expect("a Metal render pipeline").raw;
         if self.pipeline.as_ref().is_some_and(|p| Arc::ptr_eq(p, next)) { return }
-        let Some(state) = &next.state else { return };
+        // An invalid pipeline (its error reported when it was made) draws nothing, as in wgpu.
+        let Some(state) = &next.state else { self.pipeline = None; return };
         let relayout = self.pipeline.as_ref().is_none_or(|p| !Arc::ptr_eq(&p.layout, &next.layout));
         self.raw.setRenderPipelineState(state);
         self.raw.setCullMode(next.cull);
@@ -247,7 +248,7 @@ impl RenderPassInterface for MetalPass {
     }
     fn set_bind_group(&mut self, index: u32, group: Option<&DispatchBindGroup>, offsets: &[wgpu::DynamicOffset]) {
         let index = index as usize;
-        if index >= GROUPS { super::unsupported!("bind group {index}") }
+        if index >= GROUPS { return super::unsupported_call!(self.rec.lock().shared_arc(), "bind group {index}") }
         let Some(group) = group else { self.groups[index] = None; return };
         let group = &group.as_custom::<super::layout::BindGroup>().expect("a Metal bind group").raw;
         if let Some((bound, bound_offsets)) = &self.groups[index]
@@ -325,33 +326,33 @@ impl RenderPassInterface for MetalPass {
                 instances.len(), base_vertex as isize, instances.start as usize)
         }
     }
-    fn draw_mesh_tasks(&mut self, _: u32, _: u32, _: u32) { super::unsupported!("mesh shaders") }
-    fn draw_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress) { super::unsupported!("indirect draws") }
-    fn draw_indexed_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress) { super::unsupported!("indirect draws") }
-    fn draw_mesh_tasks_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress) { super::unsupported!("mesh shaders") }
-    fn multi_draw_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: u32) { super::unsupported!("indirect draws") }
+    fn draw_mesh_tasks(&mut self, _: u32, _: u32, _: u32) { super::unsupported_call!(self.rec.lock().shared_arc(), "mesh shaders") }
+    fn draw_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress) { super::unsupported_call!(self.rec.lock().shared_arc(), "indirect draws") }
+    fn draw_indexed_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress) { super::unsupported_call!(self.rec.lock().shared_arc(), "indirect draws") }
+    fn draw_mesh_tasks_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress) { super::unsupported_call!(self.rec.lock().shared_arc(), "mesh shaders") }
+    fn multi_draw_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: u32) { super::unsupported_call!(self.rec.lock().shared_arc(), "indirect draws") }
     fn multi_draw_indexed_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: u32) {
-        super::unsupported!("indirect draws")
+        super::unsupported_call!(self.rec.lock().shared_arc(), "indirect draws")
     }
     fn multi_draw_indirect_count(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: &DispatchBuffer, _: wgpu::BufferAddress, _: u32) {
-        super::unsupported!("indirect draws")
+        super::unsupported_call!(self.rec.lock().shared_arc(), "indirect draws")
     }
     fn multi_draw_mesh_tasks_indirect(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: u32) {
-        super::unsupported!("mesh shaders")
+        super::unsupported_call!(self.rec.lock().shared_arc(), "mesh shaders")
     }
     fn multi_draw_indexed_indirect_count(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: &DispatchBuffer, _: wgpu::BufferAddress, _: u32) {
-        super::unsupported!("indirect draws")
+        super::unsupported_call!(self.rec.lock().shared_arc(), "indirect draws")
     }
     fn multi_draw_mesh_tasks_indirect_count(&mut self, _: &DispatchBuffer, _: wgpu::BufferAddress, _: &DispatchBuffer, _: wgpu::BufferAddress, _: u32) {
-        super::unsupported!("mesh shaders")
+        super::unsupported_call!(self.rec.lock().shared_arc(), "mesh shaders")
     }
     fn insert_debug_marker(&mut self, _: &str) {}
     fn push_debug_group(&mut self, _: &str) {}
     fn pop_debug_group(&mut self) {}
-    fn write_timestamp(&mut self, _: &DispatchQuerySet, _: u32) { super::unsupported!("timestamps") }
-    fn begin_occlusion_query(&mut self, _: u32) { super::unsupported!("occlusion queries") }
-    fn end_occlusion_query(&mut self) { super::unsupported!("occlusion queries") }
-    fn begin_pipeline_statistics_query(&mut self, _: &DispatchQuerySet, _: u32) { super::unsupported!("query sets") }
-    fn end_pipeline_statistics_query(&mut self) { super::unsupported!("query sets") }
-    fn execute_bundles(&mut self, _: &mut dyn Iterator<Item = &DispatchRenderBundle>) { super::unsupported!("render bundles") }
+    fn write_timestamp(&mut self, _: &DispatchQuerySet, _: u32) { super::unsupported_call!(self.rec.lock().shared_arc(), "timestamps") }
+    fn begin_occlusion_query(&mut self, _: u32) { super::unsupported_call!(self.rec.lock().shared_arc(), "occlusion queries") }
+    fn end_occlusion_query(&mut self) { super::unsupported_call!(self.rec.lock().shared_arc(), "occlusion queries") }
+    fn begin_pipeline_statistics_query(&mut self, _: &DispatchQuerySet, _: u32) { super::unsupported_call!(self.rec.lock().shared_arc(), "query sets") }
+    fn end_pipeline_statistics_query(&mut self) { super::unsupported_call!(self.rec.lock().shared_arc(), "query sets") }
+    fn execute_bundles(&mut self, _: &mut dyn Iterator<Item = &DispatchRenderBundle>) { super::unsupported_call!(self.rec.lock().shared_arc(), "render bundles") }
 }

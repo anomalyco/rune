@@ -28,7 +28,11 @@
 //! in an `MTLBinaryArchive` (`cache`).
 //! New textures read as zero, as wgpu promises. A pipeline without a layout derives one from
 //! its shaders, as wgpu-core does (`derive`). Other queries, render bundles, indirect draws,
-//! depth and multisampling are not implemented: they panic naming the way back to wgpu
+//! depth and multisampling are not implemented. A command using one (an indirect draw, a query, a
+//! bundle's execution) is skipped and reported as a validation error naming the way back to wgpu
+//! (`unsupported_call!`), as wgpu reports errors: to the innermost error scope, else
+//! `Device::on_uncaptured_error`'s handler, else as a panic. A call that must return an object
+//! this backend can't make (a pass with depth, a bundle encoder, a mesh pipeline) panics naming it
 //! (`unsupported!`).
 
 #[doc(hidden)]
@@ -45,6 +49,8 @@ mod derive;
 mod derive_tests;
 mod device;
 mod encode;
+#[cfg(test)]
+mod errors_tests;
 mod layout;
 mod pass;
 mod pipeline;
@@ -187,13 +193,28 @@ macro_rules! send_sync {
 }
 pub(crate) use send_sync;
 
-/// Panics for a wgpu feature this backend doesn't implement, naming the way back to wgpu.
+/// What a call this backend doesn't implement says, naming the way back to wgpu.
+fn unsupported_message(what: std::fmt::Arguments<'_>) -> String {
+    format!("Rune's Metal backend doesn't support {what}; draw with wgpu instead: App::gpu_backend(GpuBackend::Wgpu) or RUNE_GPU_BACKEND=wgpu")
+}
+
+/// Panics for a wgpu feature this backend doesn't implement, in a call that must return an object
+/// it can't make (a pass, a pipeline, a bundle).
 macro_rules! unsupported {
-    ($($what:tt)*) => {
-        panic!("Rune's Metal backend doesn't support {}; draw with wgpu instead: App::gpu_backend(GpuBackend::Wgpu) or RUNE_GPU_BACKEND=wgpu", format_args!($($what)*))
-    };
+    ($($what:tt)*) => { panic!("{}", super::unsupported_message(format_args!($($what)*))) };
 }
 pub(crate) use unsupported;
+
+/// Reports a wgpu feature this backend doesn't implement as a validation error, as wgpu reports
+/// a call it refuses (`Shared::report`: the error scope, else `Device::on_uncaptured_error`),
+/// and skips the call. `$shared` is an `Arc<Shared>`, taken before reporting.
+macro_rules! unsupported_call {
+    ($shared:expr, $($what:tt)*) => {{
+        let shared: std::sync::Arc<super::Shared> = $shared;
+        shared.report(wgpu::ErrorFilter::Validation, super::unsupported_message(format_args!($($what)*)));
+    }};
+}
+pub(crate) use unsupported_call;
 
 #[derive(Debug)]
 struct MetalInstance;

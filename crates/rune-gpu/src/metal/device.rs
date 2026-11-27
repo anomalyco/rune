@@ -52,6 +52,15 @@ pub(crate) struct Shared {
     pub(super) dispatch: Mutex<()>,
     /// Active `Device::push_error_scope` stack for capturing shader and pipeline errors.
     pub(super) scopes: Mutex<ErrorScopes>,
+    /// `Device::on_uncaptured_error`'s handler: errors no scope captured go to it (`report`).
+    uncaptured: Mutex<Option<Uncaptured>>,
+}
+
+#[derive(Clone)]
+struct Uncaptured(Arc<dyn wgpu::UncapturedErrorHandler>);
+
+impl std::fmt::Debug for Uncaptured {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Uncaptured") }
 }
 send_sync!(Shared);
 
@@ -90,6 +99,15 @@ impl std::fmt::Debug for Lost {
     }
 }
 
+fn error(filter: wgpu::ErrorFilter, message: String) -> wgpu::Error {
+    let source = Box::new(std::io::Error::other(message.clone()));
+    match filter {
+        wgpu::ErrorFilter::Validation => wgpu::Error::Validation { source, description: message },
+        wgpu::ErrorFilter::OutOfMemory => wgpu::Error::OutOfMemory { source },
+        wgpu::ErrorFilter::Internal => wgpu::Error::Internal { source, description: message },
+    }
+}
+
 impl Shared {
     /// Records an error of `filter` into the current thread's innermost matching error scope,
     /// returning `true` when a scope captured it and `false` when no matching scope is active.
@@ -99,15 +117,20 @@ impl Shared {
         let Some((_, _, _, slot)) = scopes.stack.iter_mut().rev().find(|(_, thread, kind, _)| *thread == tid && *kind == filter) else {
             return false;
         };
-        if slot.is_none() {
-            let source = Box::new(std::io::Error::other(message.clone()));
-            *slot = Some(match filter {
-                wgpu::ErrorFilter::Validation => wgpu::Error::Validation { source, description: message },
-                wgpu::ErrorFilter::OutOfMemory => wgpu::Error::OutOfMemory { source },
-                wgpu::ErrorFilter::Internal => wgpu::Error::Internal { source, description: message },
-            });
-        }
+        if slot.is_none() { *slot = Some(error(filter, message)); }
         true
+    }
+
+    /// Reports an error as wgpu does: to the current thread's innermost matching error scope,
+    /// else to `Device::on_uncaptured_error`'s handler, else as a panic, as wgpu's default
+    /// handler does.
+    pub(super) fn report(&self, filter: wgpu::ErrorFilter, message: String) {
+        if self.capture_error(filter, message.clone()) { return }
+        let handler = self.uncaptured.lock().clone();
+        match handler {
+            Some(Uncaptured(handler)) => handler(error(filter, message)),
+            None => panic!("{message}"),
+        }
     }
 
     /// Marks the device lost once with `(reason, message)`, enqueues its device-lost callback
@@ -164,6 +187,7 @@ pub(super) fn new(device: Obj<dyn MTLDevice>, desc: &wgpu::DeviceDescriptor<'_>)
         lost: Mutex::new(Lost::default()),
         dispatch: Mutex::new(()),
         scopes: Mutex::new(ErrorScopes::default()),
+        uncaptured: Mutex::new(None),
         device,
     });
     let device = MetalDevice { shared: shared.clone(), features: desc.required_features, limits: desc.required_limits.clone() };
@@ -262,7 +286,7 @@ impl DeviceInterface for MetalDevice {
             None => lost.callback = Some(callback),
         }
     }
-    fn on_uncaptured_error(&self, _: Arc<dyn wgpu::UncapturedErrorHandler>) {}
+    fn on_uncaptured_error(&self, handler: Arc<dyn wgpu::UncapturedErrorHandler>) { *self.shared.uncaptured.lock() = Some(Uncaptured(handler)); }
     fn push_error_scope(&self, filter: wgpu::ErrorFilter) -> u32 {
         let mut scopes = self.shared.scopes.lock();
         scopes.next = scopes.next.wrapping_add(1);

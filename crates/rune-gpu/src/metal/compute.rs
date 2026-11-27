@@ -214,7 +214,7 @@ impl ComputePassInterface for MetalComputePass {
     }
     fn set_bind_group(&mut self, index: u32, group: Option<&DispatchBindGroup>, offsets: &[wgpu::DynamicOffset]) {
         let index = index as usize;
-        if index >= GROUPS { super::unsupported!("bind group {index}") }
+        if index >= GROUPS { return super::unsupported_call!(self.rec.lock().shared_arc(), "bind group {index}") }
         let Some(group) = group else { self.groups[index] = None; return };
         let group = &group.as_custom::<super::layout::BindGroup>().expect("a Metal bind group").raw;
         if let Some((bound, bound_offsets)) = &self.groups[index]
@@ -242,9 +242,9 @@ impl ComputePassInterface for MetalComputePass {
     fn insert_debug_marker(&mut self, _: &str) {}
     fn push_debug_group(&mut self, _: &str) {}
     fn pop_debug_group(&mut self) {}
-    fn write_timestamp(&mut self, _: &DispatchQuerySet, _: u32) { super::unsupported!("timestamps inside passes") }
-    fn begin_pipeline_statistics_query(&mut self, _: &DispatchQuerySet, _: u32) { super::unsupported!("query sets") }
-    fn end_pipeline_statistics_query(&mut self) { super::unsupported!("query sets") }
+    fn write_timestamp(&mut self, _: &DispatchQuerySet, _: u32) { super::unsupported_call!(self.rec.lock().shared_arc(), "timestamps inside passes") }
+    fn begin_pipeline_statistics_query(&mut self, _: &DispatchQuerySet, _: u32) { super::unsupported_call!(self.rec.lock().shared_arc(), "query sets") }
+    fn end_pipeline_statistics_query(&mut self) { super::unsupported_call!(self.rec.lock().shared_arc(), "query sets") }
     fn dispatch_workgroups(&mut self, x: u32, y: u32, z: u32) {
         if x == 0 || y == 0 || z == 0 { return }
         self.flush();

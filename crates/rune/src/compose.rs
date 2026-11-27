@@ -324,9 +324,8 @@ impl<S: 'static> Frame<'_, S> {
     ///   Rune's device-lost callback against the same `Gpu::is_lost` flag, and re-registers
     ///   Rune's bounded uncaptured-error logger with the same deduplication state on surface
     ///   devices (headless devices keep wgpu's validation panic).
-    /// - On macOS/iOS native Metal (`GpuBackend::Metal`): re-registers Rune's device-lost
-    ///   callback against the same `Gpu::is_lost` flag (`on_uncaptured_error` is a no-op on the
-    ///   native Metal backend).
+    /// - On macOS/iOS native Metal (`GpuBackend::Metal`): the same, through the backend's own
+    ///   device-lost callback and uncaptured-error handler.
     /// - On browser WebGPU (`wasm32`): clears any foreign JS `device.onuncapturederror` handler
     ///   while leaving Rune's `addEventListener('uncapturederror', ...)` and `device.lost.then`
     ///   watchers intact without adding duplicates.

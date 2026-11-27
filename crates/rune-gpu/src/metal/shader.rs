@@ -93,11 +93,8 @@ impl Ir {
     pub(super) fn new(shared: &Shared, label: &str, source: &str, checks: wgpu::ShaderRuntimeChecks) -> Self {
         let hash = source_hash(source);
         let ir = Ir { label: label.into(), source: source.into(), hash, parsed: OnceLock::new(), checks };
-        if !builtin::known(&hash)
-            && let Err(error) = ir.try_parsed()
-            && !shared.capture_error(wgpu::ErrorFilter::Validation, error.clone())
-        {
-            panic!("{error}");
+        if !builtin::known(&hash) && let Err(error) = ir.try_parsed() {
+            shared.report(wgpu::ErrorFilter::Validation, error.clone());
         }
         ir
     }

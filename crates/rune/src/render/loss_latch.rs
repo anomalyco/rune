@@ -34,10 +34,11 @@ pub(crate) const MAX_REASON_BYTES: usize = 512;
 ///
 /// - Commands already handed to `wgpu::Queue::submit` or `wgpu::Queue::present` cannot be
 ///   recalled from the driver.
-/// - On macOS, Rune's default native Metal backend implements `Device::set_device_lost_callback`
-///   (failed command buffers and `Device::destroy`), while `Device::on_uncaptured_error` is a
-///   no-op; apps relying on uncaptured validation/OOM errors on macOS should opt into
-///   [`App::gpu_backend`](crate::App::gpu_backend)`(`[`GpuBackend::Wgpu`](crate::GpuBackend::Wgpu)`)`.
+/// - On macOS, Rune's default native Metal backend reports losses through
+///   `Device::set_device_lost_callback` (failed command buffers and `Device::destroy`) and
+///   errors through `Device::on_uncaptured_error`: shader and pipeline errors and the calls it
+///   doesn't implement. It validates far less than wgpu does, so most misuse wgpu would report
+///   isn't an error there.
 /// - On `wasm32`, [`GpuLossPolicy::Terminal`] skips CPU canvas fallback and WebGL2 context
 ///   restoration (`event.preventDefault()` is omitted on `webglcontextlost`).
 /// - Windows only in this step: overlays share the process GPU pool; when a `Terminal` window

@@ -175,13 +175,13 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
             derive::layout(label, &[Some(vertex), fragment].into_iter().flatten().collect::<Vec<_>>()).raw
         }
     };
-    if desc.depth_stencil.is_some() { super::unsupported!("depth and stencil") }
     let (class, primitive) = topology(desc.primitive.topology);
     let points = class == MTLPrimitiveTopologyClass::Point;
     let d = MTLRenderPipelineDescriptor::new();
     #[cfg(debug_assertions)]
     if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
     let built = (|| -> Result<(Obj<dyn MTLRenderPipelineState>, [Vec<naga::ResourceBinding>; 2]), String> {
+        if desc.depth_stencil.is_some() { return Err(super::unsupported_message(format_args!("depth and stencil"))) }
         let vertex = Stage { module: desc.vertex.module, entry: desc.vertex.entry_point, constants: desc.vertex.compilation_options.constants,
             kind: naga::ShaderStage::Vertex };
         let vs = compile(shared, &vertex, &layout.stages[0], points)?;
@@ -193,7 +193,7 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
             let fs = compile(shared, &stage, &layout.stages[1], points)?;
             d.setFragmentFunction(Some(&fs.function));
             sized[1] = fs.sized;
-            if fragment.targets.len() > 4 { super::unsupported!("more than four color targets") }
+            if fragment.targets.len() > 4 { return Err(super::unsupported_message(format_args!("more than four color targets"))) }
             for (i, target) in fragment.targets.iter().enumerate() {
                 // SAFETY: at most four attachments, checked above.
                 let attachment = unsafe { d.colorAttachments().objectAtIndexedSubscript(i) };
@@ -227,10 +227,8 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
         Ok((state, sized)) => (Some(state), sized),
         Err(error) => {
             let msg = format!("{label}: {error}");
-            if !shared.capture_error(wgpu::ErrorFilter::Internal, msg.clone())
-                && !shared.capture_error(wgpu::ErrorFilter::Validation, msg.clone())
-            {
-                panic!("{msg}");
+            if !shared.capture_error(wgpu::ErrorFilter::Internal, msg.clone()) {
+                shared.report(wgpu::ErrorFilter::Validation, msg);
             }
             (None, [Vec::new(), Vec::new()])
         }
