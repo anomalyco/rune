@@ -120,6 +120,13 @@ fn opened<S: 'static>(on_result: impl FnOnce(&mut S, Result<(), OpenUrlError>, &
     Opened(std::rc::Rc::new(std::cell::Cell::new(Some(f))))
 }
 
+/// Whether `url` starts with a URI scheme (`scheme:...`) before any `/`, `?` or `#`,
+/// excluding scheme-relative `//...` references.
+pub(crate) fn has_scheme(url: &str) -> bool {
+    let url = url.trim();
+    !url.starts_with("//") && url.find([':', '/', '?', '#']).is_some_and(|i| url.as_bytes()[i] == b':')
+}
+
 /// The link to open, trimmed and with a lowercase scheme, or why it can't be.
 pub(crate) fn check(url: &str) -> Result<String, OpenUrlError> { check_link(url, false) }
 

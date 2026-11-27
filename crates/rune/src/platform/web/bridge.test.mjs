@@ -43,7 +43,12 @@ class FakeNode {
 
     get attributes() { return [...this._attrs].map(([name, value]) => ({ name, value })); }
     setAttribute(name, value) { this._attrs.set(name, String(value)); }
-    removeAttribute(name) { this._attrs.delete(name); }
+    removeAttribute(name) {
+        this._attrs.delete(name);
+        if (name === 'href') delete this.href;
+        if (name === 'target') delete this.target;
+        if (name === 'rel') delete this.rel;
+    }
     getAttribute(name) { return this._attrs.get(name) ?? null; }
     hasAttribute(name) { return this._attrs.has(name); }
 
@@ -124,6 +129,7 @@ class FakeNode {
             for (const child of node.children) {
                 if (parts.some(sel => {
                     if (sel === 'a[target="_blank"]') return child.tagName === 'A' && child.target === '_blank';
+                    if (sel === 'a[href]') return child.tagName === 'A' && typeof child.href === 'string' && child.href.length > 0;
                     return child.tagName === sel.toUpperCase();
                 })) out.push(child);
                 walk(child);
@@ -135,6 +141,10 @@ class FakeNode {
 
     getBoundingClientRect() {
         return { left: 0, top: 0, right: 160, bottom: 80, width: 160, height: 80 };
+    }
+
+    getClientRects() {
+        return [];
     }
 
     contains(node) {
@@ -168,7 +178,7 @@ class FakeNode {
 
 let coarsePointer = false;
 
-function installDom() {
+function installDom({ platform = 'Linux x86_64' } = {}) {
     const body = new FakeNode('body');
     const head = new FakeNode('head');
     const doc = new FakeNode('#document');
@@ -186,7 +196,7 @@ function installDom() {
     Object.defineProperty(globalThis, 'document', { value: doc, configurable: true });
     Object.defineProperty(globalThis, 'window', { value: win, configurable: true });
     Object.defineProperty(globalThis, 'navigator', {
-        value: { platform: 'Linux x86_64', standalone: false },
+        value: { platform, standalone: false },
         configurable: true,
     });
     Object.defineProperty(globalThis, 'matchMedia', {
@@ -205,9 +215,9 @@ function installDom() {
 installDom();
 const bridge = await import('./bridge.js');
 
-function setup({ embedded = false, fitHeight = false, page = false, coarse = false } = {}) {
+function setup({ embedded = false, fitHeight = false, page = false, coarse = false, platform = 'Linux x86_64' } = {}) {
     coarsePointer = coarse;
-    const { doc, win, body } = installDom();
+    const { doc, win, body } = installDom({ platform });
     globalThis.innerWidth = 800;
     const canvas = doc.createElement('canvas');
     body.append(canvas);
@@ -1145,7 +1155,8 @@ test('syncA11y sets aria-description on inline link anchors while preserving tex
     assert.equal(anchors[0].getAttribute('title'), null);
 
     assert.equal(anchors[1].textContent, 'notes');
-    assert.equal(anchors[1].href, '#');
+    assert.equal(anchors[1].href, '/notes');
+    assert.equal(anchors[1].target, undefined);
     assert.equal(anchors[1].getAttribute('aria-description'), 'Local notes');
 
     assert.equal(anchors[2].textContent, 'plain');
@@ -3741,6 +3752,199 @@ test('syncA11y mirrors ordered lists as <ol> with start attribute and preserves 
         assert.equal(ol3.getAttribute('start'), '5');
         bridge.syncA11y(h, JSON.stringify({ p: 1, u: [{ k: 'group', g: 'ol', p: '#0/ord3', r: [0, 50, 200, 40] }] }));
         assert.equal(ol3.getAttribute('start'), null);
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('same-origin block El::href and relative inline links support native browser link interactions while routing plain clicks through Rune', () => {
+    const { win, canvas, events, h } = setup();
+    canvas.getBoundingClientRect = () => ({ left: 0, top: 0, right: 400, bottom: 300, width: 400, height: 300 });
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'link', p: '#0/chat', r: [10, 10, 120, 24], t: 'Chat 123', h: '/chat/123' },
+            { k: 'link', p: '#0/ext', r: [10, 40, 120, 24], t: 'External', h: 'https://example.com/docs' },
+            {
+                k: 'text', p: '#0/msg', r: [10, 80, 300, 24],
+                u: [
+                    { t: 'See ' },
+                    { t: 'thread', h: '/chat/456', p: '#0/msg', i: 0 },
+                    { t: ' or ' },
+                    { t: '@alice', p: '#0/msg', i: 1 },
+                    { t: ' or ' },
+                    { t: 'bad', h: 'javascript:alert(1)', p: '#0/msg', i: 2 },
+                ],
+            },
+        ]));
+
+        // 1. Block El::href("/chat/123"): pointer-events:auto, real href, no target="_blank".
+        const chat = h.a11yNodes.get('a:#0/chat');
+        assert.equal(chat.href, '/chat/123');
+        assert.equal(chat.target, undefined);
+        assert.match(chat.style.cssText, /pointer-events:auto;/);
+        chat.getClientRects = () => [{ left: 10, top: 10, right: 130, bottom: 34, width: 120, height: 24 }];
+
+        // Hovering over canvas coords of a block El::href must NOT arm/disarm it via hoverLink.
+        canvas.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', buttons: 0, clientX: 50, clientY: 20 });
+        assert.equal(h.hoverLink, null, 'block El::href stays permanently armed without entering hoverLink');
+        win.dispatchEvent({ type: 'blur' });
+        assert.notEqual(chat.style.pointerEvents, 'none', 'disarmLink must never disable block El::href');
+
+        // Plain unmodified primary click prevents browser navigation and routes through a11y_press.
+        events.length = 0;
+        let prevented = false;
+        chat.dispatchEvent({ type: 'click', button: 0, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true);
+        assert.deepEqual(events, [{ kind: 'a11y_press', path: '#0/chat' }]);
+
+        // Middle-click and Cmd/Ctrl/Shift/Alt+click stay with the browser (not prevented, no a11y_press).
+        for (const mod of [
+            { button: 1 },
+            { button: 0, metaKey: true },
+            { button: 0, ctrlKey: true },
+            { button: 0, shiftKey: true },
+            { button: 0, altKey: true },
+        ]) {
+            events.length = 0;
+            prevented = false;
+            chat.dispatchEvent({ type: 'click', ...mod, preventDefault() { prevented = true; } });
+            assert.equal(prevented, false, `modified/middle click stays native: ${JSON.stringify(mod)}`);
+            assert.deepEqual(events, []);
+        }
+
+        // External block El::href keeps target="_blank" and lets plain click navigate natively.
+        const ext = h.a11yNodes.get('a:#0/ext');
+        assert.equal(ext.target, '_blank');
+        events.length = 0;
+        prevented = false;
+        ext.dispatchEvent({ type: 'click', button: 0, preventDefault() { prevented = true; } });
+        assert.equal(prevented, false);
+        assert.deepEqual(events, []);
+
+        // Promoted drag (> 4px) starting on same-origin block El::href suppresses trailing click (no a11y_press).
+        events.length = 0;
+        h.a11y.dispatchEvent({ type: 'pointerdown', target: chat, pointerType: 'mouse', pointerId: 4, button: 0, buttons: 1, clientX: 40, clientY: 20 });
+        win.dispatchEvent({ type: 'pointermove', target: chat, pointerType: 'mouse', pointerId: 4, button: -1, buttons: 1, clientX: 80, clientY: 20 });
+        win.dispatchEvent({ type: 'pointerup', target: chat, pointerType: 'mouse', pointerId: 4, button: 0, buttons: 0, clientX: 80, clientY: 20 });
+        prevented = false;
+        chat.dispatchEvent({ type: 'click', button: 0, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true, 'promoted drag cancels trailing click');
+        assert.deepEqual(events.filter(e => e.kind === 'a11y_press'), [], 'promoted drag must not fire a11y_press');
+
+        // 2. Inline relative link "/chat/456" vs opaque action link "@alice" vs unsafe "javascript:".
+        const msg = h.a11yNodes.get('p:#0/msg');
+        const anchors = msg.children.filter(c => c.tagName === 'A');
+        assert.equal(anchors.length, 2, 'unsafe javascript: link collapses to plain text');
+        const [relLink, opaqueLink] = anchors;
+        assert.equal(relLink.href, '/chat/456');
+        assert.equal(relLink.target, undefined);
+        assert.equal(opaqueLink.href, '#');
+        assert.equal(opaqueLink._opaqueLink, true);
+
+        relLink.getClientRects = () => [{ left: 40, top: 80, right: 100, bottom: 100, width: 60, height: 20 }];
+        opaqueLink.getClientRects = () => [{ left: 120, top: 80, right: 170, bottom: 100, width: 50, height: 20 }];
+
+        // Hovering over the opaque action link does NOT arm it.
+        canvas.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', buttons: 0, clientX: 140, clientY: 90 });
+        assert.equal(h.hoverLink, null, 'opaque non-URL inline link must not be hover-armed');
+
+        // Hovering over the relative inline link arms pointer-events:auto for status bar / middle / right click.
+        canvas.dispatchEvent({ type: 'pointermove', pointerType: 'mouse', buttons: 0, clientX: 60, clientY: 90 });
+        assert.equal(h.hoverLink, relLink);
+        assert.equal(relLink.style.pointerEvents, 'auto');
+
+        // Unmodified primary click sends a11y_link; Cmd/Ctrl/middle click stays with browser.
+        events.length = 0;
+        prevented = false;
+        relLink.dispatchEvent({ type: 'click', button: 0, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true);
+        assert.deepEqual(events, [{ kind: 'a11y_link', path: '#0/msg', link: 0 }]);
+
+        for (const mod of [{ button: 1 }, { button: 0, metaKey: true }, { button: 0, ctrlKey: true }]) {
+            events.length = 0;
+            prevented = false;
+            relLink.dispatchEvent({ type: 'click', ...mod, preventDefault() { prevented = true; } });
+            assert.equal(prevented, false);
+            assert.deepEqual(events, []);
+        }
+
+        // Pointer leave disarms the inline relative link back to none.
+        relLink.dispatchEvent({ type: 'pointerleave' });
+        assert.equal(h.hoverLink, null);
+        assert.equal(relLink.style.pointerEvents, 'none');
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('macOS right-click armMenu flushes layout synchronously and does not suppress contextmenu if engine still targets canvas', () => {
+    const { doc, win, canvas, events, h } = setup({ platform: 'MacIntel' });
+    try {
+        assert.equal(bridge.isMac(), true);
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'text', p: '#0/p', r: [10, 10, 200, 30], t: 'Hello macOS' },
+        ]));
+        const p = h.a11yNodes.get('p:#0/p');
+        let flushCalls = 0;
+        p.getBoundingClientRect = () => {
+            if (p.style.pointerEvents === 'auto') flushCalls++;
+            return { left: 10, top: 10, right: 210, bottom: 40, width: 200, height: 30 };
+        };
+
+        // 1. macOS right-click on text arms p, flushes layout synchronously on pointerdown, and sends secondary_browser.
+        events.length = 0;
+        bridge.syncSecondary(h, 'text');
+        canvas.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'mouse', button: 2, clientX: 50, clientY: 20, shiftKey: false, preventDefault() {} });
+        assert.equal(h.menu, 'browser');
+        assert.equal(p.style.pointerEvents, 'auto');
+        assert.ok(flushCalls >= 1, 'armMenu flushes layout synchronously after setting pointerEvents=auto');
+        assert.deepEqual(events.filter(e => e.kind !== 'mods'), [{ kind: 'a11y_flush' }, { kind: 'secondary_browser' }]);
+
+        // Safari/Firefox race: contextmenu still resolves event.target === canvas -> MUST NOT preventDefault when h.menu === 'browser'.
+        let prevented = false;
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, button: 2, preventDefault() { prevented = true; } });
+        assert.equal(prevented, false, 'contextmenu must not be suppressed after armMenu armed browser menu');
+
+        // Window blur disarms the browser menu and restores pointerEvents.
+        win.dispatchEvent({ type: 'blur' });
+        assert.equal(h.menu, '');
+        assert.equal(p.style.pointerEvents, undefined);
+
+        // 2. macOS Ctrl+click (button=0, ctrlKey=true) also triggers armAt on pointerdown.
+        events.length = 0;
+        bridge.syncSecondary(h, 'text');
+        canvas.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'mouse', button: 0, ctrlKey: true, clientX: 50, clientY: 20, shiftKey: false, preventDefault() {} });
+        assert.equal(h.menu, 'browser');
+        prevented = false;
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, button: 0, ctrlKey: true, preventDefault() { prevented = true; } });
+        assert.equal(prevented, false);
+        win.dispatchEvent({ type: 'blur' });
+
+        // 3. Rune-owned right-click (secondary === 'app' without Shift) sets h.menu = 'rune' and DOES preventDefault.
+        events.length = 0;
+        bridge.syncSecondary(h, 'app');
+        canvas.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'mouse', button: 2, clientX: 50, clientY: 20, shiftKey: false, preventDefault() {} });
+        assert.equal(h.menu, 'rune');
+        assert.deepEqual(events.filter(e => e.kind !== 'mods'), []);
+        prevented = false;
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, button: 2, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true, 'Rune-owned contextmenu stays suppressed for browser');
+        assert.equal(h.menu, '');
+
+        // 4. Shift+right-click overrides 'app' claim so browser menu opens even if target === canvas.
+        events.length = 0;
+        bridge.syncSecondary(h, 'app');
+        canvas.dispatchEvent({ type: 'pointerdown', target: canvas, pointerType: 'mouse', button: 2, clientX: 50, clientY: 20, shiftKey: true, preventDefault() {} });
+        assert.equal(h.menu, 'browser');
+        prevented = false;
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, button: 2, shiftKey: true, preventDefault() { prevented = true; } });
+        assert.equal(prevented, false, 'Shift+right-click opens browser menu even when target === canvas');
+        win.dispatchEvent({ type: 'blur' });
+
+        // 5. Stray un-armed contextmenu on canvas (h.menu === '') is still suppressed.
+        prevented = false;
+        doc.dispatchEvent({ type: 'contextmenu', target: canvas, button: 2, preventDefault() { prevented = true; } });
+        assert.equal(prevented, true, 'un-armed canvas contextmenu remains prevented');
     } finally {
         bridge.destroy(h);
     }

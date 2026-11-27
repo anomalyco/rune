@@ -1,0 +1,1 @@
+- Web: preserve native browser link interactions (hover URL preview, middle/Cmd/Ctrl+click, Copy Link) on same-origin `El::href` and relative inline links while routing unmodified primary clicks through `on_press`/`on_link`/`App::same_tab_router`, and fix the macOS right-click `armMenu`/`contextmenu` suppression race with synchronous layout flushing and non-swallowing fallback.

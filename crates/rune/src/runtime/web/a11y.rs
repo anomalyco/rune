@@ -158,6 +158,10 @@ impl A11yRun {
     fn plain(text: String) -> Self {
         A11yRun { text, href: None, path: None, link: None, description: None }
     }
+
+    fn is_plain(&self) -> bool {
+        self.href.is_none() && self.link.is_none()
+    }
 }
 
 impl A11yItem {
@@ -321,6 +325,19 @@ fn link_description(help: Option<&str>, label: &str) -> Option<String> {
     (!trimmed.is_empty() && trimmed != label.trim()).then(|| trimmed.to_owned())
 }
 
+/// Whether a validated `check_href` value from `Link::id` (without an explicit `Link::href`)
+/// is a real URL rather than an opaque internal key such as `"doc-42"` or `"mention-1"`.
+fn is_inline_url(url: &str) -> bool {
+    url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("mailto:")
+        || url.starts_with('/')
+        || url.starts_with("./")
+        || url.starts_with("../")
+        || url.starts_with('?')
+        || (url.starts_with('#') && url.len() > 1)
+}
+
 fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
     if spec.cold.links.is_empty() {
         let t = clean_slice(spec, 0, spec.content.len());
@@ -330,7 +347,7 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
     let mut at = 0usize;
     let push_plain = |out: &mut Vec<A11yRun>, text: String| {
         if text.is_empty() { return; }
-        if let Some(last) = out.last_mut().filter(|r| r.href.is_none()) {
+        if let Some(last) = out.last_mut().filter(|r| r.is_plain()) {
             last.text.push_str(&text);
         } else {
             out.push(A11yRun::plain(text));
@@ -346,9 +363,10 @@ fn text_runs(path: &str, spec: &crate::el::TextSpec) -> Vec<A11yRun> {
             if !label.is_empty() {
                 if let Ok(href) = crate::open_url::check_href(link.href.as_deref().unwrap_or(&link.id)) {
                     let description = link_description(link.help.as_deref(), &label);
+                    let real_href = (link.href.is_some() || is_inline_url(&href)).then_some(href);
                     out.push(A11yRun {
                         text: label,
-                        href: Some(href),
+                        href: real_href,
                         path: Some(path.to_owned()),
                         link: Some(idx),
                         description,
@@ -853,7 +871,7 @@ impl RuntimeCore {
                     }
                     let (plain, rich_runs) = if runs.is_empty() {
                         (String::new(), Vec::new())
-                    } else if runs.len() == 1 && runs[0].href.is_none() && flow_group.is_none() {
+                    } else if runs.len() == 1 && runs[0].is_plain() && flow_group.is_none() {
                         (runs.into_iter().next().unwrap().text, Vec::new())
                     } else {
                         (String::new(), runs)
@@ -1337,14 +1355,14 @@ fn merge_flow(prev: &mut A11yItem, rect: [f32; 4], runs: Vec<A11yRun>) {
     let needs_space = prev.runs.last().is_some_and(|r| !r.text.ends_with(char::is_whitespace))
         && runs.first().is_some_and(|r| !r.text.starts_with(char::is_whitespace) && !r.text.starts_with([')', ']', '.', ',', ';', ':']));
     if needs_space {
-        if let Some(last) = prev.runs.last_mut().filter(|r| r.href.is_none()) {
+        if let Some(last) = prev.runs.last_mut().filter(|r| r.is_plain()) {
             last.text.push(' ');
         } else {
             prev.runs.push(A11yRun::plain(" ".into()));
         }
     }
-    if runs.len() == 1 && runs[0].href.is_none()
-        && let Some(last) = prev.runs.last_mut().filter(|r| r.href.is_none())
+    if runs.len() == 1 && runs[0].is_plain()
+        && let Some(last) = prev.runs.last_mut().filter(|r| r.is_plain())
     {
         last.text.push_str(&runs[0].text);
     } else {
@@ -1400,7 +1418,7 @@ fn join_inline(prev: &mut A11yItem, rect: [f32; 4], mut runs: Vec<A11yRun>, gap:
     if gap && !ends_blank && runs.first().is_some_and(|r| !r.text.starts_with(char::is_whitespace)) {
         runs.insert(0, A11yRun::plain(" ".into()));
     }
-    if prev.runs.is_empty() && runs.iter().all(|r| r.href.is_none()) {
+    if prev.runs.is_empty() && runs.iter().all(|r| r.is_plain()) {
         for r in runs { prev.text.push_str(&r.text); }
         return;
     }
@@ -1409,7 +1427,7 @@ fn join_inline(prev: &mut A11yItem, rect: [f32; 4], mut runs: Vec<A11yRun>, gap:
     }
     for r in runs {
         match prev.runs.last_mut() {
-            Some(last) if last.href.is_none() && r.href.is_none() => last.text.push_str(&r.text),
+            Some(last) if last.is_plain() && r.is_plain() => last.text.push_str(&r.text),
             _ => prev.runs.push(r),
         }
     }
@@ -1421,3 +1439,6 @@ mod tests;
 #[cfg(test)]
 #[path = "a11y/mirror_tests.rs"]
 mod mirror_tests;
+#[cfg(test)]
+#[path = "a11y/link_tests.rs"]
+mod link_tests;
