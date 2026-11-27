@@ -4275,3 +4275,43 @@ test('showMenu clamps to window.visualViewport for mobile keyboards and pinch-zo
         bridge.destroy(h);
     }
 });
+
+test('syncA11y and focusA11y expose role="feed" and aria-posinset/aria-setsize on non-button articles', () => {
+    const { h } = setup();
+    try {
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'group', p: '#0/rows', r: [0, 0, 400, 240], g: 'div', o: 'feed', t: 'Activity', i: 'rows' },
+            { k: 'group', p: '#0/rows/row-11', r: [0, 40, 400, 40], g: 'article', a: 0, t: 'Row 11', i: 'row-11', n: [12, 400] },
+        ]));
+        const feed = h.a11yNodes.get('div:#0/rows');
+        const article = h.a11yNodes.get('article:#0/rows/row-11');
+        assert.ok(feed);
+        assert.ok(article);
+        assert.equal(feed.getAttribute('role'), 'feed');
+        assert.equal(feed.getAttribute('aria-label'), 'Activity');
+        assert.equal(feed.getAttribute('aria-posinset'), null);
+        assert.equal(feed.getAttribute('aria-setsize'), null);
+        assert.equal(article.tagName, 'ARTICLE');
+        assert.equal(article.getAttribute('role'), null);
+        assert.equal(article.getAttribute('aria-posinset'), '12');
+        assert.equal(article.getAttribute('aria-setsize'), '400');
+
+        // Clearing item.n in an update removes stale aria-posinset/aria-setsize from the article.
+        bridge.syncA11y(h, JSON.stringify([
+            { k: 'group', p: '#0/rows', r: [0, 0, 400, 240], g: 'div', o: 'feed', t: 'Activity', i: 'rows' },
+            { k: 'group', p: '#0/rows/row-11', r: [0, 40, 400, 40], g: 'article', a: 0, t: 'Row 11', i: 'row-11' },
+        ]));
+        assert.equal(article.getAttribute('aria-posinset'), null);
+        assert.equal(article.getAttribute('aria-setsize'), null);
+
+        // focusA11y exposes role="article" with aria-posinset and aria-setsize on the focus proxy.
+        bridge.focusA11y(h, JSON.stringify({ o: 'article', t: 'Row 11', n: [12, 400] }));
+        const proxy = h.focusProxies[h.focusTurn];
+        assert.equal(proxy.getAttribute('role'), 'article');
+        assert.equal(proxy.getAttribute('aria-label'), 'Row 11');
+        assert.equal(proxy.getAttribute('aria-posinset'), '12');
+        assert.equal(proxy.getAttribute('aria-setsize'), '400');
+    } finally {
+        bridge.destroy(h);
+    }
+});

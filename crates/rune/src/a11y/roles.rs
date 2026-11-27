@@ -189,6 +189,7 @@ pub(crate) const ROLES: &[RoleSpec] = &[
     RoleSpec::role("contentinfo", Role::ContentInfo).container("footer"),
     RoleSpec::role("alertdialog", Role::AlertDialog).aria_container(),
     RoleSpec::role("log", Role::Log).live(LiveRegion::Polite).aria_container(),
+    RoleSpec::role("feed", Role::Feed).aria_container(),
     // Rune component aliases and less frequent ARIA roles.
     RoleSpec::new("toggle", AkRole::Button).warn_nameless(),
     RoleSpec::new("swatch", AkRole::Button).warn_nameless(),
@@ -361,6 +362,9 @@ const fn ak_meta(role: Role) -> AkRoleMeta {
         Role::Slider => D.focus("slider"),
         Role::SpinButton => D.focus("spinbutton"),
         Role::ComboBox | Role::EditableComboBox => D.focus("combobox"),
+        Role::Article => D.focus("article"),
+        Role::Feed => D.focus("feed"),
+        Role::Log => D.focus("log"),
         Role::Dialog => D.focus("dialog"),
         Role::AlertDialog => D.focus("alertdialog"),
         Role::Region => D.focus("region"),
@@ -401,7 +405,8 @@ pub(crate) fn named_by_accesskit(role: Role) -> bool {
 pub(crate) fn ordered_set(role: Role) -> bool {
     matches!(
         role,
-        Role::Group
+        Role::Feed
+            | Role::Group
             | Role::List
             | Role::ListBox
             | Role::Menu
@@ -610,6 +615,14 @@ mod tests {
         assert_eq!(container_aria("alert"), Some("alert"));
         assert_eq!(container_tag("log"), Some("div"));
         assert_eq!(container_aria("log"), Some("log"));
+        assert_eq!(container_tag("feed"), Some("div"));
+        assert_eq!(container_aria("feed"), Some("feed"));
+        assert_eq!(map("feed", &cx()), Some(Role::Feed));
+        assert!(ordered_set(Role::Feed));
+        assert_eq!(default_live("feed"), None);
+        assert_eq!(focus_role(Role::Article), "article");
+        assert_eq!(focus_role(Role::Feed), "feed");
+        assert_eq!(focus_role(Role::Log), "log");
         assert_eq!(container_aria("table"), Some("table"));
         for role in ["menu", "menubar", "tree", "treegrid", "tabpanel", "toolbar", "grid", "gridcell", "rowgroup", "form", "search"] {
             assert_eq!(container_tag(role), Some("div"), "expected div container_tag({role})");

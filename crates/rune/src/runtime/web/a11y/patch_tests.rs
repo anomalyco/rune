@@ -419,3 +419,73 @@ fn differential_random_patch_sequences_match_full_rebuild() {
         );
     }
 }
+
+#[test]
+fn web_mirror_focus_and_export_expose_feed_role_and_virtual_article_set_positions() {
+    struct State {
+        role: &'static str,
+        count: usize,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        crate::col().w_full().h_full().child(
+            crate::col().key("pane").w_full().h_full().scroll(ScrollSpec { stick_bottom: false }).child(
+                crate::col().key("rows").role(s.role).label("Activity").w_full()
+                    .growth(crate::el::GrowthSpec::default())
+                    .virtual_rows(
+                        s.count,
+                        40.0,
+                        |_: &State, i| std::borrow::Cow::Owned(format!("row-{i}")),
+                        |_: &State, i| {
+                            crate::el().role("article").label(format!("Row {i}")).focusable(true).w_full().h(40.0)
+                        },
+                    ),
+            ),
+        )
+    }
+
+    let mut rt = Runtime::new(State { role: "log", count: 400 }, view, (400.0, 240.0), Env::new(false, 1.0));
+    rt.frame(0.0);
+    for _ in 0..4 { rt.frame(1.0 / 60.0); }
+
+    let mut mirror = A11yMirror::default();
+    let mut model = MirrorModel::default();
+    let first: Value = serde_json::from_str(rt.core().web_a11y_patch(&mut mirror).expect("initial patch")).unwrap();
+    model.apply_patch(&first);
+    let items = rt.web_a11y_items();
+    assert_eq!(model, MirrorModel::from_full(&items));
+
+    let log_item = items.iter().find(|it| it.id.as_deref() == Some("rows")).expect("log container");
+    assert_eq!((log_item.tag, log_item.role, log_item.live, log_item.set), (Some("div"), Some("log"), Some("polite"), None));
+    let row0 = items.iter().find(|it| it.id.as_deref() == Some("row-0")).expect("first article");
+    assert_eq!((row0.tag, row0.role, row0.set), (Some("article"), None, Some((1, 400))));
+
+    // Focusing an article gives the focus proxy role="article" and [pos, size].
+    rt.update(|_, tx| tx.focus("row-0", true));
+    rt.frame(1.0 / 60.0);
+    let focus: Value = serde_json::from_str(rt.core().web_a11y_focus(&mut mirror).expect("article focus")).unwrap();
+    assert_eq!((&focus["o"], &focus["t"], &focus["n"]), (&serde_json::json!("article"), &serde_json::json!("Row 0"), &serde_json::json!([1, 400])));
+
+    // Switching to role("feed") and growing the list updates container role and article set sizes.
+    rt.update(|s, _| {
+        s.role = "feed";
+        s.count = 405;
+    });
+    rt.frame(1.0 / 60.0);
+    let update: Value = serde_json::from_str(rt.core().web_a11y_patch(&mut mirror).expect("feed patch")).unwrap();
+    model.apply_patch(&update);
+    let after = rt.web_a11y_items();
+    assert_eq!(model, MirrorModel::from_full(&after));
+    let feed_item = after.iter().find(|it| it.id.as_deref() == Some("rows")).expect("feed container");
+    assert_eq!((feed_item.tag, feed_item.role, feed_item.live, feed_item.set), (Some("div"), Some("feed"), None, None));
+    let row0_after = after.iter().find(|it| it.id.as_deref() == Some("row-0")).expect("first article after");
+    assert_eq!(row0_after.set, Some((1, 405)));
+
+    let focus_after: Value = serde_json::from_str(rt.core().web_a11y_focus(&mut mirror).expect("updated article focus")).unwrap();
+    assert_eq!((&focus_after["o"], &focus_after["n"]), (&serde_json::json!("article"), &serde_json::json!([1, 405])));
+
+    // Static HTML export emits <div id="rows" role="feed" aria-label="Activity">.
+    let exported = rt.core().export_nodes();
+    let feed_export = exported.iter().find(|n| n.attrs.contains(r#"id="rows""#)).expect("exported feed");
+    assert_eq!(feed_export.tag, "div");
+    assert!(feed_export.attrs.contains(r#"role="feed""#), "exported feed attrs: {}", feed_export.attrs);
+}
