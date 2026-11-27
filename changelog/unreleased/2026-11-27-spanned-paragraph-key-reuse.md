@@ -1,0 +1,1 @@
+- Text layout: multi-line `text_input` and `El::by_line` layouts with layout-affecting `Span`s now reuse unchanged prefix and suffix paragraph keys across edits instead of rescanning and re-deferring already-shaped paragraphs on every keystroke.

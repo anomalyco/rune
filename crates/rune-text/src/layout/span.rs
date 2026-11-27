@@ -74,18 +74,12 @@ impl Span {
     /// What [`Self::affects_layout`] depends on, hashed into a layout's key.
     pub(crate) fn hash_layout(&self, h: &mut impl std::hash::Hasher) {
         use std::hash::Hash;
-        (
-            self.start,
-            self.end,
-            self.mono,
-            self.weight.map(f32::to_bits),
-            self.size.map(f32::to_bits),
-            self.italic,
-            self.bg.is_some(),
-            self.bg.map(|_| self.bg_pad.to_bits()),
-            self.underline.is_some(),
-        )
-            .hash(h);
+        (self.start, self.end, self.layout_attr_key()).hash(h);
+    }
+
+    /// Non-range fields that affect shaping, line metrics, or decorations.
+    pub(crate) fn layout_attr_key(&self) -> (bool, Option<u32>, Option<u32>, bool, bool, Option<u32>, bool) {
+        (self.mono, self.weight.map(f32::to_bits), self.size.map(f32::to_bits), self.italic, self.bg.is_some(), self.bg.map(|_| self.bg_pad.to_bits()), self.underline.is_some())
     }
 
     /// A rounded `color` background padded by `pad` points, as inline code draws.
