@@ -9,23 +9,28 @@
 //!   posts before either. With an activation scheme (`Identity::activation`) a click
 //!   opens a link on that scheme, which reaches the app whether it runs or not, as long as the
 //!   toast is in the notification center; `click_from_url` turns the link back into the click.
-//! - **Linux:** the desktop's notification server (`org.freedesktop.Notifications` on the session
-//!   bus), on its own connection and thread. `available` is whether one answered; the first call
-//!   connects, waiting up to about 2.5 s for a server to answer, so make it after the first
-//!   frame (`on_ready`). The XDG portal is not used: a sandboxed app needs permission to talk to
-//!   `org.freedesktop.Notifications`. Buttons post where the server shows actions; text boxes
+//! - **Linux:** on its own D-Bus connection and thread. Inside a Flatpak sandbox
+//!   (`FLATPAK_ID` or `/.flatpak-info`), uses the XDG Notification portal
+//!   (`org.freedesktop.portal.Notification`, gating v2-only keys such as `sound` on
+//!   `version >= 2`) and falls back to `org.freedesktop.Notifications` if the portal is
+//!   unavailable; outside a sandbox, talks to `org.freedesktop.Notifications`. `available` is
+//!   whether a backend answered; the first call connects, waiting up to about 2.5 s, so make it
+//!   after the first frame (`on_ready`). Buttons post where supported; text boxes
 //!   (`Notification::reply`) are left out. A click comes back while the process that posted
-//!   runs, with the server's activation token (`Click::activation_token`) when it sends one.
-//!   `register` names the app and its desktop entry.
+//!   runs, with the activation token (`Click::activation_token`) when provided. `register` names
+//!   the app and its desktop entry for `org.freedesktop.Notifications`.
 //! - **Elsewhere:** `available` is false and every call does nothing.
 //!
-//! Notifications are silent: they never play a sound.
+//! Notifications are silent by default; call `Notification::sound(true)` to opt into the
+//! system's default notification sound.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(target_os = "linux", test))]
+mod linux_format;
 #[cfg(target_os = "macos")]
 mod mac;
 #[cfg(target_os = "windows")]
@@ -40,6 +45,8 @@ pub struct Notification {
     info: Vec<(String, String)>,
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos", target_os = "windows")), allow(dead_code))]
     actions: Vec<Action>,
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos", target_os = "windows")), allow(dead_code))]
+    sound: bool,
 }
 
 /// A button on a notification, or a text box with its send button.
@@ -88,6 +95,21 @@ impl Notification {
     /// and the words in `Click::input(id)`. Windows and macOS.
     pub fn reply(mut self, id: impl Into<String>, placeholder: impl Into<String>, label: impl Into<String>) -> Self {
         self.actions.push(Action::Reply { id: id.into(), placeholder: placeholder.into(), label: label.into() });
+        self
+    }
+
+    /// Whether the notification plays the system's default notification sound. Silent by default
+    /// (`false`).
+    ///
+    /// - **Linux:** outside Flatpak (`org.freedesktop.Notifications`), `false` sends
+    ///   `suppress-sound: true` and `true` sends `sound-name: "message-new-instant"`. Inside
+    ///   Flatpak (`org.freedesktop.portal.Notification`), portal v2+ sends `sound: "silent"` or
+    ///   `sound: "default"`; portal v1 ignores it.
+    /// - **Windows:** `false` emits `<audio silent="true"/>`; `true` uses the system toast sound.
+    /// - **macOS:** `false` stays silent; `true` requests sound authorization and plays the
+    ///   default notification sound.
+    pub fn sound(mut self, enabled: bool) -> Self {
+        self.sound = enabled;
         self
     }
 }

@@ -1,41 +1,38 @@
-//! Linux: the desktop's notification server, `org.freedesktop.Notifications` on the session bus,
-//! on its own connection and thread. The first call connects and asks the server for its
-//! capabilities; `available` is whether one answered. Rune ids map to the server's numeric ids,
-//! so posting an id again replaces its notification, and a click (`ActionInvoked`) comes back
-//! with the id and user info it was posted with.
-use super::{ACTION, Action, Click, Notification, TOKEN, deliver};
+//! Linux notifications over D-Bus on a dedicated connection and worker thread:
+//! - Inside a Flatpak sandbox (`FLATPAK_ID` or `/.flatpak-info`), uses the XDG Notification
+//!   portal (`org.freedesktop.portal.Notification`), gating v2-only keys such as `sound` on
+//!   `version >= 2`, and falls back to `org.freedesktop.Notifications` if the portal is
+//!   unavailable.
+//! - Outside a sandbox, talks directly to `org.freedesktop.Notifications`.
+//!
+//! The first call connects and probes the active backend; `available` is whether one answered.
+
+use super::linux_format::{
+    Caps, FdoSound, PortalShown, actions_for, body_for, click_for, fdo_sound, in_flatpak,
+    portal_action_unwire, portal_payload,
+};
+use super::{Notification, deliver};
 use async_channel::{Receiver, Sender, unbounded};
 use futures_lite::{FutureExt, StreamExt};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::Duration;
-use zbus::{Connection, MatchRule, MessageStream, Proxy, message::Type, zvariant::Value};
+use zbus::proxy::SignalStream;
+use zbus::zvariant::{OwnedValue, Value};
+use zbus::{Connection, MatchRule, MessageStream, Proxy, message::Type};
 
-const NAME: &str = "org.freedesktop.Notifications";
-const PATH: &str = "/org/freedesktop/Notifications";
-/// How long the first call waits for the session bus and a notification server (which the bus
+const FDO_NAME: &str = "org.freedesktop.Notifications";
+const FDO_PATH: &str = "/org/freedesktop/Notifications";
+const PORTAL_NAME: &str = "org.freedesktop.portal.Desktop";
+const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
+const PORTAL_INTERFACE: &str = "org.freedesktop.portal.Notification";
+/// How long the first call waits for the session bus and a notification backend (which the bus
 /// may start on demand) before it decides there is none.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const RPC_TIMEOUT: Duration = Duration::from_secs(5);
-/// The action key a server invokes for a click on the notification itself.
-const DEFAULT_ACTION: &str = "default";
 
-/// What the server can do, from `GetCapabilities`.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct Caps {
-    /// Clicks and buttons: without it the notification posts without either.
-    pub(crate) actions: bool,
-    /// The body is read as a small markup language, so it is escaped.
-    pub(crate) markup: bool,
-}
-
-impl Caps {
-    fn from_list(caps: &[String]) -> Self {
-        Caps { actions: caps.iter().any(|c| c == "actions"), markup: caps.iter().any(|c| c == "body-markup") }
-    }
-}
-
-/// Who posts, from `register`: the server shows the name and finds the app's desktop entry
+/// Who posts, from `register`: the FDO server shows the name and finds the app's desktop entry
 /// (`<id>.desktop`) for its icon.
 static IDENTITY: Mutex<Option<(String, String)>> = Mutex::new(None);
 
@@ -43,7 +40,11 @@ pub(crate) fn register(id: &str, name: &str) {
     *IDENTITY.lock().unwrap_or_else(|e| e.into_inner()) = Some((id.to_owned(), name.to_owned()));
 }
 
-struct Post { n: Notification, app_name: String, desktop_entry: Option<String> }
+struct Post {
+    n: Notification,
+    app_name: String,
+    desktop_entry: Option<String>,
+}
 
 enum Command {
     Post(Post),
@@ -55,7 +56,7 @@ fn backend() -> Option<&'static Sender<Command>> {
     BACKEND.get_or_init(start).as_ref()
 }
 
-/// Starts the worker and waits for it to reach a server, or not.
+/// Starts the worker and waits for it to reach a backend, or not.
 fn start() -> Option<Sender<Command>> {
     let (commands, receiver) = unbounded();
     let (ready, result) = mpsc::sync_channel(1);
@@ -110,33 +111,130 @@ async fn timeout<T>(limit: Duration, future: impl Future<Output = T>) -> Option<
         .await
 }
 
-/// One posted notification the server still shows, with the activation token it sent for the
+/// One posted FDO notification the server still shows, with the activation token it sent for the
 /// click about to come.
-struct Shown { server: u32, info: Vec<(String, String)>, token: Option<String> }
+struct Shown {
+    server: u32,
+    info: Vec<(String, String)>,
+    token: Option<String>,
+}
 
-enum Event {
-    Command(Option<Command>),
-    /// One of the server's signals, or the stream's error for a message it couldn't read; None
-    /// when the connection ends.
-    Signal(Option<zbus::Result<zbus::Message>>),
+enum Connected {
+    Portal { proxy: Proxy<'static>, signals: Box<SignalStream<'static>>, version: u32 },
+    Fdo { proxy: Proxy<'static>, signals: Box<MessageStream>, caps: Caps },
+}
+
+async fn connect_portal(conn: &Connection) -> zbus::Result<Connected> {
+    let proxy = Proxy::new(conn, PORTAL_NAME, PORTAL_PATH, PORTAL_INTERFACE).await?;
+    let version: u32 = proxy.get_property("version").await?;
+    if version == 0 {
+        return Err(zbus::Error::Failure("notification portal reported version 0".into()));
+    }
+    let signals = Box::new(proxy.receive_signal("ActionInvoked").await?);
+    Ok(Connected::Portal { proxy, signals, version })
+}
+
+async fn connect_fdo(conn: &Connection) -> zbus::Result<Connected> {
+    let proxy = Proxy::new(conn, FDO_NAME, FDO_PATH, FDO_NAME).await?;
+    // One stream for every signal, so `ActivationToken` stays ahead of its `ActionInvoked`;
+    // only the server's, so no other peer on the bus can fake a click.
+    let rule = MatchRule::builder()
+        .msg_type(Type::Signal)
+        .sender(FDO_NAME)?
+        .interface(FDO_NAME)?
+        .path(FDO_PATH)?
+        .build();
+    let signals = Box::new(MessageStream::for_match_rule(rule, conn, None).await?);
+    let caps: Vec<String> = proxy.call("GetCapabilities", &()).await?;
+    Ok(Connected::Fdo { proxy, signals, caps: Caps::from_list(&caps) })
 }
 
 async fn run(commands: Receiver<Command>, ready: mpsc::SyncSender<bool>) {
+    let sandboxed = in_flatpak(
+        std::env::var_os("FLATPAK_ID").as_deref(),
+        std::path::Path::new("/.flatpak-info").exists(),
+    );
     let setup = async {
         let conn = Connection::session().await?;
-        let proxy = Proxy::new(&conn, NAME, PATH, NAME).await?;
-        // One stream for every signal, so `ActivationToken` stays ahead of its `ActionInvoked`;
-        // only the server's, so no other peer on the bus can fake a click.
-        let rule = MatchRule::builder().msg_type(Type::Signal).sender(NAME)?.interface(NAME)?.path(PATH)?.build();
-        let signals = MessageStream::for_match_rule(rule, &conn, None).await?;
-        let caps: Vec<String> = proxy.call("GetCapabilities", &()).await?;
-        Ok::<_, zbus::Error>((conn, proxy, signals, Caps::from_list(&caps)))
+        let connected = if sandboxed {
+            match connect_portal(&conn).await {
+                Ok(portal) => portal,
+                Err(_) => connect_fdo(&conn).await?,
+            }
+        } else {
+            connect_fdo(&conn).await?
+        };
+        Ok::<_, zbus::Error>((conn, connected))
     };
-    let Some(Ok((_conn, proxy, mut signals, caps))) = timeout(PROBE_TIMEOUT, setup).await else {
+    let Some(Ok((_conn, connected))) = timeout(PROBE_TIMEOUT, setup).await else {
         ready.send(false).ok();
         return;
     };
     ready.send(true).ok();
+    match connected {
+        Connected::Portal { proxy, signals, version } => run_portal(commands, proxy, *signals, version).await,
+        Connected::Fdo { proxy, signals, caps } => run_fdo(commands, proxy, *signals, caps).await,
+    }
+}
+
+async fn run_portal(
+    commands: Receiver<Command>,
+    proxy: Proxy<'static>,
+    mut signals: SignalStream<'static>,
+    version: u32,
+) {
+    enum Event {
+        Command(Option<Command>),
+        Signal(Option<zbus::Message>),
+    }
+
+    let mut shown = PortalShown::new();
+    loop {
+        let event = async { Event::Command(commands.recv().await.ok()) }
+            .or(async { Event::Signal(signals.next().await) })
+            .await;
+        match event {
+            Event::Command(None) | Event::Signal(None) => return,
+            Event::Command(Some(Command::Post(post))) => {
+                let notification = portal_notification(&post.n, version);
+                let args = (post.n.id.as_str(), notification);
+                if let Some(Ok(())) = timeout(RPC_TIMEOUT, proxy.call::<_, _, ()>("AddNotification", &args)).await {
+                    shown.record(post.n.id, post.n.info);
+                }
+            }
+            Event::Command(Some(Command::Remove(ids))) => {
+                for id in ids {
+                    shown.remove(&id);
+                    let _ = timeout(RPC_TIMEOUT, proxy.call::<_, _, ()>("RemoveNotification", &(id.as_str(),))).await;
+                }
+            }
+            Event::Signal(Some(message)) => {
+                let Ok((id, action, params)) =
+                    message.body().deserialize::<(String, String, Vec<OwnedValue>)>()
+                else {
+                    continue;
+                };
+                let key = portal_action_unwire(&action);
+                let token = portal_activation_token(&params);
+                deliver(click_for(&id, shown.info(&id), key, token));
+            }
+        }
+    }
+}
+
+async fn run_fdo(
+    commands: Receiver<Command>,
+    proxy: Proxy<'static>,
+    mut signals: MessageStream,
+    caps: Caps,
+) {
+    enum Event {
+        Command(Option<Command>),
+        /// One of the server's signals, or the stream's error for a message it couldn't read; None
+        /// when the connection ends.
+        Signal(Option<zbus::Result<zbus::Message>>),
+    }
+
     let mut shown: HashMap<String, Shown> = HashMap::new();
     loop {
         let event = async { Event::Command(commands.recv().await.ok()) }
@@ -148,12 +246,17 @@ async fn run(commands: Receiver<Command>, ready: mpsc::SyncSender<bool>) {
                 let replaces = shown.get(&post.n.id).map_or(0, |s| s.server);
                 let actions = actions_for(&post.n, caps);
                 let body = body_for(&post.n.body, caps);
-                let mut hints: HashMap<&str, Value> = HashMap::new();
-                hints.insert("suppress-sound", Value::from(true));
-                if let Some(entry) = post.desktop_entry.as_deref() {
-                    hints.insert("desktop-entry", Value::from(entry));
-                }
-                let args = (post.app_name.as_str(), replaces, "", post.n.title.as_str(), body.as_str(), actions, hints, -1i32);
+                let hints = fdo_hints(&post.n, post.desktop_entry.as_deref());
+                let args = (
+                    post.app_name.as_str(),
+                    replaces,
+                    "",
+                    post.n.title.as_str(),
+                    body.as_str(),
+                    actions,
+                    hints,
+                    -1i32,
+                );
                 if let Some(Ok(server)) = timeout(RPC_TIMEOUT, proxy.call::<_, _, u32>("Notify", &args)).await {
                     shown.insert(post.n.id, Shown { server, info: post.n.info, token: None });
                 }
@@ -200,51 +303,68 @@ async fn run(commands: Receiver<Command>, ready: mpsc::SyncSender<bool>) {
     }
 }
 
-/// The `Notify` action list: key, label pairs, flattened. A click on the notification itself
-/// invokes `default`; each button its own id. Text boxes have no equivalent and are left out.
-pub(crate) fn actions_for(n: &Notification, caps: Caps) -> Vec<&str> {
-    if !caps.actions {
-        return Vec::new();
-    }
-    let mut list = vec![DEFAULT_ACTION, ""];
-    for action in &n.actions {
-        if let Action::Button { id, label } = action {
-            list.extend([id.as_str(), label.as_str()]);
+/// Builds the FDO `Notify` hints dictionary for `n`.
+pub(crate) fn fdo_hints<'a>(n: &Notification, desktop_entry: Option<&'a str>) -> HashMap<&'static str, Value<'a>> {
+    let mut hints: HashMap<&'static str, Value<'a>> = HashMap::new();
+    match fdo_sound(n.sound) {
+        FdoSound::Suppress => {
+            hints.insert("suppress-sound", Value::from(true));
+        }
+        FdoSound::Name(name) => {
+            hints.insert("sound-name", Value::from(name));
         }
     }
-    list
+    if let Some(entry) = desktop_entry {
+        hints.insert("desktop-entry", Value::from(entry));
+    }
+    hints
 }
 
-/// The body as the server reads it: escaped where it would take it for markup.
-pub(crate) fn body_for(body: &str, caps: Caps) -> String {
-    if !caps.markup {
-        return body.to_owned();
+/// Builds the `org.freedesktop.portal.Notification.AddNotification` vardict for `n` at
+/// `version`, omitting v2-only keys when `version < 2`.
+pub(crate) fn portal_notification<'a>(n: &'a Notification, version: u32) -> HashMap<&'static str, Value<'a>> {
+    let payload = portal_payload(n, version);
+    let mut map: HashMap<&'static str, Value<'a>> = HashMap::new();
+    map.insert("title", Value::from(payload.title));
+    if let Some(body) = payload.body {
+        map.insert("body", Value::from(body));
     }
-    let mut out = String::with_capacity(body.len());
-    for c in body.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            _ => out.push(c),
+    map.insert("default-action", Value::from(payload.default_action));
+    if !payload.buttons.is_empty() {
+        let buttons: Vec<HashMap<&'static str, Value<'a>>> = payload
+            .buttons
+            .into_iter()
+            .map(|b| {
+                let mut button: HashMap<&'static str, Value<'a>> = HashMap::new();
+                button.insert("label", Value::from(b.label));
+                let action = match b.action {
+                    Cow::Borrowed(s) => Value::from(s),
+                    Cow::Owned(s) => Value::from(s),
+                };
+                button.insert("action", action);
+                button
+            })
+            .collect();
+        map.insert("buttons", Value::from(buttons));
+    }
+    if let Some(sound) = payload.sound {
+        map.insert("sound", Value::from(sound));
+    }
+    map
+}
+
+/// Extracts the XDG activation token from `org.freedesktop.portal.Notification::ActionInvoked`'s
+/// `parameter` (`av`) array, where portal v2 places `platform-data` (`a{sv}`) containing
+/// `activation-token` (`s`).
+pub(crate) fn portal_activation_token(params: &[OwnedValue]) -> Option<String> {
+    for param in params {
+        let Ok(cloned) = param.try_clone() else { continue };
+        let Ok(map) = HashMap::<String, OwnedValue>::try_from(cloned) else { continue };
+        if let Some(token) = map.get("activation-token").and_then(|v| <&str>::try_from(v).ok())
+            && !token.is_empty()
+        {
+            return Some(token.to_owned());
         }
     }
-    out
+    None
 }
-
-/// The click for action `key` on notification `id`: its user info, plus the button and the
-/// activation token when there are any.
-pub(crate) fn click_for(id: &str, info: &[(String, String)], key: &str, token: Option<String>) -> Click {
-    let mut info = info.to_vec();
-    if key != DEFAULT_ACTION {
-        info.push((ACTION.to_owned(), key.to_owned()));
-    }
-    if let Some(token) = token {
-        info.push((TOKEN.to_owned(), token));
-    }
-    Click { id: id.to_owned(), info }
-}
-
-#[cfg(test)]
-#[path = "linux_tests.rs"]
-mod tests;

@@ -393,8 +393,9 @@ pub(super) fn xml(n: &Notification, scheme: Option<&str>) -> String {
     // Inputs come before buttons in the schema.
     let (inputs, buttons): (Vec<&str>, Vec<&str>) = actions.split_inclusive("/>").partition(|part| part.starts_with("<input"));
     let actions = if actions.is_empty() { String::new() } else { format!("<actions>{}{}</actions>", inputs.concat(), buttons.concat()) };
+    let audio = if n.sound { "" } else { "<audio silent=\"true\"/>" };
     format!(
-        "<toast {launch}><visual><binding template=\"ToastGeneric\"><text>{}</text>{body}</binding></visual>{actions}<audio silent=\"true\"/></toast>",
+        "<toast {launch}><visual><binding template=\"ToastGeneric\"><text>{}</text>{body}</binding></visual>{actions}{audio}</toast>",
         escape(&n.title),
     )
 }
