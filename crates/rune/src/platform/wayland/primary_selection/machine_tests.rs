@@ -385,13 +385,16 @@ mod unix_pipe_integration_tests {
         assert_eq!(read_out, Some(ReadOutcome::Bytes(payload.to_vec())));
 
         // 2. >4 MiB triggers ReadOutcome::TooLarge cleanly.
+        // Surplus (2 MiB) exceeds any OS default pipe buffer (64 KiB on macOS/Linux 4K,
+        // 1 MiB on Linux 64K) so the writer cannot finish buffering before the reader
+        // hits byte MAX_PRIMARY_BYTES + 1 and closes its end.
         let (read_fd, write_fd) = make_pipe().expect("make_pipe");
-        let oversize: Arc<[u8]> = Arc::from(vec![b'X'; MAX_PRIMARY_BYTES + 128]);
+        let oversize: Arc<[u8]> = Arc::from(vec![b'X'; MAX_PRIMARY_BYTES + 2 * 1024 * 1024]);
         let w_cancel = Arc::new(WriteCancel::new().expect("WriteCancel"));
         let r_cancel = CancelToken::new().expect("CancelToken");
         let wc = Arc::clone(&w_cancel);
         let writer = std::thread::spawn(move || {
-            write_fd_bounded(write_fd, &oversize, &wc, MAX_PRIMARY_BYTES + 1024, PIPE_WRITE_TIMEOUT)
+            write_fd_bounded(write_fd, &oversize, &wc, oversize.len(), PIPE_WRITE_TIMEOUT)
         });
         let read_out = read_fd_bounded(read_fd, &r_cancel, MAX_PRIMARY_BYTES, Duration::from_secs(5));
         assert_eq!(read_out, Some(ReadOutcome::TooLarge));
@@ -418,5 +421,14 @@ mod unix_pipe_integration_tests {
         assert_eq!(read_fd_bounded(read_fd, &r_cancel, MAX_PRIMARY_BYTES, Duration::from_secs(30)), None);
         canceller.join().unwrap();
         assert!(t0.elapsed() < Duration::from_secs(2));
+
+        // 5. Writing to a pipe whose read end is already closed returns PeerClosed without SIGPIPE.
+        let (read_fd, write_fd) = make_pipe().expect("make_pipe");
+        drop(read_fd);
+        let w_cancel = WriteCancel::new().expect("WriteCancel");
+        assert_eq!(
+            write_fd_bounded(write_fd, b"closed-peer", &w_cancel, MAX_PRIMARY_BYTES, PIPE_WRITE_TIMEOUT),
+            WriteOutcome::PeerClosed
+        );
     }
 }

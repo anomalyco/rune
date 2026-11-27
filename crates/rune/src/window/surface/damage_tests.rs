@@ -193,6 +193,8 @@ fn glyph_atlas_changes_force_full_redraw_without_breaking_partial_updates() {
     text.atlas.dirty = None;
 
     // GPU-filled glyph advances `rasterized` and queues fills without marking CPU rows dirty.
+    // Explicitly select an outline-backed smoothing mode because macOS defaults to `FontSmoothing::On`.
+    text.set_font_smoothing(crate::FontSmoothing::WindfoilChromium);
     text.atlas.outlines.set_support(crate::text::outline::Support::Drawn);
     let mut quads = Vec::new();
     let rasterized_before = text.atlas.rasterized();
