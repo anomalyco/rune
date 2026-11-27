@@ -506,3 +506,175 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
     await Promise.resolve();
     assert.deepEqual(canceled, []);
 });
+
+function makeInlineCanvas({
+    parentWidth = 478,
+    inlineStyles = {},
+    attrs = {},
+    stylesheetHeight = null,
+    aspectRatio = null,
+    flexHeight = null,
+    minHeight = 0,
+    maxHeight = Infinity,
+    hidden = false,
+    computedMap = null,
+} = {}) {
+    const props = new Map(Object.entries(inlineStyles));
+    const attributes = new Map(Object.entries(attrs).map(([k, v]) => [k, String(v)]));
+    const canvas = {
+        style: {
+            setProperty(name, value) { props.set(name, String(value)); },
+            getPropertyValue(name) { return props.get(name) ?? ''; },
+            removeProperty(name) { props.delete(name); },
+            get height() { return props.get('height') ?? ''; },
+        },
+        getAttribute(name) { return attributes.has(name) ? attributes.get(name) : null; },
+        setAttribute(name, value) { attributes.set(name, String(value)); },
+        removeAttribute(name) { attributes.delete(name); },
+        getBoundingClientRect() {
+            if (hidden) return { width: 0, height: 0 };
+            const inlineH = props.get('height');
+            let h;
+            if (inlineH && inlineH !== 'auto') {
+                h = parseFloat(inlineH);
+            } else if (stylesheetHeight !== null) {
+                h = stylesheetHeight;
+            } else if (flexHeight !== null) {
+                h = flexHeight;
+            } else if (aspectRatio !== null) {
+                h = parentWidth / aspectRatio;
+            } else {
+                const iw = Number(attributes.get('width') ?? 300);
+                const ih = Number(attributes.get('height') ?? 150);
+                h = parentWidth * (ih / iw);
+            }
+            h = Math.min(Math.max(h, minHeight), maxHeight);
+            return { width: parentWidth, height: h };
+        },
+    };
+    if (computedMap) {
+        canvas.computedStyleMap = () => ({ get: name => computedMap[name] });
+    }
+    return { canvas, props, attributes };
+}
+
+test('styleInlineCanvas sets AppSpec height when page gave none and preserves page-owned styles and heights', () => {
+    installDom();
+
+    // 1. Exact issue repro: 478 px parent, inline width only -> browser defaults to 2:1 (239 px).
+    // Must set height to AppSpec::size.1 (560px) and leave width/height HTML attributes absent.
+    {
+        const { canvas, props, attributes } = makeInlineCanvas({
+            parentWidth: 478,
+            inlineStyles: { display: 'block', width: '100%' },
+        });
+        assert.equal(canvas.getBoundingClientRect().height, 239);
+        platform.styleInlineCanvas(canvas, 560, false);
+        assert.equal(props.get('display'), 'block');
+        assert.equal(props.get('width'), '100%');
+        assert.equal(props.get('height'), '560px');
+        assert.equal(props.get('touch-action'), 'none');
+        assert.equal(props.get('outline'), 'none');
+        assert.equal(props.get('user-select'), 'none');
+        assert.equal(props.get('-webkit-user-select'), 'none');
+        assert.equal(canvas.getBoundingClientRect().height, 560);
+        assert.equal(attributes.has('width'), false, 'probe must not leave width attribute behind');
+        assert.equal(attributes.has('height'), false, 'probe must not leave height attribute behind');
+    }
+
+    // 2. Existing inline style height and unrelated properties are preserved (not clobbered).
+    {
+        const { canvas, props } = makeInlineCanvas({
+            parentWidth: 478,
+            inlineStyles: { height: '400px', 'border-radius': '12px' },
+        });
+        platform.styleInlineCanvas(canvas, 560, false);
+        assert.equal(props.get('height'), '400px');
+        assert.equal(props.get('border-radius'), '12px');
+        assert.equal(props.get('width'), '100%');
+    }
+
+    // 3. Stylesheet height (even when it happens to equal width / 2 = 239 px) is respected,
+    // and existing HTML width/height attributes are restored verbatim.
+    {
+        const { canvas, props, attributes } = makeInlineCanvas({
+            parentWidth: 478,
+            stylesheetHeight: 239,
+            attrs: { width: '480', height: '320' },
+        });
+        platform.styleInlineCanvas(canvas, 560, false);
+        assert.equal(props.has('height'), false, 'must not override stylesheet height with inline style');
+        assert.equal(attributes.get('width'), '480');
+        assert.equal(attributes.get('height'), '320');
+    }
+
+    // 4. CSS aspect-ratio and flex/grid stretched height are respected.
+    {
+        const aspect = makeInlineCanvas({ parentWidth: 478, aspectRatio: 16 / 9 });
+        platform.styleInlineCanvas(aspect.canvas, 560, false);
+        assert.equal(aspect.props.has('height'), false);
+
+        const flex = makeInlineCanvas({ parentWidth: 478, flexHeight: 360 });
+        platform.styleInlineCanvas(flex.canvas, 560, false);
+        assert.equal(flex.props.has('height'), false);
+    }
+
+    // 5. min-height or max-height alone still falls back to AppSpec::size.1 so CSS bounds apply to it.
+    {
+        const maxOnly = makeInlineCanvas({ parentWidth: 478, maxHeight: 200 });
+        platform.styleInlineCanvas(maxOnly.canvas, 560, false);
+        assert.equal(maxOnly.props.get('height'), '560px');
+
+        const minOnly = makeInlineCanvas({ parentWidth: 478, minHeight: 300 });
+        platform.styleInlineCanvas(minOnly.canvas, 560, false);
+        assert.equal(minOnly.props.get('height'), '560px');
+    }
+
+    // 6. Hidden (display:none) canvas falls back via computedStyleMap / getComputedStyle.
+    {
+        const hiddenAuto = makeInlineCanvas({
+            hidden: true,
+            computedMap: { height: 'auto', 'aspect-ratio': 'auto' },
+        });
+        platform.styleInlineCanvas(hiddenAuto.canvas, 560, false);
+        assert.equal(hiddenAuto.props.get('height'), '560px');
+
+        const hiddenStyled = makeInlineCanvas({
+            hidden: true,
+            computedMap: { height: '400px', 'aspect-ratio': 'auto' },
+        });
+        platform.styleInlineCanvas(hiddenStyled.canvas, 560, false);
+        assert.equal(hiddenStyled.props.has('height'), false);
+
+        Object.defineProperty(globalThis, 'getComputedStyle', {
+            value: () => ({ height: 'auto', aspectRatio: 'auto' }),
+            configurable: true,
+        });
+        const hiddenFallbackAuto = makeInlineCanvas({ hidden: true });
+        platform.styleInlineCanvas(hiddenFallbackAuto.canvas, 560, false);
+        assert.equal(hiddenFallbackAuto.props.get('height'), '560px');
+
+        Object.defineProperty(globalThis, 'getComputedStyle', {
+            value: () => ({ height: '420px', aspectRatio: 'auto' }),
+            configurable: true,
+        });
+        const hiddenFallbackCss = makeInlineCanvas({ hidden: true });
+        platform.styleInlineCanvas(hiddenFallbackCss.canvas, 560, false);
+        assert.equal(hiddenFallbackCss.props.has('height'), false);
+    }
+
+    // 7. fit_content_height sets pan-y and leaves height unset for start_app's content measurement;
+    // non-positive or non-finite specHeight leaves height unset.
+    {
+        const fit = makeInlineCanvas({ parentWidth: 478 });
+        platform.styleInlineCanvas(fit.canvas, 560, true);
+        assert.equal(fit.props.get('touch-action'), 'pan-y');
+        assert.equal(fit.props.has('height'), false);
+
+        for (const bad of [0, -10, Number.NaN]) {
+            const c = makeInlineCanvas({ parentWidth: 478 });
+            platform.styleInlineCanvas(c.canvas, bad, false);
+            assert.equal(c.props.has('height'), false);
+        }
+    }
+});

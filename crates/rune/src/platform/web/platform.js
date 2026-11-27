@@ -541,6 +541,71 @@ export function viewport(canvas, callback, embedded) {
     };
 }
 
+const AUTO_HEIGHT = new Set(['auto', 'initial', 'unset', 'revert', 'revert-layer']);
+
+// Styles an inline `App::canvas_id` canvas to fill its parent's width while preserving any height
+// the page gave it (inline style, stylesheet rule, `aspect-ratio`, or flex/grid stretch). When
+// `fitHeight` is false and the page left CSS height unset (which would keep `<canvas>`'s default
+// 2:1 intrinsic box), falls back to `specHeight` from `AppSpec::size`.
+export function styleInlineCanvas(canvas, specHeight, fitHeight) {
+    const style = canvas.style;
+    const props = [
+        ['display', 'block'],
+        ['width', '100%'],
+        ['touch-action', fitHeight ? 'pan-y' : 'none'],
+        ['outline', 'none'],
+        ['user-select', 'none'],
+        ['-webkit-user-select', 'none'],
+    ];
+    for (const [name, value] of props) style.setProperty(name, value);
+    if (fitHeight || !Number.isFinite(specHeight) || specHeight <= 0) return;
+    const inlineH = String(style.getPropertyValue?.('height') ?? style.height ?? '').trim().toLowerCase();
+    if (inlineH && !AUTO_HEIGHT.has(inlineH)) return;
+    const before = typeof canvas.getBoundingClientRect === 'function' ? canvas.getBoundingClientRect().height : 0;
+    if (before > 0) {
+        const origW = canvas.getAttribute('width');
+        const origH = canvas.getAttribute('height');
+        let tracksIntrinsic = false;
+        try {
+            canvas.setAttribute('width', '100');
+            canvas.setAttribute('height', '1');
+            if (Math.abs(canvas.getBoundingClientRect().height - before) > 0.5) {
+                tracksIntrinsic = true;
+            } else {
+                canvas.setAttribute('width', '1');
+                canvas.setAttribute('height', '100');
+                if (Math.abs(canvas.getBoundingClientRect().height - before) > 0.5) {
+                    tracksIntrinsic = true;
+                }
+            }
+        } finally {
+            if (origW === null) canvas.removeAttribute('width');
+            else canvas.setAttribute('width', origW);
+            if (origH === null) canvas.removeAttribute('height');
+            else canvas.setAttribute('height', origH);
+        }
+        if (tracksIntrinsic) style.setProperty('height', `${specHeight}px`);
+        return;
+    }
+    let cssHeight = '';
+    let cssAspect = '';
+    if (typeof canvas.computedStyleMap === 'function') {
+        try {
+            const map = canvas.computedStyleMap();
+            cssHeight = String(map.get('height') ?? '').trim().toLowerCase();
+            cssAspect = String(map.get('aspect-ratio') ?? '').trim().toLowerCase();
+        } catch {}
+    }
+    if (!cssHeight && typeof getComputedStyle === 'function') {
+        const cs = getComputedStyle(canvas);
+        cssHeight = String(cs.height ?? '').trim().toLowerCase();
+        cssAspect = String(cs.aspectRatio ?? '').trim().toLowerCase();
+    }
+    if ((!cssHeight || AUTO_HEIGHT.has(cssHeight)) && (!cssAspect || cssAspect === 'auto')) {
+        style.setProperty('height', `${specHeight}px`);
+    }
+}
+
 // One face of an app font as the page's own, so the semantic mirror's text sets in it.
 export function addFontFace(family, bytes, weight, style) {
     const face = new FontFace(family, bytes.slice(), { weight, style });

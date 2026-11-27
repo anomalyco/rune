@@ -507,10 +507,7 @@ impl ApplicationHandler<Wake> for Browser {
                 if let Some(body) = document.body() { body.style().set_property("margin", "0").ok(); }
             }
         } else if self.embedded {
-            let touch = if app.fit_height { "pan-y" } else { "none" };
-            canvas.style().set_css_text(&format!(
-                "display:block;width:100%;touch-action:{touch};outline:none;user-select:none;-webkit-user-select:none"
-            ));
+            platform::style_inline_canvas(&canvas, app.size.1, app.fit_height);
         } else {
             // No border/padding: winit's physical input and resize coordinates must match pixels.
             canvas.style().set_css_text("position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;outline:none;user-select:none;-webkit-user-select:none");

@@ -1,0 +1,1 @@
+- **Web inline `App::canvas_id` height:** when mounted inline without `fit_content_height`, Rune now sets the canvas's CSS properties individually (preserving existing inline styles) and falls back to `AppSpec::size.1` when the page gave the canvas no CSS height, instead of leaving `<canvas>` at its default 2:1 intrinsic aspect ratio.
