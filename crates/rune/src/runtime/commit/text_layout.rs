@@ -477,8 +477,34 @@ pub(in crate::runtime) fn compute_layout(taffy: &mut LayoutEngine, root: SlotId,
                     };
                 }
             }
+            let live_ph = if spec.cold.live.is_some() {
+                nodes[i].cold.get().and_then(|c| c.live_placeholder.as_deref())
+            } else {
+                None
+            };
+            if let Some(ph) = live_ph
+                && !spec.wrap
+                && let Some((sb, mut lw, lh)) = ph.single_line_size
+                && sb == scale.to_bits()
+            {
+                if (spec.truncate || spec.truncate_fade || spec.max_lines > 0)
+                    && let AvailableSpace::Definite(a) = avail.width
+                {
+                    lw = lw.min(a);
+                }
+                return Size {
+                    width: known.width.unwrap_or(lw),
+                    height: known.height.unwrap_or(lh),
+                };
+            }
             let is_input = nodes[i].input.is_some();
-            let laid = if spec.cold.live.is_some()
+            let laid = if let Some(ph) = live_ph {
+                let mut input = spec.as_text_input(scale, false);
+                input.content = &ph.content;
+                input.inline_boxes = &ph.inline_boxes;
+                input.shape_key = ph.shape.filter(|s| s.0 == scale.to_bits()).map(|s| s.1);
+                TextLayout::Single(text.layout_live_spec(&input, scale, w.map(|w| w * scale + FIT_SLACK), parley::Alignment::Start))
+            } else if spec.cold.live.is_some()
                 && !spec.wrap
                 && nodes[i].elided.is_none()
                 && let Some(existing) = nodes[i].text_layout.as_ref()
