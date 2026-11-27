@@ -472,8 +472,16 @@ impl Host {
         let (chrome, titlebar) = (self.chrome, self.titlebar);
         // A finger presses through `WindowEvent::Touch`; the mouse events a system makes up
         // from it (Windows promotes touches) would press a second time.
-        if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. })
-            && (app.rt().touching() || host_events::touch_promoted()) { return; }
+        if matches!(event, WindowEvent::CursorMoved { .. } | WindowEvent::CursorLeft { .. } | WindowEvent::MouseInput { .. }) {
+            let (drop_event, dirty) = host_events::drop_touch_promoted_mouse(
+                app.rt_mut(),
+                !matches!(event, WindowEvent::CursorLeft { .. }),
+            );
+            if drop_event {
+                if dirty { l.request_redraw(); }
+                return;
+            }
+        }
         let record_reopen = |reopen: &mut crate::window::state::ReopenState, w: &Win, fit_height: bool| {
             if self.life.shown() {
                 reopen.record_live(
@@ -951,6 +959,8 @@ impl Host {
             rt.set_system_accent(crate::system_accent());
             rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
             rt.set_system_text_scale(crate::platform::text_scale::cached());
+            #[cfg(target_os = "windows")]
+            rt.sync_windows_tablet_mode_if_changed();
             #[cfg(target_os = "linux")]
             {
                 rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());

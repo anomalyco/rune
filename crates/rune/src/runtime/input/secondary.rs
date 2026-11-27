@@ -168,6 +168,9 @@ impl RuntimeCore {
     }
 
     pub(super) fn secondary_down_for(&mut self, x: f32, y: f32, platform: SecondaryPlatform) {
+        if !self.pointer.is_touch_input() {
+            self.sync_primary_pointer(cx::PrimaryPointer::Hover);
+        }
         let (x, y) = self.locked_point(x, y);
         let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
         self.pointer.note_button_down(crate::PointerButton::Secondary);

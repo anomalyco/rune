@@ -246,6 +246,14 @@ impl window_requests::HostState {
         self.wm_state = state;
         true
     }
+
+    #[inline]
+    pub(super) fn set_primary_pointer(&mut self, pointer: cx::PrimaryPointer) -> bool {
+        if pointer == self.primary_pointer { return false; }
+        self.primary_pointer = pointer;
+        self.languages_gen = self.languages_gen.wrapping_add(1);
+        true
+    }
 }
 
 impl RuntimeCore {
@@ -505,5 +513,69 @@ impl RuntimeCore {
     #[inline]
     pub fn set_window_manager_state(&mut self, state: crate::WindowManagerState) {
         let _ = self.sync_window_manager_state(state);
+    }
+
+    /// What [`Cx::touch_controls`] reports natively (`false` in headless runs until touch input or
+    /// [`Self::set_touch_controls`] changes it).
+    #[inline]
+    pub(crate) fn touch_controls(&self) -> bool {
+        self.host.primary_pointer.touch_controls()
+    }
+
+    /// Updates the window's native primary pointer mode (`Cx::touch_controls` and `Cx::hover_none`),
+    /// dirtying the view only when it changed and the last committed view read either accessor.
+    /// Returns whether the runtime was dirtied.
+    #[inline]
+    pub(crate) fn sync_primary_pointer(&mut self, pointer: cx::PrimaryPointer) -> bool {
+        if !self.host.set_primary_pointer(pointer) { return false; }
+        if !self.host.primary_pointer_read { return false; }
+        self.commit.dirty = true;
+        true
+    }
+
+    /// Reconciles an OS tablet/slate-mode posture probe (`true` when Windows reports slate mode
+    /// or a ready touchscreen without a mouse). Updates the window's primary pointer on the initial
+    /// sample or when the posture actually transitions, so focus changes on hybrid touchscreen
+    /// laptops preserve live touch vs. mouse mode.
+    #[cfg_attr(not(any(target_os = "windows", test)), allow(dead_code))]
+    #[inline]
+    pub(crate) fn sync_system_tablet_mode(&mut self, tablet: bool) -> bool {
+        let prev = self.host.system_tablet_mode;
+        self.host.system_tablet_mode = Some(tablet);
+        if prev == Some(tablet) {
+            return false;
+        }
+        let target = if tablet { cx::PrimaryPointer::Touch } else { cx::PrimaryPointer::Hover };
+        self.sync_primary_pointer(target)
+    }
+
+    /// Samples Windows tablet/slate posture and records the current `WM_SETTINGCHANGE` generation.
+    #[cfg(target_os = "windows")]
+    #[inline]
+    pub(crate) fn sync_windows_tablet_mode(&mut self) -> bool {
+        self.host.tablet_setting_gen = crate::platform::win32::touch_input::setting_generation();
+        self.sync_system_tablet_mode(crate::platform::win32::touch_input::system_tablet_mode())
+    }
+
+    /// Re-samples Windows tablet/slate posture only when `WM_SETTINGCHANGE` bumped the generation.
+    #[cfg(target_os = "windows")]
+    #[inline]
+    pub(crate) fn sync_windows_tablet_mode_if_changed(&mut self) -> bool {
+        let current_gen = crate::platform::win32::touch_input::setting_generation();
+        if current_gen == self.host.tablet_setting_gen {
+            return false;
+        }
+        self.host.tablet_setting_gen = current_gen;
+        self.sync_system_tablet_mode(crate::platform::win32::touch_input::system_tablet_mode())
+    }
+
+    /// Sets whether [`Cx::touch_controls`] (and [`Cx::hover_none`]) report coarse touch controls
+    /// natively. A change re-runs the view and its memos.
+    #[inline]
+    pub fn set_touch_controls(&mut self, touch: bool) -> bool {
+        let pointer = if touch { cx::PrimaryPointer::Touch } else { cx::PrimaryPointer::Hover };
+        let changed = self.host.set_primary_pointer(pointer);
+        if changed { self.commit.dirty = true; }
+        changed
     }
 }

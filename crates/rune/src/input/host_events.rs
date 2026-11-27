@@ -233,20 +233,22 @@ pub(crate) fn gesture_phase(phase: TouchPhase) -> crate::GesturePhase {
     }
 }
 
-/// Whether the mouse message being handled is one Windows synthesized from a touch or pen
-/// (`GetMessageExtraInfo` carries `MI_WP_SIGNATURE`).
-#[cfg(target_os = "windows")]
-#[allow(unsafe_code)]
-pub(crate) fn touch_promoted() -> bool {
-    const MI_WP_SIGNATURE: u32 = 0xFF51_5700;
-    // SAFETY: reads the calling thread's current message info; no pointers involved.
-    let info = unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetMessageExtraInfo() } as u32;
-    info & 0xFFFF_FF00 == MI_WP_SIGNATURE
-}
-
-#[cfg(not(target_os = "windows"))]
+/// Returns `(drop, dirty)` for a legacy mouse event: drops it while a finger is active or when
+/// Windows promoted it from touch/pen (`MI_WP_SIGNATURE`). Pen promotion leaves touch mode when
+/// `switch_on_pen` is true without double-firing the mouse event.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-pub(crate) fn touch_promoted() -> bool { false }
+pub(crate) fn drop_touch_promoted_mouse(rt: &mut RuntimeCore, switch_on_pen: bool) -> (bool, bool) {
+    if rt.touching() { return (true, false); }
+    #[cfg(target_os = "windows")]
+    match crate::platform::win32::touch_input::current_promoted_source() {
+        crate::platform::win32::touch_input::PromotedSource::Mouse => (false, false),
+        crate::platform::win32::touch_input::PromotedSource::Touch => (true, false),
+        crate::platform::win32::touch_input::PromotedSource::Pen => {
+            (true, switch_on_pen && rt.sync_primary_pointer(crate::runtime::PrimaryPointer::Hover))
+        }
+    }
+    #[cfg(not(target_os = "windows"))] { let _ = switch_on_pen; (false, false) }
+}
 
 /// Builds a `ModifiersState` from individual shift/ctrl/alt/meta flags.
 #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
@@ -770,6 +772,8 @@ pub(crate) fn refresh_accessibility_preferences(rt: &mut RuntimeCore) {
     rt.set_system_text_scale(crate::platform::text_scale::current());
     rt.set_system_reduced_transparency(crate::platform::preferences::reduced_transparency());
     rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
+    #[cfg(target_os = "windows")]
+    rt.sync_windows_tablet_mode();
 }
 
 /// Refreshes OS accessibility and appearance preferences sampled on window/overlay focus changes.

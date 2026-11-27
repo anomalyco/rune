@@ -11,6 +11,9 @@ impl RuntimeCore {
     /// point the drag last saw has nothing new to report, and its instant transaction would
     /// cut short whatever the press started (a tapped slider's knob mid-spring).
     pub(in crate::runtime) fn move_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32, drag_move: bool) {
+        if !self.pointer.is_touch_input() {
+            self.sync_primary_pointer(cx::PrimaryPointer::Hover);
+        }
         if self.pointer_locked() { return; }
         let was_left = self.pointer.left();
         let moved = self.pointer.pos != Some((x, y));
@@ -90,7 +93,9 @@ impl RuntimeCore {
     /// or a newly armed autoscroll or edge-scroll step).
     pub(crate) fn observe_pointer(&mut self, app: &dyn ViewDriver, x: f32, y: f32) -> bool {
         if self.pointer_locked() { return false; }
-        if self.pointer.pos == Some((x, y)) && !self.pointer.left() { return false; }
+        let mode_switch = !self.pointer.is_touch_input() && self.host.primary_pointer != cx::PrimaryPointer::Hover;
+        if !mode_switch && self.pointer.pos == Some((x, y)) && !self.pointer.left() { return false; }
+        let was_dirty = self.commit.dirty;
         let queued = self.frame.queue.len();
         let capture_inside = self.pointer.press_inside();
         let prev_link = self.hovered_link();
@@ -99,7 +104,8 @@ impl RuntimeCore {
         let prev_edge = self.edit.selectable.edge.running();
         let prev_autoscroll = self.pointer.autoscroll_armed();
         self.pointer_move(app, x, y);
-        self.frame.queue.len() != queued
+        (!was_dirty && self.commit.dirty)
+            || self.frame.queue.len() != queued
             || self.pointer.press_inside() != capture_inside
             || self.pointer.drag_out_request.is_some()
             || self.host.titlebar.action.is_some()
@@ -360,6 +366,9 @@ impl RuntimeCore {
     /// finger lifts as a tap. Returns whether the press reached content (not swallowed by a modal,
     /// autoscroll, another held button, or a resize edge).
     pub(in crate::runtime) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) -> bool {
+        if !touch && !self.pointer.is_touch_input() {
+            self.sync_primary_pointer(cx::PrimaryPointer::Hover);
+        }
         self.sync_pointer_lock();
         let (x, y) = self.locked_point(x, y);
         let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
@@ -488,6 +497,9 @@ impl RuntimeCore {
     }
 
     pub(crate) fn pointer_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+        if !self.pointer.is_touch_input() {
+            self.sync_primary_pointer(cx::PrimaryPointer::Hover);
+        }
         let (x, y) = self.locked_point(x, y);
         self.pointer.note_button_up(crate::PointerButton::Primary);
         if self.pointer.autoscroll_release(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
@@ -823,6 +835,9 @@ impl RuntimeCore {
     /// negative deltaY). Applied 1:1: the platform supplies its own momentum phases. A run of
     /// deltas keeps to the viewport it began on (`WheelLock::vertical_run`), even at its end.
     pub fn wheel(&mut self, x: f32, y: f32, dy: f32) {
+        if !self.pointer.is_touch_input() {
+            self.sync_primary_pointer(cx::PrimaryPointer::Hover);
+        }
         let (x, y) = self.locked_point(x, y);
         let phased = self.scroll.wheel_phased();
         let momentum = self.scroll.wheel_momentum();

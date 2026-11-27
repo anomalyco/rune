@@ -11,13 +11,14 @@ impl RuntimeCore {
     /// state (or latched a follow-up focus request), so `commit` can reflect it in the same frame.
     pub(in crate::runtime) fn apply(&mut self, app: &mut dyn AppDriver, measured: Measured, tx: &Tx) -> bool {
         let _apply_time = crate::frame::profile::Scope::new(crate::frame::profile::Phase::Apply);
-        let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, titlebar, caret_read, wm_state_read, memo_flattened, memo_reused, taken_paths, above_fit_styles, .. } = measured;
+        let Measured { layout: mut taffy, mut nodes, reduced_motion, time_scale, defaults, titlebar, caret_read, wm_state_read, primary_pointer_read, memo_flattened, memo_reused, taken_paths, above_fit_styles, .. } = measured;
         let rebound_press = self.rebound_press_path(&nodes);
         self.commit.defaults = defaults;
         if crate::tooling::interaction::active() { self.interaction_reused(&memo_reused); }
         let mut scratch = std::mem::take(&mut self.commit.apply_scratch);
         self.edit.caret_watch = caret_read;
         if let Some(read) = wm_state_read { self.host.wm_state_read = read; }
+        if let Some(read) = primary_pointer_read { self.host.primary_pointer_read = read; }
         let reduced_motion_unchanged = reduced_motion == self.reduced_motion;
         if !reduced_motion_unchanged {
             self.reduced_motion = reduced_motion;

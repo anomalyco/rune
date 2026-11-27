@@ -492,6 +492,8 @@ pub(super) struct Measurement<'a> {
     pub(super) caret_read: bool,
     pub(super) wm_state: crate::WindowManagerState,
     pub(super) wm_state_read: bool,
+    pub(super) primary_pointer: cx::PrimaryPointer,
+    pub(super) primary_pointer_read: bool,
     pub(super) layout_seen: layout_read::LayoutRects,
     pub(super) layout_reads: layout_read::LayoutReads,
 }
@@ -508,6 +510,7 @@ pub(super) struct Measured {
     pub(super) titlebar: crate::titlebar::TitlebarSet,
     pub(super) caret_read: bool,
     pub(super) wm_state_read: Option<bool>,
+    pub(super) primary_pointer_read: Option<bool>,
     pub(super) layout_reads: layout_read::LayoutReads,
     pub(super) memo_flattened: Option<Vec<memo_reuse::PendingFlat>>,
     pub(super) memo_reused: Vec<memo_reuse::ReusedSpan>,

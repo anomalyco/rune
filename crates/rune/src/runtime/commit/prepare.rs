@@ -97,6 +97,8 @@ impl RuntimeCore {
             caret_read: false,
             wm_state: self.host.wm_state,
             wm_state_read: false,
+            primary_pointer: self.host.primary_pointer,
+            primary_pointer_read: false,
             // The rects the window last laid out, as its next frame reads them, so a view that
             // measures against them (a header fitting its title) measures here too.
             layout_seen: self.commit.layout_seen.rects.clone(),

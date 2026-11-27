@@ -65,6 +65,7 @@ pub(crate) mod anchor;
 mod api;
 mod commit;
 mod cx;
+pub(crate) use cx::PrimaryPointer;
 mod drag_out_host;
 mod elements;
 pub(crate) mod event_log;
