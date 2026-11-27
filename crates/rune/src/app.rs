@@ -102,6 +102,7 @@ pub struct App<S: 'static> {
     pub(crate) open: bool,
     pub(crate) release_gpu: bool,
     pub(crate) cpu_first: crate::CpuFirst,
+    pub(crate) keyboard_dispatch: crate::KeyboardDispatch,
     pub(crate) resize_sync: crate::ResizeSync,
     pub(crate) gpu_loss_policy: crate::GpuLossPolicy,
     #[cfg(not(target_arch = "wasm32"))]
@@ -195,6 +196,7 @@ impl<S: 'static> App<S> {
             open: true,
             release_gpu: false,
             cpu_first: crate::CpuFirst::Auto,
+            keyboard_dispatch: crate::KeyboardDispatch::Batched,
             resize_sync: crate::ResizeSync::Auto,
             gpu_loss_policy: crate::GpuLossPolicy::Recover,
             #[cfg(not(target_arch = "wasm32"))]

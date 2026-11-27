@@ -907,6 +907,17 @@ impl<S: 'static> WindowSpec<S> {
         /// let _ = spec;
         /// ```
         cpu_first(mode: crate::CpuFirst);
+        /// Configure native keyboard dispatch timing for this window, like
+        /// [`App::keyboard_dispatch`].
+        ///
+        /// ```no_run
+        /// use rune::{AppSpec, KeyboardDispatch, WindowSpec, el};
+        ///
+        /// let spec = WindowSpec::new("transport", AppSpec::new("Transport", (800.0, 520.0), || (), |_, _| el()))
+        ///     .keyboard_dispatch(KeyboardDispatch::Immediate);
+        /// let _ = spec;
+        /// ```
+        keyboard_dispatch(mode: crate::KeyboardDispatch);
         /// Configure the Windows drag-only synchronized resize path for this window, like
         /// [`App::resize_sync`].
         ///

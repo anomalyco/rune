@@ -58,6 +58,7 @@ pub(crate) mod geometry;
 mod handle;
 #[cfg(not(target_arch = "wasm32"))]
 mod host;
+mod keyboard_dispatch;
 mod keys;
 #[cfg(not(target_arch = "wasm32"))]
 mod panic_trap;
@@ -90,6 +91,9 @@ pub use cpu_first::CpuFirst;
 #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(unused_imports))]
 pub(crate) use cpu_first::WebStart;
 pub use handle::WindowHandle;
+pub use keyboard_dispatch::KeyboardDispatch;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use keyboard_dispatch::step_immediate_core;
 pub use resize_sync::ResizeSync;
 #[cfg(not(target_arch = "wasm32"))]
 pub use event_loop::run;

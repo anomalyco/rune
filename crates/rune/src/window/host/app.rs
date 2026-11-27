@@ -93,6 +93,16 @@ impl dyn WindowApp + '_ {
         self.driver(|rt, app| rt.hidden_wake(app))
     }
 
+    pub(in crate::window) fn immediate_keyboard_step(
+        &mut self,
+        policy: crate::KeyboardDispatch,
+        clock: &mut FrameClock,
+        now: Instant,
+        compositing: bool,
+    ) -> bool {
+        self.driver(|rt, app| crate::window::step_immediate_core(policy, rt, app, clock, now, compositing))
+    }
+
     pub(in crate::window) fn build_for_show(&mut self) -> bool {
         self.driver(|rt, app| rt.build_for_show(app))
     }

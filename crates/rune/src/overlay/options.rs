@@ -185,6 +185,7 @@ pub struct ConfiguredOverlay<T: 'static> {
     pub(crate) macos_color_space: crate::MacColorSpace,
     pub(crate) window_backdrop: crate::WindowBackdrop,
     pub(crate) frame_latency: Option<u32>,
+    pub(crate) keyboard_dispatch: crate::KeyboardDispatch,
     pub(crate) on_materials: Option<crate::system_material::OnMaterials>,
     pub(crate) animate_reveal: bool,
     pub(crate) release_after: Option<std::time::Duration>,
@@ -554,6 +555,25 @@ impl<T: 'static> ConfiguredOverlay<T> {
         self.frame_latency = Some(latency.clamp(1, 2));
         self
     }
+    /// Controls when this key-taking native overlay drains queued keyboard input
+    /// ([`KeyboardDispatch`](crate::KeyboardDispatch)), like
+    /// [`App::keyboard_dispatch`](crate::App::keyboard_dispatch).
+    ///
+    /// Defaults to [`KeyboardDispatch::Batched`](crate::KeyboardDispatch::Batched). Ignored for
+    /// overlays with [`KeyPolicy::None`](crate::KeyPolicy::None) and on web, iOS, and headless
+    /// hosts.
+    ///
+    /// ```no_run
+    /// use rune::{KeyPolicy, KeyboardDispatch, OverlayOptions, OverlaySpec, el};
+    ///
+    /// let _overlay = OverlaySpec::new("palette", (420.0, 280.0), |_: &(), _| el())
+    ///     .options(OverlayOptions { keys: KeyPolicy::OnDemand, ..Default::default() })
+    ///     .keyboard_dispatch(KeyboardDispatch::Immediate);
+    /// ```
+    pub fn keyboard_dispatch(mut self, mode: crate::KeyboardDispatch) -> Self {
+        self.keyboard_dispatch = mode;
+        self
+    }
     /// Selects which rendering backend presents this overlay (defaults to
     /// [`RendererKind::Gpu`](crate::RendererKind::Gpu)).
     ///
@@ -610,7 +630,7 @@ impl<T: 'static> OverlaySpec<T> {
             spec: self, options, on_key: None, on_created: None, on_availability: None, poll: None, compositor: None,
             setup: None, runtime: crate::app::RuntimeConfig::default(), font_smoothing: None, macos_level: None,
             macos_color_space: crate::MacColorSpace::Srgb, window_backdrop: crate::WindowBackdrop::None,
-            frame_latency: None, on_materials: None, animate_reveal: false, release_after: None,
+            frame_latency: None, keyboard_dispatch: crate::KeyboardDispatch::Batched, on_materials: None, animate_reveal: false, release_after: None,
             renderer: crate::RendererKind::Gpu, sizing: crate::ContentSizing::Fixed, min_size: None, max_size: None,
         }
     }

@@ -433,14 +433,54 @@ impl OverlayCore {
 
     /// Fn changes the monitor saw since the loop last turned. A hidden overlay drops them: its
     /// hide released Fn, and it takes no keys.
+    /// Drains queued keyboard input immediately without acquiring, encoding, or presenting a
+    /// drawable when [`KeyboardDispatch::Immediate`](crate::KeyboardDispatch::Immediate) is
+    /// active for this key-taking overlay. Visual presentation still waits for normal pacing.
+    pub(super) fn dispatch_immediate_keyboard(&mut self, app: &mut dyn OverlayApp) -> bool {
+        if !self.options.keys.takes_keys() {
+            return false;
+        }
+        let policy = self.keyboard_dispatch.effective();
+        if !policy.is_immediate() || !app.rt().has_input_waiting() {
+            return false;
+        }
+        let now = crate::time::now();
+        let compositing = app.compositor_animating();
+        if !app.immediate_keyboard_step(policy, &mut self.clock, now, compositing) {
+            return false;
+        }
+        self.quiet.step(frame::QuietEvent::Forget);
+        self.dirty = true;
+        self.idle = false;
+        if let Some(backdrop) = app.rt_mut().host.window_backdrop_request.take() {
+            self.window_backdrop = backdrop;
+            self.sync_window_backdrop(app.rt_mut(), false);
+        }
+        self.take_window_requests(app.rt_mut());
+        self.clipboard.flush_core(app.rt_mut());
+        self.open_popup(app);
+        let live = self.presence.shown() && !self.presence.occluded();
+        if self.presence.shown() {
+            let _ = self.sync_ime(app);
+            self.publish_regions(app.rt());
+        }
+        crate::haptics::flush_live(app.rt_mut(), live);
+        true
+    }
+
     #[cfg(target_os = "macos")]
     pub(super) fn fn_key(&mut self, app: &mut dyn OverlayApp) {
         let Some(changes) = self.surface.live().and_then(|l| l.fn_key.as_ref()).map(|f| f.take()) else { return };
         if !self.presence.shown() || !self.options.keys.takes_keys() { return; }
+        let mut queued = false;
         for pressed in changes {
-            self.dirty |= app.physical_with_fallback(crate::PhysicalInput::Key {
+            queued |= app.physical_with_fallback(crate::PhysicalInput::Key {
                 key: winit::keyboard::KeyCode::Fn, mods: crate::window::map_mods(self.mods), pressed, repeat: false, text: None, consumed_mods: Default::default(),
             }, None);
+        }
+        if queued {
+            self.dirty = true;
+            self.dispatch_immediate_keyboard(app);
         }
     }
 
@@ -449,8 +489,13 @@ impl OverlayCore {
     pub(super) fn media_keys(&mut self, app: &mut dyn OverlayApp) {
         let Some(events) = self.surface.live().and_then(|l| l.media_keys.as_ref()).map(|m| m.take()) else { return };
         if !self.presence.shown() || !self.options.keys.takes_keys() { return; }
+        let mut queued = false;
         for (decoded, mods) in events {
-            self.dirty |= app.media_key(decoded, mods);
+            queued |= app.media_key(decoded, mods);
+        }
+        if queued {
+            self.dirty = true;
+            self.dispatch_immediate_keyboard(app);
         }
     }
 
