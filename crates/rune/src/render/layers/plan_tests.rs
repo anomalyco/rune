@@ -374,6 +374,8 @@ fn apply(pools: &mut Old, moves: &[Move]) {
             Move::Park(slot) => {
                 if let Some(mut t) = pools.slots[slot].take() { t.cache = None; pools.spare.push(t); }
             }
+            Move::DropSlot(slot) => { pools.slots[slot] = None; }
+            Move::Swap(a, b) => pools.slots.swap(a, b),
             Move::Set { slot, from } => {
                 pools.slots[slot] = Some(match from {
                     Kept::Retained(at) => pools.retained.swap_remove(at),
@@ -569,4 +571,139 @@ fn a_cached_leaf_with_a_draw_keeps_its_place_under_the_budget() {
     assert_eq!(decisions[0], Disposition::Inline, "the leaf with a draw draws again, straight into the window");
     assert!(!after.retained.iter().chain(after.slots.iter().flatten()).any(|t| t.cache == Some((11, 1))), "and its texture goes");
     assert!(matches!(decisions[1], Disposition::Cached { cache: None, .. }), "the empty leaf borrows its texture: {decisions:?}");
+}
+
+/// Runs one frame through `Planner::decide`, `apply`, and `finish`, returning the planned moves.
+fn step_plan(planner: &mut Planner, pools: &mut Old, scene: &[Spec], stamp: u64) -> Vec<Move> {
+    for slot in &mut pools.slots {
+        if slot.as_ref().is_some_and(|t| t.cache.is_some()) { pools.retained.push(slot.take().unwrap()); }
+    }
+    while pools.slots.len() > scene.len() {
+        if let Some(t) = pools.slots.pop().flatten() { pools.park(t); }
+    }
+    pools.slots.resize(scene.len(), None);
+    let layers = plan_of(scene, &pools.retained.iter().map(Held::from).collect::<Vec<_>>());
+    if scene.is_empty() {
+        pools.trim_retained(0, DEFAULT_CACHE_BUDGET);
+        return Vec::new();
+    }
+    let view = Pools { slots: &pools.slots, retained: &pools.retained, spare: &pools.spare };
+    planner.decide(&layers, &view, DEFAULT_CACHE_BUDGET, true, 4096);
+    let moves = planner.moves.clone();
+    apply(pools, &moves);
+    finish(pools, &layers, &planner.dispositions, stamp);
+    moves
+}
+
+fn isolated(w: f32, h: f32) -> Spec {
+    Spec { opacity: 0.5, ..Spec::plain([0.0, 0.0, w, h], [0.0, 0.0, w, h]) }
+}
+
+/// Growing or shrinking a layer drops the target it outgrew (or outshrank) before creating the
+/// replacement, leaving `spare` empty; flattening or closing the layer still parks its target.
+#[test]
+fn outgrown_and_shrunk_targets_drop_before_create_without_parking() {
+    let (mut planner, mut pools) = (Planner::default(), Old::default());
+    step_plan(&mut planner, &mut pools, &[isolated(400.0, 64.0)], 1);
+    assert!(pools.spare.is_empty());
+
+    let moves = step_plan(&mut planner, &mut pools, &[isolated(400.0, 128.0)], 2);
+    let drop_at = moves.iter().position(|&m| m == Move::DropSlot(0)).expect("outgrown target dropped");
+    let create_at = moves.iter().position(|&m| m == Move::Create { slot: 0, size: [448, 128] }).expect("larger target created");
+    assert!(drop_at < create_at, "old target drops before the new one is created: {moves:?}");
+    assert!(pools.spare.is_empty(), "growing leaves no spare behind");
+
+    let moves = step_plan(&mut planner, &mut pools, &[isolated(400.0, 448.0)], 3);
+    assert!(moves.contains(&Move::DropSlot(0)));
+    assert!(pools.spare.is_empty());
+
+    // Shrinking by more than 2x area also drops instead of parking.
+    let moves = step_plan(&mut planner, &mut pools, &[isolated(64.0, 64.0)], 4);
+    let drop_at = moves.iter().position(|&m| m == Move::DropSlot(0)).expect("oversized target dropped");
+    let create_at = moves.iter().position(|&m| m == Move::Create { slot: 0, size: [64, 64] }).expect("smaller target created");
+    assert!(drop_at < create_at, "oversized target drops before creating replacement: {moves:?}");
+    assert!(pools.spare.is_empty(), "shrinking leaves no spare behind");
+
+    // Flattening (opacity -> 1.0) still parks its target and re-isolating takes it back.
+    let flat = Spec::plain([0.0, 0.0, 64.0, 64.0], [0.0, 0.0, 64.0, 64.0]);
+    let moves = step_plan(&mut planner, &mut pools, &[flat], 5);
+    assert!(moves.contains(&Move::Park(0)), "flattening parks its target: {moves:?}");
+    assert_eq!(pools.spare.len(), 1);
+    let moves = step_plan(&mut planner, &mut pools, &[isolated(64.0, 64.0)], 6);
+    assert!(moves.contains(&Move::Set { slot: 0, from: Kept::Spare(0) }), "re-isolating reuses the parked target: {moves:?}");
+    assert!(pools.spare.is_empty());
+
+    // Closing the layer still parks its final target.
+    step_plan(&mut planner, &mut pools, &[], 7);
+    assert_eq!(pools.spare.len(), 1);
+    assert_eq!(pools.spare[0].size, [64, 64]);
+}
+
+/// Swapping or shifting layers in the same frame hands displaced targets directly to the later
+/// layers that need them, with no drops, no spare churn, and no unnecessary allocations.
+#[test]
+fn displaced_targets_hand_off_across_swaps_and_chains() {
+    let (mut planner, mut pools) = (Planner::default(), Old::default());
+    // Two layers swap order: zero drops, zero creates, zero spares.
+    step_plan(&mut planner, &mut pools, &[isolated(64.0, 64.0), isolated(300.0, 300.0)], 1);
+    let moves = step_plan(&mut planner, &mut pools, &[isolated(300.0, 300.0), isolated(64.0, 64.0)], 2);
+    assert!(moves.contains(&Move::Swap(0, 1)), "swapped layers exchange targets: {moves:?}");
+    assert!(!moves.iter().any(|m| matches!(m, Move::Create { .. } | Move::DropSlot(_) | Move::Park(_))), "{moves:?}");
+    assert!(pools.spare.is_empty());
+
+    // Three-layer shift: inserting a small layer at slot 0 shifts both 256 and 512 layers right.
+    let (mut planner, mut pools) = (Planner::default(), Old::default());
+    step_plan(&mut planner, &mut pools, &[isolated(256.0, 256.0), isolated(512.0, 512.0)], 1);
+    let moves = step_plan(&mut planner, &mut pools, &[isolated(64.0, 64.0), isolated(256.0, 256.0), isolated(512.0, 512.0)], 2);
+    assert!(moves.contains(&Move::Swap(0, 1)) && moves.contains(&Move::Swap(0, 2)), "chain shifts both targets: {moves:?}");
+    assert_eq!(moves.iter().filter(|m| matches!(m, Move::Create { .. })).count(), 1, "only the new layer creates: {moves:?}");
+    assert!(!moves.iter().any(|m| matches!(m, Move::DropSlot(_) | Move::Park(_))), "{moves:?}");
+    assert!(pools.spare.is_empty());
+    assert_eq!(pools.slots[0].unwrap().size, [64, 64]);
+    assert_eq!(pools.slots[1].unwrap().size, [256, 256]);
+    assert_eq!(pools.slots[2].unwrap().size, [512, 512]);
+}
+
+/// An outgrown target still drops when later layers either already hold a fitting target or flatten.
+#[test]
+fn outgrown_target_drops_when_later_layers_already_fit_or_flatten() {
+    let (mut planner, mut pools) = (Planner::default(), Old::default());
+    let flat = Spec::plain([0.0, 0.0, 128.0, 128.0], [0.0, 0.0, 128.0, 128.0]);
+    step_plan(&mut planner, &mut pools, &[isolated(128.0, 128.0), isolated(128.0, 128.0), flat], 1);
+    let moves = step_plan(&mut planner, &mut pools, &[isolated(256.0, 256.0), isolated(128.0, 128.0), flat], 2);
+    assert!(moves.contains(&Move::DropSlot(0)), "slot 0 drops instead of parking or swapping: {moves:?}");
+    assert!(!moves.iter().any(|m| matches!(m, Move::Swap(_, _) | Move::Park(_))), "{moves:?}");
+    assert!(pools.spare.is_empty());
+}
+
+/// A cached layer that misses and grows drops its outgrown retained target instead of parking it.
+#[test]
+fn a_growing_cached_layer_drops_its_outgrown_retained_target() {
+    let (mut planner, mut pools) = (Planner::default(), Old::default());
+    let small = Spec::cached([0.0, 0.0, 64.0, 64.0], [0.0, 0.0, 64.0, 64.0], (7, 1));
+    let large = Spec::cached([0.0, 0.0, 200.0, 200.0], [0.0, 0.0, 200.0, 200.0], (7, 2));
+    step_plan(&mut planner, &mut pools, &[small], 1);
+    let moves = step_plan(&mut planner, &mut pools, &[large], 2);
+    let drop_at = moves.iter().position(|&m| m == Move::DropSlot(0)).expect("outgrown retained target dropped");
+    let create_at = moves.iter().position(|&m| m == Move::Create { slot: 0, size: [256, 256] }).expect("larger target created");
+    assert!(drop_at < create_at, "{moves:?}");
+    assert!(pools.spare.is_empty(), "growing cache parks nothing");
+    assert!(pools.retained.is_empty());
+}
+
+/// Handing a blurred target to a later unblurred layer drops its blur scratch before the earlier
+/// slot allocates a new target.
+#[test]
+fn handed_off_blurred_target_unblurs_before_earlier_slot_creates() {
+    let (mut planner, mut pools) = (Planner::default(), Old::default());
+    let blurred = Spec { blur: 4.0, ..isolated(300.0, 300.0) };
+    step_plan(&mut planner, &mut pools, &[blurred], 1);
+    assert!(pools.slots[0].unwrap().blur.is_some());
+
+    let moves = step_plan(&mut planner, &mut pools, &[isolated(64.0, 64.0), isolated(300.0, 300.0)], 2);
+    let swap_at = moves.iter().position(|&m| m == Move::Swap(0, 1)).expect("target handed off");
+    let unblur_at = moves.iter().position(|&m| m == Move::Unblur(1)).expect("scratch dropped");
+    let create_at = moves.iter().position(|&m| m == Move::Create { slot: 0, size: [64, 64] }).expect("small target created");
+    assert!(swap_at < unblur_at && unblur_at < create_at, "unblur runs before create: {moves:?}");
+    assert!(pools.slots[1].unwrap().blur.is_none());
 }
