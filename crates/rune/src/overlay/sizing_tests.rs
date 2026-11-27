@@ -452,3 +452,74 @@ fn pre_show_measure_sets_planned_renderer_kind_and_fixed_width_change_remeasures
     assert_eq!(overlay.canvas_size.0, 120.0);
     assert!(overlay.canvas_size.1 > wide.1 + 10.0, "narrowing fixed width re-measures wrapped height: wide={wide:?} narrow={:?}", overlay.canvas_size);
 }
+
+#[test]
+fn target_area_uses_work_area_for_edge_and_full_display_for_rect() {
+    let display_px = (1920, 1080);
+    // 64 px left taskbar + 48 px bottom taskbar -> smaller work area.
+    let work_px = Some((1856, 1032));
+    let edge = Some(OverlayPlacement::Edge {
+        edge: ScreenEdge::Bottom,
+        margin: 12.0,
+        align: Align::End,
+        inset: 12.0,
+    });
+    let rect = Some(OverlayPlacement::Rect { x: 40.0, y: 0.0, width: 320.0, height: 100.0 });
+
+    // Edge placements (default and explicit) clamp to rcWork; fallback to full display when unavailable.
+    assert_eq!(target_area_px(None, display_px, work_px), (1856, 1032));
+    assert_eq!(target_area_px(edge, display_px, work_px), (1856, 1032));
+    assert_eq!(target_area_px(None, display_px, None), display_px);
+    assert_eq!(target_area_px(edge, display_px, None), display_px);
+
+    // Rect and FullScreen stay in full display coordinates, matching placement::position_in.
+    assert_eq!(target_area_px(rect, display_px, work_px), display_px);
+    assert_eq!(target_area_px(Some(OverlayPlacement::FullScreen), display_px, work_px), display_px);
+
+    // End-to-end clamping across FitHeight, FitWidth, and Fit at 1.0x scale:
+    // Edge caps to work area, Rect caps to full display, and Rect + explicit max_size caps to work area.
+    let to_pts = |(w, h): (u32, u32)| Some((w as f32, h as f32));
+    let edge_area = to_pts(target_area_px(edge, display_px, work_px));
+    let rect_area = to_pts(target_area_px(rect, display_px, work_px));
+
+    let fit_h = SizingConfig { mode: ContentSizing::FitHeight, min_size: None, max_size: None };
+    assert_eq!(
+        resolve_content_size(fit_h, edge, (320.0, 100.0), (320.0, 2000.0), edge_area, 1.0, 8192),
+        (320.0, 1032.0),
+    );
+    assert_eq!(
+        resolve_content_size(fit_h, rect, (320.0, 100.0), (320.0, 2000.0), rect_area, 1.0, 8192),
+        (320.0, 1080.0),
+    );
+
+    let fit_w = SizingConfig { mode: ContentSizing::FitWidth, min_size: None, max_size: None };
+    assert_eq!(
+        resolve_content_size(fit_w, edge, (0.0, 44.0), (3000.0, 44.0), edge_area, 1.0, 8192),
+        (1856.0, 44.0),
+    );
+    assert_eq!(
+        resolve_content_size(fit_w, rect, (0.0, 44.0), (3000.0, 44.0), rect_area, 1.0, 8192),
+        (1920.0, 100.0),
+    );
+
+    let fit_both = SizingConfig { mode: ContentSizing::Fit, min_size: None, max_size: None };
+    assert_eq!(
+        resolve_content_size(fit_both, edge, (0.0, 0.0), (3000.0, 2000.0), edge_area, 1.0, 8192),
+        (1856.0, 1032.0),
+    );
+    assert_eq!(
+        resolve_content_size(fit_both, rect, (0.0, 0.0), (3000.0, 2000.0), rect_area, 1.0, 8192),
+        (1920.0, 1080.0),
+    );
+
+    // Passing max_size from Display::work_area() bounds a content-sized Rect to the work area.
+    let rect_capped = SizingConfig {
+        mode: ContentSizing::FitHeight,
+        min_size: None,
+        max_size: edge_area,
+    };
+    assert_eq!(
+        resolve_content_size(rect_capped, rect, (320.0, 100.0), (320.0, 2000.0), rect_area, 1.0, 8192),
+        (320.0, 1032.0),
+    );
+}

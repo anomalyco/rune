@@ -1672,7 +1672,11 @@ rune::App::new(spec).fit_content_height().run();
   as shorthand for `ContentSizing::FitHeight` — for an overlay whose size follows its content
   (a candidate list, a horizontal IME bar, a HUD). Fitted axes are measured before each show
   and prewarm (at the target monitor's scale and active `RendererKind`, clamped to `min_size`,
-  `max_size`, and the display's work area, with text wrapping at `max_size.0`), so its first
+  `max_size`, and the display's sizing bounds — on Windows, `Display::work_area()` for edge
+  placements and full display bounds for `OverlayPlacement::Rect`, matching placement
+  coordinates; full display bounds elsewhere; pass `max_size` from `Display::work_area()` if
+  a content-sized `Rect` overlay should stay within the work area — with text wrapping at
+  `max_size.0`), so its first
   frame draws at the exact content size with no flash. While shown, a content size change
   resizes and re-places the overlay before painting in the same frame (no spring; on Wayland
   layer-shell, holds the previous frame until the compositor confirms the new size).
@@ -3430,9 +3434,11 @@ is one more host on the event loop
   unless interactive. Clicks still reach Rune through winit's view (`platform/macos.rs`).
 - Windows: a topmost tool window with `WS_EX_NOACTIVATE` (plus `WS_EX_TRANSPARENT|WS_EX_LAYERED`
   unless interactive), shown with `SW_SHOWNOACTIVATE`; edge-placed overlays (both `OverlaySpec`
-  defaults and `OverlayPlacement::Edge`) anchor inside all four sides of `Display::work_area()`
-  (`GetMonitorInfoW`'s `rcWork` in `platform/win32.rs`), while `OverlayPlacement::Rect` and
-  `OverlayPlacement::FullScreen` stay in full display coordinates.
+  defaults and `OverlayPlacement::Edge`) anchor and clamp `ContentSizing` inside all four sides
+  of `Display::work_area()` (`GetMonitorInfoW`'s `rcWork` in `platform/win32.rs`), while
+  `OverlayPlacement::Rect` and `OverlayPlacement::FullScreen` stay in full display coordinates
+  for both placement and `ContentSizing` (pass `max_size` from `Display::work_area()` if a
+  content-sized `Rect` overlay should stay within the work area).
 - Opt-in CPU rendering on Windows (`ConfiguredOverlay::renderer(RendererKind::Cpu)`, default
   `RendererKind::Gpu`): keeps a transparent Windows overlay on `CpuPainter` for its whole
   lifetime and presents premultiplied BGRA frames (`clear = [0.0; 4]`, `lcd = false`) through

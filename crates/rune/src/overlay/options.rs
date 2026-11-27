@@ -61,6 +61,11 @@ pub enum OverlayPlacement {
     /// exactly over an element of a window. On macOS one point space spans displays of any
     /// scale, and the overlay draws at the backing scale of the display it lands on.
     /// Elsewhere a rect off the primary display is exact only where displays share a scale.
+    ///
+    /// On Windows, `Rect` stays in full display coordinates for both placement and
+    /// [`ContentSizing`](crate::ContentSizing) (unlike `Edge`, it does not clamp to
+    /// [`crate::Display::work_area`]); pass [`ConfiguredOverlay::max_size`] if a
+    /// content-sized `Rect` overlay should stay within the work area.
     Rect { x: f32, y: f32, width: f32, height: f32 },
     /// Covers the entire selected display (including taskbar/menu-bar areas).
     FullScreen,
@@ -380,7 +385,10 @@ impl<T: 'static> ConfiguredOverlay<T> {
     ///
     /// Each show and prewarm measures what changed while hidden (at the target monitor's scale
     /// and active [`RendererKind`](crate::RendererKind), clamped to [`Self::min_size`],
-    /// [`Self::max_size`], and the display's work area) without committing, so the first frame
+    /// [`Self::max_size`], and the target display's sizing bounds — on Windows,
+    /// [`Display::work_area`](crate::Display::work_area) for edge placements and full display
+    /// bounds for [`OverlayPlacement::Rect`], matching placement coordinates; full display
+    /// bounds elsewhere) without committing, so the first frame
     /// presents at the content's height with no flash. While shown, a height change resizes
     /// and re-places the overlay before painting in the same frame (no spring; on Wayland
     /// layer-shell, holds the previous frame until the compositor confirms the new size).
@@ -421,7 +429,9 @@ impl<T: 'static> ConfiguredOverlay<T> {
     pub fn sizing(mut self, sizing: crate::ContentSizing) -> Self { self.sizing = sizing; self }
     /// Minimum logical size `(width, height)` in points for axes fitted by [`Self::sizing`].
     /// Clamped to at least `(1.0, 1.0)` and never exceeding [`Self::max_size`] or the target
-    /// display's work area.
+    /// display's sizing bounds (on Windows, [`Display::work_area`](crate::Display::work_area)
+    /// for edge placements and full display bounds for [`OverlayPlacement::Rect`]; full display
+    /// bounds on other platforms).
     ///
     /// ```no_run
     /// use rune::{ContentSizing, OverlayOptions, OverlaySpec, el};
@@ -435,7 +445,11 @@ impl<T: 'static> ConfiguredOverlay<T> {
     /// Maximum logical size `(width, height)` in points for axes fitted by [`Self::sizing`].
     /// Also applied as the root Taffy `max_size` constraint so wrapping text wraps at `size.0`
     /// instead of laying out on one unbounded line; further capped by the target display's
-    /// work area and the surface's physical pixel limit.
+    /// sizing bounds (on Windows, [`Display::work_area`](crate::Display::work_area) for edge
+    /// placements and full display bounds for [`OverlayPlacement::Rect`]; full display bounds
+    /// on other platforms) and the surface's physical pixel limit. Pass bounds derived from
+    /// [`Display::work_area`](crate::Display::work_area) here when a content-sized
+    /// [`OverlayPlacement::Rect`] overlay should not exceed the work area.
     ///
     /// ```no_run
     /// use rune::{ContentSizing, OverlayOptions, OverlaySpec, col, text};
