@@ -44,17 +44,31 @@ fn per_window_override_takes_precedence_over_app_scheme_while_system_inherits() 
 }
 
 #[test]
-fn platform_resolution_lets_macos_inherit_nsapp_and_resolves_fallback_elsewhere() {
+fn platform_resolution_lets_macos_inherit_nsapp_and_resolves_linux_explicitly() {
     for app in [ColorScheme::System, ColorScheme::Light, ColorScheme::Dark] {
         // On macOS, a System window keeps NSWindow.appearance == nil so it inherits NSApp.appearance.
-        assert_eq!(window_theme_for_platform(ColorScheme::System, app, true), None);
-        assert_eq!(window_theme_for_platform(ColorScheme::Light, app, true), Some(Theme::Light));
-        assert_eq!(window_theme_for_platform(ColorScheme::Dark, app, true), Some(Theme::Dark));
+        assert_eq!(window_theme_for_platform(ColorScheme::System, app, ThemePlatform::MacOs), None);
+        assert_eq!(window_theme_for_platform(ColorScheme::Light, app, ThemePlatform::MacOs), Some(Theme::Light));
+        assert_eq!(window_theme_for_platform(ColorScheme::Dark, app, ThemePlatform::MacOs), Some(Theme::Dark));
 
-        // On Windows and Linux, a System window resolves directly to the app-wide scheme.
-        assert_eq!(window_theme_for_platform(ColorScheme::System, app, false), app.winit_theme());
-        assert_eq!(window_theme_for_platform(ColorScheme::Light, app, false), Some(Theme::Light));
-        assert_eq!(window_theme_for_platform(ColorScheme::Dark, app, false), Some(Theme::Dark));
+        // On Windows, a System window inherits the app-wide scheme and passes None for System.
+        assert_eq!(window_theme_for_platform(ColorScheme::System, app, ThemePlatform::Windows), app.winit_theme());
+        assert_eq!(window_theme_for_platform(ColorScheme::Light, app, ThemePlatform::Windows), Some(Theme::Light));
+        assert_eq!(window_theme_for_platform(ColorScheme::Dark, app, ThemePlatform::Windows), Some(Theme::Dark));
+
+        // On Linux, every window resolves to an explicit Some(Theme::Dark | Light) so winit never
+        // passes None to sctk-adwaita's dbus-send fallback (or X11's hardcoded dark None).
+        for system_dark in [true, false] {
+            let linux = ThemePlatform::Linux { system_dark };
+            let expected_system = match app {
+                ColorScheme::Dark => Some(Theme::Dark),
+                ColorScheme::Light => Some(Theme::Light),
+                ColorScheme::System => Some(if system_dark { Theme::Dark } else { Theme::Light }),
+            };
+            assert_eq!(window_theme_for_platform(ColorScheme::System, app, linux), expected_system);
+            assert_eq!(window_theme_for_platform(ColorScheme::Light, app, linux), Some(Theme::Light));
+            assert_eq!(window_theme_for_platform(ColorScheme::Dark, app, linux), Some(Theme::Dark));
+        }
     }
 }
 
@@ -67,8 +81,8 @@ fn fake_window_sink_applies_only_on_change_and_retains_across_recreation() {
         live: bool,
     }
     impl FakeHost {
-        fn create(&mut self, app_scheme: ColorScheme, is_macos: bool) -> Option<Theme> {
-            let theme = window_theme_for_platform(self.window_scheme, app_scheme, is_macos);
+        fn create(&mut self, app_scheme: ColorScheme, platform: ThemePlatform) -> Option<Theme> {
+            let theme = window_theme_for_platform(self.window_scheme, app_scheme, platform);
             self.applied = theme;
             self.live = true;
             theme
@@ -76,50 +90,111 @@ fn fake_window_sink_applies_only_on_change_and_retains_across_recreation() {
         fn destroy(&mut self) {
             self.live = false;
         }
-        fn sync(&mut self, app_scheme: ColorScheme, is_macos: bool) {
+        fn sync(&mut self, app_scheme: ColorScheme, platform: ThemePlatform) {
             if !self.live { return; }
-            let target = window_theme_for_platform(self.window_scheme, app_scheme, is_macos);
+            let target = window_theme_for_platform(self.window_scheme, app_scheme, platform);
             let log = &mut self.applied_log;
             sync_window_theme(&mut self.applied, target, |t| log.push(t));
         }
     }
 
-    // Windows/Linux: two windows, one inheriting (System) and one pinned (Light).
+    // Windows: two windows, one inheriting (System) and one pinned (Light).
     let mut main = FakeHost { window_scheme: ColorScheme::System, applied: None, applied_log: Vec::new(), live: false };
     let mut pinned = FakeHost { window_scheme: ColorScheme::Light, applied: None, applied_log: Vec::new(), live: false };
     let mut app_scheme = ColorScheme::System;
 
-    assert_eq!(main.create(app_scheme, false), None);
-    assert_eq!(pinned.create(app_scheme, false), Some(Theme::Light));
+    assert_eq!(main.create(app_scheme, ThemePlatform::Windows), None);
+    assert_eq!(pinned.create(app_scheme, ThemePlatform::Windows), Some(Theme::Light));
 
     // App-wide Dark affects main (System), leaves pinned (Light) untouched.
     app_scheme = ColorScheme::Dark;
-    main.sync(app_scheme, false);
-    pinned.sync(app_scheme, false);
+    main.sync(app_scheme, ThemePlatform::Windows);
+    pinned.sync(app_scheme, ThemePlatform::Windows);
     // Repeated sync with same app_scheme is a no-op (no duplicate set_theme calls).
-    main.sync(app_scheme, false);
+    main.sync(app_scheme, ThemePlatform::Windows);
     assert_eq!(main.applied_log, vec![Some(Theme::Dark)]);
     assert!(pinned.applied_log.is_empty());
 
     // Recreate both windows: main inherits app-wide Dark, pinned retains Light.
     main.destroy();
     pinned.destroy();
-    assert_eq!(main.create(app_scheme, false), Some(Theme::Dark));
-    assert_eq!(pinned.create(app_scheme, false), Some(Theme::Light));
+    assert_eq!(main.create(app_scheme, ThemePlatform::Windows), Some(Theme::Dark));
+    assert_eq!(pinned.create(app_scheme, ThemePlatform::Windows), Some(Theme::Light));
 
     // Switching app-wide back to System returns main to None (OS theme); pinned stays Light.
     app_scheme = ColorScheme::System;
-    main.sync(app_scheme, false);
-    pinned.sync(app_scheme, false);
+    main.sync(app_scheme, ThemePlatform::Windows);
+    pinned.sync(app_scheme, ThemePlatform::Windows);
     assert_eq!(main.applied_log, vec![Some(Theme::Dark), None]);
     assert!(pinned.applied_log.is_empty());
 
     // Per-window override on main while hidden is retained when recreated.
     main.destroy();
     main.window_scheme = ColorScheme::Dark;
-    main.sync(app_scheme, false);
+    main.sync(app_scheme, ThemePlatform::Windows);
     assert_eq!(main.applied_log.len(), 2);
-    assert_eq!(main.create(app_scheme, false), Some(Theme::Dark));
+    assert_eq!(main.create(app_scheme, ThemePlatform::Windows), Some(Theme::Dark));
+}
+
+#[test]
+fn linux_system_window_tracks_desktop_scheme_live_without_falling_back_to_none() {
+    struct FakeLinuxHost {
+        window_scheme: ColorScheme,
+        applied: Option<Theme>,
+        applied_log: Vec<Option<Theme>>,
+    }
+    impl FakeLinuxHost {
+        fn create(window_scheme: ColorScheme, app_scheme: ColorScheme, system_dark: bool) -> Self {
+            let applied = window_theme_for_platform(
+                window_scheme,
+                app_scheme,
+                ThemePlatform::Linux { system_dark },
+            );
+            Self { window_scheme, applied, applied_log: Vec::new() }
+        }
+        fn sync(&mut self, app_scheme: ColorScheme, system_dark: bool) {
+            let target = window_theme_for_platform(
+                self.window_scheme,
+                app_scheme,
+                ThemePlatform::Linux { system_dark },
+            );
+            let log = &mut self.applied_log;
+            sync_window_theme(&mut self.applied, target, |t| log.push(t));
+        }
+    }
+
+    // Dark GNOME/Wayland desktop (e.g. Fedora Silverblue without dbus-send): ColorScheme::System
+    // starts explicitly Dark, never None.
+    let mut main = FakeLinuxHost::create(ColorScheme::System, ColorScheme::System, true);
+    let mut pinned = FakeLinuxHost::create(ColorScheme::Light, ColorScheme::System, true);
+    assert_eq!(main.applied, Some(Theme::Dark));
+    assert_eq!(pinned.applied, Some(Theme::Light));
+
+    // Repeated paint with unchanged desktop theme issues zero set_theme calls.
+    main.sync(ColorScheme::System, true);
+    assert!(main.applied_log.is_empty());
+
+    // Live desktop switch to light updates System window's CSD theme; pinned window stays Light.
+    main.sync(ColorScheme::System, false);
+    pinned.sync(ColorScheme::System, false);
+    main.sync(ColorScheme::System, false);
+    assert_eq!(main.applied_log, vec![Some(Theme::Light)]);
+    assert!(pinned.applied_log.is_empty());
+
+    // App-wide Dark override pins System window to Dark even while desktop is light.
+    main.sync(ColorScheme::Dark, false);
+    assert_eq!(main.applied_log, vec![Some(Theme::Light), Some(Theme::Dark)]);
+
+    // Returning app-wide scheme to System immediately follows the current light desktop.
+    main.sync(ColorScheme::System, false);
+    assert_eq!(main.applied_log, vec![Some(Theme::Light), Some(Theme::Dark), Some(Theme::Light)]);
+
+    // Desktop switching back to dark updates the System window to Dark again.
+    main.sync(ColorScheme::System, true);
+    assert_eq!(
+        main.applied_log,
+        vec![Some(Theme::Light), Some(Theme::Dark), Some(Theme::Light), Some(Theme::Dark)],
+    );
 }
 
 #[test]

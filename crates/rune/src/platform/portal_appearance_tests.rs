@@ -186,6 +186,39 @@ fn a_portal_answer_is_never_replaced_by_the_last_runs_scheme() {
 }
 
 #[test]
+fn fallback_color_scheme_applies_only_until_portal_answers() {
+    let slot = AtomicU8::new(UNKNOWN);
+    assert!(!has_portal_scheme(slot.load(Ordering::Relaxed)));
+
+    // Before the portal answers, the one-shot off-thread fallback sets the scheme and redraws.
+    assert!(record_fallback_scheme(&slot, true));
+    assert!(!has_portal_scheme(slot.load(Ordering::Relaxed)));
+    assert_eq!(stored_dark(slot.load(Ordering::Relaxed)), Some(true));
+    assert!(!record_fallback_scheme(&slot, true));
+
+    // A fallback replaces a stale last-run seed when the portal did not answer.
+    let seeded = AtomicU8::new(UNKNOWN);
+    assert!(seed_scheme(&seeded, false));
+    assert!(record_fallback_scheme(&seeded, true));
+    assert_eq!(stored_dark(seeded.load(Ordering::Relaxed)), Some(true));
+
+    // A portal answer matching the fallback marks portal authority without a redundant redraw.
+    assert!(!record_scheme(&slot, 1));
+    assert!(has_portal_scheme(slot.load(Ordering::Relaxed)));
+    assert_eq!(stored_dark(slot.load(Ordering::Relaxed)), Some(true));
+
+    // Once the portal has answered, subsequent fallback writes cannot overwrite it.
+    assert!(!record_fallback_scheme(&slot, false));
+    assert_eq!(stored_dark(slot.load(Ordering::Relaxed)), Some(true));
+
+    // Live SettingChanged from the portal updates and still blocks fallback writes.
+    assert!(record_scheme(&slot, 0));
+    assert_eq!(stored_dark(slot.load(Ordering::Relaxed)), Some(false));
+    assert!(!record_fallback_scheme(&slot, true));
+    assert_eq!(stored_dark(slot.load(Ordering::Relaxed)), Some(false));
+}
+
+#[test]
 fn the_last_runs_reduced_motion_stands_until_a_portal_key_or_the_fallback_answers() {
     let slot = AtomicU8::new(0);
     seed_reduced_motion(&slot, true);

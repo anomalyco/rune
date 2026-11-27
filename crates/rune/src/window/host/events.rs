@@ -884,6 +884,8 @@ impl Host {
                 rt.set_system_dark(dark);
             }
         }
+        #[cfg(target_os = "linux")]
+        self.apply_window_color_scheme();
         #[cfg(target_os = "macos")]
         if self.win.as_ref().is_some_and(|l| l.native.full_screen.take()) {
             if let Some(l) = self.win.as_ref() {

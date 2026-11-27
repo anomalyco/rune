@@ -16,12 +16,14 @@ use std::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use crate::platform::preferences::{DEFAULT_DOUBLE_CLICK_MS, clamp_double_click_ms};
 use crate::platform::text_scale::{DEFAULT as DEFAULT_TEXT_SCALE, from_f64 as text_scale_from_f64};
 
-/// Stored state: `UNKNOWN` before the portal answers (or when none is reachable); once the
-/// portal answers, `1` (prefer dark) stores `DARK`, while `0` (no preference), `2` (prefer light)
-/// and unknown values (treated as `0` per the XDG Settings portal spec) store `LIGHT`.
+/// Stored state: `UNKNOWN` before the portal or fallback answers (or when none is reachable);
+/// once answered, `DARK` or `LIGHT` sits in the lower two bits, and `PORTAL_SCHEME_BIT` marks
+/// an authoritative XDG Settings portal answer so the one-shot fallback cannot overwrite it.
 const UNKNOWN: u8 = 0;
 const DARK: u8 = 1;
 const LIGHT: u8 = 2;
+const SCHEME_VALUE_MASK: u8 = 0b11;
+const PORTAL_SCHEME_BIT: u8 = 1 << 2;
 
 /// Reduced-motion bitfield in an `AtomicU8`:
 /// - `PORTAL_REDUCED_KNOWN` / `PORTAL_REDUCED_ON`: `org.freedesktop.appearance` `reduced-motion` (`1` = reduced)
@@ -40,21 +42,43 @@ fn encode_scheme(scheme: u32) -> u8 {
     if scheme == 1 { DARK } else { LIGHT }
 }
 
-/// Decodes the stored state into `Some(true)` dark, `Some(false)` light, or `None` when no
-/// portal has answered.
+/// Whether the Settings portal has answered `org.freedesktop.appearance` `color-scheme`.
+fn has_portal_scheme(stored: u8) -> bool {
+    stored & PORTAL_SCHEME_BIT != 0
+}
+
+/// Decodes the stored state into `Some(true)` dark, `Some(false)` light, or `None` when neither
+/// the portal nor a fallback has answered.
 fn stored_dark(stored: u8) -> Option<bool> {
-    match stored {
+    match stored & SCHEME_VALUE_MASK {
         DARK => Some(true),
         LIGHT => Some(false),
         _ => None,
     }
 }
 
-/// Records a portal `color-scheme` answer in `slot` and returns whether the stored state changed
-/// (including the first answer leaving `UNKNOWN`).
+/// Records a portal `color-scheme` answer in `slot` and returns whether the resolved dark/light
+/// state changed (including the first answer leaving `UNKNOWN`).
 fn record_scheme(slot: &AtomicU8, scheme: u32) -> bool {
-    let next = encode_scheme(scheme);
-    slot.swap(next, Ordering::Relaxed) != next
+    let value = encode_scheme(scheme);
+    let next = value | PORTAL_SCHEME_BIT;
+    let prev = slot.swap(next, Ordering::Relaxed);
+    (prev & SCHEME_VALUE_MASK) != value
+}
+
+/// Records a one-shot fallback `color-scheme` answer (read off the UI thread when the portal did
+/// not answer). Never overwrites an authoritative portal answer. Returns whether the resolved
+/// dark/light state changed.
+fn record_fallback_scheme(slot: &AtomicU8, dark: bool) -> bool {
+    let value = if dark { DARK } else { LIGHT };
+    let mut prev = slot.load(Ordering::Relaxed);
+    loop {
+        if has_portal_scheme(prev) { return false; }
+        match slot.compare_exchange_weak(prev, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return (prev & SCHEME_VALUE_MASK) != value,
+            Err(actual) => prev = actual,
+        }
+    }
 }
 
 /// A run's first frame takes the scheme the last run saw (`last`), unless the portal has answered
@@ -282,12 +306,12 @@ mod dbus {
 
     use super::{
         DOUBLE_CLICK_UNKNOWN, TEXT_SCALE_UNKNOWN, UNKNOWN, effective_text_scale,
-        has_portal_contrast, has_portal_double_click, has_portal_motion, has_portal_text_scale,
-        record_contrast, record_double_click, record_enable_animations, record_fallback_contrast,
-        record_fallback_double_click, record_fallback_reduced_motion, record_fallback_text_scale,
-        record_reduced_motion, record_scheme, record_text_scale, resolved_contrast,
-        resolved_reduced_motion, seed_reduced_motion, seed_scheme, stored_dark,
-        stored_double_click_secs,
+        has_portal_contrast, has_portal_double_click, has_portal_motion, has_portal_scheme,
+        has_portal_text_scale, record_contrast, record_double_click, record_enable_animations,
+        record_fallback_contrast, record_fallback_double_click, record_fallback_reduced_motion,
+        record_fallback_scheme, record_fallback_text_scale, record_reduced_motion, record_scheme,
+        record_text_scale, resolved_contrast, resolved_reduced_motion, seed_reduced_motion,
+        seed_scheme, stored_dark, stored_double_click_secs,
     };
     use crate::platform::preferences::Appearance;
     use crate::platform::portal::{self, DEST, PATH};
@@ -454,6 +478,10 @@ mod dbus {
         if record_scheme(&SCHEME, scheme) { redraw_windows(); }
     }
 
+    fn store_fallback_scheme(dark: bool) {
+        if record_fallback_scheme(&SCHEME, dark) { redraw_windows(); }
+    }
+
     fn store_contrast(value: &Value<'_>) {
         let Some(contrast) = scheme(value) else { return };
         if record_contrast(&CONTRAST, contrast) { redraw_windows(); }
@@ -583,6 +611,11 @@ mod dbus {
             }
             Some((conn, portal, changes))
         }).await.flatten();
+        if !has_portal_scheme(SCHEME.load(Ordering::Relaxed))
+            && let Some(dark) = crate::platform::linux_color_scheme::read_color_scheme_fallback()
+        {
+            store_fallback_scheme(dark);
+        }
         if !has_portal_contrast(CONTRAST.load(Ordering::Relaxed)) {
             store_fallback_contrast(crate::platform::preferences::read_increased_contrast_fallback());
         }
