@@ -202,7 +202,9 @@ async function main() {
         const page = await context.newPage();
         page.on('pageerror', error => { errors.push(error.message); console.log(error.message); });
         page.on('console', message => { if (message.type() === 'error') { errors.push(message.text()); console.log(message.text()); } });
-        await page.addInitScript(() => {
+        await page.addInitScript((forceGpuFirst) => {
+            // Headless Linux runs SwiftShader WebGPU, which CpuFirst::Auto now rejects in favor of CpuCanvas.
+            if (forceGpuFirst) window.RUNE_CPU_FIRST = 'off';
             // Chromium's device emulation leaves devicePixelContentBoxSize at the host DPR.
             // Exercise winit's Safari fallback (CSS content box × emulated DPR) instead.
             delete ResizeObserverEntry.prototype.devicePixelContentBoxSize;
@@ -218,7 +220,7 @@ async function main() {
                 device.addEventListener('uncapturederror', e => window.__proof.gpuErrors.push(e.error.message));
                 return device;
             };
-        });
+        }, process.platform === 'linux');
         const url = `http://127.0.0.1:${server.address().port}`;
         await page.goto(url);
         if (engine === 'webkit' && !await page.evaluate(async () => !!(await navigator.gpu?.requestAdapter()))) {

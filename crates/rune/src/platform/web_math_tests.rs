@@ -154,10 +154,12 @@ fn webgl_context_loss_recovers_instead_of_terminating_the_app() {
     // WebGL2 inline or document: pause until webglcontextrestored instead of showing a fatal overlay.
     assert_eq!(loss_action(true, true, true, false), LossAction::PauseForRestore);
     assert_eq!(loss_action(true, true, false, true), LossAction::PauseForRestore);
-    // WebGPU keeps its existing policy: permanent CPU fallback on CPU-first, fatal on GPU-first.
-    assert_eq!(loss_action(false, false, false, false), LossAction::FallbackToCpu { recoverable: false });
-    assert_eq!(loss_action(false, true, false, false), LossAction::Fatal);
-    assert_eq!(loss_action(false, true, true, false), LossAction::Fatal);
+    // WebGPU mirrors recoverable WebGL2 loss while bounded recovery budget remains:
+    // CPU-first full-window falls back to CPU while re-acquiring; GPU-first/inline/document pause.
+    assert_eq!(loss_action(false, false, false, false), LossAction::FallbackToCpu { recoverable: true });
+    assert_eq!(loss_action(false, true, false, false), LossAction::PauseForRestore);
+    assert_eq!(loss_action(false, true, true, false), LossAction::PauseForRestore);
+    assert_eq!(loss_action(false, true, false, true), LossAction::PauseForRestore);
 }
 
 

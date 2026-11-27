@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { restoreGpu, watchGpu } from './health.js';
+import { dispatchGpuFallback, isSoftwareDevice, restoreGpu, watchGpu } from './health.js';
 
 test('restoreGpu clears foreign onuncapturederror without duplicating watchGpu listeners', async () => {
     let resolveLost;
@@ -51,4 +51,29 @@ test('restoreGpu clears foreign onuncapturederror without duplicating watchGpu l
 test('restoreGpu tolerates null or objects without onuncapturederror', () => {
     assert.doesNotThrow(() => restoreGpu(null));
     assert.doesNotThrow(() => restoreGpu({}));
+});
+
+test('isSoftwareDevice detects fallback flag and software rasterizer metadata', () => {
+    assert.equal(isSoftwareDevice(null), false);
+    assert.equal(isSoftwareDevice({}), false);
+    assert.equal(isSoftwareDevice({ adapterInfo: { vendor: 'apple', architecture: 'metal-3', isFallbackAdapter: false } }), false);
+    assert.equal(isSoftwareDevice({ adapterInfo: { isFallbackAdapter: true } }), true);
+    assert.equal(isSoftwareDevice({ adapterInfo: { vendor: 'google', description: 'Google SwiftShader' } }), true);
+    assert.equal(isSoftwareDevice({ adapterInfo: { architecture: 'llvmpipe' } }), true);
+    assert.equal(isSoftwareDevice({ adapterInfo: { device: 'Mesa Lavapipe' } }), true);
+    assert.equal(isSoftwareDevice({ adapterInfo: { description: 'Microsoft Basic Render Driver' } }), true);
+});
+
+test('dispatchGpuFallback emits bubbling runegpufallback CustomEvent with stage and reason', () => {
+    const dispatched = [];
+    const canvas = { dispatchEvent(ev) { dispatched.push(ev); return true; } };
+    dispatchGpuFallback(canvas, 'init', 'software/fallback GPU adapter rejected');
+    assert.equal(dispatched.length, 1);
+    assert.equal(dispatched[0].type, 'runegpufallback');
+    assert.equal(dispatched[0].bubbles, true);
+    assert.deepEqual(dispatched[0].detail, {
+        stage: 'init',
+        reason: 'software/fallback GPU adapter rejected',
+    });
+    assert.doesNotThrow(() => dispatchGpuFallback(null, 'device_lost', 'lost'));
 });

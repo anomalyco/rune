@@ -3,6 +3,7 @@
 //! `platform/web.rs`, which only builds on `wasm32`, so the tests run headless.
 #![cfg_attr(not(test), allow(dead_code))]
 
+pub(crate) mod gpu_recovery;
 pub(crate) mod handover_machine;
 pub(crate) mod platform_events;
 
@@ -193,13 +194,17 @@ pub(crate) fn loss_action_for_policy(
 }
 
 /// Decides how the web host responds when the GPU device or WebGL2 context is lost under the
-/// default `GpuLossPolicy::Recover` policy.
+/// default `GpuLossPolicy::Recover` policy (while bounded recovery is still available).
 ///
-/// WebGPU loss preserves the existing policy: permanent CPU fallback on CPU-first pages and
-/// fatal on GPU-first pages. WebGL2 context loss is recoverable when `webglcontextrestored`
-/// fires: full-window pages (`!embedded && !document`) fall back to the CPU canvas immediately so
-/// they are never blank while waiting (or if restore never arrives), while inline and document
-/// pages pause in place until restore.
+/// WebGL2 context loss is recoverable when `webglcontextrestored` fires: full-window pages
+/// (`!embedded && !document`) fall back to the CPU canvas immediately so they are never blank
+/// while waiting (or if restore never arrives), while inline and document pages pause in place
+/// until restore.
+///
+/// WebGPU device loss mirrors that split under bounded `WebGpuRecovery` (3 losses per 5-minute
+/// window): full-window CPU-first pages fall back to the CPU canvas while re-acquiring, while
+/// `GpuFirst` (`CpuFirst::Off`, inline, and document) pages pause in place (`Draw::ContextLost`)
+/// until re-acquisition succeeds or exhausts its retry budget.
 pub(crate) fn loss_action(is_webgl: bool, gpu_first: bool, embedded: bool, document: bool) -> LossAction {
     if is_webgl {
         if !embedded && !document {
@@ -207,10 +212,10 @@ pub(crate) fn loss_action(is_webgl: bool, gpu_first: bool, embedded: bool, docum
         } else {
             LossAction::PauseForRestore
         }
-    } else if gpu_first {
-        LossAction::Fatal
+    } else if gpu_first || embedded || document {
+        LossAction::PauseForRestore
     } else {
-        LossAction::FallbackToCpu { recoverable: false }
+        LossAction::FallbackToCpu { recoverable: true }
     }
 }
 

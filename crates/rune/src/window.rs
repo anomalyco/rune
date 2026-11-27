@@ -86,7 +86,7 @@ pub use color_scheme::ColorScheme;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use color_scheme::{app_color_scheme, set_app_color_scheme_state, sync_window_theme, window_theme_for_platform};
 pub use cpu_first::CpuFirst;
-#[cfg(target_arch = "wasm32")]
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(unused_imports))]
 pub(crate) use cpu_first::WebStart;
 pub use handle::WindowHandle;
 pub use resize_sync::ResizeSync;

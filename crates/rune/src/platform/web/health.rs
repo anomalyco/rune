@@ -14,6 +14,10 @@ extern "C" {
     fn has_navigator_gpu_js() -> bool;
     #[wasm_bindgen(js_name = gpuSummary)]
     fn gpu_summary(device: &JsValue) -> String;
+    #[wasm_bindgen(js_name = isSoftwareDevice)]
+    fn is_software_device_js(device: &JsValue) -> bool;
+    #[wasm_bindgen(js_name = dispatchGpuFallback)]
+    fn dispatch_gpu_fallback_js(canvas: &web_sys::HtmlCanvasElement, stage: &str, reason: &str);
     #[wasm_bindgen(js_name = watchGpu)]
     fn watch_gpu(device: &JsValue, on_error: &js_sys::Function, on_lost: &js_sys::Function, terminal: bool);
     #[wasm_bindgen(js_name = restoreGpu)]
@@ -44,6 +48,16 @@ fn js_device(device: &wgpu::Device) -> Option<&JsValue> {
 /// The adapter under `device`, as the browser describes it.
 pub(crate) fn summary(device: &wgpu::Device) -> String {
     js_device(device).map_or_else(|| "WebGL2".into(), gpu_summary)
+}
+
+/// Whether `device`'s WebGPU `GPUDevice.adapterInfo` identifies a software/fallback adapter.
+pub(super) fn is_software_device(device: &wgpu::Device) -> bool {
+    js_device(device).is_some_and(is_software_device_js)
+}
+
+/// Dispatches a bubbling `runegpufallback` DOM `CustomEvent` on `canvas`.
+pub(super) fn dispatch_gpu_fallback(canvas: &web_sys::HtmlCanvasElement, stage: &str, reason: &str) {
+    dispatch_gpu_fallback_js(canvas, stage, reason);
 }
 
 /// Validation, out-of-memory and internal error scopes on the JS device.

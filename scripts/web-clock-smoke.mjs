@@ -8,11 +8,12 @@ export async function clockSmoke(browser, url) {
     const context = await browser.newContext({ viewport: { width: 390, height: 760 }, deviceScaleFactor: 3, hasTouch: true, isMobile: true });
     const page = await context.newPage();
     try {
-        await page.addInitScript(() => {
+        await page.addInitScript((forceGpuFirst) => {
+            if (forceGpuFirst) window.RUNE_CPU_FIRST = 'off';
             window.__submits = 0;
             const submit = GPUQueue.prototype.submit;
             GPUQueue.prototype.submit = function (...args) { window.__submits++; return submit.apply(this, args); };
-        });
+        }, process.platform === 'linux');
         await page.goto(url);
         await page.waitForFunction(() => window.__submits > 0, { timeout: 30000 });
         await page.waitForTimeout(1000);

@@ -1,7 +1,66 @@
-//! The builders that place an app in a web page: its canvas, a whole-page document and its
-//! fonts by URL.
+//! The builders that place an app in a web page: its canvas, a whole-page document, its
+//! fonts by URL, same-tab link routing, and GPU fallback notification.
 
 use super::*;
+
+/// Which stage of a web app's GPU lifecycle permanently fell back off the GPU.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum GpuFallbackStage {
+    /// Initial async GPU acquisition failed (no adapter, software/fallback adapter rejected under
+    /// `CpuFirst::Auto`, `requestDevice` error, surface configuration failure, or pipeline warm
+    /// failure).
+    Init,
+    /// The GPU asynchronously rejected Rune's primary renderer shader or pipeline.
+    Shader,
+    /// The GPU did not finish its first hand-over frame within the hand-over timeout.
+    HandoverTimeout,
+    /// The GPU device was lost and bounded recovery exhausted its retry budget (or cannot recover).
+    DeviceLost,
+}
+
+impl GpuFallbackStage {
+    /// Stable lowercase identifier exposed as `detail.stage` on the bubbling `runegpufallback`
+    /// DOM `CustomEvent`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Init => "init",
+            Self::Shader => "shader",
+            Self::HandoverTimeout => "handover_timeout",
+            Self::DeviceLost => "device_lost",
+        }
+    }
+}
+
+/// Details delivered to [`App::on_gpu_fallback`] (and mirrored on `canvas[data-rune-canvas]` as a
+/// bubbling `runegpufallback` DOM `CustomEvent` with `detail: { stage, reason }`) when a web
+/// page permanently falls back off the GPU or exhausts GPU recovery.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GpuFallback {
+    stage: GpuFallbackStage,
+    reason: String,
+}
+
+impl GpuFallback {
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+    pub(crate) fn new(stage: GpuFallbackStage, reason: impl Into<String>) -> Self {
+        Self { stage, reason: reason.into() }
+    }
+
+    /// Which GPU lifecycle stage failed.
+    pub const fn stage(&self) -> GpuFallbackStage {
+        self.stage
+    }
+
+    /// Human-readable diagnostic reason for the failure.
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+}
+
+/// `App::on_gpu_fallback`'s hook, run on the browser's main thread when a web app permanently
+/// falls back off the GPU or exhausts GPU recovery.
+pub(crate) type OnGpuFallback = Box<dyn FnMut(&GpuFallback)>;
 
 /// `fonts` and one more, kept for the life of the process as `AppSpec::fonts` requires.
 pub(crate) fn with_font(fonts: &'static [&'static [u8]], bytes: Vec<u8>) -> &'static [&'static [u8]] {
@@ -81,5 +140,41 @@ impl<S: 'static> App<S> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         self.font_url(url)
+    }
+
+    /// On web, routes [`Tx::open_url_same_tab`] links inside a single-page app: `route` gets the
+    /// absolute URL of each link on the page's own origin and returns true when it handled it
+    /// (`history.pushState` and a render), or false to let the browser load it with
+    /// `location.assign`. Links to other origins always load. Ignored on native.
+    pub fn same_tab_router(mut self, route: impl Fn(&str) -> bool + 'static) -> Self {
+        self.same_tab_router = Some(Box::new(route));
+        self
+    }
+
+    /// On web, runs on the browser's main thread when the page permanently falls back off the GPU
+    /// or exhausts GPU recovery (initial async GPU acquisition failure including a rejected
+    /// software/fallback adapter under [`crate::CpuFirst::Auto`], async shader rejection,
+    /// hand-over timeout, or exhausted WebGPU device-loss recovery).
+    ///
+    /// Rune also dispatches a bubbling `runegpufallback` DOM `CustomEvent` on
+    /// `canvas[data-rune-canvas]` with `detail: { stage, reason }` so split-bundle web hosts can
+    /// unmount the WebGPU build (`AppHandle::quit`) and mount a WebGL2 build on a fresh
+    /// `<canvas>` from JS without custom glue. Ignored on native and under
+    /// [`crate::CpuFirst::Only`].
+    ///
+    /// ```no_run
+    /// use rune::{App, AppSpec, GpuFallback, el};
+    ///
+    /// let spec = AppSpec::new("App", (640.0, 480.0), || (), |_, _| el());
+    /// let app = App::new(spec);
+    /// let handle = app.handle();
+    /// app.on_gpu_fallback(move |fallback: &GpuFallback| {
+    ///     let _ = (fallback.stage(), fallback.reason());
+    ///     handle.quit();
+    /// }).run();
+    /// ```
+    pub fn on_gpu_fallback(mut self, f: impl FnMut(&GpuFallback) + 'static) -> Self {
+        self.on_gpu_fallback = Some(Box::new(f));
+        self
     }
 }

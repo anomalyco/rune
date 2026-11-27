@@ -49,8 +49,11 @@
 ///   [`CpuFirst::Off`] or a pinned `WGPU_ADAPTER_NAME`, a transparent window returns the GPU
 ///   startup error without falling back to the CPU renderer.
 /// - **Web (`wasm32`)**: applies to full-window apps (`App::web_document` and inline
-///   `App::canvas_id` pages always start on the GPU). Under [`CpuFirst::Only`], the page stays on
-///   the 2D CPU canvas and never requests WebGPU or WebGL2.
+///   `App::canvas_id` pages always start on the GPU). Under [`CpuFirst::Auto`], software/fallback
+///   WebGPU and WebGL2 adapters (`DeviceType::Cpu` / `isFallbackAdapter`, SwiftShader, `llvmpipe`)
+///   are rejected before creating a device so the page stays on the 2D CPU canvas (opt into
+///   software GPU rendering with [`CpuFirst::Off`] or `globalThis.RUNE_CPU_FIRST = "0"`). Under
+///   [`CpuFirst::Only`], the page stays on the 2D CPU canvas and never requests WebGPU or WebGL2.
 /// - **macOS, iOS, and headless**: ignored (windows open on the GPU as before).
 ///
 /// ```no_run
