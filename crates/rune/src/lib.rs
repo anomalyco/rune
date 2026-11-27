@@ -21,6 +21,7 @@ mod quit;
 mod shortcuts;
 mod states;
 mod system_material;
+mod web_image;
 mod window;
 
 pub mod clipboard;
@@ -496,6 +497,8 @@ pub use video::ThumbnailPrecision;
 pub use video::ThumbnailRequest;
 pub use video::Thumbnails;
 pub use video::Video;
+pub use web_image::WebImageClip;
+pub use web_image::WebImageDraw;
 pub use window::ColorScheme;
 pub use window::CpuFirst;
 pub use window::KeyboardDispatch;

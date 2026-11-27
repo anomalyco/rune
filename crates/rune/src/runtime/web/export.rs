@@ -95,7 +95,8 @@ impl RuntimeCore {
         let href = n.a11y.more.as_ref().and_then(|m| m.href.as_deref()).and_then(|u| crate::open_url::check_href(u).ok());
         let label = n.label.as_deref().filter(|s| !s.trim().is_empty());
         let pixels = n.vis.cold.pixels.as_ref().filter(|_| n.vis.cold.pixels_wrap.is_none() && i + 1 == self.subtree_end(i));
-        let pixels_url = pixels.and_then(|p| p.source_url());
+        let web_img = n.vis.cold.web_image.as_deref().filter(|_| i + 1 == self.subtree_end(i));
+        let pixels_url = pixels.and_then(|p| p.source_url()).or_else(|| web_img.map(|w| w.url.as_ref()));
         let list_start = (n.role == "list")
             .then(|| n.a11y.more.as_deref().and_then(|m| m.list_start))
             .flatten();
@@ -180,12 +181,16 @@ impl RuntimeCore {
             inner = css::svg(shape, (x1 - x0, y1 - y0));
         }
         if tag == "img" {
-            let fit = match n.vis.cold.pixels_fit {
-                None => "fill",
-                Some(crate::SurfaceFit::Fit) => "contain",
-                Some(crate::SurfaceFit::Fill) => "cover",
+            let fit = if let Some(w) = web_img {
+                crate::web_image::css_fit(w.fit, n.vis.cold.surface_place.unscaled)
+            } else {
+                crate::web_image::css_fit(n.vis.cold.pixels_fit, n.vis.cold.surface_place.unscaled)
             };
             decls.push(("object-fit", fit.into()));
+            let pos = crate::web_image::css_position(n.vis.cold.surface_place.anchor);
+            if pos != "50% 50%" {
+                decls.push(("object-position", pos.into()));
+            }
             if n.vis.cold.image_filter == crate::ImageFilter::Nearest {
                 decls.push(("image-rendering", "pixelated".into()));
             }

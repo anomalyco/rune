@@ -29,6 +29,7 @@ impl RuntimeCore {
         self.paint.icon_aprons.clear();
         self.surfaces.clear();
         self.paint.clear_materials();
+        self.paint.clear_web_images();
         self.hit.hits.clear();
         self.hit.wheel_hits.clear();
         self.clear_help_hits();
@@ -646,7 +647,7 @@ impl RuntimeCore {
                     skip_paint,
                     loop_vis,
                     gliding,
-                    node_turn.is_some(),
+                    turn_index,
                     input_caret.map(|(caret, _)| caret),
                     video_clock,
                     &sel_ranges,

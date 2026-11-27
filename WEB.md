@@ -247,6 +247,16 @@ rasterizes SVGs directly at that size. Images over 8192 pixels a side are refuse
 pixels are read, and a failed request or a cross-origin image without CORS headers resolves to
 `Image::error`.
 
+For cross-origin raster URLs served without `Access-Control-Allow-Origin`, use opt-in
+`El::web_image(url)` or `El::web_image_fit(url, fit)`. On web, Rune synchronizes visible
+`web_image` elements per frame to a display-only `<img>` layer (`[data-rune-web-images]`,
+`pointer-events: none`, no `crossOrigin` attribute) clipped to enclosing scroll viewports and
+rounded clips without reading pixels or bypassing browser CORS rules. The element's own `fill`
+and `border` remain on the canvas behind and around it; because the DOM layer sits above the
+canvas, canvas-drawn overlays, popovers and shaders cannot composite over it (keep
+`ImageCache::url` + `El::pixels` for same-origin or CORS-enabled images that need full GPU
+layering).
+
 System `Cursor` variants map to their CSS `cursor` keywords (including `ew-resize`,
 `ns-resize`, `nwse-resize`, `nesw-resize`, `n-resize`, `e-resize`, `s-resize`,
 `w-resize`, `alias`, and `copy`). `Cursor::Image` sets the canvas's CSS

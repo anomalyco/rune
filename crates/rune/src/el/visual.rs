@@ -65,6 +65,8 @@ pub struct VisualCold {
     /// Colour whose RGB and alpha tint `pixels`'s alpha mask (`El::pixels_tint`); `None` draws
     /// the image's own colours.
     pub(crate) pixels_tint: Option<Color>,
+    /// Display-only web `<img>` URL and fit (`El::web_image`, `El::web_image_fit`).
+    pub(crate) web_image: Option<Rc<crate::web_image::WebImage>>,
     /// Sampling filter for `pixels` (`El::image_filter`); `Linear` by default.
     pub(crate) image_filter: crate::ImageFilter,
     /// Opt-in image context menu (`El::image_menu`).
@@ -189,6 +191,7 @@ impl Empty for VisualCold {
         pixels_fit: None,
         pixels_wrap: None,
         pixels_tint: None,
+        web_image: None,
         image_filter: crate::ImageFilter::Linear,
         image_menu: None,
         effect: None,

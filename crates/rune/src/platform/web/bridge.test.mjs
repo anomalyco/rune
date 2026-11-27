@@ -4992,3 +4992,117 @@ test('openFilePicker handles open, multi-select, cancel, read, and save-download
     }
 });
 
+test('syncWebImages renders display-only <img> elements without crossOrigin, reuses nodes, nests clips, and cleans up', () => {
+    const { h, doc } = setup();
+    try {
+        // Lazy layer creation: empty sync creates no DOM layer.
+        bridge.syncWebImages(h, '[]');
+        assert.equal(h.webImages, null);
+
+        // 1. Mount two unclipped images: layer sits directly before a11y, aria-hidden, pointer-events:none.
+        bridge.syncWebImages(h, JSON.stringify([
+            { id: '10', u: 'https://cdn.example.com/a.png', r: [20, 30, 64, 48], rad: [12, 12, 12, 12], f: 'cover', p: '0% 100%', n: true, o: 0.75 },
+            { id: '20', u: 'https://cdn.example.com/b.png', r: [100, 30, 40, 40], m: [0, 1, -1, 0, 140, 30] },
+        ]));
+        assert.ok(h.webImages, 'webImages layer must be created');
+        assert.equal(h.webImages.getAttribute('data-rune-web-images'), '');
+        assert.equal(h.webImages.getAttribute('aria-hidden'), 'true');
+        assert.ok(h.webImages.style.cssText.includes('pointer-events:none'));
+        const bodyKids = doc.body.children;
+        assert.ok(bodyKids.indexOf(h.webImages) < bodyKids.indexOf(h.a11y), 'webImages must precede a11y in DOM order');
+        assert.equal(h.webImages.children.length, 2);
+
+        const imgA = h.webImages.children[0];
+        const imgB = h.webImages.children[1];
+        assert.equal(imgA.tagName, 'IMG');
+        assert.equal(imgA.src, 'https://cdn.example.com/a.png');
+        assert.equal(imgA.crossOrigin, undefined, 'must never set crossOrigin so cross-origin images display without CORS');
+        assert.equal(imgA.getAttribute('crossorigin'), null);
+        assert.equal(imgA.alt, '');
+        assert.equal(imgA.decoding, 'async');
+        assert.equal(imgA.draggable, false);
+        assert.equal(imgA.getAttribute('aria-hidden'), 'true');
+        assert.ok(imgA.style.cssText.includes('left:20px;top:30px;width:64px;height:48px'));
+        assert.ok(imgA.style.cssText.includes('object-fit:cover;object-position:0% 100%'));
+        assert.ok(imgA.style.cssText.includes('border-radius:12px 12px 12px 12px'));
+        assert.ok(imgA.style.cssText.includes('image-rendering:pixelated'));
+        assert.ok(imgA.style.cssText.includes('opacity:0.75'));
+        assert.ok(imgB.style.cssText.includes('transform:matrix(0,1,-1,0,140,30)'));
+
+        // 2. Add hard clip + rounded clip wrapper and reorder B before A: must reuse exact same <img> elements.
+        let srcWrites = 0;
+        const origSrc = imgA.src;
+        Object.defineProperty(imgA, 'src', {
+            get() { return origSrc; },
+            set() { srcWrites += 1; },
+            configurable: true,
+        });
+        bridge.syncWebImages(h, JSON.stringify([
+            { id: '20', u: 'https://cdn.example.com/b.png', r: [100, 30, 40, 40] },
+            {
+                id: '10',
+                u: 'https://cdn.example.com/a.png',
+                r: [20, 30, 64, 48],
+                c: [10, 40, 80, 38],
+                rc: [[15, 25, 90, 80, 16, 16, 16, 16]],
+            },
+        ]));
+        assert.equal(srcWrites, 0, 'moving or clipping an image must not reassign img.src');
+        assert.equal(h.webImages.children.length, 2);
+        assert.equal(h.webImages.children[0], imgB, 'paint order must update in DOM');
+        const outerClip = h.webImages.children[1];
+        assert.equal(outerClip.tagName, 'DIV');
+        assert.ok(outerClip.style.cssText.includes('left:10px;top:40px;width:80px;height:38px;overflow:hidden'));
+        const roundClip = outerClip.children[0];
+        assert.equal(roundClip.tagName, 'DIV');
+        // Relative to outerClip origin (10, 40): (15-10, 25-40) = (5, -15).
+        assert.ok(roundClip.style.cssText.includes('left:5px;top:-15px;width:90px;height:80px;overflow:hidden;pointer-events:none;border-radius:16px 16px 16px 16px'));
+        assert.equal(roundClip.children[0], imgA, 'imgA must be moved inside nested clip wrappers without recreation');
+        // Relative to roundClip origin (15, 25): (20-15, 30-25) = (5, 5).
+        assert.ok(imgA.style.cssText.includes('left:5px;top:5px;width:64px;height:48px'));
+
+        // 3. Unwrap back to 0 clips and remove imgB: imgA stays reused directly in layer.
+        bridge.syncWebImages(h, JSON.stringify([
+            { id: '10', u: 'https://cdn.example.com/a.png', r: [24, 34, 64, 48] },
+        ]));
+        assert.equal(h.webImages.children.length, 1);
+        assert.equal(h.webImages.children[0], imgA);
+        assert.ok(imgA.style.cssText.includes('left:24px;top:34px;width:64px;height:48px'));
+
+        // 4. Keyboard shift moves webImages alongside canvas and a11y.
+        bridge.sync(h, 'field', 'abc', 0, 3, 3, false);
+        bridge.syncCaret(h, 20, 420, 2, 20);
+        bridge.syncVisualViewport(h, 0, 300, 600);
+        assert.ok(h.webImages.style.transform.includes('translate3d(0, -'), 'keyboard shift must translate webImages');
+
+        // 5. Empty sync removes layer cleanly.
+        bridge.syncWebImages(h, '[]');
+        assert.equal(h.webImages, null);
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('syncWebImages follows page height in document mode and cleans up on destroy', () => {
+    const { h } = setup({ page: true });
+    try {
+        bridge.syncPage(h, 1800, false);
+        bridge.syncWebImages(h, JSON.stringify([
+            { id: '1', u: '/hero.webp', r: [0, 900, 320, 180] },
+        ]));
+        assert.ok(h.webImages);
+        assert.ok(h.webImages.style.cssText.includes('position:absolute'));
+        assert.ok(h.webImages.style.cssText.includes('height:1800px'));
+
+        bridge.syncPage(h, 2400, false);
+        assert.equal(h.webImages.style.height, '2400px');
+
+        const layer = h.webImages;
+        bridge.destroy(h);
+        assert.equal(h.webImages, null);
+        assert.equal(layer.parentElement, null);
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
