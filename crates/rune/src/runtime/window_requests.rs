@@ -75,6 +75,9 @@ pub(crate) struct HostState {
     /// A user-initiated close request (`Tx::request_user_close`) waiting for the host's
     /// `close_requested` gate.
     pub(crate) user_close_request: bool,
+    /// `Tx::request_urgent_frame` waiting for the host to arm one-shot macOS display-link
+    /// admission on the next drawn frame.
+    pub(crate) urgent_frame: bool,
     /// A handler or `update` asked to minimize the window (`Tx::minimize`); the shell takes it,
     /// after a show the same turn asked for (`window::Minimize`).
     pub(crate) minimize: crate::window::Minimize,
@@ -171,6 +174,7 @@ impl HostState {
             fit: Default::default(),
             overlay_fit: None,
             user_close_request: false,
+            urgent_frame: false,
             minimize: Default::default(),
             url_requests: Vec::new(),
             path_requests: Vec::new(),
@@ -597,6 +601,12 @@ impl RuntimeCore {
     #[inline]
     pub(crate) fn take_user_close_request(&mut self) -> bool {
         std::mem::take(&mut self.host.user_close_request)
+    }
+
+    /// Takes a latched `Tx::request_urgent_frame` request for the host.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn take_urgent_frame(&mut self) -> bool {
+        std::mem::take(&mut self.host.urgent_frame)
     }
 
     /// Whether a user-initiated close request is pending for the host.

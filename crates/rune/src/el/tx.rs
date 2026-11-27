@@ -87,6 +87,8 @@ pub struct Tx {
     /// `Tx::request_poll`: asks for another `poll` round in this frame (or a wake on the next
     /// turn when called outside a frame, such as from `AppHandle::update`).
     pub(crate) request_poll: bool,
+    /// `Tx::request_urgent_frame`: arms one-shot urgent frame admission on macOS.
+    pub(crate) urgent_frame: bool,
     pub(crate) shell: Option<Shell>,
     /// User-initiated close request (macOS unhandled ⌘W / Window › Close, assistive activation of
     /// the custom caption close button): routes through `App::on_close_request` instead of
@@ -458,6 +460,20 @@ impl Tx {
         #[cfg(feature = "frame-profile")]
         crate::frame::live_log::waker(std::panic::Location::caller(), std::time::Duration::ZERO);
         self.request_poll = true;
+    }
+
+    /// Arms one-shot urgent frame admission on macOS so the next drawn frame may bypass
+    /// display-link `Wait` once by advancing its target to now.
+    ///
+    /// Use this from [`AppHandle::update_if`](crate::AppHandle::update_if),
+    /// [`OverlayHandle::update_if`](crate::OverlayHandle::update_if), or a handler when
+    /// authoritative state changed and waiting another display interval adds visible latency.
+    /// Duplicate requests before that frame claims pacing coalesce into one admission; normal
+    /// display-link pacing resumes immediately after (even if drawable acquisition or
+    /// presentation fails), and calls during a frame already being built are consumed by that
+    /// frame. No-op for pacing off macOS.
+    pub fn request_urgent_frame(&mut self) {
+        self.urgent_frame = true;
     }
 
     /// The window's logical clock in seconds as this handler or poll runs: the `clock` `poll`

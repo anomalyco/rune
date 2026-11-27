@@ -466,6 +466,7 @@ impl OverlayCore {
     pub(super) fn apply_wake_drained(&mut self, app: &mut dyn OverlayApp, woken: bool, queued: bool, updated: bool) {
         if woken { app.rt_mut().invalidate(); }
         if queued || woken { self.clipboard.flush_core(app.rt_mut()); }
+        let urgent = app.rt_mut().take_urgent_frame();
         if !woken && !updated {
             if !queued { return; }
             // A pop-up they asked for may be answered at once, running its callback: a change.
@@ -478,6 +479,14 @@ impl OverlayCore {
             self.clipboard.flush_core(app.rt_mut());
         }
         self.dirty = true; // Queued updates already invalidate the cache before polling.
+        #[cfg(target_os = "macos")]
+        if urgent && !self.frameless() && !self.backoff.waiting(crate::time::now())
+            && let Some(pacing) = self.surface.live_mut().and_then(|l| l.pacing.as_mut())
+        {
+            pacing.admit_once();
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = urgent;
         if self.frameless() {
             // Register timer requests even before the first show; hidden or occluded overlays
             // don't draw.

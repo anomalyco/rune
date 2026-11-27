@@ -228,6 +228,8 @@ struct FrameState {
     now: Option<Instant>,
     encoded: Option<Instant>,
     redraw_stage: StageGuard,
+    present_returned: Option<Instant>,
+    urgent_admitted: bool,
 }
 
 struct WindowFrame<'a> {
@@ -320,6 +322,9 @@ impl FrameHost for WindowFrame<'_> {
                 return Gate::Skip;
             }
         }
+        if self.host.app.rt_mut().take_urgent_frame() && !hidden {
+            l.admit_urgent_frame();
+        }
         #[cfg(target_os = "macos")]
         if hidden { self.state.prewarm = l.native.panel.as_ref().map(|p| p.prewarm()); }
         // Only a timer woke the resting window, so its frame may draw what's on screen. It
@@ -330,18 +335,28 @@ impl FrameHost for WindowFrame<'_> {
         #[cfg(not(target_os = "macos"))]
         let deferred = false;
         #[cfg(target_os = "macos")]
-        let target = if hidden || self.resizing || deferred { None } else if let Some(pacing) = &mut l.native.pacing {
+        let (target, urgent_admitted) = if hidden || deferred {
+            (None, false)
+        } else if self.resizing {
+            if let Some(pacing) = &mut l.native.pacing { pacing.consume_urgent(); }
+            (None, false)
+        } else if let Some(pacing) = &mut l.native.pacing {
             if l.native.prime.presumes() && !pacing.paced() {
-                None
+                pacing.consume_urgent();
+                (None, false)
             } else {
                 let opp = {
                     let _dl = StageGuard::enter(FrameStage::DisplayLink);
                     pacing.next_frame()
                 };
                 let Some(target) = opp.target() else { return Gate::Skip };
-                target
+                (target, opp.urgent_admitted())
             }
-        } else { None };
+        } else {
+            (None, false)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let urgent_admitted = false;
         #[cfg(target_os = "macos")]
         let shown = if !hidden && l.native.prime.presumes() {
             // A frame drawn while AppKit still launches the app isn't counted: AppKit says
@@ -373,6 +388,7 @@ impl FrameHost for WindowFrame<'_> {
         self.state.hidden = hidden;
         self.state.live_resize = live_resize;
         self.state.target = target;
+        self.state.urgent_admitted = urgent_admitted;
         #[cfg(target_os = "macos")]
         {
             self.state.deferred = deferred;
@@ -595,6 +611,7 @@ impl FrameHost for WindowFrame<'_> {
         };
         // `RUNE_LOOP_CHECK=1`: how the loop-only step this frame stood in for compares with it.
         self.state.profile.take_loop_check(self.host.app.rt_mut());
+        let _ = self.host.app.rt_mut().take_urgent_frame();
         let _ = self.host.poll_gpu_loss();
         StepInfo { runtime_animating: animating, animating, dt, update_ms: 0.0, presents_at: self.state.target }
     }
@@ -745,7 +762,7 @@ impl FrameHost for WindowFrame<'_> {
     }
 
     fn submit_and_present(&mut self, prepared: PreparedWindowFrame, info: &StepInfo) -> Instant {
-        submit_and_present_window(self.host, prepared, self.state.looped.as_ref(), &mut self.state.profile, &mut self.state.encoded, &mut self.state.drawable, info)
+        submit_and_present_window(self.host, prepared, self.state.looped.as_ref(), &mut self.state.profile, &mut self.state.encoded, &mut self.state.drawable, &mut self.state.present_returned, info)
     }
 
     fn present_targets(&mut self) -> (Option<&mut FrameClock>, &mut RuntimeCore) {
@@ -800,7 +817,7 @@ impl FrameHost for WindowFrame<'_> {
             }
         }
         self.state.redraw_stage.end();
-        let frame_seq = self.host.frame_reports.drawn(self.state.encoded, info.presents_at, now, info.update_ms);
+        let frame_seq = self.host.frame_reports.drawn_with_present(self.state.encoded, self.state.present_returned, info.presents_at, now, info.update_ms, self.state.urgent_admitted);
         self.host.app.inspect_frame();
         let drawable = self.state.drawable;
         if let (Some(frame_seq), Some(drawable_seq)) = (frame_seq, drawable) {

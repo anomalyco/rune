@@ -245,11 +245,24 @@ impl DisplayLink {
         true
     }
 
+    /// Arms one-shot urgent admission so the next frame may bypass `Opportunity::Wait` once.
+    /// Duplicate calls before the next frame coalesce into a single admission.
+    pub(crate) fn admit_once(&mut self) { self.core.admit_once(); }
+
+    /// Consumes any pending one-shot urgent admission when a frame draws without `next_frame`.
+    pub(crate) fn consume_urgent(&mut self) { let _ = self.core.take_urgent(); }
+
+    /// Whether a one-shot urgent admission is currently armed.
+    pub(crate) fn is_urgent(&self) -> bool { self.core.is_urgent() }
+
     /// Claims one display opportunity: a tick and its target presentation time, or at once
-    /// when the surface has rested (`rested`). Consume before rendering so a tick arriving
-    /// during rendering can queue the next opportunity.
+    /// when the surface has rested (`rested`) or one-shot urgent admission bypassed `Wait`.
+    /// Consume before rendering so a tick arriving during rendering can queue the next opportunity.
     pub(crate) fn next_frame(&mut self) -> Opportunity {
-        if !self.start() { return Opportunity::Now; }
+        if !self.start() {
+            let _ = self.core.take_urgent();
+            return Opportunity::Now;
+        }
         let host_target = self.callback.take_target();
         let now = crate::time::now();
         let tick = (host_target != 0).then(|| target_time(now, CVGetCurrentHostTime(), host_target, self.callback.host_frequency));

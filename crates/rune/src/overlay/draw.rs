@@ -152,9 +152,14 @@ impl FrameHost for OverlayFrame<'_> {
         }
         #[cfg(target_os = "macos")]
         { self.presume = !self.prewarm && self.core.prime.presumes(); }
+        let urgent = self.app.rt_mut().take_urgent_frame();
         let (Some(live), Some(renderer)) = (self.core.surface.live_mut(), self.core.renderer.as_ref()) else {
             return Gate::Skip;
         };
+        #[cfg(target_os = "macos")]
+        if urgent && !self.prewarm && let Some(pacing) = live.pacing.as_mut() { pacing.admit_once(); }
+        #[cfg(not(target_os = "macos"))]
+        let _ = urgent;
         // Only a timer woke the resting overlay: build the frame first, and take neither a
         // drawable nor a display tick when it draws what's on screen. The link, stopped, would
         // draw it at once anyway (`defers_start`).
@@ -295,6 +300,7 @@ impl FrameHost for OverlayFrame<'_> {
         } else {
             step(self.app, &mut self.core.clock, frame_time, self.prewarm)
         };
+        let _ = self.app.rt_mut().take_urgent_frame();
         #[cfg(target_os = "macos")]
         let presents_at = self.target;
         #[cfg(not(target_os = "macos"))]

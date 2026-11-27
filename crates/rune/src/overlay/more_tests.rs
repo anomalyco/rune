@@ -849,8 +849,21 @@ fn a_turn_whose_frame_is_not_due_never_waits_on_the_present_thread() {
     let at = crate::time::now();
     assert_eq!(frame::claim(Some(Opportunity::Tick(at)), || waits += 1), Some(Some(at)));
     assert_eq!(frame::claim(Some(Opportunity::Now), || waits += 1), Some(None));
+    assert_eq!(frame::claim(Some(Opportunity::UrgentNow), || waits += 1), Some(None));
     assert_eq!(frame::claim(None, || waits += 1), Some(None));
-    assert_eq!(waits, 3);
+    assert_eq!(waits, 4);
+}
+
+#[test]
+fn overlay_update_urgent_latches_and_consumes_urgent_frame() {
+    let mut overlay = width_overlay("urgent overlay");
+    let handle = OverlayHandle { shared: overlay.shared.clone() };
+    handle.update_urgent(|w, _| *w = 42.0);
+    let updates = std::mem::take(&mut *overlay.shared.updates.lock().unwrap());
+    for f in updates { let _ = overlay.rt.update_if(f); }
+    assert_eq!(overlay.rt.state, 42.0);
+    assert!(overlay.rt.core_mut().take_urgent_frame());
+    assert!(!overlay.rt.core_mut().take_urgent_frame());
 }
 
 #[test]

@@ -555,7 +555,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         self.host.meter.presented();
         crate::haptics::flush_live(self.host.app.rt_mut(), false);
         self.redraw_stage.end();
-        self.host.frame_reports.drawn(self.encoded, None, now, info.update_ms);
+        self.host.frame_reports.drawn_with_present(self.encoded, self.encoded, None, now, info.update_ms, false);
         self.host.app.inspect_frame();
         let Some(l) = self.host.win.as_mut() else { return };
         let next_tick = l.next_tick(now).filter(|_| !self.hidden);

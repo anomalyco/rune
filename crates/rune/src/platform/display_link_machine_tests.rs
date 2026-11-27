@@ -139,7 +139,7 @@ impl SimLink {
         let opp = self.core.claim(tick, now);
         match opp {
             Opportunity::Tick(_) => self.tick_opportunities += 1,
-            Opportunity::Now => self.now_opportunities += 1,
+            Opportunity::Now | Opportunity::UrgentNow => self.now_opportunities += 1,
             Opportunity::Wait => {
                 self.wait_opportunities += 1;
                 return false;
@@ -479,7 +479,7 @@ fn drive_stream(
         let target = now + hw_period;
         before_tick(core, i, now);
         match core.claim(Some(target), now) {
-            Opportunity::Tick(_) | Opportunity::Now => {
+            Opportunity::Tick(_) | Opportunity::Now | Opportunity::UrgentNow => {
                 core.presented(now + frame_work);
                 if count_range.contains(&i) {
                     draws += 1;
@@ -664,7 +664,7 @@ fn ambient_fps_unbroken_steered_run_holds_120hz_until_2s_ceiling_then_caps() {
         let now = t0 + period_120 * i;
         let target = now + period_120;
         match core.claim(Some(target), now) {
-            Opportunity::Tick(_) | Opportunity::Now => {
+            Opportunity::Tick(_) | Opportunity::Now | Opportunity::UrgentNow => {
                 core.presented(now + frame_work);
                 draws_after_2s += 1;
             }
@@ -712,7 +712,7 @@ fn ambient_fps_reply_after_gap_caps_at_60hz_once_600ms_elapses() {
         let now = t0 + period_120 * i;
         let target = now + period_120;
         match core.claim(Some(target), now) {
-            Opportunity::Tick(_) | Opportunity::Now => {
+            Opportunity::Tick(_) | Opportunity::Now | Opportunity::UrgentNow => {
                 core.presented(now + frame_work);
                 draws_after_600 += 1;
             }

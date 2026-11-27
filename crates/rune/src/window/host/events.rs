@@ -889,7 +889,7 @@ impl Host {
         // `RedrawRequested` in winit's queue. Skip it while resting with nothing changed so it
         // cannot bump a coasting display link back to `Active` for a duplicate frame.
         #[cfg(target_os = "macos")]
-        if satisfied && self.win.as_ref().is_some_and(|l| l.presented.is_some()) {
+        if satisfied && self.win.as_ref().is_some_and(|l| l.presented.is_some() && !l.has_urgent_admission()) {
             let rt = self.app.rt();
             if !rt.stale() && !rt.live_pending() && !rt.has_pending_input() && rt.host.window_frame.is_none() {
                 return;
