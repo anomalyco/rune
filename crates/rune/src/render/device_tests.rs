@@ -927,3 +927,11 @@ fn gpu_memory_policy_reaches_offscreen_device_and_invalidates_parked_gpu() {
         );
     }
 }
+/// A compositor's compute renderer binds work buffers as large as the adapter allows, not wgpu's
+/// 128 MiB default storage binding.
+#[test]
+fn devices_take_the_adapters_buffer_sizes() {
+    let Some(gpu) = Gpu::test_headless_or_noop() else { return };
+    let sizes = |l: wgpu::Limits| (l.max_buffer_size, l.max_storage_buffer_binding_size, l.max_uniform_buffer_binding_size);
+    assert_eq!(sizes(gpu.device.limits()), sizes(gpu.adapter.limits()));
+}

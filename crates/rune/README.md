@@ -3524,9 +3524,11 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
   `Compositor::release_gpu`, and call `Frame::restore_device_callbacks()` right after initializing
   a renderer that overwrites wgpu's single-slot `set_device_lost_callback` or
   `on_uncaptured_error` handlers so Rune keeps owning device-loss recovery and bounded error
-  logging. On macOS, engines that need depth/stencil, MSAA, render bundles, indirect draws, or
-  other wgpu features beyond Rune's native Metal subset should opt into
-  `App::gpu_backend(GpuBackend::Wgpu)` and `prewarm_gpu_on(GpuBackend::Wgpu)`.
+  logging. Compute renderers, indirect dispatches included (vello's), run on macOS's native Metal
+  backend, and Rune's device takes the adapter's buffer and binding sizes. On macOS, engines that
+  need depth/stencil, MSAA, render bundles, indirect draws, or other wgpu features beyond Rune's
+  native Metal subset should opt into `App::gpu_backend(GpuBackend::Wgpu)` and
+  `prewarm_gpu_on(GpuBackend::Wgpu)`.
 - **Terminal GPU loss policy (`GpuLossPolicy::Terminal`).** Apps embedding a renderer with
   device-bound resources that cannot silently migrate to a replacement device can opt in via
   `App::gpu_loss_policy(GpuLossPolicy::Terminal)` or `WindowSpec::gpu_loss_policy`. The first GPU

@@ -241,10 +241,22 @@ fn info(device: &ProtocolObject<dyn MTLDevice>) -> wgpu::AdapterInfo {
     info
 }
 
-/// What a Metal GPU of the Apple or Mac 2 families can do, in wgpu's terms.
-fn limits() -> wgpu::Limits {
+/// What `device`, a Metal GPU of the Apple or Mac 2 families, can do, in wgpu's terms. Buffer and
+/// binding sizes and compute workgroups are the device's own, as wgpu reports them: a compute
+/// renderer sizing its work buffers from `Adapter::limits` isn't held to wgpu's defaults. Sizes
+/// stop at `u32::MAX` as wgpu-core's do, since shaders read binding sizes as `u32`s.
+fn limits(device: &ProtocolObject<dyn MTLDevice>) -> wgpu::Limits {
+    let buffer = (device.maxBufferLength() as u64).min(u64::from(u32::MAX));
+    let storage = buffer & !(u64::from(wgpu::wgt::STORAGE_BINDING_SIZE_ALIGNMENT) - 1);
+    let threads = device.maxThreadsPerThreadgroup();
     wgpu::Limits {
-        max_texture_dimension_1d: 16384, max_texture_dimension_2d: 16384, max_buffer_size: 1 << 30, max_immediate_size: MAX_IMMEDIATE_SIZE,
+        max_texture_dimension_1d: 16384, max_texture_dimension_2d: 16384, max_immediate_size: MAX_IMMEDIATE_SIZE,
+        max_buffer_size: buffer, max_storage_buffer_binding_size: storage, max_uniform_buffer_binding_size: buffer,
+        max_compute_workgroup_storage_size: device.maxThreadgroupMemoryLength() as u32,
+        max_compute_invocations_per_workgroup: threads.width as u32,
+        max_compute_workgroup_size_x: threads.width as u32,
+        max_compute_workgroup_size_y: threads.height as u32,
+        max_compute_workgroup_size_z: threads.depth as u32,
         ..wgpu::Limits::default()
     }
 }
@@ -258,7 +270,7 @@ impl AdapterInterface for MetalAdapter {
     fn features(&self) -> wgpu::Features {
         if query::supported(&self.device) { FEATURES } else { FEATURES - wgpu::Features::TIMESTAMP_QUERY }
     }
-    fn limits(&self) -> wgpu::Limits { limits() }
+    fn limits(&self) -> wgpu::Limits { limits(&self.device) }
     fn downlevel_capabilities(&self) -> wgpu::DownlevelCapabilities { Default::default() }
     fn get_info(&self) -> wgpu::AdapterInfo { info(&self.device) }
     fn get_texture_format_features(&self, format: wgpu::TextureFormat) -> wgpu::TextureFormatFeatures {

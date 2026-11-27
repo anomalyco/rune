@@ -30,6 +30,19 @@ static DIRECT_VULKAN_BYPASSED: AtomicBool = AtomicBool::new(false);
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_VIEWS: u32 = 65_536;
 
+/// `limits` with the adapter's buffer and binding sizes. They only bound what validation
+/// accepts, so the largest cost nothing, and a compositor's compute renderer can bind work
+/// buffers past wgpu's 128 MiB default storage binding (vello's grow past it on big windows).
+#[cfg(not(target_arch = "wasm32"))]
+fn buffer_sizes(limits: wgpu::Limits, adapter: &wgpu::Limits) -> wgpu::Limits {
+    wgpu::Limits {
+        max_buffer_size: adapter.max_buffer_size,
+        max_storage_buffer_binding_size: adapter.max_storage_buffer_binding_size,
+        max_uniform_buffer_binding_size: adapter.max_uniform_buffer_binding_size,
+        ..limits
+    }
+}
+
 /// Vulkan loaders crash when two threads create instances or devices at once (seen with
 /// parallel GPU tests on lavapipe), so Rune creates them one at a time.
 static GPU_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -243,7 +256,7 @@ impl Gpu {
             wgpu::Limits {
                 max_immediate_size,
                 max_non_sampler_bindings: views,
-                ..wgpu::Limits::downlevel_defaults()
+                ..buffer_sizes(wgpu::Limits::downlevel_defaults(), &adapter_limits)
                     .using_resolution(adapter_limits.clone())
                     .using_alignment(adapter_limits)
             }
@@ -251,7 +264,7 @@ impl Gpu {
             wgpu::Limits {
                 max_immediate_size,
                 max_non_sampler_bindings: views,
-                ..wgpu::Limits::default()
+                ..buffer_sizes(wgpu::Limits::default(), &adapter_limits)
                     .using_resolution(adapter_limits.clone())
                     .using_alignment(adapter_limits)
             }

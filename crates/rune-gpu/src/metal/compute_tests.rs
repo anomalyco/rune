@@ -561,3 +561,16 @@ fn indirect_dispatch_reads_counts_an_earlier_dispatch_wrote() {
     assert_eq!(ours, run_indirect(&wgpu_device, &wgpu_queue), "differs from wgpu's");
 }
 
+#[test]
+fn limits_are_the_devices_own() {
+    let ours = pollster::block_on(instance().request_adapter(&Default::default())).unwrap().limits();
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+    descriptor.backends = wgpu::Backends::METAL;
+    let theirs = pollster::block_on(wgpu::Instance::new(descriptor).request_adapter(&Default::default())).unwrap().limits();
+    let sizes = |l: &wgpu::Limits| (l.max_buffer_size, l.max_storage_buffer_binding_size, l.max_uniform_buffer_binding_size);
+    assert_eq!(sizes(&ours), sizes(&theirs), "buffer and binding sizes, as wgpu-hal reads them");
+    assert!(ours.max_storage_buffer_binding_size > wgpu::Limits::default().max_storage_buffer_binding_size, "past wgpu's 128 MiB default");
+    let compute = |l: &wgpu::Limits| (l.max_compute_workgroup_storage_size, l.max_compute_invocations_per_workgroup,
+        l.max_compute_workgroup_size_x, l.max_compute_workgroup_size_y, l.max_compute_workgroup_size_z);
+    assert_eq!(compute(&ours), compute(&theirs), "compute workgroups");
+}
