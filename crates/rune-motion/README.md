@@ -54,7 +54,7 @@ let x = store.get(id, X);
 | Gestures | `VelocityTracker`, `project`, `rubber_band*`, `deceleration`. |
 | `Animated<T>` | A single value outside any store, for one-off widgets. |
 | `Clock` / `ManualClock` | A display clock with pause, scale and seek, and a separate manual clock for tests and offline renders. |
-| `LoopTrack` / `LoopSpec` | Periodic and finite loops (`opacity`, `rotation`, `cycle`, `slide`, one-shot or `Sequence::repeating()`, and finite slide runs via `LoopTrack::with_times`). `retime` / `retime_with_times` preserve phase across periodic speed changes; `enabled` springs amplitude toward rest. The renderer owns visibility and scheduling. |
+| `LoopTrack` / `LoopSpec` | Periodic and finite loops (`opacity`, `rotation`, `cycle`, `slide`, one-shot, `Sequence::release()`, or `Sequence::repeating()`, and finite slide runs via `LoopTrack::with_times`). `retime` / `retime_with_times` preserve phase across periodic speed changes; `enabled` springs amplitude toward rest. The renderer owns visibility and scheduling. |
 | `MotionTrace` | motion-trace JSONL. `MotionTrace::from_env` opens `$RUNE_MOTION_TRACE`. |
 
 ### Kit's motion rules are the defaults

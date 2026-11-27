@@ -380,11 +380,12 @@ impl El {
         self
     }
     /// An opacity, scale, translate and rotate keyframe sequence ([`Beat`](rune_motion::Beat))
-    /// on the shared render clock: one-shot by default
-    /// (holding its final pose, landing immediately under Reduce Motion or explicit settle; a new
-    /// key replays it), or looping continuously with
-    /// [`Sequence::repeating`](rune_motion::Sequence::repeating) (holding its calm first pose
-    /// under Reduce Motion and cooling smoothly on removal).
+    /// on the shared render clock: one-shot holding its final pose by default (landing
+    /// immediately under Reduce Motion or explicit settle; a new key replays it), returning to
+    /// the element's own pose when not playing with
+    /// [`Sequence::release`](rune_motion::Sequence::release) (like CSS `animation-fill-mode: none`),
+    /// or looping continuously with [`Sequence::repeating`](rune_motion::Sequence::repeating)
+    /// (holding its calm first pose under Reduce Motion and cooling smoothly on removal).
     pub fn sequence(self, frames: rune_motion::Sequence) -> Self {
         self.looping(rune_motion::LoopSpec::sequence(frames))
     }

@@ -177,3 +177,109 @@ fn dropping_a_repeating_moving_sequence_springs_exactly_home_and_sleeps() {
     assert_eq!(rt.presented_pose("swaying").unwrap().rotation(), 0.05);
     assert!(!rt.animating);
 }
+
+#[test]
+fn a_releasing_moving_sequence_returns_offset_and_rotate_to_element_rest_and_sleeps() {
+    const FLOURISH: &[Beat] = &[
+        Beat::new(0.0).translate(-6.0, 2.0).rotate(-0.4),
+        Beat::new(0.2).translate(10.0, -4.0).rotate(std::f32::consts::PI).easing(Easing::LINEAR),
+    ];
+    struct Icon {
+        play: u32,
+        offset: [f32; 2],
+        rotate: f32,
+        delay: f64,
+        reduced: bool,
+        tick: u32,
+    }
+    fn view(s: &Icon, cx: &mut crate::Cx<Icon>) -> crate::El {
+        if s.reduced { cx.reduced_motion(true); }
+        let _ = s.tick;
+        let mut seq = Sequence::new(FLOURISH).release();
+        if s.delay > 0.0 { seq = seq.delay(s.delay); }
+        crate::el().size(300.0, 300.0).child(
+            crate::el().key(format!("icon-{}", s.play)).absolute(100.0, 100.0).size(20.0, 20.0)
+                .fill(crate::Color::WHITE).transition(crate::Transition::none())
+                .offset(s.offset[0], s.offset[1])
+                .rotate(s.rotate).rotate_motion(crate::Curve::tween(0.2, Easing::LINEAR))
+                .sequence(seq),
+        )
+    }
+    let pose = |rt: &crate::Runtime<Icon>, play: u32| {
+        let k = format!("icon-{play}");
+        let r = rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k.as_str())).unwrap().rect;
+        let centre = [r[0] + r[2] * 0.5, r[1] + r[3] * 0.5];
+        (centre, rt.presented_pose(&k).unwrap().rotation())
+    };
+    let mut rt = crate::Runtime::new(
+        Icon { play: 0, offset: [4.0, -3.0], rotate: 0.25, delay: 0.0, reduced: false, tick: 0 },
+        view, (300.0, 300.0), crate::Env::new(true, 1.0),
+    );
+    // Starts on beat 0 on top of the element's own offset (4, -3) and rotation 0.25.
+    assert!(rt.frame(0.0));
+    let (c, rot) = pose(&rt, 0);
+    assert!((c[0] - 108.0).abs() < 0.05 && (c[1] - 109.0).abs() < 0.05, "start {c:?}");
+    assert!((rot - (0.25 - 0.4)).abs() < 1e-4, "start rot {rot}");
+    // Mid-play (t = 0.1): translate (2, -1), rotate (PI - 0.4) / 2.
+    assert!(rt.frame(0.1));
+    let (c, rot) = pose(&rt, 0);
+    assert!((c[0] - 116.0).abs() < 0.05 && (c[1] - 106.0).abs() < 0.05, "mid {c:?}");
+    assert!((rot - (0.25 + (std::f32::consts::PI - 0.4) * 0.5)).abs() < 1e-3, "mid rot {rot}");
+    // Unrelated commit on the exact ending frame must still snap cleanly to rest, never unwind.
+    rt.update(|s, _| s.tick += 1);
+    assert!(!rt.frame(0.1), "ending frame sleeps immediately");
+    assert!(!rt.animating);
+    assert_eq!(rt.wake_deadline(), None);
+    let (c, rot) = pose(&rt, 0);
+    assert!((c[0] - 114.0).abs() < 0.05 && (c[1] - 107.0).abs() < 0.05, "rest {c:?}");
+    assert!((rot - 0.25).abs() < 1e-5, "rest rot {rot}");
+    // Later unrelated commits keep the element at its own pose and asleep.
+    rt.update(|s, _| s.tick += 1);
+    assert!(!rt.frame(1.0 / 60.0));
+    let (c, rot) = pose(&rt, 0);
+    assert!((c[0] - 114.0).abs() < 0.05 && (c[1] - 107.0).abs() < 0.05);
+    assert!((rot - 0.25).abs() < 1e-5);
+    // A later `El::rotate` change still tweens on `rotate_motion` from the resting angle.
+    rt.update(|s, _| s.rotate = 0.75);
+    rt.frame(0.0);
+    rt.frame(0.1);
+    let (_, mid_rot) = pose(&rt, 0);
+    assert!(mid_rot > 0.35 && mid_rot < 0.65, "rotate tweens after release: {mid_rot}");
+    for _ in 0..30 { rt.frame(1.0 / 60.0); }
+    assert!((pose(&rt, 0).1 - 0.75).abs() < 1e-5);
+    assert!(!rt.animating);
+    // Changing the key replays the flourish over the new resting rotation, then releases back.
+    rt.update(|s, _| s.play = 1);
+    assert!(rt.frame(0.0));
+    assert!((pose(&rt, 1).1 - (0.75 - 0.4)).abs() < 1e-4);
+    assert!(!rt.frame(0.25));
+    assert!(!rt.animating);
+    let (c, rot) = pose(&rt, 1);
+    assert!((c[0] - 114.0).abs() < 0.05 && (c[1] - 107.0).abs() < 0.05);
+    assert!((rot - 0.75).abs() < 1e-5);
+    // Delayed release keeps the element's own pose during the delay, then plays and releases.
+    let mut delayed = crate::Runtime::new(
+        Icon { play: 0, offset: [4.0, -3.0], rotate: 0.25, delay: 0.5, reduced: false, tick: 0 },
+        view, (300.0, 300.0), crate::Env::new(true, 1.0),
+    );
+    assert!(!delayed.frame(0.0));
+    assert_eq!(delayed.wake_deadline(), Some(0.5));
+    let (c, rot) = pose(&delayed, 0);
+    assert!((c[0] - 114.0).abs() < 0.05 && (c[1] - 107.0).abs() < 0.05, "delay rest {c:?}");
+    assert!((rot - 0.25).abs() < 1e-5, "delay rest rot {rot}");
+    assert!(delayed.frame(0.5));
+    assert!((pose(&delayed, 0).1 - (0.25 - 0.4)).abs() < 1e-4);
+    assert!(!delayed.frame(0.2));
+    assert!(!delayed.animating);
+    assert!((pose(&delayed, 0).1 - 0.25).abs() < 1e-5);
+    // Reduce Motion rests immediately at the element's own pose and sleeps.
+    let mut reduced = crate::Runtime::new(
+        Icon { play: 0, offset: [4.0, -3.0], rotate: 0.25, delay: 0.0, reduced: true, tick: 0 },
+        view, (300.0, 300.0), crate::Env::new(true, 1.0),
+    );
+    assert!(!reduced.frame(0.0));
+    let (c, rot) = pose(&reduced, 0);
+    assert!((c[0] - 114.0).abs() < 0.05 && (c[1] - 107.0).abs() < 0.05);
+    assert!((rot - 0.25).abs() < 1e-5);
+    assert_eq!(reduced.wake_deadline(), None);
+}

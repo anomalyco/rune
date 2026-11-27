@@ -1,4 +1,5 @@
 //! Clock-driven periodic and finite motion. Visibility is a renderer decision, not a second clock.
+use crate::sequence::SequenceMode;
 use crate::{Animated, Beat, Cycle, Easing, Sequence, PropClass, Spring};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -126,7 +127,7 @@ impl LoopTrack {
     /// assert!(!LoopTrack::new(LoopSpec::rotation(1.0), 0.0).is_finite());
     /// ```
     pub fn is_finite(&self) -> bool {
-        matches!(self.spec.kind, LoopKind::Sequence(frames) if !frames.repeating)
+        matches!(self.spec.kind, LoopKind::Sequence(frames) if !frames.is_repeating())
             || (is_slide(self.spec.kind) && self.times.is_some())
     }
     fn total_duration(&self) -> f64 {
@@ -173,7 +174,7 @@ impl LoopTrack {
         assert!(spec.period.is_finite() && spec.period > 0.0);
         let times = times.filter(|_| is_slide(spec.kind));
         if self.spec == spec && self.times == times { return; }
-        let new_finite = matches!(spec.kind, LoopKind::Sequence(frames) if !frames.repeating) || times.is_some();
+        let new_finite = matches!(spec.kind, LoopKind::Sequence(frames) if !frames.is_repeating()) || times.is_some();
         if self.is_finite() || new_finite {
             *self = match times {
                 Some(n) => Self::with_times(spec, n, now),
@@ -280,20 +281,25 @@ impl LoopTrack {
     }
     pub fn pose(&self, now: f64, reduced: bool) -> Option<Beat> {
         let LoopKind::Sequence(frames) = self.spec.kind else { return None };
-        if frames.repeating {
-            let at = if reduced { 0.0 } else { self.phase(now) * frames.duration() };
-            let mut p = frames.sample(at);
-            let a = self.amplitude.sample(now);
-            if a < 1.0 {
-                p.opacity = 1.0 + (p.opacity - 1.0) * a;
-                p.scale = (1.0 + (p.scale - 1.0) * a).max(0.0);
-                p.translate = p.translate.map(|v| v * a);
-                p.rotate *= a;
+        match frames.mode {
+            SequenceMode::Repeating => {
+                let at = if reduced { 0.0 } else { self.phase(now) * frames.duration() };
+                let mut p = frames.sample(at);
+                let a = self.amplitude.sample(now);
+                if a < 1.0 {
+                    p.opacity = 1.0 + (p.opacity - 1.0) * a;
+                    p.scale = (1.0 + (p.scale - 1.0) * a).max(0.0);
+                    p.translate = p.translate.map(|v| v * a);
+                    p.rotate *= a;
+                }
+                Some(p)
             }
-            return Some(p);
+            SequenceMode::Release if reduced || !self.active(now) => Some(frames.rest()),
+            SequenceMode::Hold | SequenceMode::Release => {
+                let at = if reduced || self.phase == Phase::Done { frames.duration() } else { self.phase(now) * frames.duration() };
+                Some(frames.sample(at))
+            }
         }
-        let at = if reduced || self.phase == Phase::Done { frames.duration() } else { self.phase(now) * frames.duration() };
-        Some(frames.sample(at))
     }
 }
 

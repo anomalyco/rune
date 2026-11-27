@@ -109,6 +109,72 @@ fn repeating_sequence_loops_without_commits_cools_on_removal_and_holds_first_pos
     assert_eq!(p.loop_phase, Some(0.0));
     assert_eq!(reduced.wake_deadline(), None);
 }
+#[test]
+fn releasing_sequence_returns_opacity_and_scale_to_element_rest_and_sleeps() {
+    const FLOURISH: &[crate::Beat] = &[
+        crate::Beat::new(0.0).opacity(0.25).scale(0.5),
+        crate::Beat::new(0.4).opacity(0.5).scale(1.5).easing(crate::Easing::LINEAR),
+    ];
+    fn view(play: &u32, _: &mut Cx<u32>) -> El {
+        el().key("root").size(200.0, 100.0).child(
+            el().key(format!("icon-{play}")).size(40.0, 40.0).fill(Color::WHITE)
+                .transition(crate::Transition::none())
+                .opacity(0.6).scale(1.5)
+                .sequence(crate::Sequence::new(FLOURISH).delay(0.2).release()),
+        )
+    }
+    let icon = |rt: &Runtime<u32>, play: u32| {
+        let k = format!("icon-{play}");
+        rt.elements().into_iter().find(|e| e.key.as_deref() == Some(k.as_str())).unwrap()
+    };
+    let make = || Runtime::new(0u32, view, (200.0, 100.0), Env::new(true, 1.0));
+    let mut rt = make();
+    // Waiting out delay: element keeps its own opacity (0.6) and scale (1.5) and sleeps until start.
+    assert!(!rt.frame(0.0));
+    assert_eq!(rt.wake_deadline(), Some(0.2));
+    let waiting = icon(&rt, 0);
+    assert!((waiting.opacity - 0.6).abs() < 1e-5 && (waiting.scale - 1.5).abs() < 1e-5);
+    let commits = rt.stats.commits;
+    // Mid-play (t = 0.4, halfway through [0.2, 0.6]): beat opacity = 0.375, scale = 1.0.
+    assert!(rt.frame(0.4));
+    let playing = icon(&rt, 0);
+    assert!((playing.opacity - 0.6 * 0.375).abs() < 1e-5);
+    assert!((playing.scale - 1.5 * 1.0).abs() < 1e-5);
+    assert_eq!(rt.stats.commits, commits, "releasing sequence runs with zero view commits");
+    // Unrelated commit mid-play does not restart the sequence.
+    rt.invalidate(); rt.frame(0.0);
+    assert!((icon(&rt, 0).opacity - 0.6 * 0.375).abs() < 1e-5);
+    // Completion (t = 0.6): returns to element's own opacity (0.6) and scale (1.5) and sleeps.
+    assert!(!rt.frame(0.2));
+    assert!(!rt.animating);
+    assert_eq!(rt.wake_deadline(), None);
+    let rested = icon(&rt, 0);
+    assert!((rested.opacity - 0.6).abs() < 1e-5 && (rested.scale - 1.5).abs() < 1e-5);
+    assert_eq!(rested.loop_phase, Some(1.0));
+    // Replaying with a new key plays again and releases back to rest.
+    rt.update(|g, _| *g = 1);
+    assert!(!rt.frame(0.0));
+    assert_eq!(rt.wake_deadline(), Some(0.8));
+    assert!(rt.frame(0.2));
+    assert!((icon(&rt, 1).opacity - 0.6 * 0.25).abs() < 1e-5);
+    assert!((icon(&rt, 1).scale - 1.5 * 0.5).abs() < 1e-5);
+    assert!(!rt.frame(0.4));
+    assert!(!rt.animating);
+    assert_eq!(rt.wake_deadline(), None);
+    let rested = icon(&rt, 1);
+    assert!((rested.opacity - 0.6).abs() < 1e-5 && (rested.scale - 1.5).abs() < 1e-5);
+    // Explicit settle and Reduce Motion land at the element's own pose and sleep.
+    let mut settled = make(); settled.frame(0.0); settled.settle_all();
+    assert!(!settled.frame(0.0));
+    let p = icon(&settled, 0);
+    assert!((p.opacity - 0.6).abs() < 1e-5 && (p.scale - 1.5).abs() < 1e-5);
+    assert_eq!(settled.wake_deadline(), None);
+    let mut reduced = make(); reduced.set_system_reduced_motion(true);
+    assert!(!reduced.frame(0.0));
+    let p = icon(&reduced, 0);
+    assert!((p.opacity - 0.6).abs() < 1e-5 && (p.scale - 1.5).abs() < 1e-5);
+    assert_eq!(reduced.wake_deadline(), None);
+}
 
 #[test]
 fn motion_curve_moves_layout_on_a_tween() {
