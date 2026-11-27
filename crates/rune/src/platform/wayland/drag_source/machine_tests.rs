@@ -97,9 +97,24 @@ fn dnd_action_mask_maps_copy_and_move_only() {
     assert_eq!(dnd_action_mask(true, false), DND_ACTION_COPY);
     assert_eq!(dnd_action_mask(false, true), DND_ACTION_MOVE);
     assert_eq!(dnd_action_mask(true, true), DND_ACTION_COPY | DND_ACTION_MOVE);
-    assert_eq!(SourceAction::from_wayland_mask(DND_ACTION_COPY).to_outcome(), DragOutcome::Copied);
-    assert_eq!(SourceAction::from_wayland_mask(DND_ACTION_MOVE).to_outcome(), DragOutcome::Moved);
-    assert_eq!(SourceAction::from_wayland_mask(DND_ACTION_NONE).to_outcome(), DragOutcome::Cancelled);
+    assert_eq!(SourceAction::from_wayland_mask(DND_ACTION_COPY), SourceAction::Copy);
+    assert_eq!(SourceAction::from_wayland_mask(DND_ACTION_MOVE), SourceAction::Move);
+    assert_eq!(SourceAction::from_wayland_mask(DND_ACTION_NONE), SourceAction::None);
+    assert_eq!(
+        SourceAction::Copy.finished_outcome(DND_ACTION_COPY | DND_ACTION_MOVE),
+        DragOutcome::Copied,
+    );
+    assert_eq!(
+        SourceAction::Move.finished_outcome(DND_ACTION_COPY | DND_ACTION_MOVE),
+        DragOutcome::Moved,
+    );
+    assert_eq!(SourceAction::None.finished_outcome(DND_ACTION_COPY), DragOutcome::Copied);
+    assert_eq!(
+        SourceAction::None.finished_outcome(DND_ACTION_COPY | DND_ACTION_MOVE),
+        DragOutcome::Copied,
+    );
+    assert_eq!(SourceAction::None.finished_outcome(DND_ACTION_MOVE), DragOutcome::Moved);
+    assert_eq!(SourceAction::None.finished_outcome(DND_ACTION_NONE), DragOutcome::Cancelled);
 }
 
 #[test]
@@ -257,5 +272,80 @@ fn compositor_event_order_variants_and_escape_after_hover_send_behave_per_protoc
     let _ = step(&mut state, Event::DropPerformed { drag_id: 22 });
     let drop_cancel_fx = step(&mut state, Event::Cancelled { drag_id: 22 });
     assert!(drop_cancel_fx.contains(&Effect::Complete { drag_id: 22, outcome: DragOutcome::Cancelled }));
+    assert_eq!(state, State::Idle);
+}
+
+#[test]
+fn v3_dnd_finished_without_action_falls_back_safely_to_offered_action() {
+    // Reproduces Hyprland <= v0.57.2, which emits target -> (optional send / dnd_drop_performed)
+    // -> dnd_finished without ever sending wl_data_source.action.
+    let offers = assemble_offers([], &[], None, Some("payload"));
+
+    // 1. Copy-only drag with DropPerformed -> Finished (no Action event) => Copied.
+    let mut state = State::Idle;
+    let _ = step(&mut state, Event::Start {
+        drag_id: 30, seat: 1, origin_surface: 1, serial: 1, version: 3,
+        within_app: false, offers: offers.clone(), actions_mask: DND_ACTION_COPY, with_icon: false,
+    });
+    let _ = step(&mut state, Event::Target { drag_id: 30, mime: Some(MIME_TEXT_UTF8.into()) });
+    let _ = step(&mut state, Event::DropPerformed { drag_id: 30 });
+    let fx = step(&mut state, Event::Finished { drag_id: 30 });
+    assert!(fx.contains(&Effect::Complete { drag_id: 30, outcome: DragOutcome::Copied }));
+    assert_eq!(state, State::Idle);
+
+    // 2. Copy | Move drag with Target -> Send -> Finished (no DropPerformed, no Action) => Copied
+    //    (never falsely reports Moved on a Copy | Move drag).
+    let _ = step(&mut state, Event::Start {
+        drag_id: 31, seat: 1, origin_surface: 1, serial: 2, version: 3,
+        within_app: false, offers: offers.clone(),
+        actions_mask: DND_ACTION_COPY | DND_ACTION_MOVE, with_icon: false,
+    });
+    let _ = step(&mut state, Event::Target { drag_id: 31, mime: Some(MIME_TEXT_UTF8.into()) });
+    let _ = step(&mut state, Event::Send { drag_id: 31, mime: MIME_TEXT_UTF8.into(), fd_id: 1 });
+    let fx = step(&mut state, Event::Finished { drag_id: 31 });
+    assert!(fx.contains(&Effect::Complete { drag_id: 31, outcome: DragOutcome::Copied }));
+    assert_eq!(state, State::Idle);
+
+    // 3. Move-only drag without Action => Moved (single offered action).
+    let _ = step(&mut state, Event::Start {
+        drag_id: 32, seat: 1, origin_surface: 1, serial: 3, version: 3,
+        within_app: false, offers: offers.clone(), actions_mask: DND_ACTION_MOVE, with_icon: false,
+    });
+    let _ = step(&mut state, Event::DropPerformed { drag_id: 32 });
+    let fx = step(&mut state, Event::Finished { drag_id: 32 });
+    assert!(fx.contains(&Effect::Complete { drag_id: 32, outcome: DragOutcome::Moved }));
+    assert_eq!(state, State::Idle);
+
+    // 4. Drag offering neither Copy nor Move (e.g. Link-only on Wayland) without Action => Cancelled.
+    let _ = step(&mut state, Event::Start {
+        drag_id: 33, seat: 1, origin_surface: 1, serial: 4, version: 3,
+        within_app: false, offers: offers.clone(), actions_mask: DND_ACTION_NONE, with_icon: false,
+    });
+    let fx = step(&mut state, Event::Finished { drag_id: 33 });
+    assert!(fx.contains(&Effect::Complete { drag_id: 33, outcome: DragOutcome::Cancelled }));
+    assert_eq!(state, State::Idle);
+
+    // 5. Explicit Cancelled without Action still reports Cancelled (not Copied).
+    let _ = step(&mut state, Event::Start {
+        drag_id: 34, seat: 1, origin_surface: 1, serial: 5, version: 3,
+        within_app: false, offers: offers.clone(),
+        actions_mask: DND_ACTION_COPY | DND_ACTION_MOVE, with_icon: false,
+    });
+    let _ = step(&mut state, Event::Target { drag_id: 34, mime: Some(MIME_TEXT_UTF8.into()) });
+    let _ = step(&mut state, Event::Send { drag_id: 34, mime: MIME_TEXT_UTF8.into(), fd_id: 2 });
+    let fx = step(&mut state, Event::Cancelled { drag_id: 34 });
+    assert!(fx.contains(&Effect::Complete { drag_id: 34, outcome: DragOutcome::Cancelled }));
+    assert_eq!(state, State::Idle);
+
+    // 6. Explicit Action(Move) on Copy | Move drag still reports Moved on Finished.
+    let _ = step(&mut state, Event::Start {
+        drag_id: 35, seat: 1, origin_surface: 1, serial: 6, version: 3,
+        within_app: false, offers,
+        actions_mask: DND_ACTION_COPY | DND_ACTION_MOVE, with_icon: false,
+    });
+    let _ = step(&mut state, Event::Action { drag_id: 35, mask: DND_ACTION_MOVE });
+    let _ = step(&mut state, Event::DropPerformed { drag_id: 35 });
+    let fx = step(&mut state, Event::Finished { drag_id: 35 });
+    assert!(fx.contains(&Effect::Complete { drag_id: 35, outcome: DragOutcome::Moved }));
     assert_eq!(state, State::Idle);
 }
