@@ -110,6 +110,16 @@ pub struct Tx {
     pub(crate) drop_point: Option<PointerEvent>,
     /// `Tx::drag_paths`.
     pub(crate) drag_paths: Option<Rc<[std::path::PathBuf]>>,
+    /// `Tx::drag_mods`.
+    pub(crate) drag_mods: crate::Mods,
+    /// `Tx::drag_operations`.
+    pub(crate) drag_operations: crate::DragOperations,
+    /// `Tx::drop_operation`.
+    pub(crate) drop_operation: Option<crate::DragOperation>,
+    /// `Tx::set_drop_operation`: `Some(op)` overrides the hovered target's drop operation.
+    pub(crate) drop_op_set: Option<Option<crate::DragOperation>>,
+    /// `Tx::set_drop_description`: `Some(desc)` overrides the hovered target's drop description.
+    pub(crate) drop_desc_set: Option<Option<crate::el::DropDescription>>,
     pub(crate) title: Option<String>,
     pub(crate) color_scheme: Option<crate::ColorScheme>,
     pub(crate) window_backdrop: Option<crate::WindowBackdrop>,

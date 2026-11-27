@@ -380,17 +380,31 @@ impl<S: 'static> Runtime<S> {
     #[inline(always)]
     pub fn drag_files(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>) { self.core_mut().drag_files(paths, at); }
     #[inline(always)]
+    pub fn drag_files_with(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>, mods: crate::Mods, allowed: crate::DragOperations) {
+        self.core_mut().drag_files_with(paths, at, mods, allowed);
+    }
+    #[inline(always)]
     pub fn drag_files_to(&mut self, at: Option<(f32, f32)>) -> bool { self.core_mut().drag_files_to(at) }
+    #[inline(always)]
+    pub fn drag_files_to_with(&mut self, at: Option<(f32, f32)>, mods: crate::Mods, allowed: crate::DragOperations) -> bool {
+        self.core_mut().drag_files_to_with(at, mods, allowed)
+    }
     #[inline(always)]
     pub fn drag_files_leave(&mut self) { self.core_mut().drag_files_leave(); }
     #[inline(always)]
     pub fn drop_files(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>) { self.core_mut().drop_files(paths, at); }
+    #[inline(always)]
+    pub fn drop_files_with(&mut self, paths: Vec<PathBuf>, at: Option<(f32, f32)>, mods: crate::Mods, allowed: crate::DragOperations, operation: Option<crate::DragOperation>) {
+        self.core_mut().drop_files_with(paths, at, mods, allowed, operation);
+    }
     #[inline(always)]
     pub fn dragging_files(&self) -> bool { self.core().dragging_files() }
     #[inline(always)]
     pub fn drop_hovered(&self) -> Option<String> { self.core().drop_hovered() }
     #[inline(always)]
     pub fn drop_rejected_hovered(&self) -> Option<String> { self.core().drop_rejected_hovered() }
+    #[inline(always)]
+    pub fn drop_feedback(&self) -> Option<&crate::DropFeedback> { self.core().drop_feedback() }
 
     #[inline(always)]
     pub(crate) fn take_drag_out(&mut self) -> Option<crate::drag_out::DragOutStart> { self.core_mut().take_drag_out() }

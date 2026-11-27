@@ -863,8 +863,11 @@ fn wayland_file_steps_drive_nested_targets_drop_move_and_drop_point() {
         for step in windows.take(surface) {
             match step {
                 FileStep::Enter(paths, at) => rt.drag_files(paths, at),
+                FileStep::EnterWith { paths, at, mods, allowed } => rt.drag_files_with(paths, Some(at), mods, allowed),
                 FileStep::Move(at) => { let _ = rt.drag_files_to(Some(at)); }
+                FileStep::MoveWith { at, mods, allowed } => { let _ = rt.drag_files_to_with(Some(at), mods, allowed); }
                 FileStep::Drop(paths, at) => rt.drop_files(paths, at),
+                FileStep::DropWith { paths, at, mods, allowed, operation } => rt.drop_files_with(paths, Some(at), mods, allowed, operation),
                 FileStep::Leave => rt.drag_files_leave(),
             }
         }

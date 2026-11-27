@@ -20,9 +20,30 @@ pub(super) struct FileDrop {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FileStep {
     Enter(Vec<PathBuf>, Option<(f32, f32)>),
-    #[cfg_attr(not(any(test, target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+    #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+    EnterWith {
+        paths: Vec<PathBuf>,
+        at: (f32, f32),
+        mods: crate::Mods,
+        allowed: crate::DragOperations,
+    },
+    #[cfg_attr(not(any(test, target_os = "macos", all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     Move((f32, f32)),
+    #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+    MoveWith {
+        at: (f32, f32),
+        mods: crate::Mods,
+        allowed: crate::DragOperations,
+    },
     Drop(Vec<PathBuf>, Option<(f32, f32)>),
+    #[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
+    DropWith {
+        paths: Vec<PathBuf>,
+        at: (f32, f32),
+        mods: crate::Mods,
+        allowed: crate::DragOperations,
+        operation: Option<crate::DragOperation>,
+    },
     Leave,
 }
 
@@ -61,11 +82,20 @@ impl FileDrop {
                     rt.drag_files(paths, at);
                     true
                 }
+                FileStep::EnterWith { paths, at, mods, allowed } => {
+                    rt.drag_files_with(paths, Some(view_at(at)), mods, allowed);
+                    true
+                }
                 FileStep::Move(p) => rt.drag_files_to(Some(view_at(p))),
+                FileStep::MoveWith { at, mods, allowed } => rt.drag_files_to_with(Some(view_at(at)), mods, allowed),
                 FileStep::Drop(paths, Some(p)) => { rt.drop_files(paths, Some(view_at(p))); true }
                 FileStep::Drop(paths, None) => {
                     let at = drop_at(self).or_else(|| rt.pointer());
                     rt.drop_files(paths, at);
+                    true
+                }
+                FileStep::DropWith { paths, at, mods, allowed, operation } => {
+                    rt.drop_files_with(paths, Some(view_at(at)), mods, allowed, operation);
                     true
                 }
                 FileStep::Leave => {

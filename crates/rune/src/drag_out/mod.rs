@@ -252,6 +252,8 @@ impl DragItem {
     pub fn drops_within_app(&self) -> bool { self.within_app }
     /// Whether the drag offers `operation` to the target.
     pub fn offers(&self, operation: DragOperation) -> bool { self.operations & operation.bit() != 0 }
+    /// All operations this drag offers to the target.
+    pub fn operations(&self) -> DragOperations { DragOperations(self.operations) }
     /// The colour the drag image is shown over, from [`DragItem::opaque`].
     pub fn backing(&self) -> Option<Color> { self.backing }
     /// Carries nothing a target could receive.
@@ -273,9 +275,84 @@ pub enum DragOperation {
 }
 
 impl DragOperation {
-    fn bit(self) -> u8 {
+    const fn bit(self) -> u8 {
         match self { Self::Copy => 1, Self::Move => 2, Self::Link => 4 }
     }
+}
+
+/// Set of [`DragOperation`]s a drag source allows (or a drop target accepts).
+///
+/// ```
+/// # use rune::{DragOperation, DragOperations, Mods};
+/// let allowed = DragOperations::COPY | DragOperations::MOVE;
+/// assert!(allowed.contains(DragOperation::Move));
+/// assert_eq!(allowed.resolve(Mods { shift: true, ..Mods::default() }), Some(DragOperation::Move));
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DragOperations(u8);
+
+impl DragOperations {
+    pub const NONE: Self = Self(0);
+    pub const COPY: Self = Self(DragOperation::Copy.bit());
+    pub const MOVE: Self = Self(DragOperation::Move.bit());
+    pub const LINK: Self = Self(DragOperation::Link.bit());
+    pub const ALL: Self = Self(DragOperation::Copy.bit() | DragOperation::Move.bit() | DragOperation::Link.bit());
+
+    /// A set containing only `operation`.
+    pub const fn from_operation(operation: DragOperation) -> Self { Self(operation.bit()) }
+    /// Whether no operations are allowed.
+    pub const fn is_empty(self) -> bool { self.0 == 0 }
+    /// Whether `operation` is allowed.
+    pub const fn contains(self, operation: DragOperation) -> bool { self.0 & operation.bit() != 0 }
+    /// Returns `self` with `operation` added.
+    pub const fn with(self, operation: DragOperation) -> Self { Self(self.0 | operation.bit()) }
+    /// Operations allowed by either `self` or `other`.
+    pub const fn union(self, other: Self) -> Self { Self(self.0 | other.0) }
+    /// Operations allowed by both `self` and `other`.
+    pub const fn intersection(self, other: Self) -> Self { Self(self.0 & other.0) }
+
+    /// Standard desktop modifier resolution among the operations in `self`:
+    /// `Ctrl+Shift` or `Alt` prefers [`DragOperation::Link`], `Shift` prefers
+    /// [`DragOperation::Move`], `Ctrl` prefers [`DragOperation::Copy`], and no modifier falls
+    /// back to `Copy`, then `Move`, then `Link`. Returns `None` when `self` is empty.
+    pub fn resolve(self, mods: crate::Mods) -> Option<DragOperation> {
+        if self.is_empty() { return None; }
+        if (mods.alt || (mods.ctrl && mods.shift)) && self.contains(DragOperation::Link) {
+            return Some(DragOperation::Link);
+        }
+        if mods.shift && !mods.ctrl && self.contains(DragOperation::Move) {
+            return Some(DragOperation::Move);
+        }
+        if mods.ctrl && !mods.shift && self.contains(DragOperation::Copy) {
+            return Some(DragOperation::Copy);
+        }
+        if self.contains(DragOperation::Copy) { Some(DragOperation::Copy) }
+        else if self.contains(DragOperation::Move) { Some(DragOperation::Move) }
+        else if self.contains(DragOperation::Link) { Some(DragOperation::Link) }
+        else { None }
+    }
+}
+
+impl From<DragOperation> for DragOperations {
+    fn from(op: DragOperation) -> Self { Self::from_operation(op) }
+}
+
+impl std::ops::BitOr for DragOperations {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self { self.union(rhs) }
+}
+
+impl std::ops::BitOrAssign for DragOperations {
+    fn bitor_assign(&mut self, rhs: Self) { *self = self.union(rhs); }
+}
+
+impl std::ops::BitAnd for DragOperations {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self { self.intersection(rhs) }
+}
+
+impl std::ops::BitAndAssign for DragOperations {
+    fn bitand_assign(&mut self, rhs: Self) { *self = self.intersection(rhs); }
 }
 
 /// The picture a drag shows under the pointer, as PNG data.

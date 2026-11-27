@@ -161,8 +161,8 @@ fn push_into(dest: &mut Dest, step: FileStep) {
     // A move replaces the move before it: the host wants only the latest position.
     if matches!(step, FileStep::Move(_)) && matches!(dest.steps.last(), Some(FileStep::Move(_))) { dest.steps.pop(); }
     match step {
-        FileStep::Enter(..) | FileStep::Move(_) => dest.over = true,
-        FileStep::Drop(..) | FileStep::Leave => dest.over = false,
+        FileStep::Enter(..) | FileStep::EnterWith { .. } | FileStep::Move(_) | FileStep::MoveWith { .. } => dest.over = true,
+        FileStep::Drop(..) | FileStep::DropWith { .. } | FileStep::Leave => dest.over = false,
     }
     dest.steps.push(step);
 }
