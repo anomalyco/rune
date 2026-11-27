@@ -745,18 +745,30 @@ pub(crate) fn sync_ime(window: &Window, rt: &mut RuntimeCore, ime_state: &mut Im
     }
 }
 
+/// Samples OS accessibility preferences (reduced motion, contrast theme, increased contrast,
+/// full keyboard access, and Linux double-click interval) onto `rt`.
+///
+/// Called on window and overlay construction and before reveal so non-activating hosts—which never
+/// receive `WindowEvent::Focused` and have no native handle to hear `WM_SETTINGCHANGE` before
+/// creation or while parked—reflect current preferences on their first draw.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn refresh_accessibility_preferences(rt: &mut RuntimeCore) {
+    rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
+    #[cfg(target_os = "linux")]
+    { rt.double_click_interval = crate::platform::preferences::double_click_interval(); }
+    let contrast = crate::platform::preferences::contrast();
+    rt.set_system_contrast(contrast);
+    rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_with(contrast.is_some()));
+    rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
+}
+
 /// Refreshes OS accessibility and appearance preferences sampled on window/overlay focus changes.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn refresh_focus_preferences(
     rt: &mut RuntimeCore,
     scroll_bars_override: Option<crate::platform::scroll_bars::ScrollBars>,
 ) {
-    rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
-    #[cfg(target_os = "linux")]
-    { rt.double_click_interval = crate::platform::preferences::double_click_interval(); }
-    rt.set_system_contrast(crate::platform::preferences::contrast());
-    rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
-    rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
+    refresh_accessibility_preferences(rt);
     rt.set_system_scroll_bars_state(crate::platform::scroll_bars::reread().with_override(scroll_bars_override));
 }
 

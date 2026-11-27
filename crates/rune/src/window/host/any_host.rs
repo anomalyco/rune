@@ -159,7 +159,11 @@ impl Host {
         let contrast = crate::platform::preferences::contrast();
         let mut effects = crate::system_material::windows::current_policy();
         effects.high_contrast |= contrast.is_some();
-        self.app.rt_mut().set_system_contrast(contrast);
+        {
+            let rt = self.app.rt_mut();
+            rt.set_system_contrast(contrast);
+            rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_with(contrast.is_some()));
+        }
         if let Some(l) = self.win.as_mut() {
             let native = &mut l.native;
             let redraw = native.materials.on_policy_changed(effects, native.mode.handover_mut());

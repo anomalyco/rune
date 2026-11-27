@@ -179,7 +179,11 @@ impl AnyHost for OverlayHost {
         let contrast = crate::platform::preferences::contrast();
         let mut effects = crate::system_material::windows::current_policy();
         effects.high_contrast |= contrast.is_some();
-        self.app.rt_mut().set_system_contrast(contrast);
+        {
+            let rt = self.app.rt_mut();
+            rt.set_system_contrast(contrast);
+            rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_with(contrast.is_some()));
+        }
         if let Some(live) = self.core.surface.live_mut() {
             let redraw = live.materials.on_policy_changed(effects, live.handover.as_mut());
             let now_native = live.materials.native();
@@ -192,6 +196,8 @@ impl AnyHost for OverlayHost {
                     w.request_redraw();
                 }
             }
+        } else if self.app.rt().stale() {
+            self.core.dirty = true;
         }
     }
 

@@ -442,7 +442,7 @@ unsafe fn gnome_double_click_ms() -> Option<u32> {
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 pub(crate) fn reduced_motion() -> bool { false }
 
-/// `RUNE_INCREASE_CONTRAST=1`: [`increased_contrast`] on, for captures and checks.
+/// `RUNE_INCREASE_CONTRAST=1`: [`increased_contrast_with`] on, for captures and checks.
 pub(crate) fn increased_contrast_preset() -> bool {
     std::env::var_os("RUNE_INCREASE_CONTRAST").is_some_and(|v| v == "1")
 }
@@ -451,10 +451,16 @@ pub(crate) fn increased_contrast_preset() -> bool {
 /// Display), or a Windows contrast theme. `RUNE_INCREASE_CONTRAST=1` reports it on, for captures
 /// and checks, without turning it on for the whole machine. Read as [`reduced_motion`] is, and on
 /// macOS again when the display options change (`a11y/macos.rs`).
-pub(crate) fn increased_contrast() -> bool {
+///
+/// Reuses an already-sampled `contrast().is_some()` on Windows so callers that read both avoid
+/// querying `SPI_GETHIGHCONTRAST` twice and always see a consistent pair.
+pub(crate) fn increased_contrast_with(has_contrast: bool) -> bool {
+    #[cfg(test)]
+    if let Some(v) = test_overrides::increased_contrast() { return v; }
     if increased_contrast_preset() { return true; }
     #[cfg(target_os = "macos")]
     {
+        let _ = has_contrast;
         use objc2::{class, msg_send};
         // SAFETY: NSWorkspace's shared instance lives for the process; the selector returns an
         // Objective-C BOOL. Native hosts call on the UI thread.
@@ -465,9 +471,12 @@ pub(crate) fn increased_contrast() -> bool {
         }
     }
     #[cfg(target_os = "windows")]
-    { contrast().is_some() }
+    { has_contrast }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    { false }
+    {
+        let _ = has_contrast;
+        false
+    }
 }
 
 /// The colours a system contrast theme asks every app to paint with (Windows' Contrast themes,
@@ -492,9 +501,11 @@ pub struct SystemContrast {
 }
 
 /// The system's contrast theme, when one is on (Windows: Settings > Accessibility > Contrast
-/// themes). Read when a window opens and when Windows says its settings or colours changed.
+/// themes). Read when a window or overlay opens and when Windows says its settings or colours changed.
 #[cfg(target_os = "windows")]
 pub(crate) fn contrast() -> Option<SystemContrast> {
+    #[cfg(test)]
+    if let Some(v) = test_overrides::contrast() { return v; }
     if let Some(preset) = contrast_preset() { return Some(preset); }
     use windows_sys::Win32::Graphics::Gdi::GetSysColor;
     use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
@@ -515,7 +526,11 @@ pub(crate) fn contrast() -> Option<SystemContrast> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub(crate) fn contrast() -> Option<SystemContrast> { contrast_preset() }
+pub(crate) fn contrast() -> Option<SystemContrast> {
+    #[cfg(test)]
+    if let Some(v) = test_overrides::contrast() { return v; }
+    contrast_preset()
+}
 
 /// `RUNE_CONTRAST=aquatic|desert|dusk|night-sky`: Windows 11's contrast theme of that name, as
 /// its system colours are, without turning it on for the whole machine: for captures and checks
@@ -602,6 +617,38 @@ pub(crate) fn full_keyboard_access() -> bool {
 
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn full_keyboard_access() -> bool { true }
+
+#[cfg(test)]
+pub(crate) mod test_overrides {
+    use std::cell::Cell;
+    use super::SystemContrast;
+
+    thread_local! {
+        static CONTRAST: Cell<Option<Option<SystemContrast>>> = const { Cell::new(None) };
+        static INCREASED_CONTRAST: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    pub(super) fn contrast() -> Option<Option<SystemContrast>> { CONTRAST.with(Cell::get) }
+    pub(super) fn increased_contrast() -> Option<bool> { INCREASED_CONTRAST.with(Cell::get) }
+
+    pub(crate) struct Guard {
+        prev_contrast: Option<Option<SystemContrast>>,
+        prev_increased: Option<bool>,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            CONTRAST.with(|c| c.set(self.prev_contrast));
+            INCREASED_CONTRAST.with(|c| c.set(self.prev_increased));
+        }
+    }
+
+    pub(crate) fn set_contrast(contrast: Option<SystemContrast>, increased_contrast: bool) -> Guard {
+        let prev_contrast = CONTRAST.with(|c| c.replace(Some(contrast)));
+        let prev_increased = INCREASED_CONTRAST.with(|c| c.replace(Some(increased_contrast)));
+        Guard { prev_contrast, prev_increased }
+    }
+}
 
 #[cfg(test)]
 #[path = "preferences_tests.rs"]

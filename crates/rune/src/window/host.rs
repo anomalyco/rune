@@ -471,10 +471,7 @@ impl Host {
         if replays { println!("rune-script-window {}", native_handle.key()); }
         {
             let rt = app.rt_mut();
-            rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
-            rt.set_system_contrast(crate::platform::preferences::contrast());
-            rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast());
-            rt.set_full_keyboard_access(crate::platform::preferences::full_keyboard_access());
+            crate::input::host_events::refresh_accessibility_preferences(rt);
             crate::platform::accent::watch();
             rt.set_system_accent(crate::system_accent());
             crate::platform::scroll_bars::watch();

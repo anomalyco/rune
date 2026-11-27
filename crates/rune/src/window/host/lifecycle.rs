@@ -419,11 +419,7 @@ impl Host {
                     let rt = self.app.rt_mut();
                     rt.set_system_accent(crate::system_accent());
                     rt.set_system_scroll_bars_state(crate::platform::scroll_bars::current().with_override(self.args.scroll_bars));
-                    #[cfg(target_os = "linux")]
-                    {
-                        rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
-                        rt.double_click_interval = crate::platform::preferences::double_click_interval();
-                    }
+                    crate::input::host_events::refresh_accessibility_preferences(rt);
                 }
                 RevealEffect::Build => built = self.build_for_show(),
                 RevealEffect::ApplyFrame => {
