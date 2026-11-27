@@ -19,9 +19,14 @@ use ::windows::core::{HSTRING, Interface};
 use std::sync::atomic::{AtomicU64, Ordering};
 use wgpu::hal::api::Dx12;
 
-/// How many opened textures and fences an importer keeps: a producer usually cycles a few
-/// textures per stream, and one fence.
+/// How many opened textures and fences an importer keeps across active surfaces.
 const OPENED: usize = 16;
+/// Imports on one surface without touching a cached shared texture before it is considered
+/// abandoned (e.g. a producer recreated handles at the same dimensions).
+const STALE_IMPORTS: u64 = 8;
+/// Owned copy targets kept per active surface: enough to avoid stalling against in-flight
+/// swapchain frames while capping VRAM well below `KEPT_BINDS`.
+const COPY_SLOTS: usize = 3;
 
 /// A frame in a named D3D shared texture, BGRA8 (`DXGI_FORMAT_B8G8R8A8_UNORM`), complete before
 /// it is pushed. Build one with [`named`](Self::named).
@@ -123,10 +128,39 @@ pub(crate) fn note_adapter(device: &wgpu::Device) {
     GENERATION.fetch_add(1, Ordering::AcqRel);
 }
 
+struct CachedTexture {
+    surface: usize,
+    name: String,
+    size: [u32; 2],
+    last_import: u64,
+    resource: ID3D12Resource,
+}
+
+struct CachedFence {
+    surface: usize,
+    name: String,
+    fence: ID3D12Fence,
+    last_signaled: Option<u64>,
+}
+
+struct CopyRing {
+    surface: usize,
+    size: [u32; 2],
+    textures: Vec<wgpu::Texture>,
+    next: usize,
+}
+
 pub(crate) struct Importer {
     device: wgpu::Device,
-    textures: Vec<(String, ID3D12Resource)>,
-    fences: Vec<(String, ID3D12Fence)>,
+    textures: Vec<CachedTexture>,
+    fences: Vec<CachedFence>,
+    /// Shared fences removed from `fences` whose last GPU `Signal` has not yet completed.
+    /// D3D12 requires an `ID3D12Fence` to stay alive until every queued `Signal` finishes.
+    retiring_fences: Vec<(ID3D12Fence, u64)>,
+    /// Per-surface monotonic import counter (keyed by `NativeSurface::key()`).
+    import_counts: Vec<(usize, u64)>,
+    /// Per-surface ring of owned copy targets, sized lazily up to `COPY_SLOTS`.
+    copies: Vec<CopyRing>,
     /// Decoded pictures' plane wrappers, by resource: a decoder cycles a few textures. Each goes
     /// once its decoder and every picture in it are gone.
     planes: Vec<(usize, std::sync::Weak<DecodedPlanes>, [wgpu::Texture; 2])>,
@@ -138,7 +172,15 @@ impl Importer {
         if unsafe { device.as_hal::<Dx12>() }.is_none() {
             return Err("shared textures need wgpu's D3D12 backend".into());
         }
-        Ok(Self { device: device.clone(), textures: Vec::new(), fences: Vec::new(), planes: Vec::new() })
+        Ok(Self {
+            device: device.clone(),
+            textures: Vec::new(),
+            fences: Vec::new(),
+            retiring_fences: Vec::new(),
+            import_counts: Vec::new(),
+            copies: Vec::new(),
+            planes: Vec::new(),
+        })
     }
 
     /// The two planes of a decoded picture as R8 and RG8 textures over its own resource, once the
@@ -169,7 +211,7 @@ impl Importer {
                     unsafe { self.device.create_texture_from_hal::<Dx12>(hal, &desc, wgpu::TextureUses::RESOURCE) }
                 };
                 let textures = [wrap(wgpu::TextureFormat::R8Unorm, w, h, 0), wrap(wgpu::TextureFormat::Rg8Unorm, w / 2, h / 2, 1)];
-                self.forget_gone();
+                self.forget_gone_planes();
                 self.planes.push((key, Arc::downgrade(planes), textures.clone()));
                 textures
             }
@@ -181,32 +223,119 @@ impl Importer {
         Ok(textures)
     }
 
-    /// Copies `frame` into a texture of Rune's own, then signals its release fence.
-    pub fn import(&mut self, queue: &wgpu::Queue, frame: &SharedTexture) -> Result<[wgpu::Texture; 2], String> {
+    /// Copies `frame` into a pooled texture of Rune's own, then signals its release fence.
+    pub fn import(&mut self, queue: &wgpu::Queue, surface: usize, frame: &SharedTexture) -> Result<[wgpu::Texture; 2], String> {
+        self.drain_retiring_fences();
+        let import_gen = self.next_import_gen(surface);
         let fence = match &frame.release {
-            Some((name, value)) => Some((self.fence(name)?, *value)),
-            None => None,
+            Some((name, value)) => Some((self.fence(surface, name)?, name.as_str(), *value)),
+            None => {
+                self.retire_surface_fences(surface, None);
+                None
+            }
         };
-        let copied = self.copy(queue, frame);
-        if let Some((fence, value)) = fence {
+        let copied = self.copy(queue, surface, import_gen, frame);
+        if let Some((fence, name, value)) = fence {
             // After the copy's submission (or at once if it failed), so the producer never waits
             // on a frame Rune gave up on.
             // SAFETY: the raw queue only gets a signal, ordered after work wgpu already submitted.
             let hal = unsafe { queue.as_hal::<Dx12>() }.ok_or("shared textures need wgpu's D3D12 backend")?;
             // SAFETY: as above; `fence` is a live shared fence opened on this device.
             unsafe { hal.as_raw().Signal(&fence, value) }.map_err(|e| format!("signal release fence: {e}"))?;
+            if let Some(entry) = self.fences.iter_mut().find(|e| e.surface == surface && e.name == name) {
+                entry.last_signaled = Some(entry.last_signaled.map_or(value, |prev| prev.max(value)));
+            } else {
+                retire_fence(&mut self.retiring_fences, fence, Some(value));
+            }
         }
         copied
     }
 
-    /// Lets go of plane wrappers whose decoder and pictures are all gone, so their textures go too.
-    pub fn forget_gone(&mut self) {
+    /// Lets go of decoded plane wrappers whose decoder and pictures are gone, and prunes cached
+    /// shared handles, fences, and copy rings for surfaces no longer live. Returns true when any
+    /// texture or copy ring was dropped (so the caller can wake completion polling).
+    pub fn forget_gone(&mut self, mut is_live_shared: impl FnMut(usize) -> bool) -> bool {
+        let before = self.planes.len() + self.textures.len() + self.copies.len();
+        self.forget_gone_planes();
+        // Dropping cached `ID3D12Resource` clones here is GPU-safe: every submitted copy already
+        // moved its own COM reference into a `wgpu::Texture` retained by wgpu until completion.
+        self.textures.retain(|e| is_live_shared(e.surface));
+        self.copies.retain(|c| is_live_shared(c.surface));
+        self.import_counts.retain(|(surface, _)| is_live_shared(*surface));
+        let mut i = 0;
+        while i < self.fences.len() {
+            if is_live_shared(self.fences[i].surface) {
+                i += 1;
+            } else {
+                let evicted = self.fences.remove(i);
+                retire_fence(&mut self.retiring_fences, evicted.fence, evicted.last_signaled);
+            }
+        }
+        self.drain_retiring_fences();
+        self.planes.len() + self.textures.len() + self.copies.len() < before
+    }
+
+    fn forget_gone_planes(&mut self) {
         self.planes.retain(|(_, live, _)| live.strong_count() > 0);
     }
 
-    fn copy(&mut self, queue: &wgpu::Queue, frame: &SharedTexture) -> Result<[wgpu::Texture; 2], String> {
+    fn drain_retiring_fences(&mut self) {
+        self.retiring_fences.retain(|(fence, value)| !fence_completed(fence, *value));
+    }
+
+    fn retire_surface_fences(&mut self, surface: usize, keep_name: Option<&str>) {
+        let mut i = 0;
+        while i < self.fences.len() {
+            if self.fences[i].surface == surface && keep_name != Some(self.fences[i].name.as_str()) {
+                let evicted = self.fences.remove(i);
+                retire_fence(&mut self.retiring_fences, evicted.fence, evicted.last_signaled);
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn next_import_gen(&mut self, surface: usize) -> u64 {
+        if let Some((_, count)) = self.import_counts.iter_mut().find(|(s, _)| *s == surface) {
+            *count += 1;
+            *count
+        } else {
+            self.import_counts.push((surface, 1));
+            1
+        }
+    }
+
+    fn next_copy_target(&mut self, surface: usize, size: [u32; 2]) -> wgpu::Texture {
+        let i = match self.copies.iter().position(|r| r.surface == surface) {
+            Some(i) => i,
+            None => {
+                self.copies.push(CopyRing { surface, size, textures: Vec::new(), next: 0 });
+                self.copies.len() - 1
+            }
+        };
+        let ring = &mut self.copies[i];
+        if ring.size != size {
+            ring.size = size;
+            ring.textures.clear();
+            ring.next = 0;
+        }
+        if ring.textures.len() < COPY_SLOTS {
+            let mut desc = pipeline::descriptor(size[0], size[1], wgpu::TextureFormat::Bgra8Unorm);
+            desc.usage |= wgpu::TextureUsages::COPY_DST;
+            let texture = self.device.create_texture(&desc);
+            ring.textures.push(texture.clone());
+            ring.next = ring.textures.len() % COPY_SLOTS;
+            texture
+        } else {
+            let texture = ring.textures[ring.next].clone();
+            ring.next = (ring.next + 1) % ring.textures.len();
+            texture
+        }
+    }
+
+    fn copy(&mut self, queue: &wgpu::Queue, surface: usize, import_gen: u64, frame: &SharedTexture) -> Result<[wgpu::Texture; 2], String> {
         let [width, height] = frame.size;
-        let resource = self.texture(&frame.name, width, height)?;
+        let resource = self.texture(surface, import_gen, &frame.name, width, height)?;
         let mut desc = pipeline::descriptor(width, height, wgpu::TextureFormat::Bgra8Unorm);
         desc.usage = wgpu::TextureUsages::COPY_SRC;
         // SAFETY: `resource` was opened on this device and checked to be a 2D, single-mip,
@@ -225,9 +354,7 @@ impl Importer {
         // backend calls PRESENT.
         // SAFETY: the resource was checked against `desc` above and belongs to this device.
         let source = unsafe { self.device.create_texture_from_hal::<Dx12>(hal, &desc, wgpu::TextureUses::PRESENT) };
-        let mut desc = pipeline::descriptor(width, height, wgpu::TextureFormat::Bgra8Unorm);
-        desc.usage |= wgpu::TextureUsages::COPY_DST;
-        let owned = self.device.create_texture(&desc);
+        let owned = self.next_copy_target(surface, frame.size);
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("shared texture copy") });
         encoder.copy_texture_to_texture(source.as_image_copy(), owned.as_image_copy(), desc.size);
         encoder.transition_resources(
@@ -238,9 +365,19 @@ impl Importer {
         Ok([owned.clone(), owned])
     }
 
-    fn texture(&mut self, name: &str, width: u32, height: u32) -> Result<ID3D12Resource, String> {
-        if let Some((_, resource)) = self.textures.iter().find(|(n, _)| n == name) {
-            return Ok(resource.clone());
+    fn texture(&mut self, surface: usize, import_gen: u64, name: &str, width: u32, height: u32) -> Result<ID3D12Resource, String> {
+        let size = [width, height];
+        // Drop handles for this surface whose size no longer matches (resize) or that have not
+        // been referenced for `STALE_IMPORTS` frames (producer switched to new handle names).
+        self.textures.retain(|e| {
+            e.surface != surface || (e.size == size && import_gen.saturating_sub(e.last_import) <= STALE_IMPORTS)
+        });
+        if let Some(i) = self.textures.iter().position(|e| e.surface == surface && e.name == name) {
+            let mut entry = self.textures.remove(i);
+            entry.last_import = import_gen;
+            let resource = entry.resource.clone();
+            self.textures.push(entry);
+            return Ok(resource);
         }
         let resource: ID3D12Resource = self.open(name)?;
         // SAFETY: a plain query on a live resource.
@@ -255,16 +392,34 @@ impl Importer {
         {
             return Err(format!("shared texture {name:?} isn't a {width}x{height} BGRA8 texture"));
         }
-        remember(&mut self.textures, name, resource.clone());
+        if self.textures.len() >= OPENED {
+            self.textures.remove(0);
+        }
+        self.textures.push(CachedTexture {
+            surface,
+            name: name.to_owned(),
+            size,
+            last_import: import_gen,
+            resource: resource.clone(),
+        });
         Ok(resource)
     }
 
-    fn fence(&mut self, name: &str) -> Result<ID3D12Fence, String> {
-        if let Some((_, fence)) = self.fences.iter().find(|(n, _)| n == name) {
-            return Ok(fence.clone());
+    fn fence(&mut self, surface: usize, name: &str) -> Result<ID3D12Fence, String> {
+        if let Some(i) = self.fences.iter().position(|e| e.surface == surface && e.name == name) {
+            let entry = self.fences.remove(i);
+            let fence = entry.fence.clone();
+            self.fences.push(entry);
+            self.retire_surface_fences(surface, Some(name));
+            return Ok(fence);
         }
         let fence: ID3D12Fence = self.open(name)?;
-        remember(&mut self.fences, name, fence.clone());
+        self.retire_surface_fences(surface, Some(name));
+        if self.fences.len() >= OPENED {
+            let evicted = self.fences.remove(0);
+            retire_fence(&mut self.retiring_fences, evicted.fence, evicted.last_signaled);
+        }
+        self.fences.push(CachedFence { surface, name: name.to_owned(), fence: fence.clone(), last_signaled: None });
         Ok(fence)
     }
 
@@ -295,10 +450,40 @@ pub(crate) fn release_decoded(queue: &wgpu::Queue, planes: &DecodedPlanes, value
     }
 }
 
-/// Keeps `value` under `name`, dropping the oldest past [`OPENED`].
-fn remember<T>(list: &mut Vec<(String, T)>, name: &str, value: T) {
-    if list.len() >= OPENED {
-        list.remove(0);
-    }
-    list.push((name.to_owned(), value));
+fn fence_completed(fence: &ID3D12Fence, value: u64) -> bool {
+    // SAFETY: a plain non-blocking read on a live `ID3D12Fence`. Returns `u64::MAX` on device
+    // removal, in which case no queued signal will ever run and dropping is safe.
+    let completed = unsafe { fence.GetCompletedValue() };
+    completed == u64::MAX || completed >= value
 }
+
+fn retire_fence(retiring: &mut Vec<(ID3D12Fence, u64)>, fence: ID3D12Fence, last_signaled: Option<u64>) {
+    if let Some(value) = last_signaled
+        && !fence_completed(&fence, value)
+    {
+        retiring.push((fence, value));
+    }
+}
+
+#[cfg(test)]
+impl Importer {
+    pub(super) fn cached_texture_names(&self) -> Vec<&str> {
+        self.textures.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    pub(super) fn cached_fence_count(&self) -> usize {
+        self.fences.len()
+    }
+
+    pub(super) fn retiring_fence_count(&self) -> usize {
+        self.retiring_fences.len()
+    }
+
+    pub(super) fn copy_pool_counts(&self) -> Vec<(usize, [u32; 2], usize)> {
+        self.copies.iter().map(|c| (c.surface, c.size, c.textures.len())).collect()
+    }
+}
+
+#[cfg(test)]
+#[path = "windows_tests.rs"]
+mod tests;

@@ -26,6 +26,9 @@ pub const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 /// few buffers per stream.
 const OPENED: usize = 16;
 const OPENED_BYTES: u64 = 512 << 20;
+/// Owned copy targets kept per active surface: enough to avoid stalling against in-flight
+/// swapchain frames while capping VRAM well below `KEPT_BINDS`.
+const COPY_SLOTS: usize = 3;
 /// How long the importer waits for its copy to finish before it gives the frame up.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -103,8 +106,9 @@ enum Release {
 pub struct Dmabuf {
     buffer: Arc<DmabufBuffer>,
     release: Mutex<Release>,
-    /// Rune's copy on each device that has drawn the frame.
-    copies: Mutex<Vec<(wgpu::Device, wgpu::Texture)>>,
+    /// Rune's copy on each device that has drawn the frame, plus an optional pool lease that
+    /// keeps a pooled copy target from being overwritten while this frame is alive.
+    copies: Mutex<Vec<(wgpu::Device, wgpu::Texture, Option<Arc<()>>)>>,
 }
 
 impl Dmabuf {
@@ -189,7 +193,13 @@ fn render_node(device: &wgpu::Device) -> Option<String> {
 
 /// `frame`'s picture on `device`, through the importer in `slot`. Tells the producer about every
 /// failure.
-pub(crate) fn import(slot: &mut Option<Importer>, device: &wgpu::Device, queue: &wgpu::Queue, frame: &Dmabuf) -> Result<[wgpu::Texture; 2], String> {
+pub(crate) fn import(
+    slot: &mut Option<Importer>,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    surface: usize,
+    frame: &Dmabuf,
+) -> Result<([wgpu::Texture; 2], bool), String> {
     let result = if frame.size().iter().any(|v| *v > device.limits().max_texture_dimension_2d) {
         Err("video dimensions exceed this GPU device's texture limit".into())
     } else {
@@ -197,7 +207,7 @@ pub(crate) fn import(slot: &mut Option<Importer>, device: &wgpu::Device, queue: 
             Some(importer) => Ok(importer),
             empty => Importer::new(device).map(|importer| empty.insert(importer)),
         }
-        .and_then(|importer| importer.import(queue, frame))
+        .and_then(|importer| importer.import(queue, surface, frame))
     };
     if let Err(e) = &result
         && let Some(f) = frame.tell()
@@ -207,11 +217,26 @@ pub(crate) fn import(slot: &mut Option<Importer>, device: &wgpu::Device, queue: 
     result
 }
 
+struct CopySlot {
+    texture: wgpu::Texture,
+    /// Weak handle to the `Dmabuf` frame currently using this slot; `strong_count() == 0` means
+    /// no live frame (in any window or in-flight submission) still references this texture.
+    in_use: Weak<()>,
+}
+
+struct CopyPool {
+    surface: usize,
+    size: [u32; 2],
+    slots: Vec<CopySlot>,
+}
+
 pub(crate) struct Importer {
     /// The thread that waits for each copy and tells its producer; dropped before `device`.
     reads: ReadWorker<(wgpu::SubmissionIndex, OnRead)>,
     device: wgpu::Device,
     opened: Vec<(Weak<DmabufBuffer>, wgpu::Texture)>,
+    /// Per-surface pool of owned copy targets, sized lazily up to `COPY_SLOTS`.
+    copies: Vec<CopyPool>,
 }
 
 impl Drop for Importer {
@@ -227,7 +252,7 @@ impl Importer {
         }
         let reads = ReadWorker::spawn_device("rune-dmabuf-read", device.clone(), READ_TIMEOUT)
             .map_err(|e| format!("start the dmabuf read thread: {e}"))?;
-        Ok(Self { reads, device: device.clone(), opened: Vec::new() })
+        Ok(Self { reads, device: device.clone(), opened: Vec::new(), copies: Vec::new() })
     }
 
     /// Stops and joins the dmabuf read thread before its device is torn down.
@@ -236,44 +261,90 @@ impl Importer {
     }
 
     /// Rune's copy of `frame` on this device, made the first time; the producer hears once the
-    /// GPU has finished it.
-    fn import(&mut self, queue: &wgpu::Queue, frame: &Dmabuf) -> Result<[wgpu::Texture; 2], String> {
-        if let Some((_, copy)) = frame.copies.lock().unwrap().iter().find(|(d, _)| *d == self.device) {
-            return Ok([copy.clone(), copy.clone()]);
+    /// GPU has finished it. Returns the textures and whether they belong to this importer's pool.
+    fn import(&mut self, queue: &wgpu::Queue, surface: usize, frame: &Dmabuf) -> Result<([wgpu::Texture; 2], bool), String> {
+        if let Some((_, copy, lease)) = frame.copies.lock().unwrap().iter().find(|(d, _, _)| *d == self.device) {
+            let reusable = lease.is_some()
+                && self.copies.iter().any(|p| p.surface == surface && p.slots.iter().any(|s| s.texture == *copy));
+            return Ok(([copy.clone(), copy.clone()], reusable));
         }
         if frame.told() {
             return Err("the producer may be writing this dmabuf again; another GPU device read it first".into());
         }
-        let (copy, submission) = self.copy(queue, &frame.buffer)?;
-        frame.copies.lock().unwrap().push((self.device.clone(), copy.clone()));
+        let (copy, lease, submission) = self.copy(queue, surface, &frame.buffer)?;
+        let reusable = lease.is_some();
+        frame.copies.lock().unwrap().push((self.device.clone(), copy.clone(), lease));
         if let Some(f) = frame.tell()
             && let Err((_, f)) = self.reads.send((submission, f))
         {
             f(Err("wait for the dmabuf copy: the dmabuf read thread stopped".into()));
         }
-        Ok([copy.clone(), copy])
+        Ok(([copy.clone(), copy], reusable))
     }
 
-    /// Lets go of buffers whose producer and frames are all gone.
-    pub(crate) fn forget_gone(&mut self) {
+    /// Lets go of buffers whose producer and frames are all gone, and copy pools for surfaces no
+    /// longer live. Returns true when any buffer or copy pool was dropped.
+    pub(crate) fn forget_gone(&mut self, mut is_live_dmabuf: impl FnMut(usize) -> bool) -> bool {
+        let before = self.opened.len() + self.copies.len();
         self.opened.retain(|(live, _)| live.strong_count() > 0);
+        self.copies.retain(|p| is_live_dmabuf(p.surface));
+        self.opened.len() + self.copies.len() < before
     }
 
-    fn copy(&mut self, queue: &wgpu::Queue, buffer: &Arc<DmabufBuffer>) -> Result<(wgpu::Texture, wgpu::SubmissionIndex), String> {
-        let source = self.source(buffer)?;
-        let [width, height] = buffer.size;
-        let mut desc = pipeline::descriptor(width, height, wgpu::TextureFormat::Bgra8Unorm);
+    fn acquire_copy(&mut self, surface: usize, size: [u32; 2]) -> (wgpu::Texture, Option<Arc<()>>) {
+        let i = match self.copies.iter().position(|p| p.surface == surface) {
+            Some(i) => i,
+            None => {
+                self.copies.push(CopyPool { surface, size, slots: Vec::new() });
+                self.copies.len() - 1
+            }
+        };
+        let pool = &mut self.copies[i];
+        if pool.size != size {
+            pool.size = size;
+            pool.slots.clear();
+        }
+        // Prefer an idle slot and rotate it to the back so slots cycle evenly.
+        if let Some(i) = pool.slots.iter().position(|s| s.in_use.strong_count() == 0) {
+            let mut slot = pool.slots.remove(i);
+            let lease = Arc::new(());
+            slot.in_use = Arc::downgrade(&lease);
+            let texture = slot.texture.clone();
+            pool.slots.push(slot);
+            return (texture, Some(lease));
+        }
+        let mut desc = pipeline::descriptor(size[0], size[1], wgpu::TextureFormat::Bgra8Unorm);
         desc.usage |= wgpu::TextureUsages::COPY_DST;
-        let owned = self.device.create_texture(&desc);
+        let texture = self.device.create_texture(&desc);
+        if pool.slots.len() < COPY_SLOTS {
+            let lease = Arc::new(());
+            pool.slots.push(CopySlot { texture: texture.clone(), in_use: Arc::downgrade(&lease) });
+            (texture, Some(lease))
+        } else {
+            // All pooled slots are held by live frames (e.g. another window or a burst of
+            // in-flight submissions): allocate a one-shot texture so we never overwrite one in use.
+            (texture, None)
+        }
+    }
+
+    fn copy(
+        &mut self,
+        queue: &wgpu::Queue,
+        surface: usize,
+        buffer: &Arc<DmabufBuffer>,
+    ) -> Result<(wgpu::Texture, Option<Arc<()>>, wgpu::SubmissionIndex), String> {
+        let source = self.source(buffer)?;
+        let (owned, lease) = self.acquire_copy(surface, buffer.size);
+        let size = wgpu::Extent3d { width: buffer.size[0], height: buffer.size[1], depth_or_array_layers: 1 };
         let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("dmabuf copy") });
-        encoder.copy_texture_to_texture(source.as_image_copy(), owned.as_image_copy(), desc.size);
-        Ok((owned, queue.submit([encoder.finish()])))
+        encoder.copy_texture_to_texture(source.as_image_copy(), owned.as_image_copy(), size);
+        Ok((owned, lease, queue.submit([encoder.finish()])))
     }
 
     /// `buffer` as a texture on this device, imported the first time it's drawn.
     #[allow(unsafe_code)]
     fn source(&mut self, buffer: &Arc<DmabufBuffer>) -> Result<wgpu::Texture, String> {
-        self.forget_gone();
+        self.opened.retain(|(live, _)| live.strong_count() > 0);
         if let Some((_, texture)) = self.opened.iter().find(|(live, _)| std::ptr::eq(live.as_ptr(), Arc::as_ptr(buffer))) {
             return Ok(texture.clone());
         }
