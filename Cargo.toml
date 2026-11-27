@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/rune",
+    "crates/rune-cli",
     "crates/rune-core",
     "crates/rune-edit",
     "crates/rune-gpu",
@@ -71,6 +72,7 @@ members = [
 # `--workspace` to check everything.
 default-members = [
     "crates/rune",
+    "crates/rune-cli",
     "crates/rune-core",
     "crates/rune-edit",
     "crates/rune-gpu",

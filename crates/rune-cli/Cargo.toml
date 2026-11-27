@@ -1,0 +1,21 @@
+[package]
+name = "rune-cli"
+version = "0.0.1"
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Cross-platform CLI for creating, checking, and running Rune apps with guarded hot reload."
+
+[[bin]]
+name = "rune"
+path = "src/main.rs"
+
+[dependencies]
+blake3 = { workspace = true }
+quote = "1"
+serde_json = { workspace = true }
+syn = { version = "2", features = ["full", "visit", "visit-mut"] }
+toml_edit = "0.25"
+
+[lints]
+workspace = true
