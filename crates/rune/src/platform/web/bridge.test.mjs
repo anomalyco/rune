@@ -2574,6 +2574,56 @@ test('syncA11y applies root dir/lang, per-item dir overrides, and logical text-a
     bridge.destroy(h);
 });
 
+test('syncA11y and focusA11y mirror, patch, and clear aria-roledescription on mirror nodes, proxy, and fields', () => {
+    const { h } = setup();
+
+    // Full snapshot sets aria-roledescription on mirrored article and button.
+    bridge.syncA11y(h, JSON.stringify([
+        { k: 'group', p: '#0/row-1', r: [0, 0, 200, 32], g: 'article', t: 'Row one', rd: 'card' },
+        { k: 'button', p: '#0/chip', r: [0, 36, 100, 24], t: 'Today', rd: 'divider' },
+    ]));
+    const article = h.a11yNodes.get('article:#0/row-1');
+    const chip = h.a11yNodes.get('button:#0/chip');
+    assert.equal(article.getAttribute('aria-roledescription'), 'card');
+    assert.equal(chip.getAttribute('aria-roledescription'), 'divider');
+
+    // Incremental patch updates and clears aria-roledescription.
+    bridge.syncA11y(h, JSON.stringify({
+        p: 1,
+        u: [
+            { k: 'group', p: '#0/row-1', r: [0, 0, 200, 32], g: 'article', t: 'Row one', rd: 'tile' },
+            { k: 'button', p: '#0/chip', r: [0, 36, 100, 24], t: 'Today' },
+        ],
+    }));
+    assert.equal(article.getAttribute('aria-roledescription'), 'tile');
+    assert.equal(chip.getAttribute('aria-roledescription'), null);
+
+    // focusA11y sets aria-roledescription on focus proxy and clears it on next focus.
+    bridge.focusA11y(h, JSON.stringify({ o: 'article', t: 'Row one', rd: 'card' }));
+    let proxy = h.focusProxies[h.focusTurn];
+    assert.equal(proxy.getAttribute('role'), 'article');
+    assert.equal(proxy.getAttribute('aria-roledescription'), 'card');
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'button', t: 'Save' }));
+    proxy = h.focusProxies[h.focusTurn];
+    assert.equal(proxy.getAttribute('aria-roledescription'), null);
+
+    // Focused textbox and password field mirror and clear aria-roledescription.
+    bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'Command', rd: 'command bar' }));
+    assert.equal(h.textarea.getAttribute('aria-roledescription'), 'command bar');
+    assert.equal(h.password.getAttribute('aria-roledescription'), null);
+
+    bridge.focusA11y(h, JSON.stringify({ o: 'textbox', t: 'PIN', sec: true, rd: 'PIN input' }));
+    assert.equal(h.password.getAttribute('aria-roledescription'), 'PIN input');
+    assert.equal(h.textarea.getAttribute('aria-roledescription'), null);
+
+    bridge.focusA11y(h, '');
+    assert.equal(h.textarea.getAttribute('aria-roledescription'), null);
+    assert.equal(h.password.getAttribute('aria-roledescription'), null);
+
+    bridge.destroy(h);
+});
+
 test('syncA11y and focusA11y mirror, patch, and clear aria-autocomplete on mirror nodes, proxy, and textarea', () => {
     const { h } = setup();
 

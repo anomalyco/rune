@@ -209,6 +209,7 @@ pub(super) fn item_json_fields(
     if aria.multiline { obj.insert("ml".into(), json!(true)); }
     if aria.read_only { obj.insert("ro".into(), json!(true)); }
     if aria.invalid { obj.insert("inv".into(), json!(true)); }
+    if let Some(rd) = aria.role_description.as_deref() { obj.insert("rd".into(), json!(rd)); }
     if let Some(ph) = aria.placeholder.as_deref() { obj.insert("ph".into(), json!(ph)); }
     if let Some(hp) = aria.has_popup { obj.insert("hp".into(), json!(hp)); }
     if let Some(or) = aria.orientation { obj.insert("or".into(), json!(or)); }

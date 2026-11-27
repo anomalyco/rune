@@ -47,6 +47,7 @@ impl Tree<'_> {
             None => origin,
         };
         let mut v = json!({ "role": super::roles::name(n.role()) });
+        if let Some(rd) = n.role_description() { v["roleDescription"] = rd.into(); }
         if let Some(key) = n.author_id() { v["key"] = key.into(); }
         if let Some(name) = self.name(n) { v["name"] = name.into(); }
         if n.role() != Role::Label && let Some(value) = n.value() { v["value"] = value.into(); }

@@ -149,6 +149,8 @@ impl Range {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct A11yMore {
     pub description: Option<Cow<'static, str>>,
+    /// `El::role_description` / `El::role_description_static` (ARIA `aria-roledescription`).
+    pub role_description: Option<Cow<'static, str>>,
     pub value: Option<String>,
     pub range: Option<Range>,
     /// 1-based position and the set's size.
@@ -207,13 +209,16 @@ pub(crate) struct A11y {
     /// `El::unselectable`: a web page's mirror leaves this subtree's text out of the selection.
     pub unselectable: bool,
     pub live: Option<LiveRegion>,
+    /// `El::role("group")` was called explicitly (distinguishes an explicit ARIA `group` role
+    /// from a plain layout container whose default `RoleTag` is `GROUP`).
+    pub explicit_group: bool,
     pub more: Option<Box<A11yMore>>,
 }
 
 impl A11y {
     pub(crate) const EMPTY: A11y = A11y {
         level: None, expanded: None, secure: false, checked: None, disabled: false, hidden: false, unselectable: false,
-        live: None, more: None,
+        live: None, explicit_group: false, more: None,
     };
 
     fn more(&mut self) -> &mut A11yMore {
@@ -258,6 +263,45 @@ impl El {
     /// nothing for it.
     pub fn description_static(mut self, text: &'static str) -> Self {
         self.cold_mut().a11y.more().description = Some(Cow::Borrowed(text));
+        self
+    }
+    /// A human-readable description of the element's role (ARIA `aria-roledescription`), such as
+    /// `"card"` on an `"article"` or `"divider"` on a `"button"`. The element keeps its real role
+    /// so navigation and actions still work while assistive technology names it in the app's
+    /// words. Ignored on elements with no accessible role (a plain container without
+    /// [`El::role`], or `"none"`/`"presentation"`) and when empty or whitespace-only.
+    ///
+    /// ```
+    /// # use rune::{el, text};
+    /// let row = el()
+    ///     .key("row-1")
+    ///     .role("article")
+    ///     .role_description("card")
+    ///     .label("Row one")
+    ///     .child(text("Row one"));
+    /// ```
+    pub fn role_description(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        if text.trim().is_empty() {
+            if let Some(more) = self.cold.a11y.more.as_ref() && more.role_description.is_some() {
+                self.cold_mut().a11y.more().role_description = None;
+            }
+            return self;
+        }
+        self.cold_mut().a11y.more().role_description = Some(Cow::Owned(text));
+        self
+    }
+    /// [`El::role_description`] from a string that lives for the program (a translated message,
+    /// a literal): kept as it is, with nothing copied, so a view that runs every frame pays
+    /// nothing for it.
+    pub fn role_description_static(mut self, text: &'static str) -> Self {
+        if text.trim().is_empty() {
+            if let Some(more) = self.cold.a11y.more.as_ref() && more.role_description.is_some() {
+                self.cold_mut().a11y.more().role_description = None;
+            }
+            return self;
+        }
+        self.cold_mut().a11y.more().role_description = Some(Cow::Borrowed(text));
         self
     }
     /// The element whose content is active while this one keeps keyboard focus (ARIA
@@ -671,6 +715,11 @@ impl El {
     #[inline]
     pub fn set_role(&mut self, role: &'static str) -> &mut Self {
         self.set_role_name(role);
+        if role == "group" {
+            self.cold_mut().a11y.explicit_group = true;
+        } else if self.cold.a11y.explicit_group {
+            self.cold_mut().a11y.explicit_group = false;
+        }
         self
     }
     #[inline]
