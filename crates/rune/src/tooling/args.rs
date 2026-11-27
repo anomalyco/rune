@@ -356,7 +356,7 @@ pub(super) const HELP: &str = "usage: <app> [window]
                         one on the stage, or anywhere in the window with --whole-window)
   --at SECONDS          virtual time of the snapshot/tree (default: end of frames or script);
                         mark:NAME or mark:NAME+0.5 for a script mark's time (also --start)
-  --settle              run up to 3 zero-dt layout-callback passes before --snap/--tree capture
+  --settle              settle layout callbacks (and App::settle_ready) before --snap/--tree capture
   --size WxH            viewport in points      --scale N   device scale (default 2)
   --theme dark|light    system appearance
   --scroll-bars MODE    scroll bars: when-scrolling (headless default), always, automatic

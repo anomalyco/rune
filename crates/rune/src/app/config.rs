@@ -5,6 +5,27 @@
 use crate::el::Tx;
 use crate::runtime::Runtime;
 
+/// Normalizes an opt-in frame-rate cap (Hz): positive finite values clamp to at least `1.0` Hz,
+/// while zero, negative, NaN and infinite values normalize to `0.0` (uncapped display rate).
+#[inline]
+pub(crate) fn normalize_fps_cap(fps: f32) -> f32 {
+    if fps.is_finite() && fps > 0.0 {
+        fps.max(1.0)
+    } else {
+        0.0
+    }
+}
+
+/// Converts an opt-in `ambient_fps` rate (Hz) into its target frame period, or `None` when
+/// uncapped (zero, negative, non-finite, or so large that its period rounds to zero).
+#[inline]
+pub(crate) fn ambient_period_from_fps(fps: f32) -> Option<std::time::Duration> {
+    let hz = normalize_fps_cap(fps);
+    (hz > 0.0)
+        .then(|| std::time::Duration::from_secs_f64(1.0 / f64::from(hz)))
+        .filter(|period| !period.is_zero())
+}
+
 /// Settings and callbacks copied from an `App` or `ConfiguredOverlay` into its `Runtime`.
 ///
 /// Exhaustively destructured in [`Runtime::configure`] so adding a field updates every host

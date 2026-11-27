@@ -17,7 +17,7 @@ fn make_app(with_hook: bool) -> TypedHeadlessApp<Vec<Vec<PathBuf>>> {
     );
     let (spec, state, shared, _) = app.into_parts(None);
     let rt = Runtime::new(state, spec.view, spec.size, Env::default());
-    TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files }
+    TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files, settle_ready: None }
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn headless_run_close_request_defers_commits_dialog_and_closes_when_allowed() {
         );
         let (spec, state, shared, _) = app.into_parts(None);
         let rt = Runtime::new(state, spec.view, spec.size, Env::default());
-        TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files }
+        TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files, settle_ready: None }
     };
 
     let mut deferred = make(true, true);
@@ -116,7 +116,7 @@ fn headless_run_quit_request_defers_commits_dialog_and_quits_when_allowed() {
         );
         let (spec, state, shared, _) = app.into_parts(None);
         let rt = Runtime::new(state, spec.view, spec.size, Env::default());
-        TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files }
+        TypedHeadlessApp { rt, shared: Arc::clone(&shared), comp: None, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files, settle_ready: None }
     };
 
     let mut deferred = make(true, true);

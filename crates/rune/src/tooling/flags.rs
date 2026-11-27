@@ -164,7 +164,7 @@ define_flags! {
     Settle => {
         name: "--settle",
         value: FlagValue::None,
-        description: "run up to 3 zero-dt layout-callback passes before --snap/--tree capture",
+        description: "settle layout callbacks (and App::settle_ready) before --snap/--tree capture",
     },
     At => {
         name: "--at",

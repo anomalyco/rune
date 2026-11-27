@@ -91,27 +91,6 @@ impl<S> Clone for TurnScope<S> {
 #[cfg(not(target_arch = "wasm32"))]
 impl<S> Copy for TurnScope<S> {}
 
-/// Normalizes an opt-in frame-rate cap (Hz): positive finite values clamp to at least `1.0` Hz,
-/// while zero, negative, NaN and infinite values normalize to `0.0` (uncapped display rate).
-#[inline]
-pub(crate) fn normalize_fps_cap(fps: f32) -> f32 {
-    if fps.is_finite() && fps > 0.0 {
-        fps.max(1.0)
-    } else {
-        0.0
-    }
-}
-
-/// Converts an opt-in `ambient_fps` rate (Hz) into its target frame period, or `None` when
-/// uncapped (zero, negative, non-finite, or so large that its period rounds to zero).
-#[inline]
-pub(crate) fn ambient_period_from_fps(fps: f32) -> Option<std::time::Duration> {
-    let hz = normalize_fps_cap(fps);
-    (hz > 0.0)
-        .then(|| std::time::Duration::from_secs_f64(1.0 / f64::from(hz)))
-        .filter(|period| !period.is_zero())
-}
-
 /// An `AppSpec` with its lifetime: by default it opens one window and quits when it closes,
 /// like `rune::run`.
 pub struct App<S: 'static> {
@@ -198,6 +177,8 @@ pub struct App<S: 'static> {
     /// `playground::attach`, set by `App::playground`: a window calls it through this, so an app
     /// without a playground doesn't link it.
     pub(crate) attach_playground: Option<crate::playground::Attach<S>>,
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) settle_ready: Option<settle::SettleReady<S>>,
 }
 
 impl<S: 'static> App<S> {
@@ -273,6 +254,7 @@ impl<S: 'static> App<S> {
             runtime: RuntimeConfig::default(),
             playground: None,
             attach_playground: None,
+            settle_ready: None,
         }
     }
 
@@ -1421,8 +1403,9 @@ impl<S: 'static> AppHandle<S> {
 }
 
 mod config;
-pub(crate) use config::RuntimeConfig;
+pub(crate) use config::{ambient_period_from_fps, RuntimeConfig};
 mod requests;
+mod settle;
 pub(crate) use requests::{window_request_order, Activation, Shared, SharedCore, WindowRequest, WindowRequests};
 
 #[cfg(test)]

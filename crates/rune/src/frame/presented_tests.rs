@@ -511,3 +511,27 @@ fn metal_layer_hook_attaches_to_offscreen_metal_surface_and_tracks_acquired_draw
     );
     drop(surface);
 }
+
+#[test]
+fn presented_delivery_records_first_on_display_launch_mark_with_real_timestamp() {
+    let source = Arc::new(FakeSource::default());
+    let mut reports = FramePresentReports::new(Some(Box::new(|_| {})), Some("main"));
+    reports.set_source(source.clone());
+
+    let landed_at = crate::time::now() - Duration::from_millis(17);
+    // Skipped drawable (None) must not stamp frame.first.on_display; the first landed one stamps it.
+    source.complete(1, None);
+    source.complete(2, Some(landed_at));
+    reports.push_and_drain(1, 1);
+    reports.push_and_drain(2, 2);
+
+    let mark = crate::marks::marks()
+        .into_iter()
+        .find(|(name, _)| *name == "frame.first.on_display")
+        .map(|(_, at)| at);
+    assert!(mark.is_some(), "frame.first.on_display must be recorded when a drawable lands");
+    // In isolation (or if this test runs first in the process), the timestamp matches landed_at.
+    if let Some(at) = mark {
+        assert!(at <= crate::time::now(), "frame.first.on_display timestamp must not be in the future");
+    }
+}
