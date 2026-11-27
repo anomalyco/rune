@@ -36,6 +36,7 @@ mod palette_seed_compat;
 mod popover_focus;
 mod popup_list;
 mod popup_list_motion;
+mod progress_metrics;
 mod radio_look;
 mod reorder;
 mod rolling_text;
