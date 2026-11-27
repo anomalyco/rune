@@ -49,6 +49,8 @@ impl El {
                 fg: st.fg,
                 ring: st.ring,
                 radius: st.radius,
+                pad_x: st.pad_x,
+                margin_x: st.margin_x,
                 bare: None,
             });
         }
@@ -97,6 +99,8 @@ impl El {
             fg: style.fg,
             ring: style.ring,
             radius: style.radius,
+            pad_x: style.pad_x,
+            margin_x: style.margin_x,
             bare: None,
         });
         t.spans = with_pill_colors(&t.spans, &t.cold.pills);
@@ -137,7 +141,7 @@ impl El {
         let at = t.cold.pills.partition_point(|p| p.start < start);
         let InlineIcon { icon, image, size, gap, radius, color, label, help } = icon;
         let bare = Some(Box::new(BareIcon { size, gap, radius, image, replace: None, label, help }));
-        t.cold.pills.insert(at, PillChip { start, end, icon, image: None, bg: None, fg: color, ring: None, radius: None, bare });
+        t.cold.pills.insert(at, PillChip { start, end, icon, image: None, bg: None, fg: color, ring: None, radius: None, pad_x: None, margin_x: None, bare });
         self
     }
 
@@ -175,7 +179,7 @@ impl El {
         let InlineImage { pixels, width, ascent, descent, bleed } = image;
         let replace = Some(Replace { width, ascent, descent, bleed });
         let bare = Some(Box::new(BareIcon { size: 0.0, gap: 0.0, radius: 0.0, image: Some(pixels), replace, label: None, help: None }));
-        t.cold.pills.insert(at, PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare });
+        t.cold.pills.insert(at, PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare });
         self
     }
 

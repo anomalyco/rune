@@ -866,7 +866,7 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     let chips: Vec<rune_text::PillChip> = w
         .display_pills()
         .into_iter()
-        .map(|(start, end, _)| rune_text::PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare: None })
+        .map(|(start, end, _)| rune_text::PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare: None })
         .collect();
     let layout = ts.layout_blocks(&w.text, &[], w.blocks(), &chips, style, 2.0, Some(220.0), parley::Alignment::Start);
     assert!(layout.len() >= 3, "wrapped into {} lines", layout.len());
@@ -889,7 +889,7 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
     let p_chips: Vec<rune_text::PillChip> = ime_e
         .display_pills()
         .into_iter()
-        .map(|(start, end, _)| rune_text::PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare: None })
+        .map(|(start, end, _)| rune_text::PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare: None })
         .collect();
     let ime_layout = ts.layout_blocks(&disp, &[], &[Block::Paragraph], &p_chips, style, 2.0, None, parley::Alignment::Start);
     let (mut decos, mut icons) = (Vec::new(), Vec::new());
@@ -900,7 +900,7 @@ fn pill_edge_cases_words_lines_bidi_and_direct_text_mutation() {
 
     // RTL pill and mixed RTL+LTR pill chips have positive width.
     for (txt, start, end) in [("דוד", 0u32, 6u32), ("שלום@maya", 8, 13), ("@e\u{0301}", 0, 4)] {
-        let pc = [rune_text::PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare: None }];
+        let pc = [rune_text::PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare: None }];
         let l = ts.layout_blocks(txt, &[], &[Block::Paragraph], &pc, style, 2.0, None, parley::Alignment::Start);
         let (mut d, mut ic) = (Vec::new(), Vec::new());
         rune_text::pill_chips(&l, &pc, 14.0, 2.0, [0.0, 0.0], Color::BLACK, &mut d, &mut ic);

@@ -57,7 +57,7 @@ fn pill_chips_keep_room_and_never_overlap_at_wraps() {
         .enumerate()
         .map(|(k, label)| {
             let start = content.find(label).unwrap() as u32;
-            PillChip { start, end: start + label.len() as u32, icon: (k == 1).then_some(&DOT), image: None, bg: None, fg: None, ring: None, radius: None, bare: None }
+            PillChip { start, end: start + label.len() as u32, icon: (k == 1).then_some(&DOT), image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare: None }
         })
         .collect();
     let scale = 2.0;
@@ -141,7 +141,7 @@ fn a_pill_wider_than_its_line_wraps_inside_it() {
     let label = "@Migrate config loader to the new schema";
     let content = format!("as in {label} did");
     let start = content.find(label).unwrap() as u32;
-    let pills = [PillChip { start, end: start + label.len() as u32, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare: None }];
+    let pills = [PillChip { start, end: start + label.len() as u32, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare: None }];
     let scale = 2.0;
     for width in (90..=200).step_by(7) {
         let max = width as f32 * scale;
@@ -444,10 +444,10 @@ fn pill_chips_apply_custom_radius_clamping_ring_and_leading_images() {
     let (c0, c1) = find("@capsule");
     let (l0, l1) = find("@logo");
     let pills = [
-        PillChip { start: d0, end: d1, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, bare: None },
-        PillChip { start: s0, end: s1, icon: None, image: None, bg: None, fg: None, ring: Some((ring_color, 0.0)), radius: Some(-3.0), bare: None },
-        PillChip { start: c0, end: c1, icon: None, image: None, bg: None, fg: None, ring: Some((ring_color, 1.5)), radius: Some(999.0), bare: None },
-        PillChip { start: l0, end: l1, icon: Some(&FALLBACK), image: Some(logo.clone()), bg: None, fg: None, ring: Some((ring_color, 1.0)), radius: Some(8.0), bare: None },
+        PillChip { start: d0, end: d1, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare: None },
+        PillChip { start: s0, end: s1, icon: None, image: None, bg: None, fg: None, ring: Some((ring_color, 0.0)), radius: Some(-3.0), pad_x: None, margin_x: None, bare: None },
+        PillChip { start: c0, end: c1, icon: None, image: None, bg: None, fg: None, ring: Some((ring_color, 1.5)), radius: Some(999.0), pad_x: None, margin_x: None, bare: None },
+        PillChip { start: l0, end: l1, icon: Some(&FALLBACK), image: Some(logo.clone()), bg: None, fg: None, ring: Some((ring_color, 1.0)), radius: Some(8.0), pad_x: None, margin_x: None, bare: None },
     ];
     let bare = text.layout_blocks(content, &[], &[], &[], style, scale, None, Alignment::Start);
     let layout = text.layout_blocks(content, &[], &[], &pills, style, scale, None, Alignment::Start);
@@ -486,6 +486,8 @@ fn pill_chips_apply_custom_radius_clamping_ring_and_leading_images() {
         fg: None,
         ring: Some((ring_color, 1.0)),
         radius: Some(999.0),
+        pad_x: None,
+        margin_x: None,
         bare: None,
     }];
     let wlayout = text.layout_blocks(&wrapped_text, &[], &[], &wpills, style, scale, Some(150.0 * scale), Alignment::Start);
@@ -511,6 +513,8 @@ fn pill_chips_apply_custom_radius_clamping_ring_and_leading_images() {
         fg: None,
         ring: Some((ring_color, 1.0)),
         radius: Some(999.0),
+        pad_x: None,
+        margin_x: None,
         bare: None,
     }];
     let rlayout = text.layout_blocks(rtl_text, &[], &[], &rpills, style, scale, None, Alignment::Start);
@@ -607,6 +611,8 @@ fn inline_icon_stays_on_url_line_with_prefix_and_never_creates_empty_line() {
             fg: None,
             ring: None,
             radius: None,
+            pad_x: None,
+            margin_x: None,
             bare: Some(Box::new(crate::layout::span::BareIcon {
                 size: 14.0,
                 gap: 4.0,
@@ -711,6 +717,8 @@ fn wide_unbroken_pill_and_rtl_inline_icon_never_orphan_leading_box() {
         fg: None,
         ring: None,
         radius: None,
+        pad_x: None,
+        margin_x: None,
         bare: None,
     }];
     for wrap_anywhere in [false, true] {
@@ -751,6 +759,8 @@ fn wide_unbroken_pill_and_rtl_inline_icon_never_orphan_leading_box() {
         fg: None,
         ring: None,
         radius: None,
+        pad_x: None,
+        margin_x: None,
         bare: Some(Box::new(crate::layout::span::BareIcon {
             size: 14.0,
             gap: 4.0,
@@ -785,5 +795,124 @@ fn wide_unbroken_pill_and_rtl_inline_icon_never_orphan_leading_box() {
                 um.block_max_coord,
             );
         }
+    }
+}
+
+#[test]
+fn pill_chips_respect_custom_pad_x_and_margin_x_across_layout_paint_and_wrap() {
+    static DOT: Icon = Icon { name: "dot", view: 24.0, body: "<circle cx=\"12\" cy=\"12\" r=\"8\"/>" };
+    let mut ts = TextSystem::default();
+    let style = TextStyle::new(15.0, 400.0);
+    let content = "hi @alex there";
+    let start = content.find("@alex").unwrap() as u32;
+    let end = start + "@alex".len() as u32;
+    let chip = |pad_x, margin_x, icon| PillChip {
+        start, end, icon, image: None, bg: None, fg: None, ring: None, radius: None, pad_x, margin_x, bare: None,
+    };
+    let label_span = |layout: &Layout<Ink>| -> (f32, f32, f32) {
+        let mut x0 = f32::INFINITY;
+        let mut x1 = f32::NEG_INFINITY;
+        let mut next_x = f32::INFINITY;
+        for line in layout.lines() {
+            for item in line.items() {
+                if let PositionedLayoutItem::GlyphRun(gr) = item {
+                    let r = gr.run().text_range();
+                    if r.start < end as usize && (start as usize) < r.end {
+                        x0 = x0.min(gr.offset());
+                        x1 = x1.max(gr.offset() + gr.advance());
+                    } else if r.start >= end as usize {
+                        next_x = next_x.min(gr.offset());
+                    }
+                }
+            }
+        }
+        (x0, x1, next_x)
+    };
+
+    let default_pills = [chip(None, None, None)];
+    let tight_pills = [chip(Some(2.0), Some(0.0), None)];
+    let zero_pills = [chip(Some(0.0), Some(0.0), None)];
+    let frac_margin = [chip(Some(0.0), Some(1.4), None)];
+    let icon_tight = [chip(Some(2.0), Some(0.0), Some(&DOT))];
+    let neg_clamped = [chip(Some(-5.0), Some(f32::NAN), None)];
+
+    assert_ne!(
+        shape_key(content, &[], style, 1.0, false, &default_pills),
+        shape_key(content, &[], style, 1.0, false, &tight_pills),
+        "custom pad_x/margin_x must distinguish shape_key",
+    );
+    assert_eq!(
+        shape_key(content, &[], style, 1.0, false, &zero_pills),
+        shape_key(content, &[], style, 1.0, false, &neg_clamped),
+        "negative/NaN overrides hash identically to 0.0",
+    );
+
+    for scale in [1.0f32, 2.0] {
+        let bare = ts.layout_blocks(content, &[], &[], &[], style, scale, None, Alignment::Start);
+        let l_def = ts.layout_blocks(content, &[], &[], &default_pills, style, scale, None, Alignment::Start);
+        let l_tight = ts.layout_blocks(content, &[], &[], &tight_pills, style, scale, None, Alignment::Start);
+        let l_zero = ts.layout_blocks(content, &[], &[], &zero_pills, style, scale, None, Alignment::Start);
+        let l_frac = ts.layout_blocks(content, &[], &[], &frac_margin, style, scale, None, Alignment::Start);
+        let l_icon = ts.layout_blocks(content, &[], &[], &icon_tight, style, scale, None, Alignment::Start);
+
+        let pm = PillMetrics::new(15.0);
+        let def_room = (pm.lead(false) + pm.trail()) * scale;
+        assert!((l_def.full_width() - bare.full_width() - def_room).abs() <= 1.5);
+        assert!((l_tight.full_width() - bare.full_width() - 4.0 * scale).abs() <= 1.0);
+        assert!((l_zero.full_width() - bare.full_width()).abs() <= 0.5);
+
+        let (mut c_tight, mut ic) = (Vec::new(), Vec::new());
+        pill_chips(&l_tight, &tight_pills, 15.0, scale, [0.0, 0.0], Color::BLACK, &mut c_tight, &mut ic);
+        assert_eq!(c_tight.len(), 1);
+        let (gx0, gx1, next_x) = label_span(&l_tight);
+        let r = c_tight[0].deco.rect;
+        assert!((gx0 - r[0] - 2.0 * scale).abs() <= 1.0, "left pad=2pt: chip={r:?} gx0={gx0}");
+        assert!((r[0] + r[2] - gx1 - 2.0 * scale).abs() <= 1.0, "right pad=2pt: chip={r:?} gx1={gx1}");
+        assert!((next_x - (r[0] + r[2])).abs() <= 1.0, "margin=0pt puts next run at chip end: next={next_x} chip={r:?}");
+
+        // Zero-pad with fractional margin never shrinks chip inside glyphs.
+        let (mut c_frac, mut ic2) = (Vec::new(), Vec::new());
+        pill_chips(&l_frac, &frac_margin, 15.0, scale, [0.0, 0.0], Color::BLACK, &mut c_frac, &mut ic2);
+        let (fgx0, fgx1, _) = label_span(&l_frac);
+        let fr = c_frac[0].deco.rect;
+        assert!(fr[0] <= fgx0 + 0.5 && fr[0] + fr[2] >= fgx1 - 0.5, "frac margin chip {fr:?} covers glyphs {fgx0}..{fgx1}");
+
+        // Leading icon uses custom pad_x instead of default PillMetrics::pad.
+        let (mut c_icon, mut icons) = (Vec::new(), Vec::new());
+        pill_chips(&l_icon, &icon_tight, 15.0, scale, [0.0, 0.0], Color::BLACK, &mut c_icon, &mut icons);
+        assert_eq!(icons.len(), 1);
+        let ir = c_icon[0].deco.rect;
+        assert!((icons[0].2[0] - (ir[0] + 2.0 * scale)).abs() <= 1.0, "icon inset uses custom pad_x: icon={:?} chip={ir:?}", icons[0].2);
+    }
+
+    // RTL pill with custom pad_x places icon pad_x inside the right (start) edge.
+    let rtl_text = "שלום דוד היום";
+    let rs = rtl_text.find("דוד").unwrap() as u32;
+    let rpills = [PillChip {
+        start: rs, end: rs + "דוד".len() as u32, icon: Some(&DOT), image: None,
+        bg: None, fg: None, ring: None, radius: None, pad_x: Some(2.0), margin_x: Some(0.0), bare: None,
+    }];
+    let rlayout = ts.layout_blocks(rtl_text, &[], &[], &rpills, style, 2.0, None, Alignment::Start);
+    let (mut rchips, mut ricons) = (Vec::new(), Vec::new());
+    pill_chips(&rlayout, &rpills, 15.0, 2.0, [0.0, 0.0], Color::BLACK, &mut rchips, &mut ricons);
+    assert_eq!((rchips.len(), ricons.len()), (1, 1));
+    let rr = rchips[0].deco.rect;
+    let (_, rpx, rat, _) = ricons[0];
+    assert!(((rr[0] + rr[2]) - (rat[0] + rpx as f32) - 4.0).abs() <= 1.5, "RTL icon inset uses custom pad_x: {rat:?} ({rpx}) in {rr:?}");
+
+    // Zero-room pill (pad_x=0, margin_x=0) moves whole to the next line without stranding lead.
+    let wrap_text = "hello world @superlongtag end";
+    let ws = wrap_text.find("@superlongtag").unwrap() as u32;
+    let we = ws + "@superlongtag".len() as u32;
+    let wpills = [PillChip {
+        start: ws, end: we, icon: None, image: None, bg: None, fg: None,
+        ring: None, radius: None, pad_x: Some(0.0), margin_x: Some(0.0), bare: None,
+    }];
+    for width in (95..=170).step_by(5) {
+        let layout = ts.layout_blocks(wrap_text, &[], &[], &wpills, style, 1.0, Some(width as f32), Alignment::Start);
+        let (mut chips, mut icons) = (Vec::new(), Vec::new());
+        pill_chips(&layout, &wpills, 15.0, 1.0, [0.0, 0.0], Color::BLACK, &mut chips, &mut icons);
+        assert_eq!(chips.len(), 1, "zero-room pill stays atomic on one line at width {width}");
+        assert!(chips[0].deco.rect[2] > 10.0, "chip covers label width at width {width}: {:?}", chips[0].deco.rect);
     }
 }

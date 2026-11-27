@@ -440,4 +440,111 @@ mod live {
         assert!(rt_static.instances.iter().any(|q| q.params[1] == crate::render::KIND_RECT && q.params[0] > 0.5 && q.border[3] > 0.5));
         assert!(rt_static.instances.iter().any(|q| q.params[1] == crate::render::KIND_IMAGE));
     }
+
+    #[test]
+    fn pill_style_pad_x_and_margin_x_stay_const_copy_and_control_chip_geometry() {
+        const TIGHT: PillStyle = PillStyle::new().pad_x(2.0).margin_x(0.0).radius(3.0);
+        fn assert_copy<T: Copy>(_: T) {}
+        assert_copy(TIGHT);
+        assert_eq!(PillStyle::new().pad_x, None);
+        assert_eq!(PillStyle::new().margin_x, None);
+        assert_eq!(TIGHT.pad_x, Some(2.0));
+        assert_eq!(TIGHT.margin_x, Some(0.0));
+        assert_eq!(PillStyle::new().pad_x(-3.0).pad_x, Some(0.0));
+        assert_eq!(PillStyle::new().pad_x(f32::NAN).pad_x, Some(0.0));
+        assert_eq!(PillStyle::new().margin_x(-1.0).margin_x, Some(0.0));
+        assert_eq!(PillStyle::new().margin_x(f32::INFINITY).margin_x, Some(0.0));
+
+        const BG: crate::Color = crate::Color { r: 0.2, g: 0.5, b: 0.9, a: 0.25 };
+        const STYLE: TextStyle = TextStyle::new(15.0, 400.0).lh(22.0);
+        let chip_rect = |rt: &Runtime<PillStyle>| -> [f32; 4] {
+            rt.instances
+                .iter()
+                .find(|q| q.params[1] == crate::render::KIND_RECT && q.fill[3] > 0.1)
+                .expect("pill chip rect")
+                .rect
+        };
+        let static_view = |ps: &PillStyle, _: &mut Cx<PillStyle>| {
+            col().key("root").child(text("hi @alex there").key("t").font(STYLE).pill(3..8, *ps))
+        };
+
+        let mut rt_def = Runtime::new(PillStyle::new().bg(BG), static_view, (320.0, 60.0), Env::new(true, 1.0));
+        rt_def.frame(0.0);
+        let def_rect = chip_rect(&rt_def);
+        let def_w = rt_def.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().text_layout.as_ref().unwrap().view().full_width();
+
+        let mut rt_tight = Runtime::new(TIGHT.bg(BG), static_view, (320.0, 60.0), Env::new(true, 1.0));
+        rt_tight.frame(0.0);
+        let tight_rect = chip_rect(&rt_tight);
+        let tight_w = rt_tight.tree.nodes.iter().find(|n| n.key.as_deref() == Some("t")).unwrap().text_layout.as_ref().unwrap().view().full_width();
+
+        // Default at 15pt: pad=5.4, margin=1.8 (14.4pt total). Tight: pad=2.0, margin=0.0 (4.0pt total).
+        let expected_chip_shrink = 2.0 * ((15.0f32 * 0.36).max(3.0) - 2.0);
+        assert!(
+            ((def_rect[2] - tight_rect[2]) - expected_chip_shrink).abs() <= 1.5,
+            "chip width shrunk by pad delta: def={def_rect:?} tight={tight_rect:?}",
+        );
+        let expected_total_shrink = 2.0 * (((15.0f32 * 0.36).max(3.0) + (15.0f32 * 0.12).max(1.5)) - 2.0);
+        assert!(
+            ((def_w - tight_w) - expected_total_shrink).abs() <= 2.0,
+            "text advance shrunk by pad+margin delta: def_w={def_w} tight_w={tight_w}",
+        );
+
+        // Dynamic text_input: changing pill_style updates chip rect and keeps hit-testing accurate.
+        struct InputState {
+            edit: crate::TextEdit,
+            tight: bool,
+            pressed: Vec<String>,
+        }
+        let mut edit = crate::TextEdit::new("hi ").rich();
+        edit.insert_pill("user:alex", "@alex");
+        edit.insert(" there");
+        let input_view = |s: &InputState, _: &mut Cx<InputState>| {
+            let ps = if s.tight { TIGHT.bg(BG) } else { PillStyle::new().bg(BG) };
+            col().key("root").child(
+                crate::el::text_input(&s.edit, STYLE)
+                    .key("field")
+                    .w(280.0)
+                    .h(36.0)
+                    .on_edit(|s: &mut InputState| &mut s.edit)
+                    .pill_style(move |_| ps)
+                    .on_pill_press(|s: &mut InputState, id, _, _| {
+                        s.pressed.push(id.to_owned());
+                        true
+                    }),
+            )
+        };
+        let mut rt = Runtime::new(
+            InputState { edit, tight: false, pressed: Vec::new() },
+            input_view,
+            (320.0, 60.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        let find_chip = |rt: &Runtime<InputState>| -> [f32; 4] {
+            rt.instances
+                .iter()
+                .find(|q| q.params[1] == crate::render::KIND_RECT && q.fill[3] > 0.1)
+                .expect("input pill chip rect")
+                .rect
+        };
+        let input_def = find_chip(&rt);
+
+        rt.update(|s, _| s.tight = true);
+        rt.frame(0.0);
+        let input_tight = find_chip(&rt);
+        assert!(
+            ((input_def[2] - input_tight[2]) - expected_chip_shrink).abs() <= 1.5,
+            "dynamic pill_style switch re-shapes and repaints chip: def={input_def:?} tight={input_tight:?}",
+        );
+
+        // Clicking the center of the tighter pill fires on_pill_press with its id.
+        let cx = input_tight[0] + input_tight[2] * 0.5;
+        let cy = input_tight[1] + input_tight[3] * 0.5;
+        rt.pointer_move(cx, cy);
+        rt.pointer_down(cx, cy);
+        rt.pointer_up(cx, cy);
+        rt.frame(0.0);
+        assert_eq!(rt.state.pressed, ["user:alex"]);
+    }
 }

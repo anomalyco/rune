@@ -59,9 +59,18 @@ pub fn shape_key(text: &str, spans: &[Span], style: TextStyle, scale: f32, wrap_
     }
     let mut h = KeyHasher::default();
     (key, wrap_anywhere).hash(&mut h);
+    let nonneg_bits = |v: f32| (if v.is_finite() && v > 0.0 { v } else { 0.0 }).to_bits();
     for p in pills {
         let replace = |r: &crate::Replace| [r.width, r.ascent, r.descent].map(f32::to_bits);
-        (p.start, p.end, p.has_lead_visual(), p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits(), b.replace.as_ref().map(replace)))).hash(&mut h);
+        (
+            p.start,
+            p.end,
+            p.has_lead_visual(),
+            p.pad_x.map(nonneg_bits),
+            p.margin_x.map(nonneg_bits),
+            p.bare.as_ref().map(|b| (b.size.to_bits(), b.gap.to_bits(), b.replace.as_ref().map(replace))),
+        )
+            .hash(&mut h);
     }
     h.finish()
 }

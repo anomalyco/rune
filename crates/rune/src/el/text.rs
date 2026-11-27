@@ -433,7 +433,7 @@ impl El {
                 } else {
                     st.icon.or_else(|| inp.pill_icon.as_ref().and_then(|f| f(id)))
                 };
-                crate::text::PillChip { start, end, icon, image, bg: st.bg, fg: st.fg, ring: st.ring, radius: st.radius, bare: None }
+                crate::text::PillChip { start, end, icon, image, bg: st.bg, fg: st.fg, ring: st.ring, radius: st.radius, pad_x: st.pad_x, margin_x: st.margin_x, bare: None }
             })
             .collect();
     }

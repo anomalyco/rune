@@ -116,6 +116,8 @@ pub struct PillChip {
     pub fg: Option<Color>,
     pub ring: Option<(Color, f32)>,
     pub radius: Option<f32>,
+    pub pad_x: Option<f32>,
+    pub margin_x: Option<f32>,
     pub bare: Option<Box<BareIcon>>,
 }
 
@@ -172,6 +174,7 @@ pub(crate) fn is_hidden_size(font_size: f32) -> bool {
 /// A pill chip's horizontal geometry in points for text of `size` points: the room before its
 /// label (outer margin, padding, then any icon and its gap) and after it (padding, margin).
 #[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PillMetrics {
     pub margin: f32,
     pub pad: f32,
@@ -182,6 +185,15 @@ pub struct PillMetrics {
 impl PillMetrics {
     pub fn new(size: f32) -> Self {
         Self { margin: (size * 0.12).max(1.5), pad: (size * 0.36).max(3.0), icon: (size * 0.95).round(), icon_gap: (size * 0.22).max(2.0) }
+    }
+
+    /// Resolves defaults with any per-chip `pad_x` / `margin_x` overrides (clamped to `>= 0.0`).
+    pub fn for_chip(&self, chip: &PillChip) -> Self {
+        Self {
+            margin: chip.margin_x.map_or(self.margin, nonneg_pt),
+            pad: chip.pad_x.map_or(self.pad, nonneg_pt),
+            ..*self
+        }
     }
 
     /// Room before the label, inside the chip and out.
