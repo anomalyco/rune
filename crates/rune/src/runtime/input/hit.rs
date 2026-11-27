@@ -172,8 +172,17 @@ impl RuntimeCore {
 
     /// Window point (x, y) as node `i`'s handlers see it.
     pub(crate) fn pointer_event(&self, i: usize, x: f32, y: f32) -> PointerEvent {
+        let r = self.tree.nodes[i].target;
         let [lx, ly] = self.to_local(i, x, y);
-        PointerEvent { x: lx, y: ly, window_x: x, window_y: y, pressing: self.pointer.any_button_down() }
+        PointerEvent {
+            x: lx,
+            y: ly,
+            w: (r[2] - r[0]).max(0.0),
+            h: (r[3] - r[1]).max(0.0),
+            window_x: x,
+            window_y: y,
+            pressing: self.pointer.any_button_down(),
+        }
     }
 
     /// Window point (x, y) in node `i`'s own layout points: from its top-left as drawn, divided
