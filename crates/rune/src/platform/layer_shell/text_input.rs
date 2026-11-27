@@ -1,8 +1,7 @@
 //! Wayland `zwp_text_input_v3` protocol dispatch and wire request execution for layer-shell
 //! overlays. The protocol state machine lives in `layer_shell_machine::text_input`.
 
-use wayland_client::{Connection, Dispatch, Proxy, QueueHandle};
-use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_manager_v3::ZwpTextInputManagerV3;
+use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
     self, ContentHint, ContentPurpose, ZwpTextInputV3,
 };
@@ -10,18 +9,6 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
 use super::super::layer_shell_machine::text_input::{self, Effect, Event};
 use super::{Input, State};
 use crate::input::host_events::ImeStep;
-
-impl Dispatch<ZwpTextInputManagerV3, ()> for State {
-    fn event(
-        _: &mut Self,
-        _: &ZwpTextInputManagerV3,
-        _: <ZwpTextInputManagerV3 as Proxy>::Event,
-        _: &(),
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
-}
 
 impl Dispatch<ZwpTextInputV3, ()> for State {
     fn event(

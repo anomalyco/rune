@@ -789,6 +789,7 @@ pub(crate) mod watch_loop {
 pub(crate) mod activation;
 pub(crate) mod compose_cache;
 pub(crate) mod frame_callback;
+pub(crate) mod globals_pool;
 pub(crate) mod pointer;
 pub(crate) mod text_input;
 

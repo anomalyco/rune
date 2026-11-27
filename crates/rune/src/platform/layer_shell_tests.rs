@@ -586,7 +586,7 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
         ));
         let mut layer = super::LayerSurface::new(display, "test-queued", placement, false, &options, None, false)
             .expect("configured layer surface");
-        let conn_probe = layer.conn.clone();
+        let conn_probe = layer.globals.conn().clone();
 
         // Requesting a second frame callback destroys the previous pending one immediately.
         layer.request_frame();
@@ -604,13 +604,13 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
         let surface_id = layer.surface.id();
         let surface_proto_id = surface_id.protocol_id();
         let layer_id = layer.layer.id();
-        let shell_id = layer.shell.id();
-        let compositor_id = layer.compositor.id();
-        let registry_id = layer.globals.as_ref().unwrap().registry().id();
+        let shell_id = layer.globals.shell().id();
+        let compositor_id = layer.globals.compositor().id();
+        let registry_id = layer.globals.registry_id();
         let weaks = [
-            ("registry", Arc::downgrade(layer.globals.as_ref().unwrap().registry().object_data().unwrap())),
-            ("compositor", Arc::downgrade(layer.compositor.object_data().unwrap())),
-            ("shell", Arc::downgrade(layer.shell.object_data().unwrap())),
+            ("registry", layer.globals.registry_object_data().unwrap()),
+            ("compositor", Arc::downgrade(layer.globals.compositor().object_data().unwrap())),
+            ("shell", Arc::downgrade(layer.globals.shell().object_data().unwrap())),
             ("surface", Arc::downgrade(layer.surface.object_data().unwrap())),
             ("layer", Arc::downgrade(layer.layer.object_data().unwrap())),
             ("frame_callback", Arc::downgrade(cb2.object_data().unwrap())),
@@ -660,7 +660,7 @@ fn drop_destroys_all_proxies_and_drains_queued_events_so_event_queue_does_not_le
         ));
         let mut layer = super::LayerSurface::new(display, "test-pending-cb", placement, false, &options, None, false)
             .expect("configured layer surface");
-        let conn_probe = layer.conn.clone();
+        let conn_probe = layer.globals.conn().clone();
         layer.request_frame();
         let cb = layer.state.frame_callback.as_ref().unwrap().1.clone();
         let cb_id = cb.id();
@@ -841,7 +841,7 @@ fn activation_token_names_keyboard_enter_and_touch_down_serials_on_our_surface()
     let keyboard_id = layer.state.keyboard.as_ref().expect("bound wl_keyboard").id().protocol_id();
     let touch_id = layer.state.touch.as_ref().expect("bound wl_touch").id().protocol_id();
     let surface_id = layer.surface.id().protocol_id();
-    let other_surface = layer.compositor.create_surface(&layer.queue.handle(), ());
+    let other_surface = layer.globals.compositor().create_surface(&layer.queue.handle(), ());
     let other_surface_id = other_surface.id().protocol_id();
 
     fn finish_token(host: &Connection, pending: &mut super::PendingActivationToken) -> Option<String> {
