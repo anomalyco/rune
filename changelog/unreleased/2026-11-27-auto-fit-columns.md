@@ -1,0 +1,1 @@
+- Layout: add `El::auto_fit_columns` / `set_auto_fit_columns` (`repeat(auto-fit, minmax(min, 1fr))`) and `El::auto_fill_columns` / `set_auto_fill_columns` (`repeat(auto-fill, minmax(min, 1fr))`) for responsive single-pass CSS Grid columns, plus `grid-template-columns` emission in static HTML/CSS export.

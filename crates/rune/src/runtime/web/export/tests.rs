@@ -357,3 +357,27 @@ fn html_export_emits_background_for_pixels_tile_and_wrap() {
     assert!(!mirrored.decls.iter().any(|d| d.0 == "image-rendering"), "{:?}", mirrored.decls);
     assert_eq!(plain.tag, "img");
 }
+
+#[test]
+fn exports_grid_template_columns_for_auto_fit_auto_fill_and_equal_columns() {
+    let mut rt = Runtime::new(
+        (),
+        |_, _| {
+            crate::col().key("root").w_full().role("main")
+                .child(crate::el().key("fit").w_full().auto_fit_columns(240.0).gap(12.0).child(crate::el().h(40.0)))
+                .child(crate::el().key("fill").w_full().auto_fill_columns(180.5).gap(8.0).child(crate::el().h(40.0)))
+                .child(crate::el().key("eq").w_full().equal_columns(3).child(crate::el().h(40.0)))
+        },
+        (800.0, 400.0),
+        Env::default(),
+    );
+    rt.page_mode();
+    let nodes = taken(&mut rt, 800.0);
+    let fit = nodes.iter().find(|n| n.path.ends_with("fit")).expect("fit");
+    let fill = nodes.iter().find(|n| n.path.ends_with("fill")).expect("fill");
+    let eq = nodes.iter().find(|n| n.path.ends_with("eq")).expect("eq");
+    assert!(fit.decls.contains(&("display", "grid".into())), "{:?}", fit.decls);
+    assert!(fit.decls.contains(&("grid-template-columns", "repeat(auto-fit,minmax(240px,1fr))".into())), "{:?}", fit.decls);
+    assert!(fill.decls.contains(&("grid-template-columns", "repeat(auto-fill,minmax(180.5px,1fr))".into())), "{:?}", fill.decls);
+    assert!(eq.decls.contains(&("grid-template-columns", "1fr 1fr 1fr".into())), "{:?}", eq.decls);
+}

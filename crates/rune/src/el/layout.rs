@@ -689,6 +689,71 @@ impl El {
         self.style.set_equal_columns(n);
         self
     }
+    /// Lay children out in as many equal columns of at least `min_width` points as fit the
+    /// element's width (CSS `grid-template-columns: repeat(auto-fit, minmax(min_width, 1fr))`).
+    ///
+    /// Empty trailing tracks collapse when fewer children exist than columns that fit, so a
+    /// single row of items stretches across the full width; a non-positive or non-finite
+    /// `min_width` falls back to one full-width column (`1fr`).
+    ///
+    /// ```
+    /// # use rune::{col, el};
+    /// # let _ =
+    /// el().w_full().auto_fit_columns(240.0).gap(12.0)
+    ///     .child(col().h(60.0))
+    ///     .child(col().h(60.0))
+    /// # ;
+    /// ```
+    #[inline]
+    pub fn auto_fit_columns(mut self, min_width: f32) -> Self {
+        self.set_auto_fit_columns(min_width);
+        self
+    }
+    /// [`El::auto_fit_columns`] in place.
+    ///
+    /// ```
+    /// # use rune::el;
+    /// let mut e = el().w_full();
+    /// e.set_auto_fit_columns(240.0);
+    /// ```
+    #[inline]
+    pub fn set_auto_fit_columns(&mut self, min_width: f32) -> &mut Self {
+        self.style.set_auto_fit_columns(min_width);
+        self
+    }
+    /// Lay children out in as many equal columns of at least `min_width` points as fit the
+    /// element's width, keeping empty trailing tracks (CSS
+    /// `grid-template-columns: repeat(auto-fill, minmax(min_width, 1fr))`).
+    ///
+    /// Unlike [`El::auto_fit_columns`], when fewer children exist than columns that fit, each
+    /// child keeps one column's share instead of expanding into the unused trailing tracks. A
+    /// non-positive or non-finite `min_width` falls back to one full-width column (`1fr`).
+    ///
+    /// ```
+    /// # use rune::{col, el};
+    /// # let _ =
+    /// el().w_full().auto_fill_columns(240.0).gap(12.0)
+    ///     .child(col().h(60.0))
+    ///     .child(col().h(60.0))
+    /// # ;
+    /// ```
+    #[inline]
+    pub fn auto_fill_columns(mut self, min_width: f32) -> Self {
+        self.set_auto_fill_columns(min_width);
+        self
+    }
+    /// [`El::auto_fill_columns`] in place.
+    ///
+    /// ```
+    /// # use rune::el;
+    /// let mut e = el().w_full();
+    /// e.set_auto_fill_columns(240.0);
+    /// ```
+    #[inline]
+    pub fn set_auto_fill_columns(&mut self, min_width: f32) -> &mut Self {
+        self.style.set_auto_fill_columns(min_width);
+        self
+    }
     /// Place this child of an `equal_columns` element in `column` (0-based) of the first row.
     /// Children in the same cell overlap in order, so a moving highlight can sit under a label.
     pub fn grid_cell(mut self, column: usize) -> Self {

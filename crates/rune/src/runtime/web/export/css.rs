@@ -2,7 +2,10 @@
 
 use std::fmt::Write;
 
-use taffy::style::{CompactLength, Display, FlexDirection, FlexWrap, Overflow, Position, Style};
+use taffy::style::{
+    CompactLength, Display, FlexDirection, FlexWrap, GridTemplateComponent, Overflow, Position, RepetitionCount, Style,
+    TrackSizingFunction,
+};
 
 use super::escape;
 use crate::color::Color;
@@ -28,6 +31,50 @@ fn len(raw: CompactLength) -> Option<String> {
         CompactLength::FIT_CONTENT_KEYWORD_TAG => Some("fit-content".into()),
         _ => None,
     }
+}
+
+fn track_len(raw: CompactLength) -> Option<String> {
+    match raw.tag() {
+        CompactLength::FR_TAG => Some(format!("{}fr", num(raw.value()))),
+        CompactLength::MIN_CONTENT_TAG => Some("min-content".into()),
+        CompactLength::MAX_CONTENT_TAG => Some("max-content".into()),
+        CompactLength::FIT_CONTENT_PX_TAG => Some(format!("fit-content({})", px(raw.value()))),
+        CompactLength::FIT_CONTENT_PERCENT_TAG => Some(format!("fit-content({}%)", num(raw.value() * 100.0))),
+        _ => len(raw),
+    }
+}
+
+fn track(t: TrackSizingFunction) -> Option<String> {
+    let (min, max) = (t.min.into_raw(), t.max.into_raw());
+    if min == max {
+        track_len(min)
+    } else if min.tag() == CompactLength::AUTO_TAG && max.tag() == CompactLength::FR_TAG {
+        track_len(max)
+    } else {
+        Some(format!("minmax({},{})", track_len(min)?, track_len(max)?))
+    }
+}
+
+fn grid_tracks<S: taffy::CheapCloneStr>(list: &[GridTemplateComponent<S>]) -> Option<String> {
+    if list.is_empty() { return None; }
+    let mut parts = Vec::with_capacity(list.len());
+    for c in list {
+        match c {
+            GridTemplateComponent::Single(t) => parts.push(track(*t)?),
+            GridTemplateComponent::Repeat(r) => {
+                let count = match r.count {
+                    RepetitionCount::Count(n) => n.to_string(),
+                    RepetitionCount::AutoFill => "auto-fill".into(),
+                    RepetitionCount::AutoFit => "auto-fit".into(),
+                };
+                let mut tracks = Vec::with_capacity(r.tracks.len());
+                for t in &r.tracks { tracks.push(track(*t)?); }
+                if tracks.is_empty() { return None; }
+                parts.push(format!("repeat({count},{})", tracks.join(" ")));
+            }
+        }
+    }
+    Some(parts.join(" "))
 }
 
 /// A Rust variant name in CSS's spelling: `SpaceBetween` to `space-between`.
@@ -64,6 +111,9 @@ pub(super) fn layout(s: &Style, root: bool) -> Decls {
         Display::Grid => d.push(("display", "grid".into())),
         Display::None => d.push(("display", "none".into())),
         _ => d.push(("display", "block".into())),
+    }
+    if let Some(cols) = grid_tracks(&s.grid_template_columns) {
+        d.push(("grid-template-columns", cols));
     }
     if s.flex_direction != FlexDirection::Row { d.push(("flex-direction", kebab(format!("{:?}", s.flex_direction)))); }
     if s.flex_wrap != FlexWrap::NoWrap { d.push(("flex-wrap", kebab(format!("{:?}", s.flex_wrap)))); }
