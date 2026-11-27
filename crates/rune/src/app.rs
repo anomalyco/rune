@@ -153,6 +153,7 @@ pub struct App<S: 'static> {
     pub(crate) on_ready: Option<OnWindow>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) on_window_geometry: Option<crate::window::geometry::OnWindowGeometry<S>>,
+    pub(crate) placement: crate::window::placement::AppPlacement<S>,
     pub(crate) on_display_close: Option<OnDisplayClose>,
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     pub(crate) on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
@@ -241,6 +242,7 @@ impl<S: 'static> App<S> {
             on_ready: None,
             #[cfg(not(target_arch = "wasm32"))]
             on_window_geometry: None,
+            placement: Default::default(),
             on_display_close: None,
             on_frame_encoded: None,
             on_frame_presented: None,
@@ -388,7 +390,7 @@ impl<S: 'static> App<S> {
     /// Native options for this app's window (size limits, resizability, ...). `WindowSpec::from_app`
     /// starts from them, and `WindowSpec::options` replaces them.
     pub fn window_options(mut self, options: crate::WindowOptions) -> Self {
-        self.window_options = options;
+        self.window_options = options; self.placement.override_from_options(&self.window_options);
         self
     }
 
@@ -480,7 +482,7 @@ impl<S: 'static> App<S> {
 
     /// Native and portable options together, including `WindowOptions::launcher_panel()`.
     pub fn configured_options(mut self, options: crate::ConfiguredWindowOptions) -> Self {
-        self.window_options = options.options;
+        self.window_options = options.options; self.placement.override_from_options(&self.window_options);
         self.macos_window = options.native;
         self.windows_window = options.windows;
         self

@@ -27,7 +27,7 @@ mod surface;
 pub(crate) mod traffic_lights;
 pub(crate) mod window_shape;
 
-pub(crate) use geometry::{backing_scale, content_origin, display_bounds, outer_size, overlay_rect, overlay_screen_area, place_window, pointer_display, set_window_frame, window_geometry};
+pub(crate) use geometry::{backing_scale, content_origin, display_bounds, outer_size, overlay_rect, overlay_screen_area, place_window, pointer_display, screen_bounds, set_window_frame, window_geometry};
 pub(crate) use pointer::PointerState;
 pub(crate) use presentation::Prewarm;
 #[cfg(test)]

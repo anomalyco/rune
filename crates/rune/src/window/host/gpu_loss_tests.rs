@@ -181,6 +181,7 @@ fn close_request_defer_and_poll_hidden_title_work_while_latched_without_redraw()
         on_quit: None,
         on_reopen: None,
         on_geometry: None,
+        on_placement: None,
         turn_scope: None,
         keep_layout: None,
         kept_layout: None,

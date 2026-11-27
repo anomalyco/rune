@@ -180,7 +180,10 @@ pub struct WindowOptions {
     pub click_through: bool,
     pub always_on_top: bool,
     pub visible: bool,
-    /// Physical desktop coordinates, not points. Use a display's position unchanged.
+    /// Physical desktop coordinates, not points. Use a display's position unchanged. On macOS,
+    /// resolved against connected displays' backing scales; for unambiguous mixed-scale placement
+    /// when physical display rects overlap, prefer [`App::logical_position`](crate::App::logical_position)
+    /// or [`App::window_placement`](crate::App::window_placement).
     pub position: Option<(i32, i32)>,
     /// Physical content size; overrides AppSpec's logical size when set.
     pub physical_size: Option<(u32, u32)>,
@@ -1086,6 +1089,7 @@ impl<S: 'static> WindowSpec<S> {
     }
     pub fn options(mut self, options: WindowOptions) -> Self {
         self.options = options;
+        self.app.placement.override_from_options(&self.options);
         self.app.macos_window = MacWindowOptions::default();
         self.app.windows_window = WindowsWindowOptions::default();
         self
@@ -1093,6 +1097,7 @@ impl<S: 'static> WindowSpec<S> {
     pub fn configured_options(mut self, options: ConfiguredWindowOptions) -> Self {
         let ConfiguredWindowOptions { options, native, windows } = options;
         self.options = options;
+        self.app.placement.override_from_options(&self.options);
         self.app.macos_window = native;
         self.app.windows_window = windows;
         self

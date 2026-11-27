@@ -102,32 +102,11 @@ impl WindowHandle {
     /// positions. Call it on the UI thread.
     pub fn placement(&self) -> Option<crate::windows::WindowPlacement> {
         let window = self.window().ok()?;
-        let (outer, inner) = (window.outer_position().ok()?, window.inner_position().ok()?);
-        let size = window.inner_size();
         #[cfg(target_os = "macos")]
         let panel = crate::platform::macos::is_panel(&window);
         #[cfg(not(target_os = "macos"))]
         let panel = false;
-        let (maximized, minimized, full_screen) = if panel {
-            (false, false, false)
-        } else {
-            (window.is_maximized(), window.is_minimized().unwrap_or(false), window.fullscreen().is_some())
-        };
-        #[cfg(target_os = "windows")]
-        let restore = ((maximized || minimized) && !full_screen).then(|| crate::platform::win32::restore_frame(&window)).flatten();
-        #[cfg(not(target_os = "windows"))]
-        let restore = None;
-        Some(crate::windows::WindowPlacement {
-            position: (outer.x, outer.y),
-            content_position: (inner.x, inner.y),
-            content_size: (size.width, size.height),
-            scale: window.scale_factor(),
-            maximized,
-            minimized,
-            full_screen,
-            restore,
-            display: window.current_monitor().map(|m| ((m.position().x, m.position().y), (m.size().width, m.size().height))),
-        })
+        crate::window::placement::sample_native_placement(&window, panel, None)
     }
     /// Shows `state` on the window's taskbar button: a progress bar and a count badge (see
     /// [`crate::Taskbar`]). macOS shows the count on the Dock icon, summed over the app's windows
@@ -244,9 +223,17 @@ impl WindowHandle {
         #[cfg(target_arch = "wasm32")]
         let _ = backdrop;
     }
-    /// Physical desktop pixels; retained across recreation. Unsupported on Wayland.
+    /// Physical desktop pixels; retained across recreation. On macOS, resolved against connected
+    /// displays' backing scales; for unambiguous mixed-scale moves when physical display rects
+    /// overlap, use [`Self::set_logical_position`]. Unsupported on Wayland.
     pub fn set_position(&self, position: (i32, i32)) {
         self.send(move |slot| WakeEvent::Position(slot, position));
+    }
+    /// Outer position in logical desktop points (top-left origin; negative coordinates are valid).
+    /// On macOS this moves the window directly in AppKit global points, unaffected by the
+    /// window's current display scale. Retained across recreation. Unsupported on Wayland.
+    pub fn set_logical_position(&self, position: (f64, f64)) {
+        self.send(move |slot| WakeEvent::LogicalPosition(slot, position));
     }
     pub fn place(&self, display: crate::DisplayTarget, placement: crate::OverlayPlacement) {
         let place = crate::windows::PlaceRequest::new(display, placement);

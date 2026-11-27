@@ -99,6 +99,28 @@ pub(crate) fn display_bounds(id: u32) -> [f64; 4] {
     [r.origin.x, r.origin.y, r.size.width, r.size.height]
 }
 
+/// Connected macOS displays' global top-left point bounds (`CGDisplayBounds`) and backing scale
+/// factors, plus `NSScreen::mainScreen`'s backing scale as the fallback scale.
+pub(crate) fn screen_bounds() -> (Vec<crate::window::placement::MacScreenBounds>, f64) {
+    let Some(mtm) = MainThreadMarker::new() else { return (Vec::new(), 1.0); };
+    let fallback = NSScreen::mainScreen(mtm)
+        .map(|s| s.backingScaleFactor())
+        .filter(|s| *s > 0.0 && s.is_finite())
+        .unwrap_or(1.0);
+    let screens = NSScreen::screens(mtm)
+        .iter()
+        .map(|s| {
+            let [x, y, w, h] = display_bounds(screen_id(&s));
+            crate::window::placement::MacScreenBounds {
+                origin_pt: (x, y),
+                size_pt: (w, h),
+                scale: s.backingScaleFactor(),
+            }
+        })
+        .collect();
+    (screens, fallback)
+}
+
 pub(crate) fn overlay_rect(at: crate::overlay::Placement, options: &OverlayOptions) -> Option<NSRect> {
     overlay_rect_on(at, options, None)
 }
