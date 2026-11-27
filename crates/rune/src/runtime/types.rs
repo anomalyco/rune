@@ -586,6 +586,8 @@ pub(crate) struct TreeState {
     pub(in crate::runtime) key_index: key_index::KeyIndex,
     /// Packed explicit piecewise-linear scroll-fade stops (`ScrollFade::stops`) for `Globals::flags[2..4]`.
     pub(in crate::runtime) fade_stops: [f32; 2],
+    /// Incremented on each `build()`, for invalidating cached hover snapshots.
+    pub(in crate::runtime) build_gen: u64,
 }
 
 impl TreeState {
@@ -620,6 +622,7 @@ impl TreeState {
             exit_mask: Default::default(),
             key_index: Default::default(),
             fade_stops: [0.0; 2],
+            build_gen: 0,
         }
     }
 

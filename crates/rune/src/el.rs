@@ -87,7 +87,7 @@ pub(crate) use sticky::{Sticky, StickyEdge};
 pub(crate) use text_spec::{Elide, InlineAnchor, TextDir, TextDirEvent, TextFlags, step_text_dir, wipe_links, wipe_string};
 pub use text_spec::LineFill;
 pub use text_spec::TextSpec;
-pub(crate) use tx::{Commit, FocusAsk, FullScreenRequest, MotionSource, SelectRequest, TraceCalls};
+pub(crate) use tx::{Commit, FocusAsk, FullScreenRequest, HoverSnapshot, MotionSource, SelectRequest, TraceCalls, innermost_hover_key};
 pub use tx::{Shell, Tx};
 pub(crate) use visual::VisualFlags;
 pub use visual::{Visual, VisualCold};

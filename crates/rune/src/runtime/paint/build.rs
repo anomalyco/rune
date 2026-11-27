@@ -847,6 +847,7 @@ impl RuntimeCore {
         self.update_help();
         self.paint.layer_scratch = layers;
         self.tree.built = true;
+        self.tree.build_gen = self.tree.build_gen.wrapping_add(1);
         self.land_unseen_entrances();
         self.tree.built_ids.clear();
         self.tree.built_ids.extend(self.tree.nodes.iter().map(|n| n.id));

@@ -99,16 +99,6 @@ impl Tx {
         {
             return true;
         }
-        let mut cur = path;
-        loop {
-            let own = cur.rsplit_once('/').map_or(cur, |(_, s)| s);
-            if let Some(decoded) = crate::runtime::element_path::decode_key_segment(own)
-                && crate::flight::selects(key, cur, Some(decoded.as_ref()))
-            {
-                return true;
-            }
-            let Some((above, _)) = cur.rsplit_once('/') else { return false };
-            cur = above;
-        }
+        super::hover::path_matches_within(path, key)
     }
 }

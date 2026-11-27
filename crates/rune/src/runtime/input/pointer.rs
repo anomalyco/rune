@@ -624,17 +624,16 @@ impl RuntimeCore {
         if self.pointer_locked() { return; }
         self.wheel_lost();
         self.host.titlebar.leave();
+        self.pointer.hovered = None;
+        self.pointer.hover_hit = None;
+        self.pointer.clear_hover_cache();
         if !self.pointer.captured() {
             self.pointer.pos = None;
-            self.pointer.hovered = None;
-            self.refresh_hover_within();
-            self.refresh_link_hover(false);
         } else {
             self.pointer.set_left(true);
-            self.pointer.hovered = None;
-            self.refresh_hover_within();
-            self.refresh_link_hover(false);
         }
+        self.refresh_hover_within();
+        self.refresh_link_hover(false);
     }
 
     /// A press on an element is held (the hand drives whatever follows it).
