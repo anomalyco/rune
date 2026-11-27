@@ -19,6 +19,34 @@ fn click_reads_user_info() {
     assert_eq!(click.get("server"), None);
 }
 
+#[test]
+fn notification_sound_defaults_false_and_can_opt_in() {
+    let silent = Notification::new("n-1", "Quiet");
+    assert!(!silent.sound);
+    let loud = silent.clone().sound(true);
+    assert!(loud.sound);
+    assert!(!loud.sound(false).sound);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn windows_toast_xml_honors_sound_option() {
+    let silent_xml = windows::xml(&Notification::new("n-1", "Quiet").body("Body"), None);
+    assert!(silent_xml.contains("<audio silent=\"true\"/>"));
+    let sound_xml = windows::xml(&Notification::new("n-2", "Loud").body("Body").sound(true), None);
+    assert!(!sound_xml.contains("<audio silent=\"true\"/>"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_auth_options_include_sound_only_when_requested() {
+    const UN_AUTH_BADGE: usize = 1 << 0;
+    const UN_AUTH_SOUND: usize = 1 << 1;
+    const UN_AUTH_ALERT: usize = 1 << 2;
+    assert_eq!(mac::auth_options(false), UN_AUTH_BADGE | UN_AUTH_ALERT);
+    assert_eq!(mac::auth_options(true), UN_AUTH_BADGE | UN_AUTH_ALERT | UN_AUTH_SOUND);
+}
+
 /// The delegate's click method, called the way UNUserNotificationCenter calls it, with a stand-in
 /// response that answers `notification`, `request`, `content`, `identifier` and `userInfo`.
 #[cfg(target_os = "macos")]

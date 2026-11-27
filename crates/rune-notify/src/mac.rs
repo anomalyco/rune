@@ -16,13 +16,20 @@ use objc2::{class, msg_send, sel};
 #[link(name = "UserNotifications", kind = "framework")]
 unsafe extern "C" {}
 
-// UNAuthorizationOptionBadge | UNAuthorizationOptionAlert: banners and Dock icon badges, never a
-// sound. Notifications themselves never set `content.badge`; including the badge option keeps
-// macOS from suppressing `NSDockTile.badgeLabel` (`WindowHandle::set_taskbar`) and exposes the
-// "Badge application icon" toggle in System Settings.
+// UNAuthorizationOptionBadge | UNAuthorizationOptionAlert: banners and Dock icon badges.
+// Notifications themselves never set `content.badge`; including the badge option keeps macOS from
+// suppressing `NSDockTile.badgeLabel` (`WindowHandle::set_taskbar`) and exposes the "Badge
+// application icon" toggle in System Settings. UNAuthorizationOptionSound is added only when a
+// notification opts in via `Notification::sound(true)`.
 const AUTH_OPTIONS: usize = (1 << 0) | (1 << 2);
+const AUTH_SOUND: usize = 1 << 1;
 // UNNotificationPresentationOptionList | Banner: shown even while the app is in front.
 const PRESENT_LIST_BANNER: usize = (1 << 3) | (1 << 4);
+const PRESENT_SOUND: usize = 1 << 1;
+
+pub(super) fn auth_options(sound: bool) -> usize {
+    if sound { AUTH_OPTIONS | AUTH_SOUND } else { AUTH_OPTIONS }
+}
 
 pub(super) fn bundled() -> bool {
     // SAFETY: `NSBundle.mainBundle`, `bundleIdentifier`, and `bundlePath` are thread-safe
@@ -62,12 +69,23 @@ pub(super) unsafe fn string(s: *mut AnyObject) -> Option<String> {
 pub(super) unsafe fn request_authorization(center: *mut AnyObject, done: &Block<dyn Fn(Bool, *mut AnyObject)>) {
     // SAFETY: caller passes a live `UNUserNotificationCenter` (or test stand-in) and a valid
     // ObjC completion block matching `requestAuthorizationWithOptions:completionHandler:`.
+    unsafe { request_authorization_with_options(center, AUTH_OPTIONS, done) }
+}
+
+pub(super) unsafe fn request_authorization_with_options(
+    center: *mut AnyObject,
+    options: usize,
+    done: &Block<dyn Fn(Bool, *mut AnyObject)>,
+) {
+    // SAFETY: caller passes a live `UNUserNotificationCenter` (or test stand-in) and a valid
+    // ObjC completion block matching `requestAuthorizationWithOptions:completionHandler:`.
     unsafe {
-        let _: () = msg_send![center, requestAuthorizationWithOptions: AUTH_OPTIONS, completionHandler: done];
+        let _: () = msg_send![center, requestAuthorizationWithOptions: options, completionHandler: done];
     }
 }
 
 pub(super) fn post(n: Notification) {
+    let options = auth_options(n.sound);
     let done = RcBlock::new(move |granted: Bool, _error: *mut AnyObject| {
         if granted.as_bool() {
             // SAFETY: `post` is gated on `bundled()`, and `add` runs inside its own autorelease pool.
@@ -76,7 +94,7 @@ pub(super) fn post(n: Notification) {
     });
     // SAFETY: `post` is gated on `bundled()`; `&*done` is a valid ObjC block copied by the center.
     unsafe {
-        request_authorization(center(), &*done);
+        request_authorization_with_options(center(), options, &done);
     }
 }
 
@@ -89,6 +107,10 @@ unsafe fn add(n: &Notification) {
         let _: () = msg_send![content, setTitle: ns(&n.title)];
         let _: () = msg_send![content, setBody: ns(&n.body)];
         let _: () = msg_send![content, setUserInfo: dictionary(&n.info)];
+        if n.sound {
+            let sound: *mut AnyObject = msg_send![class!(UNNotificationSound), defaultSound];
+            let _: () = msg_send![content, setSound: sound];
+        }
         if let Some(category) = category(&n.actions) {
             let _: () = msg_send![content, setCategoryIdentifier: ns(&category)];
         }
@@ -208,8 +230,21 @@ pub(super) extern "C" fn did_receive(_this: *mut AnyObject, _cmd: Sel, _center: 
     done.call(());
 }
 
-extern "C" fn will_present(_this: *mut AnyObject, _cmd: Sel, _center: *mut AnyObject, _notification: *mut AnyObject, done: &Block<dyn Fn(usize)>) {
-    done.call((PRESENT_LIST_BANNER,));
+extern "C" fn will_present(_this: *mut AnyObject, _cmd: Sel, _center: *mut AnyObject, notification: *mut AnyObject, done: &Block<dyn Fn(usize)>) {
+    // SAFETY: `UNUserNotificationCenter` passes a live `UNNotification` (or null in synthetic
+    // calls); each pointer is checked for null before messaging.
+    let has_sound = unsafe {
+        if notification.is_null() {
+            false
+        } else {
+            let request: *mut AnyObject = msg_send![notification, request];
+            let content: *mut AnyObject = if request.is_null() { std::ptr::null_mut() } else { msg_send![request, content] };
+            let sound: *mut AnyObject = if content.is_null() { std::ptr::null_mut() } else { msg_send![content, sound] };
+            !sound.is_null()
+        }
+    };
+    let options = if has_sound { PRESENT_LIST_BANNER | PRESENT_SOUND } else { PRESENT_LIST_BANNER };
+    done.call((options,));
 }
 
 pub(super) fn delegate_class() -> &'static AnyClass {
