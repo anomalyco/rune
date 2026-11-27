@@ -387,6 +387,13 @@ impl RuntimeCore {
                 }
                 TouchEffect::PanMove { scroll, along } => self.touch_scroll_move(scroll, along),
                 TouchEffect::EndScroll { scroll, velocity } => self.touch_scroll_end(scroll, velocity),
+                TouchEffect::BeginTouchSelectionDrag { origin: (x, y) } => self.begin_touch_selection_drag(x, y),
+                TouchEffect::CommitTap((x, y)) => self.commit_touch_tap(app, x, y),
+                TouchEffect::CommitWindowDragTap => {
+                    if self.kbd.focus.path().is_some() {
+                        self.frame.queue.push(Action::Blur);
+                    }
+                }
                 TouchEffect::PointerMove((x, y)) => self.pointer_move(app, x, y),
                 TouchEffect::PointerUp((x, y)) => self.pointer_up(app, x, y),
                 TouchEffect::PointerLeave => self.pointer_leave(),
@@ -441,7 +448,7 @@ impl RuntimeCore {
         let has_edge = edge_drag::any_candidate(edge);
         let scroll = self.touch_scroll_start(x, y);
         self.pointer_move(app, x, y);
-        self.press_down(app, x, y, true);
+        let tap_focus = self.press_down(app, x, y, true);
         let now = self.now_clock();
         let policy = self.pointer.touch.policy;
         let (mode, start_hold) = if self.host.titlebar.resize.is_some() {
@@ -467,7 +474,7 @@ impl RuntimeCore {
                     (Mode::Drag, false)
                 }
                 // An at-once drag in an edge zone waits for the slop, but still has no long press.
-                None => (Mode::Pending { scroll, edge }, !(has_edge && self.press_drags_at_once())),
+                None => (Mode::Pending { scroll, edge, tap_focus }, !(has_edge && self.press_drags_at_once())),
             }
         };
         let hold_event = if start_hold {
@@ -563,6 +570,54 @@ impl RuntimeCore {
     fn press_drags_at_once(&self) -> bool {
         let Some(path) = self.pointer.press.path() else { return false };
         self.live_index(path).is_some_and(|i| self.tree.nodes[i].handlers.touch_at_once && self.tree.nodes[i].handlers.on_drag.is_some())
+    }
+
+    /// A non-scrollable finger crossed `TOUCH_SLOP` off any `on_drag` control: start selection
+    /// dragging only if it landed on selectable text (cancelling a dragged press on a text input
+    /// so it neither steals focus nor fires a press).
+    fn begin_touch_selection_drag(&mut self, x: f32, y: f32) {
+        let target = self.primary_target(x, y);
+        if target.and_then(|t| self.textbox_input(t)).is_some() {
+            if let Some(held) = self.pointer.press.held_mut() {
+                held.hit = capture::Hit::Cancelled;
+            }
+            return;
+        }
+        if !target.is_some_and(|t| self.press_keeps_selection(t))
+            && (self.selectable_at(x, y).is_some() || self.marker_anchor_at(x, y).is_some())
+        {
+            self.press_selection(target, x, y);
+        }
+    }
+
+    /// Finger lifted within `TOUCH_SLOP` as a tap: commit the focus, blur and selection changes
+    /// that `press_down` deferred so pans, pinches, edge swipes and long presses keep the active
+    /// field's focus and soft keyboard undisturbed.
+    fn commit_touch_tap(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {
+        self.move_pointer(app, x, y, false);
+        if self.pointer.press.held().is_some_and(|h| !h.inside()) {
+            return;
+        }
+        let target = self.primary_target(x, y);
+        if target.and_then(|t| self.textbox_input(t)).is_none() {
+            self.edit.clear_input_click();
+        }
+        self.press_selection(target, x, y);
+        if target.is_some_and(|t| self.tree.nodes[t].handlers.on_drag.is_some() || self.tree.nodes[t].handlers.drag_out.is_some()) {
+            self.select_step(selectable::phase::Event::Release);
+        }
+        let Some(ti) = target else {
+            if self.kbd.focus.path().is_some() && !self.armed_marker_in_focused_caret_host() {
+                self.frame.queue.push(Action::Blur);
+            }
+            return;
+        };
+        if let Some(ji) = self.textbox_input(ti) {
+            self.input_tap_up(ji, (x, y), ji == ti);
+            return;
+        }
+        let on_link = self.link_at(ti, x, y).filter(|_| !self.edit.selectable.phase.dragging()).is_some();
+        self.apply_press_focus(ti, x, y, on_link);
     }
 
     /// Whether the held press is on an element that drags, so a finger drags it, not the page.

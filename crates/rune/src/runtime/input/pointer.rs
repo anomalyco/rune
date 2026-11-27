@@ -301,92 +301,13 @@ impl RuntimeCore {
     }
 
     pub(crate) fn pointer_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32) {
-        self.press_down(app, x, y, false);
+        let _ = self.press_down(app, x, y, false);
     }
 
-    /// A primary press at (x, y); `touch`: a finger's, which never runs `on_press` on the way
-    /// down (`El::press_on_down` is a mouse's).
-    pub(in crate::runtime) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) {
-        self.sync_pointer_lock();
-        let (x, y) = self.locked_point(x, y);
-        let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
-        self.pointer.note_button_down(crate::PointerButton::Primary);
-        // A press ends a middle-click autoscroll, and does nothing else.
-        if self.pointer.autoscroll_press(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return; }
-        if self.pointer.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
-            self.pointer.pos = Some((x, y));
-            return;
-        }
-        self.drop_drag_out_request();
-        // A host that didn't act on the last press's request mustn't get it with this one.
-        self.host.titlebar.action = None;
-        self.pointer.pos = Some((x, y));
-        if starts_gesture { self.queue_any_press(crate::PointerButton::Primary, x, y); }
-        // A press is the hand's: hover follows the pointer through moving layout.
-        self.release_hover_hold();
-        self.kbd.focus.step(focus_machine::FocusEvent::Pointed);
-        self.dismiss_help();
-        // A press cancels the waits to report an enter; the next move after it starts them again.
-        self.pointer.press_hover_delays();
-        self.pointer.hover_paused = true;
-        let target = self.primary_target(x, y);
-        if target.and_then(|t| self.textbox_input(t)).is_none() {
-            self.edit.clear_input_click();
-        }
-        if let Some(i) = self.active_modal()
-            && target.is_none_or(|t| !self.allowed(t))
-        {
-            self.host.titlebar.other_press();
-            if !self.point_in_modal(i, x, y)
-                && self.tree.nodes[i].handlers.modal.as_ref().is_some_and(|m| m.outside && m.dismiss.is_some())
-            {
-                self.frame.queue.push(Action::Dismiss(self.tree.nodes[i].path.clone()));
-            }
-            return;
-        }
-        self.playground_pointer_down(app, x);
-        self.press_selection(target, x, y);
-        // Inside a draggable row, dragging drags the row; clicks still select words and lines.
-        if target.is_some_and(|t| self.tree.nodes[t].handlers.on_drag.is_some() || self.tree.nodes[t].handlers.drag_out.is_some()) {
-            self.select_step(selectable::phase::Event::Release);
-        }
-        let Some(ti) = target else {
-            let now = self.input_clock();
-            self.host.titlebar.press_empty(now, x, y, self.double_click_interval);
-            if self.kbd.focus.path().is_some() && !self.armed_marker_in_focused_caret_host() {
-                self.frame.queue.push(Action::Blur);
-            }
-            return;
-        };
-        let link = self.link_at(ti, x, y).filter(|_| !self.edit.selectable.phase.dragging());
-        let on_link = link.is_some();
-        // Any press breaks a pending pair unless it's the second press of it.
-        let pending = self.pointer.press.take_first();
-        if self.bare_drag_region(ti) {
-            let now = self.input_clock();
-            let defer = !touch && self.host.titlebar.defer_mouse_drag();
-            self.host.titlebar.press_region(now, x, y, self.double_click_interval, defer);
-            if self.kbd.focus.path().is_some() {
-                self.frame.queue.push(Action::Blur);
-            }
-            return;
-        }
-        if let Some(edge) = self.bare_resize_edge(ti) {
-            self.host.titlebar.press_resize(edge);
-            return;
-        }
-        self.host.titlebar.other_press();
-        let now = self.now_clock();
-        let n = &self.tree.nodes[ti];
-        let clicks = self.pointer.press_click(&n.path, now, (x, y), self.double_click_interval);
-        let second = n.handlers.on_double_press.is_some() && pending.is_some_and(|first| {
-            first.path == n.path && press_run::follows(first.at, first.point, now, (x, y), self.double_click_interval)
-        });
-        if let Some(ji) = self.textbox_input(ti) {
-            self.input_down(ji, (x, y), now, second, link.filter(|_| ji == ti), ji == ti, touch);
-            return;
-        }
-        self.try_capture_pointer_lock(ti, x, y, touch);
+    /// Queues the focus or blur change caused by a primary press on non-textbox node `ti` at
+    /// `(x, y)`. Mouse presses run this on down; touch presses defer it until tap-up so panning
+    /// a scroll view keeps any focused field and soft keyboard open.
+    pub(in crate::runtime) fn apply_press_focus(&mut self, ti: usize, x: f32, y: f32, on_link: bool) {
         let n = &self.tree.nodes[ti];
         // Clicking a link leaves focus where it is (a composer keeps typing). Selectable text
         // off its links isn't a control: the press blurs, as a click on plain content does.
@@ -432,6 +353,103 @@ impl RuntimeCore {
             if self.commit.defaults.web_focus { self.kbd.focus.step(focus_machine::FocusEvent::StartAt(n.path.clone())); }
             if self.kbd.focus.path().is_some() { self.frame.queue.push(Action::Blur); }
         }
+    }
+
+    /// A primary press at (x, y); `touch`: a finger's, which never runs `on_press` on the way
+    /// down (`El::press_on_down` is a mouse's) and defers focus, blur and selection until the
+    /// finger lifts as a tap. Returns whether the press reached content (not swallowed by a modal,
+    /// autoscroll, another held button, or a resize edge).
+    pub(in crate::runtime) fn press_down(&mut self, app: &mut dyn AppDriver, x: f32, y: f32, touch: bool) -> bool {
+        self.sync_pointer_lock();
+        let (x, y) = self.locked_point(x, y);
+        let starts_gesture = !self.pointer.any_button_down() && !self.pointer.captured();
+        self.pointer.note_button_down(crate::PointerButton::Primary);
+        // A press ends a middle-click autoscroll, and does nothing else.
+        if self.pointer.autoscroll_press(crate::PointerButton::Primary) { self.pointer.pos = Some((x, y)); return false; }
+        if self.pointer.press.held().is_some_and(|h| h.button != crate::PointerButton::Primary) {
+            self.pointer.pos = Some((x, y));
+            return false;
+        }
+        self.drop_drag_out_request();
+        // A host that didn't act on the last press's request mustn't get it with this one.
+        self.host.titlebar.action = None;
+        self.pointer.pos = Some((x, y));
+        if starts_gesture { self.queue_any_press(crate::PointerButton::Primary, x, y); }
+        // A press is the hand's: hover follows the pointer through moving layout.
+        self.release_hover_hold();
+        self.kbd.focus.step(focus_machine::FocusEvent::Pointed);
+        self.dismiss_help();
+        // A press cancels the waits to report an enter; the next move after it starts them again.
+        self.pointer.press_hover_delays();
+        self.pointer.hover_paused = true;
+        let target = self.primary_target(x, y);
+        if !touch && target.and_then(|t| self.textbox_input(t)).is_none() {
+            self.edit.clear_input_click();
+        }
+        if let Some(i) = self.active_modal()
+            && target.is_none_or(|t| !self.allowed(t))
+        {
+            self.host.titlebar.other_press();
+            if !self.point_in_modal(i, x, y)
+                && self.tree.nodes[i].handlers.modal.as_ref().is_some_and(|m| m.outside && m.dismiss.is_some())
+            {
+                self.frame.queue.push(Action::Dismiss(self.tree.nodes[i].path.clone()));
+            }
+            return false;
+        }
+        self.playground_pointer_down(app, x);
+        if !touch {
+            self.press_selection(target, x, y);
+            // Inside a draggable row, dragging drags the row; clicks still select words and lines.
+            if target.is_some_and(|t| self.tree.nodes[t].handlers.on_drag.is_some() || self.tree.nodes[t].handlers.drag_out.is_some()) {
+                self.select_step(selectable::phase::Event::Release);
+            }
+        }
+        let Some(ti) = target else {
+            let now = self.input_clock();
+            self.host.titlebar.press_empty(now, x, y, self.double_click_interval);
+            if !touch && self.kbd.focus.path().is_some() && !self.armed_marker_in_focused_caret_host() {
+                self.frame.queue.push(Action::Blur);
+            }
+            return true;
+        };
+        let link = self.link_at(ti, x, y).filter(|_| !self.edit.selectable.phase.dragging());
+        let on_link = link.is_some();
+        // Any press breaks a pending pair unless it's the second press of it.
+        let pending = self.pointer.press.take_first();
+        if self.bare_drag_region(ti) {
+            let now = self.input_clock();
+            let defer = !touch && self.host.titlebar.defer_mouse_drag();
+            self.host.titlebar.press_region(now, x, y, self.double_click_interval, defer);
+            if !touch && self.kbd.focus.path().is_some() {
+                self.frame.queue.push(Action::Blur);
+            }
+            return true;
+        }
+        if let Some(edge) = self.bare_resize_edge(ti) {
+            self.host.titlebar.press_resize(edge);
+            return false;
+        }
+        self.host.titlebar.other_press();
+        let now = self.now_clock();
+        let n = &self.tree.nodes[ti];
+        let clicks = self.pointer.press_click(&n.path, now, (x, y), self.double_click_interval);
+        let second = n.handlers.on_double_press.is_some() && pending.is_some_and(|first| {
+            first.path == n.path && press_run::follows(first.at, first.point, now, (x, y), self.double_click_interval)
+        });
+        if let Some(ji) = self.textbox_input(ti) {
+            if touch {
+                self.input_touch_down(ji, (x, y), now, second, link.filter(|_| ji == ti));
+            } else {
+                self.input_down(ji, (x, y), now, second, link.filter(|_| ji == ti), ji == ti);
+            }
+            return true;
+        }
+        self.try_capture_pointer_lock(ti, x, y, touch);
+        if !touch {
+            self.apply_press_focus(ti, x, y, on_link);
+        }
+        let n = &self.tree.nodes[ti];
         let r = n.target;
         let [lx, ly] = self.to_local(ti, x, y);
         let d = Drag {
@@ -466,6 +484,7 @@ impl RuntimeCore {
         let mut held = capture::Held::new(path, d, crate::PointerButton::Primary, (x, y), now, second, drag_out).on_link(link).pressed_on_down(on_down).drag_handler(drag_handler);
         held.touch = touch;
         self.pointer.press.hold(held);
+        true
     }
 
     pub(crate) fn pointer_up(&mut self, app: &dyn ViewDriver, x: f32, y: f32) {

@@ -1,0 +1,1 @@
+- Touch input: defer focus, blur, and text-field caret/selection changes from touch-down to tap-up in shared touch handling, so scrolling, pinching, edge swipes, or cancelled touches keep a focused field and its soft keyboard open across web, iOS, Android, and touchscreens (#2484).

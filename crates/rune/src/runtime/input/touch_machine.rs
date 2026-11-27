@@ -39,8 +39,9 @@ pub(super) struct Contact {
 pub(super) enum Mode {
     /// Still within `TOUCH_SLOP`: lifting here is a tap. `scroll` is the vertical viewport
     /// under the finger, held until the pan picks its axis; `edge` holds the innermost matching
-    /// `El::on_edge_drag` claimant for each physical edge whose zone the finger landed in.
-    Pending { scroll: Option<NodeId>, edge: super::edge_drag::EdgeCandidates },
+    /// `El::on_edge_drag` claimant for each physical edge whose zone the finger landed in;
+    /// `tap_focus` records whether lifting as a tap should commit deferred focus and selection.
+    Pending { scroll: Option<NodeId>, edge: super::edge_drag::EdgeCandidates, tap_focus: bool },
     /// Landed on a bare `.window_drag()` region and still within `TOUCH_SLOP`: holds the drag
     /// until the finger moves past the slop, so taps, double-taps and long presses still work.
     WindowDragPending,
@@ -245,7 +246,7 @@ impl TouchState {
     pub(super) fn single_slop_query(&self, id: u64, pos: (f32, f32)) -> Option<((f32, f32), bool, Option<NodeId>)> {
         let Self::Single(f) = *self else { return None };
         if f.id != id { return None; }
-        let Mode::Pending { scroll, edge } = f.mode else { return None };
+        let Mode::Pending { scroll, edge, .. } = f.mode else { return None };
         let (dx, dy) = (pos.0 - f.origin.0, pos.1 - f.origin.1);
         if dx.hypot(dy) <= TOUCH_SLOP {
             return None;
@@ -284,6 +285,9 @@ pub(super) enum TouchEffect {
     BeginPan { origin: (f32, f32), horizontal: bool, vertical: Option<NodeId> },
     PanMove { scroll: NodeId, along: f32 },
     EndScroll { scroll: Option<NodeId>, velocity: f32 },
+    BeginTouchSelectionDrag { origin: (f32, f32) },
+    CommitTap((f32, f32)),
+    CommitWindowDragTap,
     PointerMove((f32, f32)),
     PointerUp((f32, f32)),
     PointerLeave,
@@ -414,7 +418,7 @@ fn step_single_move(
         f.mode = Mode::WindowDragging;
         effects.push(TouchEffect::StartWindowDrag);
         effects.push(TouchEffect::CancelHold);
-    } else if let Mode::Pending { scroll, edge } = f.mode
+    } else if let Mode::Pending { scroll, edge, .. } = f.mode
         && dx.hypot(dy) > TOUCH_SLOP
         && let Some((node, swipe_edge)) = super::edge_drag::moves_away_edge(dx, dy)
             .and_then(|e| edge[e.index()].map(|node| (node, e)))
@@ -431,7 +435,7 @@ fn step_single_move(
             pos: f.origin,
             cancelled: false,
         });
-    } else if let Mode::Pending { scroll, .. } = f.mode
+    } else if let Mode::Pending { scroll, tap_focus, .. } = f.mode
         && dx.hypot(dy) > TOUCH_SLOP
     {
         let horizontal_bias = dx.abs() > dy.abs();
@@ -447,7 +451,12 @@ fn step_single_move(
             f.mode = match (horizontal_bias.then_some(res.across).flatten(), scroll) {
                 (Some(id), _) => Mode::Pan { scroll: id, horizontal: true },
                 (None, Some(id)) => Mode::Pan { scroll: id, horizontal: false },
-                (None, None) => Mode::Drag,
+                (None, None) => {
+                    if tap_focus {
+                        effects.push(TouchEffect::BeginTouchSelectionDrag { origin: f.origin });
+                    }
+                    Mode::Drag
+                }
             };
         }
         effects.push(TouchEffect::CancelHold);
@@ -499,12 +508,20 @@ fn step_single_end(
         effects.push(TouchEffect::CancelPointer);
         return effects;
     }
-    if matches!(f.mode, Mode::Menu | Mode::WindowDragPending | Mode::Edge { .. } | Mode::Cancelled) {
+    if f.mode == Mode::WindowDragPending {
+        effects.push(TouchEffect::CommitWindowDragTap);
+        effects.push(TouchEffect::ReleaseWithoutClick);
+        return effects;
+    }
+    if matches!(f.mode, Mode::Menu | Mode::Edge { .. } | Mode::Cancelled) {
         effects.push(TouchEffect::ReleaseWithoutClick);
         return effects;
     }
     // A pan cancelled the press, so its release clicks nothing.
     let release_pos = if pan { f.origin } else { pos };
+    if matches!(f.mode, Mode::Pending { tap_focus: true, .. }) {
+        effects.push(TouchEffect::CommitTap(release_pos));
+    }
     if f.mode == Mode::Drag {
         effects.push(TouchEffect::PointerMove(release_pos));
     }

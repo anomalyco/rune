@@ -93,7 +93,7 @@ fn a_finger_past_the_slop_picks_one_mode_with_only_its_own_data() {
     let mut rt = rig();
     let list = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("list")).unwrap().id;
     rt.touch(1, TouchPhase::Started, 100.0, 200.0, 0.0);
-    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Pending { scroll: Some(list), edge: [None; 4] }), "pending, it holds the viewport under it");
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Pending { scroll: Some(list), edge: [None; 4], tap_focus: true }), "pending, it holds the viewport under it");
     rt.touch(1, TouchPhase::Moved, 100.0, 150.0, 0.01);
     assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Pan { scroll: list, horizontal: false }));
     rt.touch(1, TouchPhase::Ended, 100.0, 150.0, 0.02);
@@ -257,7 +257,7 @@ fn an_active_modal_blocks_touch_window_drag() {
     rt.update(|s, _| s.modal_open = true);
     rt.frame(1.0 / 60.0);
     rt.touch(1, TouchPhase::Started, 250.0, 20.0, 0.0);
-    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Pending { scroll: None, edge: [None; 4] }));
+    assert_eq!(rt.pointer.touch.single().map(|f| f.mode), Some(Mode::Pending { scroll: None, edge: [None; 4], tap_focus: false }));
     rt.touch(1, TouchPhase::Moved, 270.0, 20.0, 0.02);
     assert_eq!(rt.take_titlebar_action(), None);
     rt.touch(1, TouchPhase::Ended, 270.0, 20.0, 0.04);
@@ -671,4 +671,231 @@ fn host_touch_hold_fires_once_cancels_confirm_and_ignores_stale_or_duplicate_eve
     rt.touch(2, TouchPhase::Ended, 100.0, 30.0, 5.0);
     rt.frame(0.0);
     assert_eq!(rt.wake_deadline(), None);
+}
+
+#[derive(Default)]
+struct FocusTouchState {
+    composer: crate::TextEdit,
+    other: crate::TextEdit,
+    preserved_taps: usize,
+    focus_btn_taps: usize,
+}
+
+fn focus_touch_view(s: &FocusTouchState, _: &mut Cx<FocusTouchState>) -> El {
+    let style = crate::TextStyle::new(14.0, 400.0).lh(20.0);
+    let mut rows = col().w_full().gap(4.0);
+    rows = rows.child(
+        crate::text("selectable transcript line")
+            .key("transcript")
+            .font(style)
+            .w_full()
+            .h(30.0)
+            .selectable(true),
+    );
+    rows = rows.child(
+        crate::text_input(&s.other, style)
+            .key("other")
+            .label("Other")
+            .w_full()
+            .h(32.0)
+            .on_edit(|s: &mut FocusTouchState| &mut s.other),
+    );
+    for i in 0..16 {
+        rows = rows.child(el().key(format!("item{i}")).w_full().h(36.0));
+    }
+    col()
+        .size(240.0, 320.0)
+        .child(
+            col()
+                .key("feed")
+                .w_full()
+                .h(180.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .child(rows),
+        )
+        .child(
+            crate::text_input(&s.composer, style)
+                .key("composer")
+                .label("Composer")
+                .w_full()
+                .h(36.0)
+                .on_edit(|s: &mut FocusTouchState| &mut s.composer),
+        )
+        .child(
+            crate::row()
+                .w_full()
+                .h(36.0)
+                .child(
+                    el().key("keep_btn")
+                        .size(80.0, 36.0)
+                        .preserve_focus_on_press(true)
+                        .on_press(|s: &mut FocusTouchState| s.preserved_taps += 1),
+                )
+                .child(
+                    el().key("focus_other_btn")
+                        .size(80.0, 36.0)
+                        .on_press_tx(|s: &mut FocusTouchState, tx| {
+                            s.focus_btn_taps += 1;
+                            tx.focus("other", true);
+                        }),
+                ),
+        )
+        .child(el().key("plain").w_full().h(40.0))
+}
+
+fn focus_touch_rig() -> Runtime<FocusTouchState> {
+    let mut state = FocusTouchState {
+        composer: crate::TextEdit::new("hello world"),
+        other: crate::TextEdit::new("second field"),
+        ..Default::default()
+    };
+    state.composer.set_caret(5);
+    state.other.set_caret(0);
+    let mut rt = Runtime::new(state, focus_touch_view, (240.0, 320.0), Env::default());
+    rt.frame.set_test_clock(crate::ManualClock::new(60.0));
+    rt.double_click_interval = 0.3;
+    rt.frame(0.0);
+    rt
+}
+
+#[test]
+fn touch_scroll_keeps_focused_field_and_selection_intact_across_frames() {
+    let mut rt = focus_touch_rig();
+    // Focus composer with a tap.
+    let (cx, cy) = rt.find("composer").unwrap();
+    rt.touch(1, TouchPhase::Started, cx, cy, 0.0);
+    rt.frame(0.0);
+    assert!(!rt.state.composer.focused, "touch-down must not focus before tap-up");
+    rt.touch(1, TouchPhase::Ended, cx, cy, 0.04);
+    rt.frame(0.0);
+    assert!(rt.state.composer.focused, "tap-up focuses the text field");
+    let saved_caret = (rt.state.composer.anchor, rt.state.composer.focus);
+
+    // Pan the scroll list while composer is focused (including a frame tick while still within slop).
+    let (ix, iy) = rt.find("item2").unwrap();
+    rt.touch(2, TouchPhase::Started, ix, iy, 0.1);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.composer.focused, "touch-down on scroll feed must not blur focused field");
+    rt.touch(2, TouchPhase::Moved, ix, iy - 40.0, 0.12);
+    rt.frame(1.0 / 60.0);
+    rt.touch(2, TouchPhase::Ended, ix, iy - 40.0, 0.14);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.composer.focused, "scrolling must keep focused text field focused");
+    assert_eq!((rt.state.composer.anchor, rt.state.composer.focus), saved_caret);
+
+    // Starting a scroll pan on a second unfocused text field inside the scroll view must neither
+    // steal focus from composer nor move the second field's caret.
+    let (ox, oy) = rt.find("other").unwrap();
+    rt.touch(3, TouchPhase::Started, ox, oy, 0.2);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.composer.focused && !rt.state.other.focused);
+    rt.touch(3, TouchPhase::Moved, ox, oy - 30.0, 0.22);
+    rt.touch(3, TouchPhase::Ended, ox, oy - 30.0, 0.24);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.composer.focused && !rt.state.other.focused);
+    assert_eq!((rt.state.other.anchor, rt.state.other.focus), (0, 0));
+
+    // A cancelled touch on plain content leaves focus untouched.
+    let (px, py) = rt.find("plain").unwrap();
+    rt.touch(4, TouchPhase::Started, px, py, 0.3);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.composer.focused);
+    rt.touch(4, TouchPhase::Cancelled, px, py, 0.32);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.composer.focused, "cancelled touch must not blur");
+
+    // Tapping a preserve_focus_on_press button fires on_press and keeps focus.
+    let (kx, ky) = rt.find("keep_btn").unwrap();
+    rt.touch(5, TouchPhase::Started, kx, ky, 0.4);
+    rt.touch(5, TouchPhase::Ended, kx, ky, 0.43);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.preserved_taps, 1);
+    assert!(rt.state.composer.focused);
+
+    // Tapping a button whose on_press_tx calls tx.focus("other", true) lets tx.focus win.
+    let (fx, fy) = rt.find("focus_other_btn").unwrap();
+    rt.touch(6, TouchPhase::Started, fx, fy, 0.5);
+    rt.touch(6, TouchPhase::Ended, fx, fy, 0.53);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.state.focus_btn_taps, 1);
+    assert!(rt.state.other.focused && !rt.state.composer.focused);
+
+    // Tapping plain content blurs on tap-up (and not on touch-down).
+    rt.touch(7, TouchPhase::Started, px, py, 0.6);
+    rt.frame(1.0 / 60.0);
+    assert!(rt.state.other.focused, "touch-down on plain content must not blur before lift");
+    rt.touch(7, TouchPhase::Ended, px, py, 0.63);
+    rt.frame(1.0 / 60.0);
+    assert!(!rt.state.other.focused, "tap-up on plain content blurs the focused field");
+}
+
+#[test]
+fn touch_scroll_preserves_text_selection_and_double_tap_selects_word_in_field() {
+    let mut rt = focus_touch_rig();
+    // Create a selection in the scrollable transcript with a mouse drag.
+    let tr = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("transcript")).unwrap();
+    let ty = tr.rect[1] + tr.rect[3] * 0.5;
+    rt.pointer_move(tr.rect[0] + 4.0, ty);
+    rt.pointer_down(tr.rect[0] + 4.0, ty);
+    rt.pointer_move(tr.rect[0] + 60.0, ty);
+    rt.pointer_up(tr.rect[0] + 60.0, ty);
+    rt.frame(0.0);
+    let selected = rt.selected_text().expect("transcript text selected");
+    assert!(!selected.is_empty());
+
+    // Panning the feed keeps that selection intact across touch-down, pan and lift.
+    let (ix, iy) = rt.find("item2").unwrap();
+    rt.touch(1, TouchPhase::Started, ix, iy, 0.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.selected_text().as_deref(), Some(selected.as_str()));
+    rt.touch(1, TouchPhase::Moved, ix, iy - 40.0, 0.02);
+    rt.touch(1, TouchPhase::Ended, ix, iy - 40.0, 0.04);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.selected_text().as_deref(), Some(selected.as_str()), "scroll pan must preserve selection");
+
+    // Tapping plain content clears selection on tap-up (not touch-down).
+    let (px, py) = rt.find("plain").unwrap();
+    rt.touch(2, TouchPhase::Started, px, py, 0.1);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.selected_text().as_deref(), Some(selected.as_str()));
+    rt.touch(2, TouchPhase::Ended, px, py, 0.12);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(rt.selected_text(), None, "tap-up outside selectable text clears selection");
+
+    // Double-tapping a word inside the text field selects it on tap-up.
+    let comp = rt.elements().into_iter().find(|e| e.key.as_deref() == Some("composer")).unwrap();
+    let (tx, ty) = (comp.rect[0] + 12.0, comp.rect[1] + comp.rect[3] * 0.5);
+    rt.touch(3, TouchPhase::Started, tx, ty, 0.2);
+    rt.touch(3, TouchPhase::Ended, tx, ty, 0.22);
+    rt.frame(0.0);
+    rt.frame.test_clock_mut().unwrap().seek(0.1);
+    rt.touch(4, TouchPhase::Started, tx, ty, 0.3);
+    rt.touch(4, TouchPhase::Ended, tx, ty, 0.32);
+    rt.frame(0.0);
+    assert!(rt.state.composer.focused);
+    assert_ne!(rt.state.composer.anchor, rt.state.composer.focus, "double-tap selects word");
+}
+
+#[test]
+fn web_document_touch_tap_on_unfocused_field_activates_after_tap_up_frame() {
+    let mut rt = focus_touch_rig();
+    let (cx, cy) = rt.find("composer").unwrap();
+    assert!(!rt.has_focus());
+    rt.touch(1, TouchPhase::Started, cx, cy, 0.0);
+    rt.touch(1, TouchPhase::Ended, cx, cy, 0.04);
+    let act = crate::input::host_events::web_touch_end_activate(rt.core(), true, false);
+    rt.frame(0.0);
+    assert!(rt.state.composer.focused);
+    assert!(act.should_activate(rt.core()), "document-mode tap on unfocused field must activate DOM input");
+
+    // Tapping plain content in document mode when nothing is focused does not activate DOM focus.
+    rt.update(|_, tx| tx.blur());
+    rt.frame(0.0);
+    assert!(!rt.has_focus());
+    let (px, py) = rt.find("plain").unwrap();
+    rt.touch(2, TouchPhase::Started, px, py, 0.2);
+    rt.touch(2, TouchPhase::Ended, px, py, 0.24);
+    let act_plain = crate::input::host_events::web_touch_end_activate(rt.core(), true, false);
+    rt.frame(0.0);
+    assert!(!act_plain.should_activate(rt.core()));
 }

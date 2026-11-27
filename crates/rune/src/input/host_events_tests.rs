@@ -938,12 +938,14 @@ fn web_touch_end_does_not_activate_while_popup_menu_is_open_or_touch_ended_in_me
     let mut rt = Runtime::new(S::default(), view, (240.0, 200.0), Env::default());
     rt.frame(0.0);
 
-    // 1. Long press on a focused text field opens field_menu and enters Mode::Menu.
+    // 1. Long press on a text field does not focus on touch-down; once the hold fires it focuses
+    // the field, opens field_menu and enters Mode::Menu.
     let (ex, ey) = rt.find("editor").unwrap();
     rt.touch(1, crate::TouchPhase::Started, ex, ey, 0.0);
     rt.frame(0.0);
-    assert!(rt.core().web_has_editable_focus());
+    assert!(!rt.core().web_has_editable_focus(), "touch-down must not focus before tap-up or hold");
     rt.frame(0.6);
+    assert!(rt.core().web_has_editable_focus(), "long press field_menu focuses the text field");
     assert!(rt.popup_menu().is_some(), "long press on text field must open field_menu");
     assert!(rt.core().touch_in_menu(), "long press must transition touch into Mode::Menu");
 
