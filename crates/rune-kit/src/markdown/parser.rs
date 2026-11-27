@@ -75,13 +75,22 @@ pub(super) const PAD: &str = "\u{202f}\u{202f}";
 /// unicode-bidi: isolate }`, so code reads left to right and moves as one inside Arabic text.
 pub(super) const OPEN: &str = "\u{202f}\u{202f}\u{2066}";
 pub(super) const CLOSE: &str = "\u{2069}\u{202f}\u{202f}";
+/// `OPEN`/`CLOSE` with a leading or trailing zero-width break opportunity (`U+200B`) when the
+/// adjacent character allows a line break that `U+202F` (`GL`) would otherwise suppress.
+pub(super) const BREAK_OPEN: &str = "\u{200b}\u{202f}\u{202f}\u{2066}";
+pub(super) const BREAK_CLOSE: &str = "\u{2069}\u{202f}\u{202f}\u{200b}";
 /// Inside a link, inline code keeps its directional isolate without pill padding (`a code { padding: 0 }`).
 pub(super) const LINK_OPEN: &str = "\u{2066}";
 pub(super) const LINK_CLOSE: &str = "\u{2069}";
 
-/// `text` without inline code's padding and isolates.
+/// `text` without inline code's padding, isolates, and outer break opportunities.
 pub(super) fn unpadded(text: &str) -> String {
-    text.replace(OPEN, "").replace(CLOSE, "").replace(LINK_OPEN, "").replace(LINK_CLOSE, "")
+    text.replace(BREAK_OPEN, "")
+        .replace(BREAK_CLOSE, "")
+        .replace(OPEN, "")
+        .replace(CLOSE, "")
+        .replace(LINK_OPEN, "")
+        .replace(LINK_CLOSE, "")
 }
 
 /// Parses `src` into blocks. Unclosed constructs are closed at the end of input.
@@ -398,6 +407,23 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool, hard_breaks: bool) -> (P
                     map.push(range, start..code.len());
                 } else {
                     let inl = b.inline();
+                    let prev_len = inl.1.text.len();
+                    if let Some(next_ch) = t.chars().next()
+                        && let Some(pad) = inl.1.spans.iter_mut().rev().find(|s| s.2 == Style::CodePad && s.1 == prev_len)
+                        && inl.1.text.get(pad.0..pad.1) == Some(CLOSE)
+                        && should_break_after_code(&inl.1.text[..pad.0], next_ch)
+                    {
+                        inl.1.text.push('\u{200b}');
+                        let new_len = inl.1.text.len();
+                        pad.1 = new_len;
+                        // Any run (such as a link or emphasis) opened right after `CLOSE` starts
+                        // after the zero-width break mark so it does not absorb the code pad.
+                        for o in &mut inl.2 {
+                            if o.start == prev_len {
+                                o.start = new_len;
+                            }
+                        }
+                    }
                     let start = inl.1.text.len();
                     inl.1.text.push_str(&t);
                     inl.3.push(range, start..inl.1.text.len());
@@ -405,9 +431,13 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool, hard_breaks: bool) -> (P
             }
             Event::Code(t) => {
                 let code_src = code_span_content_range(src, range, &t);
-                let (open, close) = if b.in_link() { (LINK_OPEN, LINK_CLOSE) } else { (OPEN, CLOSE) };
+                let in_link = b.in_link();
+                let (open, close) = if in_link { (LINK_OPEN, LINK_CLOSE) } else { (OPEN, CLOSE) };
                 let inl = b.inline();
                 let a = inl.1.text.len();
+                if !in_link && inl.1.text.chars().next_back().is_some_and(|prev| should_break_before_code(prev, &t)) {
+                    inl.1.text.push('\u{200b}');
+                }
                 inl.1.text.push_str(open);
                 let start = inl.1.text.len();
                 inl.1.text.push_str(&t);
@@ -470,6 +500,98 @@ pub(super) fn parse_doc_tail(src: &str, autolink: bool, hard_breaks: bool) -> (P
         *maps.last_mut().unwrap() = map;
     }
     ((blocks, b.sources, b.tasks, b.cuts, b.block_starts, maps), b.tail)
+}
+
+/// Whether `c` is a CJK ideograph, Kana, Hangul, or Bopomofo character where UAX #14 allows a
+/// line break beside Latin/code runs (`ID` / `H2` / `H3` / `JL` / `JV` / `JT`).
+fn is_cjk_letter(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x1100..=0x11FF
+        | 0x3005..=0x3007
+        | 0x3040..=0x309F
+        | 0x30A0..=0x30FF
+        | 0x3100..=0x312F
+        | 0x3130..=0x318F
+        | 0x31A0..=0x31BF
+        | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF
+        | 0xAC00..=0xD7AF
+        | 0xF900..=0xFAFF
+        | 0xFF66..=0xFF9F
+        | 0x20000..=0x323AF
+    )
+}
+
+/// Japanese/CJK non-starter kana and marks (UAX #14 `CJ` / `NS`) that must not start a new line.
+fn is_cjk_non_starter(c: char) -> bool {
+    matches!(
+        c,
+        '々' | 'ゝ' | 'ゞ' | 'ヽ' | 'ヾ' | 'ー' | '・' | '･'
+        | 'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ' | 'っ' | 'ゃ' | 'ゅ' | 'ょ' | 'ゎ' | 'ゕ' | 'ゖ'
+        | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ' | 'ッ' | 'ャ' | 'ュ' | 'ョ' | 'ヮ' | 'ヵ' | 'ヶ'
+        | 'ｧ' | 'ｨ' | 'ｩ' | 'ｪ' | 'ｫ' | 'ｯ' | 'ｬ' | 'ｭ' | 'ｮ' | 'ｰ'
+    )
+}
+
+/// CJK/fullwidth closing or separating punctuation (plus em-dash and ellipsis) that stays attached
+/// to what precedes it and allows a break after it before an inline code span.
+fn is_break_after_punct(c: char) -> bool {
+    matches!(
+        c,
+        '、' | '。' | '，' | '．' | '：' | '；' | '！' | '？'
+        | '）' | '］' | '｝'
+        | '」' | '』' | '】' | '》' | '〉' | '〕' | '〗' | '〙' | '〛' | '〞' | '〟'
+        | '・' | '･' | '｡' | '｣' | '､'
+        | '〜' | '～' | '／' | '｜'
+        | '—' | '…'
+    )
+}
+
+/// CJK/fullwidth opening punctuation that stays attached to what follows it and allows a break
+/// before it after an inline code span.
+fn is_cjk_open_punct(c: char) -> bool {
+    matches!(
+        c,
+        '（' | '［' | '｛'
+        | '「' | '『' | '【' | '《' | '〈' | '〔' | '〖' | '〘' | '〚' | '〝' | '｢'
+    )
+}
+
+fn is_open_or_prefix(c: char) -> bool {
+    matches!(c, '(' | '[' | '{' | '<' | '"' | '\'' | '“' | '‘' | '¡' | '¿') || is_cjk_open_punct(c)
+}
+
+/// Whether a zero-width break opportunity belongs before `OPEN` so `U+202F` (`GL`) does not glue
+/// a padded inline code span to `prev` where CSS `<code>` would allow a break.
+fn should_break_before_code(prev: char, code: &str) -> bool {
+    if prev.is_whitespace() || matches!(prev, '-' | '\u{2013}') {
+        return false;
+    }
+    if is_cjk_letter(prev) || is_break_after_punct(prev) {
+        return true;
+    }
+    !is_open_or_prefix(prev)
+        && code
+            .chars()
+            .next()
+            .is_some_and(|c| (is_cjk_letter(c) && !is_cjk_non_starter(c)) || is_cjk_open_punct(c))
+}
+
+/// Whether a zero-width break opportunity belongs after `CLOSE` so `U+202F` (`GL`) does not glue
+/// a padded inline code span to `next` where CSS `<code>` would allow a break.
+fn should_break_after_code(before_close: &str, next: char) -> bool {
+    if next.is_whitespace() {
+        return false;
+    }
+    if (is_cjk_letter(next) && !is_cjk_non_starter(next)) || is_cjk_open_punct(next) || next == '—' {
+        return true;
+    }
+    next.is_ascii_alphanumeric()
+        && before_close
+            .chars()
+            .next_back()
+            .is_some_and(|c| is_cjk_letter(c) || is_break_after_punct(c))
 }
 
 /// Whether a fenced code block's source (from its opening fence) has its closing fence.

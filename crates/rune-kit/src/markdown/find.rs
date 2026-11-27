@@ -511,7 +511,7 @@ fn map_segment(
 }
 
 fn is_pad_only(s: Option<&str>) -> bool {
-    s.is_some_and(|s| s == PAD || (!s.is_empty() && s.trim_matches(['\u{202f}', '\u{2066}', '\u{2069}']).is_empty()))
+    s.is_some_and(|s| s == PAD || (!s.is_empty() && s.trim_matches(['\u{200b}', '\u{202f}', '\u{2066}', '\u{2069}']).is_empty()))
 }
 
 fn span_bounds(ranges: &[Range<usize>]) -> Range<usize> {
