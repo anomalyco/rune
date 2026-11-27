@@ -109,3 +109,31 @@ fn off_draws_coverage_as_is_on_apple_platforms() {
         assert_eq!(text.coverage_exponent([0.9, 0.9, 0.9, 1.0]), 1.0, "a window on this Mac draws Off as is");
     }
 }
+
+#[test]
+fn pipeline_with_user_smoothing_controls_on_without_changing_other_modes() {
+    assert_eq!(FontSmoothing::On.pipeline_with_user_smoothing(true), ApplePipeline::SMOOTHED);
+    assert_eq!(FontSmoothing::On.pipeline_with_user_smoothing(false), ApplePipeline::UNSMOOTHED);
+    assert_eq!(FontSmoothing::Off.pipeline_with_user_smoothing(true), ApplePipeline::UNSMOOTHED);
+    assert_eq!(FontSmoothing::Off.pipeline_with_user_smoothing(false), ApplePipeline::UNSMOOTHED);
+    assert_eq!(FontSmoothing::Windfoil.pipeline_with_user_smoothing(true), ApplePipeline::SMOOTHED);
+    assert_eq!(FontSmoothing::Windfoil.pipeline_with_user_smoothing(false), ApplePipeline::SMOOTHED);
+}
+
+#[test]
+fn ignoring_user_font_smoothing_keeps_on_smoothed_and_off_unsmoothed() {
+    let mut text = TextSystem::default();
+    assert!(text.respect_user_font_smoothing());
+    text.set_font_smoothing(FontSmoothing::On);
+    // Simulate a host whose AppleFontSmoothing = 0 downgraded On's pipeline to UNSMOOTHED.
+    text.set_apple_pipeline(ApplePipeline::UNSMOOTHED);
+    assert!(text.set_respect_user_font_smoothing(false), "disabling user preference restores SMOOTHED immediately");
+    assert!(!text.respect_user_font_smoothing());
+    assert_eq!(text.apple_pipeline(), ApplePipeline::SMOOTHED);
+    assert!(!text.set_respect_user_font_smoothing(false), "setting the same flag is a no-op");
+
+    text.set_font_smoothing(FontSmoothing::Off);
+    assert_eq!(text.apple_pipeline(), ApplePipeline::UNSMOOTHED);
+    text.set_font_smoothing(FontSmoothing::On);
+    assert_eq!(text.apple_pipeline(), ApplePipeline::SMOOTHED);
+}

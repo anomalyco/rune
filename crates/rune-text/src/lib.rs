@@ -391,6 +391,9 @@ pub struct TextSystem {
     pub smoothing: FontSmoothing,
     /// The mode the app asked for ([`Self::set_font_smoothing`]).
     requested: FontSmoothing,
+    /// Whether `FontSmoothing::On` honours the host macOS `AppleFontSmoothing` user setting
+    /// (`true` for live windows; `false` for deterministic headless runs and explicit overrides).
+    respect_user_smoothing: bool,
     /// The `trak` table of the first font of a family slot at a weight, upright or italic.
     primary_traks: FxHashMap<(Family, u32, bool), Option<Rc<Trak>>>,
     /// The hidden-axis coordinates (`hidden_axes`) of the same first font.
@@ -537,6 +540,7 @@ impl TextSystem {
             traks: Traks::new(),
             smoothing: FontSmoothing::default(),
             requested: FontSmoothing::default(),
+            respect_user_smoothing: true,
             primary_traks: Default::default(),
             primary_axes: Default::default(),
             apple: Default::default(),
@@ -705,9 +709,40 @@ impl TextSystem {
     pub fn set_font_smoothing(&mut self, mode: FontSmoothing) {
         self.requested = mode;
         self.smoothing = mode.drawn(self.lcd_ok());
-        self.apple.set_pipeline(self.smoothing.pipeline());
+        self.apple.set_pipeline(self.effective_pipeline(self.smoothing));
         self.atlas.lcd = self.smoothing.lcd();
         self.atlas.lcd_wanted = mode.lcd();
+    }
+
+    fn effective_pipeline(&self, mode: FontSmoothing) -> ApplePipeline {
+        if self.respect_user_smoothing {
+            mode.pipeline()
+        } else {
+            mode.pipeline_with_user_smoothing(true)
+        }
+    }
+
+    /// Controls whether [`FontSmoothing::On`] honours the host macOS `AppleFontSmoothing` user
+    /// setting (`true` by default, matching live AppKit/SwiftUI windows; `false` for
+    /// deterministic headless snapshots and explicit `--font-smoothing` overrides so `On`
+    /// always dilates regardless of the machine's `AppleFontSmoothing` preference). Re-applies
+    /// the active mode's pipeline immediately and returns whether it changed.
+    #[doc(hidden)]
+    pub fn set_respect_user_font_smoothing(&mut self, respect: bool) -> bool {
+        if self.respect_user_smoothing == respect {
+            return false;
+        }
+        self.respect_user_smoothing = respect;
+        let next = self.effective_pipeline(self.smoothing);
+        let changed = self.apple.pipeline() != next;
+        self.apple.set_pipeline(next);
+        changed
+    }
+
+    /// Whether [`FontSmoothing::On`] honours the host macOS `AppleFontSmoothing` preference.
+    #[doc(hidden)]
+    pub fn respect_user_font_smoothing(&self) -> bool {
+        self.respect_user_smoothing
     }
 
     /// Whether subpixel text draws here now: the renderer draws outlines and blends by channel,

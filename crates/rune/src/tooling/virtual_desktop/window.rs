@@ -293,7 +293,9 @@ impl Window {
         let (chrome, titlebar) = (app.chrome, app.titlebar);
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
         crate::credentials::note_headless_runtime();
-        let (spec, state, shared, runtime) = app.into_parts(own.scene.as_deref());
+        let (spec, state, shared, mut runtime) = app.into_parts(own.scene.as_deref());
+        runtime.respect_user_font_smoothing = false;
+        if let Some(mode) = own.font_smoothing.or(args.font_smoothing) { runtime.font_smoothing = mode; }
         let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
         let menus = crate::native_menu::MenuGuard::attach(&shared, true);
         let size = own.size.unwrap_or(spec.size);

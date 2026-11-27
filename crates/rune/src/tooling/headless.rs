@@ -212,7 +212,9 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
     let wake = HeadlessWake::default();
     let (spec, mut rt, shared, shortcuts, menus, state_ms) = {
         let _startup = observability.scope_stages(None);
-        let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
+        let (spec, state, shared, mut runtime) = app.into_parts(args.scene.as_deref());
+        runtime.respect_user_font_smoothing = false;
+        if let Some(mode) = args.font_smoothing { runtime.font_smoothing = mode; }
         shared.core.connect(wake.waker());
         let shortcuts = crate::shortcuts::Guard::attach(&shared, wake.waker(), true, false);
         let menus = crate::native_menu::MenuGuard::attach(&shared, true);

@@ -290,6 +290,10 @@ impl Host {
         if let Some(hook) = app.on_displays.take() {
             cx.on_displays.push(hook);
         }
+        if let Some(mode) = args.font_smoothing {
+            app = app.font_smoothing(mode);
+            app.runtime.respect_user_font_smoothing = false;
+        }
         let (prepared, native_handle, slot, gpu_pool, wayland) =
             HostWaker::prepare(&key, handle, &mut app.overlays, cx, app.standard_menus);
         let (on_window, on_ready, on_frame_encoded, on_frame_drawn) = (

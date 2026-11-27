@@ -68,6 +68,17 @@ impl RuntimeCore {
         self.text.font_smoothing()
     }
 
+    pub(crate) fn set_respect_user_font_smoothing(&mut self, respect: bool) {
+        if self.text.set_respect_user_font_smoothing(respect) {
+            self.commit.dirty = true;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn respect_user_font_smoothing(&self) -> bool {
+        self.text.respect_user_font_smoothing()
+    }
+
     pub fn clear_color(&self) -> [f32; 4] {
         if self.transparent {
             if !self.host.backdrop_opaque_fallback {

@@ -298,8 +298,10 @@ fn control_input_core(core: &mut RuntimeCore, app: &mut dyn AppDriver, command: 
 /// `{"id":3,"pause":true}`, `{"id":4,"step":0.05}`, or `{"id":5,"quit":true}`.
 /// Every request and patch publishes a PNG + JSON tree, then a flushed completion marker.
 #[inline]
-fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, runtime: crate::app::RuntimeConfig<S>) {
+fn headless<S: 'static>(spec: &AppSpec<S>, state: S, args: Args, mut runtime: crate::app::RuntimeConfig<S>) {
     assert!(enabled(), "--snap-on-patch requires --hot or RUNE_HOT=1 (use scripts/rune-dev)");
+    runtime.respect_user_font_smoothing = false;
+    if let Some(mode) = args.font_smoothing { runtime.font_smoothing = mode; }
     let size = args.size.unwrap_or(spec.size);
     let scale = args.scale.unwrap_or(2.0);
     let (wake, sleep) = std::sync::mpsc::channel();
