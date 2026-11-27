@@ -215,10 +215,11 @@ macro_rules! field_hook_forwarders {
         }
         /// Called when the focused inner editor loses focus: the window losing focus (another
         /// app, a hidden window), Tab, a click elsewhere or `Tx::focus` moving it off, so a form
-        /// can commit a half-typed value. Return stays [`Self::on_submit`]. An open IME
-        /// composition is finished first. Not called for a field removed from the view while
-        /// focused. Skipped when disabled. Keys are untouched: held modifiers still release
-        /// ([`El::on_focus_lost`](rune::El::on_focus_lost)).
+        /// can commit a half-typed value. Use [`Self::on_focus_change`] for in-window focus gain
+        /// and loss that stays silent on window deactivation and return. Return stays
+        /// [`Self::on_submit`]. An open IME composition is finished first. Not called for a field
+        /// removed from the view while focused. Skipped when disabled. Keys are untouched: held
+        /// modifiers still release ([`El::on_focus_lost`](rune::El::on_focus_lost)).
         /// ```
         /// # use rune::TextEdit;
         /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
@@ -232,6 +233,28 @@ macro_rules! field_hook_forwarders {
         /// ```
         pub fn on_blur<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
             self.edits.blur(f);
+            self
+        }
+        /// Called with `true` when the inner editor gains focus and `false` when focus leaves it
+        /// inside the window: Tab, pointer clicks, assistive technology, programmatic
+        /// [`Tx::focus`](rune::Tx::focus)/[`Tx::blur`](rune::Tx::blur), modal autofocus/return,
+        /// and disabling or removing the field while focused
+        /// ([`El::on_focus_change`](rune::El::on_focus_change)). Stays silent on window
+        /// deactivation and return (use [`Self::on_blur`] when window deactivation should also
+        /// notify). Read [`Tx::focus_visible`](rune::Tx::focus_visible) inside the callback to
+        /// distinguish keyboard focus from pointer focus. Skipped when disabled.
+        /// ```
+        /// # use rune::TextEdit;
+        /// # use rune_kit::{Kit, TextArea, TextField, TextInput};
+        /// # struct App { edit: TextEdit, active: bool }
+        /// # let s = App { edit: TextEdit::default(), active: false };
+        /// # let k = Kit::neutral(true);
+        /// # let _ =
+        #[doc = concat!($ctor, ".on_edit(|s: &mut App| &mut s.edit).on_focus_change(|s: &mut App, focused, _| s.active = focused).build(&k)")]
+        /// # ;
+        /// ```
+        pub fn on_focus_change<S: 'static>(mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) -> Self {
+            self.edits.focus_change(f);
             self
         }
     };
@@ -280,6 +303,9 @@ impl EditActs {
     }
     fn blur<S: 'static>(&mut self, f: impl Fn(&mut S, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_focus_lost(f)));
+    }
+    fn focus_change<S: 'static>(&mut self, f: impl Fn(&mut S, bool, &mut Tx) + 'static) {
+        self.handlers.push(Box::new(move |e: El| e.on_focus_change(f)));
     }
     fn secondary_press<S: 'static>(&mut self, f: impl Fn(&mut S, rune::PointerPress, &mut Tx) + 'static) {
         self.handlers.push(Box::new(move |e: El| e.on_secondary_press(f)));

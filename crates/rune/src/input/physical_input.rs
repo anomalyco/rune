@@ -47,9 +47,11 @@ impl crate::El {
         self
     }
     /// Called when this element has focus and loses it: the window deactivating (another app,
-    /// a hidden window) or focus moving off it inside the window. It only observes: the
-    /// element's `on_physical_input` and held modifier keys still hear `FocusLost` as if it
-    /// weren't there, and the view builds again with what `f` changed.
+    /// a hidden window) or focus moving off it inside the window. Use
+    /// [`El::on_focus_change`](Self::on_focus_change) for in-window focus gain and loss that
+    /// stays silent on window deactivation and return. It only observes: the element's
+    /// `on_physical_input` and held modifier keys still hear `FocusLost` as if it weren't there,
+    /// and the view builds again with what `f` changed.
     ///
     /// ```
     /// use rune::{El, el};

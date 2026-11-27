@@ -317,6 +317,8 @@ impl El {
     /// [`Tx::focus`](crate::Tx::focus)/[`Tx::blur`](crate::Tx::blur), text-field blur, modal
     /// autofocus/return, and removal or disabling while focused.
     ///
+    /// Stays silent on window deactivation and return (use
+    /// [`El::on_focus_lost`](Self::on_focus_lost) when window deactivation should also notify).
     /// Initial unfocused mounts fire nothing. Does not make the element focusable or a pointer
     /// hit target. Actual focus is kept separate from `:focus-visible`: read
     /// [`Tx::focus_visible`](crate::Tx::focus_visible) inside the callback to distinguish keyboard
