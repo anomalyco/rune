@@ -1,0 +1,1 @@
+- `scripts/rune-dev`: `tools/rune-dev-guard` now accepts body-only edits to inherent impl methods named `main` (for example `impl Layout { fn main(&self) ... }`) instead of asking for a restart (#2440); free `fn main` functions still require a restart.
