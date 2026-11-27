@@ -1,0 +1,1 @@
+- Added `El::pill_inline_image` (and forwarded it on `rune-kit` text fields) to render a `Mark::Pill` in a `text_input` as a baseline-aligned `InlineImage` in place of its label while keeping atomic pill editing, copy/paste text, hit-testing, and accessibility value intact.

@@ -547,4 +547,181 @@ mod live {
         rt.frame(0.0);
         assert_eq!(rt.state.pressed, ["user:alex"]);
     }
+
+    #[test]
+    fn pill_inline_image_replaces_pill_label_while_keeping_atomic_edit_copy_hit_and_a11y() {
+        const BG: crate::Color = crate::Color { r: 0.2, g: 0.5, b: 0.9, a: 0.25 };
+        const STYLE: TextStyle = TextStyle::new(14.0, 400.0).lh(20.0);
+
+        struct ChatState {
+            edit: crate::TextEdit,
+            emoji: Option<crate::Pixels>,
+            pressed: Vec<String>,
+            secondary: Vec<String>,
+            inline_first: bool,
+        }
+
+        let emoji_px = super::image(32, 32);
+        let mut edit = crate::TextEdit::new("oi ").rich();
+        edit.insert_pill("emoji:gato", ":gato:");
+        edit.insert(" ");
+        edit.insert_pill("user:ada", "@ada");
+        edit.insert(" tudo");
+
+        let view = |s: &ChatState, _: &mut Cx<ChatState>| {
+            let emoji = s.emoji.clone();
+            let mut field = crate::el::text_input(&s.edit, STYLE)
+                .key("field")
+                .w(320.0)
+                .h(80.0)
+                .on_edit(|s: &mut ChatState| &mut s.edit)
+                .on_pill_press(|s: &mut ChatState, id, _, _| {
+                    s.pressed.push(id.to_owned());
+                    true
+                })
+                .on_pill_secondary(|s: &mut ChatState, id, _, _| {
+                    s.secondary.push(id.to_owned());
+                    true
+                });
+            if s.inline_first {
+                field = field
+                    .pill_inline_image(move |id| {
+                        (id == "emoji:gato").then(|| emoji.as_ref().map(|px| crate::InlineImage::new(px.clone(), 20.0, 16.0, 4.0))).flatten()
+                    })
+                    .pill_style(|_| PillStyle::new().bg(BG));
+            } else {
+                field = field
+                    .pill_style(|_| PillStyle::new().bg(BG))
+                    .pill_inline_image(move |id| {
+                        (id == "emoji:gato").then(|| emoji.as_ref().map(|px| crate::InlineImage::new(px.clone(), 20.0, 16.0, 4.0))).flatten()
+                    });
+            }
+            col().key("root").padding(8.0).child(field)
+        };
+
+        // 1. Both builder orders produce the same replaced emoji + styled mention pill.
+        for inline_first in [false, true] {
+            let mut rt = Runtime::new(
+                ChatState { edit: edit.clone(), emoji: Some(emoji_px.clone()), pressed: Vec::new(), secondary: Vec::new(), inline_first },
+                view,
+                (360.0, 100.0),
+                Env::new(true, 1.0),
+            );
+            rt.frame(0.0);
+
+            // Exactly one KIND_IMAGE instance for `:gato:` at ~20x20, and only ONE chip rect (for `@ada`).
+            let images: Vec<_> = rt.instances.iter().filter(|q| q.params[1] == crate::render::KIND_IMAGE).collect();
+            assert_eq!(images.len(), 1, "inline_first={inline_first}: expected 1 KIND_IMAGE for :gato:");
+            let img = images[0].rect;
+            assert!((img[2] - 20.0).abs() <= 1.0 && (img[3] - 20.0).abs() <= 1.0, "emoji rect={img:?}");
+
+            let chip_rects: Vec<_> = rt.instances.iter().filter(|q| q.params[1] == crate::render::KIND_RECT && q.fill[3] > 0.1).collect();
+            assert_eq!(chip_rects.len(), 1, "inline_first={inline_first}: only @ada draws a chip rect, not :gato:");
+            assert!(chip_rects[0].rect[0] > img[0] + img[2], "@ada chip sits to the right of :gato: image");
+
+            // Accessibility value keeps the full shortcode text and adds no spurious Image child.
+            let tree = rt.accessibility_tree();
+            let field_node = tree.nodes.iter().find(|(_, n)| {
+                n.role() == accesskit::Role::MultilineTextInput || n.role() == accesskit::Role::TextInput
+            }).expect("field a11y node");
+            assert_eq!(field_node.1.value(), Some("oi :gato: @ada tudo"));
+            assert!(!tree.nodes.iter().any(|(_, n)| n.role() == accesskit::Role::Image), "replaced field pill emits no extra Image a11y node");
+
+            // Primary and secondary clicks on the emoji image hit `emoji:gato`.
+            let (ex, ey) = (img[0] + img[2] * 0.5, img[1] + img[3] * 0.5);
+            rt.pointer_move(ex, ey);
+            assert_eq!(rt.cursor(), crate::Cursor::Pointer, "hovering replaced pill with on_pill_press shows Pointer");
+            rt.pointer_down(ex, ey);
+            rt.pointer_up(ex, ey);
+            rt.frame(0.0);
+            assert_eq!(rt.state.pressed, ["emoji:gato"]);
+
+            rt.secondary_down(ex, ey);
+            rt.secondary_up(ex, ey);
+            rt.frame(0.0);
+            assert_eq!(rt.state.secondary, ["emoji:gato"]);
+        }
+
+        // 2. Dynamic update: emoji pixels arriving later switch `:gato:` from chip to replaced image
+        //    even in a multi-paragraph field, and without `on_pill_press`, clicking left/right halves
+        //    places the caret before/after `:gato:` while Backspace deletes the pill atomically.
+        let mut multi = crate::TextEdit::new("line 1\noi ").rich();
+        let pill_start = multi.text.len();
+        multi.insert_pill("emoji:gato", ":gato:");
+        let pill_end = multi.text.len();
+        multi.insert(" tudo");
+        multi.set_caret(0);
+
+        let edit_view = |s: &ChatState, _: &mut Cx<ChatState>| {
+            let emoji = s.emoji.clone();
+            col().key("root").padding(8.0).child(
+                crate::el::text_input(&s.edit, STYLE)
+                    .key("field")
+                    .w(320.0)
+                    .h(120.0)
+                    .on_edit(|s: &mut ChatState| &mut s.edit)
+                    .pill_style(|_| PillStyle::new().bg(BG))
+                    .pill_inline_image(move |id| {
+                        (id == "emoji:gato").then(|| emoji.as_ref().map(|px| crate::InlineImage::new(px.clone(), 24.0, 22.0, 6.0))).flatten()
+                    }),
+            )
+        };
+        let mut rt = Runtime::new(
+            ChatState { edit: multi, emoji: None, pressed: Vec::new(), secondary: Vec::new(), inline_first: false },
+            edit_view,
+            (360.0, 140.0),
+            Env::new(true, 1.0),
+        );
+        rt.frame(0.0);
+        assert!(!rt.instances.iter().any(|q| q.params[1] == crate::render::KIND_IMAGE), "no image before emoji loads");
+        let h_before = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("field")).unwrap().text_layout.as_ref().unwrap().view().height();
+
+        // Emoji finishes loading: switches from chip to taller 24x28 replaced image.
+        rt.update(|s, _| s.emoji = Some(emoji_px.clone()));
+        rt.frame(0.0);
+        let img = rt.instances.iter().find(|q| q.params[1] == crate::render::KIND_IMAGE).expect("emoji image drawn").rect;
+        let h_after = rt.tree.nodes.iter().find(|n| n.key.as_deref() == Some("field")).unwrap().text_layout.as_ref().unwrap().view().height();
+        assert!(h_after > h_before + 4.0, "taller inline emoji grew multi-paragraph height: before={h_before} after={h_after}");
+        assert!(!rt.instances.iter().any(|q| q.params[1] == crate::render::KIND_RECT && q.fill[3] > 0.1), "chip rect disappears once replaced by image");
+
+        // Click left half -> caret before `:gato:`; click right half -> caret after `:gato:`.
+        let mid_y = img[1] + img[3] * 0.5;
+        let left_x = img[0] + img[2] * 0.25;
+        let right_x = img[0] + img[2] * 0.75;
+        rt.pointer_move(left_x, mid_y);
+        rt.pointer_down(left_x, mid_y);
+        rt.pointer_up(left_x, mid_y);
+        rt.frame(0.0);
+        assert_eq!(rt.state.edit.range(), (pill_start, pill_start), "left-half click puts caret before pill");
+
+        rt.pointer_move(right_x, mid_y);
+        rt.pointer_down(right_x, mid_y);
+        rt.pointer_up(right_x, mid_y);
+        rt.frame(0.0);
+        assert_eq!(rt.state.edit.range(), (pill_end, pill_end), "right-half click puts caret after pill");
+
+        // Left/Right arrows step atomically over the replaced pill; Shift+Left selects it whole
+        // with its shortcode text, and Backspace removes it whole.
+        rt.key(crate::KeyEvent { key: crate::Key::Left, mods: crate::Mods::default() });
+        rt.frame(0.0);
+        assert_eq!(rt.state.edit.range(), (pill_start, pill_start), "Left arrow steps atomically before pill");
+        rt.key(crate::KeyEvent { key: crate::Key::Right, mods: crate::Mods::default() });
+        rt.frame(0.0);
+        assert_eq!(rt.state.edit.range(), (pill_end, pill_end), "Right arrow steps atomically past pill");
+
+        rt.key(crate::KeyEvent { key: crate::Key::Left, mods: crate::Mods { shift: true, ..crate::Mods::default() } });
+        rt.frame(0.0);
+        assert_eq!(rt.state.edit.range(), (pill_start, pill_end));
+        assert_eq!(rt.state.edit.selected(), ":gato:");
+        assert!(
+            rt.instances.iter().any(|q| q.params[1] == crate::render::KIND_RECT && q.rect[2] >= img[2] - 1.5 && (q.rect[0] - img[0]).abs() <= 2.0),
+            "selection highlight covers replaced emoji image",
+        );
+
+        rt.key(crate::KeyEvent { key: crate::Key::Right, mods: crate::Mods::default() });
+        rt.key(crate::KeyEvent { key: crate::Key::Backspace, mods: crate::Mods::default() });
+        rt.frame(0.0);
+        assert_eq!(rt.state.edit.text, "line 1\noi  tudo");
+        assert!(rt.state.edit.pills().next().is_none());
+    }
 }

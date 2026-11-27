@@ -83,6 +83,11 @@ macro_rules! rich_forwarders {
             self.edits.visual(move |e| e.pill_image(image));
             self
         }
+        /// See [`El::pill_inline_image`](rune::El::pill_inline_image).
+        pub fn pill_inline_image(mut self, image: impl Fn(&str) -> Option<rune::InlineImage> + 'static) -> Self {
+            self.edits.visual(move |e| e.pill_inline_image(image));
+            self
+        }
         /// See [`El::pill_style`](rune::El::pill_style).
         pub fn pill_style(mut self, style: impl Fn(&str) -> rune::PillStyle + 'static) -> Self {
             self.edits.visual(move |e| e.pill_style(style));

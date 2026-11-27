@@ -408,6 +408,42 @@ impl RuntimeCore {
         self.span_at(i, x, y, 0.0, spec.cold.links.iter().map(|l| (l.start, l.end)))
     }
 
+    /// Index of the replaced pill (`El::pill_inline_image`) in text field `i` whose inline image
+    /// box contains window point `(x, y)` (shifted left by `scroll_x` window points), if any.
+    fn replaced_pill_at(&self, i: usize, x: f32, y: f32, scroll_x: f32) -> Option<usize> {
+        let n = &self.tree.nodes[i];
+        let spec = n.text.as_deref()?;
+        let is_replaced = |p: &crate::text::PillChip| p.bare.as_deref().is_some_and(|b| b.replace.is_some());
+        if !spec.cold.pills.iter().any(is_replaced) { return None; }
+        let laid = n.text_layout.as_ref()?;
+        let (rect, ux, uy) = self.unturned_box_and_point(i, x, y);
+        if !ux.is_finite() || !uy.is_finite() { return None; }
+        let flow = laid.view();
+        let s = self.env.scale;
+        let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
+        let [ox, oy] = origin(n, spec, flow, rect, s, z);
+        let px = s / z.max(1e-4);
+        if !(px > 0.0 && px.is_finite() && ox.is_finite() && oy.is_finite()) { return None; }
+        let py = (uy - oy) * px;
+        let margin = (spec.style.line_px() * s * 4.0).max(128.0);
+        let mut found = Vec::new();
+        for piece in flow.pieces_in(py - margin, py + margin) {
+            let pills = piece.pills(&spec.cold.pills);
+            found.clear();
+            crate::text::bare_icons(piece.layout, &pills, s, [0.0, piece.y], &mut found);
+            for &(k, at, size) in &found {
+                if !is_replaced(&pills[k]) { continue; }
+                let r = [ox + at[0] / px - scroll_x, oy + at[1] / px, ox + (at[0] + size[0]) / px - scroll_x, oy + (at[1] + size[1]) / px];
+                if contains(r, ux, uy) {
+                    if piece.is_whole() { return Some(k); }
+                    let start = piece.content(pills[k].start as usize) as u32;
+                    return spec.cold.pills.iter().position(|p| p.start == start && is_replaced(p));
+                }
+            }
+        }
+        None
+    }
+
     /// The id of the `Mark::Pill` in text field `i` under window point `(x, y)`, if any.
     pub(in crate::runtime) fn input_pill_at(&self, i: usize, x: f32, y: f32) -> Option<String> {
         let n = &self.tree.nodes[i];
@@ -417,6 +453,11 @@ impl RuntimeCore {
         if pills.is_empty() { return None; }
         let z = self.paint.drawn_scale.get(i).copied().unwrap_or(1.0);
         let scroll_x = if input.single_line { self.edit.input_scroll.get(&n.path).copied().unwrap_or(0.0) * z } else { 0.0 };
+        if let Some(k) = self.replaced_pill_at(i, x, y, scroll_x)
+            && let Some(&(_, _, id)) = pills.get(k)
+        {
+            return Some(id.to_owned());
+        }
         self.span_at(i, x, y, scroll_x, pills.iter().map(|&(s, e, _)| (s, e)))
             .map(|k| pills[k].2.to_owned())
     }

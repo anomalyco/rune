@@ -449,3 +449,80 @@ fn carets_parley_places_correctly_keep_identical_geometry() {
     let lq = ts.layout_blocks(quoted, &[], &blocks, &[], style, 2.0, Some(600.0), Alignment::Start);
     assert_carets_match_parley(&lq, "quoted block", quoted);
 }
+
+#[test]
+fn replaced_pill_hit_testing_splits_at_midpoint_and_carets_bracket_image() {
+    use parley::{editing::Cursor, layout::Affinity};
+    let mut ts = TextSystem::default();
+    let style = TextStyle::new(14.0, 400.0);
+    let scale = 2.0;
+    let body = "oi :gato: tudo";
+    let start = 3u32;
+    let end = 9u32;
+    let img_w = 22.0f32;
+    let pills = [PillChip {
+        start,
+        end,
+        icon: None,
+        image: None,
+        bg: None,
+        fg: None,
+        ring: None,
+        radius: None,
+        pad_x: None,
+        margin_x: None,
+        bare: Some(Box::new(BareIcon {
+            size: 0.0,
+            gap: 0.0,
+            radius: 0.0,
+            image: None,
+            replace: Some(Replace { width: img_w, ascent: 16.0, descent: 4.0, bleed: 0.0 }),
+            label: None,
+            help: None,
+        })),
+    }];
+    let spec = TextInput {
+        content: body,
+        spans: &[],
+        blocks: &[],
+        pills: &pills,
+        span_boxes: &[],
+        inline_boxes: &[],
+        text_indent: 0.0,
+        style,
+        shape_key: None,
+        wrap_anywhere: false,
+        pretty: false,
+        redacted: false,
+        by_line: false,
+        by_paragraph: false,
+        dir: TextDir::Auto,
+    };
+    let l = ts.layout_for_spec(&spec, scale, None, Alignment::Start);
+
+    let mut boxes = Vec::new();
+    bare_icons(&l, &pills, scale, [0.0, 0.0], &mut boxes);
+    assert_eq!(boxes.len(), 1);
+    let (_, at, sz) = boxes[0];
+    assert!((sz[0] - img_w * scale).abs() <= 1.0, "replaced box width={}", sz[0]);
+
+    // Carets before and after the pill bracket the replaced image box cleanly.
+    let c_before = cursor_geometry(&Cursor::from_byte_index(&l, start as usize, Affinity::Downstream), &l, 2.0);
+    let c_after = cursor_geometry(&Cursor::from_byte_index(&l, end as usize, Affinity::Upstream), &l, 2.0);
+    assert!((c_before.x0 as f32 - at[0]).abs() <= 1.5, "before caret={} box_x={}", c_before.x0, at[0]);
+    assert!(((c_after.x0 - c_before.x0) as f32 - sz[0]).abs() <= 1.5, "caret span={} box_w={}", c_after.x0 - c_before.x0, sz[0]);
+
+    // Clicking the left half lands before the pill; clicking the right half lands after it.
+    let mid_y = at[1] + sz[1] * 0.5;
+    let hit_left = cursor_from_point(&l, at[0] + sz[0] * 0.25, mid_y);
+    assert_eq!(hit_left.index(), start as usize);
+    assert_eq!(hit_left.affinity(), Affinity::Downstream);
+    let hit_right = cursor_from_point(&l, at[0] + sz[0] * 0.75, mid_y);
+    assert_eq!(hit_right.index(), end as usize);
+    assert_eq!(hit_right.affinity(), Affinity::Upstream);
+
+    // Selection highlight (`pill_boxes = true`) covers the whole replaced image box.
+    let sel = range_boxes(&l, start as usize, end as usize, true);
+    assert_eq!(sel.len(), 1);
+    assert!(((sel[0].0.x1 - sel[0].0.x0) as f32 - sz[0]).abs() <= 1.5, "selection width={}", sel[0].0.x1 - sel[0].0.x0);
+}

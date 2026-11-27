@@ -1,6 +1,7 @@
 //! `El::pill` and `El::pills`: rounded chips around byte ranges of static text, drawn and
 //! wrapped like a [`text_input`](crate::text_input)'s [`Mark::Pill`](crate::Mark::Pill) chips.
 use std::ops::Range;
+use std::rc::Rc;
 
 use crate::Color;
 use crate::el::{El, PillStyle};
@@ -151,7 +152,7 @@ impl El {
     /// still see them. A line grows to fit a taller or deeper image, and one too wide for the
     /// rest of a line moves whole to the next. Ranges are UTF-8 bytes on char boundaries with
     /// no newline; empty, out-of-range or overlapping ones are skipped. On a field this does
-    /// nothing.
+    /// nothing: attach [`El::pill_inline_image`] instead.
     ///
     /// ```
     /// # use rune::{InlineImage, Pixels, text};
@@ -176,10 +177,41 @@ impl El {
             return self;
         }
         let at = t.cold.pills.partition_point(|p| p.start < start);
-        let InlineImage { pixels, width, ascent, descent, bleed } = image;
-        let replace = Some(Replace { width, ascent, descent, bleed });
-        let bare = Some(Box::new(BareIcon { size: 0.0, gap: 0.0, radius: 0.0, image: Some(pixels), replace, label: None, help: None }));
+        let bare = Some(Box::new(image.into_bare()));
         t.cold.pills.insert(at, PillChip { start, end, icon: None, image: None, bg: None, fg: None, ring: None, radius: None, pad_x: None, margin_x: None, bare });
+        self
+    }
+
+    /// Draws an [`InlineImage`](crate::InlineImage) in place of a [`Mark::Pill`](crate::Mark::Pill)'s
+    /// label inside a [`text_input`](crate::text_input), by the pill's id (`None`: draw the pill
+    /// as a regular chip).
+    ///
+    /// Like [`El::inline_image`] on static text, the image stands on the baseline at its own
+    /// width, ascent and descent, growing the line when taller and moving whole to the next line
+    /// when too wide. The pill stays atomic (the caret steps over it and delete removes it whole),
+    /// and its label stays in the field's text for copy, paste and accessibility. When `Some`,
+    /// this replaces the pill's chip, label, [`El::pill_style`], [`El::pill_image`] and
+    /// [`El::pill_icon`].
+    ///
+    /// ```
+    /// # use std::collections::HashMap;
+    /// # use rune::{InlineImage, Pixels, TextEdit, TextStyle, text_input};
+    /// # struct App { draft: TextEdit, emoji: HashMap<String, Pixels> }
+    /// # let s = App { draft: TextEdit::default(), emoji: HashMap::new() };
+    /// # let body = TextStyle::new(14.0, 400.0);
+    /// # let _ =
+    /// text_input(&s.draft, body).pill_inline_image({
+    ///     let emoji = s.emoji.clone();
+    ///     move |id| emoji.get(id).cloned().map(|px| InlineImage::new(px, 18.0, 14.0, 4.0))
+    /// })
+    /// # ;
+    /// ```
+    pub fn pill_inline_image(mut self, image: impl Fn(&str) -> Option<InlineImage> + 'static) -> Self {
+        if let Some(inp) = self.cold.get_mut_if_some().and_then(|c| c.input.as_deref_mut()) {
+            inp.pill_inline_image = Some(Rc::new(image));
+            self.sync_input_pills();
+            self.sync_input_rich();
+        }
         self
     }
 
@@ -247,8 +279,9 @@ impl El {
     }
 }
 
-/// An image set in text by [`El::inline_image`]: `width` points wide, `ascent` points above
-/// the baseline and `descent` below it, the image scaled to fit that box.
+/// An image set in text by [`El::inline_image`] or in a field pill by [`El::pill_inline_image`]:
+/// `width` points wide, `ascent` points above the baseline and `descent` below it, the image
+/// scaled to fit that box.
 #[derive(Clone, Debug)]
 pub struct InlineImage {
     pixels: crate::Pixels,
@@ -271,6 +304,18 @@ impl InlineImage {
     pub fn bleed(mut self, points: f32) -> Self {
         self.bleed = self::points(points);
         self
+    }
+    pub(crate) fn into_bare(self) -> BareIcon {
+        let Self { pixels, width, ascent, descent, bleed } = self;
+        BareIcon {
+            size: 0.0,
+            gap: 0.0,
+            radius: 0.0,
+            image: Some(pixels),
+            replace: Some(Replace { width, ascent, descent, bleed }),
+            label: None,
+            help: None,
+        }
     }
 }
 

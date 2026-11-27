@@ -606,3 +606,69 @@ fn by_line_spanned_streaming_append_reuses_shaped_and_waiting_paragraphs() {
     assert!(ts.shaped - shaped_before <= 2, "streaming append must shape only the new line, got {}", ts.shaped - shaped_before);
     assert!(Rc::ptr_eq(&pl1.paragraphs[100].layout, &filled.paragraphs[100].layout), "interior line 100 reused");
 }
+
+#[test]
+fn paragraphs_invalidate_when_pill_switches_to_or_resizes_replaced_image() {
+    let content = "first line\noi :gato: tudo";
+    let start = content.find(":gato:").unwrap() as u32;
+    let end = start + ":gato:".len() as u32;
+    let style = TextStyle::new(14.0, 400.0);
+    let scale = 1.0;
+
+    let mut ts = TextSystem::default();
+    let chip = [PillChip {
+        start,
+        end,
+        icon: None,
+        image: None,
+        bg: None,
+        fg: None,
+        ring: None,
+        radius: None,
+        pad_x: None,
+        margin_x: None,
+        bare: None,
+    }];
+    let replaced = |w: f32, asc: f32, desc: f32| [PillChip {
+        start,
+        end,
+        icon: None,
+        image: None,
+        bg: None,
+        fg: None,
+        ring: None,
+        radius: None,
+        pad_x: None,
+        margin_x: None,
+        bare: Some(Box::new(BareIcon {
+            size: 0.0,
+            gap: 0.0,
+            radius: 0.0,
+            image: None,
+            replace: Some(Replace { width: w, ascent: asc, descent: desc, bleed: 0.0 }),
+            label: None,
+            help: None,
+        })),
+    }];
+
+    fn input_with<'a>(content: &'a str, style: TextStyle, pills: &'a [PillChip]) -> TextInput<'a> {
+        let mut inp = rich_input(content, &[], style, true, TextDir::Auto);
+        inp.pills = pills;
+        inp
+    }
+
+    let tl_chip = ts.layout_text(&input_with(content, style, &chip), false, scale, Some(300.0), Alignment::Start, None);
+    let pl_chip = as_paragraphs(&tl_chip);
+
+    let r_small = replaced(18.0, 14.0, 4.0);
+    let tl_small = ts.layout_text(&input_with(content, style, &r_small), false, scale, Some(300.0), Alignment::Start, Some(&tl_chip));
+    let pl_small = as_paragraphs(&tl_small);
+    assert!(Rc::ptr_eq(&pl_small.paragraphs[0].layout, &pl_chip.paragraphs[0].layout), "unchanged first paragraph reused");
+    assert!(!Rc::ptr_eq(&pl_small.paragraphs[1].layout, &pl_chip.paragraphs[1].layout), "pill paragraph must re-shape when switching to replaced image");
+
+    let r_big = replaced(40.0, 26.0, 8.0);
+    let tl_big = ts.layout_text(&input_with(content, style, &r_big), false, scale, Some(300.0), Alignment::Start, Some(&tl_small));
+    let pl_big = as_paragraphs(&tl_big);
+    assert!(!Rc::ptr_eq(&pl_big.paragraphs[1].layout, &pl_small.paragraphs[1].layout), "pill paragraph must re-shape when replaced image size changes");
+    assert!(pl_big.paragraphs[1].height > pl_small.paragraphs[1].height + 4.0, "taller replaced image grows paragraph height");
+}
