@@ -217,8 +217,18 @@ impl RuntimeCore {
             let n = &self.tree.nodes[i];
             let mark = if n.vis.mark != 0 { n.vis.mark } else { pinh.mark };
             let mut own = p.opacity;
-            let mut hit_own = own * group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, 1.0);
-            own *= group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, group_lit(&self.scene, n, pinh.group));
+            // An actively running presence entrance (not delayed or frozen) takes hits at its
+            // pre-entrance opacity from frame 0, while visual paint still fades from 0.
+            let entering_own = if p.phase == rune_motion::Phase::Entering && self.scene.store().is_moving(n.id, prop::PRESENCE) {
+                self.scene.get(n.id, prop::OPACITY).unwrap_or(n.vis.opacity).clamp(0.0, 1.0)
+            } else {
+                own
+            };
+            let g_hov = group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, 1.0);
+            let g_now = group_factor(&self.scene, self.kbd.focus.keyboard(), self.kbd.focus.path(), n, group_lit(&self.scene, n, pinh.group));
+            let mut hit_own = entering_own * g_hov;
+            own *= g_now;
+            let group_hidden = pcold.group_hidden || g_now < g_hov;
             let base_opacity = (own * pinh.opacity).clamp(0.0, 1.0);
             let hover_owner = n.vis.tracks_hover_paint() || n.vis_flags.hover_group();
             let group = if hover_owner {
@@ -747,7 +757,7 @@ impl RuntimeCore {
                 self.paint.unturned_drawn[i] = (r.map(|v| v / s), full_clip);
             }
             let group_rect = if hover_owner {
-                if effective_opacity > 0.001 { rect_pt } else { intersect(rect_pt, pcold.group_rect) }
+                if !group_hidden { rect_pt } else { intersect(rect_pt, pcold.group_rect) }
             } else { pcold.group_rect };
             let held_moving = pinh.held_moving() || own_scale_moving || cover.is_some();
             next_cold.first_fade = kids_fade;
@@ -764,6 +774,7 @@ impl RuntimeCore {
             next_cold.pressed = pressed;
             next_cold.press_to = press_to;
             next_cold.group_rect = group_rect;
+            next_cold.group_hidden = group_hidden;
             next_cold.still = if scale_motion == ScaleMotion::Still { (scale, anchor, anchor_to) } else { pcold.still };
             next_cold.held = if !held_moving { (scale, anchor, anchor_to) } else { pcold.held };
             next_cold.scale_target = if cover.is_some() { scale } else { scale_target };
@@ -799,8 +810,10 @@ impl RuntimeCore {
             };
             // Shown only under its group's hover, it takes presses where the pointer hovers the
             // group: a press in the same frame as the move that reveals it finds it, as a page's
-            // `:hover` applies before the press does.
-            let (hit_opacity, hit_rect) = if effective_opacity > 0.001 { (effective_opacity, rect_pt) } else { (hit_opacity, intersect(rect_pt, pcold.group_rect)) };
+            // `:hover` applies before the press does. Entering elements on frame 0 keep `rect_pt`.
+            let (hit_opacity, hit_rect) = if effective_opacity > 0.001 { (effective_opacity, rect_pt) }
+                else if group_hidden { (hit_opacity, intersect(rect_pt, pcold.group_rect)) }
+                else { (hit_opacity, rect_pt) };
             self.register_node_hits(i, pinh.clip, (hit_opacity, visible), hit_rect, (press_k, press_anchor, hit_press_off));
             if self.tree.has_sticky {
                 self.fade_below_header(i, s);

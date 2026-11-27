@@ -26,8 +26,8 @@ const F_SNAP_SHIFTED: u8 = 1 << 7;
 pub(in crate::runtime) struct Inh {
     pub(in crate::runtime) opacity: f32,
     pub(in crate::runtime) paint_opacity: f32,
-    /// `opacity` with each `El::group_opacity` at its hovered level: a press where the pointer
-    /// hovers the group finds what the hover shows, before a frame has drawn it.
+    /// `opacity` without active presence entrance fades and with each `El::group_opacity` at its
+    /// hovered level: newly mounted controls on frame 0 and hover-revealed controls take hits.
     pub(in crate::runtime) hit_opacity: f32,
     /// Ancestors' scales, composed: a point `x` (points, with `dx`/`dy` applied) draws at
     /// `anchor_to + (x - anchor) * scale`.
@@ -171,6 +171,9 @@ pub(in crate::runtime) struct InhCold {
     pub(in crate::runtime) press_to: Option<Color>,
     /// The nearest hover group's rect in points (x0, y0, x1, y1): where a pointer hovers it.
     pub(in crate::runtime) group_rect: [f32; 4],
+    /// True when an ancestor's `El::group_opacity` is below its hovered level, so hits while
+    /// `effective_opacity <= 0.001` stay clipped to `group_rect`.
+    pub(in crate::runtime) group_hidden: bool,
     /// `(scale, anchor, anchor_to)` of ancestors whose scales hold still from the root down.
     pub(in crate::runtime) still: (f32, [f32; 2], [f32; 2]),
     /// `(scale, anchor, anchor_to)` of ancestors whose scales the app holds or drives.
@@ -205,6 +208,7 @@ impl InhCold {
         pressed: 0.0,
         press_to: None,
         group_rect: DEFAULT_GROUP_RECT,
+        group_hidden: false,
         still: (1.0, [0.0; 2], [0.0; 2]),
         held: (1.0, [0.0; 2], [0.0; 2]),
         scale_target: 1.0,
@@ -288,6 +292,7 @@ pub(in crate::runtime) fn inh_keys(p: &Inh, c: &InhCold, is_default_cold: bool) 
         for a in [c.fade, c.fade_origin, c.paint_fade, c.paint_fade_origin, c.group_rect] {
             hash_f32s(&mut h, &a);
         }
+        h.write_u8(u8::from(c.group_hidden));
         hash_f32s(&mut h, &c.anchor);
         hash_f32s(&mut h, &c.anchor_to);
         hash_f32s(&mut h, &c.cover);
