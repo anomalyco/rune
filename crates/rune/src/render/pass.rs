@@ -243,8 +243,15 @@ impl<'a, 'p> ActivePass<'a, 'p> {
             occlusion_query_set: None,
             multiview_mask: None,
         }).forget_lifetime();
-        next.set_viewport(0.0, 0.0, size[0] as f32, size[1] as f32, 0.0, 1.0);
-        if let Some([x, y, w, h]) = scissor { next.set_scissor_rect(x, y, w, h); }
+        let vw = size[0].min(src_tex.width());
+        let vh = size[1].min(src_tex.height());
+        if vw > 0 && vh > 0 {
+            next.set_viewport(0.0, 0.0, vw as f32, vh as f32, 0.0, 1.0);
+            match scissor {
+                Some([x, y, w, h]) => next.set_scissor_rect(x, y, w, h),
+                None => next.set_scissor_rect(0, 0, vw, vh),
+            }
+        }
         *self = ActivePass::Owned(OpenPass { pass: next, encoder, view, scissor, timestamps });
         Some(bd)
     }

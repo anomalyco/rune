@@ -146,6 +146,9 @@ pub(super) fn run_drag_frame<S: DragSeam>(
     let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("rune drag resize frame"),
     });
+    // Disarm any stray retained partial-damage state before encoding so drag frames always render
+    // whole into the capacited shared target (never via `draw_armed` against a mismatched buffer).
+    let _ = renderer.damage_drawn().ok();
     let comp_animating = if consumers.app.has_compositor() {
         consumers.app.render_compositor(CompositorFrame {
             device: &gpu.device,
@@ -179,16 +182,20 @@ pub(super) fn run_drag_frame<S: DragSeam>(
     };
     profile.mark_submitted();
     let encoded = consumers.frame_reports.stamp();
+    if detach_dcomp {
+        // Suppress `WM_ERASEBKGND` before the first `BeginPaint` runs on standard-frame windows;
+        // any failure below drives `Event::DragFailed`, which clears the flag again.
+        seam.set_valid_rects_active(true);
+    }
     let release_value = {
         let _present = StageGuard::enter(FrameStage::Present);
         pre_present();
-        seam.present_shared(drag, target, size, ready_value)?
+        seam.present_shared(drag, target, size, ready_value, detach_dcomp)?
     };
     let present_returned = consumers.frame_reports.stamp();
     sync.note_slot_release(slot_idx, release_value);
     if detach_dcomp {
         seam.detach_dcomp()?;
-        seam.set_valid_rects_active(true);
     }
     // Reclaim finished wgpu command allocators and staging buffers continuously during drags
     // without blocking the UI thread; any device loss surfaces via `gpu.is_lost()`.
