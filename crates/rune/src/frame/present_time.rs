@@ -435,12 +435,11 @@ pub(crate) mod metal {
 
     /// Records the first presented drawable's real display time as `frame.first.on_display`.
     fn record_first_on_display(media: f64) {
-        static FIRST: AtomicBool = AtomicBool::new(false);
-        if !FIRST.swap(true, Ordering::Relaxed) {
+        crate::marks::on_display(|| {
             // SAFETY: CACurrentMediaTime has no preconditions.
             let (now, media_now) = (crate::time::now(), unsafe { CACurrentMediaTime() });
-            crate::marks::mark_at("frame.first.on_display", instant_at(now, media_now, media));
-        }
+            instant_at(now, media_now, media)
+        });
     }
 
     /// The instant of host time `media` (CACurrentMediaTime seconds), given both clocks now.

@@ -492,6 +492,9 @@ fn overlay_wheel_line_and_glide_apply_to_notches_while_touchpad_points_stay_exac
         .wheel_line(60.0)
         .wheel_glide(false);
     let (mut overlay, handle) = Overlay::new(spec, (), &app);
+    // Exercise wheel_glide independent of the host OS's Reduce Motion preference.
+    overlay.rt.set_system_reduced_motion(false);
+    overlay.rt.wall_start = None;
     overlay.presence = Presence::Shown { occluded: false };
     overlay.rt.set_viewport(app.size, 1.0);
     overlay.rt.frame(0.0);
@@ -513,6 +516,8 @@ fn overlay_wheel_line_and_glide_apply_to_notches_while_touchpad_points_stay_exac
         .wheel_line(90.0)
         .wheel_glide(true);
     let (mut glide_overlay, glide_handle) = Overlay::new(spec_glide, (), &app);
+    glide_overlay.rt.set_system_reduced_motion(false);
+    glide_overlay.rt.wall_start = None;
     glide_overlay.presence = Presence::Shown { occluded: false };
     glide_overlay.rt.set_viewport(app.size, 1.0);
     glide_overlay.rt.frame(0.0);
@@ -529,4 +534,12 @@ fn overlay_wheel_line_and_glide_apply_to_notches_while_touchpad_points_stay_exac
     }
     assert!(settled);
     assert!((offset(&glide_overlay) - 90.0).abs() < 1e-3);
+
+    // 3. System Reduce Motion lands whole notches immediately even when wheel_glide(true) is set.
+    glide_overlay.rt.set_system_reduced_motion(true);
+    glide_overlay.rt.frame(0.0);
+    glide_handle.send_pointer(PointerInput::wheel_lines(100.0, 100.0, 0.0, -1.0));
+    glide_overlay.drain_injected_pointers();
+    assert!(!glide_overlay.rt.frame(1.0 / 60.0), "system reduced motion must land whole notch immediately");
+    assert!((offset(&glide_overlay) - 180.0).abs() < 1e-3);
 }

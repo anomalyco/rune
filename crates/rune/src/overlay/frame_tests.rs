@@ -7,6 +7,7 @@ use super::{
 /// lets `loop_waits` record `input.ready`; a hidden prewarm frame does none of those.
 #[test]
 fn shown_overlay_present_records_first_presented_mark_and_prewarm_does_not() {
+    let _marks = crate::marks::test_scope();
     let has = |name: &str| crate::marks::marks().iter().any(|(n, _)| *n == name);
 
     // Prewarm draws while hidden: must not record `frame.first.presented` or stop totals.

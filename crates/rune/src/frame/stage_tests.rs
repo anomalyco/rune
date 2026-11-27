@@ -326,6 +326,7 @@ fn runtime_frame_text_warm_glyph_atlas_and_system_fallback_emit_balanced_stages(
     );
 
     // 5. System font fallback emits SystemFontFallback even after first-frame marks are closed.
+    let _marks = crate::marks::test_scope();
     let _ = crate::marks::presented();
     events.borrow_mut().clear();
     {
