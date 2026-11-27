@@ -264,9 +264,9 @@ fn dead_connection_closes_layer_surface_and_reports_once() {
     // Fatal protocol or I/O error closes the surface and reports once.
     for kind in [ErrorKind::Protocol, ErrorKind::Io] {
         let mut ready = readiness::State::default();
-        readiness::step(&mut ready, readiness::Event::Configure { width: 320, height: 80 });
+        let _ = readiness::step(&mut ready, readiness::Event::Configure { width: 320, height: 80 });
         assert_eq!(turn_action(ready.closed(), Some(kind), ready.closed()), TurnAction::FailAndClose);
-        readiness::step(&mut ready, readiness::Event::Closed);
+        let _ = readiness::step(&mut ready, readiness::Event::ConnectionFailed);
         assert!(ready.closed());
         assert!(ready.configured());
         assert_eq!(ready.size(), None);

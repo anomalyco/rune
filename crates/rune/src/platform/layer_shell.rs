@@ -21,7 +21,7 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::ZwpTextIn
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{self, Anchor, KeyboardInteractivity, ZwlrLayerSurfaceV1};
 
-use super::layer_shell_machine::{activation as activation_machine, connection, exclusive_zone, frame_callback, keyboard, pointer, readiness, repeat, text_input as text_input_machine, touch};
+use super::layer_shell_machine::{activation as activation_machine, connection, exclusive_zone, frame_callback, keyboard, output as output_machine, pointer, readiness::{self, CloseKind}, repeat, text_input as text_input_machine, touch};
 use crate::el::Align;
 use crate::overlay::{Placement, ScreenEdge};
 use crate::runtime::Waker;
@@ -60,11 +60,19 @@ impl Over {
     fn inside(self) -> bool { matches!(self, Over::Inside { .. }) }
 }
 
+/// User data tag for the `wl_display.sync` callback sent after `zwlr_layer_surface_v1.closed`
+/// to tell whether the surface's `wl_output` went away before the sync was answered.
+struct CloseSync;
+
 #[derive(Default)]
 struct State {
     /// How far the compositor has got with the surface: its first configure is what makes it
-    /// drawable, and closing it is final.
+    /// drawable, and closing it is final once confirmed by a sync or output removal.
     readiness: readiness::State,
+    /// Pending `wl_display.sync` callback sent when `zwlr_layer_surface_v1.closed` arrived.
+    close_sync: Option<WlCallback>,
+    /// Which `wl_output` global name this surface belongs to (pinned or following enter/leave).
+    output: output_machine::SurfaceOutput,
     /// Tracks whether the compositor has answered the last presented frame's `wl_surface.frame`
     /// callback so the overlay never blocks in Mesa's FIFO wait when the surface isn't painted.
     frame: frame_callback::State,
@@ -108,11 +116,34 @@ impl Dispatch<WlSeat, ()> for State {
     }
 }
 impl State {
-    fn close_surface(&mut self, conn: &Connection) {
-        readiness::step(&mut self.readiness, readiness::Event::Closed);
-        frame_callback::step(&mut self.frame, frame_callback::Event::Reset);
-        if let Some((_, cb)) = self.frame_callback.take() {
+    fn step_readiness(&mut self, event: readiness::Event, conn: &Connection, qh: &QueueHandle<Self>) {
+        for effect in readiness::step(&mut self.readiness, event) {
+            let readiness::Effect::SendCloseSync = effect;
+            if let Some(prev) = self.close_sync.take() {
+                conn.backend().destroy_object(&prev.id()).ok();
+            }
+            self.close_sync = Some(conn.display().sync(qh, CloseSync));
+        }
+        if self.readiness.closing() || self.readiness.closed() {
+            frame_callback::step(&mut self.frame, frame_callback::Event::Reset);
+            if let Some((_, cb)) = self.frame_callback.take() {
+                conn.backend().destroy_object(&cb.id()).ok();
+            }
+            self.step_repeat(repeat::Event::Stop);
+            self.reset_compose();
+        }
+        if self.readiness.closed()
+            && let Some(cb) = self.close_sync.take()
+        {
             conn.backend().destroy_object(&cb.id()).ok();
+        }
+    }
+
+    fn reconcile_output(&mut self, globals: &globals::SharedGlobals, qh: &QueueHandle<Self>) {
+        if !self.readiness.closed()
+            && self.output.reconcile_live_outputs(|id| globals.has_output(id))
+        {
+            self.step_readiness(readiness::Event::OutputRemoved, globals.conn(), qh);
         }
     }
 
@@ -522,22 +553,44 @@ impl Dispatch<WlCallback, u64> for State {
         }
     }
 }
+impl Dispatch<WlCallback, CloseSync> for State {
+    fn event(state: &mut Self, _: &WlCallback, event: wl_callback::Event, _: &CloseSync, conn: &Connection, qh: &QueueHandle<Self>) {
+        if matches!(event, wl_callback::Event::Done { .. }) {
+            // `wl_callback.done` is a destructor event; libwayland already destroyed the proxy.
+            state.close_sync = None;
+            state.step_readiness(readiness::Event::CloseSyncDone, conn, qh);
+        }
+    }
+}
 impl Dispatch<WlSurface, ()> for State {
-    fn event(state: &mut Self, _: &WlSurface, event: wl_surface::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
-        if let wl_surface::Event::PreferredBufferScale { factor } = event {
-            readiness::step(&mut state.readiness, readiness::Event::Scale(factor.max(1)));
+    fn event(state: &mut Self, _: &WlSurface, event: wl_surface::Event, _: &(), conn: &Connection, qh: &QueueHandle<Self>) {
+        match event {
+            wl_surface::Event::PreferredBufferScale { factor } => {
+                state.step_readiness(readiness::Event::Scale(factor.max(1)), conn, qh);
+            }
+            wl_surface::Event::Enter { output } => {
+                if let Some(globals::OutputGlobal(name)) = output.data::<globals::OutputGlobal>() {
+                    state.output.enter(*name);
+                }
+            }
+            wl_surface::Event::Leave { output } => {
+                if let Some(globals::OutputGlobal(name)) = output.data::<globals::OutputGlobal>() {
+                    state.output.leave(*name);
+                }
+            }
+            _ => {}
         }
     }
 }
 impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
-    fn event(state: &mut Self, layer: &ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), conn: &Connection, _: &QueueHandle<Self>) {
+    fn event(state: &mut Self, layer: &ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), conn: &Connection, qh: &QueueHandle<Self>) {
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
                 layer.ack_configure(serial);
-                readiness::step(&mut state.readiness, readiness::Event::Configure { width, height });
+                state.step_readiness(readiness::Event::Configure { width, height }, conn, qh);
             }
             zwlr_layer_surface_v1::Event::Closed => {
-                state.close_surface(conn);
+                state.step_readiness(readiness::Event::Closed, conn, qh);
             }
             _ => {}
         }
@@ -639,12 +692,23 @@ impl Drop for Watch {
     }
 }
 
+/// Why `LayerSurface::new` did not produce a surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NewError {
+    /// The targeted `wl_output` global is already gone from the registry: make no fallback
+    /// surface on another output and report no failure.
+    OutputGone,
+    /// The display isn't Wayland, the compositor lacks layer-shell, or the display connection
+    /// failed.
+    Unavailable,
+}
+
 /// What the overlay needs to know after the compositor talked to the surface.
 pub(crate) struct Changes {
     pub size: Option<(u32, u32)>,
     pub input: Vec<Input>,
     pub scale: Option<i32>,
-    pub closed: bool,
+    pub closed: Option<CloseKind>,
 }
 
 pub(crate) struct LayerSurface {
@@ -658,10 +722,6 @@ pub(crate) struct LayerSurface {
     surface: WlSurface,
     display: NonNull<std::ffi::c_void>,
     seen_drain_gen: u64,
-    /// Registry global name of the `wl_output` this layer surface was bound to, if targeted.
-    /// Removing that global ends the surface cleanly even if the compositor sends no `closed`
-    /// before the initial `configure`.
-    output_name: Option<u32>,
     /// Why the surface closed when a fatal display error ended it; `None` for compositor `closed`.
     close_reason: Option<String>,
     /// Shared per-display registry and singleton globals; declared last so per-surface fields drop
@@ -702,15 +762,20 @@ impl LayerSurface {
     /// its initial commit so a recreated surface never maps without the keyboard. Returns `None`
     /// when the display isn't Wayland, the compositor lacks layer-shell, or the display connection
     /// fails.
-    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>, hold_keys: bool) -> Option<LayerSurface> {
-        let RawDisplayHandle::Wayland(display) = display else { return None };
+    pub fn new(display: RawDisplayHandle, namespace: &str, at: Placement, interactive: bool, options: &OverlayOptions, output_id: Option<u32>, hold_keys: bool) -> Result<LayerSurface, NewError> {
+        let RawDisplayHandle::Wayland(display) = display else { return Err(NewError::Unavailable) };
         let want_keys = options.keys.takes_keys();
         if want_keys { compose::warm(); }
-        let globals = globals::SharedGlobals::acquire(display, namespace)?;
+        let globals = globals::SharedGlobals::acquire(display, namespace).ok_or(NewError::Unavailable)?;
         let queue = globals.conn().new_event_queue::<State>();
         let qh = queue.handle();
-        let output = output_id.and_then(|id| globals.output(id));
-        let output_name = output.as_ref().and(output_id);
+        let output = match output_id {
+            Some(id) => Some(globals.output(id).ok_or(NewError::OutputGone)?),
+            None => {
+                globals.bind_all_outputs();
+                None
+            }
+        };
         let want_pointer = options.input.resolved(interactive) != OverlayInput::None;
         let seat = if want_pointer || want_keys { globals.bind_seat(&qh) } else { None };
         let surface = globals.compositor().create_surface(&qh, ());
@@ -728,6 +793,7 @@ impl LayerSurface {
             .zip(seat.as_ref())
             .map(|(manager, seat)| manager.get_text_input(seat, &qh, ()));
         let state = State {
+            output: output_machine::SurfaceOutput::new(output_id),
             surface: Some(surface.clone()),
             want_pointer,
             want_keys,
@@ -747,15 +813,14 @@ impl LayerSurface {
             surface,
             display: display.display,
             seen_drain_gen,
-            output_name,
             close_reason: None,
             globals,
         };
         this.place(at);
         this.surface.commit();
         this.flush_checked();
-        if this.state.readiness.closed() { return None; }
-        Some(this)
+        if this.state.readiness.closed() { return Err(NewError::Unavailable); }
+        Ok(this)
     }
 
     /// Returns a lightweight handle that keeps this display's shared layer-shell globals alive
@@ -878,7 +943,7 @@ impl LayerSurface {
     /// Starts a non-blocking XDG activation token request for a program launched from the overlay
     /// and returns immediately without waiting in a compositor roundtrip; see `activation`.
     pub fn start_activation_token(&self) -> Option<PendingActivationToken> {
-        if self.state.readiness.closed() { return None; }
+        if self.state.readiness.closed() || self.state.readiness.closing() { return None; }
         PendingActivationToken::start(
             &self.globals,
             &self.surface,
@@ -897,7 +962,7 @@ impl LayerSurface {
 
     /// Synchronizes `zwp_text_input_v3` enablement and cursor rectangle with `step`.
     pub fn sync_ime(&mut self, step: crate::input::host_events::ImeStep) -> Option<crate::Ime> {
-        if self.state.readiness.closed() { return None; }
+        if self.state.readiness.closed() || self.state.readiness.closing() { return None; }
         let (sent, ime) = self.state.sync_text_input(step);
         if sent { self.flush_checked(); }
         ime
@@ -921,7 +986,7 @@ impl LayerSurface {
     /// Requests a `wl_surface.frame` callback on this surface's private queue without committing,
     /// so it commits alongside the buffer in the immediately following `queue.present`.
     pub fn request_frame(&mut self) {
-        if self.state.readiness.closed() { return; }
+        if self.state.readiness.closed() || self.state.readiness.closing() { return; }
         for effect in frame_callback::step(&mut self.state.frame, frame_callback::Event::Request) {
             let frame_callback::Effect::Request(id) = effect;
             if let Some((_, prev)) = self.state.frame_callback.take() {
@@ -932,10 +997,10 @@ impl LayerSurface {
         }
     }
 
-    /// True when no `wl_surface.frame` callback is outstanding, so acquiring and presenting will
-    /// not block in Mesa's FIFO wait.
+    /// True when no `wl_surface.frame` callback is outstanding and the surface is not closing, so
+    /// acquiring and presenting will not block in Mesa's FIFO wait or draw to a closing surface.
     pub fn frame_ready(&self) -> bool {
-        self.state.frame.ready()
+        !self.state.readiness.closing() && self.state.frame.ready()
     }
 
     /// Commit role state (placement) without a new buffer; wgpu's present commits buffers.
@@ -980,31 +1045,31 @@ impl LayerSurface {
     pub fn dispatch(&mut self) -> Changes {
         let armed = self.state.repeat.attempt();
         self.turn();
-        if !self.state.readiness.closed() && let Some(attempt) = armed {
+        if !self.state.readiness.closed() && !self.state.readiness.closing() && let Some(attempt) = armed {
             self.state.fire_repeat(attempt, crate::time::now());
         }
         Changes {
             size: self.state.readiness.take_size(),
             input: std::mem::take(&mut self.state.input),
             scale: self.state.readiness.take_scale(),
-            closed: self.state.readiness.closed(),
+            closed: self.state.readiness.close_kind(),
         }
     }
 
     /// Handles what the compositor sent to a hidden surface and drops its input, keeping size
-    /// and scale for the next `dispatch`; true once the compositor closed it. libwayland frees
-    /// an undispatched event without closing its fd, so a queue left alone leaks every
+    /// and scale for the next `dispatch`; returns why the surface ended once it has. libwayland
+    /// frees an undispatched event without closing its fd, so a queue left alone leaks every
     /// `wl_keyboard.keymap` (each virtual keyboard a paste tool makes sends a few).
-    pub fn drain(&mut self) -> bool {
+    pub fn drain(&mut self) -> Option<CloseKind> {
         self.turn();
         self.state.step_repeat(repeat::Event::Stop);
         self.state.reset_compose();
         self.state.step_pointer(pointer::Event::Reset);
-        if !self.state.readiness.closed() && self.state.drain_text_input() {
+        if !self.state.readiness.closed() && !self.state.readiness.closing() && self.state.drain_text_input() {
             self.flush_checked();
         }
         self.state.input.clear();
-        self.state.readiness.closed()
+        self.state.readiness.close_kind()
     }
 
     fn turn(&mut self) {
@@ -1012,15 +1077,15 @@ impl LayerSurface {
         if was_closed {
             return;
         }
+        let qh = self.queue.handle();
         let inner_err = self.globals.dispatch_inner_queue().err().map(DispatchError::Backend);
+        // Check output removal before dispatching our queue so a global_remove that landed in the
+        // same read as a post-close wl_callback.done resolves as OutputGone rather than Closed.
+        self.state.reconcile_output(&self.globals, &qh);
         let dispatch_err = self.queue.dispatch_pending(&mut self.state).err().or(inner_err);
+        // Check again after dispatching wl_surface.enter/leave events from this turn.
+        self.state.reconcile_output(&self.globals, &qh);
         self.seen_drain_gen = self.globals.inner_drain_gen();
-        if !self.state.readiness.closed()
-            && let Some(id) = self.output_name
-            && !self.globals.has_output(id)
-        {
-            self.state.close_surface(self.globals.conn());
-        }
         let flush_err = self.queue.flush().err();
         let last_err = self.globals.conn().backend().last_error();
         let (kind, reason) = classify_turn_error(dispatch_err, flush_err, last_err);
@@ -1043,9 +1108,12 @@ impl LayerSurface {
 
     fn fail_connection(&mut self, reason: Option<String>) {
         let was_closed = self.state.readiness.closed();
-        readiness::step(&mut self.state.readiness, readiness::Event::Closed);
+        let _ = readiness::step(&mut self.state.readiness, readiness::Event::ConnectionFailed);
         frame_callback::step(&mut self.state.frame, frame_callback::Event::Reset);
         if let Some((_, cb)) = self.state.frame_callback.take() {
+            self.globals.conn().backend().destroy_object(&cb.id()).ok();
+        }
+        if let Some(cb) = self.state.close_sync.take() {
             self.globals.conn().backend().destroy_object(&cb.id()).ok();
         }
         self.state.step_repeat(repeat::Event::Stop);
@@ -1075,6 +1143,8 @@ impl Drop for LayerSurface {
         self.state.want_pointer = false;
         self.state.want_keys = false;
         self.state.surface = None;
+        // Mark ended before draining so a queued `closed` does not send a new sync during teardown.
+        let _ = readiness::step(&mut self.state.readiness, readiness::Event::ConnectionFailed);
         self.state.input_serial.step(activation_machine::InputEvent::Reset);
         self.state.reset_text_input_gone();
         // Drain pending events before destroying proxies so any queued `wl_keyboard.keymap` fd is
@@ -1083,6 +1153,7 @@ impl Drop for LayerSurface {
         drain_event_queue(&mut self.queue, &mut self.state);
         let backend = self.globals.conn().backend();
         if let Some((_, cb)) = self.state.frame_callback.take() { backend.destroy_object(&cb.id()).ok(); }
+        if let Some(cb) = self.state.close_sync.take() { backend.destroy_object(&cb.id()).ok(); }
         if let Some(ti) = self.state.text_input.take() { ti.destroy(); }
         if let Some(shape) = self.state.shape.take() { shape.destroy(); }
         // `shapes` (`wp_cursor_shape_manager_v1`) is owned by `SharedGlobals`: drop the handle
@@ -1121,3 +1192,7 @@ mod tests;
 #[cfg(test)]
 #[path = "layer_shell/keys_tests.rs"]
 mod keys_tests;
+
+#[cfg(test)]
+#[path = "layer_shell/output_tests.rs"]
+mod output_tests;

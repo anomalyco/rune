@@ -65,8 +65,23 @@ pub(crate) mod touch {
 
 /// How far the compositor has got with the surface. Nothing can be drawn before its first
 /// configure; the size it asks for and the buffer scale it prefers are each read once, by
-/// `dispatch`, in whatever order they arrive; and once it closes the surface it is final.
+/// `dispatch`, in whatever order they arrive. When `zwlr_layer_surface_v1.closed` arrives, the
+/// surface sends a `wl_display.sync` roundtrip to distinguish an unplugged output (whose
+/// `wl_registry.global_remove` arrives before the sync's `done`) from a compositor close on a
+/// live output.
 pub(crate) mod readiness {
+    use crate::machine::Effects;
+
+    /// Why a layer surface ended.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum CloseKind {
+        /// The compositor closed the surface while its output stayed, or the display connection
+        /// failed.
+        Closed,
+        /// The `wl_output` the surface belonged to was removed (`wl_registry.global_remove`).
+        OutputGone,
+    }
+
     /// What the compositor said about the surface.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(crate) enum Event {
@@ -74,8 +89,22 @@ pub(crate) mod readiness {
         Configure { width: u32, height: u32 },
         /// The buffer scale it prefers.
         Scale(i32),
-        /// It destroyed the surface.
+        /// `zwlr_layer_surface_v1.closed` arrived; wait for `wl_display.sync` or
+        /// `OutputRemoved` before deciding whether the output went.
         Closed,
+        /// The `wl_display.sync` sent after `Closed` was answered (`wl_callback.done`).
+        CloseSyncDone,
+        /// `wl_registry.global_remove` removed the `wl_output` this surface belongs to.
+        OutputRemoved,
+        /// A fatal display connection error ended the surface immediately.
+        ConnectionFailed,
+    }
+
+    /// Action the caller must perform on the Wayland connection.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Effect {
+        /// Send a `wl_display.sync` callback to tell whether `global_remove` precedes its `done`.
+        SendCloseSync,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,44 +115,102 @@ pub(crate) mod readiness {
         /// Configured. `size` and `scale` are what the compositor said that `dispatch` hasn't
         /// read yet.
         Ready { size: Option<(u32, u32)>, scale: Option<i32> },
-        /// Destroyed by the compositor: it says nothing more that counts.
-        Closed,
+        /// `zwlr_layer_surface_v1.closed` arrived; waiting for `CloseSyncDone` or
+        /// `OutputRemoved`.
+        Closing,
+        /// Final: either the compositor closed the surface (or the display died), or its output
+        /// went away.
+        Ended(CloseKind),
     }
 
     impl Default for State {
         fn default() -> Self { State::Configuring { scale: None } }
     }
 
-    /// The surface after `event`. No effect: what it said is read with the accessors below.
-    pub(crate) fn step(state: &mut State, event: Event) {
-        match (&*state, event) {
-            (State::Closed, _) => {}
-            (_, Event::Closed) => *state = State::Closed,
-            (State::Configuring { scale }, Event::Configure { width, height }) => *state = State::Ready { size: Some((width, height)), scale: *scale },
-            (State::Ready { scale, .. }, Event::Configure { width, height }) => *state = State::Ready { size: Some((width, height)), scale: *scale },
-            (State::Configuring { .. }, Event::Scale(scale)) => *state = State::Configuring { scale: Some(scale) },
-            (State::Ready { size, .. }, Event::Scale(scale)) => *state = State::Ready { size: *size, scale: Some(scale) },
+    /// Steps the surface readiness state machine on `event`.
+    pub(crate) fn step(state: &mut State, event: Event) -> Effects<Effect> {
+        match (*state, event) {
+            (State::Ended(_), _) => Effects::none(),
+            (_, Event::OutputRemoved) => {
+                *state = State::Ended(CloseKind::OutputGone);
+                Effects::none()
+            }
+            (_, Event::ConnectionFailed) => {
+                *state = State::Ended(CloseKind::Closed);
+                Effects::none()
+            }
+            (State::Configuring { .. } | State::Ready { .. }, Event::Closed) => {
+                *state = State::Closing;
+                Effects::one(Effect::SendCloseSync)
+            }
+            (State::Closing, Event::CloseSyncDone) => {
+                *state = State::Ended(CloseKind::Closed);
+                Effects::none()
+            }
+            (State::Closing, Event::Closed | Event::Configure { .. } | Event::Scale(_))
+            | (State::Configuring { .. } | State::Ready { .. }, Event::CloseSyncDone) => {
+                Effects::none()
+            }
+            (State::Configuring { scale }, Event::Configure { width, height }) => {
+                *state = State::Ready { size: Some((width, height)), scale };
+                Effects::none()
+            }
+            (State::Ready { scale, .. }, Event::Configure { width, height }) => {
+                *state = State::Ready { size: Some((width, height)), scale };
+                Effects::none()
+            }
+            (State::Configuring { .. }, Event::Scale(scale)) => {
+                *state = State::Configuring { scale: Some(scale) };
+                Effects::none()
+            }
+            (State::Ready { size, .. }, Event::Scale(scale)) => {
+                *state = State::Ready { size, scale: Some(scale) };
+                Effects::none()
+            }
         }
     }
 
     impl State {
-        /// The compositor configured a size (or closed the surface).
+        /// The compositor configured a size, or the surface has finished ending (not waiting on
+        /// initial configure or a post-close sync).
         #[cfg(test)]
-        pub(crate) fn configured(&self) -> bool { !matches!(self, State::Configuring { .. }) }
+        pub(crate) fn configured(&self) -> bool {
+            matches!(self, State::Ready { .. } | State::Ended(_))
+        }
 
         /// The compositor has sent at least one `configure` and the surface is still open.
         #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
-        pub(crate) fn is_ready(&self) -> bool { matches!(self, State::Ready { .. }) }
+        pub(crate) fn is_ready(&self) -> bool {
+            matches!(self, State::Ready { .. })
+        }
 
-        /// The compositor destroyed the surface.
-        pub(crate) fn closed(&self) -> bool { matches!(self, State::Closed) }
+        /// `zwlr_layer_surface_v1.closed` arrived and the surface is waiting for its sync answer
+        /// or output removal.
+        #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+        pub(crate) fn closing(&self) -> bool {
+            matches!(self, State::Closing)
+        }
+
+        /// The surface has ended (closed by the compositor, display failure, or removed output).
+        pub(crate) fn closed(&self) -> bool {
+            matches!(self, State::Ended(_))
+        }
+
+        /// Why the surface ended, once it has reached `State::Ended`.
+        #[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+        pub(crate) fn close_kind(&self) -> Option<CloseKind> {
+            match *self {
+                State::Ended(kind) => Some(kind),
+                State::Configuring { .. } | State::Ready { .. } | State::Closing => None,
+            }
+        }
 
         /// The size the compositor asked for that `dispatch` hasn't read yet.
         #[cfg(test)]
         pub(crate) fn size(&self) -> Option<(u32, u32)> {
             match self {
                 State::Ready { size, .. } => *size,
-                State::Configuring { .. } | State::Closed => None,
+                State::Configuring { .. } | State::Closing | State::Ended(_) => None,
             }
         }
 
@@ -131,7 +218,7 @@ pub(crate) mod readiness {
         pub(crate) fn take_size(&mut self) -> Option<(u32, u32)> {
             match self {
                 State::Ready { size, .. } => size.take(),
-                State::Configuring { .. } | State::Closed => None,
+                State::Configuring { .. } | State::Closing | State::Ended(_) => None,
             }
         }
 
@@ -139,7 +226,7 @@ pub(crate) mod readiness {
         pub(crate) fn take_scale(&mut self) -> Option<i32> {
             match self {
                 State::Configuring { scale } | State::Ready { scale, .. } => scale.take(),
-                State::Closed => None,
+                State::Closing | State::Ended(_) => None,
             }
         }
     }
@@ -684,6 +771,7 @@ pub(crate) mod activation;
 pub(crate) mod compose_cache;
 pub(crate) mod frame_callback;
 pub(crate) mod globals_pool;
+pub(crate) mod output;
 pub(crate) mod pointer;
 pub(crate) mod text_input;
 

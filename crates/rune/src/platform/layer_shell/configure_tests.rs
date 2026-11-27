@@ -146,7 +146,7 @@ fn a_layer_surface_is_made_without_waiting_and_takes_a_buffer_once_its_first_con
     host_read_once(&host);
     assert!(layer.has_pending_events());
     let before_cfg = layer.dispatch();
-    assert!(!before_cfg.closed);
+    assert_eq!(before_cfg.closed, None);
     assert_eq!(before_cfg.size, None);
     assert_eq!(before_cfg.scale, Some(2));
     assert!(!layer.is_configured(), "scale alone must not configure the surface");
@@ -161,7 +161,7 @@ fn a_layer_surface_is_made_without_waiting_and_takes_a_buffer_once_its_first_con
     host_read_once(&host);
     assert!(layer.has_pending_events());
     let configured = layer.dispatch();
-    assert!(!configured.closed);
+    assert_eq!(configured.closed, None);
     assert_eq!(configured.size, Some((320, 64)));
     assert!(layer.is_configured(), "first configure must mark the surface ready for a buffer");
     assert!(layer.is_live());
@@ -202,8 +202,12 @@ fn a_layer_surface_closed_or_left_by_its_output_before_its_first_configure_ends_
 
         send_msg(&mut server_tx, layer_id, 1, &[])?;
         host_read_once(&host);
+        let pending_sync = layer.dispatch();
+        assert_eq!(pending_sync.closed, None, "close waits for the post-close wl_display.sync");
+        assert!(layer.is_live());
+        host_read_once(&host);
         let changes = layer.dispatch();
-        assert!(changes.closed);
+        assert_eq!(changes.closed, Some(crate::platform::layer_shell_machine::readiness::CloseKind::Closed));
         assert_eq!(changes.size, None);
         assert!(!layer.is_live());
         assert!(!layer.is_configured());
@@ -235,15 +239,15 @@ fn a_layer_surface_closed_or_left_by_its_output_before_its_first_configure_ends_
         send_msg(&mut server_tx, registry_id, 1, &99u32.to_ne_bytes())?;
         host_read_once(&host);
         let unrelated = layer.dispatch();
-        assert!(!unrelated.closed);
+        assert_eq!(unrelated.closed, None);
         assert!(layer.is_live());
         assert!(!layer.is_configured());
 
-        // Removing the bound wl_output (10) ends the surface cleanly without waiting for configure.
+        // Removing the bound wl_output (10) ends the surface cleanly as OutputGone without waiting for configure.
         send_msg(&mut server_tx, registry_id, 1, &10u32.to_ne_bytes())?;
         host_read_once(&host);
         let removed = layer.dispatch();
-        assert!(removed.closed);
+        assert_eq!(removed.closed, Some(crate::platform::layer_shell_machine::readiness::CloseKind::OutputGone));
         assert_eq!(removed.size, None);
         assert!(!layer.is_live());
         assert!(!layer.is_configured());
@@ -271,7 +275,7 @@ fn a_layer_surface_closed_or_left_by_its_output_before_its_first_configure_ends_
         shutdown_handle.shutdown(std::net::Shutdown::Both)?;
         host_read_once(&host);
         let failed = layer.dispatch();
-        assert!(failed.closed);
+        assert_eq!(failed.closed, Some(crate::platform::layer_shell_machine::readiness::CloseKind::Closed));
         assert!(!layer.is_live());
         assert!(!layer.is_configured());
         assert!(layer.close_reason().is_some(), "socket hangup must record a display failure reason");

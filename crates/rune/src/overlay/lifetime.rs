@@ -3,6 +3,55 @@
 
 use super::*;
 
+/// Result of preparing a native surface for an overlay.
+pub(super) enum PrepareOutcome {
+    /// A live native window and GPU surface were created.
+    Live(Live),
+    /// The targeted display is already gone: make no surface and report no failure.
+    OutputGone,
+    /// The platform could not create a window or surface.
+    Failed,
+}
+
+/// Resolution of `OverlayOptions::display` for Wayland layer-shell creation.
+#[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WaylandOutputTarget {
+    /// No specific output targeted; let the compositor choose.
+    Any,
+    /// Bind this `wl_output` global name.
+    Output(u32),
+    /// A specific display was targeted, and it is no longer connected.
+    Gone,
+}
+
+/// Resolves a Wayland display target against the currently connected monitors. A targeted display
+/// (`DisplayTarget::Id` or `DisplayTarget::Native(NativeDisplayId::Wayland(_))`) that is no longer
+/// connected returns `WaylandOutputTarget::Gone` instead of falling back to `Any`.
+#[cfg_attr(not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
+pub(super) fn resolve_wayland_output(
+    target: &DisplayTarget,
+    find_id: impl FnOnce(&crate::DisplayId) -> Option<u32>,
+    has_wayland_id: impl FnOnce(u32) -> bool,
+) -> WaylandOutputTarget {
+    match target {
+        DisplayTarget::Id(id) => match find_id(id) {
+            Some(native) => WaylandOutputTarget::Output(native),
+            None => WaylandOutputTarget::Gone,
+        },
+        DisplayTarget::Native(crate::NativeDisplayId::Wayland(id)) => {
+            if has_wayland_id(*id) {
+                WaylandOutputTarget::Output(*id)
+            } else {
+                WaylandOutputTarget::Gone
+            }
+        }
+        DisplayTarget::Primary | DisplayTarget::UnderPointer | DisplayTarget::Native(_) => {
+            WaylandOutputTarget::Any
+        }
+    }
+}
+
 impl OverlayCore {
     /// An overlay that fits its content (`ConfiguredOverlay::fit_content_height`) about to
     /// show: when its state, input or width changed since its last commit, or it has none,
@@ -131,25 +180,44 @@ impl OverlayCore {
         if !surface && !parks { return; }
         self.fit_for_show_in(app, Some(event_loop));
         self.resolve_size(event_loop);
-        if wayland && self.start_layer(event_loop, showing) {
-            // An earlier attempt's failure no longer holds while waiting for initial configure.
-            self.shared.failure.lock().unwrap().take();
-            return;
+        if wayland {
+            match self.start_layer(event_loop, showing) {
+                super::layer_configure::StartLayer::Started => {
+                    // An earlier attempt's failure no longer holds while waiting for initial configure.
+                    self.shared.failure.lock().unwrap().take();
+                    return;
+                }
+                super::layer_configure::StartLayer::OutputGone => {
+                    self.finish_prepare(app, showing, PrepareOutcome::OutputGone);
+                    return;
+                }
+                super::layer_configure::StartLayer::Fallback => {}
+            }
         }
-        let made = if wayland {
-            self.xwayland(app).or_else(|| self.toplevel(app, event_loop))
+        let outcome = if wayland {
+            match self.xwayland(app).or_else(|| self.toplevel(app, event_loop)) {
+                Some(live) => PrepareOutcome::Live(live),
+                None => PrepareOutcome::Failed,
+            }
         } else if self.surface.parked().is_some() || self.window(app, event_loop).is_some() {
             // macOS made the surface with its panel; elsewhere the window waits parked.
             match self.surface.take_live() {
-                Some(live) => Some(live),
-                None if surface => self.unpark(app),
+                Some(live) => PrepareOutcome::Live(live),
+                None if surface => match self.unpark(app) {
+                    Some(live) => PrepareOutcome::Live(live),
+                    None => PrepareOutcome::Failed,
+                },
                 None => return self.ready(app, showing),
             }
         } else {
-            None
+            PrepareOutcome::Failed
         };
-        match made {
-            Some(live) => {
+        self.finish_prepare(app, showing, outcome);
+    }
+
+    pub(super) fn finish_prepare(&mut self, app: &mut dyn OverlayApp, showing: bool, outcome: PrepareOutcome) {
+        match outcome {
+            PrepareOutcome::Live(live) => {
                 self.surface.made(live);
                 // An earlier attempt's failure no longer holds.
                 self.shared.failure.lock().unwrap().take();
@@ -163,7 +231,8 @@ impl OverlayCore {
                 self.sync_window_backdrop(app.rt_mut(), false);
                 self.ready(app, showing);
             }
-            None => {
+            PrepareOutcome::OutputGone => {}
+            PrepareOutcome::Failed => {
                 let has_failure = self.shared.failure.lock().unwrap().is_some();
                 if !has_failure {
                     self.fail(app, "the platform could not create its window or surface".into());
@@ -217,6 +286,24 @@ impl OverlayCore {
         }
         let reason = reason.unwrap_or("compositor closed layer surface").to_owned();
         self.surface_refused(app, reason);
+        self.poll_activation_tokens(crate::time::now());
+    }
+
+    /// Handles a Wayland layer surface whose `wl_output` was unplugged: hides and drops the
+    /// surface without marking the overlay `Unavailable` or recording a failure, so the app hears
+    /// of it as a display removal rather than a broken surface.
+    #[cfg_attr(
+        not(any(test, all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))),
+        allow(dead_code)
+    )]
+    pub(super) fn layer_output_gone(&mut self, app: &mut dyn OverlayApp) {
+        #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+        if let Some(blur) = self.surface.live_mut().and_then(|l| l.wayland_backdrop.as_mut()) {
+            blur.mark_closed();
+        }
+        self.drain_tokens_none();
+        self.hide(app);
+        self.release();
         self.poll_activation_tokens(crate::time::now());
     }
 

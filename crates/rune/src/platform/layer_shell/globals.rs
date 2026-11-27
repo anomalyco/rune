@@ -38,9 +38,17 @@ fn pool() -> &'static DisplayPool<SharedGlobals> {
     POOL.get_or_init(DisplayPool::new)
 }
 
+/// User data tag on `WlOutput` proxies bound by `SharedGlobals` so any `LayerSurface` can
+/// identify an output's registry global name from `wl_surface.enter` / `wl_surface.leave`
+/// without locking `SharedGlobals` or colliding with winit's own `WlOutput` proxies.
+pub(super) struct OutputGlobal(pub(super) u32);
+
 #[derive(Default)]
 struct GlobalsState {
     outputs: HashMap<u32, WlOutput>,
+    /// Set once a surface created with no explicit output asks to follow `wl_surface.enter` /
+    /// `wl_surface.leave`, so hot-plugged `wl_output` globals are bound automatically.
+    bind_all_outputs: bool,
     cursor_shapes: Option<(u32, WpCursorShapeManagerV1)>,
     text_input_manager: Option<(u32, ZwpTextInputManagerV3)>,
     activation: Option<(u32, XdgActivationV1)>,
@@ -49,31 +57,42 @@ struct GlobalsState {
 impl Dispatch<WlRegistry, GlobalListContents> for GlobalsState {
     fn event(
         state: &mut Self,
-        _: &WlRegistry,
+        registry: &WlRegistry,
         event: wl_registry::Event,
         _: &GlobalListContents,
         conn: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::GlobalRemove { name } = event {
-            if let Some(output) = state.outputs.remove(&name) {
-                release_output(conn, output);
-            }
-            if state.cursor_shapes.as_ref().is_some_and(|(n, _)| *n == name)
-                && let Some((_, shapes)) = state.cursor_shapes.take()
+        match event {
+            wl_registry::Event::Global { name, interface, version }
+                if interface == "wl_output" && state.bind_all_outputs =>
             {
-                shapes.destroy();
+                if !state.outputs.contains_key(&name) {
+                    let bound = registry.bind::<WlOutput, _, _>(name, version.min(4), qh, OutputGlobal(name));
+                    state.outputs.insert(name, bound);
+                }
             }
-            if state.text_input_manager.as_ref().is_some_and(|(n, _)| *n == name)
-                && let Some((_, tim)) = state.text_input_manager.take()
-            {
-                tim.destroy();
+            wl_registry::Event::GlobalRemove { name } => {
+                if let Some(output) = state.outputs.remove(&name) {
+                    release_output(conn, output);
+                }
+                if state.cursor_shapes.as_ref().is_some_and(|(n, _)| *n == name)
+                    && let Some((_, shapes)) = state.cursor_shapes.take()
+                {
+                    shapes.destroy();
+                }
+                if state.text_input_manager.as_ref().is_some_and(|(n, _)| *n == name)
+                    && let Some((_, tim)) = state.text_input_manager.take()
+                {
+                    tim.destroy();
+                }
+                if state.activation.as_ref().is_some_and(|(n, _)| *n == name)
+                    && let Some((_, act)) = state.activation.take()
+                {
+                    act.destroy();
+                }
             }
-            if state.activation.as_ref().is_some_and(|(n, _)| *n == name)
-                && let Some((_, act)) = state.activation.take()
-            {
-                act.destroy();
-            }
+            _ => {}
         }
     }
 }
@@ -98,8 +117,8 @@ impl Dispatch<XdgActivationV1, ()> for GlobalsState {
     fn event(_: &mut Self, _: &XdgActivationV1, _: <XdgActivationV1 as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
 }
 
-impl Dispatch<WlOutput, ()> for GlobalsState {
-    fn event(_: &mut Self, _: &WlOutput, _: wl_output::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+impl Dispatch<WlOutput, OutputGlobal> for GlobalsState {
+    fn event(_: &mut Self, _: &WlOutput, _: wl_output::Event, _: &OutputGlobal, _: &Connection, _: &QueueHandle<Self>) {}
 }
 
 fn release_output(conn: &Connection, output: WlOutput) {
@@ -231,10 +250,12 @@ impl SharedGlobals {
         &self.shell
     }
 
-    /// True while `wl_output` global `id` is still advertised and bound in the shared registry.
+    /// True while `wl_output` global `id` is still advertised in the shared registry.
     pub(super) fn has_output(&self, id: u32) -> bool {
         let inner = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        inner.state.outputs.contains_key(&id)
+        inner.globals.as_ref().is_some_and(|globals| {
+            globals.contents().with_list(|list| list.iter().any(|g| g.name == id && g.interface == "wl_output"))
+        })
     }
 
     pub(super) fn inner_drain_gen(&self) -> u64 {
@@ -357,9 +378,35 @@ impl SharedGlobals {
         let globals = inner.globals.as_ref()?;
         let bound = globals
             .registry()
-            .bind::<WlOutput, _, _>(id, version, &inner.queue.handle(), ());
+            .bind::<WlOutput, _, _>(id, version, &inner.queue.handle(), OutputGlobal(id));
         inner.state.outputs.insert(id, bound.clone());
         Some(bound)
+    }
+
+    /// Binds every currently advertised `wl_output` global (and any announced later) so surfaces
+    /// created without an explicit output can identify outputs from `wl_surface.enter` / `leave`.
+    pub(super) fn bind_all_outputs(&self) {
+        let mut guard = self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let inner = &mut *guard;
+        self.drain_globals_queue(inner);
+        inner.state.bind_all_outputs = true;
+        let Some(globals) = inner.globals.as_ref() else { return };
+        let missing: Vec<(u32, u32)> = globals.contents().with_list(|list| {
+            list.iter()
+                .filter(|g| g.interface == "wl_output" && !inner.state.outputs.contains_key(&g.name))
+                .map(|g| (g.name, g.version.min(4)))
+                .collect()
+        });
+        let qh = inner.queue.handle();
+        let mut bound_any = false;
+        for (name, version) in missing {
+            let bound = globals.registry().bind::<WlOutput, _, _>(name, version, &qh, OutputGlobal(name));
+            inner.state.outputs.insert(name, bound);
+            bound_any = true;
+        }
+        if bound_any {
+            inner.queue.flush().ok();
+        }
     }
 
     /// Binds a per-surface `wl_seat` on the caller's `EventQueue` (released on surface drop).

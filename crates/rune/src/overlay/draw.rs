@@ -62,9 +62,16 @@ impl FrameHost for OverlayFrame<'_> {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         if let Some(Live { backing: Backing::Layer(layer), .. }) = self.core.surface.live_mut() {
             let changes = layer.dispatch();
-            if changes.closed {
-                let reason = layer.close_reason().map(str::to_owned);
-                self.core.layer_closed(self.app, reason.as_deref());
+            if let Some(kind) = changes.closed {
+                match kind {
+                    crate::platform::layer_shell_machine::readiness::CloseKind::Closed => {
+                        let reason = layer.close_reason().map(str::to_owned);
+                        self.core.layer_closed(self.app, reason.as_deref());
+                    }
+                    crate::platform::layer_shell_machine::readiness::CloseKind::OutputGone => {
+                        self.core.layer_output_gone(self.app);
+                    }
+                }
                 return Gate::Skip;
             }
             for input in changes.input { self.core.surface_input(self.app, input); }
@@ -663,14 +670,23 @@ impl OverlayCore {
         #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
         {
             let closed = match self.surface.live_mut().map(|l| &mut l.backing) {
-                Some(Backing::Layer(layer)) => layer.drain().then(|| layer.close_reason().map(str::to_owned)),
+                Some(Backing::Layer(layer)) => layer.drain().map(|kind| (kind, layer.close_reason().map(str::to_owned))),
                 Some(Backing::Xwayland(surface)) => {
                     surface.drain();
                     None
                 }
                 _ => None,
             };
-            if let Some(reason) = closed { self.layer_closed(app, reason.as_deref()); }
+            if let Some((kind, reason)) = closed {
+                match kind {
+                    crate::platform::layer_shell_machine::readiness::CloseKind::Closed => {
+                        self.layer_closed(app, reason.as_deref());
+                    }
+                    crate::platform::layer_shell_machine::readiness::CloseKind::OutputGone => {
+                        self.layer_output_gone(app);
+                    }
+                }
+            }
         }
         crate::haptics::flush_live(app.rt_mut(), false);
     }

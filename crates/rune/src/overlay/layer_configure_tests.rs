@@ -58,10 +58,16 @@ fn state_machine_tracks_initial_configure_scale_close_and_cancel() {
         .collect();
     assert_eq!(effects, [Effect::Attach { width: 100, height: 40, scale: 1 }]);
 
-    // Compositor close / output removal / fatal display error before configure emits FailClosed.
+    // Compositor close / fatal display error before configure emits FailClosed.
     assert!(step(&mut phase, Event::Started { scale: 2 }).is_empty());
     let effects: Vec<_> = step(&mut phase, Event::Closed).into_iter().collect();
     assert_eq!(effects, [Effect::FailClosed]);
+    assert_eq!(phase, Phase::Idle);
+
+    // Output removal before configure emits OutputGone (hides without failing the overlay).
+    assert!(step(&mut phase, Event::Started { scale: 2 }).is_empty());
+    let effects: Vec<_> = step(&mut phase, Event::OutputGone).into_iter().collect();
+    assert_eq!(effects, [Effect::OutputGone]);
     assert_eq!(phase, Phase::Idle);
 
     // Hide / cancel before configure emits DropLayer and leaves subsequent configure ignored.
