@@ -158,6 +158,8 @@ pub(super) struct PopupListCore {
     pub(super) active: Option<usize>,
     pub(super) empty: String,
     pub(super) label: Option<String>,
+    pub(super) backdrop_blur: Option<f32>,
+    pub(super) surface_fill: Option<Color>,
 }
 
 impl PopupListCore {
@@ -178,6 +180,8 @@ impl PopupListCore {
             active: None,
             empty: "No results".into(),
             label: None,
+            backdrop_blur: None,
+            surface_fill: None,
         }
     }
 
@@ -277,6 +281,7 @@ impl PopupListCore {
         let width = self.width;
         let padding = self.padding;
         let instant = !self.animate_filtering;
+        let backdrop = (self.backdrop_blur, self.surface_fill);
         let list = self.build_list(k, bind);
         let mut content = bind.bind_content(
             col()
@@ -289,7 +294,7 @@ impl PopupListCore {
         if instant {
             content = content.instant_changes();
         }
-        push_raised_anchored(k, layer, dismiss, content, &anchor, side, align, gutter);
+        push_raised_anchored(k, layer, dismiss, content, &anchor, side, align, gutter, backdrop);
     }
 }
 
@@ -334,6 +339,20 @@ impl<S: 'static> PopupList<S> {
     pub fn padding(mut self, padding: f32) -> Self { self.core.padding = padding; self }
     /// Corner radius of each row's highlight, in points (overrides `Kit::metrics.popup_row`).
     pub fn row_radius(mut self, radius: f32) -> Self { self.core.row_radius = Some(radius); self }
+    /// Blurs what the window draws behind the anchored popup surface ([`El::backdrop_blur`](rune::El::backdrop_blur)),
+    /// overriding [`Kit::metrics`](crate::Kit::metrics)'s `popup_backdrop` when mounted with
+    /// [`Self::build`]. `0.0` turns blur off; negative or non-finite values clamp to `0.0`.
+    pub fn backdrop_blur(mut self, sigma: f32) -> Self {
+        self.core.backdrop_blur = Some(crate::tokens::metrics::non_neg(sigma));
+        self
+    }
+    /// Replaces the anchored popup's surface fill colour (for example a translucent tint over
+    /// [`Self::backdrop_blur`]), overriding the theme fill and `Kit::metrics.popup_backdrop` when
+    /// mounted with [`Self::build`].
+    pub fn surface_fill(mut self, fill: Color) -> Self {
+        self.core.surface_fill = Some(fill);
+        self
+    }
     /// The rows. A change lands at once: the popover takes its new height and rows appear and
     /// go in the same frame, even in a commit that animates the field the list follows (one
     /// with `animate_edit_layout`). [`Self::animate_filtering`] animates it instead.

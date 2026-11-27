@@ -1,10 +1,10 @@
 //! Hover card (`@opencode/ui` components/hover-card): rich preview content anchored beside
 //! its trigger, with configurable placement, gutter, width, surface hover and ARIA attributes.
 
-use rune::{El, Tx, col};
+use rune::{Color, El, Tx, col};
 
 use super::overlay::{Placement, anchor_trigger, anchor_with, trigger_key};
-use super::popover::raised;
+use super::popover::raised_with;
 use crate::Kit;
 
 /// A hover card: rich preview content anchored beside its trigger.
@@ -21,6 +21,8 @@ pub struct HoverCard {
     hover: Option<Box<dyn FnOnce(El) -> El>>,
     role: Option<&'static str>,
     label: Option<String>,
+    backdrop_blur: Option<f32>,
+    surface_fill: Option<Color>,
 }
 
 impl HoverCard {
@@ -38,6 +40,8 @@ impl HoverCard {
             hover: None,
             role: None,
             label: None,
+            backdrop_blur: None,
+            surface_fill: None,
         }
     }
     pub fn trigger(mut self, t: El) -> Self {
@@ -155,6 +159,19 @@ impl HoverCard {
         self.label = (!l.trim().is_empty()).then_some(l);
         self
     }
+    /// Blurs what the window draws behind the card surface ([`El::backdrop_blur`](rune::El::backdrop_blur)),
+    /// overriding [`Kit::metrics`](crate::Kit::metrics)'s `popup_backdrop`. `0.0` turns blur off;
+    /// negative or non-finite values clamp to `0.0`.
+    pub fn backdrop_blur(mut self, sigma: f32) -> Self {
+        self.backdrop_blur = Some(crate::tokens::metrics::non_neg(sigma));
+        self
+    }
+    /// Replaces the card's surface fill colour (for example a translucent tint over
+    /// [`Self::backdrop_blur`]), overriding the theme fill and `Kit::metrics.popup_backdrop`.
+    pub fn surface_fill(mut self, fill: Color) -> Self {
+        self.surface_fill = Some(fill);
+        self
+    }
     /// Open on hover: the trigger reports entering (the app closes it on leaving or elsewhere).
     pub fn build(self, k: &Kit, layer: &mut Vec<El>) -> El {
         let anchor_key = trigger_key(&self.key);
@@ -177,7 +194,8 @@ impl HoverCard {
         if let Some(hover) = self.hover {
             content = hover(content);
         }
-        layer.push(anchor_with(k.motion.overlay, raised(k, content, k.radius.lg), &anchor_key, self.placement, self.gutter));
+        let surface = raised_with(k, content, k.radius.lg, self.backdrop_blur, self.surface_fill);
+        layer.push(anchor_with(k.motion.overlay, surface, &anchor_key, self.placement, self.gutter));
         trigger
     }
 }

@@ -3,7 +3,7 @@
 //! and editor modifiers left to the text field. Fuzzy scores are Rune's own ordering.
 use std::rc::Rc;
 use rune::machine::Effects;
-use rune::{El, TextEdit, Tx, col, el, icon, row};
+use rune::{Color, El, TextEdit, Tx, col, el, icon, row};
 use super::popup_list::{PopupHandlers, PopupListCore};
 use crate::list_nav::{NavAction, NavPolicy, page_size};
 use crate::{Kit, Placement, Popover, PopupItem, Select, SelectAppearance, TextInput};
@@ -264,6 +264,8 @@ struct ComboboxCore {
     disabled: bool,
     animate_filtering: bool,
     label: Option<String>,
+    backdrop_blur: Option<f32>,
+    surface_fill: Option<Color>,
 }
 
 impl ComboboxCore {
@@ -284,6 +286,8 @@ impl ComboboxCore {
             disabled: false,
             animate_filtering: false,
             label: None,
+            backdrop_blur: None,
+            surface_fill: None,
         }
     }
 
@@ -300,11 +304,12 @@ impl ComboboxCore {
         if !self.disabled {
             trigger = bind.bind_trigger(trigger, self.current.clone(), self.key.clone());
         }
-        let popover = bind.bind_popover(
-            Popover::new(&self.key).trigger(trigger).label(name.clone()).placement(self.placement).padding(0.0)
-                .width(self.width)
-                .open(self.state.is_open() && !self.disabled),
-        );
+        let mut popover = Popover::new(&self.key).trigger(trigger).label(name.clone()).placement(self.placement).padding(0.0)
+            .width(self.width)
+            .open(self.state.is_open() && !self.disabled);
+        if let Some(sigma) = self.backdrop_blur { popover = popover.backdrop_blur(sigma); }
+        if let Some(fill) = self.surface_fill { popover = popover.surface_fill(fill); }
+        let popover = bind.bind_popover(popover);
         if !self.state.is_open() || self.disabled { return popover.build(k, layer); }
         let choices = filtered(&self.options, &self.state.search.text);
         let active = self.state.active_index(&self.options, &choices);
@@ -389,6 +394,19 @@ impl<S: 'static> Combobox<S> {
     /// above) the trigger shortens it further, and it scrolls.
     pub fn max_height(mut self, height: f32) -> Self { self.core.max_height = height; self }
     pub fn placement(mut self, placement: Placement) -> Self { self.core.placement = placement; self }
+    /// Blurs what the window draws behind the open popover surface ([`El::backdrop_blur`](rune::El::backdrop_blur)),
+    /// overriding [`Kit::metrics`](crate::Kit::metrics)'s `popup_backdrop`. `0.0` turns blur off;
+    /// negative or non-finite values clamp to `0.0`.
+    pub fn backdrop_blur(mut self, sigma: f32) -> Self {
+        self.core.backdrop_blur = Some(crate::tokens::metrics::non_neg(sigma));
+        self
+    }
+    /// Replaces the open popover's surface fill colour (for example a translucent tint over
+    /// [`Self::backdrop_blur`]), overriding the theme fill and `Kit::metrics.popup_backdrop`.
+    pub fn surface_fill(mut self, fill: Color) -> Self {
+        self.core.surface_fill = Some(fill);
+        self
+    }
     /// Replaces the default field trigger (the chosen label and a chevron) with any element;
     /// pressing it opens and closes the popover.
     pub fn trigger(mut self, trigger: El) -> Self { self.core.trigger = Some(trigger); self }

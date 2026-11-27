@@ -11,7 +11,7 @@ use std::rc::Rc;
 use rune::{Align, Color, El, Shadow, Side, TextStyle, Transition, Tx, col, el, row, text};
 use rune_motion::{Spring, Vec2};
 
-use super::popover::{fit, raised};
+use super::popover::{fit, raised_with};
 use crate::{Acts, ControlSize, IconButton, IconButtonVariant, Kit};
 
 /// Where an overlay sits relative to its trigger (Kobalte/Floating UI's 12 placements).
@@ -199,7 +199,8 @@ pub(crate) fn push_anchored_modal(
 }
 
 /// Pushes an optional outside-press scrim and a raised surface anchored with [`anchor_at`]
-/// (scale-and-fade entrance).
+/// (scale-and-fade entrance), with optional per-instance `(backdrop_blur, surface_fill)`
+/// overrides for [`super::popover::raised_with`].
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn push_raised_anchored(
     k: &Kit,
@@ -210,11 +211,13 @@ pub(crate) fn push_raised_anchored(
     side: Side,
     align: Align,
     gutter: f32,
+    backdrop: (Option<f32>, Option<Color>),
 ) {
     if let Some(s) = dismiss {
         layer.push(s);
     }
-    layer.push(anchor_at(k, raised(k, content, k.radius.md), anchor, side, align, gutter));
+    let surface = raised_with(k, content, k.radius.md, backdrop.0, backdrop.1);
+    layer.push(anchor_at(k, surface, anchor, side, align, gutter));
 }
 
 /// `Popover::new("share").trigger(button).title("Share").open(s.open).build(&kit, &mut layer)`.
@@ -233,6 +236,8 @@ pub struct Popover {
     gutter: f32,
     padding: f32,
     width: Option<f32>,
+    backdrop_blur: Option<f32>,
+    surface_fill: Option<Color>,
     close: Acts,
     dismiss: Option<El>,
 }
@@ -251,6 +256,8 @@ impl Popover {
             gutter: 4.0,
             padding: 12.0,
             width: None,
+            backdrop_blur: None,
+            surface_fill: None,
             close: Acts::default(),
             dismiss: None,
         }
@@ -292,6 +299,19 @@ impl Popover {
     }
     pub fn gutter(mut self, g: f32) -> Self {
         self.gutter = g;
+        self
+    }
+    /// Blurs what the window draws behind the popover surface ([`El::backdrop_blur`](rune::El::backdrop_blur)),
+    /// overriding [`Kit::metrics`](crate::Kit::metrics)'s `popup_backdrop`. `0.0` turns blur off;
+    /// negative or non-finite values clamp to `0.0`.
+    pub fn backdrop_blur(mut self, sigma: f32) -> Self {
+        self.backdrop_blur = Some(crate::tokens::metrics::non_neg(sigma));
+        self
+    }
+    /// Replaces the popover's surface fill colour (for example a translucent tint over
+    /// [`Self::backdrop_blur`]), overriding the theme fill and `Kit::metrics.popup_backdrop`.
+    pub fn surface_fill(mut self, fill: Color) -> Self {
+        self.surface_fill = Some(fill);
         self
     }
     /// Fixes the surface width in points in place of the default 200..320 clamp.
@@ -371,7 +391,17 @@ impl Popover {
         }
         content = content.child(col().key("body").padding(self.padding).shrink().min_h(0.0).children(self.body));
         let (side, align) = self.placement.split();
-        push_raised_anchored(k, layer, self.dismiss, content, &anchor_key, side, align, self.gutter);
+        push_raised_anchored(
+            k,
+            layer,
+            self.dismiss,
+            content,
+            &anchor_key,
+            side,
+            align,
+            self.gutter,
+            (self.backdrop_blur, self.surface_fill),
+        );
         trigger
     }
 }
@@ -711,12 +741,12 @@ mod tests {
         let k = Kit::neutral(true);
         let mut layer = Vec::new();
         let s = scrim(scrim_key("p"), |_: &mut ()| {});
-        push_raised_anchored(&k, &mut layer, Some(s), col().key(content_key("p")), "p-trigger", Side::Bottom, Align::Start, 4.0);
+        push_raised_anchored(&k, &mut layer, Some(s), col().key(content_key("p")), "p-trigger", Side::Bottom, Align::Start, 4.0, (None, None));
         assert_eq!(layer.len(), 2, "scrim mounts before anchored surface");
 
         let mut tx_layer = Vec::new();
         let s_tx = scrim_tx(scrim_key("ptx"), |_: &mut (), _: &mut Tx| {});
-        push_raised_anchored(&k, &mut tx_layer, Some(s_tx), col().key(content_key("ptx")), "ptx-trigger", Side::Bottom, Align::Start, 4.0);
+        push_raised_anchored(&k, &mut tx_layer, Some(s_tx), col().key(content_key("ptx")), "ptx-trigger", Side::Bottom, Align::Start, 4.0, (None, None));
         assert_eq!(tx_layer.len(), 2, "scrim_tx mounts before anchored surface");
 
         let mut modal_layer = Vec::new();

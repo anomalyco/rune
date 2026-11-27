@@ -14,7 +14,7 @@ mod item;
 
 pub use item::MenuItem;
 
-use rune::{El, Key, KeyEvent, PointerPress, Tx, col, el, row, text};
+use rune::{Color, El, Key, KeyEvent, PointerPress, Tx, col, el, row, text};
 
 use super::overlay::{Modal, Placement, anchor_trigger, dismissal_tx, push_anchored_modal, scrim_key, trigger_key};
 use super::popover::fit_scroll_bar;
@@ -151,12 +151,14 @@ pub struct Menu {
     sep_keys: Vec<(usize, String)>,
 }
 
-/// A menu's own padding, separator spacing and inner border; `None` keeps the appearance's.
+/// A menu's own padding, separator spacing, inner border and backdrop; `None` keeps the theme's.
 #[derive(Clone, Copy, Default)]
 struct Look {
     padding: Option<f32>,
     separator_spacing: Option<(f32, f32)>,
     border: Option<f32>,
+    backdrop_blur: Option<f32>,
+    surface_fill: Option<Color>,
 }
 
 #[derive(Clone, Copy)]
@@ -266,6 +268,35 @@ impl Menu {
         self.look.border = Some(crate::tokens::metrics::non_neg(width));
         self
     }
+    /// Blurs what the window draws behind the menu surface ([`El::backdrop_blur`](rune::El::backdrop_blur)),
+    /// overriding [`Kit::metrics`](crate::Kit::metrics)'s `popup_backdrop` for this menu and its
+    /// open submenus. Pair with a translucent [`Self::surface_fill`] (or a translucent theme fill)
+    /// so the blur shows through. `0.0` turns blur off; negative or non-finite values clamp to `0.0`.
+    ///
+    /// ```
+    /// # use rune_kit::{Kit, Menu};
+    /// # let k = Kit::neutral(true);
+    /// let _menu = Menu::new("ctx")
+    ///     .backdrop_blur(20.0)
+    ///     .surface_fill(k.c.layer_01.alpha(0.78));
+    /// ```
+    pub fn backdrop_blur(mut self, sigma: f32) -> Self {
+        self.look.backdrop_blur = Some(crate::tokens::metrics::non_neg(sigma));
+        self
+    }
+    /// Replaces the menu surface's background fill colour (for example a translucent tint over
+    /// [`Self::backdrop_blur`]), overriding the theme fill and `Kit::metrics.popup_backdrop` for
+    /// this menu and its open submenus.
+    ///
+    /// ```
+    /// # use rune_kit::{Kit, Menu};
+    /// # let k = Kit::neutral(true);
+    /// let _menu = Menu::new("ctx").surface_fill(k.c.layer_01.alpha(0.78));
+    /// ```
+    pub fn surface_fill(mut self, fill: Color) -> Self {
+        self.look.surface_fill = Some(fill);
+        self
+    }
     pub fn group_label(mut self, l: impl Into<String>) -> Self {
         self.entries.push(MenuEntry::Label(l.into()));
         self
@@ -347,7 +378,8 @@ impl Menu {
         let row_m = k.popup_row_metrics();
         let border = look.border.unwrap_or(if standard { mm.standard_inner_border } else { 0.0 });
         let frame_radius = k.radius_md();
-        let frame = if standard { frame.radius(frame_radius).fill(c.surface_raised) } else { frame.radius(frame_radius).fill(c.layer_01) };
+        let base_fill = if standard { c.surface_raised } else { c.layer_01 };
+        let frame = k.apply_popup_surface(frame.radius(frame_radius), base_fill, look.backdrop_blur, look.surface_fill);
         let frame = if border > 0.0 { frame.border(border, k.alpha(c.std_border, 0.5)) } else { frame };
         let frame = k.elevate(frame, if standard { &k.elevation.md } else { &k.elevation.floating });
         let pad = look.padding.unwrap_or(if standard { mm.standard_padding } else { mm.padding });
