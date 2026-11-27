@@ -45,12 +45,31 @@ impl SourceAction {
         }
     }
 
+    /// Resolves the final [`DragOutcome`] when `wl_data_source.dnd_finished` arrives.
+    ///
+    /// Per the Wayland protocol, `dnd_finished` only fires after the drop destination accepted
+    /// and finished the transfer (`wl_data_source.cancelled` fires on cancellation). Compliant
+    /// v3 compositors send `wl_data_source.action` first, populating `self` with `Copy` or `Move`.
+    ///
+    /// Some compositors (notably Hyprland <= v0.57.2) emit `dnd_finished` without ever sending
+    /// `wl_data_source.action`, leaving `self` as `None`. In that case fall back to `Copied`
+    /// whenever `Copy` was offered (including `Copy | Move`, so a caller never deletes its
+    /// original on an ambiguous move), to `Moved` when only `Move` was offered, and to
+    /// `Cancelled` when neither action was offered.
     #[inline]
-    pub(crate) const fn to_outcome(self) -> DragOutcome {
+    pub(crate) const fn finished_outcome(self, offered_actions: u32) -> DragOutcome {
         match self {
             Self::Copy => DragOutcome::Copied,
             Self::Move => DragOutcome::Moved,
-            Self::None => DragOutcome::Cancelled,
+            Self::None => {
+                if offered_actions & DND_ACTION_COPY != 0 {
+                    DragOutcome::Copied
+                } else if offered_actions & DND_ACTION_MOVE != 0 {
+                    DragOutcome::Moved
+                } else {
+                    DragOutcome::Cancelled
+                }
+            }
         }
     }
 }
@@ -65,6 +84,7 @@ pub(crate) struct DragSession {
     pub version: u32,
     pub within_app: bool,
     pub offers: Vec<OfferedMime>,
+    pub offered_actions: u32,
     pub accepted_mime: Option<String>,
     pub selected_action: SourceAction,
     pub sent_any: bool,
@@ -189,7 +209,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Vec<Effect> {
                 return out;
             }
             let mimes: Vec<String> = offers.iter().map(|o| o.mime.clone()).collect();
-            let actions_mask = (version >= 3).then_some(actions_mask);
+            let wire_actions_mask = (version >= 3).then_some(actions_mask);
             *state = State::Active(DragSession {
                 drag_id,
                 seat,
@@ -197,6 +217,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Vec<Effect> {
                 version,
                 within_app,
                 offers,
+                offered_actions: actions_mask,
                 accepted_mime: None,
                 selected_action: SourceAction::None,
                 sent_any: false,
@@ -208,7 +229,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Vec<Effect> {
                 origin_surface,
                 serial,
                 mimes,
-                actions_mask,
+                actions_mask: wire_actions_mask,
                 with_icon,
             });
             out.push(Effect::Flush);
@@ -258,7 +279,7 @@ pub(crate) fn step(state: &mut State, event: Event) -> Vec<Effect> {
             if state.active_drag_id() == Some(drag_id) {
                 if let Some(s) = take_session(state) {
                     let outcome = if s.version >= 3 {
-                        s.selected_action.to_outcome()
+                        s.selected_action.finished_outcome(s.offered_actions)
                     } else {
                         DragOutcome::Copied
                     };
