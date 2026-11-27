@@ -41,13 +41,14 @@ struct Scrub(Contracts);
 impl Scrub {
     fn body(&mut self, sig: &syn::Signature, attrs: &[syn::Attribute], block: &mut syn::Block) {
         // Const bodies can determine persistent layouts.
-        if sig.ident == "main" || sig.constness.is_some() || !inert(attrs) { return; }
+        if sig.constness.is_some() || !inert(attrs) { return; }
         self.0.visit_block(block);
         *block = syn::parse_quote!({});
     }
 }
 impl VisitMut for Scrub {
     fn visit_item_fn_mut(&mut self, f: &mut syn::ItemFn) {
+        if f.sig.ident == "main" { return; }
         self.body(&f.sig, &f.attrs, &mut f.block);
     }
     fn visit_item_impl_mut(&mut self, i: &mut syn::ItemImpl) {
@@ -115,6 +116,23 @@ mod tests {
             "impl S { #[persistent] fn n() -> usize { 1 } }",
             "#[persistent] impl S { fn n() -> usize { 1 } }",
             "impl T for S { fn n() -> usize { 1 } }",
+        ] {
+            assert_ne!(contract(kept).unwrap(), contract(&kept.replace("{ 1 }", "{ 2 }")).unwrap());
+        }
+    }
+
+    #[test]
+    fn inherent_method_named_main_patches_while_free_main_does_not() {
+        let base = "struct Layout; impl Layout { fn main(&self) -> &'static str { \"Home\" } } struct App; impl App { fn main() -> u32 { 1 } } fn main() { let x = 1; }";
+        assert_eq!(contract(base).unwrap(), contract(&base.replace("\"Home\"", "\"Start\"")).unwrap());
+        assert_eq!(contract(base).unwrap(), contract(&base.replace("{ 1 }", "{ 2 }")).unwrap());
+        assert_ne!(contract(base).unwrap(), contract(&base.replace("let x = 1;", "let x = 2;")).unwrap());
+        assert_ne!(contract(base).unwrap(), contract(&base.replace("\"Home\"", "{ static X: &str = \"Start\"; X }")).unwrap());
+        for kept in [
+            "impl Layout { const fn main() -> usize { 1 } }",
+            "impl Layout { #[persistent] fn main(&self) -> usize { 1 } }",
+            "#[persistent] impl Layout { fn main(&self) -> usize { 1 } }",
+            "impl T for Layout { fn main(&self) -> usize { 1 } }",
         ] {
             assert_ne!(contract(kept).unwrap(), contract(&kept.replace("{ 1 }", "{ 2 }")).unwrap());
         }
