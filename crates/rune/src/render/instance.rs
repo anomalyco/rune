@@ -762,6 +762,16 @@ impl Instance {
         Self { params: [0.0, KIND_LAYER_END, 0.0, 0.0], ..Self::zeroed() }
     }
 
+    /// The `El::effect` tag carried by a `Kind::Effect` record (`EffectSite::mark`), or `None`
+    /// for any other primitive kind.
+    #[inline]
+    pub const fn effect_mark(&self) -> Option<u32> {
+        if !matches!(self.kind(), Some(Kind::Effect)) {
+            return None;
+        }
+        Some(effect_mark(self))
+    }
+
     /// Scales only the colour and opacity fields of this instance by `opacity`, leaving
     /// non-colour payloads (outline glyph records, wrapped-image placement rects, layer pivots,
     /// effect marks, wrap modes, etc.) untouched. Mirrors `crates/rune-gpu/src/springs.wgsl`.
@@ -782,8 +792,9 @@ impl Instance {
 }
 
 /// An effect slot's `El::effect` tag, from the two exact 16-bit floats in `border` (`KIND_EFFECT`).
-pub(crate) fn effect_mark(i: &Instance) -> u32 {
-    (i.border[0] as u32 & 0xFFFF) | (i.border[1] as u32 & 0xFFFF) << 16
+#[inline]
+pub(crate) const fn effect_mark(i: &Instance) -> u32 {
+    (i.border[0] as u32 & 0xFFFF) | ((i.border[1] as u32 & 0xFFFF) << 16)
 }
 
 /// Pack a 64-bit integer into four exact non-negative 16-bit integer floats (`0.0..=65535.0`).

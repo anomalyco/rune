@@ -257,12 +257,119 @@ impl<S: 'static> Frame<'_, S> {
         self.ui.write_buffer(self.device, self.queue, self.encoder, buffer, offset, data);
     }
 
+    /// Iterates every `El::effect` slot in this frame's laid-out instances, in painter order.
+    ///
+    /// Call this before opening compositor passes or calling `Renderer::prepare` to find slots by
+    /// [`EffectSlot::mark`], size offscreen targets from [`EffectSlot::rect`] and
+    /// [`EffectSlot::scale`], or read [`EffectSlot::data`] in the same frame layout ran. Does not
+    /// require `Runtime::track_marks`.
+    ///
+    /// This borrows `&Frame`. To encode into `f.encoder` while iterating without cloning, call
+    /// [`Runtime::effect_slots`] on `f.rt` directly (borrowing only `f.rt`).
+    pub fn effect_slots(&self) -> impl Iterator<Item = EffectSlot<'_>> {
+        self.rt.effect_slots()
+    }
+
+    /// Finds the first `El::effect` slot in this frame tagged `mark`, in painter order.
+    ///
+    /// Convenience over [`Self::effect_slots`] when each mark identifies one slot. If multiple
+    /// slots can share a mark (such as an outgoing slot playing its exit transition beside its
+    /// replacement), iterate [`Self::effect_slots`] or [`Runtime::effect_slots`] instead.
+    pub fn effect_slot(&self, mark: u32) -> Option<EffectSlot<'_>> {
+        self.rt.effect_slot(mark)
+    }
+
     /// The default frame: every instance into the target, cleared to the window colour.
     pub fn draw_ui(&mut self) {
         let clear = self.rt.clear_color();
         self.ui.set_fade_stops(self.rt.fade_stops());
         self.ui.prepare_ui(self.device, self.queue, &mut self.rt.text.atlas, &self.rt.instances, self.size);
         self.ui.draw(self.encoder, self.target, clear);
+    }
+}
+
+/// One `El::effect` slot present in a frame's laid-out instances ([`Frame::effect_slots`],
+/// [`Frame::effect_slot`], [`Runtime::effect_slots`], [`Runtime::effect_slot`]).
+///
+/// Use this before opening compositor passes or calling `Renderer::prepare` to size offscreen
+/// targets (for example an MSAA + depth 3D scene) from [`Self::rect`] and [`Self::scale`] in the
+/// same frame the slot is laid out. When drawing the slot inside Rune's pass via
+/// `Renderer::draw_with`, [`EffectSite`](crate::render::EffectSite) supplies the pass's target
+/// `format` (`Frame::format` on the frame target, `Rgba16Float` inside an isolated layer),
+/// `origin`, `size`, `in_layer` and `backdrop`.
+///
+/// ```no_run
+/// # use rune::{Compositor, Frame, render::EffectSite};
+/// # const VIEWPORT: u32 = 1;
+/// # struct App;
+/// # struct Scene;
+/// # impl Scene {
+/// #     fn render_offscreen(&mut self, _: &wgpu::Device, _: &wgpu::Queue, _: &mut wgpu::CommandEncoder, _: [f32; 4], _: f32) {}
+/// #     fn blit(&mut self, _: &mut wgpu::RenderPass<'_>, _: &EffectSite<'_>) {}
+/// # }
+/// impl Compositor<App> for Scene {
+///     fn render(&mut self, f: &mut Frame<'_, App>) {
+///         if let Some(slot) = f.effect_slot(VIEWPORT) {
+///             let (rect, scale) = (slot.rect, slot.scale);
+///             self.render_offscreen(f.device, f.queue, f.encoder, rect, scale);
+///         }
+///         let clear = f.rt.clear_color();
+///         f.ui.prepare(f.device, f.queue, &mut f.rt.text.atlas, &f.rt.instances, f.size);
+///         f.ui.draw_with(f.encoder, f.target, clear, &mut |pass, site| {
+///             if site.mark == VIEWPORT {
+///                 self.blit(pass, site);
+///             }
+///         });
+///     }
+/// }
+/// ```
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug)]
+pub struct EffectSlot<'a> {
+    /// The slot's position in `Runtime::instances` (matches `EffectSite::index`).
+    pub index: u32,
+    /// The slot's `KIND_EFFECT` record: `rect`, `radii`, `clip` and `fade`.
+    pub instance: &'a Instance,
+    /// The slot's `El::effect` tag (`Instance::effect_mark`, matches `EffectSite::mark`).
+    pub mark: u32,
+    /// The slot's `El::effect_data` payload, bit for bit (matches `EffectSite::data`).
+    pub data: [f32; 4],
+    /// The slot's device-pixel rectangle `[x, y, width, height]` (`instance.rect`).
+    pub rect: [f32; 4],
+    /// Device pixels per point at this slot (`instance.params[3]`, matches `EffectSite::scale`).
+    pub scale: f32,
+    /// Bleed past `rect` in device pixels (`El::effect_bleed`, `instance.params[2]`).
+    pub bleed: f32,
+    /// Whether the slot requested a backdrop copy (`El::effect_backdrop(true)`).
+    pub backdrop: bool,
+}
+
+impl<S: 'static> Runtime<S> {
+    /// Iterates every `El::effect` slot in `self.instances`, in painter order.
+    ///
+    /// Decodes each slot's tag from its `KIND_EFFECT` record (`Instance::effect_mark`), so it
+    /// works even when `Runtime::track_marks` is false. Inside `Compositor::render`, calling
+    /// `f.rt.effect_slots()` borrows only `f.rt`, leaving `f.device`, `f.queue`, `f.encoder` and
+    /// `f.ui` available for encoding compositor passes in the loop.
+    pub fn effect_slots(&self) -> impl Iterator<Item = EffectSlot<'_>> {
+        self.instances.iter().enumerate().filter_map(|(index, instance)| {
+            let mark = instance.effect_mark()?;
+            Some(EffectSlot {
+                index: index as u32,
+                instance,
+                mark,
+                data: instance.uv,
+                rect: instance.rect,
+                scale: instance.params[3],
+                bleed: instance.params[2],
+                backdrop: instance.params[0] != 0.0,
+            })
+        })
+    }
+
+    /// Finds the first `El::effect` slot in `self.instances` tagged `mark`, in painter order.
+    pub fn effect_slot(&self, mark: u32) -> Option<EffectSlot<'_>> {
+        self.effect_slots().find(|slot| slot.mark == mark)
     }
 }
 
