@@ -551,3 +551,411 @@ fn inh_stays_compact_and_cold_handles_stay_consistent_across_keep_and_scroll() {
         );
     }
 }
+
+fn assert_copy_matches_fresh<S: 'static>(copy: &Runtime<S>, fresh: &Runtime<S>, label: &str) {
+    assert_eq!(
+        bytemuck::cast_slice::<Instance, u8>(&copy.core().instances),
+        bytemuck::cast_slice::<Instance, u8>(&fresh.core().instances),
+        "{label}: instances differ"
+    );
+    assert_eq!(copy.core().hit.hits, fresh.core().hit.hits, "{label}: hits differ");
+    assert_eq!(copy.core().hit.wheel_hits, fresh.core().hit.wheel_hits, "{label}: wheel_hits differ");
+    assert_eq!(copy.core().hit.overlay_hits, fresh.core().hit.overlay_hits, "{label}: overlay_hits differ");
+    assert_eq!(copy.core().hit.help_hits, fresh.core().hit.help_hits, "{label}: help_hits differ");
+    assert_eq!(copy.core().hit.drop_hits, fresh.core().hit.drop_hits, "{label}: drop_hits differ");
+    assert_eq!(copy.core().paint.drawn, fresh.core().paint.drawn, "{label}: drawn rects differ");
+    assert_eq!(copy.core().paint.seen, fresh.core().paint.seen, "{label}: seen flags differ");
+}
+
+#[test]
+fn modal_open_keeps_unchanged_background_and_modal_subtrees_and_invalidates_hits() {
+    use crate::{ScrollSpec, TextEdit, memo, region_with, text_input};
+
+    #[derive(Clone, Copy)]
+    enum GridKind {
+        Memo,
+        Region,
+    }
+
+    struct State {
+        kind: GridKind,
+        open: bool,
+        grid_ver: u32,
+        card_ver: [u32; 20],
+        edit: TextEdit,
+    }
+
+    fn build_card(i: usize, ver: u32) -> El {
+        row()
+            .key(format!("card-{i}"))
+            .w_full()
+            .h(28.0)
+            .fill(Color { r: 0.14, g: 0.15, b: 0.18, a: 1.0 })
+            .on_press(|_: &mut State| {})
+            .on_drop_files(|_: &mut State, _, _| {})
+            .help(format!("Card {i} help"))
+            .child(text(format!("Card {i} v{ver}")).key("title").font(TextStyle::new(12.0, 400.0)))
+            .child(el().key("badge").size(12.0, 12.0).fill(Color::WHITE))
+    }
+
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let grid = match s.kind {
+            GridKind::Memo => col()
+                .key("bg-grid")
+                .w_full()
+                .h(240.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .children((0..s.card_ver.len()).map(|i| {
+                    let v = s.card_ver[i];
+                    memo(format!("card-{i}"), v, || build_card(i, v))
+                })),
+            GridKind::Region => region_with("bg-region", (s.grid_ver, s.card_ver), || {
+                col()
+                    .key("bg-grid")
+                    .w_full()
+                    .h(240.0)
+                    .scroll(ScrollSpec { stick_bottom: false })
+                    .children((0..s.card_ver.len()).map(|i| build_card(i, s.card_ver[i])))
+            }),
+        };
+
+        let mut root = col().key("root").w_full().h_full().child(grid);
+        if s.open {
+            root = root
+                .child(el().key("scrim").absolute(0.0, 0.0).size(360.0, 240.0).fill(Color::BLACK.alpha(0.4)))
+                .child(
+                    col()
+                        .key("dialog")
+                        .absolute(40.0, 30.0)
+                        .size(280.0, 160.0)
+                        .fill(Color { r: 0.2, g: 0.2, b: 0.24, a: 1.0 })
+                        .transition(crate::Transition::none())
+                        .modal(true, |s: &mut State| s.open = false)
+                        .child(memo("header", 0u32, || {
+                            row()
+                                .key("header")
+                                .w_full()
+                                .h(28.0)
+                                .help("Dialog header")
+                                .child(text("Edit item").key("heading").font(TextStyle::new(14.0, 600.0)))
+                                .child(el().key("close-btn").size(20.0, 20.0).on_press(|s: &mut State| s.open = false))
+                        }))
+                        .child(
+                            text_input(&s.edit, TextStyle::new(13.0, 400.0))
+                                .key("dialog-input")
+                                .label("Dialog input")
+                                .size(240.0, 28.0)
+                                .on_edit(|s: &mut State| &mut s.edit),
+                        ),
+                );
+        }
+        root
+    }
+
+    let make = |kind: GridKind| {
+        let mut edit = TextEdit::new("abc");
+        edit.focused = true;
+        Runtime::new(
+            State { kind, open: false, grid_ver: 0, card_ver: [0; 20], edit },
+            view,
+            (360.0, 240.0),
+            Env::new(true, 1.0),
+        )
+    };
+    let node_id = |rt: &Runtime<State>, k: &str| {
+        rt.core().tree.nodes.iter().find(|n| n.key.as_deref() == Some(k)).unwrap().id
+    };
+    let idx_of = |rt: &Runtime<State>, k: &str| {
+        rt.core().tree.nodes.iter().position(|n| n.key.as_deref() == Some(k)).unwrap()
+    };
+
+    for kind in [GridKind::Memo, GridKind::Region] {
+        let tag = match kind { GridKind::Memo => "memo", GridKind::Region => "region" };
+        let mut rt_dbg = make(kind);
+        let mut rt_copy = make(kind);
+        let mut rt_fresh = make(kind);
+        rt_dbg.set_paint_keep_strict(true);
+        rt_copy.core_mut().paint.keep.force_copy = true;
+
+        let step = |dbg: &mut Runtime<State>, copy: &mut Runtime<State>, fresh: &mut Runtime<State>, dt: f64, label: &str| {
+            dbg.frame(dt);
+            copy.frame(dt);
+            fresh.core_mut().paint.keep.off_once = true;
+            fresh.frame(dt);
+            assert_eq!(dbg.paint_keep_mismatches(), 0, "{tag} {label}: strict keep_check mismatch");
+            assert_copy_matches_fresh(copy, fresh, &format!("{tag} {label}"));
+        };
+
+        // Baseline closed frames: background registers hits, wheel, help and drop targets.
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 0.0, "closed-0");
+        let card0_id = node_id(&rt_copy, "card-0");
+        assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == card0_id), "{tag}: closed background takes hits");
+        assert!(rt_copy.core().hit.help_hits.iter().any(|(id, ..)| *id == card0_id), "{tag}: closed background takes help hits");
+        assert!(rt_copy.core().hit.drop_hits.iter().any(|(id, ..)| *id == card0_id), "{tag}: closed background takes drop hits");
+
+        // Open the modal: background must drop all hit registrations while modal registers its own.
+        for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+            rt.update(|s, tx| { s.open = true; tx.instant(); });
+        }
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "modal-open");
+        let close_btn_id = node_id(&rt_copy, "close-btn");
+        assert!(!rt_copy.core().hit.hits.iter().any(|(id, _)| *id == card0_id), "{tag}: background hit blocked behind modal");
+        assert!(!rt_copy.core().hit.help_hits.iter().any(|(id, ..)| *id == card0_id), "{tag}: background help blocked behind modal");
+        assert!(!rt_copy.core().hit.drop_hits.iter().any(|(id, ..)| *id == card0_id), "{tag}: background drop blocked behind modal");
+        assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == close_btn_id), "{tag}: modal button takes hits");
+
+        // Type and delete inside the modal input across frames: background cards AND unchanged modal header must be copied.
+        let card_nodes = 20 * 3; // each card has row + title + badge
+        for (k, ch) in [(0, Some('x')), (1, Some('y')), (2, None), (3, Some('z'))] {
+            for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+                rt.update(|s, _| {
+                    if let Some(c) = ch {
+                        s.edit.insert(&c.to_string());
+                    } else {
+                        s.edit.key(&crate::KeyEvent { key: crate::Key::Backspace, mods: Default::default() }, None);
+                    }
+                });
+            }
+            step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, &format!("edit-{k}"));
+            assert!(rt_copy.core().paint.keep.on, "{tag} edit-{k}: paint keep must stay on while modal is open");
+            assert!(
+                rt_copy.core().paint.keep.last_kept >= card_nodes + 3,
+                "{tag} edit-{k}: expected background cards ({card_nodes}) + modal header (3) copied, got {}",
+                rt_copy.core().paint.keep.last_kept,
+            );
+            assert!(rt_copy.core().paint.keep.clean[idx_of(&rt_copy, "card-0")], "{tag} edit-{k}: background card-0 must be clean");
+            assert!(rt_copy.core().paint.keep.clean[idx_of(&rt_copy, "header")], "{tag} edit-{k}: unchanged modal header must be clean");
+            assert!(!rt_copy.core().hit.hits.iter().any(|(id, _)| *id == card0_id), "{tag} edit-{k}: copied background must emit no hits");
+            assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == close_btn_id), "{tag} edit-{k}: copied modal header keeps its hit");
+        }
+
+        // Forced unchanged frame while modal is open must also copy unchanged subtrees.
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "modal-unchanged");
+        assert!(rt_copy.core().paint.keep.on, "{tag}: paint keep must be on for unchanged frame under modal");
+        assert!(rt_copy.core().paint.keep.last_kept >= card_nodes + 3, "{tag}: unchanged modal frame must copy background + header");
+
+        // Mutating one background card while modal is open invalidates that card and repaints it
+        // while keeping unchanged background cards (in memo mode) and modal header copied.
+        let before_bg_bytes = bytemuck::cast_slice::<Instance, u8>(&rt_copy.core().instances).to_vec();
+        for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+            rt.update(|s, tx| { s.card_ver[2] += 1; tx.instant(); });
+        }
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "bg-mutate-under-modal");
+        assert!(!rt_copy.core().paint.keep.clean[idx_of(&rt_copy, "card-2")], "{tag}: mutated card-2 must repaint");
+        assert!(rt_copy.core().paint.keep.clean[idx_of(&rt_copy, "header")], "{tag}: unchanged modal header stays clean");
+        if matches!(kind, GridKind::Memo) {
+            assert!(rt_copy.core().paint.keep.clean[idx_of(&rt_copy, "card-0")], "memo: untouched card-0 stays clean");
+            assert!(rt_copy.core().paint.keep.last_kept >= 19 * 3 + 3, "memo: 19 untouched cards + header copied");
+        }
+        assert_ne!(
+            before_bg_bytes,
+            bytemuck::cast_slice::<Instance, u8>(&rt_copy.core().instances),
+            "{tag}: mutated background card must update instances while modal is open",
+        );
+
+        // Closing the modal restores background hits immediately and keeps copying afterwards.
+        for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+            rt.update(|s, tx| { s.open = false; tx.instant(); });
+        }
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "modal-close");
+        assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == card0_id), "{tag}: closing modal restores background hits");
+        assert!(rt_copy.core().hit.help_hits.iter().any(|(id, ..)| *id == card0_id), "{tag}: closing modal restores background help hits");
+        assert!(rt_copy.core().hit.drop_hits.iter().any(|(id, ..)| *id == card0_id), "{tag}: closing modal restores background drop hits");
+
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "post-close-steady");
+        assert!(rt_copy.core().paint.keep.on && rt_copy.core().paint.keep.last_kept >= card_nodes, "{tag}: post-close steady frame copies background");
+    }
+}
+
+#[test]
+fn modal_transitions_backdrop_blur_move_and_nested_stay_exact() {
+    use crate::{Transition, memo};
+
+    struct S {
+        outer: bool,
+        inner: bool,
+        fade_outer: bool,
+        dx: f32,
+        inner_tick: u32,
+    }
+
+    fn view(s: &S, _: &mut Cx<S>) -> El {
+        let bg = memo("bg", 0u32, || {
+            col()
+                .key("bg")
+                .w_full()
+                .h_full()
+                .children((0..12).map(|i| {
+                    row()
+                        .key(format!("row-{i}"))
+                        .w_full()
+                        .h(20.0)
+                        .fill(Color { r: 0.12, g: 0.14, b: 0.18, a: 1.0 })
+                        .on_press(|_: &mut S| {})
+                        .help(format!("Row {i}"))
+                        .child(text(format!("Row {i}")).key("lbl").font(TextStyle::new(11.0, 400.0)))
+                }))
+        });
+
+        let mut root = col().key("root").w_full().h_full().child(bg);
+        if s.outer {
+            // Non-focusable modal: opening/closing leaves focus as None so PaintKeep's shared key
+            // stays identical across instant transitions, directly exercising own_key's modal bit.
+            let tr = if s.fade_outer { Transition::opacity() } else { Transition::none() };
+            root = root.child(
+                col()
+                    .key("outer-modal")
+                    .absolute(30.0, 20.0)
+                    .size(220.0, 140.0)
+                    .offset(s.dx, 0.0)
+                    .fill(Color { r: 0.18, g: 0.2, b: 0.26, a: 0.88 })
+                    .backdrop_blur(10.0)
+                    .transition(tr)
+                    .focusable(false)
+                    .modal(true, |s: &mut S| s.outer = false)
+                    .child(memo("outer-btn", 0u32, || {
+                        row()
+                            .key("outer-btn")
+                            .size(100.0, 24.0)
+                            .on_press(|_: &mut S| {})
+                            .help("Outer action")
+                            .child(text("Outer").key("outer-lbl"))
+                    })),
+            );
+        }
+        if s.inner {
+            root = root.child(
+                col()
+                    .key("inner-modal")
+                    .absolute(70.0, 50.0)
+                    .size(150.0, 90.0)
+                    .fill(Color { r: 0.24, g: 0.22, b: 0.28, a: 1.0 })
+                    .transition(Transition::none())
+                    .focusable(false)
+                    .modal(true, |s: &mut S| s.inner = false)
+                    .child(
+                        row()
+                            .key("inner-btn")
+                            .size(90.0, 24.0)
+                            .on_press(|_: &mut S| {})
+                            .child(text(format!("Inner {}", s.inner_tick)).key("inner-lbl")),
+                    ),
+            );
+        }
+        root
+    }
+
+    let make = || {
+        Runtime::new(
+            S { outer: false, inner: false, fade_outer: false, dx: 0.0, inner_tick: 0 },
+            view,
+            (320.0, 240.0),
+            Env::new(true, 1.0),
+        )
+    };
+    let mut rt_dbg = make();
+    let mut rt_copy = make();
+    let mut rt_fresh = make();
+    rt_dbg.set_paint_keep_strict(true);
+    rt_copy.core_mut().paint.keep.force_copy = true;
+
+    let step = |dbg: &mut Runtime<S>, copy: &mut Runtime<S>, fresh: &mut Runtime<S>, dt: f64, label: &str| {
+        dbg.frame(dt);
+        copy.frame(dt);
+        fresh.core_mut().paint.keep.off_once = true;
+        fresh.frame(dt);
+        assert_eq!(dbg.paint_keep_mismatches(), 0, "{label}: strict keep_check mismatch");
+        assert_copy_matches_fresh(copy, fresh, label);
+    };
+    let node_id = |rt: &Runtime<S>, k: &str| {
+        rt.core().tree.nodes.iter().find(|n| n.key.as_deref() == Some(k)).unwrap().id
+    };
+
+    // Baseline closed frame.
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 0.0, "closed-0");
+    let row0_idx = rt_copy.core().tree.nodes.iter().position(|n| n.key.as_deref() == Some("row-0")).unwrap();
+    let row0_id = rt_copy.core().tree.nodes[row0_idx].id;
+    let row0_own_closed = own_key(rt_copy.core(), row0_idx);
+    assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == row0_id));
+
+    // 1. Open modal with backdrop_blur, move it, nest a second modal, mutate inside it, and unwind.
+    for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+        rt.update(|s, tx| { s.outer = true; tx.instant(); });
+    }
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "outer-open-instant");
+    assert_ne!(own_key(rt_copy.core(), row0_idx), row0_own_closed, "own_key must encode modal membership");
+    assert!(!rt_copy.core().hit.hits.iter().any(|(id, _)| *id == row0_id), "bg hit dropped immediately behind modal");
+    let outer_btn_id = node_id(&rt_copy, "outer-btn");
+    assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == outer_btn_id));
+
+    // Move the outer modal with backdrop_blur: bg stays copied, modal repaints at new offset.
+    for (k, dx) in [12.0, 28.0, 40.0].into_iter().enumerate() {
+        for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+            rt.update(|s, tx| { s.dx = dx; tx.instant(); });
+        }
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, &format!("outer-move-{k}"));
+        assert!(rt_copy.core().paint.keep.on && rt_copy.core().paint.keep.last_kept >= 25, "outer-move-{k}: bg copied while modal moves");
+    }
+
+    // Open nested inner modal: outer modal drops hits and inner modal takes hits.
+    for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+        rt.update(|s, tx| { s.inner = true; tx.instant(); });
+    }
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "nested-open");
+    let inner_btn_id = node_id(&rt_copy, "inner-btn");
+    assert!(!rt_copy.core().hit.hits.iter().any(|(id, _)| *id == row0_id), "nested-open: bg still blocked");
+    assert!(!rt_copy.core().hit.hits.iter().any(|(id, _)| *id == outer_btn_id), "nested-open: outer modal blocked behind inner modal");
+    assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == inner_btn_id), "nested-open: inner modal takes hits");
+
+    // Mutate inner modal: BOTH background AND outer modal body stay copied!
+    for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+        rt.update(|s, tx| { s.inner_tick += 1; tx.instant(); });
+    }
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "nested-edit");
+    assert!(rt_copy.core().paint.keep.on && rt_copy.core().paint.keep.last_kept >= 25 + 2, "nested-edit: bg + outer modal body copied");
+    assert!(!rt_copy.core().hit.hits.iter().any(|(id, _)| *id == outer_btn_id), "nested-edit: copied outer modal emits no hits behind inner modal");
+
+    // Close inner modal: outer modal regains hits immediately, bg stays blocked.
+    for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+        rt.update(|s, tx| { s.inner = false; tx.instant(); });
+    }
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "nested-close");
+    assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == outer_btn_id), "nested-close: outer modal regains hits");
+    assert!(!rt_copy.core().hit.hits.iter().any(|(id, _)| *id == row0_id), "nested-close: bg still blocked");
+
+    // Steady frame after closing inner modal copies both bg (with no hits) and outer modal (with restored hits).
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "nested-close-steady");
+    assert!(rt_copy.core().paint.keep.on && rt_copy.core().paint.keep.last_kept >= 25 + 2, "nested-close-steady: bg + outer modal copied");
+    assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == outer_btn_id), "nested-close-steady: copied outer modal keeps restored hits");
+
+    // Close outer modal: bg regains hits immediately.
+    for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+        rt.update(|s, tx| { s.outer = false; tx.instant(); });
+    }
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "outer-close-instant");
+    assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == row0_id), "outer-close-instant: bg regains hits immediately");
+
+    // 2. Animated opacity entrance + exit transition with backdrop_blur: bg stays copied across
+    //    every fade-in, fade-out, and post-prune frame without stale blur or ghost hits.
+    for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+        rt.update(|s, _| { s.fade_outer = true; s.outer = true; });
+    }
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "fade-open");
+    for f in 0..8 {
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, &format!("fade-in-{f}"));
+        assert!(rt_copy.core().paint.keep.on && rt_copy.core().paint.keep.last_kept >= 25, "fade-in-{f}: bg copied during fade-in");
+    }
+    for rt in [&mut rt_dbg, &mut rt_copy, &mut rt_fresh] {
+        rt.update(|s, _| s.outer = false);
+    }
+    step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, "fade-close-start");
+    assert!(rt_copy.core().hit.hits.iter().any(|(id, _)| *id == row0_id), "fade-close-start: bg regains hits immediately");
+    let mut exit_kept_frames = 0usize;
+    for f in 0..25 {
+        step(&mut rt_dbg, &mut rt_copy, &mut rt_fresh, 1.0 / 60.0, &format!("fade-exit-{f}"));
+        if rt_copy.core().paint.keep.on && rt_copy.core().paint.keep.last_kept >= 25 {
+            exit_kept_frames += 1;
+        }
+    }
+    assert!(exit_kept_frames >= 20, "expected bg copied across exit fade and prune, got {exit_kept_frames}/25 frames");
+}
