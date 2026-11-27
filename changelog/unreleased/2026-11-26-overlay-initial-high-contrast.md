@@ -1,0 +1,1 @@
+- Overlays read the system contrast theme, increased contrast, reduced motion and full keyboard access when they're made and before they show, so a non-activating overlay draws its first frame with high contrast already on.

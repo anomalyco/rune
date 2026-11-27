@@ -797,9 +797,7 @@ impl OverlayCore {
         release_after: Option<Duration>,
     ) -> Self {
         let meter = crate::frame::surface_stats::SurfaceMeter::new(name, shared.stats.clone());
-        rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
-        #[cfg(target_os = "linux")]
-        { rt.double_click_interval = crate::platform::preferences::double_click_interval(); }
+        crate::input::host_events::refresh_accessibility_preferences(rt);
         crate::platform::accent::watch();
         rt.set_system_accent(crate::system_accent());
         crate::platform::scroll_bars::watch();

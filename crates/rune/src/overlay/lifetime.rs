@@ -15,19 +15,23 @@ impl OverlayCore {
         self.fit_for_show_in(app, None);
     }
 
+    /// Refreshes OS appearance and accessibility preferences before showing an overlay that was
+    /// hidden (or had no native handle yet) and so missed redraws or `WM_SETTINGCHANGE` broadcasts.
+    pub(super) fn refresh_preferences_for_show(&mut self, rt: &mut RuntimeCore) {
+        let was_dirty = rt.stale();
+        rt.set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
+        crate::input::host_events::refresh_accessibility_preferences(rt);
+        if !was_dirty && rt.stale() {
+            self.dirty = true;
+        }
+        self.accent_changed(rt, crate::system_accent());
+        self.scroll_bars_changed(rt, crate::platform::scroll_bars::current());
+    }
+
     pub(super) fn show_fading(&mut self, app: &mut dyn OverlayApp, event_loop: &ActiveEventLoop, fade: Duration) {
         if self.poll_terminal_gpu_loss(app) { return; }
         if self.presence.shown() { return; }
-        // Hidden, it missed the redraws a new accent or portal preference asks for.
-        app.rt_mut().set_system_dark(crate::platform::preferences::dark().unwrap_or(self.dark));
-        #[cfg(target_os = "linux")]
-        {
-            let rt = app.rt_mut();
-            rt.set_system_reduced_motion(crate::platform::preferences::reduced_motion());
-            rt.double_click_interval = crate::platform::preferences::double_click_interval();
-        }
-        self.accent_changed(app.rt_mut(), crate::system_accent());
-        self.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
+        self.refresh_preferences_for_show(app.rt_mut());
         if !self.presence.fading() { self.fit_for_show_in(app, Some(event_loop)); }
         #[cfg(target_os = "windows")]
         if self.uses_cpu_layered(app) && self.show_cpu(app, event_loop, fade) {

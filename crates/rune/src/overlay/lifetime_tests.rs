@@ -160,3 +160,104 @@ fn a_focused_field_in_a_hiding_overlay_fires_on_focus_lost_once() {
     overlay.hidden_input();
     assert_eq!(overlay.rt.state.saved, ["query"]);
 }
+
+fn sample_high_contrast() -> crate::SystemContrast {
+    crate::SystemContrast {
+        window: crate::Color::BLACK,
+        text: crate::Color::WHITE,
+        highlight: crate::Color { r: 0.2, g: 0.7, b: 0.9, a: 1.0 },
+        highlight_text: crate::Color::BLACK,
+        disabled: crate::Color { r: 0.5, g: 0.5, b: 0.5, a: 1.0 },
+        button: crate::Color::BLACK,
+        button_text: crate::Color::WHITE,
+        link: crate::Color { r: 0.4, g: 0.8, b: 1.0, a: 1.0 },
+    }
+}
+
+/// A non-activating overlay (`KeyPolicy::None`) never receives `WindowEvent::Focused`, so it must
+/// reflect an existing high-contrast preference on its first draw without waiting for a
+/// settings-change notification; when no contrast preference is active, defaults remain off.
+#[test]
+fn non_activating_overlay_sees_existing_high_contrast_on_first_draw() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<(Option<crate::SystemContrast>, bool)>>>;
+    fn contrast_view(seen: &Seen, cx: &mut Cx<Seen>) -> El {
+        seen.borrow_mut().push((cx.system_contrast(), cx.system_increased_contrast()));
+        el().size(40.0, 20.0)
+    }
+
+    let hc = sample_high_contrast();
+    {
+        let _guard = crate::platform::preferences::test_overrides::set_contrast(Some(hc), true);
+        let seen: Seen = Rc::default();
+        let app = AppSpec::new("hc-overlay", (40.0, 20.0), Seen::default, contrast_view);
+        let spec = OverlaySpec::new("hc-overlay", app.size, contrast_view)
+            .options(OverlayOptions { keys: KeyPolicy::None, ..Default::default() });
+        let (mut overlay, _) = Overlay::new(spec, seen.clone(), &app);
+        // First draw without any focus event or settings-change notification.
+        overlay.rt.frame(0.0);
+        assert_eq!(seen.borrow().as_slice(), &[(Some(hc), true)]);
+        assert_eq!(overlay.rt.core().system_contrast(), Some(hc));
+    }
+    {
+        let _guard = crate::platform::preferences::test_overrides::set_contrast(None, false);
+        let seen: Seen = Rc::default();
+        let app = AppSpec::new("plain-overlay", (40.0, 20.0), Seen::default, contrast_view);
+        let spec = OverlaySpec::new("plain-overlay", app.size, contrast_view)
+            .options(OverlayOptions { keys: KeyPolicy::None, ..Default::default() });
+        let (mut overlay, _) = Overlay::new(spec, seen.clone(), &app);
+        overlay.rt.frame(0.0);
+        assert_eq!(seen.borrow().as_slice(), &[(None, false)]);
+        assert_eq!(overlay.rt.core().system_contrast(), None);
+    }
+}
+
+/// An overlay created or parked while hidden misses `WM_SETTINGCHANGE`; revealing it refreshes
+/// contrast preferences before its first visible draw and marks retained surfaces dirty.
+#[test]
+fn hidden_non_activating_overlay_picks_up_high_contrast_before_show() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Seen = Rc<RefCell<Vec<(Option<crate::SystemContrast>, bool)>>>;
+    fn contrast_view(seen: &Seen, cx: &mut Cx<Seen>) -> El {
+        seen.borrow_mut().push((cx.system_contrast(), cx.system_increased_contrast()));
+        el().size(40.0, 20.0)
+    }
+
+    let hc = sample_high_contrast();
+    let seen: Seen = Rc::default();
+    let app = AppSpec::new("hidden-hc", (40.0, 20.0), Seen::default, contrast_view);
+    let spec = OverlaySpec::new("hidden-hc", app.size, contrast_view)
+        .options(OverlayOptions { keys: KeyPolicy::None, ..Default::default() });
+
+    let mut overlay = {
+        let _off = crate::platform::preferences::test_overrides::set_contrast(None, false);
+        let (mut overlay, _) = Overlay::new(spec, seen.clone(), &app);
+        overlay.rt.frame(0.0);
+        overlay
+    };
+    assert_eq!(seen.borrow().as_slice(), &[(None, false)]);
+    overlay.dirty = false;
+
+    // High contrast turns on while the overlay is hidden (no HWND / no focus event).
+    {
+        let _on = crate::platform::preferences::test_overrides::set_contrast(Some(hc), true);
+        overlay.core.refresh_preferences_for_show(overlay.rt.core_mut());
+        assert!(overlay.dirty, "contrast change before show must mark the overlay dirty");
+        overlay.rt.frame(0.0);
+    }
+    assert_eq!(seen.borrow().as_slice(), &[(None, false), (Some(hc), true)]);
+    overlay.dirty = false;
+
+    // High contrast turns back off while hidden.
+    {
+        let _off = crate::platform::preferences::test_overrides::set_contrast(None, false);
+        overlay.core.refresh_preferences_for_show(overlay.rt.core_mut());
+        assert!(overlay.dirty, "clearing contrast before show must mark the overlay dirty");
+        overlay.rt.frame(0.0);
+    }
+    assert_eq!(seen.borrow().as_slice(), &[(None, false), (Some(hc), true), (None, false)]);
+}
