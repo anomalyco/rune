@@ -1,0 +1,2 @@
+- **`TextInput`, `TextArea`, and `TextField` forward `on_focus_change` to their inner editor.**
+  It wraps `El::on_focus_change`, firing on in-window focus gain and loss (keyboard, pointer, programmatic `Tx::focus`/`Tx::blur`, modal autofocus/return, and disabling or removing while focused) while staying silent on window deactivation and return; `Tx::focus_visible()` distinguishes keyboard from pointer focus inside the callback.

@@ -138,7 +138,10 @@ input moves the caret or selection, skipped when disabled), `on_input_copy` (int
 keyboard and context-menu Copy/Cut, skipped when disabled), and `on_input_paste` (intercepting
 pastes before plain-text insertion, skipped when disabled), `on_blur` (when the focused editor
 loses focus to another app, Tab, a click elsewhere or `Tx::focus`, so a form can commit a half-typed
-value; Return stays `on_submit`; skipped when disabled), as well as `on_submit` and accessible
+value; Return stays `on_submit`; skipped when disabled), `on_focus_change` (forwarding
+`El::on_focus_change` to the inner editor for in-window focus gain and loss, including disabling or
+removing while focused, while staying silent on window deactivation and return), as well as
+`on_submit` and accessible
 `description`. They also accept `.decorations(spans)` (or `.spans(spans)`), `.line_fill(fill)` / `.line_fills(fills)`,
 and `.rich_style(style)` for attributed `TextEdit` marks, paragraph blocks, full-width code/quote
 line decorations and per-frame syntax highlights, and `.pill_style(f)` / `.pill_image(f)` /
