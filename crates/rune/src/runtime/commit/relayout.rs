@@ -396,8 +396,8 @@ impl Measurement<'_> {
 }
 
 /// Whether every picture sizing a side from its pixels still has the ratio its Taffy style or
-/// measure key was built with, so a resize or virtual remount can reuse nodes without flattening.
-pub(in crate::runtime) fn pixel_aspects_unchanged(tree: &types::TreeState) -> bool {
+/// measure key was built with, so a viewport resize can relayout without flattening again.
+fn pixel_aspects_unchanged(tree: &types::TreeState) -> bool {
     if !tree.aspect_snap.is_empty() {
         return false;
     }
