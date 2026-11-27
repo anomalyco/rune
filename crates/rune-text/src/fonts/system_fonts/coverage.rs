@@ -430,6 +430,7 @@ impl TextSystem {
         }
         // The first system font a launch loads, for its trace (`marks`).
         rune_core::marks::mark("text.fallback.begin");
+        let _fallback = crate::profile::TextStageScope::enter(crate::profile::TextStage::SystemFallback);
         for (i, ch) in scripts {
             register_script_fallbacks(&mut self.font_cx.collection, &mut self.font_files, &fallback::SCRIPT_FONTS[i], ch, locale.as_deref());
             if self.mono_scripts.is_none() && matches!(fallback::SCRIPT_FONTS[i].script, b"Arab" | b"Hebr") {

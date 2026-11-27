@@ -475,7 +475,14 @@ impl Host {
         #[cfg(target_os = "linux")]
         self.cpu_idle();
         #[cfg(not(target_os = "windows"))]
-        { !crate::marks::counting() && self.app.text_idle_owed() && self.app.text_idle_turn() }
+        {
+            if !crate::marks::counting() && self.app.text_idle_owed() {
+                let _stages = self.observability.scope_stages(None);
+                self.app.text_idle_turn()
+            } else {
+                false
+            }
+        }
     }
 
     fn resumed_in_turn(&mut self, event_loop: &ActiveEventLoop) {
@@ -486,6 +493,7 @@ impl Host {
     fn user_event_in_turn(&mut self, event_loop: &ActiveEventLoop, event: WakeEvent) {
         #[cfg(feature = "frame-profile")]
         let logged = Some(crate::frame::live_log::now());
+        let _stages = self.observability.scope_stages(None);
         self.meter.waited();
         self.handle_user_event(event_loop, event);
         self.publish();
@@ -496,7 +504,9 @@ impl Host {
     fn window_event_in_turn(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
         #[cfg(feature = "frame-profile")]
         let logged = (!matches!(event, WindowEvent::RedrawRequested)).then(crate::frame::live_log::now);
-        if !matches!(event, WindowEvent::RedrawRequested) { self.meter.waited(); }
+        let is_redraw = matches!(event, WindowEvent::RedrawRequested);
+        let _stages = (!is_redraw).then(|| self.observability.scope_stages(None));
+        if !is_redraw { self.meter.waited(); }
         self.handle_window_event(event_loop, id, event);
         self.publish();
         #[cfg(feature = "frame-profile")]

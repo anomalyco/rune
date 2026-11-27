@@ -379,6 +379,7 @@ impl TextSystem {
         if slot_resolves(collection, &self.sans) && slot_resolves(collection, &self.mono) {
             return;
         }
+        let _fallback = crate::profile::TextStageScope::enter(crate::profile::TextStage::SystemFallback);
         #[cfg(windows)]
         // Windows' fallback for Latin; `asked` is otherwise never given ASCII.
         if self.fallbacks.asked.insert('A') {

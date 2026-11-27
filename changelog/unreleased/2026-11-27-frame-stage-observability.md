@@ -1,0 +1,1 @@
+- Add per-window input and frame-stage observability hooks (`App::on_frame_stage`, `App::on_window_key`, `App::on_window_focus`, and matching `WindowSpec` builders) with `FrameStage`, `FrameStageEvent`, `StageBoundary`, `WindowKeyEvent`, and `WindowFocusEvent` correlated to `FrameEncoded::seq` and `FramePresented::seq`.

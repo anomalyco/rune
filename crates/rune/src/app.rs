@@ -32,6 +32,8 @@ use std::sync::Arc;
 use crate::el::Tx;
 use crate::tooling::{AppSpec, Args};
 
+#[path = "app/observability.rs"]
+mod observability;
 #[path = "app/quit_request.rs"]
 mod quit_request;
 pub use quit_request::QuitResponse;
@@ -153,6 +155,7 @@ pub struct App<S: 'static> {
     pub(crate) on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
     pub(crate) on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     pub(crate) on_frame_drawn: Option<crate::frame::encoded::OnFrameDrawn<S>>,
+    pub(crate) observability: crate::frame::stage::WindowObservability,
     #[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
     pub(crate) ambient_period: Option<std::time::Duration>,
     /// `App::layout_seed`'s seed and keeper; only desktop windows use them.
@@ -238,6 +241,7 @@ impl<S: 'static> App<S> {
             on_frame_encoded: None,
             on_frame_presented: None,
             on_frame_drawn: None,
+            observability: crate::frame::stage::WindowObservability::default(),
             ambient_period: None,
             layout_seed: None,
             keep_layout: None,
@@ -1089,76 +1093,6 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn on_display_close(mut self, f: impl FnOnce() + 'static) -> Self {
         self.on_display_close = Some(Box::new(f));
-        self
-    }
-
-    /// Runs on the UI thread after each frame of the app's window, saying what it came to
-    /// ([`FrameOutcome`](crate::FrameOutcome)): `Drawn` once it was encoded, submitted and
-    /// presented, the first frame during creation and a hidden launcher's frames included;
-    /// `Unchanged` for a frame only a timer asked for that drew what was on screen; `Skipped`
-    /// for one a covered, minimised or occluded window, or a drawable that never came, kept
-    /// from drawing. For logging frame timing: pair [`FrameEncoded::at`](crate::FrameEncoded::at)
-    /// with `Tx::input_time` for input latency. It changes nothing about when or what the window
-    /// draws; without it, each frame checks an `Option`. A single-window headless run reports
-    /// every frame on its virtual clock as `Drawn`, with wall-clock instants and `refresh_hz` at
-    /// its `--fps`, so an app's own meter reads its build and encode costs there too. Overlays,
-    /// multi-window headless runs and the web never call it.
-    pub fn on_frame_encoded(mut self, f: impl FnMut(&crate::FrameEncoded) + 'static) -> Self {
-        self.on_frame_encoded = Some(Box::new(f));
-        self
-    }
-
-    /// Runs on the UI thread in submission order once a `Drawn` frame actually reaches the screen
-    /// (or is skipped by the system, reported as
-    /// [`FramePresented::presented_at`](crate::FramePresented::presented_at) returning `None`).
-    ///
-    /// [`FramePresented::seq`](crate::FramePresented::seq) matches
-    /// [`FrameEncoded::seq`](crate::FrameEncoded::seq) for the same `Drawn` frame, and
-    /// `on_frame_encoded` always runs before `on_frame_presented` for a given sequence number.
-    /// Pair them to measure real input-to-photon latency or detect missed vsyncs against
-    /// [`FrameEncoded::presents_at`](crate::FrameEncoded::presents_at).
-    ///
-    /// Only platforms with reliable actual presentation timestamps call it (currently macOS
-    /// Metal, via `MTLDrawable::addPresentedHandler`). Windows, Linux, the web, overlays, and
-    /// headless runs never call it, matching
-    /// [`FrameEncoded::presents_at`](crate::FrameEncoded::presents_at). Without it, no layer
-    /// hook is attached and each frame pays only an `Option` check; once in-flight drawables
-    /// finish presenting, the watch clears automatically so an idle window never wakes or draws.
-    ///
-    /// ```no_run
-    /// use rune::{App, AppSpec, el};
-    ///
-    /// let spec = AppSpec::new("Demo", (320.0, 240.0), || (), |_, _| el());
-    /// App::new(spec)
-    ///     .on_frame_presented(|p| {
-    ///         let _ = (p.seq(), p.window(), p.presented_at());
-    ///     })
-    ///     .run();
-    /// ```
-    pub fn on_frame_presented(mut self, f: impl FnMut(&crate::FramePresented) + 'static) -> Self {
-        self.on_frame_presented = Some(Box::new(f));
-        self
-    }
-
-    /// Runs on the UI thread after each `Drawn` frame of the app's window (desktop windows and
-    /// the web runner, and never on unchanged or skipped frames), with the runtime as that frame
-    /// presented it (`Runtime::elements`, `Runtime::state`), for an app that watches its own
-    /// motion or waits for presented frames. Pair it with [`last_input`](crate::last_input) to
-    /// tell motion the user caused from motion they didn't. Like `on_frame_encoded`, it changes
-    /// nothing about when or what the window draws.
-    ///
-    /// ```no_run
-    /// use rune::{App, AppSpec, el};
-    ///
-    /// let spec = AppSpec::new("Demo", (320.0, 240.0), || 0u32, |_, _| el());
-    /// App::new(spec)
-    ///     .on_frame_drawn(|rt| {
-    ///         let _count = rt.elements().len();
-    ///     })
-    ///     .run();
-    /// ```
-    pub fn on_frame_drawn(mut self, f: impl FnMut(&crate::Runtime<S>) + 'static) -> Self {
-        self.on_frame_drawn = Some(Box::new(f));
         self
     }
 

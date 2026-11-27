@@ -430,6 +430,7 @@ impl TextSystem {
     /// Builds a [`TextSystem`] without updating the process-wide measurement state, for
     /// [`measure::with_text`]'s thread-local measurer.
     pub(crate) fn new_local(fonts: &[&'static [u8]], families: (&str, &str)) -> Self {
+        let _warm = crate::profile::TextStageScope::enter(crate::profile::TextStage::Warm);
         // Windows' own word dictionaries for the scripts that need one (loaded when first asked).
         #[cfg(all(target_os = "windows", not(feature = "segmenter-dictionaries")))]
         crate::segmenter::install();
@@ -628,7 +629,10 @@ impl TextSystem {
     /// The installed `Family::SystemMono` families, loading them the first time.
     fn system_mono(&mut self) -> &[String] {
         let (collection, loaded) = (&mut self.font_cx.collection, &mut self.font_files);
-        self.system_mono.get_or_insert_with(|| load_system_mono(collection, loaded))
+        self.system_mono.get_or_insert_with(|| {
+            let _fallback = crate::profile::TextStageScope::enter(crate::profile::TextStage::SystemFallback);
+            load_system_mono(collection, loaded)
+        })
     }
 
     /// The RGBA image of a colour glyph quad (`GlyphQuad::color`, nonzero).

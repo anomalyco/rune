@@ -33,6 +33,7 @@ pub(super) struct StartedWebApp {
     pub(super) menus: crate::native_menu::MenuGuard,
     pub(super) shortcuts: crate::shortcuts::Guard,
     pub(super) fonts: &'static [&'static [u8]],
+    pub(super) observability: crate::frame::stage::HostObservability,
 }
 
 type StartFn = Box<dyn FnOnce(Vec<Vec<u8>>, (f32, f32), Env, Waker, Waker) -> StartedWebApp>;
@@ -255,8 +256,11 @@ impl<S: 'static> TypedWebApp<S> {
         let shared = app.shared.core.clone();
         let start: StartFn = Box::new(move |fonts, viewport, env, wake, live_wake| {
             app.spec.fonts = with_fonts(app.spec.fonts, fonts);
-            let (rt, shared, compositor, on_frame_drawn, spec_fonts) =
-                super::super::web_math::start_web_runtime(app, viewport, env, wake.clone(), live_wake);
+            let observability = crate::frame::stage::HostObservability::new(app.observability.take(), Some("main"));
+            let (rt, shared, compositor, on_frame_drawn, spec_fonts) = {
+                let _startup = observability.scope_stages(None);
+                super::super::web_math::start_web_runtime(app, viewport, env, wake.clone(), live_wake)
+            };
             let menus = crate::native_menu::MenuGuard::attach(&shared, false);
             let shortcuts = crate::shortcuts::Guard::attach(&shared, wake, false, false);
             StartedWebApp {
@@ -264,6 +268,7 @@ impl<S: 'static> TypedWebApp<S> {
                 menus,
                 shortcuts,
                 fonts: spec_fonts,
+                observability,
             }
         });
         Ok(PendingApp {

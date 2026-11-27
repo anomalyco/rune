@@ -55,6 +55,7 @@ impl<S: 'static> Runtime<S> {
 
 impl RuntimeCore {
     pub(super) fn prepare_text_with(&mut self, app: &dyn ViewDriver, size: (f32, f32)) -> usize {
+        let _warm = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::TextWarm);
         let before = self.text.layout_keys();
         let (mut nodes, mut spare_nodes, mut layout) = (Vec::new(), Vec::new(), LayoutEngine::new());
         let (mut node_index, mut path_ids, mut memo) = (NodeIndex::default(), HashMap::default(), crate::memo::MemoCache::default());

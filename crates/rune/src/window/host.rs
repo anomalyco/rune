@@ -79,6 +79,7 @@ pub(in crate::window) struct Host {
     pub(in crate::window) on_window: Option<crate::app::OnWindow>,
     pub(in crate::window) on_ready: Option<crate::app::OnWindow>,
     pub(in crate::window) frame_reports: crate::frame::encoded::FrameReports,
+    pub(in crate::window) observability: crate::frame::stage::HostObservability,
     #[cfg(target_os = "macos")]
     pub(in crate::window) frame_presented: crate::frame::presented::FramePresentReports,
     #[cfg(target_os = "macos")]
@@ -232,6 +233,7 @@ struct HostInit {
     on_window: Option<crate::app::OnWindow>,
     on_ready: Option<crate::app::OnWindow>,
     on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
+    observability: crate::frame::stage::HostObservability,
     #[cfg(target_os = "macos")]
     on_frame_presented: Option<crate::frame::presented::OnFramePresented>,
     #[cfg(target_os = "macos")]
@@ -283,6 +285,10 @@ impl Host {
             app.on_frame_encoded.take(),
             app.on_frame_drawn.take(),
         );
+        let observability = crate::frame::stage::HostObservability::new(
+            app.observability.take(),
+            Some(native_handle.key()),
+        );
         #[cfg(target_os = "macos")]
         let on_frame_presented = app.on_frame_presented.take();
         #[cfg(target_os = "macos")]
@@ -310,11 +316,15 @@ impl Host {
         let comp = app.compositor.take();
         let (layout_seed, keep_layout) = (app.layout_seed.take(), app.keep_layout.take());
         let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
-        let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
-        let size = args.size.unwrap_or(spec.size);
-        // The window reports the system appearance and scale when it opens.
-        let env = Env::new(args.theme.as_deref() != Some("light"), 1.0);
-        let mut rt = runtime_for(&spec, state, size, env, setup_waker(&shared.core));
+        let (spec, mut rt, shared, runtime) = {
+            let _startup_stages = observability.scope_stages(None);
+            let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
+            let size = args.size.unwrap_or(spec.size);
+            // The window reports the system appearance and scale when it opens.
+            let env = Env::new(args.theme.as_deref() != Some("light"), 1.0);
+            let rt = runtime_for(&spec, state, size, env, setup_waker(&shared.core));
+            (spec, rt, shared, runtime)
+        };
         if let Some(attach) = attach_playground { attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), true); }
         rt.configure(runtime);
         if let Some(seed) = layout_seed.clone() { rt.core_mut().offer_layout_seed(seed); }
@@ -344,6 +354,7 @@ impl Host {
             on_window,
             on_ready,
             on_frame_encoded,
+            observability,
             #[cfg(target_os = "macos")]
             on_frame_presented,
             #[cfg(target_os = "macos")]
@@ -398,6 +409,7 @@ impl Host {
             on_window,
             on_ready,
             on_frame_encoded,
+            observability,
             #[cfg(target_os = "macos")]
             on_frame_presented,
             #[cfg(target_os = "macos")]
@@ -438,7 +450,7 @@ impl Host {
         let track_presented = false;
         let frame_reports = crate::frame::encoded::FrameReports::with_presented_seq(
             on_frame_encoded,
-            track_presented,
+            track_presented || observability.wants_stages(),
             Some(native_handle.key()),
         );
         if fit_height {
@@ -518,6 +530,7 @@ impl Host {
             on_window,
             on_ready,
             frame_reports,
+            observability,
             #[cfg(target_os = "macos")]
             frame_presented,
             #[cfg(target_os = "macos")]

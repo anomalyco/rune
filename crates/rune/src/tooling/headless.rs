@@ -74,6 +74,7 @@ struct HeadlessConfig {
     min_size: Option<(f32, f32)>,
     on_ready: Option<crate::app::OnWindow>,
     on_frame_encoded: Option<crate::frame::encoded::OnFrameEncoded>,
+    observability: crate::frame::stage::HostObservability,
     shared_core: Arc<SharedCore>,
     shortcuts_core: Arc<crate::shortcuts::HubCore>,
     shortcuts: crate::shortcuts::Guard,
@@ -170,20 +171,25 @@ fn try_headless_configured<S: 'static>(mut app: crate::app::App<S>, args: Args, 
     );
     let on_ready = app.on_ready.take();
     let on_frame_encoded = app.on_frame_encoded.take();
+    let observability = crate::frame::stage::HostObservability::new(app.observability.take(), Some("main"));
     let (playground, attach_playground) = (app.playground.take(), app.attach_playground);
     crate::credentials::note_headless_runtime();
-    let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
-    let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
-    let menus = crate::native_menu::MenuGuard::attach(&shared, true);
-    let state_ms = launched.elapsed().as_secs_f64() * 1000.0;
-    let mut rt = runtime_for(&spec, state, prep.size, Env::new(prep.dark, prep.scale), Arc::new(|| {}));
+    let (spec, mut rt, shared, runtime, shortcuts, menus, state_ms) = {
+        let _startup = observability.scope_stages(None);
+        let (spec, state, shared, runtime) = app.into_parts(args.scene.as_deref());
+        let shortcuts = crate::shortcuts::Guard::attach(&shared, Arc::new(|| {}), true, false);
+        let menus = crate::native_menu::MenuGuard::attach(&shared, true);
+        let state_ms = launched.elapsed().as_secs_f64() * 1000.0;
+        let rt = runtime_for(&spec, state, prep.size, Env::new(prep.dark, prep.scale), Arc::new(|| {}));
+        (spec, rt, shared, runtime, shortcuts, menus, state_ms)
+    };
     if let Some(attach) = attach_playground {
         attach(&mut rt, playground, &spec, args.playground.clone(), args.variant.clone(), false);
     }
     rt.configure(runtime);
     let config = HeadlessConfig {
         launched, state_ms, args, transparent, chrome, titlebar, fit_height, app_options,
-        min_size: spec.min_size, on_ready, on_frame_encoded,
+        min_size: spec.min_size, on_ready, on_frame_encoded, observability,
         shared_core: shared.core.clone(), shortcuts_core: shared.shortcuts.core.clone(), shortcuts, menus,
     };
     let mut typed = TypedHeadlessApp { rt, shared, comp, on_close_request, on_quit_request, on_close, on_quit, on_reopen, on_open_url, on_open_files };
@@ -194,11 +200,15 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
     let HeadlessPrep { source, script, timeline, scale, size, dark, mut writer } = prep;
     let HeadlessConfig {
         launched, state_ms, args, transparent, chrome, titlebar, fit_height, app_options,
-        min_size, on_ready, on_frame_encoded, shared_core, shortcuts_core, shortcuts, mut menus,
+        min_size, on_ready, on_frame_encoded, observability, shared_core, shortcuts_core, shortcuts, mut menus,
     } = config;
     // A `--realtime` run stands in for a window, so it starts the app's live work as one does.
     let mut on_ready = on_ready.filter(|_| args.realtime);
-    let mut reports = crate::frame::encoded::FrameReports::new(on_frame_encoded, Some("main"));
+    let mut reports = crate::frame::encoded::FrameReports::with_presented_seq(
+        on_frame_encoded,
+        observability.wants_stages(),
+        Some("main"),
+    );
     app.rt_mut().headless_chrome(chrome, titlebar, app_options.borderless);
     app.rt_mut().transparent = transparent;
     app.rt_mut().host.set_fit_height(fit_height);
@@ -415,6 +425,8 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
         // Frame 0 has drawn: a window runs `on_ready` after its first frame.
         if k == 1 && let Some(mut ready) = on_ready.take() { ready(&crate::WindowHandle::new("main")); }
         let requested_place = take_requests(app, &mut menus);
+        let seq = state.reports.next_seq();
+        let _stage_scope = observability.scope_stages(seq);
         let mut host = HeadlessFrame {
             state: &mut state,
             app,
@@ -427,6 +439,7 @@ fn run_headless(prep: HeadlessPrep, config: HeadlessConfig, app: &mut dyn Headle
             want_pixels: false,
             first_pixels: false,
             encoded_stamp: None,
+            redraw_stage: crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Redraw),
             #[cfg(feature = "frame-profile")]
             fp_alloc0: alloc0,
             #[cfg(feature = "frame-profile")]

@@ -318,6 +318,18 @@ impl Renderer {
             self.uploads.lost.0 = staging.lost();
             self.resend_uploads(atlas);
         }
+        let atlas_work = crate::frame::stage::active()
+            && (atlas.dirty.is_some()
+                || atlas.pages.iter().any(|p| p.dirty.is_some())
+                || atlas.has_pending_fills()
+                || atlas.page_rows(0) > self.atlas.height()
+                || self.atlas_pages.len() != atlas.pages.len()
+                || atlas.outlines.has_records());
+        let mut glyph_atlas_stage = if atlas_work {
+            crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::GlyphAtlas)
+        } else {
+            crate::frame::stage::StageGuard::default()
+        };
         // The Windfoil shader, built the first time text draws from outlines (render/variant.rs),
         // fills atlas pages on the GPU, so the pages are made again as ones it can draw into.
         if atlas.outlines.has_records() && self.select(device, variant::Event::OutlinesWanted) {
@@ -364,6 +376,7 @@ impl Renderer {
         if atlas_changed { self.images_changed(); }
         self.upload_outlines(device, &staging, atlas);
         self.fill_atlas(device, queue, &staging, atlas);
+        glyph_atlas_stage.end();
         if self.instances.ensure(device, instances.len()) {
             self.uploads.forget_instances();
         }

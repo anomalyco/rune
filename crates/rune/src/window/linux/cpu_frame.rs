@@ -241,7 +241,17 @@ impl Host {
     /// A frame drawn by the CPU renderer: the runtime steps, the painter repaints the tiles that
     /// changed, and only those rectangles go to the display.
     pub(in crate::window) fn draw_cpu(&mut self, resizing: bool) {
-        let mut frame = CpuWindowFrame { host: self, resizing, owed: false, now: None, encoded: None, sent: false };
+        let seq = self.frame_reports.next_seq();
+        let _stage_scope = self.observability.scope_stages(seq);
+        let mut frame = CpuWindowFrame {
+            host: self,
+            resizing,
+            owed: false,
+            now: None,
+            encoded: None,
+            sent: false,
+            redraw_stage: crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Redraw),
+        };
         host_step::run(&mut frame);
     }
 }
@@ -255,6 +265,7 @@ struct CpuWindowFrame<'a> {
     encoded: Option<Instant>,
     /// This frame sent pixels to the display.
     sent: bool,
+    redraw_stage: crate::frame::stage::StageGuard,
 }
 
 impl FrameHost for CpuWindowFrame<'_> {
@@ -269,6 +280,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         let owed = cpu.frames.exposed(false);
         let covered = !owed && (!self.host.life.uncovered() || l.minimized());
         if covered {
+            self.redraw_stage.end();
             self.host.covered_frame();
             return Gate::Skip;
         }
@@ -296,6 +308,7 @@ impl FrameHost for CpuWindowFrame<'_> {
     fn acquire(&mut self) -> Acquire<()> { Acquire::Ready(()) }
 
     fn step_runtime(&mut self) -> StepInfo {
+        let _runtime = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Runtime);
         let now = crate::time::now();
         self.now = Some(now);
         let (animating, dt) = self.host.app.clock_advance(&mut self.host.clock, now, false);
@@ -323,7 +336,12 @@ impl FrameHost for CpuWindowFrame<'_> {
         }
         let gpu_failed = matches!(l.native.mode, SurfaceMode::Cpu { job: GpuJob::Failed, .. });
         let Some(cpu) = l.native.mode.cpu() else { return RenderPrep::Abort };
-        cpu.painter.fill_masks(&mut rt.text.atlas);
+        if rt.text.atlas.has_pending_fills() {
+            let _atlas = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::GlyphAtlas);
+            cpu.painter.fill_masks(&mut rt.text.atlas);
+        } else {
+            cpu.painter.fill_masks(&mut rt.text.atlas);
+        }
         crate::marks::mark_once(&FIRST_MASKS, "frame.first.masks");
         let scene = Scene::new(&rt.instances, &rt.text.atlas, &rt.images, (width, height), rt.clear_color())
             .srgb_blend(rt.srgb_blend())
@@ -346,7 +364,10 @@ impl FrameHost for CpuWindowFrame<'_> {
         };
         if !canvas.kept { painter.forget(); }
         let (kept, stride) = (canvas.kept, canvas.stride);
-        let painted = painter.paint(&scene, &mut Target::with_stride(&mut *canvas.bytes, width, height, stride));
+        let painted = {
+            let _encode = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Encode);
+            painter.paint(&scene, &mut Target::with_stride(&mut *canvas.bytes, width, height, stride))
+        };
         match painted {
             Ok(painted) => {
                 clear_corners(canvas.bytes, stride, (width, height), radius, &painted.rects);
@@ -386,6 +407,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         // wants the window's pixels: the request that asked for this frame may be why.
         let owed = self.owed || (rects.is_empty() && cpu.frames.exposed(true));
         let put = if owed { Put::All } else { Put::Rects(rects) };
+        let _present = crate::frame::stage::StageGuard::enter(crate::frame::stage::FrameStage::Present);
         // winit asks the compositor for the next frame's time with what is committed now.
         if owed || !rects.is_empty() { l.window.pre_present_notify(); }
         self.sent = cpu.frames.present(put);
@@ -410,6 +432,7 @@ impl FrameHost for CpuWindowFrame<'_> {
         let now = self.now.unwrap_or(submitted);
         self.host.meter.presented();
         crate::haptics::flush_live(self.host.app.rt_mut(), false);
+        self.redraw_stage.end();
         self.host.frame_reports.drawn(self.encoded, None, now, info.update_ms);
         self.host.app.inspect_frame();
         let Some(l) = self.host.win.as_mut() else { return };

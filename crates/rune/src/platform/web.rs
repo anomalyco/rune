@@ -228,6 +228,8 @@ struct Running {
     last_presented: Option<crate::window::Presented>,
     /// `App::on_ready`, which runs once that first frame is presented, as a window's does.
     on_ready: Option<crate::app::OnWindow>,
+    observability: crate::frame::stage::HostObservability,
+    frame_seq: u64,
     /// `App::font_url_later`'s fonts, fetched once that first frame is presented.
     late_fonts: Vec<String>,
     /// The app's fonts, which the page takes as its own once that first frame is presented
@@ -355,7 +357,7 @@ impl Browser {
         let wake: crate::Waker = Arc::new(move || { proxy.send_event(Wake::App).ok(); });
         let live_proxy = self.proxy.clone();
         let live_wake: crate::Waker = Arc::new(move || { live_proxy.send_event(Wake::Live).ok(); });
-        let app::StartedWebApp { mut app, menus, shortcuts, fonts: spec_fonts } = pending.start(
+        let app::StartedWebApp { mut app, menus, shortcuts, fonts: spec_fonts, observability } = pending.start(
             fonts,
             (size.width as f32 / scale, size.height as f32 / scale),
             Env::new(dark, scale),
@@ -437,8 +439,8 @@ impl Browser {
             input::Mode { embedded: self.embedded, fit_height, document });
         *self.running.borrow_mut() = Some(Running { draw, app, shared: self.shared.clone(), input, clipboard,
             clock: crate::frame::clock::FrameClock::new(now), suspended: false, full_redraw: true, embedded: self.embedded,
-            document, presented: false, last_presented: None, band: None, size: physical, on_ready, late_fonts, fonts: page_fonts,
-            cursor, _menus: menus, shortcuts });
+            document, presented: false, last_presented: None, band: None, size: physical, on_ready, observability, frame_seq: 0,
+            late_fonts, fonts: page_fonts, cursor, _menus: menus, shortcuts });
         crate::marks::mark("web.started");
         if let Some(reason) = terminal_init_error {
             self.enter_terminal_gpu_loss(reason);

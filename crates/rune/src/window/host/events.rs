@@ -349,6 +349,7 @@ impl Host {
                 if stale { return; }
                 #[cfg(all(feature = "native-file-dialog", target_os = "linux"))]
                 if let Some(w) = &self.win { crate::file_dialog::window_focus(&w.window, focused && self.life.shown()); }
+                self.observability.report_focus(focused);
                 // Deliver independently of drawable availability, including hide/occlusion.
                 self.app.window_focus(focused);
                 // The key window's App takes the menu bar, so its items act in this window.
@@ -615,6 +616,12 @@ impl Host {
             }
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 let pressed = event.state == ElementState::Pressed;
+                self.observability.report_key(
+                    pressed,
+                    event.repeat,
+                    app.rt().has_focus(),
+                    crate::input::time::current(),
+                );
                 if pressed { crate::marks::input_arrived(true); }
                 if pressed && let Some(text) = crate::platform::ime::take_direct_commit(&l.window) {
                     host_events::ime(app.rt_mut(), &l.window, &mut self.ime, winit::event::Ime::Commit(text));

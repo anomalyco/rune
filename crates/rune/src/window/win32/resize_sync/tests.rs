@@ -665,6 +665,7 @@ fn drag_frame_feeds_every_presented_frame_consumer_behind_seam() {
                 clock,
                 meter,
                 frame_reports,
+                observability: None,
                 rest,
                 damage,
                 trace,

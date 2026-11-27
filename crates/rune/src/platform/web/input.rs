@@ -466,6 +466,9 @@ impl Running {
             Some("contrast") => if !pe::apply_contrast(self.app.rt_mut(), event) { return false; },
             Some("focus") => {
                 let focus = self.app.apply_focus(event);
+                if focus.changed {
+                    self.observability.report_focus(event["focused"].as_bool().unwrap_or(false));
+                }
                 self.finish_focus(focus, window);
                 if !focus.changed { return false; }
             }
@@ -721,6 +724,12 @@ impl Running {
             WindowEvent::KeyboardInput { event, .. }
                 if self.input.document && event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Tab) => return false,
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
+                self.observability.report_key(
+                    event.state == ElementState::Pressed,
+                    event.repeat,
+                    self.app.rt().has_focus(),
+                    crate::input::time::current(),
+                );
                 // Browsers expose no synchronous layout key_without_modifiers, so `key_base`
                 // derives `Tx::key_base` from `KeyboardEvent.key` when unmodified (or for shifted
                 // letters) while physical US positions arrive in `physical_key`.

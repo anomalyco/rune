@@ -33,13 +33,22 @@ mod enabled {
         static CPU_RAW: Cell<[u64; PHASES]> = const { Cell::new([0; PHASES]) };
     }
 
-    pub(crate) struct Scope(Phase, Instant, Option<ThreadCpuMark>);
+    pub(crate) struct Scope(Phase, Instant, Option<ThreadCpuMark>, bool);
     impl Scope {
-        pub(crate) fn new(phase: Phase) -> Self { Self(phase, crate::time::now(), thread_cpu_mark()) }
+        pub(crate) fn new(phase: Phase) -> Self {
+            let staged = crate::frame::stage::active();
+            if staged {
+                crate::frame::stage::emit_phase(phase, crate::frame::stage::StageBoundary::Begin);
+            }
+            Self(phase, crate::time::now(), thread_cpu_mark(), staged)
+        }
     }
     impl Drop for Scope {
         fn drop(&mut self) {
             let wall_ms = self.1.elapsed().as_secs_f64() * 1000.0;
+            if self.3 {
+                crate::frame::stage::emit_phase(self.0, crate::frame::stage::StageBoundary::End);
+            }
             if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(self.0, wall_ms); }
             if crate::tooling::interaction::active() { crate::tooling::interaction::add(self.0, wall_ms); }
             WALL.with(|wall| {
@@ -245,25 +254,37 @@ pub fn thread_cpu_since(mark: ThreadCpuMark) -> Option<f64> {
 }
 
 /// Without `frame-profile`, a phase is timed only for `RUNE_COMMIT_BUDGET_MS`
-/// (`perf_warn::budget`) and in a frame interaction timing follows (`tooling::interaction`),
-/// and otherwise costs a cached flag and a thread-local one.
+/// (`perf_warn::budget`), in a frame interaction timing follows (`tooling::interaction`), or
+/// when an `App::on_frame_stage` hook is active; otherwise it costs cached/TLS flag checks.
 #[cfg(not(feature = "frame-profile"))]
-pub(crate) struct Scope(Option<(Phase, crate::time::Instant)>);
+pub(crate) struct Scope(Option<(Phase, crate::time::Instant)>, Option<Phase>);
 #[cfg(not(feature = "frame-profile"))]
 impl Scope {
     #[inline(always)]
     pub(crate) fn new(phase: Phase) -> Self {
-        Self((crate::tooling::perf_warn::budget::on() || crate::tooling::interaction::active()).then(|| (phase, crate::time::now())))
+        let timed = (crate::tooling::perf_warn::budget::on() || crate::tooling::interaction::active())
+            .then(|| (phase, crate::time::now()));
+        let staged = if crate::frame::stage::active() {
+            crate::frame::stage::emit_phase(phase, crate::frame::stage::StageBoundary::Begin);
+            Some(phase)
+        } else {
+            None
+        };
+        Self(timed, staged)
     }
 }
 #[cfg(not(feature = "frame-profile"))]
 impl Drop for Scope {
     #[inline(always)]
     fn drop(&mut self) {
-        let Some((phase, start)) = self.0 else { return };
-        let ms = start.elapsed().as_secs_f64() * 1000.0;
-        if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(phase, ms); }
-        if crate::tooling::interaction::active() { crate::tooling::interaction::add(phase, ms); }
+        if let Some((phase, start)) = self.0 {
+            let ms = start.elapsed().as_secs_f64() * 1000.0;
+            if crate::tooling::perf_warn::budget::on() { crate::tooling::perf_warn::budget::add(phase, ms); }
+            if crate::tooling::interaction::active() { crate::tooling::interaction::add(phase, ms); }
+        }
+        if let Some(phase) = self.1 {
+            crate::frame::stage::emit_phase(phase, crate::frame::stage::StageBoundary::End);
+        }
     }
 }
 
@@ -273,7 +294,10 @@ thread_local! {
 
 fn enter_text_phase() -> crate::text::profile::Token {
     #[cfg(not(feature = "frame-profile"))]
-    if !crate::tooling::perf_warn::budget::on() && !crate::tooling::interaction::active() {
+    if !crate::tooling::perf_warn::budget::on()
+        && !crate::tooling::interaction::active()
+        && !crate::frame::stage::active()
+    {
         return 0;
     }
     TEXT_SCOPES.with_borrow_mut(|scopes| scopes.push(Scope::new(Phase::Text)));
@@ -286,11 +310,46 @@ fn exit_text_phase(_token: crate::text::profile::Token) {
     });
 }
 
-/// Registers this crate's `Phase::Text` timing hooks with `rune-text`, once per process.
+fn enter_text_stage(stage: crate::text::profile::TextStage) -> crate::text::profile::Token {
+    use crate::frame::stage::{FrameStage, StageBoundary};
+    use crate::text::profile::TextStage;
+    match stage {
+        TextStage::Shape => enter_text_phase(),
+        TextStage::GlyphAtlas => enter_stage_boundary(FrameStage::GlyphAtlas, StageBoundary::Begin),
+        TextStage::Warm => enter_stage_boundary(FrameStage::TextWarm, StageBoundary::Begin),
+        TextStage::SystemFallback => enter_stage_boundary(FrameStage::SystemFontFallback, StageBoundary::Begin),
+    }
+}
+
+fn exit_text_stage(stage: crate::text::profile::TextStage, token: crate::text::profile::Token) {
+    use crate::frame::stage::{FrameStage, StageBoundary};
+    use crate::text::profile::TextStage;
+    match stage {
+        TextStage::Shape => exit_text_phase(token),
+        TextStage::GlyphAtlas => crate::frame::stage::emit(FrameStage::GlyphAtlas, StageBoundary::End),
+        TextStage::Warm => crate::frame::stage::emit(FrameStage::TextWarm, StageBoundary::End),
+        TextStage::SystemFallback => crate::frame::stage::emit(FrameStage::SystemFontFallback, StageBoundary::End),
+    }
+}
+
+#[inline(always)]
+fn enter_stage_boundary(
+    stage: crate::frame::stage::FrameStage,
+    boundary: crate::frame::stage::StageBoundary,
+) -> crate::text::profile::Token {
+    if !crate::frame::stage::active() {
+        return 0;
+    }
+    crate::frame::stage::emit(stage, boundary);
+    1
+}
+
+/// Registers this crate's text timing and stage hooks with `rune-text`, once per process.
 pub(crate) fn install_text_hook() {
     static INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !INSTALLED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         crate::text::profile::set_text_phase_hooks(enter_text_phase, exit_text_phase);
+        crate::text::profile::set_text_stage_hooks(enter_text_stage, exit_text_stage);
     }
 }
 
