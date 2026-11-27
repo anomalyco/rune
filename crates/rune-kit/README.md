@@ -261,8 +261,12 @@ same commit (see `rune-overlays--tx-callbacks`). `Select::step_closed(true)` opt
 popup, clamping at the ends while `Alt+Down`, Space and clicking still open it (see
 `rune-select--step-closed`, and `rune-focus--keyboard` for `El::press_on_return()` and
 entering a `focus_group` from a focused container). `Kit::metrics` also covers overlays (`DialogMetrics`, `PopupRowMetrics`, `SelectMetrics`,
-`PopoverMetrics`, and `MenuMetrics`), with `::kit(&k)` constructors whose radii follow
-`k.radius.{sm,md}` automatically (see `rune-overlays--metrics` in the gallery). `Menu::padding`,
+`PopoverMetrics`, `MenuMetrics`, and `PopupBackdrop`), with `::kit(&k)` constructors whose radii follow
+`k.radius.{sm,md}` automatically (see `rune-overlays--metrics` in the gallery). Set
+`k.metrics.popup_backdrop = Some(PopupBackdrop::frosted(20.0, 0.78))` (off by default) to apply
+in-window `El::backdrop_blur` and translucent tinting across `Menu` (and open submenus),
+`Select`, `PopupList`, `Popover`, `Combobox`, `HoverCard`, and `popover::raised`, or override
+one surface with `.backdrop_blur(sigma)` and `.surface_fill(color)`. `Menu::padding`,
 `Menu::separator_spacing(above, below)`, and `Menu::inner_border` override a menu's row padding,
 separator spacing, and inner border per instance (propagating to open submenus), and
 `Menu::separator_keyed` assigns a separator a stable key without changing `MenuEntry`. `Menu::label` names the open `role="menu"`

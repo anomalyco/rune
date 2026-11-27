@@ -6,7 +6,7 @@
 //! close it, and focus goes back to the trigger, without a ring when the pointer opened it, as
 //! Desktop's menu machine has it (`ui/src/navigation/menu/machine.ts`).
 
-use rune::{El, Icon, TextStyle, Tx, col, el, icon, row, text};
+use rune::{Color, El, Icon, TextStyle, Tx, col, el, icon, row, text};
 
 use super::overlay::{Modal, Placement, content_key, dismissal, dismissal_tx, push_anchored_modal, scrim_key, trigger_key};
 use super::popover::fit_scroll_bar;
@@ -63,6 +63,8 @@ pub struct Select {
     appearance: SelectAppearance,
     highlighted: Option<String>,
     placement: Placement,
+    backdrop_blur: Option<f32>,
+    surface_fill: Option<Color>,
     choose: Option<Choose>,
     step_key: Option<StepClosed>,
     toggle: Option<Box<dyn FnOnce(El) -> El>>,
@@ -88,6 +90,8 @@ impl Select {
             appearance: SelectAppearance::Inline,
             highlighted: None,
             placement: Placement::BottomEnd,
+            backdrop_blur: None,
+            surface_fill: None,
             choose: None,
             step_key: None,
             toggle: None,
@@ -197,6 +201,19 @@ impl Select {
     }
     pub fn placement(mut self, p: Placement) -> Self {
         self.placement = p;
+        self
+    }
+    /// Blurs what the window draws behind the open listbox surface ([`El::backdrop_blur`](rune::El::backdrop_blur)),
+    /// overriding [`Kit::metrics`](crate::Kit::metrics)'s `popup_backdrop`. `0.0` turns blur off;
+    /// negative or non-finite values clamp to `0.0`.
+    pub fn backdrop_blur(mut self, sigma: f32) -> Self {
+        self.backdrop_blur = Some(crate::tokens::metrics::non_neg(sigma));
+        self
+    }
+    /// Replaces the open listbox's surface fill colour (for example a translucent tint over
+    /// [`Self::backdrop_blur`]), overriding the theme fill and `Kit::metrics.popup_backdrop`.
+    pub fn surface_fill(mut self, fill: Color) -> Self {
+        self.surface_fill = Some(fill);
         self
     }
     pub fn state(mut self, s: State) -> Self {
@@ -363,11 +380,14 @@ impl Select {
             Some(w) => listbox.w(w),
             None => listbox.min_w(160.0).max_w(368.0),
         };
+        let surface = k.apply_popup_surface(
+            listbox.radius(k.radius_md()),
+            c.layer_01,
+            self.backdrop_blur,
+            self.surface_fill,
+        );
         let content = k.elevate(
-            listbox
-                .radius(k.radius_md())
-                .fill(c.layer_01)
-                .child(fit_scroll_bar(k, &self.key, list)),
+            surface.child(fit_scroll_bar(k, &self.key, list)),
             &k.elevation.floating,
         );
         push_anchored_modal(k, layer, self.dismiss, content, &anchor_key, self.placement, 2.0);

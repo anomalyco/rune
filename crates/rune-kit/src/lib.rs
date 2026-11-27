@@ -186,6 +186,7 @@ pub use tokens::metrics::KeybindMetrics;
 pub use tokens::metrics::MenuMetrics;
 pub use tokens::metrics::Metrics;
 pub use tokens::metrics::PopoverMetrics;
+pub use tokens::metrics::PopupBackdrop;
 pub use tokens::metrics::PopupRowMetrics;
 pub use tokens::metrics::ProgressMetrics;
 pub use tokens::metrics::SegmentedMetrics;

@@ -34,6 +34,7 @@ mod number_field;
 mod overlay_metrics;
 mod palette_seed_compat;
 mod popover_focus;
+mod popup_backdrop;
 mod popup_list;
 mod popup_list_motion;
 mod radio_look;

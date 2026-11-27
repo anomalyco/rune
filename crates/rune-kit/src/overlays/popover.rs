@@ -3,7 +3,7 @@
 //! inside it ([`fit_scroll`]). [`crate::Popover`], menus and selects are built from the same
 //! four.
 
-use rune::{Align, El, ScrollSpec, Side, Transition, col};
+use rune::{Align, Color, El, ScrollSpec, Side, Transition, col};
 use rune_motion::{Effect, Spring, SpringPair, tokens};
 
 use crate::{Kit, Placement};
@@ -46,8 +46,8 @@ pub(crate) fn fit(content: El, anchor: &str, side: Side, align: Align, gap: f32)
     content.anchored_fit(anchor, side, align, gap)
 }
 
-/// The popover surface style: raised fill, half-strength border, `radius` corners and the
-/// medium shadow.
+/// The popover surface style: raised fill (plus any [`Kit::metrics`](crate::Kit::metrics)
+/// `popup_backdrop` blur and tint), half-strength border, `radius` corners and the medium shadow.
 ///
 /// ```
 /// # use rune::{col, el};
@@ -57,7 +57,18 @@ pub(crate) fn fit(content: El, anchor: &str, side: Side, align: Align, gap: f32)
 /// let surface = popover::raised(&kit, col().padding(8.0).child(body), kit.radius.md);
 /// ```
 pub fn raised(k: &Kit, el: El, radius: f32) -> El {
-    k.elevate(el.radius(radius).fill(k.c.surface_raised).border(1.0, k.alpha(k.c.std_border, 0.5)), &k.elevation.md)
+    raised_with(k, el, radius, None, None)
+}
+
+pub(crate) fn raised_with(
+    k: &Kit,
+    el: El,
+    radius: f32,
+    backdrop_blur: Option<f32>,
+    surface_fill: Option<Color>,
+) -> El {
+    let e = k.apply_popup_surface(el.radius(radius), k.c.surface_raised, backdrop_blur, surface_fill);
+    k.elevate(e.border(1.0, k.alpha(k.c.std_border, 0.5)), &k.elevation.md)
 }
 
 /// A list's rows in a scroll viewport that shrinks with the fitted surface from [`anchored`],

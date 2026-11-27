@@ -3,12 +3,26 @@
 //! `None` by default, and a `None` entry keeps the control's built-in look, which follows the
 //! kit's other tokens (`radius`, `ty`, `c`) as they are when the control is built.
 
-use rune::{Color, TextStyle};
+use rune::{Color, El, TextStyle};
 
 use crate::{ControlSize, Kit};
 
 pub(crate) fn non_neg(v: f32) -> f32 {
     if v.is_finite() && v > 0.0 { v } else { 0.0 }
+}
+
+pub(crate) fn unit_alpha(v: f32) -> f32 {
+    if v.is_nan() {
+        1.0
+    } else if !v.is_finite() {
+        if v.is_sign_positive() { 1.0 } else { 0.0 }
+    } else if v <= 0.0 {
+        0.0
+    } else if v >= 1.0 {
+        1.0
+    } else {
+        v
+    }
 }
 
 /// One value per [`ControlSize`].
@@ -497,6 +511,62 @@ impl MenuMetrics {
     }
 }
 
+/// Backdrop blur and surface tint shared by transient overlay surfaces: [`Menu`](crate::Menu)
+/// (and its open submenus), [`Select`](crate::Select)'s listbox, [`PopupList`](crate::PopupList),
+/// [`Popover`](crate::Popover), [`Combobox`](crate::Combobox), [`HoverCard`](crate::HoverCard),
+/// and [`popover::raised`](crate::popover::raised) surfaces mounted with
+/// [`popover::anchored`](crate::popover::anchored).
+///
+/// Off by default (`Kit::metrics.popup_backdrop == None`), so every overlay keeps its opaque
+/// surface fill. Set [`Self::sigma`] to blur what the window draws behind the surface
+/// ([`El::backdrop_blur`](rune::El::backdrop_blur)), and lower [`Self::fill_alpha`] (or set
+/// [`Self::fill`]) so the surface's fill tints the blur rather than covering it opaquely.
+///
+/// Under system Reduce Transparency
+/// ([`Cx::system_reduced_transparency`](rune::Cx::system_reduced_transparency)), Rune
+/// automatically skips the blur pass; leave `popup_backdrop` unset while reduced transparency
+/// is active if the surface fill should also stay opaque.
+///
+/// ```
+/// # use rune_kit::{Kit, PopupBackdrop};
+/// let mut k = Kit::neutral(true);
+/// k.metrics.popup_backdrop = Some(PopupBackdrop::frosted(20.0, 0.78));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PopupBackdrop {
+    /// Gaussian backdrop blur standard deviation in points ([`El::backdrop_blur`](rune::El::backdrop_blur)).
+    /// `0.0` turns blur off; negative or non-finite values clamp to `0.0`.
+    pub sigma: f32,
+    /// Opacity multiplier applied to the surface's theme fill (`c.layer_01` or
+    /// `c.surface_raised`) when [`Self::fill`] is `None`. Clamped to `0.0..=1.0`; `1.0` keeps
+    /// the theme fill unchanged.
+    pub fill_alpha: f32,
+    /// Optional explicit tint colour replacing the surface's default theme fill. When `Some`,
+    /// used as-is (ignoring [`Self::fill_alpha`]).
+    pub fill: Option<Color>,
+}
+
+impl PopupBackdrop {
+    /// No backdrop blur and unchanged theme fill (the built-in default).
+    pub const NONE: PopupBackdrop = PopupBackdrop { sigma: 0.0, fill_alpha: 1.0, fill: None };
+
+    /// The built-in default: no backdrop blur and unchanged theme fill.
+    pub fn kit(_k: &Kit) -> PopupBackdrop {
+        PopupBackdrop::NONE
+    }
+
+    /// Frosted surface: blur behind the overlay at `sigma` points and scale the theme's
+    /// surface fill opacity by `fill_alpha` (clamped to `0.0..=1.0`).
+    pub fn frosted(sigma: f32, fill_alpha: f32) -> PopupBackdrop {
+        PopupBackdrop { sigma: non_neg(sigma), fill_alpha: unit_alpha(fill_alpha), fill: None }
+    }
+
+    /// Frosted surface with an explicit tint `fill` over a `sigma`-point backdrop blur.
+    pub fn tinted(sigma: f32, fill: Color) -> PopupBackdrop {
+        PopupBackdrop { sigma: non_neg(sigma), fill_alpha: 1.0, fill: Some(fill) }
+    }
+}
+
 /// Overrides for metrics some controls otherwise fix in code. `Metrics::default()` overrides
 /// nothing.
 ///
@@ -598,6 +668,11 @@ pub struct Metrics {
     pub popover: Option<PopoverMetrics>,
     /// [`Menu`](crate::Menu) padding, separator spacing, and standard inner border; else [`MenuMetrics::kit`].
     pub menu: Option<MenuMetrics>,
+    /// Backdrop blur and surface tint shared by transient overlay surfaces ([`Menu`](crate::Menu),
+    /// [`Select`](crate::Select), [`PopupList`](crate::PopupList), [`Popover`](crate::Popover),
+    /// [`Combobox`](crate::Combobox), [`HoverCard`](crate::HoverCard), and
+    /// [`popover::raised`](crate::popover::raised)); else [`PopupBackdrop::NONE`].
+    pub popup_backdrop: Option<PopupBackdrop>,
 }
 
 impl Kit {
@@ -705,5 +780,36 @@ impl Kit {
             standard_separator_below: non_neg(m.standard_separator_below),
             standard_inner_border: non_neg(m.standard_inner_border),
         }
+    }
+    pub(crate) fn popup_backdrop(&self) -> PopupBackdrop {
+        let b = self.metrics.popup_backdrop.unwrap_or(PopupBackdrop::NONE);
+        PopupBackdrop {
+            sigma: non_neg(b.sigma),
+            fill_alpha: unit_alpha(b.fill_alpha),
+            fill: b.fill,
+        }
+    }
+    /// Applies the resolved backdrop blur and surface fill to a transient overlay surface
+    /// element, combining [`Metrics::popup_backdrop`] with any per-instance overrides.
+    pub(crate) fn apply_popup_surface(
+        &self,
+        mut e: El,
+        base_fill: Color,
+        override_sigma: Option<f32>,
+        override_fill: Option<Color>,
+    ) -> El {
+        let b = self.popup_backdrop();
+        let sigma = override_sigma.map(non_neg).unwrap_or(b.sigma);
+        let fill = override_fill.or(b.fill).unwrap_or_else(|| {
+            if b.fill_alpha >= 1.0 {
+                base_fill
+            } else {
+                self.alpha(base_fill, base_fill.a * b.fill_alpha)
+            }
+        });
+        if sigma > 0.0 {
+            e = e.backdrop_blur(sigma);
+        }
+        e.fill(fill)
     }
 }
