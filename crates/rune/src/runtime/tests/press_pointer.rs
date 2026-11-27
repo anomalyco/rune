@@ -524,3 +524,199 @@ fn hover_tracks_bounds_respects_clip_bounds_and_memo_reuse() {
     rt.pointer_up(20.0, 20.0);
     rt.frame(0.0);
 }
+
+#[test]
+fn pointer_event_size_reports_layout_dimensions_on_first_move_and_after_resize() {
+    let def = PointerEvent::default();
+    assert_eq!((def.w, def.h), (0.0, 0.0));
+
+    #[derive(Default)]
+    struct State {
+        moves: Vec<PointerEvent>,
+        any_moves: std::rc::Rc<std::cell::RefCell<Vec<PointerEvent>>>,
+    }
+    fn view(s: &State, _: &mut Cx<State>) -> El {
+        let sink = s.any_moves.clone();
+        col().w_full().h_full().padding(10.0)
+            .child(
+                el().key("screen").w_full().grow(1.0)
+                    .on_pointer_move_local(|s: &mut State, p, _| s.moves.push(p))
+                    .child(
+                        el().key("overlay-strip").w_full().h(40.0)
+                            .on_pointer_move_any(move |p, _| sink.borrow_mut().push(p)),
+                    ),
+            )
+    }
+
+    // Window 220x120 with 10 pt padding => screen is 200x100 at (10, 10), strip is 200x40 at (10, 10).
+    let mut rt = Runtime::new(State::default(), view, (220.0, 120.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    rt.pointer_move(60.0, 35.0);
+    rt.frame(0.0);
+    let p = *rt.state.moves.last().expect("first move delivered");
+    assert_eq!((p.x, p.y, p.w, p.h), (50.0, 25.0, 200.0, 100.0));
+    assert!(((p.x / p.w) - 0.25).abs() < 1e-5 && ((p.y / p.h) - 0.25).abs() < 1e-5);
+    let ap = *rt.state.any_moves.borrow().last().expect("on_pointer_move_any delivered");
+    assert_eq!((ap.x, ap.y, ap.w, ap.h), (50.0, 25.0, 200.0, 40.0));
+
+    // Resize window to 420x220 => screen immediately becomes 400x200 with no on_layout handler.
+    rt.set_viewport((420.0, 220.0), 1.0);
+    rt.frame(0.0);
+    rt.pointer_move(210.0, 160.0);
+    rt.frame(0.0);
+    let p2 = *rt.state.moves.last().expect("post-resize move delivered");
+    assert_eq!((p2.x, p2.y, p2.w, p2.h), (200.0, 150.0, 400.0, 200.0));
+    assert!(((p2.x / p2.w) - 0.5).abs() < 1e-5 && ((p2.y / p2.h) - 0.75).abs() < 1e-5);
+}
+
+#[test]
+fn pointer_event_size_stays_in_local_points_under_scale_rotate_scroll_zoom_and_overlay() {
+    struct State {
+        last: Option<PointerEvent>,
+        drag_size: Option<(f32, f32)>,
+        live_zoom: crate::Live<f32>,
+    }
+    fn view(s: &State, cx: &mut Cx<State>) -> El {
+        cx.zoom(1.5);
+        el().size(400.0, 300.0)
+            // Scaled box: layout 80x40, scaled 2x about top-left => drawn [20, 20, 160, 80].
+            .child(
+                el().key("scaled").absolute(20.0, 20.0).size(80.0, 40.0)
+                    .scale(2.0).origin(0.0, 0.0)
+                    .on_pointer_move_local(|s: &mut State, p, _| s.last = Some(p))
+                    .on_drag(|s: &mut State, d, _| s.drag_size = Some((d.w, d.h))),
+            )
+            // Live-scaled box: layout 100x50, live_scale 0.5 about top-left => drawn [200, 20, 50, 25].
+            .child(
+                el().key("live").absolute(200.0, 20.0).size(100.0, 50.0)
+                    .live_scale(&s.live_zoom).origin(0.0, 0.0)
+                    .on_pointer_move_local(|s: &mut State, p, _| s.last = Some(p)),
+            )
+            // Rotated box: layout 100x20 at (100, 140), rotated 90 deg CW about center (150, 150).
+            .child(
+                el().key("turned").absolute(100.0, 140.0).size(100.0, 20.0)
+                    .rotate(std::f32::consts::FRAC_PI_2)
+                    .on_pointer_move_local(|s: &mut State, p, _| s.last = Some(p)),
+            )
+            // Scrolled row inside a viewport at (260, 120): row is 120x40 below an 80 pt spacer.
+            .child(
+                col().key("sc").absolute(260.0, 120.0).size(120.0, 80.0)
+                    .scroll(crate::ScrollSpec::default())
+                    .child(el().size(120.0, 80.0))
+                    .child(
+                        el().key("scrolled-row").size(120.0, 40.0)
+                            .on_pointer_move_local(|s: &mut State, p, _| s.last = Some(p)),
+                    )
+                    .child(el().size(120.0, 120.0)),
+            )
+    }
+
+    for overlay in [false, true] {
+        let state = State { last: None, drag_size: None, live_zoom: crate::Live::new(0.5) };
+        let mut rt = Runtime::new(state, view, (600.0, 450.0), Env::new(true, 2.0));
+        rt.host.native_overlay = overlay;
+        rt.frame(0.0);
+        rt.update(|_, tx| tx.scroll_to_instant("sc", 0.0, 60.0));
+        rt.frame(0.0);
+
+        // Scaled 2x box: window (100, 60) is the exact midpoint (local 40, 20 out of 80x40).
+        rt.pointer_move(100.0, 60.0);
+        rt.pointer_down(100.0, 60.0);
+        rt.pointer_up(100.0, 60.0);
+        rt.frame(0.0);
+        let ps = rt.state.last.expect("scaled move");
+        assert!((ps.w - 80.0).abs() < 1e-3 && (ps.h - 40.0).abs() < 1e-3, "overlay={overlay}: {ps:?}");
+        assert!(((ps.x / ps.w) - 0.5).abs() < 1e-3 && ((ps.y / ps.h) - 0.5).abs() < 1e-3, "overlay={overlay}: {ps:?}");
+        assert_eq!(rt.state.drag_size, Some((ps.w, ps.h)), "PointerEvent w/h must match Drag w/h");
+
+        // Live-scaled 0.5x box: window (212.5, 32.5) is local (25, 25) out of 100x50.
+        rt.pointer_move(212.5, 32.5);
+        rt.frame(0.0);
+        let pl = rt.state.last.expect("live_scale move");
+        assert!((pl.w - 100.0).abs() < 1e-3 && (pl.h - 50.0).abs() < 1e-3, "overlay={overlay}: {pl:?}");
+        assert!(((pl.x / pl.w) - 0.25).abs() < 1e-3 && ((pl.y / pl.h) - 0.5).abs() < 1e-3, "overlay={overlay}: {pl:?}");
+
+        // Rotated 90 deg CW box (100x20 centered at 150, 150): window (150, 175) is local (75, 10) out of 100x20.
+        rt.pointer_move(150.0, 175.0);
+        rt.frame(0.0);
+        let pt = rt.state.last.expect("rotated move");
+        assert!((pt.w - 100.0).abs() < 1e-3 && (pt.h - 20.0).abs() < 1e-3, "overlay={overlay}: {pt:?}");
+        assert!(((pt.x / pt.w) - 0.75).abs() < 1e-2 && ((pt.y / pt.h) - 0.5).abs() < 1e-2, "overlay={overlay}: {pt:?}");
+
+        // Scrolled row (120x40, drawn at y = 120 + 80 - 60 = 140): window (290, 150) is local (30, 10).
+        rt.pointer_move(290.0, 150.0);
+        rt.frame(0.0);
+        let psc = rt.state.last.expect("scrolled move");
+        assert!((psc.w - 120.0).abs() < 1e-3 && (psc.h - 40.0).abs() < 1e-3, "overlay={overlay}: {psc:?}");
+        assert!(((psc.x / psc.w) - 0.25).abs() < 1e-3 && ((psc.y / psc.h) - 0.25).abs() < 1e-3, "overlay={overlay}: {psc:?}");
+    }
+}
+
+#[test]
+fn pointer_event_size_populates_across_secondary_any_press_press_point_touch_and_drop() {
+    #[derive(Default)]
+    struct State {
+        secondary: Option<PointerEvent>,
+        any_press: Option<PointerEvent>,
+        press: Vec<PointerEvent>,
+        drop_move: Option<PointerEvent>,
+        drop_point: Option<PointerEvent>,
+    }
+    fn view(_: &State, _: &mut Cx<State>) -> El {
+        el().size(300.0, 200.0)
+            .child(
+                el().key("card").absolute(20.0, 30.0).size(120.0, 60.0)
+                    .on_secondary_press_local(|s: &mut State, p, _| s.secondary = Some(p))
+                    .on_any_press(|s: &mut State, _, p, _| s.any_press = Some(p))
+                    .on_press_tx(|s: &mut State, tx| {
+                        if let Some(p) = tx.press_point() { s.press.push(p); }
+                    })
+                    .on_drop_move(|s: &mut State, p, _| s.drop_move = Some(p))
+                    .on_drop_files(|s: &mut State, _, tx| s.drop_point = tx.drop_point()),
+            )
+    }
+
+    let mut rt = Runtime::new(State::default(), view, (300.0, 200.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+
+    // Mouse click -> press_point and on_any_press both carry 120x60.
+    rt.pointer_down(50.0, 45.0);
+    rt.pointer_up(50.0, 45.0);
+    rt.frame(0.0);
+    let any = rt.state.any_press.expect("on_any_press fired");
+    assert_eq!((any.x, any.y, any.w, any.h), (30.0, 15.0, 120.0, 60.0));
+    let click = rt.state.press[0];
+    assert_eq!((click.x, click.y, click.w, click.h), (30.0, 15.0, 120.0, 60.0));
+
+    // Outside press -> on_any_press reports x > w so caller can dismiss without storing size.
+    rt.pointer_down(200.0, 45.0);
+    rt.pointer_up(200.0, 45.0);
+    rt.frame(0.0);
+    let out = rt.state.any_press.expect("outside on_any_press fired");
+    assert!(out.x > out.w && (out.w, out.h) == (120.0, 60.0), "{out:?}");
+
+    // Touch tap -> press_point carries 120x60.
+    rt.touch(1, crate::TouchPhase::Started, 80.0, 60.0, 0.0);
+    rt.touch(1, crate::TouchPhase::Ended, 80.0, 60.0, 0.04);
+    rt.frame(0.0);
+    let tap = rt.state.press[1];
+    assert_eq!((tap.x, tap.y, tap.w, tap.h), (60.0, 30.0, 120.0, 60.0));
+
+    // Secondary click -> on_secondary_press_local carries 120x60.
+    rt.secondary_down(110.0, 75.0);
+    rt.secondary_up(110.0, 75.0);
+    rt.frame(0.0);
+    let sec = rt.state.secondary.expect("secondary press fired");
+    assert_eq!((sec.x, sec.y, sec.w, sec.h), (90.0, 45.0, 120.0, 60.0));
+
+    // File drop move and drop -> on_drop_move and Tx::drop_point carry 120x60.
+    let files = vec![std::path::PathBuf::from("photo.png")];
+    rt.drag_files(files.clone(), Some((80.0, 60.0)));
+    rt.frame(0.0);
+    let dm = rt.state.drop_move.expect("on_drop_move fired");
+    assert_eq!((dm.x, dm.y, dm.w, dm.h), (60.0, 30.0, 120.0, 60.0));
+    rt.drop_files(files, Some((80.0, 60.0)));
+    rt.frame(0.0);
+    let dp = rt.state.drop_point.expect("drop_point populated");
+    assert_eq!((dp.x, dp.y, dp.w, dp.h), (60.0, 30.0, 120.0, 60.0));
+}

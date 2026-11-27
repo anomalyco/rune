@@ -768,7 +768,7 @@ top-left, which is what popups and context menus anchor to.
 | `on_wheel`, `on_wheel_any` | `WheelEvent::x`, `y` (`dx`, `dy` are the scroll in points) | local |
 | `on_magnify`, `on_magnify_any`, `on_rotate` | `MagnifyEvent::x`, `y`, `RotateEvent::x`, `y` | local |
 | `on_smart_magnify` | `x`, `y` | local |
-| `on_pointer_move_local`, `on_secondary_press_local`, `on_any_press` | `PointerEvent::x`, `y` | local |
+| `on_pointer_move_local`, `on_secondary_press_local`, `on_any_press` | `PointerEvent::x`, `y`, `w`, `h` | local |
 | | `PointerEvent::window_x`, `window_y`, `window()` | window |
 | | `PointerEvent::pressing` (whether any mouse button is held down) | window-wide |
 | `on_pointer_move`, `on_secondary_press` | `PointerPress::x`, `y` | window |

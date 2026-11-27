@@ -366,15 +366,20 @@ pub struct PointerPress {
 
 /// Where the pointer is, for [`El::on_pointer_move_local`],
 /// [`El::on_secondary_press_local`], [`El::on_any_press`], [`El::on_drop_move`],
-/// [`Tx::press_point`] and [`Tx::drop_point`]: `x` and `y` in the element's own layout points, as
-/// [`Drag`] and [`crate::WheelEvent`] give them (from its top-left as drawn, divided by any
-/// scale it draws at, so they hold on a zoomed canvas), the same point in window points
-/// for a context menu's anchor, and whether any mouse button is currently held down.
+/// [`Tx::press_point`] and [`Tx::drop_point`]: `x`, `y`, `w` and `h` in the element's own
+/// layout points, as [`Drag`] gives them (`x` and `y` from its top-left as drawn, divided by
+/// any scale it draws at, so they hold on a zoomed canvas, and `w` and `h` as its laid-out
+/// size in the same units), the same point in window points for a context menu's anchor, and
+/// whether any mouse button is currently held down.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PointerEvent {
     pub x: f32,
     pub y: f32,
+    /// The element's width in its own layout points (same units as `x`, matching [`Drag::w`]).
+    pub w: f32,
+    /// The element's height in its own layout points (same units as `y`, matching [`Drag::h`]).
+    pub h: f32,
     pub window_x: f32,
     pub window_y: f32,
     /// Whether any mouse button is currently held down anywhere in the window (cleared on
@@ -459,11 +464,11 @@ impl El {
     /// the press, taking hits, or changing focus or hover (like DOM capture-phase `pointerdown`
     /// or AppKit's `addLocalMonitorForEventsMatchingMask:`).
     ///
-    /// Receives the [`crate::PointerButton`] and a [`PointerEvent`] with the press point in
-    /// both this element's own layout points (`x`, `y`) and window points (`window_x`,
-    /// `window_y`), with `pressing == true` and [`Tx::button`] set to the pressed button.
-    /// Inside or outside is the observer's choice: compare `(p.x, p.y)` against the element's
-    /// size or `(p.window_x, p.window_y)` against its layout rect.
+    /// Receives the [`crate::PointerButton`] and a [`PointerEvent`] with the press point and
+    /// element size in this element's own layout points (`x`, `y`, `w`, `h`) and window points
+    /// (`window_x`, `window_y`), with `pressing == true` and [`Tx::button`] set to the pressed
+    /// button. Inside or outside is the observer's choice: compare `(p.x, p.y)` against
+    /// `(p.w, p.h)` or `(p.window_x, p.window_y)` against its layout rect.
     ///
     /// Only a button-down that starts a new gesture fires observers: a chorded button-down while
     /// another button or pointer capture is held is ignored. Observers run before that press's
@@ -481,7 +486,7 @@ impl El {
     /// #         .children(s.open.then(|| {
     /// #             el().key("popup").absolute(100.0, 10.0).size(80.0, 60.0)
     /// #                 .on_any_press(|s: &mut App, _btn: PointerButton, p: PointerEvent, _| {
-    /// #                     if p.x < 0.0 || p.y < 0.0 || p.x > 80.0 || p.y > 60.0 {
+    /// #                     if p.x < 0.0 || p.y < 0.0 || p.x > p.w || p.y > p.h {
     /// #                         s.open = false;
     /// #                     }
     /// #                 })
