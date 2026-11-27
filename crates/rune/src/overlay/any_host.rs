@@ -183,6 +183,7 @@ impl AnyHost for OverlayHost {
             let rt = self.app.rt_mut();
             rt.set_system_contrast(contrast);
             rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_with(contrast.is_some()));
+            rt.set_system_text_scale(crate::platform::text_scale::current());
         }
         if let Some(live) = self.core.surface.live_mut() {
             let redraw = live.materials.on_policy_changed(effects, live.handover.as_mut());
@@ -361,6 +362,7 @@ impl AnyHost for OverlayHost {
                 // A new accent, scroller style or Linux portal preference asks every window to redraw.
                 core.accent_changed(app.rt_mut(), crate::system_accent());
                 core.scroll_bars_changed(app.rt_mut(), crate::platform::scroll_bars::current());
+                app.rt_mut().set_system_text_scale(crate::platform::text_scale::cached());
                 #[cfg(target_os = "linux")]
                 {
                     let rt = app.rt_mut();

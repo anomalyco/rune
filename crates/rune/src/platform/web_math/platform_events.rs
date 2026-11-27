@@ -71,6 +71,17 @@ pub(crate) fn apply_contrast(rt: &mut RuntimeCore, event: &serde_json::Value) ->
     rt.set_system_contrast(parse_contrast(&event["colors"]))
 }
 
+pub(crate) fn parse_text_scale(value: &serde_json::Value) -> f32 {
+    value
+        .as_f64()
+        .and_then(crate::platform::text_scale::from_f64)
+        .unwrap_or(crate::platform::text_scale::DEFAULT)
+}
+
+pub(crate) fn apply_text_scale(rt: &mut RuntimeCore, event: &serde_json::Value) -> bool {
+    rt.set_system_text_scale(parse_text_scale(&event["scale"]))
+}
+
 pub(crate) fn apply_languages(rt: &mut RuntimeCore, event: &serde_json::Value) -> bool {
     rt.set_languages(parse_languages(&event["languages"]))
 }
@@ -164,6 +175,7 @@ pub(crate) fn apply_init(
     let mut needs_frame = viewport_changed || pointer_changed;
     needs_frame |= apply_motion(rt, event);
     needs_frame |= apply_contrast(rt, event);
+    needs_frame |= rt.set_system_text_scale(parse_text_scale(&event["textScale"]));
     let focus = apply_focus(rt, app, event);
     needs_frame |= focus.changed;
     let (action, clear_presented) = match apply_visibility(rt, app, shared, event) {

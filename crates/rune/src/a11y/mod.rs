@@ -192,6 +192,7 @@ impl AccessibilityLink {
             let contrast = crate::platform::preferences::contrast();
             rt.set_system_contrast(contrast);
             rt.set_system_increased_contrast(crate::platform::preferences::increased_contrast_with(contrast.is_some()));
+            rt.set_system_text_scale(crate::platform::text_scale::current());
             queued |= !was_dirty && rt.commit.dirty;
         }
         match inbox.asked {

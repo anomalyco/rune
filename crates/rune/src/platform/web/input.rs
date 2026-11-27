@@ -464,6 +464,8 @@ impl Running {
             Some("primary_pointer") => if !self.apply_primary_pointer(event) { return false; },
             // The browser's `forced-colors` (a contrast theme) and its system colours, as sRGB bytes.
             Some("contrast") => if !pe::apply_contrast(self.app.rt_mut(), event) { return false; },
+            // The browser's default font size (root `font-size` / 16px), for `Cx::system_text_scale`.
+            Some("text_scale") => if !pe::apply_text_scale(self.app.rt_mut(), event) { return false; },
             Some("focus") => {
                 let focus = self.app.apply_focus(event);
                 if focus.changed {

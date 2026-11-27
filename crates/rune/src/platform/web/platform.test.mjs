@@ -68,10 +68,12 @@ class FakeEventTarget {
     }
 }
 
-function installDom({ width = 390, height = 844, offsetLeft = 0, offsetTop = 0 } = {}) {
+function installDom({ width = 390, height = 844, offsetLeft = 0, offsetTop = 0, rootFontSize = '16px' } = {}) {
     const body = new FakeElement('body');
+    const documentElement = new FakeElement('html');
     const doc = Object.assign(new FakeEventTarget(), {
         body,
+        documentElement,
         hidden: false,
         hasFocus: () => true,
         createElement: tag => new FakeElement(tag),
@@ -82,10 +84,19 @@ function installDom({ width = 390, height = 844, offsetLeft = 0, offsetTop = 0 }
         devicePixelRatio: 1,
     });
     const makeMedia = () => Object.assign(new FakeEventTarget(), { matches: false });
+    const observers = [];
     class FakeResizeObserver {
-        observe() {}
-        disconnect() {}
+        constructor(cb) {
+            this.cb = cb;
+            this.targets = new Set();
+            this.disconnected = false;
+            observers.push(this);
+        }
+        observe(target) { this.targets.add(target); }
+        disconnect() { this.disconnected = true; this.targets.clear(); }
+        trigger() { if (!this.disconnected) this.cb(); }
     }
+    const rootStyle = { fontSize: rootFontSize };
 
     Object.defineProperty(globalThis, 'document', { value: doc, configurable: true });
     Object.defineProperty(globalThis, 'window', { value: win, configurable: true });
@@ -94,10 +105,12 @@ function installDom({ width = 390, height = 844, offsetLeft = 0, offsetTop = 0 }
     Object.defineProperty(globalThis, 'matchMedia', { value: makeMedia, configurable: true });
     Object.defineProperty(globalThis, 'ResizeObserver', { value: FakeResizeObserver, configurable: true });
     Object.defineProperty(globalThis, 'getComputedStyle', {
-        value: () => ({ paddingTop: '0', paddingRight: '0', paddingBottom: '0', paddingLeft: '0' }),
+        value: el => (el === documentElement
+            ? rootStyle
+            : { paddingTop: '0', paddingRight: '0', paddingBottom: '0', paddingLeft: '0' }),
         configurable: true,
     });
-    return { doc, win, body, visualViewport };
+    return { doc, win, body, documentElement, visualViewport, observers, rootStyle };
 }
 
 const platform = await import('./platform.js');
@@ -192,6 +205,44 @@ test('viewport reports null visual band for embedded canvases and leaves unrelat
     assert.equal(cpu.style.height, '100%');
     assert.deepEqual(events.map(e => e.visual), [null]);
     disposeEmbedded();
+});
+
+test('viewport reports root font-size textScale in init and emits text_scale on ResizeObserver changes', async () => {
+    const { doc, body, observers, rootStyle } = installDom({ rootFontSize: '20px' });
+    const canvas = doc.createElement('canvas');
+    body.append(canvas);
+    const events = [];
+    const dispose = platform.viewport(canvas, msg => events.push(JSON.parse(msg)), false);
+    await Promise.resolve();
+
+    assert.equal(events.length, 1);
+    assert.equal(events[0].kind, 'init');
+    assert.equal(events[0].textScale, 1.25);
+
+    // Find the observer watching the 10rem text-scale probe.
+    const textObserver = observers.find(o => [...o.targets].some(t => t.style.cssText.includes('10rem')));
+    assert.ok(textObserver, 'viewport must observe a 10rem text-scale probe');
+
+    // Unchanged root font-size does not emit duplicate text_scale events.
+    events.length = 0;
+    textObserver.trigger();
+    assert.equal(events.length, 0);
+
+    // Raising root font-size to 24px emits scale 1.5.
+    rootStyle.fontSize = '24px';
+    textObserver.trigger();
+    assert.deepEqual(events, [{ kind: 'text_scale', scale: 1.5 }]);
+
+    // Repeating with the same 24px emits nothing.
+    events.length = 0;
+    textObserver.trigger();
+    assert.equal(events.length, 0);
+
+    // After dispose, the observer disconnects and stops emitting.
+    dispose();
+    rootStyle.fontSize = '16px';
+    textObserver.trigger();
+    assert.equal(events.length, 0);
 });
 
 test('preferredLanguages reads navigator.languages with navigator.language fallback and languagechange forwards updates', async () => {
@@ -477,6 +528,7 @@ test('viewport startup microtask emits one combined init snapshot, respects disp
             [1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12],
             [13, 14, 15], [16, 17, 18], [19, 20, 21], [22, 23, 24],
         ],
+        textScale: 1,
         focused: false,
         visible: false,
     }]);

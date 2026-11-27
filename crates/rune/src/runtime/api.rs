@@ -342,6 +342,10 @@ impl<S: 'static> Runtime<S> {
     pub fn set_system_reduced_motion(&mut self, reduced: bool) { self.core_mut().set_system_reduced_motion(reduced); }
     #[inline(always)]
     pub fn system_reduced_motion(&self) -> bool { self.core().host.system_reduced_motion() }
+    #[inline(always)]
+    pub fn set_system_text_scale(&mut self, scale: f32) { self.core_mut().set_system_text_scale(scale); }
+    #[inline(always)]
+    pub fn system_text_scale(&self) -> f32 { self.core().system_text_scale() }
     /// Sets the preferred language list reported by [`Cx::system_languages`] and [`Cx::locale`]
     /// as BCP 47 tags in preference order, overriding the lazily queried platform languages.
     /// Empty and duplicate tags are dropped; a change re-runs the view and its memos.

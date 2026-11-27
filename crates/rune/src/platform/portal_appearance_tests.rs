@@ -243,3 +243,73 @@ fn reads_double_click_millis_however_deeply_the_portal_wraps_it() {
     assert_eq!(dbus::millis_value(&Value::Str("400".into())), None);
     assert_eq!(dbus::millis_value(&Value::Bool(true)), None);
 }
+
+#[test]
+fn unanswered_text_scale_defaults_to_one() {
+    let slot = AtomicU64::new(TEXT_SCALE_UNKNOWN);
+    assert!(!has_portal_text_scale(slot.load(Ordering::Relaxed)));
+    assert_eq!(stored_text_scale(slot.load(Ordering::Relaxed)), None);
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 1.0);
+}
+
+#[test]
+fn portal_text_scale_clamps_and_tracks_live_changes() {
+    let slot = AtomicU64::new(TEXT_SCALE_UNKNOWN);
+
+    // Portal agreeing with the 1.0 default marks authority without requesting a redraw.
+    assert!(!record_text_scale(&slot, 1.0));
+    assert!(has_portal_text_scale(slot.load(Ordering::Relaxed)));
+    assert_eq!(stored_text_scale(slot.load(Ordering::Relaxed)), Some(1.0));
+
+    // GNOME Large Text (1.25) updates and requests a redraw; repeating it requests none.
+    assert!(record_text_scale(&slot, 1.25));
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 1.25);
+    assert!(!record_text_scale(&slot, 1.25));
+
+    // Out-of-range values clamp; invalid values are ignored.
+    assert!(record_text_scale(&slot, 0.05));
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 0.25);
+    assert!(record_text_scale(&slot, 9.0));
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 5.0);
+    assert!(!record_text_scale(&slot, 0.0));
+    assert!(!record_text_scale(&slot, -1.5));
+    assert!(!record_text_scale(&slot, f64::NAN));
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 5.0);
+}
+
+#[test]
+fn fallback_text_scale_applies_only_until_portal_answers() {
+    let slot = AtomicU64::new(TEXT_SCALE_UNKNOWN);
+
+    assert!(!record_fallback_text_scale(&slot, 0.0));
+    assert_eq!(stored_text_scale(slot.load(Ordering::Relaxed)), None);
+
+    assert!(record_fallback_text_scale(&slot, 1.25));
+    assert!(!has_portal_text_scale(slot.load(Ordering::Relaxed)));
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 1.25);
+    assert!(!record_fallback_text_scale(&slot, 1.25));
+
+    // Portal matching fallback marks authority without redundant redraw.
+    assert!(!record_text_scale(&slot, 1.25));
+    assert!(has_portal_text_scale(slot.load(Ordering::Relaxed)));
+
+    // Subsequent fallback writes cannot override the portal.
+    assert!(!record_fallback_text_scale(&slot, 1.75));
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 1.25);
+
+    // Live SettingChanged updates take effect and still block fallback writes.
+    assert!(record_text_scale(&slot, 1.5));
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 1.5);
+    assert!(!record_fallback_text_scale(&slot, 1.0));
+    assert_eq!(effective_text_scale(slot.load(Ordering::Relaxed)), 1.5);
+}
+
+#[cfg(all(target_os = "linux", feature = "dbus"))]
+#[test]
+fn reads_text_scale_however_deeply_the_portal_wraps_it() {
+    use zbus::zvariant::Value;
+    assert_eq!(dbus::f64_value(&Value::F64(1.25)), Some(1.25));
+    assert_eq!(dbus::f64_value(&Value::Value(Box::new(Value::F64(1.5)))), Some(1.5));
+    assert_eq!(dbus::f64_value(&Value::Value(Box::new(Value::Value(Box::new(Value::I32(2)))))), Some(2.0));
+    assert_eq!(dbus::f64_value(&Value::Str("1.5".into())), None);
+}

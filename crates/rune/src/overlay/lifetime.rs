@@ -533,6 +533,7 @@ impl OverlayCore {
         crate::platform::portal_appearance::follow(&window);
         #[cfg(all(target_os = "linux", not(feature = "dbus")))]
         crate::platform::preferences::follow_fallback(&window);
+        crate::platform::text_scale::follow(&window);
         self.dark = window.theme().map_or_else(|| crate::platform::preferences::desktop_dark(&window).unwrap_or(true), |t| t == winit::window::Theme::Dark);
         app.rt_mut().set_system_dark(self.dark);
         if self.cursor.is_none() { self.cursor = Some(crate::cursor::os::OsCursor::new()); }

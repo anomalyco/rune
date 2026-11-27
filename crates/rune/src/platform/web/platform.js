@@ -475,6 +475,24 @@ export function viewport(canvas, callback, embedded) {
         return colors;
     };
     const contrast = () => callback(JSON.stringify({ kind: 'contrast', colors: readContrast() }));
+    // The browser's default font size (root `font-size` / 16px), for `Cx::system_text_scale`.
+    // A hidden `10rem` probe observed by ResizeObserver fires whenever the user changes the
+    // browser's font-size setting without needing a window resize.
+    const readTextScale = () => {
+        const root = document.documentElement;
+        const px = root ? parseFloat(getComputedStyle(root).fontSize) : NaN;
+        return Number.isFinite(px) && px > 0 ? px / 16 : 1;
+    };
+    let lastTextScale = readTextScale();
+    const textScaleProbe = document.createElement('div');
+    textScaleProbe.style.cssText = 'position:fixed;top:0;left:0;width:10rem;height:0;visibility:hidden;pointer-events:none';
+    document.body.append(textScaleProbe);
+    const textScale = () => {
+        const next = readTextScale();
+        if (next === lastTextScale) return;
+        lastTextScale = next;
+        callback(JSON.stringify({ kind: 'text_scale', scale: next }));
+    };
     const focus = () => callback(JSON.stringify({ kind: 'focus', focused: document.hasFocus() }));
     const languageChange = () => callback(JSON.stringify({ kind: 'languages', languages: preferredLanguages() }));
     const visibility = () => callback(JSON.stringify({ kind: 'visibility', visible: !document.hidden, focused: document.hasFocus() }));
@@ -497,6 +515,8 @@ export function viewport(canvas, callback, embedded) {
     // them (its content box is always empty, which is what an observer watches by default).
     const insets = new ResizeObserver(update);
     insets.observe(probe, { box: 'border-box' });
+    const textScaleObserver = new ResizeObserver(textScale);
+    textScaleObserver.observe(textScaleProbe, { box: 'border-box' });
     motion.addEventListener('change', reduced);
     hoverNone.addEventListener('change', pointer);
     coarse.addEventListener('change', pointer);
@@ -510,6 +530,7 @@ export function viewport(canvas, callback, embedded) {
     // single snapshot instead of six separate callbacks.
     queueMicrotask(() => {
         if (disposed) return;
+        lastTextScale = readTextScale();
         callback(JSON.stringify({
             kind: 'init',
             ...readViewport(),
@@ -517,6 +538,7 @@ export function viewport(canvas, callback, embedded) {
             hover: !hoverNone.matches,
             coarse: coarse.matches,
             colors: readContrast(),
+            textScale: lastTextScale,
             focused: document.hasFocus(),
             visible: !document.hidden,
         }));
@@ -528,6 +550,7 @@ export function viewport(canvas, callback, embedded) {
         window.visualViewport?.removeEventListener('scroll', update);
         window.removeEventListener('resize', update);
         insets.disconnect();
+        textScaleObserver.disconnect();
         motion.removeEventListener('change', reduced);
         hoverNone.removeEventListener('change', pointer);
         coarse.removeEventListener('change', pointer);
@@ -538,6 +561,7 @@ export function viewport(canvas, callback, embedded) {
         document.removeEventListener('visibilitychange', visibility);
         probe.remove();
         largest.remove();
+        textScaleProbe.remove();
     };
 }
 
