@@ -5,7 +5,7 @@ use rune::{Color, El, Icon, RichStyle, Span, TextEdit, TextStyle, Tx, el, icon, 
 
 use crate::{Acts, Kit, State};
 
-fn kit_rich_style(k: &Kit) -> RichStyle {
+pub(crate) fn kit_rich_style(k: &Kit) -> RichStyle {
     RichStyle {
         link: k.c.text_accent,
         code_fg: None,
@@ -19,7 +19,7 @@ fn kit_rich_style(k: &Kit) -> RichStyle {
 /// Shared shell painting (text-input.css:5-75, textarea.css): the base fill, input elevation,
 /// hover overlay, a 1 point focus or invalid ring just inside the box in place of the shadow
 /// (or the kit's own radius and ring, `Kit::metrics.field`), disabled dimming.
-fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
+pub(crate) fn shell(k: &Kit, e: El, state: State, invalid: bool, focused: bool) -> El {
     let c = &k.c;
     let m = k.field_metrics();
     let hover = state == State::Hover && !invalid && !focused;
@@ -328,7 +328,7 @@ impl EditActs {
 
 /// What assistive technology reads for a field's editor: its name (the label, else the
 /// placeholder), a description, and whether it can be used.
-fn name_field(e: El, label: Option<&str>, placeholder: &str, description: Option<&str>, disabled: bool) -> El {
+pub(crate) fn name_field(e: El, label: Option<&str>, placeholder: &str, description: Option<&str>, disabled: bool) -> El {
     let e = match label.filter(|l| !l.is_empty()).or(Some(placeholder).filter(|p| !p.is_empty())) {
         Some(name) => e.label(name),
         None => e,
