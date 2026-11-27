@@ -187,13 +187,16 @@ fn unregister(id: u64) {
     if id == 0 {
         return;
     }
-    let removed = REGISTRY.with(|cell| {
-        let mut reg = cell.borrow_mut();
-        reg.entries
-            .iter()
-            .position(|e| e.id == id)
-            .and_then(|idx| reg.entries.remove(idx).callbacks)
-    });
+    let removed = REGISTRY
+        .try_with(|cell| {
+            let mut reg = cell.borrow_mut();
+            reg.entries
+                .iter()
+                .position(|e| e.id == id)
+                .and_then(|idx| reg.entries.remove(idx).callbacks)
+        })
+        .ok()
+        .flatten();
     drop(removed);
 }
 

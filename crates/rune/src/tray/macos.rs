@@ -547,7 +547,7 @@ fn refresh_rect(id: u64, mtm: MainThreadMarker) -> Option<[i32; 4]> {
 }
 
 fn remove_item(id: u64) {
-    let Some(live) = ITEMS.with(|map| map.borrow_mut().remove(&id)) else { return };
+    let Some(live) = ITEMS.try_with(|map| map.borrow_mut().remove(&id)).ok().flatten() else { return };
     if let Some((menu, _)) = live.target.ivars().last_menu.borrow_mut().take() {
         clear_menu_targets(&menu);
     }

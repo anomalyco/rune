@@ -88,7 +88,11 @@ impl<T> std::ops::Deref for Tracked<T> {
     #[inline]
     fn deref(&self) -> &T {
         if RECORDING.get() > 0 {
-            READS.with_borrow_mut(|r| if let Some(frame) = r.last_mut() { frame.push(self.id) });
+            let _ = READS.try_with(|r| {
+                if let Some(frame) = r.borrow_mut().last_mut() {
+                    frame.push(self.id);
+                }
+            });
         }
         &self.value
     }
@@ -194,7 +198,9 @@ impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for Tracked<T> {
 }
 
 fn bump(id: u32) {
-    VERSIONS.with_borrow_mut(|v| {
+    // Skip once this thread's table is gone during TLS teardown: nothing can read versions after.
+    let _ = VERSIONS.try_with(|v| {
+        let mut v = v.borrow_mut();
         let i = id as usize;
         if v.len() <= i {
             v.resize(i + 1, 0);
@@ -206,14 +212,16 @@ fn bump(id: u32) {
 /// Cell `id`'s version now.
 #[doc(hidden)]
 pub fn version(id: u32) -> u64 {
-    VERSIONS.with_borrow(|v| v.get(id as usize).copied().unwrap_or(0))
+    VERSIONS
+        .try_with(|v| v.borrow().get(id as usize).copied().unwrap_or(0))
+        .unwrap_or(0)
 }
 
 /// A region starts building: its reads go to a frame of their own.
 #[doc(hidden)]
 pub fn begin() {
     RECORDING.set(RECORDING.get() + 1);
-    READS.with_borrow_mut(|r| r.push(Vec::new()));
+    let _ = READS.try_with(|r| r.borrow_mut().push(Vec::new()));
 }
 
 /// A memo that isn't a region starts building: reads inside it record nothing (until a region
@@ -232,10 +240,19 @@ pub fn resume(recording: u32) {
 #[doc(hidden)]
 pub fn end() -> Vec<(u32, u64)> {
     RECORDING.set(RECORDING.get().saturating_sub(1));
-    let mut ids = READS.with_borrow_mut(|r| r.pop()).unwrap_or_default();
+    let mut ids = READS
+        .try_with(|r| r.borrow_mut().pop())
+        .ok()
+        .flatten()
+        .unwrap_or_default();
     ids.sort_unstable();
     ids.dedup();
-    VERSIONS.with_borrow(|v| ids.into_iter().map(|id| (id, v.get(id as usize).copied().unwrap_or(0))).collect())
+    VERSIONS
+        .try_with(|v| {
+            let v = v.borrow();
+            ids.iter().map(|&id| (id, v.get(id as usize).copied().unwrap_or(0))).collect()
+        })
+        .unwrap_or_else(|_| ids.into_iter().map(|id| (id, 0)).collect())
 }
 
 /// The [`Tracked`] values a closure read, at the versions it read them ([`tracked_reads`]): for
@@ -247,14 +264,23 @@ pub struct Reads(Vec<(u32, u64)>);
 impl Reads {
     /// Whether any value read was written since.
     pub fn changed(&self) -> bool {
-        VERSIONS.with_borrow(|v| self.0.iter().any(|&(id, version)| v.get(id as usize).copied().unwrap_or(0) != version))
+        VERSIONS
+            .try_with(|v| {
+                let v = v.borrow();
+                self.0.iter().any(|&(id, version)| v.get(id as usize).copied().unwrap_or(0) != version)
+            })
+            .unwrap_or(false)
     }
 
     /// Counts the values as read again, by a region building around a caller that reuses what
     /// it derived from them instead of reading them.
     pub fn read(&self) {
         if RECORDING.get() > 0 {
-            READS.with_borrow_mut(|r| if let Some(frame) = r.last_mut() { frame.extend(self.0.iter().map(|&(id, _)| id)) });
+            let _ = READS.try_with(|r| {
+                if let Some(frame) = r.borrow_mut().last_mut() {
+                    frame.extend(self.0.iter().map(|&(id, _)| id));
+                }
+            });
         }
     }
 }
@@ -268,3 +294,7 @@ pub fn tracked_reads<R>(f: impl FnOnce() -> R) -> (R, Reads) {
     reads.read();
     (out, reads)
 }
+
+#[cfg(test)]
+#[path = "tracked_tests.rs"]
+mod tests;
