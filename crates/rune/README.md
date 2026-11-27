@@ -3592,7 +3592,13 @@ and its goldens are unchanged. `examples/lab` uses it to composite `rune-light` 
   One compositor serves any number of formats: build pipelines per `EffectSite::format`.
 - **Per-slot identity and payload.** `EffectSite::mark` is the slot's `El::effect` tag and
   `EffectSite::data` its `El::effect_data([f32; 4])` payload, both carried in the slot's record, so
-  a compositor needs neither `Runtime::marks` nor its own copy of app state. A removed element keeps
+  a compositor needs neither `Runtime::marks` nor its own copy of app state. Before opening its own
+  passes or calling `Renderer::prepare`, a compositor can inspect the current frame's laid-out slots
+  via `Frame::effect_slots` / `Frame::effect_slot(mark)` (or `Runtime::effect_slots` /
+  `Runtime::effect_slot(mark)` to borrow only `f.rt` while encoding into `f.encoder`), or read a
+  raw record's tag directly with `Instance::effect_mark()`, returning `compose::EffectSlot` with
+  each slot's `index`, `instance`, `mark`, `data`, device-pixel `rect`, `scale`, `bleed` and
+  `backdrop`. A removed element keeps
   its last-built payload through its exit transition, so an outgoing slot keeps drawing its own
   content while its replacement enters beside it. Keep resources per mark and drop a mark's once a
   frame passes without it (the example on `compose::Compositor`). The slot's rect and `scale`

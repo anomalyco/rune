@@ -83,6 +83,7 @@ pub use color::Color;
 pub use color::oklch;
 pub use color::oklcha;
 pub use compose::Compositor;
+pub use compose::EffectSlot;
 pub use compose::Frame;
 pub use drag_out::DragImage;
 pub use drag_out::DragItem;
