@@ -58,9 +58,11 @@ impl CommitState {
         if hot || checking_live_only || (self.virtuals.is_empty() && self.virtual_items.is_empty()) || tree.nodes.is_empty() {
             return false;
         }
-        if !tree.nodes.iter().all(|n| {
-            relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted)
-        }) {
+        if !relayout::pixel_aspects_unchanged(tree)
+            || !tree.nodes.iter().all(|n| {
+                relayout::reusable(n) && n.text.as_ref().is_none_or(|t| !t.redacted)
+            })
+        {
             return false;
         }
         let has_nested = |path: &str| {

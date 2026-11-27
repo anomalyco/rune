@@ -785,3 +785,64 @@ fn scroll_center_in_instant_scoped_unmounted_virtual_row_mark_mounts_target_list
     let mid = mark.rect[1] + mark.rect[3] * 0.5;
     assert!((mid - 100.0).abs() < 1.0, "mark centred in 200pt viewport: {:?}", mark.rect);
 }
+
+#[test]
+fn scrolling_virtual_rows_with_pixel_aspect_image_skips_view_when_aspect_is_unchanged() {
+    struct State {
+        img: crate::Pixels,
+        views: Cell<u32>,
+    }
+    let img = crate::Pixels::new();
+    img.set(200, 100, vec![255; 200 * 100 * 4]);
+    let view = |s: &State, _: &mut Cx<State>| {
+        s.views.set(s.views.get() + 1);
+        let list = col().key("rows").w_full().growth(GrowthSpec::default()).virtual_rows(
+            200,
+            40.0,
+            |_: &State, i| Cow::Owned(format!("r{i}")),
+            |s: &State, i| {
+                if i % 20 == 0 {
+                    // Markdown-style image: explicit width, auto height -> sets cold.pixel_aspect.
+                    col().w_full().child(el().key("pic").w_full().max_w(200.0).pixels(&s.img))
+                } else {
+                    row().w_full().h(40.0).child(text(format!("Row {i}")).key("label"))
+                }
+            },
+        );
+        col().key("scroll").w_full().h_full().scroll(ScrollSpec { stick_bottom: false }).child(list)
+    };
+    let mut rt = Runtime::new(State { img, views: Cell::new(0) }, view, (400.0, 240.0), Env::new(true, 1.0));
+    rt.frame(0.0);
+    while rt.frame(1.0 / 120.0) {}
+
+    let v0 = rt.state.views.get();
+    let mut remounts = 0u32;
+    for _ in 0..30 {
+        let c0 = rt.stats.commits;
+        rt.wheel(200.0, 120.0, -80.0);
+        rt.frame(1.0 / 120.0);
+        if rt.stats.commits > c0 {
+            remounts += 1;
+        }
+    }
+    assert!(remounts > 0, "scrolling should trigger at least one virtual window remount");
+    assert_eq!(
+        rt.state.views.get() - v0,
+        0,
+        "virtual scroll with an unchanged pixel_aspect image must stay on CommitKind::Remount"
+    );
+
+    // Changing the image's aspect ratio while mounted must fall back to Rebuild on the next commit.
+    rt.state.img.set(100, 200, vec![128; 100 * 200 * 4]);
+    let v1 = rt.state.views.get();
+    let mut rebuilt = false;
+    for _ in 0..30 {
+        rt.wheel(200.0, 120.0, 80.0);
+        rt.frame(1.0 / 120.0);
+        if rt.state.views.get() > v1 {
+            rebuilt = true;
+            break;
+        }
+    }
+    assert!(rebuilt, "aspect ratio change on a mounted pixel_aspect image must trigger view rebuild");
+}

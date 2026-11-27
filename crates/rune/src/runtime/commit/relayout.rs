@@ -73,12 +73,13 @@ pub(in crate::runtime) fn apply_root_sizing(
 }
 
 /// Whether a commit can lay `n` out again as it is. Layout rewrites the styles of
-/// `aspect_fit` elements and fitted anchored overlays, and pictures can change their aspect.
+/// `aspect_fit` elements and fitted anchored overlays; pictures with unchanged decoded aspects
+/// are checked separately via [`pixel_aspects_unchanged`].
 /// Live bindings only own scene properties: moving the node retains their sources, sampled
 /// values and exact fill, while `apply` leaves their scene tracks alone.
 pub(in crate::runtime) fn reusable(n: &Node) -> bool {
     n.cold.get().is_none_or(|c| {
-        c.aspect_fit.is_none() && c.above.as_ref().is_none_or(|a| !a.fit) && c.pixel_aspect.is_none()
+        c.aspect_fit.is_none() && c.above.as_ref().is_none_or(|a| !a.fit)
     })
 }
 
@@ -395,8 +396,8 @@ impl Measurement<'_> {
 }
 
 /// Whether every picture sizing a side from its pixels still has the ratio its Taffy style or
-/// measure key was built with, so a viewport resize can relayout without flattening again.
-fn pixel_aspects_unchanged(tree: &types::TreeState) -> bool {
+/// measure key was built with, so a resize or virtual remount can reuse nodes without flattening.
+pub(in crate::runtime) fn pixel_aspects_unchanged(tree: &types::TreeState) -> bool {
     if !tree.aspect_snap.is_empty() {
         return false;
     }
