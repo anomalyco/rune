@@ -174,6 +174,12 @@ class FakeNode {
         if (prev) prev.dispatchEvent({ type: 'blur' });
         if (this.onFocus) this.onFocus();
     }
+
+    blur() {
+        if (globalThis.document?.activeElement !== this) return;
+        globalThis.document.activeElement = globalThis.document.body;
+        this.dispatchEvent({ type: 'blur' });
+    }
 }
 
 let coarsePointer = false;
@@ -4476,6 +4482,160 @@ test('syncA11y renders custom accessibility actions as non-tabbable buttons that
         }));
         assert.equal(article.children.filter(c => c.tagName === 'BUTTON').length, 1);
         assert.equal(h.a11yByPath.get('0/row-1'), article);
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('keydown forwards Space, sibling control keys, printable shortcuts, and Cmd/Ctrl+V on stray proxies after text focus ends', () => {
+    const { doc, canvas, events, h } = setup();
+    try {
+        // While a Rune text field is active on textarea, input, or password, Space and ordinary
+        // characters stay browser text input and Cmd/Ctrl+V stays un-prevented for paste.
+        const activeConfigs = [
+            { field: h.textarea, args: ['plain', 'hi', 0, 2, 2, false] },
+            { field: h.input, args: ['email', 'hi', 0, 2, 2, false, true, 'email', 'email'] },
+            { field: h.password, args: ['secret', '', 0, 0, 0, true] },
+        ];
+        for (const { field, args } of activeConfigs) {
+            events.length = 0;
+            bridge.sync(h, ...args);
+            bridge.activate(h);
+            assert.equal(dispatchKeydown(field, { key: ' ', code: 'Space' }), false);
+            assert.equal(dispatchKeydown(field, { key: 'j', code: 'KeyJ' }), false);
+            assert.equal(dispatchKeydown(field, { key: 'v', code: 'KeyV', ctrlKey: true }), false);
+            assert.equal(events.length, 0);
+        }
+
+        // End text focus: h.key becomes '' and h.field resets to h.textarea.
+        bridge.sync(h, '', '', 0, 0, 0, false);
+
+        // Simulate DOM focus lingering on each hidden proxy (textarea, semantic input, or password)
+        // for a turn after text focus ended, even with residual value/selection.
+        for (const field of [h.textarea, h.input, h.password]) {
+            events.length = 0;
+            field._inert = false;
+            field.value = 'stale';
+            field.selectionStart = 2;
+            field.selectionEnd = 3;
+            doc.activeElement = field;
+
+            assert.equal(dispatchKeydown(field, { key: ' ', code: 'Space' }), true);
+            assert.equal(doc.activeElement, canvas, 'stray proxy focus must return to canvas after forwarding Space');
+            assert.deepEqual(events[0], {
+                kind: 'key',
+                key: ' ',
+                code: 'Space',
+                shift: false,
+                ctrl: false,
+                alt: false,
+                meta: false,
+                repeat: false,
+            });
+
+            // Sibling editing/control keys, printable shortcuts, and Ctrl+V also forward on every proxy.
+            events.length = 0;
+            doc.activeElement = field;
+            for (const [k, code, extra] of [
+                ['Enter', 'Enter', {}],
+                ['Tab', 'Tab', {}],
+                ['Escape', 'Escape', {}],
+                ['Backspace', 'Backspace', {}],
+                ['Delete', 'Delete', {}],
+                ['ArrowDown', 'ArrowDown', {}],
+                ['Insert', 'Insert', {}],
+                ['j', 'KeyJ', {}],
+                ['v', 'KeyV', { ctrlKey: true }],
+            ]) {
+                assert.equal(dispatchKeydown(field, { key: k, code, ...extra }), true, field.tagName + ' ' + k);
+            }
+            assert.deepEqual(events.map(e => e.key), ['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'ArrowDown', 'Insert', 'j', 'v']);
+
+            // Browser shortcuts stay un-prevented when !h.key (F5/F12 untouched; Ctrl+R forwarded un-prevented).
+            events.length = 0;
+            assert.equal(dispatchKeydown(field, { key: 'F5', code: 'F5' }), false);
+            assert.equal(dispatchKeydown(field, { key: 'F12', code: 'F12' }), false);
+            assert.equal(dispatchKeydown(field, { key: 'r', code: 'KeyR', ctrlKey: true }), false);
+            assert.deepEqual(events.map(e => e.key), ['r']);
+        }
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('beforeinput forwards Space, Enter, and Delete/Backspace from stray proxies when text focus has ended', () => {
+    const { doc, body, events, h } = setup({ page: true });
+    try {
+        // Active field: beforeinput insertText ' ' is left to browser editing.
+        bridge.sync(h, 'field', 'abc', 0, 1, 1, false);
+        bridge.activate(h);
+        assert.equal(dispatchBeforeInput(h.textarea, { inputType: 'insertText', data: ' ' }), false);
+        assert.equal(events.length, 0);
+
+        // Focus leaves text; simulate stray focus remaining on h.input in page mode.
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        h.input._inert = false;
+        h.input.value = 'abc';
+        h.input.selectionStart = 1;
+        h.input.selectionEnd = 1;
+        doc.activeElement = h.input;
+
+        assert.equal(dispatchBeforeInput(h.input, { inputType: 'insertText', data: ' ' }), true);
+        assert.equal(doc.activeElement, body, 'page mode releases stray proxy focus via blur instead of focusing canvas');
+        assert.equal(dispatchBeforeInput(h.input, { inputType: 'insertLineBreak' }), true);
+        assert.equal(dispatchBeforeInput(h.input, { inputType: 'deleteContentBackward' }), true);
+        assert.equal(dispatchBeforeInput(h.input, { inputType: 'deleteContentForward' }), true);
+        assert.deepEqual(events.map(e => e.key), [' ', 'Enter', 'Backspace', 'Delete']);
+    } finally {
+        bridge.destroy(h);
+    }
+});
+
+test('sync clearing text focus tears down IME composition, ignores trailing composition/select events, and blurs fallback proxy', async () => {
+    const { doc, body, canvas, events, h } = setup();
+    try {
+        bridge.sync(h, 'field', 'hi', 0, 2, 2, false);
+        bridge.activate(h);
+        assert.equal(doc.activeElement, h.textarea);
+
+        // Start IME composition and simulate a non-focusable canvas whose focus() is a no-op.
+        h.textarea.dispatchEvent({ type: 'compositionstart' });
+        h.textarea.value = 'hini';
+        h.textarea.dispatchEvent({ type: 'compositionupdate', data: 'ni' });
+        assert.equal(h.composing, true);
+        assert.equal(h.composition, 'ni');
+
+        const origFocus = canvas.focus.bind(canvas);
+        canvas.focus = () => {};
+        bridge.sync(h, '', '', 0, 0, 0, false);
+        canvas.focus = origFocus;
+
+        assert.equal(h.composing, false);
+        assert.equal(h.composition, '');
+        assert.equal(doc.activeElement, body, 'active.blur() fallback must clear proxy focus when canvas.focus() does not take it');
+
+        // Wait a microtask to ensure the queued compositionupdate microtask drops silently.
+        await Promise.resolve();
+        assert.equal(events.length, 0);
+
+        // Trailing compositionend/compositionstart/compositionupdate/select after !h.key must not
+        // emit edit/preedit/sync/selection or leave h.composing stuck true.
+        h.textarea.value = 'committed';
+        h.textarea.dispatchEvent({ type: 'compositionend' });
+        assert.equal(h.textarea.value, '');
+        h.textarea.dispatchEvent({ type: 'compositionstart' });
+        h.textarea.dispatchEvent({ type: 'compositionupdate', data: 'late' });
+        doc.activeElement = h.textarea;
+        h.textarea.dispatchEvent({ type: 'select' });
+        await Promise.resolve();
+
+        assert.equal(h.composing, false);
+        assert.equal(h.composition, '');
+        assert.equal(events.length, 0);
+
+        // Space keydown is not blocked by stale IME state and forwards cleanly.
+        assert.equal(dispatchKeydown(h.textarea, { key: ' ', code: 'Space' }), true);
+        assert.deepEqual(events.map(e => e.key), [' ']);
     } finally {
         bridge.destroy(h);
     }

@@ -322,15 +322,22 @@ impl RuntimeCore {
                     _ => return false,
                 }
             }
+            None if !self.web_has_editable_focus() => {
+                let mut chars = name.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) if !c.is_control() => crate::Key::Text(name.into()),
+                    _ => return false,
+                }
+            }
             None => return false,
         };
         let base = crate::window::web_key_base_str(name, mods);
         let event_key = crate::KeyEvent { key, mods };
-        let activate = event_key.key == crate::Key::Tab;
+        let activate = event_key.key == crate::Key::Tab || !self.web_has_editable_focus();
         let repeat = flag("repeat");
         if let Some(key) = code {
-            // Only Space reaches here as text (other text arrives as typed input), so the
-            // unmodified key is `base`.
+            // Only Space or stray non-editing keys reach here as text (ordinary field typing
+            // arrives via `web_edit`), so `base` is the unmodified key when known.
             let text = match &event_key.key { crate::Key::Text(t) => Some(t.clone()), _ => None };
             let consumed_mods = crate::window::consumed_from(false, mods, text.as_deref(), base.map(String::from).as_deref());
             self.physical_then(app, crate::PhysicalInput::Key { key, mods, pressed: true, repeat, text, consumed_mods }, Some(event_key), base, None);

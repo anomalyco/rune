@@ -598,8 +598,13 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             anchor: backward ? selEnd : selStart,
             focus: backward ? selStart : selEnd });
     }
-    const key = (name, event = {}) => send({ kind: 'key', key: name, code: event.code ?? '', shift: !!event.shiftKey,
-        ctrl: !!event.ctrlKey, alt: !!event.altKey, meta: !!event.metaKey, repeat: !!event.repeat });
+    const releaseProxyFocus = field => {
+        if (h.disposed || h.key || document.activeElement !== field || typeof h.menu?.done === 'function') return;
+        if (!h.page) h.canvas.focus({ preventScroll: true });
+        if (document.activeElement === field) field.blur?.();
+    };
+    const key = (name, event = {}, after) => send({ kind: 'key', key: name, code: event.code ?? '', shift: !!event.shiftKey,
+        ctrl: !!event.ctrlKey, alt: !!event.altKey, meta: !!event.metaKey, repeat: !!event.repeat }, after);
     for (const textField of [textarea, input]) {
         listen(textField, 'input', event => {
             if (textField === input && h.field !== input) {
@@ -613,21 +618,25 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             changed(textField, h.composing || event.isComposing);
         });
         listen(textField, 'compositionstart', () => {
-            if (h.field === textField) { h.composing = true; h.composition = ''; }
+            if (h.key && h.field === textField) { h.composing = true; h.composition = ''; }
         });
         listen(textField, 'compositionupdate', event => {
-            if (h.field !== textField) return;
+            if (!h.key || h.field !== textField) return;
             h.composition = event.data ?? '';
-            queueMicrotask(() => { if (!h.disposed && h.composing && h.field === textField) changed(textField, true); });
+            queueMicrotask(() => { if (!h.disposed && h.composing && h.key && h.field === textField) changed(textField, true); });
         });
         listen(textField, 'compositionend', () => {
-            if (h.field !== textField) return;
+            if (!h.key || h.field !== textField) {
+                if (h.field === textField) { h.composing = false; h.composition = ''; }
+                if (!h.key) textField.value = '';
+                return;
+            }
             changed(textField);
             h.composing = false; h.composition = '';
             send({ kind: 'sync' });
         });
         listen(textField, 'select', () => {
-            if (h.syncing || h.composing || h.field !== textField || document.activeElement !== textField) return;
+            if (h.syncing || h.composing || !h.key || h.field !== textField || document.activeElement !== textField) return;
             if (typeof textField.selectionStart !== 'number' || typeof textField.selectionEnd !== 'number') return;
             const backward = textField.selectionDirection === 'backward';
             const selStart = domToRaw(textField.selectionStart, h.crlfs);
@@ -664,15 +673,24 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             }
         });
         listen(field, 'beforeinput', event => {
-            if (field !== h.field) return;
+            if (h.key && field !== h.field) return;
+            const after = !h.key ? () => releaseProxyFocus(field) : undefined;
             if (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph') {
                 event.preventDefault();
-                if (!h.composing && !event.isComposing) key('Enter', { shiftKey: h.shift, code: 'Enter' });
+                if (!h.composing && !event.isComposing) key('Enter', { shiftKey: h.shift, code: 'Enter' }, after);
             } else if (isSecure && event.inputType.startsWith('delete')) {
                 event.preventDefault();
                 const forward = event.inputType.endsWith('Forward');
                 key(forward ? 'Delete' : 'Backspace',
-                    { altKey: event.inputType.includes('Word'), code: forward ? 'Delete' : 'Backspace' });
+                    { altKey: event.inputType.includes('Word'), code: forward ? 'Delete' : 'Backspace' }, after);
+            } else if (!h.key && !h.composing && !event.isComposing && event.inputType.startsWith('delete')) {
+                event.preventDefault();
+                const forward = event.inputType.endsWith('Forward');
+                key(forward ? 'Delete' : 'Backspace',
+                    { altKey: event.inputType.includes('Word'), code: forward ? 'Delete' : 'Backspace' }, after);
+            } else if (!h.key && !h.composing && !event.isComposing && event.inputType === 'insertText' && event.data === ' ') {
+                event.preventDefault();
+                key(' ', { shiftKey: h.shift, code: 'Space' }, after);
             } else if (!isSecure && !h.composing && !event.isComposing && event.inputType.startsWith('delete')) {
                 if (field.selectionStart === 0 && field.selectionEnd === 0 && event.inputType.endsWith('Backward')) {
                     event.preventDefault();
@@ -685,14 +703,20 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             }
         });
         listen(field, 'keydown', event => {
-            if (field !== h.field) return;
+            if (h.key && field !== h.field) return;
             h.shift = event.shiftKey;
             if (event.isComposing || h.composing || event.keyCode === 229) return;
             // On Windows European layouts AltGr sets both ctrlKey and altKey; let those characters type.
             const chord = (event.metaKey || event.ctrlKey) && !event.getModifierState?.('AltGraph');
             const editing = ['Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'];
-            if (isSecure) editing.push('Backspace', 'Delete');
-            else {
+            if (!h.key) {
+                // A hidden proxy can still hold DOM focus for a turn after Rune focus leaves text
+                // (including an inactive <input> or password proxy after h.field resets). There
+                // Space and editing keys are control keys, not text input for a mirrored field.
+                editing.push(' ', 'Backspace', 'Delete', 'Insert', 'ContextMenu', 'PrintScreen', 'ScrollLock', 'Pause');
+            } else if (isSecure) {
+                editing.push('Backspace', 'Delete');
+            } else {
                 // At either boundary with nothing selected, the browser deletes nothing and fires
                 // no `input` event, so forward Backspace or Delete as a key as native platforms
                 // and password fields do.
@@ -703,10 +727,14 @@ export function mount(canvas, callback, embedded, fitHeight, page) {
             // focused fields receive them as canvas focus does.
             const functionKey = FUNCTION_KEY.test(event.key) && !browserShortcut(event);
             const mediaKey = h.mediaKeys && MEDIA_KEYS.includes(event.key);
-            if (!chord && !functionKey && !mediaKey && !editing.includes(event.key)) return;
-            if (chord && event.key.toLowerCase() === 'v') return;
-            event.preventDefault();
-            key(event.key, event);
+            // When no Rune text field is active, single printable characters are control/shortcut
+            // keys (matching canvas focus) rather than text input for the hidden proxy.
+            const printableKey = !h.key && !chord && typeof event.key === 'string'
+                && Array.from(event.key).length === 1 && !/[\u0000-\u001f\u007f-\u009f]/.test(event.key);
+            if (!chord && !functionKey && !mediaKey && !printableKey && !editing.includes(event.key)) return;
+            if (h.key && chord && event.key.toLowerCase() === 'v') return;
+            if (h.key || !browserShortcut(event)) event.preventDefault();
+            key(event.key, event, !h.key ? () => releaseProxyFocus(field) : undefined);
         });
         listen(field, 'keyup', event => { h.shift = event.shiftKey; });
         listen(field, 'focus', () => {
@@ -1057,8 +1085,9 @@ export function sync(
     singleLine = false, inputMode = 'text', autofill = '',
     peerKey = '', peerSecure = false, peerAutofill = '', peerType = '',
 ) {
-    if (h.composing && key === h.key) return;
+    if (h.composing && key && key === h.key) return;
     h.composing = false;
+    h.composition = '';
     h.syncing = true;
     const active = document.activeElement;
     const editing = active === h.textarea || active === h.input || active === h.password;
@@ -1080,7 +1109,10 @@ export function sync(
         h.selection = null;
         h.textarea.value = '';
         h.input.value = '';
-        if (editing) h.canvas.focus({ preventScroll: true });
+        if (editing) {
+            h.canvas.focus({ preventScroll: true });
+            if (document.activeElement === active) active.blur?.();
+        }
         for (const f of [h.textarea, h.input, h.password]) {
             f.inert = true;
             f.removeAttribute('aria-hidden');

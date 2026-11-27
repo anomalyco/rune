@@ -631,7 +631,8 @@ impl Running {
         self.app.frame(0.0);
         self.apply_frame_requests(window);
         self.clipboard.flush_core(self.app.rt_mut());
-        let activate = activate || (a11y_press && self.app.rt().web_has_editable_focus());
+        let activate = (activate || (a11y_press && self.app.rt().web_has_editable_focus()))
+            && self.app.rt().popup_menu().is_none();
         self.sync_input(activate);
         if flush_a11y {
             self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand);

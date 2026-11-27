@@ -1,0 +1,1 @@
+- **Web: Space and sibling keys no longer vanish into a hidden editing proxy after text focus ends.** When no Rune text field is active, `bridge.js` forwards Space, editing/control keys, printable shortcuts, and `Cmd/Ctrl+V` from any lingering `<textarea>`, `<input>`, or password proxy, tears down stale IME composition state, and releases proxy DOM focus.
