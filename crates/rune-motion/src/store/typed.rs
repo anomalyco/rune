@@ -185,6 +185,15 @@ impl AnimationStore {
         self.index.get(&(node.0, prop.id.0)).is_some_and(|&t| self.t_slot[t as usize] != NONE)
     }
 
+    /// True when `prop` on `node` is actively moving now (not settled, frozen on a stopped clock,
+    /// or waiting on a delayed start).
+    pub fn is_moving<T>(&self, node: NodeId, prop: Prop<T>) -> bool {
+        self.index.get(&(node.0, prop.id.0)).is_some_and(|&t| {
+            let t = t as usize;
+            self.t_slot[t] != NONE && matches!(self.mode(t), tracks::Mode::Moving | tracks::Mode::Due)
+        })
+    }
+
     /// True when lane `lane` of `prop` on `node` is currently animating (running, stacked or
     /// waiting on a delayed start). Out-of-range lanes return `false`.
     pub fn is_lane_animating<T>(&self, node: NodeId, prop: Prop<T>, lane: usize) -> bool {

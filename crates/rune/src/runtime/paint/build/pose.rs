@@ -279,6 +279,7 @@ impl crate::runtime::tracks::MotionState {
             pcold.paint_fade = fade;
             pcold.paint_fade_origin = fade_origin;
             pcold.rounded = None;
+            pcold.group_hidden = false;
             pcold.anchor = anchor;
             pcold.anchor_to = anchor_to;
             pcold.blur = 0.0;
@@ -324,6 +325,7 @@ impl crate::runtime::tracks::MotionState {
             pcold.paint_fade = fade;
             pcold.paint_fade_origin = fade_origin;
             pcold.rounded = None;
+            pcold.group_hidden = false;
             pcold.anchor = [0.0; 2];
             pcold.anchor_to = [0.0; 2];
             pcold.blur = 0.0;

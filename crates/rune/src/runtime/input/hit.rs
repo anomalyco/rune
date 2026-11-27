@@ -548,3 +548,7 @@ impl RuntimeCore {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "hit_tests.rs"]
+mod tests;
