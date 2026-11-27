@@ -381,3 +381,84 @@ fn exports_grid_template_columns_for_auto_fit_auto_fill_and_equal_columns() {
     assert!(fill.decls.contains(&("grid-template-columns", "repeat(auto-fill,minmax(180.5px,1fr))".into())), "{:?}", fill.decls);
     assert!(eq.decls.contains(&("grid-template-columns", "1fr 1fr 1fr".into())), "{:?}", eq.decls);
 }
+
+#[test]
+fn html_export_keeps_numeric_leading_and_punctuation_anchor_ids_and_styles_them_via_classes() {
+    fn view(_: &(), _: &mut Cx<()>) -> El {
+        crate::col().key("root").w_full().role("main")
+            .child(
+                crate::col().key("100-overview").role("region").label("Overview")
+                    .child(
+                        crate::text("3D Device View")
+                            .key("3d-device-view")
+                            .role("heading")
+                            .level(2)
+                            .font(crate::tok::type_::TITLE)
+                            .color(crate::Color::WHITE),
+                    )
+                    .child(
+                        crate::row()
+                            .key("42-jump")
+                            .href("#3d-device-view")
+                            .child(crate::text("Jump to 3D")),
+                    )
+                    .child(crate::text("Zero").key("0").role("heading").level(3))
+                    .child(crate::text("Dash").key("--html").role("heading").level(3))
+                    .child(crate::text("Under").key("_intro").role("heading").level(3))
+                    .child(crate::text("Bad space").key("3d view").role("heading").level(3))
+                    .child(crate::text("Bad quote").key("3d\"view").role("heading").level(3))
+                    .child(crate::text("Bad dup").key("3d#dup1").role("heading").level(3))
+                    .child(crate::text("Empty key").key("").role("heading").level(3)),
+            )
+    }
+    let mut rt = Runtime::new((), view, (480.0, 600.0), Env::default());
+    rt.page_mode();
+    let nodes = taken(&mut rt, 480.0);
+    let (body, css) = page(&[(480.0, nodes.clone())]);
+
+    for expected in [
+        "id=\"100-overview\"",
+        "id=\"3d-device-view\"",
+        "id=\"42-jump\" href=\"#3d-device-view\"",
+        "id=\"0\"",
+        "id=\"--html\"",
+        "id=\"_intro\"",
+    ] {
+        assert!(body.contains(expected), "missing {expected} in exported HTML: {body}");
+    }
+    // The <h2> with numeric-leading id is styled via generated class selector (not unescaped `#3d-device-view`).
+    let h2_open = body
+        .split("<h2 ")
+        .nth(1)
+        .and_then(|s| s.split('>').next())
+        .expect("exported <h2>");
+    assert!(h2_open.contains("id=\"3d-device-view\""), "<h2> attrs: {h2_open}");
+    let h2_classes = h2_open
+        .split("class=\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .expect("<h2> class attribute");
+    let style_class = h2_classes
+        .split_whitespace()
+        .find(|c| *c != "t")
+        .expect("generated style class for <h2>");
+    assert!(
+        css.contains(&format!(".{style_class}{{")),
+        "stylesheet must target <h2> via class .{style_class}: {css}",
+    );
+    assert!(!css.contains("#3d-device-view"), "stylesheet must not emit unescaped numeric #id selectors: {css}");
+
+    // Unsafe, whitespace, duplicate-suffix, and empty keys still emit no `id` attribute.
+    for (label, key) in [
+        ("Bad space", "3d view"),
+        ("Bad quote", "3d\"view"),
+        ("Bad dup", "3d#dup1"),
+        ("Empty key", ""),
+    ] {
+        let node = nodes
+            .iter()
+            .find(|n| n.inner == label)
+            .unwrap_or_else(|| panic!("missing exported node for {label} ({key:?})"));
+        assert!(!node.attrs.contains(" id="), "invalid key {key:?} must not emit id: {}", node.attrs);
+    }
+}

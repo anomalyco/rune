@@ -1,0 +1,1 @@
+- Web: static `--html` export and the live accessibility mirror now keep element `id` attributes (and `aria-controls`/`aria-owns` references) for keys starting with a digit, `-`, or `_` (such as `3d-device-view`), matching HTML5 `id` rules, and escape them per CSSOM `CSS.escape` during static-to-live scroll anchoring.
