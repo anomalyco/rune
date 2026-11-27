@@ -12,14 +12,14 @@ use std::sync::atomic::Ordering;
 #[cfg(debug_assertions)]
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCounterDontSample, MTLIndexType, MTLLoadAction, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
-    MTLScissorRect, MTLStoreAction, MTLViewport,
+    MTLClearColor, MTLCommandBuffer, MTLCommandEncoder, MTLCounterDontSample, MTLDepthClipMode, MTLIndexType, MTLLoadAction,
+    MTLRenderCommandEncoder, MTLRenderPassDescriptor, MTLScissorRect, MTLStoreAction, MTLViewport,
 };
 use objc2::rc::autoreleasepool;
 use parking_lot::Mutex;
 use wgpu::custom::*;
 
-use crate::lazy_init::{Effect, Event, LoadKind, StoreKind, Subresource};
+use crate::lazy_init::{Effect, Event, LoadKind, StoreKind, Subresource, SubresourceRange};
 use super::encode::Rec;
 use super::layout::{Counts, GroupRaw};
 use super::pipeline::{PipelineRaw, RenderPipeline, vertex_slot};
@@ -54,7 +54,6 @@ fn view(view: &wgpu::TextureView) -> &MetalView { view.as_custom::<MetalView>().
 
 impl MetalPass {
     pub(super) fn begin(rec: Arc<Mutex<Rec>>, desc: &wgpu::RenderPassDescriptor<'_>) -> Self {
-        if desc.depth_stencil_attachment.is_some() { super::unsupported!("depth and stencil") }
         if desc.color_attachments.len() > 4 { super::unsupported!("more than four color attachments") }
         let d = MTLRenderPassDescriptor::new();
         let mut keep = rec.lock().shared().keep_list();
@@ -74,12 +73,13 @@ impl MetalPass {
         }
         for (i, attachment) in desc.color_attachments.iter().enumerate() {
             let Some(attachment) = attachment else { continue };
-            if attachment.resolve_target.is_some() { super::unsupported!("multisample resolves") }
             let target = view(attachment.view).raw.clone();
+            let resolve = attachment.resolve_target.map(|r| view(r).raw.clone());
             // SAFETY: at most four attachments, checked above.
             let color = unsafe { d.colorAttachments().objectAtIndexedSubscript(i) };
             color.setTexture(Some(&target.raw));
             if let Some(slice) = attachment.depth_slice { color.setDepthPlane(slice as usize); }
+            if let Some(resolve) = &resolve { color.setResolveTexture(Some(&resolve.raw)); }
             let mut load_op = attachment.ops.load;
             if let Some(tex) = &target.texture && let Some(lazy) = &tex.lazy_init && lazy.has_uninit() {
                 let load = match load_op {
@@ -106,11 +106,111 @@ impl MetalPass {
                 wgpu::LoadOp::Load => color.setLoadAction(MTLLoadAction::Load),
                 wgpu::LoadOp::DontCare(_) => color.setLoadAction(MTLLoadAction::DontCare),
             }
-            color.setStoreAction(match attachment.ops.store {
-                wgpu::StoreOp::Store => MTLStoreAction::Store,
-                wgpu::StoreOp::Discard => MTLStoreAction::DontCare,
+            color.setStoreAction(match (attachment.ops.store, resolve.is_some()) {
+                (wgpu::StoreOp::Store, true) => MTLStoreAction::StoreAndMultisampleResolve,
+                (wgpu::StoreOp::Discard, true) => MTLStoreAction::MultisampleResolve,
+                (wgpu::StoreOp::Store, false) => MTLStoreAction::Store,
+                (wgpu::StoreOp::Discard, false) => MTLStoreAction::DontCare,
             });
             drawable |= target.drawable;
+            if let Some(uses) = &target.uses { keep.use_texture(uses); }
+            keep.push(target);
+            if let Some(resolve) = resolve {
+                if let Some(tex) = &resolve.texture && let Some(lazy) = &tex.lazy_init && lazy.has_uninit() {
+                    let _ = lazy.step(Event::WriteFull(SubresourceRange {
+                        base_mip: resolve.range.base_mip,
+                        mips: 1,
+                        base_layer: resolve.range.base_layer,
+                        layers: 1,
+                    }));
+                }
+                drawable |= resolve.drawable;
+                if let Some(uses) = &resolve.uses { keep.use_texture(uses); }
+                keep.push(resolve);
+            }
+        }
+        if let Some(ds) = &desc.depth_stencil_attachment {
+            let target = view(ds.view).raw.clone();
+            let has_depth = target.format.has_depth_aspect() && target.aspect != wgpu::TextureAspect::StencilOnly;
+            let has_stencil = target.format.has_stencil_aspect() && target.aspect != wgpu::TextureAspect::DepthOnly;
+            if has_depth {
+                let (mut load_op, store_op) = match ds.depth_ops {
+                    Some(ops) => (ops.load, ops.store),
+                    None => (wgpu::LoadOp::Load, wgpu::StoreOp::Store),
+                };
+                if let Some(tex) = &target.texture && let Some(lazy) = &tex.lazy_init && lazy.has_uninit() {
+                    let load = match load_op {
+                        wgpu::LoadOp::Clear(_) => LoadKind::Clear,
+                        wgpu::LoadOp::Load => LoadKind::Load,
+                        wgpu::LoadOp::DontCare(_) => LoadKind::DontCare,
+                    };
+                    let store = match store_op {
+                        wgpu::StoreOp::Store => StoreKind::Store,
+                        wgpu::StoreOp::Discard => StoreKind::Discard,
+                    };
+                    let sub = Subresource { mip: target.range.base_mip, layer: target.range.base_layer };
+                    for effect in lazy.step(Event::Attach { sub, load, store }) {
+                        if let Effect::PromoteLoadToClear = effect {
+                            load_op = wgpu::LoadOp::Clear(0.0);
+                        }
+                    }
+                }
+                let depth = d.depthAttachment();
+                depth.setTexture(Some(&target.raw));
+                match load_op {
+                    wgpu::LoadOp::Clear(v) => {
+                        depth.setLoadAction(MTLLoadAction::Clear);
+                        depth.setClearDepth(f64::from(v));
+                    }
+                    wgpu::LoadOp::Load => depth.setLoadAction(MTLLoadAction::Load),
+                    wgpu::LoadOp::DontCare(_) => depth.setLoadAction(MTLLoadAction::DontCare),
+                }
+                depth.setStoreAction(match store_op {
+                    wgpu::StoreOp::Store => MTLStoreAction::Store,
+                    wgpu::StoreOp::Discard => MTLStoreAction::DontCare,
+                });
+            }
+            if has_stencil {
+                let (mut load_op, store_op) = match ds.stencil_ops {
+                    Some(ops) => (ops.load, ops.store),
+                    None => (wgpu::LoadOp::Load, wgpu::StoreOp::Store),
+                };
+                if !has_depth
+                    && let Some(tex) = &target.texture
+                    && let Some(lazy) = &tex.lazy_init
+                    && lazy.has_uninit()
+                {
+                    let load = match load_op {
+                        wgpu::LoadOp::Clear(_) => LoadKind::Clear,
+                        wgpu::LoadOp::Load => LoadKind::Load,
+                        wgpu::LoadOp::DontCare(_) => LoadKind::DontCare,
+                    };
+                    let store = match store_op {
+                        wgpu::StoreOp::Store => StoreKind::Store,
+                        wgpu::StoreOp::Discard => StoreKind::Discard,
+                    };
+                    let sub = Subresource { mip: target.range.base_mip, layer: target.range.base_layer };
+                    for effect in lazy.step(Event::Attach { sub, load, store }) {
+                        if let Effect::PromoteLoadToClear = effect {
+                            load_op = wgpu::LoadOp::Clear(0);
+                        }
+                    }
+                }
+                let stencil = d.stencilAttachment();
+                stencil.setTexture(Some(&target.raw));
+                match load_op {
+                    wgpu::LoadOp::Clear(v) => {
+                        stencil.setLoadAction(MTLLoadAction::Clear);
+                        stencil.setClearStencil(v);
+                    }
+                    wgpu::LoadOp::Load => stencil.setLoadAction(MTLLoadAction::Load),
+                    wgpu::LoadOp::DontCare(_) => stencil.setLoadAction(MTLLoadAction::DontCare),
+                }
+                stencil.setStoreAction(match store_op {
+                    wgpu::StoreOp::Store => MTLStoreAction::Store,
+                    wgpu::StoreOp::Discard => MTLStoreAction::DontCare,
+                });
+            }
             if let Some(uses) = &target.uses { keep.use_texture(uses); }
             keep.push(target);
         }
@@ -234,6 +334,17 @@ impl RenderPassInterface for MetalPass {
         self.raw.setCullMode(next.cull);
         self.raw.setFrontFacingWinding(next.winding);
         self.raw.setTriangleFillMode(next.fill);
+        if let Some((ds, bias)) = &next.depth_stencil {
+            self.raw.setDepthStencilState(Some(ds));
+            self.raw.setDepthBias_slopeScale_clamp(bias.constant as f32, bias.slope_scale, bias.clamp);
+        } else if self.pipeline.as_ref().is_some_and(|p| p.depth_stencil.is_some()) {
+            self.raw.setDepthStencilState(None);
+            self.raw.setDepthBias_slopeScale_clamp(0.0, 0.0, 0.0);
+        }
+        let prev_clip = self.pipeline.as_ref().map_or(MTLDepthClipMode::Clip, |p| p.depth_clip);
+        if next.depth_clip != prev_clip {
+            self.raw.setDepthClipMode(next.depth_clip);
+        }
         if relayout {
             self.dirty = self.groups.iter().enumerate().filter(|(_, g)| g.is_some()).fold(0, |m, (i, _)| m | 1 << i);
             // Zeroed for a new layout, as wgpu-core does.

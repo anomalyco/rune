@@ -111,3 +111,33 @@ fn lazy_init_fast_path_flips_on_final_subresource() {
     assert!(!lazy.has_uninit(), "all subresources initialized: fast path now clear");
     assert!(lazy.step(Event::Read(SubresourceRange { base_mip: 0, mips: 2, base_layer: 0, layers: 1 })).is_empty());
 }
+
+/// MSAA resolve target receives `WriteFull` for its resolved `(mip, layer)` so a subsequent
+/// shader read does not emit a clear pass that would wipe the resolved 3D scene.
+#[test]
+fn msaa_resolve_target_write_full_skips_subsequent_clear() {
+    let msaa = LazyInit::new(1, 1);
+    let resolve_slot = LazyInit::new(1, 1);
+    // Transient 4x MSAA color + depth pass: Clear + Discard keeps MSAA uninit without promoting.
+    assert!(msaa.step(Event::Attach { sub: sub(0, 0), load: LoadKind::Clear, store: StoreKind::Discard }).is_empty());
+    assert!(msaa.has_uninit(), "discarded MSAA attachment stays uninit");
+    // Resolving into the slot marks the slot initialized with zero clear effects.
+    assert!(resolve_slot.step(Event::WriteFull(SubresourceRange::single(0, 0))).is_empty());
+    assert!(!resolve_slot.has_uninit(), "resolved slot is now initialized");
+    // Sampling the slot texture in the compositor UI pass emits no ClearSubresource.
+    assert!(resolve_slot.step(Event::Read(SubresourceRange::single(0, 0))).is_empty());
+}
+
+/// Single-aspect depth attachment lazy-init: read-only (`Load`, `Store`) on an uninitialized
+/// texture promotes to `Clear(0.0)` and marks initialized, while `Clear` + `Discard` stays uninit.
+#[test]
+fn depth_attachment_lazy_init_promotion_and_discard() {
+    let depth = LazyInit::new(1, 1);
+    assert!(depth.step(Event::Attach { sub: sub(0, 0), load: LoadKind::Clear, store: StoreKind::Discard }).is_empty());
+    assert!(depth.has_uninit());
+    let promoted = collect(depth.step(Event::Attach { sub: sub(0, 0), load: LoadKind::Load, store: StoreKind::Store }));
+    assert_eq!(promoted, vec![Effect::PromoteLoadToClear]);
+    assert!(!depth.has_uninit());
+    // Subsequent read-only pass preserves stored depth with no promotion.
+    assert!(depth.step(Event::Attach { sub: sub(0, 0), load: LoadKind::Load, store: StoreKind::Store }).is_empty());
+}

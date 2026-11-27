@@ -7,9 +7,11 @@ use std::sync::Arc;
 
 #[cfg(debug_assertions)]
 use objc2_foundation::NSString;
+use objc2::rc::Retained;
 use objc2_metal::{
-    MTLBlendFactor, MTLBlendOperation, MTLColorWriteMask, MTLCullMode, MTLDevice, MTLPixelFormat, MTLPrimitiveTopologyClass,
-    MTLPrimitiveType, MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLTriangleFillMode, MTLVertexDescriptor, MTLVertexFormat,
+    MTLBlendFactor, MTLBlendOperation, MTLColorWriteMask, MTLCullMode, MTLDepthClipMode, MTLDepthStencilDescriptor,
+    MTLDepthStencilState, MTLDevice, MTLPixelFormat, MTLPrimitiveTopologyClass, MTLPrimitiveType, MTLRenderPipelineDescriptor,
+    MTLRenderPipelineState, MTLStencilDescriptor, MTLStencilOperation, MTLTriangleFillMode, MTLVertexDescriptor, MTLVertexFormat,
     MTLVertexStepFunction, MTLWinding,
 };
 use wgpu::custom::*;
@@ -17,7 +19,7 @@ use wgpu::naga;
 
 use super::derive::{self, Use};
 use super::layout::{LayoutRaw, PipelineLayout};
-use super::resource::{Live, pixel_format};
+use super::resource::{Live, compare, pixel_format};
 use super::shader::{Stage, compile};
 use super::{Obj, Shared, send_sync};
 
@@ -33,11 +35,13 @@ pub(crate) struct RenderPipeline {
 pub(crate) struct PipelineRaw {
     /// `None` when pipeline creation failed inside an active wgpu error scope.
     pub(super) state: Option<Obj<dyn MTLRenderPipelineState>>,
+    pub(super) depth_stencil: Option<(Obj<dyn MTLDepthStencilState>, wgpu::DepthBiasState)>,
     pub(super) layout: Arc<LayoutRaw>,
     pub(super) primitive: MTLPrimitiveType,
     pub(super) cull: MTLCullMode,
     pub(super) winding: MTLWinding,
     pub(super) fill: MTLTriangleFillMode,
+    pub(super) depth_clip: MTLDepthClipMode,
     /// Per stage, the bindings whose lengths its sizes buffer holds.
     pub(super) sized: [Vec<naga::ResourceBinding>; 2],
     _live: Option<Live>,
@@ -164,6 +168,46 @@ fn vertex_descriptor(buffers: &[Option<wgpu::VertexBufferLayout<'_>>]) -> Option
     Some(d)
 }
 
+fn stencil_op(op: wgpu::StencilOperation) -> MTLStencilOperation {
+    use MTLStencilOperation as M;
+    use wgpu::StencilOperation as S;
+    match op {
+        S::Keep => M::Keep,
+        S::Zero => M::Zero,
+        S::Replace => M::Replace,
+        S::Invert => M::Invert,
+        S::IncrementClamp => M::IncrementClamp,
+        S::DecrementClamp => M::DecrementClamp,
+        S::IncrementWrap => M::IncrementWrap,
+        S::DecrementWrap => M::DecrementWrap,
+    }
+}
+
+fn stencil_descriptor(face: &wgpu::StencilFaceState, read_mask: u32, write_mask: u32) -> Retained<MTLStencilDescriptor> {
+    let d = MTLStencilDescriptor::new();
+    d.setStencilCompareFunction(compare(face.compare));
+    d.setReadMask(read_mask);
+    d.setWriteMask(write_mask);
+    d.setStencilFailureOperation(stencil_op(face.fail_op));
+    d.setDepthFailureOperation(stencil_op(face.depth_fail_op));
+    d.setDepthStencilPassOperation(stencil_op(face.pass_op));
+    d
+}
+
+fn depth_stencil_descriptor(state: &wgpu::DepthStencilState) -> Retained<MTLDepthStencilDescriptor> {
+    let d = MTLDepthStencilDescriptor::new();
+    d.setDepthCompareFunction(compare(state.depth_compare.unwrap_or(wgpu::CompareFunction::Always)));
+    d.setDepthWriteEnabled(state.depth_write_enabled.unwrap_or(false));
+    let s = &state.stencil;
+    if s.is_enabled() {
+        let front = stencil_descriptor(&s.front, s.read_mask, s.write_mask);
+        let back = stencil_descriptor(&s.back, s.read_mask, s.write_mask);
+        d.setFrontFaceStencil(Some(&front));
+        d.setBackFaceStencil(Some(&back));
+    }
+    d
+}
+
 pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>) -> RenderPipeline {
     let label = desc.label.unwrap_or("pipeline");
     let layout = match desc.layout {
@@ -174,13 +218,13 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
             derive::layout(label, &[Some(vertex), fragment].into_iter().flatten().collect::<Vec<_>>()).raw
         }
     };
-    if desc.depth_stencil.is_some() { super::unsupported!("depth and stencil") }
     let (class, primitive) = topology(desc.primitive.topology);
     let points = class == MTLPrimitiveTopologyClass::Point;
     let d = MTLRenderPipelineDescriptor::new();
     #[cfg(debug_assertions)]
     if let Some(label) = desc.label { d.setLabel(Some(&NSString::from_str(label))); }
-    let built = (|| -> Result<(Obj<dyn MTLRenderPipelineState>, [Vec<naga::ResourceBinding>; 2]), String> {
+    type Built = (Obj<dyn MTLRenderPipelineState>, Option<(Obj<dyn MTLDepthStencilState>, wgpu::DepthBiasState)>, [Vec<naga::ResourceBinding>; 2]);
+    let built = (|| -> Result<Built, String> {
         let vertex = Stage { module: desc.vertex.module, entry: desc.vertex.entry_point, constants: desc.vertex.compilation_options.constants,
             kind: naga::ShaderStage::Vertex };
         let vs = compile(shared, &vertex, &layout.stages[0], points)?;
@@ -209,18 +253,37 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
                     attachment.setDestinationAlphaBlendFactor(blend_factor(blend.alpha.dst_factor));
                 }
             }
+        } else if desc.depth_stencil.is_none() {
+            // Metal validation requires at least one attachment pixel format on attachmentless pipelines.
+            d.setDepthAttachmentPixelFormat(MTLPixelFormat::Depth32Float);
         }
+        let depth_stencil = match &desc.depth_stencil {
+            Some(ds) => {
+                let fmt = pixel_format(ds.format);
+                if ds.format.has_depth_aspect() {
+                    d.setDepthAttachmentPixelFormat(fmt);
+                }
+                if ds.format.has_stencil_aspect() {
+                    d.setStencilAttachmentPixelFormat(fmt);
+                }
+                let ds_desc = depth_stencil_descriptor(ds);
+                let ds_state = shared.device.newDepthStencilStateWithDescriptor(&ds_desc)
+                    .ok_or_else(|| "Metal refused depth stencil state".to_owned())?;
+                Some((ds_state, ds.bias))
+            }
+            None => None,
+        };
         d.setVertexDescriptor(vertex_descriptor(desc.vertex.buffers).as_deref());
         // SAFETY: the class matches the primitive type every draw with this pipeline uses.
         unsafe { d.setInputPrimitiveTopology(class) };
-        d.setRasterSampleCount(desc.multisample.count as usize);
+        d.setRasterSampleCount(desc.multisample.count.max(1) as usize);
         d.setAlphaToCoverageEnabled(desc.multisample.alpha_to_coverage_enabled);
         let state = shared.device.newRenderPipelineStateWithDescriptor_error(&d)
             .map_err(|e| e.localizedDescription().to_string())?;
-        Ok((state, sized))
+        Ok((state, depth_stencil, sized))
     })();
-    let (state, sized) = match built {
-        Ok((state, sized)) => (Some(state), sized),
+    let (state, depth_stencil, sized) = match built {
+        Ok((state, depth_stencil, sized)) => (Some(state), depth_stencil, sized),
         Err(error) => {
             let msg = format!("{label}: {error}");
             if !shared.capture_error(wgpu::ErrorFilter::Internal, msg.clone())
@@ -228,12 +291,13 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
             {
                 panic!("{msg}");
             }
-            (None, [Vec::new(), Vec::new()])
+            (None, None, [Vec::new(), Vec::new()])
         }
     };
     let _live = state.is_some().then(|| Live::new(&shared.render_pipelines));
     let raw = PipelineRaw {
         state,
+        depth_stencil,
         layout,
         primitive,
         cull: match desc.primitive.cull_mode {
@@ -248,6 +312,11 @@ pub(super) fn create(shared: &Shared, desc: &wgpu::RenderPipelineDescriptor<'_>)
         fill: match desc.primitive.polygon_mode {
             wgpu::PolygonMode::Line => MTLTriangleFillMode::Lines,
             _ => MTLTriangleFillMode::Fill,
+        },
+        depth_clip: if desc.primitive.unclipped_depth {
+            MTLDepthClipMode::Clamp
+        } else {
+            MTLDepthClipMode::Clip
         },
         sized,
         _live,
