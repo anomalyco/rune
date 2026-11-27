@@ -2964,7 +2964,222 @@ export async function pastedImage(h, max) {
     return undefined;
 }
 
+// Browser file handles opened through `Tx::pick_file`, `Tx::pick_files`, and
+// `Tx::pick_save_file`: Rust holds only the id and display name; nothing is read until the
+// app asks, and the last `FileHandle` clone dropping calls `releasePickedFile(id)`.
+const pickedFiles = new Map();
+let nextPickedFile = 1;
+
+function formatPickerAccept(filters) {
+    const exts = [];
+    for (const f of filters ?? []) {
+        for (const raw of f?.extensions ?? []) {
+            const ext = String(raw ?? "").replace(/^[* .]+/, "").trim();
+            if (ext && ext !== "*") exts.push(`.${ext}`);
+        }
+    }
+    return [...new Set(exts)].join(",");
+}
+
+function formatFsaTypes(filters) {
+    const out = [];
+    for (const f of filters ?? []) {
+        const exts = [];
+        for (const raw of f?.extensions ?? []) {
+            const ext = String(raw ?? "").replace(/^[* .]+/, "").trim();
+            if (ext && ext !== "*") exts.push(`.${ext}`);
+        }
+        if (!exts.length) continue;
+        const description = String(f?.name ?? "").trim() || exts.join(", ");
+        out.push({ description, accept: { "application/octet-stream": [...new Set(exts)] } });
+    }
+    return out;
+}
+
+function offerPickedFiles(entries) {
+    const out = [];
+    for (const entry of entries) {
+        const id = nextPickedFile++;
+        pickedFiles.set(id, Object.assign({ claimed: false }, entry));
+        out.push({ id, name: entry.name ?? "" });
+    }
+    return out;
+}
+
+function settlePickedFiles(offered) {
+    for (const { id } of offered) {
+        if (pickedFiles.get(id)?.claimed === false) pickedFiles.delete(id);
+    }
+}
+
+export function openFilePicker(h, id, kind, multiple, filtersJson, fileName) {
+    h.cancelFilePicker?.();
+    let filters = [];
+    try { filters = JSON.parse(filtersJson || "[]"); } catch { filters = []; }
+    const sendDeferred = (event, after) => {
+        queueMicrotask(() => {
+            if (h.disposed) { after?.(); return; }
+            h.send(event, after);
+        });
+    };
+    if (kind === "save") {
+        const suggestedName = String(fileName || "").trim() || "download";
+        if (typeof globalThis.showSaveFilePicker === "function") {
+            const opts = { suggestedName };
+            const types = formatFsaTypes(filters);
+            if (types.length) opts.types = types;
+            let cancelled = false;
+            h.cancelFilePicker = () => { cancelled = true; h.cancelFilePicker = null; };
+            let promise;
+            try {
+                promise = globalThis.showSaveFilePicker(opts);
+            } catch (err) {
+                h.cancelFilePicker = null;
+                sendDeferred({ kind: "file_dialog", id, error: String(err?.message || err || "save file picker failed") });
+                return;
+            }
+            Promise.resolve(promise).then((handle) => {
+                h.cancelFilePicker = null;
+                if (cancelled || h.disposed) return;
+                const name = handle?.name || suggestedName;
+                const offered = offerPickedFiles([{ kind: "save-fsa", handle, name }]);
+                h.send({ kind: "file_dialog", id, files: offered }, () => settlePickedFiles(offered));
+            }, (err) => {
+                h.cancelFilePicker = null;
+                if (cancelled || h.disposed) return;
+                if (err?.name === "AbortError") {
+                    h.send({ kind: "file_dialog", id, cancel: true });
+                } else {
+                    h.send({ kind: "file_dialog", id, error: String(err?.message || err || "save file picker failed") });
+                }
+            });
+            return;
+        }
+        const offered = offerPickedFiles([{ kind: "save-download", name: suggestedName }]);
+        sendDeferred({ kind: "file_dialog", id, files: offered }, () => settlePickedFiles(offered));
+        return;
+    }
+    if (typeof document?.createElement !== "function") {
+        sendDeferred({ kind: "file_dialog", id, error: "file picker is unavailable in this browser environment" });
+        return;
+    }
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = !!multiple;
+    const accept = formatPickerAccept(filters);
+    if (accept) input.accept = accept;
+    input.style.cssText = "position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;";
+    document.body?.append?.(input);
+    let settled = false;
+    let focusTimer = 0;
+    const cleanup = () => {
+        if (focusTimer) { clearTimeout(focusTimer); focusTimer = 0; }
+        globalThis.window?.removeEventListener?.("focus", onFocus);
+        input.remove?.();
+        if (h.cancelFilePicker === abort) h.cancelFilePicker = null;
+    };
+    const abort = () => {
+        settled = true;
+        cleanup();
+    };
+    const finishCancel = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (!h.disposed) h.send({ kind: "file_dialog", id, cancel: true });
+    };
+    const onFocus = () => {
+        if (settled) return;
+        if (focusTimer) clearTimeout(focusTimer);
+        focusTimer = setTimeout(() => {
+            focusTimer = 0;
+            if (!settled && !(input.files?.length)) finishCancel();
+        }, 300);
+    };
+    input.addEventListener("change", () => {
+        if (settled) return;
+        settled = true;
+        const list = [...(input.files ?? [])];
+        cleanup();
+        if (!list.length) {
+            if (!h.disposed) h.send({ kind: "file_dialog", id, cancel: true });
+            return;
+        }
+        const offered = offerPickedFiles(list.map(file => ({ kind: "read", file, name: file.name ?? "" })));
+        if (!h.disposed) h.send({ kind: "file_dialog", id, files: offered }, () => settlePickedFiles(offered));
+        else settlePickedFiles(offered);
+    });
+    input.addEventListener("cancel", finishCancel);
+    globalThis.window?.addEventListener?.("focus", onFocus);
+    h.cancelFilePicker = abort;
+    try {
+        input.click();
+    } catch (err) {
+        settled = true;
+        cleanup();
+        sendDeferred({ kind: "file_dialog", id, error: String(err?.message || err || "failed to open file picker") });
+    }
+}
+
+export function claimPickedFile(id) {
+    const entry = pickedFiles.get(id);
+    if (!entry || entry.claimed) return false;
+    entry.claimed = true;
+    return true;
+}
+
+export function pickedFile(id) {
+    const entry = pickedFiles.get(id);
+    return entry?.file ?? entry?.handle;
+}
+
+export function releasePickedFile(id) {
+    pickedFiles.delete(id);
+}
+
+export async function readPickedFile(id) {
+    const entry = pickedFiles.get(id);
+    if (!entry) return undefined;
+    if (entry.kind === "read" && entry.file) {
+        return new Uint8Array(await entry.file.arrayBuffer());
+    }
+    if (entry.kind === "save-fsa" && entry.handle) {
+        const file = await entry.handle.getFile();
+        return new Uint8Array(await file.arrayBuffer());
+    }
+    throw new Error("this browser file handle is write-only");
+}
+
+export async function writePickedFile(id, bytes) {
+    const entry = pickedFiles.get(id);
+    if (!entry) throw new Error("browser file handle is no longer available");
+    if (entry.kind === "save-fsa" && entry.handle) {
+        const writable = await entry.handle.createWritable();
+        try {
+            await writable.write(bytes);
+            await writable.close();
+        } catch (err) {
+            try { await writable.abort?.(); } catch {}
+            throw err;
+        }
+        return;
+    }
+    if (entry.kind === "save-download") {
+        const blob = new Blob([bytes]);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = entry.name || "download";
+        a.style.cssText = "position:fixed;left:-9999px;top:-9999px;opacity:0;";
+        document.body?.append?.(a);
+        try { a.click(); } finally { a.remove?.(); }
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        return;
+    }
+    throw new Error("browser <input type=\"file\"> handles are read-only");
+}
 export function destroy(h) {
+    h.cancelFilePicker?.();
     exitPointerLock(h);
     closeMenu(h, false);
     h.disposed = true;

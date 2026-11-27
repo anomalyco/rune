@@ -322,3 +322,48 @@ fn frame_summary_is_copy_and_step_and_flush_preserves_haptics_for_host() {
     );
 }
 
+#[test]
+fn embed_frame_keeps_file_dialog_when_host_handles_them_and_refuses_otherwise() {
+    #[derive(Default)]
+    struct S { answers: Vec<Result<Option<String>, String>> }
+    fn view(_: &S, _: &mut Cx<S>) -> El { el().size(40.0, 20.0) }
+
+    let start = crate::time::now();
+    // Default embedded host refuses file dialogs.
+    let mut rt_default = Runtime::new(S::default(), view, (40.0, 20.0), Env::default());
+    let mut clock = FrameClock::new(start);
+    rt_default.wall_start = Some(start);
+    rt_default.update(|_, tx| {
+        tx.pick_file(crate::FileDialogOptions::default(), |s: &mut S, res, _| {
+            s.answers.push(res.map(|h| h.map(|f| f.name().to_owned())).map_err(|e| e.0));
+        });
+    });
+    {
+        let (core, mut app) = rt_default.split_mut();
+        step_and_flush(&mut clock, core, &mut app, start, false);
+    }
+    assert!(rt_default.file_dialog().is_none(), "default embedded host refuses dialogs");
+    rt_default.frame(1.0 / 60.0);
+    assert_eq!(rt_default.state.answers, [Err("native file dialogs are unsupported in embedded views".to_owned())]);
+
+    // Embedded host with host.file_dialogs = true keeps the dialog pending for the host to present.
+    let mut rt_host = Runtime::new(S::default(), view, (40.0, 20.0), Env::default());
+    rt_host.host.file_dialogs = true;
+    let mut clock2 = FrameClock::new(start);
+    rt_host.wall_start = Some(start);
+    rt_host.update(|_, tx| {
+        tx.pick_file(crate::FileDialogOptions::default(), |s: &mut S, res, _| {
+            s.answers.push(res.map(|h| h.map(|f| f.name().to_owned())).map_err(|e| e.0));
+        });
+    });
+    {
+        let (core, mut app) = rt_host.split_mut();
+        step_and_flush(&mut clock2, core, &mut app, start, false);
+    }
+    assert!(rt_host.file_dialog().is_some() && rt_host.file_dialog_handles(), "embedding host with file_dialogs keeps handle dialog pending");
+    rt_host.resolve_file_dialog_handle(Some(crate::FileHandle::from_bytes("doc.pdf", b"pdf".to_vec()))).unwrap();
+    rt_host.frame(1.0 / 60.0);
+    assert_eq!(rt_host.state.answers, [Ok(Some("doc.pdf".to_owned()))]);
+}
+
+

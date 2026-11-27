@@ -4870,3 +4870,125 @@ test('keydown handles macOS DevTools, PWA window shortcuts, and canvas synchrono
         bridge.destroy(mac.h);
     }
 });
+test('openFilePicker handles open, multi-select, cancel, read, and save-download/FSA handles', async () => {
+    const { doc, body, events, h } = setup();
+    try {
+        // 1. Single/multi open via <input type="file">.
+        let clickedInput = null;
+        const origCreate = doc.createElement;
+        doc.createElement = tag => {
+            const node = origCreate.call(doc, tag);
+            node.click = () => { clickedInput = node; };
+            return node;
+        };
+        const filters = JSON.stringify([{ name: 'CSV', extensions: ['csv', '*.tsv'] }]);
+        bridge.openFilePicker(h, 7, 'open', true, filters, '');
+        assert.ok(clickedInput, 'picker should click a hidden <input type="file">');
+        assert.equal(clickedInput.type, 'file');
+        assert.equal(clickedInput.multiple, true);
+        assert.equal(clickedInput.accept, '.csv,.tsv');
+        assert.equal(clickedInput.parentElement, body);
+
+        // Deliver two picked files and claim + read them.
+        const fileA = { name: 'a.csv', async arrayBuffer() { return new TextEncoder().encode('col1,col2').buffer; } };
+        const fileB = { name: 'b.tsv', async arrayBuffer() { return new TextEncoder().encode('x\ty').buffer; } };
+        clickedInput.files = [fileA, fileB];
+        let claimedIds = [];
+        const origSend = h.send;
+        h.send = (ev, after) => {
+            events.push(ev);
+            if (ev.files) {
+                for (const f of ev.files) {
+                    assert.equal(bridge.claimPickedFile(f.id), true);
+                    claimedIds.push(f.id);
+                }
+            }
+            after?.();
+        };
+        clickedInput.dispatchEvent({ type: 'change' });
+        assert.equal(clickedInput.parentElement, null, 'input removed after change');
+        const openEv = events.at(-1);
+        assert.equal(openEv.kind, 'file_dialog');
+        assert.equal(openEv.id, 7);
+        assert.deepEqual(openEv.files.map(f => f.name), ['a.csv', 'b.tsv']);
+        assert.equal(new TextDecoder().decode(await bridge.readPickedFile(claimedIds[0])), 'col1,col2');
+        assert.equal(bridge.pickedFile(claimedIds[0]), fileA);
+        await assert.rejects(() => bridge.writePickedFile(claimedIds[0], new Uint8Array([1])), /read-only/);
+        for (const id of claimedIds) bridge.releasePickedFile(id);
+        assert.equal(bridge.pickedFile(claimedIds[0]), undefined);
+
+        // 2. Cancel event answers cancel: true.
+        clickedInput = null;
+        bridge.openFilePicker(h, 8, 'open', false, '[]', '');
+        assert.equal(clickedInput.multiple, false);
+        clickedInput.dispatchEvent({ type: 'cancel' });
+        assert.deepEqual(events.at(-1), { kind: 'file_dialog', id: 8, cancel: true });
+
+        // 3. Save picker with showSaveFilePicker (FSA) supports writing + AbortError cancellation.
+        const written = [];
+        let fsaOpts = null;
+        globalThis.showSaveFilePicker = async (opts) => {
+            fsaOpts = opts;
+            return {
+                name: 'chosen.json',
+                async createWritable() {
+                    return {
+                        async write(bytes) { written.push(new Uint8Array(bytes)); },
+                        async close() {},
+                    };
+                },
+            };
+        };
+        try {
+            claimedIds = [];
+            bridge.openFilePicker(h, 9, 'save', false, JSON.stringify([{ name: 'JSON', extensions: ['json'] }]), 'out.json');
+            await new Promise(r => setTimeout(r, 0));
+            assert.equal(fsaOpts.suggestedName, 'out.json');
+            assert.deepEqual(fsaOpts.types[0].accept['application/octet-stream'], ['.json']);
+            assert.equal(events.at(-1).id, 9);
+            assert.equal(events.at(-1).files[0].name, 'chosen.json');
+            await bridge.writePickedFile(claimedIds[0], new TextEncoder().encode('{"saved":1}'));
+            assert.equal(new TextDecoder().decode(written[0]), '{"saved":1}');
+            bridge.releasePickedFile(claimedIds[0]);
+
+            // AbortError maps to cancel: true.
+            globalThis.showSaveFilePicker = async () => { const e = new Error('aborted'); e.name = 'AbortError'; throw e; };
+            bridge.openFilePicker(h, 10, 'save', false, '[]', 'out.json');
+            await new Promise(r => setTimeout(r, 0));
+            assert.deepEqual(events.at(-1), { kind: 'file_dialog', id: 10, cancel: true });
+        } finally {
+            delete globalThis.showSaveFilePicker;
+        }
+
+        // 4. Fallback save picker without showSaveFilePicker triggers <a download> on write.
+        claimedIds = [];
+        let clickedLink = null;
+        doc.createElement = tag => {
+            const node = origCreate.call(doc, tag);
+            node.click = () => { clickedLink = node; };
+            return node;
+        };
+        const origCreateObj = URL.createObjectURL;
+        const origRevokeObj = URL.revokeObjectURL;
+        URL.createObjectURL = () => 'blob:test-save';
+        URL.revokeObjectURL = () => {};
+        try {
+            bridge.openFilePicker(h, 11, 'save', false, '[]', 'backup.txt');
+            await Promise.resolve();
+            assert.equal(events.at(-1).id, 11);
+            assert.equal(events.at(-1).files[0].name, 'backup.txt');
+            await bridge.writePickedFile(claimedIds[0], new TextEncoder().encode('data'));
+            assert.ok(clickedLink);
+            assert.equal(clickedLink.download, 'backup.txt');
+            assert.equal(clickedLink.href, 'blob:test-save');
+            bridge.releasePickedFile(claimedIds[0]);
+        } finally {
+            URL.createObjectURL = origCreateObj;
+            URL.revokeObjectURL = origRevokeObj;
+            h.send = origSend;
+        }
+    } finally {
+        bridge.destroy(h);
+    }
+});
+

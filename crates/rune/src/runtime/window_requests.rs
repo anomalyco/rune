@@ -107,7 +107,10 @@ pub(crate) struct HostState {
     /// Test-only seam forcing `App::on_field_menu` even where `popup_menu_supported()` is true.
     #[cfg(test)]
     pub(crate) force_field_menu_fallback: bool,
-    /// The file dialog asked for (`Tx::open_file`, `Tx::save_file`) and not yet answered.
+    /// True when the embedding host presents file dialogs itself rather than refusing them.
+    #[cfg_attr(not(any(test, target_vendor = "apple")), allow(dead_code))]
+    pub(crate) file_dialogs: bool,
+    /// The file dialog asked for (`Tx::open_file`, `Tx::pick_file`, `Tx::save_file`) and not yet answered.
     pub(in crate::runtime) file_dialog: crate::file_dialog::DialogState,
     /// File dialog callbacks, by id, until their answer runs.
     pub(in crate::runtime) file_dialog_answers: Vec<(u64, crate::file_dialog::AnswerFn)>,
@@ -190,6 +193,7 @@ impl HostState {
             deferred_field_menu_pick: None,
             #[cfg(test)]
             force_field_menu_fallback: false,
+            file_dialogs: false,
             file_dialog: Default::default(),
             file_dialog_answers: Vec::new(),
             next_file_dialog: 0,

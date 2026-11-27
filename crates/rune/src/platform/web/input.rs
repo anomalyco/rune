@@ -87,7 +87,7 @@ pub(super) struct Mode {
 }
 
 pub(super) struct Bridge {
-    handle: JsValue,
+    pub(super) handle: JsValue,
     _callback: Closure<dyn FnMut(String)>,
     dispose_viewport: js_sys::Function,
     mods: ModifiersState,
@@ -409,10 +409,8 @@ impl Running {
                 self.run_a11y_schedule(event);
                 return false;
             }
-            Some("a11y_flush") => {
-                self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand);
-                return false;
-            }
+            Some("a11y_flush") => { self.run_a11y_schedule(crate::runtime::web_a11y::schedule::ScheduleEvent::ConsumerDemand); return false; }
+            Some("file_dialog") => { let ok = super::file_dialog::handle_event(self.app.rt_mut(), event); if ok { self.full_redraw = true; } return ok; }
             Some("gesture_start") => {
                 let point = event["x"].as_f64().zip(event["y"].as_f64())
                     .map(|(x, y)| crate::input::host_events::window_point(self.app.rt(), x as f32, y as f32));
