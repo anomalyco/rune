@@ -125,8 +125,8 @@ fn shipped_shaders_translate_to_valid_webgl2_glsl_es_300() {
     let video = include_str!("../../../rune-media/src/native_surface/video.wgsl");
 
     let mut cases: Vec<(String, String, Vec<(&str, f64)>)> = vec![
-        ("uber_wgsl::CLASSIC".into(), uber_wgsl::CLASSIC.into(), Vec::new()),
-        ("uber_wgsl::WINDFOIL".into(), uber_wgsl::WINDFOIL.into(), Vec::new()),
+        ("uber_wgsl::classic".into(), uber_wgsl::classic().into(), Vec::new()),
+        ("uber_wgsl::windfoil".into(), uber_wgsl::windfoil().into(), Vec::new()),
         ("backdrop_blur.wgsl".into(), backdrop_blur::BLUR_WGSL.into(), Vec::new()),
         ("backdrop_composite.wgsl".into(), composite, Vec::new()),
         ("surface_alpha.wgsl".into(), surface_alpha::WGSL.into(), Vec::new()),
@@ -164,4 +164,93 @@ fn fs() -> @location(0) vec4<f32> {
     let err = check_webgl2_shader("bad_uvec2_select", bad, &[])
         .expect_err("vector select on uvec2 must be rejected for WebGL2 GLSL ES 3.00");
     assert!(err.contains("vector-condition `select`"), "unexpected error: {err}");
+}
+
+#[test]
+fn minified_wgsl_preserves_anchors_shrinks_sources_and_validates_for_webgl2() {
+    use super::wgsl_minify::minify;
+
+    // Nested block comments and adjacent identifier separation.
+    let nested = "let/* outer /* inner */ outer */x: f32 = 1.0; // trailing\n\n   let   y = x;\n";
+    assert_eq!(minify(nested), "let x: f32 = 1.0;\nlet y = x;");
+
+    let clip = minify(uber_wgsl::CLIP);
+    let shader = minify(uber_wgsl::SHADER);
+    let outline = minify(uber_wgsl::OUTLINE);
+    let blur = minify(uber_wgsl::BACKDROP_BLUR);
+    let comp = minify(uber_wgsl::BACKDROP_COMPOSITE);
+    let lblur = minify(uber_wgsl::LAYER_BLUR);
+    let salpha = minify(uber_wgsl::SURFACE_ALPHA);
+    let springs = minify(crate::gpu::springs::SHADER);
+
+    let raw_total = uber_wgsl::CLIP.len()
+        + uber_wgsl::SHADER.len()
+        + uber_wgsl::OUTLINE.len()
+        + uber_wgsl::BACKDROP_BLUR.len()
+        + uber_wgsl::BACKDROP_COMPOSITE.len()
+        + uber_wgsl::LAYER_BLUR.len()
+        + uber_wgsl::SURFACE_ALPHA.len()
+        + crate::gpu::springs::SHADER.len();
+    let min_total = clip.len() + shader.len() + outline.len() + blur.len() + comp.len() + lblur.len() + salpha.len() + springs.len();
+    assert!(
+        min_total < raw_total * 65 / 100,
+        "minified WGSL ({min_total} B) must be at least 35% smaller than raw ({raw_total} B)"
+    );
+    for (name, src) in [
+        ("clip", &clip),
+        ("shader", &shader),
+        ("outline", &outline),
+        ("backdrop_blur", &blur),
+        ("backdrop_composite", &comp),
+        ("layer_blur", &lblur),
+        ("surface_alpha", &salpha),
+        ("springs", &springs),
+    ] {
+        assert!(!src.contains("//"), "{name} must have no line comments left after minify");
+        assert!(!src.contains("/*"), "{name} must have no block comments left after minify");
+    }
+
+    let glyph_anchor = minify(uber_wgsl::GLYPH_BRANCH);
+    let outline_branch = minify(uber_wgsl::OUTLINE_BRANCH);
+    assert_eq!(shader.matches(&glyph_anchor).count(), 1, "minified shader must preserve GLYPH_BRANCH");
+
+    let classic = format!("{clip}\n{shader}");
+    let windfoil = format!("{clip}\n{}\n{outline}", shader.replacen(&glyph_anchor, &outline_branch, 1));
+    assert_eq!(windfoil.matches(super::instance::shader_consts::PINNED_KIND_OFF_DECL).count(), 1);
+    assert_eq!(windfoil.matches(super::instance::shader_consts::FS_ENTRY_DECL).count(), 1);
+    assert_eq!(windfoil.matches(super::instance::shader_consts::OUTLINE_SUBPIXEL_OFF_DECL).count(), 1);
+
+    // Classic + GPU springs uses storage buffers (WebGPU/native, not WebGL2), so validate
+    // it with Naga's WGSL front-end and full validator.
+    let springs_src = format!("{classic}\n{springs}");
+    let springs_mod = naga::front::wgsl::parse_str(&springs_src).expect("parse minified classic+springs");
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+        .validate(&springs_mod)
+        .expect("validate minified classic+springs");
+
+    let mut cases: Vec<(String, String, Vec<(&str, f64)>)> = vec![
+        ("minified classic".into(), classic.clone(), Vec::new()),
+        ("minified windfoil".into(), windfoil.clone(), Vec::new()),
+        ("minified backdrop_blur".into(), blur, Vec::new()),
+        ("minified backdrop_composite".into(), format!("{clip}\n{comp}"), Vec::new()),
+        ("minified surface_alpha".into(), salpha, Vec::new()),
+    ];
+    for &kind in &variant::PINNED {
+        let pinned = windfoil.replacen(
+            super::instance::shader_consts::PINNED_KIND_OFF_DECL,
+            &format!("const PINNED_KIND: f32 = {kind}.0;"),
+            1,
+        );
+        cases.push((format!("minified pinned_k{kind}"), pinned, Vec::new()));
+    }
+    for (i, &(mode, additive)) in layer_blur::MODES.iter().enumerate() {
+        cases.push((
+            format!("minified layer_blur[{i}]"),
+            lblur.clone(),
+            vec![("MODE", mode), ("ADDITIVE", additive)],
+        ));
+    }
+    for (label, source, constants) in &cases {
+        check_webgl2_shader(label, source, constants).unwrap_or_else(|err| panic!("{err}"));
+    }
 }

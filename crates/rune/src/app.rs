@@ -1206,7 +1206,7 @@ impl<S: 'static> App<S> {
     #[cfg(target_arch = "wasm32")]
     pub fn try_run(mut self) -> Result<(), String> {
         if let Some(argv) = self.argv.take() {
-            let _ = Args::parse_from(argv);
+            crate::tooling::set_extra_args(argv);
         }
         crate::platform::web::run(self)
     }

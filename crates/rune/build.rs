@@ -15,6 +15,9 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+#[path = "src/render/wgsl_minify.rs"]
+mod wgsl_minify;
+
 /// shader.wgsl's atlas glyph branch, which Windfoil puts the outline branch before.
 const GLYPH_BRANCH: &str = "        if i.uv.z > 0.0 || rotated {";
 const OUTLINE_BRANCH: &str = "        if i.radii.w > 0.0 {\n            cov = outline_glyph(i, screen);\n        } else if i.radii.x > 0.5 && !(i.uv.z > 0.0 || rotated) {\n            cov = lcd_mask(i, screen);\n        } else if i.uv.z > 0.0 || rotated {";
@@ -22,6 +25,7 @@ const FS_ENTRY: &str = "@fragment\nfn fs(i: Out) -> @location(0) vec4<f32> {";
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
+    println!("cargo::rerun-if-changed=src/render/wgsl_minify.rs");
     // Paths are from the package's folder, where cargo runs this.
     let read = |path: &str| {
         println!("cargo::rerun-if-changed={path}");
@@ -34,6 +38,7 @@ fn main() {
     let layer_blur_wgsl = read("src/shaders/layer_blur.wgsl");
     let backdrop_blur_wgsl = read("src/shaders/backdrop_blur.wgsl");
     let backdrop_composite_wgsl = read("src/shaders/backdrop_composite.wgsl");
+    let surface_alpha_wgsl = read("src/shaders/surface_alpha.wgsl");
 
     let consts = parse_shader_consts(&WgslSources {
         clip: &clip_wgsl,
@@ -99,19 +104,53 @@ fn main() {
     stale("The precompiled Metal Windfoil shader (uber_windfoil.metallib)", recorded("src/render/uber/windfoil_hash.rs", "WINDFOIL_WGSL_BLAKE3"),
         &windfoil_hash, "scripts/precompile-metal-shaders.sh on a Mac");
 
+    let is_wasm = std::env::var_os("CARGO_CFG_TARGET_ARCH").as_deref() == Some(std::ffi::OsStr::new("wasm32"));
+    let embed = |src: &str| if is_wasm { wgsl_minify::minify(src) } else { src.to_owned() };
+    let clip_embed = embed(&clip_wgsl);
+    let shader_embed = embed(&shader_wgsl);
+    let outline_embed = embed(&outline_wgsl);
+    let layer_blur_embed = embed(&layer_blur_wgsl);
+    let backdrop_blur_embed = embed(&backdrop_blur_wgsl);
+    let backdrop_composite_embed = embed(&backdrop_composite_wgsl);
+    let surface_alpha_embed = embed(&surface_alpha_wgsl);
+    let glyph_branch = if is_wasm { wgsl_minify::minify(GLYPH_BRANCH) } else { GLYPH_BRANCH.to_owned() };
+    let outline_branch = if is_wasm { wgsl_minify::minify(OUTLINE_BRANCH) } else { OUTLINE_BRANCH.to_owned() };
+    assert!(shader_embed.matches(&glyph_branch).count() == 1,
+        "embedded shader.wgsl must hold Windfoil's anchor `{glyph_branch}` exactly once");
+
     let out = Path::new(&std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR")).to_owned();
     let write = |name: &str, text: &str| std::fs::write(out.join(name), text).unwrap_or_else(|e| panic!("{name}: {e}"));
-    write("uber_classic.wgsl", &classic);
-    write("uber_windfoil.wgsl", &windfoil);
+    // Embed each shader source once (minified on wasm32, normalized LF on native) and assemble
+    // Classic/Windfoil at shader-creation time instead of duplicating clip.wgsl and shader.wgsl.
+    write("clip.wgsl", &clip_embed);
+    write("shader.wgsl", &shader_embed);
+    write("outline.wgsl", &outline_embed);
+    write("layer_blur.wgsl", &layer_blur_embed);
+    write("backdrop_blur.wgsl", &backdrop_blur_embed);
+    write("backdrop_composite.wgsl", &backdrop_composite_embed);
+    write("surface_alpha.wgsl", &surface_alpha_embed);
     write("uber_wgsl.rs", &format!(
-        "/// clip.wgsl and shader.wgsl.\n\
-         pub(crate) const CLASSIC: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/uber_classic.wgsl\"));\n\
-         /// BLAKE3 of [`CLASSIC`], which only macOS ships a library for.\n\
+        "/// Shared clip helpers (`clip.wgsl`), embedded once.\n\
+         pub(crate) const CLIP: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/clip.wgsl\"));\n\
+         /// Uber shader body (`shader.wgsl`), embedded once.\n\
+         pub(crate) const SHADER: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/shader.wgsl\"));\n\
+         /// Windfoil outline glyph shader (`outline.wgsl`), embedded once.\n\
+         pub(crate) const OUTLINE: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/outline.wgsl\"));\n\
+         /// Layer blur shader (`layer_blur.wgsl`), embedded once.\n\
+         pub(crate) const LAYER_BLUR: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/layer_blur.wgsl\"));\n\
+         /// Backdrop blur shader (`backdrop_blur.wgsl`), embedded once.\n\
+         pub(crate) const BACKDROP_BLUR: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/backdrop_blur.wgsl\"));\n\
+         /// Backdrop composite shader (`backdrop_composite.wgsl`), embedded once.\n\
+         pub(crate) const BACKDROP_COMPOSITE: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/backdrop_composite.wgsl\"));\n\
+         /// Surface alpha shader (`surface_alpha.wgsl`), embedded once.\n\
+         pub(crate) const SURFACE_ALPHA: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/surface_alpha.wgsl\"));\n\
+         /// Anchor inside [`SHADER`] replaced by [`OUTLINE_BRANCH`] when assembling Windfoil.\n\
+         pub(crate) const GLYPH_BRANCH: &str = {glyph_branch:?};\n\
+         pub(crate) const OUTLINE_BRANCH: &str = {outline_branch:?};\n\
+         /// BLAKE3 of raw Classic WGSL, which only macOS ships a library for.\n\
          #[cfg_attr(not(target_os = \"macos\"), allow(dead_code))]\n\
          pub(crate) const CLASSIC_BLAKE3: &str = \"{classic_hash}\";\n\
-         /// Classic with outline.wgsl's glyph branch, then outline.wgsl.\n\
-         pub(crate) const WINDFOIL: &str = include_str!(concat!(env!(\"OUT_DIR\"), \"/uber_windfoil.wgsl\"));\n\
-         /// BLAKE3 of [`WINDFOIL`], which Windows and macOS ship bytecode for.\n\
+         /// BLAKE3 of raw Windfoil WGSL, which Windows and macOS ship bytecode for.\n\
          #[cfg_attr(not(any(target_os = \"macos\", target_os = \"windows\")), allow(dead_code))]\n\
          pub(crate) const WINDFOIL_BLAKE3: &str = \"{windfoil_hash}\";\n\
          /// BLAKE3 of the WGSL of each fragment pinned to a kind (render/variant.rs `pinned_wgsl`, `PINNED` order).\n\

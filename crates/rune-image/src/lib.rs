@@ -20,6 +20,7 @@ mod from_url;
 mod gzip;
 #[cfg_attr(not(any(test, target_arch = "wasm32", feature = "svg")), allow(dead_code))]
 mod header;
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 mod icc;
 #[cfg(test)]
 mod icc_tests;
@@ -639,12 +640,12 @@ impl ImageCache {
                         match fetched { Ok(fetched) => from_url::land_in_slices(&url, fetched, px, None).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
                     Input::Encoded(bytes) if browser_decodes(&bytes) => {
-                        let decoded = from_url::decode_in_browser(&bytes).await;
+                        let decoded = decode_encoded_in_browser(&bytes).await;
                         if !wanted(&weak) { return; }
                         match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, 0, None).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
                     Input::EncodedScaled(bytes, max_px) if browser_decodes(&bytes) => {
-                        let decoded = from_url::decode_in_browser(&bytes).await;
+                        let decoded = decode_encoded_in_browser(&bytes).await;
                         if !wanted(&weak) { return; }
                         match decoded { Ok(fetched) => from_url::land_in_slices("image", fetched, max_px, Some(max_px)).await, Err(e) => Err(e) }.map_err(DecodeFailure::from)
                     }
@@ -659,11 +660,21 @@ impl ImageCache {
     }
 }
 
-/// Encoded bytes a web build hands to the browser's codecs: everything but PNG (decoded exactly,
-/// alpha and all, by Rune), SVG and ICNS.
+/// Encoded bytes a web build hands to the browser's codecs. With the default `png` feature,
+/// PNG and ICNS decode in Rust (for exact alpha, APNG and ICC); without `png` on `wasm32`,
+/// every non-SVG format (including PNG and ICNS's embedded PNG) decodes in the browser.
 #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 fn browser_decodes(bytes: &[u8]) -> bool {
-    !bytes.starts_with(b"\x89PNG\r\n\x1a\n") && !bytes.starts_with(b"icns") && !is_svg(bytes)
+    #[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
+    { !bytes.starts_with(b"\x89PNG\r\n\x1a\n") && !bytes.starts_with(b"icns") && !is_svg(bytes) }
+    #[cfg(all(target_arch = "wasm32", not(feature = "png")))]
+    { !is_svg(bytes) }
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn decode_encoded_in_browser(bytes: &[u8]) -> Result<from_url::Fetched, ImageError> {
+    let bytes = if bytes.starts_with(b"icns") { icns_png(bytes)? } else { bytes };
+    from_url::decode_in_browser(bytes).await
 }
 
 /// Whether anything still holds the image a fetch is for.
@@ -749,6 +760,7 @@ fn decode_scaled(bytes: &[u8], max_px: u32) -> Result<Decoded, ImageError> {
     mip_chain(w, h, &rgba)
 }
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 fn decode_still_raster(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
     use image::ImageDecoder;
     let error = |e: image::ImageError| ImageError(e.to_string());
@@ -775,11 +787,17 @@ fn decode_still_raster(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> 
     Ok((w, h, raw))
 }
 
+#[cfg(all(target_arch = "wasm32", not(feature = "png")))]
+fn decode_still_raster(_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), ImageError> {
+    Err(ImageError("Rust raster decoding is disabled on wasm32 without the `png` feature".into()))
+}
+
 /// A PNG decoded to 8-bit RGBA by the PNG decoder alone. `image::load_from_memory_with_format`
 /// dispatches on the format at run time, which links every codec the crate is built with (JPEG,
 /// WebP, GIF, BMP, ICO) into an app that only ever reads PNGs from the clipboard or a cursor.
 /// The same decoder and limits as that call's PNG arm, with embedded RGB ICC profiles converted
 /// to sRGB.
+#[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
 #[doc(hidden)]
 pub fn png_rgba8(bytes: &[u8]) -> image::ImageResult<image::RgbaImage> {
     use image::ImageDecoder;

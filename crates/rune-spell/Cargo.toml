@@ -9,7 +9,14 @@ description = "Platform spell checking for Rune: Windows ISpellChecker, macOS NS
 default = ["hunspell"]
 # Pure-Rust Hunspell spellchecking via `spellbook` (MPL-2.0) and `unicode-segmentation` on Linux
 # and `wasm32`. Off, Linux and `wasm32` fall back to a no-op backend without compiling `spellbook`.
-hunspell = ["dep:spellbook", "dep:unicode-segmentation"]
+hunspell = [
+    "dep:spellbook",
+    "dep:unicode-segmentation",
+    "dep:js-sys",
+    "dep:wasm-bindgen",
+    "dep:wasm-bindgen-futures",
+    "dep:web-sys",
+]
 
 [dependencies]
 rune-core = { workspace = true }
@@ -28,10 +35,10 @@ spellbook = { version = "0.4", optional = true }
 unicode-segmentation = { workspace = true, optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-js-sys = { workspace = true }
-wasm-bindgen = { workspace = true }
-wasm-bindgen-futures = { workspace = true }
-web-sys = { workspace = true, features = ["console"] }
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["console"] }
 
 [dev-dependencies]
 spellbook = "0.4"

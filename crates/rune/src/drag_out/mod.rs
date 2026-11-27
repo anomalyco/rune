@@ -20,7 +20,9 @@
 //! (`tests/macos_drag_out.rs`, and `tests/macos_overlay_drag_out.rs` for a non-activating
 //! overlay that takes input only on its hit regions).
 
-use crate::color::{Color, srgb_decode, srgb_encode};
+use crate::color::Color;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::color::{srgb_decode, srgb_encode};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -379,6 +381,7 @@ impl DragImage {
 
     /// The image composited over an opaque `backing`, blended in linear light as the window
     /// blends. `None` if the PNG doesn't decode.
+    #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
     pub(crate) fn over(&self, backing: Color) -> Option<Self> {
         let mut rgba = crate::image::png_rgba8(&self.png).ok()?;
@@ -436,14 +439,96 @@ pub(crate) fn encode_png(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>
         .ok()
         .and_then(|w| usize::try_from(height).ok().and_then(|h| w.checked_mul(h)?.checked_mul(4)))?;
     if width == 0 || height == 0 || rgba.len() != expected { return None; }
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, width, height);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    let mut w = enc.write_header().ok()?;
-    w.write_image_data(rgba).ok()?;
-    w.finish().ok()?;
+    #[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
+    {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, width, height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        let mut w = enc.write_header().ok()?;
+        w.write_image_data(rgba).ok()?;
+        w.finish().ok()?;
+        Some(out)
+    }
+    #[cfg(all(target_arch = "wasm32", not(feature = "png")))]
+    {
+        encode_png_stored(width, height, rgba)
+    }
+}
+
+/// Minimal dependency-free RGBA8 PNG encoder (uncompressed RFC 1950/1951 stored deflate blocks
+/// with an sRGB Perceptual chunk), used on `wasm32` when the `png` feature is off so
+/// `ClipboardImage::from_rgba` and `DragImage::from_rgba` keep working without linking `png`,
+/// `fdeflate`, or `miniz_oxide`.
+#[cfg(any(test, all(target_arch = "wasm32", not(feature = "png"))))]
+pub(crate) fn encode_png_stored(width: u32, height: u32, rgba: &[u8]) -> Option<Vec<u8>> {
+    let row_bytes = usize::try_from(width).ok()?.checked_mul(4)?;
+    let h = usize::try_from(height).ok()?;
+    let raw_len = row_bytes.checked_add(1)?.checked_mul(h)?;
+    if width == 0 || height == 0 || rgba.len() != row_bytes.checked_mul(h)? {
+        return None;
+    }
+    let crc32 = |data: &[u8]| -> u32 {
+        let mut crc = 0xffff_ffffu32;
+        for &b in data {
+            crc ^= u32::from(b);
+            for _ in 0..8 {
+                crc = if (crc & 1) != 0 { (crc >> 1) ^ 0xedb8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    };
+    let push_chunk = |out: &mut Vec<u8>, kind: [u8; 4], data: &[u8]| {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        let start = out.len();
+        out.extend_from_slice(&kind);
+        out.extend_from_slice(data);
+        let crc = crc32(&out[start..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+    };
+
+    let mut filtered = Vec::with_capacity(raw_len);
+    let (mut s1, mut s2) = (1u32, 0u32);
+    for row in rgba.chunks_exact(row_bytes) {
+        filtered.push(0);
+        s2 += s1;
+        if s2 >= 65521 { s2 -= 65521; }
+        filtered.extend_from_slice(row);
+        for &b in row {
+            s1 += u32::from(b);
+            if s1 >= 65521 { s1 -= 65521; }
+            s2 += s1;
+            if s2 >= 65521 { s2 -= 65521; }
+        }
+    }
+    let blocks = filtered.len().div_ceil(65535).max(1);
+    let mut zlib = Vec::with_capacity(2 + filtered.len() + blocks * 5 + 4);
+    zlib.extend_from_slice(&[0x78, 0x01]);
+    let mut off = 0;
+    while off < filtered.len() {
+        let chunk = (filtered.len() - off).min(65535);
+        let last = u8::from(off + chunk == filtered.len());
+        let len = chunk as u16;
+        zlib.push(last);
+        zlib.extend_from_slice(&len.to_le_bytes());
+        zlib.extend_from_slice(&(!len).to_le_bytes());
+        zlib.extend_from_slice(&filtered[off..off + chunk]);
+        off += chunk;
+    }
+    zlib.extend_from_slice(&((s2 << 16) | s1).to_be_bytes());
+
+    let mut out = Vec::with_capacity(8 + 25 + 13 + 12 + zlib.len() + 12);
+    out.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+    let mut ihdr = [0u8; 13];
+    ihdr[0..4].copy_from_slice(&width.to_be_bytes());
+    ihdr[4..8].copy_from_slice(&height.to_be_bytes());
+    ihdr[8] = 8; // bit depth
+    ihdr[9] = 6; // RGBA
+    push_chunk(&mut out, *b"IHDR", &ihdr);
+    push_chunk(&mut out, *b"sRGB", &[0]); // Perceptual
+    push_chunk(&mut out, *b"IDAT", &zlib);
+    push_chunk(&mut out, *b"IEND", &[]);
     Some(out)
 }
 
@@ -556,6 +641,7 @@ pub(crate) fn begin(window: &winit::window::Window, start: DragOutStart, snapsho
 }
 
 /// The item's own image, else the snapshot, over the item's backing colour if it has one.
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(not(any(target_os = "macos", target_os = "windows", all(unix, not(target_os = "ios"), not(target_os = "android")))), allow(dead_code))]
 fn picture(item: &DragItem, snapshot: Option<DragImage>) -> Option<DragImage> {
     let picture = item.drag_image().cloned().or(snapshot)?;

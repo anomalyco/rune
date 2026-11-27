@@ -107,7 +107,7 @@ fn wgsl_uniform_and_storage_layouts_match_rust() {
         ("taps", offset_of!(layer_blur::Uniforms, taps)),
     ];
 
-    let (classic, classic_layout) = parse("uber_wgsl::CLASSIC", uber_wgsl::CLASSIC);
+    let (classic, classic_layout) = parse("uber_wgsl::classic", uber_wgsl::classic());
     check_struct("CLASSIC", &classic, &classic_layout, "Globals", size_of::<Globals>(), globals_fields);
 
     // Also confirm Instance's vertex attributes agree with `struct In` locations and `offset_of!`.
@@ -128,7 +128,7 @@ fn wgsl_uniform_and_storage_layouts_match_rust() {
         assert_eq!((attr.shader_location, attr.offset, attr.format), (loc, off, fmt));
     }
 
-    let (windfoil, windfoil_layout) = parse("uber_wgsl::WINDFOIL", uber_wgsl::WINDFOIL);
+    let (windfoil, windfoil_layout) = parse("uber_wgsl::windfoil", uber_wgsl::windfoil());
     check_struct("WINDFOIL", &windfoil, &windfoil_layout, "Globals", size_of::<Globals>(), globals_fields);
 
     let (bd_blur, bd_blur_layout) = parse("backdrop_blur.wgsl", backdrop_blur::BLUR_WGSL);
@@ -142,7 +142,7 @@ fn wgsl_uniform_and_storage_layouts_match_rust() {
     let (lb, lb_layout) = parse("layer_blur.wgsl", layer_blur::WGSL);
     check_struct("layer_blur.wgsl", &lb, &lb_layout, "Uniforms", size_of::<layer_blur::Uniforms>(), layer_blur_fields);
 
-    let springs_src = format!("{}\n{}", uber_wgsl::CLASSIC, springs::SHADER);
+    let springs_src = format!("{}\n{}", uber_wgsl::classic(), springs::SHADER);
     let (sp, sp_layout) = parse("CLASSIC+springs.wgsl", &springs_src);
     check_struct("CLASSIC+springs.wgsl", &sp, &sp_layout, "Globals", size_of::<Globals>(), globals_fields);
     check_struct(
@@ -914,12 +914,12 @@ fn wgsl_generated_constants_match_naga_ir() {
             .unwrap_or_else(|| panic!("WGSL override `{name}` has no default"))
     };
 
-    let classic = wgsl::parse_str(uber_wgsl::CLASSIC).expect("parse CLASSIC");
+    let classic = wgsl::parse_str(uber_wgsl::classic()).expect("parse classic");
     assert_eq!(eval_f32(&classic, const_expr(&classic, "CONTINUOUS_K")).to_bits(), sc::CONTINUOUS_K.to_bits());
     assert_eq!(eval_f32(&classic, const_expr(&classic, "SHADOW_INSIDE")).to_bits(), sc::SHADOW_INSIDE.to_bits());
     assert_eq!(eval_f32(&classic, const_expr(&classic, "PINNED_KIND")).to_bits(), sc::PINNED_KIND.to_bits());
 
-    let windfoil = wgsl::parse_str(uber_wgsl::WINDFOIL).expect("parse WINDFOIL");
+    let windfoil = wgsl::parse_str(uber_wgsl::windfoil()).expect("parse windfoil");
     assert_eq!(eval_f32(&windfoil, const_expr(&windfoil, "OUTLINE_HINT_REACH")).to_bits(), sc::OUTLINE_HINT_REACH.to_bits());
     assert_eq!(eval_bool(&windfoil, const_expr(&windfoil, "OUTLINE_SUBPIXEL")), sc::OUTLINE_SUBPIXEL);
 

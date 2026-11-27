@@ -289,3 +289,45 @@ fn snapshot_unpremultiplies_correctly_on_srgb_and_unorm_targets() {
         assert!(px[3].abs_diff(expected_a) <= 1, "{format:?}: alpha got {}, expected {expected_a}", px[3]);
     }
 }
+
+#[test]
+fn encode_png_stored_roundtrips_small_and_multiblock_rgba_images() {
+    assert!(encode_png_stored(0, 1, &[]).is_none());
+    assert!(encode_png_stored(1, 0, &[]).is_none());
+    assert!(encode_png_stored(2, 2, &[0; 12]).is_none());
+
+    // Small image covering transparent, semi-transparent, and opaque pixels.
+    let small: Vec<u8> = vec![
+        255, 0, 0, 0,
+        0, 255, 0, 128,
+        0, 0, 255, 255,
+        12, 34, 56, 200,
+        90, 120, 150, 255,
+        200, 100, 50, 1,
+    ];
+    let bytes = encode_png_stored(3, 2, &small).expect("encode 3x2 stored PNG");
+    let decoded = crate::image::png_rgba8(&bytes).expect("decode 3x2 stored PNG");
+    assert_eq!(decoded.dimensions(), (3, 2));
+    assert_eq!(decoded.into_raw(), small);
+
+    // Multi-block deflate stream: 200x100 RGBA8 = 80,100 filtered bytes (> 65,535 stored block limit).
+    let (w, h) = (200u32, 100u32);
+    let mut big = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            big.extend_from_slice(&[
+                ((x * 7 + y * 3) & 0xff) as u8,
+                ((x * 11 + y * 5) & 0xff) as u8,
+                ((x ^ y) & 0xff) as u8,
+                if (x + y) % 5 == 0 { 128 } else { 255 },
+            ]);
+        }
+    }
+    let big_png = encode_png_stored(w, h, &big).expect("encode 200x100 stored PNG");
+    let decoder = png::Decoder::new(std::io::Cursor::new(&big_png));
+    let info = decoder.read_info().expect("read multi-block stored PNG header");
+    assert_eq!(info.info().srgb, Some(png::SrgbRenderingIntent::Perceptual));
+    let decoded = crate::image::png_rgba8(&big_png).expect("decode multi-block stored PNG");
+    assert_eq!(decoded.dimensions(), (w, h));
+    assert_eq!(decoded.into_raw(), big);
+}

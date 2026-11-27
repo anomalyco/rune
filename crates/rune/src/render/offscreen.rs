@@ -168,15 +168,26 @@ impl super::Renderer {
 }
 
 pub fn write_png(path: &std::path::Path, width: u32, height: u32, rgba: &[u8]) -> std::io::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+    #[cfg(any(not(target_arch = "wasm32"), feature = "png"))]
+    {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let file = std::io::BufWriter::new(std::fs::File::create(path)?);
+        let mut enc = png::Encoder::new(file, width, height);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        let mut w = enc.write_header().map_err(std::io::Error::other)?;
+        w.write_image_data(rgba).map_err(std::io::Error::other)?;
+        Ok(())
     }
-    let file = std::io::BufWriter::new(std::fs::File::create(path)?);
-    let mut enc = png::Encoder::new(file, width, height);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    let mut w = enc.write_header().map_err(std::io::Error::other)?;
-    w.write_image_data(rgba).map_err(std::io::Error::other)?;
-    Ok(())
+    #[cfg(all(target_arch = "wasm32", not(feature = "png")))]
+    {
+        let _ = (path, width, height, rgba);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "write_png is unsupported on wasm32 without the `png` feature",
+        ))
+    }
 }

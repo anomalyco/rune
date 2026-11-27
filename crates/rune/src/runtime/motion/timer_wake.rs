@@ -16,7 +16,8 @@ pub(crate) struct FrameState {
     frame_target: Option<crate::time::Instant>,
     #[cfg(test)]
     test_clock: Option<crate::ManualClock>,
-    /// Tooling opts in before any callbacks. Absent in ordinary app runs.
+    /// Tooling opts in before any callbacks. Absent in ordinary app runs (and on `wasm32`).
+    #[cfg(not(target_arch = "wasm32"))]
     trace_channels: Option<HashMap<&'static str, (&'static str, f32)>>,
     #[cfg(feature = "hot")]
     hot: Option<crate::hot::Session>,
@@ -79,7 +80,8 @@ impl FrameState {
             live_checks: 0,
             #[cfg(debug_assertions)]
             live_only_warnings: Vec::new(),
-            record_events: true,
+            record_events: !cfg!(target_arch = "wasm32"),
+            #[cfg(not(target_arch = "wasm32"))]
             trace_channels: None,
             #[cfg(feature = "hot")]
             hot: None,
@@ -121,21 +123,33 @@ impl FrameState {
 
     #[inline]
     pub(crate) fn tracing_channels(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        return false;
+        #[cfg(not(target_arch = "wasm32"))]
         self.trace_channels.is_some()
     }
 
     #[inline]
     pub(crate) fn trace_channels(&self) -> Option<&HashMap<&'static str, (&'static str, f32)>> {
+        #[cfg(target_arch = "wasm32")]
+        return None;
+        #[cfg(not(target_arch = "wasm32"))]
         self.trace_channels.as_ref()
     }
 
     #[inline]
     pub(crate) fn enable_trace_channels(&mut self, enabled: bool) {
-        self.trace_channels = enabled.then(Default::default);
+        #[cfg(target_arch = "wasm32")]
+        let _ = enabled;
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.trace_channels = enabled.then(Default::default); }
     }
 
     #[inline]
     pub(in crate::runtime) fn record_trace_channel(&mut self, name: &'static str, kind: &'static str, value: f32) {
+        #[cfg(target_arch = "wasm32")]
+        let _ = (name, kind, value);
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(channels) = &mut self.trace_channels {
             channels.insert(name, (kind, value));
         }

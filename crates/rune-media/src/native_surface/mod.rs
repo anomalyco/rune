@@ -386,6 +386,7 @@ impl NativeSurface {
     pub fn latest(&self) -> Option<Arc<Frame>> {
         self.0.lock().unwrap().latest.clone()
     }
+    #[cfg(not(target_arch = "wasm32"))]
     fn latest_mirrored(&self) -> Option<(Arc<Frame>, bool)> {
         let s = self.0.lock().unwrap();
         s.latest.clone().map(|f| (f, s.mirrored))

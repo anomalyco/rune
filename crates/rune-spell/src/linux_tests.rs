@@ -323,7 +323,7 @@ fn manifest_gates_spellbook_behind_hunspell_feature() {
         "rune-spell must enable hunspell by default"
     );
     assert!(
-        spell_manifest.contains("hunspell = [\"dep:spellbook\", \"dep:unicode-segmentation\"]"),
+        spell_manifest.contains("\"dep:spellbook\"") && spell_manifest.contains("\"dep:unicode-segmentation\""),
         "rune-spell hunspell feature must gate optional spellbook and unicode-segmentation"
     );
     assert!(
@@ -339,10 +339,10 @@ fn manifest_gates_spellbook_behind_hunspell_feature() {
     );
     assert!(
         rune_manifest.contains("rune-spell = { workspace = true, default-features = false }"),
-        "rune must disable rune-spell default features so --no-default-features omits spellbook on Linux"
+        "rune must disable rune-spell default features so --no-default-features omits spellbook on Linux and wasm32"
     );
     assert!(
-        rune_manifest.contains("rune-spell = { workspace = true, features = [\"hunspell\"] }"),
-        "rune must keep rune-spell/hunspell enabled on wasm32 even under default-features = false"
+        !rune_manifest.contains("rune-spell = { workspace = true, features = [\"hunspell\"] }"),
+        "rune must not force rune-spell/hunspell unconditionally on wasm32 when default-features = false"
     );
 }

@@ -55,7 +55,7 @@ std::thread_local! {
 
 /// clip.wgsl and shader.wgsl, joined when Rune builds (render/uber_wgsl.rs).
 pub(super) fn uber_wgsl() -> &'static str {
-    super::uber_wgsl::CLASSIC
+    super::uber_wgsl::classic()
 }
 
 #[cfg(test)]

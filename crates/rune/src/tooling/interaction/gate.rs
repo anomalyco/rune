@@ -22,9 +22,11 @@ static ENDPOINT: OnceLock<Option<SocketAddr>> = OnceLock::new();
 
 #[inline(always)]
 pub(crate) fn on() -> bool {
-    #[cfg(test)]
+    #[cfg(target_arch = "wasm32")]
+    return false;
+    #[cfg(all(not(target_arch = "wasm32"), test))]
     return FORCED.get();
-    #[cfg(not(test))]
+    #[cfg(all(not(target_arch = "wasm32"), not(test)))]
     match STATE.load(Ordering::Relaxed) {
         ON => true,
         OFF => false,

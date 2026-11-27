@@ -2,7 +2,7 @@
 //! the sampled textures the CPU fills, and the bind group the uber shader reads.
 
 use super::{
-    ATLAS_START_ROWS, Blend, CLIP_WGSL, Globals, Instance, Renderer, dxbc, metallib,
+    ATLAS_START_ROWS, Blend, Globals, Instance, Renderer, dxbc, metallib,
     shader_check::{self, ShaderError, UberCheck},
     variant,
     warmup::WarmRenderer,
@@ -88,7 +88,7 @@ impl Renderer {
                 ));
                 let make_pipeline = |shader: &dxbc::Shaders| Self::pipeline(device, &layout, shader, format, vertex_entry, Blend::SourceOver);
                 let res = if properties.is_some() {
-                    let source = format!("{CLIP_WGSL}\n{}\n{}", include_str!("../shaders/shader.wgsl"), crate::gpu::springs::SHADER);
+                    let source = format!("{}\n{}", super::uber_wgsl::classic(), crate::gpu::springs::SHADER);
                     shader_check::checked_sync(device, || {
                         let shader = dxbc::Shaders::one(device.create_shader_module(wgpu::ShaderModuleDescriptor {
                             label: Some("uber"),

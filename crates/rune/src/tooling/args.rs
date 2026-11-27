@@ -105,7 +105,12 @@ pub(crate) fn mark_time(v: &str) -> Option<String> {
 /// and in release builds compiled with Rune's `tooling` (or `hot`) feature.
 #[inline]
 pub(crate) const fn dev_tooling_enabled() -> bool {
-    cfg!(any(feature = "tooling", feature = "hot", debug_assertions))
+    cfg!(all(not(target_arch = "wasm32"), any(feature = "tooling", feature = "hot", debug_assertions)))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn set_extra_args(argv: Vec<String>) {
+    EXTRA.set(argv).ok();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -139,12 +144,17 @@ impl Args {
 
     pub fn parse() -> Args {
         #[cfg(target_arch = "wasm32")]
-        let argv = Vec::new();
+        {
+            EXTRA.set(Vec::new()).ok();
+            Args::defaults()
+        }
         #[cfg(not(target_arch = "wasm32"))]
-        let argv = process_argv();
-        let (args, extra) = Args::parse_process_argv(argv, dev_tooling_enabled());
-        EXTRA.set(extra).ok();
-        args
+        {
+            let argv = process_argv();
+            let (args, extra) = Args::parse_process_argv(argv, dev_tooling_enabled());
+            EXTRA.set(extra).ok();
+            args
+        }
     }
 
     /// Parses `argv` (without the program name); unrecognised arguments become `extra_args`.
@@ -158,15 +168,15 @@ impl Args {
     /// set it.
     fn parse_process() -> Args {
         #[cfg(target_arch = "wasm32")]
-        let argv = Vec::new();
+        { Args::defaults() }
         #[cfg(not(target_arch = "wasm32"))]
-        let argv = process_argv();
-        Args::parse_process_argv(argv, dev_tooling_enabled()).0
+        { Args::parse_process_argv(process_argv(), dev_tooling_enabled()).0 }
     }
 
     /// Splits a process command line into Rune's flags and app arguments. When `dev_tooling` is
     /// false (a release build without Rune's `tooling` or `hot` feature), Rune parses no process
     /// flags and leaves every argument untouched for the app (`extra_args`).
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn parse_process_argv(argv: Vec<String>, dev_tooling: bool) -> (Args, Vec<String>) {
         if dev_tooling {
             Args::parse_split(argv)

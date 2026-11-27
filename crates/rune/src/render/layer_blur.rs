@@ -68,7 +68,7 @@ impl Mode {
 }
 
 /// The pass's shader (`layer_blur.wgsl`).
-pub(crate) const WGSL: &str = include_str!("../shaders/layer_blur.wgsl");
+pub(crate) const WGSL: &str = super::uber_wgsl::LAYER_BLUR;
 
 /// Each pipeline's `MODE` and `ADDITIVE` overrides, in `Pipeline::pipelines`' order.
 pub(crate) const MODES: [(f64, f64); 5] = [
